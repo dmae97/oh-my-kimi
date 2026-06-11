@@ -176,6 +176,9 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 		"uv" if matches!(ctx.subcommand, Some("run" | "pytest" | "ruff" | "mypy" | "-m")) => {
 			filter_uv_wrapper(ctx, input, exit_code)
 		},
+		"bundle" if matches!(ctx.subcommand, Some("exec")) => {
+			filter_bundle_wrapper(ctx, input, exit_code)
+		},
 		"npm" | "pnpm" | "yarn" => {
 			if is_pkg_test_invocation(ctx) {
 				node_tests::filter(ctx, input, exit_code)
@@ -262,6 +265,40 @@ fn filter_uv_wrapper(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> Min
 		Some("jest" | "vitest" | "playwright") => node_tests::filter(ctx, input, exit_code),
 		_ => MinimizerOutput::passthrough(input),
 	}
+}
+
+fn filter_bundle_wrapper(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
+	let Some(inner_command) = bundle_wrapped_command(ctx.command) else {
+		return pkg::filter(ctx, input, exit_code);
+	};
+	crate::minimizer::apply(&inner_command, input, exit_code, ctx.config)
+}
+
+/// Extract the inner command from a `bundle exec <cmd> …` invocation so the
+/// engine can re-dispatch through the wrapped tool's filter/def. Returns
+/// `None` when the command does not follow the `bundle exec` pattern.
+fn bundle_wrapped_command(command: &str) -> Option<String> {
+	let tokens: Vec<&str> = command
+		.split(|ch: char| ch.is_whitespace() || matches!(ch, ';' | '|' | '&'))
+		.filter(|tok| !tok.is_empty())
+		.collect();
+	let bundle_pos = tokens.iter().position(|t| {
+		t.rsplit('/')
+			.next()
+			.is_some_and(|name| name.eq_ignore_ascii_case("bundle"))
+	})?;
+	let mut iter = tokens.iter().skip(bundle_pos + 1).copied();
+	let word = next_command_word(&mut iter)?;
+	if word != "exec" {
+		return None;
+	}
+	let tool = next_command_word(&mut iter)?;
+	let mut inner = String::from(tool);
+	for tok in iter {
+		inner.push(' ');
+		inner.push_str(tok);
+	}
+	Some(inner)
 }
 
 /// Normalize uv invocation forms into a routable tool name (B1 / m4).
@@ -352,6 +389,11 @@ const WRAPPER_VALUE_OPTIONS: &[&str] = &[
 	"--workspace",
 	"-w",
 	"--node-arg",
+	// bundle exec
+	"--gemfile",
+	"--path",
+	"--jobs",
+	"--retry",
 ];
 
 /// Advance `tokens` to the next invoked-command word, skipping flag tokens and
@@ -864,6 +906,91 @@ mod tests {
 		let context = ctx("uv", Some("pytest"), "uv pytest tests/", &config);
 		let out = filter(&context, PYTEST_FAILURE_INPUT, 1);
 		assert_eq!(out.text, PYTEST_FAILURE_INPUT);
+		assert!(!out.changed);
+	}
+
+	// -------------------------------------------------------------
+	// Tier 2b: bundle exec wrapper re-dispatch
+	// -------------------------------------------------------------
+
+	#[test]
+	fn bundle_wrapped_command_extracts_inner_command() {
+		assert_eq!(
+			super::bundle_wrapped_command("bundle exec rails db:migrate"),
+			Some("rails db:migrate".to_string())
+		);
+		assert_eq!(
+			super::bundle_wrapped_command("bundle exec rake db:migrate"),
+			Some("rake db:migrate".to_string())
+		);
+		assert_eq!(
+			super::bundle_wrapped_command("bundle exec rails routes"),
+			Some("rails routes".to_string())
+		);
+		assert_eq!(super::bundle_wrapped_command("bundle exec rspec"), Some("rspec".to_string()));
+		// Skips bundle-specific value-taking options
+		assert_eq!(
+			super::bundle_wrapped_command("bundle exec --gemfile foo/Gemfile rails db:migrate"),
+			Some("rails db:migrate".to_string())
+		);
+		// Non-exec subcommands return None
+		assert_eq!(super::bundle_wrapped_command("bundle install"), None);
+		// No bundle token returns None
+		assert_eq!(super::bundle_wrapped_command("gem install"), None);
+		// Path-prefixed bundle binary should still be recognized
+		assert_eq!(
+			super::bundle_wrapped_command("/usr/local/bin/bundle exec rails db:migrate"),
+			Some("rails db:migrate".to_string())
+		);
+		assert_eq!(
+			super::bundle_wrapped_command("bin/bundle exec rake db:migrate"),
+			Some("rake db:migrate".to_string())
+		);
+	}
+
+	#[test]
+	fn bundle_exec_rails_db_migrate_routes_to_def() {
+		let config = MinimizerConfig { enabled: true, ..Default::default() };
+		let context = ctx("bundle", Some("exec"), "bundle exec rails db:migrate", &config);
+		let input = "== 20240115 CreateUsers: migrating\n-- create_table(:users)\n   -> 0.0234s\n== \
+		             20240115 CreateUsers: migrated\n";
+		let out = filter(&context, input, 0);
+		assert!(out.changed);
+		assert!(out.text.contains("CreateUsers"));
+		assert!(!out.text.contains("-- create_table"));
+	}
+
+	#[test]
+	fn bundle_exec_rails_routes_routes_to_def() {
+		let config = MinimizerConfig { enabled: true, ..Default::default() };
+		let context = ctx("bundle", Some("exec"), "bundle exec rails routes", &config);
+		let input = "                                  Prefix Verb   URI Pattern                                                                                       Controller#Action\n                                    root GET    /                                                                                                 home#index\n";
+		let out = filter(&context, input, 0);
+		assert!(out.changed);
+		assert!(!out.text.contains("Prefix"));
+		assert!(out.text.contains("root GET"));
+	}
+
+	#[test]
+	fn bundle_exec_rspec_routes_to_ruby_filter() {
+		let config = MinimizerConfig { enabled: true, ..Default::default() };
+		let context = ctx("bundle", Some("exec"), "bundle exec rspec", &config);
+		let input = "Randomized with seed 12345\n\nUserController\n  GET /users\n    returns a list \
+		             of users\n\nFinished in 0.45 seconds\n5 examples, 0 failures\n";
+		let out = filter(&context, input, 0);
+		assert!(out.changed);
+		assert!(out.text.contains("5 examples, 0 failures"));
+		assert!(!out.text.contains("returns a list of users"));
+	}
+
+	#[test]
+	fn bundle_exec_unknown_tool_uses_pkg_filter() {
+		let config = MinimizerConfig { enabled: true, ..Default::default() };
+		let context = ctx("bundle", Some("exec"), "bundle exec ruby script.rb", &config);
+		let input = "hello from ruby\n";
+		let out = filter(&context, input, 0);
+		// No filter matches ruby script.rb, so it passes through
+		assert_eq!(out.text, input);
 		assert!(!out.changed);
 	}
 }
