@@ -122,6 +122,19 @@ export function chunkForConPTY(data: string, maxChunkBytes: number = MAX_CONPTY_
 let activeTerminal: ProcessTerminal | null = null;
 // Track if a terminal was ever started (for emergency restore logic)
 let terminalEverStarted = false;
+// Whether the alternate screen buffer is currently active (mirrors the TUI's
+// overlay enter/leave writes). Consulted by emergencyTerminalRestore: DECRST
+// 1049 must never be written blindly, because Windows' shared VT dispatcher
+// (conhost and Windows Terminal both use AdaptDispatch) executes an
+// unconditional cursor restore on it — with no prior DECSC save the cursor
+// jumps to the viewport home, dropping the parent shell prompt on top of the
+// dead frame after exit.
+let altScreenActive = false;
+
+/** Record alternate-screen state (called by the TUI on `?1049h`/`?1049l` writes). */
+export function setAltScreenActive(active: boolean): void {
+	altScreenActive = active;
+}
 
 const stdoutErrorHandlers = new Set<(err: Error) => void>();
 let stdoutErrorListenerInstalled = false;
@@ -226,10 +239,15 @@ export function emergencyTerminalRestore(): void {
 		if (terminal) {
 			terminal.stop();
 			// stop() never touches the alternate screen — the TUI owns that
-			// state and exits it on the normal shutdown path. A crash while a
-			// fullscreen overlay is up would otherwise strand the shell on the
-			// alt buffer. Safe no-op when the alt screen is not active.
-			terminal.write("\x1b[?1049l");
+			// state and exits it on the normal shutdown path. Only crash paths
+			// with a fullscreen overlay still hold the alt buffer here. The
+			// leave sequence is gated on the tracked state because it is NOT a
+			// universally safe no-op: Windows' VT dispatcher homes the cursor
+			// on DECRST 1049 even when the alt buffer is inactive.
+			if (altScreenActive) {
+				terminal.write("\x1b[?1049l");
+				altScreenActive = false;
+			}
 			terminal.showCursor();
 		} else if (terminalEverStarted) {
 			// Blind restore only if we know a terminal was started but lost track of it
@@ -244,9 +262,14 @@ export function emergencyTerminalRestore(): void {
 					"\x1b[<u" + // Pop kitty keyboard protocol
 					"\x1b[>4;0m" + // Disable modifyOtherKeys fallback
 					"\x1b[?1006l\x1b[?1003l\x1b[?1000l" + // Disable mouse tracking (fullscreen overlays)
-					"\x1b[?1049l" + // Leave the alternate screen (fullscreen overlays)
+					// Leave the alternate screen only when a fullscreen overlay
+					// actually holds it — on Windows, DECRST 1049 on the main
+					// buffer homes the cursor (unconditional CursorRestoreState
+					// with no prior save), corrupting the shell handoff on exit.
+					(altScreenActive ? "\x1b[?1049l" : "") +
 					"\x1b[?25h", // Show cursor
 			);
+			altScreenActive = false;
 			if (process.stdin.setRawMode) {
 				process.stdin.setRawMode(false);
 			}

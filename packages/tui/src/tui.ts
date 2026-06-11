@@ -16,7 +16,7 @@ import { $flag, getDebugLogPath } from "@oh-my-pi/pi-utils";
 import { DEFAULT_MAX_INLINE_IMAGES, ImageBudget } from "./components/image";
 import { planDeccaraFills } from "./deccara";
 import { isKeyRelease, matchesKey } from "./keys";
-import { isConPTYHosted, type Terminal } from "./terminal";
+import { isConPTYHosted, setAltScreenActive, type Terminal } from "./terminal";
 import {
 	encodeKittyDeleteImage,
 	ImageProtocol,
@@ -1326,6 +1326,7 @@ export class TUI extends Container {
 		// the restored normal screen (which #previousLines still describes).
 		if (this.#altActive) {
 			this.terminal.write(`${MOUSE_TRACKING_OFF}\x1b[?1049l`);
+			setAltScreenActive(false);
 			this.#altActive = false;
 			this.#altPreviousLines = [];
 		}
@@ -2049,6 +2050,7 @@ export class TUI extends Container {
 		const wantAlt = this.#wantsAltScreen();
 		if (wantAlt && !this.#altActive) {
 			this.terminal.write(`\x1b[?1049h${MOUSE_TRACKING_ON}`);
+			setAltScreenActive(true);
 			this.terminal.hideCursor();
 			this.#forgetHardwareCursorState();
 			this.#recordHardwareCursorHidden();
@@ -2058,6 +2060,7 @@ export class TUI extends Container {
 			this.#altEnterHeight = height;
 		} else if (!wantAlt && this.#altActive) {
 			this.terminal.write(`${MOUSE_TRACKING_OFF}\x1b[?1049l`);
+			setAltScreenActive(false);
 			this.#forgetHardwareCursorState();
 			this.#altActive = false;
 			this.#altPreviousLines = [];
