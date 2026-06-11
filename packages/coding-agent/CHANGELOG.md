@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Anthropic web search requests to include `metadata.user_id`, matching the main Messages path: API-key requests forward the active session id verbatim, OAuth requests build the Claude-Code-shaped `{session_id, account_uuid?, device_id}` JSON envelope so gateways see consistent attribution ([#2295](https://github.com/can1357/oh-my-pi/issues/2295)).
+
 ## [15.11.0] - 2026-06-10
 
 ### Breaking Changes
@@ -45,7 +49,6 @@
 
 ### Fixed
 
-- Fixed Anthropic web search requests to include `metadata.user_id`, matching the main Messages path: API-key requests forward the active session id verbatim, OAuth requests build the Claude-Code-shaped `{session_id, account_uuid?, device_id}` JSON envelope so gateways see consistent attribution ([#2295](https://github.com/can1357/oh-my-pi/issues/2295)).
 - Fixed `irc` live message delivery so successfully handed-off messages are no longer enqueued as mailbox mail, so they do not inflate unread `irc` counts
 - Fixed `irc send` with `await: true` to wait for a fresh reply to the current call instead of consuming previously buffered messages
 - Fixed main-session chat output to stop duplicating outbound `irc` sends from the main agent as relay cards
