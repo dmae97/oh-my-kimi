@@ -4,13 +4,17 @@ use super::lint;
 use crate::minimizer::{MinimizerCtx, MinimizerOutput, primitives};
 
 pub fn supports(program: &str, subcommand: Option<&str>) -> bool {
-	// rake/rails are claimed GENERICALLY (not just the `test` subcommand): the
-	// `test` subcommand routes to the minitest filter, every other task routes to
-	// the generic rake condenser. This is Rust rather than a def because an
-	// unscoped def would overlay the minitest output and could strip
-	// failure-detail lines ('Expected: true') that lack rake/minitest keywords.
-	let _ = subcommand;
-	matches!(program, "rspec" | "rubocop" | "rake" | "rails")
+	match program {
+		"rspec" | "rubocop" => true,
+		"rake" | "rails" => !is_def_scoped_subcommand(subcommand),
+		_ => false,
+	}
+}
+
+/// Subcommands that have dedicated TOML defs and must run standalone instead
+/// of being claimed by the generic ruby filter (which would overlay them).
+fn is_def_scoped_subcommand(subcommand: Option<&str>) -> bool {
+	matches!(subcommand, Some("db:migrate" | "db:rollback" | "routes"))
 }
 
 pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
@@ -34,16 +38,8 @@ fn ruby_tool<'a>(program: &'a str, subcommand: Option<&'a str>) -> Option<&'a st
 	match (program, subcommand) {
 		("rspec", _) => Some("rspec"),
 		("rubocop", _) => Some("rubocop"),
-		// Any minitest task keeps the minitest filter; every other rake/rails
-		// task falls through to the generic condenser. Rails ships SCOPED
-		// minitest tasks (`rake test:models`, `rails test:system`, `rake
-		// app:test`) — detect_subcommand returns the first positional lowercased
-		// (e.g. "test:models", "app:test"), NOT the literal "test", so routing
-		// only the exact "test" subcommand would send those scoped runs to the
-		// generic rake condenser, whose keep-lines pass drops minitest
-		// failure-detail lines ('Expected: true' / 'Actual: false') that lack a
-		// rake/minitest keyword. Match `test`, `test:*`, and `*:test` instead.
 		("rake" | "rails", Some(sub)) if is_minitest_subcommand(sub) => Some("minitest"),
+		("rake" | "rails", Some(sub)) if is_def_scoped_subcommand(Some(sub)) => None,
 		("rake" | "rails", _) => Some("rake"),
 		_ => None,
 	}
@@ -673,11 +669,13 @@ mod tests {
 		assert!(supports("rake", Some("test")));
 		assert!(supports("rails", Some("test")));
 		assert!(supports("rubocop", None));
-		// rake/rails are now claimed GENERICALLY: non-test tasks route to the
-		// generic rake condenser instead of falling through unminimized.
-		assert!(supports("rake", Some("db:migrate")));
+		// rake/rails are claimed GENERICALLY except for def-scoped subcommands
+		// (db:migrate, db:rollback, routes) which run standalone via TOML defs.
+		assert!(!supports("rake", Some("db:migrate")));
+		assert!(!supports("rails", Some("db:migrate")));
+		assert!(!supports("rails", Some("db:rollback")));
+		assert!(!supports("rails", Some("routes")));
 		assert!(supports("rake", Some("db:seed")));
-		assert!(supports("rails", Some("routes")));
 		// test subcommand still routes to the minitest filter.
 		assert_eq!(ruby_tool("rake", Some("test")), Some("minitest"));
 		assert_eq!(ruby_tool("rails", Some("test")), Some("minitest"));
@@ -689,9 +687,11 @@ mod tests {
 		assert_eq!(ruby_tool("rails", Some("test:system")), Some("minitest"));
 		assert_eq!(ruby_tool("rake", Some("test:all")), Some("minitest"));
 		assert_eq!(ruby_tool("rake", Some("app:test")), Some("minitest"));
-		// A non-test namespaced task that merely contains "test" elsewhere is
-		// NOT a minitest task.
-		assert_eq!(ruby_tool("rake", Some("db:migrate")), Some("rake"));
+		// Def-scoped subcommands return None so the engine runs the TOML def
+		// standalone instead of overlaying the generic rake condenser.
+		assert_eq!(ruby_tool("rake", Some("db:migrate")), None);
+		assert_eq!(ruby_tool("rails", Some("db:migrate")), None);
+		assert_eq!(ruby_tool("rails", Some("routes")), None);
 	}
 
 	#[test]
