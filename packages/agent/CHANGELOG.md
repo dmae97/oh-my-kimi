@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed whitespace-only error tool results so Anthropic requests no longer 400 with `tool_result: content cannot be empty if is_error is true` and wedge the session on every subsequent turn
 ## [15.11.0] - 2026-06-10
 ### Breaking Changes
 
