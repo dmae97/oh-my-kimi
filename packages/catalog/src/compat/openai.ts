@@ -102,7 +102,8 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 	const isZhipu = modelMatchesHost(hostModel, "zhipu");
 	const isKilo = modelMatchesHost(hostModel, "kilo");
 	const isKimiModel = isKimiModelId(spec.id);
-	const isMoonshotKimi = isKimiModel && modelMatchesHost(hostModel, "moonshotNative");
+	const isMoonshotNative = modelMatchesHost(hostModel, "moonshotNative");
+	const isMoonshotKimi = isKimiModel && isMoonshotNative;
 	const usesMoonshotKimiPreservedThinking = isMoonshotKimi && isKimiK26ModelId(spec.id);
 	const isAnthropicModel =
 		modelMatchesHost(hostModel, "anthropic") || isClaudeModelId(spec.id) || isAnthropicNamespacedModelId(spec.id);
@@ -145,11 +146,16 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 		isKilo ||
 		isQwen ||
 		isXiaomiHost ||
+		isMoonshotNative ||
 		isOpenCodeHost;
 	const isOpenCodeProvider = provider === "opencode-go" || provider === "opencode-zen";
 
 	const useMaxTokens =
-		isMistral || hostMatchesUrl(baseUrl, "chutes") || hostMatchesUrl(baseUrl, "fireworks") || isDirectDeepseekApi;
+		isMistral ||
+		isMoonshotNative ||
+		hostMatchesUrl(baseUrl, "chutes") ||
+		hostMatchesUrl(baseUrl, "fireworks") ||
+		isDirectDeepseekApi;
 
 	// Hosts whose chat-completions endpoints are known to accept multiple
 	// leading `system`/`developer` messages (preferred for KV-cache reuse).
