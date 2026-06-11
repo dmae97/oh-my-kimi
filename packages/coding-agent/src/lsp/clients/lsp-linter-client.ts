@@ -4,17 +4,9 @@
  */
 import { getOrCreateClient, notifySaved, sendRequest, syncContent } from "../../lsp/client";
 import { applyTextEditsToString } from "../../lsp/edits";
+import { resolveFormatOptions } from "../../lsp/format-options";
 import type { Diagnostic, LinterClient, LspClient, ServerConfig, TextEdit } from "../../lsp/types";
 import { fileToUri } from "../../lsp/utils";
-
-/** Default formatting options for LSP */
-const DEFAULT_FORMAT_OPTIONS = {
-	tabSize: 3,
-	insertSpaces: true,
-	trimTrailingWhitespace: true,
-	insertFinalNewline: true,
-	trimFinalNewlines: true,
-};
 
 /**
  * LSP-based linter client implementation.
@@ -56,7 +48,7 @@ export class LspLinterClient implements LinterClient {
 		// Request formatting
 		const edits = (await sendRequest(client, "textDocument/formatting", {
 			textDocument: { uri },
-			options: DEFAULT_FORMAT_OPTIONS,
+			options: resolveFormatOptions(filePath, content),
 		})) as TextEdit[] | null;
 
 		if (!edits || edits.length === 0) {

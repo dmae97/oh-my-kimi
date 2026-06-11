@@ -7,6 +7,10 @@
 - Fixed stale `Working…` loader rows being committed to native scrollback above the live loader: the interactive status container now reports a live-region seam while it has mounted content ([#2328](https://github.com/can1357/oh-my-pi/pull/2328) by [@35844493](https://github.com/35844493)).
 - Fixed Mnemopi memory consolidation never running on session shutdown: `MnemopiSessionState.dispose()` now drains pending fact extractions and runs `sleepAllSessions` on every owned bank before closing handles (and `AgentSession.dispose()` awaits the result), matching the `/memory enqueue` slash command. `mnemopiBackend.clear` opts out via `dispose({ consolidate: false })` so the destructive `/memory clear` path does not spend tokens consolidating memories that are wiped on the next line. `consolidate()` deliberately keeps no `aliasOf` short-circuit so `/memory enqueue` from a subagent still flushes and sleeps the parent's shared banks (the alias guard lives in `dispose` for lifecycle, not in `consolidate` for content). Without this, `episodic_memory`, `gists`, `consolidation_log`, `graph_edges`, and `triples` stayed empty for every deployment because the SHMR/beam pipeline only ran when a user typed `/memory enqueue|rebuild` ([#2320](https://github.com/can1357/oh-my-pi/issues/2320)).
 
+### Fixed
+
+- Fixed `lsp.formatOnWrite` sending a hardcoded `tabSize: 3, insertSpaces: true` on every `textDocument/formatting` request, which silently re-indented 2-space YAML (and any LSP-formatted file) to 3-space on every write/edit through formatter-aware servers like `yaml-language-server`. Format options are now resolved per-file from `.editorconfig` (`indent_size`, `indent_style`, `tab_width`), falling back to the indent sniffed from the in-memory content the agent is about to write, then to a 2-space default. The duplicate `DEFAULT_FORMAT_OPTIONS` constant in `lsp/index.ts` and `lsp/clients/lsp-linter-client.ts` is replaced with a single shared `resolveFormatOptions` helper ([#2329](https://github.com/can1357/oh-my-pi/issues/2329)).
+
 ## [15.11.2] - 2026-06-11
 
 ### Added
