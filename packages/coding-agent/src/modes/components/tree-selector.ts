@@ -530,8 +530,14 @@ class TreeList implements Component {
 				// Check if there's a gutter at this level (translated to original tree depth)
 				const gutter = flatNode.gutters.find(g => g.position === originalLevel);
 				if (gutter) {
+					// Chain rows (no connector of their own) extend the gutter past
+					// last-sibling ancestors so the flattened conversation flow stays
+					// visually anchored to its branch parent (#2298). Branched
+					// descendants keep the standard convention so a `│` never floats
+					// below an unrelated `└─`.
+					const showVertical = gutter.show || !hasConnector;
 					if (posInLevel === 0) {
-						prefixChars.push(gutter.show ? theme.tree.vertical : " ");
+						prefixChars.push(showVertical ? theme.tree.vertical : " ");
 					} else {
 						prefixChars.push(" ");
 					}

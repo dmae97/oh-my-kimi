@@ -238,7 +238,13 @@
 
           const gutter = gutters.find(g => g.position === level);
           if (gutter) {
-            prefixChars.push(posInLevel === 0 ? (gutter.show ? '│' : ' ') : ' ');
+            // Chain rows (no connector of their own) extend the gutter past
+            // last-sibling ancestors so the flattened conversation flow stays
+            // visually anchored to its branch parent (#2298). Branched
+            // descendants keep the standard convention so a `│` never floats
+            // below an unrelated `└─`.
+            const showVertical = gutter.show || !connector;
+            prefixChars.push(posInLevel === 0 ? (showVertical ? '│' : ' ') : ' ');
           } else if (connector && level === connectorPosition) {
             if (posInLevel === 0) {
               prefixChars.push(isLast ? '└' : '├');
