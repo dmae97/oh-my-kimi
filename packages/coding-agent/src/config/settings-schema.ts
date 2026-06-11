@@ -452,6 +452,17 @@ export const SETTINGS_SCHEMA = {
 			description: "Use the session name color for the editor border and status line gap",
 		},
 	},
+
+	"statusLine.transparent": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "appearance",
+			label: "Transparent Status Line",
+			description:
+				"Use the terminal's default background for the status line instead of the theme's `statusLineBg`. Powerline end caps are dropped because they need a contrasting fill to bridge into the surrounding terminal.",
+		},
+	},
 	"tools.artifactSpillThreshold": {
 		type: "number",
 		default: 50,
@@ -668,7 +679,7 @@ export const SETTINGS_SCHEMA = {
 		ui: {
 			tab: "appearance",
 			label: "Smooth Streaming",
-			description: "Reveal assistant text smoothly while streamed chunks arrive",
+			description: "Reveal assistant text and streamed tool input smoothly while chunks arrive",
 		},
 	},
 
@@ -2501,11 +2512,11 @@ export const SETTINGS_SCHEMA = {
 	// Async jobs
 	"async.enabled": {
 		type: "boolean",
-		default: false,
+		default: true,
 		ui: {
 			tab: "tools",
 			label: "Async Execution",
-			description: "Enable async bash commands",
+			description: "Enable async bash commands and background task execution",
 		},
 	},
 
@@ -2758,7 +2769,7 @@ export const SETTINGS_SCHEMA = {
 			tab: "tasks",
 			label: "Batch Task Calls",
 			description:
-				"Switch the task tool to its batch shape: one call carries { agent, context, tasks[] } — one subagent per item (with per-item isolation) and a required shared context prepended to every assignment. Each spawn still runs as an independent background agent with the normal idle/parked lifecycle. Disable to restore the flat single-spawn schema.",
+				"Switch the task tool to its batch shape: one call carries { agent, context, tasks[] } — one subagent per item (with per-item isolation) and a required shared context prepended to every assignment. With async.enabled=true, each spawn runs as an independent background agent with the normal idle/parked lifecycle; otherwise the call blocks for merged results. Disable to restore the flat single-spawn schema.",
 		},
 	},
 

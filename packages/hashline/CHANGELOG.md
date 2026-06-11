@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [15.11.1] - 2026-06-11
+
+### Fixed
+
+- Fixed the `insert after block N:` prompt guidance so it explicitly says N must be the block opener, not the closing delimiter or last visible line, and points visible closing-line edits to plain `insert after M:`. ([#2292](https://github.com/can1357/oh-my-pi/issues/2292))
+
 ## [15.11.0] - 2026-06-10
 
 ### Changed

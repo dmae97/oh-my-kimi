@@ -44,6 +44,7 @@ export interface MCPStoredOAuthCredential extends OAuthCredential {
 	tokenUrl?: string;
 	clientId?: string;
 	clientSecret?: string;
+	resource?: string;
 }
 
 const DEFAULT_PORT = 3000;
@@ -134,6 +135,23 @@ function resolveCallbackOptions(config: MCPOAuthConfig): OAuthCallbackFlowOption
 	};
 }
 
+function resolveResourceUri(resource: string | undefined): string | undefined {
+	const trimmed = resource?.trim();
+	if (!trimmed) return undefined;
+	if (trimmed !== resource) {
+		throw new Error("OAuth resource URI must not include surrounding whitespace");
+	}
+
+	const parsed = new URL(trimmed);
+	if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+		throw new Error("OAuth resource URI must use http or https");
+	}
+	if (parsed.hash) {
+		throw new Error("OAuth resource URI must not include a fragment");
+	}
+	return trimmed;
+}
+
 export interface MCPOAuthConfig {
 	/** Authorization endpoint URL */
 	authorizationUrl: string;
@@ -160,6 +178,8 @@ export interface MCPOAuthConfig {
 	callbackPort?: number;
 	/** Custom callback path (default: /callback or redirectUri pathname) */
 	callbackPath?: string;
+	/** MCP resource URI for RFC 8707 resource indicators */
+	resource?: string;
 	/** Fetch implementation for token exchange and discovery requests. */
 	fetch?: FetchImpl;
 }
@@ -173,6 +193,7 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 	#registeredClientSecret?: string;
 	#codeVerifier?: string;
 	#fetch: FetchImpl;
+	#resource?: string;
 
 	constructor(
 		private config: MCPOAuthConfig,
@@ -181,6 +202,9 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 		super(ctrl, resolveCallbackOptions(config));
 		this.#resolvedClientId = this.#resolveClientId(config);
 		this.#fetch = config.fetch ?? ctrl.fetch ?? fetch;
+		this.#resource = resolveResourceUri(
+			config.resource ?? this.#resourceFromAuthorizationUrl(config.authorizationUrl),
+		);
 	}
 
 	/**
@@ -201,6 +225,9 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 	 */
 	get registeredClientSecret(): string | undefined {
 		return this.#registeredClientSecret;
+	}
+	get resource(): string | undefined {
+		return this.#resource;
 	}
 
 	async generateAuthUrl(state: string, redirectUri: string): Promise<{ url: string; instructions?: string }> {
@@ -224,6 +251,12 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 		const prompt = this.config.prompt ?? "consent";
 		if (prompt && !params.get("prompt")) {
 			params.set("prompt", prompt);
+		}
+		const existingResource = params.get("resource")?.trim();
+		if (existingResource) {
+			this.#resource = resolveResourceUri(existingResource);
+		} else if (this.#resource) {
+			params.set("resource", this.#resource);
 		}
 		params.set("redirect_uri", redirectUri);
 		params.set("state", state);
@@ -261,6 +294,9 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 		this.#codeVerifier = undefined;
 
 		// Add client secret if provided
+		if (this.#resource) {
+			params.set("resource", this.#resource);
+		}
 		const clientSecret = this.config.clientSecret ?? this.#registeredClientSecret;
 		if (clientSecret) {
 			params.set("client_secret", clientSecret);
@@ -330,6 +366,13 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 
 		try {
 			return new URL(config.authorizationUrl).searchParams.get("client_id") ?? undefined;
+		} catch {
+			return undefined;
+		}
+	}
+	#resourceFromAuthorizationUrl(authorizationUrl: string): string | undefined {
+		try {
+			return new URL(authorizationUrl).searchParams.get("resource") ?? undefined;
 		} catch {
 			return undefined;
 		}
@@ -456,14 +499,18 @@ export async function refreshMCPOAuthToken(
 	refreshToken: string,
 	clientId?: string,
 	clientSecret?: string,
+	resourceOrOpts?: string | { fetch?: FetchImpl },
 	opts?: { fetch?: FetchImpl },
 ): Promise<OAuthCredentials> {
-	const fetchImpl: FetchImpl = opts?.fetch ?? fetch;
+	const fetchImpl: FetchImpl = (typeof resourceOrOpts === "string" ? opts?.fetch : resourceOrOpts?.fetch) ?? fetch;
+	const resource = typeof resourceOrOpts === "string" ? resourceOrOpts : undefined;
 	const params = new URLSearchParams({
 		grant_type: "refresh_token",
 		refresh_token: refreshToken,
 	});
 	if (clientId) params.set("client_id", clientId);
+	const resolvedResource = resolveResourceUri(resource);
+	if (resolvedResource) params.set("resource", resolvedResource);
 	if (clientSecret) params.set("client_secret", clientSecret);
 
 	const response = await fetchImpl(tokenUrl, {

@@ -32,6 +32,7 @@ describe("resolveStdioSpawnCommand", () => {
 				"/c",
 				`""${shim}" "serve" "--mcp""`,
 			]);
+			expect(result.windowsHide).toBe(true);
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}
@@ -63,6 +64,7 @@ describe("resolveStdioSpawnCommand", () => {
 				"/c",
 				`""${shim}" "serve" "--header" "Authorization=^%TOKEN^%""`,
 			]);
+			expect(result.windowsHide).toBe(true);
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}
@@ -94,6 +96,7 @@ describe("resolveStdioSpawnCommand", () => {
 				"/c",
 				`""${shim}" "--config" "{^"a^":^"b&c|d^"}""`,
 			]);
+			expect(result.windowsHide).toBe(true);
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}
@@ -133,6 +136,7 @@ describe("resolveStdioSpawnCommand", () => {
 				"/c",
 				`""${shim}" "serve" "--mcp""`,
 			]);
+			expect(result.windowsHide).toBe(true);
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}
@@ -159,6 +163,7 @@ describe("resolveStdioSpawnCommand", () => {
 			"/c",
 			`""codegraph.cmd" "serve" "--mcp""`,
 		]);
+		expect(result.windowsHide).toBe(true);
 	});
 
 	it("leaves non-Windows commands untouched", async () => {
@@ -168,6 +173,7 @@ describe("resolveStdioSpawnCommand", () => {
 		);
 
 		expect(result.cmd).toEqual(["codegraph", "serve", "--mcp"]);
+		expect(result.windowsHide).toBeUndefined();
 	});
 });
 

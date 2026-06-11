@@ -6,6 +6,12 @@
 
 - Added profile-aware directory helpers and isolated profile state roots, while keeping the install ID shared across profiles.
 
+## [15.11.1] - 2026-06-11
+
+### Fixed
+
+- Fixed cleanup reentry noise during fatal shutdown: recursive cleanup requests now no-op idempotently instead of logging repeated `Cleanup invoked recursively` errors ([#2284](https://github.com/can1357/oh-my-pi/issues/2284)).
+
 ## [15.11.0] - 2026-06-10
 
 ### Added

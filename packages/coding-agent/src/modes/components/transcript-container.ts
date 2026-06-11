@@ -1,12 +1,18 @@
-import { type Component, Container, type NativeScrollbackLiveRegion, type RenderStablePrefix } from "@oh-my-pi/pi-tui";
+import {
+	type Component,
+	Container,
+	type NativeScrollbackCommittedRows,
+	type NativeScrollbackLiveRegion,
+	type RenderStablePrefix,
+} from "@oh-my-pi/pi-tui";
 
 const kSnapshot = Symbol("transcript.liveDiffSnapshot");
 
 /**
- * Per-block diff cache: the block's previous stripped contribution plus the
- * derived append-only state. Purely an input to {@link deriveLiveCommitState}
- * for still-live blocks — it is never replayed as render output. Every block
- * renders its current content on every frame.
+ * Per-block render cache: the block's previous stripped contribution plus the
+ * derived append-only state. Still-live blocks use it as input to
+ * {@link deriveLiveCommitState}; finalized blocks wholly inside already
+ * committed native scrollback can replay it without calling render().
  */
 interface LiveDiffSnapshot {
 	width: number;
@@ -47,11 +53,26 @@ interface SnapshotCarrier {
  */
 interface FinalizableBlock {
 	isTranscriptBlockFinalized?(): boolean;
+	/**
+	 * Monotonic content version for blocks that can still mutate *after*
+	 * reporting finalized (e.g. `AssistantMessageComponent`: the inline error
+	 * restored at the next turn's `agent_start`, late tool-result images). The
+	 * committed-scrollback render bypass only replays a block's previous rows
+	 * when the version is unchanged; without this signal a post-finalize
+	 * mutation would stay invisible until a global invalidation. Blocks that
+	 * never mutate post-finalize simply omit the method.
+	 */
+	getTranscriptBlockVersion?(): number;
 }
 
 function isBlockFinalized(child: Component): boolean {
 	const fn = (child as Component & FinalizableBlock).isTranscriptBlockFinalized;
 	return fn ? fn.call(child) : true;
+}
+
+function getBlockVersion(child: Component): number | undefined {
+	const fn = (child as Component & FinalizableBlock).getTranscriptBlockVersion;
+	return fn ? fn.call(child) : undefined;
 }
 
 // A "plain blank" row is empty or whitespace-only with no ANSI bytes. It marks
@@ -87,11 +108,16 @@ interface BlockSegment {
 	rawRef: readonly string[];
 	contribution: readonly string[];
 	width: number;
+	generation: number;
 	/** Frame row of this block's first emitted row (the separator when present). */
 	startRow: number;
 	/** Rows emitted: separator + contribution (0 for empty contributions). */
 	rowCount: number;
 	sep: number;
+	/** Whether the block reported finalized when this segment was rendered. */
+	finalized: boolean;
+	/** Block version observed when this segment was rendered (see {@link FinalizableBlock}). */
+	version: number | undefined;
 }
 
 const EMPTY_SEGMENTS: BlockSegment[] = [];
@@ -369,7 +395,10 @@ function deriveLiveCommitState(
  * through {@link RenderStablePrefix} so the engine can skip marker scanning,
  * line preparation, and the committed-prefix audit for those rows.
  */
-export class TranscriptContainer extends Container implements NativeScrollbackLiveRegion, RenderStablePrefix {
+export class TranscriptContainer
+	extends Container
+	implements NativeScrollbackLiveRegion, NativeScrollbackCommittedRows, RenderStablePrefix
+{
 	// Bumped to retire every block's diff snapshot at once (theme change /
 	// clear); a snapshot is only honored when its stored generation matches.
 	#generation = 0;
@@ -390,6 +419,10 @@ export class TranscriptContainer extends Container implements NativeScrollbackLi
 	#lines: string[] = [];
 	#segments: BlockSegment[] = EMPTY_SEGMENTS;
 	#renderWidth = -1;
+	// Local rows already committed to native scrollback by the previous frame.
+	// Finalized blocks wholly before this boundary are immutable on-screen history;
+	// their previous contribution can be replayed without calling render().
+	#committedRows = 0;
 	// Stable-prefix floor accumulated across renders since the last
 	// getRenderStablePrefixRows() read (see RenderStablePrefix: reading
 	// consumes the report and re-bases the baseline). Out-of-band renders
@@ -405,6 +438,10 @@ export class TranscriptContainer extends Container implements NativeScrollbackLi
 	override clear(): void {
 		this.#generation++;
 		super.clear();
+	}
+
+	setNativeScrollbackCommittedRows(rows: number): void {
+		this.#committedRows = Number.isFinite(rows) ? Math.max(0, Math.trunc(rows)) : 0;
 	}
 
 	getRenderStablePrefixRows(): number {
@@ -497,21 +534,43 @@ export class TranscriptContainer extends Container implements NativeScrollbackLi
 
 			// This child's contribution: its current render with plain-blank
 			// top/bottom edges stripped (the container owns inter-block gaps).
-			// Always the latest content — committed history keeps whatever bytes
-			// it was written with, but the window must reflect the present state
-			// (late tool results, post-finalize re-layouts, expand toggles).
-			// A block whose render returned the same array reference reuses the
-			// previously stripped contribution (same ref ⇒ identical rows).
+			// Finalized blocks wholly inside committed native scrollback can reuse
+			// their previous contribution without calling render(): those rows are
+			// immutable terminal history for the current width/generation. Blocks
+			// outside committed history still render normally so late results,
+			// post-finalize re-layouts, and expand toggles remain visible.
 			const previousSnapshot = child[kSnapshot];
-			const raw = child.render(width);
 			const previous = previousSegments[i];
-			const reusable =
+			const finalized = isBlockFinalized(child);
+			const version = getBlockVersion(child);
+			const committedReusable =
 				previous !== undefined &&
 				previous.component === child &&
-				previous.rawRef === raw &&
-				previous.width === width;
+				previous.width === width &&
+				previous.generation === this.#generation &&
+				previous.startRow === row &&
+				previous.startRow + previous.rowCount <= this.#committedRows &&
+				finalized &&
+				// Only replay bytes that were themselves produced by a finalized
+				// render: a block finalizing between frames may have changed content
+				// while its rows were already committed via the append-only live
+				// path, so the first post-transition frame must render. Defense in
+				// depth on the transcript side — the TUI commit policy should keep
+				// that window closed, but the safety must not live there alone.
+				previous.finalized &&
+				// Post-finalize mutations (inline error restore, late tool images)
+				// bump the block version; a mismatch forces a real render so the
+				// committed-prefix audit can observe and re-anchor the change.
+				previous.version === version;
+			const raw = committedReusable ? previous.rawRef : child.render(width);
+			const reusable =
+				committedReusable ||
+				(previous !== undefined &&
+					previous.component === child &&
+					previous.rawRef === raw &&
+					previous.width === width &&
+					previous.generation === this.#generation);
 			const contribution = reusable ? previous.contribution : stripPlainBlankEdges(raw);
-			const finalized = isBlockFinalized(child);
 			let liveCommitState: LiveCommitState | undefined;
 			if (i >= liveStartIndex && !finalized) {
 				liveCommitState = deriveLiveCommitState(previousSnapshot, contribution, width, this.#generation);
@@ -540,7 +599,18 @@ export class TranscriptContainer extends Container implements NativeScrollbackLi
 					lines.length = row;
 				}
 				if (chainStable) stableRows = row;
-				segments[i] = { component: child, rawRef: raw, contribution, width, startRow: row, rowCount: 0, sep: 0 };
+				segments[i] = {
+					component: child,
+					rawRef: raw,
+					contribution,
+					width,
+					generation: this.#generation,
+					startRow: row,
+					rowCount: 0,
+					sep: 0,
+					finalized,
+					version,
+				};
 				continue;
 			}
 
@@ -584,7 +654,18 @@ export class TranscriptContainer extends Container implements NativeScrollbackLi
 				if (!(finalized && safeLength >= contribution.length)) commitSafeOpen = false;
 			}
 
-			segments[i] = { component: child, rawRef: raw, contribution, width, startRow: row, rowCount, sep };
+			segments[i] = {
+				component: child,
+				rawRef: raw,
+				contribution,
+				width,
+				generation: this.#generation,
+				startRow: row,
+				rowCount,
+				sep,
+				finalized,
+				version,
+			};
 			row += rowCount;
 		}
 		// Trailing shrink: blocks removed from the tail leave stale rows behind

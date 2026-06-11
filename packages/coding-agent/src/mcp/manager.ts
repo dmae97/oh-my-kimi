@@ -1223,6 +1223,8 @@ export class MCPManager {
 				const tokenUrl = material?.tokenUrl;
 				const clientId = material?.clientId;
 				const clientSecret = material?.clientSecret;
+				const resource =
+					material?.resource ?? (config.type === "http" || config.type === "sse" ? config.url : undefined);
 				// Proactive refresh: 5-minute buffer before expiry
 				// Force refresh: on 401/403 auth errors (revoked tokens, clock skew, missing expires)
 				const REFRESH_BUFFER_MS = 5 * 60_000;
@@ -1230,9 +1232,22 @@ export class MCPManager {
 					opts?.forceRefresh || (credential.expires && Date.now() >= credential.expires - REFRESH_BUFFER_MS);
 				if (shouldRefresh && credential.refresh && tokenUrl) {
 					try {
-						const refreshed = await refreshMCPOAuthToken(tokenUrl, credential.refresh, clientId, clientSecret);
+						const refreshed = await refreshMCPOAuthToken(
+							tokenUrl,
+							credential.refresh,
+							clientId,
+							clientSecret,
+							resource,
+						);
 						// Spread the old credential first so embedded refresh material survives rotation.
-						const refreshedCredential: MCPStoredOAuthCredential = { ...credential, ...refreshed };
+						const refreshedCredential: MCPStoredOAuthCredential = {
+							...credential,
+							...refreshed,
+							tokenUrl,
+							clientId,
+							clientSecret,
+							resource,
+						};
 						await this.#authStorage.set(credentialId, refreshedCredential);
 						credential = refreshedCredential;
 					} catch (refreshError) {

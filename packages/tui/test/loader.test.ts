@@ -36,7 +36,7 @@ describe("Loader component", () => {
 
 	it("keeps spinner cadence when animated messages repaint at 30fps", () => {
 		vi.useFakeTimers();
-		const ui = { requestRender: vi.fn() } as unknown as TUI;
+		const ui = { requestComponentRender: vi.fn() } as unknown as TUI;
 		const colorMessage = ((text: string) => text) as LoaderMessageColorFn & { animated: true };
 		colorMessage.animated = true;
 		const loader = new Loader(ui, text => text, colorMessage, "Checking", ["0", "1", "2", "3"]);
@@ -49,18 +49,18 @@ describe("Loader component", () => {
 
 	it("skips animated render requests when composed text is unchanged before the spinner advances", () => {
 		vi.useFakeTimers();
-		const ui = { requestRender: vi.fn() } as unknown as TUI;
+		const ui = { requestComponentRender: vi.fn() } as unknown as TUI;
 		const colorMessage = ((text: string) => text) as LoaderMessageColorFn & { animated: true };
 		colorMessage.animated = true;
 		const loader = new Loader(ui, text => text, colorMessage, "Checking", ["0", "1"]);
 
-		expect(ui.requestRender).toHaveBeenCalledTimes(1);
+		expect(ui.requestComponentRender).toHaveBeenCalledTimes(1);
 
 		vi.advanceTimersByTime(34);
-		expect(ui.requestRender).toHaveBeenCalledTimes(1);
+		expect(ui.requestComponentRender).toHaveBeenCalledTimes(1);
 
 		vi.advanceTimersByTime(67);
-		expect(ui.requestRender).toHaveBeenCalledTimes(2);
+		expect(ui.requestComponentRender).toHaveBeenCalledTimes(2);
 		expect(loader.render(20).join("\n")).toContain("1 Checking");
 
 		loader.stop();
@@ -68,7 +68,7 @@ describe("Loader component", () => {
 
 	it("requests render for message changes but not repeated identical messages", () => {
 		vi.useFakeTimers();
-		const ui = { requestRender: vi.fn() } as unknown as TUI;
+		const ui = { requestComponentRender: vi.fn() } as unknown as TUI;
 		const loader = new Loader(
 			ui,
 			text => text,
@@ -77,14 +77,14 @@ describe("Loader component", () => {
 			["0"],
 		);
 
-		expect(ui.requestRender).toHaveBeenCalledTimes(1);
+		expect(ui.requestComponentRender).toHaveBeenCalledTimes(1);
 
 		loader.setMessage("Still checking");
-		expect(ui.requestRender).toHaveBeenCalledTimes(2);
+		expect(ui.requestComponentRender).toHaveBeenCalledTimes(2);
 		expect(loader.render(30).join("\n")).toContain("0 Still checking");
 
 		loader.setMessage("Still checking");
-		expect(ui.requestRender).toHaveBeenCalledTimes(2);
+		expect(ui.requestComponentRender).toHaveBeenCalledTimes(2);
 
 		loader.stop();
 	});
@@ -92,15 +92,15 @@ describe("Loader component", () => {
 	it("requests render when animated message bytes change between spinner frames", () => {
 		vi.useFakeTimers();
 		setSystemTime(new Date(1_000));
-		const ui = { requestRender: vi.fn() } as unknown as TUI;
+		const ui = { requestComponentRender: vi.fn() } as unknown as TUI;
 		const colorMessage = ((text: string) => `${text}-${Date.now()}`) as LoaderMessageColorFn & { animated: true };
 		colorMessage.animated = true;
 		const loader = new Loader(ui, text => text, colorMessage, "Checking", ["0"]);
 
-		expect(ui.requestRender).toHaveBeenCalledTimes(1);
+		expect(ui.requestComponentRender).toHaveBeenCalledTimes(1);
 
 		vi.advanceTimersByTime(34);
-		expect(ui.requestRender).toHaveBeenCalledTimes(2);
+		expect(ui.requestComponentRender).toHaveBeenCalledTimes(2);
 		expect(loader.render(40).join("\n")).toContain("0 Checking-");
 
 		loader.stop();
@@ -116,7 +116,7 @@ describe("Loader component", () => {
 			"Checking",
 			["a", "b", "c"],
 		);
-		const spy = spyOn(tui, "requestRender");
+		const spy = spyOn(tui, "requestComponentRender");
 		loader.dispose();
 		const after = spy.mock.calls.length;
 		await Bun.sleep(40); // longer than the spinner interval

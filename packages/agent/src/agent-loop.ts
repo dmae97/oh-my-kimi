@@ -148,6 +148,16 @@ function snapshotAssistantMessageEvent(event: AssistantMessageEvent): AssistantM
  * (missing `content` array → crash on reload). We coerce at the single boundary where untyped
  * results enter the agent loop, so every downstream consumer can rely on the type.
  */
+const EMPTY_ERROR_TOOL_RESULT_TEXT = "Tool failed with no output.";
+
+function hasSubstantiveToolResultContent(content: AgentToolResult["content"]): boolean {
+	for (const block of content) {
+		if (block.type === "image") return true;
+		if (block.type === "text" && block.text.trim().length > 0) return true;
+	}
+	return false;
+}
+
 function coerceToolResult(raw: unknown): { result: AgentToolResult<unknown>; malformed: boolean } {
 	const rawObj = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
 	const rawContent = rawObj?.content;
@@ -193,8 +203,14 @@ function coerceToolResult(raw: unknown): { result: AgentToolResult<unknown>; mal
 			text: `Tool returned an invalid result: ${invalidBlocks} content block${invalidBlocks === 1 ? "" : "s"} had an unsupported shape.`,
 		});
 	}
+	const isError = explicitError || invalidBlocks > 0;
+	// Anthropic rejects tool_result blocks with is_error: true and empty content.
+	if (isError && !hasSubstantiveToolResultContent(content)) {
+		content.length = 0;
+		content.push({ type: "text", text: EMPTY_ERROR_TOOL_RESULT_TEXT });
+	}
 	return {
-		result: { content, details, ...(explicitError || invalidBlocks > 0 ? { isError: true } : {}) },
+		result: { content, details, ...(isError ? { isError: true } : {}) },
 		malformed: invalidBlocks > 0,
 	};
 }

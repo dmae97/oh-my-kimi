@@ -127,6 +127,7 @@ describe("per-profile MCP OAuth binding", () => {
 			"old-refresh",
 			"embedded-client",
 			"embedded-secret",
+			SERVER_URL,
 		);
 		expect(authorizationHeader(prepared)).toBe("Bearer fresh-token");
 		// Embedded refresh material must survive rotation, or the *next* refresh
@@ -137,6 +138,7 @@ describe("per-profile MCP OAuth binding", () => {
 			refresh: "fresh-refresh",
 			tokenUrl: "https://mcp.example.com/token",
 			clientId: "embedded-client",
+			resource: SERVER_URL,
 		});
 	});
 
@@ -235,6 +237,7 @@ describe("per-profile MCP OAuth binding", () => {
 			"my-refresh",
 			"my-dcr-client",
 			undefined,
+			SERVER_URL,
 		);
 		expect(authorizationHeader(prepared)).toBe("Bearer fresh-token");
 	});

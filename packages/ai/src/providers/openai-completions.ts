@@ -56,6 +56,7 @@ import {
 	getOpenAIStreamFirstEventTimeoutMs,
 	getOpenAIStreamIdleTimeoutMs,
 	iterateWithIdleTimeout,
+	iterateWithTerminalGrace,
 } from "../utils/idle-iterator";
 import { parseStreamingJson, parseStreamingJsonThrottled } from "../utils/json-parse";
 import { notifyProviderResponse } from "../utils/provider-response";
@@ -392,6 +393,13 @@ function getTrailingPartialDeepseekToken(text: string): string {
 }
 const OPENAI_COMPLETIONS_FIRST_EVENT_TIMEOUT_MESSAGE =
 	"OpenAI completions stream timed out while waiting for the first event";
+// How long to keep draining the stream after a `finish_reason` chunk arrived.
+// Compliant hosts follow it (almost) immediately with an optional usage-only
+// chunk and the `[DONE]` sentinel, so the window only ever elapses on hosts
+// that hold the connection open after the response logically completed —
+// without it the turn parks on `iterator.next()` until the idle watchdog
+// converts the already-successful response into a timeout error.
+const OPENAI_COMPLETIONS_POST_FINISH_GRACE_MS = 2_500;
 
 async function* observeDecodedOpenAICompletionChunks(
 	chunks: AsyncIterable<ChatCompletionChunk>,
@@ -748,6 +756,11 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				for (const call of calls) emitHealedToolCall(call);
 			};
 
+			// Terminal-chunk bookkeeping for the post-finish grace window below.
+			// `streamFinishedAt` flips when a chunk carries `finish_reason`;
+			// `sawUsagePayload` flips when any usage payload was parsed.
+			let streamFinishedAt: number | undefined;
+			let sawUsagePayload = false;
 			const timedOpenaiStream = iterateWithIdleTimeout(openaiStream, {
 				idleTimeoutMs,
 				firstItemTimeoutMs: firstEventTimeoutMs,
@@ -761,7 +774,16 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 			const observedOpenaiStream = rawSseObserver
 				? observeDecodedOpenAICompletionChunks(timedOpenaiStream, rawSseObserver)
 				: timedOpenaiStream;
-			for await (const chunk of observedOpenaiStream) {
+			const terminalAwareStream = iterateWithTerminalGrace(observedOpenaiStream, {
+				finishedAtMs: () => streamFinishedAt,
+				graceMs: OPENAI_COMPLETIONS_POST_FINISH_GRACE_MS,
+				// The inner idle-timeout generator is parked mid-`next()` when the
+				// grace window closes, so abort the transport to settle that read
+				// and release the socket immediately (a queued `.return()` alone
+				// would wait on the never-arriving next chunk).
+				onGraceEnd: () => requestAbortController.abort(),
+			});
+			for await (const chunk of terminalAwareStream) {
 				if (!chunk || typeof chunk !== "object") continue;
 
 				// OpenAI documents ChatCompletionChunk.id as the unique chat completion identifier,
@@ -776,15 +798,23 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 
 				if (chunk.usage) {
 					output.usage = parseChunkUsage(chunk.usage, model, premiumRequestsTotal);
+					sawUsagePayload = true;
 				}
 
 				const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
-				if (!choice) continue;
+				if (!choice) {
+					// Trailing usage-only chunk (`stream_options.include_usage`) after
+					// `finish_reason`: the response is complete — stop pulling instead
+					// of waiting for `[DONE]`/close from hosts that never send either.
+					if (streamFinishedAt !== undefined && sawUsagePayload) break;
+					continue;
+				}
 
 				if (!chunk.usage) {
 					const choiceUsage = getChoiceUsage(choice);
 					if (choiceUsage) {
 						output.usage = parseChunkUsage(choiceUsage, model, premiumRequestsTotal);
+						sawUsagePayload = true;
 					}
 				}
 
@@ -794,6 +824,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 					if (finishReasonResult.errorMessage) {
 						output.errorMessage = finishReasonResult.errorMessage;
 					}
+					streamFinishedAt ??= Date.now();
 				}
 
 				if (choice.delta) {
@@ -967,6 +998,12 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 						}
 					}
 				}
+
+				// `finish_reason` + usage both observed: the chat-completions
+				// contract has nothing left to deliver. Break instead of waiting
+				// for `[DONE]`/connection close so hosts that hold the socket open
+				// can't park the turn until the idle watchdog errors it out.
+				if (streamFinishedAt !== undefined && sawUsagePayload) break;
 			}
 
 			if (streamMarkupHealing) {

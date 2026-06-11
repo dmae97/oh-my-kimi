@@ -57,6 +57,12 @@ type WizardStep =
 export interface MCPAddWizardOAuthResult {
 	credentialId: string;
 	clientId?: string;
+	resource?: string;
+}
+
+interface MCPAddWizardOAuthOptions {
+	serverUrl?: string;
+	resource?: string;
 }
 
 interface WizardState {
@@ -71,6 +77,7 @@ interface WizardState {
 	oauthClientId: string;
 	oauthClientSecret: string;
 	oauthScopes: string;
+	oauthResource: string;
 	oauthCredentialId: string | null;
 	apiKey: string;
 	authLocation: AuthLocation | null;
@@ -101,6 +108,7 @@ export class MCPAddWizard extends Container {
 		oauthClientId: "",
 		oauthClientSecret: "",
 		oauthScopes: "",
+		oauthResource: "",
 		oauthCredentialId: null,
 		apiKey: "",
 		authLocation: null,
@@ -122,7 +130,7 @@ export class MCPAddWizard extends Container {
 				clientId: string,
 				clientSecret: string,
 				scopes: string,
-				serverUrl?: string,
+				options?: MCPAddWizardOAuthOptions,
 		  ) => Promise<MCPAddWizardOAuthResult>)
 		| null = null;
 	#onTestConnectionCallback: ((config: MCPServerConfig) => Promise<void>) | null = null;
@@ -137,7 +145,7 @@ export class MCPAddWizard extends Container {
 			clientId: string,
 			clientSecret: string,
 			scopes: string,
-			serverUrl?: string,
+			options?: MCPAddWizardOAuthOptions,
 		) => Promise<MCPAddWizardOAuthResult>,
 		onTestConnection?: (config: MCPServerConfig) => Promise<void>,
 		onRender?: () => void,
@@ -989,6 +997,7 @@ export class MCPAddWizard extends Container {
 					this.#state.oauthTokenUrl = oauth.tokenUrl;
 					this.#state.oauthClientId = oauth.clientId || "";
 					this.#state.oauthScopes = oauth.scopes || "";
+					this.#state.oauthResource = oauth.resource || (this.#state.transport === "stdio" ? "" : this.#state.url);
 					this.#state.authMethod = "oauth";
 
 					this.#contentContainer.clear();
@@ -1056,6 +1065,7 @@ export class MCPAddWizard extends Container {
 					type: "oauth",
 					credentialId: this.#state.oauthCredentialId,
 					tokenUrl: this.#state.oauthTokenUrl || undefined,
+					resource: this.#state.oauthResource || undefined,
 					clientId: this.#state.oauthClientId || undefined,
 					clientSecret: this.#state.oauthClientSecret || undefined,
 				};
@@ -1083,6 +1093,7 @@ export class MCPAddWizard extends Container {
 				type: "oauth",
 				credentialId: this.#state.oauthCredentialId,
 				tokenUrl: this.#state.oauthTokenUrl || undefined,
+				resource: this.#state.oauthResource || undefined,
 				clientId: this.#state.oauthClientId || undefined,
 				clientSecret: this.#state.oauthClientSecret || undefined,
 			};
@@ -1144,19 +1155,24 @@ export class MCPAddWizard extends Container {
 
 		try {
 			// Call OAuth handler
+			const oauthResource = this.#state.oauthResource || (this.#state.transport === "stdio" ? "" : this.#state.url);
 			const oauthResult = await this.#onOAuthCallback(
 				this.#state.oauthAuthUrl,
 				this.#state.oauthTokenUrl,
 				this.#state.oauthClientId,
 				this.#state.oauthClientSecret,
 				this.#state.oauthScopes,
-				this.#state.url || undefined,
+				{
+					serverUrl: this.#state.url || undefined,
+					resource: oauthResource || undefined,
+				},
 			);
 
 			// Store credential ID + any dynamically-registered client id. DCR client
 			// secrets stay embedded in the stored credential, never in mcp.json.
 			this.#state.oauthCredentialId = oauthResult.credentialId;
 			if (oauthResult.clientId) this.#state.oauthClientId = oauthResult.clientId;
+			this.#state.oauthResource = oauthResult.resource ?? oauthResource;
 
 			// Show success message
 			this.#contentContainer.clear();
@@ -1286,6 +1302,7 @@ export class MCPAddWizard extends Container {
 					type: "oauth",
 					credentialId: this.#state.oauthCredentialId,
 					tokenUrl: this.#state.oauthTokenUrl || undefined,
+					resource: this.#state.oauthResource || undefined,
 					clientId: this.#state.oauthClientId || undefined,
 					clientSecret: this.#state.oauthClientSecret || undefined,
 				};
@@ -1314,6 +1331,7 @@ export class MCPAddWizard extends Container {
 				type: "oauth",
 				credentialId: this.#state.oauthCredentialId,
 				tokenUrl: this.#state.oauthTokenUrl || undefined,
+				resource: this.#state.oauthResource || undefined,
 				clientId: this.#state.oauthClientId || undefined,
 				clientSecret: this.#state.oauthClientSecret || undefined,
 			};

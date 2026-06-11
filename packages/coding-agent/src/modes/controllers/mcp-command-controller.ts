@@ -130,6 +130,7 @@ class McpConnectingBlock extends ChatBlock {
 interface OAuthFlowResult {
 	credentialId: string;
 	clientId?: string;
+	resource?: string;
 }
 
 type MCPAddScope = "user" | "project";
@@ -492,6 +493,7 @@ export class MCPCommandController {
 						}
 
 						try {
+							const oauthResource = oauth.resource ?? finalConfig.url;
 							const oauthResult = await this.#handleOAuthFlow(
 								oauth.authorizationUrl,
 								oauth.tokenUrl,
@@ -504,10 +506,12 @@ export class MCPCommandController {
 									redirectUri: finalConfig.oauth?.redirectUri,
 									prompt: finalConfig.oauth?.prompt,
 									serverUrl: finalConfig.url,
+									resource: oauthResource,
 								},
 							);
 							finalConfig = this.#persistOAuthResult(finalConfig, oauthResult, {
 								tokenUrl: oauth.tokenUrl,
+								resource: oauthResource,
 								clientId: oauth.clientId,
 								userClientSecret: finalConfig.oauth?.clientSecret,
 							});
@@ -542,15 +546,8 @@ export class MCPCommandController {
 				done();
 				this.#handleWizardCancel();
 			},
-			async (
-				authUrl: string,
-				tokenUrl: string,
-				clientId: string,
-				clientSecret: string,
-				scopes: string,
-				serverUrl?: string,
-			) => {
-				return await this.#handleOAuthFlow(authUrl, tokenUrl, clientId, clientSecret, scopes, { serverUrl });
+			async (authUrl: string, tokenUrl: string, clientId: string, clientSecret: string, scopes: string, options) => {
+				return await this.#handleOAuthFlow(authUrl, tokenUrl, clientId, clientSecret, scopes, options);
 			},
 			async (config: MCPServerConfig) => {
 				return await this.#handleTestConnection(config);
@@ -583,6 +580,7 @@ export class MCPCommandController {
 			redirectUri?: string;
 			prompt?: string;
 			serverUrl?: string;
+			resource?: string;
 		},
 	): Promise<OAuthFlowResult> {
 		const authStorage = this.ctx.session.modelRegistry.authStorage;
@@ -623,6 +621,7 @@ export class MCPCommandController {
 					redirectUri: opts?.redirectUri,
 					callbackPort: opts?.callbackPort,
 					callbackPath: opts?.callbackPath,
+					resource: opts?.resource,
 				},
 				{
 					onAuth: (info: { url: string; instructions?: string }) => {
@@ -709,6 +708,7 @@ export class MCPCommandController {
 				tokenUrl,
 				clientId: flow.resolvedClientId ?? resolvedClientId,
 				clientSecret: flow.registeredClientSecret ?? resolvedClientSecret,
+				resource: flow.resource,
 			};
 
 			await authStorage.set(credentialId, oauthCredential);
@@ -716,6 +716,7 @@ export class MCPCommandController {
 			return {
 				credentialId,
 				clientId: flow.resolvedClientId,
+				resource: flow.resource,
 			};
 		} catch (error) {
 			const errorMsg = error instanceof Error ? error.message : String(error);
@@ -748,9 +749,10 @@ export class MCPCommandController {
 	#persistOAuthResult(
 		config: MCPServerConfig,
 		result: OAuthFlowResult,
-		opts: { tokenUrl: string; clientId?: string; userClientSecret?: string },
+		opts: { tokenUrl: string; resource?: string; clientId?: string; userClientSecret?: string },
 	): MCPServerConfig {
 		const clientId = result.clientId ?? opts.clientId ?? config.oauth?.clientId;
+		const resource = result.resource ?? opts.resource ?? config.auth?.resource;
 		return {
 			...config,
 			auth: {
@@ -759,6 +761,7 @@ export class MCPCommandController {
 				tokenUrl: opts.tokenUrl,
 				clientId,
 				clientSecret: opts.userClientSecret,
+				resource,
 			},
 			oauth: {
 				...config.oauth,
@@ -846,6 +849,7 @@ export class MCPCommandController {
 		tokenUrl: string;
 		clientId?: string;
 		scopes?: string;
+		resource?: string;
 	}> {
 		// Stdio servers manage credentials inside the child process; OMP's OAuth
 		// flow only applies to http/sse transports. Without this guard the
@@ -1480,6 +1484,9 @@ export class MCPCommandController {
 
 			this.#showMessage(["", theme.fg("muted", `Reauthorizing "${name}"...`), ""].join("\n"));
 
+			const oauthResource =
+				oauth.resource ?? currentAuth?.resource ?? ("url" in baseConfig ? baseConfig.url : undefined);
+
 			const oauthResult = await this.#handleOAuthFlow(
 				oauth.authorizationUrl,
 				oauth.tokenUrl,
@@ -1492,6 +1499,7 @@ export class MCPCommandController {
 					redirectUri: found.config.oauth?.redirectUri,
 					prompt: found.config.oauth?.prompt,
 					serverUrl,
+					resource: oauthResource,
 				},
 			);
 
@@ -1511,6 +1519,7 @@ export class MCPCommandController {
 					tokenUrl: oauth.tokenUrl,
 					clientId: oauth.clientId,
 					userClientSecret,
+					resource: oauthResource,
 				});
 				await updateMCPServer(found.filePath, name, updated);
 			}
