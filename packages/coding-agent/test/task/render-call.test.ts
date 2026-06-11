@@ -91,6 +91,43 @@ describe("task renderer: streaming call preview", () => {
 		expect(lines[0]).toContain("isolated");
 	});
 
+	// The batch schema streams `context` before `tasks`, and `renderResult`
+	// draws context/assignment above the agent rows. The call preview must use
+	// the same order: agent rows above the context would shift the whole brief
+	// down on every streamed item, then visibly jump below it once the first
+	// progress snapshot replaces the call view.
+	it("renders the per-agent list below the context and assignment briefs", () => {
+		const args = {
+			agent: "task",
+			context: "# Goal\nFix the bench branches.",
+			tasks: [
+				{ id: "Fix01Foundation", description: "Fix bench/01-foundation-memory" },
+				{ id: "Fix02Setup", description: "Fix bench/02-setup" },
+			],
+		} as unknown as TaskParams;
+		const out = render(args);
+
+		const contextAt = out.indexOf("Fix the bench branches.");
+		const firstAgentAt = out.indexOf("Fix01Foundation");
+		expect(contextAt).toBeGreaterThanOrEqual(0);
+		expect(firstAgentAt).toBeGreaterThan(contextAt);
+		expect(out.indexOf("Fix02Setup")).toBeGreaterThan(firstAgentAt);
+	});
+
+	// Early in the stream only `context` has parsed; the (empty) agent-list
+	// section must not draw a stray trailing divider bar.
+	it("omits the agent-list divider while no agent rows exist yet", () => {
+		const args = { agent: "task", context: "# Goal\nShared brief." } as unknown as TaskParams;
+		const out = render(args);
+		const lines = out.split("\n");
+
+		expect(out).toContain("Shared brief.");
+		// Interior divider bars start with the tee glyph; only the header (top)
+		// and bottom border may exist.
+		const tee = theme.boxSharp.teeRight;
+		expect(lines.filter(line => line.trimStart().startsWith(tee))).toHaveLength(0);
+	});
+
 	// Once the tool produces a result, the container suppresses the call entirely
 	// via `mergeCallAndResult` and `renderResult` draws the agent. As a safety
 	// net, `renderCall` also drops its preview when a result snapshot is present,

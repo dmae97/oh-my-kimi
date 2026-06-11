@@ -631,12 +631,18 @@ export function renderCall(
 		// same agent (and the assignment brief) itself, so showing it here would
 		// repeat what the result frame already shows.
 		if (!options.renderContext?.hasResult) {
-			sections.push({
-				separator: true,
-				lines: renderTaskCallLines(args, theme),
-			});
+			// Mirror renderResult's layout — context, assignment, then the
+			// per-agent list — so the agent rows do not jump from above the
+			// brief to below it when the first progress snapshot replaces the
+			// call view. This also matches the schema's field order (`context`
+			// streams before `tasks`), so the streaming preview grows
+			// append-only instead of inserting agent rows above the
+			// already-rendered markdown and pushing it down on every item.
 			if (contextSection) sections.push(contextSection(width));
 			if (assignmentSection) sections.push(assignmentSection(width));
+			const callLines = renderTaskCallLines(args, theme);
+			// Guarded: an empty trailing section would still draw its divider.
+			if (callLines.length > 0) sections.push({ separator: true, lines: callLines });
 		}
 
 		return {
