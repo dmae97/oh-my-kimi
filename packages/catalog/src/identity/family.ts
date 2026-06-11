@@ -58,7 +58,7 @@ export function isMinimaxM2FamilyModelId(modelId: string): boolean {
 	if (!lower.includes("minimax")) return false;
 	// Boundary-delimited `m2` token followed by zero or more digits (dotless
 	// variants like `m21`/`m25`/`m27`) and an optional dotted minor version.
-	return /(?:^|[/.\-])m2\d*(?:[.\-]\d+)?(?:[-.:_]|$)/i.test(lower);
+	return /(?:^|[/.-])m2\d*(?:[.-]\d+)?(?:[-.:_]|$)/i.test(lower);
 }
 
 /**
