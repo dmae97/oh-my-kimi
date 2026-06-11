@@ -44,7 +44,7 @@ Read-only snapshot path:
 - Calling `job` with `list: true` returns a markdown summary of every job spawned by the calling agent (running + completed within retention) without waiting.
 
 ## Flow
-1. `JobTool` is registered unconditionally in `packages/coding-agent/src/tools/index.ts`; there is no `async.enabled` gate (the `task` tool always schedules background jobs).
+1. `JobTool` is registered unconditionally in `packages/coding-agent/src/tools/index.ts`; there is no `async.enabled` gate (the manager may still carry bash or task jobs from before a setting change).
 2. `execute(...)` fetches `session.asyncJobManager`. If absent, it returns `Async execution is disabled; no background jobs are available.`
 3. `cancel` ids are processed first:
    - `manager.getJob(id)` missing → `not_found`.
