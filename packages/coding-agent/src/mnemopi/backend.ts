@@ -82,7 +82,7 @@ export const mnemopiBackend: MemoryBackend = {
 					hasRecalledForFirstTurn: true,
 				}),
 			);
-			previous?.dispose();
+			await previous?.dispose();
 			return;
 		}
 
@@ -91,7 +91,7 @@ export const mnemopiBackend: MemoryBackend = {
 			await Promise.all([loadMnemopi(), loadMnemopiCore()]);
 			const state = new MnemopiSessionState({ sessionId, config, session });
 			const previous = setMnemopiSessionState(session, state);
-			previous?.dispose();
+			await previous?.dispose();
 			state.attachSessionListeners();
 		} catch (error) {
 			logger.warn("Mnemopi: backend startup failed; memory backend inert.", { error: String(error) });
@@ -115,7 +115,7 @@ export const mnemopiBackend: MemoryBackend = {
 
 	async clear(agentDir, _cwd, session): Promise<void> {
 		const previous = session ? setMnemopiSessionState(session, undefined) : undefined;
-		previous?.dispose();
+		await previous?.dispose({ consolidate: false });
 		const config = previous?.config ?? (session ? loadMnemopiConfig(session.settings, agentDir) : undefined);
 		if (!config) return;
 		await loadMnemopiCore();
@@ -136,11 +136,7 @@ export const mnemopiBackend: MemoryBackend = {
 				state = new MnemopiSessionState({ sessionId: session.sessionId, config, session });
 				setMnemopiSessionState(session, state);
 			}
-			await state?.forceRetainCurrentSession();
-			// Drain the background fact extraction scheduled by the final retain
-			// before the process can exit, otherwise the last turn's facts are lost.
-			await state?.memory.flushExtractions();
-			state?.memory.sleepAllSessions(false);
+			await state?.consolidate();
 		} catch (error) {
 			logger.warn("Mnemopi: enqueue failed.", { error: String(error) });
 		}

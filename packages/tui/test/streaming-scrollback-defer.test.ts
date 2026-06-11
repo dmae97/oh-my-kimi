@@ -234,6 +234,46 @@ describe("streaming scrollback defer", () => {
 		}
 	});
 
+	it("keeps the topmost live seam when a lower sibling also reports one", async () => {
+		if (process.platform === "win32") return;
+		const term = new VirtualTerminal(24, 4);
+		overrideProbe(term, undefined);
+		const tui = new TUI(term);
+		const sealed = new LineList(rows("prior-", 12));
+		// Volatile live transcript block: seam at 0, no commit-safe end.
+		const live = new LiveLineList([]);
+		// Status loader below the transcript: also reports a seam. Commits are
+		// prefix-only, so the engine must keep the TOPMOST seam — letting the
+		// lower sibling's seam win would move the boundary past the transcript's
+		// still-mutable rows and commit them as stale history.
+		const loader = new LiveLineList(["Working..."]);
+
+		try {
+			tui.addChild(sealed);
+			tui.addChild(live);
+			tui.addChild(loader);
+			tui.start();
+			await settle(term);
+
+			const writes = capture(term);
+
+			live.setLines(rows("pending-stale-", 10));
+			tui.requestRender();
+			await settle(term);
+
+			live.setLines(rows("running-fresh-", 10));
+			tui.requestRender();
+			await settle(term);
+
+			const buffer = term.getScrollBuffer().map(line => line.trimEnd());
+			expect(eraseScrollbackCount(writes)).toBe(0);
+			expect(buffer.some(line => line.startsWith("pending-stale-"))).toBe(false);
+			expect(buffer).toContain("running-fresh-9");
+		} finally {
+			tui.stop();
+		}
+	});
+
 	it("commits scrolled streaming rows to history exactly once without ED3", async () => {
 		if (process.platform === "win32") return;
 		const term = new VirtualTerminal(40, 10);

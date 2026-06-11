@@ -383,6 +383,15 @@ export type CompatOf<TApi extends Api> = TApi extends "openai-completions"
 // Model interface for the unified model system
 export interface Model<TApi extends Api = Api> {
 	id: string;
+	/**
+	 * Model id to send on the wire when it differs from `id`. Used by catalog
+	 * variants that present one upstream model under several local entries —
+	 * e.g. GitHub Copilot long-context variants (`claude-opus-4.7-1m` requests
+	 * upstream `claude-opus-4.7`; the tier is a client-side context budget, not
+	 * a served model id). Providers MUST serialize `requestModelId ?? id`;
+	 * everything local (selection, caching, usage attribution) keys on `id`.
+	 */
+	requestModelId?: string;
 	name: string;
 	api: TApi;
 	provider: Provider;

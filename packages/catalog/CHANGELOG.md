@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [15.11.3] - 2026-06-11
+### Added
+
+- Added `requestModelId` on `Model` to represent the upstream model id used when a catalog entry is a local variant
+- Added synthetic GitHub Copilot long-context model variants with `-1m` suffixes when tiered token pricing is advertised
+
+### Changed
+
+- Changed GitHub Copilot discovery to request `X-GitHub-Api-Version: 2026-06-01` from `api.githubcopilot.com`
+- Changed GitHub Copilot discovery to cap base model `contextWindow` to the default token tier and keep long-context access as the separate `-1m` model entry
+- Changed Copilot model mapping to omit non-chat `/models` entries and enable image input for models whose capabilities indicate vision support
+
+### Fixed
+
+- Fixed long-context variant pricing to use `billing.token_prices.long_context` rates instead of default model pricing
+- Fixed `mapModel` handling in OpenAI-compatible discovery so returning `null` now skips a model entry rather than falling back to defaults
+- Fixed model ID precedence so a real upstream Copilot model id is kept when it conflicts with a synthesized `-1m` variant
+
 ## [15.11.1] - 2026-06-11
 
 ### Fixed

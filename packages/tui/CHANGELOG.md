@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [15.11.3] - 2026-06-11
+
+### Fixed
+
+- Fixed the root compose letting a lower child's native-scrollback live seam overwrite a higher one: the topmost seam (and its commit-safe extension) now defines the commit boundary, so a status loader below a streaming transcript can no longer cause still-mutable transcript rows to be committed as stale history ([#2328](https://github.com/can1357/oh-my-pi/pull/2328)).
+
 ## [15.11.2] - 2026-06-11
 
 ### Fixed
