@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import {
 	getPluginsDir,
@@ -76,12 +77,29 @@ function gitInstallSpec(original: string, source: GitSource): string {
 	return `${source.repo}#${source.ref}`;
 }
 
+function findExistingGitPackageName(packageInstallSpec: string, deps: Record<string, string>): string | undefined {
+	const needle = packageInstallSpec.replace(/^git\+/i, "");
+	for (const [key, value] of Object.entries(deps)) {
+		if (typeof value === "string" && value.includes(needle)) {
+			return key;
+		}
+	}
+	return undefined;
+}
+
 function hasDefaultExport(value: unknown): value is { default?: unknown } {
 	return typeof value === "object" && value !== null && "default" in value;
 }
 
 function hasExtensionFactoryExport(module: unknown): boolean {
 	return typeof module === "function" || (hasDefaultExport(module) && typeof module.default === "function");
+}
+
+interface PluginPackageSnapshot {
+	readonly actualName: string;
+	readonly packagePath: string;
+	readonly backupRoot: string;
+	readonly backupPath: string;
 }
 
 // =============================================================================
@@ -183,19 +201,50 @@ export class PluginManager {
 		}
 	}
 
+	async #snapshotInstalledPackage(actualName: string | undefined): Promise<PluginPackageSnapshot | null> {
+		if (!actualName) {
+			return null;
+		}
+		const packagePath = path.join(getPluginsNodeModules(), actualName);
+		try {
+			await fs.promises.lstat(packagePath);
+		} catch (err) {
+			if (isEnoent(err)) {
+				return null;
+			}
+			throw err;
+		}
+
+		const backupRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "omp-plugin-backup-"));
+		const backupPath = path.join(backupRoot, "package");
+		await fs.promises.cp(packagePath, backupPath, { recursive: true, verbatimSymlinks: true });
+		return { actualName, packagePath, backupRoot, backupPath };
+	}
+
+	async #cleanupSnapshot(snapshot: PluginPackageSnapshot | null): Promise<void> {
+		if (!snapshot) {
+			return;
+		}
+		try {
+			await fs.promises.rm(snapshot.backupRoot, { recursive: true, force: true });
+		} catch (err) {
+			logger.warn("Failed to remove plugin install backup", { plugin: snapshot.actualName, error: String(err) });
+		}
+	}
+
 	async #rollbackFailedInstall(
 		actualName: string,
 		packageJsonBefore: string,
-		wasInstalledBefore: boolean,
+		snapshot: PluginPackageSnapshot | null,
 	): Promise<void> {
-		try {
-			await Bun.write(getPluginsPackageJson(), packageJsonBefore);
-			if (!wasInstalledBefore) {
-				await fs.promises.rm(path.join(getPluginsNodeModules(), actualName), { recursive: true, force: true });
-			}
-		} catch (err) {
-			logger.warn("Failed to roll back invalid plugin install", { plugin: actualName, error: String(err) });
+		await Bun.write(getPluginsPackageJson(), packageJsonBefore);
+		const packagePath = path.join(getPluginsNodeModules(), actualName);
+		await fs.promises.rm(packagePath, { recursive: true, force: true });
+		if (!snapshot) {
+			return;
 		}
+		await fs.promises.mkdir(path.dirname(snapshot.packagePath), { recursive: true });
+		await fs.promises.cp(snapshot.backupPath, snapshot.packagePath, { recursive: true, verbatimSymlinks: true });
 	}
 
 	async #validateInstalledExtensions(plugin: InstalledPlugin): Promise<void> {
@@ -272,120 +321,128 @@ export class PluginManager {
 		const packageJsonBefore = await Bun.file(pkgJsonPath).text();
 		const depsBefore = await this.#readDeps(pkgJsonPath);
 		const packageInstallSpec = gitSource ? gitInstallSpec(spec.packageName, gitSource) : spec.packageName;
+		const existingActualName = gitSource
+			? findExistingGitPackageName(packageInstallSpec, depsBefore)
+			: extractPackageName(spec.packageName);
+		const packageSnapshot = await this.#snapshotInstalledPackage(existingActualName);
 
-		// Run npm install
-		const proc = Bun.spawn(["bun", "install", packageInstallSpec], {
-			cwd: getPluginsDir(),
-			stdin: "ignore",
-			stdout: "pipe",
-			stderr: "pipe",
-			windowsHide: true,
-		});
+		try {
+			// Run npm install
+			const proc = Bun.spawn(["bun", "install", packageInstallSpec], {
+				cwd: getPluginsDir(),
+				stdin: "ignore",
+				stdout: "pipe",
+				stderr: "pipe",
+				windowsHide: true,
+			});
 
-		const exitCode = await proc.exited;
-		if (exitCode !== 0) {
-			const stderr = await new Response(proc.stderr).text();
-			throw new Error(`npm install failed: ${stderr}`);
-		}
-		// Resolve actual package name. npm specs encode the name (strip version);
-		// git specs do not, so diff plugins/package.json deps to find the new entry.
-		let actualName: string;
-		if (gitSource) {
-			const depsAfter = await this.#readDeps(pkgJsonPath);
-			let resolved: string | undefined;
-			for (const key of Object.keys(depsAfter)) {
-				if (!(key in depsBefore)) {
-					resolved = key;
-					break;
-				}
+			const exitCode = await proc.exited;
+			if (exitCode !== 0) {
+				const stderr = await new Response(proc.stderr).text();
+				throw new Error(`npm install failed: ${stderr}`);
 			}
-			// Fallback: a force-reinstall of an already-present git plugin will not
-			// add a new key, just rewrite the existing one to the new spec value.
-			// Match by the install value for force-reinstalls where no new key is
-			// added (non-GitHub shorthands are normalized before bun sees them).
-			if (!resolved) {
-				const needle = packageInstallSpec.replace(/^git\+/i, "");
-				for (const [key, value] of Object.entries(depsAfter)) {
-					if (typeof value === "string" && value.includes(needle)) {
+			// Resolve actual package name. npm specs encode the name (strip version);
+			// git specs do not, so diff plugins/package.json deps to find the new entry.
+			let actualName: string;
+			if (gitSource) {
+				const depsAfter = await this.#readDeps(pkgJsonPath);
+				let resolved: string | undefined;
+				for (const key of Object.keys(depsAfter)) {
+					if (!(key in depsBefore)) {
 						resolved = key;
 						break;
 					}
 				}
+				// Fallback: a force-reinstall of an already-present git plugin will not
+				// add a new key, just rewrite the existing one to the new spec value.
+				// Match by the install value for force-reinstalls where no new key is
+				// added (non-GitHub shorthands are normalized before bun sees them).
+				if (!resolved) {
+					resolved = findExistingGitPackageName(packageInstallSpec, depsAfter);
+				}
+				if (!resolved) {
+					throw new Error(
+						`Installed ${spec.packageName} but could not determine package name from plugins/package.json`,
+					);
+				}
+				actualName = resolved;
+			} else {
+				actualName = extractPackageName(spec.packageName);
 			}
-			if (!resolved) {
-				throw new Error(
-					`Installed ${spec.packageName} but could not determine package name from plugins/package.json`,
-				);
-			}
-			actualName = resolved;
-		} else {
-			actualName = extractPackageName(spec.packageName);
-		}
-		const pkgPath = path.join(getPluginsNodeModules(), actualName, "package.json");
+			const pkgPath = path.join(getPluginsNodeModules(), actualName, "package.json");
 
-		let pkg: { name: string; version: string; omp?: PluginManifest; pi?: PluginManifest };
-		try {
-			pkg = await Bun.file(pkgPath).json();
-		} catch (err) {
-			if (isEnoent(err)) {
-				throw new Error(`Package installed but package.json not found at ${pkgPath}`);
+			let pkg: { name: string; version: string; omp?: PluginManifest; pi?: PluginManifest };
+			try {
+				pkg = await Bun.file(pkgPath).json();
+			} catch (err) {
+				if (isEnoent(err)) {
+					throw new Error(`Package installed but package.json not found at ${pkgPath}`);
+				}
+				throw err;
 			}
-			throw err;
-		}
-		const manifest: PluginManifest = pkg.omp || pkg.pi || { version: pkg.version };
-		manifest.version = pkg.version;
+			const manifest: PluginManifest = pkg.omp || pkg.pi || { version: pkg.version };
+			manifest.version = pkg.version;
 
-		// Resolve enabled features
-		let enabledFeatures: string[] | null = null;
-		if (spec.features === "*") {
-			// All features
-			enabledFeatures = manifest.features ? Object.keys(manifest.features) : null;
-		} else if (Array.isArray(spec.features)) {
-			if (spec.features.length > 0) {
-				// Validate requested features exist
-				if (manifest.features) {
-					for (const feat of spec.features) {
-						if (!(feat in manifest.features)) {
-							throw new Error(
-								`Unknown feature "${feat}" in ${actualName}. Available: ${Object.keys(manifest.features).join(", ")}`,
-							);
+			// Resolve enabled features
+			let enabledFeatures: string[] | null = null;
+			if (spec.features === "*") {
+				// All features
+				enabledFeatures = manifest.features ? Object.keys(manifest.features) : null;
+			} else if (Array.isArray(spec.features)) {
+				if (spec.features.length > 0) {
+					// Validate requested features exist
+					if (manifest.features) {
+						for (const feat of spec.features) {
+							if (!(feat in manifest.features)) {
+								throw new Error(
+									`Unknown feature "${feat}" in ${actualName}. Available: ${Object.keys(manifest.features).join(", ")}`,
+								);
+							}
 						}
 					}
+					enabledFeatures = spec.features;
+				} else {
+					// Empty array = no optional features
+					enabledFeatures = [];
 				}
-				enabledFeatures = spec.features;
-			} else {
-				// Empty array = no optional features
-				enabledFeatures = [];
 			}
+			// null = use defaults
+
+			const installedPlugin: InstalledPlugin = {
+				name: pkg.name,
+				version: pkg.version,
+				path: path.join(getPluginsNodeModules(), actualName),
+				manifest,
+				enabledFeatures,
+				enabled: true,
+			};
+
+			try {
+				await this.#validateInstalledExtensions(installedPlugin);
+			} catch (err) {
+				try {
+					await this.#rollbackFailedInstall(actualName, packageJsonBefore, packageSnapshot);
+				} catch (rollbackErr) {
+					const message = err instanceof Error ? err.message : String(err);
+					const rollbackMessage = rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr);
+					throw new Error(`${message}\nRollback failed: ${rollbackMessage}`);
+				}
+				throw err;
+			}
+
+			// Update runtime config
+			const config = await this.#ensureConfigLoaded();
+			config.plugins[pkg.name] = {
+				version: pkg.version,
+				enabledFeatures,
+				enabled: true,
+			};
+			await this.#saveRuntimeConfig();
+
+			return installedPlugin;
+		} finally {
+			await this.#cleanupSnapshot(packageSnapshot);
 		}
-		// null = use defaults
-
-		const installedPlugin: InstalledPlugin = {
-			name: pkg.name,
-			version: pkg.version,
-			path: path.join(getPluginsNodeModules(), actualName),
-			manifest,
-			enabledFeatures,
-			enabled: true,
-		};
-
-		try {
-			await this.#validateInstalledExtensions(installedPlugin);
-		} catch (err) {
-			await this.#rollbackFailedInstall(actualName, packageJsonBefore, actualName in depsBefore);
-			throw err;
-		}
-
-		// Update runtime config
-		const config = await this.#ensureConfigLoaded();
-		config.plugins[pkg.name] = {
-			version: pkg.version,
-			enabledFeatures,
-			enabled: true,
-		};
-		await this.#saveRuntimeConfig();
-
-		return installedPlugin;
 	}
 
 	/**

@@ -14,6 +14,33 @@ function emptyStream(): ReadableStream<Uint8Array> {
 	return body;
 }
 
+interface PluginFixture {
+	readonly version: string;
+	readonly source: string;
+	readonly dependencyVersion?: string;
+	readonly peerDependencies?: Record<string, string>;
+}
+
+async function writePluginPackage(pluginsNodeModules: string, name: string, fixture: PluginFixture): Promise<string> {
+	const installedDir = path.join(pluginsNodeModules, name);
+	await fs.mkdir(path.join(installedDir, "dist"), { recursive: true });
+	await Bun.write(
+		path.join(installedDir, "package.json"),
+		JSON.stringify(
+			{
+				name,
+				version: fixture.version,
+				...(fixture.peerDependencies ? { peerDependencies: fixture.peerDependencies } : {}),
+				omp: { extensions: ["./dist/extension.ts"] },
+			},
+			null,
+			2,
+		),
+	);
+	await Bun.write(path.join(installedDir, "dist", "extension.ts"), fixture.source);
+	return installedDir;
+}
+
 describe("PluginManager.install load validation", () => {
 	let tmpRoot: string;
 	let pluginsDir: string;
@@ -53,25 +80,12 @@ describe("PluginManager.install load validation", () => {
 						2,
 					),
 				);
-				const installedDir = path.join(pluginsNodeModules, "broken-plugin");
-				await fs.mkdir(path.join(installedDir, "dist"), { recursive: true });
-				await Bun.write(
-					path.join(installedDir, "package.json"),
-					JSON.stringify(
-						{
-							name: "broken-plugin",
-							version: "1.0.0",
-							peerDependencies: { "missing-peer": "^1.0.0" },
-							omp: { extensions: ["./dist/extension.ts"] },
-						},
-						null,
-						2,
-					),
-				);
-				await Bun.write(
-					path.join(installedDir, "dist", "extension.ts"),
-					'import { missing } from "missing-peer";\nexport default function(pi) { pi.registerCommand(String(missing), { handler: async () => {} }); }\n',
-				);
+				await writePluginPackage(pluginsNodeModules, "broken-plugin", {
+					version: "1.0.0",
+					peerDependencies: { "missing-peer": "^1.0.0" },
+					source:
+						'import { missing } from "missing-peer";\nexport default function(pi) { pi.registerCommand(String(missing), { handler: async () => {} }); }\n',
+				});
 			})();
 
 			return {
@@ -88,5 +102,66 @@ describe("PluginManager.install load validation", () => {
 		expect(pluginsPackage.dependencies ?? {}).toEqual({});
 		expect(await Bun.file(path.join(pluginsNodeModules, "broken-plugin", "package.json")).exists()).toBe(false);
 		expect(await Bun.file(path.join(tmpRoot, "omp-plugins.lock.json")).exists()).toBe(false);
+	});
+
+	test("restores the previous package tree when reinstall validation fails", async () => {
+		await Bun.write(
+			pluginsPkgJson,
+			JSON.stringify({ name: "omp-plugins", private: true, dependencies: { "broken-plugin": "1.0.0" } }, null, 2),
+		);
+		await Bun.write(
+			path.join(tmpRoot, "omp-plugins.lock.json"),
+			JSON.stringify(
+				{ plugins: { "broken-plugin": { version: "1.0.0", enabledFeatures: null, enabled: true } }, settings: {} },
+				null,
+				2,
+			),
+		);
+		await writePluginPackage(pluginsNodeModules, "broken-plugin", {
+			version: "1.0.0",
+			source: 'export default function(pi) { pi.registerCommand("old-ok", { handler: async () => {} }); }\n',
+		});
+
+		vi.spyOn(Bun, "spawn").mockImplementation(((cmd: string[]) => {
+			expect(cmd).toEqual(["bun", "install", "broken-plugin"]);
+
+			const prepare = (async () => {
+				await Bun.write(
+					pluginsPkgJson,
+					JSON.stringify(
+						{ name: "omp-plugins", private: true, dependencies: { "broken-plugin": "2.0.0" } },
+						null,
+						2,
+					),
+				);
+				await writePluginPackage(pluginsNodeModules, "broken-plugin", {
+					version: "2.0.0",
+					peerDependencies: { "missing-peer": "^1.0.0" },
+					source:
+						'import { missing } from "missing-peer";\nexport default function(pi) { pi.registerCommand(String(missing), { handler: async () => {} }); }\n',
+				});
+			})();
+
+			return {
+				pid: 1,
+				stdout: emptyStream(),
+				stderr: emptyStream(),
+				exited: prepare.then(() => 0),
+			} as Subprocess;
+		}) as typeof Bun.spawn);
+
+		await expect(new PluginManager(tmpRoot).install("broken-plugin")).rejects.toThrow(/missing-peer/);
+
+		const pluginsPackage = await Bun.file(pluginsPkgJson).json();
+		expect(pluginsPackage.dependencies).toEqual({ "broken-plugin": "1.0.0" });
+		const restoredPackage = await Bun.file(path.join(pluginsNodeModules, "broken-plugin", "package.json")).json();
+		expect(restoredPackage.version).toBe("1.0.0");
+		const restoredExtension = await Bun.file(
+			path.join(pluginsNodeModules, "broken-plugin", "dist", "extension.ts"),
+		).text();
+		expect(restoredExtension).toContain("old-ok");
+		expect(restoredExtension).not.toContain("missing-peer");
+		const lock = await Bun.file(path.join(tmpRoot, "omp-plugins.lock.json")).json();
+		expect(lock.plugins["broken-plugin"]).toEqual({ version: "1.0.0", enabledFeatures: null, enabled: true });
 	});
 });
