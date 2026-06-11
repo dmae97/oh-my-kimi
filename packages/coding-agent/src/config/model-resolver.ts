@@ -646,7 +646,9 @@ function resolveConfiguredRolePattern(value: string, settings?: Settings): strin
 	if (!role) return [normalized];
 
 	const configured = settings?.getModelRole(role)?.trim();
-	const configuredDefault = shouldInheritDefaultBeforePriority(role) ? settings?.getModelRole(DEFAULT_MODEL_ROLE)?.trim() : undefined;
+	const configuredDefault = shouldInheritDefaultBeforePriority(role)
+		? settings?.getModelRole(DEFAULT_MODEL_ROLE)?.trim()
+		: undefined;
 	const roleDefaults = normalizeModelPatternList(MODEL_PRIO[role as keyof typeof MODEL_PRIO]);
 	const resolved = configured ? normalizeModelPatternList(configured) : normalizeModelPatternList(configuredDefault);
 	if (resolved.length === 0) {
