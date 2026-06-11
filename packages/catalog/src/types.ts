@@ -37,9 +37,9 @@ export interface ThinkingConfig {
 	/** Optional default effort applied when this model is selected. Falls back to global default if absent. */
 	defaultLevel?: Effort;
 	/**
-	 * Effort → wire-value remap for `anthropic-adaptive` transports, baked at
-	 * build time (4-tier legacy scale vs the 5-tier Opus 4.7+/Fable/Mythos
-	 * scale). Identity for efforts the map omits.
+	 * Effort → provider wire-value remap, baked at build time. Identity for
+	 * efforts the map omits. Used by Anthropic adaptive thinking, OpenAI-
+	 * compatible `reasoning_effort`, and Responses-style reasoning params.
 	 */
 	effortMap?: Partial<Record<Effort, string>>;
 	/**

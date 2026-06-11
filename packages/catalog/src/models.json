@@ -2435,7 +2435,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"deepseek-v4-pro": {
@@ -2464,7 +2471,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"deepseek/deepseek-chat-v3-0324": {
@@ -11244,8 +11258,7 @@
 					"high"
 				],
 				"effortMap": {
-					"minimal": "low",
-					"xhigh": "max"
+					"minimal": "low"
 				}
 			}
 		}
@@ -11861,8 +11874,7 @@
 					"high"
 				],
 				"effortMap": {
-					"minimal": "low",
-					"xhigh": "max"
+					"minimal": "low"
 				}
 			}
 		},
@@ -13480,13 +13492,6 @@
 			"compat": {
 				"supportsDeveloperRole": false,
 				"supportsReasoningEffort": true,
-				"reasoningEffortMap": {
-					"minimal": "high",
-					"low": "high",
-					"medium": "high",
-					"high": "high",
-					"xhigh": "max"
-				},
 				"maxTokensField": "max_tokens",
 				"supportsToolChoice": false,
 				"extraBody": {
@@ -13506,7 +13511,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"deepseek-v4-pro": {
@@ -13530,13 +13542,6 @@
 			"compat": {
 				"supportsDeveloperRole": false,
 				"supportsReasoningEffort": true,
-				"reasoningEffortMap": {
-					"minimal": "high",
-					"low": "high",
-					"medium": "high",
-					"high": "high",
-					"xhigh": "max"
-				},
 				"maxTokensField": "max_tokens",
 				"supportsToolChoice": false,
 				"extraBody": {
@@ -13556,7 +13561,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		}
 	},
@@ -13588,7 +13600,10 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "none"
+				}
 			}
 		}
 	},
@@ -13635,7 +13650,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"glm-5": {
@@ -13664,7 +13686,10 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "none"
+				}
 			}
 		},
 		"glm-5.1": {
@@ -13693,7 +13718,10 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "none"
+				}
 			}
 		},
 		"gpt-oss-120b": {
@@ -13750,7 +13778,10 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "none"
+				}
 			}
 		},
 		"kimi-k2.6": {
@@ -13780,7 +13811,10 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "none"
+				}
 			}
 		},
 		"minimax-m2.7": {
@@ -14133,8 +14167,7 @@
 					"high"
 				],
 				"effortMap": {
-					"minimal": "low",
-					"xhigh": "max"
+					"minimal": "low"
 				}
 			}
 		},
@@ -17059,8 +17092,7 @@
 					"high"
 				],
 				"effortMap": {
-					"minimal": "low",
-					"xhigh": "max"
+					"minimal": "low"
 				}
 			}
 		},
@@ -17090,7 +17122,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"deepseek-ai/deepseek-v3.2-maas": {
@@ -17119,7 +17158,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"gemini-2.5-flash": {
@@ -17673,7 +17719,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"gemma2-9b-it": {
@@ -18060,7 +18113,13 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"effortMap": {
+					"minimal": "default",
+					"low": "default",
+					"medium": "default",
+					"high": "default"
+				}
 			}
 		}
 	},
@@ -18091,7 +18150,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"deepseek-ai/DeepSeek-V3.1": {
@@ -19965,7 +20031,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"deepseek/deepseek-v3.2-exp": {
@@ -19994,7 +20067,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"deepseek/deepseek-v3.2-speciale": {
@@ -20042,7 +20122,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"deepseek/deepseek-v4-flash:discounted": {
@@ -20109,7 +20196,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"deepseek/deepseek-v4-pro:discounted": {
@@ -31666,7 +31760,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"deepseek-ai/DeepSeek-V3.1-Terminus": {
@@ -31695,7 +31796,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"deepseek-ai/deepseek-v3.2-exp": {
@@ -31952,7 +32060,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"deepseek/deepseek-v3.2-speciale": {
@@ -32000,7 +32115,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"deepseek/deepseek-v4-pro": {
@@ -32029,7 +32151,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"deepseek/deepseek-v4-pro-cheaper": {
@@ -32058,7 +32187,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"dmind/dmind-1": {
@@ -42005,7 +42141,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"TEE/gemma-3-27b-it": {
@@ -44617,7 +44760,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"deepseek-ai/deepseek-v3.1": {
@@ -44646,7 +44796,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"deepseek-ai/deepseek-v3.1-terminus": {
@@ -44675,7 +44832,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"deepseek-ai/deepseek-v3.2": {
@@ -44704,7 +44868,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"deepseek-ai/deepseek-v4-flash": {
@@ -44733,7 +44904,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"deepseek-ai/deepseek-v4-pro": {
@@ -44762,7 +44940,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"google/codegemma-1.1-7b": {
@@ -49772,7 +49957,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"deepseek-v4-pro": {
@@ -49806,7 +49998,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"glm-5": {
@@ -50276,7 +50475,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"claude-3-5-haiku": {
@@ -50625,8 +50831,7 @@
 					"high"
 				],
 				"effortMap": {
-					"minimal": "low",
-					"xhigh": "max"
+					"minimal": "low"
 				}
 			}
 		},
@@ -50656,7 +50861,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"deepseek-v4-flash-free": {
@@ -50685,7 +50897,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"deepseek-v4-pro": {
@@ -50714,7 +50933,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"gemini-3-flash": {
@@ -52699,7 +52925,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "low",
+					"low": "medium",
+					"medium": "high",
+					"high": "xhigh",
+					"xhigh": "max"
+				}
 			}
 		},
 		"anthropic/claude-haiku-4.5": {
@@ -52836,7 +53069,11 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "low",
+					"xhigh": "max"
+				}
 			}
 		},
 		"anthropic/claude-opus-4.6-fast": {
@@ -52866,7 +53103,11 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "low",
+					"xhigh": "max"
+				}
 			}
 		},
 		"anthropic/claude-opus-4.7": {
@@ -52896,7 +53137,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "low",
+					"low": "medium",
+					"medium": "high",
+					"high": "xhigh",
+					"xhigh": "max"
+				}
 			}
 		},
 		"anthropic/claude-opus-4.7-fast": {
@@ -52926,7 +53174,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "low",
+					"low": "medium",
+					"medium": "high",
+					"high": "xhigh",
+					"xhigh": "max"
+				}
 			}
 		},
 		"anthropic/claude-opus-4.8": {
@@ -52956,7 +53211,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "low",
+					"low": "medium",
+					"medium": "high",
+					"high": "xhigh",
+					"xhigh": "max"
+				}
 			}
 		},
 		"anthropic/claude-opus-4.8-fast": {
@@ -52986,7 +53248,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "low",
+					"low": "medium",
+					"medium": "high",
+					"high": "xhigh",
+					"xhigh": "max"
+				}
 			}
 		},
 		"anthropic/claude-sonnet-4": {
@@ -53557,7 +53826,13 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high"
+				}
 			}
 		},
 		"deepseek/deepseek-chat-v3.1": {
@@ -53585,7 +53860,13 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high"
+				}
 			}
 		},
 		"deepseek/deepseek-r1": {
@@ -53613,7 +53894,13 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high"
+				}
 			}
 		},
 		"deepseek/deepseek-r1-0528": {
@@ -53641,7 +53928,13 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high"
+				}
 			}
 		},
 		"deepseek/deepseek-v3.1-terminus": {
@@ -53669,7 +53962,13 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high"
+				}
 			}
 		},
 		"deepseek/deepseek-v3.1-terminus:exacto": {
@@ -53697,7 +53996,13 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high"
+				}
 			}
 		},
 		"deepseek/deepseek-v3.2": {
@@ -53725,7 +54030,13 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high"
+				}
 			}
 		},
 		"deepseek/deepseek-v3.2-exp": {
@@ -53753,7 +54064,13 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high"
+				}
 			}
 		},
 		"deepseek/deepseek-v4-flash": {
@@ -53781,7 +54098,13 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high"
+				}
 			}
 		},
 		"deepseek/deepseek-v4-flash:free": {
@@ -53809,7 +54132,13 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high"
+				}
 			}
 		},
 		"deepseek/deepseek-v4-pro": {
@@ -53823,13 +54152,13 @@
 				"text"
 			],
 			"cost": {
-				"input": 0.09999999999999999,
-				"output": 0.19999999999999998,
-				"cacheRead": 0.02,
+				"input": 0.435,
+				"output": 0.87,
+				"cacheRead": 0.003625,
 				"cacheWrite": 0
 			},
 			"contextWindow": 1048576,
-			"maxTokens": 16384,
+			"maxTokens": 384000,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53837,7 +54166,13 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high"
+				}
 			}
 		},
 		"essentialai/rnj-1-instruct": {
@@ -59684,7 +60019,13 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high"
+				}
 			}
 		},
 		"tngtech/tng-r1t-chimera": {
@@ -61210,7 +61551,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"deepseek-ai/DeepSeek-V3.1": {
@@ -61816,7 +62164,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			},
 			"compat": {
 				"supportsUsageInStreaming": false
@@ -61848,7 +62203,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			},
 			"compat": {
 				"supportsUsageInStreaming": false
@@ -61880,7 +62242,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			},
 			"compat": {
 				"supportsUsageInStreaming": false
@@ -63834,7 +64203,7 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": 222222,
+			"contextWindow": 1000000,
 			"maxTokens": 8888,
 			"compat": {
 				"supportsUsageInStreaming": false
@@ -65089,8 +65458,7 @@
 					"high"
 				],
 				"effortMap": {
-					"minimal": "low",
-					"xhigh": "max"
+					"minimal": "low"
 				}
 			}
 		},
@@ -69113,7 +69481,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"deepseek-v4-pro": {
@@ -69146,7 +69521,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"GLM-5.1": {
@@ -70063,7 +70445,10 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "low"
+				}
 			}
 		},
 		"grok-4.3": {
@@ -70098,7 +70483,10 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "low"
+				}
 			}
 		},
 		"grok-build": {
@@ -71164,8 +71552,7 @@
 					"high"
 				],
 				"effortMap": {
-					"minimal": "low",
-					"xhigh": "max"
+					"minimal": "low"
 				}
 			}
 		},
@@ -71501,7 +71888,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"deepseek/deepseek-reasoner": {
@@ -71530,7 +71924,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"deepseek/deepseek-v3.2": {
@@ -71559,7 +71960,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"deepseek/deepseek-v3.2-exp": {
@@ -71588,7 +71996,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"deepseek/deepseek-v4-flash": {
@@ -71617,7 +72032,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"deepseek/deepseek-v4-flash-free": {
@@ -71646,7 +72068,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"deepseek/deepseek-v4-pro": {
@@ -71675,7 +72104,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"deepseek/deepseek-v4-pro-free": {
@@ -71704,7 +72140,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "high",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"google/gemini-2.0-flash": {

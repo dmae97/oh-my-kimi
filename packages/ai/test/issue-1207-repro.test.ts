@@ -61,7 +61,7 @@ describe("issue #1207 — DeepSeek V4 keeps reasoning with tools", () => {
 		expect(compat.supportsToolChoice).toBe(false);
 		expect(compat.maxTokensField).toBe("max_tokens");
 		expect(compat.extraBody).toEqual({ thinking: { type: "enabled" } });
-		expect(compat.reasoningEffortMap).toMatchObject({
+		expect(model.thinking?.effortMap).toMatchObject({
 			minimal: "high",
 			low: "high",
 			medium: "high",
@@ -70,11 +70,11 @@ describe("issue #1207 — DeepSeek V4 keeps reasoning with tools", () => {
 		});
 	});
 
-	it("merges partial user reasoning maps with DeepSeek defaults", () => {
-		const compat = customDeepseekFlash().compat;
+	it("merges partial user reasoning maps with DeepSeek defaults in thinking metadata", () => {
+		const model = customDeepseekFlash();
 
-		expect(compat.supportsToolChoice).toBe(false);
-		expect(compat.reasoningEffortMap).toMatchObject({
+		expect(model.compat.supportsToolChoice).toBe(false);
+		expect(model.thinking?.effortMap).toMatchObject({
 			minimal: "high",
 			low: "high",
 			medium: "high",
