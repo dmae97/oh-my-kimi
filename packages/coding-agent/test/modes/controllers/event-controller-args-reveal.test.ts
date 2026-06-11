@@ -107,7 +107,10 @@ describe("EventController paces streamed tool args", () => {
 
 		// The JSON closed: providers drop `partialJson` and deliver final args.
 		const finalArgs = { path: "/tmp/a.ts", content };
-		await dispatch(controller, makeStreamingMessage([{ type: "toolCall", id: "tc-1", name: "write", arguments: finalArgs }]));
+		await dispatch(
+			controller,
+			makeStreamingMessage([{ type: "toolCall", id: "tc-1", name: "write", arguments: finalArgs }]),
+		);
 		expect(updateArgsSpy.mock.calls.at(-1)?.[0]).toBe(finalArgs);
 
 		// The reveal entry is gone: no further paced frames tick in.
@@ -123,7 +126,13 @@ describe("EventController paces streamed tool args", () => {
 		const updateArgsSpy = vi.spyOn(ToolExecutionComponent.prototype, "updateArgs");
 		const target = `{"path":"/tmp/a.ts","content":"abc"}`;
 		const streaming = makeStreamingMessage([
-			{ type: "toolCall", id: "tc-1", name: "write", arguments: { path: "/tmp/a.ts" }, partialJson: target } as never,
+			{
+				type: "toolCall",
+				id: "tc-1",
+				name: "write",
+				arguments: { path: "/tmp/a.ts" },
+				partialJson: target,
+			} as never,
 		]);
 		const { controller } = createFixture(streaming);
 
