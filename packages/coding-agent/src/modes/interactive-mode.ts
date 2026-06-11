@@ -14,7 +14,14 @@ import {
 import type { CompactionOutcome } from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage, ImageContent, Message, Model, UsageReport } from "@oh-my-pi/pi-ai";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
-import type { Component, EditorTheme, LoaderMessageColorFn, OverlayHandle, SlashCommand } from "@oh-my-pi/pi-tui";
+import type {
+	Component,
+	EditorTheme,
+	LoaderMessageColorFn,
+	NativeScrollbackLiveRegion,
+	OverlayHandle,
+	SlashCommand,
+} from "@oh-my-pi/pi-tui";
 import {
 	Container,
 	clearRenderCache,
@@ -257,12 +264,18 @@ export interface InteractiveModeOptions {
 	initialMessages?: string[];
 }
 
-class StatusContainer extends Container {
+/**
+ * Hosts the working loader and transient status rows. While anything is
+ * mounted, every row is live: report a seam at 0 so the engine never commits
+ * a still-animating loader to native scrollback (stale `Working…` rows would
+ * otherwise pile up above the live one). The transcript's own seam, when
+ * present, sits higher and wins (topmost-seam merge in TUI.render).
+ */
+class StatusContainer extends Container implements NativeScrollbackLiveRegion {
 	getNativeScrollbackLiveRegionStart(): number | undefined {
 		return this.children.length > 0 ? 0 : undefined;
 	}
 }
-
 
 export class InteractiveMode implements InteractiveModeContext {
 	session: AgentSession;
