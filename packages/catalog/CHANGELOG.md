@@ -23,9 +23,6 @@
 - Fixed long-context variant pricing to use `billing.token_prices.long_context` rates instead of default model pricing
 - Fixed `mapModel` handling in OpenAI-compatible discovery so returning `null` now skips a model entry rather than falling back to defaults
 - Fixed model ID precedence so a real upstream Copilot model id is kept when it conflicts with a synthesized `-1m` variant
-### Fixed
-
-- Fixed MiniMax M2-family and OpenAI gpt-oss model metadata so OpenAI-compatible catalog entries declare only `low|medium|high` thinking efforts. Their upstreams reject `minimal`, `xhigh`, and Fireworks' `minimal → none` wire mapping, so `fireworks/minimax-m2.7` as the smol auto-thinking classifier model 400ed on every turn. Regenerated `models.json` now makes `disableReasoning` choose `low` for those families while leaving GLM-5.x and other Fireworks models on the existing `minimal → none` path ([#2315](https://github.com/can1357/oh-my-pi/issues/2315)).
 
 ## [15.11.1] - 2026-06-11
 
