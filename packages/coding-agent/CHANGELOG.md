@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.11.3] - 2026-06-11
+
 ### Fixed
 
 - Fixed stale `Working…` loader rows being committed to native scrollback above the live loader: the interactive status container now reports a live-region seam while it has mounted content ([#2328](https://github.com/can1357/oh-my-pi/pull/2328) by [@35844493](https://github.com/35844493)).

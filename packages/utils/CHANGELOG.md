@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.11.3] - 2026-06-11
+
 ### Added
 
 - Added `getEditorConfigFormatting(file)`: returns the `.editorconfig`-pinned `tabSize`/`insertSpaces` (both optional, no fallback) so LSP-format callers can layer per-file defaults under it without paving over silence with the renderer's display tab width ([#2329](https://github.com/can1357/oh-my-pi/issues/2329)).

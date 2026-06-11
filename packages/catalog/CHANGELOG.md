@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.11.3] - 2026-06-11
 ### Added
 
 - Added `requestModelId` on `Model` to represent the upstream model id used when a catalog entry is a local variant
