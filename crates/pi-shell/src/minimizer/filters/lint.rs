@@ -320,10 +320,10 @@ fn parse_eslint_row(row: &str) -> Option<(&str, &str, &str, Option<&str>)> {
 	// `radix`, `complexity`) are counted and not glued onto the message text.
 	// Rows with no >=2-space gap (`Parsing error: Unexpected token`) yield no
 	// rule-id and keep their whole body as the message.
-	if let Some((message, candidate)) = split_message_and_rule(body) {
-		if is_eslint_rule_id(candidate) {
-			return Some((loc, severity, message.trim_end(), Some(candidate)));
-		}
+	if let Some((message, candidate)) = split_message_and_rule(body)
+		&& is_eslint_rule_id(candidate)
+	{
+		return Some((loc, severity, message.trim_end(), Some(candidate)));
 	}
 	Some((loc, severity, body, None))
 }
@@ -366,8 +366,8 @@ fn is_line_col(token: &str) -> bool {
 /// and hyphenless core rules `semi`, `eqeqeq`, `camelcase`, `curly`, `radix`,
 /// `complexity`). NO hyphen is required — recognition relies on the structural
 /// >=2-space column split in `parse_eslint_row` plus this character-class. A
-/// leading lowercase letter excludes prose tokens that survived the split
-/// (uppercase-initial words, punctuation, trailing periods).
+/// > leading lowercase letter excludes prose tokens that survived the split
+/// > (uppercase-initial words, punctuation, trailing periods).
 fn is_eslint_rule_id(token: &str) -> bool {
 	let mut chars = token.chars();
 	matches!(chars.next(), Some(ch) if ch.is_ascii_lowercase())

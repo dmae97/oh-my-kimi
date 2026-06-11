@@ -455,7 +455,7 @@ fn is_glog_prefix(line: &str) -> bool {
 	// output that happens to start with W + 4 digits + space.
 	let month = (bytes[1] - b'0') * 10 + (bytes[2] - b'0');
 	let day = (bytes[3] - b'0') * 10 + (bytes[4] - b'0');
-	if month < 1 || month > 12 || day < 1 || day > 31 {
+	if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
 		return false;
 	}
 	// Require a time stamp (hh:mm...) after the space to distinguish real
@@ -639,7 +639,7 @@ fn log_dedup_key(line: &str) -> String {
 		if is_compose_log_service(service) {
 			let message = message.trim_start();
 			let normalized = crate::minimizer::filters::system::normalize_log_line(message);
-			return format!("{}|{}", service, normalized);
+			return format!("{service}|{normalized}");
 		}
 	}
 	crate::minimizer::filters::system::normalize_log_line(line)

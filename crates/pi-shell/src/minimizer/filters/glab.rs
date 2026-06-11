@@ -11,8 +11,8 @@ use crate::minimizer::{MinimizerCtx, MinimizerOutput, primitives};
 static SECTION_MARKER_RE: LazyLock<Regex> =
 	LazyLock::new(|| Regex::new(r"section_(?:start|end):\d+:[a-z0-9_]+\[[\d;]*[A-Za-z]").unwrap());
 
-/// Match bare bracket ANSI-like codes without ESC prefix: `[0K`, `[0;m`, `[36;1m`,
-/// etc.
+/// Match bare bracket ANSI-like codes without ESC prefix: `[0K`, `[0;m`,
+/// `[36;1m`, etc.
 static BARE_ANSI_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[[\d;]+[A-Za-z]").unwrap());
 
 /// Multiple consecutive blank lines (3+ newlines) collapsed to double newline.

@@ -48,7 +48,7 @@ fn filter_build_like(label: &str, input: &str, exit_code: i32) -> String {
 					&& trimmed
 						.split_whitespace()
 						.next()
-						.map_or(false, |first| first.chars().all(|c| c.is_ascii_digit()));
+						.is_some_and(|first| first.chars().all(|c| c.is_ascii_digit()));
 				let is_later_failure = lower.starts_with("failed! ")
 					|| lower.starts_with("failed ")
 					|| lower.starts_with("error ")
@@ -61,7 +61,7 @@ fn filter_build_like(label: &str, input: &str, exit_code: i32) -> String {
 				} else {
 					"build"
 				};
-				return format!("ok ({} succeeded)\n", noun);
+				return format!("ok ({noun} succeeded)\n");
 			}
 		}
 	}

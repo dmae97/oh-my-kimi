@@ -137,8 +137,8 @@ fn filter_rspec(input: &str, exit_code: i32) -> String {
 }
 
 /// Render the buffered `Failures:` detail blocks into `out`, capped at
-/// MAX_RENDERED_FAILURES with a `+N more failures` marker. Runs at most once —
-/// guarded by `rendered` — so the section is emitted exactly where the
+/// `MAX_RENDERED_FAILURES` with a `+N more failures` marker. Runs at most once
+/// — guarded by `rendered` — so the section is emitted exactly where the
 /// `Failures:` block ends (the summary line or `Failed examples:` boundary),
 /// preserving real rspec section ordering.
 fn render_rspec_blocks(out: &mut String, blocks: &mut Vec<String>, rendered: &mut bool) {
@@ -183,7 +183,7 @@ fn is_numbered_failure(trimmed: &str) -> bool {
 }
 
 /// Drop rtk-style rspec noise before the text paths. Mirrors
-/// rtk/src/cmds/ruby/rspec_cmd.rs::strip_noise: Spring preloader, SimpleCov
+/// `rtk/src/cmds/ruby/rspec_cmd.rs::strip_noise`: Spring preloader, `SimpleCov`
 /// coverage block (until the next blank line), `DEPRECATION WARNING:` lines,
 /// the `Finished in …` timing line, and Capybara screenshot detail (kept as a
 /// compact `[screenshot: path]`).
@@ -256,10 +256,10 @@ fn strip_rspec_noise(input: &str) -> String {
 	out
 }
 
-/// The SimpleCov coverage-report banner that opens the trailing coverage block,
-/// e.g. `Coverage report generated for RSpec to /app/coverage`. Anchored to the
-/// banner shape so a failure-detail line merely mentioning a `coverage/` path
-/// is not misread as the banner.
+/// The `SimpleCov` coverage-report banner that opens the trailing coverage
+/// block, e.g. `Coverage report generated for RSpec to /app/coverage`. Anchored
+/// to the banner shape so a failure-detail line merely mentioning a `coverage/`
+/// path is not misread as the banner.
 fn is_coverage_banner(lower: &str) -> bool {
 	lower.starts_with("coverage report")
 }
@@ -453,11 +453,11 @@ fn filter_minitest(input: &str, exit_code: i32) -> String {
 	}
 }
 
-/// RuboCop output: keep lint's grouped offense rendering as primary, but
+/// `RuboCop` output: keep lint's grouped offense rendering as primary, but
 /// compact the `-a`/`-A` autocorrect run-summary line
 /// (`N files inspected, M offenses detected, K offenses autocorrected`) — which
 /// the grouped output otherwise keeps verbatim and buried — to a single `ok`
-/// line. Ported from rtk/src/cmds/ruby/rubocop_cmd.rs autocorrect handling,
+/// line. Ported from `rtk/src/cmds/ruby/rubocop_cmd.rs` autocorrect handling,
 /// re-derived against the minimizer's DEFAULT text output.
 fn filter_rubocop(input: &str, exit_code: i32) -> String {
 	let condensed = lint::condense_lint_output("rubocop", input, exit_code);
@@ -502,7 +502,7 @@ fn leading_number(s: &str) -> Option<usize> {
 /// lines (mirrors snip's rake keep-lines pattern) plus the HEAD of a
 /// `rake aborted!` traceback (the first few frames, which carry the real
 /// cause). `rake test` / `rails test` never reach here — they route to
-/// filter_minitest.
+/// `filter_minitest`.
 fn filter_rake(input: &str, exit_code: i32) -> String {
 	// On a FAILING non-test task that prints no `rake aborted!` header, the
 	// keep-lines pass below would retain only individually keyword-matching lines

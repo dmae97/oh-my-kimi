@@ -93,8 +93,8 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 
 /// Per-(program, subcommand) success no-op detection. Returns the one-line
 /// summary to emit when the raw output says nothing changed, replacing the
-/// match_output overlays that previously lived in defs/poetry-install.toml and
-/// defs/uv-sync.toml. Callers must gate on exit_code == 0.
+/// `match_output` overlays that previously lived in defs/poetry-install.toml
+/// and defs/uv-sync.toml. Callers must gate on `exit_code` == 0.
 fn success_up_to_date_short_circuit(ctx: &MinimizerCtx<'_>, cleaned: &str) -> Option<&'static str> {
 	// poetry install/lock/update no-op: 'No dependencies to install or update'
 	// (poetry 1.x) or 'No changes.' (poetry 2.x). Scoped to program=poetry.
@@ -132,7 +132,7 @@ fn success_up_to_date_short_circuit(ctx: &MinimizerCtx<'_>, cleaned: &str) -> Op
 /// 'failed') that must survive a uv no-op short-circuit. Kept deliberately
 /// narrow: the no-op summary lines themselves ('Resolved …', 'Audited …') carry
 /// none of these tokens, so a clean no-op still collapses to 'ok (up to date)'.
-/// Do NOT reuse is_error_or_summary here — it also matches 'audited'/'found'/
+/// Do NOT reuse `is_error_or_summary` here — it also matches 'audited'/'found'/
 /// 'success'/'complete', which would suppress the short-circuit on every no-op.
 fn uv_has_actionable_diagnostic(cleaned: &str) -> bool {
 	cleaned.lines().any(|line| {
@@ -457,8 +457,8 @@ fn is_js_program(program: &str) -> bool {
 }
 
 /// JS package-manager success-summary lines worth keeping exactly once. snip
-/// retains these so the count confirms lockfile/node_modules state. Callers
-/// must gate on is_js_program first.
+/// retains these so the count confirms `lockfile/node_modules` state. Callers
+/// must gate on `is_js_program` first.
 fn is_js_install_summary(lower: &str) -> bool {
 	lower.starts_with("added ") && lower.contains("package")
 		|| lower.starts_with("removed ") && lower.contains("package")
@@ -543,7 +543,7 @@ fn is_python_package_noise(ctx: &MinimizerCtx<'_>, _line: &str, lower: &str) -> 
 
 /// poetry prefixes per-package progress with a `- ` or `• ` bullet, e.g.
 /// `  - Downloading requests-2.31.0…` / `  • Installing certifi (2023.11.17)`,
-/// plus virtualenv-setup chatter. These are the strip_lines that previously
+/// plus virtualenv-setup chatter. These are the `strip_lines` that previously
 /// lived in defs/poetry-install.toml; the bullet prefix means the bare
 /// `downloading `/`installing ` checks above never reached them. `lower` is the
 /// already-trimmed, lowercased line.
