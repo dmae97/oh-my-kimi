@@ -609,6 +609,46 @@ describe("Mnemopi backend lifecycle", () => {
 		registeredMnemopiState = undefined;
 	});
 
+	it("clear() skips consolidation before deleting the DBs (#2327 review)", async () => {
+		const config = makeMnemopiConfig({
+			scoping: "per-project-tagged",
+			bank: "project-alpha",
+			globalBank: "default",
+			retainBank: "project-alpha",
+			recallBanks: ["project-alpha", "default"],
+		});
+		const state = registerMnemopiState(config, { cwd: "/work/project-alpha" });
+		const ownedMemories = [state.getScopedRetainTarget().memory];
+		if (state.globalMemory && state.globalMemory !== ownedMemories[0]) {
+			ownedMemories.push(state.globalMemory);
+		}
+
+		const retainSpy = vi.spyOn(state, "forceRetainCurrentSession");
+		const consolidateSpy = vi.spyOn(state, "consolidate");
+		const perBank = ownedMemories.map(memory => ({
+			flush: vi.spyOn(memory, "flushExtractions"),
+			sleep: vi.spyOn(memory, "sleepAllSessions"),
+			close: vi.spyOn(memory, "close"),
+		}));
+
+		const session = state.session;
+		setMnemopiSessionState(session, state);
+
+		await mnemopiBackend.clear(path.dirname(config.dbPath), "/work/project-alpha", session);
+
+		// `/memory clear` is about to delete the SQLite files: spending tokens
+		// and time consolidating memory that will be wiped is wasted work.
+		expect(retainSpy).not.toHaveBeenCalled();
+		expect(consolidateSpy).not.toHaveBeenCalled();
+		for (const bank of perBank) {
+			expect(bank.flush).not.toHaveBeenCalled();
+			expect(bank.sleep).not.toHaveBeenCalled();
+			expect(bank.close).toHaveBeenCalledTimes(1);
+		}
+		expect(getMnemopiSessionState(session)).toBeUndefined();
+		registeredMnemopiState = undefined;
+	});
+
 	it("exposes direct mnemopi runtime status and search/save results", async () => {
 		const config = makeMnemopiConfig({
 			scoping: "per-project-tagged",

@@ -115,7 +115,7 @@ export const mnemopiBackend: MemoryBackend = {
 
 	async clear(agentDir, _cwd, session): Promise<void> {
 		const previous = session ? setMnemopiSessionState(session, undefined) : undefined;
-		await previous?.dispose();
+		await previous?.dispose({ consolidate: false });
 		const config = previous?.config ?? (session ? loadMnemopiConfig(session.settings, agentDir) : undefined);
 		if (!config) return;
 		await loadMnemopiCore();

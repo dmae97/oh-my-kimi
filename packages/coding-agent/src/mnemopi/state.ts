@@ -387,14 +387,24 @@ export class MnemopiSessionState {
 		}
 	}
 
-	async dispose(): Promise<void> {
+	/**
+	 * Release the per-session resources. Defaults to running {@link consolidate}
+	 * before closing handles so normal session shutdown promotes working memory
+	 * into long-term storage. Callers that are about to delete the DB files —
+	 * e.g. `mnemopiBackend.clear` — pass `{ consolidate: false }` to skip the
+	 * extraction/sleep pass, since spending tokens on memories that will be
+	 * wiped on the next line is wasted work (PR #2327 review).
+	 */
+	async dispose(options: { consolidate?: boolean } = {}): Promise<void> {
 		this.unsubscribe?.();
 		this.unsubscribe = undefined;
 		if (this.aliasOf) return;
-		try {
-			await this.consolidate();
-		} catch (error) {
-			logger.warn("Mnemopi: consolidation on dispose failed.", { error: String(error) });
+		if (options.consolidate !== false) {
+			try {
+				await this.consolidate();
+			} catch (error) {
+				logger.warn("Mnemopi: consolidation on dispose failed.", { error: String(error) });
+			}
 		}
 		for (const memory of this.scoped.owned) memory.close();
 	}
