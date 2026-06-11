@@ -377,9 +377,17 @@ export class MnemopiSessionState {
 	 * callers can keep using the state. {@link dispose} composes this with the
 	 * close step so normal session shutdown promotes working memory to
 	 * episodic/gists/graph automatically (see issue #2320).
+	 *
+	 * Aliased subagent states share `scoped` (and therefore the actual SQLite
+	 * banks) with their parent. `consolidate()` deliberately does NOT
+	 * short-circuit on `aliasOf`: `forceRetainCurrentSession` already guards
+	 * itself, and an explicit `/memory enqueue` invoked from within a subagent
+	 * still needs to flush extractions and sleep the parent's shared banks —
+	 * otherwise enqueue would report success while leaving the subagent's
+	 * retained memories unconsolidated until the parent eventually shuts down
+	 * (PR #2327 review).
 	 */
 	async consolidate(): Promise<void> {
-		if (this.aliasOf) return;
 		await this.forceRetainCurrentSession();
 		for (const memory of this.scoped.owned) {
 			await memory.flushExtractions();

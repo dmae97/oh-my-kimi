@@ -582,6 +582,48 @@ describe("Mnemopi backend lifecycle", () => {
 		expect(parentRetainSpy).not.toHaveBeenCalled();
 	});
 
+	it("aliased subagent enqueue still flushes and sleeps the parent's shared banks (#2327 review)", async () => {
+		const settings = Settings.isolated({ "memory.backend": "mnemopi" });
+		const parentState = registerMnemopiState();
+		const parentMemory = parentState.getScopedRetainTarget().memory;
+		const childSession = {
+			sessionId: "child-session-id",
+			settings,
+			sessionManager: { getEntries: () => [], getCwd: () => "/tmp" },
+			emitNotice: () => {},
+			modelRegistry: {} as never,
+			getMnemopiSessionState: () => getMnemopiSessionState(childSession),
+		} as never;
+		await mnemopiBackend.start({
+			session: childSession,
+			settings,
+			modelRegistry: {} as never,
+			agentDir: path.dirname(tempDbPath!),
+			taskDepth: 1,
+			parentMnemopiSessionState: parentState,
+		});
+		const childState = getMnemopiSessionState(childSession);
+		expect(childState?.aliasOf).toBe(parentState);
+
+		const flushSpy = vi.spyOn(parentMemory, "flushExtractions");
+		const sleepSpy = vi.spyOn(parentMemory, "sleepAllSessions");
+		const parentRetainSpy = vi.spyOn(parentState, "forceRetainCurrentSession");
+		const childRetainSpy = vi.spyOn(childState!, "forceRetainCurrentSession");
+
+		await mnemopiBackend.enqueue(path.dirname(tempDbPath!), "/tmp", childSession);
+
+		// /memory enqueue from a subagent must still consolidate the shared
+		// banks; `forceRetainCurrentSession` is the one piece that the alias
+		// guard short-circuits (the subagent's transcript is the parent's
+		// concern), but the SQL-level flush and sleep must reach every owned
+		// bank or the user's enqueue silently no-ops.
+		expect(flushSpy).toHaveBeenCalledTimes(1);
+		expect(sleepSpy).toHaveBeenCalledTimes(1);
+		expect(sleepSpy).toHaveBeenCalledWith(false);
+		expect(childRetainSpy).toHaveBeenCalledTimes(1);
+		expect(parentRetainSpy).not.toHaveBeenCalled();
+	});
+
 	it("clears every scoped Mnemopi database for per-project-tagged mode", async () => {
 		const config = makeMnemopiConfig({
 			scoping: "per-project-tagged",
