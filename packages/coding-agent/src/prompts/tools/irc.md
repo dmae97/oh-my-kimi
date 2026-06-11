@@ -9,7 +9,7 @@ Sends short text messages to other agents in this process and receives theirs.
 - `op: "wait"` — block until a message arrives (optionally only `from` a specific peer); consumes and returns it. A timeout is a clean "no message" result, not an error.
 - `op: "inbox"` — drain pending messages without blocking (`peek: true` to leave them unread).
 - `replyTo` — set it to the id of the message you are answering so the sender can correlate.
-- Nobody answers on a peer's behalf anymore: a reply only arrives when the recipient actually sends one. For background on what a peer has been doing, `read` `history://<id>` instead of interrogating them.
+- Nobody answers on a peer's behalf — a reply normally arrives only when the recipient sends one — with one exception: `send` with `await: true` to a peer that is mid-turn and cannot reach a step boundary (async execution disabled, e.g. blocked in a synchronous task spawn) gets a side-channel auto-reply generated from that peer's context. For background on what a peer has been doing, `read` `history://<id>` instead of interrogating them.
 </instruction>
 
 <when_to_use>

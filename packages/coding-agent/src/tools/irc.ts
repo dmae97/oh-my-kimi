@@ -234,7 +234,15 @@ export class IrcTool implements AgentTool<typeof ircSchema, IrcDetails> {
 			// through the bus unfiltered so parked recipients are revived.
 			const targets = isBroadcast ? registry.listVisibleTo(senderId).map(ref => ref.id) : [to];
 			const receipts = await Promise.all(
-				targets.map(target => bus.send({ from: senderId, to: target, body: message, replyTo: params.replyTo })),
+				targets.map(target =>
+					bus.send(
+						{ from: senderId, to: target, body: message, replyTo: params.replyTo },
+						// Awaited sends mark the sender as blocked on an answer so a
+						// busy recipient that cannot reach a step boundary (async
+						// disabled) auto-replies instead of stranding the sender.
+						params.await ? { expectsReply: true } : undefined,
+					),
+				),
 			);
 
 			const lines: string[] = [];
@@ -457,13 +465,14 @@ function callMeta(args: IrcRenderArgs | undefined): string[] {
 
 /**
  * Display-only transcript card for live IRC traffic: `irc:incoming` DMs
- * delivered to this session and `irc:relay` observations of agent↔agent
+ * delivered to this session, `irc:autoreply` side-channel replies sent on
+ * this session's behalf, and `irc:relay` observations of agent↔agent
  * traffic. Shares the tool renderer's glyph + quote-border conventions so
  * cards and `irc` tool output look identical in the transcript.
  */
 export function createIrcMessageCard(
 	card: {
-		kind: "incoming" | "relay";
+		kind: "incoming" | "autoreply" | "relay";
 		from?: string;
 		to?: string;
 		body?: string;
@@ -477,9 +486,12 @@ export function createIrcMessageCard(
 	const title =
 		card.kind === "incoming"
 			? `IRC ${uiTheme.nav.back} ${from}`
-			: `IRC ${from} ${uiTheme.nav.selected} ${card.to?.trim() || "?"}`;
+			: card.kind === "autoreply"
+				? `IRC ${uiTheme.nav.selected} ${card.to?.trim() || "?"}`
+				: `IRC ${from} ${uiTheme.nav.selected} ${card.to?.trim() || "?"}`;
 	const body = card.body ?? "";
 	const meta: string[] = [];
+	if (card.kind === "autoreply") meta.push("auto");
 	if (card.replyTo) meta.push("reply");
 	const age = messageAge(card.timestamp);
 	if (age) meta.push(age);

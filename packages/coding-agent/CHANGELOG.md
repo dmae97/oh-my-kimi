@@ -17,6 +17,7 @@
 - Routed LSP hover code rendering through the shared cached highlighter instead of calling the native highlighter directly on each render.
 - Kept smooth assistant streaming renders transient until `message_end` so catch-up frames do not synchronously re-highlight still-growing code blocks.
 - Fixed the `job` tool's poll header repeating the running count ("waiting on 19 of 19 19 running"): the title now reads "waiting on N jobs" (or "waiting on N of M jobs" when some settled) and the dim meta lists only settled categories (done/failed/cancelled)
+- Fixed `irc` `send await:true` to a busy peer stranding the sender until timeout when async execution is disabled: the recipient (e.g. Main blocked in a synchronous task spawn awaiting the sender's own batch) can never reach a step boundary to reply, so it now generates an ephemeral side-channel auto-reply from its context (the pre-mailbox `respondAsBackground` behavior), records it as an `irc:autoreply` aside in its own history, and delivers it back over the bus with `replyTo` threading
 
 ## [15.11.1] - 2026-06-11
 ### Added

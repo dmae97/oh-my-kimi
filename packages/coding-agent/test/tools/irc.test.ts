@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { SettingPath } from "@oh-my-pi/pi-coding-agent/config/settings-schema";
 import { IrcBus, type IrcMessage } from "@oh-my-pi/pi-coding-agent/irc/bus";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
@@ -73,7 +74,10 @@ function makeToolSession(registry: AgentRegistry, agentId: string): ToolSession 
 	};
 }
 
-function createRealSession(): { session: AgentSession; sessionManager: SessionManager } {
+function createRealSession(overrides: Partial<Record<SettingPath, unknown>> = {}): {
+	session: AgentSession;
+	sessionManager: SessionManager;
+} {
 	const sessionManager = SessionManager.inMemory("/tmp");
 	const session = new AgentSession({
 		agent: new Agent({
@@ -84,7 +88,7 @@ function createRealSession(): { session: AgentSession; sessionManager: SessionMa
 			},
 		}),
 		sessionManager,
-		settings: Settings.isolated({ "compaction.enabled": false }),
+		settings: Settings.isolated({ "compaction.enabled": false, ...overrides }),
 		modelRegistry: {} as never,
 	});
 	return { session, sessionManager };
@@ -601,6 +605,70 @@ describe("IRC", () => {
 			});
 			expect(outcome).toBe("injected");
 			expect(promptSpy).not.toHaveBeenCalled();
+		});
+
+		it("auto-replies via an ephemeral side turn when the sender awaits and async execution is disabled", async () => {
+			const { session } = createRealSession({ "async.enabled": false });
+			sessions.push(session);
+			registry.register({ id: "Main", displayName: "main", kind: "main", session });
+			const sub = makeFakeSession();
+			registry.register({ id: "0-Sub", displayName: "task", kind: "sub", session: sub.session });
+			Object.defineProperty(session, "isStreaming", { value: true, configurable: true });
+			const ephemeralSpy = vi
+				.spyOn(session, "runEphemeralTurn")
+				.mockResolvedValue({ replyText: "auto answer", assistantMessage: {} as never });
+			const autoReplyEvent = new Promise<CustomMessage>(resolve => {
+				session.subscribe(event => {
+					if (event.type === "irc_message" && event.message.customType === "irc:autoreply") {
+						resolve(event.message);
+					}
+				});
+			});
+
+			// The sender parks a waiter (the `await: true` path), then sends with
+			// the expectsReply hint — exactly what the irc tool does.
+			const waiting = bus.wait("0-Sub", { from: "Main" }, 1000);
+			const receipt = await bus.send(
+				{ from: "0-Sub", to: "Main", body: "which PR did you mean?" },
+				{ expectsReply: true },
+			);
+			expect(receipt).toEqual({ to: "Main", outcome: "injected" });
+
+			// The side-channel reply resolves the sender's waiter as a real bus
+			// message threaded to the original send.
+			const reply = await waiting;
+			expect(reply?.from).toBe("Main");
+			expect(reply?.body).toBe("auto answer");
+			expect(reply?.replyTo).toBeTruthy();
+			expect(ephemeralSpy.mock.calls[0]?.[0]?.promptText).toContain("which PR did you mean?");
+
+			// The recipient records what was said on its behalf.
+			const record = await autoReplyEvent;
+			expect(record.details).toMatchObject({ to: "0-Sub", body: "auto answer" });
+		});
+
+		it("does not auto-reply when async execution is enabled or the sender does not await", async () => {
+			const enabled = createRealSession({ "async.enabled": true });
+			sessions.push(enabled.session);
+			registry.register({ id: "Main", displayName: "main", kind: "main", session: enabled.session });
+			Object.defineProperty(enabled.session, "isStreaming", { value: true, configurable: true });
+			const enabledSpy = vi
+				.spyOn(enabled.session, "runEphemeralTurn")
+				.mockResolvedValue({ replyText: "nope", assistantMessage: {} as never });
+			const awaited = await bus.send({ from: "0-Sub", to: "Main", body: "q?" }, { expectsReply: true });
+			expect(awaited.outcome).toBe("injected");
+			expect(enabledSpy).not.toHaveBeenCalled();
+
+			const disabled = createRealSession({ "async.enabled": false });
+			sessions.push(disabled.session);
+			registry.register({ id: "Main2", displayName: "main", kind: "main", session: disabled.session });
+			Object.defineProperty(disabled.session, "isStreaming", { value: true, configurable: true });
+			const disabledSpy = vi
+				.spyOn(disabled.session, "runEphemeralTurn")
+				.mockResolvedValue({ replyText: "nope", assistantMessage: {} as never });
+			const fireAndForget = await bus.send({ from: "0-Sub", to: "Main2", body: "fyi" });
+			expect(fireAndForget.outcome).toBe("injected");
+			expect(disabledSpy).not.toHaveBeenCalled();
 		});
 	});
 });
