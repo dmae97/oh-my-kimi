@@ -11,6 +11,8 @@ import {
 	logger,
 } from "@oh-my-pi/pi-utils";
 import { type GitSource, parseGitUrl } from "./git-url";
+import { installLegacyPiSpecifierShim, loadLegacyPiModule } from "./legacy-pi-compat";
+import { resolvePluginExtensionPaths } from "./loader";
 import { extractPackageName, parsePluginSpec } from "./parser";
 import type {
 	DoctorCheck,
@@ -72,6 +74,14 @@ function gitInstallSpec(original: string, source: GitSource): string {
 		return source.repo;
 	}
 	return `${source.repo}#${source.ref}`;
+}
+
+function hasDefaultExport(value: unknown): value is { default?: unknown } {
+	return typeof value === "object" && value !== null && "default" in value;
+}
+
+function hasExtensionFactoryExport(module: unknown): boolean {
+	return typeof module === "function" || (hasDefaultExport(module) && typeof module.default === "function");
 }
 
 // =============================================================================
@@ -173,6 +183,48 @@ export class PluginManager {
 		}
 	}
 
+	async #rollbackFailedInstall(
+		actualName: string,
+		packageJsonBefore: string,
+		wasInstalledBefore: boolean,
+	): Promise<void> {
+		try {
+			await Bun.write(getPluginsPackageJson(), packageJsonBefore);
+			if (!wasInstalledBefore) {
+				await fs.promises.rm(path.join(getPluginsNodeModules(), actualName), { recursive: true, force: true });
+			}
+		} catch (err) {
+			logger.warn("Failed to roll back invalid plugin install", { plugin: actualName, error: String(err) });
+		}
+	}
+
+	async #validateInstalledExtensions(plugin: InstalledPlugin): Promise<void> {
+		const extensionPaths = resolvePluginExtensionPaths(plugin);
+		if (plugin.manifest.extensions && plugin.manifest.extensions.length > 0 && extensionPaths.length === 0) {
+			throw new Error(`Plugin ${plugin.name} declares extension entries but none resolved to loadable files`);
+		}
+		if (extensionPaths.length === 0) {
+			return;
+		}
+
+		installLegacyPiSpecifierShim();
+		const errors: string[] = [];
+		for (const extensionPath of extensionPaths) {
+			try {
+				const module = await loadLegacyPiModule(extensionPath);
+				if (!hasExtensionFactoryExport(module)) {
+					errors.push(`${extensionPath}: extension does not export a valid factory function`);
+				}
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				errors.push(`${extensionPath}: ${message}`);
+			}
+		}
+		if (errors.length > 0) {
+			throw new Error(`Plugin ${plugin.name} extension validation failed:\n${errors.join("\n")}`);
+		}
+	}
+
 	// ==========================================================================
 	// Install / Uninstall
 	// ==========================================================================
@@ -217,7 +269,8 @@ export class PluginManager {
 			};
 		}
 		const pkgJsonPath = getPluginsPackageJson();
-		const depsBefore = gitSource ? await this.#readDeps(pkgJsonPath) : {};
+		const packageJsonBefore = await Bun.file(pkgJsonPath).text();
+		const depsBefore = await this.#readDeps(pkgJsonPath);
 		const packageInstallSpec = gitSource ? gitInstallSpec(spec.packageName, gitSource) : spec.packageName;
 
 		// Run npm install
@@ -307,6 +360,22 @@ export class PluginManager {
 		}
 		// null = use defaults
 
+		const installedPlugin: InstalledPlugin = {
+			name: pkg.name,
+			version: pkg.version,
+			path: path.join(getPluginsNodeModules(), actualName),
+			manifest,
+			enabledFeatures,
+			enabled: true,
+		};
+
+		try {
+			await this.#validateInstalledExtensions(installedPlugin);
+		} catch (err) {
+			await this.#rollbackFailedInstall(actualName, packageJsonBefore, actualName in depsBefore);
+			throw err;
+		}
+
 		// Update runtime config
 		const config = await this.#ensureConfigLoaded();
 		config.plugins[pkg.name] = {
@@ -316,14 +385,7 @@ export class PluginManager {
 		};
 		await this.#saveRuntimeConfig();
 
-		return {
-			name: pkg.name,
-			version: pkg.version,
-			path: path.join(getPluginsNodeModules(), actualName),
-			manifest,
-			enabledFeatures,
-			enabled: true,
-		};
+		return installedPlugin;
 	}
 
 	/**

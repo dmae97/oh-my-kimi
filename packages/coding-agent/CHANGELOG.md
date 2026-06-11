@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed npm plugin installs to reject packages whose declared extension entry points cannot load because imports or nested dependencies are unresolved ([#2312](https://github.com/can1357/oh-my-pi/issues/2312)).
+
 ## [15.11.2] - 2026-06-11
 
 ### Added
