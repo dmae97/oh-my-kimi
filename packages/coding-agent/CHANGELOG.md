@@ -58,6 +58,7 @@
 ### Fixed
 
 - Fixed Anthropic classifier refusals to switch through configured retry fallback chains without same-model retries, and to keep the fallback pinned for the conversation. ([#2290](https://github.com/can1357/oh-my-pi/issues/2290))
+- Fixed the edit-tool hashline prompt to stop steering agents toward `insert after block N:` on closing delimiter lines; opener-only block anchors now point visible closing-line insertions to plain `insert after M:`. ([#2292](https://github.com/can1357/oh-my-pi/issues/2292))
 - Fixed `irc` live message delivery so successfully handed-off messages are no longer enqueued as mailbox mail, so they do not inflate unread `irc` counts
 - Fixed `irc send` with `await: true` to wait for a fresh reply to the current call instead of consuming previously buffered messages
 - Fixed main-session chat output to stop duplicating outbound `irc` sends from the main agent as relay cards

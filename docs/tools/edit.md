@@ -34,6 +34,7 @@ Patch language inside `input`:
   - `delete block N` — delete the whole tree-sitter block beginning on line N (resolved like `replace block N`, with the same decorator/comment caveat). No body. On success the result echoes the matched span (`delete block N → resolved lines A-B`). Same resolution failure modes and `delete N..M` fallback.
   - `insert before N:` — insert body rows immediately before line N.
   - `insert after N:` — insert body rows immediately after line N.
+  - `insert after block N:` — insert body rows after the last line of the tree-sitter block beginning on line N. Point N at the line that opens the construct, never its closing delimiter / last visible line; if you can see the last line already, use plain `insert after M:`. Same resolution failure modes and `insert after M:` fallback.
   - `insert head:` — insert body rows at the start of the file.
   - `insert tail:` — insert body rows at the end of the file.
 - **Body rows**:
@@ -62,7 +63,7 @@ The canonical grammar is strict, but the hand parser accepts a few non-dangerous
 - `delete N..M:` and any body rows under `delete` / `delete block` are rejected.
 - Empty `replace` / `insert` / `replace block` hunks are rejected.
 - `-` body rows are rejected with `MINUS_ROW_REJECTED`.
-- `replace block N:` / `delete block N` require a wired tree-sitter resolver; `replace block` additionally needs at least one `+TEXT` body row, while `delete block` takes none. An unresolvable block (unsupported language, blank/closing-delimiter line, no node beginning on N, or a syntax error in the resolved block) is rejected on the apply/final-preview path; the streaming preview silently drops it instead.
+- `replace block N:` / `delete block N` / `insert after block N:` require a wired tree-sitter resolver; `replace block` and `insert after block` additionally need at least one `+TEXT` body row, while `delete block` takes none. An unresolvable block (unsupported language, blank/closing-delimiter line, no node beginning on N, or a syntax error in the resolved block) is rejected on the apply/final-preview path; the streaming preview silently drops it instead.
 
 ## Outputs
 - Single-shot tool result; hashline mode does not use a `resolve` preview/apply handshake.
@@ -171,8 +172,9 @@ delete 20
   - `line N: \`replace N..M:\` needs at least one \`+TEXT\` body row. To delete lines, use \`delete N..M\`.`
   - `line N: \`insert\` needs at least one \`+TEXT\` body row.`
   - `line N: \`replace block N:\` needs at least one \`+TEXT\` body row. To delete a block, use \`delete N..M\` with the block's line range.`
-- Unresolvable `replace block N:` (apply / final-preview path only):
+- Unresolvable block anchor (apply / final-preview path only):
   - `line N: \`replace block X:\` could not resolve a syntactic block beginning on line X. The language may be unsupported, the line may be blank or a closing delimiter, or the block may not parse. Use \`replace X..M:\` with the block's explicit end line instead.` — followed by a blank line and numbered `*`-marked context rows around line X (same shape as the mismatch preview).
+  - `line N: \`insert after block X:\` could not resolve a syntactic block beginning on line X. The language may be unsupported, the line may be blank or a closing delimiter, or the block may not parse. Use \`insert after M:\` with the block's explicit last line instead.` — same context preview.
 - Delete with body:
   - `line N: \`delete N..M\` does not take body rows. Remove the body, or use \`replace N..M:\`.`
   - `line N: \`delete block N\` does not take body rows. Remove the body, or use \`replace block N:\` to replace the block.`
