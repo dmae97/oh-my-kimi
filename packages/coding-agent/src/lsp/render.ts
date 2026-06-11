@@ -218,7 +218,7 @@ function renderHover(
 	const beforeCode = fullText.slice(0, codeStart).trimEnd();
 	const afterCode = fullText.slice(fullText.indexOf("```", 3) + 3).trim();
 
-	const codeLines = highlightThemeCode(code, lang);
+	const codeLines = highlightThemeCode(code, lang, theme);
 	const icon = theme.styledSymbol("status.info", "accent");
 	const langLabel = lang ? theme.fg("mdCodeBlockBorder", ` ${lang}`) : "";
 

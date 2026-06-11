@@ -22,7 +22,7 @@ describe("LSP render", () => {
 		const rendered = Bun.stripANSI(component.render(120).join("\n"));
 
 		expect(highlightSpy).toHaveBeenCalledTimes(1);
-		expect(highlightSpy).toHaveBeenCalledWith("const value = 1;", "ts");
+		expect(highlightSpy).toHaveBeenCalledWith("const value = 1;", "ts", themeModule.theme);
 		expect(rendered).toContain("CACHED_HIGHLIGHT");
 	});
 });
