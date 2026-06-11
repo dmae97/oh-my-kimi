@@ -174,7 +174,8 @@ describe("memories runtime", () => {
 		];
 		await fs.writeFile(rolloutPath, `${rolloutRows.map(row => JSON.stringify(row)).join("\n")}\n`);
 
-		vi.spyOn(ai, "completeSimple")
+		const completeSpy = vi
+			.spyOn(ai, "completeSimple")
 			.mockResolvedValueOnce({
 				stopReason: "end_turn",
 				content: [
@@ -226,6 +227,8 @@ describe("memories runtime", () => {
 		});
 		expect(ai.completeSimple).toHaveBeenCalled();
 		expect(ai.completeSimple).toHaveBeenCalledTimes(2);
+		const phase2Prompt = completeSpy.mock.calls[1]?.[1];
+		expect(phase2Prompt?.systemPrompt?.[0]).toContain("memory-stage-two consolidator");
 	});
 
 	test("clamps stage1 and phase2 reasoning effort against the model's supported range", async () => {

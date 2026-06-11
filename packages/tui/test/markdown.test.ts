@@ -1258,6 +1258,69 @@ describe("Module-level LRU render cache", () => {
 		const l2Markdown = new Markdown(text, 0, 0, defaultMarkdownTheme);
 		expect(l2Markdown.render(width)).toBe(first);
 	});
+
+	it("skips code-block highlighting for transient streaming renders", () => {
+		clearRenderCache();
+		let highlightCallCount = 0;
+		const themeWithSpy = {
+			...defaultMarkdownTheme,
+			highlightCode: (_code: string, _lang?: string): string[] => {
+				highlightCallCount++;
+				return ["HIGHLIGHTED"];
+			},
+		};
+
+		const markdown = new Markdown("```ts\nconst streamed = true;\n```", 0, 0, themeWithSpy);
+		markdown.transientRenderCache = true;
+		const plain = stripVTControlCharacters(markdown.render(80).join("\n"));
+
+		expect(highlightCallCount).toBe(0);
+		expect(plain).toContain("const streamed = true;");
+		expect(plain).not.toContain("HIGHLIGHTED");
+	});
+
+	it("re-renders code-block highlighting when a transient instance becomes stable", () => {
+		clearRenderCache();
+		let highlightCallCount = 0;
+		const themeWithSpy = {
+			...defaultMarkdownTheme,
+			highlightCode: (_code: string, _lang?: string): string[] => {
+				highlightCallCount++;
+				return ["HIGHLIGHTED"];
+			},
+		};
+
+		const markdown = new Markdown("```ts\nconst streamed = true;\n```", 0, 0, themeWithSpy);
+		markdown.transientRenderCache = true;
+		const plain = stripVTControlCharacters(markdown.render(80).join("\n"));
+		expect(highlightCallCount).toBe(0);
+		expect(plain).toContain("const streamed = true;");
+
+		markdown.transientRenderCache = false;
+		const highlighted = stripVTControlCharacters(markdown.render(80).join("\n"));
+		expect(highlightCallCount).toBe(1);
+		expect(highlighted).toContain("HIGHLIGHTED");
+	});
+
+	it("skips nested list code-block highlighting for transient streaming renders", () => {
+		clearRenderCache();
+		let highlightCallCount = 0;
+		const themeWithSpy = {
+			...defaultMarkdownTheme,
+			highlightCode: (_code: string, _lang?: string): string[] => {
+				highlightCallCount++;
+				return ["HIGHLIGHTED"];
+			},
+		};
+
+		const markdown = new Markdown("- item\n\n  ```ts\n  const streamed = true;\n  ```", 0, 0, themeWithSpy);
+		markdown.transientRenderCache = true;
+		const plain = stripVTControlCharacters(markdown.render(80).join("\n"));
+
+		expect(highlightCallCount).toBe(0);
+		expect(plain).toContain("const streamed = true;");
+		expect(plain).not.toContain("HIGHLIGHTED");
+	});
 });
 
 describe("OSC 66 text-sizing headings", () => {

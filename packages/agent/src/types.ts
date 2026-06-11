@@ -456,8 +456,9 @@ export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any
 	 * Concurrency mode for tool scheduling when multiple calls are in one turn.
 	 * - "shared": can run alongside other shared tools (default)
 	 * - "exclusive": runs alone; other tools wait until it finishes
+	 * - function: resolved per call from the (raw, pre-validation) arguments
 	 */
-	concurrency?: "shared" | "exclusive";
+	concurrency?: "shared" | "exclusive" | ((args: Partial<Static<TParameters>>) => "shared" | "exclusive");
 	/** If true, argument validation errors are non-fatal: raw args are passed to execute() instead of returning an error to the LLM. */
 	lenientArgValidation?: boolean;
 	/**

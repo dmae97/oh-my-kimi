@@ -30,7 +30,6 @@ import type {
 	TSchema,
 } from "@oh-my-pi/pi-ai";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/oauth/types";
-import type * as piCodingAgent from "@oh-my-pi/pi-coding-agent";
 import type { AutocompleteItem, Component, EditorTheme, KeyId, TUI } from "@oh-my-pi/pi-tui";
 import type { logger as PiLogger } from "@oh-my-pi/pi-utils";
 import type * as Zod from "zod/v4";
@@ -40,6 +39,7 @@ import type { EditToolDetails } from "../../edit";
 import type { PythonResult } from "../../eval/py/executor";
 import type { BashResult } from "../../exec/bash-executor";
 import type { ExecOptions, ExecResult } from "../../exec/exec";
+import type * as PiCodingAgent from "../../index";
 import type { MemoryRuntimeContext } from "../../memory-backend";
 import type { CustomEditor } from "../../modes/components/custom-editor";
 import type { Theme } from "../../modes/theme/theme";
@@ -893,7 +893,7 @@ export interface ExtensionAPI {
 	zod: typeof Zod;
 
 	/** Injected pi-coding-agent exports for accessing SDK utilities */
-	pi: typeof piCodingAgent;
+	pi: typeof PiCodingAgent;
 
 	// =========================================================================
 	// Event Subscription

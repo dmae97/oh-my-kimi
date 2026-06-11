@@ -83,6 +83,8 @@ export interface PlanReviewOverlayCallbacks {
 	onCancel: () => void;
 	/** Invoked when the external-editor key is pressed (overlay stays open). */
 	onExternalEditor?: () => void;
+	/** Invoked when the external-editor key edits the active annotation draft. */
+	onAnnotationExternalEditor?: (draft: string, commit: (text: string | null) => void) => void;
 	/** Invoked with the new full plan text after an in-overlay delete/undo. */
 	onPlanEdited?: (content: string) => void;
 	/** Invoked with the Refine feedback markdown whenever annotations change. */
@@ -282,6 +284,12 @@ export class PlanReviewOverlay implements Component {
 	handleInput(keyData: string): void {
 		if (keyData.startsWith("\x1b[<") && this.#handleMouse(keyData)) return;
 		if (this.#annotating) {
+			if (this.callbacks.onAnnotationExternalEditor && matchesAppExternalEditor(keyData)) {
+				this.callbacks.onAnnotationExternalEditor(this.#input.getValue(), text => {
+					if (text !== null) this.#submitAnnotation(text);
+				});
+				return;
+			}
 			this.#input.handleInput(keyData);
 			return;
 		}
@@ -603,9 +611,21 @@ export class PlanReviewOverlay implements Component {
 		}
 		for (const section of annotated) {
 			feedback += `\n## ${section.title}\n`;
-			for (const note of section.annotations) feedback += `- ${note}\n`;
+			for (const note of section.annotations) feedback += this.#formatAnnotationFeedback(note);
 		}
 		this.callbacks.onFeedbackChange?.(feedback);
+	}
+
+	#formatAnnotationFeedback(note: string): string {
+		if (!note.includes("\n")) return `- ${note}\n`;
+		const fence = this.#markdownFenceFor(note);
+		return `${fence}md\n${note}\n${fence}\n`;
+	}
+
+	#markdownFenceFor(text: string): string {
+		let fence = "```";
+		while (text.includes(fence)) fence += "`";
+		return fence;
 	}
 
 	#renderSliderLines(): string[] {
@@ -676,7 +696,14 @@ export class PlanReviewOverlay implements Component {
 			if (section.level >= 1 && section.annotations.length > 0 && rendered.length > 0) {
 				lines.push(rendered[0]!);
 				for (const note of section.annotations) {
-					lines.push(`${theme.fg("warning", "▎ ")}${theme.fg("dim", "note: ")}${theme.fg("accent", note)}`);
+					const noteLines = note.split(/\r?\n/);
+					for (let j = 0; j < noteLines.length; j++) {
+						const prefix =
+							j === 0
+								? `${theme.fg("warning", "▎ ")}${theme.fg("dim", "note: ")}`
+								: `${theme.fg("warning", "▎ ")}${theme.fg("dim", "      ")}`;
+						lines.push(`${prefix}${theme.fg("accent", noteLines[j] ?? "")}`);
+					}
 				}
 				for (let k = 1; k < rendered.length; k++) lines.push(rendered[k]!);
 			} else {
@@ -749,7 +776,9 @@ export class PlanReviewOverlay implements Component {
 			const section = this.#sections[this.#toc[this.#tocCursor]!];
 			const title = section?.title ?? "";
 			const caption = `${theme.fg("dim", "Annotate")} ${theme.fg("accent", `‹${title}›`)}`;
-			return [caption, this.#input.render(innerWidth)[0] ?? ""];
+			const hintParts = ["enter save", "esc cancel"];
+			if (this.#externalEditorLabel) hintParts.push(`${this.#externalEditorLabel} editor`);
+			return [caption, this.#input.render(innerWidth)[0] ?? "", theme.fg("dim", hintParts.join(" · "))];
 		}
 		return [theme.fg("dim", this.#buildHelp())];
 	}

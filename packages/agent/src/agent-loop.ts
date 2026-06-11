@@ -1563,7 +1563,19 @@ async function executeToolCalls(
 
 	for (let index = 0; index < records.length; index++) {
 		const record = records[index];
-		const concurrency = record.tool?.concurrency ?? "shared";
+		const concurrencyMode = record.tool?.concurrency;
+		let concurrency: "shared" | "exclusive";
+		if (typeof concurrencyMode === "function") {
+			// Resolved from raw pre-validation args; a throwing resolver must not
+			// take down the whole batch, so fall back to the safe (serial) mode.
+			try {
+				concurrency = concurrencyMode(record.args);
+			} catch {
+				concurrency = "exclusive";
+			}
+		} else {
+			concurrency = concurrencyMode ?? "shared";
+		}
 		const start = concurrency === "exclusive" ? Promise.all([lastExclusive, ...sharedTasks]) : lastExclusive;
 		const task = start.then(() => runTool(record, index));
 		tasks.push(task);

@@ -7,7 +7,11 @@
  * AgentLifecycleManager, idle agents are woken with a real turn, and busy
  * agents receive the message as a non-interrupting aside at the next step
  * boundary (see AgentSession.deliverIrcMessage). Replies are real turns by
- * the recipient, observed via `wait`.
+ * the recipient, observed via `wait` — with one exception: when the sender
+ * awaits a reply and the recipient is mid-turn with async execution
+ * disabled, the recipient session generates an ephemeral side-channel
+ * auto-reply (it may be blocked in a synchronous task spawn whose batch
+ * includes the sender, so a real turn could never happen in time).
  */
 
 import { logger, Snowflake } from "@oh-my-pi/pi-utils";
@@ -80,8 +84,15 @@ export class IrcBus {
 	 * context, so buffering it too would double-deliver via a later
 	 * `wait`/`inbox` and inflate unread counts. Only a failed live hand-off
 	 * is buffered for the recipient to drain later.
+	 *
+	 * `opts.expectsReply` marks sends whose caller is blocked on an answer
+	 * (`send await:true`). It is forwarded to the recipient session so a
+	 * mid-turn recipient that cannot reach a step boundary (async execution
+	 * disabled — e.g. blocked in a synchronous task spawn awaiting the
+	 * sender's own batch) can generate an ephemeral side-channel auto-reply
+	 * instead of stranding the sender until timeout.
 	 */
-	async send(msg: Omit<IrcMessage, "id" | "ts">): Promise<IrcDeliveryReceipt> {
+	async send(msg: Omit<IrcMessage, "id" | "ts">, opts?: { expectsReply?: boolean }): Promise<IrcDeliveryReceipt> {
 		const message: IrcMessage = { ...msg, id: Snowflake.next(), ts: Date.now() };
 		const ref = this.#registry.get(message.to);
 		if (!ref || ref.status === "aborted") {
@@ -118,7 +129,7 @@ export class IrcBus {
 		}
 
 		try {
-			const delivery = await session.deliverIrcMessage(message);
+			const delivery = await session.deliverIrcMessage(message, opts);
 			this.#relayToMainUi(message);
 			return { to: message.to, outcome: revived ? "revived" : delivery };
 		} catch (error) {

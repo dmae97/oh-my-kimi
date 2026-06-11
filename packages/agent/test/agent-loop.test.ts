@@ -569,6 +569,83 @@ describe("agentLoop with AgentMessage", () => {
 		expect(turnEndEvent.toolResults.map(result => result.toolCallId)).toEqual(["tool-2", "tool-1"]);
 	});
 
+	it("resolves function-form concurrency per call", async () => {
+		const toolSchema = z.object({ value: z.string(), exclusive: z.boolean().optional() });
+		const startTimes: Record<string, number> = {};
+		const finishTimes: Record<string, number> = {};
+		const { promise: slowContinue, resolve: slowResolve } = Promise.withResolvers<void>();
+		const { promise: slowStarted, resolve: slowStartedResolve } = Promise.withResolvers<void>();
+		const { promise: fastFinished, resolve: fastFinishedResolve } = Promise.withResolvers<void>();
+
+		const tool: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo tool",
+			parameters: toolSchema,
+			concurrency: args => (args.exclusive === true ? "exclusive" : "shared"),
+			async execute(_toolCallId, params) {
+				if (params.value === "slow") {
+					startTimes.slow = Bun.nanoseconds();
+					slowStartedResolve();
+					await slowContinue;
+					finishTimes.slow = Bun.nanoseconds();
+				} else if (params.value === "fast") {
+					await slowStarted;
+					startTimes.fast = Bun.nanoseconds();
+					finishTimes.fast = Bun.nanoseconds();
+					fastFinishedResolve();
+				} else {
+					startTimes.exclusive = Bun.nanoseconds();
+					finishTimes.exclusive = Bun.nanoseconds();
+				}
+				return {
+					content: [{ type: "text", text: `echoed: ${params.value}` }],
+					details: { value: params.value },
+				};
+			},
+		};
+
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [tool] };
+
+		const mock = createMockModel({
+			responses: [
+				{
+					content: [
+						{ type: "toolCall", id: "tool-1", name: "echo", arguments: { value: "slow" } },
+						{ type: "toolCall", id: "tool-2", name: "echo", arguments: { value: "fast" } },
+						{
+							type: "toolCall",
+							id: "tool-3",
+							name: "echo",
+							arguments: { value: "last", exclusive: true },
+						},
+					],
+				},
+				{ content: ["done"] },
+			],
+		});
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("start")], context, config, undefined, mock.stream);
+		const streamTask = (async () => {
+			for await (const event of stream) {
+				events.push(event);
+			}
+		})();
+
+		await fastFinished;
+		slowResolve();
+		await streamTask;
+
+		// Both shared calls overlapped: fast started and finished while slow was running.
+		expect(startTimes.fast).toBeLessThan(finishTimes.slow);
+		expect(finishTimes.fast).toBeLessThan(finishTimes.slow);
+		// The exclusive call waited for every shared call to finish.
+		expect(startTimes.exclusive).toBeGreaterThan(finishTimes.slow);
+		expect(startTimes.exclusive).toBeGreaterThan(finishTimes.fast);
+	});
+
 	it("drops incomplete tool calls when assistant aborts before toolcall_end", async () => {
 		const context: AgentContext = {
 			systemPrompt: ["You are helpful."],

@@ -2565,10 +2565,10 @@ const HIGHLIGHT_CACHE_MAX = 256;
 const highlightCache = new LRUCache<string, string>({ max: HIGHLIGHT_CACHE_MAX });
 let highlightCacheTheme: Theme | undefined;
 
-function highlightCached(code: string, validLang: string | undefined): string | null {
-	if (highlightCacheTheme !== theme) {
+function highlightCached(code: string, validLang: string | undefined, highlightTheme: Theme): string | null {
+	if (highlightCacheTheme !== highlightTheme) {
 		highlightCache.clear();
-		highlightCacheTheme = theme;
+		highlightCacheTheme = highlightTheme;
 	}
 	const key = `${validLang ?? ""}\x00${code}`;
 	const hit = highlightCache.get(key);
@@ -2577,7 +2577,7 @@ function highlightCached(code: string, validLang: string | undefined): string | 
 	}
 	let highlighted: string;
 	try {
-		highlighted = nativeHighlightCode(code, validLang, getHighlightColors(theme));
+		highlighted = nativeHighlightCode(code, validLang, getHighlightColors(highlightTheme));
 	} catch {
 		return null;
 	}
@@ -2589,9 +2589,9 @@ function highlightCached(code: string, validLang: string | undefined): string | 
  * Highlight code with syntax coloring based on file extension or language.
  * Returns array of highlighted lines.
  */
-export function highlightCode(code: string, lang?: string): string[] {
+export function highlightCode(code: string, lang?: string, highlightTheme: Theme = theme): string[] {
 	const validLang = lang && nativeSupportsLanguage(lang) ? lang : undefined;
-	const highlighted = highlightCached(code, validLang);
+	const highlighted = highlightCached(code, validLang, highlightTheme);
 	// Always return a fresh array: callers (e.g. renderCodeCell) push extra lines
 	// onto the result, which would corrupt the cached string otherwise.
 	return (highlighted ?? code).split("\n");
@@ -2639,7 +2639,7 @@ export function getMarkdownTheme(): MarkdownTheme {
 		resolveMermaidAscii,
 		highlightCode: (code: string, lang?: string): string[] => {
 			const validLang = lang && nativeSupportsLanguage(lang) ? lang : undefined;
-			const highlighted = highlightCached(code, validLang);
+			const highlighted = highlightCached(code, validLang, theme);
 			if (highlighted !== null) return highlighted.split("\n");
 			return code.split("\n").map(line => theme.fg("mdCodeBlock", line));
 		},

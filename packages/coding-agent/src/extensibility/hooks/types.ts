@@ -1,8 +1,11 @@
 import type { ImageContent, Message, Model, TextContent } from "@oh-my-pi/pi-ai";
 import type { Component, TUI } from "@oh-my-pi/pi-tui";
+import type { logger as PiLogger } from "@oh-my-pi/pi-utils";
+import type * as Zod from "zod/v4";
 import type { ModelRegistry } from "../../config/model-registry";
 import type { EditToolDetails } from "../../edit";
 import type { ExecOptions, ExecResult } from "../../exec/exec";
+import type * as PiCodingAgent from "../../index";
 import type { Theme } from "../../modes/theme/theme";
 import type { HookMessage } from "../../session/messages";
 import type { ReadonlySessionManager, SessionManager } from "../../session/session-manager";
@@ -39,6 +42,7 @@ import type {
 	TurnEndEvent,
 	TurnStartEvent,
 } from "../shared-events";
+import type * as TypeBox from "../typebox";
 
 // Re-export for backward compatibility
 export type { ExecOptions, ExecResult } from "../../exec/exec";
@@ -577,13 +581,13 @@ export interface HookAPI {
 	exec(command: string, args: string[], options?: ExecOptions): Promise<ExecResult>;
 
 	/** File logger for error/warning/debug messages */
-	logger: typeof import("@oh-my-pi/pi-utils").logger;
+	logger: typeof PiLogger;
 	/** Injected zod-backed typebox shim (legacy/compat — prefer `zod`). */
-	typebox: typeof import("../typebox");
+	typebox: typeof TypeBox;
 	/** Injected zod module for Zod-authored hooks. */
-	zod: typeof import("zod/v4");
+	zod: typeof Zod;
 	/** Injected pi-coding-agent exports */
-	pi: typeof import("../..");
+	pi: typeof PiCodingAgent;
 }
 
 /**

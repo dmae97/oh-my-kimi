@@ -295,10 +295,7 @@ export class Markdown implements Component {
 	#cachedText?: string;
 	#cachedWidth?: number;
 	#cachedLines?: readonly string[];
-	/** When true, skip the module-level LRU (lookup and insert) for this instance's
-	 *  renders. Set for in-flight streaming partials whose text changes every frame —
-	 *  caching those churns the LRU with near-duplicate full-message snapshots. */
-	transientRenderCache = false;
+	#transientRenderCache = false;
 
 	constructor(
 		text: string,
@@ -325,6 +322,16 @@ export class Markdown implements Component {
 		this.#cachedText = undefined;
 		this.#cachedWidth = undefined;
 		this.#cachedLines = undefined;
+	}
+	get transientRenderCache(): boolean {
+		return this.#transientRenderCache;
+	}
+
+	set transientRenderCache(value: boolean) {
+		const next = value === true;
+		if (this.#transientRenderCache === next) return;
+		this.#transientRenderCache = next;
+		this.invalidate();
 	}
 
 	render(width: number): readonly string[] {
@@ -618,7 +625,7 @@ export class Markdown implements Component {
 
 				const codeIndent = padding(this.#codeBlockIndent);
 				lines.push(this.#theme.codeBlockBorder(`\`\`\`${token.lang || ""}`));
-				if (this.#theme.highlightCode) {
+				if (this.#theme.highlightCode && !this.transientRenderCache) {
 					const highlightedLines = this.#theme.highlightCode(token.text, token.lang);
 					for (const hlLine of highlightedLines) {
 						lines.push(`${codeIndent}${hlLine}`);
@@ -909,7 +916,7 @@ export class Markdown implements Component {
 				// Code block in list item
 				const codeIndent = padding(this.#codeBlockIndent);
 				lines.push({ text: this.#theme.codeBlockBorder(`\`\`\`${token.lang || ""}`), nested: false });
-				if (this.#theme.highlightCode) {
+				if (this.#theme.highlightCode && !this.transientRenderCache) {
 					const highlightedLines = this.#theme.highlightCode(token.text, token.lang);
 					for (const hlLine of highlightedLines) {
 						lines.push({ text: `${codeIndent}${hlLine}`, nested: false });

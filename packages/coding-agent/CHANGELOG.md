@@ -6,9 +6,34 @@
 
 - Added isolated profile support via `--profile <name>` / `OMP_PROFILE` and shell alias bootstrap via `--alias <command>`, including launch/ACP bootstrap handling, extension-flag-safe parsing, profile-scoped user config discovery, and symlinked extension-directory discovery.
 - MCP OAuth credentials are now bound per server URL (`mcp_oauth:<url>`) in each profile's agent.db, with refresh material embedded in the stored credential. A server *definition* in a shared project `mcp.json` (no `auth` block needed) now resolves each profile's own credential, so two profiles can stay signed into the same project server with different accounts instead of clobbering each other's `auth.credentialId` pointer. Stale pointers from other profiles fall back to the url-keyed binding, the fallback always yields to an explicit `Authorization` header, mid-session 401s refresh definition-only bindings too, `/mcp reauth` no longer writes auth state into definition-only entries, OAuth reauthorization sends `prompt=consent` by default so users can switch accounts/workspaces, stdio reauth fails fast with a `mcp-remote` machine-cache hint, and DCR-issued client secrets are never written into config files. Note: committed `mcp.json` definitions are trusted input — any checkout naming an authorized URL connects with that profile's credential (see docs/mcp-config.md).
+
+## [15.11.2] - 2026-06-11
+
+### Added
+
 - Added the Expert Elixir language server (`expert`, invoked as `expert --stdio`) to the built-in LSP server list, auto-detected for Mix projects (`mix.exs`/`mix.lock`). When both are installed, `elixir-ls` remains the primary navigation server (Expert is ordered after it).
+- Added `magicKeywords.enabled` and per-keyword `magicKeywords.ultrathink`, `magicKeywords.orchestrate`, and `magicKeywords.workflow` settings to disable hidden magic-keyword notices and ultrathink auto-thinking escalation ([#1796](https://github.com/can1357/oh-my-pi/issues/1796)).
+- Added external-editor support for Plan Review section annotations, preserving multiline feedback for Refine plan ([#2305](https://github.com/can1357/oh-my-pi/issues/2305)).
+- Added plain-RPC slash command discovery with command source metadata and startup/update notifications ([#2261](https://github.com/can1357/oh-my-pi/issues/2261)).
+
+### Changed
+
+- Bash tool calls in one assistant message now run in parallel instead of serializing the batch: non-pty `bash` is scheduled as a shared tool (`pty: true` stays exclusive), and overlapping calls on the same shell session key degrade to isolated one-shot shells so they cannot queue behind or abort each other
+
+### Fixed
+
+- Fixed CDP attach target selection for Chromium/Edge endpoints that expose page targets through discovery before `browser.pages()` is populated, and improved `ws://` `app.cdp_url` diagnostics ([#2246](https://github.com/can1357/oh-my-pi/issues/2246)).
+- Fixed local memory consolidation on Responses-style models that reject user-only requests by sending a dedicated stage-two system prompt.
+- Fixed extension, custom-tool, custom-command, and hook loaders injecting `pi` through bare `@oh-my-pi/pi-coding-agent` self-imports, which could pull a different cached package version into global installs during plugin load and trigger mixed-runtime stack overflows.
+- Marked unsmoothed assistant streaming renders as transient so streamed code blocks can avoid synchronous syntax highlighting until the message finalizes.
+- Routed LSP hover code rendering through the shared cached highlighter instead of calling the native highlighter directly on each render.
+- Kept smooth assistant streaming renders transient until `message_end` so catch-up frames do not synchronously re-highlight still-growing code blocks.
+- Fixed the `job` tool's poll header repeating the running count ("waiting on 19 of 19 19 running"): the title now reads "waiting on N jobs" (or "waiting on N of M jobs" when some settled) and the dim meta lists only settled categories (done/failed/cancelled)
+- Fixed `irc` `send await:true` to a busy peer stranding the sender until timeout when async execution is disabled: the recipient (e.g. Main blocked in a synchronous task spawn awaiting the sender's own batch) can never reach a step boundary to reply, so it now generates an ephemeral side-channel auto-reply from its context (the pre-mailbox `respondAsBackground` behavior), records it as an `irc:autoreply` aside in its own history, and delivers it back over the bus with `replyTo` threading
+- Fixed Windows-style backslash paths and globs being parsed as literal POSIX path segments by search/find tools ([#2245](https://github.com/can1357/oh-my-pi/issues/2245)).
 
 ## [15.11.1] - 2026-06-11
+
 ### Added
 
 - Added the `statusLine.transparent` appearance setting (default off): when enabled, the status line skips the theme's `statusLineBg` fill and powerline end caps so the bar inherits the terminal's default background — useful in Ghostty and other terminals whose theme background does not match the theme's hardcoded status-line color ([#2306](https://github.com/can1357/oh-my-pi/issues/2306))

@@ -172,8 +172,9 @@ describe("AuthStorage forceRefresh + rotateSessionCredential", () => {
 		// Session A takes one credential and parks it briefly (e.g. a transient
 		// probe block) — a sibling is still free, so this reports switched.
 		await authStorage.getApiKey(PROVIDER, "sess-a");
-		const blockedAt = Date.now();
+		const blockedBefore = Date.now();
 		const first = await authStorage.markUsageLimitReached(PROVIDER, "sess-a", { retryAfterMs: 30_000 });
+		const blockedAfter = Date.now();
 		expect(first.switched).toBe(true);
 
 		// Session B lands on the remaining credential and hits a multi-hour
@@ -184,8 +185,8 @@ describe("AuthStorage forceRefresh + rotateSessionCredential", () => {
 		const second = await authStorage.markUsageLimitReached(PROVIDER, "sess-b", { retryAfterMs: 3_600_000 });
 		expect(second.switched).toBe(false);
 		expect(second.retryAtMs).toBeDefined();
-		expect(second.retryAtMs!).toBeGreaterThan(blockedAt);
-		expect(second.retryAtMs!).toBeLessThanOrEqual(blockedAt + 30_000);
+		expect(second.retryAtMs!).toBeGreaterThanOrEqual(blockedBefore + 30_000);
+		expect(second.retryAtMs!).toBeLessThanOrEqual(blockedAfter + 30_000);
 	});
 
 	test("markUsageLimitReached reports no retry time for a single-credential setup", async () => {
