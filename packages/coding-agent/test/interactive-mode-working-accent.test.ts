@@ -78,6 +78,17 @@ afterEach(() => {
 });
 
 describe("InteractiveMode working-message session accent cache", () => {
+	it("keeps the working loader out of native scrollback", async () => {
+		const { mode } = await createHarness("Live status");
+		const statusContainer = mode.statusContainer as typeof mode.statusContainer & {
+			getNativeScrollbackLiveRegionStart(): number | undefined;
+		};
+
+		expect(statusContainer.getNativeScrollbackLiveRegionStart()).toBeUndefined();
+		startStableLoader(mode);
+		expect(statusContainer.getNativeScrollbackLiveRegionStart()).toBe(0);
+	});
+
 	it("reuses one computed accent across loader spinner and message colorizers", async () => {
 		const { mode } = await createHarness("Cached session");
 		const getHex = vi.spyOn(sessionColor, "getSessionAccentHex");

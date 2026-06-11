@@ -257,6 +257,13 @@ export interface InteractiveModeOptions {
 	initialMessages?: string[];
 }
 
+class StatusContainer extends Container {
+	getNativeScrollbackLiveRegionStart(): number | undefined {
+		return this.children.length > 0 ? 0 : undefined;
+	}
+}
+
+
 export class InteractiveMode implements InteractiveModeContext {
 	session: AgentSession;
 	sessionManager: SessionManager;
@@ -418,7 +425,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		setTerminalTextSizing(settings.get("tui.textSizing") && TERMINAL.textSizing);
 		this.chatContainer = new TranscriptContainer();
 		this.pendingMessagesContainer = new Container();
-		this.statusContainer = new Container();
+		this.statusContainer = new StatusContainer();
 		this.todoContainer = new Container();
 		this.btwContainer = new Container();
 		this.omfgContainer = new Container();
