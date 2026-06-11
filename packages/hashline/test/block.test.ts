@@ -13,6 +13,7 @@ import {
 	parsePatch,
 	resolveBlockEdits,
 } from "@oh-my-pi/hashline";
+import promptText from "../src/prompt.md" with { type: "text" };
 
 const PATH = "x.ts";
 
@@ -338,6 +339,33 @@ describe("insert after block", () => {
 	it("throws an op-specific unresolved error when the resolver returns null", () => {
 		const edits = parsePatch("insert after block 7:\n+X").edits;
 		expect(() => resolveBlockEdits(edits, "ignored", PATH, () => null)).toThrow("`insert after block 7:`");
+	});
+
+	it("rejects a closing-delimiter line as an insert-after-block anchor", () => {
+		const section = Patch.parseSingle(`[${PATH}#1A2B]\ninsert after block 3:\n+  done();`);
+		const resolver: BlockResolver = ({ line }) => (line === 2 ? { start: 2, end: 3 } : null);
+		let error: Error | undefined;
+		try {
+			section.applyTo(text, resolver);
+		} catch (err) {
+			error = err instanceof Error ? err : new Error(String(err));
+		}
+
+		expect(error?.message).toContain(
+			"`insert after block 3:` could not resolve a syntactic block beginning on line 3",
+		);
+		expect(error?.message).toContain("Use `insert after M:` with the block's explicit last line instead");
+		expect(error?.message).toContain("*3:  }");
+	});
+
+	it("documents the opener-only rule for insert-after-block anchors", () => {
+		const entry = promptText.split("\n").find(line => line.startsWith("`insert after block N:`"));
+
+		expect(entry).toContain("OPENS");
+		expect(entry).toContain("not the closing delimiter / last visible line");
+		expect(promptText).toContain(
+			"# WRONG — `insert after block N:` anchored on a closing delimiter / last visible line. RIGHT: plain `insert after M:`",
+		);
 	});
 
 	it("applyTo inserts the body after the resolved block's last line", () => {

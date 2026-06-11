@@ -1,10 +1,15 @@
-{{#if batchEnabled}}Spawns subagents to work in the background — one per `tasks[]` item; a single spawn is a one-item batch.{{else}}Spawns ONE subagent per call to work in the background.{{/if}}
+{{#if asyncEnabled}}{{#if batchEnabled}}Spawns subagents to work in the background — one per `tasks[]` item; a single spawn is a one-item batch.{{else}}Spawns ONE subagent per call to work in the background.{{/if}}
 
 - Spawning is non-blocking: the call returns immediately with the agent id{{#if batchEnabled}}s{{/if}} and job id{{#if batchEnabled}}s{{/if}}; each result is delivered automatically when that agent yields.
 - Parallelism = {{#if batchEnabled}}`tasks[]` items in one call, and/or multiple `task` calls in one assistant message{{else}}multiple `task` calls in one assistant message{{/if}}. Concurrency is bounded at {{MAX_CONCURRENCY}} running subagents per session.
 - If genuinely blocked on a result, wait with `job poll`; otherwise keep working. `job cancel` terminates a task and **cannot carry a message** — only for stalled/abandoned work.
+{{else}}{{#if batchEnabled}}Runs subagents synchronously — one per `tasks[]` item; a single spawn is a one-item batch.{{else}}Runs ONE subagent synchronously per call.{{/if}}
+
+- Spawning is blocking: the call returns only after the agent{{#if batchEnabled}}s{{/if}} finish; results arrive inline.
+- Parallelism = {{#if batchEnabled}}`tasks[]` items in one call, and/or multiple `task` calls in one assistant message{{else}}multiple `task` calls in one assistant message{{/if}}. Concurrency is bounded at {{MAX_CONCURRENCY}} running subagents per session.
+{{/if}}
 {{#if ircEnabled}}
-- Coordinate with running agents via `irc` using their ids. Agents reach you and their siblings live the same way.
+- Coordinate with agents via `irc` using their ids. Agents reach you and their siblings live the same way.
 {{/if}}
 
 <lifecycle>

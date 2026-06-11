@@ -1,5 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { type Component, type NativeScrollbackLiveRegion, TUI } from "@oh-my-pi/pi-tui";
+import {
+	type Component,
+	type NativeScrollbackCommittedRows,
+	type NativeScrollbackLiveRegion,
+	TUI,
+} from "@oh-my-pi/pi-tui";
 import { VirtualTerminal } from "./virtual-terminal";
 
 class LineList implements Component {
@@ -35,6 +40,26 @@ class LiveLineList extends LineList implements NativeScrollbackLiveRegion {
 class AppendOnlyLiveLineList extends LiveLineList {
 	getNativeScrollbackCommitSafeEnd(): number | undefined {
 		return Number.POSITIVE_INFINITY;
+	}
+}
+
+/**
+ * Records the engine's committed-row claim visible at each render() call.
+ * Pins the propagation contract: the claim must be fed *before* render so the
+ * child (e.g. the transcript container) can skip re-deriving blocks that
+ * already live in immutable native scrollback.
+ */
+class CommittedRowsProbe extends AppendOnlyLiveLineList implements NativeScrollbackCommittedRows {
+	#committedRows = 0;
+	committedRowsAtRender: number[] = [];
+
+	setNativeScrollbackCommittedRows(rows: number): void {
+		this.#committedRows = rows;
+	}
+
+	override render(width: number): string[] {
+		this.committedRowsAtRender.push(this.#committedRows);
+		return super.render(width);
 	}
 }
 
@@ -407,6 +432,36 @@ describe("streaming scrollback defer", () => {
 					.map(line => line.trim())
 					.at(-1),
 			).toBe("prompt");
+		} finally {
+			tui.stop();
+		}
+	});
+
+	it("feeds committed native scrollback rows to interested children before render", async () => {
+		if (process.platform === "win32") return;
+		const term = new VirtualTerminal(20, 4);
+		overrideProbe(term, undefined);
+		const tui = new TUI(term);
+		const probe = new CommittedRowsProbe([]);
+
+		try {
+			tui.addChild(probe);
+			tui.start();
+			await settle(term);
+
+			// Grow well past the 4-row viewport: the append-only body lets the
+			// engine commit the scrolled-off head to native scrollback.
+			probe.setLines(rows("out-", 12));
+			tui.requestRender();
+			await settle(term);
+
+			// The next compose must surface the engine's committed claim to the
+			// child before render(). A severed wire here silently disables the
+			// transcript's committed-block bypass (rows stay 0 forever).
+			tui.requestRender();
+			await settle(term);
+
+			expect(probe.committedRowsAtRender.at(-1)!).toBeGreaterThan(0);
 		} finally {
 			tui.stop();
 		}

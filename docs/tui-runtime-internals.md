@@ -104,6 +104,7 @@ This keeps key parsing/editor mechanics in `packages/tui` and mode semantics in 
 - forced renders (`requestRender(true, ...)`) schedule an immediate frame and force a full window rewrite; with `clearScrollback`, they trigger a destructive full paint (ED3 outside multiplexers)
 - ordinary renders schedule through `#scheduleRender()` and respect `TUI.#MIN_RENDER_INTERVAL_MS`
 - repeated requests while a render is pending collapse into the same scheduled frame
+- `requestComponentRender(component)` requests on behalf of a single self-contained change (spinner frame, blink): when every request in the coalesced frame is component-scoped and the frame is quiet (no resize, overlays, inline images, forced repaint, or root-list change), compose re-renders only the root subtrees containing the requesting components and reuses every other root child's previous rows and seam report; any unsafe condition or concurrent full request downgrades to a full compose
 
 `#doRender()` pipeline:
 
@@ -164,7 +165,7 @@ Status lane ownership:
 
 Loader behavior:
 
-- `Loader` updates every 80ms via interval and requests render each frame.
+- `Loader` updates every 80ms via interval and requests a component-scoped render each frame (`requestComponentRender`), so idle spinner ticks repaint without re-walking the transcript.
 - Escape handlers are temporarily overridden during auto-compaction and auto-retry to cancel those operations.
 - On end/cancel paths, controllers restore prior escape handlers and stop/clear loader components.
 
@@ -214,7 +215,7 @@ Event-driven updates:
 Throttled/debounced paths:
 
 - TUI rendering is tick-debounced (`requestRender` coalescing).
-- Loader animation is fixed-interval (80ms), each frame requesting render.
+- Loader animation is fixed-interval (80ms), each frame requesting a component-scoped render.
 - Editor autocomplete updates (inside `Editor`) use debounce timers, reducing recompute churn during typing.
 
 The runtime therefore mixes event-driven state transitions with bounded render cadence to keep interactivity responsive without repaint storms.

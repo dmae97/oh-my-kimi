@@ -1,6 +1,6 @@
 # task
 
-> Spawn subagents to work in the background — one per call, or a `tasks[]` batch per call (`task.batch`, default on).
+> Spawn subagents — one per call, or a `tasks[]` batch per call (`task.batch`, default on). With `async.enabled=true`, spawns run in the background; otherwise the call blocks until they finish.
 
 ## Source
 - Entry: `packages/coding-agent/src/task/index.ts`
@@ -28,7 +28,7 @@
 
 The wire schema is shape-swapped by `task.batch` (default on). One unit of work is the task item `{ id?, description?, assignment, isolated? }` (`isolated` only when `task.isolation.mode` is not `none`):
 
-- **Batch shape** (`task.batch` on): `{ agent, context, tasks: item[] }` — one subagent per item, all spawned in parallel as independent background jobs. `context` is **required** shared background rendered into every spawned subagent's system prompt (`CONTEXT` section); `isolated` is per item.
+- **Batch shape** (`task.batch` on): `{ agent, context, tasks: item[] }` — one subagent per item, all run under the same fan-out rules. `context` is **required** shared background rendered into every spawned subagent's system prompt (`CONTEXT` section); `isolated` is per item.
 - **Flat shape** (`task.batch` off): `{ agent, ...item }` — exactly one spawn per call. Shared background goes into a `local://` file (e.g. `local://ctx.md`) that each assignment references; subagents share the parent's `local://` root.
 
 | Field | Type | Required | Description |
@@ -49,12 +49,12 @@ There is no per-call `schema` parameter. Structured output comes from the agent 
 
 The tool returns one text block plus `details: TaskToolDetails`.
 
-Immediate (async) response — the normal case:
+Background response (`async.enabled=true`):
 - `content`: `` Spawned agent `<id>` (job `<jobId>`). The result will be delivered when it yields. ... `` plus a coordination hint (`irc` DM when enabled, otherwise `job`). A batch call instead returns `` Spawned N background agents using <agent>. ... `` with a per-agent `- `<id>` (job `<jobId>`)` listing.
 - `details`: `{ projectAgentsDir: null, results: [], totalDurationMs: 0, progress: [<seeded AgentProgress per spawn>], async: { state: "running", jobId, type: "task" } }`. A batch call keeps one shared `progress[]` snapshot; `async.jobId` is the first started job and `async.state` aggregates ("running" until every job settles, "failed" if any spawn failed).
 - Live progress keeps streaming into the same tool block via `onUpdate(...)`; each final result arrives later as an async-result injection into the parent conversation. The delivery text appends a follow-up hint: `` <id> is now idle — message it via `irc` to follow up; transcript at history://<id> `` (aborted variant points at the transcript only).
 
-Settled (sync-fallback or job-body) response:
+Settled response (`async.enabled=false`, no job manager, blocking agent, or async job body):
 - `content`: summary rendered from `packages/coding-agent/src/prompts/tools/task-summary.md` with a preview capped at 5000 chars; `agent://<id>` holds the full output. A sync batch concatenates the per-spawn summaries.
 - `details.results`: one `SingleResult` per spawn; `usage`, `outputPaths` populated (aggregated across spawns for a sync batch).
 
@@ -74,8 +74,8 @@ Artifacts and side channels:
 ## Flow
 1. `TaskTool.create(...)` discovers agents once per cwd through a process-level memo (`discoverAgentsForCreate`) to render the dynamic prompt description.
 2. `execute(...)` repairs raw params (`repairTaskParams`), then validates: `schema` is always rejected; `tasks`/`context` are rejected unless `task.batch` is on; batch calls need a non-empty `tasks` (per-item assignments, unique provided ids), a non-empty shared `context`, and no top-level `assignment`; flat calls need `assignment`. The call is then normalized into its spawn list (`resolveSpawnItems`).
-3. Sync fallback only when the session has no `AsyncJobManager` (orphaned host) or the selected agent definition declares `blocking: true`; the call then runs `#executeSync(...)` inline under the session-scoped semaphore.
-4. Otherwise execution is always async:
+3. Sync execution runs when `async.enabled=false`, the session has no `AsyncJobManager` (orphaned host), or the selected agent definition declares `blocking: true`; the call then runs every spawn through `#executeSync(...)` inline under the session-scoped semaphore.
+4. Background execution runs only when `async.enabled=true` and the session has an `AsyncJobManager`:
    - agent ids are allocated up front via `AgentOutputManager.allocate(item.id || generateTaskName())`, one per spawn;
    - one `type: "task"` job per spawn is registered with `session.asyncJobManager` (`id` = agent id, `queued: true`, `ownerId` = caller agent id) and the tool returns immediately;
    - each job body acquires the session-scoped `Semaphore` (one per `TaskTool` instance, sized from `task.maxConcurrency` at first use), marks the job running, runs `#executeSync(...)` with that spawn's params, and reports progress through the shared `buildAsyncDetails`/`onUpdate`;
@@ -98,10 +98,10 @@ Artifacts and side channels:
 
 ## Modes / Variants
 - Execution mode
-  - Always-async background job — default; spawns go through `AsyncJobManager`.
-  - Sync inline fallback — only when no job manager exists or the agent definition has `blocking: true`.
+  - Background job — `async.enabled=true`; spawns go through `AsyncJobManager`.
+  - Sync inline — `async.enabled=false`, no job manager, or `blocking: true` agent.
 - Batch mode (`task.batch`, default on)
-  - on — `{ agent, context, tasks[] }`: one independent background job per item, required `context` shared across the call's spawns, `isolated` per item. Lifecycle, revival, and concurrency semantics are identical to N parallel single calls.
+  - on — `{ agent, context, tasks[] }`: one independent spawn per item, required `context` shared across the call's spawns, `isolated` per item. Lifecycle, revival, and concurrency semantics match N parallel single calls.
   - off — single spawn per call; `tasks`/`context` are rejected and removed from the schema.
 - Isolation backend: `none`, `worktree`, `fuse-overlay`, `fuse-projfs`.
 - Isolation merge strategy: patch mode (capture/apply root patches) or branch mode (commit to `omp/task/<id>`, cherry-pick into parent).
@@ -119,13 +119,13 @@ Artifacts and side channels:
   - Git operations for baseline capture, patch apply, worktrees, branches, stash, cherry-pick, commits.
 - Session state (transcript, memory, jobs, checkpoints, registries)
   - Creates child `AgentSession` instances with isolated settings snapshots; finished sessions stay registered in the process-global `AgentRegistry` as `idle`/`parked` until process teardown or explicit release.
-  - Registers one async job per call in `session.asyncJobManager`; completion is injected into the parent as an async-result message.
+  - With `async.enabled=true`, registers one async job per spawn in `session.asyncJobManager`; completion is injected into the parent as an async-result message.
   - Arms idle-TTL timers in `AgentLifecycleManager` (unref'd; they never hold the process open).
   - Emits `task:subagent:event`, `task:subagent:progress`, and `task:subagent:lifecycle` on the parent event bus.
   - Allocates session-scoped output ids through `AgentOutputManager` so `agent://` stays unique across invocations.
   - Shares the parent `local://` root and `ArtifactManager` with subagents.
 - Background work / cancellation
-  - `job cancel` (or parent tool-call abort) cancels the job; a hard-aborted run lands `aborted` and is torn down.
+  - `job cancel` (or parent tool-call abort) cancels background jobs; parent tool-call abort cancels sync runs through the call signal. A hard-aborted run lands `aborted` and is torn down.
   - Missing-`yield` recovery sends up to three internal reminder prompts to the child session.
 
 ## Limits & Caps
@@ -154,7 +154,7 @@ Artifacts and side channels:
 - `agent://<id>` resolution errors are model-visible when another tool reads them: no session, no artifacts dir, missing id, conflicting extraction syntax, or invalid JSON for extraction.
 
 ## Notes
-- Parallelism is parallel `task` calls in one assistant message — or, with `task.batch`, a `tasks[]` batch in one call; either way the session-scoped semaphore bounds the fan-out and each spawn is an independent background job.
+- Parallelism is parallel `task` calls in one assistant message — or, with `task.batch`, a `tasks[]` batch in one call; either way the session-scoped semaphore bounds the fan-out. With `async.enabled=true`, each spawn is an independent background job.
 - Shared background convention without batch mode: write it once to a `local://` file and reference that path in each assignment — subagents share the parent's `local://` root. With `task.batch`, the required `context` parameter carries the shared background directly into each spawn's system prompt.
 - Prefer messaging an existing agent (`irc`) over a fresh spawn for follow-up work: it already holds the relevant context. `irc` op:"list" shows idle/parked candidates; messaging a parked agent revives it. `history://<id>` shows what an agent has done.
 - `irc` availability is derived, not configured (`isIrcEnabled` in `packages/coding-agent/src/tools/irc.ts`): it exists exactly when there is someone to message — the session can spawn subagents, or it is a subagent itself. Messaging is the only follow-up path to a finished subagent, so task without irc would strand idle agents.
