@@ -914,6 +914,14 @@ export async function processResponsesStream<TApi extends Api>(
 				output.stopReason = "toolUse";
 			}
 			options?.onCompleted?.();
+			// `response.completed`/`response.incomplete` is the last event of a
+			// Responses stream. Stop pulling instead of waiting for the server to
+			// close the connection: misbehaving providers keep the socket open
+			// after the terminal event, which would park this loop until the idle
+			// watchdog converts an already-successful turn into a timeout error.
+			// Breaking unwinds the iterator chain (the consumer's `.return()`
+			// reaches the SDK stream), actively releasing the connection.
+			break;
 		} else if (event.type === "error") {
 			throw new Error(`Error Code ${event.code}: ${event.message}`);
 		} else if (event.type === "response.failed") {
