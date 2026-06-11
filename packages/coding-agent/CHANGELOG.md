@@ -12,6 +12,10 @@
 ### Fixed
 
 - Fixed local memory consolidation on Responses-style models that reject user-only requests by sending a dedicated stage-two system prompt.
+- Fixed extension, custom-tool, custom-command, and hook loaders injecting `pi` through bare `@oh-my-pi/pi-coding-agent` self-imports, which could pull a different cached package version into global installs during plugin load and trigger mixed-runtime stack overflows.
+- Marked unsmoothed assistant streaming renders as transient so streamed code blocks can avoid synchronous syntax highlighting until the message finalizes.
+- Routed LSP hover code rendering through the shared cached highlighter instead of calling the native highlighter directly on each render.
+- Kept smooth assistant streaming renders transient until `message_end` so catch-up frames do not synchronously re-highlight still-growing code blocks.
 
 ## [15.11.1] - 2026-06-11
 ### Added
@@ -192,7 +196,6 @@
 - Default API auto-retries now use 10 attempts with a 500ms Anthropic-style exponential backoff capped at 8s with jitter, so transient 502/gateway failures get a longer retry budget without multi-minute local sleeps.
 
 ### Fixed
-- Fixed extension, custom-tool, custom-command, and hook loaders injecting `pi` through bare `@oh-my-pi/pi-coding-agent` self-imports, which could pull a different cached package version into global installs during plugin load and trigger mixed-runtime stack overflows.
 
 - Fixed `ask` question/result renders so option and answer rows are no longer duplicated when the component is re-rendered
 - Fixed streaming `write`/`diff` previews to keep line-number gutter widths stable while content grows, preventing already-rendered preview rows from being reflowed mid-stream
