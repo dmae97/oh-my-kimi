@@ -87,9 +87,9 @@ describe("issue #2298: chain rows under last-sibling branches keep their gutter"
 		}
 	});
 
-	// Branched grandchildren (rows with their own ├─/└─ connector) must stay on
-	// the standard tree convention so a `│` never floats below an unrelated
-	// `└─`. Only chain rows opt into the extended gutter.
+	// Branched grandchildren and their continuations must stay on the standard
+	// tree convention so a `│` never floats below an unrelated `└─`. Only the
+	// nearest connector gutter is extended for chain rows.
 	it("does not extend the gutter through branched descendants of a last-sibling parent", () => {
 		const root = makeNode("user", "original");
 		const rootAsst = makeNode("assistant", "resp", root.entry.id);
@@ -99,24 +99,39 @@ describe("issue #2298: chain rows under last-sibling branches keep their gutter"
 		const branch2 = makeNode("user", "branch2 head", rootAsst.entry.id);
 		rootAsst.children.push(branch1, branch2);
 
-		// branch1 itself branches into c, d (both have their own connectors).
+		// branch1 itself branches into c, d (both have their own connectors),
+		// and each grandchild continues linearly.
 		const c = makeNode("user", "grandchild c", branch1.entry.id);
 		const d = makeNode("user", "grandchild d", branch1.entry.id);
 		branch1.children.push(c, d);
+		const cContinuation = makeNode("assistant", "c continuation", c.entry.id);
+		c.children.push(cContinuation);
+		const dContinuation = makeNode("assistant", "d continuation", d.entry.id);
+		d.children.push(dContinuation);
 
 		const fixIt = makeNode("user", "fix it all", branch2.entry.id);
 		branch2.children.push(fixIt);
 
 		const rendered = renderStripped([root], fixIt.entry.id);
 
-		// Grandchildren of the last sibling carry their own connector; the
-		// inherited gutter at branch1's column must stay as space so the
-		// standard `└─` semantics survive for proper tree drawings.
+		// The grandchildren carry their own connectors; the inherited gutter at
+		// branch1's column must stay as space so the standard `└─` semantics
+		// survive for proper tree drawings.
 		for (const needle of ["grandchild c", "grandchild d"]) {
 			const row = rendered.find(line => line.includes(needle));
 			if (!row) throw new Error(`row containing ${JSON.stringify(needle)} not rendered`);
 			expect(row).not.toMatch(/^\s{2}│/);
 			expect(row).toMatch(/[├└]─/);
+		}
+
+		// Linear continuations of those branched grandchildren are chain rows,
+		// but they must extend only their nearest connector gutter (c/d), not the
+		// suppressed branch1 gutter. This is the nested case from the PR review.
+		for (const needle of ["c continuation", "d continuation"]) {
+			const row = rendered.find(line => line.includes(needle));
+			if (!row) throw new Error(`row containing ${JSON.stringify(needle)} not rendered`);
+			expect(row).not.toMatch(/^\s{2}│/);
+			expect(row).toMatch(/^\s{5}│/);
 		}
 	});
 });

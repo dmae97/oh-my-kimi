@@ -229,6 +229,7 @@
         const displayIndent = multipleRoots ? Math.max(0, indent - 1) : indent;
         const connector = showConnector && !isVirtualRootChild ? (isLast ? '└─ ' : '├─ ') : '';
         const connectorPosition = connector ? displayIndent - 1 : -1;
+        const chainGutter = !connector ? gutters[gutters.length - 1] : undefined;
 
         const totalChars = displayIndent * 3;
         const prefixChars = [];
@@ -238,12 +239,10 @@
 
           const gutter = gutters.find(g => g.position === level);
           if (gutter) {
-            // Chain rows (no connector of their own) extend the gutter past
-            // last-sibling ancestors so the flattened conversation flow stays
-            // visually anchored to its branch parent (#2298). Branched
-            // descendants keep the standard convention so a `│` never floats
-            // below an unrelated `└─`.
-            const showVertical = gutter.show || !connector;
+            // Chain rows (no connector of their own) extend only their
+            // nearest connector gutter so the flattened conversation flow
+            // stays anchored without reviving unrelated `└─` ancestors (#2298).
+            const showVertical = gutter.show || gutter === chainGutter;
             prefixChars.push(posInLevel === 0 ? (showVertical ? '│' : ' ') : ' ');
           } else if (connector && level === connectorPosition) {
             if (posInLevel === 0) {

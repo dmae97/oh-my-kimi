@@ -518,6 +518,7 @@ class TreeList implements Component {
 			const renderedIndent = Math.min(displayIndent, maxIndentLevels);
 			const scrollOffset = displayIndent - renderedIndent;
 			const connectorPositionDisplay = hasConnector ? renderedIndent - 1 : -1;
+			const chainGutter = !hasConnector ? flatNode.gutters[flatNode.gutters.length - 1] : undefined;
 
 			// Build prefix char by char, placing gutters and connector at their positions
 			const totalChars = renderedIndent * 3;
@@ -530,12 +531,10 @@ class TreeList implements Component {
 				// Check if there's a gutter at this level (translated to original tree depth)
 				const gutter = flatNode.gutters.find(g => g.position === originalLevel);
 				if (gutter) {
-					// Chain rows (no connector of their own) extend the gutter past
-					// last-sibling ancestors so the flattened conversation flow stays
-					// visually anchored to its branch parent (#2298). Branched
-					// descendants keep the standard convention so a `│` never floats
-					// below an unrelated `└─`.
-					const showVertical = gutter.show || !hasConnector;
+					// Chain rows (no connector of their own) extend only their
+					// nearest connector gutter so the flattened conversation flow
+					// stays anchored without reviving unrelated `└─` ancestors (#2298).
+					const showVertical = gutter.show || gutter === chainGutter;
 					if (posInLevel === 0) {
 						prefixChars.push(showVertical ? theme.tree.vertical : " ");
 					} else {
