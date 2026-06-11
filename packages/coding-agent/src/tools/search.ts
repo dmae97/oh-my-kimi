@@ -795,6 +795,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 						internalUrlAction: "search",
 						trackImmutableSources: true,
 						surfaceExactFilePaths: true,
+						fanOutFileTargets: true,
 						multipathStatHint: " (`paths` entries must each exist relative to cwd)",
 						settings: this.session.settings,
 						signal,
@@ -863,6 +864,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 					if (searchablePaths.length > 0) {
 						if (exactFilePaths || multiTargets) {
 							const matches: GrepMatch[] = [];
+							const seenMatchKeys = new Set<string>();
 							let limitReached = false;
 							let totalMatches = 0;
 							let filesSearched = 0;
@@ -900,6 +902,15 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 								filesSearched += targetResult.filesSearched;
 								for (const match of targetResult.matches) {
 									const absolute = path.resolve(target.basePath, match.path);
+									// Overlapping targets (a directory plus a file nested
+									// inside it) surface the same physical line twice;
+									// keep the first occurrence.
+									const matchKey = `${absolute}\0${match.lineNumber}`;
+									if (seenMatchKeys.has(matchKey)) {
+										totalMatches = Math.max(0, totalMatches - 1);
+										continue;
+									}
+									seenMatchKeys.add(matchKey);
 									const rebased = path.relative(searchPath, absolute).replace(/\\/g, "/");
 									matches.push({ ...match, path: rebased });
 								}
