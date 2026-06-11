@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.11.2] - 2026-06-11
+
 ### Fixed
 
 - Fixed Anthropic encoding of error tool results with whitespace-only content so requests no longer 400 with `tool_result: content cannot be empty if is_error is true`

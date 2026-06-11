@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.11.2] - 2026-06-11
+
 ### Added
 
 - `AgentTool.concurrency` now also accepts a per-call resolver function `(args) => "shared" | "exclusive"`, letting tools pick the scheduling mode from the call's arguments (a throwing resolver falls back to `"exclusive"`)
