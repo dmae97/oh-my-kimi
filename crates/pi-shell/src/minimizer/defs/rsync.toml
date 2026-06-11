@@ -10,6 +10,7 @@ strip_lines_matching = [
 	"^sending incremental file list$",
 	"^receiving incremental file list$",
 ]
+only_on_exit = [0]
 match_output = [
 	{ pattern = "total size is", message = "ok (synced)", unless = "(?i)(error|failed|no such file)" },
 ]
