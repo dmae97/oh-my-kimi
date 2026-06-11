@@ -54,6 +54,8 @@ export const KNOWN_HOSTS = {
 		urlMarkers: ["api.minimax.io", "api.minimaxi.com"],
 	},
 	qwenPortal: { providers: ["qwen-portal"], urlMarkers: ["portal.qwen.ai"] },
+	/** NVIDIA NIM (`integrate.api.nvidia.com`). Qwen NIM endpoints take `chat_template_kwargs.enable_thinking`, never top-level `enable_thinking`. */
+	nvidia: { providers: ["nvidia"], urlMarkers: ["integrate.api.nvidia.com"] },
 	moonshotNative: { providers: ["moonshot", "kimi-code"], urlMarkers: ["api.moonshot.ai", "api.kimi.com"] },
 	opencode: { providers: ["opencode-go", "opencode-zen"], urlMarkers: ["opencode.ai"] },
 	chutes: { urlMarkers: ["chutes.ai"] },
