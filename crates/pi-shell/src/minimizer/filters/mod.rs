@@ -15,6 +15,7 @@ pub mod dotnet;
 
 pub mod generic;
 pub mod gh;
+pub mod glab;
 
 pub mod go;
 pub mod gt;
@@ -59,6 +60,7 @@ pub fn supports(program: &str, subcommand: Option<&str>) -> bool {
 		"aws" | "curl" | "wget" | "psql" => cloud::supports(program, subcommand),
 		"docker" | "kubectl" | "helm" => docker::supports(subcommand),
 		"gh" => gh::supports(subcommand),
+		"glab" => glab::supports(subcommand),
 		"pytest" | "ruff" | "mypy" | "python" | "python3" | "py" => {
 			python::supports(program, subcommand)
 		},
@@ -161,6 +163,7 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 		"aws" | "curl" | "wget" | "psql" => cloud::filter(ctx, input, exit_code),
 		"docker" | "kubectl" | "helm" => docker::filter(ctx, input, exit_code),
 		"gh" => gh::filter(ctx, input, exit_code),
+		"glab" => glab::filter(ctx, input, exit_code),
 		"pytest" | "ruff" | "mypy" | "python" | "python3" | "py" => {
 			python::filter(ctx, input, exit_code)
 		},
