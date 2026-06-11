@@ -1,6 +1,8 @@
 //! Filesystem listing and search filters.
 
-use std::{collections::BTreeMap, path::Path};
+use std::{collections::BTreeMap, path::Path, sync::LazyLock};
+
+use regex::Regex;
 
 use crate::minimizer::{MinimizerCtx, MinimizerOutput, config::OutlineLevel, primitives};
 
@@ -67,7 +69,7 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 				}
 			},
 			"cat" | "read" => compact_cat_output(ctx, &cleaned),
-			"stat" | "du" | "df" | "wc" => compact_summary_output(&cleaned),
+			"stat" | "du" | "df" | "wc" => compact_summary_output(&cleaned, ctx.program),
 			"jq" | "json" => cleaned,
 			_ => cleaned,
 		}
@@ -78,6 +80,14 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 		MinimizerOutput::transformed(text, input.len())
 	}
 }
+
+/// Date/time anchor in `ls -l` output: month-name day time-or-year.
+/// E.g.: " Apr 28 10:00 " or " Dec 25  2024 " or " 2 feb 21:35 ".
+/// The `(?i)` flag makes month names case-insensitive for non-C locales.
+/// The trailing space ensures we do not match partial tokens.
+static LS_DATE_RE: LazyLock<Regex> = LazyLock::new(|| {
+	Regex::new(r"(?i)\s+(?:(?:\p{L}{3,}\.?\s+\d{1,2}|\d{1,2}\.?\s+\p{L}{3,}\.?)\s+(?:\d{4}|\d{2}:\d{2})|\d{4}[-/]\d{2}(?:[-/]\d{2})?\s+\d{2}:\d{2})\s+").unwrap()
+});
 
 fn compact_listing_output(input: &str) -> String {
 	primitives::compact_listing(input, 80)
@@ -471,24 +481,48 @@ fn parse_ls_long_line(line: &str) -> Option<LsEntry> {
 	if trimmed.starts_with("total ") || trimmed.is_empty() {
 		return None;
 	}
-	let kind = trimmed.chars().next()?;
-	if !matches!(kind, 'd' | '-' | 'l') {
-		return None;
-	}
-	let parts: Vec<&str> = trimmed.split_whitespace().collect();
-	if parts.len() < 9 {
-		return None;
-	}
-	let name = parts[8..].join(" ");
+
+	let date_match = LS_DATE_RE.find(line)?;
+	let name = line[date_match.end()..].to_string();
 	if matches!(name.as_str(), "." | "..") {
 		return None;
 	}
-	Some(LsEntry {
-		name,
-		is_dir: kind == 'd',
-		size: parts.get(4).and_then(|value| value.parse().ok()),
-		is_file: kind == '-',
-	})
+
+	let before_date = &line[..date_match.start()];
+	let before_parts: Vec<&str> = before_date.split_whitespace().collect();
+	if before_parts.len() < 4 {
+		return None;
+	}
+
+	let kind = before_parts[0].chars().next()?;
+	if !matches!(kind, '-' | 'd' | 'l' | 'c' | 'b' | 's' | 'p' | 'D') {
+		return None;
+	}
+
+	// Size is the rightmost parseable u64 before the date, but skip
+	// comma-separated device major/minor pairs.
+	let mut size = None;
+	for i in (0..before_parts.len()).rev() {
+		let part = before_parts[i];
+		if part.ends_with(',') {
+			// Major number of a device file — skip.
+			size = None;
+			break;
+		}
+		if let Ok(s) = part.parse::<u64>() {
+			if i > 0 && before_parts[i - 1].ends_with(',') {
+				// This numeric field is the minor number of a device file.
+				size = None;
+				break;
+			}
+			size = Some(s);
+			break;
+		}
+		// Non-numeric field (e.g. owner/group word) before size: no size.
+		break;
+	}
+
+	Some(LsEntry { name, is_dir: kind == 'd', size, is_file: kind == '-' })
 }
 
 fn format_human_size(size: u64) -> String {
@@ -1123,13 +1157,32 @@ fn strip_python_bodies(input: &str) -> String {
 	out
 }
 
-fn compact_summary_output(input: &str) -> String {
+fn compact_summary_output(input: &str, program: &str) -> String {
 	let lines: Vec<&str> = input.lines().collect();
 	if lines.len() <= 30 {
 		return input.to_string();
 	}
 
-	let windowed = primitives::head_tail_lines(input, 12, 12);
+	let input = if program == "df" {
+		let kept: Vec<&str> = lines
+			.into_iter()
+			.filter(|line| {
+				let trimmed = line.trim_start();
+				!trimmed.starts_with("tmpfs")
+					&& !trimmed.starts_with("devtmpfs")
+					&& !trimmed.starts_with("udev")
+					&& !trimmed.starts_with("none")
+					&& !trimmed.starts_with("overlay")
+					&& !trimmed.starts_with("shm")
+			})
+			.collect();
+		kept.join("\n")
+	} else {
+		lines.join("\n")
+	};
+
+	let lines: Vec<&str> = input.lines().collect();
+	let windowed = primitives::head_tail_lines(&input, 12, 12);
 	let mut out = String::new();
 	for line in lines.iter().copied().filter(|line| is_summary_line(line)) {
 		if !windowed.lines().any(|existing| existing == line)
@@ -1815,6 +1868,135 @@ mod tests {
 		let out = filter(&ctx, &input, 0);
 		// Legacy: small input passes through unchanged.
 		assert_eq!(out.text, input);
+		assert!(!out.changed);
+	}
+
+	// -------------------------------------------------------------
+	// CONCERN 1: ls date-anchored parse
+	// -------------------------------------------------------------
+
+	#[test]
+	fn parse_ls_long_line_handles_spaced_filename() {
+		let entry = parse_ls_long_line("drwxr-xr-x  2 user staff  192 Feb  2 21:35 my dir").unwrap();
+		assert_eq!(entry.name, "my dir");
+		assert_eq!(entry.size, Some(192));
+		assert!(entry.is_dir);
+		assert!(!entry.is_file);
+	}
+
+	#[test]
+	fn parse_ls_long_line_handles_year_format_date() {
+		let entry =
+			parse_ls_long_line("-rw-r--r--  1 user staff 5678 Dec 25  2024 archive.tar").unwrap();
+		assert_eq!(entry.name, "archive.tar");
+		assert_eq!(entry.size, Some(5678));
+		assert!(!entry.is_dir);
+		assert!(entry.is_file);
+	}
+
+	#[test]
+	fn compact_ls_with_spaced_filename_and_year_date() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = ctx("ls", &cfg);
+		let mut input = String::from("total 8\n");
+		input.push_str("drwxr-xr-x  2 user staff  192 Feb  2 21:35 my dir\n");
+		input.push_str("-rw-r--r--  1 user staff 1234 Feb  2 21:35 my file.txt\n");
+		input.push_str("-rw-r--r--  1 user staff 5678 Dec 25  2024 archive.tar\n");
+		for idx in 0..20 {
+			input.push_str("-rw-r--r--  1 user staff ");
+			input.push_str(&(1024 * (idx + 1)).to_string());
+			input.push_str(" Feb  2 21:35 file");
+			input.push_str(&idx.to_string());
+			input.push_str(".rs\n");
+		}
+		let out = filter(&ctx, &input, 0);
+		assert!(out.text.contains("my dir/"), "spaced dir name missing: {}", out.text);
+		assert!(out.text.contains("my file.txt"), "spaced file name missing: {}", out.text);
+		assert!(out.text.contains("archive.tar"), "year-format file missing: {}", out.text);
+	}
+
+	#[test]
+	fn parse_ls_long_line_handles_non_english_month() {
+		let entry =
+			parse_ls_long_line("-rw-r--r--  1 user staff 1234 25 Mär 10:00 file.txt").unwrap();
+		assert_eq!(entry.name, "file.txt");
+		assert_eq!(entry.size, Some(1234));
+		assert!(!entry.is_dir);
+		assert!(entry.is_file);
+	}
+
+	#[test]
+	fn parse_ls_long_line_handles_dotted_month_abbreviation() {
+		let entry =
+			parse_ls_long_line("-rw-r--r--  1 user staff 5678 févr.  2 21:35 file.txt").unwrap();
+		assert_eq!(entry.name, "file.txt");
+		assert_eq!(entry.size, Some(5678));
+		assert!(!entry.is_dir);
+		assert!(entry.is_file);
+	}
+
+	#[test]
+	fn parse_ls_long_line_device_file_returns_none_size() {
+		let entry =
+			parse_ls_long_line("crw-rw----  1 root dialout 1, 3 Jan  1 10:00 console").unwrap();
+		assert_eq!(entry.name, "console");
+		assert_eq!(entry.size, None);
+		assert!(!entry.is_dir);
+		assert!(!entry.is_file);
+	}
+
+	#[test]
+	fn parse_ls_long_line_iso_date_format() {
+		let entry =
+			parse_ls_long_line("-rw-r--r--  1 user staff 1234 2024-12-25 10:00 file.txt").unwrap();
+		assert_eq!(entry.name, "file.txt");
+		assert_eq!(entry.size, Some(1234));
+		assert!(!entry.is_dir);
+		assert!(entry.is_file);
+	}
+
+	// -------------------------------------------------------------
+	// CONCERN 2: df virtual-filesystem row drop
+	// -------------------------------------------------------------
+
+	#[test]
+	fn long_df_drops_virtual_fs_rows() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = ctx("df", &cfg);
+		let mut input = String::from("Filesystem 1K-blocks Used Available Use% Mounted on\n");
+		for idx in 0..18 {
+			input.push_str("tmpfs 100 50 50 50% /mnt/t");
+			input.push_str(&idx.to_string());
+			input.push('\n');
+		}
+		for idx in 0..30 {
+			input.push_str("/dev/disk");
+			input.push_str(&idx.to_string());
+			input.push_str(" 100 50 50 50% /mnt/d");
+			input.push_str(&idx.to_string());
+			input.push('\n');
+		}
+		let out = filter(&ctx, &input, 0);
+		assert!(
+			out.text
+				.contains("Filesystem 1K-blocks Used Available Use% Mounted on"),
+			"header must be kept: {}",
+			out.text
+		);
+		assert!(!out.text.contains("tmpfs"), "tmpfs must be dropped: {}", out.text);
+		assert!(out.text.contains("/dev/disk"), "real disk rows must be kept: {}", out.text);
+		assert!(out.text.contains("…"), "summary ellipsis expected: {}", out.text);
+	}
+
+	#[test]
+	fn short_df_passes_through_verbatim() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = ctx("df", &cfg);
+		let mut input = String::from("Filesystem 1K-blocks Used Available Use% Mounted on\n");
+		input.push_str("tmpfs 100 50 50 50% /mnt/tmp\n");
+		input.push_str("/dev/disk0 100 50 50 50% /\n");
+		let out = filter(&ctx, &input, 0);
+		assert_eq!(out.text, input, "short df must pass through verbatim");
 		assert!(!out.changed);
 	}
 }
