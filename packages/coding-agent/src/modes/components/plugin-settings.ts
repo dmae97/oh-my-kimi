@@ -717,6 +717,16 @@ export class PluginSettingsComponent extends Container {
 	}
 
 	handleInput(data: string): void {
-		this.#viewComponent?.handleInput(data);
+		if (!this.#viewComponent) {
+			// The list view mounts asynchronously (npm + marketplace listing).
+			// Until it does — or if listing rejected and no view ever mounted —
+			// Escape must still close the panel instead of leaving /settings
+			// non-dismissible.
+			if (data === "\x1b" || data === "\x1b\x1b") {
+				this.callbacks.onClose();
+			}
+			return;
+		}
+		this.#viewComponent.handleInput(data);
 	}
 }

@@ -65,6 +65,7 @@ import { adaptSchemaForStrict, NO_STRICT, sanitizeSchemaForOpenAIResponses, tool
 import { notifyRawSseEvent } from "../utils/sse-debug";
 import { compactGrammarDefinition } from "./grammar";
 import {
+	type CodexReasoningContext,
 	type CodexRequestOptions,
 	type InputItem,
 	type RequestBody,
@@ -87,12 +88,35 @@ import { transformMessages } from "./transform-messages";
 export interface OpenAICodexResponsesOptions extends StreamOptions {
 	reasoning?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
 	reasoningSummary?: "auto" | "concise" | "detailed" | null;
+	/** `reasoning.context` replay scope. Defaults to `all_turns` under {@link OpenAICodexResponsesOptions.responsesLite}, otherwise omitted (server default is `current_turn`). */
+	reasoningContext?: CodexReasoningContext;
 	textVerbosity?: "low" | "medium" | "high";
 	include?: string[];
 	codexMode?: boolean;
 	toolChoice?: ToolChoice;
 	preferWebsockets?: boolean;
 	serviceTier?: ServiceTier;
+	/**
+	 * Opt into the Responses Lite transport contract. Sends
+	 * `x-openai-internal-codex-responses-lite: true` on HTTP requests and on the
+	 * WebSocket upgrade (the marker is connection-scoped there, so lite and
+	 * non-lite turns never share a pooled socket), strips image detail from
+	 * input, and defaults `reasoning.context` to `all_turns` — mirroring codex-rs.
+	 */
+	responsesLite?: boolean;
+	/**
+	 * Extra `client_metadata` to include in the request body on both transports.
+	 * The canonical Codex envelope is `client_metadata["x-codex-turn-metadata"]`
+	 * (JSON string of thread/turn identifiers); flat keys are also accepted.
+	 */
+	clientMetadata?: Record<string, string>;
+	/**
+	 * Invoked when the server streams a `response.metadata` event carrying
+	 * ChatGPT moderation metadata (`metadata.openai_chatgpt_moderation_metadata`)
+	 * for first-party presentation parity. Diagnostic observer: failures are
+	 * swallowed and must not alter the stream.
+	 */
+	onModerationMetadata?: (metadata: unknown) => void;
 }
 
 const CODEX_DEBUG = $flag("PI_CODEX_DEBUG");
@@ -141,6 +165,11 @@ const CODEX_RETRYABLE_EVENT_MESSAGE =
 const CODEX_PROVIDER_SESSION_STATE_KEY = "openai-codex-responses";
 const X_CODEX_TURN_STATE_HEADER = "x-codex-turn-state";
 const X_MODELS_ETAG_HEADER = "x-models-etag";
+const X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER = "x-openai-internal-codex-responses-lite";
+/** WebSocket frames cannot carry per-request HTTP headers; codex-rs mirrors the lite marker into `client_metadata` under this key. */
+const CODEX_WS_RESPONSES_LITE_CLIENT_METADATA_KEY = "ws_request_header_x_openai_internal_codex_responses_lite";
+/** `response.metadata` payload key carrying ChatGPT moderation metadata. */
+const CODEX_MODERATION_METADATA_KEY = "openai_chatgpt_moderation_metadata";
 /** Connection-level websocket failures that should immediately fall back to SSE without retrying. */
 const CODEX_WEBSOCKET_FATAL_PATTERNS = ["websocket error:", "websocket closed before open", "connection timeout"];
 /** Max total time to spend retrying 429s with server-provided delays (5 minutes). */
@@ -222,6 +251,7 @@ interface CodexRequestContext {
 	transportSessionId?: string;
 	providerSessionState?: CodexProviderSessionState;
 	websocketState?: CodexWebSocketSessionState;
+	responsesLite: boolean;
 	transformedBody: RequestBody;
 	rawRequestDump: RawHttpRequestDump;
 }
@@ -680,7 +710,8 @@ async function buildCodexRequestContext(
 	};
 
 	const providerSessionState = getCodexProviderSessionState(options?.providerSessionState);
-	const sessionKey = getCodexWebSocketSessionKey(transportSessionId, model, accountId, baseUrl);
+	const responsesLite = options?.responsesLite === true;
+	const sessionKey = getCodexWebSocketSessionKey(transportSessionId, model, accountId, baseUrl, responsesLite);
 	const publicSessionKey = getCodexPublicSessionKey(transportSessionId, model, baseUrl);
 	if (sessionKey && publicSessionKey) {
 		providerSessionState?.webSocketPublicToPrivate.set(publicSessionKey, sessionKey);
@@ -696,6 +727,7 @@ async function buildCodexRequestContext(
 		transportSessionId,
 		providerSessionState,
 		websocketState,
+		responsesLite,
 		transformedBody,
 		rawRequestDump,
 	};
@@ -764,11 +796,16 @@ async function buildTransformedCodexRequestBody(
 		params.instructions = systemPrompts[0];
 	}
 	const developerMessages = systemPrompts.slice(1);
+	if (options?.clientMetadata && Object.keys(options.clientMetadata).length > 0) {
+		params.client_metadata = { ...options.clientMetadata };
+	}
 	const codexOptions: CodexRequestOptions = {
 		reasoningEffort: options?.reasoning,
 		reasoningSummary: options?.reasoningSummary === undefined ? "auto" : options.reasoningSummary,
+		reasoningContext: options?.reasoningContext,
 		textVerbosity: options?.textVerbosity,
 		include: options?.include,
+		responsesLite: options?.responsesLite,
 	};
 
 	return transformRequestBody(params, model, codexOptions, { developerMessages });
@@ -833,7 +870,11 @@ async function openCodexWebSocketTransport(
 	requestBodyForState: RequestBody;
 	transport: CodexTransport;
 }> {
-	const websocketRequest = buildCodexWebSocketRequest(requestContext.transformedBody, websocketState);
+	const websocketRequest = buildCodexWebSocketRequest(
+		requestContext.transformedBody,
+		websocketState,
+		requestContext.responsesLite,
+	);
 	const websocketHeaders = createCodexHeaders(
 		requestContext.requestHeaders,
 		requestContext.accountId,
@@ -841,6 +882,7 @@ async function openCodexWebSocketTransport(
 		requestContext.transportSessionId,
 		"websocket",
 		websocketState,
+		requestContext.responsesLite,
 	);
 	const requestBodyForState = structuredCloneJSON(requestContext.transformedBody);
 	logCodexDebug("codex websocket request", {
@@ -890,6 +932,7 @@ async function openCodexSseTransport(
 			requestContext.transportSessionId,
 			body,
 			state,
+			requestContext.responsesLite,
 			requestSetup.requestSignal,
 			event => options?.onSseEvent?.(event, model),
 			options?.fetch,
@@ -1171,6 +1214,18 @@ function handleCodexStreamEvent(
 
 	if (eventType === "response.completed" || eventType === "response.done" || eventType === "response.incomplete") {
 		handleResponseCompleted(model, output, runtime, rawEvent);
+		return firstTokenTime;
+	}
+
+	if (eventType === "response.metadata") {
+		const moderation = asRecord(rawEvent.metadata)?.[CODEX_MODERATION_METADATA_KEY];
+		if (moderation !== undefined) {
+			try {
+				context.options?.onModerationMetadata?.(moderation);
+			} catch {
+				// Diagnostic observer: failures must not disturb the stream.
+			}
+		}
 		return firstTokenTime;
 	}
 
@@ -1967,6 +2022,7 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 						baseUrl: model.baseUrl || CODEX_BASE_URL,
 						url: "",
 						requestHeaders: {},
+						responsesLite: options?.responsesLite === true,
 						transformedBody: { model: model.id },
 						rawRequestDump: {
 							provider: model.provider,
@@ -2003,7 +2059,7 @@ export async function prewarmOpenAICodexResponses(
 	model: Model<"openai-codex-responses">,
 	options?: Pick<
 		OpenAICodexResponsesOptions,
-		"apiKey" | "headers" | "sessionId" | "signal" | "preferWebsockets" | "providerSessionState"
+		"apiKey" | "headers" | "sessionId" | "signal" | "preferWebsockets" | "providerSessionState" | "responsesLite"
 	>,
 ): Promise<void> {
 	const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
@@ -2013,7 +2069,8 @@ export async function prewarmOpenAICodexResponses(
 	const url = resolveCodexResponsesUrl(baseUrl);
 	const promptCacheKey = normalizeOpenAIResponsesPromptCacheKey(options?.sessionId);
 	const providerSessionState = getCodexProviderSessionState(options?.providerSessionState);
-	const sessionKey = getCodexWebSocketSessionKey(promptCacheKey, model, accountId, baseUrl);
+	const responsesLite = options?.responsesLite === true;
+	const sessionKey = getCodexWebSocketSessionKey(promptCacheKey, model, accountId, baseUrl, responsesLite);
 	const publicSessionKey = getCodexPublicSessionKey(promptCacheKey, model, baseUrl);
 	if (publicSessionKey && sessionKey) {
 		providerSessionState?.webSocketPublicToPrivate.set(publicSessionKey, sessionKey);
@@ -2030,6 +2087,7 @@ export async function prewarmOpenAICodexResponses(
 		promptCacheKey,
 		"websocket",
 		state,
+		responsesLite,
 	);
 	await logger.time(
 		"prewarmCodex:establishWs",
@@ -2059,10 +2117,14 @@ function getCodexWebSocketSessionKey(
 	model: Model<"openai-codex-responses">,
 	accountId: string,
 	baseUrl: string,
+	responsesLite: boolean,
 ): string | undefined {
 	const promptCacheKey = normalizeOpenAIResponsesPromptCacheKey(sessionId);
 	if (!promptCacheKey) return undefined;
-	return `${accountId}:${baseUrl}:${model.id}:${promptCacheKey}`;
+	// Responses Lite is connection-scoped on the WebSocket upgrade, so lite and
+	// non-lite turns must never share a pooled socket or append state.
+	const liteSuffix = responsesLite ? ":lite" : "";
+	return `${accountId}:${baseUrl}:${model.id}:${promptCacheKey}${liteSuffix}`;
 }
 
 function getCodexPublicSessionKey(
@@ -2213,8 +2275,10 @@ function buildAppendInput(
 ): InputItem[] | null {
 	if (!previous) return null;
 	if (!Array.isArray(previous.input) || !Array.isArray(current.input)) return null;
-	const previousWithoutInput = { ...previous, input: undefined };
-	const currentWithoutInput = { ...current, input: undefined };
+	// Per-turn `client_metadata` (e.g. rotating turn ids) must not break the
+	// append fast-path; codex-rs excludes it from the same comparison.
+	const previousWithoutInput = { ...previous, input: undefined, client_metadata: undefined };
+	const currentWithoutInput = { ...current, input: undefined, client_metadata: undefined };
 	if (JSON.stringify(previousWithoutInput) !== JSON.stringify(currentWithoutInput)) {
 		return null;
 	}
@@ -2257,7 +2321,13 @@ function recordCodexWebSocketRequestStats(
 function buildCodexWebSocketRequest(
 	requestBody: RequestBody,
 	state: CodexWebSocketSessionState | undefined,
+	responsesLite: boolean,
 ): Record<string, unknown> {
+	// WebSocket frames cannot carry per-request HTTP headers, so the Responses
+	// Lite marker rides in `client_metadata` on every `response.create`.
+	const liteClientMetadata = responsesLite
+		? { ...(requestBody.client_metadata ?? {}), [CODEX_WS_RESPONSES_LITE_CLIENT_METADATA_KEY]: "true" }
+		: undefined;
 	const appendInput = state?.canAppend
 		? buildAppendInput(state.lastRequest, state.lastResponseItems, requestBody)
 		: null;
@@ -2265,6 +2335,7 @@ function buildCodexWebSocketRequest(
 		const request = {
 			type: "response.create",
 			...requestBody,
+			...(liteClientMetadata ? { client_metadata: liteClientMetadata } : {}),
 			previous_response_id: state.lastResponseId,
 			input: appendInput,
 		};
@@ -2282,6 +2353,7 @@ function buildCodexWebSocketRequest(
 	const request = {
 		type: "response.create",
 		...requestBody,
+		...(liteClientMetadata ? { client_metadata: liteClientMetadata } : {}),
 	};
 	recordCodexWebSocketRequestStats(state, request);
 	return request;
@@ -2901,11 +2973,12 @@ async function openCodexSseEventStream(
 	sessionId: string | undefined,
 	body: RequestBody,
 	state: CodexWebSocketSessionState | undefined,
+	responsesLite: boolean,
 	signal?: AbortSignal,
 	onSseEvent?: OpenAICodexResponsesOptions["onSseEvent"],
 	fetchOverride?: FetchImpl,
 ): Promise<AsyncGenerator<Record<string, unknown>>> {
-	const headers = createCodexHeaders(requestHeaders, accountId, apiKey, sessionId, "sse", state);
+	const headers = createCodexHeaders(requestHeaders, accountId, apiKey, sessionId, "sse", state, responsesLite);
 	logCodexDebug("codex request", {
 		url,
 		model: body.model,
@@ -2966,6 +3039,7 @@ function createCodexHeaders(
 	sessionId?: string,
 	transport: CodexTransport = "sse",
 	state?: CodexWebSocketSessionState,
+	responsesLite = false,
 ): Headers {
 	const headers = new Headers(initHeaders ?? {});
 	headers.delete("x-api-key");
@@ -2998,6 +3072,11 @@ function createCodexHeaders(
 		headers.set(X_MODELS_ETAG_HEADER, state.modelsEtag);
 	} else {
 		headers.delete(X_MODELS_ETAG_HEADER);
+	}
+	if (responsesLite) {
+		headers.set(X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER, "true");
+	} else {
+		headers.delete(X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER);
 	}
 	if (transport === "sse") {
 		headers.set("accept", "text/event-stream");

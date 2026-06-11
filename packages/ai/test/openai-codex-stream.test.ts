@@ -660,6 +660,48 @@ describe("openai-codex streaming", () => {
 		expect(Object.keys(capturedHeaders ?? {}).filter(key => key.toLowerCase() === "openai-beta")).toHaveLength(1);
 	});
 
+	it("sends the Responses Lite marker on the upgrade and in response.create client_metadata", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+		const token = createCodexTestToken();
+		let capturedHeaders: WsHeaders | undefined;
+		const sentRequests: Array<Record<string, unknown>> = [];
+		class LiteWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				capturedHeaders = options?.headers;
+				this.scheduleOpen();
+			}
+
+			send(data: string): void {
+				sentRequests.push(JSON.parse(data) as Record<string, unknown>);
+				this.emitCodexResponse({ messageId: "msg_lite", responseId: "resp_lite", text: "Hi" });
+			}
+		}
+
+		global.WebSocket = LiteWebSocket as unknown as typeof WebSocket;
+		const result = await streamOpenAICodexResponses(
+			createCodexTestModel("https://chatgpt.com/backend-api"),
+			createCodexTestContext(),
+			{
+				apiKey: token,
+				sessionId: "ws-lite-session",
+				providerSessionState: new Map<string, ProviderSessionState>(),
+				responsesLite: true,
+				clientMetadata: { "x-codex-turn-metadata": '{"thread_id":"t_1"}' },
+			},
+		).result();
+
+		expect(result.stopReason).toBe("stop");
+		expect(capturedHeaders?.["x-openai-internal-codex-responses-lite"]).toBe("true");
+		expect(sentRequests).toHaveLength(1);
+		expect(sentRequests[0]?.type).toBe("response.create");
+		expect(sentRequests[0]?.client_metadata).toEqual({
+			"x-codex-turn-metadata": '{"thread_id":"t_1"}',
+			ws_request_header_x_openai_internal_codex_responses_lite: "true",
+		});
+	});
+
 	it("streams SSE responses into AssistantMessageEventStream", async () => {
 		const tempDir = TempDir.createSync("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
