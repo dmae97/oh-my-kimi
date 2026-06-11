@@ -97,6 +97,11 @@ fn filter_go_test(input: &str, exit_code: i32) -> String {
 /// Success-path aggregation: count package and test markers (re-derived for
 /// DEFAULT text, with opportunistic JSON rendering) and emit one summary line.
 fn aggregate_go_test_success(input: &str) -> String {
+	// Benchmark output is signal — don't collapse it into a count.
+	if input.lines().any(|l| l.trim_start().starts_with("Benchmark")) {
+		return primitives::head_tail_lines(input, 140, 80);
+	}
+
 	let mut packages_ok = 0usize;
 	let mut no_tests = 0usize;
 	let mut tests_skipped = 0usize;
@@ -162,7 +167,7 @@ fn render_go_test_json_line(line: &str) -> Option<String> {
 	match action {
 		"fail" if !test.is_empty() => Some(format!("--- FAIL: {test}")),
 		"fail" if !package.is_empty() => Some(format!("FAIL\t{package}")),
-		"pass" if !package.is_empty() && test.is_empty() => Some(format!("ok\t{package}")),
+		"pass" if !package.is_empty() && test.is_empty() => None,
 		"skip" if !test.is_empty() => Some(format!("--- SKIP: {test}")),
 		_ => None,
 	}
@@ -607,5 +612,22 @@ mod tests {
 		let out = filter(&ctx, input, 0);
 		assert_eq!(out.text, input);
 		assert!(!out.changed);
+	}
+
+	#[test]
+	fn go_json_no_double_count() {
+		// A -json stream has both an Output "ok\t{pkg}" line AND a pass event.
+		// We must count only once.
+		let json = "{\"Action\":\"output\",\"Package\":\"example/pkg\",\"Output\":\"ok\\texample/pkg\\n\"}\n{\"Action\":\"pass\",\"Package\":\"example/pkg\",\"Elapsed\":0.123}\n";
+		let result = aggregate_go_test_success(json);
+		assert!(result.contains("1 packages ok"), "got: {result}");
+		assert!(!result.contains("2 packages ok"), "double-counted: {result}");
+	}
+
+	#[test]
+	fn go_benchmark_preserved_on_success() {
+		let input = "BenchmarkFoo-8\t1000000\t1234 ns/op\nok\texample/pkg\t1.234s\n";
+		let result = filter_go_test(input, 0);
+		assert!(result.contains("BenchmarkFoo"), "benchmark stripped: {result}");
 	}
 }
