@@ -104,6 +104,30 @@ describe("issue #2315 — MiniMax M2 / GPT-OSS catalog excludes unsupported reas
 		expect(body.reasoning_effort).toBe("low");
 	});
 
+	it("preserves a custom compat.whenThinking reasoningEffortMap override at request time", async () => {
+		const base = getBundledModel("fireworks", "minimax-m2.7") as Model<"openai-completions">;
+		// Custom proxy: minimal stays clamped to low, xhigh is force-mapped to high
+		// via a whenThinking variant — the swap was getting lost when this PR
+		// moved effort maps onto `model.thinking.effortMap`.
+		const model = buildModel({
+			id: base.id,
+			name: base.name,
+			api: "openai-completions",
+			provider: "fireworks",
+			baseUrl: base.baseUrl,
+			reasoning: true,
+			thinking: { mode: "effort", efforts: [Effort.Low, Effort.Medium, Effort.High] },
+			compat: { whenThinking: { reasoningEffortMap: { high: "max" } } },
+			input: base.input,
+			cost: base.cost,
+			contextWindow: base.contextWindow,
+			maxTokens: base.maxTokens,
+		});
+
+		const body = await capturePayload(model, { reasoning: Effort.High });
+		expect(body.reasoning_effort).toBe("max");
+	});
+
 	it("preserves low/medium/high passthrough on fireworks/minimax-m2.7", async () => {
 		const model = getBundledModel("fireworks", "minimax-m2.7") as Model<"openai-completions">;
 		const lowBody = await capturePayload(model, { reasoning: Effort.Low });

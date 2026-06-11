@@ -501,7 +501,10 @@ function buildParams(
 		options,
 		messages,
 		effort =>
-			mapReasoningEffort(effort as NonNullable<OpenAIResponsesOptions["reasoning"]>, model.thinking?.effortMap),
+			mapReasoningEffort(
+				effort as NonNullable<OpenAIResponsesOptions["reasoning"]>,
+				resolveActiveEffortMap(model),
+			),
 		options?.includeEncryptedReasoning ?? true,
 		options?.omitReasoningEffort ?? false,
 	);
@@ -518,6 +521,21 @@ function mapReasoningEffort(
 	reasoningEffortMap: Partial<Record<NonNullable<OpenAIResponsesOptions["reasoning"]>, string>> | undefined,
 ): string {
 	return reasoningEffortMap?.[effort] ?? effort;
+}
+
+/**
+ * Compose the effective effort-map: catalog-baked `model.thinking.effortMap`
+ * is the default, with the resolved compat's `reasoningEffortMap` overlaid on
+ * top so custom raw `Model` configs keep authoring their own overrides.
+ */
+function resolveActiveEffortMap(
+	model: Model<"openai-responses">,
+): Partial<Record<NonNullable<OpenAIResponsesOptions["reasoning"]>, string>> | undefined {
+	const compatMap = model.compat.reasoningEffortMap;
+	const thinkingMap = model.thinking?.effortMap;
+	if (!compatMap || Object.keys(compatMap).length === 0) return thinkingMap;
+	if (!thinkingMap) return compatMap;
+	return { ...thinkingMap, ...compatMap };
 }
 
 function convertConversationMessages(
