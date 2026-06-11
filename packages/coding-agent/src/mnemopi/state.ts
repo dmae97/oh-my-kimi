@@ -370,12 +370,33 @@ export class MnemopiSessionState {
 		}
 	}
 
-	dispose(): void {
+	/**
+	 * Drain in-flight fact extraction and run beam consolidation on every owned
+	 * bank, after capturing the current transcript. Mirrors the manual
+	 * `/memory enqueue` slash command, but stops short of closing the DBs so
+	 * callers can keep using the state. {@link dispose} composes this with the
+	 * close step so normal session shutdown promotes working memory to
+	 * episodic/gists/graph automatically (see issue #2320).
+	 */
+	async consolidate(): Promise<void> {
+		if (this.aliasOf) return;
+		await this.forceRetainCurrentSession();
+		for (const memory of this.scoped.owned) {
+			await memory.flushExtractions();
+			memory.sleepAllSessions(false);
+		}
+	}
+
+	async dispose(): Promise<void> {
 		this.unsubscribe?.();
 		this.unsubscribe = undefined;
-		if (!this.aliasOf) {
-			for (const memory of this.scoped.owned) memory.close();
+		if (this.aliasOf) return;
+		try {
+			await this.consolidate();
+		} catch (error) {
+			logger.warn("Mnemopi: consolidation on dispose failed.", { error: String(error) });
 		}
+		for (const memory of this.scoped.owned) memory.close();
 	}
 }
 

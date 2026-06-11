@@ -338,9 +338,9 @@ describe("retain.execute (Mnemopi backend)", () => {
 		tempDbPath = undefined;
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		vi.restoreAllMocks();
-		registeredMnemopiState?.dispose();
+		await registeredMnemopiState?.dispose();
 		registeredMnemopiState = undefined;
 		if (tempDbPath) {
 			try {
@@ -406,13 +406,13 @@ describe("retain.execute (Mnemopi backend)", () => {
 		await MemoryRetainTool.createIf(makeSession(settings))!.execute("call-mnemopi-alpha-store", {
 			items: [{ content: "alpha uses tabs" }],
 		});
-		registeredMnemopiState?.dispose();
+		await registeredMnemopiState?.dispose();
 		registerMnemopiState(betaConfig, { cwd: "/work/project-beta" });
 		const betaRecall = await MemoryRecallTool.createIf(makeSession(settings))!.execute("call-mnemopi-beta-recall", {
 			query: "tabs",
 		});
 		expect(betaRecall.content[0]).toEqual({ type: "text", text: "No relevant memories found." });
-		registeredMnemopiState?.dispose();
+		await registeredMnemopiState?.dispose();
 		registerMnemopiState(alphaConfig, { cwd: "/work/project-alpha" });
 		const alphaRecall = await MemoryRecallTool.createIf(makeSession(settings))!.execute("call-mnemopi-alpha-recall", {
 			query: "tabs",
@@ -435,9 +435,9 @@ describe("Mnemopi backend lifecycle", () => {
 		tempDbPath = undefined;
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		vi.restoreAllMocks();
-		registeredMnemopiState?.dispose();
+		await registeredMnemopiState?.dispose();
 		registeredMnemopiState = undefined;
 		if (tempDbPath) {
 			try {
@@ -495,7 +495,91 @@ describe("Mnemopi backend lifecycle", () => {
 		const childState = getMnemopiSessionState(childSession);
 		expect(childState?.aliasOf).toBe(parentState);
 		expect(childState?.getScopedRetainTarget().bank).toBe(parentState.getScopedRetainTarget().bank);
-		childState?.dispose();
+		await childState?.dispose();
+	});
+
+	it("flushes extractions, sleeps, and closes every owned bank on session shutdown (#2320)", async () => {
+		const config = makeMnemopiConfig({
+			scoping: "per-project-tagged",
+			bank: "project-alpha",
+			globalBank: "default",
+			retainBank: "project-alpha",
+			recallBanks: ["project-alpha", "default"],
+		});
+		const state = registerMnemopiState(config, { cwd: "/work/project-alpha" });
+		// Seed working memory in each owned bank so the SQL consolidation path
+		// has rows to walk and the sleep call is not a trivial no-op.
+		state.rememberInScope("project-alpha note", { scope: "bank", extract: false, source: "test" });
+		state.globalMemory?.remember("default-bank note", { scope: "bank", extract: false, source: "test" });
+
+		const retainMemory = state.getScopedRetainTarget().memory;
+		const ownedMemories = [retainMemory];
+		if (state.globalMemory && state.globalMemory !== retainMemory) {
+			ownedMemories.push(state.globalMemory);
+		}
+
+		const retainSpy = vi.spyOn(state, "forceRetainCurrentSession").mockResolvedValue();
+		const perBank = ownedMemories.map(memory => ({
+			memory,
+			flush: vi.spyOn(memory, "flushExtractions"),
+			sleep: vi.spyOn(memory, "sleepAllSessions"),
+			close: vi.spyOn(memory, "close"),
+		}));
+
+		await state.dispose();
+
+		expect(retainSpy).toHaveBeenCalledTimes(1);
+		for (const bank of perBank) {
+			expect(bank.flush).toHaveBeenCalledTimes(1);
+			expect(bank.sleep).toHaveBeenCalledTimes(1);
+			expect(bank.sleep).toHaveBeenCalledWith(false);
+			expect(bank.close).toHaveBeenCalledTimes(1);
+			const flushedAt = bank.flush.mock.invocationCallOrder[0];
+			const sleptAt = bank.sleep.mock.invocationCallOrder[0];
+			const closedAt = bank.close.mock.invocationCallOrder[0];
+			expect(flushedAt).toBeLessThan(sleptAt);
+			expect(sleptAt).toBeLessThan(closedAt);
+			expect(retainSpy.mock.invocationCallOrder[0]).toBeLessThan(closedAt);
+		}
+		// State already consumed its owned resources; the afterEach hook would
+		// otherwise re-enter dispose on closed handles.
+		registeredMnemopiState = undefined;
+	});
+
+	it("skips consolidation when disposing an aliased subagent state (#2320)", async () => {
+		const settings = Settings.isolated({ "memory.backend": "mnemopi" });
+		const parentState = registerMnemopiState();
+		const parentMemory = parentState.getScopedRetainTarget().memory;
+		const childSession = {
+			sessionId: "child-session-id",
+			settings,
+			sessionManager: { getEntries: () => [], getCwd: () => "/tmp" },
+			emitNotice: () => {},
+		} as never;
+		await mnemopiBackend.start({
+			session: childSession,
+			settings,
+			modelRegistry: {} as never,
+			agentDir: path.dirname(tempDbPath!),
+			taskDepth: 1,
+			parentMnemopiSessionState: parentState,
+		});
+		const childState = getMnemopiSessionState(childSession);
+		expect(childState?.aliasOf).toBe(parentState);
+
+		const flushSpy = vi.spyOn(parentMemory, "flushExtractions");
+		const sleepSpy = vi.spyOn(parentMemory, "sleepAllSessions");
+		const closeSpy = vi.spyOn(parentMemory, "close");
+		const parentRetainSpy = vi.spyOn(parentState, "forceRetainCurrentSession");
+
+		await childState?.dispose();
+
+		// Alias dispose must not touch the parent's owned memories or trigger
+		// parent retention; the parent state outlives the subagent.
+		expect(flushSpy).not.toHaveBeenCalled();
+		expect(sleepSpy).not.toHaveBeenCalled();
+		expect(closeSpy).not.toHaveBeenCalled();
+		expect(parentRetainSpy).not.toHaveBeenCalled();
 	});
 
 	it("clears every scoped Mnemopi database for per-project-tagged mode", async () => {
@@ -707,9 +791,9 @@ describe("recall.execute (Mnemopi backend)", () => {
 		tempDbPath = undefined;
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		vi.restoreAllMocks();
-		registeredMnemopiState?.dispose();
+		await registeredMnemopiState?.dispose();
 		registeredMnemopiState = undefined;
 		if (tempDbPath) {
 			try {
