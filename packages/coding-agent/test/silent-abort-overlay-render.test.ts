@@ -1,17 +1,19 @@
 /**
- * Regression: observer overlay must not render SILENT_ABORT_MARKER verbatim.
+ * Regression: the agent-hub chat transcript must not render SILENT_ABORT_MARKER verbatim.
  *
- * Codex review flagged that `session-observer-overlay.ts` renders `errorMessage`
- * without filtering the silent-abort sentinel. This test exercises the full
- * `#buildTranscriptLines` path through a real JSONL session file and mock registry.
+ * Codex review flagged that the old observer overlay rendered `errorMessage`
+ * without filtering the silent-abort sentinel; the renderer now lives in
+ * `agent-hub.ts`. This test exercises the full `#buildTranscriptLines` path
+ * through a real JSONL session file and an isolated agent registry.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { SessionObserverOverlayComponent } from "@oh-my-pi/pi-coding-agent/modes/components/session-observer-overlay";
+import { AgentHubOverlayComponent } from "@oh-my-pi/pi-coding-agent/modes/components/agent-hub";
 import type { ObservableSession } from "@oh-my-pi/pi-coding-agent/modes/session-observer-registry";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { SILENT_ABORT_MARKER } from "@oh-my-pi/pi-coding-agent/session/messages";
 
 const SESSION_ID = "test-session-1";
@@ -32,7 +34,29 @@ function makeSubagentRegistry(sessions: ObservableSession[]) {
 	} as unknown as import("@oh-my-pi/pi-coding-agent/modes/session-observer-registry").SessionObserverRegistry;
 }
 
-describe("Observer overlay silent-abort regression", () => {
+function makeHub(sessionFile: string, observed: ObservableSession[]): AgentHubOverlayComponent {
+	const agents = new AgentRegistry();
+	agents.register({
+		id: SESSION_ID,
+		displayName: SESSION_ID,
+		kind: "sub",
+		parentId: "Main",
+		session: null,
+		sessionFile,
+		status: "parked",
+	});
+	const hub = new AgentHubOverlayComponent({
+		observers: makeSubagentRegistry(observed),
+		hubKeys: ["ctrl+s"],
+		onDone: () => {},
+		requestRender: () => {},
+		registry: agents,
+	});
+	hub.openChat(SESSION_ID);
+	return hub;
+}
+
+describe("Agent hub silent-abort regression", () => {
 	let tmpDir: string;
 
 	beforeAll(() => {
@@ -83,7 +107,7 @@ describe("Observer overlay silent-abort regression", () => {
 			},
 		]);
 
-		const registry = makeSubagentRegistry([
+		const hub = makeHub(sessionFile, [
 			{
 				id: SESSION_ID,
 				kind: "subagent",
@@ -94,11 +118,10 @@ describe("Observer overlay silent-abort regression", () => {
 			},
 		]);
 
-		const overlay = new SessionObserverOverlayComponent(registry, () => {}, ["ctrl+s"]);
-
-		// Render with a reasonable width — the overlay reads the session file
-		// and calls #buildTranscriptLines internally.
-		const rendered = overlay.render(120);
+		// Render with a reasonable width — the hub chat view reads the session
+		// file and calls #buildTranscriptLines internally.
+		const rendered = hub.render(120);
+		hub.dispose();
 		const renderedText = rendered.join("\n");
 
 		// The sentinel MUST NOT appear verbatim in any rendered line
@@ -143,7 +166,7 @@ describe("Observer overlay silent-abort regression", () => {
 			},
 		]);
 
-		const registry = makeSubagentRegistry([
+		const hub = makeHub(sessionFile, [
 			{
 				id: SESSION_ID,
 				kind: "subagent",
@@ -154,9 +177,8 @@ describe("Observer overlay silent-abort regression", () => {
 			},
 		]);
 
-		const overlay = new SessionObserverOverlayComponent(registry, () => {}, ["ctrl+s"]);
-
-		const rendered = overlay.render(120);
+		const rendered = hub.render(120);
+		hub.dispose();
 		const renderedText = rendered.join("\n");
 
 		// A real error message SHOULD be rendered with the ✗ Error: prefix

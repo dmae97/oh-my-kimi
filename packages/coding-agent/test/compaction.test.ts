@@ -814,6 +814,58 @@ describe("buildSessionContext", () => {
 		expect((loaded.messages[0] as any).summary).toContain("Summary of 1,a,2,b");
 	});
 
+	it("re-attaches snapcompact frames from preserveData as compaction summary images", () => {
+		const u1 = createMessageEntry(createUserMessage("1"));
+		const a1 = createMessageEntry(createAssistantMessage("a"));
+		const u2 = createMessageEntry(createUserMessage("2"));
+		const frame = { data: "ZmFrZQ==", mimeType: "image/png", cols: 64, rows: 40, chars: 4 };
+		const compaction: CompactionEntry = {
+			...createCompactionEntry("Filmed summary", u2.id),
+			preserveData: { snapcompact: { frames: [frame], totalChars: 4, truncatedChars: 0 } },
+		};
+		const u3 = createMessageEntry(createUserMessage("3"));
+
+		const loaded = buildSessionContext([u1, a1, u2, compaction, u3]);
+		const summaryMessage = loaded.messages[0] as { role: string; images?: unknown };
+		expect(summaryMessage.role).toBe("compactionSummary");
+		expect(summaryMessage.images).toEqual([{ type: "image", data: "ZmFrZQ==", mimeType: "image/png" }]);
+	});
+
+	it("transcript option keeps full history with every compaction inline at its position", () => {
+		const u1 = createMessageEntry(createUserMessage("1"));
+		const a1 = createMessageEntry(createAssistantMessage("a"));
+		const compact1 = createCompactionEntry("First summary", u1.id);
+		const u2 = createMessageEntry(createUserMessage("2"));
+		const frame = { data: "ZmFrZQ==", mimeType: "image/png", cols: 64, rows: 40, chars: 4 };
+		const compact2: CompactionEntry = {
+			...createCompactionEntry("Second summary", u2.id),
+			preserveData: { snapcompact: { frames: [frame], totalChars: 4, truncatedChars: 0 } },
+		};
+		const u3 = createMessageEntry(createUserMessage("3"));
+		const entries: SessionEntry[] = [u1, a1, compact1, u2, compact2, u3];
+
+		const transcript = buildSessionContext(entries, undefined, undefined, { transcript: true });
+		// Nothing erased: every message survives, compactions sit where they fired.
+		expect(transcript.messages.map(m => m.role)).toEqual([
+			"user",
+			"assistant",
+			"compactionSummary",
+			"user",
+			"compactionSummary",
+			"user",
+		]);
+		const first = transcript.messages[2] as { summary: string };
+		const second = transcript.messages[4] as { summary: string; images?: unknown };
+		expect(first.summary).toContain("First summary");
+		expect(second.summary).toContain("Second summary");
+		// Snapcompact frames ride along in the transcript too.
+		expect(second.images).toEqual([{ type: "image", data: "ZmFrZQ==", mimeType: "image/png" }]);
+
+		// LLM context is untouched by the option: latest compaction replaces history.
+		const llm = buildSessionContext(entries);
+		expect(llm.messages.map(m => m.role)).toEqual(["compactionSummary", "user", "user"]);
+	});
+
 	it("should handle multiple compactions (only latest matters)", () => {
 		// First batch
 		const u1 = createMessageEntry(createUserMessage("1"));

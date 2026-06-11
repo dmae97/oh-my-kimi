@@ -56,7 +56,7 @@ import {
 } from "../../extensibility/extensions";
 import { runExtensionCompact } from "../../extensibility/extensions/compact-handler";
 import { getSessionSlashCommands } from "../../extensibility/extensions/get-commands-handler";
-import { buildSkillPromptMessage, getSkillSlashCommandName } from "../../extensibility/skills";
+import { buildSkillPromptMessage } from "../../extensibility/skills";
 import { loadSlashCommands } from "../../extensibility/slash-commands";
 import { resolveLocalUrlToPath } from "../../internal-urls";
 import { MCPManager } from "../../mcp/manager";
@@ -71,12 +71,8 @@ import {
 	type SessionInfo as StoredSessionInfo,
 	type UsageStatistics,
 } from "../../session/session-manager";
-import {
-	ACP_BUILTIN_RESERVED_NAMES,
-	ACP_BUILTIN_SLASH_COMMANDS,
-	executeAcpBuiltinSlashCommand,
-	isAcpBuiltinShadowedName,
-} from "../../slash-commands/acp-builtins";
+import { executeAcpBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
+import { buildAvailableSlashCommands, toAcpAvailableCommands } from "../../slash-commands/available-commands";
 import { AUTO_THINKING, parseConfiguredThinkingLevel } from "../../thinking";
 import { normalizeLocalScheme } from "../../tools/path-utils";
 import { runResolveInvocation } from "../../tools/resolve";
@@ -1662,66 +1658,7 @@ export class AcpAgent implements Agent {
 	}
 
 	async #buildAvailableCommands(session: AgentSession): Promise<AvailableCommand[]> {
-		const commands: AvailableCommand[] = [];
-		const seenNames = new Set<string>();
-		const appendCommand = (command: AvailableCommand): void => {
-			if (seenNames.has(command.name)) {
-				return;
-			}
-			seenNames.add(command.name);
-			commands.push(command);
-		};
-
-		// Advertise in the order dispatch resolves them (mirrors AgentSession
-		// dispatch: builtins → skills → extensions → custom TS → file-based).
-		// `appendCommand` dedupes by name so earlier entries win; extension
-		// commands therefore correctly shadow custom TS commands of the same
-		// name, matching the runtime behaviour of #tryExecuteExtensionCommand
-		// running before #tryExecuteCustomCommand.
-		for (const command of ACP_BUILTIN_SLASH_COMMANDS) {
-			appendCommand(command);
-		}
-
-		if (session.skillsSettings?.enableSkillCommands) {
-			for (const skill of session.skills) {
-				appendCommand({
-					name: getSkillSlashCommandName(skill),
-					description: skill.description || `Run ${skill.name} skill`,
-					input: { hint: "arguments" },
-				});
-			}
-		}
-
-		for (const command of session.extensionRunner?.getRegisteredCommands(ACP_BUILTIN_RESERVED_NAMES) ?? []) {
-			// Reserved-set filtering in getRegisteredCommands only covers exact
-			// names; colon-namespaced names whose prefix is a builtin (e.g.
-			// `model:foo`) would still dispatch to the builtin in ACP.
-			if (isAcpBuiltinShadowedName(command.name)) {
-				continue;
-			}
-			appendCommand({
-				name: command.name,
-				description: command.description ?? "(extension command)",
-				input: { hint: "arguments" },
-			});
-		}
-
-		for (const command of session.customCommands) {
-			appendCommand({
-				name: command.command.name,
-				description: command.command.description,
-				input: { hint: "arguments" },
-			});
-		}
-
-		for (const command of await loadSlashCommands({ cwd: session.sessionManager.getCwd() })) {
-			appendCommand({
-				name: command.name,
-				description: command.description,
-			});
-		}
-
-		return commands;
+		return toAcpAvailableCommands(await buildAvailableSlashCommands(session));
 	}
 
 	#toSessionInfo(session: StoredSessionInfo): SessionInfo {

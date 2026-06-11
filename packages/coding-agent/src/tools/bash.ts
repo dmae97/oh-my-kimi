@@ -17,7 +17,7 @@ import { truncateToVisualLines } from "../modes/components/visual-truncate";
 import { highlightCode, type Theme } from "../modes/theme/theme";
 import bashDescription from "../prompts/tools/bash.md" with { type: "text" };
 import type { ClientBridgeTerminalExitStatus, ClientBridgeTerminalOutput } from "../session/client-bridge";
-import { DEFAULT_MAX_BYTES, streamTailUpdates, TailBuffer } from "../session/streaming-output";
+import { DEFAULT_MAX_BYTES, enforceInlineByteCap, streamTailUpdates, TailBuffer } from "../session/streaming-output";
 import { renderStatusLine } from "../tui";
 import { CachedOutputBlock, markFramedBlockComponent } from "../tui/output-block";
 import { getSixelLineMask } from "../utils/sixel";
@@ -368,7 +368,11 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 	readonly loadMode = "essential";
 	readonly description: string;
 	readonly parameters: BashToolSchema;
-	readonly concurrency = "exclusive";
+	// Non-pty calls run alongside each other (the executor isolates overlapping
+	// runs on the same shell session); pty takes over the terminal UI and must
+	// run alone.
+	readonly concurrency = (args: Partial<BashToolInput>): "shared" | "exclusive" =>
+		args.pty === true ? "exclusive" : "shared";
 	readonly strict = true;
 	readonly #asyncEnabled: boolean;
 	readonly #autoBackgroundEnabled: boolean;
@@ -429,7 +433,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		}
 	}
 
-	#buildCompletedResult(
+	async #buildCompletedResult(
 		result: BashResult | BashInteractiveResult,
 		timeoutSec: number,
 		options: {
@@ -438,7 +442,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			terminalId?: string;
 			wallTimeMs?: number;
 		} = {},
-	): AgentToolResult<BashToolDetails> {
+	): Promise<AgentToolResult<BashToolDetails>> {
 		const exitCode = result.exitCode;
 		const failedExit = exitCode !== undefined && exitCode !== 0;
 
@@ -472,7 +476,17 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		if (failedExit) {
 			details.exitCode = exitCode;
 		}
-		const resultBuilder = toolResult(details).text(outputText).truncationFromSummary(result, { direction: "tail" });
+		// Final defense at the tool-result boundary: no bash path (client bridge,
+		// head-retention spill, minimizer miss) may emit more than
+		// ~DEFAULT_MAX_BYTES inline. No-op for already-bounded output.
+		const cappedOutputText = await enforceInlineByteCap(outputText, {
+			label: "bash output",
+			saveArtifact: full => saveBashOriginalArtifact(this.session, full),
+		});
+
+		const resultBuilder = toolResult(details)
+			.text(cappedOutputText)
+			.truncationFromSummary(result, { direction: "tail" });
 		if (failedExit) resultBuilder.error();
 		return resultBuilder.done();
 	}
@@ -560,7 +574,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 						onMinimizedSave: originalText => saveBashOriginalArtifact(this.session, originalText),
 					});
 					const wallTimeMs = performance.now() - wallTimeStart;
-					const finalResult = this.#buildCompletedResult(result, options.timeoutSec, {
+					const finalResult = await this.#buildCompletedResult(result, options.timeoutSec, {
 						requestedTimeoutSec: options.requestedTimeoutSec,
 						notices: options.notices ?? [],
 						wallTimeMs,

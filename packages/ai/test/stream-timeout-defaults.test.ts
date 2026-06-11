@@ -5,6 +5,7 @@ import {
 	getStreamFirstEventTimeoutMs,
 	getStreamIdleTimeoutMs,
 	iterateWithIdleTimeout,
+	iterateWithTerminalGrace,
 } from "@oh-my-pi/pi-ai/utils/idle-iterator";
 
 /**
@@ -255,5 +256,77 @@ describe("iterateWithIdleTimeout", () => {
 		// instead of being left suspended.
 		await Bun.sleep(5);
 		expect(upstreamClosed).toBe(true);
+	});
+});
+
+describe("iterateWithTerminalGrace", () => {
+	it("passes items through untouched while the stream is not finished", async () => {
+		async function* source(): AsyncGenerator<string> {
+			yield "a";
+			yield "b";
+		}
+
+		const seen: string[] = [];
+		for await (const item of iterateWithTerminalGrace(source(), {
+			finishedAtMs: () => undefined,
+			graceMs: 50,
+		})) {
+			seen.push(item);
+		}
+		expect(seen).toEqual(["a", "b"]);
+	});
+
+	it("yields trailing items that arrive within the grace window", async () => {
+		let finishedAt: number | undefined;
+		async function* source(): AsyncGenerator<string> {
+			yield "finish";
+			await Bun.sleep(5);
+			yield "usage";
+			await new Promise<never>(() => {}); // server holds the connection open
+		}
+
+		const seen: string[] = [];
+		for await (const item of iterateWithTerminalGrace(source(), {
+			finishedAtMs: () => finishedAt,
+			graceMs: 100,
+		})) {
+			seen.push(item);
+			if (item === "finish") finishedAt = Date.now();
+			if (item === "usage") break;
+		}
+		expect(seen).toEqual(["finish", "usage"]);
+	});
+
+	it("ends cleanly and fires onGraceEnd when the source stays silent past the grace window", async () => {
+		let finishedAt: number | undefined;
+		let graceEnded = false;
+		let upstreamClosed = false;
+		async function* source(): AsyncGenerator<string> {
+			try {
+				yield "finish";
+				await new Promise<never>(() => {}); // never sends [DONE], never closes
+			} finally {
+				upstreamClosed = true;
+			}
+		}
+
+		const seen: string[] = [];
+		for await (const item of iterateWithTerminalGrace(source(), {
+			finishedAtMs: () => finishedAt,
+			graceMs: 20,
+			onGraceEnd: () => {
+				graceEnded = true;
+			},
+		})) {
+			seen.push(item);
+			finishedAt = Date.now();
+		}
+
+		// Clean end of iteration — no throw — with the grace hook invoked so the
+		// caller can abort the transport and release the parked source read.
+		expect(seen).toEqual(["finish"]);
+		expect(graceEnded).toBe(true);
+		await Bun.sleep(5);
+		expect(upstreamClosed).toBe(false); // parked mid-await; only the abort can release it
 	});
 });

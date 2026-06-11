@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
-import { MCPOAuthFlow } from "@oh-my-pi/pi-coding-agent/mcp/oauth-flow";
+import { MCPOAuthFlow, refreshMCPOAuthToken } from "@oh-my-pi/pi-coding-agent/mcp/oauth-flow";
 
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -107,6 +107,77 @@ describe("mcp oauth flow", () => {
 			access: "access-token",
 			refresh: "refresh-token",
 		});
+	});
+	it("sends MCP resource indicator in authorization and token requests", async () => {
+		let authResource = "";
+		let tokenRequestBody = "";
+
+		const flow = new MCPOAuthFlow(
+			{
+				authorizationUrl: "https://provider.example/authorize",
+				tokenUrl: "https://provider.example/token",
+				clientId: "client-id",
+				resource: "https://mcp.example.com/mcp",
+				callbackPort: 14572,
+				fetch: mockProviderTokenEndpoint(body => {
+					tokenRequestBody = body;
+				}),
+			},
+			{
+				onAuth: info => {
+					const authUrl = new URL(info.url);
+					authResource = authUrl.searchParams.get("resource") ?? "";
+					const redirectUri = authUrl.searchParams.get("redirect_uri") ?? "";
+					const state = authUrl.searchParams.get("state") ?? "";
+					queueMicrotask(() => {
+						void fetch(`${redirectUri}?code=test-code&state=${state}`);
+					});
+				},
+				signal: AbortSignal.timeout(1_000),
+			},
+		);
+
+		await flow.login();
+		const tokenParams = new URLSearchParams(tokenRequestBody);
+
+		expect(authResource).toBe("https://mcp.example.com/mcp");
+		expect(tokenParams.get("resource")).toBe("https://mcp.example.com/mcp");
+	});
+	it("uses an authorization URL resource for the matching token request", async () => {
+		let authResource = "";
+		let tokenRequestBody = "";
+
+		const flow = new MCPOAuthFlow(
+			{
+				authorizationUrl:
+					"https://provider.example/authorize?resource=https%3A%2F%2Fauth-url-resource.example%2Fmcp",
+				tokenUrl: "https://provider.example/token",
+				clientId: "client-id",
+				resource: "https://config-resource.example/mcp",
+				callbackPort: 14573,
+				fetch: mockProviderTokenEndpoint(body => {
+					tokenRequestBody = body;
+				}),
+			},
+			{
+				onAuth: info => {
+					const authUrl = new URL(info.url);
+					authResource = authUrl.searchParams.get("resource") ?? "";
+					const redirectUri = authUrl.searchParams.get("redirect_uri") ?? "";
+					const state = authUrl.searchParams.get("state") ?? "";
+					queueMicrotask(() => {
+						void fetch(`${redirectUri}?code=test-code&state=${state}`);
+					});
+				},
+				signal: AbortSignal.timeout(1_000),
+			},
+		);
+
+		await flow.login();
+		const tokenParams = new URLSearchParams(tokenRequestBody);
+
+		expect(authResource).toBe("https://auth-url-resource.example/mcp");
+		expect(tokenParams.get("resource")).toBe("https://auth-url-resource.example/mcp");
 	});
 
 	it("uses exact redirectUri and clientSecret for provider requests", async () => {
@@ -367,6 +438,7 @@ describe("mcp oauth flow", () => {
 				},
 				onManualCodeInput: async () => {
 					const authUrl = new URL(manualAuthUrl);
+
 					const redirectUri = authUrl.searchParams.get("redirect_uri") ?? "";
 					const state = authUrl.searchParams.get("state") ?? "";
 					return `${redirectUri}?code=manual-code&state=${encodeURIComponent(state)}`;
@@ -380,5 +452,40 @@ describe("mcp oauth flow", () => {
 
 		expect(credentials.access).toBe("access-token");
 		expect(tokenParams.get("code")).toBe("manual-code");
+	});
+
+	it("sends MCP resource indicator when refreshing tokens", async () => {
+		let tokenRequestBody = "";
+
+		const credentials = await refreshMCPOAuthToken(
+			"https://provider.example/token",
+			"refresh-token",
+			"client-id",
+			"client-secret",
+			"https://mcp.example.com/mcp",
+			{
+				fetch: mockProviderTokenEndpoint(body => {
+					tokenRequestBody = body;
+				}),
+			},
+		);
+		const tokenParams = new URLSearchParams(tokenRequestBody);
+
+		expect(credentials.access).toBe("access-token");
+		expect(tokenParams.get("grant_type")).toBe("refresh_token");
+		expect(tokenParams.get("resource")).toBe("https://mcp.example.com/mcp");
+	});
+	it("keeps the legacy refresh options position when no resource is provided", async () => {
+		let tokenRequestBody = "";
+
+		await refreshMCPOAuthToken("https://provider.example/token", "refresh-token", undefined, undefined, {
+			fetch: mockProviderTokenEndpoint(body => {
+				tokenRequestBody = body;
+			}),
+		});
+		const tokenParams = new URLSearchParams(tokenRequestBody);
+
+		expect(tokenParams.get("grant_type")).toBe("refresh_token");
+		expect(tokenParams.get("resource")).toBeNull();
 	});
 });

@@ -185,6 +185,7 @@ export class PipelineController {
 							truncated: false,
 							durationMs: 0,
 							tokens: 0,
+							requests: 0,
 							error,
 						};
 						return { agentName, result: failResult };

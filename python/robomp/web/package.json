@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "description": "Glassmorphic SolidJS dashboard bundled by Vite and served by robomp's FastAPI app.",
+  "homepage": "https://omp.sh",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

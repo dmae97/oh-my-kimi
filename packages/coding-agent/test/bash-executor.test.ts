@@ -548,6 +548,56 @@ exit 64
 		});
 		expect(afterAbort.output.trim()).toBe("unset");
 	});
+
+	it("runs overlapping calls on the same session key concurrently", async () => {
+		if (process.platform === "win32") return;
+
+		const sessionKey = "parallel-overlap";
+		const order: string[] = [];
+		const slow = executeBash('sleep 0.6 && echo "A-done"', { cwd: tempDir, timeout: 5000, sessionKey }).then(
+			result => {
+				order.push("slow");
+				return result;
+			},
+		);
+		const fast = executeBash('echo "B-done"', { cwd: tempDir, timeout: 5000, sessionKey }).then(result => {
+			order.push("fast");
+			return result;
+		});
+
+		const [slowResult, fastResult] = await Promise.all([slow, fast]);
+		expect(slowResult.exitCode).toBe(0);
+		expect(slowResult.output).toContain("A-done");
+		expect(fastResult.exitCode).toBe(0);
+		expect(fastResult.output).toContain("B-done");
+		// If the second call had queued behind the persistent session it could
+		// not finish before the 600ms sleep of the first.
+		expect(order).toEqual(["fast", "slow"]);
+	});
+
+	it("keeps the owner session usable when an overlapping call times out", async () => {
+		if (process.platform === "win32") return;
+
+		const sessionKey = "parallel-timeout-isolation";
+		const owner = executeBash('sleep 1.3 && echo "owner-done"', {
+			cwd: tempDir,
+			timeout: 5000,
+			sessionKey,
+		});
+		// Overlaps with the owner for its whole lifetime; times out at the 1s floor.
+		const overlapping = await executeBash("sleep 5", { cwd: tempDir, timeout: 1000, sessionKey });
+		expect(overlapping.cancelled).toBe(true);
+
+		const ownerResult = await owner;
+		expect(ownerResult.exitCode).toBe(0);
+		expect(ownerResult.output).toContain("owner-done");
+
+		// The overlapping timeout must not quarantine or delete the persistent
+		// session owned by the first call.
+		const after = await executeBash('echo "still-ok"', { cwd: tempDir, timeout: 5000, sessionKey });
+		expect(after.exitCode).toBe(0);
+		expect(after.output).toContain("still-ok");
+	});
 	it("streams output chunks", async () => {
 		const chunks: string[] = [];
 		const result = await executeBash("i=1; while [ $i -le 20 ]; do echo line$i; i=$((i+1)); done", {

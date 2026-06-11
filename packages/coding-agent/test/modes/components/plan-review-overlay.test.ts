@@ -341,6 +341,65 @@ describe("PlanReviewOverlay", () => {
 		const feedback = onFeedbackChange.mock.calls.at(-1)?.[0] as string;
 		expect(feedback).toContain("Overview");
 		expect(feedback).toContain("needs detail");
+		expect(feedback).toContain("## Overview\n- needs detail\n");
+		expect(feedback).not.toContain("```md");
+	});
+
+	it("opens the external editor for an active annotation draft", () => {
+		setKeybindings(KeybindingsManager.inMemory({ "tui.select.cancel": "ctrl+g", "app.editor.external": "ctrl+e" }));
+		const onFeedbackChange = vi.fn();
+		let editorDraft: string | undefined;
+		const overlay = new PlanReviewOverlay(
+			SECTION_PLAN,
+			{ promptTitle: "next", options: APPROVAL_OPTIONS, externalEditorLabel: "ctrl+e" },
+			{
+				onPick: vi.fn(),
+				onCancel: vi.fn(),
+				onFeedbackChange,
+				onAnnotationExternalEditor: (draft, commit) => {
+					editorDraft = draft;
+					commit("- add rollback command\n- include smoke test");
+				},
+			},
+		);
+		render(overlay);
+		overlay.handleInput(TAB); // -> toc (Overview)
+		overlay.handleInput("a");
+		for (const ch of "draft") overlay.handleInput(ch);
+		overlay.handleInput("\x05"); // ctrl+e
+
+		expect(editorDraft).toBe("draft");
+		const out = render(overlay);
+		expect(out).toContain("- add rollback command");
+		expect(out).toContain("- include smoke test");
+		expect(out).toContain("✎");
+		const feedback = onFeedbackChange.mock.calls.at(-1)?.[0] as string;
+		expect(feedback).toContain("## Overview\n```md\n- add rollback command\n- include smoke test\n```");
+	});
+
+	it("keeps the annotation draft when the external editor is cancelled", () => {
+		setKeybindings(KeybindingsManager.inMemory({ "tui.select.cancel": "ctrl+g", "app.editor.external": "ctrl+e" }));
+		const onFeedbackChange = vi.fn();
+		const overlay = new PlanReviewOverlay(
+			SECTION_PLAN,
+			{ promptTitle: "next", options: APPROVAL_OPTIONS, externalEditorLabel: "ctrl+e" },
+			{
+				onPick: vi.fn(),
+				onCancel: vi.fn(),
+				onFeedbackChange,
+				onAnnotationExternalEditor: (_draft, commit) => commit(null),
+			},
+		);
+		render(overlay);
+		overlay.handleInput(TAB); // -> toc (Overview)
+		overlay.handleInput("a");
+		for (const ch of "draft") overlay.handleInput(ch);
+		overlay.handleInput("\x05"); // ctrl+e
+
+		const out = render(overlay);
+		expect(out).toContain("Annotate");
+		expect(out).toContain("draft");
+		expect(onFeedbackChange).not.toHaveBeenCalled();
 	});
 
 	// Click a rendered row. The fullscreen overlay paints from screen row 0, so a

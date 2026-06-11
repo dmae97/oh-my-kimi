@@ -8,6 +8,7 @@ import { findToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/find";
 import {
 	expandDelimitedPathEntries,
 	parseFindPattern,
+	resolveToolSearchScope,
 	splitDelimitedPathEntry,
 } from "@oh-my-pi/pi-coding-agent/tools/path-utils";
 import type { Component } from "@oh-my-pi/pi-tui";
@@ -102,6 +103,33 @@ describe("delimited path expansion", () => {
 				splitter: parseFindPattern,
 			}),
 		).toEqual(["apps/**/*.txt", "packages/**/*.txt"]);
+	});
+
+	it("normalizes Windows path separators before parsing find globs", async () => {
+		expect(parseFindPattern("apps\\**\\*.txt")).toEqual({
+			basePath: "apps",
+			globPattern: "**/*.txt",
+			hasGlob: true,
+		});
+
+		expect(await splitDelimitedPathEntry("apps/a.txt\\,packages/b.txt", tempDir)).toBeNull();
+		const parsed = parseFindPattern("C:\\work\\repo\\src\\**\\*.ts");
+		expect(parsed).toEqual({
+			basePath: "C:/work/repo/src",
+			globPattern: "**/*.ts",
+			hasGlob: true,
+		});
+	});
+
+	it("normalizes Windows separators for search scope globs", async () => {
+		const scope = await resolveToolSearchScope({
+			rawPaths: ["apps\\**\\*.txt"],
+			cwd: tempDir,
+			internalUrlAction: "search",
+		});
+
+		expect(scope.searchPath).toBe(path.join(tempDir, "apps"));
+		expect(scope.globFilter).toBe("**/*.txt");
 	});
 });
 

@@ -21,6 +21,7 @@ function createResult(): SingleResult {
 		truncated: false,
 		durationMs: 1,
 		tokens: 0,
+		requests: 0,
 	};
 }
 

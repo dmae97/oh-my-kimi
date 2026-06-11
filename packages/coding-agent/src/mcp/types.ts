@@ -55,6 +55,8 @@ export interface MCPAuthConfig {
 	clientId?: string;
 	/** Client secret — persisted for token refresh */
 	clientSecret?: string;
+	/** MCP resource URI — persisted for OAuth resource indicators during refresh */
+	resource?: string;
 }
 
 /** Base server config with shared options */

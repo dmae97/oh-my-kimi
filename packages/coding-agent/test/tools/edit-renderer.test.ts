@@ -225,6 +225,41 @@ describe("editToolRenderer", () => {
 		expect(narrowHeader).toContain("container.test.ts");
 		expect(narrowHeader).not.toContain(":251");
 	});
+	it("caches completed diff rendering across stable frame renders", async () => {
+		const uiTheme = await getUiTheme();
+		let renderDiffCalls = 0;
+		const options = {
+			expanded: false,
+			isPartial: false,
+			renderContext: {
+				renderDiff: (diffText: string) => {
+					renderDiffCalls++;
+					return diffText;
+				},
+			},
+		};
+		const component = editToolRenderer.renderResult(
+			{
+				content: [{ type: "text", text: "Updated src/example.ts" }],
+				details: {
+					diff: "+1│const value = 1;",
+					op: "update",
+					path: "src/example.ts",
+				},
+			},
+			options,
+			uiTheme,
+			{ file_path: "src/example.ts" },
+		);
+
+		component.render(160);
+		component.render(120);
+		expect(renderDiffCalls).toBe(1);
+
+		options.expanded = true;
+		component.render(120);
+		expect(renderDiffCalls).toBe(2);
+	});
 
 	it("computes the hashline preview diff once a single-line edit finishes streaming", async () => {
 		await getUiTheme();

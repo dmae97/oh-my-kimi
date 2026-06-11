@@ -11,10 +11,12 @@ const echoTool: Tool = {
 	parameters: z.object({ text: z.string() }),
 };
 
-const contextWithTools: Context = {
-	messages: [{ role: "user", content: "call echo", timestamp: Date.now() }],
-	tools: [echoTool],
-};
+function contextWithTools(tools: Tool[] = [echoTool]): Context {
+	return {
+		messages: [{ role: "user", content: "call tool", timestamp: Date.now() }],
+		tools,
+	};
+}
 
 function abortedSignal(): AbortSignal {
 	const controller = new AbortController();
@@ -22,9 +24,9 @@ function abortedSignal(): AbortSignal {
 	return controller.signal;
 }
 
-async function capturePayload(model: Model<"openai-completions">): Promise<Record<string, unknown>> {
+async function capturePayload(model: Model<"openai-completions">, tools?: Tool[]): Promise<Record<string, unknown>> {
 	const { promise, resolve } = Promise.withResolvers<unknown>();
-	streamOpenAICompletions(model, contextWithTools, {
+	streamOpenAICompletions(model, contextWithTools(tools), {
 		apiKey: "test-key",
 		signal: abortedSignal(),
 		reasoning: "minimal",
@@ -114,5 +116,23 @@ describe("issue #1207 — DeepSeek V4 keeps reasoning with tools", () => {
 		expect(body.tool_choice).toBe("auto");
 		expect(body.reasoning).toEqual({ effort: "high" });
 		expect(body.reasoning_effort).toBeUndefined();
+	});
+
+	it("does not nest anyOf branches in OpenRouter DeepSeek tool schemas", async () => {
+		const model = getBundledModel("openrouter", "deepseek/deepseek-v4-flash") as Model<"openai-completions">;
+		const unionTool: Tool = {
+			name: "union_repro",
+			description: "Union schema repro",
+			parameters: z.object({
+				paths: z.union([z.string(), z.array(z.string())]).optional(),
+			}),
+		};
+		const body = await capturePayload(model, [unionTool]);
+		const tools = body.tools as Array<{ function: { parameters: Record<string, unknown> } }>;
+		const properties = tools[0].function.parameters.properties as Record<string, Record<string, unknown>>;
+		const branches = properties.paths.anyOf as Array<Record<string, unknown>>;
+
+		expect(branches.map(branch => branch.type)).toEqual(["string", "array", "null"]);
+		expect(branches.some(branch => Array.isArray(branch.anyOf))).toBe(false);
 	});
 });

@@ -1501,15 +1501,6 @@ function b() {
 			expect(output).toContain("second");
 			expect(output).toContain("third");
 		});
-
-		it("should expose background-job tools when bash auto-background is enabled", () => {
-			const autoBackgroundSession = createTestToolSession(
-				testDir,
-				Settings.isolated({ "bash.autoBackground.enabled": true }),
-			);
-
-			expect(JobTool.createIf(autoBackgroundSession)).not.toBeNull();
-		});
 	});
 
 	describe("JobTool", () => {
@@ -1520,7 +1511,7 @@ function b() {
 			const session = createTestToolSession(testDir, Settings.isolated({ "bash.autoBackground.enabled": true }), {
 				asyncJobManager: manager,
 			});
-			const jobTool = JobTool.createIf(session)!;
+			const jobTool = new JobTool(session);
 
 			const jobId = manager.register("bash", "test job", async () => "success");
 

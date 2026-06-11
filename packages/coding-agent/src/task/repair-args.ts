@@ -2,7 +2,7 @@
  * Repair double-encoded JSON string arguments for the task tool.
  *
  * Models occasionally JSON-escape a string value twice when emitting a
- * `task` tool call, so a `context`/`assignment` that should read
+ * `task` tool call, so an `assignment` that should read
  *
  *     # Role
  *     You are a judge … "describe this" … return —
@@ -24,7 +24,7 @@
  * string.
  *
  * This is deliberately scoped to the task tool's natural-language fields
- * (`context`, `assignment`, `description`). It is NOT applied to code-bearing
+ * (`assignment`, `description`). It is NOT applied to code-bearing
  * tools (write/edit/bash/search), where a backslash or quote is load-bearing
  * and a false-positive unescape would silently corrupt a file or command.
  */
@@ -90,15 +90,20 @@ function repairTaskItem(task: TaskItem): TaskItem {
 }
 
 /**
- * Repair double-encoded prose in task-tool params (`context` and each task's
- * `assignment`/`description`). Returns the same reference when nothing changed
- * so callers can cheaply skip work. Defensive against partially-streamed args
- * (missing/undefined fields, partial task arrays) so it is safe on the render
- * path as well as on execution.
+ * Repair double-encoded prose in task-tool params (`assignment`,
+ * `description`, shared `context`, and each batch task item's prose fields).
+ * Returns the same reference when nothing changed so callers can cheaply skip
+ * work. Defensive against partially-streamed args (missing/undefined fields,
+ * partial task arrays) so it is safe on the render path as well as on
+ * execution.
  */
 export function repairTaskParams(params: TaskParams): TaskParams {
 	if (params === null || typeof params !== "object") return params;
 
+	const assignment =
+		typeof params.assignment === "string" ? repairDoubleEncodedJsonString(params.assignment) : params.assignment;
+	const description =
+		typeof params.description === "string" ? repairDoubleEncodedJsonString(params.description) : params.description;
 	const context = typeof params.context === "string" ? repairDoubleEncodedJsonString(params.context) : params.context;
 
 	let tasks = params.tasks;
@@ -112,6 +117,13 @@ export function repairTaskParams(params: TaskParams): TaskParams {
 		if (changed) tasks = repaired;
 	}
 
-	if (context === params.context && tasks === params.tasks) return params;
-	return { ...params, context, tasks };
+	if (
+		assignment === params.assignment &&
+		description === params.description &&
+		context === params.context &&
+		tasks === params.tasks
+	) {
+		return params;
+	}
+	return { ...params, assignment, description, context, tasks };
 }

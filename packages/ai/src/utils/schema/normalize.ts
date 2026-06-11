@@ -1438,6 +1438,21 @@ export function sanitizeSchemaForStrictMode(
 }
 
 /**
+ * A node whose only constraining keyword is `anyOf` (annotations like
+ * `description` aside). Only such nodes can be merged into an enclosing
+ * union without changing semantics: sibling keywords (`type`, `enum`,
+ * `properties`, …) apply conjunctively with `anyOf`, so spreading the
+ * branches of a non-pure node would drop those constraints.
+ */
+function isPureAnyOfNode(value: unknown): value is Record<string, unknown> & { anyOf: unknown[] } {
+	if (!isJsonObject(value) || !Array.isArray(value.anyOf)) return false;
+	for (const key in value) {
+		if (key !== "anyOf" && key !== "description") return false;
+	}
+	return true;
+}
+
+/**
  * Recursively enforces JSON Schema constraints required by OpenAI/Codex strict mode:
  *   - `additionalProperties: false` on every object node
  *   - every key in `properties` present in `required`
@@ -1505,6 +1520,10 @@ function enforceStrictSchemaBody(
 					strictProperties[key] = processed;
 					continue;
 				}
+				if (isPureAnyOfNode(processed)) {
+					strictProperties[key] = { ...processed, anyOf: [...processed.anyOf, { type: "null" }] };
+					continue;
+				}
 				if (isJsonObject(processed) && typeof processed.description === "string") {
 					const { description, ...withoutDescription } = processed;
 					strictProperties[key] = { anyOf: [withoutDescription, { type: "null" }], description };
@@ -1544,6 +1563,26 @@ function enforceStrictSchemaBody(
 					: entry,
 			);
 		}
+	}
+	// Splice nested pure unions into the parent `anyOf`: `(A ∨ B) ∨ C` ≡ `A ∨ B ∨ C`.
+	// Some strict-mode validators (e.g. DeepSeek behind OpenRouter) reject anyOf
+	// branches that carry no `type`, which is exactly what a nested combinator
+	// node looks like (#2270). Branch recursion above already flattened deeper
+	// levels bottom-up, so a single pass suffices.
+	if (Array.isArray(result.anyOf) && result.anyOf.some(isPureAnyOfNode)) {
+		const flattened: unknown[] = [];
+		for (const branch of result.anyOf) {
+			if (!isPureAnyOfNode(branch)) {
+				flattened.push(branch);
+				continue;
+			}
+			flattened.push(...branch.anyOf);
+			// Keep the inner annotation when the parent has none.
+			if (typeof branch.description === "string" && result.description === undefined) {
+				result.description = branch.description;
+			}
+		}
+		result.anyOf = flattened;
 	}
 	for (const defsKey of ["$defs", "definitions"] as const) {
 		if (result[defsKey] != null && typeof result[defsKey] === "object" && !Array.isArray(result[defsKey])) {

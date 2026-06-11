@@ -25,6 +25,7 @@ import { isMCPTimeoutEnabled, resolveMCPTimeoutMs } from "../timeout";
 /** Subprocess argv for launching an MCP stdio server. */
 export interface StdioSpawnCommand {
 	cmd: string[];
+	windowsHide?: boolean;
 }
 
 /** Inputs used to resolve platform-specific stdio spawn behavior. */
@@ -153,6 +154,7 @@ export async function resolveStdioSpawnCommand(
 
 	return {
 		cmd: [resolveComSpec(options.env), "/d", "/s", "/c", buildCmdExeCommand(resolvedCommand, args)],
+		windowsHide: true,
 	};
 }
 
@@ -255,6 +257,7 @@ export class StdioTransport implements MCPTransport {
 			stdin: "pipe",
 			stdout: "pipe",
 			stderr: "pipe",
+			windowsHide: spawnCommand.windowsHide,
 		});
 
 		this.#connected = true;

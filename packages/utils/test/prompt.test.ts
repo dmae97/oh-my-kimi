@@ -94,3 +94,17 @@ describe("compile cache", () => {
 		expect(prompt.render("{{#if a}}{ {{b}}}{{/if}}", { a: true, b: "v" })).toBe("{ v}");
 	});
 });
+
+describe("helpers: join", () => {
+	it("unescapes \\n and \\t in the separator (Handlebars string literals carry no escapes)", () => {
+		// Regression: `{{join files "\n"}}` used to emit the literal two-char `\n`
+		// between entries (visible in compaction <read-files> lists).
+		expect(prompt.render('{{join files "\\n"}}', { files: ["a.ts", "b.ts"] })).toBe("a.ts\nb.ts");
+		expect(prompt.render('{{join files "\\t"}}', { files: ["a.ts", "b.ts"] })).toBe("a.ts\tb.ts");
+	});
+
+	it("defaults to comma-space and tolerates non-arrays", () => {
+		expect(prompt.render("{{join files}}", { files: ["a", "b"] })).toBe("a, b");
+		expect(prompt.render("{{join files}}", { files: "not-an-array" })).toBe("");
+	});
+});

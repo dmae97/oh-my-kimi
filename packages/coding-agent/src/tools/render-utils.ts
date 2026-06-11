@@ -780,6 +780,62 @@ export function createCachedComponent(
 }
 
 /**
+ * Single-slot memo for an expensive rendered string (syntax highlighting, diff
+ * coloring) keyed by the exact inputs that shape the bytes: theme instance,
+ * expanded state, a caller-chosen salt (path/language), and the source content.
+ * Field-wise comparison instead of a concatenated key string: a cache hit costs
+ * one string value-compare (engines short-circuit on length) and a miss never
+ * allocates a key. Comparing the {@link Theme} by reference is sound because
+ * theme switches replace the instance wholesale (`setTheme`/`previewTheme`/
+ * `setSymbolPreset` in modes/theme/theme.ts) — themes are never mutated in
+ * place.
+ */
+export interface RenderedStringCache {
+	theme: Theme | null;
+	expanded: boolean;
+	salt: string;
+	content: string;
+	value: string;
+}
+
+export function createRenderedStringCache(): RenderedStringCache {
+	return { theme: null, expanded: false, salt: "", content: "", value: "" };
+}
+
+/** Drop the memo so the next lookup re-renders (e.g. the render function identity changed). */
+export function invalidateRenderedStringCache(cache: RenderedStringCache): void {
+	cache.theme = null;
+}
+
+export function cachedRenderedString(
+	cache: RenderedStringCache | undefined,
+	theme: Theme,
+	expanded: boolean,
+	salt: string,
+	content: string,
+	render: () => string,
+): string {
+	if (
+		cache !== undefined &&
+		cache.theme === theme &&
+		cache.expanded === expanded &&
+		cache.salt === salt &&
+		cache.content === content
+	) {
+		return cache.value;
+	}
+	const value = render();
+	if (cache !== undefined) {
+		cache.theme = theme;
+		cache.expanded = expanded;
+		cache.salt = salt;
+		cache.content = content;
+		cache.value = value;
+	}
+	return value;
+}
+
+/**
  * Append the indented bullet list of parse errors (capped at
  * {@link PARSE_ERRORS_LIMIT}) to `lines`, with an overflow summary line if the
  * total exceeds the cap. No-op when `parseErrors` is empty.

@@ -745,6 +745,13 @@ export class Settings {
 			delete isolationObj.enabled;
 		}
 
+		// task.simple: removed — the task tool no longer accepts a per-call
+		// schema (workflows drive structured output via eval agent()) and the
+		// batch/context shape is gated by task.batch instead.
+		if (taskObj && "simple" in taskObj) {
+			delete taskObj.simple;
+		}
+
 		// task.isolation.mode: legacy values from before the pi-iso PAL refactor.
 		// `worktree` was git worktree → now lives under `rcopy`. `fuse-overlay`
 		// and `fuse-projfs` are now the platform-named `overlayfs` / `projfs`

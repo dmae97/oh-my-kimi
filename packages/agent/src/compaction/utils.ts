@@ -3,7 +3,7 @@
  */
 
 import type { Message } from "@oh-my-pi/pi-ai";
-import { prompt } from "@oh-my-pi/pi-utils";
+import { formatGroupedPaths, prompt } from "@oh-my-pi/pi-utils";
 import type { AgentMessage } from "../types";
 import fileOperationsTemplate from "./prompts/file-operations.md" with { type: "text" };
 import summarizationSystemPrompt from "./prompts/summarization-system.md" with { type: "text" };
@@ -26,6 +26,55 @@ export function createFileOps(): FileOperations {
 	};
 }
 
+// Read-tool selector grammar, mirrored from the conservative filesystem splitter in
+// packages/coding-agent/src/tools/path-utils.ts (splitPathAndSel). Keep in sync.
+// A trailing `:chunk` is a selector only when it is a line-range list
+// (`50`, `50-200`, `50+10`, `5-16,960-973`, `..` alias), `raw`, or `conflicts` —
+// alone or as a `range:raw` / `raw:range` compound.
+const RANGE_CHUNK_SRC = String.raw`L?\d+(?:(?:[-+]|\.\.)L?\d+|-|\.\.)?`;
+const RANGE_LIST_SRC = `${RANGE_CHUNK_SRC}(?:,${RANGE_CHUNK_SRC})*`;
+const READ_SELECTOR_RE = new RegExp(`^(?:${RANGE_LIST_SRC}|raw|conflicts)$`, "i");
+const READ_RANGE_ONLY_RE = new RegExp(`^${RANGE_LIST_SRC}$`, "i");
+const READ_RAW_ONLY_RE = /^raw$/i;
+
+/**
+ * Split a read-tool path into its base path and trailing selector, mirroring the
+ * read tool's own splitter. Single source of the grammar in this package: the
+ * file-operations list strips selectors via {@link stripReadSelector}, and the
+ * supersede-prune pass keys on both parts via `readToolSupersedeKey`.
+ */
+export function splitReadSelector(path: string): { path: string; sel?: string } {
+	const colon = path.lastIndexOf(":");
+	if (colon <= 0) return { path };
+	const candidate = path.slice(colon + 1);
+	if (!READ_SELECTOR_RE.test(candidate)) return { path };
+	let base = path.slice(0, colon);
+	let sel = candidate;
+	// Compound trailing selector: `path:1-50:raw` or `path:raw:1-50`.
+	const inner = base.lastIndexOf(":");
+	if (inner > 0) {
+		const innerCandidate = base.slice(inner + 1);
+		const innerIsRaw = READ_RAW_ONLY_RE.test(innerCandidate);
+		const outerIsRaw = READ_RAW_ONLY_RE.test(candidate);
+		const innerIsRange = READ_RANGE_ONLY_RE.test(innerCandidate);
+		const outerIsRange = READ_RANGE_ONLY_RE.test(candidate);
+		if ((innerIsRaw && outerIsRange) || (innerIsRange && outerIsRaw)) {
+			sel = `${innerCandidate}:${candidate}`;
+			base = base.slice(0, inner);
+		}
+	}
+	return { path: base, sel };
+}
+
+/**
+ * Strip a trailing read-tool selector (`:50-200`, `:raw`, `:1-50:raw`, `:conflicts`, …)
+ * so the same file read with different line ranges dedupes to one `<files>` entry
+ * and matches its write/edit path when computing Read/Write/RW markers.
+ */
+export function stripReadSelector(path: string): string {
+	return splitReadSelector(path).path;
+}
+
 /**
  * Extract file operations from tool calls in an assistant message.
  */
@@ -46,7 +95,7 @@ export function extractFileOpsFromMessage(message: AgentMessage, fileOps: FileOp
 
 		switch (block.name) {
 			case "read":
-				fileOps.read.add(path);
+				fileOps.read.add(stripReadSelector(path));
 				break;
 			case "write":
 				fileOps.written.add(path);
@@ -70,32 +119,48 @@ export function computeFileLists(fileOps: FileOperations): { readFiles: string[]
 }
 
 /**
- * Format file operations as XML tags for summary.
+ * Format file operations as one `<files>` tag: a grouped, prefix-folded
+ * directory tree (find-tool shape — `# dir/` headers, bare basenames) with a
+ * ` (Read)` / ` (Write)` / ` (RW)` marker per file instead of separate
+ * read/modified lists. `readSet` is the cumulative read set (`fileOps.read`),
+ * used to tell modified files that were also read (RW) from blind writes.
  */
 const FILE_OPERATION_SUMMARY_LIMIT = 20;
 
-function truncateFileList(files: string[]): string[] {
-	if (files.length <= FILE_OPERATION_SUMMARY_LIMIT) return files;
-	const omitted = files.length - FILE_OPERATION_SUMMARY_LIMIT;
-	return [...files.slice(0, FILE_OPERATION_SUMMARY_LIMIT), `… (${omitted} more files omitted)`];
-}
-
 function stripFileOperationTags(summary: string): string {
-	const withoutReadFiles = summary.replace(/<read-files>[\s\S]*?<\/read-files>\s*/g, "");
-	const withoutModifiedFiles = withoutReadFiles.replace(/<modified-files>[\s\S]*?<\/modified-files>\s*/g, "");
-	return withoutModifiedFiles.trimEnd();
+	// Legacy <read-files>/<modified-files> tags are still stripped so summaries
+	// written before the combined <files> tag self-heal on the next compaction.
+	return summary
+		.replace(/<files>[\s\S]*?<\/files>\s*/g, "")
+		.replace(/<read-files>[\s\S]*?<\/read-files>\s*/g, "")
+		.replace(/<modified-files>[\s\S]*?<\/modified-files>\s*/g, "")
+		.trimEnd();
 }
-export function formatFileOperations(readFiles: string[], modifiedFiles: string[]): string {
+export function formatFileOperations(
+	readFiles: string[],
+	modifiedFiles: string[],
+	readSet?: ReadonlySet<string>,
+): string {
 	if (readFiles.length === 0 && modifiedFiles.length === 0) return "";
-	return prompt.render(fileOperationsTemplate, {
-		readFiles: truncateFileList(readFiles),
-		modifiedFiles: truncateFileList(modifiedFiles),
-	});
+	const mode = new Map<string, "Read" | "Write" | "RW">();
+	for (const file of readFiles) mode.set(file, "Read");
+	for (const file of modifiedFiles) mode.set(file, readSet?.has(file) ? "RW" : "Write");
+	const all = [...mode.keys()].sort();
+	let files = formatGroupedPaths(all.slice(0, FILE_OPERATION_SUMMARY_LIMIT), path => ` (${mode.get(path)})`);
+	if (all.length > FILE_OPERATION_SUMMARY_LIMIT) {
+		files += `\n… (${all.length - FILE_OPERATION_SUMMARY_LIMIT} more files omitted)`;
+	}
+	return prompt.render(fileOperationsTemplate, { files });
 }
 
-export function upsertFileOperations(summary: string, readFiles: string[], modifiedFiles: string[]): string {
+export function upsertFileOperations(
+	summary: string,
+	readFiles: string[],
+	modifiedFiles: string[],
+	readSet?: ReadonlySet<string>,
+): string {
 	const baseSummary = stripFileOperationTags(summary);
-	const fileOperations = formatFileOperations(readFiles, modifiedFiles);
+	const fileOperations = formatFileOperations(readFiles, modifiedFiles, readSet);
 	if (!fileOperations) return baseSummary;
 	if (!baseSummary) return fileOperations;
 	return `${baseSummary}\n\n${fileOperations}`;

@@ -149,6 +149,7 @@ With most FS/bash-like tools, static references to them will automatically resol
 - `agent://<id>`: full agent output artifact
    - `/<path>`: JSON field extraction
 - `artifact://<id>`: Artifact content
+- `history://<agentId>`: agent transcript as concise markdown; bare `history://` lists agents
 - `local://<name>.md`: Plan artifacts and shared content with subagents
 {{#if hasObsidian}}
 - `vault://<vault>/<path>`: Obsidian vault content (read/edit). `vault://` lists vaults; `vault://_/…` targets the active vault. File-scoped `?op=outline|backlinks|links|tags|properties|tasks|base|…`; vault-scoped `?op=search&q=…|daily|tasks|orphans|unresolved|bases|…`.

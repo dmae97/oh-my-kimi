@@ -175,6 +175,8 @@ export class CustomEditor extends Editor {
 	onDequeue?: () => void;
 	/** Called when Caps Lock is pressed. */
 	onCapsLock?: () => void;
+	/** Called when left-arrow is pressed while the editor is empty (cursor necessarily at start). */
+	onLeftAtStart?: () => void;
 
 	/** Custom key handlers from extensions and non-built-in app actions. */
 	#customKeyHandlers = new Map<KeyId, () => void>();
@@ -256,6 +258,14 @@ export class CustomEditor extends Editor {
 
 		const parsedKey = parseKey(data);
 		const canonical = parsedKey !== undefined ? canonicalKeyId(parsedKey) : undefined;
+
+		// Left-arrow on an empty editor: surface for the agent-hub double-tap
+		// gesture. Plain "left" only — modified arrows and any in-text cursor
+		// movement fall through to normal handling.
+		if (canonical === "left" && this.onLeftAtStart && this.getText().trim() === "") {
+			this.onLeftAtStart();
+			return;
+		}
 
 		if (canonical !== undefined) {
 			// Intercept configured image paste (async - fires and handles result)

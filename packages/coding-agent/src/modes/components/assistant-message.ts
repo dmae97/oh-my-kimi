@@ -36,6 +36,16 @@ export class AssistantMessageComponent extends Container {
 	 * transcript keeps the error in history.
 	 */
 	#errorPinned = false;
+	/**
+	 * Monotonic content version reported to the transcript container via
+	 * {@link getTranscriptBlockVersion}. Bumped by {@link updateContent} — the
+	 * choke point every mutator funnels through, including the post-finalize
+	 * ones: `setErrorPinned(false)` restoring the inline error at the next
+	 * turn's `agent_start`, late tool-result images, async Kitty conversions,
+	 * and `setUsageInfo`. Without it, the container's committed-scrollback
+	 * bypass would replay this block's pre-mutation bytes forever.
+	 */
+	#blockVersion = 0;
 	/** Whether the last updateContent carried an in-flight streaming partial; such
 	 *  renders bypass the markdown module LRU (see Markdown.transientRenderCache). */
 	#lastUpdateTransient = false;
@@ -84,6 +94,10 @@ export class AssistantMessageComponent extends Container {
 
 	isTranscriptBlockFinalized(): boolean {
 		return this.#transcriptBlockFinalized;
+	}
+
+	getTranscriptBlockVersion(): number {
+		return this.#blockVersion;
 	}
 
 	markTranscriptBlockFinalized(): void {
@@ -215,6 +229,7 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	updateContent(message: AssistantMessage, opts?: { transient?: boolean }): void {
+		this.#blockVersion++;
 		this.#lastMessage = message;
 		this.#lastUpdateTransient = opts?.transient === true;
 

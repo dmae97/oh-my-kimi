@@ -2,16 +2,24 @@ import { Box, Container, Spacer, Text } from "@oh-my-pi/pi-tui";
 import type { Rule } from "../../capability/rule";
 import { theme } from "../../modes/theme/theme";
 
+/** Collapsed view shows at most this many rules before eliding the rest. */
+const MAX_COLLAPSED_RULES = 4;
+
 /**
  * Component that renders a TTSR (Time Traveling Stream Rules) notification.
  * Shows when a rule violation is detected and the stream is being rewound.
+ * One block can carry several rules: a single event may match multiple rules,
+ * and consecutive notifications merge into the previous block via
+ * {@link addRules} while it is still the live transcript tail.
  */
 export class TtsrNotificationComponent extends Container {
 	#box: Box;
 	#expanded = false;
+	#rules: Rule[];
 
-	constructor(private readonly rules: Rule[]) {
+	constructor(rules: Rule[]) {
 		super();
+		this.#rules = [...rules];
 
 		this.addChild(new Spacer(1));
 
@@ -20,6 +28,17 @@ export class TtsrNotificationComponent extends Container {
 		this.addChild(this.#box);
 
 		this.#rebuild();
+	}
+
+	/** Merge additional rules into this block (deduped by rule name). */
+	addRules(rules: Rule[]): void {
+		let changed = false;
+		for (const rule of rules) {
+			if (this.#rules.some(existing => existing.name === rule.name)) continue;
+			this.#rules.push(rule);
+			changed = true;
+		}
+		if (changed) this.#rebuild();
 	}
 
 	setExpanded(expanded: boolean): void {
@@ -35,46 +54,69 @@ export class TtsrNotificationComponent extends Container {
 
 	#rebuild(): void {
 		this.#box.clear();
+		// fg colors conflict with inverse, so styling inside the block is limited
+		// to bold (names) and italic (descriptions).
+		if (this.#rules.length === 1) {
+			this.#rebuildSingle(this.#rules[0]!);
+		} else {
+			this.#rebuildMulti();
+		}
+	}
 
-		// Build header: warning symbol + rule name + rewind icon
-		const ruleNames = this.rules.map(r => theme.bold(r.name)).join(", ");
-		const label = this.rules.length === 1 ? "rule" : "rules";
-		const header = `${theme.icon.warning} Injecting ${label}: ${ruleNames}`;
+	#rebuildSingle(rule: Rule): void {
+		const header = `${theme.icon.warning} Injecting rule: ${theme.bold(rule.name)}  ${theme.icon.rewind}`;
+		this.#box.addChild(new Text(header, 0, 0));
 
-		// Create header with rewind icon on the right
-		const rewindIcon = theme.icon.rewind;
+		const desc = (rule.description || rule.content)?.trim();
+		if (!desc) return;
 
-		this.#box.addChild(new Text(`${header}  ${rewindIcon}`, 0, 0));
-
-		// Show description(s) - italic and truncated
-		for (const rule of this.rules) {
-			const desc = rule.description || rule.content;
-			if (desc) {
-				this.#box.addChild(new Spacer(1));
-
-				let displayText = desc.trim();
-				if (!this.#expanded) {
-					// Truncate to first 2 lines
-					const lines = displayText.split("\n");
-					if (lines.length > 2) {
-						displayText = `${lines.slice(0, 2).join("\n")}…`;
-					}
-				}
-
-				// Use italic for subtle distinction (fg colors conflict with inverse)
-				this.#box.addChild(new Text(theme.italic(displayText), 0, 0));
+		let displayText = desc;
+		let truncated = false;
+		if (!this.#expanded) {
+			const lines = desc.split("\n");
+			if (lines.length > 2) {
+				displayText = `${lines.slice(0, 2).join("\n")}…`;
+				truncated = true;
 			}
 		}
 
-		// Show expand hint if collapsed and there's more content
-		if (!this.#expanded) {
-			const hasMoreContent = this.rules.some(r => {
-				const desc = r.description || r.content;
-				return desc && desc.split("\n").length > 2;
-			});
-			if (hasMoreContent) {
-				this.#box.addChild(new Text(theme.italic(" (ctrl+o to expand)"), 0, 0));
+		this.#box.addChild(new Spacer(1));
+		this.#box.addChild(new Text(theme.italic(displayText), 0, 0));
+		if (truncated) {
+			this.#box.addChild(new Text(theme.italic(" (ctrl+o to expand)"), 0, 0));
+		}
+	}
+
+	#rebuildMulti(): void {
+		const header = `${theme.icon.warning} Injecting ${this.#rules.length} rules:  ${theme.icon.rewind}`;
+		this.#box.addChild(new Text(header, 0, 0));
+		this.#box.addChild(new Spacer(1));
+
+		const visible = this.#expanded ? this.#rules : this.#rules.slice(0, MAX_COLLAPSED_RULES);
+		let elidedDetail = false;
+		for (const rule of visible) {
+			const desc = (rule.description || rule.content)?.trim();
+			let line = theme.bold(rule.name);
+			if (desc) {
+				let displayText = desc;
+				if (!this.#expanded) {
+					// One line per rule when collapsed; full description when expanded.
+					const newline = desc.indexOf("\n");
+					if (newline !== -1) {
+						displayText = `${desc.slice(0, newline).trimEnd()}…`;
+						elidedDetail = true;
+					}
+				}
+				line += `: ${theme.italic(displayText)}`;
 			}
+			this.#box.addChild(new Text(line, 0, 0));
+		}
+
+		const hidden = this.#rules.length - visible.length;
+		if (hidden > 0) {
+			this.#box.addChild(new Text(theme.italic(`… +${hidden} more (ctrl+o to expand)`), 0, 0));
+		} else if (elidedDetail) {
+			this.#box.addChild(new Text(theme.italic(" (ctrl+o to expand)"), 0, 0));
 		}
 	}
 }

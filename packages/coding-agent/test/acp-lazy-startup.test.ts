@@ -156,7 +156,7 @@ async function closeTransport(writable: WritableStream<unknown>): Promise<void> 
 }
 
 describe("ACP lazy startup", () => {
-	it("keeps ACP background jobs disabled by default and preserves explicit opt-ins", async () => {
+	it("applies schema defaults for ACP background jobs and preserves explicit overrides", async () => {
 		const { runRootCommand } = await import("@oh-my-pi/pi-coding-agent/main");
 
 		type ObservedBackgroundSettings = {
@@ -214,23 +214,27 @@ describe("ACP lazy startup", () => {
 			return observed;
 		};
 
+		// ACP startup must not clobber background-job settings: an unset config
+		// observes the schema defaults (async on since 844c8dbdfe)…
 		await expect(runAcpStartup(Settings.isolated())).resolves.toEqual({
-			asyncEnabled: false,
+			asyncEnabled: true,
 			asyncMaxJobs: 100,
 			bashAutoBackground: false,
 			bashAutoBackgroundThresholdMs: 60000,
 		});
+		// …and explicit overrides survive in both directions (here: async
+		// opted OUT against the default, auto-background opted IN).
 		await expect(
 			runAcpStartup(
 				Settings.isolated({
-					"async.enabled": true,
+					"async.enabled": false,
 					"async.maxJobs": 7,
 					"bash.autoBackground.enabled": true,
 					"bash.autoBackground.thresholdMs": 1234,
 				}),
 			),
 		).resolves.toEqual({
-			asyncEnabled: true,
+			asyncEnabled: false,
 			asyncMaxJobs: 7,
 			bashAutoBackground: true,
 			bashAutoBackgroundThresholdMs: 1234,

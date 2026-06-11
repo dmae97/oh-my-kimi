@@ -11,7 +11,7 @@ Every file section starts with `[PATH#TAG]`. `TAG` is the 4-hex snapshot tag fro
 `delete block N` — delete the whole syntactic block that BEGINS on line N.
 `insert before N:` — insert the body rows immediately before line N.
 `insert after N:` — insert the body rows immediately after line N.
-`insert after block N:` — insert the body rows after the END of the syntactic block that BEGINS on line N (resolved like `replace block`).
+`insert after block N:` — insert the body rows after the END of the syntactic block that BEGINS on line N. Point N at the line that OPENS the construct (the `if`/`function`/`def`/`{`-bearing line), not the closing delimiter / last visible line; if you have the last line, use plain `insert after M:` instead.
 `insert head:` — insert the body rows at the very start of the file.
 `insert tail:` — insert the body rows at the very end of the file.
 Single line: `replace N..N:` / `delete N`. The range is the ORIGINAL lines you touch; body length is irrelevant (replacing 1 line with 10 is still `replace N..N:`).
@@ -36,6 +36,7 @@ There is NO other body row kind. NEVER write `-old` or a bare/context line. To k
 - Keep every range as tight as the change: a range covers ONLY lines whose content actually changes. Never widen it to swallow an unchanged signature, brace, or neighboring statement just to rewrite a few lines inside — change one line with `replace N..N`, not the whole block around it. Tightness means excluding unchanged lines, not being short: a range where every line genuinely changes is correctly long. Tight ranges bound the blast radius of a stale number: a stale one-line range corrupts one line; a stale wide range shreds every line it spans. This applies to hand-counted `replace N..M` ranges; `replace block N` is exempt — tree-sitter fixes the end.
 - `replace block N` vs `replace N..M`: use `replace block N` to rewrite a WHOLE construct (function / `if` / loop / class body) — tree-sitter resolves its closing line, so a long body can't be mis-counted and a stale end can't clip it mid-block. The edit result echoes the span it matched (`replace block N → resolved lines A-B`); glance at it to confirm you got what you meant. Use `replace N..M` to change specific lines inside a construct.
 - The resolved span of `replace block N` is EXACTLY the node beginning on line N. A leading decorator, attribute, or doc-comment is a separate node and is NOT included; to take a decorated definition together with its decorator, point N at the FIRST decorator line (Python parses `@dec` + `def` as one block). A leading line-comment that parses as its own node (e.g. Rust `///`) is not captured by any single opener — use `replace N..M` spanning the comment and the construct.
+- `insert after block N` follows the same opener-only anchor rule as `replace block N`: N is the first line of the syntactic block, never a line inside it, its closing delimiter, or its last visible line. To append after a closing delimiter you can see, use plain `insert after M:`.
 - To change lines 2 and 5 while keeping 3–4, issue two hunks (`replace 2..2:` and `replace 5..5:`). Untouched lines are simply absent from every range.
 - Pure additions use `insert`, never a widened `replace`. If the change only adds lines, `insert before/after` the spot and keep every existing line out of all ranges. Do NOT `replace` a span of keepers and retype them around the new line "to preserve" them — those retyped keepers are exactly what gets silently dropped when one is forgotten. A keeper that never enters your body cannot be lost. `replace` is only for lines whose own text changes.
 - NEVER use this tool to format code — reordering imports, re-indenting, aligning columns, or any mechanical restyling. That is the project formatter's job; run it instead of hand-editing layout here.
@@ -125,6 +126,13 @@ replace 2..4:
 # RIGHT — touch nothing you keep; the new line is the whole body.
 insert after 2:
 +    extra = compute(name)
+
+# WRONG — `insert after block N:` anchored on a closing delimiter / last visible line. RIGHT: plain `insert after M:`
+insert after block 3:
++after()
+# RIGHT
+insert after 3:
++after()
 </anti-patterns>
 
 <critical>

@@ -241,7 +241,10 @@ export const resolveToolRenderer = {
 		const isApply = action === "apply" && !result.isError;
 		const isFailedApply = action === "apply" && result.isError;
 		const bgColor = result.isError ? "error" : isApply ? "success" : "warning";
-		const icon = isApply ? uiTheme.styledSymbol("tool.resolve", "accent") : uiTheme.status.error;
+		// Bare symbol: the line is wrapped in inverse(fg(...)), so any embedded fg
+		// reset (styledSymbol/status glyphs carry their own \x1b[39m) would drop the
+		// inverse block back to the default background mid-line.
+		const icon = uiTheme.symbol(isApply ? "tool.resolve" : "status.error");
 		const verb = isApply ? "Accept" : isFailedApply ? "Failed" : "Discard";
 		const separator = ": ";
 		const separatorIndex = label.indexOf(separator);

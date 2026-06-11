@@ -3,6 +3,7 @@ import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
 import browserDescription from "../prompts/tools/browser.md" with { type: "text" };
 import type { ToolSession } from "../sdk";
+import { enforceInlineByteCap } from "../session/streaming-output";
 import { truncateForPrompt } from "./approval";
 import { acquireBrowser, type BrowserHandle, type BrowserKind, type BrowserKindTag } from "./browser/registry";
 import type { Observation, ScreenshotResult } from "./browser/tab-protocol";
@@ -271,8 +272,34 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 			.filter((c): c is { type: "text"; text: string } => c.type === "text")
 			.map(c => c.text)
 			.join("\n");
-		details.result = textOnly;
+		// Final defense at the tool-result boundary: a single run can display
+		// tens of KB (large JSON returns, dumped observations). Cap the combined
+		// text inline; the full text stays recoverable via the artifact footer
+		// when allocation succeeds.
+		const cappedText = await enforceInlineByteCap(textOnly, {
+			label: "browser output",
+			saveArtifact: full => saveBrowserOutputArtifact(this.session, full),
+		});
+		details.result = cappedText;
+		if (cappedText !== textOnly) {
+			const nonText = content.filter(c => c.type !== "text");
+			return toolResult(details)
+				.content([...nonText, { type: "text", text: cappedText }])
+				.done();
+		}
 		return toolResult(details).content(content).done();
+	}
+}
+
+/** Persist over-cap browser run output as a session artifact; mirrors the bash minimizer's save path. */
+async function saveBrowserOutputArtifact(session: ToolSession, fullText: string): Promise<string | undefined> {
+	try {
+		const alloc = await session.allocateOutputArtifact?.("browser-original");
+		if (!alloc?.path || !alloc.id) return undefined;
+		await Bun.write(alloc.path, fullText);
+		return alloc.id;
+	} catch {
+		return undefined;
 	}
 }
 

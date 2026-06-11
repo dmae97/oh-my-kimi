@@ -14,6 +14,7 @@ import {
 	buildAnthropicSystemBlocks,
 	buildAnthropicUrl,
 	type FetchImpl,
+	resolveAnthropicMetadataUserId,
 	stripClaudeToolPrefix,
 	withAuth,
 	wrapFetchForCch,
@@ -82,6 +83,7 @@ function buildSystemBlocks(
  * @param auth - Authentication configuration (API key or OAuth)
  * @param model - Model identifier to use
  * @param query - Search query from the user
+ * @param metadataUserId - Optional Anthropic Messages metadata.user_id (already shaped for OAuth)
  * @param systemPrompt - Optional system prompt for guiding response style
  * @returns Raw API response from Anthropic
  * @throws {SearchProviderError} If the API request fails
@@ -90,6 +92,7 @@ async function callSearch(
 	auth: AnthropicAuthConfig,
 	model: string,
 	query: string,
+	metadataUserId?: string,
 	systemPrompt?: string,
 	maxTokens?: number,
 	temperature?: number,
@@ -112,6 +115,10 @@ async function callSearch(
 			},
 		],
 	};
+
+	if (metadataUserId) {
+		body.metadata = { user_id: metadataUserId };
+	}
 
 	if (temperature !== undefined) {
 		body.temperature = temperature;
@@ -273,19 +280,37 @@ export async function searchAnthropic(
 	const model = getModel();
 	const systemPrompt = "authStorage" in params ? params.systemPrompt : params.system_prompt;
 	const maxTokens = "authStorage" in params ? params.maxOutputTokens : params.max_tokens;
+	const callerSessionId = "authStorage" in params ? params.sessionId : undefined;
+	const accountId =
+		"authStorage" in params ? params.authStorage.getOAuthAccountId("anthropic", params.sessionId) : undefined;
 	const response = await withAuth(
 		keyOrResolver,
-		key =>
-			callSearch(
-				buildAnthropicAuthConfig(key, searchBaseUrl),
+		key => {
+			const auth = buildAnthropicAuthConfig(key, searchBaseUrl);
+			// Mirror the main Messages path: OAuth requests need a Claude-Code-shaped
+			// metadata.user_id (`{session_id, account_uuid?, device_id}`) so the
+			// CC billing header + system fingerprint installed by
+			// `buildAnthropicSearchHeaders`/`buildSystemBlocks` line up with the
+			// attribution Anthropic and enterprise gateways expect. API-key tokens
+			// forward the raw session id verbatim.
+			const metadataUserId = resolveAnthropicMetadataUserId(
+				callerSessionId,
+				auth.isOAuth,
+				callerSessionId,
+				accountId,
+			);
+			return callSearch(
+				auth,
 				model,
 				params.query,
+				metadataUserId,
 				systemPrompt,
 				maxTokens,
 				params.temperature,
 				params.signal,
 				params.fetch,
-			),
+			);
+		},
 		{
 			signal: params.signal,
 			missingKeyMessage:

@@ -477,7 +477,7 @@ async function createHarness(
  * `setTimeout` drift without slowing tests meaningfully.
  */
 async function waitForBootstrapGuard(): Promise<void> {
-	await Bun.sleep(ACP_BOOTSTRAP_RACE_GUARD_MS + 30);
+	await Bun.sleep(ACP_BOOTSTRAP_RACE_GUARD_MS + 150);
 }
 
 describe("ACP agent", () => {
@@ -1299,16 +1299,26 @@ describe("ACP agent", () => {
 			},
 		};
 
-		await waitForBootstrapGuard();
+		// Drive a deterministic re-advertisement instead of sleeping through
+		// the bootstrap timer: under full-suite load the 50ms guard plus the
+		// awaited slash-command scan can outlive the fixed wait, leaving zero
+		// command updates observed (#flake). `/reload-plugins` awaits the
+		// refresh and emits an advertisement that includes the stubs above.
+		await harness.agent.prompt({
+			sessionId: created.sessionId,
+			messageId: "00000000-0000-4000-8000-000000000005",
+			prompt: [{ type: "text", text: "/reload-plugins" }],
+		} as PromptRequest);
 
 		const commandUpdates = harness.updates.filter(
 			update =>
 				update.sessionId === created.sessionId && update.update.sessionUpdate === "available_commands_update",
 		);
-		// Flatten all advertised commands from all updates for this session.
-		const allCommands = commandUpdates.flatMap(update =>
-			update.update.sessionUpdate === "available_commands_update" ? update.update.availableCommands : [],
-		);
+		// Each update is a complete advertisement; assert on the latest one
+		// (the bootstrap update may or may not have landed by now).
+		const lastUpdate = commandUpdates.at(-1);
+		const allCommands =
+			lastUpdate?.update.sessionUpdate === "available_commands_update" ? lastUpdate.update.availableCommands : [];
 		const names = allCommands.map(c => c.name);
 
 		// Extension command must surface.

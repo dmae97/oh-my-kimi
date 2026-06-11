@@ -139,6 +139,10 @@ function getLatestSurvivingAssistantIndex(messages: readonly Message[]): number 
 	return -1;
 }
 
+function isAnthropicMessagesModel(model: Model): model is Model<"anthropic-messages"> {
+	return model.api === "anthropic-messages";
+}
+
 /**
  * Normalize tool call ID for cross-provider compatibility.
  * OpenAI Responses API generates IDs that are 450+ chars with special characters like `|`.
@@ -184,10 +188,45 @@ export function transformMessages<TApi extends Api>(
 					assistantMsg.api === model.api &&
 					assistantMsg.model === model.id;
 
-				const mustPreserveLatestAnthropicThinking =
-					index === latestSurvivingAssistantIndex &&
-					model.api === "anthropic-messages" &&
-					assistantMsg.api === "anthropic-messages";
+				const isAnthropicTarget = isAnthropicMessagesModel(model);
+				// Anthropic's all-or-none contract on prior-turn thinking blocks
+				// applies to every `anthropic-messages → anthropic-messages` replay,
+				// not just the latest assistant turn. The legacy
+				// `mustPreserveLatestAnthropicThinking` flag only honored it for the
+				// latest turn; every prior turn fell through to the cross-API
+				// text-demotion path whenever the conversation crossed a model id,
+				// silently dropping the reasoning chain on continuation for custom
+				// anthropic-messages providers configured via `models.yaml` and
+				// session-level model swaps (#2257).
+				const isAnthropicReplay = isAnthropicTarget && assistantMsg.api === "anthropic-messages";
+				const isLatestSurvivingAssistant = index === latestSurvivingAssistantIndex;
+				// Signature policy is a second axis. Anthropic cryptographically
+				// binds reasoning signatures to its key+session+model, so cross-model
+				// signatures must be stripped whenever official Anthropic is on
+				// either end of the replay:
+				//   * official → 3p: the 3p target can't reverify the signature;
+				//     keeping it leaks private continuation metadata for no benefit.
+				//   * 3p → official: official rejects a foreign signature outright.
+				//   * official → official cross-model: the new model rejects the
+				//     previous model's signature.
+				// 3p ↔ 3p replays preserve signatures because compatible providers
+				// (Z.AI, DeepSeek, custom `models.yaml` providers) treat them as
+				// opaque continuation hints rather than verified material; stripping
+				// degrades the reasoning chain into unsigned/text on the next turn
+				// (#2265). Source-side official detection uses the canonical catalog
+				// provider id `"anthropic"` because assistant messages carry no
+				// `baseUrl` — a user who manually points `provider: "anthropic"` at
+				// a custom proxy via `models.yaml` will see signatures stripped, the
+				// conservative direction (degraded reasoning, not broken requests).
+				const isOfficialAnthropicSource = isAnthropicReplay && assistantMsg.provider === "anthropic";
+				const isOfficialAnthropicTarget = isAnthropicTarget && model.compat.officialEndpoint;
+				const officialAnthropicInvolved = isOfficialAnthropicSource || isOfficialAnthropicTarget;
+				// Compatible Anthropic-messages reasoning targets that accept
+				// unsigned thinking natively (Z.AI, DeepSeek, the generic
+				// `reasoning && !official` case in the compat builder). Used to keep
+				// `redacted_thinking` siblings beside unsigned visible thinking on
+				// targets that won't text-demote it.
+				const replaysUnsignedAnthropicThinking = isAnthropicTarget && model.compat.replayUnsignedThinking;
 				// Thinking signatures can be untrustworthy for two distinct reasons with very
 				// different blast radii:
 				//
@@ -226,11 +265,37 @@ export function transformMessages<TApi extends Api>(
 						// untrustworthy signature so the encoder can downgrade the block to text.
 						const signatureUntrustworthy =
 							abandonedToolUse || (invalidStopReason && blockIndex === lastBlockIndex);
-						const sanitized =
+						let sanitized: typeof block =
 							signatureUntrustworthy && block.thinkingSignature
 								? { ...block, thinkingSignature: undefined }
 								: block;
-						if (mustPreserveLatestAnthropicThinking) return abandonedToolUse ? block : sanitized;
+						if (isAnthropicReplay) {
+							// Latest abandoned turn: Anthropic's byte-for-byte rule forbids
+							// even stripping a signature on the latest message.
+							if (isLatestSurvivingAssistant && abandonedToolUse) return block;
+							// Cross-model prior turns crossing an official Anthropic endpoint
+							// must strip the source signature so the downstream encoder
+							// applies its `replayUnsignedThinking` policy (unsigned thinking
+							// is emitted natively on Anthropic-compatible reasoning endpoints
+							// and demoted to text on official Anthropic). 3p ↔ 3p replays
+							// keep the signature so the reasoning chain stays signed on
+							// continuation (#2265).
+							if (
+								!isLatestSurvivingAssistant &&
+								!isSameModel &&
+								officialAnthropicInvolved &&
+								sanitized.thinkingSignature
+							) {
+								sanitized = { ...sanitized, thinkingSignature: undefined };
+							}
+							// Drop blocks with neither a signature anchor nor any text —
+							// nothing for the next turn to replay.
+							if (!sanitized.thinkingSignature && (!sanitized.thinking || sanitized.thinking.trim() === "")) {
+								return [];
+							}
+							return sanitized;
+						}
+						// Cross-API target: keep the existing text-demotion fallback.
 						// For same model: keep thinking blocks with signatures (needed for replay)
 						// even if the thinking text is empty (OpenAI encrypted reasoning)
 						if (isSameModel && sanitized.thinkingSignature) return sanitized;
@@ -244,7 +309,15 @@ export function transformMessages<TApi extends Api>(
 					}
 
 					if (block.type === "redactedThinking") {
-						if (mustPreserveLatestAnthropicThinking) return block;
+						// Redacted thinking is native-only. Keep it for same-model
+						// signed replay, the latest byte-for-byte Anthropic turn, or
+						// compatible targets that will also emit sibling unsigned
+						// thinking natively. Drop it when the visible thinking was
+						// cross-model stripped and will be demoted to text.
+						if (isAnthropicReplay) {
+							if (isSameModel || isLatestSurvivingAssistant || replaysUnsignedAnthropicThinking) return block;
+							return [];
+						}
 						if (isSameModel) return block;
 						return [];
 					}

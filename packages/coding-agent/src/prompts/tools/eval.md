@@ -46,9 +46,9 @@ tool.<name>(args) → unknown
     Invoke any session tool by name. `args` is the tool's parameter object.
 completion(prompt, model?="default", system?=None, schema?=None) → str | dict
     Oneshot, stateless completion (no history, no tools). `model` picks a tier: "smol" (fast), "default" (this session's model), "slow" (most capable). Pass `system` for a system prompt. Pass a JSON-Schema `schema` to force structured output and get the parsed object back; otherwise returns the completion text.
-{{#if spawns}}agent(prompt, agent_type?="task", model?=None, context?=None, label?=None, schema?=None) → str | dict
-    Run a subagent and return its final output. Defaults to the bundled "task" agent; pass `agent_type`/`agentType` for another discovered agent. Pass a JSON-Schema `schema` to force structured output and get the parsed object back.
-{{#if js}}    In JS, pass options as one trailing object — never positional: agent(prompt, { agentType, context, schema }).
+{{#if spawns}}agent(prompt, agent_type?="task", model?=None, label?=None, schema?=None) → str | dict
+    Run a subagent and return its final output. Defaults to the bundled "task" agent; pass `agent_type`/`agentType` for another discovered agent. Pass a JSON-Schema `schema` to force structured output and get the parsed object back. Share background by writing a `local://` file and referencing it in the prompt.
+{{#if js}}    In JS, pass options as one trailing object — never positional: agent(prompt, { agentType, schema }).
 {{/if}}
 {{/if}}
 parallel(thunks) → list

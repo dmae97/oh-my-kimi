@@ -10,6 +10,7 @@ import type {
 	ElementHandle,
 	ElementScreenshotOptions,
 	HTTPResponse,
+	ImageFormat,
 	KeyInput,
 	Page,
 	SerializedAXNode,
@@ -434,6 +435,19 @@ export function describeScreenshot(opts?: ScreenshotOptions): string {
 	if (opts?.selector) return `tab.screenshot({ selector: ${JSON.stringify(opts.selector)} })`;
 	if (opts?.fullPage) return "tab.screenshot({ fullPage: true })";
 	return "tab.screenshot()";
+}
+
+/** Map an explicit save path's extension to a puppeteer capture format (default png). */
+export function imageFormatForPath(filePath: string): ImageFormat {
+	switch (path.extname(filePath).toLowerCase()) {
+		case ".webp":
+			return "webp";
+		case ".jpg":
+		case ".jpeg":
+			return "jpeg";
+		default:
+			return "png";
+	}
 }
 
 /** Summarize still-running helpers (oldest first) so a cell timeout names what stalled. */
@@ -931,6 +945,12 @@ export class WorkerCore {
 	): Promise<ScreenshotResult> {
 		const page = this.#requirePage();
 		const fullPage = opts.selector ? false : (opts.fullPage ?? false);
+		// An explicit save path picks the full-res capture format: puppeteer encodes
+		// png/jpeg/webp natively, so `save: "shot.webp"` gets real WebP bytes instead
+		// of PNG bytes hiding behind a .webp name. Unknown/missing extensions stay PNG.
+		const explicitPath = opts.save ? resolveToCwd(opts.save, session.cwd) : undefined;
+		const captureType = explicitPath ? imageFormatForPath(explicitPath) : "png";
+		const captureMime = `image/${captureType}` as const;
 		let buffer: Buffer;
 		if (opts.selector) {
 			const handle = (await untilAborted(signal, () =>
@@ -951,24 +971,23 @@ export class WorkerCore {
 				).catch(() => undefined);
 				// scrollIntoView:false skips the same IntersectionObserver check inside screenshot();
 				// captureBeyondViewport (puppeteer's default) still renders the clipped region.
-				const shotOpts: ElementScreenshotOptions = { type: "png", scrollIntoView: false };
+				const shotOpts: ElementScreenshotOptions = { type: captureType, scrollIntoView: false };
 				buffer = (await untilAborted(signal, () => handle.screenshot(shotOpts))) as Buffer;
 			} finally {
 				await handle.dispose().catch(() => undefined);
 			}
 		} else {
-			buffer = (await untilAborted(signal, () => page.screenshot({ type: "png", fullPage }))) as Buffer;
+			buffer = (await untilAborted(signal, () => page.screenshot({ type: captureType, fullPage }))) as Buffer;
 		}
 		const resized = await resizeImage(
-			{ type: "image", data: buffer.toBase64(), mimeType: "image/png" },
+			{ type: "image", data: buffer.toBase64(), mimeType: captureMime },
 			{ maxWidth: 1024, maxHeight: 1024, maxBytes: 150 * 1024, jpegQuality: 70 },
 		);
-		const explicitPath = opts.save ? resolveToCwd(opts.save, session.cwd) : undefined;
 		const saveFullRes = !!(explicitPath || session.browserScreenshotDir);
 		const savedBuffer = saveFullRes ? buffer : resized.buffer;
-		const savedMimeType = saveFullRes ? "image/png" : resized.mimeType;
-		// Auto-generated names must match the bytes we actually write: full-res is always
-		// PNG, but the resized buffer is whichever of PNG/JPEG/WebP encoded smallest.
+		const savedMimeType = saveFullRes ? captureMime : resized.mimeType;
+		// Names must match the bytes we actually write: full-res follows the capture
+		// format, the resized buffer is whichever of PNG/JPEG/WebP encoded smallest.
 		const ext = savedMimeType === "image/webp" ? "webp" : savedMimeType === "image/jpeg" ? "jpg" : "png";
 		const dest =
 			explicitPath ??

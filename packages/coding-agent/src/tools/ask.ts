@@ -104,7 +104,7 @@ const RECOMMENDED_SUFFIX = " (Recommended)";
 const TIMEOUT_DETECTION_TOLERANCE_MS = 1_000;
 
 function getDoneOptionLabel(): string {
-	return `${theme.symbol("tool.ask")} Done selecting`;
+	return `${theme.status.success} Done selecting`;
 }
 
 /** Add "(Recommended)" suffix to the option at the given index if not already present */
@@ -694,7 +694,9 @@ function normalizeRenderQuestions(raw: unknown): NonNullable<AskRenderArgs["ques
 /** Render a custom free-text answer as a status line plus indented continuation rows. */
 function renderCustomInputLines(uiTheme: Theme, customInput: string): string[] {
 	const lines = customInput.split("\n");
-	const out: string[] = [` ${uiTheme.styledSymbol("tool.ask", "accent")} ${uiTheme.fg("toolOutput", lines[0] ?? "")}`];
+	const out: string[] = [
+		` ${uiTheme.styledSymbol("status.success", "success")} ${uiTheme.fg("toolOutput", lines[0] ?? "")}`,
+	];
 	for (let i = 1; i < lines.length; i++) out.push(`   ${uiTheme.fg("toolOutput", lines[i])}`);
 	return out;
 }

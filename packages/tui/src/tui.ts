@@ -16,7 +16,7 @@ import { $flag, getDebugLogPath } from "@oh-my-pi/pi-utils";
 import { DEFAULT_MAX_INLINE_IMAGES, ImageBudget } from "./components/image";
 import { planDeccaraFills } from "./deccara";
 import { isKeyRelease, matchesKey } from "./keys";
-import { isConPTYHosted, type Terminal } from "./terminal";
+import { isConPTYHosted, setAltScreenActive, type Terminal } from "./terminal";
 import {
 	encodeKittyDeleteImage,
 	ImageProtocol,
@@ -189,6 +189,14 @@ export interface Component {
 export interface NativeScrollbackLiveRegion {
 	getNativeScrollbackLiveRegionStart(): number | undefined;
 	getNativeScrollbackCommitSafeEnd?(): number | undefined;
+}
+
+export interface NativeScrollbackCommittedRows {
+	setNativeScrollbackCommittedRows(rows: number): void;
+}
+
+function setNativeScrollbackCommittedRows(component: Component, rows: number): void {
+	(component as Component & Partial<NativeScrollbackCommittedRows>).setNativeScrollbackCommittedRows?.(rows);
 }
 
 function getNativeScrollbackLiveRegionStart(component: Component): number | undefined {
@@ -490,14 +498,29 @@ interface CursorControlResult extends HardwareCursorUpdate {
 
 /**
  * One root child's contribution to the composed frame: the array reference its
- * render() returned, the frame row it starts at, and the row count recorded at
- * compose time (in-place mutators keep the reference but may change length).
+ * render() returned, the frame row it starts at, the row count recorded at
+ * compose time (in-place mutators keep the reference but may change length),
+ * and the child-local seam reports captured at render time — replayed verbatim
+ * when a component-scoped frame reuses this segment without re-rendering.
  */
 interface FrameSegment {
 	component: Component;
 	lines: readonly string[];
 	start: number;
 	rowCount: number;
+	liveLocalStart?: number;
+	commitLocalEnd?: number;
+}
+
+/** Depth-first identity search through `Container`-shaped children. */
+function subtreeContains(root: Component, target: Component): boolean {
+	if (root === target) return true;
+	const children = (root as Partial<Container>).children;
+	if (!Array.isArray(children)) return false;
+	for (let i = 0; i < children.length; i++) {
+		if (subtreeContains(children[i]!, target)) return true;
+	}
+	return false;
 }
 
 interface PreparedLine {
@@ -711,6 +734,21 @@ export class TUI extends Container {
 	// Leading rows of #composedFrame byte-identical to the previous compose.
 	#renderStablePrefixRows = 0;
 
+	// Component-scoped render accumulation. Targets are the components handed
+	// to requestComponentRender() since the last frame; the flag stays true
+	// only while EVERY pending request is component-scoped. Both are consumed
+	// once per frame by #doRender.
+	#componentRenderTargets = new Set<Component>();
+	#pendingRenderComponentsOnly = false;
+	// Root children that must re-render during the current compose; null for a
+	// full compose. Non-null only for the duration of a component-scoped
+	// render() call inside #doRender (the scratch set below, reused per frame).
+	#partialComposeRoots: Set<Component> | null = null;
+	#partialComposeRootsScratch = new Set<Component>();
+	// Target component -> containing root child, so animation-rate requests do
+	// not re-walk a huge transcript subtree every frame.
+	#componentRootCache = new WeakMap<Component, Component>();
+
 	// Persistent prepared frame, row-aligned with #composedFrame. Entries store
 	// normalized, width-fitted content rows without the per-line terminal
 	// terminator; terminators are appended only at write time so width checks
@@ -750,30 +788,58 @@ export class TUI extends Container {
 		this.#composeWidth = width;
 		let offset = 0;
 		let stableRows = 0;
+		const partialRoots = this.#partialComposeRoots;
 		for (let index = 0; index < children.length; index++) {
 			const child = children[index]!;
-			const childLines = child.render(width);
-			const liveRegionStart = getNativeScrollbackLiveRegionStart(child);
-			if (liveRegionStart !== undefined) {
-				const boundedStart = Number.isFinite(liveRegionStart)
-					? Math.max(0, Math.min(childLines.length, Math.trunc(liveRegionStart)))
-					: childLines.length;
-				this.#nativeScrollbackLiveRegionStart = offset + boundedStart;
-				const commitSafeEnd = getNativeScrollbackCommitSafeEnd(child);
-				if (commitSafeEnd !== undefined) {
-					const boundedEnd = Number.isFinite(commitSafeEnd)
-						? Math.max(boundedStart, Math.min(childLines.length, Math.trunc(commitSafeEnd)))
+			const previous = previousSegments[index];
+			// Component-scoped frame: a root child outside every requested
+			// subtree provably did not change (content mutations route through
+			// a render request, which would have made this frame a full one) —
+			// reuse its previous rows and seam report without calling render().
+			const reuse =
+				partialRoots !== null && previous !== undefined && previous.component === child && !partialRoots.has(child);
+			let childLines: readonly string[];
+			let liveLocalStart: number | undefined;
+			let commitLocalEnd: number | undefined;
+			let reported: number | undefined;
+			if (reuse) {
+				childLines = previous.lines;
+				liveLocalStart = previous.liveLocalStart;
+				commitLocalEnd = previous.commitLocalEnd;
+			} else {
+				// Feed the engine's committed-row claim (from the previous frame's
+				// emit) before rendering so the child can skip re-deriving blocks
+				// that already live in immutable native scrollback. Reused segments
+				// skip this: they never call render(), so the signal is moot.
+				setNativeScrollbackCommittedRows(child, Math.max(0, this.#committedRows - offset));
+				childLines = child.render(width);
+				const liveRegionStart = getNativeScrollbackLiveRegionStart(child);
+				if (liveRegionStart !== undefined) {
+					liveLocalStart = Number.isFinite(liveRegionStart)
+						? Math.max(0, Math.min(childLines.length, Math.trunc(liveRegionStart)))
 						: childLines.length;
-					this.#nativeScrollbackCommitSafeEnd = offset + boundedEnd;
+					const commitSafeEnd = getNativeScrollbackCommitSafeEnd(child);
+					if (commitSafeEnd !== undefined) {
+						commitLocalEnd = Number.isFinite(commitSafeEnd)
+							? Math.max(liveLocalStart, Math.min(childLines.length, Math.trunc(commitSafeEnd)))
+							: childLines.length;
+					}
+				}
+				// Consume the stability report unconditionally for implementers:
+				// reading re-bases the component's baseline to the state this
+				// compose is about to ingest (used or not, the current rows are
+				// what ends up in the composed frame). Reused segments are
+				// deliberately NOT read — their baseline must stay anchored to
+				// the last render the engine actually observed.
+				reported = getRenderStablePrefixRows(child);
+			}
+			if (liveLocalStart !== undefined) {
+				this.#nativeScrollbackLiveRegionStart = offset + liveLocalStart;
+				if (commitLocalEnd !== undefined) {
+					this.#nativeScrollbackCommitSafeEnd = offset + commitLocalEnd;
 				}
 			}
-			// Consume the stability report unconditionally for implementers:
-			// reading re-bases the component's baseline to the state this
-			// compose is about to ingest (used or not, the current rows are
-			// what ends up in the composed frame).
-			const reported = getRenderStablePrefixRows(child);
 			if (chainStable) {
-				const previous = previousSegments[index];
 				if (previous !== undefined && previous.component === child && previous.start === offset) {
 					let stableCount = 0;
 					if (reported !== undefined) {
@@ -794,7 +860,14 @@ export class TUI extends Container {
 					chainStable = false;
 				}
 			}
-			segments[index] = { component: child, lines: childLines, start: offset, rowCount: childLines.length };
+			segments[index] = {
+				component: child,
+				lines: childLines,
+				start: offset,
+				rowCount: childLines.length,
+				liveLocalStart,
+				commitLocalEnd,
+			};
 			offset += childLines.length;
 		}
 		this.#frameSegments = segments;
@@ -1253,6 +1326,7 @@ export class TUI extends Container {
 		// the restored normal screen (which #previousLines still describes).
 		if (this.#altActive) {
 			this.terminal.write(`${MOUSE_TRACKING_OFF}\x1b[?1049l`);
+			setAltScreenActive(false);
 			this.#altActive = false;
 			this.#altPreviousLines = [];
 		}
@@ -1335,6 +1409,8 @@ export class TUI extends Container {
 	}
 
 	requestRender(force = false, options?: RenderRequestOptions): void {
+		// Any non-component-scoped request makes the pending frame a full one.
+		this.#pendingRenderComponentsOnly = false;
 		if (force) {
 			// Forced repaints landing inside the multiplexer resize debounce
 			// (e.g. `#finishSixelProbe`, image-budget eviction, a programmatic
@@ -1365,6 +1441,38 @@ export class TUI extends Container {
 			});
 			return;
 		}
+		this.#requestOrdinaryRender();
+	}
+
+	/**
+	 * Schedule a render on behalf of `component` after a self-contained change
+	 * (spinner frame, blink) that cannot have affected any other component.
+	 *
+	 * When every request since the last frame is component-scoped and the
+	 * frame is otherwise quiet — no resize or geometry change, no overlays, no
+	 * live inline images, no forced repaint, unchanged root child list — the
+	 * next compose re-renders only the root subtrees containing the requesting
+	 * components and reuses the previous frame's rows (and seam reports) for
+	 * every other root child, skipping the full component-tree walk that makes
+	 * long transcripts expensive to repaint at animation rate. Any concurrent
+	 * full request or unsafe condition downgrades the frame to a normal full
+	 * compose, so this is never less correct than `requestRender()` — only
+	 * cheaper.
+	 */
+	requestComponentRender(component: Component): void {
+		if (this.#stopped) return;
+		// Start a component-scoped accumulation only when nothing else is in
+		// flight (a pending throttled request or a deferred ConPTY settle
+		// replay may carry full-render intent that must not be narrowed).
+		if (!this.#renderRequested && this.#postFullPaintSettleTimer === undefined) {
+			this.#pendingRenderComponentsOnly = true;
+		}
+		this.#componentRenderTargets.add(component);
+		this.#requestOrdinaryRender();
+	}
+
+	/** Ordinary (non-forced) scheduling shared by full and component-scoped requests. */
+	#requestOrdinaryRender(): void {
 		// Coalesce non-forced renders inside the post-full-paint ConPTY settle
 		// window into one trailing render. Spinner/blink/streaming components
 		// otherwise fire `requestRender(false)` at 30 Hz while the host is still
@@ -1379,7 +1487,7 @@ export class TUI extends Container {
 						this.#postFullPaintSettleTimer = undefined;
 						this.#postFullPaintSettleUntilMs = 0;
 						if (this.#stopped) return;
-						this.requestRender(false);
+						this.#requestOrdinaryRender();
 					}, this.#postFullPaintSettleUntilMs - now);
 				}
 				return;
@@ -1389,6 +1497,56 @@ export class TUI extends Container {
 		if (this.#renderRequested) return;
 		this.#renderRequested = true;
 		this.#renderScheduler.scheduleImmediate(() => this.#scheduleRender());
+	}
+
+	/**
+	 * Decide whether this frame may compose component-scoped, and resolve the
+	 * requested components to the root children that must re-render. Returns
+	 * null — full compose — whenever a global condition could invalidate rows
+	 * the partial compose would reuse, or when a requested component is not
+	 * reachable from the current root child list.
+	 */
+	#resolvePartialComposeRoots(width: number, height: number): Set<Component> | null {
+		if (this.#componentRenderTargets.size === 0) return null;
+		if (!this.#hasEverRendered || this.#resizeEventPending) return null;
+		if (width !== this.#previousWidth || height !== this.#previousHeight || width !== this.#composeWidth) return null;
+		if (this.#clearScrollbackOnNextRender || this.#forceViewportRepaintOnNextRender) return null;
+		if (this.overlayStack.length > 0) return null;
+		// The image budget audits display order across the whole frame; a
+		// partial walk would under-count it. Engage only on image-free frames.
+		if (!this.#imageBudget.quiescent) return null;
+		// The root child list must match the segment ledger exactly — a
+		// structural change shifts offsets under every reused segment.
+		const children = this.children;
+		const segments = this.#frameSegments;
+		if (segments.length !== children.length) return null;
+		for (let i = 0; i < children.length; i++) {
+			if (segments[i]!.component !== children[i]) return null;
+		}
+		const roots = this.#partialComposeRootsScratch;
+		roots.clear();
+		for (const target of this.#componentRenderTargets) {
+			const root = this.#resolveComponentRoot(target);
+			if (root === null) return null;
+			roots.add(root);
+		}
+		return roots;
+	}
+
+	/** Root child whose subtree contains `target`, memoized per component. */
+	#resolveComponentRoot(target: Component): Component | null {
+		const cached = this.#componentRootCache.get(target);
+		if (cached !== undefined && this.children.includes(cached) && subtreeContains(cached, target)) {
+			return cached;
+		}
+		for (const child of this.children) {
+			if (subtreeContains(child, target)) {
+				this.#componentRootCache.set(target, child);
+				return child;
+			}
+		}
+		this.#componentRootCache.delete(target);
+		return null;
 	}
 
 	/**
@@ -1468,7 +1626,7 @@ export class TUI extends Container {
 				this.#postFullPaintSettleTimer = undefined;
 				this.#postFullPaintSettleUntilMs = 0;
 				if (this.#stopped) return;
-				this.requestRender(false);
+				this.#requestOrdinaryRender();
 			}, TUI.#CONPTY_POST_FULL_PAINT_SETTLE_MS);
 		}
 	}
@@ -1881,12 +2039,18 @@ export class TUI extends Container {
 		const width = this.terminal.columns;
 		const height = this.terminal.rows;
 
+		// Consume the component-scoped accumulation: it describes the render
+		// requests made up to this frame, whichever path the frame takes.
+		const componentScopedOnly = this.#pendingRenderComponentsOnly;
+		this.#pendingRenderComponentsOnly = false;
+
 		// Fullscreen alt-screen short-circuit. While the topmost visible overlay
 		// requests it, borrow the terminal's alternate buffer and paint only the
 		// modal there; the normal screen and all accounting stay untouched.
 		const wantAlt = this.#wantsAltScreen();
 		if (wantAlt && !this.#altActive) {
 			this.terminal.write(`\x1b[?1049h${MOUSE_TRACKING_ON}`);
+			setAltScreenActive(true);
 			this.terminal.hideCursor();
 			this.#forgetHardwareCursorState();
 			this.#recordHardwareCursorHidden();
@@ -1896,6 +2060,7 @@ export class TUI extends Container {
 			this.#altEnterHeight = height;
 		} else if (!wantAlt && this.#altActive) {
 			this.terminal.write(`${MOUSE_TRACKING_OFF}\x1b[?1049l`);
+			setAltScreenActive(false);
 			this.#forgetHardwareCursorState();
 			this.#altActive = false;
 			this.#altPreviousLines = [];
@@ -1907,15 +2072,32 @@ export class TUI extends Container {
 			}
 		}
 		if (this.#altActive) {
+			this.#componentRenderTargets.clear();
 			this.#renderAltFrame(width, height);
 			return;
 		}
 
 		// 1. Compose the frame. Bracket the render so the image budget observes
-		// every inline image in display order (overlays carry none).
-		this.#imageBudget.beginPass();
-		const rawFrame = this.render(width);
-		this.#imageBudget.endPass();
+		// every inline image in display order (overlays carry none). A
+		// component-scoped frame skips the budget pass instead — it is gated on
+		// a quiescent budget, and a partial tree walk would under-count display
+		// order — and re-renders only the requested root subtrees, reusing the
+		// previous segment of every other root child.
+		const partialRoots = componentScopedOnly ? this.#resolvePartialComposeRoots(width, height) : null;
+		this.#componentRenderTargets.clear();
+		let rawFrame: readonly string[];
+		if (partialRoots !== null) {
+			this.#partialComposeRoots = partialRoots;
+			try {
+				rawFrame = this.render(width);
+			} finally {
+				this.#partialComposeRoots = null;
+			}
+		} else {
+			this.#imageBudget.beginPass();
+			rawFrame = this.render(width);
+			this.#imageBudget.endPass();
+		}
 		// Ghostty initial-image deferral must run before any render state is
 		// consumed (#resizeEventPending, hardware-cursor state, commit
 		// re-anchoring): the early return abandons this frame and the deferred
@@ -1958,13 +2140,16 @@ export class TUI extends Container {
 		// composed frame's stable prefix covers every committed row — bytes
 		// that provably did not change since the last (aligned) frame cannot
 		// have diverged.
+		let committedRowsResynced = false;
 		if (
 			this.#hasEverRendered &&
 			!geometryChanged &&
 			!this.#clearScrollbackOnNextRender &&
 			this.#renderStablePrefixRows < this.#committedRows
 		) {
+			const committedRowsBeforeAudit = this.#committedRows;
 			this.#auditCommittedPrefix(rawFrame);
+			committedRowsResynced = this.#committedRows !== committedRowsBeforeAudit;
 		}
 
 		// 3. Window and commit math (lengths only; content prepared below).
@@ -1995,14 +2180,22 @@ export class TUI extends Container {
 		if (fullPaint) {
 			windowTop = Math.max(0, frameLength - height);
 			chunkTo = Math.min(commitBoundary, windowTop);
-		} else if (frameLength <= this.#committedRows) {
-			// The frame shrank into (or below) the committed prefix: the app
-			// replaced content it had already let scroll into history without
-			// requesting a session replace. History is immutable without a
-			// gesture, so the stale committed copy stays in scrollback;
-			// re-anchor the window at the tail and restart commit bookkeeping
-			// there so the live grid shows the real content instead of a blank
-			// pinned window.
+		} else if (
+			frameLength <= this.#committedRows ||
+			(committedRowsResynced &&
+				frameLength - this.#committedRows < height &&
+				cursorMarkers.some(marker => marker.row >= this.#committedRows))
+		) {
+			// Either the frame shrank into the committed prefix, or a
+			// committed-prefix resync left a focused cursor tail shorter than the
+			// viewport. The latter happens when a streaming/live block had an
+			// append-only prefix committed, then collapses on abort/finalize:
+			// the audit re-anchors #committedRows at the first divergent row, but
+			// flooring windowTop there would pin the editor near the top and
+			// leave blank rows underneath. Re-show the frame tail instead. The
+			// stale committed copy stays in native history; duplicating a few rows
+			// is preferable to a live editor gap and matches the existing
+			// "duplication, never loss" resync contract.
 			windowTop = Math.max(0, frameLength - height);
 			chunkTo = Math.min(commitBoundary, windowTop);
 			this.#committedRows = chunkTo;

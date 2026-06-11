@@ -43,6 +43,9 @@ function buildToolSession(
 		settings: options.settings,
 		authStorage: options.authStorage,
 		modelRegistry: options.modelRegistry,
+		// The task tool no longer takes a per-call schema; the inherited session
+		// schema drives structured output for every spawn from this session.
+		outputSchema: analyzeFileOutputSchema,
 	};
 }
 
@@ -59,29 +62,45 @@ export function createAnalyzeFileTool(options: {
 		label: "Analyze Files",
 		description: "Spawn quick_task agents to analyze files.",
 		parameters: analyzeFileSchema,
-		async execute(toolCallId, params, onUpdate, ctx, signal) {
+		async execute(toolCallId, params, _onUpdate, ctx, signal) {
 			const toolSession = buildToolSession(ctx, options);
+			// The hand-built ToolSession carries no asyncJobManager, so every
+			// execute() below takes the task tool's sync fallback and resolves
+			// with the subagent's result inline — exactly what this flow needs.
+			// The tool's session semaphore bounds the parallel fan-out.
 			const taskTool = await TaskTool.create(toolSession);
 			const numstat = options.state.overview?.numstat ?? [];
-			const tasks = params.files.map((file, index) => {
-				const relatedFiles = formatRelatedFiles(params.files, file, numstat);
-				const assignment = prompt.render(analyzeFilePrompt, {
-					file,
-					goal: params.goal,
-					related_files: relatedFiles,
-				});
-				return {
-					id: `AnalyzeFile${index + 1}`,
-					description: `Analyze ${file}`,
-					assignment,
-				};
-			});
-			const taskParams: TaskParams = {
-				agent: "quick_task",
-				schema: JSON.stringify(analyzeFileOutputSchema),
-				tasks,
+
+			const analyses = await Promise.all(
+				params.files.map((file, index) => {
+					const relatedFiles = formatRelatedFiles(params.files, file, numstat);
+					const assignment = prompt.render(analyzeFilePrompt, {
+						file,
+						goal: params.goal,
+						related_files: relatedFiles,
+					});
+					const taskParams: TaskParams = {
+						agent: "quick_task",
+						id: `AnalyzeFile${index + 1}`,
+						description: `Analyze ${file}`,
+						assignment,
+					};
+					return taskTool.execute(`${toolCallId}-${index + 1}`, taskParams, signal);
+				}),
+			);
+			const results = analyses.flatMap(analysis => analysis.details?.results ?? []);
+			const text = analyses
+				.map(analysis => analysis.content.find(part => part.type === "text")?.text ?? "")
+				.filter(Boolean)
+				.join("\n\n");
+			return {
+				content: [{ type: "text", text: text || "(no output)" }],
+				details: {
+					projectAgentsDir: null,
+					results,
+					totalDurationMs: analyses.reduce((sum, analysis) => sum + (analysis.details?.totalDurationMs ?? 0), 0),
+				},
 			};
-			return taskTool.execute(toolCallId, taskParams, signal, onUpdate);
 		},
 	};
 }

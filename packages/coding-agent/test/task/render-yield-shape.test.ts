@@ -46,6 +46,7 @@ describe("task renderer: malformed yield slot (#1987)", () => {
 			truncated: false,
 			durationMs: 250,
 			tokens: 100,
+			requests: 0,
 			// Cast deliberately: production typings declare `unknown[]`, but the
 			// renderer must defend against a stray non-array value — that's
 			// exactly what this regression test exercises.
@@ -66,6 +67,7 @@ describe("task renderer: malformed yield slot (#1987)", () => {
 			recentTools: [],
 			recentOutput: [],
 			toolCount: 1,
+			requests: 0,
 			tokens: 100,
 			cost: 0,
 			durationMs: 250,

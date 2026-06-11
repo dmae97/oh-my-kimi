@@ -124,6 +124,7 @@ describe("Anthropic provider hard-timeout wiring", () => {
 			authStorage: {
 				getApiKey: async () => "sk-fallback",
 				resolver: vi.fn(() => async () => "sk-fallback"),
+				getOAuthAccountId: () => undefined,
 			} as unknown as AuthStorage,
 		});
 

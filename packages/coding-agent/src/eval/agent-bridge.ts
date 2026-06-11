@@ -34,7 +34,6 @@ const agentArgsSchema = z.object({
 	prompt: z.string().min(1, "prompt must be a non-empty string"),
 	agentType: z.string().min(1).optional(),
 	model: z.union([z.string().min(1), z.array(z.string().min(1)).min(1)]).optional(),
-	context: z.string().optional(),
 	label: z.string().optional(),
 	schema: z.unknown().optional(),
 });
@@ -43,7 +42,6 @@ interface EvalAgentArgs {
 	prompt: string;
 	agentType?: string;
 	model?: string | string[];
-	context?: string;
 	label?: string;
 	schema?: unknown;
 }
@@ -111,7 +109,7 @@ function assertNotPlanMode(session: ToolSession): void {
 }
 
 function renderSubagentPrompt(assignment: string): string {
-	return prompt.render(subagentUserPromptTemplate, { assignment: assignment.trim(), independentMode: false });
+	return prompt.render(subagentUserPromptTemplate, { assignment: assignment.trim() });
 }
 
 function trimToUndefined(value: string | undefined): string | undefined {
@@ -135,20 +133,12 @@ function getOutputManager(session: ToolSession): AgentOutputManager {
 async function getArtifacts(session: ToolSession): Promise<{
 	sessionFile: string | null;
 	artifactsDir: string;
-	contextFile?: string;
 }> {
 	const sessionFile = session.getSessionFile();
 	const sessionArtifactsDir = sessionFile ? sessionFile.slice(0, -6) : null;
 	const artifactsDir = sessionArtifactsDir ?? path.join(os.tmpdir(), `omp-eval-agent-${Snowflake.next()}`);
 	await fs.mkdir(artifactsDir, { recursive: true });
-
-	const shouldWriteConversationContext = session.settings.get("irc.enabled") !== true;
-	const compactContext = shouldWriteConversationContext ? session.getCompactContext?.() : undefined;
-	if (!compactContext) return { sessionFile, artifactsDir };
-
-	const contextFile = path.join(artifactsDir, "context.md");
-	await Bun.write(contextFile, compactContext);
-	return { sessionFile, artifactsDir, contextFile };
+	return { sessionFile, artifactsDir };
 }
 
 function emitProgressStatus(emitStatus: ((event: JsStatusEvent) => void) | undefined, progress: AgentProgress): void {
@@ -246,11 +236,10 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 	};
 	const parentArtifactManager = options.session.getArtifactManager?.() ?? undefined;
 	const mcpManager = options.session.mcpManager ?? MCPManager.instance();
-	const { sessionFile, artifactsDir, contextFile } = await getArtifacts(options.session);
+	const { sessionFile, artifactsDir } = await getArtifacts(options.session);
 	const outputManager = getOutputManager(options.session);
 	const id = await outputManager.allocate(outputIdBase(parsed.label, agentName));
 	const assignment = parsed.prompt.trim();
-	const context = trimToUndefined(parsed.context);
 	// Suspend eval timeout accounting while the subagent owns control. The
 	// timeout clock restarts once the bridge returns to the cell runtime.
 	const result = await withBridgeTimeoutPause(options.emitStatus, () =>
@@ -259,7 +248,6 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 			agent: effectiveAgent,
 			task: renderSubagentPrompt(assignment),
 			assignment,
-			context,
 			description: trimToUndefined(parsed.label),
 			index: 0,
 			id,
@@ -271,7 +259,6 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 			sessionFile,
 			persistArtifacts: Boolean(sessionFile),
 			artifactsDir,
-			contextFile,
 			// Eval `agent()` subagents are short-lived programmatic helpers (data
 			// collection, structured output, parallel() fan-out). LSP server
 			// cold-start costs tens of seconds and is pure overhead here, so it is

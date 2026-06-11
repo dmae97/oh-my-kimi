@@ -157,9 +157,12 @@ describe("AgentSession shake", () => {
 			session.settings.set("compaction.thresholdPercent", 1);
 			session.settings.set("contextPromotion.enabled", false);
 
+			// Reclaim enough that the corrected (provider − tokensFreed) figure lands
+			// inside the 80% recovery band — otherwise the #2275 post-shake check would
+			// (correctly) declare pressure unresolved and fall back to context-full.
 			const shakeSpy = vi
 				.spyOn(session, "shake")
-				.mockResolvedValue({ mode: "elide", toolResultsDropped: 1, blocksDropped: 0, tokensFreed: 500 });
+				.mockResolvedValue({ mode: "elide", toolResultsDropped: 1, blocksDropped: 0, tokensFreed: 10_000 });
 
 			const assistantMessage: AssistantMessage = {
 				role: "assistant",
@@ -240,6 +243,57 @@ describe("AgentSession shake", () => {
 			expect(shakeEnd?.errorMessage).toMatch(/falling back to context-full/i);
 
 			// Fallback enters the context-full path so the situation actually resolves.
+			const fullStart = events.find(
+				e => e.type === "auto_compaction_start" && (e as { action?: string }).action === "context-full",
+			);
+			expect(fullStart).toBeDefined();
+		});
+
+		it("falls back when provider-reported usage stays above the threshold even though the local estimate is below it (regression #2275)", async () => {
+			session.settings.set("compaction.strategy", "shake");
+			session.settings.set("compaction.thresholdTokens", 5_000);
+			session.settings.set("contextPromotion.enabled", false);
+
+			// Agent state holds almost no content, so #estimatePendingPromptTokens reads
+			// well below the 5K threshold. The pre-fix post-shake check trusted that
+			// estimate and treated the pressure as resolved, even though the assistant
+			// message's provider-reported usage (11K) was well above the threshold.
+			// This is the metric-divergence dead loop from #2275: thinking-heavy
+			// sessions hit it for real (thinkingSignature payloads aren't counted by
+			// the estimator), and an empty-state probe mimics it deterministically.
+			session.agent.replaceMessages([]);
+
+			const shakeSpy = vi
+				.spyOn(session, "shake")
+				.mockResolvedValue({ mode: "elide", toolResultsDropped: 1, blocksDropped: 0, tokensFreed: 10 });
+
+			const assistantMessage: AssistantMessage = {
+				role: "assistant",
+				content: [{ type: "text", text: "trigger" }],
+				...apiInfo,
+				stopReason: "stop",
+				usage: {
+					input: 10_000,
+					output: 1_000,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 11_000,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				timestamp: Date.now(),
+			};
+			session.agent.emitExternalEvent({ type: "message_end", message: assistantMessage });
+			session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMessage] });
+			await Bun.sleep(50);
+
+			expect(shakeSpy).toHaveBeenCalledTimes(1);
+
+			const shakeEnd = events.find(
+				e => e.type === "auto_compaction_end" && (e as { action?: string }).action === "shake",
+			) as { errorMessage?: string; skipped?: boolean } | undefined;
+			expect(shakeEnd).toBeDefined();
+			expect(shakeEnd?.errorMessage).toMatch(/falling back to context-full/i);
+
 			const fullStart = events.find(
 				e => e.type === "auto_compaction_start" && (e as { action?: string }).action === "context-full",
 			);

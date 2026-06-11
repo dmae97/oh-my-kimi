@@ -72,10 +72,13 @@ describe("focus-changing menu teardown", () => {
 
 			// The menu rows were committed to history while the menu was tall;
 			// closing it resyncs the commit index at the divergence (stale menu
-			// stays in scrollback) and the window re-anchors at the live tail —
-			// "assistant" scrolled into history and is no longer on the grid.
-			expect(term.getViewport().map(line => line.trimEnd())).toEqual(["prompt", "", "", "", "", ""]);
-			expect(term.getCursor()).toEqual({ row: 0, col: 6 });
+			// stays in scrollback). The focused cursor tail is shorter than the
+			// viewport, so the window re-anchors at the frame tail instead of
+			// pinning "prompt" at the top with blank rows underneath —
+			// "assistant" is re-shown on the grid (its committed copy stays in
+			// scrollback; duplication, never loss).
+			expect(term.getViewport().map(line => line.trimEnd())).toEqual(["assistant", "prompt", "", "", "", ""]);
+			expect(term.getCursor()).toEqual({ row: 1, col: 6 });
 		} finally {
 			tui.stop();
 		}

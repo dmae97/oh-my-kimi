@@ -108,6 +108,7 @@ export type SymbolKey =
 	| "icon.time"
 	| "icon.pi"
 	| "icon.agents"
+	| "icon.job"
 	| "icon.cache"
 	| "icon.input"
 	| "icon.output"
@@ -129,6 +130,8 @@ export type SymbolKey =
 	| "icon.extensionInstruction"
 	// STT
 	| "icon.mic"
+	// Compaction divider
+	| "icon.camera"
 	// Thinking Levels
 	| "thinking.minimal"
 	| "thinking.low"
@@ -220,7 +223,8 @@ export type SymbolKey =
 	| "tool.resolve"
 	| "tool.review"
 	| "tool.inspectImage"
-	| "tool.goal";
+	| "tool.goal"
+	| "tool.irc";
 
 type SymbolMap = Record<SymbolKey, string>;
 
@@ -301,6 +305,7 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"icon.time": "⏱",
 	"icon.pi": "π",
 	"icon.agents": "👥",
+	"icon.job": "⚙",
 	"icon.cache": "💾",
 	"icon.input": "⤵",
 	"icon.output": "⤴",
@@ -322,13 +327,15 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"icon.extensionInstruction": "📘",
 	// STT
 	"icon.mic": "🎤",
+	// Compaction divider
+	"icon.camera": "📷",
 	// Thinking levels
 	"thinking.minimal": "◔ min",
 	"thinking.low": "◑ low",
 	"thinking.medium": "◒ med",
 	"thinking.high": "◕ high",
 	"thinking.xhigh": "◉ xhigh",
-	"thinking.autoPending": "▣?",
+	"thinking.autoPending": "⟳",
 	// Checkboxes
 	"checkbox.checked": "☑",
 	"checkbox.unchecked": "☐",
@@ -414,6 +421,7 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"tool.review": "◉",
 	"tool.inspectImage": "🖼",
 	"tool.goal": "◎",
+	"tool.irc": "✉",
 };
 
 const NERD_SYMBOLS: SymbolMap = {
@@ -561,6 +569,8 @@ const NERD_SYMBOLS: SymbolMap = {
 	"icon.pi": "\ue22c",
 	// pick:  | alt: 
 	"icon.agents": "\uf0c0",
+	// pick:  (nf-fa-gear) | alt:  ⚙
+	"icon.job": "\uf013",
 	// pick:  | alt:  
 	"icon.cache": "\uf1c0",
 	// pick:  | alt:  →
@@ -599,6 +609,8 @@ const NERD_SYMBOLS: SymbolMap = {
 	"icon.extensionInstruction": "\uf02d",
 	// STT - fa-microphone
 	"icon.mic": "\uf130",
+	// Compaction divider - fa-camera-retro
+	"icon.camera": "\uf083",
 	// Thinking Levels - emoji labels
 	// pick: 🤨 min | alt:  min  min
 	"thinking.minimal": "\u{F0E7} min",
@@ -610,8 +622,8 @@ const NERD_SYMBOLS: SymbolMap = {
 	"thinking.high": "\u{F111} high",
 	// pick: 🧠 xhi | alt:  xhi  xhi
 	"thinking.xhigh": "\u{F06D} xhi",
-	// pick: 󰞋 (nf-md-help_box) | alt:  [?]
-	"thinking.autoPending": "\u{f078b}",
+	// pick:  (fa-circle-o-notch) | alt: 󰂼 (nf-md-cached) ⟳
+	"thinking.autoPending": "\uf1ce",
 	// Checkboxes
 	// pick:  | alt:  
 	"checkbox.checked": "\uf14a",
@@ -708,6 +720,7 @@ const NERD_SYMBOLS: SymbolMap = {
 	"tool.review": "\uEA70",
 	"tool.inspectImage": "\uEAEA",
 	"tool.goal": "\uEBF8",
+	"tool.irc": "\uF086",
 };
 
 const ASCII_SYMBOLS: SymbolMap = {
@@ -787,6 +800,7 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"icon.time": "t:",
 	"icon.pi": "pi",
 	"icon.agents": "AG",
+	"icon.job": "bg",
 	"icon.cache": "cache",
 	"icon.input": "in:",
 	"icon.output": "out:",
@@ -808,13 +822,15 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"icon.extensionInstruction": "IN",
 	// STT
 	"icon.mic": "MIC",
+	// Compaction divider
+	"icon.camera": "[o]",
 	// Thinking Levels
 	"thinking.minimal": "[min]",
 	"thinking.low": "[low]",
 	"thinking.medium": "[med]",
 	"thinking.high": "[high]",
 	"thinking.xhigh": "[xhi]",
-	"thinking.autoPending": "[?]",
+	"thinking.autoPending": "[~]",
 	// Checkboxes
 	"checkbox.checked": "[x]",
 	"checkbox.unchecked": "[ ]",
@@ -898,6 +914,7 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"tool.review": "rev",
 	"tool.inspectImage": "[i]",
 	"tool.goal": "(o)",
+	"tool.irc": "irc",
 };
 
 const SYMBOL_PRESETS: Record<SymbolPreset, SymbolMap> = {
@@ -1666,6 +1683,7 @@ export class Theme {
 			time: this.#symbols["icon.time"],
 			pi: this.#symbols["icon.pi"],
 			agents: this.#symbols["icon.agents"],
+			job: this.#symbols["icon.job"],
 			cache: this.#symbols["icon.cache"],
 			input: this.#symbols["icon.input"],
 			output: this.#symbols["icon.output"],
@@ -1686,6 +1704,7 @@ export class Theme {
 			extensionContextFile: this.#symbols["icon.extensionContextFile"],
 			extensionInstruction: this.#symbols["icon.extensionInstruction"],
 			mic: this.#symbols["icon.mic"],
+			camera: this.#symbols["icon.camera"],
 		};
 	}
 
@@ -2546,10 +2565,10 @@ const HIGHLIGHT_CACHE_MAX = 256;
 const highlightCache = new LRUCache<string, string>({ max: HIGHLIGHT_CACHE_MAX });
 let highlightCacheTheme: Theme | undefined;
 
-function highlightCached(code: string, validLang: string | undefined): string | null {
-	if (highlightCacheTheme !== theme) {
+function highlightCached(code: string, validLang: string | undefined, highlightTheme: Theme): string | null {
+	if (highlightCacheTheme !== highlightTheme) {
 		highlightCache.clear();
-		highlightCacheTheme = theme;
+		highlightCacheTheme = highlightTheme;
 	}
 	const key = `${validLang ?? ""}\x00${code}`;
 	const hit = highlightCache.get(key);
@@ -2558,7 +2577,7 @@ function highlightCached(code: string, validLang: string | undefined): string | 
 	}
 	let highlighted: string;
 	try {
-		highlighted = nativeHighlightCode(code, validLang, getHighlightColors(theme));
+		highlighted = nativeHighlightCode(code, validLang, getHighlightColors(highlightTheme));
 	} catch {
 		return null;
 	}
@@ -2570,9 +2589,9 @@ function highlightCached(code: string, validLang: string | undefined): string | 
  * Highlight code with syntax coloring based on file extension or language.
  * Returns array of highlighted lines.
  */
-export function highlightCode(code: string, lang?: string): string[] {
+export function highlightCode(code: string, lang?: string, highlightTheme: Theme = theme): string[] {
 	const validLang = lang && nativeSupportsLanguage(lang) ? lang : undefined;
-	const highlighted = highlightCached(code, validLang);
+	const highlighted = highlightCached(code, validLang, highlightTheme);
 	// Always return a fresh array: callers (e.g. renderCodeCell) push extra lines
 	// onto the result, which would corrupt the cached string otherwise.
 	return (highlighted ?? code).split("\n");
@@ -2620,7 +2639,7 @@ export function getMarkdownTheme(): MarkdownTheme {
 		resolveMermaidAscii,
 		highlightCode: (code: string, lang?: string): string[] => {
 			const validLang = lang && nativeSupportsLanguage(lang) ? lang : undefined;
-			const highlighted = highlightCached(code, validLang);
+			const highlighted = highlightCached(code, validLang, theme);
 			if (highlighted !== null) return highlighted.split("\n");
 			return code.split("\n").map(line => theme.fg("mdCodeBlock", line));
 		},

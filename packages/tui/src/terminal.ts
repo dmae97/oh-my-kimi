@@ -122,6 +122,37 @@ export function chunkForConPTY(data: string, maxChunkBytes: number = MAX_CONPTY_
 let activeTerminal: ProcessTerminal | null = null;
 // Track if a terminal was ever started (for emergency restore logic)
 let terminalEverStarted = false;
+// Whether the alternate screen buffer is currently active (mirrors the TUI's
+// overlay enter/leave writes). Consulted by emergencyTerminalRestore: DECRST
+// 1049 must never be written blindly, because Windows' shared VT dispatcher
+// (conhost and Windows Terminal both use AdaptDispatch) executes an
+// unconditional cursor restore on it — with no prior DECSC save the cursor
+// jumps to the viewport home, dropping the parent shell prompt on top of the
+// dead frame after exit.
+let altScreenActive = false;
+
+/** Record alternate-screen state (called by the TUI on `?1049h`/`?1049l` writes). */
+export function setAltScreenActive(active: boolean): void {
+	altScreenActive = active;
+}
+
+const stdoutErrorHandlers = new Set<(err: Error) => void>();
+let stdoutErrorListenerInstalled = false;
+
+function onStdoutError(err: Error): void {
+	for (const handler of stdoutErrorHandlers) handler(err);
+}
+
+function registerStdoutErrorHandler(handler: (err: Error) => void): () => void {
+	stdoutErrorHandlers.add(handler);
+	if (!stdoutErrorListenerInstalled) {
+		process.stdout.on("error", onStdoutError);
+		stdoutErrorListenerInstalled = true;
+	}
+	return () => {
+		stdoutErrorHandlers.delete(handler);
+	};
+}
 
 const STD_INPUT_HANDLE = -10;
 const ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200;
@@ -208,10 +239,15 @@ export function emergencyTerminalRestore(): void {
 		if (terminal) {
 			terminal.stop();
 			// stop() never touches the alternate screen — the TUI owns that
-			// state and exits it on the normal shutdown path. A crash while a
-			// fullscreen overlay is up would otherwise strand the shell on the
-			// alt buffer. Safe no-op when the alt screen is not active.
-			terminal.write("\x1b[?1049l");
+			// state and exits it on the normal shutdown path. Only crash paths
+			// with a fullscreen overlay still hold the alt buffer here. The
+			// leave sequence is gated on the tracked state because it is NOT a
+			// universally safe no-op: Windows' VT dispatcher homes the cursor
+			// on DECRST 1049 even when the alt buffer is inactive.
+			if (altScreenActive) {
+				terminal.write("\x1b[?1049l");
+				altScreenActive = false;
+			}
 			terminal.showCursor();
 		} else if (terminalEverStarted) {
 			// Blind restore only if we know a terminal was started but lost track of it
@@ -226,9 +262,14 @@ export function emergencyTerminalRestore(): void {
 					"\x1b[<u" + // Pop kitty keyboard protocol
 					"\x1b[>4;0m" + // Disable modifyOtherKeys fallback
 					"\x1b[?1006l\x1b[?1003l\x1b[?1000l" + // Disable mouse tracking (fullscreen overlays)
-					"\x1b[?1049l" + // Leave the alternate screen (fullscreen overlays)
+					// Leave the alternate screen only when a fullscreen overlay
+					// actually holds it — on Windows, DECRST 1049 on the main
+					// buffer homes the cursor (unconditional CursorRestoreState
+					// with no prior save), corrupting the shell handoff on exit.
+					(altScreenActive ? "\x1b[?1049l" : "") +
 					"\x1b[?25h", // Show cursor
 			);
+			altScreenActive = false;
 			if (process.stdin.setRawMode) {
 				process.stdin.setRawMode(false);
 			}
@@ -344,6 +385,11 @@ export class ProcessTerminal implements Terminal {
 	#stdinDataHandler?: (data: string) => void;
 	#dead = false;
 	#writeLogPath = $env.PI_TUI_WRITE_LOG || "";
+	#stdoutErrorCleanup?: () => void;
+	#stdoutErrorHandler = (err: Error) => {
+		this.#markTerminalWriteFailed(err);
+	};
+
 	#windowsVTInputRestore?: () => void;
 	#appearanceCallbacks: Array<(appearance: TerminalAppearance) => void> = [];
 	#appearance: TerminalAppearance | undefined;
@@ -1182,6 +1228,18 @@ export class ProcessTerminal implements Terminal {
 		if (process.stdin.setRawMode) {
 			process.stdin.setRawMode(this.#wasRaw);
 		}
+		this.#stdoutErrorCleanup?.();
+		this.#stdoutErrorCleanup = undefined;
+	}
+
+	#ensureStdoutErrorHandler(): void {
+		this.#stdoutErrorCleanup ??= registerStdoutErrorHandler(this.#stdoutErrorHandler);
+	}
+
+	#markTerminalWriteFailed(err: unknown): void {
+		if (this.#dead) return;
+		this.#dead = true;
+		logger.warn("terminal write failed; disabling terminal rendering", { err });
 	}
 
 	write(data: string): void {
@@ -1200,6 +1258,7 @@ export class ProcessTerminal implements Terminal {
 		// Skip control sequences when stdout isn't a TTY (piped output, tests, log
 		// files). They serve no purpose there and would surface as visible noise.
 		if (!process.stdout.isTTY) return;
+		this.#ensureStdoutErrorHandler();
 		// A console-sharing child process may have flipped the console codepage
 		// away from UTF-8; repair it before any bytes hit WriteFile so no frame
 		// is ever translated through an OEM codepage. See ensureWindowsConsoleUtf8.
@@ -1219,15 +1278,14 @@ export class ProcessTerminal implements Terminal {
 			// threshold. See #2034 and #2095.
 			if (isConPTYHosted() && Buffer.byteLength(data, "utf8") > MAX_CONPTY_WRITE_CHUNK_BYTES) {
 				for (const chunk of chunkForConPTY(data, MAX_CONPTY_WRITE_CHUNK_BYTES)) {
+					if (this.#dead) break;
 					process.stdout.write(chunk);
 				}
 			} else {
 				process.stdout.write(data);
 			}
 		} catch (err) {
-			// Any write failure means terminal is dead - no recovery possible
-			this.#dead = true;
-			logger.warn("terminal is dead - no recovery possible", { error: err, data });
+			this.#markTerminalWriteFailed(err);
 		}
 	}
 

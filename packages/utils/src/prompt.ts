@@ -342,10 +342,12 @@ handlebars.registerHelper(
 /**
  * {{join array ", "}}
  * Joins an array with a separator (default: ", ").
+ * Note: Use \n/\t in the separator for newlines/tabs (unescaped automatically,
+ * same convention as {{#list}} — Handlebars string literals carry no escapes).
  */
 handlebars.registerHelper("join", (context: unknown[], separator?: unknown): string => {
 	if (!Array.isArray(context)) return "";
-	const sep = typeof separator === "string" ? separator : ", ";
+	const sep = typeof separator === "string" ? separator.replace(/\\n/g, "\n").replace(/\\t/g, "\t") : ", ";
 	return context.join(sep);
 });
 

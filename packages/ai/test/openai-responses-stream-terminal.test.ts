@@ -319,4 +319,30 @@ describe("processResponsesStream: lost output_item.added recovery", () => {
 		expect(output.usage.input).toBe(4);
 		expect(output.usage.output).toBe(2);
 	});
+
+	test("stops pulling after response.completed even when the source never ends", async () => {
+		const output = makeOutput();
+		const stream = { push: () => {}, end: () => {} } as never;
+		let onCompletedCalled = false;
+
+		// Misbehaving providers deliver the terminal event but never close the
+		// connection. The processor must break out instead of parking on
+		// `iterator.next()` until the idle watchdog errors the turn.
+		async function* neverEndingStream(): AsyncIterable<ResponseStreamEvent> {
+			yield {
+				type: "response.completed",
+				response: { id: "resp_open", status: "completed", usage: { input_tokens: 1, output_tokens: 1 } },
+			} as unknown as ResponseStreamEvent;
+			await new Promise<never>(() => {}); // connection held open forever
+		}
+
+		await processResponsesStream(neverEndingStream(), output, stream, makeModel(), {
+			onCompleted: () => {
+				onCompletedCalled = true;
+			},
+		});
+
+		expect(onCompletedCalled).toBe(true);
+		expect(output.responseId).toBe("resp_open");
+	});
 });

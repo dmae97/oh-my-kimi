@@ -5,10 +5,36 @@
  * them.
  */
 
-import { HL_FILE_HASH_SEP, HL_FILE_PREFIX, HL_FILE_SUFFIX } from "./format";
+import { formatNumberedLine, HL_FILE_HASH_SEP, HL_FILE_PREFIX, HL_FILE_SUFFIX } from "./format";
 
 /** Lines of context shown either side of a hash mismatch. */
 export const MISMATCH_CONTEXT = 2;
+
+/**
+ * Render numbered `LINE:TEXT` context rows around `anchorLines`
+ * (±{@link MISMATCH_CONTEXT} lines each), `*`-marking the anchored lines and
+ * separating non-adjacent runs with `...`. Out-of-range anchors contribute no
+ * rows; returns an empty array when every anchor is out of range.
+ */
+export function formatAnchoredContext(anchorLines: readonly number[], fileLines: readonly string[]): string[] {
+	const displayLines = new Set<number>();
+	for (const line of anchorLines) {
+		if (line < 1 || line > fileLines.length) continue;
+		const lo = Math.max(1, line - MISMATCH_CONTEXT);
+		const hi = Math.min(fileLines.length, line + MISMATCH_CONTEXT);
+		for (let lineNum = lo; lineNum <= hi; lineNum++) displayLines.add(lineNum);
+	}
+	const anchorSet = new Set(anchorLines);
+	const rows: string[] = [];
+	let previous = -1;
+	for (const lineNum of [...displayLines].sort((a, b) => a - b)) {
+		if (previous !== -1 && lineNum > previous + 1) rows.push("...");
+		previous = lineNum;
+		const marker = anchorSet.has(lineNum) ? "*" : " ";
+		rows.push(`${marker}${formatNumberedLine(lineNum, fileLines[lineNum - 1] ?? "")}`);
+	}
+	return rows;
+}
 
 /** Optional patch envelope start marker; silently consumed when present. */
 export const BEGIN_PATCH_MARKER = "*** Begin Patch";
@@ -50,10 +76,15 @@ export const EMPTY_BLOCK =
  * Error text emitted when a block-anchored op cannot be resolved to a
  * syntactic block (unrecognized language, blank/out-of-range line, no node
  * begins on line N such as a lone closing delimiter, or the resolved block has
- * a syntax error). Names the offending line and steers back to an explicit
- * concrete-line form.
+ * a syntax error). Names the offending line, steers back to an explicit
+ * concrete-line form, and — when `fileLines` is provided — appends a
+ * {@link formatAnchoredContext} preview of the file around the anchor line.
  */
-export function blockUnresolvedMessage(line: number, op: "replace" | "delete" | "insert_after" = "replace"): string {
+export function blockUnresolvedMessage(
+	line: number,
+	op: "replace" | "delete" | "insert_after" = "replace",
+	fileLines?: readonly string[],
+): string {
 	const phrase =
 		op === "delete"
 			? `delete block ${line}`
@@ -66,11 +97,15 @@ export function blockUnresolvedMessage(line: number, op: "replace" | "delete" | 
 			: op === "insert_after"
 				? `\`insert after M:\` with the block's explicit last line`
 				: `\`replace ${line}..M:\` with the block's explicit end line`;
-	return (
+	let message =
 		`\`${phrase}\` could not resolve a syntactic block beginning on line ${line}. ` +
 		`The language may be unsupported, the line may be blank or a closing delimiter, or the block may not parse. ` +
-		`Use ${fallback} instead.`
-	);
+		`Use ${fallback} instead.`;
+	if (fileLines) {
+		const context = formatAnchoredContext([line], fileLines);
+		if (context.length > 0) message += `\n\n${context.join("\n")}`;
+	}
+	return message;
 }
 
 /**

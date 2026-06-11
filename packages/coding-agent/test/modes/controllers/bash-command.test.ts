@@ -38,7 +38,7 @@ describe("bash shortcut command", () => {
 			chatContainer: createContainer(),
 			pendingMessagesContainer: createContainer(),
 			pendingBashComponents: [],
-			ui: { requestRender: vi.fn() },
+			ui: { requestRender: vi.fn(), requestComponentRender: vi.fn() },
 			present: vi.fn(),
 			showError: vi.fn(),
 		} as unknown as InteractiveModeContext;

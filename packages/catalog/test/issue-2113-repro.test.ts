@@ -17,7 +17,7 @@
  * moonshot discovery mapper and stamps default thinking metadata.
  */
 import { describe, expect, it } from "bun:test";
-import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
+import { type OpenAICompletionsOptions, streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import type { AssistantMessage, Context } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
@@ -82,6 +82,7 @@ interface CapturedRequest {
 
 async function runHiTurn(
 	model: Model<"openai-completions">,
+	options?: Pick<OpenAICompletionsOptions, "reasoning">,
 ): Promise<{ captured: CapturedRequest; assistant: AssistantMessage }> {
 	const captured: CapturedRequest = { url: "", body: {} };
 	const fetchMock = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
@@ -92,7 +93,7 @@ async function runHiTurn(
 		return buildMockMoonshotResponse();
 	}) as typeof fetch;
 
-	const stream = streamOpenAICompletions(model, basicContext(), { apiKey: "test-key", fetch: fetchMock });
+	const stream = streamOpenAICompletions(model, basicContext(), { apiKey: "test-key", fetch: fetchMock, ...options });
 	for await (const _ of stream) {
 		// drain until terminal event
 	}
@@ -155,6 +156,14 @@ describe("issue #2113 — moonshot kimi-k2.6 discovery and wire format", () => {
 		expect(textBlock).toBeDefined();
 	});
 
+	it("uses Moonshot-native max_tokens and omits OpenAI store control", async () => {
+		const model = moonshotKimiModel("kimi-k2.5", true);
+		const { captured } = await runHiTurn(model, { reasoning: "high" });
+
+		expect(captured.body.max_tokens).toBeDefined();
+		expect(captured.body.max_completion_tokens).toBeUndefined();
+		expect(captured.body.store).toBeUndefined();
+	});
 	it("wire body includes thinking.keep='all' when reasoning is explicitly requested", async () => {
 		const model = moonshotKimiModel("kimi-k2.6", true);
 		const captured: CapturedRequest = { url: "", body: {} };

@@ -18,6 +18,9 @@ export interface StatusLineSettings {
 	segmentOptions?: StatusLineSegmentOptions;
 	showHookStatus?: boolean;
 	sessionAccent?: boolean;
+	/** Drop the theme's `statusLineBg` fill and powerline caps so the bar
+	 *  inherits the terminal's default background. */
+	transparent?: boolean;
 }
 
 export type EffectiveStatusLineSettings = Required<

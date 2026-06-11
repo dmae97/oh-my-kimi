@@ -51,25 +51,34 @@ async function cleanBundleOutputs(): Promise<void> {
 async function main(): Promise<void> {
 	const start = Bun.nanoseconds();
 	await cleanBundleOutputs();
-	await runCommand([
-		"bun",
-		"build",
-		"--target=bun",
-		"--outdir",
-		"dist",
-		"--minify-whitespace",
-		"--minify-syntax",
-		"--keep-names",
-		"--external",
-		"mupdf",
-		"--external",
-		"@oh-my-pi/pi-natives",
-		"--external",
-		"@huggingface/transformers",
-		"--define",
-		'process.env.PI_BUNDLED="true"',
-		"./src/cli.ts",
-	]);
+	// The npm bundle ships no stats dashboard sources or prebuilt dist/client,
+	// so embed the dashboard archive the same way compiled binaries do
+	// (scripts/build-binary.ts). Reset afterwards to keep the checked-in
+	// placeholder empty.
+	await runCommand(["bun", "--cwd=../stats", "scripts/generate-client-bundle.ts", "--generate"]);
+	try {
+		await runCommand([
+			"bun",
+			"build",
+			"--target=bun",
+			"--outdir",
+			"dist",
+			"--minify-whitespace",
+			"--minify-syntax",
+			"--keep-names",
+			"--external",
+			"mupdf",
+			"--external",
+			"@oh-my-pi/pi-natives",
+			"--external",
+			"@huggingface/transformers",
+			"--define",
+			'process.env.PI_BUNDLED="true"',
+			"./src/cli.ts",
+		]);
+	} finally {
+		await runCommand(["bun", "--cwd=../stats", "scripts/generate-client-bundle.ts", "--reset"]);
+	}
 	await ensureShebang();
 	const stat = await fs.stat(cliPath);
 	const elapsedMs = (Bun.nanoseconds() - start) / 1_000_000;

@@ -37,6 +37,11 @@ export interface GalleryFixture {
 	 */
 	customRendered?: boolean;
 	/**
+	 * Renderer-registry key to use when the fixture key is a variant of a tool
+	 * (e.g. `irc_wait` → `irc`). Defaults to the fixture key.
+	 */
+	renderer?: string;
+	/**
 	 * Arguments shown during the streaming state — a partial view of {@link args}
 	 * as if the tool-call JSON were still arriving. May include `__partialJson`
 	 * for renderers (bash, edit) that surface fields before the object closes.

@@ -197,7 +197,7 @@ describe("runSubprocess yield reminders", () => {
 		expect(createAgentSessionSpy).toHaveBeenCalledTimes(1);
 	});
 
-	it("renders shared task context in subagent system prompt before now", async () => {
+	it("splices the subagent role prompt before the trailing system section", async () => {
 		let userPrompt = "";
 		const session = createMockSession(({ text, emit }) => {
 			userPrompt = text;
@@ -217,7 +217,6 @@ describe("runSubprocess yield reminders", () => {
 		await runSubprocess({
 			...baseOptions,
 			id: "subagent-context-system",
-			context: "Shared task background",
 			task: "Your assignment is below.\nBe thorough and complete fully before yielding.\n\nDo the task.",
 		});
 
@@ -229,11 +228,12 @@ describe("runSubprocess yield reminders", () => {
 		expect(systemPrompt).toHaveLength(4);
 		expect(systemPrompt?.[0]).toBe("system");
 		expect(systemPrompt?.[1]).toBe("project");
-		expect(systemPrompt?.[2]).toMatch(/CONTEXT\n=+\n\nShared task background/);
 		expect(systemPrompt?.[2]).toMatch(/ROLE\n=+\n\ntest/);
+		// The parent-conversation CONTEXT section is gone: subagents get their
+		// background inside the assignment (or a local:// file), never a dump.
+		expect(systemPrompt?.[2]).not.toMatch(/CONTEXT\n=+/);
 		expect(systemPrompt?.[3]).toBe("now");
 		expect(userPrompt).not.toMatch(/CONTEXT\n=+/);
-		expect(userPrompt).not.toContain("Shared task background");
 	});
 
 	it("sends reminder prompt when subagent stops without yield", async () => {
@@ -586,7 +586,7 @@ describe("runSubprocess yield reminders", () => {
 
 		expect(result.aborted).toBe(true);
 		expect(errorSpy).not.toHaveBeenCalledWith("Subagent prompt failed", expect.anything());
-		expect(debugSpy).toHaveBeenCalledWith("Subagent prompt aborted", expect.anything());
+		expect(debugSpy).toHaveBeenCalledWith("Subagent prompt aborted");
 	});
 });
 

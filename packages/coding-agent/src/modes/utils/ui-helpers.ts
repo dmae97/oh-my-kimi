@@ -35,6 +35,7 @@ import {
 	type SkillPromptDetails,
 } from "../../session/messages";
 import type { SessionContext } from "../../session/session-manager";
+import { createIrcMessageCard } from "../../tools/irc";
 import { formatBytes, formatDuration } from "../../tools/render-utils";
 
 type TextBlock = { type: "text"; text: string };
@@ -200,39 +201,30 @@ export class UiHelpers {
 								from?: string;
 								to?: string;
 								message?: string;
-								reply?: string;
 								body?: string;
-								kind?: "message" | "reply";
+								replyTo?: string;
 							}>
 						).details;
-						let arrow: string;
-						let body: string;
-						if (message.customType === "irc:incoming") {
-							const peer = details?.from ?? "?";
-							body = details?.message ?? "";
-							arrow = `⇦ ${peer}`;
-						} else if (message.customType === "irc:autoreply") {
-							const peer = details?.to ?? "?";
-							body = details?.reply ?? "";
-							arrow = `⇨ ${peer}`;
-						} else {
-							const from = details?.from ?? "?";
-							const to = details?.to ?? "?";
-							body = details?.body ?? "";
-							arrow = `${from} ⇨ ${to}`;
-						}
-						const block = new TranscriptBlock();
-						const header = `${theme.fg("accent", `[IRC] ${arrow}`)}`;
-						const headerComponent = new Text(header, 1, 0);
-						block.addChild(headerComponent);
-						if (body) {
-							for (const line of body.split("\n")) {
-								const lineComponent = new Text(theme.fg("muted", `  ${line}`), 0, 0);
-								block.addChild(lineComponent);
-							}
-						}
-						this.ctx.chatContainer.addChild(block);
-						return [block];
+						const kind =
+							message.customType === "irc:incoming"
+								? ("incoming" as const)
+								: message.customType === "irc:autoreply"
+									? ("autoreply" as const)
+									: ("relay" as const);
+						const card = createIrcMessageCard(
+							{
+								kind,
+								from: details?.from,
+								to: details?.to,
+								body: kind === "incoming" ? details?.message : details?.body,
+								replyTo: details?.replyTo,
+								timestamp: message.timestamp,
+							},
+							() => this.ctx.toolOutputExpanded,
+							theme,
+						);
+						this.ctx.chatContainer.addChild(card);
+						return [card];
 					}
 					const renderer = this.ctx.session.extensionRunner?.getMessageRenderer(message.customType);
 					// Both HookMessage and CustomMessage have the same structure, cast for compatibility
@@ -337,13 +329,23 @@ export class UiHelpers {
 		let readGroup: ReadToolGroupComponent | null = null;
 		const readToolCallArgs = new Map<string, Record<string, unknown>>();
 		const readToolCallAssistantComponents = new Map<string, AssistantMessageComponent>();
-		const deferredMessages: AgentMessage[] = [];
-		for (const message of sessionContext.messages) {
-			// Defer compaction summaries so they render at the bottom (visible after scroll)
-			if (message.role === "compactionSummary") {
-				deferredMessages.push(message);
-				continue;
+		// Rebuild-time mirror of the event controller's displaceable-poll
+		// bookkeeping: a `job` poll that found every watched job still running is
+		// superseded by the next `job` call, so a rebuilt transcript collapses a
+		// repeated-poll run to its final snapshot instead of replaying the spam.
+		let waitingPoll: ToolExecutionComponent | null = null;
+		const resolveWaitingPoll = (nextToolName?: string) => {
+			const previous = waitingPoll;
+			if (!previous) return;
+			waitingPoll = null;
+			if (nextToolName === "job" && previous.isDisplaceableBlock()) {
+				this.ctx.chatContainer.removeChild(previous);
 			}
+			// Sealing freezes the block and stops the waiting-poll spinner that
+			// updateResult armed.
+			previous.seal();
+		};
+		for (const message of sessionContext.messages) {
 			// Assistant messages need special handling for tool calls
 			if (message.role === "assistant") {
 				this.ctx.addMessageToChat(message);
@@ -379,6 +381,7 @@ export class UiHelpers {
 					if (content.type !== "toolCall") {
 						continue;
 					}
+					resolveWaitingPoll(content.name);
 
 					if (
 						content.name === "read" &&
@@ -493,8 +496,17 @@ export class UiHelpers {
 				if (component) {
 					component.updateResult(message, false, message.toolCallId);
 					this.ctx.pendingTools.delete(message.toolCallId);
+					if (
+						message.toolName === "job" &&
+						component instanceof ToolExecutionComponent &&
+						component.isDisplaceableBlock()
+					) {
+						waitingPoll = component;
+					}
 				}
 			} else {
+				// A user prompt closes the displacement window, same as the live path.
+				if (message.role === "user") resolveWaitingPoll();
 				// All other messages use standard rendering
 				this.ctx.addMessageToChat(message, options);
 			}
@@ -504,17 +516,15 @@ export class UiHelpers {
 		// rebuilt group freezes (even with a never-persisted result) and commits to
 		// native scrollback like every other historical block.
 		readGroup?.seal();
-
-		// Render deferred messages (compaction summaries) at the bottom so they're visible
-		for (const message of deferredMessages) {
-			this.ctx.addMessageToChat(message, options);
-		}
+		// A trailing waiting poll is final history on rebuild; seal it so it
+		// freezes (and its spinner timer stops) like every other block.
+		resolveWaitingPoll();
 
 		this.ctx.pendingTools.clear();
 		this.ctx.ui.requestRender();
 	}
 
-	renderInitialMessages(prebuiltContext?: SessionContext, options: RenderInitialMessagesOptions = {}): void {
+	renderInitialMessages(options: RenderInitialMessagesOptions = {}): void {
 		// This path is used to rebuild the visible chat transcript (e.g. after custom/debug UI).
 		// Clear existing rendered chat first to avoid duplicating the full session in the container.
 		// On a non-preserving rebuild the existing blocks are discarded for good, so
@@ -530,8 +540,9 @@ export class UiHelpers {
 		this.ctx.pendingBashComponents = [];
 		this.ctx.pendingPythonComponents = [];
 
-		// Reuse a pre-built context when available (e.g. from navigateTree) to avoid a second O(N) walk.
-		const context = prebuiltContext ?? this.ctx.sessionManager.buildSessionContext();
+		// Display always uses the full-history transcript: compactions show as
+		// inline dividers instead of restarting the visible conversation.
+		const context = this.ctx.session.buildTranscriptSessionContext();
 		this.ctx.renderSessionContext(context, {
 			updateFooter: true,
 			populateHistory: true,

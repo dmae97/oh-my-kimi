@@ -148,6 +148,16 @@ function snapshotAssistantMessageEvent(event: AssistantMessageEvent): AssistantM
  * (missing `content` array → crash on reload). We coerce at the single boundary where untyped
  * results enter the agent loop, so every downstream consumer can rely on the type.
  */
+const EMPTY_ERROR_TOOL_RESULT_TEXT = "Tool failed with no output.";
+
+function hasSubstantiveToolResultContent(content: AgentToolResult["content"]): boolean {
+	for (const block of content) {
+		if (block.type === "image") return true;
+		if (block.type === "text" && block.text.trim().length > 0) return true;
+	}
+	return false;
+}
+
 function coerceToolResult(raw: unknown): { result: AgentToolResult<unknown>; malformed: boolean } {
 	const rawObj = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
 	const rawContent = rawObj?.content;
@@ -193,8 +203,14 @@ function coerceToolResult(raw: unknown): { result: AgentToolResult<unknown>; mal
 			text: `Tool returned an invalid result: ${invalidBlocks} content block${invalidBlocks === 1 ? "" : "s"} had an unsupported shape.`,
 		});
 	}
+	const isError = explicitError || invalidBlocks > 0;
+	// Anthropic rejects tool_result blocks with is_error: true and empty content.
+	if (isError && !hasSubstantiveToolResultContent(content)) {
+		content.length = 0;
+		content.push({ type: "text", text: EMPTY_ERROR_TOOL_RESULT_TEXT });
+	}
 	return {
-		result: { content, details, ...(explicitError || invalidBlocks > 0 ? { isError: true } : {}) },
+		result: { content, details, ...(isError ? { isError: true } : {}) },
 		malformed: invalidBlocks > 0,
 	};
 }
@@ -564,8 +580,10 @@ async function runLoopBody(
 	streamFn?: StreamFn,
 ): Promise<void> {
 	let firstTurn = true;
-	// Check for steering messages at start (user may have typed while waiting)
-	let pendingMessages: AgentMessage[] = (await config.getSteeringMessages?.()) || [];
+	// Check for steering messages at start (user may have typed while waiting).
+	// Skip when the run is already externally aborted — dequeuing would strand
+	// the messages in a run that is about to die.
+	let pendingMessages: AgentMessage[] = signal?.aborted ? [] : (await config.getSteeringMessages?.()) || [];
 	let harmonyRetryAttempt = 0;
 	let harmonyTruncateResumeCount = 0;
 
@@ -743,7 +761,12 @@ async function runLoopBody(
 
 			stream.push({ type: "turn_end", message, toolResults });
 
-			const steering = steeringMessagesFromExecution ?? ((await config.getSteeringMessages?.()) || []);
+			// On external abort (user interrupt), leave the steering queue intact: the
+			// session aborts then continues, delivering the queue into a fresh run.
+			// Draining it here would inject the messages right before a model call that
+			// instantly aborts — message lands in history, agent never responds.
+			const steering =
+				steeringMessagesFromExecution ?? (signal?.aborted ? [] : (await config.getSteeringMessages?.()) || []);
 			if (hasMoreToolCalls) {
 				// Mid-work: fold any non-interrupting asides into the next turn alongside steering.
 				const asides = resolveAsides(await config.getAsideMessages?.());
@@ -758,8 +781,9 @@ async function runLoopBody(
 
 		// Agent would stop here. Drain non-interrupting asides + follow-up messages.
 		await config.onBeforeYield?.();
-		const asideMessages = resolveAsides(await config.getAsideMessages?.());
-		const followUpMessages = (await config.getFollowUpMessages?.()) || [];
+		// Skip queue drains when externally aborted (same stranding hazard as above).
+		const asideMessages = signal?.aborted ? [] : resolveAsides(await config.getAsideMessages?.());
+		const followUpMessages = signal?.aborted ? [] : (await config.getFollowUpMessages?.()) || [];
 		if (asideMessages.length > 0 || followUpMessages.length > 0) {
 			// Set as pending so the inner loop processes them before stopping.
 			pendingMessages = [...asideMessages, ...followUpMessages];
@@ -1253,11 +1277,16 @@ async function executeToolCalls(
 	}));
 
 	const checkSteering = async (): Promise<void> => {
-		if (!shouldInterruptImmediately || !getSteeringMessages || interruptState.triggered) {
+		// `signal` (external/user abort) is checked separately from the internal
+		// steeringAbortController: once the run is externally aborted it is
+		// unwinding, and draining the steering queue here would strand the
+		// messages in the dying run instead of leaving them for the post-abort
+		// continue (interruptAndFlushQueuedMessages → Agent.continue()).
+		if (!shouldInterruptImmediately || !getSteeringMessages || interruptState.triggered || signal?.aborted) {
 			return;
 		}
 		const check = steeringCheckTail.then(async () => {
-			if (interruptState.triggered) return;
+			if (interruptState.triggered || signal?.aborted) return;
 			const steering = await getSteeringMessages();
 			if (steering.length > 0) {
 				steeringMessages = steering;
@@ -1534,7 +1563,19 @@ async function executeToolCalls(
 
 	for (let index = 0; index < records.length; index++) {
 		const record = records[index];
-		const concurrency = record.tool?.concurrency ?? "shared";
+		const concurrencyMode = record.tool?.concurrency;
+		let concurrency: "shared" | "exclusive";
+		if (typeof concurrencyMode === "function") {
+			// Resolved from raw pre-validation args; a throwing resolver must not
+			// take down the whole batch, so fall back to the safe (serial) mode.
+			try {
+				concurrency = concurrencyMode(record.args);
+			} catch {
+				concurrency = "exclusive";
+			}
+		} else {
+			concurrency = concurrencyMode ?? "shared";
+		}
 		const start = concurrency === "exclusive" ? Promise.all([lastExclusive, ...sharedTasks]) : lastExclusive;
 		const task = start.then(() => runTool(record, index));
 		tasks.push(task);

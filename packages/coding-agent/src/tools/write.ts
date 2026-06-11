@@ -37,12 +37,15 @@ import { type OutputMeta, outputMeta } from "./output-meta";
 import { formatPathRelativeToCwd, isInternalUrlPath } from "./path-utils";
 import { enforcePlanModeWrite, resolvePlanPath } from "./plan-mode-guard";
 import {
+	cachedRenderedString,
+	createRenderedStringCache,
 	formatDiagnostics,
 	formatErrorDetail,
 	formatExpandHint,
 	formatMoreItems,
 	formatStatusIcon,
 	getLspBatchRequest,
+	type RenderedStringCache,
 	replaceTabs,
 	shortenPath,
 } from "./render-utils";
@@ -1042,37 +1045,40 @@ function formatStreamingContent(
 	language: string | undefined,
 	uiTheme: Theme,
 	spinnerFrame?: number,
+	cache?: RenderedStringCache,
 ): string {
 	if (!content) return "";
-	const lines = normalizeDisplayText(content).split("\n");
-	const totalLines = lines.length;
-	// Collapsed: follow the streaming edge with a bounded tail window so the box
-	// stays short enough not to strand its scrolled-off head above the viewport
-	// while the block is volatile. `Ctrl+O` (expanded) lifts the cap for a
-	// deliberate full view — matching the eval streaming preview.
-	const startIndex = expanded ? 0 : Math.max(0, totalLines - WRITE_STREAMING_PREVIEW_LINES);
-	const visibleLines = lines.slice(startIndex);
-	const hidden = startIndex;
-	const highlighted = highlightCode(visibleLines.join("\n"), language);
-	const lineNumberWidth = Math.max(WRITE_GUTTER_MIN_WIDTH, String(totalLines).length);
+	const bodyText = cachedRenderedString(cache, uiTheme, expanded, language ?? "", content, () => {
+		const lines = normalizeDisplayText(content).split("\n");
+		const totalLines = lines.length;
+		// Collapsed: follow the streaming edge with a bounded tail window so the box
+		// stays short enough not to strand its scrolled-off head above the viewport
+		// while the block is volatile. `Ctrl+O` (expanded) lifts the cap for a
+		// deliberate full view — matching the eval streaming preview.
+		const startIndex = expanded ? 0 : Math.max(0, totalLines - WRITE_STREAMING_PREVIEW_LINES);
+		const visibleLines = lines.slice(startIndex);
+		const hidden = startIndex;
+		const highlighted = highlightCode(visibleLines.join("\n"), language);
+		const lineNumberWidth = Math.max(WRITE_GUTTER_MIN_WIDTH, String(totalLines).length);
 
-	let text = "\n\n";
-	if (hidden > 0) {
-		text += `${uiTheme.fg("dim", `… (${hidden} earlier line${hidden === 1 ? "" : "s"})`)}\n`;
-	}
-	for (let i = 0; i < highlighted.length; i++) {
-		const lineNum = startIndex + i + 1;
-		const gutter = uiTheme.fg("dim", `${String(lineNum).padStart(lineNumberWidth, " ")} `);
-		const body = replaceTabs(highlighted[i] ?? "");
-		text += `${gutter}${body}\n`;
-	}
+		let text = "\n\n";
+		if (hidden > 0) {
+			text += `${uiTheme.fg("dim", `… (${hidden} earlier line${hidden === 1 ? "" : "s"})`)}\n`;
+		}
+		for (let i = 0; i < highlighted.length; i++) {
+			const lineNum = startIndex + i + 1;
+			const gutter = uiTheme.fg("dim", `${String(lineNum).padStart(lineNumberWidth, " ")} `);
+			const body = replaceTabs(highlighted[i] ?? "");
+			text += `${gutter}${body}\n`;
+		}
+		return text;
+	});
 	// The animated glyph lives on this trailing line — inside the transcript's
 	// volatile-tail holdback — never in the header: an animating head row pins
 	// the native-scrollback commit boundary at the top of the block, so a long
 	// expanded preview could never scroll-append mid-stream.
 	const spinner = spinnerFrame !== undefined ? `${formatStatusIcon("running", uiTheme, spinnerFrame)} ` : "";
-	text += `${spinner}${uiTheme.fg("dim", `… (streaming)`)}`;
-	return text;
+	return `${bodyText}${spinner}${uiTheme.fg("dim", `… (streaming)`)}`;
 }
 
 function renderContentPreview(
@@ -1080,29 +1086,32 @@ function renderContentPreview(
 	expanded: boolean,
 	language: string | undefined,
 	uiTheme: Theme,
+	cache?: RenderedStringCache,
 ): string {
 	if (!content) return "";
-	const rawLines = normalizeDisplayText(content).split("\n");
-	const totalLines = rawLines.length;
-	const maxLines = expanded ? totalLines : Math.min(totalLines, WRITE_PREVIEW_LINES);
-	const visibleLines = rawLines.slice(0, maxLines);
-	const highlighted = highlightCode(visibleLines.join("\n"), language);
-	const lineNumberWidth = Math.max(WRITE_GUTTER_MIN_WIDTH, String(totalLines).length);
-	const hidden = totalLines - maxLines;
+	return cachedRenderedString(cache, uiTheme, expanded, language ?? "", content, () => {
+		const rawLines = normalizeDisplayText(content).split("\n");
+		const totalLines = rawLines.length;
+		const maxLines = expanded ? totalLines : Math.min(totalLines, WRITE_PREVIEW_LINES);
+		const visibleLines = rawLines.slice(0, maxLines);
+		const highlighted = highlightCode(visibleLines.join("\n"), language);
+		const lineNumberWidth = Math.max(WRITE_GUTTER_MIN_WIDTH, String(totalLines).length);
+		const hidden = totalLines - maxLines;
 
-	let text = "\n\n";
-	for (let i = 0; i < highlighted.length; i++) {
-		const lineNum = i + 1;
-		const gutter = uiTheme.fg("dim", `${String(lineNum).padStart(lineNumberWidth, " ")} `);
-		const body = replaceTabs(highlighted[i] ?? "");
-		text += `${gutter}${body}\n`;
-	}
-	if (!expanded && hidden > 0) {
-		const hint = formatExpandHint(uiTheme, expanded, hidden > 0);
-		const moreLine = `${formatMoreItems(hidden, "line")}${hint ? ` ${hint}` : ""}`;
-		text += uiTheme.fg("dim", moreLine);
-	}
-	return text.trimEnd();
+		let text = "\n\n";
+		for (let i = 0; i < highlighted.length; i++) {
+			const lineNum = i + 1;
+			const gutter = uiTheme.fg("dim", `${String(lineNum).padStart(lineNumberWidth, " ")} `);
+			const body = replaceTabs(highlighted[i] ?? "");
+			text += `${gutter}${body}\n`;
+		}
+		if (!expanded && hidden > 0) {
+			const hint = formatExpandHint(uiTheme, expanded, hidden > 0);
+			const moreLine = `${formatMoreItems(hidden, "line")}${hint ? ` ${hint}` : ""}`;
+			text += uiTheme.fg("dim", moreLine);
+		}
+		return text.trimEnd();
+	});
 }
 
 export const writeToolRenderer = {
@@ -1125,9 +1134,17 @@ export const writeToolRenderer = {
 			},
 			uiTheme,
 		);
+		const streamingCache = createRenderedStringCache();
 		return framedBlock(uiTheme, width => {
 			const body = args.content
-				? formatStreamingContent(args.content, Boolean(options?.expanded), lang, uiTheme, options?.spinnerFrame)
+				? formatStreamingContent(
+						args.content,
+						Boolean(options?.expanded),
+						lang,
+						uiTheme,
+						options?.spinnerFrame,
+						streamingCache,
+					)
 				: "";
 			const bodyLines = body ? body.split("\n") : [];
 			while (bodyLines.length > 0 && bodyLines[0].trim() === "") bodyLines.shift();
@@ -1189,9 +1206,10 @@ export const writeToolRenderer = {
 		);
 		const diagnostics = result.details?.diagnostics;
 
+		const previewCache = createRenderedStringCache();
 		return framedBlock(uiTheme, width => {
 			const { expanded } = options;
-			let body = renderContentPreview(fileContent, expanded, lang, uiTheme);
+			let body = renderContentPreview(fileContent, expanded, lang, uiTheme, previewCache);
 			if (diagnostics) {
 				const diagText = formatDiagnostics(diagnostics, expanded, uiTheme, fp =>
 					uiTheme.getLangIcon(getLanguageFromPath(fp)),

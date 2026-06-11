@@ -18,14 +18,8 @@ const TIPS: readonly string[] = tipsText
 	.filter(line => line.length > 0);
 
 /**
- * Tip chosen once per process so the pre-TUI startup splash and the in-TUI
- * welcome screen show the same tip instead of shuffling on the swap.
- */
-const PROCESS_TIP: string | undefined = TIPS.length > 0 ? TIPS[Math.floor(Math.random() * TIPS.length)] : undefined;
-
-/**
- * Fixed number of session rows in the welcome box so its height doesn't shift
- * between the pre-TUI splash (loading placeholder) and the loaded state.
+ * Fixed number of session rows in the welcome box so its height stays stable
+ * across recent-session updates.
  */
 export const WELCOME_SESSION_SLOTS = 4;
 
@@ -76,10 +70,8 @@ export interface LspServerInfo {
 export class WelcomeComponent implements Component {
 	#animStart: number | null = null;
 	#animTimer: ReturnType<typeof setInterval> | null = null;
-	/** When set, a non-animating render shows the intro's first frame instead of the resting frame. */
-	#holdIntroFirstFrame = false;
-	/** Per-process tip so re-renders (intro, LSP updates, splash swap) don't shuffle it. */
-	readonly #tip: string | undefined = PROCESS_TIP;
+	/** Tip chosen once per instance so re-renders (intro, LSP updates) don't shuffle it. */
+	readonly #tip: string | undefined = TIPS.length > 0 ? TIPS[Math.floor(Math.random() * TIPS.length)] : undefined;
 	// Render cache: the welcome box is the first transcript-area component, so
 	// returning a stable array reference keeps the whole frame prefix stable.
 	// Bypassed while the intro animation runs (every frame differs).
@@ -90,7 +82,7 @@ export class WelcomeComponent implements Component {
 		private readonly version: string,
 		private modelName: string,
 		private providerName: string,
-		private recentSessions: RecentSession[] | null = [],
+		private recentSessions: RecentSession[] = [],
 		private lspServers: LspServerInfo[] = [],
 	) {}
 
@@ -100,23 +92,12 @@ export class WelcomeComponent implements Component {
 	}
 
 	/**
-	 * Freeze the logo on the intro animation's first frame. The pre-TUI startup
-	 * splash uses this so the in-TUI intro — which starts at that exact frame —
-	 * picks up seamlessly from the splash's static box.
-	 */
-	holdIntroFirstFrame(): void {
-		this.#holdIntroFirstFrame = true;
-		this.invalidate();
-	}
-
-	/**
 	 * Play a one-shot intro that sweeps the gradient through every phase
 	 * before settling on the resting frame. Safe to call multiple times —
 	 * subsequent calls reset and replay.
 	 */
 	playIntro(requestRender: () => void): void {
 		this.#stopAnimation();
-		this.#holdIntroFirstFrame = false;
 		this.#animStart = performance.now();
 		requestRender();
 		this.#animTimer = setInterval(() => {
@@ -217,9 +198,7 @@ export class WelcomeComponent implements Component {
 
 		// Recent sessions content
 		const sessionLines: string[] = [];
-		if (this.recentSessions === null) {
-			sessionLines.push(` ${theme.fg("dim", "Loading…")}`);
-		} else if (this.recentSessions.length === 0) {
+		if (this.recentSessions.length === 0) {
 			sessionLines.push(` ${theme.fg("dim", "No recent sessions")}`);
 		} else {
 			// Reserve width for the bullet prefix (" • ") and the trailing " (timeAgo)"
@@ -238,7 +217,7 @@ export class WelcomeComponent implements Component {
 				);
 			}
 		}
-		// Pad to the fixed slot count so the box doesn't grow when sessions load in.
+		// Pad to the fixed slot count so the box height doesn't depend on session count.
 		while (sessionLines.length < WELCOME_SESSION_SLOTS) {
 			sessionLines.push("");
 		}
@@ -377,9 +356,9 @@ export class WelcomeComponent implements Component {
 		return str + padding(width - visLen);
 	}
 
-	/** Pick the logo frame for the current intro phase, or the resting/held frame. */
+	/** Pick the logo frame for the current intro phase, or the resting frame. */
 	#currentLogoFrame(): readonly string[] {
-		if (this.#animStart == null) return this.#holdIntroFirstFrame ? INTRO_FIRST_FRAME : REST_FRAME;
+		if (this.#animStart == null) return REST_FRAME;
 		const elapsed = performance.now() - this.#animStart;
 		if (elapsed >= INTRO_MS) return REST_FRAME;
 		return introLogoFrame(elapsed / INTRO_MS);
@@ -509,9 +488,6 @@ function introLogoFrame(progress: number): string[] {
 	const shineStrength = (1 - eased) ** 1.5;
 	return gradientLogo(PI_LOGO, phase, { strength: shineStrength, pos: shinePos });
 }
-
-/** First intro frame, cached for splash-held renders (resize re-renders reuse it). */
-const INTRO_FIRST_FRAME = introLogoFrame(0);
 
 /** Resting gradient frame, cached for re-renders outside of the intro. */
 const REST_FRAME = gradientLogo(PI_LOGO, 0);

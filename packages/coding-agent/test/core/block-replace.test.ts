@@ -148,8 +148,9 @@ describe("replace block — native tree-sitter resolution end-to-end", () => {
 			// Line 3 is `  }` — a closing delimiter, not a block opener.
 			const input = `${header}\nreplace block 3:\n+  }`;
 
+			// Steers to the concrete form and previews the file around the anchor (`*`-marked).
 			await expect(executeHashlineSingle(executeOptions(tempDir, input, session))).rejects.toThrow(
-				/could not resolve a syntactic block beginning on line 3.*replace 3\.\.M:/s,
+				/could not resolve a syntactic block beginning on line 3.*replace 3\.\.M:.*^ 1:function x\(\) \{$.*^\*3: {2}\}$/ms,
 			);
 			// Disk untouched — refusal never leaves a partial write.
 			expect(await Bun.file(filePath).text()).toBe(TS_SOURCE);

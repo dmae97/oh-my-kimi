@@ -235,9 +235,25 @@ export class InputController {
 		for (const key of this.ctx.keybindings.getKeys("app.clipboard.copyLine")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => this.handleCopyCurrentLine());
 		}
-		for (const key of this.ctx.keybindings.getKeys("app.session.observe")) {
-			this.ctx.editor.setCustomKeyHandler(key, () => this.ctx.showSessionObserver());
+		const hubKeys = new Set([
+			...this.ctx.keybindings.getKeys("app.agents.hub"),
+			...this.ctx.keybindings.getKeys("app.session.observe"),
+		]);
+		for (const key of hubKeys) {
+			this.ctx.editor.setCustomKeyHandler(key, () => this.ctx.showAgentHub());
 		}
+
+		// Double-tap left arrow on an empty editor opens the agent hub — same
+		// 500ms window as the double-escape state machine above.
+		this.ctx.editor.onLeftAtStart = () => {
+			const now = Date.now();
+			if (now - this.ctx.lastLeftTapTime < 500) {
+				this.ctx.lastLeftTapTime = 0;
+				this.ctx.showAgentHub();
+			} else {
+				this.ctx.lastLeftTapTime = now;
+			}
+		};
 
 		this.#setupEnhancedPaste();
 

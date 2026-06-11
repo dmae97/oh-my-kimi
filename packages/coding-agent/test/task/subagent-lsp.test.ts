@@ -18,7 +18,9 @@ import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 
 const TEST_TASK: TaskParams = {
 	agent: "task",
-	tasks: [{ id: "CheckLsp", description: "Check LSP availability", assignment: "Inspect LSP tools." }],
+	id: "CheckLsp",
+	description: "Check LSP availability",
+	assignment: "Inspect LSP tools.",
 };
 
 function createAssistantStopMessage(text: string): AssistantMessage {
