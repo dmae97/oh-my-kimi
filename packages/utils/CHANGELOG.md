@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## [15.11.1] - 2026-06-11
+
+### Fixed
+
+- Fixed cleanup reentry noise during fatal shutdown: recursive cleanup requests now no-op idempotently instead of logging repeated `Cleanup invoked recursively` errors ([#2284](https://github.com/can1357/oh-my-pi/issues/2284)).
+
+## [15.11.0] - 2026-06-10
+
+### Added
+
+- Added the `path-tree` module (`buildPathTree`, `walkPathTree`, `formatGroupedPaths`, `isUrlLikePath`), moved from the coding agent's grouped file output so compaction file lists can share the same prefix-folded directory-tree rendering; `formatGroupedPaths` gains an optional `annotate` callback for per-file suffixes
+
+### Fixed
+
+- Fixed the `{{join}}` prompt helper joining with a literal two-character `\n` when templates pass `"\n"` as the separator — Handlebars string literals carry no escape processing. The separator now unescapes `\n`/`\t`, matching the `{{#list}}` helper's documented convention (visible as literal `\n` between paths in compaction `<read-files>` lists).
+
 ## [15.10.11] - 2026-06-10
 ### Added
 

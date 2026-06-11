@@ -571,6 +571,66 @@ export function truncateMiddle(content: string, options: TruncationOptions = {})
 }
 
 // =============================================================================
+// Inline byte cap — final defense at the tool-result boundary
+// =============================================================================
+
+/** Options for {@link enforceInlineByteCap}. */
+export interface InlineByteCapOptions {
+	/** Inline byte budget. Defaults to {@link DEFAULT_MAX_BYTES}. */
+	maxBytes?: number;
+	/** What the text is, for the elision marker (e.g. "bash output"). */
+	label: string;
+	/**
+	 * Persist the full text as a session artifact. When an artifact id is
+	 * returned, a `[raw output: artifact://<id>]` footer is appended so the
+	 * elided bytes stay recoverable.
+	 */
+	saveArtifact?: (full: string) => string | undefined | Promise<string | undefined>;
+}
+
+/** Drop the partial last line of a head window (keep it if there is no newline at all). */
+function trimHeadToLineBoundary(text: string): string {
+	const idx = text.lastIndexOf(NL);
+	return idx > 0 ? text.substring(0, idx) : text;
+}
+
+/** Drop the partial first line of a tail window (keep it if there is no newline at all). */
+function trimTailToLineBoundary(text: string): string {
+	const idx = text.indexOf(NL);
+	if (idx < 0 || idx === text.length - 1) return text;
+	return text.substring(idx + 1);
+}
+
+/**
+ * Final-defense inline size guard for tool results.
+ *
+ * No-op when `text` fits within `maxBytes` (the common path). Otherwise keeps
+ * ~60% of the budget from the head and ~25% from the tail — cut on line
+ * boundaries, never splitting a multi-byte UTF-8 sequence — with an elision
+ * marker between. The remaining ~15% is slack for the marker and the optional
+ * `[raw output: artifact://<id>]` footer, so the result stays under `maxBytes`.
+ */
+export async function enforceInlineByteCap(text: string, options: InlineByteCapOptions): Promise<string> {
+	const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
+	if (maxBytes <= 0) return text;
+	const totalBytes = Buffer.byteLength(text, "utf-8");
+	if (totalBytes <= maxBytes) return text;
+
+	const head = trimHeadToLineBoundary(truncateHeadBytes(text, Math.floor(maxBytes * 0.6)).text);
+	const tail = trimTailToLineBoundary(truncateTailBytes(text, Math.floor(maxBytes * 0.25)).text);
+	const elidedBytes = Math.max(0, totalBytes - Buffer.byteLength(head, "utf-8") - Buffer.byteLength(tail, "utf-8"));
+	const marker = `[… elided ${elidedBytes} bytes of ${options.label} …]`;
+	let composed = `${head}\n${marker}\n${tail}`;
+
+	const artifactId = await options.saveArtifact?.(text);
+	if (artifactId) {
+		const sep = composed.endsWith(NL) ? "" : NL;
+		composed += `${sep}[raw output: artifact://${artifactId}]`;
+	}
+	return composed;
+}
+
+// =============================================================================
 // TailBuffer — ring-style tail buffer with lazy joining
 // =============================================================================
 

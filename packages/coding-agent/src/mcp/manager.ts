@@ -1174,12 +1174,15 @@ export class MCPManager {
 					const shouldRefresh =
 						forceRefresh || (credential.expires && Date.now() >= credential.expires - REFRESH_BUFFER_MS);
 					if (shouldRefresh && credential.refresh && auth.tokenUrl) {
+						const resource =
+							auth.resource ?? (config.type === "http" || config.type === "sse" ? config.url : undefined);
 						try {
 							const refreshed = await refreshMCPOAuthToken(
 								auth.tokenUrl,
 								credential.refresh,
 								auth.clientId,
 								auth.clientSecret,
+								resource,
 							);
 							const refreshedCredential = { type: "oauth" as const, ...refreshed };
 							await this.#authStorage.set(credentialId, refreshedCredential);

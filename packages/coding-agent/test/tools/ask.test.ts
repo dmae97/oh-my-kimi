@@ -828,15 +828,14 @@ describe("AskTool multiline custom input rendering", () => {
 		expect(renderedText).toContain("second line");
 		expect(renderedText).toContain("third line");
 
-		// Count tool.ask glyphs — should be exactly one for the custom input block,
-		// plus one for the question status icon (if present). The key contract is that
-		// continuation lines do NOT get their own glyph.
-		const askGlyph = theme!.symbol("tool.ask");
+		// Count success glyphs — should be exactly one for the custom input block.
+		// The key contract is that continuation lines do NOT get their own glyph.
+		const successGlyph = theme!.symbol("status.success");
 		const successIconCount = (
-			renderedText.match(new RegExp(askGlyph.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")) || []
+			renderedText.match(new RegExp(successGlyph.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")) || []
 		).length;
-		// One icon on the status line header + one on the custom input first line = 2 max
-		expect(successIconCount).toBeLessThanOrEqual(2);
+		// One glyph on the custom input first line; header uses the tool.ask icon.
+		expect(successIconCount).toBe(1);
 
 		// Ensure "second line" and "third line" are NOT preceded by a success icon on their own line
 		const lines = renderedText.split("\n");
@@ -844,7 +843,7 @@ describe("AskTool multiline custom input rendering", () => {
 			const trimmed = line.trim();
 			if (trimmed.includes("second line") || trimmed.includes("third line")) {
 				// These continuation lines must NOT start with a success icon
-				expect(trimmed.startsWith(askGlyph)).toBe(false);
+				expect(trimmed.startsWith(successGlyph)).toBe(false);
 			}
 		}
 	});

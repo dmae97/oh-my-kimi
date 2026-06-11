@@ -36,6 +36,7 @@ pub mod highlight;
 pub mod html;
 pub mod keys;
 pub mod sixel;
+pub mod snapcompact;
 pub use pi_ast::language;
 
 pub mod power;
@@ -70,7 +71,7 @@ use napi_derive::{module_init, napi};
 /// MUST stay in sync with `VERSION_SENTINEL_EXPORT` in
 /// `packages/natives/native/index.js` (which derives the name from
 /// `package.json#version`).
-#[napi(js_name = "__piNativesV15_10_12")]
+#[napi(js_name = "__piNativesV15_11_1")]
 pub const fn pi_natives_version_sentinel() {}
 
 /// Native module entry point: install crash diagnostics before any tool can

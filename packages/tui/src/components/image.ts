@@ -196,6 +196,21 @@ export class ImageBudget {
 		return this.#pendingTransmits.length > 0;
 	}
 
+	/**
+	 * True when the budget has nothing in flight: no live images observed on
+	 * the last pass, no queued transmits, no pending purges, and no stricter
+	 * threshold left to apply. A component-scoped frame may skip the observe
+	 * pass only then — a partial tree walk would under-count display order.
+	 */
+	get quiescent(): boolean {
+		return (
+			this.#lastTotal === 0 &&
+			this.#pendingTransmits.length === 0 &&
+			this.#purgeIds.length === 0 &&
+			this.#planned === this.#onTerminal
+		);
+	}
+
 	/** Transmit sequences to write before this frame's placements; clears the queue. */
 	takeTransmits(): readonly string[] {
 		if (this.#pendingTransmits.length === 0) return EMPTY_TRANSMITS;

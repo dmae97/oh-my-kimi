@@ -1,51 +1,87 @@
-import { Box, Markdown, Spacer, Text } from "@oh-my-pi/pi-tui";
+import { Box, type Component, Markdown } from "@oh-my-pi/pi-tui";
 import { getMarkdownTheme, theme } from "../../modes/theme/theme";
 import type { CompactionSummaryMessage } from "../../session/messages";
 
 /**
- * Component that renders a compaction message with collapsed/expanded state.
- * Uses same background color as hook messages for visual consistency.
+ * Compaction point in the transcript, rendered as a slim horizontal divider:
+ *
+ *   ──────── 📷 compacted · ctrl+o ────────
+ *
+ * The conversation above the divider stays visible (display transcript keeps
+ * full history); only the LLM context was reset. Expanding (ctrl+o) reveals
+ * the compaction summary below the divider.
  */
-export class CompactionSummaryMessageComponent extends Box {
+export class CompactionSummaryMessageComponent implements Component {
 	#expanded = false;
+	#cache?: { width: number; lines: string[] };
+	#detail?: Box;
 
-	constructor(private readonly message: CompactionSummaryMessage) {
-		super(1, 1, t => theme.bg("customMessageBg", t));
-		this.#updateDisplay();
-	}
+	constructor(private readonly message: CompactionSummaryMessage) {}
 
 	setExpanded(expanded: boolean): void {
+		if (this.#expanded === expanded) return;
 		this.#expanded = expanded;
-		this.#updateDisplay();
+		this.#cache = undefined;
 	}
 
-	override invalidate(): void {
-		super.invalidate();
-		this.#updateDisplay();
+	invalidate(): void {
+		this.#cache = undefined;
+		// Theme may have changed — rebuild the detail box lazily on next render.
+		this.#detail = undefined;
 	}
 
-	#updateDisplay(): void {
-		this.clear();
-
-		const tokenStr = this.message.tokensBefore.toLocaleString();
-		const label = theme.fg("customMessageLabel", theme.bold("[compaction]"));
-		this.addChild(new Text(label, 0, 0));
-		this.addChild(new Spacer(1));
-
-		if (this.#expanded) {
-			const header = `**Compacted from ${tokenStr} tokens**\n\n`;
-			this.addChild(
-				new Markdown(header + this.message.summary, 0, 0, getMarkdownTheme(), {
-					color: (text: string) => theme.fg("customMessageText", text),
-				}),
-			);
-		} else {
-			this.addChild(
-				new Text(theme.fg("customMessageText", `Compacted from ${tokenStr} tokens (ctrl+o to expand)`), 0, 0),
-			);
-			if (this.message.shortSummary) {
-				this.addChild(new Text(theme.fg("customMessageText", this.message.shortSummary), 0, 1));
-			}
+	render(width: number): readonly string[] {
+		width = Math.max(1, width);
+		if (this.#cache?.width === width) {
+			return this.#cache.lines;
 		}
+		const lines = this.#expanded
+			? ["", this.#divider(width), "", ...this.#detailBox().render(width)]
+			: ["", this.#divider(width), ""];
+		this.#cache = { width, lines };
+		return lines;
+	}
+
+	#divider(width: number): string {
+		const rule = theme.tree.horizontal;
+		const label = `${theme.icon.camera} compacted`;
+		// sep.dot ships pre-padded (" · "); trim so the hint joins with single spaces.
+		const hint = `${theme.sep.dot.trim()} ctrl+o`;
+		const plainWidth = Bun.stringWidth(`${label} ${hint}`, { countAnsiEscapeCodes: false });
+		// ` label hint ` framed by rules on both sides.
+		const remaining = width - plainWidth - 2;
+		if (remaining < 4) {
+			// Too narrow for a framed rule — emit the bare label.
+			return theme.fg("muted", label);
+		}
+		const left = Math.floor(remaining / 2);
+		const right = remaining - left;
+		return (
+			theme.fg("dim", rule.repeat(left)) +
+			` ${theme.fg("muted", label)} ${theme.fg("dim", hint)} ` +
+			theme.fg("dim", rule.repeat(right))
+		);
+	}
+
+	#detailBox(): Box {
+		if (this.#detail) return this.#detail;
+		const box = new Box(1, 1, t => theme.bg("customMessageBg", t));
+		const tokenStr = this.message.tokensBefore.toLocaleString();
+		const frameCount = this.message.images?.length ?? 0;
+		const frameNote =
+			frameCount > 0 ? `\n\n_${frameCount} snapcompact frame${frameCount === 1 ? "" : "s"} attached_` : "";
+		box.addChild(
+			new Markdown(
+				`**Compacted from ${tokenStr} tokens**\n\n${this.message.summary}${frameNote}`,
+				0,
+				0,
+				getMarkdownTheme(),
+				{
+					color: (text: string) => theme.fg("customMessageText", text),
+				},
+			),
+		);
+		this.#detail = box;
+		return box;
 	}
 }

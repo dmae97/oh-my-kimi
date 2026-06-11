@@ -21,6 +21,7 @@ import { isSilentAbort, readPendingDisplayTag, resolveAbortLabel } from "../../s
 import type { ResolveToolDetails } from "../../tools/resolve";
 import { interruptHint } from "../shared";
 import { StreamingRevealController } from "./streaming-reveal";
+import { ToolArgsRevealController } from "./tool-args-reveal";
 
 type AgentSessionEventKind = AgentSessionEvent["type"];
 
@@ -77,13 +78,26 @@ export class EventController {
 	// Insertion-ordered IRC cards not yet retired; values are the transcript
 	// components each card contributed (see #retireIrcCard for the guard).
 	#liveIrcCards = new Map<string, Component[]>();
+	// Most recent `job` tool block whose result still had every watched job
+	// running. Kept un-finalized (live) so the next `job` call displaces it —
+	// one persistent poll instead of a stack of "waiting on N jobs" frames —
+	// and sealed in place the moment anything else lands below it.
+	#displaceablePollComponent: ToolExecutionComponent | undefined = undefined;
+	// Most recent TTSR notification block. A new ttsr_triggered event merges its
+	// rules into this block while it is still the (live-region) transcript tail.
+	#lastTtsrNotification: TtsrNotificationComponent | undefined = undefined;
 	#streamingReveal: StreamingRevealController;
+	#toolArgsReveal: ToolArgsRevealController;
 	#handlers: AgentSessionEventHandlers;
 
 	constructor(private ctx: InteractiveModeContext) {
 		this.#streamingReveal = new StreamingRevealController({
 			getSmoothStreaming: () => this.ctx.settings.get("display.smoothStreaming"),
 			getHideThinkingBlock: () => this.ctx.hideThinkingBlock,
+			requestRender: () => this.ctx.ui.requestRender(),
+		});
+		this.#toolArgsReveal = new ToolArgsRevealController({
+			getSmoothStreaming: () => this.ctx.settings.get("display.smoothStreaming"),
 			requestRender: () => this.ctx.ui.requestRender(),
 		});
 		this.#handlers = {
@@ -119,6 +133,7 @@ export class EventController {
 
 	dispose(): void {
 		this.#streamingReveal.stop();
+		this.#toolArgsReveal.stop();
 		this.#cancelIdleCompaction();
 		for (const timer of this.#ircExpiryTimers.values()) {
 			clearTimeout(timer);
@@ -282,6 +297,7 @@ export class EventController {
 			const signature = `${textContent}\u0000${imageCount}`;
 
 			this.#resetReadGroup();
+			this.#resolveDisplaceablePoll();
 			const wasOptimistic = this.ctx.optimisticUserMessageSignature === signature;
 			const wasLocallySubmitted = this.ctx.locallySubmittedUserSignatures.delete(signature) || wasOptimistic;
 			if (!wasOptimistic) {
@@ -389,6 +405,28 @@ export class EventController {
 		}
 	}
 
+	/**
+	 * Resolve the pending displaceable poll block before the next block lands.
+	 * A follow-up `job` call displaces it — the stale "waiting on N jobs" frame
+	 * is removed so repeated polls read as one persistent poll — while anything
+	 * else seals it in place as final history. Removal is safe only because a
+	 * displaceable block never finalizes: commits stop at the first live block,
+	 * so none of its rows have entered native scrollback (see
+	 * ToolExecutionComponent.isDisplaceableBlock).
+	 */
+	#resolveDisplaceablePoll(nextToolName?: string): void {
+		const previous = this.#displaceablePollComponent;
+		if (!previous) return;
+		this.#displaceablePollComponent = undefined;
+		if (nextToolName === "job" && previous.isDisplaceableBlock()) {
+			this.ctx.chatContainer.removeChild(previous);
+		}
+		// Sealing stops the waiting-poll spinner and freezes the block (for a
+		// just-removed component it only clears the animation timer).
+		previous.seal();
+		this.ctx.ui.requestRender();
+	}
+
 	async #handleNotice(event: Extract<AgentSessionEvent, { type: "notice" }>): Promise<void> {
 		const message = event.source ? `${event.source}: ${event.message}` : event.message;
 		if (event.level === "error") {
@@ -444,6 +482,7 @@ export class EventController {
 						continue;
 					}
 					if (!readArgsTargetInternalUrl(content.arguments)) {
+						if (!this.ctx.pendingTools.has(content.id)) this.#resolveDisplaceablePoll(content.name);
 						this.#trackReadToolCall(content.id, content.arguments);
 						const component = this.ctx.pendingTools.get(content.id);
 						if (component) {
@@ -460,11 +499,25 @@ export class EventController {
 
 				// Preserve the raw partial JSON for renderers that need to surface fields before the JSON object closes.
 				// Bash uses this to show inline env assignments during streaming instead of popping them in at completion.
-				const renderArgs =
-					"partialJson" in content
-						? { ...content.arguments, __partialJson: content.partialJson }
-						: content.arguments;
+				// While the JSON is still open, ToolArgsRevealController paces the
+				// reveal (write/edit/bash previews grow smoothly when a slow provider
+				// delivers large batches); once it closes, the final args render
+				// as-is — mirroring how assistant text snaps at message_end.
+				const partialJson = "partialJson" in content ? content.partialJson : undefined;
+				let renderArgs: Record<string, unknown>;
+				if (typeof partialJson === "string") {
+					renderArgs = this.#toolArgsReveal.setTarget(
+						content.id,
+						partialJson,
+						content.customWireName !== undefined,
+						content.arguments,
+					);
+				} else {
+					this.#toolArgsReveal.finish(content.id);
+					renderArgs = content.arguments;
+				}
 				if (!this.ctx.pendingTools.has(content.id)) {
+					this.#resolveDisplaceablePoll(content.name);
 					this.#resetReadGroup();
 					const tool = this.ctx.session.getToolByName(content.name);
 					const component = new ToolExecutionComponent(
@@ -484,10 +537,12 @@ export class EventController {
 					component.setExpanded(this.ctx.toolOutputExpanded);
 					this.ctx.chatContainer.addChild(component);
 					this.ctx.pendingTools.set(content.id, component);
+					this.#toolArgsReveal.bind(content.id, component);
 				} else {
 					const component = this.ctx.pendingTools.get(content.id);
 					if (component) {
 						component.updateArgs(renderArgs, content.id);
+						this.#toolArgsReveal.bind(content.id, component);
 					}
 				}
 			}
@@ -522,6 +577,7 @@ export class EventController {
 		if (this.ctx.streamingComponent && event.message.role === "assistant") {
 			this.ctx.streamingMessage = event.message;
 			this.#streamingReveal.stop();
+			this.#toolArgsReveal.flushAll();
 			let errorMessage: string | undefined;
 			const aborted = this.ctx.streamingMessage.stopReason === "aborted";
 			const silentlyAborted = aborted && isSilentAbort(this.ctx.streamingMessage.errorMessage);
@@ -561,6 +617,9 @@ export class EventController {
 						component.seal();
 					}
 				}
+				// These calls will never produce a result either, so the tracked
+				// waiting poll cannot be displaced anymore — freeze it in place.
+				this.#resolveDisplaceablePoll();
 			}
 			this.#lastAssistantComponent = this.ctx.streamingComponent;
 			this.#lastAssistantComponent.setUsageInfo(event.message.usage);
@@ -589,6 +648,7 @@ export class EventController {
 	async #handleToolExecutionStart(event: Extract<AgentSessionEvent, { type: "tool_execution_start" }>): Promise<void> {
 		this.#updateWorkingMessageFromIntent(event.intent);
 		if (!this.ctx.pendingTools.has(event.toolCallId)) {
+			this.#resolveDisplaceablePoll(event.toolName);
 			if (event.toolName === "read" && readArgsHaveTarget(event.args) && !readArgsTargetInternalUrl(event.args)) {
 				this.#trackReadToolCall(event.toolCallId, event.args);
 				const component = this.ctx.pendingTools.get(event.toolCallId);
@@ -697,6 +757,14 @@ export class EventController {
 					this.ctx.pendingTools.delete(event.toolCallId);
 					this.#backgroundToolCallIds.delete(event.toolCallId);
 				}
+				if (
+					event.toolName === "job" &&
+					component instanceof ToolExecutionComponent &&
+					component.isDisplaceableBlock()
+				) {
+					// Remember the waiting poll so the next `job` call can displace it.
+					this.#displaceablePollComponent = component;
+				}
 				this.ctx.ui.requestRender();
 			}
 		}
@@ -727,6 +795,7 @@ export class EventController {
 	async #handleAgentEnd(_event: Extract<AgentSessionEvent, { type: "agent_end" }>): Promise<void> {
 		this.#agentTurnActive = false;
 		this.#streamingReveal.stop();
+		this.#toolArgsReveal.flushAll();
 		if (this.ctx.loadingAnimation) {
 			this.ctx.loadingAnimation.stop();
 			this.ctx.loadingAnimation = undefined;
@@ -759,6 +828,9 @@ export class EventController {
 		this.#readToolCallArgs.clear();
 		this.#readToolCallAssistantComponents.clear();
 		this.#resetReadGroup();
+		// The turn is over: nothing else lands this turn, so the waiting poll is
+		// final history — seal it instead of letting its spinner tick while idle.
+		this.#resolveDisplaceablePoll();
 		this.#lastAssistantComponent = undefined;
 		this.ctx.ui.requestRender();
 		this.#scheduleIdleCompaction();
@@ -908,9 +980,26 @@ export class EventController {
 	}
 
 	async #handleTtsrTriggered(event: Extract<AgentSessionEvent, { type: "ttsr_triggered" }>): Promise<void> {
+		// Consecutive notifications (e.g. per-tool matches from one assistant
+		// message) merge into the previous block instead of stacking. Mutating an
+		// existing block is only safe while it sits inside the live region — a
+		// still-mutating block above it means none of its rows have been committed
+		// to native scrollback yet (commits are prefix-only and stop at the first
+		// live block), so the grown block still repaints.
+		const previous = this.#lastTtsrNotification;
+		if (
+			previous &&
+			this.ctx.chatContainer.children.at(-1) === previous &&
+			this.ctx.chatContainer.isWithinLiveRegion(previous)
+		) {
+			previous.addRules(event.rules);
+			this.ctx.ui.requestRender();
+			return;
+		}
 		const component = new TtsrNotificationComponent(event.rules);
 		component.setExpanded(this.ctx.toolOutputExpanded);
 		this.ctx.present(component);
+		this.#lastTtsrNotification = component;
 	}
 
 	async #handleTodoReminder(event: Extract<AgentSessionEvent, { type: "todo_reminder" }>): Promise<void> {

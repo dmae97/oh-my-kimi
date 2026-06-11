@@ -102,11 +102,13 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 	const isZhipu = modelMatchesHost(hostModel, "zhipu");
 	const isKilo = modelMatchesHost(hostModel, "kilo");
 	const isKimiModel = isKimiModelId(spec.id);
-	const isMoonshotKimi = isKimiModel && modelMatchesHost(hostModel, "moonshotNative");
+	const isMoonshotNative = modelMatchesHost(hostModel, "moonshotNative");
+	const isMoonshotKimi = isKimiModel && isMoonshotNative;
 	const usesMoonshotKimiPreservedThinking = isMoonshotKimi && isKimiK26ModelId(spec.id);
 	const isAnthropicModel =
 		modelMatchesHost(hostModel, "anthropic") || isClaudeModelId(spec.id) || isAnthropicNamespacedModelId(spec.id);
 	const isAlibaba = modelMatchesHost(hostModel, "alibabaDashscope");
+	const isNvidiaNim = modelMatchesHost(hostModel, "nvidia");
 	const isQwen = isQwenModelId(spec.id);
 	// DeepSeek V4 (and other reasoning-capable DeepSeek models) reject follow-up requests in
 	// thinking mode unless prior assistant tool-call turns include `reasoning_content`. The
@@ -145,11 +147,16 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 		isKilo ||
 		isQwen ||
 		isXiaomiHost ||
+		isMoonshotNative ||
 		isOpenCodeHost;
 	const isOpenCodeProvider = provider === "opencode-go" || provider === "opencode-zen";
 
 	const useMaxTokens =
-		isMistral || hostMatchesUrl(baseUrl, "chutes") || hostMatchesUrl(baseUrl, "fireworks") || isDirectDeepseekApi;
+		isMistral ||
+		isMoonshotNative ||
+		hostMatchesUrl(baseUrl, "chutes") ||
+		hostMatchesUrl(baseUrl, "fireworks") ||
+		isDirectDeepseekApi;
 
 	// Hosts whose chat-completions endpoints are known to accept multiple
 	// leading `system`/`developer` messages (preferred for KV-cache reuse).
@@ -266,14 +273,20 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 		// OpenAI-compatible proxies — Fireworks' Fire Pass router, OpenCode's gateway,
 		// etc. — drives reasoning via OpenAI-style `reasoning_effort`
 		// (low|medium|high|xhigh|max|none), so those stay on the "openai" path.
+		// NVIDIA NIM hosts Qwen with the vLLM convention
+		// (`chat_template_kwargs.enable_thinking`); top-level `enable_thinking`
+		// is rejected by NIM's `additionalProperties: false` request schema
+		// (issue #2299).
 		thinkingFormat:
 			isZai || isZhipu || isMoonshotKimi || isXiaomiMimo
 				? "zai"
 				: isOpenRouter
 					? "openrouter"
-					: isAlibaba || isQwen
-						? "qwen"
-						: "openai",
+					: isQwen && isNvidiaNim
+						? "qwen-chat-template"
+						: isAlibaba || isQwen
+							? "qwen"
+							: "openai",
 		thinkingKeep: usesMoonshotKimiPreservedThinking ? "all" : undefined,
 		reasoningContentField: "reasoning_content",
 		// Backends that 400 follow-up requests when prior assistant tool-call turns lack `reasoning_content`:

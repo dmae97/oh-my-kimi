@@ -136,6 +136,7 @@ export interface InteractiveModeContext {
 	locallySubmittedUserSignatures: Set<string>;
 	lastSigintTime: number;
 	lastEscapeTime: number;
+	lastLeftTapTime: number;
 	shutdownRequested: boolean;
 	hookSelector: HookSelectorComponent | undefined;
 	hookInput: HookInputComponent | undefined;
@@ -225,10 +226,7 @@ export interface InteractiveModeContext {
 		sessionContext: SessionContext,
 		options?: { updateFooter?: boolean; populateHistory?: boolean },
 	): void;
-	renderInitialMessages(
-		prebuiltContext?: SessionContext,
-		options?: { preserveExistingChat?: boolean; clearTerminalHistory?: boolean },
-	): void;
+	renderInitialMessages(options?: { preserveExistingChat?: boolean; clearTerminalHistory?: boolean }): void;
 	getUserMessageText(message: Message): string;
 	findLastAssistantMessage(): AssistantMessage | undefined;
 	extractAssistantText(message: AssistantMessage): string;
@@ -292,7 +290,7 @@ export interface InteractiveModeContext {
 	showProviderSetup(): Promise<void>;
 	showHookConfirm(title: string, message: string): Promise<boolean>;
 	showDebugSelector(): Promise<void>;
-	showSessionObserver(): void;
+	showAgentHub(): void;
 	resetObserverRegistry(): void;
 
 	// Input handling

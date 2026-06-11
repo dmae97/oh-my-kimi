@@ -69,7 +69,7 @@ function fakeToolFor(name: string, fixture: GalleryFixture | undefined): AgentTo
 	if (!fixture?.label && !fixture?.editMode && !fixture?.customRendered) return undefined;
 	const tool: Record<string, unknown> = { name, label: fixture.label ?? name, mode: fixture.editMode };
 	if (fixture.customRendered) {
-		const renderer = toolRenderers[name] as
+		const renderer = toolRenderers[fixture.renderer ?? name] as
 			| { renderCall?: unknown; renderResult?: unknown; mergeCallAndResult?: unknown; inline?: unknown }
 			| undefined;
 		if (renderer) {
@@ -111,10 +111,11 @@ export async function renderGalleryState(
 
 	const tool = fakeToolFor(name, fixture);
 	const streamingArgs = state === "streaming" ? (fixture.streamingArgs ?? fixture.args) : fixture.args;
-	// The component only calls `requestRender` during a static render;
-	// `imageBudget` is consulted solely when images render, which the gallery
-	// disables. A cast avoids constructing a real terminal.
-	const ui = { requestRender() {} } as unknown as TUI;
+	// The component only calls `requestRender`/`requestComponentRender` (via
+	// its loader) during a static render; `imageBudget` is consulted solely
+	// when images render, which the gallery disables. A cast avoids
+	// constructing a real terminal.
+	const ui = { requestRender() {}, requestComponentRender() {} } as unknown as TUI;
 	const component = new ToolExecutionComponent(name, streamingArgs, { showImages: false }, tool, ui, getProjectDir());
 	component.setExpanded(expanded);
 

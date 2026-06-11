@@ -56,6 +56,7 @@ import {
 	getOpenAIStreamFirstEventTimeoutMs,
 	getOpenAIStreamIdleTimeoutMs,
 	iterateWithIdleTimeout,
+	iterateWithTerminalGrace,
 } from "../utils/idle-iterator";
 import { parseStreamingJson, parseStreamingJsonThrottled } from "../utils/json-parse";
 import { notifyProviderResponse } from "../utils/provider-response";
@@ -278,6 +279,8 @@ type ToolStrictModeOverride = Exclude<ResolvedOpenAICompat["toolStrictMode"], "m
 type BuiltOpenAICompletionTools = {
 	tools: OpenAI.Chat.Completions.ChatCompletionTool[];
 	toolStrictMode: AppliedToolStrictMode;
+	/** True when at least one wire tool was sent with `strict: true`. */
+	strictToolsApplied: boolean;
 };
 
 const OPENAI_COMPLETIONS_PROVIDER_SESSION_STATE_PREFIX = "openai-completions:";
@@ -390,6 +393,13 @@ function getTrailingPartialDeepseekToken(text: string): string {
 }
 const OPENAI_COMPLETIONS_FIRST_EVENT_TIMEOUT_MESSAGE =
 	"OpenAI completions stream timed out while waiting for the first event";
+// How long to keep draining the stream after a `finish_reason` chunk arrived.
+// Compliant hosts follow it (almost) immediately with an optional usage-only
+// chunk and the `[DONE]` sentinel, so the window only ever elapses on hosts
+// that hold the connection open after the response logically completed —
+// without it the turn parks on `iterator.next()` until the idle watchdog
+// converts the already-successful response into a timeout error.
+const OPENAI_COMPLETIONS_POST_FINISH_GRACE_MS = 2_500;
 
 async function* observeDecodedOpenAICompletionChunks(
 	chunks: AsyncIterable<ChatCompletionChunk>,
@@ -447,7 +457,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 			} = await createClient(model, context, apiKey, options?.headers, options?.initiatorOverride, options?.fetch);
 			const premiumRequestsTotal = copilotPremiumRequests;
 			getCapturedErrorResponse = captureErrorResponse;
-			let appliedToolStrictMode: AppliedToolStrictMode = "mixed";
+			let appliedStrictTools = false;
 			const providerSessionState = getOpenAICompletionsProviderSessionState(
 				model,
 				baseUrl,
@@ -458,8 +468,13 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 			const createCompletionsStream = async (toolStrictModeOverride?: ToolStrictModeOverride) => {
 				clearCapturedErrorResponse();
 				const effectiveToolStrictModeOverride = disableStrictTools ? "none" : toolStrictModeOverride;
-				const { params, toolStrictMode } = buildParams(model, context, options, effectiveToolStrictModeOverride);
-				appliedToolStrictMode = toolStrictMode;
+				const { params, strictToolsApplied } = buildParams(
+					model,
+					context,
+					options,
+					effectiveToolStrictModeOverride,
+				);
+				appliedStrictTools = strictToolsApplied;
 				options?.onPayload?.(params);
 				rawRequestDump = {
 					provider: model.provider,
@@ -517,9 +532,15 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 					disableStrictTools = true;
 					openaiStream = await createCompletionsStream("none");
 				} else {
-					if (!shouldRetryWithoutStrictTools(error, capturedErrorResponse, appliedToolStrictMode, context.tools)) {
+					if (!shouldRetryWithoutStrictTools(error, capturedErrorResponse, appliedStrictTools, context.tools)) {
 						throw error;
 					}
+					// Remember the rejection for the rest of the session so every
+					// subsequent request doesn't pay a strict-400 + retry round-trip.
+					if (providerSessionState) {
+						providerSessionState.strictToolsDisabled = true;
+					}
+					disableStrictTools = true;
 					openaiStream = await createCompletionsStream("none");
 				}
 			}
@@ -735,6 +756,11 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				for (const call of calls) emitHealedToolCall(call);
 			};
 
+			// Terminal-chunk bookkeeping for the post-finish grace window below.
+			// `streamFinishedAt` flips when a chunk carries `finish_reason`;
+			// `sawUsagePayload` flips when any usage payload was parsed.
+			let streamFinishedAt: number | undefined;
+			let sawUsagePayload = false;
 			const timedOpenaiStream = iterateWithIdleTimeout(openaiStream, {
 				idleTimeoutMs,
 				firstItemTimeoutMs: firstEventTimeoutMs,
@@ -748,7 +774,16 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 			const observedOpenaiStream = rawSseObserver
 				? observeDecodedOpenAICompletionChunks(timedOpenaiStream, rawSseObserver)
 				: timedOpenaiStream;
-			for await (const chunk of observedOpenaiStream) {
+			const terminalAwareStream = iterateWithTerminalGrace(observedOpenaiStream, {
+				finishedAtMs: () => streamFinishedAt,
+				graceMs: OPENAI_COMPLETIONS_POST_FINISH_GRACE_MS,
+				// The inner idle-timeout generator is parked mid-`next()` when the
+				// grace window closes, so abort the transport to settle that read
+				// and release the socket immediately (a queued `.return()` alone
+				// would wait on the never-arriving next chunk).
+				onGraceEnd: () => requestAbortController.abort(),
+			});
+			for await (const chunk of terminalAwareStream) {
 				if (!chunk || typeof chunk !== "object") continue;
 
 				// OpenAI documents ChatCompletionChunk.id as the unique chat completion identifier,
@@ -763,15 +798,23 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 
 				if (chunk.usage) {
 					output.usage = parseChunkUsage(chunk.usage, model, premiumRequestsTotal);
+					sawUsagePayload = true;
 				}
 
 				const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
-				if (!choice) continue;
+				if (!choice) {
+					// Trailing usage-only chunk (`stream_options.include_usage`) after
+					// `finish_reason`: the response is complete — stop pulling instead
+					// of waiting for `[DONE]`/close from hosts that never send either.
+					if (streamFinishedAt !== undefined && sawUsagePayload) break;
+					continue;
+				}
 
 				if (!chunk.usage) {
 					const choiceUsage = getChoiceUsage(choice);
 					if (choiceUsage) {
 						output.usage = parseChunkUsage(choiceUsage, model, premiumRequestsTotal);
+						sawUsagePayload = true;
 					}
 				}
 
@@ -781,6 +824,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 					if (finishReasonResult.errorMessage) {
 						output.errorMessage = finishReasonResult.errorMessage;
 					}
+					streamFinishedAt ??= Date.now();
 				}
 
 				if (choice.delta) {
@@ -954,6 +998,12 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 						}
 					}
 				}
+
+				// `finish_reason` + usage both observed: the chat-completions
+				// contract has nothing left to deliver. Break instead of waiting
+				// for `[DONE]`/connection close so hosts that hold the socket open
+				// can't park the turn until the idle watchdog errors it out.
+				if (streamFinishedAt !== undefined && sawUsagePayload) break;
 			}
 
 			if (streamMarkupHealing) {
@@ -1174,7 +1224,7 @@ function buildParams(
 	context: Context,
 	options: OpenAICompletionsOptions | undefined,
 	toolStrictModeOverride?: ToolStrictModeOverride,
-): { params: OpenAICompletionsParams; toolStrictMode: AppliedToolStrictMode } {
+): { params: OpenAICompletionsParams; toolStrictMode: AppliedToolStrictMode; strictToolsApplied: boolean } {
 	let compat = model.compat;
 	const thinkingEnabledForRequest =
 		Boolean(options?.reasoning) && !options?.disableReasoning && Boolean(model.reasoning);
@@ -1211,6 +1261,7 @@ function buildParams(
 		stream: true,
 	};
 	let toolStrictMode: AppliedToolStrictMode = "none";
+	let strictToolsApplied = false;
 
 	if (compat.supportsUsageInStreaming !== false) {
 		params.stream_options = { include_usage: true };
@@ -1264,6 +1315,7 @@ function buildParams(
 		const builtTools = convertTools(context.tools, compat, toolStrictModeOverride);
 		params.tools = builtTools.tools;
 		toolStrictMode = builtTools.toolStrictMode;
+		strictToolsApplied = builtTools.strictToolsApplied;
 	} else if (context.tools === undefined && hasToolHistory(context.messages)) {
 		// Anthropic (via LiteLLM/proxy) requires the `tools` param when the conversation
 		// contains tool_calls/tool_results, even when no tools are offered this turn.
@@ -1391,7 +1443,7 @@ function buildParams(
 		}
 	}
 
-	return { params, toolStrictMode };
+	return { params, toolStrictMode, strictToolsApplied };
 }
 
 function getOptionalNumberProperty(value: object, key: string): number | undefined {
@@ -1651,6 +1703,8 @@ export function convertMessages(
 							type: "image_url",
 							image_url: {
 								url: `data:${item.mimeType};base64,${item.data}`,
+								// Chat Completions has no "original"; omit it (provider default).
+								...(item.detail && item.detail !== "original" ? { detail: item.detail } : {}),
 							},
 						} satisfies ChatCompletionContentPartImage);
 					} else {
@@ -1999,16 +2053,19 @@ function convertTools(
 			};
 		}),
 		toolStrictMode,
+		strictToolsApplied:
+			tools.length > 0 &&
+			(toolStrictMode === "all_strict" || (toolStrictMode === "mixed" && adaptedTools.some(tool => tool.strict))),
 	};
 }
 
 function shouldRetryWithoutStrictTools(
 	error: unknown,
 	capturedErrorResponse: CapturedHttpErrorResponse | undefined,
-	toolStrictMode: AppliedToolStrictMode,
+	strictToolsApplied: boolean,
 	tools: Tool[] | undefined,
 ): boolean {
-	if (!tools || tools.length === 0 || toolStrictMode !== "all_strict") {
+	if (!tools || tools.length === 0 || !strictToolsApplied) {
 		return false;
 	}
 	const status = extractHttpStatusFromError(error) ?? capturedErrorResponse?.status;
@@ -2018,7 +2075,14 @@ function shouldRetryWithoutStrictTools(
 	const messageParts = [error instanceof Error ? error.message : undefined, capturedErrorResponse?.bodyText]
 		.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
 		.join("\n");
-	return /wrong_api_format|mixed values for 'strict'|tool[s]?\b.*strict|\bstrict\b.*tool/i.test(messageParts);
+	// Last two alternatives catch upstream tool-schema validators rejecting our
+	// strictified schemas outright (e.g. OpenRouter DeepSeek's "Invalid tool
+	// parameters schema : field `anyOf`: missing field `type`", #2270, and
+	// OpenAI's own "Invalid schema for function 'x'"). Retrying non-strict sends
+	// the unmodified base schemas, which those validators accept.
+	return /wrong_api_format|mixed values for 'strict'|tool[s]?\b.*strict|\bstrict\b.*tool|tool parameters? schema|invalid schema for function/i.test(
+		messageParts,
+	);
 }
 
 function mapStopReason(reason: ChatCompletionChunk.Choice["finish_reason"] | string): {
