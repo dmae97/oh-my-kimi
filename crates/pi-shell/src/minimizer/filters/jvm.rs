@@ -221,18 +221,29 @@ pub enum MvnPhase {
 	Passthrough,   // clean, site, plugin goals, version/help, empty
 }
 
+/// Whether `a` is a Maven lifecycle phase or plugin goal we map to a MvnPhase.
+fn is_recognized_mvn_goal(a: &str) -> bool {
+	matches!(
+		a,
+		"test" | "integration-test" | "compile" | "test-compile"
+			| "package" | "install" | "verify" | "deploy"
+			| "clean" | "site" | "site-deploy" | "spring-boot:run"
+	) || a.ends_with(":spring-boot-maven-plugin:run")
+}
+
 /// Scan args left-to-right, skip flags + `-D…` system props, pick the LAST
-/// remaining token.
+/// RECOGNIZED lifecycle goal, ignoring unrecognized positional tokens (e.g. the
+/// module name after `-pl`).
 ///
 /// If empty, plugin-form (`:`), or `clean`/`site` → Passthrough. Re-tokenizes
 /// the raw command because `ctx.subcommand` is the FIRST non-flag arg and so
 /// reports the wrong goal for `mvn clean install`.
 pub fn detect_phase(command: &str) -> MvnPhase {
-	// `.last()` (not `.next_back()`): `SplitWhitespace` is not a
-	// `DoubleEndedIterator`. We consume the whole iterator anyway, so the
-	// forward `.last()` yields the same final non-flag token.
+	// Use the last RECOGNIZED lifecycle goal so that option-value tokens
+	// (e.g. the module name after -pl) are ignored.
 	let last = arg_tokens(command)
 		.filter(|a| !a.starts_with('-'))
+		.filter(|a| is_recognized_mvn_goal(a))
 		.last()
 		.unwrap_or("");
 
@@ -1013,24 +1024,43 @@ pub enum GradleTask {
 
 /// Pick the filter for a gradle invocation by re-tokenizing `ctx.command`.
 ///
-/// Ported from rtk `gradlew_cmd.rs::detect_task` (~31-64). Uses the LAST
-/// non-flag, non-`clean` task, lowercased — e.g. `clean assembleDebug` → Build,
-/// and for mixed-task `test assemble`, the last wins. Adapted to take the raw
-/// command string instead of rtk's `&[String]` args slice (the minimizer never
-/// holds a parsed args vector); the leading program word is dropped by
-/// [`arg_tokens`], matching rtk's args slice which never includes the program.
+/// Ported from rtk `gradlew_cmd.rs::detect_task` (~31-64). Uses the FIRST
+/// recognized task token, lowercased — tasks appear before option-value tokens
+/// such as `--tests FooSpec`, so `.find()` on recognized tasks avoids matching
+/// option-values. Adapted to take the raw command string instead of rtk's
+/// `&[String]` args slice (the minimizer never holds a parsed args vector); the
+/// leading program word is dropped by [`arg_tokens`], matching rtk's args slice
+/// which never includes the program.
 ///
 /// `bootRun` is checked first so it routes to the dedicated Spring Boot runtime
 /// filter (rtk handled `spring-boot:run`/`bootRun` via a separate command).
 pub fn detect_task(command: &str) -> GradleTask {
-	// `.last()`, not `.next_back()`: `SplitWhitespace` is not double-ended. We
-	// consume the whole iterator, so the forward `.last()` yields the same final
-	// non-flag, non-clean token rtk's `.next_back()` would.
-	let task = arg_tokens(command)
+	// Use the FIRST recognized task token to ignore option-value tokens that
+	// follow --tests, --rerun, etc. (e.g. "gradle test --tests FooSpec" → Test).
+	// When find returns None we need to distinguish two cases:
+	//   • no non-flag non-clean tokens at all  → only `clean` was given → Build
+	//   • non-flag non-clean tokens existed but none recognized → unrecognized task → Other
+	let mut non_clean_tokens = arg_tokens(command)
 		.filter(|a| !a.starts_with('-'))
 		.map(str::to_lowercase)
 		.filter(|a| a != "clean")
-		.last()
+		.peekable();
+	let had_tokens = non_clean_tokens.peek().is_some();
+	let task = non_clean_tokens
+		.find(|a| {
+			a.contains("bootrun")
+				|| a.contains("connected")
+				|| a.contains("test")
+				|| a.contains("assemble")
+				|| a.contains("build")
+				|| a.contains("bundle")
+				|| a.contains("install")
+				|| a.contains("lint")
+				|| a.contains("ktlint")
+				|| a.contains("detekt")
+				|| a == "check"
+				|| a.contains("dependencies")
+		})
 		.unwrap_or_default();
 
 	if task.contains("bootrun") {
@@ -1051,12 +1081,14 @@ pub fn detect_task(command: &str) -> GradleTask {
 		GradleTask::Test
 	} else if task.contains("dependencies") {
 		GradleTask::Dependencies
-	} else if task.is_empty() {
-		// Only `clean` was passed (filtered out above) → treat as Build to filter
-		// task noise (rtk parity).
-		GradleTask::Build
-	} else {
+	} else if had_tokens {
+		// Non-flag non-clean tokens existed but none were recognized → unrecognized
+		// task (e.g. `gradlew signingReport`). Rtk parity: fall through to Other.
 		GradleTask::Other
+	} else {
+		// No non-flag non-clean tokens at all — only `clean` was passed (filtered
+		// out above) → treat as Build to filter task noise (rtk parity).
+		GradleTask::Build
 	}
 }
 
@@ -1698,6 +1730,12 @@ mod tests {
 	#[test]
 	fn phase_help() {
 		assert_eq!(detect_phase("mvn --help"), MvnPhase::Passthrough);
+	}
+	#[test]
+	fn detect_phase_ignores_pl_module_value() {
+		// "-pl module-a" option-value must not shadow the recognized lifecycle goal
+		assert_eq!(detect_phase("mvn test -pl module-a"), MvnPhase::Test);
+		assert_eq!(detect_phase("mvn install -pl :sub1,:sub2"), MvnPhase::Package);
 	}
 
 	// ── Quiet detection (rtk ~1986-2003) ─────────────────────────────────────
@@ -2436,6 +2474,12 @@ mod tests {
 		// `bootRun` routes to the dedicated Spring Boot runtime filter.
 		assert_eq!(detect_task("gradlew bootRun"), GradleTask::SpringBootRun);
 		assert_eq!(detect_task("gradlew :app:bootRun"), GradleTask::SpringBootRun);
+	}
+	#[test]
+	fn detect_task_ignores_tests_filter_value() {
+		// "--tests FooSpec" option-value must not shadow the task
+		assert_eq!(detect_task("./gradlew test --tests FooSpec"), GradleTask::Test);
+		assert_eq!(detect_task("./gradlew test --tests com.example.Foo"), GradleTask::Test);
 	}
 
 	// ── Build filter (rtk ~660-744, 1128-1230, 1347-1379) ───────────────────
