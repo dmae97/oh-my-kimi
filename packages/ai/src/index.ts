@@ -5,6 +5,7 @@ export { type AuthGatewayBootOptions, type ModelResolver, startAuthGateway } fro
 export * from "./auth-gateway/types";
 export * from "./auth-retry";
 export * from "./auth-storage";
+export * from "./errors";
 export * from "./provider-details";
 export * from "./providers/anthropic";
 export * from "./providers/anthropic-client";

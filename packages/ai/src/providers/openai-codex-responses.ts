@@ -71,10 +71,11 @@ import {
 	type RequestBody,
 	transformRequestBody,
 } from "./openai-codex/request-transformer";
-import { parseCodexError } from "./openai-codex/response-handler";
+import { CodexApiError } from "./openai-codex/response-handler";
 import { normalizeOpenAIResponsesPromptCacheKey } from "./openai-responses";
 import {
 	appendResponsesToolResultMessages,
+	buildResponsesDeltaInput,
 	convertResponsesAssistantMessage,
 	convertResponsesInputContent,
 	encodeResponsesToolCallId,
@@ -3004,11 +3005,7 @@ async function openCodexSseEventStream(
 		cfRay: response.headers.get("cf-ray") || null,
 	});
 	if (!response.ok) {
-		const info = await parseCodexError(response);
-		const error = new Error(info.friendlyMessage || info.message);
-		(error as { headers?: Headers; status?: number }).headers = response.headers;
-		(error as { headers?: Headers; status?: number }).status = response.status;
-		throw error;
+		throw await CodexApiError.fromResponse(response);
 	}
 	updateCodexSessionMetadataFromHeaders(state, response.headers);
 	if (!response.body) {
