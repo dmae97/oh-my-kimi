@@ -1046,8 +1046,12 @@ type ReasoningOptions = {
 
 /**
  * Apply reasoning-related Responses parameters: enable encrypted reasoning content for replay,
- * set effort/summary when requested, and otherwise inject the GPT-5 "Juice: 0" no-reasoning hack.
- * Mutates `params` and may push a developer message into `messages`.
+ * set effort/summary when requested, and otherwise inject the "Juice: 0" no-reasoning hack
+ * when `model.compat.requiresJuiceZeroHack` is set (GPT-5 family by default).
+ * Mutates `params` and may push a developer message into `messages`. Returns
+ * the number of per-turn trailing scaffolding items appended to `messages`
+ * (the "Juice: 0" developer item), so callers doing stateful
+ * `previous_response_id` chaining can exclude them from append-baseline math.
  *
  * @param omitReasoningEffort - When `true`, suppresses `params.reasoning.effort` from the wire
  *   body. Set by `xai-responses.ts` via {@link OpenAIResponsesOptions.omitReasoningEffort} for
@@ -1060,14 +1064,14 @@ type ReasoningOptions = {
  */
 export function applyResponsesReasoningParams<P extends OpenAI.Responses.ResponseCreateParamsStreaming>(
 	params: P,
-	model: Model<Api>,
+	model: Model<"openai-responses" | "azure-openai-responses" | "openai-codex-responses">,
 	options: ReasoningOptions | undefined,
 	messages: ResponseInput,
 	mapEffort?: (effort: string) => string,
 	includeEncryptedReasoning: boolean = true,
 	omitReasoningEffort: boolean = false,
-): void {
-	if (!model.reasoning) return;
+): number {
+	if (!model.reasoning) return 0;
 	// Always request encrypted reasoning content so reasoning items can be replayed in
 	// multi-turn conversations when store is false (items aren't persisted server-side, so
 	// we must include the full content). See: https://github.com/can1357/oh-my-pi/issues/41
@@ -1103,13 +1107,15 @@ export function applyResponsesReasoningParams<P extends OpenAI.Responses.Respons
 			}
 			params.reasoning = reasoningParams as P["reasoning"];
 		}
-	} else if (model.name.toLowerCase().startsWith("gpt-5")) {
+	} else if (model.compat.requiresJuiceZeroHack) {
 		// Jesus Christ, see https://community.openai.com/t/need-reasoning-false-option-for-gpt-5/1351588/7
 		messages.push({
 			role: "developer",
 			content: [{ type: "input_text", text: "# Juice: 0 !important" }],
 		});
+		return 1;
 	}
+	return 0;
 }
 
 /** Populate `output.usage` from a Responses-API `response.usage` payload. Does not invoke `calculateCost`. */
