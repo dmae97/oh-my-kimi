@@ -139,6 +139,34 @@ describe("shouldEnableHyperlinksByDefault", () => {
 		expect(shouldEnableHyperlinksByDefault({ TERM: "screen-256color" }, "kitty")).toBe(false);
 	});
 
+	it("treats TMUX as authoritative even when TERM is screen-family (tmux's historical default-terminal)", () => {
+		// tmux's historical `default-terminal` is `screen-256color`, so a tmux
+		// session can have a screen-family TERM. The TMUX env signals tmux is the
+		// immediate layer and its version gate must run regardless of TERM.
+		expect(
+			shouldEnableHyperlinksByDefault(
+				{
+					TMUX: "/tmp/tmux-1000/default,1,0",
+					TERM: "screen-256color",
+					TERM_PROGRAM: "tmux",
+					TERM_PROGRAM_VERSION: "3.4",
+				},
+				"wezterm",
+			),
+		).toBe(true);
+		expect(
+			shouldEnableHyperlinksByDefault(
+				{
+					TMUX: "/tmp/tmux-1000/default,1,0",
+					TERM: "screen",
+					TERM_PROGRAM: "tmux",
+					TERM_PROGRAM_VERSION: "3.3a",
+				},
+				"wezterm",
+			),
+		).toBe(false);
+	});
+
 	it("keeps tmux off when no version is reported (old tmux without TERM_PROGRAM_VERSION)", () => {
 		expect(shouldEnableHyperlinksByDefault({ TMUX: "/tmp/tmux-1000/default,1,0" }, "wezterm")).toBe(false);
 		expect(shouldEnableHyperlinksByDefault({ TERM: "tmux-256color" }, "wezterm")).toBe(false);

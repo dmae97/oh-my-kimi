@@ -280,13 +280,19 @@ function parseTmuxVersionFromEnv(env: NodeJS.ProcessEnv): { major: number; minor
  *      on). Opt-out wins ties.
  *   2. Static terminal capability — terminals whose {@link TerminalInfo} marks
  *      `hyperlinks: false` (e.g. `base`) stay off unless the user forced on.
- *   3. GNU screen always off: screen never gained OSC 8 support.
- *   4. tmux: enabled when tmux self-reports >= 3.4 via `TERM_PROGRAM_VERSION`
- *      (tmux 3.4 stores OSC 8 as a cell attribute and forwards it to outer
- *      terminals whose `terminal-features` include `hyperlinks`). Older or
- *      unknown versions stay off; on outer terminals without the feature
- *      configured, tmux silently drops the sequence — identical to today.
- *   5. Otherwise honor the static terminal capability.
+ *   3. tmux session (`TMUX` set): enabled when tmux self-reports >= 3.4 via
+ *      `TERM_PROGRAM_VERSION` (tmux 3.4 stores OSC 8 as a cell attribute and
+ *      forwards it to outer terminals whose `terminal-features` include
+ *      `hyperlinks`). Older or unknown versions stay off; on outer terminals
+ *      without the feature configured, tmux silently drops the sequence —
+ *      identical to today. Checked before the screen-family TERM heuristic
+ *      because tmux's historical `default-terminal` is `screen-256color`, so
+ *      `TERM=screen*` inside a tmux session must NOT short-circuit to off.
+ *   4. GNU screen (`STY` set, or screen-family TERM without `TMUX`) always off:
+ *      screen never gained OSC 8 support.
+ *   5. tmux-family TERM without `TMUX` env — unusual (e.g. inspection scripts);
+ *      no version available, so off.
+ *   6. Otherwise honor the static terminal capability.
  */
 export function shouldEnableHyperlinksByDefault(
 	env: NodeJS.ProcessEnv = Bun.env,
@@ -297,14 +303,18 @@ export function shouldEnableHyperlinksByDefault(
 
 	if (!getTerminalInfo(terminalId).hyperlinks) return false;
 
-	const term = env.TERM?.toLowerCase() ?? "";
-	if (env.STY || term.startsWith("screen")) return false;
-
-	if (env.TMUX || term.startsWith("tmux")) {
+	// tmux check first: TMUX is the authoritative current-session signal and
+	// supersedes TERM, which may be `screen-256color` under tmux's historical
+	// default-terminal setting.
+	if (env.TMUX) {
 		const version = parseTmuxVersionFromEnv(env);
 		if (!version) return false;
 		return version.major > 3 || (version.major === 3 && version.minor >= 4);
 	}
+
+	const term = env.TERM?.toLowerCase() ?? "";
+	if (env.STY || term.startsWith("screen")) return false;
+	if (term.startsWith("tmux")) return false;
 
 	return true;
 }
