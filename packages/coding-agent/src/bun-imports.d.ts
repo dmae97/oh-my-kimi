@@ -26,3 +26,20 @@ declare module "*.lark" {
 	const content: string;
 	export default content;
 }
+
+// Session-export template assets imported as text.
+// No `*.html` declaration: bun-types claims that pattern as HTMLBundle, so the
+// text import in src/export/html/index.ts casts at the use site instead.
+declare module "*.css" {
+	const content: string;
+	export default content;
+}
+declare module "*/template.js" {
+	const content: string;
+	export default content;
+}
+
+declare module "*.generated.js" {
+	const content: string;
+	export default content;
+}

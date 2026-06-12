@@ -40,8 +40,7 @@
 		"fmt": "biome format --write . && bun run format-prompts",
 		"format-prompts": "bun scripts/format-prompts.ts",
 		"generate-docs-index": "bun scripts/generate-docs-index.ts",
-		"prepack": "bun scripts/generate-docs-index.ts && bun scripts/bundle-dist.ts",
-		"generate-template": "bun scripts/generate-template.ts",
+		"prepack": "bun scripts/generate-docs-index.ts && bun --cwd=../collab-web run build:tool-views && bun scripts/bundle-dist.ts",
 		"bench:guard": "bun scripts/bench-guard.ts"
 	},
 	"dependencies": {

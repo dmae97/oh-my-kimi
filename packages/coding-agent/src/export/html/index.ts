@@ -2,9 +2,39 @@ import * as path from "node:path";
 import type { AgentState } from "@oh-my-pi/pi-agent-core";
 import { APP_NAME, isEnoent } from "@oh-my-pi/pi-utils";
 import { getResolvedThemeColors, getThemeExportColors } from "../../modes/theme/theme";
-import { type SessionEntry, type SessionHeader, SessionManager } from "../../session/session-manager";
-// Pre-generated template (created by scripts/generate-template.ts at publish time)
-import { TEMPLATE } from "./template.generated";
+import {
+	loadEntriesFromFile,
+	type SessionEntry,
+	type SessionHeader,
+	SessionManager,
+} from "../../session/session-manager";
+import templateCss from "./template.css" with { type: "text" };
+import templateHtml from "./template.html" with { type: "text" };
+import templateJs from "./template.js" with { type: "text" };
+// Pre-built React tool renderers: built by `bun --cwd=packages/collab-web run build:tool-views`,
+// run automatically by root `prepare` on install and by `prepack` at publish.
+import toolViewsJs from "./tool-views.generated.js" with { type: "text" };
+
+let cachedTemplate: string | undefined;
+
+/** Compose the standalone export template: minified CSS, tool renderers, and viewer JS inlined. */
+export function getTemplate(): string {
+	if (cachedTemplate) return cachedTemplate;
+	const minifiedCss = templateCss
+		.replace(/\/\*[\s\S]*?\*\//g, "")
+		.replace(/\s+/g, " ")
+		.replace(/\s*([{}:;,])\s*/g, "$1")
+		.trim();
+	// Function replacements so `$'`, `$&`, `$$`, etc. inside the embedded
+	// CSS/JS are not interpreted as substitution patterns. The cast is safe:
+	// `with { type: "text" }` yields a string at runtime; bun-types just types
+	// every *.html import as HTMLBundle (TS can't vary types by import attribute).
+	cachedTemplate = (templateHtml as unknown as string)
+		.replace("<template-css/>", () => `<style>${minifiedCss}</style>`)
+		.replace("<template-tool-views/>", () => `<script>${toolViewsJs}</script>`)
+		.replace("<template-js/>", () => `<script>${templateJs}</script>`);
+	return cachedTemplate;
+}
 
 export interface ExportOptions {
 	outputPath?: string;
@@ -106,10 +136,9 @@ async function generateHtml(sessionData: SessionData, themeName?: string): Promi
 	// Use function replacements so `$'`, `$&`, `$$`, `$n`, etc. in the
 	// substituted CSS/base64 are not interpreted as substitution patterns
 	// (see https://mdn.io/String.replace).
-	return TEMPLATE.replace("<theme-vars/>", () => `<style>:root { ${themeVars} }</style>`).replace(
-		"{{SESSION_DATA}}",
-		() => sessionDataBase64,
-	);
+	return getTemplate()
+		.replace("<theme-vars/>", () => `<style>:root { ${themeVars} }</style>`)
+		.replace("{{SESSION_DATA}}", () => sessionDataBase64);
 }
 
 /** Export session to HTML using SessionManager and AgentState. */
