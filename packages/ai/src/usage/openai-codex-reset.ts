@@ -15,7 +15,7 @@
  * (`already_redeemed`, `no_credit`, `nothing_to_reset`).
  *
  * These are thin, dependency-light functions so both the interactive session
- * (the `/reset-usage` command + auto-redeem) and any out-of-band tooling can
+ * (the `/usage reset` command + auto-redeem) and any out-of-band tooling can
  * share one wire contract.
  */
 import type { FetchImpl } from "../types";

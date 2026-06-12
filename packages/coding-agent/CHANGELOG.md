@@ -3,9 +3,15 @@
 ## [Unreleased]
 
 
+### Changed
+
+- Renamed the saved Codex reset command from `/reset-usage` to `/usage reset` and added `/usage show` as an explicit alias for plain `/usage`.
+
 ### Fixed
 
 - Fixed the Subagents HUD order so progress updates no longer move active rows; batched subagents keep their task order.
+- Fixed `/settings` dirty-value highlighting so changed values stay orange while the row has keyboard focus.
+
 ## [15.11.5] - 2026-06-12
 
 ### Added

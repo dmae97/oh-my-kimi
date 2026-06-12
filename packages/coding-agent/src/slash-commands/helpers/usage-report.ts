@@ -63,7 +63,7 @@ function renderUsageReports(
 							? report.metadata.accountId
 							: "account";
 				lines.push(
-					`- ${resetLabel}: ${savedResets} saved rate-limit reset${savedResets === 1 ? "" : "s"} available — /reset-usage to spend`,
+					`- ${resetLabel}: ${savedResets} saved rate-limit reset${savedResets === 1 ? "" : "s"} available — /usage reset to spend`,
 				);
 			}
 			if (report.limits.length === 0) {

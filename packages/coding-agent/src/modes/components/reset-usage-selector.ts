@@ -7,7 +7,7 @@ import { DynamicBorder } from "./dynamic-border";
 const RESET_SELECTOR_MAX_VISIBLE = 10;
 
 /**
- * Account picker for `/reset-usage`. Lists Codex accounts with their saved
+ * Account picker for `/usage reset`. Lists Codex accounts with their saved
  * rate-limit reset counts; selecting one redeems a reset. Because a reset is a
  * scarce, irreversible credit, Enter requires a second press to confirm.
  */

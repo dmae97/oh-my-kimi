@@ -1,5 +1,5 @@
 /**
- * Shared helpers for the `/reset-usage` command (TUI selector + ACP): turn the
+ * Shared helpers for the `/usage reset` command (TUI selector + ACP): turn the
  * live per-account reset-credit status into selector rows, and map a redeem
  * outcome code to a human message.
  */

@@ -35,6 +35,17 @@ describe("buildAvailableSlashCommands", () => {
 		const commands = await buildAvailableSlashCommands(session as never, async () => fileCommands);
 		const byName = Object.fromEntries(commands.map(command => [command.name, command]));
 
+		expect(byName.usage.subcommands).toContainEqual({
+			name: "show",
+			description: "Show provider usage and limits",
+		});
+		expect(byName.usage.subcommands).toContainEqual({
+			name: "reset",
+			description: "Spend a saved Codex rate-limit reset",
+			usage: "[account|active]",
+		});
+		expect(byName["reset-usage"]).toBeUndefined();
+
 		expect(byName.model.source).toBe("builtin");
 		expect(byName["skill:reviewer"].source).toBe("skill");
 		expect(byName["ext:hello"].source).toBe("extension");

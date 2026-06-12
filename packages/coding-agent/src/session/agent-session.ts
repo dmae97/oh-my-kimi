@@ -10148,7 +10148,7 @@ export class AgentSession {
 	/**
 	 * Redeem one saved Codex rate-limit reset for a specific account, injecting
 	 * the provider base URL like {@link AgentSession.fetchUsageReports}. Powers
-	 * the `/reset-usage` command and auto-redeem. Never throws for business
+	 * the `/usage reset` command and auto-redeem. Never throws for business
 	 * outcomes — inspect the returned `code`.
 	 */
 	async redeemResetCredit(target: ResetCreditTarget, signal?: AbortSignal): Promise<ResetCreditRedeemOutcome> {
@@ -10162,7 +10162,7 @@ export class AgentSession {
 	/**
 	 * List saved Codex rate-limit resets per stored account, fetched live from
 	 * the dedicated credits endpoint (bypasses the usage cache). Powers the
-	 * `/reset-usage` account selector.
+	 * `/usage reset` account selector.
 	 */
 	async listResetCredits(signal?: AbortSignal): Promise<ResetCreditAccountStatus[]> {
 		return this.#modelRegistry.authStorage.listResetCredits({
