@@ -1,6 +1,15 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added a one-shot request-debug target that writes the next provider HTTP request JSON to an explicit path.
+
+### Fixed
+
+- Fixed one-shot request-debug path handling so an explicit request log target is consumed after the next request and no longer affects subsequent calls
+- Fixed explicit request-debug path mode to create missing parent directories before writing request logs
+- Fixed explicit request-debug mode to overwrite existing `.res.log` files for the requested path instead of failing when they already exist
 
 ## [15.11.4] - 2026-06-12
 

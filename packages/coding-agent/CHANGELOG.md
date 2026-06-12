@@ -1,6 +1,17 @@
 # Changelog
 
 ## [Unreleased]
+
+### Added
+
+- Added `/debug dump-request` and `/debug next-request` as aliases for `/debug dump-next-request` when arming a one-shot AI provider request dump
+- Added `/debug dump-next-request <path>` to dump the next AI provider HTTP request JSON to a chosen file.
+
+### Changed
+
+- Changed `/debug` handling in interactive mode so `/debug` with arguments now executes the requested debug subcommand instead of always opening the debug selector
+- Changed `/debug dump-next-request` path handling to expand `~` and resolve relative paths against the current working directory
+
 ### Fixed
 
 - Fixed settings search to rank matching tabs by relevance so exact matches appear before incidental matches

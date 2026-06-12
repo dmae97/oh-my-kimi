@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
+import { setNextRequestDebugPath } from "@oh-my-pi/pi-ai/utils/request-debug";
 import { Snowflake, setProjectDir } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import type { SettingPath, SettingValue } from "../config/settings";
@@ -64,6 +65,46 @@ const shutdownHandlerTui = (_command: ParsedSlashCommand, runtime: TuiSlashComma
 	void runtime.ctx.shutdown();
 	return commandConsumed();
 };
+
+const DEBUG_DUMP_NEXT_REQUEST_USAGE = "Usage: /debug dump-next-request <path>";
+
+function resolveDebugRequestDumpPath(target: string, cwd: string): string {
+	const expanded =
+		target === "~"
+			? os.homedir()
+			: target.startsWith("~/") || target.startsWith("~\\")
+				? path.join(os.homedir(), target.slice(2))
+				: target;
+	return path.resolve(cwd, expanded);
+}
+
+async function handleDebugSubcommand(
+	args: string,
+	cwd: string,
+	output: (text: string) => Promise<void> | void,
+): Promise<SlashCommandResult> {
+	const { verb, rest } = parseSubcommand(args);
+	switch (verb) {
+		case "":
+			await output(DEBUG_DUMP_NEXT_REQUEST_USAGE);
+			return commandConsumed();
+		case "dump-next-request":
+		case "dump-request":
+		case "next-request": {
+			if (!rest) {
+				await output(DEBUG_DUMP_NEXT_REQUEST_USAGE);
+				return commandConsumed();
+			}
+			const requestPath = resolveDebugRequestDumpPath(rest, cwd);
+			setNextRequestDebugPath(requestPath);
+			await output(`Next AI provider request will be dumped to ${requestPath}`);
+			return commandConsumed();
+		}
+		default:
+			await output(`Unknown /debug subcommand "${verb}". ${DEBUG_DUMP_NEXT_REQUEST_USAGE}`);
+			return commandConsumed();
+	}
+}
 
 /** Parse the `/shake` subcommand into a {@link ShakeMode}; empty defaults to elide. */
 function parseShakeMode(args: string): ShakeMode | { error: string } {
@@ -974,8 +1015,25 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "debug",
 		description: "Open debug tools selector",
-		handleTui: (_command, runtime) => {
-			runtime.ctx.showDebugSelector();
+		allowArgs: true,
+		subcommands: [
+			{
+				name: "dump-next-request",
+				description: "Dump the next AI provider HTTP request as JSON",
+				usage: "<path>",
+			},
+		],
+		handle: async (command, runtime) =>
+			handleDebugSubcommand(command.args, runtime.cwd, text => runtime.output(text)),
+		handleTui: async (command, runtime) => {
+			const args = command.args.trim();
+			if (args.length === 0) {
+				runtime.ctx.showDebugSelector();
+			} else {
+				await handleDebugSubcommand(args, runtime.ctx.sessionManager.getCwd(), text =>
+					runtime.ctx.showStatus(text),
+				);
+			}
 			runtime.ctx.editor.setText("");
 		},
 	},
