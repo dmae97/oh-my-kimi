@@ -178,7 +178,12 @@ export class InputController {
 			} else if (this.ctx.session.isStreaming) {
 				this.ctx.notifyInterrupting();
 				void this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL });
-			} else if (!this.ctx.editor.getText().trim()) {
+			} else if (this.ctx.editor.getText().trim()) {
+				// Esc with typed text clears the draft instead of (or before) any double-Esc action
+				this.ctx.editor.setText("");
+				this.ctx.ui.requestRender();
+				this.ctx.lastEscapeTime = 0;
+			} else {
 				// Double-interrupt with empty editor triggers /tree, /branch, or nothing based on setting
 				const action = settings.get("doubleEscapeAction");
 				if (action !== "none") {
@@ -189,6 +194,7 @@ export class InputController {
 						} else {
 							this.ctx.showUserMessageSelector();
 						}
+						this.ctx.ui.resetDisplay();
 						this.ctx.lastEscapeTime = 0;
 					} else {
 						this.ctx.lastEscapeTime = now;

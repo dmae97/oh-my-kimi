@@ -5,6 +5,12 @@
 ### Added
 
 - Added isolated profile support via `--profile <name>` / `OMP_PROFILE` and shell alias bootstrap via `--alias <command>`, including launch/ACP bootstrap handling, extension-flag-safe parsing, profile-scoped user config discovery, and symlinked extension-directory discovery.
+## [15.12.3] - 2026-06-12
+
+### Fixed
+
+- Restored the intended double-Esc default to `/tree` and fixed the Esc-opened selector path to reset the terminal display instead of preserving stale scrollback when the selector opens.
+
 ## [15.12.2] - 2026-06-12
 
 ### Fixed
