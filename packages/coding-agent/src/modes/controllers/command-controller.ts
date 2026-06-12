@@ -1026,11 +1026,6 @@ export class CommandController {
 		}
 		this.ctx.statusContainer.clear();
 
-		const originalOnEscape = this.ctx.editor.onEscape;
-		this.ctx.editor.onEscape = () => {
-			this.ctx.session.abortCompaction();
-		};
-
 		this.ctx.chatContainer.addChild(new Spacer(1));
 		const label = isAuto ? "Auto-compacting context... (esc to cancel)" : "Compacting context... (esc to cancel)";
 		const compactingLoader = new Loader(
@@ -1068,7 +1063,6 @@ export class CommandController {
 		} finally {
 			compactingLoader.stop();
 			this.ctx.statusContainer.clear();
-			this.ctx.editor.onEscape = originalOnEscape;
 		}
 		await this.ctx.flushCompactionQueue({ willRetry: false });
 		return outcome;
@@ -1088,11 +1082,6 @@ export class CommandController {
 			this.ctx.loadingAnimation = undefined;
 		}
 		this.ctx.statusContainer.clear();
-
-		const originalOnEscape = this.ctx.editor.onEscape;
-		this.ctx.editor.onEscape = () => {
-			this.ctx.session.abortHandoff();
-		};
 
 		const handoffLoader = new Loader(
 			this.ctx.ui,
@@ -1138,7 +1127,6 @@ export class CommandController {
 		} finally {
 			handoffLoader.stop();
 			this.ctx.statusContainer.clear();
-			this.ctx.editor.onEscape = originalOnEscape;
 		}
 		this.ctx.ui.requestRender();
 	}

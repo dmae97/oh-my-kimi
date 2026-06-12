@@ -120,6 +120,35 @@ export class InputController {
 			});
 		}
 		this.ctx.editor.onEscape = () => {
+			// Active context maintenance owns Esc: auto/manual compaction,
+			// handoff generation, and auto-retry backoff all advertise
+			// "(esc to cancel)". Dispatch on live session state instead of
+			// swapping onEscape handlers — interleaved start/end events used
+			// to clobber the single saved-handler slot (auto-compaction start
+			// → /compact → auto end → manual finally), leaving Esc wired to a
+			// stale no-op closure until restart.
+			const viewSession = this.ctx.viewSession;
+			let aborted = false;
+			if (viewSession.isCompacting) {
+				try {
+					viewSession.abortCompaction();
+				} catch {}
+				aborted = true;
+			}
+			if (viewSession.isGeneratingHandoff) {
+				try {
+					viewSession.abortHandoff();
+				} catch {}
+				aborted = true;
+			}
+			if (viewSession.isRetrying) {
+				try {
+					viewSession.abortRetry();
+				} catch {}
+				aborted = true;
+			}
+			if (aborted) return;
+
 			if (this.ctx.loopModeEnabled) {
 				this.ctx.pauseLoop();
 				if (this.ctx.session.isStreaming) {
