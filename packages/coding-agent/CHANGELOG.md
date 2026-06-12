@@ -15,6 +15,7 @@
 ### Fixed
 
 - Fixed settings search to rank matching tabs by relevance so exact matches appear before incidental matches
+- Fixed snapcompact `toolResults` imaging confusing models into reporting tool malfunctions: the note prepended to rasterized tool results now tells the model the result is in the PNG frame(s) below and that the image delivery is deliberate, not a tool error, instead of the bare `[Rasterized]` marker
 
 ## [15.11.4] - 2026-06-12
 
