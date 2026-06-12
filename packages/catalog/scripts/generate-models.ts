@@ -465,6 +465,13 @@ async function generateModels() {
 	allModels = applyCodexPricingFallback(allModels);
 	allModels = applyFireworksKimiMaxTokensCap(allModels);
 	allModels = applyFireworksDeepSeekReasoningShape(allModels);
+	// Normalize display names: gateway author prefixes ("OpenAI: …"), alias
+	// markers ("(latest)"), provider attribution ("(Antigravity)"), and
+	// price/promo tags are model-extrinsic — strip them from the bundle.
+	allModels = allModels.map(model => {
+		const name = cleanModelName(model.name);
+		return name === model.name ? model : { ...model, name };
+	});
 	applyGeneratedModelPolicies(allModels);
 	linkOpenAIPromotionTargets(allModels);
 

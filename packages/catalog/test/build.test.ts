@@ -74,6 +74,33 @@ describe("buildModel", () => {
 		const model = buildModel(completionsSpec({ reasoning: true }));
 		expect(model.compat.whenThinking).toBeUndefined();
 	});
+
+	it("strips gateway author prefixes and extrinsic tags from display names", () => {
+		const cases: [string, string][] = [
+			["Anthropic: Claude Opus 4.6 (Fast) ($$$$)", "Claude Opus 4.6 (Fast)"],
+			["Claude Opus 4.5 (latest)", "Claude Opus 4.5"],
+			["Gemini 2.5 Flash (Thinking) (Antigravity)", "Gemini 2.5 Flash (Thinking)"],
+			["Stealth: Claude Opus 4.6 (20% off)", "Claude Opus 4.6"],
+			["NousResearch: Hermes 2 Pro (retires Jun 5)", "Hermes 2 Pro"],
+			["Z.ai: GLM 5", "GLM 5"],
+		];
+		for (const [raw, cleaned] of cases) {
+			expect(buildModel(completionsSpec({ name: raw })).name).toBe(cleaned);
+		}
+	});
+
+	it("keeps variant tags that map to distinct wire ids", () => {
+		const keep = [
+			"Trinity Large Preview (free)",
+			"Grok 4.1 Fast (Non-Reasoning)",
+			"GPT-4o (2024-08-06)",
+			"Claude Haiku 3.5 (EU)",
+			"Llama-3.3+(3.1v3.3)-70B-Hanami-x1",
+		];
+		for (const name of keep) {
+			expect(buildModel(completionsSpec({ name })).name).toBe(name);
+		}
+	});
 });
 
 describe("model cache spec round trip", () => {

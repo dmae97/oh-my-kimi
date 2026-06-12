@@ -219,7 +219,7 @@ export async function fetchAntigravityDiscoveryModels(
 			const supportsImages = model.supportsImages === true;
 			models.push({
 				id: modelId,
-				name: model.displayName ? `${model.displayName} (Antigravity)` : modelId,
+				name: model.displayName || modelId,
 				api: "google-gemini-cli",
 				provider: "google-antigravity",
 				baseUrl: endpoint,
