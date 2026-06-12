@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [15.11.3] - 2026-06-11
+### Fixed
+
+- Fixed GitHub Copilot long-context model requests to use the upstream `requestModelId` when calling Anthropic, OpenAI Responses, and OpenAI Completions APIs
+- Fixed GitHub Copilot model enablement to deduplicate catalog variants by upstream model ID when enabling all models
+
 ## [15.11.2] - 2026-06-11
 
 ### Fixed

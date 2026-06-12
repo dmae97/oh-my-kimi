@@ -22,7 +22,6 @@ import type {
 } from "../../config/settings-schema";
 import { SETTING_TABS, TAB_METADATA } from "../../config/settings-schema";
 import { getCurrentThemeName, getSelectListTheme, getSettingsListTheme, theme } from "../../modes/theme/theme";
-import { matchesAppInterrupt } from "../../modes/utils/keybinding-matchers";
 import { AUTO_THINKING, type ConfiguredThinkingLevel } from "../../thinking";
 import { getTabBarTheme } from "../shared";
 import { DynamicBorder } from "./dynamic-border";
@@ -221,7 +220,6 @@ export interface SettingsCallbacks {
 export class SettingsSelectorComponent extends Container {
 	#tabBar: TabBar;
 	#currentList: SettingsList | null = null;
-	#currentSubmenu: Container | null = null;
 	#pluginComponent: PluginSettingsComponent | null = null;
 	#statusPreviewContainer: Container | null = null;
 	#statusPreviewText: Text | null = null;
@@ -630,16 +628,6 @@ export class SettingsSelectorComponent extends Container {
 				matchesKey(data, "right"))
 		) {
 			this.#tabBar.handleInput(data);
-			return;
-		}
-
-		// Escape clears an active settings search before closing the panel.
-		if (matchesAppInterrupt(data) && !this.#currentSubmenu) {
-			if (this.#currentList?.hasSearchQuery()) {
-				this.#currentList.clearSearch();
-				return;
-			}
-			this.callbacks.onCancel();
 			return;
 		}
 

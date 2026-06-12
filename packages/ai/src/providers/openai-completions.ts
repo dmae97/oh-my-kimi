@@ -113,6 +113,8 @@ function resolveOpenAICompletionsModelId(
 	model: Model<"openai-completions">,
 	options: OpenAICompletionsOptions | undefined,
 ): string {
+	// Catalog variants (e.g. Copilot long-context `-1m` entries) pin the wire id.
+	if (model.requestModelId) return model.requestModelId;
 	if (model.provider === "firepass") return toFirepassWireModelId(model.id);
 	if (model.provider === "fireworks") return toFireworksWireModelId(model.id);
 	if (model.provider === "openrouter") return applyOpenRouterRoutingVariant(model.id, options?.openrouterVariant);

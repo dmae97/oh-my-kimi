@@ -173,6 +173,24 @@ describe("issue:// protocol handler", () => {
 		expect(spy).toHaveBeenCalledTimes(1);
 	});
 
+	it("retries issue://owner/repo/<n> without stateReason when gh does not support it", async () => {
+		const spy = vi.spyOn(git.github, "json").mockImplementation(async (_cwd, args) => {
+			if (requestedJsonFields(args).has("stateReason")) {
+				throw new Error('Unknown JSON field: "stateReason"');
+			}
+			return issuePayload(42, "issue body") as never;
+		});
+
+		const router = InternalUrlRouter.instance();
+		const resource = await router.resolve("issue://owner/example/42");
+
+		expect(resource.content).toContain("# Issue #42: Issue #42");
+		expect(resource.content).not.toContain("State reason");
+		expect(spy).toHaveBeenCalledTimes(2);
+		expect(requestedJsonFields(spy.mock.calls[0]?.[1] as string[]).has("stateReason")).toBe(true);
+		expect(requestedJsonFields(spy.mock.calls[1]?.[1] as string[]).has("stateReason")).toBe(false);
+	});
+
 	it("?comments=0 selects a separate cache row with comments suppressed", async () => {
 		const spy = vi
 			.spyOn(git.github, "json")
@@ -400,6 +418,7 @@ describe("issue:// / pr:// listing", () => {
 		expect(args[1]).toBe("list");
 		expect(args).toEqual(expect.arrayContaining(["--repo", "owner/example"]));
 		expect(args).toEqual(expect.arrayContaining(["--state", "open"]));
+		expect(requestedJsonFields(args).has("stateReason")).toBe(false);
 	});
 
 	it("pr://owner/repo passes state and limit query params through to gh", async () => {

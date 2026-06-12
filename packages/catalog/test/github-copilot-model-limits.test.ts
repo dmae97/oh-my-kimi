@@ -38,11 +38,13 @@ async function discoverCopilotModels(
 	expectedBaseUrl = "https://api.githubcopilot.com",
 	expectedAuthorizationToken = apiKey,
 ) {
+	const requestApiVersions: Array<string | undefined> = [];
 	const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
 		const url = typeof input === "string" ? input : input.toString();
 		expect(url).toBe(`${expectedBaseUrl}/models`);
 		expect(init?.method).toBe("GET");
 		expect(getHeaderValue(init?.headers, "Authorization")).toBe(`Bearer ${expectedAuthorizationToken}`);
+		requestApiVersions.push(getHeaderValue(init?.headers, "X-GitHub-Api-Version"));
 		return new Response(JSON.stringify(payload), {
 			status: 200,
 			headers: { "Content-Type": "application/json" },
@@ -52,7 +54,7 @@ async function discoverCopilotModels(
 	expect(options.fetchDynamicModels).toBeDefined();
 	const models = await options.fetchDynamicModels?.();
 	expect(models).not.toBeNull();
-	return { models: models ?? [], fetchMock };
+	return { models: models ?? [], fetchMock, requestApiVersions };
 }
 
 describe("github copilot model limits mapping", () => {
@@ -286,5 +288,216 @@ describe("github copilot model limits mapping", () => {
 		// Should use the Copilot-specific bundled reference (272k after models.json fix),
 		// not the OpenAI global reference (1050k).
 		expect(model?.contextWindow).toBe(272_000);
+	});
+});
+
+/**
+ * Entry shaped like the `/models` response under `X-GitHub-Api-Version: 2026-06-01`:
+ * `capabilities.limits` reports the long-context ceiling and
+ * `billing.token_prices` carries per-tier prompt boundaries and prices
+ * (hundredths of a dollar per 1M tokens).
+ */
+function tieredCopilotEntry(overrides: {
+	id: string;
+	name: string;
+	window: number;
+	maxOutput: number;
+	defaultContextMax?: number;
+	longContextMax?: number;
+	defaultPrices?: { input: number; output: number; cache: number };
+	longPrices?: { input: number; output: number; cache: number };
+	vision?: boolean;
+	type?: string;
+}) {
+	return {
+		id: overrides.id,
+		name: overrides.name,
+		capabilities: {
+			type: overrides.type ?? "chat",
+			limits: {
+				max_context_window_tokens: overrides.window,
+				max_output_tokens: overrides.maxOutput,
+			},
+			...(overrides.vision !== undefined && { supports: { vision: overrides.vision } }),
+		},
+		billing: {
+			token_prices: {
+				default: {
+					...(overrides.defaultContextMax !== undefined && { context_max: overrides.defaultContextMax }),
+					...(overrides.defaultPrices && {
+						input_price: overrides.defaultPrices.input,
+						output_price: overrides.defaultPrices.output,
+						cache_price: overrides.defaultPrices.cache,
+					}),
+				},
+				...(overrides.longContextMax !== undefined && {
+					long_context: {
+						context_max: overrides.longContextMax,
+						...(overrides.longPrices && {
+							input_price: overrides.longPrices.input,
+							output_price: overrides.longPrices.output,
+							cache_price: overrides.longPrices.cache,
+						}),
+					},
+				}),
+			},
+		},
+	};
+}
+
+describe("github copilot tiered context windows", () => {
+	it("sends the Copilot API version header on discovery", async () => {
+		const { requestApiVersions } = await discoverCopilotModels({ data: [] });
+		expect(requestApiVersions).toEqual(["2026-06-01"]);
+	});
+
+	it("caps the base entry to the default tier and synthesizes a 1M sibling", async () => {
+		const { models } = await discoverCopilotModels({
+			data: [
+				tieredCopilotEntry({
+					id: "claude-opus-4.7",
+					name: "Claude Opus 4.7",
+					window: 1_000_000,
+					maxOutput: 64_000,
+					defaultContextMax: 200_000,
+					longContextMax: 936_000,
+					defaultPrices: { input: 500, output: 2500, cache: 50 },
+					longPrices: { input: 500, output: 2500, cache: 50 },
+					vision: true,
+				}),
+			],
+		});
+
+		const base = models.find(candidate => candidate.id === "claude-opus-4.7");
+		expect(base).toBeDefined();
+		expect(base?.api).toBe("anthropic-messages");
+		expect(base?.contextWindow).toBe(264_000);
+		expect(base?.maxTokens).toBe(64_000);
+		expect(base?.contextPromotionTarget).toBe("github-copilot/claude-opus-4.7-1m");
+		expect(base?.headers?.["X-GitHub-Api-Version"]).toBe("2026-06-01");
+
+		const variant = models.find(candidate => candidate.id === "claude-opus-4.7-1m");
+		expect(variant).toBeDefined();
+		expect(variant?.requestModelId).toBe("claude-opus-4.7");
+		expect(variant?.name).toBe("Claude Opus 4.7 (1M)");
+		expect(variant?.api).toBe("anthropic-messages");
+		expect(variant?.contextWindow).toBe(1_000_000);
+		expect(variant?.maxTokens).toBe(64_000);
+		expect(variant?.contextPromotionTarget).toBeUndefined();
+	});
+
+	it("prices the long-context variant from its own tier", async () => {
+		const { models } = await discoverCopilotModels({
+			data: [
+				tieredCopilotEntry({
+					id: "gemini-9.9-pro-preview",
+					name: "Gemini 9.9 Pro",
+					window: 1_000_000,
+					maxOutput: 64_000,
+					defaultContextMax: 200_000,
+					longContextMax: 936_000,
+					defaultPrices: { input: 200, output: 1200, cache: 20 },
+					longPrices: { input: 400, output: 1800, cache: 40 },
+				}),
+			],
+		});
+
+		const variant = models.find(candidate => candidate.id === "gemini-9.9-pro-preview-1m");
+		expect(variant).toBeDefined();
+		expect(variant?.cost).toEqual({ input: 4, output: 18, cacheRead: 0.4, cacheWrite: 0 });
+	});
+
+	it("keeps legacy tier-capped responses unchanged and synthesizes no variant", async () => {
+		const { models } = await discoverCopilotModels({
+			data: [
+				{
+					id: "claude-haiku-4.5",
+					name: "Claude Haiku 4.5",
+					capabilities: {
+						type: "chat",
+						limits: {
+							max_context_window_tokens: 144_000,
+							max_output_tokens: 32_000,
+						},
+						supports: { vision: true },
+					},
+				},
+			],
+		});
+
+		expect(models).toHaveLength(1);
+		const model = models[0];
+		expect(model?.id).toBe("claude-haiku-4.5");
+		expect(model?.contextWindow).toBe(144_000);
+		expect(model?.requestModelId).toBeUndefined();
+		expect(model?.contextPromotionTarget).toBeUndefined();
+	});
+
+	it("maps vision capability for models without bundled references", async () => {
+		const { models } = await discoverCopilotModels({
+			data: [
+				tieredCopilotEntry({
+					id: "claude-fable-9",
+					name: "Claude Fable 9",
+					window: 264_000,
+					maxOutput: 64_000,
+					vision: true,
+				}),
+				tieredCopilotEntry({
+					id: "text-only-model",
+					name: "Text Only",
+					window: 128_000,
+					maxOutput: 16_000,
+				}),
+			],
+		});
+
+		const fable = models.find(candidate => candidate.id === "claude-fable-9");
+		expect(fable?.input).toEqual(["text", "image"]);
+		expect(fable?.api).toBe("anthropic-messages");
+		const textOnly = models.find(candidate => candidate.id === "text-only-model");
+		expect(textOnly?.input).toEqual(["text"]);
+	});
+
+	it("drops non-chat catalog entries", async () => {
+		const { models } = await discoverCopilotModels({
+			data: [
+				tieredCopilotEntry({
+					id: "text-embedding-3-small",
+					name: "Embedding V3 small",
+					window: 0,
+					maxOutput: 0,
+					type: "embeddings",
+				}),
+			],
+		});
+
+		expect(models).toHaveLength(0);
+	});
+
+	it("prefers a real upstream id over a synthesized variant", async () => {
+		const { models } = await discoverCopilotModels({
+			data: [
+				tieredCopilotEntry({
+					id: "claude-opus-4.6",
+					name: "Claude Opus 4.6",
+					window: 1_000_000,
+					maxOutput: 64_000,
+					defaultContextMax: 200_000,
+					longContextMax: 936_000,
+				}),
+				tieredCopilotEntry({
+					id: "claude-opus-4.6-1m",
+					name: "Claude Opus 4.6 1M (served)",
+					window: 999_000,
+					maxOutput: 64_000,
+				}),
+			],
+		});
+
+		const served = models.filter(candidate => candidate.id === "claude-opus-4.6-1m");
+		expect(served).toHaveLength(1);
+		expect(served[0]?.contextWindow).toBe(999_000);
+		expect(served[0]?.requestModelId).toBeUndefined();
 	});
 });

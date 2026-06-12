@@ -169,7 +169,9 @@ export async function fetchOpenAICompatibleModels<TApi extends Api>(
 			maxTokens: UNK_MAX_TOKENS,
 		};
 
-		const mapped = options.mapModel?.(entry, defaults, context) ?? defaults;
+		// `mapModel` returning null skips the entry (documented contract); only a
+		// missing mapper falls back to the defaults.
+		const mapped = options.mapModel ? options.mapModel(entry, defaults, context) : defaults;
 		if (!mapped || typeof mapped.id !== "string" || mapped.id.length === 0) {
 			continue;
 		}
