@@ -1,4 +1,5 @@
 import { describe, expect, it, spyOn } from "bun:test";
+import * as path from "node:path";
 import type {
 	ResetCreditAccountStatus,
 	ResetCreditRedeemOutcome,
@@ -478,11 +479,12 @@ describe("session lifecycle commands", () => {
 		runtime.notifyTitleChanged = async () => {
 			notified = true;
 		};
+		const expectedMovedTo = path.resolve("/tmp");
 		const result = await executeAcpBuiltinSlashCommand("/move /tmp", runtime);
 		expect(result).toEqual({ consumed: true });
 		expect(fakeSessionManager._flushed).toBe(true);
-		expect(fakeSessionManager._movedTo).toBe("/tmp");
-		expect(output[0]).toContain("/tmp");
+		expect(fakeSessionManager._movedTo).toBe(expectedMovedTo);
+		expect(output[0]).toContain(expectedMovedTo);
 		expect(notified).toBe(true);
 	});
 
