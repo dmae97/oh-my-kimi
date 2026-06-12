@@ -128,7 +128,8 @@ describe("SettingsSelectorComponent memory tab", () => {
 		comp.handleInput("b");
 		const strip = (line: string): string => line.replace(/\x1b\[[0-9;]*m/g, "");
 		const searching = comp.render(120).map(strip).join("\n");
-		expect(searching).toContain("b▌");
+		const banner = comp.render(120).map(strip).find(line => /\d+ match/.test(line)) ?? "";
+		expect(banner).toContain(" b ");
 		expect(searching).toMatch(/\d+ match/);
 
 		// First Escape exits search mode without closing the panel.
@@ -156,6 +157,25 @@ describe("SettingsSelectorComponent memory tab", () => {
 		if (appearanceIndex >= 0) {
 			expect(appearanceIndex).toBeGreaterThan(providersIndex);
 		}
+	});
+
+	it("supports editor hotkeys in the global search bar", () => {
+		const comp = createSelector();
+		const strip = (line: string): string => line.replace(/\x1b\[[0-9;]*m/g, "");
+		const banner = (): string => comp.render(120).map(strip).find(line => /\d+ match/.test(line)) ?? "";
+
+		// alt+backspace deletes the trailing word from the query.
+		for (const ch of "image provider") comp.handleInput(ch);
+		comp.handleInput("\x1b\x7f");
+		expect(banner()).toContain("image");
+		expect(banner()).not.toContain("provider");
+
+		// Arrow keys move the cursor; typing inserts mid-query instead of appending.
+		comp.handleInput("\x15"); // ctrl+u clears the rest of the query
+		for (const ch of "model") comp.handleInput(ch);
+		for (let i = 0; i < 5; i++) comp.handleInput("\x1b[D");
+		comp.handleInput("x");
+		expect(banner()).toContain("xmodel");
 	});
 
 	it("delegates Escape to an open settings submenu before closing the selector", () => {
