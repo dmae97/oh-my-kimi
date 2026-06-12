@@ -100,6 +100,7 @@ import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { countTokens, MacOSPowerAssertion } from "@oh-my-pi/pi-natives";
 import {
 	extractRetryHint,
+	formatDuration,
 	getAgentDbPath,
 	getInstallId,
 	isBunTestRuntime,
@@ -240,7 +241,13 @@ import { normalizeModelContextImages } from "../utils/image-loading";
 import { buildNamedToolChoice } from "../utils/tool-choice";
 import type { AuthStorage } from "./auth-storage";
 import type { ClientBridge, ClientBridgePermissionOption, ClientBridgePermissionOutcome } from "./client-bridge";
-import { defaultCodexAutoRedeemCoordinator, evaluateCodexAutoRedeem } from "./codex-auto-reset";
+import {
+	type CodexAutoRedeemRedeemDecision,
+	defaultCodexAutoRedeemCoordinator,
+	evaluateCodexAutoRedeem,
+	shouldEvaluateCodexAutoRedeem,
+	shouldPromptCodexAutoRedeem,
+} from "./codex-auto-reset";
 import {
 	type BashExecutionMessage,
 	type CustomMessage,
@@ -10198,20 +10205,61 @@ export class AgentSession {
 			signal,
 		});
 	}
+	async #confirmCodexAutoRedeem(decision: CodexAutoRedeemRedeemDecision): Promise<boolean> {
+		const runner = this.#extensionRunner;
+		if (!runner?.hasUI()) {
+			this.emitNotice(
+				"warning",
+				"Codex saved reset is eligible, but auto-redeem is unset and no prompt UI is available. Run `/usage reset` or set codexResets.autoRedeem.",
+				"codex-auto-reset",
+			);
+			return false;
+		}
+
+		const who = decision.target.email ?? decision.target.accountId ?? "the active account";
+		const resetLabel = decision.availableCount === 1 ? "reset" : "resets";
+		try {
+			const choice = await runner.getUIContext().select(
+				`Do you wanna redeem your reset?\n${who} is blocked by the weekly Codex limit for about ${formatDuration(decision.remainingMs)}. Spend 1 of ${decision.availableCount} saved ${resetLabel}?`,
+				[
+					{
+						label: "Yes",
+						description: "Redeem now and remember yes for future eligible Codex weekly blocks.",
+					},
+					{
+						label: "No",
+						description: "Do not auto-redeem saved Codex resets.",
+					},
+				],
+			);
+			if (choice === "Yes") {
+				this.settings.set("codexResets.autoRedeem", "yes");
+				return true;
+			}
+			if (choice === "No") {
+				this.settings.set("codexResets.autoRedeem", "no");
+			}
+		} catch (error) {
+			logger.warn("codex-auto-reset prompt failed", { error: String(error) });
+		}
+		return false;
+	}
 
 	/**
 	 * Auto-redeem hook for {@link AgentSession.#handleRetryableError}'s
 	 * usage-limit branch. Returns `true` only when a saved Codex reset was
-	 * actually spent (so the caller retries immediately). Opt-in, reactive, and
-	 * heavily gated — see `./codex-auto-reset` and the design in
-	 * `local://autoreset-spec.md`. Per-account in-flight dedup lets concurrent
-	 * sessions adopt one redeem instead of double-spending.
+	 * actually spent (so the caller retries immediately). The "unset" mode is
+	 * reactive but asks before spending; "yes" skips that prompt, and "no" avoids
+	 * the eligibility IO entirely. The decision remains heavily gated — see
+	 * `./codex-auto-reset` and the design in `local://autoreset-spec.md`.
+	 * Per-account in-flight dedup lets concurrent sessions adopt one redeem
+	 * instead of double-spending.
 	 */
 	async #maybeAutoRedeemCodexReset(coordinator = defaultCodexAutoRedeemCoordinator): Promise<boolean> {
 		const cfg = this.settings.getGroup("codexResets");
 		const model = this.model;
 		// Cheap exits before any IO.
-		if (!cfg.autoRedeem || !model || model.provider !== "openai-codex") return false;
+		if (!shouldEvaluateCodexAutoRedeem(cfg.autoRedeem) || !model || model.provider !== "openai-codex") return false;
 		const authStorage = this.#modelRegistry.authStorage;
 		// Capture identity BEFORE awaits: markUsageLimitReached leaves the
 		// usage-limit session credential sticky, so this names the blocked account.
@@ -10228,7 +10276,7 @@ export class AgentSession {
 				provider: model.provider,
 				modelId: model.id,
 				settings: {
-					autoRedeem: cfg.autoRedeem,
+					autoRedeem: true,
 					minBlockedMinutes: Math.max(0, cfg.minBlockedMinutes),
 					keepCredits: Math.max(0, Math.trunc(cfg.keepCredits)),
 				},
@@ -10239,6 +10287,9 @@ export class AgentSession {
 			});
 			if (!decision.redeem) {
 				logger.debug("codex-auto-reset: skipped", { reason: decision.reason });
+				return false;
+			}
+			if (shouldPromptCodexAutoRedeem(cfg.autoRedeem) && !(await this.#confirmCodexAutoRedeem(decision))) {
 				return false;
 			}
 			// Commit the attempt BEFORE acting so this block can never re-enter.

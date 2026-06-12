@@ -3775,14 +3775,24 @@ export const SETTINGS_SCHEMA = {
 	},
 	// Codex saved rate-limit resets (auto-redeem)
 	"codexResets.autoRedeem": {
-		type: "boolean",
-		default: false,
+		type: "enum",
+		values: ["unset", "yes", "no"] as const,
+		default: "unset" as const,
 		ui: {
 			tab: "providers",
 			group: "Services",
 			label: "Codex Auto-Redeem Saved Resets",
 			description:
-				"When a turn is blocked by the Codex weekly limit on the active account and no other account is available, automatically spend one saved rate-limit reset (ChatGPT 'save rate limit resets'). Conservative: never fires for 5-hour-only or Spark limits, near a natural reset, or twice for the same block. Requires retries enabled.",
+				"When a turn is blocked by the Codex weekly limit on the active account and no other account is available, run the conservative saved-reset check. unset asks before spending the first eligible reset, yes spends eligible resets without prompting, and no disables the check entirely. Requires retries enabled.",
+			options: [
+				{
+					value: "unset",
+					label: "Unset",
+					description: "Check eligibility, then ask before spending the first saved reset.",
+				},
+				{ value: "yes", label: "Yes", description: "Spend eligible saved resets without prompting." },
+				{ value: "no", label: "No", description: "Do not run the saved-reset auto-redeem check." },
+			],
 		},
 	},
 	"codexResets.minBlockedMinutes": {
@@ -4194,8 +4204,10 @@ export interface ShellMinimizerSettings {
 	sourceOutlineLevel: "default" | "aggressive";
 	legacyFilters: boolean | undefined;
 }
+export type CodexAutoRedeemMode = "unset" | "yes" | "no";
+
 export interface CodexResetsSettings {
-	autoRedeem: boolean;
+	autoRedeem: CodexAutoRedeemMode;
 	minBlockedMinutes: number;
 	keepCredits: number;
 }

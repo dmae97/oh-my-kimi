@@ -834,6 +834,18 @@ export class Settings {
 		}
 		delete raw["providers.parallelFetch"];
 
+		// codexResets.autoRedeem: boolean -> tri-state enum.
+		// Existing explicit false keeps the old "do not run" behavior; missing
+		// config now falls through to the new "unset" default, which asks before
+		// the first eligible spend.
+		const codexResetsObj = raw.codexResets as Record<string, unknown> | undefined;
+		if (codexResetsObj && typeof codexResetsObj.autoRedeem === "boolean") {
+			codexResetsObj.autoRedeem = codexResetsObj.autoRedeem ? "yes" : "no";
+		}
+		if (typeof raw["codexResets.autoRedeem"] === "boolean") {
+			raw["codexResets.autoRedeem"] = raw["codexResets.autoRedeem"] ? "yes" : "no";
+		}
+
 		// Map legacy `memories.enabled` boolean to the explicit `memory.backend`
 		// enum if the latter hasn't been set yet. Idempotent: subsequent
 		// migrations are no-ops once memory.backend is materialised.

@@ -10,11 +10,14 @@
  */
 import { describe, expect, it } from "bun:test";
 import type { OAuthAccountIdentity, UsageReport } from "@oh-my-pi/pi-ai";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { SETTINGS_SCHEMA } from "@oh-my-pi/pi-coding-agent/config/settings-schema";
 import {
 	type CodexAutoRedeemInput,
 	DEBOUNCE_BUCKET_MS,
 	evaluateCodexAutoRedeem,
+	shouldEvaluateCodexAutoRedeem,
+	shouldPromptCodexAutoRedeem,
 } from "@oh-my-pi/pi-coding-agent/session/codex-auto-reset";
 
 // Epoch ms divisible by 60_000 so a minute-boundary `resetsAt` lets the
@@ -231,8 +234,20 @@ describe("evaluateCodexAutoRedeem", () => {
 			input([report(1.0, 3 * DAY, 1)], { settings: { autoRedeem: false, minBlockedMinutes: 60, keepCredits: 0 } }),
 		);
 		expect(decision).toEqual({ redeem: false, reason: "disabled" });
-		// The opt-in master switch must default OFF (scarce, possibly irreversible resource).
-		expect(SETTINGS_SCHEMA["codexResets.autoRedeem"].default).toBe(false);
+		// The public setting defaults to prompt-on-eligibility, not silent spend.
+		expect(SETTINGS_SCHEMA["codexResets.autoRedeem"].default).toBe("unset");
+		expect(shouldEvaluateCodexAutoRedeem("unset")).toBe(true);
+		expect(shouldPromptCodexAutoRedeem("unset")).toBe(true);
+		expect(shouldEvaluateCodexAutoRedeem("yes")).toBe(true);
+		expect(shouldPromptCodexAutoRedeem("yes")).toBe(false);
+		expect(shouldEvaluateCodexAutoRedeem("no")).toBe(false);
+		expect(shouldPromptCodexAutoRedeem("no")).toBe(false);
+	});
+
+	it("migrates legacy boolean autoRedeem config to the tri-state policy", () => {
+		expect(Settings.isolated().get("codexResets.autoRedeem")).toBe("unset");
+		expect(Settings.isolated({ "codexResets.autoRedeem": true }).get("codexResets.autoRedeem")).toBe("yes");
+		expect(Settings.isolated({ "codexResets.autoRedeem": false }).get("codexResets.autoRedeem")).toBe("no");
 	});
 
 	it("skips a stale usage report", () => {
