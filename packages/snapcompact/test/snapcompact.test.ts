@@ -71,11 +71,29 @@ interface DecodedPng {
 	width: number;
 	height: number;
 	colorType: number;
-	/** Palette indices, one byte per pixel (filter bytes stripped). */
+	/** GLOBAL palette indices (mapped back through PLTE), one byte per pixel. */
 	pixels: Uint8Array;
 }
 
-/** Minimal PNG reader for the encoder's own output (indexed, filter None). */
+/** The renderer's fixed global palette (see PALETTE in snapcompact.rs). */
+const GLOBAL_PALETTE = [
+	[255, 255, 255],
+	[109, 2, 2],
+	[109, 53, 2],
+	[24, 109, 2],
+	[2, 109, 109],
+	[2, 32, 109],
+	[75, 2, 109],
+	[0, 0, 0],
+	[255, 247, 194],
+	[128, 128, 128],
+] as const;
+
+/**
+ * Minimal PNG reader for the encoder's own output (indexed, filter None,
+ * 1/2/4/8-bit). The encoder narrows each frame's palette to the colors it
+ * uses, so decoded indices are mapped back to GLOBAL palette slots via PLTE.
+ */
 function decodePng(png: Uint8Array): DecodedPng {
 	expect(Array.from(png.subarray(0, 8))).toEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 	const view = new DataView(png.buffer, png.byteOffset, png.byteLength);
@@ -84,6 +102,7 @@ function decodePng(png: Uint8Array): DecodedPng {
 	let height = 0;
 	let colorType = -1;
 	let depth = 0;
+	let plte: Uint8Array | undefined;
 	const idatParts: Uint8Array[] = [];
 	while (pos < png.length) {
 		const length = view.getUint32(pos);
@@ -94,10 +113,23 @@ function decodePng(png: Uint8Array): DecodedPng {
 			height = view.getUint32(pos + 12);
 			depth = data[8];
 			colorType = data[9];
+		} else if (type === "PLTE") {
+			plte = data;
 		} else if (type === "IDAT") {
 			idatParts.push(data);
 		}
 		pos += 12 + length;
+	}
+	// Local palette slot -> global palette index, matched by RGB.
+	const toGlobal = new Uint8Array(plte ? plte.length / 3 : 0);
+	if (plte) {
+		for (let i = 0; i < toGlobal.length; i++) {
+			const global = GLOBAL_PALETTE.findIndex(
+				([r, g, b]) => plte[i * 3] === r && plte[i * 3 + 1] === g && plte[i * 3 + 2] === b,
+			);
+			expect(global).toBeGreaterThanOrEqual(0);
+			toGlobal[i] = global;
+		}
 	}
 	let idatLength = 0;
 	for (const part of idatParts) idatLength += part.length;
@@ -109,19 +141,19 @@ function decodePng(png: Uint8Array): DecodedPng {
 	}
 	// Strip the zlib envelope (2-byte header + trailing Adler-32).
 	const raw = Bun.inflateSync(idat.subarray(2, idat.length - 4));
-	const rowBytes = depth === 4 ? Math.ceil(width / 2) : width;
+	const per = 8 / depth;
+	const rowBytes = Math.ceil(width / per);
 	expect(raw.length).toBe(height * (rowBytes + 1));
+	const mask = (1 << depth) - 1;
 	const pixels = new Uint8Array(width * height);
 	for (let y = 0; y < height; y++) {
 		expect(raw[y * (rowBytes + 1)]).toBe(0); // filter byte: None
 		const row = raw.subarray(y * (rowBytes + 1) + 1, (y + 1) * (rowBytes + 1));
-		if (depth === 4) {
-			for (let x = 0; x < width; x++) {
-				const byte = row[x >> 1];
-				pixels[y * width + x] = x % 2 === 0 ? byte >> 4 : byte & 0xf;
-			}
-		} else {
-			pixels.set(row, y * width);
+		for (let x = 0; x < width; x++) {
+			const byte = row[Math.floor(x / per)];
+			const shift = depth * (per - 1 - (x % per));
+			const local = (byte >> shift) & mask;
+			pixels[y * width + x] = colorType === 3 ? toGlobal[local] : local;
 		}
 	}
 	return { width, height, colorType, pixels };

@@ -534,49 +534,76 @@ fn resize_rgb(src: &[f32], sw: usize, sh: usize, dw: usize, dh: usize) -> Vec<f3
 // PNG encoding
 // ============================================================================
 
-/// Pack one-byte-per-pixel palette indices into 4-bit PNG scanline data
-/// (two pixels per byte, high nibble first). With only 9 palette entries,
-/// 4-bit depth halves the pre-deflate stream vs 8-bit.
-fn pack_nibbles(pixels: &[u8], width: usize, height: usize) -> Vec<u8> {
-	let row_bytes = width.div_ceil(2);
+/// Pack one-byte-per-pixel palette indices into `bits`-per-pixel PNG
+/// scanline data (big-endian within each byte), remapping each global
+/// palette index through `remap` to its per-frame slot on the way.
+fn pack_bits(
+	pixels: &[u8],
+	width: usize,
+	height: usize,
+	bits: usize,
+	remap: &[u8; PALETTE.len()],
+) -> Vec<u8> {
+	let per = 8 / bits;
+	let row_bytes = width.div_ceil(per);
 	let mut packed = vec![0u8; row_bytes * height];
 	for y in 0..height {
 		let src = &pixels[y * width..(y + 1) * width];
 		let dst = &mut packed[y * row_bytes..(y + 1) * row_bytes];
 		for (x, &px) in src.iter().enumerate() {
-			dst[x / 2] |= px << (4 * (1 - x % 2));
+			dst[x / per] |= remap[px as usize] << (bits * (per - 1 - x % per));
 		}
 	}
 	packed
 }
 
-/// Encode a palette-indexed bitmap as a 4-bit indexed PNG with `None` row
+/// Encode a palette-indexed bitmap as an indexed PNG with `None` row
 /// filtering (the glyph bitmap is already minimal-entropy; filtering costs
 /// encode time without helping deflate).
+///
+/// The palette is narrowed to the colors the frame actually uses and the bit
+/// depth follows: a plain `bw` frame (background + ink) packs 1-bit rows, a
+/// dim/banded frame 2-bit, sentence-hue frames 4-bit — bw frames shed
+/// another ~half of the pre-deflate stream vs the fixed 4-bit layout.
 fn encode_indexed_png(
 	pixels: &[u8],
 	width: usize,
 	height: usize,
 	compression: png::Compression,
 ) -> Result<Vec<u8>> {
-	let mut palette = Vec::with_capacity(PALETTE.len() * 3);
-	for rgb in PALETTE {
-		palette.extend_from_slice(&rgb);
+	let mut used = [false; PALETTE.len()];
+	for &px in pixels {
+		used[px as usize] = true;
 	}
+	let mut remap = [0u8; PALETTE.len()];
+	let mut palette = Vec::with_capacity(PALETTE.len() * 3);
+	let mut count = 0u8;
+	for (global, &is_used) in used.iter().enumerate() {
+		if is_used {
+			remap[global] = count;
+			count += 1;
+			palette.extend_from_slice(&PALETTE[global]);
+		}
+	}
+	let (depth, bits) = match count {
+		0..=2 => (png::BitDepth::One, 1),
+		3..=4 => (png::BitDepth::Two, 2),
+		_ => (png::BitDepth::Four, 4),
+	};
 	let mut out = Vec::new();
 	let mut encoder = png::Encoder::new(&mut out, width as u32, height as u32);
 	encoder.set_color(png::ColorType::Indexed);
-	encoder.set_depth(png::BitDepth::Four);
+	encoder.set_depth(depth);
 	encoder.set_palette(Cow::Owned(palette));
 	encoder.set_compression(compression);
 	// MUST come after `set_compression`, which resets the filter to the
-	// compression level's default (`Adaptive` for `Balanced`).
+	// compression level's default (`Adaptive` for `Balanced`/`High`).
 	encoder.set_filter(png::Filter::NoFilter);
 	let mut writer = encoder
 		.write_header()
 		.map_err(|err| Error::from_reason(format!("Failed to write PNG header: {err}")))?;
 	writer
-		.write_image_data(&pack_nibbles(pixels, width, height))
+		.write_image_data(&pack_bits(pixels, width, height, bits, &remap))
 		.map_err(|err| Error::from_reason(format!("Failed to write PNG data: {err}")))?;
 	writer
 		.finish()
@@ -728,7 +755,7 @@ pub fn render_snapcompact_png(
 			render_bitmap(&text, size, height, font, &grid, black_ink)
 		};
 		return Ok(STANDARD
-			.encode(encode_indexed_png(&pixels, size, height, png::Compression::Balanced)?)
+			.encode(encode_indexed_png(&pixels, size, height, png::Compression::High)?)
 			.into());
 	}
 
@@ -762,7 +789,7 @@ pub fn render_snapcompact_png(
 		}
 	}
 	Ok(STANDARD
-		.encode(encode_rgb_png(&frame, size, dst_h, png::Compression::Balanced)?)
+		.encode(encode_rgb_png(&frame, size, dst_h, png::Compression::High)?)
 		.into())
 }
 
@@ -906,6 +933,63 @@ mod tests {
 		assert_eq!(stretched[25], 2);
 		let legacy = png_bytes(render_snapcompact_png("Hi. Ok.".into(), opts(40)).unwrap());
 		assert_eq!(legacy[25], 3, "default shape stays the legacy 5x8 indexed path");
+	}
+
+	#[test]
+	fn indexed_png_narrows_palette_and_bit_depth() {
+		// IHDR bit depth lives at byte 24; PLTE length is the chunk length
+		// word 8 bytes after the "PLTE" tag position.
+		fn depth_and_palette(png: &[u8]) -> (u8, usize) {
+			let tag = png
+				.windows(4)
+				.position(|w| w == b"PLTE")
+				.expect("PLTE chunk");
+			let len = u32::from_be_bytes(png[tag - 4..tag].try_into().unwrap()) as usize;
+			(png[24], len / 3)
+		}
+
+		// Plain bw, no dim/band/repeat: background + black ink = 1-bit.
+		let bw = png_bytes(
+			render_snapcompact_png("Hello world. Again.".into(), SnapcompactRenderOptions {
+				size: 128,
+				font: Some("8x8".into()),
+				variant: Some("bw".into()),
+				..Default::default()
+			})
+			.unwrap(),
+		);
+		assert_eq!(depth_and_palette(&bw), (1, 2));
+
+		// bw with a dim span and repeat bands: 4 colors = 2-bit.
+		let dim = png_bytes(
+			render_snapcompact_png(
+				"Read \u{e}the dim part\u{f} now.".into(),
+				SnapcompactRenderOptions {
+					size: 128,
+					font: Some("8x8".into()),
+					variant: Some("bw".into()),
+					line_repeat: Some(2),
+					..Default::default()
+				},
+			)
+			.unwrap(),
+		);
+		assert_eq!(depth_and_palette(&dim), (2, 4));
+
+		// Sentence hues exceed 4 colors: stays 4-bit, palette still narrowed
+		// to the inks actually printed (bg + 2 hues here).
+		let sent = png_bytes(
+			render_snapcompact_png("Hi. Ok.".into(), SnapcompactRenderOptions {
+				size: 128,
+				font: Some("8x8".into()),
+				variant: Some("sent".into()),
+				..Default::default()
+			})
+			.unwrap(),
+		);
+		let (sent_depth, sent_colors) = depth_and_palette(&sent);
+		assert_eq!(sent_depth, 2, "two hues + bg fit 2-bit");
+		assert_eq!(sent_colors, 3);
 	}
 
 	#[test]

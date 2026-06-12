@@ -188,18 +188,26 @@ def main() -> None:
             failures += 1
             continue
         got = Image.open(out_png).convert("RGB")
-        if got.size != ref.size:
-            print(f"FAIL {name}: size {got.size} != {ref.size}")
+        # Production clips frame height to the rows actually printed; the
+        # reference renders the full square. Compare the printed region
+        # pixel-exact and require everything below it to be blank.
+        if got.width != ref.width or got.height > ref.height:
+            print(f"FAIL {name}: size {got.size} incompatible with reference {ref.size}")
             failures += 1
             continue
         rpx, gpx = ref.load(), got.load()
         diffs, first = 0, None
-        for y in range(SIZE):
-            for x in range(SIZE):
-                if classify(rpx[x, y]) != classify(gpx[x, y]):
+        for y in range(ref.height):
+            for x in range(ref.width):
+                if y < got.height:
+                    if classify(rpx[x, y]) != classify(gpx[x, y]):
+                        diffs += 1
+                        if first is None:
+                            first = (x, y, rpx[x, y], gpx[x, y])
+                elif classify(rpx[x, y]) != ("bg",):
                     diffs += 1
                     if first is None:
-                        first = (x, y, rpx[x, y], gpx[x, y])
+                        first = (x, y, rpx[x, y], "clipped")
         if diffs:
             print(f"FAIL {name}: {diffs} differing pixels; first at {first}")
             ref.save(PARITY / f"{name}.ref.png")
