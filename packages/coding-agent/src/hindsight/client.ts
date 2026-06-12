@@ -546,7 +546,7 @@ interface BuiltMemoryItem {
 function buildMemoryItem(item: MemoryItemInput): BuiltMemoryItem {
 	const out: BuiltMemoryItem = { content: item.content };
 	if (item.timestamp !== undefined) {
-		out.timestamp = item.timestamp instanceof Date ? item.timestamp.toISOString() : item.timestamp;
+		out.timestamp = item.timestamp instanceof Date ? formatDateWithLocalOffset(item.timestamp) : item.timestamp;
 	}
 	if (item.context !== undefined) out.context = item.context;
 	if (item.metadata !== undefined) out.metadata = item.metadata;
@@ -556,6 +556,31 @@ function buildMemoryItem(item: MemoryItemInput): BuiltMemoryItem {
 	if (item.strategy !== undefined) out.strategy = item.strategy;
 	if (item.updateMode !== undefined) out.update_mode = item.updateMode;
 	return out;
+}
+
+function formatDateWithLocalOffset(date: Date): string {
+	const offsetMinutes = date.getTimezoneOffset();
+	const offsetSign = offsetMinutes <= 0 ? "+" : "-";
+	const absoluteOffset = Math.abs(offsetMinutes);
+	const offsetHours = Math.floor(absoluteOffset / 60);
+	const offsetRemainderMinutes = absoluteOffset % 60;
+	const milliseconds = date.getMilliseconds();
+	const millisecondsPart = milliseconds === 0 ? "" : `.${pad3(milliseconds)}`;
+	return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}T${pad2(
+		date.getHours(),
+	)}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}${millisecondsPart}${offsetSign}${pad2(
+		offsetHours,
+	)}:${pad2(offsetRemainderMinutes)}`;
+}
+
+function pad2(value: number): string {
+	return value < 10 ? `0${value}` : String(value);
+}
+
+function pad3(value: number): string {
+	if (value < 10) return `00${value}`;
+	if (value < 100) return `0${value}`;
+	return String(value);
 }
 
 function buildQueryString(query: Record<string, unknown>): string {
