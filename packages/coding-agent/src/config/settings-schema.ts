@@ -1667,6 +1667,38 @@ export const SETTINGS_SCHEMA = {
 					label: "5x8 legacy, sentence hues",
 					description: "The original snapcompact shape (pre-shape-table sessions rendered this).",
 				},
+				{
+					value: "6x12-dim",
+					label: "6x12, dimmed stopwords",
+					description: "X.org 6x12 glyphs, black ink, function words dimmed gray. Claude fable eval winner.",
+				},
+				{
+					value: "8x13-bw",
+					label: "8x13, black",
+					description: "X.org 8x13 glyphs, black ink. Opus eval winner.",
+				},
+				{
+					value: "8on16-bw",
+					label: "8x13 on 16px pitch, black",
+					description: "8x13 glyphs on an 8x16 cell (extra leading), black ink. GPT grid runner-up (.906).",
+				},
+				{
+					value: "doc-8on16-bw",
+					label: "Doc 8on16, black",
+					description:
+						"Two word-wrapped newspaper columns of 8x13 glyphs on a 16px pitch, black ink. GPT eval winner.",
+				},
+				{
+					value: "doc-8on16-sent",
+					label: "Doc 8on16, sentence hues",
+					description: "Two-column doc layout with sentence-hue ink. GLM eval winner.",
+				},
+				{
+					value: "doc-8on16-sent-dim",
+					label: "Doc 8on16, sentence hues + dimmed stopwords",
+					description:
+						"Two-column doc layout, sentence-hue ink, function words dimmed gray. Gemini/Kimi eval winner.",
+				},
 			],
 		},
 	},
