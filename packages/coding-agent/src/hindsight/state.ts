@@ -26,6 +26,7 @@ const RETAIN_FLUSH_INTERVAL_MS = 5_000;
 interface PendingRetainItem {
 	content: string;
 	context?: string;
+	timestamp: Date;
 }
 
 interface RecallOutcome {
@@ -84,7 +85,7 @@ export class HindsightRetainQueue {
 		if (this.#closed) {
 			throw new Error("Hindsight retain queue is closed.");
 		}
-		this.#items.push({ content, context });
+		this.#items.push({ content, context, timestamp: new Date() });
 
 		if (this.#items.length >= RETAIN_FLUSH_BATCH_SIZE) {
 			void this.flush();
@@ -154,6 +155,7 @@ export class HindsightRetainQueue {
 				context: item.context ?? state.config.retainContext,
 				metadata: { session_id: sessionId },
 				tags: state.retainTags,
+				timestamp: item.timestamp,
 			}));
 			await state.client.retainBatch(state.bankId, batch, { async: true });
 			if (state.config.debug) {
@@ -281,6 +283,7 @@ export class HindsightSessionState {
 	}
 
 	async retainSession(messages: HindsightMessage[]): Promise<void> {
+		const retainedAt = new Date();
 		const retainFullWindow = this.config.retainMode === "full-session";
 		let target: HindsightMessage[];
 		let documentId: string;
@@ -291,7 +294,7 @@ export class HindsightSessionState {
 		} else {
 			const windowTurns = this.config.retainEveryNTurns + this.config.retainOverlapTurns;
 			target = sliceLastTurnsByUserBoundary(messages, windowTurns);
-			documentId = `${this.sessionId}-${Date.now()}`;
+			documentId = `${this.sessionId}-${retainedAt.getTime()}`;
 		}
 
 		const { transcript } = prepareRetentionTranscript(target, true);
@@ -303,6 +306,7 @@ export class HindsightSessionState {
 			context: this.config.retainContext,
 			metadata: { session_id: this.sessionId },
 			tags: this.retainTags,
+			timestamp: retainedAt,
 			async: true,
 		});
 	}
