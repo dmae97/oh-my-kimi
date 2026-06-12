@@ -13,12 +13,45 @@ function relayHttpUrl(): string {
 	return relay.url.replace(/^ws:/, "http:").replace(/^wss:/, "https:");
 }
 
+interface Inbox {
+	queue: MessageEvent[];
+	waiters: Array<(event: MessageEvent) => void>;
+}
+
+const inboxes = new Map<WebSocket, Inbox>();
+
 function socket(path: string): WebSocket {
 	if (!relay) throw new Error("relay not started");
 	const ws = new WebSocket(`${relay.url}${path}`);
 	ws.binaryType = "arraybuffer";
+	const inbox: Inbox = { queue: [], waiters: [] };
+	inboxes.set(ws, inbox);
+	ws.addEventListener("message", event => {
+		const waiter = inbox.waiters.shift();
+		if (waiter) waiter(event as MessageEvent);
+		else inbox.queue.push(event as MessageEvent);
+	});
 	sockets.push(ws);
 	return ws;
+}
+
+function nextMessage(ws: WebSocket, label: string, timeoutMs = REQUEST_TIMEOUT_MS): Promise<MessageEvent> {
+	const inbox = inboxes.get(ws);
+	if (!inbox) throw new Error("socket not created via socket()");
+	const queued = inbox.queue.shift();
+	if (queued) return Promise.resolve(queued);
+	const { promise, resolve, reject } = Promise.withResolvers<MessageEvent>();
+	const timer = setTimeout(() => {
+		const idx = inbox.waiters.indexOf(onEvent);
+		if (idx !== -1) inbox.waiters.splice(idx, 1);
+		reject(new Error(`timed out waiting for ${label}`));
+	}, timeoutMs);
+	const onEvent = (event: MessageEvent): void => {
+		clearTimeout(timer);
+		resolve(event);
+	};
+	inbox.waiters.push(onEvent);
+	return promise;
 }
 
 function waitEvent<T extends Event>(
@@ -51,13 +84,13 @@ function waitOpen(ws: WebSocket): Promise<Event> {
 }
 
 async function waitText(ws: WebSocket, label: string): Promise<string> {
-	const event = await waitEvent<MessageEvent>(ws, "message", label);
+	const event = await nextMessage(ws, label);
 	if (typeof event.data !== "string") throw new Error(`${label} was not TEXT`);
 	return event.data;
 }
 
 async function waitBinary(ws: WebSocket, label: string): Promise<Uint8Array> {
-	const event = await waitEvent<MessageEvent>(ws, "message", label);
+	const event = await nextMessage(ws, label);
 	const data: unknown = event.data;
 	if (data instanceof ArrayBuffer) return new Uint8Array(data);
 	if (ArrayBuffer.isView(data)) return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
@@ -70,6 +103,7 @@ function closeSocket(ws: WebSocket): void {
 
 afterEach(() => {
 	for (const ws of sockets.splice(0)) closeSocket(ws);
+	inboxes.clear();
 	relay?.stop();
 	relay = null;
 });

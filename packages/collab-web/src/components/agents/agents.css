@@ -154,7 +154,7 @@
 .ag-chip--model {
 	overflow: hidden;
 	max-width: 160px;
-	color: var(--accent-muted);
+	color: var(--fg-faint);
 	text-overflow: ellipsis;
 }
 
@@ -320,7 +320,7 @@
 	width: 72px;
 	height: 4px;
 	border-radius: var(--radius-sm);
-	background: var(--bg-inset);
+	background: var(--border-strong);
 }
 
 .ag-gauge-fill {
@@ -370,8 +370,12 @@
 }
 
 .ag-chat-input:focus-visible {
-	outline: 2px solid var(--ring);
-	outline-offset: 2px;
+	outline: 2px solid transparent;
+	outline-offset: 0;
+}
+
+.ag-chat-input:focus {
+	border-color: var(--ring);
 }
 
 @media (prefers-reduced-motion: reduce) {

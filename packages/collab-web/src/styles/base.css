@@ -51,6 +51,11 @@ kbd {
 	outline-offset: 2px;
 }
 
+input,
+textarea {
+	caret-color: var(--accent);
+}
+
 ::selection {
 	background: var(--accent-muted);
 }

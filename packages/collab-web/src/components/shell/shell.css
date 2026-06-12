@@ -182,8 +182,8 @@
 
 .sh-gauge-track {
 	width: 72px;
-	height: 3px;
-	background: var(--bg-inset);
+	height: 4px;
+	background: var(--border-strong);
 	border-radius: var(--radius-sm);
 	overflow: hidden;
 }
@@ -202,7 +202,7 @@
 
 .sh-gauge-pct {
 	font: 400 11px / 1 var(--font-mono);
-	color: var(--fg-faint);
+	color: var(--fg-muted);
 }
 
 .sh-gauge-warn .sh-gauge-pct {
@@ -290,6 +290,15 @@
 	opacity: 0.55;
 }
 
+.sh-composer-input:focus-visible {
+	outline: 2px solid transparent;
+	outline-offset: 0;
+}
+
+.sh-composer-input:focus {
+	border-color: var(--ring);
+}
+
 .sh-composer-actions {
 	display: flex;
 	align-items: center;
@@ -310,19 +319,21 @@
 /* ---- banners ---- */
 .sh-banner {
 	position: fixed;
-	top: 0;
-	left: 0;
-	right: 0;
-	z-index: 40;
+	top: 8px;
+	left: 50%;
+	transform: translateX(-50%);
+	z-index: 50;
 	display: flex;
 	align-items: center;
-	justify-content: center;
 	gap: 6px;
-	padding: 3px 0;
+	padding: 3px 12px;
 	font-size: 12px;
+	white-space: nowrap;
 	color: var(--warn);
 	background: var(--bg-overlay);
-	border-bottom: 1px solid var(--border);
+	border: 1px solid var(--border-strong);
+	border-radius: var(--radius);
+	box-shadow: var(--shadow-overlay);
 }
 
 .sh-banner-dot {
@@ -441,7 +452,7 @@
 	padding: 28px;
 	display: flex;
 	flex-direction: column;
-	gap: 14px;
+	gap: 12px;
 	background: var(--bg-raised);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-lg);
@@ -450,7 +461,7 @@
 .sh-lockup {
 	font: 500 15px / 1.5 var(--font-mono);
 	letter-spacing: 0.02em;
-	margin-bottom: 4px;
+	margin-bottom: 6px;
 }
 
 .sh-lockup-pi {
@@ -484,6 +495,15 @@
 	color: var(--fg-faint);
 }
 
+.sh-input:focus-visible {
+	outline: 2px solid transparent;
+	outline-offset: 0;
+}
+
+.sh-input:focus {
+	border-color: var(--ring);
+}
+
 .sh-input-mono {
 	font-family: var(--font-mono);
 	font-size: 12px;
@@ -497,5 +517,5 @@
 .sh-connect-submit {
 	justify-content: center;
 	padding: 7px 10px;
-	margin-top: 2px;
+	margin-top: 8px;
 }

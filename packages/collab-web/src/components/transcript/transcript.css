@@ -242,7 +242,7 @@
 }
 
 .tr-tool-head:hover {
-	background: var(--bg-inset);
+	background: color-mix(in oklch, var(--fg) 4%, transparent);
 }
 
 .tr-tool-dot {
