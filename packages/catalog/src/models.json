@@ -16574,7 +16574,7 @@
 				"effortRouting": {
 					"off": "gemini-3.1-pro-low",
 					"low": "gemini-3.1-pro-low",
-					"high": "gemini-3.1-pro-high"
+					"high": "gemini-pro-agent"
 				},
 				"suppressWhenOff": true
 			},

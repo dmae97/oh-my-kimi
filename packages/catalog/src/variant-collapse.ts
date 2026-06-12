@@ -58,6 +58,15 @@ export interface EffortVariantFamily {
 	 */
 	members: readonly string[];
 	/**
+	 * Wire ids upstream no longer serves (e.g. a deployment killed while
+	 * discovery still advertises it). Fresh collapsing never routes to them,
+	 * and stale collapsed snapshots (bundled catalog, cache rows,
+	 * previous-generation fallbacks) get routing/`requestModelId` entries that
+	 * target them re-pointed through `routing`. Keep retired ids in `members`
+	 * so the raw upstream spec is still consumed and aliased.
+	 */
+	retiredMembers?: readonly string[];
+	/**
 	 * Per-effort upstream wire id; `"off"` applies when thinking is disabled.
 	 * Entries whose target member is absent from the input are dropped — those
 	 * efforts fall back to `requestModelId ?? id`.
@@ -130,6 +139,7 @@ export const ANTIGRAVITY_VARIANT_COLLAPSE_TABLE: VariantCollapseTable = {
 			// thinking budget/caps) and accepts the identical request body.
 			// `gemini-3.1-pro-high` stays a member so the dead raw id is consumed.
 			members: ["gemini-3.1-pro-low", "gemini-pro-agent", "gemini-3.1-pro-high"],
+			retiredMembers: ["gemini-3.1-pro-high"],
 			routing: {
 				off: "gemini-3.1-pro-low",
 				[Effort.Low]: "gemini-3.1-pro-low",
@@ -288,6 +298,71 @@ export function isVariantCollapsedSpec(spec: VariantSpecLike): boolean {
 }
 
 /**
+ * Re-point a stale collapsed spec whose `requestModelId` or routing still
+ * targets a retired wire id. Collapsed snapshots (bundled catalog, cache
+ * rows, previous-generation fallbacks) pass through collapsing untouched, so
+ * a hand-table routing fix would otherwise never reach them. Only retired
+ * targets are rewritten — presence-filtered routing decisions from live
+ * discovery stay authoritative for everything else. Per retired entry the
+ * table's route for that effort wins, then the off/first-live-member wire id,
+ * then the route is dropped (falls back to `requestModelId ?? id`). Returns
+ * `spec` by reference when nothing targets a retired id.
+ */
+function reconcileRetiredRouting<TSpec extends VariantSpecLike>(
+	spec: TSpec,
+	family: EffortVariantFamily,
+	retired: ReadonlySet<string>,
+): TSpec {
+	const routing = spec.thinking?.effortRouting;
+	const requestRetired = spec.requestModelId !== undefined && retired.has(spec.requestModelId);
+	let routingRetired = false;
+	if (routing !== undefined) {
+		for (const key in routing) {
+			const target = routing[key as Effort | "off"];
+			if (target !== undefined && retired.has(target)) {
+				routingRetired = true;
+				break;
+			}
+		}
+	}
+	if (!requestRetired && !routingRetired) return spec;
+
+	const offTarget = family.routing.off;
+	const fallbackWireId =
+		offTarget !== undefined && !retired.has(offTarget)
+			? offTarget
+			: family.members.find(id => !retired.has(id));
+	const next: TSpec = { ...spec };
+	if (routingRetired && routing !== undefined) {
+		const nextRouting: Partial<Record<Effort | "off", string>> = {};
+		for (const key in routing) {
+			const effortKey = key as Effort | "off";
+			const target = routing[effortKey];
+			if (target === undefined) continue;
+			if (!retired.has(target)) {
+				nextRouting[effortKey] = target;
+				continue;
+			}
+			const tableTarget = family.routing[effortKey];
+			if (tableTarget !== undefined && !retired.has(tableTarget)) {
+				nextRouting[effortKey] = tableTarget;
+			} else if (fallbackWireId !== undefined) {
+				nextRouting[effortKey] = fallbackWireId;
+			}
+		}
+		next.thinking = { ...(spec.thinking as ThinkingConfig), effortRouting: nextRouting };
+	}
+	if (requestRetired) {
+		if (fallbackWireId !== undefined && fallbackWireId !== spec.id) {
+			next.requestModelId = fallbackWireId;
+		} else {
+			delete next.requestModelId;
+		}
+	}
+	return next;
+}
+
+/**
  * Collapse every family in `table` found in `specs`. Non-member specs pass
  * through verbatim (by reference), order preserved; the collapsed spec
  * replaces the first occurrence of its family.
@@ -307,13 +382,26 @@ export function collapseEffortVariants<TSpec extends VariantSpecLike>(
 	const familyIdBySpecId = new Map<string, string>();
 
 	for (const family of table.families) {
+		const retired =
+			family.retiredMembers !== undefined && family.retiredMembers.length > 0
+				? new Set(family.retiredMembers)
+				: undefined;
 		const existing = byId.get(family.id);
 		const existingCollapsed =
 			existing !== undefined &&
 			(existing.requestModelId !== undefined || existing.thinking?.effortRouting !== undefined);
+		const reconciled =
+			existing !== undefined && existingCollapsed && retired !== undefined
+				? reconcileRetiredRouting(existing, family, retired)
+				: existing;
 		const rawPresent = family.members.filter(id => byId.has(id) && !(id === family.id && existingCollapsed));
 		if (rawPresent.length === 0) {
 			// Inert (no members) or already collapsed (pass-through) — idempotence.
+			// A stale collapsed entry still gets retired routing re-pointed.
+			if (reconciled !== undefined && reconciled !== existing) {
+				familyIdBySpecId.set(family.id, family.id);
+				replacement.set(family.id, reconciled);
+			}
 			continue;
 		}
 
@@ -322,8 +410,8 @@ export function collapseEffortVariants<TSpec extends VariantSpecLike>(
 
 		if (existingCollapsed) {
 			// Mixed input: the collapsed entry (live truth) wins; stale raw
-			// members are deduped away.
-			replacement.set(family.id, existing);
+			// members are deduped away. Retired targets are re-pointed first.
+			replacement.set(family.id, reconciled as TSpec);
 			continue;
 		}
 
@@ -334,7 +422,7 @@ export function collapseEffortVariants<TSpec extends VariantSpecLike>(
 		let hasEffortRoute = false;
 		for (const effortKey in family.routing) {
 			const target = family.routing[effortKey as Effort | "off"];
-			if (target !== undefined && presentSet.has(target)) {
+			if (target !== undefined && presentSet.has(target) && !retired?.has(target)) {
 				routing[effortKey as Effort | "off"] = target;
 				hasRouting = true;
 				if (effortKey !== "off") hasEffortRoute = true;
@@ -361,12 +449,14 @@ export function collapseEffortVariants<TSpec extends VariantSpecLike>(
 			contextWindow: Math.max(...memberSpecs.map(spec => spec.contextWindow)),
 			maxTokens: Math.max(...memberSpecs.map(spec => spec.maxTokens)),
 		};
-		// The default wire id is the priority member; omit when it equals the
-		// logical id (bare/thinking pairs) — `resolveWireModelId` falls back.
-		if (rawPresent[0] === family.id) {
+		// The default wire id is the highest-priority live member; omit when it
+		// equals the logical id (bare/thinking pairs) — `resolveWireModelId`
+		// falls back. Retired members never become the default.
+		const defaultWireId = rawPresent.find(id => !retired?.has(id)) ?? rawPresent[0];
+		if (defaultWireId === family.id) {
 			delete collapsed.requestModelId;
 		} else {
-			collapsed.requestModelId = rawPresent[0] as string;
+			collapsed.requestModelId = defaultWireId as string;
 		}
 		if (reasoning) {
 			collapsed.thinking = thinking;
