@@ -880,7 +880,7 @@ async function streamAssistantResponse(
 		};
 	}
 	if (config.transformProviderContext) {
-		llmContext = config.transformProviderContext(llmContext);
+		llmContext = config.transformProviderContext(llmContext, config.model);
 	}
 
 	const streamFunction = streamFn || streamSimple;

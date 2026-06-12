@@ -6,6 +6,7 @@ import {
 	isSnapcompactShape,
 	normalizeForSnapcompact,
 	renderSnapcompactFrame,
+	renderSnapcompactFrames,
 	resolveSnapcompactShape,
 	SNAPCOMPACT_DIM_OFF,
 	SNAPCOMPACT_DIM_ON,
@@ -16,6 +17,7 @@ import {
 	type SnapcompactCompactionResult,
 	serializeSnapcompactConversation,
 	snapcompactCompact,
+	snapcompactFrameCount,
 	snapcompactGeometry,
 	snapcompactImages,
 } from "../src";
@@ -237,6 +239,49 @@ describe("renderSnapcompactFrame", () => {
 		const { capacity } = snapcompactGeometry(SNAPCOMPACT_SHAPES.legacy, TEST_FRAME_SIZE);
 		const frame = renderSnapcompactFrame("x".repeat(capacity + 500), SNAPCOMPACT_SHAPES.legacy, TEST_FRAME_SIZE);
 		expect(frame.chars).toBe(capacity);
+	});
+});
+
+describe("renderSnapcompactFrames", () => {
+	it("returns no frames for empty or whitespace-only input", () => {
+		expect(renderSnapcompactFrames("", { shape: SNAPCOMPACT_SHAPES.anthropic, frameSize: TEST_FRAME_SIZE })).toEqual(
+			[],
+		);
+		expect(
+			renderSnapcompactFrames("  \n\t  ", { shape: SNAPCOMPACT_SHAPES.anthropic, frameSize: TEST_FRAME_SIZE }),
+		).toEqual([]);
+		expect(snapcompactFrameCount("", { shape: SNAPCOMPACT_SHAPES.anthropic, frameSize: TEST_FRAME_SIZE })).toBe(0);
+	});
+
+	it("pages text into image blocks matching the predicted frame count", () => {
+		const shape = SNAPCOMPACT_SHAPES.anthropic;
+		const { capacity } = snapcompactGeometry(shape, TEST_FRAME_SIZE);
+
+		const short = renderSnapcompactFrames("hello world", { shape, frameSize: TEST_FRAME_SIZE });
+		expect(short).toHaveLength(1);
+		expect(short[0].type).toBe("image");
+		expect(short[0].mimeType).toBe("image/png");
+		expect(short[0].data.length).toBeGreaterThan(0);
+
+		const text = "x".repeat(capacity * 2 + 10);
+		const frames = renderSnapcompactFrames(text, { shape, frameSize: TEST_FRAME_SIZE });
+		expect(frames).toHaveLength(3);
+		expect(snapcompactFrameCount(text, { shape, frameSize: TEST_FRAME_SIZE })).toBe(3);
+	});
+
+	it("honors maxFrames and propagates the shape's detail hint", () => {
+		const shape = SNAPCOMPACT_SHAPES.openaiDense;
+		const { capacity } = snapcompactGeometry(shape, TEST_FRAME_SIZE);
+		const frames = renderSnapcompactFrames("x".repeat(capacity * 3), {
+			shape,
+			frameSize: TEST_FRAME_SIZE,
+			maxFrames: 2,
+		});
+		expect(frames).toHaveLength(2);
+		// openaiDense carries imageDetail: "original"; anthropic carries none.
+		expect(frames[0].detail).toBe("original");
+		const bw = renderSnapcompactFrames("hi", { shape: SNAPCOMPACT_SHAPES.anthropic, frameSize: TEST_FRAME_SIZE });
+		expect(bw[0].detail).toBeUndefined();
 	});
 });
 

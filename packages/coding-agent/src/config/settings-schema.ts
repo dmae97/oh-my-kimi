@@ -104,7 +104,7 @@ export const TAB_GROUPS: Record<SettingTab, readonly string[]> = {
 		"Startup & Updates",
 		"Power (macOS)",
 	],
-	context: ["General", "Compaction", "Rules (TTSR)"],
+	context: ["General", "Compaction", "Rules (TTSR)", "Experimental"],
 	memory: ["General", "Mnemopi", "Hindsight"],
 	files: ["Editing", "Reading", "Read Summaries", "LSP"],
 	shell: ["Bash", "Eval & Python"],
@@ -1537,6 +1537,31 @@ export const SETTINGS_SCHEMA = {
 			group: "Compaction",
 			label: "Supersede Stale Reads",
 			description: "Prune older read results when the same file is read again (cache-aware, runs every turn)",
+		},
+	},
+
+	// Experimental: snapcompact inline imaging (transient, per-request; never persisted)
+	"snapcompact.systemPrompt": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "context",
+			group: "Experimental",
+			label: "Snapcompact System Prompt",
+			description:
+				"Experimental: render the system prompt as dense PNG image(s) and attach to the first user message (vision models only). Saves tokens; loses system-prompt prompt caching.",
+		},
+	},
+
+	"snapcompact.toolResults": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "context",
+			group: "Experimental",
+			label: "Snapcompact Tool Results",
+			description:
+				"Experimental: render large historical tool results as dense PNG image(s) instead of text (vision models only). Saves tokens on accumulated read/search output.",
 		},
 	},
 

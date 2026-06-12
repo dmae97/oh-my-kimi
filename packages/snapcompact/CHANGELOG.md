@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `renderSnapcompactFrames()` for paging arbitrary text into snapcompact PNG frames as LLM image blocks, and `snapcompactFrameCount()` for predicting the frame count without rendering
+
 ## [15.11.0] - 2026-06-10
 
 ### Breaking Changes

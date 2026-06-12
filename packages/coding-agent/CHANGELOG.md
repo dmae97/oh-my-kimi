@@ -9,6 +9,7 @@
 ### Added
 
 - `ModelRegistry.resolver` now accepts a model directly — `resolver(model, sessionId)` — deriving `provider`, `baseUrl`, and `modelId` from it; all model-scoped call sites migrated from the verbose `resolver(model.provider, { sessionId, baseUrl, modelId })` form.
+- Added experimental `snapcompact.systemPrompt` and `snapcompact.toolResults` settings (off by default, `/settings` → Context → Experimental) that render the system prompt and large historical tool results as dense snapcompact PNG frames on vision-capable models to cut token cost. Frames are built per-request in the provider-context transform, cached across turns, capped by a per-provider image budget, and gated on a token-savings estimate — they never reach `session.jsonl`.
 
 ### Changed
 

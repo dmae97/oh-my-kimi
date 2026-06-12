@@ -579,6 +579,52 @@ export function renderSnapcompactFrame(
 	return { data, cols, rows, chars };
 }
 
+/** Options for {@link renderSnapcompactFrames} and {@link snapcompactFrameCount}. */
+export interface RenderSnapcompactFramesOptions {
+	/** Explicit shape; wins over `model`. */
+	shape?: SnapcompactShape;
+	/** Model whose `api` selects the eval-optimal shape. */
+	model?: Pick<Model, "api">;
+	/** Frame edge in px; defaults to the shape's `frameSize`. */
+	frameSize?: number;
+	/** Hard cap on frames produced; omit for unbounded (caller decides usage). */
+	maxFrames?: number;
+}
+
+/**
+ * Render arbitrary text into snapcompact PNG frames as LLM image blocks
+ * (first page first). Synchronous: safe to call from per-request transforms.
+ * Empty/whitespace-only input yields no frames.
+ */
+export function renderSnapcompactFrames(text: string, options?: RenderSnapcompactFramesOptions): ImageContent[] {
+	const shape = options?.shape ?? resolveSnapcompactShape(options?.model?.api);
+	const frameSize = options?.frameSize ?? shape.frameSize;
+	const geometry = snapcompactGeometry(shape, frameSize);
+	const normalized = normalizeForSnapcompact(text);
+	const frames: ImageContent[] = [];
+	for (let offset = 0; offset < normalized.length; offset += geometry.capacity) {
+		if (options?.maxFrames !== undefined && frames.length >= options.maxFrames) break;
+		const rendered = renderSnapcompactFrame(normalized.slice(offset, offset + geometry.capacity), shape, frameSize);
+		frames.push({
+			type: "image",
+			data: rendered.data,
+			mimeType: "image/png",
+			...(shape.imageDetail ? { detail: shape.imageDetail } : {}),
+		});
+	}
+	return frames;
+}
+
+/** Frames needed to hold `text` at the given shape/size, without rendering. */
+export function snapcompactFrameCount(
+	text: string,
+	options?: Pick<RenderSnapcompactFramesOptions, "shape" | "model" | "frameSize">,
+): number {
+	const shape = options?.shape ?? resolveSnapcompactShape(options?.model?.api);
+	const geometry = snapcompactGeometry(shape, options?.frameSize ?? shape.frameSize);
+	return Math.ceil(normalizeForSnapcompact(text).length / geometry.capacity);
+}
+
 // ============================================================================
 // Archive helpers
 // ============================================================================
