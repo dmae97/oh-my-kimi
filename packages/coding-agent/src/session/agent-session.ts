@@ -7252,6 +7252,22 @@ export class AgentSession {
 		this.#closeProviderSessionsForModelSwitch(currentModel, currentModel);
 	}
 
+	#resetCurrentResponsesProviderSession(reason: string): void {
+		const currentModel = this.model;
+		if (currentModel?.api !== "openai-responses" && currentModel?.api !== "openai-codex-responses") {
+			return;
+		}
+
+		this.#closeProviderSessionsForModelSwitch(currentModel, currentModel);
+		this.agent.appendOnlyContext?.invalidateForModelChange();
+		logger.debug("Reset Responses provider session after stale replay error", {
+			provider: currentModel.provider,
+			model: currentModel.id,
+			api: currentModel.api,
+			reason,
+		});
+	}
+
 	/**
 	 * Re-evaluate append-only context mode, creating or destroying the
 	 * manager as needed. Called on model switch AND setting change.
@@ -8293,9 +8309,30 @@ export class AgentSession {
 		if (isContextOverflow(message, contextWindow)) return false;
 
 		if (this.#isClassifierRefusal(message)) return true;
+		if (this.#isStaleOpenAIResponsesReplayError(message)) return true;
 
 		const err = message.errorMessage;
 		return this.#isTransientErrorMessage(err) || isUsageLimitError(err);
+	}
+
+	#isStaleOpenAIResponsesReplayError(message: AssistantMessage): boolean {
+		const currentApi = this.model?.api;
+		if (
+			message.api !== "openai-responses" &&
+			message.api !== "openai-codex-responses" &&
+			currentApi !== "openai-responses" &&
+			currentApi !== "openai-codex-responses"
+		) {
+			return false;
+		}
+
+		const errorMessage = message.errorMessage;
+		if (!errorMessage) return false;
+
+		return (
+			/\bItem with id ['"][^'"]+['"] not found\.?/i.test(errorMessage) ||
+			(/previous[ _]?response/i.test(errorMessage) && /not[ _]?found|invalid|expired|stale/i.test(errorMessage))
+		);
 	}
 
 	#isClassifierRefusal(message: AssistantMessage): boolean {
@@ -8631,15 +8668,22 @@ export class AgentSession {
 		}
 
 		const errorMessage = message.errorMessage || "Unknown error";
+		const staleOpenAIResponsesReplayError = this.#isStaleOpenAIResponsesReplayError(message);
 		const parsedRetryAfterMs = this.#parseRetryAfterMsFromError(errorMessage);
-		let delayMs = calculateRetryBackoffDelayMs(retrySettings.baseDelayMs, this.#retryAttempt);
+		let delayMs = staleOpenAIResponsesReplayError
+			? 0
+			: calculateRetryBackoffDelayMs(retrySettings.baseDelayMs, this.#retryAttempt);
 		let switchedCredential = false;
 		let switchedModel = false;
 		// Set when a usage-limit error pinned the wait to credential
 		// availability — suppresses the generic retry-after bump below.
 		let usageLimitWaitMs: number | undefined;
 
-		if (this.model && isUsageLimitError(errorMessage)) {
+		if (staleOpenAIResponsesReplayError) {
+			this.#resetCurrentResponsesProviderSession("stale replay error");
+		}
+
+		if (this.model && !staleOpenAIResponsesReplayError && isUsageLimitError(errorMessage)) {
 			const retryAfterMs = parsedRetryAfterMs ?? calculateRateLimitBackoffMs(parseRateLimitReason(errorMessage));
 			const outcome = await this.#modelRegistry.authStorage.markUsageLimitReached(
 				this.model.provider,
@@ -8676,7 +8720,7 @@ export class AgentSession {
 		}
 
 		const currentSelector = this.model ? formatRetryFallbackSelector(this.model, this.thinkingLevel) : undefined;
-		if (!switchedCredential && currentSelector) {
+		if (!staleOpenAIResponsesReplayError && !switchedCredential && currentSelector) {
 			if (retrySettings.modelFallback) {
 				if (!classifierRefusal) {
 					this.#noteRetryFallbackCooldown(currentSelector, parsedRetryAfterMs, errorMessage);
