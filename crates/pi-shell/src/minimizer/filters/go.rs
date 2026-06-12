@@ -116,6 +116,19 @@ fn aggregate_go_test_success(input: &str) -> String {
 		}
 
 		// Opportunistic JSON: render to the same text shape, then count.
+		// Also check for JSON-wrapped benchmark output — those lines start with
+		// "{" so the raw-line guard above misses them.  Bail to head_tail
+		// early so benchmark results are never collapsed into a package count.
+		if trimmed.starts_with('{') {
+			if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
+				if let Some(output) = value.get("Output").and_then(|v| v.as_str()) {
+					if output.trim_start().starts_with("Benchmark") {
+						return primitives::head_tail_lines(input, 140, 80);
+					}
+				}
+			}
+		}
+
 		let candidate = render_go_test_json_line(trimmed);
 		let line_to_count = candidate.as_deref().unwrap_or(trimmed);
 		let lower = line_to_count.trim().to_ascii_lowercase();
@@ -633,5 +646,17 @@ mod tests {
 		let input = "BenchmarkFoo-8\t1000000\t1234 ns/op\nok\texample/pkg\t1.234s\n";
 		let result = filter_go_test(input, 0);
 		assert!(result.contains("BenchmarkFoo"), "benchmark stripped: {result}");
+	}
+
+	#[test]
+	fn test_json_benchmark_preserved() {
+		let input = r#"{"Action":"run","Test":"BenchmarkFoo"}
+{"Action":"output","Output":"BenchmarkFoo-8   1000   1234 ns/op\n"}
+{"Action":"output","Output":"ok  example.com/pkg  1.234s\n"}
+{"Action":"pass","Elapsed":1.234}"#;
+		let result = aggregate_go_test_success(input);
+		// Should NOT produce "packages ok" summary — should return head_tail of input
+		assert!(!result.contains("packages ok"), "benchmark json run must not be collapsed");
+		assert!(result.contains("BenchmarkFoo"), "benchmark lines must survive");
 	}
 }
