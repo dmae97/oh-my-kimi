@@ -18,6 +18,7 @@ import { isTinyTitleLocalModelKey } from "../../tiny/models";
 import { isLowSignalTitleInput } from "../../tiny/text";
 import { tinyTitleClient } from "../../tiny/title-client";
 import type { TinyTitleProgressEvent } from "../../tiny/title-protocol";
+import { shortenPath, TRUNCATE_LENGTHS, truncateToWidth } from "../../tools/render-utils";
 import { copyToClipboard, readImageFromClipboard, readTextFromClipboard } from "../../utils/clipboard";
 import { EnhancedPasteController } from "../../utils/enhanced-paste";
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
@@ -921,13 +922,24 @@ export class InputController {
 				// path on the *local* filesystem. When omp itself runs over SSH, that
 				// path is unreachable here; pasting it as text would look like the
 				// image was attached when in fact nothing was sent. Refuse the silent
-				// degrade and tell the user how to send the bytes for real.
+				// degrade and tell the user how to send the bytes for real. The
+				// pasted path is untrusted terminal input — strip control/ANSI/
+				// newlines, collapse home to `~`, and bound the displayed length
+				// before splicing it into the status string.
+				const displayPath = truncateToWidth(
+					shortenPath(
+						sanitizeText(path)
+							.replace(/[\r\n\t]+/g, " ")
+							.trim(),
+					),
+					TRUNCATE_LENGTHS.CONTENT,
+				);
 				const env = process.env;
 				const overSsh = Boolean(env.SSH_CONNECTION || env.SSH_TTY || env.SSH_CLIENT);
 				this.ctx.showStatus(
 					overSsh
-						? `Image not found at ${path}. Over SSH this path is local to your terminal — paste the image directly (clipboard image-paste shortcut) to send its bytes.`
-						: `Image not found at ${path}`,
+						? `Image not found at ${displayPath}. Over SSH this path is local to your terminal — paste the image directly (clipboard image-paste shortcut) to send its bytes.`
+						: `Image not found at ${displayPath}`,
 				);
 				return;
 			}

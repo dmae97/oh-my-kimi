@@ -80,4 +80,29 @@ describe("InputController.handleImagePathPaste (issue #2375)", () => {
 		const status = String(spies.showStatus.mock.calls[0]?.[0] ?? "");
 		expect(status).toMatch(/not found|could not|unreadable/i);
 	});
+
+	it("sanitizes untrusted pasted-path characters and bounds length before splicing into status", async () => {
+		const { ctx, spies } = createContext();
+		const controller = new InputController(ctx);
+		// Path carrying ANSI, control chars, a CR/LF, and a tab — all of which
+		// would corrupt the TUI status line if interpolated verbatim. Long
+		// enough to exceed the status-line truncation budget (TRUNCATE_LENGTHS
+		// .CONTENT = 80) without tripping ENAMETOOLONG so the ENOENT branch
+		// keeps firing.
+		const hostile = `/tmp/\x1b[31mevil\x1b[0m\r\nname\twith-${"x".repeat(100)}.png`;
+
+		await controller.handleImagePathPaste(hostile);
+
+		expect(spies.pasteText).not.toHaveBeenCalled();
+		expect(spies.showStatus).toHaveBeenCalledTimes(1);
+		const status = String(spies.showStatus.mock.calls[0]?.[0] ?? "");
+		// No ANSI escape, no raw control bytes, no embedded newlines/tabs.
+		expect(status).not.toMatch(/\x1b/);
+		expect(status).not.toMatch(/[\x00-\x08\x0B-\x1F\x7F]/);
+		expect(status).not.toContain("\n");
+		expect(status).not.toContain("\t");
+		// The hostile path runs well past the status truncation budget; the
+		// displayed path must be clamped strictly inside that budget.
+		expect(status.length).toBeLessThan(hostile.length);
+	});
 });
