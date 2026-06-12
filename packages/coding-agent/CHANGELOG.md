@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Restored the default double-Esc behavior to open the editable message-history selector instead of `/tree` so pressing Esc twice can edit a previous message again ([#2396](https://github.com/can1357/oh-my-pi/issues/2396)).
+
 ## [15.12.0] - 2026-06-12
 
 ### Added
@@ -30,7 +34,6 @@
 
 ### Fixed
 
-- Restored the default double-Esc behavior to open the editable message-history selector instead of `/tree` so pressing Esc twice can edit a previous message again ([#2396](https://github.com/can1357/oh-my-pi/issues/2396)).
 - Filtered silent abort markers from Agent Hub assistant output so failed turns now render as normal error text
 - Reset focus-session state when switching transcript rendering between the main session and a focused subagent so streaming/progress context no longer leaks across sessions
 - Fixed read-only collab sessions so prompting, interrupts, and other write actions are blocked with a read-only warning instead of being applied
