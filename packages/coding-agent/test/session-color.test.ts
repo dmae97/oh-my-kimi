@@ -8,6 +8,14 @@ const NO_THEME_COLORS: string[] = [];
 
 const lum = (hex: string): number => relativeLuminance(hex) ?? 0;
 const contrast = (a: number, b: number): number => (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+const saturatedThemeHues = (colors: string[]): number[] => {
+	const hues: number[] = [];
+	for (const color of colors) {
+		const { h, s } = hexToHsv(color);
+		if (s >= 0.1) hues.push(h);
+	}
+	return hues;
+};
 
 const names = Array.from({ length: 600 }, (_, i) => `analyze-debian-trixie-${i}`);
 
@@ -70,7 +78,7 @@ describe("getSessionAccentHex with real Theme", () => {
 		if (!theme) return; // skip if theme not found
 		const colors = theme.getMajorThemeColorHexes();
 		const surface = theme.accentSurfaceLuminance;
-		const themeHues = colors.map(c => hexToHsv(c).h).filter(h => hexToHsv(colors[0]).s >= 0.1);
+		const themeHues = saturatedThemeHues(colors);
 
 		for (const name of ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"]) {
 			const hex = getSessionAccentHex(name, colors, surface);
@@ -88,7 +96,7 @@ describe("getSessionAccentHex with real Theme", () => {
 		const theme = await getThemeByName("dark-catppuccin");
 		if (!theme) return;
 		const colors = theme.getMajorThemeColorHexes();
-		const themeHues = colors.map(c => hexToHsv(c).h).filter(h => hexToHsv(colors[0]).s >= 0.1);
+		const themeHues = saturatedThemeHues(colors);
 
 		for (const name of ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"]) {
 			const hex = getSessionAccentHex(name, colors);

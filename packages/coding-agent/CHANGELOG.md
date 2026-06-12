@@ -8,26 +8,30 @@
 - Fixed local memory consolidation on Responses-style models that reject user-only requests by sending a dedicated stage-two system prompt.
 ### Added
 
+- Added mouse-driven interaction to `/settings`, including tab and setting row hover highlighting, wheel scrolling, and left-click activation for entries and submenus
+- Added fullscreen `/settings` mouse-event handling so scrolling and clicks work in an alternate-screen overlay
 - `ModelRegistry.resolver` now accepts a model directly — `resolver(model, sessionId)` — deriving `provider`, `baseUrl`, and `modelId` from it; all model-scoped call sites migrated from the verbose `resolver(model.provider, { sessionId, baseUrl, modelId })` form.
 - Added experimental `snapcompact.systemPrompt` and `snapcompact.toolResults` settings (off by default, `/settings` → Context → Experimental) that render the system prompt and large historical tool results as dense snapcompact PNG frames on vision-capable models to cut token cost. Frames are built per-request in the provider-context transform, cached across turns, capped by a per-provider image budget, and gated on a token-savings estimate — they never reach `session.jsonl`.
 
 ### Changed
 
+- Changed `/settings` to open as a full-screen overlay on the alternate screen so it no longer shares space with the underlying transcript
 - Codex, Gemini, and Perplexity web search now route their OAuth bearers through the new `withOAuthAccess` driver: a 401 or usage-limit force-refreshes the same account and then rotates to a sibling instead of failing the search, while identity metadata (`chatgpt-account-id`, Google `projectId`) is re-derived from the refreshed credential on every retry.
 - Kagi web search, the xAI TTS tool, and model-discovery list fetches now resolve their bearers through `withAuth` with an auth-storage resolver instead of a one-shot key snapshot, gaining the same force-refresh + rotate retry on 401.
 - Compaction, handoff, and branch-summarization call sites now hand the compactor a per-candidate API-key resolver (availability still gated on a key snapshot), so credential refresh happens before the #986 fallback-model loop advances.
 - The mnemopi backend now passes an OpenRouter resolver for default embedding/extraction setups (AuthStorage-stored keys included), keeping pinned literal keys and custom endpoints unchanged.
 - Reorganized the `/settings` panel for findability: every tab now has titled sections backed by a per-tab layout contract (`TAB_GROUPS`); on wide terminals the panel renders a section sidebar with the active section's settings beside it (narrow terminals keep a flat list with inline headings), and PgUp/PgDn jump section-to-section. The Editing tab became Files (edit/read/LSP) and a new Shell tab hosts bash, eval, and Python settings. Misplaced settings were rehomed: bash toggles united under Shell, tool approval mode and policies together under Interaction → Approvals, marketplace auto-update next to startup update checks, and the todo auto-clear delay beside the other todo settings.
+- Restyled the `/settings` chrome: the tab strip moved below the content as a label-less footer, the panel keeps one constant height across navigation, value changes, and submenus (no more viewport jumps after each change), and typing now runs a global cross-tab search — results group under per-tab headings, the footer shows live match counts with non-matching tabs muted, Tab hops between matching tabs, and Esc exits search landing on the selected result's tab.
 - Normalized `/settings` labels and descriptions: consistent Title Case labels (e.g. "Todo Auto-Clear Delay", "GitHub View Cache"), uniform unit placement, articles and verb-first phrasing in descriptions ("If false…"/"Whether to…" rewritten), and a stale browser-tool description (Ulixee Hero) corrected to the actual puppeteer/Chromium implementation.
+- `/settings` section headings are now underlined — the active section's heading stays bold, and headings outside the active section render dim with the same underline — so section boundaries read at a glance.
 - Image-generation (Antigravity, xAI, OpenRouter, Gemini) and xAI TTS request failures now throw pi-ai's typed `ProviderHttpError` carrying status and response headers instead of `Object.assign`-patched `Error`s.
 - Collapsed bash, ssh, and eval previews now cap the command/code section to a viewport-sized tail window (terminal rows minus a chrome reserve) that renders identically while streaming and after completion, with `ctrl+o` as the only way to uncap. Previously bash/ssh capped the command only while streaming and snapped it fully open the moment the tool finished, and eval never capped cell code at all.
 
 ### Fixed
 
+- Fixed the settings sidebar divider alignment in `/settings` by locking sidebar width to the widest group name so switching tabs no longer shifts the layout
+- Fixed plan-review overlay mouse hit-testing so wheel, hover, TOC, and body clicks map to the intended regions
 - Fixed `lsp.formatOnWrite` sending a hardcoded `tabSize: 3, insertSpaces: true` on every `textDocument/formatting` request, which silently re-indented 2-space YAML (and any LSP-formatted file) to 3-space on every write/edit through formatter-aware servers like `yaml-language-server`. Format options are now resolved per-file from `.editorconfig` (`indent_size`, `indent_style`, `tab_width`), falling back to the indent sniffed from the in-memory content the agent is about to write, then to a 2-space default. The duplicate `DEFAULT_FORMAT_OPTIONS` constant in `lsp/index.ts` and `lsp/clients/lsp-linter-client.ts` is replaced with a single shared `resolveFormatOptions` helper ([#2329](https://github.com/can1357/oh-my-pi/issues/2329)).
-
-### Fixed
-
 - Fixed stale OpenAI Responses replay failures such as `Item with id 'rs_...' not found.` by resetting the provider session and retrying without advancing fallback chains.
 - Fixed `/settings` Escape handling so an open submenu receives Esc and returns to the settings list before a second Esc closes the panel ([#2331](https://github.com/can1357/oh-my-pi/issues/2331)).
 - Fixed Escape not closing `/settings` on the Plugins tab while the async plugin list is still loading: `PluginSettingsComponent` now closes on Esc while no child view is mounted, and an npm plugin registry listing failure is caught (like marketplace failures) so a bad registry no longer leaves the tab permanently blank ([#2331](https://github.com/can1357/oh-my-pi/issues/2331)).

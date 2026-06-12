@@ -258,7 +258,7 @@ describe("SettingsList", () => {
 		]);
 	});
 
-	it("renders a section sidebar at wide widths showing only the active section's items", () => {
+	it("renders a section sidebar at wide widths with the whole list in the pane", () => {
 		const list = new SettingsList(
 			sectionedItems(),
 			10,
@@ -272,16 +272,36 @@ describe("SettingsList", () => {
 		expect(output).toMatch(/Group A\s+│/);
 		expect(output).toMatch(/Group B\s+│/);
 		expect(output).toMatch(/Group C\s+│/);
-		// Pane shows the active section's items only
+		// Pane shows every item — sections outside the active one stay visible
 		expect(output).toContain("Alpha");
-		expect(output).not.toContain("Beta");
-		expect(output).not.toContain("Gamma");
+		expect(output).toContain("Beta");
+		expect(output).toContain("Gamma");
+	});
 
-		// Jump to Group B: the pane swaps to its items
-		list.handleInput("\x1b[6~");
-		const after = list.render(120).join("\n");
-		expect(after).toContain("Beta");
-		expect(after).not.toContain("Alpha");
+	it("styles heading rows through theme.heading with the dimmed flag for out-of-section headings", () => {
+		const themed: SettingsListTheme = {
+			...testTheme,
+			heading: (text: string, dimmed: boolean) => (dimmed ? `[dim-heading]${text}` : `[heading]${text}`),
+		};
+		const list = new SettingsList(
+			sectionedItems(),
+			10,
+			themed,
+			() => {},
+			() => {},
+		);
+
+		// Split layout: the active section's heading is bright, the rest dim.
+		const split = list.render(120).join("\n");
+		expect(split).toContain("[heading]Group A");
+		expect(split).toContain("[dim-heading]Group B");
+		expect(split).toContain("[dim-heading]Group C");
+
+		// Flat layout has no active section: every heading renders undimmed.
+		const flat = list.render(60).join("\n");
+		expect(flat).toContain("[heading]Group A");
+		expect(flat).toContain("[heading]Group B");
+		expect(flat).not.toContain("[dim-heading]");
 	});
 
 	it("falls back to inline heading rows when the width cannot fit the sidebar", () => {

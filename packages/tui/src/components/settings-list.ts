@@ -1,6 +1,7 @@
 import { fuzzyFilter } from "../fuzzy";
 import { getKeybindings } from "../keybindings";
 import { extractPrintableText } from "../keys";
+import type { MouseRoutable, SgrMouseEvent } from "../mouse";
 import type { Component } from "../tui";
 import { Ellipsis, padding, replaceTabs, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "../utils";
 import { ScrollView } from "./scroll-view";
@@ -37,10 +38,12 @@ export interface SettingsListTheme {
 	description: (text: string) => string;
 	cursor: string;
 	hint: (text: string) => string;
-	/** Style for section heading rows. Falls back to `hint` when omitted. */
-	heading?: (text: string) => string;
+	/** Style for section heading rows (dimmed when outside the active section). Falls back to `hint` when omitted. */
+	heading?: (text: string, dimmed: boolean) => string;
 	/** Style for sidebar section names in the split layout. Falls back to label/hint. */
 	section?: (text: string, active: boolean) => string;
+	/** Hover band applied to the full row under the mouse pointer. */
+	hovered?: (text: string) => string;
 }
 
 /** A contiguous run of items under one heading, derived from the item list. */
@@ -65,8 +68,14 @@ export interface SettingsListOptions {
 	typeToSearch?: boolean;
 	/** Text shown when the list has no items at all. */
 	emptyText?: string;
-	/** Footer hint line (hint-styled, replaces the default navigation hint). */
+	/**
+	 * Footer hint line (hint-styled, replaces the default navigation hint).
+	 * An empty string removes the hint row and its leading blank entirely —
+	 * use when the host renders its own footer.
+	 */
 	hint?: string;
+	/** Fixed split-sidebar width (columns incl. indent+gap); default derives from section names. */
+	sidebarWidth?: number;
 }
 
 /** Searchable text for a setting item: label, id, value, description, and cycle values. */
@@ -99,6 +108,12 @@ export class SettingsList implements Component {
 	// Submenu state
 	#submenuComponent: Component | null = null;
 	#submenuItemId: string | null = null;
+	// Mouse support: hover highlight and per-render hit maps (content-line
+	// index → item id), rebuilt by every main-list render.
+	#hoveredItemId: string | null = null;
+	#hitRows: (string | undefined)[] = [];
+	#sidebarHitRows: (string | undefined)[] = [];
+	#sidebarHitCol = 0;
 	constructor(
 		items: SettingItem[],
 		maxVisible: number,
@@ -143,6 +158,60 @@ export class SettingsList implements Component {
 		if (item?.id === this.#lastNotifiedSelectionId) return;
 		this.#lastNotifiedSelectionId = item?.id;
 		this.onSelectionChange?.(item);
+	}
+
+	/** Resize the visible viewport (fullscreen hosts call this every render). */
+	setMaxVisible(rows: number): void {
+		const next = Math.max(3, Math.floor(rows));
+		if (next === this.#maxVisible) return;
+		this.#maxVisible = next;
+		this.#clampSelectedIndex();
+	}
+
+	/** Move the selection one step for a wheel notch. */
+	handleWheel(delta: -1 | 1): void {
+		if (this.#submenuComponent) return;
+		this.#moveSelection(delta);
+	}
+
+	/** Highlight the item under the pointer (null clears). */
+	setHoverItem(id: string | null): void {
+		this.#hoveredItemId = id;
+	}
+
+	/**
+	 * Resolve a pointer position against the last rendered frame. `line` is the
+	 * 0-based content-line index within this component's render output, `col`
+	 * the 0-based column. Sidebar rows resolve to the section's first item.
+	 */
+	hitTest(line: number, col: number): string | undefined {
+		if (this.#submenuComponent) return undefined;
+		if (this.#sidebarHitCol > 0 && col < this.#sidebarHitCol) {
+			return this.#sidebarHitRows[line];
+		}
+		return this.#hitRows[line];
+	}
+
+	/**
+	 * Like {@link hitTest}, but only rows the pointer is visually on: sidebar
+	 * jump targets are excluded so hovering section names does not light up
+	 * pane rows.
+	 */
+	hoverTest(line: number, col: number): string | undefined {
+		if (this.#submenuComponent) return undefined;
+		if (this.#sidebarHitCol > 0 && col < this.#sidebarHitCol) return undefined;
+		return this.#hitRows[line];
+	}
+
+	/**
+	 * Route a mouse event into an open submenu (coordinates are local to this
+	 * list's rendered lines). Returns false when no submenu is open; submenus
+	 * that do not implement {@link MouseRoutable} consume the event silently.
+	 */
+	routeSubmenuMouse(event: SgrMouseEvent, line: number, col: number): boolean {
+		if (!this.#submenuComponent) return false;
+		(this.#submenuComponent as Component & Partial<MouseRoutable>).routeMouse?.(event, line, col);
+		return true;
 	}
 
 	getSearchQuery(): string {
@@ -336,9 +405,12 @@ export class SettingsList implements Component {
 	 * height forces the terminal to re-anchor and can strand scrollback rows.
 	 */
 	#stableHeight(): number {
-		// viewport + description (1 blank + 3 lines) + search status + blank + hint.
-		// Without internal type-to-search the status row is never rendered.
-		return this.#maxVisible + (this.#options.typeToSearch === false ? 6 : 7);
+		// viewport + blank + 3 description rows, plus the optional search status
+		// row and the optional blank+hint footer.
+		let height = this.#maxVisible + 4;
+		if (this.#options.typeToSearch !== false) height += 1;
+		if (this.#options.hint !== "") height += 2;
+		return height;
 	}
 
 	#padLines(lines: string[]): string[] {
@@ -347,6 +419,10 @@ export class SettingsList implements Component {
 	}
 
 	render(width: number): readonly string[] {
+		// Hit maps describe exactly the frame being produced now.
+		this.#hitRows = [];
+		this.#sidebarHitRows = [];
+		this.#sidebarHitCol = 0;
 		// If submenu is active, render it instead (padded to the list's stable
 		// height so opening/closing a submenu does not resize the panel).
 		if (this.#submenuComponent) {
@@ -356,24 +432,36 @@ export class SettingsList implements Component {
 		return this.#padLines(this.#renderMainList(width));
 	}
 
-	#renderItemRow(item: SettingItem, index: number, maxLabelWidth: number, rowWidth: number): string {
+	#renderItemRow(item: SettingItem, index: number, maxLabelWidth: number, rowWidth: number, dimmed = false): string {
 		if (item.heading) {
-			const headingStyle = this.#theme.heading ?? this.#theme.hint;
-			return truncateToWidth(`  ${headingStyle(item.label)}`, Math.max(0, rowWidth));
+			const headingStyle = this.#theme.heading ?? ((text: string) => this.#theme.hint(text));
+			return truncateToWidth(`  ${headingStyle(item.label, dimmed)}`, Math.max(0, rowWidth));
 		}
 		const isSelected = index === this.#selectedIndex;
 		const prefix = isSelected ? this.#theme.cursor : "  ";
 		const prefixWidth = visibleWidth(prefix);
 		const labelPadded = item.label + padding(Math.max(0, maxLabelWidth - visibleWidth(item.label)));
-		const labelText = this.#theme.label(labelPadded, isSelected, item.changed === true);
 		const separator = "  ";
 		const valueMaxWidth = rowWidth - prefixWidth - maxLabelWidth - visibleWidth(separator) - 2;
-		const valueText = this.#theme.value(
-			truncateToWidth(item.currentValue, valueMaxWidth, Ellipsis.Omit),
-			isSelected,
-			item.changed === true,
-		);
-		return truncateToWidth(prefix + labelText + separator + valueText, Math.max(0, rowWidth));
+		const valuePlain = truncateToWidth(item.currentValue, valueMaxWidth, Ellipsis.Omit);
+		const hovered = !isSelected && this.#theme.hovered !== undefined && item.id === this.#hoveredItemId;
+		// De-emphasized rows (outside the active section) render as plain text
+		// under one dim wash so inner label/value colors don't fight it.
+		if (dimmed && !isSelected) {
+			const text = this.#theme.hint(
+				truncateToWidth(`  ${labelPadded}${separator}${valuePlain}`, Math.max(0, rowWidth)),
+			);
+			return hovered && this.#theme.hovered ? this.#theme.hovered(text) : text;
+		}
+		const labelText = this.#theme.label(labelPadded, isSelected, item.changed === true);
+		const valueText = this.#theme.value(valuePlain, isSelected, item.changed === true);
+		const text = truncateToWidth(prefix + labelText + separator + valueText, Math.max(0, rowWidth));
+		// Pointer hover paints a band behind the whole row, distinct from the
+		// keyboard selection (cursor glyph + accent) which stays where it is.
+		if (hovered && this.#theme.hovered) {
+			return this.#theme.hovered(text);
+		}
+		return text;
 	}
 
 	#renderMainList(width: number): string[] {
@@ -415,6 +503,9 @@ export class SettingsList implements Component {
 			const itemRows = visibleItems.map((item, index) =>
 				this.#renderItemRow(item, startIndex + index, maxLabelWidth, itemRowWidth),
 			);
+			visibleItems.forEach((item, index) => {
+				this.#hitRows[index] = item.heading ? undefined : item.id;
+			});
 			const scrollView = new ScrollView(itemRows, {
 				height: viewportHeight,
 				scrollbar: "auto",
@@ -452,26 +543,29 @@ export class SettingsList implements Component {
 			lines.push(this.#renderSearchStatus(width));
 		}
 
-		// Add hint
-		lines.push("");
-		const jumpHint = sections.length >= 2 ? "PgUp/PgDn to jump sections · " : "";
-		const hintText = this.#options.hint ?? `Enter/Space to change · ${jumpHint}Type to search · Esc to cancel`;
-		lines.push(truncateToWidth(this.#theme.hint(`  ${hintText}`), width));
+		// Add hint (suppressed entirely when the host owns the footer)
+		if (this.#options.hint !== "") {
+			lines.push("");
+			const jumpHint = sections.length >= 2 ? "PgUp/PgDn to jump sections · " : "";
+			const hintText = this.#options.hint ?? `Enter/Space to change · ${jumpHint}Type to search · Esc to cancel`;
+			lines.push(truncateToWidth(this.#theme.hint(`  ${hintText}`), width));
+		}
 
 		return lines;
 	}
 
 	/**
-	 * Split layout: section sidebar on the left, the active section's items on
-	 * the right. Up/Down navigation still flows across section boundaries; the
-	 * sidebar highlight follows the selection. Returns null when the width
-	 * cannot fit both panes, falling back to the flat single-column layout.
+	 * Split layout: section sidebar on the left, every item on the right with
+	 * rows outside the active section dimmed so the section under the cursor
+	 * pops. Up/Down navigation flows across section boundaries; the sidebar
+	 * highlight follows the selection. Returns null when the width cannot fit
+	 * both panes, falling back to the flat single-column layout.
 	 */
 	#renderSplitList(width: number, sections: SettingSection[]): string[] | null {
 		const sectionNames = sections.map(section => section.name || "Other");
 		let nameWidth = 0;
 		for (const name of sectionNames) nameWidth = Math.max(nameWidth, visibleWidth(name));
-		const sidebarWidth = Math.min(22, nameWidth) + 4; // 2-space indent + 2-space gap
+		const sidebarWidth = this.#options.sidebarWidth ?? Math.min(22, nameWidth) + 4; // 2-space indent + 2-space gap
 		const paneWidth = width - sidebarWidth - 2; // "│ " separator
 		// Below this the value column starves (2 prefix + 30 label + 2 gap + ~25 value).
 		if (paneWidth < 60) return null;
@@ -488,27 +582,31 @@ export class SettingsList implements Component {
 			return `  ${sectionStyle(label, i === activeIndex)}${padding(sidebarWidth - 2 - visibleWidth(label))}`;
 		});
 
-		// Right pane: only the active section's items.
-		const itemIndices: number[] = [];
-		for (let i = active.firstItemIndex; i <= active.lastItemIndex; i++) itemIndices.push(i);
-		const viewportHeight = Math.min(this.#maxVisible, itemIndices.length);
-		const selectedRow = Math.max(0, this.#selectedIndex - active.firstItemIndex);
+		// Right pane: the whole list, continuously scrollable. The active
+		// section's heading row belongs to its dim-exempt range.
+		const activeStart = active.name ? active.firstItemIndex - 1 : active.firstItemIndex;
+		const viewportHeight = Math.min(this.#maxVisible, this.#filteredItems.length);
 		const startRow = Math.max(
 			0,
-			Math.min(selectedRow - Math.floor(viewportHeight / 2), itemIndices.length - viewportHeight),
+			Math.min(this.#selectedIndex - Math.floor(viewportHeight / 2), this.#filteredItems.length - viewportHeight),
 		);
 		// Label column width spans all items so the layout stays stable across sections.
 		const labelWidths = this.#filteredItems.filter(item => !item.heading).map(item => visibleWidth(item.label));
 		const maxLabelWidth = Math.min(30, labelWidths.length > 0 ? Math.max(...labelWidths) : 0);
-		const overflow = itemIndices.length > viewportHeight;
+		const overflow = this.#filteredItems.length > viewportHeight;
 		const rowWidth = Math.max(0, paneWidth - (overflow ? 1 : 0));
-		const itemRows = itemIndices
-			.slice(startRow, startRow + viewportHeight)
-			.map(index => this.#renderItemRow(this.#filteredItems[index], index, maxLabelWidth, rowWidth));
+		const itemRows: string[] = [];
+		for (let r = 0; r < viewportHeight; r++) {
+			const index = startRow + r;
+			const item = this.#filteredItems[index];
+			if (!item) break;
+			const dimmed = index < activeStart || index > active.lastItemIndex;
+			itemRows.push(this.#renderItemRow(item, index, maxLabelWidth, rowWidth, dimmed));
+		}
 		const scrollView = new ScrollView(itemRows, {
 			height: viewportHeight,
 			scrollbar: "auto",
-			totalRows: itemIndices.length,
+			totalRows: this.#filteredItems.length,
 			theme: {
 				track: text => this.#theme.hint(text),
 				thumb: text => this.#theme.label(text, true, false),
@@ -516,6 +614,17 @@ export class SettingsList implements Component {
 		});
 		scrollView.setScrollOffset(startRow);
 		const paneRows = scrollView.render(paneWidth);
+
+		// Hit maps: sidebar rows resolve to each section's first item; pane rows
+		// to the item they render.
+		this.#sidebarHitCol = sidebarWidth;
+		for (let i = 0; i < sectionNames.length; i++) {
+			this.#sidebarHitRows[i] = this.#filteredItems[sections[i].firstItemIndex]?.id;
+		}
+		for (let r = 0; r < viewportHeight; r++) {
+			const item = this.#filteredItems[startRow + r];
+			if (item && !item.heading) this.#hitRows[r] = item.id;
+		}
 
 		const separator = this.#theme.hint("│ ");
 		const lines: string[] = [];

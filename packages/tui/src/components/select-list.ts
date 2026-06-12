@@ -34,6 +34,8 @@ export interface SelectListTheme {
 	scrollInfo: (text: string) => string;
 	noMatch: (text: string) => string;
 	symbols: SymbolTheme;
+	/** Hover band applied to the full row under the mouse pointer. */
+	hovered?: (text: string) => string;
 }
 
 export interface SelectListTruncatePrimaryContext {
@@ -81,6 +83,9 @@ export class SelectList implements Component {
 	#filteredItems: ReadonlyArray<SelectItem>;
 	#filterQuery = "";
 	#selectedIndex: number = 0;
+	#hoveredIndex: number | null = null;
+	/** Per-render map of 0-based output line → filtered-item index. */
+	#hitRows: (number | undefined)[] = [];
 
 	onSelect?: (item: SelectItem) => void;
 	onCancel?: () => void;
@@ -103,12 +108,43 @@ export class SelectList implements Component {
 		this.#selectedIndex = Math.max(0, Math.min(index, this.#filteredItems.length - 1));
 	}
 
+	/** Resolve a 0-based rendered-line index to a filtered-item index. */
+	hitTest(line: number): number | undefined {
+		return this.#hitRows[line];
+	}
+
+	/** Highlight the item under the pointer (null clears). */
+	setHoverIndex(index: number | null): void {
+		this.#hoveredIndex = index;
+	}
+
+	/** Move the selection one step for a wheel notch. */
+	handleWheel(delta: -1 | 1): void {
+		if (this.#filteredItems.length === 0) return;
+		const next = clamp(this.#selectedIndex + delta, 0, this.#filteredItems.length - 1);
+		if (next === this.#selectedIndex) return;
+		this.#selectedIndex = next;
+		this.#notifySelectionChange();
+	}
+
+	/** Mouse click: select the item under the pointer and confirm it. */
+	clickItem(index: number): void {
+		const item = this.#filteredItems[index];
+		if (!item) return;
+		if (index !== this.#selectedIndex) {
+			this.#selectedIndex = index;
+			this.#notifySelectionChange();
+		}
+		this.onSelect?.(item);
+	}
+
 	invalidate(): void {
 		// No cached state to invalidate currently
 	}
 
 	render(width: number): readonly string[] {
 		const lines: string[] = [];
+		this.#hitRows = [];
 		const showSearchStatus = this.#shouldRenderSearchStatus();
 
 		// If no items match filter, show message
@@ -159,10 +195,12 @@ export class SelectList implements Component {
 		for (let i = startIndex; i < endIndex && rows.length < visualBudget; i++) {
 			const item = this.#filteredItems[i];
 			if (!item) continue;
+			const hovered = this.theme.hovered !== undefined && i === this.#hoveredIndex && i !== this.#selectedIndex;
 			const itemRows = this.#renderItem(item, i === this.#selectedIndex, rowWidth, primaryColumnWidth);
 			for (const row of itemRows) {
 				if (rows.length >= visualBudget) break;
-				rows.push(row);
+				this.#hitRows[rows.length] = i;
+				rows.push(hovered && this.theme.hovered ? this.theme.hovered(row) : row);
 			}
 		}
 
