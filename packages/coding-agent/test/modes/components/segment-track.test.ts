@@ -1,16 +1,16 @@
 import { beforeAll, describe, expect, it } from "bun:test";
-import { renderSegmentTrack, type TrackSegment } from "@oh-my-pi/pi-coding-agent/modes/components/segment-track";
+import {
+	renderSegmentTrack,
+	resolveSegmentPalette,
+	type TrackSegment,
+} from "@oh-my-pi/pi-coding-agent/modes/components/segment-track";
 import { initTheme, type ThemeColor, theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 
 beforeAll(async () => {
 	await initTheme();
 });
 
-const SEGMENTS: TrackSegment[] = [
-	{ label: "smol", color: "warning" },
-	{ label: "default", color: "success" },
-	{ label: "slow", color: "accent" },
-];
+const SEGMENTS: TrackSegment[] = [{ label: "smol" }, { label: "default" }, { label: "slow" }];
 
 /** Pull the RGB out of a truecolor fg/bg escape, or null for 256-palette ones. */
 function rgb(ansi: string): [number, number, number] | null {
@@ -22,15 +22,31 @@ function luma([r, g, b]: [number, number, number]): number {
 	return 0.299 * r + 0.587 * g + 0.114 * b;
 }
 
+describe("resolveSegmentPalette", () => {
+	it("returns theme colors that resolve to pairwise-distinct escapes", () => {
+		const palette = resolveSegmentPalette(SEGMENTS.length);
+		expect(palette.length).toBeGreaterThan(0);
+		expect(palette.length).toBeLessThanOrEqual(SEGMENTS.length);
+		const escapes = palette.map(color => theme.getFgAnsi(color));
+		expect(new Set(escapes).size).toBe(palette.length);
+	});
+
+	it("starts from the theme accent and never exceeds the requested count", () => {
+		expect(resolveSegmentPalette(1)).toEqual(["accent"]);
+		expect(resolveSegmentPalette(4).length).toBeLessThanOrEqual(4);
+	});
+});
+
 describe("renderSegmentTrack", () => {
-	it("renders every segment in its own color", () => {
+	it("colors each segment by position from the theme palette", () => {
 		const raw = renderSegmentTrack(SEGMENTS, 1);
 		expect(Bun.stripANSI(raw)).toContain("smol");
 		expect(Bun.stripANSI(raw)).toContain("default");
 		expect(Bun.stripANSI(raw)).toContain("slow");
-		// Each segment carries the foreground escape for its assigned theme color.
-		for (const seg of SEGMENTS) {
-			expect(raw).toContain(theme.getFgAnsi(seg.color as ThemeColor));
+		// Each position carries the escape of its palette slot (modulo wrap).
+		const palette = resolveSegmentPalette(SEGMENTS.length);
+		for (let i = 0; i < SEGMENTS.length; i++) {
+			expect(raw).toContain(theme.getFgAnsi(palette[i % palette.length]));
 		}
 	});
 
@@ -41,9 +57,10 @@ describe("renderSegmentTrack", () => {
 		// ones (CI), so match the palette-agnostic `\x1b[48;` prefix.
 		expect(raw.match(/\x1b\[1m/g)?.length).toBe(1);
 		expect(raw.match(/\x1b\[48;/g)?.length).toBe(1);
-		// The active label sits inside the bold run, and the fill is its own accent.
+		// The active label sits inside the bold run, and the fill is its own slot color.
 		expect(raw).toContain("\x1b[1m default \x1b[22m");
-		const activeBg = theme.getFgAnsi("success").replace("\x1b[38;", "\x1b[48;");
+		const palette = resolveSegmentPalette(SEGMENTS.length);
+		const activeBg = theme.getFgAnsi(palette[1 % palette.length]).replace("\x1b[38;", "\x1b[48;");
 		expect(raw).toContain(activeBg);
 	});
 

@@ -2,7 +2,6 @@ import * as fs from "node:fs/promises";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import type { AutocompleteProvider, SlashCommand } from "@oh-my-pi/pi-tui";
 import { $env, logger, sanitizeText } from "@oh-my-pi/pi-utils";
-import { getRoleInfo } from "../../config/model-roles";
 import { isSettingsInitialized, settings } from "../../config/settings";
 import { AssistantMessageComponent } from "../../modes/components/assistant-message";
 import { renderSegmentTrack } from "../../modes/components/segment-track";
@@ -1007,7 +1006,7 @@ export class InputController {
 			// the cycle status is just a status-line-style chip track (active role
 			// filled), matching the plan-approval model slider.
 			const track = renderSegmentTrack(
-				cycleOrder.map(role => ({ label: role, color: getRoleInfo(role, settings).color })),
+				cycleOrder.map(role => ({ label: role })),
 				cycleOrder.indexOf(result.role),
 			);
 			this.ctx.showStatus(track, { dim: false });

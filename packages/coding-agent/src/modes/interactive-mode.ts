@@ -50,7 +50,6 @@ import {
 import chalk from "chalk";
 import { reset as resetCapabilities } from "../capability";
 import { KeybindingsManager } from "../config/keybindings";
-import { MODEL_ROLES, type ModelRole } from "../config/model-roles";
 import { isSettingsInitialized, onStatusLineSessionAccentChanged, Settings, settings } from "../config/settings";
 import { clearClaudePluginRootsCache } from "../discovery/helpers";
 import type {
@@ -2491,7 +2490,6 @@ export class InteractiveMode implements InteractiveModeContext {
 						index: startTierIndex,
 						segments: cycle.models.map(entry => ({
 							label: entry.role,
-							color: MODEL_ROLES[entry.role as ModelRole]?.color,
 							detail: entry.model.name || entry.model.id,
 						})),
 						onChange: index => {
