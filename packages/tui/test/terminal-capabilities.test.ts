@@ -167,6 +167,32 @@ describe("shouldEnableHyperlinksByDefault", () => {
 		).toBe(false);
 	});
 
+	it("lets GNU screen's STY marker veto tmux enabling in nested multiplexer sessions", () => {
+		expect(
+			shouldEnableHyperlinksByDefault(
+				{
+					STY: "1234.pts-0.host",
+					TMUX: "/tmp/tmux-1000/default,1,0",
+					TERM_PROGRAM: "tmux",
+					TERM_PROGRAM_VERSION: "3.4",
+				},
+				"wezterm",
+			),
+		).toBe(false);
+		expect(
+			shouldEnableHyperlinksByDefault(
+				{
+					STY: "1234.pts-0.host",
+					TMUX: "/tmp/tmux-1000/default,1,0",
+					TERM: "screen-256color",
+					TERM_PROGRAM: "tmux",
+					TERM_PROGRAM_VERSION: "3.5a",
+				},
+				"kitty",
+			),
+		).toBe(false);
+	});
+
 	it("keeps tmux off when no version is reported (old tmux without TERM_PROGRAM_VERSION)", () => {
 		expect(shouldEnableHyperlinksByDefault({ TMUX: "/tmp/tmux-1000/default,1,0" }, "wezterm")).toBe(false);
 		expect(shouldEnableHyperlinksByDefault({ TERM: "tmux-256color" }, "wezterm")).toBe(false);

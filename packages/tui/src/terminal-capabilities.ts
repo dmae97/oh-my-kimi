@@ -280,7 +280,9 @@ function parseTmuxVersionFromEnv(env: NodeJS.ProcessEnv): { major: number; minor
  *      on). Opt-out wins ties.
  *   2. Static terminal capability — terminals whose {@link TerminalInfo} marks
  *      `hyperlinks: false` (e.g. `base`) stay off unless the user forced on.
- *   3. tmux session (`TMUX` set): enabled when tmux self-reports >= 3.4 via
+ *   3. GNU screen's explicit session marker (`STY`) always off, even if tmux is
+ *      also present: a screen layer anywhere in the path cannot forward OSC 8.
+ *   4. tmux session (`TMUX` set): enabled when tmux self-reports >= 3.4 via
  *      `TERM_PROGRAM_VERSION` (tmux 3.4 stores OSC 8 as a cell attribute and
  *      forwards it to outer terminals whose `terminal-features` include
  *      `hyperlinks`). Older or unknown versions stay off; on outer terminals
@@ -288,11 +290,11 @@ function parseTmuxVersionFromEnv(env: NodeJS.ProcessEnv): { major: number; minor
  *      identical to today. Checked before the screen-family TERM heuristic
  *      because tmux's historical `default-terminal` is `screen-256color`, so
  *      `TERM=screen*` inside a tmux session must NOT short-circuit to off.
- *   4. GNU screen (`STY` set, or screen-family TERM without `TMUX`) always off:
- *      screen never gained OSC 8 support.
- *   5. tmux-family TERM without `TMUX` env — unusual (e.g. inspection scripts);
+ *   5. screen-family TERM without `TMUX` always off: screen never gained OSC 8
+ *      support.
+ *   6. tmux-family TERM without `TMUX` env — unusual (e.g. inspection scripts);
  *      no version available, so off.
- *   6. Otherwise honor the static terminal capability.
+ *   7. Otherwise honor the static terminal capability.
  */
 export function shouldEnableHyperlinksByDefault(
 	env: NodeJS.ProcessEnv = Bun.env,
@@ -303,9 +305,14 @@ export function shouldEnableHyperlinksByDefault(
 
 	if (!getTerminalInfo(terminalId).hyperlinks) return false;
 
-	// tmux check first: TMUX is the authoritative current-session signal and
-	// supersedes TERM, which may be `screen-256color` under tmux's historical
-	// default-terminal setting.
+	// STY is GNU screen's explicit session marker. It vetoes tmux enabling when
+	// multiplexers are nested because screen cannot forward OSC 8 anywhere in the
+	// path.
+	if (env.STY) return false;
+
+	// tmux check before TERM heuristics: TMUX is the authoritative current-session
+	// signal and supersedes TERM, which may be `screen-256color` under tmux's
+	// historical default-terminal setting.
 	if (env.TMUX) {
 		const version = parseTmuxVersionFromEnv(env);
 		if (!version) return false;
@@ -313,7 +320,7 @@ export function shouldEnableHyperlinksByDefault(
 	}
 
 	const term = env.TERM?.toLowerCase() ?? "";
-	if (env.STY || term.startsWith("screen")) return false;
+	if (term.startsWith("screen")) return false;
 	if (term.startsWith("tmux")) return false;
 
 	return true;
