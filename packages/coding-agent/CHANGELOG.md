@@ -18,6 +18,8 @@
 ### Fixed
 
 - Fixed tool calls taller than the viewport reading as cut off while streaming (the head reappeared only once the result landed): the 15.11.6 stranded-preview fix marked every collapsed pending tool preview commit-unstable, which also blocked durable top-anchored streams — e.g. a task call's context/assignment markdown — from reaching native scrollback mid-run. Commit stability is now classified per renderer (`ToolRenderer.provisionalPendingPreview`): only the tail-window previews the result render re-anchors (edit/apply_patch streamed-diff tails, bash/ssh command caps, eval cells with interleaved outputs) stay provisional; every other pending preview commits its settled head mid-stream again
+- Fixed `omp bench` reporting "tokens 0, TPS 0.0" successes on repeated OpenRouter runs: pi-ai opts every OpenRouter request into response caching, so bench's byte-identical request replayed a cached generation with zeroed usage at edge speed. Bench now sends `X-OpenRouter-Cache: false` so every run measures a fresh generation
+- Fixed `omp bench` failing with HTTP 400 `{"detail":"Instructions are required"}` against `openai-codex` models: bench requests now carry a minimal default system prompt (same guard as eval's completion bridge)
 
 ## [15.11.6] - 2026-06-12
 

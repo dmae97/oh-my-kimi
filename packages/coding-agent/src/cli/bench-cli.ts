@@ -171,6 +171,9 @@ async function runBenchRequest(
 	let firstTokenAt: number | undefined;
 	try {
 		const context: Context = {
+			// Codex's Responses endpoint 400s with "Instructions are required" when no
+			// system prompt is present — same guard as eval's completion bridge.
+			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: options.prompt, timestamp: Date.now(), attribution: "user" }],
 		};
 		const stream = streamFn(model, context, {
@@ -182,6 +185,12 @@ async function runBenchRequest(
 					: options.maxTokens,
 			reasoning: options.reasoning,
 			disableReasoning: options.disableReasoning,
+			// pi-ai opts every OpenRouter request into response caching (1h TTL).
+			// Bench sends a byte-identical request each run, so within the TTL
+			// OpenRouter replays the cached generation with zeroed usage — the run
+			// shows "tokens 0, TPS 0.0" at line speed. Opt back out so every run
+			// measures a fresh generation.
+			headers: model.provider === "openrouter" ? { "X-OpenRouter-Cache": "false" } : undefined,
 		});
 		let message: AssistantMessage | undefined;
 		for await (const event of stream) {
