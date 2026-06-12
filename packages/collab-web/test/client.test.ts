@@ -50,8 +50,8 @@ function messageEntry(id: string, message: WireMessage): SessionEntry {
 	return { type: "message", id, parentId: null, timestamp: "2026-06-12T00:00:01Z", message };
 }
 
-function welcomeFrame(entries: SessionEntry[] = []): HostFrame {
-	return { t: "welcome", proto: 1, header: HEADER, entries, state: STATE, agents: AGENTS };
+function welcomeFrame(entries: SessionEntry[] = [], readOnly?: boolean): HostFrame {
+	return { t: "welcome", proto: 1, header: HEADER, entries, state: STATE, agents: AGENTS, readOnly };
 }
 
 function liveClient(entries: SessionEntry[] = []): GuestClient {
@@ -82,7 +82,7 @@ describe("GuestClient frame apply", () => {
 	it("welcome readOnly flag lands in the snapshot", () => {
 		const client = new GuestClient(LINK, "tester");
 		expect(client.getSnapshot().readOnly).toBe(false);
-		client.applyFrameForTest({ ...welcomeFrame(), readOnly: true } as HostFrame);
+		client.applyFrameForTest(welcomeFrame([], true));
 		expect(client.getSnapshot().readOnly).toBe(true);
 	});
 

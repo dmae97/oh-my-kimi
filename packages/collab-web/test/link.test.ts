@@ -39,9 +39,24 @@ describe("collab link parsing", () => {
 		expect("error" in parseCollabLink(`ws://relay.example.com/r/${ROOM}#${KEY_TEXT}`)).toBe(true);
 	});
 
-	it("rejects keys that are not 32 base64url bytes", () => {
+	it("rejects keys that are not 32 or 48 base64url bytes", () => {
 		const shortKey = encodeBase64Url(new Uint8Array(16));
 		expect("error" in parseCollabLink(`${ROOM}#${shortKey}`)).toBe(true);
+		const midKey = encodeBase64Url(new Uint8Array(40));
+		expect("error" in parseCollabLink(`${ROOM}#${midKey}`)).toBe(true);
+	});
+
+	it("splits full-link fragments into key and write token", () => {
+		const token = Uint8Array.from({ length: 16 }, (_, i) => 0xf0 + i);
+		const full = parseCollabLink(formatCollabLink(DEFAULT_RELAY_URL, ROOM, KEY, token));
+		if ("error" in full) throw new Error(full.error);
+		expect(full.key).toEqual(KEY);
+		expect(full.writeToken).toEqual(token);
+
+		const view = parseCollabLink(formatCollabLink(DEFAULT_RELAY_URL, ROOM, KEY));
+		if ("error" in view) throw new Error(view.error);
+		expect(view.key).toEqual(KEY);
+		expect(view.writeToken).toBeUndefined();
 	});
 
 	it("parses web deep links (https://<relay>/#<link>)", () => {

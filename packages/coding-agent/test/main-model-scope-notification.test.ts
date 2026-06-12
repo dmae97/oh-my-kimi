@@ -1,8 +1,9 @@
 import { describe, expect, it } from "bun:test";
+import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import type { ScopedModel } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
-import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { buildModelScopeNotification } from "@oh-my-pi/pi-coding-agent/main";
+
 function scopedModel(id: string): ScopedModel {
 	return {
 		model: buildModel({
@@ -33,7 +34,11 @@ describe("buildModelScopeNotification", () => {
 		});
 	});
 	it("includes thinking suffix only when explicitly scoped", () => {
-		const withExplicit = { ...scopedModel("claude-sonnet-4-5"), thinkingLevel: "high" as ThinkingLevel, explicitThinkingLevel: true };
+		const withExplicit = {
+			...scopedModel("claude-sonnet-4-5"),
+			thinkingLevel: "high" as ThinkingLevel,
+			explicitThinkingLevel: true,
+		};
 		expect(buildModelScopeNotification([withExplicit], false)).toEqual({
 			kind: "info",
 			message: "Model scope: claude-sonnet-4-5:high (Ctrl+P to cycle)",
@@ -44,7 +49,11 @@ describe("buildModelScopeNotification", () => {
 		// `applyRootSessionOptions` fills `sessionOptions.scopedModels[*].thinkingLevel`
 		// with the global default for Ctrl+P cycling — the banner must not surface that
 		// default as if the user had scoped `:high`.
-		const withDefault = { ...scopedModel("claude-sonnet-4-5"), thinkingLevel: "high" as ThinkingLevel, explicitThinkingLevel: false };
+		const withDefault = {
+			...scopedModel("claude-sonnet-4-5"),
+			thinkingLevel: "high" as ThinkingLevel,
+			explicitThinkingLevel: false,
+		};
 		expect(buildModelScopeNotification([withDefault], false)).toEqual({
 			kind: "info",
 			message: "Model scope: claude-sonnet-4-5 (Ctrl+P to cycle)",

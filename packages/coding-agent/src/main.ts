@@ -254,9 +254,7 @@ export function buildModelScopeNotification(
 	const modelList = scopedModelsForDisplay
 		.map(scopedModel => {
 			const thinkingStr =
-				scopedModel.explicitThinkingLevel && scopedModel.thinkingLevel
-					? `:${scopedModel.thinkingLevel}`
-					: "";
+				scopedModel.explicitThinkingLevel && scopedModel.thinkingLevel ? `:${scopedModel.thinkingLevel}` : "";
 			return `${scopedModel.model.id}${thinkingStr}`;
 		})
 		.join(", ");

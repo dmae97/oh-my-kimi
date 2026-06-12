@@ -1,5 +1,11 @@
 import { describe, expect, it } from "bun:test";
-import { generateRoomKey, generateWriteToken, importRoomKey, open, seal } from "@oh-my-pi/pi-coding-agent/collab/crypto";
+import {
+	generateRoomKey,
+	generateWriteToken,
+	importRoomKey,
+	open,
+	seal,
+} from "@oh-my-pi/pi-coding-agent/collab/crypto";
 import {
 	type CollabFrame,
 	DEFAULT_RELAY_URL,
