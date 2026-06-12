@@ -4,10 +4,12 @@ use std::collections::BTreeMap;
 
 use crate::minimizer::{MinimizerCtx, MinimizerOutput, primitives};
 
+#[must_use]
 pub fn supports(subcommand: Option<&str>) -> bool {
 	supports_program("", subcommand)
 }
 
+#[must_use]
 pub fn supports_program(program: &str, subcommand: Option<&str>) -> bool {
 	// Program-claim the JS type-checker/linters too: without this, a path-arg
 	// invocation (`tsc --project x`, `eslint src/`, `biome ci app/`,
@@ -39,6 +41,7 @@ fn is_js_lint_program(program: &str) -> bool {
 	matches!(program, "tsc" | "eslint" | "biome" | "oxlint")
 }
 
+#[must_use]
 pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
 	if preserves_machine_readable_output(ctx) {
 		return MinimizerOutput::passthrough(input);
@@ -52,6 +55,7 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 	}
 }
 
+#[must_use]
 pub fn condense_lint_output(program: &str, input: &str, exit_code: i32) -> String {
 	let cleaned = primitives::strip_ansi(input);
 	let stripped = strip_lint_noise(program, &cleaned, exit_code);
@@ -99,14 +103,13 @@ fn preserves_machine_readable_output(ctx: &MinimizerCtx<'_>) -> bool {
 	if ctx.program == "eslint" {
 		let tokens: Vec<&str> = ctx.command.split_whitespace().collect();
 		for (i, t) in tokens.iter().enumerate() {
-			if (*t == "-f" || *t == "--format") && tokens.get(i + 1).map_or(false, |v| *v != "stylish")
-			{
+			if (*t == "-f" || *t == "--format") && tokens.get(i + 1).is_some_and(|v| *v != "stylish") {
 				return true;
 			}
-			if let Some(val) = t.strip_prefix("--format=") {
-				if val != "stylish" {
-					return true;
-				}
+			if let Some(val) = t.strip_prefix("--format=")
+				&& val != "stylish"
+			{
+				return true;
 			}
 		}
 	}
@@ -180,7 +183,7 @@ fn is_pyright_banner_noise(line: &str) -> bool {
 	}
 	// `Found 42 source files`: literal prefix, then a count, then `source file`.
 	if let Some(rest) = line.strip_prefix("Found ") {
-		let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+		let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
 		if !digits.is_empty() {
 			let after = rest[digits.len()..].trim_start();
 			if after.starts_with("source file") {
@@ -485,6 +488,7 @@ fn is_bare_gutter_numbered_line(trimmed: &str) -> bool {
 	false
 }
 
+#[must_use]
 pub fn group_diagnostics(input: &str) -> String {
 	let mut grouped: BTreeMap<String, Vec<String>> = BTreeMap::new();
 	let mut ungrouped = Vec::new();

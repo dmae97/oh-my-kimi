@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use super::git;
 use crate::minimizer::{MinimizerCtx, MinimizerOutput, primitives};
 
+#[must_use]
 pub fn supports(program: &str) -> bool {
 	matches!(
 		program,
@@ -23,6 +24,7 @@ pub fn supports(program: &str) -> bool {
 	)
 }
 
+#[must_use]
 pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
 	let cleaned = primitives::strip_ansi(input);
 	let command = ctx.program;

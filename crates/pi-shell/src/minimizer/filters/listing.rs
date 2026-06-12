@@ -39,6 +39,7 @@ fn find_outputs_paths_only(command: &str) -> bool {
 	})
 }
 
+#[must_use]
 pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
 	let cleaned = primitives::strip_ansi(input);
 	let legacy = ctx.config.legacy_filters_active();
@@ -502,24 +503,17 @@ fn parse_ls_long_line(line: &str) -> Option<LsEntry> {
 	// Size is the rightmost parseable u64 before the date, but skip
 	// comma-separated device major/minor pairs.
 	let mut size = None;
-	for i in (0..before_parts.len()).rev() {
-		let part = before_parts[i];
+	if let Some((i, part)) = before_parts.iter().enumerate().next_back() {
 		if part.ends_with(',') {
 			// Major number of a device file — skip.
-			size = None;
-			break;
-		}
-		if let Ok(s) = part.parse::<u64>() {
+		} else if let Ok(s) = part.parse::<u64>() {
 			if i > 0 && before_parts[i - 1].ends_with(',') {
 				// This numeric field is the minor number of a device file.
-				size = None;
-				break;
+			} else {
+				size = Some(s);
 			}
-			size = Some(s);
-			break;
 		}
 		// Non-numeric field (e.g. owner/group word) before size: no size.
-		break;
 	}
 
 	Some(LsEntry { name, is_dir: kind == 'd', size, is_file: kind == '-' })
@@ -1215,6 +1209,8 @@ fn has_content(text: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+	use std::fmt::Write as _;
+
 	use super::*;
 	use crate::minimizer::MinimizerConfig;
 
@@ -1506,9 +1502,10 @@ mod tests {
 			"overlay          52428800     1234  52427566   0% /var/lib/docker/overlay2/abc/merged\n";
 		let real_fs = "sda1             52428800  5000000  47428800  10% /data\n";
 		let tmpfs_line = "tmpfs              8192000        0   8192000   0% /dev\n";
-		let padding: String = (0..28)
-			.map(|i| format!("sda{i}  1000 500 500 50% /mnt/disk{i}\n"))
-			.collect();
+		let padding: String = (0..28).fold(String::new(), |mut s, i| {
+			let _ = writeln!(s, "sda{i}  1000 500 500 50% /mnt/disk{i}");
+			s
+		});
 		let input = format!("{header}{overlay_root}{overlay_inner}{real_fs}{tmpfs_line}{padding}");
 
 		let out = filter(&ctx, &input, 0);
@@ -1713,23 +1710,21 @@ mod tests {
 	// ---------------------------------------------------------------
 
 	fn legacy_cfg() -> MinimizerConfig {
-		let mut cfg = MinimizerConfig::default();
-		cfg.enabled = true;
-		cfg.legacy_filters_active = true;
-		cfg
+		MinimizerConfig { enabled: true, legacy_filters_active: true, ..Default::default() }
 	}
 
 	fn synthesize_grep(matches_per_file: usize, files: usize) -> String {
 		let mut out = String::new();
 		for f in 0..files {
 			for m in 0..matches_per_file {
-				out.push_str(&format!(
+				let _ = writeln!(
+					out,
 					"src/module{f}/file{f}.rs:{ln}:    pub fn handler_{f}_{m}(req: Request) -> \
-					 Result<Response, AppError> {{ /* body */ }}\n",
+					 Result<Response, AppError> {{ /* body */ }}",
 					ln = m * 7 + 1,
 					f = f,
 					m = m,
-				));
+				);
 			}
 		}
 		out
@@ -1739,10 +1734,11 @@ mod tests {
 		let mut out = String::new();
 		for d in 0..dirs {
 			for f in 0..per_dir {
-				out.push_str(&format!(
+				let _ = writeln!(
+					out,
 					"./crates/pi-shell/src/minimizer/filters/category{d}/\
-					 handler_{f}_with_descriptive_name.rs\n",
-				));
+					 handler_{f}_with_descriptive_name.rs",
+				);
 			}
 		}
 		out

@@ -36,6 +36,7 @@ pub mod ruby;
 pub mod rust_tools;
 pub mod system;
 
+#[must_use]
 pub fn supports(program: &str, subcommand: Option<&str>) -> bool {
 	match program {
 		"git" | "yadm" => git::supports(subcommand),
@@ -141,6 +142,7 @@ fn is_lint_script_token(token: &str) -> bool {
 }
 
 /// Apply the matching built-in filter.
+#[must_use]
 pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
 	let _ = ctx.command;
 	let _ = ctx.config.per_command(ctx.program);
@@ -921,9 +923,8 @@ mod tests {
 	fn pytest_legacy_filters_active_passes_through() {
 		// Kill-switch parity (M2): legacy_filters_active=true skips the
 		// pytest state machine even when invoked via `uv pytest`.
-		let mut config = MinimizerConfig::default();
-		config.enabled = true;
-		config.legacy_filters_active = true;
+		let config =
+			MinimizerConfig { enabled: true, legacy_filters_active: true, ..Default::default() };
 		let context = ctx("uv", Some("pytest"), "uv pytest tests/", &config);
 		let out = filter(&context, PYTEST_FAILURE_INPUT, 1);
 		assert_eq!(out.text, PYTEST_FAILURE_INPUT);

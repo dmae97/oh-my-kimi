@@ -235,6 +235,7 @@ pub fn compile(name: String, def: PipelineDef) -> Result<CompiledPipeline, Strin
 
 impl CompiledPipeline {
 	/// Whether this pipeline claims the given `(program, subcommand)` pair.
+	#[must_use]
 	pub fn matches(&self, program: &str, subcommand: Option<&str>) -> bool {
 		if !self.match_command.is_match(program) {
 			return false;
@@ -249,6 +250,7 @@ impl CompiledPipeline {
 	}
 
 	/// Whether this pipeline is gated off for the supplied exit code.
+	#[must_use]
 	pub fn skipped_by_exit(&self, exit_code: i32) -> bool {
 		if !self.only_on_exit.is_empty() && !self.only_on_exit.contains(&exit_code) {
 			return true;
@@ -260,6 +262,7 @@ impl CompiledPipeline {
 	}
 
 	/// Apply the full 9-stage pipeline to `input`.
+	#[must_use]
 	pub fn apply<'a>(&self, input: &'a str) -> Cow<'a, str> {
 		// Stage 1: strip_ansi
 		let stage1: Cow<'_, str> = if self.strip_ansi {
@@ -380,6 +383,7 @@ pub struct PipelineRegistry {
 
 impl PipelineRegistry {
 	/// Find the first pipeline that claims this `(program, subcommand)` pair.
+	#[must_use]
 	pub fn find(&self, program: &str, subcommand: Option<&str>) -> Option<&CompiledPipeline> {
 		self
 			.pipelines
@@ -432,6 +436,7 @@ pub struct TestOutcome {
 
 /// Run every inline test in `registry` and return the outcomes.
 #[allow(dead_code, reason = "test-only API surface")]
+#[must_use]
 pub fn run_tests(registry: &PipelineRegistry) -> Vec<TestOutcome> {
 	let mut out = Vec::new();
 	for (filter_name, tests) in &registry.tests {

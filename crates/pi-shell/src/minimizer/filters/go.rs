@@ -1,7 +1,10 @@
 //! Go toolchain output filters.
 
+use std::fmt::Write as _;
+
 use crate::minimizer::{MinimizerCtx, MinimizerOutput, primitives};
 
+#[must_use]
 pub fn supports(program: &str, subcommand: Option<&str>) -> bool {
 	match program {
 		"go" => matches!(subcommand, Some("test" | "build" | "vet" | "tool")),
@@ -10,6 +13,7 @@ pub fn supports(program: &str, subcommand: Option<&str>) -> bool {
 	}
 }
 
+#[must_use]
 pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
 	let cleaned = primitives::strip_ansi(input);
 	let text = if ctx.program == "golangci-lint" || is_go_tool_golangci_lint(ctx) {
@@ -119,14 +123,12 @@ fn aggregate_go_test_success(input: &str) -> String {
 		// Also check for JSON-wrapped benchmark output — those lines start with
 		// "{" so the raw-line guard above misses them.  Bail to head_tail
 		// early so benchmark results are never collapsed into a package count.
-		if trimmed.starts_with('{') {
-			if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
-				if let Some(output) = value.get("Output").and_then(|v| v.as_str()) {
-					if output.trim_start().starts_with("Benchmark") {
-						return primitives::head_tail_lines(input, 140, 80);
-					}
-				}
-			}
+		if trimmed.starts_with('{')
+			&& let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed)
+			&& let Some(output) = value.get("Output").and_then(|v| v.as_str())
+			&& output.trim_start().starts_with("Benchmark")
+		{
+			return primitives::head_tail_lines(input, 140, 80);
 		}
 
 		let candidate = render_go_test_json_line(trimmed);
@@ -148,10 +150,10 @@ fn aggregate_go_test_success(input: &str) -> String {
 
 	let mut summary = format!("go test: {packages_ok} packages ok");
 	if no_tests > 0 {
-		summary.push_str(&format!(", {no_tests} no tests"));
+		let _ = write!(summary, ", {no_tests} no tests");
 	}
 	if tests_skipped > 0 {
-		summary.push_str(&format!(", {tests_skipped} tests skipped"));
+		let _ = write!(summary, ", {tests_skipped} tests skipped");
 	}
 	summary.push('\n');
 	summary
@@ -312,12 +314,12 @@ fn summarize_golangci_json(line: &str) -> Option<String> {
 		let line_no = issue
 			.get("Pos")
 			.and_then(|pos| pos.get("Line"))
-			.and_then(|v| v.as_u64())
+			.and_then(serde_json::Value::as_u64)
 			.map_or(0, |value| value);
 		let col_no = issue
 			.get("Pos")
 			.and_then(|pos| pos.get("Column"))
-			.and_then(|v| v.as_u64())
+			.and_then(serde_json::Value::as_u64)
 			.map_or(0, |value| value);
 		let linter = issue
 			.get("FromLinter")

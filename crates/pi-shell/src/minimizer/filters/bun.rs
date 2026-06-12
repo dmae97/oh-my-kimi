@@ -13,6 +13,7 @@ const BUN_TOOL_SUBCOMMANDS: &[&str] =
 	&["tsc", "eslint", "biome", "next", "prettier", "prisma", "jest", "vitest", "playwright"];
 const BUN_CPP_TOOL_SUBCOMMANDS: &[&str] = &["cmake", "ctest", "ninja", "gtest", "gtest-parallel"];
 
+#[must_use]
 pub fn supports(program: &str, subcommand: Option<&str>) -> bool {
 	match program {
 		"bun" => subcommand.is_some_and(|subcommand| {
@@ -30,6 +31,7 @@ pub fn supports(program: &str, subcommand: Option<&str>) -> bool {
 	}
 }
 
+#[must_use]
 pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
 	let subcommand = ctx.subcommand;
 	if matches!((ctx.program, subcommand), ("bun", Some(subcommand)) if is_non_exec_package_subcommand(subcommand))

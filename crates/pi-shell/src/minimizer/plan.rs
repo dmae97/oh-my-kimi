@@ -64,6 +64,7 @@ pub enum CommandPlan {
 }
 
 /// Parse `command` with `brush-parser` and classify its structure.
+#[must_use]
 pub fn analyze(command: &str) -> CommandPlan {
 	let trimmed = command.trim();
 	if trimmed.is_empty() {

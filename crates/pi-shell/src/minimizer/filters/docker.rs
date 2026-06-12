@@ -6,6 +6,7 @@ use serde_json::Value;
 
 use crate::minimizer::{MinimizerCtx, MinimizerOutput, primitives};
 
+#[must_use]
 pub fn supports(subcommand: Option<&str>) -> bool {
 	matches!(
 		subcommand,
@@ -36,6 +37,7 @@ pub fn supports(subcommand: Option<&str>) -> bool {
 	)
 }
 
+#[must_use]
 pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
 	let cleaned = primitives::strip_ansi(input);
 	let text = match ctx.program {
@@ -339,10 +341,17 @@ fn compute_pod_container_stats(status: &Value) -> (usize, usize, i32) {
 	let mut ready = 0usize;
 	let mut restarts = 0i32;
 	for cs in container_statuses {
-		if cs.get("ready").and_then(|v| v.as_bool()).unwrap_or(false) {
+		if cs
+			.get("ready")
+			.and_then(serde_json::Value::as_bool)
+			.unwrap_or(false)
+		{
 			ready += 1;
 		}
-		restarts += cs.get("restartCount").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+		restarts += cs
+			.get("restartCount")
+			.and_then(serde_json::Value::as_i64)
+			.unwrap_or(0) as i32;
 	}
 	(ready, total, restarts)
 }
@@ -408,15 +417,19 @@ fn format_k8s_ports(ports: Option<&Vec<Value>>) -> String {
 		.map(|p| {
 			let port = p
 				.get("port")
-				.and_then(|v| v.as_i64())
+				.and_then(serde_json::Value::as_i64)
 				.map_or_else(|| "?".to_string(), |v| v.to_string());
 			let proto = p.get("protocol").and_then(|v| v.as_str()).unwrap_or("TCP");
-			let node_port = p.get("nodePort").and_then(|v| v.as_i64());
+			let node_port = p.get("nodePort").and_then(serde_json::Value::as_i64);
 			let target_port = p.get("targetPort");
 			let target = target_port
-				.and_then(|v| v.as_i64())
+				.and_then(serde_json::Value::as_i64)
 				.map(|v| v.to_string())
-				.or_else(|| target_port.and_then(|v| v.as_str()).map(|s| s.to_string()));
+				.or_else(|| {
+					target_port
+						.and_then(|v| v.as_str())
+						.map(std::string::ToString::to_string)
+				});
 			match (target, node_port) {
 				(Some(t), Some(np)) => format!("{port}/{t}:{np}->{port}/{proto}"),
 				(Some(t), None) => format!("{port}/{t}:{port}/{proto}"),
@@ -462,7 +475,7 @@ fn is_glog_prefix(line: &str) -> bool {
 	if bytes.len() < 6
 		|| bytes[0] != b'W'
 		|| bytes[5] != b' '
-		|| !bytes[1..5].iter().all(|b| b.is_ascii_digit())
+		|| !bytes[1..5].iter().all(u8::is_ascii_digit)
 	{
 		return false;
 	}
@@ -890,7 +903,7 @@ mod tests {
 		};
 		let mut input = String::from("NAME IMAGE COMMAND SERVICE CREATED STATUS PORTS\n");
 		for idx in 0..20 {
-			input.push_str(&format!("svc-{idx} img command api 1m running 8080/tcp\n"));
+			let _ = writeln!(input, "svc-{idx} img command api 1m running 8080/tcp");
 		}
 		let out = filter(&compose_ctx, &input, 0).text;
 		assert!(out.contains("20 rows"));
@@ -1210,7 +1223,7 @@ mod tests {
 		let kubectl_ctx = ctx("kubectl", Some("get"), &cfg);
 		let mut input = String::from("NAME STATUS\n");
 		for i in 0..25 {
-			input.push_str(&format!("pod-{} running\n", i));
+			let _ = writeln!(input, "pod-{i} running");
 		}
 		let out = filter(&kubectl_ctx, &input, 0).text;
 		// Should use table compaction, not crash
@@ -1330,7 +1343,7 @@ mod tests {
 		};
 		let mut input = String::from("NAME READY STATUS RESTARTS AGE IP NODE\n");
 		for i in 0..25 {
-			input.push_str(&format!("pod-{i} 1/1 Running 0 1h 10.0.0.{i} node\n"));
+			let _ = writeln!(input, "pod-{i} 1/1 Running 0 1h 10.0.0.{i} node");
 		}
 		let out = filter(&ctx, input.as_str(), 0).text;
 		assert!(out.contains("rows"), "-owide is a table format and must be compacted, got: {out}");
@@ -1373,7 +1386,7 @@ mod tests {
 		let kubectl_ctx = ctx("kubectl", Some("apply"), &cfg);
 		let mut input = String::new();
 		for i in 0..250 {
-			input.push_str(&format!("deployment.apps/app-{i} unchanged\n"));
+			let _ = writeln!(input, "deployment.apps/app-{i} unchanged");
 		}
 		let out = filter(&kubectl_ctx, &input, 0).text;
 		assert!(

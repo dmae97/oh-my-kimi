@@ -1,5 +1,7 @@
 //! Graphite (`gt`) output filters.
 
+use std::fmt::Write as _;
+
 use super::git;
 use crate::minimizer::{MinimizerCtx, MinimizerOutput, primitives};
 
@@ -8,10 +10,12 @@ const GT_SUBCOMMANDS: &[&str] = &[
 	"fetch", "stash", "worktree",
 ];
 
+#[must_use]
 pub fn supports(program: &str, subcommand: Option<&str>) -> bool {
 	program == "gt" && subcommand.is_some_and(|subcommand| GT_SUBCOMMANDS.contains(&subcommand))
 }
 
+#[must_use]
 pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
 	if ctx.subcommand == Some("log") && is_log_short(ctx.command) {
 		return MinimizerOutput::passthrough(input);
@@ -172,9 +176,9 @@ fn dense_sync_summary(input: &str, exit_code: i32) -> Option<String> {
 		const DELETED_NAME_CAP: usize = 20;
 		let shown = deleted_names.len().min(DELETED_NAME_CAP);
 		let names = deleted_names[..shown].join(", ");
-		summary.push_str(&format!(" ({names}"));
+		let _ = write!(summary, " ({names}");
 		if deleted_names.len() > DELETED_NAME_CAP {
-			summary.push_str(&format!(", +{} more", deleted_names.len() - DELETED_NAME_CAP));
+			let _ = write!(summary, ", +{} more", deleted_names.len() - DELETED_NAME_CAP);
 		}
 		summary.push(')');
 	}
@@ -440,7 +444,7 @@ mod tests {
 		let ctx = test_ctx(Some("sync"), &cfg);
 		let mut input = String::from("Synced with remote\n");
 		for idx in 0..500 {
-			input.push_str(&format!("Deleted branch feat/merged-{idx}\n"));
+			let _ = writeln!(input, "Deleted branch feat/merged-{idx}");
 		}
 
 		let out = filter(&ctx, &input, 0);

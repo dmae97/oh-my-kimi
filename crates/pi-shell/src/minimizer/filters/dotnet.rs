@@ -2,10 +2,12 @@
 
 use crate::minimizer::{MinimizerCtx, MinimizerOutput, primitives};
 
+#[must_use]
 pub fn supports(program: &str, subcommand: Option<&str>) -> bool {
 	program == "dotnet" && matches!(subcommand, Some("build" | "test" | "restore" | "format"))
 }
 
+#[must_use]
 pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
 	let cleaned = primitives::strip_ansi(input);
 	let text = match ctx.subcommand {
@@ -257,7 +259,7 @@ fn first_string<'a>(
 fn first_number(map: &serde_json::Map<String, serde_json::Value>, keys: &[&str]) -> Option<u64> {
 	keys
 		.iter()
-		.find_map(|key| map.get(*key).and_then(|value| value.as_u64()))
+		.find_map(|key| map.get(*key).and_then(serde_json::Value::as_u64))
 }
 
 fn compact_general(input: &str) -> String {

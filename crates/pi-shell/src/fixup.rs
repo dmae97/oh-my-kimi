@@ -25,7 +25,13 @@
 
 use std::{io::BufReader, sync::LazyLock};
 
-use brush_parser::{Parser, ParserOptions, SourceInfo, ast::*};
+use brush_parser::{
+	Parser, ParserOptions, SourceInfo,
+	ast::{
+		AndOr, AndOrList, Command, CommandPrefixOrSuffixItem, CompoundListItem, IoFileRedirectKind,
+		IoFileRedirectTarget, IoRedirect, Pipeline, SourceLocation,
+	},
+};
 use regex::Regex;
 
 /// Result of [`apply_bash_fixups`].
@@ -38,6 +44,7 @@ pub struct BashFixupResult {
 }
 
 /// Apply the bash fixups to `cmd`. See module docs for full rules.
+#[must_use]
 pub fn apply_bash_fixups(cmd: &str) -> BashFixupResult {
 	// Multi-line input is out of scope: heredoc/loop bodies can't be safely
 	// rewritten and the agent rarely passes them as bash tool input. Bailing

@@ -3,6 +3,7 @@
 use super::lint;
 use crate::minimizer::{MinimizerCtx, MinimizerOutput, primitives};
 
+#[must_use]
 pub fn supports(program: &str, subcommand: Option<&str>) -> bool {
 	match program {
 		"rspec" | "rubocop" => true,
@@ -17,6 +18,7 @@ fn is_def_scoped_subcommand(subcommand: Option<&str>) -> bool {
 	matches!(subcommand, Some("db:migrate" | "db:rollback" | "routes"))
 }
 
+#[must_use]
 pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
 	let cleaned = primitives::strip_ansi(input);
 	let text = match ruby_tool(ctx.program, ctx.subcommand) {
@@ -412,7 +414,7 @@ fn first_json_string<'a>(
 fn first_json_u64(map: &serde_json::Map<String, serde_json::Value>, keys: &[&str]) -> Option<u64> {
 	keys
 		.iter()
-		.find_map(|key| map.get(*key).and_then(|value| value.as_u64()))
+		.find_map(|key| map.get(*key).and_then(serde_json::Value::as_u64))
 }
 
 fn filter_minitest(input: &str, exit_code: i32) -> String {
@@ -671,6 +673,8 @@ fn has_content(text: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+	use std::fmt::Write as _;
+
 	use super::*;
 	use crate::minimizer::MinimizerConfig;
 
@@ -880,10 +884,11 @@ mod tests {
 	fn rspec_caps_failure_blocks_at_five() {
 		let mut input = String::from("Failures:\n\n");
 		for i in 1..=7 {
-			input.push_str(&format!(
+			let _ = write!(
+				input,
 				"  {i}) Example number {i} fails\n     Failure/Error: expect(true).to eq(false)\n     \
 				 # ./spec/a_spec.rb:{i}\n\n"
-			));
+			);
 		}
 		input.push_str("7 examples, 7 failures\n");
 		let out = filter_rspec(&input, 1);
@@ -1118,7 +1123,7 @@ mod tests {
 		};
 		let mut input = String::from("rake aborted!\nNameError: undefined local variable\n");
 		for i in 0..20 {
-			input.push_str(&format!("/app/lib/task_{i}.rb:{i}:in `block'\n"));
+			let _ = writeln!(input, "/app/lib/task_{i}.rb:{i}:in `block'");
 		}
 		input.push_str("\nTasks: TOP => db:seed\n");
 		let out = filter(&context, &input, 1);

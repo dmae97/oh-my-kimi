@@ -26,6 +26,7 @@ pub enum MinimizerMode {
 }
 
 /// Return the minimization mode for a command.
+#[must_use]
 pub fn mode_for(command: &str, config: &MinimizerConfig) -> MinimizerMode {
 	match plan::analyze(command) {
 		plan::CommandPlan::Single { .. } => {
@@ -62,6 +63,7 @@ pub fn mode_for(command: &str, config: &MinimizerConfig) -> MinimizerMode {
 
 /// Return true when the command should be captured for minimization.
 #[allow(dead_code, reason = "test-only API surface")]
+#[must_use]
 pub fn should_minimize(command: &str, config: &MinimizerConfig) -> bool {
 	!matches!(mode_for(command, config), MinimizerMode::None)
 }
@@ -77,6 +79,7 @@ pub fn should_minimize(command: &str, config: &MinimizerConfig) -> bool {
 /// `artifact://<id>` reference back into the visible text before showing it
 /// to the agent. The minimizer itself never formats the reference — ids are
 /// assigned by the session store, not content-addressed.
+#[must_use]
 pub fn apply(
 	command: &str,
 	captured: &str,
@@ -510,6 +513,7 @@ fn builtin_pipelines() -> &'static PipelineRegistry {
 
 /// Expose the built-in registry's inline tests for the verify CLI surface.
 #[allow(dead_code, reason = "test-only API surface")]
+#[must_use]
 pub fn verify_builtin_filters() -> Vec<pipeline::TestOutcome> {
 	pipeline::run_tests(builtin_pipelines())
 }
@@ -517,6 +521,7 @@ pub fn verify_builtin_filters() -> Vec<pipeline::TestOutcome> {
 #[cfg(test)]
 mod tests {
 	use std::{
+		fmt::Write as _,
 		fs,
 		sync::atomic::{AtomicUsize, Ordering},
 	};
@@ -628,7 +633,7 @@ only_on_exit = [0]
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
 		let mut input = String::new();
 		for i in 0..120 {
-			input.push_str(&format!("/src/file{i}.ts:{i}:1  error  Something is wrong  rule/name\n"));
+			let _ = writeln!(input, "/src/file{i}.ts:{i}:1  error  Something is wrong  rule/name");
 		}
 		let npx = apply("npx eslint src/", &input, 1, &cfg);
 		let direct = apply("eslint src/", &input, 1, &cfg);
@@ -1084,10 +1089,11 @@ strip_lines_matching = [".*"]
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
 		let mut input = String::new();
 		for i in 0..100 {
-			input.push_str(&format!(
+			let _ = write!(
+				input,
 				"== 20240115 Migration{i}: migrating\n-- step\n   -> 0.0s\n== 20240115 Migration{i}: \
 				 migrated\n\n"
-			));
+			);
 		}
 		let out = apply("rails db:migrate", &input, 0, &cfg);
 		assert!(out.changed);

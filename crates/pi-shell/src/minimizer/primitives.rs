@@ -11,6 +11,7 @@ pub enum CapClass {
 }
 
 impl CapClass {
+	#[must_use]
 	pub const fn lines(self) -> usize {
 		match self {
 			Self::Errors => 160,
@@ -21,12 +22,14 @@ impl CapClass {
 	}
 }
 
+#[must_use]
 pub const fn reduced(cap: usize, by: usize) -> usize {
 	let reduced = cap.saturating_sub(by);
 	if reduced == 0 && cap > 0 { 1 } else { reduced }
 }
 
 /// Remove ANSI CSI escape sequences while preserving line endings verbatim.
+#[must_use]
 pub fn strip_ansi(input: &str) -> String {
 	let mut out = String::with_capacity(input.len());
 	let mut chars = input.chars().peekable();
@@ -46,6 +49,7 @@ pub fn strip_ansi(input: &str) -> String {
 }
 
 /// Collapse consecutive identical lines as `line (×N)`.
+#[must_use]
 pub fn dedup_consecutive_lines(input: &str) -> String {
 	let mut out = String::new();
 	let mut previous: Option<&str> = None;
@@ -77,6 +81,7 @@ fn flush_repeated(out: &mut String, line: Option<&str>, count: usize) {
 }
 
 /// Keep the first `head` and last `tail` lines with an omission marker.
+#[must_use]
 pub fn head_tail_lines(input: &str, head: usize, tail: usize) -> String {
 	let lines: Vec<&str> = input.lines().collect();
 	if lines.len() <= head + tail {
@@ -99,6 +104,7 @@ pub fn head_tail_lines(input: &str, head: usize, tail: usize) -> String {
 }
 
 /// Keep head/tail lines using a named cap class.
+#[must_use]
 pub fn head_tail_cap(input: &str, class: CapClass) -> String {
 	let cap = class.lines();
 	let head = reduced(cap, cap / 3);
@@ -120,6 +126,7 @@ pub fn strip_lines(input: &str, predicates: &[fn(&str) -> bool]) -> String {
 }
 
 /// Group `file:line:message` style diagnostics by file.
+#[must_use]
 pub fn group_by_file(input: &str, max_per_file: usize) -> String {
 	let mut grouped: BTreeMap<String, Vec<String>> = BTreeMap::new();
 	let mut ungrouped = Vec::new();
@@ -169,6 +176,7 @@ fn split_file_line(line: &str) -> Option<(&str, &str)> {
 	Some((file, rest))
 }
 
+#[must_use]
 pub fn command_has_ordered_tokens(command: &str, first: &str, second: &str) -> bool {
 	let mut saw_first = false;
 	for part in command.split_whitespace() {
@@ -182,6 +190,7 @@ pub fn command_has_ordered_tokens(command: &str, first: &str, second: &str) -> b
 	false
 }
 
+#[must_use]
 pub fn command_has_any_token(command: &str, tokens: &[&str]) -> bool {
 	command.split_whitespace().any(|part| {
 		tokens.iter().any(|token| {
@@ -194,14 +203,17 @@ pub fn command_has_any_token(command: &str, tokens: &[&str]) -> bool {
 }
 
 /// Dedup consecutive lines then apply a 120-head / 80-tail cap.
+#[must_use]
 pub fn head_tail_dedup(input: &str) -> String {
 	head_tail_lines(&dedup_consecutive_lines(input), 120, 80)
 }
 
+#[must_use]
 pub fn is_markdown_badge_or_image(line: &str) -> bool {
 	line.starts_with("![") || line.starts_with("[![") || line.contains("img.shields.io")
 }
 
+#[must_use]
 pub fn is_horizontal_rule(line: &str) -> bool {
 	line.len() >= 3
 		&& line.chars().all(|ch| matches!(ch, '-' | '*' | '_' | ' '))
@@ -209,6 +221,7 @@ pub fn is_horizontal_rule(line: &str) -> bool {
 }
 
 /// Compact a long plain listing to head/tail form.
+#[must_use]
 pub fn compact_listing(input: &str, max_lines: usize) -> String {
 	let lines: Vec<&str> = input
 		.lines()
@@ -244,6 +257,7 @@ pub fn compact_listing(input: &str, max_lines: usize) -> String {
 ///
 /// `max_chars == 0` is treated as "drop the line"; no marker is emitted in
 /// that case since the caller asked for an empty result.
+#[must_use]
 pub fn truncate_line(line: &str, max_chars: usize) -> String {
 	if max_chars == 0 {
 		return String::new();
@@ -266,6 +280,7 @@ pub fn truncate_line(line: &str, max_chars: usize) -> String {
 }
 
 /// Keep only the first `head` lines; append a summary marker when truncated.
+#[must_use]
 pub fn head_lines_only(input: &str, head: usize) -> String {
 	let lines: Vec<&str> = input.lines().collect();
 	if lines.len() <= head {
@@ -284,6 +299,7 @@ pub fn head_lines_only(input: &str, head: usize) -> String {
 }
 
 /// Keep only the last `tail` lines; prepend a summary marker when truncated.
+#[must_use]
 pub fn tail_lines_only(input: &str, tail: usize) -> String {
 	let lines: Vec<&str> = input.lines().collect();
 	if lines.len() <= tail {
@@ -302,6 +318,7 @@ pub fn tail_lines_only(input: &str, tail: usize) -> String {
 }
 
 /// Hard cap: keep at most `max` lines, append a truncation marker otherwise.
+#[must_use]
 pub fn max_lines(input: &str, max: usize) -> String {
 	let lines: Vec<&str> = input.lines().collect();
 	if lines.len() <= max {
@@ -325,6 +342,7 @@ pub fn max_lines(input: &str, max: usize) -> String {
 /// match the strip set (when present) — i.e. keep is `K AND NOT S`. An
 /// absent set imposes no constraint, so pure strip and pure keep filtering
 /// are the degenerate single-set cases.
+#[must_use]
 pub fn filter_lines_regex(
 	input: &str,
 	strip: Option<&regex::RegexSet>,

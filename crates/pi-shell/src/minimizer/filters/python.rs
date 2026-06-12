@@ -33,6 +33,7 @@ use crate::minimizer::{MinimizerCtx, MinimizerOutput, primitives};
 /// overflow independent.
 const MAX_PYTEST_FAILURES: usize = 10;
 
+#[must_use]
 pub fn supports(program: &str, subcommand: Option<&str>) -> bool {
 	matches!(program, "pytest" | "ruff" | "mypy")
 		|| matches!(
@@ -41,6 +42,7 @@ pub fn supports(program: &str, subcommand: Option<&str>) -> bool {
 		)
 }
 
+#[must_use]
 pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
 	// Kill-switch parity (M2): when `legacy_filters_active`, fall back to
 	// the pre-PR passthrough so callers can rollback an RTK-port regression
@@ -409,6 +411,8 @@ fn has_content(text: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+	use std::fmt::Write as _;
+
 	use super::*;
 	use crate::minimizer::MinimizerConfig;
 
@@ -549,18 +553,19 @@ mod tests {
 			 ===================================\n",
 		);
 		for i in 0..12 {
-			input.push_str(&format!(
+			let _ = write!(
+				input,
 				"____________________________ test_case_{i} ____________________________\n\n    def \
 				 test_case_{i}():\n>       assert False\nE       assert \
 				 False\n\ntests/test_many.py:{}: AssertionError\n",
 				i + 1
-			));
+			);
 		}
 		input.push_str(
 			"=========================== short test summary info ===========================\n",
 		);
 		for i in 0..12 {
-			input.push_str(&format!("FAILED tests/test_many.py::test_case_{i} - assert False\n"));
+			let _ = writeln!(input, "FAILED tests/test_many.py::test_case_{i} - assert False");
 		}
 		input.push_str("========================= 12 failed in 0.30s =========================\n");
 
@@ -619,29 +624,31 @@ mod tests {
 			 ====================================\n",
 		);
 		for i in 0..9 {
-			input.push_str(&format!(
+			let _ = write!(
+				input,
 				"_____________________ ERROR collecting tests/test_imp_{i}.py \
 				 _____________________\nImportError while importing test module \
 				 'tests/test_imp_{i}.py'.\nE   ImportError: boom\n"
-			));
+			);
 		}
 		input.push_str(
 			"=================================== FAILURES ===================================\n",
 		);
 		for i in 0..5 {
-			input.push_str(&format!(
+			let _ = write!(
+				input,
 				"_______________________________ test_critical_{i} \
 				 ________________________________\ntests/pay.py:{}: in test_critical_{i}\n    assert \
 				 0 == 100\nE   assert 0 == 100\ntests/pay.py:{}: AssertionError\n",
 				i + 1,
 				i + 1
-			));
+			);
 		}
 		input.push_str(
 			"=========================== short test summary info ===========================\n",
 		);
 		for i in 0..5 {
-			input.push_str(&format!("FAILED tests/pay.py::test_critical_{i} - assert 0 == 100\n"));
+			let _ = writeln!(input, "FAILED tests/pay.py::test_critical_{i} - assert 0 == 100");
 		}
 		input.push_str(
 			"========================= 5 failed, 9 errors in 0.30s =========================\n",
@@ -676,19 +683,21 @@ mod tests {
 			 ====================================\n",
 		);
 		for i in 0..12 {
-			input.push_str(&format!(
+			let _ = write!(
+				input,
 				"_____________________ ERROR collecting tests/test_imp_{i}.py \
 				 _____________________\nE   ImportError: boom\n"
-			));
+			);
 		}
 		input.push_str(
 			"=================================== FAILURES ===================================\n",
 		);
 		for i in 0..2 {
-			input.push_str(&format!(
+			let _ = write!(
+				input,
 				"_______________________________ test_real_{i} ________________________________\n    \
 				 assert False\nE   assert False\n"
-			));
+			);
 		}
 		input.push_str(
 			"========================= 2 failed, 12 errors in 0.10s =========================\n",

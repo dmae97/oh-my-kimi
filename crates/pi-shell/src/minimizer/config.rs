@@ -110,6 +110,7 @@ impl Default for MinimizerConfig {
 impl MinimizerConfig {
 	/// Build a resolved configuration from `MinimizerOptions`, optionally
 	/// merging in a TOML settings file.
+	#[must_use]
 	pub fn from_options(opts: &MinimizerOptions) -> Self {
 		let mut cfg = Self::default();
 		if let Some(enabled) = opts.enabled {
@@ -185,6 +186,7 @@ impl MinimizerConfig {
 	}
 
 	/// Whether the engine should attempt to minimize output for `program`.
+	#[must_use]
 	pub fn is_program_enabled(&self, program: &str) -> bool {
 		if !self.enabled {
 			return false;
@@ -200,11 +202,13 @@ impl MinimizerConfig {
 	}
 
 	/// Fetch a per-command TOML table, if any.
+	#[must_use]
 	pub fn per_command(&self, program: &str) -> Option<&toml::Value> {
 		self.per_command.get(&program.to_lowercase())
 	}
 
 	/// Whether opted-in filters should fall back to pre-PR legacy behavior.
+	#[must_use]
 	pub const fn legacy_filters_active(&self) -> bool {
 		self.legacy_filters_active
 	}

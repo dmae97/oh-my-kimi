@@ -23,7 +23,7 @@
 //! All fixture failures are collected before the harness panics so a single run
 //! reports every regression, not just the first.
 
-use std::{fs, path::Path};
+use std::{fmt::Write as _, fs, path::Path};
 
 use pi_shell::minimizer::{self, MinimizerConfig};
 
@@ -158,12 +158,13 @@ fn diff_excerpt(expected: &str, actual: &str) -> String {
 
 	let mut excerpt = String::new();
 	for i in start..(start + 3).min(max) {
-		excerpt.push_str(&format!(
+		let _ = write!(
+			excerpt,
 			"    line {}:\n      expected {:?}\n      actual   {:?}\n",
 			i + 1,
 			expected_lines.get(i).copied().unwrap_or("<missing>"),
 			actual_lines.get(i).copied().unwrap_or("<missing>")
-		));
+		);
 	}
 	excerpt.trim_end().to_string()
 }

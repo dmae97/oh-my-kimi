@@ -1,7 +1,10 @@
 //! GitHub CLI output filters.
 
+use std::fmt::Write as _;
+
 use crate::minimizer::{MinimizerCtx, MinimizerOutput, primitives};
 
+#[must_use]
 pub fn supports(subcommand: Option<&str>) -> bool {
 	matches!(
 		subcommand,
@@ -18,6 +21,7 @@ pub fn supports(subcommand: Option<&str>) -> bool {
 	)
 }
 
+#[must_use]
 pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
 	if preserves_raw_mode(ctx) {
 		return MinimizerOutput::passthrough(input);
@@ -148,12 +152,12 @@ fn filter_pr_checks(input: &str) -> Option<String> {
 
 	let mut out = String::new();
 	let failed = failed_rows.len();
-	out.push_str(&format!("checks: {passed} passed, {failed} failed"));
+	let _ = write!(out, "checks: {passed} passed, {failed} failed");
 	if pending > 0 {
-		out.push_str(&format!(", {pending} pending"));
+		let _ = write!(out, ", {pending} pending");
 	}
 	if skipping > 0 {
-		out.push_str(&format!(", {skipping} skipping"));
+		let _ = write!(out, ", {skipping} skipping");
 	}
 	out.push('\n');
 	// Cap the verbatim failed rows: a PR with hundreds of failing checks would
@@ -305,7 +309,7 @@ mod tests {
 		let ctx = test_ctx(Some("pr"), "gh pr checks 123", &cfg);
 		let mut input = String::new();
 		for idx in 0..500 {
-			input.push_str(&format!("X\tcheck{idx}\t1s\thttps://ci.test/{idx}\n"));
+			let _ = writeln!(input, "X\tcheck{idx}\t1s\thttps://ci.test/{idx}");
 		}
 
 		let out = filter(&ctx, &input, 1);

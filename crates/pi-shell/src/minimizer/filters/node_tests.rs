@@ -2,6 +2,7 @@
 
 use crate::minimizer::{MinimizerCtx, MinimizerOutput, primitives};
 
+#[must_use]
 pub fn filter(_ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
 	let cleaned = primitives::strip_ansi(input);
 	let text = if exit_code == 0 {
@@ -202,7 +203,7 @@ fn is_playwright_numbered_failure(trimmed: &str) -> bool {
 			saw_digit = true;
 			continue;
 		}
-		return saw_digit && ch == ')' && chars.next().is_some_and(|next| next.is_whitespace());
+		return saw_digit && ch == ')' && chars.next().is_some_and(char::is_whitespace);
 	}
 	false
 }

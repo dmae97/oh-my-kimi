@@ -12,12 +12,14 @@ pub struct CommandIdentity {
 /// The detector intentionally handles the common interactive subset instead
 /// of emulating a full shell parser. Ambiguous commands return `None` and are
 /// left streaming unchanged.
+#[must_use]
 pub fn detect(command: &str) -> Option<CommandIdentity> {
 	let tokens = tokenize(command);
 	detect_tokens(&tokens)
 }
 
 /// Extract command identity from an already-expanded argv vector.
+#[must_use]
 pub fn detect_tokens(tokens: &[String]) -> Option<CommandIdentity> {
 	let tokens = strip_launch_prefix(tokens)?;
 	let (program, rest) = tokens.split_first()?;

@@ -1,6 +1,6 @@
 //! GitLab CLI (glab) output filters.
 
-use std::sync::LazyLock;
+use std::{fmt::Write as _, sync::LazyLock};
 
 use regex::Regex;
 
@@ -18,10 +18,12 @@ static BARE_ANSI_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[[\d;]+[A-
 /// Multiple consecutive blank lines (3+ newlines) collapsed to double newline.
 static MULTI_BLANK_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\n{3,}").unwrap());
 
+#[must_use]
 pub fn supports(subcommand: Option<&str>) -> bool {
 	matches!(subcommand, Some("mr" | "issue" | "ci" | "pipeline" | "release"))
 }
 
+#[must_use]
 pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
 	if preserves_raw_mode(ctx) {
 		return MinimizerOutput::passthrough(input);
@@ -158,14 +160,12 @@ fn filter_release_list(input: &str) -> Option<String> {
 			break;
 		}
 		// Parse "Showing N releases on owner/repo." or similar
-		if total.is_none() {
-			if let Some(rest) = trimmed.strip_prefix("Showing ") {
-				if let Some(n_str) = rest.split_whitespace().next() {
-					if let Ok(n) = n_str.parse::<usize>() {
-						total = Some(n);
-					}
-				}
-			}
+		if total.is_none()
+			&& let Some(rest) = trimmed.strip_prefix("Showing ")
+			&& let Some(n_str) = rest.split_whitespace().next()
+			&& let Ok(n) = n_str.parse::<usize>()
+		{
+			total = Some(n);
 		}
 		lines.next();
 	}
@@ -196,9 +196,9 @@ fn filter_release_list(input: &str) -> Option<String> {
 		let created = parts[2].trim();
 
 		if name == tag {
-			filtered.push_str(&format!("  {name} ({created})\n"));
+			let _ = writeln!(filtered, "  {name} ({created})");
 		} else {
-			filtered.push_str(&format!("  {name} [{tag}] ({created})\n"));
+			let _ = writeln!(filtered, "  {name} [{tag}] ({created})");
 		}
 
 		count += 1;
@@ -209,9 +209,9 @@ fn filter_release_list(input: &str) -> Option<String> {
 	}
 
 	// Append omission marker when there are more releases than shown.
-	let omitted = total.map(|t| t.saturating_sub(count)).unwrap_or(0);
+	let omitted = total.map_or(0, |t| t.saturating_sub(count));
 	if omitted > 0 {
-		filtered.push_str(&format!("… {} releases omitted …\n", omitted));
+		let _ = writeln!(filtered, "… {omitted} releases omitted …");
 	} else if has_more {
 		// Total not parsed from preamble but a 21st row was observed; signal
 		// truncation.
@@ -653,7 +653,7 @@ section_end:1711234600:build_script[0K
 		// Build input with 25 releases so the cap of 20 is exceeded.
 		let mut input = String::from("Showing 25 releases on owner/repo.\n\nName\tTag\tCreated\n");
 		for i in 1..=25 {
-			input.push_str(&format!("Release {i}\tv{i}.0.0\t{i} days ago\n"));
+			let _ = writeln!(input, "Release {i}\tv{i}.0.0\t{i} days ago");
 		}
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
 		let ctx = test_ctx(Some("release"), "glab release list", &cfg);

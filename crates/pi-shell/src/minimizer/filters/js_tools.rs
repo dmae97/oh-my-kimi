@@ -8,10 +8,12 @@ use crate::minimizer::{MinimizerCtx, MinimizerOutput, primitives};
 const SUPPORTED_TOOLS: &[&str] = &["next", "prettier", "prisma"];
 const NPX_ROUTABLE_TOOLS: &[&str] = &["tsc", "eslint", "prisma", "prettier", "next"];
 
+#[must_use]
 pub fn supports(program: &str, subcommand: Option<&str>) -> bool {
 	effective_tool(program, subcommand).is_some()
 }
 
+#[must_use]
 pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
 	let cleaned = primitives::strip_ansi(input);
 	let tool = effective_tool(ctx.program, ctx.subcommand)
@@ -31,6 +33,7 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 	}
 }
 
+#[must_use]
 pub fn effective_tool<'a>(program: &'a str, subcommand: Option<&'a str>) -> Option<&'a str> {
 	if SUPPORTED_TOOLS.contains(&program) {
 		return Some(program);

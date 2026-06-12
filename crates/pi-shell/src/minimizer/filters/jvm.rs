@@ -18,7 +18,7 @@
 //! with a Rust module capable of state-machine parsing (block collapse,
 //! continuation tracking, mode toggle) that the TOML DSL cannot express.
 
-use std::{collections::HashSet, sync::LazyLock};
+use std::{collections::HashSet, fmt::Write as _, sync::LazyLock};
 
 use regex::Regex;
 
@@ -97,6 +97,7 @@ static FILE_COORD: LazyLock<Regex> =
 /// The active phase is decided inside [`filter`] by re-tokenizing the raw
 /// command, never by `ctx.subcommand` (which is the FIRST non-flag arg and so
 /// mis-reports the phase for `mvn clean install` — it would say `clean`).
+#[must_use]
 pub fn supports(program: &str, _subcommand: Option<&str>) -> bool {
 	is_mvn_family(program) || is_gradle_family(program)
 }
@@ -111,6 +112,7 @@ fn is_gradle_family(program: &str) -> bool {
 	matches!(program, "gradle" | "gradlew" | "gradlew.bat")
 }
 
+#[must_use]
 pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, _exit_code: i32) -> MinimizerOutput {
 	if is_gradle_family(ctx.program) {
 		return filter_gradle(ctx, input);
@@ -221,7 +223,8 @@ pub enum MvnPhase {
 	Passthrough,   // clean, site, plugin goals, version/help, empty
 }
 
-/// Whether `a` is a Maven lifecycle phase or plugin goal we map to a MvnPhase.
+/// Whether `a` is a Maven lifecycle phase or plugin goal we map to a
+/// `MvnPhase`.
 fn is_recognized_mvn_goal(a: &str) -> bool {
 	matches!(
 		a,
@@ -246,7 +249,7 @@ fn is_recognized_mvn_goal(a: &str) -> bool {
 /// mistaken for build goals/tasks.
 fn jvm_positional_tokens<'a>(command: &'a str, value_flags: &[&str]) -> Vec<&'a str> {
 	let mut out = Vec::new();
-	let mut tokens = command.split_whitespace().skip(1).peekable();
+	let mut tokens = command.split_whitespace().skip(1);
 	while let Some(tok) = tokens.next() {
 		if tok.starts_with('-') {
 			let bare = tok.trim_start_matches('-');
@@ -270,6 +273,7 @@ fn jvm_positional_tokens<'a>(command: &'a str, value_flags: &[&str]) -> Vec<&'a 
 /// If empty, plugin-form (`:`), or `clean`/`site` → Passthrough. Re-tokenizes
 /// the raw command because `ctx.subcommand` is the FIRST non-flag arg and so
 /// reports the wrong goal for `mvn clean install`.
+#[must_use]
 pub fn detect_phase(command: &str) -> MvnPhase {
 	// Use the last RECOGNIZED lifecycle goal so that option-value tokens
 	// (e.g. the module name after -pl) are ignored.
@@ -292,8 +296,7 @@ pub fn detect_phase(command: &str) -> MvnPhase {
 		"--threads",
 	])
 	.into_iter()
-	.filter(|a| is_recognized_mvn_goal(a))
-	.last()
+	.rfind(|a| is_recognized_mvn_goal(a))
 	.unwrap_or("");
 
 	// `spring-boot:run` is checked BEFORE the generic `:`-plugin-goal guard
@@ -652,7 +655,7 @@ impl FailuresSummaryCap {
 			return;
 		}
 		if self.dropped > 0 {
-			out.push_str(&format!("\n… +{} more failures\n", self.dropped));
+			let _ = write!(out, "\n… +{} more failures\n", self.dropped);
 		}
 		self.in_summary = false;
 		self.emitted = 0;
@@ -662,7 +665,7 @@ impl FailuresSummaryCap {
 	/// End-of-stream tail emission for cases where the AGG line never arrives.
 	fn finish(&self, out: &mut String) {
 		if self.in_summary && self.dropped > 0 {
-			out.push_str(&format!("\n… +{} more failures\n", self.dropped));
+			let _ = write!(out, "\n… +{} more failures\n", self.dropped);
 		}
 	}
 }
@@ -671,6 +674,7 @@ impl FailuresSummaryCap {
 ///
 /// English-footer guard: if no `BUILD SUCCESS`/`BUILD FAILURE` line is present,
 /// return the ANSI-stripped raw input (non-English locale or truncated output).
+#[must_use]
 pub fn filter_surefire(raw: &str) -> String {
 	filter_surefire_with_cap(raw, max_mvn_failing_classes())
 }
@@ -740,7 +744,7 @@ fn filter_surefire_with_cap(raw: &str, cap: usize) -> String {
 	block.finish(&mut out);
 	summary.finish(&mut out);
 	if dropped_failing > 0 {
-		out.push_str(&format!("\n… +{dropped_failing} more failing test classes\n"));
+		let _ = write!(out, "\n… +{dropped_failing} more failing test classes\n");
 	}
 	out
 }
@@ -822,6 +826,7 @@ pub fn filter_compile(raw: &str) -> String {
 /// `[INFO] Running …` line is seen (via [`SurefireBlock`]). Outside any
 /// Surefire block, applies the unified keep-list (compile keepers +
 /// install/artifact lines).
+#[must_use]
 pub fn filter_package(raw: &str) -> String {
 	filter_package_with_cap(raw, max_mvn_failing_classes())
 }
@@ -898,7 +903,7 @@ fn filter_package_with_cap(raw: &str, cap: usize) -> String {
 	block.finish(&mut out);
 	summary.finish(&mut out);
 	if dropped_failing > 0 {
-		out.push_str(&format!("\n… +{dropped_failing} more failing test classes\n"));
+		let _ = write!(out, "\n… +{dropped_failing} more failing test classes\n");
 	}
 	out
 }
@@ -1592,12 +1597,12 @@ fn filter_gradle_dependencies(input: &str) -> String {
 
 	let cap = max_gradle_deps();
 	for (config, deps) in &configs {
-		result.push_str(&format!("\n{} ({}):\n", config, deps.len()));
+		let _ = write!(result, "\n{} ({}):\n", config, deps.len());
 		for dep in deps.iter().take(cap) {
-			result.push_str(&format!("  {dep}\n"));
+			let _ = writeln!(result, "  {dep}");
 		}
 		if deps.len() > cap {
-			result.push_str(&format!("  ... +{} more\n", deps.len() - cap));
+			let _ = writeln!(result, "  ... +{} more", deps.len() - cap);
 		}
 	}
 
@@ -2188,12 +2193,13 @@ mod tests {
 	fn surefire_caps_failing_blocks_emits_tail() {
 		let mut i = String::from("[INFO] Scanning for projects...\n[INFO] -----< x >-----\n");
 		for n in 1..=5 {
-			i.push_str(&format!(
+			let _ = write!(
+				i,
 				"[INFO] Running x.Fail{n}\n[ERROR] Tests run: 1, Failures: 1, Errors: 0, Skipped: 0, \
 				 Time elapsed: 0.0{n}1 s <<< FAILURE! -- in x.Fail{n}\n[ERROR] x.Fail{n}.bar -- Time \
 				 elapsed: 0.0{n}0 s <<< FAILURE!\norg.opentest4j.AssertionFailedError: boom{n}\n\tat \
 				 x.Fail{n}.bar(Fail{n}.java:25)\n\n"
-			));
+			);
 		}
 		i.push_str("[INFO] BUILD FAILURE\n");
 		let o = filter_surefire_with_cap(&i, 3);
@@ -2215,10 +2221,11 @@ mod tests {
 	fn surefire_cap_zero_emits_summary_only() {
 		let mut i = String::from("[INFO] Scanning for projects...\n[INFO] -----< x >-----\n");
 		for n in 1..=5 {
-			i.push_str(&format!(
+			let _ = write!(
+				i,
 				"[INFO] Running x.Fail{n}\n[ERROR] Tests run: 1, Failures: 1, Errors: 0, Skipped: 0, \
 				 Time elapsed: 0.0{n}1 s <<< FAILURE! -- in x.Fail{n}\n\n"
-			));
+			);
 		}
 		i.push_str("[INFO] BUILD FAILURE\n");
 		let o = filter_surefire_with_cap(&i, 0);
@@ -2236,7 +2243,7 @@ mod tests {
 		let mut i =
 			String::from("[INFO] -----< x >-----\n[INFO] Results:\n[INFO]\n[ERROR] Failures:\n");
 		for n in 1..=5 {
-			i.push_str(&format!("[ERROR]   ClassA.test{n}:25 expected: <a> but was: <b{n}>\n"));
+			let _ = writeln!(i, "[ERROR]   ClassA.test{n}:25 expected: <a> but was: <b{n}>");
 		}
 		i.push_str(
 			"[INFO]\n[ERROR] Tests run: 100, Failures: 5, Errors: 0, Skipped: 0\n[INFO] BUILD \

@@ -76,6 +76,7 @@ impl MinimizerOutput {
 
 	/// Transformed output. Caller-supplied `input_bytes` lets the savings
 	/// metric compare pre- and post-filter sizes.
+	#[must_use]
 	pub const fn transformed(text: String, input_bytes: usize) -> Self {
 		let output_bytes = text.len();
 		Self { text, changed: true, input_bytes, output_bytes, filter: "", original_text: None }
@@ -111,6 +112,7 @@ impl MinimizerOutput {
 
 	/// Byte count saved by this filter (0 for passthrough).
 	#[allow(dead_code, reason = "test-only API surface")]
+	#[must_use]
 	pub const fn bytes_saved(&self) -> usize {
 		self.input_bytes.saturating_sub(self.output_bytes)
 	}
@@ -141,6 +143,7 @@ pub(crate) fn chain_output(
 /// Apply the configured filter pipeline to a captured buffer.
 /// Returns the original text unchanged when minimization is disabled, no
 /// filter matches, or a filter panics.
+#[must_use]
 pub fn apply(
 	command: &str,
 	captured: &str,

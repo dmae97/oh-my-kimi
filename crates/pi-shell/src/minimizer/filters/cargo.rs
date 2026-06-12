@@ -4,6 +4,7 @@ use std::{collections::BTreeMap, fmt::Write as _};
 
 use crate::minimizer::{MinimizerCtx, MinimizerOutput, primitives};
 
+#[must_use]
 pub fn supports(subcommand: Option<&str>) -> bool {
 	matches!(
 		subcommand,
@@ -22,6 +23,7 @@ pub fn supports(subcommand: Option<&str>) -> bool {
 	)
 }
 
+#[must_use]
 pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
 	let cleaned = primitives::strip_ansi(input);
 	let text = match ctx.subcommand {
@@ -67,7 +69,7 @@ fn is_compiling_noise(line: &str) -> bool {
 		|| is_generated_warnings_rollup(trimmed)
 }
 
-/// The per-crate rollup line `warning: \`crate\` (lib) generated N warnings`.
+/// The per-crate rollup line warning: `crate` (lib) generated N warnings.
 /// The individual `warning: ...` diagnostic blocks are kept; this redundant
 /// tally is dropped.  Clippy/install paths already skip it explicitly, so
 /// stripping it here only affects build/check/doc/run condensing.

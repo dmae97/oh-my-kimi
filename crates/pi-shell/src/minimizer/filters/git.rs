@@ -4,6 +4,7 @@ use std::fmt::Write as _;
 
 use crate::minimizer::{MinimizerCtx, MinimizerOutput, primitives};
 
+#[must_use]
 pub fn supports(subcommand: Option<&str>) -> bool {
 	matches!(
 		subcommand,
@@ -29,6 +30,7 @@ pub fn supports(subcommand: Option<&str>) -> bool {
 	)
 }
 
+#[must_use]
 pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
 	if is_show_path_content(ctx.command) || is_stash_patch(ctx.command) {
 		return MinimizerOutput::passthrough(input);
@@ -1739,9 +1741,10 @@ mod tests {
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
 		let ctx =
 			test_ctx(Some("tag"), "git tag --format=%(refname:short)|%(taggerdate:short)", &cfg);
-		let input = (0..45)
-			.map(|idx| format!("v1.{idx}|2026-06-06\n"))
-			.collect::<String>();
+		let input = (0..45).fold(String::new(), |mut s, idx| {
+			let _ = writeln!(s, "v1.{idx}|2026-06-06");
+			s
+		});
 
 		let out = filter(&ctx, &input, 0);
 
@@ -1753,9 +1756,10 @@ mod tests {
 	fn tag_delete_output_is_passthrough() {
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
 		let ctx = test_ctx(Some("tag"), "git tag -d v1.0 v1.1", &cfg);
-		let input = (0..45)
-			.map(|idx| format!("Deleted tag 'v1.{idx}' (was abc1234)\n"))
-			.collect::<String>();
+		let input = (0..45).fold(String::new(), |mut s, idx| {
+			let _ = writeln!(s, "Deleted tag 'v1.{idx}' (was abc1234)");
+			s
+		});
 
 		let out = filter(&ctx, &input, 0);
 
@@ -1767,7 +1771,10 @@ mod tests {
 	fn tag_listing_is_compacted() {
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
 		let ctx = test_ctx(Some("tag"), "git tag --list", &cfg);
-		let input = (0..45).map(|idx| format!("v1.{idx}\n")).collect::<String>();
+		let input = (0..45).fold(String::new(), |mut s, idx| {
+			let _ = writeln!(s, "v1.{idx}");
+			s
+		});
 
 		let out = filter(&ctx, &input, 0);
 
@@ -2073,10 +2080,8 @@ mod tests {
 			if idx % 3 == 0 {
 				input.push_str(".rs\tnew-");
 				input.push_str(&idx.to_string());
-				input.push_str(".rs\n");
-			} else {
-				input.push_str(".rs\n");
 			}
+			input.push_str(".rs\n");
 		}
 
 		let out = filter(&ctx, &input, 0);
@@ -2762,9 +2767,10 @@ error: could not apply abc1234... fix: something\nhint: Resolve all conflicts ma
 		input.push_str("/home/alice/repo                  abc1234 (bare)\n");
 		input.push_str("/home/alice/repo-detached         def5678 (detached HEAD)\n");
 		for idx in 0..20 {
-			input.push_str(&format!(
-				"/home/alice/wt-{idx:02}                    aaaaaaa{idx:02} [wt-{idx}]\n"
-			));
+			let _ = writeln!(
+				input,
+				"/home/alice/wt-{idx:02}                    aaaaaaa{idx:02} [wt-{idx}]"
+			);
 		}
 		let out = condense_worktree_with_home(&input, home);
 
@@ -2825,7 +2831,7 @@ error: could not apply abc1234... fix: something\nhint: Resolve all conflicts ma
 		let ctx = test_ctx(Some("worktree"), "git worktree list", &cfg);
 		let mut input = String::new();
 		for idx in 0..22usize {
-			input.push_str(&format!("/repo/wt-{idx:02}  aaaaaaa{idx:02} [branch-{idx}]\n"));
+			let _ = writeln!(input, "/repo/wt-{idx:02}  aaaaaaa{idx:02} [branch-{idx}]");
 		}
 		let out = filter(&ctx, &input, 0);
 		assert!(
