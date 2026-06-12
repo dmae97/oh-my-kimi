@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { convertAnthropicMessages } from "@oh-my-pi/pi-ai/providers/anthropic";
+import { convertAnthropicMessages, streamAnthropic } from "@oh-my-pi/pi-ai/providers/anthropic";
 import type {
 	AssistantMessage,
 	Message,
@@ -141,6 +141,51 @@ describe("Anthropic-compatible unsigned thinking replay (#2005)", () => {
 		const sameToolUse = sameBlocks.find(block => block.type === "tool_use") as WireToolUseBlock;
 		expect(sameToolUse.input.text).toBe("broken \ufffd end");
 		expect((sameToolUse.input.nested as { parts: string[] }).parts[0]).toBe("broken \ufffd end");
+	});
+
+	it("sanitizes payload replacements before SDK JSON serialization", async () => {
+		const splitSurrogate = `render \`"icon.ghost": "\\ud83d${String.fromCharCode(0xdc7b)}"\``;
+		const { promise: bodyPromise, resolve } = Promise.withResolvers<string>();
+		const controller = new AbortController();
+		const fakeFetch = async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+			const raw = init?.body;
+			resolve(typeof raw === "string" ? raw : new TextDecoder().decode(raw as Uint8Array));
+			controller.abort();
+			return new Response('event: message_stop\ndata: {"type":"message_stop"}\n\n', {
+				status: 200,
+				headers: { "content-type": "text/event-stream" },
+			});
+		};
+
+		streamAnthropic(
+			makeModel(),
+			{ systemPrompt: [], messages: [makeUser("continue")] },
+			{
+				apiKey: "sk-ant-test",
+				signal: controller.signal,
+				fetch: fakeFetch,
+				onPayload: payload => {
+					const request = payload as { messages?: Array<{ role: string; content: unknown }> };
+					if (!Array.isArray(request.messages)) throw new Error("Anthropic payload missing messages");
+					request.messages.push({
+						role: "assistant",
+						content: [
+							{
+								type: "tool_use",
+								id: "toolu_surrogate",
+								name: "write",
+								input: { text: splitSurrogate },
+							},
+						],
+					});
+					return request;
+				},
+			},
+		);
+
+		const body = await bodyPromise;
+		expect(body).not.toContain("\\udc7b");
+		expect(body).toContain("\ufffd");
 	});
 
 	it("covers the Xiaomi MiMo Anthropic-compatible reporter configuration without provider allowlists", () => {
