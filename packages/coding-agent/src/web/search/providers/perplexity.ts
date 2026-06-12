@@ -8,7 +8,7 @@
  * - Anonymous via `www.perplexity.ai/rest/sse/perplexity_ask`
  */
 
-import { type AuthStorage, type FetchImpl, getEnvApiKey } from "@oh-my-pi/pi-ai";
+import { type AuthStorage, type FetchImpl, getEnvApiKey, type OAuthAccess, withOAuthAccess } from "@oh-my-pi/pi-ai";
 import { $env, readSseJson } from "@oh-my-pi/pi-utils";
 import type {
 	PerplexityMessageOutput,
@@ -43,7 +43,7 @@ type PerplexityAuth =
 	  }
 	| {
 			type: "oauth";
-			token: string;
+			access: OAuthAccess;
 	  }
 	| {
 			type: "cookies";
@@ -302,11 +302,11 @@ function jwtExpiryMs(token: string): number | undefined {
 	}
 }
 
-async function findOAuthToken(
+async function findOAuthAccess(
 	authStorage: AuthStorage,
 	sessionId: string | undefined,
 	signal: AbortSignal | undefined,
-): Promise<string | null> {
+): Promise<OAuthAccess | null> {
 	try {
 		// `getOAuthAccess` returns the raw OAuth bearer only — runtime/config
 		// api_key overrides and stored api_key credentials are intentionally
@@ -314,12 +314,12 @@ async function findOAuthToken(
 		// `www.perplexity.ai` session/SSE endpoint.
 		const access = await authStorage.getOAuthAccess("perplexity", sessionId, { signal });
 		const token = access?.accessToken;
-		if (!token) return null;
+		if (!access || !token) return null;
 		// Trust the JWT's own `exp` claim if it has one; otherwise treat as
 		// non-expiring. Perplexity session JWTs commonly omit `exp`.
 		const jwtExpiry = jwtExpiryMs(token);
 		if (jwtExpiry !== undefined && jwtExpiry <= Date.now() + OAUTH_EXPIRY_BUFFER_MS) return null;
-		return token;
+		return access;
 	} catch {
 		return null;
 	}
@@ -339,9 +339,9 @@ async function findPerplexityAuth(
 	const apiKey = findApiKey();
 
 	// 2. OAuth/session bearer from AuthStorage.
-	const oauthToken = await findOAuthToken(authStorage, sessionId, signal);
-	if (oauthToken) {
-		return { type: "oauth", token: oauthToken };
+	const oauthAccess = await findOAuthAccess(authStorage, sessionId, signal);
+	if (oauthAccess) {
+		return { type: "oauth", access: oauthAccess };
 	}
 
 	// 3. PERPLEXITY_API_KEY env var
@@ -646,7 +646,19 @@ export async function searchPerplexity(params: PerplexitySearchParams): Promise<
 	const auth = await findPerplexityAuth(params.authStorage, params.sessionId, params.signal);
 
 	if (auth.type !== "api_key") {
-		const askResult = await callPerplexityAsk(auth, params);
+		// OAuth bearer mode routes the whole authenticated unit (the ask
+		// session/SSE request) through the central auth-retry policy so a 401 or
+		// usage-limit force-refreshes, then rotates to a sibling credential.
+		// Cookie/env/anonymous modes have no rotatable credential — untouched.
+		const askResult =
+			auth.type === "oauth"
+				? await withOAuthAccess(
+						params.authStorage,
+						"perplexity",
+						access => callPerplexityAsk({ type: "oauth", token: access.accessToken }, params),
+						{ sessionId: params.sessionId, signal: params.signal, seed: auth.access },
+					)
+				: await callPerplexityAsk(auth, params);
 		return applySourceLimit(
 			{
 				provider: "perplexity",
