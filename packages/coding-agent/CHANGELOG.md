@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Changed `/usage` to show the OAuth account currently selected for the active model provider when usage reports include multiple accounts, making multi-account sessions easier to verify without marking unrelated providers.
+
 ## [15.10.12] - 2026-06-10
 
 ### Added
@@ -611,8 +615,6 @@
 - Fixed `github` tool `run_watch` op ignoring the explicit `repo` argument and silently watching the cwd-inferred repository in nested/umbrella workspaces. `executeRunWatch` passed `undefined` for the user-supplied `repo` to `resolveGitHubRepo`, so a call like `{op: "run_watch", repo: "owner/cxf", branch: "main"}` fell back to `gh repo view` in cwd and streamed `watching <sha> on <cwd-repo>` against the wrong repository. The explicit `repo` now takes precedence over the cwd inference, and the no-`branch`/no-`run` path refuses to derive the watched commit from `git HEAD` unless the cwd actually points at the resolved repo — otherwise it raises a `ToolError` telling the caller to pass `branch` or `run` instead of silently rebinding to an unrelated commit ([#1949](https://github.com/can1357/oh-my-pi/issues/1949)).
 - Fixed `omp plugin install <local-path>` failing with `Invalid package name: .` (and similar) for cwd-relative (`.`, `./pkg`), absolute (`/abs`, `C:\…`, `\\unc`), and tilde-prefixed (`~/pkg`) specs. `classifyInstallTarget` now returns a `local` arm in addition to `marketplace`/`npm`, and `plugin install` routes those specs to `PluginManager.link()` — the same code path as `omp plugin link`. ([#1945](https://github.com/can1357/oh-my-pi/issues/1945))
 - Fixed the `web_search` result renderer capping the synthesized answer at 12 lines even when expanded, while the Sources list expanded in full — so a long answer stayed truncated ("… N more lines") after `Ctrl+O`, making the expand toggle look like a no-op and dwarfing the answer next to its sources. The answer now renders the full text (markdown-formatted) when expanded and a short markdown preview when collapsed, matching the sources' collapse/expand behavior. The answer is also rendered through the Markdown component instead of dimmed raw lines, so headings, bold, lists, and code in the answer display formatted.
-- Changed implicit local Ollama discovery to build models on the native `ollama-chat` transport (`/api/chat`) instead of `openai-responses` (`/v1/responses`). Ollama's Responses surface returns empty text for thinking-capable models (e.g. `gemma4`) because it routes the answer into a `reasoning` block; the native `/api/chat` wire handles reasoning models correctly. Discovered Ollama models now carry `api: "ollama-chat"` with the native base URL (no `/v1` suffix) and continue to read reasoning, vision (`input: ["text", "image"]`), and the real `contextWindow` from `/api/show`. Explicitly configured `openai-responses`/`openai-completions` Ollama providers are unaffected.
-- Changed `/usage` to show the OAuth account currently selected for the active model provider when usage reports include multiple accounts, making multi-account sessions easier to verify without marking unrelated providers.
 
 ## [15.9.3] - 2026-06-05
 
