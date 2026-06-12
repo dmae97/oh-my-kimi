@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.11.7] - 2026-06-12
 ### Added
 
 - Added mouse support to the setup wizard, including hover, wheel scrolling, and click-to-select for provider sign-in, web-search provider, glyph, and theme option lists
