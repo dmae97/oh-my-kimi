@@ -169,6 +169,45 @@ fn split_file_line(line: &str) -> Option<(&str, &str)> {
 	Some((file, rest))
 }
 
+pub fn command_has_ordered_tokens(command: &str, first: &str, second: &str) -> bool {
+	let mut saw_first = false;
+	for part in command.split_whitespace() {
+		if saw_first && part == second {
+			return true;
+		}
+		if part == first {
+			saw_first = true;
+		}
+	}
+	false
+}
+
+pub fn command_has_any_token(command: &str, tokens: &[&str]) -> bool {
+	command.split_whitespace().any(|part| {
+		tokens.iter().any(|token| {
+			part == *token
+				|| part
+					.strip_prefix(*token)
+					.is_some_and(|suffix| suffix.starts_with('='))
+		})
+	})
+}
+
+/// Dedup consecutive lines then apply a 120-head / 80-tail cap.
+pub fn head_tail_dedup(input: &str) -> String {
+	head_tail_lines(&dedup_consecutive_lines(input), 120, 80)
+}
+
+pub fn is_markdown_badge_or_image(line: &str) -> bool {
+	line.starts_with("![") || line.starts_with("[![") || line.contains("img.shields.io")
+}
+
+pub fn is_horizontal_rule(line: &str) -> bool {
+	line.len() >= 3
+		&& line.chars().all(|ch| matches!(ch, '-' | '*' | '_' | ' '))
+		&& line.chars().any(|ch| matches!(ch, '-' | '*' | '_'))
+}
+
 /// Compact a long plain listing to head/tail form.
 pub fn compact_listing(input: &str, max_lines: usize) -> String {
 	let lines: Vec<&str> = input
@@ -280,28 +319,23 @@ pub fn max_lines(input: &str, max: usize) -> String {
 	out
 }
 
-/// Drop every line matched by any regex in `set`.
-pub fn strip_lines_regex(input: &str, set: &regex::RegexSet) -> String {
+/// Line filter combining an optional keep set and an optional strip set.
+///
+/// A line survives iff it matches the keep set (when present) AND does not
+/// match the strip set (when present) — i.e. keep is `K AND NOT S`. An
+/// absent set imposes no constraint, so pure strip and pure keep filtering
+/// are the degenerate single-set cases.
+pub fn filter_lines_regex(
+	input: &str,
+	strip: Option<&regex::RegexSet>,
+	keep: Option<&regex::RegexSet>,
+) -> String {
 	let mut out = String::new();
 	for line in input.lines() {
-		if set.is_match(line) {
-			continue;
+		if keep.is_none_or(|set| set.is_match(line)) && !strip.is_some_and(|set| set.is_match(line)) {
+			out.push_str(line);
+			out.push('\n');
 		}
-		out.push_str(line);
-		out.push('\n');
-	}
-	out
-}
-
-/// Keep only lines matching any regex in `set`.
-pub fn keep_lines_regex(input: &str, set: &regex::RegexSet) -> String {
-	let mut out = String::new();
-	for line in input.lines() {
-		if !set.is_match(line) {
-			continue;
-		}
-		out.push_str(line);
-		out.push('\n');
 	}
 	out
 }
@@ -380,5 +414,73 @@ mod tests {
 	#[test]
 	fn truncate_line_max_zero_yields_empty() {
 		assert_eq!(truncate_line("anything", 0), "");
+	}
+
+	#[test]
+	fn filter_lines_regex_combines_keep_and_strip() {
+		let strip = regex::RegexSet::new(["noise"]).unwrap();
+		let keep = regex::RegexSet::new(["^task"]).unwrap();
+		let input = "task ok\ntask noise\nnoise only\nunrelated\n";
+
+		// Combined: survives iff matches keep AND NOT strip.
+		assert_eq!(filter_lines_regex(input, Some(&strip), Some(&keep)), "task ok\n");
+		// Strip only: absent keep set imposes no constraint.
+		assert_eq!(filter_lines_regex(input, Some(&strip), None), "task ok\nunrelated\n");
+		// Keep only: absent strip set imposes no constraint.
+		assert_eq!(filter_lines_regex(input, None, Some(&keep)), "task ok\ntask noise\n");
+		// Neither: identity modulo trailing-newline normalization.
+		assert_eq!(filter_lines_regex(input, None, None), input);
+	}
+
+	#[test]
+	fn test_command_has_ordered_tokens_basic() {
+		assert!(command_has_ordered_tokens("glab mr diff 42", "mr", "diff"));
+		assert!(
+			!command_has_ordered_tokens("glab diff mr 42", "mr", "diff"),
+			"wrong order must be false"
+		);
+		assert!(
+			!command_has_ordered_tokens("glab mr", "mr", "diff"),
+			"missing second token must be false"
+		);
+	}
+
+	#[test]
+	fn test_command_has_ordered_tokens_first_equals_second() {
+		// edge case: first == second — both must appear in order
+		assert!(command_has_ordered_tokens("git push push", "push", "push"));
+		assert!(
+			!command_has_ordered_tokens("git push", "push", "push"),
+			"only one occurrence — must be false"
+		);
+	}
+
+	#[test]
+	fn test_command_has_any_token_equals_form() {
+		// Exact token match and non-match.
+		assert!(command_has_any_token("eslint --format json src", &["json"]));
+		assert!(!command_has_any_token("eslint --format json src", &["xml"]));
+		// Equals-form: --flag=value matches when the search token is the flag prefix.
+		assert!(command_has_any_token("eslint --format=json src", &["--format"]));
+		// Value-only search does NOT match an equals-form part (token is prefix, not
+		// suffix).
+		assert!(
+			!command_has_any_token("eslint --format=json src", &["json"]),
+			"value after = must not match when token is not the flag prefix"
+		);
+		// Substring of a standalone word must not match.
+		assert!(
+			!command_has_any_token("eslint --format foobar src", &["bar"]),
+			"substring of a token must not match"
+		);
+	}
+
+	#[test]
+	fn test_horizontal_rule_requires_non_space() {
+		assert!(is_horizontal_rule("---"));
+		assert!(is_horizontal_rule("- - -"));
+		assert!(is_horizontal_rule("***"));
+		assert!(!is_horizontal_rule("   "), "whitespace-only must not be a rule");
+		assert!(!is_horizontal_rule("  "), "short whitespace must not be a rule");
 	}
 }

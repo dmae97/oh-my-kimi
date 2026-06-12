@@ -11,8 +11,9 @@ strip_lines_matching = [
 	"^Synced ",
 	"^Uploaded ",
 	"^Downloaded ",
+	"^\\s*Downloading",
 	"^Fetching ",
-	"^Uploading ",
+	"^\\s*Uploading",
 	"^Hashing ",
 	"^Processing ",
 	"^Preview your theme: ",
@@ -30,3 +31,8 @@ expected = "Error: Liquid syntax error in templates/product.liquid line 5\n"
 name = "push success kept"
 input = "Fetching theme\nUploading assets/foo.js\nTheme pushed successfully"
 expected = "Theme pushed successfully\n"
+
+[[tests.shopify-theme]]
+name = "strips indented downloading/uploading progress"
+input = "  Downloading templates/index.liquid\n  Uploading assets/app.css\nTheme pulled successfully"
+expected = "Theme pulled successfully\n"

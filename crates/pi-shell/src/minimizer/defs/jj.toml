@@ -6,6 +6,7 @@ match_command = "^jj$"
 strip_ansi = true
 strip_lines_matching = [
 	"^\\s*$",
+	"^Hint:",
 ]
 truncate_lines_at = 200
 max_lines = 80
@@ -20,3 +21,8 @@ expected = "Working copy  (@) : abc def\nParent commit      : xyz 123 main | msg
 name = "empty becomes sentinel"
 input = "\n\n"
 expected = "jj: ok"
+
+[[tests.jj]]
+name = "strips hint keeps working copy update"
+input = "Working copy now at: qpvuntsm abc123 feat: add new feature\nHint: use `jj log` to see the full history\n"
+expected = "Working copy now at: qpvuntsm abc123 feat: add new feature\n"
