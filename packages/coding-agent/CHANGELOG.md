@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Windows PowerShell image paste so Ctrl+V can fall back to the PowerShell clipboard bridge when the native clipboard reader reports no image ([#2429](https://github.com/can1357/oh-my-pi/issues/2429)).
+
 ## [15.12.3] - 2026-06-12
 
 ### Fixed
