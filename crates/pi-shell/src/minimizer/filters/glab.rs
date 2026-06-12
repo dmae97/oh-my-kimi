@@ -78,6 +78,10 @@ fn preserves_raw_mode(ctx: &MinimizerCtx<'_>) -> bool {
 	{
 		return true;
 	}
+	// mr diff -> passthrough (raw unified diff must be un-modified)
+	if primitives::command_has_ordered_tokens(ctx.command, "mr", "diff") {
+		return true;
+	}
 	false
 }
 
@@ -661,5 +665,18 @@ section_end:1711234600:build_script[0K
 		// First release present, 21st not shown verbatim in the list.
 		assert!(out.text.contains("Release 1"));
 		assert!(!out.text.contains("Release 21 ["));
+	}
+
+	#[test]
+	fn mr_diff_passes_through_unmodified() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = test_ctx(Some("mr"), "glab mr diff 42", &cfg);
+		let input =
+			"diff --git a/foo.rs b/foo.rs\n--- a/foo.rs\n+++ b/foo.rs\n@@ -1 +1 @@\n-old\n+new\n";
+
+		let out = filter(&ctx, input, 0);
+
+		assert!(!out.changed);
+		assert_eq!(out.text, input);
 	}
 }
