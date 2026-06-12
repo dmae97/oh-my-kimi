@@ -7,6 +7,7 @@ import {
 	isMinimaxM2FamilyModelId,
 	isOpenAIGptOssModelId,
 	isReasoningGlmModelId,
+	modelFamilyToken,
 	supportsAdaptiveThinkingDisplay,
 } from "@oh-my-pi/pi-catalog/identity";
 
@@ -148,5 +149,29 @@ describe("isGlmVisionModelId", () => {
 		expect(isGlmVisionModelId("glm-5-preview")).toBe(false);
 		expect(isGlmVisionModelId("glm-4.5")).toBe(false);
 		expect(isGlmVisionModelId("glm-5-turbo")).toBe(false);
+	});
+});
+describe("modelFamilyToken", () => {
+	test("groups point releases within a vendor and separates across vendors", () => {
+		expect(modelFamilyToken("claude-opus-4-7")).toBe("anthropic");
+		expect(modelFamilyToken("claude-opus-4-8")).toBe("anthropic");
+		expect(modelFamilyToken("claude-opus-4-7")).toBe(modelFamilyToken("claude-opus-4-8"));
+		expect(modelFamilyToken("gpt-5.4")).toBe("openai");
+		expect(modelFamilyToken("gemini-3-pro")).toBe("gemini");
+		expect(modelFamilyToken("claude-opus-4-8")).not.toBe(modelFamilyToken("gpt-5.4"));
+	});
+
+	test("folds aggregator mirrors and namespace prefixes onto the lineage", () => {
+		expect(modelFamilyToken("anthropic/claude-opus-4.8")).toBe("anthropic");
+		expect(modelFamilyToken("openrouter/anthropic/claude-opus-4-8")).toBe("anthropic");
+	});
+
+	test("classifies non-first-party families", () => {
+		expect(modelFamilyToken("moonshotai/kimi-k2")).toBe("kimi");
+		expect(modelFamilyToken("qwen/qwen3-coder")).toBe("qwen");
+	});
+
+	test("returns an empty token for unclassifiable ids so callers fall back to provider", () => {
+		expect(modelFamilyToken("some-unknown-model")).toBe("");
 	});
 });
