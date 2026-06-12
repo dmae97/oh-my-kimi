@@ -138,7 +138,7 @@ Also exposed:
 - `deliverAs: "steer"` (default) — interrupts current run
 - `deliverAs: "followUp"` — queued to run after current run
 - `deliverAs: "nextTurn"` — stored and injected on the next user prompt
-- `triggerTurn: true` — starts a turn when idle (`nextTurn` ignores this)
+- `triggerTurn: true` — starts a turn when idle (also honored with `deliverAs: "nextTurn"`: idle prompts immediately; while streaming the queued message schedules an internal continuation)
 
 `pi.sendUserMessage(content, { deliverAs })` always goes through prompt flow; while streaming it queues as steer/follow-up.
 
@@ -276,7 +276,7 @@ pi.registerTool({
 });
 ```
 
-`tool_call`/`tool_result` intercept all tools once the registry is wrapped in `sdk.ts`, including built-ins and extension/custom tools. `ToolDefinition` also supports optional `hidden`, `defaultInactive`, `deferrable`, `mcpServerName`, `mcpToolName`, `renderCall`, and `renderResult` fields.
+`tool_call`/`tool_result` intercept all tools once the registry is wrapped in `sdk.ts`, including built-ins and extension/custom tools. `ToolDefinition` also supports optional `hidden`, `defaultInactive`, `deferrable`, `approval`, `mcpServerName`, `mcpToolName`, `renderCall`, and `renderResult` fields.
 
 ## UI integration points
 
@@ -297,16 +297,15 @@ Current no-op methods in this controller:
 
 - `setFooter`
 - `setHeader`
-- `setEditorComponent`
 
-Also note: `setWidget` currently routes to status-line text via `setHookWidget(...)`.
+`setEditorComponent` is wired to the live editor (`ctx.setEditorComponent(factory)`). `setWidget` renders real widget components above or below the editor via `setHookWidget(...)` (`placement: "aboveEditor" | "belowEditor"`; string-array content capped at 10 lines).
 
 ### RPC mode (`rpc-mode.ts`)
 
 `ctx.ui` is backed by RPC `extension_ui_request` events:
 
 - dialog methods (`select`, `confirm`, `input`, `editor`) round-trip to client responses
-- fire-and-forget methods emit requests (`notify`, `setStatus`, `setWidget` for string arrays, `setTitle`, `setEditorText`)
+- fire-and-forget methods emit requests (`notify`, `setStatus`, `setWidget` for string arrays, `setEditorText`; `setTitle` emits only when `PI_RPC_EMIT_TITLE=1`)
 
 Unsupported/no-op in RPC implementation:
 
@@ -321,9 +320,9 @@ Unsupported/no-op in RPC implementation:
 
 When no UI context is supplied to runner init, `ctx.hasUI` is `false` and methods are no-op/default-returning.
 
-### Background interactive mode
+### ACP mode
 
-Background mode installs a non-interactive UI context object. In current implementation, `ctx.hasUI` may still be `true` while interactive dialogs return defaults/no-op behavior.
+ACP installs an elicitation-bridged UI context (`createAcpExtensionUiContext` in `acp-agent.ts`). `ctx.hasUI` is `true` while only `select`/`confirm`/`input` round-trip (as ACP elicitations; defaults are returned when the client lacks the `elicitation.form` capability). The non-elicitation surface (widgets, editor, theming, terminal input) is stubbed no-op.
 
 ## Session and state patterns
 

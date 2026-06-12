@@ -23,7 +23,7 @@ They are intentionally separate:
 Blob file naming:
 
 - file path: `<blobsDir>/<sha256-hex>`
-- no extension
+- canonical file has no extension; when an extension is supplied (image MIME type), a typed sidecar `<sha256-hex>.<ext>` is hardlinked (or copied) next to it so OS openers can type-detect
 - reference string stored in entries: `blob:sha256:<sha256-hex>`
 
 Implications:
@@ -55,6 +55,7 @@ Subagents can adopt the parent `ArtifactManager`; in that case parent and subage
 
 - `hash`: hex digest,
 - `path`: `<blobsDir>/<hash>`,
+- `displayPath`: `<blobsDir>/<hash>.<ext>` when an extension was supplied, otherwise the canonical path,
 - `ref`: `blob:sha256:<hash>`.
 
 No session-local counter is used.

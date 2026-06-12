@@ -24,11 +24,11 @@ Does not cover:
 - [`../src/session/agent-session.ts`](../packages/coding-agent/src/session/agent-session.ts)
 - [`packages/agent/src/compaction/compaction.ts`](../packages/agent/src/compaction/compaction.ts)
 - [`../src/session/session-manager.ts`](../packages/coding-agent/src/session/session-manager.ts)
-- [`../src/extensibility/slash-commands.ts`](../packages/coding-agent/src/extensibility/slash-commands.ts)
+- [`../src/slash-commands/builtin-registry.ts`](../packages/coding-agent/src/slash-commands/builtin-registry.ts)
 
 ## Trigger path
 
-1. `/handoff` is declared in builtin slash command metadata (`slash-commands.ts`) with optional inline hint: `[focus instructions]`.
+1. `/handoff` is declared in builtin slash command metadata (`slash-commands/builtin-registry.ts`) with optional inline hint: `[focus instructions]`.
 2. In interactive input handling (`InputController`), submit text matching `/handoff` or `/handoff ...` is intercepted before normal prompt submission.
 3. The editor is cleared and `handleHandoffCommand(customInstructions?)` is called.
 4. `CommandController.handleHandoffCommand` performs a preflight guard using current entries:
@@ -62,10 +62,10 @@ The same minimum-content guard exists again inside `AgentSession.handoff()` and 
 
 `generateHandoff(...)` converts the existing `AgentMessage[]` history to real LLM `Message[]` history, then appends one trailing agent-attributed `user` message containing the rendered handoff prompt.
 
-The request uses `completeSimple(...)` directly:
+The request uses `instrumentedCompleteSimple(...)` (the OTEL-instrumented `completeSimple` oneshot wrapper) directly:
 
 ```ts
-await completeSimple(
+await instrumentedCompleteSimple(
   model,
   {
     systemPrompt,
@@ -80,6 +80,7 @@ await completeSimple(
     initiatorOverride,
     metadata,
   },
+  { telemetry, oneshotKind: "handoff" },
 );
 ```
 
@@ -239,7 +240,7 @@ High-level state flow:
 1. Interactive slash command intercepted.
 2. Preflight message-count guard.
 3. `#handoffAbortController` created (`isGeneratingHandoff = true`).
-4. `generateHandoff(...)` issues one `completeSimple(...)` request with live system prompt, tools, message history, current thinking level, and trailing handoff prompt.
+4. `generateHandoff(...)` issues one `instrumentedCompleteSimple(...)` request with live system prompt, tools, message history, current thinking level, and trailing handoff prompt.
 5. Assistant response text blocks are joined; tool-call blocks are discarded.
 6. If missing text → return `undefined`; if aborted → cancellation error path.
 7. If present:

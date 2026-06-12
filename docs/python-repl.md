@@ -59,7 +59,7 @@ One JSON object per line, UTF-8, `\n` terminated.
 Host → runner:
 
 ```jsonc
-{"id": "<reqId>", "code": "<source>", "silent": false, "storeHistory": true}
+{"id": "<reqId>", "code": "<source>", "silent": false, "storeHistory": true, "cwd": "<optional>", "env": {"KEY": "VAL"}}
 {"type": "exit"}
 ```
 
@@ -108,7 +108,7 @@ Unknown magic names raise `NameError: UsageError: ...` inside the cell.
 `python.kernelMode` controls retained kernel reuse:
 
 - `session` (default)
-  - Reuses kernel sessions keyed by namespaced eval session id plus cwd.
+  - Reuses kernel sessions keyed by namespaced eval session id plus normalized cwd and interpreter.
   - Multiple owners can share the same retained kernel for that key.
   - Calls through the tool are exclusive, so tool invocations do not overlap.
   - A dead retained subprocess is replaced before execution.
@@ -138,9 +138,9 @@ Environment is filtered before launching the runner:
 - Allow-prefixes: `LC_`, `XDG_`, `PI_`
 - Denylist strips common API keys (OpenAI/Anthropic/Gemini/etc.)
 
-Runtime selection order:
+Runtime selection order (skipped entirely when the `python.interpreter` setting names an explicit executable):
 
-1. Active/located venv (`VIRTUAL_ENV`, then `<cwd>/.venv`, `<cwd>/venv`)
+1. Active/located venv (`VIRTUAL_ENV`, then `CONDA_PREFIX`, then `<cwd>/.venv`, `<cwd>/venv`)
 2. Managed venv at `~/.omp/python-env`
 3. `python` or `python3` on PATH
 
@@ -156,19 +156,19 @@ The runner additionally receives `PYTHONUNBUFFERED=1` and `PYTHONIOENCODING=utf-
 - JavaScript backend only (`eval.py=false`, `eval.js=true`, or `PI_PY=0 PI_JS=1`)
 - both backends (`eval.py=true`, `eval.js=true`, or `PI_PY=1 PI_JS=1`)
 
-`PI_PY` and `PI_JS` use normal boolean flag parsing. If either env var is set, the env pair overrides the per-key settings; an unset member of the pair defaults to enabled.
+`PI_PY` and `PI_JS` use normal boolean flag parsing. Each flag, when set, overrides only its own setting; an unset flag falls back to its setting (`eval.py` / `eval.js`, both default `true`).
 
 If Python preflight fails and `eval.js` is enabled, `eval` remains available for `js` cells; `py` cells fail with a Python-backend availability error.
 
-Python prelude helpers include `agent(prompt, *, agent_type="task", model=None, context=None, label=None, schema=None)`. It synchronously calls the host bridge, runs one subagent through the task executor, and returns the final text. When `schema` is supplied, the helper parses the subagent's JSON output and returns the object.
+Python prelude helpers include `agent(prompt, *, agent_type="task", model=None, label=None, schema=None)`. It synchronously calls the host bridge, runs one subagent through the task executor, and returns the final text. When `schema` is supplied, the helper parses the subagent's JSON output and returns the object.
 
 ## Execution flow and cancellation/timeout
 
 ### Cell timeout
 
-Each eval cell `timeout` is in seconds, defaults to 30, and is clamped to `1..600`. It is a **wall-clock budget on the cell's own work** that the watchdog (`IdleTimeout`, `src/eval/idle-timeout.ts`) enforces, **but it is paused while a host-side `agent()`/`parallel()`/`completion()` bridge call is in flight**: those calls pump a heartbeat (`withBridgeHeartbeat`, `src/eval/heartbeat.ts`) that re-arms the watchdog, so a long fanout or a slow completion runs to completion instead of being killed mid-stream.
+Each eval cell `timeout` is in seconds, defaults to 30, and is clamped to `1..3600`. It is a **wall-clock budget on the cell's own work** that the watchdog (`IdleTimeout`, `src/eval/idle-timeout.ts`) enforces, **but it is suspended while a host-side `agent()`/`parallel()`/`completion()` bridge call is in flight**: those calls emit synthetic pause/resume timeout-control status events (`withBridgeTimeoutPause`, `src/eval/bridge-timeout.ts`) that pause the watchdog entirely and start a fresh timeout window when control returns to the runtime, so a long fanout or a slow completion runs to completion instead of being killed mid-stream. Pause is reference-counted because `parallel()` can have multiple bridge calls in flight at once.
 
-The heartbeat is the **sole** signal that extends the budget. Everything else the cell does — compute, `stdout`/`stderr`, `log()`/`phase()`, and ordinary (non-agent) tool calls — counts against `timeout`, so a cell that is not delegating to an agent/completion is bounded by a plain wall-clock timeout. The tool combines the caller abort signal, the session abort signal, and the watchdog's signal with `AbortSignal.any(...)`; no wall-clock deadline is passed to the backend, so neither runtime arms a competing fixed timer.
+The pause/resume events are the **sole** mechanism that suspends the budget. Everything else the cell does — compute, `stdout`/`stderr`, `log()`/`phase()`, and ordinary (non-agent) tool calls — counts against `timeout`, so a cell that is not delegating to an agent/completion is bounded by a plain wall-clock timeout. The tool combines the caller abort signal, the session abort signal, and the watchdog's signal with `AbortSignal.any(...)`; no wall-clock deadline is passed to the backend, so neither runtime arms a competing fixed timer.
 
 ### Kernel execution cancellation
 
@@ -176,10 +176,10 @@ On abort/timeout:
 
 - The host sends `kill("SIGINT")` to the runner subprocess.
 - The runner's exec-time signal handler raises `KeyboardInterrupt` inside the user code.
-- Result includes `cancelled=true`; the timeout path annotates output as `Command timed out after <n> seconds`.
+- Result includes `cancelled=true`; a kernel timeout is annotated as `eval cell timed out after <n>s; kernel interrupted but remains running. Reset the kernel via { reset: true } if state appears corrupted.`
 - Between requests the runner installs `SIG_IGN` for SIGINT so a stray cancel does not tear down the kernel.
 
-If a second cancel is required (runner stuck in C code), the host escalates to `SIGTERM` and the session restarts on the next call.
+If the runner does not emit `done` within 5s of the interrupt (`INTERRUPT_ESCALATION_MS` — e.g. stuck in C code holding the GIL), the host shuts the subprocess down (escalating `exit` → `SIGTERM` → `SIGKILL`), the cell is annotated as kernel-killed, and the kernel is recreated on the next call.
 
 ### stdin behavior
 

@@ -300,7 +300,7 @@ type CreateAgentSessionResult = {
   modelFallbackMessage?: string;
   lspServers?: Array<{
     name: string;
-    status: "ready" | "error";
+    status: "connecting" | "ready" | "error" | "available";
     fileTypes: string[];
     error?: string;
   }>;

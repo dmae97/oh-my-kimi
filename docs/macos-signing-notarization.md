@@ -61,8 +61,8 @@ What this means in practice:
 ## Required GitHub secrets
 
 Add these under **Settings → Secrets and variables → Actions** (repo secrets).
-Both the cert (`APPLE_CERTIFICATE_P12`) **and** the API key (`APPLE_API_KEY`)
-must be present for signing to engage.
+All five secrets (cert, password, and API key trio) must be present for
+signing to engage.
 
 | Secret | What it is |
 | --- | --- |

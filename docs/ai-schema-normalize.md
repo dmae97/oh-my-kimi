@@ -28,8 +28,9 @@ All exports live under `@oh-my-pi/pi-ai/utils/schema`:
   OpenAI strict-mode pipeline (sanitize → enforce). All three are exported
   from `normalize.ts`.
 - `adaptSchemaForStrict(schema, strict)` from `./adapt` — thin composer that
-  wraps `tryEnforceStrictSchema` for provider call sites and consults
-  `PI_NO_STRICT` (env `PI_NO_STRICT`) for the global bypass.
+  upgrades draft-07 inputs to 2020-12 and wraps `tryEnforceStrictSchema` for
+  provider call sites. `./adapt` also exports the `NO_STRICT` global-bypass
+  flag (env `PI_NO_STRICT`) honored by every provider that emits `strict: true`.
 
 Removed in the unified-flow refactor:
 
@@ -135,15 +136,16 @@ so callers MUST emit `strict: true` only when enforcement actually succeeded.
 
 ## Performance: static fingerprint cache
 
-`resolveProviderModels` in `packages/ai/src/model-manager.ts` and
-`readModelCache`/`writeModelCache` in `model-cache.ts` cooperate via a
-schema-v3 `static_fingerprint` column on the `model_cache` SQLite table.
+`resolveProviderModels` in `packages/catalog/src/model-manager.ts` and
+`readModelCache`/`writeModelCache` in `packages/catalog/src/model-cache.ts`
+cooperate via a `static_fingerprint` column on the `model_cache` SQLite
+table (current cache schema version 5).
 
 - `fingerprintStatic(staticModels)` hashes the static catalog slice
   (`Bun.hash(JSON.stringify(models))` in base36) and memoizes the result
-  in a per-process `WeakMap` keyed by the array reference. Multiple
-  cold-start arms calling `resolveProviderModels` with the same
-  `staticModels` array pay the JSON+hash cost once.
+  by tagging the array with a symbol property. Multiple cold-start arms
+  calling `resolveProviderModels` with the same `staticModels` array pay
+  the JSON+hash cost once.
 - On cache read, if the network fetch is being skipped, the cached row is
   fresh + authoritative, and the cached `static_fingerprint` matches the
   current one, `resolveProviderModels` returns the cached models verbatim
@@ -153,10 +155,10 @@ schema-v3 `static_fingerprint` column on the `model_cache` SQLite table.
   empty-source inputs (the common shape after `(static, [])` or for
   providers without a static catalog), avoiding Map churn entirely.
 
-Cache rows written before schema v3 are dropped by the cache-version
-check; the column defaults to `''` for any row that survives a version
-upgrade so the fingerprint-equality check naturally fails closed and the
-full merge re-runs.
+Cache rows written before the current schema version are dropped by the
+cache-version check; the column defaults to `''` for any row that survives
+a version upgrade so the fingerprint-equality check naturally fails closed
+and the full merge re-runs.
 
 ## Related
 

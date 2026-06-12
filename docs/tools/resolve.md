@@ -45,7 +45,7 @@ This is a preview. Call the `resolve` tool to apply or discard these changes.
 ```
 
 6. When `resolve.execute()` runs, it wraps the call in `untilAborted(...)` and fetches `session.peekQueueInvoker?.() ?? session.peekStandingResolveHandler?.()`.
-7. If no invoker exists, it throws `ToolError("No pending action to resolve. Nothing to apply or discard.")`.
+7. If no invoker exists, `apply` throws `ToolError("No pending action to resolve. Nothing to apply or discard.")`; `discard` instead returns a success payload `Nothing to discard; no pending action remains.` because the desired end-state (no staged change) already holds.
 8. Otherwise it invokes the current handler with the full params object.
 9. `runResolveInvocation(...)` builds base details from `action`, `reason`, `extra`, `sourceToolName`, and `label`.
 10. For `apply`, it calls the producer's `apply(reason, extra)` callback.
@@ -57,6 +57,7 @@ This is a preview. Call the `resolve` tool to apply or discard these changes.
 - `apply`: runs the pending action's `apply(reason, extra?)` callback and returns its content.
 - `discard` with reject callback: runs `reject(reason, extra?)` and returns that callback's content when non-`undefined`.
 - `discard` without reject callback, or with a reject callback returning `undefined`: returns the built-in `Discarded: ...` text payload.
+- `discard` with no pending action at all: returns `Nothing to discard; no pending action remains.` as a success result.
 - Queued handler: one in-flight tool-choice queue invoker, used by preview producers such as `ast_edit`.
 - Standing handler: long-lived mode-owned handler, used as a fallback when no queue invoker is active.
 
@@ -77,7 +78,7 @@ This is a preview. Call the `resolve` tool to apply or discard these changes.
 - There is no independent queue depth cap in this tool; ordering follows the shared tool-choice queue and mode-owned standing handler lifecycle.
 
 ## Errors
-- No pending action or standing handler: throws `ToolError("No pending action to resolve. Nothing to apply or discard.")`.
+- `apply` with no pending action or standing handler: throws `ToolError("No pending action to resolve. Nothing to apply or discard.")`. `discard` in the same situation succeeds with `Nothing to discard; no pending action remains.` instead of erroring.
 - `apply` callback throws `ToolError`: the original `ToolError` propagates.
 - `apply` callback throws any other value: `resolve` wraps it as `ToolError("Apply failed: <message>")` after running `onApplyError` when present.
 - `reject` callback exceptions propagate without the apply-specific wrapper.

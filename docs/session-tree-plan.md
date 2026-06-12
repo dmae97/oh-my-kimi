@@ -19,7 +19,8 @@ Key files:
 - `src/session/agent-session.ts` — `/tree` navigation flow, summarization, hook/event emission
 - `src/modes/components/tree-selector.ts` — interactive tree UI behavior and filtering
 - `src/modes/controllers/selector-controller.ts` — selector orchestration for `/tree` and `/branch`
-- `src/modes/controllers/input-controller.ts` — command routing (`/tree`, `/branch`, double-escape behavior)
+- `src/slash-commands/builtin-registry.ts` — command routing (`/tree`, `/branch`)
+- `src/modes/controllers/input-controller.ts` — double-escape behavior and `app.session.tree`/`app.session.fork` keybinding wiring
 - `src/session/messages.ts` — conversion of `branch_summary`, `compaction`, and `custom_message` entries into LLM context messages
 
 ## Tree data model in `SessionManager`
@@ -118,7 +119,7 @@ User-facing `/branch` flow (`SelectorController.showUserMessageSelector` → `Ag
 `session/messages.ts` then maps these message types for model input:
 
 - `branchSummary` and `compactionSummary` become user-role templated context messages
-- `custom`/`hookMessage` become user-role content messages
+- `custom`/`hookMessage` become developer-role content messages (via agent-core's `convertMessageToLlm`)
 
 So tree movement changes context by changing the active leaf path, not by mutating old entries.
 

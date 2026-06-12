@@ -15,8 +15,9 @@ my-marketplace/
     marketplace.json
   plugins/
     my-plugin/
-      package.json
-      index.ts
+      skills/
+        my-skill/
+          SKILL.md
 ```
 
 ```json
@@ -191,26 +192,21 @@ Declares the plugin as an npm package. `version` is optional:
 
 ## Plugin structure
 
-Each plugin directory (regardless of source type) should contain:
+A plugin directory (regardless of source type) ships its content in conventional locations, all optional:
 
 ```
 my-plugin/
-  package.json          ← required: declares omp.extensions entry points
-  src/
-    main.ts             ← extension factory
-  README.md             ← recommended: description + usage
+  skills/<name>/SKILL.md   ← skills
+  commands/*.md            ← slash commands
+  agents/*.md              ← subagent definitions
+  hooks/pre/, hooks/post/  ← hooks
+  tools/                   ← custom tools
+  .mcp.json                ← MCP server definitions
+  package.json             ← optional; its version is a fallback when the catalog entry has no version
+  README.md                ← recommended: description + usage
 ```
 
-Minimum `package.json`:
-
-```json
-{
-  "name": "my-plugin",
-  "omp": {
-    "extensions": ["./src/main.ts"]
-  }
-}
-```
+> Note: extension modules declared via `package.json` `omp.extensions` are **not** loaded from marketplace installs — that mechanism only applies to npm-installed or `omp plugin link`ed plugins. Ship marketplace plugin behavior through the conventional directories above.
 
 ## Install command
 

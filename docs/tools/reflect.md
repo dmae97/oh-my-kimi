@@ -6,7 +6,7 @@
 - Entry: `packages/coding-agent/src/tools/memory-reflect.ts`
 - Model-facing prompt: `packages/coding-agent/src/prompts/tools/reflect.md`
 - Hindsight collaborators:
-  - `packages/coding-agent/src/hindsight/bank.ts` — best-effort bank mission initialization.
+  - `packages/coding-agent/src/hindsight/bank.ts` — best-effort first-use bank/mission setup (`ensureBankExists`).
   - `packages/coding-agent/src/hindsight/state.ts` — session state, shared bank scope, recall/reflect config.
   - `packages/coding-agent/src/hindsight/client.ts` — HTTP `reflect` call and error mapping.
 - Mnemopi collaborators:
@@ -45,8 +45,8 @@ Mnemopi:
    - if results exist, it renders them through `state.formatContextScoped(...)` and prefixes `Based on recalled memories:`.
 4. If the backend is `hindsight`:
    - it reads `session.getHindsightSessionState()` and throws if the backend was not started;
-   - it calls `ensureBankMission(...)` with the current `bankId`, config, and process-local `missionsSet`;
-   - `ensureBankMission(...)` best-effort `PUT`s `/v1/default/banks/{bank_id}` with `reflect_mission` and optional `retain_mission` exactly once per bank/process; failures are swallowed;
+   - it calls `ensureBankExists(...)` with the current `bankId`, config, and the session state's `banksSet`;
+   - `ensureBankExists(...)` best-effort `PUT`s `/v1/default/banks/{bank_id}` (`createBank`) with optional `reflect_mission` / `retain_mission` once per bank per session state; failures are swallowed;
    - it calls `state.client.reflect(...)` with `query`, optional `context`, configured recall budget, and bank-scope tag filters;
    - `HindsightApi.reflect(...)` POSTs `/v1/default/banks/{bank_id}/reflect` and defaults its own budget to `"low"` when callers omit one; this tool always passes the configured budget;
    - blank or whitespace-only responses are replaced with `No relevant information found to reflect on.`
@@ -57,8 +57,8 @@ Mnemopi:
 - Mnemopi tool path: one local scoped recall followed by context formatting.
 - Hindsight bank scoping:
   - `global` — no tag filter.
-  - `per-project` — separate bank id per cwd basename.
-  - `per-project-tagged` — shared bank id plus `project:<cwd basename>` filter with `tagsMatch = "any"`.
+  - `per-project` — separate bank id per project label (git primary checkout root basename; cwd basename outside a repo).
+  - `per-project-tagged` — shared bank id plus `project:<project label>` filter with `tagsMatch = "any"`.
 - Mnemopi bank scoping:
   - `global` — reads the shared bank.
   - `per-project` — reads the project bank.
@@ -67,7 +67,7 @@ Mnemopi:
 
 ## Side Effects
 - Network
-  - Hindsight: optional `PUT /v1/default/banks/{bank_id}` from `ensureBankMission(...)`, then `POST /v1/default/banks/{bank_id}/reflect`.
+  - Hindsight: optional `PUT /v1/default/banks/{bank_id}` from `ensureBankExists(...)`, then `POST /v1/default/banks/{bank_id}/reflect`.
   - Mnemopi: none unless configured embedding or LLM providers are used by the local runtime during recall.
 - Session state
   - Reads session-held backend scope and config only. Does not update `lastRecallSnippet`, Hindsight mental-model cache, or retain queues.
@@ -79,14 +79,14 @@ Mnemopi:
 - Tool-level params: only `query` is required; `context` is optional.
 - Hindsight budget setting comes from `hindsight.recallBudget`, default `"mid"`.
 - Hindsight `reflect` has no client-side token cap parameter here; unlike `recall`, the tool does not pass `maxTokens`.
-- Hindsight mission initialization tracks up to `MISSION_SET_CAP = 10_000` bank ids, then drops the oldest half of the sorted set.
+- Hindsight bank initialization tracks up to `MISSION_SET_CAP = 10_000` bank ids per session state, then drops half of the sorted set.
 - Mnemopi result count is capped by `mnemopi.recallLimit`, default `8`.
 
 ## Errors
 - Throws `Mnemopi backend is not initialised for this session.` when `memory.backend == "mnemopi"` but no state exists.
 - Throws `Hindsight backend is not initialised for this session.` when `memory.backend == "hindsight"` but no state exists.
 - Hindsight HTTP and fetch failures become `HindsightError` with `statusCode` and parsed `details` when available.
-- Hindsight `ensureBankMission(...)` failures are silent to the tool caller; only the later reflect request can fail visibly.
+- Hindsight `ensureBankExists(...)` failures are silent to the tool caller; only the later reflect request can fail visibly.
 - Mnemopi recall target failures inside `collectScopedRecallResults(...)` are caught per bank and logged only when `mnemopi.debug` is enabled; if all targets fail, the tool can return the no-information text.
 - Non-`Error` failures caught by the tool are normalized to `new Error(String(err))` before rethrow.
 

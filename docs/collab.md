@@ -15,13 +15,13 @@ prints
 ```
 Collab session started!
  • Join from another terminal: omp join "mgAYTZwEnpRQtca0CTgn-Q#gdJUbTovD94ofDaa8YvhY0-ty16w4fn8PgB6PLnoA30"
- • or any web browser: relay.omp.sh/#mgAYTZwEnpRQtca0CTgn-Q#gdJUbTovD94ofDaa8YvhY0-ty16w4fn8PgB6PLnoA30
+ • or any web browser: my.omp.sh/#mgAYTZwEnpRQtca0CTgn-Q#gdJUbTovD94ofDaa8YvhY0-ty16w4fn8PgB6PLnoA30
 ```
 
 The browser line is click-to-join (an OSC 8 hyperlink to the full `https://` deep link): the relay serves the web guest client at `/`, and the room id + key ride in the URL fragment. From another omp (any directory, any machine), either form works:
 
 ```
-/join relay.omp.sh/#mgAYTZwEnpRQtca0CTgn-Q#gdJU…
+/join my.omp.sh/#mgAYTZwEnpRQtca0CTgn-Q#gdJU…
 ```
 
 The guest's previous session is restored on `/leave` (or when the host stops).
@@ -32,6 +32,7 @@ The guest's previous session is restored on `/leave` (or when the host stops).
 |---|---|
 | `/collab` | Start sharing (or re-print the link when already hosting) |
 | `/collab <relay>` | Start sharing through a specific relay (`relay.example.com`, `ws://localhost:7475`) |
+| `/collab view` | Print a read-only (view-only) link (starts sharing first if needed) |
 | `/collab status` | Show link + participants |
 | `/collab stop` | Stop sharing |
 | `/join <link>` | Join a shared session as a guest |
@@ -41,7 +42,7 @@ The guest's previous session is restored on `/leave` (or when the host stops).
 
 ```
 https://host[:port]/#<link>          → browser deep link (printed by /collab; /join accepts it too)
-<roomId>#<key>                       → default relay (relay.omp.sh)
+<roomId>#<key>                       → default relay (my.omp.sh)
 host[:port]/r/<roomId>#<key>         → custom relay, wss:// inferred
 ws://localhost:7475/r/<roomId>#<key> → plain ws, allowed for localhost only
 ```
@@ -88,8 +89,10 @@ Known v1 limit for guests: a turn already streaming when you join becomes visibl
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `collab.relayUrl` | `wss://relay.omp.sh` | Relay used by `/collab` when no relay is passed inline |
+| `collab.relayUrl` | `wss://my.omp.sh` | Relay used by `/collab` when no relay is passed inline |
 | `collab.displayName` | OS username | Name shown to other participants |
+| `share.serverUrl` | `https://my.omp.sh/s` | Share viewer/upload base used by `/share` (same Go service; links are `<base>/<id>#<key>`) |
+| `share.redactSecrets` | `true` | Run the secret obfuscator over `/share` snapshots before upload |
 
 ## Self-hosting the relay
 
@@ -97,6 +100,7 @@ The relay is a small content-blind Go service (`omp-collab-relay`, in the pi-www
 
 - `GET /` — the static collab-web guest client (target of the `/collab` deep link),
 - `GET /r/<roomId>?role=host|guest` — WebSocket upgrade,
+- `POST /s` / `GET /s/<id>` / `GET /s/<id>/raw` — `/share` blob upload, viewer page, and blob fetch (see the relay README),
 - `GET /healthz` — liveness.
 
 Run it:

@@ -22,7 +22,7 @@
 | --- | --- | --- | --- |
 | `id` | `string` | Yes | Stable identifier used in multi-question results. |
 | `question` | `string` | Yes | Prompt text shown to the user. |
-| `options` | `{ label: string }[]` | Yes | Option labels for the picker. The schema does not require a minimum length; the UI always appends `Other (type your own)`, and callers must not include it. |
+| `options` | `{ label: string; description?: string }[]` | Yes | Option labels for the picker, each with optional explanatory `description` text shown below the label. The schema does not require a minimum length; the UI always appends `Other (type your own)`, and callers must not include it. |
 | `multi` | `boolean` | No | Enables multi-select mode. Default: `false`. |
 | `recommended` | `number` | No | Zero-based recommended option index. In single-select mode the label gets ` (Recommended)` appended in the UI. |
 
@@ -32,8 +32,8 @@
   - single question: `User selected: ...` and/or `User provided custom input: ...`
   - multiple questions: `User answers:` followed by one line per `id`
 - `details`:
-  - single question: `{ question, options, multi, selectedOptions, customInput? }`
-  - multiple questions: `{ results: QuestionResult[] }`, where each item includes `id`, `question`, `options`, `multi`, `selectedOptions`, and optional `customInput`
+  - single question: `{ question, options, multi, selectedOptions, customInput?, timedOut? }`
+  - multiple questions: `{ results: QuestionResult[] }`, where each item includes `id`, `question`, `options`, `multi`, `selectedOptions`, and optional `customInput` and `timedOut`
 - Cancellation and headless cases throw instead of returning a structured success result.
 
 ## Flow
@@ -45,7 +45,7 @@
    - single-select list + optional editor for `Other`
    - multi-select checkbox loop + `Done selecting` sentinel + optional editor for `Other`
 6. In multi-question mode, left/right arrow handlers enable back/forward navigation between questions and preserve prior selections.
-7. If a timeout fires before any selection/custom input, the tool auto-selects the recommended option, or the first option when no valid `recommended` index exists.
+7. If a timeout fires before any selection/custom input, the tool auto-selects the recommended option, or the first option when no valid `recommended` index exists; the result text gets an ` (auto-selected after timeout)` suffix and `details.timedOut` is set.
 8. If the user cancels without timeout, `execute()` aborts the tool context and throws `ToolAbortError("Ask tool was cancelled by the user")`.
 9. On success it formats human-readable text plus structured `details`; the TUI renderer uses `details` for rich display.
 
@@ -70,7 +70,8 @@
 - `questions` must contain at least 1 item (`askSchema` in `packages/coding-agent/src/tools/ask.ts`).
 - `ask.timeout` default is `0` seconds, which disables timeout (`packages/coding-agent/src/config/settings-schema.ts`). Configured non-zero values are seconds.
 - Prompt guidance says provide 2-5 options, but code only requires the `options` array field and does not enforce a minimum or maximum length (`packages/coding-agent/src/prompts/tools/ask.md`).
-- Timeout only applies to the option picker; once the user chooses `Other`, the editor has no timeout (`packages/coding-agent/src/prompts/tools/ask.md`).
+- Timeout only applies to the option picker; once the user chooses `Other`, the editor has no timeout (`promptForCustomInput()` in `packages/coding-agent/src/tools/ask.ts`).
+- `AskTool.concurrency = "exclusive"`: the tool runs alone in its tool batch because the selector/editor UI surface is shared and concurrent `ask` calls would clobber each other.
 
 ## Errors
 - Missing interactive UI: throws `ToolAbortError("Ask tool requires interactive mode")`.

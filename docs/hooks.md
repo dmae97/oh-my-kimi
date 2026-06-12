@@ -234,7 +234,7 @@ Hook status text set via `ctx.ui.setStatus(key, text)` is:
 
 - stored per key
 - sorted by key name
-- sanitized (`\r`, `\n`, `\t` → spaces; repeated spaces collapsed)
+- sanitized (ANSI/VT escape sequences stripped; control characters mapped to spaces; repeated spaces collapsed; trimmed)
 - joined and width-truncated for display
 
 ## Error propagation and fallback

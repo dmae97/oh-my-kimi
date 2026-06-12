@@ -35,6 +35,7 @@ Boundary rule: the TUI engine is message-agnostic. It only knows `Component.rend
 - `pendingMessagesContainer`
 - `statusContainer`
 - `todoContainer`
+- `subagentContainer`
 - `btwContainer`
 - `omfgContainer`
 - `errorBannerContainer`
@@ -165,7 +166,7 @@ Status lane ownership:
 
 Loader behavior:
 
-- `Loader` updates every 80ms via interval and requests a component-scoped render each frame (`requestComponentRender`), so idle spinner ticks repaint without re-walking the transcript.
+- `Loader` advances its spinner every 80ms (animated message colorizers redraw at ~30fps) and requests a component-scoped render each frame (`requestComponentRender`), so idle spinner ticks repaint without re-walking the transcript.
 - Escape handlers are temporarily overridden during auto-compaction and auto-retry to cancel those operations.
 - On end/cancel paths, controllers restore prior escape handlers and stop/clear loader components.
 
@@ -215,7 +216,7 @@ Event-driven updates:
 Throttled/debounced paths:
 
 - TUI rendering is tick-debounced (`requestRender` coalescing).
-- Loader animation is fixed-interval (80ms), each frame requesting a component-scoped render.
+- Loader animation is interval-driven (80ms spinner advance; ~30fps when the message colorizer is animated), each frame requesting a component-scoped render.
 - Editor autocomplete updates (inside `Editor`) use debounce timers, reducing recompute churn during typing.
 
 The runtime therefore mixes event-driven state transitions with bounded render cadence to keep interactivity responsive without repaint storms.

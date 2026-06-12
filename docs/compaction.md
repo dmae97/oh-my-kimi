@@ -44,11 +44,12 @@ When context is rebuilt (`buildSessionContext`):
 4. `branch_summary` entries are converted to `branchSummary` messages.
 5. `custom_message` entries are converted to `custom` messages.
 
-Those custom roles are then transformed into LLM-facing user messages in `convertToLlm()` using the static templates:
+Those custom roles are then transformed into LLM-facing messages in `convertToLlm()`: `compactionSummary` and `branchSummary` become user messages rendered through the static templates
 
 - `packages/agent/src/compaction/prompts/compaction-summary-context.md`
 - `packages/agent/src/compaction/prompts/branch-summary-context.md`
-- `packages/agent/src/compaction/prompts/handoff-document.md`
+
+while `custom` messages pass through as developer messages with their raw content (no template).
 
 ## Compaction pipeline
 
@@ -150,7 +151,7 @@ Default prune policy:
 
 - Protect newest `40_000` tool-output tokens.
 - Require at least `20_000` total estimated savings.
-- Never prune tool results from `skill` or `read`.
+- Never prune `skill` tool results, `read` results of `skill://` paths, or reads of the active plan reference file (added via `AgentSession`'s plan protection).
 
 Pruned tool results are replaced with:
 

@@ -46,7 +46,7 @@ Rust creates `brush_core::Shell` with:
 - inherited environment disabled (`do_not_inherit_env: true`), followed by explicit environment reconstruction from host env,
 - profile and rc loading skipped,
 - bash-mode builtins, with `exec` and `suspend` disabled,
-- native `sleep` and `timeout` builtins registered,
+- native `sleep`, `timeout`, and `nohup` builtins registered,
 - skip-list for shell-sensitive vars (`PS1`, `PWD`, `SHLVL`, bash function exports, etc.),
 - a non-exported `env="$env"` fallback so PowerShell-style `$env:NAME` survives brush parameter expansion unless the user shadows `env`.
 
@@ -227,7 +227,7 @@ The parser combines:
 
 Modifier handling:
 
-- only shift/alt/ctrl bits are compared for key matching,
+- only shift/alt/ctrl/super bits are compared for key matching,
 - lock bits are masked out before comparisons.
 
 Layout behavior:
