@@ -239,7 +239,9 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 					const parts = ["No files found matching pattern"];
 					if (notice) parts.push(notice);
 					if (missingPathsNote) parts.push(missingPathsNote);
-					return toolResult(details).text(parts.join("\n")).done();
+					// Zero results is useless regardless of notices: the follow-up
+					// call has already corrected course by the time compaction runs.
+					return toolResult(details).text(parts.join("\n")).useless().done();
 				}
 
 				const listLimit = applyListLimit(files, { limit: effectiveLimit });

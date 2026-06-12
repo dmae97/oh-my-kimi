@@ -310,6 +310,8 @@ export class IrcTool implements AgentTool<typeof ircSchema, IrcDetails> {
 			return {
 				content: [{ type: "text", text: `No message${filterNote} within ${formatDuration(timeoutMs)}.` }],
 				details: { op: "wait", from: senderId, waited: null },
+				// A clean wait timeout carries no information once consumed.
+				useless: true,
 			};
 		}
 		return {
@@ -324,6 +326,8 @@ export class IrcTool implements AgentTool<typeof ircSchema, IrcDetails> {
 			return {
 				content: [{ type: "text", text: "Inbox empty." }],
 				details: { op: "inbox", from: senderId, inbox: [] },
+				// An empty inbox drain carries no information once consumed.
+				useless: true,
 			};
 		}
 		const header = params.peek ? `${messages.length} unread message(s):` : `${messages.length} message(s):`;

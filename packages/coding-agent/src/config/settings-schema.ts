@@ -1621,6 +1621,18 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"compaction.dropUseless": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "context",
+			group: "Compaction",
+			label: "Elide Uneventful Results",
+			description:
+				"Prune tool results flagged contextually useless (no matches, timed-out waits) once consumed (cache-aware)",
+		},
+	},
+
 	// Experimental: snapcompact inline imaging (transient, per-request; never persisted)
 	"snapcompact.systemPrompt": {
 		type: "enum",
@@ -4079,6 +4091,7 @@ export interface CompactionSettings {
 	idleThresholdTokens: number;
 	idleTimeoutSeconds: number;
 	supersedeReads: boolean;
+	dropUseless: boolean;
 }
 
 export interface ContextPromotionSettings {

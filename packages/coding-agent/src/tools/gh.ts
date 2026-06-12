@@ -2452,13 +2452,16 @@ function buildTextResult(
 	text: string,
 	sourceUrl?: string,
 	details?: GhToolDetails,
-	options?: { artifactId?: string; artifactLabel?: string },
+	options?: { artifactId?: string; artifactLabel?: string; useless?: boolean },
 ): AgentToolResult<GhToolDetails> {
 	const builder = toolResult<GhToolDetails>(details).text(
 		appendArtifactReference(text, options?.artifactId, options?.artifactLabel ?? "Saved artifact"),
 	);
 	if (sourceUrl) {
 		builder.sourceUrl(sourceUrl);
+	}
+	if (options?.useless) {
+		builder.useless();
 	}
 	return builder.done();
 }
@@ -3405,7 +3408,9 @@ async function executeSearchIssues(
 
 	const response = await git.github.json<GhApiSearchResponse<GhApiSearchIssueItem>>(session.cwd, args, signal);
 	const items = (response.items ?? []).map(apiIssueToSearchResult);
-	return buildTextResult(formatSearchResults("issues", displayQuery, repo, items));
+	return buildTextResult(formatSearchResults("issues", displayQuery, repo, items), undefined, undefined, {
+		useless: items.length === 0,
+	});
 }
 
 async function executeSearchPrs(
@@ -3423,7 +3428,9 @@ async function executeSearchPrs(
 
 	const response = await git.github.json<GhApiSearchResponse<GhApiSearchIssueItem>>(session.cwd, args, signal);
 	const items = (response.items ?? []).map(apiIssueToSearchResult);
-	return buildTextResult(formatSearchResults("pull requests", displayQuery, repo, items));
+	return buildTextResult(formatSearchResults("pull requests", displayQuery, repo, items), undefined, undefined, {
+		useless: items.length === 0,
+	});
 }
 
 async function executeSearchCode(
@@ -3442,7 +3449,9 @@ async function executeSearchCode(
 
 	const response = await git.github.json<GhApiSearchResponse<GhApiSearchCodeItem>>(session.cwd, args, signal);
 	const items = (response.items ?? []).map(apiCodeToSearchResult);
-	return buildTextResult(formatSearchCodeResults(query, repo, items));
+	return buildTextResult(formatSearchCodeResults(query, repo, items), undefined, undefined, {
+		useless: items.length === 0,
+	});
 }
 
 async function executeSearchCommits(
@@ -3460,7 +3469,9 @@ async function executeSearchCommits(
 
 	const response = await git.github.json<GhApiSearchResponse<GhApiSearchCommitItem>>(session.cwd, args, signal);
 	const items = (response.items ?? []).map(apiCommitToSearchResult);
-	return buildTextResult(formatSearchCommitsResults(displayQuery, repo, items));
+	return buildTextResult(formatSearchCommitsResults(displayQuery, repo, items), undefined, undefined, {
+		useless: items.length === 0,
+	});
 }
 
 async function executeSearchRepos(
@@ -3476,7 +3487,9 @@ async function executeSearchRepos(
 
 	const response = await git.github.json<GhApiSearchResponse<GhApiSearchRepoItem>>(session.cwd, args, signal);
 	const items = (response.items ?? []).map(apiRepoToSearchResult);
-	return buildTextResult(formatSearchReposResults(query, items));
+	return buildTextResult(formatSearchReposResults(query, items), undefined, undefined, {
+		useless: items.length === 0,
+	});
 }
 
 async function executeRunWatch(
@@ -3751,6 +3764,7 @@ async function executeRunWatch(
 				`No workflow runs found for ${repo}@${formatShortSha(headSha) ?? headSha} after ${elapsedSec}s (${pollCount} polls). The commit may not trigger any GitHub Actions workflows, or Actions may be disabled for this repository. Pass \`run\` to watch a specific run.`,
 				undefined,
 				buildCommitRunWatchDetails(repo, headSha, branch, runs, { state: "completed", pollCount }),
+				{ useless: true },
 			);
 		}
 		await scheduler.wait(currentIntervalSeconds() * 1000, { signal });

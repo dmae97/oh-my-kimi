@@ -191,6 +191,17 @@ function truncateForSummary(text: string, maxChars: number): string {
 export function serializeConversation(messages: Message[]): string {
 	const parts: string[] = [];
 
+	// Tool results flagged contextually useless (and their paired calls) are
+	// dropped from the serialized text: the source region is discarded after
+	// summarization anyway, so excluding them costs nothing and keeps garbage
+	// out of the summary input.
+	const uselessCallIds = new Set<string>();
+	for (const msg of messages) {
+		if (msg.role === "toolResult" && msg.useless === true && msg.isError !== true) {
+			uselessCallIds.add(msg.toolCallId);
+		}
+	}
+
 	for (const msg of messages) {
 		if (msg.role === "user") {
 			const content =
@@ -212,6 +223,7 @@ export function serializeConversation(messages: Message[]): string {
 				} else if (block.type === "thinking") {
 					thinkingParts.push(block.thinking);
 				} else if (block.type === "toolCall") {
+					if (uselessCallIds.has(block.id)) continue;
 					const args = block.arguments as Record<string, unknown>;
 					const argsStr = Object.entries(args)
 						.map(([k, v]) => `${k}=${JSON.stringify(v)}`)
@@ -230,6 +242,7 @@ export function serializeConversation(messages: Message[]): string {
 				parts.push(`[Assistant tool calls]: ${toolCalls.join("; ")}`);
 			}
 		} else if (msg.role === "toolResult") {
+			if (uselessCallIds.has(msg.toolCallId)) continue;
 			const content = msg.content
 				.filter((c): c is { type: "text"; text: string } => c.type === "text")
 				.map(c => c.text)

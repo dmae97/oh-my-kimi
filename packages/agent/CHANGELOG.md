@@ -1,6 +1,19 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Changed `pruneSupersededToolResults` to allow `supersedeKey` to be omitted so useless-result pruning can run without read-style supersede grouping
+
+### Added
+
+- Added `pruneUseless` controls to `PruneConfig` and `SupersedePruneConfig` so callers can toggle compaction of `toolResult` entries marked `useless`
+- Added the ability to disable useless-result pruning by setting `pruneUseless` to false
+- Tools can flag a result contextually useless (`AgentToolResult.useless`; overridable via `AfterToolCallResult.useless`): the agent loop copies the flag onto the persisted `ToolResultMessage` (errors always win), and compaction consumes it — the cache-aware supersede pass and the threshold prune blank flagged results to the exact `USELESS_NOTICE` placeholder (bypassing the protect window, skipping results smaller than the notice), shake collects them inside the protect-recent window, and `serializeConversation` drops the whole tool call/result pair from summarizer input
+
+### Changed
+
+- Changed `pruneSupersededToolResults` to allow omitted `supersedeKey` when `pruneUseless` is enabled, so useless-result pruning can run without read-style supersede grouping
 
 ## [15.11.4] - 2026-06-12
 ### Added

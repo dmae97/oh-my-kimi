@@ -2132,6 +2132,11 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 			const position = { line: resolvedLine - 1, character: resolvedCharacter };
 
 			let output: string;
+			// Set on bare empty-lookup outcomes (no definition/references/…): the
+			// result carries no information once consumed, so compaction may elide
+			// it. Clean diagnostics runs are NOT useless — they are verification
+			// evidence.
+			let useless = false;
 
 			if (needsProjectIndex && !isRustAnalyzerServer) {
 				await waitForProjectLoaded(client, signal);
@@ -2157,6 +2162,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 
 					if (locations.length === 0) {
 						output = "No definition found";
+						useless = true;
 					} else {
 						const lines = await Promise.all(
 							locations.map(location => formatLocationWithContext(location, this.session.cwd)),
@@ -2181,6 +2187,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 
 					if (locations.length === 0) {
 						output = "No type definition found";
+						useless = true;
 					} else {
 						const lines = await Promise.all(
 							locations.map(location => formatLocationWithContext(location, this.session.cwd)),
@@ -2205,6 +2212,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 
 					if (locations.length === 0) {
 						output = "No implementation found";
+						useless = true;
 					} else {
 						const lines = await Promise.all(
 							locations.map(location => formatLocationWithContext(location, this.session.cwd)),
@@ -2242,6 +2250,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 
 					if (!result || result.length === 0) {
 						output = "No references found";
+						useless = true;
 					} else {
 						const contextualReferences = result.slice(0, REFERENCE_CONTEXT_LIMIT);
 						const plainReferences = result.slice(REFERENCE_CONTEXT_LIMIT);
@@ -2381,6 +2390,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 
 					if (!result || result.length === 0) {
 						output = "No symbols found";
+						useless = true;
 					} else {
 						const relPath = formatPathRelativeToCwd(targetFile, this.session.cwd);
 						if ("selectionRange" in result[0]) {
@@ -2444,6 +2454,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 			return {
 				content: [{ type: "text", text: output }],
 				details: { serverName, action, success: true, request: params },
+				...(useless ? { useless: true } : {}),
 			};
 		} catch (err) {
 			if (err instanceof ToolError) throw err;
