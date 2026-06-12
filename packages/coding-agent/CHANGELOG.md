@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Claude Code marketplace plugin skills installed under `skills/<name>/SKILL.md` to also appear as bare slash commands such as `/understand`, matching Claude-native plugin docs ([#2415](https://github.com/can1357/oh-my-pi/issues/2415)).
+
 ## [15.12.3] - 2026-06-12
 
 ### Fixed
