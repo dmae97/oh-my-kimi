@@ -91,32 +91,18 @@ Known v1 limit for guests: a turn already streaming when you join becomes visibl
 |---|---|---|
 | `collab.relayUrl` | `wss://my.omp.sh` | Relay used by `/collab` when no relay is passed inline |
 | `collab.displayName` | OS username | Name shown to other participants |
-| `share.serverUrl` | `https://my.omp.sh/s` | Share viewer/upload base used by `/share` (same Go service; links are `<base>/<id>#<key>`) |
+| `share.serverUrl` | `https://my.omp.sh/s` | Share viewer/upload base used by `/share` (links are `<base>/<id>#<key>`) |
 | `share.redactSecrets` | `true` | Run the secret obfuscator over `/share` snapshots before upload |
 
 ## Self-hosting the relay
 
-The relay is a small content-blind Go service (`omp-collab-relay`, in the pi-www repo under `relay/`). It keeps no state beyond live connections and exposes:
+The relay is a small content-blind Go service. It keeps no state beyond live connections and exposes:
 
 - `GET /` — the static collab-web guest client (target of the `/collab` deep link),
 - `GET /r/<roomId>?role=host|guest` — WebSocket upgrade,
-- `POST /s` / `GET /s/<id>` / `GET /s/<id>/raw` — `/share` blob upload, viewer page, and blob fetch (see the relay README),
+- `POST /s` / `GET /s/<id>` / `GET /s/<id>/raw` — `/share` blob upload, viewer page, and blob fetch,
 - `GET /healthz` — liveness.
 
-Run it:
-
-```sh
-go build -o omp-collab-relay .
-RELAY_BIND=0.0.0.0:7475 ./omp-collab-relay
-```
-
-`RELAY_BIND` accepts `host:port`, a bare port (binds localhost), or a unix socket path (front it with a TLS-terminating reverse proxy — guests other than localhost require `wss://`). Then:
-
-```
-/collab my-relay.example.com
-```
-
-or set `collab.relayUrl` in `/settings`.
 
 ## Architecture notes
 

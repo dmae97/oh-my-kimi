@@ -80,6 +80,38 @@ describe("Agent", () => {
 		expect(mock.calls.length).toBe(2);
 	});
 
+	it("delivers a steer that lands at the yield boundary instead of stranding it", async () => {
+		// Regression: a steering message queued after the stop-boundary dequeue
+		// (e.g. while onBeforeYield runs) was silently stranded in the queue until
+		// the next manual prompt. The outer yield drain must re-poll steering.
+		const mock = createMockModel({ responses: [{ content: ["First answer"] }, { content: ["Steer answer"] }] });
+		const agent = new Agent({ streamFn: mock.stream });
+		let injected = false;
+		agent.setOnBeforeYield(() => {
+			if (injected) return;
+			injected = true;
+			agent.steer({
+				role: "user",
+				content: [{ type: "text", text: "Late steer" }],
+				steering: true,
+				timestamp: Date.now(),
+			});
+		});
+
+		await agent.prompt("Initial");
+
+		expect(mock.calls.length).toBe(2);
+		expect(agent.hasQueuedMessages()).toBe(false);
+		const steerDelivered = agent.state.messages.some(
+			message =>
+				message.role === "user" &&
+				Array.isArray(message.content) &&
+				message.content.some(part => part.type === "text" && part.text === "Late steer"),
+		);
+		expect(steerDelivered).toBe(true);
+		expect(agent.state.messages[agent.state.messages.length - 1].role).toBe("assistant");
+	});
+
 	it("prompt() emits assistant error lifecycle for Anthropic output-blocked stream errors before assistant start", async () => {
 		const mock = createMockModel({ responses: [] });
 		const errorText = "Output blocked by content filtering policy";

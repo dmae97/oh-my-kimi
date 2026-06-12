@@ -25,7 +25,7 @@ interface RelayData {
 
 type RelaySocket = Bun.ServerWebSocket<RelayData>;
 
-/** Single-room relay mirroring the omp-collab-relay forwarding contract. */
+/** Single-room test relay mirroring the production forwarding contract. */
 function startTestRelay(): { url: string; stop(): void } {
 	let host: RelaySocket | null = null;
 	const guests = new Map<number, RelaySocket>();

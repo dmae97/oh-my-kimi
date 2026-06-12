@@ -1139,7 +1139,22 @@ export class AgentSession {
 		if (this.#promptInFlightCount === 0) {
 			this.#releasePowerAssertion();
 			this.#flushPendingAgentEnd();
+			this.#drainStrandedQueuedMessages();
 		}
+	}
+
+	/** A steer/follow-up can land after the agent loop's final queue poll but
+	 *  before the prompt unwinds: #promptInFlightCount keeps isStreaming true
+	 *  through post-prompt recovery, so senders (collab guests, skills) still
+	 *  queue via agent.steer()/followUp() instead of starting a fresh prompt.
+	 *  Without a drain those messages strand invisibly until the next manual
+	 *  prompt. Runs when the session settles; the guard makes it a no-op when
+	 *  the queue was consumed normally or a new turn already started. */
+	#drainStrandedQueuedMessages(): void {
+		if (!this.agent.hasQueuedMessages()) return;
+		this.#scheduleAgentContinue({
+			shouldContinue: () => this.#canAutoContinueForFollowUp() && this.agent.hasQueuedMessages(),
+		});
 	}
 
 	#resetInFlight(): void {
@@ -5254,6 +5269,14 @@ export class AgentSession {
 				this.agent.followUp(normalizedAppMessage);
 			} else {
 				this.agent.steer(normalizedAppMessage);
+			}
+			// The isStreaming check above can be stale: image normalization is
+			// awaited, so the turn may have ended in between, leaving the message
+			// queued on an idle agent. Mirror #queueSteer's idle-path delivery.
+			if (this.#canAutoContinueForFollowUp()) {
+				this.#scheduleAgentContinue({
+					shouldContinue: () => this.#canAutoContinueForFollowUp() && this.agent.hasQueuedMessages(),
+				});
 			}
 			return;
 		}

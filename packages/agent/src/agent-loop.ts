@@ -815,11 +815,15 @@ async function runLoopBody(
 		// Agent would stop here. Drain non-interrupting asides + follow-up messages.
 		await config.onBeforeYield?.();
 		// Skip queue drains when externally aborted (same stranding hazard as above).
+		// Re-poll steering too: a steer can land between the stop-boundary dequeue
+		// above and this yield point (e.g. queued while onBeforeYield ran). Without
+		// this poll it would strand in the queue until the next manual prompt.
+		const lateSteering = signal?.aborted ? [] : (await config.getSteeringMessages?.()) || [];
 		const asideMessages = signal?.aborted ? [] : resolveAsides(await config.getAsideMessages?.());
 		const followUpMessages = signal?.aborted ? [] : (await config.getFollowUpMessages?.()) || [];
-		if (asideMessages.length > 0 || followUpMessages.length > 0) {
+		if (lateSteering.length > 0 || asideMessages.length > 0 || followUpMessages.length > 0) {
 			// Set as pending so the inner loop processes them before stopping.
-			pendingMessages = [...asideMessages, ...followUpMessages];
+			pendingMessages = [...lateSteering, ...asideMessages, ...followUpMessages];
 			continue;
 		}
 
