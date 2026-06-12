@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.12.0] - 2026-06-12
+
 ### Added
 
 - Added support for optional write tokens in collaboration links so full links can embed the room key and write token (48-byte fragment) while legacy key-only (32-byte) links remain supported

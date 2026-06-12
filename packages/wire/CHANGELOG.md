@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.12.0] - 2026-06-12
 ### Added
 
 - Added `readOnly` flags to participant and session payload types to indicate when a guest is connected via a read-only (view) link
