@@ -61,7 +61,7 @@ fn minimizer_fixtures_clear_savings_gate() {
 		root.display()
 	);
 
-	let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+	let cfg = MinimizerConfig { enabled: true, max_capture_bytes: u32::MAX, ..Default::default() };
 	let mut failures: Vec<String> = Vec::new();
 
 	for fixture in &fixtures {
