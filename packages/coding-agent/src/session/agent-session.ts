@@ -6388,7 +6388,6 @@ export class AgentSession {
 				const snapcompactResult = await snapcompact.compact(preparation, {
 					convertToLlm,
 					model: this.model,
-					thinkingLevel: this.thinkingLevel,
 				});
 				summary = snapcompactResult.summary;
 				shortSummary = snapcompactResult.shortSummary;
@@ -7922,7 +7921,6 @@ export class AgentSession {
 				const snapcompactResult = await snapcompact.compact(preparation, {
 					convertToLlm,
 					model: this.model,
-					thinkingLevel: this.thinkingLevel,
 				});
 				summary = snapcompactResult.summary;
 				shortSummary = snapcompactResult.shortSummary;

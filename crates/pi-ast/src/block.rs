@@ -304,7 +304,8 @@ mod tests {
 		// infer the bash grammar so `replace block` / `insert after block`
 		// works. Previously `Path::extension` returned `None`, leaving block
 		// ops permanently unresolvable on these files.
-		let code = "ZSH_COMPDUMP=x\nif [[ -f \"$ZSH_COMPDUMP\" ]]; then\n  compinit -C\nelse\n  compinit\nfi\n";
+		let code = "ZSH_COMPDUMP=x\nif [[ -f \"$ZSH_COMPDUMP\" ]]; then\n  compinit -C\nelse\n  \
+		            compinit\nfi\n";
 		let span = Some(BlockRange { start_line: 2, end_line: 6 });
 		assert_eq!(resolve(code, "modules/zsh/zshrc", 2), span);
 		assert_eq!(resolve(code, ".zshrc", 2), span);
