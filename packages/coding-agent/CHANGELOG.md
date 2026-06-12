@@ -1,13 +1,13 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
 - Added `snapcompact.shape` setting to pick the frame variant snapcompact prints text with — `auto` (each provider's eval winner) or any research-eval variant: the square grids (`8x8r`/`8x8u`/`6x6u`/`5x8` × sentence-hue/black ink) and the per-model winners (`6x12-dim`, `8x13-bw`, `8on16-bw`, `doc-8on16-bw`, `doc-8on16-sent`, `doc-8on16-sent-dim`); applies to both the compaction archive and inline system-prompt/tool-result imaging
 
 ### Changed
 
+- Updated `snapcompact.shape` option help text so the `auto` mode and `8on16-bw` descriptions now reflect OpenAI’s current default and GPT winner variants
 - Model selectors keyed by retired effort-tier variant ids keep resolving after catalog collapsing: reference resolution and bare-id matching consult the hand-table aliases (`gemini-3.5-flash-low`, `gemini-pro-agent`, recycled `gemini-3-flash`) plus the `X-thinking` → `X` grammar for auto-collapsed pairs, with exact matches always winning while a raw id is live; explicit `:effort` suffixes transfer unchanged. models.yml `modelOverrides` and rate-limit selector suppressions keyed by raw member ids re-key onto the collapsed model
 - Custom/config provider model lists now collapse `X`/`X-thinking` twins at registry rebuild (`collapseBuiltModelVariants`), folding config-defined twins into one entry whose thinking toggle routes to the `-thinking` backing id
 

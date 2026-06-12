@@ -11,6 +11,7 @@
 
 ### Changed
 
+- **Changed the OpenAI default shape from `6x6u-sent` to `8on16-bw`.** A production-regime mono eval (gpt-5.5, the full 800k-char SQuAD flow in one request, n=50) scored the old dense default f1 .602 vs .851 for `8on16-bw` rendered by the production pipeline, at near-equal total cost (the dense cells burned the frame savings on reasoning tokens); chunked exp14 had already scored `8on16-bw` .906. `SHAPES.openaiDense` is renamed to `SHAPES.openai`
 - `normalize()` now keeps line structure: whitespace runs containing a line break collapse to `NEWLINE_GLYPH` (U+2588 FULL BLOCK, drawn by the native renderer as a pitch-black cell one character wide) instead of a plain space; leading/trailing breaks are trimmed, and the frame-reading prompt explains the marker
 - `normalize()` now skips characters the fonts cannot render instead of printing `?` blanks: whole ANSI escape sequences are stripped, and bare control characters, zero-width format characters (ZWSP, BOM, directional marks), combining marks, and lone surrogates are dropped without occupying a cell; `?` remains the fallback for unsupported graphic characters only
 

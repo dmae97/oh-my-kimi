@@ -474,6 +474,10 @@ async function generateModels() {
 	});
 	applyGeneratedModelPolicies(allModels);
 	linkOpenAIPromotionTargets(allModels);
+	// Collapse effort-tier variants AFTER the policy re-bake: live-discovery
+	// entries are already collapsed (rebake skips them); this pass folds
+	// previous-snapshot raw members into their logical families.
+	allModels = collapseEffortVariantsAcrossProviders(allModels);
 
 	// Group by provider and sort each provider's models
 	const providers: Record<string, Record<string, ModelSpec>> = {};
@@ -481,10 +485,6 @@ async function generateModels() {
 		if (DISCOVERY_ONLY_PROVIDERS.has(model.provider)) continue;
 		if (!providers[model.provider]) {
 			providers[model.provider] = {};
-	// Collapse effort-tier variants AFTER the policy re-bake: live-discovery
-	// entries are already collapsed (rebake skips them); this pass folds
-	// previous-snapshot raw members into their logical families.
-	allModels = collapseEffortVariantsAcrossProviders(allModels);
 		}
 		// Use model ID as key to automatically deduplicate
 		// Only add if not already present (models.dev takes priority over endpoint discovery)

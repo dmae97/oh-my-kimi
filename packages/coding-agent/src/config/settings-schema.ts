@@ -1624,7 +1624,7 @@ export const SETTINGS_SCHEMA = {
 				{
 					value: "auto",
 					label: "Auto",
-					description: "Provider's eval winner: 8x8r-bw on Anthropic, 8x8r-sent on Gemini, 6x6u-sent on OpenAI.",
+					description: "Provider's eval winner: 8x8r-bw on Anthropic, 8x8r-sent on Gemini, 8on16-bw on OpenAI.",
 				},
 				{
 					value: "8x8r-bw",
@@ -1680,7 +1680,8 @@ export const SETTINGS_SCHEMA = {
 				{
 					value: "8on16-bw",
 					label: "8x13 on 16px pitch, black",
-					description: "8x13 glyphs on an 8x16 cell (extra leading), black ink. GPT grid runner-up (.906).",
+					description:
+						"8x13 glyphs on an 8x16 cell (extra leading), black ink. GPT eval winner (chunked .906, mono .851) and the OpenAI auto default.",
 				},
 				{
 					value: "doc-8on16-bw",

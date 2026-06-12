@@ -158,8 +158,8 @@ describe("normalize", () => {
 describe("shape resolution", () => {
 	it("maps provider APIs to their eval-winning shapes", () => {
 		expect(snapcompact.resolveShape("anthropic-messages")).toBe(snapcompact.SHAPES.anthropic);
-		expect(snapcompact.resolveShape("openai-responses")).toBe(snapcompact.SHAPES.openaiDense);
-		expect(snapcompact.resolveShape("azure-openai-responses")).toBe(snapcompact.SHAPES.openaiDense);
+		expect(snapcompact.resolveShape("openai-responses")).toBe(snapcompact.SHAPES.openai);
+		expect(snapcompact.resolveShape("azure-openai-responses")).toBe(snapcompact.SHAPES.openai);
 		expect(snapcompact.resolveShape("google-generative-ai")).toBe(snapcompact.SHAPES.google);
 		// Unknown and absent APIs fall back to the refusal-robust plain shape.
 		expect(snapcompact.resolveShape("some-future-api")).toBe(snapcompact.SHAPES.anthropic);
@@ -179,7 +179,7 @@ describe("shape resolution", () => {
 
 		const repeatedOnOpenai = snapcompact.resolveShape("openai-responses", "8x8r-bw");
 		expect(repeatedOnOpenai.lineRepeat).toBe(2);
-		expect(repeatedOnOpenai.frameTokenEstimate).toBe(snapcompact.SHAPES.openaiDense.frameTokenEstimate);
+		expect(repeatedOnOpenai.frameTokenEstimate).toBe(snapcompact.SHAPES.openai.frameTokenEstimate);
 		expect(repeatedOnOpenai.imageDetail).toBe("original");
 
 		// Legacy 2576px frames keep the conservative ceiling on every provider.
@@ -200,10 +200,10 @@ describe("shape resolution", () => {
 	});
 
 	it("recognizes complete shape overrides and rejects malformed ones", () => {
-		expect(snapcompact.isShape(snapcompact.SHAPES.openaiDense)).toBe(true);
-		expect(snapcompact.isShape({ ...snapcompact.SHAPES.openaiDense, cellWidth: 0 })).toBe(false);
-		expect(snapcompact.isShape({ ...snapcompact.SHAPES.openaiDense, variant: "color" })).toBe(false);
-		expect(snapcompact.isShape({ ...snapcompact.SHAPES.openaiDense, imageDetail: "original" })).toBe(true);
+		expect(snapcompact.isShape(snapcompact.SHAPES.openai)).toBe(true);
+		expect(snapcompact.isShape({ ...snapcompact.SHAPES.openai, cellWidth: 0 })).toBe(false);
+		expect(snapcompact.isShape({ ...snapcompact.SHAPES.openai, variant: "color" })).toBe(false);
+		expect(snapcompact.isShape({ ...snapcompact.SHAPES.openai, imageDetail: "original" })).toBe(true);
 	});
 
 	it("images forwards the per-frame detail hint", () => {
@@ -260,8 +260,9 @@ describe("render", () => {
 		expect(used.has(1)).toBe(false); // no sentence hues in bw
 	});
 
-	it("renders the openai stretch shape as truecolor RGB", () => {
-		const frame = snapcompact.render("Hello world.", snapcompact.SHAPES.openaiDense, TEST_FRAME_SIZE);
+	it("renders a stretched shape as truecolor RGB", () => {
+		const stretched = snapcompact.resolveShape("openai-responses", "6x6u-sent");
+		const frame = snapcompact.render("Hello world.", stretched, TEST_FRAME_SIZE);
 		// IHDR color type byte: 2 = truecolor RGB (anti-aliased stretch output).
 		expect(Buffer.from(frame.data, "base64")[25]).toBe(2);
 		expect(frame.cols).toBe(Math.floor(TEST_FRAME_SIZE / 6));
@@ -315,7 +316,7 @@ describe("renderMany", () => {
 	});
 
 	it("honors maxFrames and propagates the shape's detail hint", () => {
-		const shape = snapcompact.SHAPES.openaiDense;
+		const shape = snapcompact.SHAPES.openai;
 		const { capacity } = snapcompact.geometry(shape, TEST_FRAME_SIZE);
 		const frames = snapcompact.renderMany("x".repeat(capacity * 3), {
 			shape,
@@ -323,7 +324,7 @@ describe("renderMany", () => {
 			maxFrames: 2,
 		});
 		expect(frames).toHaveLength(2);
-		// openaiDense carries imageDetail: "original"; anthropic carries none.
+		// The openai shape carries imageDetail: "original"; anthropic carries none.
 		expect(frames[0].detail).toBe("original");
 		const bw = snapcompact.renderMany("hi", { shape: snapcompact.SHAPES.anthropic, frameSize: TEST_FRAME_SIZE });
 		expect(bw[0].detail).toBeUndefined();

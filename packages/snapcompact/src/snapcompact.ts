@@ -206,8 +206,11 @@ export const SHAPES = {
 	anthropic: priceShape(SHAPE_VARIANTS["8x8r-bw"], "anthropic"),
 	/** `8x8r-sent`: the repeated grid with sentence-hue ink. */
 	google: priceShape(SHAPE_VARIANTS["8x8r-sent"], "google"),
-	/** `6x6u-sent`: unscii stretched to 6x6 — densest readable cell, fewest frames. */
-	openaiDense: priceShape(SHAPE_VARIANTS["6x6u-sent"], "openai"),
+	/** `8on16-bw`: 8x13 X.org glyphs on a 16px pitch, black ink. Mono eval on
+	 *  gpt-5.5 (200k-token single request, n=50): f1 .851 vs .602 for the
+	 *  previous `6x6u-sent` default at near-equal total cost; chunked exp14
+	 *  scored it .906. */
+	openai: priceShape(SHAPE_VARIANTS["8on16-bw"], "openai"),
 	/** Original 5x8 X.org shape (pre-shape-table sessions rendered this). */
 	legacy: priceShape(SHAPE_VARIANTS["5x8-sent"], "anthropic"),
 } satisfies Record<string, Shape>;
@@ -249,7 +252,7 @@ export function resolveShape(api?: Api, variant?: ShapeVariantName | "auto"): Sh
 	if (variant && variant !== "auto") return priceShape(SHAPE_VARIANTS[variant], family);
 	switch (family) {
 		case "openai":
-			return SHAPES.openaiDense;
+			return SHAPES.openai;
 		case "google":
 			return SHAPES.google;
 		default:
