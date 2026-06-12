@@ -52,6 +52,14 @@ function makeCtx(): {
 		pendingBashComponents: [],
 		pendingPythonComponents: [],
 		session: { buildTranscriptSessionContext: transcriptSpy },
+		viewSession: {
+			buildTranscriptSessionContext: transcriptSpy,
+			sessionManager: {
+				buildSessionContext: llmContextSpy,
+				getEntries: vi.fn(() => []),
+				getCwd: vi.fn(() => "/tmp"),
+			},
+		},
 		sessionManager: {
 			buildSessionContext: llmContextSpy,
 			getEntries: vi.fn(() => []),

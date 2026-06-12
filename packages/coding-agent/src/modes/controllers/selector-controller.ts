@@ -841,19 +841,6 @@ export class SelectorController {
 		});
 	}
 
-	#clearTransientSessionUi(): void {
-		if (this.ctx.loadingAnimation) {
-			this.ctx.loadingAnimation.stop();
-			this.ctx.loadingAnimation = undefined;
-		}
-		this.ctx.statusContainer.clear();
-		this.ctx.pendingMessagesContainer.clear();
-		this.ctx.compactionQueuedMessages = [];
-		this.ctx.streamingComponent = undefined;
-		this.ctx.streamingMessage = undefined;
-		this.ctx.pendingTools.clear();
-	}
-
 	#refreshSessionTerminalTitle(): void {
 		const sessionManager = this.ctx.sessionManager as {
 			getSessionName?: () => string | undefined;
@@ -875,7 +862,7 @@ export class SelectorController {
 		}
 		this.#refreshSessionTerminalTitle();
 
-		this.#clearTransientSessionUi();
+		this.ctx.clearTransientSessionUi();
 		this.ctx.statusLine.invalidate();
 		this.ctx.statusLine.setSessionStartTime(Date.now());
 		this.ctx.updateEditorTopBorder();
@@ -887,7 +874,7 @@ export class SelectorController {
 	}
 
 	async handleResumeSession(sessionPath: string): Promise<void> {
-		this.#clearTransientSessionUi();
+		this.ctx.clearTransientSessionUi();
 
 		const previousCwd = this.ctx.sessionManager.getCwd();
 		// Switch session via AgentSession (emits hook and tool session events). The
@@ -1180,16 +1167,25 @@ export class SelectorController {
 		const done = () => {
 			hub?.dispose();
 			overlayHandle?.hide();
+			this.ctx.ui.setFocus(this.ctx.editor);
 			this.ctx.ui.requestRender();
 		};
 
 		hub = new AgentHubOverlayComponent({
 			observers,
 			hubKeys,
+			expandKeys: this.ctx.keybindings.getKeys("app.tools.expand"),
 			onDone: done,
 			requestRender: () => this.ctx.ui.requestRender(),
 			registry: this.ctx.collabGuest?.agentRegistry,
 			remote: this.ctx.collabGuest?.hubRemote,
+			ui: this.ctx.ui,
+			getTool: name => this.ctx.session.getToolByName(name),
+			getMessageRenderer: type => this.ctx.session.extensionRunner?.getMessageRenderer(type),
+			cwd: this.ctx.sessionManager.getCwd(),
+			hideThinkingBlock: () => this.ctx.hideThinkingBlock,
+			focusAgent: id => this.ctx.focusAgentSession(id),
+			sessionFile: this.ctx.sessionManager.getSessionFile() ?? null,
 		});
 
 		overlayHandle = this.ctx.ui.showOverlay(hub, {

@@ -158,7 +158,7 @@ describe("PatchSection.applyTo / applyPartialTo with block edits", () => {
 
 	it("applyTo throws when a block edit has no resolver", () => {
 		const section = Patch.parseSingle(`[${PATH}#1A2B]\nreplace block 2:\n+X`);
-		expect(() => section.applyTo(text)).toThrow("replace block");
+		expect(() => section.applyTo(text)).toThrow("Block-anchored ops are not available");
 	});
 
 	it("applyPartialTo drops an unresolvable block edit instead of throwing", () => {

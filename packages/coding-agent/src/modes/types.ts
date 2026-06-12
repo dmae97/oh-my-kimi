@@ -98,6 +98,18 @@ export interface InteractiveModeContext {
 	// Session access
 	session: AgentSession;
 	sessionManager: SessionManager;
+	/** Session the transcript/editor/status are attached to: the focused agent's, else `session`. */
+	readonly viewSession: AgentSession;
+	/** Id of the focused agent, undefined when the main session is attached. */
+	readonly focusedAgentId: string | undefined;
+	/** Focus the main view on an agent's live session (delegates to SessionFocusController.focusAgent). */
+	focusAgentSession(id: string): Promise<void>;
+	/** Focus the focused agent's parent session, falling back to main (delegates to focusParent). */
+	focusParentSession(): Promise<void>;
+	/** Return the view to the main session (delegates to SessionFocusController.unfocus). */
+	unfocusSession(): Promise<void>;
+	/** Clear loader, status/pending containers, streaming state, and pending tools. */
+	clearTransientSessionUi(): void;
 	settings: Settings;
 	keybindings: KeybindingsManager;
 	agent: AgentSession["agent"];

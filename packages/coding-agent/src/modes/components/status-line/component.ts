@@ -154,6 +154,7 @@ export class StatusLineComponent implements Component {
 	#loopModeStatus: { enabled: boolean } | null = null;
 	#goalModeStatus: { enabled: boolean; paused: boolean } | null = null;
 	#collabStatus: CollabStatus | null = null;
+	#focusedAgentId: string | undefined;
 
 	// Git status caching (1s TTL)
 	#cachedGitStatus: { staged: number; unstaged: number; untracked: number } | null = null;
@@ -189,7 +190,7 @@ export class StatusLineComponent implements Component {
 	#nonMessageInputsKey: string | undefined;
 	#messageTokenTotalsCache: MessageTokenTotalsCache | undefined;
 
-	constructor(private readonly session: AgentSession) {
+	constructor(private session: AgentSession) {
 		this.#settings = {
 			preset: settings.get("statusLine.preset"),
 			leftSegments: settings.get("statusLine.leftSegments"),
@@ -200,6 +201,19 @@ export class StatusLineComponent implements Component {
 			sessionAccent: settings.get("statusLine.sessionAccent"),
 			transparent: settings.get("statusLine.transparent"),
 		};
+	}
+
+	/**
+	 * Re-point the status line at another session (focus proxy). Invalidate: model/context/usage all derive
+	 * from it. `focusedAgentId` is the focused subagent id while the view is proxied, undefined for main.
+	 */
+	setSession(session: AgentSession, focusedAgentId?: string): void {
+		const sessionChanged = this.session !== session;
+		if (!sessionChanged && this.#focusedAgentId === focusedAgentId) return;
+		this.session = session;
+		this.#focusedAgentId = focusedAgentId;
+		if (sessionChanged) this.#invalidateSessionCaches();
+		this.invalidate();
 	}
 
 	updateSettings(settings: StatusLineSettings): void {
@@ -291,6 +305,16 @@ export class StatusLineComponent implements Component {
 
 	invalidate(): void {
 		this.#invalidateGitCaches();
+	}
+	#invalidateSessionCaches(): void {
+		this.#cachedUsage = null;
+		this.#usageFetchedAt = 0;
+		this.#usageInFlight = false;
+		this.#nonMessageTokensCache = undefined;
+		this.#nonMessageInputsKey = undefined;
+		this.#messageTokenTotalsCache = undefined;
+		this.#lastTokensPerSecond = null;
+		this.#lastTokensPerSecondTimestamp = null;
 	}
 
 	#invalidateGitCaches(): void {
@@ -452,16 +476,19 @@ export class StatusLineComponent implements Component {
 		const now = Date.now();
 		if (this.#usageInFlight) return;
 		if (this.#usageFetchedAt > 0 && now - this.#usageFetchedAt < 5 * 60_000) return;
-		const fetcher = (this.session as { fetchUsageReports?: () => Promise<unknown> }).fetchUsageReports;
+		const session = this.session;
+		const fetcher = (session as { fetchUsageReports?: () => Promise<unknown> }).fetchUsageReports;
 		if (typeof fetcher !== "function") return;
 		this.#usageInFlight = true;
 		void fetcher
-			.call(this.session)
+			.call(session)
 			.then(reports => {
+				if (this.session !== session) return;
 				this.#cachedUsage = this.#normalizeUsageReports(reports);
 				this.#usageFetchedAt = Date.now();
 			})
 			.catch(() => {
+				if (this.session !== session) return;
 				// Backoff on error: stamp the fetch time so the 5-min TTL guard
 				// also acts as an error budget. Without this, every render
 				// kicks off another fetch (gated only by #usageInFlight),
@@ -469,7 +496,7 @@ export class StatusLineComponent implements Component {
 				this.#usageFetchedAt = Date.now();
 			})
 			.finally(() => {
-				this.#usageInFlight = false;
+				if (this.session === session) this.#usageInFlight = false;
 			});
 	}
 
@@ -665,6 +692,7 @@ export class StatusLineComponent implements Component {
 
 		return {
 			session: this.session,
+			focusedAgentId: this.#focusedAgentId,
 			width,
 			options: segmentOptions ?? {},
 			planMode: this.#planModeStatus,
@@ -878,7 +906,12 @@ export class StatusLineComponent implements Component {
 	}
 
 	getTopBorder(width: number): { content: string; width: number } {
-		const content = this.#buildStatusLine(width);
+		let content = this.#buildStatusLine(width);
+		if (this.#focusedAgentId && content) {
+			// Dim the whole bar while focus-proxied. Group/cap terminators emit full
+			// `\x1b[0m` resets that would cancel faint mid-bar, so re-open it after each.
+			content = `\x1b[2m${content.replaceAll("\x1b[0m", "\x1b[0m\x1b[2m")}\x1b[22m`;
+		}
 		return {
 			content,
 			width: visibleWidth(content),

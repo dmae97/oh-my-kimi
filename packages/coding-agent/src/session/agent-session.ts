@@ -10219,19 +10219,21 @@ export class AgentSession {
 		const who = decision.target.email ?? decision.target.accountId ?? "the active account";
 		const resetLabel = decision.availableCount === 1 ? "reset" : "resets";
 		try {
-			const choice = await runner.getUIContext().select(
-				`Do you wanna redeem your reset?\n${who} is blocked by the weekly Codex limit for about ${formatDuration(decision.remainingMs)}. Spend 1 of ${decision.availableCount} saved ${resetLabel}?`,
-				[
-					{
-						label: "Yes",
-						description: "Redeem now and remember yes for future eligible Codex weekly blocks.",
-					},
-					{
-						label: "No",
-						description: "Do not auto-redeem saved Codex resets.",
-					},
-				],
-			);
+			const choice = await runner
+				.getUIContext()
+				.select(
+					`Do you wanna redeem your reset?\n${who} is blocked by the weekly Codex limit for about ${formatDuration(decision.remainingMs)}. Spend 1 of ${decision.availableCount} saved ${resetLabel}?`,
+					[
+						{
+							label: "Yes",
+							description: "Redeem now and remember yes for future eligible Codex weekly blocks.",
+						},
+						{
+							label: "No",
+							description: "Do not auto-redeem saved Codex resets.",
+						},
+					],
+				);
 			if (choice === "Yes") {
 				this.settings.set("codexResets.autoRedeem", "yes");
 				return true;

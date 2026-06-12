@@ -221,6 +221,35 @@ export class EventController {
 			await this.handleEvent(event);
 		});
 	}
+	/**
+	 * Clear every transcript-anchored/turn-scoped piece of state. Used by the
+	 * session focus proxy when re-pointing the transcript at another session:
+	 * components, timers, and stream-reveal state all reference the previous
+	 * session's transcript and must not bleed into the new one.
+	 */
+	resetTranscriptAnchors(): void {
+		this.#resetReadGroup();
+		this.#lastVisibleBlockCount = 0;
+		this.#renderedCustomMessages.clear();
+		this.#lastIntent = undefined;
+		this.#backgroundToolCallIds.clear();
+		this.#agentTurnActive = false;
+		this.#interrupting = false;
+		this.#readToolCallArgs.clear();
+		this.#readToolCallAssistantComponents.clear();
+		this.#lastAssistantComponent = undefined;
+		this.#pinnedErrorComponent = undefined;
+		this.#cancelIdleCompaction();
+		for (const timer of this.#ircExpiryTimers.values()) {
+			clearTimeout(timer);
+		}
+		this.#ircExpiryTimers.clear();
+		this.#liveIrcCards.clear();
+		this.#displaceablePollComponent = undefined;
+		this.#lastTtsrNotification = undefined;
+		this.#streamingReveal.stop();
+		this.#toolArgsReveal.stop();
+	}
 
 	async handleEvent(event: AgentSessionEvent): Promise<void> {
 		if (!this.ctx.isInitialized) {
@@ -335,7 +364,7 @@ export class EventController {
 				undefined,
 				this.ctx.hideThinkingBlock,
 				() => this.ctx.ui.requestRender(),
-				this.ctx.session.extensionRunner?.getAssistantThinkingRenderers(),
+				this.ctx.viewSession.extensionRunner?.getAssistantThinkingRenderers(),
 				this.ctx.ui.imageBudget,
 			);
 			this.ctx.streamingMessage = event.message;
@@ -519,12 +548,12 @@ export class EventController {
 				if (!this.ctx.pendingTools.has(content.id)) {
 					this.#resolveDisplaceablePoll(content.name);
 					this.#resetReadGroup();
-					const tool = this.ctx.session.getToolByName(content.name);
+					const tool = this.ctx.viewSession.getToolByName(content.name);
 					const component = new ToolExecutionComponent(
 						content.name,
 						renderArgs,
 						{
-							snapshots: getFileSnapshotStore(this.ctx.session),
+							snapshots: getFileSnapshotStore(this.ctx.viewSession),
 							showImages: settings.get("terminal.showImages"),
 							editFuzzyThreshold: settings.get("edit.fuzzyThreshold"),
 							editAllowFuzzy: settings.get("edit.fuzzyMatch"),
@@ -556,7 +585,7 @@ export class EventController {
 					this.#updateWorkingMessageFromIntent(args[INTENT_FIELD]);
 					continue;
 				}
-				const tool = this.ctx.session.getToolByName(content.name);
+				const tool = this.ctx.viewSession.getToolByName(content.name);
 				if (typeof tool?.intent !== "function") continue;
 				try {
 					const derived = tool.intent(args as never)?.trim();
@@ -581,7 +610,7 @@ export class EventController {
 			let errorMessage: string | undefined;
 			const aborted = this.ctx.streamingMessage.stopReason === "aborted";
 			const silentlyAborted = aborted && isSilentAbort(this.ctx.streamingMessage.errorMessage);
-			const ttsrSilenced = aborted && this.ctx.session.isTtsrAbortPending;
+			const ttsrSilenced = aborted && this.ctx.viewSession.isTtsrAbortPending;
 			if (aborted && !silentlyAborted && !ttsrSilenced) {
 				// Resolve the operator-facing label: a user-interrupt (Esc) abort
 				// carries USER_INTERRUPT_LABEL on errorMessage (threaded through the
@@ -590,7 +619,7 @@ export class EventController {
 				// AgentSession.#handleAgentEvent already stamped SILENT_ABORT_MARKER for
 				// the plan-compact transition before this controller ran, so reaching
 				// this branch implies the abort was NOT a silent internal transition.
-				errorMessage = resolveAbortLabel(this.ctx.streamingMessage.errorMessage, this.ctx.session.retryAttempt);
+				errorMessage = resolveAbortLabel(this.ctx.streamingMessage.errorMessage, this.ctx.viewSession.retryAttempt);
 				this.ctx.streamingMessage.errorMessage = errorMessage;
 			}
 			if (silentlyAborted || ttsrSilenced) {
@@ -664,12 +693,12 @@ export class EventController {
 			}
 
 			this.#resetReadGroup();
-			const tool = this.ctx.session.getToolByName(event.toolName);
+			const tool = this.ctx.viewSession.getToolByName(event.toolName);
 			const component = new ToolExecutionComponent(
 				event.toolName,
 				event.args,
 				{
-					snapshots: getFileSnapshotStore(this.ctx.session),
+					snapshots: getFileSnapshotStore(this.ctx.viewSession),
 					showImages: settings.get("terminal.showImages"),
 					editFuzzyThreshold: settings.get("edit.fuzzyThreshold"),
 					editAllowFuzzy: settings.get("edit.fuzzyMatch"),
@@ -844,7 +873,7 @@ export class EventController {
 		this.#cancelIdleCompaction();
 		this.ctx.autoCompactionEscapeHandler = this.ctx.editor.onEscape;
 		this.ctx.editor.onEscape = () => {
-			this.ctx.session.abortCompaction();
+			this.ctx.viewSession.abortCompaction();
 		};
 		this.ctx.statusContainer.clear();
 		const reasonText =
@@ -937,7 +966,7 @@ export class EventController {
 	async #handleAutoRetryStart(event: Extract<AgentSessionEvent, { type: "auto_retry_start" }>): Promise<void> {
 		this.ctx.retryEscapeHandler = this.ctx.editor.onEscape;
 		this.ctx.editor.onEscape = () => {
-			this.ctx.session.abortRetry();
+			this.ctx.viewSession.abortRetry();
 		};
 		this.ctx.statusContainer.clear();
 		const delaySeconds = Math.round(event.delayMs / 1000);
@@ -1023,7 +1052,7 @@ export class EventController {
 		this.#cancelIdleCompaction();
 		// Don't schedule idle work while context maintenance is already running; the
 		// maintenance flow may reset the session before this timer fires.
-		if (this.ctx.session.isCompacting) return;
+		if (this.ctx.viewSession.isCompacting) return;
 
 		const idleSettings = settings.getGroup("compaction");
 		if (!idleSettings.idleEnabled) return;
@@ -1040,17 +1069,17 @@ export class EventController {
 			this.#idleCompactionTimer = undefined;
 			// Re-check conditions before firing. Pruning may have run between arming
 			// the timer and now, dropping usage back below the idle threshold.
-			if (this.ctx.session.isStreaming) return;
-			if (this.ctx.session.isCompacting) return;
+			if (this.ctx.viewSession.isStreaming) return;
+			if (this.ctx.viewSession.isCompacting) return;
 			if (this.ctx.editor.getText().trim()) return;
 			if (this.#currentContextTokens() < threshold) return;
-			void this.ctx.session.runIdleCompaction();
+			void this.ctx.viewSession.runIdleCompaction();
 		}, timeoutMs);
 		this.#idleCompactionTimer.unref?.();
 	}
 
 	#currentContextTokens(): number {
-		const lastAssistant = this.ctx.session.agent.state.messages
+		const lastAssistant = this.ctx.viewSession.agent.state.messages
 			.slice()
 			.reverse()
 			.find((m): m is AssistantMessage => m.role === "assistant" && m.stopReason !== "aborted");
@@ -1065,7 +1094,7 @@ export class EventController {
 		// errored — those are not "Task complete" events. Mirrors the gate
 		// already used by #currentContextTokens, #handleMessageEnd, and the
 		// retry / TTSR / compaction skip paths across agent-session.ts.
-		const last = this.ctx.session.getLastAssistantMessage?.();
+		const last = this.ctx.viewSession.getLastAssistantMessage?.();
 		if (last?.stopReason === "aborted" || last?.stopReason === "error") return;
 
 		const sessionName = this.ctx.sessionManager.getSessionName();

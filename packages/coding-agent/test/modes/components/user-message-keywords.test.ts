@@ -75,19 +75,21 @@ describe("UserMessageComponent magic-keyword highlighting", () => {
 
 	it("rebuilds user messages with image hyperlinks when image links are not precomputed", () => {
 		const chatContainer = new Container();
+		const sessionManagerMock = {
+			putBlobSync: () => ({
+				hash: "abc123",
+				path: "/tmp/abc123",
+				displayPath: "/tmp/abc123.png",
+				get ref() {
+					return "blob:sha256:abc123";
+				},
+			}),
+		};
 		const helpers = new UiHelpers({
 			chatContainer,
 			getUserMessageText: () => "please inspect [Image #1]",
-			sessionManager: {
-				putBlobSync: () => ({
-					hash: "abc123",
-					path: "/tmp/abc123",
-					displayPath: "/tmp/abc123.png",
-					get ref() {
-						return "blob:sha256:abc123";
-					},
-				}),
-			},
+			sessionManager: sessionManagerMock,
+			viewSession: { sessionManager: sessionManagerMock },
 		} as unknown as InteractiveModeContext);
 		const message: AgentMessage = {
 			role: "user",

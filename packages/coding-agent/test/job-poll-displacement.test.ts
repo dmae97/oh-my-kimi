@@ -142,6 +142,7 @@ describe("EventController displaces consecutive waiting polls", () => {
 				},
 			},
 			session: { getToolByName: () => undefined },
+			viewSession: { getToolByName: () => undefined },
 			sessionManager: { getCwd: () => process.cwd() },
 		} as unknown as InteractiveModeContext;
 		return { controller: new EventController(ctx), children };

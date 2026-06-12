@@ -70,6 +70,9 @@ function createContext(currentSessionFile: string): {
 			newSession,
 			switchSession: vi.fn(async () => true),
 		},
+		get viewSession() {
+			return this.session;
+		},
 		sessionManager: {
 			getCwd: () => "/tmp/project",
 			getSessionDir: () => "/tmp/project/sessions",
@@ -124,6 +127,12 @@ function createContext(currentSessionFile: string): {
 		showError: vi.fn(),
 		showHookConfirm,
 		shutdown: vi.fn(async () => undefined),
+		clearTransientSessionUi() {
+			ctx.loadingAnimation.stop();
+			ctx.statusContainer.clear();
+			ctx.pendingMessagesContainer.clear();
+			ctx.pendingTools.clear();
+		},
 	} as unknown as TestContext;
 
 	return {

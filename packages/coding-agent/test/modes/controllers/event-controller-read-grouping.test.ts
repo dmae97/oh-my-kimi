@@ -68,6 +68,7 @@ function assistantMessage(content: Block[]): AssistantMessage {
 
 function createFixture() {
 	const chatContainer = new Container();
+	const sessionMock = { getToolByName: () => undefined, extensionRunner: undefined };
 	const ctx = {
 		isInitialized: true,
 		init: vi.fn(async () => {}),
@@ -80,7 +81,9 @@ function createFixture() {
 		toolOutputExpanded: false,
 		hideThinkingBlock: false,
 		setWorkingMessage: vi.fn(),
-		session: { getToolByName: () => undefined, extensionRunner: undefined },
+		clearTransientSessionUi: () => {},
+		session: sessionMock,
+		viewSession: sessionMock,
 	} as unknown as InteractiveModeContext;
 	return { controller: new EventController(ctx), chatContainer };
 }

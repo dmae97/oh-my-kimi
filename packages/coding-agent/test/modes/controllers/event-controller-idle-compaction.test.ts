@@ -66,6 +66,10 @@ describe("EventController idle compaction teardown", () => {
 				runIdleCompaction,
 				agent: { state: { messages: [createAssistantMessage()] } },
 			},
+			get viewSession() {
+				return (this as typeof context).session;
+			},
+			clearTransientSessionUi: () => {},
 		} as unknown as InteractiveModeContext;
 
 		const controller = new EventController(context);

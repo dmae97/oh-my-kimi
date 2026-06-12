@@ -16,6 +16,7 @@ type FakeEditor = {
 	onCycleModelBackward?: () => void;
 	onSelectModelTemporary?: () => void;
 	onSelectModel?: () => void;
+	onLeftAtStart?: () => void;
 	onHistorySearch?: () => void;
 	onPasteImage?: () => void;
 	onCopyPrompt?: () => void;
@@ -163,7 +164,9 @@ function createContext(): {
 		updateEditorBorderColor: vi.fn(),
 		showDebugSelector: vi.fn(),
 		toggleTodoExpansion: vi.fn(),
-		handleHotkeysCommand: vi.fn(),
+		showAgentHub: vi.fn(),
+		unfocusSession: vi.fn(async () => {}),
+		focusParentSession: vi.fn(async () => {}),
 		handleSTTToggle: vi.fn(),
 		handleBtwEscape,
 		handleBtwCommand,
@@ -335,5 +338,30 @@ describe("InputController escape behavior", () => {
 		expect(spies.cancelPendingSubmission).not.toHaveBeenCalled();
 		expect(spies.clearQueue).not.toHaveBeenCalled();
 		expect(spies.abort).toHaveBeenCalledTimes(1);
+	});
+
+	it("returns focused subagent view to main on Esc instead of aborting", () => {
+		const { ctx, editor, spies } = createContext();
+		Object.defineProperty(ctx, "focusedAgentId", { value: "Worker", configurable: true });
+		const controller = new InputController(ctx);
+
+		controller.setupKeyHandlers();
+		editor.onEscape?.();
+
+		expect(ctx.unfocusSession).toHaveBeenCalledTimes(1);
+		expect(spies.abort).not.toHaveBeenCalled();
+	});
+
+	it("routes focused left-left through the same main-return path as Esc", () => {
+		const { ctx, editor } = createContext();
+		Object.defineProperty(ctx, "focusedAgentId", { value: "Worker", configurable: true });
+		ctx.lastLeftTapTime = Date.now();
+		const controller = new InputController(ctx);
+
+		controller.setupKeyHandlers();
+		editor.onLeftAtStart?.();
+
+		expect(ctx.unfocusSession).toHaveBeenCalledTimes(1);
+		expect(ctx.focusParentSession).not.toHaveBeenCalled();
 	});
 });

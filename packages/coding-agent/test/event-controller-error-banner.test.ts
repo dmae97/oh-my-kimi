@@ -76,6 +76,10 @@ function createFixture(streamingMessage?: AssistantMessage) {
 		showPinnedError,
 		clearPinnedError,
 		session: { isTtsrAbortPending: false, retryAttempt: 0 },
+		get viewSession() {
+			return this.session;
+		},
+		clearTransientSessionUi: () => {},
 	} as unknown as InteractiveModeContext;
 
 	const controller = new EventController(ctx);
