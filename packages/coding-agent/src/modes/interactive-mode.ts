@@ -1162,6 +1162,30 @@ export class InteractiveMode implements InteractiveModeContext {
 		// of restarting the visible conversation (the LLM context still resets).
 		const context = this.session.buildTranscriptSessionContext();
 		this.renderSessionContext(context);
+		// During the pre-streaming window — after `startPendingSubmission` has
+		// optimistically rendered the user's message but before the user
+		// `message_start` event lands it in `session` entries — any rebuild
+		// (e.g. Ctrl+T toggleThinkingBlockVisibility, theme selector) would
+		// otherwise erase the user's just-submitted message until the first
+		// assistant token arrived (#2372). Once `message_start` fires the
+		// signature is cleared by `EventController`, so this replay is a no-op
+		// post-streaming and cannot duplicate.
+		this.#replayOptimisticUserMessage();
+	}
+
+	#replayOptimisticUserMessage(): void {
+		if (!this.optimisticUserMessageSignature) return;
+		const submission = this.#pendingSubmittedInput;
+		if (!submission || submission.cancelled || submission.customType) return;
+		this.addMessageToChat(
+			{
+				role: "user",
+				content: [{ type: "text", text: submission.text }, ...(submission.images ?? [])],
+				attribution: "user",
+				timestamp: Date.now(),
+			},
+			{ imageLinks: submission.imageLinks },
+		);
 	}
 
 	#formatTodoLine(todo: TodoItem, prefix: string, matched: boolean): string {
