@@ -387,8 +387,11 @@ describe("tool live-region scrollback", () => {
 				.map(row => Bun.stripANSI(row).trimEnd())
 				.join("\n");
 			expect(bufferText).not.toContain("pending [1/1]");
-			expect(bufferText).toContain("const line9 = 9;");
+			// The running cell renders the bounded TAIL window of the code: the
+			// live edge stays visible; the head is elided behind a marker.
 			expect(bufferText).toContain("const line19 = 19;");
+			expect(bufferText).toContain("earlier lines");
+			expect(bufferText).not.toContain("const line0 = 0;");
 		} finally {
 			component.stopAnimation();
 			tui.stop();
@@ -566,10 +569,11 @@ describe("tool live-region scrollback", () => {
 	it("commits the scrolled-off head of an over-tall pending eval cell to scrollback", async () => {
 		if (process.platform === "win32") return;
 
-		// The single-spawn task renderer bounds its pending preview (the old
-		// uncapped multi-task `context` field is gone), so the eval tool —
-		// whose pending code preview is intentionally never capped — now
-		// carries the over-tall pending content.
+		// Collapsed eval previews are head-capped (renderCodeCell's default
+		// window), so they can no longer go over-tall on their own. Expanded
+		// (ctrl+o) lifts the cap — the preview renders the whole brief
+		// top-anchored, append-only as chunks stream in — so the expanded eval
+		// cell carries the over-tall pending content here.
 		const term = new VirtualTerminal(120, 12);
 		const tui = new TUI(term);
 		const chat = new TranscriptContainer();
@@ -578,6 +582,7 @@ describe("tool live-region scrollback", () => {
 			cells: [{ language: "js", title: "probe", code: code(n) }],
 		});
 		const component = new ToolExecutionComponent("eval", args(4), {}, undefined, tui, process.cwd());
+		component.setExpanded(true);
 
 		try {
 			chat.addChild(component);

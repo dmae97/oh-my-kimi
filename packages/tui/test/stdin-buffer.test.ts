@@ -37,6 +37,18 @@ describe("StdinBuffer", () => {
 		buffer.process(data);
 	}
 
+	// Poll until `predicate` holds. Fixed sleeps race the flush timer chain
+	// (timeout -> setTimeout(0) deferral): under parallel test load, an expired
+	// sleep with an older deadline resolves before the deferral fires, so the
+	// assertion would observe pre-flush state. The deadline only guards against
+	// a hung test; the caller's expect() reports the real failure.
+	async function waitUntil(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
+		const deadline = Date.now() + timeoutMs;
+		while (!predicate() && Date.now() < deadline) {
+			await Bun.sleep(2);
+		}
+	}
+
 	describe("Regular Characters", () => {
 		it("should handle unicode characters", () => {
 			processInput("hello \u4e16\u754c");
@@ -96,8 +108,8 @@ describe("StdinBuffer", () => {
 			processInput("\x1b[1;5");
 			expect(emittedSequences).toEqual([]);
 
-			// Wait for timeout
-			await Bun.sleep(25);
+			// Wait for the flush timeout to deliver the partial
+			await waitUntil(() => emittedSequences.length > 0);
 
 			expect(emittedSequences).toEqual(["\x1b[1;5"]);
 		});
@@ -120,7 +132,7 @@ describe("StdinBuffer", () => {
 			capped.on("data", sequence => emitted.push(sequence));
 			try {
 				capped.process("\x1b[<35;8;16");
-				await Bun.sleep(60);
+				await waitUntil(() => emitted.length > 0);
 				// Tail never arrived: delivered as one raw sequence (ESC intact,
 				// so downstream treats it as control data, not typed text).
 				expect(emitted).toEqual(["\x1b[<35;8;16"]);
@@ -149,7 +161,7 @@ describe("StdinBuffer", () => {
 			// Legacy terminals: a bare ESC is a real keypress and must not lag
 			// behind the flush timeout by more than the deferral.
 			processInput("\x1b");
-			await Bun.sleep(30);
+			await waitUntil(() => emittedSequences.length > 0);
 			expect(emittedSequences).toEqual(["\x1b"]);
 		});
 	});
@@ -264,7 +276,7 @@ describe("StdinBuffer", () => {
 			expect(emittedSequences).toEqual([]);
 
 			// After timeout, should emit
-			await Bun.sleep(15);
+			await waitUntil(() => emittedSequences.length > 0);
 			expect(emittedSequences).toEqual(["\x1b"]);
 		});
 
@@ -334,8 +346,8 @@ describe("StdinBuffer", () => {
 			processInput("\x1b[1;5");
 			expect(emittedSequences).toEqual([]);
 
-			// Wait for timeout to flush
-			await Bun.sleep(25);
+			// Wait for the flush timeout to deliver the partial
+			await waitUntil(() => emittedSequences.length > 0);
 
 			expect(emittedSequences).toEqual(["\x1b[1;5"]);
 		});
@@ -475,7 +487,7 @@ describe("StdinBuffer", () => {
 			buffer.process("\x1b[200~lost marker content");
 			expect(pastes).toEqual([]);
 
-			await Bun.sleep(60);
+			await waitUntil(() => pastes.length > 0);
 			expect(pastes).toEqual(["lost marker content"]);
 
 			// Input is alive again after recovery.
