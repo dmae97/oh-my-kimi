@@ -165,7 +165,10 @@ describe("SnapcompactInlineTransformer", () => {
 	});
 
 	it("moves only loaded context-file instructions when AGENTS.md mode is selected", () => {
-		const transformer = new SnapcompactInlineTransformer({ renderSystemPrompt: "agents-md", renderToolResults: false });
+		const transformer = new SnapcompactInlineTransformer({
+			renderSystemPrompt: "agents-md",
+			renderToolResults: false,
+		});
 		const longContext = denseText(3000);
 		const context: Context = {
 			systemPrompt: [

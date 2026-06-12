@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
+import type { UsageReport } from "@oh-my-pi/pi-ai";
 import { setNextRequestDebugPath } from "@oh-my-pi/pi-ai/utils/request-debug";
 import { Snowflake, setProjectDir } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
@@ -34,6 +35,7 @@ import { handleSshAcp } from "./helpers/ssh";
 import { launchStatsDashboard, parseStatsDashboardArgs } from "./helpers/stats-dashboard";
 import { handleTodoAcp } from "./helpers/todo";
 import { buildUsageReportText } from "./helpers/usage-report";
+import { buildResetUsageAccounts, describeRedeemOutcome } from "./helpers/reset-usage";
 import { parseMarketplaceInstallArgs, parsePluginScopeArgs } from "./marketplace-install-parser";
 import type {
 	BuiltinSlashCommand,
@@ -598,6 +600,64 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		},
 		handleTui: async (_command, runtime) => {
 			await runtime.ctx.handleUsageCommand();
+			runtime.ctx.editor.setText("");
+		},
+	},
+	{
+		name: "reset-usage",
+		description: "Spend a saved Codex rate-limit reset",
+		acpDescription: "Spend a saved rate-limit reset",
+		inlineHint: "[account|active]",
+		allowArgs: true,
+		handle: async (command, runtime) => {
+			const { session } = runtime;
+			let reports: UsageReport[] | null = null;
+			try {
+				reports = await session.fetchUsageReports();
+			} catch {
+				await runtime.output("Could not load usage data to find saved resets.");
+				return commandConsumed();
+			}
+			const active = session.modelRegistry.authStorage.getOAuthAccountIdentity("openai-codex", session.sessionId);
+			const accounts = buildResetUsageAccounts(reports, active);
+			if (accounts.length === 0) {
+				await runtime.output("No Codex accounts found. Use /login to add one.");
+				return commandConsumed();
+			}
+			const arg = command.args.trim();
+			if (!arg) {
+				const lines = ["Saved Codex rate-limit resets:"];
+				for (const account of accounts) {
+					lines.push(`- ${account.label}: ${account.availableCount} available${account.active ? " (active)" : ""}`);
+				}
+				lines.push("", "Spend one with `/reset-usage <account email>` or `/reset-usage active`.");
+				await runtime.output(lines.join("\n"));
+				return commandConsumed();
+			}
+			const wanted = arg.toLowerCase();
+			const target =
+				wanted === "active"
+					? accounts.find(account => account.active)
+					: accounts.find(
+							account =>
+								account.label.toLowerCase() === wanted ||
+								account.target.email?.toLowerCase() === wanted ||
+								account.target.accountId?.toLowerCase() === wanted,
+						);
+			if (!target) {
+				await runtime.output(`No Codex account matches "${arg}".`);
+				return commandConsumed();
+			}
+			if (target.availableCount <= 0) {
+				await runtime.output(`${target.label}: no saved resets to spend.`);
+				return commandConsumed();
+			}
+			const outcome = await session.redeemResetCredit(target.target);
+			await runtime.output(describeRedeemOutcome(outcome, target.label));
+			return commandConsumed();
+		},
+		handleTui: (_command, runtime) => {
+			void runtime.ctx.showResetUsageSelector();
 			runtime.ctx.editor.setText("");
 		},
 	},

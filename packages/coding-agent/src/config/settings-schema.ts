@@ -1588,7 +1588,11 @@ export const SETTINGS_SCHEMA = {
 					label: "AGENTS.md",
 					description: "Only move loaded context-file instructions to images, when that saves tokens.",
 				},
-				{ value: "all", label: "All", description: "Move the full system prompt to images, when that saves tokens." },
+				{
+					value: "all",
+					label: "All",
+					description: "Move the full system prompt to images, when that saves tokens.",
+				},
 			],
 		},
 	},

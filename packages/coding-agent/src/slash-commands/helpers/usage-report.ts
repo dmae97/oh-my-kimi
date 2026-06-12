@@ -54,6 +54,18 @@ function renderUsageReports(
 		const activeAccount = resolveActiveAccount?.(provider);
 		for (const report of providerReports) {
 			const inUse = reportMatchesActiveAccount(report, activeAccount);
+			const savedResets = report.resetCredits?.availableCount ?? 0;
+			if (savedResets > 0) {
+				const resetLabel =
+					typeof report.metadata?.email === "string"
+						? report.metadata.email
+						: typeof report.metadata?.accountId === "string"
+							? report.metadata.accountId
+							: "account";
+				lines.push(
+					`- ${resetLabel}: ${savedResets} saved rate-limit reset${savedResets === 1 ? "" : "s"} available — /reset-usage to spend`,
+				);
+			}
 			if (report.limits.length === 0) {
 				const email = typeof report.metadata?.email === "string" ? report.metadata.email : "account";
 				lines.push(`- ${email}: no limits reported`);

@@ -345,7 +345,9 @@ function buildLegendLines(breakdown: ContextBreakdown, theme: typeof Theme): str
 							: sp.reason === "empty"
 								? "nothing to image"
 								: "frames would not save tokens";
-					lines.push(`  System prompt (${sp.scope === "agents-md" ? "AGENTS.md" : "all"}): ${theme.fg("dim", `stays text (${reason})`)}`);
+					lines.push(
+						`  System prompt (${sp.scope === "agents-md" ? "AGENTS.md" : "all"}): ${theme.fg("dim", `stays text (${reason})`)}`,
+					);
 				}
 			}
 			if (snap.toolResults) {

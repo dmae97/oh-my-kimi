@@ -1,9 +1,18 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
+- Added `AuthStorage.redeemResetCredit` to redeem stored OpenAI Codex saved rate-limit reset credits for a target account by `credentialId`, `accountId`, or `email`
+- Added `listCodexResetCredits` and `consumeCodexResetCredit` exports for OpenAI Codex saved reset-credit listing and redemption
+- Added `resetCredits` with `availableCount` to `UsageReport` so OpenAI Codex usage data now exposes redeemable rate-limit resets
+- Added `openai-codex-reset` exports via package barrel for out-of-band tooling usage
 - Added a one-shot request-debug target that writes the next provider HTTP request JSON to an explicit path.
+
+### Changed
+
+- Changed `AuthStorage.redeemResetCredit` to invalidate cached usage data after a successful redemption so the next usage report reflects the reset immediately
 
 ### Fixed
 

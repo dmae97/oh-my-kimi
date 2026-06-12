@@ -63,11 +63,25 @@ export interface UsageLimit {
 	notes?: string[];
 }
 
+/**
+ * Saved/banked rate-limit resets an account can redeem on demand.
+ *
+ * Surfaced by providers that let users defer a usage-window reset and spend it
+ * later (OpenAI Codex "saved rate limit resets"). The redeem itself is a
+ * separate, provider-specific action; this is the read-only count for display.
+ */
+export interface UsageResetCredits {
+	/** Number of resets available to redeem right now. */
+	availableCount: number;
+}
+
 /** Aggregated usage report for a provider. */
 export interface UsageReport {
 	provider: Provider;
 	fetchedAt: number;
 	limits: UsageLimit[];
+	/** Saved rate-limit resets the account can redeem, when the provider reports them. */
+	resetCredits?: UsageResetCredits;
 	metadata?: Record<string, unknown>;
 	raw?: unknown;
 }
@@ -114,10 +128,15 @@ export const usageLimitSchema = z.object({
 	notes: z.array(z.string()).optional(),
 });
 
+export const usageResetCreditsSchema = z.object({
+	availableCount: z.number(),
+});
+
 export const usageReportSchema = z.object({
 	provider: z.string(),
 	fetchedAt: z.number(),
 	limits: z.array(usageLimitSchema),
+	resetCredits: usageResetCreditsSchema.optional(),
 	metadata: z.record(z.string(), z.unknown()).optional(),
 	// `raw` is provider-specific and may be anything; the broker strips it before
 	// sending the report over the wire, so accept-but-ignore here.

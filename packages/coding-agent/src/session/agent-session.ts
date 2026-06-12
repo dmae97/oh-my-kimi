@@ -73,6 +73,8 @@ import type {
 	Model,
 	ProviderResponseMetadata,
 	ProviderSessionState,
+	ResetCreditRedeemOutcome,
+	ResetCreditTarget,
 	ServiceTier,
 	SimpleStreamOptions,
 	TextContent,
@@ -10132,6 +10134,20 @@ export class AgentSession {
 		const authStorage = this.#modelRegistry.authStorage;
 		if (!authStorage.fetchUsageReports) return null;
 		return authStorage.fetchUsageReports({
+			baseUrlResolver: provider => this.#modelRegistry.getProviderBaseUrl?.(provider),
+			signal,
+		});
+	}
+
+	/**
+	 * Redeem one saved Codex rate-limit reset for a specific account, injecting
+	 * the provider base URL like {@link AgentSession.fetchUsageReports}. Powers
+	 * the `/reset-usage` command and auto-redeem. Never throws for business
+	 * outcomes — inspect the returned `code`.
+	 */
+	async redeemResetCredit(target: ResetCreditTarget, signal?: AbortSignal): Promise<ResetCreditRedeemOutcome> {
+		return this.#modelRegistry.authStorage.redeemResetCredit({
+			target,
 			baseUrlResolver: provider => this.#modelRegistry.getProviderBaseUrl?.(provider),
 			signal,
 		});

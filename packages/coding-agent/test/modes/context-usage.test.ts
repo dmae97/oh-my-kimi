@@ -56,7 +56,14 @@ describe("renderContextUsage snapcompact section", () => {
 		const output = renderContextUsage(
 			breakdownWith({
 				visionCapable: true,
-				systemPrompt: { applied: true, scope: "all", textTokens: 9768, frames: 2, imageTokens: 6600, savedTokens: 3168 },
+				systemPrompt: {
+					applied: true,
+					scope: "all",
+					textTokens: 9768,
+					frames: 2,
+					imageTokens: 6600,
+					savedTokens: 3168,
+				},
 				toolResults: { total: 3, swapped: 0, textTokens: 0, frames: 0, imageTokens: 0, savedTokens: 0 },
 				savedTokens: 3168,
 			}),

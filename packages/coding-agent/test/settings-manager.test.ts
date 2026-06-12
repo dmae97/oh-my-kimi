@@ -4,11 +4,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Effort } from "@oh-my-pi/pi-ai";
 import {
-	type SettingPath,
 	getDefault,
 	onAppendOnlyModeChanged,
 	onStatusLineSessionAccentChanged,
 	resetSettingsForTest,
+	type SettingPath,
 	Settings,
 } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { getProjectAgentDir, Snowflake } from "@oh-my-pi/pi-utils";

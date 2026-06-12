@@ -1,8 +1,10 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
+- Added `/reset-usage` command to spend a saved Codex rate-limit reset by running `/reset-usage <active|account id|email>`, with a TUI selector flow for interactive reset redemption
 - Added `snapcompact.systemPrompt` enum modes `none`, `agents-md`, and `all`, so users can disable system-prompt imaging, image only loaded AGENTS.md/context-file instruction sections, or image the full system prompt
 - Added `agents-md` snapcompact mode that rasterizes AGENTS.md-style context sections from the system prompt into frames and appends them to the first user message
 - `/context` (TUI panel and ACP report) now shows estimated snapcompact wire savings when `snapcompact.systemPrompt` or `snapcompact.toolResults` is enabled — per-feature text → frames token deltas, the reason a swap does not apply (savings margin, image budget, or text-only model), and the estimated size of the next request. The estimate and the live provider-request transform share one planner (`planInlineSwaps`) so displayed numbers cannot drift from wire behavior.
@@ -11,6 +13,7 @@
 
 ### Changed
 
+- Changed usage views (`/usage` reports, status summaries, and account headers) to show available saved Codex rate-limit resets and point to `/reset-usage` for spending them
 - Changed `/context` system-prompt savings lines to show the scope as `AGENTS.md` or `all`, so savings estimates now indicate whether imaging applied only to context-file instructions or the entire prompt
 - Changed `/debug` handling in interactive mode so `/debug` with arguments now executes the requested debug subcommand instead of always opening the debug selector
 - Changed `/debug dump-next-request` path handling to expand `~` and resolve relative paths against the current working directory

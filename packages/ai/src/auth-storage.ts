@@ -35,6 +35,7 @@ import { githubCopilotUsageProvider } from "./usage/github-copilot";
 import { antigravityRankingStrategy, antigravityUsageProvider } from "./usage/google-antigravity";
 import { kimiUsageProvider } from "./usage/kimi";
 import { codexRankingStrategy, openaiCodexUsageProvider } from "./usage/openai-codex";
+import { type CodexResetConsumeCode, consumeCodexResetCredit, listCodexResetCredits } from "./usage/openai-codex-reset";
 import { zaiUsageProvider } from "./usage/zai";
 
 const USAGE_RANKING_METRIC_EPSILON = 1e-9;
@@ -636,6 +637,33 @@ export type OAuthAccessResolution = ({ ok: true } & OAuthAccess) | ({ ok: false 
 export interface InvalidateCredentialMatchingOptions {
 	signal?: AbortSignal;
 	sessionId?: string;
+}
+
+/**
+ * Identifies which stored account to redeem a saved rate-limit reset for.
+ * Any one field is enough; `credentialId` is the most precise.
+ */
+export interface ResetCreditTarget {
+	credentialId?: number;
+	accountId?: string;
+	email?: string;
+}
+
+/** Outcome of {@link AuthStorage.redeemResetCredit}. */
+export interface ResetCreditRedeemOutcome {
+	/** `true` only when a reset was actually applied (`code === "reset"`). */
+	ok: boolean;
+	/**
+	 * Result code. Backend codes: `reset` (success), `already_redeemed`,
+	 * `no_credit`, `nothing_to_reset`. Locally-synthesized: `no_account`
+	 * (target not found), `account_unavailable` (token refresh failed),
+	 * `http_<status>` (unexpected HTTP).
+	 */
+	code: CodexResetConsumeCode;
+	accountId?: string;
+	email?: string;
+	/** The credit that was spent (when one was). */
+	creditId?: string;
 }
 
 function isAbortSignalOption(
@@ -3514,6 +3542,79 @@ export class AuthStorage {
 				}
 			}),
 		);
+	}
+
+	/**
+	 * Redeem one saved rate-limit reset (OpenAI Codex "saved resets") for a
+	 * specific stored account.
+	 *
+	 * Resolves a fresh access token for the target account, picks an available
+	 * credit (the given `creditId`, else the first redeemable one), spends it,
+	 * and invalidates the cached usage report so the next `/usage` reflects the
+	 * reset. Never throws for business outcomes — inspect the returned `code`.
+	 */
+	async redeemResetCredit(options: {
+		target: ResetCreditTarget;
+		provider?: string;
+		creditId?: string;
+		baseUrlResolver?: (provider: string) => string | undefined;
+		signal?: AbortSignal;
+	}): Promise<ResetCreditRedeemOutcome> {
+		const provider = options.provider ?? "openai-codex";
+		const baseUrl = options.baseUrlResolver?.(provider);
+		const { target } = options;
+		const accesses = await this.getOAuthAccesses(provider);
+		const match = accesses.find(
+			access =>
+				(target.credentialId !== undefined && access.credentialId === target.credentialId) ||
+				(!!target.accountId && access.accountId === target.accountId) ||
+				(!!target.email && access.email === target.email),
+		);
+		if (!match) return { ok: false, code: "no_account", accountId: target.accountId, email: target.email };
+		if (!match.ok) {
+			return { ok: false, code: "account_unavailable", accountId: match.accountId, email: match.email };
+		}
+
+		let creditId = options.creditId;
+		if (!creditId) {
+			const list = await listCodexResetCredits({
+				accessToken: match.accessToken,
+				accountId: match.accountId,
+				baseUrl,
+				fetch: this.#usageFetch,
+				signal: options.signal,
+			});
+			const credit = list?.credits.find(entry => (entry.status ?? "available") === "available") ?? list?.credits[0];
+			if (!credit) return { ok: false, code: "no_credit", accountId: match.accountId, email: match.email };
+			creditId = credit.id;
+		}
+
+		const result = await consumeCodexResetCredit({
+			creditId,
+			accessToken: match.accessToken,
+			accountId: match.accountId,
+			baseUrl,
+			fetch: this.#usageFetch,
+			signal: options.signal,
+		});
+		if (result.ok) this.#invalidateUsageReportCache(provider, baseUrl);
+		return { ok: result.ok, code: result.code, accountId: match.accountId, email: match.email, creditId };
+	}
+
+	/**
+	 * Force the next usage fetch for `provider` to bypass the 5-min cache, so
+	 * `/usage` reflects a freshly-redeemed reset instead of stale numbers.
+	 */
+	#invalidateUsageReportCache(provider: string, baseUrl?: string): void {
+		const expired = Date.now() - 1;
+		for (const entry of this.#getStoredCredentials(provider)) {
+			if (entry.credential.type !== "oauth") continue;
+			const cacheKey = this.#buildUsageReportCacheKey(
+				this.#buildUsageRequestForOauth(provider, entry.credential, baseUrl),
+			);
+			const existing = this.#usageCache.getStale<UsageReport | null>(cacheKey);
+			this.#usageCache.set(cacheKey, { value: existing?.value ?? null, expiresAt: expired });
+		}
 	}
 
 	#extractStructuredApiKeyToken(apiKey: string): string | undefined {
