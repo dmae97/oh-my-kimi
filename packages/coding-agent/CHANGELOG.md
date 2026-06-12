@@ -12,6 +12,7 @@
 ### Changed
 
 - Changed `/settings` keyboard navigation so `Tab` and `Shift+Tab` toggle focus between section headings and setting rows in sectioned lists, with `↑/↓` jumping sections, `←/→` switching tabs, and status text reflecting the active controls
+- The `task` tool description now mandates batching parallel spawns into one call's `tasks[]` (sharing `context` once) instead of presenting multiple `task` calls per message as an equal alternative; separate calls are reserved for different agent types or unrelated context
 - Updated `/settings` on-screen navigation hints to match the new section-focus behavior (`↑/↓` and `Tab/Enter`) and tab-switching arrows
 - Changed `/settings` to open as a full-screen overlay on the alternate screen so it no longer shares space with the underlying transcript
 - Codex, Gemini, and Perplexity web search now route their OAuth bearers through the new `withOAuthAccess` driver: a 401 or usage-limit force-refreshes the same account and then rotates to a sibling instead of failing the search, while identity metadata (`chatgpt-account-id`, Google `projectId`) is re-derived from the refreshed credential on every retry.
