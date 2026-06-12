@@ -1,17 +1,78 @@
 import { clearGitLabDuoDirectAccessCache } from "../../providers/gitlab-duo";
-import { OAuthCallbackFlow } from "./callback-server";
+import type { FetchImpl } from "../../types";
+import { OAuthCallbackFlow, type OAuthCallbackFlowOptions } from "./callback-server";
 import { generatePKCE } from "./pkce";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "./types";
 
 const GITLAB_COM_URL = "https://gitlab.com";
-const BUNDLED_CLIENT_ID = "da4edff2e6ebd2bc3208611e2768bc1c1dd7be791dc5ff26ca34ca9ee44f7d4b";
+/**
+ * Default OAuth client id baked into the bundled GitLab Duo login flow. GitLab
+ * authorize requests are rejected outright (`The redirect URI included is not
+ * valid`) whenever this client id's registered redirect URI list drifts from
+ * `http://localhost:8080/callback`. Users hitting that case can either:
+ *
+ * - register their own GitLab OAuth application and override the bundled
+ *   credentials with `GITLAB_CLIENT_ID` + `GITLAB_REDIRECT_URI`, or
+ * - skip OAuth entirely and supply a Personal Access Token via `GITLAB_TOKEN`.
+ *
+ * @see https://github.com/can1357/oh-my-pi/issues/2424
+ */
+const DEFAULT_CLIENT_ID = "da4edff2e6ebd2bc3208611e2768bc1c1dd7be791dc5ff26ca34ca9ee44f7d4b";
 const OAUTH_SCOPES = ["api"];
-const CALLBACK_PORT = 8080;
-const CALLBACK_PATH = "/callback";
+const DEFAULT_CALLBACK_PORT = 8080;
+const DEFAULT_CALLBACK_PATH = "/callback";
+const DEFAULT_CALLBACK_HOSTNAME = "localhost";
 
 interface PKCEPair {
 	verifier: string;
 	challenge: string;
+}
+
+/**
+ * Resolve the OAuth client id, preferring `GITLAB_CLIENT_ID` when set so users
+ * with their own GitLab OAuth application can bypass the bundled credentials.
+ */
+function resolveClientId(): string {
+	const env = process.env.GITLAB_CLIENT_ID?.trim();
+	return env && env.length > 0 ? env : DEFAULT_CLIENT_ID;
+}
+
+/**
+ * Resolve callback-server options from `GITLAB_REDIRECT_URI`. When set, the
+ * exact string is advertised to GitLab (strict matching), random-port fallback
+ * is disabled, and the local listener is bound to the URI's loopback host/port
+ * so the browser callback lands on us. Non-loopback URIs bind a random local
+ * port — only the paste-code path can complete in that case.
+ */
+function resolveCallbackOptions(): OAuthCallbackFlowOptions {
+	const raw = process.env.GITLAB_REDIRECT_URI?.trim();
+	if (!raw) {
+		return {
+			preferredPort: DEFAULT_CALLBACK_PORT,
+			callbackPath: DEFAULT_CALLBACK_PATH,
+			callbackHostname: DEFAULT_CALLBACK_HOSTNAME,
+		};
+	}
+
+	let parsed: URL;
+	try {
+		parsed = new URL(raw);
+	} catch {
+		throw new Error(`Invalid GITLAB_REDIRECT_URI: ${raw}`);
+	}
+	if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+		throw new Error(`GITLAB_REDIRECT_URI must use http:// or https://, got: ${raw}`);
+	}
+
+	const isLoopback = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1" || parsed.hostname === "[::1]";
+	const port = parsed.port ? Number.parseInt(parsed.port, 10) : parsed.protocol === "https:" ? 443 : 80;
+
+	return {
+		preferredPort: isLoopback ? port : 0,
+		callbackPath: parsed.pathname || DEFAULT_CALLBACK_PATH,
+		callbackHostname: isLoopback ? parsed.hostname : DEFAULT_CALLBACK_HOSTNAME,
+		redirectUri: raw,
+	};
 }
 
 function mapTokenResponse(payload: {
@@ -38,15 +99,19 @@ function mapTokenResponse(payload: {
 
 class GitLabDuoOAuthFlow extends OAuthCallbackFlow {
 	#pkce: PKCEPair;
+	#clientId: string;
+	#fetch: FetchImpl;
 
-	constructor(ctrl: OAuthLoginCallbacks, pkce: PKCEPair) {
-		super(ctrl, CALLBACK_PORT, CALLBACK_PATH);
+	constructor(ctrl: OAuthLoginCallbacks, pkce: PKCEPair, clientId: string, options: OAuthCallbackFlowOptions) {
+		super(ctrl, options);
 		this.#pkce = pkce;
+		this.#clientId = clientId;
+		this.#fetch = ctrl.fetch ?? fetch;
 	}
 
 	override async generateAuthUrl(state: string, redirectUri: string): Promise<{ url: string; instructions?: string }> {
 		const authParams = new URLSearchParams({
-			client_id: BUNDLED_CLIENT_ID,
+			client_id: this.#clientId,
 			redirect_uri: redirectUri,
 			response_type: "code",
 			scope: OAUTH_SCOPES.join(" "),
@@ -57,16 +122,19 @@ class GitLabDuoOAuthFlow extends OAuthCallbackFlow {
 
 		return {
 			url: `${GITLAB_COM_URL}/oauth/authorize?${authParams.toString()}`,
-			instructions: "Complete GitLab login in browser. Authentication will finish automatically.",
+			instructions:
+				'Complete GitLab login in browser. If GitLab responds with "The redirect URI included is not valid", ' +
+				"register your own GitLab OAuth application and set GITLAB_CLIENT_ID + GITLAB_REDIRECT_URI, or use a " +
+				"Personal Access Token via GITLAB_TOKEN.",
 		};
 	}
 
 	override async exchangeToken(code: string, _state: string, redirectUri: string): Promise<OAuthCredentials> {
-		const response = await fetch(`${GITLAB_COM_URL}/oauth/token`, {
+		const response = await this.#fetch(`${GITLAB_COM_URL}/oauth/token`, {
 			method: "POST",
 			headers: { "Content-Type": "application/x-www-form-urlencoded" },
 			body: new URLSearchParams({
-				client_id: BUNDLED_CLIENT_ID,
+				client_id: this.#clientId,
 				grant_type: "authorization_code",
 				code,
 				code_verifier: this.#pkce.verifier,
@@ -92,7 +160,9 @@ class GitLabDuoOAuthFlow extends OAuthCallbackFlow {
 
 export async function loginGitLabDuo(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
 	const pkce = await generatePKCE();
-	const flow = new GitLabDuoOAuthFlow(callbacks, pkce);
+	const clientId = resolveClientId();
+	const options = resolveCallbackOptions();
+	const flow = new GitLabDuoOAuthFlow(callbacks, pkce, clientId, options);
 	return flow.login();
 }
 
@@ -101,7 +171,7 @@ export async function refreshGitLabDuoToken(credentials: OAuthCredentials): Prom
 		method: "POST",
 		headers: { "Content-Type": "application/x-www-form-urlencoded" },
 		body: new URLSearchParams({
-			client_id: BUNDLED_CLIENT_ID,
+			client_id: resolveClientId(),
 			grant_type: "refresh_token",
 			refresh_token: credentials.refresh,
 		}).toString(),
