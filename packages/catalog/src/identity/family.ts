@@ -45,6 +45,33 @@ export function isMimoModelIdOrName(value: string): boolean {
 }
 
 /**
+ * MiniMax M2-generation family (M2, M2.1, M2.5, M2.7, including `-highspeed`/
+ * `-lightning`/`-her`/`-turbo` variants, dotless aliases like `minimax-m21`,
+ * and short `minimax/m2-…` ids on aggregator hosts). Underlying model accepts
+ * only `low|medium|high` for `reasoning_effort` and 400s on `minimal`,
+ * `xhigh`, or `none` — so hosts whose default effort map otherwise lowers
+ * `minimal` to `none` (Fireworks) or expects the full 5-tier scale must
+ * clamp instead. Excludes M1, M3, MiniMax-Text-01, music, hailuo, voice ids.
+ */
+export function isMinimaxM2FamilyModelId(modelId: string): boolean {
+	const lower = modelId.toLowerCase();
+	if (!lower.includes("minimax")) return false;
+	// Boundary-delimited `m2` token followed by zero or more digits (dotless
+	// variants like `m21`/`m25`/`m27`) and an optional dotted minor version.
+	return /(?:^|[/.-])m2\d*(?:[.-]\d+)?(?:[-.:_]|$)/i.test(lower);
+}
+
+/**
+ * OpenAI gpt-oss family (`gpt-oss-20b`, `gpt-oss-120b`, `gpt-oss:120b`,
+ * `vendor/gpt-oss-…`). The Harmony reasoning format only accepts
+ * `low|medium|high` for `reasoning_effort` and rejects `minimal`, `xhigh`,
+ * and `none`.
+ */
+export function isOpenAIGptOssModelId(modelId: string): boolean {
+	return /(^|\/)gpt-oss[-:]/i.test(modelId);
+}
+
+/**
  * Adaptive thinking `display` is supported starting with Claude Opus 4.7 and
  * the Claude Fable/Mythos 5 generation. Older adaptive-thinking models
  * (Opus 4.6, Sonnet 4.6+) reject the field. Classifier-based, so dotted and

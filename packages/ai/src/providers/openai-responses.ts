@@ -15,7 +15,6 @@ import type {
 	FetchImpl,
 	MessageAttribution,
 	Model,
-	OpenAICompat,
 	ProviderSessionState,
 	RawSseEvent,
 	ServiceTier,
@@ -694,10 +693,9 @@ function buildParams(
 		options,
 		messages,
 		effort =>
-			mapReasoningEffort(
-				effort as NonNullable<OpenAIResponsesOptions["reasoning"]>,
-				model.compat.reasoningEffortMap,
-			),
+			model.compat.reasoningEffortMap?.[effort as NonNullable<OpenAIResponsesOptions["reasoning"]>] ??
+			model.thinking?.effortMap?.[effort as NonNullable<OpenAIResponsesOptions["reasoning"]>] ??
+			effort,
 		options?.includeEncryptedReasoning ?? true,
 		options?.omitReasoningEffort ?? false,
 	);
@@ -707,13 +705,6 @@ function buildParams(
 	}
 
 	return { params, trailingScaffoldingItems };
-}
-
-function mapReasoningEffort(
-	effort: NonNullable<OpenAIResponsesOptions["reasoning"]>,
-	reasoningEffortMap: OpenAICompat["reasoningEffortMap"] | undefined,
-): string {
-	return reasoningEffortMap?.[effort] ?? effort;
 }
 
 function convertConversationMessages(

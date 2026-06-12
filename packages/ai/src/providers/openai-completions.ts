@@ -1372,7 +1372,10 @@ function buildParams(
 			openRouterParams.reasoning = { enabled: false };
 		} else if (options?.reasoning) {
 			openRouterParams.reasoning = {
-				effort: mapReasoningEffort(options.reasoning, compat.reasoningEffortMap),
+				effort:
+					compat.reasoningEffortMap?.[options.reasoning] ??
+					model.thinking?.effortMap?.[options.reasoning] ??
+					options.reasoning,
 			};
 		}
 	} else if (
@@ -1383,7 +1386,9 @@ function buildParams(
 		compat.supportsReasoningEffort
 	) {
 		// OpenAI-style reasoning_effort
-		params.reasoning_effort = mapReasoningEffort(options.reasoning, compat.reasoningEffortMap) as Effort;
+		params.reasoning_effort = (compat.reasoningEffortMap?.[options.reasoning] ??
+			model.thinking?.effortMap?.[options.reasoning] ??
+			options.reasoning) as Effort;
 	} else if (
 		supportsReasoningParams &&
 		options?.disableReasoning &&
@@ -1398,7 +1403,9 @@ function buildParams(
 		if (minEffort === undefined) {
 			throw new Error(`Model ${model.provider}/${model.id} has no supported reasoning efforts`);
 		}
-		params.reasoning_effort = mapReasoningEffort(minEffort, compat.reasoningEffortMap) as Effort;
+		params.reasoning_effort = (compat.reasoningEffortMap?.[minEffort] ??
+			model.thinking?.effortMap?.[minEffort] ??
+			minEffort) as Effort;
 	}
 
 	if (compat.disableReasoningOnToolChoice && params.tool_choice !== undefined) {
@@ -1532,13 +1539,6 @@ export function parseChunkUsage(
 	};
 	calculateCost(model, usage);
 	return usage;
-}
-
-function mapReasoningEffort(
-	effort: NonNullable<OpenAICompletionsOptions["reasoning"]>,
-	reasoningEffortMap: Partial<Record<NonNullable<OpenAICompletionsOptions["reasoning"]>, string>>,
-): string {
-	return reasoningEffortMap[effort] ?? effort;
 }
 
 function maybeAddAnthropicCacheControl(compat: ResolvedOpenAICompat, messages: ChatCompletionMessageParam[]): void {

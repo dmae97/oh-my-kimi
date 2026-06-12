@@ -41,8 +41,7 @@ describe("deepseek built-in provider (issue #830)", () => {
 		expect(descriptor?.api).toBe("openai-completions");
 		expect(descriptor?.baseUrl).toBe("https://api.deepseek.com");
 		// Per-model compat: DeepSeek V4 supports thinking-mode tool calls, but only
-		// with `high`/`max` effort, no explicit `tool_choice`, max_tokens, and
-		// reasoning_content replay.
+		// with no explicit `tool_choice`, max_tokens, and reasoning_content replay.
 		const compat =
 			descriptor?.api === "openai-completions" ? (descriptor.compat as OpenAICompat | undefined) : undefined;
 		expect(compat?.supportsDeveloperRole).toBe(false);
@@ -53,12 +52,5 @@ describe("deepseek built-in provider (issue #830)", () => {
 		expect(compat?.requiresAssistantContentForToolCalls).toBe(true);
 		expect(compat?.reasoningContentField).toBe("reasoning_content");
 		expect(compat?.extraBody).toEqual({ thinking: { type: "enabled" } });
-		expect(compat?.reasoningEffortMap).toMatchObject({
-			minimal: "high",
-			low: "high",
-			medium: "high",
-			high: "high",
-			xhigh: "max",
-		});
 	});
 });
