@@ -68,6 +68,7 @@ function createContext(): {
 		requestRender: Spy;
 		startPendingSubmission: StartPendingSubmissionSpy;
 	};
+	inputListeners: Array<(data: string) => { consume?: boolean; data?: string } | undefined>;
 } {
 	let editorText = "";
 	const abort = vi.fn();
@@ -77,13 +78,14 @@ function createContext(): {
 	const cancelPendingSubmission = vi.fn(() => false);
 	const clearQueue = vi.fn(() => ({ steering: [], followUp: [] }));
 	const onInputCallback = vi.fn();
-	const prompt = vi.fn();
 	const requestRender = vi.fn();
+	const inputListeners: Array<(data: string) => { consume?: boolean; data?: string } | undefined> = [];
 	const handleBtwCommand = vi.fn(async () => {});
 	const handleBtwEscape = vi.fn(() => true);
 	const hasActiveBtw = vi.fn(() => false);
 	const handleOmfgEscape = vi.fn(() => true);
 	const hasActiveOmfg = vi.fn(() => false);
+	const prompt = vi.fn();
 	const startPendingSubmission = vi.fn(
 		(input: {
 			text: string;
@@ -116,7 +118,10 @@ function createContext(): {
 		editor: editor as unknown as InteractiveModeContext["editor"],
 		ui: {
 			requestRender,
-			addInputListener: vi.fn(),
+			addInputListener: vi.fn(listener => {
+				inputListeners.push(listener as (data: string) => { consume?: boolean; data?: string } | undefined);
+				return () => {};
+			}),
 			addStartListener: vi.fn(),
 		} as unknown as InteractiveModeContext["ui"],
 		loadingAnimation: undefined,
@@ -199,6 +204,7 @@ function createContext(): {
 			requestRender,
 			startPendingSubmission,
 		},
+		inputListeners,
 	};
 }
 
@@ -352,14 +358,16 @@ describe("InputController escape behavior", () => {
 		expect(spies.abort).not.toHaveBeenCalled();
 	});
 
-	it("routes focused left-left through the same main-return path as Esc", () => {
-		const { ctx, editor } = createContext();
+	it("routes focused left-left through the global input listener like Esc", () => {
+		const { ctx, inputListeners } = createContext();
 		Object.defineProperty(ctx, "focusedAgentId", { value: "Worker", configurable: true });
 		ctx.lastLeftTapTime = Date.now();
 		const controller = new InputController(ctx);
 
 		controller.setupKeyHandlers();
-		editor.onLeftAtStart?.();
+		const result = inputListeners[0]("\x1b[D");
+
+		expect(result).toEqual({ consume: true });
 
 		expect(ctx.unfocusSession).toHaveBeenCalledTimes(1);
 		expect(ctx.focusParentSession).not.toHaveBeenCalled();

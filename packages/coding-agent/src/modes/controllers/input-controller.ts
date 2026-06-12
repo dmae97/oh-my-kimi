@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
-import type { AutocompleteProvider, SlashCommand } from "@oh-my-pi/pi-tui";
+import { type AutocompleteProvider, matchesKey, type SlashCommand } from "@oh-my-pi/pi-tui";
 import { $env, isEnoent, logger, sanitizeText } from "@oh-my-pi/pi-utils";
 import { isSettingsInitialized, settings } from "../../config/settings";
 import { AssistantMessageComponent } from "../../modes/components/assistant-message";
@@ -60,6 +60,7 @@ export class InputController {
 	) {}
 
 	#enhancedPaste?: EnhancedPasteController;
+	#focusedLeftTapListenerInstalled = false;
 
 	#showTinyTitleDownloadProgress(modelKey: string): void {
 		if (!isTinyTitleLocalModelKey(modelKey)) return;
@@ -108,6 +109,16 @@ export class InputController {
 
 	setupKeyHandlers(): void {
 		this.ctx.editor.setActionKeys("app.interrupt", this.ctx.keybindings.getKeys("app.interrupt"));
+		if (!this.#focusedLeftTapListenerInstalled) {
+			this.#focusedLeftTapListenerInstalled = true;
+			this.ctx.ui.addInputListener(data => {
+				if (!this.ctx.focusedAgentId) return undefined;
+				if (!matchesKey(data, "left")) return undefined;
+				if (this.ctx.editor.getText().trim()) return undefined;
+				this.#handleFocusedLeftTap();
+				return { consume: true };
+			});
+		}
 		this.ctx.editor.onEscape = () => {
 			if (this.ctx.loopModeEnabled) {
 				this.ctx.pauseLoop();
@@ -277,11 +288,14 @@ export class InputController {
 		// main session, or returns the focused subagent view to the main session.
 		// Focused ←← intentionally matches Esc.
 		this.ctx.editor.onLeftAtStart = () => {
+			if (this.ctx.focusedAgentId) {
+				this.#handleFocusedLeftTap();
+				return;
+			}
 			const now = Date.now();
 			if (now - this.ctx.lastLeftTapTime < 500) {
 				this.ctx.lastLeftTapTime = 0;
-				if (this.ctx.focusedAgentId) void this.ctx.unfocusSession();
-				else this.ctx.showAgentHub();
+				this.ctx.showAgentHub();
 			} else {
 				this.ctx.lastLeftTapTime = now;
 			}
@@ -299,6 +313,16 @@ export class InputController {
 				this.ctx.updateEditorBorderColor();
 			}
 		};
+	}
+
+	#handleFocusedLeftTap(): void {
+		const now = Date.now();
+		if (now - this.ctx.lastLeftTapTime < 500) {
+			this.ctx.lastLeftTapTime = 0;
+			void this.ctx.unfocusSession();
+		} else {
+			this.ctx.lastLeftTapTime = now;
+		}
 	}
 
 	#setupEnhancedPaste(): void {
