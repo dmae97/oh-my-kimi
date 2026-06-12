@@ -46,10 +46,11 @@ function globalJobKey(cwd: string): string {
 
 export function openMemoryDb(dbPath: string): Database {
 	const db = new Database(dbPath);
+	// Install the busy handler BEFORE any lock-taking statement. See #2421.
+	db.exec("PRAGMA busy_timeout = 5000");
 	db.exec(`
 PRAGMA journal_mode=WAL;
 PRAGMA synchronous=NORMAL;
-PRAGMA busy_timeout=5000;
 
 CREATE TABLE IF NOT EXISTS threads (
 	id TEXT PRIMARY KEY,
