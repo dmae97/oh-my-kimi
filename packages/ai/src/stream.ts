@@ -4,6 +4,7 @@ import {
 	mapEffortToAnthropicAdaptiveEffort,
 	mapEffortToGoogleThinkingLevel,
 	requireSupportedEffort,
+	resolveWireModelId,
 } from "@oh-my-pi/pi-catalog/model-thinking";
 import { CATALOG_PROVIDERS, type ProviderCatalogEntry } from "@oh-my-pi/pi-catalog/provider-models";
 import { $env, $pickenv, extractHttpStatusFromError } from "@oh-my-pi/pi-utils";
@@ -887,53 +888,57 @@ function mapOptionsForApi<TApi extends Api>(
 
 		case "google-gemini-cli": {
 			const reasoning = options?.reasoning;
-			if (!reasoning || !model.reasoning) {
-				return castApi<"google-gemini-cli">({
-					...base,
-					thinking: { enabled: false },
-					toolChoice: mapGoogleToolChoice(options?.toolChoice),
-				});
+			const toolChoice = mapGoogleToolChoice(options?.toolChoice);
+			if (reasoning && model.reasoning) {
+				const effort = requireSupportedEffort(model, reasoning);
+
+				// Gemini 3+ models use thinkingLevel instead of thinkingBudget
+				if (model.thinking?.mode === "google-level") {
+					return castApi<"google-gemini-cli">({
+						...base,
+						requestModelId: resolveWireModelId(model, effort),
+						thinking: {
+							enabled: true,
+							level: mapEffortToGoogleThinkingLevel(effort),
+						},
+						toolChoice,
+					});
+				}
+
+				let thinkingBudget = options.thinkingBudgets?.[effort] ?? GOOGLE_THINKING[effort];
+
+				// Caller's maxTokens is the desired output; add thinking budget on top, capped at model limit
+				const maxTokens = Math.min((base.maxTokens || 0) + thinkingBudget, model.maxTokens);
+
+				// If not enough room for thinking + output, reduce thinking budget
+				if (maxTokens <= thinkingBudget) {
+					thinkingBudget = Math.max(0, maxTokens - MIN_OUTPUT_TOKENS);
+				}
+
+				if (thinkingBudget > 0) {
+					return castApi<"google-gemini-cli">({
+						...base,
+						maxTokens,
+						requestModelId: resolveWireModelId(model, effort),
+						thinking: { enabled: true, budgetTokens: thinkingBudget },
+						toolChoice,
+					});
+				}
+				// Budget clamped to zero — fall through to the thinking-off path.
 			}
 
-			const effort = requireSupportedEffort(model, reasoning);
-
-			// Gemini 3+ models use thinkingLevel instead of thinkingBudget
-			if (model.thinking?.mode === "google-level") {
-				return castApi<"google-gemini-cli">({
-					...base,
-					thinking: {
-						enabled: true,
-						level: mapEffortToGoogleThinkingLevel(effort),
-					},
-					toolChoice: mapGoogleToolChoice(options?.toolChoice),
-				});
+			const thinking: GoogleGeminiCliOptions["thinking"] = { enabled: false };
+			if (model.reasoning && model.thinking?.suppressWhenOff) {
+				// CCA re-applies the per-id baked server default when the config
+				// is omitted; suppression must be explicit on the wire.
+				thinking.suppress = model.thinking.mode === "google-level" ? { level: "MINIMAL" } : { budget: 0 };
 			}
-
-			let thinkingBudget = options.thinkingBudgets?.[effort] ?? GOOGLE_THINKING[effort];
-
-			// Caller's maxTokens is the desired output; add thinking budget on top, capped at model limit
-			const maxTokens = Math.min((base.maxTokens || 0) + thinkingBudget, model.maxTokens);
-
-			// If not enough room for thinking + output, reduce thinking budget
-			if (maxTokens <= thinkingBudget) {
-				thinkingBudget = Math.max(0, maxTokens - MIN_OUTPUT_TOKENS) ?? 0;
-			}
-
-			// If thinking budget is too low, disable thinking
-			if (thinkingBudget <= 0) {
-				return castApi<"google-gemini-cli">({
-					...base,
-					thinking: { enabled: false },
-					toolChoice: mapGoogleToolChoice(options?.toolChoice),
-				});
-			} else {
-				return castApi<"google-gemini-cli">({
-					...base,
-					maxTokens,
-					thinking: { enabled: true, budgetTokens: thinkingBudget },
-					toolChoice: mapGoogleToolChoice(options?.toolChoice),
-				});
-			}
+			return castApi<"google-gemini-cli">({
+				...base,
+				requestModelId: resolveWireModelId(model, undefined),
+				thinking,
+				toolChoice,
+			});
 		}
 
 		case "google-vertex": {

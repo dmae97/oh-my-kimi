@@ -76,7 +76,19 @@ export interface GoogleGeminiCliOptions extends StreamOptions {
 		budgetTokens?: number;
 		/** Thinking level. Use for Gemini 3 models (LOW/HIGH for Pro, MINIMAL/LOW/MEDIUM/HIGH for Flash). */
 		level?: GoogleThinkingLevel;
+		/**
+		 * Explicit wire suppression when `enabled` is false. Cloud Code Assist
+		 * re-applies the per-id baked server default when thinkingConfig is
+		 * omitted, so models with `thinking.suppressWhenOff` must send
+		 * `includeThoughts: false` plus a MINIMAL level (or zero budget).
+		 */
+		suppress?: { level: GoogleThinkingLevel } | { budget: number };
 	};
+	/**
+	 * Upstream wire model id override for collapsed effort-tier variants.
+	 * Serialized as `requestModelId ?? model.requestModelId ?? model.id`.
+	 */
+	requestModelId?: string;
 	projectId?: string;
 }
 
@@ -770,6 +782,17 @@ export function buildRequest(
 		} else if (options.thinking.budgetTokens !== undefined) {
 			generationConfig.thinkingConfig.thinkingBudget = options.thinking.budgetTokens;
 		}
+	} else if (options.thinking?.suppress && model.reasoning) {
+		// Explicit off: omitting thinkingConfig re-applies the per-id baked
+		// server default (the model silently thinks and bills the tokens).
+		const suppress = options.thinking.suppress;
+		generationConfig.thinkingConfig = { includeThoughts: false };
+		if ("level" in suppress) {
+			// Cast to any since our GoogleThinkingLevel mirrors Google's ThinkingLevel enum values
+			generationConfig.thinkingConfig.thinkingLevel = suppress.level as any;
+		} else {
+			generationConfig.thinkingConfig.thinkingBudget = suppress.budget;
+		}
 	}
 
 	const request: CloudCodeAssistRequest["request"] = {
@@ -840,7 +863,7 @@ export function buildRequest(
 
 	return {
 		project: projectId,
-		model: model.id,
+		model: options.requestModelId ?? model.requestModelId ?? model.id,
 		request,
 		...(isAntigravity
 			? {
