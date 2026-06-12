@@ -201,10 +201,22 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 }
 
 fn filter_js_wrapper(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
-	if wrapper_invokes(ctx, &["tsc", "eslint", "biome"]) {
-		lint::filter(ctx, input, exit_code)
-	} else if wrapper_invokes(ctx, &["jest", "vitest", "playwright"]) {
-		node_tests::filter(ctx, input, exit_code)
+	if let Some(tool) = wrapper_invoked_tool(ctx, &["tsc", "eslint", "biome"]) {
+		let routed = MinimizerCtx {
+			program:    tool,
+			subcommand: Some(tool),
+			command:    ctx.command,
+			config:     ctx.config,
+		};
+		lint::filter(&routed, input, exit_code)
+	} else if let Some(tool) = wrapper_invoked_tool(ctx, &["jest", "vitest", "playwright"]) {
+		let routed = MinimizerCtx {
+			program:    tool,
+			subcommand: Some(tool),
+			command:    ctx.command,
+			config:     ctx.config,
+		};
+		node_tests::filter(&routed, input, exit_code)
 	} else if js_tools::supports(ctx.program, ctx.subcommand) {
 		js_tools::filter(ctx, input, exit_code)
 	} else {
@@ -508,6 +520,19 @@ mod tests {
 		let out = filter(&context, input, 0);
 		assert_eq!(out.text, input);
 		assert!(!out.changed);
+	}
+
+	#[test]
+	fn test_wrapper_eslint_json_format_preserved() {
+		// Simulates: npx eslint -f json src/
+		let config = MinimizerConfig::default();
+		let input = r#"[{"filePath":"a.ts","messages":[],"errorCount":0}]"#;
+		let context = ctx("npx", Some("eslint"), "npx eslint -f json src/", &config);
+		let out = filter(&context, input, 0);
+		assert!(
+			out.text.contains("filePath"),
+			"eslint -f json via npx must not be condensed"
+		);
 	}
 
 	#[test]
