@@ -81,6 +81,7 @@ export interface InteractiveModeContext {
 	pendingMessagesContainer: Container;
 	statusContainer: Container;
 	todoContainer: Container;
+	subagentContainer: Container;
 	btwContainer: Container;
 	omfgContainer: Container;
 	errorBannerContainer: Container;

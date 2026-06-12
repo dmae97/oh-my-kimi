@@ -165,7 +165,7 @@ function formatJsonScalar(value: unknown, _theme: Theme): string {
 	return "";
 }
 
-function formatTaskId(id: string): string {
+export function formatTaskId(id: string): string {
 	// Ids are name-based (e.g. "Anna", "Anna-2"); a "." separates nesting levels
 	// (e.g. "Anna.Bob"). Render the hierarchy with a ">" breadcrumb.
 	const segments = id.split(".");
