@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added section support to `SettingsList`: `SettingItem.heading` rows split the list into sections, PgUp/PgDn (`tui.select.pageUp`/`pageDown`) jump between sections (or page when none exist), and wide renders use a split layout — section sidebar on the left, the active section's items on the right — falling back to inline heading rows when the width cannot fit both panes. Headings are skipped by navigation, excluded from search, and styled through the optional `SettingsListTheme.heading`/`section`.
+
 ## [15.11.3] - 2026-06-11
 
 ### Fixed
