@@ -119,18 +119,23 @@ describe("SettingsSelectorComponent memory tab", () => {
 		expect(sidebarTitles).toEqual(["General", "Hindsight"]);
 	});
 
-	it("clears settings search on Escape before closing the selector", () => {
+	it("clears the global settings search on Escape before closing the selector", () => {
 		let cancelCount = 0;
 		const comp = createSelector(() => {
 			cancelCount++;
 		});
 
+		// Typing starts the cross-tab search: banner shows the query and matches.
 		comp.handleInput("b");
-		expect(comp.render(120).join("\n")).toContain("Search: b");
+		const strip = (line: string): string => line.replace(/\x1b\[[0-9;]*m/g, "");
+		const searching = comp.render(120).map(strip).join("\n");
+		expect(searching).toContain("b▌");
+		expect(searching).toMatch(/\d+ match/);
 
+		// First Escape exits search mode without closing the panel.
 		comp.handleInput("\x1b");
 		expect(cancelCount).toBe(0);
-		expect(comp.render(120).join("\n")).not.toContain("Search: b");
+		expect(comp.render(120).join("\n")).not.toContain("matches");
 
 		comp.handleInput("\x1b");
 		expect(cancelCount).toBe(1);
