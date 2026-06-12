@@ -16,6 +16,7 @@
  * itself stays credential-free.
  */
 import { readSseJson } from "@oh-my-pi/pi-utils";
+import { ProviderHttpError } from "../errors";
 import type {
 	Api,
 	AssistantMessage,
@@ -58,7 +59,19 @@ function buildWireOptions(options: SimpleStreamOptions | undefined): Record<stri
 	return wire;
 }
 
-async function decodeGatewayError(response: Response): Promise<Error> {
+/**
+ * Non-2xx response from the auth-gateway `/v1/pi/stream` endpoint. `code`
+ * carries the gateway's error-type token (`authentication_error`,
+ * `rate_limit_error`, `upstream_error`, ...).
+ */
+export class AuthGatewayError extends ProviderHttpError {
+	constructor(message: string, status: number, headers?: Headers, code?: string) {
+		super(message, status, { headers, code });
+		this.name = "AuthGatewayError";
+	}
+}
+
+async function decodeGatewayError(response: Response): Promise<AuthGatewayError> {
 	const status = response.status;
 	let body: unknown;
 	try {
@@ -71,16 +84,16 @@ async function decodeGatewayError(response: Response): Promise<Error> {
 		if (typeof err === "object" && err !== null) {
 			const message = (err as { message?: unknown }).message;
 			const type = (err as { type?: unknown }).type;
-			const out = new Error(typeof message === "string" ? message : `auth-gateway ${status}`);
-			(out as { status?: number; type?: string }).status = status;
-			if (typeof type === "string") (out as { type?: string }).type = type;
-			return out;
+			return new AuthGatewayError(
+				typeof message === "string" ? message : `auth-gateway ${status}`,
+				status,
+				response.headers,
+				typeof type === "string" ? type : undefined,
+			);
 		}
 	}
 	const text = typeof body === "string" ? body : JSON.stringify(body);
-	const err = new Error(`auth-gateway ${status}: ${text || response.statusText}`);
-	(err as { status?: number }).status = status;
-	return err;
+	return new AuthGatewayError(`auth-gateway ${status}: ${text || response.statusText}`, status, response.headers);
 }
 
 /**

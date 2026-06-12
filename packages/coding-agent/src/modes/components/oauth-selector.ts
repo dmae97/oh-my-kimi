@@ -6,6 +6,7 @@ import {
 	fuzzyFilter,
 	matchesKey,
 	ScrollView,
+	type SgrMouseEvent,
 	Spacer,
 	TruncatedText,
 } from "@oh-my-pi/pi-tui";
@@ -15,6 +16,12 @@ import type { AuthStorage, CredentialOriginKind } from "../../session/auth-stora
 import { DynamicBorder } from "./dynamic-border";
 
 const OAUTH_SELECTOR_MAX_VISIBLE = 10;
+
+/**
+ * Rendered lines before the provider rows: top border, spacer, title, spacer
+ * (must mirror the constructor's addChild order).
+ */
+const LIST_ROW_OFFSET = 4;
 
 /** Compact, human-readable tag for each credential-origin leg. */
 const ORIGIN_LABELS: Record<CredentialOriginKind, string> = {
@@ -34,6 +41,10 @@ export class OAuthSelectorComponent extends Container {
 	#filteredProviders: OAuthProviderInfo[] = [];
 	#searchQuery = "";
 	#selectedIndex: number = 0;
+	#hoveredIndex: number | null = null;
+	/** First provider index of the visible ScrollView window (last #updateList). */
+	#scrollStart = 0;
+	#visibleCount = 0;
 	#mode: "login" | "logout";
 	#authStorage: AuthStorage;
 	#onSelectCallback: (providerId: string) => void;
@@ -252,6 +263,8 @@ export class OAuthSelectorComponent extends Container {
 				? 0
 				: Math.max(0, Math.min(this.#selectedIndex - Math.floor(maxVisible / 2), total - maxVisible));
 		const endIndex = Math.min(startIndex + maxVisible, total);
+		this.#scrollStart = startIndex;
+		this.#visibleCount = endIndex - startIndex;
 
 		const rows: string[] = [];
 		for (let i = startIndex; i < endIndex; i++) {
@@ -269,6 +282,9 @@ export class OAuthSelectorComponent extends Container {
 			} else {
 				const text = isAvailable ? `  ${provider.name}` : theme.fg("dim", `  ${provider.name}`);
 				line = text + statusIndicator;
+			}
+			if (!isSelected && i === this.#hoveredIndex) {
+				line = theme.bg("selectedBg", line);
 			}
 			rows.push(line);
 		}
@@ -354,15 +370,59 @@ export class OAuthSelectorComponent extends Container {
 		}
 		// Enter
 		else if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
-			const selectedProvider = this.#filteredProviders[this.#selectedIndex];
-			if (selectedProvider?.available) {
-				this.#statusMessage = undefined;
-				this.stopValidation();
-				this.#onSelectCallback(selectedProvider.id);
-			} else if (selectedProvider) {
-				this.#statusMessage = "Provider unavailable in this environment.";
+			this.#confirmSelection();
+		}
+	}
+
+	/** Confirm the selected provider (Enter or mouse click). */
+	#confirmSelection(): void {
+		const selectedProvider = this.#filteredProviders[this.#selectedIndex];
+		if (selectedProvider?.available) {
+			this.#statusMessage = undefined;
+			this.stopValidation();
+			this.#onSelectCallback(selectedProvider.id);
+		} else if (selectedProvider) {
+			this.#statusMessage = "Provider unavailable in this environment.";
+			this.#updateList();
+		}
+	}
+
+	/** Move the selection one step for a wheel notch (clamped, no wrap). */
+	handleWheel(delta: -1 | 1): void {
+		if (this.#filteredProviders.length === 0) return;
+		const next = Math.max(0, Math.min(this.#selectedIndex + delta, this.#filteredProviders.length - 1));
+		if (next === this.#selectedIndex) return;
+		this.#selectedIndex = next;
+		this.#statusMessage = undefined;
+		this.#updateList();
+	}
+
+	/**
+	 * Route an SGR mouse report at component-local coordinates. Provider rows
+	 * start LIST_ROW_OFFSET lines into the render; the ScrollView window shows
+	 * #visibleCount rows from #scrollStart. Wheel moves the selection, motion
+	 * drives the hover band, and a left click selects and confirms like Enter.
+	 */
+	routeMouse(event: SgrMouseEvent, line: number, _col: number): void {
+		if (event.wheel !== null) {
+			this.handleWheel(event.wheel);
+			return;
+		}
+		const localRow = line - LIST_ROW_OFFSET;
+		const index = localRow >= 0 && localRow < this.#visibleCount ? this.#scrollStart + localRow : undefined;
+		const target = index !== undefined && index < this.#filteredProviders.length ? index : null;
+		if (event.motion) {
+			if (target !== this.#hoveredIndex) {
+				this.#hoveredIndex = target;
 				this.#updateList();
 			}
+			return;
 		}
+		if (!event.leftClick || target === null) return;
+		if (target !== this.#selectedIndex) {
+			this.#selectedIndex = target;
+			this.#statusMessage = undefined;
+		}
+		this.#confirmSelection();
 	}
 }

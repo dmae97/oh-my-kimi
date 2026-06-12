@@ -174,6 +174,7 @@ describe("hindsightBackend.start", () => {
 		session.emit({ type: "agent_end", messages: [] });
 		await Bun.sleep(0);
 		expect(retainSpy).toHaveBeenCalledTimes(1);
+		expect(retainSpy.mock.calls[0]?.[2]?.timestamp).toBeInstanceOf(Date);
 	});
 
 	it("aliases parent state on subagent runs (taskDepth > 0) so tools share the parent bank", async () => {
@@ -876,6 +877,7 @@ describe("hindsightBackend retain queue flush on session teardown", () => {
 		expect(bankId).toBe("omp");
 		expect(items).toHaveLength(1);
 		expect(items[0].content).toBe("durable fact");
+		expect(items[0].timestamp).toBeInstanceOf(Date);
 	});
 
 	// Companion contract test: documents the failure mode the dispose-order

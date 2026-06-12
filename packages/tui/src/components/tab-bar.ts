@@ -18,6 +18,10 @@ export interface Tab {
 	id: string;
 	/** Display label shown in the tab bar */
 	label: string;
+	/** Compact form (e.g. just the icon) used when the bar must shrink to fit one line. */
+	short?: string;
+	/** Render with the muted style and skip during keyboard navigation. */
+	muted?: boolean;
 }
 
 /** Theme for styling the tab bar */
@@ -30,6 +34,10 @@ export interface TabBarTheme {
 	inactiveTab: (text: string) => string;
 	/** Style for the hint text (e.g., "(tab to cycle)") */
 	hint: (text: string) => string;
+	/** Style for muted tabs. Falls back to `inactiveTab` when omitted. */
+	mutedTab?: (text: string) => string;
+	/** Style for the tab under the mouse pointer. Falls back to `inactiveTab` when omitted. */
+	hoverTab?: (text: string) => string;
 }
 
 /**
@@ -50,9 +58,15 @@ export class TabBar implements Component {
 	#activeIndex: number = 0;
 	#theme: TabBarTheme;
 	#label: string;
+	#hoverTabId: string | null = null;
+	/** Per-render tab hit zones: 0-based line + [start, end) columns. */
+	#hitZones: { line: number; start: number; end: number; index: number }[] = [];
 
 	/** Callback fired when the active tab changes */
 	onTabChange?: (tab: Tab, index: number) => void;
+
+	/** Render the trailing "(tab to cycle)" hint. Disable when the host folds the hint into its own footer. */
+	showHint = true;
 
 	constructor(label: string, tabs: Tab[], theme: TabBarTheme, initialIndex: number = 0) {
 		this.#label = label;
@@ -80,14 +94,55 @@ export class TabBar implements Component {
 		}
 	}
 
-	/** Move to the next tab (wraps to first tab after last) */
-	nextTab(): void {
-		this.setActiveIndex((this.#activeIndex + 1) % this.#tabs.length);
+	/**
+	 * Replace the tab set without firing onTabChange. The active tab is
+	 * preserved by id when it survives the swap (or forced via `activeId`);
+	 * otherwise the index is clamped.
+	 */
+	setTabs(tabs: Tab[], activeId?: string): void {
+		const targetId = activeId ?? this.#tabs[this.#activeIndex]?.id;
+		this.#tabs = tabs;
+		const index = tabs.findIndex(tab => tab.id === targetId);
+		this.#activeIndex = index >= 0 ? index : Math.max(0, Math.min(this.#activeIndex, tabs.length - 1));
 	}
 
-	/** Move to the previous tab (wraps to last tab before first) */
+	/** Set the active tab by id without firing onTabChange. Returns false when the id is unknown. */
+	setActiveById(id: string): boolean {
+		const index = this.#tabs.findIndex(tab => tab.id === id);
+		if (index === -1) return false;
+		this.#activeIndex = index;
+		return true;
+	}
+
+	/** Activate the tab with `id`, firing onTabChange when it changes. Muted tabs are ignored. */
+	selectTab(id: string): boolean {
+		const index = this.#tabs.findIndex(tab => tab.id === id);
+		if (index === -1 || this.#tabs[index]?.muted) return false;
+		this.setActiveIndex(index);
+		return true;
+	}
+
+	/** Move to the next non-muted tab (wraps to first tab after last) */
+	nextTab(): void {
+		this.#stepTab(1);
+	}
+
+	/** Move to the previous non-muted tab (wraps to last tab before first) */
 	prevTab(): void {
-		this.setActiveIndex((this.#activeIndex - 1 + this.#tabs.length) % this.#tabs.length);
+		this.#stepTab(-1);
+	}
+
+	/** Step to the nearest non-muted tab in `delta` direction; no-op when none exists. */
+	#stepTab(delta: -1 | 1): void {
+		const len = this.#tabs.length;
+		if (len === 0) return;
+		for (let step = 1; step <= len; step++) {
+			const index = (((this.#activeIndex + delta * step) % len) + len) % len;
+			if (!this.#tabs[index]?.muted) {
+				this.setActiveIndex(index);
+				return;
+			}
+		}
 	}
 
 	invalidate(): void {
@@ -110,38 +165,78 @@ export class TabBar implements Component {
 		return false;
 	}
 
-	/** Render the tab bar, wrapping to multiple lines if needed */
+	/**
+	 * Render the tab bar. When the full labels overflow the width, tabs are
+	 * collapsed to their `short` form one by one — starting with the tabs
+	 * farthest from the active one — until the bar fits on a single line.
+	 * Wrapping to multiple lines is the last resort.
+	 */
 	render(width: number): readonly string[] {
 		const maxWidth = Math.max(1, width);
-		const chunks: string[] = [];
 
-		// Label prefix
-		chunks.push(this.#theme.label(`${this.#label}:`));
-		chunks.push("  ");
+		interface TabChunk {
+			text: string;
+			/** Index into #tabs when this chunk is a clickable tab button. */
+			tabIndex?: number;
+		}
 
-		// Tab buttons
-		for (let i = 0; i < this.#tabs.length; i++) {
-			const tab = this.#tabs[i];
-			if (i === this.#activeIndex) {
-				chunks.push(this.#theme.activeTab(` ${tab.label} `));
-			} else {
-				chunks.push(this.#theme.inactiveTab(` ${tab.label} `));
+		const buildChunks = (labels: readonly string[]): TabChunk[] => {
+			const chunks: TabChunk[] = [];
+			// Label prefix (omitted when the label is empty)
+			if (this.#label) {
+				chunks.push({ text: this.#theme.label(`${this.#label}:`) });
+				chunks.push({ text: "  " });
 			}
-			if (i < this.#tabs.length - 1) {
-				chunks.push("  ");
+			for (let i = 0; i < this.#tabs.length; i++) {
+				const tab = this.#tabs[i];
+				// Muted tabs never take the active highlight: they are skipped by
+				// navigation and only become "active" transiently via setTabs swaps.
+				// A hovered (non-active) tab lights up so mouse users see the target.
+				const hovered = tab.id === this.#hoverTabId && !tab.muted && i !== this.#activeIndex;
+				const style = tab.muted
+					? (this.#theme.mutedTab ?? this.#theme.inactiveTab)
+					: i === this.#activeIndex
+						? this.#theme.activeTab
+						: hovered
+							? (this.#theme.hoverTab ?? this.#theme.inactiveTab)
+							: this.#theme.inactiveTab;
+				chunks.push({ text: style(` ${labels[i]} `), tabIndex: i });
+				if (i < this.#tabs.length - 1) {
+					chunks.push({ text: "  " });
+				}
+			}
+			// Navigation hint
+			if (this.showHint) {
+				chunks.push({ text: "  " });
+				chunks.push({ text: this.#theme.hint("(tab to cycle)") });
+			}
+			return chunks;
+		};
+		const totalWidth = (chunks: TabChunk[]): number =>
+			chunks.reduce((sum, chunk) => sum + visibleWidth(chunk.text), 0);
+
+		const labels = this.#tabs.map(tab => tab.label);
+		let chunks = buildChunks(labels);
+
+		if (totalWidth(chunks) > maxWidth) {
+			const collapseOrder = this.#tabs
+				.map((_, index) => index)
+				.filter(index => index !== this.#activeIndex && this.#tabs[index].short !== undefined)
+				.sort((a, b) => Math.abs(b - this.#activeIndex) - Math.abs(a - this.#activeIndex));
+			for (const index of collapseOrder) {
+				labels[index] = this.#tabs[index].short ?? this.#tabs[index].label;
+				chunks = buildChunks(labels);
+				if (totalWidth(chunks) <= maxWidth) break;
 			}
 		}
 
-		// Navigation hint
-		chunks.push("  ");
-		chunks.push(this.#theme.hint("(tab to cycle)"));
-
+		this.#hitZones = [];
 		const lines: string[] = [];
 		let currentLine = "";
 		let currentWidth = 0;
 
 		for (const chunk of chunks) {
-			const chunkWidth = visibleWidth(chunk);
+			const chunkWidth = visibleWidth(chunk.text);
 			if (chunkWidth <= 0) {
 				continue;
 			}
@@ -152,7 +247,10 @@ export class TabBar implements Component {
 					currentLine = "";
 					currentWidth = 0;
 				}
-				lines.push(truncateToWidth(chunk, maxWidth));
+				if (chunk.tabIndex !== undefined) {
+					this.#hitZones.push({ line: lines.length, start: 0, end: maxWidth, index: chunk.tabIndex });
+				}
+				lines.push(truncateToWidth(chunk.text, maxWidth));
 				continue;
 			}
 
@@ -162,7 +260,15 @@ export class TabBar implements Component {
 				currentWidth = 0;
 			}
 
-			currentLine += chunk;
+			if (chunk.tabIndex !== undefined) {
+				this.#hitZones.push({
+					line: lines.length,
+					start: currentWidth,
+					end: currentWidth + chunkWidth,
+					index: chunk.tabIndex,
+				});
+			}
+			currentLine += chunk.text;
 			currentWidth += chunkWidth;
 		}
 
@@ -171,5 +277,24 @@ export class TabBar implements Component {
 		}
 
 		return lines.length > 0 ? lines : [""];
+	}
+
+	/**
+	 * Resolve a pointer position against the last rendered frame. `line` is the
+	 * 0-based line index within this component's render output, `col` the
+	 * 0-based column.
+	 */
+	tabAt(line: number, col: number): Tab | undefined {
+		for (const zone of this.#hitZones) {
+			if (zone.line === line && col >= zone.start && col < zone.end) {
+				return this.#tabs[zone.index];
+			}
+		}
+		return undefined;
+	}
+
+	/** Highlight the tab under the pointer (null clears). */
+	setHoverTab(id: string | null): void {
+		this.#hoverTabId = id;
 	}
 }

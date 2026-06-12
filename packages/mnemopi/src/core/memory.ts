@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import type { Api, Model } from "@oh-my-pi/pi-ai";
+import type { Api, ApiKey, Model } from "@oh-my-pi/pi-ai";
 
 import { dbPath as configuredDbPath } from "../config";
 import { closeQuietly } from "../db";
@@ -35,13 +35,15 @@ export interface MnemopiOptions {
 	readonly noEmbeddings?: boolean;
 	readonly embeddingModel?: string;
 	readonly embeddingApiUrl?: string;
-	readonly embeddingApiKey?: string;
+	readonly embeddingApiKey?: ApiKey;
 	readonly embeddings?: false | MnemopiEmbeddingRuntimeOptions;
 	readonly llmEnabled?: boolean;
 	readonly llmBaseUrl?: string;
-	readonly llmApiKey?: string;
+	readonly llmApiKey?: ApiKey;
 	readonly llmModel?: string | Model<Api>;
 	readonly llm?: false | MnemopiLlmRuntimeOptions | Model<Api> | MnemopiLlmCompletion;
+	/** Escalate best-effort failure logs (embedding pipeline) from debug to warn. */
+	readonly debug?: boolean;
 }
 
 export interface RememberInput extends MemoryInput {
@@ -219,10 +221,11 @@ function resolveRuntimeOptions(options: MnemopiOptions): ResolvedMnemopiRuntimeO
 		}
 	}
 
-	if (embeddings === undefined && llm === undefined) {
+	const debug = options.debug ? true : undefined;
+	if (embeddings === undefined && llm === undefined && debug === undefined) {
 		return undefined;
 	}
-	return { embeddings, llm };
+	return { embeddings, llm, debug };
 }
 
 let defaultInstance: Mnemopi | null = null;

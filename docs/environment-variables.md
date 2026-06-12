@@ -201,6 +201,8 @@ OAuth host chain: `KIMI_CODE_OAUTH_HOST` → `KIMI_OAUTH_HOST` → `https://auth
 | ------------------------------------------ | ---------------------------------------------------- |
 | `PI_CODEX_DEBUG`                           | `1`/`true` enables Codex provider debug logging      |
 | `PI_CODEX_WEBSOCKET`                       | `1`/`true` enables websocket transport preference    |
+| `PI_CODEX_STATEFUL`                        | `0`/`false` disables stateful SSE turn chaining (`previous_response_id`); enabled by default |
+| `PI_OPENAI_STATEFUL`                       | Overrides the stateful-chaining default for the platform OpenAI Responses API (`previous_response_id`, forces `store: true`): on by default against api.openai.com, off elsewhere |
 | `PI_CODEX_WEBSOCKET_V2`                    | `1`/`true` enables websocket v2 path                 |
 | `PI_CODEX_WEBSOCKET_IDLE_TIMEOUT_MS`       | Positive integer override (default 300000)           |
 | `PI_CODEX_WEBSOCKET_RETRY_BUDGET`          | Non-negative integer override (default 5)            |

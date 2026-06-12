@@ -6,16 +6,17 @@ beforeAll(async () => {
 });
 
 describe("getSettingsListTheme", () => {
-	it("keeps modified labels dirty while selected values use the cursor accent", () => {
+	it("keeps modified labels and values dirty even when selected", () => {
 		const settingsTheme = getSettingsListTheme();
 
+		const selectedChangedLabel = settingsTheme.label("Changed", true, true);
 		const selectedChangedValue = settingsTheme.value("changed", true, true);
 		const unselectedChangedValue = settingsTheme.value("changed", false, true);
-		const selectedChangedLabel = settingsTheme.label("Changed", true, true);
+		const selectedDefaultValue = settingsTheme.value("default", true, false);
 
-		expect(selectedChangedValue).toBe(theme.fg("accent", "changed"));
-		expect(unselectedChangedValue).toBe(theme.fg("statusLineGitDirty", "changed"));
 		expect(selectedChangedLabel).toBe(theme.fg("statusLineGitDirty", "Changed"));
-		expect(selectedChangedValue).not.toBe(unselectedChangedValue);
+		expect(selectedChangedValue).toBe(theme.fg("statusLineGitDirty", "changed"));
+		expect(unselectedChangedValue).toBe(theme.fg("statusLineGitDirty", "changed"));
+		expect(selectedDefaultValue).toBe(theme.fg("accent", "default"));
 	});
 });

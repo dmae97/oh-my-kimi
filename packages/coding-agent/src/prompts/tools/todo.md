@@ -2,7 +2,7 @@
 
 Manages a phased task list. Pass `ops`: a flat array of operations.
 The next pending task is auto-promoted to `in_progress` after each completion.
-Allowed `op` values are only `init`, `start`, `done`, `drop`, `rm`, `append`, `note`, and `view`. `pending` is a task status, not an `op`; leave not-yet-started tasks implicit in `init`/`append` lists.
+Allowed `op` values are only `init`, `start`, `done`, `drop`, `rm`, `append`, and `view`. `pending` is a task status, not an `op`; leave not-yet-started tasks implicit in `init`/`append` lists.
 
 ## Operations
 
@@ -14,7 +14,6 @@ Allowed `op` values are only `init`, `start`, `done`, `drop`, `rm`, `append`, `n
 |`drop`|`task` or `phase`|Mark abandoned|
 |`rm`|`task` or `phase` (optional)|Remove task or phase's tasks; omit both to clear the entire list|
 |`append`|`phase`, `items: string[]`|Append tasks to `phase`; lazily creates phase|
-|`note`|`task`, `text`|Append a note to a task. Reminders for future-you only.|
 |`view`|—|Read-only: echo the current list without modifying it|
 
 ## Anatomy

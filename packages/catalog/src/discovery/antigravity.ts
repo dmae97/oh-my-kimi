@@ -1,6 +1,7 @@
 import * as z from "zod/v4";
 import type { ModelSpec } from "../types";
 import { toPositiveNumber } from "../utils";
+import { ANTIGRAVITY_VARIANT_COLLAPSE_TABLE, collapseEffortVariants } from "../variant-collapse";
 import { getAntigravityUserAgent } from "../wire/gemini-headers";
 
 const DEFAULT_ANTIGRAVITY_DISCOVERY_ENDPOINTS = [
@@ -11,13 +12,7 @@ const FETCH_AVAILABLE_MODELS_PATH = "/v1internal:fetchAvailableModels";
 
 const DEFAULT_CONTEXT_WINDOW = 200_000;
 const DEFAULT_MAX_TOKENS = 64_000;
-const ANTIGRAVITY_DISCOVERY_DENYLIST = new Set([
-	"chat_20706",
-	"chat_23310",
-	"gemini-2.5-flash-thinking",
-	"gemini-3-pro-low",
-	"gemini-2.5-pro",
-]);
+const ANTIGRAVITY_DISCOVERY_DENYLIST = new Set(["chat_20706", "chat_23310", "gemini-2.5-pro"]);
 
 /**
  * Raw model metadata returned by Antigravity's `fetchAvailableModels` endpoint.
@@ -224,7 +219,7 @@ export async function fetchAntigravityDiscoveryModels(
 			const supportsImages = model.supportsImages === true;
 			models.push({
 				id: modelId,
-				name: model.displayName ? `${model.displayName} (Antigravity)` : modelId,
+				name: model.displayName || modelId,
 				api: "google-gemini-cli",
 				provider: "google-antigravity",
 				baseUrl: endpoint,
@@ -241,8 +236,12 @@ export async function fetchAntigravityDiscoveryModels(
 			});
 		}
 
-		models.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
-		return models;
+		// Collapse effort-tier variants at the source so runtime discovery,
+		// the gemini-cli re-provision, and the catalog generator all see
+		// logical ids only.
+		const collapsed = collapseEffortVariants(models, ANTIGRAVITY_VARIANT_COLLAPSE_TABLE);
+		collapsed.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+		return collapsed;
 	}
 
 	return null;

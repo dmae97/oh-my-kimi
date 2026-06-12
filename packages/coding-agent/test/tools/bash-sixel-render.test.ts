@@ -4,6 +4,7 @@ import * as path from "node:path";
 import type { RenderResultOptions } from "@oh-my-pi/pi-agent-core";
 import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { bashToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/bash";
+import { previewWindowRows } from "@oh-my-pi/pi-coding-agent/tools/render-utils";
 import { ImageProtocol, TERMINAL } from "@oh-my-pi/pi-tui";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 
@@ -303,5 +304,40 @@ describe("bashToolRenderer", () => {
 		(component as { invalidate?: () => void }).invalidate?.();
 		const postInvalidate = component.render(120);
 		expect(postInvalidate).not.toBe(sameAgainCached);
+	});
+
+	it("renders the collapsed command as a viewport tail window in every state — no stream→final expansion", async () => {
+		// The collapsed command is a tail window sized from the viewport: the end
+		// (the live edge while args stream) stays visible behind an "earlier
+		// lines" marker. The finalized collapsed block MUST render the identical
+		// window — snapping the full command open on completion makes the block
+		// jump. Only ctrl+o (expanded) uncaps.
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		const uiTheme = theme!;
+		const total = previewWindowRows() + 5;
+		const command = Array.from({ length: total }, (_, i) => `echo step_${i}`).join("\n");
+		const render = (opts: { expanded: boolean; isPartial: boolean }) => {
+			const component = bashToolRenderer.renderResult(
+				{ content: [{ type: "text", text: "" }], details: {}, isError: false },
+				opts,
+				uiTheme,
+				{ command },
+			);
+			return sanitizeText(component.render(120).join("\n"));
+		};
+
+		for (const rendered of [
+			render({ expanded: false, isPartial: true }),
+			render({ expanded: false, isPartial: false }),
+		]) {
+			expect(rendered).toContain(`echo step_${total - 1}`);
+			expect(rendered).toContain("earlier line");
+			expect(rendered).not.toContain("echo step_0");
+		}
+
+		const expandedFinal = render({ expanded: true, isPartial: false });
+		expect(expandedFinal).toContain("echo step_0");
+		expect(expandedFinal).not.toContain("earlier line");
 	});
 });

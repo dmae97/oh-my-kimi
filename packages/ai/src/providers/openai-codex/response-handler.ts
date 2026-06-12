@@ -1,4 +1,5 @@
 import { toNumber } from "@oh-my-pi/pi-catalog/utils";
+import { ProviderHttpError } from "../../errors";
 
 export type CodexRateLimit = {
 	used_percent?: number;
@@ -14,16 +15,34 @@ export type CodexRateLimits = {
 export type CodexErrorInfo = {
 	message: string;
 	status: number;
+	/** Machine-readable error code (`error.code` or `error.type` from the response body), when present. */
+	code?: string;
 	friendlyMessage?: string;
 	rateLimits?: CodexRateLimits;
 	raw?: string;
 };
+
+/** Non-2xx response from the Codex backend, with the parsed body retained. */
+export class CodexApiError extends ProviderHttpError {
+	readonly info: CodexErrorInfo;
+
+	constructor(info: CodexErrorInfo, headers?: Headers) {
+		super(info.friendlyMessage || info.message, info.status, { headers, code: info.code });
+		this.name = "CodexApiError";
+		this.info = info;
+	}
+
+	static async fromResponse(response: Response): Promise<CodexApiError> {
+		return new CodexApiError(await parseCodexError(response), response.headers);
+	}
+}
 
 export async function parseCodexError(response: Response): Promise<CodexErrorInfo> {
 	const raw = await response.text();
 	let message = raw || response.statusText || "Request failed";
 	let friendlyMessage: string | undefined;
 	let rateLimits: CodexRateLimits | undefined;
+	let errorCode: string | undefined;
 
 	try {
 		const parsed = JSON.parse(raw) as { error?: Record<string, unknown> };
@@ -46,6 +65,7 @@ export async function parseCodexError(response: Response): Promise<CodexErrorInf
 				: undefined;
 
 		const code = String((err as { code?: string; type?: string }).code ?? (err as { type?: string }).type ?? "");
+		errorCode = code || undefined;
 		const resetsAt = (err as { resets_at?: number }).resets_at ?? primary.resets_at ?? secondary.resets_at;
 		const mins = resetsAt ? Math.max(0, Math.round((resetsAt * 1000 - Date.now()) / 60000)) : undefined;
 
@@ -68,6 +88,7 @@ export async function parseCodexError(response: Response): Promise<CodexErrorInf
 	return {
 		message,
 		status: response.status,
+		code: errorCode,
 		friendlyMessage,
 		rateLimits,
 		raw: raw,

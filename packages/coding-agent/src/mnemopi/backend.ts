@@ -1,6 +1,7 @@
 import { rm } from "node:fs/promises";
 import * as path from "node:path";
-import { completeSimple } from "@oh-my-pi/pi-ai";
+import { type ApiKeyResolver, completeSimple } from "@oh-my-pi/pi-ai";
+import { hostMatchesUrl } from "@oh-my-pi/pi-catalog/hosts";
 import type { Mnemopi } from "@oh-my-pi/pi-mnemopi";
 import type * as MnemopiDiagnoseNs from "@oh-my-pi/pi-mnemopi/diagnose";
 import type { DiagnosticSummary } from "@oh-my-pi/pi-mnemopi/diagnose";
@@ -433,6 +434,25 @@ async function loadMnemopiConfigWithProviders(
 	return config;
 }
 
+/**
+ * When mnemopi targets OpenRouter (its default embedding host) without a
+ * user-pinned key, hand it the central {@link ApiKeyResolver} so requests pick
+ * up AuthStorage credentials, force-refresh on 401, and rotate across sibling
+ * keys. Returns undefined when the URL points elsewhere or when no OpenRouter
+ * credential exists, preserving mnemopi's env-key fallback and its
+ * "no key -> API embeddings unavailable" gating.
+ */
+async function openrouterKeyResolver(
+	modelRegistry: ModelRegistry,
+	sessionId: string,
+	baseUrl: string | undefined,
+): Promise<ApiKeyResolver | undefined> {
+	if (baseUrl !== undefined && !hostMatchesUrl(baseUrl, "openrouter")) return undefined;
+	const key = await modelRegistry.getApiKeyForProvider("openrouter", sessionId);
+	if (key === undefined || key === "") return undefined;
+	return modelRegistry.resolver("openrouter", { sessionId });
+}
+
 async function resolveMnemopiProviderOptions(
 	config: MnemopiBackendConfig,
 	settings: MemoryBackendStartOptions["settings"],
@@ -443,7 +463,9 @@ async function resolveMnemopiProviderOptions(
 		noEmbeddings: config.providerOptions.noEmbeddings,
 		embeddingModel: config.providerOptions.embeddingModel,
 		embeddingApiUrl: config.providerOptions.embeddingApiUrl,
-		embeddingApiKey: config.providerOptions.embeddingApiKey,
+		embeddingApiKey:
+			config.providerOptions.embeddingApiKey ??
+			(await openrouterKeyResolver(modelRegistry, sessionId, config.providerOptions.embeddingApiUrl)),
 		llm: false,
 	};
 
@@ -469,7 +491,11 @@ async function resolveMnemopiProviderOptions(
 			...base,
 			llm: {
 				baseUrl: config.llmBaseUrl,
-				apiKey: config.llmApiKey,
+				apiKey:
+					config.llmApiKey ??
+					(config.llmBaseUrl === undefined
+						? undefined
+						: await openrouterKeyResolver(modelRegistry, sessionId, config.llmBaseUrl)),
 				model: config.llmModel,
 			},
 		};
@@ -499,11 +525,7 @@ async function resolveMnemopiProviderOptions(
 						messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
 					},
 					{
-						apiKey: modelRegistry.resolver(model.provider, {
-							sessionId,
-							baseUrl: model.baseUrl,
-							modelId: model.id,
-						}),
+						apiKey: modelRegistry.resolver(model, sessionId),
 						maxTokens: opts?.maxTokens,
 						temperature: opts?.temperature,
 					},

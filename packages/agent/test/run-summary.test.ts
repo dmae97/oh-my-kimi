@@ -547,7 +547,10 @@ describe("skipped tools without spans", () => {
 			description: "fast",
 			parameters: z.object({ value: z.string().optional() }),
 			intent: "omit",
-			execute: async () => ({ content: [{ type: "text", text: "fast-ok" }], details: {} }),
+			execute: async () => {
+				fastDone = true;
+				return { content: [{ type: "text", text: "fast-ok" }], details: {} };
+			},
 		};
 		const slowTool: AgentTool = {
 			name: "slow",
@@ -571,8 +574,8 @@ describe("skipped tools without spans", () => {
 				return { content: [{ type: "text", text: "slow-ok" }], details: {} };
 			},
 		};
-		let triggered = false;
-		let getSteeringCallCount = 0;
+		let fastDone = false;
+		let drained = false;
 		const mock = createMockModel({
 			responses: [
 				{
@@ -592,14 +595,14 @@ describe("skipped tools without spans", () => {
 				convertToLlm: identityConverter,
 				telemetry: { tracer },
 				interruptMode: "immediate",
+				// The post-tool poll peeks; the boundary dequeues. The pre-chat
+				// startup poll sees an empty queue (fast tool hasn't run yet), the
+				// checkSteering peek after the fast tool finishes triggers the
+				// interrupt, and the boundary dequeue drains the message once.
+				hasSteeringMessages: () => fastDone && !drained,
 				getSteeringMessages: async () => {
-					// First call is at runLoopBody startup BEFORE any chat happens —
-					// suppress it so the tools actually start. Return steering on the
-					// next call (inside checkSteering after fast-tool finishes).
-					getSteeringCallCount += 1;
-					if (getSteeringCallCount === 1) return [];
-					if (triggered) return [];
-					triggered = true;
+					if (!fastDone || drained) return [];
+					drained = true;
 					return [createUserMessage("steering")];
 				},
 			},
@@ -633,9 +636,12 @@ describe("regressions: agent loop telemetry/run summary", () => {
 			parameters: z.object({ value: z.string().optional() }),
 			intent: "omit",
 			concurrency: "exclusive",
-			execute: async () => ({ content: [{ type: "text", text: "ok" }], details: {} }),
+			execute: async () => {
+				state.firstDone = true;
+				return { content: [{ type: "text", text: "ok" }], details: {} };
+			},
 		};
-		const callCount = { n: 0 };
+		const state = { firstDone: false, drained: false };
 		const mock = createMockModel({
 			responses: [
 				{
@@ -657,14 +663,14 @@ describe("regressions: agent loop telemetry/run summary", () => {
 				convertToLlm: identityConverter,
 				telemetry: { tracer },
 				interruptMode: "immediate",
+				// Peek triggers `interruptState.triggered` after the first call
+				// completes; the remaining two exclusive calls hit the early-return
+				// inside `runTool`. The boundary dequeue drains the message once.
+				hasSteeringMessages: () => state.firstDone && !state.drained,
 				getSteeringMessages: async () => {
-					callCount.n += 1;
-					// Pre-chat poll (call 1) returns nothing so tools start;
-					// the first post-tool checkSteering (call 2) injects steering
-					// and flips `interruptState.triggered` for the rest of the
-					// batch. Subsequent polls return nothing so the loop drains.
-					if (callCount.n === 2) return [createUserMessage("stop")];
-					return [];
+					if (!state.firstDone || state.drained) return [];
+					state.drained = true;
+					return [createUserMessage("stop")];
 				},
 			},
 			undefined,

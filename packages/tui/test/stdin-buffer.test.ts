@@ -6,6 +6,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { setKittyProtocolActive } from "@oh-my-pi/pi-tui/keys";
 import { StdinBuffer } from "@oh-my-pi/pi-tui/stdin-buffer";
 
 describe("StdinBuffer", () => {
@@ -13,6 +14,7 @@ describe("StdinBuffer", () => {
 	let emittedSequences: string[];
 
 	beforeEach(() => {
+		setKittyProtocolActive(false);
 		buffer = new StdinBuffer({ timeout: 10 });
 
 		// Collect emitted sequences
@@ -27,11 +29,24 @@ describe("StdinBuffer", () => {
 		// buffer would otherwise emit into the current test's emittedSequences
 		// (the data listener closes over the reassigned module variable).
 		buffer.destroy();
+		setKittyProtocolActive(false);
 	});
 
 	// Helper to process data through the buffer
 	function processInput(data: string | Buffer): void {
 		buffer.process(data);
+	}
+
+	// Poll until `predicate` holds. Fixed sleeps race the flush timer chain
+	// (timeout -> setTimeout(0) deferral): under parallel test load, an expired
+	// sleep with an older deadline resolves before the deferral fires, so the
+	// assertion would observe pre-flush state. The deadline only guards against
+	// a hung test; the caller's expect() reports the real failure.
+	async function waitUntil(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
+		const deadline = Date.now() + timeoutMs;
+		while (!predicate() && Date.now() < deadline) {
+			await Bun.sleep(2);
+		}
 	}
 
 	describe("Regular Characters", () => {
@@ -89,13 +104,98 @@ describe("StdinBuffer", () => {
 		});
 
 		it("should flush incomplete sequence after timeout", async () => {
-			processInput("\x1b[<35");
+			// Non-mouse CSI partial: ambiguous, so it flushes after the timeout.
+			processInput("\x1b[1;5");
 			expect(emittedSequences).toEqual([]);
 
-			// Wait for timeout
-			await Bun.sleep(15);
+			// Wait for the flush timeout to deliver the partial
+			await waitUntil(() => emittedSequences.length > 0);
 
-			expect(emittedSequences).toEqual(["\x1b[<35"]);
+			expect(emittedSequences).toEqual(["\x1b[1;5"]);
+		});
+
+		it("should hold a split SGR mouse partial past the flush timeout and reassemble it", async () => {
+			// `\x1b[<…` is unambiguously a mouse report: the partial must never
+			// flush on timeout, or its tail leaks as typed text (settings search
+			// filling with `[<35;8;16M`).
+			processInput("\x1b[<35;8;16");
+			await Bun.sleep(30);
+			expect(emittedSequences).toEqual([]);
+
+			processInput("M");
+			expect(emittedSequences).toEqual(["\x1b[<35;8;16M"]);
+		});
+
+		it("should deliver a held mouse partial raw once the hold cap expires", async () => {
+			const capped = new StdinBuffer({ timeout: 5, partialHoldTimeout: 20 });
+			const emitted: string[] = [];
+			capped.on("data", sequence => emitted.push(sequence));
+			try {
+				capped.process("\x1b[<35;8;16");
+				await waitUntil(() => emitted.length > 0);
+				// Tail never arrived: delivered as one raw sequence (ESC intact,
+				// so downstream treats it as control data, not typed text).
+				expect(emitted).toEqual(["\x1b[<35;8;16"]);
+			} finally {
+				capped.destroy();
+			}
+		});
+
+		it("should hold a lone ESC while the kitty protocol is active and join the mouse tail", async () => {
+			setKittyProtocolActive(true);
+			try {
+				// Under kitty the ESC key arrives as \x1b[27u, so a bare \x1b is
+				// always the head of a split sequence.
+				processInput("\x1b");
+				await Bun.sleep(30);
+				expect(emittedSequences).toEqual([]);
+
+				processInput("[<35;8;16M");
+				expect(emittedSequences).toEqual(["\x1b[<35;8;16M"]);
+			} finally {
+				setKittyProtocolActive(false);
+			}
+		});
+
+		it("should flush a lone ESC after timeout when the kitty protocol is inactive", async () => {
+			// Legacy terminals: a bare ESC is a real keypress and must not lag
+			// behind the flush timeout by more than the deferral.
+			processInput("\x1b");
+			await waitUntil(() => emittedSequences.length > 0);
+			expect(emittedSequences).toEqual(["\x1b"]);
+		});
+	});
+
+	describe("Double-ESC disambiguation", () => {
+		it("joins a held bare ESC with a following CSI into one meta sequence", async () => {
+			processInput("\x1b");
+			processInput("\x1b[B");
+			await waitUntil(() => emittedSequences.length > 0);
+			expect(emittedSequences).toEqual(["\x1b\x1b[B"]);
+		});
+
+		it("splits a bare ESC from a following SGR mouse report", async () => {
+			processInput("\x1b");
+			processInput("\x1b[<35;22;17M");
+			await waitUntil(() => emittedSequences.length > 0);
+			expect(emittedSequences).toEqual(["\x1b", "\x1b[<35;22;17M"]);
+		});
+
+		it("flushes a trailing double-ESC as one sequence after the timeout", async () => {
+			processInput("\x1b\x1b");
+			expect(emittedSequences).toEqual([]);
+			await waitUntil(() => emittedSequences.length > 0);
+			expect(emittedSequences).toEqual(["\x1b\x1b"]);
+		});
+
+		it("keeps double-ESC followed by a non-CSI byte split as before", () => {
+			processInput("\x1b\x1bX");
+			expect(emittedSequences).toEqual(["\x1b\x1b", "X"]);
+		});
+
+		it("consumes a whole meta-CSI arrow in one chunk", () => {
+			processInput("\x1b\x1b[A");
+			expect(emittedSequences).toEqual(["\x1b\x1b[A"]);
 		});
 	});
 
@@ -209,7 +309,7 @@ describe("StdinBuffer", () => {
 			expect(emittedSequences).toEqual([]);
 
 			// After timeout, should emit
-			await Bun.sleep(15);
+			await waitUntil(() => emittedSequences.length > 0);
 			expect(emittedSequences).toEqual(["\x1b"]);
 		});
 
@@ -276,13 +376,13 @@ describe("StdinBuffer", () => {
 		});
 
 		it("should emit flushed data via timeout", async () => {
-			processInput("\x1b[<35");
+			processInput("\x1b[1;5");
 			expect(emittedSequences).toEqual([]);
 
-			// Wait for timeout to flush
-			await Bun.sleep(15);
+			// Wait for the flush timeout to deliver the partial
+			await waitUntil(() => emittedSequences.length > 0);
 
-			expect(emittedSequences).toEqual(["\x1b[<35"]);
+			expect(emittedSequences).toEqual(["\x1b[1;5"]);
 		});
 	});
 
@@ -420,7 +520,7 @@ describe("StdinBuffer", () => {
 			buffer.process("\x1b[200~lost marker content");
 			expect(pastes).toEqual([]);
 
-			await Bun.sleep(60);
+			await waitUntil(() => pastes.length > 0);
 			expect(pastes).toEqual(["lost marker content"]);
 
 			// Input is alive again after recovery.

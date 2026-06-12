@@ -761,8 +761,8 @@ const XAI_NON_CHAT_PREFIXES = ["grok-imagine-", "grok-stt-", "grok-voice-"] as c
 // hermes-agent/agent/transports/codex.py:92 `_effort_clamp = {"minimal":
 // "low"}`). Hermes sends `xhigh` to xAI verbatim and we match that contract
 // — let xAI decide if the level is valid for the specific Grok model.
-// applyResponsesReasoningParams runs this through `model.compat.reasoningEffortMap`
-// at request time, downstream of the omitReasoningEffort gate in xai-responses.ts.
+// `resolveModelThinking` folds this into `model.thinking.effortMap`, downstream
+// of the omitReasoningEffort gate in xai-responses.ts.
 const XAI_REASONING_EFFORT_MAP = { minimal: "low" } as const;
 
 // xai-oauth's /v1/models exposes no per-request output limit on the OAuth
@@ -3110,12 +3110,10 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_CORE: readonly ModelsDevProviderDescriptor
 		// ids are kept off the catalog until the issue thread asks for them.
 		filterModel: (id, m) => m.tool_call === true && id.startsWith("deepseek-v4"),
 		compat: {
-			// DeepSeek V4 only accepts `high`/`max`; map lower OMP levels upward so
-			// subagent "minimal" turns stay in documented thinking mode instead of
-			// sending unsupported effort strings.
+			// DeepSeek V4 effort remapping is derived in model-thinking metadata; this
+			// descriptor keeps only transport-shape compat.
 			supportsDeveloperRole: false,
 			supportsReasoningEffort: true,
-			reasoningEffortMap: { minimal: "high", low: "high", medium: "high", high: "high", xhigh: "max" },
 			maxTokensField: "max_tokens",
 			// DeepSeek V4 thinking mode rejects the `tool_choice` control parameter.
 			// Tool calls still work without it; the API defaults to auto when tools exist.

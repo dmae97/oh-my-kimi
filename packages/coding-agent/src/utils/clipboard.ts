@@ -125,6 +125,56 @@ async function readImageViaPowerShell(): Promise<ClipboardImage | null> {
 	}
 }
 
+// PowerShell one-liner that emits the clipboard text verbatim on stdout, or
+// nothing when the clipboard holds no text. `[Console]::Out.Write` avoids the
+// trailing newline Write-Output would add; output encoding is forced to UTF-8
+// so non-ASCII text survives the interop boundary regardless of console
+// codepage.
+const POWERSHELL_TEXT_SCRIPT = `
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+[Console]::Out.Write([string](Get-Clipboard -Raw))
+`;
+
+/**
+ * Read clipboard text through Windows PowerShell — native win32 or the WSL
+ * host over interop.
+ *
+ * Same rationale as `readImageViaPowerShell`: under WSL, the WSLg Wayland
+ * clipboard only works when `wl-clipboard` happens to be installed in the
+ * distro, while `powershell.exe` is always reachable. Forcing UTF-8 output
+ * encoding keeps non-ASCII text intact regardless of the console codepage
+ * (the legacy win32 `Get-Clipboard` shell-out mangled it), and `Bun.spawn`
+ * keeps a cold PowerShell start off the TUI event loop.
+ *
+ * Returns null when the bridge fails (WSL callers fall through to
+ * wl-paste/xclip); an empty string is a successful "no text" read.
+ */
+async function readTextViaPowerShell(): Promise<string | null> {
+	try {
+		const proc = Bun.spawn(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", POWERSHELL_TEXT_SCRIPT], {
+			stdout: "pipe",
+			stderr: "ignore",
+			stdin: "ignore",
+		});
+		const timer = setTimeout(() => proc.kill(), POWERSHELL_TIMEOUT_MS);
+		let stdout = "";
+		try {
+			stdout = await new Response(proc.stdout).text();
+			await proc.exited;
+		} catch (err) {
+			logger.warn("clipboard: powershell text read failed", { error: String(err) });
+			return null;
+		} finally {
+			clearTimeout(timer);
+		}
+		if (proc.exitCode !== 0) return null;
+		return stdout.replaceAll("\r\n", "\n");
+	} catch {
+		return null;
+	}
+}
+
 /**
  * Read an image from the system clipboard.
  *
@@ -165,13 +215,15 @@ export async function readTextFromClipboard(): Promise<string> {
 			return execSync("pbpaste", { encoding: "utf8", timeout: 2000 }).toString();
 		}
 		if (p === "win32") {
-			return execSync('powershell.exe -NoProfile -Command "Get-Clipboard"', {
-				encoding: "utf8",
-				timeout: 2000,
-			}).toString();
+			return (await readTextViaPowerShell()) ?? "";
 		}
 		if (process.env.TERMUX_VERSION) {
 			return execSync("termux-clipboard-get", { encoding: "utf8", timeout: 2000 }).toString();
+		}
+		if (isWsl()) {
+			const text = await readTextViaPowerShell();
+			if (text !== null) return text;
+			// Bridge failed — fall through to the wl-paste/xclip paths below.
 		}
 		const hasWaylandDisplay = Boolean(process.env.WAYLAND_DISPLAY);
 		const hasX11Display = Boolean(process.env.DISPLAY);

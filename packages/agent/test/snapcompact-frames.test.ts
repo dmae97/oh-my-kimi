@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
-import { SNAPCOMPACT_FRAME_TOKEN_ESTIMATE } from "@oh-my-pi/snapcompact";
+import * as snapcompact from "@oh-my-pi/snapcompact";
 import { estimateTokens } from "../src/compaction/compaction";
 import { createCompactionSummaryMessage, defaultConvertToLlm } from "../src/compaction/messages";
 
@@ -20,7 +20,7 @@ describe("compaction summary message with snapcompact frames", () => {
 			undefined,
 			images,
 		);
-		expect(estimateTokens(withFrames) - estimateTokens(bare)).toBe(2 * SNAPCOMPACT_FRAME_TOKEN_ESTIMATE);
+		expect(estimateTokens(withFrames) - estimateTokens(bare)).toBe(2 * snapcompact.FRAME_TOKEN_ESTIMATE);
 	});
 
 	it("defaultConvertToLlm appends frames as image blocks after the summary text", () => {

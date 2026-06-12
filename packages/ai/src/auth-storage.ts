@@ -24,17 +24,26 @@ import type {
 	UsageCredential,
 	UsageFetchContext,
 	UsageFetchParams,
+	UsageHistoryEntry,
+	UsageHistoryQuery,
 	UsageLimit,
 	UsageLogger,
 	UsageProvider,
 	UsageReport,
 } from "./usage";
+import { resolveUsedFraction } from "./usage";
 import { claudeRankingStrategy, claudeUsageProvider } from "./usage/claude";
 import { googleGeminiCliUsageProvider } from "./usage/gemini";
 import { githubCopilotUsageProvider } from "./usage/github-copilot";
 import { antigravityRankingStrategy, antigravityUsageProvider } from "./usage/google-antigravity";
 import { kimiUsageProvider } from "./usage/kimi";
 import { codexRankingStrategy, openaiCodexUsageProvider } from "./usage/openai-codex";
+import {
+	type CodexResetConsumeCode,
+	type CodexResetCredit,
+	consumeCodexResetCredit,
+	listCodexResetCredits,
+} from "./usage/openai-codex-reset";
 import { zaiUsageProvider } from "./usage/zai";
 
 const USAGE_RANKING_METRIC_EPSILON = 1e-9;
@@ -285,6 +294,14 @@ export interface AuthCredentialStore {
 	setCache(key: string, value: string, expiresAtSec: number): void;
 	cleanExpiredCache(): void;
 	/**
+	 * Append usage-limit snapshots for trend history. Optional: stores without
+	 * durable storage (e.g. the broker remote store) omit it and recording is
+	 * skipped — the broker host records into its own database instead.
+	 */
+	recordUsageSnapshots?(entries: UsageHistoryEntry[]): void;
+	/** Read recorded usage-limit snapshots, oldest first. */
+	listUsageHistory?(query?: UsageHistoryQuery): UsageHistoryEntry[];
+	/**
 	 * Optional store-supplied OAuth refresh. When present, `AuthStorage` uses
 	 * it before the per-provider local refresh path. `RemoteAuthCredentialStore`
 	 * implements this against the broker; SQLite stores leave it undefined.
@@ -484,6 +501,13 @@ const USAGE_REPORT_TTL_MS = 5 * 60_000;
 const USAGE_HEADER_INGEST_INTERVAL_MS = 60_000;
 const USAGE_LAST_GOOD_RETENTION_MS = 24 * 60 * 60_000;
 /**
+ * Downsample usage history to at most one row per hour per account window: a
+ * snapshot landing in the same hour bucket as the series' latest row
+ * overwrites it in place. That bound makes further retention pruning
+ * unnecessary — 1 row/hour is ~9k rows per account window per year.
+ */
+const USAGE_HISTORY_BUCKET_MS = 60 * 60_000;
+/**
  * Per-credential cool-down after a usage fetch fails. While this window is
  * active we serve the last successful value to avoid dropping the credential
  * from the report; without a previous value we just return null and retry
@@ -620,10 +644,63 @@ export interface OAuthAccessFailure {
 	error: string;
 }
 
+/**
+ * Identity of the OAuth credential a session is currently routed to. Read-only
+ * display/metadata shape: `accountId` is the provider's account UUID, `email`
+ * the user-facing login, `projectId` the GCP-style project for providers that
+ * key usage on it (Gemini CLI / Antigravity).
+ */
+export interface OAuthAccountIdentity {
+	accountId?: string;
+	email?: string;
+	projectId?: string;
+}
+
 export type OAuthAccessResolution = ({ ok: true } & OAuthAccess) | ({ ok: false } & OAuthAccessFailure);
 export interface InvalidateCredentialMatchingOptions {
 	signal?: AbortSignal;
 	sessionId?: string;
+}
+
+/**
+ * Identifies which stored account to redeem a saved rate-limit reset for.
+ * Any one field is enough; `credentialId` is the most precise.
+ */
+export interface ResetCreditTarget {
+	credentialId?: number;
+	accountId?: string;
+	email?: string;
+}
+
+/** Outcome of {@link AuthStorage.redeemResetCredit}. */
+export interface ResetCreditRedeemOutcome {
+	/** `true` only when a reset was actually applied (`code === "reset"`). */
+	ok: boolean;
+	/**
+	 * Result code. Backend codes: `reset` (success), `already_redeemed`,
+	 * `no_credit`, `nothing_to_reset`. Locally-synthesized: `no_account`
+	 * (target not found), `account_unavailable` (token refresh failed),
+	 * `http_<status>` (unexpected HTTP).
+	 */
+	code: CodexResetConsumeCode;
+	accountId?: string;
+	email?: string;
+	/** The credit that was spent (when one was). */
+	creditId?: string;
+}
+
+/** One stored account's live saved-reset status, from {@link AuthStorage.listResetCredits}. */
+export interface ResetCreditAccountStatus {
+	credentialId?: number;
+	accountId?: string;
+	email?: string;
+	/** Resets redeemable for this account right now (live, not cached). */
+	availableCount: number;
+	credits: CodexResetCredit[];
+	/** Whether this is the given session's active account. */
+	active: boolean;
+	/** Set when the account's token refresh or list call failed. */
+	error?: string;
 }
 
 function isAbortSignalOption(
@@ -872,6 +949,14 @@ export class AuthStorage {
 		this.#usageProviderResolver = options.usageProviderResolver ?? resolveDefaultUsageProvider;
 		this.#rankingStrategyResolver = options.rankingStrategyResolver ?? resolveDefaultRankingStrategy;
 		this.#usageCache = new AuthStorageUsageCache(this.#store);
+		// Opportunistic hygiene, once per AuthStorage lifetime: drop expired
+		// cache rows (24h last-good retention). A cheap indexed DELETE;
+		// failures must never block construction.
+		try {
+			this.#store.cleanExpiredCache();
+		} catch {
+			// Best-effort.
+		}
 		this.#usageFetch = options.usageFetch ?? fetch;
 		this.#usageRequestTimeoutMs = options.usageRequestTimeoutMs ?? DEFAULT_USAGE_REQUEST_TIMEOUT_MS;
 		this.#refreshOAuthCredentialOverride = options.refreshOAuthCredential;
@@ -1572,6 +1657,28 @@ export class AuthStorage {
 	}
 
 	/**
+	 * Get the OAuth account identity for a provider, preferring the credential that
+	 * is session-sticky for `sessionId`. This is a read-only lookup for display and
+	 * metadata paths; it does not refresh tokens, rank usage, or advance selection.
+	 */
+	getOAuthAccountIdentity(provider: string, sessionId?: string): OAuthAccountIdentity | undefined {
+		const preferred = this.#resolveActiveOAuthCredential(provider, sessionId);
+		if (!preferred) return undefined;
+		const identity: OAuthAccountIdentity = {};
+		if (typeof preferred.accountId === "string" && preferred.accountId.length > 0) {
+			identity.accountId = preferred.accountId;
+		}
+		if (typeof preferred.email === "string" && preferred.email.length > 0) {
+			identity.email = preferred.email;
+		}
+		if (typeof preferred.projectId === "string" && preferred.projectId.length > 0) {
+			identity.projectId = preferred.projectId;
+		}
+		if (!identity.accountId && !identity.email && !identity.projectId) return undefined;
+		return identity;
+	}
+
+	/**
 	 * Get all credentials.
 	 */
 	getAll(): AuthStorageData {
@@ -1940,6 +2047,7 @@ export class AuthStorage {
 				// fan-out trips 429s every cycle. With ±25% jitter on TTL the refresh
 				// times decorrelate within a few cycles.
 				this.#usageCache.set(cacheKey, { value: report, expiresAt: Date.now() + USAGE_REPORT_TTL_MS + ttlJitter });
+				this.#recordUsageHistory(request, report);
 				return report;
 			}
 			// Failure: cache the LAST GOOD value (if any) with a short jittered TTL
@@ -1959,6 +2067,50 @@ export class AuthStorage {
 
 		this.#usageRequestInFlight.set(cacheKey, promise);
 		return promise;
+	}
+
+	/**
+	 * Append a freshly fetched report to durable usage history (when the store
+	 * supports it). The usage cache is latest-snapshot-only — these rows are
+	 * the only place limit utilization is kept over time.
+	 */
+	#recordUsageHistory(request: UsageRequestDescriptor, report: UsageReport): void {
+		const record = this.#store.recordUsageSnapshots;
+		if (!record || report.limits.length === 0) return;
+		const recordedAt = Number.isFinite(report.fetchedAt) && report.fetchedAt > 0 ? report.fetchedAt : Date.now();
+		const accountKey = this.#buildUsageCacheIdentity(request.credential);
+		const metadata = report.metadata ?? {};
+		const metaEmail = typeof metadata.email === "string" ? metadata.email : undefined;
+		const metaAccountId = typeof metadata.accountId === "string" ? metadata.accountId : undefined;
+		const entries: UsageHistoryEntry[] = report.limits.map(limit => ({
+			recordedAt,
+			provider: request.provider,
+			accountKey,
+			email: request.credential.email ?? metaEmail,
+			accountId: request.credential.accountId ?? limit.scope.accountId ?? metaAccountId,
+			limitId: limit.id,
+			label: limit.label,
+			windowLabel: limit.window?.label ?? limit.scope.windowId,
+			usedFraction: resolveUsedFraction(limit),
+			status: limit.status,
+			resetsAt: limit.window?.resetsAt,
+		}));
+		try {
+			record.call(this.#store, entries);
+		} catch (error) {
+			this.#usageLogger?.debug("usage history record failed", {
+				provider: request.provider,
+				error: String(error),
+			});
+		}
+	}
+
+	/**
+	 * Recorded usage-limit snapshots, oldest first. Empty when the underlying
+	 * store has no durable history (e.g. a broker-backed remote store).
+	 */
+	listUsageHistory(query?: UsageHistoryQuery): UsageHistoryEntry[] {
+		return this.#store.listUsageHistory?.(query) ?? [];
 	}
 
 	ingestUsageHeaders(
@@ -2871,7 +3023,15 @@ export class AuthStorage {
 		await Promise.all(
 			candidates.map(async candidate => {
 				const force = forceRefreshIndex !== undefined && candidate.selection.index === forceRefreshIndex;
-				if (!force && Date.now() + OAUTH_REFRESH_SKEW_MS < candidate.selection.credential.expires) return;
+				const initialCredentialId = this.#getStoredCredentials(provider)[candidate.selection.index]?.id;
+				let syncedPeerCredential = false;
+				if (initialCredentialId !== undefined) {
+					const beforeSync = candidate.selection.credential;
+					if (!this.#syncOAuthSelectionFromStore(provider, candidate.selection, initialCredentialId)) return;
+					syncedPeerCredential = !authCredentialEquals(beforeSync, candidate.selection.credential);
+				}
+				const hasFreshAccess = Date.now() + OAUTH_REFRESH_SKEW_MS < candidate.selection.credential.expires;
+				if ((!force || syncedPeerCredential) && hasFreshAccess) return;
 				const latestCredential = this.#getCredentialsForProvider(provider)[candidate.selection.index];
 				if (
 					!force &&
@@ -2903,7 +3063,17 @@ export class AuthStorage {
 					};
 					candidate.selection.credential = updated;
 					this.#replaceCredentialAt(provider, candidate.selection.index, updated);
-				} catch {}
+				} catch (error) {
+					// Recovery for definitive failures (incl. peer rotation) lives in
+					// #tryOAuthCredential; log instead of swallowing silently — a bare
+					// catch here hid stale-refresh-token replays from concurrent
+					// sessions (one-turn 401 "Invalid authentication credentials").
+					logger.debug("OAuth preflight refresh failed", {
+						provider,
+						index: candidate.selection.index,
+						error: String(error),
+					});
+				}
 			}),
 		);
 
@@ -3023,31 +3193,39 @@ export class AuthStorage {
 		}
 	}
 
-	async #prepareOAuthCredentialForRequest(
+	#syncOAuthSelectionFromStore(
 		provider: string,
 		selection: { credential: OAuthCredential; index: number },
-		options: AuthApiKeyOptions | undefined,
-	): Promise<boolean> {
-		const prepare = this.#store.prepareForRequest?.bind(this.#store);
-		if (!prepare) return true;
-		const stored = this.#getStoredCredentials(provider);
-		const selected = stored[selection.index];
-		if (selected?.credential.type !== "oauth") return false;
-
-		const prepared = await prepare(selected.id, { signal: options?.signal });
-		if (!prepared) return true;
+		credentialId: number,
+	): boolean {
 		const latestRows = this.#store.listAuthCredentials(provider);
 		this.#setStoredCredentials(
 			provider,
 			latestRows.map(row => ({ id: row.id, credential: row.credential })),
 		);
-		const latestIndex = latestRows.findIndex(row => row.id === selected.id);
+		const latestIndex = latestRows.findIndex(row => row.id === credentialId);
 		if (latestIndex === -1) return false;
 		const latest = latestRows[latestIndex];
 		if (latest?.credential.type !== "oauth") return false;
 		selection.index = latestIndex;
 		selection.credential = latest.credential;
 		return true;
+	}
+
+	async #prepareOAuthCredentialForRequest(
+		provider: string,
+		selection: { credential: OAuthCredential; index: number },
+		options: AuthApiKeyOptions | undefined,
+	): Promise<boolean> {
+		const stored = this.#getStoredCredentials(provider);
+		const selected = stored[selection.index];
+		if (selected?.credential.type !== "oauth") return false;
+
+		const prepare = this.#store.prepareForRequest?.bind(this.#store);
+		if (prepare) {
+			await prepare(selected.id, { signal: options?.signal });
+		}
+		return this.#syncOAuthSelectionFromStore(provider, selection, selected.id);
 	}
 
 	/** Attempts to use a single OAuth credential, checking usage and refreshing token. */
@@ -3454,6 +3632,151 @@ export class AuthStorage {
 				}
 			}),
 		);
+	}
+
+	/**
+	 * List saved rate-limit resets for every stored OAuth account of `provider`
+	 * (Codex), fetched LIVE from the dedicated `rate-limit-reset-credits` route.
+	 *
+	 * This deliberately bypasses the usage-report cache: `/wham/usage` is
+	 * IP-rate-limited and may serve stale (or pre-feature) snapshots when many
+	 * accounts are polled, which would hide redeemable credits. One entry per
+	 * account, with the session's active account flagged and unreachable
+	 * accounts carrying an `error`.
+	 */
+	async listResetCredits(options?: {
+		provider?: string;
+		sessionId?: string;
+		baseUrlResolver?: (provider: string) => string | undefined;
+		signal?: AbortSignal;
+	}): Promise<ResetCreditAccountStatus[]> {
+		const provider = options?.provider ?? "openai-codex";
+		const accesses = await this.getOAuthAccesses(provider);
+		if (accesses.length === 0) return [];
+		const baseUrl = options?.baseUrlResolver?.(provider);
+		const activeId = this.getOAuthAccountIdentity(provider, options?.sessionId);
+		return Promise.all(
+			accesses.map(async (access): Promise<ResetCreditAccountStatus> => {
+				const active =
+					!!activeId &&
+					((!!activeId.accountId && activeId.accountId === access.accountId) ||
+						(!!activeId.email && activeId.email === access.email));
+				const base = {
+					credentialId: access.credentialId,
+					accountId: access.accountId,
+					email: access.email,
+					active,
+				};
+				if (!access.ok) return { ...base, availableCount: 0, credits: [], error: access.error };
+				const list = await listCodexResetCredits({
+					accessToken: access.accessToken,
+					accountId: access.accountId,
+					baseUrl,
+					fetch: this.#usageFetch,
+					signal: options?.signal,
+				});
+				if (!list) return { ...base, availableCount: 0, credits: [], error: "Failed to load saved resets" };
+				return { ...base, availableCount: list.availableCount, credits: list.credits };
+			}),
+		);
+	}
+
+	/**
+	 * Redeem one saved rate-limit reset (OpenAI Codex "saved resets") for a
+	 * specific stored account.
+	 *
+	 * Resolves a fresh access token for the target account, picks an available
+	 * credit (the given `creditId`, else the first redeemable one), spends it,
+	 * and invalidates the cached usage report so the next `/usage` reflects the
+	 * reset. Never throws for business outcomes — inspect the returned `code`.
+	 */
+	async redeemResetCredit(options: {
+		target: ResetCreditTarget;
+		provider?: string;
+		creditId?: string;
+		baseUrlResolver?: (provider: string) => string | undefined;
+		signal?: AbortSignal;
+	}): Promise<ResetCreditRedeemOutcome> {
+		const provider = options.provider ?? "openai-codex";
+		const baseUrl = options.baseUrlResolver?.(provider);
+		const { target } = options;
+		const accesses = await this.getOAuthAccesses(provider);
+		const match = accesses.find(
+			access =>
+				(target.credentialId !== undefined && access.credentialId === target.credentialId) ||
+				(!!target.accountId && access.accountId === target.accountId) ||
+				(!!target.email && access.email === target.email),
+		);
+		if (!match) return { ok: false, code: "no_account", accountId: target.accountId, email: target.email };
+		if (!match.ok) {
+			return { ok: false, code: "account_unavailable", accountId: match.accountId, email: match.email };
+		}
+
+		let creditId = options.creditId;
+		if (!creditId) {
+			const list = await listCodexResetCredits({
+				accessToken: match.accessToken,
+				accountId: match.accountId,
+				baseUrl,
+				fetch: this.#usageFetch,
+				signal: options.signal,
+			});
+			const credit = list?.credits.find(entry => (entry.status ?? "available") === "available") ?? list?.credits[0];
+			if (!credit) return { ok: false, code: "no_credit", accountId: match.accountId, email: match.email };
+			creditId = credit.id;
+		}
+
+		const result = await consumeCodexResetCredit({
+			creditId,
+			accessToken: match.accessToken,
+			accountId: match.accountId,
+			baseUrl,
+			fetch: this.#usageFetch,
+			signal: options.signal,
+		});
+		if (result.ok) {
+			this.#invalidateUsageReportCache(provider, baseUrl);
+			// The window this credential was blocked on (by markUsageLimitReached)
+			// is now reset, so lift its temporary block — otherwise selection
+			// keeps skipping/under-ranking the freshly-reset account.
+			if (match.credentialId !== undefined) this.#clearCredentialBlocks(provider, match.credentialId);
+		}
+		return { ok: result.ok, code: result.code, accountId: match.accountId, email: match.email, creditId };
+	}
+
+	/**
+	 * Force the next usage fetch for `provider` to bypass the 5-min cache, so
+	 * `/usage` reflects a freshly-redeemed reset instead of stale numbers.
+	 */
+	#invalidateUsageReportCache(provider: string, baseUrl?: string): void {
+		const expired = Date.now() - 1;
+		for (const entry of this.#getStoredCredentials(provider)) {
+			if (entry.credential.type !== "oauth") continue;
+			const cacheKey = this.#buildUsageReportCacheKey(
+				this.#buildUsageRequestForOauth(provider, entry.credential, baseUrl),
+			);
+			const existing = this.#usageCache.getStale<UsageReport | null>(cacheKey);
+			this.#usageCache.set(cacheKey, { value: existing?.value ?? null, expiresAt: expired });
+		}
+	}
+
+	/**
+	 * Lift any temporary backoff blocks on one credential (across the bare
+	 * `provider:oauth` key and its scoped `\0`-suffixed derivatives). Called
+	 * after a saved reset is redeemed so the just-reset account is immediately
+	 * selectable again instead of being skipped/under-ranked by a stale block
+	 * that `markUsageLimitReached` set for the now-obsolete reset time.
+	 */
+	#clearCredentialBlocks(provider: string, credentialId: number): void {
+		const index = this.#getStoredCredentials(provider).findIndex(entry => entry.id === credentialId);
+		if (index < 0) return;
+		const providerKey = this.#getProviderTypeKey(provider, "oauth");
+		const scopedPrefix = `${providerKey}\0`;
+		for (const [key, backoffMap] of this.#credentialBackoff) {
+			if (key !== providerKey && !key.startsWith(scopedPrefix)) continue;
+			backoffMap.delete(index);
+			if (backoffMap.size === 0) this.#credentialBackoff.delete(key);
+		}
 	}
 
 	#extractStructuredApiKeyToken(apiKey: string): string | undefined {
@@ -4017,6 +4340,10 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 	#getCacheIncludingExpiredStmt: Statement;
 	#upsertCacheStmt: Statement;
 	#deleteExpiredCacheStmt: Statement;
+	#insertUsageHistoryStmt: Statement;
+	#lastUsageHistoryStmt: Statement;
+	#listUsageHistoryStmt: Statement;
+	#updateUsageHistoryStmt: Statement;
 	#closed = false;
 
 	constructor(db: Database) {
@@ -4056,6 +4383,18 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 			"INSERT INTO cache (key, value, expires_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, expires_at = excluded.expires_at",
 		);
 		this.#deleteExpiredCacheStmt = this.#db.prepare(`DELETE FROM cache WHERE expires_at <= ${SQLITE_NOW_EPOCH}`);
+		this.#insertUsageHistoryStmt = this.#db.prepare(
+			"INSERT INTO usage_history (recorded_at, provider, account_key, email, account_id, limit_id, label, window_label, used_fraction, status, resets_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		);
+		this.#lastUsageHistoryStmt = this.#db.prepare(
+			"SELECT id, recorded_at FROM usage_history WHERE provider = ? AND account_key = ? AND limit_id = ? ORDER BY recorded_at DESC LIMIT 1",
+		);
+		this.#updateUsageHistoryStmt = this.#db.prepare(
+			"UPDATE usage_history SET recorded_at = ?, email = ?, account_id = ?, label = ?, window_label = ?, used_fraction = ?, status = ?, resets_at = ? WHERE id = ?",
+		);
+		this.#listUsageHistoryStmt = this.#db.prepare(
+			"SELECT recorded_at, provider, account_key, email, account_id, limit_id, label, window_label, used_fraction, status, resets_at FROM usage_history WHERE recorded_at >= ? AND (? IS NULL OR provider = ?) ORDER BY recorded_at ASC",
+		);
 	}
 
 	static async open(dbPath: string = getAgentDbPath()): Promise<SqliteAuthCredentialStore> {
@@ -4093,6 +4432,22 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 				expires_at INTEGER NOT NULL
 			);
 			CREATE INDEX IF NOT EXISTS idx_cache_expires ON cache(expires_at);
+			CREATE TABLE IF NOT EXISTS usage_history (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				recorded_at INTEGER NOT NULL,
+				provider TEXT NOT NULL,
+				account_key TEXT NOT NULL,
+				email TEXT,
+				account_id TEXT,
+				limit_id TEXT NOT NULL,
+				label TEXT NOT NULL,
+				window_label TEXT,
+				used_fraction REAL,
+				status TEXT,
+				resets_at INTEGER
+			);
+			CREATE INDEX IF NOT EXISTS idx_usage_history_series ON usage_history(provider, account_key, limit_id, recorded_at);
+			CREATE INDEX IF NOT EXISTS idx_usage_history_recorded ON usage_history(recorded_at);
 		`);
 
 		if (!this.#authCredentialsTableExists()) {
@@ -4500,6 +4855,80 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		}
 	}
 
+	recordUsageSnapshots(entries: UsageHistoryEntry[]): void {
+		try {
+			for (const entry of entries) {
+				const bucket = Math.floor(entry.recordedAt / USAGE_HISTORY_BUCKET_MS);
+				const last = this.#lastUsageHistoryStmt.get(entry.provider, entry.accountKey, entry.limitId) as
+					| { id: number; recorded_at: number }
+					| undefined;
+				if (last && Math.floor(last.recorded_at / USAGE_HISTORY_BUCKET_MS) === bucket) {
+					this.#updateUsageHistoryStmt.run(
+						entry.recordedAt,
+						entry.email ?? null,
+						entry.accountId ?? null,
+						entry.label,
+						entry.windowLabel ?? null,
+						entry.usedFraction ?? null,
+						entry.status ?? null,
+						entry.resetsAt ?? null,
+						last.id,
+					);
+					continue;
+				}
+				this.#insertUsageHistoryStmt.run(
+					entry.recordedAt,
+					entry.provider,
+					entry.accountKey,
+					entry.email ?? null,
+					entry.accountId ?? null,
+					entry.limitId,
+					entry.label,
+					entry.windowLabel ?? null,
+					entry.usedFraction ?? null,
+					entry.status ?? null,
+					entry.resetsAt ?? null,
+				);
+			}
+		} catch {
+			// History is best-effort; never break the usage fetch path.
+		}
+	}
+
+	listUsageHistory(query?: UsageHistoryQuery): UsageHistoryEntry[] {
+		try {
+			const provider = query?.provider ?? null;
+			const rows = this.#listUsageHistoryStmt.all(query?.sinceMs ?? 0, provider, provider) as Array<{
+				recorded_at: number;
+				provider: string;
+				account_key: string;
+				email: string | null;
+				account_id: string | null;
+				limit_id: string;
+				label: string;
+				window_label: string | null;
+				used_fraction: number | null;
+				status: string | null;
+				resets_at: number | null;
+			}>;
+			return rows.map(row => ({
+				recordedAt: row.recorded_at,
+				provider: row.provider as Provider,
+				accountKey: row.account_key,
+				email: row.email ?? undefined,
+				accountId: row.account_id ?? undefined,
+				limitId: row.limit_id,
+				label: row.label,
+				windowLabel: row.window_label ?? undefined,
+				usedFraction: row.used_fraction ?? undefined,
+				status: (row.status ?? undefined) as UsageHistoryEntry["status"],
+				resetsAt: row.resets_at ?? undefined,
+			}));
+		} catch {
+			return [];
+		}
+	}
+
 	// ─── Convenience methods for CLI ────────────────────────────────────────
 
 	/**
@@ -4583,6 +5012,10 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		this.#getCacheIncludingExpiredStmt.finalize();
 		this.#upsertCacheStmt.finalize();
 		this.#deleteExpiredCacheStmt.finalize();
+		this.#insertUsageHistoryStmt.finalize();
+		this.#lastUsageHistoryStmt.finalize();
+		this.#listUsageHistoryStmt.finalize();
+		this.#updateUsageHistoryStmt.finalize();
 		this.#db.close();
 	}
 }

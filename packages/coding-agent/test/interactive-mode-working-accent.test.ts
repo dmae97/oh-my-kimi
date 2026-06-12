@@ -110,10 +110,22 @@ describe("InteractiveMode working-message session accent cache", () => {
 		const renamedName = "Beta session";
 		const { mode, sessionManager } = await createHarness(initialName);
 		const initialAnsi = defined(
-			sessionColor.getSessionAccentAnsi(sessionColor.getSessionAccentHex(initialName, theme.accentSurfaceLuminance)),
+			sessionColor.getSessionAccentAnsi(
+				sessionColor.getSessionAccentHex(
+					initialName,
+					theme.getMajorThemeColorHexes(),
+					theme.accentSurfaceLuminance,
+				),
+			),
 		);
 		const renamedAnsi = defined(
-			sessionColor.getSessionAccentAnsi(sessionColor.getSessionAccentHex(renamedName, theme.accentSurfaceLuminance)),
+			sessionColor.getSessionAccentAnsi(
+				sessionColor.getSessionAccentHex(
+					renamedName,
+					theme.getMajorThemeColorHexes(),
+					theme.accentSurfaceLuminance,
+				),
+			),
 		);
 		const getHex = vi.spyOn(sessionColor, "getSessionAccentHex");
 
@@ -136,14 +148,14 @@ describe("InteractiveMode working-message session accent cache", () => {
 		try {
 			startStableLoader(mode);
 			expect(getHex).toHaveBeenCalledTimes(1);
-			expect(getHex.mock.calls[0]).toEqual([sessionName, undefined]);
+			expect(getHex.mock.calls[0]).toEqual([sessionName, theme.getMajorThemeColorHexes(), undefined]);
 
 			restoreInitial();
 			const restoreLight = shadowAccentSurfaceLuminance(0.72);
 			try {
 				mode.loadingAnimation?.setMessage("Light theme");
 				expect(getHex).toHaveBeenCalledTimes(2);
-				expect(getHex.mock.calls[1]).toEqual([sessionName, 0.72]);
+				expect(getHex.mock.calls[1]).toEqual([sessionName, theme.getMajorThemeColorHexes(), 0.72]);
 			} finally {
 				restoreLight();
 			}
@@ -156,7 +168,13 @@ describe("InteractiveMode working-message session accent cache", () => {
 		const sessionName = "Toggle session";
 		const { mode } = await createHarness(sessionName);
 		const accentAnsi = defined(
-			sessionColor.getSessionAccentAnsi(sessionColor.getSessionAccentHex(sessionName, theme.accentSurfaceLuminance)),
+			sessionColor.getSessionAccentAnsi(
+				sessionColor.getSessionAccentHex(
+					sessionName,
+					theme.getMajorThemeColorHexes(),
+					theme.accentSurfaceLuminance,
+				),
+			),
 		);
 		const getHex = vi.spyOn(sessionColor, "getSessionAccentHex");
 

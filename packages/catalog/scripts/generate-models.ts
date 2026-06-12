@@ -38,6 +38,8 @@ import {
 	UNK_MAX_TOKENS,
 } from "../src/provider-models/openai-compat";
 import type { ModelSpec } from "../src/types";
+import { cleanModelName } from "../src/utils";
+import { collapseEffortVariantsAcrossProviders } from "../src/variant-collapse";
 import { JWT_CLAIM_PATH } from "../src/wire/codex";
 import {
 	applyGeneratedModelPolicies,
@@ -106,6 +108,19 @@ async function fetchProviderModelsFromCatalog(descriptor: CatalogProviderDescrip
 		console.log(`Fetching models from ${descriptor.catalogDiscovery.label} model manager...`);
 		const manager = createModelManager(descriptor.createModelManagerOptions({ apiKey }));
 		const result = await manager.refresh("online");
+		// `stale: true` means the dynamic fetch failed and the manager fell back
+		// to merging the local agent.db model cache over the static catalog —
+		// fine for a live session ("stale state remains visible"), poison for a
+		// committed bundle: cache rows written by older code leak outdated
+		// limits into models.json (e.g. the xai-oauth maxTokens regression).
+		// Treat it like missing credentials so the prev-snapshot/curated-seed
+		// fallback applies instead.
+		if (result.stale) {
+			console.warn(
+				`${descriptor.catalogDiscovery.label} dynamic fetch failed (stale cache merge), using fallback models`,
+			);
+			return [];
+		}
 		const models = result.models.filter(model => model.provider === descriptor.providerId);
 		if (models.length === 0) {
 			console.warn(`${descriptor.catalogDiscovery.label} discovery returned no models, using fallback models`);
@@ -382,11 +397,12 @@ async function generateModels() {
 		allModels.push(CLOUDFLARE_FALLBACK_MODEL as ModelSpec<"anthropic-messages">);
 	}
 
-	// xai-oauth has no upstream catalog source (not in models.dev or
-	// MODELS_DEV_PROVIDER_DESCRIPTORS). The curated chat models live in
-	// XAI_OAUTH_CURATED_MODELS and reach the runtime via
-	// xaiOAuthModelManagerOptions().staticModels. Bundling them here too lets
-	// ModelRegistry.#loadModels() pick them up synchronously at boot, so a
+	// xai-oauth is not in models.dev; its descriptor's catalogDiscovery fetch
+	// only succeeds with live SuperGrok OAuth credentials (and on success the
+	// dynamic entries — already overlaid by applyXAIOAuthCuration — win dedup
+	// below). Always push the curated seed so a regen without credentials, or
+	// with a failed fetch, still bundles XAI_OAUTH_CURATED_MODELS verbatim:
+	// ModelRegistry.#loadModels() picks them up synchronously at boot, so a
 	// persisted `modelRoles.default = "xai-oauth/<id>"` is honored before the
 	// async refresh fires (interactive boot does not await refresh).
 	allModels.push(...buildXaiOAuthStaticSeed());
@@ -449,8 +465,19 @@ async function generateModels() {
 	allModels = applyCodexPricingFallback(allModels);
 	allModels = applyFireworksKimiMaxTokensCap(allModels);
 	allModels = applyFireworksDeepSeekReasoningShape(allModels);
+	// Normalize display names: gateway author prefixes ("OpenAI: …"), alias
+	// markers ("(latest)"), provider attribution ("(Antigravity)"), and
+	// price/promo tags are model-extrinsic — strip them from the bundle.
+	allModels = allModels.map(model => {
+		const name = cleanModelName(model.name);
+		return name === model.name ? model : { ...model, name };
+	});
 	applyGeneratedModelPolicies(allModels);
 	linkOpenAIPromotionTargets(allModels);
+	// Collapse effort-tier variants AFTER the policy re-bake: live-discovery
+	// entries are already collapsed (rebake skips them); this pass folds
+	// previous-snapshot raw members into their logical families.
+	allModels = collapseEffortVariantsAcrossProviders(allModels);
 
 	// Group by provider and sort each provider's models
 	const providers: Record<string, Record<string, ModelSpec>> = {};

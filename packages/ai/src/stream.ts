@@ -3,12 +3,15 @@ import { isVertexExpressOpenAIUrl, isVertexRawPredictUrl } from "@oh-my-pi/pi-ca
 import {
 	mapEffortToAnthropicAdaptiveEffort,
 	mapEffortToGoogleThinkingLevel,
+	minimumSupportedEffort,
 	requireSupportedEffort,
+	resolveWireModelId,
 } from "@oh-my-pi/pi-catalog/model-thinking";
 import { CATALOG_PROVIDERS, type ProviderCatalogEntry } from "@oh-my-pi/pi-catalog/provider-models";
 import { $env, $pickenv, extractHttpStatusFromError } from "@oh-my-pi/pi-utils";
 import { getCustomApi } from "./api-registry";
 import { AUTH_RETRY_STEPS, isApiKeyResolver, resolveRetryKey } from "./auth-retry";
+import { ProviderHttpError } from "./errors";
 import type { BedrockOptions } from "./providers/amazon-bedrock";
 import type { AnthropicOptions } from "./providers/anthropic";
 import type { CursorOptions } from "./providers/cursor";
@@ -350,11 +353,10 @@ function isRetryableUpstreamError(error: unknown, status: number | undefined, me
 	return !!message && isUsageLimitError(message);
 }
 
-function createAssistantAuthError(message: AssistantMessage): Error & { status?: number } {
-	const error: Error & { status?: number } = new Error(message.errorMessage ?? "Provider authentication failed");
+function createAssistantAuthError(message: AssistantMessage): Error {
+	const text = message.errorMessage ?? "Provider authentication failed";
 	const status = extractStatusFromAssistantError(message);
-	if (status !== undefined) error.status = status;
-	return error;
+	return status === undefined ? new Error(text) : new ProviderHttpError(text, status);
 }
 
 function emitBufferedEvents(stream: AssistantMessageEventStream, events: AssistantMessageEvent[]): void {
@@ -667,11 +669,39 @@ function resolveOpenAiReasoningEffort<TApi extends Api>(
 
 const castApi = <TApi extends Api>(api: OptionsForApi<TApi>): OptionsForApi<Api> => api as OptionsForApi<Api>;
 
-function mapOptionsForApi<TApi extends Api>(
+/**
+ * Mandatory-reasoning endpoints (`thinking.requiresEffort`) reject disabled
+ * or omitted thinking ("Reasoning is mandatory for this endpoint and cannot
+ * be disabled") — clamp to the lowest supported effort instead.
+ * `suppressWhenOff` models handle off provider-side via explicit wire
+ * suppression. Collapsed pairs interplay: pair derivation strips member
+ * flags (off routes to a bare SKU that CAN disable), while identity backfill
+ * re-flags pairs whose logical id is itself mandatory (Gemini 3.x) — there
+ * the clamp wins and the floored effort routes to the thinking SKU.
+ */
+function normalizeMandatoryReasoningOptions<TApi extends Api>(
 	model: Model<TApi>,
 	options?: SimpleStreamOptions,
+): SimpleStreamOptions | undefined {
+	if (
+		!model.reasoning ||
+		!model.thinking?.requiresEffort ||
+		model.thinking.suppressWhenOff ||
+		(options?.reasoning !== undefined && !options.disableReasoning)
+	) {
+		return options;
+	}
+	const floor = minimumSupportedEffort(model);
+	if (floor === undefined) return options;
+	return { ...options, reasoning: floor, disableReasoning: undefined };
+}
+
+function mapOptionsForApi<TApi extends Api>(
+	model: Model<TApi>,
+	rawOptions?: SimpleStreamOptions,
 	apiKey?: string,
 ): OptionsForApi<TApi> {
+	const options = normalizeMandatoryReasoningOptions(model, rawOptions);
 	const base = {
 		temperature: options?.temperature,
 		topP: options?.topP,
@@ -707,6 +737,7 @@ function mapOptionsForApi<TApi extends Api>(
 			if (!reasoning || !model.reasoning) {
 				return castApi<"anthropic-messages">({
 					...base,
+					requestModelId: resolveWireModelId(model, undefined),
 					thinkingEnabled: false,
 					toolChoice: mapAnthropicToolChoice(options?.toolChoice),
 					thinkingDisplay: options?.hideThinkingSummary ? "omitted" : undefined,
@@ -718,6 +749,7 @@ function mapOptionsForApi<TApi extends Api>(
 			if (thinkingBudget <= 0) {
 				return castApi<"anthropic-messages">({
 					...base,
+					requestModelId: resolveWireModelId(model, undefined),
 					thinkingEnabled: false,
 					toolChoice: mapAnthropicToolChoice(options?.toolChoice),
 					thinkingDisplay: options?.hideThinkingSummary ? "omitted" : undefined,
@@ -731,6 +763,7 @@ function mapOptionsForApi<TApi extends Api>(
 				const effort = mapEffortToAnthropicAdaptiveEffort(model, reasoning);
 				return castApi<"anthropic-messages">({
 					...base,
+					requestModelId: resolveWireModelId(model, reasoning),
 					thinkingEnabled: true,
 					effort,
 					toolChoice: mapAnthropicToolChoice(options?.toolChoice),
@@ -742,6 +775,7 @@ function mapOptionsForApi<TApi extends Api>(
 			if (ANTHROPIC_USE_INTERLEAVED_THINKING) {
 				return castApi<"anthropic-messages">({
 					...base,
+					requestModelId: resolveWireModelId(model, reasoning),
 					thinkingEnabled: true,
 					thinkingBudgetTokens: thinkingBudget,
 					toolChoice: mapAnthropicToolChoice(options?.toolChoice),
@@ -762,6 +796,7 @@ function mapOptionsForApi<TApi extends Api>(
 			if (thinkingBudget <= 0) {
 				return castApi<"anthropic-messages">({
 					...base,
+					requestModelId: resolveWireModelId(model, undefined),
 					thinkingEnabled: false,
 					toolChoice: mapAnthropicToolChoice(options?.toolChoice),
 					thinkingDisplay: options?.hideThinkingSummary ? "omitted" : undefined,
@@ -771,6 +806,7 @@ function mapOptionsForApi<TApi extends Api>(
 				return castApi<"anthropic-messages">({
 					...base,
 					maxTokens,
+					requestModelId: resolveWireModelId(model, reasoning),
 					thinkingEnabled: true,
 					thinkingBudgetTokens: thinkingBudget,
 					toolChoice: mapAnthropicToolChoice(options?.toolChoice),
@@ -887,53 +923,57 @@ function mapOptionsForApi<TApi extends Api>(
 
 		case "google-gemini-cli": {
 			const reasoning = options?.reasoning;
-			if (!reasoning || !model.reasoning) {
-				return castApi<"google-gemini-cli">({
-					...base,
-					thinking: { enabled: false },
-					toolChoice: mapGoogleToolChoice(options?.toolChoice),
-				});
+			const toolChoice = mapGoogleToolChoice(options?.toolChoice);
+			if (reasoning && model.reasoning) {
+				const effort = requireSupportedEffort(model, reasoning);
+
+				// Gemini 3+ models use thinkingLevel instead of thinkingBudget
+				if (model.thinking?.mode === "google-level") {
+					return castApi<"google-gemini-cli">({
+						...base,
+						requestModelId: resolveWireModelId(model, effort),
+						thinking: {
+							enabled: true,
+							level: mapEffortToGoogleThinkingLevel(effort),
+						},
+						toolChoice,
+					});
+				}
+
+				let thinkingBudget = options.thinkingBudgets?.[effort] ?? GOOGLE_THINKING[effort];
+
+				// Caller's maxTokens is the desired output; add thinking budget on top, capped at model limit
+				const maxTokens = Math.min((base.maxTokens || 0) + thinkingBudget, model.maxTokens);
+
+				// If not enough room for thinking + output, reduce thinking budget
+				if (maxTokens <= thinkingBudget) {
+					thinkingBudget = Math.max(0, maxTokens - MIN_OUTPUT_TOKENS);
+				}
+
+				if (thinkingBudget > 0) {
+					return castApi<"google-gemini-cli">({
+						...base,
+						maxTokens,
+						requestModelId: resolveWireModelId(model, effort),
+						thinking: { enabled: true, budgetTokens: thinkingBudget },
+						toolChoice,
+					});
+				}
+				// Budget clamped to zero — fall through to the thinking-off path.
 			}
 
-			const effort = requireSupportedEffort(model, reasoning);
-
-			// Gemini 3+ models use thinkingLevel instead of thinkingBudget
-			if (model.thinking?.mode === "google-level") {
-				return castApi<"google-gemini-cli">({
-					...base,
-					thinking: {
-						enabled: true,
-						level: mapEffortToGoogleThinkingLevel(effort),
-					},
-					toolChoice: mapGoogleToolChoice(options?.toolChoice),
-				});
+			const thinking: GoogleGeminiCliOptions["thinking"] = { enabled: false };
+			if (model.reasoning && model.thinking?.suppressWhenOff) {
+				// CCA re-applies the per-id baked server default when the config
+				// is omitted; suppression must be explicit on the wire.
+				thinking.suppress = model.thinking.mode === "google-level" ? { level: "MINIMAL" } : { budget: 0 };
 			}
-
-			let thinkingBudget = options.thinkingBudgets?.[effort] ?? GOOGLE_THINKING[effort];
-
-			// Caller's maxTokens is the desired output; add thinking budget on top, capped at model limit
-			const maxTokens = Math.min((base.maxTokens || 0) + thinkingBudget, model.maxTokens);
-
-			// If not enough room for thinking + output, reduce thinking budget
-			if (maxTokens <= thinkingBudget) {
-				thinkingBudget = Math.max(0, maxTokens - MIN_OUTPUT_TOKENS) ?? 0;
-			}
-
-			// If thinking budget is too low, disable thinking
-			if (thinkingBudget <= 0) {
-				return castApi<"google-gemini-cli">({
-					...base,
-					thinking: { enabled: false },
-					toolChoice: mapGoogleToolChoice(options?.toolChoice),
-				});
-			} else {
-				return castApi<"google-gemini-cli">({
-					...base,
-					maxTokens,
-					thinking: { enabled: true, budgetTokens: thinkingBudget },
-					toolChoice: mapGoogleToolChoice(options?.toolChoice),
-				});
-			}
+			return castApi<"google-gemini-cli">({
+				...base,
+				requestModelId: resolveWireModelId(model, undefined),
+				thinking,
+				toolChoice,
+			});
 		}
 
 		case "google-vertex": {

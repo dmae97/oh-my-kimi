@@ -8,6 +8,7 @@ import type {
 	UsageLimit,
 	UsageProvider,
 	UsageReport,
+	UsageResetCredits,
 	UsageWindow,
 } from "../usage";
 import { isRecord } from "../utils";
@@ -185,7 +186,21 @@ function parseUsagePayload(payload: unknown): ParsedUsage | null {
 	return parsed;
 }
 
-function normalizeCodexBaseUrl(baseUrl?: string): string {
+/**
+ * Parse the `rate_limit_reset_credits` block from `/wham/usage`. OpenAI Codex
+ * reports the count of saved rate-limit resets the account can redeem here; the
+ * redeem action itself lives in `./openai-codex-reset`.
+ */
+function parseResetCredits(payload: unknown): UsageResetCredits | undefined {
+	if (!isRecord(payload)) return undefined;
+	const block = payload.rate_limit_reset_credits;
+	if (!isRecord(block)) return undefined;
+	const availableCount = toNumber(block.available_count);
+	if (availableCount === undefined) return undefined;
+	return { availableCount: Math.max(0, Math.trunc(availableCount)) };
+}
+
+export function normalizeCodexBaseUrl(baseUrl?: string): string {
 	const fallback = CODEX_BASE_URL;
 	const trimmed = baseUrl?.trim() ? baseUrl.trim() : fallback;
 	const base = trimmed.replace(/\/+$/, "");
@@ -454,10 +469,12 @@ export const openaiCodexUsageProvider: UsageProvider = {
 			}
 		}
 
+		const resetCredits = parseResetCredits(payload);
 		const report: UsageReport = {
 			provider: "openai-codex",
 			fetchedAt: nowMs,
 			limits,
+			...(resetCredits ? { resetCredits } : {}),
 			metadata: {
 				planType,
 				allowed: parsed?.allowed,

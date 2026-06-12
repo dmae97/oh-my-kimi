@@ -1,4 +1,4 @@
-import { type Component, matchesKey, padding, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
+import { type Component, matchesKey, padding, parseSgrMouse, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
 import { APP_NAME } from "@oh-my-pi/pi-utils";
 import { gradientLogo, PI_LOGO } from "../components/welcome";
 import { theme } from "../theme/theme";
@@ -61,6 +61,8 @@ export class SetupWizardComponent implements Component {
 	#timer: NodeJS.Timeout | undefined;
 	#done = Promise.withResolvers<void>();
 	#disposed = false;
+	/** Screen row where the active scene's body began in the last rendered frame. */
+	#bodyRowStart = 0;
 
 	constructor(
 		readonly ctx: InteractiveModeContext,
@@ -87,6 +89,10 @@ export class SetupWizardComponent implements Component {
 
 	handleInput(data: string): void {
 		if (this.#phase === "done") return;
+		if (data.startsWith("\x1b[<")) {
+			this.#handleMouse(data);
+			return;
+		}
 		if (matchesKey(data, "ctrl+c")) {
 			this.#beginOutro();
 			return;
@@ -114,6 +120,36 @@ export class SetupWizardComponent implements Component {
 			return;
 		}
 		this.#activeScene?.handleInput?.(data);
+	}
+
+	/**
+	 * Mouse handling for the fullscreen wizard (SGR tracking is on while the
+	 * overlay holds the alternate screen). The frame paints from screen row 0,
+	 * so report coordinates index directly into the last rendered lines: scene
+	 * body rows start at #bodyRowStart, indented by SCENE_MARGIN_X. Scenes
+	 * that implement routeMouse get hit-tested events (wheel, hover, click);
+	 * for the rest a wheel notch falls back to an arrow key. A left click
+	 * advances the splash/outro like Enter. Raw reports never reach scene
+	 * keyboard input.
+	 */
+	#handleMouse(data: string): void {
+		const event = parseSgrMouse(data);
+		if (!event) return;
+		if (this.#phase === "splash" || this.#phase === "outro") {
+			if (!event.leftClick) return;
+			if (this.#phase === "splash") this.#beginScene();
+			else this.#complete();
+			return;
+		}
+		const scene = this.#activeScene;
+		if (!scene) return;
+		if (scene.routeMouse) {
+			scene.routeMouse(event, event.row - this.#bodyRowStart, event.col - SCENE_MARGIN_X);
+			return;
+		}
+		if (event.wheel !== null) {
+			scene.handleInput?.(event.wheel === -1 ? "\x1b[A" : "\x1b[B");
+		}
 	}
 
 	render(width: number): readonly string[] {
@@ -163,6 +199,7 @@ export class SetupWizardComponent implements Component {
 			header.push(indentLine(theme.fg("muted", subtitle), width, SCENE_MARGIN_X));
 		}
 		header.push("");
+		this.#bodyRowStart = header.length;
 
 		const footer = [
 			"",

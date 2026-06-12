@@ -117,6 +117,19 @@ export const BLOCK_RESOLVER_UNAVAILABLE =
 	"Block-anchored ops (`replace block N:`, `delete block N`, `insert after block N:`) are not available here (no tree-sitter block resolver is configured). Use a concrete line range instead.";
 
 /**
+ * Warning emitted when an `insert after block N:` anchored on a pure
+ * closing-delimiter line is lowered to plain `insert after N:`. No block
+ * begins on a closer, but the closer IS the end of one — and inserting after
+ * the end of that block is exactly what the plain form does.
+ */
+export function insertAfterBlockCloserLoweredWarning(line: number): string {
+	return (
+		`\`insert after block ${line}:\` anchors on a closing-delimiter line; no block begins there, so it was applied as plain \`insert after ${line}:\`. ` +
+		"Anchor `insert after block` on the line that OPENS the construct."
+	);
+}
+
+/**
  * Internal invariant error: `applyEdits` received an unresolved `replace block
  * N:` edit. Block edits must be expanded by `resolveBlockEdits` before reaching
  * the applier; hitting this is a wiring bug, not authored-input error.
@@ -147,6 +160,22 @@ export function afterInsertLandingShiftWarning(anchorLine: number, landingLine: 
 		`insert after ${anchorLine}: the body is indented shallower than line ${anchorLine}, so the landing was moved past ` +
 		`${crossed} closing line${crossed === 1 ? "" : "s"} to after line ${landingLine}. ` +
 		`If you meant the deeper position inside the block, re-issue with the body indented to match.`
+	);
+}
+
+/**
+ * Warning emitted when an `insert after block N:` body is indented deeper
+ * than the block's closing line and the landing was pulled back inside the
+ * block. `insert after block` places content AFTER the block at sibling
+ * depth; a deeper body almost always means "append inside the block's body"
+ * — the misuse this corrects.
+ */
+export function blockInsertLandingShiftWarning(blockStart: number, closerLine: number, landingLine: number): string {
+	return (
+		`insert after block ${blockStart}: the body is indented deeper than the block's closing line ${closerLine}, ` +
+		`so it was placed inside the block, after line ${landingLine}. ` +
+		"`insert after block` always lands AFTER the block at sibling depth — if you meant that, " +
+		`re-issue as plain \`insert after ${closerLine}:\` with the body indented to match line ${closerLine}.`
 	);
 }
 

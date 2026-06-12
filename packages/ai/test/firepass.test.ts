@@ -63,10 +63,10 @@ describe("Fire Pass provider", () => {
 		// reasoning_effort set as `low | medium | high | xhigh | max | none`, and
 		// `xhigh` is a distinct tier from `max` (different reasoning-token budgets
 		// for the same prompt). The bundled entry must therefore advertise xhigh
-		// without a compat.reasoningEffortMap that would silently downgrade it to
-		// max — see PR #1199 discussion r3265122224 for the live API capture.
+		// without a thinking effortMap that would silently downgrade it to max —
+		// see PR #1199 discussion r3265122224 for the live API capture.
 		const model = getBundledModel<"openai-completions">("firepass", "kimi-k2.6-turbo");
-		expect(model.compat?.reasoningEffortMap?.xhigh).toBeUndefined();
+		expect(model.thinking?.effortMap?.xhigh).toBeUndefined();
 
 		const captured: { body: string | null } = { body: null };
 		const fetchMock: FetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {

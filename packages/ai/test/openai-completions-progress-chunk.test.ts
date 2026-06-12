@@ -133,6 +133,18 @@ describe("resolveOpenAICompat stream idle timeout", () => {
 		expect(model.compat.streamIdleTimeoutMs).toBe(300_000);
 	});
 
+	it("widens Kimi K2.6 reasoning streams across OpenAI-compatible hosts", () => {
+		const bundled = getBundledModel<"openai-completions">("firepass", "kimi-k2.6-turbo");
+		const canonicalRouter = buildModel({
+			...bundled,
+			id: "accounts/fireworks/routers/kimi-k2p6-turbo",
+			compat: bundled.compatConfig,
+		} as ModelSpec<"openai-completions">);
+
+		expect(bundled.compat.streamIdleTimeoutMs).toBe(300_000);
+		expect(canonicalRouter.compat.streamIdleTimeoutMs).toBe(300_000);
+	});
+
 	it("leaves non-reasoning DeepSeek-hosted models on the global timeout", () => {
 		const model = buildModel({
 			...openAICompletionsModel,

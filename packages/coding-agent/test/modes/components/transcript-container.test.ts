@@ -53,6 +53,15 @@ class StreamingBlock implements Component {
 	}
 }
 
+// A still-live block whose render is provisional (a tool call's tail-window
+// streaming preview): the result render replaces it wholesale, so its settled
+// rows must never be offered for native-scrollback commit.
+class ProvisionalStreamingBlock extends StreamingBlock {
+	isTranscriptBlockCommitStable(): boolean {
+		return false;
+	}
+}
+
 class CountingFinalizedBlock implements Component {
 	renderCount = 0;
 	#lines: string[];
@@ -270,6 +279,55 @@ describe("TranscriptContainer", () => {
 		pending.finalize(["pending-final"]);
 		expect(container.render(40)).toEqual(["done-collapsed", "", "pending-final", "", "card"]);
 		expect(container.getNativeScrollbackLiveRegionStart()).toBe(4);
+	});
+
+	it("never offers a commit-unstable live block's settled rows for native scrollback", () => {
+		const container = new TranscriptContainer();
+		container.addChild(new MutableBlock(["history"]));
+		// A pending collapsed tool preview: byte-static while the tool executes
+		// (the spinner stops once args complete), but replaced wholesale by the
+		// result render — committing any of it would strand a stale call-box
+		// fragment in terminal history above the final block.
+		const preview = new ProvisionalStreamingBlock([
+			"┌ Edit: foo.ts",
+			"… (2 more hunks above)",
+			"-old-a",
+			"+new-a",
+			"-old-b",
+			"+new-b",
+			"└ (streaming)",
+		]);
+		container.addChild(preview);
+
+		// Far past STABLE_PREFIX_COMMIT_FRAMES: a durable block's settled head
+		// would have been promoted long ago.
+		for (let frame = 0; frame < 40; frame++) container.render(40);
+		expect(container.getNativeScrollbackLiveRegionStart()).toBe(2);
+		expect(container.getNativeScrollbackCommitSafeEnd()).toBeUndefined();
+
+		// The result render re-anchors the block top-first; nothing of the stale
+		// preview was committed, so nothing can be duplicated. Finalizing makes
+		// the full body commit-safe like any settled block.
+		preview.finalize(["✔ Edit: foo.ts (+2/-2)", "-old-a", "+new-a", "context"]);
+		container.render(40);
+		expect(container.getNativeScrollbackLiveRegionStart()).toBe(2);
+		expect(container.getNativeScrollbackCommitSafeEnd()).toBe(6);
+	});
+
+	it("still promotes a durable live block's settled head after the stability window", () => {
+		const container = new TranscriptContainer();
+		container.addChild(new MutableBlock(["history"]));
+		// Default contract (no isTranscriptBlockCommitStable): settled leading
+		// rows are durable — a streaming assistant message, a top-anchored
+		// expanded tool stream — and promote once they sit visibly unchanged for
+		// the whole stability window, holding back only the volatile tail.
+		const streaming = new StreamingBlock(["head-0", "head-1", "head-2", "head-3", "head-4", "head-5", "tail"]);
+		container.addChild(streaming);
+
+		for (let frame = 0; frame < 40; frame++) container.render(40);
+		expect(container.getNativeScrollbackLiveRegionStart()).toBe(2);
+		// blockStart 2 + (7 rows - TAIL_VOLATILITY_ROWS holdback of 4) = 5.
+		expect(container.getNativeScrollbackCommitSafeEnd()).toBe(5);
 	});
 	it("does not re-render finalized rows already committed to native scrollback", () => {
 		const container = new TranscriptContainer();
@@ -514,5 +572,43 @@ describe("TranscriptContainer getRenderStablePrefixRows", () => {
 		// The read above re-based the baseline to the just-returned state, so
 		// without any render in between the full array now counts as stable.
 		expect(container.getRenderStablePrefixRows()).toBe(reflowed.length);
+	});
+});
+
+describe("TranscriptContainer isBlockInLiveRegion", () => {
+	it("opens at the first still-mutating block and includes everything below it", () => {
+		const container = new TranscriptContainer();
+		const above = new StreamingBlock(["above"], true);
+		const live = new StreamingBlock(["live"], false);
+		const below = new StreamingBlock(["below"], true);
+		container.addChild(above);
+		container.addChild(live);
+		container.addChild(below);
+
+		expect(container.isBlockInLiveRegion(above)).toBe(false);
+		expect(container.isBlockInLiveRegion(live)).toBe(true);
+		expect(container.isBlockInLiveRegion(below)).toBe(true);
+	});
+
+	it("anchors on the tail block when every block has finalized", () => {
+		const container = new TranscriptContainer();
+		const first = new StreamingBlock(["first"], true);
+		const tail = new StreamingBlock(["tail"], false);
+		container.addChild(first);
+		container.addChild(tail);
+
+		expect(container.isBlockInLiveRegion(tail)).toBe(true);
+		tail.finalize();
+		// All finalized: only the tail anchors the live region — a finalized
+		// block above it is commit-eligible history (a detached task block
+		// stops animating exactly on this transition).
+		expect(container.isBlockInLiveRegion(first)).toBe(false);
+		expect(container.isBlockInLiveRegion(tail)).toBe(true);
+	});
+
+	it("returns false for a component that is not a child", () => {
+		const container = new TranscriptContainer();
+		container.addChild(new StreamingBlock(["a"], true));
+		expect(container.isBlockInLiveRegion(new StreamingBlock(["x"], false))).toBe(false);
 	});
 });

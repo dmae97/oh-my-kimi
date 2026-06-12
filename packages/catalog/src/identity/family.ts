@@ -14,9 +14,9 @@ export function isKimiModelId(modelId: string): boolean {
 	return modelId.includes("moonshotai/kimi") || /(^|\/)kimi[-.]/i.test(modelId);
 }
 
-/** Kimi K2.6 specifically (preserved-thinking transport on Moonshot-native hosts). */
+/** Kimi K2.6 specifically, including router ids that spell the version `k2p6`. */
 export function isKimiK26ModelId(modelId: string): boolean {
-	return /(^|\/)kimi-k2\.6(?:[-:]|$)/i.test(modelId);
+	return /(^|\/)kimi-k2(?:\.6|p6)(?:[-:]|$)/i.test(modelId);
 }
 
 /** Claude ids in any namespace form (`claude-*`, `vendor/claude.x`). */
@@ -42,6 +42,33 @@ export function isDeepseekModelIdOrName(value: string): boolean {
 /** Xiaomi MiMo family by id or display name. */
 export function isMimoModelIdOrName(value: string): boolean {
 	return value.toLowerCase().includes("mimo");
+}
+
+/**
+ * MiniMax M2-generation family (M2, M2.1, M2.5, M2.7, including `-highspeed`/
+ * `-lightning`/`-her`/`-turbo` variants, dotless aliases like `minimax-m21`,
+ * and short `minimax/m2-…` ids on aggregator hosts). Underlying model accepts
+ * only `low|medium|high` for `reasoning_effort` and 400s on `minimal`,
+ * `xhigh`, or `none` — so hosts whose default effort map otherwise lowers
+ * `minimal` to `none` (Fireworks) or expects the full 5-tier scale must
+ * clamp instead. Excludes M1, M3, MiniMax-Text-01, music, hailuo, voice ids.
+ */
+export function isMinimaxM2FamilyModelId(modelId: string): boolean {
+	const lower = modelId.toLowerCase();
+	if (!lower.includes("minimax")) return false;
+	// Boundary-delimited `m2` token followed by zero or more digits (dotless
+	// variants like `m21`/`m25`/`m27`) and an optional dotted minor version.
+	return /(?:^|[/.-])m2\d*(?:[.-]\d+)?(?:[-.:_]|$)/i.test(lower);
+}
+
+/**
+ * OpenAI gpt-oss family (`gpt-oss-20b`, `gpt-oss-120b`, `gpt-oss:120b`,
+ * `vendor/gpt-oss-…`). The Harmony reasoning format only accepts
+ * `low|medium|high` for `reasoning_effort` and rejects `minimal`, `xhigh`,
+ * and `none`.
+ */
+export function isOpenAIGptOssModelId(modelId: string): boolean {
+	return /(^|\/)gpt-oss[-:]/i.test(modelId);
 }
 
 /**
@@ -85,4 +112,45 @@ export function supportsMidConversationSystemMessages(modelId: string): boolean 
 export function isAnthropicFableOrMythosModel(modelId: string): boolean {
 	const parsed = parseAnthropicModel(bareModelId(modelId));
 	return parsed !== null && isFableOrMythos(parsed.kind);
+}
+
+/** Thinking-variant token location inside a model id. */
+export interface ThinkingVariantToken {
+	index: number;
+	length: number;
+}
+
+const THINKING_VARIANT_TOKEN_RE = /-(?:thinking|reasoner|reasoning)(?=$|[^a-z0-9])/gi;
+
+/**
+ * Locates the first thinking-variant token (`-thinking`, `-reasoner`,
+ * `-reasoning`; trailing or infix) in a model id. The token ends at the id
+ * end or any non-alphanumeric boundary, and negated forms (`non-thinking`,
+ * `no-thinking`) never match — those name the NON-thinking SKU.
+ */
+export function findThinkingVariantToken(modelId: string): ThinkingVariantToken | undefined {
+	THINKING_VARIANT_TOKEN_RE.lastIndex = 0;
+	let match = THINKING_VARIANT_TOKEN_RE.exec(modelId);
+	while (match !== null) {
+		const preceding = /([a-z0-9]+)$/i.exec(modelId.slice(0, match.index))?.[1]?.toLowerCase();
+		if (preceding !== "non" && preceding !== "no") {
+			return { index: match.index, length: match[0].length };
+		}
+		match = THINKING_VARIANT_TOKEN_RE.exec(modelId);
+	}
+	return undefined;
+}
+
+/**
+ * Removes the located thinking-variant token: `kimi-k2-thinking` → `kimi-k2`,
+ * `mimo-v2-flash-thinking-original` → `mimo-v2-flash-original`,
+ * `grok-4.1-fast-reasoning` → `grok-4.1-fast`. Returns `undefined` when no
+ * token exists or nothing would remain. Callers MUST verify the result names
+ * a live model.
+ */
+export function stripThinkingVariantToken(modelId: string): string | undefined {
+	const token = findThinkingVariantToken(modelId);
+	if (!token) return undefined;
+	const stripped = modelId.slice(0, token.index) + modelId.slice(token.index + token.length);
+	return stripped.length > 0 ? stripped : undefined;
 }

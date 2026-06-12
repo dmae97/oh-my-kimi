@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
+import { setNextRequestDebugPath } from "@oh-my-pi/pi-ai/utils/request-debug";
 import { Snowflake, setProjectDir } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import type { SettingPath, SettingValue } from "../config/settings";
@@ -21,7 +22,7 @@ import {
 } from "../extensibility/plugins/marketplace";
 import { resolveMemoryBackend } from "../memory-backend";
 import type { InteractiveModeContext } from "../modes/types";
-import type { FreshSessionResult } from "../session/agent-session";
+import type { AgentSession, FreshSessionResult } from "../session/agent-session";
 import { formatShakeSummary, type ShakeMode } from "../session/shake-types";
 import { getChangelogPath, parseChangelog } from "../utils/changelog";
 import { buildContextReportText } from "./helpers/context-report";
@@ -29,6 +30,7 @@ import { formatDuration } from "./helpers/format";
 import { createMarketplaceManager } from "./helpers/marketplace-manager";
 import { handleMcpAcp } from "./helpers/mcp";
 import { commandConsumed, errorMessage, parseSlashCommand, parseSubcommand, usage } from "./helpers/parse";
+import { describeRedeemOutcome, type ResetUsageAccount, toResetUsageAccounts } from "./helpers/reset-usage";
 import { handleSshAcp } from "./helpers/ssh";
 import { launchStatsDashboard, parseStatsDashboardArgs } from "./helpers/stats-dashboard";
 import { handleTodoAcp } from "./helpers/todo";
@@ -64,6 +66,95 @@ const shutdownHandlerTui = (_command: ParsedSlashCommand, runtime: TuiSlashComma
 	void runtime.ctx.shutdown();
 	return commandConsumed();
 };
+
+async function handleUsageResetCommand(
+	arg: string,
+	session: AgentSession,
+	output: SlashCommandRuntime["output"],
+): Promise<void> {
+	let accounts: ResetUsageAccount[];
+	try {
+		accounts = toResetUsageAccounts(await session.listResetCredits());
+	} catch (error) {
+		await output(`Could not load saved resets: ${errorMessage(error)}`);
+		return;
+	}
+	if (accounts.length === 0) {
+		await output("No Codex accounts found. Use /login to add one.");
+		return;
+	}
+	const targetArg = arg.trim();
+	if (!targetArg) {
+		const lines = ["Saved Codex rate-limit resets:"];
+		for (const account of accounts) {
+			const detail = account.error ? `unavailable (${account.error})` : `${account.availableCount} available`;
+			lines.push(`- ${account.label}: ${detail}${account.active ? " (active)" : ""}`);
+		}
+		lines.push("", "Spend one with `/usage reset <account email>` or `/usage reset active`.");
+		await output(lines.join("\n"));
+		return;
+	}
+	const wanted = targetArg.toLowerCase();
+	const target =
+		wanted === "active"
+			? accounts.find(account => account.active)
+			: accounts.find(
+					account =>
+						account.label.toLowerCase() === wanted ||
+						account.target.email?.toLowerCase() === wanted ||
+						account.target.accountId?.toLowerCase() === wanted,
+				);
+	if (!target) {
+		await output(`No Codex account matches "${targetArg}".`);
+		return;
+	}
+	if (target.availableCount <= 0) {
+		await output(`${target.label}: no saved resets to spend.`);
+		return;
+	}
+	const outcome = await session.redeemResetCredit(target.target);
+	await output(describeRedeemOutcome(outcome, target.label));
+}
+
+const DEBUG_DUMP_NEXT_REQUEST_USAGE = "Usage: /debug dump-next-request <path>";
+
+function resolveDebugRequestDumpPath(target: string, cwd: string): string {
+	const expanded =
+		target === "~"
+			? os.homedir()
+			: target.startsWith("~/") || target.startsWith("~\\")
+				? path.join(os.homedir(), target.slice(2))
+				: target;
+	return path.resolve(cwd, expanded);
+}
+
+async function handleDebugSubcommand(
+	args: string,
+	cwd: string,
+	output: (text: string) => Promise<void> | void,
+): Promise<SlashCommandResult> {
+	const { verb, rest } = parseSubcommand(args);
+	switch (verb) {
+		case "":
+			await output(DEBUG_DUMP_NEXT_REQUEST_USAGE);
+			return commandConsumed();
+		case "dump-next-request":
+		case "dump-request":
+		case "next-request": {
+			if (!rest) {
+				await output(DEBUG_DUMP_NEXT_REQUEST_USAGE);
+				return commandConsumed();
+			}
+			const requestPath = resolveDebugRequestDumpPath(rest, cwd);
+			setNextRequestDebugPath(requestPath);
+			await output(`Next AI provider request will be dumped to ${requestPath}`);
+			return commandConsumed();
+		}
+		default:
+			await output(`Unknown /debug subcommand "${verb}". ${DEBUG_DUMP_NEXT_REQUEST_USAGE}`);
+			return commandConsumed();
+	}
+}
 
 /** Parse the `/shake` subcommand into a {@link ShakeMode}; empty defaults to elide. */
 function parseShakeMode(args: string): ShakeMode | { error: string } {
@@ -551,12 +642,41 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		name: "usage",
 		description: "Show provider usage and limits",
 		acpDescription: "Show token usage",
-		handle: async (_command, runtime) => {
-			await runtime.output(await buildUsageReportText(runtime));
-			return commandConsumed();
+		acpInputHint: "[show|reset [account|active]]",
+		subcommands: [
+			{ name: "show", description: "Show provider usage and limits" },
+			{ name: "reset", description: "Spend a saved Codex rate-limit reset", usage: "[account|active]" },
+		],
+		allowArgs: true,
+		handle: async (command, runtime) => {
+			const { verb, rest } = parseSubcommand(command.args);
+			if (!verb || (verb === "show" && !rest)) {
+				await runtime.output(await buildUsageReportText(runtime));
+				return commandConsumed();
+			}
+			if (verb === "reset") {
+				await handleUsageResetCommand(rest, runtime.session, runtime.output);
+				return commandConsumed();
+			}
+			return usage("Usage: /usage [show|reset [account|active]]", runtime);
 		},
-		handleTui: async (_command, runtime) => {
-			await runtime.ctx.handleUsageCommand();
+		handleTui: async (command, runtime) => {
+			const { verb, rest } = parseSubcommand(command.args);
+			if (!verb || (verb === "show" && !rest)) {
+				await runtime.ctx.handleUsageCommand();
+				runtime.ctx.editor.setText("");
+				return;
+			}
+			if (verb === "reset") {
+				if (rest) {
+					await handleUsageResetCommand(rest, runtime.ctx.session, text => runtime.ctx.showStatus(text));
+				} else {
+					await runtime.ctx.showResetUsageSelector();
+				}
+				runtime.ctx.editor.setText("");
+				return;
+			}
+			runtime.ctx.showStatus("Usage: /usage [show|reset [account|active]]");
 			runtime.ctx.editor.setText("");
 		},
 	},
@@ -974,8 +1094,25 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "debug",
 		description: "Open debug tools selector",
-		handleTui: (_command, runtime) => {
-			runtime.ctx.showDebugSelector();
+		allowArgs: true,
+		subcommands: [
+			{
+				name: "dump-next-request",
+				description: "Dump the next AI provider HTTP request as JSON",
+				usage: "<path>",
+			},
+		],
+		handle: async (command, runtime) =>
+			handleDebugSubcommand(command.args, runtime.cwd, text => runtime.output(text)),
+		handleTui: async (command, runtime) => {
+			const args = command.args.trim();
+			if (args.length === 0) {
+				runtime.ctx.showDebugSelector();
+			} else {
+				await handleDebugSubcommand(args, runtime.ctx.sessionManager.getCwd(), text =>
+					runtime.ctx.showStatus(text),
+				);
+			}
 			runtime.ctx.editor.setText("");
 		},
 	},

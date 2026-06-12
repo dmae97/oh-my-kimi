@@ -47,16 +47,16 @@ function assistantToolCall(
 
 describe("DeepSeek reasoning_content tool-call replay", () => {
 	// ----------------------------------------------------------------
-	// Fix 1: reasoningEffortMap for DeepSeek-family on any provider
+	// Fix 1: effortMap for DeepSeek-family on any provider
 	// ----------------------------------------------------------------
-	describe("reasoningEffortMap (Fix 1)", () => {
+	describe("thinking effortMap (Fix 1)", () => {
 		it("maps unsupported lower DeepSeek efforts to high on opencode-go", () => {
-			const compat = deepseekModel({
+			const model = deepseekModel({
 				provider: "opencode-go",
 				baseUrl: "https://opencode.ai/zen/go/v1",
 				id: "deepseek-v4-flash",
-			}).compat;
-			expect(compat.reasoningEffortMap).toMatchObject({
+			});
+			expect(model.thinking?.effortMap).toMatchObject({
 				minimal: "high",
 				low: "high",
 				medium: "high",
@@ -66,12 +66,12 @@ describe("DeepSeek reasoning_content tool-call replay", () => {
 		});
 
 		it("maps unsupported lower DeepSeek efforts to high on NVIDIA", () => {
-			const compat = deepseekModel({
+			const model = deepseekModel({
 				provider: "nvidia",
 				baseUrl: "https://integrate.api.nvidia.com/v1",
 				id: "deepseek-ai/deepseek-v4-flash",
-			}).compat;
-			expect(compat.reasoningEffortMap).toMatchObject({
+			});
+			expect(model.thinking?.effortMap).toMatchObject({
 				minimal: "high",
 				low: "high",
 				medium: "high",
@@ -81,12 +81,12 @@ describe("DeepSeek reasoning_content tool-call replay", () => {
 		});
 
 		it("maps unsupported lower DeepSeek efforts to high on the official endpoint", () => {
-			const compat = deepseekModel({
+			const model = deepseekModel({
 				provider: "deepseek",
 				baseUrl: "https://api.deepseek.com/v1",
 				id: "deepseek-v4-pro",
-			}).compat;
-			expect(compat.reasoningEffortMap).toMatchObject({
+			});
+			expect(model.thinking?.effortMap).toMatchObject({
 				minimal: "high",
 				low: "high",
 				medium: "high",
@@ -96,13 +96,13 @@ describe("DeepSeek reasoning_content tool-call replay", () => {
 		});
 
 		it("does NOT map xhigh for non-DeepSeek models", () => {
-			const compat = deepseekModel({
+			const model = deepseekModel({
 				provider: "openai",
 				baseUrl: "https://api.openai.com/v1",
 				id: "gpt-4o-mini",
 				reasoning: false,
-			}).compat;
-			expect(compat.reasoningEffortMap.xhigh).toBeUndefined();
+			});
+			expect(model.thinking?.effortMap?.xhigh).toBeUndefined();
 		});
 	});
 

@@ -86,8 +86,10 @@ import { BUILTIN_SLASH_COMMAND_RESERVED_NAMES } from "../slash-commands/builtin-
 import { formatDuration } from "../slash-commands/helpers/format";
 import { STTController, type SttState } from "../stt";
 import { discoverTitleSystemPromptFile, resolvePromptInput } from "../system-prompt";
+import { formatTaskId } from "../task/render";
 import type { LspStartupServerInfo } from "../tools";
 import { normalizeLocalScheme } from "../tools/path-utils";
+import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "../tools/render-utils";
 import { setAutoQaConsentHandler } from "../tools/report-tool-issue";
 import { type ResolveToolDetails, runResolveInvocation } from "../tools/resolve";
 import { formatPhaseDisplayName, selectStickyTodoWindow, todoMatchesAnyDescription } from "../tools/todo";
@@ -132,6 +134,7 @@ import {
 	parseLoopLimitArgs,
 } from "./loop-limit";
 import { OAuthManualInputManager } from "./oauth-manual-input";
+import type { ObservableSession } from "./session-observer-registry";
 import { SessionObserverRegistry } from "./session-observer-registry";
 import { runProviderSetupWizard } from "./setup-wizard/lazy";
 import { interruptHint } from "./shared";
@@ -277,6 +280,41 @@ class StatusContainer extends Container implements NativeScrollbackLiveRegion {
 	}
 }
 
+/**
+ * Build the anchored subagent HUD block: a bold accent "Subagents" header plus
+ * one hooked row per running agent in the same `Id: description` shape the
+ * inline task rows use (muted task preview when no description was given).
+ * Returns an empty array when nothing is running so the container can clear.
+ */
+export function renderSubagentHudLines(sessions: ObservableSession[], columns: number): string[] {
+	const running = sessions.filter(session => session.kind === "subagent" && session.status === "active");
+	if (running.length === 0) return [];
+
+	const indent = "  ";
+	const hook = theme.tree.hook;
+	const dot = theme.styledSymbol("status.done", "accent");
+	const lines = ["", indent + theme.bold(theme.fg("accent", "Subagents"))];
+	running.forEach((session, index) => {
+		const prefix = `${indent}${index === 0 ? hook : " "} `;
+		const displayId = formatTaskId(session.id);
+		let line = `${prefix}${dot} ${theme.fg("accent", theme.bold(displayId))}`;
+		const description = session.description?.trim() || session.progress?.description?.trim();
+		if (description) {
+			const budget = Math.max(TRUNCATE_LENGTHS.SHORT, columns - visibleWidth(prefix) - visibleWidth(displayId) - 6);
+			line += `${theme.fg("accent", ":")} ${theme.fg("accent", truncateToWidth(replaceTabs(description), budget))}`;
+		} else {
+			// No spawn description: fall back to a muted task preview, same as
+			// the inline task rows when a row has no label.
+			const taskPreview = session.progress?.task?.trim();
+			if (taskPreview) {
+				line += ` ${theme.fg("muted", truncateToWidth(replaceTabs(taskPreview), TRUNCATE_LENGTHS.SHORT))}`;
+			}
+		}
+		lines.push(line);
+	});
+	return lines;
+}
+
 export class InteractiveMode implements InteractiveModeContext {
 	session: AgentSession;
 	sessionManager: SessionManager;
@@ -291,6 +329,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	pendingMessagesContainer: Container;
 	statusContainer: Container;
 	todoContainer: Container;
+	subagentContainer: Container;
 	btwContainer: Container;
 	omfgContainer: Container;
 	errorBannerContainer: Container;
@@ -440,6 +479,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.pendingMessagesContainer = new Container();
 		this.statusContainer = new StatusContainer();
 		this.todoContainer = new Container();
+		this.subagentContainer = new Container();
 		this.btwContainer = new Container();
 		this.omfgContainer = new Container();
 		this.errorBannerContainer = new Container();
@@ -606,6 +646,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.addChild(this.pendingMessagesContainer);
 		this.ui.addChild(this.statusContainer);
 		this.ui.addChild(this.todoContainer);
+		this.ui.addChild(this.subagentContainer);
 		this.ui.addChild(this.btwContainer);
 		this.ui.addChild(this.omfgContainer);
 		this.ui.addChild(this.errorBannerContainer);
@@ -632,6 +673,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#reconcileTodosWithSubagents();
 			this.#syncTodoAutoClearTimer();
 			this.#renderTodoList();
+			this.#renderSubagentList();
 			this.ui.requestRender();
 		});
 
@@ -1093,7 +1135,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		} else {
 			const accentEnabled = !isSettingsInitialized() || settings.get("statusLine.sessionAccent") !== false;
 			const sessionName = accentEnabled ? this.sessionManager.getSessionName() : undefined;
-			const hex = sessionName ? getSessionAccentHex(sessionName, theme.accentSurfaceLuminance) : undefined;
+			const hex = sessionName
+				? getSessionAccentHex(sessionName, theme.getMajorThemeColorHexes(), theme.accentSurfaceLuminance)
+				: undefined;
 			const ansi = getSessionAccentAnsi(hex);
 			if (ansi) {
 				this.editor.borderColor = (str: string) => `${ansi}${str}\x1b[39m`;
@@ -1118,6 +1162,30 @@ export class InteractiveMode implements InteractiveModeContext {
 		// of restarting the visible conversation (the LLM context still resets).
 		const context = this.session.buildTranscriptSessionContext();
 		this.renderSessionContext(context);
+		// During the pre-streaming window — after `startPendingSubmission` has
+		// optimistically rendered the user's message but before the user
+		// `message_start` event lands it in `session` entries — any rebuild
+		// (e.g. Ctrl+T toggleThinkingBlockVisibility, theme selector) would
+		// otherwise erase the user's just-submitted message until the first
+		// assistant token arrived (#2372). Once `message_start` fires the
+		// signature is cleared by `EventController`, so this replay is a no-op
+		// post-streaming and cannot duplicate.
+		this.#replayOptimisticUserMessage();
+	}
+
+	#replayOptimisticUserMessage(): void {
+		if (!this.optimisticUserMessageSignature) return;
+		const submission = this.#pendingSubmittedInput;
+		if (!submission || submission.cancelled || submission.customType) return;
+		this.addMessageToChat(
+			{
+				role: "user",
+				content: [{ type: "text", text: submission.text }, ...(submission.images ?? [])],
+				attribution: "user",
+				timestamp: Date.now(),
+			},
+			{ imageLinks: submission.imageLinks },
+		);
 	}
 
 	#formatTodoLine(todo: TodoItem, prefix: string, matched: boolean): string {
@@ -1278,6 +1346,19 @@ export class InteractiveMode implements InteractiveModeContext {
 		});
 
 		this.todoContainer.addChild(new Text(lines.join("\n"), 1, 0));
+	}
+
+	/**
+	 * Anchored HUD of in-flight subagents, mirroring the Todos block above the
+	 * editor. Driven entirely by observer-registry change events, so rows appear
+	 * on spawn and the whole block clears itself once the last subagent leaves
+	 * the "active" state.
+	 */
+	#renderSubagentList(): void {
+		this.subagentContainer.clear();
+		const lines = renderSubagentHudLines(this.#observerRegistry.getSessions(), this.ui.terminal.columns);
+		if (lines.length === 0) return;
+		this.subagentContainer.addChild(new Text(lines.join("\n"), 1, 0));
 	}
 
 	async #loadTodoList(): Promise<void> {
@@ -2823,7 +2904,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (!key.sessionAccentEnabled || !key.sessionName) {
 			return this.#cacheWorkingMessageAccent(key, undefined);
 		}
-		const hex = getSessionAccentHex(key.sessionName, key.accentSurfaceLuminance);
+		const hex = getSessionAccentHex(key.sessionName, theme.getMajorThemeColorHexes(), key.accentSurfaceLuminance);
 		const main = getSessionAccentAnsi(hex);
 		const dim = getSessionAccentAnsi(adjustHsv(hex, { s: 0.55, v: 0.65 }));
 		return this.#cacheWorkingMessageAccent(key, main && dim ? { main, dim } : undefined);
@@ -3231,6 +3312,10 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	showOAuthSelector(mode: "login" | "logout", providerId?: string): Promise<void> {
 		return this.#selectorController.showOAuthSelector(mode, providerId);
+	}
+
+	showResetUsageSelector(): Promise<void> {
+		return this.#selectorController.showResetUsageSelector();
 	}
 
 	showProviderSetup(): Promise<void> {

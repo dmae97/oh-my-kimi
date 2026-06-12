@@ -6,7 +6,7 @@
  * through the shared {@link AuthStorage} broker (Bearer token), and responses
  * are categorized result buckets rather than the legacy flat object array.
  */
-import type { AuthStorage, FetchImpl } from "@oh-my-pi/pi-ai";
+import { type AuthStorage, type FetchImpl, withAuth } from "@oh-my-pi/pi-ai";
 import { withHardTimeout } from "./search/providers/utils";
 
 const KAGI_SEARCH_URL = "https://kagi.com/api/v1/search";
@@ -173,14 +173,6 @@ export interface KagiSearchResult {
 	answer?: string;
 }
 
-export async function findKagiApiKey(
-	authStorage: AuthStorage,
-	sessionId?: string,
-	signal?: AbortSignal,
-): Promise<string | null> {
-	return (await authStorage.getApiKey("kagi", sessionId, { signal })) ?? null;
-}
-
 /**
  * Compute a YYYY-MM-DD date string `recency` units before now, in UTC.
  * UTC keeps the recency window deterministic regardless of host timezone and
@@ -247,27 +239,34 @@ export async function searchWithKagi(
 	options: KagiSearchOptions = {},
 	authStorage: AuthStorage,
 ): Promise<KagiSearchResult> {
-	const apiKey = await findKagiApiKey(authStorage, options.sessionId, options.signal);
-	if (!apiKey) {
-		throw new KagiApiError("Kagi credentials not found. Set KAGI_API_KEY or login with 'omp /login kagi'.");
-	}
-
 	const fetchImpl = options.fetch ?? fetch;
+	const body = JSON.stringify(buildRequestBody(query, options));
 
-	const response = await fetchImpl(KAGI_SEARCH_URL, {
-		method: "POST",
-		headers: {
-			Authorization: `Bearer ${apiKey}`,
-			"Content-Type": "application/json",
-			Accept: "application/json",
+	const response = await withAuth(
+		authStorage.resolver("kagi", { sessionId: options.sessionId }),
+		async apiKey => {
+			const res = await fetchImpl(KAGI_SEARCH_URL, {
+				method: "POST",
+				headers: {
+					Authorization: `Bearer ${apiKey}`,
+					"Content-Type": "application/json",
+					Accept: "application/json",
+				},
+				body,
+				signal: withHardTimeout(options.signal),
+			});
+
+			if (!res.ok) {
+				throw parseKagiErrorResponse(res.status, await res.text());
+			}
+
+			return res;
 		},
-		body: JSON.stringify(buildRequestBody(query, options)),
-		signal: withHardTimeout(options.signal),
-	});
-
-	if (!response.ok) {
-		throw parseKagiErrorResponse(response.status, await response.text());
-	}
+		{
+			signal: options.signal,
+			missingKeyMessage: "Kagi credentials not found. Set KAGI_API_KEY or login with 'omp /login kagi'.",
+		},
+	);
 
 	const payload = (await response.json()) as KagiSearchResponse;
 	if (payload.error && payload.error.length > 0) {

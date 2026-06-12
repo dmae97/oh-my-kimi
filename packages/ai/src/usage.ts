@@ -63,13 +63,76 @@ export interface UsageLimit {
 	notes?: string[];
 }
 
+/**
+ * Saved/banked rate-limit resets an account can redeem on demand.
+ *
+ * Surfaced by providers that let users defer a usage-window reset and spend it
+ * later (OpenAI Codex "saved rate limit resets"). The redeem itself is a
+ * separate, provider-specific action; this is the read-only count for display.
+ */
+export interface UsageResetCredits {
+	/** Number of resets available to redeem right now. */
+	availableCount: number;
+}
+
 /** Aggregated usage report for a provider. */
 export interface UsageReport {
 	provider: Provider;
 	fetchedAt: number;
 	limits: UsageLimit[];
+	/** Saved rate-limit resets the account can redeem, when the provider reports them. */
+	resetCredits?: UsageResetCredits;
 	metadata?: Record<string, unknown>;
 	raw?: unknown;
+}
+
+/**
+ * Resolve a limit's used fraction (0..1; >1 means overage) from whichever
+ * amount fields the provider populated. Precedence mirrors the usage UIs:
+ * explicit fraction > used/limit > percent-unit used > inverted remaining.
+ */
+export function resolveUsedFraction(limit: UsageLimit): number | undefined {
+	const amount = limit.amount;
+	if (amount.usedFraction !== undefined) return amount.usedFraction;
+	if (amount.used !== undefined && amount.limit !== undefined && amount.limit > 0) {
+		return amount.used / amount.limit;
+	}
+	if (amount.unit === "percent" && amount.used !== undefined) return amount.used / 100;
+	if (amount.remainingFraction !== undefined) return Math.max(0, 1 - amount.remainingFraction);
+	return undefined;
+}
+
+/**
+ * One recorded usage-limit snapshot: a single limit window of one account at
+ * a point in time. The usage cache itself is latest-snapshot-only; history
+ * rows are appended by the auth storage layer whenever a fresh report is
+ * fetched, so limit utilization stays inspectable over time.
+ */
+export interface UsageHistoryEntry {
+	/** Epoch ms the report was fetched. */
+	recordedAt: number;
+	provider: Provider;
+	/** Stable credential identity key (account/email/project derived). */
+	accountKey: string;
+	email?: string;
+	accountId?: string;
+	/** {@link UsageLimit.id} of the recorded window. */
+	limitId: string;
+	/** Human label of the limit. */
+	label: string;
+	windowLabel?: string;
+	/** Used fraction (0..1) when resolvable. */
+	usedFraction?: number;
+	status?: UsageStatus;
+	/** Epoch ms the window resets, when known. */
+	resetsAt?: number;
+}
+
+/** Filter for reading recorded usage history. */
+export interface UsageHistoryQuery {
+	provider?: string;
+	/** Inclusive lower bound on {@link UsageHistoryEntry.recordedAt} (epoch ms). */
+	sinceMs?: number;
 }
 
 // ─── Zod schemas (wire-shape validation for the broker `/v1/usage` endpoint) ─
@@ -114,10 +177,15 @@ export const usageLimitSchema = z.object({
 	notes: z.array(z.string()).optional(),
 });
 
+export const usageResetCreditsSchema = z.object({
+	availableCount: z.number(),
+});
+
 export const usageReportSchema = z.object({
 	provider: z.string(),
 	fetchedAt: z.number(),
 	limits: z.array(usageLimitSchema),
+	resetCredits: usageResetCreditsSchema.optional(),
 	metadata: z.record(z.string(), z.unknown()).optional(),
 	// `raw` is provider-specific and may be anything; the broker strips it before
 	// sending the report over the wire, so accept-but-ignore here.

@@ -7,7 +7,14 @@
  * credentials produced no usage report are listed too, so the output
  * always covers the full credential pool.
  */
-import type { AuthStorage, UsageLimit, UsageReport, UsageUnit } from "@oh-my-pi/pi-ai";
+import {
+	type AuthStorage,
+	resolveUsedFraction,
+	type UsageHistoryEntry,
+	type UsageLimit,
+	type UsageReport,
+	type UsageUnit,
+} from "@oh-my-pi/pi-ai";
 import { formatDuration, formatNumber } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import { ModelRegistry } from "../config/model-registry";
@@ -19,6 +26,10 @@ export interface UsageCommandArgs {
 	json?: boolean;
 	provider?: string;
 	redact?: boolean;
+	/** Show recorded usage-limit history instead of a live snapshot. */
+	history?: boolean;
+	/** History window in days (with `history`). */
+	days?: number;
 }
 
 /** Identity slice of a stored credential, for "every account" coverage. */
@@ -139,20 +150,9 @@ function collectIdentityStrings(reports: UsageReport[], accounts: UsageAccountId
 
 type LimitStatus = NonNullable<UsageLimit["status"]>;
 
-function resolveFraction(limit: UsageLimit): number | undefined {
-	const amount = limit.amount;
-	if (amount.usedFraction !== undefined) return amount.usedFraction;
-	if (amount.used !== undefined && amount.limit !== undefined && amount.limit > 0) {
-		return amount.used / amount.limit;
-	}
-	if (amount.unit === "percent" && amount.used !== undefined) return amount.used / 100;
-	if (amount.remainingFraction !== undefined) return Math.max(0, 1 - amount.remainingFraction);
-	return undefined;
-}
-
 function resolveStatus(limit: UsageLimit): LimitStatus {
 	if (limit.status && limit.status !== "unknown") return limit.status;
-	const fraction = resolveFraction(limit);
+	const fraction = resolveUsedFraction(limit);
 	if (fraction === undefined) return "unknown";
 	if (fraction >= 1) return "exhausted";
 	if (fraction >= 0.8) return "warning";
@@ -208,7 +208,7 @@ function describeAmount(limit: UsageLimit): string {
 	} else if (absoluteUnit && amount.remaining !== undefined) {
 		parts.push(`${formatUnitValue(amount.remaining, amount.unit)}${UNIT_SUFFIX[amount.unit]} left`);
 	}
-	const fraction = resolveFraction(limit);
+	const fraction = resolveUsedFraction(limit);
 	if (fraction !== undefined) {
 		parts.push(`${(fraction * 100).toFixed(1)}% used`);
 	} else if (amount.remainingFraction !== undefined) {
@@ -219,7 +219,7 @@ function describeAmount(limit: UsageLimit): string {
 }
 
 function renderBar(limit: UsageLimit): string {
-	const fraction = resolveFraction(limit);
+	const fraction = resolveUsedFraction(limit);
 	if (fraction === undefined) return chalk.dim("·".repeat(BAR_WIDTH));
 	const clamped = Math.min(Math.max(fraction, 0), 1);
 	const filled = Math.round(clamped * BAR_WIDTH);
@@ -325,6 +325,8 @@ function formatAccountHeader(
 	let header = `${icon} ${chalk.bold(redaction?.get(label) ?? label)}`;
 	const planType = report.metadata?.planType;
 	if (typeof planType === "string" && planType) header += chalk.dim(` · plan: ${planType}`);
+	const savedResets = report.resetCredits?.availableCount ?? 0;
+	if (savedResets > 0) header += chalk.cyan(` · ✦ ${savedResets} saved reset${savedResets === 1 ? "" : "s"}`);
 	if (report.fetchedAt && nowMs - report.fetchedAt > 90_000) {
 		header += chalk.dim(` · fetched ${formatDuration(nowMs - report.fetchedAt)} ago`);
 	}
@@ -375,7 +377,7 @@ export function computeProviderWindowStats(reports: UsageReport[]): ProviderWind
 	for (const report of reports) {
 		const accountMax = new Map<string, number>();
 		for (const limit of report.limits) {
-			const fraction = resolveFraction(limit);
+			const fraction = resolveUsedFraction(limit);
 			if (fraction === undefined) continue;
 			const durationMs = limit.window?.durationMs;
 			const key =
@@ -482,6 +484,144 @@ export function formatUsageBreakdown(
 	return lines.join("\n");
 }
 
+const HISTORY_SPARK_WIDTH = 48;
+const SPARK_LEVELS = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"] as const;
+
+interface HistorySeries {
+	title: string;
+	/** Snapshots ascending by recordedAt (listUsageHistory order). */
+	entries: UsageHistoryEntry[];
+}
+
+interface HistoryAccount {
+	label: string;
+	series: Map<string, HistorySeries>;
+}
+
+/** Mirror of {@link limitTitle} for history rows (no scope/tier available). */
+function historySeriesTitle(entry: UsageHistoryEntry): string {
+	const label = entry.label;
+	const windowLabel = entry.windowLabel;
+	if (!windowLabel) return label;
+	if (windowLabel.toLowerCase() === "quota window") return label;
+	if (label.toLowerCase().includes(windowLabel.toLowerCase())) return label;
+	return `${label} (${windowLabel})`;
+}
+
+function historyAccountLabel(entry: UsageHistoryEntry): string {
+	return entry.email ?? entry.accountId ?? entry.accountKey;
+}
+
+function historyStatus(fraction: number | undefined, status: UsageHistoryEntry["status"]): LimitStatus {
+	if (status && status !== "unknown") return status;
+	if (fraction === undefined) return "unknown";
+	if (fraction >= 1) return "exhausted";
+	if (fraction >= 0.8) return "warning";
+	return "ok";
+}
+
+/** Peak-per-bucket sparkline over [sinceMs, nowMs]; empty buckets render dim dots. */
+function renderHistorySparkline(entries: UsageHistoryEntry[], sinceMs: number, nowMs: number): string {
+	const span = Math.max(1, nowMs - sinceMs);
+	const buckets: Array<number | undefined> = new Array(HISTORY_SPARK_WIDTH).fill(undefined);
+	for (const entry of entries) {
+		if (entry.usedFraction === undefined) continue;
+		const offset = Math.floor(((entry.recordedAt - sinceMs) / span) * HISTORY_SPARK_WIDTH);
+		const index = Math.min(HISTORY_SPARK_WIDTH - 1, Math.max(0, offset));
+		const prev = buckets[index];
+		buckets[index] = prev === undefined ? entry.usedFraction : Math.max(prev, entry.usedFraction);
+	}
+	return buckets
+		.map(fraction => {
+			if (fraction === undefined) return chalk.dim("·");
+			const clamped = Math.min(Math.max(fraction, 0), 1);
+			const level = SPARK_LEVELS[Math.min(SPARK_LEVELS.length - 1, Math.floor(clamped * SPARK_LEVELS.length))];
+			return STATUS_COLOR[historyStatus(clamped, undefined)](level);
+		})
+		.join("");
+}
+
+/** Identity strings a history rendering could surface — input for {@link buildRedactionMap}. */
+function collectHistoryIdentityStrings(entries: UsageHistoryEntry[]): string[] {
+	const values: string[] = [];
+	for (const entry of entries) {
+		if (entry.email) values.push(entry.email);
+		if (entry.accountId) values.push(entry.accountId);
+		values.push(entry.accountKey);
+	}
+	return values;
+}
+
+/**
+ * Render recorded usage-limit history: per provider, per account, one
+ * peak-per-bucket sparkline per limit window plus latest/peak percentages.
+ */
+export function formatUsageHistory(
+	entries: UsageHistoryEntry[],
+	sinceMs: number,
+	nowMs: number,
+	redaction?: Map<string, string>,
+): string {
+	const providers = new Map<string, Map<string, HistoryAccount>>();
+	for (const entry of entries) {
+		let accounts = providers.get(entry.provider);
+		if (!accounts) {
+			accounts = new Map();
+			providers.set(entry.provider, accounts);
+		}
+		let account = accounts.get(entry.accountKey);
+		if (!account) {
+			account = { label: historyAccountLabel(entry), series: new Map() };
+			accounts.set(entry.accountKey, account);
+		}
+		let series = account.series.get(entry.limitId);
+		if (!series) {
+			series = { title: historySeriesTitle(entry), entries: [] };
+			account.series.set(entry.limitId, series);
+		}
+		// Labels can change across snapshots (provider renames); latest wins.
+		series.title = historySeriesTitle(entry);
+		series.entries.push(entry);
+	}
+
+	const lines: string[] = [];
+	lines.push(
+		`${chalk.bold("Usage history")}${chalk.dim(` · last ${formatDuration(nowMs - sinceMs)} · peak per bucket`)}`,
+	);
+
+	for (const provider of [...providers.keys()].sort((a, b) => a.localeCompare(b))) {
+		const accounts = providers.get(provider) ?? new Map<string, HistoryAccount>();
+		lines.push("");
+		lines.push(
+			`${chalk.bold.cyan(formatProviderName(provider))} ${chalk.dim(`— ${accounts.size} ${accounts.size === 1 ? "account" : "accounts"}`)}`,
+		);
+		const sortedAccounts = [...accounts.values()].sort((a, b) => a.label.localeCompare(b.label));
+		for (const account of sortedAccounts) {
+			lines.push(`  ${chalk.bold(redaction?.get(account.label) ?? account.label)}`);
+			const labelWidth = [...account.series.values()].reduce((max, series) => Math.max(max, series.title.length), 0);
+			const sortedSeries = [...account.series.values()].sort((a, b) => a.title.localeCompare(b.title));
+			for (const series of sortedSeries) {
+				const fractions = series.entries
+					.map(entry => entry.usedFraction)
+					.filter((fraction): fraction is number => fraction !== undefined);
+				const latestEntry = series.entries[series.entries.length - 1];
+				const latestFraction = fractions.length > 0 ? fractions[fractions.length - 1] : undefined;
+				const peakFraction = fractions.length > 0 ? Math.max(...fractions) : undefined;
+				const status = historyStatus(latestFraction, latestEntry?.status);
+				const details: string[] = [];
+				if (latestFraction !== undefined) details.push(`latest ${(latestFraction * 100).toFixed(1)}%`);
+				if (peakFraction !== undefined) details.push(`peak ${(peakFraction * 100).toFixed(1)}%`);
+				details.push(`${series.entries.length} snapshot${series.entries.length === 1 ? "" : "s"}`);
+				lines.push(
+					`      ${STATUS_COLOR[status]("●")} ${series.title.padEnd(labelWidth)}  ${renderHistorySparkline(series.entries, sinceMs, nowMs)}  ${chalk.dim(details.join(" · "))}`,
+				);
+			}
+		}
+	}
+
+	return lines.join("\n");
+}
+
 function collectStoredAccounts(authStorage: AuthStorage): UsageAccountIdentity[] {
 	const accounts: UsageAccountIdentity[] = [];
 	const all = authStorage.getAll();
@@ -541,6 +681,37 @@ function redactReportForJson(
 export async function runUsageCommand(cmd: UsageCommandArgs): Promise<void> {
 	const authStorage = await discoverAuthStorage();
 	try {
+		if (cmd.history) {
+			const days = cmd.days !== undefined && Number.isFinite(cmd.days) && cmd.days > 0 ? cmd.days : 7;
+			const nowMs = Date.now();
+			const sinceMs = nowMs - days * 86_400_000;
+			const entries = authStorage.listUsageHistory({ sinceMs, provider: cmd.provider?.toLowerCase() });
+			const redaction = cmd.redact ? buildRedactionMap(collectHistoryIdentityStrings(entries)) : undefined;
+			if (cmd.json) {
+				const masked = redaction
+					? entries.map(entry => ({
+							...entry,
+							accountKey: redaction.get(entry.accountKey) ?? entry.accountKey,
+							email: maskIdentity(redaction, entry.email),
+							accountId: maskIdentity(redaction, entry.accountId),
+						}))
+					: entries;
+				process.stdout.write(`${JSON.stringify({ generatedAt: nowMs, sinceMs, entries: masked }, null, 2)}\n`);
+				return;
+			}
+			if (entries.length === 0) {
+				const scope = cmd.provider ? ` for provider "${cmd.provider}"` : "";
+				process.stderr.write(
+					chalk.yellow(
+						`No usage history recorded${scope} yet. Snapshots accumulate whenever usage is fetched (TUI footer, /usage, omp usage).\n`,
+					),
+				);
+				process.exitCode = 1;
+				return;
+			}
+			process.stdout.write(`${formatUsageHistory(entries, sinceMs, nowMs, redaction)}\n`);
+			return;
+		}
 		const modelRegistry = new ModelRegistry(authStorage);
 		const reports =
 			(await authStorage.fetchUsageReports({

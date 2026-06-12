@@ -421,6 +421,12 @@ export class MnemopiSessionState {
 // `per-project-tagged` is implemented by opening both the project bank and the
 // shared bank, then merging recall results while keeping writes project-local.
 function createScopedResources(config: MnemopiBackendConfig): MnemopiScopedResources {
+	// Env vars (MNEMOPI_POLYPHONIC_RECALL / MNEMOPI_ENHANCED_RECALL) still override
+	// these config-driven defaults inside the core gates.
+	requireMnemopi().configureRecallFeatures({
+		polyphonicRecall: config.polyphonicRecall,
+		enhancedRecall: config.enhancedRecall,
+	});
 	const banks = resolveScopedBanks(config);
 	const memories = new Map<string, MnemopiScopedMemory>();
 	const open = (bank: string): MnemopiScopedMemory => {

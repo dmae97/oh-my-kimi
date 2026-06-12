@@ -15,6 +15,11 @@ export default class Usage extends Command {
 			description: "Redact account emails/ids (shortest unique prefix) for sharing screenshots",
 			default: false,
 		}),
+		history: Flags.boolean({
+			description: "Show recorded usage-limit history (hourly snapshots) instead of a live snapshot",
+			default: false,
+		}),
+		days: Flags.integer({ char: "d", description: "History window in days (with --history)", default: 7 }),
 	};
 
 	static examples = [
@@ -22,6 +27,7 @@ export default class Usage extends Command {
 		"# Only Anthropic accounts\n  omp usage --provider anthropic",
 		"# Redact account identifiers for screenshots\n  omp usage --redact",
 		"# Machine-readable output\n  omp usage --json",
+		"# Usage-limit trend over the last 30 days\n  omp usage --history --days 30",
 	];
 
 	async run(): Promise<void> {
@@ -30,6 +36,8 @@ export default class Usage extends Command {
 			json: flags.json,
 			provider: flags.provider,
 			redact: flags.redact,
+			history: flags.history,
+			days: flags.days,
 		});
 	}
 }

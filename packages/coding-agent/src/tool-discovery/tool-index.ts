@@ -1,4 +1,5 @@
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
+import { isZodSchema, zodToWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 
 // ─── Generic Tool Discovery Types ────────────────────────────────────────────
 
@@ -65,6 +66,7 @@ export function isMCPToolName(name: string): boolean {
 }
 
 function getSchemaPropertyKeys(parameters: unknown): string[] {
+	if (isZodSchema(parameters)) parameters = zodToWireSchema(parameters);
 	if (!parameters || typeof parameters !== "object" || Array.isArray(parameters)) return [];
 	const properties = (parameters as { properties?: unknown }).properties;
 	if (!properties || typeof properties !== "object" || Array.isArray(properties)) return [];

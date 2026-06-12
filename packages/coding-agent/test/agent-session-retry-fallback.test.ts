@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
 import { Agent } from "@oh-my-pi/pi-agent-core";
-import { type AssistantMessage, Effort, type Model } from "@oh-my-pi/pi-ai";
+import { type AssistantMessage, Effort, type Model, type ProviderSessionState } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
@@ -739,6 +739,161 @@ describe("AgentSession retry fallback", () => {
 			type: "text",
 			text: "Recovered after OpenAI processing error",
 		});
+	});
+
+	it("restarts Responses provider state before retrying stale item-id replay errors", async () => {
+		const model = getBundledModel("openai", "gpt-4o-mini");
+		const fallbackModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model || !fallbackModel) {
+			throw new Error("Expected bundled test models to exist");
+		}
+
+		const staleReplayError = "Item with id 'rs_stale' not found.";
+		const requestedModels: string[] = [];
+		const fallbackAppliedEvents: Array<Extract<AgentSessionEvent, { type: "retry_fallback_applied" }>> = [];
+		const mock = createMockModel({
+			responses: [{ throw: staleReplayError }, { content: ["Recovered after Responses state reset"] }],
+		});
+		const agent = new Agent({
+			getApiKey: provider => `${provider}-test-key`,
+			initialState: {
+				model,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+			streamFn: (requestedModel, context, options) => {
+				requestedModels.push(`${requestedModel.provider}/${requestedModel.id}`);
+				return mock.stream(requestedModel, context, options);
+			},
+		});
+
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 5,
+			"retry.maxRetries": 1,
+			"retry.fallbackChains": {
+				default: [`${fallbackModel.provider}/${fallbackModel.id}`],
+			},
+		});
+		settings.setModelRole("default", `${model.provider}/${model.id}`);
+
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+		session.subscribe(event => {
+			if (event.type === "retry_fallback_applied") {
+				fallbackAppliedEvents.push(event);
+			}
+		});
+		const closeSpy = vi.fn();
+		session.providerSessionState.set("openai-responses:openai", {
+			close: closeSpy,
+		} satisfies ProviderSessionState);
+		const { retryStartEvents, retryEndEvents } = trackRetryEvents(session);
+
+		await session.prompt("Retry stale OpenAI replay");
+		await session.waitForIdle();
+
+		expect(closeSpy).toHaveBeenCalledTimes(1);
+		expect(session.providerSessionState.has("openai-responses:openai")).toBe(false);
+		expect(requestedModels).toEqual([`${model.provider}/${model.id}`, `${model.provider}/${model.id}`]);
+		expect(fallbackAppliedEvents).toHaveLength(0);
+		expect(retryStartEvents).toHaveLength(1);
+		expect(retryStartEvents[0]).toMatchObject({
+			attempt: 1,
+			delayMs: 0,
+			errorMessage: staleReplayError,
+		});
+		expect(retryEndEvents).toHaveLength(1);
+		expect(retryEndEvents[0]).toMatchObject({ success: true, attempt: 1 });
+		const lastAssistant = getLastAssistantMessage(session);
+		expect(lastAssistant.stopReason).toBe("stop");
+		expect(lastAssistant.content).toContainEqual({
+			type: "text",
+			text: "Recovered after Responses state reset",
+		});
+	});
+
+	it("restarts Responses provider state before retrying Zero Data Retention errors", async () => {
+		const model = getBundledModel("openai", "gpt-4o-mini");
+		const fallbackModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model || !fallbackModel) {
+			throw new Error("Expected bundled test models to exist");
+		}
+
+		// Mirrors the live wire error from OpenAI ZDR orgs after the in-provider
+		// retry has already exhausted itself; the higher-level retry must still
+		// classify the failure as a stale-replay event so the session reset and
+		// zero-delay backoff fire instead of a model fallback.
+		const zdrReplayError = "400 Previous response cannot be used for this organization due to Zero Data Retention.";
+		const requestedModels: string[] = [];
+		const fallbackAppliedEvents: Array<Extract<AgentSessionEvent, { type: "retry_fallback_applied" }>> = [];
+		const mock = createMockModel({
+			responses: [{ throw: zdrReplayError }, { content: ["Recovered after ZDR reset"] }],
+		});
+		const agent = new Agent({
+			getApiKey: provider => `${provider}-test-key`,
+			initialState: {
+				model,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+			streamFn: (requestedModel, context, options) => {
+				requestedModels.push(`${requestedModel.provider}/${requestedModel.id}`);
+				return mock.stream(requestedModel, context, options);
+			},
+		});
+
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 5,
+			"retry.maxRetries": 1,
+			"retry.fallbackChains": {
+				default: [`${fallbackModel.provider}/${fallbackModel.id}`],
+			},
+		});
+		settings.setModelRole("default", `${model.provider}/${model.id}`);
+
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+		session.subscribe(event => {
+			if (event.type === "retry_fallback_applied") {
+				fallbackAppliedEvents.push(event);
+			}
+		});
+		const closeSpy = vi.fn();
+		session.providerSessionState.set("openai-responses:openai", {
+			close: closeSpy,
+		} satisfies ProviderSessionState);
+		const { retryStartEvents, retryEndEvents } = trackRetryEvents(session);
+
+		await session.prompt("Retry ZDR replay");
+		await session.waitForIdle();
+
+		expect(closeSpy).toHaveBeenCalledTimes(1);
+		expect(session.providerSessionState.has("openai-responses:openai")).toBe(false);
+		expect(requestedModels).toEqual([`${model.provider}/${model.id}`, `${model.provider}/${model.id}`]);
+		expect(fallbackAppliedEvents).toHaveLength(0);
+		expect(retryStartEvents).toHaveLength(1);
+		expect(retryStartEvents[0]).toMatchObject({
+			attempt: 1,
+			delayMs: 0,
+			errorMessage: zdrReplayError,
+		});
+		expect(retryEndEvents).toHaveLength(1);
+		expect(retryEndEvents[0]).toMatchObject({ success: true, attempt: 1 });
+		const lastAssistant = getLastAssistantMessage(session);
+		expect(lastAssistant.stopReason).toBe("stop");
+		expect(lastAssistant.content).toContainEqual({ type: "text", text: "Recovered after ZDR reset" });
 	});
 
 	it("auto-retries Anthropic stream-envelope failures before message_start", async () => {

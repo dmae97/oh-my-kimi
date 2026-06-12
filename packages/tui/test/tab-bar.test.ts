@@ -38,4 +38,83 @@ describe("TabBar", () => {
 		const activeHighlights = rendered.match(/\x1b\[30;46m/g) ?? [];
 		expect(activeHighlights.length).toBe(1);
 	});
+
+	it("collapses distant tabs to their short form before wrapping", () => {
+		const tabs = Array.from({ length: 8 }, (_, i) => ({
+			id: `tab${i}`,
+			label: `⊕ Section ${i}`,
+			short: "⊕",
+		}));
+		const tabBar = new TabBar("", tabs, ansiTheme, 0);
+		tabBar.showHint = false;
+
+		const lines = tabBar.render(60);
+		// One line: distant tabs gave up their labels for icons.
+		expect(lines.length).toBe(1);
+		const text = lines[0];
+		// The active tab always keeps its full label.
+		expect(text).toContain("Section 0");
+		// The farthest tab collapsed to its icon-only form.
+		expect(text).not.toContain("Section 7");
+	});
+
+	it("skips muted tabs during keyboard cycling and click selection", () => {
+		const tabs = [
+			{ id: "a", label: "A" },
+			{ id: "b", label: "B", muted: true },
+			{ id: "c", label: "C" },
+		];
+		const tabBar = new TabBar("", tabs, ansiTheme, 0);
+		const changes: string[] = [];
+		tabBar.onTabChange = tab => changes.push(tab.id);
+
+		tabBar.nextTab();
+		expect(changes).toEqual(["c"]);
+
+		tabBar.prevTab();
+		expect(changes).toEqual(["c", "a"]);
+
+		// Click selection refuses muted tabs but accepts normal ones.
+		expect(tabBar.selectTab("b")).toBe(false);
+		expect(tabBar.selectTab("c")).toBe(true);
+		expect(changes).toEqual(["c", "a", "c"]);
+	});
+
+	it("setTabs preserves the active tab by id without firing onTabChange", () => {
+		const tabBar = new TabBar(
+			"",
+			[
+				{ id: "a", label: "A" },
+				{ id: "b", label: "B" },
+			],
+			ansiTheme,
+			1,
+		);
+		const changes: string[] = [];
+		tabBar.onTabChange = tab => changes.push(tab.id);
+
+		// Reordered set: "b" moves to the front and must stay active.
+		tabBar.setTabs([
+			{ id: "b", label: "B (2)" },
+			{ id: "a", label: "A", muted: true },
+		]);
+		expect(tabBar.getActiveTab().id).toBe("b");
+		expect(changes).toEqual([]);
+	});
+
+	it("resolves tabs from pointer positions via per-render hit zones", () => {
+		const tabs = [
+			{ id: "first", label: "First" },
+			{ id: "second", label: "Second" },
+		];
+		const tabBar = new TabBar("", tabs, ansiTheme, 0);
+		const line = tabBar.render(80)[0];
+		expect(visibleWidth(line)).toBeGreaterThan(0);
+
+		// ` First `  +  "  "  +  ` Second `  → col 0 is inside First,
+		// col 9 (after the 7-wide button and 2-space gap) inside Second.
+		expect(tabBar.tabAt(0, 1)?.id).toBe("first");
+		expect(tabBar.tabAt(0, 10)?.id).toBe("second");
+		expect(tabBar.tabAt(1, 1)).toBeUndefined();
+	});
 });

@@ -545,12 +545,61 @@ describe("resolveAgentModelPatterns", () => {
 		expect(result).toEqual(["anthropic/claude-sonnet-4-5:high"]);
 	});
 
-	test("expands pi/designer to priority defaults", () => {
+	test("uses default for unconfigured smol, slow, and designer agent roles before priority defaults", () => {
 		const settings = Settings.isolated({
-			modelRoles: {
-				default: "anthropic/claude-sonnet-4-5",
-			},
+			modelRoles: { default: "local/llama" },
 		});
+
+		expect(resolveAgentModelPatterns({ agentModel: "pi/smol", settings })).toEqual(["local/llama"]);
+		expect(resolveAgentModelPatterns({ agentModel: "pi/slow", settings })).toEqual(["local/llama"]);
+		expect(resolveAgentModelPatterns({ agentModel: "pi/designer", settings })).toEqual(["local/llama"]);
+	});
+
+	test("keeps built-in priority defaults when default aliases the same unset role", () => {
+		const smolSettings = Settings.isolated({
+			modelRoles: { default: "pi/smol" },
+		});
+		const slowSettings = Settings.isolated({
+			modelRoles: { default: "pi/slow" },
+		});
+		const designerSettings = Settings.isolated({
+			modelRoles: { default: "pi/designer" },
+		});
+
+		expect(resolveAgentModelPatterns({ agentModel: "pi/smol", settings: smolSettings })).toEqual([
+			"cerebras/zai-glm-4.7",
+			"cerebras/zai-glm-4.6",
+			"cerebras/zai-glm",
+			"haiku-4-5",
+			"haiku-4.5",
+			"haiku",
+			"flash",
+			"mini",
+		]);
+		expect(resolveAgentModelPatterns({ agentModel: "pi/slow", settings: slowSettings })[0]).toBe("gpt-5.4");
+		expect(resolveAgentModelPatterns({ agentModel: "pi/designer", settings: designerSettings })[0]).toBe(
+			"google-gemini-cli/gemini-3.1-pro",
+		);
+	});
+
+	test("expands cross-role default aliases when inheriting for an unset role", () => {
+		const settings = Settings.isolated({
+			modelRoles: { default: "pi/slow", slow: "anthropic/claude-sonnet-4-5" },
+		});
+
+		expect(resolveAgentModelPatterns({ agentModel: "pi/smol", settings })).toEqual(["anthropic/claude-sonnet-4-5"]);
+	});
+
+	test("recurses into priority defaults when default points at another unset role", () => {
+		const settings = Settings.isolated({
+			modelRoles: { default: "pi/slow" },
+		});
+
+		expect(resolveAgentModelPatterns({ agentModel: "pi/smol", settings })[0]).toBe("gpt-5.4");
+	});
+
+	test("expands pi/designer to priority defaults when default is unset", () => {
+		const settings = Settings.isolated();
 
 		const result = resolveAgentModelPatterns({
 			agentModel: "pi/designer",
@@ -1113,5 +1162,92 @@ describe("filterAvailableModelsByEnabledPatterns", () => {
 			registry,
 		);
 		expect(result).toHaveLength(2);
+	});
+});
+
+describe("effort-tier variant aliases", () => {
+	const variantModels: Model<Api>[] = [
+		buildModel({
+			id: "gemini-3.5-flash",
+			requestModelId: "gemini-3.5-flash-extra-low",
+			name: "Gemini 3.5 Flash",
+			api: "google-gemini-cli",
+			provider: "google-antigravity",
+			baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+			reasoning: true,
+			thinking: {
+				mode: "google-level",
+				efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High],
+				effortRouting: {
+					off: "gemini-3.5-flash-extra-low",
+					[Effort.Minimal]: "gemini-3-flash-agent",
+					[Effort.Low]: "gemini-3.5-flash-extra-low",
+					[Effort.Medium]: "gemini-3.5-flash-extra-low",
+					[Effort.High]: "gemini-3.5-flash-low",
+				},
+				suppressWhenOff: true,
+			},
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 1_048_576,
+			maxTokens: 65_535,
+		}),
+		// Live legacy model whose id is also a recycled alias of the family —
+		// exact matches must keep winning while it exists.
+		buildModel({
+			id: "gemini-3-flash",
+			name: "Gemini 3 Flash",
+			api: "google-gemini-cli",
+			provider: "google-antigravity",
+			baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+			reasoning: true,
+			thinking: { mode: "google-level", efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High] },
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 1_048_576,
+			maxTokens: 65_535,
+		}),
+		// Auto-derived pair target on a provider without a hand table.
+		buildModel({
+			id: "kimi-k2",
+			name: "Kimi K2",
+			api: "openai-completions",
+			provider: "venice",
+			baseUrl: "https://api.venice.ai/api/v1",
+			reasoning: true,
+			thinking: { mode: "budget", efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High] },
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128_000,
+			maxTokens: 8_192,
+		}),
+	];
+
+	test("provider-qualified retired tier ids resolve to the collapsed model", () => {
+		const result = parseModelPattern("google-antigravity/gemini-3.5-flash-low", variantModels);
+		expect(result.model?.id).toBe("gemini-3.5-flash");
+		expect(result.thinkingLevel).toBeUndefined();
+	});
+
+	test("retired tier ids keep explicit :level suffixes", () => {
+		const result = parseModelPattern("google-antigravity/gemini-3.5-flash-low:high", variantModels);
+		expect(result.model?.id).toBe("gemini-3.5-flash");
+		expect(result.thinkingLevel).toBe(Effort.High);
+	});
+
+	test("bare retired tier ids resolve through the alias table", () => {
+		const result = parseModelPattern("gemini-3.5-flash-extra-low", variantModels);
+		expect(result.model?.id).toBe("gemini-3.5-flash");
+		expect(result.model?.provider).toBe("google-antigravity");
+	});
+
+	test("live models always beat recycled aliases", () => {
+		const result = parseModelPattern("google-antigravity/gemini-3-flash", variantModels);
+		expect(result.model?.id).toBe("gemini-3-flash");
+	});
+
+	test("consumed X-thinking twins resolve via the grammar fallback", () => {
+		expect(parseModelPattern("venice/kimi-k2-thinking", variantModels).model?.id).toBe("kimi-k2");
+		expect(parseModelPattern("kimi-k2-thinking", variantModels).model?.id).toBe("kimi-k2");
 	});
 });

@@ -4,6 +4,7 @@
  * Shows name, description, origin, status, and kind-specific preview.
  */
 import * as os from "node:os";
+import { isZodSchema, zodToWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { type Component, truncateToWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
 import { theme } from "../../../modes/theme/theme";
 import { shortenPath } from "../../../tools/render-utils";
@@ -168,12 +169,15 @@ export class InspectorPanel implements Component {
 
 		try {
 			const tool = raw as any;
-			const params = tool?.parameters?.properties || tool?.inputSchema?.properties || {};
+			const wire = (s: unknown): any => (isZodSchema(s) ? zodToWireSchema(s) : s);
+			const paramSchema = wire(tool?.parameters);
+			const inputSchema = wire(tool?.inputSchema);
+			const params = paramSchema?.properties || inputSchema?.properties || {};
 
 			if (Object.keys(params).length === 0) {
 				lines.push(theme.fg("dim", "  (no arguments)"));
 			} else {
-				const required = new Set(tool?.parameters?.required || tool?.inputSchema?.required || []);
+				const required = new Set(paramSchema?.required || inputSchema?.required || []);
 
 				for (const [name, spec] of Object.entries(params)) {
 					const param = spec as any;

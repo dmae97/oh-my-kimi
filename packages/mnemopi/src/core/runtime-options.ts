@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { Api, Model } from "@oh-my-pi/pi-ai";
+import type { Api, ApiKey, Model } from "@oh-my-pi/pi-ai";
 
 export interface MnemopiLlmCompleteOptions {
 	maxTokens?: number;
@@ -31,14 +31,14 @@ export interface MnemopiEmbeddingRuntimeOptions {
 	disabled?: boolean;
 	model?: string;
 	apiUrl?: string;
-	apiKey?: string;
+	apiKey?: ApiKey;
 	provider?: MnemopiEmbeddingProvider | ((texts: readonly string[]) => EmbeddingOutput | Promise<EmbeddingOutput>);
 }
 
 export interface MnemopiLlmRuntimeOptions {
 	enabled?: boolean;
 	baseUrl?: string;
-	apiKey?: string;
+	apiKey?: ApiKey;
 	model?: string | Model<Api>;
 	maxTokens?: number;
 	complete?: MnemopiLlmCompletion;
@@ -51,20 +51,22 @@ export interface MnemopiLlmRuntimeOptions {
 export interface MnemopiRuntimeOptions {
 	embeddings?: false | MnemopiEmbeddingRuntimeOptions;
 	llm?: false | MnemopiLlmRuntimeOptions | Model<Api> | MnemopiLlmCompletion;
+	/** Verbose diagnostics: escalates best-effort failure logs from debug to warn. */
+	debug?: boolean;
 }
 
 export interface ResolvedMnemopiEmbeddingRuntimeOptions {
 	disabled?: boolean;
 	model?: string;
 	apiUrl?: string;
-	apiKey?: string;
+	apiKey?: ApiKey;
 	provider?: MnemopiEmbeddingProvider;
 }
 
 export interface ResolvedMnemopiLlmRuntimeOptions {
 	enabled?: boolean;
 	baseUrl?: string;
-	apiKey?: string;
+	apiKey?: ApiKey;
 	model?: string | Model<Api>;
 	maxTokens?: number;
 	complete?: MnemopiLlmCompletion;
@@ -75,6 +77,7 @@ export interface ResolvedMnemopiLlmRuntimeOptions {
 export interface ResolvedMnemopiRuntimeOptions {
 	embeddings?: ResolvedMnemopiEmbeddingRuntimeOptions;
 	llm?: ResolvedMnemopiLlmRuntimeOptions;
+	debug?: boolean;
 }
 
 const runtimeOptionsStorage = new AsyncLocalStorage<ResolvedMnemopiRuntimeOptions>();
@@ -88,6 +91,11 @@ export function withMnemopiRuntimeOptions<T>(options: ResolvedMnemopiRuntimeOpti
 
 export function getMnemopiRuntimeOptions(): ResolvedMnemopiRuntimeOptions | undefined {
 	return runtimeOptionsStorage.getStore();
+}
+
+/** Whether the active runtime scope requested verbose diagnostics (`mnemopi.debug`). */
+export function mnemopiDebugEnabled(): boolean {
+	return runtimeOptionsStorage.getStore()?.debug === true;
 }
 
 export function resolveEmbeddingProvider(

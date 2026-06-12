@@ -3,8 +3,9 @@
  *
  * Layering:
  * - `matchModel` is the single matching engine. Order: exact `provider/id`
- *   reference (with OpenRouter routed/date fallbacks) → exact canonical id →
- *   exact bare id → provider-scoped fuzzy → substring with alias-vs-dated pick.
+ *   reference (with variant-alias and OpenRouter routed/date fallbacks) →
+ *   exact canonical id → exact bare id → retired variant alias →
+ *   provider-scoped fuzzy → substring with alias-vs-dated pick.
  * - `parseModelPatternWithContext`/`parseModelPattern` layer the selector
  *   grammar on top: trailing `:level` thinking suffixes (`splitThinkingSuffix`)
  *   and `@upstream` provider routing (`splitUpstreamRouting`).
@@ -19,9 +20,11 @@ import type { Api, Effort, KnownProvider, Model, ModelSpec } from "@oh-my-pi/pi-
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { modelMatchesHost } from "@oh-my-pi/pi-catalog/hosts";
 import { buildModelProviderPriorityRank } from "@oh-my-pi/pi-catalog/identity";
+import { stripThinkingVariantToken } from "@oh-my-pi/pi-catalog/identity/family";
 import { clampThinkingLevelForModel } from "@oh-my-pi/pi-catalog/model-thinking";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { DEFAULT_MODEL_PER_PROVIDER } from "@oh-my-pi/pi-catalog/provider-models";
+import { resolveBareVariantAlias, resolveVariantAlias } from "@oh-my-pi/pi-catalog/variant-collapse";
 import { fuzzyMatch } from "@oh-my-pi/pi-tui";
 import { logger } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
@@ -228,6 +231,18 @@ export function resolveProviderModelReference(
 		return exact;
 	}
 
+	// Retired effort-tier variant ids resolve to their collapsed logical
+	// model: hand-table aliases first, then the `X-thinking` → `X` grammar
+	// for auto-derived pairs. Exact lookup above always wins while raw is live.
+	const variantAliasId =
+		resolveVariantAlias(normalizedProvider, normalizedModelId) ?? stripThinkingVariantToken(normalizedModelId);
+	if (variantAliasId) {
+		const aliased = index.get(`${normalizedProvider}\u0000${variantAliasId.toLowerCase()}`);
+		if (aliased) {
+			return aliased;
+		}
+	}
+
 	if (normalizedProvider !== "openrouter") {
 		return undefined;
 	}
@@ -407,11 +422,13 @@ function findExactCanonicalModelMatch(
 
 /**
  * The single model-matching engine. Tries, in order:
- * 1. exact `provider/id` reference (OpenRouter routed/date fallbacks included),
+ * 1. exact `provider/id` reference (variant-alias and OpenRouter routed/date
+ *    fallbacks included),
  * 2. exact canonical id (coalesces provider variants),
  * 3. exact bare id (preference-ranked),
- * 4. provider-scoped fuzzy match,
- * 5. substring match with the alias-vs-dated pick.
+ * 4. retired effort-tier variant alias (collapsed catalog entries),
+ * 5. provider-scoped fuzzy match,
+ * 6. substring match with the alias-vs-dated pick.
  * Returns the matched model or undefined if no match found.
  */
 function matchModel(
@@ -439,6 +456,20 @@ function matchModel(
 	const exactMatches = availableModels.filter(m => m.id.toLowerCase() === modelPattern.toLowerCase());
 	if (exactMatches.length > 0) {
 		return pickPreferredModel(exactMatches, context);
+	}
+
+	// Retired effort-tier variant ids (bare, no provider prefix) resolve to
+	// their collapsed logical model; models from the providers whose table
+	// declared the alias win ties. Auto-derived `X-thinking` pairs resolve
+	// through the grammar fallback.
+	const bareAlias = resolveBareVariantAlias(modelPattern);
+	const bareAliasTargetId = bareAlias?.id ?? stripThinkingVariantToken(modelPattern);
+	if (bareAliasTargetId) {
+		const aliasMatches = availableModels.filter(m => m.id.toLowerCase() === bareAliasTargetId.toLowerCase());
+		if (aliasMatches.length > 0) {
+			const preferred = bareAlias ? aliasMatches.filter(m => bareAlias.providers.includes(m.provider)) : [];
+			return pickPreferredModel(preferred.length > 0 ? preferred : aliasMatches, context);
+		}
 	}
 	// Check for provider/modelId format — fuzzy match within provider only.
 	const slashIndex = modelPattern.indexOf("/");
@@ -633,18 +664,72 @@ function isSessionInheritedAgentPattern(value: string): boolean {
 	return value === DEFAULT_MODEL_ROLE || value === `${PREFIX_MODEL_ROLE}${DEFAULT_MODEL_ROLE}` || value === "pi/task";
 }
 
-function resolveConfiguredRolePattern(value: string, settings?: Settings): string[] | undefined {
+function shouldInheritDefaultBeforePriority(role: ModelRole): boolean {
+	return role === "smol" || role === "slow" || role === "designer";
+}
+
+function resolveDefaultInheritedPatterns(
+	role: ModelRole,
+	configuredDefault: string | undefined,
+	roleDefaults: string[],
+	settings: Settings | undefined,
+	visited: Set<ModelRole>,
+): string[] {
+	if (!shouldInheritDefaultBeforePriority(role) || !configuredDefault) return [];
+
+	const resolved: string[] = [];
+	for (const pattern of normalizeModelPatternList(configuredDefault)) {
+		const { base: aliasCandidate, level: thinkingLevel } = splitThinkingSuffix(pattern, PREFIX_MODEL_ROLE.length);
+		const aliasRole = getModelRoleAlias(aliasCandidate);
+		if (aliasRole === role) {
+			// Self-alias (e.g. modelRoles.default = "pi/smol") would loop back to the
+			// same unset role; collapse straight to the built-in priority chain.
+			resolved.push(
+				...(thinkingLevel
+					? roleDefaults.map(defaultPattern => `${defaultPattern}:${thinkingLevel}`)
+					: roleDefaults),
+			);
+			continue;
+		}
+		if (aliasRole && !visited.has(aliasRole)) {
+			// Cross-role alias (e.g. modelRoles.default = "pi/slow"): resolve the
+			// target role's patterns now so downstream one-layer expanders see
+			// concrete model patterns instead of another role alias.
+			const recursed = resolveConfiguredRolePattern(pattern, settings, new Set(visited));
+			if (recursed && recursed.length > 0) {
+				resolved.push(...recursed);
+				continue;
+			}
+		}
+		resolved.push(pattern);
+	}
+	return resolved;
+}
+
+function resolveConfiguredRolePattern(
+	value: string,
+	settings?: Settings,
+	visited: Set<ModelRole> = new Set(),
+): string[] | undefined {
 	const normalized = value.trim();
 	if (!normalized) return undefined;
 
 	const { base: aliasCandidate, level: thinkingLevel } = splitThinkingSuffix(normalized, PREFIX_MODEL_ROLE.length);
 	const role = getModelRoleAlias(aliasCandidate);
 	if (!role) return [normalized];
+	if (visited.has(role)) return undefined;
+	visited.add(role);
 
 	const configured = settings?.getModelRole(role)?.trim();
+	const configuredDefault = settings?.getModelRole(DEFAULT_MODEL_ROLE)?.trim();
 	const roleDefaults = normalizeModelPatternList(MODEL_PRIO[role as keyof typeof MODEL_PRIO]);
-	const resolved = configured ? normalizeModelPatternList(configured) : roleDefaults;
-	if (!resolved || resolved.length === 0) {
+	const resolved = configured
+		? normalizeModelPatternList(configured)
+		: resolveDefaultInheritedPatterns(role, configuredDefault, roleDefaults, settings, visited);
+	if (resolved.length === 0) {
+		resolved.push(...roleDefaults);
+	}
+	if (resolved.length === 0) {
 		return undefined;
 	}
 

@@ -430,6 +430,7 @@ export class UiHelpers {
 							showImages: settings.get("terminal.showImages"),
 							editFuzzyThreshold: settings.get("edit.fuzzyThreshold"),
 							editAllowFuzzy: settings.get("edit.fuzzyMatch"),
+							liveRegion: this.ctx.chatContainer,
 						},
 						tool,
 						this.ctx.ui,
@@ -660,10 +661,13 @@ export class UiHelpers {
 			await this.ctx.session.prompt(message.text);
 			return;
 		}
-		await this.ctx.withLocalSubmission(message.text, () =>
-			message.mode === "followUp"
-				? this.ctx.session.followUp(message.text, message.images)
-				: this.ctx.session.steer(message.text, message.images),
+		await this.ctx.withLocalSubmission(
+			message.text,
+			() =>
+				message.mode === "followUp"
+					? this.ctx.session.followUp(message.text, message.images)
+					: this.ctx.session.steer(message.text, message.images),
+			{ imageCount: message.images?.length ?? 0 },
 		);
 	}
 
@@ -753,7 +757,7 @@ export class UiHelpers {
 			// firstPrompt is fire-and-forget — its rejection is funneled through
 			// `restoreQueue` rather than rethrown, so we use the primitive
 			// recordLocalSubmission and dispose manually in the catch.
-			const disposeFirstPrompt = this.ctx.recordLocalSubmission(firstPrompt.text);
+			const disposeFirstPrompt = this.ctx.recordLocalSubmission(firstPrompt.text, firstPrompt.images?.length ?? 0);
 			const promptPromise = this.ctx.session
 				.prompt(firstPrompt.text, {
 					streamingBehavior: firstPrompt.mode === "followUp" ? "followUp" : "steer",

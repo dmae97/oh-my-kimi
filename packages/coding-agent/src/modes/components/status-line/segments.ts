@@ -486,7 +486,9 @@ const sessionNameSegment: StatusLineSegment = {
 		if (!name) return { content: "", visible: false };
 
 		const ansi =
-			getSessionAccentAnsi(getSessionAccentHex(name, theme.accentSurfaceLuminance)) ?? theme.getFgAnsi("accent");
+			getSessionAccentAnsi(
+				getSessionAccentHex(name, theme.getMajorThemeColorHexes(), theme.accentSurfaceLuminance),
+			) ?? theme.getFgAnsi("accent");
 		return { content: `${ansi}${sanitizeStatusText(name)}\x1b[39m`, visible: true };
 	},
 };

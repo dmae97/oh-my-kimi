@@ -6,19 +6,22 @@
  */
 
 import {
+	type ApiKey,
 	type AssistantMessage,
 	Effort,
 	type FetchImpl,
 	type Message,
 	type MessageAttribution,
 	type Model,
+	ProviderHttpError,
 	type Tool,
 	type Usage,
+	withAuth,
 } from "@oh-my-pi/pi-ai";
 import { clampThinkingLevelForModel } from "@oh-my-pi/pi-catalog/model-thinking";
 import { countTokens } from "@oh-my-pi/pi-natives";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
-import { SNAPCOMPACT_FRAME_TOKEN_ESTIMATE } from "@oh-my-pi/snapcompact";
+import * as snapcompact from "@oh-my-pi/snapcompact";
 import { type AgentTelemetry, instrumentedCompleteSimple } from "../telemetry";
 import { ThinkingLevel } from "../thinking";
 import type { AgentMessage } from "../types";
@@ -324,7 +327,7 @@ export function estimateTokens(message: AgentMessage): number {
 			fragments.push(message.summary);
 			if (message.role === "compactionSummary" && message.images) {
 				// Snapcompact frames render at ≥1568px; providers bill the downscaled cap.
-				extra += message.images.length * SNAPCOMPACT_FRAME_TOKEN_ESTIMATE;
+				extra += message.images.length * snapcompact.FRAME_TOKEN_ESTIMATE;
 			}
 			break;
 		}
@@ -579,11 +582,8 @@ function resolveCompactionEffort(model: Model, level: ThinkingLevel | undefined)
  * message-based check is still required upstream — see issue #986.
  */
 function createSummarizationError(prefix: string, response: AssistantMessage): Error {
-	const error: Error & { status?: number } = new Error(`${prefix}: ${response.errorMessage || "Unknown error"}`);
-	if (response.errorStatus !== undefined) {
-		error.status = response.errorStatus;
-	}
-	return error;
+	const text = `${prefix}: ${response.errorMessage || "Unknown error"}`;
+	return response.errorStatus === undefined ? new Error(text) : new ProviderHttpError(text, response.errorStatus);
 }
 
 /**
@@ -622,7 +622,7 @@ export async function generateSummary(
 	currentMessages: AgentMessage[],
 	model: Model,
 	reserveTokens: number,
-	apiKey: string,
+	apiKey: ApiKey,
 	signal?: AbortSignal,
 	customInstructions?: string,
 	previousSummary?: string,
@@ -736,7 +736,7 @@ export function renderHandoffPrompt(customInstructions?: string): string {
 export async function generateHandoff(
 	messages: AgentMessage[],
 	model: Model,
-	apiKey: string,
+	apiKey: ApiKey,
 	options: HandoffOptions,
 	signal?: AbortSignal,
 ): Promise<string> {
@@ -784,7 +784,7 @@ async function generateShortSummary(
 	historySummary: string | undefined,
 	model: Model,
 	reserveTokens: number,
-	apiKey: string,
+	apiKey: ApiKey,
 	signal?: AbortSignal,
 	options?: SummaryOptions,
 ): Promise<string> {
@@ -981,7 +981,7 @@ const TURN_PREFIX_SUMMARIZATION_PROMPT = prompt.render(compactionTurnPrefixPromp
 export async function compact(
 	preparation: CompactionPreparation,
 	model: Model,
-	apiKey: string,
+	apiKey: ApiKey,
 	customInstructions?: string,
 	signal?: AbortSignal,
 	options?: SummaryOptions,
@@ -1032,13 +1032,18 @@ export async function compact(
 		);
 		if (remoteHistory.length > 0) {
 			try {
-				const remote = await requestOpenAiRemoteCompaction(
-					model,
+				const remote = await withAuth(
 					apiKey,
-					remoteHistory,
-					summaryOptions.remoteInstructions ?? SUMMARIZATION_SYSTEM_PROMPT,
-					signal,
-					{ fetch: summaryOptions.fetch },
+					key =>
+						requestOpenAiRemoteCompaction(
+							model,
+							key,
+							remoteHistory,
+							summaryOptions.remoteInstructions ?? SUMMARIZATION_SYSTEM_PROMPT,
+							signal,
+							{ fetch: summaryOptions.fetch },
+						),
+					{ signal },
 				);
 				preserveData = withOpenAiRemoteCompactionPreserveData(previousPreserveData, remote);
 			} catch (err) {
@@ -1137,7 +1142,7 @@ async function generateTurnPrefixSummary(
 	messages: AgentMessage[],
 	model: Model,
 	reserveTokens: number,
-	apiKey: string,
+	apiKey: ApiKey,
 	signal?: AbortSignal,
 	options?: SummaryOptions,
 ): Promise<string> {

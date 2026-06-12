@@ -43,9 +43,10 @@ describe("issue #2298: chain rows under last-sibling branches keep their gutter"
 	});
 
 	// The bug rendered the conversation chain under a `└─` branch with bare
-	// spaces, breaking the visual flow back to the parent message. The fix keeps
-	// the inherited gutter `│` for chain descendants (rows without their own
-	// connector) so the chain stays anchored to its branch.
+	// spaces, breaking the visual flow back to the parent message. The fix
+	// anchors chain descendants (rows without their own connector) with a `│`
+	// one level right of the suppressed gutter — directly below the branch
+	// head's content — never in the `└─` corner column itself (#2325).
 	it("draws the inherited `│` for chain descendants of a last-sibling branch", () => {
 		const root = makeNode("user", "original");
 		const rootAsst = makeNode("assistant", "resp", root.entry.id);
@@ -78,12 +79,15 @@ describe("issue #2298: chain rows under last-sibling branches keep their gutter"
 		const branch1Row = findRow("user: branch1 head");
 		expect(branch1Row).toMatch(/└─\s+user: branch1 head/);
 
-		// Each chain descendant of branch1 must keep the inherited `│` gutter at
-		// the column the parent's connector lived in. Before the fix, this row
-		// rendered as bare spaces and the chain floated unanchored (#2298).
+		// Each chain descendant of branch1 must stay anchored by a `│` drawn
+		// below the branch head's content (one level right of the `└─`
+		// connector). Before #2298 these rows rendered as bare spaces and the
+		// chain floated unanchored; after #2325 the anchor must not sit in the
+		// `└─` corner column, which would dangle below the terminal branch.
 		for (const needle of ["assistant: chain-asst-1", "user: chain-user-2"]) {
 			const row = findRow(needle);
-			expect(row).toMatch(/^\s{2}│\s+\S/);
+			expect(row).not.toMatch(/^\s{2}│/);
+			expect(row).toMatch(/^\s{5}│\s+\S/);
 		}
 	});
 
@@ -124,14 +128,24 @@ describe("issue #2298: chain rows under last-sibling branches keep their gutter"
 			expect(row).toMatch(/[├└]─/);
 		}
 
-		// Linear continuations of those branched grandchildren are chain rows,
-		// but they must extend only their nearest connector gutter (c/d), not the
-		// suppressed branch1 gutter. This is the nested case from the PR review.
-		for (const needle of ["c continuation", "d continuation"]) {
-			const row = rendered.find(line => line.includes(needle));
-			if (!row) throw new Error(`row containing ${JSON.stringify(needle)} not rendered`);
+		// Linear continuations of those branched grandchildren are chain rows.
+		// c is not the last sibling, so its sibling line (`│` in c's connector
+		// column) anchors the continuation. d is the last sibling (`└─`), so its
+		// continuation is anchored one level further right instead — never in
+		// d's own corner column (#2325), and never in the suppressed branch1
+		// column. This is the nested case from the PR review.
+		{
+			const row = rendered.find(line => line.includes("c continuation"));
+			if (!row) throw new Error("row containing c continuation not rendered");
 			expect(row).not.toMatch(/^\s{2}│/);
 			expect(row).toMatch(/^\s{5}│/);
+		}
+		{
+			const row = rendered.find(line => line.includes("d continuation"));
+			if (!row) throw new Error("row containing d continuation not rendered");
+			expect(row).not.toMatch(/^\s{2}│/);
+			expect(row).not.toMatch(/^\s{5}│/);
+			expect(row).toMatch(/^\s{8}│/);
 		}
 	});
 });

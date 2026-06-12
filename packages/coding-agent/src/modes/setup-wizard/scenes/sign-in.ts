@@ -1,7 +1,7 @@
 import type { AuthStorage } from "@oh-my-pi/pi-ai";
 import { PASTE_CODE_LOGIN_PROVIDERS } from "@oh-my-pi/pi-ai";
 import type { OAuthProvider } from "@oh-my-pi/pi-ai/oauth/types";
-import { Input, matchesKey, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
+import { Input, matchesKey, type SgrMouseEvent, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
 import { getAgentDbPath } from "@oh-my-pi/pi-utils";
 import { OAuthSelectorComponent } from "../../components/oauth-selector";
 import { theme } from "../../theme/theme";
@@ -35,6 +35,8 @@ export class SignInTab implements SetupTab {
 	#loginAbort: AbortController | undefined;
 	#loggingInProvider: string | undefined;
 	#disposed = false;
+	/** Render line where the provider selector begins. */
+	#selectorRowStart = 2;
 
 	constructor(private readonly host: SetupSceneHost) {
 		this.#authStorage = host.ctx.session.modelRegistry.authStorage;
@@ -68,12 +70,19 @@ export class SignInTab implements SetupTab {
 		this.#selector.handleInput(data);
 	}
 
+	/** Forward mouse to the provider selector; pointer is inert during an active login or code prompt. */
+	routeMouse(event: SgrMouseEvent, line: number, col: number): void {
+		if (this.#loggingInProvider || this.#prompt) return;
+		this.#selector.routeMouse(event, line - this.#selectorRowStart, col);
+	}
+
 	render(width: number): readonly string[] {
 		const lines: string[] = [];
 		if (this.#loggingInProvider) {
 			lines.push(theme.bold(`Signing in to ${this.#loggingInProvider}`));
 		} else {
 			lines.push(theme.fg("muted", "Pick a provider to sign in — you can connect more than one."), "");
+			this.#selectorRowStart = lines.length;
 			lines.push(...this.#selector.render(width));
 		}
 

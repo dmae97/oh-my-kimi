@@ -204,6 +204,10 @@ export class VirtualTerminal implements Terminal {
 		return true;
 	}
 
+	get kittyEnableSequence(): string | null {
+		return "\x1b[>1u";
+	}
+
 	get appearance(): TerminalAppearance | undefined {
 		return undefined;
 	}

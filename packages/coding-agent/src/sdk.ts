@@ -9,6 +9,7 @@ import {
 	type ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
 import {
+	type Context,
 	type CredentialDisabledEvent,
 	type Message,
 	type Model,
@@ -121,6 +122,7 @@ import {
 	wrapSteeringForModel,
 } from "./session/messages";
 import { getRestorableSessionModels, SessionManager } from "./session/session-manager";
+import { SnapcompactInlineTransformer } from "./session/snapcompact-inline";
 import { closeAllConnections } from "./ssh/connection-manager";
 import { unmountAll } from "./ssh/sshfs-mount";
 import {
@@ -1977,6 +1979,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				workspaceTree: workspaceTreePromise,
 				memoryRootEnabled: memoryBackend.id === "local",
 				model: settings.get("includeModelInPrompt") ? getActiveModelString() : undefined,
+				personality: agentKind === "sub" ? "none" : settings.get("personality"),
 			});
 
 			if (options.systemPrompt === undefined) {
@@ -2156,6 +2159,26 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			const withContext = await extensionRunner.emitContext(messages);
 			return wrapSteeringForModel(withContext);
 		};
+		// Per-request provider-context transforms. Obfuscate FIRST so secrets are
+		// redacted from text before snapcompact rasterizes it into PNG frames.
+		// Both operate on the transient outgoing Context only — never persisted.
+		const snapcompactSystemPromptMode = settings.get("snapcompact.systemPrompt");
+		const snapcompactInline =
+			snapcompactSystemPromptMode !== "none" || settings.get("snapcompact.toolResults")
+				? new SnapcompactInlineTransformer({
+						renderSystemPrompt: snapcompactSystemPromptMode,
+						renderToolResults: settings.get("snapcompact.toolResults"),
+						shape: settings.get("snapcompact.shape"),
+					})
+				: undefined;
+		const transformProviderContext =
+			obfuscator || snapcompactInline
+				? (context: Context, transformModel: Model): Context => {
+						let transformed = obfuscator ? obfuscateProviderContext(obfuscator, context) : context;
+						if (snapcompactInline) transformed = snapcompactInline.transform(transformed, transformModel);
+						return transformed;
+					}
+				: undefined;
 		const onPayload = async (payload: unknown, _model?: Model) => {
 			return await extensionRunner.emitBeforeProviderRequest(payload);
 		};
@@ -2196,7 +2219,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			sessionId: providerSessionId,
 			promptCacheKey: options.providerPromptCacheKey,
 			transformContext,
-			transformProviderContext: obfuscator ? context => obfuscateProviderContext(obfuscator, context) : undefined,
+			transformProviderContext,
 			steeringMode: settings.get("steeringMode") ?? "one-at-a-time",
 			followUpMode: settings.get("followUpMode") ?? "one-at-a-time",
 			interruptMode: settings.get("interruptMode") ?? "immediate",

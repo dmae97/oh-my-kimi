@@ -974,6 +974,11 @@ export interface AnthropicOptions extends StreamOptions {
 	 */
 	thinkingBudgetTokens?: number;
 	/**
+	 * Upstream wire model id override for collapsed effort-tier variants.
+	 * Serialized as `requestModelId ?? model.requestModelId ?? model.id`.
+	 */
+	requestModelId?: string;
+	/**
 	 * Effort level for adaptive thinking.
 	 * Controls how much thinking Claude allocates:
 	 * - "max": Always thinks with no constraints
@@ -2816,7 +2821,7 @@ function buildParams(
 	// Build params in the canonical field order: model → messages → system → tools →
 	// metadata → max_tokens → thinking → context_management → output_config → stream.
 	const params: MessageCreateParamsStreaming = {
-		model: model.requestModelId ?? model.id,
+		model: options?.requestModelId ?? model.requestModelId ?? model.id,
 		messages: convertAnthropicMessages(context.messages, model, isOAuthToken),
 		...(systemBlocks && { system: systemBlocks }),
 		...(tools !== undefined && { tools }),

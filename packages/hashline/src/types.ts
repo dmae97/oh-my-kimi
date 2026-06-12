@@ -31,6 +31,13 @@ export type Edit =
 			lineNum: number;
 			index: number;
 			mode?: "replacement";
+			/**
+			 * Present on inserts lowered from `insert after block N:`: the
+			 * resolved block's first line. Lets the applier slide a body that
+			 * claims a depth inside the block back across the block's trailing
+			 * closer lines (never above this line).
+			 */
+			blockStart?: number;
 	  }
 	| { kind: "delete"; anchor: Anchor; lineNum: number; index: number; oldAssertion?: string }
 	| {

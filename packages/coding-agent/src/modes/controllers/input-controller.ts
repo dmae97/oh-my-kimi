@@ -4,6 +4,7 @@ import type { AutocompleteProvider, SlashCommand } from "@oh-my-pi/pi-tui";
 import { $env, logger, sanitizeText } from "@oh-my-pi/pi-utils";
 import { getRoleInfo } from "../../config/model-roles";
 import { isSettingsInitialized, settings } from "../../config/settings";
+import { AssistantMessageComponent } from "../../modes/components/assistant-message";
 import { renderSegmentTrack } from "../../modes/components/segment-track";
 import { TinyTitleDownloadProgressComponent } from "../../modes/components/tiny-title-download-progress";
 import { expandEmoticons } from "../../modes/emoji-autocomplete";
@@ -49,7 +50,14 @@ const TINY_TITLE_PROGRESS_DONE_TTL_MS = 3_000;
 const TINY_TITLE_PROGRESS_REVEAL_DELAY_MS = 1_000;
 
 export class InputController {
-	constructor(private ctx: InteractiveModeContext) {}
+	constructor(
+		private ctx: InteractiveModeContext,
+		/** Injectable clipboard reads so tests can drive paste flows without a real clipboard. */
+		private clipboard: {
+			readImage: typeof readImageFromClipboard;
+			readText: typeof readTextFromClipboard;
+		} = { readImage: readImageFromClipboard, readText: readTextFromClipboard },
+	) {}
 
 	#enhancedPaste?: EnhancedPasteController;
 
@@ -523,6 +531,36 @@ export class InputController {
 				});
 
 				this.ctx.onInputCallback(submission);
+			} else {
+				// No input waiter: the main loop is between turns (post-turn
+				// epilogue, retry backoff, or a scheduled continue) with the agent
+				// momentarily idle. The editor already cleared itself on Enter, so
+				// falling through here would silently swallow the message. Queue it
+				// as a steer instead: the idle drain in #queueSteer delivers it
+				// immediately when the session is resumable, and a retry/continue
+				// run picks it up at loop start otherwise.
+				this.ctx.editor.imageLinks = undefined;
+				const images = inputImages && inputImages.length > 0 ? [...inputImages] : undefined;
+				this.ctx.pendingImages = [];
+				this.ctx.pendingImageLinks = [];
+				try {
+					await this.ctx.withLocalSubmission(text, () => this.ctx.session.steer(text, images), {
+						imageCount: images?.length ?? 0,
+					});
+				} catch (error) {
+					// Don't lose the message: hand the text and images back to the
+					// editor so the user can retry (e.g. steer() rejecting an
+					// extension command).
+					this.ctx.editor.setText(text);
+					if (images && images.length > 0) {
+						this.ctx.pendingImages = [...images];
+						this.ctx.pendingImageLinks = inputImageLinks ? [...inputImageLinks] : images.map(() => undefined);
+						this.ctx.editor.imageLinks = this.ctx.pendingImageLinks;
+					}
+					this.ctx.showError(error instanceof Error ? error.message : String(error));
+				}
+				this.ctx.updatePendingMessagesDisplay();
+				this.ctx.ui.requestRender();
 			}
 			this.ctx.editor.addToHistory(text);
 		};
@@ -737,10 +775,19 @@ export class InputController {
 			}
 			return 0;
 		}
-		const queuedText = allQueued.join("\n\n");
+		const queuedText = allQueued.map(e => e.text).join("\n\n");
 		const currentText = options?.currentText ?? this.ctx.editor.getText();
 		const combinedText = [queuedText, currentText].filter(t => t.trim()).join("\n\n");
 		this.ctx.editor.setText(combinedText);
+		// Hand queued images back to the pending-image buffer (links are
+		// re-materialized lazily; the restored text already carries the
+		// `[Image #N, WxH]` markers).
+		const queuedImages = allQueued.flatMap(e => e.images ?? []);
+		if (queuedImages.length > 0) {
+			this.ctx.pendingImages.push(...queuedImages);
+			this.ctx.pendingImageLinks.push(...queuedImages.map(() => undefined));
+			this.ctx.editor.imageLinks = this.ctx.pendingImageLinks;
+		}
 		this.ctx.updatePendingMessagesDisplay();
 		if (options?.abort) {
 			this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL });
@@ -837,10 +884,25 @@ export class InputController {
 
 	async handleImagePaste(): Promise<boolean> {
 		try {
-			const image = await readImageFromClipboard();
+			const image = await this.clipboard.readImage();
 			if (!image) {
-				this.ctx.showStatus("No image in clipboard (use terminal paste for text)");
-				return false;
+				// Smart paste (#1628): no image on the clipboard — fall back to
+				// pasting its text so the same chord covers both payload kinds.
+				// Hosts that pre-empt the terminal's own paste (VS Code's
+				// integrated terminal, Win+V clipboard history) deliver only
+				// this keypress, so a miss here must not dead-end.
+				const text = await this.clipboard.readText();
+				if (!text) {
+					this.ctx.showStatus("Clipboard is empty");
+					return false;
+				}
+				// Route to the focused component when it accepts pastes (modal
+				// Input prompts), matching the enhanced-paste text path (#2127).
+				const focused = this.ctx.ui.getFocused();
+				const target = focused && focused !== this.ctx.editor && hasPasteText(focused) ? focused : this.ctx.editor;
+				target.pasteText(text);
+				this.ctx.ui.requestRender();
+				return true;
 			}
 			return await this.#normalizeAndInsertPastedImage(
 				{
@@ -858,10 +920,11 @@ export class InputController {
 
 	async handleClipboardTextRawPaste(): Promise<void> {
 		try {
-			const text = await readTextFromClipboard();
+			const text = await this.clipboard.readText();
 			if (text) {
 				this.ctx.editor.insertText(text);
 				this.ctx.ui.requestRender();
+			} else {
 				this.ctx.showStatus("No text in clipboard to paste raw");
 			}
 		} catch {
@@ -977,18 +1040,19 @@ export class InputController {
 
 	toggleThinkingBlockVisibility(): void {
 		this.ctx.hideThinkingBlock = !this.ctx.hideThinkingBlock;
-		settings.set("hideThinkingBlock", this.ctx.hideThinkingBlock);
+		this.ctx.settings.set("hideThinkingBlock", this.ctx.hideThinkingBlock);
 		this.ctx.session.agent.hideThinkingSummary = this.ctx.hideThinkingBlock;
 
-		// Rebuild chat from session messages
-		this.ctx.chatContainer.clear();
-		this.ctx.rebuildChatFromMessages();
+		for (const child of this.ctx.chatContainer.children) {
+			if (child instanceof AssistantMessageComponent) {
+				child.setHideThinkingBlock(this.ctx.hideThinkingBlock);
+				child.invalidate();
+			}
+		}
 
-		// If streaming, re-add the streaming component with updated visibility and re-render
 		if (this.ctx.streamingComponent && this.ctx.streamingMessage) {
 			this.ctx.streamingComponent.setHideThinkingBlock(this.ctx.hideThinkingBlock);
 			this.ctx.streamingComponent.updateContent(this.ctx.streamingMessage);
-			this.ctx.chatContainer.addChild(this.ctx.streamingComponent);
 		}
 
 		this.ctx.showStatus(`Thinking blocks: ${this.ctx.hideThinkingBlock ? "hidden" : "visible"}`);
