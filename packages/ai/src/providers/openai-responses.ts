@@ -364,7 +364,26 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 		const firstEventTimeoutAbortError = new Error(OPENAI_RESPONSES_FIRST_EVENT_TIMEOUT_MESSAGE);
 		const { requestAbortController, requestSignal } = abortTracker;
 		const onSseEvent = options?.onSseEvent;
-		const rawSseObserver = onSseEvent ? (event: RawSseEvent) => onSseEvent(event, model) : undefined;
+		const rawSseObserver = onSseEvent
+			? (event: RawSseEvent) => {
+					if (!event.event && event.data && event.data !== "[DONE]") {
+						try {
+							const parsed = JSON.parse(event.data);
+							const resolvedEvent =
+								typeof parsed.type === "string"
+									? parsed.type
+									: typeof parsed.object === "string"
+										? parsed.object
+										: null;
+							if (resolvedEvent) {
+								event.event = resolvedEvent;
+								event.raw = [`event: ${resolvedEvent}`, ...event.raw];
+							}
+						} catch {}
+					}
+					onSseEvent(event, model);
+				}
+			: undefined;
 
 		try {
 			// Keep request routing on `sessionId` while allowing callers to pin a
@@ -418,9 +437,13 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 							);
 						}
 						try {
+							const headers = { ...requestHeaders };
+							if (requestTimeoutMs !== undefined) {
+								headers["X-Stainless-Timeout"] = Math.floor(requestTimeoutMs / 1000).toString();
+							}
 							const { events, response, requestId } = await postOpenAIStream<ResponseStreamEvent>({
 								url: requestUrl,
-								headers: requestHeaders,
+								headers,
 								body: requestParams,
 								signal: requestSignal,
 								fetch: options?.fetch,

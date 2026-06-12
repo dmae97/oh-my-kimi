@@ -115,7 +115,26 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 		const firstEventTimeoutAbortError = new Error(AZURE_OPENAI_RESPONSES_FIRST_EVENT_TIMEOUT_MESSAGE);
 		const { requestAbortController, requestSignal } = abortTracker;
 		const onSseEvent = options?.onSseEvent;
-		const rawSseObserver = onSseEvent ? (event: RawSseEvent) => onSseEvent(event, model) : undefined;
+		const rawSseObserver = onSseEvent
+			? (event: RawSseEvent) => {
+					if (!event.event && event.data && event.data !== "[DONE]") {
+						try {
+							const parsed = JSON.parse(event.data);
+							const resolvedEvent =
+								typeof parsed.type === "string"
+									? parsed.type
+									: typeof parsed.object === "string"
+										? parsed.object
+										: null;
+							if (resolvedEvent) {
+								event.event = resolvedEvent;
+								event.raw = [`event: ${resolvedEvent}`, ...event.raw];
+							}
+						} catch {}
+					}
+					onSseEvent(event, model);
+				}
+			: undefined;
 
 		try {
 			const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
@@ -141,9 +160,13 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 			}
 			let openaiStream: AsyncIterable<ResponseStreamEvent>;
 			try {
+				const headersWithTimeout = { ...headers };
+				if (requestTimeoutMs !== undefined) {
+					headersWithTimeout["X-Stainless-Timeout"] = Math.floor(requestTimeoutMs / 1000).toString();
+				}
 				const handle = await postOpenAIStream<ResponseStreamEvent>({
 					url,
-					headers,
+					headers: headersWithTimeout,
 					body: params,
 					signal: requestSignal,
 					fetch: options?.fetch,
