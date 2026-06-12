@@ -38,7 +38,9 @@ export function getBrowserSessionDir(projectRoot?: string, sessionId?: string): 
 }
 
 export async function createBrowserSession(options: CreateSessionOptions): Promise<BrowserSession> {
-  const playwrightModuleName = "playwright";
+  const playwrightModuleName = process.env.NODE_ENV === "test"
+    ? process.env.OMK_PLAYWRIGHT_MODULE ?? "playwright"
+    : "playwright";
   let playwright: unknown;
   try {
     playwright = await import(playwrightModuleName);

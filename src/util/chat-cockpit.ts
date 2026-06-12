@@ -25,6 +25,7 @@ export interface LaunchChatCockpitOptions {
   provider?: string;
   model?: string;
   execution?: string;
+  ui?: string;
   cockpitRefresh?: string;
   cockpitRedraw?: "diff" | "full" | "append";
   cockpitHistory?: "off" | "static" | "watch";
@@ -177,6 +178,7 @@ export async function launchChatCockpit(options: LaunchChatCockpitOptions = {}):
     provider: options.provider,
     model: options.model,
     execution: options.execution,
+    ui: options.ui,
   });
   const rightTopCmd = buildRightPaneCommand({ nodeCmd, cliCmd, runId, refreshMs, redraw, height: cockpitPaneHeight });
   const rightBottomCmd = `${nodeCmd} ${cliCmd} runs --watch --limit 15 --refresh 5000`;
@@ -316,8 +318,9 @@ export function buildLeftPaneCommand(options: {
   provider?: string;
   model?: string;
   execution?: string;
+  ui?: string;
 }): string {
-  const { nodeCmd, cliCmd, runId, brand, agentFile, workers, maxStepsPerTurn, mcpScope, provider, model, execution } = options;
+  const { nodeCmd, cliCmd, runId, brand, agentFile, workers, maxStepsPerTurn, mcpScope, provider, model, execution, ui } = options;
   let cmd = `${nodeCmd} ${cliCmd} chat --layout plain --run-id ${shellQuote(runId)} --brand ${shellQuote(brand)}`;
   if (agentFile) cmd += ` --agent-file ${shellQuote(agentFile)}`;
   if (workers) cmd += ` --workers ${shellQuote(workers)}`;
@@ -326,6 +329,7 @@ export function buildLeftPaneCommand(options: {
   if (provider) cmd += ` --provider ${shellQuote(provider)}`;
   if (model) cmd += ` --model ${shellQuote(model)}`;
   if (execution) cmd += ` --execution ${shellQuote(execution)}`;
+  if (ui) cmd += ` --ui ${shellQuote(ui)}`;
   return cmd;
 }
 

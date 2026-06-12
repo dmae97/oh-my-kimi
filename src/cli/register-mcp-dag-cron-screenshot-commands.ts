@@ -11,6 +11,16 @@ export function registerMcpDagCronScreenshotCommands(program: Command): void {
       await mcpListCommand();
     });
   mcp
+    .command("connect")
+    .description("Show the MCP Tool Plane and optionally preflight or repair active servers")
+    .option("--json", "Output JSON")
+    .option("--fix", "Apply safe project-local MCP repairs before reporting")
+    .option("--all", "Run full MCP preflight for active servers")
+    .action(async (options) => {
+      const { mcpConnectCommand } = await import("../mcp/autoconnect.js");
+      await mcpConnectCommand(options);
+    });
+  mcp
     .command("doctor")
     .description(t("cmd.mcpDoctorDesc"))
     .option("--json", "Output JSON")

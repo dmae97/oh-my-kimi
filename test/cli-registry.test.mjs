@@ -11,6 +11,8 @@ const CLI_ENV = {
   OMK_STAR_PROMPT: "0",
   OMK_RENDER_LOGO: "0",
 };
+delete CLI_ENV.FORCE_COLOR;
+delete CLI_ENV.NO_COLOR;
 
 function commandNames(command) {
   return command.commands.map((subcommand) => subcommand.name());
@@ -61,6 +63,9 @@ test("sliced CLI registry preserves ordered top-level commands", () => {
     "open-design-agent",
     "cockpit",
     "rail",
+    "consent",
+    "do",
+    "why",
     "plan",
     "feature",
     "bugfix",
@@ -70,12 +75,15 @@ test("sliced CLI registry preserves ordered top-level commands", () => {
     "team",
     "parallel",
     "orchestrate",
+    "parallel:interactive",
     "provider",
+    "model",
     "deepseek",
     "deepseekset",
     "codex",
     "openai",
     "image",
+    "auth",
     "graph",
     "hud",
     "merge",
@@ -105,7 +113,10 @@ test("sliced CLI registry preserves ordered nested command groups", () => {
 
   assert.deepEqual(commandNames(findCommand(program, "skill")), ["pack", "catalog", "install", "sync"]);
   const provider = findCommand(program, "provider");
-  assert.deepEqual(commandNames(provider), ["list", "doctor", "oauth", "auth", "profiles", "set", "enable", "disable", "deepseek"]);
+  assert.deepEqual(commandNames(provider), ["list", "doctor", "oauth", "auth", "profiles", "use", "set", "enable", "disable", "deepseek"]);
+  const model = findCommand(program, "model");
+  assert.deepEqual(commandNames(model), ["list", "aliases", "resolve", "use", "alias"]);
+  assert.deepEqual(commandNames(findCommand(model, "alias")), ["add", "remove"]);
   assert.deepEqual(commandNames(findCommand(provider, "deepseek")), ["enable", "disable", "set"]);
   const deepseek = findCommand(program, "deepseek");
   assert.deepEqual(commandNames(deepseek), ["api", "enable", "disable", "doctor"]);
@@ -126,6 +137,7 @@ test("sliced CLI registry preserves ordered nested command groups", () => {
   ]);
   assert.deepEqual(commandNames(findCommand(program, "mcp")), [
     "list",
+    "connect",
     "doctor",
     "test",
     "prewarm",
@@ -157,6 +169,33 @@ test("sliced CLI registry exposes doctor fix options", () => {
   assert.ok(mcpDoctorFlags.includes("--global"));
 });
 
+test("sliced CLI registry exposes MCP connect control-plane options", () => {
+  const program = createOmkProgram();
+  const mcpConnectFlags = optionFlags(findCommand(findCommand(program, "mcp"), "connect"));
+
+  assert.ok(mcpConnectFlags.includes("--json"));
+  assert.ok(mcpConnectFlags.includes("--all"));
+  assert.ok(mcpConnectFlags.includes("--fix"));
+});
+
+test("sliced CLI registry exposes Auth Center and provider/model control-plane options", () => {
+  const program = createOmkProgram();
+  const authFlags = optionFlags(findCommand(program, "auth"));
+  const provider = findCommand(program, "provider");
+  const providerUseFlags = optionFlags(findCommand(provider, "use"));
+  const model = findCommand(program, "model");
+
+  assert.ok(authFlags.includes("--json"));
+  assert.ok(authFlags.includes("--doctor"));
+  assert.ok(authFlags.includes("--setup"));
+  assert.ok(authFlags.includes("--soft"));
+  assert.ok(providerUseFlags.includes("--model <model>"));
+  assert.ok(providerUseFlags.includes("--authority"));
+  assert.ok(providerUseFlags.includes("--json"));
+  assert.ok(optionFlags(findCommand(model, "resolve")).includes("--json"));
+  assert.ok(optionFlags(findCommand(findCommand(model, "alias"), "add")).includes("--json"));
+});
+
 test("sliced CLI registry preserves public aliases", () => {
   const program = createOmkProgram();
   const design = findCommand(program, "design");
@@ -179,6 +218,40 @@ test("sliced CLI shim keeps open-design-agent smoke path cheap and exact", () =>
     assert.equal(result.stdout, "ok\n");
     assert.equal(result.stderr, "");
   }
+});
+
+test("orchestrate dry-run honors explicit worker count", () => {
+  const result = runCli([
+    "orchestrate",
+    "--workers",
+    "3",
+    "verify TUI input and parallel subagent routing",
+    "--dry-run",
+    "--timeout",
+    "60000",
+  ]);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Max workers: 3/);
+  assert.match(result.stdout, /Max Parallelism: 3/);
+  assert.match(result.stdout, /Dry run complete/);
+});
+
+test("parallel interactive dry-run is successful and honors global workers", () => {
+  const result = runCli([
+    "--workers",
+    "2",
+    "parallel:interactive",
+    "verify workers merge",
+    "--dry-run",
+    "--timeout",
+    "60000",
+  ]);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Max Workers:\s+2/);
+  assert.match(result.stdout, /Dry run complete/);
+  assert.doesNotMatch(result.stdout, /Orchestration failed/);
 });
 
 test("sliced CLI registry keeps representative JSON command stdout-pure", () => {

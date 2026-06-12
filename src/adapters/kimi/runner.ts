@@ -20,6 +20,8 @@ import { enableRawTerminalInput, restoreTerminalInputState } from "../../util/te
 import { checkCommand, resolveKimiBin } from "../../util/shell.js";
 import { defaultScopedRoleAgentFile, writeScopedAgentFile } from "../../util/scoped-agent-file.js";
 import { terminateProcessTree, type ProcessTreeTarget } from "../../util/process-tree.js";
+import { sanitizeUserVisibleOutput } from "../../util/user-visible-output.js";
+import { isDeniedChildEnvName } from "../../runtime/child-env.js";
 
 const REQUIRED_KIMI_ENV_KEYS = new Set([
   "PATH",
@@ -41,7 +43,7 @@ const REQUIRED_KIMI_ENV_KEYS = new Set([
 ]);
 
 const SECRET_ENV_KEY_PATTERN =
-  /(?:SECRET|TOKEN|PASSWORD|PASSWD|API[_-]?KEY|ACCESS[_-]?KEY|PRIVATE[_-]?KEY|CREDENTIAL|AUTH|COOKIE|SESSION|BEARER|DATABASE[_-]?URL|REDIS[_-]?URL|MONGO(?:DB)?[_-]?URI|CONNECTION[_-]?STRING|DSN)/i;
+  /(?:^|[_-])(?:SECRET|TOKEN|PASSWORD|PASSWD|API[_-]?KEY|ACCESS[_-]?KEY|PRIVATE[_-]?KEY|CREDENTIAL|AUTHORIZATION|AUTH|COOKIE|SESSION(?:[_-]?(?:ID|TOKEN|SECRET))?|JSESSIONID|PHPSESSID|BEARER|DATABASE[_-]?URL|REDIS[_-]?URL|MONGO(?:DB)?[_-]?URI|CONNECTION[_-]?STRING|DSN)(?:[_-]|$)/i;
 
 const NON_SECRET_KIMI_METADATA_ENV_KEYS = new Set([
   "KIMI_SESSION_ID",
@@ -49,12 +51,15 @@ const NON_SECRET_KIMI_METADATA_ENV_KEYS = new Set([
   "OMK_SESSION_ID",
   "OMK_INHERIT_LOCAL_AUTH",
   "OMK_ISOLATED_HOME_INHERIT_AUTH",
+  "OMK_TOTAL_TOKENS",
+  "OMK_NODE_PROVIDER_AUTHORITY",
 ]);
 
 const TRUSTED_KIMI_EXPLICIT_SECRET_ENV_PATTERN = /^(1|true|yes)$/i;
 const KIMI_EXPLICIT_SECRET_ENV_WARNED = new Set<string>();
 
 function isAllowedInheritedKimiEnvKey(key: string): boolean {
+  if (isDeniedChildEnvName(key)) return false;
   if (NON_SECRET_KIMI_METADATA_ENV_KEYS.has(key)) return true;
   if (SECRET_ENV_KEY_PATTERN.test(key)) return false;
   return REQUIRED_KIMI_ENV_KEYS.has(key) || key.startsWith("LC_") || key.startsWith("KIMI_") || key.startsWith("OMK_");
@@ -69,10 +74,6 @@ function isTrustedExplicitSecretEnvEnabled(env: Record<string, string | undefine
   return TRUSTED_KIMI_EXPLICIT_SECRET_ENV_PATTERN.test(env.OMK_TRUST_KIMI_EXPLICIT_SECRET_ENV ?? "");
 }
 
-function isStrictExplicitSecretEnvEnabled(env: Record<string, string | undefined>): boolean {
-  return TRUSTED_KIMI_EXPLICIT_SECRET_ENV_PATTERN.test(env.OMK_STRICT_KIMI_EXPLICIT_ENV ?? "");
-}
-
 function warnExplicitSecretLikeKimiEnvKey(
   key: string,
   context: string,
@@ -83,8 +84,7 @@ function warnExplicitSecretLikeKimiEnvKey(
   KIMI_EXPLICIT_SECRET_ENV_WARNED.add(warningKey);
   onWarning(
     `[omk] Warning: explicit Kimi child env includes secret-like key "${key}" in ${context}; ` +
-      "explicit env is trusted input. Set OMK_STRICT_KIMI_EXPLICIT_ENV=1 to drop secret-like explicit keys unless " +
-      "OMK_TRUST_KIMI_EXPLICIT_SECRET_ENV=1 is also set."
+      "the key was dropped. Set OMK_TRUST_KIMI_EXPLICIT_SECRET_ENV=1 only inside an isolated runner to pass it through."
   );
 }
 
@@ -107,7 +107,6 @@ export function buildSafeKimiChildEnv(
     }
   }
   const trustedExplicitSecretEnv = isTrustedExplicitSecretEnvEnabled({ ...inheritedEnv, ...explicitEnv, ...forcedEnv });
-  const strictExplicitSecretEnv = isStrictExplicitSecretEnvEnabled({ ...inheritedEnv, ...explicitEnv, ...forcedEnv });
   const explicitEnvContext = options.explicitEnvContext ?? "kimi child env";
   const onWarning = options.onWarning ?? ((message: string) => process.stderr.write(`${message}\n`));
 
@@ -116,14 +115,16 @@ export function buildSafeKimiChildEnv(
       delete safeEnv[key];
       continue;
     }
+    if (isDeniedChildEnvName(key)) {
+      delete safeEnv[key];
+      continue;
+    }
     if (isSecretLikeKimiEnvKey(key) && !trustedExplicitSecretEnv) {
       if (options.warnExplicitSecrets) {
         warnExplicitSecretLikeKimiEnvKey(key, explicitEnvContext, onWarning);
       }
-      if (strictExplicitSecretEnv) {
-        delete safeEnv[key];
-        continue;
-      }
+      delete safeEnv[key];
+      continue;
     }
     safeEnv[key] = value;
   }
@@ -231,6 +232,69 @@ export function formatKimiProviderFailureHint(output: string): string | null {
     ...diagnosis.remediation.map((line) => `      - ${line}`),
   ];
   return lines.join("\n") + "\n";
+}
+
+export type KimiMcpFailurePolicy = "required-only" | "strict";
+
+export function shouldFailOnMcpError(input: {
+  readonly serverName: string;
+  readonly requiredServers: readonly string[];
+  readonly failurePolicy: KimiMcpFailurePolicy;
+}): boolean {
+  if (input.failurePolicy === "strict") return true;
+  return input.requiredServers.includes(input.serverName);
+}
+
+export function extractKimiMcpConnectionFailureNames(output: string): string[] {
+  if (!/Failed to connect MCP servers/i.test(output)) return [];
+  const names = new Set<string>();
+  const objectMatches = output.matchAll(/['"]([^'"]+)['"]\s*:/g);
+  for (const match of objectMatches) {
+    const name = match[1]?.trim();
+    if (name) names.add(name);
+  }
+  const fallbackMatches = output.matchAll(/\b(?:server|MCP)\s+([a-zA-Z0-9_.-]+)\s+(?:failed|unavailable|closed)/gi);
+  for (const match of fallbackMatches) {
+    const name = match[1]?.trim();
+    if (name && name.toLowerCase() !== "servers") names.add(name);
+  }
+  return [...names];
+}
+
+function optionalRootMcpAllowlist(names: readonly string[] | undefined): string[] {
+  const normalized = [...new Set((names ?? []).map((name) => name.trim()).filter(Boolean))];
+  const preferred = normalized.filter((name) => {
+    const lowered = name.toLowerCase();
+    return lowered === "omk-project" || lowered === "memory" || lowered.includes("filesystem") || lowered === "git";
+  });
+  return preferred.length > 0 ? preferred : ["omk-project"];
+}
+
+function parseMcpHints(value: string | undefined): string[] | undefined {
+  if (value === undefined) return undefined;
+  return value.split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+function resolveNodeMcpAllowlist(
+  node: DagNode,
+  nodeEnv: Record<string, string>,
+  fallbackNames: readonly string[] | undefined
+): string[] {
+  const envHints = parseMcpHints(nodeEnv.OMK_MCP_HINTS);
+  if (envHints !== undefined) return envHints;
+  if (node.routing?.mcpServers) return [...node.routing.mcpServers];
+  return optionalRootMcpAllowlist(fallbackNames);
+}
+
+function isOptionalMcpFailureResult(node: DagNode, output: string, hasStdout: boolean): boolean {
+  const failedNames = extractKimiMcpConnectionFailureNames(output);
+  if (failedNames.length === 0 || !hasStdout) return false;
+  const requiredServers = node.routing?.requiresMcp ? node.routing.mcpServers ?? [] : [];
+  return failedNames.every((serverName) => !shouldFailOnMcpError({
+    serverName,
+    requiredServers,
+    failurePolicy: node.routing?.requiresMcp ? "strict" : "required-only",
+  }));
 }
 
 export interface KimiStartupExitDiagnosis {
@@ -492,7 +556,7 @@ export async function runKimiInteractive(
   }
 
   function writeStdout(data: string): void {
-    circularPush(data);
+    circularPush(sanitizeUserVisibleOutput(data));
     if (!stdoutWriting) {
       flushStdoutQueue();
     }
@@ -770,7 +834,7 @@ export interface KimiTaskRunnerOptions {
   hookNames?: string[];
   toolNames?: string[];
   onThinking?: (thinking: string) => void;
-  /** If true, automatically pick .omk/agents/{role}.yaml per node role */
+  onOutput?: (text: string) => void;
   roleAgentFiles?: boolean;
 }
 
@@ -898,9 +962,7 @@ export function createKimiTaskRunner(options: KimiTaskRunnerOptions = {}): TaskR
         CODEX_HOME: join(tmpHome, ".codex"),
       });
       const args: string[] = [];
-      const mcpAllowlist = nodeEnv.OMK_MCP_HINTS !== undefined
-        ? nodeEnv.OMK_MCP_HINTS.split(",").map((s) => s.trim()).filter(Boolean)
-        : node.routing?.mcpServers ?? mcpNames;
+      const mcpAllowlist = resolveNodeMcpAllowlist(node, nodeEnv, mcpNames);
       await injectKimiGlobals(args, { mcpScope: effectiveMcpScope, skillsScope: effectiveSkillsScope, hooksScope: effectiveHooksScope, role: node.role, mcpAllowlist });
       await preflightMcpConfigs(args);
 
@@ -944,8 +1006,8 @@ export function createKimiTaskRunner(options: KimiTaskRunnerOptions = {}): TaskR
         });
         args.push("--agent-file", scopedAgentFile);
       }
-      args.push("--prompt", buildNodeMessage(node, mergedEnv, promptPrefix));
-      args.push("--print");
+      const promptInput = buildNodeMessage(node, mergedEnv, promptPrefix);
+      args.push("--print", "--input-format", "text");
 
       if (worktree) {
         await ensureDir(worktree);
@@ -978,8 +1040,11 @@ export function createKimiTaskRunner(options: KimiTaskRunnerOptions = {}): TaskR
           cwd: worktree,
           timeout: effectiveTimeout,
           env: mergedEnv,
+          input: promptInput,
           logPath,
           onStdout: (chunk, io) => {
+            const safeChunk = sanitizeUserVisibleOutput(chunk);
+            options.onOutput?.(safeChunk);
             thinkingHandler?.(chunk);
             const decision = continuePromptGuard.process(chunk);
             if (decision.sendEnter) {
@@ -1058,11 +1123,18 @@ export function createKimiTaskRunner(options: KimiTaskRunnerOptions = {}): TaskR
       // Known MCP soft-failure: Kimi CLI may return exit code 1 when an MCP
       // server fails to connect, even though it produced meaningful stdout.
       // Only allow this specific exception; all other non-zero exits are failures.
+      const optionalMcpFailure = isOptionalMcpFailureResult(node, `${result.stderr}\n${result.stdout}`, result.stdout.trim().length > 0);
+      const stderrWithOptionalWarning = optionalMcpFailure
+        ? [
+            prefixStderr,
+            `${prefix}[omk] Warning: optional MCP server startup failed; continuing because this node does not require MCP.`,
+          ].filter(Boolean).join("\n")
+        : prefixStderr;
       return {
-        success: !result.failed && result.exitCode === 0,
+        success: (!result.failed && result.exitCode === 0) || optionalMcpFailure,
         exitCode: result.exitCode,
         stdout: prefixStdout,
-        stderr: prefixStderr,
+        stderr: stderrWithOptionalWarning,
       };
     },
   };
@@ -1077,25 +1149,36 @@ function buildNodeMessage(
   promptPrefix?: string
 ): string {
   const routing = node.routing;
-  const mandatoryRouting: string[] = [];
+  if (routing?.promptMode === "dnc-nlp") {
+    return [promptPrefix?.trim(), node.name].filter((section): section is string => Boolean(section)).join("\n\n");
+  }
+  const routingDirectives: string[] = [];
   if (routing?.skills?.length) {
-    mandatoryRouting.push(`- Skills (MUST use): ${routing.skills.join(", ")}`);
+    routingDirectives.push(`- Selected skills (use when relevant): ${routing.skills.join(", ")}`);
   }
   if (routing?.mcpServers?.length) {
-    mandatoryRouting.push(`- MCP servers (MUST activate): ${routing.mcpServers.join(", ")}`);
+    routingDirectives.push(
+      routing.requiresMcp
+        ? `- Required MCP servers: ${routing.mcpServers.join(", ")}`
+        : `- Optional MCP servers: ${routing.mcpServers.join(", ")}`
+    );
   }
   if (routing?.tools?.length) {
-    mandatoryRouting.push(`- Tools (MUST call when relevant): ${routing.tools.join(", ")}`);
+    routingDirectives.push(
+      routing.requiresToolCalling
+        ? `- Required tools: ${routing.tools.join(", ")}`
+        : `- Available tools: ${routing.tools.join(", ")}`
+    );
   }
   if (routing?.hooks?.length) {
-    mandatoryRouting.push(`- Hooks (active boundaries): ${routing.hooks.join(", ")}`);
+    routingDirectives.push(`- Hooks (active boundaries): ${routing.hooks.join(", ")}`);
   }
   const provider = routing?.assignedProvider ?? routing?.provider;
   if (provider) {
-    mandatoryRouting.push(`- Provider route: ${provider}${routing?.assignedProviderAuthority ? ` (${routing.assignedProviderAuthority})` : ""}`);
+    routingDirectives.push(`- Provider route: ${provider}${routing?.assignedProviderAuthority ? ` (${routing.assignedProviderAuthority})` : ""}`);
   }
   if (routing?.rationale) {
-    mandatoryRouting.push(`- Rationale: ${routing.rationale}`);
+    routingDirectives.push(`- Rationale: ${routing.rationale}`);
   }
   const deepseekAdvisory = env.OMK_DEEPSEEK_ADVISORY?.trim();
   const actionAtom = routing?.actionAtom;
@@ -1123,12 +1206,13 @@ function buildNodeMessage(
       `Evidence required: ${String(routing?.evidenceRequired ?? env.OMK_ROUTE_EVIDENCE_REQUIRED ?? false)}`,
     ].join("\n"),
     actionAtomSection,
-    mandatoryRouting.length > 0
+    routingDirectives.length > 0
       ? [
-          "Routing directives (MANDATORY — activate these skills/MCP/tools explicitly):",
-          ...mandatoryRouting,
-          "- Do not ignore the routing hints above.",
-          "- If a skill or MCP server is listed, prefer its capabilities over generic reasoning.",
+          "Routing directives:",
+          ...routingDirectives,
+          "- Do not activate every available MCP server, skill, or tool.",
+          "- Activate only capabilities required by the current task.",
+          "- Optional MCP server failures are warnings unless this node lists Required MCP servers.",
         ].join("\n")
       : undefined,
     deepseekAdvisory
@@ -1145,7 +1229,7 @@ function buildNodeMessage(
       "- Treat the prompt prefix as the active OMK orchestration contract; turn it into concrete node work, not a repeated summary.",
       "- Preserve completed work and continue only the unresolved scope named by this node.",
       "- Keep context small and read only the files needed for this node.",
-      "- Use the listed skills/MCP/tools when they fit the node.",
+      "- Use selected skills/MCP/tools only when they fit the node.",
       "- Produce concrete evidence, changed files, blockers, and verification result.",
       "- Do not silently skip required gates.",
     ].join("\n"),

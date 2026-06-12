@@ -1,9 +1,11 @@
-import { getRunPath, injectKimiGlobals, pathExists } from "../../util/fs.js";
+import { getRunPath, pathExists } from "../../util/fs.js";
 import { relative } from "path";
 import { style, status, box, label, separator } from "../../util/theme.js";
 import { writeSessionMeta } from "../../util/session.js";
 import { finalizeChatState } from "../../util/chat-state.js";
 import { getOmkResourceSettings } from "../../util/resource-profile.js";
+import { buildOmkToolPlaneManifest } from "../../runtime/tool-plane.js";
+import type { OmkToolPlaneDiagnostic } from "../../runtime/tool-plane.js";
 import {
   sanitizeChatStartupFailureOutput,
   CHAT_STARTUP_FAILURE_OUTPUT_LIMIT,
@@ -26,12 +28,22 @@ export interface ChatSmokeReport {
     path: string | null;
     exists: boolean;
   };
+  root: {
+    path: string;
+    cwd: string;
+    source: string;
+  };
+  diagnostics: {
+    toolPlane: readonly OmkToolPlaneDiagnostic[];
+  };
   startupFailureArtifactExists: boolean;
   checks: Array<{ name: string; status: "ok" | "fail"; message: string }>;
 }
 
 export async function buildChatSmokeReport(options: {
   root: string;
+  rootSource?: string;
+  activeCwd?: string;
   runId: string;
   agentFile: string;
   schemaOk: boolean;
@@ -39,13 +51,16 @@ export async function buildChatSmokeReport(options: {
   mcpScope: "all" | "project" | "none";
   mcpAllowlist?: string[];
 }): Promise<ChatSmokeReport> {
-  const args: string[] = ["--agent-file", options.agentFile];
-  await injectKimiGlobals(args, { role: "coordinator", mcpScope: options.mcpScope, mcpAllowlist: options.mcpAllowlist });
-  const mcpArgIndex = args.indexOf("--mcp-config-file");
-  const runtimeMcpPath = mcpArgIndex >= 0 ? args[mcpArgIndex + 1] ?? null : null;
+  const toolPlane = await buildOmkToolPlaneManifest({
+    mcpScope: options.mcpScope,
+    mcpAllowlist: options.mcpAllowlist,
+  });
+  const runtimeMcpPath = toolPlane.mcpConfigFile ?? null;
   const runtimeMcpExists = runtimeMcpPath ? await pathExists(runtimeMcpPath) : false;
   const failurePath = getRunPath(options.runId, "chat-startup-failure.json", options.root);
   const startupFailureArtifactExists = await pathExists(failurePath);
+  const toolPlaneErrorCount = toolPlane.diagnostics.filter((diagnostic) => diagnostic.level === "error").length;
+  const toolPlaneWarningCount = toolPlane.diagnostics.filter((diagnostic) => diagnostic.level === "warning").length;
   const checks: ChatSmokeReport["checks"] = [
     {
       name: "agent schema",
@@ -66,6 +81,13 @@ export async function buildChatSmokeReport(options: {
       status: startupFailureArtifactExists ? "fail" : "ok",
       message: startupFailureArtifactExists ? "chat-startup-failure.json exists" : "no startup failure artifact",
     },
+    {
+      name: "tool-plane diagnostics",
+      status: toolPlaneErrorCount > 0 ? "fail" : "ok",
+      message: toolPlane.diagnostics.length === 0
+        ? "no tool-plane diagnostics"
+        : `${toolPlaneErrorCount} error(s), ${toolPlaneWarningCount} warning(s)`,
+    },
   ];
   return {
     ok: checks.every((check) => check.status === "ok"),
@@ -80,6 +102,14 @@ export async function buildChatSmokeReport(options: {
       injected: Boolean(runtimeMcpPath),
       path: runtimeMcpPath ? relative(options.root, runtimeMcpPath) : null,
       exists: runtimeMcpExists,
+    },
+    root: {
+      path: options.root,
+      cwd: options.activeCwd ?? process.cwd(),
+      source: options.rootSource ?? "unknown",
+    },
+    diagnostics: {
+      toolPlane: toolPlane.diagnostics,
     },
     startupFailureArtifactExists,
     checks,

@@ -8,7 +8,7 @@
 import type { RunState, TaskResult } from "../../contracts/orchestration.js";
 import type { DagNode } from "../dag.js";
 import { createStatePersister, type StatePersister } from "../state-persister.js";
-import { createRoutedRunState } from "../run-state.js";
+import { assignNodeCapabilitiesToRunState, createRoutedRunState } from "../run-state.js";
 import type { OrchestrationEvent, OrchestrationState, StateManagerOptions, WorkerState } from "../contracts/index.js";
 import { transitionWorker, getRunningWorkerCount, getCompletedWorkerCount, getFailedWorkerCount } from "./run-state-machine.js";
 import { transitionNode } from "./node-state-machine.js";
@@ -63,9 +63,17 @@ export class OrchestrationStateManager {
     this.state = transitionWorker(this.state, { type: "start", nodeId, assignment });
 
     // RunState의 노드 상태 업데이트
-    this.runState = updateNodeInRunState(this.runState, nodeId, (node) =>
-      transitionNode(node, { type: "start", startedAt })
-    );
+    this.runState = assignNodeCapabilitiesToRunState({
+      ...updateNodeInRunState(this.runState, nodeId, (node) =>
+        transitionNode(node, { type: "start", startedAt })
+      ),
+      ...(assignment ? {
+        capabilityAssignments: {
+          ...(this.runState.capabilityAssignments ?? {}),
+          [nodeId]: assignment,
+        },
+      } : {}),
+    });
   }
 
   /**
@@ -229,6 +237,7 @@ export class OrchestrationStateManager {
           startedAt: node.startedAt,
           completedAt: node.completedAt,
           durationMs: node.durationMs,
+          assignment: loaded.capabilityAssignments?.[node.id],
         });
 
         if (node.status === "done") {

@@ -1,7 +1,7 @@
 {
   "name": "open-multi-agent-kit",
   "version": "1.1.18",
-  "description": "Provider-neutral agent runtime for coding workflows. Verified DAG execution with evidence gates, worktree isolation, and local graph memory.",
+  "description": "MCP-native agent control plane for coding workflows. Boots MCP-connected workspaces with provider routing, evidence gates, worktree isolation, and local graph memory.",
   "type": "module",
   "bin": {
     "omk": "dist/cli.js",
@@ -31,11 +31,12 @@
     "smoke:no-kimi:chat": "KIMI_BIN=/nonexistent/kimi OMK_LEGACY_CHAT=0 OMK_MCP_PREFLIGHT=off OMK_PROJECT_ROOT=\"$PWD\" node dist/cli.js chat --provider auto --mode agent --execution ask --layout plain --mcp-scope none --smoke --json",
     "smoke:no-kimi:codex": "KIMI_BIN=/nonexistent/kimi OMK_LEGACY_CHAT=0 OMK_MCP_PREFLIGHT=off OMK_PROJECT_ROOT=\"$PWD\" node dist/cli.js chat --provider codex --mode agent --execution ask --layout plain --mcp-scope none --smoke --json",
     "smoke:no-kimi:doctor": "KIMI_BIN=/nonexistent/kimi OMK_LEGACY_CHAT=0 OMK_PROJECT_ROOT=\"$PWD\" node dist/cli.js doctor --json",
-    "verify:no-kimi": "npm run build:clean && npm run smoke:no-kimi:doctor && npm run smoke:no-kimi:chat && npm run smoke:no-kimi:codex",
+    "verify:no-kimi": "npm run build:clean && npm run smoke:no-kimi:doctor && npm run smoke:no-kimi:chat && npm run smoke:no-kimi:codex && npm run native:no-kimi:turn",
     "rust:check": "node scripts/rust-safety-check.mjs",
     "rust:build": "cargo build -p omk-safety",
     "native:build": "node scripts/build-native.mjs",
-    "native:normalize": "node scripts/normalize-native-artifacts.mjs"
+    "native:normalize": "node scripts/normalize-native-artifacts.mjs",
+    "native:no-kimi:turn": "KIMI_BIN=/nonexistent/kimi OMK_LEGACY_CHAT=0 OMK_MCP_PREFLIGHT=off OMK_PROJECT_ROOT=\"$PWD\" node --test test/no-kimi-native-turn.test.mjs"
   },
   "keywords": [
     "agent-runtime",
@@ -84,7 +85,9 @@
     "local-first",
     "lsp",
     "mcp",
+    "mcp-native",
     "model-context-protocol",
+    "agent-control-plane",
     "multi-agent",
     "multi-agent-orchestration",
     "nodejs",
@@ -103,7 +106,9 @@
   "author": "dmae97",
   "license": "MIT",
   "dependencies": {
+    "@clack/prompts": "^1.4.0",
     "@inquirer/prompts": "^7.0.0",
+    "clipanion": "^4.0.0-rc.4",
     "commander": "^14.0.0",
     "execa": "^9.0.0",
     "fs-extra": "^11.0.0",

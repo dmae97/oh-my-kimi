@@ -10,6 +10,8 @@ import {
 import {
   normalizeProviderId,
   providerDoctorStatus,
+  resolveUserModelAlias,
+  setProviderDefaults,
   readProviderRegistry,
   setProviderConfig,
   setProviderEnabled,
@@ -45,6 +47,11 @@ export interface ProviderSetOptions extends ProviderJsonOptions {
 export interface ProviderAuthOptions extends ProviderJsonOptions {
   method?: ProviderAuthMethod;
   apiKeyEnv?: string;
+}
+
+export interface ProviderUseOptions extends ProviderJsonOptions {
+  model?: string;
+  authority?: boolean;
 }
 
 export interface ProviderOAuthOptions extends ProviderJsonOptions {
@@ -317,6 +324,36 @@ export async function providerSetCommand(
     routing: entry.routing,
   };
   emitProviderMutation("Provider configured", payload, options);
+}
+
+export async function providerUseCommand(
+  provider: string,
+  options: ProviderUseOptions = {}
+): Promise<void> {
+  const normalized = normalizeProviderId(provider);
+  if (normalized === "auto") throw new Error("Provider id is required");
+  const entry = await readProviderRegistry().then((providers) => providers.find((candidate) => candidate.id === normalized));
+  const resolvedModel = options.model ? await resolveUserModelAlias(options.model) : undefined;
+  const model = resolvedModel?.model ?? entry?.defaultModel ?? "default";
+  const authorityProvider = options.authority ? normalized : undefined;
+  const result = await setProviderDefaults({
+    provider: normalized,
+    model,
+    authorityProvider,
+  });
+  const payload = {
+    ok: true,
+    command: "provider use",
+    defaultProvider: result.defaults.provider,
+    defaultModel: result.defaults.model,
+    authorityProvider: result.defaults.authorityProvider,
+    modelSource: resolvedModel?.source,
+    configPath: result.configPath,
+    secretValuesPrinted: false,
+    tokenFilesRead: false,
+    projectFilesWritten: false,
+  };
+  emitProviderMutation("Provider default updated", payload, options);
 }
 
 export async function providerAuthCommand(

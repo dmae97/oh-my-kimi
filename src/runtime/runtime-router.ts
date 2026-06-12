@@ -57,19 +57,19 @@ interface EvidenceHistoryEntry {
 }
 
 const INTENT_RUNTIME_PREFERENCES: Record<NodeIntent, string[]> = {
-  research: ["deepseek-api", "openrouter-api", "gemini-cli", "codex-cli", "kimi-api", "kimi-cli", "kimi-wire"],
-  planning: ["codex-cli", "openrouter-api", "claude-code", "kimi-api", "kimi-cli", "kimi-wire"],
-  coding: ["codex-cli", "claude-code", "kimi-api", "kimi-cli", "kimi-wire"],
-  debugging: ["codex-cli", "kimi-api", "kimi-cli", "kimi-wire"],
-  refactor: ["codex-cli", "claude-code", "kimi-api", "kimi-cli", "kimi-wire"],
-  review: ["deepseek-api", "openrouter-api", "claude-code", "codex-cli", "kimi-cli"],
-  "test-generation": ["codex-cli", "kimi-api", "kimi-cli", "kimi-wire"],
-  documentation: ["gemini-cli", "openrouter-api", "codex-cli", "kimi-cli"],
-  "shell-operation": ["codex-cli", "kimi-api", "kimi-cli", "kimi-wire"],
+  research: ["mimo-api", "deepseek-api", "openrouter-api", "gemini-cli", "codex-cli", "kimi-api", "kimi-wire"],
+  planning: ["mimo-api", "kimi-api", "kimi-wire", "codex-cli", "openrouter-api", "claude-code"],
+  coding: ["mimo-api", "kimi-api", "kimi-wire", "codex-cli", "claude-code"],
+  debugging: ["mimo-api", "kimi-api", "kimi-wire", "codex-cli"],
+  refactor: ["mimo-api", "kimi-api", "kimi-wire", "codex-cli", "claude-code"],
+  review: ["mimo-api", "deepseek-api", "openrouter-api", "claude-code", "codex-cli", "kimi-api"],
+  "test-generation": ["mimo-api", "kimi-api", "kimi-wire", "codex-cli"],
+  documentation: ["mimo-api", "gemini-cli", "openrouter-api", "codex-cli", "kimi-api"],
+  "shell-operation": ["mimo-api", "kimi-api", "kimi-wire", "codex-cli"],
 };
 
 export function createRuntimeRouter(options: RuntimeRouterOptions = {}) {
-  const runtimes = options.runtimes ?? [];
+  let runtimes = [...(options.runtimes ?? [])];
   const memoryPath = options.memoryPath;
   const fallbackChain = options.fallbackChain;
   let evidenceCache: EvidenceHistoryEntry[] | undefined;
@@ -177,7 +177,7 @@ export function createRuntimeRouter(options: RuntimeRouterOptions = {}) {
     const supporting = sorted.filter((r) => r.supports(capsule));
 
     if (supporting.length === 0) {
-      throw new Error(`No runtime supports node ${capsule.nodeId}`);
+      throw new Error(formatUnsupportedCapsuleMessage(capsule, sorted));
     }
 
     const scores = supporting.map((r) => computeScores(r, intent, history));
@@ -218,7 +218,7 @@ export function createRuntimeRouter(options: RuntimeRouterOptions = {}) {
     const supporting = candidateRuntimes.filter((r) => typeof r.execute === "function" && runtimeSupportsTask(r, task));
 
     if (supporting.length === 0) {
-      throw new Error(`No runtime supports task for node ${task.context.nodeId}`);
+      throw new Error(formatUnsupportedTaskMessage(task, candidateRuntimes));
     }
 
     const scores = supporting.map((r) => computeScores(r, intent, history));
@@ -254,7 +254,7 @@ export function createRuntimeRouter(options: RuntimeRouterOptions = {}) {
     const supporting = sorted.filter((r) => r.supports(capsule));
 
     if (supporting.length === 0) {
-      throw new Error(`No runtime supports node ${capsule.nodeId}`);
+      throw new Error(formatUnsupportedCapsuleMessage(capsule, sorted));
     }
 
     const preferred = fallbackChain ?? INTENT_RUNTIME_PREFERENCES[intent];
@@ -426,6 +426,10 @@ export function createRuntimeRouter(options: RuntimeRouterOptions = {}) {
   }
 
   return {
+    setRuntimes(nextRuntimes: readonly AgentRuntime[]): void {
+      runtimes = [...nextRuntimes];
+      invalidateCache();
+    },
     select,
     selectByIntent,
     runNode,
@@ -452,6 +456,87 @@ function computeComposite(
     0.15 * (1 - score.recentFailurePenalty) +
     preferenceBonus
   );
+}
+
+function formatUnsupportedCapsuleMessage(
+  capsule: ContextCapsule,
+  candidates: readonly AgentRuntime[]
+): string {
+  return formatUnsupportedRuntimeMessage(
+    `No runtime supports node ${capsule.nodeId}`,
+    capsuleRoutingRequirements(capsule),
+    candidates
+  );
+}
+
+function formatUnsupportedTaskMessage(
+  task: AgentTask,
+  candidates: readonly AgentRuntime[]
+): string {
+  return formatUnsupportedRuntimeMessage(
+    `No runtime supports task for node ${task.context.nodeId}`,
+    taskCapabilityRequirements(task),
+    candidates
+  );
+}
+
+function formatUnsupportedRuntimeMessage(
+  base: string,
+  requirements: readonly string[],
+  candidates: readonly AgentRuntime[]
+): string {
+  const details = [
+    ...requirements,
+    ...candidateSecurityDetails(requirements, candidates),
+  ];
+  return uniqueStrings([base, ...details]).join("; ");
+}
+
+function capsuleRoutingRequirements(capsule: ContextCapsule): string[] {
+  const routing = capsule.node.routing;
+  const requirements: string[] = [];
+  const assignedCapabilities = new Set(routing?.assignedProviderCapabilities ?? []);
+  if (routing?.requiresMcp === true || assignedCapabilities.has("mcp")) {
+    requirements.push("Node requires MCP authority");
+  }
+  if (routing?.requiresToolCalling === true || assignedCapabilities.has("toolCalling")) {
+    requirements.push("Node requires live tool authority");
+  }
+  for (const capability of assignedCapabilities) {
+    if (capability === "mcp" || capability === "toolCalling") continue;
+    requirements.push(`Node requires provider capability ${capability}`);
+  }
+  return requirements;
+}
+
+function taskCapabilityRequirements(task: AgentTask): string[] {
+  const requirements: string[] = [];
+  if (task.capabilities.mcp) requirements.push("Node requires MCP authority");
+  if (task.capabilities.toolCalling) requirements.push("Node requires live tool authority");
+  const capabilityKeys = ["read", "write", "shell", "patch", "review", "merge", "vision"] as const;
+  for (const key of capabilityKeys) {
+    if (task.capabilities[key]) requirements.push(`Node requires provider capability ${key}`);
+  }
+  return requirements;
+}
+
+function candidateSecurityDetails(
+  requirements: readonly string[],
+  candidates: readonly AgentRuntime[]
+): string[] {
+  const details: string[] = [];
+  const requiresMcp = requirements.some((requirement) => requirement.includes("MCP authority"));
+  const requiresToolAuthority = requirements.some((requirement) => requirement.includes("tool authority"));
+  for (const runtime of candidates) {
+    if (runtime.id === "codex-cli" && requiresMcp) {
+      details.push("Codex CLI runtime does not receive OMK MCP authority");
+      continue;
+    }
+    if (runtime.id === "codex-cli" && requiresToolAuthority && runtime.capabilities?.supportsToolCalling !== true) {
+      details.push("Codex CLI runtime does not receive OMK tool authority");
+    }
+  }
+  return details;
 }
 
 function preferenceRankBonus(preferred: string[], runtimeId: string): number {
@@ -491,7 +576,8 @@ function runtimeIdsForProviderRef(value: string): string[] {
   if (normalized === "deepseek" || normalized === "deepseek-v4" || normalized === "ds") return ["deepseek-api"];
   if (normalized === "openrouter" || normalized === "openrouter-ai") return ["openrouter-api"];
   if (normalized === "qwen" || normalized === "dashscope" || normalized === "qwen3" || normalized === "qwen-max") return ["qwen-api", "qwen-cli"];
-  if (normalized === "kimi" || normalized === "moonshot") return ["kimi-api", "kimi-cli", "kimi-wire", "kimi-print"];
+  if (normalized === "kimi" || normalized === "moonshot") return ["kimi-api", "kimi-wire"];
+  if (normalized === "mimo" || normalized === "mimo-v2" || normalized === "mimo-v2.5-pro") return ["mimo-api", "kimi-api"];
   if (normalized === "opencode") return ["opencode-cli"];
   if (normalized === "commandcode") return ["commandcode-cli"];
   return [normalized];

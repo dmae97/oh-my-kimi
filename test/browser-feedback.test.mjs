@@ -4,9 +4,14 @@ import { spawnSync } from "node:child_process";
 import { mkdtemp, mkdir, writeFile, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
-const SESSION_MODULE = join(process.cwd(), "dist", "browser", "browser-session.js");
-const OBSERVER_MODULE = join(process.cwd(), "dist", "browser", "browser-observer.js");
+const SESSION_MODULE = pathToFileURL(
+  join(process.cwd(), "dist", "browser", "browser-session.js")
+).href;
+const OBSERVER_MODULE = pathToFileURL(
+  join(process.cwd(), "dist", "browser", "browser-observer.js")
+).href;
 
 test("createBrowserSession throws helpful error when playwright import fails", async () => {
   const tmpDir = await mkdtemp(join(tmpdir(), "omk-browser-test-"));
@@ -18,7 +23,7 @@ test("createBrowserSession throws helpful error when playwright import fails", a
   );
   await writeFile(
     join(fakePlaywrightDir, "index.mjs"),
-    `export const chromium = { launch: async () => { throw new Error("Mock playwright not installed"); } };`
+    `throw new Error("Mock playwright not installed");`
   );
 
   const scriptPath = join(tmpDir, "test-script.mjs");
@@ -35,7 +40,11 @@ try {
 
   const result = spawnSync(process.execPath, [scriptPath], {
     encoding: "utf-8",
-    env: { ...process.env, NODE_PATH: join(tmpDir, "node_modules") },
+    env: {
+      ...process.env,
+      NODE_ENV: "test",
+      OMK_PLAYWRIGHT_MODULE: pathToFileURL(join(fakePlaywrightDir, "index.mjs")).href,
+    },
   });
 
   await rm(tmpDir, { recursive: true, force: true });

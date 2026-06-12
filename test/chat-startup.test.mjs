@@ -375,10 +375,97 @@ test("chat smoke validates startup without launching Kimi", async () => {
     assert.ok(harness.virtualDag.nodes.some((node) => node.id === "root-coordinator" && node.required === true));
     assert.ok(harness.virtualDag.nodes.some((node) => node.id === "review-merge" && node.required === true));
     assert.ok(harness.virtualDag.failurePolicy.blockingLanes.includes("root-coordinator"));
-    assert.ok(harness.authority.some((line) => /auto is the configured OMK authority provider/.test(line)));
+    assert.ok(harness.authority.some((line) => /kimi is the configured OMK authority provider/.test(line)));
     assert.equal(harness.authority.some((line) => /Kimi\/OMK chat owns edits/.test(line)), false);
     assert.match(await readFile(join(projectRoot, ".omk", "runs", runId, "memory-recall-summary.md"), "utf-8"), /Memory Recall Summary/);
     assert.equal(existsSync(join(projectRoot, ".omk", "runs", runId, "chat-startup-failure.json")), false);
+  } finally {
+    await rm(projectRoot, { recursive: true, force: true });
+    await rm(homeRoot, { recursive: true, force: true });
+    await rm(binRoot, { recursive: true, force: true });
+  }
+});
+
+test("chat smoke report exposes sanitized tool-plane diagnostics", async () => {
+  const projectRoot = await mkdtemp(join(tmpdir(), "omk-chat-smoke-mcp-diagnostics-project-"));
+  const homeRoot = await mkdtemp(join(tmpdir(), "omk-chat-smoke-mcp-diagnostics-home-"));
+  const binRoot = await mkdtemp(join(tmpdir(), "omk-chat-smoke-mcp-diagnostics-bin-"));
+  const markerPath = join(projectRoot, "kimi-launched.marker");
+  const runId = "chat-smoke-mcp-diagnostics";
+
+  try {
+    await mkdir(binRoot, { recursive: true });
+    const kimiBin = await createFakeKimi(binRoot, [
+      `if (process.argv[2] === "--version") {`,
+      `  console.log("kimi 1.0.0");`,
+      `  process.exit(0);`,
+      `}`,
+      `require("fs").writeFileSync(${JSON.stringify(markerPath)}, "launched");`,
+      `process.exit(0);`,
+      ``,
+    ].join("\n"));
+
+    const env = {
+      ...process.env,
+      HOME: homeRoot,
+      OMK_ORIGINAL_HOME: homeRoot,
+      OMK_PROJECT_ROOT: projectRoot,
+      OMK_RENDER_LOGO: "0",
+      OMK_STAR_PROMPT: "0",
+      OMK_CHAT_NO_BANNER: "1",
+      OMK_MCP_SUPPRESS_PRUNE_WARNINGS: "",
+      OMK_UPDATE_PROMPT: "force",
+      OMK_MCP_SCOPE: "project",
+      OMK_MCP_PREFLIGHT: "off",
+      KIMI_BIN: kimiBin,
+    };
+
+    const init = spawnSync(process.execPath, [CLI, "init"], {
+      cwd: projectRoot,
+      encoding: "utf-8",
+      timeout: 30000,
+      env,
+    });
+    assert.equal(init.status, 0, init.stderr || init.stdout);
+    await writeFile(join(projectRoot, ".kimi", "mcp.json"), '{"mcpServers":{"github":{"env":{"TOKEN":"sk-proj-secret', "utf-8");
+
+    const result = spawnSync(process.execPath, [
+      CLI,
+      "chat",
+      "--smoke",
+      "--json",
+      "--layout",
+      "plain",
+      "--brand",
+      "plain",
+      "--run-id",
+      runId,
+    ], {
+      cwd: projectRoot,
+      encoding: "utf-8",
+      timeout: 30000,
+      env,
+    });
+
+    assert.equal(result.status, 1, result.stderr || result.stdout);
+    assert.equal(existsSync(markerPath), false, "Kimi should not launch during chat smoke");
+    assert.doesNotMatch(result.stdout + result.stderr, /sk-proj-secret|github/);
+
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.ok, false);
+    assert.deepEqual(report.diagnostics.toolPlane, [
+      {
+        level: "error",
+        code: "mcp_config_parse_failed",
+        path: ".kimi/mcp.json",
+        message: "invalid JSON",
+      },
+    ]);
+    assert.ok(report.checks.some((check) =>
+      check.name === "tool-plane diagnostics"
+      && check.status === "fail"
+      && check.message === "1 error(s), 0 warning(s)"
+    ));
   } finally {
     await rm(projectRoot, { recursive: true, force: true });
     await rm(homeRoot, { recursive: true, force: true });
@@ -448,8 +535,163 @@ test("chat smoke provider auto does not require Kimi preflight", async () => {
 test("chat runtime direct Kimi fallback requires explicit Kimi policy or legacy opt-in", () => {
   assert.equal(shouldUseDirectKimiFallback("auto", {}), false);
   assert.equal(shouldUseDirectKimiFallback("qwen", {}), false);
-  assert.equal(shouldUseDirectKimiFallback("kimi", {}), true);
+  assert.equal(shouldUseDirectKimiFallback("kimi", {}), false);
+  assert.equal(shouldUseDirectKimiFallback("kimi", { OMK_LEGACY_CHAT: "1" }), true);
   assert.equal(shouldUseDirectKimiFallback("auto", { OMK_LEGACY_CHAT: "1" }), true);
+});
+
+test("chat smoke prefers current shell cwd over stale OMK_PROJECT_ROOT", async () => {
+  const homeRoot = await mkdtemp(join(tmpdir(), "omk-chat-cwd-home-"));
+  const projectRoot = join(homeRoot, "work", "actual-project");
+  const staleRoot = join(homeRoot, "stale", "old-project");
+  const binRoot = await mkdtemp(join(tmpdir(), "omk-chat-cwd-bin-"));
+  const runId = "chat-cwd-root";
+
+  try {
+    await mkdir(projectRoot, { recursive: true });
+    await mkdir(staleRoot, { recursive: true });
+    await mkdir(binRoot, { recursive: true });
+    const kimiBin = await createFakeKimi(binRoot, [
+      `if (process.argv[2] === "--version") {`,
+      `  console.log("kimi 1.0.0");`,
+      `  process.exit(0);`,
+      `}`,
+      `process.exit(0);`,
+      ``,
+    ].join("\n"));
+
+    const initEnv = {
+      ...process.env,
+      HOME: homeRoot,
+      OMK_ORIGINAL_HOME: homeRoot,
+      OMK_PROJECT_ROOT: projectRoot,
+      OMK_RENDER_LOGO: "0",
+      OMK_STAR_PROMPT: "0",
+      OMK_CHAT_NO_BANNER: "1",
+      KIMI_BIN: kimiBin,
+      OMK_MCP_SUPPRESS_PRUNE_WARNINGS: "",
+    };
+    const init = spawnSync(process.execPath, [CLI, "init"], {
+      cwd: projectRoot,
+      encoding: "utf-8",
+      timeout: 30000,
+      env: initEnv,
+    });
+    assert.equal(init.status, 0, init.stderr || init.stdout);
+
+    const result = spawnSync(process.execPath, [
+      CLI,
+      "chat",
+      "--smoke",
+      "--json",
+      "--layout",
+      "plain",
+      "--brand",
+      "plain",
+      "--run-id",
+      runId,
+    ], {
+      cwd: projectRoot,
+      encoding: "utf-8",
+      timeout: 30000,
+      env: {
+        ...initEnv,
+        OMK_PROJECT_ROOT: staleRoot,
+        OMK_DEFAULT_PROJECT_ROOT: staleRoot,
+      },
+    });
+
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.ok, true);
+    assert.equal(report.root.path, projectRoot);
+    assert.equal(report.root.cwd, projectRoot);
+    assert.equal(report.root.source, "strong-marker");
+    assert.equal(existsSync(join(projectRoot, ".omk", "runs", runId)), true);
+    assert.equal(existsSync(join(staleRoot, ".omk", "runs", runId)), false);
+  } finally {
+    await rm(homeRoot, { recursive: true, force: true });
+    await rm(binRoot, { recursive: true, force: true });
+  }
+});
+
+test("chat smoke respects OMK_PROJECT_ROOT only when explicitly allowed", async () => {
+  const homeRoot = await mkdtemp(join(tmpdir(), "omk-chat-respect-env-home-"));
+  const cwdRoot = join(homeRoot, "work", "cwd-project");
+  const envRoot = join(homeRoot, "work", "env-project");
+  const binRoot = await mkdtemp(join(tmpdir(), "omk-chat-respect-env-bin-"));
+  const runId = "chat-respect-env-root";
+
+  try {
+    await mkdir(cwdRoot, { recursive: true });
+    await mkdir(envRoot, { recursive: true });
+    await mkdir(binRoot, { recursive: true });
+    const kimiBin = await createFakeKimi(binRoot, [
+      `if (process.argv[2] === "--version") {`,
+      `  console.log("kimi 1.0.0");`,
+      `  process.exit(0);`,
+      `}`,
+      `process.exit(0);`,
+      ``,
+    ].join("\n"));
+
+    const initEnv = {
+      ...process.env,
+      HOME: homeRoot,
+      OMK_ORIGINAL_HOME: homeRoot,
+      OMK_PROJECT_ROOT: envRoot,
+      OMK_RENDER_LOGO: "0",
+      OMK_STAR_PROMPT: "0",
+      OMK_CHAT_NO_BANNER: "1",
+      KIMI_BIN: kimiBin,
+      OMK_MCP_SUPPRESS_PRUNE_WARNINGS: "",
+    };
+    const init = spawnSync(process.execPath, [CLI, "init"], {
+      cwd: envRoot,
+      encoding: "utf-8",
+      timeout: 30000,
+      env: initEnv,
+    });
+    assert.equal(init.status, 0, init.stderr || init.stdout);
+
+    const result = spawnSync(process.execPath, [
+      CLI,
+      "chat",
+      "--smoke",
+      "--json",
+      "--layout",
+      "plain",
+      "--brand",
+      "plain",
+      "--provider",
+      "auto",
+      "--run-id",
+      runId,
+    ], {
+      cwd: cwdRoot,
+      encoding: "utf-8",
+      timeout: 30000,
+      env: {
+        ...initEnv,
+        KIMI_BIN: "/nonexistent/kimi",
+        OMK_MCP_PREFLIGHT: "off",
+        OMK_PROJECT_ROOT: envRoot,
+        OMK_CHAT_RESPECT_PROJECT_ROOT_ENV: "1",
+      },
+    });
+
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.ok, true);
+    assert.equal(report.root.path, envRoot);
+    assert.equal(report.root.cwd, cwdRoot);
+    assert.equal(report.root.source, "env");
+    assert.equal(existsSync(join(envRoot, ".omk", "runs", runId)), true);
+    assert.equal(existsSync(join(cwdRoot, ".omk", "runs", runId)), false);
+  } finally {
+    await rm(homeRoot, { recursive: true, force: true });
+    await rm(binRoot, { recursive: true, force: true });
+  }
 });
 
 test("chat smoke uses OMK_DEFAULT_PROJECT_ROOT when launched from HOME git repo", async () => {
@@ -526,6 +768,9 @@ test("chat smoke uses OMK_DEFAULT_PROJECT_ROOT when launched from HOME git repo"
     assert.equal(existsSync(join(homeRoot, ".omk", "runs", runId)), false);
     const report = JSON.parse(result.stdout);
     assert.equal(report.ok, true);
+    assert.equal(report.root.path, projectRoot);
+    assert.equal(report.root.cwd, homeRoot);
+    assert.equal(report.root.source, "default-env");
   } finally {
     await rm(homeRoot, { recursive: true, force: true });
     await rm(binRoot, { recursive: true, force: true });

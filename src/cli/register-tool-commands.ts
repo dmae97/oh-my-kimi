@@ -2,11 +2,15 @@ import type { Command } from "commander";
 import { t } from "../util/i18n.js";
 
 export function registerToolCommands(program: Command): void {
-  program.command("auth")
-    .description("Show provider authentication status and setup instructions")
-    .action(async () => {
+  program.command("auth [provider]")
+    .description("Show provider authentication, runtime, model, and setup status")
+    .option("--json", "Output JSON")
+    .option("--doctor", "Run provider doctor-style status checks")
+    .option("--setup", "Show setup commands")
+    .option("--soft", "Do not fail when the selected provider is unavailable")
+    .action(async (provider, options) => {
       const { authCommand } = await import("../commands/auth.js");
-      await authCommand();
+      await authCommand(provider, options);
     });
 
   const graph = program.command("graph").description("Inspect OMK ontology graph");

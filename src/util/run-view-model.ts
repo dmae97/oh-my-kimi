@@ -2,7 +2,7 @@
  * Shared RunViewModel — unified state interpretation for HUD and Parallel UI.
  */
 
-import type { RunState } from "../contracts/orchestration.js";
+import type { RunCapabilityAssignment, RunGoalState, RunRouteDecision, RunState } from "../contracts/orchestration.js";
 import type { TelemetryEvent } from "./events-logger.js";
 import { sanitizeTerminalText } from "./theme.js";
 
@@ -19,6 +19,8 @@ export interface RunViewModelWorker {
   lastEvidence?: { gate: string; passed: boolean; message?: string };
   /** Latest thinking text from the worker (live activity). */
   thinking?: string;
+  /** Scoped skills/MCP/hooks assigned to this worker lane. Names only; no config/env values. */
+  assignment?: RunCapabilityAssignment;
   /** High-level phase description (e.g. "reading src/foo.ts"). */
   phase?: string;
   /** Milliseconds since last meaningful activity (thinking/node event). */
@@ -71,6 +73,8 @@ export interface RunViewModelBlockerItem {
 
 export interface RunViewModel {
   health: RunHealth;
+  goal: RunGoalState | null;
+  routeDecision: RunRouteDecision | null;
   goalTitle: string | null;
   goalScore: number | null;
   activeNode: RunViewModelActiveNode | null;
@@ -208,6 +212,8 @@ export function buildRunViewModel(
   if (!state) {
     return {
       health: "warn",
+      goal: null,
+      routeDecision: null,
       goalTitle: options.goalTitle ?? null,
       goalScore: null,
       activeNode: null,
@@ -234,6 +240,8 @@ export function buildRunViewModel(
   const settled = done.length + skipped.length + failed.length + blocked.length;
   const percent = total > 0 ? Math.round((settled / total) * 100) : 0;
   const providerRouting = computeProviderRouting(nodes);
+  const goal = deriveGoalState(state);
+  const goalTitle = goal?.title ?? options.goalTitle ?? null;
 
   let health: RunHealth = "ok";
   if (failed.length > 0) health = "failed";
@@ -309,6 +317,7 @@ export function buildRunViewModel(
   const mapNodeToWorker = (n: (typeof nodes)[0]): RunViewModelWorker => {
     const elapsed = n.durationMs ?? (n.startedAt ? now - new Date(n.startedAt).getTime() : 0);
     const lastEvidence = n.evidence?.length ? n.evidence[n.evidence.length - 1] : undefined;
+    const assignment = normalizeRunCapabilityAssignment(state.capabilityAssignments?.[n.id], n.routing);
     const stateValue: RunViewModelWorker["state"] =
       n.status === "pending" ? "idle" :
       n.status === "skipped" ? "skipped" :
@@ -347,6 +356,7 @@ export function buildRunViewModel(
         ? { gate: lastEvidence.gate, passed: lastEvidence.passed, message: lastEvidence.message ? sanitizeForDisplay(lastEvidence.message) : undefined }
         : undefined,
       thinking,
+      assignment,
       phase,
       lastActivityAgeMs,
       lastHeartbeatAgeMs,
@@ -358,7 +368,9 @@ export function buildRunViewModel(
 
   return {
     health,
-    goalTitle: options.goalTitle ?? null,
+    goal,
+    routeDecision: state.routeDecision ?? null,
+    goalTitle,
     goalScore: total > 0 ? Math.round((settled / total) * 100) : null,
     activeNode,
     blocker,
@@ -436,6 +448,48 @@ function computeLiveStatus(input: {
   if (!heartbeatFresh) return "stalled";
   if (input.lastActivityAgeMs != null && input.lastActivityAgeMs <= 30_000) return "running-active";
   return "running-silent";
+}
+
+function deriveGoalState(state: RunState): RunGoalState | null {
+  if (state.goal) return state.goal;
+  if (!state.goalSnapshot) return null;
+  return {
+    id: state.goalId,
+    title: state.goalSnapshot.title,
+    objective: state.goalSnapshot.objective,
+    successCriteria: state.goalSnapshot.successCriteria.map((criterion) => ({
+      id: criterion.id,
+      description: criterion.description,
+      requirement: criterion.requirement,
+    })),
+    status: "planned",
+  };
+}
+
+function normalizeRunCapabilityAssignment(
+  assignment: RunCapabilityAssignment | undefined,
+  routing: RunState["nodes"][number]["routing"] | undefined
+): RunCapabilityAssignment | undefined {
+  const assigned = routing?.assignedCapabilities;
+  const skills = uniqueCapabilityNames(assignment?.skills ?? assigned?.skills ?? routing?.skills ?? []);
+  const mcpServers = uniqueCapabilityNames(assignment?.mcpServers ?? assigned?.mcpServers ?? routing?.mcpServers ?? []);
+  const hooks = uniqueCapabilityNames(assignment?.hooks ?? assigned?.hooks ?? routing?.hooks ?? []);
+  const tools = uniqueCapabilityNames(assignment?.tools ?? assigned?.tools ?? routing?.tools ?? []);
+  if (skills.length === 0 && mcpServers.length === 0 && hooks.length === 0 && tools.length === 0) {
+    return undefined;
+  }
+  return {
+    skills,
+    mcpServers,
+    hooks,
+    ...(tools.length > 0 ? { tools } : {}),
+    source: assignment?.source ?? (routing?.autoSpawned ? "capability-router" : "routing"),
+    rationale: assignment?.rationale ? sanitizeForDisplay(assignment.rationale) : routing?.rationale ? sanitizeForDisplay(routing.rationale) : undefined,
+  };
+}
+
+function uniqueCapabilityNames(values: readonly string[]): string[] {
+  return [...new Set(values.map((value) => sanitizeForDisplay(value.trim())).filter(Boolean))];
 }
 
 function computeProviderRouting(nodes: RunState["nodes"]): RunViewModelProviderRouting {

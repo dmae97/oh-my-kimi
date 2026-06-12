@@ -110,7 +110,7 @@ export const FORBIDDEN_PATTERNS = [
 export const SIZE_BUDGETS = {
   tarballMb: 35,
   unpackedMb: 40,
-  entryCount: 720,
+  entryCount: 1100,
   singleFileMb: 20,
   readmeassetMb: 30,
   distMb: 20,

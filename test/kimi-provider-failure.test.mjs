@@ -4,9 +4,11 @@ import assert from "node:assert/strict";
 const {
   classifyKimiProviderFailure,
   classifyKimiStartupExit,
+  extractKimiMcpConnectionFailureNames,
   formatKimiProviderFailureHint,
   isKimiStartupReadyData,
   resolveKimiStartupTimeoutMs,
+  shouldFailOnMcpError,
 } = await import("../dist/kimi/runner.js");
 
 const monthlyQuotaError = `LLM provider error: Error code: 429 - {'error': {'message': "You've reached kimi monthly usage limit for this billing cycle. Your quota will be refreshed in the next cycle. Upgrade to get more: https://www.kimi.com/code/console?from=quota-upgrade", 'type': 'exceeded_current_quota_error'}}
@@ -37,6 +39,27 @@ test("ignores unrelated runtime output", () => {
   assert.equal(classifyKimiProviderFailure("Runtime note: next billing cycle starts tomorrow"), null);
   assert.equal(classifyKimiProviderFailure("MCP sync included usage limit metadata"), null);
   assert.equal(classifyKimiProviderFailure("MCP server HTTP 429 during setup"), null);
+});
+
+test("classifies optional MCP connection failures as non-fatal by requirement list", () => {
+  const output = "Failed to connect MCP servers: {'omk-web-bridge': McpError('Connection closed')}";
+
+  assert.deepEqual(extractKimiMcpConnectionFailureNames(output), ["omk-web-bridge"]);
+  assert.equal(shouldFailOnMcpError({
+    serverName: "omk-web-bridge",
+    requiredServers: [],
+    failurePolicy: "required-only",
+  }), false);
+  assert.equal(shouldFailOnMcpError({
+    serverName: "omk-web-bridge",
+    requiredServers: ["omk-web-bridge"],
+    failurePolicy: "required-only",
+  }), true);
+  assert.equal(shouldFailOnMcpError({
+    serverName: "omk-web-bridge",
+    requiredServers: [],
+    failurePolicy: "strict",
+  }), true);
 });
 
 test("separates monthly quota exhaustion from transient rate limits", () => {

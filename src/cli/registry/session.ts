@@ -73,21 +73,22 @@ export function registerSessionCommands(program: Command): void {
     .option("--execution <ask|auto|parallel|sequential>", "Execution selection policy (ask | auto | parallel | sequential)")
     .option("--provider <provider>", "provider policy (auto | kimi | deepseek | codex | qwen)", "auto")
     .option("--model <model>", "provider model or provider/model override")
+    .option("--cwd <path>", "Working directory seed for chat root resolution (defaults to current shell cwd)")
+    .option("--project-root <path>", "Force the OMK project root for this chat session")
     .option("--max-steps-per-turn <n>", t("cmd.chatMaxStepsOption"))
     .option("--layout <auto|tmux|inline|plain>", t("cmd.chatLayoutOption"), "auto")
-    .option("--brand <omk|minimal|plain>", t("cmd.chatBrandOption"), "minimal")
+        .option("--ui <legacy|plain-modern|rich|system24|green-rain|neon-grid>", "Single-pane chat renderer (legacy | plain-modern | rich | system24 | green-rain | neon-grid)")
+    .option("--brand <omk|minimal|plain|green-rain|neon-grid>", t("cmd.chatBrandOption"), "minimal")
     .option("--mode <agent|plan|chat|debugging|review>", "OMK execution mode")
-    .option("--cockpit-refresh <ms>", "Cockpit refresh interval in milliseconds", "2000")
-    .option("--cockpit-redraw <diff|full|append>", "Cockpit redraw mode", "diff")
-    .option("--cockpit-history <off|static|watch>", "Cockpit history pane mode", "static")
-    .option("--cockpit-side-width <percent>", "Cockpit side pane width percentage (default: auto, about 45-50%)")
-    .option("--cockpit-height <rows>", "Cockpit fixed height in rows (default: auto)")
     .option("--smoke", "Run chat startup preflight and runtime MCP merge checks without launching the agent")
+    .option("--show-think <off|summary|debug>", "Thinking visibility mode (off | summary | debug)", "off")
+    .option("--reasoning-nlp", "Enable reasoning NLP normalization")
+    .option("--reasoning-summary <auto|concise|detailed>", "OpenAI reasoning summary mode (auto | concise | detailed)", "auto")
     .option("--json", "With --smoke, output machine-readable JSON")
     .action(async (options) => {
       const globalOpts = program.opts();
       const { chatCommand } = await import("../../commands/chat.js");
-      await chatCommand({ ...options, runId: globalOpts.runId });
+      await chatCommand({ ...options, runId: globalOpts.runId, showThink: options.showThink, reasoningNlp: Boolean(options.reasoningNlp), reasoningSummary: options.reasoningSummary });
     });
 
   program

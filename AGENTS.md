@@ -10,18 +10,23 @@ Do not restate this file unless the user explicitly asks for project rules.
 
 ---
 
-## Current OMK Runtime Surface
+## Current OMK Runtime Surface (V2)
 
 Keep these surfaces aligned when editing init/runtime docs:
 
 - Init markdown: `AGENTS.md`, `.kimi/AGENTS.md`, `.omk/prompts/root.md`, plus generated companion docs `DESIGN.md`, `GEMINI.md`, `CLAUDE.md`, `ROADMAP.md`, and `SECURITY.md`.
 - Skills: project portable skills live in `.agents/skills`; Kimi runtime skills live in `.kimi/skills`; init templates live under `templates/skills/agents` and `templates/skills/kimi`.
-- Default runtime preset: `.omk/runtime-preset.json` uses `omk-parallel-orchestrator` so agent/non-simple work prefers parallel worker, capability, review, QA, and security lanes; `.omk/runtime-presets.json` keeps `omk-core-verified` as the fallback/baseline preset and also includes `omk-ts-product` for strict TS/React/Next/Nest product work, `omk-worktree-team` for isolated parallel worktree lanes before merge, and `omk-release-guard` for secret/security/release evidence gates with narrowed MCP authority, strong hooks, and no auto-publish authority.
-- MCP: fresh init is project-scoped and writes only local `omk-project` into `.kimi/mcp.json` / `.omk/mcp.json`. `omk init --local-user` or `OMK_MCP_SCOPE=all OMK_SKILLS_SCOPE=all` reads user `~/.kimi/mcp.json` and `~/.kimi/skills` at runtime without copying personal/global files. `--import-user-skills` is a trusted local opt-in copy path.
-- Agents: generated agents extend the Okabe-compatible base with `SendDMail`. Default root aliases are `explorer`/`explore`, `planner`/`plan`, `router`, `architect`, `coder`, `reviewer`, `security`, `qa`, `tester`, `researcher`, `integrator`, `aggregator`, `interviewer`, `ontology`, and `vision-debugger`; each is scaffolded with MCP, skills, and hooks capability flags that are applied only within the active runtime/harness scope. Use additional local roles such as `coordinator`, `docs`, `merger`, or `release` only when the current `.omk/agents/root.yaml` or harness exposes them. **OMK is the root orchestrator; Kimi is one provider adapter.**
-- Transition: transitioning from provider-hosted subagents to OMK-hosted parallel workers. Capability flags, worker limits, and provider routing are owned by OMK; Kimi is one adapter that executes nodes only when selected.
-- Harness: chat agent mode writes `.omk/runs/<run-id>/chat-agent-harness.json`. Prompts carry compact MCP/skills/hooks counts; read the harness manifest for the full inventory, worker limits, authority boundaries, virtual DAG, and gate list.
+- Default runtime preset: `.omk/runtime-preset.json` uses `omk-parallel-orchestrator` so agent/non-simple work prefers parallel worker, capability, review, QA, and security lanes.
+- MCP: fresh init is project-scoped and writes only local `omk-project` into `.kimi/mcp.json` / `.omk/mcp.json`. `omk init --local-user` or `OMK_MCP_SCOPE=all OMK_SKILLS_SCOPE=all` reads user `~/.kimi/mcp.json` and `~/.kimi/skills` at runtime.
+- Providers: `mimo` (default, mimo-v2.5-pro), `kimi` (kimi-api direct HTTP), `deepseek`, `codex`, `opencode`, `openrouter`, `qwen`, `local-llm`. kimi-cli dependency removed — kimi-api uses direct Moonshot HTTP API.
+- Runtime pipeline: User Input → CommandBus → IntentClassifier → CapabilitySelector → RuntimeSidecar → OutputRouter → ThemeRenderer/NlpRenderer/JsonRenderer/NlgRenderer.
+- CLI v2: Clipanion-based (`src/cli/v2/cli-v2-skeleton.ts`), enabled via `OMK_CLI_V2=1`. Commands: ChatCommand, RunCommand, StatusCommand, ModelCommand, DoctorCommand, MemoryCommand, ThemeCommand.
+- Theme: `src/cli/theme/theme-registry.ts` ThemePalette with SemanticToken, 5 palettes (omk/minimal/mono/dark/light). `src/runtime/renderers.ts` integrates ThemePalette + i18n bilingual.
+- Reasoning Trace Engine: `src/runtime/reasoning-trace.ts` stores intent, plan, tools, evidence, results, privacy. Consent-aware NLG via `src/runtime/nlg-renderer.ts`.
+- Harness: chat agent mode writes `.omk/runs/<run-id>/chat-agent-harness.json`. Prompts carry compact MCP/skills/hooks counts; read the harness manifest for the full inventory.
 - Evidence: `scripts/run-tests.mjs` and OMK verification surfaces record sanitized MCP/skill/hook resource metadata. Do not emit resource secrets, headers, or raw env values.
+- Architecture doc: `OMK_CLI_V2_RUNTIME_ARCHITECTURE.md` (2058 lines), ~85% implemented.
+- Obsidian knowledge base: `/home/yu/.openclaw/workspace/llm-wiki/projects/omk/`
 
 ---
 
@@ -154,6 +159,135 @@ When `--max-steps-per-turn` is set (e.g. via `omk chat --max-steps-per-turn <n>`
 
 ---
 
+## Parallel Subagent Orchestration (Goal → DAG → Lanes → Evidence → Synthesis)
+
+You are the **root orchestrator**. You do not do all the work yourself; you decompose a
+`goal` into a DAG, fan it out to parallel subagent lanes, and own routing, resource
+assignment, evidence collection, and final synthesis. Workers execute; the orchestrator
+decides.
+
+### Orchestration loop
+
+```txt
+1. Intake     capture the goal + success criteria (use Ouroboros to crystallize if vague)
+2. Decompose  build a task DAG (nodes, dependencies, risk, read/write authority)
+3. Route      pick topology + per-lane provider/runtime (use Adaptorch route)
+4. Provision  assign each lane its skills, hooks, MCP servers, acceptance criteria
+5. Dispatch   run independent lanes in parallel up to OMK_WORKERS
+6. Collect    gather per-lane evidence (diffs, test/build output, citations)
+7. Synthesize merge lane outputs into one consistent result (use Adaptorch synthesize)
+8. Verify     run quality gates; replan failed lanes; persist memory
+```
+
+### Per-lane provisioning contract
+
+Every dispatched subagent MUST receive an explicit, minimal grant. Never give a lane more
+authority than its task needs.
+
+```txt
+Lane:              <id> (e.g. explore-auth, impl-router, review-security)
+Role:              explorer | planner | coder | reviewer | qa | security | docs
+Goal:              one sentence, verifiable
+Scope:             allowed files/directories only
+Skills:            only the SKILL.md entrypoints this lane needs
+Hooks:             pre/post hooks this lane must respect (e.g. secret-guard, format)
+MCP:               only the MCP servers this lane may call
+Provider/Runtime:  authority for this lane (read-only lanes stay read-only)
+Acceptance:        explicit pass criteria
+Evidence output:   path under .omk/runs/<run-id>/ for diffs, logs, citations
+Constraints:       preserve concurrent edits; do not touch out-of-scope files
+```
+
+### Lane authority rules
+
+* Read-only lanes (explorer, researcher, reviewer, qa) get read/advisory authority only.
+* Write/shell/merge authority stays on the authority provider and is granted per-lane,
+  never globally.
+* Two lanes must not write the same files concurrently. Split scope or sequence them.
+* Respect `OMK_WORKERS`: never spawn more parallel lanes than the configured budget.
+* Every lane must return evidence; a lane with no evidence is treated as failed.
+
+### Adaptorch — topology routing + adaptive synthesis
+
+Use Adaptorch for DAG-aware execution planning and consistency-verified merge.
+
+* Skills: `adaptorch-route` (analyze DAG width/depth/coupling → recommend topology),
+  `adaptorch-synthesize` (topology-aware routing + adaptive synthesis across lanes),
+  `adaptorch-benchmark` (compare orchestration strategies when measuring quality).
+* MCP: `adaptorch` (dev) / `adaptorch-prod` (prod reliability kernel).
+* Use `adaptorch-route` before fanning out a complex DAG; use `adaptorch-synthesize`
+  when merging multiple lane outputs that must stay mutually consistent.
+
+### Ouroboros — goal lifecycle and evolutionary loop
+
+Use Ouroboros to turn vague requests into a runnable, verifiable goal and to iterate.
+
+* Skills: `interview`/`pm` (crystallize requirements), `seed` (validated spec),
+  `run` (execute spec), `evaluate`/`qa` (three-stage verification),
+  `evolve`/`auto` (iterate to A-grade), `status` (goal drift), `resume-session`.
+* MCP: `ouroboros`.
+* Use Ouroboros when the goal is ambiguous, long-horizon, or needs drift tracking and
+  replanning across turns.
+
+### Supermemory — cross-lane and cross-session memory
+
+Use Supermemory as shared, durable memory for the orchestrator and lanes.
+
+* MCP: `supermemory`.
+* Write stable facts (decisions, contracts, blockers, goal state) so parallel lanes and
+  future sessions recall them instead of re-deriving context.
+* Project-local graph memory (`omk_write_memory`, `omk_graph_query`) remains the default
+  source of truth; Supermemory is the cross-session/cross-project layer.
+* Never store secrets, tokens, or private credentials in any memory layer.
+
+### Parallel execution patterns
+
+Fan out only **independent** work. Prefer these proven shapes:
+
+* **Parallel research** — N read-only explorer/researcher lanes investigate disjoint
+  questions or modules, then one lane synthesizes.
+* **Parallel file operations** — each coder lane owns a disjoint file set; never two
+  writers on the same file. Split by directory/module boundary.
+* **Parallel explore + build** — explorer maps the codebase while a planner drafts the
+  approach; converge before coding.
+* **Parallel verification** — reviewer, qa, and security lanes audit the same diff
+  concurrently from different angles.
+
+Dispatch discipline (search-first, domain-split):
+
+```txt
+1. Search/recall memory first (supermemory + project graph) to avoid re-deriving context
+2. Anchor the goal; analyze it into independent domains/lanes
+3. One subtask per domain, each with its own provisioning contract
+4. Run independent lanes in parallel (≤ OMK_WORKERS); sequence dependent ones
+5. Persist domain analysis + decisions to memory so lanes/sessions share them
+```
+
+### When NOT to parallelize
+
+* Tasks with tight data dependencies (output of A is input of B) — sequence them.
+* Multiple writers touching the same files — serialize or re-split scope.
+* Trivial single-step tasks — the orchestration overhead is not worth it.
+* When `OMK_WORKERS=1` — run lanes sequentially.
+
+### Orchestration guardrails
+
+* Decompose first, read targeted files second — do not dump the whole repo into context.
+* Keep evidence under `.omk/runs/<run-id>/` or `.omk/goals/<goal-id>/`.
+* Prefer small, reviewable per-lane diffs; integrate via a reviewer/qa lane before done.
+* Do not claim success until lane evidence and quality gates confirm it.
+
+### References (external patterns this section draws on)
+
+* `github/awesome-copilot` — agents and subagents guidance
+* `microsoft/vscode-docs` — subagents docs
+* `cloudflare/cloudflare-docs` — sub-agent runtime execution
+* `lastmile-ai/mcp-agent` — MCP agent core components
+* `teren-papercutlabs/pcl-workshop` — parallel-subagents technique
+* `vincents-ai/engram` — dispatching parallel agents (search-first, domain-split, memory)
+
+---
+
 ## Skills Policy
 
 Before starting, inspect the loaded skills list.
@@ -264,6 +398,36 @@ Rules:
 * Do not expose or request temperature/top_p tuning from users.
 
 For web-heavy research, prefer a no-thinking research profile when the runtime supports it.
+
+---
+
+## V2 Runtime Architecture Key Files
+
+When modifying the runtime pipeline, reference these files:
+
+```txt
+src/runtime/contracts/command-envelope.ts    # CommandKind, OmkEvent, CapabilityPlan, OutputProfile
+src/runtime/contracts/reasoning-trace.ts    # ReasoningTrace schema, TraceSummary, ConsentAwareNlg
+src/runtime/debloat-nlp.ts                  # classifyIntent, selectCapabilities, compileBloatToNlp, filterMcpConfigForTurn, selectProviderRuntime
+src/runtime/command-bus.ts                  # CommandBus, slash command dispatch
+src/runtime/slash-commands.ts               # /model, /status, /theme, /help handlers
+src/runtime/output-router.ts                # OutputRouter → ThemeRenderer/NlpRenderer/JsonRenderer/NlgRenderer
+src/runtime/renderers.ts                    # ThemeRenderer (ThemePalette), NlpRenderer (i18n bilingual), JsonRenderer
+src/runtime/nlg-renderer.ts                 # Consent-aware NLG, trace summaries
+src/runtime/provider-event-normalizer.ts    # KimiEventNormalizer, KimiPrintNormalizer (i18n)
+src/runtime/reasoning-trace.ts              # createReasoningTrace, redactTrace, summarizeTrace, generateConsentReport
+src/runtime/ui-components.ts                # statusCard, providerCard, mcpHealthCard, errorBox, traceSummaryCard, consentNotice
+src/runtime/context-broker.ts               # ContextCapsule builder (promptMode dnc-nlp check)
+src/runtime/mimo-api-runtime.ts             # MiMo API runtime (extends KimiApiRuntime)
+src/runtime/kimi-api-runtime.ts             # Moonshot API runtime (direct HTTP)
+src/runtime/runtime-router.ts               # runtimeIdsForProviderRef, INTENT_RUNTIME_PREFERENCES
+src/cli/v2/cli-v2-skeleton.ts               # Clipanion CLI v2 (7 commands)
+src/cli/v2/chat-repl.ts                     # Interactive REPL with pipeline
+src/cli/v2/persistent-memory.ts             # .omk/memory/ store
+src/cli/theme/theme-registry.ts             # ThemePalette, SemanticToken, 5 palettes
+src/util/i18n.ts                            # t() bilingual (KO/EN), ~1070 lines
+test/v2-regression.test.mjs                 # 10 regression tests
+```
 
 ---
 

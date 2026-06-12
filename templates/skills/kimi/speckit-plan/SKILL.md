@@ -1,7 +1,7 @@
 ---
 name: "speckit-plan"
 description: "Execute the implementation planning workflow using the plan template to generate design artifacts."
-compatibility: "Requires spec-kit project structure with .specify/ directory"
+compatibility: "Supports standard .specify/specs layout; OMK fallback uses .omk/specs and .omk/templates/spec-kit-omk-preset when standard spec-kit is not initialized."
 metadata:
   author: "github-spec-kit"
   source: "templates/commands/plan.md"
@@ -52,9 +52,17 @@ You **MUST** consider the user input before proceeding (if not empty).
 
 ## Outline
 
-1. **Setup**: Run `.specify/scripts/bash/setup-plan.sh --json` from repo root and parse JSON for FEATURE_SPEC, IMPL_PLAN, SPECS_DIR, BRANCH. For single quotes in args like "I'm Groot", use escape syntax: e.g 'I'\''m Groot' (or double-quote if possible: "I'm Groot").
+1. **Setup**:
+   - If `.specify/scripts/bash/setup-plan.sh` exists, run `.specify/scripts/bash/setup-plan.sh --json` from repo root and parse JSON for FEATURE_SPEC, IMPL_PLAN, SPECS_DIR, BRANCH.
+   - If the script is absent, use OMK fallback resolution:
+     1. Use `SPECIFY_FEATURE_DIRECTORY` when explicitly provided.
+     2. Else read `.specify/feature.json` if present.
+     3. Else use the latest `.omk/specs/*` directory containing `spec.md`.
+     4. Set `FEATURE_SPEC` to `<feature-dir>/spec.md` and `IMPL_PLAN` to `<feature-dir>/plan.md`.
+     5. Copy `.omk/templates/spec-kit-omk-preset/templates/plan-template.md`, then `templates/spec-kit-omk-preset/templates/plan-template.md`, as the plan template when `IMPL_PLAN` does not exist.
+   - For single quotes in args like "I'm Groot", use escape syntax: e.g 'I'\''m Groot' (or double-quote if possible: "I'm Groot").
 
-2. **Load context**: Read FEATURE_SPEC and `.specify/memory/constitution.md`. Load IMPL_PLAN template (already copied).
+2. **Load context**: Read FEATURE_SPEC. Read `.specify/memory/constitution.md` when present; otherwise use the OMK project contract from AGENTS.md plus the plan template's safety/authority/evidence sections. Load IMPL_PLAN template (already copied).
 
 3. **Execute plan workflow**: Follow the structure in IMPL_PLAN template to:
    - Fill Technical Context (mark unknowns as "NEEDS CLARIFICATION")

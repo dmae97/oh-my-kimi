@@ -1,4 +1,5 @@
 import type { TaskResult } from "../contracts/orchestration.js";
+import type { TaskRunContext } from "../contracts/worker-context.js";
 import type { DagNode } from "../orchestration/dag.js";
 import type {
   ProviderId,
@@ -14,6 +15,7 @@ export interface AgentRunInput {
   env: Record<string, string>;
   signal: AbortSignal;
   attempt: number;
+  runContext?: TaskRunContext;
 }
 
 export interface AgentRunResult {

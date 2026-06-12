@@ -10,7 +10,7 @@ import { createEnsembleTaskRunner } from "../dist/orchestration/ensemble.js";
 import { createExecutor } from "../dist/orchestration/executor.js";
 import { estimateRunProgress } from "../dist/orchestration/eta.js";
 import { renderCapabilityRoutingArtifact } from "../dist/orchestration/capability-routing.js";
-import { createRoutedRunState, refreshRunStateEstimate, routeRunState, createExecutableDagFromState } from "../dist/orchestration/run-state.js";
+import { createRoutedRunState, refreshRunStateEstimate, routeRunState, createExecutableDagFromState, buildRunGoalState } from "../dist/orchestration/run-state.js";
 import { dagNodeRoutingEnv, discoverRoutingInventory, resetRoutingInventoryCache } from "../dist/orchestration/routing.js";
 import { OMK_RELEASE_GUARD_PRESET } from "../dist/runtime/core-verified-preset.js";
 import { collectMcpConfigs, getUserHome, injectKimiGlobals, normalizeUserHomePath, pruneRuntimeMcpServers } from "../dist/util/fs.js";
@@ -404,6 +404,7 @@ test("injectKimiGlobals passes one merged MCP config to Kimi to avoid duplicate 
   const previousOriginalHome = process.env.OMK_ORIGINAL_HOME;
   const previousMcpScope = process.env.OMK_MCP_SCOPE;
   const previousSkillsScope = process.env.OMK_SKILLS_SCOPE;
+  const previousMcpPreflight = process.env.OMK_MCP_PREFLIGHT;
 
   try {
     await mkdir(join(originalHome, ".kimi"), { recursive: true });
@@ -426,6 +427,7 @@ test("injectKimiGlobals passes one merged MCP config to Kimi to avoid duplicate 
     process.env.OMK_ORIGINAL_HOME = originalHome;
     process.env.OMK_MCP_SCOPE = "all";
     process.env.OMK_SKILLS_SCOPE = "none";
+    process.env.OMK_MCP_PREFLIGHT = "off";
 
     const args = [];
     await injectKimiGlobals(args, { mcpScope: "all", skillsScope: "none" });
@@ -449,6 +451,7 @@ test("injectKimiGlobals passes one merged MCP config to Kimi to avoid duplicate 
     restoreEnv("OMK_ORIGINAL_HOME", previousOriginalHome);
     restoreEnv("OMK_MCP_SCOPE", previousMcpScope);
     restoreEnv("OMK_SKILLS_SCOPE", previousSkillsScope);
+    restoreEnv("OMK_MCP_PREFLIGHT", previousMcpPreflight);
     await rm(projectRoot, { recursive: true, force: true });
     await rm(originalHome, { recursive: true, force: true });
   }
@@ -562,7 +565,7 @@ test("dag routing exposes provider-neutral node capability contract", () => {
         maxRetries: 1,
         routing: {
           provider: "auto",
-          candidateProviders: ["codex", "qwen", "openrouter", "kimi"],
+          candidateProviders: ["kimi", "codex", "qwen", "openrouter"],
           assignedProviderAuthority: "authority",
           assignedProviderCapabilities: ["write", "shell", "mcp"],
           skills: ["omk-typescript-strict", "omk-typescript-strict"],
@@ -584,7 +587,7 @@ test("dag routing exposes provider-neutral node capability contract", () => {
   assert.equal(env.OMK_NODE_PROVIDER, "auto");
   assert.equal(env.OMK_NODE_PROVIDER_AUTHORITY, "authority");
   assert.equal(env.OMK_NODE_PROVIDER_CAPABILITIES, "write,shell,mcp");
-  assert.equal(env.OMK_NODE_CANDIDATE_PROVIDERS, "codex,qwen,openrouter,kimi");
+  assert.equal(env.OMK_NODE_CANDIDATE_PROVIDERS, "kimi,codex,qwen,openrouter");
   assert.equal(env.OMK_NODE_SKILLS, "omk-typescript-strict");
   assert.equal(env.OMK_NODE_MCP_SERVERS, "omk-project");
   assert.equal(env.OMK_NODE_TOOLS, "omk_run_quality_gate");
@@ -602,7 +605,7 @@ test("capability routing artifact records per-node provider and capability assig
         maxRetries: 1,
         routing: {
           provider: "auto",
-          candidateProviders: ["codex", "qwen", "openrouter", "kimi"],
+          candidateProviders: ["kimi", "codex", "qwen", "openrouter"],
           assignedProviderAuthority: "authority",
           skills: ["omk-typescript-strict"],
           mcpServers: ["omk-project"],
@@ -617,7 +620,7 @@ test("capability routing artifact records per-node provider and capability assig
   assert.equal(artifact.generatedAt, "2026-05-24T00:00:00.000Z");
   assert.equal(artifact.nodes[0].nodeId, "worker");
   assert.equal(artifact.nodes[0].provider, "auto");
-  assert.deepEqual(artifact.nodes[0].candidateProviders, ["codex", "qwen", "openrouter", "kimi"]);
+  assert.deepEqual(artifact.nodes[0].candidateProviders, ["kimi", "codex", "qwen", "openrouter"]);
   assert.deepEqual(artifact.nodes[0].skills, ["omk-typescript-strict"]);
   assert.deepEqual(artifact.nodes[0].mcpServers, ["omk-project"]);
   assert.deepEqual(artifact.nodes[0].hooks, ["protect-secrets.sh"]);
@@ -885,6 +888,70 @@ test("run state routing helper enriches synthetic CLI nodes", async () => {
     assert.ok(state.nodes[1].routing?.skills?.includes("omk-quality-gate"));
     assert.equal(state.estimate?.totalNodes, 2);
   });
+});
+
+test("run state binds goal and scoped capability assignments for HUD control loops", () => {
+  const goalSnapshot = {
+    title: "Critical issue scan",
+    objective: "Find critical issues in current repo state",
+    successCriteria: [
+      { id: "evidence", description: "Evidence is collected", requirement: "required" },
+    ],
+  };
+  const state = createRoutedRunState({
+    runId: "goal-assignment-test",
+    startedAt: "2026-05-01T00:00:00.000Z",
+    workerCount: 2,
+    goalId: "goal-1",
+    goalSnapshot,
+    routeDecision: {
+      intent: "critical_issue_scan",
+      selectedAgents: ["repo_explorer", "security_reviewer"],
+      reason: "critical scan",
+      requiredEvidence: [
+        { kind: "diff", required: true, description: "diff evidence" },
+      ],
+      mode: "read-only",
+    },
+    nodes: [
+      {
+        id: "scan",
+        name: "Scan runtime risk",
+        role: "reviewer",
+        dependsOn: [],
+        maxRetries: 1,
+        routing: {
+          skills: ["omk-code-review"],
+          mcpServers: ["omk-project"],
+          hooks: ["stop-verify.sh"],
+          tools: ["omk_run_quality_gate"],
+          rationale: "test assignment",
+        },
+      },
+    ],
+  });
+
+  assert.deepEqual(buildRunGoalState({ goalId: "goal-1", goalSnapshot }), {
+    id: "goal-1",
+    title: "Critical issue scan",
+    objective: "Find critical issues in current repo state",
+    successCriteria: goalSnapshot.successCriteria,
+    status: "planned",
+  });
+  assert.equal(state.goal?.objective, goalSnapshot.objective);
+  assert.equal(state.routeDecision?.intent, "critical_issue_scan");
+  assert.deepEqual(state.capabilityAssignments?.scan, {
+    skills: ["omk-code-review"],
+    mcpServers: ["omk-project"],
+    hooks: ["stop-verify.sh"],
+    tools: ["omk_run_quality_gate"],
+    source: "routing",
+    rationale: "test assignment",
+  });
+
+  const routed = routeRunState(state, 2);
+  assert.equal(routed.goal?.title, "Critical issue scan");
+  assert.equal(routed.capabilityAssignments?.scan?.skills[0], "omk-code-review");
 });
 
 test("run state estimate can be refreshed after synthetic status changes", () => {
@@ -1698,6 +1765,76 @@ test("executor bypasses ensemble fanout for optional DeepSeek provider lanes", a
   assert.equal(calls[0].env.OMK_ENSEMBLE, undefined);
   assert.equal(result.state.nodes[0].attempts.at(-1)?.provider, "deepseek");
   assert.equal(result.state.nodes[0].attempts.at(-1)?.providerParticipation, "direct");
+});
+
+test("executor passes OMK-owned worker context to parallel TaskRunner nodes", async () => {
+  let capturedContext;
+  let capturedEnv;
+  const startedAt = new Date(0).toISOString();
+  const dag = createDag({
+    nodes: [
+      {
+        id: "owned-worker",
+        name: "Implement owned worker context",
+        role: "coder",
+        dependsOn: [],
+        maxRetries: 1,
+        routing: {
+          provider: "codex",
+          readOnly: false,
+          requiresMcp: true,
+          requiresToolCalling: true,
+          skills: ["omk-typescript-strict"],
+          mcpServers: ["omk-project"],
+          hooks: ["protect-secrets.sh"],
+          tools: ["apply_patch"],
+          assignedProviderCapabilities: ["write", "patch", "shell", "mcp"],
+        },
+      },
+    ],
+  });
+  const executor = createExecutor({
+    ensemble: false,
+    resumeFromState: {
+      schemaVersion: 1,
+      runId: "executor-owned-context-test",
+      goalId: "goal-owned-context",
+      goalSnapshot: {
+        title: "Parallel owned context",
+        objective: "Coordinate workers with assigned skills, hooks, and MCP",
+        successCriteria: [],
+      },
+      nodes: dag.nodes.map((node) => ({ ...node })),
+      startedAt,
+    },
+  });
+  const runner = {
+    async run(_node, env, _signal, context) {
+      capturedEnv = env;
+      capturedContext = context;
+      return { success: true, stdout: "## Evidence\nok", stderr: "" };
+    },
+  };
+
+  const result = await executor.execute(dag, runner, {
+    runId: "executor-owned-context-test",
+    workers: 1,
+    approvalPolicy: "yolo",
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(capturedContext.worker.owner, "omk");
+  assert.equal(capturedContext.goal.goalId, "goal-owned-context");
+  assert.equal(capturedContext.goal.objective, "Coordinate workers with assigned skills, hooks, and MCP");
+  assert.deepEqual(capturedContext.worker.toolPlane.mcpServers, ["omk-project"]);
+  assert.deepEqual(capturedContext.worker.toolPlane.skills, ["omk-typescript-strict"]);
+  assert.deepEqual(capturedContext.worker.toolPlane.hooks, ["protect-secrets.sh"]);
+  assert.deepEqual(capturedContext.worker.toolPlane.tools, ["apply_patch"]);
+  assert.equal(capturedEnv.OMK_WORKER_MANIFEST_OWNER, "omk");
+  assert.equal(capturedEnv.OMK_NODE_MCP_SERVERS, "omk-project");
+  assert.equal(capturedEnv.OMK_NODE_SKILLS, "omk-typescript-strict");
+  assert.equal(capturedEnv.OMK_NODE_HOOKS, "protect-secrets.sh");
+  assert.equal(capturedEnv.OMK_NODE_TOOLS, "apply_patch");
 });
 
 test("executor rejects fractional worker counts", async () => {

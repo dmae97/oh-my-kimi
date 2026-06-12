@@ -353,6 +353,8 @@ if (options.list) {
 
 const childEnv = { ...process.env };
 delete childEnv.NODE_TEST_CONTEXT;
+delete childEnv.FORCE_COLOR;
+childEnv.NO_COLOR = "1";
 
 let failed = 0;
 const failedFiles = [];

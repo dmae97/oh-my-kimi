@@ -1,7 +1,7 @@
 ---
 name: "speckit-tasks"
 description: "Generate an actionable, dependency-ordered tasks.md for the feature based on available design artifacts."
-compatibility: "Requires spec-kit project structure with .specify/ directory"
+compatibility: "Supports standard .specify/specs layout; OMK fallback uses .omk/specs and .omk/templates/spec-kit-omk-preset when standard spec-kit is not initialized."
 metadata:
   author: "github-spec-kit"
   source: "templates/commands/tasks.md"
@@ -52,7 +52,16 @@ You **MUST** consider the user input before proceeding (if not empty).
 
 ## Outline
 
-1. **Setup**: Run `.specify/scripts/bash/setup-tasks.sh --json` from repo root and parse FEATURE_DIR, TASKS_TEMPLATE, and AVAILABLE_DOCS list. `FEATURE_DIR` and `TASKS_TEMPLATE` must be absolute paths when provided. `AVAILABLE_DOCS` is a list of document names/relative paths available under `FEATURE_DIR` (for example `research.md` or `contracts/`). For single quotes in args like "I'm Groot", use escape syntax: e.g 'I'\''m Groot' (or double-quote if possible: "I'm Groot").
+1. **Setup**:
+   - If `.specify/scripts/bash/setup-tasks.sh` exists, run `.specify/scripts/bash/setup-tasks.sh --json` from repo root and parse FEATURE_DIR, TASKS_TEMPLATE, and AVAILABLE_DOCS list.
+   - If the script is absent, use OMK fallback resolution:
+     1. Use `SPECIFY_FEATURE_DIRECTORY` when explicitly provided.
+     2. Else read `.specify/feature.json` if present.
+     3. Else use the latest `.omk/specs/*` directory containing `spec.md` or `plan.md`.
+     4. Set `FEATURE_DIR` to that directory.
+     5. Set `TASKS_TEMPLATE` to `.omk/templates/spec-kit-omk-preset/templates/tasks-template.md`, then `templates/spec-kit-omk-preset/templates/tasks-template.md`, when available.
+     6. Build `AVAILABLE_DOCS` from existing files under `FEATURE_DIR` (for example `research.md`, `contracts/`, `plan.md`, `spec.md`, `quickstart.md`).
+   - `FEATURE_DIR` and `TASKS_TEMPLATE` must be absolute paths when provided. `AVAILABLE_DOCS` is a list of document names/relative paths available under `FEATURE_DIR` (for example `research.md` or `contracts/`). For single quotes in args like "I'm Groot", use escape syntax: e.g 'I'\''m Groot' (or double-quote if possible: "I'm Groot").
 
 2. **Load design documents**: Read from FEATURE_DIR:
    - **Required**: plan.md (tech stack, libraries, structure), spec.md (user stories with priorities)
@@ -70,7 +79,7 @@ You **MUST** consider the user input before proceeding (if not empty).
    - Create parallel execution examples per user story
    - Validate task completeness (each user story has all needed tasks, independently testable)
 
-4. **Generate tasks.md**: Read the tasks template from TASKS_TEMPLATE (from the JSON output above) and use it as structure. If TASKS_TEMPLATE is empty, fall back to `.specify/templates/tasks-template.md`. Fill with:
+4. **Generate tasks.md**: Read the tasks template from TASKS_TEMPLATE (from the JSON output above or OMK fallback) and use it as structure. If TASKS_TEMPLATE is empty, fall back to `.specify/templates/tasks-template.md`, then `.omk/templates/spec-kit-omk-preset/templates/tasks-template.md`, then `templates/spec-kit-omk-preset/templates/tasks-template.md`. Fill with:
    - Correct feature name from plan.md
    - Phase 1: Setup tasks (project initialization)
    - Phase 2: Foundational tasks (blocking prerequisites for all user stories)

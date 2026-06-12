@@ -92,6 +92,9 @@ export function emitDoctorJsonReport(
     },
     security: {
       dangerousConfig: findMsg("Dangerous Config"),
+      childEnvIsolation: findMsg("Child Env Isolation"),
+      sandboxEnforcement: findMsg("Sandbox Enforcement"),
+      sandboxMetadata: find("Sandbox Enforcement")?.metadata ?? null,
     },
     rustSafety: {
       cargo: findMsg("Rust Cargo"),

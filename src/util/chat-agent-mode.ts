@@ -5,6 +5,7 @@ import type { OmkMode } from "./mode-preset.js";
 import { getRunPath } from "./fs.js";
 import type { OmkRuntimeScope } from "./resource-profile.js";
 import type { ExecutionPromptPolicy, ExecutionSelectionSource } from "../contracts/orchestration.js";
+import { DEFAULT_AUTHORITY_PROVIDER } from "../providers/types.js";
 import { normalizeProviderId } from "../providers/model-registry.js";
 import {
   readRootAgentSubagents,
@@ -646,10 +647,20 @@ export function buildChatAgentRuntimeMcpAllowlist(input: {
   const allowlist = new Set<string>(["omk-project"]);
   const rootMcp = selectRoleNames("coordinator", normalized.active.mcp, "mcp");
   for (const name of rootMcp) allowlist.add(name);
-  if (input.mode !== "chat") {
-    for (const lane of buildLaneCapabilityAssignments(normalized)) {
-      for (const name of lane.mcpServers) allowlist.add(name);
-    }
+  return Array.from(allowlist);
+}
+
+export function buildChatAgentRuntimeSkillAllowlist(input: {
+  mode: OmkMode;
+  resources: ChatAgentModeResources;
+}): string[] | undefined {
+  if (input.resources.skillsScope === "none") return undefined;
+  const normalized = normalizeHarnessResources(input.resources);
+  const active = normalized.active.skills;
+  const allowlist = new Set<string>();
+  for (const name of selectRoleNames("coordinator", active, "skill")) allowlist.add(name);
+  for (const preferred of ["omk-project-rules", "omk-context-broker", "omk-plan-first"]) {
+    if (active.includes(preferred)) allowlist.add(preferred);
   }
   return Array.from(allowlist);
 }
@@ -728,7 +739,7 @@ function normalizeAuthorityProvider(resources: ChatAgentModeResources): string {
   if (explicit !== "auto") return explicit;
   const legacy = normalizeProviderId(process.env.OMK_PROVIDER_AUTHORITY);
   if (legacy !== "auto" && legacy !== "direct" && legacy !== "advisory") return legacy;
-  return "auto";
+  return DEFAULT_AUTHORITY_PROVIDER;
 }
 
 function withAuthorityFallback(candidates: string[], authorityProvider: string): string[] {
@@ -738,7 +749,7 @@ function withAuthorityFallback(candidates: string[], authorityProvider: string):
 function authorityProviderCandidates(authorityProvider: string): string[] {
   const legacyKimiFallback = process.env.OMK_LEGACY_CHAT === "1" || process.env.OMK_LEGACY_KIMI_FALLBACK === "1";
   if (authorityProvider === "auto") {
-    return uniqueProviderCandidates(["codex", "qwen", "openrouter", ...(legacyKimiFallback ? ["kimi"] : [])]);
+    return uniqueProviderCandidates([DEFAULT_AUTHORITY_PROVIDER, "codex", "qwen", "openrouter", ...(legacyKimiFallback ? ["kimi"] : [])]);
   }
   return uniqueProviderCandidates([authorityProvider, ...(legacyKimiFallback && authorityProvider !== "kimi" ? ["kimi"] : [])]);
 }
@@ -800,6 +811,7 @@ type CapabilityRouteKind = "skill" | "mcp" | "hook";
 
 const ROLE_ROUTE_KEYWORDS: Record<CapabilityRouteKind, Record<string, string[]>> = {
   skill: {
+    coordinator: ["project", "context", "plan", "repo", "rules"],
     explorer: ["explore", "repo", "context", "research"],
     researcher: ["research", "docs", "context", "repo"],
     "vision-debugger": ["vision", "design", "screenshot", "browser", "web"],
@@ -813,6 +825,7 @@ const ROLE_ROUTE_KEYWORDS: Record<CapabilityRouteKind, Record<string, string[]>>
     ontology: ["memory", "context", "graph"],
   },
   mcp: {
+    coordinator: ["omk", "memory", "filesystem"],
     explorer: ["omk", "filesystem", "git", "github", "web", "bridge", "browser", "chrome"],
     researcher: ["context", "fetch", "firecrawl", "github", "web", "bridge", "browser", "chrome", "page"],
     "vision-debugger": ["web", "bridge", "browser", "chrome", "screenshot", "playwright"],

@@ -473,6 +473,9 @@ test("doctor --json includes sanitized project root diagnostics for HOME git fal
   assert.equal(parsed.data.root.detectedGitRoot, "~");
   assert.equal(parsed.data.root.effectiveProjectRoot, "~/work/app");
   assert.equal(parsed.data.root.homeIsGitRepo, true);
+  assert.match(parsed.data.security.childEnvIsolation, /parent env not inherited/);
+  assert.match(parsed.data.security.sandboxEnforcement, /OS-level .*not enforced/);
+  assert.equal(parsed.data.security.sandboxMetadata.osSandbox, "not-enforced");
   assert.equal(cap.stderr.length, 0, "should not emit to stderr");
 });
 

@@ -1,6 +1,5 @@
 import { readTextFile, writeFileSafe, pathExists } from "./fs.js";
 import { getOmkVersionSync } from "./version.js";
-import { getKimiCapabilities } from "../kimi/capability.js";
 import { runShell, type ShellResult } from "./shell.js";
 import { join } from "path";
 import { homedir } from "os";
@@ -41,10 +40,6 @@ const DEFAULT_UPDATE_REMIND_HOURS = 24;
 const UPDATE_PROMPT_TIMEOUT_MS = 30_000;
 export const OMK_NPM_PACKAGE_NAME = "open-multi-agent-kit";
 const OMK_UPDATE_INSTALL_CMD = `npm i -g ${OMK_NPM_PACKAGE_NAME}`;
-
-const FALLBACK_INSTALL_SCRIPT = process.platform === "win32"
-  ? "Invoke-Expression (New-Object System.Net.WebClient).DownloadString('https://code.kimi.com/install.ps1')"
-  : "curl -LsSf https://code.kimi.com/install.sh | bash";
 
 type UpdatePromptEnv = Record<string, string | undefined>;
 
@@ -229,9 +224,7 @@ export function formatStartupUpdateBanner(updateStatus: UpdateStatus): string {
   if (updateStatus.omk.outdated) {
     banner += `\n  ! omk ${updateStatus.omk.current} → ${updateStatus.omk.latest}  |  ${updateStatus.omk.installCmd}`;
   }
-  if (updateStatus.kimi.outdated) {
-    banner += `\n  ! kimi-cli ${updateStatus.kimi.installed} → ${updateStatus.kimi.latest}  |  omk update kimi-adapter`;
-  }
+  // kimi-cli dependency removed — kimi-api uses direct Moonshot HTTP API
   return banner;
 }
 
@@ -411,61 +404,17 @@ async function fetchOmkLatest(): Promise<string | null> {
   }
 }
 
-async function fetchKimiLatest(): Promise<string | null> {
-  // Primary: PyPI JSON API via native fetch
-  try {
-    const url = "https://pypi.org/pypi/kimi-cli/json";
-    const resp = await fetch(url, { signal: AbortSignal.timeout(8000) });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const data = (await resp.json()) as { info?: { version?: string } };
-    if (data.info?.version && /^\d+\.\d+\.\d+/.test(data.info.version)) {
-      return data.info.version;
-    }
-  } catch {
-    // fall through to uv
-  }
-
-  // Fallback: uv tool upgrade --dry-run
-  try {
-    const uvResult = await runShell("uv", ["tool", "upgrade", "kimi-cli", "--dry-run"], {
-      timeout: 10000,
-    });
-    if (uvResult.failed) return null;
-    const match = uvResult.stdout.match(/(?:Would upgrade kimi-cli|kimi-cli)\s+(?:from\s+\S+\s+to\s+)?(\d+\.\d+\.\d+)/);
-    if (match) return match[1];
-  } catch {
-    // ignore
-  }
-
-  return null;
-}
-
-async function getKimiInstalledVersion(): Promise<string | null> {
-  try {
-    const caps = getKimiCapabilities();
-    return caps.version;
-  } catch {
-    return null;
-  }
-}
-
 export async function checkUpdates(forceRefresh = false): Promise<UpdateStatus> {
   const cached = forceRefresh ? null : await readCache();
   const cacheHit = cached !== null;
 
   const omkCurrent = getOmkVersionSync();
-  const kimiInstalled = await getKimiInstalledVersion();
-
   let omkLatest: string | null = cached?.omkLatest ?? null;
   let kimiLatest: string | null = cached?.kimiLatest ?? null;
 
   if (!cacheHit) {
-    const [omk, kimi] = await Promise.all([
-      fetchOmkLatest(),
-      fetchKimiLatest(),
-    ]);
-    omkLatest = omk;
-    kimiLatest = kimi;
+    omkLatest = await fetchOmkLatest();
+    kimiLatest = null;
 
     await writeCache({
       omkLatest,
@@ -475,13 +424,10 @@ export async function checkUpdates(forceRefresh = false): Promise<UpdateStatus> 
   }
 
   const omkOutdated = !!omkLatest && isOutdated(omkCurrent, omkLatest);
-  const kimiOutdated = !!kimiLatest && !!kimiInstalled && isOutdated(kimiInstalled, kimiLatest);
 
   let omkError: string | null = null;
-  let kimiError: string | null = null;
 
   if (!omkLatest && !cacheHit) omkError = "registry unreachable";
-  if (!kimiLatest && !cacheHit) kimiError = "PyPI unreachable";
 
   return {
     omk: {
@@ -492,15 +438,13 @@ export async function checkUpdates(forceRefresh = false): Promise<UpdateStatus> 
       installCmd: OMK_UPDATE_INSTALL_CMD,
     },
     kimi: {
-      installed: kimiInstalled,
-      latest: kimiLatest,
-      outdated: kimiOutdated,
-      error: kimiError,
-      installCmd: "uv tool upgrade kimi-cli --no-cache",
-      installScript: process.platform === "win32"
-        ? "Invoke-RestMethod https://code.kimi.com/install.ps1 | Invoke-Expression"
-        : "curl -LsSf https://code.kimi.com/install.sh | bash",
-      fallbackInstallCmd: FALLBACK_INSTALL_SCRIPT,
+      installed: null,
+      latest: null,
+      outdated: false,
+      error: null,
+      installCmd: "echo 'kimi-api uses direct Moonshot HTTP API — no CLI needed'",
+      installScript: "echo 'kimi-api uses direct Moonshot HTTP API'",
+      fallbackInstallCmd: "echo 'kimi-api uses direct Moonshot HTTP API'",
     },
     checkedAt: new Date().toISOString(),
     cacheHit,

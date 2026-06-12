@@ -5,7 +5,7 @@
  */
 
 import type { DagNode } from "../dag.js";
-import type { RunState, TaskResult } from "../../contracts/orchestration.js";
+import type { RunCapabilityAssignment, RunState, TaskResult } from "../../contracts/orchestration.js";
 
 export type WorkerStatus = "idle" | "running" | "completed" | "failed" | "retrying";
 
@@ -19,11 +19,7 @@ export interface WorkerState {
   durationMs?: number;
   result?: TaskResult;
   error?: string;
-  assignment?: {
-    skills: string[];
-    mcpServers: string[];
-    hooks: string[];
-  };
+  assignment?: RunCapabilityAssignment;
 }
 
 export interface OrchestrationEvent {

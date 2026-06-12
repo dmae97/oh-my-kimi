@@ -25,7 +25,7 @@ import {
   getDeepSeekProviderStatus,
   resolveDeepSeekApiKey,
 } from "../../providers/deepseek/deepseek-config.js";
-import { loadMergedMcpConfig } from "../../orchestration/routing.js";
+import { loadMergedMcpConfig } from "../../orchestration/routing/mcp-config.js";
 import { type TelemetryEvent } from "../../util/events-logger.js";
 import { parseGitStatusPorcelain } from "../hud.js";
 

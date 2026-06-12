@@ -4,8 +4,13 @@
  * Analyzes node role, intent, and task characteristics to determine
  * the optimal set of skills, MCP servers, tools, and hooks.
  * Records the assignment decision to the unified decision trace store.
+ *
+ * v2.0: Externalized ROLE_DEFAULTS to config/skill-presets.json
+ *       with schema validation and runtime reload.
  */
 
+import { readFile } from "fs/promises";
+import { join } from "path";
 import type { DagNode, DagNodeRouting } from "./dag.js";
 import { attachAssignedCapabilities } from "./capability-routing.js";
 import type { NodeIntent } from "../runtime/runtime-router.js";
@@ -38,7 +43,74 @@ interface AssignmentRule {
   readonly rationale: string;
 }
 
-const ROLE_DEFAULTS: Record<string, Partial<Pick<DagNodeRouting, "skills" | "mcpServers" | "tools" | "hooks">>> = {
+interface SkillPreset {
+  readonly skills?: readonly string[];
+  readonly mcpServers?: readonly string[];
+  readonly tools?: readonly string[];
+  readonly hooks?: readonly string[];
+}
+
+interface SkillPresetsSchema {
+  readonly version: string;
+  readonly presets: Record<string, SkillPreset>;
+}
+
+// —— In-memory cache with validation ——
+let _roleDefaults: Record<string, SkillPreset> | null = null;
+let _presetsPath: string | null = null;
+let _presetsVersion: string = "inline";
+
+function getPresetsPath(): string {
+  if (_presetsPath) return _presetsPath;
+  // Resolve relative to project root (dist-aware)
+  const root = process.cwd();
+  _presetsPath = join(root, "src", "config", "skill-presets.json");
+  return _presetsPath;
+}
+
+function validatePresets(data: unknown): data is SkillPresetsSchema {
+  if (typeof data !== "object" || data === null) return false;
+  const d = data as Record<string, unknown>;
+  if (typeof d.version !== "string") return false;
+  if (typeof d.presets !== "object" || d.presets === null) return false;
+  for (const preset of Object.values(d.presets)) {
+    if (typeof preset !== "object" || preset === null) return false;
+    const p = preset as Record<string, unknown>;
+    for (const key of ["skills", "mcpServers", "tools", "hooks"]) {
+      if (p[key] !== undefined && !Array.isArray(p[key])) return false;
+      if (p[key] !== undefined && (p[key] as unknown[]).some((v) => typeof v !== "string")) return false;
+    }
+  }
+  return true;
+}
+
+export async function loadRoleDefaults(force = false): Promise<Record<string, SkillPreset>> {
+  if (_roleDefaults && !force) return _roleDefaults;
+
+  try {
+    const raw = await readFile(getPresetsPath(), "utf-8");
+    const parsed = JSON.parse(raw) as unknown;
+    if (!validatePresets(parsed)) {
+      throw new Error("Invalid skill-presets.json schema");
+    }
+    _roleDefaults = parsed.presets;
+    _presetsVersion = parsed.version;
+    return _roleDefaults;
+  } catch {
+    // Memory-injection safety: fall back to inline hard-coded defaults on any error
+    _roleDefaults = ROLE_DEFAULTS_FALLBACK;
+    _presetsVersion = "fallback";
+    return _roleDefaults;
+  }
+}
+
+export function getRoleDefaultsSync(): Record<string, SkillPreset> {
+  if (_roleDefaults) return _roleDefaults;
+  return ROLE_DEFAULTS_FALLBACK;
+}
+
+/** Hard-coded fallback — always safe, never depends on external file integrity */
+const ROLE_DEFAULTS_FALLBACK: Record<string, SkillPreset> = {
   explorer: { skills: ["omk-repo-explorer", "omk-context-broker", "omk-research-verify"], mcpServers: ["omk-project"], hooks: ["subagent-stop-audit.sh"] },
   researcher: { skills: ["omk-repo-explorer", "omk-research-verify", "omk-context-broker", "omk-plan-first"], mcpServers: ["omk-project", "context7"], hooks: ["subagent-stop-audit.sh"] },
   planner: { skills: ["omk-plan-first", "omk-context-broker", "omk-industrial-control-loop", "speckit-plan", "speckit-specify"], mcpServers: ["omk-project"], hooks: ["subagent-stop-audit.sh"] },
@@ -234,32 +306,26 @@ const SKILL_RULES: readonly AssignmentRule[] = [
   },
 ];
 
-export function classifyNodeIntent(node: DagNode): NodeIntent {
-  const text = `${node.id} ${node.name} ${node.role}`.toLowerCase();
-
-  if (/debug|fix|error|failure|bug|trace/.test(text) || node.role === "debugger") return "debugging";
-  if (/review|audit|check|validate|verify/.test(text) || node.role === "reviewer") return "review";
-  if (/test|spec|coverage|assertion/.test(text) || node.role === "tester") return "test-generation";
-  if (/refactor|optimize|clean|improve|simplify/.test(text) || node.role === "refactor") return "refactor";
-  if (/research|investigate|explore|search|discover|analyze/.test(text) || node.role === "researcher") return "research";
-  if (/plan|design|architect|strategy|roadmap/.test(text) || node.role === "planner") return "planning";
-  if (/doc|readme|changelog|comment/.test(text) || node.role === "documenter") return "documentation";
-  if (/shell|command|run|exec|script/.test(text) || node.role === "shell") return "shell-operation";
+// —— Unified intent classifier (deduplicated) ——
+function classifyIntent(text: string, role: string): NodeIntent {
+  const t = text.toLowerCase();
+  if (/debug|fix|error|failure|bug|trace/.test(t) || role === "debugger") return "debugging";
+  if (/review|audit|check|validate|verify/.test(t) || role === "reviewer") return "review";
+  if (/test|spec|coverage|assertion/.test(t) || role === "tester") return "test-generation";
+  if (/refactor|optimize|clean|improve|simplify/.test(t) || role === "refactor") return "refactor";
+  if (/research|investigate|explore|search|discover|analyze/.test(t) || role === "researcher") return "research";
+  if (/plan|design|architect|strategy|roadmap/.test(t) || role === "planner") return "planning";
+  if (/doc|readme|changelog|comment/.test(t) || role === "documenter") return "documentation";
+  if (/shell|command|run|exec|script/.test(t) || role === "shell") return "shell-operation";
   return "coding";
 }
 
-export function classifyRoutingIntent(input: RoutingInput): NodeIntent {
-  const text = `${input.id} ${input.name} ${input.role}`.toLowerCase();
+export function classifyNodeIntent(node: DagNode): NodeIntent {
+  return classifyIntent(`${node.id} ${node.name} ${node.role}`, node.role);
+}
 
-  if (/debug|fix|error|failure|bug|trace/.test(text) || input.role === "debugger") return "debugging";
-  if (/review|audit|check|validate|verify/.test(text) || input.role === "reviewer") return "review";
-  if (/test|spec|coverage|assertion/.test(text) || input.role === "tester") return "test-generation";
-  if (/refactor|optimize|clean|improve|simplify/.test(text) || input.role === "refactor") return "refactor";
-  if (/research|investigate|explore|search|discover|analyze/.test(text) || input.role === "researcher") return "research";
-  if (/plan|design|architect|strategy|roadmap/.test(text) || input.role === "planner") return "planning";
-  if (/doc|readme|changelog|comment/.test(text) || input.role === "documenter") return "documentation";
-  if (/shell|command|run|exec|script/.test(text) || input.role === "shell") return "shell-operation";
-  return "coding";
+export function classifyRoutingIntent(input: RoutingInput): NodeIntent {
+  return classifyIntent(`${input.id} ${input.name} ${input.role}`, input.role);
 }
 
 export function assignSkills(
@@ -294,12 +360,13 @@ function doAssignSkills(
   attemptId?: string
 ): SkillAssignment {
   const nodeText = `${node.id} ${node.name} ${node.role}`;
+  const roleDefaults = getRoleDefaultsSync()[node.role];
 
   const matched = SKILL_RULES
     .filter((rule) => rule.match(node, intent))
     .sort((a, b) => b.priority - a.priority);
 
-  return buildAssignment(matched, intent, nodeText, node.routing, runId, attemptId, node.id, ROLE_DEFAULTS[node.role]);
+  return buildAssignment(matched, intent, nodeText, node.routing, runId, attemptId, node.id, roleDefaults);
 }
 
 function doAssignSkillsForRoutingInput(
@@ -310,7 +377,6 @@ function doAssignSkillsForRoutingInput(
 ): SkillAssignment {
   const nodeText = `${input.id} ${input.name} ${input.role}`;
 
-  // Adapt node shape for rule matching
   const adaptedNode: DagNode = {
     id: input.id,
     name: input.name,
@@ -322,11 +388,13 @@ function doAssignSkillsForRoutingInput(
     routing: input.routing ?? {},
   };
 
+  const roleDefaults = getRoleDefaultsSync()[input.role];
+
   const matched = SKILL_RULES
     .filter((rule) => rule.match(adaptedNode, intent))
     .sort((a, b) => b.priority - a.priority);
 
-  return buildAssignment(matched, intent, nodeText, input.routing, runId, attemptId, input.id, ROLE_DEFAULTS[input.role]);
+  return buildAssignment(matched, intent, nodeText, input.routing, runId, attemptId, input.id, roleDefaults);
 }
 
 function buildAssignment(
@@ -337,7 +405,7 @@ function buildAssignment(
   runId: string | undefined,
   attemptId: string | undefined,
   nodeId: string,
-  roleDefaults?: Partial<Pick<DagNodeRouting, "skills" | "mcpServers" | "tools" | "hooks">>
+  roleDefaults?: SkillPreset
 ): SkillAssignment {
   const skills = new Set<string>();
   const mcpServers = new Set<string>();
@@ -345,7 +413,7 @@ function buildAssignment(
   const hooks = new Set<string>();
   const rationales: string[] = [];
 
-  // Apply role defaults first (lowest priority; intent-specific rules override)
+  // Apply role defaults first
   if (roleDefaults) {
     if (roleDefaults.skills) {
       for (const s of roleDefaults.skills) skills.add(s);
@@ -359,7 +427,7 @@ function buildAssignment(
     if (roleDefaults.hooks) {
       for (const h of roleDefaults.hooks) hooks.add(h);
     }
-    rationales.push(`[role-default] Default capability set for ${nodeText.split(" ")[2] ?? ""}`);
+    rationales.push(`[role-default] Default capability set for ${nodeText.split(" ")[2] ?? ""} (v${_presetsVersion})`);
   }
 
   for (const rule of matched) {

@@ -1,7 +1,7 @@
 ---
 name: "speckit-constitution"
 description: "Create or update the project constitution from interactive or provided principle inputs, ensuring all dependent templates stay in sync."
-compatibility: "Requires spec-kit project structure with .specify/ directory"
+compatibility: "Supports standard .specify/specs layout; OMK fallback uses .omk/specs and .omk/templates/spec-kit-omk-preset when standard spec-kit is not initialized."
 metadata:
   author: "github-spec-kit"
   source: "templates/commands/constitution.md"
@@ -52,7 +52,7 @@ You **MUST** consider the user input before proceeding (if not empty).
 
 ## Outline
 
-You are updating the project constitution at `.specify/memory/constitution.md`. This file is a TEMPLATE containing placeholder tokens in square brackets (e.g. `[PROJECT_NAME]`, `[PRINCIPLE_1_NAME]`). Your job is to (a) collect/derive concrete values, (b) fill the template precisely, and (c) propagate any amendments across dependent artifacts.
+You are updating the project constitution at `.specify/memory/constitution.md`. In an OMK runtime repository without standard Spec Kit initialization, ask before creating tracked `.specify/` state; otherwise use `.omk/templates/spec-kit-omk-preset` and `.omk/specs/` only as local fallback context. This file is a TEMPLATE containing placeholder tokens in square brackets (e.g. `[PROJECT_NAME]`, `[PRINCIPLE_1_NAME]`). Your job is to (a) collect/derive concrete values, (b) fill the template precisely, and (c) propagate any amendments across dependent artifacts.
 
 **Note**: If `.specify/memory/constitution.md` does not exist yet, it should have been initialized from `.specify/templates/constitution-template.md` during project setup. If it's missing, copy the template first.
 

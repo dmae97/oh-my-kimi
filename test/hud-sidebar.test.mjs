@@ -17,7 +17,31 @@ test("HUD parses porcelain git changes for changed file sidebar", () => {
 test("HUD sidebar renders run TODOs and changed files", () => {
   const sidebar = buildHudSidebar(
     {
+      schemaVersion: 1,
       runId: "test-run",
+      goal: {
+        title: "critical_issue_scan",
+        objective: "Find critical issues",
+        successCriteria: [],
+        status: "running",
+      },
+      routeDecision: {
+        intent: "critical_issue_scan",
+        selectedAgents: ["repo_explorer", "security_reviewer"],
+        reason: "critical scan",
+        requiredEvidence: [
+          { kind: "diff", required: true, description: "changed file diffs" },
+          { kind: "test", required: true, description: "affected test result" },
+        ],
+        mode: "read-only",
+      },
+      capabilityAssignments: {
+        code: {
+          skills: ["omk-typescript-strict"],
+          mcpServers: ["omk-project"],
+          hooks: ["stop-verify.sh"],
+        },
+      },
       startedAt: new Date(0).toISOString(),
       nodes: [
         { id: "plan", name: "Plan the work", role: "planner", dependsOn: [], status: "done", retries: 0, maxRetries: 1 },
@@ -31,7 +55,12 @@ test("HUD sidebar renders run TODOs and changed files", () => {
   assert.match(sidebar, /Right Rail/);
   assert.match(sidebar, /progress/);
   assert.match(sidebar, /1\/2/);
+  assert.match(sidebar, /critical_issue_scan/);
+  assert.match(sidebar, /read-only/);
   assert.match(sidebar, /Implement HUD sidebar/);
+  assert.match(sidebar, /skills:omk-typescript-strict/);
+  assert.match(sidebar, /hooks:stop-verify\.sh/);
+  assert.match(sidebar, /mcp:omk-project/);
   assert.match(sidebar, /Changed Files/);
   assert.match(sidebar, /src\/commands\/hud\.ts/);
 });

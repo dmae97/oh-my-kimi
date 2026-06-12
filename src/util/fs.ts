@@ -1414,17 +1414,53 @@ function safePreflightProcessEnv(): Record<string, string> {
   return safe;
 }
 
+async function runBoundedPreflightProcess(
+  command: string,
+  args: string[],
+  options: {
+    env: Record<string, string>;
+    extendEnv: boolean;
+    timeoutMs: number;
+  }
+): Promise<{ exitCode: number | null; timedOut: boolean }> {
+  const timeoutMarker = Symbol("runtime-mcp-preflight-timeout");
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+
+  const subprocess = execa(command, args, {
+    env: options.env,
+    extendEnv: options.extendEnv,
+    reject: false,
+    stdio: "ignore",
+  });
+
+  try {
+    const result = await Promise.race([
+      subprocess,
+      new Promise<typeof timeoutMarker>((resolve) => {
+        timeout = setTimeout(() => resolve(timeoutMarker), options.timeoutMs);
+      }),
+    ]);
+    if (result === timeoutMarker) {
+      subprocess.kill("SIGTERM", new Error(`timeout after ${options.timeoutMs}ms`));
+      subprocess.unref();
+      void subprocess.catch(() => {});
+      return { exitCode: null, timedOut: true };
+    }
+    return { exitCode: result.exitCode ?? null, timedOut: Boolean(result.timedOut) };
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
 async function runPreflightProbe(
   probe: PreflightProbe,
   timeoutMs: number
 ): Promise<{ failed: boolean; reason?: RuntimeMcpPreflightFailureReason; detail?: string }> {
   try {
-    const result = await execa(probe.command, probe.args, {
+    const result = await runBoundedPreflightProcess(probe.command, probe.args, {
       env: { ...safePreflightProcessEnv(), ...probe.env },
       extendEnv: false,
-      timeout: timeoutMs,
-      reject: false,
-      stdio: "pipe",
+      timeoutMs,
     });
     if (result.timedOut) {
       return { failed: true, reason: "timeout", detail: `timeout after ${timeoutMs}ms` };
@@ -1555,12 +1591,10 @@ async function probeMcpStdioStartup(
 
   for (const flag of ["--version", "-v", "-h", "--help"]) {
     try {
-      const result = await execa(command, [...args, flag], {
+      const result = await runBoundedPreflightProcess(command, [...args, flag], {
         env: safePreflightProcessEnv(),
         extendEnv: true,
-        timeout: Math.min(timeoutMs, 3000),
-        reject: false,
-        stdio: "pipe",
+        timeoutMs: Math.min(timeoutMs, 3000),
       });
       if (result.exitCode === 0 || result.exitCode === 1) {
         return { ok: true };
@@ -1571,13 +1605,10 @@ async function probeMcpStdioStartup(
   }
 
   try {
-    const result = await execa(command, args, {
+    const result = await runBoundedPreflightProcess(command, args, {
       env: safePreflightProcessEnv(),
       extendEnv: true,
-      timeout: 3000,
-      reject: false,
-      stdio: "pipe",
-      killSignal: "SIGTERM",
+      timeoutMs: 3000,
     });
     if (result.timedOut) {
       return { ok: true };
@@ -1823,7 +1854,7 @@ export async function writeRuntimeMcpConfig(
   const quarantinedNames = new Set(quarantineEntries.map((e) => e.name));
 
   let targetServers = mergedServers;
-  if (allowlist && allowlist.length > 0) {
+  if (allowlist !== undefined) {
     const allowed = new Set(allowlist);
     const missing = allowlist.filter((name) => !mergedServers[name]);
     if (missing.length > 0) {

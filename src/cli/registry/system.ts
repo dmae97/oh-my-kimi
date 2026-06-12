@@ -20,15 +20,10 @@ export function registerSystemCommands(program: Command): void {
           console.log(JSON.stringify(status, null, 2));
           return;
         }
-        const kimiLabel = status.kimi.installed
-          ? (status.kimi.outdated
-            ? `${status.kimi.installed} → ${style.orange(status.kimi.latest ?? "?")}`
-            : `${status.kimi.installed} ${style.gray("(latest)")}`)
-          : style.red("not installed");
-        console.log(`  cli: ${kimiLabel}`);
-        if (status.kimi.outdated) console.log(`  ℹ️  ${style.gray(status.kimi.installCmd)}`);
+        console.log(`  omk: ${status.omk.current} ${status.omk.outdated ? `→ ${style.orange(status.omk.latest ?? "?")}` : style.gray("(latest)")}`);
+        if (status.omk.outdated) console.log(`  ℹ️  ${style.gray(status.omk.installCmd)}`);
         if (status.omk.error) console.log(style.gray(`  omk error: ${status.omk.error}`));
-        if (status.kimi.error) console.log(style.gray(`  cli error: ${status.kimi.error}`));
+        console.log(style.gray("  kimi-api: uses direct Moonshot HTTP API (no CLI dependency)"));
         if (status.cacheHit) console.log(style.gray(`
     (cached, checked ${status.checkedAt})`));
         console.log("");
@@ -55,47 +50,9 @@ export function registerSystemCommands(program: Command): void {
         process.exit(result.failed ? (result.exitCode ?? 1) : 0);
       }
       if (isKimiAdapterAction) {
-        // --install-script is safe without TTY
-        if (options.installScript) {
-          const st = await checkUpdates();
-          console.log(st.kimi.installScript);
-          return;
-        }
-
-        const { runShell } = await import("../../util/shell.js");
-        const kimiCheck = await runShell("kimi", ["--version"], { timeout: 10000 });
-        const needsInstall = kimiCheck.failed;
-
-        if (!options.yes && !needsInstall) {
-          console.log("Upgrade Kimi adapter CLI via: uv tool upgrade kimi-cli --no-cache");
-          console.log("Press Enter to continue or Ctrl+C to cancel...");
-          const rl = (await import("readline")).createInterface({ input: process.stdin, output: process.stdout });
-          await new Promise<void>((resolve) => rl.question("", () => { rl.close(); resolve(); }));
-        }
-
-        if (needsInstall) {
-          const script = process.platform === "win32"
-            ? "Invoke-RestMethod https://code.kimi.com/install.ps1 | Invoke-Expression"
-            : "curl -LsSf https://code.kimi.com/install.sh | bash";
-          console.log("Kimi adapter CLI not found. Installing via official script...");
-          if (process.platform === "win32") {
-            console.error("Please run the following in PowerShell:");
-            console.log(script);
-            process.exit(1);
-          }
-          const result = await runShell("bash", ["-c", script], { stdio: "inherit", timeout: 300_000 });
-          process.exit(result.failed ? (result.exitCode ?? 1) : 0);
-        }
-
-        const result = await runShell("uv", ["tool", "upgrade", "kimi-cli", "--no-cache"], { stdio: "inherit", timeout: 120_000 });
-        if (result.failed) {
-          console.error("uv tool upgrade failed. Is uv installed? (pip install uv)");
-          console.error("Fallback: try the official install script:");
-          console.error(process.platform === "win32"
-            ? "Invoke-RestMethod https://code.kimi.com/install.ps1 | Invoke-Expression"
-            : "curl -LsSf https://code.kimi.com/install.sh | bash");
-        }
-        process.exit(result.failed ? (result.exitCode ?? 1) : 0);
+        console.log("kimi-api uses direct Moonshot HTTP API — no CLI dependency.");
+        console.log("To update the Moonshot API key, edit ~/.kimi/config.toml [providers.kimi] api_key.");
+        return;
       }
       console.error(`Unknown update action: ${actionMode}`);
       process.exit(1);

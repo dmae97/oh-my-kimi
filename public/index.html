@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OMK — Project-aware AI coding runtime</title>
+  <meta name="description" content="OMK resumes your project context, routes coding tasks across models, and turns verified coding workflows into opt-in evaluation data." />
+  <meta property="og:title" content="OMK — Project-aware AI coding runtime" />
+  <meta property="og:description" content="Install once. Resume every project. Route to the best coding model." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://omk.dev" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #0a0a0a; --fg: #e5e5e5; --dim: #888;
+      --accent: #22d3ee; --accent2: #a78bfa; --accent3: #34d399;
+      --surface: #111; --border: #222; --radius: 12px;
+      --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      --mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+    }
+    html { scroll-behavior: smooth; }
+    body { font-family: var(--font); background: var(--bg); color: var(--fg); line-height: 1.6; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* ── Nav ── */
+    nav { position: fixed; top: 0; width: 100%; background: rgba(10,10,10,.85); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border); z-index: 100; padding: 0 2rem; display: flex; align-items: center; height: 56px; }
+    nav .logo { font-weight: 700; font-size: 1.2rem; color: var(--accent); margin-right: auto; }
+    nav a { margin-left: 1.5rem; font-size: .9rem; color: var(--dim); }
+    nav a:hover { color: var(--fg); text-decoration: none; }
+
+    /* ── Hero ── */
+    .hero { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 6rem 2rem 4rem; }
+    .hero h1 { font-size: clamp(2.2rem, 5vw, 3.8rem); font-weight: 800; letter-spacing: -.03em; line-height: 1.15; margin-bottom: 1rem; }
+    .hero h1 span { background: linear-gradient(135deg, var(--accent), var(--accent2)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .hero .sub { font-size: 1.15rem; color: var(--dim); max-width: 540px; margin: 0 auto 2.5rem; }
+    .hero .install-box { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem 1.5rem; display: inline-flex; align-items: center; gap: 1rem; font-family: var(--mono); font-size: .95rem; margin-bottom: 1.5rem; }
+    .hero .install-box code { color: var(--accent3); }
+    .hero .install-box .copy { cursor: pointer; color: var(--dim); font-size: .8rem; border: 1px solid var(--border); border-radius: 6px; padding: .25rem .6rem; transition: all .15s; }
+    .hero .install-box .copy:hover { color: var(--fg); border-color: var(--accent); }
+    .hero .btn-row { display: flex; gap: 1rem; flex-wrap: wrap; justify-content: center; margin-top: 1rem; }
+    .btn { display: inline-block; padding: .7rem 1.6rem; border-radius: 8px; font-weight: 600; font-size: .95rem; transition: all .15s; cursor: pointer; border: none; }
+    .btn-primary { background: var(--accent); color: #000; }
+    .btn-primary:hover { background: #06b6d4; text-decoration: none; }
+    .btn-ghost { background: transparent; color: var(--fg); border: 1px solid var(--border); }
+    .btn-ghost:hover { border-color: var(--accent); text-decoration: none; }
+
+    /* ── Sections ── */
+    section { max-width: 900px; margin: 0 auto; padding: 5rem 2rem; }
+    section h2 { font-size: 1.8rem; font-weight: 700; margin-bottom: .6rem; }
+    section .lead { color: var(--dim); margin-bottom: 2rem; max-width: 600px; }
+
+    /* ── Terminal demo ── */
+    .terminal { background: #0d1117; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; font-family: var(--mono); font-size: .82rem; line-height: 1.7; }
+    .terminal .bar { background: #161b22; padding: .5rem 1rem; display: flex; gap: .5rem; }
+    .terminal .bar span { width: 12px; height: 12px; border-radius: 50%; }
+    .terminal .bar .r { background: #ff5f57; } .terminal .bar .y { background: #febc2e; } .terminal .bar .g { background: #28c840; }
+    .terminal .body { padding: 1rem 1.2rem; color: #c9d1d9; white-space: pre-wrap; }
+    .terminal .body .prompt { color: var(--accent); }
+    .terminal .body .cmd { color: #e6edf3; }
+    .terminal .body .info { color: #8b949e; }
+    .terminal .body .ok { color: var(--accent3); }
+    .terminal .body .warn { color: #d29922; }
+
+    /* ── Model lanes ── */
+    .lanes { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.2rem; margin-top: 1.5rem; }
+    .lane { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.4rem; }
+    .lane .tag { font-size: .7rem; text-transform: uppercase; letter-spacing: .08em; color: var(--accent); font-weight: 700; margin-bottom: .5rem; }
+    .lane h3 { font-size: 1.05rem; margin-bottom: .4rem; }
+    .lane p { font-size: .85rem; color: var(--dim); }
+
+    /* ── Privacy ── */
+    .consent-levels { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1rem; margin-top: 1.5rem; }
+    .consent-level { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.2rem; text-align: center; }
+    .consent-level .lv { font-size: 1.6rem; font-weight: 800; color: var(--accent); }
+    .consent-level .name { font-size: .85rem; font-weight: 600; margin: .4rem 0 .2rem; }
+    .consent-level .desc { font-size: .75rem; color: var(--dim); }
+    .consent-level .status { font-size: .7rem; margin-top: .5rem; padding: .2rem .6rem; border-radius: 4px; display: inline-block; }
+    .consent-level .on { background: rgba(52,211,153,.15); color: var(--accent3); }
+    .consent-level .off { background: rgba(255,95,87,.12); color: #ff5f57; }
+
+    /* ── CTA section ── */
+    .cta-section { text-align: center; padding: 4rem 2rem 6rem; }
+    .cta-section h2 { font-size: 2rem; margin-bottom: .8rem; }
+    .cta-section p { color: var(--dim); margin-bottom: 2rem; max-width: 500px; margin-left: auto; margin-right: auto; }
+
+    /* ── Waitlist form ── */
+    .waitlist { max-width: 440px; margin: 2rem auto 0; }
+    .waitlist .field { display: flex; gap: .5rem; margin-bottom: .8rem; }
+    .waitlist input { flex: 1; padding: .7rem 1rem; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--fg); font-size: .9rem; font-family: var(--font); }
+    .waitlist input:focus { outline: none; border-color: var(--accent); }
+    .waitlist select { padding: .7rem 1rem; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--fg); font-size: .9rem; font-family: var(--font); }
+    .waitlist .submit-row { text-align: center; margin-top: .5rem; }
+
+    /* ── Footer ── */
+    footer { border-top: 1px solid var(--border); padding: 2rem; text-align: center; font-size: .8rem; color: var(--dim); }
+    footer a { color: var(--dim); margin: 0 .8rem; }
+    footer a:hover { color: var(--fg); }
+
+    /* ── Responsive ── */
+    @media (max-width: 600px) {
+      nav { padding: 0 1rem; }
+      nav a { margin-left: 1rem; font-size: .8rem; }
+      .hero { padding: 5rem 1.2rem 3rem; }
+      section { padding: 3rem 1.2rem; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Nav ── -->
+<nav>
+  <div class="logo">OMK</div>
+  <a href="#demo">Demo</a>
+  <a href="#models">Models</a>
+  <a href="#privacy">Privacy</a>
+  <a href="#relay">Relay</a>
+  <a href="https://github.com/dmae97/open_multi-agent_kit">GitHub</a>
+</nav>
+
+<!-- ── Hero ── -->
+<div class="hero">
+  <h1><span>Project-aware</span> AI coding runtime</h1>
+  <p class="sub">Install once. Resume every project. Route to the best coding model. Keep control of your code.</p>
+
+  <div class="install-box">
+    <code>curl -fsSL https://get.omk.dev | sh</code>
+    <button class="copy" onclick="navigator.clipboard.writeText('curl -fsSL https://get.omk.dev | sh').then(()=>{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)})">Copy</button>
+  </div>
+
+  <p style="font-size:.8rem;color:var(--dim);margin-bottom:1.5rem;">
+    <a href="https://get.omk.dev/install.sh" style="color:var(--dim);text-decoration:underline;">Inspect installer</a>
+    &nbsp;·&nbsp; <a href="#security" style="color:var(--dim);text-decoration:underline;">Security policy</a>
+  </p>
+
+  <div class="btn-row">
+    <a href="#demo" class="btn btn-primary">See it in action</a>
+    <a href="#relay" class="btn btn-ghost">Enterprise Relay</a>
+    <a href="https://github.com/dmae97/open_multi-agent_kit" class="btn btn-ghost">Source on GitHub</a>
+  </div>
+</div>
+
+<!-- ── 30s Demo ── -->
+<section id="demo">
+  <h2>30-second demo</h2>
+  <p class="lead">OMK detects your project, mounts MCP servers, and routes to the best model — automatically.</p>
+
+  <div class="terminal">
+    <div class="bar"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+    <div class="body"><span class="prompt">$</span> <span class="cmd">omk</span>
+
+<span class="info">╭─ OMK — Project-aware AI coding runtime ─────────────╮</span>
+<span class="info">│</span>
+<span class="info">│</span>  Project:     <span class="cmd">~/projects/my-app</span>
+<span class="info">│</span>  MCP servers: <span class="ok">omk-project (16 tools)</span>
+<span class="info">│</span>  Skills:      <span class="ok">omk-context-broker, omk-plan-first</span>
+<span class="info">│</span>  Provider:    <span class="ok">DeepSeek Flash</span> <span class="info">(auto-selected)</span>
+<span class="info">│</span>
+<span class="info">╰──────────────────────────────────────────────────────╯</span>
+
+<span class="prompt">you&gt;</span> <span class="cmd">add dark mode toggle to settings page</span>
+
+<span class="ok">✓</span> Intent: code_edit  |  Risk: write  |  Model: deepseek-flash
+<span class="ok">✓</span> Plan created (3 steps)
+<span class="ok">✓</span> SettingsDarkToggle.tsx — implemented
+<span class="ok">✓</span> 4/4 tests passing
+<span class="ok">✓</span> Changes committed: <span class="cmd">feat(settings): add dark mode toggle</span>
+
+<span class="prompt">you&gt;</span> <span class="cmd">/model kimi</span>
+<span class="warn">→</span> Switched to <span class="cmd">managed:kimi-code</span> for next turn
+
+<span class="prompt">you&gt;</span> <span class="cmd">/status</span>
+<span class="info">Provider: managed:kimi-code | MCP: omk-project | Session: 12 min</span></div>
+  </div>
+</section>
+
+<!-- ── Why OMK ── -->
+<section>
+  <h2>Why OMK?</h2>
+  <p class="lead">Not another AI wrapper. A runtime that remembers, routes, and verifies.</p>
+
+  <div class="lanes">
+    <div class="lane">
+      <div class="tag">Memory</div>
+      <h3>Project context</h3>
+      <p>OMK remembers your project structure, conventions, and decisions across sessions.</p>
+    </div>
+    <div class="lane">
+      <div class="tag">Routing</div>
+      <h3>Model lanes</h3>
+      <p>Auto-route by task complexity. Fast models for simple edits, strong models for architecture.</p>
+    </div>
+    <div class="lane">
+      <div class="tag">MCP</div>
+      <h3>Tool orchestration</h3>
+      <p>Auto-connect project MCP servers. Skills, hooks, and evidence gates — one command.</p>
+    </div>
+    <div class="lane">
+      <div class="tag">Governance</div>
+      <h3>Consent & DLP</h3>
+      <p>Granular consent levels. Redaction preview. Never auto-opt-in for dataset sharing.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ── Model Lanes ── -->
+<section id="models">
+  <h2>Model lanes</h2>
+  <p class="lead">OMK is provider-neutral. Route to the best model for each task.</p>
+
+  <div class="lanes">
+    <div class="lane">
+      <div class="tag">Default</div>
+      <h3>DeepSeek Flash</h3>
+      <p>Fast, cheap, high-volume coding runs. Great for routine edits and quick iterations.</p>
+    </div>
+    <div class="lane">
+      <div class="tag">Challenge</div>
+      <h3>MiMo Pro</h3>
+      <p>Long-horizon coding comparison. Test against frontier reasoning models.</p>
+    </div>
+    <div class="lane">
+      <div class="tag">Quality</div>
+      <h3>DeepSeek Pro</h3>
+      <p>Higher-quality verification baseline. Use for architecture and review tasks.</p>
+    </div>
+    <div class="lane">
+      <div class="tag">Premium</div>
+      <h3>Kimi / Claude / Codex</h3>
+      <p>Benchmark and comparison lane. Bring your own API key or use Relay credits.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ── Privacy & Consent ── -->
+<section id="privacy">
+  <h2>Privacy & consent</h2>
+  <p class="lead">Your code is yours. Dataset sharing is always opt-in, never automatic.</p>
+
+  <div class="consent-levels">
+    <div class="consent-level">
+      <div class="lv">L0</div>
+      <div class="name">Ops stats</div>
+      <div class="desc">Anonymous usage metrics</div>
+      <div class="status on">Selectable</div>
+    </div>
+    <div class="consent-level">
+      <div class="lv">L1</div>
+      <div class="name">Trace meta</div>
+      <div class="desc">Intent, model, duration</div>
+      <div class="status off">OFF by default</div>
+    </div>
+    <div class="consent-level">
+      <div class="lv">L2</div>
+      <div class="name">Trajectory</div>
+      <div class="desc">Tool calls, diffs, test results</div>
+      <div class="status off">OFF by default</div>
+    </div>
+    <div class="consent-level">
+      <div class="lv">L3</div>
+      <div class="name">Sample pack</div>
+      <div class="desc">Redacted, per-case approval</div>
+      <div class="status off">Per-case</div>
+    </div>
+    <div class="consent-level">
+      <div class="lv">L4</div>
+      <div class="name">Raw code</div>
+      <div class="desc">Source code content</div>
+      <div class="status off">Forbidden</div>
+    </div>
+  </div>
+
+  <p style="margin-top:1.5rem;font-size:.9rem;color:var(--dim);">
+    <strong style="color:var(--fg);">무료 request 제공 ≠ 데이터 제공 동의.</strong>
+    Free relay credits do not require dataset contribution. You can use OMK fully without sharing any data.
+  </p>
+
+  <div style="margin-top:1rem;font-family:var(--mono);font-size:.82rem;color:var(--dim);">
+    <code style="color:var(--accent3);">omk consent status</code> —查看 current settings<br/>
+    <code style="color:var(--accent3);">omk consent preview</code> — see what would be shared<br/>
+    <code style="color:var(--accent3);">omk consent enable l2</code> — opt in to trajectory sharing<br/>
+    <code style="color:var(--accent3);">omk consent revoke</code> — revoke all consent
+  </div>
+</section>
+
+<!-- ── Enterprise Relay ── -->
+<section id="relay">
+  <h2>OMK Relay SaaS</h2>
+  <p class="lead">Secure model routing, budget control, redaction, and audit logs for teams.</p>
+
+  <div class="lanes">
+    <div class="lane">
+      <div class="tag">Free</div>
+      <h3>Free Relay</h3>
+      <p>Free coding requests with auto-selected models. No data sharing required.</p>
+    </div>
+    <div class="lane">
+      <div class="tag">Team</div>
+      <h3>Team Workspace</h3>
+      <p>Shared project memory, budget controls, team consent ledger.</p>
+    </div>
+    <div class="lane">
+      <div class="tag">Enterprise</div>
+      <h3>Private Relay</h3>
+      <p>Private routing, DLP/redaction, audit logs, deletion SLA. On-prem available.</p>
+    </div>
+    <div class="lane">
+      <div class="tag">Benchmark</div>
+      <h3>Secure Benchmark Room</h3>
+      <p>Isolated evaluation environment. Compare models on your code without exposure.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ── Waitlist CTA ── -->
+<div class="cta-section" id="waitlist">
+  <h2>Join the beta</h2>
+  <p>Get early access to OMK Relay, free credits, and the K-Coding Dataset consortium.</p>
+
+  <form class="waitlist" onsubmit="handleWaitlist(event)">
+    <div class="field">
+      <input type="email" name="email" placeholder="you@company.com" required />
+    </div>
+    <div class="field">
+      <input type="text" name="company" placeholder="Company (optional)" />
+      <select name="interest">
+        <option value="free-cli">Free CLI</option>
+        <option value="team-relay">Team Relay</option>
+        <option value="private-relay">Private Relay</option>
+        <option value="benchmark">Secure Benchmark</option>
+        <option value="dataset">Dataset / Eval Pack</option>
+      </select>
+    </div>
+    <div class="submit-row">
+      <button type="submit" class="btn btn-primary">Join waitlist</button>
+    </div>
+    <p id="waitlist-msg" style="margin-top:.8rem;font-size:.85rem;color:var(--accent3);display:none;"></p>
+  </form>
+</div>
+
+<!-- ── Security ── -->
+<section id="security">
+  <h2>Security</h2>
+  <p class="lead">Supply-chain trust is non-negotiable.</p>
+
+  <div style="font-size:.9rem;color:var(--dim);line-height:1.8;">
+    <p><strong style="color:var(--fg);">Install script:</strong> <a href="https://get.omk.dev/install.sh">get.omk.dev/install.sh</a> — inspect before running</p>
+    <p><strong style="color:var(--fg);">Checksums:</strong> <a href="https://github.com/dmae97/open_multi-agent_kit/releases">GitHub Releases</a> — SHA-256 for all artifacts</p>
+    <p><strong style="color:var(--fg);">Signatures:</strong> <a href="https://github.com/dmae97/open_multi-agent_kit/releases">GitHub Releases</a> — cosign / Sigstore</p>
+    <p><strong style="color:var(--fg);">Security policy:</strong> <a href="https://github.com/dmae97/open_multi-agent_kit/blob/main/SECURITY.md">SECURITY.md</a></p>
+    <p style="margin-top:1rem;">The installer does <strong style="color:var(--fg);">not</strong> read API keys, .env files, or repository code. No telemetry is sent before first successful run.</p>
+  </div>
+</section>
+
+<!-- ── Footer ── -->
+<footer>
+  <a href="https://omk.dev">Home</a>
+  <a href="https://github.com/dmae97/open_multi-agent_kit">GitHub</a>
+  <a href="https://github.com/dmae97/open_multi-agent_kit/releases">Releases</a>
+  <a href="https://github.com/dmae97/open_multi-agent_kit/blob/main/SECURITY.md">Security</a>
+  <a href="https://github.com/dmae97/open_multi-agent_kit/blob/main/LICENSE">License</a>
+  <p style="margin-top:.8rem;">© 2025 OMK Contributors · Apache-2.0</p>
+</footer>
+
+<script>
+function handleWaitlist(e) {
+  e.preventDefault();
+  const form = e.target;
+  const email = form.email.value;
+  const company = form.company.value;
+  const interest = form.interest.value;
+  const msg = document.getElementById('waitlist-msg');
+  // In production, POST to relay.omk.dev/api/waitlist
+  msg.textContent = 'Thanks! We\'ll be in touch at ' + email;
+  msg.style.display = 'block';
+  form.reset();
+}
+</script>
+
+</body>
+</html>

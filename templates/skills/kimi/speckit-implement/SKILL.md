@@ -1,7 +1,7 @@
 ---
 name: "speckit-implement"
 description: "Execute the implementation plan by processing and executing all tasks defined in tasks.md"
-compatibility: "Requires spec-kit project structure with .specify/ directory"
+compatibility: "Supports standard .specify/specs layout; OMK fallback uses .omk/specs and .omk/templates/spec-kit-omk-preset when standard spec-kit is not initialized."
 metadata:
   author: "github-spec-kit"
   source: "templates/commands/implement.md"
@@ -52,7 +52,7 @@ You **MUST** consider the user input before proceeding (if not empty).
 
 ## Outline
 
-1. Run `.specify/scripts/bash/check-prerequisites.sh --json --require-tasks --include-tasks` from repo root and parse FEATURE_DIR and AVAILABLE_DOCS list. All paths must be absolute. For single quotes in args like "I'm Groot", use escape syntax: e.g 'I'\''m Groot' (or double-quote if possible: "I'm Groot").
+1. Run `.specify/scripts/bash/check-prerequisites.sh --json --require-tasks --include-tasks` from repo root when available and parse FEATURE_DIR and AVAILABLE_DOCS list. If the script is absent, use OMK fallback resolution: `SPECIFY_FEATURE_DIRECTORY`, then `.specify/feature.json`, then the latest `.omk/specs/*` directory containing `tasks.md`. All paths must be absolute. For single quotes in args like "I'm Groot", use escape syntax: e.g 'I'\''m Groot' (or double-quote if possible: "I'm Groot").
 
 2. **Check checklists status** (if FEATURE_DIR/checklists/ exists):
    - Scan all checklist files in the checklists/ directory

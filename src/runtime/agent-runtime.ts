@@ -11,6 +11,7 @@
  */
 
 import type { TaskResult } from "../contracts/orchestration.js";
+import type { GoalExecutionContext, WorkerManifest } from "../contracts/worker-context.js";
 import type { ContextCapsule } from "./context-capsule.js";
 import type {
   RuntimeId,
@@ -80,11 +81,28 @@ export interface AgentContext {
   memory?: Array<{ key: string; source: string; summary: string }>;
   cwd?: string;
   env?: Record<string, string>;
+  providerModel?: string;
+  risk?: string;
+  approvalPolicy?: string;
+  sandboxMode?: string;
   abortSignal?: AbortSignal;
+  goalContext?: GoalExecutionContext;
+  workerManifest?: WorkerManifest;
+  onOutput?: (text: string) => void;
+}
+
+export interface ToolManifestEntry {
+  readonly name: string;
+  readonly description: string;
+  readonly inputSchema: unknown;
+  readonly readOnly?: boolean;
+  readonly parallelSafe?: boolean;
+  readonly stormExempt?: boolean;
+  readonly skipRetentionSave?: boolean;
 }
 
 export interface ToolManifest {
-  available: Array<{ name: string; description: string; inputSchema: unknown }>;
+  available: ToolManifestEntry[];
   mcpServers?: string[];
   skills?: string[];
   hooks?: string[];

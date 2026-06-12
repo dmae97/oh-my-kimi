@@ -34,7 +34,7 @@ const PRESETS: ModePreset[] = [
     name: "agent",
     label: "Agent Orchestrator",
     description: "Interactive orchestrator: asks parallel vs one-by-one, then coordinates plan/run/review",
-    icon: "🤖",
+    icon: "◇",
     behavior: {
       autoExecute: true,
       planOnly: false,
@@ -48,7 +48,7 @@ const PRESETS: ModePreset[] = [
     name: "plan",
     label: "Plan",
     description: "Plan-only mode: generates plan and enriched prompt, waits for your approval before executing",
-    icon: "📐",
+    icon: "▣",
     behavior: {
       autoExecute: false,
       planOnly: true,
@@ -62,7 +62,7 @@ const PRESETS: ModePreset[] = [
     name: "chat",
     label: "Chat",
     description: "Chat-only mode: conversation about the project without code modification",
-    icon: "💬",
+    icon: "◌",
     behavior: {
       autoExecute: false,
       planOnly: false,
@@ -76,7 +76,7 @@ const PRESETS: ModePreset[] = [
     name: "debugging",
     label: "Debug",
     description: "Debugging mode: focused on bug reproduction, root-cause analysis, and minimal fixes",
-    icon: "🐛",
+    icon: "⟁",
     behavior: {
       autoExecute: true,
       planOnly: false,
@@ -90,7 +90,7 @@ const PRESETS: ModePreset[] = [
     name: "review",
     label: "Review",
     description: "Review mode: focused on code audit, security scan, and quality assessment",
-    icon: "🔍",
+    icon: "◆",
     behavior: {
       autoExecute: true,
       planOnly: false,

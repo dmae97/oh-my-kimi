@@ -1,7 +1,7 @@
 import type { RuntimeId } from "./agent-runtime.js";
 
 const PROVIDER_TO_RUNTIME: Record<string, RuntimeId> = {
-  kimi: "kimi-cli",
+  kimi: "kimi-api",
   deepseek: "deepseek-api",
   codex: "codex-cli",
   qwen: "qwen-api",

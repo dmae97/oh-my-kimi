@@ -10,6 +10,12 @@ oh-my-kimi(OMK)의 현재 방향성은 **Kimi-native verified agent runtime**이
 
 이 방향은 `README.md`, `ROADMAP.md`, `MATURITY.md`, init templates, `src/orchestration/*`, `src/goal/*`, `src/mcp/*`가 공통으로 지향하는 제품 축이다. 2026-05-18 안정화 이후 source/fresh-init 기준은 **project-local `omk-core-verified` baseline**으로 정렬되었고, 기존 생성 `.omk/*` artifact drift는 별도 운영 caveat로 취급한다.
 
+2026-05-24 이후 native root/runtime 알고리즘의 현재 후속 기준은
+[`native-root-runtime-hardening.md`](./native-root-runtime-hardening.md)와
+[`native-root-runtime-algorithms.md`](./native-root-runtime-algorithms.md)이다.
+이 문서는 방향성 기록으로 유지하며, ActionAtom/Novelty Guard 표현은
+구현 및 테스트가 확인된 범위와 구분한다.
+
 ## Stabilization update — Kimi CLI / `.kimi`
 
 - Fresh init: project-local `.kimi/mcp.json`, project scopes, `omk-core-verified`.

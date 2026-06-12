@@ -48,6 +48,16 @@ export function registerProviderCommands(program: Command): void {
       await providerProfilesCommand(options);
     });
   provider
+    .command("use <provider>")
+    .description("Set the default provider/model for OMK root and chat sessions")
+    .option("--model <model>", "Model name or alias")
+    .option("--authority", "Also set as authority provider")
+    .option("--json", "Output JSON")
+    .action(async (target, options) => {
+      const { providerUseCommand } = await import("../commands/provider.js");
+      await providerUseCommand(target, options);
+    });
+  provider
     .command("set <provider>")
     .description("Set provider model/base URL/API key env metadata without storing secret values")
     .option("--model <model>", "Default model or alias target")
@@ -76,6 +86,57 @@ export function registerProviderCommands(program: Command): void {
       const { providerDisableCommand } = await import("../commands/provider.js");
       await providerDisableCommand(target, reason, options);
     });
+  const model = program.command("model").description("Inspect and configure provider/model aliases");
+  model
+    .command("list")
+    .description("List provider model defaults and aliases")
+    .option("--json", "Output JSON")
+    .action(async (options) => {
+      const { modelListCommand } = await import("../commands/model.js");
+      await modelListCommand(options);
+    });
+  model
+    .command("aliases")
+    .description("List user model aliases")
+    .option("--json", "Output JSON")
+    .action(async (options) => {
+      const { modelAliasesCommand } = await import("../commands/model.js");
+      await modelAliasesCommand(options);
+    });
+  model
+    .command("resolve <model>")
+    .description("Resolve a model alias to provider/model metadata")
+    .option("--json", "Output JSON")
+    .action(async (target, options) => {
+      const { modelResolveCommand } = await import("../commands/model.js");
+      await modelResolveCommand(target, options);
+    });
+  model
+    .command("use <model>")
+    .description("Set the default model for OMK root and chat sessions")
+    .option("--json", "Output JSON")
+    .action(async (target, options) => {
+      const { modelUseCommand } = await import("../commands/model.js");
+      await modelUseCommand(target, options);
+    });
+  const modelAlias = model.command("alias").description("Manage user model aliases");
+  modelAlias
+    .command("add <alias> <target>")
+    .description("Add a user model alias, e.g. fast deepseek/flash")
+    .option("--json", "Output JSON")
+    .action(async (alias, target, options) => {
+      const { modelAliasAddCommand } = await import("../commands/model.js");
+      await modelAliasAddCommand(alias, target, options);
+    });
+  modelAlias
+    .command("remove <alias>")
+    .description("Remove a user model alias")
+    .option("--json", "Output JSON")
+    .action(async (alias, options) => {
+      const { modelAliasRemoveCommand } = await import("../commands/model.js");
+      await modelAliasRemoveCommand(alias, options);
+    });
+
   const deepseekProvider = provider.command("deepseek").description("Manage DeepSeek opportunistic workers");
   deepseekProvider
     .command("enable")

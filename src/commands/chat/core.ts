@@ -1,4 +1,4 @@
-import { getOmkPath, getProjectRootDiagnostics, displayProjectRootPath } from "../../util/fs.js";
+import { getOmkPath, resolveProjectRoot, displayProjectRootPath, type ProjectRootResolution } from "../../util/fs.js";
 import { style, status, header } from "../../util/theme.js";
 import { t } from "../../util/i18n.js";
 import { createOmkSessionId } from "../../util/session.js";
@@ -8,20 +8,22 @@ import { parseExecutionPromptPolicy } from "../../util/execution-selection.js";
 import { normalizeProviderPolicy, parseProviderModelArg } from "../../providers/model-registry.js";
 import { validateAgentYamlFile, formatAgentYamlIssues } from "../../util/agent-schema.js";
 import { ensureChatStartupArtifacts } from "../../util/chat-startup.js";
-import { ensureChatRunState, detectTmux, launchChatCockpit, isCockpitChild } from "../../util/chat-cockpit.js";
-import { buildChatAgentRuntimeMcpAllowlist, prepareChatAgentModeAgent, type ChatAgentModeResources } from "../../util/chat-agent-mode.js";
+import { ensureChatRunState } from "../../util/chat-cockpit.js";
+import { buildChatAgentRuntimeMcpAllowlist, buildChatAgentRuntimeSkillAllowlist, prepareChatAgentModeAgent, type ChatAgentModeResources } from "../../util/chat-agent-mode.js";
 import { parseRuntimeScopeOption } from "../../util/runtime-scope.js";
 import { queueChatStatePatch } from "../../util/chat-state.js";
 import { initCommand } from "../init.js";
 import { checkCommand, resolveKimiBin } from "../../util/shell.js";
 import { readTodos } from "../../util/todo-sync.js";
-import { relative, join } from "path";
+import { relative, join, resolve } from "path";
 import { readFile } from "fs/promises";
 
 import {
   type ChatLayout,
   type ChatBrand,
+  type ChatUi,
   resolveLayout,
+  resolveChatUi,
   resolveChatWorkerCount,
   renderChatIntro,
   getActiveMcpNames,
@@ -31,6 +33,25 @@ import {
 } from "./utils.js";
 import { buildChatSmokeReport, failChatBeforeLaunch } from "./startup.js";
 import { runChatRuntime } from "./runtime.js";
+
+function resolveChatProjectRoot(options: {
+  cwd?: string;
+  projectRoot?: string;
+}): ProjectRootResolution {
+  const cwd = resolve(options.cwd ?? process.cwd());
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    OMK_PREFER_CWD_ROOT: process.env.OMK_PREFER_CWD_ROOT ?? "1",
+  };
+
+  if (options.projectRoot) {
+    env.OMK_PROJECT_ROOT = resolve(options.projectRoot);
+  } else if (process.env.OMK_CHAT_RESPECT_PROJECT_ROOT_ENV !== "1") {
+    delete env.OMK_PROJECT_ROOT;
+  }
+
+  return resolveProjectRoot({ cwd, env });
+}
 
 export async function chatCommand(options: {
   agentFile?: string;
@@ -43,6 +64,9 @@ export async function chatCommand(options: {
   execution?: string;
   provider?: string;
   model?: string;
+  cwd?: string;
+  projectRoot?: string;
+  ui?: ChatUi;
   cockpitRefresh?: string;
   cockpitRedraw?: "diff" | "full" | "append";
   cockpitHistory?: "off" | "static" | "watch";
@@ -51,10 +75,13 @@ export async function chatCommand(options: {
   mcpScope?: string;
   smoke?: boolean;
   json?: boolean;
+  showThink?: string;
+  reasoningNlp?: boolean;
+  reasoningSummary?: string;
 }): Promise<void> {
-  const rootResolution = getProjectRootDiagnostics();
+  const rootResolution = resolveChatProjectRoot(options);
   const root = rootResolution.root;
-  process.env.OMK_PROJECT_ROOT ??= root;
+  process.env.OMK_PROJECT_ROOT = root;
   if (rootResolution.isHomeRoot && rootResolution.warning) {
     const message = `Project root resolved to HOME (${displayProjectRootPath(root) ?? root}). ${rootResolution.recommendation ?? "Set OMK_PROJECT_ROOT or OMK_DEFAULT_PROJECT_ROOT."}`;
     if (process.env.OMK_ALLOW_HOME_PROJECT_ROOT !== "1") {
@@ -88,10 +115,15 @@ export async function chatCommand(options: {
   const runId = options.runId;
   const effectiveRunId = runId ?? sessionId;
   const layout = resolveLayout(options.layout);
+  const ui = resolveChatUi(options.ui);
   const brand = options.brand ?? "minimal";
   const resources = await getOmkResourceSettings();
   const modelArg = parseProviderModelArg(options.model);
-  const providerPolicy = normalizeProviderPolicy(options.provider ?? modelArg.provider);
+  const providerInput = options.provider
+    ?? modelArg.provider
+    ?? process.env.OMK_DEFAULT_PROVIDER
+    ?? "kimi";
+  const providerPolicy = normalizeProviderPolicy(providerInput);
   const mcpScope = parseRuntimeScopeOption(options.mcpScope, resources.mcpScope, "--mcp-scope");
   const effectiveResources = { ...resources, mcpScope };
   const effectiveWorkers = resolveChatWorkerCount(options.workers, resources.maxWorkers);
@@ -140,32 +172,31 @@ export async function chatCommand(options: {
 
   try {
     const bootstrap = await ensureChatStartupArtifacts({ root, runId: effectiveRunId });
-    if (!isCockpitChild() && layout !== "plain" && bootstrap.created.length > 0) {
+    if (layout !== "plain" && bootstrap.created.length > 0) {
       console.log(status.ok(t("chat.bootstrapReady", bootstrap.date, bootstrap.created.length)));
     }
   } catch (err) {
-    if (!isCockpitChild() && layout !== "plain") {
+    if (layout !== "plain") {
       const message = err instanceof Error ? err.message : String(err);
       console.log(status.warn(t("chat.bootstrapWarning", message)));
     }
   }
 
   // ── Star prompt at chat start (parent only, skipped in cockpit child) ──
-  if (!isCockpitChild()) {
-    try {
-      const { maybeAskForGitHubStarAtChatStart } = await import("../../util/first-run-star.js");
-      const { getOmkVersionSync } = await import("../../util/version.js");
-      await maybeAskForGitHubStarAtChatStart({ version: getOmkVersionSync() });
-    } catch {
-      // Swallow star prompt errors so chat entry is preserved.
-    }
+  try {
+    const { maybeAskForGitHubStarAtChatStart } = await import("../../util/first-run-star.js");
+    const { getOmkVersionSync } = await import("../../util/version.js");
+    await maybeAskForGitHubStarAtChatStart({ version: getOmkVersionSync() });
+  } catch {
+    // Swallow star prompt errors so chat entry is preserved.
   }
 
   // Ensure run state exists before launching cockpit so right pane can read it
   await ensureChatRunState(root, effectiveRunId);
 
   let effectiveAgentFile = agentFile;
-  let chatRuntimeMcpAllowlist: string[] | undefined;
+  let chatRuntimeMcpAllowlist: string[] | undefined = effectiveResources.mcpScope === "none" ? undefined : ["omk-project"];
+  let chatRuntimeSkillAllowlist: string[] | undefined;
   if (!options.agentFile) {
     try {
       const [mcpNames, skillNames, hookNames] = await Promise.all([
@@ -195,6 +226,10 @@ export async function chatCommand(options: {
         mode: currentMode,
         resources: chatAgentResources,
       });
+      chatRuntimeSkillAllowlist = buildChatAgentRuntimeSkillAllowlist({
+        mode: currentMode,
+        resources: chatAgentResources,
+      });
       const prepared = await prepareChatAgentModeAgent({
         root,
         runId: effectiveRunId,
@@ -209,7 +244,7 @@ export async function chatCommand(options: {
       }).catch(() => {});
     } catch (err) {
       effectiveAgentFile = agentFile;
-      if (!isCockpitChild() && layout !== "plain") {
+      if (layout !== "plain") {
         const detail = process.env.OMK_DEBUG === "1" && err instanceof Error ? `: ${err.name}` : "";
         console.log(status.warn(`Chat agent harness unavailable; using base agent${detail}`));
       }
@@ -243,6 +278,8 @@ export async function chatCommand(options: {
   if (options.smoke) {
     const report = await buildChatSmokeReport({
       root,
+      rootSource: rootResolution.source,
+      activeCwd: rootResolution.cwd,
       runId: effectiveRunId,
       agentFile: effectiveAgentFile,
       schemaOk: agentSchema.ok,
@@ -263,7 +300,7 @@ export async function chatCommand(options: {
     return;
   }
 
-  if (!options.json && !isCockpitChild()) {
+  if (!options.json) {
     try {
       const { maybePromptForOmkUpdate } = await import("../../util/update-check.js");
       const updatePrompt = await maybePromptForOmkUpdate({ source: "chat" });
@@ -273,68 +310,13 @@ export async function chatCommand(options: {
     }
   }
 
-  // ── tmux layout: delegate to cockpit launcher ──
-  if (layout === "tmux") {
-    const hasTmux = await detectTmux();
-    if (!hasTmux) {
-      console.error(status.error(t("chat.cockpitTmuxNotFound")));
-      console.error(style.gray(t("chat.cockpitTmuxInstallHint")));
-      process.exit(1);
-    }
-    if (!process.stdout.isTTY) {
-      console.error(status.error("tmux layout requires a TTY"));
-      process.exit(1);
-    }
-    await launchChatCockpit({
-      runId: effectiveRunId,
-      brand,
-      cwd: root,
-      agentFile: effectiveAgentFile,
-      workers: options.workers ? effectiveWorkers : undefined,
-      maxStepsPerTurn: options.maxStepsPerTurn,
-      mcpScope,
-      provider: providerPolicy,
-      model: options.model,
-      execution: executionPrompt,
-      cockpitRefresh: options.cockpitRefresh,
-      cockpitRedraw: options.cockpitRedraw,
-      cockpitHistory: options.cockpitHistory,
-      cockpitSideWidth: options.cockpitSideWidth,
-      cockpitHeight: options.cockpitHeight,
-    });
-    return;
-  }
-
-  // ── auto layout: tmux if available and TTY, else inline ──
-  if (layout === "auto") {
-    const hasTmux = await detectTmux();
-    if (hasTmux && process.stdout.isTTY) {
-      await launchChatCockpit({
-        runId: effectiveRunId,
-        brand,
-        cwd: root,
-        agentFile: effectiveAgentFile,
-        workers: options.workers ? effectiveWorkers : undefined,
-        maxStepsPerTurn: options.maxStepsPerTurn,
-        mcpScope,
-        provider: providerPolicy,
-        model: options.model,
-        execution: executionPrompt,
-        cockpitRefresh: options.cockpitRefresh,
-        cockpitRedraw: options.cockpitRedraw,
-        cockpitHistory: options.cockpitHistory,
-        cockpitSideWidth: options.cockpitSideWidth,
-        cockpitHeight: options.cockpitHeight,
-      });
-      return;
-    }
-    // fall through to inline
-  }
+  // ── tmux/auto layout: use System24 renderer inline ──
+  // cockpit removed — System24 TUI handles all rendering
 
   // ── plain / inline: run Kimi directly ──
   const isPlain = layout === "plain";
 
-  if (!isPlain && !isCockpitChild()) {
+  if (!isPlain && ui !== "green-rain" && ui !== "neon-grid") {
     const trust = `${effectiveResources.mcpScope} MCP / ${effectiveResources.skillsScope} skills`;
     const agentDisplay = relative(root, effectiveAgentFile);
     const { getModePreset } = await import("../../util/mode-preset.js");
@@ -351,75 +333,70 @@ export async function chatCommand(options: {
     );
   }
 
-  // ── Print OMK status summary (HUD/TODO preview before entering chat) ──
-  if (!isPlain && !isCockpitChild()) {
-    try {
-      const { renderHudDashboard } = await import("../hud.js");
-      const hud = await renderHudDashboard({ runId: effectiveRunId, terminalWidth: process.stdout.columns, fetchQuota: false });
-      const lines = hud.split("\n");
-      // Use terminal height to show as much HUD as possible (reserve 4 lines for prompt)
-      const termRows = process.stdout.rows || 24;
-      const maxLines = Math.max(20, termRows - 4);
-      const summary = lines.slice(0, Math.min(lines.length, maxLines)).join("\n");
-      console.log(summary);
-      console.log(style.gray(t("chat.scrollUpForHud")));
-    } catch {
-      // Ignore HUD failure
-    }
-  }
-
-  // ── Print recent run history so users can scroll back to see past work ──
-  // PERF: consider deferring to after Kimi spawn
-  if (!isPlain && !isCockpitChild()) {
-    try {
-      const { listRunCandidates } = await import("../hud.js");
-      const { pathExists, getRunsDir, getRunPath } = await import("../../util/fs.js");
-      const { readFile } = await import("fs/promises");
-      const runsDir = getRunsDir();
-      if (await pathExists(runsDir)) {
-        const candidates = await listRunCandidates(runsDir);
-        const sorted = candidates
-          .filter((c) => c.name !== effectiveRunId)
-          .sort((a, b) => b.stateUpdatedAtMs - a.stateUpdatedAtMs)
-          .slice(0, 5);
-        if (sorted.length > 0) {
-          console.log("");
-          console.log(style.purpleBold("📜 Recent Work History"));
-          for (const c of sorted) {
-            let statusStr = style.gray("unknown");
-            try {
-              const statePath = getRunPath(c.name, "state.json");
-              const raw = await readFile(statePath, "utf-8");
-              const state = JSON.parse(raw) as Record<string, unknown>;
-              const st = String(state.status ?? "unknown");
-              if (st === "done") statusStr = style.mint(st);
-              else if (st === "running") statusStr = style.purple(st);
-              else if (st === "failed") statusStr = style.red(st);
-              else statusStr = style.gray(st);
-            } catch { /* ignore */ }
-            let goalTitle = "";
-            try {
-              const goalRaw = await readFile(getRunPath(c.name, "goal.md"), "utf-8");
-              const firstLine = goalRaw.split(/\r?\n/)[0]?.trim() ?? "";
-              goalTitle = firstLine.replace(/^#+\s*/, "").slice(0, 30);
-            } catch { /* ignore */ }
-            const date = new Date(c.stateUpdatedAtMs);
-            const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
-            const markers = [c.hasGoal ? "📝" : "", c.hasPlan ? "📐" : ""].join("");
-            const name = c.name.length > 34 ? c.name.slice(0, 31) + "…" : c.name;
-            const titlePart = goalTitle ? style.gray(` → ${goalTitle}`) : "";
-            console.log(`  ${style.gray("•")} ${style.cream(name)} ${statusStr} ${style.gray(dateStr)} ${markers}${titlePart}`);
+  // ── Deferred HUD + history: fire-and-forget, let the agent loop start immediately ──
+  if (!isPlain) {
+    // Show a minimal status line while we defer the full HUD
+    const providerLabel = providerPolicy === "auto" ? "auto-detect" : providerPolicy;
+    const modeLabel = currentMode;
+    const mcpLabel = effectiveResources.mcpScope === "none" ? "mcp=off" : `mcp=${effectiveResources.mcpScope}`;
+    console.log(style.phosphorDim(`  ⟡ ${providerLabel} · ${modeLabel} · ${mcpLabel} · workers=${effectiveWorkers}`));
+    console.log(style.gray(`  Run ${style.cream("omk hud")} for dashboard, ${style.cream("omk runs")} for history.`));
+    // Defer full HUD + history rendering to after the agent loop starts (non-blocking)
+    setImmediate(async () => {
+      try {
+        const { renderHudDashboard } = await import("../hud.js");
+        const hud = await renderHudDashboard({ runId: effectiveRunId, terminalWidth: process.stdout.columns, fetchQuota: false });
+        const lines = hud.split("\n");
+        const termRows = process.stdout.rows || 24;
+        const maxLines = Math.max(10, termRows - 4);
+        const summary = lines.slice(0, Math.min(lines.length, maxLines)).join("\n");
+        process.stderr.write(`\n${summary}\n${style.gray(t("chat.scrollUpForHud"))}\n`);
+      } catch { /* ignore */ }
+    });
+    setImmediate(async () => {
+      try {
+        const { listRunCandidates: listRuns } = await import("../hud.js");
+        const { pathExists, getRunsDir, getRunPath } = await import("../../util/fs.js");
+        const { readFile } = await import("fs/promises");
+        const runsDir = getRunsDir();
+        if (await pathExists(runsDir)) {
+          const candidates = await listRuns(runsDir);
+          const sorted = candidates
+            .filter((c) => c.name !== effectiveRunId)
+            .sort((a, b) => b.stateUpdatedAtMs - a.stateUpdatedAtMs)
+            .slice(0, 3);
+          if (sorted.length > 0) {
+            process.stderr.write(`\n${style.purpleBold("▣ Recent Runs")}\n`);
+            for (const c of sorted) {
+              let statusStr = style.gray("unknown");
+              try {
+                const statePath = getRunPath(c.name, "state.json");
+                const raw = await readFile(statePath, "utf-8");
+                const state = JSON.parse(raw) as Record<string, unknown>;
+                const st = String(state.status ?? "unknown");
+                if (st === "done") statusStr = style.mint(st);
+                else if (st === "running") statusStr = style.purple(st);
+                else if (st === "failed") statusStr = style.red(st);
+                else statusStr = style.gray(st);
+              } catch { /* ignore */ }
+              let goalTitle = "";
+              try {
+                const goalRaw = await readFile(getRunPath(c.name, "goal.md"), "utf-8");
+                const firstLine = goalRaw.split(/\r?\n/)[0]?.trim() ?? "";
+                goalTitle = firstLine.replace(/^#+\s*/, "").slice(0, 30);
+              } catch { /* ignore */ }
+              const titlePart = goalTitle ? style.gray(` → ${goalTitle}`) : "";
+              process.stderr.write(`  ${style.gray("•")} ${style.cream(c.name.slice(0, 31))} ${statusStr}${titlePart}\n`);
+            }
+            process.stderr.write(style.gray(`  Run ${style.cream("omk runs")} for full history\n`));
           }
-          console.log(style.gray(`  Run ${style.cream("omk runs")} for full history`));
         }
-      }
-    } catch {
-      // Ignore recent-run rendering failure
-    }
+      } catch { /* ignore */ }
+    });
   }
 
   // ── Resume: show existing TODO summary if resuming ──
-  if (!isPlain && !isCockpitChild()) {
+  if (!isPlain) {
     try {
       const existingTodos = await readTodos(effectiveRunId).catch(() => null);
       if (existingTodos && existingTodos.length > 0) {
@@ -433,6 +410,8 @@ export async function chatCommand(options: {
 
   const exitCode = await runChatRuntime(options, {
     root,
+    rootSource: rootResolution.source,
+    activeCwd: rootResolution.cwd,
     effectiveRunId,
     effectiveAgentFile,
     sessionId,
@@ -445,7 +424,9 @@ export async function chatCommand(options: {
     effectiveResources,
     effectiveWorkers,
     executionPrompt,
+    ui,
     chatRuntimeMcpAllowlist,
+    chatRuntimeSkillAllowlist,
   });
 
   if (exitCode !== 0) process.exitCode = exitCode;

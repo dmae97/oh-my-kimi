@@ -1,0 +1,53 @@
+[[hooks]]
+event = "SessionStart"
+command = "/home/yu/.local/share/uv/tools/kimi-cli/bin/python /home/yu/.kimi/scripts/post_update_runtime_patch_hook.py --source session-start"
+matcher = ""
+timeout = 20
+
+[[hooks]]
+event = "SessionStart"
+command = "/home/yu/oh-my-kimi/.omk/hooks/session-context.sh"
+matcher = ""
+timeout = 5
+
+[[hooks]]
+event = "UserPromptSubmit"
+command = "/home/yu/oh-my-kimi/.omk/hooks/awesome-agent-skills-router.sh"
+matcher = ""
+timeout = 5
+
+[[hooks]]
+event = "PreCompact"
+command = "/home/yu/oh-my-kimi/.omk/hooks/precompact-checkpoint.sh"
+matcher = ""
+timeout = 5
+
+[[hooks]]
+event = "SubagentStop"
+command = "/home/yu/oh-my-kimi/.omk/hooks/subagent-stop-audit.sh"
+matcher = ""
+timeout = 5
+
+[[hooks]]
+event = "PreToolUse"
+command = "/home/yu/oh-my-kimi/.omk/hooks/pre-shell-guard.sh"
+matcher = "Shell"
+timeout = 5
+
+[[hooks]]
+event = "PreToolUse"
+command = "/home/yu/oh-my-kimi/.omk/hooks/protect-secrets.sh"
+matcher = "WriteFile|StrReplaceFile"
+timeout = 5
+
+[[hooks]]
+event = "PostToolUse"
+command = "/home/yu/oh-my-kimi/.omk/hooks/post-format.sh"
+matcher = "WriteFile|StrReplaceFile"
+timeout = 20
+
+[[hooks]]
+event = "Stop"
+command = "/home/yu/oh-my-kimi/.omk/hooks/stop-verify.sh"
+matcher = ""
+timeout = 30

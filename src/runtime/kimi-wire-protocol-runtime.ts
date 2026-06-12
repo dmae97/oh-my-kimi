@@ -293,7 +293,11 @@ export class KimiWireProtocolRuntime implements AgentRuntime {
   async execute(task: AgentTask): Promise<AgentResult> {
     const client = new KimiWireClient({
       cwd: this.options.cwd ?? task.context.cwd,
-      env: { ...this.options.env, ...task.context.env },
+      env: {
+        ...this.options.env,
+        ...task.context.env,
+        ...(task.context.providerModel ? { OMK_PROVIDER_MODEL: task.context.providerModel } : {}),
+      },
       agentFile: this.options.agentFile,
       configFile: this.options.configFile,
       mcpConfigFile: this.options.mcpConfigFile,

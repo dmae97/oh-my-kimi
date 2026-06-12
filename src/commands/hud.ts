@@ -8,6 +8,10 @@ import {
   leaveAlternateScreen,
   type HudCommandOptions,
 } from "../hud/render.js";
+import { readReasoningFrames } from "../util/reasoning-nlp.js";
+import { getRunsDir } from "../util/fs.js";
+import { readdir } from "fs/promises";
+import { join } from "path";
 
 export type {
   HudGitChange,
@@ -27,11 +31,45 @@ export {
   listRunCandidates,
 } from "../hud/render.js";
 
+interface HudThinkingEntry {
+  agentId: string;
+  step: string;
+  status: "running" | "done" | "failed";
+  timestamp: number;
+}
+
+async function loadLatestThinking(limit = 5): Promise<HudThinkingEntry[]> {
+  try {
+    const runsDir = getRunsDir();
+    const entries = await readdir(runsDir, { withFileTypes: true });
+    const runDirs = entries
+      .filter((e) => e.isDirectory())
+      .map((e) => ({ name: e.name, path: join(runsDir, e.name) }))
+      .sort((a, b) => b.name.localeCompare(a.name));
+
+    if (runDirs.length === 0) return [];
+
+    const frames = await readReasoningFrames(runDirs[0].path);
+    if (frames.length === 0) return [];
+
+    const recent = frames.slice(-limit);
+    return recent.map((f, i) => ({
+      agentId: f.provider ?? "unknown",
+      step: f.text.length > 60 ? f.text.slice(0, 57) + "..." : f.text,
+      status: i === recent.length - 1 ? "running" as const : "done" as const,
+      timestamp: new Date(f.timestamp).getTime(),
+    }));
+  } catch {
+    return [];
+  }
+}
+
 export async function hudCommand(options: HudCommandOptions = {}): Promise<void> {
   const refreshMs = normalizeRefreshMs(options.refreshMs);
 
   if (!options.watch) {
-    console.log(await renderHudDashboard(options));
+    const thinking = await loadLatestThinking();
+    console.log(await renderHudDashboard({ ...options, thinking }));
     return;
   }
 
@@ -61,7 +99,8 @@ export async function hudCommand(options: HudCommandOptions = {}): Promise<void>
         cachedUsage = await getKimiUsage();
         lastUsageRefreshMs = now;
       }
-      const frame = await renderHudDashboard({ ...options, kimiUsage: cachedUsage, footerRefreshMs: refreshMs });
+      const thinking = await loadLatestThinking();
+      const frame = await renderHudDashboard({ ...options, kimiUsage: cachedUsage, footerRefreshMs: refreshMs, thinking });
       if (frame !== lastFrame) {
         lastFrame = frame;
         if (shouldClear) clearScreen();

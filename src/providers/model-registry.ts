@@ -18,7 +18,7 @@ import type {
   ProviderWireApi,
 } from "./types.js";
 
-export const KNOWN_PROVIDER_IDS = ["kimi", "deepseek", "qwen", "codex", "openrouter"] as const satisfies readonly KnownProviderId[];
+export const KNOWN_PROVIDER_IDS = ["kimi", "deepseek", "qwen", "codex", "opencode", "commandcode", "openrouter", "mimo", "local-llm"] as const satisfies readonly KnownProviderId[];
 export const QWEN_DASHSCOPE_COMPAT_BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1";
 export const OPENROUTER_COMPAT_BASE_URL = "https://openrouter.ai/api/v1";
 
@@ -70,6 +70,19 @@ export interface ProviderConfigSetInput {
   kind?: ProviderKind;
   enabled?: boolean;
   authMethod?: ProviderAuthMethod;
+}
+
+export interface ProviderDefaults {
+  provider?: ProviderId;
+  model?: string;
+  authorityProvider?: ProviderId;
+}
+
+export interface ModelAliasResolution {
+  input: string;
+  provider?: ProviderId;
+  model: string;
+  source: "user-alias" | "provider-alias" | "builtin-normalizer" | "literal";
 }
 
 const DEFAULT_PROVIDER_CONFIGS: Record<KnownProviderId, Omit<ProviderRegistryEntry, "id" | "configured" | "updatedAt">> = {
@@ -128,6 +141,27 @@ const DEFAULT_PROVIDER_CONFIGS: Record<KnownProviderId, Omit<ProviderRegistryEnt
     planKind: "runtime",
     routing: "advisory",
   },
+  "local-llm": {
+    enabled: true,
+    kind: "openai-compatible",
+    baseUrl: "http://localhost:8080/v1",
+    apiKeyEnv: "LOCAL_LLM_API_KEY",
+    defaultModel: "qwen3-coder-30b-a3b",
+    aliases: {
+      default: "qwen3-coder-30b-a3b",
+      local: "qwen3-coder-30b-a3b",
+      llama: "qwen3-coder-30b-a3b",
+      qwen3: "qwen3-coder-30b-a3b",
+      "qwen3-coder": "qwen3-coder-30b-a3b",
+      "local-llm": "qwen3-coder-30b-a3b",
+    },
+    capabilities: ["read", "write", "shell", "patch", "review"],
+    wireApi: "openai-chat-completions",
+    auth: { method: "none" },
+    profileType: "runtime",
+    planKind: "runtime",
+    routing: "runtime",
+  },
   codex: {
     enabled: true,
     kind: "codex-cli",
@@ -138,6 +172,30 @@ const DEFAULT_PROVIDER_CONFIGS: Record<KnownProviderId, Omit<ProviderRegistryEnt
     auth: { method: "external-cli" },
     profileType: "compatibility",
     planKind: "chatgpt-plan",
+    routing: "external-cli",
+  },
+  opencode: {
+    enabled: true,
+    kind: "external-cli",
+    defaultModel: "opencode-cli",
+    aliases: { default: "opencode-cli", opencode: "opencode-cli", "opencode-cli": "opencode-cli" },
+    capabilities: ["read", "write", "shell", "patch", "review"],
+    wireApi: "external-cli",
+    auth: { method: "external-cli" },
+    profileType: "runtime",
+    planKind: "external-cli",
+    routing: "external-cli",
+  },
+  commandcode: {
+    enabled: true,
+    kind: "external-cli",
+    defaultModel: "commandcode-cli",
+    aliases: { default: "commandcode-cli", commandcode: "commandcode-cli", cmd: "commandcode-cli", "commandcode-cli": "commandcode-cli" },
+    capabilities: ["read", "write", "shell", "patch", "review"],
+    wireApi: "external-cli",
+    auth: { method: "external-cli" },
+    profileType: "runtime",
+    planKind: "external-cli",
     routing: "external-cli",
   },
   qwen: {
@@ -218,13 +276,32 @@ const DEFAULT_PROVIDER_CONFIGS: Record<KnownProviderId, Omit<ProviderRegistryEnt
       "X-OpenRouter-Title": "open_multi-agent_kit",
     },
   },
+  mimo: {
+    enabled: true,
+    kind: "openai-compatible",
+    baseUrl: "https://api.xiaomimimo.com/v1",
+    apiKeyEnv: "MIMO_API_KEY",
+    defaultModel: "mimo-v2.5-pro",
+    aliases: {
+      default: "mimo-v2.5-pro",
+      mimo: "mimo-v2.5-pro",
+      "mimo-v2": "mimo-v2.5-pro",
+      "mimo-v2.5-pro": "mimo-v2.5-pro",
+    },
+    capabilities: ["read", "write", "research", "review", "thinking"],
+    wireApi: "openai-chat-completions",
+    auth: { method: "api-key-env" },
+    profileType: "runtime",
+    planKind: "runtime",
+    routing: "runtime",
+  },
 };
 
 export function normalizeProviderPolicy(value: string | undefined): ProviderPolicy {
   const normalizedText = value?.trim().toLowerCase();
   if (normalizedText === "authority" || normalizedText === "primary" || normalizedText === "omk") return "authority";
   const normalized = normalizeProviderId(value);
-  return normalized === "kimi" || normalized === "deepseek" || normalized === "codex" || normalized === "qwen" || normalized === "openrouter"
+  return normalized === "kimi" || normalized === "deepseek" || normalized === "codex" || normalized === "qwen" || normalized === "openrouter" || normalized === "opencode" || normalized === "commandcode" || normalized === "mimo"
     ? normalized as ProviderPolicy
     : "auto";
 }
@@ -237,8 +314,11 @@ export function normalizeProviderId(value: string | undefined): ProviderId | "au
   if (lower === "kimi" || lower === "moonshot") return "kimi";
   if (lower === "deepseek" || lower === "deepseek-v4" || lower === "ds") return "deepseek";
   if (lower === "codex" || lower === "openai-codex") return "codex";
+  if (lower === "opencode" || lower === "open-code") return "opencode";
+  if (lower === "commandcode" || lower === "command-code" || lower === "cmd") return "commandcode";
   if (lower === "qwen" || lower === "dashscope" || lower === "qwen3" || lower === "qwen-max") return "qwen";
   if (lower === "openrouter" || lower === "openrouter-ai") return "openrouter";
+  if (lower === "mimo" || lower === "mimo-v2" || lower === "mimo-v2.5-pro") return "mimo";
   if (lower === "claude" || lower === "anthropic") return "openrouter";
   if (lower === "gpt" || lower === "openai") return "openrouter";
   if (lower === "gemini" || lower === "google") return "openrouter";
@@ -298,6 +378,95 @@ export function normalizeModelAlias(value: string): string {
   return trimmed;
 }
 
+export async function readProviderDefaults(options: DeepSeekConfigPathOptions = {}): Promise<ProviderDefaults> {
+  const config = await readOmkProvidersConfig(options);
+  const provider = normalizeProviderId(config.defaults?.provider);
+  const authorityProvider = normalizeProviderId(config.defaults?.authorityProvider);
+  return {
+    provider: provider === "auto" ? undefined : provider,
+    model: config.defaults?.model ? normalizeModelAlias(config.defaults.model) : undefined,
+    authorityProvider: authorityProvider === "auto" ? undefined : authorityProvider,
+  };
+}
+
+export async function setProviderDefaults(
+  input: ProviderDefaults,
+  options: DeepSeekConfigPathOptions = {}
+): Promise<{ defaults: ProviderDefaults; configPath: string }> {
+  const config = await readOmkProvidersConfig(options);
+  const provider = normalizeProviderId(input.provider);
+  const authorityProvider = normalizeProviderId(input.authorityProvider);
+  const defaults: ProviderDefaults = {
+    ...(config.defaults ?? {}),
+    provider: provider === "auto" ? config.defaults?.provider : provider,
+    model: input.model ? normalizeModelAlias(input.model) : config.defaults?.model,
+    authorityProvider: authorityProvider === "auto" ? config.defaults?.authorityProvider : authorityProvider,
+  };
+  const configPath = await writeOmkProvidersConfig({ ...config, defaults }, options);
+  return { defaults, configPath };
+}
+
+export async function listUserModelAliases(options: DeepSeekConfigPathOptions = {}): Promise<Record<string, string>> {
+  const config = await readOmkProvidersConfig(options);
+  return { ...(config.modelAliases ?? {}) };
+}
+
+export async function setUserModelAlias(
+  alias: string,
+  target: string,
+  options: DeepSeekConfigPathOptions = {}
+): Promise<{ aliases: Record<string, string>; key: string; value: string; configPath: string }> {
+  const key = normalizeUserModelAliasName(alias);
+  const parsed = parseProviderModelArg(target);
+  if (!parsed.model) throw new Error("Model alias target is required");
+  const value = parsed.provider ? `${parsed.provider}/${parsed.model}` : parsed.model;
+  const config = await readOmkProvidersConfig(options);
+  const aliases = { ...(config.modelAliases ?? {}), [key]: value };
+  const configPath = await writeOmkProvidersConfig({ ...config, modelAliases: aliases }, options);
+  return { aliases, key, value, configPath };
+}
+
+export async function removeUserModelAlias(
+  alias: string,
+  options: DeepSeekConfigPathOptions = {}
+): Promise<{ aliases: Record<string, string>; key: string; removed: boolean; configPath: string }> {
+  const key = normalizeUserModelAliasName(alias);
+  const config = await readOmkProvidersConfig(options);
+  const aliases = { ...(config.modelAliases ?? {}) };
+  const removed = Object.prototype.hasOwnProperty.call(aliases, key);
+  delete aliases[key];
+  const configPath = await writeOmkProvidersConfig({ ...config, modelAliases: aliases }, options);
+  return { aliases, key, removed, configPath };
+}
+
+export async function resolveUserModelAlias(
+  value: string,
+  options: DeepSeekConfigPathOptions = {}
+): Promise<ModelAliasResolution> {
+  const input = value.trim();
+  if (!input) throw new Error("Model name or alias is required");
+  const config = await readOmkProvidersConfig(options);
+  const userAlias = config.modelAliases?.[input.toLowerCase()];
+  if (userAlias) {
+    const parsed = parseProviderModelArg(userAlias);
+    if (!parsed.model) throw new Error(`Model alias '${input}' has an invalid target`);
+    return {
+      input,
+      provider: parsed.provider,
+      model: parsed.model,
+      source: "user-alias",
+    };
+  }
+  const parsed = parseProviderModelArg(input);
+  if (!parsed.model) throw new Error("Model name or alias is required");
+  return {
+    input,
+    provider: parsed.provider,
+    model: parsed.model,
+    source: parsed.provider ? "provider-alias" : parsed.model === input ? "literal" : "builtin-normalizer",
+  };
+}
+
 export async function readProviderRegistry(options: DeepSeekConfigPathOptions = {}): Promise<ProviderRegistryEntry[]> {
   const config = await readOmkProvidersConfig(options);
   const ids = new Set<string>([...KNOWN_PROVIDER_IDS, ...Object.keys(config.providers)]);
@@ -344,7 +513,7 @@ export async function setProviderConfig(
     updatedAt: new Date().toISOString(),
   };
   await writeOmkProvidersConfig({
-    version: 1,
+    ...config,
     providers: { ...config.providers, [id]: updated },
   }, options);
   return mergeProviderConfig(id, updated);
@@ -392,7 +561,7 @@ export async function setProviderEnabled(
     updatedAt: new Date().toISOString(),
   };
   await writeOmkProvidersConfig({
-    version: 1,
+    ...config,
     providers: { ...config.providers, [id]: updated },
   }, options);
   return mergeProviderConfig(id, updated);
@@ -535,6 +704,7 @@ function normalizePlanKind(value: string | undefined): ProviderPlanKind | undefi
     value === "chatgpt-plan" ||
     value === "claude-code-plan" ||
     value === "gemini-cli-plan" ||
+    value === "external-cli" ||
     value === "qwen-coding-plan" ||
     value === "openrouter-credits" ||
     value === "openrouter-byok"
@@ -545,6 +715,14 @@ function normalizePlanKind(value: string | undefined): ProviderPlanKind | undefi
 function normalizeRouting(value: string | undefined): "runtime" | "advisory" | "external-cli" | undefined {
   if (value === "runtime" || value === "advisory" || value === "external-cli") return value;
   return undefined;
+}
+
+function normalizeUserModelAliasName(value: string): string {
+  const key = value.trim().toLowerCase();
+  if (!/^[a-z][a-z0-9._-]{0,63}$/u.test(key)) {
+    throw new Error("Model alias must match /^[a-z][a-z0-9._-]{0,63}$/");
+  }
+  return key;
 }
 
 async function isCodexCliAvailable(): Promise<boolean> {

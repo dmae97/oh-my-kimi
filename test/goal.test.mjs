@@ -5,7 +5,7 @@ import { copyFile, cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/p
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 
-import { createGoalSpec, normalizeGoal, updateGoalStatus } from "../dist/goal/intake.js";
+import { analyzeUserIntent, createGoalSpec, normalizeGoal, updateGoalStatus } from "../dist/goal/intake.js";
 import { createGoalPersister } from "../dist/goal/persistence.js";
 import { compileGoalToDagNodes, attachGoalToRunState } from "../dist/goal/compiler.js";
 import {
@@ -192,6 +192,25 @@ test("IntentFrameV2 redacts secrets, extracts directives, and emits capability h
   assert.doesNotMatch(JSON.stringify(frame), /sk-proj-secretsecret/);
   assert.ok(frame.actionAtoms.some((atom) => atom.label === "inspect-read-only-scope"));
   assert.ok(frame.actionAtoms.some((atom) => atom.label === "verify-evidence"));
+});
+
+test("analyzeUserIntent honors explicit read-only directives over write keywords", () => {
+  const intent = analyzeUserIntent("READ-ONLY review src/goal/intake.ts and do not edit files");
+  const frame = buildIntentFrame("READ-ONLY review src/goal/intake.ts and do not edit files");
+
+  assert.equal(intent.isReadOnly, true);
+  assert.equal(frame.capabilityHints.readOnly, true);
+  assert.ok(frame.actionAtoms.some((atom) => atom.label === "inspect-read-only-scope"));
+});
+
+test("analyzeUserIntent treats Korean critical issue scan as parallel security review", () => {
+  const intent = analyzeUserIntent("현재 변경사항에서 크리티컬 이슈와 위험을 찾아줘");
+
+  assert.equal(intent.taskType, "review");
+  assert.equal(intent.needsSecurityReview, true);
+  assert.equal(intent.parallelizable, true);
+  assert.ok(intent.requiredRoles.includes("security"));
+  assert.ok(intent.requiredRoles.includes("reviewer"));
 });
 
 test("normalizeGoal creates a GoalSpec with inferred success criteria", () => {

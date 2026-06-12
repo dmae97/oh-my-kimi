@@ -1,5 +1,11 @@
 # OMK DAG + Agent Ensemble Runtime — 2026-05-01
 
+Current successor reference: the native runtime bridge extends this historical
+DAG/ensemble direction with context-capsule conversion and intent-aware runtime
+fallback in
+[`native-root-runtime-algorithms.md`](./native-root-runtime-algorithms.md)
+(Algorithms 3 and 5).
+
 ## OSS DAG 선택
 
 GitHub 공개 지표 기준으로 `dagrejs/dagre`가 더 많은 stars를 갖지만, 해당 프로젝트는 directed graph **layout** 라이브러리다. OMK 런타임에는 layout보다 작업 의존성 검증, topological order, runnable node 탐지가 필요하므로 같은 DagreJS 조직의 `dagrejs/graphlib` 설계를 기준으로 내부 DAG 인덱스를 구현했다.

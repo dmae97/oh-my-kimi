@@ -1,0 +1,357 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=22mm]{geometry}
+\usepackage{kotex}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{setspace}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!55!black,
+  urlcolor=blue!55!black,
+  citecolor=blue!55!black
+}
+
+\setstretch{1.12}
+\setlist[itemize]{leftmargin=*, itemsep=2pt, topsep=4pt}
+\setlist[enumerate]{leftmargin=*, itemsep=2pt, topsep=4pt}
+\titleformat{\section}{\large\bfseries}{\thesection}{0.7em}{}
+\titleformat{\subsection}{\normalsize\bfseries}{\thesubsection}{0.7em}{}
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{open-multi-agent-kit 고도화 제안}
+\rhead{\thepage}
+
+\newcommand{\OMK}{\textsc{OMK}}
+\newcommand{\code}[1]{\texttt{\detokenize{#1}}}
+\newcommand{\priority}[1]{\textbf{#1}}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+
+\title{\textbf{open-multi-agent-kit 고도화 및 개선 제안서}}
+\author{대상 저장소: \url{https://github.com/dmae97/open-multi-agent-kit}}
+\date{작성일: 2026년 6월 11일}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+이 문서는 \OMK{}를 단순한 다중 에이전트 CLI가 아니라, 코딩 에이전트 실행을 라우팅하고, 권한을 제한하고, 증거를 검증하고, 실행을 재현하는 로컬 우선 agent control plane으로 고도화하기 위한 제안서다. 현재 저장소는 \code{0.78.8} 소스 타깃, \code{v1.2} 런타임 계약 계열, \code{pre-1.0} 릴리스 채널을 기준으로 하고 있다. 따라서 핵심 전략은 신규 기능 확장보다 안정화 게이트, provider authority 경계, JSON 자동화 계약, evidence bundle 무결성, crash recovery, 관측성, release proof 체계를 우선 확정하는 것이다.
+\end{abstract}
+
+\section{진단 요약}
+\OMK{}의 방향성은 적절하다. README와 설계 문서는 \OMK{}를 provider-neutral multi-agent control plane으로 정의하고, 모델은 실행하고 \OMK{}는 라우팅, 검증, 측정, 제어를 담당한다고 명시한다. 현재 구조의 강점은 goal to DAG, provider routing, scoped MCP, evidence gate, replay, audit라는 control-plane 구성요소가 이미 분리되어 있다는 점이다.
+
+하지만 안정 제품으로 승격하기에는 아직 세 가지 리스크가 크다.
+
+\begin{itemize}
+  \item 첫째, 안정화 대상이 넓다. \code{chat}, \code{run}, \code{parallel}, \code{goal}, \code{provider}, \code{mcp}, \code{dag}, \code{replay}, \code{inspect}, \code{diff-runs}가 동시에 존재해서 회귀면이 크다.
+  \item 둘째, provider authority 경계가 핵심 실패 지점이다. advisory provider가 write, shell, merge 권한을 암묵적으로 획득하면 안전성 주장이 깨진다.
+  \item 셋째, 자동화 계약이 부분적으로만 균일하다. 일부 명령은 \code{--json}을 제공하지만 모든 CI 소비 명령이 동일한 envelope와 diagnostics를 쓰지는 않는다.
+\end{itemize}
+
+따라서 권장 우선순위는 P0 안정화 60\%, P1 관측성과 사용성 25\%, P2 확장 SDK와 벤치마크 15\%다.
+
+\section{목표 아키텍처}
+\OMK{}의 목표 상태는 아래 수식으로 요약할 수 있다.
+
+\[
+G \xrightarrow{\Phi} D=(V,E),\qquad
+v_i \xrightarrow{\rho} r_j,\qquad
+r_j(v_i) \xrightarrow{\epsilon} B_i,\qquad
+\nu(B_i) \in \{\textsf{pass},\textsf{warn},\textsf{fail}\}.
+\]
+
+여기서 $G$는 사용자 목표, $D$는 실행 DAG, $v_i$는 노드, $\rho$는 provider routing policy, $r_j$는 runtime adapter, $B_i$는 evidence bundle, $\nu$는 verifier다. 이 모델에서 성공 조건은 에이전트의 자연어 완료 선언이 아니라 검증 가능한 evidence bundle이다.
+
+\subsection{불변식}
+\begin{enumerate}
+  \item 완료 선언은 반드시 command, diff, artifact, metric, review 중 하나 이상의 evidence를 참조해야 한다.
+  \item write, shell, merge 권한은 turn risk, approval policy, sandbox mode, provider capability가 모두 통과할 때만 부여한다.
+  \item advisory provider는 conformance test가 없는 한 workspace write, shell, MCP authority, merge authority를 갖지 않는다.
+  \item replay는 감사 가능한 수준의 결정 재현성을 보장해야 한다. 완전한 LLM 결정론이 아니라 입력, 라우팅, 권한, tool call, evidence, exit 상태의 재현성을 의미한다.
+  \item private prompt, secret-like config, local artifact는 기본적으로 redaction 대상이다.
+\end{enumerate}
+
+\section{P0, 릴리스 차단 개선}
+\subsection{AgentRuntime 계약과 conformance suite 고정}
+현재 roadmap은 \code{AgentRuntime.execute}를 모든 worker execution의 단일 entrypoint로 잡고 있다. 이 방향을 안정화하려면 인터페이스 자체보다 conformance test를 먼저 고정해야 한다.
+
+\begin{verbatim}
+export interface AgentRuntime {
+  id: string;
+  capabilities: RuntimeCapabilities;
+  health(signal?: AbortSignal): Promise<RuntimeHealth>;
+  execute(task: AgentTask, context: RuntimeContext): Promise<TaskResult>;
+  recover?(handle: RecoveryHandle): Promise<RecoveryResult>;
+}
+\end{verbatim}
+
+수용 기준은 다음과 같다.
+
+\begin{itemize}
+  \item 모든 built-in provider가 동일한 \code{AgentTask} 입력과 \code{TaskResult} 출력을 만족한다.
+  \item provider별로 read, review, write, patch, shell, merge, mcp capability matrix가 테스트된다.
+  \item 실패 유형은 \code{timeout}, \code{rate_limit}, \code{quota}, \code{auth}, \code{model_unavailable}, \code{sandbox_denied}, \code{tool_denied}, \code{unknown}으로 정규화된다.
+  \item fallback chain은 선택된 provider뿐 아니라 거부된 provider와 거부 사유를 기록한다.
+\end{itemize}
+
+\subsection{Native turn safety gate 완성}
+가장 중요한 P0는 native chat turn의 risk inference와 capability assignment다. read turn은 read-only로 유지하고, write/shell/merge는 approval과 sandbox 전파를 강제해야 한다.
+
+권장 구현 단위는 다음과 같다.
+
+\begin{itemize}
+  \item \path{src/runtime/risk/infer-native-turn-risk.ts}, conservative classifier와 golden test 추가.
+  \item \path{src/runtime/safety/approval-policy.ts}, \code{ask|auto|never} 전파 검증.
+  \item \path{src/runtime/safety/sandbox-policy.ts}, provider adapter 호출 직전 최종 검증.
+  \item \path{test/native-turn-safety.test.mjs}, read, write, shell, merge, destructive prompt fixture 고정.
+\end{itemize}
+
+수용 기준은 \code{DeepSeek}와 같은 advisory/read provider가 write/shell 요청을 받았을 때 silent downgrade가 아니라 명시적 block 또는 authority provider fallback을 남기는 것이다.
+
+\subsection{Command JSON envelope 표준화}
+자동화와 CI 소비 명령은 동일한 envelope를 써야 한다. 권장 스키마는 다음과 같다.
+
+\begin{verbatim}
+{
+  "schemaVersion": "omk.command.v1",
+  "command": "provider doctor",
+  "status": "pass|warn|fail",
+  "runId": "...",
+  "commit": "...",
+  "startedAt": "2026-06-11T00:00:00.000Z",
+  "finishedAt": "2026-06-11T00:00:03.000Z",
+  "data": {},
+  "diagnostics": [
+    {
+      "severity": "info|warn|error",
+      "code": "PROVIDER_AUTH_MISSING",
+      "message": "...",
+      "redacted": true,
+      "remediation": "..."
+    }
+  ],
+  "evidenceRefs": [],
+  "exitCode": 0
+}
+\end{verbatim}
+
+우선 적용 명령은 \code{doctor}, \code{provider}, \code{mcp}, \code{dag}, \code{summary}, \code{verify}, \code{replay}, \code{inspect}, \code{diff-runs}, \code{goal}이다.
+
+\subsection{RecoveryArtifactStore 도입}
+열려 있는 PR은 Kimi provider failure 이후 isolated HOME과 session artifact를 보존하려는 방향이다. 이것을 특정 provider 전용 수정으로 끝내면 같은 문제가 Codex CLI, OpenCode, CommandCode, local runtime에서 반복된다. provider-neutral \code{RecoveryArtifactStore}를 두는 편이 낫다.
+
+권장 경로는 다음과 같다.
+
+\begin{itemize}
+  \item \path{.omk/runs/<runId>/recovery/<provider>/<nodeId>/manifest.json}
+  \item \path{.omk/runs/<runId>/recovery/<provider>/<nodeId>/stdout.log}
+  \item \path{.omk/runs/<runId>/recovery/<provider>/<nodeId>/stderr.redacted.log}
+  \item \path{.omk/runs/<runId>/recovery/<provider>/<nodeId>/session-handle.json}
+\end{itemize}
+
+수용 기준은 rate limit, quota, timeout, provider crash 시 복구 가능한 artifact가 남고, 성공 종료나 사용자가 명시한 cleanup에서는 정책대로 제거되는 것이다.
+
+\subsection{EvidenceBundleValidator 강화}
+현재 \OMK{}의 차별점은 evidence gate다. 이 장점은 검증기가 fail-open이면 곧바로 약점이 된다. evidence bundle은 최소한 아래 항목을 포함해야 한다.
+
+\begin{itemize}
+  \item \code{runId}, \code{nodeId}, \code{commit}, \code{provider}, \code{model}, \code{runtimeVersion}
+  \item 실행 command와 exit code
+  \item 변경 파일 목록과 diff hash
+  \item artifact path와 sha256
+  \item verifier verdict와 verifier version
+  \item redaction summary
+\end{itemize}
+
+검증 실패는 \code{missing_artifact}, \code{hash_mismatch}, \code{unlinked_decision}, \code{stale_commit}, \code{redaction_violation}, \code{unsupported_schema}로 분류한다.
+
+\section{P1, 운영성과 사용성 개선}
+\subsection{Structured event log와 관측성}
+런타임과 라우터는 사람이 읽는 HUD만으로는 부족하다. \path{.omk/runs/<runId>/events.ndjson}를 표준화해서 모든 단계가 machine-readable event로 남아야 한다.
+
+핵심 이벤트는 \code{run.started}, \code{dag.node.started}, \code{provider.selected}, \code{provider.fallback}, \code{tool.allowed}, \code{tool.denied}, \code{evidence.attached}, \code{verifier.verdict}, \code{run.completed}이다.
+
+\subsection{Provider health probe 고도화}
+provider health는 binary existence만으로 충분하지 않다. 최소 필드는 아래처럼 분리해야 한다.
+
+\begin{itemize}
+  \item \code{runtimeOk}: CLI 또는 API client 사용 가능.
+  \item \code{authOk}: 실제 호출 가능한 인증 상태.
+  \item \code{modelOk}: 선택 모델 지원 여부.
+  \item \code{quotaOk}: known good, known bad, unknown 중 하나.
+  \item \code{latencyMs}: cheap probe의 응답 시간.
+  \item \code{lastFailure}: 최근 실패 유형과 시각.
+\end{itemize}
+
+라우터 점수는 다음 형태로 단순화할 수 있다.
+
+\[
+S(p,t)=0.35Q_p+0.25E_p+0.20H_p+0.10C_{p,t}+0.10L_p-P_{p,t}.
+\]
+
+$Q_p$는 품질 prior, $E_p$는 evidence pass rate, $H_p$는 health score, $C_{p,t}$는 task capability match, $L_p$는 latency normalization, $P_{p,t}$는 최근 실패 penalty다.
+
+\subsection{MCP policy manifest}
+MCP, skills, hooks가 많아질수록 ``무엇이 왜 주입되었는가''가 핵심 감사 포인트가 된다. \path{.omk/policy/mcp-policy.json} 또는 \path{omk.config.toml} 내부에 policy manifest를 두고 다음을 표준화한다.
+
+\begin{itemize}
+  \item allowed servers, denied servers, per-command allowlist.
+  \item read/write/shell 별 tool permission.
+  \item timeout, max calls, max output bytes.
+  \item secret redaction strategy.
+  \item required evidence level.
+\end{itemize}
+
+\subsection{DAG scheduler V2}
+DAG scheduler는 병렬성보다 실패 수습이 더 중요하다. V2는 다음 동작을 명시해야 한다.
+
+\begin{itemize}
+  \item node-level timeout, retry budget, cancellation propagation.
+  \item fail-fast와 continue-on-warn 정책 분리.
+  \item worker lane별 resource budget.
+  \item verifier node를 일반 DAG node와 동일하게 취급.
+  \item merge node는 authority provider와 evidence gate를 모두 통과해야 실행.
+\end{itemize}
+
+\section{P2, 생태계 확장 개선}
+\subsection{Provider Adapter SDK}
+외부 provider 추가를 쉽게 하려면 runtime adapter SDK와 fixture 기반 conformance test가 필요하다. 최소 산출물은 다음과 같다.
+
+\begin{itemize}
+  \item \path{packages/adapter-sdk} 또는 \path{src/providers/sdk}
+  \item \path{test/fixtures/agent-task/*.json}
+  \item \path{test/provider-conformance/*.test.mjs}
+  \item sample adapter, fake provider, failure simulator
+\end{itemize}
+
+\subsection{Benchmark harness}
+현재 \code{benchmark:shadow}, \code{benchmark:live}, \code{benchmark:ci} 스크립트 방향은 좋다. 이를 기능 회귀와 라우팅 품질 회귀에 연결해야 한다.
+
+권장 지표는 다음과 같다.
+
+\begin{itemize}
+  \item task success rate.
+  \item evidence pass rate.
+  \item fallback rate.
+  \item mean time to first useful artifact.
+  \item unnecessary shell/write escalation rate.
+  \item replay audit completeness.
+\end{itemize}
+
+\section{우선순위 표}
+\begin{longtable}{p{16mm}p{31mm}p{58mm}p{54mm}}
+\toprule
+우선순위 & 영역 & 개선안 & 수용 기준 \\
+\midrule
+P0 & Runtime contract & \code{AgentRuntime} 입력, 출력, failure taxonomy 고정 & 모든 built-in provider가 conformance suite 통과 \\
+P0 & Safety & turn risk, approval, sandbox propagation & read prompt는 write/shell 권한을 받지 않음 \\
+P0 & Provider authority & advisory provider의 write/shell/merge 차단 & DeepSeek, API runtime의 권한 초과 테스트 통과 \\
+P0 & JSON contract & \code{omk.command.v1} envelope 도입 & CI 소비 명령이 동일한 status, diagnostics, evidenceRefs 출력 \\
+P0 & Evidence & bundle hash와 artifact linkage 검증 & hash mismatch와 missing artifact가 fail 처리 \\
+P0 & Recovery & provider-neutral recovery artifact store & rate limit, quota, timeout 이후 session handle 보존 \\
+P1 & Observability & \code{events.ndjson} 표준화 & run, node, provider, tool, verifier event가 audit 가능 \\
+P1 & Diagnostics & MCP와 provider doctor failure category 확장 & parse, permission, timeout, auth, quota가 분리 보고 \\
+P1 & DAG & scheduler V2와 cancellation propagation & 실패 노드가 dependent node에 일관되게 전파 \\
+P2 & SDK & adapter SDK와 fake provider & 외부 adapter가 fixture만으로 검증 가능 \\
+P2 & Benchmark & shadow/live benchmark를 release gate에 연결 & routing 품질과 evidence pass rate 추세 기록 \\
+\bottomrule
+\end{longtable}
+
+\section{실행 순서}
+\subsection{1단계, P0 계약 고정}
+\begin{enumerate}
+  \item \path{schemas/omk-command-envelope.v1.json} 추가.
+  \item \path{src/runtime/contracts/agent-runtime.ts} 정리.
+  \item \path{src/providers/conformance} 테스트 추가.
+  \item \path{src/runtime/safety}에 risk, approval, sandbox finalizer 추가.
+  \item \path{src/evidence/bundle-validator.ts} 추가.
+\end{enumerate}
+
+\subsection{2단계, provider와 recovery 안정화}
+\begin{enumerate}
+  \item Kimi failure recovery PR을 provider-neutral store로 일반화.
+  \item Codex CLI, OpenCode, CommandCode, local API runtime에도 동일한 recovery manifest 적용.
+  \item provider health probe를 auth, model, quota, latency로 분리.
+  \item fallback metadata를 summary, inspect, replay에서 동일하게 노출.
+\end{enumerate}
+
+\subsection{3단계, 관측성과 문서 정리}
+\begin{enumerate}
+  \item \path{events.ndjson}와 \path{decision-trace.json}를 연결.
+  \item maturity matrix를 README, MATURITY, docs site, CLI \code{doctor} 출력에서 동일한 문장으로 맞춘다.
+  \item open issue인 chat session end, custom provider false warning, public site maturity wording을 각각 regression test와 연결한다.
+\end{enumerate}
+
+\section{검증 명령}
+릴리스 전 최소 검증 명령은 다음과 같다.
+
+\begin{verbatim}
+npm run check
+npm run lint
+npm run test
+npm run contract:check
+npm run regression:matrix
+npm run proof:check
+npm run smoke:execution
+npm run smoke:pack
+npm run audit:package
+npm run release:check
+node dist/cli.js provider list --json
+node dist/cli.js provider doctor kimi --json --soft
+node dist/cli.js mcp doctor --json
+\end{verbatim}
+
+추가로 Windows CI를 반드시 blocking gate로 둔다. 기존 hardening 문서에서 Windows job 실패가 publish/tag 차단 조건으로 언급된 적이 있기 때문에, Windows를 비필수로 내리면 release proof의 신뢰도가 낮아진다.
+
+\section{실패 모드와 대응}
+\begin{longtable}{p{42mm}p{55mm}p{62mm}}
+\toprule
+실패 모드 & 영향 & 대응 \\
+\midrule
+Advisory provider가 write 권한 획득 & 안전성 주장 붕괴 & capability finalizer와 conformance test로 차단 \\
+JSON envelope 불일치 & CI와 외부 에이전트 연동 실패 & \code{omk.command.v1} schema와 snapshot test 적용 \\
+Evidence bundle 누락 & false completion 증가 & verifier fail-closed, artifact hash 강제 \\
+Provider health 오판 & fallback 품질 저하 & auth, model, quota, latency probe 분리 \\
+Recovery artifact 삭제 & rate limit 이후 조사와 복구 불가 & failure class별 retention policy 적용 \\
+문서의 안정성 과장 & 사용자 신뢰 손상 & release channel, maturity, provider limit를 모든 문서에 동일하게 표시 \\
+\bottomrule
+\end{longtable}
+
+\section{6주 로드맵}
+\begin{longtable}{p{18mm}p{48mm}p{82mm}}
+\toprule
+주차 & 목표 & 산출물 \\
+\midrule
+1주차 & 계약과 스키마 고정 & \code{omk.command.v1}, \code{AgentRuntime}, failure taxonomy \\
+2주차 & safety gate & turn risk golden tests, approval/sandbox propagation tests \\
+3주차 & provider health와 fallback & structured probe, fallback metadata, provider doctor 개선 \\
+4주차 & evidence와 recovery & bundle validator, recovery artifact store, rate-limit fixture \\
+5주차 & observability와 replay & \code{events.ndjson}, replay audit completeness report \\
+6주차 & release proof & OS matrix CI, smoke-pack, package audit, proof index, docs alignment \\
+\bottomrule
+\end{longtable}
+
+\section{결론}
+\OMK{}는 이미 기능 방향이 넓고 강하다. 다음 고도화의 승부처는 기능 수가 아니라 계약의 엄밀성이다. stable claim을 하려면 provider-neutral이라는 문장을 기능 설명이 아니라 검증 가능한 시스템 속성으로 만들어야 한다. 구체적으로는 \code{AgentRuntime} conformance, native turn safety, JSON envelope, provider health probe, evidence bundle integrity, recovery artifact store가 먼저 닫혀야 한다. 이 여섯 가지가 고정되면 \OMK{}는 단순 CLI가 아니라 감사 가능한 multi-agent control plane으로 포지셔닝할 수 있다.
+
+\begin{thebibliography}{9}
+\bibitem{repo} GitHub repository, \url{https://github.com/dmae97/open-multi-agent-kit}
+\bibitem{roadmap} Roadmap, \url{https://github.com/dmae97/open-multi-agent-kit/blob/main/ROADMAP.md}
+\bibitem{maturity} Maturity matrix, \url{https://github.com/dmae97/open-multi-agent-kit/blob/main/MATURITY.md}
+\bibitem{provider} Provider maturity, \url{https://github.com/dmae97/open-multi-agent-kit/blob/main/docs/provider-maturity.md}
+\bibitem{hardening} Native root runtime hardening, \url{https://github.com/dmae97/open-multi-agent-kit/blob/main/docs/native-root-runtime-hardening.md}
+\bibitem{algorithms} Native root runtime algorithms, \url{https://github.com/dmae97/open-multi-agent-kit/blob/main/docs/native-root-runtime-algorithms.md}
+\bibitem{package} package.json, \url{https://github.com/dmae97/open-multi-agent-kit/blob/main/package.json}
+\end{thebibliography}
+
+\end{document}

@@ -7,7 +7,6 @@ import type { TodoItem } from "../../util/todo-sync.js";
 import { readFile, readdir } from "fs/promises";
 import YAML from "yaml";
 import { t } from "../../util/i18n.js";
-import { isCockpitChild } from "../../util/chat-cockpit.js";
 
 export function mergeTodos(existing: TodoItem[], incoming: TodoItem[]): TodoItem[] {
   const map = new Map<string, TodoItem>();
@@ -51,13 +50,23 @@ export function formatResourceCount(count: number, scope: string): string {
 }
 
 export type ChatLayout = "auto" | "tmux" | "inline" | "plain";
-export type ChatBrand = "omk" | "minimal" | "plain" | "kimicat";
+export type ChatBrand = "omk" | "minimal" | "plain" | "kimicat" | "green-rain" | "neon-grid";
+export type ChatUi = "legacy" | "plain-modern" | "rich" | "system24" | "green-rain" | "neon-grid";
 
 export function resolveLayout(requested: ChatLayout | undefined): ChatLayout {
   if (requested && requested !== "auto") return requested;
-  // Already inside a tmux cockpit pane — never launch tmux again
-  if (isCockpitChild()) return "inline";
-  return "auto";
+  return "inline";
+}
+
+export function resolveChatUi(requested: string | undefined, env: NodeJS.ProcessEnv = process.env): ChatUi {
+  const raw = requested ?? env.OMK_UI ?? env.OMK_CHAT_UI ?? "system24";
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === "plain-modern" || normalized === "modern" || normalized === "agent-console") return "plain-modern";
+  if (normalized === "rich") return "rich";
+  if (normalized === "system24" || normalized === "s24") return "system24";
+  if (normalized === "green-rain" || normalized === "green" || normalized === "matrix" || normalized === "rain") return "green-rain";
+  if (normalized === "neon-grid" || normalized === "neon" || normalized === "grid" || normalized === "control" || normalized === "omk-control") return "neon-grid";
+  return "legacy";
 }
 
 export function resolveChatWorkerCount(requested: string | undefined, fallback: number): string {
@@ -75,12 +84,14 @@ export function renderChatIntro(
   const titleKey: Record<ChatBrand, string> = {
     omk: "chat.intro.omk",
     kimicat: "chat.intro.omk",
+    "green-rain": "chat.intro.greenRain",
+    "neon-grid": "chat.intro.neonGrid",
     minimal: "chat.intro.minimal",
     plain: "chat.intro.plain",
   };
   const title = t(titleKey[brand] ?? titleKey.omk);
   const lines: string[] = [];
-  if (brand !== "plain") {
+  if (brand === "green-rain") {
     const rainWidth = Math.min(60, process.stdout.columns ?? 80);
     const rain = renderMatrixRain(meta.runId ?? "omk", rainWidth, 4);
     for (const rainLine of rain.split("\n")) {
@@ -90,6 +101,11 @@ export function renderChatIntro(
     for (const artLine of OMK_MATRIX_ASCII_ART.split("\n")) {
       lines.push(style.phosphor(artLine));
     }
+    lines.push("");
+  } else if (brand !== "plain") {
+    lines.push(style.phosphorBold("◇ OMK//CONTROL"));
+    lines.push(style.gray("  NEON GRID ONLINE"));
+    lines.push(style.gray("  Route agents. Verify evidence. Control the loop."));
     lines.push("");
   }
   lines.push(style.phosphorBold(`▸ ${title}`));
@@ -174,7 +190,7 @@ export async function getActiveSkillNames(skillsScope: "all" | "project" | "none
 
 export async function getActiveHookNames(root: string): Promise<string[]> {
   try {
-    const { discoverRoutingInventory } = await import("../../orchestration/routing.js");
+    const { discoverRoutingInventory } = await import("../../orchestration/routing/inventory.js");
     return [...discoverRoutingInventory(root).hooks.keys()];
   } catch {
     return [];

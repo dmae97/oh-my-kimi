@@ -6,8 +6,16 @@ export interface RuntimeRegistryEntry {
   enabled: boolean;
 }
 
+export type RuntimeRegistryListener = (runtimes: AgentRuntime[]) => void;
+
 export function createRuntimeRegistry() {
   const adapters = new Map<string, RuntimeRegistryEntry>();
+  const listeners = new Set<RuntimeRegistryListener>();
+
+  function notify(): void {
+    const runtimes = list();
+    for (const listener of listeners) listener(runtimes);
+  }
 
   function register(runtime: AgentRuntime): void {
     adapters.set(runtime.id, {
@@ -15,10 +23,13 @@ export function createRuntimeRegistry() {
       registeredAt: new Date().toISOString(),
       enabled: true,
     });
+    notify();
   }
 
   function unregister(runtimeId: string): boolean {
-    return adapters.delete(runtimeId);
+    const removed = adapters.delete(runtimeId);
+    if (removed) notify();
+    return removed;
   }
 
   function get(runtimeId: string): AgentRuntime | undefined {
@@ -34,12 +45,23 @@ export function createRuntimeRegistry() {
 
   function disable(runtimeId: string): void {
     const entry = adapters.get(runtimeId);
-    if (entry) entry.enabled = false;
+    if (entry) {
+      entry.enabled = false;
+      notify();
+    }
   }
 
   function enable(runtimeId: string): void {
     const entry = adapters.get(runtimeId);
-    if (entry) entry.enabled = true;
+    if (entry) {
+      entry.enabled = true;
+      notify();
+    }
+  }
+
+  function onChange(listener: RuntimeRegistryListener): () => void {
+    listeners.add(listener);
+    return () => listeners.delete(listener);
   }
 
   async function healthCheck(): Promise<RuntimeHealth[]> {
@@ -87,6 +109,7 @@ export function createRuntimeRegistry() {
     list,
     disable,
     enable,
+    onChange,
     healthCheck,
     findCompatible,
   };

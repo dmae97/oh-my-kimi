@@ -10,6 +10,7 @@ const OMK_ROOT = process.cwd();
 const MCP_MODULE_URL = pathToFileURL(join(OMK_ROOT, "dist", "commands", "mcp.js")).href;
 const OMK_PROJECT_SERVER = join(OMK_ROOT, "dist", "mcp", "omk-project-server.js");
 const OMK_CLI = join(OMK_ROOT, "dist", "cli.js");
+const MCP_SCRIPT_TIMEOUT_MS = process.platform === "win32" ? 240000 : 60000;
 
 function runMcpScript(projectRoot, homeRoot, scriptBody, extraEnv = {}) {
   const evalScript = `
@@ -63,7 +64,7 @@ function runMcpScript(projectRoot, homeRoot, scriptBody, extraEnv = {}) {
     },
     encoding: "utf-8",
     maxBuffer: 10 * 1024 * 1024,
-    timeout: 60000,
+    timeout: MCP_SCRIPT_TIMEOUT_MS,
   });
 }
 
@@ -297,13 +298,51 @@ test("runtime MCP cleanup does not delete active peer process configs", async ()
   }
 });
 
+test("runtime MCP allowlist treats empty list as no servers, not all servers", async () => {
+  const projectRoot = await mkdtemp(join(tmpdir(), "omk-runtime-mcp-allowlist-"));
+  const homeRoot = await mkdtemp(join(tmpdir(), "omk-runtime-mcp-home-"));
+
+  try {
+    await writeEmptyConfigs(projectRoot, homeRoot, {
+      mcpServers: {
+        alpha: {
+          command: process.execPath,
+          args: ["--version"],
+        },
+        beta: {
+          command: process.execPath,
+          args: ["--version"],
+        },
+      },
+    });
+
+    const result = runMcpScript(projectRoot, homeRoot, `
+      const configPath = join(process.env.OMK_PROJECT_ROOT, ".kimi", "mcp.json");
+      const emptyRuntimePath = await writeRuntimeMcpConfig([configPath], []);
+      const alphaRuntimePath = await writeRuntimeMcpConfig([configPath], ["alpha"]);
+      const alphaNames = alphaRuntimePath
+        ? Object.keys(JSON.parse(await readFile(alphaRuntimePath, "utf-8")).mcpServers)
+        : [];
+      console.log(JSON.stringify({ emptyRuntimePath, alphaNames }));
+    `);
+
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const parsed = JSON.parse(result.stdout.trim());
+    assert.equal(parsed.emptyRuntimePath, null);
+    assert.deepEqual(parsed.alphaNames, ["alpha"]);
+  } finally {
+    await removeTree(projectRoot);
+    await removeTree(homeRoot);
+  }
+});
+
 test("runtime MCP preflight keeps all-scope precedence and keeps timed-out npm-family servers as prewarm-needed", async () => {
   const projectRoot = await mkdtemp(join(tmpdir(), "omk-runtime-mcp-preflight-"));
   const homeRoot = await mkdtemp(join(tmpdir(), "omk-runtime-mcp-home-"));
   const binDir = await mkdtemp(join(tmpdir(), "omk-runtime-mcp-bin-"));
 
   try {
-    await writeFakeNpm(binDir, "process.stderr.write('API_TOKEN=SHOULD_NOT_LEAK\\n'); setTimeout(() => {}, 1000);");
+    await writeFakeNpm(binDir, "process.stderr.write('API_TOKEN=SHOULD_NOT_LEAK\\n'); setTimeout(() => process.exit(0), 250);");
     await mkdir(join(projectRoot, ".kimi"), { recursive: true });
     await mkdir(join(homeRoot, ".kimi"), { recursive: true });
     await writeFile(join(homeRoot, ".kimi", "mcp.json"), JSON.stringify({

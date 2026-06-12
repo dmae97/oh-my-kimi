@@ -142,6 +142,18 @@ function getTableRowKey(w: RunViewModelWorker): string {
   return `${w.id}#${w.state}#${w.currentNode ?? ""}`;
 }
 
+function formatWorkerAssignment(w: RunViewModelWorker, maxItems = 2): string | null {
+  const assignment = w.assignment;
+  if (!assignment) return null;
+  const parts = [
+    assignment.skills.length > 0 ? `skills:${assignment.skills.slice(0, maxItems).join(",")}` : "",
+    assignment.hooks.length > 0 ? `hooks:${assignment.hooks.slice(0, maxItems).join(",")}` : "",
+    assignment.mcpServers.length > 0 ? `mcp:${assignment.mcpServers.slice(0, maxItems).join(",")}` : "",
+    assignment.tools && assignment.tools.length > 0 ? `tools:${assignment.tools.slice(0, maxItems).join(",")}` : "",
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(" ") : null;
+}
+
 function renderParallelTable(vm: RunViewModel): string {
   const runId = vm.runId ?? "unknown";
   let printed = tablePrintedRows.get(runId);
@@ -278,6 +290,10 @@ export function renderParallelCockpit(
 
       const row = `  ${padEndAnsi(roleCol, roleW)} ${padEndAnsi(nodeCol, nodeW)} ${padEndAnsi(stateCol, stateW)} ${padEndAnsi(elapsedCol, elapsedW)} ${padEndAnsi(retryCol, retryW)} ${evidenceCol}`;
       lines.push(row);
+      const assignment = formatWorkerAssignment(w);
+      if (assignment) {
+        lines.push(`    ${style.gray("↳")} ${style.gray(truncate(assignment, termWidth - 6))}`);
+      }
       if (w.state === "running" && w.phase) {
         lines.push(`    ${style.gray("→")} ${truncate(w.phase, nodeW)}`);
       }

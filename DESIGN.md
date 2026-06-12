@@ -12,6 +12,14 @@ Design surfaces must show that Kimi is the primary coding authority while OMK ex
 
 Open Design bridge outputs must treat this `DESIGN.md` as the source of truth for tokens, product constraints, and brand direction. Catalog styles from Open Design or `awesome-design-md` are reference inputs only; adapt them to the local OMK system instead of replacing tokens or cloning external brands.
 
+## Runtime Algorithm Reference
+
+Runtime architecture visuals should summarize, not duplicate, the canonical
+native root loop and routing algorithms in
+[`docs/native-root-runtime-algorithms.md`](./docs/native-root-runtime-algorithms.md).
+Show provider-neutral orchestration as a hardening milestone gated by evidence,
+approval/sandbox policy, and adapter capability boundaries.
+
 ## Reference Design System
 
 기준 디자인: **냥심판 (Nyang Judge)** — 따뜻한 크림 베이지 배경, 초콜릿 브라운 타이포그래피, 귀여운 고양이 판사 일러스트, 노랑 CTA, 오렌지 강조, 발바닥 별점이 있는 "살까 말까?" 구매 재판 앱의 디자인 시스템을 OMK에 통합.

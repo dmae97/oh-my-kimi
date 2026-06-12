@@ -2,6 +2,43 @@ import type { Command } from "commander";
 import { style, omkCliHero } from "../util/theme.js";
 import { t, initI18n } from "../util/i18n.js";
 import { buildCustomHelp } from "../util/help-text.js";
+import type { OmkMode } from "../util/mode-preset.js";
+import type { McpDoctorReport } from "../commands/mcp.js";
+import {
+  mapDoctorToAutoConnectReport,
+  renderMcpAutoConnectLines,
+  runMcpAutoConnect,
+} from "../mcp/autoconnect.js";
+
+function isDisabledEnvValue(value: string | undefined): boolean {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "0" || normalized === "false" || normalized === "no" || normalized === "off";
+}
+
+export function formatRootMcpStatusLines(report: McpDoctorReport): string[] {
+  return renderMcpAutoConnectLines(mapDoctorToAutoConnectReport(report, { preflight: "fast" }));
+}
+
+async function buildRootMcpStatusLines(env: NodeJS.ProcessEnv = process.env): Promise<string[]> {
+  if (isDisabledEnvValue(env.OMK_ROOT_MCP_SUMMARY)) return [];
+
+  try {
+    const report = await runMcpAutoConnect({
+      env: {
+        ...env,
+        OMK_MCP_PREFLIGHT: "off",
+      },
+      preflight: "fast",
+    });
+    return renderMcpAutoConnectLines(report);
+  } catch {
+    return ["MCP Tool Plane: summary unavailable (run `omk mcp connect`)"];
+  }
+}
+
+export async function runRootOmkControlPlane(program: Command): Promise<void> {
+  await runRootHudFlow(program);
+}
 
 export async function runRootHudFlow(program: Command): Promise<void> {
   const globalOpts = program.opts();
@@ -36,7 +73,14 @@ export async function runRootHudFlow(program: Command): Promise<void> {
     }
   })();
 
+  const mcpStatusPromise = buildRootMcpStatusLines();
+
   console.log(await hudPromise);
+
+  const mcpStatusLines = await mcpStatusPromise;
+  if (mcpStatusLines.length > 0) {
+    console.log(style.gray(mcpStatusLines.join("\n")));
+  }
 
   const { banner: updateBanner, status } = await updatePromise;
   if (updateBanner) console.log(updateBanner);
@@ -44,13 +88,15 @@ export async function runRootHudFlow(program: Command): Promise<void> {
   if (!hasTty) {
     const c = (k: string) => t(k).replace(/^.*? — /, "");
     console.log(style.gray(`
-    💡 omk parallel "<prompt>" — Run the parallel subagent orchestrator`));
-    console.log(style.gray(`  💡 omk run <flow> "<goal>" — Run a named workflow`));
-    console.log(style.gray(`  💡 omk chat --mode agent --execution ask — Interactive agent orchestrator`));
-    console.log(style.gray(`  💡 omk chat --mode chat — ${c("cli.suggestionChat")}`));
-    console.log(style.gray(`  💡 omk hud   — ${c("cli.suggestionHud")}`));
-    console.log(style.gray(`  💡 omk menu  — Show interactive menu`));
-    console.log(style.gray(`  💡 omk --help — ${c("cli.suggestionHelp")}`));
+    ⟡ omk parallel "<prompt>" — Run the parallel subagent orchestrator`));
+    console.log(style.gray(`  ⟡ omk run <flow> "<goal>" — Run a named workflow`));
+    console.log(style.gray(`  ⟡ omk mcp connect --all — Preflight the MCP tool plane`));
+    console.log(style.gray(`  ⟡ omk mcp connect --fix — Repair project-local MCP config`));
+    console.log(style.gray(`  ⟡ omk chat --layout plain --provider auto — Interactive agent (simple terminal)`));
+    console.log(style.gray(`  ⟡ omk chat --layout tmux  — Interactive agent (split-pane cockpit)`));
+    console.log(style.gray(`  ⟡ omk hud   — ${c("cli.suggestionHud")}`));
+    console.log(style.gray(`  ⟡ omk menu  — Show interactive menu`));
+    console.log(style.gray(`  ⟡ omk --help — ${c("cli.suggestionHelp")}`));
     return;
   }
 
@@ -62,8 +108,9 @@ export async function runRootHudFlow(program: Command): Promise<void> {
   }
 
   // ── Mode selector: Tab to cycle, Enter to confirm ──
-  const { promptModeCycle } = await import("../util/mode-selector.js");
-  const selectedMode = await promptModeCycle();
+  const selectedMode: OmkMode = isDisabledEnvValue(process.env.OMK_ROOT_MODE_SELECTOR)
+    ? "agent"
+    : await (await import("../util/mode-selector.js")).promptModeCycle();
 
   const { getModePreset } = await import("../util/mode-preset.js");
   const preset = getModePreset(selectedMode);
@@ -160,7 +207,7 @@ export function configureRootProgram(program: Command, OMK_VERSION: string, OMK_
         console.log(customHelp);
         process.exit(1);
       }
-      await runRootHudFlow(program);
+      await runRootOmkControlPlane(program);
     });
 
   program.hook("preAction", async (_thisCommand, _actionCommand) => {

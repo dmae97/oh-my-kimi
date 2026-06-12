@@ -44,6 +44,12 @@ export interface GenericProviderConfig {
 
 export interface OmkProvidersConfig {
   version: 1;
+  defaults?: {
+    provider?: string;
+    model?: string;
+    authorityProvider?: string;
+  };
+  modelAliases?: Record<string, string>;
   providers: Record<string, GenericProviderConfig | undefined> & {
     deepseek?: DeepSeekProviderConfig;
   };
@@ -102,6 +108,8 @@ export async function readOmkProvidersConfig(
     const parsed = JSON.parse(raw) as Partial<OmkProvidersConfig>;
     return {
       version: 1,
+      defaults: normalizeProviderDefaults(parsed.defaults),
+      modelAliases: normalizeStringMap(parsed.modelAliases),
       providers: normalizeProvidersConfig(parsed.providers),
     };
   } catch {
@@ -145,7 +153,7 @@ export async function setDeepSeekEnabled(
         updatedAt,
       };
 
-  await writeOmkProvidersConfig({ version: 1, providers: { ...config.providers, deepseek: next } }, options);
+  await writeOmkProvidersConfig({ ...config, providers: { ...config.providers, deepseek: next } }, options);
   return next;
 }
 
@@ -179,7 +187,7 @@ export async function setDeepSeekApiKey(
     disabledBy: undefined,
     updatedAt: new Date().toISOString(),
   };
-  await writeOmkProvidersConfig({ version: 1, providers: { ...config.providers, deepseek } }, options);
+  await writeOmkProvidersConfig({ ...config, providers: { ...config.providers, deepseek } }, options);
 
   return { secretsPath, apiKeyEnv };
 }
@@ -241,7 +249,7 @@ export async function setDeepSeekProviderOptions(
     ...options,
     updatedAt: new Date().toISOString(),
   };
-  await writeOmkProvidersConfig({ version: 1, providers: { ...config.providers, deepseek: updated } }, pathOptions);
+  await writeOmkProvidersConfig({ ...config, providers: { ...config.providers, deepseek: updated } }, pathOptions);
   return updated;
 }
 
@@ -262,6 +270,16 @@ function emptyProvidersConfig(): OmkProvidersConfig {
     version: 1,
     providers: {},
   };
+}
+
+function normalizeProviderDefaults(value: unknown): OmkProvidersConfig["defaults"] {
+  if (!isRecord(value)) return undefined;
+  const defaults = {
+    provider: typeof value.provider === "string" && value.provider.trim() ? value.provider.trim() : undefined,
+    model: typeof value.model === "string" && value.model.trim() ? value.model.trim() : undefined,
+    authorityProvider: typeof value.authorityProvider === "string" && value.authorityProvider.trim() ? value.authorityProvider.trim() : undefined,
+  };
+  return defaults.provider || defaults.model || defaults.authorityProvider ? defaults : undefined;
 }
 
 function normalizeProvidersConfig(value: unknown): OmkProvidersConfig["providers"] {

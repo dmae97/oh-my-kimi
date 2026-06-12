@@ -16,6 +16,8 @@ test("release workflow does not mask npm test failures behind tee", () => {
 
 test("CI exposes the local release:check gate", () => {
   const workflow = read(".github/workflows/ci.yml");
+  assert.match(workflow, /verify-no-kimi:/);
+  assert.match(workflow, /npm run verify:no-kimi/);
   assert.match(workflow, /release-check:/);
   assert.match(workflow, /npm run release:check/);
   assert.match(workflow, /node scripts\/run-tests\.mjs/);
@@ -36,6 +38,8 @@ test("release workflow runs YAML, package audit, and install smoke gates", () =>
   assert.match(workflow, /npm run audit:package/);
   assert.match(workflow, /node scripts\/package-audit\.mjs --tarball/);
   assert.match(workflow, /node scripts\/smoke-test\.mjs --tarball/);
+  assert.match(workflow, /open-multi-agent-kit-\*\.tgz/);
+  assert.doesNotMatch(workflow, /oh-my-kimi-cli-\*\.tgz/);
 });
 
 test("smoke workflow tests before packaging and audits the produced tarball", () => {
@@ -51,6 +55,8 @@ test("smoke workflow tests before packaging and audits the produced tarball", ()
   assert.match(workflow, /npm run native:normalize/);
   assert.match(workflow, /npm run audit:package/);
   assert.match(workflow, /node scripts\/package-audit\.mjs --tarball/);
+  assert.match(workflow, /open-multi-agent-kit-\*\.tgz/);
+  assert.doesNotMatch(workflow, /oh-my-kimi-cli-\*\.tgz/);
 });
 
 test("pack-smoke evidence includes pack, audit, and install smoke phases", () => {
@@ -63,6 +69,7 @@ test("pack-smoke evidence includes pack, audit, and install smoke phases", () =>
 test("package release:check composes the full local gate", () => {
   const pkg = JSON.parse(read("package.json"));
   assert.match(pkg.scripts.verify, /npm run secret:scan:runtime/);
+  assert.match(pkg.scripts["verify:no-kimi"], /npm run native:no-kimi:turn/);
   assert.match(pkg.scripts["release:check"], /npm run verify/);
   assert.match(pkg.scripts["release:check"], /npm run native:build/);
   assert.match(pkg.scripts["release:check"], /npm run audit:package/);

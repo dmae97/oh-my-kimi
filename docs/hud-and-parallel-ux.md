@@ -68,6 +68,12 @@ If a run state file is corrupt, missing, or invalid, the HUD shows a **recovery 
 
 Parallel is the **DAG executor with live UI**. It orchestrates coordinator → worker fan-out → reviewer runs and renders progress in real time.
 
+Runtime/provider UI fields should follow the canonical routing and worker-scope
+contracts in
+[`native-root-runtime-algorithms.md`](./native-root-runtime-algorithms.md):
+Algorithm 5 for selected runtime, fallback chain, and route evidence;
+Algorithm 7 for worker environment/capability scope.
+
 ### Header
 
 The top of the parallel UI shows:
@@ -144,5 +150,6 @@ Run complete. Next steps:
 | **Active node** | Currently executing node + role |
 | **Blocker** | First blocking or failed node, if any |
 | **Workers** | Array of active workers with elapsed time and retry count |
+| **Runtime route** | Selected provider/runtime, fallback chain, risk, sandbox, and approval policy when available |
 
 Both HUD and parallel UI consume the same `RunViewModel`, so their interpretations of run health and progress are always consistent.

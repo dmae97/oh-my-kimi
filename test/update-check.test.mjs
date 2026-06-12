@@ -76,7 +76,7 @@ test("isOutdated handles local newer than latest", () => {
   assert.strictEqual(isOutdated("99.0.0", "1.0.0"), false);
 });
 
-test("formatStartupUpdateBanner renders omk package and Kimi adapter update hints", () => {
+test("formatStartupUpdateBanner renders omk package updates and suppresses removed Kimi CLI hints", () => {
   const omkBanner = formatStartupUpdateBanner(fakeUpdateStatus());
   assert.match(omkBanner, /omk 1\.1\.17 → 1\.1\.18/);
   assert.match(omkBanner, /npm i -g open-multi-agent-kit/);
@@ -86,8 +86,9 @@ test("formatStartupUpdateBanner renders omk package and Kimi adapter update hint
     omk: { outdated: false },
     kimi: { installed: "0.9.0", latest: "1.0.0", outdated: true },
   }));
-  assert.match(kimiBanner, /kimi-cli 0\.9\.0 → 1\.0\.0/);
-  assert.match(kimiBanner, /omk update kimi-adapter/);
+  assert.equal(kimiBanner, "");
+  assert.doesNotMatch(kimiBanner, /kimi-cli 0\.9\.0 → 1\.0\.0/);
+  assert.doesNotMatch(kimiBanner, /omk update kimi-adapter/);
   assert.doesNotMatch(kimiBanner, /npm i -g open-multi-agent-kit/);
 });
 
@@ -387,7 +388,7 @@ test("omk update check --json outputs valid JSON", () => {
   assert.strictEqual(typeof status.cacheHit, "boolean");
 });
 
-test("omk update kimi-adapter --install-script prints install script", () => {
+test("omk update kimi-adapter --install-script reports direct Moonshot API configuration", () => {
   const tmpDir = mkdtempSync(join(tmpdir(), "omk-cli-test-"));
   const cliJs = join(process.cwd(), "dist", "cli.js");
   const result = spawnSync("node", [cliJs, "update", "kimi-adapter", "--install-script", "--refresh"], {
@@ -397,9 +398,10 @@ test("omk update kimi-adapter --install-script prints install script", () => {
     env: { ...process.env, OMK_NO_STAR: "1" },
   });
   const output = result.stdout.trim();
+  assert.equal(result.status, 0, result.stderr || result.stdout);
   assert.ok(
-    output.includes("curl") || output.includes("Invoke-RestMethod") || output.includes(".com/install"),
-    `Expected install script output, got: ${output}`
+    output.includes("kimi-api uses direct Moonshot HTTP API") && output.includes("~/.kimi/config.toml"),
+    `Expected direct API configuration guidance, got: ${output}`
   );
 });
 

@@ -3,12 +3,14 @@
  */
 
 import { enableRawTerminalInput, restoreTerminalInputState, type TerminalInputState } from "../../util/terminal-input.js";
+import { clearTerminalScreen, TerminalFrameRenderer } from "../../tui/terminal-frame-renderer.js";
+import type { TuiRenderMode } from "../../tui/model.js";
 import { MIN_COCKPIT_FRAME_WIDTH, MAX_COCKPIT_FRAME_WIDTH } from "./utils.js";
 
-export type RenderMode = "diff" | "full" | "append";
+export type RenderMode = TuiRenderMode;
 
 export class CockpitRenderer {
-  private prevLines: string[] = [];
+  private readonly frameRenderer: TerminalFrameRenderer;
   mode: RenderMode = "diff";
   paused = false;
   refreshMs: number;
@@ -22,6 +24,7 @@ export class CockpitRenderer {
   constructor(refreshMs: number, height?: number) {
     this.refreshMs = refreshMs;
     this.height = normalizeCockpitFrameHeight(height);
+    this.frameRenderer = new TerminalFrameRenderer({ mode: this.mode, height: this.height });
   }
 
   setupKeyboard(): void {
@@ -69,52 +72,16 @@ export class CockpitRenderer {
   }
 
   render(frame: string): void {
-    const newLines = frame.split("\n");
-
-    if (this.mode === "full") {
-      clearScreen();
-      process.stdout.write(frame + "\n");
-      this.prevLines = [...newLines];
-      return;
-    }
-
-    if (this.mode === "append") {
-      process.stdout.write(frame + "\n");
-      this.prevLines = [...newLines];
-      return;
-    }
-
-    // diff mode
-    const parts: string[] = ["\x1b[H"];
-    const maxLen = Math.max(newLines.length, this.prevLines.length);
-
-    for (let i = 0; i < maxLen; i++) {
-      const newLine = newLines[i] ?? "";
-      const oldLine = this.prevLines[i] ?? "";
-
-      if (i < newLines.length) {
-        if (newLine !== oldLine) {
-          parts.push(newLine + "\x1b[K");
-        }
-      } else {
-        // Extra old line to clear
-        parts.push("\x1b[K");
-      }
-
-      if (i < maxLen - 1) {
-        parts.push("\r\n");
-      }
-    }
-
-    process.stdout.write(parts.join(""));
-    this.prevLines = [...newLines];
+    this.frameRenderer.mode = this.mode;
+    this.frameRenderer.height = this.height;
+    this.frameRenderer.render(frame);
   }
 }
 
 export function clearScreen(): void {
   // Clear screen + move cursor home, but PRESERVE scrollback so users can scroll up
   // to see previous code edits and output history.
-  process.stdout.write("\x1b[2J\x1b[H");
+  clearTerminalScreen();
 }
 
 export function getTerminalWidth(requested?: number): number {

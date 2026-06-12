@@ -18,13 +18,31 @@ description: "OMK Feature Specification template with agent-oriented requirement
   Use roles exposed by .omk/agents/root.yaml or chat-agent-harness.json.
 -->
 
+## Safety, Authority, and Evidence Contract
+
+<!--
+  Required for OMK runtime/orchestration work.
+  Keep these fields explicit so DAG conversion can build least-privilege AgentTask values.
+-->
+
+- **Risk**: read / write / shell / merge
+- **Approval Policy**: ask / auto / never
+- **Sandbox**: read-only / workspace-write
+- **Provider Policy**: auto / kimi / codex / deepseek / authority
+- **Resolved Authority**: [Concrete provider when Provider Policy is authority]
+- **Capability Scope**: MCP servers, skills, hooks, write, patch, shell, review
+- **Diagnostics**: provider health, capability mismatch, MCP parse failures, fallback reasons
+- **Evidence**: command output path, run artifact path, CI/Smoke URL when available
+
 ### Requirement 1 - [Brief Title] (Priority: P1)
 
 **Agent**: coder / architect
 **Skills**: [Relevant skill names, e.g. omk-typescript-strict, omk-security-review]
 **MCP**: [omk-project or specific configured server, if needed]
 **Evidence Gate**: file-exists + command-pass
-**Risk**: medium
+**Risk**: read / write / shell / merge
+**Approval Policy**: ask / auto / never
+**Sandbox**: read-only / workspace-write
 
 **What**: [Describe what the agent should build]
 **Verify**: [How OMK checks completion — exact command or file path]
@@ -72,6 +90,7 @@ description: "OMK Feature Specification template with agent-oriented requirement
 - `npm run build:clean` — clean build
 - `npm test` — test harness
 - `omk verify --json` — evidence summary when available
+- GitHub Actions CI/Smoke URL — required for release claims
 
 ## Assumptions
 

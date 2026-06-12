@@ -5,17 +5,15 @@ import type { IntentFrame } from "../../contracts/goal.js";
 import type { ExecutionStrategy } from "../../contracts/orchestration.js";
 import { parseProviderModelArg } from "../../providers/model-registry.js";
 import { getOmkResourceSettings } from "../../util/resource-profile.js";
-import { createExecutor } from "../../orchestration/executor.js";
-import { createStatePersister } from "../../orchestration/state-persister.js";
 import { ParallelLiveRenderer, renderCompactParallelFrame, type ParallelViewMode } from "../../orchestration/parallel-ui.js";
 import { omkCliHero, style, status, label, bullet } from "../../util/theme.js";
 import { formatOmkVersionFooter } from "../../util/version.js";
 import { captureTerminalInputState, restoreTerminalInputState } from "../../util/terminal-input.js";
-import { createProviderBackedTaskRunner } from "../../providers/index.js";
+import { createHarnessTaskRunner } from "../../harness/create-harness-task-runner.js";
+import { executeHarnessRun } from "../../harness/execute-harness-run.js";
 import { getActiveRuntimePreset } from "../../util/resource-profile.js";
 import { createOmkSessionEnv } from "../../util/session.js";
 import { t } from "../../util/i18n.js";
-import { join } from "path";
 import readline from "readline";
 import { isCapabilityAgentNode } from "../../orchestration/capability-agents.js";
 import { renderActionDigest } from "../../goal/intent-frame.js";
@@ -172,13 +170,6 @@ export async function executeParallelRun(input: {
   process.once("SIGINT", handleSignal);
   process.once("SIGTERM", handleSignal);
 
-  const executor = createExecutor({
-    persister: createStatePersister(join(root, ".omk", "runs")),
-    ensemble: resources.ensembleDefaultEnabled ? {} : false,
-    resumeFromState: routedState,
-    signal: abortController.signal,
-  });
-
   console.log(omkCliHero(formatOmkVersionFooter()));
   console.log(style.purpleBold("🐾 omk parallel — DAG executor with live UI"));
   console.log(style.gray(t("parallel.agentsActivated")));
@@ -215,14 +206,12 @@ export async function executeParallelRun(input: {
     view: (options.view as ParallelViewMode | undefined) ?? (useCompact ? "compact" : "cockpit"),
   });
 
-  if (useWatch) {
-    executor.onStateChange((state) => {
-      latestState = state;
-    });
-    if (useCompact) {
-      // Compact mode: render a single line on each state change
-      executor.onStateChange((state) => {
-        const line = renderCompactParallelFrame(state, {
+  const previousStatuses = new Map<string, string>();
+  const handleStateChange = (stateSnapshot: RunState): void => {
+    if (useWatch) {
+      latestState = stateSnapshot;
+      if (useCompact) {
+        const line = renderCompactParallelFrame(stateSnapshot, {
           runId,
           approvalPolicy,
           workerCount,
@@ -233,59 +222,72 @@ export async function executeParallelRun(input: {
           statePath,
         });
         console.log(line);
-      });
-    } else {
+      }
+      return;
+    }
+    logRunStateTransitions(stateSnapshot, previousStatuses);
+  };
+
+  if (useWatch) {
+    if (!useCompact) {
       liveRenderer.start(() => latestState);
     }
-  } else {
-    const previousStatuses = new Map<string, string>();
-    executor.onStateChange((stateSnapshot) => logRunStateTransitions(stateSnapshot, previousStatuses));
   }
 
   const activePreset = await getActiveRuntimePreset();
-  const runner = await createProviderBackedTaskRunner({
+  const harnessEnv = {
+    ...createOmkSessionEnv(root, runId),
+    OMK_RUN_ID: runId,
+    OMK_FLOW: "parallel",
+    OMK_GOAL: intentFrame.desiredOutcome,
+    OMK_GOAL_CONTEXT: renderActionDigest(intentFrame),
+    OMK_WORKERS: String(workerCount),
+    OMK_DAG_ROUTING: "1",
+    OMK_DAG_STATE_PATH: statePath,
+    OMK_MCP_SCOPE: mcpScope,
+    OMK_SKILLS_SCOPE: resources.skillsScope,
+    OMK_APPROVAL_POLICY: approvalPolicy,
+    ...(modelArg.model ? { OMK_PROVIDER_MODEL: modelArg.model } : {}),
+  };
+  const runner = await createHarnessTaskRunner({
+    root,
+    runId,
+    mode: "parallel",
     providerPolicy,
-    eventRunDir: runDir,
-    deepseekPromptPrefix,
-    allowDeepSeekAdvisoryFileNodes: true,
-    kimi: {
-      cwd: root,
-      timeout: 0,
+    providerOptions: {
+      eventRunDir: runDir,
+      deepseekPromptPrefix,
+      allowDeepSeekAdvisoryFileNodes: true,
       agentFile,
       promptPrefix: promptText,
       mcpScope,
       skillsScope: resources.skillsScope,
-      roleAgentFiles: true,
+      hooksScope: resources.hooksScope,
       mcpNames: activePreset?.mcpServers ?? [],
       skillNames: activePreset?.skills ?? [],
       hookNames: activePreset?.hooks ?? [],
       toolNames: [],
-      env: {
-        ...createOmkSessionEnv(root, runId),
-        OMK_RUN_ID: runId,
-        OMK_FLOW: "parallel",
-        OMK_GOAL: intentFrame.desiredOutcome,
-        OMK_GOAL_CONTEXT: renderActionDigest(intentFrame),
-        OMK_WORKERS: String(workerCount),
-        OMK_DAG_ROUTING: "1",
-        OMK_DAG_STATE_PATH: statePath,
-        OMK_MCP_SCOPE: mcpScope,
-        OMK_SKILLS_SCOPE: resources.skillsScope,
-        OMK_APPROVAL_POLICY: approvalPolicy,
-        ...(modelArg.model ? { OMK_PROVIDER_MODEL: modelArg.model } : {}),
-      },
     },
+    env: harnessEnv,
   });
 
-  let result: Awaited<ReturnType<typeof executor.execute>>;
+  let result: Awaited<ReturnType<typeof executeHarnessRun>>;
   try {
-    result = await executor.execute(dag, runner, {
+    result = await executeHarnessRun({
+      root,
       runId,
+      dag,
+      runner,
+      env: harnessEnv,
       workers: workerCount,
       approvalPolicy: approvalPolicy as "interactive" | "auto" | "yolo" | "block",
       nodeTimeoutMs: options.timeoutPreset ? undefined : 600_000,
       timeoutPreset: options.timeoutPreset,
-      worktreeRoot: root,
+      resumeFromState: routedState,
+      eventRunDir: runDir,
+      ensemble: resources.ensembleDefaultEnabled ? {} : false,
+      signal: abortController.signal,
+      onStateChange: handleStateChange,
     });
   } finally {
     liveRenderer.stop();

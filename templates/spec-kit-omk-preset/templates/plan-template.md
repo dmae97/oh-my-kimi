@@ -17,6 +17,11 @@ description: "OMK Implementation Plan template with current agent routing and ev
 - **MCP Scope**: [project | all | none]
 - **Skills**: [Relevant skill names only]
 - **Authority**: Kimi is final writer/merger unless harness says otherwise.
+- **Safety Default**: [read-only by default | workspace-write required | shell required | merge required]
+- **Approval Policy**: [ask | auto | never]
+- **Sandbox**: [read-only | workspace-write]
+- **Provider Policy**: [authority | kimi | codex | deepseek | auto | other concrete provider]
+- **Release Evidence**: [not release-bound | exact commit + local gates + GitHub Smoke + GitHub CI]
 
 ## Agent Routing
 
@@ -63,6 +68,10 @@ tests/
 | Breaking changes | [Yes/No] | [Migration plan if yes] |
 | Parallel tasks | [Count] | [Which phases can run in parallel] |
 | MCP/secret exposure | [None/Scoped] | [How secrets stay out of artifacts] |
+| Provider health | [runtime/auth/model/quota status] | [How unavailable providers are blocked or remediated] |
+| Approval/sandbox propagation | [Preserved/Not applicable] | [How adapter metadata keeps user execution policy] |
+| Tool-plane diagnostics | [Required/Optional] | [MCP/skills/hooks failure handling] |
+| Release evidence | [Required/Not release-bound] | [Exact commit local and GitHub gates] |
 
 ## Quality Gates
 
@@ -73,3 +82,4 @@ tests/
 - **Build**: `npm run build:clean` — clean dist build
 - **Tests**: `npm test` — project test harness
 - **Evidence**: `omk verify --json` or run-specific evidence command when available
+- **Release**: `npm run release:check` plus GitHub Smoke Test and GitHub CI on the exact target commit when release-bound

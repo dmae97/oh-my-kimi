@@ -44,6 +44,17 @@ export function capabilityScopesFromRouting(
   };
 }
 
+export function mergeCapabilityScopes(
+  ...scopes: readonly (Partial<NodeCapabilityScopes> | undefined)[]
+): NodeCapabilityScopes {
+  return {
+    skills: uniqueCapabilityNames(scopes.flatMap((scope) => scope?.skills ?? [])),
+    mcpServers: uniqueCapabilityNames(scopes.flatMap((scope) => scope?.mcpServers ?? [])),
+    tools: uniqueCapabilityNames(scopes.flatMap((scope) => scope?.tools ?? [])),
+    hooks: uniqueCapabilityNames(scopes.flatMap((scope) => scope?.hooks ?? [])),
+  };
+}
+
 export function attachAssignedCapabilities(routing: DagNodeRouting): DagNodeRouting {
   const assignedCapabilities = capabilityScopesFromRouting(routing);
   return {

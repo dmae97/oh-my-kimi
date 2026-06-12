@@ -61,6 +61,10 @@ export interface McpDoctorOptions {
   global?: boolean;
 }
 
+export interface McpDoctorReportOptions {
+  env?: Record<string, string | undefined>;
+}
+
 type McpDoctorSeverity = "ok" | "info" | "warn" | "error";
 
 export interface McpDoctorCheck {
@@ -561,7 +565,7 @@ export async function repairMcpDoctorIssues(
   };
 }
 
-export async function buildMcpDoctorReport(): Promise<McpDoctorReport> {
+export async function buildMcpDoctorReport(options: McpDoctorReportOptions = {}): Promise<McpDoctorReport> {
   const sources = await resolveAllConfigs();
   const servers = collectServers(sources);
   const resources = await getOmkResourceSettings();
@@ -574,7 +578,7 @@ export async function buildMcpDoctorReport(): Promise<McpDoctorReport> {
     detail?: string;
     packageSpec?: string;
   }>();
-  const preflightOptions = resolveRuntimeMcpPreflightOptions();
+  const preflightOptions = resolveRuntimeMcpPreflightOptions(options.env);
   if (preflightOptions.mode !== "off") {
     const activeServersForPreflight: Record<string, unknown> = {};
     for (const [name, info] of servers) {

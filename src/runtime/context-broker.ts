@@ -287,18 +287,25 @@ export function createContextBroker(options: ContextBrokerOptions = {}) {
       graphMemory,
     }).catch(() => {});
 
-    const task = [
-      `Execute DAG node: ${node.id}`,
-      `Name: ${node.name}`,
-      `Role: ${node.role}`,
-      node.routing?.actionAtom ? `ActionAtom: ${node.routing.actionAtom.id} | ${node.routing.actionAtom.label} | ${node.routing.actionAtom.verb} ${node.routing.actionAtom.object ?? "assigned scope"} | evidence=${node.routing.actionAtom.evidenceTarget} | done=${node.routing.actionAtom.doneCondition}` : undefined,
-      node.routing?.skills?.length ? `Skills: ${node.routing.skills.join(", ")}` : undefined,
-      node.routing?.mcpServers?.length ? `MCP: ${node.routing.mcpServers.join(", ")}` : undefined,
-      node.routing?.tools?.length ? `Tools: ${node.routing.tools.join(", ")}` : undefined,
-      node.routing?.rationale ? `Rationale: ${node.routing.rationale}` : undefined,
-    ]
-      .filter(Boolean)
-      .join("\n");
+    // When promptMode is "dnc-nlp", the NLP compiler already produced a minimal
+    // modelPrompt stored in node.name. Use it directly — do NOT wrap in orchestration
+    // contract. This prevents prompt bloat (I-001: available ≠ required).
+    const isDncNlp = node.routing?.promptMode === "dnc-nlp";
+    const task = isDncNlp
+      ? node.name
+      : [
+          `Execute DAG node: ${node.id}`,
+          `Name: ${node.name}`,
+          `Role: ${node.role}`,
+          node.routing?.actionAtom ? `ActionAtom: ${node.routing.actionAtom.id} | ${node.routing.actionAtom.label} | ${node.routing.actionAtom.verb} ${node.routing.actionAtom.object ?? "assigned scope"} | evidence=${node.routing.actionAtom.evidenceTarget} | done=${node.routing.actionAtom.doneCondition}` : undefined,
+          node.routing?.skills?.length ? `Skills: ${node.routing.skills.join(", ")}` : undefined,
+          node.routing?.mcpServers?.length ? `MCP: ${node.routing.mcpServers.join(", ")}` : undefined,
+          node.routing?.tools?.length ? `Tools: ${node.routing.tools.join(", ")}` : undefined,
+          node.routing?.hooks?.length ? `Hooks: ${node.routing.hooks.join(", ")}` : undefined,
+          node.routing?.rationale ? `Rationale: ${node.routing.rationale}` : undefined,
+        ]
+          .filter(Boolean)
+          .join("\n");
 
     // Guard against empty task content
     if (!task || task.trim().length === 0) {

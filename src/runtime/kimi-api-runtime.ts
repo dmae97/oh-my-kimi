@@ -17,6 +17,8 @@ import type {
 } from "./agent-runtime.js";
 import type { ContextCapsule } from "./context-capsule.js";
 import { capsuleToTask } from "./context-broker-converter.js";
+import { buildProviderToolPayload } from "./provider-tool-contracts.js";
+import { repairToolCalls, type ToolCallRepairResult } from "./tool-call-repair.js";
 
 interface MoonshotChatMessage {
   role: "system" | "user" | "assistant" | "tool";
@@ -93,6 +95,14 @@ interface MoonshotNonStreamResponse {
   };
 }
 
+interface ToolCallMapResult {
+  readonly toolCalls?: readonly ToolCallRecord[];
+  readonly repair: {
+    readonly suppressed: readonly string[];
+    readonly ignored: readonly string[];
+  };
+}
+
 function mapToolCalls(
   apiToolCalls:
     | Array<{
@@ -100,27 +110,45 @@ function mapToolCalls(
         type: "function";
         function: { name: string; arguments: string };
       }>
-    | undefined
-): ToolCallRecord[] | undefined {
-  if (!apiToolCalls || apiToolCalls.length === 0) return undefined;
-  return apiToolCalls.map((tc) => {
-    let input: unknown;
-    try {
-      input = JSON.parse(tc.function.arguments) as unknown;
-    } catch {
-      input = tc.function.arguments;
-    }
-    return {
+    | undefined,
+  context: {
+    readonly allowedToolNames: ReadonlySet<string>;
+    readonly toolContracts: readonly { name: string }[];
+    readonly reasoningContent?: string;
+    readonly visibleContent?: string;
+  },
+): ToolCallMapResult {
+  const repaired: ToolCallRepairResult = repairToolCalls({
+    declaredCalls: (apiToolCalls ?? []).map((tc) => ({
+      id: tc.id,
       name: tc.function.name,
-      input,
-      output: undefined,
-      durationMs: 0,
-      success: false,
-    };
+      arguments: tc.function.arguments,
+    })),
+    reasoningContent: context.reasoningContent,
+    visibleContent: context.visibleContent,
+    allowedToolNames: context.allowedToolNames,
+    toolContracts: context.toolContracts,
   });
+  return {
+    toolCalls: repaired.calls.length > 0
+      ? repaired.calls.map((call) => ({
+          name: call.name,
+          input: call.input,
+          output: undefined,
+          durationMs: 0,
+          success: false,
+        }))
+      : undefined,
+    repair: {
+      suppressed: repaired.suppressed,
+      ignored: repaired.ignored,
+    },
+  };
 }
 
 export interface KimiApiRuntimeOptions {
+  id?: string;
+  priority?: number;
   apiKey?: string;
   model?: string;
   baseUrl?: string;
@@ -156,15 +184,15 @@ export function createKimiApiRuntime(options: KimiApiRuntimeOptions = {}): Agent
 export const createKimiWireRuntime = createKimiApiRuntime;
 
 export class KimiApiRuntime implements AgentRuntime {
-  readonly id = "kimi-api";
+  readonly id: string;
   readonly kind = "api";
-  readonly priority = 90;
+  readonly priority: number;
   readonly capabilities: RuntimeCapabilities = {
     read: true,
-    write: true,
+    write: false,
     shell: false,
     mcp: false,
-    patch: true,
+    patch: false,
     review: true,
     merge: false,
     vision: true,
@@ -178,6 +206,8 @@ export class KimiApiRuntime implements AgentRuntime {
   private readonly baseUrl: string;
 
   constructor(options: KimiApiRuntimeOptions = {}) {
+    this.id = options.id ?? "kimi-api";
+    this.priority = options.priority ?? 90;
     this.apiKey = options.apiKey ?? process.env.KIMI_API_KEY;
     this.model = options.model ?? process.env.KIMI_MODEL ?? "kimi-k2-6";
     this.baseUrl = (options.baseUrl ?? "https://api.moonshot.cn/v1").replace(/\/+$/, "");
@@ -185,6 +215,12 @@ export class KimiApiRuntime implements AgentRuntime {
 
   supports(capsule: ContextCapsule): boolean {
     if (!this.apiKey) return false;
+    const requiredCapabilities = capsule.node.routing?.assignedProviderCapabilities ?? [];
+    if (
+      requiredCapabilities.some((capability) =>
+        ["write", "patch", "shell", "mcp", "merge"].includes(capability)
+      )
+    ) return false;
     const requiresVision = capsule.node.routing?.assignedProviderCapabilities?.includes("vision");
     if (requiresVision && !this.capabilities.vision) return false;
     const requiresToolCalling = capsule.node.routing?.requiresToolCalling;
@@ -240,6 +276,23 @@ export class KimiApiRuntime implements AgentRuntime {
         metadata: { error: "KIMI_API_KEY is not set" },
       };
     }
+    if (
+      task.capabilities.write ||
+      task.capabilities.patch ||
+      task.capabilities.shell ||
+      task.capabilities.mcp ||
+      task.capabilities.merge
+    ) {
+      return {
+        output: "",
+        exitCode: 1,
+        thinking: "",
+        metadata: {
+          error: `${this.id} is advisory/read-only and does not receive write, shell, MCP, merge, or patch authority`,
+          authorityMode: "advisory",
+        },
+      };
+    }
 
     const messages: MoonshotChatMessage[] = [];
     if (task.context.system) {
@@ -247,21 +300,17 @@ export class KimiApiRuntime implements AgentRuntime {
     }
     messages.push({ role: "user", content: task.prompt });
 
-    const tools: MoonshotTool[] = task.capabilities.toolCalling
-      ? task.tools.available.map((t) => ({
-          type: "function",
-          function: {
-            name: t.name,
-            description: t.description,
-            parameters: t.inputSchema,
-          },
-        }))
-      : [];
+    const providerTools = task.capabilities.toolCalling
+      ? buildProviderToolPayload(task.tools.available)
+      : buildProviderToolPayload([]);
+    const tools: MoonshotTool[] = providerTools.tools as MoonshotTool[];
+
+    const useStreaming = task.capabilities.streaming ?? true;
 
     const body: Record<string, unknown> = {
-      model: this.model,
+      model: task.context.providerModel ?? task.context.env?.OMK_PROVIDER_MODEL ?? this.model,
       messages,
-      stream: task.capabilities.streaming ?? true,
+      stream: useStreaming,
     };
 
     if (tools.length > 0) {
@@ -293,8 +342,19 @@ export class KimiApiRuntime implements AgentRuntime {
         };
       }
 
-      if (task.capabilities.streaming) {
-        return this.parseStreamResponse(response);
+      if (useStreaming) {
+        return this.parseStreamResponse(response, {
+          toolPlaneHash: providerTools.toolPlaneHash,
+          toolContracts: providerTools.contracts,
+        });
+      }
+
+      const contentType = response.headers.get("content-type") ?? "";
+      if (contentType.includes("text/event-stream")) {
+        return this.parseStreamResponse(response, {
+          toolPlaneHash: providerTools.toolPlaneHash,
+          toolContracts: providerTools.contracts,
+        });
       }
 
       const payload = (await response.json()) as MoonshotNonStreamResponse;
@@ -302,6 +362,12 @@ export class KimiApiRuntime implements AgentRuntime {
       const content = choice?.message?.content ?? "";
       const reasoning = choice?.message?.reasoning_content ?? "";
       const usage = payload.usage;
+      const mappedToolCalls = mapToolCalls(choice?.message?.tool_calls, {
+        allowedToolNames: new Set(providerTools.contracts.map((contract) => contract.name)),
+        toolContracts: providerTools.contracts,
+        reasoningContent: reasoning,
+        visibleContent: content,
+      });
 
       return {
         output: content,
@@ -314,8 +380,14 @@ export class KimiApiRuntime implements AgentRuntime {
               totalTokens: usage.total_tokens,
             }
           : undefined,
-        toolCalls: mapToolCalls(choice?.message?.tool_calls),
-        metadata: { model: payload.model, finishReason: choice?.finish_reason ?? null },
+        toolCalls: mappedToolCalls.toolCalls,
+        metadata: {
+          model: payload.model,
+          finishReason: choice?.finish_reason ?? null,
+          toolPlaneHash: providerTools.toolPlaneHash,
+          toolContracts: providerTools.contracts,
+          toolCallRepair: mappedToolCalls.repair,
+        },
       };
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
@@ -335,7 +407,10 @@ export class KimiApiRuntime implements AgentRuntime {
     }
   }
 
-  private async parseStreamResponse(response: Response): Promise<AgentResult> {
+  private async parseStreamResponse(
+    response: Response,
+    metadata: { toolPlaneHash: string; toolContracts: readonly { name: string }[] },
+  ): Promise<AgentResult> {
     const reader = response.body?.getReader();
     if (!reader) {
       return {
@@ -430,6 +505,13 @@ export class KimiApiRuntime implements AgentRuntime {
       }
     }
 
+    const mappedToolCalls = mapToolCalls(streamedToolCalls, {
+      allowedToolNames: new Set(metadata.toolContracts.map((contract) => contract.name)),
+      toolContracts: metadata.toolContracts,
+      reasoningContent: reasoning,
+      visibleContent: output,
+    });
+
     return {
       output,
       exitCode: 0,
@@ -438,8 +520,13 @@ export class KimiApiRuntime implements AgentRuntime {
         totalTokens > 0
           ? { inputTokens, outputTokens, totalTokens }
           : undefined,
-      toolCalls: mapToolCalls(streamedToolCalls),
-      metadata: { model, finishReason },
+      toolCalls: mappedToolCalls.toolCalls,
+      metadata: {
+        model,
+        finishReason,
+        ...metadata,
+        toolCallRepair: mappedToolCalls.repair,
+      },
     };
   }
 }

@@ -18,7 +18,7 @@ import type { IntentFrame } from "../../contracts/goal.js";
 import type { DagNodeDefinition } from "../../orchestration/dag.js";
 import { renderCapabilityRoutingArtifact } from "../../orchestration/capability-routing.js";
 
-import { resolveParallelCommandExecutionDecision, createInteractiveRunState, createExecutableDagFromState } from "./orchestrator.js";
+import { buildParallelRouteDecision, resolveParallelCommandExecutionDecision, createInteractiveRunState, createExecutableDagFromState } from "./orchestrator.js";
 import { normalizeWorkerCount, executeParallelRun } from "./worker.js";
 import { buildPromptText, buildDeepSeekPromptPrefix, normalizeApprovalPolicy } from "./utils.js";
 
@@ -171,7 +171,9 @@ export async function parallelCommand(
       nodes: specNodes,
       workerCount,
       goalId,
+      goalObjective: effectiveGoal,
       goalSnapshot,
+      routeDecision: buildParallelRouteDecision(effectiveGoal, resolvedIntent),
     });
   } else {
     intentFrame = intentFrame ?? buildIntentFrame(effectiveGoal);

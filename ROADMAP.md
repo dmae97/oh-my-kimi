@@ -1,7 +1,15 @@
 # Roadmap
 
 Current source version: v1.1.18
-Last updated: 2026-05-22
+Last updated: 2026-05-24
+
+## 2026-05-24 runtime hardening status
+
+Latest pushed source on `new-origin/main` is `6305e2b62185c11549f59e2340936769a3027cdd`. This supersedes the earlier native-root pivot commit in the same line. The architecture direction remains OMK-as-root with Kimi as the default coding adapter, but the current line is still hardening-gated:
+
+- GitHub Actions Smoke Test is green on `6305e2b`.
+- GitHub Actions CI is red on Windows jobs on `6305e2b`; do not publish/tag v1.1.18 until this is fixed.
+- The active architecture backlog is now tracked in `docs/native-root-runtime-hardening.md`, `docs/native-root-runtime-algorithms.md`, and `.omk/specs/native-orchestrator-phase1/`.
 
 ## v1.1.9 reality
 
@@ -26,18 +34,27 @@ Provider routing and graph viewing are no longer purely future work:
 - Implement `AgentRuntime.execute` as the single entrypoint for all worker execution (chat, DAG node, inline tool call).
 - Model chat as a DAG: user message → IntentFrame → ActionAtom → worker node → evidence gate.
 - Ensure Kimi adapter remains the mature default while the bridge is provider-agnostic.
+- Use `docs/native-root-runtime-algorithms.md` Algorithms 3-5 as the
+  acceptance reference for context-capsule conversion, task execution, and
+  router fallback.
 
 ### Phase 2: Worker Capability Assignment
 
 - Allow per-DAG-node MCP, skills, hooks, and provider selection.
 - Move capability flag resolution from Kimi prompt scaffolding into OMK harness metadata.
 - Add preflight health checks and fallback chains for non-Kimi workers.
+- Make native chat turn capability default-safe: read-only for advisory/review prompts, write/patch for edit prompts, and shell only when command execution is intended and approval policy allows it.
+- Keep DeepSeek as read/review/advisory unless a future contract explicitly grants write/shell authority.
+- Use Algorithm 2 and Algorithm 7 as the acceptance reference for per-turn
+  capabilities and scoped worker environment construction.
 
 ### Phase 3: Root Coordinator Mode
 
 - Introduce native OMK agent loop with `IntentFrame` parsing and `ActionAtom` dispatch.
 - OMK becomes the root orchestrator; Kimi becomes one worker provider adapter among many.
 - Preserve D-Mail checkpoints and Okabe-compatible context management across provider handoffs.
+- Treat ActionAtom/Novelty Guard language as contract-level until concrete
+  runtime implementation and tests land.
 
 ### Phase 4: Docs & GA
 
@@ -52,8 +69,10 @@ Provider routing and graph viewing are no longer purely future work:
 - Done: YAML validation now runs in local `verify` plus CI/smoke workflows.
 - Done: package dry-pack, package audit, tarball smoke, native safety build, and release matrix gates were re-verified against v1.1.17 artifacts.
 - Required before v1.1.18 publish/tag: regenerate the native safety binary, pass package audit, pass smoke-pack/tarball install smoke, and pass `npm run release:check` on the exact intended release diff.
+- Required before v1.1.18 publish/tag: GitHub Actions CI and Smoke Test must both pass on the exact intended commit.
 - Done: provider/deepseek and screenshot JSON command contracts gained hermetic regression tests.
 - Done: current AGENTS/init templates and packaged workflow skills were aligned with the active skills/MCP/agents/harness surface, including all generated agent MCP/skills/hooks flags and parallel subagent orchestration guidance.
+- Remaining: lock runtime safety gates for native turn risk, approval/sandbox propagation, authority-provider resolution, provider health probes, and DeepSeek read-only routing.
 - Remaining: lock broader provider fallback metadata with tests for rate limit, timeout, and default fallback variants.
 - Remaining: define minimum machine-readable CLI envelopes for the rest of the automation-critical commands.
 

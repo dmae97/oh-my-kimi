@@ -20,6 +20,12 @@ Each task MUST include OMK Execution Metadata:
   > verify: `npm test` or `npm run check`
   > gate: [file-exists | command-pass | diff-nonempty | summary-present]
   > risk: [low | medium | high]
+  > approval: [ask | auto | never]
+  > sandbox: [read-only | workspace-write]
+  > provider: [authority | kimi | codex | deepseek | auto | concrete provider]
+  > capabilities: [read | write | shell | merge]
+  > diagnostics: [none | `.omk/runs/{runId}/tool-plane.json` | provider health artifact]
+  > evidence: [run artifact, CI URL, smoke URL, release log, or none]
 ```
 
 ### Legend
@@ -30,6 +36,12 @@ Each task MUST include OMK Execution Metadata:
 - **verify**: Command to run after task completion. OMK runs this as a command-pass gate.
 - **gate**: Evidence gate type that proves task completion.
 - **risk**: If high, OMK adds a D-Mail/checkpoint before this task.
+- **approval**: User execution policy that must reach the runtime adapter.
+- **sandbox**: Runtime sandbox boundary; read/review tasks should stay read-only.
+- **provider**: Provider policy or concrete lane. `authority` must resolve before execution.
+- **capabilities**: Requested runtime capabilities; do not request write/shell for read-only work.
+- **diagnostics**: Artifact expected when provider health, MCP, skills, or hooks can fail.
+- **evidence**: Exact proof of completion, including local gates and GitHub gates for release-bound work.
 
 ---
 
@@ -44,6 +56,12 @@ Each task MUST include OMK Execution Metadata:
   > verify: `test -f .omk/runs/{runId}/explore-summary.md`
   > gate: file-exists
   > risk: low
+  > approval: ask
+  > sandbox: read-only
+  > provider: authority
+  > capabilities: read
+  > diagnostics: none
+  > evidence: `.omk/runs/{runId}/explore-summary.md`
 
 - [ ] T002 [P] Verify toolchain scripts and runtime scopes
   > role: qa
@@ -52,6 +70,12 @@ Each task MUST include OMK Execution Metadata:
   > verify: `npm run yaml:check && npm run check`
   > gate: command-pass
   > risk: low
+  > approval: ask
+  > sandbox: workspace-write
+  > provider: authority
+  > capabilities: read, shell
+  > diagnostics: `.omk/runs/{runId}/toolchain-summary.md`
+  > evidence: local command output
 
 ---
 
@@ -66,6 +90,12 @@ Each task MUST include OMK Execution Metadata:
   > verify: `grep -c "## Phase" .omk/runs/{runId}/plan.md`
   > gate: file-exists
   > risk: low
+  > approval: ask
+  > sandbox: read-only
+  > provider: authority
+  > capabilities: read
+  > diagnostics: none
+  > evidence: `.omk/runs/{runId}/plan.md`
 
 - [ ] T004 Define public API contracts and types
   > role: architect
@@ -74,6 +104,12 @@ Each task MUST include OMK Execution Metadata:
   > verify: `npm run check`
   > gate: file-exists
   > risk: medium
+  > approval: ask
+  > sandbox: workspace-write
+  > provider: authority
+  > capabilities: write
+  > diagnostics: provider health artifact
+  > evidence: `src/contracts.ts`
 
 ---
 
@@ -88,6 +124,12 @@ Each task MUST include OMK Execution Metadata:
   > verify: `npm test -- --match models`
   > gate: command-pass
   > risk: medium
+  > approval: ask
+  > sandbox: workspace-write
+  > provider: authority
+  > capabilities: write
+  > diagnostics: provider health artifact
+  > evidence: local test output
 
 - [ ] T006 [P] Implement service / business logic layer
   > role: coder
@@ -96,6 +138,12 @@ Each task MUST include OMK Execution Metadata:
   > verify: `npm test -- --match services`
   > gate: command-pass
   > risk: medium
+  > approval: ask
+  > sandbox: workspace-write
+  > provider: authority
+  > capabilities: write
+  > diagnostics: provider health artifact
+  > evidence: local test output
 
 - [ ] T007 Implement API / CLI / UI presentation layer
   > role: coder
@@ -104,6 +152,12 @@ Each task MUST include OMK Execution Metadata:
   > verify: `npm run lint && npm run check`
   > gate: command-pass
   > risk: high
+  > approval: ask
+  > sandbox: workspace-write
+  > provider: authority
+  > capabilities: write
+  > diagnostics: provider health artifact
+  > evidence: local command output
 
 ---
 
@@ -118,6 +172,12 @@ Each task MUST include OMK Execution Metadata:
   > verify: `npm test -- --match [feature]`
   > gate: command-pass
   > risk: low
+  > approval: ask
+  > sandbox: workspace-write
+  > provider: authority
+  > capabilities: write
+  > diagnostics: none
+  > evidence: local test output
 
 - [ ] T009 [P] Run static analysis, type checking, and secret scan
   > role: qa
@@ -126,6 +186,12 @@ Each task MUST include OMK Execution Metadata:
   > verify: `npm run lint && npm run secret:scan && npm run check`
   > gate: command-pass
   > risk: low
+  > approval: ask
+  > sandbox: workspace-write
+  > provider: authority
+  > capabilities: read, shell
+  > diagnostics: `.omk/runs/{runId}/tool-plane.json`
+  > evidence: local command output
 
 - [ ] T010 Review security and trust-boundary impact
   > role: reviewer
@@ -134,6 +200,12 @@ Each task MUST include OMK Execution Metadata:
   > verify: `grep -Ei "risk|vuln|exposure|secret|none" .omk/runs/{runId}/security-review.md`
   > gate: file-exists
   > risk: high
+  > approval: ask
+  > sandbox: read-only
+  > provider: deepseek
+  > capabilities: read
+  > diagnostics: none
+  > evidence: `.omk/runs/{runId}/security-review.md`
 
 ---
 
@@ -148,6 +220,12 @@ Each task MUST include OMK Execution Metadata:
   > verify: `npm run build:clean && npm test`
   > gate: command-pass
   > risk: medium
+  > approval: ask
+  > sandbox: workspace-write
+  > provider: authority
+  > capabilities: read, shell
+  > diagnostics: provider health artifact
+  > evidence: local command output
 
 - [ ] T012 Produce merge summary and evidence handoff
   > role: reviewer
@@ -156,5 +234,25 @@ Each task MUST include OMK Execution Metadata:
   > verify: `grep -c "## Summary" .omk/runs/{runId}/merge-summary.md`
   > gate: file-exists
   > risk: low
+  > approval: ask
+  > sandbox: read-only
+  > provider: authority
+  > capabilities: read
+  > diagnostics: none
+  > evidence: `.omk/runs/{runId}/merge-summary.md`
+
+- [ ] T013 [P] If release-bound, capture exact-commit release evidence
+  > role: qa
+  > deps: T011
+  > files: [`.omk/release-evidence/{shortSha}/summary.md`]
+  > verify: `npm run release:check`
+  > gate: command-pass
+  > risk: high
+  > approval: ask
+  > sandbox: workspace-write
+  > provider: authority
+  > capabilities: read, shell
+  > diagnostics: provider health artifact
+  > evidence: `npm run release:check`, GitHub Smoke Test URL, GitHub CI URL for the exact target commit
 
 ---

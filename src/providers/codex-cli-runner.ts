@@ -6,8 +6,10 @@ import type { DagNode } from "../orchestration/dag.js";
 import { renderPromptDigest } from "../goal/prompt-digest.js";
 import { runShell } from "../util/shell.js";
 import { inferNodeRisk } from "./router.js";
+import { buildChildEnv } from "../runtime/child-env.js";
 
 export interface CodexCliRunnerOptions {
+  bin?: string;
   cwd: string;
   model?: string;
   timeoutMs?: number;
@@ -43,10 +45,13 @@ export function createCodexCliAdvisoryTaskRunner(options: CodexCliRunnerOptions)
       const outputPath = join(tmp, "last-message.txt");
       try {
         const prompt = buildCodexPrompt(node, env);
+        const sandboxMode = authorityMode ? "workspace-write" : "read-only";
+        const approvalPolicy = authorityMode ? "on-request" : "never";
+        const childEnv = buildChildEnv({ overrideEnv: env });
         const args = [
           "exec",
-          "--sandbox", authorityMode ? "workspace-write" : "read-only",
-          "--ask-for-approval", "never",
+          "--sandbox", sandboxMode,
+          "--ask-for-approval", approvalPolicy,
           "--cd", options.cwd,
           "--color", "never",
           "--output-last-message", outputPath,
@@ -54,12 +59,13 @@ export function createCodexCliAdvisoryTaskRunner(options: CodexCliRunnerOptions)
         const model = env.OMK_PROVIDER_MODEL || options.model;
         if (model && model !== "codex-cli") args.push("--model", model);
         args.push("-");
-        const result = await runShell("codex", args, {
+        const result = await runShell(options.bin ?? "codex", args, {
           cwd: options.cwd,
           input: prompt,
           timeout: options.timeoutMs ?? 120_000,
           signal,
-          inheritEnv: true,
+          inheritEnv: false,
+          env: childEnv,
         });
         const lastMessage = await readFile(outputPath, "utf-8").catch(() => "");
         return {

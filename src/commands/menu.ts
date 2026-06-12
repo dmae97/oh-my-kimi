@@ -29,9 +29,9 @@ export async function menuCommand(options: { runId?: string; workers?: string })
 
   const hasTty = Boolean(process.stdout.isTTY && process.stdin.isTTY);
   if (!hasTty) {
-    console.log(style.gray("\n  💡 omk chat  — " + t("cli.suggestionChat").replace("  💡 omk chat  — ", "")));
-    console.log(style.gray("  💡 omk hud   — " + t("cli.suggestionHud").replace("  💡 omk hud   — ", "")));
-    console.log(style.gray("  💡 omk --help — " + t("cli.suggestionHelp").replace("  💡 omk --help — ", "").trim()));
+    console.log(style.gray("\n  ⟡ omk chat  — " + t("cli.suggestionChat").replace("  ⟡ omk chat  — ", "")));
+    console.log(style.gray("  ⟡ omk hud   — " + t("cli.suggestionHud").replace("  ⟡ omk hud   — ", "")));
+    console.log(style.gray("  ⟡ omk --help — " + t("cli.suggestionHelp").replace("  ⟡ omk --help — ", "").trim()));
     return;
   }
 

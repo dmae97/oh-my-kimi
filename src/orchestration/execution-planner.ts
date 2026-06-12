@@ -56,8 +56,8 @@ export function createExecutionPlan(options: ExecutionPlannerOptions): Execution
   // 4. 임계 경로 계산
   const criticalPath = findCriticalPath(dag);
 
-  // 5. 최대 병렬성 계산
-  const maxParallelism = Math.max(...levels.map((level) => level.length));
+  // 5. 실제 배치 기준 최대 병렬성 계산
+  const maxParallelism = Math.max(...batches.map((batch) => batch.length));
 
   const nodeMeta = new Map<string, NodeExecutionMeta>();
   for (const node of dag) {

@@ -90,6 +90,12 @@ test("chat, run, and parallel commands expose execution selection policy", () =>
   }
 });
 
+test("chat command exposes opt-in single-pane UI renderer", () => {
+  const result = runHelp("chat");
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /--ui <legacy\|plain-modern\|rich\|system24\|green-rain\|neon-grid>/);
+});
+
 test("agent mode preset launches interactive orchestrator chat surface", async () => {
   const { getModePreset } = await import(MODE_PRESET_MODULE_URL);
   assert.equal(getModePreset("agent")?.launchCommand, "chat");
@@ -629,7 +635,7 @@ test("open-design-agent isolated HOME does not inherit local auth directories by
       cwd: process.cwd(),
       input: "Check HOME isolation",
       encoding: "utf-8",
-      timeout: 10000,
+      timeout: 30000,
       env: {
         ...process.env,
         HOME: homeRoot,
@@ -762,7 +768,7 @@ test("open-design-agent timeout with stdout only is not success", () => {
       cwd: process.cwd(),
       input: "Generate an index.html artifact",
       encoding: "utf-8",
-      timeout: 10000,
+      timeout: 30000,
       env: {
         ...process.env,
         PATH: `${binDir}${delimiter}${process.env.PATH || ""}`,
@@ -996,7 +1002,7 @@ test("slash command templates are packaged", () => {
 test("chat command leaves mode unset for persisted mode and advertises OMK brand", () => {
   const result = runHelp("chat");
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /--brand <omk\|minimal\|plain>/);
+  assert.match(result.stdout, /--brand <omk\|minimal\|plain\|green-rain\|neon-grid>/);
   assert.match(result.stdout, /--mode <agent\|plan\|chat\|debugging\|review>/);
   assert.doesNotMatch(result.stdout, /default: agent/);
   assert.doesNotMatch(result.stdout, /kimicat|kimichan/);

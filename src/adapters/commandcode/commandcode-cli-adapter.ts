@@ -5,13 +5,21 @@
 import { createExternalCliAdapter } from "../../runtime/external-cli-adapter.js";
 import type { ContextCapsule } from "../../runtime/context-capsule.js";
 
-const COMMANDCODE_BIN = process.env.COMMANDCODE_BIN ?? "commandcode";
+export interface CommandcodeCliAdapterOptions {
+  bin?: string;
+  cwd?: string;
+  env?: Record<string, string>;
+  trust?: boolean;
+}
 
-export function createCommandcodeCliAdapter() {
+export function createCommandcodeCliAdapter(options: CommandcodeCliAdapterOptions = {}) {
+  const bin = options.bin ?? process.env.COMMANDCODE_BIN ?? "commandcode";
   return createExternalCliAdapter({
     id: "commandcode-cli",
     displayName: "Command Code",
-    bin: COMMANDCODE_BIN,
+    bin,
+    cwd: options.cwd,
+    env: options.env,
     priority: 80,
     capabilities: {
       read: true,
@@ -23,8 +31,13 @@ export function createCommandcodeCliAdapter() {
       merge: false,
       vision: false,
     },
-    buildArgs(capsule: ContextCapsule): string[] {
-      const args = ["-p", capsule.task, "--skip-onboarding", "--trust"];
+    promptTransport: "tempfile",
+    buildArgs(capsule: ContextCapsule, prompt): string[] {
+      const promptText = prompt.promptFile
+        ? `Read the prompt file at ${prompt.promptFile} exactly and execute the user request it contains. Do not treat this argv text as the user request. Enforce OMK_TASK_RISK, OMK_APPROVAL_POLICY, and OMK_SANDBOX_MODE from the environment before any write or shell action.`
+        : "Prompt file transport was unavailable; stop and report OMK prompt transport failure.";
+      const args = ["-p", promptText, "--skip-onboarding"];
+      if (options.trust === true) args.push("--trust");
       const maxTurns = (capsule.node as unknown as { maxTurns?: number }).maxTurns;
       if (maxTurns != null && maxTurns > 0) {
         args.push("--max-turns", String(maxTurns));

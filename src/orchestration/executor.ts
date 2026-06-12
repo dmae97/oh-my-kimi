@@ -6,6 +6,7 @@ import { createStatePersister } from "./state-persister.js";
 import { createEnsembleTaskRunner, type EnsemblePolicy } from "./ensemble.js";
 import { estimateRunProgress } from "./eta.js";
 import { dagNodeRoutingEnv } from "./routing.js";
+import { buildTaskRunContext, envFromWorkerManifest } from "../runtime/worker-manifest.js";
 import { getOmkResourceSettings } from "../util/resource-profile.js";
 import { checkEvidenceGates } from "./evidence-gate.js";
 import { invalidateTaskDagGraph } from "./task-graph.js";
@@ -187,6 +188,7 @@ export function createExecutor(executorOptions: ExecutorOptions = {}): DagExecut
 
   async function commitState(state: RunState, opts?: { mustPersist?: boolean }): Promise<void> {
     latestSnapshot = cloneState(state);
+    emit(cloneState(latestSnapshot));
     // Coalesce: skip intermediate snapshots when queue is full,
     // but always persist final/must-persist snapshots.
     if (!opts?.mustPersist && commitQueueSize >= MAX_COMMIT_QUEUE) {
@@ -376,6 +378,26 @@ export function createExecutor(executorOptions: ExecutorOptions = {}): DagExecut
     emitNodeStart(node);
 
     const resources = await getOmkResourceSettings();
+    const runContext = buildTaskRunContext({
+      runId: options.runId,
+      ...(state.goalId ? { goalId: state.goalId } : {}),
+      root: options.worktreeRoot ?? process.cwd(),
+      node,
+      objective: state.goalSnapshot?.objective ?? node.name,
+      scopes: {
+        mcp: resources.mcpScope,
+        skills: resources.skillsScope,
+        hooks: resources.hooksScope,
+      },
+      toolPlane: {
+        mcpServers: node.routing?.mcpServers ?? node.routing?.assignedCapabilities?.mcpServers,
+        skills: node.routing?.skills ?? node.routing?.assignedCapabilities?.skills,
+        hooks: node.routing?.hooks ?? node.routing?.assignedCapabilities?.hooks,
+        tools: node.routing?.tools ?? node.routing?.assignedCapabilities?.tools,
+        requiresRuntimeMcp: node.routing?.requiresMcp,
+      },
+      model: node.routing?.providerModel,
+    });
     const env: Record<string, string> = {
       OMK_NODE_ID: node.id,
       OMK_RUN_ID: options.runId,
@@ -385,6 +407,7 @@ export function createExecutor(executorOptions: ExecutorOptions = {}): DagExecut
       OMK_SKILLS_ENABLED: resources.skillsScope === "none" ? "false" : "true",
       OMK_HOOKS_ENABLED: resources.hooksScope === "none" ? "false" : "true",
       ...dagNodeRoutingEnv(node, dag),
+      ...envFromWorkerManifest(runContext.worker),
       ...etaEnv(state.estimate),
     };
 
@@ -461,7 +484,7 @@ export function createExecutor(executorOptions: ExecutorOptions = {}): DagExecut
         outAbort.abort = abortNode;
       }
       let runPromiseSettled = false;
-      const runPromise = nodeRunner.run(node, env, nodeAbortController.signal).finally(() => {
+      const runPromise = nodeRunner.run(node, env, nodeAbortController.signal, runContext).finally(() => {
         runPromiseSettled = true;
       });
       let hardMaxHandle: ReturnType<typeof setTimeout> | undefined;

@@ -1,9 +1,7 @@
 import type { DagContextBudget, DagNode, DagNodeDefinition, DagNodeRouting } from "./dag.js";
 import { attachAssignedCapabilities, capabilityScopesFromRouting } from "./capability-routing.js";
-import { existsSync, readdirSync, readFileSync } from "fs";
-import { homedir } from "os";
-import { isAbsolute, join, relative, resolve, sep } from "path";
-import { normalizeUserHomePath } from "../util/fs.js";
+import { discoverRoutingInventory, routeCandidates } from "./routing/inventory.js";
+import type { RouteCandidate, RoutingInventory, ScoredRoute } from "./routing/types.js";
 import { assignSkills } from "./skill-assigner.js";
 import { DEFAULT_AUTHORITY_PROVIDER, resolveFallbackProvider } from "../providers/types.js";
 import {
@@ -12,27 +10,10 @@ import {
   OMK_WORKTREE_TEAM_PRESET,
 } from "../runtime/core-verified-preset.js";
 
-type RouteKind = "skill" | "mcp" | "tool" | "hook";
-type RouteSource = "project" | "global" | "builtin";
-type WriteRisk = "none" | "low" | "high";
-
-interface RouteCandidate {
-  kind: RouteKind;
-  id: string;
-  source: RouteSource;
-  roles: string[];
-  keywords: string[];
-  readOnly: boolean;
-  writeRisk: WriteRisk;
-  contextCost: 1 | 2 | 3;
-  capabilities: string[];
-}
-
-interface ScoredRoute {
-  candidate: RouteCandidate;
-  score: number;
-  reason: string;
-}
+export {
+  discoverRoutingInventory,
+  resetRoutingInventoryCache,
+} from "./routing/inventory.js";
 
 export type RoutingInput = Pick<DagNodeDefinition, "id" | "name" | "role" | "inputs" | "outputs" | "cost" | "routing">;
 
@@ -40,42 +21,6 @@ const MAX_SKILLS = 3;
 const MAX_MCP_SERVERS = 2;
 const MAX_TOOLS = 4;
 const MAX_HOOKS = 4;
-const OMK_PROJECT_TOOLS = [
-  "omk_search_memory",
-  "omk_read_memory",
-  "omk_memory_mindmap",
-  "omk_graph_query",
-  "omk_list_agents",
-  "omk_read_agent",
-  "omk_list_runs",
-  "omk_read_run",
-  "omk_run_quality_gate",
-  "omk_save_checkpoint",
-  "omk_list_checkpoints",
-  "omk_search_snippets",
-  "omk_get_snippet",
-];
-
-export interface RoutingInventory {
-  skills: Map<string, RouteSource>;
-  mcpServers: Map<string, RouteSource>;
-  hooks: Map<string, RouteSource>;
-  tools: Set<string>;
-  diagnostics: RoutingDiagnostic[];
-  skillsScope: "project" | "all" | "none";
-  mcpScope: "project" | "all" | "none";
-  hooksScope: "project" | "all" | "none";
-}
-
-export interface RoutingDiagnostic {
-  kind: "mcp-config";
-  source: "project" | "global";
-  path: string;
-  message: string;
-}
-
-let inventoryCache: { key: string; value: RoutingInventory } | undefined;
-
 const ROUTE_CANDIDATES: RouteCandidate[] = [
   {
     kind: "skill",
@@ -351,7 +296,7 @@ export function selectTaskRouting(input: RoutingInput): DagNodeRouting {
       reason: `${diagnostic.path}: ${diagnostic.message}`,
     }));
 
-  const scored = routeCandidates(inventory).flatMap((candidate): ScoredRoute[] => {
+  const scored = routeCandidates(inventory, ROUTE_CANDIDATES).flatMap((candidate): ScoredRoute[] => {
     const rejectReason = rejectionReason(candidate, readOnly, contextBudget, inventory);
     if (rejectReason) {
       rejected.push({ id: candidate.id, reason: rejectReason });
@@ -449,10 +394,6 @@ export function selectTaskRouting(input: RoutingInput): DagNodeRouting {
   });
 }
 
-export function resetRoutingInventoryCache(): void {
-  inventoryCache = undefined;
-}
-
 export function mergeDagNodeRouting(auto: DagNodeRouting, override: DagNodeRouting | undefined): DagNodeRouting {
   if (!override) return attachAssignedCapabilities(auto);
   return attachAssignedCapabilities({
@@ -517,6 +458,7 @@ export function dagNodeRoutingEnv(node: DagNode, dag?: import("./dag.js").Dag): 
     OMK_NODE_PROVIDER_AUTHORITY: routing.assignedProviderAuthority ?? "",
     OMK_NODE_PROVIDER_CAPABILITIES: (routing.assignedProviderCapabilities ?? []).join(","),
     OMK_NODE_CANDIDATE_PROVIDERS: (routing.candidateProviders ?? []).join(","),
+    OMK_PROVIDER_MODEL: routing.providerModel ?? "",
     OMK_PROVIDER_MODEL_TIER: routing.providerModelTier ?? "",
     OMK_PROVIDER_FALLBACK: routing.fallbackProvider ?? resolveFallbackProvider([DEFAULT_AUTHORITY_PROVIDER]),
     OMK_PROVIDER_REASON: routing.providerReason ?? "",
@@ -552,104 +494,6 @@ function scoreRoute(
       evidenceFit ? "evidence" : "",
       smallContextFit ? "small-context" : "",
     ].filter(Boolean).join(", ") || "fallback",
-  };
-}
-
-export function discoverRoutingInventory(projectRoot = getRoutingProjectRoot()): RoutingInventory {
-  const root = resolve(projectRoot);
-  const config = readFlatConfig(root);
-  const skillsScope = normalizeScope(config["runtime.skills_scope"] ?? process.env.OMK_SKILLS_SCOPE, "project");
-  const mcpScope = normalizeScope(config["runtime.mcp_scope"] ?? process.env.OMK_MCP_SCOPE, "project");
-  const hooksScope = normalizeScope(config["runtime.hooks_scope"] ?? process.env.OMK_HOOKS_SCOPE, "project");
-  const key = [root, skillsScope, mcpScope, hooksScope].join("|");
-  if (inventoryCache?.key === key) return inventoryCache.value;
-
-  const skills = new Map<string, RouteSource>();
-  for (const dir of skillDirs(root, skillsScope)) {
-    for (const skill of readSkillNames(dir.path)) {
-      if (!skills.has(skill)) skills.set(skill, dir.source);
-    }
-  }
-
-  const mcpServers = new Map<string, RouteSource>();
-  const mergedMcp = loadMergedMcpConfigSync(root, mcpScope);
-  for (const server of readMcpServerNames({ mcpServers: mergedMcp.servers })) {
-    const source = mergedMcp.sources.get(server) ?? "project";
-    if (!mcpServers.has(server)) mcpServers.set(server, source);
-  }
-
-  const tools = new Set<string>(["SearchWeb", "FetchURL"]);
-  if (mcpServers.has("omk-project")) {
-    for (const tool of OMK_PROJECT_TOOLS) tools.add(tool);
-  }
-
-  const hooks = new Map<string, RouteSource>();
-  for (const hook of readActiveHookNames(root, hooksScope)) {
-    if (!hooks.has(hook.name)) hooks.set(hook.name, hook.source);
-  }
-
-  const value = { skills, mcpServers, hooks, tools, diagnostics: mergedMcp.diagnostics, skillsScope, mcpScope, hooksScope };
-  inventoryCache = { key, value };
-  return value;
-}
-
-function routeCandidates(inventory: RoutingInventory): RouteCandidate[] {
-  const staticIds = new Set(ROUTE_CANDIDATES.map((candidate) => `${candidate.kind}:${candidate.id}`));
-  const dynamicSkills: RouteCandidate[] = [...inventory.skills.entries()]
-    .filter(([id]) => !staticIds.has(`skill:${id}`))
-    .map(([id, source]) => dynamicSkillCandidate(id, source));
-  const dynamicMcps: RouteCandidate[] = [...inventory.mcpServers.entries()]
-    .filter(([id]) => !staticIds.has(`mcp:${id}`))
-    .map(([id, source]) => dynamicMcpCandidate(id, source));
-  const dynamicHooks: RouteCandidate[] = [...inventory.hooks.entries()]
-    .filter(([id]) => !staticIds.has(`hook:${id}`))
-    .map(([id, source]) => dynamicHookCandidate(id, source));
-  return [...ROUTE_CANDIDATES, ...dynamicSkills, ...dynamicMcps, ...dynamicHooks];
-}
-
-function dynamicSkillCandidate(id: string, source: RouteSource): RouteCandidate {
-  const keywords = keywordsFromId(id);
-  const readOnly = !keywords.some((keyword) => ["write", "delete", "commit", "git", "fix", "implementation"].includes(keyword));
-  return {
-    kind: "skill",
-    id,
-    source,
-    roles: rolesFromKeywords(keywords),
-    keywords,
-    readOnly,
-    writeRisk: readOnly ? "none" : "low",
-    contextCost: id.includes("flow") ? 2 : 1,
-    capabilities: keywords,
-  };
-}
-
-function dynamicMcpCandidate(id: string, source: RouteSource): RouteCandidate {
-  const keywords = keywordsFromId(id);
-  return {
-    kind: "mcp",
-    id,
-    source,
-    roles: rolesFromKeywords(keywords),
-    keywords,
-    readOnly: true,
-    writeRisk: "none",
-    contextCost: 1,
-    capabilities: keywords,
-  };
-}
-
-function dynamicHookCandidate(id: string, source: RouteSource): RouteCandidate {
-  const keywords = keywordsFromId(id.replace(/\.(sh|js|mjs|ts)$/i, ""));
-  return {
-    kind: "hook",
-    id,
-    source,
-    roles: rolesFromKeywords(keywords),
-    keywords: [...keywords, "hook"],
-    readOnly: !keywords.some((keyword) => ["write", "format", "shell", "guard", "secret"].includes(keyword)),
-    writeRisk: keywords.some((keyword) => ["write", "format", "shell", "guard", "secret"].includes(keyword)) ? "low" : "none",
-    contextCost: 1,
-    capabilities: keywords,
   };
 }
 
@@ -756,305 +600,4 @@ function textMatchesKeyword(text: string, keyword: string): boolean {
 
 function unique(values: string[]): string[] {
   return [...new Set(values.filter((value) => value.trim().length > 0))];
-}
-
-function getRoutingProjectRoot(): string {
-  return process.env.OMK_PROJECT_ROOT ? resolve(process.env.OMK_PROJECT_ROOT) : process.cwd();
-}
-
-function getRoutingUserHome(): string {
-  return (
-    normalizeUserHomePath(process.env.OMK_ORIGINAL_HOME)
-    ?? normalizeUserHomePath(process.env.HOME)
-    ?? normalizeUserHomePath(homedir())
-    ?? homedir()
-  );
-}
-
-function skillDirs(root: string, scope: RoutingInventory["skillsScope"]): Array<{ path: string; source: RouteSource }> {
-  if (scope === "none") return [];
-  const dirs: Array<{ path: string; source: RouteSource }> = [
-    { path: join(root, ".agents", "skills"), source: "project" },
-    { path: join(root, ".kimi", "skills"), source: "project" },
-    { path: join(root, ".omk", "skills"), source: "project" },
-  ];
-  if (scope === "all") {
-    const userHome = getRoutingUserHome();
-    dirs.push(
-      { path: join(userHome, ".codex", "skills"), source: "global" },
-      { path: join(userHome, ".agents", "skills"), source: "global" },
-      { path: join(userHome, ".kimi", "skills"), source: "global" },
-    );
-  }
-  return dirs;
-}
-
-function readActiveHookNames(root: string, scope: RoutingInventory["hooksScope"]): Array<{ name: string; source: RouteSource }> {
-  if (scope === "none") return [];
-  const files: Array<{ path: string; source: RouteSource }> = [
-    { path: join(root, ".omk", "kimi.config.toml"), source: "project" },
-    { path: join(root, ".kimi", "kimi.config.toml"), source: "project" },
-  ];
-  if (scope === "all") {
-    const userHome = getRoutingUserHome();
-    files.unshift(
-      { path: join(userHome, ".kimi", "kimi.config.toml"), source: "global" },
-      { path: join(userHome, ".codex", "kimi.config.toml"), source: "global" },
-    );
-  }
-  const result: Array<{ name: string; source: RouteSource }> = [];
-  for (const file of files) {
-    try {
-      const content = readFileSync(file.path, "utf-8");
-      for (const match of content.matchAll(/^\s*command\s*=\s*["']([^"']*hooks\/([^/"']+))["']/gm)) {
-        const name = match[2]?.trim();
-        if (name) result.push({ name, source: file.source });
-      }
-    } catch {
-      // ignore missing or invalid hook config
-    }
-  }
-  return result;
-}
-
-const SECRET_PATTERNS = ["apikey", "token", "password", "secret", "authorization"];
-
-function isSecretKey(key: string): boolean {
-  const normalized = key.toLowerCase().replace(/[_-]/g, "");
-  return SECRET_PATTERNS.some((pattern) => normalized === pattern || normalized.endsWith(pattern));
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function deepMerge(target: Record<string, unknown>, source: Record<string, unknown>): Record<string, unknown> {
-  const result: Record<string, unknown> = { ...target };
-  for (const key of Object.keys(source)) {
-    const sVal = source[key];
-    const tVal = result[key];
-    if (isPlainObject(sVal) && isPlainObject(tVal)) {
-      result[key] = deepMerge(tVal, sVal);
-    } else {
-      result[key] = sVal;
-    }
-  }
-  return result;
-}
-
-export function redactMcpConfig(cfg: unknown): unknown {
-  if (isPlainObject(cfg)) {
-    const result: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(cfg)) {
-      if (isSecretKey(key)) {
-        result[key] = "***";
-      } else if (isPlainObject(value)) {
-        result[key] = redactMcpConfig(value);
-      } else if (Array.isArray(value)) {
-        result[key] = value.map((item) => redactMcpConfig(item));
-      } else {
-        result[key] = value;
-      }
-    }
-    return result;
-  }
-  if (Array.isArray(cfg)) {
-    return cfg.map((item) => redactMcpConfig(item));
-  }
-  return cfg;
-}
-
-function loadMergedMcpConfigSync(
-  projectRoot: string,
-  scope: "project" | "all" | "none"
-): { servers: Record<string, unknown>; sources: Map<string, RouteSource>; diagnostics: RoutingDiagnostic[] } {
-  const root = resolve(projectRoot);
-  const servers: Record<string, unknown> = {};
-  const sources = new Map<string, RouteSource>();
-  const diagnostics: RoutingDiagnostic[] = [];
-
-  if (scope === "none") {
-    return { servers, sources, diagnostics };
-  }
-
-  const globalFiles = scope === "all" ? [join(getRoutingUserHome(), ".kimi", "mcp.json"), join(getRoutingUserHome(), ".omk", "mcp.json")] : [];
-
-  for (const path of globalFiles) {
-    if (!existsSync(path)) continue;
-    try {
-      const parsed = JSON.parse(readFileSync(path, "utf-8")) as { mcpServers?: Record<string, unknown> };
-      for (const [name, cfg] of Object.entries(parsed.mcpServers ?? {})) {
-        if (!sources.has(name)) {
-          servers[name] = cfg;
-          sources.set(name, "global");
-        }
-      }
-    } catch (err) {
-      diagnostics.push(createMcpConfigDiagnostic(root, "global", path, err));
-    }
-  }
-
-  const projectFiles = [
-    join(root, ".omk", "mcp.json"),
-    join(root, ".kimi", "mcp.json"),
-  ];
-
-  for (const path of projectFiles) {
-    if (!existsSync(path)) continue;
-    try {
-      const parsed = JSON.parse(readFileSync(path, "utf-8")) as { mcpServers?: Record<string, unknown> };
-      for (const [name, cfg] of Object.entries(parsed.mcpServers ?? {})) {
-        if (!sources.has(name) || sources.get(name) === "global") {
-          if (sources.has(name) && isPlainObject(servers[name]) && isPlainObject(cfg)) {
-            servers[name] = deepMerge(servers[name] as Record<string, unknown>, cfg as Record<string, unknown>);
-          } else {
-            servers[name] = cfg;
-          }
-          sources.set(name, "project");
-        }
-      }
-    } catch (err) {
-      diagnostics.push(createMcpConfigDiagnostic(root, "project", path, err));
-    }
-  }
-
-  if (!sources.has("omk-project")) {
-    servers["omk-project"] = { type: "builtin", command: "omk", args: ["mcp", "serve", "omk-project"] };
-    sources.set("omk-project", "builtin");
-  }
-
-  return { servers, sources, diagnostics };
-}
-
-export function loadMergedMcpConfig(
-  projectRoot: string,
-  scope: "project" | "all" | "none"
-): Promise<{ servers: Record<string, unknown>; sources: Map<string, RouteSource>; diagnostics: RoutingDiagnostic[] }> {
-  return Promise.resolve(loadMergedMcpConfigSync(projectRoot, scope));
-}
-
-function createMcpConfigDiagnostic(
-  root: string,
-  source: "project" | "global",
-  path: string,
-  err: unknown
-): RoutingDiagnostic {
-  return {
-    kind: "mcp-config",
-    source,
-    path: formatRoutingPath(root, path),
-    message: mcpConfigErrorMessage(err),
-  };
-}
-
-function formatRoutingPath(root: string, path: string): string {
-  const resolvedPath = resolve(path);
-  const resolvedRoot = resolve(root);
-  const rootRelative = relative(resolvedRoot, resolvedPath);
-  if (rootRelative === "") return ".";
-  if (isRelativeChildPath(rootRelative)) return rootRelative;
-  const home = resolve(getRoutingUserHome());
-  const homeRelative = relative(home, resolvedPath);
-  if (homeRelative === "") return "~";
-  if (isRelativeChildPath(homeRelative)) return `~/${homeRelative.split(sep).join("/")}`;
-  return resolvedPath;
-}
-
-function isRelativeChildPath(path: string): boolean {
-  return path !== "" && path !== ".." && !path.startsWith(`..${sep}`) && !path.startsWith("../") && !isAbsolute(path);
-}
-
-function mcpConfigErrorMessage(err: unknown): string {
-  if (err instanceof SyntaxError) return "invalid JSON";
-  if (err && typeof err === "object" && "code" in err && typeof (err as { code?: unknown }).code === "string") {
-    return `unreadable MCP config (${(err as { code: string }).code})`;
-  }
-  return "invalid MCP config";
-}
-
-function readSkillNames(dir: string): string[] {
-  try {
-    return readdirSync(dir, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory() && existsSync(join(dir, entry.name, "SKILL.md")))
-      .map((entry) => entry.name);
-  } catch {
-    return [];
-  }
-}
-
-function readMcpServerNames(config: { mcpServers?: Record<string, unknown> }): string[] {
-  return Object.keys(config.mcpServers ?? {});
-}
-
-function readFlatConfig(root: string): Record<string, string> {
-  try {
-    return parseSimpleToml(readFileSync(join(root, ".omk", "config.toml"), "utf-8"));
-  } catch {
-    return {};
-  }
-}
-
-function parseSimpleToml(content: string): Record<string, string> {
-  const result: Record<string, string> = {};
-  let section = "";
-  for (const rawLine of content.split(/\r?\n/)) {
-    const line = stripComment(rawLine).trim();
-    if (!line) continue;
-    const sectionMatch = line.match(/^\[([^\]]+)]$/);
-    if (sectionMatch) {
-      section = sectionMatch[1].trim();
-      continue;
-    }
-    const kv = line.match(/^([A-Za-z0-9_.-]+)\s*=\s*(.+)$/);
-    if (!kv) continue;
-    const key = section ? `${section}.${kv[1].trim()}` : kv[1].trim();
-    result[key] = normalizeConfigValue(kv[2].trim());
-  }
-  return result;
-}
-
-function stripComment(line: string): string {
-  let inString = false;
-  let quote = "";
-  for (let i = 0; i < line.length; i += 1) {
-    const char = line[i];
-    if ((char === "\"" || char === "'") && line[i - 1] !== "\\") {
-      if (!inString) {
-        inString = true;
-        quote = char;
-      } else if (quote === char) {
-        inString = false;
-      }
-    }
-    if (char === "#" && !inString) return line.slice(0, i);
-  }
-  return line;
-}
-
-function normalizeConfigValue(value: string): string {
-  if ((value.startsWith("\"") && value.endsWith("\"")) || (value.startsWith("'") && value.endsWith("'"))) {
-    return value.slice(1, -1);
-  }
-  return value;
-}
-
-function normalizeScope(value: string | undefined, fallback: RoutingInventory["skillsScope"]): RoutingInventory["skillsScope"] {
-  const normalized = value?.trim().toLowerCase();
-  if (normalized === "none" || normalized === "off" || normalized === "disabled") return "none";
-  if (normalized === "all" || normalized === "global" || normalized === "local-user" || normalized === "local_user" || normalized === "personal" || normalized === "user") return "all";
-  if (normalized === "project" || normalized === "local") return "project";
-  return fallback;
-}
-
-function keywordsFromId(id: string): string[] {
-  return unique(id.replace(/^omk-/, "").split(/[-_]/).filter((keyword) => keyword.length >= 2));
-}
-
-function rolesFromKeywords(keywords: string[]): string[] {
-  if (keywords.some((keyword) => ["review", "security", "quality"].includes(keyword))) return ["reviewer", "qa"];
-  if (keywords.some((keyword) => ["test", "debug", "fix"].includes(keyword))) return ["debugger", "tester", "coder"];
-  if (keywords.some((keyword) => ["frontend", "implementation", "typescript", "python"].includes(keyword))) return ["coder"];
-  if (keywords.some((keyword) => ["repo", "research", "docs"].includes(keyword))) return ["researcher", "explorer"];
-  if (keywords.some((keyword) => ["plan", "flow", "dag", "context", "router"].includes(keyword))) return ["planner", "router"];
-  return ["planner", "router", "reviewer"];
 }

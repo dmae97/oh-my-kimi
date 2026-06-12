@@ -1,0 +1,76 @@
+{
+  "version": "1.0.0",
+  "description": "OMK role-default skill presets. Editable at runtime without code changes.",
+  "presets": {
+    "explorer": {
+      "skills": ["omk-repo-explorer", "omk-context-broker", "omk-research-verify"],
+      "mcpServers": ["omk-project"],
+      "hooks": ["subagent-stop-audit.sh"]
+    },
+    "researcher": {
+      "skills": ["omk-repo-explorer", "omk-research-verify", "omk-context-broker", "omk-plan-first"],
+      "mcpServers": ["omk-project", "context7"],
+      "hooks": ["subagent-stop-audit.sh"]
+    },
+    "planner": {
+      "skills": ["omk-plan-first", "omk-context-broker", "omk-industrial-control-loop", "speckit-plan", "speckit-specify"],
+      "mcpServers": ["omk-project"],
+      "hooks": ["subagent-stop-audit.sh"]
+    },
+    "architect": {
+      "skills": ["omk-plan-first", "omk-design-system", "omk-context-broker", "omk-industrial-control-loop"],
+      "mcpServers": ["omk-project", "context7"],
+      "hooks": ["subagent-stop-audit.sh"]
+    },
+    "coder": {
+      "skills": ["omk-test-debug-loop", "omk-typescript-strict", "omk-python-typing", "omk-frontend-implementation", "matt-pocock-skills", "andrej-karpathy-skills", "omk-flow-feature-dev", "omk-flow-refactor"],
+      "mcpServers": ["omk-project"],
+      "hooks": ["protect-secrets.sh", "pre-shell-guard.sh", "post-format.sh"]
+    },
+    "reviewer": {
+      "skills": ["omk-code-review", "omk-security-review", "omk-frontend-ui-review", "omk-backend-api-review", "omk-evidence-contract", "omk-multimodal-ui-review"],
+      "mcpServers": ["omk-project"],
+      "hooks": ["subagent-stop-audit.sh", "stop-verify.sh"]
+    },
+    "security": {
+      "skills": ["omk-security-review", "omk-secret-guard", "omk-code-review", "omk-evidence-contract"],
+      "mcpServers": ["omk-project"],
+      "hooks": ["protect-secrets.sh", "pre-shell-guard.sh", "stop-verify.sh"]
+    },
+    "qa": {
+      "skills": ["omk-quality-gate", "omk-test-debug-loop", "omk-typescript-strict", "omk-python-typing", "omk-evidence-contract"],
+      "mcpServers": ["omk-project"],
+      "hooks": ["stop-verify.sh", "pre-shell-guard.sh"]
+    },
+    "tester": {
+      "skills": ["omk-quality-gate", "omk-test-debug-loop", "omk-flow-bugfix", "omk-evidence-contract"],
+      "mcpServers": ["omk-project"],
+      "hooks": ["stop-verify.sh", "pre-shell-guard.sh"]
+    },
+    "integrator": {
+      "skills": ["omk-git-commit-pr", "omk-context-broker", "omk-evidence-contract"],
+      "mcpServers": ["omk-project"],
+      "hooks": ["branch-diff-snapshot.sh", "subagent-stop-audit.sh", "stop-verify.sh"]
+    },
+    "aggregator": {
+      "skills": ["omk-code-review", "omk-context-broker", "omk-evidence-contract", "omk-industrial-control-loop"],
+      "mcpServers": ["omk-project"],
+      "hooks": ["subagent-stop-audit.sh", "stop-verify.sh"]
+    },
+    "interviewer": {
+      "skills": ["omk-context-broker", "speckit-clarify", "speckit-checklist", "omk-plan-first"],
+      "mcpServers": ["omk-project"],
+      "hooks": ["subagent-stop-audit.sh"]
+    },
+    "vision-debugger": {
+      "skills": ["omk-multimodal-ui-review", "omk-design-md"],
+      "mcpServers": ["omk-project"],
+      "hooks": ["pre-shell-guard.sh"]
+    },
+    "ontology": {
+      "skills": ["omk-context-broker", "graph-view", "agentmemory"],
+      "mcpServers": ["omk-project"],
+      "hooks": ["subagent-stop-audit.sh"]
+    }
+  }
+}

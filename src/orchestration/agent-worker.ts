@@ -11,6 +11,8 @@ import type { WorkerLogHandle } from "./log-streamer.js";
 import { renderScopedAgentYaml, type AgentCapabilityScopes } from "../util/scoped-agent-file.js";
 import { assignSkills, type SkillAssignment } from "./skill-assigner.js";
 import { capabilityScopesFromRouting } from "./capability-routing.js";
+import { buildChildEnv } from "../runtime/child-env.js";
+import type { TaskRunContext } from "../contracts/worker-context.js";
 
 export interface AgentWorkerOptions {
   node: DagNode;
@@ -20,6 +22,7 @@ export interface AgentWorkerOptions {
   cwd?: string;
   env?: Record<string, string>;
   timeout?: number;
+  runContext?: TaskRunContext;
 }
 
 export interface WorkerOutput {
@@ -30,6 +33,21 @@ export interface WorkerOutput {
   metadata?: Record<string, unknown>;
 }
 
+export function buildAgentWorkerSpawnEnv(
+  workerEnv: Record<string, string>,
+  metadata: { readonly runId: string; readonly nodeId: string; readonly role: string }
+): Record<string, string> {
+  return buildChildEnv({
+    parentEnv: process.env,
+    overrideEnv: {
+      ...workerEnv,
+      OMK_RUN_ID: metadata.runId,
+      OMK_NODE_ID: metadata.nodeId,
+      OMK_NODE_ROLE: metadata.role,
+    },
+  });
+}
+
 export class AgentWorker {
   private node: DagNode;
   private runId: string;
@@ -38,6 +56,7 @@ export class AgentWorker {
   private cwd: string;
   private env: Record<string, string>;
   private timeout: number;
+  private runContext?: TaskRunContext;
   private process: ChildProcess | null = null;
   private abortController: AbortController | null = null;
 
@@ -49,6 +68,7 @@ export class AgentWorker {
     this.cwd = options.cwd ?? process.cwd();
     this.env = options.env ?? {};
     this.timeout = options.timeout ?? 300000; // 5분 기본
+    this.runContext = options.runContext;
   }
 
   /**
@@ -64,7 +84,12 @@ export class AgentWorker {
       this.logHandle.log("info", `Executing node in-process: ${this.node.id}`);
 
       const { createRuntimeBackedTaskRunner } = await import("../runtime/runtime-backed-task-runner.js");
-      const runner = await createRuntimeBackedTaskRunner({ cwd: this.cwd, env: this.env });
+      const runner = await createRuntimeBackedTaskRunner({
+        cwd: this.cwd,
+        env: this.env,
+        runId: this.runId,
+        goal: this.node.name,
+      });
 
       const timeoutId =
         this.timeout > 0
@@ -77,7 +102,7 @@ export class AgentWorker {
           : undefined;
 
       try {
-        const taskResult = await runner.run(this.node, this.env, this.abortController.signal);
+        const taskResult = await runner.run(this.node, this.env, this.abortController.signal, this.runContext);
         const duration = Date.now() - startTime;
 
         for (const line of taskResult.stdout.split("\n")) {
@@ -102,6 +127,7 @@ export class AgentWorker {
             duration,
             nodeId: this.node.id,
             role: this.node.role,
+            capabilityScopes: capabilityScopesFromRouting(this.node.routing),
           },
         };
       } catch (error) {
@@ -133,13 +159,11 @@ export class AgentWorker {
       try {
         this.process = spawn(command, args, {
           cwd: this.cwd,
-          env: {
-            ...process.env,
-            ...this.env,
-            OMK_RUN_ID: this.runId,
-            OMK_NODE_ID: this.node.id,
-            OMK_NODE_ROLE: this.node.role,
-          },
+          env: buildAgentWorkerSpawnEnv(this.env, {
+            runId: this.runId,
+            nodeId: this.node.id,
+            role: this.node.role,
+          }),
           stdio: ["pipe", "pipe", "pipe"],
           signal: this.abortController!.signal,
         });

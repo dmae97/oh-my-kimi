@@ -13,7 +13,7 @@ import { getOmkVersionSync } from "../../util/version.js";
 import { resolveBundledLspBinary } from "../lsp.js";
 import { detectPackageManager } from "../../mcp/quality-gate.js";
 import { buildMcpDoctorReport } from "../mcp.js";
-import { discoverRoutingInventory } from "../../orchestration/routing.js";
+import { discoverRoutingInventory } from "../../orchestration/routing/inventory.js";
 import { validateProjectAgentYaml, formatAgentYamlIssues } from "../../util/agent-schema.js";
 import {
   getGlobalMemoryConfigPath,
@@ -191,7 +191,7 @@ export async function runtimeChecks(resources: OmkResourceSettings): Promise<Che
     message: codexExists ? "available" : "not found",
   });
   results.push({
-    name: "kimi-cli",
+    name: "kimi-api",
     status: kimiExists ? "ok" : kimiDisabled ? "info" : "warn",
     message: kimiExists ? "available" : kimiDisabled ? "disabled by OMK_KIMI_ENABLED" : "not found",
   });
@@ -941,6 +941,28 @@ export async function securityChecks(root: string): Promise<CheckResult[]> {
   const results: CheckResult[] = [];
   const configPath = join(root, ".omk", "config.toml");
   const configExists = await pathExists(configPath);
+
+  results.push({
+    name: "Child Env Isolation",
+    status: "ok",
+    message: "parent env not inherited by default; secret-like env drops require explicit grants",
+    metadata: {
+      inheritEnv: false,
+      secretEnvPolicy: "drop-by-default",
+      explicitSecretGrants: true,
+    },
+  });
+
+  results.push({
+    name: "Sandbox Enforcement",
+    status: "info",
+    message: "env-only active; OS-level filesystem, process, and network sandboxing is not enforced",
+    metadata: {
+      enforcement: "env-only",
+      osSandbox: "not-enforced",
+      networkPolicy: "not-enforced",
+    },
+  });
 
   if (!configExists) {
     results.push({ name: "Config Audit", status: "info", message: ".omk/config.toml not found" });

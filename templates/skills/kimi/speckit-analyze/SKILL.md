@@ -1,7 +1,7 @@
 ---
 name: "speckit-analyze"
 description: "Perform a non-destructive cross-artifact consistency and quality analysis across spec.md, plan.md, and tasks.md after task generation."
-compatibility: "Requires spec-kit project structure with .specify/ directory"
+compatibility: "Supports standard .specify/specs layout; OMK fallback uses .omk/specs and .omk/templates/spec-kit-omk-preset when standard spec-kit is not initialized."
 metadata:
   author: "github-spec-kit"
   source: "templates/commands/analyze.md"
@@ -64,7 +64,7 @@ Identify inconsistencies, duplications, ambiguities, and underspecified items ac
 
 ### 1. Initialize Analysis Context
 
-Run `.specify/scripts/bash/check-prerequisites.sh --json --require-tasks --include-tasks` once from repo root and parse JSON for FEATURE_DIR and AVAILABLE_DOCS. Derive absolute paths:
+Run `.specify/scripts/bash/check-prerequisites.sh --json --require-tasks --include-tasks` once from repo root and parse JSON for FEATURE_DIR and AVAILABLE_DOCS. If the script is absent, use OMK fallback resolution: `SPECIFY_FEATURE_DIRECTORY`, then `.specify/feature.json`, then the latest `.omk/specs/*` directory containing `spec.md`, `plan.md`, and `tasks.md`. Derive absolute paths:
 
 - SPEC = FEATURE_DIR/spec.md
 - PLAN = FEATURE_DIR/plan.md

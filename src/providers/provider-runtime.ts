@@ -1,4 +1,5 @@
 import type { TaskRunner } from "../contracts/orchestration.js";
+import type { TaskRunContext } from "../contracts/worker-context.js";
 import { createKimiTaskRunner, type KimiTaskRunnerOptions } from "../kimi/runner.js";
 import { style, status } from "../util/theme.js";
 import { getProjectRoot } from "../util/fs.js";
@@ -26,6 +27,7 @@ import { createContextBroker } from "../runtime/context-broker.js";
 import type { AgentRuntime } from "../runtime/agent-runtime.js";
 import { createKimiPrintRuntime } from "../runtime/kimi-print-runtime.js";
 import { createKimiApiRuntime } from "../runtime/kimi-api-runtime.js";
+import { createMimoApiRuntime } from "../runtime/mimo-api-runtime.js";
 import { createRuntimeRouter } from "../runtime/runtime-router.js";
 
 export interface RuntimeRegistryOptions {
@@ -52,20 +54,26 @@ async function discoverKimiRuntime(
   options: RuntimeRegistryOptions
 ): Promise<{ runner?: TaskRunner; provider?: AgentProvider; runtimes: AgentRuntime[] }> {
   const kimiEnabled = process.env.OMK_KIMI_ENABLED !== "0";
-  const kimiBin = options.kimi
-    ? resolveKimiBin({ ...process.env, ...(options.kimi.env ?? {}) })
-    : resolveKimiBin(process.env);
-  const kimiAvailable =
-    kimiEnabled && options.kimi != null && (await checkCommand(kimiBin).catch(() => false));
-  if (!kimiAvailable) return { runtimes: [] };
-  const runner = createKimiTaskRunner(options.kimi!);
-  const provider = createKimiProvider({ runner });
-  const printRuntime = createKimiPrintRuntime(options.kimi!);
+  if (!kimiEnabled || !options.kimi) return { runtimes: [] };
+
+  // kimi-api uses direct Moonshot HTTP API — no binary needed
   const apiRuntime = createKimiApiRuntime({
-    cwd: options.kimi!.cwd,
-    env: options.kimi!.env as NodeJS.ProcessEnv | undefined,
+    cwd: options.kimi.cwd,
+    env: options.kimi.env as NodeJS.ProcessEnv | undefined,
   });
-  return { runner, provider, runtimes: [printRuntime, apiRuntime] };
+
+  // kimi-print and kimi runner require the kimi CLI binary
+  const kimiBin = resolveKimiBin({ ...process.env, ...(options.kimi.env ?? {}) });
+  const kimiBinAvailable = await checkCommand(kimiBin).catch(() => false);
+  if (!kimiBinAvailable) {
+    // kimi-api works standalone without kimi binary
+    return { runtimes: [apiRuntime] };
+  }
+
+  const runner = createKimiTaskRunner(options.kimi);
+  const provider = createKimiProvider({ runner });
+  const printRuntime = createKimiPrintRuntime(options.kimi);
+  return { runner, provider, runtimes: [apiRuntime, printRuntime] };
 }
 
 export async function createProviderBackedTaskRunner(
@@ -115,6 +123,34 @@ export async function createProviderBackedTaskRunner(
       providerHealth.setUnavailable("kimi", "Kimi not discovered");
     }
     runtimes.push(...kimiDiscovery.runtimes);
+  }
+
+  // Auto-discovery: MiMo (Xiaomi MiMo API — OpenAI-compatible)
+  if (!explicitProviderIds.has("mimo")) {
+    providerHealth.register("mimo");
+    const mimoEnabled = process.env.OMK_MIMO_ENABLED !== "0";
+    if (mimoEnabled) {
+      // Read API key from env or config.toml
+      let mimoApiKey = process.env.MIMO_API_KEY;
+      if (!mimoApiKey) {
+        try {
+          const { readFileSync } = await import("node:fs");
+          const { join } = await import("node:path");
+          const { getUserHome } = await import("../util/fs.js");
+          const configPath = join(getUserHome(), ".kimi", "config.toml");
+          const configContent = readFileSync(configPath, "utf-8");
+          const mimoMatch = configContent.match(/\[providers\.mimo\][\s\S]*?api_key\s*=\s*"([^"]+)"/);
+          if (mimoMatch) mimoApiKey = mimoMatch[1];
+        } catch { /* config not found */ }
+      }
+      if (mimoApiKey) {
+        const mimoRuntime = createMimoApiRuntime({ apiKey: mimoApiKey });
+        runtimes.push(mimoRuntime);
+        providerHealth.setAvailable("mimo");
+      } else {
+        providerHealth.setUnavailable("mimo", "MIMO_API_KEY not set");
+      }
+    }
   }
 
   // DeepSeek discovery (skip if explicitly injected)
@@ -269,7 +305,7 @@ export async function createProviderBackedTaskRunner(
   const wrappedRunner: TaskRunner = {
     onThinking: baseRunner.onThinking,
     fork: baseRunner.fork,
-    async run(node, env, signal) {
+    async run(node, env, signal, context) {
       let budgetReport: unknown;
       try {
         budgetReport = (await contextBroker.buildCapsule(node)).report;
@@ -277,7 +313,7 @@ export async function createProviderBackedTaskRunner(
         const errorMsg = err instanceof Error ? err.message : String(err);
         process.stderr.write(`[omk] ContextBroker failed for node ${node.id}: ${errorMsg}\n`);
       }
-      const taskResult = await baseRunner.run(node, env, signal);
+      const taskResult = await baseRunner.run(node, env, signal, context);
       taskResult.metadata = {
         ...(taskResult.metadata ?? {}),
         ...(budgetReport ? { _budgetReport: budgetReport } : {}),
@@ -371,7 +407,7 @@ function uniqueProviderIds(providers: ProviderId[]): ProviderId[] {
 
 function taskRunnerFromAgentProvider(provider: AgentProvider): TaskRunner {
   return {
-    async run(node, env, signal) {
+    async run(node, env, signal, context?: TaskRunContext) {
       const fallbackSignal = new AbortController().signal;
       const attempt = Number(env.OMK_PROVIDER_ATTEMPT ?? "1");
       const result = await provider.run({
@@ -379,6 +415,7 @@ function taskRunnerFromAgentProvider(provider: AgentProvider): TaskRunner {
         env,
         signal: signal ?? fallbackSignal,
         attempt: Number.isFinite(attempt) && attempt > 0 ? Math.floor(attempt) : 1,
+        ...(context ? { runContext: context } : {}),
       });
       return toTaskResult(result);
     },

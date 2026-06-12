@@ -353,20 +353,29 @@ Do not duplicate runtime inventories; follow AGENTS.md and \`chat-agent-harness.
 
 export const ROADMAP_MD = `# Roadmap
 
-Current source version: v1.1.17
-Last updated: 2026-05-18
+Current source version: v1.1.18
+Last updated: 2026-05-24
 
-## v1.1.9 reality
+## Current runtime stance
 
-Provider routing and graph viewing are no longer purely future work:
+OMK is the root orchestrator. Kimi is the default authority-capable provider adapter, not the whole runtime. Codex, DeepSeek, OpenCode, CommandCode, OpenRouter, Qwen, Gemini, and Claude run as adapter lanes only when provider health, capability, approval, sandbox, and harness policy match the task.
 
-- \`omk run\`, \`omk parallel\`, and DAG replay expose \`--provider auto|kimi\`.
-- \`omk provider\` / \`omk deepseek\` manage DeepSeek enablement, key setup, availability checks, and primary fallback.
-- DeepSeek is an opportunistic read-only/advisory worker; Primary provider remains the orchestrator, writer, merger, and final authority.
-- \`omk graph view\` generates an HTML view from \`.omk/memory/graph-state.json\`.
+- \`omk run\`, \`omk parallel\`, chat harnesses, and DAG replay expose provider routing and evidence-gated lanes.
+- \`omk provider\` / \`omk deepseek\` manage provider enablement, key setup, availability checks, and fallback readiness.
+- DeepSeek is read/review/advisory by default; it must not receive write/shell authority from native chat defaults.
+- The resolved authority provider remains the writer, merger, and final synthesis lane for write/shell/merge work.
+- \`omk graph view\` generates an HTML view from local graph memory.
 - \`omk goal\` has a persisted lifecycle, continue loop, generated plan/evidence criteria, and verification flow.
 
 ## v1.2 — Hardening the current surface
+
+### P0: native runtime safety hardening
+
+- Remaining: native chat turn capabilities must be intent-based: read-only by default, write only for edits, shell only for explicit command/build/test work, merge only for merge/release operations.
+- Remaining: \`--execution ask|auto|never\` and sandbox mode must propagate into runtime adapter metadata; provider adapters must not silently collapse ask into never.
+- Remaining: \`authority\`, \`primary\`, and \`omk\` provider policy must resolve to a concrete provider before bootstrap/router execution.
+- Remaining: CLI provider bootstrap must distinguish runtime/binary availability from auth/model/quota readiness.
+- Remaining: MCP, skills, hooks, and tool-plane parse or resolution failures must surface as diagnostics; runtime-required MCP failures should hard fail.
 
 ### P0: release and contract gates
 
@@ -374,8 +383,9 @@ Provider routing and graph viewing are no longer purely future work:
 - Done: package dry-pack, package audit, tarball smoke, native safety build, and release matrix gates were re-verified against v1.1.17 artifacts.
 - Done: provider/deepseek and screenshot JSON command contracts gained hermetic regression tests.
 - Done: current AGENTS/init templates and packaged workflow skills were aligned with the active skills/MCP/agents/harness surface, including all generated agent MCP/skills/hooks flags and parallel subagent orchestration guidance.
-- Remaining: lock broader provider fallback metadata with tests for rate limit, timeout, and primary fallback variants.
+- Remaining: lock broader provider fallback metadata with tests for rate limit, timeout, and authority fallback variants.
 - Remaining: define minimum machine-readable CLI envelopes for the rest of the automation-critical commands.
+- Remaining: release/tag only after local gates, native safety packaging, package audit, smoke-pack, tarball install smoke, GitHub Smoke Test, and GitHub CI pass on the exact target commit.
 
 ### P1: observability and diagnostics
 
@@ -396,7 +406,7 @@ Provider routing and graph viewing are no longer purely future work:
 
 ### Provider routing maturity
 
-- Keep primary provider as the main orchestrator, planner, merger, and final synthesis runtime.
+- Keep the resolved authority provider as the writer, merger, and final synthesis runtime.
 - Use provider hints for explorer, reviewer, QA, planner, and documentation roles only when preflight is healthy and task risk is low.
 - Record provider attempts, route confidence, fallback reason, and final authority in run evidence.
 
@@ -432,7 +442,17 @@ Please report security issues via GitHub Issues with the \`security\` label.
 
 ## Built-in Protections
 
-open_multi-agent_kit includes default hooks to block destructive commands and secret leakage.
+open_multi-agent_kit includes scoped default hooks to block destructive commands and secret leakage when the active runtime/harness enables them.
+
+## Native Runtime Safety Gates
+
+- Native chat turns should be read-only by default; write, shell, and merge capabilities must be requested only when task intent requires them.
+- \`--execution ask|auto|never\` and sandbox policy must propagate through routing into runtime adapters.
+- \`authority\`, \`primary\`, and \`omk\` provider policies must resolve to a concrete provider before execution.
+- DeepSeek and other advisory providers are read/review/advisory by default and must not silently receive write/shell authority.
+- Provider bootstrap must distinguish binary/runtime availability from auth, model, and quota readiness.
+- Provider failure previews must be gated behind debug mode and redacted before terminal or artifact output.
+- MCP, skills, hooks, and tool-plane parse/resolution failures must surface as diagnostics; runtime-required MCP failures should block execution.
 
 ## MCP and Harness Secret Handling
 
@@ -440,6 +460,34 @@ open_multi-agent_kit includes default hooks to block destructive commands and se
 - Never print, commit, or summarize MCP \`env\`, headers, tokens, or provider keys.
 - Treat \`chat-agent-harness.json\` as private run metadata: use it for inventory/gates, but do not paste large inventories or secret-like values into prompts, memory, or reports.
 - Prefer sanitized \`omk mcp doctor --json\`, \`omk verify --json\`, test summaries, and secret scans as shareable evidence.
+
+## Child Runtime Isolation
+
+OMK currently provides environment hardening for child runtimes.
+
+By default, child runtimes do not inherit the full parent process environment.
+OMK passes an allowlisted environment and drops common secret-bearing variables
+such as cloud provider credentials, GitHub/NPM tokens, SSH agent sockets,
+Kubernetes config, and dotenv/env-file references.
+
+This is not a full OS-level sandbox. Filesystem, process, and network isolation
+are future hardening work and must not be assumed unless explicitly provided by
+the selected runtime or host environment.
+
+Current security claims:
+
+- OMK prevents ambient secret leakage into child runtimes by default.
+- OMK sanitizes child runtime environments.
+- OMK routes tasks according to declared runtime capabilities.
+- OMK forces approval for write-capable Codex workspace runs.
+- OMK exposes sandbox intent/profile metadata for future enforcement.
+
+Non-claims:
+
+- OMK does not fully sandbox child CLIs.
+- OMK does not prevent all filesystem access outside the workspace.
+- OMK does not prevent network exfiltration.
+- OMK does not enforce OS-level process isolation.
 
 ## Best Practices
 

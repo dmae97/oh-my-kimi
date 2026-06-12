@@ -3,6 +3,7 @@
 // Read-only for all other workers. Version-bump only via Integration Worker.
 
 import type { Dag, DagNode } from "./dag.js";
+import type { TaskRunContext } from "./worker-context.js";
 
 export type ApprovalPolicy = "interactive" | "auto" | "yolo" | "block";
 
@@ -104,6 +105,83 @@ export interface UserIntent {
   rationale: string;
 }
 
+export type UserIntentLanguage = "ko" | "en" | "mixed" | "unknown";
+
+export type UserIntentTargetSurface =
+  | "cli"
+  | "tui"
+  | "nlp"
+  | "harness"
+  | "runtime"
+  | "provider"
+  | "mcp"
+  | "docs"
+  | "tests";
+
+export interface UserIntentAmbiguitySignal {
+  kind: "admin-command" | "repo-target" | "execution-mode" | "provider" | "scope";
+  message: string;
+  severity: "low" | "medium" | "high";
+}
+
+export interface UserIntentRoutingHints {
+  preferredExecutionStrategy?: ExecutionStrategy;
+  preferredProvider?: string;
+  requireEvidence?: boolean;
+  requireHarness?: boolean;
+}
+
+export interface UserIntentV2 extends UserIntent {
+  confidence: number;
+  matchedRules: string[];
+  language: UserIntentLanguage;
+  domainTerms: string[];
+  targetSurfaces: UserIntentTargetSurface[];
+  extractedFiles: string[];
+  extractedCommands: string[];
+  ambiguitySignals: UserIntentAmbiguitySignal[];
+  routingHints: UserIntentRoutingHints;
+}
+
+export type RunCapabilityAssignmentSource =
+  | "routing"
+  | "skill-assigner"
+  | "capability-router"
+  | "manual";
+
+export interface RunCapabilityAssignment {
+  skills: string[];
+  mcpServers: string[];
+  hooks: string[];
+  tools?: string[];
+  source?: RunCapabilityAssignmentSource;
+  rationale?: string;
+}
+
+export interface RunGoalState {
+  id?: string;
+  title?: string;
+  objective: string;
+  successCriteria: Array<{ id: string; description: string; requirement: string }>;
+  status?: "planned" | "running" | "blocked" | "complete" | "failed";
+}
+
+export type RunEvidenceKind = "file" | "diff" | "test" | "log" | "diagnostic";
+
+export interface RunEvidenceRequirement {
+  kind: RunEvidenceKind;
+  required: boolean;
+  description: string;
+}
+
+export interface RunRouteDecision {
+  intent: string;
+  selectedAgents: string[];
+  reason: string;
+  requiredEvidence: RunEvidenceRequirement[];
+  mode: "read-only" | "write" | "dangerous";
+}
+
 export type EstimateConfidence = "low" | "medium" | "high";
 
 export interface RunProgressEstimate {
@@ -148,11 +226,17 @@ export interface RunState {
   schemaVersion: 1;
   runId: string;
   goalId?: string;
+  /** Goal bound to the run so HUD/control loops do not depend on ad-hoc markdown parsing. */
+  goal?: RunGoalState;
   goalSnapshot?: {
     title: string;
     objective: string;
     successCriteria: Array<{ id: string; description: string; requirement: string }>;
   };
+  /** Per-lane scoped skill/MCP/hook assignment names. Never stores MCP config/env values. */
+  capabilityAssignments?: Record<string, RunCapabilityAssignment>;
+  /** Policy-level route decision used by HUD/control loops to explain why lanes exist. */
+  routeDecision?: RunRouteDecision;
   nodes: DagNode[];
   startedAt: string;
   completedAt?: string;
@@ -177,7 +261,7 @@ export interface RunResult {
 }
 
 export interface TaskRunner {
-  run(node: DagNode, env: Record<string, string>, signal?: AbortSignal): Promise<TaskResult>;
+  run(node: DagNode, env: Record<string, string>, signal?: AbortSignal, context?: TaskRunContext): Promise<TaskResult>;
   /** Optional live-thinking callback so the executor can surface runner progress. */
   onThinking?: (thinking: string) => void;
   /** Create a new runner with an isolated onThinking callback (parallel-safe). */

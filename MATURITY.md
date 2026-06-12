@@ -1,6 +1,6 @@
 # OMK Command Maturity Matrix
 
-Last updated: 2026-05-22
+Last updated: 2026-05-24
 Current source version: v1.1.18
 
 | Level | Meaning |
@@ -15,7 +15,7 @@ Current source version: v1.1.18
 |---------|-------|
 | `omk init` | Project scaffold for AGENTS.md, DESIGN.md, and local `.omk/` state. |
 | `omk doctor` | Runtime/toolchain/project diagnostics. Supports `--json` for CI-style consumption. |
-| `omk chat` | Interactive chat coordinator with startup status/HUD preview and run-scoped harness manifest generation. |
+| `omk chat` | Interactive chat coordinator with startup status/HUD preview and run-scoped harness manifest generation. The Kimi-default path is stable; native provider-neutral routing remains gated by the hardening items below. |
 | `omk hud` | Execution status and local system usage HUD. |
 | `omk cockpit` | Sidecar cockpit for run state, TODOs, and ETA. |
 | `omk plan` | Plan-only execution entrypoint. |
@@ -69,7 +69,8 @@ Current source version: v1.1.18
 |------|---------------|----------------|
 | JSON output | Present on `doctor`, `runs/history`, `update`, `verify`, `goal` read/verify commands, provider commands, and screenshot subcommands; provider/screenshot JSON contracts are now regression-tested. | Expand consistent JSON to MCP diagnostics, graph, DAG, summary, and workflow entrypoints. |
 | Provider routing | DeepSeek opportunistic worker routing exists for low-risk/read-heavy paths; Kimi remains the most mature adapter, orchestrator, and fallback; run summaries/reports now include provider attempt and fallback totals. | Add HUD provider route metrics and broader release-gate tests for fallback/metadata contracts. |
+| Native runtime safety | OMK owns the root-orchestrator direction, but native chat must still lock turn-risk inference, approval/sandbox propagation, authority resolution, provider health probes, and DeepSeek read-only enforcement before stable provider-neutral claims. | Treat `docs/native-root-runtime-hardening.md` and `.omk/specs/native-orchestrator-phase1/` as the active hardening contract. |
 | MCP diagnostics | `mcp list/doctor/test` exist; invalid project/global MCP JSON now fails visibly through diagnostics without exposing config contents. | Add machine-readable MCP JSON and structured failure categories for command resolution, timeout, permission, and server health. |
 | Skills and harness templates | `omk skill` exposes current core/TypeScript/review packs, while init templates document project MCP scope, runtime skills, portable `.agents/skills`, and run-scoped harness manifests. | Keep external-inspired skills compact, source-linked, and non-vendored; verify install/sync through `skill-command` tests and package audit. |
-| Release docs and site | README, CHANGELOG, MATURITY, ROADMAP, getting-started docs, package audit, and release-gate commands now distinguish the v1.1.18 source target from the latest published v1.1.17 release while documenting alpha/experimental surfaces, parallel subagent orchestration, typed doctor repair plans, startup update prompts, native safety package readiness, current harness templates, packaged workflow skills, and the public project repository at `https://github.com/dmae97/open_multi-agent_kit`. | Treat `npm run release:check`, native safety packaging, tarball install smoke, and CI release workflow evidence as the publish/deploy gate before claiming v1.1.18 as released. |
+| Release docs and site | README, CHANGELOG, MATURITY, ROADMAP, getting-started docs, package audit, and release-gate commands now distinguish the v1.1.18 source target from the latest published v1.1.17 release while documenting alpha/experimental surfaces, parallel subagent orchestration, typed doctor repair plans, startup update prompts, native safety package readiness, current harness templates, packaged workflow skills, and the public project repository at `https://github.com/dmae97/open_multi-agent_kit`. | Treat `npm run release:check`, native safety packaging, tarball install smoke, GitHub Smoke Test, and GitHub CI evidence on the exact commit as the publish/deploy gate before claiming v1.1.18 as released. Current `6305e2b` Smoke is green but CI is red on Windows jobs. |
 | Goal planner | Goal lifecycle exists, including continue, generated plan/evidence criteria, and verification. | Expand planner quality scoring and release evidence. |

@@ -8,7 +8,7 @@
  *   - Resolves tarball globs to a single file before install.
  *   - Requires both omk and open-multi-agent-kit installed bin shims (no cli.js fallback).
  *   - Runs local install smoke + global-prefix install smoke.
- *   - Runs Kimi soft onboarding smoke with isolated HOME (no host Kimi dependency).
+ *   - Runs provider-neutral Kimi API onboarding smoke with isolated HOME (no host Kimi CLI dependency).
  *   - Runs star fallback smoke with a fake gh shim.
  */
 
@@ -300,7 +300,7 @@ try {
 }
 
 // ---------------------------------------------------------------------------
-// Kimi soft onboarding smoke (isolated HOME, no host kimi dependency)
+// Kimi API onboarding smoke (isolated HOME, no host Kimi CLI dependency)
 // ---------------------------------------------------------------------------
 
 const isolatedHome = mkdtempSync(smokeTmpPrefix("omk-smoke-home-"));
@@ -313,7 +313,16 @@ const isolatedPath = isWindows
   ? `${isolatedPathDir};${process.env.PATH || ""}`
   : `${isolatedPathDir}:${process.env.PATH || ""}`;
 
-// Update check --json smoke with missing Kimi
+function isDirectKimiApiStatus(kimi) {
+  if (typeof kimi !== "object" || kimi === null) return false;
+  const actionText = [kimi.installCmd, kimi.installScript, kimi.fallbackInstallCmd]
+    .filter((value) => typeof value === "string")
+    .join("\n")
+    .toLowerCase();
+  return actionText.includes("kimi-api") && actionText.includes("no cli");
+}
+
+// Update check --json smoke with provider-neutral Kimi API status
 try {
   const raw = run(localOmkCmd("update check --json --refresh"), installDir, {
     ...isolatedEnv,
@@ -324,7 +333,9 @@ try {
   if (typeof parsed !== "object" || parsed === null) {
     throw new Error("update check output is not a JSON object");
   }
-  if (parsed.kimi && (parsed.kimi.installed === false || parsed.kimi.missing === true || parsed.kimi.notFound === true)) {
+  if (isDirectKimiApiStatus(parsed.kimi)) {
+    logPass("Update check reports Kimi API no-CLI status");
+  } else if (parsed.kimi && (parsed.kimi.installed === false || parsed.kimi.missing === true || parsed.kimi.notFound === true)) {
     logPass("Update check reports missing Kimi actionably");
   } else if (parsed.kimi && parsed.kimi.latest) {
     logPass("Update check actionable with missing/required Kimi info");
