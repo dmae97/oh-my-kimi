@@ -8,6 +8,7 @@
 - `ModelRegistry.resolver` now accepts a model directly — `resolver(model, sessionId)` — deriving `provider`, `baseUrl`, and `modelId` from it; all model-scoped call sites migrated from the verbose `resolver(model.provider, { sessionId, baseUrl, modelId })` form.
 - Added experimental `snapcompact.systemPrompt` and `snapcompact.toolResults` settings (off by default, `/settings` → Context → Experimental) that render the system prompt and large historical tool results as dense snapcompact PNG frames on vision-capable models to cut token cost. Frames are built per-request in the provider-context transform, cached across turns, capped by a per-provider image budget, and gated on a token-savings estimate — they never reach `session.jsonl`.
 - Added a Personality selector to `/settings` (Model → Prompt): `default` (the previous built-in reply style), `friendly`, `pragmatic`, or `none`. The selected spec renders into a dedicated `<personality>` system-prompt block (extracted from the former `<reply-guidelines>` section) and applies to the live session immediately; subagents always omit the block.
+- Added `mnemopi.polyphonicRecall` and `mnemopi.enhancedRecall` config.yml settings (off by default, `/settings` → Memory → Mnemopi) that enable the mnemopi 4-voice polyphonic recall engine and the tiered query result cache without environment variables; `MNEMOPI_POLYPHONIC_RECALL` / `MNEMOPI_ENHANCED_RECALL` still override the configured values when set ([#2323](https://github.com/can1357/oh-my-pi/issues/2323)).
 
 ### Changed
 

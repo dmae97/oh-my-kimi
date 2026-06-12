@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { type Env, enhancedRecallEnabled } from "../config";
 import { cosineSimilarity } from "./vector-math";
 
 export type QueryCacheResult = Record<string, unknown>;
@@ -39,10 +40,8 @@ interface CacheRow {
 	readonly results_json: string;
 }
 
-type Env = Readonly<Record<string, string | undefined>>;
-
 export function isEnhancedRecallEnabled(env: Env = process.env): boolean {
-	return env.MNEMOPI_ENHANCED_RECALL === "1";
+	return enhancedRecallEnabled(env);
 }
 
 export function isQueryCacheEnabled(useCache = true, env: Env = process.env): boolean {

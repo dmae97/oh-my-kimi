@@ -1748,6 +1748,28 @@ export const SETTINGS_SCHEMA = {
 			condition: "mnemopiActive",
 		},
 	},
+	"mnemopi.polyphonicRecall": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "memory",
+			group: "Mnemopi",
+			label: "Mnemopi Polyphonic Recall",
+			description: "Enable 4-voice recall (vector, graph, fact, temporal) fused with reciprocal rank fusion",
+			condition: "mnemopiActive",
+		},
+	},
+	"mnemopi.enhancedRecall": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "memory",
+			group: "Mnemopi",
+			label: "Mnemopi Enhanced Recall",
+			description: "Enable the tiered query result cache for repeated and similar recall queries",
+			condition: "mnemopiActive",
+		},
+	},
 	"mnemopi.noEmbeddings": {
 		type: "boolean",
 		default: false,
