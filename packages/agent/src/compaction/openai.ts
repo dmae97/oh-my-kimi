@@ -12,6 +12,7 @@
  *   with `{ summary, shortSummary? }`.
  */
 
+import { ProviderHttpError } from "@oh-my-pi/pi-ai/errors";
 import { parseTextSignature } from "@oh-my-pi/pi-ai/providers/openai-responses-shared";
 import { transformMessages } from "@oh-my-pi/pi-ai/providers/transform-messages";
 import type { AssistantMessage, FetchImpl, Message, Model } from "@oh-my-pi/pi-ai/types";
@@ -467,7 +468,13 @@ export async function requestOpenAiRemoteCompaction(
 			statusText: response.statusText,
 			errorText,
 		});
-		throw new Error(`Remote compaction failed (${response.status} ${response.statusText})`);
+		throw new ProviderHttpError(
+			`Remote compaction failed (${response.status} ${response.statusText})`,
+			response.status,
+			{
+				headers: response.headers,
+			},
+		);
 	}
 
 	const data = (await response.json()) as { output?: unknown[] } | undefined;
@@ -519,7 +526,13 @@ export async function requestRemoteCompaction(
 			statusText: response.statusText,
 			errorText,
 		});
-		throw new Error(`Remote compaction failed (${response.status} ${response.statusText})`);
+		throw new ProviderHttpError(
+			`Remote compaction failed (${response.status} ${response.statusText})`,
+			response.status,
+			{
+				headers: response.headers,
+			},
+		);
 	}
 
 	const data = (await response.json()) as RemoteCompactionResponse | undefined;
