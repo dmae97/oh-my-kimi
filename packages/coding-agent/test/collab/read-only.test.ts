@@ -141,7 +141,15 @@ interface TestGuest {
 	nextFrame(): Promise<CollabFrame>;
 }
 
-/** Raw guest speaking the wire protocol directly. `writeToken` overrides the link's token (e.g. forged). */
+/** Frames the host broadcasts on its own schedule (debounced state/agents, entry/event/bus taps). */
+const BROADCAST_FRAME_TYPES = new Set<CollabFrame["t"]>(["state", "agents", "entry", "event", "bus"]);
+
+/**
+ * Raw guest speaking the wire protocol directly. `writeToken` overrides the link's token (e.g. forged).
+ * Broadcast frames interleave nondeterministically with directed replies (the post-hello state
+ * broadcast races the first prompt's error reply), so `nextFrame` drops them and yields only the
+ * welcome/error frames these tests assert on.
+ */
 async function joinAsGuest(link: string, name: string, writeTokenOverride?: string): Promise<TestGuest> {
 	const parsed = parseCollabLink(link);
 	if ("error" in parsed) throw new Error(parsed.error);
@@ -152,6 +160,7 @@ async function joinAsGuest(link: string, name: string, writeTokenOverride?: stri
 	const queue: CollabFrame[] = [];
 	const waiters: ((frame: CollabFrame) => void)[] = [];
 	socket.onFrame = frame => {
+		if (BROADCAST_FRAME_TYPES.has(frame.t)) return;
 		const waiter = waiters.shift();
 		if (waiter) waiter(frame);
 		else queue.push(frame);
