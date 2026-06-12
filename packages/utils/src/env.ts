@@ -30,11 +30,22 @@ export function isSafeEnvValue(value: string): boolean {
 	return !value.includes("\0");
 }
 
+export function isMacosMallocStackLoggingEnvName(name: string): boolean {
+	return name === "MallocStackLogging" || name === "MallocStackLoggingNoCompact";
+}
+
 export function filterProcessEnv(env: Record<string, string | undefined>): Record<string, string> {
 	const result: Record<string, string> = {};
 	for (const key in env) {
 		const value = env[key];
-		if (!isSafeEnvName(key) || value === undefined || !isSafeEnvValue(value)) continue;
+		if (
+			!isSafeEnvName(key) ||
+			isMacosMallocStackLoggingEnvName(key) ||
+			value === undefined ||
+			!isSafeEnvValue(value)
+		) {
+			continue;
+		}
 		result[key] = value;
 	}
 	return result;
@@ -93,14 +104,14 @@ const projectEnv = parseEnvFile(path.join(process.cwd(), ".env"));
 
 for (const key of Object.keys(Bun.env)) {
 	const value = Bun.env[key];
-	if (!isSafeEnvName(key) || value === undefined || !isSafeEnvValue(value)) {
+	if (!isSafeEnvName(key) || isMacosMallocStackLoggingEnvName(key) || value === undefined || !isSafeEnvValue(value)) {
 		delete Bun.env[key];
 	}
 }
 
 for (const file of [projectEnv, agentEnv, piEnv, homeEnv]) {
 	for (const key in file) {
-		if (!Bun.env[key]) {
+		if (!isMacosMallocStackLoggingEnvName(key) && !Bun.env[key]) {
 			Bun.env[key] = file[key];
 		}
 	}

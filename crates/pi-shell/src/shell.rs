@@ -1340,8 +1340,15 @@ fn apply_env_fallback(shell: &mut BrushShell) -> Result<()> {
 		.map_err(|err| Error::msg(format!("Failed to set env fallback: {err}")))
 }
 
+fn is_macos_malloc_stack_logging_var(key: &str) -> bool {
+	matches!(key, "MallocStackLogging" | "MallocStackLoggingNoCompact")
+}
+
 fn should_skip_env_var(key: &str) -> bool {
 	if key.starts_with("BASH_FUNC_") && key.ends_with("%%") {
+		return true;
+	}
+	if is_macos_malloc_stack_logging_var(key) {
 		return true;
 	}
 
