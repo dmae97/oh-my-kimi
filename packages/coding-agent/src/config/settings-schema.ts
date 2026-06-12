@@ -3527,6 +3527,10 @@ export const SETTINGS_SCHEMA = {
 
 	"skills.enablePiProject": { type: "boolean", default: true },
 
+	"skills.enableAgentsUser": { type: "boolean", default: true },
+
+	"skills.enableAgentsProject": { type: "boolean", default: true },
+
 	"skills.customDirectories": { type: "array", default: [] as string[] },
 
 	"skills.ignoredSkills": { type: "array", default: [] as string[] },
@@ -4138,6 +4142,8 @@ export interface SkillsSettings {
 	enableClaudeProject?: boolean;
 	enablePiUser?: boolean;
 	enablePiProject?: boolean;
+	enableAgentsUser?: boolean;
+	enableAgentsProject?: boolean;
 	customDirectories?: string[];
 	ignoredSkills?: string[];
 	includeSkills?: string[];

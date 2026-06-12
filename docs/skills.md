@@ -99,7 +99,7 @@ Dedup key is skill name. First item with a given name wins.
 
 `loadSkills()` applies these controls:
 
-- source toggles: `enableCodexUser`, `enableClaudeUser`, `enableClaudeProject`, `enablePiUser`, `enablePiProject`
+- source toggles: `enableCodexUser`, `enableClaudeUser`, `enableClaudeProject`, `enablePiUser`, `enablePiProject`, `enableAgentsUser`, `enableAgentsProject`
 - `disabledExtensions` entries with `skill:<name>`
 - `ignoredSkills` (exclude; glob patterns)
 - `includeSkills` (include allowlist; glob patterns; empty means include all)
@@ -110,7 +110,8 @@ Filter order is:
 2. source enabled
 3. not ignored
 4. included (if include list present)
-   For providers other than codex/claude/native (for example `agents`, `claude-plugins`, `opencode`), enablement currently falls back to: enabled if **any** built-in source toggle is enabled.
+
+The `agents` provider (`.agent[s]/skills`) is the canonical OMP-native location and has its own `enableAgentsUser`/`enableAgentsProject` toggles — disabling Claude/Codex/Pi does **not** turn it off. For providers without a dedicated toggle (`claude-plugins`, `opencode`, `gemini`, `github`, …), enablement falls back to: enabled if **any** named source toggle is enabled.
 
 ### Collision and duplicate handling
 
