@@ -791,8 +791,10 @@ describe("agentLoop with AgentMessage", () => {
 			model: mock.model,
 			convertToLlm: identityConverter,
 			interruptMode: "immediate",
+			hasSteeringMessages: () => executed.length >= 1 && !queuedDelivered,
 			getSteeringMessages: async () => {
-				// Return steering message after tool execution has started
+				// Deliver the steering message at the injection boundary after
+				// tool execution has started
 				if (executed.length >= 1 && !queuedDelivered) {
 					queuedDelivered = true;
 					return [queuedUserMessage];
@@ -838,6 +840,166 @@ describe("agentLoop with AgentMessage", () => {
 			m => m.role === "user" && typeof m.content === "string" && m.content === "interrupt",
 		);
 		expect(sawInterruptInContext).toBe(true);
+	});
+
+	it("leaves steering queued when the run is aborted while interrupted tools settle", async () => {
+		// Regression: the mid-batch steering poll used to DEQUEUE the message into
+		// a loop-local variable. An external abort while the in-flight tools were
+		// still settling then injected it into history right before the run died —
+		// the message showed as "sent" but the agent never responded, and queue
+		// consumers (clearAllQueues/hasQueuedMessages) could no longer see it.
+		// The poll must only peek; an abort must leave the queue untouched.
+		const toolSchema = z.object({ value: z.string() });
+		const executed: string[] = [];
+		const abortController = new AbortController();
+		const steerTriggered = Promise.withResolvers<void>();
+		let steerReady = false;
+		let drained = false;
+
+		const tool: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo tool",
+			parameters: toolSchema,
+			concurrency: "shared",
+			async execute(_toolCallId, params) {
+				executed.push(params.value);
+				if (params.value === "fast") {
+					steerReady = true;
+				} else {
+					// Slow tool: keep settling until the steering interrupt has
+					// fired, then abort the whole run before resolving.
+					await steerTriggered.promise;
+					abortController.abort();
+					await Bun.sleep(1);
+				}
+				return {
+					content: [{ type: "text", text: `ok:${params.value}` }],
+					details: { value: params.value },
+				};
+			},
+		};
+
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [tool] };
+		const mock = createMockModel({
+			responses: [
+				{
+					content: [
+						{ type: "toolCall", id: "tool-1", name: "echo", arguments: { value: "fast" } },
+						{ type: "toolCall", id: "tool-2", name: "echo", arguments: { value: "slow" } },
+					],
+				},
+				{ content: ["never reached"] },
+			],
+		});
+
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			interruptMode: "immediate",
+			hasSteeringMessages: () => {
+				if (!steerReady) return false;
+				steerTriggered.resolve();
+				return true;
+			},
+			getSteeringMessages: async () => {
+				if (!steerReady) return [];
+				drained = true;
+				return [createUserMessage("interrupt")];
+			},
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("start")], context, config, abortController.signal, mock.stream);
+		for await (const event of stream) {
+			events.push(event);
+		}
+
+		// The queue was never drained into the dying run...
+		expect(drained).toBe(false);
+		// ...and the steering message never landed in history.
+		const steerInjected = events.some(
+			e => e.type === "message_start" && e.message.role === "user" && e.message.content === "interrupt",
+		);
+		expect(steerInjected).toBe(false);
+		const steerInContext = context.messages.some(m => m.role === "user" && m.content === "interrupt");
+		expect(steerInContext).toBe(false);
+	});
+
+	it("injects nothing when steering is retracted between the interrupt and the boundary", async () => {
+		// The interrupt poll peeks; the queue owner may still cancel (Esc/Alt+Up
+		// pulls the message back into the editor) before the loop reaches the
+		// injection boundary. The boundary dequeue must then find nothing and the
+		// loop must keep going without a phantom user message.
+		const toolSchema = z.object({ value: z.string() });
+		const executed: string[] = [];
+		let steerReady = false;
+
+		const tool: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo tool",
+			parameters: toolSchema,
+			concurrency: "exclusive",
+			async execute(_toolCallId, params) {
+				executed.push(params.value);
+				return {
+					content: [{ type: "text", text: `ok:${params.value}` }],
+					details: { value: params.value },
+				};
+			},
+		};
+
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [tool] };
+		const mock = createMockModel({
+			responses: [
+				{
+					content: [
+						{ type: "toolCall", id: "tool-1", name: "echo", arguments: { value: "first" } },
+						{ type: "toolCall", id: "tool-2", name: "echo", arguments: { value: "second" } },
+					],
+				},
+				{ content: ["done"] },
+			],
+		});
+
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			interruptMode: "immediate",
+			hasSteeringMessages: () => {
+				if (executed.length >= 1) {
+					steerReady = true;
+					return true;
+				}
+				return false;
+			},
+			// Retraction: by the time the loop dequeues, the queue is empty again.
+			getSteeringMessages: async () => [],
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("start")], context, config, undefined, mock.stream);
+		for await (const event of stream) {
+			events.push(event);
+		}
+
+		// The interrupt fired (second tool skipped), but no user message appeared.
+		expect(steerReady).toBe(true);
+		expect(executed).toEqual(["first"]);
+		const userInjected = events.some(
+			e => e.type === "message_start" && e.message.role === "user" && e.message.content !== "start",
+		);
+		expect(userInjected).toBe(false);
+
+		// The loop still completed the turn normally.
+		const finalAssistant = events.findLast(
+			(e): e is Extract<AgentEvent, { type: "message_end" }> =>
+				e.type === "message_end" && e.message.role === "assistant",
+		);
+		expect(finalAssistant).toBeDefined();
+		if (finalAssistant?.message.role !== "assistant") return;
+		expect(finalAssistant.message.stopReason).toBe("stop");
 	});
 
 	it("injects aside messages at the step boundary without interrupting tools", async () => {

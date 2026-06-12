@@ -1009,6 +1009,7 @@ export class Agent {
 				}
 				return this.#dequeueSteeringMessages();
 			},
+			hasSteeringMessages: () => this.#steeringQueue.length > 0,
 			getFollowUpMessages: async () => this.#dequeueFollowUpMessages(),
 			getAsideMessages: async () => (await this.#asideMessageProvider?.()) ?? [],
 			onBeforeYield: () => this.#onBeforeYield?.(),

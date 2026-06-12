@@ -5040,6 +5040,16 @@ export class AgentSession {
 			attribution: "user",
 			timestamp: Date.now(),
 		});
+		// A steer can land on an idle session: the caller checked isStreaming
+		// before the (potentially slow) image normalization above, so the turn
+		// may have ended in between. Without a drain the message would strand in
+		// the queue until the next manual prompt — schedule an immediate continue,
+		// mirroring #queueFollowUp's idle-path delivery.
+		if (this.#canAutoContinueForFollowUp()) {
+			this.#scheduleAgentContinue({
+				shouldContinue: () => this.#canAutoContinueForFollowUp() && this.agent.hasQueuedMessages(),
+			});
+		}
 	}
 
 	/**
@@ -6371,6 +6381,7 @@ export class AgentSession {
 				const snapcompactResult = await snapcompact.compact(preparation, {
 					convertToLlm,
 					model: this.model,
+					thinkingLevel: this.thinkingLevel,
 				});
 				summary = snapcompactResult.summary;
 				shortSummary = snapcompactResult.shortSummary;
@@ -7904,6 +7915,7 @@ export class AgentSession {
 				const snapcompactResult = await snapcompact.compact(preparation, {
 					convertToLlm,
 					model: this.model,
+					thinkingLevel: this.thinkingLevel,
 				});
 				summary = snapcompactResult.summary;
 				shortSummary = snapcompactResult.shortSummary;

@@ -523,6 +523,27 @@ export class InputController {
 				});
 
 				this.ctx.onInputCallback(submission);
+			} else {
+				// No input waiter: the main loop is between turns (post-turn
+				// epilogue, retry backoff, or a scheduled continue) with the agent
+				// momentarily idle. The editor already cleared itself on Enter, so
+				// falling through here would silently swallow the message. Queue it
+				// as a steer instead: the idle drain in #queueSteer delivers it
+				// immediately when the session is resumable, and a retry/continue
+				// run picks it up at loop start otherwise.
+				this.ctx.editor.imageLinks = undefined;
+				const images = inputImages && inputImages.length > 0 ? [...inputImages] : undefined;
+				this.ctx.pendingImages = [];
+				this.ctx.pendingImageLinks = [];
+				try {
+					await this.ctx.withLocalSubmission(text, () => this.ctx.session.steer(text, images), {
+						imageCount: images?.length ?? 0,
+					});
+				} catch (error) {
+					this.ctx.showError(error instanceof Error ? error.message : String(error));
+				}
+				this.ctx.updatePendingMessagesDisplay();
+				this.ctx.ui.requestRender();
 			}
 			this.ctx.editor.addToHistory(text);
 		};

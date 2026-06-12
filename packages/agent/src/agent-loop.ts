@@ -676,7 +676,6 @@ async function runLoopBody(
 				stream.push({ type: "message_end", message: snapshotAssistantMessage(message) });
 			}
 			newMessages.push(message);
-			let steeringMessagesFromExecution: AgentMessage[] | undefined;
 
 			if (message.stopReason === "error" || message.stopReason === "aborted") {
 				// Create placeholder tool results for any tool calls in the aborted message
@@ -737,7 +736,6 @@ async function runLoopBody(
 				);
 
 				toolResults.push(...executionResult.toolResults);
-				steeringMessagesFromExecution = executionResult.steeringMessages;
 
 				for (const result of toolResults) {
 					currentContext.messages.push(result);
@@ -790,9 +788,10 @@ async function runLoopBody(
 			// On external abort (user interrupt), leave the steering queue intact: the
 			// session aborts then continues, delivering the queue into a fresh run.
 			// Draining it here would inject the messages right before a model call that
-			// instantly aborts — message lands in history, agent never responds.
-			const steering =
-				steeringMessagesFromExecution ?? (signal?.aborted ? [] : (await config.getSteeringMessages?.()) || []);
+			// instantly aborts — message lands in history, agent never responds. The
+			// mid-batch interrupt poll only peeks (hasSteeringMessages), so the queue
+			// still owns every message until this dequeue.
+			const steering = signal?.aborted ? [] : (await config.getSteeringMessages?.()) || [];
 			if (hasMoreToolCalls) {
 				// Mid-work: fold any non-interrupting asides into the next turn alongside steering.
 				const asides = resolveAsides(await config.getAsideMessages?.());
@@ -1259,10 +1258,10 @@ async function executeToolCalls(
 	config: AgentLoopConfig,
 	telemetry: AgentTelemetry | undefined,
 	invokeAgentSpan: Span | undefined,
-): Promise<{ toolResults: ToolResultMessage[]; steeringMessages?: AgentMessage[] }> {
+): Promise<{ toolResults: ToolResultMessage[] }> {
 	const tools = currentContext.tools;
 	const {
-		getSteeringMessages,
+		hasSteeringMessages,
 		interruptMode = "immediate",
 		getToolContext,
 		transformToolCallArguments,
@@ -1281,8 +1280,6 @@ async function executeToolCalls(
 		? AbortSignal.any([signal, steeringAbortController.signal])
 		: steeringAbortController.signal;
 	const interruptState = { triggered: false };
-	let steeringMessages: AgentMessage[] | undefined;
-	let steeringCheckTail: Promise<void> = Promise.resolve();
 
 	const records = toolCalls.map(toolCall => ({
 		toolCall,
@@ -1305,23 +1302,20 @@ async function executeToolCalls(
 	const checkSteering = async (): Promise<void> => {
 		// `signal` (external/user abort) is checked separately from the internal
 		// steeringAbortController: once the run is externally aborted it is
-		// unwinding, and draining the steering queue here would strand the
-		// messages in the dying run instead of leaving them for the post-abort
-		// continue (interruptAndFlushQueuedMessages → Agent.continue()).
-		if (!shouldInterruptImmediately || !getSteeringMessages || interruptState.triggered || signal?.aborted) {
+		// unwinding and the interrupt would be redundant.
+		if (!shouldInterruptImmediately || !hasSteeringMessages || interruptState.triggered || signal?.aborted) {
 			return;
 		}
-		const check = steeringCheckTail.then(async () => {
+		// Peek only — the queue keeps owning the message until runLoopBody
+		// dequeues it at the next injection boundary. Dequeuing here would make
+		// the message invisible to queue consumers (clearAllQueues /
+		// hasQueuedMessages) while in-flight tools settle, and an external abort
+		// in that window would inject it into history right before the run dies.
+		if (await hasSteeringMessages()) {
 			if (interruptState.triggered || signal?.aborted) return;
-			const steering = await getSteeringMessages();
-			if (steering.length > 0) {
-				steeringMessages = steering;
-				interruptState.triggered = true;
-				steeringAbortController.abort();
-			}
-		});
-		steeringCheckTail = check.catch(() => {});
-		await check;
+			interruptState.triggered = true;
+			steeringAbortController.abort();
+		}
 	};
 
 	const emitToolResult = (record: (typeof records)[number], result: AgentToolResult<any>, isError: boolean): void => {
@@ -1630,7 +1624,7 @@ async function executeToolCalls(
 		}
 	}
 
-	return { toolResults: emittedToolResults, steeringMessages };
+	return { toolResults: emittedToolResults };
 }
 
 /**
