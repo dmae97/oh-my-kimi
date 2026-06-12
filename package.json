@@ -66,7 +66,6 @@
       "marked": "^18.0.5",
       "markit-ai": "0.5.3",
       "onnxruntime-node": "1.26.0",
-      "openai": "^6.42.0",
       "partial-json": "^0.1.7",
       "postcss": "^8.5.15",
       "prettier": "^3.8.4",
