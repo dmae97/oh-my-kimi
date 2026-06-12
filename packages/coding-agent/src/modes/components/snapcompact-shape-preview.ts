@@ -12,7 +12,6 @@
  * Sixel, Kitty `a=p`) do not survive. Everything else falls back to the stats
  * line plus a dim notice.
  */
-import type { Api } from "@oh-my-pi/pi-ai";
 import { type Component, type ImageBudget, renderImage, TERMINAL } from "@oh-my-pi/pi-tui";
 import {
 	DIM_OFF,
@@ -25,6 +24,7 @@ import {
 	SHAPE_VARIANT_NAMES,
 	SHAPE_VARIANTS,
 	type Shape,
+	type ShapeTarget,
 	type ShapeVariantName,
 } from "@oh-my-pi/snapcompact";
 import { theme } from "../theme/theme";
@@ -49,8 +49,8 @@ type PreviewEntry =
 	| { state: "ready"; data: string; edgePx: number; imageId: number; transmitted: boolean };
 
 export interface SnapcompactShapePreviewOptions {
-	/** Active model API; resolves what `auto` maps to for this provider. */
-	api?: Api;
+	/** Active model (api + id); resolves what `auto` maps to for this reader. */
+	model?: ShapeTarget;
 	/** Shared TUI image budget: stable graphics ids, transmit-once, exit cleanup. */
 	imageBudget?: ImageBudget;
 	/** Schedules a re-render once an async sample render completes. */
@@ -58,14 +58,14 @@ export interface SnapcompactShapePreviewOptions {
 }
 
 export class SnapcompactShapePreview implements Component {
-	#api: Api | undefined;
+	#model: ShapeTarget | undefined;
 	#budget: ImageBudget | undefined;
 	#requestRender: () => void;
 	#variant: ShapeVariantName | "auto" = "auto";
 	#entries = new Map<ShapeVariantName, PreviewEntry>();
 
 	constructor(currentValue: string, options: SnapcompactShapePreviewOptions = {}) {
-		this.#api = options.api;
+		this.#model = options.model;
 		this.#budget = options.imageBudget;
 		this.#requestRender = options.requestRender ?? (() => {});
 		this.setValue(currentValue);
@@ -77,7 +77,7 @@ export class SnapcompactShapePreview implements Component {
 	}
 
 	render(width: number): readonly string[] {
-		const shape = resolveShape(this.#api, this.#variant);
+		const shape = resolveShape(this.#model, this.#variant);
 		const name = resolvedVariantName(shape);
 		const geo = geometry(shape);
 		const label = this.#variant === "auto" ? `auto → ${name}` : name;

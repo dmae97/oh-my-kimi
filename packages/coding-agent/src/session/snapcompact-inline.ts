@@ -32,20 +32,11 @@ export interface SnapcompactInlineOptions {
 	shape?: snapcompact.ShapeVariantName | "auto";
 }
 
-/**
- * Image-count budget per provider. Snapcompact frames are 1568px (<2000px) so
- * dimension/size limits never bind; only COUNT does. Strictest mainstream is
- * Groq (~5), so unknown providers get the safe floor.
- */
-const INLINE_IMAGE_BUDGET_BY_PROVIDER: Record<string, number> = {
-	anthropic: 90,
-	"amazon-bedrock": 90,
-	openai: 200,
-	google: 200,
-	"google-vertex": 200,
-	"google-gemini-cli": 200,
-};
-const DEFAULT_INLINE_IMAGE_BUDGET = 5;
+// Per-provider image-count budgets live in @oh-my-pi/snapcompact
+// (`providerImageBudget`): snapcompact frames are 1568px (<2000px) so
+// dimension/size limits never bind; only COUNT does. Once the budget is
+// spent (e.g. OpenRouter's hard 8-image cap, already consumed by archive
+// frames), tool results ship verbatim as text.
 const MAX_SYSTEM_PROMPT_FRAMES = 6;
 /** Tool results under this many tokens are never rasterized — the swap can't
  *  save enough to justify trading crisp text for an image. */
@@ -275,7 +266,7 @@ export function estimateInlineSavings(input: {
 		return { visionCapable: false, savedTokens: 0 };
 	}
 
-	const shape = snapcompact.resolveShape(model.api, options.shape);
+	const shape = snapcompact.resolveShape(model, options.shape);
 	let existingImages = 0;
 	for (const message of input.messages) {
 		if (!Array.isArray(message.content)) continue;
@@ -283,7 +274,7 @@ export function estimateInlineSavings(input: {
 			if (block.type === "image") existingImages++;
 		}
 	}
-	const budget = (INLINE_IMAGE_BUDGET_BY_PROVIDER[model.provider] ?? DEFAULT_INLINE_IMAGE_BUDGET) - existingImages;
+	const budget = snapcompact.providerImageBudget(model.provider) - existingImages;
 
 	const candidates: InlineToolResultCandidate[] = [];
 	if (options.renderToolResults) {
@@ -409,9 +400,8 @@ export class SnapcompactInlineTransformer {
 		// rendering would lose the content entirely.
 		if (!model.input.includes("image")) return context;
 
-		const shape = snapcompact.resolveShape(model.api, this.options.shape);
-		const budget =
-			(INLINE_IMAGE_BUDGET_BY_PROVIDER[model.provider] ?? DEFAULT_INLINE_IMAGE_BUDGET) - countContextImages(context);
+		const shape = snapcompact.resolveShape(model, this.options.shape);
+		const budget = snapcompact.providerImageBudget(model.provider) - countContextImages(context);
 		if (budget <= 0) return context;
 
 		const messages = [...context.messages];

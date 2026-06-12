@@ -1,5 +1,5 @@
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { Api, Effort } from "@oh-my-pi/pi-ai";
+import type { Effort } from "@oh-my-pi/pi-ai";
 import {
 	type Component,
 	Container,
@@ -23,6 +23,7 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@oh-my-pi/pi-tui";
+import type { ShapeTarget } from "@oh-my-pi/snapcompact";
 import { getDefault, type SettingPath, settings } from "../../config/settings";
 import type {
 	SettingTab,
@@ -259,8 +260,8 @@ export interface SettingsRuntimeContext {
 	availableThemes: string[];
 	/** Working directory for plugins tab */
 	cwd: string;
-	/** Active model API; resolves what the snapcompact `auto` shape maps to. */
-	modelApi?: Api;
+	/** Active model (api + id); resolves what the snapcompact `auto` shape maps to. */
+	model?: ShapeTarget;
 	/** Shared TUI image budget (graphics ids + transmit-once) for image previews. */
 	imageBudget?: ImageBudget;
 	/** Schedules a re-render after async preview work completes. */
@@ -816,7 +817,7 @@ export class SettingsSelectorComponent implements Component {
 			};
 		} else if (def.path === "snapcompact.shape") {
 			const shapePreview = new SnapcompactShapePreview(currentValue, {
-				api: this.context.modelApi,
+				model: this.context.model,
 				imageBudget: this.context.imageBudget,
 				requestRender: this.context.requestRender,
 			});

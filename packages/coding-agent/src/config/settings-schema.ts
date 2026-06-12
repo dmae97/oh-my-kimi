@@ -1619,12 +1619,12 @@ export const SETTINGS_SCHEMA = {
 			group: "Experimental",
 			label: "Snapcompact Shape",
 			description:
-				"Frame shape snapcompact prints text with (compaction archive and inline imaging). Auto picks a provider-tuned shape.",
+				"Frame shape snapcompact prints text with (compaction archive and inline imaging). Auto picks a shape tuned for the current model.",
 			options: [
 				{
 					value: "auto",
 					label: "Auto",
-					description: "Picks a shape tuned for the current provider.",
+					description: "Picks a shape tuned for the current model, falling back to its provider family.",
 				},
 				{
 					value: "8x8r-bw",

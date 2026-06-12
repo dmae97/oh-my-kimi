@@ -6388,7 +6388,10 @@ export class AgentSession {
 				const snapcompactResult = await snapcompact.compact(preparation, {
 					convertToLlm,
 					model: this.model,
-					shape: snapcompact.resolveShape(this.model.api, this.settings.get("snapcompact.shape")),
+					shape: snapcompact.resolveShape(this.model, this.settings.get("snapcompact.shape")),
+					// Providers with hard image caps (OpenRouter: 8) silently drop
+					// frames past the cap — keep the archive within budget.
+					maxFrames: snapcompact.providerFrameBudget(this.model.provider),
 				});
 				summary = snapcompactResult.summary;
 				shortSummary = snapcompactResult.shortSummary;
@@ -7922,6 +7925,7 @@ export class AgentSession {
 				const snapcompactResult = await snapcompact.compact(preparation, {
 					convertToLlm,
 					model: this.model,
+					maxFrames: snapcompact.providerFrameBudget(this.model?.provider),
 				});
 				summary = snapcompactResult.summary;
 				shortSummary = snapcompactResult.shortSummary;
