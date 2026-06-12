@@ -5,6 +5,8 @@ import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { setNextRequestDebugPath } from "@oh-my-pi/pi-ai/utils/request-debug";
 import { Snowflake, setProjectDir } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
+import { COLLAB_GUEST_ALLOWED_COMMANDS, CollabGuestLink } from "../collab/guest";
+import { CollabHost } from "../collab/host";
 import type { SettingPath, SettingValue } from "../config/settings";
 import { settings } from "../config/settings";
 import {
@@ -440,6 +442,115 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		handleTui: async (_command, runtime) => {
 			await runtime.ctx.handleShareCommand();
 			runtime.ctx.editor.setText("");
+		},
+	},
+	{
+		name: "collab",
+		description: "Share this session live via a relay",
+		inlineHint: "[start|stop|status] [relayUrl]",
+		allowArgs: true,
+		handleTui: async (command, runtime) => {
+			const ctx = runtime.ctx;
+			ctx.editor.setText("");
+			const args = command.args.trim();
+			const [first = ""] = args.split(/\s+/, 1);
+			if (first === "stop") {
+				if (!ctx.collabHost) {
+					ctx.showStatus("Not hosting a collab session");
+					return;
+				}
+				await ctx.collabHost.stop("host stopped");
+				ctx.showStatus("Collab stopped");
+				return;
+			}
+			if (first === "status") {
+				if (ctx.collabHost) {
+					const names = ctx.collabHost.participants.map(p => (p.role === "host" ? `${p.name} (host)` : p.name));
+					ctx.showStatus(`Collab: ${names.join(", ")} — ${ctx.collabHost.link}`);
+				} else if (ctx.collabGuest) {
+					ctx.showStatus("In a collab session as a guest (/leave to exit)");
+				} else {
+					ctx.showStatus("Not in a collab session");
+				}
+				return;
+			}
+			if (ctx.collabGuest) {
+				ctx.showError("Already in a collab session as a guest (/leave first)");
+				return;
+			}
+			if (ctx.collabHost) {
+				ctx.session.emitNotice("info", `Collab link: ${ctx.collabHost.link}`, "collab");
+				return;
+			}
+			const explicitUrl = first === "start" ? args.slice("start".length).trim() : args;
+			const relayInput = explicitUrl || ctx.settings.get("collab.relayUrl") || "";
+			if (!relayInput) {
+				ctx.showError(
+					"No relay configured. Set collab.relayUrl in /settings or pass one: /collab relay.example.com",
+				);
+				return;
+			}
+			// Scheme-less relay args default to wss (ws:// must be spelled out for localhost).
+			const relayUrl = relayInput.includes("://") ? relayInput : `wss://${relayInput}`;
+			const host = new CollabHost(ctx);
+			try {
+				await host.start(relayUrl);
+			} catch (err) {
+				ctx.showError(`Failed to start collab session: ${errorMessage(err)}`);
+				return;
+			}
+			ctx.collabHost = host;
+			ctx.session.emitNotice(
+				"info",
+				`Collab link: ${host.link}\nAnyone with this link can read the session and prompt the agent.`,
+				"collab",
+			);
+		},
+	},
+	{
+		name: "join",
+		description: "Join a shared collab session",
+		inlineHint: "<link>",
+		allowArgs: true,
+		handleTui: async (command, runtime) => {
+			const ctx = runtime.ctx;
+			ctx.editor.setText("");
+			const link = command.args.trim();
+			if (!link) {
+				ctx.showError("Usage: /join <link>");
+				return;
+			}
+			if (ctx.collabHost) {
+				ctx.showError("Stop hosting first (/collab stop)");
+				return;
+			}
+			if (ctx.collabGuest) {
+				ctx.showError("Already in a collab session (/leave first)");
+				return;
+			}
+			try {
+				await new CollabGuestLink(ctx).join(link);
+			} catch (err) {
+				ctx.showError(`Failed to join collab session: ${errorMessage(err)}`);
+			}
+		},
+	},
+	{
+		name: "leave",
+		description: "Leave the collab session",
+		handleTui: async (_command, runtime) => {
+			const ctx = runtime.ctx;
+			ctx.editor.setText("");
+			if (ctx.collabGuest) {
+				await ctx.collabGuest.leave("left");
+				return;
+			}
+			if (ctx.collabHost) {
+				await ctx.collabHost.stop("host stopped");
+				ctx.showStatus("Collab stopped");
+				return;
+			}
+			ctx.showStatus("Not in a collab session");
 		},
 	},
 	{
@@ -1889,6 +2000,13 @@ export async function executeBuiltinSlashCommand(
 	if (!command) return false;
 	if (parsed.args.length > 0 && !command.allowArgs) {
 		return false;
+	}
+	// Collab guests run a read-mostly replica: session-mutating builtins are
+	// host-only; the allowlist covers purely local/read-only commands.
+	if (runtime.ctx.collabGuest && !COLLAB_GUEST_ALLOWED_COMMANDS[command.name]) {
+		runtime.ctx.showStatus(`/${command.name} is host-only during a collab session`);
+		runtime.ctx.editor.setText("");
+		return true;
 	}
 	if (command.handleTui) {
 		const result = await command.handleTui(parsed, runtime);

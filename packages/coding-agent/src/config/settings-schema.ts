@@ -1,5 +1,6 @@
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-ai";
 import { SHAPE_VARIANT_NAMES } from "@oh-my-pi/snapcompact";
+import { DEFAULT_RELAY_URL } from "../collab/protocol";
 import { AUTO_THINKING, getConfiguredThinkingLevelMetadata, getThinkingLevelMetadata } from "../thinking";
 import {
 	TINY_MODEL_DEVICE_DEFAULT,
@@ -101,6 +102,7 @@ export const TAB_GROUPS: Record<SettingTab, readonly string[]> = {
 		"Approvals",
 		"Notifications",
 		"Speech",
+		"Collab",
 		"Magic Keywords",
 		"Startup & Updates",
 		"Power (macOS)",
@@ -147,7 +149,8 @@ export type StatusLineSegmentId =
 	| "cache_write"
 	| "cache_hit"
 	| "session_name"
-	| "usage";
+	| "usage"
+	| "collab";
 
 /** Submenu choice metadata. */
 export type SubmenuOption<V extends string = string> = {
@@ -1324,6 +1327,29 @@ export const SETTINGS_SCHEMA = {
 			group: "Notifications",
 			label: "Ask Notification",
 			description: "Notify when the ask tool is waiting for input",
+		},
+	},
+
+	// Collab
+	"collab.relayUrl": {
+		type: "string",
+		default: DEFAULT_RELAY_URL,
+		ui: {
+			tab: "interaction",
+			group: "Collab",
+			label: "Relay URL",
+			description: "Relay used by /collab (wss://host[:port]; self-host with the omp-collab-relay service)",
+		},
+	},
+
+	"collab.displayName": {
+		type: "string",
+		default: "",
+		ui: {
+			tab: "interaction",
+			group: "Collab",
+			label: "Display Name",
+			description: "Name shown to other collab participants (default: OS username)",
 		},
 	},
 

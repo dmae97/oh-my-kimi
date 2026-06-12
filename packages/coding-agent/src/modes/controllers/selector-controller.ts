@@ -1188,6 +1188,8 @@ export class SelectorController {
 			hubKeys,
 			onDone: done,
 			requestRender: () => this.ctx.ui.requestRender(),
+			registry: this.ctx.collabGuest?.agentRegistry,
+			remote: this.ctx.collabGuest?.hubRemote,
 		});
 
 		overlayHandle = this.ctx.ui.showOverlay(hub, {

@@ -124,6 +124,16 @@ export class InputController {
 			if (this.ctx.hasActiveOmfg() && this.ctx.handleOmfgEscape()) {
 				return;
 			}
+			if (this.ctx.collabGuest) {
+				// Guest Esc: ask the host to interrupt its agent; the local replica
+				// session is never streaming, so the native abort path below would
+				// no-op.
+				if (this.ctx.collabGuest.state?.isStreaming || this.ctx.loadingAnimation) {
+					this.ctx.notifyInterrupting();
+					this.ctx.collabGuest.sendAbort();
+				}
+				return;
+			}
 			if (this.ctx.loadingAnimation) {
 				if (this.ctx.cancelPendingSubmission()) {
 					return;
@@ -389,6 +399,32 @@ export class InputController {
 			if (typeof slashResult === "string") {
 				// Command handled but returned remaining text to use as prompt
 				text = slashResult;
+			}
+
+			// Collab guest: prompts execute on the host; local slash/skill/bash/
+			// python execution is host-only (builtins are gated inside
+			// executeBuiltinSlashCommand, which already consumed allowed ones).
+			if (this.ctx.collabGuest) {
+				if (text.startsWith("/")) {
+					this.ctx.showStatus(`${text.split(/\s+/, 1)[0]} is host-only during a collab session`);
+					this.ctx.editor.setText("");
+					return;
+				}
+				if (text.startsWith("!") || text.startsWith("$")) {
+					this.ctx.showStatus("Local execution is host-only during a collab session");
+					this.ctx.editor.setText("");
+					return;
+				}
+				this.ctx.editor.addToHistory(text);
+				this.ctx.editor.setText("");
+				this.ctx.editor.imageLinks = undefined;
+				const images = inputImages && inputImages.length > 0 ? [...inputImages] : undefined;
+				this.ctx.pendingImages = [];
+				this.ctx.pendingImageLinks = [];
+				// No local render: the prompt comes back from the host as a
+				// collab-prompt event/entry and renders with the author badge.
+				this.ctx.collabGuest.sendPrompt(text, images);
+				return;
 			}
 
 			// Handle skill commands (/skill:name [args]). Enter ⇒ steer (matches the

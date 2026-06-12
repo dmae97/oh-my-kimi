@@ -81,6 +81,15 @@ function statusBadge(status: AgentStatus): string {
 	}
 }
 
+/** Guest-side proxy for hub actions executed on the collab host. */
+export interface AgentHubRemote {
+	chat(id: string, text: string): void;
+	kill(id: string): void;
+	revive(id: string): void;
+	/** Mirrors readFileIncremental: text from fromByte (complete JSONL lines), newSize = next fromByte base; null = unavailable. */
+	readTranscript(id: string, fromByte: number): Promise<{ text: string; newSize: number } | null>;
+}
+
 export interface AgentHubDeps {
 	/** Progress/status snapshot source (task lifecycle + progress channels). */
 	observers: SessionObserverRegistry;
@@ -94,6 +103,8 @@ export interface AgentHubDeps {
 	lifecycle?: AgentLifecycleManager;
 	/** Injectable for tests; defaults to the process-global bus. */
 	irc?: IrcBus;
+	/** Collab guest: route actions/transcripts to the host instead of local sessions. */
+	remote?: AgentHubRemote;
 }
 
 export class AgentHubOverlayComponent extends Container {
@@ -106,6 +117,11 @@ export class AgentHubOverlayComponent extends Container {
 	#hubKeys: KeyId[];
 	#unsubscribers: Array<() => void> = [];
 	#ageTimer: NodeJS.Timeout | undefined;
+	#remote: AgentHubRemote | undefined;
+	#remoteFetchInFlight = false;
+	/** Invalidates stale in-flight fetch callbacks after openChat resets the cache. */
+	#remoteFetchToken = 0;
+	#remoteTranscriptUnavailable = false;
 
 	// Table state
 	#view: "table" | "chat" = "table";
@@ -143,6 +159,7 @@ export class AgentHubOverlayComponent extends Container {
 		this.#onDone = deps.onDone;
 		this.#requestRender = deps.requestRender;
 		this.#hubKeys = deps.hubKeys;
+		this.#remote = deps.remote;
 
 		this.#editor = new Editor(getEditorTheme());
 		this.#editor.setMaxHeight(4);
@@ -196,6 +213,9 @@ export class AgentHubOverlayComponent extends Container {
 		this.#chatAgentId = id;
 		this.#notice = undefined;
 		this.#transcriptCache = undefined;
+		this.#remoteTranscriptUnavailable = false;
+		this.#remoteFetchInFlight = false;
+		this.#remoteFetchToken++;
 		this.#scrollOffset = 0;
 		this.#selectedEntryIndex = 0;
 		this.#expandedEntries.clear();
@@ -238,6 +258,8 @@ export class AgentHubOverlayComponent extends Container {
 
 	/** Subscribe to the chat agent's live session (if any) for transcript refreshes. Idempotent per session. */
 	#attachLiveSession(): void {
+		// Remote refs carry no live session handle; refreshes come from observer onChange.
+		if (this.#remote) return;
 		const session = this.#chatAgentId ? (this.#registry.get(this.#chatAgentId)?.session ?? undefined) : undefined;
 		if (session === this.#attachedSession) return;
 		this.#detachLiveSession();
@@ -391,6 +413,11 @@ export class AgentHubOverlayComponent extends Container {
 			return;
 		}
 		this.#notice = undefined;
+		if (this.#remote) {
+			this.#remote.revive(ref.id);
+			this.#requestRender();
+			return;
+		}
 		// Fire-and-forget; failures surface as an inline notice
 		this.#lifecycle()
 			.ensureLive(ref.id)
@@ -405,6 +432,12 @@ export class AgentHubOverlayComponent extends Container {
 		const ref = this.#rows[this.#selectedRow];
 		if (!ref) return;
 		this.#notice = undefined;
+		if (this.#remote) {
+			this.#remote.kill(ref.id);
+			this.#refreshRows();
+			this.#requestRender();
+			return;
+		}
 		void (async () => {
 			try {
 				if (ref.status === "running" && ref.session) {
@@ -512,7 +545,10 @@ export class AgentHubOverlayComponent extends Container {
 
 		// Load transcript first so model info is available for the header
 		let messageEntries: SessionMessageEntry[] | null = null;
-		if (ref?.sessionFile) {
+		if (this.#remote) {
+			if (id) this.#fetchRemoteTranscript(id);
+			messageEntries = this.#transcriptCache?.entries ?? [];
+		} else if (ref?.sessionFile) {
 			messageEntries = this.#loadTranscript(ref.sessionFile);
 		}
 
@@ -530,12 +566,18 @@ export class AgentHubOverlayComponent extends Container {
 		this.#viewerEntries = [];
 		if (!ref) {
 			contentLines.push(theme.fg("dim", "Agent no longer registered."));
-		} else if (!ref.sessionFile) {
+		} else if (!this.#remote && !ref.sessionFile) {
 			contentLines.push(theme.fg("dim", "No session file available yet."));
 		} else if (!messageEntries) {
 			contentLines.push(theme.fg("dim", "Unable to read session file."));
 		} else if (messageEntries.length === 0) {
-			contentLines.push(theme.fg("dim", "No messages yet."));
+			if (this.#remote && this.#remoteTranscriptUnavailable) {
+				contentLines.push(theme.fg("dim", "Transcript lives on the host — not available."));
+			} else if (this.#remote && !this.#transcriptCache) {
+				contentLines.push(theme.fg("dim", "Loading transcript from host…"));
+			} else {
+				contentLines.push(theme.fg("dim", "No messages yet."));
+			}
 		} else {
 			this.#buildTranscriptLines(messageEntries, contentLines);
 		}
@@ -580,6 +622,12 @@ export class AgentHubOverlayComponent extends Container {
 		if (!id || !trimmed) return;
 		this.#editor.setText("");
 		this.#notice = undefined;
+		if (this.#remote) {
+			this.#remote.chat(id, trimmed);
+			this.#scheduleChatRefresh();
+			this.#requestRender();
+			return;
+		}
 		void (async () => {
 			try {
 				// Revives a parked agent; returns the live session for running/idle.
@@ -1024,31 +1072,80 @@ export class AgentHubOverlayComponent extends Container {
 			return this.#loadTranscript(sessionFile);
 		}
 
-		if (!this.#transcriptCache) {
-			this.#transcriptCache = { path: sessionFile, bytesRead: 0, entries: [] };
-		}
+		this.#ingestTranscriptChunk(sessionFile, result.text, fromByte);
+		return this.#transcriptCache?.entries ?? null;
+	}
 
-		if (result.text.length > 0) {
-			const lastNewline = result.text.lastIndexOf("\n");
-			if (lastNewline >= 0) {
-				const completeChunk = result.text.slice(0, lastNewline + 1);
-				const newEntries = parseSessionEntries(completeChunk);
-				for (const entry of newEntries) {
-					if (entry.type === "message") {
-						this.#transcriptCache.entries.push(entry);
-						// Extract model from first assistant message
-						const msg = entry.message;
-						if (!this.#transcriptCache.model && msg.role === "assistant") {
-							this.#transcriptCache.model = msg.model;
-						}
-					} else if (entry.type === "model_change") {
-						this.#transcriptCache.model = entry.model;
-					}
+	/** Parse a complete-line JSONL chunk into the transcript cache and advance bytesRead. Shared by the local file and remote paths. */
+	#ingestTranscriptChunk(cacheKey: string, text: string, fromByte: number): void {
+		if (!this.#transcriptCache) {
+			this.#transcriptCache = { path: cacheKey, bytesRead: 0, entries: [] };
+		}
+		if (text.length === 0) return;
+		const lastNewline = text.lastIndexOf("\n");
+		if (lastNewline < 0) return;
+		const completeChunk = text.slice(0, lastNewline + 1);
+		const newEntries = parseSessionEntries(completeChunk);
+		for (const entry of newEntries) {
+			if (entry.type === "message") {
+				this.#transcriptCache.entries.push(entry);
+				// Extract model from first assistant message
+				const msg = entry.message;
+				if (!this.#transcriptCache.model && msg.role === "assistant") {
+					this.#transcriptCache.model = msg.model;
 				}
-				this.#transcriptCache.bytesRead = fromByte + Buffer.byteLength(completeChunk, "utf-8");
+			} else if (entry.type === "model_change") {
+				this.#transcriptCache.model = entry.model;
 			}
 		}
-		return this.#transcriptCache.entries;
+		this.#transcriptCache.bytesRead = fromByte + Buffer.byteLength(completeChunk, "utf-8");
+	}
+
+	/** Kick an incremental transcript fetch from the collab host (single-flight). */
+	#fetchRemoteTranscript(id: string): void {
+		const remote = this.#remote;
+		if (!remote || this.#remoteFetchInFlight) return;
+		const cacheKey = `remote:${id}`;
+		if (this.#transcriptCache && this.#transcriptCache.path !== cacheKey) {
+			this.#transcriptCache = undefined;
+		}
+		const fromByte = this.#transcriptCache?.bytesRead ?? 0;
+		this.#remoteFetchInFlight = true;
+		const token = ++this.#remoteFetchToken;
+		void remote
+			.readTranscript(id, fromByte)
+			.then(result => {
+				if (token !== this.#remoteFetchToken) return;
+				this.#remoteFetchInFlight = false;
+				if (this.#chatAgentId !== id) return;
+				if (!result) {
+					if (!this.#transcriptCache || this.#transcriptCache.entries.length === 0) {
+						if (!this.#remoteTranscriptUnavailable) {
+							this.#remoteTranscriptUnavailable = true;
+							this.#scheduleChatRefresh();
+						}
+					}
+					return;
+				}
+				if (result.newSize < fromByte) {
+					// Host transcript truncated/rotated — restart from 0.
+					this.#transcriptCache = undefined;
+					this.#fetchRemoteTranscript(id);
+					return;
+				}
+				this.#remoteTranscriptUnavailable = false;
+				const hadCache = this.#transcriptCache !== undefined;
+				const before = this.#transcriptCache?.entries.length ?? 0;
+				this.#ingestTranscriptChunk(cacheKey, result.text, fromByte);
+				const after = this.#transcriptCache?.entries.length ?? 0;
+				// Only refresh on new content (or first completed fetch) — an
+				// unconditional rebuild would re-kick the fetch in a tight loop.
+				if (after > before || !hadCache) this.#scheduleChatRefresh();
+			})
+			.catch((error: unknown) => {
+				if (token === this.#remoteFetchToken) this.#remoteFetchInFlight = false;
+				logger.warn("Agent hub: remote transcript fetch failed", { id, error: String(error) });
+			});
 	}
 }
 
