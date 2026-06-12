@@ -418,10 +418,13 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 				options?.streamFirstEventTimeoutMs ?? getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs);
 			const requestTimeoutMs =
 				firstEventTimeoutMs !== undefined && firstEventTimeoutMs > 0 ? firstEventTimeoutMs : undefined;
-			const replacementPayload = await options?.onPayload?.(chained.params, model);
-			if (replacementPayload !== undefined) {
-				chained = { ...chained, params: replacementPayload as typeof chained.params };
-			}
+			const applyPayloadReplacement = async (requestParams: OpenAIResponsesSamplingParams) => {
+				const replacementPayload = await options?.onPayload?.(requestParams, model);
+				return replacementPayload !== undefined
+					? (replacementPayload as OpenAIResponsesSamplingParams)
+					: requestParams;
+			};
+			chained = { ...chained, params: await applyPayloadReplacement(chained.params) };
 			rawRequestDump = {
 				provider: model.provider,
 				api: output.api,
@@ -490,8 +493,9 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 					registerOpenAIResponsesChainStaleFailure(chainState, error);
 				}
 				sentPreviousResponseId = undefined;
-				rawRequestDump.body = params;
-				openaiStream = await openResponsesStream(params);
+				const retryParams = await applyPayloadReplacement(params);
+				rawRequestDump.body = retryParams;
+				openaiStream = await openResponsesStream(retryParams);
 			}
 			if (premiumRequestsTotal !== undefined) output.usage.premiumRequests = premiumRequestsTotal;
 			stream.push({ type: "start", partial: output });
