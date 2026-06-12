@@ -63,6 +63,44 @@ const GH_ISSUE_FIELDS_NO_COMMENTS = [
 	"updatedAt",
 	"url",
 ];
+
+const GH_ISSUE_STATE_REASON_FIELD = "stateReason";
+
+function ghJsonErrorNamesField(err: unknown, field: string): boolean {
+	if (!(err instanceof Error) || !err.message.includes("Unknown JSON field")) return false;
+	return err.message.includes(`"${field}"`) || err.message.includes(`'${field}'`) || err.message.includes(field);
+}
+
+function dropJsonField(args: readonly string[], field: string): string[] | undefined {
+	const next = [...args];
+	const jsonIndex = next.indexOf("--json");
+	if (jsonIndex < 0) return undefined;
+	const fields = next[jsonIndex + 1];
+	if (!fields) return undefined;
+	const splitFields = fields.split(",");
+	const kept = splitFields.filter(candidate => candidate !== field);
+	if (kept.length === splitFields.length) return undefined;
+	next[jsonIndex + 1] = kept.join(",");
+	return next;
+}
+
+/** Runs `gh --json` for issue data, retrying without optional stateReason on older gh releases. */
+export async function githubIssueJsonWithStateReasonFallback<T>(
+	cwd: string,
+	args: readonly string[],
+	signal: AbortSignal | undefined,
+	options?: git.GhCommandOptions,
+): Promise<T> {
+	try {
+		return await git.github.json<T>(cwd, [...args], signal, options);
+	} catch (err) {
+		if (!ghJsonErrorNamesField(err, GH_ISSUE_STATE_REASON_FIELD)) throw err;
+		const retryArgs = dropJsonField(args, GH_ISSUE_STATE_REASON_FIELD);
+		if (!retryArgs) throw err;
+		return await git.github.json<T>(cwd, retryArgs, signal, options);
+	}
+}
+
 const GH_PR_FIELDS = [
 	"author",
 	"baseRefName",
@@ -2549,7 +2587,7 @@ async function fetchIssueViewFresh(
 	const args = ["issue", "view", identifier];
 	appendRepoFlag(args, repo, identifier);
 	args.push("--json", (includeComments ? GH_ISSUE_FIELDS : GH_ISSUE_FIELDS_NO_COMMENTS).join(","));
-	const data = await git.github.json<GhIssueViewData>(cwd, args, signal, {
+	const data = await githubIssueJsonWithStateReasonFallback<GhIssueViewData>(cwd, args, signal, {
 		repoProvided: Boolean(repo),
 	});
 	const rendered = formatIssueView(data, { issue: identifier, repo, comments: includeComments });

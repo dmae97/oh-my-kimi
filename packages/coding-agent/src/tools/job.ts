@@ -449,17 +449,21 @@ export const jobToolRenderer = {
 		const counts = { completed: 0, failed: 0, cancelled: 0, running: 0 };
 		for (const job of jobs) counts[job.status]++;
 
+		// The title already carries the running count, so meta lists only the
+		// settled categories — "waiting on 19 of 19 · 19 running" read awkward.
 		const meta: string[] = [];
 		if (counts.completed > 0) meta.push(uiTheme.fg("success", `${counts.completed} done`));
 		if (counts.failed > 0) meta.push(uiTheme.fg("error", `${counts.failed} failed`));
 		if (counts.cancelled > 0) meta.push(uiTheme.fg("warning", `${counts.cancelled} cancelled`));
-		if (counts.running > 0) meta.push(uiTheme.fg("accent", `${counts.running} running`));
 
 		const headerIcon: ToolUIStatus = counts.failed > 0 ? "warning" : counts.running > 0 ? "info" : "success";
+		const jobsNoun = jobs.length === 1 ? "job" : "jobs";
 		const description =
 			counts.running > 0
-				? `waiting on ${counts.running} of ${jobs.length}`
-				: `${jobs.length} ${jobs.length === 1 ? "job" : "jobs"} settled`;
+				? counts.running === jobs.length
+					? `waiting on ${jobs.length} ${jobsNoun}`
+					: `waiting on ${counts.running} of ${jobs.length} ${jobsNoun}`
+				: `${jobs.length} ${jobsNoun} settled`;
 
 		const header = renderStatusLine(
 			{

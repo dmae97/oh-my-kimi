@@ -65,6 +65,115 @@ describe("model thinking derivation", () => {
 		expect(requireSupportedEffort(model, Effort.XHigh)).toBe(Effort.XHigh);
 	});
 
+	it("stores MiniMax M2 and GPT-OSS OpenAI-compatible effort limits in model metadata", () => {
+		const minimax = createModel({
+			id: "minimax-m2.7",
+			api: "openai-completions",
+			provider: "fireworks",
+			baseUrl: "https://api.fireworks.ai/inference/v1",
+		});
+		const gptOss = createModel({
+			id: "gpt-oss-120b",
+			api: "openai-completions",
+			provider: "fireworks",
+			baseUrl: "https://api.fireworks.ai/inference/v1",
+		});
+
+		expect(minimax.thinking).toEqual({
+			mode: "effort",
+			efforts: [Effort.Low, Effort.Medium, Effort.High],
+		});
+		expect(gptOss.thinking).toEqual({
+			mode: "effort",
+			efforts: [Effort.Low, Effort.Medium, Effort.High],
+		});
+		expect(minimax.thinking?.effortMap).toBeUndefined();
+		expect(gptOss.thinking?.effortMap).toBeUndefined();
+	});
+
+	it("normalizes stale explicit MiniMax M2 / GPT-OSS effort metadata from caches", () => {
+		const staleMinimax = createModel({
+			id: "minimax-m2.7",
+			api: "openai-completions",
+			provider: "fireworks",
+			baseUrl: "https://api.fireworks.ai/inference/v1",
+			thinking: {
+				mode: "effort",
+				efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+				effortMap: { minimal: "none", xhigh: "max" },
+			},
+		});
+		const staleGptOss = createModel({
+			id: "gpt-oss-120b",
+			api: "openai-completions",
+			provider: "fireworks",
+			baseUrl: "https://api.fireworks.ai/inference/v1",
+			thinking: {
+				mode: "effort",
+				efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+			},
+		});
+
+		expect(staleMinimax.thinking).toEqual({
+			mode: "effort",
+			efforts: [Effort.Low, Effort.Medium, Effort.High],
+		});
+		expect(staleGptOss.thinking).toEqual({
+			mode: "effort",
+			efforts: [Effort.Low, Effort.Medium, Effort.High],
+		});
+	});
+
+	it("stores OpenAI-compatible provider effort maps in thinking metadata", () => {
+		const fireworks = createModel({
+			id: "glm-5.1",
+			api: "openai-completions",
+			provider: "fireworks",
+			baseUrl: "https://api.fireworks.ai/inference/v1",
+		});
+		const groqQwen = createModel({
+			id: "qwen/qwen3-32b",
+			api: "openai-completions",
+			provider: "groq",
+			baseUrl: "https://api.groq.com/openai/v1",
+		});
+		const deepseek = createModel({
+			id: "deepseek-v4-flash",
+			api: "openai-completions",
+			provider: "deepseek",
+			baseUrl: "https://api.deepseek.com/v1",
+			compat: { reasoningEffortMap: { xhigh: "max-plus" } },
+		});
+		const openRouterAnthropic = createModel({
+			id: "anthropic/claude-opus-4.7",
+			api: "openai-completions",
+			provider: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+		});
+
+		expect(fireworks.thinking?.effortMap).toEqual({ minimal: "none" });
+		expect(groqQwen.thinking?.effortMap).toEqual({
+			minimal: "default",
+			low: "default",
+			medium: "default",
+			high: "default",
+		});
+		expect(deepseek.thinking?.effortMap).toMatchObject({
+			minimal: "high",
+			low: "high",
+			medium: "high",
+			high: "high",
+			xhigh: "max-plus",
+		});
+		expect(openRouterAnthropic.thinking?.effortMap).toEqual({
+			minimal: "low",
+			low: "medium",
+			medium: "high",
+			high: "xhigh",
+			xhigh: "max",
+		});
+	});
+
 	it("encodes the Gemini 3 Pro effort gap directly in efforts", () => {
 		const model = createModel({
 			id: "gemini-3-pro-preview",
@@ -164,7 +273,7 @@ describe("model thinking derivation", () => {
 		expect(filled.thinking).toEqual({
 			mode: "anthropic-adaptive",
 			efforts: [Effort.Low, Effort.High],
-			effortMap: { minimal: "low", low: "medium", medium: "high", high: "xhigh", xhigh: "max" },
+			effortMap: { low: "medium", high: "xhigh" },
 			supportsDisplay: true,
 		});
 

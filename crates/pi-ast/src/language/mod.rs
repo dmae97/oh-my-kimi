@@ -627,6 +627,31 @@ fn from_extension(path: &Path) -> Option<SupportLang> {
 		return Some(SupportLang::Dockerfile);
 	}
 
+	// Extensionless shell rc/profile files. `Path::extension` returns `None`
+	// for both bare (`zshrc`) and dotfile (`.zshrc`) forms, so they would
+	// otherwise resolve to no language and disable block-aware ops on them.
+	let stem = name.strip_prefix('.').unwrap_or(name);
+	if matches!(
+		stem,
+		"zshrc"
+			| "zshenv"
+			| "zprofile"
+			| "zlogin"
+			| "zlogout"
+			| "zsh_aliases"
+			| "bashrc"
+			| "bash_profile"
+			| "bash_login"
+			| "bash_logout"
+			| "bash_aliases"
+			| "profile"
+			| "kshrc"
+			| "mkshrc"
+			| "shrc"
+	) {
+		return Some(SupportLang::Bash);
+	}
+
 	let ext = path.extension()?.to_str()?;
 	SupportLang::all_langs()
 		.iter()

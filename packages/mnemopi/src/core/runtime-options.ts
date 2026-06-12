@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { Api, Model } from "@oh-my-pi/pi-ai";
+import type { Api, ApiKey, Model } from "@oh-my-pi/pi-ai";
 
 export interface MnemopiLlmCompleteOptions {
 	maxTokens?: number;
@@ -31,14 +31,14 @@ export interface MnemopiEmbeddingRuntimeOptions {
 	disabled?: boolean;
 	model?: string;
 	apiUrl?: string;
-	apiKey?: string;
+	apiKey?: ApiKey;
 	provider?: MnemopiEmbeddingProvider | ((texts: readonly string[]) => EmbeddingOutput | Promise<EmbeddingOutput>);
 }
 
 export interface MnemopiLlmRuntimeOptions {
 	enabled?: boolean;
 	baseUrl?: string;
-	apiKey?: string;
+	apiKey?: ApiKey;
 	model?: string | Model<Api>;
 	maxTokens?: number;
 	complete?: MnemopiLlmCompletion;
@@ -57,14 +57,14 @@ export interface ResolvedMnemopiEmbeddingRuntimeOptions {
 	disabled?: boolean;
 	model?: string;
 	apiUrl?: string;
-	apiKey?: string;
+	apiKey?: ApiKey;
 	provider?: MnemopiEmbeddingProvider;
 }
 
 export interface ResolvedMnemopiLlmRuntimeOptions {
 	enabled?: boolean;
 	baseUrl?: string;
-	apiKey?: string;
+	apiKey?: ApiKey;
 	model?: string | Model<Api>;
 	maxTokens?: number;
 	complete?: MnemopiLlmCompletion;

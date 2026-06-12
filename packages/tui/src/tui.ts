@@ -16,7 +16,7 @@ import { $flag, getDebugLogPath } from "@oh-my-pi/pi-utils";
 import { DEFAULT_MAX_INLINE_IMAGES, ImageBudget } from "./components/image";
 import { planDeccaraFills } from "./deccara";
 import { isKeyRelease, matchesKey } from "./keys";
-import { isConPTYHosted, type Terminal } from "./terminal";
+import { isConPTYHosted, setAltScreenActive, type Terminal } from "./terminal";
 import {
 	encodeKittyDeleteImage,
 	ImageProtocol,
@@ -185,6 +185,10 @@ export interface Component {
  * of history until it finalizes. Volatile live blocks (tool previews that
  * collapse) omit it. Defaults to `liveRegionStart` when absent; a root that
  * reports no seam at all commits everything that scrolls (shell semantics).
+ *
+ * When several root children report a seam in the same frame, the topmost
+ * one (and its commit-safe extension) defines the boundary: commits are
+ * prefix-only, so everything below the first seam is already excluded.
  */
 export interface NativeScrollbackLiveRegion {
 	getNativeScrollbackLiveRegionStart(): number | undefined;
@@ -833,7 +837,13 @@ export class TUI extends Container {
 				// the last render the engine actually observed.
 				reported = getRenderStablePrefixRows(child);
 			}
-			if (liveLocalStart !== undefined) {
+			// Topmost seam wins. Commits are prefix-only: the first child that
+			// reports a live region (plus its own commit-safe extension) already
+			// bounds everything below it, so a lower sibling's seam (e.g. a
+			// status loader under a streaming transcript) must never overwrite
+			// it — moving the boundary down would commit the earlier child's
+			// still-mutable rows as stale history.
+			if (liveLocalStart !== undefined && this.#nativeScrollbackLiveRegionStart === undefined) {
 				this.#nativeScrollbackLiveRegionStart = offset + liveLocalStart;
 				if (commitLocalEnd !== undefined) {
 					this.#nativeScrollbackCommitSafeEnd = offset + commitLocalEnd;
@@ -1326,6 +1336,7 @@ export class TUI extends Container {
 		// the restored normal screen (which #previousLines still describes).
 		if (this.#altActive) {
 			this.terminal.write(`${MOUSE_TRACKING_OFF}\x1b[?1049l`);
+			setAltScreenActive(false);
 			this.#altActive = false;
 			this.#altPreviousLines = [];
 		}
@@ -2049,6 +2060,7 @@ export class TUI extends Container {
 		const wantAlt = this.#wantsAltScreen();
 		if (wantAlt && !this.#altActive) {
 			this.terminal.write(`\x1b[?1049h${MOUSE_TRACKING_ON}`);
+			setAltScreenActive(true);
 			this.terminal.hideCursor();
 			this.#forgetHardwareCursorState();
 			this.#recordHardwareCursorHidden();
@@ -2058,6 +2070,7 @@ export class TUI extends Container {
 			this.#altEnterHeight = height;
 		} else if (!wantAlt && this.#altActive) {
 			this.terminal.write(`${MOUSE_TRACKING_OFF}\x1b[?1049l`);
+			setAltScreenActive(false);
 			this.#forgetHardwareCursorState();
 			this.#altActive = false;
 			this.#altPreviousLines = [];

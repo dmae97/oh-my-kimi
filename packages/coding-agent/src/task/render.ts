@@ -35,6 +35,19 @@ import { repairDoubleEncodedJsonString } from "./repair-args";
 import { subprocessToolRegistry } from "./subprocess-tool-registry";
 import type { AgentProgress, SingleResult, TaskItem, TaskParams, TaskToolDetails } from "./types";
 
+/** Render context threaded in from `ToolExecutionComponent.#buildRenderContext`. */
+interface TaskRenderContext {
+	hasResult?: boolean;
+	/**
+	 * The block left the transcript live region (detached spawn the transcript
+	 * has moved past, or a sealed block): progress rows render static gray
+	 * instead of shimmering, so commit-eligible rows never enter native
+	 * scrollback mid-sweep.
+	 */
+	frozen?: boolean;
+}
+type TaskRenderOptions = RenderResultOptions & { renderContext?: TaskRenderContext };
+
 /**
  * Get status icon for agent state.
  * For running status, uses animated spinner if spinnerFrame is provided.
@@ -614,11 +627,7 @@ function createMarkdownSectionRenderer(text: string, theme: Theme): AssignmentSe
 /**
  * Render the tool call arguments.
  */
-export function renderCall(
-	args: TaskParams,
-	options: RenderResultOptions & { renderContext?: { hasResult?: boolean } },
-	theme: Theme,
-): Component {
+export function renderCall(args: TaskParams, options: TaskRenderOptions, theme: Theme): Component {
 	const showIsolated = "isolated" in args && args.isolated === true;
 	const header = renderStatusLine({ icon: "pending", title: "Task", description: args.agent }, theme);
 	const assignmentSection = createAssignmentSectionRenderer(args, theme);
@@ -666,6 +675,7 @@ function renderAgentProgress(
 	expanded: boolean,
 	theme: Theme,
 	spinnerFrame?: number,
+	frozen = false,
 ): string[] {
 	const lines: string[] = [];
 
@@ -685,15 +695,23 @@ function renderAgentProgress(
 	let statusLine: string;
 	if (progress.status === "running" || progress.status === "pending") {
 		// Live (or queued) agents shimmer their description so the row reads as
-		// in-flight even after the block freezes — the async spawn result keeps
-		// the agent on "pending" while the detached job runs.
+		// in-flight — the async spawn result keeps the agent on "pending" while
+		// the detached job runs. Once the block leaves the live region it
+		// freezes (`frozen`): its rows are commit-eligible scrollback history,
+		// so paint them static gray instead of leaving a mid-sweep shimmer band
+		// in the terminal's history.
 		const bullet =
 			progress.status === "running" ? theme.styledSymbol("status.done", "text") : theme.fg(iconColor, icon);
-		const name = theme.fg("accent", description ? theme.bold(displayId) : displayId);
+		const nameColor = frozen ? "dim" : "accent";
+		const name = theme.fg(nameColor, description ? theme.bold(displayId) : displayId);
 		statusLine = `${indent}${bullet} ${name}`;
 		if (description) {
-			const desc = shimmerEnabled() ? shimmerText(description, theme) : theme.fg("accent", description);
-			statusLine += `${theme.fg("accent", ":")} ${desc}`;
+			const desc = frozen
+				? theme.fg("dim", description)
+				: shimmerEnabled()
+					? shimmerText(description, theme)
+					: theme.fg("accent", description);
+			statusLine += `${theme.fg(nameColor, ":")} ${desc}`;
 		}
 	} else {
 		const glyph =
@@ -836,7 +854,7 @@ function renderAgentProgress(
 	const inflight = progress.inflightTaskDetails;
 	if (completedTaskCalls.length > 0 || inflight) {
 		const snapshots = inflight ? [...completedTaskCalls, inflight] : completedTaskCalls;
-		const nestedLines = renderNestedTaskTree(snapshots, expanded, theme, spinnerFrame);
+		const nestedLines = renderNestedTaskTree(snapshots, expanded, theme, spinnerFrame, frozen);
 		for (const line of nestedLines) {
 			lines.push(`${continuePrefix}${line}`);
 		}
@@ -1160,7 +1178,7 @@ function orderResultsForDisplay(results: readonly SingleResult[]): SingleResult[
  */
 export function renderResult(
 	result: { content: Array<{ type: string; text?: string }>; details?: TaskToolDetails; isError?: boolean },
-	options: RenderResultOptions,
+	options: TaskRenderOptions,
 	theme: Theme,
 	args?: TaskParams,
 ): Component {
@@ -1219,13 +1237,14 @@ export function renderResult(
 
 	return framedBlock(theme, width => {
 		const { expanded, isPartial, spinnerFrame } = options;
+		const frozen = options.renderContext?.frozen === true;
 		const lines: string[] = [];
 
 		const shouldRenderProgress =
 			Boolean(details.progress && details.progress.length > 0) && (isPartial || details.results.length === 0);
 		if (shouldRenderProgress && details.progress) {
 			orderProgressForDisplay(details.progress).forEach(progress => {
-				lines.push(...renderAgentProgress(progress, "", "  ", expanded, theme, spinnerFrame));
+				lines.push(...renderAgentProgress(progress, "", "  ", expanded, theme, spinnerFrame, frozen));
 			});
 		} else if (details.results && details.results.length > 0) {
 			orderResultsForDisplay(details.results).forEach(res => {
@@ -1345,6 +1364,7 @@ function renderNestedTaskTree(
 	expanded: boolean,
 	theme: Theme,
 	spinnerFrame?: number,
+	frozen = false,
 ): string[] {
 	const lines: string[] = [];
 	for (const details of detailsList) {
@@ -1362,7 +1382,7 @@ function renderNestedTaskTree(
 			const ordered = orderProgressForDisplay(inflight);
 			ordered.forEach((prog, index) => {
 				const { prefix, continuePrefix } = nestedMarkers(index === ordered.length - 1, theme);
-				lines.push(...renderAgentProgress(prog, prefix, continuePrefix, expanded, theme, spinnerFrame));
+				lines.push(...renderAgentProgress(prog, prefix, continuePrefix, expanded, theme, spinnerFrame, frozen));
 			});
 		}
 	}

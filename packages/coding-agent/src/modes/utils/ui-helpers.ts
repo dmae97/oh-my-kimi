@@ -191,7 +191,11 @@ export class UiHelpers {
 						this.ctx.chatContainer.addChild(component);
 						break;
 					}
-					if (message.customType === "irc:incoming" || message.customType === "irc:relay") {
+					if (
+						message.customType === "irc:incoming" ||
+						message.customType === "irc:autoreply" ||
+						message.customType === "irc:relay"
+					) {
 						const details = (
 							message as CustomMessage<{
 								from?: string;
@@ -201,13 +205,18 @@ export class UiHelpers {
 								replyTo?: string;
 							}>
 						).details;
-						const incoming = message.customType === "irc:incoming";
+						const kind =
+							message.customType === "irc:incoming"
+								? ("incoming" as const)
+								: message.customType === "irc:autoreply"
+									? ("autoreply" as const)
+									: ("relay" as const);
 						const card = createIrcMessageCard(
 							{
-								kind: incoming ? "incoming" : "relay",
+								kind,
 								from: details?.from,
 								to: details?.to,
-								body: incoming ? details?.message : details?.body,
+								body: kind === "incoming" ? details?.message : details?.body,
 								replyTo: details?.replyTo,
 								timestamp: message.timestamp,
 							},
@@ -421,6 +430,7 @@ export class UiHelpers {
 							showImages: settings.get("terminal.showImages"),
 							editFuzzyThreshold: settings.get("edit.fuzzyThreshold"),
 							editAllowFuzzy: settings.get("edit.fuzzyMatch"),
+							liveRegion: this.ctx.chatContainer,
 						},
 						tool,
 						this.ctx.ui,

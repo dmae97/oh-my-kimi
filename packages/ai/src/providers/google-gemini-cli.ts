@@ -12,6 +12,7 @@ import {
 	getGeminiCliHeaders,
 } from "@oh-my-pi/pi-catalog/wire/gemini-headers";
 import { extractHttpStatusFromError, fetchWithRetry, readSseJson } from "@oh-my-pi/pi-utils";
+import { ProviderHttpError } from "../errors";
 import type {
 	Api,
 	AssistantMessage,
@@ -25,7 +26,7 @@ import type {
 } from "../types";
 import { normalizeSystemPrompts } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
-import { appendRawHttpRequestDumpFor400, type RawHttpRequestDump, withHttpStatus } from "../utils/http-inspector";
+import { appendRawHttpRequestDumpFor400, type RawHttpRequestDump } from "../utils/http-inspector";
 // Refresh is the sole responsibility of AuthStorage (broker-aware, single-flighted);
 // the stream provider trusts the access token threaded through `options.apiKey`.
 import { normalizeSchemaForCCA } from "../utils/schema";
@@ -49,6 +50,11 @@ import {
  * `import { GoogleThinkingLevel } from "./google-gemini-cli"` callers keep working.
  */
 export type { GoogleThinkingLevel };
+
+/** Non-2xx response (or in-stream error chunk) from the Cloud Code Assist API. */
+export class GeminiCliApiError extends ProviderHttpError {
+	override readonly name = "GeminiCliApiError";
+}
 
 export interface GoogleGeminiCliOptions extends StreamOptions {
 	/**
@@ -361,9 +367,10 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 			);
 			if (!response.ok) {
 				const errorText = await response.text();
-				throw withHttpStatus(
-					new Error(`Cloud Code Assist API error (${response.status}): ${extractErrorMessage(errorText)}`),
+				throw new GeminiCliApiError(
+					`Cloud Code Assist API error (${response.status}): ${extractErrorMessage(errorText)}`,
 					response.status,
+					{ headers: response.headers },
 				);
 			}
 			const requestUrl = response.url;
@@ -412,10 +419,10 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 				)) {
 					if (chunk.error) {
 						const detail = chunk.error.message || chunk.error.status || "unknown error";
-						const err = new Error(`Cloud Code Assist stream error: ${detail}`);
+						const message = `Cloud Code Assist stream error: ${detail}`;
 						throw typeof chunk.error.code === "number" && chunk.error.code >= 400
-							? withHttpStatus(err, chunk.error.code)
-							: err;
+							? new GeminiCliApiError(message, chunk.error.code)
+							: new Error(message);
 					}
 					const responseData = chunk.response;
 					if (!responseData) continue;
@@ -572,9 +579,10 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 
 					if (!currentResponse.ok) {
 						const retryErrorText = await currentResponse.text();
-						throw withHttpStatus(
-							new Error(`Cloud Code Assist API error (${currentResponse.status}): ${retryErrorText}`),
+						throw new GeminiCliApiError(
+							`Cloud Code Assist API error (${currentResponse.status}): ${retryErrorText}`,
 							currentResponse.status,
+							{ headers: currentResponse.headers },
 						);
 					}
 				}

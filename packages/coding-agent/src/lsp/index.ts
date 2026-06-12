@@ -39,6 +39,7 @@ import {
 	flattenWorkspaceTextEdits,
 	rangesOverlap,
 } from "./edits";
+import { resolveFormatOptions } from "./format-options";
 import { detectLspmux } from "./lspmux";
 import {
 	type CodeAction,
@@ -779,15 +780,6 @@ export enum FileFormatResult {
 	FORMATTED = "formatted",
 }
 
-/** Default formatting options for LSP */
-const DEFAULT_FORMAT_OPTIONS = {
-	tabSize: 3,
-	insertSpaces: true,
-	trimTrailingWhitespace: true,
-	insertFinalNewline: true,
-	trimFinalNewlines: true,
-};
-
 /**
  * Format content using LSP or custom linter client.
  *
@@ -834,7 +826,7 @@ async function formatContent(
 				"textDocument/formatting",
 				{
 					textDocument: { uri },
-					options: DEFAULT_FORMAT_OPTIONS,
+					options: resolveFormatOptions(absolutePath, content),
 				},
 				signal,
 			)) as TextEdit[] | null;

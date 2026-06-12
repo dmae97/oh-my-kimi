@@ -37,9 +37,9 @@ export interface ThinkingConfig {
 	/** Optional default effort applied when this model is selected. Falls back to global default if absent. */
 	defaultLevel?: Effort;
 	/**
-	 * Effort → wire-value remap for `anthropic-adaptive` transports, baked at
-	 * build time (4-tier legacy scale vs the 5-tier Opus 4.7+/Fable/Mythos
-	 * scale). Identity for efforts the map omits.
+	 * Effort → provider wire-value remap, baked at build time. Identity for
+	 * efforts the map omits. Used by Anthropic adaptive thinking, OpenAI-
+	 * compatible `reasoning_effort`, and Responses-style reasoning params.
 	 */
 	effortMap?: Partial<Record<Effort, string>>;
 	/**
@@ -205,6 +205,14 @@ export interface OpenAICompat {
 	/** Whether Responses-API tool-call/result history must be strictly paired. Default: auto-detected (Azure OpenAI, GitHub Copilot). */
 	strictResponsesPairing?: boolean;
 	/**
+	 * Append a trailing `# Juice: 0 !important` developer item when the caller
+	 * did not request reasoning, suppressing default reasoning on models that
+	 * cannot disable it via request params (Responses APIs only; see
+	 * https://community.openai.com/t/need-reasoning-false-option-for-gpt-5/1351588/7).
+	 * Default: auto-detected (GPT-5-family model names).
+	 */
+	requiresJuiceZeroHack?: boolean;
+	/**
 	 * Compat deltas applied when a request actually engages thinking mode
 	 * (reasoning requested and not disabled, model reasoning-capable, and not
 	 * suppressed by a forced tool choice). `buildModel` materializes the full
@@ -321,6 +329,7 @@ export type ResolvedOpenAICompat = Required<
 		| "cacheControlFormat"
 		| "thinkingKeep"
 		| "strictResponsesPairing"
+		| "requiresJuiceZeroHack"
 		| "whenThinking"
 	>
 > & {
@@ -346,6 +355,7 @@ export interface ResolvedOpenAIResponsesCompat {
 	supportsReasoningEffort: boolean;
 	supportsLongPromptCacheRetention: boolean;
 	strictResponsesPairing: boolean;
+	requiresJuiceZeroHack: boolean;
 	reasoningEffortMap: Partial<Record<Effort, string>>;
 }
 
@@ -383,6 +393,15 @@ export type CompatOf<TApi extends Api> = TApi extends "openai-completions"
 // Model interface for the unified model system
 export interface Model<TApi extends Api = Api> {
 	id: string;
+	/**
+	 * Model id to send on the wire when it differs from `id`. Used by catalog
+	 * variants that present one upstream model under several local entries —
+	 * e.g. GitHub Copilot long-context variants (`claude-opus-4.7-1m` requests
+	 * upstream `claude-opus-4.7`; the tier is a client-side context budget, not
+	 * a served model id). Providers MUST serialize `requestModelId ?? id`;
+	 * everything local (selection, caching, usage attribution) keys on `id`.
+	 */
+	requestModelId?: string;
 	name: string;
 	api: TApi;
 	provider: Provider;

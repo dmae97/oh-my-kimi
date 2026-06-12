@@ -58,6 +58,14 @@ import { yieldIfDue } from "./utils/yield";
 /** Sentinel returned by the abort race in `streamAssistantResponse`. */
 const ABORTED: unique symbol = Symbol("agent-loop-aborted");
 
+/**
+ * Cap on consecutive re-samples triggered by a non-terminal stop
+ * (`stopDetails.type === "pause_turn"`) without an intervening tool call. Each
+ * continuation is a full model request, so a backend that never stops pausing
+ * must not spin the loop forever. Resets whenever a turn carries tool calls.
+ */
+const MAX_PAUSED_TURN_CONTINUATIONS = 8;
+
 class HarmonyLeakInterruption extends Error {
 	constructor(
 		readonly detection: HarmonyDetection,
@@ -148,6 +156,16 @@ function snapshotAssistantMessageEvent(event: AssistantMessageEvent): AssistantM
  * (missing `content` array → crash on reload). We coerce at the single boundary where untyped
  * results enter the agent loop, so every downstream consumer can rely on the type.
  */
+const EMPTY_ERROR_TOOL_RESULT_TEXT = "Tool failed with no output.";
+
+function hasSubstantiveToolResultContent(content: AgentToolResult["content"]): boolean {
+	for (const block of content) {
+		if (block.type === "image") return true;
+		if (block.type === "text" && block.text.trim().length > 0) return true;
+	}
+	return false;
+}
+
 function coerceToolResult(raw: unknown): { result: AgentToolResult<unknown>; malformed: boolean } {
 	const rawObj = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
 	const rawContent = rawObj?.content;
@@ -193,8 +211,14 @@ function coerceToolResult(raw: unknown): { result: AgentToolResult<unknown>; mal
 			text: `Tool returned an invalid result: ${invalidBlocks} content block${invalidBlocks === 1 ? "" : "s"} had an unsupported shape.`,
 		});
 	}
+	const isError = explicitError || invalidBlocks > 0;
+	// Anthropic rejects tool_result blocks with is_error: true and empty content.
+	if (isError && !hasSubstantiveToolResultContent(content)) {
+		content.length = 0;
+		content.push({ type: "text", text: EMPTY_ERROR_TOOL_RESULT_TEXT });
+	}
 	return {
-		result: { content, details, ...(explicitError || invalidBlocks > 0 ? { isError: true } : {}) },
+		result: { content, details, ...(isError ? { isError: true } : {}) },
 		malformed: invalidBlocks > 0,
 	};
 }
@@ -570,6 +594,7 @@ async function runLoopBody(
 	let pendingMessages: AgentMessage[] = signal?.aborted ? [] : (await config.getSteeringMessages?.()) || [];
 	let harmonyRetryAttempt = 0;
 	let harmonyTruncateResumeCount = 0;
+	let pausedTurnContinuations = 0;
 
 	// Outer loop: continues when queued follow-up messages arrive after agent would stop
 	while (true) {
@@ -741,6 +766,23 @@ async function runLoopBody(
 				if (message.stopReason === "length" && toolResults.length > 0) {
 					hasMoreToolCalls = true;
 				}
+			}
+
+			if (toolCalls.length > 0) {
+				pausedTurnContinuations = 0;
+			} else if (
+				!hasMoreToolCalls &&
+				message.stopReason === "stop" &&
+				message.stopDetails?.type === "pause_turn" &&
+				pausedTurnContinuations < MAX_PAUSED_TURN_CONTINUATIONS
+			) {
+				// Non-terminal stop: the provider ended the response but not the turn
+				// (e.g. Codex `end_turn: false` on a commentary-only progress update).
+				// Re-sample with the assistant message replayed so the model keeps
+				// working; the next round folds steering/asides in like any other
+				// mid-work turn.
+				pausedTurnContinuations++;
+				hasMoreToolCalls = true;
 			}
 
 			stream.push({ type: "turn_end", message, toolResults });
@@ -1547,7 +1589,19 @@ async function executeToolCalls(
 
 	for (let index = 0; index < records.length; index++) {
 		const record = records[index];
-		const concurrency = record.tool?.concurrency ?? "shared";
+		const concurrencyMode = record.tool?.concurrency;
+		let concurrency: "shared" | "exclusive";
+		if (typeof concurrencyMode === "function") {
+			// Resolved from raw pre-validation args; a throwing resolver must not
+			// take down the whole batch, so fall back to the safe (serial) mode.
+			try {
+				concurrency = concurrencyMode(record.args);
+			} catch {
+				concurrency = "exclusive";
+			}
+		} else {
+			concurrency = concurrencyMode ?? "shared";
+		}
 		const start = concurrency === "exclusive" ? Promise.all([lastExclusive, ...sharedTasks]) : lastExclusive;
 		const task = start.then(() => runTool(record, index));
 		tasks.push(task);

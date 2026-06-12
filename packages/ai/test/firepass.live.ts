@@ -21,7 +21,7 @@ if (!apiKey) {
 
 const model = getBundledModel<"openai-completions">("firepass", "kimi-k2.6-turbo");
 console.log(`Model: ${model.provider}/${model.id} -> ${model.baseUrl}`);
-console.log(`compat.reasoningEffortMap:`, model.compat?.reasoningEffortMap ?? "(none)");
+console.log(`thinking.effortMap:`, model.thinking?.effortMap ?? "(none)");
 
 // Capture the outbound request body so we can verify the wire-id translation
 // and the reasoning_effort mapping locally before reading the network result.
@@ -110,7 +110,7 @@ if (xhigh.firstError) {
 if (xhigh.parsedBody?.reasoning_effort !== "xhigh") {
 	console.error(
 		`\nxhigh was rewritten on the wire (got ${xhigh.parsedBody?.reasoning_effort}); ` +
-			"expected verbatim passthrough — adding compat.reasoningEffortMap would silently downgrade the user",
+			"expected verbatim passthrough — adding thinking.effortMap would silently downgrade the user",
 	);
 	process.exit(1);
 }

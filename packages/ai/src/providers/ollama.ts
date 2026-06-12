@@ -1,4 +1,5 @@
 import { extractHttpStatusFromError, fetchWithRetry } from "@oh-my-pi/pi-utils";
+import { ProviderHttpError } from "../errors";
 import { getEnvApiKey } from "../stream";
 import type {
 	Api,
@@ -16,12 +17,7 @@ import type {
 } from "../types";
 import { normalizeSystemPrompts } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
-import {
-	type CapturedHttpErrorResponse,
-	finalizeErrorMessage,
-	type RawHttpRequestDump,
-	withHttpStatus,
-} from "../utils/http-inspector";
+import { type CapturedHttpErrorResponse, finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
 import { parseStreamingJson } from "../utils/json-parse";
 import { toolWireSchema } from "../utils/schema/wire";
 import {
@@ -31,6 +27,11 @@ import {
 	type StreamMarkupHealingEvent,
 } from "../utils/stream-markup-healing";
 import { transformMessages } from "./transform-messages";
+
+/** Non-2xx response from the Ollama `/api/chat` endpoint. */
+export class OllamaApiError extends ProviderHttpError {
+	override readonly name = "OllamaApiError";
+}
 
 export interface OllamaChatOptions extends StreamOptions {
 	reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh";
@@ -539,7 +540,9 @@ export const streamOllama: StreamFunction<"ollama-chat"> = (
 			});
 			if (!response.ok) {
 				capturedErrorResponse = await captureHttpErrorResponse(response);
-				throw withHttpStatus(new Error(`HTTP ${response.status} from ${baseUrl}/api/chat`), response.status);
+				throw new OllamaApiError(`HTTP ${response.status} from ${baseUrl}/api/chat`, response.status, {
+					headers: response.headers,
+				});
 			}
 			if (!response.body) {
 				throw new Error("Ollama returned an empty response body");

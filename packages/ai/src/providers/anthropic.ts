@@ -873,13 +873,7 @@ async function prepareAnthropicManyImageContext(context: Context, supportsImages
 	return { ...context, messages };
 }
 
-/**
- * Convert content blocks to Anthropic API format
- */
-function convertContentBlocks(
-	content: (TextContent | ImageContent)[],
-	supportsImages = true,
-):
+type AnthropicToolResultContent =
 	| string
 	| Array<
 			| { type: "text"; text: string }
@@ -891,7 +885,15 @@ function convertContentBlocks(
 						data: string;
 					};
 			  }
-	  > {
+	  >;
+
+/**
+ * Convert content blocks to Anthropic API format
+ */
+function convertContentBlocks(
+	content: (TextContent | ImageContent)[],
+	supportsImages = true,
+): AnthropicToolResultContent {
 	const blocks: Array<
 		| { type: "text"; text: string }
 		| {
@@ -2814,7 +2816,7 @@ function buildParams(
 	// Build params in the canonical field order: model → messages → system → tools →
 	// metadata → max_tokens → thinking → context_management → output_config → stream.
 	const params: MessageCreateParamsStreaming = {
-		model: model.id,
+		model: model.requestModelId ?? model.id,
 		messages: convertAnthropicMessages(context.messages, model, isOAuthToken),
 		...(systemBlocks && { system: systemBlocks }),
 		...(tools !== undefined && { tools }),
@@ -2883,11 +2885,36 @@ function buildParams(
 	return params;
 }
 
+const EMPTY_ERROR_TOOL_RESULT_TEXT = "Tool failed with no output.";
+
+function isEmptyToolResultWireContent(content: AnthropicToolResultContent): boolean {
+	if (typeof content === "string") {
+		return content.trim().length === 0;
+	}
+	return content.length === 0;
+}
+
+function ensureErrorToolResultWireContent(
+	content: AnthropicToolResultContent,
+	isError: boolean | undefined,
+): AnthropicToolResultContent {
+	if (!isError || !isEmptyToolResultWireContent(content)) {
+		return content;
+	}
+	return typeof content === "string"
+		? EMPTY_ERROR_TOOL_RESULT_TEXT
+		: [{ type: "text", text: EMPTY_ERROR_TOOL_RESULT_TEXT }];
+}
+
 function buildToolResultBlock(model: Model<"anthropic-messages">, msg: ToolResultMessage): ContentBlockParam {
+	const content = ensureErrorToolResultWireContent(
+		convertContentBlocks(msg.content, model.input.includes("image")),
+		msg.isError,
+	);
 	const block: ContentBlockParam = {
 		type: "tool_result",
 		tool_use_id: msg.toolCallId,
-		content: convertContentBlocks(msg.content, model.input.includes("image")),
+		content,
 		is_error: msg.isError,
 	};
 	if (model.compat.requiresToolResultId) {

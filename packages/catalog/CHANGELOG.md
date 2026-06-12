@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed MiniMax M2-family and OpenAI gpt-oss model metadata so OpenAI-compatible catalog entries declare only `low|medium|high` thinking efforts. Their upstreams reject `minimal`, `xhigh`, and Fireworks' `minimal → none` wire mapping, so `fireworks/minimax-m2.7` as the smol auto-thinking classifier model 400ed on every turn. OpenAI-compatible provider effort maps (`Groq qwen/qwen3-32b`, DeepSeek-family, OpenRouter Anthropic adaptive, Fireworks `minimal → none`) now bake into `thinking.effortMap` in catalog metadata instead of `buildOpenAICompat`, and request builders read that field directly. Regenerated `models.json` now makes `disableReasoning` choose `low` for those families while leaving GLM-5.x and other Fireworks models on the existing `minimal → none` path ([#2315](https://github.com/can1357/oh-my-pi/issues/2315)).
+### Added
+
+- Added `requiresJuiceZeroHack` Responses-API compat flag, resolved by `buildOpenAIResponsesCompat` from GPT-5-family model names and overridable via sparse model `compat` config. Replaces the request-time `model.name.startsWith("gpt-5")` sniff that gated the trailing `# Juice: 0 !important` no-reasoning developer item.
+
+## [15.11.3] - 2026-06-11
+### Added
+
+- Added `requestModelId` on `Model` to represent the upstream model id used when a catalog entry is a local variant
+- Added synthetic GitHub Copilot long-context model variants with `-1m` suffixes when tiered token pricing is advertised
+
+### Changed
+
+- Changed GitHub Copilot discovery to request `X-GitHub-Api-Version: 2026-06-01` from `api.githubcopilot.com`
+- Changed GitHub Copilot discovery to cap base model `contextWindow` to the default token tier and keep long-context access as the separate `-1m` model entry
+- Changed Copilot model mapping to omit non-chat `/models` entries and enable image input for models whose capabilities indicate vision support
+
+### Fixed
+
+- Fixed long-context variant pricing to use `billing.token_prices.long_context` rates instead of default model pricing
+- Fixed `mapModel` handling in OpenAI-compatible discovery so returning `null` now skips a model entry rather than falling back to defaults
+- Fixed model ID precedence so a real upstream Copilot model id is kept when it conflicts with a synthesized `-1m` variant
+
 ## [15.11.1] - 2026-06-11
 
 ### Fixed

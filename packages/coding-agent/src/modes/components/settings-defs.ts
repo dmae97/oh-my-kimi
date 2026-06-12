@@ -4,7 +4,8 @@
  * settings selector.
  *
  * To add a new setting to the UI: declare it in `settings-schema.ts`
- * with a `ui` block. If it needs a submenu, include `options: [...]`
+ * with a `ui` block carrying `tab` and `group` (the group must be listed
+ * in `TAB_GROUPS[tab]`). If it needs a submenu, include `options: [...]`
  * (or `options: "runtime"` for runtime-injected lists like themes).
  */
 
@@ -21,6 +22,7 @@ import {
 	type SettingPath,
 	type SettingTab,
 	type SubmenuOption,
+	TAB_GROUPS,
 } from "../../config/settings-schema";
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -34,6 +36,8 @@ interface BaseSettingDef {
 	label: string;
 	description: string;
 	tab: SettingTab;
+	/** Section within the tab; items are ordered by TAB_GROUPS[tab] and rendered under a heading row. */
+	group?: string;
 	/**
 	 * Optional visibility predicate. When supplied and returning false, the
 	 * setting is hidden from the UI. Applies to every variant — booleans,
@@ -111,7 +115,7 @@ function pathToSettingDef(path: SettingPath): SettingDef | null {
 
 	const schemaType = getType(path);
 	const condition = ui.condition ? CONDITIONS[ui.condition] : undefined;
-	const base = { path, label: ui.label, description: ui.description, tab: ui.tab, condition };
+	const base = { path, label: ui.label, description: ui.description, tab: ui.tab, group: ui.group, condition };
 
 	if (schemaType === "boolean") {
 		return { ...base, type: "boolean" };
@@ -170,9 +174,20 @@ export function getAllSettingDefs(): SettingDef[] {
 	return defs;
 }
 
-/** Get settings for a specific tab */
+/**
+ * Get settings for a specific tab, ordered by the tab's group layout
+ * (TAB_GROUPS). Ungrouped settings sort first; within a group, schema
+ * declaration order is preserved.
+ */
 export function getSettingsForTab(tab: SettingTab): SettingDef[] {
-	return getAllSettingDefs().filter(def => def.tab === tab);
+	const defs = getAllSettingDefs().filter(def => def.tab === tab);
+	const order = TAB_GROUPS[tab];
+	const rank = (def: SettingDef): number => {
+		if (!def.group) return -1;
+		const index = order.indexOf(def.group);
+		return index >= 0 ? index : order.length;
+	};
+	return defs.sort((a, b) => rank(a) - rank(b));
 }
 
 /** Get a setting definition by path */

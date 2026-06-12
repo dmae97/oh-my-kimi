@@ -1,6 +1,6 @@
 import * as net from "node:net";
 import { Process, ProcessStatus } from "@oh-my-pi/pi-natives";
-import type { Browser, Page } from "puppeteer-core";
+import { type Browser, type Page, TargetType } from "puppeteer-core";
 import { ToolError, throwIfAborted } from "../tool-errors";
 
 const ATTACH_TARGET_SKIP_PATTERN =
@@ -119,22 +119,41 @@ export async function findReusableCdp(
 }
 
 /**
- * Pick the best page target on an attached browser. Without a matcher, prefer
- * a page that doesn't look like a helper window (devtools, request handler,
- * background pages); with a matcher, return the first url+title substring hit.
+ * Pick the best page target on an attached browser. Prefer discoverable page
+ * targets first so Chromium/Edge attach flows that hide pages from
+ * `browser.pages()` can still return a usable tab.
  */
 export async function pickElectronTarget(browser: Browser, matcher?: string): Promise<Page> {
-	const pages = await browser.pages();
-	if (!pages.length) {
+	const discoveredPages = await Promise.all(
+		browser.targets().map(async target => {
+			if (target.type() !== TargetType.PAGE) return null;
+			return await target.page().catch(() => null);
+		}),
+	);
+	const usablePages = discoveredPages.filter((page): page is Page => page !== null);
+	if (usablePages.length > 0) {
+		return pickPageFromList(usablePages, matcher);
+	}
+
+	const fallbackPages = await browser.pages();
+	if (!fallbackPages.length) {
 		throw new ToolError("No page targets available on the attached browser");
 	}
-	const enriched = await Promise.all(
+	return pickPageFromList(fallbackPages, matcher);
+}
+
+async function enrichPages(pages: Page[]): Promise<Array<{ page: Page; url: string; title: string }>> {
+	return await Promise.all(
 		pages.map(async page => ({
 			page,
 			url: page.url(),
 			title: ((await page.title().catch(() => "")) ?? "").trim(),
 		})),
 	);
+}
+
+async function pickPageFromList(pages: Page[], matcher?: string): Promise<Page> {
+	const enriched = await enrichPages(pages);
 	if (matcher) {
 		const needle = matcher.toLowerCase();
 		const hit = enriched.find(p => p.url.toLowerCase().includes(needle) || p.title.toLowerCase().includes(needle));

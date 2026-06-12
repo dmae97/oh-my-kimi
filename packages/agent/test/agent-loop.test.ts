@@ -10,7 +10,7 @@ import type {
 	ToolCallContext,
 } from "@oh-my-pi/pi-agent-core/types";
 import type { AssistantMessage, AssistantMessageEvent, Message, ToolResultMessage } from "@oh-my-pi/pi-ai";
-import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
+import { createMockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import * as z from "zod/v4";
 import { createAssistantMessage, createUserMessage } from "./helpers";
@@ -71,6 +71,59 @@ describe("agentLoop with AgentMessage", () => {
 		expect(result.telemetry?.stepCount).toBe(1);
 		expect(result.telemetry?.chats.total).toBe(1);
 		expect(result.coverage?.modelsUsed).toEqual([mock.model.id]);
+	});
+
+	it("re-samples when an assistant turn ends with a pause_turn stop", async () => {
+		const context: AgentContext = { systemPrompt: ["You are helpful."], messages: [], tools: [] };
+		const secondCallRoles: string[] = [];
+		const mock = createMockModel({
+			responses: [
+				{ content: ["Scanning the repo first."], stopReason: "stop", stopDetails: { type: "pause_turn" } },
+				context => {
+					secondCallRoles.push(...context.messages.map(m => m.role));
+					return { content: ["All done."] };
+				},
+			],
+		});
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("Hello")], context, config, undefined, mock.stream);
+		for await (const event of stream) {
+			events.push(event);
+		}
+		const messages = await stream.result();
+
+		// The pause re-samples with the commentary committed to history and no
+		// tool results in between; the second response ends the run.
+		expect(mock.calls).toHaveLength(2);
+		expect(messages.map(m => m.role)).toEqual(["user", "assistant", "assistant"]);
+		const [paused, final] = messages.slice(1) as AssistantMessage[];
+		expect(paused.content).toEqual([{ type: "text", text: "Scanning the repo first." }]);
+		expect(final.content).toEqual([{ type: "text", text: "All done." }]);
+		// The follow-up request replayed the paused commentary, with no user or
+		// tool-result message appended in between.
+		expect(secondCallRoles).toEqual(["user", "assistant"]);
+		// One turn_start per sampling round: the continuation ran as a fresh turn.
+		expect(events.filter(e => e.type === "turn_start")).toHaveLength(2);
+	});
+
+	it("caps consecutive pause_turn continuations", async () => {
+		const context: AgentContext = { systemPrompt: ["You are helpful."], messages: [], tools: [] };
+		function* pauseForever(): Generator<MockResponse> {
+			while (true) {
+				yield { content: ["still working"], stopReason: "stop", stopDetails: { type: "pause_turn" } };
+			}
+		}
+		const mock = createMockModel({ responses: pauseForever() });
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
+
+		const messages = await agentLoop([createUserMessage("Hello")], context, config, undefined, mock.stream).result();
+
+		// Initial sample + MAX_PAUSED_TURN_CONTINUATIONS (8), then the loop stops
+		// cleanly instead of spinning on a backend that never stops pausing.
+		expect(mock.calls).toHaveLength(9);
+		expect(messages.at(-1)?.role).toBe("assistant");
 	});
 
 	it("retries when harmony leakage reaches the committed assistant message (openai-codex)", async () => {
@@ -567,6 +620,83 @@ describe("agentLoop with AgentMessage", () => {
 		expect(turnEndEvent).toBeDefined();
 		if (!turnEndEvent) return;
 		expect(turnEndEvent.toolResults.map(result => result.toolCallId)).toEqual(["tool-2", "tool-1"]);
+	});
+
+	it("resolves function-form concurrency per call", async () => {
+		const toolSchema = z.object({ value: z.string(), exclusive: z.boolean().optional() });
+		const startTimes: Record<string, number> = {};
+		const finishTimes: Record<string, number> = {};
+		const { promise: slowContinue, resolve: slowResolve } = Promise.withResolvers<void>();
+		const { promise: slowStarted, resolve: slowStartedResolve } = Promise.withResolvers<void>();
+		const { promise: fastFinished, resolve: fastFinishedResolve } = Promise.withResolvers<void>();
+
+		const tool: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo tool",
+			parameters: toolSchema,
+			concurrency: args => (args.exclusive === true ? "exclusive" : "shared"),
+			async execute(_toolCallId, params) {
+				if (params.value === "slow") {
+					startTimes.slow = Bun.nanoseconds();
+					slowStartedResolve();
+					await slowContinue;
+					finishTimes.slow = Bun.nanoseconds();
+				} else if (params.value === "fast") {
+					await slowStarted;
+					startTimes.fast = Bun.nanoseconds();
+					finishTimes.fast = Bun.nanoseconds();
+					fastFinishedResolve();
+				} else {
+					startTimes.exclusive = Bun.nanoseconds();
+					finishTimes.exclusive = Bun.nanoseconds();
+				}
+				return {
+					content: [{ type: "text", text: `echoed: ${params.value}` }],
+					details: { value: params.value },
+				};
+			},
+		};
+
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [tool] };
+
+		const mock = createMockModel({
+			responses: [
+				{
+					content: [
+						{ type: "toolCall", id: "tool-1", name: "echo", arguments: { value: "slow" } },
+						{ type: "toolCall", id: "tool-2", name: "echo", arguments: { value: "fast" } },
+						{
+							type: "toolCall",
+							id: "tool-3",
+							name: "echo",
+							arguments: { value: "last", exclusive: true },
+						},
+					],
+				},
+				{ content: ["done"] },
+			],
+		});
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("start")], context, config, undefined, mock.stream);
+		const streamTask = (async () => {
+			for await (const event of stream) {
+				events.push(event);
+			}
+		})();
+
+		await fastFinished;
+		slowResolve();
+		await streamTask;
+
+		// Both shared calls overlapped: fast started and finished while slow was running.
+		expect(startTimes.fast).toBeLessThan(finishTimes.slow);
+		expect(finishTimes.fast).toBeLessThan(finishTimes.slow);
+		// The exclusive call waited for every shared call to finish.
+		expect(startTimes.exclusive).toBeGreaterThan(finishTimes.slow);
+		expect(startTimes.exclusive).toBeGreaterThan(finishTimes.fast);
 	});
 
 	it("drops incomplete tool calls when assistant aborts before toolcall_end", async () => {
@@ -1326,5 +1456,42 @@ describe("agentLoopContinue with AgentMessage", () => {
 			.join("\n");
 		expect(text).toContain("stop_reason: length");
 		expect(text).toMatch(/split|chunk/i);
+	});
+	it("fills whitespace-only error tool results so Anthropic does not 400", async () => {
+		const toolSchema = z.object({ value: z.string() });
+		const tool: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo tool",
+			parameters: toolSchema,
+			async execute() {
+				return {
+					content: [{ type: "text", text: "\n\n\n\n\n" }],
+					isError: true,
+				};
+			},
+		};
+
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [tool] };
+		const mock = createMockModel({
+			responses: [
+				{ content: [{ type: "toolCall", id: "tool-1", name: "echo", arguments: { value: "hello" } }] },
+				{ content: ["done"] },
+			],
+		});
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("echo something")], context, config, undefined, mock.stream);
+		for await (const event of stream) {
+			events.push(event);
+		}
+
+		const toolEnd = events.find(e => e.type === "tool_execution_end");
+		expect(toolEnd).toBeDefined();
+		if (toolEnd?.type === "tool_execution_end") {
+			expect(toolEnd.isError).toBe(true);
+			expect(toolEnd.result.content).toEqual([{ type: "text", text: "Tool failed with no output." }]);
+		}
 	});
 });

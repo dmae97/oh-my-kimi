@@ -6,8 +6,72 @@
 ### Fixed
 
 - Fixed local memory consolidation on Responses-style models that reject user-only requests by sending a dedicated stage-two system prompt.
+### Added
+
+- `ModelRegistry.resolver` now accepts a model directly — `resolver(model, sessionId)` — deriving `provider`, `baseUrl`, and `modelId` from it; all model-scoped call sites migrated from the verbose `resolver(model.provider, { sessionId, baseUrl, modelId })` form.
+
+### Changed
+
+- Codex, Gemini, and Perplexity web search now route their OAuth bearers through the new `withOAuthAccess` driver: a 401 or usage-limit force-refreshes the same account and then rotates to a sibling instead of failing the search, while identity metadata (`chatgpt-account-id`, Google `projectId`) is re-derived from the refreshed credential on every retry.
+- Kagi web search, the xAI TTS tool, and model-discovery list fetches now resolve their bearers through `withAuth` with an auth-storage resolver instead of a one-shot key snapshot, gaining the same force-refresh + rotate retry on 401.
+- Compaction, handoff, and branch-summarization call sites now hand the compactor a per-candidate API-key resolver (availability still gated on a key snapshot), so credential refresh happens before the #986 fallback-model loop advances.
+- The mnemopi backend now passes an OpenRouter resolver for default embedding/extraction setups (AuthStorage-stored keys included), keeping pinned literal keys and custom endpoints unchanged.
+- Reorganized the `/settings` panel for findability: every tab now has titled sections backed by a per-tab layout contract (`TAB_GROUPS`); on wide terminals the panel renders a section sidebar with the active section's settings beside it (narrow terminals keep a flat list with inline headings), and PgUp/PgDn jump section-to-section. The Editing tab became Files (edit/read/LSP) and a new Shell tab hosts bash, eval, and Python settings. Misplaced settings were rehomed: bash toggles united under Shell, tool approval mode and policies together under Interaction → Approvals, marketplace auto-update next to startup update checks, and the todo auto-clear delay beside the other todo settings.
+- Normalized `/settings` labels and descriptions: consistent Title Case labels (e.g. "Todo Auto-Clear Delay", "GitHub View Cache"), uniform unit placement, articles and verb-first phrasing in descriptions ("If false…"/"Whether to…" rewritten), and a stale browser-tool description (Ulixee Hero) corrected to the actual puppeteer/Chromium implementation.
+- Image-generation (Antigravity, xAI, OpenRouter, Gemini) and xAI TTS request failures now throw pi-ai's typed `ProviderHttpError` carrying status and response headers instead of `Object.assign`-patched `Error`s.
+- Collapsed bash, ssh, and eval previews now cap the command/code section to a viewport-sized tail window (terminal rows minus a chrome reserve) that renders identically while streaming and after completion, with `ctrl+o` as the only way to uncap. Previously bash/ssh capped the command only while streaming and snapped it fully open the moment the tool finished, and eval never capped cell code at all.
+
+### Fixed
+
+- Fixed `lsp.formatOnWrite` sending a hardcoded `tabSize: 3, insertSpaces: true` on every `textDocument/formatting` request, which silently re-indented 2-space YAML (and any LSP-formatted file) to 3-space on every write/edit through formatter-aware servers like `yaml-language-server`. Format options are now resolved per-file from `.editorconfig` (`indent_size`, `indent_style`, `tab_width`), falling back to the indent sniffed from the in-memory content the agent is about to write, then to a 2-space default. The duplicate `DEFAULT_FORMAT_OPTIONS` constant in `lsp/index.ts` and `lsp/clients/lsp-linter-client.ts` is replaced with a single shared `resolveFormatOptions` helper ([#2329](https://github.com/can1357/oh-my-pi/issues/2329)).
+
+### Fixed
+
+- Fixed stale OpenAI Responses replay failures such as `Item with id 'rs_...' not found.` by resetting the provider session and retrying without advancing fallback chains.
+- Fixed `/settings` Escape handling so an open submenu receives Esc and returns to the settings list before a second Esc closes the panel ([#2331](https://github.com/can1357/oh-my-pi/issues/2331)).
+- Fixed Escape not closing `/settings` on the Plugins tab while the async plugin list is still loading: `PluginSettingsComponent` now closes on Esc while no child view is mounted, and an npm plugin registry listing failure is caught (like marketplace failures) so a bad registry no longer leaves the tab permanently blank ([#2331](https://github.com/can1357/oh-my-pi/issues/2331)).
+- Fixed unconfigured `pi/smol`, `pi/slow`, and `pi/designer` agent model roles using cloud-priority defaults before the user's configured `modelRoles.default`, which could route local-default setups to authenticated paid providers ([#2336](https://github.com/can1357/oh-my-pi/issues/2336)).
+- Fixed `issue://` reads failing on older GitHub CLI releases that reject the optional `stateReason` issue JSON field; single issue reads now retry without it and issue listings no longer request it ([#2333](https://github.com/can1357/oh-my-pi/issues/2333)).
+- Fixed image generation ignoring `/login`-stored OpenRouter and Google API keys: provider selection and requests now resolve through the model registry (with env-var fallback) instead of environment variables only.
+- Fixed the detached (`task` async spawn) subagent shimmer animating jumpily once the parent turn ended: the shimmer phase is sampled at render time, but nothing drove redraws while the agent idled, so the band only advanced when a progress snapshot happened to repaint. Detached task blocks now run the 30fps redraw driver while they are inside the transcript live region, and freeze the moment they leave it — the driver stops, progress rows settle on static gray (instead of leaving a mid-sweep shimmer band in native scrollback), and later partial snapshots no longer repaint commit-eligible rows (the final completion snapshot still applies).
+- Fixed five consumers treating Zod tool-parameter schemas as plain JSON Schema objects, leaking schema-instance internals (`def`, `shape`, methods stringified as `undefined`) or silently reading nothing: `/dump` and the RPC `get_state` `dumpTools` payload now convert parameters through the same wire-schema conversion providers receive; context-usage token estimation no longer stringifies the Zod `def` tree (overcounting tool schema tokens in the status line); tool-discovery search indexing recovers `schemaKeys` from Zod tools (previously empty, weakening BM25 ranking); and the extension inspector panel renders Zod tool arguments instead of "(no arguments)".
+
+## [15.11.3] - 2026-06-11
+
+### Fixed
+
+- Fixed stale `Working…` loader rows being committed to native scrollback above the live loader: the interactive status container now reports a live-region seam while it has mounted content ([#2328](https://github.com/can1357/oh-my-pi/pull/2328) by [@35844493](https://github.com/35844493)).
+- Fixed Mnemopi memory consolidation never running on session shutdown: `MnemopiSessionState.dispose()` now drains pending fact extractions and runs `sleepAllSessions` on every owned bank before closing handles (and `AgentSession.dispose()` awaits the result), matching the `/memory enqueue` slash command. `mnemopiBackend.clear` opts out via `dispose({ consolidate: false })` so the destructive `/memory clear` path does not spend tokens consolidating memories that are wiped on the next line. `consolidate()` deliberately keeps no `aliasOf` short-circuit so `/memory enqueue` from a subagent still flushes and sleeps the parent's shared banks (the alias guard lives in `dispose` for lifecycle, not in `consolidate` for content). Without this, `episodic_memory`, `gists`, `consolidation_log`, `graph_edges`, and `triples` stayed empty for every deployment because the SHMR/beam pipeline only ran when a user typed `/memory enqueue|rebuild` ([#2320](https://github.com/can1357/oh-my-pi/issues/2320)).
+- Fixed multi-path `search` collapsing distinct scopes into one walk rooted at their unrequested common ancestor: `paths: [".", "~/.gitconfig"]` scanned the entire home directory (typically until the 30s grep timeout), and explicit file entries inside walker-pruned directories (e.g. `.git/config`, gitignored files) silently never matched because they were folded into the directory walk's glob union. Multi-path scopes now fan out into per-target scans when the common ancestor is not itself a requested path, plain-file entries are read directly as their own targets, and matches from overlapping targets are deduplicated.
+- Fixed `lsp.formatOnWrite` sending a hardcoded `tabSize: 3, insertSpaces: true` on every `textDocument/formatting` request, which silently re-indented 2-space YAML (and any LSP-formatted file) to 3-space on every write/edit through formatter-aware servers like `yaml-language-server`. Format options are now resolved per-file from `.editorconfig` (`indent_size`, `indent_style`, `tab_width`), falling back to the indent sniffed from the in-memory content the agent is about to write, then to a 2-space default. The duplicate `DEFAULT_FORMAT_OPTIONS` constant in `lsp/index.ts` and `lsp/clients/lsp-linter-client.ts` is replaced with a single shared `resolveFormatOptions` helper ([#2329](https://github.com/can1357/oh-my-pi/issues/2329)).
+
+## [15.11.2] - 2026-06-11
+
+### Added
+
+- Added the Expert Elixir language server (`expert`, invoked as `expert --stdio`) to the built-in LSP server list, auto-detected for Mix projects (`mix.exs`/`mix.lock`). When both are installed, `elixir-ls` remains the primary navigation server (Expert is ordered after it).
+- Added `magicKeywords.enabled` and per-keyword `magicKeywords.ultrathink`, `magicKeywords.orchestrate`, and `magicKeywords.workflow` settings to disable hidden magic-keyword notices and ultrathink auto-thinking escalation ([#1796](https://github.com/can1357/oh-my-pi/issues/1796)).
+- Added external-editor support for Plan Review section annotations, preserving multiline feedback for Refine plan ([#2305](https://github.com/can1357/oh-my-pi/issues/2305)).
+- Added plain-RPC slash command discovery with command source metadata and startup/update notifications ([#2261](https://github.com/can1357/oh-my-pi/issues/2261)).
+
+### Changed
+
+- Bash tool calls in one assistant message now run in parallel instead of serializing the batch: non-pty `bash` is scheduled as a shared tool (`pty: true` stays exclusive), and overlapping calls on the same shell session key degrade to isolated one-shot shells so they cannot queue behind or abort each other
+
+### Fixed
+
+- Fixed CDP attach target selection for Chromium/Edge endpoints that expose page targets through discovery before `browser.pages()` is populated, and improved `ws://` `app.cdp_url` diagnostics ([#2246](https://github.com/can1357/oh-my-pi/issues/2246)).
+- Fixed local memory consolidation on Responses-style models that reject user-only requests by sending a dedicated stage-two system prompt.
+- Fixed extension, custom-tool, custom-command, and hook loaders injecting `pi` through bare `@oh-my-pi/pi-coding-agent` self-imports, which could pull a different cached package version into global installs during plugin load and trigger mixed-runtime stack overflows.
+- Marked unsmoothed assistant streaming renders as transient so streamed code blocks can avoid synchronous syntax highlighting until the message finalizes.
+- Routed LSP hover code rendering through the shared cached highlighter instead of calling the native highlighter directly on each render.
+- Kept smooth assistant streaming renders transient until `message_end` so catch-up frames do not synchronously re-highlight still-growing code blocks.
+- Fixed the `job` tool's poll header repeating the running count ("waiting on 19 of 19 19 running"): the title now reads "waiting on N jobs" (or "waiting on N of M jobs" when some settled) and the dim meta lists only settled categories (done/failed/cancelled)
+- Fixed `irc` `send await:true` to a busy peer stranding the sender until timeout when async execution is disabled: the recipient (e.g. Main blocked in a synchronous task spawn awaiting the sender's own batch) can never reach a step boundary to reply, so it now generates an ephemeral side-channel auto-reply from its context (the pre-mailbox `respondAsBackground` behavior), records it as an `irc:autoreply` aside in its own history, and delivers it back over the bus with `replyTo` threading
+- Fixed Windows-style backslash paths and globs being parsed as literal POSIX path segments by search/find tools ([#2245](https://github.com/can1357/oh-my-pi/issues/2245)).
 
 ## [15.11.1] - 2026-06-11
+
 ### Added
 
 - Added the `statusLine.transparent` appearance setting (default off): when enabled, the status line skips the theme's `statusLineBg` fill and powerline end caps so the bar inherits the terminal's default background — useful in Ghostty and other terminals whose theme background does not match the theme's hardcoded status-line color ([#2306](https://github.com/can1357/oh-my-pi/issues/2306))

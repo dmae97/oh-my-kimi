@@ -1,9 +1,15 @@
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Effort } from "@oh-my-pi/pi-ai";
 import {
+	type Component,
 	Container,
+	extractPrintableText,
+	fuzzyFilter,
+	getKeybindings,
+	getSettingItemFilterText,
 	Input,
 	matchesKey,
+	padding,
 	type SelectItem,
 	SelectList,
 	type SettingItem,
@@ -12,6 +18,8 @@ import {
 	type Tab,
 	TabBar,
 	Text,
+	truncateToWidth,
+	visibleWidth,
 } from "@oh-my-pi/pi-tui";
 import { getDefault, type SettingPath, settings } from "../../config/settings";
 import type {
@@ -22,12 +30,11 @@ import type {
 } from "../../config/settings-schema";
 import { SETTING_TABS, TAB_METADATA } from "../../config/settings-schema";
 import { getCurrentThemeName, getSelectListTheme, getSettingsListTheme, theme } from "../../modes/theme/theme";
-import { matchesAppInterrupt } from "../../modes/utils/keybinding-matchers";
 import { AUTO_THINKING, type ConfiguredThinkingLevel } from "../../thinking";
 import { getTabBarTheme } from "../shared";
 import { DynamicBorder } from "./dynamic-border";
 import { handleInputOrEscape, PluginSettingsComponent } from "./plugin-settings";
-import { getSettingsForTab, type SettingDef } from "./settings-defs";
+import { getSettingDef, getSettingsForTab, type SettingDef } from "./settings-defs";
 import { getPreset } from "./status-line/presets";
 
 /**
@@ -175,6 +182,57 @@ function getSettingsTabs(): Tab[] {
 }
 
 /**
+ * Single-line search banner pinned above the settings content while a global
+ * search is active. Renders nothing when idle so it can stay permanently
+ * mounted between the top border and the tab content.
+ */
+class SettingsSearchHeader implements Component {
+	#query = "";
+	#matchCount = 0;
+	#active = false;
+
+	update(query: string, matchCount: number): void {
+		this.#active = true;
+		this.#query = query;
+		this.#matchCount = matchCount;
+	}
+
+	clear(): void {
+		this.#active = false;
+		this.#query = "";
+		this.#matchCount = 0;
+	}
+
+	invalidate(): void {}
+
+	render(width: number): readonly string[] {
+		if (!this.#active) return [];
+
+		const icon = theme.symbol("icon.search");
+		const countText = this.#matchCount === 1 ? "1 match" : `${this.#matchCount} matches`;
+		const rightWidth = visibleWidth(countText) + 1; // trailing margin
+		// Fixed chrome: " <icon> " prefix plus the "▌" cursor cell.
+		const queryBudget = Math.max(4, width - visibleWidth(icon) - 4 - rightWidth - 1);
+
+		// Keep the tail visible (where the cursor is) when the query overflows.
+		let display = this.#query;
+		if (visibleWidth(display) > queryBudget) {
+			const chars = [...display];
+			while (chars.length > 1 && visibleWidth(chars.join("")) > queryBudget - 1) {
+				chars.shift();
+			}
+			display = `…${chars.join("")}`;
+		}
+
+		const left = ` ${theme.fg("accent", icon)} ${theme.bold(display)}${theme.fg("accent", "▌")}`;
+		const count = theme.fg(this.#matchCount > 0 ? "dim" : "warning", countText);
+		const gap = Math.max(1, width - visibleWidth(left) - rightWidth);
+		const line = truncateToWidth(`${left}${padding(gap)}${count} `, width);
+		return [line, ""];
+	}
+}
+
+/**
  * Dynamic context for settings that need runtime data.
  * Some settings (like thinking level) are managed by the session, not Settings.
  */
@@ -220,12 +278,18 @@ export interface SettingsCallbacks {
  */
 export class SettingsSelectorComponent extends Container {
 	#tabBar: TabBar;
+	#searchHeader = new SettingsSearchHeader();
+	#footer: Component[];
 	#currentList: SettingsList | null = null;
-	#currentSubmenu: Container | null = null;
+	#searchList: SettingsList | null = null;
 	#pluginComponent: PluginSettingsComponent | null = null;
 	#statusPreviewContainer: Container | null = null;
 	#statusPreviewText: Text | null = null;
 	#currentTabId: SettingTab | "plugins" = "appearance";
+	#preSearchTabId: SettingTab | "plugins" = "appearance";
+	#searchQuery = "";
+	/** First matching item id per tab id, for Tab-key jumps while searching. */
+	#searchFirstMatch = new Map<string, string>();
 	#textInputActive = false;
 
 	constructor(
@@ -234,33 +298,52 @@ export class SettingsSelectorComponent extends Container {
 	) {
 		super();
 
-		// Add top border
+		// Top border, then the search banner (renders nothing while idle).
 		this.addChild(new DynamicBorder());
+		this.addChild(this.#searchHeader);
 
-		// Tab bar
-		this.#tabBar = new TabBar("Settings", getSettingsTabs(), getTabBarTheme());
+		// Tab bar lives at the bottom, under the tab content, so value rows and
+		// descriptions stay put (closest to where the user is looking) while
+		// tabs act as a footer. No label prefix — the panel context is obvious —
+		// and no "(tab to cycle)" hint: it is folded into the list footer so it
+		// never wraps onto a lone line under the tabs.
+		this.#tabBar = new TabBar("", getSettingsTabs(), getTabBarTheme());
+		this.#tabBar.showHint = false;
 		this.#tabBar.onTabChange = () => {
-			this.#switchToTab(this.#tabBar.getActiveTab().id as SettingTab | "plugins");
+			const tabId = this.#tabBar.getActiveTab().id as SettingTab | "plugins";
+			if (this.#searchList) {
+				// While searching, tabs act as jump targets into the result list.
+				const firstId = this.#searchFirstMatch.get(tabId);
+				if (firstId) this.#searchList.selectItem(firstId);
+				return;
+			}
+			this.#switchToTab(tabId);
 		};
-		this.addChild(this.#tabBar);
 
-		// Spacer after tab bar
-		this.addChild(new Spacer(1));
+		// Footer: spacer + tab bar + bottom border. #setContent inserts the
+		// active content above this footer.
+		this.#footer = [new Spacer(1), this.#tabBar, new DynamicBorder()];
+		for (const child of this.#footer) {
+			this.addChild(child);
+		}
 
 		// Initialize with first tab
 		this.#switchToTab("appearance");
-
-		// Add bottom border
-		this.addChild(new DynamicBorder());
 	}
 
-	#switchToTab(tabId: SettingTab | "plugins"): void {
-		this.#currentTabId = tabId;
-
-		// Remove current content
+	/**
+	 * Replace the tab content (everything between the search banner and the
+	 * footer). Removes whichever content component is active, runs `build` to
+	 * append the replacement, then re-attaches the footer below it.
+	 */
+	#setContent(build: () => void): void {
 		if (this.#currentList) {
 			this.removeChild(this.#currentList);
 			this.#currentList = null;
+		}
+		if (this.#searchList) {
+			this.removeChild(this.#searchList);
+			this.#searchList = null;
 		}
 		if (this.#pluginComponent) {
 			this.removeChild(this.#pluginComponent);
@@ -272,18 +355,164 @@ export class SettingsSelectorComponent extends Container {
 			this.#statusPreviewText = null;
 		}
 
-		// Remove bottom border temporarily
-		const bottomBorder = this.children[this.children.length - 1];
-		this.removeChild(bottomBorder);
+		for (const child of this.#footer) {
+			this.removeChild(child);
+		}
+		build();
+		for (const child of this.#footer) {
+			this.addChild(child);
+		}
+	}
 
-		if (tabId === "plugins") {
-			this.#showPluginsTab();
-		} else {
-			this.#showSettingsTab(tabId);
+	#switchToTab(tabId: SettingTab | "plugins"): void {
+		this.#currentTabId = tabId;
+		this.#setContent(() => {
+			if (tabId === "plugins") {
+				this.#showPluginsTab();
+			} else {
+				this.#showSettingsTab(tabId);
+			}
+		});
+	}
+
+	// ═══════════════════════════════════════════════════════════════════════
+	// Global search (type-to-search across every tab)
+	// ═══════════════════════════════════════════════════════════════════════
+
+	/** Swap the tab content for the global search result list. */
+	#startSearch(initialQuery: string): void {
+		this.#preSearchTabId = this.#currentTabId;
+		const list = new SettingsList(
+			[],
+			10,
+			getSettingsListTheme(),
+			(id, newValue) => this.#onSearchSettingChange(id as SettingPath, newValue),
+			() => this.callbacks.onCancel(),
+			{
+				layout: "flat",
+				typeToSearch: false,
+				emptyText: "No matching settings — Backspace to edit, Esc to exit",
+				hint: "Enter/Space to change · Tab to jump tabs · Esc to exit search",
+			},
+		);
+		// Keep the footer tab highlight on the tab owning the selected result.
+		list.onSelectionChange = item => this.#syncTabBarToSelection(item);
+		this.#setContent(() => {
+			this.#searchList = list;
+			this.addChild(list);
+		});
+		this.#setSearchQuery(initialQuery);
+	}
+
+	/**
+	 * Recompute matches across every settings tab. Results render as one flat
+	 * list with a heading row per tab; the footer tab bar reorders to show
+	 * matching tabs (with counts) first and the rest muted at the end.
+	 */
+	#setSearchQuery(query: string): void {
+		if (!this.#searchList) return;
+		if (query.length === 0) {
+			this.#endSearch(false);
+			return;
+		}
+		this.#searchQuery = query;
+
+		const counts = new Map<SettingTab, number>();
+		const items: SettingItem[] = [];
+		this.#searchFirstMatch.clear();
+		let total = 0;
+		for (const tab of SETTING_TABS) {
+			const candidates: SettingItem[] = [];
+			for (const def of getSettingsForTab(tab)) {
+				const item = this.#defToItem(def);
+				if (item) candidates.push(item);
+			}
+			const matched = fuzzyFilter(candidates, query, getSettingItemFilterText);
+			counts.set(tab, matched.length);
+			if (matched.length === 0) continue;
+			total += matched.length;
+			const meta = TAB_METADATA[tab];
+			items.push({
+				id: `__tab:${tab}`,
+				label: `${theme.symbol(meta.icon as Parameters<typeof theme.symbol>[0])} ${meta.label}`,
+				currentValue: "",
+				heading: true,
+			});
+			this.#searchFirstMatch.set(tab, matched[0].id);
+			items.push(...matched);
 		}
 
-		// Re-add bottom border
-		this.addChild(bottomBorder);
+		this.#searchList.setItems(items);
+		this.#searchHeader.update(query, total);
+		this.#tabBar.setTabs(this.#buildSearchTabs(counts));
+		this.#syncTabBarToSelection(this.#searchList.getSelectedItem());
+	}
+
+	/**
+	 * Leave search mode. With `jumpToSelection`, land on the tab containing
+	 * the selected result and keep it selected there — search doubles as
+	 * navigation. Otherwise restore the pre-search tab.
+	 */
+	#endSearch(jumpToSelection: boolean): void {
+		if (!this.#searchList) return;
+		const selected = jumpToSelection ? this.#searchList.getSelectedItem() : undefined;
+		const selectedDef = selected ? getSettingDef(selected.id as SettingPath) : undefined;
+		const targetTab: SettingTab | "plugins" = selectedDef?.tab ?? this.#preSearchTabId;
+
+		this.#searchQuery = "";
+		this.#searchFirstMatch.clear();
+		this.#searchHeader.clear();
+		this.#tabBar.setTabs(getSettingsTabs(), targetTab);
+		this.#switchToTab(targetTab);
+		if (selectedDef) {
+			this.#currentList?.selectItem(selectedDef.path);
+		}
+	}
+
+	/** Matching tabs first (counts attached), the rest muted at the end. */
+	#buildSearchTabs(counts: Map<SettingTab, number>): Tab[] {
+		const matched: Tab[] = [];
+		const empty: Tab[] = [];
+		for (const id of SETTING_TABS) {
+			const meta = TAB_METADATA[id];
+			const icon = theme.symbol(meta.icon as Parameters<typeof theme.symbol>[0]);
+			const count = counts.get(id) ?? 0;
+			if (count > 0) {
+				matched.push({ id, label: `${icon} ${meta.label} (${count})` });
+			} else {
+				empty.push({ id, label: `${icon} ${meta.label}`, muted: true });
+			}
+		}
+		// Plugins hosts its own UI; it is not part of the schema-backed search.
+		empty.push({ id: "plugins", label: `${theme.icon.package} Plugins`, muted: true });
+		return [...matched, ...empty];
+	}
+
+	#syncTabBarToSelection(item: SettingItem | undefined): void {
+		if (!this.#searchList || !item) return;
+		const def = getSettingDef(item.id as SettingPath);
+		if (def) this.#tabBar.setActiveById(def.tab);
+	}
+
+	/** Value-change dispatch for the search result list (any tab's setting). */
+	#onSearchSettingChange(path: SettingPath, newValue: string): void {
+		const def = getSettingDef(path);
+		if (!def) return;
+		if (def.type === "boolean") {
+			const boolValue = newValue === "true";
+			settings.set(path, boolValue as never);
+			this.callbacks.onChange(path, boolValue);
+		} else if (def.type === "enum") {
+			settings.set(path, newValue as never);
+			this.callbacks.onChange(path, newValue);
+		}
+		// Submenu/text types already persisted inside their own done callbacks.
+		if (def.tab === "appearance") {
+			this.#triggerStatusLinePreview();
+		}
+		// Values feed the searchable text and condition gates may have flipped:
+		// recompute results in place (selection is preserved by item id).
+		this.#setSearchQuery(this.#searchQuery);
 	}
 
 	/**
@@ -520,8 +749,15 @@ export class SettingsSelectorComponent extends Container {
 			this.addChild(this.#statusPreviewContainer);
 		}
 
+		const items = this.#buildItemsForDefs(defs);
+		// Mirror SettingsList's section detection (leading ungrouped items form
+		// an implicit section) so the hint only advertises PgUp/PgDn when the
+		// jump actually changes sections.
+		const sectionCount = items.filter(item => item.heading).length + (items.length > 0 && !items[0].heading ? 1 : 0);
+		const jumpHint = sectionCount >= 2 ? "PgUp/PgDn to jump sections · " : "";
+
 		this.#currentList = new SettingsList(
-			this.#buildItemsForDefs(defs),
+			items,
 			10,
 			getSettingsListTheme(),
 			(id, newValue) => {
@@ -550,17 +786,33 @@ export class SettingsSelectorComponent extends Container {
 				this.#refreshCurrentTabItems(defs);
 			},
 			() => this.callbacks.onCancel(),
+			// The selector owns type-to-search (global, cross-tab); disable the
+			// list's internal filter so the two never compete.
+			{
+				typeToSearch: false,
+				hint: `Enter/Space to change · ${jumpHint}Tab to switch tabs · Type to search · Esc to cancel`,
+			},
 		);
 
 		this.addChild(this.#currentList);
 	}
 
-	/** Map a definition list to UI items, dropping any whose condition is false. */
+	/**
+	 * Map a definition list to UI items, dropping any whose condition is false.
+	 * Inserts a heading row whenever the (group-sorted) definition list crosses
+	 * into a new group; groups whose items are all condition-hidden emit none.
+	 */
 	#buildItemsForDefs(defs: SettingDef[]): SettingItem[] {
 		const items: SettingItem[] = [];
+		let lastGroup: string | undefined;
 		for (const def of defs) {
 			const item = this.#defToItem(def);
-			if (item) items.push(item);
+			if (!item) continue;
+			if (def.group && def.group !== lastGroup) {
+				items.push({ id: `__heading:${def.group}`, label: def.group, currentValue: "", heading: true });
+				lastGroup = def.group;
+			}
+			items.push(item);
 		}
 		return items;
 	}
@@ -616,38 +868,83 @@ export class SettingsSelectorComponent extends Container {
 
 	getFocusComponent(): SettingsList | PluginSettingsComponent {
 		// Return the current focusable component - one of these will always be set
-		return (this.#currentList || this.#pluginComponent)!;
+		return (this.#searchList || this.#currentList || this.#pluginComponent)!;
 	}
 
 	handleInput(data: string): void {
-		// Handle tab switching — but NOT when a text input is active, since
-		// arrow keys must reach the cursor and Tab must not switch tabs.
+		// Text-input submenus take every byte: arrow keys must reach the
+		// cursor and Tab must not switch tabs.
+		if (this.#textInputActive) {
+			(this.#searchList ?? this.#currentList)?.handleInput(data);
+			return;
+		}
+
+		const activeList = this.#searchList ?? this.#currentList;
+
+		// An open submenu owns input entirely — Tab/arrows/typing belong to it.
+		if (activeList?.hasOpenSubmenu()) {
+			activeList.handleInput(data);
+			return;
+		}
+
+		if (this.#searchList) {
+			this.#handleSearchModeInput(data, this.#searchList);
+			return;
+		}
+
 		if (
-			!this.#textInputActive &&
-			(matchesKey(data, "tab") ||
-				matchesKey(data, "shift+tab") ||
-				matchesKey(data, "left") ||
-				matchesKey(data, "right"))
+			matchesKey(data, "tab") ||
+			matchesKey(data, "shift+tab") ||
+			matchesKey(data, "left") ||
+			matchesKey(data, "right")
 		) {
 			this.#tabBar.handleInput(data);
 			return;
 		}
 
-		// Escape clears an active settings search before closing the panel.
-		if (matchesAppInterrupt(data) && !this.#currentSubmenu) {
-			if (this.#currentList?.hasSearchQuery()) {
-				this.#currentList.clearSearch();
+		// Printable characters start a search across every settings tab. The
+		// plugins tab keeps its own local filtering instead.
+		if (this.#currentTabId !== "plugins") {
+			const printable = extractPrintableText(data);
+			if (printable !== undefined && printable.trim().length > 0) {
+				this.#startSearch(printable);
 				return;
 			}
-			this.callbacks.onCancel();
-			return;
 		}
 
-		// Pass to current content
 		if (this.#currentList) {
 			this.#currentList.handleInput(data);
 		} else if (this.#pluginComponent) {
 			this.#pluginComponent.handleInput(data);
 		}
+	}
+
+	#handleSearchModeInput(data: string, list: SettingsList): void {
+		const kb = getKeybindings();
+		if (kb.matches(data, "tui.select.cancel")) {
+			// Exit search, landing on the tab of the selected result.
+			this.#endSearch(true);
+			return;
+		}
+		if (kb.matches(data, "tui.editor.deleteCharBackward")) {
+			this.#setSearchQuery([...this.#searchQuery].slice(0, -1).join(""));
+			return;
+		}
+		if (
+			matchesKey(data, "tab") ||
+			matchesKey(data, "shift+tab") ||
+			matchesKey(data, "left") ||
+			matchesKey(data, "right")
+		) {
+			// Jump between tabs that have matches (muted tabs are skipped).
+			this.#tabBar.handleInput(data);
+			return;
+		}
+		const printable = extractPrintableText(data);
+		if (printable !== undefined) {
+			this.#setSearchQuery(this.#searchQuery + printable);
+			return;
+		}
+		list.handleInput(data);
 	}
 }

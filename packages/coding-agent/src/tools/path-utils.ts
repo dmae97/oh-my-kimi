@@ -398,6 +398,11 @@ export function formatPathRelativeToCwd(
 export function stripOuterDoubleQuotes(input: string): string {
 	return input.startsWith('"') && input.endsWith('"') && input.length > 1 ? input.slice(1, -1) : input;
 }
+function normalizePathSeparators(input: string): string {
+	if (isInternalUrlPath(input)) return input;
+	if (!input.includes("\\")) return input;
+	return input.replace(/\\/g, "/");
+}
 
 export function normalizePathLikeInput(input: string): string {
 	return stripOuterDoubleQuotes(input.trim());
@@ -582,19 +587,20 @@ export interface ResolvedMultiFindPattern {
 	targets: ResolvedFindTarget[];
 	scopePath: string;
 }
-
-/**
- * Split a user path into a base path + glob pattern for tools that delegate to
- * APIs accepting separate `path` and `glob` arguments.
- */
 export function parseSearchPath(filePath: string): ParsedSearchPath {
-	const normalizedPath = filePath.replace(/\\/g, "/");
-	if (!hasGlobPathChars(normalizedPath)) {
-		return { basePath: filePath };
+	const normalizedPath = normalizePathSeparators(filePath);
+	const segments = normalizedPath.split("/");
+	let firstGlobIndex = -1;
+	for (let i = 0; i < segments.length; i++) {
+		if (hasGlobPathChars(segments[i])) {
+			firstGlobIndex = i;
+			break;
+		}
 	}
 
-	const segments = normalizedPath.split("/");
-	const firstGlobIndex = segments.findIndex(segment => hasGlobPathChars(segment));
+	if (firstGlobIndex === -1) {
+		return { basePath: normalizedPath };
+	}
 
 	if (firstGlobIndex <= 0) {
 		return { basePath: ".", glob: normalizedPath };
@@ -617,7 +623,7 @@ export async function parseSearchPathPreferringLiteral(filePath: string, cwd: st
 	if (!hasGlobPathChars(filePath) || isInternalUrlPath(filePath)) return parseSearchPath(filePath);
 	try {
 		await fs.promises.stat(resolveToCwd(filePath, cwd));
-		return { basePath: filePath };
+		return { basePath: normalizePathSeparators(filePath) };
 	} catch {
 		return parseSearchPath(filePath);
 	}
@@ -632,7 +638,8 @@ export async function parseSearchPathPreferringLiteral(filePath: string, cwd: st
 //   /abs/path/**/\*.ts -> { basePath: "/abs/path", globPattern: "**/*.ts", hasGlob: true }
 //   src/app -> { basePath: "src/app", globPattern: "**/*", hasGlob: false }
 export function parseFindPattern(pattern: string): ParsedFindPattern {
-	const segments = pattern.split("/");
+	const normalizedPattern = normalizePathSeparators(pattern);
+	const segments = normalizedPattern.split("/");
 	let firstGlobIndex = -1;
 	for (let i = 0; i < segments.length; i++) {
 		if (hasGlobPathChars(segments[i])) {
@@ -642,14 +649,14 @@ export function parseFindPattern(pattern: string): ParsedFindPattern {
 	}
 
 	if (firstGlobIndex === -1) {
-		return { basePath: pattern, globPattern: "**/*", hasGlob: false };
+		return { basePath: normalizedPattern, globPattern: "**/*", hasGlob: false };
 	}
 
 	if (firstGlobIndex === 0) {
-		const needsRecursive = !pattern.startsWith("**/");
+		const needsRecursive = !normalizedPattern.startsWith("**/");
 		return {
 			basePath: ".",
-			globPattern: needsRecursive ? `**/${pattern}` : pattern,
+			globPattern: needsRecursive ? `**/${normalizedPattern}` : normalizedPattern,
 			hasGlob: true,
 		};
 	}
@@ -722,6 +729,7 @@ async function resolveSearchPathItems(
 	pathItems: string[],
 	cwd: string,
 	suffixGlob?: string,
+	fanOutFileItems = false,
 ): Promise<ResolvedMultiSearchPath | undefined> {
 	if (pathItems.length < 1) {
 		return undefined;
@@ -753,14 +761,27 @@ async function resolveSearchPathItems(
 		}
 		return relativeBasePath === "." ? path.basename(item.absoluteBasePath) : relativeBasePath;
 	});
-	const rootPath = path.parse(commonBasePath).root;
-	const isDegenerateRoot = commonBasePath === rootPath && parsedItems.length > 1;
-	const targets = isDegenerateRoot
-		? parsedItems.map(item => ({
-				basePath: item.absoluteBasePath,
-				glob: item.parsedPath.glob ? combineSearchGlobs(item.parsedPath.glob, suffixGlob) : suffixGlob,
-			}))
-		: undefined;
+	// A single walk rooted at the common ancestor is only safe when that
+	// ancestor is itself one of the requested scopes (e.g. `.` + `src/foo.ts`):
+	// the walk then covers exactly what the caller asked for. When the common
+	// ancestor is an unrequested parent (`.` + `~/.gitconfig` → `$HOME`, or
+	// disjoint trees → `/`), a collapsed walk traverses every unrelated sibling
+	// under it — fan out into per-item targets so each scan stays bounded to a
+	// requested path.
+	const commonIsRequestedScope = parsedItems.some(item => item.absoluteBasePath === commonBasePath);
+	// Walkers prune `.git` unconditionally and honor gitignore, so a plain-file
+	// item folded into a directory walk's glob union (`.` + `.git/config`) can
+	// silently never match. Callers that dedupe overlapping results opt in via
+	// `fanOutFileItems` to get explicit file targets, which bypass the walker.
+	const demotesFileItem =
+		fanOutFileItems && !allExactFiles && parsedItems.some(item => !item.parsedPath.glob && item.stat.isFile());
+	const targets =
+		parsedItems.length > 1 && (!commonIsRequestedScope || demotesFileItem)
+			? parsedItems.map(item => ({
+					basePath: item.absoluteBasePath,
+					glob: item.parsedPath.glob ? combineSearchGlobs(item.parsedPath.glob, suffixGlob) : suffixGlob,
+				}))
+			: undefined;
 
 	return {
 		basePath: commonBasePath,
@@ -775,8 +796,9 @@ export async function resolveExplicitSearchPaths(
 	pathItems: string[],
 	cwd: string,
 	suffixGlob?: string,
+	fanOutFileItems = false,
 ): Promise<ResolvedMultiSearchPath | undefined> {
-	return resolveSearchPathItems([...new Set(pathItems)], cwd, suffixGlob);
+	return resolveSearchPathItems([...new Set(pathItems)], cwd, suffixGlob, fanOutFileItems);
 }
 
 async function resolveFindPatternItems(
@@ -921,6 +943,10 @@ export interface ToolScopeOptions {
 	trackImmutableSources?: boolean;
 	/** Honor `exactFilePaths` from {@link resolveExplicitSearchPaths} (search-only). */
 	surfaceExactFilePaths?: boolean;
+	/** Fan plain-file entries out into per-target scans instead of folding them
+	 * into a directory walk's glob union (search-only: the caller must dedupe
+	 * matches from overlapping targets). */
+	fanOutFileTargets?: boolean;
 	/** Extra hint appended to "Path not found" when stat fails and the user supplied multiple paths. */
 	multipathStatHint?: string;
 	/** Calling session's settings — forwarded to the internal-URL router so caller-aware handlers (issue://, pr://) honor it. */
@@ -1017,7 +1043,12 @@ export async function resolveToolSearchScope(opts: ToolScopeOptions): Promise<To
 		globFilter = parsedPath.glob;
 		scopePath = formatPathRelativeToCwd(searchPath, cwd);
 	} else {
-		const multiSearchPath = await resolveExplicitSearchPaths(effectivePaths, cwd);
+		const multiSearchPath = await resolveExplicitSearchPaths(
+			effectivePaths,
+			cwd,
+			undefined,
+			opts.fanOutFileTargets === true,
+		);
 		if (!multiSearchPath) {
 			throw new ToolError("`paths` must contain at least one path or glob");
 		}

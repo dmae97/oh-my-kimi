@@ -9,7 +9,7 @@ import type { ModelManagerOptions } from "../model-manager";
 import { getBundledModels } from "../models";
 import type { Api, FetchImpl, Model, ModelSpec, Provider, ThinkingConfig } from "../types";
 import { isAnthropicOAuthToken, isRecord, toBoolean, toNumber, toPositiveNumber } from "../utils";
-import { getGitHubCopilotBaseUrl, OPENCODE_HEADERS, parseGitHubCopilotApiKey } from "../wire/github-copilot";
+import { COPILOT_API_HEADERS, getGitHubCopilotBaseUrl, parseGitHubCopilotApiKey } from "../wire/github-copilot";
 import { createBundledReferenceMap, createReferenceResolver, toModelSpec } from "./bundled-references";
 import { UNK_CONTEXT_WINDOW, UNK_MAX_TOKENS } from "./discovery-constants";
 
@@ -761,8 +761,8 @@ const XAI_NON_CHAT_PREFIXES = ["grok-imagine-", "grok-stt-", "grok-voice-"] as c
 // hermes-agent/agent/transports/codex.py:92 `_effort_clamp = {"minimal":
 // "low"}`). Hermes sends `xhigh` to xAI verbatim and we match that contract
 // — let xAI decide if the level is valid for the specific Grok model.
-// applyResponsesReasoningParams runs this through `model.compat.reasoningEffortMap`
-// at request time, downstream of the omitReasoningEffort gate in xai-responses.ts.
+// `resolveModelThinking` folds this into `model.thinking.effortMap`, downstream
+// of the omitReasoningEffort gate in xai-responses.ts.
 const XAI_REASONING_EFFORT_MAP = { minimal: "low" } as const;
 
 // xai-oauth's /v1/models exposes no per-request output limit on the OAuth
@@ -2371,7 +2371,7 @@ export interface GithubCopilotModelManagerConfig {
 	fetch?: FetchImpl;
 }
 
-const COPILOT_ANTHROPIC_MODEL_PATTERN = /^claude-(haiku|sonnet|opus)-4([.-]|$)/;
+const COPILOT_ANTHROPIC_MODEL_PATTERN = /^claude-(haiku|sonnet|opus|fable|mythos)-\d/;
 const isCopilotResponsesModelId = (modelId: string): boolean =>
 	modelId.startsWith("gpt-5") || modelId.startsWith("oswe");
 
@@ -2406,6 +2406,122 @@ function extractCopilotLimits(entry: OpenAICompatibleModelRecord): {
 	};
 }
 
+/** Local id/name suffixes for synthesized Copilot long-context variants. */
+export const COPILOT_LONG_CONTEXT_ID_SUFFIX = "-1m";
+const COPILOT_LONG_CONTEXT_NAME_SUFFIX = " (1M)";
+
+/** One tier of Copilot token pricing (`billing.token_prices.{default,long_context}`). Prices are hundredths of a dollar per 1M tokens. */
+interface CopilotTokenPriceTier {
+	contextMax?: number;
+	inputPrice?: number;
+	outputPrice?: number;
+	cachePrice?: number;
+}
+
+function parseCopilotTokenPriceTier(value: unknown): CopilotTokenPriceTier | undefined {
+	if (!isRecord(value)) {
+		return undefined;
+	}
+	return {
+		contextMax: toNumber(value.context_max),
+		inputPrice: toNumber(value.input_price),
+		outputPrice: toNumber(value.output_price),
+		cachePrice: toNumber(value.cache_price),
+	};
+}
+
+/**
+ * Tiered context boundaries/prices from `billing.token_prices`. Served only
+ * when discovery requests `X-GitHub-Api-Version` ≥ 2026-06-01; absent on the
+ * legacy response shape (where `capabilities.limits` is already tier-capped).
+ */
+function extractCopilotTokenPrices(entry: OpenAICompatibleModelRecord): {
+	defaultTier?: CopilotTokenPriceTier;
+	longContext?: CopilotTokenPriceTier;
+} {
+	if (!isRecord(entry.billing)) {
+		return {};
+	}
+	const tokenPrices = entry.billing.token_prices;
+	if (!isRecord(tokenPrices)) {
+		return {};
+	}
+	return {
+		defaultTier: parseCopilotTokenPriceTier(tokenPrices.default),
+		longContext: parseCopilotTokenPriceTier(tokenPrices.long_context),
+	};
+}
+
+function extractCopilotSupportsVision(entry: OpenAICompatibleModelRecord): boolean | undefined {
+	if (!isRecord(entry.capabilities)) {
+		return undefined;
+	}
+	const supports = entry.capabilities.supports;
+	if (!isRecord(supports)) {
+		return undefined;
+	}
+	return toBoolean(supports.vision);
+}
+
+/** Copilot's `/models` mixes chat and embedding models; only `type: "chat"` entries are usable here. */
+function isCopilotChatModel(entry: OpenAICompatibleModelRecord): boolean {
+	if (!isRecord(entry.capabilities)) {
+		return true;
+	}
+	const type = entry.capabilities.type;
+	return typeof type !== "string" || type === "chat";
+}
+
+function copilotTierCost(
+	tier: CopilotTokenPriceTier | undefined,
+): Omit<ModelSpec<Api>["cost"], "cacheWrite"> | undefined {
+	if (tier?.inputPrice === undefined || tier.outputPrice === undefined) {
+		return undefined;
+	}
+	return {
+		input: tier.inputPrice / 100,
+		output: tier.outputPrice / 100,
+		cacheRead: (tier.cachePrice ?? 0) / 100,
+	};
+}
+
+/**
+ * Synthesize the opt-in long-context sibling for a Copilot model that reports
+ * a `billing.token_prices.long_context` tier (e.g. Claude Opus 200k → 1M, as
+ * selectable in copilot-cli). The variant is a local catalog entry: it keeps
+ * the upstream model id on the wire via `requestModelId` — the tier is purely
+ * a client-side context budget with its own pricing, not a served model id.
+ * The base entry stays on the default tier so nobody silently pays
+ * long-context rates.
+ */
+function createCopilotLongContextVariant(
+	base: ModelSpec<Api>,
+	fullContextWindow: number,
+	maxTokens: number,
+	longContext: CopilotTokenPriceTier | undefined,
+): ModelSpec<Api> | undefined {
+	const longContextMax = longContext?.contextMax;
+	if (longContextMax === undefined || longContextMax <= 0) {
+		return undefined;
+	}
+	const variantWindow = Math.min(fullContextWindow, longContextMax + maxTokens);
+	if (variantWindow <= base.contextWindow) {
+		return undefined;
+	}
+	const longCost = copilotTierCost(longContext);
+	return {
+		...base,
+		id: `${base.id}${COPILOT_LONG_CONTEXT_ID_SUFFIX}`,
+		requestModelId: base.id,
+		name: `${base.name}${COPILOT_LONG_CONTEXT_NAME_SUFFIX}`,
+		contextWindow: variantWindow,
+		// Long-context tier has its own token prices (Gemini/GPT bill ~2x above
+		// the default boundary). cacheWrite is not reported per tier; inherit.
+		...(longCost && { cost: { ...longCost, cacheWrite: base.cost.cacheWrite } }),
+		contextPromotionTarget: undefined,
+	};
+}
+
 export function githubCopilotModelManagerOptions(config?: GithubCopilotModelManagerConfig): ModelManagerOptions<Api> {
 	const rawApiKey = config?.apiKey;
 	const configuredBaseUrl = config?.baseUrl ?? "https://api.githubcopilot.com";
@@ -2420,18 +2536,22 @@ export function githubCopilotModelManagerOptions(config?: GithubCopilotModelMana
 	return {
 		providerId: "github-copilot",
 		...(apiKey && {
-			fetchDynamicModels: () =>
-				fetchOpenAICompatibleModels<Api>({
+			fetchDynamicModels: async () => {
+				const longContextVariants: ModelSpec<Api>[] = [];
+				const models = await fetchOpenAICompatibleModels<Api>({
 					api: "openai-completions",
 					provider: "github-copilot",
 					baseUrl,
 					apiKey,
-					headers: OPENCODE_HEADERS,
+					headers: COPILOT_API_HEADERS,
 					mapModel: (
 						entry: OpenAICompatibleModelRecord,
 						defaults: ModelSpec<Api>,
 						_context: OpenAICompatibleModelMapperContext<Api>,
-					): ModelSpec<Api> => {
+					): ModelSpec<Api> | null => {
+						if (!isCopilotChatModel(entry)) {
+							return null;
+						}
 						const reference = resolveReference(defaults.id);
 						const copilotLimits = extractCopilotLimits(entry);
 						// Copilot exposes token limits under capabilities.limits.*.
@@ -2463,48 +2583,91 @@ export function githubCopilotModelManagerOptions(config?: GithubCopilotModelMana
 								? entry.name
 								: (reference?.name ?? defaults.name);
 						const api = inferCopilotApi(defaults.id);
-						if (reference) {
-							return {
-								...reference,
-								api,
-								provider: "github-copilot",
-								baseUrl,
-								name,
-								contextWindow,
-								maxTokens,
-								headers: { ...OPENCODE_HEADERS, ...(providerRefs.get(defaults.id)?.headers ?? {}) },
-								...(api === "openai-completions"
-									? {
-											compat: {
-												supportsStore: false,
-												supportsDeveloperRole: false,
-												supportsReasoningEffort: false,
-											},
-										}
-									: {}),
-							};
-						}
-						return {
-							...defaults,
-							api,
-							baseUrl,
-							name,
+						const supportsVision = extractCopilotSupportsVision(entry);
+						const input: ModelSpec<Api>["input"] = supportsVision
+							? ["text", "image"]
+							: (reference?.input ?? defaults.input);
+						// With COPILOT_API_HEADERS the served window is the long-context
+						// ceiling; the default tier ends at token_prices.default.context_max
+						// prompt tokens. Cap the base entry to the default tier — the long
+						// tier is the opt-in `-1m` sibling below.
+						const tokenPrices = extractCopilotTokenPrices(entry);
+						const defaultContextMax = tokenPrices.defaultTier?.contextMax;
+						const defaultTierWindow =
+							defaultContextMax !== undefined && defaultContextMax > 0
+								? Math.min(contextWindow, defaultContextMax + maxTokens)
+								: contextWindow;
+						const base: ModelSpec<Api> = reference
+							? {
+									...reference,
+									api,
+									provider: "github-copilot",
+									baseUrl,
+									name,
+									input,
+									contextWindow: defaultTierWindow,
+									maxTokens,
+									headers: { ...COPILOT_API_HEADERS, ...(providerRefs.get(defaults.id)?.headers ?? {}) },
+									...(api === "openai-completions"
+										? {
+												compat: {
+													supportsStore: false,
+													supportsDeveloperRole: false,
+													supportsReasoningEffort: false,
+												},
+											}
+										: {}),
+								}
+							: {
+									...defaults,
+									api,
+									baseUrl,
+									name,
+									input,
+									contextWindow: defaultTierWindow,
+									maxTokens,
+									headers: { ...COPILOT_API_HEADERS },
+									...(api === "openai-completions"
+										? {
+												compat: {
+													supportsStore: false,
+													supportsDeveloperRole: false,
+													supportsReasoningEffort: false,
+												},
+											}
+										: {}),
+								};
+						const variant = createCopilotLongContextVariant(
+							base,
 							contextWindow,
 							maxTokens,
-							headers: { ...OPENCODE_HEADERS },
-							...(api === "openai-completions"
-								? {
-										compat: {
-											supportsStore: false,
-											supportsDeveloperRole: false,
-											supportsReasoningEffort: false,
-										},
-									}
-								: {}),
-						};
+							tokenPrices.longContext,
+						);
+						if (variant) {
+							longContextVariants.push(variant);
+							// Overflowing the default tier promotes into the 1M sibling
+							// unless the reference already pins a target.
+							base.contextPromotionTarget ??= `github-copilot/${variant.id}`;
+						}
+						return base;
 					},
 					fetch: config?.fetch,
-				}),
+				});
+				if (models === null) {
+					return null;
+				}
+				// Append synthesized tiers; a real upstream id always wins over a
+				// local variant with the same id.
+				const takenIds = new Set(models.map(model => model.id));
+				for (const variant of longContextVariants) {
+					if (takenIds.has(variant.id)) {
+						continue;
+					}
+					takenIds.add(variant.id);
+					models.push(variant);
+				}
+				return models.sort((left, right) => left.id.localeCompare(right.id));
+			},
 		}),
 	};
 }
@@ -2947,12 +3110,10 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_CORE: readonly ModelsDevProviderDescriptor
 		// ids are kept off the catalog until the issue thread asks for them.
 		filterModel: (id, m) => m.tool_call === true && id.startsWith("deepseek-v4"),
 		compat: {
-			// DeepSeek V4 only accepts `high`/`max`; map lower OMP levels upward so
-			// subagent "minimal" turns stay in documented thinking mode instead of
-			// sending unsupported effort strings.
+			// DeepSeek V4 effort remapping is derived in model-thinking metadata; this
+			// descriptor keeps only transport-shape compat.
 			supportsDeveloperRole: false,
 			supportsReasoningEffort: true,
-			reasoningEffortMap: { minimal: "high", low: "high", medium: "high", high: "high", xhigh: "max" },
 			maxTokensField: "max_tokens",
 			// DeepSeek V4 thinking mode rejects the `tool_choice` control parameter.
 			// Tool calls still work without it; the API defaults to auto when tools exist.
@@ -3077,7 +3238,7 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_SPECIALIZED: readonly ModelsDevProviderDes
 	openAiCompletionsDescriptor("github-copilot", "github-copilot", COPILOT_BASE_URL, {
 		defaultContextWindow: 128000,
 		defaultMaxTokens: 8192,
-		headers: { ...OPENCODE_HEADERS },
+		headers: { ...COPILOT_API_HEADERS },
 		filterModel: filterActiveToolCallModels,
 		resolveApi: (modelId, raw) =>
 			resolveApiByRules(modelId, raw, COPILOT_API_RESOLUTION_RULES, COPILOT_DEFAULT_RESOLUTION),

@@ -102,7 +102,7 @@ describe("status line session accent", () => {
 		return component;
 	}
 
-	const accentAnsi = getSessionAccentAnsi(getSessionAccentHex("Named session"));
+	const accentAnsi = getSessionAccentAnsi(getSessionAccentHex("Named session", theme.getMajorThemeColorHexes()));
 
 	it("paints the gap with the session accent when enabled", () => {
 		expect(accentAnsi).toBeDefined();

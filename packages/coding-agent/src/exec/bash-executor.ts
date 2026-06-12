@@ -56,6 +56,8 @@ export interface BashResult {
 const shellSessions = new Map<string, Shell>();
 const brokenShellSessions = new Set<string>();
 const shellSessionQuarantines = new Map<string, Promise<unknown>>();
+/** Session keys with a command currently in flight on the persistent Shell. */
+const shellSessionsInUse = new Set<string>();
 
 function quarantineShellSession(
 	sessionKey: string,
@@ -223,14 +225,24 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 		shellSessions.delete(sessionKey);
 	}
 
-	let shellSession = persistentSessionBroken ? undefined : shellSessions.get(sessionKey);
-	if (!shellSession && !persistentSessionBroken) {
+	// A persistent Shell runs one command at a time (the native session is a
+	// mutex-guarded queue and `abort()` kills every in-flight run on it). When
+	// parallel bash calls overlap on the same key, the first one owns the
+	// persistent session; the rest degrade to isolated one-shot shells — the
+	// same path quarantined sessions take.
+	const sessionBusy = shellSessionsInUse.has(sessionKey);
+	let shellSession = persistentSessionBroken || sessionBusy ? undefined : shellSessions.get(sessionKey);
+	if (!shellSession && !persistentSessionBroken && !sessionBusy) {
 		shellSession = new Shell({
 			sessionEnv: shellEnv,
 			snapshotPath: snapshotPath ?? undefined,
 			minimizer,
 		});
 		shellSessions.set(sessionKey, shellSession);
+	}
+	const ownsPersistentSession = shellSession !== undefined;
+	if (ownsPersistentSession) {
+		shellSessionsInUse.add(sessionKey);
 	}
 	const userSignal = options?.signal;
 	const runAbortController = new AbortController();
@@ -393,10 +405,13 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 		if (userSignal) {
 			userSignal.removeEventListener("abort", abortHandler);
 		}
-		if (resetSession || options?.sessionKey?.includes(":async:")) {
-			// `:async:` keys are per-job (jobId is unique), so the Shell would
-			// otherwise stay in the process-global map forever after completion.
-			shellSessions.delete(sessionKey);
+		if (ownsPersistentSession) {
+			shellSessionsInUse.delete(sessionKey);
+			if (resetSession || options?.sessionKey?.includes(":async:")) {
+				// `:async:` keys are per-job (jobId is unique), so the Shell would
+				// otherwise stay in the process-global map forever after completion.
+				shellSessions.delete(sessionKey);
+			}
 		}
 	}
 }

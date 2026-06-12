@@ -171,7 +171,7 @@ import { GoalRuntime } from "../goals/runtime";
 import type { Goal, GoalModeState } from "../goals/state";
 import type { HindsightSessionState } from "../hindsight/state";
 import { type LocalProtocolOptions, resolveLocalUrlToPath } from "../internal-urls";
-import type { IrcMessage } from "../irc/bus";
+import { IrcBus, type IrcMessage } from "../irc/bus";
 import { resolveMemoryBackend } from "../memory-backend";
 import { getMnemopiSessionState, type MnemopiSessionState, setMnemopiSessionState } from "../mnemopi/state";
 import { containsOrchestrate, ORCHESTRATE_NOTICE } from "../modes/orchestrate";
@@ -185,6 +185,7 @@ import type { PlanModeState } from "../plan-mode/state";
 import autoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
 import eagerTodoPrompt from "../prompts/system/eager-todo.md" with { type: "text" };
 import emptyStopRetryTemplate from "../prompts/system/empty-stop-retry.md" with { type: "text" };
+import ircAutoReplyTemplate from "../prompts/system/irc-autoreply.md" with { type: "text" };
 import ircIncomingTemplate from "../prompts/system/irc-incoming.md" with { type: "text" };
 import planModeActivePrompt from "../prompts/system/plan-mode-active.md" with { type: "text" };
 import planModeReferencePrompt from "../prompts/system/plan-mode-reference.md" with { type: "text" };
@@ -298,6 +299,7 @@ export type AgentSessionEvent =
 
 /** Listener function for agent session events */
 export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
+export type CommandMetadataChangedListener = () => void | Promise<void>;
 export type AsyncJobSnapshotItem = Pick<AsyncJob, "id" | "type" | "status" | "label" | "startTime">;
 
 const EMPTY_STOP_MAX_RETRIES = 3;
@@ -884,6 +886,7 @@ export class AgentSession {
 	/** Last (enable, providerId) tuple resolved by `#syncAppendOnlyContext` — used to skip no-op invalidations. */
 	#lastAppendOnlyResolution?: { enable: boolean; providerId: string | undefined };
 	#eventListeners: AgentSessionEventListener[] = [];
+	#commandMetadataChangedListeners: CommandMetadataChangedListener[] = [];
 
 	/** Tracks pending steering messages for UI display. Removed when delivered.
 	 *  Entry shape: `{ text }` for plain-text steers (user-message dequeue
@@ -3034,6 +3037,27 @@ export class AgentSession {
 		};
 	}
 
+	subscribeCommandMetadataChanged(listener: CommandMetadataChangedListener): () => void {
+		this.#commandMetadataChangedListeners.push(listener);
+		return () => {
+			const index = this.#commandMetadataChangedListeners.indexOf(listener);
+			if (index !== -1) {
+				this.#commandMetadataChangedListeners.splice(index, 1);
+			}
+		};
+	}
+
+	#notifyCommandMetadataChanged(): void {
+		const listeners = [...this.#commandMetadataChangedListeners];
+		for (const listener of listeners) {
+			try {
+				void listener();
+			} catch (err) {
+				logger.error("Command metadata listener threw", { err });
+			}
+		}
+	}
+
 	/**
 	 * Temporarily disconnect from agent events.
 	 * User listeners are preserved and will receive events again after resubscribe().
@@ -3189,7 +3213,7 @@ export class AgentSession {
 		this.setHindsightSessionState(undefined);
 		hindsightState?.dispose();
 		const mnemopiState = setMnemopiSessionState(this, undefined);
-		mnemopiState?.dispose();
+		await mnemopiState?.dispose();
 		this.#disconnectFromAgent();
 		if (this.#unsubscribeAppendOnly) {
 			this.#unsubscribeAppendOnly();
@@ -4350,9 +4374,15 @@ export class AgentSession {
 		return [...this.#customCommands, ...this.#mcpPromptCommands];
 	}
 
+	/** MCP prompt commands only, for command-list metadata. */
+	get mcpPromptCommands(): ReadonlyArray<LoadedCustomCommand> {
+		return this.#mcpPromptCommands;
+	}
+
 	/** Update the MCP prompt commands list. Called when server prompts are (re)loaded. */
 	setMCPPromptCommands(commands: LoadedCustomCommand[]): void {
 		this.#mcpPromptCommands = commands;
+		this.#notifyCommandMetadataChanged();
 	}
 
 	// =========================================================================
@@ -4465,12 +4495,16 @@ export class AgentSession {
 		return { ...message, content: normalized } as T;
 	}
 
+	#magicKeywordEnabled(keyword: "orchestrate" | "ultrathink" | "workflow"): boolean {
+		return this.settings.get("magicKeywords.enabled") && this.settings.get(`magicKeywords.${keyword}`);
+	}
+
 	#createMagicKeywordNotices(text: string): CustomMessage[] {
 		const timestamp = Date.now();
 		const turnBudget = parseTurnBudget(text);
 		this.sessionManager.beginTurnBudget(turnBudget?.total ?? null, turnBudget?.hard ?? false);
 		const keywordNotices: CustomMessage[] = [];
-		if (containsUltrathink(text)) {
+		if (this.#magicKeywordEnabled("ultrathink") && containsUltrathink(text)) {
 			keywordNotices.push({
 				role: "custom",
 				customType: "ultrathink-notice",
@@ -4480,7 +4514,7 @@ export class AgentSession {
 				timestamp,
 			});
 		}
-		if (containsOrchestrate(text)) {
+		if (this.#magicKeywordEnabled("orchestrate") && containsOrchestrate(text)) {
 			keywordNotices.push({
 				role: "custom",
 				customType: "orchestrate-notice",
@@ -4490,7 +4524,7 @@ export class AgentSession {
 				timestamp,
 			});
 		}
-		if (containsWorkflow(text)) {
+		if (this.#magicKeywordEnabled("workflow") && containsWorkflow(text)) {
 			keywordNotices.push({
 				role: "custom",
 				customType: "workflow-notice",
@@ -5921,7 +5955,7 @@ export class AgentSession {
 		if (!model?.reasoning) return;
 
 		let resolved: Effort | undefined;
-		if (containsUltrathink(promptText)) {
+		if (this.#magicKeywordEnabled("ultrathink") && containsUltrathink(promptText)) {
 			// The user explicitly asked for maximum thinking; bypass the classifier
 			// and jump straight to the highest auto-supported level for this model.
 			resolved = clampAutoThinkingEffort(model, Effort.XHigh);
@@ -6548,7 +6582,7 @@ export class AgentSession {
 			const rawHandoffText = await generateHandoff(
 				this.agent.state.messages,
 				model,
-				apiKey,
+				this.#modelRegistry.resolver(model, this.sessionId),
 				{
 					systemPrompt: this.#obfuscateForProvider(this.#baseSystemPrompt),
 					tools: obfuscateProviderTools(this.#obfuscator, this.agent.state.tools),
@@ -7218,6 +7252,22 @@ export class AgentSession {
 		this.#closeProviderSessionsForModelSwitch(currentModel, currentModel);
 	}
 
+	#resetCurrentResponsesProviderSession(reason: string): void {
+		const currentModel = this.model;
+		if (currentModel?.api !== "openai-responses" && currentModel?.api !== "openai-codex-responses") {
+			return;
+		}
+
+		this.#closeProviderSessionsForModelSwitch(currentModel, currentModel);
+		this.agent.appendOnlyContext?.invalidateForModelChange();
+		logger.debug("Reset Responses provider session after stale replay error", {
+			provider: currentModel.provider,
+			model: currentModel.id,
+			api: currentModel.api,
+			reason,
+		});
+	}
+
 	/**
 	 * Re-evaluate append-only context mode, creating or destroying the
 	 * manager as needed. Called on model switch AND setting change.
@@ -7543,7 +7593,7 @@ export class AgentSession {
 				return await compact(
 					this.#obfuscatePreparationForProvider(preparation),
 					candidate,
-					apiKey,
+					this.#modelRegistry.resolver(candidate, this.sessionId),
 					this.#obfuscateTextForProvider(customInstructions),
 					signal,
 					{
@@ -7872,7 +7922,7 @@ export class AgentSession {
 							compactResult = await compact(
 								this.#obfuscatePreparationForProvider(preparation),
 								candidate,
-								apiKey,
+								this.#modelRegistry.resolver(candidate, this.sessionId),
 								undefined,
 								autoCompactionSignal,
 								{
@@ -8259,9 +8309,30 @@ export class AgentSession {
 		if (isContextOverflow(message, contextWindow)) return false;
 
 		if (this.#isClassifierRefusal(message)) return true;
+		if (this.#isStaleOpenAIResponsesReplayError(message)) return true;
 
 		const err = message.errorMessage;
 		return this.#isTransientErrorMessage(err) || isUsageLimitError(err);
+	}
+
+	#isStaleOpenAIResponsesReplayError(message: AssistantMessage): boolean {
+		const currentApi = this.model?.api;
+		if (
+			message.api !== "openai-responses" &&
+			message.api !== "openai-codex-responses" &&
+			currentApi !== "openai-responses" &&
+			currentApi !== "openai-codex-responses"
+		) {
+			return false;
+		}
+
+		const errorMessage = message.errorMessage;
+		if (!errorMessage) return false;
+
+		return (
+			/\bItem with id ['"][^'"]+['"] not found\.?/i.test(errorMessage) ||
+			(/previous[ _]?response/i.test(errorMessage) && /not[ _]?found|invalid|expired|stale/i.test(errorMessage))
+		);
 	}
 
 	#isClassifierRefusal(message: AssistantMessage): boolean {
@@ -8597,15 +8668,22 @@ export class AgentSession {
 		}
 
 		const errorMessage = message.errorMessage || "Unknown error";
+		const staleOpenAIResponsesReplayError = this.#isStaleOpenAIResponsesReplayError(message);
 		const parsedRetryAfterMs = this.#parseRetryAfterMsFromError(errorMessage);
-		let delayMs = calculateRetryBackoffDelayMs(retrySettings.baseDelayMs, this.#retryAttempt);
+		let delayMs = staleOpenAIResponsesReplayError
+			? 0
+			: calculateRetryBackoffDelayMs(retrySettings.baseDelayMs, this.#retryAttempt);
 		let switchedCredential = false;
 		let switchedModel = false;
 		// Set when a usage-limit error pinned the wait to credential
 		// availability — suppresses the generic retry-after bump below.
 		let usageLimitWaitMs: number | undefined;
 
-		if (this.model && isUsageLimitError(errorMessage)) {
+		if (staleOpenAIResponsesReplayError) {
+			this.#resetCurrentResponsesProviderSession("stale replay error");
+		}
+
+		if (this.model && !staleOpenAIResponsesReplayError && isUsageLimitError(errorMessage)) {
 			const retryAfterMs = parsedRetryAfterMs ?? calculateRateLimitBackoffMs(parseRateLimitReason(errorMessage));
 			const outcome = await this.#modelRegistry.authStorage.markUsageLimitReached(
 				this.model.provider,
@@ -8642,7 +8720,7 @@ export class AgentSession {
 		}
 
 		const currentSelector = this.model ? formatRetryFallbackSelector(this.model, this.thinkingLevel) : undefined;
-		if (!switchedCredential && currentSelector) {
+		if (!staleOpenAIResponsesReplayError && !switchedCredential && currentSelector) {
 			if (retrySettings.modelFallback) {
 				if (!classifierRefusal) {
 					this.#noteRetryFallbackCooldown(currentSelector, parsedRetryAfterMs, errorMessage);
@@ -9118,11 +9196,20 @@ export class AgentSession {
 	 *   → "woken".
 	 *
 	 * Never blocks on the recipient's turn: the wake turn is fire-and-forget.
+	 *
+	 * When the sender expects a reply (`send await:true`) and this session is
+	 * mid-turn with async execution disabled, the next step boundary may be
+	 * gated on the sender's own batch finishing (blocking task spawns), so a
+	 * real reply turn can never happen in time. In that case an ephemeral
+	 * side-channel auto-reply is generated from the current context (the old
+	 * `respondAsBackground` path) and sent back over the bus on this agent's
+	 * behalf.
 	 */
-	async deliverIrcMessage(msg: IrcMessage): Promise<"injected" | "woken"> {
+	async deliverIrcMessage(msg: IrcMessage, opts?: { expectsReply?: boolean }): Promise<"injected" | "woken"> {
 		if (this.#isDisposed) {
 			throw new Error("Recipient session is disposed.");
 		}
+		const autoReply = (opts?.expectsReply ?? false) && this.isStreaming && !this.settings.get("async.enabled");
 		const record: CustomMessage = {
 			role: "custom",
 			customType: "irc:incoming",
@@ -9130,6 +9217,7 @@ export class AgentSession {
 				from: msg.from,
 				message: msg.body,
 				replyTo: msg.replyTo ?? "",
+				autoReplied: autoReply,
 			}),
 			display: true,
 			details: { id: msg.id, from: msg.from, message: msg.body, ...(msg.replyTo ? { replyTo: msg.replyTo } : {}) },
@@ -9139,6 +9227,7 @@ export class AgentSession {
 		void this.#emitSessionEvent({ type: "irc_message", message: record });
 		if (this.isStreaming) {
 			this.#pendingIrcAsides.push(record);
+			if (autoReply) void this.#runIrcAutoReply(msg);
 			return "injected";
 		}
 		// Idle: same wake primitive the yield queue uses for async-result
@@ -9147,6 +9236,50 @@ export class AgentSession {
 			logger.warn("IRC wake turn failed", { from: msg.from, to: msg.to, error: String(error) });
 		});
 		return "woken";
+	}
+
+	/**
+	 * Generate and deliver an ephemeral auto-reply to `msg` on this agent's
+	 * behalf: a no-tools side-channel turn over the current history (same
+	 * pipeline as `/btw`), recorded into this session as an `irc:autoreply`
+	 * aside so the model knows what was said for it, and sent back to the
+	 * sender as a regular bus message (`replyTo: msg.id`) so their parked
+	 * `wait`/`await:true` resolves. Failures only log — the sender then hits
+	 * its normal wait timeout.
+	 */
+	async #runIrcAutoReply(msg: IrcMessage): Promise<void> {
+		try {
+			const { replyText } = await this.runEphemeralTurn({
+				promptText: prompt.render(ircAutoReplyTemplate, {
+					from: msg.from,
+					message: msg.body,
+					replyTo: msg.replyTo ?? "",
+				}),
+			});
+			const body = replyText.trim();
+			if (!body || this.#isDisposed) return;
+			const record: CustomMessage = {
+				role: "custom",
+				customType: "irc:autoreply",
+				content: `[IRC you → \`${msg.from}\` (auto)]\n\n${body}`,
+				display: true,
+				details: { to: msg.from, body, replyTo: msg.id },
+				attribution: "agent",
+				timestamp: Date.now(),
+			};
+			void this.#emitSessionEvent({ type: "irc_message", message: record });
+			// Asides drain at the next step boundary; anything left over is
+			// flushed at the start of the next prompt (#flushPendingIrcAsides).
+			this.#pendingIrcAsides.push(record);
+			// `from` must be the id the sender addressed (msg.to) so their
+			// from-filtered waiter matches.
+			const receipt = await IrcBus.global().send({ from: msg.to, to: msg.from, body, replyTo: msg.id });
+			if (receipt.outcome === "failed") {
+				logger.warn("IRC auto-reply delivery failed", { to: msg.from, error: receipt.error });
+			}
+		} catch (error) {
+			logger.warn("IRC auto-reply turn failed", { from: msg.from, error: String(error) });
+		}
 	}
 
 	/**
@@ -9724,7 +9857,7 @@ export class AgentSession {
 			const branchSummarySettings = this.settings.getGroup("branchSummary");
 			const result = await generateBranchSummary(entriesToSummarize, {
 				model,
-				apiKey,
+				apiKey: this.#modelRegistry.resolver(model, this.sessionId),
 				signal: this.#branchSummaryAbortController.signal,
 				customInstructions: this.#obfuscateTextForProvider(options.customInstructions),
 				reserveTokens: branchSummarySettings.reserveTokens,
