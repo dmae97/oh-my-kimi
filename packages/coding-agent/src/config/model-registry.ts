@@ -20,6 +20,11 @@ import {
 	UNK_CONTEXT_WINDOW,
 	UNK_MAX_TOKENS,
 } from "@oh-my-pi/pi-catalog/provider-models";
+import {
+	collapseBuiltModelVariants,
+	getVariantAliasSources,
+	resolveVariantAlias,
+} from "@oh-my-pi/pi-catalog/variant-collapse";
 
 // Sentinel for local-only OAuth token (LM Studio, vLLM) — declared inline to avoid loading
 // any provider module at startup. Must match `DEFAULT_LOCAL_TOKEN` in oauth/lm-studio.ts.
@@ -542,7 +547,37 @@ function normalizeSuppressedSelector(selector: string): string {
 	if (!trimmed) return trimmed;
 	const parsed = parseModelString(trimmed);
 	if (!parsed) return trimmed;
-	return `${parsed.provider}/${parsed.id}`;
+	// Retired effort-tier variant ids normalize to their collapsed logical id
+	// so persisted suppressions keyed by raw member ids still bind.
+	const aliasId = resolveVariantAlias(parsed.provider, parsed.id);
+	return `${parsed.provider}/${aliasId ?? parsed.id}`;
+}
+
+/**
+ * Look up a model's override, falling back to entries keyed by retired
+ * effort-tier variant ids (models.yml authored before collapsing). A raw key
+ * only re-binds when no live model holds that id.
+ */
+function resolveModelOverrideWithAliases(
+	overrides: Map<string, ModelOverride>,
+	model: Model<Api>,
+	hasLiveModel: (provider: string, id: string) => boolean,
+): ModelOverride | undefined {
+	const direct = overrides.get(model.id);
+	if (direct) return direct;
+	for (const rawId of getVariantAliasSources(model.provider, model.id)) {
+		if (hasLiveModel(model.provider, rawId)) continue;
+		const remapped = overrides.get(rawId);
+		if (remapped) {
+			logger.debug("model override re-keyed through variant alias", {
+				provider: model.provider,
+				from: rawId,
+				to: model.id,
+			});
+			return remapped;
+		}
+	}
+	return undefined;
 }
 
 function getDisabledProviderIdsFromSettings(): Set<string> {
@@ -799,7 +834,9 @@ export class ModelRegistry {
 		const withConfigModels = this.#mergeCustomModels(resolvedDefaults, this.#customModelOverlays);
 		// Merge runtime extension models so they survive refresh() cycles
 		const combined = this.#mergeCustomModels(withConfigModels, this.#runtimeModelOverlays);
-		const withModelOverrides = this.#applyModelOverrides(combined, this.#modelOverrides);
+		// Custom/config providers bypass the model-manager merge point —
+		// collapse effort-tier variants here so X/X-thinking twins fold.
+		const withModelOverrides = this.#applyModelOverrides(collapseBuiltModelVariants(combined), this.#modelOverrides);
 		this.#models = this.#applyRuntimeProviderOverrides(withModelOverrides);
 		this.#rebuildCanonicalIndex();
 		this.#lastStaticLoadMtime = this.#modelsConfigFile.getMtimeMs();
@@ -1152,7 +1189,7 @@ export class ModelRegistry {
 		const withConfigModels = this.#mergeCustomModels(resolved, this.#customModelOverlays);
 		// Merge runtime extension models so they survive online discovery completion
 		const combined = this.#mergeCustomModels(withConfigModels, this.#runtimeModelOverlays);
-		const withModelOverrides = this.#applyModelOverrides(combined, this.#modelOverrides);
+		const withModelOverrides = this.#applyModelOverrides(collapseBuiltModelVariants(combined), this.#modelOverrides);
 		this.#models = this.#applyRuntimeProviderOverrides(withModelOverrides);
 		this.#rebuildCanonicalIndex();
 	}
@@ -1398,8 +1435,13 @@ export class ModelRegistry {
 	#applyProviderModelOverrides(provider: string, models: Model<Api>[]): Model<Api>[] {
 		const overrides = this.#modelOverrides.get(provider);
 		if (!overrides || overrides.size === 0) return models;
+		let liveIds: Set<string> | null = null;
+		const hasLiveModel = (_provider: string, id: string) => {
+			liveIds ??= new Set(models.map(m => m.id));
+			return liveIds.has(id);
+		};
 		return models.map(model => {
-			const override = overrides.get(model.id);
+			const override = resolveModelOverrideWithAliases(overrides, model, hasLiveModel);
 			if (!override) return model;
 			return applyModelOverride(model, override);
 		});
@@ -1443,10 +1485,15 @@ export class ModelRegistry {
 	}
 	#applyModelOverrides(models: Model<Api>[], overrides: Map<string, Map<string, ModelOverride>>): Model<Api>[] {
 		if (overrides.size === 0) return models;
+		let liveKeys: Set<string> | null = null;
+		const hasLiveModel = (provider: string, id: string) => {
+			liveKeys ??= new Set(models.map(m => `${m.provider}\u0000${m.id}`));
+			return liveKeys.has(`${provider}\u0000${id}`);
+		};
 		return models.map(model => {
 			const providerOverrides = overrides.get(model.provider);
 			if (!providerOverrides) return model;
-			const override = providerOverrides.get(model.id);
+			const override = resolveModelOverrideWithAliases(providerOverrides, model, hasLiveModel);
 			if (!override) return model;
 			return applyModelOverride(model, override);
 		});
