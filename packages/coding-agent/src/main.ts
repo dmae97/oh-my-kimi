@@ -244,6 +244,22 @@ export interface InteractiveModeNotify {
 	message: string;
 }
 
+export function buildModelScopeNotification(
+	scopedModelsForDisplay: readonly Pick<ScopedModel, "model" | "thinkingLevel">[],
+	startupQuiet: boolean,
+): InteractiveModeNotify | null {
+	if (startupQuiet || scopedModelsForDisplay.length === 0) {
+		return null;
+	}
+	const modelList = scopedModelsForDisplay
+		.map(scopedModel => {
+			const thinkingStr = scopedModel.thinkingLevel ? `:${scopedModel.thinkingLevel}` : "";
+			return `${scopedModel.model.id}${thinkingStr}`;
+		})
+		.join(", ");
+	return { kind: "info", message: `Model scope: ${modelList} (Ctrl+P to cycle)` };
+}
+
 export async function submitInteractiveInput(
 	mode: Pick<
 		InteractiveMode,
@@ -1268,17 +1284,15 @@ export async function runRootCommand(
 			const changelogMarkdown = await logger.time("main:getChangelogForDisplay", getChangelogForDisplay, parsedArgs);
 
 			const scopedModelsForDisplay = sessionOptions.scopedModels ?? scopedModels;
-			if (scopedModelsForDisplay.length > 0) {
-				const modelList = scopedModelsForDisplay
-					.map(scopedModel => {
-						const thinkingStr = !scopedModel.thinkingLevel ? `:${scopedModel.thinkingLevel}` : "";
-						return `${scopedModel.model.id}${thinkingStr}`;
-					})
-					.join(", ");
+			const modelScopeNotification = buildModelScopeNotification(
+				scopedModelsForDisplay,
+				settingsInstance.get("startup.quiet"),
+			);
+			if (modelScopeNotification) {
 				// Routed through the TUI (not stdout): the startup capture owns the
 				// terminal in raw mode here, and the TUI's first clearScrollback paint
 				// would wipe a pre-TUI line anyway.
-				notifs.push({ kind: "info", message: `Model scope: ${modelList} (Ctrl+P to cycle)` });
+				notifs.push(modelScopeNotification);
 			}
 
 			if ($env.PI_TIMING) {
