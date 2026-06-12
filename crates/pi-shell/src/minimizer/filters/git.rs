@@ -66,7 +66,16 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 		Some("tag") if is_tag_non_listing(ctx.command) => cleaned,
 		Some("tag") => primitives::compact_listing(&cleaned, 40),
 		Some("stash") => condense_stash(ctx.command, &cleaned, exit_code),
-		Some("worktree") => condense_worktree(&cleaned),
+		Some("worktree") => {
+			if has_token(ctx.command, "--porcelain")
+				|| has_token(ctx.command, "-z")
+				|| has_token(ctx.command, "--null")
+			{
+				cleaned
+			} else {
+				condense_worktree(&cleaned)
+			}
+		},
 		Some("push") if has_token(ctx.command, "--porcelain") => cleaned,
 		Some("push") => condense_push(&cleaned, exit_code),
 		Some("pull") => condense_pull(&cleaned, exit_code),
@@ -2779,6 +2788,53 @@ error: could not apply abc1234... fix: something\nhint: Resolve all conflicts ma
 		let out = filter(&ctx, input, 0);
 		assert!(!out.changed, "{:?}", out.text);
 		assert_eq!(out.text, input);
+	}
+
+	#[test]
+	fn worktree_porcelain_passthrough() {
+		// `git worktree list --porcelain` emits machine-readable records;
+		// the minimizer must not insert "… N lines omitted …" markers.
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = test_ctx(
+			Some("worktree"),
+			"git worktree list --porcelain",
+			&cfg,
+		);
+		let input = "worktree /home/user/project\nHEAD abc1234def\nbranch refs/heads/main\n\nworktree /home/user/other\nHEAD 567890ab\nbranch refs/heads/feat\n";
+		let out = filter(&ctx, input, 0);
+		assert!(!out.changed, "porcelain worktree listing must pass through unchanged");
+		assert_eq!(out.text, input, "porcelain worktree listing must pass through");
+	}
+
+	#[test]
+	fn worktree_null_passthrough() {
+		// `git worktree list -z` also produces machine-readable NUL-delimited output.
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = test_ctx(Some("worktree"), "git worktree list -z", &cfg);
+		let input = "worktree /home/user/project\0HEAD abc1234def\0branch refs/heads/main\0";
+		let out = filter(&ctx, input, 0);
+		assert!(!out.changed, "-z worktree output must pass through unchanged");
+		assert_eq!(out.text, input);
+	}
+
+	#[test]
+	fn worktree_non_porcelain_still_condensed() {
+		// Normal (non-porcelain) listing should still go through the condenser.
+		// Build 22 listing-shaped entries so the cap (20) is exceeded; the condenser
+		// would insert an "… N worktrees omitted …" marker that a passthrough would
+		// never emit.
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = test_ctx(Some("worktree"), "git worktree list", &cfg);
+		let mut input = String::new();
+		for idx in 0..22usize {
+			input.push_str(&format!("/repo/wt-{idx:02}  aaaaaaa{idx:02} [branch-{idx}]\n"));
+		}
+		let out = filter(&ctx, &input, 0);
+		assert!(
+			out.text.contains("worktrees omitted"),
+			"non-porcelain output over the cap must show omitted marker; got: {:?}",
+			out.text
+		);
 	}
 
 	#[test]
