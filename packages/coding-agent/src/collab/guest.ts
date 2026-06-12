@@ -62,6 +62,10 @@ export class CollabGuestLink {
 	#applyChain: Promise<void> = Promise.resolve();
 	#welcomed = false;
 	#left = false;
+	/** base64url write token from a full link; absent when joined via a view link. */
+	#writeToken: string | undefined;
+	/** True when the host marked this peer read-only (view link). */
+	#readOnly = false;
 	/** False until the first assistant message_start (real or synthesized) since (re)sync. */
 	#assistantStreamSynced = false;
 	state: CollabSessionState | null = null;
@@ -73,12 +77,15 @@ export class CollabGuestLink {
 	#nextReqId = 1;
 	readonly #hubRemote: AgentHubRemote = {
 		chat: (id, text) => {
+			if (this.#rejectReadOnly()) return;
 			this.#socket?.send({ t: "agent-cmd", cmd: "chat", agentId: id, text });
 		},
 		kill: id => {
+			if (this.#rejectReadOnly()) return;
 			this.#socket?.send({ t: "agent-cmd", cmd: "kill", agentId: id });
 		},
 		revive: id => {
+			if (this.#rejectReadOnly()) return;
 			this.#socket?.send({ t: "agent-cmd", cmd: "revive", agentId: id });
 		},
 		readTranscript: (id, fromByte) => {
@@ -106,6 +113,18 @@ export class CollabGuestLink {
 		return this.#hubRemote;
 	}
 
+	/** True when this guest joined through a read-only (view) link. */
+	get readOnly(): boolean {
+		return this.#readOnly;
+	}
+
+	/** Shows the read-only status hint when applicable; true when the action must be dropped. */
+	#rejectReadOnly(): boolean {
+		if (!this.#readOnly) return false;
+		this.#ctx.showStatus("This collab link is read-only");
+		return true;
+	}
+
 	constructor(ctx: InteractiveModeContext) {
 		this.#ctx = ctx;
 	}
@@ -114,6 +133,7 @@ export class CollabGuestLink {
 		const parsed = parseCollabLink(link);
 		if ("error" in parsed) throw new Error(parsed.error);
 		this.#roomId = parsed.roomId;
+		this.#writeToken = parsed.writeToken ? Buffer.from(parsed.writeToken).toString("base64url") : undefined;
 		const key = await importRoomKey(parsed.key);
 
 		this.#returnSessionFile = this.#ctx.sessionManager.getSessionFile() ?? null;
@@ -128,7 +148,12 @@ export class CollabGuestLink {
 			// (Re)connect: re-introduce ourselves; the host answers with a fresh
 			// welcome which (re)syncs the replica.
 			this.#welcomed = false;
-			socket.send({ t: "hello", proto: COLLAB_PROTO, name: collabDisplayName(this.#ctx) });
+			socket.send({
+				t: "hello",
+				proto: COLLAB_PROTO,
+				name: collabDisplayName(this.#ctx),
+				writeToken: this.#writeToken,
+			});
 		};
 		socket.onFrame = frame => {
 			this.#applyChain = this.#applyChain
@@ -188,10 +213,12 @@ export class CollabGuestLink {
 	}
 
 	sendPrompt(text: string, images?: ImageContent[]): void {
+		if (this.#rejectReadOnly()) return;
 		this.#socket?.send({ t: "prompt", text, images: images && images.length > 0 ? images : undefined });
 	}
 
 	sendAbort(): void {
+		if (this.#rejectReadOnly()) return;
 		this.#socket?.send({ t: "abort" });
 	}
 
@@ -218,8 +245,10 @@ export class CollabGuestLink {
 		this.#ctx.renderInitialMessages({ clearTerminalHistory: true });
 		await this.#ctx.reloadTodos();
 		this.#updateStatusSegment();
+		this.#readOnly = frame.readOnly === true;
 		this.#welcomed = true;
-		this.#ctx.showStatus(isResync ? "Reconnected to collab session" : "Joined collab session");
+		const suffix = this.#readOnly ? " (read-only)" : "";
+		this.#ctx.showStatus(isResync ? `Reconnected to collab session${suffix}` : `Joined collab session${suffix}`);
 	}
 
 	#applyFrame(frame: CollabFrame): void {

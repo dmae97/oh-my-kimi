@@ -9,6 +9,7 @@
  * and incremental subagent-transcript reads.
  */
 import * as fs from "node:fs/promises";
+import { timingSafeEqual } from "node:crypto";
 import * as os from "node:os";
 import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
@@ -20,7 +21,7 @@ import type { AgentSessionEvent } from "../session/agent-session";
 import { stripImagesFromMessage, USER_INTERRUPT_LABEL } from "../session/messages";
 import type { SessionEntry as StoredSessionEntry } from "../session/session-manager";
 import { TASK_SUBAGENT_LIFECYCLE_CHANNEL, TASK_SUBAGENT_PROGRESS_CHANNEL } from "../task";
-import { generateRoomKey, importRoomKey } from "./crypto";
+import { generateRoomKey, generateWriteToken, importRoomKey } from "./crypto";
 import {
 	type AgentSnapshot,
 	COLLAB_PROMPT_MESSAGE_TYPE,
@@ -29,6 +30,7 @@ import {
 	type CollabParticipant,
 	type CollabSessionState,
 	formatCollabLink,
+	formatCollabWebLink,
 	generateRoomId,
 	parseCollabLink,
 } from "./protocol";
@@ -106,9 +108,13 @@ export class CollabHost {
 	#ctx: InteractiveModeContext;
 	#socket: CollabSocket | null = null;
 	#link = "";
+	#webLink = "";
+	#viewLink = "";
+	#webViewLink = "";
+	#writeToken: Uint8Array | null = null;
 	#sessionId = "";
 	#unsubscribe?: () => void;
-	#peers = new Map<number, string>();
+	#peers = new Map<number, { name: string; canWrite: boolean }>();
 	#lastStateJson = "";
 	#stateDebounce: Timer | null = null;
 	#streamingInterval: Timer | null = null;
@@ -125,16 +131,38 @@ export class CollabHost {
 		return this.#link;
 	}
 
+	/** Browser deep link (`https://<relay>/#<link>`) — the relay serves the web client at `/`. */
+	get webLink(): string {
+		return this.#webLink;
+	}
+
+	/** Read-only variant of {@link link}: bare room key, no write token. */
+	get viewLink(): string {
+		return this.#viewLink;
+	}
+
+	/** Read-only variant of {@link webLink}. */
+	get webViewLink(): string {
+		return this.#webViewLink;
+	}
+
 	get participants(): CollabParticipant[] {
 		const list: CollabParticipant[] = [{ name: collabDisplayName(this.#ctx), role: "host" }];
-		for (const name of this.#peers.values()) list.push({ name, role: "guest" });
+		for (const peer of this.#peers.values()) {
+			list.push({ name: peer.name, role: "guest", readOnly: peer.canWrite ? undefined : true });
+		}
 		return list;
 	}
 
 	async start(relayUrl: string): Promise<void> {
 		const rawKey = generateRoomKey();
+		const writeToken = generateWriteToken();
 		const roomId = generateRoomId();
-		this.#link = formatCollabLink(relayUrl, roomId, rawKey);
+		this.#writeToken = writeToken;
+		this.#link = formatCollabLink(relayUrl, roomId, rawKey, writeToken);
+		this.#webLink = formatCollabWebLink(relayUrl, roomId, rawKey, writeToken);
+		this.#viewLink = formatCollabLink(relayUrl, roomId, rawKey);
+		this.#webViewLink = formatCollabWebLink(relayUrl, roomId, rawKey);
 		const parsed = parseCollabLink(this.#link);
 		if ("error" in parsed) throw new Error(parsed.error);
 		const key = await importRoomKey(rawKey);
@@ -249,7 +277,7 @@ export class CollabHost {
 	#handleFrame(frame: CollabFrame, fromPeer: number): void {
 		switch (frame.t) {
 			case "hello":
-				this.#handleHello(frame.name, frame.proto, fromPeer);
+				this.#handleHello(frame.name, frame.proto, frame.writeToken, fromPeer);
 				break;
 			case "prompt":
 				this.#handlePrompt(frame.text, frame.images, fromPeer);
@@ -268,7 +296,20 @@ export class CollabHost {
 		}
 	}
 
-	#handleHello(name: string, proto: number, fromPeer: number): void {
+	/** Timing-safe write-token check; peers without a valid token are read-only. */
+	#verifyWriteToken(token: string | undefined): boolean {
+		const expected = this.#writeToken;
+		if (!expected || !token) return false;
+		const bytes = Buffer.from(token, "base64url");
+		return bytes.byteLength === expected.byteLength && timingSafeEqual(bytes, expected);
+	}
+
+	/** Reject a mutating frame from a read-only peer with a targeted error. */
+	#rejectReadOnly(action: string, fromPeer: number): void {
+		this.#socket?.send({ t: "error", message: `${action} is disabled on a read-only link` }, fromPeer);
+	}
+
+	#handleHello(name: string, proto: number, writeToken: string | undefined, fromPeer: number): void {
 		if (proto !== COLLAB_PROTO) {
 			this.#socket?.send(
 				{ t: "error", message: `protocol mismatch: host speaks v${COLLAB_PROTO}, guest sent v${proto}` },
@@ -277,7 +318,8 @@ export class CollabHost {
 			return;
 		}
 		const cleanName = name.trim().slice(0, 64) || `guest-${fromPeer}`;
-		this.#peers.set(fromPeer, cleanName);
+		const canWrite = this.#verifyWriteToken(writeToken);
+		this.#peers.set(fromPeer, { name: cleanName, canWrite });
 
 		// Snapshot and send synchronously: no awaits between snapshot and send, so
 		// later entries/events queue behind the welcome on the same socket and the
@@ -299,16 +341,26 @@ export class CollabHost {
 				entries,
 				state: this.#buildState(),
 				agents: this.#snapshotAgents(),
+				readOnly: canWrite ? undefined : true,
 			},
 			fromPeer,
 		);
-		this.#ctx.session.emitNotice("info", `${cleanName} joined the collab session`, "collab");
+		this.#ctx.session.emitNotice(
+			"info",
+			`${cleanName} joined the collab session${canWrite ? "" : " (read-only)"}`,
+			"collab",
+		);
 		this.#updateStatusSegment();
 		this.#scheduleStateBroadcast();
 	}
 
 	#handlePrompt(text: string, images: ImageContent[] | undefined, fromPeer: number): void {
-		const name = this.#peers.get(fromPeer) ?? `guest-${fromPeer}`;
+		const peer = this.#peers.get(fromPeer);
+		if (!peer?.canWrite) {
+			this.#rejectReadOnly("prompting", fromPeer);
+			return;
+		}
+		const name = peer.name;
 		const content: string | (TextContent | ImageContent)[] =
 			images && images.length > 0 ? [{ type: "text", text }, ...images] : text;
 		this.#ctx.session
@@ -329,7 +381,12 @@ export class CollabHost {
 	}
 
 	#handleAbort(fromPeer: number): void {
-		const name = this.#peers.get(fromPeer) ?? `guest-${fromPeer}`;
+		const peer = this.#peers.get(fromPeer);
+		if (!peer?.canWrite) {
+			this.#rejectReadOnly("interrupting", fromPeer);
+			return;
+		}
+		const name = peer.name;
 		void this.#ctx.session
 			.abort()
 			.then(() => this.#ctx.session.emitNotice("info", `${name} interrupted`, "collab"))
@@ -337,7 +394,7 @@ export class CollabHost {
 	}
 
 	#handlePeerLeft(peer: number): void {
-		const name = this.#peers.get(peer);
+		const name = this.#peers.get(peer)?.name;
 		this.#peers.delete(peer);
 		if (name) this.#ctx.session.emitNotice("info", `${name} left the collab session`, "collab");
 		this.#updateStatusSegment();
@@ -401,6 +458,10 @@ export class CollabHost {
 	}
 
 	#handleAgentCmd(cmd: "chat" | "kill" | "revive", agentId: string, text: string | undefined, fromPeer: number): void {
+		if (!this.#peers.get(fromPeer)?.canWrite) {
+			this.#rejectReadOnly("agent control", fromPeer);
+			return;
+		}
 		const fail = (err: unknown) => {
 			logger.warn("collab agent-cmd failed", { cmd, agentId, error: String(err) });
 			this.#socket?.send({ t: "error", message: `agent ${agentId}: ${String(err)}` }, fromPeer);

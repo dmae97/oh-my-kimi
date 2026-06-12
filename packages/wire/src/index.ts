@@ -217,6 +217,8 @@ export interface ContextUsage {
 export interface Participant {
 	name: string;
 	role: "host" | "guest";
+	/** True when the guest joined through a read-only (view) link. */
+	readOnly?: boolean;
 }
 
 /** Debounced footer snapshot broadcast by the host. */
@@ -296,7 +298,17 @@ export interface SubagentLifecyclePayload {
 // ═══════════════════════════════════════════════════════════════════════════
 
 export type GuestFrame =
-	| { t: "hello"; proto: number; name: string }
+	| {
+			t: "hello";
+			proto: number;
+			name: string;
+			/**
+			 * base64url write token proving full-link possession; absent for
+			 * read-only (view) links. The host marks peers without a valid token
+			 * read-only and rejects their mutating frames.
+			 */
+			writeToken?: string;
+	  }
 	| { t: "prompt"; text: string; images?: ImageContent[] }
 	| { t: "abort" }
 	| { t: "agent-cmd"; cmd: "chat" | "kill" | "revive"; agentId: string; text?: string }
@@ -313,6 +325,8 @@ export type HostFrame =
 			entries: SessionEntry[];
 			state: SessionState;
 			agents: AgentSnapshot[];
+			/** True when this peer joined through a read-only (view) link. */
+			readOnly?: boolean;
 	  }
 	| { t: "entry"; entry: SessionEntry }
 	| { t: "event"; event: AgentEvent }
@@ -339,6 +353,16 @@ export const ENVELOPE_HEADER_LENGTH = 4;
 
 export const ROOM_ID_BYTES = 16;
 
+/** AES-256-GCM room key; the seal key for every collab frame. */
+export const ROOM_KEY_BYTES = 32;
+
+/**
+ * Random write token appended to the room key in full links
+ * (`base64url(key ∥ token)`); view links carry the bare key. Possession
+ * proves prompt/abort/agent-cmd capability to the host.
+ */
+export const WRITE_TOKEN_BYTES = 16;
+
 /** Default public relay; bare `<roomId>#<key>` links resolve against it. */
 export const DEFAULT_RELAY_URL = "wss://relay.omp.sh";
 
@@ -347,6 +371,8 @@ export interface ParsedCollabLink {
 	wsUrl: string;
 	roomId: string;
 	key: Uint8Array;
+	/** Write token from a full link; absent for read-only (view) links. */
+	writeToken?: Uint8Array;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

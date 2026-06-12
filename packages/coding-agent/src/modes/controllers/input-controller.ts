@@ -130,7 +130,7 @@ export class InputController {
 				// session is never streaming, so the native abort path below would
 				// no-op.
 				if (this.ctx.collabGuest.state?.isStreaming || this.ctx.loadingAnimation) {
-					this.ctx.notifyInterrupting();
+					if (!this.ctx.collabGuest.readOnly) this.ctx.notifyInterrupting();
 					this.ctx.collabGuest.sendAbort();
 				}
 				return;
@@ -414,6 +414,11 @@ export class InputController {
 				if (text.startsWith("!") || text.startsWith("$")) {
 					this.ctx.showStatus("Local execution is host-only during a collab session");
 					this.ctx.editor.setText("");
+					return;
+				}
+				if (this.ctx.collabGuest.readOnly) {
+					// Keep the typed text: the prompt was not consumed.
+					this.ctx.showStatus("This collab link is read-only — prompting is disabled");
 					return;
 				}
 				this.ctx.editor.addToHistory(text);

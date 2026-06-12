@@ -16,7 +16,13 @@ import type {
 	SessionState,
 	AgentSnapshot as WireAgentSnapshot,
 } from "@oh-my-pi/pi-wire";
-import { DEFAULT_RELAY_URL, ENVELOPE_HEADER_LENGTH, ROOM_ID_BYTES } from "@oh-my-pi/pi-wire";
+import {
+	DEFAULT_RELAY_URL,
+	ENVELOPE_HEADER_LENGTH,
+	ROOM_ID_BYTES,
+	ROOM_KEY_BYTES,
+	WRITE_TOKEN_BYTES,
+} from "@oh-my-pi/pi-wire";
 import type { ContextUsage } from "../extensibility/extensions/types";
 import type { AgentSessionEvent } from "../session/agent-session";
 import type { SessionEntry, SessionHeader } from "../session/session-manager";
@@ -62,6 +68,8 @@ export type CollabFrame =
 			entries: SessionEntry[];
 			state: CollabSessionState;
 			agents: AgentSnapshot[];
+			/** True when this peer joined through a read-only (view) link. */
+			readOnly?: boolean;
 	  }
 	| { t: "entry"; entry: SessionEntry }
 	| { t: "event"; event: AgentSessionEvent }
@@ -147,16 +155,41 @@ function normalizeRelayOrigin(relayUrl: string): { origin: string } | { error: s
  * `<roomId>#<key>`, other wss relays drop the scheme (`host[:port]/r/…`);
  * only localhost ws:// links keep their full URL so parsing cannot
  * mis-infer wss.
+ *
+ * Full links append the write token to the key in the fragment
+ * (`base64url(key ∥ writeToken)`); read-only (view) links carry the bare
+ * 32-byte key, which is also the pre-token link format.
  */
-export function formatCollabLink(relayUrl: string, roomId: string, key: Uint8Array): string {
+export function formatCollabLink(relayUrl: string, roomId: string, key: Uint8Array, writeToken?: Uint8Array): string {
 	const normalized = normalizeRelayOrigin(relayUrl);
 	if ("error" in normalized) throw new Error(normalized.error);
-	const keyText = Buffer.from(key).toString("base64url");
+	const secret = writeToken ? Buffer.concat([key, writeToken]) : Buffer.from(key);
+	const keyText = secret.toString("base64url");
 	if (normalized.origin === DEFAULT_RELAY_URL) return `${roomId}#${keyText}`;
 	const compact = normalized.origin.startsWith("wss://")
 		? normalized.origin.slice("wss://".length)
 		: normalized.origin;
 	return `${compact}/r/${roomId}#${keyText}`;
+}
+
+/**
+ * Render the browser deep link: `http(s)://<relay-host>/#<collab-link>`. The
+ * relay serves the web client at `/`, and the whole collab link (including the
+ * room key) rides in the fragment, so it never appears in any HTTP request.
+ * Terminals auto-link the https form, making it click-to-join.
+ */
+export function formatCollabWebLink(
+	relayUrl: string,
+	roomId: string,
+	key: Uint8Array,
+	writeToken?: Uint8Array,
+): string {
+	const normalized = normalizeRelayOrigin(relayUrl);
+	if ("error" in normalized) throw new Error(normalized.error);
+	const httpOrigin = normalized.origin.startsWith("wss://")
+		? `https://${normalized.origin.slice("wss://".length)}`
+		: `http://${normalized.origin.slice("ws://".length)}`;
+	return `${httpOrigin}/#${formatCollabLink(relayUrl, roomId, key, writeToken)}`;
 }
 
 export function parseCollabLink(link: string): ParsedCollabLink | { error: string } {
@@ -176,6 +209,12 @@ export function parseCollabLink(link: string): ParsedCollabLink | { error: strin
 	if ("error" in normalized) return normalized;
 	const match = ROOM_PATH_RE.exec(url.pathname);
 	if (!match) {
+		// Web deep link: `http(s)://<relay>/#<collab-link>` — the fragment holds
+		// the whole link (which itself contains another `#`). URL.hash spans to
+		// the end of the string, so recurse on it; the inner fragment is just
+		// the key (no `#`), which bounds the recursion.
+		const inner = url.hash.startsWith("#") ? url.hash.slice(1) : url.hash;
+		if (inner.includes("#")) return parseCollabLink(inner);
 		return { error: "Collab link must contain a /r/<roomId> path" };
 	}
 	const roomId = match[1]!;
@@ -183,9 +222,11 @@ export function parseCollabLink(link: string): ParsedCollabLink | { error: strin
 	if (!fragment) {
 		return { error: "Collab link is missing the #<key> fragment" };
 	}
-	const key = B64URL_RE.test(fragment) ? new Uint8Array(Buffer.from(fragment, "base64url")) : null;
-	if (key?.byteLength !== 32) {
-		return { error: "Collab link key must be 32 base64url bytes" };
+	const secret = B64URL_RE.test(fragment) ? new Uint8Array(Buffer.from(fragment, "base64url")) : null;
+	if (!secret || (secret.byteLength !== ROOM_KEY_BYTES && secret.byteLength !== ROOM_KEY_BYTES + WRITE_TOKEN_BYTES)) {
+		return { error: "Collab link key must be 32 (view) or 48 (full) base64url bytes" };
 	}
-	return { wsUrl: `${normalized.origin}/r/${roomId}`, roomId, key };
+	const key = secret.subarray(0, ROOM_KEY_BYTES);
+	const writeToken = secret.byteLength > ROOM_KEY_BYTES ? secret.subarray(ROOM_KEY_BYTES) : undefined;
+	return { wsUrl: `${normalized.origin}/r/${roomId}`, roomId, key, writeToken };
 }

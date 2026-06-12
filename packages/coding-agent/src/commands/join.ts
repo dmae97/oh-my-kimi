@@ -17,7 +17,7 @@ export default class Join extends Command {
 		}),
 	};
 
-	static examples = [`${APP_NAME} join wss://relay.omp.sh/s/abc123#key`];
+	static examples = [`${APP_NAME} join "relay.example.sh/abc123#key"`];
 
 	async run(): Promise<void> {
 		const { args } = await this.parse(Join);

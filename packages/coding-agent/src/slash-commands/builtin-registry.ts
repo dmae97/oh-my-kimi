@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { setNextRequestDebugPath } from "@oh-my-pi/pi-ai/utils/request-debug";
 import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
-import { Snowflake, setProjectDir } from "@oh-my-pi/pi-utils";
+import { APP_NAME, Snowflake, setProjectDir } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import { COLLAB_GUEST_ALLOWED_COMMANDS, CollabGuestLink } from "../collab/guest";
 import { CollabHost } from "../collab/host";
@@ -24,9 +24,11 @@ import {
 	MarketplaceManager,
 } from "../extensibility/plugins/marketplace";
 import { resolveMemoryBackend } from "../memory-backend";
+import { theme } from "../modes/theme/theme";
 import type { InteractiveModeContext } from "../modes/types";
 import type { AgentSession, FreshSessionResult } from "../session/agent-session";
 import { formatShakeSummary, type ShakeMode } from "../session/shake-types";
+import { urlHyperlinkAlways } from "../tui";
 import { getChangelogPath, parseChangelog } from "../utils/changelog";
 import { buildContextReportText } from "./helpers/context-report";
 import { formatDuration } from "./helpers/format";
@@ -58,6 +60,30 @@ function refreshStatusLine(ctx: InteractiveModeContext): void {
 	ctx.statusLine.invalidate();
 	ctx.updateEditorTopBorder();
 	ctx.ui.requestRender();
+}
+
+/** Scheme-less display form of a browser deep link: accent + underline, OSC-8 linked to the full URL. */
+function collabWebLinkClickable(webLink: string): string {
+	const display = theme.fg("accent", `\x1b[4m${webLink.replace(/^https?:\/\//, "")}\x1b[24m`);
+	return urlHyperlinkAlways(webLink, display);
+}
+
+/** Join hint printed by /collab: compact terminal link + clickable browser deep link. */
+function collabLinkHint(host: CollabHost, heading: string, view = false): string {
+	const bullet = theme.fg("accent", theme.format.bullet);
+	const link = view ? host.viewLink : host.link;
+	const webLink = view ? host.webViewLink : host.webLink;
+	return [
+		theme.fg("success", heading),
+		` ${bullet} ${theme.fg("muted", view ? "Watch from another terminal:" : "Join from another terminal:")} ${APP_NAME} join "${link}"`,
+		` ${bullet} ${theme.fg("muted", "or any web browser:")} ${collabWebLinkClickable(webLink)}`,
+		theme.fg(
+			"dim",
+			view
+				? "Anyone with this link can watch the session but cannot prompt the agent."
+				: "Anyone with the link can read the session and prompt the agent. Read-only link: /collab view",
+		),
+	].join("\n");
 }
 
 function formatFreshSessionResult(result: FreshSessionResult): string {
@@ -449,7 +475,12 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "collab",
 		description: "Share this session live via a relay",
-		inlineHint: "[start|stop|status] [relayUrl]",
+		inlineHint: "[start|view|stop|status] [relayUrl]",
+		subcommands: [
+			{ name: "view", description: "Share a read-only link (guests can watch, not prompt)" },
+			{ name: "status", description: "Show link + participants" },
+			{ name: "stop", description: "Stop sharing" },
+		],
 		allowArgs: true,
 		handleTui: async (command, runtime) => {
 			const ctx = runtime.ctx;
@@ -467,10 +498,16 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			}
 			if (first === "status") {
 				if (ctx.collabHost) {
-					const names = ctx.collabHost.participants.map(p => (p.role === "host" ? `${p.name} (host)` : p.name));
-					ctx.showStatus(`Collab: ${names.join(", ")} — ${ctx.collabHost.link}`);
+					const names = ctx.collabHost.participants.map(p =>
+						p.role === "host" ? `${p.name} (host)` : p.readOnly ? `${p.name} (view-only)` : p.name,
+					);
+					ctx.showStatus(`Collab: ${names.join(", ")} — ${collabWebLinkClickable(ctx.collabHost.webLink)}`);
 				} else if (ctx.collabGuest) {
-					ctx.showStatus("In a collab session as a guest (/leave to exit)");
+					ctx.showStatus(
+						ctx.collabGuest.readOnly
+							? "In a collab session as a read-only guest (/leave to exit)"
+							: "In a collab session as a guest (/leave to exit)",
+					);
 				} else {
 					ctx.showStatus("Not in a collab session");
 				}
@@ -480,11 +517,15 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 				ctx.showError("Already in a collab session as a guest (/leave first)");
 				return;
 			}
+			const view = first === "view";
 			if (ctx.collabHost) {
-				ctx.session.emitNotice("info", `Collab link: ${ctx.collabHost.link}`, "collab");
+				ctx.showStatus(
+					collabLinkHint(ctx.collabHost, view ? "Read-only collab link" : "Collab session active", view),
+					{ dim: false },
+				);
 				return;
 			}
-			const explicitUrl = first === "start" ? args.slice("start".length).trim() : args;
+			const explicitUrl = first === "start" || view ? args.slice(first.length).trim() : args;
 			const relayInput = explicitUrl || ctx.settings.get("collab.relayUrl") || "";
 			if (!relayInput) {
 				ctx.showError(
@@ -502,11 +543,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 				return;
 			}
 			ctx.collabHost = host;
-			ctx.session.emitNotice(
-				"info",
-				`Collab link: ${host.link}\nAnyone with this link can read the session and prompt the agent.`,
-				"collab",
-			);
+			ctx.showStatus(collabLinkHint(host, "Collab session started!", view), { dim: false });
 		},
 	},
 	{

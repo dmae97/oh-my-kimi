@@ -1,6 +1,19 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added `/collab view` command to create a read-only spectator join link
+- Added read-only hints and status text for guest-only participation in collab sessions
+
+### Changed
+
+- Changed collab links so full links with a write token grant mutation rights while links without a token now join as read-only
+- `/collab` now prints a join hint with both link forms: the compact `omp join` link for terminals and a click-to-join browser deep link (`https://<relay-host>/#<link>`, displayed scheme-less, OSC 8-linked) — the relay serves the collab web client at `/`, and the room id + key ride in the URL fragment, so they never appear in any HTTP request. `/join`, `omp join`, and the web connect screen accept either form
+
+### Fixed
+
+- Fixed read-only collab sessions so prompting, interrupts, and other write actions are blocked with a read-only warning instead of being applied
 
 ## [15.11.8] - 2026-06-12
 

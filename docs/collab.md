@@ -10,16 +10,18 @@ Host:
 /collab
 ```
 
-prints a link like
+prints
 
 ```
-Collab link: mgAYTZwEnpRQtca0CTgn-Q#gdJUbTovD94ofDaa8YvhY0-ty16w4fn8PgB6PLnoA30
+Collab session started!
+ • Join from another terminal: omp join "mgAYTZwEnpRQtca0CTgn-Q#gdJUbTovD94ofDaa8YvhY0-ty16w4fn8PgB6PLnoA30"
+ • or any web browser: relay.omp.sh/#mgAYTZwEnpRQtca0CTgn-Q#gdJUbTovD94ofDaa8YvhY0-ty16w4fn8PgB6PLnoA30
 ```
 
-Guest (any directory, any machine):
+The browser line is click-to-join (an OSC 8 hyperlink to the full `https://` deep link): the relay serves the web guest client at `/`, and the room id + key ride in the URL fragment. From another omp (any directory, any machine), either form works:
 
 ```
-/join mgAYTZwEnpRQtca0CTgn-Q#gdJU…
+/join relay.omp.sh/#mgAYTZwEnpRQtca0CTgn-Q#gdJU…
 ```
 
 The guest's previous session is restored on `/leave` (or when the host stops).
@@ -38,12 +40,18 @@ The guest's previous session is restored on `/leave` (or when the host stops).
 ## Link format
 
 ```
-<roomId>#<key>                      → default relay (relay.omp.sh)
-host[:port]/r/<roomId>#<key>        → custom relay, wss:// inferred
+https://host[:port]/#<link>          → browser deep link (printed by /collab; /join accepts it too)
+<roomId>#<key>                       → default relay (relay.omp.sh)
+host[:port]/r/<roomId>#<key>         → custom relay, wss:// inferred
 ws://localhost:7475/r/<roomId>#<key> → plain ws, allowed for localhost only
 ```
 
-The fragment (`#<key>`) is the 32-byte AES-256-GCM room key, base64url-encoded. Fragments never appear in HTTP requests, and the key is never sent to the relay.
+The trailing fragment (`#<key>`) is the room secret, base64url-encoded, in one of two strengths:
+
+- **Full link** — 48 bytes: the 32-byte AES-256-GCM room key followed by a 16-byte write token. Grants prompting, interrupting, and subagent control.
+- **View-only link** — the bare 32-byte key, no write token. Grants live read access only. Pre-token links parse as view-only.
+
+In the browser deep link, everything after the first `#` — room id and key — is a URL fragment: it never appears in any HTTP request, and neither secret is ever sent to the relay.
 
 ## End-to-end encryption
 
@@ -53,16 +61,20 @@ Every session payload (entries, events, state, prompts) is sealed with AES-256-G
 - opaque ciphertext frames and their sizes,
 - a 4-byte routing prefix (which guest a frame targets).
 
-Possession of the link is the trust boundary: anyone with the full link can read the session and prompt the agent. Share it like a secret.
+Possession of the link is the trust boundary: a full link reads and steers the session, a view-only link reads it. Share both like secrets.
 
 ## Guest permission model
 
-Single trust level. Guests can:
+Two trust levels, enforced by the link itself — the host verifies the 16-byte write token at join and rejects writes from peers without it (they appear as read-only in the participants list, and the join notice says so).
+
+Guests with a full link can:
 
 - read the entire session (including the back-transcript at join time),
 - prompt the agent (rendered with their name badge on every participant's transcript; the LLM sees the prompt text verbatim — names are display-only),
 - interrupt the agent (Esc),
 - use the Agent Hub against the host's subagents: live table and progress, chat (steers the host's subagent), kill, revive, and transcript viewing (fetched from the host on demand).
+
+Guests with a view-only link can read everything live — back-transcript, streaming text, tool cards, subagent transcripts — but the host rejects prompting, interrupting, and agent control from them.
 
 Everything that mutates the host session or machine is host-only: `/model`, `/compact`, `/resume`, `/branch`, bash (`!`), python (`$`), skills, etc. Guests keep a small local allowlist (`/dump`, `/export`, `/copy`, `/help`, `/hotkeys`, `/theme`, `/settings`, `/leave`, `/collab`, `/exit`).
 
@@ -70,7 +82,7 @@ Known v1 limit for guests: a turn already streaming when you join becomes visibl
 
 ## Web client
 
-`packages/collab-web` is a standalone browser client for the same links — no omp install needed on the guest side. It renders the live transcript (streaming text, thinking, tool cards), a subagent panel with on-demand transcripts, and a composer with the same guest powers (prompt, interrupt, hub actions). Run `bun run dev` in the package for a local instance, `bun run mock-host` for an offline scripted host to develop against, and `bun run build` to emit a static `dist/` deployable anywhere (HTTPS required for WebCrypto). The client never talks to anything but the relay, and the key stays in the URL fragment.
+`packages/collab-web` is a standalone browser client for the same links — no omp install needed on the guest side. The relay serves it at `/`, which is what makes the `/collab` deep link click-to-join: `https://<relay>/#<link>` loads the client and auto-connects from the fragment. It renders the live transcript (streaming text, thinking, tool cards), a subagent panel with on-demand transcripts, and a composer with the same guest powers (prompt, interrupt, hub actions). Run `bun run dev` in the package for a local instance, `bun run mock-host` for an offline scripted host to develop against, and `bun run build` to emit a static `dist/` deployable anywhere (HTTPS required for WebCrypto). The client never talks to anything but the relay, and the key stays in the URL fragment.
 
 ## Settings
 
@@ -83,6 +95,7 @@ Known v1 limit for guests: a turn already streaming when you join becomes visibl
 
 The relay is a small content-blind Go service (`omp-collab-relay`, in the pi-www repo under `relay/`). It keeps no state beyond live connections and exposes:
 
+- `GET /` — the static collab-web guest client (target of the `/collab` deep link),
 - `GET /r/<roomId>?role=host|guest` — WebSocket upgrade,
 - `GET /healthz` — liveness.
 

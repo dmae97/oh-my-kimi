@@ -44,6 +44,21 @@ describe("collab link parsing", () => {
 		expect("error" in parseCollabLink(`${ROOM}#${shortKey}`)).toBe(true);
 	});
 
+	it("parses web deep links (https://<relay>/#<link>)", () => {
+		const bare = parseCollabLink(`https://relay.omp.sh/#${ROOM}#${KEY_TEXT}`);
+		if ("error" in bare) throw new Error(bare.error);
+		expect(bare.wsUrl).toBe(`${DEFAULT_RELAY_URL}/r/${ROOM}`);
+		expect(bare.key).toEqual(KEY);
+
+		const custom = parseCollabLink(`https://relay.example.com:8443/#relay.example.com:8443/r/${ROOM}#${KEY_TEXT}`);
+		if ("error" in custom) throw new Error(custom.error);
+		expect(custom.wsUrl).toBe(`wss://relay.example.com:8443/r/${ROOM}`);
+
+		const local = parseCollabLink(`http://localhost:7466/#ws://localhost:7466/r/${ROOM}#${KEY_TEXT}`);
+		if ("error" in local) throw new Error(local.error);
+		expect(local.wsUrl).toBe(`ws://localhost:7466/r/${ROOM}`);
+	});
+
 	it("round-trips format → parse for default, custom, and localhost relays", () => {
 		const roomId = generateRoomId();
 		for (const relay of [DEFAULT_RELAY_URL, "wss://relay.example.com:8443", "ws://127.0.0.1:7466"]) {
