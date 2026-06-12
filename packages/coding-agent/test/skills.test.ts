@@ -151,14 +151,14 @@ describe("skills", () => {
 
 	describe("loadSkills with options", () => {
 		it("should load from customDirectories only when built-ins disabled", async () => {
-			const { skills } = await loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS, customDirectories: [fixturesDir], });
+			const { skills } = await loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS, customDirectories: [fixturesDir] });
 			expect(skills.length).toBeGreaterThan(0);
 			// Custom directory skills have source "custom:user"
 			expect(skills.every(s => s.source.startsWith("custom"))).toBe(true);
 		});
 
 		it("should return customDirectory skills sorted by name (case-insensitive)", async () => {
-			const { skills } = await loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS, customDirectories: [fixturesDir], });
+			const { skills } = await loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS, customDirectories: [fixturesDir] });
 
 			expect(skills.map(s => s.name)).toEqual(expectedFixtureSkillOrder);
 		});
@@ -194,7 +194,6 @@ describe("skills", () => {
 				await fs.rm(tempHomeDir, { recursive: true, force: true });
 			}
 		});
-
 
 		// Regression for issue #2401: a user who disables the named third-party
 		// CLI toggles (codex/claude/native) MUST still see skills from the
@@ -254,14 +253,20 @@ describe("skills", () => {
 		});
 
 		it("should filter out ignoredSkills", async () => {
-			const { skills } = await loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS, customDirectories: [fixturesDir],
-				ignoredSkills: ["valid-skill"], });
+			const { skills } = await loadSkills({
+				...DISABLE_ALL_BUILTIN_SKILLS,
+				customDirectories: [fixturesDir],
+				ignoredSkills: ["valid-skill"],
+			});
 			expect(skills.some(s => s.name === "valid-skill")).toBe(false);
 		});
 
 		it("should support glob patterns in ignoredSkills", async () => {
-			const { skills } = await loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS, customDirectories: [fixturesDir],
-				ignoredSkills: ["valid-*"], });
+			const { skills } = await loadSkills({
+				...DISABLE_ALL_BUILTIN_SKILLS,
+				customDirectories: [fixturesDir],
+				ignoredSkills: ["valid-*"],
+			});
 			expect(skills.every(s => !s.name.startsWith("valid-"))).toBe(true);
 		});
 
@@ -282,7 +287,7 @@ enabled: false
 			);
 
 			try {
-				const { skills } = await loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS, customDirectories: [tempDir], });
+				const { skills } = await loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS, customDirectories: [tempDir] });
 				expect(skills.some(s => s.name === "disabled-skill")).toBe(false);
 			} finally {
 				await fs.rm(tempDir, { recursive: true, force: true });
@@ -299,7 +304,7 @@ enabled: false
 			);
 
 			try {
-				const { skills } = await loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS, customDirectories: [tempDir], });
+				const { skills } = await loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS, customDirectories: [tempDir] });
 				const skill = skills.find(s => s.name === "hidden-by-spec");
 				expect(skill).toBeDefined();
 				expect(skill!.hide).toBe(true);
@@ -309,9 +314,12 @@ enabled: false
 		});
 
 		it("should let ignoredSkills override includeSkills", async () => {
-			const { skills } = await loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS, customDirectories: [fixturesDir],
+			const { skills } = await loadSkills({
+				...DISABLE_ALL_BUILTIN_SKILLS,
+				customDirectories: [fixturesDir],
 				includeSkills: ["valid-*"],
-				ignoredSkills: ["valid-skill"], });
+				ignoredSkills: ["valid-skill"],
+			});
 			expect(skills.every(s => s.name !== "valid-skill")).toBe(true);
 		});
 	});
@@ -335,8 +343,14 @@ description: Skill loaded from a tilde-expanded custom directory.
 		);
 
 		try {
-			const { skills: withTilde } = await loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS, customDirectories: [tildeDir], });
-			const { skills: withoutTilde } = await loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS, customDirectories: [tempHomeSkillsDir], });
+			const { skills: withTilde } = await loadSkills({
+				...DISABLE_ALL_BUILTIN_SKILLS,
+				customDirectories: [tildeDir],
+			});
+			const { skills: withoutTilde } = await loadSkills({
+				...DISABLE_ALL_BUILTIN_SKILLS,
+				customDirectories: [tempHomeSkillsDir],
+			});
 			expect(withTilde.length).toBe(withoutTilde.length);
 			expect(withTilde.some(skill => skill.name === "tilde-skill")).toBe(true);
 		} finally {
@@ -345,33 +359,48 @@ description: Skill loaded from a tilde-expanded custom directory.
 	});
 
 	it("should return empty when all sources disabled and no custom dirs", async () => {
-		const { skills } = await loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS,  });
+		const { skills } = await loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS });
 		expect(skills).toHaveLength(0);
 	});
 
 	it("should filter skills with includeSkills glob patterns", async () => {
 		// Load all skills from fixtures
-		const { skills: allSkills } = await loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS, customDirectories: [fixturesDir], });
+		const { skills: allSkills } = await loadSkills({
+			...DISABLE_ALL_BUILTIN_SKILLS,
+			customDirectories: [fixturesDir],
+		});
 		expect(allSkills.length).toBeGreaterThan(0);
 
 		// Filter to only include "valid-skill"
-		const { skills: filtered } = await loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS, customDirectories: [fixturesDir],
-			includeSkills: ["valid-skill"], });
+		const { skills: filtered } = await loadSkills({
+			...DISABLE_ALL_BUILTIN_SKILLS,
+			customDirectories: [fixturesDir],
+			includeSkills: ["valid-skill"],
+		});
 		expect(filtered).toHaveLength(1);
 		expect(filtered[0].name).toBe("valid-skill");
 	});
 
 	it("should support glob patterns in includeSkills", async () => {
-		const { skills } = await loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS, customDirectories: [fixturesDir],
-			includeSkills: ["valid-*"], });
+		const { skills } = await loadSkills({
+			...DISABLE_ALL_BUILTIN_SKILLS,
+			customDirectories: [fixturesDir],
+			includeSkills: ["valid-*"],
+		});
 		expect(skills.length).toBeGreaterThan(0);
 		expect(skills.every(s => s.name.startsWith("valid-"))).toBe(true);
 	});
 
 	it("should return all skills when includeSkills is empty", async () => {
-		const { skills: withEmpty } = await loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS, customDirectories: [fixturesDir],
-			includeSkills: [], });
-		const { skills: withoutOption } = await loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS, customDirectories: [fixturesDir], });
+		const { skills: withEmpty } = await loadSkills({
+			...DISABLE_ALL_BUILTIN_SKILLS,
+			customDirectories: [fixturesDir],
+			includeSkills: [],
+		});
+		const { skills: withoutOption } = await loadSkills({
+			...DISABLE_ALL_BUILTIN_SKILLS,
+			customDirectories: [fixturesDir],
+		});
 		expect(withEmpty.length).toBe(withoutOption.length);
 	});
 });
