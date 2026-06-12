@@ -38,7 +38,7 @@ export function ConnectScreen({ defaultName, error, onConnect }: ConnectScreenPr
 						type="text"
 						value={link}
 						onChange={e => setLink(e.target.value)}
-						placeholder="ws://host:port/r/room#key"
+						placeholder="ws://host:port/r/room.key"
 						spellCheck={false}
 						autoComplete="off"
 						autoFocus

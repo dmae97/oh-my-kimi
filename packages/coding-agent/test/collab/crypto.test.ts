@@ -44,9 +44,9 @@ describe("collab link format", () => {
 	const key = generateRoomKey();
 	const roomId = generateRoomId();
 
-	it("collapses the default relay to a bare roomId#key link", () => {
+	it("collapses the default relay to a bare roomId.key link", () => {
 		const link = formatCollabLink(DEFAULT_RELAY_URL, roomId, key);
-		expect(link).toBe(`${roomId}#${Buffer.from(key).toString("base64url")}`);
+		expect(link).toBe(`${roomId}.${Buffer.from(key).toString("base64url")}`);
 		const parsed = parseCollabLink(link);
 		if ("error" in parsed) throw new Error(parsed.error);
 		expect(parsed.wsUrl).toBe(`${DEFAULT_RELAY_URL}/r/${roomId}`);
@@ -82,8 +82,30 @@ describe("collab link format", () => {
 	});
 
 	it("rejects keys that are not 32 base64url bytes", () => {
-		expect("error" in parseCollabLink(`${roomId}#dG9vc2hvcnQ`)).toBe(true);
-		expect("error" in parseCollabLink(`${roomId}#not+base64url/`)).toBe(true);
+		expect("error" in parseCollabLink(`${roomId}.dG9vc2hvcnQ`)).toBe(true);
+		expect("error" in parseCollabLink(`${roomId}.not+base64url/`)).toBe(true);
+	});
+
+	it("accepts legacy #-separated links", () => {
+		const keyText = Buffer.from(key).toString("base64url");
+		for (const legacy of [
+			`${roomId}#${keyText}`,
+			`relay.example.com:8443/r/${roomId}#${keyText}`,
+			`https://my.omp.sh/#${roomId}#${keyText}`,
+		]) {
+			const parsed = parseCollabLink(legacy);
+			if ("error" in parsed) throw new Error(`${legacy}: ${parsed.error}`);
+			expect(parsed.roomId).toBe(roomId);
+			expect(Buffer.from(parsed.key)).toEqual(Buffer.from(key));
+		}
+	});
+
+	it("accepts %23-mangled legacy deep links (macOS Foundation re-encoding)", () => {
+		const keyText = Buffer.from(key).toString("base64url");
+		const parsed = parseCollabLink(`https://my.omp.sh/#${roomId}%23${keyText}`);
+		if ("error" in parsed) throw new Error(parsed.error);
+		expect(parsed.wsUrl).toBe(`${DEFAULT_RELAY_URL}/r/${roomId}`);
+		expect(Buffer.from(parsed.key)).toEqual(Buffer.from(key));
 	});
 
 	it("renders web deep links that parse back to the same room", () => {
@@ -140,7 +162,7 @@ describe("collab link format", () => {
 		expect(url.origin).toBe("https://my.omp.sh");
 		expect(url.pathname).toBe("/");
 		expect(url.search).toBe("");
-		expect(url.hash).toBe(`#${roomId}#${Buffer.from(key).toString("base64url")}`);
+		expect(url.hash).toBe(`#${roomId}.${Buffer.from(key).toString("base64url")}`);
 	});
 });
 

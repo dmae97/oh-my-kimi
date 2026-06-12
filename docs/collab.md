@@ -14,14 +14,14 @@ prints
 
 ```
 Collab session started!
- • Join from another terminal: omp join "mgAYTZwEnpRQtca0CTgn-Q#gdJUbTovD94ofDaa8YvhY0-ty16w4fn8PgB6PLnoA30"
- • or any web browser: my.omp.sh/#mgAYTZwEnpRQtca0CTgn-Q#gdJUbTovD94ofDaa8YvhY0-ty16w4fn8PgB6PLnoA30
+ • Join from another terminal: omp join "mgAYTZwEnpRQtca0CTgn-Q.gdJUbTovD94ofDaa8YvhY0-ty16w4fn8PgB6PLnoA30"
+ • or any web browser: my.omp.sh/#mgAYTZwEnpRQtca0CTgn-Q.gdJUbTovD94ofDaa8YvhY0-ty16w4fn8PgB6PLnoA30
 ```
 
 The browser line is click-to-join (an OSC 8 hyperlink to the full `https://` deep link): the relay serves the web guest client at `/`, and the room id + key ride in the URL fragment. From another omp (any directory, any machine), either form works:
 
 ```
-/join my.omp.sh/#mgAYTZwEnpRQtca0CTgn-Q#gdJU…
+/join my.omp.sh/#mgAYTZwEnpRQtca0CTgn-Q.gdJU…
 ```
 
 The guest's previous session is restored on `/leave` (or when the host stops).
@@ -42,17 +42,17 @@ The guest's previous session is restored on `/leave` (or when the host stops).
 
 ```
 https://host[:port]/#<link>          → browser deep link (printed by /collab; /join accepts it too)
-<roomId>#<key>                       → default relay (my.omp.sh)
-host[:port]/r/<roomId>#<key>         → custom relay, wss:// inferred
-ws://localhost:7475/r/<roomId>#<key> → plain ws, allowed for localhost only
+<roomId>.<key>                       → default relay (my.omp.sh)
+host[:port]/r/<roomId>.<key>         → custom relay, wss:// inferred
+ws://localhost:7475/r/<roomId>.<key> → plain ws, allowed for localhost only
 ```
 
-The trailing fragment (`#<key>`) is the room secret, base64url-encoded, in one of two strengths:
+The trailing `.<key>` part is the room secret, base64url-encoded, in one of two strengths:
 
 - **Full link** — 48 bytes: the 32-byte AES-256-GCM room key followed by a 16-byte write token. Grants prompting, interrupting, and subagent control.
 - **View-only link** — the bare 32-byte key, no write token. Grants live read access only. Pre-token links parse as view-only.
 
-In the browser deep link, everything after the first `#` — room id and key — is a URL fragment: it never appears in any HTTP request, and neither secret is ever sent to the relay.
+The room secret is dot-joined rather than `#`-joined: RFC 3986 forbids a raw `#` inside a URL fragment, so strict URL stacks (macOS Foundation behind terminal click-to-open) percent-encode a second `#` to `%23` and break the link. Parsers leniently accept the legacy `#` form and the mangled `%23` form. In the browser deep link, everything after the `#` — room id and key — is a URL fragment: it never appears in any HTTP request, and neither secret is ever sent to the relay.
 
 ## End-to-end encryption
 

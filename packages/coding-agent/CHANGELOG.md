@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Collab links now dot-join the room secret (`<roomId>.<key>`, `host/r/<roomId>.<key>`) instead of using a second `#`: RFC 3986 forbids a raw `#` inside a URL fragment, so macOS Foundation (behind terminal click-to-open) percent-encoded the browser deep link's second `#` to `%23` and the web client rejected the session. `/join`, `omp join`, and the web client still accept legacy `#`-joined links and leniently decode `%23`-mangled ones
+
 ## [15.12.1] - 2026-06-12
 
 ### Added

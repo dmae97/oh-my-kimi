@@ -108,11 +108,11 @@ export function rewriteEnvelopePeer(data: Uint8Array, peerId: number): void {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Link format: wss://<host[:port]>/r/<roomId>#<base64url-32-byte-key>
+// Link format: wss://<host[:port]>/r/<roomId>.<base64url-32-byte-key>
 // ═══════════════════════════════════════════════════════════════════════════
 
-const ROOM_PATH_RE = /^\/r\/([A-Za-z0-9_-]{10,64})$/;
-const BARE_LINK_RE = /^([A-Za-z0-9_-]{10,64})#([A-Za-z0-9_-]+)$/;
+const ROOM_PATH_RE = /^\/r\/([A-Za-z0-9_-]{10,64})(?:\.([A-Za-z0-9_-]+))?$/;
+const BARE_LINK_RE = /^([A-Za-z0-9_-]{10,64})[#.]([A-Za-z0-9_-]+)$/;
 const B64URL_RE = /^[A-Za-z0-9_-]+$/;
 const LOCAL_HOSTNAMES: Record<string, true> = { localhost: true, "127.0.0.1": true, "::1": true, "[::1]": true };
 
@@ -152,11 +152,17 @@ function normalizeRelayOrigin(relayUrl: string): { origin: string } | { error: s
 
 /**
  * Render the shareable link. Compact forms: the default relay collapses to
- * `<roomId>#<key>`, other wss relays drop the scheme (`host[:port]/r/…`);
+ * `<roomId>.<key>`, other wss relays drop the scheme (`host[:port]/r/…`);
  * only localhost ws:// links keep their full URL so parsing cannot
  * mis-infer wss.
  *
- * Full links append the write token to the key in the fragment
+ * The room secret is dot-joined (`<roomId>.<key>`) rather than `#`-joined:
+ * RFC 3986 forbids a raw `#` inside a fragment, so strict URL stacks (macOS
+ * Foundation behind terminal click-to-open) percent-encode a second `#` to
+ * `%23` and break the link. Parsers still accept the legacy `#` form and the
+ * mangled `%23` form.
+ *
+ * Full links append the write token to the key
  * (`base64url(key ∥ writeToken)`); read-only (view) links carry the bare
  * 32-byte key, which is also the pre-token link format.
  */
@@ -165,11 +171,11 @@ export function formatCollabLink(relayUrl: string, roomId: string, key: Uint8Arr
 	if ("error" in normalized) throw new Error(normalized.error);
 	const secret = writeToken ? Buffer.concat([key, writeToken]) : Buffer.from(key);
 	const keyText = secret.toString("base64url");
-	if (normalized.origin === DEFAULT_RELAY_URL) return `${roomId}#${keyText}`;
+	if (normalized.origin === DEFAULT_RELAY_URL) return `${roomId}.${keyText}`;
 	const compact = normalized.origin.startsWith("wss://")
 		? normalized.origin.slice("wss://".length)
 		: normalized.origin;
-	return `${compact}/r/${roomId}#${keyText}`;
+	return `${compact}/r/${roomId}.${keyText}`;
 }
 
 /**
@@ -193,10 +199,12 @@ export function formatCollabWebLink(
 }
 
 export function parseCollabLink(link: string): ParsedCollabLink | { error: string } {
-	let text = link.trim();
-	// Bare `<roomId>#<key>` → default relay.
+	// Lenient input: terminals that open OSC 8 links through strict URL stacks
+	// (macOS Foundation) percent-encode the legacy second `#` to `%23`.
+	let text = link.trim().replace(/%23/gi, "#");
+	// Bare `<roomId>.<key>` (legacy `<roomId>#<key>`) → default relay.
 	const bare = BARE_LINK_RE.exec(text);
-	if (bare) text = `${DEFAULT_RELAY_URL}/r/${bare[1]}#${bare[2]}`;
+	if (bare) text = `${DEFAULT_RELAY_URL}/r/${bare[1]}.${bare[2]}`;
 	// Scheme-less `host[:port]/r/…` → wss.
 	else if (!text.includes("://")) text = `wss://${text}`;
 	let url: URL;
@@ -210,17 +218,18 @@ export function parseCollabLink(link: string): ParsedCollabLink | { error: strin
 	const match = ROOM_PATH_RE.exec(url.pathname);
 	if (!match) {
 		// Web deep link: `http(s)://<relay>/#<collab-link>` — the fragment holds
-		// the whole link (which itself contains another `#`). URL.hash spans to
-		// the end of the string, so recurse on it; the inner fragment is just
-		// the key (no `#`), which bounds the recursion.
+		// the whole link, so recurse on it. The recursion terminates because
+		// the inner text is a strict suffix of the input.
 		const inner = url.hash.startsWith("#") ? url.hash.slice(1) : url.hash;
-		if (inner.includes("#")) return parseCollabLink(inner);
+		if (inner) return parseCollabLink(inner);
 		return { error: "Collab link must contain a /r/<roomId> path" };
 	}
 	const roomId = match[1]!;
-	const fragment = url.hash.startsWith("#") ? url.hash.slice(1) : url.hash;
+	// Key rides dot-joined in the path (`/r/<roomId>.<key>`); legacy links
+	// carry it in the fragment (`/r/<roomId>#<key>`).
+	const fragment = match[2] ?? (url.hash.startsWith("#") ? url.hash.slice(1) : url.hash);
 	if (!fragment) {
-		return { error: "Collab link is missing the #<key> fragment" };
+		return { error: "Collab link is missing the <key> part" };
 	}
 	const secret = B64URL_RE.test(fragment) ? new Uint8Array(Buffer.from(fragment, "base64url")) : null;
 	if (!secret || (secret.byteLength !== ROOM_KEY_BYTES && secret.byteLength !== ROOM_KEY_BYTES + WRITE_TOKEN_BYTES)) {
