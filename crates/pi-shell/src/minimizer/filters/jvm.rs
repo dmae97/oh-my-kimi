@@ -240,6 +240,26 @@ fn is_recognized_mvn_goal(a: &str) -> bool {
 	) || a.ends_with(":spring-boot-maven-plugin:run")
 }
 
+/// Returns non-flag tokens from the command, skipping the value token that
+/// follows each known value-taking option.  This prevents option values (e.g.
+/// the module name after `-pl`, the project dir after `-p`) from being
+/// mistaken for build goals/tasks.
+fn jvm_positional_tokens<'a>(command: &'a str, value_flags: &[&str]) -> Vec<&'a str> {
+	let mut out = Vec::new();
+	let mut tokens = command.split_whitespace().skip(1).peekable();
+	while let Some(tok) = tokens.next() {
+		if tok.starts_with('-') {
+			let bare = tok.trim_start_matches('-');
+			if value_flags.iter().any(|f| f.trim_start_matches('-') == bare) {
+				tokens.next(); // consume the value that follows this option
+			}
+		} else {
+			out.push(tok);
+		}
+	}
+	out
+}
+
 /// Scan args left-to-right, skip flags + `-D…` system props, pick the LAST
 /// RECOGNIZED lifecycle goal, ignoring unrecognized positional tokens (e.g. the
 /// module name after `-pl`).
@@ -250,11 +270,31 @@ fn is_recognized_mvn_goal(a: &str) -> bool {
 pub fn detect_phase(command: &str) -> MvnPhase {
 	// Use the last RECOGNIZED lifecycle goal so that option-value tokens
 	// (e.g. the module name after -pl) are ignored.
-	let last = arg_tokens(command)
-		.filter(|a| !a.starts_with('-'))
-		.filter(|a| is_recognized_mvn_goal(a))
-		.last()
-		.unwrap_or("");
+	let last = jvm_positional_tokens(
+		command,
+		&[
+			"-pl",
+			"--projects",
+			"-P",
+			"--activate-profiles",
+			"-f",
+			"--file",
+			"-s",
+			"--settings",
+			"-gs",
+			"--global-settings",
+			"-t",
+			"--toolchains",
+			"-gt",
+			"--global-toolchains",
+			"-T",
+			"--threads",
+		],
+	)
+	.into_iter()
+	.filter(|a| is_recognized_mvn_goal(a))
+	.last()
+	.unwrap_or("");
 
 	// `spring-boot:run` is checked BEFORE the generic `:`-plugin-goal guard
 	// below: it is application runtime output, not a plugin build step, and
@@ -1050,11 +1090,30 @@ pub fn detect_task(command: &str) -> GradleTask {
 	//   • no non-flag non-clean tokens at all  → only `clean` was given → Build
 	//   • non-flag non-clean tokens existed but none recognized → unrecognized task
 	// → Other
-	let mut non_clean_tokens = arg_tokens(command)
-		.filter(|a| !a.starts_with('-'))
-		.map(str::to_lowercase)
-		.filter(|a| a != "clean")
-		.peekable();
+	let mut non_clean_tokens = jvm_positional_tokens(
+		command,
+		&[
+			"-p",
+			"--project-dir",
+			"-P",
+			"--project-prop",
+			"-g",
+			"--gradle-user-home",
+			"--settings-file",
+			"-b",
+			"--build-file",
+			"--init-script",
+			"-I",
+			"--max-workers",
+			"-c",
+			"--configuration-file",
+			"--project-cache-dir",
+		],
+	)
+	.into_iter()
+	.map(str::to_lowercase)
+	.filter(|a| a != "clean")
+	.peekable();
 	let had_tokens = non_clean_tokens.peek().is_some();
 	let task = non_clean_tokens
 		.find(|a| {
@@ -1746,6 +1805,15 @@ mod tests {
 		// "-pl module-a" option-value must not shadow the recognized lifecycle goal
 		assert_eq!(detect_phase("mvn test -pl module-a"), MvnPhase::Test);
 		assert_eq!(detect_phase("mvn install -pl :sub1,:sub2"), MvnPhase::Package);
+	}
+	#[test]
+	fn detect_phase_skips_value_of_value_taking_options() {
+		// "-pl test" — "test" is the value of -pl, not a lifecycle goal
+		assert_eq!(detect_phase("mvn compile -pl test"), MvnPhase::Compile);
+		// "--projects test" — same, long form
+		assert_eq!(detect_phase("mvn install --projects test"), MvnPhase::Package);
+		// "-pl module-a" value is not a recognised goal; recognised goal still wins
+		assert_eq!(detect_phase("mvn test -pl module-a"), MvnPhase::Test);
 	}
 
 	// ── Quiet detection (rtk ~1986-2003) ─────────────────────────────────────
@@ -2490,6 +2558,13 @@ mod tests {
 		// "--tests FooSpec" option-value must not shadow the task
 		assert_eq!(detect_task("./gradlew test --tests FooSpec"), GradleTask::Test);
 		assert_eq!(detect_task("./gradlew test --tests com.example.Foo"), GradleTask::Test);
+	}
+	#[test]
+	fn detect_task_skips_value_of_value_taking_options() {
+		// "-p test build" — "test" is the value of -p (project-dir), not a task name
+		assert_eq!(detect_task("gradle -p test build"), GradleTask::Build);
+		// "--project-dir test build" — long form
+		assert_eq!(detect_task("gradle --project-dir test build"), GradleTask::Build);
 	}
 
 	// ── Build filter (rtk ~660-744, 1128-1230, 1347-1379) ───────────────────
