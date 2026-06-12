@@ -8354,7 +8354,8 @@ export class AgentSession {
 
 		return (
 			/\bItem with id ['"][^'"]+['"] not found\.?/i.test(errorMessage) ||
-			(/previous[ _]?response/i.test(errorMessage) && /not[ _]?found|invalid|expired|stale/i.test(errorMessage))
+			(/previous[ _]?response/i.test(errorMessage) &&
+				/not[ _]?found|invalid|expired|stale|zero[ _-]?data[ _-]?retention/i.test(errorMessage))
 		);
 	}
 

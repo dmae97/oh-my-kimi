@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the higher-level Responses retry classifier to recognize OpenAI Zero Data Retention rejections (`Previous response cannot be used for this organization due to Zero Data Retention`) as stale-replay errors. The provider-level fix in `@oh-my-pi/pi-ai` covers the common case in a single turn; this layer additionally guarantees that any ZDR error that still bubbles up resets the Responses session and retries at zero backoff instead of falling back to a different model ([#2341](https://github.com/can1357/oh-my-pi/issues/2341)).
+
 ## [15.11.4] - 2026-06-12
 
 ### Added
