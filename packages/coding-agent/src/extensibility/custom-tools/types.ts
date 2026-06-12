@@ -15,7 +15,7 @@ import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
 import type { FetchImpl, Model, Static, TSchema } from "@oh-my-pi/pi-ai";
 import type { Component } from "@oh-my-pi/pi-tui";
 import type { logger as PiLogger } from "@oh-my-pi/pi-utils";
-import type * as Zod from "zod/v4";
+import type { z } from "zod/v4";
 import type { Rule } from "../../capability/rule";
 import type { ModelRegistry } from "../../config/model-registry";
 import type { Settings } from "../../config/settings";
@@ -64,7 +64,7 @@ export interface CustomToolAPI {
 	/** Injected zod-backed typebox shim (legacy/compat — Zod-authored tools are preferred). */
 	typebox: typeof TypeBox;
 	/** Injected zod module for Zod-authored custom tools. */
-	zod: typeof Zod;
+	zod: typeof z;
 	/** Injected pi-coding-agent exports */
 	pi: typeof PiCodingAgent;
 	/** Push a preview action that can later be resolved with the hidden resolve tool */
