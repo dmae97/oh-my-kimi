@@ -13626,22 +13626,6 @@
 			},
 			"contextWindow": 1048576,
 			"maxTokens": 384000,
-			"compat": {
-				"supportsDeveloperRole": false,
-				"supportsReasoningEffort": true,
-				"reasoningEffortMap": {
-					"minimal": "high",
-					"low": "high",
-					"medium": "high",
-					"high": "high",
-					"xhigh": "max"
-				},
-				"maxTokensField": "max_tokens",
-				"supportsToolChoice": false,
-				"reasoningContentField": "reasoning_content",
-				"requiresReasoningContentForToolCalls": true,
-				"requiresAssistantContentForToolCalls": true
-			},
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -13658,6 +13642,15 @@
 					"high": "high",
 					"xhigh": "max"
 				}
+			},
+			"compat": {
+				"supportsDeveloperRole": false,
+				"supportsReasoningEffort": true,
+				"maxTokensField": "max_tokens",
+				"supportsToolChoice": false,
+				"reasoningContentField": "reasoning_content",
+				"requiresReasoningContentForToolCalls": true,
+				"requiresAssistantContentForToolCalls": true
 			}
 		},
 		"glm-5": {
@@ -13735,13 +13728,13 @@
 				"text"
 			],
 			"cost": {
-				"input": 0.25,
-				"output": 0.69,
+				"input": 0.35,
+				"output": 0.75,
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
 			"contextWindow": 131072,
-			"maxTokens": 32768,
+			"maxTokens": 40960,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -13849,7 +13842,7 @@
 		"claude-fable-5": {
 			"id": "claude-fable-5",
 			"name": "Claude Fable 5",
-			"api": "openai-completions",
+			"api": "anthropic-messages",
 			"provider": "github-copilot",
 			"baseUrl": "https://api.githubcopilot.com",
 			"reasoning": true,
@@ -13866,21 +13859,26 @@
 			"contextWindow": 1000000,
 			"maxTokens": 128000,
 			"headers": {
-				"User-Agent": "opencode/1.3.15"
-			},
-			"compat": {
-				"supportsStore": false,
-				"supportsDeveloperRole": false,
-				"supportsReasoningEffort": false
+				"User-Agent": "opencode/1.3.15",
+				"X-GitHub-Api-Version": "2026-06-01"
 			},
 			"thinking": {
-				"mode": "effort",
+				"mode": "anthropic-adaptive",
 				"efforts": [
 					"minimal",
 					"low",
 					"medium",
-					"high"
-				]
+					"high",
+					"xhigh"
+				],
+				"effortMap": {
+					"minimal": "low",
+					"low": "medium",
+					"medium": "high",
+					"high": "xhigh",
+					"xhigh": "max"
+				},
+				"supportsDisplay": true
 			}
 		},
 		"claude-haiku-4.5": {
@@ -13903,7 +13901,8 @@
 			"contextWindow": 200000,
 			"maxTokens": 64000,
 			"headers": {
-				"User-Agent": "opencode/1.3.15"
+				"User-Agent": "opencode/1.3.15",
+				"X-GitHub-Api-Version": "2026-06-01"
 			},
 			"premiumMultiplier": 0.33,
 			"thinking": {
@@ -13937,7 +13936,8 @@
 			"contextWindow": 200000,
 			"maxTokens": 32000,
 			"headers": {
-				"User-Agent": "opencode/1.3.15"
+				"User-Agent": "opencode/1.3.15",
+				"X-GitHub-Api-Version": "2026-06-01"
 			},
 			"thinking": {
 				"mode": "anthropic-budget-effort",
@@ -13970,7 +13970,8 @@
 			"contextWindow": 168000,
 			"maxTokens": 32000,
 			"headers": {
-				"User-Agent": "opencode/1.3.15"
+				"User-Agent": "opencode/1.3.15",
+				"X-GitHub-Api-Version": "2026-06-01"
 			},
 			"premiumMultiplier": 3,
 			"thinking": {
@@ -14008,7 +14009,8 @@
 			"contextWindow": 200000,
 			"maxTokens": 32000,
 			"headers": {
-				"User-Agent": "opencode/1.3.15"
+				"User-Agent": "opencode/1.3.15",
+				"X-GitHub-Api-Version": "2026-06-01"
 			},
 			"thinking": {
 				"mode": "anthropic-adaptive",
@@ -14049,7 +14051,8 @@
 			"contextWindow": 200000,
 			"maxTokens": 64000,
 			"headers": {
-				"User-Agent": "opencode/1.3.15"
+				"User-Agent": "opencode/1.3.15",
+				"X-GitHub-Api-Version": "2026-06-01"
 			},
 			"thinking": {
 				"mode": "anthropic-adaptive",
@@ -14090,7 +14093,8 @@
 			"contextWindow": 216000,
 			"maxTokens": 16000,
 			"headers": {
-				"User-Agent": "opencode/1.3.15"
+				"User-Agent": "opencode/1.3.15",
+				"X-GitHub-Api-Version": "2026-06-01"
 			},
 			"thinking": {
 				"mode": "budget",
@@ -14123,7 +14127,8 @@
 			"contextWindow": 200000,
 			"maxTokens": 32000,
 			"headers": {
-				"User-Agent": "opencode/1.3.15"
+				"User-Agent": "opencode/1.3.15",
+				"X-GitHub-Api-Version": "2026-06-01"
 			},
 			"thinking": {
 				"mode": "anthropic-budget-effort",
@@ -14156,7 +14161,8 @@
 			"contextWindow": 200000,
 			"maxTokens": 32000,
 			"headers": {
-				"User-Agent": "opencode/1.3.15"
+				"User-Agent": "opencode/1.3.15",
+				"X-GitHub-Api-Version": "2026-06-01"
 			},
 			"thinking": {
 				"mode": "anthropic-adaptive",
@@ -14191,7 +14197,8 @@
 			"contextWindow": 128000,
 			"maxTokens": 64000,
 			"headers": {
-				"User-Agent": "opencode/1.3.15"
+				"User-Agent": "opencode/1.3.15",
+				"X-GitHub-Api-Version": "2026-06-01"
 			},
 			"compat": {
 				"supportsStore": false,
@@ -14228,7 +14235,8 @@
 			"contextWindow": 128000,
 			"maxTokens": 64000,
 			"headers": {
-				"User-Agent": "opencode/1.3.15"
+				"User-Agent": "opencode/1.3.15",
+				"X-GitHub-Api-Version": "2026-06-01"
 			},
 			"compat": {
 				"supportsStore": false,
@@ -14300,7 +14308,8 @@
 			"contextWindow": 200000,
 			"maxTokens": 64000,
 			"headers": {
-				"User-Agent": "opencode/1.3.15"
+				"User-Agent": "opencode/1.3.15",
+				"X-GitHub-Api-Version": "2026-06-01"
 			},
 			"compat": {
 				"supportsStore": false,
@@ -14335,7 +14344,8 @@
 			"contextWindow": 200000,
 			"maxTokens": 64000,
 			"headers": {
-				"User-Agent": "opencode/1.3.15"
+				"User-Agent": "opencode/1.3.15",
+				"X-GitHub-Api-Version": "2026-06-01"
 			},
 			"compat": {
 				"supportsStore": false,
@@ -14372,7 +14382,8 @@
 			"contextWindow": 128000,
 			"maxTokens": 16384,
 			"headers": {
-				"User-Agent": "opencode/1.3.15"
+				"User-Agent": "opencode/1.3.15",
+				"X-GitHub-Api-Version": "2026-06-01"
 			},
 			"compat": {
 				"supportsStore": false,
@@ -14461,7 +14472,8 @@
 			"contextWindow": 264000,
 			"maxTokens": 64000,
 			"headers": {
-				"User-Agent": "opencode/1.3.15"
+				"User-Agent": "opencode/1.3.15",
+				"X-GitHub-Api-Version": "2026-06-01"
 			},
 			"thinking": {
 				"mode": "effort",
@@ -14619,7 +14631,8 @@
 			"contextWindow": 272000,
 			"maxTokens": 128000,
 			"headers": {
-				"User-Agent": "opencode/1.3.15"
+				"User-Agent": "opencode/1.3.15",
+				"X-GitHub-Api-Version": "2026-06-01"
 			},
 			"thinking": {
 				"mode": "effort",
@@ -14651,7 +14664,8 @@
 			"contextWindow": 272000,
 			"maxTokens": 128000,
 			"headers": {
-				"User-Agent": "opencode/1.3.15"
+				"User-Agent": "opencode/1.3.15",
+				"X-GitHub-Api-Version": "2026-06-01"
 			},
 			"thinking": {
 				"mode": "effort",
@@ -14683,7 +14697,8 @@
 			"contextWindow": 272000,
 			"maxTokens": 128000,
 			"headers": {
-				"User-Agent": "opencode/1.3.15"
+				"User-Agent": "opencode/1.3.15",
+				"X-GitHub-Api-Version": "2026-06-01"
 			},
 			"thinking": {
 				"mode": "effort",
@@ -14715,7 +14730,8 @@
 			"contextWindow": 272000,
 			"maxTokens": 128000,
 			"headers": {
-				"User-Agent": "opencode/1.3.15"
+				"User-Agent": "opencode/1.3.15",
+				"X-GitHub-Api-Version": "2026-06-01"
 			},
 			"thinking": {
 				"mode": "effort",
@@ -14747,7 +14763,8 @@
 			"contextWindow": 272000,
 			"maxTokens": 128000,
 			"headers": {
-				"User-Agent": "opencode/1.3.15"
+				"User-Agent": "opencode/1.3.15",
+				"X-GitHub-Api-Version": "2026-06-01"
 			},
 			"premiumMultiplier": 0.33,
 			"thinking": {
@@ -14780,7 +14797,8 @@
 			"contextWindow": 400000,
 			"maxTokens": 128000,
 			"headers": {
-				"User-Agent": "opencode/1.3.15"
+				"User-Agent": "opencode/1.3.15",
+				"X-GitHub-Api-Version": "2026-06-01"
 			},
 			"thinking": {
 				"mode": "effort",
@@ -14812,7 +14830,8 @@
 			"contextWindow": 400000,
 			"maxTokens": 128000,
 			"headers": {
-				"User-Agent": "opencode/1.3.15"
+				"User-Agent": "opencode/1.3.15",
+				"X-GitHub-Api-Version": "2026-06-01"
 			},
 			"thinking": {
 				"mode": "effort",
@@ -14882,7 +14901,8 @@
 			"contextWindow": 400000,
 			"maxTokens": 128000,
 			"headers": {
-				"User-Agent": "opencode/1.3.15"
+				"User-Agent": "opencode/1.3.15",
+				"X-GitHub-Api-Version": "2026-06-01"
 			},
 			"compat": {
 				"supportsStore": false,
@@ -27819,11 +27839,6 @@
 			},
 			"contextWindow": 262144,
 			"maxTokens": 32000,
-			"compat": {
-				"thinkingFormat": "zai",
-				"reasoningContentField": "reasoning_content",
-				"supportsDeveloperRole": false
-			},
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -27832,6 +27847,11 @@
 					"medium",
 					"high"
 				]
+			},
+			"compat": {
+				"thinkingFormat": "zai",
+				"reasoningContentField": "reasoning_content",
+				"supportsDeveloperRole": false
 			}
 		},
 		"kimi-k2": {
@@ -27884,11 +27904,6 @@
 			},
 			"contextWindow": 262144,
 			"maxTokens": 32000,
-			"compat": {
-				"thinkingFormat": "zai",
-				"reasoningContentField": "reasoning_content",
-				"supportsDeveloperRole": false
-			},
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -27897,6 +27912,11 @@
 					"medium",
 					"high"
 				]
+			},
+			"compat": {
+				"thinkingFormat": "zai",
+				"reasoningContentField": "reasoning_content",
+				"supportsDeveloperRole": false
 			}
 		},
 		"kimi-k2.5": {
@@ -27922,11 +27942,6 @@
 			},
 			"contextWindow": 262144,
 			"maxTokens": 65536,
-			"compat": {
-				"thinkingFormat": "zai",
-				"reasoningContentField": "reasoning_content",
-				"supportsDeveloperRole": false
-			},
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -27935,6 +27950,11 @@
 					"medium",
 					"high"
 				]
+			},
+			"compat": {
+				"thinkingFormat": "zai",
+				"reasoningContentField": "reasoning_content",
+				"supportsDeveloperRole": false
 			}
 		}
 	},
@@ -33345,11 +33365,6 @@
 			"headers": {
 				"User-Agent": "opencode/1.3.15"
 			},
-			"compat": {
-				"supportsStore": false,
-				"supportsDeveloperRole": false,
-				"supportsReasoningEffort": false
-			},
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -33358,6 +33373,11 @@
 					"medium",
 					"high"
 				]
+			},
+			"compat": {
+				"supportsStore": false,
+				"supportsDeveloperRole": false,
+				"supportsReasoningEffort": false
 			}
 		},
 		"gemini-2.5-pro-exp-03-25": {
@@ -33475,15 +33495,15 @@
 			},
 			"contextWindow": 1000000,
 			"maxTokens": 64000,
-			"compat": {
-				"supportsUsageInStreaming": false
-			},
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
 					"low",
 					"high"
 				]
+			},
+			"compat": {
+				"supportsUsageInStreaming": false
 			}
 		},
 		"gemini-3-pro-preview-thinking": {
@@ -36711,11 +36731,6 @@
 			},
 			"contextWindow": 196608,
 			"maxTokens": 128000,
-			"compat": {
-				"supportsDeveloperRole": false,
-				"thinkingFormat": "zai",
-				"reasoningContentField": "reasoning_content"
-			},
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -36723,6 +36738,11 @@
 					"medium",
 					"high"
 				]
+			},
+			"compat": {
+				"supportsDeveloperRole": false,
+				"thinkingFormat": "zai",
+				"reasoningContentField": "reasoning_content"
 			}
 		},
 		"minimax/minimax-01": {
@@ -38220,6 +38240,25 @@
 					"xhigh"
 				]
 			}
+		},
+		"nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-TEE": {
+			"id": "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-TEE",
+			"name": "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-TEE",
+			"api": "openai-completions",
+			"provider": "nanogpt",
+			"baseUrl": "https://nano-gpt.com/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888
 		},
 		"nvidia/nvidia-nemotron-nano-9b-v2": {
 			"id": "nvidia/nvidia-nemotron-nano-9b-v2",
@@ -43973,6 +44012,25 @@
 				]
 			}
 		},
+		"xiaomi/mimo-v2.5-pro-ultraspeed": {
+			"id": "xiaomi/mimo-v2.5-pro-ultraspeed",
+			"name": "xiaomi/mimo-v2.5-pro-ultraspeed",
+			"api": "openai-completions",
+			"provider": "nanogpt",
+			"baseUrl": "https://nano-gpt.com/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888
+		},
 		"yi-large": {
 			"id": "yi-large",
 			"name": "yi-large",
@@ -44445,6 +44503,25 @@
 					"xhigh"
 				]
 			}
+		},
+		"zai-org/GLM-5-NVFP4-TEE": {
+			"id": "zai-org/GLM-5-NVFP4-TEE",
+			"name": "zai-org/GLM-5-NVFP4-TEE",
+			"api": "openai-completions",
+			"provider": "nanogpt",
+			"baseUrl": "https://nano-gpt.com/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888
 		},
 		"zai-org/glm-5-original": {
 			"id": "zai-org/glm-5-original",
@@ -49669,6 +49746,7 @@
 			"maxTokens": 128000,
 			"preferWebsockets": true,
 			"priority": 0,
+			"applyPatchToolType": "freeform",
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -49677,8 +49755,7 @@
 					"high",
 					"xhigh"
 				]
-			},
-			"applyPatchToolType": "freeform"
+			}
 		},
 		"gpt-5.4-mini": {
 			"id": "gpt-5.4-mini",
@@ -49701,6 +49778,7 @@
 			"maxTokens": 128000,
 			"preferWebsockets": true,
 			"priority": 1,
+			"applyPatchToolType": "freeform",
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -49709,8 +49787,7 @@
 					"high",
 					"xhigh"
 				]
-			},
-			"applyPatchToolType": "freeform"
+			}
 		},
 		"gpt-5.4-nano": {
 			"id": "gpt-5.4-nano",
@@ -49765,6 +49842,7 @@
 			"maxTokens": 128000,
 			"preferWebsockets": true,
 			"priority": 9,
+			"applyPatchToolType": "freeform",
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -49774,7 +49852,6 @@
 					"xhigh"
 				]
 			},
-			"applyPatchToolType": "freeform",
 			"contextPromotionTarget": "openai-codex/gpt-5.4"
 		}
 	},
@@ -53817,7 +53894,7 @@
 				"cacheRead": 0.135,
 				"cacheWrite": 0
 			},
-			"contextWindow": 131072,
+			"contextWindow": 163840,
 			"maxTokens": 16384,
 			"thinking": {
 				"mode": "effort",
@@ -54084,13 +54161,13 @@
 				"text"
 			],
 			"cost": {
-				"input": 0.0983,
-				"output": 0.1966,
-				"cacheRead": 0.019700000000000002,
+				"input": 0.098,
+				"output": 0.196,
+				"cacheRead": 0.02,
 				"cacheWrite": 0
 			},
 			"contextWindow": 1048576,
-			"maxTokens": 131072,
+			"maxTokens": 384000,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -70381,7 +70458,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 2000000,
-			"maxTokens": 2000000,
+			"maxTokens": 30000,
 			"compat": {
 				"reasoningEffortMap": {
 					"minimal": "low"
@@ -70406,7 +70483,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 2000000,
-			"maxTokens": 2000000,
+			"maxTokens": 30000,
 			"compat": {
 				"reasoningEffortMap": {
 					"minimal": "low"
@@ -70431,12 +70508,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 2000000,
-			"maxTokens": 2000000,
-			"compat": {
-				"reasoningEffortMap": {
-					"minimal": "low"
-				}
-			},
+			"maxTokens": 8888,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -70447,6 +70519,11 @@
 					"xhigh"
 				],
 				"effortMap": {
+					"minimal": "low"
+				}
+			},
+			"compat": {
+				"reasoningEffortMap": {
 					"minimal": "low"
 				}
 			}
@@ -70469,12 +70546,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 1000000,
-			"maxTokens": 1000000,
-			"compat": {
-				"reasoningEffortMap": {
-					"minimal": "low"
-				}
-			},
+			"maxTokens": 30000,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -70485,6 +70557,11 @@
 					"xhigh"
 				],
 				"effortMap": {
+					"minimal": "low"
+				}
+			},
+			"compat": {
+				"reasoningEffortMap": {
 					"minimal": "low"
 				}
 			}
@@ -70506,7 +70583,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 512000,
-			"maxTokens": 512000,
+			"maxTokens": 8888,
 			"compat": {
 				"reasoningEffortMap": {
 					"minimal": "low"
@@ -71859,7 +71936,7 @@
 				"cacheRead": 0.056,
 				"cacheWrite": 0
 			},
-			"contextWindow": 163840,
+			"contextWindow": 128000,
 			"maxTokens": 8888
 		},
 		"deepseek/deepseek-r1-0528": {
