@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.12.2] - 2026-06-12
+
 ### Fixed
 
 - Link parsing accepts the new dot-joined room secret (`<roomId>.<key>`, `/r/<roomId>.<key>`) and leniently decodes `%23`-mangled legacy deep links (macOS Foundation percent-encodes a second `#` when terminals open clicked links), which previously failed to connect
