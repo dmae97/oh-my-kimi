@@ -250,6 +250,9 @@
 ### Security
 
 - Rejected non-local `ws://` relay URLs and invalid room keys when parsing collab links to prevent insecure or malformed session joins
+### Fixed
+
+- Fixed ACP `/move` builtin test expectations to compare the resolved destination path so the test is portable on Windows and Unix ([#2381](https://github.com/can1357/oh-my-pi/pull/2381) by [@oldschoola](https://github.com/oldschoola)).
 
 ## [15.11.7] - 2026-06-12
 
