@@ -38,6 +38,72 @@ describe("resolveStdioSpawnCommand", () => {
 		}
 	});
 
+	it("prefers a project-local .cmd shim over a same-named global one when no path segment is given", async () => {
+		const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-mcp-cwd-"));
+		const globalDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-mcp-global-"));
+		try {
+			const localShim = path.join(projectDir, "server.cmd");
+			const globalShim = path.join(globalDir, "server.cmd");
+			await Bun.write(localShim, "@echo off\r\nrem local\r\n");
+			await Bun.write(globalShim, "@echo off\r\nrem global\r\n");
+
+			const result = await resolveStdioSpawnCommand(
+				{ type: "stdio", command: "server.cmd", args: ["serve"] },
+				{
+					cwd: projectDir,
+					env: {
+						COMSPEC: "C:\\Windows\\System32\\cmd.exe",
+						PATH: globalDir,
+						PATHEXT: ".cmd",
+					},
+					platform: "win32",
+				},
+			);
+
+			expect(result.cmd).toEqual(["C:\\Windows\\System32\\cmd.exe", "/d", "/s", "/c", `""${localShim}" "serve""`]);
+			expect(result.windowsHide).toBe(true);
+		} finally {
+			await fs.rm(projectDir, { recursive: true, force: true });
+			await fs.rm(globalDir, { recursive: true, force: true });
+		}
+	});
+
+	it("launches npm .cmd shims through node so CodeGraph owns the stdio pipes", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-mcp-codegraph-"));
+		try {
+			const shim = path.join(tempDir, "codegraph.cmd");
+			const entry = path.join(tempDir, "node_modules", "@colbymchenry", "codegraph", "npm-shim.js");
+			await Bun.write(
+				shim,
+				[
+					"@ECHO off",
+					"SETLOCAL",
+					"CALL :find_dp0",
+					'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%" "%dp0%\\node_modules\\@colbymchenry\\codegraph\\npm-shim.js" %*',
+					"",
+				].join("\r\n"),
+			);
+
+			const result = await resolveStdioSpawnCommand(
+				{ type: "stdio", command: "codegraph.cmd", args: ["serve", "--mcp"] },
+				{
+					cwd: tempDir,
+					env: {
+						COMSPEC: "C:\\Windows\\System32\\cmd.exe",
+						PATH: tempDir,
+						PATHEXT: ".cmd",
+					},
+					platform: "win32",
+				},
+			);
+
+			expect(result.cmd).toEqual(["node", entry, "serve", "--mcp"]);
+			expect(result.windowsHide).toBe(true);
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
 	it("escapes percent-delimited args before routing .cmd shims through cmd.exe", async () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-mcp-percent-"));
 		try {
