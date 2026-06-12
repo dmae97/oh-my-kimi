@@ -51,6 +51,8 @@ export interface MnemopiLlmRuntimeOptions {
 export interface MnemopiRuntimeOptions {
 	embeddings?: false | MnemopiEmbeddingRuntimeOptions;
 	llm?: false | MnemopiLlmRuntimeOptions | Model<Api> | MnemopiLlmCompletion;
+	/** Verbose diagnostics: escalates best-effort failure logs from debug to warn. */
+	debug?: boolean;
 }
 
 export interface ResolvedMnemopiEmbeddingRuntimeOptions {
@@ -75,6 +77,7 @@ export interface ResolvedMnemopiLlmRuntimeOptions {
 export interface ResolvedMnemopiRuntimeOptions {
 	embeddings?: ResolvedMnemopiEmbeddingRuntimeOptions;
 	llm?: ResolvedMnemopiLlmRuntimeOptions;
+	debug?: boolean;
 }
 
 const runtimeOptionsStorage = new AsyncLocalStorage<ResolvedMnemopiRuntimeOptions>();
@@ -88,6 +91,11 @@ export function withMnemopiRuntimeOptions<T>(options: ResolvedMnemopiRuntimeOpti
 
 export function getMnemopiRuntimeOptions(): ResolvedMnemopiRuntimeOptions | undefined {
 	return runtimeOptionsStorage.getStore();
+}
+
+/** Whether the active runtime scope requested verbose diagnostics (`mnemopi.debug`). */
+export function mnemopiDebugEnabled(): boolean {
+	return runtimeOptionsStorage.getStore()?.debug === true;
 }
 
 export function resolveEmbeddingProvider(
