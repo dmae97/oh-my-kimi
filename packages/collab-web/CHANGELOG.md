@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.11.8] - 2026-06-12
 ### Added
 
 - Added deep-link auto-connection support from `#<roomId>#<key>` URLs when opening the web app

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.11.8] - 2026-06-12
+
 ### Breaking Changes
 
 - Removed the Codex SSE stateful transport path, so SSE turns no longer send `previous_response_id` with delta input and now always send the full transcript
