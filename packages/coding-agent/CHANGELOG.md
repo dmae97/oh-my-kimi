@@ -26,6 +26,11 @@
 ## [15.11.2] - 2026-06-11
 
 ### Added
+- Fixed `issue://` reads failing on older GitHub CLI releases that reject the optional `stateReason` issue JSON field; single issue reads now retry without it and issue listings no longer request it ([#2333](https://github.com/can1357/oh-my-pi/issues/2333)).
+- Fixed image generation ignoring `/login`-stored OpenRouter and Google API keys: provider selection and requests now resolve through the model registry (with env-var fallback) instead of environment variables only.
+- Fixed the detached (`task` async spawn) subagent shimmer animating jumpily once the parent turn ended: the shimmer phase is sampled at render time, but nothing drove redraws while the agent idled, so the band only advanced when a progress snapshot happened to repaint. Detached task blocks now run the 30fps redraw driver while they are inside the transcript live region, and freeze the moment they leave it — the driver stops, progress rows settle on static gray (instead of leaving a mid-sweep shimmer band in native scrollback), and later partial snapshots no longer repaint commit-eligible rows (the final completion snapshot still applies).
+
+## [15.11.3] - 2026-06-11
 
 - Added the Expert Elixir language server (`expert`, invoked as `expert --stdio`) to the built-in LSP server list, auto-detected for Mix projects (`mix.exs`/`mix.lock`). When both are installed, `elixir-ls` remains the primary navigation server (Expert is ordered after it).
 - Added `magicKeywords.enabled` and per-keyword `magicKeywords.ultrathink`, `magicKeywords.orchestrate`, and `magicKeywords.workflow` settings to disable hidden magic-keyword notices and ultrathink auto-thinking escalation ([#1796](https://github.com/can1357/oh-my-pi/issues/1796)).

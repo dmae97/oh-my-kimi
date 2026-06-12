@@ -516,3 +516,41 @@ describe("TranscriptContainer getRenderStablePrefixRows", () => {
 		expect(container.getRenderStablePrefixRows()).toBe(reflowed.length);
 	});
 });
+
+describe("TranscriptContainer isBlockInLiveRegion", () => {
+	it("opens at the first still-mutating block and includes everything below it", () => {
+		const container = new TranscriptContainer();
+		const above = new StreamingBlock(["above"], true);
+		const live = new StreamingBlock(["live"], false);
+		const below = new StreamingBlock(["below"], true);
+		container.addChild(above);
+		container.addChild(live);
+		container.addChild(below);
+
+		expect(container.isBlockInLiveRegion(above)).toBe(false);
+		expect(container.isBlockInLiveRegion(live)).toBe(true);
+		expect(container.isBlockInLiveRegion(below)).toBe(true);
+	});
+
+	it("anchors on the tail block when every block has finalized", () => {
+		const container = new TranscriptContainer();
+		const first = new StreamingBlock(["first"], true);
+		const tail = new StreamingBlock(["tail"], false);
+		container.addChild(first);
+		container.addChild(tail);
+
+		expect(container.isBlockInLiveRegion(tail)).toBe(true);
+		tail.finalize();
+		// All finalized: only the tail anchors the live region — a finalized
+		// block above it is commit-eligible history (a detached task block
+		// stops animating exactly on this transition).
+		expect(container.isBlockInLiveRegion(first)).toBe(false);
+		expect(container.isBlockInLiveRegion(tail)).toBe(true);
+	});
+
+	it("returns false for a component that is not a child", () => {
+		const container = new TranscriptContainer();
+		container.addChild(new StreamingBlock(["a"], true));
+		expect(container.isBlockInLiveRegion(new StreamingBlock(["x"], false))).toBe(false);
+	});
+});
