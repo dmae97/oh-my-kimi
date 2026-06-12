@@ -15,7 +15,7 @@
     },
     "packages/agent": {
       "name": "@oh-my-pi/pi-agent-core",
-      "version": "15.11.4",
+      "version": "15.11.5",
       "dependencies": {
         "@oh-my-pi/pi-ai": "catalog:",
         "@oh-my-pi/pi-catalog": "catalog:",
@@ -32,7 +32,7 @@
     },
     "packages/ai": {
       "name": "@oh-my-pi/pi-ai",
-      "version": "15.11.4",
+      "version": "15.11.5",
       "dependencies": {
         "@bufbuild/protobuf": "catalog:",
         "@oh-my-pi/pi-catalog": "catalog:",
@@ -47,7 +47,7 @@
     },
     "packages/catalog": {
       "name": "@oh-my-pi/pi-catalog",
-      "version": "15.11.4",
+      "version": "15.11.5",
       "dependencies": {
         "@bufbuild/protobuf": "catalog:",
         "@oh-my-pi/pi-utils": "catalog:",
@@ -60,7 +60,7 @@
     },
     "packages/coding-agent": {
       "name": "@oh-my-pi/pi-coding-agent",
-      "version": "15.11.4",
+      "version": "15.11.5",
       "bin": {
         "omp": "src/cli.ts",
       },
@@ -108,7 +108,7 @@
     },
     "packages/hashline": {
       "name": "@oh-my-pi/hashline",
-      "version": "15.11.4",
+      "version": "15.11.5",
       "dependencies": {
         "diff": "catalog:",
         "lru-cache": "catalog:",
@@ -119,7 +119,7 @@
     },
     "packages/mnemopi": {
       "name": "@oh-my-pi/pi-mnemopi",
-      "version": "15.11.4",
+      "version": "15.11.5",
       "bin": {
         "mnemopi": "src/cli.ts",
       },
@@ -137,7 +137,7 @@
     },
     "packages/natives": {
       "name": "@oh-my-pi/pi-natives",
-      "version": "15.11.4",
+      "version": "15.11.5",
       "devDependencies": {
         "@napi-rs/cli": "catalog:",
         "@types/bun": "catalog:",
@@ -145,7 +145,7 @@
     },
     "packages/snapcompact": {
       "name": "@oh-my-pi/snapcompact",
-      "version": "15.11.4",
+      "version": "15.11.5",
       "dependencies": {
         "@oh-my-pi/pi-ai": "catalog:",
         "@oh-my-pi/pi-natives": "catalog:",
@@ -157,7 +157,7 @@
     },
     "packages/stats": {
       "name": "@oh-my-pi/omp-stats",
-      "version": "15.11.4",
+      "version": "15.11.5",
       "bin": {
         "omp-stats": "./src/index.ts",
       },
@@ -183,7 +183,7 @@
     },
     "packages/swarm-extension": {
       "name": "@oh-my-pi/swarm-extension",
-      "version": "15.11.4",
+      "version": "15.11.5",
       "bin": {
         "omp-swarm": "src/cli.ts",
       },
@@ -199,7 +199,7 @@
     },
     "packages/tui": {
       "name": "@oh-my-pi/pi-tui",
-      "version": "15.11.4",
+      "version": "15.11.5",
       "dependencies": {
         "@oh-my-pi/pi-natives": "catalog:",
         "@oh-my-pi/pi-utils": "catalog:",
@@ -240,7 +240,7 @@
     },
     "packages/utils": {
       "name": "@oh-my-pi/pi-utils",
-      "version": "15.11.4",
+      "version": "15.11.5",
       "dependencies": {
         "@oh-my-pi/pi-natives": "catalog:",
         "beautiful-mermaid": "catalog:",
@@ -280,17 +280,17 @@
     "@huggingface/transformers": "^4.2.0",
     "@mozilla/readability": "^0.6.0",
     "@napi-rs/cli": "3.7.0",
-    "@oh-my-pi/hashline": "15.11.4",
-    "@oh-my-pi/omp-stats": "15.11.4",
-    "@oh-my-pi/pi-agent-core": "15.11.4",
-    "@oh-my-pi/pi-ai": "15.11.4",
-    "@oh-my-pi/pi-catalog": "15.11.4",
-    "@oh-my-pi/pi-coding-agent": "15.11.4",
-    "@oh-my-pi/pi-mnemopi": "15.11.4",
-    "@oh-my-pi/pi-natives": "15.11.4",
-    "@oh-my-pi/pi-tui": "15.11.4",
-    "@oh-my-pi/pi-utils": "15.11.4",
-    "@oh-my-pi/snapcompact": "15.11.4",
+    "@oh-my-pi/hashline": "15.11.5",
+    "@oh-my-pi/omp-stats": "15.11.5",
+    "@oh-my-pi/pi-agent-core": "15.11.5",
+    "@oh-my-pi/pi-ai": "15.11.5",
+    "@oh-my-pi/pi-catalog": "15.11.5",
+    "@oh-my-pi/pi-coding-agent": "15.11.5",
+    "@oh-my-pi/pi-mnemopi": "15.11.5",
+    "@oh-my-pi/pi-natives": "15.11.5",
+    "@oh-my-pi/pi-tui": "15.11.5",
+    "@oh-my-pi/pi-utils": "15.11.5",
+    "@oh-my-pi/snapcompact": "15.11.5",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/context-async-hooks": "^2.7.1",
     "@opentelemetry/exporter-trace-otlp-proto": "^0.218.0",

@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.11.5] - 2026-06-12
 ### Added
 
 - Added `fuzzyRank` to return sorted matches together with a fuzzy score
