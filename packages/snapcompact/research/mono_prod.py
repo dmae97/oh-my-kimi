@@ -59,7 +59,11 @@ SHAPES = {
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--shape", required=True, choices=sorted(SHAPES))
+    ap.add_argument("--shape", choices=sorted(SHAPES), help="named shape from the built-in table")
+    ap.add_argument("--shape-json", help="raw production Shape JSON (alternative to --shape)")
+    ap.add_argument("--name", help="condition label; required with --shape-json")
+    ap.add_argument("--price-in", type=float, help="$/M input tokens; overrides the final.MODELS table")
+    ap.add_argument("--price-out", type=float, help="$/M output tokens; overrides the final.MODELS table")
     ap.add_argument("--model", default="gpt-5.5")
     ap.add_argument("--chars", type=int, default=800_000)
     ap.add_argument("--questions", type=int, default=50)
@@ -79,12 +83,25 @@ def main() -> None:
     paras = squad.load_paragraphs(CACHE)
     flow, offsets = squad.build_flow(paras, args.chars)
     questions = squad.sample_chunk_questions(paras, offsets, 0, len(flow), args.questions, args.seed)
-    price_in, price_out = MODELS[args.model]
-    cond = f"prod-{args.shape}"
+    table = MODELS.get(args.model)
+    price_in = args.price_in if args.price_in is not None else (table or (None, None))[0]
+    price_out = args.price_out if args.price_out is not None else (table or (None, None))[1]
+    if price_in is None or price_out is None:
+        ap.error(f"model {args.model} not in final.MODELS; pass --price-in/--price-out")
+
+    if args.shape_json:
+        if not args.name:
+            ap.error("--name is required with --shape-json")
+        shape, label = json.loads(args.shape_json), args.name
+    elif args.shape:
+        shape, label = SHAPES[args.shape], args.shape
+    else:
+        ap.error("pass --shape or --shape-json")
+    cond = f"prod-{label}"
+    size = shape["frameSize"]
 
     # Production frames (keyed by flow + shape so corpus changes re-render).
-    shape = SHAPES[args.shape]
-    frame_dir = CACHE / f"prod-frames-{args.shape}-{sha8(flow, json.dumps(shape, sort_keys=True))}"
+    frame_dir = CACHE / f"prod-frames-{label}-{sha8(flow, json.dumps(shape, sort_keys=True))}"
     if not frame_dir.exists() or not any(frame_dir.iterdir()):
         flow_file = CACHE / f"prod-flow-{sha8(flow)}.txt"
         flow_file.write_text(flow)
@@ -94,8 +111,8 @@ def main() -> None:
         )
     pngs = sorted(frame_dir.glob("page-*.png"))
     repeat = shape.get("lineRepeat", 1)
-    cols = (SIZE // shape["cellWidth"] - 3) // 2 if shape.get("columns") == 2 else SIZE // shape["cellWidth"]
-    rows = SIZE // shape["cellHeight"] // repeat
+    cols = (size // shape["cellWidth"] - 3) // 2 if shape.get("columns") == 2 else size // shape["cellWidth"]
+    rows = size // shape["cellHeight"] // repeat
     preamble = load_prompt("qa-image-multi.md").format(k=len(pngs), cols=cols, rows=rows)
     if shape.get("columns") == 2:
         preamble += (
@@ -110,7 +127,7 @@ def main() -> None:
         )
     ctx_blocks = [{"text": preamble}, *({"image_path": p} for p in pngs), {"text": "End of images.", "cache": True}]
 
-    out_dir = RESULTS / f"mono-prod-{args.model.replace('/', '-')}-{args.shape}"
+    out_dir = RESULTS / f"mono-prod-{args.model.replace('/', '-')}-{label}"
     out_dir.mkdir(parents=True, exist_ok=True)
     answers, usages, stops = [], [], []
     for b in range(0, len(questions), args.qpb):
