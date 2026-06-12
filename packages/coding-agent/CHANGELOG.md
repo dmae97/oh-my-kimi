@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.12.3] - 2026-06-12
+
 ### Fixed
 
 - Restored the intended double-Esc default to `/tree` and fixed the Esc-opened selector path to reset the terminal display instead of preserving stale scrollback when the selector opens.
