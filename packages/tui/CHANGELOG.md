@@ -4,10 +4,12 @@
 ### Added
 
 - Added `fuzzyRank` to return sorted matches together with a fuzzy score
+- Added a configurable `Input.prompt` field (defaults to `"> "`; set to `""` for chrome-less embedding inside custom banners)
 
 ### Changed
 
 - Changed fuzzy matching to normalize queries and text into words, including camelCase and punctuation separators, before scoring
+- Changed `Input.setValue` to place the cursor at the end of the new value instead of clamping it to its previous position, so typing after seeding a prefilled value appends rather than prepends
 
 ### Fixed
 
