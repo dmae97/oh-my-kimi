@@ -245,7 +245,7 @@ export interface InteractiveModeNotify {
 }
 
 export function buildModelScopeNotification(
-	scopedModelsForDisplay: readonly Pick<ScopedModel, "model" | "thinkingLevel">[],
+	scopedModelsForDisplay: readonly Pick<ScopedModel, "model" | "thinkingLevel" | "explicitThinkingLevel">[],
 	startupQuiet: boolean,
 ): InteractiveModeNotify | null {
 	if (startupQuiet || scopedModelsForDisplay.length === 0) {
@@ -253,13 +253,15 @@ export function buildModelScopeNotification(
 	}
 	const modelList = scopedModelsForDisplay
 		.map(scopedModel => {
-			const thinkingStr = scopedModel.thinkingLevel ? `:${scopedModel.thinkingLevel}` : "";
+			const thinkingStr =
+				scopedModel.explicitThinkingLevel && scopedModel.thinkingLevel
+					? `:${scopedModel.thinkingLevel}`
+					: "";
 			return `${scopedModel.model.id}${thinkingStr}`;
 		})
 		.join(", ");
 	return { kind: "info", message: `Model scope: ${modelList} (Ctrl+P to cycle)` };
 }
-
 export async function submitInteractiveInput(
 	mode: Pick<
 		InteractiveMode,
@@ -1283,9 +1285,8 @@ export async function runRootCommand(
 			const versionCheckPromise = checkForNewVersion(VERSION).catch(() => undefined);
 			const changelogMarkdown = await logger.time("main:getChangelogForDisplay", getChangelogForDisplay, parsedArgs);
 
-			const scopedModelsForDisplay = sessionOptions.scopedModels ?? scopedModels;
 			const modelScopeNotification = buildModelScopeNotification(
-				scopedModelsForDisplay,
+				scopedModels,
 				settingsInstance.get("startup.quiet"),
 			);
 			if (modelScopeNotification) {
