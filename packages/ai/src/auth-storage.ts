@@ -2871,7 +2871,15 @@ export class AuthStorage {
 		await Promise.all(
 			candidates.map(async candidate => {
 				const force = forceRefreshIndex !== undefined && candidate.selection.index === forceRefreshIndex;
-				if (!force && Date.now() + OAUTH_REFRESH_SKEW_MS < candidate.selection.credential.expires) return;
+				const initialCredentialId = this.#getStoredCredentials(provider)[candidate.selection.index]?.id;
+				let syncedPeerCredential = false;
+				if (initialCredentialId !== undefined) {
+					const beforeSync = candidate.selection.credential;
+					if (!this.#syncOAuthSelectionFromStore(provider, candidate.selection, initialCredentialId)) return;
+					syncedPeerCredential = !authCredentialEquals(beforeSync, candidate.selection.credential);
+				}
+				const hasFreshAccess = Date.now() + OAUTH_REFRESH_SKEW_MS < candidate.selection.credential.expires;
+				if ((!force || syncedPeerCredential) && hasFreshAccess) return;
 				const latestCredential = this.#getCredentialsForProvider(provider)[candidate.selection.index];
 				if (
 					!force &&
@@ -2903,7 +2911,17 @@ export class AuthStorage {
 					};
 					candidate.selection.credential = updated;
 					this.#replaceCredentialAt(provider, candidate.selection.index, updated);
-				} catch {}
+				} catch (error) {
+					// Recovery for definitive failures (incl. peer rotation) lives in
+					// #tryOAuthCredential; log instead of swallowing silently — a bare
+					// catch here hid stale-refresh-token replays from concurrent
+					// sessions (one-turn 401 "Invalid authentication credentials").
+					logger.debug("OAuth preflight refresh failed", {
+						provider,
+						index: candidate.selection.index,
+						error: String(error),
+					});
+				}
 			}),
 		);
 
@@ -3023,31 +3041,39 @@ export class AuthStorage {
 		}
 	}
 
-	async #prepareOAuthCredentialForRequest(
+	#syncOAuthSelectionFromStore(
 		provider: string,
 		selection: { credential: OAuthCredential; index: number },
-		options: AuthApiKeyOptions | undefined,
-	): Promise<boolean> {
-		const prepare = this.#store.prepareForRequest?.bind(this.#store);
-		if (!prepare) return true;
-		const stored = this.#getStoredCredentials(provider);
-		const selected = stored[selection.index];
-		if (selected?.credential.type !== "oauth") return false;
-
-		const prepared = await prepare(selected.id, { signal: options?.signal });
-		if (!prepared) return true;
+		credentialId: number,
+	): boolean {
 		const latestRows = this.#store.listAuthCredentials(provider);
 		this.#setStoredCredentials(
 			provider,
 			latestRows.map(row => ({ id: row.id, credential: row.credential })),
 		);
-		const latestIndex = latestRows.findIndex(row => row.id === selected.id);
+		const latestIndex = latestRows.findIndex(row => row.id === credentialId);
 		if (latestIndex === -1) return false;
 		const latest = latestRows[latestIndex];
 		if (latest?.credential.type !== "oauth") return false;
 		selection.index = latestIndex;
 		selection.credential = latest.credential;
 		return true;
+	}
+
+	async #prepareOAuthCredentialForRequest(
+		provider: string,
+		selection: { credential: OAuthCredential; index: number },
+		options: AuthApiKeyOptions | undefined,
+	): Promise<boolean> {
+		const stored = this.#getStoredCredentials(provider);
+		const selected = stored[selection.index];
+		if (selected?.credential.type !== "oauth") return false;
+
+		const prepare = this.#store.prepareForRequest?.bind(this.#store);
+		if (prepare) {
+			await prepare(selected.id, { signal: options?.signal });
+		}
+		return this.#syncOAuthSelectionFromStore(provider, selection, selected.id);
 	}
 
 	/** Attempts to use a single OAuth credential, checking usage and refreshing token. */

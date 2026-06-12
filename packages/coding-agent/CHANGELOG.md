@@ -2,13 +2,35 @@
 
 ## [Unreleased]
 
+### Added
+
+- `ModelRegistry.resolver` now accepts a model directly — `resolver(model, sessionId)` — deriving `provider`, `baseUrl`, and `modelId` from it; all model-scoped call sites migrated from the verbose `resolver(model.provider, { sessionId, baseUrl, modelId })` form.
+
+### Changed
+
+- Codex, Gemini, and Perplexity web search now route their OAuth bearers through the new `withOAuthAccess` driver: a 401 or usage-limit force-refreshes the same account and then rotates to a sibling instead of failing the search, while identity metadata (`chatgpt-account-id`, Google `projectId`) is re-derived from the refreshed credential on every retry.
+- Kagi web search, the xAI TTS tool, and model-discovery list fetches now resolve their bearers through `withAuth` with an auth-storage resolver instead of a one-shot key snapshot, gaining the same force-refresh + rotate retry on 401.
+- Compaction, handoff, and branch-summarization call sites now hand the compactor a per-candidate API-key resolver (availability still gated on a key snapshot), so credential refresh happens before the #986 fallback-model loop advances.
+- The mnemopi backend now passes an OpenRouter resolver for default embedding/extraction setups (AuthStorage-stored keys included), keeping pinned literal keys and custom endpoints unchanged.
+- Reorganized the `/settings` panel for findability: every tab now has titled sections backed by a per-tab layout contract (`TAB_GROUPS`); on wide terminals the panel renders a section sidebar with the active section's settings beside it (narrow terminals keep a flat list with inline headings), and PgUp/PgDn jump section-to-section. The Editing tab became Files (edit/read/LSP) and a new Shell tab hosts bash, eval, and Python settings. Misplaced settings were rehomed: bash toggles united under Shell, tool approval mode and policies together under Interaction → Approvals, marketplace auto-update next to startup update checks, and the todo auto-clear delay beside the other todo settings.
+- Normalized `/settings` labels and descriptions: consistent Title Case labels (e.g. "Todo Auto-Clear Delay", "GitHub View Cache"), uniform unit placement, articles and verb-first phrasing in descriptions ("If false…"/"Whether to…" rewritten), and a stale browser-tool description (Ulixee Hero) corrected to the actual puppeteer/Chromium implementation.
+- Image-generation (Antigravity, xAI, OpenRouter, Gemini) and xAI TTS request failures now throw pi-ai's typed `ProviderHttpError` carrying status and response headers instead of `Object.assign`-patched `Error`s.
+- Collapsed bash, ssh, and eval previews now cap the command/code section to a viewport-sized tail window (terminal rows minus a chrome reserve) that renders identically while streaming and after completion, with `ctrl+o` as the only way to uncap. Previously bash/ssh capped the command only while streaming and snapped it fully open the moment the tool finished, and eval never capped cell code at all.
+
 ### Fixed
 
+- Fixed `lsp.formatOnWrite` sending a hardcoded `tabSize: 3, insertSpaces: true` on every `textDocument/formatting` request, which silently re-indented 2-space YAML (and any LSP-formatted file) to 3-space on every write/edit through formatter-aware servers like `yaml-language-server`. Format options are now resolved per-file from `.editorconfig` (`indent_size`, `indent_style`, `tab_width`), falling back to the indent sniffed from the in-memory content the agent is about to write, then to a 2-space default. The duplicate `DEFAULT_FORMAT_OPTIONS` constant in `lsp/index.ts` and `lsp/clients/lsp-linter-client.ts` is replaced with a single shared `resolveFormatOptions` helper ([#2329](https://github.com/can1357/oh-my-pi/issues/2329)).
+
+### Fixed
+
+- Fixed stale OpenAI Responses replay failures such as `Item with id 'rs_...' not found.` by resetting the provider session and retrying without advancing fallback chains.
+- Fixed `/settings` Escape handling so an open submenu receives Esc and returns to the settings list before a second Esc closes the panel ([#2331](https://github.com/can1357/oh-my-pi/issues/2331)).
+- Fixed Escape not closing `/settings` on the Plugins tab while the async plugin list is still loading: `PluginSettingsComponent` now closes on Esc while no child view is mounted, and an npm plugin registry listing failure is caught (like marketplace failures) so a bad registry no longer leaves the tab permanently blank ([#2331](https://github.com/can1357/oh-my-pi/issues/2331)).
 - Fixed unconfigured `pi/smol`, `pi/slow`, and `pi/designer` agent model roles using cloud-priority defaults before the user's configured `modelRoles.default`, which could route local-default setups to authenticated paid providers ([#2336](https://github.com/can1357/oh-my-pi/issues/2336)).
-
-### Fixed
-
 - Fixed `issue://` reads failing on older GitHub CLI releases that reject the optional `stateReason` issue JSON field; single issue reads now retry without it and issue listings no longer request it ([#2333](https://github.com/can1357/oh-my-pi/issues/2333)).
+- Fixed image generation ignoring `/login`-stored OpenRouter and Google API keys: provider selection and requests now resolve through the model registry (with env-var fallback) instead of environment variables only.
+- Fixed the detached (`task` async spawn) subagent shimmer animating jumpily once the parent turn ended: the shimmer phase is sampled at render time, but nothing drove redraws while the agent idled, so the band only advanced when a progress snapshot happened to repaint. Detached task blocks now run the 30fps redraw driver while they are inside the transcript live region, and freeze the moment they leave it — the driver stops, progress rows settle on static gray (instead of leaving a mid-sweep shimmer band in native scrollback), and later partial snapshots no longer repaint commit-eligible rows (the final completion snapshot still applies).
+- Fixed five consumers treating Zod tool-parameter schemas as plain JSON Schema objects, leaking schema-instance internals (`def`, `shape`, methods stringified as `undefined`) or silently reading nothing: `/dump` and the RPC `get_state` `dumpTools` payload now convert parameters through the same wire-schema conversion providers receive; context-usage token estimation no longer stringifies the Zod `def` tree (overcounting tool schema tokens in the status line); tool-discovery search indexing recovers `schemaKeys` from Zod tools (previously empty, weakening BM25 ranking); and the extension inspector panel renders Zod tool arguments instead of "(no arguments)".
 
 ## [15.11.3] - 2026-06-11
 

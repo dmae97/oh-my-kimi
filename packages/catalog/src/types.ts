@@ -205,6 +205,14 @@ export interface OpenAICompat {
 	/** Whether Responses-API tool-call/result history must be strictly paired. Default: auto-detected (Azure OpenAI, GitHub Copilot). */
 	strictResponsesPairing?: boolean;
 	/**
+	 * Append a trailing `# Juice: 0 !important` developer item when the caller
+	 * did not request reasoning, suppressing default reasoning on models that
+	 * cannot disable it via request params (Responses APIs only; see
+	 * https://community.openai.com/t/need-reasoning-false-option-for-gpt-5/1351588/7).
+	 * Default: auto-detected (GPT-5-family model names).
+	 */
+	requiresJuiceZeroHack?: boolean;
+	/**
 	 * Compat deltas applied when a request actually engages thinking mode
 	 * (reasoning requested and not disabled, model reasoning-capable, and not
 	 * suppressed by a forced tool choice). `buildModel` materializes the full
@@ -321,6 +329,7 @@ export type ResolvedOpenAICompat = Required<
 		| "cacheControlFormat"
 		| "thinkingKeep"
 		| "strictResponsesPairing"
+		| "requiresJuiceZeroHack"
 		| "whenThinking"
 	>
 > & {
@@ -346,6 +355,7 @@ export interface ResolvedOpenAIResponsesCompat {
 	supportsReasoningEffort: boolean;
 	supportsLongPromptCacheRetention: boolean;
 	strictResponsesPairing: boolean;
+	requiresJuiceZeroHack: boolean;
 	reasoningEffortMap: Partial<Record<Effort, string>>;
 }
 

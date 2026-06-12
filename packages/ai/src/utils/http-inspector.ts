@@ -20,10 +20,6 @@ export type CapturedHttpErrorResponse = {
 	bodyJson?: unknown;
 };
 
-type ErrorWithStatus = {
-	status?: unknown;
-};
-
 const SENSITIVE_HEADERS = ["authorization", "x-api-key", "api-key", "cookie", "set-cookie", "proxy-authorization"];
 
 export async function appendRawHttpRequestDumpFor400(
@@ -65,12 +61,6 @@ export async function finalizeErrorMessage(
 		}
 	}
 	return appendRawHttpRequestDumpFor400(message, error, rawRequestDump);
-}
-
-export function withHttpStatus(error: unknown, status: number): Error {
-	const wrapped = error instanceof Error ? error : new Error(String(error));
-	(wrapped as ErrorWithStatus).status = status;
-	return wrapped;
 }
 
 /**

@@ -4,6 +4,7 @@
 
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import { extractHttpStatusFromError, readSseJson } from "@oh-my-pi/pi-utils";
+import { ProviderHttpError } from "../errors";
 import type {
 	Api,
 	AssistantMessage,
@@ -20,7 +21,7 @@ import type {
 } from "../types";
 import { normalizeSystemPrompts } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
-import { finalizeErrorMessage, type RawHttpRequestDump, withHttpStatus } from "../utils/http-inspector";
+import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
 import { normalizeSchemaForCCA, normalizeSchemaForGoogle, toolWireSchema } from "../utils/schema";
 import type {
 	Content,
@@ -44,6 +45,11 @@ export type {
 	ThinkingConfig,
 } from "./google-types";
 export { normalizeSchemaForGoogle };
+
+/** Non-2xx response (or in-stream error chunk) from the Google Generative Language / Vertex API. */
+export class GoogleApiError extends ProviderHttpError {
+	override readonly name = "GoogleApiError";
+}
 
 type GoogleApiType = "google-generative-ai" | "google-gemini-cli" | "google-vertex";
 
@@ -547,10 +553,10 @@ export async function consumeGoogleStream<T extends GoogleApiType>(args: {
 	for await (const chunk of googleStream) {
 		if (chunk.error) {
 			const detail = chunk.error.message || chunk.error.status || "unknown error";
-			const err = new Error(`Google API stream error: ${detail}`);
+			const message = `Google API stream error: ${detail}`;
 			throw typeof chunk.error.code === "number" && chunk.error.code >= 400
-				? withHttpStatus(err, chunk.error.code)
-				: err;
+				? new GoogleApiError(message, chunk.error.code)
+				: new Error(message);
 		}
 		if (!chunk.candidates?.length && chunk.promptFeedback?.blockReason) {
 			const detail = chunk.promptFeedback.blockReasonMessage;
@@ -850,9 +856,10 @@ export function streamGoogleGenAI<T extends "google-generative-ai" | "google-ver
 			});
 			if (!response.ok) {
 				const errorText = await response.text().catch(() => "");
-				throw withHttpStatus(
-					new Error(`Google API error (${response.status}): ${extractGoogleErrorMessage(errorText)}`),
+				throw new GoogleApiError(
+					`Google API error (${response.status}): ${extractGoogleErrorMessage(errorText)}`,
 					response.status,
+					{ headers: response.headers },
 				);
 			}
 			if (!response.body) {

@@ -57,7 +57,7 @@ import {
 import { isRecord, logger } from "@oh-my-pi/pi-utils";
 import { parseModelString, resolveProviderModelReference } from "../config/model-resolver";
 import type { AuthStorage, OAuthCredential } from "../session/auth-storage";
-import { type ApiKeyResolverOptions, createApiKeyResolver } from "./api-key-resolver";
+import { type ApiKeyResolverModel, type ApiKeyResolverOptions, createApiKeyResolver } from "./api-key-resolver";
 import type { ConfigError, ConfigFile } from "./config-file";
 import {
 	DISCOVERY_DEFAULT_MAX_TOKENS,
@@ -1238,9 +1238,10 @@ export class ModelRegistry {
 	#discoveryContext(): DiscoveryContext {
 		return {
 			fetch: this.#fetch,
-			getBearerApiKey: async provider => {
+			getBearerApiKeyResolver: async provider => {
 				const apiKey = await this.getApiKeyForProvider(provider);
-				return apiKey && apiKey !== DEFAULT_LOCAL_TOKEN && apiKey !== kNoAuth ? apiKey : undefined;
+				if (!apiKey || apiKey === DEFAULT_LOCAL_TOKEN || apiKey === kNoAuth) return undefined;
+				return this.resolver(provider);
 			},
 		};
 	}
@@ -1754,12 +1755,24 @@ export class ModelRegistry {
 	}
 
 	/**
-	 * Build an {@link ApiKeyResolver} for this provider, implementing the
-	 * central a/b/c auth-retry policy. Callers that need the initial key for
-	 * a guard can call `resolveApiKeyOnce(resolver)`.
+	 * Build an {@link ApiKeyResolver} implementing the central a/b/c auth-retry
+	 * policy. Accepts a provider id with options, or a model with an optional
+	 * session id (`resolver(model, sessionId)`) which derives `baseUrl`/`modelId`
+	 * from the model. Callers that need the initial key for a guard can call
+	 * `resolveApiKeyOnce(resolver)`.
 	 */
-	resolver(provider: string, options?: ApiKeyResolverOptions): ApiKeyResolver {
-		return createApiKeyResolver(this, provider, options);
+	resolver(provider: string, options?: ApiKeyResolverOptions): ApiKeyResolver;
+	resolver(model: ApiKeyResolverModel, sessionId?: string): ApiKeyResolver;
+	resolver(target: string | ApiKeyResolverModel, optionsOrSessionId?: ApiKeyResolverOptions | string): ApiKeyResolver {
+		const options = typeof optionsOrSessionId === "string" ? { sessionId: optionsOrSessionId } : optionsOrSessionId;
+		if (typeof target === "string") {
+			return createApiKeyResolver(this, target, options);
+		}
+		return createApiKeyResolver(this, target.provider, {
+			...options,
+			baseUrl: target.baseUrl,
+			modelId: target.id,
+		});
 	}
 
 	async #peekApiKeyForProvider(provider: string): Promise<string | undefined> {

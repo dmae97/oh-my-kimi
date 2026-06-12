@@ -15,6 +15,7 @@ import {
 } from "@oh-my-pi/pi-tui";
 import { getProjectDir, logger, sanitizeText } from "@oh-my-pi/pi-utils";
 import { EDIT_MODE_STRATEGIES, type EditMode, type PerFileDiffPreview } from "../../edit";
+import { shimmerEnabled } from "../../modes/theme/shimmer";
 import type { Theme } from "../../modes/theme/theme";
 import { theme } from "../../modes/theme/theme";
 import { BASH_DEFAULT_PREVIEW_LINES } from "../../tools/bash";
@@ -111,11 +112,23 @@ function getArgsWithStreamedTextInput(args: unknown): unknown {
 	return input === undefined ? args : { ...record, input };
 }
 
+/**
+ * Transcript-side probe telling a block whether it is still inside the live
+ * (repaintable) region. Implemented by `TranscriptContainer`; injected rather
+ * than imported so the component stays decoupled from the transcript.
+ */
+export interface TranscriptLiveRegionProbe {
+	isBlockInLiveRegion(component: Component): boolean;
+}
+
 export interface ToolExecutionOptions {
 	snapshots?: SnapshotStore;
 	showImages?: boolean; // default: true (only used if terminal supports images)
 	editFuzzyThreshold?: number;
 	editAllowFuzzy?: boolean;
+	/** Live-region probe driving the detached-task shimmer: animate while the
+	 * block is inside the region, freeze it gray once it leaves. */
+	liveRegion?: TranscriptLiveRegionProbe;
 }
 
 export interface ToolExecutionHandle {
@@ -200,6 +213,14 @@ export class ToolExecutionComponent extends Container {
 	// follow-up `job` call can displace it instead of stacking another
 	// "waiting on N jobs" frame. Cleared by `seal()`.
 	#displaceable = false;
+	// Probe into the owning transcript (absent outside the interactive
+	// transcript, e.g. in tests): whether this block is still repaintable.
+	#liveRegion?: TranscriptLiveRegionProbe;
+	// One-way latch for a detached (`async.state === "running"`) task block
+	// that left the transcript live region: its rows are commit-eligible
+	// history, so the shimmer driver stops, progress rows render static gray,
+	// and further partial snapshots are dropped (see #maybeFreezeBackgroundTask).
+	#backgroundTaskFrozen = false;
 	#renderState: {
 		spinnerFrame?: number;
 		expanded: boolean;
@@ -226,6 +247,7 @@ export class ToolExecutionComponent extends Container {
 		this.#editFuzzyThreshold = options.editFuzzyThreshold;
 		this.#editAllowFuzzy = options.editAllowFuzzy;
 		this.#snapshots = options.snapshots;
+		this.#liveRegion = options.liveRegion;
 		this.#tool = tool;
 		this.#ui = ui;
 		this.#cwd = cwd;
@@ -363,6 +385,15 @@ export class ToolExecutionComponent extends Container {
 		isPartial = false,
 		_toolCallId?: string,
 	): void {
+		// A detached task spawn keeps streaming progress snapshots after the
+		// block froze (left the transcript live region). Drop them: the rows are
+		// static gray history now, and repainting would rewrite rows the engine
+		// may already have committed to native scrollback. The terminal snapshot
+		// (async completed/failed → isPartial=false) still applies so a block
+		// that is still on screen settles on real results.
+		if (isPartial && this.#toolName === "task" && this.#maybeFreezeBackgroundTask()) {
+			return;
+		}
 		this.#result = result;
 		this.#isPartial = isPartial;
 		// A `job` poll that found every watched job still running is transient
@@ -436,11 +467,27 @@ export class ToolExecutionComponent extends Container {
 			(this.#result?.details as { async?: { state?: string } } | undefined)?.async?.state === "running";
 		const isBackgroundAsyncTask = this.#toolName === "task" && isBackgroundAsyncRunning;
 		const isPartialTask = this.#isPartial && this.#toolName === "task" && !isBackgroundAsyncTask;
+		// A detached spawn (`async.state === "running"`) reports finalized so the
+		// transcript may freeze it, yet its progress rows shimmer while the block
+		// is still inside the live region. Drive those redraws at 30fps too: the
+		// shimmer phase is Date.now() sampled at render time, so without a driver
+		// it only advances when a progress snapshot happens to repaint — a jumpy
+		// band once the parent turn ends and the status-line loader stops. The
+		// tick freezes the block gray the moment it leaves the live region, so
+		// the interval never outlives the block's repaintable life. Gated on the
+		// probe (absent outside the interactive transcript) and on shimmer being
+		// enabled (static rows need no redraw driver).
+		const isLiveBackgroundTask =
+			isBackgroundAsyncTask &&
+			this.#isPartial &&
+			!this.#backgroundTaskFrozen &&
+			this.#liveRegion !== undefined &&
+			shimmerEnabled();
 		// A displaceable waiting poll keeps its spinner ticking: it reads as one
 		// persistent live poll, and the changing leading glyph keeps the
 		// transcript's stable-prefix ratchet from committing rows of a block
 		// that a follow-up `job` call may remove.
-		const needsSpinner = isStreamingArgs || isPartialTask || this.isDisplaceableBlock();
+		const needsSpinner = isStreamingArgs || isPartialTask || isLiveBackgroundTask || this.isDisplaceableBlock();
 		if (needsSpinner && !this.#spinnerInterval) {
 			const now = performance.now();
 			const frameCount = theme.spinnerFrames.length;
@@ -450,6 +497,9 @@ export class ToolExecutionComponent extends Container {
 				this.#renderState.spinnerFrame = 0;
 			}
 			this.#spinnerInterval = setInterval(() => {
+				// Detached task: stop animating the instant the block leaves the
+				// live region (the freeze repaints it gray and clears this interval).
+				if (this.#maybeFreezeBackgroundTask()) return;
 				const now = performance.now();
 				const frameCount = theme.spinnerFrames.length;
 				// Redraw at 30fps for a smooth `task` name shimmer, but keep the spinner
@@ -478,6 +528,27 @@ export class ToolExecutionComponent extends Container {
 				this.#renderState.spinnerFrame = undefined;
 			}
 		}
+	}
+
+	/**
+	 * Freeze a detached (`async.state === "running"`) task block once it leaves
+	 * the transcript's live region. Past that seam its rows are commit-eligible
+	 * native-scrollback history: stop the shimmer driver, repaint the progress
+	 * rows static gray (so scrollback never keeps a mid-sweep shimmer band), and
+	 * drop further partial snapshots. One-way — blocks never re-enter the live
+	 * region. Returns whether the block is frozen.
+	 */
+	#maybeFreezeBackgroundTask(): boolean {
+		if (this.#backgroundTaskFrozen) return true;
+		if (this.#toolName !== "task" || this.#liveRegion === undefined) return false;
+		const asyncState = (this.#result?.details as { async?: { state?: string } } | undefined)?.async?.state;
+		if (asyncState !== "running") return false;
+		if (this.#liveRegion.isBlockInLiveRegion(this)) return false;
+		this.#backgroundTaskFrozen = true;
+		this.#updateSpinnerAnimation();
+		this.#updateDisplay();
+		this.#ui.requestRender();
+		return true;
 	}
 
 	#updateTodoStrikeAnimation(): void {
@@ -547,6 +618,9 @@ export class ToolExecutionComponent extends Container {
 		if (this.#sealed) return;
 		this.#sealed = true;
 		this.#displaceable = false;
+		// A sealed detached task is abandoned history: settle its progress rows
+		// on static gray instead of a frozen mid-sweep shimmer band.
+		this.#backgroundTaskFrozen = true;
 		this.stopAnimation();
 		this.#updateDisplay();
 		this.#ui.requestRender();
@@ -888,6 +962,9 @@ export class ToolExecutionComponent extends Container {
 			// draws every dispatched agent as a progress/result line, so tell
 			// `renderCall` to drop its duplicate streaming preview list.
 			context.hasResult = Boolean(this.#result);
+			// Out of the transcript live region: progress rows render static gray
+			// instead of shimmering (see task/render.ts).
+			context.frozen = this.#backgroundTaskFrozen;
 		} else if (isEditLikeToolName(this.#toolName)) {
 			context.editMode = this.#editMode;
 			const previews = this.#editDiffPreview;

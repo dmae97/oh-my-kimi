@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { getThemeByName, initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { previewWindowRows } from "@oh-my-pi/pi-coding-agent/tools/render-utils";
 import { sshToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/ssh";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 
@@ -54,5 +55,34 @@ describe("sshToolRenderer", () => {
 		const body = sanitized.slice(1).join("\n");
 		expect(body).toContain("$ set -e");
 		expect(body).toContain("do-something");
+	});
+
+	it("renders the collapsed command as a viewport tail window in every state — no stream→final expansion", async () => {
+		const uiTheme = (await getThemeByName("dark"))!;
+		expect(uiTheme).toBeDefined();
+		const total = previewWindowRows() + 5;
+		const command = Array.from({ length: total }, (_, i) => `step_${i}`).join("\n");
+		const render = (opts: { expanded: boolean; isPartial: boolean }) =>
+			sanitizeText(
+				sshToolRenderer
+					.renderResult({ content: [{ type: "text", text: "" }] }, opts, uiTheme, { host: "router", command })
+					.render(120)
+					.join("\n"),
+			);
+
+		// Identical tail window streaming and final: the end stays visible, the
+		// head is elided behind an "earlier lines" marker. Only ctrl+o uncaps.
+		for (const rendered of [
+			render({ expanded: false, isPartial: true }),
+			render({ expanded: false, isPartial: false }),
+		]) {
+			expect(rendered).toContain(`step_${total - 1}`);
+			expect(rendered).toContain("earlier line");
+			expect(rendered).not.toContain("step_0");
+		}
+
+		const expandedFinal = render({ expanded: true, isPartial: false });
+		expect(expandedFinal).toContain("$ step_0");
+		expect(expandedFinal).not.toContain("earlier line");
 	});
 });

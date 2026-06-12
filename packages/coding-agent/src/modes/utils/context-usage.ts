@@ -1,6 +1,7 @@
 import type { CompactionSettings } from "@oh-my-pi/pi-agent-core/compaction";
 import { effectiveReserveTokens, estimateTokens, resolveThresholdTokens } from "@oh-my-pi/pi-agent-core/compaction";
 import type { Model } from "@oh-my-pi/pi-ai";
+import { isZodSchema, zodToWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { countTokens } from "@oh-my-pi/pi-natives";
 import { formatNumber } from "@oh-my-pi/pi-utils";
 import type { Skill } from "../../extensibility/skills";
@@ -57,7 +58,8 @@ export function estimateToolSchemaTokens(
 	for (const tool of tools) {
 		fragments.push(tool.name, tool.description);
 		try {
-			fragments.push(JSON.stringify(tool.parameters ?? {}));
+			const params = tool.parameters;
+			fragments.push(JSON.stringify((isZodSchema(params) ? zodToWireSchema(params) : params) ?? {}));
 		} catch {
 			// Schema may contain functions or cycles; ignore.
 		}

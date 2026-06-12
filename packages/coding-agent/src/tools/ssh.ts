@@ -329,9 +329,9 @@ export const sshToolRenderer = {
 						state: "success",
 						sections: [
 							{
-								lines: options.isPartial
-									? capPreviewLines(cmdLines, uiTheme, { expanded: options.expanded })
-									: cmdLines,
+								// Viewport-sized tail window in every state — streaming and final
+								// render identically; only ctrl+o uncaps.
+								lines: capPreviewLines(cmdLines, uiTheme, { expanded }),
 							},
 							{ label: uiTheme.fg("toolTitle", "Output"), lines: outputLines },
 						],

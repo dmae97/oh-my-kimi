@@ -18,6 +18,8 @@ export interface Tab {
 	id: string;
 	/** Display label shown in the tab bar */
 	label: string;
+	/** Render with the muted style and skip during keyboard navigation. */
+	muted?: boolean;
 }
 
 /** Theme for styling the tab bar */
@@ -30,6 +32,8 @@ export interface TabBarTheme {
 	inactiveTab: (text: string) => string;
 	/** Style for the hint text (e.g., "(tab to cycle)") */
 	hint: (text: string) => string;
+	/** Style for muted tabs. Falls back to `inactiveTab` when omitted. */
+	mutedTab?: (text: string) => string;
 }
 
 /**
@@ -53,6 +57,9 @@ export class TabBar implements Component {
 
 	/** Callback fired when the active tab changes */
 	onTabChange?: (tab: Tab, index: number) => void;
+
+	/** Render the trailing "(tab to cycle)" hint. Disable when the host folds the hint into its own footer. */
+	showHint = true;
 
 	constructor(label: string, tabs: Tab[], theme: TabBarTheme, initialIndex: number = 0) {
 		this.#label = label;
@@ -80,14 +87,47 @@ export class TabBar implements Component {
 		}
 	}
 
-	/** Move to the next tab (wraps to first tab after last) */
-	nextTab(): void {
-		this.setActiveIndex((this.#activeIndex + 1) % this.#tabs.length);
+	/**
+	 * Replace the tab set without firing onTabChange. The active tab is
+	 * preserved by id when it survives the swap (or forced via `activeId`);
+	 * otherwise the index is clamped.
+	 */
+	setTabs(tabs: Tab[], activeId?: string): void {
+		const targetId = activeId ?? this.#tabs[this.#activeIndex]?.id;
+		this.#tabs = tabs;
+		const index = tabs.findIndex(tab => tab.id === targetId);
+		this.#activeIndex = index >= 0 ? index : Math.max(0, Math.min(this.#activeIndex, tabs.length - 1));
 	}
 
-	/** Move to the previous tab (wraps to last tab before first) */
+	/** Set the active tab by id without firing onTabChange. Returns false when the id is unknown. */
+	setActiveById(id: string): boolean {
+		const index = this.#tabs.findIndex(tab => tab.id === id);
+		if (index === -1) return false;
+		this.#activeIndex = index;
+		return true;
+	}
+
+	/** Move to the next non-muted tab (wraps to first tab after last) */
+	nextTab(): void {
+		this.#stepTab(1);
+	}
+
+	/** Move to the previous non-muted tab (wraps to last tab before first) */
 	prevTab(): void {
-		this.setActiveIndex((this.#activeIndex - 1 + this.#tabs.length) % this.#tabs.length);
+		this.#stepTab(-1);
+	}
+
+	/** Step to the nearest non-muted tab in `delta` direction; no-op when none exists. */
+	#stepTab(delta: -1 | 1): void {
+		const len = this.#tabs.length;
+		if (len === 0) return;
+		for (let step = 1; step <= len; step++) {
+			const index = (((this.#activeIndex + delta * step) % len) + len) % len;
+			if (!this.#tabs[index]?.muted) {
+				this.setActiveIndex(index);
+				return;
+			}
+		}
 	}
 
 	invalidate(): void {
@@ -115,26 +155,33 @@ export class TabBar implements Component {
 		const maxWidth = Math.max(1, width);
 		const chunks: string[] = [];
 
-		// Label prefix
-		chunks.push(this.#theme.label(`${this.#label}:`));
-		chunks.push("  ");
+		// Label prefix (omitted when the label is empty)
+		if (this.#label) {
+			chunks.push(this.#theme.label(`${this.#label}:`));
+			chunks.push("  ");
+		}
 
 		// Tab buttons
 		for (let i = 0; i < this.#tabs.length; i++) {
 			const tab = this.#tabs[i];
-			if (i === this.#activeIndex) {
-				chunks.push(this.#theme.activeTab(` ${tab.label} `));
-			} else {
-				chunks.push(this.#theme.inactiveTab(` ${tab.label} `));
-			}
+			// Muted tabs never take the active highlight: they are skipped by
+			// navigation and only become "active" transiently via setTabs swaps.
+			const style = tab.muted
+				? (this.#theme.mutedTab ?? this.#theme.inactiveTab)
+				: i === this.#activeIndex
+					? this.#theme.activeTab
+					: this.#theme.inactiveTab;
+			chunks.push(style(` ${tab.label} `));
 			if (i < this.#tabs.length - 1) {
 				chunks.push("  ");
 			}
 		}
 
 		// Navigation hint
-		chunks.push("  ");
-		chunks.push(this.#theme.hint("(tab to cycle)"));
+		if (this.showHint) {
+			chunks.push("  ");
+			chunks.push(this.#theme.hint("(tab to cycle)"));
+		}
 
 		const lines: string[] = [];
 		let currentLine = "";

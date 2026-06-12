@@ -1,4 +1,13 @@
-import { type Api, type AssistantMessage, completeSimple, type FetchImpl, type Model } from "@oh-my-pi/pi-ai";
+import {
+	type Api,
+	type ApiKey,
+	type AssistantMessage,
+	completeSimple,
+	type FetchImpl,
+	type Model,
+	ProviderHttpError,
+	withAuth,
+} from "@oh-my-pi/pi-ai";
 import { type CompleteOptions, callHostLlm, getHostLlmBackend } from "./llm-backends";
 import {
 	getMnemopiRuntimeOptions,
@@ -109,7 +118,7 @@ function llmModelName(): string {
 	return env("MNEMOPI_LLM_MODEL") || "local";
 }
 
-function llmApiKey(): string {
+function llmApiKey(): ApiKey {
 	const active = activeLlmOptions();
 	if (active?.apiKey !== undefined) {
 		return active.apiKey;
@@ -323,25 +332,33 @@ export async function callRemoteLlm(
 		return null;
 	}
 
-	const headers: Record<string, string> = { "Content-Type": "application/json" };
-	const apiKey = llmApiKey();
-	if (apiKey !== "") {
-		headers.Authorization = `Bearer ${apiKey}`;
-	}
-
+	const body = JSON.stringify({
+		model: llmModelName(),
+		messages: [{ role: "user", content: prompt }],
+		max_tokens: llmMaxTokens(),
+		temperature,
+		stop: ["</s>", "<|user|>"],
+	});
 	const fetchImpl = options.fetch ?? fetch;
 	try {
-		const response = await fetchImpl(`${baseUrl}/chat/completions`, {
-			method: "POST",
-			headers,
-			body: JSON.stringify({
-				model: llmModelName(),
-				messages: [{ role: "user", content: prompt }],
-				max_tokens: llmMaxTokens(),
-				temperature,
-				stop: ["</s>", "<|user|>"],
-			}),
-			signal: AbortSignal.timeout(60000),
+		// withAuth re-resolves the key on 401 (force-refresh, then sibling
+		// rotation) when the configured key is a resolver. An empty static key
+		// attempts without an Authorization header (local/proxy setups).
+		const response = await withAuth(llmApiKey(), async key => {
+			const headers: Record<string, string> = { "Content-Type": "application/json" };
+			if (key !== "") {
+				headers.Authorization = `Bearer ${key}`;
+			}
+			const res = await fetchImpl(`${baseUrl}/chat/completions`, {
+				method: "POST",
+				headers,
+				body,
+				signal: AbortSignal.timeout(60000),
+			});
+			if (res.status === 401) {
+				throw new ProviderHttpError("mnemopi remote LLM request unauthorized (401)", 401, { headers: res.headers });
+			}
+			return res;
 		});
 		if (!response.ok) {
 			return null;

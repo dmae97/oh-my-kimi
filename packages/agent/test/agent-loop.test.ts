@@ -10,7 +10,7 @@ import type {
 	ToolCallContext,
 } from "@oh-my-pi/pi-agent-core/types";
 import type { AssistantMessage, AssistantMessageEvent, Message, ToolResultMessage } from "@oh-my-pi/pi-ai";
-import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
+import { createMockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import * as z from "zod/v4";
 import { createAssistantMessage, createUserMessage } from "./helpers";
@@ -71,6 +71,59 @@ describe("agentLoop with AgentMessage", () => {
 		expect(result.telemetry?.stepCount).toBe(1);
 		expect(result.telemetry?.chats.total).toBe(1);
 		expect(result.coverage?.modelsUsed).toEqual([mock.model.id]);
+	});
+
+	it("re-samples when an assistant turn ends with a pause_turn stop", async () => {
+		const context: AgentContext = { systemPrompt: ["You are helpful."], messages: [], tools: [] };
+		const secondCallRoles: string[] = [];
+		const mock = createMockModel({
+			responses: [
+				{ content: ["Scanning the repo first."], stopReason: "stop", stopDetails: { type: "pause_turn" } },
+				context => {
+					secondCallRoles.push(...context.messages.map(m => m.role));
+					return { content: ["All done."] };
+				},
+			],
+		});
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("Hello")], context, config, undefined, mock.stream);
+		for await (const event of stream) {
+			events.push(event);
+		}
+		const messages = await stream.result();
+
+		// The pause re-samples with the commentary committed to history and no
+		// tool results in between; the second response ends the run.
+		expect(mock.calls).toHaveLength(2);
+		expect(messages.map(m => m.role)).toEqual(["user", "assistant", "assistant"]);
+		const [paused, final] = messages.slice(1) as AssistantMessage[];
+		expect(paused.content).toEqual([{ type: "text", text: "Scanning the repo first." }]);
+		expect(final.content).toEqual([{ type: "text", text: "All done." }]);
+		// The follow-up request replayed the paused commentary, with no user or
+		// tool-result message appended in between.
+		expect(secondCallRoles).toEqual(["user", "assistant"]);
+		// One turn_start per sampling round: the continuation ran as a fresh turn.
+		expect(events.filter(e => e.type === "turn_start")).toHaveLength(2);
+	});
+
+	it("caps consecutive pause_turn continuations", async () => {
+		const context: AgentContext = { systemPrompt: ["You are helpful."], messages: [], tools: [] };
+		function* pauseForever(): Generator<MockResponse> {
+			while (true) {
+				yield { content: ["still working"], stopReason: "stop", stopDetails: { type: "pause_turn" } };
+			}
+		}
+		const mock = createMockModel({ responses: pauseForever() });
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
+
+		const messages = await agentLoop([createUserMessage("Hello")], context, config, undefined, mock.stream).result();
+
+		// Initial sample + MAX_PAUSED_TURN_CONTINUATIONS (8), then the loop stops
+		// cleanly instead of spinning on a backend that never stops pausing.
+		expect(mock.calls).toHaveLength(9);
+		expect(messages.at(-1)?.role).toBe("assistant");
 	});
 
 	it("retries when harmony leakage reaches the committed assistant message (openai-codex)", async () => {

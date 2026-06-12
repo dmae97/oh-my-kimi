@@ -476,6 +476,32 @@ export class TranscriptContainer
 		return false;
 	}
 
+	/**
+	 * Whether `component` is inside the live (repaintable) region exactly as
+	 * {@link render} computes it: at/after the first still-mutating block, or
+	 * the transcript tail when every block has finalized. Unlike
+	 * {@link isWithinLiveRegion} (strictly below a still-mutating block, i.e.
+	 * guaranteed-uncommitted), this also counts the trailing block that anchors
+	 * the live region. Self-animating finalized blocks (a detached task's
+	 * shimmering progress rows) poll this to stop animating — and settle on
+	 * static bytes — the moment they sit above the seam, where their rows
+	 * become commit-eligible native-scrollback history.
+	 */
+	isBlockInLiveRegion(component: Component): boolean {
+		const children = this.children;
+		const index = children.indexOf(component);
+		if (index < 0) return false;
+		for (let i = 0; i <= index; i++) {
+			if (!isBlockFinalized(children[i]!)) return true;
+		}
+		// Every block at/before `index` finalized: the live region starts at the
+		// first unfinalized block below it, or at the last child when none exists.
+		for (let i = index + 1; i < children.length; i++) {
+			if (!isBlockFinalized(children[i]!)) return false;
+		}
+		return index === children.length - 1;
+	}
+
 	override render(width: number): readonly string[] {
 		width = Math.max(1, width);
 		this.#nativeScrollbackLiveRegionStart = undefined;

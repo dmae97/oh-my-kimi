@@ -24,6 +24,7 @@ export function getTabBarTheme(): TabBarTheme {
 		label: (text: string) => theme.bold(theme.fg("accent", text)),
 		activeTab: (text: string) => theme.bold(theme.bg("selectedBg", theme.fg("text", text))),
 		inactiveTab: (text: string) => theme.fg("muted", text),
+		mutedTab: (text: string) => theme.fg("dim", text),
 		hint: (text: string) => theme.fg("dim", text),
 	};
 }

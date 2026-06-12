@@ -9,6 +9,7 @@ import { CATALOG_PROVIDERS, type ProviderCatalogEntry } from "@oh-my-pi/pi-catal
 import { $env, $pickenv, extractHttpStatusFromError } from "@oh-my-pi/pi-utils";
 import { getCustomApi } from "./api-registry";
 import { AUTH_RETRY_STEPS, isApiKeyResolver, resolveRetryKey } from "./auth-retry";
+import { ProviderHttpError } from "./errors";
 import type { BedrockOptions } from "./providers/amazon-bedrock";
 import type { AnthropicOptions } from "./providers/anthropic";
 import type { CursorOptions } from "./providers/cursor";
@@ -350,11 +351,10 @@ function isRetryableUpstreamError(error: unknown, status: number | undefined, me
 	return !!message && isUsageLimitError(message);
 }
 
-function createAssistantAuthError(message: AssistantMessage): Error & { status?: number } {
-	const error: Error & { status?: number } = new Error(message.errorMessage ?? "Provider authentication failed");
+function createAssistantAuthError(message: AssistantMessage): Error {
+	const text = message.errorMessage ?? "Provider authentication failed";
 	const status = extractStatusFromAssistantError(message);
-	if (status !== undefined) error.status = status;
-	return error;
+	return status === undefined ? new Error(text) : new ProviderHttpError(text, status);
 }
 
 function emitBufferedEvents(stream: AssistantMessageEventStream, events: AssistantMessageEvent[]): void {
