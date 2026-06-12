@@ -11,7 +11,6 @@ import { formatNumber } from "@oh-my-pi/pi-utils";
 import { settings } from "../config/settings";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { formatContextUsage } from "../modes/components/status-line/context-thresholds";
-import { shimmerEnabled, shimmerText } from "../modes/theme/shimmer";
 import { getMarkdownTheme, type Theme } from "../modes/theme/theme";
 import {
 	formatBadge,
@@ -40,9 +39,8 @@ interface TaskRenderContext {
 	hasResult?: boolean;
 	/**
 	 * The block left the transcript live region (detached spawn the transcript
-	 * has moved past, or a sealed block): progress rows render static gray
-	 * instead of shimmering, so commit-eligible rows never enter native
-	 * scrollback mid-sweep.
+	 * has moved past, or a sealed block): progress rows render static gray, so
+	 * commit-eligible rows do not repaint after entering native scrollback.
 	 */
 	frozen?: boolean;
 }
@@ -694,24 +692,16 @@ function renderAgentProgress(
 	const indent = prefix ? `${prefix} ` : "";
 	let statusLine: string;
 	if (progress.status === "running" || progress.status === "pending") {
-		// Live (or queued) agents shimmer their description so the row reads as
-		// in-flight — the async spawn result keeps the agent on "pending" while
-		// the detached job runs. Once the block leaves the live region it
-		// freezes (`frozen`): its rows are commit-eligible scrollback history,
-		// so paint them static gray instead of leaving a mid-sweep shimmer band
-		// in the terminal's history.
-		const bullet =
-			progress.status === "running" ? theme.styledSymbol("status.done", "text") : theme.fg(iconColor, icon);
+		// Live (or queued) agents use the task icon: detached async spawns can
+		// stay "pending" while real work is running, so a pending/hourglass glyph
+		// reads wrong in the transcript. Keep the row static; the Task tool header
+		// already carries any live animation.
+		const taskIcon = theme.styledSymbol("tool.task", frozen ? "dim" : "accent");
 		const nameColor = frozen ? "dim" : "accent";
 		const name = theme.fg(nameColor, description ? theme.bold(displayId) : displayId);
-		statusLine = `${indent}${bullet} ${name}`;
+		statusLine = `${indent}${taskIcon} ${name}`;
 		if (description) {
-			const desc = frozen
-				? theme.fg("dim", description)
-				: shimmerEnabled()
-					? shimmerText(description, theme)
-					: theme.fg("accent", description);
-			statusLine += `${theme.fg(nameColor, ":")} ${desc}`;
+			statusLine += `${theme.fg(nameColor, ":")} ${theme.fg(nameColor, description)}`;
 		}
 	} else {
 		const glyph =

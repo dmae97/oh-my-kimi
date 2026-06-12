@@ -71,12 +71,11 @@ function finalSnapshot(output: string): {
 	};
 }
 
-// Contract under test: a detached (`async.state === "running"`) task block
-// animates its shimmer at the spinner cadence while it sits inside the
-// transcript live region, then freezes — driver stopped, bytes static, further
-// partial snapshots dropped — the moment it leaves the region. The final
-// (completed) snapshot still applies.
-describe("ToolExecutionComponent detached task shimmer freeze", () => {
+// Contract under test: a detached (`async.state === "running"`) task block keeps
+// progress rows static, avoids a redraw driver, freezes once a later partial
+// snapshot observes that it left the live region, drops further partial
+// snapshots, and still applies the final (completed) snapshot.
+describe("ToolExecutionComponent detached task freeze", () => {
 	beforeAll(async () => {
 		await Settings.init({ inMemory: true, cwd: process.cwd() });
 		await initTheme();
@@ -100,25 +99,15 @@ describe("ToolExecutionComponent detached task shimmer freeze", () => {
 		return { component, requestRender };
 	}
 
-	it("drives redraws while in the live region, then freezes once out and stays byte-stable", () => {
+	it("does not drive redraws while live and keeps progress bytes static", () => {
 		vi.useFakeTimers();
-		let live = true;
-		const { component, requestRender } = makeComponent(() => live);
+		const { component, requestRender } = makeComponent(() => true);
 
 		component.updateResult(asyncSnapshot("scouting the auth flow"), true);
-		requestRender.mockClear();
-		vi.advanceTimersByTime(200);
-		// ~30fps driver: 200ms must produce several redraw requests.
-		expect(requestRender.mock.calls.length).toBeGreaterThanOrEqual(4);
-
-		// Block leaves the live region: the next tick freezes it and clears the interval.
-		live = false;
-		vi.advanceTimersByTime(40);
 		requestRender.mockClear();
 		vi.advanceTimersByTime(500);
 		expect(requestRender).not.toHaveBeenCalled();
 
-		// Frozen rows no longer sample the clock: bytes identical across time.
 		vi.spyOn(Date, "now").mockReturnValue(1_000);
 		const frameA = component.render(100).join("\n");
 		vi.spyOn(Date, "now").mockReturnValue(5_000);

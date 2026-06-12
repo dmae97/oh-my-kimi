@@ -534,10 +534,10 @@ export const jobToolRenderer = {
 								visibleLabelLines[visibleLabelLines.length - 1] = `${last} …`;
 							}
 							const durationText = uiTheme.fg("dim", formatDuration(job.durationMs));
-							// Running rows in a live block shimmer their label like the task
-							// renderer; once the block stops animating (sealed, or a settled
-							// snapshot — spinnerFrame cleared) they render static so
-							// scrollback never keeps a mid-sweep shimmer band.
+							// Running rows in a live block shimmer their label; once the block
+							// stops animating (sealed, or a settled snapshot — spinnerFrame
+							// cleared) they render static so scrollback never keeps a mid-sweep
+							// shimmer band.
 							const live = job.status === "running" && options.spinnerFrame !== undefined;
 							const headRaw = visibleLabelLines[0] ?? "";
 							const headLabel = live
