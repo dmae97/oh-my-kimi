@@ -35,25 +35,30 @@ function getEditAnchors(edit: AppliedEdit): Anchor[] {
 	return getCursorAnchors(edit.cursor);
 }
 
+function trailingPhantomLine(fileLines: readonly string[]): number {
+	// `split("\n")` on a newline-terminated file yields a trailing "" sentinel.
+	// It is addressable for inserts (append-past-end), but it is not real
+	// content. Deleting it only strips the file's final newline, so ignore delete
+	// edits that land there; inclusive ranges ending at EOF then do the intended
+	// thing and delete through the last concrete line.
+	return fileLines.length > 1 && fileLines[fileLines.length - 1] === "" ? fileLines.length : 0;
+}
+
+function dropTrailingPhantomDeletes(edits: AppliedEdit[], fileLines: readonly string[]): AppliedEdit[] {
+	const phantomLine = trailingPhantomLine(fileLines);
+	if (phantomLine === 0) return edits;
+	return edits.filter(edit => edit.kind !== "delete" || edit.anchor.line !== phantomLine);
+}
+
 /**
  * Verify every anchored edit points at an existing line. File-version binding is
  * checked once per section via the header hash before this function runs.
  */
-function validateLineBounds(edits: AppliedEdit[], fileLines: string[]): void {
-	// `split("\n")` on a newline-terminated file yields a trailing "" sentinel.
-	// It is addressable for inserts (append-past-end), but deleting it would
-	// silently strip the file's final newline — an off-by-one that must error.
-	const phantomLine = fileLines.length > 1 && fileLines[fileLines.length - 1] === "" ? fileLines.length : 0;
+function validateLineBounds(edits: readonly AppliedEdit[], fileLines: readonly string[]): void {
 	for (const edit of edits) {
 		for (const anchor of getEditAnchors(edit)) {
 			if (anchor.line < 1 || anchor.line > fileLines.length) {
 				throw new Error(`Line ${anchor.line} does not exist (file has ${fileLines.length} lines)`);
-			}
-			if (edit.kind === "delete" && anchor.line === phantomLine) {
-				throw new Error(
-					`Line ${anchor.line} is the trailing blank sentinel of a newline-terminated file and has no content to delete. ` +
-						`End the range at line ${anchor.line - 1}, or use \`insert tail:\` to append.`,
-				);
 			}
 		}
 	}
@@ -742,7 +747,10 @@ export function applyEdits(text: string, edits: readonly Edit[]): ApplyResult {
 		if (firstChangedLine === undefined || line < firstChangedLine) firstChangedLine = line;
 	};
 
-	const targetEdits = appliedEdits.map((edit, index) => cloneAppliedEdit(edit, index));
+	const targetEdits = dropTrailingPhantomDeletes(
+		appliedEdits.map((edit, index) => cloneAppliedEdit(edit, index)),
+		fileLines,
+	);
 	validateLineBounds(targetEdits, fileLines);
 	const { edits: repaired, warnings: boundaryWarnings } = repairReplacementBoundaries(targetEdits, fileLines);
 	const { edits: landed, warnings: landingWarnings } = repairAfterInsertLandings(repaired, fileLines);
