@@ -114,6 +114,9 @@ export class SelectorController {
 					thinkingLevel: this.ctx.session.thinkingLevel,
 					availableThemes,
 					cwd: getProjectDir(),
+					modelApi: this.ctx.session.model?.api,
+					imageBudget: this.ctx.ui.imageBudget,
+					requestRender: () => this.ctx.ui.requestRender(),
 				},
 				{
 					onChange: (id, value) => this.handleSettingChange(id, value),

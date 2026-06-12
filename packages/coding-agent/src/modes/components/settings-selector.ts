@@ -1,5 +1,5 @@
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { Effort } from "@oh-my-pi/pi-ai";
+import type { Api, Effort } from "@oh-my-pi/pi-ai";
 import {
 	type Component,
 	Container,
@@ -7,6 +7,7 @@ import {
 	fuzzyRank,
 	getKeybindings,
 	getSettingItemFilterText,
+	type ImageBudget,
 	Input,
 	matchesKey,
 	parseSgrMouse,
@@ -36,6 +37,7 @@ import { getTabBarTheme } from "../shared";
 import { bottomBorder, divider, row, topBorder } from "./overlay-box";
 import { handleInputOrEscape, PluginSettingsComponent } from "./plugin-settings";
 import { getSettingDef, getSettingsForTab, type SettingDef } from "./settings-defs";
+import { SnapcompactShapePreview } from "./snapcompact-shape-preview";
 import { getPreset } from "./status-line/presets";
 
 /**
@@ -97,6 +99,7 @@ class SelectSubmenu extends Container {
 		onCancel: () => void,
 		onSelectionChange?: (value: string) => void | Promise<void>,
 		private readonly getPreview?: () => string,
+		footer?: Component,
 	) {
 		super();
 
@@ -158,6 +161,13 @@ class SelectSubmenu extends Container {
 		// Hint
 		this.addChild(new Spacer(1));
 		this.addChild(new Text(theme.fg("dim", "  Enter to select · Esc to go back"), 0, 0));
+
+		// Footer (e.g. the snapcompact shape preview) below the interactive rows,
+		// so the list never shifts while browsing.
+		if (footer) {
+			this.addChild(new Spacer(1));
+			this.addChild(footer);
+		}
 	}
 
 	#updatePreview(): void {
@@ -249,6 +259,12 @@ export interface SettingsRuntimeContext {
 	availableThemes: string[];
 	/** Working directory for plugins tab */
 	cwd: string;
+	/** Active model API; resolves what the snapcompact `auto` shape maps to. */
+	modelApi?: Api;
+	/** Shared TUI image budget (graphics ids + transmit-once) for image previews. */
+	imageBudget?: ImageBudget;
+	/** Schedules a re-render after async preview work completes. */
+	requestRender?: () => void;
 }
 
 /** Status line settings subset for preview */
@@ -758,6 +774,7 @@ export class SettingsSelectorComponent implements Component {
 		// Preview handlers
 		let onPreview: ((value: string) => void | Promise<void>) | undefined;
 		let onPreviewCancel: (() => void) | undefined;
+		let footer: Component | undefined;
 
 		const activeThemeBeforePreview = getCurrentThemeName() ?? currentValue;
 		if (def.path === "theme.dark" || def.path === "theme.light") {
@@ -797,6 +814,14 @@ export class SettingsSelectorComponent implements Component {
 				const separator = settings.get("statusLine.separator");
 				this.callbacks.onStatusLinePreview?.({ separator });
 			};
+		} else if (def.path === "snapcompact.shape") {
+			const shapePreview = new SnapcompactShapePreview(currentValue, {
+				api: this.context.modelApi,
+				imageBudget: this.context.imageBudget,
+				requestRender: this.context.requestRender,
+			});
+			onPreview = value => shapePreview.setValue(value);
+			footer = shapePreview;
 		}
 
 		// Provide status line preview for theme selection
@@ -819,6 +844,7 @@ export class SettingsSelectorComponent implements Component {
 			},
 			onPreview,
 			getPreview,
+			footer,
 		);
 	}
 
