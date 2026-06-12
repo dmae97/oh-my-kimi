@@ -1,8 +1,9 @@
+import { Database } from "bun:sqlite";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import type { MnemopiOptions } from "@oh-my-pi/pi-mnemopi";
-import { getMemoriesDir } from "@oh-my-pi/pi-utils";
+import { getMemoriesDir, logger } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../config/settings";
-import * as git from "../utils/git";
 
 export type MnemopiLlmMode = "none" | "smol" | "remote";
 
@@ -42,15 +43,18 @@ export function loadMnemopiConfig(settings: Settings, agentDir: string): Mnemopi
 	const configuredDbPath = settings.get("mnemopi.dbPath");
 	const cwd = settings.getCwd();
 	const scoping = settings.get("mnemopi.scoping");
-	const scope = resolveBankScope(settings.get("mnemopi.bank"), cwd, scoping);
+	const dbPath = configuredDbPath ?? path.join(getMemoriesDir(agentDir), "mnemopi", "mnemopi.db");
+	const scope = computeMnemopiBankScope(settings.get("mnemopi.bank"), cwd, scoping);
+	const recallBanks =
+		scoping === "global" ? scope.recallBanks : extendRecallWithLegacyBanks(scope.recallBanks, dbPath, cwd);
 	const llmMode = settings.get("mnemopi.llmMode");
 	return {
-		dbPath: configuredDbPath ?? path.join(getMemoriesDir(agentDir), "mnemopi", "mnemopi.db"),
+		dbPath,
 		baseBank: scope.baseBank,
 		bank: scope.bank,
 		globalBank: scope.globalBank,
 		retainBank: scope.retainBank,
-		recallBanks: scope.recallBanks,
+		recallBanks,
 		scoping,
 		autoRecall: settings.get("mnemopi.autoRecall"),
 		autoRetain: settings.get("mnemopi.autoRetain"),
@@ -86,7 +90,11 @@ export function loadMnemopiConfig(settings: Settings, agentDir: string): Mnemopi
 
 const DEFAULT_SHARED_BANK = "default";
 
-interface MnemopiBankScope {
+// Cap legacy-bank scanning at session start so a pathological banks/
+// directory cannot dominate startup latency.
+const LEGACY_BANK_SCAN_LIMIT = 64;
+
+export interface MnemopiBankScope {
 	baseBank: string;
 	bank: string;
 	globalBank: string;
@@ -94,9 +102,19 @@ interface MnemopiBankScope {
 	recallBanks: readonly string[];
 }
 
-// Mnemopi does not have built-in tag-filtered recall, so `per-project-tagged`
-// maps to a project-local write bank plus a shared recall-visible bank.
-function resolveBankScope(configured: string | undefined, cwd: string, scoping: MnemopiScoping): MnemopiBankScope {
+/**
+ * Resolve write/recall banks for a session.
+ *
+ * Mnemopi has no tag-filtered recall, so `per-project-tagged` maps to a
+ * project-local write bank plus a shared recall-visible bank. The project
+ * bank is derived purely from {@link cwd} — see {@link projectBank} for the
+ * stability contract.
+ */
+export function computeMnemopiBankScope(
+	configured: string | undefined,
+	cwd: string,
+	scoping: MnemopiScoping,
+): MnemopiBankScope {
 	const project = projectBank(configured, cwd);
 	const globalBank = sharedBank(configured);
 	switch (scoping) {
@@ -131,8 +149,17 @@ function sharedBank(configured: string | undefined): string {
 	return sanitizeBankName(configured) ?? DEFAULT_SHARED_BANK;
 }
 
+/**
+ * Derive the per-project bank id from `cwd` alone.
+ *
+ * Earlier versions resolved the enclosing git root before hashing, which
+ * made the bank id unstable: removing or adding a `.git` anywhere above the
+ * cwd repointed the same conversation directory to a different bank and
+ * fragmented memories (#2412). The git lookup is gone here; the rescue path
+ * for already-fragmented installs lives in {@link extendRecallWithLegacyBanks}.
+ */
 function projectBank(configured: string | undefined, cwd: string): string {
-	const projectRoot = git.repo.resolveSync(cwd)?.repoRoot ?? path.resolve(cwd);
+	const projectRoot = path.resolve(cwd || ".");
 	const project = projectBankSegment(projectRoot);
 	const base = sanitizeBankName(configured);
 	return limitBankName(base ? `${base}-${project}` : project);
@@ -140,7 +167,64 @@ function projectBank(configured: string | undefined, cwd: string): string {
 
 function projectBankSegment(projectRoot: string): string {
 	const project = sanitizeBankName(path.basename(projectRoot)) ?? "default";
-	return limitBankName(`${project}-${Bun.hash(path.resolve(projectRoot)).toString(36)}`);
+	return limitBankName(`${project}-${Bun.hash(projectRoot).toString(36)}`);
+}
+
+/**
+ * Discover sibling banks under `<dbDir>/banks/` whose `working_memory` rows
+ * already carry the active `cwd` in `metadata_json.$.cwd`, and add them to
+ * the recall set. This rescues memories stranded by a previous, less-stable
+ * bank derivation (#2412) without changing the write target — only recall is
+ * widened.
+ *
+ * Robust by design: a missing banks directory, unreadable bank dir, or
+ * corrupt SQLite file is silently skipped. Scanning is capped at
+ * {@link LEGACY_BANK_SCAN_LIMIT} to bound startup cost.
+ */
+export function extendRecallWithLegacyBanks(
+	resolved: readonly string[],
+	dbPath: string,
+	cwd: string,
+): readonly string[] {
+	const banksDir = path.join(path.dirname(dbPath), "banks");
+	const cwdAbs = path.resolve(cwd || ".");
+	let entries: fs.Dirent[];
+	try {
+		entries = fs.readdirSync(banksDir, { withFileTypes: true });
+	} catch {
+		return resolved;
+	}
+	const have = new Set(resolved);
+	const extras: string[] = [];
+	let scanned = 0;
+	for (const entry of entries) {
+		if (!entry.isDirectory() || have.has(entry.name)) continue;
+		if (scanned >= LEGACY_BANK_SCAN_LIMIT) break;
+		scanned++;
+		const candidate = path.join(banksDir, entry.name, "mnemopi.db");
+		if (bankHasCwd(candidate, cwdAbs)) extras.push(entry.name);
+	}
+	return extras.length === 0 ? resolved : [...resolved, ...extras];
+}
+
+function bankHasCwd(dbPath: string, cwd: string): boolean {
+	let db: Database | undefined;
+	try {
+		db = new Database(dbPath, { readonly: true });
+		const row = db
+			.query("SELECT 1 FROM working_memory WHERE json_extract(metadata_json, '$.cwd') = ? LIMIT 1")
+			.get(cwd);
+		return row !== null;
+	} catch (error) {
+		logger.debug("Mnemopi: legacy bank probe failed", { dbPath, error: String(error) });
+		return false;
+	} finally {
+		try {
+			db?.close();
+		} catch {
+			// nothing to do — read-only handle.
+		}
+	}
 }
 
 function sanitizeBankName(value: string | undefined): string | undefined {
