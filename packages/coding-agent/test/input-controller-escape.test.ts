@@ -1,4 +1,5 @@
-import { describe, expect, it, type Mock, vi } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "bun:test";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import type { InteractiveModeContext, SubmittedUserInput } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
@@ -66,6 +67,7 @@ function createContext(): {
 		onInputCallback: Spy;
 		prompt: Spy;
 		requestRender: Spy;
+		resetDisplay: Spy;
 		startPendingSubmission: StartPendingSubmissionSpy;
 	};
 	inputListeners: Array<(data: string) => { consume?: boolean; data?: string } | undefined>;
@@ -79,6 +81,7 @@ function createContext(): {
 	const clearQueue = vi.fn(() => ({ steering: [], followUp: [] }));
 	const onInputCallback = vi.fn();
 	const requestRender = vi.fn();
+	const resetDisplay = vi.fn();
 	const inputListeners: Array<(data: string) => { consume?: boolean; data?: string } | undefined> = [];
 	const handleBtwCommand = vi.fn(async () => {});
 	const handleBtwEscape = vi.fn(() => true);
@@ -118,6 +121,7 @@ function createContext(): {
 		editor: editor as unknown as InteractiveModeContext["editor"],
 		ui: {
 			requestRender,
+			resetDisplay,
 			addInputListener: vi.fn(listener => {
 				inputListeners.push(listener as (data: string) => { consume?: boolean; data?: string } | undefined);
 				return () => {};
@@ -202,11 +206,19 @@ function createContext(): {
 			onInputCallback,
 			prompt,
 			requestRender,
+			resetDisplay,
 			startPendingSubmission,
 		},
 		inputListeners,
 	};
 }
+beforeEach(async () => {
+	await Settings.init({ inMemory: true });
+});
+
+afterEach(() => {
+	resetSettingsForTest();
+});
 
 describe("InputController escape behavior", () => {
 	it("prefers canceling a pending optimistic submission before aborting the session", async () => {
@@ -371,5 +383,60 @@ describe("InputController escape behavior", () => {
 
 		expect(ctx.unfocusSession).toHaveBeenCalledTimes(1);
 		expect(ctx.focusParentSession).not.toHaveBeenCalled();
+	});
+	it("opens the tree selector and clears the display on default double-Esc", () => {
+		const { ctx, editor, spies } = createContext();
+		const controller = new InputController(ctx);
+
+		controller.setupKeyHandlers();
+		editor.onEscape?.();
+		editor.onEscape?.();
+
+		expect(ctx.showTreeSelector).toHaveBeenCalledTimes(1);
+		expect(ctx.showUserMessageSelector).not.toHaveBeenCalled();
+		expect(spies.resetDisplay).toHaveBeenCalledTimes(1);
+	});
+
+	it("opens the message selector and clears the display when double-Esc is configured for branch", () => {
+		Settings.instance.override("doubleEscapeAction", "branch");
+		const { ctx, editor, spies } = createContext();
+		const controller = new InputController(ctx);
+
+		controller.setupKeyHandlers();
+		editor.onEscape?.();
+		editor.onEscape?.();
+
+		expect(ctx.showUserMessageSelector).toHaveBeenCalledTimes(1);
+		expect(ctx.showTreeSelector).not.toHaveBeenCalled();
+		expect(spies.resetDisplay).toHaveBeenCalledTimes(1);
+	});
+	it("clears typed editor text on Esc without opening selectors or aborting", () => {
+		const { ctx, editor, spies } = createContext();
+		const controller = new InputController(ctx);
+
+		controller.setupKeyHandlers();
+		editor.setText("draft message");
+		editor.onEscape?.();
+
+		expect(editor.getText()).toBe("");
+		expect(spies.requestRender).toHaveBeenCalledTimes(1);
+		expect(ctx.showTreeSelector).not.toHaveBeenCalled();
+		expect(ctx.showUserMessageSelector).not.toHaveBeenCalled();
+		expect(spies.resetDisplay).not.toHaveBeenCalled();
+		expect(spies.abort).not.toHaveBeenCalled();
+	});
+
+	it("does not treat the Esc after a text-clearing Esc as a double-Esc", () => {
+		const { ctx, editor } = createContext();
+		const controller = new InputController(ctx);
+
+		controller.setupKeyHandlers();
+		editor.onEscape?.(); // empty editor: arms double-Esc timer
+		editor.setText("draft");
+		editor.onEscape?.(); // clears text, must also reset the timer
+		editor.onEscape?.(); // empty again: should only re-arm, not trigger
+
+		expect(ctx.showTreeSelector).not.toHaveBeenCalled();
+		expect(ctx.showUserMessageSelector).not.toHaveBeenCalled();
 	});
 });
