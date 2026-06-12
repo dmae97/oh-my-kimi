@@ -212,159 +212,13 @@
 	animation: tr-pulse 1.4s ease-in-out infinite;
 }
 
-/* ---- tool cards ---- */
+/* ---- tool cards ----
+ * Cards themselves are rendered by src/tool-render (tv-* namespace);
+ * only host-level layout lives here. */
 
-.tr-tool {
+.tr-body > .tv-card {
 	align-self: stretch;
-	border: 1px solid var(--border);
-	border-radius: var(--radius);
 	background: var(--bg-raised);
-	overflow: hidden;
-}
-
-.tr-tool--error {
-	border-color: color-mix(in oklch, var(--err) 40%, var(--border));
-}
-
-.tr-tool-head {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	width: 100%;
-	min-width: 0;
-	padding: 4px 8px;
-	border: none;
-	background: none;
-	cursor: pointer;
-	text-align: left;
-	font: inherit;
-	color: var(--fg-muted);
-}
-
-.tr-tool-head:hover {
-	background: color-mix(in oklch, var(--fg) 4%, transparent);
-}
-
-.tr-tool-dot {
-	flex: none;
-	width: 7px;
-	height: 7px;
-	border-radius: 50%;
-}
-
-.tr-tool-dot--ok {
-	background: var(--ok);
-}
-
-.tr-tool-dot--err {
-	background: var(--err);
-}
-
-.tr-tool-dot--pending {
-	background: var(--fg-faint);
-}
-
-.tr-tool-spin {
-	flex: none;
-	color: var(--accent);
-	animation: tr-spin 0.8s linear infinite;
-}
-
-.tr-tool-name {
-	flex: none;
-	font-family: var(--font-mono);
-	font-size: 12px;
-	color: var(--fg);
-}
-
-.tr-tool-intent {
-	flex: 1;
-	min-width: 0;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-	font-size: 12px;
-	color: var(--fg-faint);
-}
-
-.tr-tool-chev {
-	flex: none;
-	color: var(--fg-faint);
-	transition: transform 150ms ease-out;
-}
-
-.tr-tool-chev--open {
-	transform: rotate(90deg);
-}
-
-.tr-tool-body {
-	display: flex;
-	flex-direction: column;
-	gap: 4px;
-	padding: 6px 8px 8px;
-	border-top: 1px solid var(--border);
-}
-
-.tr-tool-label {
-	font-family: var(--font-mono);
-	font-size: 10px;
-	text-transform: uppercase;
-	letter-spacing: 0.08em;
-	color: var(--fg-faint);
-	user-select: none;
-}
-
-.tr-tool-pre {
-	margin: 0;
-	padding: 6px 8px;
-	max-height: 320px;
-	overflow: auto;
-	border-radius: var(--radius-sm);
-	background: var(--bg-inset);
-	font-family: var(--font-mono);
-	font-size: 11.5px;
-	line-height: 1.45;
-	white-space: pre;
-	color: var(--fg-muted);
-}
-
-.tr-tool-result--error {
-	color: var(--err);
-}
-
-.tr-tool-partial {
-	margin: 0 8px 8px;
-	white-space: pre-wrap;
-	word-break: break-word;
-}
-
-.tr-tool-imgs {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 8px;
-}
-
-.tr-tool-img {
-	max-height: 240px;
-	max-width: 100%;
-	border: 1px solid var(--border);
-	border-radius: var(--radius-sm);
-	cursor: zoom-in;
-}
-
-.tr-more {
-	align-self: flex-start;
-	padding: 2px 0;
-	border: none;
-	background: none;
-	cursor: pointer;
-	color: var(--accent);
-	font-family: var(--font-mono);
-	font-size: 11px;
-}
-
-.tr-more:hover {
-	text-decoration: underline;
 }
 
 /* ---- markdown ---- */
@@ -518,17 +372,12 @@
 	font-size: 9px;
 }
 
-.tr-root--compact .tr-tool-pre {
+.tr-root--compact .tv-pre {
 	max-height: 200px;
+	overflow-y: auto;
 }
 
 /* ---- animation ---- */
-
-@keyframes tr-spin {
-	to {
-		transform: rotate(360deg);
-	}
-}
 
 @keyframes tr-pulse {
 	0%,

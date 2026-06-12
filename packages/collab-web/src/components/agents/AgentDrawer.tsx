@@ -17,9 +17,11 @@ export function AgentDrawer(props: {
 	client: GuestClient;
 	/** View-link guests: hide kill/revive/chat (the host rejects them anyway). */
 	readOnly?: boolean;
+	/** Forwarded to tool renderers so nested task cards can drill further. */
+	host?: TranscriptProps["host"];
 	onClose(): void;
 }): ReactNode {
-	const { agent, progress, client, readOnly, onClose } = props;
+	const { agent, progress, client, readOnly, host, onClose } = props;
 	const [entries, setEntries] = useState<readonly SessionEntry[]>([]);
 	const [draft, setDraft] = useState("");
 
@@ -159,6 +161,7 @@ export function AgentDrawer(props: {
 						streamDone={false}
 						activeTools={EMPTY_TOOLS}
 						working={agent.status === "running"}
+						host={host}
 					/>
 				) : (
 					<div className="ag-empty">no transcript available</div>

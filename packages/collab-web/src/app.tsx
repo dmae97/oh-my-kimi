@@ -10,6 +10,7 @@ import { Toasts } from "./components/shell/Toasts";
 import { Transcript } from "./components/transcript/Transcript";
 import { GuestClient } from "./lib/client";
 import { useGuestSnapshot } from "./lib/use-guest";
+import type { ToolRenderHost } from "./tool-render";
 import "./components/shell/shell.css";
 
 const NAME_KEY = "omp.collab.name";
@@ -106,6 +107,18 @@ function Session({ client, onLeave, onRejoin }: SessionProps): ReactNode {
 
 	const subCount = useMemo(() => snap.agents.filter(a => a.kind === "sub").length, [snap.agents]);
 
+	// Task-card agent chips drill into the same drawer the rail uses.
+	const agentIds = useMemo(() => new Set(snap.agents.map(a => a.id)), [snap.agents]);
+	const toolHost = useMemo<ToolRenderHost>(
+		() => ({
+			hasAgent: id => agentIds.has(id),
+			openAgent: id => {
+				if (agentIds.has(id)) setSelectedId(id);
+			},
+		}),
+		[agentIds],
+	);
+
 	// Auto-open the rail the first time a subagent appears.
 	useEffect(() => {
 		if (subCount > 0 && !autoOpenedRef.current) {
@@ -139,6 +152,7 @@ function Session({ client, onLeave, onRejoin }: SessionProps): ReactNode {
 							streamDone={snap.streamDone}
 							activeTools={snap.activeTools}
 							working={snap.working}
+							host={toolHost}
 						/>
 					</div>
 				</section>
@@ -161,6 +175,7 @@ function Session({ client, onLeave, onRejoin }: SessionProps): ReactNode {
 					progress={snap.progress.get(drawerAgent.id)}
 					client={client}
 					readOnly={snap.readOnly}
+					host={toolHost}
 					onClose={() => setSelectedId(null)}
 				/>
 			)}

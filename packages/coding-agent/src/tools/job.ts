@@ -512,14 +512,11 @@ export const jobToolRenderer = {
 						itemType: "job",
 						renderItem: job => {
 							const lines: string[] = [];
-							const icon =
-								job.status === "completed"
-									? uiTheme.styledSymbol("tool.job", "accent")
-									: formatStatusIcon(
-											statusToIcon(job.status),
-											uiTheme,
-											job.status === "running" ? options.spinnerFrame : undefined,
-										);
+							const icon = formatStatusIcon(
+								statusToIcon(job.status),
+								uiTheme,
+								job.status === "running" ? options.spinnerFrame : undefined,
+							);
 							const typeBadge = formatBadge(job.type, statusToColor(job.status), uiTheme);
 							// Task jobs label themselves with their agent id, which is also
 							// the job id — drop the id column instead of stuttering it twice.
