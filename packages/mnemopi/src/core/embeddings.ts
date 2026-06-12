@@ -12,7 +12,12 @@ import {
 import type { EmbeddingModel } from "fastembed";
 import { LRUCache } from "lru-cache/raw";
 import packageJson from "../../package.json" with { type: "json" };
-import { type EmbeddingOutput, getMnemopiRuntimeOptions, resolveEmbeddingProvider } from "./runtime-options";
+import {
+	type EmbeddingOutput,
+	getMnemopiRuntimeOptions,
+	mnemopiDebugEnabled,
+	resolveEmbeddingProvider,
+} from "./runtime-options";
 
 export type { EmbeddingOutput } from "./runtime-options";
 export { cosineSimilarity } from "./vector-math";
@@ -245,7 +250,11 @@ async function getLocalModel(): Promise<LocalEmbeddingModel | null> {
 	localModelPromise = loading;
 	try {
 		return await loading;
-	} catch {
+	} catch (error) {
+		logger[mnemopiDebugEnabled() ? "warn" : "debug"]("mnemopi: local embedding model failed to load", {
+			model: modelName,
+			error: String(error),
+		});
 		if (localModelPromise === loading) localModelPromise = null;
 		return null;
 	}
@@ -426,7 +435,11 @@ export async function embed(texts: readonly string[]): Promise<EmbeddingMatrix |
 			}
 		}
 		return vectors;
-	} catch {
+	} catch (error) {
+		logger[mnemopiDebugEnabled() ? "warn" : "debug"]("mnemopi: local embedding failed", {
+			textCount: texts.length,
+			error: String(error),
+		});
 		return null;
 	}
 }

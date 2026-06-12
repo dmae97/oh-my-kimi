@@ -42,6 +42,8 @@ export interface MnemopiOptions {
 	readonly llmApiKey?: ApiKey;
 	readonly llmModel?: string | Model<Api>;
 	readonly llm?: false | MnemopiLlmRuntimeOptions | Model<Api> | MnemopiLlmCompletion;
+	/** Escalate best-effort failure logs (embedding pipeline) from debug to warn. */
+	readonly debug?: boolean;
 }
 
 export interface RememberInput extends MemoryInput {
@@ -219,10 +221,11 @@ function resolveRuntimeOptions(options: MnemopiOptions): ResolvedMnemopiRuntimeO
 		}
 	}
 
-	if (embeddings === undefined && llm === undefined) {
+	const debug = options.debug ? true : undefined;
+	if (embeddings === undefined && llm === undefined && debug === undefined) {
 		return undefined;
 	}
-	return { embeddings, llm };
+	return { embeddings, llm, debug };
 }
 
 let defaultInstance: Mnemopi | null = null;

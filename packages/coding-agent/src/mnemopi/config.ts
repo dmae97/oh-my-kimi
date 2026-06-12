@@ -10,7 +10,7 @@ export type MnemopiScoping = "global" | "per-project" | "per-project-tagged";
 
 export type MnemopiProviderOptions = Pick<
 	MnemopiOptions,
-	"noEmbeddings" | "embeddingModel" | "embeddingApiUrl" | "embeddingApiKey" | "llm"
+	"noEmbeddings" | "embeddingModel" | "embeddingApiUrl" | "embeddingApiKey" | "llm" | "debug"
 >;
 
 export interface MnemopiBackendConfig {
@@ -64,6 +64,7 @@ export function loadMnemopiConfig(settings: Settings, agentDir: string): Mnemopi
 		debug: settings.get("mnemopi.debug"),
 		providerOptions: {
 			noEmbeddings: settings.get("mnemopi.noEmbeddings"),
+			debug: settings.get("mnemopi.debug"),
 			embeddingModel: settings.get("mnemopi.embeddingModel"),
 			embeddingApiUrl: settings.get("mnemopi.embeddingApiUrl"),
 			embeddingApiKey: settings.get("mnemopi.embeddingApiKey"),
