@@ -181,10 +181,16 @@ export interface RuntimeResolverOptions {
 /**
  * Patch `node:module`'s resolver (idempotently) so bare specifiers that the
  * stock compiled-binary resolver cannot find fall back to the registered
- * runtime caches. Stock resolution is tried first, so this never changes
- * behavior for modules that already resolve (bundled imports, node builtins).
- * Multiple runtime roots may register; they are consulted in registration
- * order.
+ * runtime caches. Stock resolution is tried first and kept for anything
+ * outside the registered roots (bundled imports, node builtins, host or
+ * extension trees). Multiple runtime roots may register; they are consulted
+ * in registration order.
+ *
+ * One stock "success" is distrusted: the compiled-binary resolver ignores
+ * `main`/`exports` for real-FS packages (Bun #1763), so a package shipping
+ * its TS source next to `dist/` (e.g. `@huggingface/hub`'s root `index.ts`)
+ * resolves to the wrong file. When the stock hit lands inside a registered
+ * runtime root, the manifest-aware resolution wins.
  */
 export function installRuntimeModuleResolver({ runtimeNodeModules, stubs = {} }: RuntimeResolverOptions): void {
 	const registry = resolverRegistry();
@@ -197,17 +203,38 @@ export function installRuntimeModuleResolver({ runtimeNodeModules, stubs = {} }:
 	if (target[PATCHED]) return;
 	const original = target._resolveFilename.bind(target);
 	target._resolveFilename = (request: string, parent: unknown, isMain: boolean, options?: unknown): string => {
+		let stockResolved: string | null = null;
+		let stockError: unknown;
 		try {
-			return original(request, parent, isMain, options);
+			stockResolved = original(request, parent, isMain, options);
 		} catch (error) {
-			for (const registration of resolverRegistry()) {
-				const stub = registration.stubs[request];
-				if (stub) return stub;
-				const resolved = resolveRuntimeModule(registration.runtimeNodeModules, request);
-				if (resolved) return resolved;
-			}
-			throw error;
+			stockError = error;
 		}
+		const bare = !request.startsWith(".") && !request.startsWith("node:") && !path.isAbsolute(request);
+		if (bare) {
+			for (const registration of resolverRegistry()) {
+				if (stockResolved) {
+					// Correct a stock hit only inside the top-level package the
+					// request names. A hit in a nested node_modules (e.g. tar's
+					// minizlib resolving its own minipass@3 under
+					// <root>/minizlib/node_modules/) is version-correct — overriding
+					// it with the top-level instance would cross major versions.
+					const { packageName } = splitBareSpecifier(request);
+					const pkgDir = path.join(registration.runtimeNodeModules, ...packageName.split("/"));
+					if (!stockResolved.startsWith(pkgDir + path.sep)) continue;
+					if (path.relative(pkgDir, stockResolved).split(path.sep).includes("node_modules")) continue;
+					const expected = resolveRuntimeModule(registration.runtimeNodeModules, request);
+					if (expected) return expected;
+				} else {
+					const stub = registration.stubs[request];
+					if (stub) return stub;
+					const fallback = resolveRuntimeModule(registration.runtimeNodeModules, request);
+					if (fallback) return fallback;
+				}
+			}
+		}
+		if (stockResolved) return stockResolved;
+		throw stockError;
 	};
 	target[PATCHED] = true;
 }
