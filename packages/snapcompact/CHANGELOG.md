@@ -6,6 +6,13 @@
 
 - Added `SHAPE_VARIANTS`, the catalog of research-eval frame variants the native renderer reproduces faithfully (`8x8r`/`8x8u`/`6x6u`/`5x8` × `sent`/`bw`), with `ShapeVariantName`, `SHAPE_VARIANT_NAMES`, and the `isShapeVariantName` guard
 - `resolveShape(api, variant?)` now accepts an explicit variant name (or `"auto"`); forced variants keep their geometry but are re-priced for the target provider's image billing (token estimate and OpenAI `original` detail hint)
+- Added the six research-eval winning frame variants to `SHAPE_VARIANTS`: `6x12-dim` (Claude fable), `8x13-bw` (Opus), `8on16-bw` (GPT grid runner-up), `doc-8on16-bw` (GPT), `doc-8on16-sent` (GLM), and `doc-8on16-sent-dim` (Gemini/Kimi), backed by new `Shape` fields `stretch` (disable Lanczos stretch: natural glyphs on a larger cell pitch), `columns` (two word-wrapped newspaper columns), `stopwordDim`, and the X.org `6x12`/`8x13` fonts
+- Added `dimStopwords()`, which prints high-frequency function words in dim ink via zero-width markers (skipping spans that are already dim), and `wrap()`, the greedy word-wrap used to typeset doc-layout pages; `geometry`/`render`/`renderMany`/`frames`/`compact` understand doc shapes (wrap once, paginate into `2 * rows`-line pages), and compaction frames persist `columns`/`stopwordDim` for mixed-shape detection
+
+### Changed
+
+- `normalize()` now keeps line structure: whitespace runs containing a line break collapse to `NEWLINE_GLYPH` (U+2588 FULL BLOCK, drawn by the native renderer as a pitch-black cell one character wide) instead of a plain space; leading/trailing breaks are trimmed, and the frame-reading prompt explains the marker
+- `normalize()` now skips characters the fonts cannot render instead of printing `?` blanks: whole ANSI escape sequences are stripped, and bare control characters, zero-width format characters (ZWSP, BOM, directional marks), combining marks, and lone surrogates are dropped without occupying a cell; `?` remains the fallback for unsupported graphic characters only
 
 ## [15.11.4] - 2026-06-12
 

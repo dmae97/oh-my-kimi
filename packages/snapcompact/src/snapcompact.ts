@@ -44,14 +44,22 @@ import snapcompactSummaryPrompt from "./prompts/snapcompact-summary.md" with { t
 /** One eval-validated frame shape: font, cell, ink, repetition, and size. */
 export interface Shape {
 	/** Bundled font in the native renderer. */
-	font: "5x8" | "8x8";
+	font: "5x8" | "8x8" | "6x12" | "8x13";
 	/** Target cell advance in pixels; differing from the font's natural cell
 	 *  renders via Lanczos stretch (anti-aliased RGB frame). */
 	cellWidth: number;
 	/** Target cell pitch in pixels. */
 	cellHeight: number;
+	/** `false` → glyphs drawn at natural size on the cell pitch (8on16);
+	 *  `true`/`undefined` → legacy auto Lanczos stretch when cell ≠ natural. */
+	stretch?: boolean;
 	/** Ink: `sent` cycles six hues at sentence boundaries; `bw` is black. */
 	variant: "sent" | "bw";
+	/** Print stopwords in dim ink (research `dim`/`sent-dim` variants). */
+	stopwordDim?: boolean;
+	/** 1/undefined = row-major grid; 2 = two word-wrapped newspaper columns
+	 *  (research `doc`). */
+	columns?: number;
 	/** Each text line is printed this many times; copies after the first sit
 	 *  on a pale highlight band (redundancy coding). */
 	lineRepeat: number;
@@ -71,8 +79,11 @@ export type ShapeGeometry = Omit<Shape, "frameTokenEstimate" | "imageDetail">;
  * renderer reproduces faithfully, keyed by their research names. Font codes:
  * `8x8u` unscii square cell, `8x8r` unscii with every line printed twice
  * (redundancy coding), `6x6u` unscii Lanczos-squeezed to 6x6 (densest
- * readable cell), `5x8` the X.org legacy font on its 2576px frame. Ink:
- * `sent` cycles six hues at sentence boundaries, `bw` is plain black.
+ * readable cell), `5x8` the X.org legacy font on its 2576px frame, `6x12`
+ * and `8x13` the X.org misc fonts, `8on16` 8x13 glyphs on an 8x16 cell pitch
+ * (no stretch, extra leading), `doc-` prefixed shapes a two-column
+ * word-wrapped newspaper layout. Ink: `sent` cycles six hues at sentence
+ * boundaries, `bw` is plain black, `-dim` suffix prints stopwords in gray.
  */
 export const SHAPE_VARIANTS = {
 	"8x8r-bw": { font: "8x8", cellWidth: 8, cellHeight: 8, variant: "bw", lineRepeat: 2, frameSize: 1568 },
@@ -83,6 +94,56 @@ export const SHAPE_VARIANTS = {
 	"6x6u-sent": { font: "8x8", cellWidth: 6, cellHeight: 6, variant: "sent", lineRepeat: 1, frameSize: 1568 },
 	"5x8-bw": { font: "5x8", cellWidth: 5, cellHeight: 8, variant: "bw", lineRepeat: 1, frameSize: 2576 },
 	"5x8-sent": { font: "5x8", cellWidth: 5, cellHeight: 8, variant: "sent", lineRepeat: 1, frameSize: 2576 },
+	"6x12-dim": {
+		font: "6x12",
+		cellWidth: 6,
+		cellHeight: 12,
+		variant: "bw",
+		stopwordDim: true,
+		lineRepeat: 1,
+		frameSize: 1568,
+	},
+	"8x13-bw": { font: "8x13", cellWidth: 8, cellHeight: 13, variant: "bw", lineRepeat: 1, frameSize: 1568 },
+	"8on16-bw": {
+		font: "8x13",
+		cellWidth: 8,
+		cellHeight: 16,
+		stretch: false,
+		variant: "bw",
+		lineRepeat: 1,
+		frameSize: 1568,
+	},
+	"doc-8on16-bw": {
+		font: "8x13",
+		cellWidth: 8,
+		cellHeight: 16,
+		stretch: false,
+		variant: "bw",
+		columns: 2,
+		lineRepeat: 1,
+		frameSize: 1568,
+	},
+	"doc-8on16-sent": {
+		font: "8x13",
+		cellWidth: 8,
+		cellHeight: 16,
+		stretch: false,
+		variant: "sent",
+		columns: 2,
+		lineRepeat: 1,
+		frameSize: 1568,
+	},
+	"doc-8on16-sent-dim": {
+		font: "8x13",
+		cellWidth: 8,
+		cellHeight: 16,
+		stretch: false,
+		variant: "sent",
+		stopwordDim: true,
+		columns: 2,
+		lineRepeat: 1,
+		frameSize: 1568,
+	},
 } as const satisfies Record<string, ShapeGeometry>;
 
 /** Research name of one renderable frame variant. */
@@ -159,12 +220,15 @@ export function isShape(value: unknown): value is Shape {
 	const variant = shape.variant;
 	const detail = shape.imageDetail;
 	return (
-		(font === "5x8" || font === "8x8") &&
+		(font === "5x8" || font === "8x8" || font === "6x12" || font === "8x13") &&
 		typeof shape.cellWidth === "number" &&
 		shape.cellWidth > 0 &&
 		typeof shape.cellHeight === "number" &&
 		shape.cellHeight > 0 &&
+		(shape.stretch === undefined || typeof shape.stretch === "boolean") &&
 		(variant === "sent" || variant === "bw") &&
+		(shape.stopwordDim === undefined || typeof shape.stopwordDim === "boolean") &&
+		(shape.columns === undefined || shape.columns === 1 || shape.columns === 2) &&
 		typeof shape.lineRepeat === "number" &&
 		shape.lineRepeat > 0 &&
 		typeof shape.frameSize === "number" &&
@@ -223,7 +287,7 @@ export interface Frame {
 	/** Base64-encoded PNG. */
 	data: string;
 	mimeType: string;
-	/** Characters per row in the frame grid. */
+	/** Characters per row in the frame grid (per-column width on doc frames). */
 	cols: number;
 	/** Text rows in the frame grid (unique lines, not repeated copies). */
 	rows: number;
@@ -233,6 +297,10 @@ export interface Frame {
 	font?: Shape["font"];
 	variant?: Shape["variant"];
 	lineRepeat?: number;
+	/** 2 on two-column doc frames; absent on row-major grid frames. */
+	columns?: number;
+	/** True when stopwords were printed in dim ink. */
+	stopwordDim?: boolean;
 	/** Resolution hint forwarded to the provider when re-attaching. */
 	detail?: ImageContent["detail"];
 }
@@ -248,9 +316,11 @@ export interface Archive {
 }
 
 export interface Geometry {
+	/** Characters per row (per-column line width when `columns === 2`). */
 	cols: number;
 	rows: number;
-	/** Characters that fit one frame (cols * rows). */
+	/** Characters that fit one frame (nominal upper bound on doc shapes,
+	 *  where real consumption is wrap-dependent). */
 	capacity: number;
 }
 
@@ -559,18 +629,52 @@ const CHAR_FOLD: Record<string, string> = {
 	"\u2718": "x",
 };
 
+/** Printed in place of newline runs: the native renderer fills this cell
+ *  entirely with pitch-black ink, so line structure survives whitespace
+ *  collapsing at a one-cell cost. */
+export const NEWLINE_GLYPH = "\u2588";
+
+/** Collapsed in one pass: whitespace plus zero-width format characters (ZWSP,
+ *  BOM, directional marks — JS `\s` already counts BOM as whitespace, so they
+ *  must fold here, before the per-character pass). */
+const COLLAPSIBLE = /[\s\p{Cf}]+/gu;
+
+/** Runs carrying one of these collapse to {@link NEWLINE_GLYPH}. */
+const LINE_BREAK = /[\n\r\u2028\u2029]/;
+
+/** Leading/trailing spaces or newline glyphs add no information to a frame. */
+const EDGE_RUNS = /^[ \u2588]+|[ \u2588]+$/g;
+
+/** Glyph-less code points skipped outright instead of printing `?`: controls
+ *  (bare ESC/BEL/NUL — full ANSI sequences are stripped beforehand),
+ *  combining marks the fonts cannot compose, and lone surrogates. */
+const UNRENDERABLE = /[\p{Cc}\p{Mn}\p{Me}\p{Cs}]/u;
+
 /**
- * Prepare text for printing: collapse whitespace runs (incl. newlines) to
- * single spaces — the eval's "paragraph breaks collapsed to spaces" format —
- * then fold everything outside the fonts' ASCII + Latin-1 coverage to ASCII
- * approximations (`?` as the last resort).
+ * Prepare text for printing: strip ANSI escape sequences, collapse horizontal
+ * whitespace runs to single spaces and newline-bearing runs to one
+ * {@link NEWLINE_GLYPH} (drawn as a pitch-black cell), then fold everything
+ * outside the fonts' ASCII + Latin-1 coverage to ASCII approximations.
+ * Unrenderable control/format/combining characters are dropped without
+ * occupying a cell; `?` remains the fallback for unsupported graphic
+ * characters. The zero-width ink toggles {@link DIM_ON}/{@link DIM_OFF} pass
+ * through untouched.
  */
 export function normalize(text: string): string {
-	const collapsed = text.replace(/\s+/g, " ").trim();
+	const stripped = text.includes("\u001b") ? Bun.stripANSI(text) : text;
+	const collapsed = stripped
+		// A run of pure format chars (BOM is both \s and Cf) vanishes; only a
+		// run containing genuine whitespace separates words.
+		.replace(COLLAPSIBLE, run => (LINE_BREAK.test(run) ? NEWLINE_GLYPH : /[^\p{Cf}]/u.test(run) ? " " : ""))
+		.replace(EDGE_RUNS, "");
 	let out = "";
 	for (const ch of collapsed) {
 		const cp = ch.codePointAt(0) as number;
-		if (cp < 0x7f || (cp >= 0xa0 && cp <= 0xff)) {
+		if ((cp >= 0x20 && cp < 0x7f) || (cp >= 0xa0 && cp <= 0xff)) {
+			out += ch;
+			continue;
+		}
+		if (ch === DIM_ON || ch === DIM_OFF || ch === NEWLINE_GLYPH) {
 			out += ch;
 			continue;
 		}
@@ -580,7 +684,7 @@ export function normalize(text: string): string {
 		} else if (cp >= 0x2500 && cp <= 0x257f) {
 			// Box drawing: keep table skeletons legible.
 			out += cp === 0x2502 || cp === 0x2503 ? "|" : cp === 0x2500 || cp === 0x2501 ? "-" : "+";
-		} else {
+		} else if (!UNRENDERABLE.test(ch)) {
 			out += "?";
 		}
 	}
@@ -588,29 +692,157 @@ export function normalize(text: string): string {
 }
 
 // ============================================================================
+// Stopword dimming
+// ============================================================================
+
+/** High-frequency function words a reader can reconstruct from context; the
+ *  dim shapes render them in light gray so content words carry the contrast
+ *  (verbatim from `research/bdf.py` `_STOPWORDS`). */
+const STOPWORDS: ReadonlySet<string> = new Set(
+	(
+		"the a an and or of to in on at as is are was were be been by for with that this it its from had has have not but " +
+		"he she his her they their them which also who whom when where while will would could should there then than " +
+		"into over under about after before between during each such these those some most more other only same so"
+	).split(" "),
+);
+
+/** Maximal alphabetic runs (ASCII + Latin-1 letters, the fonts' coverage). */
+const ALPHA_RUN = /[a-zA-Z\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u00ff]+/g;
+
+/** Splitter that keeps the zero-width ink toggles as their own segments. */
+const DIM_MARKER_SPLIT = /([\u000e\u000f])/;
+
+/**
+ * Wrap each maximal alphabetic run that is a stopword in {@link DIM_ON} /
+ * {@link DIM_OFF} so it prints in dim gray ink. Spans that are already dim
+ * (e.g. archived tool output) pass through untouched — wrapping there would
+ * terminate the enclosing dim span early. Markers are zero-width, so the
+ * visible glyph count is unchanged.
+ */
+export function dimStopwords(text: string): string {
+	const parts = text.split(DIM_MARKER_SPLIT);
+	let dim = false;
+	let out = "";
+	for (const part of parts) {
+		if (part === DIM_ON) {
+			dim = true;
+			out += part;
+		} else if (part === DIM_OFF) {
+			dim = false;
+			out += part;
+		} else if (dim) {
+			out += part;
+		} else {
+			out += part.replace(ALPHA_RUN, word => (STOPWORDS.has(word.toLowerCase()) ? DIM_ON + word + DIM_OFF : word));
+		}
+	}
+	return out;
+}
+
+// ============================================================================
+// Doc layout (two word-wrapped newspaper columns)
+// ============================================================================
+
+/** Char cells between the two doc columns (research exp14 `GUTTER`). */
+const DOC_GUTTER = 3;
+
+/**
+ * Greedy word-wrap, no mid-word breaks (hard split only for width+ words) —
+ * ported verbatim from `research/exp14_bestgpt.py` `wrap()`. Zero-width dim
+ * markers count toward word length here; serialized history places them at
+ * word boundaries, so the drift is at most one cell per affected line.
+ */
+export function wrap(text: string, width: number): string[] {
+	const lines: string[] = [];
+	let cur = "";
+	for (const token of text.split(/\s+/)) {
+		if (token.length === 0) continue;
+		let word = token;
+		while (word.length > width) {
+			// Pathological; never hit on prose.
+			if (cur) {
+				lines.push(cur);
+				cur = "";
+			}
+			lines.push(word.slice(0, width));
+			word = word.slice(width);
+		}
+		if (!cur) {
+			cur = word;
+		} else if (cur.length + 1 + word.length <= width) {
+			cur += ` ${word}`;
+		} else {
+			lines.push(cur);
+			cur = word;
+		}
+	}
+	if (cur) lines.push(cur);
+	return lines;
+}
+
+/**
+ * Paginate already-normalized text for a doc shape: wrap once at the column
+ * width, then slice into pages of `2 * rows` lines, each page `\n`-joined.
+ * Every input character lands on exactly one page (whitespace becomes the
+ * wrap points).
+ */
+function docPages(normalized: string, geo: Geometry): string[] {
+	const lines = wrap(normalized, geo.cols);
+	const perPage = 2 * geo.rows;
+	const pages: string[] = [];
+	for (let offset = 0; offset < lines.length; offset += perPage) {
+		pages.push(lines.slice(offset, offset + perPage).join("\n"));
+	}
+	return pages;
+}
+
+// ============================================================================
 // Rendering
 // ============================================================================
 
 export function geometry(shape: Shape, size: number = shape.frameSize): Geometry {
-	const cols = Math.floor(size / shape.cellWidth);
+	const gridCols = Math.floor(size / shape.cellWidth);
 	const rows = Math.floor(size / shape.cellHeight / shape.lineRepeat);
-	return { cols, rows, capacity: cols * rows };
+	if (shape.columns === 2) {
+		const cols = Math.floor((gridCols - DOC_GUTTER) / 2);
+		return { cols, rows, capacity: 2 * cols * rows };
+	}
+	return { cols: gridCols, rows, capacity: gridCols * rows };
 }
 
-/** Render one snapcompact frame from already-normalized text. */
+const NEWLINES = /\n/g;
+
+/** Render one snapcompact frame from already-normalized text. Doc shapes
+ *  (`columns === 2`) expect one page of `\n`-joined pre-wrapped lines. */
 export function render(text: string, shape: Shape, size: number = shape.frameSize): RenderedFrame {
 	const { cols, rows, capacity } = geometry(shape, size);
-	const visible = text.length - (text.match(DIM_MARKERS)?.length ?? 0);
+	let visible = text.length - (text.match(DIM_MARKERS)?.length ?? 0);
+	// Doc line separators consume no cell; in the grid they print as a blank.
+	if (shape.columns === 2) visible -= text.match(NEWLINES)?.length ?? 0;
 	const chars = Math.min(visible, capacity);
 	const data = renderSnapcompactPng(text, {
 		size,
 		font: shape.font,
 		cellWidth: shape.cellWidth,
 		cellHeight: shape.cellHeight,
+		stretch: shape.stretch,
 		variant: shape.variant,
 		lineRepeat: shape.lineRepeat,
+		columns: shape.columns,
 	});
 	return { data, cols, rows, chars };
+}
+
+/** Stateful per-page text finisher: re-opens a dim span the previous page
+ *  boundary cut through, then applies stopword dimming when the shape asks
+ *  for it (after pagination, so capacity math never sees the markers). */
+function pageFinisher(shape: Shape): (page: string) => string {
+	let dimOpen = false;
+	return page => {
+		const text = dimOpen ? DIM_ON + page : page;
+		dimOpen = text.lastIndexOf(DIM_ON) > text.lastIndexOf(DIM_OFF);
+		return shape.stopwordDim ? dimStopwords(text) : text;
+	};
 }
 
 /** Options for {@link renderMany} and {@link frames}. */
@@ -636,24 +868,40 @@ export function renderMany(text: string, options?: RenderManyOptions): ImageCont
 	const geo = geometry(shape, frameSize);
 	const normalized = normalize(text);
 	const frames: ImageContent[] = [];
-	for (let offset = 0; offset < normalized.length; offset += geo.capacity) {
-		if (options?.maxFrames !== undefined && frames.length >= options.maxFrames) break;
-		const rendered = render(normalized.slice(offset, offset + geo.capacity), shape, frameSize);
+	const push = (rendered: RenderedFrame): void => {
 		frames.push({
 			type: "image",
 			data: rendered.data,
 			mimeType: "image/png",
 			...(shape.imageDetail ? { detail: shape.imageDetail } : {}),
 		});
+	};
+	if (shape.columns === 2) {
+		const finish = pageFinisher(shape);
+		for (const page of docPages(normalized, geo)) {
+			if (options?.maxFrames !== undefined && frames.length >= options.maxFrames) break;
+			push(render(finish(page), shape, frameSize));
+		}
+		return frames;
+	}
+	for (let offset = 0; offset < normalized.length; offset += geo.capacity) {
+		if (options?.maxFrames !== undefined && frames.length >= options.maxFrames) break;
+		let chunk = normalized.slice(offset, offset + geo.capacity);
+		if (shape.stopwordDim) chunk = dimStopwords(chunk);
+		push(render(chunk, shape, frameSize));
 	}
 	return frames;
 }
 
-/** Frames needed to hold `text` at the given shape/size, without rendering. */
+/** Frames needed to hold `text` at the given shape/size, without rendering.
+ *  For doc shapes this wraps the text once and counts pages of `2 * rows`
+ *  lines; for grid shapes it divides by the frame capacity. */
 export function frames(text: string, options?: Pick<RenderManyOptions, "shape" | "model" | "frameSize">): number {
 	const shape = options?.shape ?? resolveShape(options?.model?.api);
 	const geo = geometry(shape, options?.frameSize ?? shape.frameSize);
-	return Math.ceil(normalize(text).length / geo.capacity);
+	const normalized = normalize(text);
+	if (shape.columns === 2) return Math.ceil(wrap(normalized, geo.cols).length / (2 * geo.rows));
+	return Math.ceil(normalized.length / geo.capacity);
 }
 
 // ============================================================================
@@ -740,13 +988,17 @@ export async function compact<TMessage = Message>(
 	let truncatedChars = previousArchive?.truncatedChars ?? 0;
 
 	const newFrames: Frame[] = [];
-	let dimOpen = false;
-	for (let offset = 0; offset < archiveText.length; offset += geo.capacity) {
-		let chunk = archiveText.slice(offset, offset + geo.capacity);
-		// Re-open a dim span that the previous frame boundary cut through.
-		if (dimOpen) chunk = DIM_ON + chunk;
-		dimOpen = chunk.lastIndexOf(DIM_ON) > chunk.lastIndexOf(DIM_OFF);
-		const rendered = render(chunk, shape, frameSize);
+	const finish = pageFinisher(shape);
+	const pages: string[] = [];
+	if (shape.columns === 2) {
+		pages.push(...docPages(archiveText, geo));
+	} else {
+		for (let offset = 0; offset < archiveText.length; offset += geo.capacity) {
+			pages.push(archiveText.slice(offset, offset + geo.capacity));
+		}
+	}
+	for (const page of pages) {
+		const rendered = render(finish(page), shape, frameSize);
 		newFrames.push({
 			data: rendered.data,
 			mimeType: "image/png",
@@ -756,6 +1008,8 @@ export async function compact<TMessage = Message>(
 			font: shape.font,
 			variant: shape.variant,
 			lineRepeat: shape.lineRepeat,
+			...(shape.columns === 2 ? { columns: 2 } : {}),
+			...(shape.stopwordDim ? { stopwordDim: true } : {}),
 			...(shape.imageDetail ? { detail: shape.imageDetail } : {}),
 		});
 		// Keep the event loop responsive between native render passes.
@@ -780,7 +1034,9 @@ export async function compact<TMessage = Message>(
 			frame.cols !== geo.cols ||
 			frame.rows !== geo.rows ||
 			(frame.variant ?? "sent") !== shape.variant ||
-			(frame.lineRepeat ?? 1) !== shape.lineRepeat,
+			(frame.lineRepeat ?? 1) !== shape.lineRepeat ||
+			(frame.columns ?? 1) !== (shape.columns ?? 1) ||
+			(frame.stopwordDim ?? false) !== (shape.stopwordDim ?? false),
 	);
 
 	let summary: string;
@@ -795,6 +1051,8 @@ export async function compact<TMessage = Message>(
 			rows: geo.rows,
 			sentenceInk: shape.variant === "sent",
 			lineRepeated: shape.lineRepeat > 1,
+			docColumns: shape.columns === 2,
+			stopwordDimmed: shape.stopwordDim === true,
 			dimmedToolResults: options?.dimToolResults !== false,
 			mixedShapes,
 			totalChars,

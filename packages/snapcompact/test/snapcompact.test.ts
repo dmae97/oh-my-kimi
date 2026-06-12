@@ -128,11 +128,30 @@ function decodePng(png: Uint8Array): DecodedPng {
 }
 
 describe("normalize", () => {
-	it("collapses whitespace runs and folds non-Latin-1 to ASCII", () => {
-		expect(snapcompact.normalize("a\n\n\tb   c\r\nd")).toBe("a b c d");
+	it("collapses horizontal whitespace and folds non-Latin-1 to ASCII", () => {
+		expect(snapcompact.normalize("a \t b   c")).toBe("a b c");
 		expect(snapcompact.normalize("x → y ✓ “quoted” — em…")).toBe(`x -> y v "quoted" - em...`);
 		expect(snapcompact.normalize("café größe")).toBe("café größe"); // Latin-1 has glyphs
 		expect(snapcompact.normalize("box │─┌ emoji 🎞")).toBe("box |-+ emoji ?");
+	});
+
+	it("folds newline runs to one full-block glyph, trimming the edges", () => {
+		expect(snapcompact.normalize("a\n\n\tb   c\r\nd")).toBe(
+			`a${snapcompact.NEWLINE_GLYPH}b c${snapcompact.NEWLINE_GLYPH}d`,
+		);
+		expect(snapcompact.normalize("\n\nbody\n")).toBe("body");
+		expect(snapcompact.normalize("  \n\t  ")).toBe("");
+	});
+
+	it("skips characters it cannot render instead of printing ?", () => {
+		// Whole ANSI sequences vanish, not just the ESC byte.
+		expect(snapcompact.normalize("\u001b[31mred\u001b[0m plain")).toBe("red plain");
+		// Bare controls, zero-width format chars, and combining marks drop out.
+		expect(snapcompact.normalize("a\u0000b\u0007c\u200bd\ufeffe\u0301f")).toBe("abcdef");
+		// Zero-width dim ink toggles survive untouched.
+		expect(snapcompact.normalize(`x ${snapcompact.DIM_ON}y${snapcompact.DIM_OFF} z`)).toBe(
+			`x ${snapcompact.DIM_ON}y${snapcompact.DIM_OFF} z`,
+		);
 	});
 });
 
@@ -252,6 +271,19 @@ describe("render", () => {
 		const { capacity } = snapcompact.geometry(snapcompact.SHAPES.legacy, TEST_FRAME_SIZE);
 		const frame = snapcompact.render("x".repeat(capacity + 500), snapcompact.SHAPES.legacy, TEST_FRAME_SIZE);
 		expect(frame.chars).toBe(capacity);
+	});
+
+	it("fills a full pitch-black cell for the newline glyph", () => {
+		// Legacy 5x8 cells: the glyph at row 0, col 1 spans x 5..10, y 0..8.
+		const frame = snapcompact.render(`a${snapcompact.NEWLINE_GLYPH}b`, snapcompact.SHAPES.legacy, TEST_FRAME_SIZE);
+		expect(frame.chars).toBe(3); // the block occupies exactly one cell
+		const decoded = decodePng(Buffer.from(frame.data, "base64"));
+		for (let y = 0; y < 8; y++) {
+			for (let x = 5; x < 10; x++) {
+				// Pitch-black ink (palette 7), even in the sentence-hue variant.
+				expect(decoded.pixels[y * decoded.width + x]).toBe(7);
+			}
+		}
 	});
 });
 
@@ -537,5 +569,112 @@ describe("archive helpers", () => {
 			truncatedChars: 0,
 		};
 		expect(snapcompact.getPreservedArchive({ [snapcompact.PRESERVE_KEY]: valid })).toEqual(valid);
+	});
+});
+
+describe("dimStopwords", () => {
+	const { DIM_ON, DIM_OFF, dimStopwords } = snapcompact;
+
+	it("wraps maximal alphabetic stopword runs in zero-width dim toggles", () => {
+		expect(dimStopwords("the cat sat on a mat")).toBe(
+			`${DIM_ON}the${DIM_OFF} cat sat ${DIM_ON}on${DIM_OFF} ${DIM_ON}a${DIM_OFF} mat`,
+		);
+		// Case-insensitive; punctuation bounds the run.
+		expect(dimStopwords("The end.")).toBe(`${DIM_ON}The${DIM_OFF} end.`);
+		// A stopword embedded in a longer word stays untouched.
+		expect(dimStopwords("theory")).toBe("theory");
+	});
+
+	it("passes through spans that are already dim", () => {
+		const input = `alpha ${DIM_ON}the tool output${DIM_OFF} and omega`;
+		expect(dimStopwords(input)).toBe(`alpha ${DIM_ON}the tool output${DIM_OFF} ${DIM_ON}and${DIM_OFF} omega`);
+		// An unterminated dim span (page straddle) suppresses wrapping to its end.
+		expect(dimStopwords(`${DIM_ON}so it goes`)).toBe(`${DIM_ON}so it goes`);
+	});
+
+	it("changes only zero-width markers, never visible glyphs", () => {
+		const input = "this is the content of a frame";
+		const dimmed = dimStopwords(input);
+		expect(dimmed).not.toBe(input);
+		expect(dimmed.replace(/[\u000e\u000f]/g, "")).toBe(input);
+	});
+});
+
+describe("wrap", () => {
+	it("greedily packs words at the column width", () => {
+		expect(snapcompact.wrap("aa bb cc dd", 5)).toEqual(["aa bb", "cc dd"]);
+		expect(snapcompact.wrap("one two three", 8)).toEqual(["one two", "three"]);
+		// Exactly-width words fit without splitting.
+		expect(snapcompact.wrap("abcd", 4)).toEqual(["abcd"]);
+		expect(snapcompact.wrap("", 10)).toEqual([]);
+	});
+
+	it("hard-splits only words wider than the line", () => {
+		expect(snapcompact.wrap("abcdefghij", 4)).toEqual(["abcd", "efgh", "ij"]);
+		// The current line flushes before the oversized word's slices, and the
+		// remainder seeds the next line.
+		expect(snapcompact.wrap("xx abcdefghij yy", 4)).toEqual(["xx", "abcd", "efgh", "ij", "yy"]);
+	});
+});
+
+describe("doc layout", () => {
+	const docShape = snapcompact.resolveShape(undefined, "doc-8on16-bw");
+
+	it("computes two-column geometry with the 3-cell gutter", () => {
+		// 1568px: 196 grid cells → (196-3)/2 = 96 per column; 1568/16 = 98 rows.
+		expect(snapcompact.geometry(docShape)).toEqual({ cols: 96, rows: 98, capacity: 2 * 96 * 98 });
+		// 160px: 20 grid cells → 8 per column, 10 rows per column.
+		expect(snapcompact.geometry(docShape, 160)).toEqual({ cols: 8, rows: 10, capacity: 160 });
+	});
+
+	it("frames() counts pages of wrapped lines, two columns per page", () => {
+		// 8-char column x 10 rows → 20 lines per page; "ab ab ab" fills a line.
+		const words = (n: number) => Array.from({ length: n }, () => "ab").join(" ");
+		expect(snapcompact.frames(words(60), { shape: docShape, frameSize: 160 })).toBe(1);
+		expect(snapcompact.frames(words(61), { shape: docShape, frameSize: 160 })).toBe(2);
+		expect(snapcompact.frames("", { shape: docShape, frameSize: 160 })).toBe(0);
+	});
+});
+
+describe("new shape variants", () => {
+	const newNames = [
+		"6x12-dim",
+		"8x13-bw",
+		"8on16-bw",
+		"doc-8on16-bw",
+		"doc-8on16-sent",
+		"doc-8on16-sent-dim",
+	] as const;
+
+	it("registers the six research winners as priceable variants", () => {
+		for (const name of newNames) {
+			expect(snapcompact.isShapeVariantName(name)).toBe(true);
+			expect(snapcompact.SHAPE_VARIANT_NAMES).toContain(name);
+			const shape = snapcompact.resolveShape(undefined, name);
+			expect(snapcompact.isShape(shape)).toBe(true);
+			expect(shape.frameSize).toBe(1568);
+		}
+	});
+
+	it("carries the eval-winning capability flags", () => {
+		expect(snapcompact.SHAPE_VARIANTS["6x12-dim"]).toMatchObject({ font: "6x12", stopwordDim: true });
+		expect(snapcompact.SHAPE_VARIANTS["8x13-bw"]).toMatchObject({ font: "8x13", cellHeight: 13 });
+		expect(snapcompact.SHAPE_VARIANTS["8on16-bw"]).toMatchObject({ font: "8x13", cellHeight: 16, stretch: false });
+		expect(snapcompact.SHAPE_VARIANTS["doc-8on16-bw"].columns).toBe(2);
+		expect(snapcompact.SHAPE_VARIANTS["doc-8on16-sent"].variant).toBe("sent");
+		expect(snapcompact.SHAPE_VARIANTS["doc-8on16-sent-dim"]).toMatchObject({
+			columns: 2,
+			stopwordDim: true,
+			variant: "sent",
+		});
+	});
+
+	it("isShape validates the new optional fields", () => {
+		const base = snapcompact.resolveShape(undefined, "doc-8on16-sent-dim");
+		expect(snapcompact.isShape({ ...base, columns: 3 })).toBe(false);
+		expect(snapcompact.isShape({ ...base, columns: 1 })).toBe(true);
+		expect(snapcompact.isShape({ ...base, stretch: "no" })).toBe(false);
+		expect(snapcompact.isShape({ ...base, stopwordDim: 1 })).toBe(false);
+		expect(snapcompact.isShape({ ...base, font: "9x9" })).toBe(false);
 	});
 });
