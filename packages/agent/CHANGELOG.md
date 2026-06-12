@@ -3,13 +3,12 @@
 ## [Unreleased]
 ### Added
 
-- Added `hasSteeringMessages` callback to steering configuration so the agent can detect queued steering messages during immediate tool execution without dequeuing them
-- Added `hasSteeringMessages` to `AgentLoopConfig` and `Agent` plumbing so implementations can quickly signal queued steering while keeping queue ownership
+- Added `hasSteeringMessages` to `AgentLoopConfig` (wired by `Agent` to its steering queue): a peek used by the immediate-interrupt poll during tool execution, so the loop can detect queued steering without dequeuing and the queue keeps owning its messages until the injection boundary
 - The agent loop now re-samples after a non-terminal stop (`stopReason: "stop"` with `stopDetails: { type: "pause_turn" }`, emitted by the Codex providers for `end_turn: false` commentary-only responses): the assistant message is committed to history and the model is called again without ending the turn. Consecutive pause continuations without an intervening tool call are capped at 8 to bound a backend that never stops pausing.
 
 ### Changed
 
-- Changed steering handling so queued steering messages are now dequeued only at injection boundaries, with immediate mid-batch interrupt polling using `hasSteeringMessages`
+- Changed steering handling so queued steering messages are now dequeued only at injection boundaries, with immediate mid-batch interrupt polling using `hasSteeringMessages`. Consumers constructing `AgentLoopConfig` directly with only `getSteeringMessages` no longer get mid-batch interrupts — steering degrades to boundary-only delivery until they also supply `hasSteeringMessages`
 - Compaction, handoff, short-summary, and branch-summarization helpers now accept an `ApiKey` (static string or resolver) instead of a pre-resolved string, so a 401 mid-compaction force-refreshes and rotates the credential through the central auth-retry policy before any model-level fallback. The remote OpenAI compaction request is wrapped in `withAuth` and its HTTP failures now carry `.status`, so the retry classifier actually fires on remote-compaction 401s.
 - `transformProviderContext` now receives the dispatch model as a second argument (`(context, model) => Context`), so per-request transforms can gate on model capabilities (vision input, provider, API family). Existing single-argument implementations keep working unchanged.
 - Remote-compaction and summarization failures now throw pi-ai's typed `ProviderHttpError` instead of mutating plain `Error`s with a `.status` property; the generic `requestRemoteCompaction` error now carries `.status` (and response headers) too.

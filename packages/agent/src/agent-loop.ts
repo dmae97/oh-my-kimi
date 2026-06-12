@@ -1262,6 +1262,7 @@ async function executeToolCalls(
 	const tools = currentContext.tools;
 	const {
 		hasSteeringMessages,
+		getSteeringMessages,
 		interruptMode = "immediate",
 		getToolContext,
 		transformToolCallArguments,
@@ -1303,15 +1304,24 @@ async function executeToolCalls(
 		// `signal` (external/user abort) is checked separately from the internal
 		// steeringAbortController: once the run is externally aborted it is
 		// unwinding and the interrupt would be redundant.
-		if (!shouldInterruptImmediately || !hasSteeringMessages || interruptState.triggered || signal?.aborted) {
+		if (!shouldInterruptImmediately || interruptState.triggered || signal?.aborted) {
 			return;
 		}
-		// Peek only — the queue keeps owning the message until runLoopBody
-		// dequeues it at the next injection boundary. Dequeuing here would make
-		// the message invisible to queue consumers (clearAllQueues /
-		// hasQueuedMessages) while in-flight tools settle, and an external abort
-		// in that window would inject it into history right before the run dies.
-		if (await hasSteeringMessages()) {
+		// Prefer the non-consuming peek (`hasSteeringMessages`) when available.
+		// Fall back to calling `getSteeringMessages` directly when only it is
+		// provided (e.g. in tests or minimal integrations without a separate
+		// peek function). In that case the message is consumed here rather than
+		// at the outer injection boundary, but the interrupt still fires.
+		let hasMessages: boolean;
+		if (hasSteeringMessages) {
+			hasMessages = await hasSteeringMessages();
+		} else if (getSteeringMessages) {
+			const msgs = await getSteeringMessages();
+			hasMessages = (msgs?.length ?? 0) > 0;
+		} else {
+			return;
+		}
+		if (hasMessages) {
 			if (interruptState.triggered || signal?.aborted) return;
 			interruptState.triggered = true;
 			steeringAbortController.abort();
