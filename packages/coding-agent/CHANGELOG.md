@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+
+### Fixed
+
+- Fixed local memory consolidation on Responses-style models that reject user-only requests by sending a dedicated stage-two system prompt.
 ### Added
 
 - `ModelRegistry.resolver` now accepts a model directly — `resolver(model, sessionId)` — deriving `provider`, `baseUrl`, and `modelId` from it; all model-scoped call sites migrated from the verbose `resolver(model.provider, { sessionId, baseUrl, modelId })` form.
