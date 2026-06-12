@@ -24,7 +24,7 @@ import {
 import { ToolError } from "./tool-errors";
 
 const jobSchema = z.object({
-	poll: z.array(z.string()).optional().describe("job ids to wait for"),
+	poll: z.array(z.string()).optional().describe("job ids to wait for; omit to wait on all running jobs"),
 	cancel: z.array(z.string()).optional().describe("job ids to cancel"),
 	list: z.boolean().optional().describe("snapshot all jobs"),
 });

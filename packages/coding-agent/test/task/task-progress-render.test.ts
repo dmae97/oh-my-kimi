@@ -270,6 +270,92 @@ describe("task progress rendering", () => {
 		expect(positions.every(p => p >= 0)).toBe(true);
 		expect(positions).toEqual([...positions].sort((a, b) => a - b));
 	});
+
+	it("folds collapsed progress lists to the live edge with a status summary", async () => {
+		const theme = (await getThemeByName("dark"))!;
+		const details: TaskToolDetails = {
+			projectAgentsDir: null,
+			results: [],
+			totalDurationMs: 0,
+			progress: [
+				runningProgress({ index: 0, id: "DoneOne", status: "completed", durationMs: 1000 }),
+				runningProgress({ index: 1, id: "DoneTwo", status: "completed", durationMs: 2000 }),
+				runningProgress({ index: 2, id: "DoneThree", status: "completed", durationMs: 3000 }),
+				runningProgress({ index: 3, id: "LiveOne", status: "running" }),
+				runningProgress({ index: 4, id: "LiveTwo", status: "running" }),
+				runningProgress({ index: 5, id: "LiveThree", status: "pending" }),
+				runningProgress({ index: 6, id: "LiveFour", status: "pending" }),
+			],
+		};
+		const result = { content: [{ type: "text", text: "" }], details };
+
+		const collapsed = Bun.stripANSI(
+			taskToolRenderer
+				.renderResult(result, { expanded: false, isPartial: true, spinnerFrame: 0 }, theme)
+				.render(120)
+				.join("\n"),
+		);
+		// Finished rows fold into the summary; the live edge stays visible.
+		for (const id of ["LiveOne", "LiveTwo", "LiveThree", "LiveFour"]) {
+			expect(collapsed).toContain(id);
+		}
+		for (const id of ["DoneOne", "DoneTwo", "DoneThree"]) {
+			expect(collapsed).not.toContain(id);
+		}
+		expect(collapsed).toContain("… 3 more agents (3 done)");
+		// The summary line sits above the visible rows (live edge at the bottom).
+		expect(collapsed.indexOf("more agents")).toBeLessThan(collapsed.indexOf("LiveOne"));
+
+		const expanded = Bun.stripANSI(
+			taskToolRenderer
+				.renderResult(result, { expanded: true, isPartial: true, spinnerFrame: 0 }, theme)
+				.render(120)
+				.join("\n"),
+		);
+		for (const id of ["DoneOne", "DoneTwo", "DoneThree", "LiveOne", "LiveFour"]) {
+			expect(expanded).toContain(id);
+		}
+		expect(expanded).not.toContain("more agents");
+	});
+
+	it("keeps problem rows visible when the collapsed result list folds", async () => {
+		const theme = (await getThemeByName("dark"))!;
+		const details: TaskToolDetails = {
+			projectAgentsDir: null,
+			results: [
+				finishedResult({ index: 0, id: "FastOne", durationMs: 1000 }),
+				finishedResult({ index: 1, id: "FastTwo", durationMs: 2000 }),
+				finishedResult({ index: 2, id: "FastThree", durationMs: 3000 }),
+				finishedResult({ index: 3, id: "SlowOne", durationMs: 8000 }),
+				finishedResult({ index: 4, id: "SlowTwo", durationMs: 9000 }),
+				finishedResult({ index: 5, id: "SlowFailed", exitCode: 1, error: "boom", durationMs: 10000 }),
+			],
+			totalDurationMs: 10000,
+		};
+
+		const collapsed = Bun.stripANSI(
+			taskToolRenderer
+				.renderResult(
+					{ content: [{ type: "text", text: "" }], details },
+					{ expanded: false, isPartial: false },
+					theme,
+				)
+				.render(120)
+				.join("\n"),
+		);
+		// The failed agent claims a slot even though it finished last; the
+		// slowest successes fold away instead.
+		expect(collapsed).toContain("SlowFailed");
+		for (const id of ["FastOne", "FastTwo", "FastThree"]) {
+			expect(collapsed).toContain(id);
+		}
+		expect(collapsed).not.toContain("SlowOne");
+		expect(collapsed).not.toContain("SlowTwo");
+		expect(collapsed).toContain("… 2 more agents");
+		// The run summary footer still counts the full batch.
+		expect(collapsed).toContain("5 succeeded");
+		expect(collapsed).toContain("1 failed");
+	});
 });
 
 describe("task result detail-less state", () => {
