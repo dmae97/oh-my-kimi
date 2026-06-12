@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.11.4] - 2026-06-12
+
 ### Breaking Changes
 
 - Renamed every export to drop the `snapcompact`/`Snapcompact`/`SNAPCOMPACT_` qualifier — the package is meant to be consumed via `import * as snapcompact from "@oh-my-pi/snapcompact"`. Functions: `snapcompactCompact` → `compact`, `renderSnapcompactFrame` → `render`, `snapcompactGeometry` → `geometry`, `normalizeForSnapcompact` → `normalize`, `serializeSnapcompactConversation` → `serializeConversation`, `snapcompactImages` → `images`, `getPreservedSnapcompactArchive` → `getPreservedArchive`, `isSnapcompactShape` → `isShape`, `resolveSnapcompactShape` → `resolveShape`, `createSnapcompactFileOps` → `createFileOps`, `computeSnapcompactFileLists` → `computeFileLists`, `upsertSnapcompactFileOperations` → `upsertFileOperations`. Types: `SnapcompactShape` → `Shape`, `SnapcompactFrame` → `Frame`, `SnapcompactArchive` → `Archive`, `SnapcompactGeometry` → `Geometry`, `SnapcompactOptions` → `Options`, `SnapcompactSerializeOptions` → `SerializeOptions`, `SnapcompactFileOperations` → `FileOperations`, `SnapcompactCompactionDetails`/`Preparation`/`Result` → `CompactionDetails`/`CompactionPreparation`/`CompactionResult`, `SnapcompactConvertToLlm` → `ConvertToLlm`. Constants: `SNAPCOMPACT_X` → `X` (`SHAPES`, `FRAME_SIZE`, `MAX_FRAMES`, `FRAME_TOKEN_ESTIMATE`, `PRESERVE_KEY`, `TOOL_RESULT_MAX_CHARS`, `TOOL_ARG_MAX_CHARS`, `TOOL_CALL_MAX_CHARS`, `TRUNCATE_HEAD_RATIO`, `DIM_ON`, `DIM_OFF`).

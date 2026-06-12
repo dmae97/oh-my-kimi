@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.11.4] - 2026-06-12
 ### Added
 
 - Added `hasSteeringMessages` to `AgentLoopConfig` (wired by `Agent` to its steering queue): a peek used by the immediate-interrupt poll during tool execution, so the loop can detect queued steering without dequeuing and the queue keeps owning its messages until the injection boundary

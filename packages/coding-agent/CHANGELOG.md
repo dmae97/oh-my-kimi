@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.11.4] - 2026-06-12
+
 ### Added
 
 - Added mouse-driven interaction to `/settings`, including tab and setting row hover highlighting, wheel scrolling, and left-click activation for entries and submenus

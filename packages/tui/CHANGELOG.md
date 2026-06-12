@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.11.4] - 2026-06-12
 ### Added
 
 - Added `partialHoldTimeout` to `StdinBufferOptions` to control the maximum extra delay held for unambiguous incomplete escape sequences before they are flushed
