@@ -1,7 +1,7 @@
 import type { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { toFirepassWireModelId, toFireworksWireModelId } from "@oh-my-pi/pi-catalog/fireworks-model-id";
 import { isDeepseekModelIdOrName } from "@oh-my-pi/pi-catalog/identity";
-import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
+import { getSupportedEfforts, resolveWireModelId } from "@oh-my-pi/pi-catalog/model-thinking";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import type { ResolvedOpenAICompat } from "@oh-my-pi/pi-catalog/types";
 import { parseGitHubCopilotApiKey } from "@oh-my-pi/pi-catalog/wire/github-copilot";
@@ -113,12 +113,16 @@ function resolveOpenAICompletionsModelId(
 	model: Model<"openai-completions">,
 	options: OpenAICompletionsOptions | undefined,
 ): string {
-	// Catalog variants (e.g. Copilot long-context `-1m` entries) pin the wire id.
-	if (model.requestModelId) return model.requestModelId;
-	if (model.provider === "firepass") return toFirepassWireModelId(model.id);
-	if (model.provider === "fireworks") return toFireworksWireModelId(model.id);
-	if (model.provider === "openrouter") return applyOpenRouterRoutingVariant(model.id, options?.openrouterVariant);
-	return model.id;
+	// Effort-tier variants route per request effort (off → bare id, efforts →
+	// the thinking backing id); catalog variants (Copilot long-context `-1m`
+	// entries) pin via `requestModelId`; everything else serializes `model.id`.
+	const effort =
+		options?.reasoning && !options.disableReasoning && model.reasoning ? (options.reasoning as Effort) : undefined;
+	const wireId = resolveWireModelId(model, effort);
+	if (model.provider === "firepass") return toFirepassWireModelId(wireId);
+	if (model.provider === "fireworks") return toFireworksWireModelId(wireId);
+	if (model.provider === "openrouter") return applyOpenRouterRoutingVariant(wireId, options?.openrouterVariant);
+	return wireId;
 }
 
 /**
