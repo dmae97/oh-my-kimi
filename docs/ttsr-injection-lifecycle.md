@@ -43,6 +43,7 @@ const { rulebookRules, alwaysApplyRules } = bucketRules(
 
 Registration is skipped when:
 
+- TTSR is disabled (`ttsr.enabled === false`)
 - both `rule.condition` (regex) and `rule.astCondition` (ast-grep patterns) are absent, or every regex condition fails to compile and there are no AST conditions
 - a rule with the same `rule.name` was already registered in this manager
 - the rule scope excludes all monitored streams
@@ -55,9 +56,9 @@ A rule may carry `astCondition`: a list of [ast-grep](https://ast-grep.github.io
 
 AST conditions only evaluate on **edit/write tool-argument streams** — they need a language, which is inferred from the file extension on the tool's path argument, and they match against the tool's reconstructed source snapshot (`matcherDigest`), not the raw wire delta. Matching is performed in memory by the native `astMatch` engine (no temp files) with Smart strictness. Streams without a usable file path (prose, thinking, path-less tool calls) skip AST conditions entirely. A rule may mix `condition` and `astCondition`; the regex paths keep working on every scope while AST paths apply only to those tool streams.
 
-### Setting caveat
+### Setting gating
 
-`TtsrSettings.enabled` is loaded into the manager but is not currently checked in runtime gating. If TTSR rules exist, matching still runs.
+`TtsrSettings.enabled` gates the manager: when `ttsr.enabled === false`, `addRule()` refuses registration and `checkDelta()`/`checkSnapshot()`/`checkAstSnapshot()`/`hasRules()`/`hasAstRules()` all return empty/false, so no matching runs.
 
 ## 2. Streaming monitor lifecycle
 
@@ -74,11 +75,10 @@ On `turn_start`, the stream buffer is reset:
 When assistant updates arrive and rules exist:
 
 - monitor `text_delta`, `thinking_delta`, and `toolcall_delta`
-- append delta into a source/tool scoped manager buffer
-- call `checkDelta(delta, matchContext)` (synchronous regex matching)
+- for tools exposing `matcherDigest` (edit/write), replace the scoped buffer with the reconstructed source snapshot and call `checkSnapshot(snapshot, matchContext)`; otherwise append the delta into a source/tool scoped manager buffer and call `checkDelta(delta, matchContext)` (synchronous regex matching either way)
 - for edit/write tool streams, when `hasAstRules()` is true, `await checkAstSnapshot(snapshot, matchContext)` (asynchronous AST matching)
 
-`checkDelta()` iterates registered rules and returns all matching rules that pass scope, global path-glob, regex condition, and repeat policy checks. `checkAstSnapshot()` applies the same scope/path/repeat gates, then runs each candidate rule's `astCondition` patterns against the snapshot via the native `astMatch` engine. It is throttled per stream key: an identical consecutive snapshot (common when only non-source arguments change between deltas) is skipped without re-running the matcher. Both paths feed their matches through the same trigger-decision handler.
+`checkDelta()`/`checkSnapshot()` iterate registered rules and return all matching rules that pass scope, global path-glob, regex condition, and repeat policy checks. `checkAstSnapshot()` applies the same scope/path/repeat gates, then runs each candidate rule's `astCondition` patterns against the snapshot via the native `astMatch` engine. It is throttled per stream key: an identical consecutive snapshot (common when only non-source arguments change between deltas) is skipped without re-running the matcher. Both paths feed their matches through the same trigger-decision handler.
 
 ## 3. Trigger decision and immediate abort path
 
@@ -222,7 +222,7 @@ Net effect: injected-rule suppression is persisted/restored across session reloa
 
 ### Between abort and continue
 
-During the timer window, state can change (user interruption, mode actions, additional events). The retry call is best-effort: `agent.continue().catch(() => {})` swallows follow-up errors.
+During the timer window, state can change (user interruption, mode actions, additional events). The retry call is best-effort: `agent.continue()` is awaited in a try/catch; on failure the error is swallowed and the TTSR resume gate is resolved.
 
 ## 9. Edge cases summary
 

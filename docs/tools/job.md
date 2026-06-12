@@ -16,8 +16,8 @@
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `poll` | `string[]` | No | Job ids to watch. Cannot be combined with `list`. If omitted (and `cancel` is also omitted), the tool watches all running jobs. If provided, missing ids are silently filtered out before waiting. |
-| `cancel` | `string[]` | No | Job ids to cancel before any polling. Missing ids are reported as `not_found`; non-running ids as `already_completed`. |
+| `poll` | `string[]` | No | Job ids to watch. Cannot be combined with `list`. If omitted (and `cancel` is also omitted), the tool watches all running jobs owned by the calling agent. If provided, missing ids — and ids owned by other agents — are silently filtered out before waiting. |
+| `cancel` | `string[]` | No | Job ids to cancel before any polling. Missing ids (and other agents' jobs) are reported as `not_found`; non-running ids as `already_completed`. |
 | `list` | `boolean` | No | Return an immediate snapshot of every job spawned by the calling agent (running + completed within retention) without waiting. Read-only — cannot be combined with `poll` or `cancel`. |
 
 ## Outputs
@@ -54,8 +54,8 @@ Read-only snapshot path:
    - only `cancel` present → return immediately, no wait.
    - explicit `poll`, or no args at all → proceed to watch jobs.
 5. Watch set resolution:
-   - explicit `poll` → map ids through `manager.getJob(...)` and drop missing ones.
-   - no `poll` and no `cancel` → `manager.getRunningJobs()`.
+   - explicit `poll` → resolve ids via `#visibleJobs(...)`, dropping missing ids and jobs owned by other agents.
+   - no `poll` and no `cancel` → `manager.getRunningJobs(ownerFilter)` (jobs owned by the calling agent).
 6. Empty watch set returns immediately:
    - if cancellations happened, return snapshots for the cancelled ids that still exist.
    - else return either `No matching jobs found for IDs: ...` or `No running background jobs to wait for.`
@@ -128,6 +128,7 @@ Lifecycle and exact state names:
 - Tool-call abort during polling stops waiting and returns a final snapshot through `#buildResult(...)`; it does not cancel watched jobs.
 - Failures inside the underlying async work are stored on the job (`status: "failed"`, `errorText`) and reported in normal tool output, not rethrown by `job`.
 - Calling `list: true` against an empty manager returns a normal empty-list result rather than throwing; missing ids passed to `poll` are silently filtered.
+- Combining `list` with `poll` or `cancel` throws a `ToolError`: `` `list` cannot be combined with `poll` or `cancel`. ``
 
 ## Notes
 - `job` waits for the first watched running job to settle, not for all watched jobs. If others remain `running`, they are reported under `## Still Running`; the caller must invoke `job` again to continue waiting.

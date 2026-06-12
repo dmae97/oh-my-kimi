@@ -24,7 +24,7 @@ import {
 import { ToolError } from "./tool-errors";
 
 const jobSchema = z.object({
-	poll: z.array(z.string()).optional().describe("job ids to wait for"),
+	poll: z.array(z.string()).optional().describe("job ids to wait for; omit to wait on all running jobs"),
 	cancel: z.array(z.string()).optional().describe("job ids to cancel"),
 	list: z.boolean().optional().describe("snapshot all jobs"),
 });
@@ -512,14 +512,11 @@ export const jobToolRenderer = {
 						itemType: "job",
 						renderItem: job => {
 							const lines: string[] = [];
-							const icon =
-								job.status === "completed"
-									? uiTheme.styledSymbol("tool.job", "accent")
-									: formatStatusIcon(
-											statusToIcon(job.status),
-											uiTheme,
-											job.status === "running" ? options.spinnerFrame : undefined,
-										);
+							const icon = formatStatusIcon(
+								statusToIcon(job.status),
+								uiTheme,
+								job.status === "running" ? options.spinnerFrame : undefined,
+							);
 							const typeBadge = formatBadge(job.type, statusToColor(job.status), uiTheme);
 							// Task jobs label themselves with their agent id, which is also
 							// the job id — drop the id column instead of stuttering it twice.

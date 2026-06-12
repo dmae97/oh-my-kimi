@@ -1639,6 +1639,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 				if (replacementPayload !== undefined) {
 					nextParams = replacementPayload as typeof nextParams;
 				}
+				nextParams = toWellFormedDeep(nextParams) as typeof nextParams;
 				rawRequestDump = {
 					provider: model.provider,
 					api: output.api,
@@ -3075,13 +3076,12 @@ export function convertAnthropicMessages(
 						type: "tool_use",
 						id: block.id,
 						name: isOAuthToken ? applyClaudeToolPrefix(block.name) : block.name,
-						// Anthropic-origin arguments are guaranteed well-formed (they came
-						// from the API's own JSON); cross-API replays can carry lone
-						// surrogates that Anthropic's strict UTF-8 validation rejects.
-						input:
-							msg.api === "anthropic-messages"
-								? (block.arguments ?? {})
-								: toWellFormedDeep(block.arguments ?? {}),
+						// Always sanitize: the model itself can emit lone-surrogate escapes
+						// in tool-argument JSON (streamed out fine, rejected with a 400 on
+						// replay by Anthropic's strict UTF-8 validation). toWellFormedDeep
+						// is identity-preserving, so well-formed arguments stay
+						// byte-identical and prompt-cache prefixes are unaffected.
+						input: toWellFormedDeep(block.arguments ?? {}),
 					});
 				}
 			}

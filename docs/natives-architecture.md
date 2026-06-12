@@ -107,6 +107,7 @@ Loader failures are explicit:
 - `ast`
 - `block`
 - `clipboard`
+- `crash_handler`
 - `fd`
 - `fs_cache`
 - `glob`
@@ -123,6 +124,7 @@ Loader failures are explicit:
 - `pty`
 - `shell`
 - `sixel`
+- `snapcompact`
 - `summary`
 - `task`
 - `text`

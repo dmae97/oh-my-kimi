@@ -93,7 +93,7 @@ Changing sync ↔ async for an existing export is a breaking public API change b
 `#[napi(object)]` Rust structs become TS interfaces, for example:
 
 - `GrepResult`, `SearchResult`, `GlobResult`, `FuzzyFindResult`
-- `ShellRunResult`, `ShellExecuteResult`, `PtyRunResult`, `MinimizerResult`
+- `ShellRunResult`, `PtyRunResult`, `MinimizerResult`
 - `AstFindResult`, `AstReplaceResult`, `BlockRange`, `SummaryResult`
 - `System`/media/isolation payloads such as `ClipboardImage`, `WorkProfile`, `ParsedKittyResult`, `IsoResolveResult`
 

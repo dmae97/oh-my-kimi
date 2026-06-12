@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [15.12.0] - 2026-06-12
+
+### Changed
+
+- Condensed all parser/applier/patcher error and warning messages: shorter wording, same diagnostic anchors (op names, line numbers, suggested fallback forms)
+
 ## [15.11.4] - 2026-06-12
 
 ### Added

@@ -19,6 +19,8 @@
   - `packages/coding-agent/src/debug/profiler.ts` — CPU/heap profiling helpers
   - `packages/coding-agent/src/debug/report-bundle.ts` — `.tar.gz` report bundling, log source, cache cleanup
   - `packages/coding-agent/src/debug/system-info.ts` — system snapshot collection and env redaction
+  - `packages/coding-agent/src/debug/terminal-info.ts` — terminal state collection/formatting
+  - `packages/coding-agent/src/debug/protocol-probe.ts` — terminal protocol probe panel and sample image
 
 ## Inputs
 
@@ -78,7 +80,7 @@
 - `custom_request`: `command`
 
 ### Interactive selector values
-`packages/coding-agent/src/debug/index.ts` also exposes a fixed UI-only selector with values `open-artifacts`, `performance`, `work`, `dump`, `memory`, `logs`, `system`, `raw-sse`, `transcript`, `clear-cache`. These are not model-callable through `debugSchema`; they are local TUI menu routes.
+`packages/coding-agent/src/debug/index.ts` also exposes a fixed UI-only selector with values `open-artifacts`, `performance`, `work`, `dump`, `memory`, `logs`, `system`, `terminal`, `protocols`, `raw-sse`, `transcript`, `clear-cache`. These are not model-callable through `debugSchema`; they are local TUI menu routes.
 
 ## Outputs
 The agent tool returns a standard `toolResult()` payload from `packages/coding-agent/src/tools/debug.ts`:
@@ -141,6 +143,8 @@ Side-channel artifacts outside the model tool result:
    - `logs`: build a `DebugLogSource` and mount `DebugLogViewerComponent`
    - `raw-sse`: resolve a `RawSseDebugBuffer` from the session and mount `RawSseViewerComponent`
    - `system`: call `collectSystemInfo()` and render `formatSystemInfo()` into the chat pane
+   - `terminal`: `collectTerminalState()` + `formatTerminalState()` rendered into the chat pane
+   - `protocols`: fires a test desktop notification (unless suppressed), then mounts `ProtocolProbeComponent` with a sample image
    - `open-artifacts`: open the current session artifact directory if it exists
    - `transcript`: delegates to `ctx.handleDebugTranscriptCommand()`
    - `clear-cache`: show confirmation, then remove artifact directories older than 30 days with `clearArtifactCache()`
@@ -186,6 +190,8 @@ Side-channel artifacts outside the model tool result:
   - `dump` — report bundle without profiler artifacts.
   - `work` — standalone work-profile flamegraph export/open.
   - `system` — formatted OS/arch/CPU/memory/version/cwd/shell/terminal dump.
+  - `terminal` — formatted terminal subprotocol/geometry/scrollback state dump.
+  - `protocols` — terminal protocol test: desktop-notification side effect plus a probe panel sampling special protocols.
   - `open-artifacts` / `transcript` / `clear-cache` — artifact directory open, transcript export, artifact-cache pruning.
 
 ## Side Effects
@@ -226,7 +232,7 @@ Side-channel artifacts outside the model tool result:
 - Single active session: enforced by `#ensureLaunchSlot()` in `packages/coding-agent/src/dap/session.ts`.
 - Idle session cleanup: `IDLE_TIMEOUT_MS = 10 * 60 * 1000`, checked every `CLEANUP_INTERVAL_MS = 30 * 1000`.
 - Adapter liveness heartbeat: `HEARTBEAT_INTERVAL_MS = 5 * 1000`.
-- Output capture cap: `MAX_OUTPUT_BYTES = 128 * 1024`; older text is trimmed in ~1 KiB slices and `outputTruncated` is recorded.
+- Output capture cap: `MAX_OUTPUT_BYTES = 128 * 1024`; whole chunks are dropped from the front (then the front chunk is byte-sliced so exactly the cap remains) and `outputTruncated` is recorded.
 - Initial stop capture timeout after launch/attach: `STOP_CAPTURE_TIMEOUT_MS = 5_000`.
 - Socket-mode adapter readiness timeout: `10_000` ms in `waitForCondition()` and TCP connect timeout logic in `packages/coding-agent/src/dap/client.ts`.
 - Raw SSE buffer caps in `packages/coding-agent/src/debug/raw-sse-buffer.ts`:

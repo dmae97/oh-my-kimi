@@ -8,7 +8,7 @@
 - Hindsight collaborators:
   - `packages/coding-agent/src/hindsight/state.ts` — per-session queue, flush, auto-retain.
   - `packages/coding-agent/src/hindsight/backend.ts` — session bootstrap, prompt injection, subagent aliasing.
-  - `packages/coding-agent/src/hindsight/bank.ts` — bank id derivation, tag scoping, mission setup.
+  - `packages/coding-agent/src/hindsight/bank.ts` — bank id derivation, tag scoping, first-use bank/mission setup.
   - `packages/coding-agent/src/hindsight/client.ts` — HTTP `retain` / `retainBatch` calls.
   - `packages/coding-agent/src/hindsight/content.ts` — retention transcript shaping, memory-tag stripping.
   - `packages/coding-agent/src/hindsight/mental-models.ts` — bank-scoped mental-model seeding and cache rendering.
@@ -52,15 +52,15 @@ Mnemopi:
    - it fetches `session.getHindsightSessionState()` and throws if the backend was not started;
    - each input item is handed to `HindsightSessionState.enqueueRetain(...)`;
    - `HindsightRetainQueue.enqueue(...)` appends the item and either flushes immediately when the queue reaches `RETAIN_FLUSH_BATCH_SIZE`, or starts a debounce timer for `RETAIN_FLUSH_INTERVAL_MS`;
-   - on flush, `HindsightRetainQueue.#doFlush(...)` verifies ownership, best-effort initializes the bank mission, maps items to `MemoryItemInput` with `context ?? config.retainContext`, `metadata.session_id`, and bank-scope tags, then sends one async `retainBatch(...)` request.
+   - on flush, `HindsightRetainQueue.#doFlush(...)` verifies ownership, best-effort ensures the bank exists via `ensureBankExists(...)`, maps items to `MemoryItemInput` with `context ?? config.retainContext`, `metadata.session_id`, and bank-scope tags, then sends one async `retainBatch(...)` request.
 
 ## Modes / Variants
 - Hindsight tool path: queued batch write only.
 - Mnemopi tool path: direct local `remember(...)` into the scoped retain bank.
 - Hindsight bank scoping from `computeBankScope(...)`:
   - `global` — one shared bank, no project tags.
-  - `per-project` — bank id gets `-<cwd basename>` appended.
-  - `per-project-tagged` — shared bank plus `project:<cwd basename>` tags on retained memories.
+  - `per-project` — bank id gets `-<project label>` appended, where the label is the git primary checkout root basename (cwd basename outside a repo).
+  - `per-project-tagged` — shared bank plus `project:<project label>` tags on retained memories.
 - Mnemopi bank scoping from `resolveBankScope(...)`:
   - `global` — retain and recall use the shared bank.
   - `per-project` — retain and recall use the project bank.
@@ -76,7 +76,7 @@ Mnemopi:
   - Hindsight: none for retained memories. No local memory file is written.
   - Mnemopi: writes to local SQLite under `mnemopi.dbPath`, defaulting beneath the agent memories directory (`mnemopi/mnemopi.db`) with one database file per scoped bank when needed.
 - Network
-  - Hindsight: `POST /v1/default/banks/{bank_id}/memories` via `retainBatch(...)`, plus optional `PUT /v1/default/banks/{bank_id}` via `ensureBankMission(...)` before first write per bank/process.
+  - Hindsight: `POST /v1/default/banks/{bank_id}/memories` via `retainBatch(...)`, plus optional `PUT /v1/default/banks/{bank_id}` via `ensureBankExists(...)` before the first write per bank per session state (the set is created with the primary session state and shared with subagent aliases).
   - Mnemopi: none unless configured embedding or LLM providers make calls during extraction.
 - Session state
   - Hindsight: appends to the in-memory `HindsightRetainQueue`, includes `metadata.session_id`, and shares parent state for subagents.
@@ -109,7 +109,7 @@ Mnemopi:
 - Throws `Hindsight backend is not initialised for this session.` when `memory.backend == "hindsight"` but no state exists.
 - Hindsight queue enqueue on disposed state throws `Hindsight retain queue is closed.`
 - Hindsight flush-time API failures are caught in `HindsightRetainQueue.#doFlush(...)`, logged, and converted into a warning notice instead of a tool error.
-- Hindsight mission creation failures are swallowed in `ensureBankMission(...)`; writes continue.
+- Hindsight bank/mission creation failures are swallowed in `ensureBankExists(...)`; writes continue.
 - Mnemopi `remember(...)` failures are caught in `MnemopiSessionState.rememberInScope(...)`, logged, and not rethrown to the tool caller.
 
 ## Notes

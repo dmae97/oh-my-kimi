@@ -84,7 +84,7 @@ Kernel semantics are implemented in `executePython` / `PythonKernel` and apply t
 `PythonKernelMode`:
 
 - `session` (default)
-  - kernels are cached by `(session id, cwd)`
+  - kernels are cached by `(session id, cwd, interpreter)`
   - multiple owners can share a retained kernel for the same key
   - execution is serialized by the tool's exclusive concurrency and backend execution path
   - dead kernels are replaced before execution
@@ -103,7 +103,7 @@ In session mode:
 
 - if the retained subprocess is not alive before execution, it is replaced
 - if execution fails because the subprocess died, the kernel is replaced and the code is retried once
-- explicit `reset` is rejected while another reset for the same session key is already in progress
+- concurrent resets for the same session key coalesce: a reset already in flight is awaited instead of starting another, and runs queued behind it proceed on the freshly-restarted kernel
 
 ## 4) Environment/session variable injection
 
@@ -114,6 +114,7 @@ Kernel startup and per-execution environment patching can receive:
 - `PI_TOOL_BRIDGE_URL`
 - `PI_TOOL_BRIDGE_TOKEN`
 - `PI_TOOL_BRIDGE_SESSION`
+- `PI_EVAL_LOCAL_ROOTS`
 
 The runner initializes process state so code executes in the requested cwd, managed env entries are reflected in `os.environ`, and cwd is available on `sys.path`.
 

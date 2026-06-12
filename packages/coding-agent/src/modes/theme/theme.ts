@@ -107,6 +107,7 @@ export type SymbolKey =
 	| "icon.cost"
 	| "icon.time"
 	| "icon.pi"
+	| "icon.ghost"
 	| "icon.agents"
 	| "icon.job"
 	| "icon.cache"
@@ -305,6 +306,7 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"icon.cost": "💲",
 	"icon.time": "⏱",
 	"icon.pi": "π",
+	"icon.ghost": "👻",
 	"icon.agents": "👥",
 	"icon.job": "⚙",
 	"icon.cache": "💾",
@@ -569,6 +571,8 @@ const NERD_SYMBOLS: SymbolMap = {
 	"icon.time": "\uf017",
 	// pick:  | alt: π ∏ ∑
 	"icon.pi": "\ue22c",
+	// pick: 󰊠 (nf-md-ghost) | alt: 👻
+	"icon.ghost": "\u{f02a0}",
 	// pick:  | alt: 
 	"icon.agents": "\uf0c0",
 	// pick:  (nf-fa-gear) | alt:  ⚙
@@ -802,6 +806,7 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"icon.cost": "$",
 	"icon.time": "t:",
 	"icon.pi": "pi",
+	"icon.ghost": "@",
 	"icon.agents": "AG",
 	"icon.job": "bg",
 	"icon.cache": "cache",
@@ -1769,6 +1774,7 @@ export class Theme {
 			cost: this.#symbols["icon.cost"],
 			time: this.#symbols["icon.time"],
 			pi: this.#symbols["icon.pi"],
+			ghost: this.#symbols["icon.ghost"],
 			agents: this.#symbols["icon.agents"],
 			job: this.#symbols["icon.job"],
 			cache: this.#symbols["icon.cache"],

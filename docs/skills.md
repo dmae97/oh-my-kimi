@@ -56,6 +56,7 @@ Supported frontmatter fields on the skill type:
 - `globs?: string[]`
 - `alwaysApply?: boolean`
 - `hide?: boolean`
+- `disableModelInvocation?: boolean` (Agent Skills equivalent of `hide`; normalized from kebab-case `disable-model-invocation`)
 - additional keys are preserved as unknown metadata
 
 Current runtime behavior:
@@ -63,12 +64,13 @@ Current runtime behavior:
 - `name` defaults to the skill directory name
 - `description` is required for:
   - native `.omp` provider skill discovery (`requireDescription: true`)
+  - `omp-plugins` extension-package skills and the `github` provider (`.github/skills/`), which also pass `requireDescription: true`
   - `skills.customDirectories` scans via `scanSkillsFromDir` in `src/discovery/helpers.ts` (non-recursive)
-- non-native providers can load skills without description
+- the claude/codex/agents/opencode/claude-plugins providers can load skills without description
 
 ## Discovery pipeline
 
-`discoverSkills()` in `src/extensibility/skills.ts` does two passes:
+`loadSkills()` in `src/extensibility/skills.ts` does two passes:
 
 1. **Capability providers** via `loadCapability("skills")`
 2. **Custom directories** via `scanSkillsFromDir(..., { requireDescription: true })` (one-level directory enumeration)
@@ -82,7 +84,7 @@ Provider ordering is priority-first (higher wins), then registration order for t
 Current registered skill providers:
 
 1. `native` (priority 100) — `.omp` user/project skills via `src/discovery/builtin.ts`
-2. `omp-plugins` (priority 90) — `skills/` bundled next to extension packages loaded through `extensions:` or `--extension`/`-e`
+2. `omp-plugins` (priority 90) — `skills/` bundled next to extension packages loaded through `extensions:`, `--extension`/`-e`, or installed plugins under `~/.omp/plugins/node_modules`
 3. `claude` (priority 80)
 4. priority 70 group (in registration order):
    - `claude-plugins`
@@ -95,12 +97,12 @@ Dedup key is skill name. First item with a given name wins.
 
 ### Source toggles and filtering
 
-`discoverSkills()` applies these controls:
+`loadSkills()` applies these controls:
 
 - source toggles: `enableCodexUser`, `enableClaudeUser`, `enableClaudeProject`, `enablePiUser`, `enablePiProject`
 - `disabledExtensions` entries with `skill:<name>`
-- `ignoredSkills` (exclude)
-- `includeSkills` (include allowlist; empty means include all)
+- `ignoredSkills` (exclude; glob patterns)
+- `includeSkills` (include allowlist; glob patterns; empty means include all)
 
 Filter order is:
 
@@ -116,7 +118,7 @@ Filter order is:
 - `extensibility/skills.ts` additionally:
   - de-duplicates identical files by `realpath` (symlink-safe)
   - emits collision warnings when a later skill name conflicts
-  - keeps the convenience `discoverSkillsFromDir({ dir, source })` API as a thin adapter over `scanSkillsFromDir`
+  - keeps the convenience `loadSkillsFromDir({ dir, source })` API as a thin adapter over `scanSkillsFromDir`
 - Custom-directory skills are merged after provider skills and follow the same collision behavior
 
 ## Runtime usage behavior
@@ -148,7 +150,7 @@ If `skills.enableSkillCommands` is true, interactive mode registers one slash co
   - **Ctrl+Enter** (`app.message.followUp`) → invokes the skill on the `followUp` queue while streaming, or as a normal idle prompt when the agent is not streaming
 - appends metadata (`Skill: <path>`, optional `User: <args>`)
 
-There is no flag, mode-selector, or frontmatter knob to override this — the keybinding _is_ the choice, identical to how free text is routed during streaming (`input-controller.ts:243-249` for Enter, `input-controller.ts:462-500` for Ctrl+Enter; both dispatch through `#invokeSkillCommand`).
+There is no flag, mode-selector, or frontmatter knob to override this — the keybinding _is_ the choice, identical to how free text is routed during streaming (`input-controller.ts:436-442` for Enter, `input-controller.ts:770-775` for Ctrl+Enter; both dispatch through `#invokeSkillCommand`).
 
 ## `skill://` URL behavior
 
@@ -195,7 +197,7 @@ No fallback search is performed for missing assets.
 - **Skills**: named, optional capability packs selected by task context or explicitly requested
 - **AGENTS.md/context files**: persistent instruction files loaded as context-file capability and merged by level/depth rules
 
-`src/discovery/agents-md.ts` specifically walks ancestor directories from `cwd` to discover standalone `AGENTS.md` files (up to depth 20), excluding hidden-directory segments.
+`src/discovery/agents-md.ts` specifically walks ancestor directories from `cwd` to discover standalone `AGENTS.md` files (stopping at the repo root, or home when no repo root is known), skipping files whose containing directory name starts with a dot.
 
 ### Skills vs slash commands
 

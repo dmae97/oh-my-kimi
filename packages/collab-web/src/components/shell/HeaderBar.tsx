@@ -12,7 +12,7 @@ export interface HeaderBarProps {
 }
 
 export function HeaderBar({ snapshot, subCount, railOpen, onToggleRail, onLeave }: HeaderBarProps): ReactNode {
-	const { header, state, phase } = snapshot;
+	const { header, state, phase, readOnly } = snapshot;
 	const title = header?.title ?? state?.sessionName ?? "session";
 	const usage = state?.contextUsage;
 	let pct: number | null = null;
@@ -35,6 +35,11 @@ export function HeaderBar({ snapshot, subCount, railOpen, onToggleRail, onLeave 
 				)}
 			</div>
 			<div className="sh-header-right">
+				{readOnly && (
+					<span className="sh-chip" title="you joined with a read-only link — watching only">
+						read-only
+					</span>
+				)}
 				{state?.model && <span className="sh-chip">{state.model.name}</span>}
 				{state?.thinkingLevel && <span className="sh-chip">{state.thinkingLevel}</span>}
 				{pct != null && (
@@ -54,7 +59,7 @@ export function HeaderBar({ snapshot, subCount, railOpen, onToggleRail, onLeave 
 							<span
 								key={`${p.name}:${i}`}
 								className={p.role === "host" ? "sh-avatar sh-avatar-host" : "sh-avatar"}
-								title={`${p.name} · ${p.role}`}
+								title={`${p.name} · ${p.role}${p.readOnly ? " · view-only" : ""}`}
 							>
 								{(p.name[0] ?? "?").toUpperCase()}
 							</span>

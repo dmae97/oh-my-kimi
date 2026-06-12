@@ -45,6 +45,8 @@ export type RGB = readonly [number, number, number];
 
 export interface SegmentContext {
 	session: AgentSession;
+	/** Focused subagent id while the view is proxied at its session, undefined otherwise. */
+	focusedAgentId?: string | undefined;
 	width: number;
 	options: StatusLineSegmentOptions;
 	planMode: {

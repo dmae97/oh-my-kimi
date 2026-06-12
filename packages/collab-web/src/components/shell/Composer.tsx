@@ -18,9 +18,11 @@ export function Composer({ client, snapshot }: ComposerProps): ReactNode {
 	const taRef = useRef<HTMLTextAreaElement | null>(null);
 
 	const live = snapshot.phase === "live";
+	const readOnly = snapshot.readOnly;
+	const canPrompt = live && !readOnly;
 	const busy = snapshot.working || (snapshot.state?.isStreaming ?? false);
 	const queued = snapshot.state?.queuedMessageCount ?? 0;
-	const canSend = live && text.trim().length > 0;
+	const canSend = canPrompt && text.trim().length > 0;
 
 	useLayoutEffect(() => {
 		const el = taRef.current;
@@ -33,10 +35,10 @@ export function Composer({ client, snapshot }: ComposerProps): ReactNode {
 
 	const send = useCallback((): void => {
 		const trimmed = text.trim();
-		if (!trimmed || !live) return;
+		if (!trimmed || !live || readOnly) return;
 		client.sendPrompt(trimmed);
 		setText("");
-	}, [client, live, text]);
+	}, [client, live, readOnly, text]);
 
 	const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
 		if (e.key === "Enter" && !e.shiftKey) {
@@ -54,14 +56,20 @@ export function Composer({ client, snapshot }: ComposerProps): ReactNode {
 					value={text}
 					onChange={e => setText(e.target.value)}
 					onKeyDown={onKeyDown}
-					placeholder={live ? "prompt the host agent…" : "waiting for session…"}
-					disabled={!live}
+					placeholder={
+						readOnly
+							? "read-only session — watching only"
+							: live
+								? "prompt the host agent…"
+								: "waiting for session…"
+					}
+					disabled={!canPrompt}
 					rows={1}
 					spellCheck={false}
 				/>
 				<div className="sh-composer-actions">
 					{busy && queued > 0 && <span className="sh-queued">queued ×{queued}</span>}
-					{busy && (
+					{busy && !readOnly && (
 						<button
 							type="button"
 							className="sh-btn sh-btn-stop"

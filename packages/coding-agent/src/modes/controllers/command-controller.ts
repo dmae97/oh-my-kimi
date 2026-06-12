@@ -11,8 +11,9 @@ import {
 } from "@oh-my-pi/pi-ai";
 import { Loader, Markdown, padding, Spacer, Text, visibleWidth } from "@oh-my-pi/pi-tui";
 import { formatDuration, Snowflake } from "@oh-my-pi/pi-utils";
-import { $ } from "bun";
 import { shouldEnableAppendOnlyContext } from "../../config/append-only-context-mode";
+import { type LoadedCustomShare, loadCustomShare } from "../../export/custom-share";
+import { shareSession } from "../../export/share";
 import type { CompactOptions } from "../../extensibility/extensions/types";
 import {
 	diffMentalModelContent,
@@ -117,126 +118,84 @@ export class CommandController {
 	}
 
 	async handleShareCommand(): Promise<void> {
-		const tmpFile = path.join(os.tmpdir(), `${Snowflake.next()}.html`);
-		const cleanupTempFile = async () => {
-			try {
-				await fs.rm(tmpFile, { force: true });
-			} catch {
-				// Ignore cleanup errors
-			}
-		};
+		let customShare: LoadedCustomShare | null;
 		try {
-			await this.ctx.session.exportToHtml(tmpFile);
-		} catch (error: unknown) {
-			this.ctx.showError(`Failed to export session: ${error instanceof Error ? error.message : "Unknown error"}`);
-			return;
-		}
-
-		try {
-			const { loadCustomShare } = await import("../../export/custom-share");
-			const customShare = await loadCustomShare();
-			if (customShare) {
-				const loader = new BorderedLoader(this.ctx.ui, theme, "Sharing...");
-				this.ctx.editorContainer.clear();
-				this.ctx.editorContainer.addChild(loader);
-				this.ctx.ui.setFocus(loader);
-				this.ctx.ui.requestRender();
-
-				const restoreEditor = async () => {
-					loader.dispose();
-					this.ctx.editorContainer.clear();
-					this.ctx.editorContainer.addChild(this.ctx.editor);
-					this.ctx.ui.setFocus(this.ctx.editor);
-					await cleanupTempFile();
-				};
-
-				try {
-					const result = await customShare.fn(tmpFile);
-					await restoreEditor();
-
-					if (typeof result === "string") {
-						this.ctx.showStatus(`Share URL: ${result}`);
-						this.openInBrowser(result);
-					} else if (result) {
-						const parts: string[] = [];
-						if (result.url) parts.push(`Share URL: ${result.url}`);
-						if (result.message) parts.push(result.message);
-						if (parts.length > 0) this.ctx.showStatus(parts.join("\n"));
-						if (result.url) this.openInBrowser(result.url);
-					} else {
-						this.ctx.showStatus("Session shared");
-					}
-					return;
-				} catch (err) {
-					await restoreEditor();
-					this.ctx.showError(`Custom share failed: ${err instanceof Error ? err.message : String(err)}`);
-					return;
-				}
-			}
+			customShare = await loadCustomShare();
 		} catch (err) {
-			await cleanupTempFile();
 			this.ctx.showError(err instanceof Error ? err.message : String(err));
 			return;
 		}
 
-		try {
-			const authResult = await $`gh auth status`.quiet().nothrow();
-			if (authResult.exitCode !== 0) {
-				await cleanupTempFile();
-				this.ctx.showError("GitHub CLI is not logged in. Run 'gh auth login' first.");
-				return;
-			}
-		} catch {
-			await cleanupTempFile();
-			this.ctx.showError("GitHub CLI (gh) is not installed. Install it from https://cli.github.com/");
-			return;
-		}
-
-		const loader = new BorderedLoader(this.ctx.ui, theme, "Creating gist...");
+		const loader = new BorderedLoader(this.ctx.ui, theme, "Sharing session...");
 		this.ctx.editorContainer.clear();
 		this.ctx.editorContainer.addChild(loader);
 		this.ctx.ui.setFocus(loader);
 		this.ctx.ui.requestRender();
 
-		const restoreEditor = async () => {
+		const restoreEditor = () => {
 			loader.dispose();
 			this.ctx.editorContainer.clear();
 			this.ctx.editorContainer.addChild(this.ctx.editor);
 			this.ctx.ui.setFocus(this.ctx.editor);
-			await cleanupTempFile();
 		};
-
 		loader.onAbort = () => {
-			void restoreEditor();
+			restoreEditor();
 			this.ctx.showStatus("Share cancelled");
 		};
 
+		// Custom share scripts keep their legacy contract: they receive a path
+		// to a standalone HTML export. No fallback to the default flow on error.
+		if (customShare) {
+			const tmpFile = path.join(os.tmpdir(), `${Snowflake.next()}.html`);
+			try {
+				await this.ctx.session.exportToHtml(tmpFile);
+				const result = await customShare.fn(tmpFile);
+				if (loader.signal.aborted) return;
+				restoreEditor();
+
+				if (typeof result === "string") {
+					this.ctx.showStatus(`Share URL: ${result}`);
+					this.openInBrowser(result);
+				} else if (result) {
+					const parts: string[] = [];
+					if (result.url) parts.push(`Share URL: ${result.url}`);
+					if (result.message) parts.push(result.message);
+					if (parts.length > 0) this.ctx.showStatus(parts.join("\n"));
+					if (result.url) this.openInBrowser(result.url);
+				} else {
+					this.ctx.showStatus("Session shared");
+				}
+			} catch (err) {
+				if (!loader.signal.aborted) {
+					restoreEditor();
+					this.ctx.showError(`Custom share failed: ${err instanceof Error ? err.message : String(err)}`);
+				}
+			} finally {
+				await fs.rm(tmpFile, { force: true }).catch(() => {});
+			}
+			return;
+		}
+
+		// Default: encrypted snapshot to a secret gist (preferred) or the share
+		// server; the key rides in the link fragment and never leaves the client.
 		try {
-			const result = await $`gh gist create --public=false ${tmpFile}`.quiet().nothrow();
+			const result = await shareSession(this.ctx.session.sessionManager, {
+				serverUrl: this.ctx.settings.get("share.serverUrl"),
+				state: this.ctx.session.state,
+				obfuscator: this.ctx.settings.get("share.redactSecrets") ? this.ctx.session.obfuscator : undefined,
+			});
 			if (loader.signal.aborted) return;
+			restoreEditor();
 
-			await restoreEditor();
-
-			if (result.exitCode !== 0) {
-				const errorMsg = result.stderr.toString("utf-8").trim() || "Unknown error";
-				this.ctx.showError(`Failed to create gist: ${errorMsg}`);
-				return;
-			}
-
-			const gistUrl = result.stdout.toString("utf-8").trim();
-			const gistId = gistUrl.split("/").pop();
-			if (!gistId) {
-				this.ctx.showError("Failed to parse gist ID from gh output");
-				return;
-			}
-
-			const previewUrl = `https://gistpreview.github.io/?${gistId}`;
-			this.ctx.showStatus(`Share URL: ${previewUrl}\nGist: ${gistUrl}`);
-			this.openInBrowser(previewUrl);
+			const lines = [`Share URL: ${result.url}`];
+			if (result.gistUrl) lines.push(`Gist: ${result.gistUrl}`);
+			if (result.truncated) lines.push("Note: large content was trimmed to fit the share size limit.");
+			this.ctx.showStatus(lines.join("\n"));
+			this.openInBrowser(result.url);
 		} catch (error: unknown) {
 			if (!loader.signal.aborted) {
-				await restoreEditor();
-				this.ctx.showError(`Failed to create gist: ${error instanceof Error ? error.message : "Unknown error"}`);
+				restoreEditor();
+				this.ctx.showError(`Failed to share session: ${error instanceof Error ? error.message : "Unknown error"}`);
 			}
 		}
 	}

@@ -14,55 +14,67 @@
  * Replaces the old SessionObserverOverlayComponent (ctrl+s observer).
  */
 import * as fs from "node:fs";
-import type { ToolResultMessage } from "@oh-my-pi/pi-ai";
-import { Container, Editor, Markdown, type MarkdownTheme, matchesKey, ScrollView } from "@oh-my-pi/pi-tui";
-import { formatAge, formatDuration, formatNumber, logger } from "@oh-my-pi/pi-utils";
+import * as path from "node:path";
+import type { AgentMessage, AgentTool } from "@oh-my-pi/pi-agent-core";
+import { Container, Editor, matchesKey, ScrollView, Text, type TUI } from "@oh-my-pi/pi-tui";
+import { formatAge, formatBytes, formatDuration, formatNumber, getProjectDir, logger } from "@oh-my-pi/pi-utils";
+import { COLLAB_PROMPT_MESSAGE_TYPE, type CollabPromptDetails } from "../../collab/protocol";
 import type { KeyId } from "../../config/keybindings";
+import { settings } from "../../config/settings";
+import type { MessageRenderer } from "../../extensibility/extensions/types";
 import { IrcBus } from "../../irc/bus";
 import { AgentLifecycleManager } from "../../registry/agent-lifecycle";
 import { type AgentRef, AgentRegistry, type AgentStatus, MAIN_AGENT_ID } from "../../registry/agent-registry";
 import type { AgentSession } from "../../session/agent-session";
-import { isSilentAbort, USER_INTERRUPT_LABEL } from "../../session/messages";
+import {
+	type CustomMessage,
+	isSilentAbort,
+	LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE,
+	resolveAbortLabel,
+	SKILL_PROMPT_MESSAGE_TYPE,
+	type SkillPromptDetails,
+	USER_INTERRUPT_LABEL,
+} from "../../session/messages";
 import type { SessionMessageEntry } from "../../session/session-manager";
 import { parseSessionEntries } from "../../session/session-manager";
-import { PREVIEW_LIMITS, replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "../../tools/render-utils";
-import { toPathList } from "../../tools/search";
+import { createIrcMessageCard } from "../../tools/irc";
+import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "../../tools/render-utils";
 import type { ObservableSession, SessionObserverRegistry } from "../session-observer-registry";
-import { getEditorTheme, getMarkdownTheme, theme } from "../theme/theme";
+import { getEditorTheme, theme } from "../theme/theme";
 import { matchesSelectDown, matchesSelectUp } from "../utils/keybinding-matchers";
+import { AssistantMessageComponent } from "./assistant-message";
+import { BashExecutionComponent } from "./bash-execution";
+import { BranchSummaryMessageComponent } from "./branch-summary-message";
+import { CollabPromptMessageComponent } from "./collab-prompt-message";
+import { CompactionSummaryMessageComponent } from "./compaction-summary-message";
+import { CustomMessageComponent } from "./custom-message";
 import { DynamicBorder } from "./dynamic-border";
+import { EvalExecutionComponent } from "./eval-execution";
+import { type LateDiagnosticsFile, LateDiagnosticsMessageComponent } from "./late-diagnostics-message";
+import { ReadToolGroupComponent, readArgsHaveTarget, readArgsTargetInternalUrl } from "./read-tool-group";
+import { SkillMessageComponent } from "./skill-message";
 import { formatContextUsage } from "./status-line/context-thresholds";
+import { ToolExecutionComponent } from "./tool-execution";
+import { TranscriptBlock, TranscriptContainer } from "./transcript-container";
+import { UserMessageComponent } from "./user-message";
 
-/** Max thinking characters in collapsed state */
-const MAX_THINKING_CHARS_COLLAPSED = 200;
-/** Max thinking characters in expanded state */
-const MAX_THINKING_CHARS_EXPANDED = 4000;
-/** Max tool args characters to display */
-const MAX_TOOL_ARGS_CHARS = 500;
 /** Lines per page for PageUp/PageDown */
 const PAGE_SIZE = 15;
-/** Left indent for content under entry headers */
-const INDENT = "    ";
 /** Refresh cadence for the relative-time column */
 const AGE_TICK_MS = 5_000;
 /** Debounce for live-session transcript refreshes */
 const CHAT_REFRESH_DEBOUNCE_MS = 80;
+/** Double-tap window for the left-left "go to parent" gesture (matches the editor's). */
+const LEFT_TAP_WINDOW_MS = 500;
 
-/** Compute the max content width for the current terminal, accounting for indent and chrome. */
-function contentWidth(indent = INDENT): number {
-	return Math.max(TRUNCATE_LENGTHS.SHORT, (process.stdout.columns || 80) - indent.length - 2);
+/** Compute the max content width for the current terminal, accounting for chrome. */
+function contentWidth(): number {
+	return Math.max(TRUNCATE_LENGTHS.SHORT, (process.stdout.columns || 80) - 6);
 }
 
 /** Sanitize a line for TUI display: replace tabs, then truncate to viewport width. */
 function sanitizeLine(text: string, maxWidth?: number): string {
 	return truncateToWidth(replaceTabs(text), maxWidth ?? contentWidth());
-}
-
-/** Represents a rendered entry in the viewer for selection/expand tracking */
-interface ViewerEntry {
-	lineStart: number;
-	lineCount: number;
-	kind: "thinking" | "text" | "toolCall" | "user";
 }
 
 const STATUS_ORDER: Record<AgentStatus, number> = { running: 0, idle: 1, parked: 2, aborted: 3 };
@@ -78,6 +90,38 @@ function statusBadge(status: AgentStatus): string {
 			return theme.fg("muted", `${theme.status.shadowed} parked`);
 		case "aborted":
 			return theme.fg("error", `${theme.status.aborted} aborted`);
+	}
+}
+
+function registerPersistedSubagents(registry: AgentRegistry, sessionFile: string | null | undefined): void {
+	if (!sessionFile?.endsWith(".jsonl")) return;
+	const root = sessionFile.slice(0, -6);
+	registerPersistedSubagentsFromDir(registry, root, undefined);
+}
+
+function registerPersistedSubagentsFromDir(registry: AgentRegistry, dir: string, parentId: string | undefined): void {
+	let entries: fs.Dirent[];
+	try {
+		entries = fs.readdirSync(dir, { withFileTypes: true });
+	} catch {
+		return;
+	}
+	for (const entry of entries) {
+		if (!entry.isFile() || !entry.name.endsWith(".jsonl") || entry.name.includes(".bak")) continue;
+		const id = entry.name.slice(0, -6);
+		const sessionFile = path.join(dir, entry.name);
+		if (!registry.get(id)) {
+			registry.register({
+				id,
+				displayName: id,
+				kind: "sub",
+				parentId: parentId ?? MAIN_AGENT_ID,
+				session: null,
+				sessionFile,
+				status: "parked",
+			});
+		}
+		registerPersistedSubagentsFromDir(registry, path.join(dir, id), id);
 	}
 }
 
@@ -103,6 +147,22 @@ export interface AgentHubDeps {
 	lifecycle?: AgentLifecycleManager;
 	/** Injectable for tests; defaults to the process-global bus. */
 	irc?: IrcBus;
+	/** TUI handle for transcript components; tests omit it and get a render-only stub. */
+	ui?: TUI;
+	/** Tool lookup for transcript renderers (labels, custom render functions). */
+	getTool?: (name: string) => AgentTool | undefined;
+	/** Extension message renderers for custom messages in the transcript. */
+	getMessageRenderer?: (customType: string) => MessageRenderer | undefined;
+	/** Cwd used by tool renderers for path shortening; defaults to the project dir. */
+	cwd?: string;
+	/** Mirrors the main transcript's thinking-block visibility. */
+	hideThinkingBlock?: () => boolean;
+	/** Keys toggling tool output expansion (app.tools.expand). */
+	expandKeys?: KeyId[];
+	/** Focus the main view on this agent's live session (ctx.focusAgentSession). When absent (collab guest, tests), Enter opens the in-hub chat view instead. */
+	focusAgent?: (id: string) => Promise<void>;
+	/** Current main session file; used to seed parked historical subagents after restart. */
+	sessionFile?: string | null;
 	/** Collab guest: route actions/transcripts to the host instead of local sessions. */
 	remote?: AgentHubRemote;
 }
@@ -137,16 +197,33 @@ export class AgentHubOverlayComponent extends Container {
 	#chatRefreshTimer: NodeJS.Timeout | undefined;
 	#transcriptCache: { path: string; bytesRead: number; entries: SessionMessageEntry[]; model?: string } | undefined;
 
-	// Transcript viewer state (absorbed from the session observer overlay)
+	// Chat transcript: the same component renderers as the main session
+	// transcript, assembled incrementally from the persisted JSONL entries.
+	#ui: TUI;
+	#getTool: ((name: string) => AgentTool | undefined) | undefined;
+	#getMessageRenderer: ((customType: string) => MessageRenderer | undefined) | undefined;
+	#cwd: string;
+	#hideThinkingBlock: (() => boolean) | undefined;
+	#expandKeys: KeyId[];
+	#focusAgent: ((id: string) => Promise<void>) | undefined;
+	#chatLog = new TranscriptContainer();
+	#chatEntriesRef: SessionMessageEntry[] | undefined;
+	#chatBuiltCount = 0;
+	#chatPendingTools = new Map<string, ToolExecutionComponent | ReadToolGroupComponent>();
+	#chatReadArgs = new Map<string, Record<string, unknown>>();
+	#chatReadGroup: ReadToolGroupComponent | null = null;
+	#chatWaitingPoll: ToolExecutionComponent | null = null;
+	#chatExpandables: Array<{ setExpanded(expanded: boolean): void }> = [];
+	#chatExpanded = false;
+	#chatPlaceholder: string | undefined;
+
+	// Viewport state
 	#scrollOffset = 0;
-	#renderedLines: string[] = [];
+	#lastMaxScroll = 0;
 	#viewportHeight = 20;
 	#wasAtBottom = true;
-	#viewerEntries: ViewerEntry[] = [];
-	#selectedEntryIndex = 0;
-	#expandedEntries = new Set<number>();
 	#viewerHeaderLines: string[] = [];
-	#mdTheme: MarkdownTheme = getMarkdownTheme();
+	#lastLeftTap = 0;
 
 	constructor(deps: AgentHubDeps) {
 		super();
@@ -160,6 +237,18 @@ export class AgentHubOverlayComponent extends Container {
 		this.#requestRender = deps.requestRender;
 		this.#hubKeys = deps.hubKeys;
 		this.#remote = deps.remote;
+		this.#ui =
+			deps.ui ??
+			({
+				requestRender: () => deps.requestRender(),
+				requestComponentRender: () => deps.requestRender(),
+			} as unknown as TUI);
+		this.#getTool = deps.getTool;
+		this.#getMessageRenderer = deps.getMessageRenderer;
+		this.#cwd = deps.cwd ?? getProjectDir();
+		this.#hideThinkingBlock = deps.hideThinkingBlock;
+		this.#expandKeys = deps.expandKeys ?? ["ctrl+o"];
+		this.#focusAgent = deps.focusAgent;
 
 		this.#editor = new Editor(getEditorTheme());
 		this.#editor.setMaxHeight(4);
@@ -170,6 +259,7 @@ export class AgentHubOverlayComponent extends Container {
 		this.#ageTimer = setInterval(() => this.#requestRender(), AGE_TICK_MS);
 		this.#ageTimer.unref?.();
 
+		if (!this.#remote) registerPersistedSubagents(this.#registry, deps.sessionFile);
 		this.#refreshRows();
 	}
 
@@ -185,6 +275,7 @@ export class AgentHubOverlayComponent extends Container {
 			this.#chatRefreshTimer = undefined;
 		}
 		this.#detachLiveSession();
+		this.#resetChatLog();
 	}
 
 	override render(width: number): readonly string[] {
@@ -216,18 +307,13 @@ export class AgentHubOverlayComponent extends Container {
 		this.#remoteTranscriptUnavailable = false;
 		this.#remoteFetchInFlight = false;
 		this.#remoteFetchToken++;
+		this.#resetChatLog();
 		this.#scrollOffset = 0;
-		this.#selectedEntryIndex = 0;
-		this.#expandedEntries.clear();
 		this.#wasAtBottom = true;
+		this.#lastLeftTap = 0;
 		this.#editor.setText("");
 		this.#attachLiveSession();
 		this.#rebuildChatContent();
-		// Auto-scroll to bottom and select last entry on open
-		if (this.#viewerEntries.length > 0) {
-			this.#selectedEntryIndex = this.#viewerEntries.length - 1;
-			this.#rebuildChatContent();
-		}
 		this.#requestRender();
 	}
 
@@ -283,12 +369,7 @@ export class AgentHubOverlayComponent extends Container {
 		this.#chatRefreshTimer = setTimeout(() => {
 			this.#chatRefreshTimer = undefined;
 			if (this.#view !== "chat") return;
-			// Keep auto-scrolling to bottom unless the user navigated away
-			this.#wasAtBottom = this.#selectedEntryIndex >= this.#viewerEntries.length - 1;
 			this.#rebuildChatContent();
-			if (this.#wasAtBottom && this.#viewerEntries.length > 0) {
-				this.#selectedEntryIndex = this.#viewerEntries.length - 1;
-			}
 			this.#requestRender();
 		}, CHAT_REFRESH_DEBOUNCE_MS);
 		this.#chatRefreshTimer.unref?.();
@@ -335,7 +416,7 @@ export class AgentHubOverlayComponent extends Container {
 			lines.push(` ${theme.fg("error", sanitizeLine(this.#notice, Math.max(10, width - 2)))}`);
 		}
 		lines.push("");
-		lines.push(` ${theme.fg("dim", "j/k:select  Enter:chat  r:revive  x:kill  Esc:close")}`);
+		lines.push(` ${theme.fg("dim", "j/k:select  Enter:open  r:revive  x:kill  Esc/←←:close")}`);
 		lines.push(...new DynamicBorder().render(width));
 		return lines;
 	}
@@ -375,6 +456,16 @@ export class AgentHubOverlayComponent extends Container {
 			this.#onDone();
 			return;
 		}
+		if (matchesKey(keyData, "left")) {
+			const now = Date.now();
+			if (now - this.#lastLeftTap < LEFT_TAP_WINDOW_MS) {
+				this.#lastLeftTap = 0;
+				this.#onDone();
+			} else {
+				this.#lastLeftTap = now;
+			}
+			return;
+		}
 		if (keyData === "j" || matchesSelectDown(keyData)) {
 			if (this.#rows.length > 0) {
 				this.#selectedRow = Math.min(this.#selectedRow + 1, this.#rows.length - 1);
@@ -391,7 +482,7 @@ export class AgentHubOverlayComponent extends Container {
 		}
 		if (matchesKey(keyData, "enter") || keyData === "\r" || keyData === "\n") {
 			const selected = this.#rows[this.#selectedRow];
-			if (selected) this.openChat(selected.id);
+			if (selected) this.#activateAgent(selected);
 			return;
 		}
 		if (keyData === "r") {
@@ -402,6 +493,30 @@ export class AgentHubOverlayComponent extends Container {
 			this.#killSelected();
 			return;
 		}
+	}
+
+	/**
+	 * Enter on a row: focus the main view on the agent's live session and close
+	 * the hub. The transcript then renders through the regular session pipeline —
+	 * exact parity by construction. Collab guests (no local sessions) keep the
+	 * in-hub chat view.
+	 */
+	#activateAgent(ref: AgentRef): void {
+		this.#notice = undefined;
+		const focusAgent = this.#focusAgent;
+		if (this.#remote || !focusAgent) {
+			this.openChat(ref.id);
+			return;
+		}
+		void (async () => {
+			try {
+				await focusAgent(ref.id); // ensureLive inside revives parked agents; no parking, no session files
+				this.#onDone();
+			} catch (error) {
+				this.#notice = error instanceof Error ? error.message : String(error);
+				this.#requestRender();
+			}
+		})();
 	}
 
 	#reviveSelected(): void {
@@ -471,7 +586,12 @@ export class AgentHubOverlayComponent extends Container {
 		const footerChrome = editorLines.length + footerLines.length + (noticeLine ? 1 : 0) + 1;
 		this.#viewportHeight = Math.max(5, termHeight - headerChrome - footerChrome);
 
-		const maxScroll = Math.max(0, this.#renderedLines.length - this.#viewportHeight);
+		const contentLines: readonly string[] = this.#chatPlaceholder
+			? [theme.fg("dim", this.#chatPlaceholder)]
+			: this.#chatLog.render(innerWidth);
+
+		const maxScroll = Math.max(0, contentLines.length - this.#viewportHeight);
+		this.#lastMaxScroll = maxScroll;
 		if (this.#wasAtBottom) this.#scrollOffset = maxScroll;
 		this.#scrollOffset = Math.max(0, Math.min(this.#scrollOffset, maxScroll));
 
@@ -483,11 +603,11 @@ export class AgentHubOverlayComponent extends Container {
 		lines.push(...new DynamicBorder().render(width));
 
 		const scrollView = new ScrollView(
-			this.#renderedLines.slice(this.#scrollOffset, this.#scrollOffset + this.#viewportHeight),
+			contentLines.slice(this.#scrollOffset, this.#scrollOffset + this.#viewportHeight),
 			{
 				height: this.#viewportHeight,
 				scrollbar: "auto",
-				totalRows: this.#renderedLines.length,
+				totalRows: contentLines.length,
 				theme: { track: t => theme.fg("dim", t), thumb: t => theme.fg("accent", t) },
 			},
 		);
@@ -506,7 +626,9 @@ export class AgentHubOverlayComponent extends Container {
 		const observed = this.#chatAgentId ? this.#observableFor(this.#chatAgentId) : undefined;
 		const statsLine = this.#buildStatsLine(observed);
 		if (statsLine) lines.push(` ${statsLine}`);
-		lines.push(` ${theme.fg("dim", "Enter:send  Esc:back  empty input: j/k:scroll  Enter:expand  g/G:top/bottom")}`);
+		lines.push(
+			` ${theme.fg("dim", `Enter:send  Esc:back  ←←:parent  ${this.#expandKeys[0] ?? "ctrl+o"}:expand  empty input: j/k:scroll  g/G:top/bottom`)}`,
+		);
 		return lines;
 	}
 
@@ -538,7 +660,7 @@ export class AgentHubOverlayComponent extends Container {
 		return parts.join(theme.sep.dot);
 	}
 
-	/** Rebuild the chat header + transcript content lines */
+	/** Rebuild the chat header and sync transcript components from new entries */
 	#rebuildChatContent(): void {
 		const id = this.#chatAgentId;
 		const ref = id ? this.#registry.get(id) : undefined;
@@ -562,26 +684,24 @@ export class AgentHubOverlayComponent extends Container {
 			this.#viewerHeaderLines.push(`${theme.bold(ref.id)} ${statusBadge(ref.status)}${kindTag}${modelLabel}`);
 		}
 
-		const contentLines: string[] = [];
-		this.#viewerEntries = [];
 		if (!ref) {
-			contentLines.push(theme.fg("dim", "Agent no longer registered."));
+			this.#chatPlaceholder = "Agent no longer registered.";
 		} else if (!this.#remote && !ref.sessionFile) {
-			contentLines.push(theme.fg("dim", "No session file available yet."));
+			this.#chatPlaceholder = "No session file available yet.";
 		} else if (!messageEntries) {
-			contentLines.push(theme.fg("dim", "Unable to read session file."));
+			this.#chatPlaceholder = "Unable to read session file.";
 		} else if (messageEntries.length === 0) {
 			if (this.#remote && this.#remoteTranscriptUnavailable) {
-				contentLines.push(theme.fg("dim", "Transcript lives on the host — not available."));
+				this.#chatPlaceholder = "Transcript lives on the host — not available.";
 			} else if (this.#remote && !this.#transcriptCache) {
-				contentLines.push(theme.fg("dim", "Loading transcript from host…"));
+				this.#chatPlaceholder = "Loading transcript from host…";
 			} else {
-				contentLines.push(theme.fg("dim", "No messages yet."));
+				this.#chatPlaceholder = "No messages yet.";
 			}
 		} else {
-			this.#buildTranscriptLines(messageEntries, contentLines);
+			this.#chatPlaceholder = undefined;
+			this.#syncChatComponents(messageEntries);
 		}
-		this.#renderedLines = contentLines;
 	}
 
 	#handleChatInput(keyData: string): void {
@@ -597,8 +717,31 @@ export class AgentHubOverlayComponent extends Container {
 			return;
 		}
 
-		// Navigation mirrors the old observer overlay while the input is empty;
-		// once the user starts typing, the editor owns every key.
+		// Tool output expansion mirrors the main transcript's app.tools.expand toggle.
+		for (const key of this.#expandKeys) {
+			if (matchesKey(keyData, key)) {
+				this.#chatExpanded = !this.#chatExpanded;
+				for (const component of this.#chatExpandables) component.setExpanded(this.#chatExpanded);
+				this.#requestRender();
+				return;
+			}
+		}
+
+		// Double-tap left on an empty editor hops to the parent session —
+		// the inverse of the main editor's double-left opening the hub.
+		if (editorEmpty && matchesKey(keyData, "left")) {
+			const now = Date.now();
+			if (now - this.#lastLeftTap < LEFT_TAP_WINDOW_MS) {
+				this.#lastLeftTap = 0;
+				this.#openParent();
+			} else {
+				this.#lastLeftTap = now;
+			}
+			return;
+		}
+
+		// Scrolling works while the input is empty; once the user starts
+		// typing, the editor owns every key.
 		if (editorEmpty && this.#handleViewerNavigation(keyData)) {
 			return;
 		}
@@ -607,11 +750,23 @@ export class AgentHubOverlayComponent extends Container {
 		this.#requestRender();
 	}
 
+	/** Open the chat for the agent's parent, or close the hub when the parent is the main session. */
+	#openParent(): void {
+		const ref = this.#chatAgentId ? this.#registry.get(this.#chatAgentId) : undefined;
+		const parentId = ref?.parentId;
+		if (parentId && parentId !== MAIN_AGENT_ID && this.#registry.get(parentId)) {
+			this.openChat(parentId);
+			return;
+		}
+		this.#onDone();
+	}
+
 	#closeChat(): void {
 		this.#view = "table";
 		this.#chatAgentId = undefined;
 		this.#notice = undefined;
 		this.#detachLiveSession();
+		this.#resetChatLog();
 		this.#refreshRows();
 		this.#requestRender();
 	}
@@ -644,415 +799,391 @@ export class AgentHubOverlayComponent extends Container {
 		this.#requestRender();
 	}
 
-	/** Viewer navigation (selection, paging, expand) for the chat transcript. Returns true when handled. */
+	/** Viewport scrolling for the chat transcript. Returns true when handled. */
 	#handleViewerNavigation(keyData: string): boolean {
-		const entryCount = this.#viewerEntries.length;
-
+		const maxScroll = this.#lastMaxScroll;
+		const scrollBy = (delta: number) => {
+			this.#scrollOffset = Math.max(0, Math.min(this.#scrollOffset + delta, maxScroll));
+			this.#wasAtBottom = this.#scrollOffset >= maxScroll;
+			this.#requestRender();
+		};
 		if (keyData === "j" || matchesSelectDown(keyData)) {
-			if (entryCount > 0) {
-				this.#selectedEntryIndex = Math.min(this.#selectedEntryIndex + 1, entryCount - 1);
-			}
-			this.#rebuildAndScroll();
+			scrollBy(1);
 			return true;
 		}
 		if (keyData === "k" || matchesSelectUp(keyData)) {
-			if (entryCount > 0) {
-				this.#selectedEntryIndex = Math.max(this.#selectedEntryIndex - 1, 0);
-			}
-			this.#rebuildAndScroll();
+			scrollBy(-1);
 			return true;
 		}
 		if (matchesKey(keyData, "pageDown")) {
-			if (entryCount > 0) {
-				const prevIndex = this.#selectedEntryIndex;
-				this.#selectedEntryIndex = Math.min(this.#selectedEntryIndex + 5, entryCount - 1);
-				if (this.#selectedEntryIndex === prevIndex) {
-					this.#scrollOffset = Math.min(
-						this.#scrollOffset + PAGE_SIZE,
-						Math.max(0, this.#renderedLines.length - this.#viewportHeight),
-					);
-				}
-			} else {
-				this.#scrollOffset = Math.min(
-					this.#scrollOffset + PAGE_SIZE,
-					Math.max(0, this.#renderedLines.length - this.#viewportHeight),
-				);
-			}
-			this.#rebuildAndScroll();
+			scrollBy(PAGE_SIZE);
 			return true;
 		}
 		if (matchesKey(keyData, "pageUp")) {
-			if (entryCount > 0) {
-				const prevIndex = this.#selectedEntryIndex;
-				this.#selectedEntryIndex = Math.max(this.#selectedEntryIndex - 5, 0);
-				if (this.#selectedEntryIndex === prevIndex) {
-					this.#scrollOffset = Math.max(this.#scrollOffset - PAGE_SIZE, 0);
-				}
-			} else {
-				this.#scrollOffset = Math.max(this.#scrollOffset - PAGE_SIZE, 0);
-			}
-			this.#rebuildAndScroll();
-			return true;
-		}
-		if (matchesKey(keyData, "enter") || keyData === "\r" || keyData === "\n") {
-			if (entryCount > 0 && this.#selectedEntryIndex < entryCount) {
-				if (this.#expandedEntries.has(this.#selectedEntryIndex)) {
-					this.#expandedEntries.delete(this.#selectedEntryIndex);
-				} else {
-					this.#expandedEntries.add(this.#selectedEntryIndex);
-				}
-				this.#rebuildAndScroll();
-			}
+			scrollBy(-PAGE_SIZE);
 			return true;
 		}
 		if (keyData === "G") {
-			if (entryCount > 0) this.#selectedEntryIndex = entryCount - 1;
-			this.#scrollOffset = Math.max(0, this.#renderedLines.length - this.#viewportHeight);
-			this.#rebuildAndScroll();
+			this.#scrollOffset = maxScroll;
+			this.#wasAtBottom = true;
+			this.#requestRender();
 			return true;
 		}
 		if (keyData === "g") {
-			this.#selectedEntryIndex = 0;
 			this.#scrollOffset = 0;
-			this.#rebuildAndScroll();
+			this.#wasAtBottom = maxScroll === 0;
+			this.#requestRender();
 			return true;
 		}
 		return false;
 	}
 
-	/** Rebuild transcript lines (which depend on selectedEntryIndex/expandedEntries) and scroll to selection */
-	#rebuildAndScroll(): void {
-		// Resume auto-scrolling once selection returns to the last entry
-		this.#wasAtBottom = this.#selectedEntryIndex >= this.#viewerEntries.length - 1;
-		this.#rebuildChatContent();
-		this.#scrollToSelectedEntry();
-		this.#requestRender();
-	}
-
-	#scrollToSelectedEntry(): void {
-		if (this.#viewerEntries.length === 0) return;
-		const entry = this.#viewerEntries[this.#selectedEntryIndex];
-		if (!entry) return;
-
-		const entryTop = entry.lineStart;
-		const entryBottom = entry.lineStart + entry.lineCount;
-
-		if (entry.lineCount >= this.#viewportHeight) {
-			// Entry taller than viewport: only snap when it's completely out of view.
-			if (this.#scrollOffset + this.#viewportHeight <= entryTop) {
-				this.#scrollOffset = Math.max(0, entryTop - 1);
-			} else if (this.#scrollOffset >= entryBottom) {
-				this.#scrollOffset = Math.max(0, entryBottom - this.#viewportHeight);
-			}
-		} else {
-			// Entry fits in viewport: ensure it's fully visible
-			if (entryTop < this.#scrollOffset) {
-				this.#scrollOffset = Math.max(0, entryTop - 1);
-			}
-			if (entryBottom > this.#scrollOffset + this.#viewportHeight) {
-				this.#scrollOffset = Math.max(0, entryBottom - this.#viewportHeight + 1);
-			}
-		}
-	}
-
 	// ========================================================================
-	// Transcript rendering (absorbed from the session observer overlay)
+	// Transcript assembly — the same components as the main session transcript
+	// (mirrors UiHelpers.renderSessionContext / addMessageToChat).
 	// ========================================================================
 
-	#buildTranscriptLines(messageEntries: SessionMessageEntry[], lines: string[]): void {
-		// Build a tool call ID -> tool result map
-		const toolResults = new Map<string, ToolResultMessage>();
-		for (const entry of messageEntries) {
-			if (entry.message.role === "toolResult") {
-				toolResults.set(entry.message.toolCallId, entry.message);
-			}
+	/** Tear down transcript components (sealing pending spinners) and reset build state. */
+	#resetChatLog(): void {
+		for (const pending of this.#chatPendingTools.values()) pending.seal();
+		this.#chatPendingTools.clear();
+		this.#chatReadArgs.clear();
+		this.#chatReadGroup = null;
+		this.#chatWaitingPoll = null;
+		this.#chatExpandables = [];
+		this.#chatLog.dispose();
+		this.#chatLog.clear();
+		this.#chatEntriesRef = undefined;
+		this.#chatBuiltCount = 0;
+		this.#chatPlaceholder = undefined;
+	}
+
+	/** Append components for entries not yet materialized. Rebuilds from scratch when the cache was replaced (agent switch, file rotation). */
+	#syncChatComponents(entries: SessionMessageEntry[]): void {
+		if (this.#chatEntriesRef !== entries) {
+			this.#resetChatLog();
+			this.#chatEntriesRef = entries;
 		}
+		for (let i = this.#chatBuiltCount; i < entries.length; i++) {
+			this.#appendChatMessage(entries[i].message);
+		}
+		this.#chatBuiltCount = entries.length;
+	}
 
-		let entryIndex = 0;
-		for (const entry of messageEntries) {
-			const msg = entry.message;
+	#trackExpandable(component: { setExpanded(expanded: boolean): void }): void {
+		component.setExpanded(this.#chatExpanded);
+		this.#chatExpandables.push(component);
+	}
 
-			if (msg.role === "assistant") {
-				// Handle error messages with empty content
-				if (msg.content.length === 0 && msg.errorMessage && !isSilentAbort(msg.errorMessage)) {
-					const startLine = lines.length;
-					const isSelected = entryIndex === this.#selectedEntryIndex;
-					const cursor = isSelected ? theme.fg("accent", theme.nav.cursor) : " ";
-					lines.push("");
-					const errorLines = msg.errorMessage.split("\n");
-					const maxWidth = contentWidth();
-					lines.push(`${cursor} ${theme.fg("error", `✗ Error: ${sanitizeLine(errorLines[0], maxWidth)}`)}`);
-					for (let i = 1; i < errorLines.length; i++) {
-						lines.push(`${INDENT}${theme.fg("error", sanitizeLine(errorLines[i], maxWidth))}`);
-					}
-					this.#viewerEntries.push({ lineStart: startLine, lineCount: lines.length - startLine, kind: "text" });
-					entryIndex++;
-				} else {
-					for (const content of msg.content) {
-						if (content.type === "thinking" && content.thinking.trim()) {
-							const startLine = lines.length;
-							const isExpanded = this.#expandedEntries.has(entryIndex);
-							const isSelected = entryIndex === this.#selectedEntryIndex;
-							this.#renderThinkingLines(lines, content.thinking.trim(), isExpanded, isSelected);
-							this.#viewerEntries.push({
-								lineStart: startLine,
-								lineCount: lines.length - startLine,
-								kind: "thinking",
-							});
-							entryIndex++;
-						} else if (content.type === "text" && content.text.trim()) {
-							const startLine = lines.length;
-							const isExpanded = this.#expandedEntries.has(entryIndex);
-							const isSelected = entryIndex === this.#selectedEntryIndex;
-							this.#renderTextLines(lines, content.text.trim(), isExpanded, isSelected);
-							this.#viewerEntries.push({
-								lineStart: startLine,
-								lineCount: lines.length - startLine,
-								kind: "text",
-							});
-							entryIndex++;
-						} else if (content.type === "toolCall") {
-							const startLine = lines.length;
-							const isExpanded = this.#expandedEntries.has(entryIndex);
-							const isSelected = entryIndex === this.#selectedEntryIndex;
-							const result = toolResults.get(content.id);
-							this.#renderToolCallLines(lines, content, result, isExpanded, isSelected);
-							this.#viewerEntries.push({
-								lineStart: startLine,
-								lineCount: lines.length - startLine,
-								kind: "toolCall",
-							});
-							entryIndex++;
-						}
-					}
+	/** A `job` poll showing all-running is displaced by the next `job` call (mirrors the rebuild path). */
+	#resolveWaitingPoll(nextToolName?: string): void {
+		const previous = this.#chatWaitingPoll;
+		if (!previous) return;
+		this.#chatWaitingPoll = null;
+		if (nextToolName === "job" && previous.isDisplaceableBlock()) {
+			this.#chatLog.removeChild(previous);
+		}
+		previous.seal();
+	}
+
+	#ensureReadGroup(): ReadToolGroupComponent {
+		if (!this.#chatReadGroup) {
+			this.#chatReadGroup = new ReadToolGroupComponent({
+				showContentPreview: settings.get("read.toolResultPreview"),
+			});
+			this.#trackExpandable(this.#chatReadGroup);
+			this.#chatLog.addChild(this.#chatReadGroup);
+		}
+		return this.#chatReadGroup;
+	}
+
+	#appendChatMessage(message: AgentMessage): void {
+		switch (message.role) {
+			case "assistant":
+				this.#appendAssistantMessage(message);
+				break;
+			case "toolResult":
+				this.#appendToolResult(message);
+				break;
+			case "user":
+			case "developer": {
+				// A user prompt closes the poll-displacement window, same as the live path.
+				if (message.role === "user") this.#resolveWaitingPoll();
+				const textContent =
+					message.role !== "user"
+						? ""
+						: typeof message.content === "string"
+							? message.content
+							: message.content
+									.filter((block): block is { type: "text"; text: string } => block.type === "text")
+									.map(block => block.text)
+									.join("");
+				if (textContent) {
+					const isSynthetic = message.role === "developer" ? true : (message.synthetic ?? false);
+					this.#chatLog.addChild(new UserMessageComponent(textContent, isSynthetic));
 				}
-			} else if (msg.role === "user" || msg.role === "developer") {
-				const text =
-					typeof msg.content === "string"
-						? msg.content
-						: msg.content
-								.filter((b): b is { type: "text"; text: string } => b.type === "text")
-								.map(b => b.text)
-								.join("\n");
-				if (text.trim()) {
-					const startLine = lines.length;
-					const isSelected = entryIndex === this.#selectedEntryIndex;
-					const isExpanded = this.#expandedEntries.has(entryIndex);
-					const label = msg.role === "developer" ? "System" : "User";
-					const cursor = isSelected ? theme.fg("accent", theme.nav.cursor) : " ";
-					lines.push("");
-					if (isExpanded) {
-						lines.push(`${cursor} ${theme.fg("dim", `[${label}]`)}`);
-						const mdLines = this.#renderMarkdownToLines(text.trim());
-						for (const ml of mdLines) {
-							lines.push(ml);
-						}
+				break;
+			}
+			case "bashExecution": {
+				const component = new BashExecutionComponent(message.command, this.#ui, message.excludeFromContext);
+				if (message.output) component.appendOutput(message.output);
+				component.setComplete(message.exitCode, message.cancelled, { truncation: message.meta?.truncation });
+				this.#chatLog.addChild(component);
+				break;
+			}
+			case "pythonExecution": {
+				const component = new EvalExecutionComponent(message.code, this.#ui, message.excludeFromContext);
+				if (message.output) component.appendOutput(message.output);
+				component.setComplete(message.exitCode, message.cancelled, { truncation: message.meta?.truncation });
+				this.#chatLog.addChild(component);
+				break;
+			}
+			case "hookMessage":
+			case "custom":
+				this.#appendCustomMessage(message);
+				break;
+			case "compactionSummary": {
+				const component = new CompactionSummaryMessageComponent(message);
+				this.#trackExpandable(component);
+				this.#chatLog.addChild(component);
+				break;
+			}
+			case "branchSummary": {
+				const component = new BranchSummaryMessageComponent(message);
+				this.#trackExpandable(component);
+				this.#chatLog.addChild(component);
+				break;
+			}
+			case "fileMention": {
+				const block = new TranscriptBlock();
+				for (const file of message.files) {
+					let suffix: string;
+					if (file.skippedReason === "tooLarge") {
+						const size = typeof file.byteSize === "number" ? formatBytes(file.byteSize) : "unknown size";
+						suffix = `(skipped: ${size})`;
 					} else {
-						const firstLine = text.trim().split("\n")[0];
-						const totalLines = text.trim().split("\n").length;
-						const hint = totalLines > 1 ? theme.fg("dim", ` (${totalLines} lines)`) : "";
-						lines.push(
-							`${cursor} ${theme.fg("dim", `[${label}]`)} ${theme.fg("muted", sanitizeLine(firstLine, TRUNCATE_LENGTHS.TITLE))}${hint}`,
-						);
+						suffix = file.image
+							? "(image)"
+							: file.lineCount === undefined
+								? "(unknown lines)"
+								: `(${file.lineCount} lines)`;
 					}
-					this.#viewerEntries.push({ lineStart: startLine, lineCount: lines.length - startLine, kind: "user" });
-					entryIndex++;
+					const text = `${theme.fg("dim", `${theme.tree.last} `)}${theme.fg("muted", "Read")} ${theme.fg(
+						"accent",
+						file.path,
+					)} ${theme.fg("dim", suffix)}`;
+					block.addChild(new Text(text, 0, 0));
 				}
+				if (block.children.length > 0) this.#chatLog.addChild(block);
+				break;
+			}
+			default:
+				message satisfies never;
+		}
+	}
+
+	#appendAssistantMessage(message: Extract<AgentMessage, { role: "assistant" }>): void {
+		const assistantComponent = new AssistantMessageComponent(message, this.#hideThinkingBlock?.() ?? false, () =>
+			this.#requestRender(),
+		);
+		assistantComponent.setUsageInfo(message.usage);
+		this.#chatLog.addChild(assistantComponent);
+
+		const hasVisibleAssistantContent = message.content.some(
+			content =>
+				(content.type === "text" && content.text.trim().length > 0) ||
+				(content.type === "thinking" && content.thinking.trim().length > 0),
+		);
+		if (hasVisibleAssistantContent) {
+			// New visible turn content closes the current read run (mirrors rebuild).
+			this.#chatReadGroup?.seal();
+			this.#chatReadGroup = null;
+		}
+
+		const isAbortedSilently = message.stopReason === "aborted" && isSilentAbort(message.errorMessage);
+		const hasErrorStop = !isAbortedSilently && (message.stopReason === "aborted" || message.stopReason === "error");
+		const errorMessage = hasErrorStop
+			? message.stopReason === "aborted"
+				? resolveAbortLabel(message.errorMessage)
+				: message.errorMessage || "Error"
+			: null;
+
+		for (const content of message.content) {
+			if (content.type !== "toolCall") continue;
+			this.#resolveWaitingPoll(content.name);
+
+			if (
+				content.name === "read" &&
+				readArgsHaveTarget(content.arguments) &&
+				!readArgsTargetInternalUrl(content.arguments)
+			) {
+				if (hasErrorStop && errorMessage) {
+					const group = this.#ensureReadGroup();
+					group.updateArgs(content.arguments, content.id);
+					group.updateResult(
+						{ content: [{ type: "text", text: errorMessage }], isError: true },
+						false,
+						content.id,
+					);
+				} else {
+					const normalizedArgs =
+						content.arguments && typeof content.arguments === "object" && !Array.isArray(content.arguments)
+							? (content.arguments as Record<string, unknown>)
+							: {};
+					this.#chatReadArgs.set(content.id, normalizedArgs);
+				}
+				continue;
+			}
+
+			this.#chatReadGroup?.seal();
+			this.#chatReadGroup = null;
+			const component = new ToolExecutionComponent(
+				content.name,
+				content.arguments,
+				{
+					// Images can't be sliced through the scroll viewport; keep them off.
+					showImages: false,
+					editFuzzyThreshold: settings.get("edit.fuzzyThreshold"),
+					editAllowFuzzy: settings.get("edit.fuzzyMatch"),
+					liveRegion: this.#chatLog,
+				},
+				this.#getTool?.(content.name),
+				this.#ui,
+				this.#cwd,
+				content.id,
+			);
+			this.#trackExpandable(component);
+			this.#chatLog.addChild(component);
+
+			if (hasErrorStop && errorMessage) {
+				component.updateResult(
+					{ content: [{ type: "text", text: errorMessage }], isError: true },
+					false,
+					content.id,
+				);
+			} else {
+				this.#chatPendingTools.set(content.id, component);
 			}
 		}
 	}
 
-	/** Render markdown text into indented lines using the theme's markdown renderer */
-	#renderMarkdownToLines(text: string, indent: string = INDENT): string[] {
-		const width = Math.max(40, (process.stdout.columns || 80) - indent.length - 4);
-		const md = new Markdown(text, 0, 0, this.#mdTheme);
-		const rendered = md.render(width);
-		return rendered.map(line => `${indent}${line.trimEnd()}`);
-	}
-
-	#renderThinkingLines(lines: string[], thinking: string, expanded: boolean, selected: boolean): void {
-		const cursor = selected ? theme.fg("accent", theme.nav.cursor) : " ";
-		const maxChars = expanded ? MAX_THINKING_CHARS_EXPANDED : MAX_THINKING_CHARS_COLLAPSED;
-		const truncated = thinking.length > maxChars;
-		const expandLabel = !expanded && truncated ? theme.fg("dim", " ↵") : "";
-
-		lines.push("");
-		lines.push(`${cursor} ${theme.fg("dim", "💭 Thinking")}${expandLabel}`);
-
-		const displayText = truncated ? `${thinking.slice(0, maxChars)}...` : thinking;
-		if (expanded) {
-			// Expanded thinking: render as markdown for readable formatting
-			const mdLines = this.#renderMarkdownToLines(displayText);
-			const maxLines = 100;
-			for (let i = 0; i < Math.min(mdLines.length, maxLines); i++) {
-				lines.push(mdLines[i]);
+	#appendToolResult(message: Extract<AgentMessage, { role: "toolResult" }>): void {
+		const pending = this.#chatPendingTools.get(message.toolCallId);
+		const isReadGroupResult = message.toolName === "read" && (!pending || pending instanceof ReadToolGroupComponent);
+		if (isReadGroupResult) {
+			let component = pending;
+			if (!component) {
+				const group = this.#ensureReadGroup();
+				const args = this.#chatReadArgs.get(message.toolCallId);
+				if (args) group.updateArgs(args, message.toolCallId);
+				component = group;
 			}
-			if (mdLines.length > maxLines) {
-				lines.push(`${INDENT}${theme.fg("dim", `... ${mdLines.length - maxLines} more lines`)}`);
-			}
-		} else {
-			// Collapsed thinking: brief italic preview
-			const thinkingLines = displayText.split("\n");
-			const maxLines = PREVIEW_LIMITS.COLLAPSED_LINES;
-			for (let i = 0; i < Math.min(thinkingLines.length, maxLines); i++) {
-				lines.push(`${INDENT}${theme.fg("thinkingText", sanitizeLine(thinkingLines[i]))}`);
-			}
-			if (thinkingLines.length > maxLines) {
-				lines.push(`${INDENT}${theme.fg("dim", `... ${thinkingLines.length - maxLines} more lines`)}`);
-			}
-		}
-	}
-
-	#renderTextLines(lines: string[], text: string, expanded: boolean, selected: boolean): void {
-		const cursor = selected ? theme.fg("accent", theme.nav.cursor) : " ";
-
-		lines.push("");
-		lines.push(`${cursor} ${theme.fg("muted", "Response")}`);
-
-		if (expanded) {
-			// Expanded: full markdown rendering
-			const mdLines = this.#renderMarkdownToLines(text);
-			for (const ml of mdLines) {
-				lines.push(ml);
-			}
-		} else {
-			// Collapsed: first few lines as plain text
-			const textLines = text.split("\n");
-			const maxLines = PREVIEW_LIMITS.COLLAPSED_LINES;
-			const maxWidth = contentWidth();
-			for (let i = 0; i < Math.min(textLines.length, maxLines); i++) {
-				lines.push(`${INDENT}${sanitizeLine(textLines[i], maxWidth)}`);
-			}
-			if (textLines.length > maxLines) {
-				lines.push(`${INDENT}${theme.fg("dim", `... ${textLines.length - maxLines} more lines`)}`);
-			}
-		}
-	}
-
-	#renderToolCallLines(
-		lines: string[],
-		call: { id: string; name: string; arguments: Record<string, unknown>; intent?: string },
-		result: ToolResultMessage | undefined,
-		expanded: boolean,
-		selected: boolean,
-	): void {
-		const cursor = selected ? theme.fg("accent", theme.nav.cursor) : " ";
-		lines.push("");
-
-		// Tool call header
-		const intentStr = call.intent ? theme.fg("dim", ` ${sanitizeLine(call.intent, TRUNCATE_LENGTHS.SHORT)}`) : "";
-		lines.push(`${cursor} ${theme.fg("accent", "▸")} ${theme.bold(theme.fg("muted", call.name))}${intentStr}`);
-
-		// Key arguments
-		const argSummary = this.#formatToolArgs(call.name, call.arguments);
-		if (argSummary) {
-			lines.push(`${INDENT}${theme.fg("dim", sanitizeLine(argSummary, contentWidth()))}`);
-		}
-
-		// Tool result
-		if (result) {
-			this.#renderToolResultLines(lines, result, expanded);
-		}
-	}
-
-	#renderToolResultLines(lines: string[], result: ToolResultMessage, expanded: boolean): void {
-		const textParts = result.content
-			.filter((p): p is { type: "text"; text: string } => p.type === "text")
-			.map(p => p.text);
-		const text = textParts.join("\n").trim();
-
-		if (result.isError) {
-			const errorLines = text.split("\n");
-			const maxErrorLines = expanded ? PREVIEW_LIMITS.EXPANDED_LINES : PREVIEW_LIMITS.COLLAPSED_LINES;
-			const maxWidth = contentWidth();
-			lines.push(`${INDENT}${theme.fg("error", `✗ ${sanitizeLine(errorLines[0] || "Error", maxWidth)}`)}`);
-			for (let i = 1; i < Math.min(errorLines.length, maxErrorLines); i++) {
-				lines.push(`${INDENT}  ${theme.fg("error", sanitizeLine(errorLines[i], maxWidth))}`);
-			}
-			if (errorLines.length > maxErrorLines) {
-				lines.push(`${INDENT}  ${theme.fg("dim", `... ${errorLines.length - maxErrorLines} more lines`)}`);
-			}
+			component.updateResult(message, false, message.toolCallId);
+			this.#chatPendingTools.delete(message.toolCallId);
+			this.#chatReadArgs.delete(message.toolCallId);
 			return;
 		}
-
-		if (!text) {
-			lines.push(`${INDENT}${theme.fg("dim", "✓ done")}`);
-			return;
-		}
-
-		const resultLines = text.split("\n");
-		const maxLines = expanded ? PREVIEW_LIMITS.EXPANDED_LINES : PREVIEW_LIMITS.OUTPUT_COLLAPSED;
-
-		// Status line
-		const statusPrefix = `${INDENT}${theme.fg("success", "✓")}`;
-
-		if (resultLines.length === 1 && text.length < TRUNCATE_LENGTHS.LONG) {
-			lines.push(`${statusPrefix} ${theme.fg("dim", sanitizeLine(text))}`);
-			return;
-		}
-
-		lines.push(`${statusPrefix} ${theme.fg("dim", `${resultLines.length} lines`)}`);
-		const displayLines = resultLines.slice(0, maxLines);
-		for (const rl of displayLines) {
-			lines.push(`${INDENT}  ${theme.fg("dim", sanitizeLine(rl))}`);
-		}
-		if (resultLines.length > maxLines) {
-			lines.push(`${INDENT}  ${theme.fg("dim", `... ${resultLines.length - maxLines} more`)}`);
+		if (!pending) return;
+		pending.updateResult(message, false, message.toolCallId);
+		this.#chatPendingTools.delete(message.toolCallId);
+		if (message.toolName === "job" && pending instanceof ToolExecutionComponent && pending.isDisplaceableBlock()) {
+			this.#chatWaitingPoll = pending;
 		}
 	}
 
-	#formatToolArgs(toolName: string, args: Record<string, unknown>): string {
-		switch (toolName) {
-			case "read":
-			case "write":
-			case "edit":
-				return args.path ? `path: ${args.path}` : "";
-			case "search": {
-				const searchPathsInput =
-					typeof args.paths === "string" || Array.isArray(args.paths)
-						? args.paths
-						: typeof args.path === "string"
-							? args.path
-							: undefined;
-				const searchPaths = toPathList(searchPathsInput);
-				return [
-					args.pattern ? `pattern: ${args.pattern}` : "",
-					searchPaths.length > 0 ? `paths: ${searchPaths.join(", ")}` : "",
+	#appendCustomMessage(message: Extract<AgentMessage, { role: "custom" | "hookMessage" }>): void {
+		if (!message.display) return;
+		if (message.customType === "async-result") {
+			const details = (
+				message as CustomMessage<{
+					jobId?: string;
+					type?: "bash" | "task";
+					label?: string;
+					durationMs?: number;
+					jobs?: Array<{ jobId?: string; type?: "bash" | "task"; label?: string; durationMs?: number }>;
+				}>
+			).details;
+			const jobs =
+				details?.jobs && details.jobs.length > 0
+					? details.jobs
+					: [
+							{
+								jobId: details?.jobId,
+								type: details?.type,
+								label: details?.label,
+								durationMs: details?.durationMs,
+							},
+						];
+			const block = new TranscriptBlock();
+			for (const job of jobs) {
+				const jobId = job.jobId ?? "unknown";
+				const typeLabel = job.type ? `[${job.type}]` : "[job]";
+				const duration = typeof job.durationMs === "number" ? formatDuration(job.durationMs) : undefined;
+				const line = [
+					theme.fg("success", `${theme.status.done} Background job completed`),
+					theme.fg("dim", typeLabel),
+					theme.fg("accent", jobId),
+					duration ? theme.fg("dim", `(${duration})`) : undefined,
 				]
 					.filter(Boolean)
-					.join(", ");
+					.join(" ");
+				block.addChild(new Text(line, 1, 0));
 			}
-			case "find":
-				return Array.isArray(args.paths) ? `paths: ${args.paths.join(", ")}` : "";
-			case "bash": {
-				const cmd = args.command;
-				return typeof cmd === "string" ? replaceTabs(cmd) : "";
-			}
-			case "lsp":
-				return [args.action, args.file, args.symbol].filter(Boolean).join(" ");
-			case "ast_grep":
-			case "ast_edit":
-				return args.path ? `path: ${args.path}` : "";
-			case "task": {
-				const target = typeof args.agent === "string" ? args.agent : "";
-				const id = typeof args.id === "string" && args.id ? ` ${args.id}` : "";
-				return `${target}${id}`.trim();
-			}
-			default: {
-				const parts: string[] = [];
-				let total = 0;
-				for (const key in args) {
-					if (key.startsWith("_")) continue;
-					const value = args[key];
-					const v = typeof value === "string" ? value : JSON.stringify(value);
-					const entry = `${key}: ${replaceTabs(v ?? "")}`;
-					if (total + entry.length > MAX_TOOL_ARGS_CHARS) break;
-					parts.push(entry);
-					total += entry.length;
-				}
-				return parts.join(", ");
-			}
+			this.#chatLog.addChild(block);
+			return;
 		}
+		if (message.customType === LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE) {
+			const details = (message as CustomMessage<{ files?: LateDiagnosticsFile[] }>).details;
+			const component = new LateDiagnosticsMessageComponent(details?.files ?? []);
+			this.#trackExpandable(component);
+			this.#chatLog.addChild(component);
+			return;
+		}
+		if (message.customType === COLLAB_PROMPT_MESSAGE_TYPE) {
+			this.#chatLog.addChild(new CollabPromptMessageComponent(message as CustomMessage<CollabPromptDetails>));
+			return;
+		}
+		if (message.customType === SKILL_PROMPT_MESSAGE_TYPE) {
+			const component = new SkillMessageComponent(message as CustomMessage<SkillPromptDetails>);
+			this.#trackExpandable(component);
+			this.#chatLog.addChild(component);
+			return;
+		}
+		if (
+			message.customType === "irc:incoming" ||
+			message.customType === "irc:autoreply" ||
+			message.customType === "irc:relay"
+		) {
+			const details = (
+				message as CustomMessage<{ from?: string; to?: string; message?: string; body?: string; replyTo?: string }>
+			).details;
+			const kind =
+				message.customType === "irc:incoming"
+					? ("incoming" as const)
+					: message.customType === "irc:autoreply"
+						? ("autoreply" as const)
+						: ("relay" as const);
+			const card = createIrcMessageCard(
+				{
+					kind,
+					from: details?.from,
+					to: details?.to,
+					body: kind === "incoming" ? details?.message : details?.body,
+					replyTo: details?.replyTo,
+					timestamp: message.timestamp,
+				},
+				() => this.#chatExpanded,
+				theme,
+			);
+			this.#chatLog.addChild(card);
+			return;
+		}
+		const component = new CustomMessageComponent(
+			message as CustomMessage<unknown>,
+			this.#getMessageRenderer?.(message.customType),
+		);
+		this.#trackExpandable(component);
+		this.#chatLog.addChild(component);
 	}
 
 	#loadTranscript(sessionFile: string): SessionMessageEntry[] | null {

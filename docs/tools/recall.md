@@ -60,8 +60,8 @@ When no matches exist:
 - Backend auto-recall has a richer query-composition path in `HindsightSessionState.beforeAgentStartPrompt(...)` / `maybeRecallOnAgentStart(...)` and `MnemopiSessionState.beforeAgentStartPrompt(...)` / `maybeRecallOnAgentStart(...)`.
 - Hindsight bank scoping:
   - `global` — no tag filter.
-  - `per-project` — separate bank id per cwd basename.
-  - `per-project-tagged` — shared bank id plus `project:<cwd basename>` filter with `tagsMatch = "any"`, so project-tagged and untagged global memories can both surface.
+  - `per-project` — separate bank id per project label (git primary checkout root basename; cwd basename outside a repo).
+  - `per-project-tagged` — shared bank id plus `project:<project label>` filter with `tagsMatch = "any"`, so project-tagged and untagged global memories can both surface.
 - Mnemopi bank scoping:
   - `global` — recall reads the shared bank.
   - `per-project` — recall reads the project bank.

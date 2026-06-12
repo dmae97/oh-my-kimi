@@ -39,9 +39,39 @@ describe("collab link parsing", () => {
 		expect("error" in parseCollabLink(`ws://relay.example.com/r/${ROOM}#${KEY_TEXT}`)).toBe(true);
 	});
 
-	it("rejects keys that are not 32 base64url bytes", () => {
+	it("rejects keys that are not 32 or 48 base64url bytes", () => {
 		const shortKey = encodeBase64Url(new Uint8Array(16));
 		expect("error" in parseCollabLink(`${ROOM}#${shortKey}`)).toBe(true);
+		const midKey = encodeBase64Url(new Uint8Array(40));
+		expect("error" in parseCollabLink(`${ROOM}#${midKey}`)).toBe(true);
+	});
+
+	it("splits full-link fragments into key and write token", () => {
+		const token = Uint8Array.from({ length: 16 }, (_, i) => 0xf0 + i);
+		const full = parseCollabLink(formatCollabLink(DEFAULT_RELAY_URL, ROOM, KEY, token));
+		if ("error" in full) throw new Error(full.error);
+		expect(full.key).toEqual(KEY);
+		expect(full.writeToken).toEqual(token);
+
+		const view = parseCollabLink(formatCollabLink(DEFAULT_RELAY_URL, ROOM, KEY));
+		if ("error" in view) throw new Error(view.error);
+		expect(view.key).toEqual(KEY);
+		expect(view.writeToken).toBeUndefined();
+	});
+
+	it("parses web deep links (https://<relay>/#<link>)", () => {
+		const bare = parseCollabLink(`https://my.omp.sh/#${ROOM}#${KEY_TEXT}`);
+		if ("error" in bare) throw new Error(bare.error);
+		expect(bare.wsUrl).toBe(`${DEFAULT_RELAY_URL}/r/${ROOM}`);
+		expect(bare.key).toEqual(KEY);
+
+		const custom = parseCollabLink(`https://relay.example.com:8443/#relay.example.com:8443/r/${ROOM}#${KEY_TEXT}`);
+		if ("error" in custom) throw new Error(custom.error);
+		expect(custom.wsUrl).toBe(`wss://relay.example.com:8443/r/${ROOM}`);
+
+		const local = parseCollabLink(`http://localhost:7466/#ws://localhost:7466/r/${ROOM}#${KEY_TEXT}`);
+		if ("error" in local) throw new Error(local.error);
+		expect(local.wsUrl).toBe(`ws://localhost:7466/r/${ROOM}`);
 	});
 
 	it("round-trips format → parse for default, custom, and localhost relays", () => {

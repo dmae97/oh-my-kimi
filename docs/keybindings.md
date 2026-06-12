@@ -25,7 +25,7 @@ app.stt.toggle: []
 | Action ID                   | Default                                | Meaning                                       |
 | --------------------------- | -------------------------------------- | --------------------------------------------- |
 | `app.model.cycleForward`    | `Ctrl+P`                               | Cycle role models forward                     |
-| `app.model.cycleBackward`   | `Shift+Ctrl+P`                         | Cycle role models in temporary mode           |
+| `app.model.cycleBackward`   | `Shift+Ctrl+P`                         | Cycle role models backward                    |
 | `app.model.selectTemporary` | `Alt+P`                                | Pick a model temporarily for this session     |
 | `app.model.select`          | `Alt+M`                                | Open the model selector and set roles         |
 | `app.plan.toggle`           | `Alt+Shift+P`                          | Toggle plan mode                              |

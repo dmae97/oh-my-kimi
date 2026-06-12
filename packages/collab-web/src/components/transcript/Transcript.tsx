@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { ActiveTool } from "../../lib/client";
 import { fmtTokens } from "../../lib/format";
+import type { ToolRenderHost } from "../../tool-render";
 import { Markdown } from "./Markdown";
 import { ToolCard } from "./ToolCard";
 import "./transcript.css";
@@ -15,6 +16,8 @@ export interface TranscriptProps {
 	activeTools: ReadonlyMap<string, ActiveTool>;
 	working: boolean;
 	compact?: boolean; // dense variant for the agent drawer
+	/** Sub-session drill-down capabilities forwarded to tool renderers. */
+	host?: ToolRenderHost;
 }
 
 function Row({
@@ -86,12 +89,14 @@ function AssistantBody({
 	results,
 	active,
 	pending,
+	host,
 }: {
 	message: AssistantMessage;
 	results: ReadonlyMap<string, ToolResultMessage>;
 	active: ReadonlyMap<string, ActiveTool>;
 	/** Still streaming — suppress stop-reason chips on the partial message. */
 	pending: boolean;
+	host?: ToolRenderHost;
 }): ReactNode {
 	const blocks = message.content.map((block, i) => {
 		switch (block.type) {
@@ -112,6 +117,7 @@ function AssistantBody({
 						intent={block.intent ?? act?.intent}
 						args={block.arguments}
 						result={result}
+						host={host}
 						running={!result && (act !== undefined || pending)}
 						partialResult={act?.partialResult}
 					/>
@@ -142,11 +148,12 @@ interface EntryRowProps {
 	entry: SessionEntry;
 	results: ReadonlyMap<string, ToolResultMessage>;
 	active: ReadonlyMap<string, ActiveTool>;
+	host?: ToolRenderHost;
 }
 
 /** Re-render only when the entry itself or one of its tool pairings changed. */
 function entryRowEqual(prev: EntryRowProps, next: EntryRowProps): boolean {
-	if (prev.entry !== next.entry) return false;
+	if (prev.entry !== next.entry || prev.host !== next.host) return false;
 	const e = next.entry;
 	if (e.type !== "message" || e.message.role !== "assistant") return true;
 	for (const block of e.message.content) {
@@ -157,7 +164,7 @@ function entryRowEqual(prev: EntryRowProps, next: EntryRowProps): boolean {
 	return true;
 }
 
-const EntryRow = memo(function EntryRow({ entry, results, active }: EntryRowProps): ReactNode {
+const EntryRow = memo(function EntryRow({ entry, results, active, host }: EntryRowProps): ReactNode {
 	switch (entry.type) {
 		case "message": {
 			const msg = entry.message;
@@ -171,7 +178,7 @@ const EntryRow = memo(function EntryRow({ entry, results, active }: EntryRowProp
 				case "assistant":
 					return (
 						<Row kind="assistant" gutter="agent" title={entry.timestamp}>
-							<AssistantBody message={msg} results={results} active={active} pending={false} />
+							<AssistantBody message={msg} results={results} active={active} pending={false} host={host} />
 						</Row>
 					);
 				default:
@@ -235,7 +242,7 @@ const EntryRow = memo(function EntryRow({ entry, results, active }: EntryRowProp
 }, entryRowEqual);
 
 export function Transcript(props: TranscriptProps): ReactNode {
-	const { entries, stream, streamDone, activeTools, working, compact } = props;
+	const { entries, stream, streamDone, activeTools, working, compact, host } = props;
 
 	const results = useMemo(() => {
 		const map = new Map<string, ToolResultMessage>();
@@ -281,11 +288,17 @@ export function Transcript(props: TranscriptProps): ReactNode {
 		>
 			{entries.length === 0 && stream === null && !working && <div className="tr-empty">no activity yet</div>}
 			{entries.map(entry => (
-				<EntryRow key={entry.id} entry={entry} results={results} active={activeTools} />
+				<EntryRow key={entry.id} entry={entry} results={results} active={activeTools} host={host} />
 			))}
 			{stream !== null && (
 				<Row kind="assistant" gutter="agent">
-					<AssistantBody message={stream} results={results} active={activeTools} pending={!streamDone} />
+					<AssistantBody
+						message={stream}
+						results={results}
+						active={activeTools}
+						pending={!streamDone}
+						host={host}
+					/>
 				</Row>
 			)}
 			{tailTools.length > 0 && (
@@ -299,6 +312,7 @@ export function Transcript(props: TranscriptProps): ReactNode {
 							args={tool.args}
 							running
 							partialResult={tool.partialResult}
+							host={host}
 						/>
 					))}
 				</Row>

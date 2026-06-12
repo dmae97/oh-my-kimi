@@ -56,7 +56,7 @@ function createFixture(opts: {
 	const streamingComponent = { updateContent, setUsageInfo, setComplete, markTranscriptBlockFinalized };
 	const requestRender = vi.fn();
 
-	const ctx = {
+	const ctxBase = {
 		isInitialized: true,
 		init: vi.fn(async () => {}),
 		ui: { requestRender },
@@ -65,10 +65,16 @@ function createFixture(opts: {
 		streamingComponent,
 		streamingMessage: opts.streamingMessage,
 		pendingTools: new Map(),
-		session: {
-			isTtsrAbortPending: opts.isTtsrAbortPending ?? false,
-			retryAttempt: opts.retryAttempt ?? 0,
-		},
+	};
+	const sessionMock = {
+		isTtsrAbortPending: opts.isTtsrAbortPending ?? false,
+		retryAttempt: opts.retryAttempt ?? 0,
+	};
+	const ctx = {
+		...ctxBase,
+		session: sessionMock,
+		viewSession: sessionMock,
+		clearTransientSessionUi: () => {},
 	} as unknown as InteractiveModeContext;
 
 	const controller = new EventController(ctx);

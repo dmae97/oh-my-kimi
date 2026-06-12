@@ -4,7 +4,7 @@ This document describes how MCP servers are discovered, connected, exposed as to
 
 ## Lifecycle at a glance
 
-1. **SDK startup** calls `discoverAndLoadMCPTools()` (unless MCP is disabled).
+1. **SDK startup** kicks off MCP discovery (unless MCP is disabled): headless/SDK sessions await `discoverAndLoadMCPTools()`; interactive sessions (`hasUI: true`) create the manager up front and defer `discoverAndConnect()` until the session is live.
 2. **Discovery** (`loadAllMCPConfigs`) resolves MCP server configs from capability sources, filters disabled/project/Exa entries and browser MCP servers when the built-in browser tool is enabled, and preserves source metadata.
 3. **Manager connect phase** (`MCPManager.connectServers`) starts per-server connect + `tools/list` in parallel.
 4. **Fast startup gate** waits up to 250ms, then may return:
@@ -20,13 +20,17 @@ This document describes how MCP servers are discovered, connected, exposed as to
 
 ### Entry path from SDK
 
-`createAgentSession()` in `src/sdk.ts` performs MCP startup when `enableMCP` is true (default):
+`createAgentSession()` in `src/sdk.ts` performs MCP startup when `enableMCP` is true (default). There are two paths:
 
-- calls `discoverAndLoadMCPTools(cwd, { ... })`,
-- passes `authStorage`, cache storage, `mcp.enableProjectConfig`, and browser-MCP filtering based on the `browser.enabled` setting,
-- always sets `filterExa: true`,
-- logs per-server load/connect errors,
-- stores returned manager in `toolSession.mcpManager` and session result.
+- **Headless/SDK** (no UI, no provided manager): awaits `discoverAndLoadMCPTools(cwd, { ... })` and merges the returned tools into the startup `customTools` set.
+- **Interactive/TUI** (`hasUI: true`, no provided manager): constructs `MCPManager` immediately (with cache + auth storage), defers `discoverAndConnect()` to a background task started after the session exists, then binds tools via `session.refreshMCPTools(...)` (disposing the manager if the session was torn down mid-connect).
+
+Both paths:
+
+- pass `authStorage`, cache storage, `mcp.enableProjectConfig`, and browser-MCP filtering based on the `browser.enabled` setting,
+- always set `filterExa: true`,
+- log per-server load/connect errors,
+- store the manager in `toolSession.mcpManager` and the session result.
 
 If `enableMCP` is false, MCP discovery is skipped entirely.
 
@@ -107,9 +111,9 @@ After 250ms:
 - rejected tasks produce per-server errors,
 - still-pending tasks:
   - use cached tool definitions if available (`MCPToolCache.get`) to create `DeferredMCPTool`s,
-  - otherwise block until those pending tasks settle.
+  - otherwise contribute no tools at startup; they stay in flight, and the background continuation registers their tools via `#onToolsChanged` once connect/list finishes (a slow server no longer blocks startup — issue #2100).
 
-This is a hybrid startup model: fast return when cache is available, correctness wait when cache is not.
+This is a hybrid startup model: fast return with deferred handles when cache is available, late background registration when it is not.
 
 ### Background completion behavior
 
@@ -160,7 +164,7 @@ Current runtime behavior is connection-event driven:
 
 - **No autonomous polling health monitor** in manager/client.
 - **Automatic reconnect is wired to `transport.onClose`** for managed connections.
-- Reconnect retries with backoff (`500`, `1000`, `2000`, `4000` ms), reloads tools, and notifies consumers on success.
+- Reconnect retries with backoff (`500`, `1000`, `2000`, `4000` ms), reloads tools, and notifies consumers on success. A crash-storm circuit breaker suspends automatic reconnects for a server after more than 5 reconnect attempts within 30s; manual `/mcp reconnect` resets that history.
 - Tool calls that see retriable connection errors also attempt one reconnect + retry.
 - Reconnect is also explicit via `/mcp reconnect <name>` or broader `/mcp reload`.
 
@@ -199,7 +203,7 @@ In current wiring, explicit teardown is used in MCP command flows (for reload/re
 | Invalid server config                                | Server skipped with validation error entry                                                                                | Best-effort per server         |
 | Connect timeout/init failure                         | Server error recorded; others continue                                                                                    | Best-effort per server         |
 | `tools/list` still pending at startup with cache hit | Deferred tools returned immediately                                                                                       | Best-effort fast startup       |
-| `tools/list` still pending at startup without cache  | Startup waits for pending to settle                                                                                       | Hard wait for correctness      |
+| `tools/list` still pending at startup without cache  | No tools at startup; background continuation registers them via `#onToolsChanged` when ready                              | Best-effort late registration  |
 | Late background tool-load failure                    | Logged after startup gate                                                                                                 | Best-effort logging            |
 | Runtime dropped transport                            | Manager attempts reconnect; stale tools remain while reconnecting and future calls may retry once or fail with MCP errors | Best-effort automatic recovery |
 

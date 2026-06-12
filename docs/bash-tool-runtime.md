@@ -95,7 +95,8 @@ That means print mode and non-UI RPC/tool contexts always use non-PTY.
 - configured command prefix,
 - snapshot path,
 - serialized shell env,
-- optional agent session key.
+- optional agent session key,
+- minimizer configuration.
 
 Session-level bang-command executions pass `sessionKey: this.sessionId`.
 

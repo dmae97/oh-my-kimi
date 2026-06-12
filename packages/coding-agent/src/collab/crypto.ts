@@ -4,23 +4,29 @@
  * The room key lives only in the link fragment; the relay sees opaque bytes.
  * Sealed layout: `[12B IV][ciphertext+tag]`.
  */
+import { ROOM_KEY_BYTES, WRITE_TOKEN_BYTES } from "@oh-my-pi/pi-wire";
 import type { CollabFrame } from "./protocol";
 
 const AES_ALGORITHM = "AES-GCM";
 const IV_LENGTH = 12;
-const KEY_LENGTH = 32;
 const TEXT_ENCODER = new TextEncoder();
 const TEXT_DECODER = new TextDecoder();
 
 export function generateRoomKey(): Uint8Array {
-	const key = new Uint8Array(KEY_LENGTH);
+	const key = new Uint8Array(ROOM_KEY_BYTES);
 	crypto.getRandomValues(key);
 	return key;
 }
 
+export function generateWriteToken(): Uint8Array {
+	const token = new Uint8Array(WRITE_TOKEN_BYTES);
+	crypto.getRandomValues(token);
+	return token;
+}
+
 export function importRoomKey(raw: Uint8Array): Promise<CryptoKey> {
-	if (raw.byteLength !== KEY_LENGTH) {
-		throw new Error(`Room key must be ${KEY_LENGTH} bytes, got ${raw.byteLength}`);
+	if (raw.byteLength !== ROOM_KEY_BYTES) {
+		throw new Error(`Room key must be ${ROOM_KEY_BYTES} bytes, got ${raw.byteLength}`);
 	}
 	return crypto.subtle.importKey("raw", asStrict(raw), AES_ALGORITHM, false, ["encrypt", "decrypt"]);
 }

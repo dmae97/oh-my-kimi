@@ -24,8 +24,8 @@
  * eligibility off exact limit ids (`openai-codex:primary` /
  * `openai-codex:secondary`) and `usedFraction`, never off `status`.
  *
- * ANTI-WASTE GATES (in evaluation order): the policy must be OFF unless opted
- * in; the active model must be Codex (not Spark — a Spark block lives on a
+ * ANTI-WASTE GATES (in evaluation order): the policy must not be set to "no";
+ * the active model must be Codex (not Spark — a Spark block lives on a
  * separate meter and it is unknown whether a credit even resets it); a fresh
  * usage report for the active account must confirm `limitReached`; the WEEKLY
  * (secondary) window must be genuinely exhausted — a 5h-only block self-heals
@@ -38,18 +38,28 @@
  * read-only views are passed in so the predicate itself stays deterministic.
  */
 import type { OAuthAccountIdentity, ResetCreditTarget, UsageReport } from "@oh-my-pi/pi-ai";
+import type { CodexAutoRedeemMode } from "../config/settings-schema";
 import { reportMatchesActiveAccount } from "../slash-commands/helpers/active-oauth-account";
 
 /** Weekly window counts as exhausted at `usedFraction >= 0.999` (used_percent >= 99.9). */
 export const WEEKLY_EXHAUSTED_MIN_FRACTION = 0.999;
 /** A weekly reset can never be more than one window length (7d) away; +1h slack for skew. */
 export const MAX_PLAUSIBLE_REMAINING_MS = 7 * 24 * 3_600_000 + 60 * 60_000;
+
 /** Report must be no older than the 5-min usage cache TTL plus slack. */
 export const REPORT_FRESHNESS_MS = 10 * 60_000;
 /** Per-account cooldown that catches blockKey drift across a minute boundary. */
 export const ATTEMPT_COOLDOWN_MS = 60_000;
 /** Minute bucket for blockKey, absorbing `reset_after_seconds`-derived jitter. */
 export const DEBOUNCE_BUCKET_MS = 60_000;
+
+export function shouldEvaluateCodexAutoRedeem(mode: CodexAutoRedeemMode): boolean {
+	return mode !== "no";
+}
+
+export function shouldPromptCodexAutoRedeem(mode: CodexAutoRedeemMode): boolean {
+	return mode === "unset";
+}
 
 export type CodexAutoRedeemSkipReason =
 	| "disabled"
@@ -83,16 +93,18 @@ export interface CodexAutoRedeemInput {
 	lastAttemptAtByAccount: ReadonlyMap<string, number>;
 }
 
+export interface CodexAutoRedeemRedeemDecision {
+	redeem: true;
+	target: ResetCreditTarget;
+	accountKey: string;
+	blockKey: string;
+	weeklyResetAtMs: number;
+	remainingMs: number;
+	availableCount: number;
+}
+
 export type CodexAutoRedeemDecision =
-	| {
-			redeem: true;
-			target: ResetCreditTarget;
-			accountKey: string;
-			blockKey: string;
-			weeklyResetAtMs: number;
-			remainingMs: number;
-			availableCount: number;
-	  }
+	| CodexAutoRedeemRedeemDecision
 	| { redeem: false; reason: CodexAutoRedeemSkipReason };
 
 /** Trimmed lowercase, or undefined when blank. Mirrors `normalizeIdentityValue` in active-oauth-account.ts. */

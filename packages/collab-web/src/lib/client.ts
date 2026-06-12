@@ -19,7 +19,7 @@ import type {
 	SubagentProgressPayload,
 } from "@oh-my-pi/pi-wire";
 import { importRoomKey } from "./codec";
-import { COLLAB_PROTO, parseCollabLink } from "./link";
+import { COLLAB_PROTO, encodeBase64Url, parseCollabLink } from "./link";
 import { CollabSocket } from "./socket";
 
 export type ConnectionPhase = "connecting" | "waiting" | "live" | "reconnecting" | "ended";
@@ -57,6 +57,8 @@ export interface GuestSnapshot {
 	activeTools: ReadonlyMap<string, ActiveTool>;
 	/** agent_start..agent_end, reconciled by state.isStreaming. */
 	working: boolean;
+	/** True when this guest joined through a read-only (view) link. */
+	readOnly: boolean;
 	/** Capped at 50, newest last. */
 	notices: readonly Notice[];
 }
@@ -74,6 +76,8 @@ interface PendingTranscript {
 export class GuestClient {
 	readonly #socket: CollabSocket;
 	readonly #name: string;
+	/** base64url write token from a full link; absent when joined via a view link. */
+	readonly #writeToken: string | undefined;
 	readonly #listeners = new Set<() => void>();
 	readonly #pendingTranscripts = new Map<number, PendingTranscript>();
 	#reqSeq = 0;
@@ -94,6 +98,7 @@ export class GuestClient {
 	#streamDone = false;
 	#activeTools: ReadonlyMap<string, ActiveTool> = new Map();
 	#working = false;
+	#readOnly = false;
 	#notices: readonly Notice[] = [];
 	#snapshot: GuestSnapshot;
 
@@ -102,6 +107,7 @@ export class GuestClient {
 		const parsed = parseCollabLink(link);
 		if ("error" in parsed) throw new Error(parsed.error);
 		this.#name = displayName;
+		this.#writeToken = parsed.writeToken ? encodeBase64Url(parsed.writeToken) : undefined;
 		this.#socket = new CollabSocket({ wsUrl: parsed.wsUrl, role: "guest", key: importRoomKey(parsed.key) });
 		this.#socket.onOpen = () => this.#handleOpen();
 		this.#socket.onFrame = frame => this.#applyFrameSafe(frame);
@@ -175,7 +181,7 @@ export class GuestClient {
 	}
 
 	#handleOpen(): void {
-		this.#socket.send({ t: "hello", proto: COLLAB_PROTO, name: this.#name });
+		this.#socket.send({ t: "hello", proto: COLLAB_PROTO, name: this.#name, writeToken: this.#writeToken });
 		this.#phase = this.#everConnected ? "reconnecting" : "waiting";
 		this.#everConnected = true;
 		this.#commit();
@@ -242,6 +248,7 @@ export class GuestClient {
 				this.#working = frame.state.isStreaming;
 				this.#phase = "live";
 				this.#endedReason = null;
+				this.#readOnly = frame.readOnly === true;
 				this.#welcomed = true;
 				this.#clearWelcomeTimer();
 				break;
@@ -399,6 +406,7 @@ export class GuestClient {
 			streamDone: this.#streamDone,
 			activeTools: this.#activeTools,
 			working: this.#working,
+			readOnly: this.#readOnly,
 			notices: this.#notices,
 		};
 	}

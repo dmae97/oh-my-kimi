@@ -122,6 +122,7 @@ import { InputController } from "./controllers/input-controller";
 import { MCPCommandController } from "./controllers/mcp-command-controller";
 import { OmfgController } from "./controllers/omfg-controller";
 import { SelectorController } from "./controllers/selector-controller";
+import { SessionFocusController } from "./controllers/session-focus-controller";
 import { SSHCommandController } from "./controllers/ssh-command-controller";
 import { TanCommandController } from "./controllers/tan-command-controller";
 import { TodoCommandController } from "./controllers/todo-command-controller";
@@ -285,10 +286,15 @@ class StatusContainer extends Container implements NativeScrollbackLiveRegion {
  * Build the anchored subagent HUD block: a bold accent "Subagents" header plus
  * one hooked row per running agent in the same `Id: description` shape the
  * inline task rows use (muted task preview when no description was given).
+ * Only detached background spawns are listed: a sync task call blocks the
+ * parent turn and its inline tool block already renders progress live, and
+ * eval `agent()` spawns are rendered by their own eval cell tree.
  * Returns an empty array when nothing is running so the container can clear.
  */
 export function renderSubagentHudLines(sessions: ObservableSession[], columns: number): string[] {
-	const running = sessions.filter(session => session.kind === "subagent" && session.status === "active");
+	const running = sessions.filter(
+		session => session.kind === "subagent" && session.status === "active" && session.detached === true,
+	);
 	if (running.length === 0) return [];
 
 	const indent = "  ";
@@ -435,6 +441,34 @@ export class InteractiveMode implements InteractiveModeContext {
 	readonly #extensionUiController: ExtensionUiController;
 	readonly #inputController: InputController;
 	readonly #selectorController: SelectorController;
+	readonly #focusController: SessionFocusController;
+	get viewSession(): AgentSession {
+		return this.#focusController.target ?? this.session;
+	}
+	get focusedAgentId(): string | undefined {
+		return this.#focusController.focusedAgentId;
+	}
+	focusAgentSession(id: string): Promise<void> {
+		return this.#focusController.focusAgent(id);
+	}
+	focusParentSession(): Promise<void> {
+		return this.#focusController.focusParent();
+	}
+	unfocusSession(): Promise<void> {
+		return this.#focusController.unfocus();
+	}
+	clearTransientSessionUi(): void {
+		if (this.loadingAnimation) {
+			this.loadingAnimation.stop();
+			this.loadingAnimation = undefined;
+		}
+		this.statusContainer.clear();
+		this.pendingMessagesContainer.clear();
+		this.compactionQueuedMessages = [];
+		this.streamingComponent = undefined;
+		this.streamingMessage = undefined;
+		this.pendingTools.clear();
+	}
 	readonly #uiHelpers: UiHelpers;
 	#sttController: STTController | undefined;
 	#voiceAnimationInterval: NodeJS.Timeout | undefined;
@@ -560,6 +594,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#commandController = new CommandController(this);
 		this.#todoCommandController = new TodoCommandController(this);
 		this.#selectorController = new SelectorController(this);
+		this.#focusController = new SessionFocusController(this);
 		this.#inputController = new InputController(this);
 		this.#observerRegistry = new SessionObserverRegistry();
 	}
@@ -1155,6 +1190,12 @@ export class InteractiveMode implements InteractiveModeContext {
 				this.editor.borderColor = theme.getThinkingBorderColor(level);
 			}
 		}
+		if (this.focusedAgentId) {
+			// Focused subagent view: faint the outline so the borrowed session is
+			// visually distinct from the main one.
+			const base = this.editor.borderColor;
+			this.editor.borderColor = (str: string) => `\x1b[2m${base(str)}\x1b[22m`;
+		}
 		this.updateEditorTopBorder();
 		this.ui.requestRender();
 	}
@@ -1169,7 +1210,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.chatContainer.clear();
 		// Full-history transcript: compactions render as inline dividers instead
 		// of restarting the visible conversation (the LLM context still resets).
-		const context = this.session.buildTranscriptSessionContext();
+		const context = this.viewSession.buildTranscriptSessionContext();
 		this.renderSessionContext(context);
 		// During the pre-streaming window — after `startPendingSubmission` has
 		// optimistically rendered the user's message but before the user
@@ -2695,6 +2736,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		this.#btwController.dispose();
 		this.#omfgController.dispose();
+		this.#focusController.dispose();
 
 		// Emit shutdown event to hooks
 		await this.session.dispose();

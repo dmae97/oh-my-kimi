@@ -23,6 +23,24 @@ declare module "*.bdf" {
 	export default content;
 }
 
+// Session-export template assets imported as text (coding-agent src/export/html).
+// No `*.html` declaration: bun-types claims that pattern as HTMLBundle, so the
+// text import casts at the use site instead.
+declare module "*.css" {
+	const content: string;
+	export default content;
+}
+
+declare module "*/template.js" {
+	const content: string;
+	export default content;
+}
+
+declare module "*.generated.js" {
+	const content: string;
+	export default content;
+}
+
 // turndown-plugin-gfm has no published types
 declare module "turndown-plugin-gfm" {
 	import type TurndownService from "turndown";

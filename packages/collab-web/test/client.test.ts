@@ -50,8 +50,8 @@ function messageEntry(id: string, message: WireMessage): SessionEntry {
 	return { type: "message", id, parentId: null, timestamp: "2026-06-12T00:00:01Z", message };
 }
 
-function welcomeFrame(entries: SessionEntry[] = []): HostFrame {
-	return { t: "welcome", proto: 1, header: HEADER, entries, state: STATE, agents: AGENTS };
+function welcomeFrame(entries: SessionEntry[] = [], readOnly?: boolean): HostFrame {
+	return { t: "welcome", proto: 1, header: HEADER, entries, state: STATE, agents: AGENTS, readOnly };
 }
 
 function liveClient(entries: SessionEntry[] = []): GuestClient {
@@ -77,6 +77,13 @@ describe("GuestClient frame apply", () => {
 		expect(snap.working).toBe(false);
 		expect(snap.stream).toBeNull();
 		expect(snap.activeTools.size).toBe(0);
+	});
+
+	it("welcome readOnly flag lands in the snapshot", () => {
+		const client = new GuestClient(LINK, "tester");
+		expect(client.getSnapshot().readOnly).toBe(false);
+		client.applyFrameForTest(welcomeFrame([], true));
+		expect(client.getSnapshot().readOnly).toBe(true);
 	});
 
 	it("message_update sets the stream ghost (synthesizing a missed start)", () => {

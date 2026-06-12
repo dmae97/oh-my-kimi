@@ -11,6 +11,13 @@ export interface ObservableSession {
 	status: "active" | "completed" | "failed" | "aborted";
 	sessionFile?: string;
 	parentToolCallId?: string;
+	/**
+	 * Spawn runs as a detached background job (parent turn not blocked on it).
+	 * The anchored subagent HUD only lists detached spawns: sync task spawns
+	 * and eval `agent()` spawns are already rendered live by their own inline
+	 * tool block / eval cell.
+	 */
+	detached?: boolean;
 	index?: number;
 	lastUpdate: number;
 	/** Latest progress snapshot from the subagent executor */
@@ -146,6 +153,7 @@ export class SessionObserverRegistry {
 					existing.lastUpdate = Date.now();
 					existing.index = payload.index;
 					existing.parentToolCallId = payload.parentToolCallId ?? existing.parentToolCallId;
+					existing.detached = payload.detached ?? existing.detached;
 					if (payload.description) existing.description = payload.description;
 					if (payload.sessionFile) existing.sessionFile = payload.sessionFile;
 				} else {
@@ -158,6 +166,7 @@ export class SessionObserverRegistry {
 						status,
 						sessionFile: payload.sessionFile,
 						parentToolCallId: payload.parentToolCallId,
+						detached: payload.detached,
 						index: payload.index,
 						lastUpdate: Date.now(),
 					});
@@ -179,6 +188,7 @@ export class SessionObserverRegistry {
 					existing.lastUpdate = Date.now();
 					existing.index = payload.index;
 					existing.parentToolCallId = payload.parentToolCallId ?? existing.parentToolCallId;
+					existing.detached = payload.detached ?? existing.detached;
 					existing.progress = progress;
 					if (progress.description) existing.description = progress.description;
 					if (payload.sessionFile) existing.sessionFile = payload.sessionFile;
@@ -192,6 +202,7 @@ export class SessionObserverRegistry {
 						status: "active",
 						sessionFile: payload.sessionFile,
 						parentToolCallId: payload.parentToolCallId,
+						detached: payload.detached,
 						index: payload.index,
 						lastUpdate: Date.now(),
 						progress,

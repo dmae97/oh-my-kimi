@@ -31,8 +31,8 @@ For normal file-like reads, `splitPathAndSel()` in `packages/coding-agent/src/to
 | --- | --- |
 | `:raw` | Raw/verbatim mode. Disables structural summaries and line prefixes. |
 | `:conflicts` | Render unresolved Git merge-conflict regions for a local file. |
-| `:N` / `:LN` / `:N-` | Start at 1-indexed line `N`, open-ended. |
-| `:A-B` / `:LA-LB` | Inclusive 1-indexed line range. |
+| `:N` / `:LN` / `:N-` / `:N..` | Start at 1-indexed line `N`, open-ended. |
+| `:A-B` / `:LA-LB` / `:A..B` | Inclusive 1-indexed line range (`..` is a forgiving alias normalized to `-`). |
 | `:A+C` / `:LA+LC` | `C` lines starting at `A`; tool converts this to end line `A + C - 1`. |
 | `:R1,R2,...` | Multiple ranges, sorted and merged before reading (for example `:5-16,960-973`). |
 | `:range:raw` or `:raw:range` | Same line selection, but raw output. |
@@ -88,8 +88,8 @@ URL selectors are parsed separately in `packages/coding-agent/src/tools/fetch.ts
    - markit-converted document
    - structural summary for parseable code/prose
    - streamed text/line-range read
-9. Local text reads are streamed by `streamLinesFromFile()` rather than loading the whole file. The tool adds up to 3 lines of context before/after explicit bounded ranges.
-10. Non-empty contiguous local reads are recorded into `getFileReadCache(session)` for later hashline edit recovery.
+9. Local text reads are streamed by `streamLinesFromFile()` rather than loading the whole file. The tool adds `1` leading and `3` trailing context lines around explicit bounded ranges (constrained sides only).
+10. Hashline-eligible local reads record a whole-file snapshot into the session snapshot store (`getFileSnapshotStore()` on `session.fileSnapshotStore`, `packages/coding-agent/src/edit/file-snapshot-store.ts`) for later hashline edit verification/recovery.
 11. If suffix resolution happened, the first text block is prefixed with `[Path '...' not found; resolved to '...' via suffix match]`.
 
 ## Modes / Variants
@@ -106,8 +106,8 @@ URL selectors are parsed separately in `packages/coding-agent/src/tools/fetch.ts
     - hashline numbered output when edit mode is hashline, read is not raw, source is mutable, edit tool exists, and `readHashLines !== false`
     - otherwise optional line numbers when `readLineNumbers === true`
     - raw mode suppresses both
-- Prefix format in hashline mode is a `¶PATH#TAG` header followed by `LINE:TEXT`, e.g. `¶src/foo.ts#0A1B` and `41:def alpha():`, from the session snapshot store plus `formatNumberedLine()` / `formatHashlineHeader()`.
-- The `edit`/hashline path consumes that header plus bare line numbers later; the four-hex tag is opaque and only meaningful in the session snapshot store that minted it. Immutable sources and `:raw` intentionally suppress hashline headers.
+- Prefix format in hashline mode is a `[PATH#TAG]` header followed by `LINE:TEXT`, e.g. `[src/foo.ts#0A1B]` and `41:def alpha():`, from the session snapshot store plus `formatNumberedLine()` / `formatHashlineHeader()`.
+- The `edit`/hashline path consumes that header plus bare line numbers later; the four-hex tag is a content-derived hash of the whole normalized file, resolvable through the session snapshot store that recorded it. Immutable sources and `:raw` intentionally suppress hashline headers.
 
 ### Directory listings
 - `#readDirectory()` calls `buildDirectoryTree()` with:
@@ -121,9 +121,9 @@ URL selectors are parsed separately in `packages/coding-agent/src/tools/fetch.ts
 ### Archives
 - Supported archive containers: `.tar`, `.tar.gz`, `.tgz`, `.zip`.
 - Syntax: `archive.ext`, `archive.ext:path/inside`, `archive.ext:path/inside:50-60`.
-- `openArchive()` reads the whole archive into memory, then:
-  - tar/tgz uses `new Bun.Archive(bytes)`
-  - zip uses `fflate.unzipSync()`
+- `openArchive()` branches by format:
+  - tar/tgz reads the whole archive into memory (capped at `MAX_TAR_ARCHIVE_BYTES = 256 MiB`) and indexes it with `new Bun.Archive(bytes)`
+  - zip is indexed via ranged central-directory reads (`readZipEntries()`); entries are inflated on demand with `fflate.inflateSync()`, with declared member sizes capped at `MAX_ARCHIVE_MEMBER_BYTES = 64 MiB`
 - Archive paths normalize `/`, drop `.` segments, and reject `..`.
 - Directory reads list immediate children; files show `name` plus ` (size)` when size > 0.
 - Directory listing default limit is `500` entries in `#readArchiveDirectory()`.
@@ -161,7 +161,7 @@ URL selectors are parsed separately in `packages/coding-agent/src/tools/fetch.ts
 - `kind: "raw"`
 - Cannot be combined with table selectors or any other query param.
 - Empty `q` throws.
-- `executeReadQuery()` runs `db.prepare(sql).all()` and rejects bound parameters; it does not verify that the SQL starts with `SELECT`.
+- `executeReadQuery()` prepares the SQL, rejects bound parameters, and collects rows from `statement.iterate()` capped at `MAX_RAW_QUERY_ROWS = 1000`; it does not verify that the SQL starts with `SELECT`.
 
 - Rendering caps in `packages/coding-agent/src/tools/sqlite-reader.ts`:
   - ASCII table width `120` (`MAX_RENDER_WIDTH`)
@@ -196,7 +196,7 @@ URL selectors are parsed separately in `packages/coding-agent/src/tools/fetch.ts
 
 ### Internal URLs
 - `read` does not resolve these itself; it delegates to `session.internalRouter.resolve()`.
-- Registered protocols are outside this file, but the router in `packages/coding-agent/src/internal-urls/router.ts` is built for `agent://`, `artifact://`, `history://`, `issue://`, `local://`, `mcp://`, `memory://`, `omp://`, `pr://`, `rule://`, and `skill://`.
+- Registered protocols are outside this file, but the router in `packages/coding-agent/src/internal-urls/router.ts` is built for `agent://`, `artifact://`, `history://`, `issue://`, `local://`, `mcp://`, `memory://`, `omp://`, `pr://`, `rule://`, `skill://`, and `vault://`.
 - `#handleInternalUrl()` behavior:
   - parses the URL with `parseInternalUrl()` so colons inside the host segment are legal
   - for `agent://`, treats non-root path extraction or `?q=` extraction as a special no-pagination mode
@@ -235,7 +235,7 @@ Notes: ...
 ## Side Effects
 - Filesystem
   - Opens and streams local files.
-  - Reads entire archives into memory before indexing.
+  - Reads tar/tgz archives fully into memory before indexing (256 MiB cap); ZIP archives are indexed via ranged central-directory reads.
   - May read URL-cache artifact files from the session artifacts directory.
   - Writes URL output artifacts when URL output is truncated or when line-range pagination needs a persisted cache body.
 - Network
@@ -245,7 +245,7 @@ Notes: ...
   - Uses `Bun.Archive` for tar/tgz and `fflate` for zip.
   - URL HTML rendering can delegate into site handlers and HTML-to-text backends from `packages/coding-agent/src/tools/fetch.ts`.
 - Session state
-  - Records local text lines into `session.fileReadCache` for later stale-anchor recovery.
+  - Records whole-file snapshots of local text reads into `session.fileSnapshotStore` for later stale-anchor recovery.
   - Uses `session.internalRouter` for internal URLs.
   - Uses `session.allocateOutputArtifact()` for cached/truncated URL output.
 - Background work / cancellation
@@ -267,6 +267,7 @@ Notes: ...
   - default row query limit `20`
   - schema sample limit `5`
   - max query limit `500`
+  - raw `?q=` row cap `1000` (`MAX_RAW_QUERY_ROWS`)
   - table list cap `500`
   - render width `120`, column width `40`
   - busy timeout `3000` ms
@@ -275,14 +276,14 @@ Notes: ...
   - source bytes cap `20 MiB`
   - post-resize inline output cap `300 KiB`
 - Unique suffix auto-resolution glob timeout: `5000` ms.
-- File-read cache holds `30` paths per session.
+- File snapshot store holds `30` paths with up to `4` versions each (`DEFAULT_MAX_PATHS` / `DEFAULT_MAX_VERSIONS_PER_PATH` in `packages/hashline/src/snapshots.ts`); files over `4 MiB` (`SNAPSHOT_MAX_BYTES`) are not snapshotted.
 
 ## Errors
 - Validation and operational failures surface as `ToolError`.
 - Selector errors include:
   - `Line selector 0 is invalid; lines are 1-indexed. Use :1.`
   - invalid `A+B` / `A-B` shapes
-  - `Cannot combine query extraction with offset/limit` for `agent://.../path:50`
+  - `Cannot combine query extraction with line selectors` for `agent://.../path:50`
 - Missing local/archive/sqlite paths first attempt unique suffix resolution; if no unique match exists they error.
 - Out-of-bounds line reads do not throw. They return explanatory text with a suggestion such as `Use :1 ...` or `Use :<last line> ...`.
 - Binary archive entries do not throw; they return a text notice.
@@ -299,4 +300,4 @@ Notes: ...
 - URL cache keys are session-scoped and normalized by requested URL + raw/rendered mode; both requested URL and final redirected URL are cached.
 - URL line-range reads request `ensureArtifact: true, preferCached: true` so a later paginated read can reopen the same rendered body from artifact storage.
 - Raw SQLite `q=` execution is not keyword-restricted beyond “no bound parameters”; the read tool relies on the surrounding contract to keep it read-only.
-- The file-read cache is not a read acceleration cache. It exists to recover hashline edits when the file changed after the read.
+- The file snapshot store is not a read acceleration cache. It exists to verify and recover hashline edits when the file changed after the read.

@@ -1,0 +1,137 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { resolveRuntimeModule, splitBareSpecifier } from "../src/runtime-install";
+
+// Contract under test: runtime-installed packages (fastembed, Transformers.js
+// graphs) load inside compiled binaries through resolveRuntimeModule, which
+// must honor `exports` (CommonJS conditions), then `main` (including `.node`
+// targets without an extension probe match), then `index.js` — the shapes the
+// stock compiled-binary resolver gets wrong (Bun #1763).
+
+const tempDirs: string[] = [];
+
+afterEach(async () => {
+	await Promise.all(tempDirs.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
+});
+
+async function makeNodeModules(packages: Record<string, { manifest: Record<string, unknown>; files: string[] }>) {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-runtime-install-"));
+	tempDirs.push(root);
+	const nodeModules = path.join(root, "node_modules");
+	for (const name in packages) {
+		const pkg = packages[name];
+		const pkgDir = path.join(nodeModules, ...name.split("/"));
+		await Bun.write(path.join(pkgDir, "package.json"), JSON.stringify({ name, ...pkg.manifest }));
+		for (const file of pkg.files) {
+			await Bun.write(path.join(pkgDir, file), "");
+		}
+	}
+	return nodeModules;
+}
+
+describe("splitBareSpecifier", () => {
+	test("splits scoped and unscoped specifiers with subpaths", () => {
+		expect(splitBareSpecifier("fastembed")).toEqual({ packageName: "fastembed", subpath: undefined });
+		expect(splitBareSpecifier("tar/lib/extract")).toEqual({ packageName: "tar", subpath: "lib/extract" });
+		expect(splitBareSpecifier("@anush008/tokenizers")).toEqual({
+			packageName: "@anush008/tokenizers",
+			subpath: undefined,
+		});
+		expect(splitBareSpecifier("@huggingface/transformers/types")).toEqual({
+			packageName: "@huggingface/transformers",
+			subpath: "types",
+		});
+	});
+});
+
+describe("resolveRuntimeModule", () => {
+	test("resolves conditional exports preferring require over import", async () => {
+		const nodeModules = await makeNodeModules({
+			fastembed: {
+				manifest: {
+					exports: {
+						".": {
+							import: { default: "./lib/esm/index.js" },
+							require: { default: "./lib/cjs/index.js" },
+						},
+					},
+					main: "./lib/cjs/index.js",
+				},
+				files: ["lib/esm/index.js", "lib/cjs/index.js"],
+			},
+		});
+		expect(resolveRuntimeModule(nodeModules, "fastembed")).toBe(
+			path.join(nodeModules, "fastembed", "lib", "cjs", "index.js"),
+		);
+	});
+
+	test("falls back to main pointing at a .node binding (napi-rs platform package)", async () => {
+		const nodeModules = await makeNodeModules({
+			"@anush008/tokenizers-darwin-arm64": {
+				manifest: { main: "tokenizers.darwin-arm64.node" },
+				files: ["tokenizers.darwin-arm64.node"],
+			},
+		});
+		expect(resolveRuntimeModule(nodeModules, "@anush008/tokenizers-darwin-arm64")).toBe(
+			path.join(nodeModules, "@anush008", "tokenizers-darwin-arm64", "tokenizers.darwin-arm64.node"),
+		);
+	});
+
+	test("probes extensions and directory index for extensionless main", async () => {
+		const nodeModules = await makeNodeModules({
+			"onnxruntime-node": {
+				manifest: { main: "dist/index" },
+				files: ["dist/index.js"],
+			},
+			"onnxruntime-common": {
+				manifest: { main: "dist" },
+				files: ["dist/index.js"],
+			},
+		});
+		expect(resolveRuntimeModule(nodeModules, "onnxruntime-node")).toBe(
+			path.join(nodeModules, "onnxruntime-node", "dist", "index.js"),
+		);
+		expect(resolveRuntimeModule(nodeModules, "onnxruntime-common")).toBe(
+			path.join(nodeModules, "onnxruntime-common", "dist", "index.js"),
+		);
+	});
+
+	test("resolves subpath requests through the exports map and via plain joining", async () => {
+		const nodeModules = await makeNodeModules({
+			mapped: {
+				manifest: { exports: { ".": "./index.js", "./util": { require: "./lib/util.cjs" } } },
+				files: ["index.js", "lib/util.cjs"],
+			},
+			plain: {
+				manifest: { main: "index.js" },
+				files: ["index.js", "lib/helper.js"],
+			},
+		});
+		expect(resolveRuntimeModule(nodeModules, "mapped/util")).toBe(
+			path.join(nodeModules, "mapped", "lib", "util.cjs"),
+		);
+		expect(resolveRuntimeModule(nodeModules, "plain/lib/helper")).toBe(
+			path.join(nodeModules, "plain", "lib", "helper.js"),
+		);
+	});
+
+	test("returns null for absent packages and import-only exports", async () => {
+		const nodeModules = await makeNodeModules({
+			"esm-only": {
+				manifest: { exports: { ".": { import: "./index.mjs" } } },
+				files: ["index.mjs"],
+			},
+		});
+		expect(resolveRuntimeModule(nodeModules, "missing-package")).toBeNull();
+		expect(resolveRuntimeModule(nodeModules, "esm-only")).toBeNull();
+	});
+
+	test("falls back to index.js when manifest has no usable entry", async () => {
+		const nodeModules = await makeNodeModules({
+			bare: { manifest: {}, files: ["index.js"] },
+		});
+		expect(resolveRuntimeModule(nodeModules, "bare")).toBe(path.join(nodeModules, "bare", "index.js"));
+	});
+});

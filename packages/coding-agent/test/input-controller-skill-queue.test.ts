@@ -91,6 +91,9 @@ function createStubInputControllerContext(opts: { skillCommands: Map<string, str
 			prompt,
 			promptCustomMessage,
 		},
+		get viewSession() {
+			return (this as typeof ctx).session;
+		},
 		showError,
 		handleGoalModeCommand,
 		goalModeEnabled: false,
@@ -384,6 +387,7 @@ function createStubInteractiveModeContextForUiHelpers(session: AgentSession) {
 		ui: { requestRender },
 		pendingMessagesContainer,
 		session,
+		viewSession: session,
 		compactionQueuedMessages: [],
 		keybindings: {
 			getDisplayString: (_action: string) => "Alt+Up",
@@ -490,6 +494,9 @@ function createEventControllerFixtureForE10() {
 		updatePendingMessagesDisplay,
 		pendingTools: new Map(),
 		session: {},
+		get viewSession() {
+			return (this as typeof ctx).session;
+		},
 	} as unknown as InteractiveModeContext;
 
 	const controller = new EventController(ctx);

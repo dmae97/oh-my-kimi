@@ -1,4 +1,5 @@
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-ai";
+import { DEFAULT_SHARE_URL } from "@oh-my-pi/pi-wire";
 import { SHAPE_VARIANT_NAMES } from "@oh-my-pi/snapcompact";
 import { DEFAULT_RELAY_URL } from "../collab/protocol";
 import { AUTO_THINKING, getConfiguredThinkingLevelMetadata, getThinkingLevelMetadata } from "../thinking";
@@ -1350,6 +1351,29 @@ export const SETTINGS_SCHEMA = {
 			group: "Collab",
 			label: "Display Name",
 			description: "Name shown to other collab participants (default: OS username)",
+		},
+	},
+
+	"share.serverUrl": {
+		type: "string",
+		default: DEFAULT_SHARE_URL,
+		ui: {
+			tab: "interaction",
+			group: "Collab",
+			label: "Share Server",
+			description:
+				"Share viewer/upload base used by /share (encrypted blob upload + viewer; links are <base>/<id>#<key>)",
+		},
+	},
+
+	"share.redactSecrets": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "interaction",
+			group: "Collab",
+			label: "Share Secret Redaction",
+			description: "Run the secret obfuscator over /share snapshots before upload (uses the secrets.* config)",
 		},
 	},
 
@@ -3751,14 +3775,24 @@ export const SETTINGS_SCHEMA = {
 	},
 	// Codex saved rate-limit resets (auto-redeem)
 	"codexResets.autoRedeem": {
-		type: "boolean",
-		default: false,
+		type: "enum",
+		values: ["unset", "yes", "no"] as const,
+		default: "unset" as const,
 		ui: {
 			tab: "providers",
 			group: "Services",
 			label: "Codex Auto-Redeem Saved Resets",
 			description:
-				"When a turn is blocked by the Codex weekly limit on the active account and no other account is available, automatically spend one saved rate-limit reset (ChatGPT 'save rate limit resets'). Conservative: never fires for 5-hour-only or Spark limits, near a natural reset, or twice for the same block. Requires retries enabled.",
+				"When a turn is blocked by the Codex weekly limit on the active account and no other account is available, run the conservative saved-reset check. unset asks before spending the first eligible reset, yes spends eligible resets without prompting, and no disables the check entirely. Requires retries enabled.",
+			options: [
+				{
+					value: "unset",
+					label: "Unset",
+					description: "Check eligibility, then ask before spending the first saved reset.",
+				},
+				{ value: "yes", label: "Yes", description: "Spend eligible saved resets without prompting." },
+				{ value: "no", label: "No", description: "Do not run the saved-reset auto-redeem check." },
+			],
 		},
 	},
 	"codexResets.minBlockedMinutes": {
@@ -4170,8 +4204,10 @@ export interface ShellMinimizerSettings {
 	sourceOutlineLevel: "default" | "aggressive";
 	legacyFilters: boolean | undefined;
 }
+export type CodexAutoRedeemMode = "unset" | "yes" | "no";
+
 export interface CodexResetsSettings {
-	autoRedeem: boolean;
+	autoRedeem: CodexAutoRedeemMode;
 	minBlockedMinutes: number;
 	keepCredits: number;
 }

@@ -5,8 +5,8 @@ This document explains how token/tool streaming is normalized in `@oh-my-pi/pi-a
 ## End-to-end flow
 
 1. `streamSimple()` (`packages/ai/src/stream.ts`) maps generic options and dispatches to a provider stream function.
-2. Provider stream functions translate provider-native stream events into the unified `AssistantMessageEvent` sequence. Current built-ins include Anthropic, OpenAI Responses/Completions/Codex/Azure Responses, Google Gemini/Gemini CLI/Vertex, Bedrock Converse, Ollama, Cursor, pi-native gateway transport, plus GitLab Duo/Kimi/Synthetic wrappers and extension-registered custom APIs.
-3. Each provider pushes events into `AssistantMessageEventStream` (`packages/ai/src/utils/event-stream.ts`), which throttles delta events and exposes:
+2. Provider stream functions translate provider-native stream events into the unified `AssistantMessageEvent` sequence. Current built-ins include Anthropic, OpenAI Responses/Completions/Codex/Azure Responses, Google Gemini/Gemini CLI/Vertex, Bedrock Converse, Ollama, Cursor, pi-native gateway transport, plus GitLab Duo/Kimi/Synthetic/xAI-Grok-Responses wrappers and extension-registered custom APIs.
+3. Each provider pushes events into `AssistantMessageEventStream` (`packages/ai/src/utils/event-stream.ts`), which exposes:
    - async iteration for incremental updates
    - `result()` for final `AssistantMessage`
 4. `agentLoop` (`packages/agent/src/agent-loop.ts`) consumes those events, mutates in-flight assistant state, and emits `message_update` events carrying the raw `assistantMessageEvent`.
@@ -28,18 +28,13 @@ All providers emit the same shape (`AssistantMessageEvent` in `packages/ai/src/t
 `AssistantMessageEventStream` guarantees:
 
 - final result is resolved by terminal event (`done` or `error`)
-- deltas are batched/throttled (~50ms)
-- buffered deltas are flushed before non-delta events and before completion
+- events are delivered to consumers immediately, in push order (no batching or merging)
 
-## Delta throttling and harmonization behavior
+## Delta throttling behavior
 
-`AssistantMessageEventStream` treats `text_delta`, `thinking_delta`, and `toolcall_delta` as mergeable events:
+`AssistantMessageEventStream` itself no longer throttles or merges delta events — every provider event is delivered as pushed. The per-delta cost control moved into tool-call argument parsing: providers accumulate partial JSON and re-parse it via `parseStreamingJsonThrottled()` (`packages/ai/src/utils/json-parse.ts`), which skips the re-parse until at least `STREAMING_JSON_PARSE_MIN_GROWTH` (256) new bytes have arrived, bounding mid-stream parse cost from quadratic to linear. The final `toolcall_end` parse is always unconditional and authoritative.
 
-- buffered deltas are merged only when **type + contentIndex** match
-- merge keeps the latest `partial` snapshot
-- non-delta events force immediate flush
-
-This smooths high-frequency provider streams for TUI/event consumers, but is not provider backpressure: providers still produce at full speed, while the local stream buffers.
+There is no provider backpressure: providers still produce at full speed, while the local stream queues.
 
 ## Provider normalization details
 
@@ -63,7 +58,7 @@ Tool-call argument streaming:
 
 - each tool block carries internal `partialJson`
 - every JSON delta appends to `partialJson`
-- `arguments` are reparsed on each delta via `parseStreamingJson()`
+- `arguments` are reparsed on appended deltas via `parseStreamingJsonThrottled()` (re-parse only after ≥256 new bytes)
 - `toolcall_end` reparses once more, then strips `partialJson`
 
 ## OpenAI Responses family (`openai-responses`, `openai-codex-responses`, `azure-openai-responses`)
@@ -88,7 +83,7 @@ Tool-call argument streaming:
 
 ## Google Generative AI (`google-generative-ai`)
 
-Source: `packages/ai/src/providers/google.ts`
+Source: `packages/ai/src/providers/google.ts` (thin request wrapper) and `google-shared.ts` (`streamGoogleGenAI`, shared chunk-to-block translation)
 
 Normalization points:
 
@@ -106,17 +101,17 @@ Tool-call argument streaming:
 
 ## Partial tool-call JSON accumulation and recovery
 
-Shared behavior for Anthropic/OpenAI Responses uses `parseStreamingJson()` (`packages/ai/src/utils/json-parse.ts`):
+Shared behavior for Anthropic/OpenAI Responses uses `parseStreamingJson()` / `parseStreamingJsonThrottled()` (`packages/ai/src/utils/json-parse.ts`):
 
 1. try `JSON.parse`
-2. fallback to `partial-json` parser for incomplete fragments
+2. fallback to `repairJson()` + the `partial-json` parser for incomplete fragments
 3. if both fail, return `{}`
 
 Implications:
 
 - malformed or truncated argument deltas do not crash stream processing immediately
 - in-progress `arguments` may temporarily be `{}`
-- later valid deltas can recover structured arguments because parsing is retried on every append
+- later valid deltas can recover structured arguments because parsing is retried as the buffer grows (throttled to ≥256-byte growth steps mid-stream)
 - final `toolcall_end` performs one more parse attempt before emission
 
 ## Stop reasons vs transport/runtime errors
@@ -140,7 +135,7 @@ If provider stream throws or signals failure, each provider wrapper catches and 
 
 ## Malformed chunk / SSE parse failure behavior
 
-Most provider paths delegate chunk/SSE framing to vendor SDK streams (Anthropic SDK, OpenAI SDK, Google SDK). The Codex SSE fallback uses `readSseJson()` directly, and websocket Codex frames are normalized through the same event handler.
+The OpenAI Completions/Responses paths delegate chunk/SSE framing to the `openai` SDK stream. Anthropic uses the in-repo `AnthropicMessagesClient` (`packages/ai/src/providers/anthropic-client.ts`); the Google paths and the Codex SSE fallback read SSE via `readSseJson()` directly, and websocket Codex frames are normalized through the same event handler.
 
 Observed behavior in current implementation:
 
@@ -169,7 +164,7 @@ Tool execution cancellation is separate from model stream cancellation:
 There is no hard backpressure mechanism between provider SDK stream and downstream consumers:
 
 - `EventStream` uses in-memory queues with no max size
-- throttling reduces UI update rate but does not slow provider intake
+- the throttled partial-JSON re-parse reduces per-delta CPU cost but does not slow provider intake
 - if consumers lag significantly, queued events can grow until completion
 
 Current design favors responsiveness and simple ordering over bounded-buffer flow control.
@@ -195,7 +190,7 @@ Unified (common contract):
 
 - event shape (`AssistantMessageEvent`)
 - final result extraction (`done`/`error`)
-- delta throttling + merge rules
+- immediate in-order event delivery
 - agent/session event propagation model
 
 Provider-specific (not fully abstracted):
@@ -210,7 +205,7 @@ Provider-specific (not fully abstracted):
 ## Implementation files
 
 - [`../../ai/src/stream.ts`](../packages/ai/src/stream.ts) — provider dispatch, option mapping, API key/session plumbing, custom API dispatch, and provider-specific credential handling.
-- [`../../ai/src/utils/event-stream.ts`](../packages/ai/src/utils/event-stream.ts) — generic stream queue + assistant delta throttling.
+- [`../../ai/src/utils/event-stream.ts`](../packages/ai/src/utils/event-stream.ts) — generic stream queue + final-result resolution.
 - [`../../ai/src/utils/json-parse.ts`](../packages/ai/src/utils/json-parse.ts) — partial JSON parsing for streamed tool arguments.
 - [`../../ai/src/providers/anthropic.ts`](../packages/ai/src/providers/anthropic.ts) — Anthropic event translation and tool JSON delta accumulation.
 - [`../../ai/src/providers/openai-responses.ts`](../packages/ai/src/providers/openai-responses.ts), [`openai-responses-shared.ts`](../packages/ai/src/providers/openai-responses-shared.ts), [`openai-codex-responses.ts`](../packages/ai/src/providers/openai-codex-responses.ts), [`azure-openai-responses.ts`](../packages/ai/src/providers/azure-openai-responses.ts) — Responses-family event translation and status mapping.
