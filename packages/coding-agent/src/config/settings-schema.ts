@@ -1,4 +1,5 @@
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-ai";
+import { SHAPE_VARIANT_NAMES } from "@oh-my-pi/snapcompact";
 import { AUTO_THINKING, getConfiguredThinkingLevelMetadata, getThinkingLevelMetadata } from "../thinking";
 import {
 	TINY_MODEL_DEVICE_DEFAULT,
@@ -1606,6 +1607,67 @@ export const SETTINGS_SCHEMA = {
 			label: "Snapcompact Tool Results",
 			description:
 				"Experimental: render large historical tool results as dense PNG image(s) instead of text (vision models only). Saves tokens on accumulated read/search output.",
+		},
+	},
+
+	"snapcompact.shape": {
+		type: "enum",
+		values: ["auto", ...SHAPE_VARIANT_NAMES] as const,
+		default: "auto",
+		ui: {
+			tab: "context",
+			group: "Experimental",
+			label: "Snapcompact Shape",
+			description:
+				"Frame shape snapcompact prints text with (compaction archive and inline imaging). Auto picks the eval-winning shape for the current provider; the rest are the variants from the snapcompact research evals.",
+			options: [
+				{
+					value: "auto",
+					label: "Auto",
+					description: "Provider's eval winner: 8x8r-bw on Anthropic, 8x8r-sent on Gemini, 6x6u-sent on OpenAI.",
+				},
+				{
+					value: "8x8r-bw",
+					label: "8x8 repeated, black",
+					description:
+						"unscii square cell, black ink, every line doubled on highlight bands. Anthropic eval winner.",
+				},
+				{
+					value: "8x8r-sent",
+					label: "8x8 repeated, sentence hues",
+					description: "Repeated grid with ink cycling six hues at sentence boundaries. Gemini eval winner.",
+				},
+				{
+					value: "8x8u-bw",
+					label: "8x8, black",
+					description: "Plain unscii square cell, single-printed lines, black ink.",
+				},
+				{
+					value: "8x8u-sent",
+					label: "8x8, sentence hues",
+					description: "Plain unscii square cell with sentence-hue ink.",
+				},
+				{
+					value: "6x6u-bw",
+					label: "6x6 dense, black",
+					description: "unscii squeezed to 6x6 — densest readable cell, fewest frames — in black ink.",
+				},
+				{
+					value: "6x6u-sent",
+					label: "6x6 dense, sentence hues",
+					description: "Densest cell with sentence-hue ink. OpenAI eval winner.",
+				},
+				{
+					value: "5x8-bw",
+					label: "5x8 legacy, black",
+					description: "Original X.org 5x8 glyphs on the 2576px frame, black ink.",
+				},
+				{
+					value: "5x8-sent",
+					label: "5x8 legacy, sentence hues",
+					description: "The original snapcompact shape (pre-shape-table sessions rendered this).",
+				},
+			],
 		},
 	},
 

@@ -147,6 +147,39 @@ describe("shape resolution", () => {
 		expect(snapcompact.resolveShape(undefined)).toBe(snapcompact.SHAPES.anthropic);
 	});
 
+	it("forces a named variant and re-prices it for the provider's billing", () => {
+		// "auto" behaves exactly like no override.
+		expect(snapcompact.resolveShape("anthropic-messages", "auto")).toBe(snapcompact.SHAPES.anthropic);
+
+		// Forced geometry survives; billing follows the provider, not the variant.
+		const denseOnAnthropic = snapcompact.resolveShape("anthropic-messages", "6x6u-sent");
+		expect(denseOnAnthropic.cellWidth).toBe(6);
+		expect(denseOnAnthropic.variant).toBe("sent");
+		expect(denseOnAnthropic.frameTokenEstimate).toBe(snapcompact.SHAPES.anthropic.frameTokenEstimate);
+		expect(denseOnAnthropic.imageDetail).toBeUndefined();
+
+		const repeatedOnOpenai = snapcompact.resolveShape("openai-responses", "8x8r-bw");
+		expect(repeatedOnOpenai.lineRepeat).toBe(2);
+		expect(repeatedOnOpenai.frameTokenEstimate).toBe(snapcompact.SHAPES.openaiDense.frameTokenEstimate);
+		expect(repeatedOnOpenai.imageDetail).toBe("original");
+
+		// Legacy 2576px frames keep the conservative ceiling on every provider.
+		const legacyOnGoogle = snapcompact.resolveShape("google-generative-ai", "5x8-bw");
+		expect(legacyOnGoogle.frameSize).toBe(2576);
+		expect(legacyOnGoogle.frameTokenEstimate).toBe(snapcompact.SHAPES.legacy.frameTokenEstimate);
+	});
+
+	it("every catalog variant resolves to a complete, renderable shape", () => {
+		expect(snapcompact.SHAPE_VARIANT_NAMES.length).toBeGreaterThan(0);
+		for (const name of snapcompact.SHAPE_VARIANT_NAMES) {
+			expect(snapcompact.isShapeVariantName(name)).toBe(true);
+			expect(snapcompact.isShape(snapcompact.resolveShape("openai-responses", name))).toBe(true);
+			expect(snapcompact.isShape(snapcompact.resolveShape(undefined, name))).toBe(true);
+		}
+		expect(snapcompact.isShapeVariantName("auto")).toBe(false);
+		expect(snapcompact.isShapeVariantName("6x10-sent")).toBe(false);
+	});
+
 	it("recognizes complete shape overrides and rejects malformed ones", () => {
 		expect(snapcompact.isShape(snapcompact.SHAPES.openaiDense)).toBe(true);
 		expect(snapcompact.isShape({ ...snapcompact.SHAPES.openaiDense, cellWidth: 0 })).toBe(false);

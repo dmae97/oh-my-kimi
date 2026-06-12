@@ -183,7 +183,7 @@ export function computeContextBreakdown(
 		const renderToolResults = session.settings.get("snapcompact.toolResults");
 		if (renderSystemPrompt !== "none" || renderToolResults) {
 			snapcompactSavings = estimateInlineSavings({
-				options: { renderSystemPrompt, renderToolResults },
+				options: { renderSystemPrompt, renderToolResults, shape: session.settings.get("snapcompact.shape") },
 				model,
 				systemPrompt: session.systemPrompt ?? [],
 				messages: session.messages ?? [],

@@ -63,51 +63,93 @@ export interface Shape {
 	imageDetail?: ImageContent["detail"];
 }
 
+/** Geometry half of a {@link Shape}: everything except provider billing. */
+export type ShapeGeometry = Omit<Shape, "frameTokenEstimate" | "imageDetail">;
+
+/**
+ * Frame variants exercised by the SQuAD evals in `research/` that the native
+ * renderer reproduces faithfully, keyed by their research names. Font codes:
+ * `8x8u` unscii square cell, `8x8r` unscii with every line printed twice
+ * (redundancy coding), `6x6u` unscii Lanczos-squeezed to 6x6 (densest
+ * readable cell), `5x8` the X.org legacy font on its 2576px frame. Ink:
+ * `sent` cycles six hues at sentence boundaries, `bw` is plain black.
+ */
+export const SHAPE_VARIANTS = {
+	"8x8r-bw": { font: "8x8", cellWidth: 8, cellHeight: 8, variant: "bw", lineRepeat: 2, frameSize: 1568 },
+	"8x8r-sent": { font: "8x8", cellWidth: 8, cellHeight: 8, variant: "sent", lineRepeat: 2, frameSize: 1568 },
+	"8x8u-bw": { font: "8x8", cellWidth: 8, cellHeight: 8, variant: "bw", lineRepeat: 1, frameSize: 1568 },
+	"8x8u-sent": { font: "8x8", cellWidth: 8, cellHeight: 8, variant: "sent", lineRepeat: 1, frameSize: 1568 },
+	"6x6u-bw": { font: "8x8", cellWidth: 6, cellHeight: 6, variant: "bw", lineRepeat: 1, frameSize: 1568 },
+	"6x6u-sent": { font: "8x8", cellWidth: 6, cellHeight: 6, variant: "sent", lineRepeat: 1, frameSize: 1568 },
+	"5x8-bw": { font: "5x8", cellWidth: 5, cellHeight: 8, variant: "bw", lineRepeat: 1, frameSize: 2576 },
+	"5x8-sent": { font: "5x8", cellWidth: 5, cellHeight: 8, variant: "sent", lineRepeat: 1, frameSize: 2576 },
+} as const satisfies Record<string, ShapeGeometry>;
+
+/** Research name of one renderable frame variant. */
+export type ShapeVariantName = keyof typeof SHAPE_VARIANTS;
+
+/** All variant names, in declaration order (for settings enums). */
+export const SHAPE_VARIANT_NAMES = Object.keys(SHAPE_VARIANTS) as readonly ShapeVariantName[];
+
+/** Runtime guard for variant names loaded from config. */
+export function isShapeVariantName(value: unknown): value is ShapeVariantName {
+	return typeof value === "string" && value in SHAPE_VARIANTS;
+}
+
+/** Provider families with distinct image billing. */
+type BillingFamily = "anthropic" | "google" | "openai";
+
+function billingFamily(api?: Api): BillingFamily {
+	switch (api) {
+		case "openai-completions":
+		case "openai-responses":
+		case "openai-codex-responses":
+		case "azure-openai-responses":
+			return "openai";
+		case "google-generative-ai":
+		case "google-gemini-cli":
+		case "google-vertex":
+			return "google";
+		default:
+			// anthropic-messages, bedrock-converse-stream, and anything unknown
+			// share Anthropic's pixel-area pricing as the safe ceiling.
+			return "anthropic";
+	}
+}
+
+/** Eval-measured per-frame billing for a standard 1568px frame, by family. */
+const FAMILY_BILLING: Record<BillingFamily, Pick<Shape, "frameTokenEstimate" | "imageDetail">> = {
+	// Anthropic bills pixel area: 1568*1568/750 ≈ 3,278.
+	anthropic: { frameTokenEstimate: 3300 },
+	google: { frameTokenEstimate: 1100 },
+	// OpenAI bills per image at `original` detail, ~2.9k tokens flat.
+	openai: { frameTokenEstimate: 2900, imageDetail: "original" },
+};
+
+/** Attach a provider family's billing to a variant geometry. */
+function priceShape(base: ShapeGeometry, family: BillingFamily): Shape {
+	const billing = FAMILY_BILLING[family];
+	return {
+		...base,
+		// Family estimates are measured at 1568px; the larger legacy frame
+		// keeps the conservative pixel-area ceiling everywhere.
+		frameTokenEstimate:
+			base.frameSize > 1568 ? FAMILY_BILLING.anthropic.frameTokenEstimate : billing.frameTokenEstimate,
+		...(billing.imageDetail ? { imageDetail: billing.imageDetail } : {}),
+	};
+}
+
 /** Eval-validated shapes, keyed by the provider family they won on. */
 export const SHAPES = {
 	/** `8x8r-bw`: unscii square, black ink, lines doubled on highlight bands. */
-	anthropic: {
-		font: "8x8",
-		cellWidth: 8,
-		cellHeight: 8,
-		variant: "bw",
-		lineRepeat: 2,
-		frameSize: 1568,
-		frameTokenEstimate: 3300,
-	},
+	anthropic: priceShape(SHAPE_VARIANTS["8x8r-bw"], "anthropic"),
 	/** `8x8r-sent`: the repeated grid with sentence-hue ink. */
-	google: {
-		font: "8x8",
-		cellWidth: 8,
-		cellHeight: 8,
-		variant: "sent",
-		lineRepeat: 2,
-		frameSize: 1568,
-		frameTokenEstimate: 1100,
-	},
-	/** `6x6u-sent`: unscii stretched to 6x6 — densest readable cell, fewest
-	 *  frames (OpenAI bills per image, ~2.9k tokens flat). */
-	openaiDense: {
-		font: "8x8",
-		cellWidth: 6,
-		cellHeight: 6,
-		variant: "sent",
-		lineRepeat: 1,
-		frameSize: 1568,
-		frameTokenEstimate: 2900,
-		imageDetail: "original",
-	},
+	google: priceShape(SHAPE_VARIANTS["8x8r-sent"], "google"),
+	/** `6x6u-sent`: unscii stretched to 6x6 — densest readable cell, fewest frames. */
+	openaiDense: priceShape(SHAPE_VARIANTS["6x6u-sent"], "openai"),
 	/** Original 5x8 X.org shape (pre-shape-table sessions rendered this). */
-	legacy: {
-		font: "5x8",
-		cellWidth: 5,
-		cellHeight: 8,
-		variant: "sent",
-		lineRepeat: 1,
-		frameSize: 2576,
-		frameTokenEstimate: 3300,
-	},
-} as const satisfies Record<string, Shape>;
+	legacy: priceShape(SHAPE_VARIANTS["5x8-sent"], "anthropic"),
+} satisfies Record<string, Shape>;
 
 /** Runtime guard for shape overrides loaded from config or preserve data. */
 export function isShape(value: unknown): value is Shape {
@@ -133,21 +175,21 @@ export function isShape(value: unknown): value is Shape {
 	);
 }
 
-/** Pick the eval-optimal frame shape for a provider API. */
-export function resolveShape(api?: Api): Shape {
-	switch (api) {
-		case "openai-completions":
-		case "openai-responses":
-		case "openai-codex-responses":
-		case "azure-openai-responses":
+/**
+ * Pick the frame shape for a provider API. An explicit `variant` (anything
+ * but `"auto"`) forces that geometry, re-priced for the provider's billing;
+ * otherwise the provider family's eval-winning shape applies.
+ */
+export function resolveShape(api?: Api, variant?: ShapeVariantName | "auto"): Shape {
+	const family = billingFamily(api);
+	if (variant && variant !== "auto") return priceShape(SHAPE_VARIANTS[variant], family);
+	switch (family) {
+		case "openai":
 			return SHAPES.openaiDense;
-		case "google-generative-ai":
-		case "google-gemini-cli":
-		case "google-vertex":
+		case "google":
 			return SHAPES.google;
 		default:
-			// anthropic-messages, bedrock-converse-stream, and anything unknown:
-			// the plain repeated grid is the most refusal-robust reader shape.
+			// The plain repeated grid is the most refusal-robust reader shape.
 			return SHAPES.anthropic;
 	}
 }

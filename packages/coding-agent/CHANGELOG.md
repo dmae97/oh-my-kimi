@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added `snapcompact.shape` configuration to control the frame variant used by snapcompact compaction and inline rendering, with `auto` selecting each provider's winning shape
 
 ## [15.11.6] - 2026-06-12
 

@@ -2168,6 +2168,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				? new SnapcompactInlineTransformer({
 						renderSystemPrompt: snapcompactSystemPromptMode,
 						renderToolResults: settings.get("snapcompact.toolResults"),
+						shape: settings.get("snapcompact.shape"),
 					})
 				: undefined;
 		const transformProviderContext =

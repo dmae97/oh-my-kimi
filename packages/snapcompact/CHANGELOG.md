@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `SHAPE_VARIANTS`, the catalog of research-eval frame variants the native renderer reproduces faithfully (`8x8r`/`8x8u`/`6x6u`/`5x8` × `sent`/`bw`), with `ShapeVariantName`, `SHAPE_VARIANT_NAMES`, and the `isShapeVariantName` guard
+- `resolveShape(api, variant?)` now accepts an explicit variant name (or `"auto"`); forced variants keep their geometry but are re-priced for the target provider's image billing (token estimate and OpenAI `original` detail hint)
+
 ## [15.11.4] - 2026-06-12
 
 ### Breaking Changes

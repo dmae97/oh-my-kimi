@@ -6388,6 +6388,7 @@ export class AgentSession {
 				const snapcompactResult = await snapcompact.compact(preparation, {
 					convertToLlm,
 					model: this.model,
+					shape: snapcompact.resolveShape(this.model.api, this.settings.get("snapcompact.shape")),
 				});
 				summary = snapcompactResult.summary;
 				shortSummary = snapcompactResult.shortSummary;

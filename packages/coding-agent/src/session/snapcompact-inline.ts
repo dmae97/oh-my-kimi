@@ -28,6 +28,8 @@ export type SnapcompactSystemPromptMode = "none" | "agents-md" | "all";
 export interface SnapcompactInlineOptions {
 	renderSystemPrompt: SnapcompactSystemPromptMode;
 	renderToolResults: boolean;
+	/** Frame variant override; `"auto"`/omitted picks the provider's eval winner. */
+	shape?: snapcompact.ShapeVariantName | "auto";
 }
 
 /**
@@ -273,7 +275,7 @@ export function estimateInlineSavings(input: {
 		return { visionCapable: false, savedTokens: 0 };
 	}
 
-	const shape = snapcompact.resolveShape(model.api);
+	const shape = snapcompact.resolveShape(model.api, options.shape);
 	let existingImages = 0;
 	for (const message of input.messages) {
 		if (!Array.isArray(message.content)) continue;
@@ -407,7 +409,7 @@ export class SnapcompactInlineTransformer {
 		// rendering would lose the content entirely.
 		if (!model.input.includes("image")) return context;
 
-		const shape = snapcompact.resolveShape(model.api);
+		const shape = snapcompact.resolveShape(model.api, this.options.shape);
 		const budget =
 			(INLINE_IMAGE_BUDGET_BY_PROVIDER[model.provider] ?? DEFAULT_INLINE_IMAGE_BUDGET) - countContextImages(context);
 		if (budget <= 0) return context;
