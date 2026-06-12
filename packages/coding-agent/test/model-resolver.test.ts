@@ -545,12 +545,61 @@ describe("resolveAgentModelPatterns", () => {
 		expect(result).toEqual(["anthropic/claude-sonnet-4-5:high"]);
 	});
 
-	test("expands pi/designer to priority defaults", () => {
+	test("uses default for unconfigured smol, slow, and designer agent roles before priority defaults", () => {
 		const settings = Settings.isolated({
-			modelRoles: {
-				default: "anthropic/claude-sonnet-4-5",
-			},
+			modelRoles: { default: "local/llama" },
 		});
+
+		expect(resolveAgentModelPatterns({ agentModel: "pi/smol", settings })).toEqual(["local/llama"]);
+		expect(resolveAgentModelPatterns({ agentModel: "pi/slow", settings })).toEqual(["local/llama"]);
+		expect(resolveAgentModelPatterns({ agentModel: "pi/designer", settings })).toEqual(["local/llama"]);
+	});
+
+	test("keeps built-in priority defaults when default aliases the same unset role", () => {
+		const smolSettings = Settings.isolated({
+			modelRoles: { default: "pi/smol" },
+		});
+		const slowSettings = Settings.isolated({
+			modelRoles: { default: "pi/slow" },
+		});
+		const designerSettings = Settings.isolated({
+			modelRoles: { default: "pi/designer" },
+		});
+
+		expect(resolveAgentModelPatterns({ agentModel: "pi/smol", settings: smolSettings })).toEqual([
+			"cerebras/zai-glm-4.7",
+			"cerebras/zai-glm-4.6",
+			"cerebras/zai-glm",
+			"haiku-4-5",
+			"haiku-4.5",
+			"haiku",
+			"flash",
+			"mini",
+		]);
+		expect(resolveAgentModelPatterns({ agentModel: "pi/slow", settings: slowSettings })[0]).toBe("gpt-5.4");
+		expect(resolveAgentModelPatterns({ agentModel: "pi/designer", settings: designerSettings })[0]).toBe(
+			"google-gemini-cli/gemini-3.1-pro",
+		);
+	});
+
+	test("expands cross-role default aliases when inheriting for an unset role", () => {
+		const settings = Settings.isolated({
+			modelRoles: { default: "pi/slow", slow: "anthropic/claude-sonnet-4-5" },
+		});
+
+		expect(resolveAgentModelPatterns({ agentModel: "pi/smol", settings })).toEqual(["anthropic/claude-sonnet-4-5"]);
+	});
+
+	test("recurses into priority defaults when default points at another unset role", () => {
+		const settings = Settings.isolated({
+			modelRoles: { default: "pi/slow" },
+		});
+
+		expect(resolveAgentModelPatterns({ agentModel: "pi/smol", settings })[0]).toBe("gpt-5.4");
+	});
+
+	test("expands pi/designer to priority defaults when default is unset", () => {
+		const settings = Settings.isolated();
 
 		const result = resolveAgentModelPatterns({
 			agentModel: "pi/designer",

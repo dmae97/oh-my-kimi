@@ -23,6 +23,7 @@ import {
 	getOrFetchIssue,
 	getOrFetchPr,
 	getOrFetchPrDiff,
+	githubIssueJsonWithStateReasonFallback,
 	type PrDiffFile,
 	parsePositiveDecimalInt,
 	resolveDefaultRepoMemoized,
@@ -294,7 +295,7 @@ async function fetchAndRenderList(
 	const cwd = resolveCwd(context);
 	const fields =
 		scheme === "issue"
-			? ["number", "title", "state", "stateReason", "author", "labels", "createdAt", "updatedAt", "url"]
+			? ["number", "title", "state", "author", "labels", "createdAt", "updatedAt", "url"]
 			: [
 					"number",
 					"title",
@@ -323,9 +324,14 @@ async function fetchAndRenderList(
 	if (options.author) args.push("--author", options.author);
 	if (options.label) args.push("--label", options.label);
 
-	const items = await git.github.json<Array<IssueListItem | PrListItem>>(cwd, args, context?.signal, {
-		repoProvided: true,
-	});
+	const items =
+		scheme === "issue"
+			? await githubIssueJsonWithStateReasonFallback<Array<IssueListItem>>(cwd, args, context?.signal, {
+					repoProvided: true,
+				})
+			: await git.github.json<Array<PrListItem>>(cwd, args, context?.signal, {
+					repoProvided: true,
+				});
 	const header =
 		scheme === "issue"
 			? `# Issues in ${repo} (${options.state}, up to ${options.limit})`

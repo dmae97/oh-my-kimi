@@ -10,6 +10,14 @@
 ### Fixed
 
 - Fixed `/mcp reauth` for definition-only MCP URLs containing `${...}` env expansion: OAuth credentials are now keyed by the expanded runtime URL, reload finds the row without writing an explicit `auth.credentialId`, embedded DCR client secrets survive token exchange, and `/mcp unauth` clears the expanded key too.
+### Fixed
+
+- Fixed `/settings` Escape handling so an open submenu receives Esc and returns to the settings list before a second Esc closes the panel ([#2331](https://github.com/can1357/oh-my-pi/issues/2331)).
+- Fixed unconfigured `pi/smol`, `pi/slow`, and `pi/designer` agent model roles using cloud-priority defaults before the user's configured `modelRoles.default`, which could route local-default setups to authenticated paid providers ([#2336](https://github.com/can1357/oh-my-pi/issues/2336)).
+
+### Fixed
+
+- Fixed `issue://` reads failing on older GitHub CLI releases that reject the optional `stateReason` issue JSON field; single issue reads now retry without it and issue listings no longer request it ([#2333](https://github.com/can1357/oh-my-pi/issues/2333)).
 
 ## [15.11.3] - 2026-06-11
 
