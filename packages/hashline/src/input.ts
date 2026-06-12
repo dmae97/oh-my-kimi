@@ -88,8 +88,9 @@ function normalizeHashlinePath(rawPath: string, cwd?: string): string {
 	const unquoted = stripApplyPatchPathNoise(unquoteHashlinePath(rawPath.trim()));
 	if (!cwd || !path.isAbsolute(unquoted)) return unquoted;
 	const relative = path.relative(path.resolve(cwd), path.resolve(unquoted));
+	const normalizedRelative = relative.split(path.sep).join("/");
 	const isWithinCwd = relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-	return isWithinCwd ? relative || "." : unquoted;
+	return isWithinCwd ? normalizedRelative || "." : unquoted;
 }
 
 interface RawSection {
