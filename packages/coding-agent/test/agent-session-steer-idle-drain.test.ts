@@ -108,4 +108,16 @@ describe("AgentSession steer idle drain", () => {
 		expect(session.agent.hasQueuedMessages()).toBe(true);
 		expect(session.getQueuedMessages().steering).toContain("wait for the run");
 	});
+
+	it("round-trips queued images through clearQueue for editor restoration", async () => {
+		// Non-resumable state so the idle drain stays out of the way.
+		await createSession([{ role: "user", content: "hello", timestamp: Date.now() }]);
+		const image = { type: "image" as const, data: "abc", mimeType: "image/png" };
+
+		await session.steer("with image", [image]);
+
+		const { steering } = session.clearQueue();
+		expect(steering).toEqual([{ text: "with image", images: [image] }]);
+		expect(session.agent.hasQueuedMessages()).toBe(false);
+	});
 });

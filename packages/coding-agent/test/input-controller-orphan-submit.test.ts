@@ -138,8 +138,10 @@ describe("InputController orphaned submit", () => {
 		expect(ctx.pendingImages.length).toBe(0);
 	});
 
-	it("surfaces a steer rejection instead of failing silently", async () => {
+	it("restores text and images to the editor when the steer rejects", async () => {
 		const { ctx, editor, spies } = createContext();
+		const image = { type: "image" as const, data: "abc", mimeType: "image/png" };
+		(ctx.pendingImages as unknown[]).push(image);
 		spies.steer.mockImplementationOnce(async () => {
 			throw new Error("queue exploded");
 		});
@@ -149,7 +151,28 @@ describe("InputController orphaned submit", () => {
 		await editor.onSubmit?.("doomed message");
 
 		expect(spies.showError).toHaveBeenCalledWith("queue exploded");
+		// The message survives the failure: text and images return to the editor.
+		expect(editor.getText()).toBe("doomed message");
+		expect(ctx.pendingImages).toEqual([image]);
 		// The signature must not leak for a message that never queued.
-		expect(ctx.locallySubmittedUserSignatures.has("doomed message\u00000")).toBe(false);
+		expect(ctx.locallySubmittedUserSignatures.has("doomed message\u00001")).toBe(false);
+	});
+
+	it("returns queued images to the pending-image buffer on queue restore", async () => {
+		const { ctx, editor } = createContext();
+		const image = { type: "image" as const, data: "abc", mimeType: "image/png" };
+		const session = ctx.session as unknown as { clearQueue: () => unknown };
+		session.clearQueue = () => ({
+			steering: [{ text: "queued with image", images: [image] }],
+			followUp: [],
+		});
+		const controller = new InputController(ctx);
+
+		const restored = controller.restoreQueuedMessagesToEditor();
+
+		expect(restored).toBe(1);
+		expect(editor.getText()).toBe("queued with image");
+		expect(ctx.pendingImages).toEqual([image]);
+		expect(ctx.pendingImageLinks).toEqual([undefined]);
 	});
 });
