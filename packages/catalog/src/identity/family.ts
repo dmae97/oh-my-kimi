@@ -113,3 +113,44 @@ export function isAnthropicFableOrMythosModel(modelId: string): boolean {
 	const parsed = parseAnthropicModel(bareModelId(modelId));
 	return parsed !== null && isFableOrMythos(parsed.kind);
 }
+
+/** Thinking-variant token location inside a model id. */
+export interface ThinkingVariantToken {
+	index: number;
+	length: number;
+}
+
+const THINKING_VARIANT_TOKEN_RE = /-(?:thinking|reasoner|reasoning)(?=$|[^a-z0-9])/gi;
+
+/**
+ * Locates the first thinking-variant token (`-thinking`, `-reasoner`,
+ * `-reasoning`; trailing or infix) in a model id. The token ends at the id
+ * end or any non-alphanumeric boundary, and negated forms (`non-thinking`,
+ * `no-thinking`) never match — those name the NON-thinking SKU.
+ */
+export function findThinkingVariantToken(modelId: string): ThinkingVariantToken | undefined {
+	THINKING_VARIANT_TOKEN_RE.lastIndex = 0;
+	let match = THINKING_VARIANT_TOKEN_RE.exec(modelId);
+	while (match !== null) {
+		const preceding = /([a-z0-9]+)$/i.exec(modelId.slice(0, match.index))?.[1]?.toLowerCase();
+		if (preceding !== "non" && preceding !== "no") {
+			return { index: match.index, length: match[0].length };
+		}
+		match = THINKING_VARIANT_TOKEN_RE.exec(modelId);
+	}
+	return undefined;
+}
+
+/**
+ * Removes the located thinking-variant token: `kimi-k2-thinking` → `kimi-k2`,
+ * `mimo-v2-flash-thinking-original` → `mimo-v2-flash-original`,
+ * `grok-4.1-fast-reasoning` → `grok-4.1-fast`. Returns `undefined` when no
+ * token exists or nothing would remain. Callers MUST verify the result names
+ * a live model.
+ */
+export function stripThinkingVariantToken(modelId: string): string | undefined {
+	const token = findThinkingVariantToken(modelId);
+	if (!token) return undefined;
+	const stripped = modelId.slice(0, token.index) + modelId.slice(token.index + token.length);
+	return stripped.length > 0 ? stripped : undefined;
+}

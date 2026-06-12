@@ -33,6 +33,7 @@
  */
 import { buildCompat, buildModel } from "./build";
 import { Effort } from "./effort";
+import { stripThinkingVariantToken } from "./identity/family";
 import { resolveModelThinking } from "./model-thinking";
 import type { Api, Model, ModelSpec, Provider, ThinkingConfig } from "./types";
 
@@ -168,24 +169,6 @@ export const VARIANT_COLLAPSE_TABLES: Readonly<Record<string, VariantCollapseTab
 };
 
 /**
- * Removes the first `-thinking` token from a model id; the token ends at the
- * end of the id or any non-alphanumeric boundary: `kimi-k2-thinking` →
- * `kimi-k2`, `mimo-v2-flash-thinking-original` → `mimo-v2-flash-original`,
- * `[Kiro] claude-opus-4-8-thinking [X]` → `[Kiro] claude-opus-4-8 [X]`.
- * Returns `undefined` when no token exists or nothing would remain. Used by
- * the automatic pair rule and as the alias-of-last-resort for saved
- * selectors — callers MUST verify the result names a live model.
- */
-export function stripThinkingVariantToken(modelId: string): string | undefined {
-	const match = /-thinking(?=$|[^a-z0-9])/i.exec(modelId);
-	if (!match) {
-		return undefined;
-	}
-	const stripped = modelId.slice(0, match.index) + modelId.slice(match.index + match[0].length);
-	return stripped.length > 0 ? stripped : undefined;
-}
-
-/**
  * The global automatic rule: derive an `X` + `X-thinking` family for every
  * pair where both ids are live in `specs` (trailing or infix token). Gates:
  * - both members share the same `api`,
@@ -256,14 +239,19 @@ export function deriveThinkingPairFamilies<TSpec extends VariantSpecLike>(
 
 const DEFAULT_PAIR_EFFORTS: readonly Effort[] = [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High];
 
-/** Surface fallback chain: thinking member → bare member → canonical deriver → budget default. */
+/**
+ * Surface fallback chain: thinking member → bare member → canonical deriver →
+ * budget default. `requiresEffort` is dropped from every source: the COLLAPSED
+ * pair can disable thinking (off routes to the bare backing id), even though
+ * the thinking member alone cannot.
+ */
 function derivePairThinkingSurface(
 	thinkingSpec: VariantSpecLike,
 	baseSpec: VariantSpecLike,
-): Omit<ThinkingConfig, "effortRouting" | "suppressWhenOff"> {
+): Omit<ThinkingConfig, "effortRouting" | "suppressWhenOff" | "requiresEffort"> {
 	const baked = thinkingSpec.thinking ?? baseSpec.thinking;
 	if (baked && baked.efforts.length > 0) {
-		const { effortRouting: _routing, suppressWhenOff: _suppress, ...surface } = baked;
+		const { effortRouting: _routing, suppressWhenOff: _suppress, requiresEffort: _required, ...surface } = baked;
 		return surface;
 	}
 	const derived = resolveModelThinking(
@@ -271,7 +259,8 @@ function derivePairThinkingSurface(
 		buildCompat(thinkingSpec as unknown as ModelSpec<Api>),
 	);
 	if (derived && derived.efforts.length > 0) {
-		return derived;
+		const { effortRouting: _dRouting, suppressWhenOff: _dSuppress, requiresEffort: _dRequired, ...surface } = derived;
+		return surface;
 	}
 	return { mode: "budget", efforts: DEFAULT_PAIR_EFFORTS };
 }

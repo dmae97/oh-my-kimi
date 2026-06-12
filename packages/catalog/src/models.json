@@ -2735,7 +2735,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"gemini-3-flash-preview": {
@@ -2764,7 +2765,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"gemini-3.1-flash-lite": {
@@ -2793,7 +2795,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"gemini-3.1-flash-lite-preview": {
@@ -2822,7 +2825,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"gemini-3.1-pro-preview": {
@@ -2849,7 +2853,8 @@
 				"efforts": [
 					"low",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"gemini-3.5-flash": {
@@ -2878,7 +2883,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"gemma-3-12b-it": {
@@ -5593,7 +5599,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"o1-2024-12-17": {
@@ -5660,7 +5667,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"o3-mini-2025-01-31": {
@@ -5728,7 +5736,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"o4-mini": {
@@ -5758,7 +5767,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"o4-mini-2025-04-16": {
@@ -7315,7 +7325,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"qwen3-coder-next": {
@@ -9092,7 +9103,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"minimax.minimax-m2.1": {
@@ -9120,7 +9132,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"minimax.minimax-m2.5": {
@@ -9148,7 +9161,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"mistral.devstral-2-123b": {
@@ -9379,7 +9393,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"moonshotai.kimi-k2.5": {
@@ -12216,7 +12231,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"openai/o3": {
@@ -12246,7 +12262,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"openai/o3-mini": {
@@ -12275,7 +12292,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"openai/o3-pro": {
@@ -12305,7 +12323,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"openai/o4-mini": {
@@ -12335,7 +12354,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"workers-ai/@cf/moonshotai/kimi-k2.5": {
@@ -12684,7 +12704,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"gemini-3-pro": {
@@ -12711,7 +12732,8 @@
 				"efforts": [
 					"low",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"gemini-3.1-pro": {
@@ -12738,7 +12760,8 @@
 				"efforts": [
 					"low",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"gpt-5.1-codex-max": {
@@ -13801,7 +13824,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		}
 	},
@@ -14179,7 +14203,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"gemini-3-flash-preview": {
@@ -14217,7 +14242,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"gemini-3-pro-preview": {
@@ -14252,7 +14278,8 @@
 				"efforts": [
 					"low",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"gemini-3.1-pro-preview": {
@@ -14288,7 +14315,8 @@
 				"efforts": [
 					"low",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"gemini-3.5-flash": {
@@ -14326,7 +14354,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"gpt-4.1": {
@@ -15691,7 +15720,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"gemini-2.5-pro-preview-05-06": {
@@ -15720,7 +15750,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"gemini-2.5-pro-preview-06-05": {
@@ -15749,7 +15780,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"gemini-3-flash-preview": {
@@ -15778,7 +15810,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"gemini-3-pro-preview": {
@@ -15805,7 +15838,8 @@
 				"efforts": [
 					"low",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"gemini-3.1-flash-lite": {
@@ -15834,7 +15868,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"gemini-3.1-flash-lite-preview": {
@@ -15863,7 +15898,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"gemini-3.1-pro-preview": {
@@ -15890,7 +15926,8 @@
 				"efforts": [
 					"low",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"gemini-3.1-pro-preview-customtools": {
@@ -15917,7 +15954,8 @@
 				"efforts": [
 					"low",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"gemini-3.5-flash": {
@@ -15946,7 +15984,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"gemini-flash-latest": {
@@ -16439,7 +16478,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"gemini-3-flash": {
@@ -16468,7 +16508,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"gemini-3-pro": {
@@ -16648,7 +16689,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"gemini-3-flash-preview": {
@@ -16677,7 +16719,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"gemini-3-pro-preview": {
@@ -16704,7 +16747,8 @@
 				"efforts": [
 					"low",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"gemini-3.1-flash-lite-preview": {
@@ -16733,7 +16777,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"gemini-3.1-pro-preview": {
@@ -16760,7 +16805,8 @@
 				"efforts": [
 					"low",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		}
 	},
@@ -17153,7 +17199,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"gemini-3-flash-preview": {
@@ -17182,7 +17229,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"gemini-3.1-flash-lite": {
@@ -17211,7 +17259,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"gemini-3.1-flash-lite-preview": {
@@ -17240,7 +17289,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"gemini-3.1-pro-preview": {
@@ -17267,7 +17317,8 @@
 				"efforts": [
 					"low",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"gemini-3.1-pro-preview-customtools": {
@@ -17294,7 +17345,8 @@
 				"efforts": [
 					"low",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"gemini-3.5-flash": {
@@ -17323,7 +17375,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"gemini-flash-latest": {
@@ -17449,7 +17502,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"openai/gpt-oss-120b-maas": {
@@ -20405,7 +20459,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"google/gemini-2.5-pro-preview": {
@@ -20472,7 +20527,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"google/gemini-3-pro-image-preview": {
@@ -20499,7 +20555,8 @@
 				"efforts": [
 					"low",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"google/gemini-3-pro-preview": {
@@ -20526,7 +20583,8 @@
 				"efforts": [
 					"low",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"google/gemini-3.1-flash-image-preview": {
@@ -20574,7 +20632,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"google/gemini-3.1-flash-lite-preview": {
@@ -20621,7 +20680,8 @@
 				"efforts": [
 					"low",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"google/gemini-3.1-pro-preview-customtools": {
@@ -20669,7 +20729,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"google/gemma-2-27b-it": {
@@ -21850,7 +21911,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"minimax/minimax-m2-her": {
@@ -21896,7 +21958,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"minimax/minimax-m2.5": {
@@ -21923,7 +21986,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"minimax/minimax-m2.5:free": {
@@ -21969,7 +22033,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"minimax/minimax-m3": {
@@ -24477,7 +24542,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"openai/o1-pro": {
@@ -24526,7 +24592,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"openai/o3-deep-research": {
@@ -24574,7 +24641,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"openai/o3-mini-high": {
@@ -24623,7 +24691,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"openai/o4-mini": {
@@ -24653,7 +24722,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"openai/o4-mini-deep-research": {
@@ -24947,7 +25017,7 @@
 			"api": "openai-completions",
 			"provider": "kilo",
 			"baseUrl": "https://api.kilo.ai/api/gateway",
-			"reasoning": false,
+			"reasoning": true,
 			"input": [
 				"text"
 			],
@@ -24958,30 +25028,56 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 222222,
-			"maxTokens": 8888
+			"maxTokens": 8888,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				],
+				"effortRouting": {
+					"off": "perplexity/sonar-pro",
+					"minimal": "perplexity/sonar-reasoning-pro",
+					"low": "perplexity/sonar-reasoning-pro",
+					"medium": "perplexity/sonar-reasoning-pro",
+					"high": "perplexity/sonar-reasoning-pro",
+					"xhigh": "perplexity/sonar-reasoning-pro"
+				}
+			},
+			"compat": {
+				"supportsStore": false,
+				"supportsDeveloperRole": false,
+				"supportsMultipleSystemMessages": false,
+				"supportsReasoningEffort": true,
+				"supportsReasoningParams": true,
+				"reasoningEffortMap": {},
+				"supportsUsageInStreaming": true,
+				"alwaysSendMaxTokens": false,
+				"disableReasoningOnForcedToolChoice": false,
+				"disableReasoningOnToolChoice": false,
+				"supportsToolChoice": true,
+				"maxTokensField": "max_completion_tokens",
+				"requiresToolResultName": false,
+				"requiresAssistantAfterToolResult": false,
+				"requiresThinkingAsText": false,
+				"requiresMistralToolIds": false,
+				"thinkingFormat": "openai",
+				"reasoningContentField": "reasoning_content",
+				"requiresReasoningContentForToolCalls": false,
+				"allowsSyntheticReasoningContentForToolCalls": true,
+				"requiresAssistantContentForToolCalls": false,
+				"isOpenRouterHost": false,
+				"isVercelGatewayHost": false,
+				"supportsStrictMode": false,
+				"toolStrictMode": "mixed"
+			}
 		},
 		"perplexity/sonar-pro-search": {
 			"id": "perplexity/sonar-pro-search",
 			"name": "Sonar Pro Search",
-			"api": "openai-completions",
-			"provider": "kilo",
-			"baseUrl": "https://api.kilo.ai/api/gateway",
-			"reasoning": false,
-			"input": [
-				"text"
-			],
-			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 222222,
-			"maxTokens": 8888
-		},
-		"perplexity/sonar-reasoning-pro": {
-			"id": "perplexity/sonar-reasoning-pro",
-			"name": "Sonar Reasoning Pro",
 			"api": "openai-completions",
 			"provider": "kilo",
 			"baseUrl": "https://api.kilo.ai/api/gateway",
@@ -25754,7 +25850,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"qwen/qwen3-vl-235b-a22b-instruct": {
@@ -27973,7 +28070,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"MiniMax-M2.1": {
@@ -28002,7 +28100,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"MiniMax-M2.5": {
@@ -28031,7 +28130,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"MiniMax-M2.5-highspeed": {
@@ -28060,7 +28160,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"MiniMax-M2.5-lightning": {
@@ -28089,7 +28190,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"MiniMax-M2.7": {
@@ -28118,7 +28220,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"MiniMax-M2.7-highspeed": {
@@ -28147,7 +28250,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"MiniMax-M3": {
@@ -28208,7 +28312,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"MiniMax-M2.1": {
@@ -28237,7 +28342,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"MiniMax-M2.5": {
@@ -28266,7 +28372,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"MiniMax-M2.5-highspeed": {
@@ -28295,7 +28402,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"MiniMax-M2.5-lightning": {
@@ -28324,7 +28432,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"MiniMax-M2.7": {
@@ -28353,7 +28462,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"MiniMax-M2.7-highspeed": {
@@ -28382,7 +28492,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"MiniMax-M3": {
@@ -28447,7 +28558,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"MiniMax-M2.1": {
@@ -28480,7 +28592,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"MiniMax-M2.1-lightning": {
@@ -28513,7 +28626,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"MiniMax-M2.5": {
@@ -28546,7 +28660,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"MiniMax-M2.5-highspeed": {
@@ -28579,7 +28694,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"MiniMax-M2.5-lightning": {
@@ -28612,7 +28728,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"MiniMax-M2.7": {
@@ -28645,7 +28762,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"MiniMax-M2.7-highspeed": {
@@ -28678,7 +28796,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"MiniMax-M3": {
@@ -28748,7 +28867,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"MiniMax-M2.1": {
@@ -28781,7 +28901,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"MiniMax-M2.1-lightning": {
@@ -28814,7 +28935,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"MiniMax-M2.5": {
@@ -28847,7 +28969,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"MiniMax-M2.5-highspeed": {
@@ -28880,7 +29003,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"MiniMax-M2.5-lightning": {
@@ -28913,7 +29037,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"MiniMax-M2.7": {
@@ -28946,7 +29071,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"MiniMax-M2.7-highspeed": {
@@ -28979,7 +29105,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"MiniMax-M3": {
@@ -33497,7 +33624,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			},
 			"compat": {
 				"supportsStore": false,
@@ -33569,7 +33697,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"gemini-2.5-pro-preview-06-05": {
@@ -33598,7 +33727,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"gemini-3-pro-preview": {
@@ -33630,7 +33760,8 @@
 					"off": "gemini-3-pro-preview",
 					"low": "gemini-3-pro-preview-thinking",
 					"high": "gemini-3-pro-preview-thinking"
-				}
+				},
+				"requiresEffort": true
 			},
 			"compat": {
 				"supportsStore": true,
@@ -34510,7 +34641,8 @@
 					"low": "google/gemini-3-flash-preview-thinking",
 					"medium": "google/gemini-3-flash-preview-thinking",
 					"high": "google/gemini-3-flash-preview-thinking"
-				}
+				},
+				"requiresEffort": true
 			},
 			"compat": {
 				"supportsStore": true,
@@ -34566,7 +34698,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"google/gemini-3.1-flash-lite-preview": {
@@ -34613,7 +34746,8 @@
 				"efforts": [
 					"low",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"google/gemini-3.1-pro-preview-customtools": {
@@ -34640,7 +34774,8 @@
 				"efforts": [
 					"low",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"google/gemini-3.1-pro-preview-high": {
@@ -34714,7 +34849,8 @@
 					"low": "google/gemini-3.5-flash-thinking",
 					"medium": "google/gemini-3.5-flash-thinking",
 					"high": "google/gemini-3.5-flash-thinking"
-				}
+				},
+				"requiresEffort": true
 			},
 			"compat": {
 				"supportsStore": true,
@@ -36902,7 +37038,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			},
 			"compat": {
 				"supportsDeveloperRole": false,
@@ -36991,7 +37128,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"minimax/minimax-m2.5": {
@@ -37018,7 +37156,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"minimax/minimax-m2.7": {
@@ -37045,7 +37184,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"minimax/minimax-m2.7-turbo": {
@@ -37807,7 +37947,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"moonshotai/kimi-k2-thinking-original": {
@@ -38345,7 +38486,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"nvidia/nemotron-3-super-120b-a12b": {
@@ -39471,7 +39613,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"openai/o1-preview": {
@@ -39539,7 +39682,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"openai/o3-deep-research": {
@@ -39569,7 +39713,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"openai/o3-mini": {
@@ -39598,7 +39743,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"openai/o3-mini-high": {
@@ -39685,7 +39831,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"openai/o4-mini-deep-research": {
@@ -39715,7 +39862,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"openai/o4-mini-high": {
@@ -39745,7 +39893,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"owl": {
@@ -40426,7 +40575,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"Qwen/Qwen3-VL-235B-A22B-Instruct": {
@@ -41908,7 +42058,7 @@
 			"api": "openai-completions",
 			"provider": "nanogpt",
 			"baseUrl": "https://nano-gpt.com/api/v1",
-			"reasoning": false,
+			"reasoning": true,
 			"input": [
 				"text"
 			],
@@ -41919,26 +42069,52 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 222222,
-			"maxTokens": 8888
-		},
-		"sonar-reasoning-pro": {
-			"id": "sonar-reasoning-pro",
-			"name": "sonar-reasoning-pro",
-			"api": "openai-completions",
-			"provider": "nanogpt",
-			"baseUrl": "https://nano-gpt.com/api/v1",
-			"reasoning": false,
-			"input": [
-				"text"
-			],
-			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
-				"cacheWrite": 0
+			"maxTokens": 8888,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				],
+				"effortRouting": {
+					"off": "sonar-pro",
+					"minimal": "sonar-reasoning-pro",
+					"low": "sonar-reasoning-pro",
+					"medium": "sonar-reasoning-pro",
+					"high": "sonar-reasoning-pro",
+					"xhigh": "sonar-reasoning-pro"
+				}
 			},
-			"contextWindow": 222222,
-			"maxTokens": 8888
+			"compat": {
+				"supportsStore": true,
+				"supportsDeveloperRole": false,
+				"supportsMultipleSystemMessages": false,
+				"supportsReasoningEffort": true,
+				"supportsReasoningParams": true,
+				"reasoningEffortMap": {},
+				"supportsUsageInStreaming": true,
+				"alwaysSendMaxTokens": false,
+				"disableReasoningOnForcedToolChoice": false,
+				"disableReasoningOnToolChoice": false,
+				"supportsToolChoice": true,
+				"maxTokensField": "max_completion_tokens",
+				"requiresToolResultName": false,
+				"requiresAssistantAfterToolResult": false,
+				"requiresThinkingAsText": false,
+				"requiresMistralToolIds": false,
+				"thinkingFormat": "openai",
+				"reasoningContentField": "reasoning_content",
+				"requiresReasoningContentForToolCalls": false,
+				"allowsSyntheticReasoningContentForToolCalls": true,
+				"requiresAssistantContentForToolCalls": false,
+				"isOpenRouterHost": false,
+				"isVercelGatewayHost": false,
+				"supportsStrictMode": false,
+				"toolStrictMode": "mixed"
+			}
 		},
 		"soob3123/amoral-gemma3-27B-v2": {
 			"id": "soob3123/amoral-gemma3-27B-v2",
@@ -43845,27 +44021,43 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
-			}
-		},
-		"x-ai/grok-4.1-fast-reasoning": {
-			"id": "x-ai/grok-4.1-fast-reasoning",
-			"name": "x-ai/grok-4.1-fast-reasoning",
-			"api": "openai-completions",
-			"provider": "nanogpt",
-			"baseUrl": "https://nano-gpt.com/api/v1",
-			"reasoning": false,
-			"input": [
-				"text"
-			],
-			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
-				"cacheWrite": 0
+				],
+				"effortRouting": {
+					"off": "x-ai/grok-4.1-fast",
+					"minimal": "x-ai/grok-4.1-fast-reasoning",
+					"low": "x-ai/grok-4.1-fast-reasoning",
+					"medium": "x-ai/grok-4.1-fast-reasoning",
+					"high": "x-ai/grok-4.1-fast-reasoning",
+					"xhigh": "x-ai/grok-4.1-fast-reasoning"
+				}
 			},
-			"contextWindow": 222222,
-			"maxTokens": 8888
+			"compat": {
+				"supportsStore": true,
+				"supportsDeveloperRole": false,
+				"supportsMultipleSystemMessages": false,
+				"supportsReasoningEffort": true,
+				"supportsReasoningParams": true,
+				"reasoningEffortMap": {},
+				"supportsUsageInStreaming": true,
+				"alwaysSendMaxTokens": false,
+				"disableReasoningOnForcedToolChoice": false,
+				"disableReasoningOnToolChoice": false,
+				"supportsToolChoice": true,
+				"maxTokensField": "max_completion_tokens",
+				"requiresToolResultName": false,
+				"requiresAssistantAfterToolResult": false,
+				"requiresThinkingAsText": false,
+				"requiresMistralToolIds": false,
+				"thinkingFormat": "openai",
+				"reasoningContentField": "reasoning_content",
+				"requiresReasoningContentForToolCalls": false,
+				"allowsSyntheticReasoningContentForToolCalls": true,
+				"requiresAssistantContentForToolCalls": false,
+				"isOpenRouterHost": false,
+				"isVercelGatewayHost": false,
+				"supportsStrictMode": false,
+				"toolStrictMode": "mixed"
+			}
 		},
 		"x-ai/grok-4.20": {
 			"id": "x-ai/grok-4.20",
@@ -46218,7 +46410,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"minimaxai/minimax-m2.1": {
@@ -46245,7 +46438,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"minimaxai/minimax-m2.5": {
@@ -46272,7 +46466,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"minimaxai/minimax-m2.7": {
@@ -46299,7 +46494,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"mistralai/codestral-22b-instruct-v0.1": {
@@ -46714,7 +46910,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"moonshotai/kimi-k2.5": {
@@ -47357,7 +47554,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"nvidia/nemotron-3-super-120b-a12b": {
@@ -47972,7 +48170,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"qwen/qwen3.5-122b-a10b": {
@@ -49445,7 +49644,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"o1-pro": {
@@ -49475,7 +49675,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"o3": {
@@ -49505,7 +49706,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"o3-deep-research": {
@@ -49535,7 +49737,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"o3-mini": {
@@ -49564,7 +49767,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"o3-pro": {
@@ -49594,7 +49798,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"o4-mini": {
@@ -49624,7 +49829,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"o4-mini-deep-research": {
@@ -49654,7 +49860,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		}
 	},
@@ -50662,7 +50869,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"minimax-m2.7": {
@@ -50689,7 +50897,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"minimax-m3": {
@@ -51361,7 +51570,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"gemini-3-pro": {
@@ -51388,7 +51598,8 @@
 				"efforts": [
 					"low",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"gemini-3.1-pro": {
@@ -51415,7 +51626,8 @@
 				"efforts": [
 					"low",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"gemini-3.5-flash": {
@@ -51444,7 +51656,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"glm-4.6": {
@@ -52373,7 +52586,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"minimax-m2.5": {
@@ -52400,7 +52614,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"minimax-m2.5-free": {
@@ -52429,7 +52644,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"minimax-m2.7": {
@@ -52456,7 +52672,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"minimax-m3-free": {
@@ -53795,7 +54012,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"arcee-ai/trinity-large-thinking:free": {
@@ -53823,7 +54041,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"arcee-ai/trinity-mini": {
@@ -54748,7 +54967,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"google/gemini-2.5-pro-preview": {
@@ -54777,7 +54997,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"google/gemini-2.5-pro-preview-05-06": {
@@ -54806,7 +55027,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"google/gemini-3-flash-preview": {
@@ -54835,7 +55057,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"google/gemini-3-pro-preview": {
@@ -54862,7 +55085,8 @@
 				"efforts": [
 					"low",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"google/gemini-3.1-flash-lite": {
@@ -54891,7 +55115,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"google/gemini-3.1-flash-lite-preview": {
@@ -54938,7 +55163,8 @@
 				"efforts": [
 					"low",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"google/gemini-3.1-pro-preview-customtools": {
@@ -54965,7 +55191,8 @@
 				"efforts": [
 					"low",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"google/gemini-3.5-flash": {
@@ -54994,7 +55221,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"google/gemma-3-12b-it": {
@@ -55662,7 +55890,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"minimax/minimax-m2.1": {
@@ -55689,7 +55918,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"minimax/minimax-m2.5": {
@@ -55716,7 +55946,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"minimax/minimax-m2.5:free": {
@@ -55743,7 +55974,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			},
 			"compat": {
 				"supportsToolChoice": false
@@ -55773,7 +56005,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"minimax/minimax-m3": {
@@ -56411,7 +56644,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"moonshotai/kimi-k2.5": {
@@ -56734,7 +56968,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"nvidia/nemotron-3-super-120b-a12b": {
@@ -58198,7 +58433,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"openai/o3": {
@@ -58227,7 +58463,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"openai/o3-deep-research": {
@@ -58256,7 +58493,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"openai/o3-mini": {
@@ -58284,7 +58522,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"openai/o3-mini-high": {
@@ -58312,7 +58551,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"openai/o3-pro": {
@@ -58341,7 +58581,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"openai/o4-mini": {
@@ -58370,7 +58611,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"openai/o4-mini-deep-research": {
@@ -58399,7 +58641,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"openai/o4-mini-high": {
@@ -58428,7 +58671,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"openrouter/aurora-alpha": {
@@ -58970,7 +59214,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"qwen/qwen3-30b-a3b": {
@@ -59045,7 +59290,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"qwen/qwen3-32b": {
@@ -59346,7 +59592,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"qwen/qwen3-next-80b-a3b-instruct": {
@@ -59412,7 +59659,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"qwen/qwen3-vl-235b-a22b-instruct": {
@@ -59461,7 +59709,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"qwen/qwen3-vl-30b-a3b-instruct": {
@@ -59510,7 +59759,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"qwen/qwen3-vl-32b-instruct": {
@@ -59579,7 +59829,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"qwen/qwen3.5-122b-a10b": {
@@ -63058,7 +63309,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			},
 			"compat": {
 				"supportsUsageInStreaming": false
@@ -63088,7 +63340,8 @@
 				"efforts": [
 					"low",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			},
 			"compat": {
 				"supportsUsageInStreaming": false
@@ -63527,7 +63780,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			},
 			"compat": {
 				"supportsUsageInStreaming": false
@@ -63623,7 +63877,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			},
 			"compat": {
 				"supportsUsageInStreaming": false
@@ -63653,7 +63908,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			},
 			"compat": {
 				"supportsUsageInStreaming": false
@@ -64266,7 +64522,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			},
 			"compat": {
 				"supportsUsageInStreaming": false
@@ -64949,7 +65206,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"alibaba/qwen3-coder": {
@@ -65171,7 +65429,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"alibaba/qwen3-vl-thinking": {
@@ -65201,7 +65460,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"alibaba/qwen3.5-flash": {
@@ -65889,7 +66149,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"bytedance/seed-1.6": {
@@ -66102,7 +66363,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"deepseek/deepseek-v4-flash": {
@@ -66336,7 +66598,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"google/gemini-3-flash": {
@@ -66365,7 +66628,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"google/gemini-3-pro-preview": {
@@ -66392,7 +66656,8 @@
 				"efforts": [
 					"low",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"google/gemini-3.1-flash-lite": {
@@ -66421,7 +66686,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"google/gemini-3.1-flash-lite-preview": {
@@ -66468,7 +66734,8 @@
 				"efforts": [
 					"low",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"google/gemini-3.5-flash": {
@@ -66497,7 +66764,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"google/gemma-4-26b-a4b-it": {
@@ -66682,7 +66950,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"meta/llama-3.1-70b": {
@@ -66848,7 +67117,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"minimax/minimax-m2.1": {
@@ -66877,7 +67147,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"minimax/minimax-m2.1-lightning": {
@@ -66906,7 +67177,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"minimax/minimax-m2.5": {
@@ -66935,7 +67207,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"minimax/minimax-m2.5-highspeed": {
@@ -66965,7 +67238,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"minimax/minimax-m2.7": {
@@ -66994,7 +67268,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"minimax/minimax-m2.7-highspeed": {
@@ -67023,7 +67298,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"minimax/minimax-m3": {
@@ -67362,7 +67638,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"moonshotai/kimi-k2-turbo": {
@@ -68055,7 +68332,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"openai/gpt-5.2": {
@@ -68490,7 +68768,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"openai/o3": {
@@ -68520,7 +68799,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"openai/o3-deep-research": {
@@ -68550,7 +68830,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"openai/o3-mini": {
@@ -68579,7 +68860,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"openai/o3-pro": {
@@ -68609,7 +68891,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"openai/o4-mini": {
@@ -68639,7 +68922,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"perplexity/sonar": {
@@ -68973,7 +69257,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"xai/grok-4.1-fast-non-reasoning": {
@@ -69023,7 +69308,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"xai/grok-4.20-multi-agent": {
@@ -69153,7 +69439,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"xai/grok-4.20-reasoning-beta": {
@@ -69183,7 +69470,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"xai/grok-4.3": {
@@ -70538,7 +70826,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"grok-4.20-beta-latest-non-reasoning": {
@@ -70587,7 +70876,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"grok-4.20-multi-agent-beta-latest": {
@@ -71966,7 +72256,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"baidu/ernie-5.1": {
@@ -72314,7 +72605,8 @@
 					"medium": "high",
 					"high": "high",
 					"xhigh": "max"
-				}
+				},
+				"requiresEffort": true
 			}
 		},
 		"deepseek/deepseek-v3.2": {
@@ -72648,7 +72940,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"google/gemini-3-flash-preview": {
@@ -72677,7 +72970,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"google/gemini-3-pro-image-preview": {
@@ -72704,7 +72998,8 @@
 				"efforts": [
 					"low",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"google/gemini-3-pro-preview": {
@@ -72731,7 +73026,8 @@
 				"efforts": [
 					"low",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"google/gemini-3.1-flash-lite": {
@@ -72760,7 +73056,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"google/gemini-3.1-flash-lite-preview": {
@@ -72807,7 +73104,8 @@
 				"efforts": [
 					"low",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"google/gemini-3.5-flash": {
@@ -72836,7 +73134,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"google/gemini-3.5-flash-free": {
@@ -72865,7 +73164,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"google/gemma-3-12b-it": {
@@ -73277,7 +73577,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"minimax/minimax-m2-her": {
@@ -73323,7 +73624,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"minimax/minimax-m2.5": {
@@ -73350,7 +73652,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"minimax/minimax-m2.5-lightning": {
@@ -73377,7 +73680,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"minimax/minimax-m2.7": {
@@ -73404,7 +73708,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"minimax/minimax-m2.7-highspeed": {
@@ -73431,7 +73736,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"minimax/minimax-m3": {
@@ -73548,7 +73854,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"moonshotai/kimi-k2-thinking-turbo": {
@@ -73577,7 +73884,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"moonshotai/kimi-k2.5": {
@@ -74443,7 +74751,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"openai/text-embedding-3-large": {
@@ -74556,7 +74865,8 @@
 					"low",
 					"medium",
 					"high"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"qwen/qwen3-coder": {
@@ -75146,7 +75456,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"tencent/hy3-preview": {

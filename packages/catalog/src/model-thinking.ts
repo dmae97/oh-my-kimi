@@ -21,6 +21,7 @@ import {
 	semverGte,
 } from "./identity/classify";
 import {
+	findThinkingVariantToken,
 	isDeepseekModelIdOrName,
 	isMinimaxM2FamilyModelId,
 	isOpenAIGptOssModelId,
@@ -157,7 +158,8 @@ function fillThinkingWireDefaults<TApi extends Api>(
 		thinking.supportsDisplay === undefined &&
 		(spec.api === "anthropic-messages" || spec.api === "bedrock-converse-stream") &&
 		supportsAdaptiveThinkingDisplay(spec.id);
-	if (!effortsChanged && !shouldReplaceEffortMap && !needsDisplay) {
+	const needsRequiresEffort = thinking.requiresEffort === undefined && impliesMandatoryReasoning(parsed, spec.id);
+	if (!effortsChanged && !shouldReplaceEffortMap && !needsDisplay && !needsRequiresEffort) {
 		return thinking;
 	}
 	const filled: ThinkingConfig = { ...thinking };
@@ -173,6 +175,9 @@ function fillThinkingWireDefaults<TApi extends Api>(
 	}
 	if (needsDisplay) {
 		filled.supportsDisplay = true;
+	}
+	if (needsRequiresEffort) {
+		filled.requiresEffort = true;
 	}
 	return filled;
 }
@@ -197,6 +202,9 @@ export function deriveThinking<TApi extends Api>(spec: ModelSpec<TApi>, compat: 
 		supportsAdaptiveThinkingDisplay(spec.id)
 	) {
 		config.supportsDisplay = true;
+	}
+	if (impliesMandatoryReasoning(parsed, spec.id)) {
+		config.requiresEffort = true;
 	}
 	return config;
 }
@@ -355,6 +363,30 @@ function inferGeminiSupportedEfforts(model: GeminiModel): readonly Effort[] {
 		return DEFAULT_REASONING_EFFORTS;
 	}
 	return model.kind === "pro" ? GEMINI_3_PRO_EFFORTS : GEMINI_3_FLASH_EFFORTS;
+}
+
+const OPENAI_O_SERIES_RE = /^o[134](?:$|[-:.])/i;
+
+/**
+ * Reasoning-only upstreams reject disabled or omitted thinking ("Reasoning is
+ * mandatory for this endpoint and cannot be disabled") — the floor is the
+ * lowest effort, never off:
+ * - Gemini 3.x exposes levels only; Gemini 2.5 Pro floors thinkingBudget at
+ *   128 and rejects 0 (2.5 Flash/Flash-Lite keep the off switch).
+ * - OpenAI o-series and MiniMax M2 are reasoning-first architectures.
+ * - Thinking-variant SKUs (`*-thinking`, `*-reasoner`, `*-reasoning`) ARE the
+ *   thinking checkpoint; live bare twins pair-collapse away
+ *   (variant-collapse) and the collapsed entry owns off — this floor protects
+ *   the orphans.
+ */
+function impliesMandatoryReasoning(parsed: ParsedModel, modelId: string): boolean {
+	if (parsed.family === "gemini") {
+		if (semverGte(parsed.version, "3.0")) return true;
+		if (parsed.kind === "pro" && semverGte(parsed.version, "2.5")) return true;
+	}
+	if (isMinimaxM2FamilyModelId(modelId)) return true;
+	if (OPENAI_O_SERIES_RE.test(bareModelId(modelId))) return true;
+	return findThinkingVariantToken(modelId) !== undefined;
 }
 
 function inferAnthropicSupportedEfforts<TApi extends Api>(
@@ -566,4 +598,17 @@ export function mapEffortToAnthropicAdaptiveEffort<TApi extends Api>(
  */
 export function resolveWireModelId<TApi extends Api>(model: ApiModel<TApi>, effort: Effort | undefined): string {
 	return model.thinking?.effortRouting?.[effort ?? "off"] ?? model.requestModelId ?? model.id;
+}
+
+/**
+ * Lowest supported effort in canonical order — the clamp target for
+ * thinking-off requests on `thinking.requiresEffort` models.
+ */
+export function minimumSupportedEffort<TApi extends Api>(model: ApiModel<TApi>): Effort | undefined {
+	const efforts = model.thinking?.efforts;
+	if (!efforts || efforts.length === 0) return undefined;
+	for (const effort of THINKING_EFFORTS) {
+		if (efforts.includes(effort)) return effort;
+	}
+	return efforts[0];
 }

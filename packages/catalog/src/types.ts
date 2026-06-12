@@ -61,6 +61,14 @@ export interface ThinkingConfig {
 	 * config is absent.
 	 */
 	suppressWhenOff?: boolean;
+	/**
+	 * Reasoning is mandatory upstream: the endpoint rejects disabled or
+	 * omitted thinking (e.g. OpenRouter Gemini 3.x — "Reasoning is mandatory
+	 * for this endpoint and cannot be disabled"). Request mapping clamps
+	 * thinking-off to the lowest supported effort unless `suppressWhenOff`
+	 * provides an explicit wire off-path.
+	 */
+	requiresEffort?: boolean;
 }
 
 // `Provider` is any provider-id string; `KnownProvider` (re-exported above) enumerates

@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { fetchAntigravityDiscoveryModels } from "@oh-my-pi/pi-catalog/discovery/antigravity";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
+import { stripThinkingVariantToken } from "@oh-my-pi/pi-catalog/identity/family";
 import { resolveProviderModels } from "@oh-my-pi/pi-catalog/model-manager";
 import { resolveWireModelId } from "@oh-my-pi/pi-catalog/model-thinking";
 import { googleGeminiCliModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/google";
@@ -18,7 +19,6 @@ import {
 	isVariantCollapsedSpec,
 	resolveBareVariantAlias,
 	resolveVariantAlias,
-	stripThinkingVariantToken,
 } from "@oh-my-pi/pi-catalog/variant-collapse";
 
 function memberSpec(
@@ -181,13 +181,18 @@ describe("stripThinkingVariantToken", () => {
 		expect(stripThinkingVariantToken("hf:moonshotai/Kimi-K2-Thinking")).toBe("hf:moonshotai/Kimi-K2");
 		expect(stripThinkingVariantToken("xiaomi/mimo-v2-flash-thinking-original")).toBe("xiaomi/mimo-v2-flash-original");
 		expect(stripThinkingVariantToken("[Kiro] claude-opus-4-8-thinking [X]")).toBe("[Kiro] claude-opus-4-8 [X]");
+		// Reasoning-token spellings pair the same way.
+		expect(stripThinkingVariantToken("x-ai/grok-4.1-fast-reasoning")).toBe("x-ai/grok-4.1-fast");
+		expect(stripThinkingVariantToken("claude-3-7-sonnet-reasoner")).toBe("claude-3-7-sonnet");
 	});
 
-	it("ignores ids without a hyphenated token", () => {
+	it("ignores ids without a token and negated tokens", () => {
 		expect(stripThinkingVariantToken("kimi-k2")).toBeUndefined();
 		// OpenRouter route variants use `:thinking` — a different mechanism.
 		expect(stripThinkingVariantToken("anthropic/claude-3.7-sonnet:thinking")).toBeUndefined();
 		expect(stripThinkingVariantToken("thinkingcap-1")).toBeUndefined();
+		// `non-thinking` names the NON-thinking SKU.
+		expect(stripThinkingVariantToken("deepseek-non-thinking-v3.2-exp")).toBeUndefined();
 	});
 });
 
