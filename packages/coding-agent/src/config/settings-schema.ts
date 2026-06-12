@@ -1,4 +1,5 @@
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-ai";
+import { DEFAULT_SHARE_URL } from "@oh-my-pi/pi-wire";
 import { SHAPE_VARIANT_NAMES } from "@oh-my-pi/snapcompact";
 import { DEFAULT_RELAY_URL } from "../collab/protocol";
 import { AUTO_THINKING, getConfiguredThinkingLevelMetadata, getThinkingLevelMetadata } from "../thinking";
@@ -1350,6 +1351,29 @@ export const SETTINGS_SCHEMA = {
 			group: "Collab",
 			label: "Display Name",
 			description: "Name shown to other collab participants (default: OS username)",
+		},
+	},
+
+	"share.serverUrl": {
+		type: "string",
+		default: DEFAULT_SHARE_URL,
+		ui: {
+			tab: "interaction",
+			group: "Collab",
+			label: "Share Server",
+			description:
+				"Share viewer/upload base used by /share (encrypted blob upload + viewer; links are <base>/<id>#<key>)",
+		},
+	},
+
+	"share.redactSecrets": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "interaction",
+			group: "Collab",
+			label: "Share Secret Redaction",
+			description: "Run the secret obfuscator over /share snapshots before upload (uses the secrets.* config)",
 		},
 	},
 

@@ -1418,6 +1418,11 @@ export class AgentSession {
 		return this.#ttsrManager;
 	}
 
+	/** Secret obfuscator, when secrets are configured; /share redaction reuses it. */
+	get obfuscator(): SecretObfuscator | undefined {
+		return this.#obfuscator;
+	}
+
 	/** Whether a TTSR abort is pending (stream was aborted to inject rules) */
 	get isTtsrAbortPending(): boolean {
 		return this.#ttsrAbortPending;

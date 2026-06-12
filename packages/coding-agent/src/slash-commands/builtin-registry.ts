@@ -4,8 +4,7 @@ import * as path from "node:path";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { setNextRequestDebugPath } from "@oh-my-pi/pi-ai/utils/request-debug";
 import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
-import { APP_NAME, Snowflake, setProjectDir } from "@oh-my-pi/pi-utils";
-import { $ } from "bun";
+import { APP_NAME, setProjectDir } from "@oh-my-pi/pi-utils";
 import { COLLAB_GUEST_ALLOWED_COMMANDS, CollabGuestLink } from "../collab/guest";
 import { CollabHost } from "../collab/host";
 import type { SettingPath, SettingValue } from "../config/settings";
@@ -15,6 +14,7 @@ import {
 	resolveActiveProjectRegistryPath,
 	resolveOrDefaultProjectRegistryPath,
 } from "../discovery/helpers.js";
+import { shareSession } from "../export/share";
 import { PluginManager } from "../extensibility/plugins";
 import {
 	getInstalledPluginsRegistryPath,
@@ -440,31 +440,21 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "share",
-		description: "Share session as a secret GitHub gist",
+		description: "Share session via an encrypted link (secret gist or share server)",
 		handle: async (_command, runtime) => {
-			const tmpFile = path.join(os.tmpdir(), `${Snowflake.next()}.html`);
 			try {
-				try {
-					await runtime.session.exportToHtml(tmpFile);
-				} catch (err) {
-					return usage(`Failed to export session: ${errorMessage(err)}`, runtime);
-				}
-				const result = await $`gh gist create --public=false ${tmpFile}`.quiet().nothrow();
-				if (result.exitCode !== 0) {
-					return usage(
-						`Failed to create gist: ${result.stderr.toString("utf-8").trim() || "unknown error"}`,
-						runtime,
-					);
-				}
-				const gistUrl = result.stdout.toString("utf-8").trim();
-				const gistId = gistUrl.split("/").pop();
-				if (!gistId) return usage("Failed to parse gist ID from gh output", runtime);
-				await runtime.output(`Share URL: https://gistpreview.github.io/?${gistId}\nGist: ${gistUrl}`);
+				const result = await shareSession(runtime.sessionManager, {
+					serverUrl: runtime.settings.get("share.serverUrl"),
+					state: runtime.session.state,
+					obfuscator: runtime.settings.get("share.redactSecrets") ? runtime.session.obfuscator : undefined,
+				});
+				const lines = [`Share URL: ${result.url}`];
+				if (result.gistUrl) lines.push(`Gist: ${result.gistUrl}`);
+				if (result.truncated) lines.push("Note: large content was trimmed to fit the share size limit.");
+				await runtime.output(lines.join("\n"));
 				return commandConsumed();
-			} catch {
-				return usage("GitHub CLI (gh) is required for /share. Install it from https://cli.github.com/.", runtime);
-			} finally {
-				await fs.rm(tmpFile, { force: true }).catch(() => {});
+			} catch (err) {
+				return usage(`Failed to share session: ${errorMessage(err)}`, runtime);
 			}
 		},
 		handleTui: async (_command, runtime) => {
