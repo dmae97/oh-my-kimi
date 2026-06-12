@@ -8,6 +8,9 @@ const fakeAuthStorage = {
 	async getApiKey() {
 		return process.env.KAGI_API_KEY ?? undefined;
 	},
+	resolver() {
+		return async () => process.env.KAGI_API_KEY ?? undefined;
+	},
 	hasAuth() {
 		return Boolean(process.env.KAGI_API_KEY);
 	},

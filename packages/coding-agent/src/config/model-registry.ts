@@ -1238,9 +1238,10 @@ export class ModelRegistry {
 	#discoveryContext(): DiscoveryContext {
 		return {
 			fetch: this.#fetch,
-			getBearerApiKey: async provider => {
+			getBearerApiKeyResolver: async provider => {
 				const apiKey = await this.getApiKeyForProvider(provider);
-				return apiKey && apiKey !== DEFAULT_LOCAL_TOKEN && apiKey !== kNoAuth ? apiKey : undefined;
+				if (!apiKey || apiKey === DEFAULT_LOCAL_TOKEN || apiKey === kNoAuth) return undefined;
+				return this.resolver(provider);
 			},
 		};
 	}
