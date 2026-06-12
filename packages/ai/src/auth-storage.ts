@@ -620,6 +620,18 @@ export interface OAuthAccessFailure {
 	error: string;
 }
 
+/**
+ * Identity of the OAuth credential a session is currently routed to. Read-only
+ * display/metadata shape: `accountId` is the provider's account UUID, `email`
+ * the user-facing login, `projectId` the GCP-style project for providers that
+ * key usage on it (Gemini CLI / Antigravity).
+ */
+export interface OAuthAccountIdentity {
+	accountId?: string;
+	email?: string;
+	projectId?: string;
+}
+
 export type OAuthAccessResolution = ({ ok: true } & OAuthAccess) | ({ ok: false } & OAuthAccessFailure);
 export interface InvalidateCredentialMatchingOptions {
 	signal?: AbortSignal;
@@ -1569,6 +1581,28 @@ export class AuthStorage {
 		const preferred = this.#resolveActiveOAuthCredential(provider, sessionId);
 		const accountId = preferred?.accountId;
 		return typeof accountId === "string" && accountId.length > 0 ? accountId : undefined;
+	}
+
+	/**
+	 * Get the OAuth account identity for a provider, preferring the credential that
+	 * is session-sticky for `sessionId`. This is a read-only lookup for display and
+	 * metadata paths; it does not refresh tokens, rank usage, or advance selection.
+	 */
+	getOAuthAccountIdentity(provider: string, sessionId?: string): OAuthAccountIdentity | undefined {
+		const preferred = this.#resolveActiveOAuthCredential(provider, sessionId);
+		if (!preferred) return undefined;
+		const identity: OAuthAccountIdentity = {};
+		if (typeof preferred.accountId === "string" && preferred.accountId.length > 0) {
+			identity.accountId = preferred.accountId;
+		}
+		if (typeof preferred.email === "string" && preferred.email.length > 0) {
+			identity.email = preferred.email;
+		}
+		if (typeof preferred.projectId === "string" && preferred.projectId.length > 0) {
+			identity.projectId = preferred.projectId;
+		}
+		if (!identity.accountId && !identity.email && !identity.projectId) return undefined;
+		return identity;
 	}
 
 	/**

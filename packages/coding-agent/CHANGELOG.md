@@ -174,6 +174,10 @@
 
 - `app.clipboard.pasteImage` (`Ctrl+V`) now falls back to pasting clipboard text when no image is present, so hosts that deliver only that chord (VS Code's integrated terminal forwarding `Ctrl+V`, Windows clipboard history via `Win+V`) cover both payload kinds; WSL text reads now reach the Windows clipboard through host PowerShell like image reads already did ([#1628](https://github.com/can1357/oh-my-pi/issues/1628)).
 
+### Changed
+
+- Changed `/usage` to show the OAuth account currently selected for the active model provider when usage reports include multiple accounts, making multi-account sessions easier to verify without marking unrelated providers.
+
 ## [15.10.12] - 2026-06-10
 
 ### Added

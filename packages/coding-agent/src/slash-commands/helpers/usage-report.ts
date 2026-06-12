@@ -1,5 +1,7 @@
 import type { UsageLimit, UsageReport } from "@oh-my-pi/pi-ai";
+import type { OAuthAccountIdentity } from "../../session/auth-storage";
 import type { SlashCommandRuntime } from "../types";
+import { reportMatchesActiveAccount } from "./active-oauth-account";
 import { formatDuration, renderAsciiBar } from "./format";
 
 function formatProviderName(provider: string): string {
@@ -31,7 +33,11 @@ function formatUsageReportAccount(report: UsageReport, limit: UsageLimit, index:
 	return `account ${index + 1}`;
 }
 
-function renderUsageReports(reports: UsageReport[], nowMs: number): string {
+function renderUsageReports(
+	reports: UsageReport[],
+	nowMs: number,
+	resolveActiveAccount?: (provider: string) => OAuthAccountIdentity | undefined,
+): string {
 	const latestFetchedAt = Math.max(...reports.map(report => report.fetchedAt ?? 0));
 	const lines = [`Usage${latestFetchedAt ? ` (${formatDuration(nowMs - latestFetchedAt)} ago)` : ""}`];
 	const grouped = new Map<string, UsageReport[]>();
@@ -45,7 +51,9 @@ function renderUsageReports(reports: UsageReport[], nowMs: number): string {
 		left.localeCompare(right),
 	)) {
 		lines.push("", formatProviderName(provider));
+		const activeAccount = resolveActiveAccount?.(provider);
 		for (const report of providerReports) {
+			const inUse = reportMatchesActiveAccount(report, activeAccount);
 			if (report.limits.length === 0) {
 				const email = typeof report.metadata?.email === "string" ? report.metadata.email : "account";
 				lines.push(`- ${email}: no limits reported`);
@@ -56,7 +64,9 @@ function renderUsageReports(reports: UsageReport[], nowMs: number): string {
 				const window = limit.window?.label ?? limit.scope.windowId;
 				const tier = limit.scope.tier ? ` (${limit.scope.tier})` : "";
 				lines.push(`- ${limit.label}${tier}${window ? ` — ${window}` : ""}`);
-				lines.push(`  ${formatUsageReportAccount(report, limit, index)}: ${formatUsageAmount(limit)}`);
+				lines.push(
+					`  ${formatUsageReportAccount(report, limit, index)}: ${formatUsageAmount(limit)}${inUse ? "  ← in use by this session" : ""}`,
+				);
 				lines.push(`  ${renderAsciiBar(limit.amount.usedFraction)}`);
 				if (limit.window?.resetsAt && limit.window.resetsAt > nowMs) {
 					lines.push(`  resets in ${formatDuration(limit.window.resetsAt - nowMs)}`);
@@ -79,7 +89,18 @@ export async function buildUsageReportText(runtime: SlashCommandRuntime): Promis
 	};
 	if (provider.fetchUsageReports) {
 		const reports = await provider.fetchUsageReports();
-		if (reports && reports.length > 0) return renderUsageReports(reports, Date.now());
+		if (reports && reports.length > 0) {
+			const currentProvider = runtime.session.model?.provider;
+			const activeAccount = currentProvider
+				? runtime.session.modelRegistry.authStorage.getOAuthAccountIdentity(
+						currentProvider,
+						runtime.session.sessionId,
+					)
+				: undefined;
+			return renderUsageReports(reports, Date.now(), providerId =>
+				providerId === currentProvider ? activeAccount : undefined,
+			);
+		}
 	}
 
 	const stats = runtime.session.sessionManager.getUsageStatistics();
