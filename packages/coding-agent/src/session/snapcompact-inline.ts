@@ -9,6 +9,10 @@
  * input context shares `content` array references with the persisted
  * `SessionMessageEntry` messages, so mutation would leak rendered images
  * into session.jsonl.
+ *
+ * The swap policy (budget, savings gate, skip rules) lives in
+ * `planInlineSwaps`, shared by the transform and the `/context` savings
+ * estimate (`estimateInlineSavings`) so the two can never disagree.
  */
 import type { Context, ImageContent, Model, TextContent, ToolResultMessage, UserMessage } from "@oh-my-pi/pi-ai";
 import { countTokens } from "@oh-my-pi/pi-natives";
@@ -65,6 +69,262 @@ function passesSavingsGate(frames: number, shape: snapcompact.Shape, textTokens:
 	return frames * shape.frameTokenEstimate <= textTokens * SAVINGS_MARGIN;
 }
 
+// ============================================================================
+// Swap planning (shared by the live transform and /context estimation)
+// ============================================================================
+
+/** Tool-result swap candidate, in context order. */
+export interface InlineToolResultCandidate {
+	/** toolCallId — stable identity for render caching and application. */
+	id: string;
+	/** Token count of the joined text blocks (0 when empty or image-carrying). */
+	textTokens: number;
+	/** Frames needed to render the text (0 = empty or below the token floor). */
+	frames: number;
+	/** Already carries an image (screenshot etc.) — never re-imaged. */
+	hasImage: boolean;
+}
+
+export interface InlineSystemPromptCandidate {
+	textTokens: number;
+	frames: number;
+}
+
+export interface InlinePlanInput {
+	options: SnapcompactInlineOptions;
+	shape: snapcompact.Shape;
+	/** Provider image-count budget minus images already present in the context. */
+	budget: number;
+	/** All tool results in context order, INCLUDING the most recent one. */
+	toolResults: readonly InlineToolResultCandidate[];
+	/** Joined system prompt; undefined when absent or system-prompt imaging is off. */
+	systemPrompt: InlineSystemPromptCandidate | undefined;
+	/** Whether a user message exists to carry the system-prompt frames. */
+	hasUserMessage: boolean;
+}
+
+export interface InlineSwapPlan {
+	/** Tool results to swap, oldest first. */
+	toolResults: Array<{ id: string; textTokens: number; frames: number }>;
+	/** Set when the system prompt should swap to frames (uses leftover budget). */
+	systemPrompt: InlineSystemPromptCandidate | undefined;
+}
+
+/**
+ * Decide which content gets swapped for frames. Pure — the same rules drive
+ * the provider-request transform and the /context savings estimate.
+ */
+export function planInlineSwaps(input: InlinePlanInput): InlineSwapPlan {
+	let budget = input.budget;
+
+	const toolResults: InlineSwapPlan["toolResults"] = [];
+	if (input.options.renderToolResults) {
+		// Oldest-first for cache-stable bytes; skip the LAST tool result so the
+		// freshest output stays crisp text. A candidate too big for the
+		// remaining budget is skipped, not a stop — later smaller ones may fit.
+		for (let k = 0; k < input.toolResults.length - 1 && budget > 0; k++) {
+			const candidate = input.toolResults[k];
+			if (candidate.hasImage) continue;
+			if (candidate.textTokens < MIN_TOOL_RESULT_TOKENS) continue;
+			if (candidate.frames === 0 || candidate.frames > budget) continue;
+			if (!passesSavingsGate(candidate.frames, input.shape, candidate.textTokens)) continue;
+			toolResults.push({ id: candidate.id, textTokens: candidate.textTokens, frames: candidate.frames });
+			budget -= candidate.frames;
+		}
+	}
+
+	let systemPrompt: InlineSystemPromptCandidate | undefined;
+	if (
+		input.options.renderSystemPrompt &&
+		input.systemPrompt &&
+		budget > 0 &&
+		input.systemPrompt.frames > 0 &&
+		input.systemPrompt.frames <= Math.min(budget, MAX_SYSTEM_PROMPT_FRAMES) &&
+		passesSavingsGate(input.systemPrompt.frames, input.shape, input.systemPrompt.textTokens) &&
+		// No user message to carry the frames → leave the prompt as text.
+		input.hasUserMessage
+	) {
+		systemPrompt = input.systemPrompt;
+	}
+
+	return { toolResults, systemPrompt };
+}
+
+// ============================================================================
+// /context savings estimation
+// ============================================================================
+
+/**
+ * Minimal structural view of a history message — both pi-ai `Message`s (the
+ * outgoing context) and agent-core `AgentMessage`s (the live session) satisfy
+ * it, so the estimator can read session state without conversion.
+ */
+export interface InlineMessageView {
+	role: string;
+	toolCallId?: string;
+	content?: unknown;
+}
+
+export interface SnapcompactSavingsEstimate {
+	/** Frames only ship on models that accept image input. */
+	visionCapable: boolean;
+	/** Present iff system-prompt imaging is enabled. */
+	systemPrompt?: {
+		applied: boolean;
+		/** Why the prompt stays text when `applied` is false. */
+		reason?: "empty" | "margin" | "budget";
+		textTokens: number;
+		frames: number;
+		/** Estimated billed tokens for the frames (0 when there are none). */
+		imageTokens: number;
+		savedTokens: number;
+	};
+	/** Present iff tool-result imaging is enabled. */
+	toolResults?: {
+		/** Tool results currently in history. */
+		total: number;
+		swapped: number;
+		/** Text tokens of the swapped results only. */
+		textTokens: number;
+		frames: number;
+		imageTokens: number;
+		savedTokens: number;
+	};
+	/** Net estimated wire savings for the next request. */
+	savedTokens: number;
+}
+
+/** Loose block-array view of unknown message content. */
+type BlockViews = ReadonlyArray<{ type?: unknown; text?: unknown }>;
+
+/**
+ * Estimate what `SnapcompactInlineTransformer.transform` would save on the
+ * NEXT request, given the session's live system prompt and message history.
+ *
+ * Mirrors the transform exactly via `planInlineSwaps`, with one deliberate
+ * difference: `hasUserMessage` is assumed true, because the request being
+ * estimated is always triggered by a user prompt — even when the current
+ * history is still empty.
+ */
+export function estimateInlineSavings(input: {
+	options: SnapcompactInlineOptions;
+	model: Model | undefined;
+	systemPrompt: readonly string[];
+	messages: readonly InlineMessageView[];
+}): SnapcompactSavingsEstimate {
+	const { options, model } = input;
+	if (!model?.input.includes("image")) {
+		return { visionCapable: false, savedTokens: 0 };
+	}
+
+	const shape = snapcompact.resolveShape(model.api);
+	let existingImages = 0;
+	for (const message of input.messages) {
+		if (!Array.isArray(message.content)) continue;
+		for (const block of message.content as BlockViews) {
+			if (block.type === "image") existingImages++;
+		}
+	}
+	const budget = (INLINE_IMAGE_BUDGET_BY_PROVIDER[model.provider] ?? DEFAULT_INLINE_IMAGE_BUDGET) - existingImages;
+
+	const candidates: InlineToolResultCandidate[] = [];
+	if (options.renderToolResults) {
+		for (const message of input.messages) {
+			if (message.role !== "toolResult" || typeof message.toolCallId !== "string") continue;
+			const blocks: BlockViews = Array.isArray(message.content) ? (message.content as BlockViews) : [];
+			const hasImage = blocks.some(block => block.type === "image");
+			const text = hasImage
+				? ""
+				: blocks
+						.filter(block => block.type === "text" && typeof block.text === "string")
+						.map(block => block.text as string)
+						.join("\n");
+			const textTokens = text.length > 0 ? countTokens(text) : 0;
+			candidates.push({
+				id: message.toolCallId,
+				textTokens,
+				frames: textTokens >= MIN_TOOL_RESULT_TOKENS ? snapcompact.frames(text, { shape }) : 0,
+				hasImage,
+			});
+		}
+	}
+
+	let systemPromptCandidate: InlineSystemPromptCandidate | undefined;
+	if (options.renderSystemPrompt && input.systemPrompt.length > 0) {
+		const joined = input.systemPrompt.join("\n\n");
+		systemPromptCandidate = {
+			textTokens: countTokens(joined),
+			frames: snapcompact.frames(joined, { shape }),
+		};
+	}
+
+	const plan = planInlineSwaps({
+		options,
+		shape,
+		budget,
+		toolResults: candidates,
+		systemPrompt: systemPromptCandidate,
+		hasUserMessage: true,
+	});
+
+	let savedTokens = 0;
+	let systemPromptEstimate: SnapcompactSavingsEstimate["systemPrompt"];
+	if (options.renderSystemPrompt) {
+		const candidate = systemPromptCandidate ?? { textTokens: 0, frames: 0 };
+		const applied = plan.systemPrompt !== undefined;
+		const imageTokens = candidate.frames * shape.frameTokenEstimate;
+		const saved = applied ? Math.max(0, candidate.textTokens - imageTokens) : 0;
+		let reason: "empty" | "margin" | "budget" | undefined;
+		if (!applied) {
+			const leftover = budget - plan.toolResults.reduce((sum, swap) => sum + swap.frames, 0);
+			if (candidate.frames === 0) reason = "empty";
+			else if (candidate.frames > Math.min(leftover, MAX_SYSTEM_PROMPT_FRAMES)) reason = "budget";
+			else reason = "margin";
+		}
+		systemPromptEstimate = {
+			applied,
+			...(reason ? { reason } : {}),
+			textTokens: candidate.textTokens,
+			frames: candidate.frames,
+			imageTokens,
+			savedTokens: saved,
+		};
+		savedTokens += saved;
+	}
+
+	let toolResultsEstimate: SnapcompactSavingsEstimate["toolResults"];
+	if (options.renderToolResults) {
+		let textTokens = 0;
+		let frames = 0;
+		for (const swap of plan.toolResults) {
+			textTokens += swap.textTokens;
+			frames += swap.frames;
+		}
+		const imageTokens = frames * shape.frameTokenEstimate;
+		const saved = Math.max(0, textTokens - imageTokens);
+		toolResultsEstimate = {
+			total: candidates.length,
+			swapped: plan.toolResults.length,
+			textTokens,
+			frames,
+			imageTokens,
+			savedTokens: saved,
+		};
+		savedTokens += saved;
+	}
+
+	return {
+		visionCapable: true,
+		...(systemPromptEstimate ? { systemPrompt: systemPromptEstimate } : {}),
+		...(toolResultsEstimate ? { toolResults: toolResultsEstimate } : {}),
+		savedTokens,
+	};
+}
+
+// ============================================================================
+// Provider-request transform
+// ============================================================================
+
 interface FrameCacheEntry {
 	hash: number | bigint;
 	frames: ImageContent[];
@@ -88,43 +348,70 @@ export class SnapcompactInlineTransformer {
 		if (!model.input.includes("image")) return context;
 
 		const shape = snapcompact.resolveShape(model.api);
-		let budget =
+		const budget =
 			(INLINE_IMAGE_BUDGET_BY_PROVIDER[model.provider] ?? DEFAULT_INLINE_IMAGE_BUDGET) - countContextImages(context);
 		if (budget <= 0) return context;
 
 		const messages = [...context.messages];
-		let changed = false;
 
+		// Collect tool-result candidates (in order) for the planner, plus the
+		// text/index needed to apply swaps and the live ids for cache eviction.
+		const candidates: InlineToolResultCandidate[] = [];
+		const targets = new Map<string, { index: number; message: ToolResultMessage; text: string }>();
+		const liveToolCallIds = new Set<string>();
 		if (this.options.renderToolResults) {
-			const toolResultIndices: number[] = [];
-			const liveToolCallIds = new Set<string>();
 			for (let i = 0; i < messages.length; i++) {
 				const message = messages[i];
 				if (message.role !== "toolResult") continue;
-				toolResultIndices.push(i);
 				liveToolCallIds.add(message.toolCallId);
-			}
-			// Oldest-first for cache-stable bytes; skip the LAST tool result so
-			// the freshest output stays crisp text.
-			for (let k = 0; k < toolResultIndices.length - 1 && budget > 0; k++) {
-				const index = toolResultIndices[k];
-				const message = messages[index] as ToolResultMessage;
 				// Don't re-image results that already carry images (screenshots etc.).
-				if (message.content.some(block => block.type === "image")) continue;
-				const text = message.content
-					.filter(isTextContent)
-					.map(block => block.text)
-					.join("\n");
-				const textTokens = countTokens(text);
-				if (textTokens < MIN_TOOL_RESULT_TOKENS) continue;
-				const needed = snapcompact.frames(text, { shape });
-				if (needed === 0 || needed > budget) continue;
-				if (!passesSavingsGate(needed, shape, textTokens)) continue;
-				const frames = this.#framesFor(this.#toolCache, message.toolCallId, text, shape);
-				messages[index] = { ...message, content: [{ type: "text", text: toolResultNote }, ...frames] };
-				budget -= frames.length;
-				changed = true;
+				const hasImage = message.content.some(block => block.type === "image");
+				const text = hasImage
+					? ""
+					: message.content
+							.filter(isTextContent)
+							.map(block => block.text)
+							.join("\n");
+				const textTokens = text.length > 0 ? countTokens(text) : 0;
+				candidates.push({
+					id: message.toolCallId,
+					textTokens,
+					frames: textTokens >= MIN_TOOL_RESULT_TOKENS ? snapcompact.frames(text, { shape }) : 0,
+					hasImage,
+				});
+				targets.set(message.toolCallId, { index: i, message, text });
 			}
+		}
+
+		let systemPromptCandidate: InlineSystemPromptCandidate | undefined;
+		let joinedSystemPrompt = "";
+		if (this.options.renderSystemPrompt && context.systemPrompt?.length) {
+			joinedSystemPrompt = context.systemPrompt.join("\n\n");
+			systemPromptCandidate = {
+				textTokens: countTokens(joinedSystemPrompt),
+				frames: snapcompact.frames(joinedSystemPrompt, { shape }),
+			};
+		}
+
+		const userIndex = messages.findIndex(message => message.role === "user");
+		const plan = planInlineSwaps({
+			options: this.options,
+			shape,
+			budget,
+			toolResults: candidates,
+			systemPrompt: systemPromptCandidate,
+			hasUserMessage: userIndex >= 0,
+		});
+
+		let changed = false;
+		for (const swap of plan.toolResults) {
+			const target = targets.get(swap.id);
+			if (!target) continue;
+			const frames = this.#framesFor(this.#toolCache, swap.id, target.text, shape);
+			messages[target.index] = { ...target.message, content: [{ type: "text", text: toolResultNote }, ...frames] };
+			changed = true;
+		}
+		if (this.options.renderToolResults) {
 			// Drop cache entries for tool calls no longer in the context
 			// (compacted away) so the cache stays bounded by live history.
 			for (const key of this.#toolCache.keys()) {
@@ -133,38 +420,26 @@ export class SnapcompactInlineTransformer {
 		}
 
 		let systemPrompt = context.systemPrompt;
-		if (this.options.renderSystemPrompt && context.systemPrompt?.length && budget > 0) {
-			const joined = context.systemPrompt.join("\n\n");
-			const needed = snapcompact.frames(joined, { shape });
-			const userIndex = messages.findIndex(message => message.role === "user");
-			if (
-				needed > 0 &&
-				needed <= Math.min(budget, MAX_SYSTEM_PROMPT_FRAMES) &&
-				passesSavingsGate(needed, shape, countTokens(joined)) &&
-				// No user message to carry the frames → leave the prompt as text.
-				userIndex >= 0
-			) {
-				const hash = Bun.hash(joined);
-				let cached = this.#systemCache;
-				if (!cached || cached.hash !== hash) {
-					cached = {
-						hash,
-						frames: snapcompact.renderMany(joined, { shape, maxFrames: MAX_SYSTEM_PROMPT_FRAMES }),
-					};
-					this.#systemCache = cached;
-				}
-				const frames = cached.frames;
-				const original = messages[userIndex] as UserMessage;
-				const originalContent: (TextContent | ImageContent)[] =
-					typeof original.content === "string" ? [{ type: "text", text: original.content }] : original.content;
-				messages[userIndex] = {
-					...original,
-					content: [{ type: "text", text: systemFramesNote }, ...frames, ...originalContent],
+		if (plan.systemPrompt && userIndex >= 0) {
+			const hash = Bun.hash(joinedSystemPrompt);
+			let cached = this.#systemCache;
+			if (!cached || cached.hash !== hash) {
+				cached = {
+					hash,
+					frames: snapcompact.renderMany(joinedSystemPrompt, { shape, maxFrames: MAX_SYSTEM_PROMPT_FRAMES }),
 				};
-				systemPrompt = [systemStub];
-				budget -= frames.length;
-				changed = true;
+				this.#systemCache = cached;
 			}
+			const frames = cached.frames;
+			const original = messages[userIndex] as UserMessage;
+			const originalContent: (TextContent | ImageContent)[] =
+				typeof original.content === "string" ? [{ type: "text", text: original.content }] : original.content;
+			messages[userIndex] = {
+				...original,
+				content: [{ type: "text", text: systemFramesNote }, ...frames, ...originalContent],
+			};
+			systemPrompt = [systemStub];
+			changed = true;
 		}
 
 		if (!changed) return context;

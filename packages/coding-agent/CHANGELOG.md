@@ -4,6 +4,7 @@
 
 ### Added
 
+- `/context` (TUI panel and ACP report) now shows estimated snapcompact wire savings when `snapcompact.systemPrompt` or `snapcompact.toolResults` is enabled — per-feature text → frames token deltas, the reason a swap does not apply (savings margin, image budget, or text-only model), and the estimated size of the next request. The estimate and the live provider-request transform share one planner (`planInlineSwaps`) so displayed numbers cannot drift from wire behavior.
 - Added `/debug dump-request` and `/debug next-request` as aliases for `/debug dump-next-request` when arming a one-shot AI provider request dump
 - Added `/debug dump-next-request <path>` to dump the next AI provider HTTP request JSON to a chosen file.
 
@@ -11,6 +12,7 @@
 
 - Changed `/debug` handling in interactive mode so `/debug` with arguments now executes the requested debug subcommand instead of always opening the debug selector
 - Changed `/debug dump-next-request` path handling to expand `~` and resolve relative paths against the current working directory
+- Changed the task tool's TUI block: the header now shows the task dispatch glyph (`tool.task`) while agents are in flight instead of a spinner (async spawns return immediately, so a spinner misread the call as blocking), and per-agent rows use one static dot for every state — completed rows keep the same dot and settle from accent to the plain foreground color instead of switching to a different status glyph
 
 ### Fixed
 

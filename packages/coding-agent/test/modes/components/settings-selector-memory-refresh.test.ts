@@ -128,7 +128,11 @@ describe("SettingsSelectorComponent memory tab", () => {
 		comp.handleInput("b");
 		const strip = (line: string): string => line.replace(/\x1b\[[0-9;]*m/g, "");
 		const searching = comp.render(120).map(strip).join("\n");
-		const banner = comp.render(120).map(strip).find(line => /\d+ match/.test(line)) ?? "";
+		const banner =
+			comp
+				.render(120)
+				.map(strip)
+				.find(line => /\d+ match/.test(line)) ?? "";
 		expect(banner).toContain(" b ");
 		expect(searching).toMatch(/\d+ match/);
 
@@ -162,7 +166,11 @@ describe("SettingsSelectorComponent memory tab", () => {
 	it("supports editor hotkeys in the global search bar", () => {
 		const comp = createSelector();
 		const strip = (line: string): string => line.replace(/\x1b\[[0-9;]*m/g, "");
-		const banner = (): string => comp.render(120).map(strip).find(line => /\d+ match/.test(line)) ?? "";
+		const banner = (): string =>
+			comp
+				.render(120)
+				.map(strip)
+				.find(line => /\d+ match/.test(line)) ?? "";
 
 		// alt+backspace deletes the trailing word from the query.
 		for (const ch of "image provider") comp.handleInput(ch);
