@@ -6582,7 +6582,7 @@ export class AgentSession {
 			const rawHandoffText = await generateHandoff(
 				this.agent.state.messages,
 				model,
-				apiKey,
+				this.#modelRegistry.resolver(model, this.sessionId),
 				{
 					systemPrompt: this.#obfuscateForProvider(this.#baseSystemPrompt),
 					tools: obfuscateProviderTools(this.#obfuscator, this.agent.state.tools),
@@ -7577,7 +7577,7 @@ export class AgentSession {
 				return await compact(
 					this.#obfuscatePreparationForProvider(preparation),
 					candidate,
-					apiKey,
+					this.#modelRegistry.resolver(candidate, this.sessionId),
 					this.#obfuscateTextForProvider(customInstructions),
 					signal,
 					{
@@ -7906,7 +7906,7 @@ export class AgentSession {
 							compactResult = await compact(
 								this.#obfuscatePreparationForProvider(preparation),
 								candidate,
-								apiKey,
+								this.#modelRegistry.resolver(candidate, this.sessionId),
 								undefined,
 								autoCompactionSignal,
 								{
@@ -9813,7 +9813,7 @@ export class AgentSession {
 			const branchSummarySettings = this.settings.getGroup("branchSummary");
 			const result = await generateBranchSummary(entriesToSummarize, {
 				model,
-				apiKey,
+				apiKey: this.#modelRegistry.resolver(model, this.sessionId),
 				signal: this.#branchSummaryAbortController.signal,
 				customInstructions: this.#obfuscateTextForProvider(options.customInstructions),
 				reserveTokens: branchSummarySettings.reserveTokens,
