@@ -49,7 +49,14 @@ const TINY_TITLE_PROGRESS_DONE_TTL_MS = 3_000;
 const TINY_TITLE_PROGRESS_REVEAL_DELAY_MS = 1_000;
 
 export class InputController {
-	constructor(private ctx: InteractiveModeContext) {}
+	constructor(
+		private ctx: InteractiveModeContext,
+		/** Injectable clipboard reads so tests can drive paste flows without a real clipboard. */
+		private clipboard: {
+			readImage: typeof readImageFromClipboard;
+			readText: typeof readTextFromClipboard;
+		} = { readImage: readImageFromClipboard, readText: readTextFromClipboard },
+	) {}
 
 	#enhancedPaste?: EnhancedPasteController;
 
@@ -876,10 +883,25 @@ export class InputController {
 
 	async handleImagePaste(): Promise<boolean> {
 		try {
-			const image = await readImageFromClipboard();
+			const image = await this.clipboard.readImage();
 			if (!image) {
-				this.ctx.showStatus("No image in clipboard (use terminal paste for text)");
-				return false;
+				// Smart paste (#1628): no image on the clipboard — fall back to
+				// pasting its text so the same chord covers both payload kinds.
+				// Hosts that pre-empt the terminal's own paste (VS Code's
+				// integrated terminal, Win+V clipboard history) deliver only
+				// this keypress, so a miss here must not dead-end.
+				const text = await this.clipboard.readText();
+				if (!text) {
+					this.ctx.showStatus("Clipboard is empty");
+					return false;
+				}
+				// Route to the focused component when it accepts pastes (modal
+				// Input prompts), matching the enhanced-paste text path (#2127).
+				const focused = this.ctx.ui.getFocused();
+				const target = focused && focused !== this.ctx.editor && hasPasteText(focused) ? focused : this.ctx.editor;
+				target.pasteText(text);
+				this.ctx.ui.requestRender();
+				return true;
 			}
 			return await this.#normalizeAndInsertPastedImage(
 				{
@@ -897,10 +919,11 @@ export class InputController {
 
 	async handleClipboardTextRawPaste(): Promise<void> {
 		try {
-			const text = await readTextFromClipboard();
+			const text = await this.clipboard.readText();
 			if (text) {
 				this.ctx.editor.insertText(text);
 				this.ctx.ui.requestRender();
+			} else {
 				this.ctx.showStatus("No text in clipboard to paste raw");
 			}
 		} catch {
