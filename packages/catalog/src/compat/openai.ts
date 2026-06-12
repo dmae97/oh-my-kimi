@@ -25,6 +25,8 @@ const GLM_CODING_PLAN_MODEL_PATTERN = /^glm-5(?:[.-]|$)/i;
 const GLM_CODING_PLAN_STREAM_IDLE_TIMEOUT_MS = 600_000;
 /** Direct DeepSeek reasoning models stall between thinking and answer phases. */
 const DEEPSEEK_REASONING_STREAM_IDLE_TIMEOUT_MS = 300_000;
+/** Kimi K2.6 can spend several minutes reasoning before the first visible token. */
+const KIMI_K26_REASONING_STREAM_IDLE_TIMEOUT_MS = 300_000;
 
 /**
  * OpenCode's gateways (https://opencode.ai/zen|go) gate `reasoning_content`
@@ -178,15 +180,17 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 			isCopilotHost ||
 			isZenmuxHost);
 
-	// Stream-watchdog floor: GLM coding-plan SKUs and direct DeepSeek reasoning
-	// models idle for minutes mid-reasoning; widen the idle timeout so warm-ups
-	// stop aborting and retrying.
+	// Stream-watchdog floor: GLM coding-plan SKUs, Kimi K2.6, and direct
+	// DeepSeek reasoning models can idle for minutes while reasoning; widen the
+	// idle timeout so warm-ups stop aborting and retrying.
 	const streamIdleTimeoutMs =
 		GLM_CODING_PLAN_MODEL_PATTERN.test(spec.id) && (isZai || isZhipu)
 			? GLM_CODING_PLAN_STREAM_IDLE_TIMEOUT_MS
-			: spec.reasoning && isDirectDeepseekApi
-				? DEEPSEEK_REASONING_STREAM_IDLE_TIMEOUT_MS
-				: undefined;
+			: spec.reasoning && isKimiK26ModelId(spec.id)
+				? KIMI_K26_REASONING_STREAM_IDLE_TIMEOUT_MS
+				: spec.reasoning && isDirectDeepseekApi
+					? DEEPSEEK_REASONING_STREAM_IDLE_TIMEOUT_MS
+					: undefined;
 
 	const compat: ResolvedOpenAICompat = {
 		supportsStore: !isNonStandard,
