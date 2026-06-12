@@ -4058,7 +4058,6 @@ export interface CodexResetsSettings {
 	keepCredits: number;
 }
 
-
 /** Map group prefix -> typed settings interface */
 export interface GroupTypeMap {
 	compaction: CompactionSettings;

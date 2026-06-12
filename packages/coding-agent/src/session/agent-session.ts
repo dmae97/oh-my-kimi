@@ -240,6 +240,7 @@ import { normalizeModelContextImages } from "../utils/image-loading";
 import { buildNamedToolChoice } from "../utils/tool-choice";
 import type { AuthStorage } from "./auth-storage";
 import type { ClientBridge, ClientBridgePermissionOption, ClientBridgePermissionOutcome } from "./client-bridge";
+import { defaultCodexAutoRedeemCoordinator, evaluateCodexAutoRedeem } from "./codex-auto-reset";
 import {
 	type BashExecutionMessage,
 	type CustomMessage,
@@ -259,7 +260,6 @@ import type {
 	SessionManager,
 } from "./session-manager";
 import { EPHEMERAL_MODEL_CHANGE_ROLE, getLatestCompactionEntry, getRestorableSessionModels } from "./session-manager";
-import { defaultCodexAutoRedeemCoordinator, evaluateCodexAutoRedeem } from "./codex-auto-reset";
 import type { ShakeMode, ShakeResult } from "./shake-types";
 import { ToolChoiceQueue } from "./tool-choice-queue";
 import { YieldQueue } from "./yield-queue";

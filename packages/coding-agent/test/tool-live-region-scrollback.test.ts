@@ -399,6 +399,86 @@ describe("tool live-region scrollback", () => {
 		}
 	});
 
+	it("does not strand a stale pending edit preview in scrollback when the result re-lays-out the block", async () => {
+		if (process.platform === "win32") return;
+
+		// Regression for the "tool call rendered inside itself" spray: an edit's
+		// pending preview is a TAIL window of the streamed diff ("… N more lines
+		// above" + last rows), and it goes byte-static once args complete — the
+		// spinner stops while the apply + LSP pass runs. The stable-prefix
+		// ratchet used to promote that settled head after
+		// STABLE_PREFIX_COMMIT_FRAMES and commit it to native scrollback; the
+		// result render then re-anchors the block top-first (stats header +
+		// head-anchored diff), the committed-prefix audit re-anchors at the
+		// divergence, and the stale call-box fragment stayed stranded above the
+		// final box. Pending collapsed previews are provisional and must never
+		// commit.
+		const term = new VirtualTerminal(120, 10);
+		const tui = new TUI(term);
+		const chat = new TranscriptContainer();
+		const diffLines: string[] = [];
+		for (let i = 0; i < 14; i++) {
+			diffLines.push(`-const before_${i} = ${i};`);
+			diffLines.push(`+const after_${i} = ${i};`);
+		}
+		const diff = diffLines.join("\n");
+		const args = { path: "src/sample.ts", op: "update", diff };
+		const component = new ToolExecutionComponent("edit", args, {}, undefined, tui, process.cwd());
+
+		try {
+			chat.addChild(new Text("prior filler\n".repeat(6).trimEnd(), 0, 0));
+			tui.addChild(chat);
+			tui.start();
+			await term.waitForRender();
+
+			chat.addChild(component);
+			component.setArgsComplete();
+			tui.requestRender();
+			await term.waitForRender();
+
+			// The tail-window preview's live edge is on screen while the tool
+			// executes (its head sits above the viewport and stays uncommitted).
+			const pending = term
+				.getScrollBuffer()
+				.map(row => Bun.stripANSI(row).trimEnd())
+				.join("\n");
+			expect(pending).toContain("(streaming)");
+
+			// The tool runs with a byte-static preview — far past the
+			// stable-prefix promotion window.
+			for (let frame = 0; frame < 40; frame++) {
+				tui.requestRender();
+				await term.waitForRender();
+			}
+
+			component.updateResult(
+				{
+					content: [{ type: "text", text: "" }],
+					details: { diff, path: "src/sample.ts", firstChangedLine: 1 },
+				},
+				false,
+			);
+			tui.requestRender();
+			await term.waitForRender();
+
+			const bufferText = term
+				.getScrollBuffer()
+				.map(row => Bun.stripANSI(row).trimEnd())
+				.join("\n");
+			// The tail-window marker exists only in the pending preview's head; any
+			// occurrence after the result means a committed fragment of the call
+			// box was stranded above the final block.
+			expect(bufferText).not.toContain("more lines above");
+			expect(bufferText).not.toContain("(streaming)");
+			// The result's head-anchored diff is present.
+			expect(bufferText).toContain("+const after_0 = 0;");
+		} finally {
+			component.stopAnimation();
+			tui.stop();
+			await term.flush();
+		}
+	});
+
 	it("scroll-appends a tall expanded streaming write into native scrollback mid-stream", async () => {
 		if (process.platform === "win32") return;
 

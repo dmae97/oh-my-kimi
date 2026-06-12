@@ -43,7 +43,9 @@ export interface TodoToolDetails {
 // Schema
 // =============================================================================
 
-const TodoOp = z.enum(["init", "start", "done", "rm", "drop", "append", "view"] as const).describe("operation to apply");
+const TodoOp = z
+	.enum(["init", "start", "done", "rm", "drop", "append", "view"] as const)
+	.describe("operation to apply");
 
 const InitListEntry = z.object({
 	phase: z.string().describe("phase name"),
@@ -451,7 +453,6 @@ export function markdownToPhases(md: string): { phases: TodoPhase[]; errors: str
 	for (let lineNum = 0; lineNum < lines.length; lineNum++) {
 		const raw = lines[lineNum];
 
-
 		const trimmed = raw.trim();
 		if (!trimmed) continue;
 
@@ -600,7 +601,6 @@ type TodoRenderArgs = {
 	}>;
 };
 
-
 // =============================================================================
 // Phase numbering (display-only)
 // =============================================================================
@@ -639,7 +639,6 @@ export function phaseRomanNumeral(oneBasedIndex: number): string {
 export function formatPhaseDisplayName(name: string, oneBasedIndex: number): string {
 	return `${phaseRomanNumeral(oneBasedIndex)}. ${name}`;
 }
-
 
 export const TODO_STRIKE_HOLD_FRAMES = 2;
 export const TODO_STRIKE_REVEAL_FRAMES = 12;
@@ -693,7 +692,6 @@ function formatTodoLine(
 			return uiTheme.fg("dim", `${prefix}${checkbox.unchecked} ${item.content}`);
 	}
 }
-
 
 /**
  * Phases the latest update touched, plus the active (in_progress) phase.

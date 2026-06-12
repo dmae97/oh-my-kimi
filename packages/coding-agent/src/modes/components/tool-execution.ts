@@ -590,6 +590,24 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	/**
+	 * Whether this still-live block's settled rows may enter native scrollback
+	 * (see `FinalizableBlock.isTranscriptBlockCommitStable`). A pending
+	 * collapsed preview is provisional: the tail-window streaming views
+	 * (edit/bash/eval caps) are re-anchored top-first by the result render, so
+	 * promoting their visually static head — e.g. an edit preview idling on
+	 * its last frame while the apply + LSP pass runs — would strand a stale
+	 * copy of the call box above the final block the moment the result lands.
+	 * Expanded pending blocks stream top-anchored append-shaped content whose
+	 * rows the result render preserves byte-stable (the over-tall write/eval
+	 * scrollback contract), so they stay commit-eligible. Displaceable waiting
+	 * polls are removed wholesale by the next poll and must never commit.
+	 */
+	isTranscriptBlockCommitStable(): boolean {
+		if (this.#displaceable) return false;
+		return this.#expanded || this.isTranscriptBlockFinalized();
+	}
+
+	/**
 	 * Mark the tool terminal even though no result arrived (the turn aborted or
 	 * abandoned it) and stop animating, so it can freeze and stops pinning the
 	 * transcript live region.
