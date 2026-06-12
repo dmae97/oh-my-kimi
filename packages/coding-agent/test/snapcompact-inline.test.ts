@@ -9,15 +9,22 @@ import {
 import * as snapcompact from "@oh-my-pi/snapcompact";
 
 /**
- * Token-dense deterministic word salad. 3000 words ≈ 20.6k normalized chars
- * → 2 anthropic-shape frames (capacity 19208) whose ~6600 estimated image
- * tokens clear the savings gate against ~8900 text tokens.
+ * Token-dense deterministic word salad: each word is `w` + ≤5 digits, ~7
+ * normalized chars with the joining space.
  */
 function denseText(words: number): string {
 	return Array.from({ length: words }, (_, i) => `w${(i * 7919) % 100000}`).join(" ");
 }
 
-const LARGE = denseText(3000);
+/** Frame capacity of the unknown-provider default shape. */
+const DEFAULT_CAPACITY = snapcompact.geometry(snapcompact.resolveShape(undefined)).capacity;
+
+/**
+ * Sized to span exactly 2 default-shape frames (~1.2x one frame's capacity),
+ * so the ~6,600 estimated image tokens clear the savings gate against the
+ * much larger text-token bill.
+ */
+const LARGE = denseText(Math.ceil((DEFAULT_CAPACITY * 1.2) / 7));
 const SMALL = "12 lines OK";
 
 function toolResult(id: string, text: string): ToolResultMessage {

@@ -9,10 +9,11 @@
  * The frame shape is provider-aware, following the snapcompact SQuAD evals
  * (`packages/snapcompact`, 200k-token monolithic runs):
  *
- * - **Anthropic** (`8x8r-bw`): unscii-8 square cells, black ink, every line
- *   printed twice with the copy on a pale highlight band. Read at F1 parity
- *   with raw text at ~2x lower cost; the colored variants drew refusals at
- *   scale, the repeated plain shape did not.
+ * - **Anthropic** (`6x12-dim`): X.org 6x12 glyphs, black ink, stopwords
+ *   dimmed gray. Production mono eval on claude-fable: f1 .840 vs .877 for
+ *   the repeated `8x8r-bw` grid — within noise at n=25 — at 37% lower cost
+ *   (12 frames vs 21 per 400k chars). `8x8r-bw` remains the max-recall
+ *   choice via the shape setting; it never refused in any probe.
  * - **Google** (`doc-8on16-sent-dim`): two word-wrapped newspaper columns of
  *   8x13 glyphs on a 16px pitch, sentence-hue ink, stopwords dimmed (0.90 F1
  *   on gemini-3.5-flash vs 0.85 for the repeated grid, at lower cost; same
@@ -204,8 +205,11 @@ function priceShape(base: ShapeGeometry, family: BillingFamily): Shape {
 
 /** Eval-validated shapes, keyed by the provider family they won on. */
 export const SHAPES = {
-	/** `8x8r-bw`: unscii square, black ink, lines doubled on highlight bands. */
-	anthropic: priceShape(SHAPE_VARIANTS["8x8r-bw"], "anthropic"),
+	/** `6x12-dim`: X.org 6x12 glyphs, black ink with stopwords dimmed gray.
+	 *  Production mono eval on claude-fable: f1 .840 vs .877 for the repeated
+	 *  `8x8r-bw` grid (within noise at n=25) at 37% lower cost — 12 frames
+	 *  instead of 21 per 400k chars. Never refused in any run. */
+	anthropic: priceShape(SHAPE_VARIANTS["6x12-dim"], "anthropic"),
 	/** `doc-8on16-sent-dim`: two word-wrapped columns, sentence hues, dimmed
 	 *  stopwords. Production mono eval on gemini-3.5-flash: f1 .900 vs .853
 	 *  for the repeated grid, at lower cost; also the chunked round-2 winner. */
@@ -260,7 +264,8 @@ export function resolveShape(api?: Api, variant?: ShapeVariantName | "auto"): Sh
 		case "google":
 			return SHAPES.google;
 		default:
-			// The plain repeated grid is the most refusal-robust reader shape.
+			// 6x12-dim: fable recall within noise of the repeated grid at 37%
+			// lower cost, and clean completions in every probe.
 			return SHAPES.anthropic;
 	}
 }

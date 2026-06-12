@@ -161,7 +161,7 @@ describe("shape resolution", () => {
 		expect(snapcompact.resolveShape("openai-responses")).toBe(snapcompact.SHAPES.openai);
 		expect(snapcompact.resolveShape("azure-openai-responses")).toBe(snapcompact.SHAPES.openai);
 		expect(snapcompact.resolveShape("google-generative-ai")).toBe(snapcompact.SHAPES.google);
-		// Unknown and absent APIs fall back to the refusal-robust plain shape.
+		// Unknown and absent APIs fall back to the Anthropic family default.
 		expect(snapcompact.resolveShape("some-future-api")).toBe(snapcompact.SHAPES.anthropic);
 		expect(snapcompact.resolveShape(undefined)).toBe(snapcompact.SHAPES.anthropic);
 	});
@@ -247,17 +247,35 @@ describe("render", () => {
 		expect(used.has(3)).toBe(false);
 	});
 
-	it("renders the anthropic shape with doubled lines, black ink, and highlight bands", () => {
-		const geometry = snapcompact.geometry(snapcompact.SHAPES.anthropic, TEST_FRAME_SIZE);
+	it("renders the repeated grid with doubled lines, black ink, and highlight bands", () => {
+		const repeated = snapcompact.resolveShape("anthropic-messages", "8x8r-bw");
+		const geometry = snapcompact.geometry(repeated, TEST_FRAME_SIZE);
 		expect(geometry).toEqual({ cols: 40, rows: 20, capacity: 800 });
 
-		const frame = snapcompact.render("Hello world. Again.", snapcompact.SHAPES.anthropic, TEST_FRAME_SIZE);
+		const frame = snapcompact.render("Hello world. Again.", repeated, TEST_FRAME_SIZE);
 		const decoded = decodePng(Buffer.from(frame.data, "base64"));
 		expect(decoded.colorType).toBe(3);
 		const used = new Set(decoded.pixels);
 		expect(used.has(7)).toBe(true); // black bw ink
 		expect(used.has(8)).toBe(true); // repeat highlight band
 		expect(used.has(1)).toBe(false); // no sentence hues in bw
+	});
+
+	it("renders the anthropic default with dimmed stopwords and no highlight bands", () => {
+		const geometry = snapcompact.geometry(snapcompact.SHAPES.anthropic, TEST_FRAME_SIZE);
+		expect(geometry).toEqual({ cols: 53, rows: 26, capacity: 1378 });
+
+		const frames = snapcompact.renderMany("Reading the films of the archive. Again.", {
+			shape: snapcompact.SHAPES.anthropic,
+			frameSize: TEST_FRAME_SIZE,
+		});
+		const decoded = decodePng(Buffer.from(frames[0].data, "base64"));
+		expect(decoded.colorType).toBe(3);
+		const used = new Set(decoded.pixels);
+		expect(used.has(7)).toBe(true); // black ink for content words
+		expect(used.has(9)).toBe(true); // dim gray ink for stopwords ("the", "of")
+		expect(used.has(8)).toBe(false); // no repeat highlight band
+		expect(used.has(1)).toBe(false); // no sentence hues
 	});
 
 	it("renders a stretched shape as truecolor RGB", () => {
@@ -403,9 +421,9 @@ describe("compact", () => {
 
 		expect(result.firstKeptEntryId).toBe("kept-1");
 		expect(result.tokensBefore).toBe(99000);
-		// Reading instructions reflect the default (anthropic 8x8r-bw) shape.
-		expect(result.summary).toContain("40 characters per row");
-		expect(result.summary).toContain("printed twice");
+		// Reading instructions reflect the default (anthropic 6x12-dim) shape.
+		expect(result.summary).toContain("53 characters per row");
+		expect(result.summary).toContain("dim gray");
 		expect(result.summary).toContain("plain black ink");
 		expect(result.summary).toContain("snapcompact frame");
 		// File operations are upserted like every other compaction summary:
@@ -418,9 +436,9 @@ describe("compact", () => {
 		expect(archive?.frames.length).toBe(1);
 		expect(archive?.frames[0].mimeType).toBe("image/png");
 		expect(archive?.frames[0].chars).toBe(archive?.totalChars);
-		expect(archive?.frames[0].font).toBe("8x8");
+		expect(archive?.frames[0].font).toBe("6x12");
 		expect(archive?.frames[0].variant).toBe("bw");
-		expect(archive?.frames[0].lineRepeat).toBe(2);
+		expect(archive?.frames[0].stopwordDim).toBe(true);
 		expect(archive?.truncatedChars).toBe(0);
 		// Frame data round-trips as a decodable PNG.
 		const decoded = decodePng(Buffer.from(archive?.frames[0].data ?? "", "base64"));

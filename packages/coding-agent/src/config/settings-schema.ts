@@ -1619,24 +1619,23 @@ export const SETTINGS_SCHEMA = {
 			group: "Experimental",
 			label: "Snapcompact Shape",
 			description:
-				"Frame shape snapcompact prints text with (compaction archive and inline imaging). Auto picks the eval-winning shape for the current provider; the rest are the variants from the snapcompact research evals.",
+				"Frame shape snapcompact prints text with (compaction archive and inline imaging). Auto picks a provider-tuned shape.",
 			options: [
 				{
 					value: "auto",
 					label: "Auto",
-					description:
-						"Provider's eval winner: 8x8r-bw on Anthropic, doc-8on16-sent-dim on Gemini, 8on16-bw on OpenAI.",
+					description: "Picks a shape tuned for the current provider.",
 				},
 				{
 					value: "8x8r-bw",
 					label: "8x8 repeated, black",
 					description:
-						"unscii square cell, black ink, every line doubled on highlight bands. Anthropic eval winner.",
+						"unscii square cell, black ink, every line printed twice with the copy on a pale highlight band.",
 				},
 				{
 					value: "8x8r-sent",
 					label: "8x8 repeated, sentence hues",
-					description: "Repeated grid with ink cycling six hues at sentence boundaries. Gemini eval winner.",
+					description: "Repeated grid with ink cycling six hues at sentence boundaries.",
 				},
 				{
 					value: "8x8u-bw",
@@ -1656,7 +1655,7 @@ export const SETTINGS_SCHEMA = {
 				{
 					value: "6x6u-sent",
 					label: "6x6 dense, sentence hues",
-					description: "Densest cell with sentence-hue ink. OpenAI eval winner.",
+					description: "Densest cell with sentence-hue ink.",
 				},
 				{
 					value: "5x8-bw",
@@ -1671,35 +1670,32 @@ export const SETTINGS_SCHEMA = {
 				{
 					value: "6x12-dim",
 					label: "6x12, dimmed stopwords",
-					description: "X.org 6x12 glyphs, black ink, function words dimmed gray. Claude fable eval winner.",
+					description: "X.org 6x12 glyphs, black ink, function words dimmed gray.",
 				},
 				{
 					value: "8x13-bw",
 					label: "8x13, black",
-					description: "X.org 8x13 glyphs, black ink. Opus eval winner.",
+					description: "X.org 8x13 glyphs, black ink.",
 				},
 				{
 					value: "8on16-bw",
 					label: "8x13 on 16px pitch, black",
-					description:
-						"8x13 glyphs on an 8x16 cell (extra leading), black ink. GPT eval winner (chunked .906, mono .851) and the OpenAI auto default.",
+					description: "8x13 glyphs on an 8x16 cell (extra leading), black ink.",
 				},
 				{
 					value: "doc-8on16-bw",
 					label: "Doc 8on16, black",
-					description:
-						"Two word-wrapped newspaper columns of 8x13 glyphs on a 16px pitch, black ink. GPT eval winner.",
+					description: "Two word-wrapped newspaper columns of 8x13 glyphs on a 16px pitch, black ink.",
 				},
 				{
 					value: "doc-8on16-sent",
 					label: "Doc 8on16, sentence hues",
-					description: "Two-column doc layout with sentence-hue ink. GLM eval winner.",
+					description: "Two-column doc layout with sentence-hue ink.",
 				},
 				{
 					value: "doc-8on16-sent-dim",
 					label: "Doc 8on16, sentence hues + dimmed stopwords",
-					description:
-						"Two-column doc layout, sentence-hue ink, function words dimmed gray. Gemini eval winner (mono .900 vs .853 for the repeated grid) and the Gemini auto default.",
+					description: "Two-column doc layout, sentence-hue ink, function words dimmed gray.",
 				},
 			],
 		},
