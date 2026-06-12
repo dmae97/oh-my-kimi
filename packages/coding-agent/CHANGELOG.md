@@ -23,6 +23,7 @@
 - Changed `/debug` handling in interactive mode so `/debug` with arguments now executes the requested debug subcommand instead of always opening the debug selector
 - Changed `/debug dump-next-request` path handling to expand `~` and resolve relative paths against the current working directory
 - Changed the task tool's TUI block: the header now shows the task dispatch glyph (`tool.task`) while agents are in flight instead of a spinner (async spawns return immediately, so a spinner misread the call as blocking), and per-agent rows use one static dot for every state — completed rows keep the same dot and settle from accent to the plain foreground color instead of switching to a different status glyph
+- Compressed the `eval`, `browser`, `read`, and `irc` tool prompts (6156 → 4932 tokens o200k, −20%): deduplicated claims across sections, tightened helper reference descriptions, trimmed redundant examples; input grammar, examples, and template conditionals (`py`/`js`/`spawns`, read display modes) unchanged
 
 ### Fixed
 

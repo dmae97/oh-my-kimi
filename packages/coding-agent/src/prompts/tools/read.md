@@ -1,84 +1,78 @@
 Read files, directories, archives, SQLite databases, images, documents, internal resources, and web URLs through a single `path` string.
 
 <instruction>
-- One tool for filesystem, archives, SQLite, images, documents (PDF/DOCX/PPTX/XLSX/RTF/EPUB/ipynb), internal URIs, and web URLs (reader-mode by default).
 - You SHOULD parallelize independent reads when exploring related files.
-- You SHOULD reach for `read` — not a browser/puppeteer tool — for fetching web content.
+- You SHOULD reach for `read` — not a browser/puppeteer tool — for web content; browser only when `read` cannot deliver it.
 </instruction>
 
 ## Parameters
 
-- `path` — required. Local path, internal URI (`skill://`, `agent://`, `artifact://`, `history://`, `memory://`, `rule://`, `local://`, `vault://`, `mcp://`, `omp://`, `issue://`, `pr://`), or URL. Append `:<sel>` for line ranges, raw mode, or special modes (e.g. `src/foo.ts:50-200`, `src/foo.ts:raw`, `db.sqlite:users:42`).
+- `path` — required. Local path, internal URI (`skill://`, `agent://`, `artifact://`, `history://`, `memory://`, `rule://`, `local://`, `vault://`, `mcp://`, `omp://`, `issue://`, `pr://`), or URL. Append `:<sel>` for line ranges or special modes (e.g. `src/foo.ts:50-200`, `src/foo.ts:raw`, `db.sqlite:users:42`).
 
 ## Selectors
 
-Append `:<sel>` to `path`. The bare path falls back to the default mode.
+Append `:<sel>` to `path`; bare path = default mode.
 
-- _(none)_ — parseable code → structural summary (signatures kept, bodies elided); other files → read from the start (up to {{DEFAULT_LIMIT}} lines).
-- `:50` / `:50-` — read from line 50 onward.
+- _(none)_ — parseable code → structural summary; other files → from start (up to {{DEFAULT_LIMIT}} lines).
+- `:50` / `:50-` — from line 50 onward.
 - `:50-200` — lines 50–200 inclusive.
-- `:50+150` — 150 lines starting at line 50.
-- `:20+1` — anchor on line 20 (single-range reads expand by ≤1 leading and ≤3 trailing context lines).
-- `:5-16,960-973` — multiple ranges in one call (sorted, overlaps merged). Multi-range mode returns exact bounds with no context padding.
-- `:raw` — verbatim text; no anchors, no summary, no line prefixes.
-- `:2-4:raw` or `:raw:2-4` — range AND verbatim; the two compose in either order.
-- `:conflicts` — one-line-per-block index of every unresolved git merge conflict.
+- `:50+150` — 150 lines starting at 50.
+- `:20+1` — anchor line 20 (single-range reads pad ≤1 leading / ≤3 trailing context lines).
+- `:5-16,960-973` — multiple ranges in one call (sorted, overlaps merged); exact bounds, no padding.
+- `:raw` — verbatim; no anchors, no summary, no line prefixes.
+- `:2-4:raw` / `:raw:2-4` — range AND verbatim; compose in either order.
+- `:conflicts` — one line per unresolved git merge conflict block.
 
 # Files
 
-- Reading a directory path returns a depth-limited dirent listing.
+- Directory path → depth-limited dirent listing.
 {{#if IS_HL_MODE}}
-- Reading a file with an explicit selector emits a file snapshot tag header and numbered lines: `[src/foo.ts#1A2B]` then `41:def alpha():`. Copy the `[PATH#TAG]` header for anchored edits; ops use bare line numbers. NEVER fabricate the tag.
+- File with explicit selector → snapshot tag header + numbered lines: `[src/foo.ts#1A2B]` then `41:def alpha():`. Copy the `[PATH#TAG]` header for anchored edits; ops use bare line numbers. NEVER fabricate the tag.
 {{else}}
 {{#if IS_LINE_NUMBER_MODE}}
-- Reading a file with an explicit selector returns lines prefixed with line numbers: `41|def alpha():`.
+- File with explicit selector → lines prefixed with numbers: `41|def alpha():`.
 {{/if}}
 {{/if}}
-- Parseable code without a selector returns a **structural summary**: declarations kept, large bodies collapsed to `..` (merged brace pair) or `…` (standalone). Summarized output ends with a footer demonstrating the multi-range selector you can use to recover the elided bodies, e.g.:
-
-  `[NN lines elided; re-read needed ranges, e.g. <path>:5-16,40-80]`
-
-  Re-issue **only the relevant range(s)** using the multi-range selector (e.g. `<path>:5-16,120-200`). NEVER guess what's inside `..` / `…` — those markers carry no content. NEVER re-read the whole file or use `:raw` when targeted ranges suffice.
+- Parseable code without selector → **structural summary**: declarations kept, bodies collapsed to `..` (merged brace pair) or `…` (standalone). The footer shows the recovery selector: `[NN lines elided; re-read needed ranges, e.g. <path>:5-16,40-80]`. Re-issue ONLY the ranges you need via the multi-range selector. `..`/`…` carry no content — NEVER guess what's inside; NEVER re-read the whole file or `:raw` when ranges suffice.
 
 # Documents & Notebooks
 
-Extracts text from PDF, Word, PowerPoint, Excel, RTF, and EPUB. Notebooks (`.ipynb`) are shown as editable `# %% [type] cell:N` text; edits round-trip back to the underlying JSON preserving notebook metadata. Add `:raw` to a notebook to bypass the converter and read the JSON directly.
+PDF, Word, PowerPoint, Excel, RTF, EPUB → extracted text. Notebooks (`.ipynb`) → editable `# %% [type] cell:N` text; edits round-trip to the underlying JSON preserving metadata. `:raw` bypasses the converter.
 
 # Images
 
 {{#if INSPECT_IMAGE_ENABLED}}
-Reading an image path returns metadata (mime, bytes, dimensions, channels, alpha). For actual visual analysis, call `inspect_image` with the path and a question describing what to inspect.
+Image path → metadata (mime, bytes, dimensions, channels, alpha). For visual analysis, call `inspect_image` with the path and a question.
 {{else}}
-Reading an image path returns the decoded image inline (PNG, JPEG, GIF, WEBP) for direct visual analysis.
+Image path → decoded image inline (PNG, JPEG, GIF, WEBP) for direct visual analysis.
 {{/if}}
 
 # Archives
 
-Supports `.tar`, `.tar.gz`, `.tgz`, `.zip`. Use `archive.ext:path/inside/archive` to read a member, and append a normal selector to the inner path: `archive.zip:dir/file.ts:50-60`.
+`.tar`, `.tar.gz`, `.tgz`, `.zip`. `archive.ext:path/inside/archive` reads a member; inner paths take normal selectors: `archive.zip:dir/file.ts:50-60`.
 
 # SQLite
 
 For `.sqlite`, `.sqlite3`, `.db`, `.db3`:
-- `file.db` — list tables with row counts
+- `file.db` — tables with row counts
 - `file.db:table` — schema + sample rows
-- `file.db:table:key` — single row by primary key
-- `file.db:table?limit=50&offset=100` — paginated rows
-- `file.db:table?where=status='active'&order=created:desc` — filtered rows
-- `file.db?q=SELECT …` — read-only SELECT query
+- `file.db:table:key` — row by primary key
+- `file.db:table?limit=50&offset=100` — pagination
+- `file.db:table?where=status='active'&order=created:desc` — filter/order
+- `file.db?q=SELECT …` — read-only SELECT
 
 # URLs
 
-- Default reader-mode: HTML pages, GitHub issues/PRs, Stack Overflow, Wikipedia, Reddit, NPM, arXiv, RSS/Atom, JSON endpoints, PDFs → clean text/markdown.
-- `:raw` returns untouched HTML; line selectors (`:50`, `:50-100`, `:50+150`) paginate the cached fetched output.
-- Bare `host:port` URLs collide with the selector grammar — add a trailing slash before the selector: `https://example.com/:80`.
+- Reader-mode by default: HTML, GitHub issues/PRs, Stack Overflow, Wikipedia, Reddit, NPM, arXiv, RSS/Atom, JSON endpoints, PDFs → clean text/markdown.
+- `:raw` → untouched HTML; line selectors (`:50`, `:50-100`, `:50+150`) paginate the cached fetch.
+- Bare `host:port` collides with the selector grammar — add a trailing slash: `https://example.com/:80`.
 
 # Internal URIs
 
-`skill://<name>`, `agent://<id>`, `artifact://<id>`, `history://<agentId>`, `memory://root`, `rule://<name>`, `local://<name>.md`, `vault://<vault>/<path>`, `mcp://<uri>`, `omp://<doc>.md`, `issue://<N>`, and `pr://<N>` resolve transparently and accept the same line selectors as filesystem paths. Use `artifact://<id>` to recover full output that a previous bash/eval/tool result spilled or truncated. `history://<agentId>` is an agent's transcript as concise markdown; bare `history://` lists agents.
+All `path` URI schemes resolve transparently and take the same line selectors. `artifact://<id>` recovers full output a previous bash/eval/tool result spilled or truncated. `history://<agentId>` is an agent's transcript as concise markdown; bare `history://` lists agents.
 
 <critical>
-- You MUST use `read` for every file, directory, archive, and URL inspection. `cat`, `head`, `tail`, `less`, `more`, `ls`, `tar`, `unzip`, `curl`, `wget` are FORBIDDEN — any such bash call is a bug, regardless of how short or convenient it looks.
-- You MUST prefer `read` over a browser/puppeteer tool for URL content; only reach for a browser when `read` cannot deliver reasonable content.
-- For line ranges, append the selector to `path` (`path="src/foo.ts:50-200"`, `path="src/foo.ts:50+150"`). NEVER substitute `sed -n`, `awk NR`, or `head`/`tail` pipelines.
-- Summary footer names ranges to re-read? Re-issue ONLY the ranges you need via the multi-range selector. NEVER guess what's inside `..` / `…` markers — they carry no content.
+- You MUST use `read` for every file, directory, archive, and URL inspection. `cat`, `head`, `tail`, `less`, `more`, `ls`, `tar`, `unzip`, `curl`, `wget` are FORBIDDEN bash calls, however short or convenient.
+- Line ranges go in the selector (`path="src/foo.ts:50-200"`) — NEVER `sed -n`, `awk NR`, or `head`/`tail` pipelines.
+- Summary footer names elided ranges? Re-issue ONLY those ranges. NEVER guess `..`/`…` content.
 </critical>
