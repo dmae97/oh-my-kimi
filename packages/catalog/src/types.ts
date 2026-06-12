@@ -47,6 +47,20 @@ export interface ThinkingConfig {
 	 * 5). Also implies native interleaved thinking — no beta header needed.
 	 */
 	supportsDisplay?: boolean;
+	/**
+	 * Per-effort upstream wire-id routing for collapsed effort-tier variants
+	 * (`variant-collapse.ts`). Keyed by pi effort; `"off"` applies when
+	 * thinking is disabled. Missing keys fall back to `requestModelId ?? id`.
+	 */
+	effortRouting?: Readonly<Partial<Record<Effort | "off", string>>>;
+	/**
+	 * When true, a thinking-off request MUST explicitly suppress thinking on
+	 * the wire (google-level: `thinkingLevel: "MINIMAL"` + `includeThoughts:
+	 * false`; budget: `thinkingBudget: 0`) instead of omitting thinkingConfig —
+	 * Cloud Code Assist re-applies the per-id baked server default when the
+	 * config is absent.
+	 */
+	suppressWhenOff?: boolean;
 }
 
 // `Provider` is any provider-id string; `KnownProvider` (re-exported above) enumerates

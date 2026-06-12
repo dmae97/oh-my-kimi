@@ -557,3 +557,13 @@ export function mapEffortToAnthropicAdaptiveEffort<TApi extends Api>(
 	const supported = requireSupportedEffort(model, effort);
 	return (model.thinking?.effortMap?.[supported] ?? supported) as "low" | "medium" | "high" | "xhigh" | "max";
 }
+
+/**
+ * Resolves the upstream wire model id for a request at the given effort
+ * (`undefined` = thinking off). Collapsed effort-tier variants route through
+ * `thinking.effortRouting`; everything else falls back to
+ * `requestModelId ?? id`.
+ */
+export function resolveWireModelId<TApi extends Api>(model: ApiModel<TApi>, effort: Effort | undefined): string {
+	return model.thinking?.effortRouting?.[effort ?? "off"] ?? model.requestModelId ?? model.id;
+}

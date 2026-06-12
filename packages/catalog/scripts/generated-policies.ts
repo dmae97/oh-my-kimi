@@ -15,6 +15,7 @@ import {
 } from "../src/identity/classify";
 import { resolveModelThinking } from "../src/model-thinking";
 import type { Api, ModelSpec } from "../src/types";
+import { isVariantCollapsedSpec } from "../src/variant-collapse";
 
 const CLOUDFLARE_AI_GATEWAY_BASE_URL = "https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/anthropic";
 
@@ -70,9 +71,12 @@ export function applyGeneratedModelPolicies(models: ModelSpec<Api>[]): void {
 /**
  * Recompute `thinking` from the canonical deriver, replacing any baked value.
  * Mirrors `buildModel`'s trust-or-derive resolution with trust disabled: the
- * generator is the authority that produces the trusted values.
+ * generator is the authority that produces the trusted values. Collapsed
+ * effort-tier variants are exempt — their collapse table authored the
+ * routing/off-suppression metadata and the deriver cannot reproduce it.
  */
 export function rebakeModelThinking(model: ModelSpec<Api>): void {
+	if (isVariantCollapsedSpec(model)) return;
 	const thinking = resolveModelThinking({ ...model, thinking: undefined }, buildCompat(model));
 	if (thinking) {
 		model.thinking = thinking;
