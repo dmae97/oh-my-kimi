@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Fixed
+
+- Fixed settings search to rank matching tabs by relevance so exact matches appear before incidental matches
 
 ## [15.11.4] - 2026-06-12
 

@@ -4,7 +4,7 @@ import {
 	type Component,
 	Container,
 	extractPrintableText,
-	fuzzyFilter,
+	fuzzyRank,
 	getKeybindings,
 	getSettingItemFilterText,
 	Input,
@@ -547,6 +547,7 @@ export class SettingsSelectorComponent implements Component {
 
 		const counts = new Map<SettingTab, number>();
 		const items: SettingItem[] = [];
+		const tabResults: { tab: SettingTab; matched: SettingItem[]; bestScore: number; order: number }[] = [];
 		this.#searchFirstMatch.clear();
 		let total = 0;
 		for (const tab of SETTING_TABS) {
@@ -555,24 +556,40 @@ export class SettingsSelectorComponent implements Component {
 				const item = this.#defToItem(def);
 				if (item) candidates.push(item);
 			}
-			const matched = fuzzyFilter(candidates, query, getSettingItemFilterText);
+			const ranked = fuzzyRank(candidates, query, getSettingItemFilterText);
+			const matched = ranked.map(result => result.item);
 			counts.set(tab, matched.length);
 			if (matched.length === 0) continue;
 			total += matched.length;
-			const meta = TAB_METADATA[tab];
+			tabResults.push({
+				tab,
+				matched,
+				bestScore: ranked[0]?.score ?? 0,
+				order: SETTING_TABS.indexOf(tab),
+			});
+		}
+
+		tabResults.sort((a, b) => a.bestScore - b.bestScore || a.order - b.order);
+		for (const result of tabResults) {
+			const meta = TAB_METADATA[result.tab];
 			items.push({
-				id: `__tab:${tab}`,
+				id: `__tab:${result.tab}`,
 				label: `${theme.symbol(meta.icon as Parameters<typeof theme.symbol>[0])} ${meta.label}`,
 				currentValue: "",
 				heading: true,
 			});
-			this.#searchFirstMatch.set(tab, matched[0].id);
-			items.push(...matched);
+			this.#searchFirstMatch.set(result.tab, result.matched[0]?.id ?? "");
+			items.push(...result.matched);
 		}
 
 		this.#searchList.setItems(items);
 		this.#searchMatchCount = total;
-		this.#tabBar.setTabs(this.#buildSearchTabs(counts));
+		this.#tabBar.setTabs(
+			this.#buildSearchTabs(
+				counts,
+				tabResults.map(result => result.tab),
+			),
+		);
 		this.#syncTabBarToSelection(this.#searchList.getSelectedItem());
 	}
 
@@ -597,19 +614,24 @@ export class SettingsSelectorComponent implements Component {
 		}
 	}
 
-	/** Matching tabs first (counts attached), the rest muted at the end. */
-	#buildSearchTabs(counts: Map<SettingTab, number>): Tab[] {
+	/** Matching tabs first (counts attached), ordered by best result score; the rest stay muted at the end. */
+	#buildSearchTabs(counts: Map<SettingTab, number>, matchedTabOrder: readonly SettingTab[]): Tab[] {
 		const matched: Tab[] = [];
 		const empty: Tab[] = [];
-		for (const id of SETTING_TABS) {
+		const matchedIds = new Set<SettingTab>(matchedTabOrder);
+		for (const id of matchedTabOrder) {
 			const meta = TAB_METADATA[id];
 			const icon = theme.symbol(meta.icon as Parameters<typeof theme.symbol>[0]);
 			const count = counts.get(id) ?? 0;
 			if (count > 0) {
 				matched.push({ id, label: `${icon} ${meta.label} (${count})`, short: `${icon} ${count}` });
-			} else {
-				empty.push({ id, label: `${icon} ${meta.label}`, short: icon, muted: true });
 			}
+		}
+		for (const id of SETTING_TABS) {
+			if (matchedIds.has(id)) continue;
+			const meta = TAB_METADATA[id];
+			const icon = theme.symbol(meta.icon as Parameters<typeof theme.symbol>[0]);
+			empty.push({ id, label: `${icon} ${meta.label}`, short: icon, muted: true });
 		}
 		// Plugins hosts its own UI; it is not part of the schema-backed search.
 		empty.push({ id: "plugins", label: `${theme.icon.package} Plugins`, short: theme.icon.package, muted: true });

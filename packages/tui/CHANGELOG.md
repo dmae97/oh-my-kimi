@@ -1,6 +1,17 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added `fuzzyRank` to return sorted matches together with a fuzzy score
+
+### Changed
+
+- Changed fuzzy matching to normalize queries and text into words, including camelCase and punctuation separators, before scoring
+
+### Fixed
+
+- Fixed multi-word searches so `fuzzyMatch` no longer matches when query letters are only scattered across unrelated words
 
 ## [15.11.4] - 2026-06-12
 ### Added
