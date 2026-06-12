@@ -15,3 +15,10 @@ The earliest frame begins with "[Summary of earlier history]" — a condensed di
 {{/if}}
 
 Total archived: {{totalChars}} characters. Consult the frames whenever you need exact earlier details (user wording, decisions, file paths, tool output). If a region is hard to read, re-derive the fact from the workspace (re-read files, re-run commands) rather than guessing.
+{{#if textTail}}
+
+The frame budget ran out before the newest part of the archive. That remainder continues below as plain text — it is newer than every frame and ends where the live conversation resumes.
+
+[Archived history, continued as text]
+{{textTail}}
+{{/if}}

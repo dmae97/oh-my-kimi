@@ -22,10 +22,14 @@
  *   ink (gpt-5.5 mono F1 0.851 vs 0.602 for the previous dense `6x6u-sent`).
  *   OpenAI bills a flat ~2.9k tokens per image; frames request
  *   `detail: "original"` since the default `auto` downscale destroys glyphs.
- * - **Unknown providers** default to the Anthropic shape (most
- *   refusal-robust). Gateways that resize images (e.g. OpenRouter normalizes
- *   visual payloads to a fixed token budget) defeat any shape — optical
- *   context fails silently there.
+ * - **Unknown providers** default to the Anthropic shape. Gateways can
+ *   defeat any shape silently: OpenRouter enforces a per-model image cap
+ *   (measured: 8 images for glm-4.6v — frames past the cap are dropped with
+ *   no error, billed tokens plateau exactly at 8x frame cost). The same
+ *   frames routed direct to the vendor read fine (glm f1 .20 -> .78), so
+ *   `providerImageBudget` caps per-request images per provider (OpenRouter
+ *   8, unknown 5) and `compact()` keeps any archive overflow as a text tail
+ *   on the summary instead of rendering frames that would be dropped.
  *
  * The whole pass is local and deterministic — no LLM call, no API key, no
  * latency beyond rendering. Rasterization and PNG encoding happen in native
@@ -250,24 +254,62 @@ export function isShape(value: unknown): value is Shape {
 	);
 }
 
+/** Eval-winning variant per provider family (billing fallback when the
+ *  model id matches no known reader line). */
+const FAMILY_VARIANT: Record<BillingFamily, ShapeVariantName> = {
+	anthropic: "6x12-dim",
+	google: "doc-8on16-sent-dim",
+	openai: "8on16-bw",
+};
+
+const FAMILY_SHAPE: Record<BillingFamily, Shape> = {
+	anthropic: SHAPES.anthropic,
+	google: SHAPES.google,
+	openai: SHAPES.openai,
+};
+
+/** Eval-winning variant per model line, matched against the model id. The
+ *  wire API only identifies the gateway — a Claude served through Vertex or
+ *  OpenRouter still reads best with its own shape. Patterns cover the model
+ *  lines the mono evals measured; everything else falls back to the API
+ *  family's winner. */
+const MODEL_VARIANTS: readonly (readonly [RegExp, ShapeVariantName])[] = [
+	// claude-fable .840 / opus .800 mono; within noise of 8x8r-bw at ~40% lower cost.
+	[/claude/i, "6x12-dim"],
+	// gemini-3.5-flash .900 mono; also the chunked round-2 winner.
+	[/gemini/i, "doc-8on16-sent-dim"],
+	// gpt-5.5 .851 mono / .906 chunked.
+	[/gpt|codex/i, "8on16-bw"],
+	// kimi-k2.6 .973 mono at <=8 frames per request.
+	[/kimi/i, "8on16-bw"],
+	// glm-4.6v .780 mono via direct vendor routing.
+	[/glm/i, "8on16-bw"],
+];
+
+/** Eval-ideal variant for a model id, or undefined when unmeasured. */
+export function idealShapeVariant(modelId: string): ShapeVariantName | undefined {
+	return MODEL_VARIANTS.find(([pattern]) => pattern.test(modelId))?.[1];
+}
+
+/** What will read the frames: the wire API (billing) and model id (shape). */
+export interface ShapeTarget {
+	api?: Api;
+	id?: string;
+}
+
 /**
- * Pick the frame shape for a provider API. An explicit `variant` (anything
- * but `"auto"`) forces that geometry, re-priced for the provider's billing;
- * otherwise the provider family's eval-winning shape applies.
+ * Pick the frame shape for a reader. An explicit `variant` (anything but
+ * `"auto"`) forces that geometry; otherwise the model id selects the
+ * eval-winning shape for its model line, falling back to the API family's
+ * winner when the model is unmeasured. Billing (token estimate, detail
+ * hint) always follows the API family actually carrying the request.
+ * Accepts a full pi-ai `Model` or any `{ api, id }` subset.
  */
-export function resolveShape(api?: Api, variant?: ShapeVariantName | "auto"): Shape {
-	const family = billingFamily(api);
-	if (variant && variant !== "auto") return priceShape(SHAPE_VARIANTS[variant], family);
-	switch (family) {
-		case "openai":
-			return SHAPES.openai;
-		case "google":
-			return SHAPES.google;
-		default:
-			// 6x12-dim: fable recall within noise of the repeated grid at 37%
-			// lower cost, and clean completions in every probe.
-			return SHAPES.anthropic;
-	}
+export function resolveShape(model?: ShapeTarget, variant?: ShapeVariantName | "auto"): Shape {
+	const family = billingFamily(model?.api);
+	const name =
+		variant && variant !== "auto" ? variant : (model?.id && idealShapeVariant(model.id)) || FAMILY_VARIANT[family];
+	return name === FAMILY_VARIANT[family] ? FAMILY_SHAPE[family] : priceShape(SHAPE_VARIANTS[name], family);
 }
 
 // ============================================================================
@@ -286,6 +328,37 @@ export const MAX_FRAMES = 8;
 /** Conservative per-frame token estimate used for context budgeting
  *  (upper bound across shapes: Anthropic bills 1568*1568/750 ≈ 3,278). */
 export const FRAME_TOKEN_ESTIMATE = 3300;
+
+/**
+ * Per-request image-count budgets by provider id. Routers and smaller
+ * providers enforce hard caps and silently DROP images past them (measured:
+ * OpenRouter caps at 8 — images 9+ vanish with no error and billed tokens
+ * plateau at 8x frame cost). First-party APIs allow far more; their values
+ * are conservative policy caps well under the measured hard limits
+ * (Anthropic 100, OpenAI 500, Gemini ~2500).
+ */
+export const PROVIDER_IMAGE_BUDGETS: Record<string, number> = {
+	anthropic: 90,
+	"amazon-bedrock": 90,
+	openai: 200,
+	google: 200,
+	"google-vertex": 200,
+	"google-gemini-cli": 200,
+	openrouter: 8,
+};
+
+/** Safe floor for unknown providers (strictest mainstream measured: Groq ~5). */
+export const DEFAULT_PROVIDER_IMAGE_BUDGET = 5;
+
+/** Per-request image budget for `provider`; unknown providers get the floor. */
+export function providerImageBudget(provider: string | undefined): number {
+	return (provider !== undefined ? PROVIDER_IMAGE_BUDGETS[provider] : undefined) ?? DEFAULT_PROVIDER_IMAGE_BUDGET;
+}
+
+/** Archive frame budget for `provider`: its image budget clamped to {@link MAX_FRAMES}. */
+export function providerFrameBudget(provider: string | undefined): number {
+	return Math.min(MAX_FRAMES, providerImageBudget(provider));
+}
 
 /** Key under `CompactionEntry.preserveData` holding the frame archive. */
 export const PRESERVE_KEY = "snapcompact";
@@ -325,6 +398,11 @@ export interface Archive {
 	totalChars: number;
 	/** Characters dropped so far to respect the frame budget. */
 	truncatedChars: number;
+	/** Most recent slice of archived history that exceeded the frame budget,
+	 *  kept verbatim as normalized text (dim markers and newline glyphs
+	 *  included). Shipped as plain text in the compaction summary and folded
+	 *  back into frames by the next compaction. */
+	textTail?: string;
 }
 
 export interface Geometry {
@@ -519,6 +597,17 @@ function truncateForSummary(text: string, maxChars: number, headRatio: number): 
 }
 
 const DIM_MARKERS = /[\u000e\u000f]/g;
+
+/** Cap on the unrendered archive text tail, in frame-capacity units: enough
+ *  to keep the newest discarded history readable without re-inflating the
+ *  context a compaction just shrank. */
+const TEXT_TAIL_MAX_PAGES = 2;
+
+/** Normalized archive text → plain text: drop zero-width dim toggles and
+ *  print newline glyphs as real newlines. */
+function toPlainText(text: string): string {
+	return stripDimMarkers(text).replaceAll(NEWLINE_GLYPH, "\n");
+}
 
 /** Strip stray ink toggles from raw content so it cannot forge dim spans. */
 function stripDimMarkers(text: string): string {
@@ -875,7 +964,7 @@ export interface RenderManyOptions {
  * Empty/whitespace-only input yields no frames.
  */
 export function renderMany(text: string, options?: RenderManyOptions): ImageContent[] {
-	const shape = options?.shape ?? resolveShape(options?.model?.api);
+	const shape = options?.shape ?? resolveShape(options?.model);
 	const frameSize = options?.frameSize ?? shape.frameSize;
 	const geo = geometry(shape, frameSize);
 	const normalized = normalize(text);
@@ -909,7 +998,7 @@ export function renderMany(text: string, options?: RenderManyOptions): ImageCont
  *  For doc shapes this wraps the text once and counts pages of `2 * rows`
  *  lines; for grid shapes it divides by the frame capacity. */
 export function frames(text: string, options?: Pick<RenderManyOptions, "shape" | "model" | "frameSize">): number {
-	const shape = options?.shape ?? resolveShape(options?.model?.api);
+	const shape = options?.shape ?? resolveShape(options?.model);
 	const geo = geometry(shape, options?.frameSize ?? shape.frameSize);
 	const normalized = normalize(text);
 	if (shape.columns === 2) return Math.ceil(wrap(normalized, geo.cols).length / (2 * geo.rows));
@@ -941,6 +1030,7 @@ export function getPreservedArchive(preserveData: Record<string, unknown> | unde
 		frames,
 		totalChars: typeof archive.totalChars === "number" ? archive.totalChars : 0,
 		truncatedChars: typeof archive.truncatedChars === "number" ? archive.truncatedChars : 0,
+		...(typeof archive.textTail === "string" && archive.textTail.length > 0 ? { textTail: archive.textTail } : {}),
 	};
 }
 
@@ -963,7 +1053,10 @@ export function images(archive: Archive): ImageContent[] {
  * the discarded history, prints it onto PNG frames in the provider-optimal
  * shape, merges previously archived frames (oldest dropped beyond the
  * budget), and produces a deterministic summary explaining how to read the
- * frames.
+ * frames. Pages past the frame budget are never rendered (providers with
+ * hard image caps silently drop excess frames on the wire) — the newest
+ * unrendered slice survives verbatim as a text tail on the summary and is
+ * folded back into frames by the next compaction.
  *
  * Frames archived under a different shape (provider switches, legacy 5x8
  * sessions) are kept as-is — each frame carries its own geometry, and the
@@ -981,7 +1074,7 @@ export async function compact<TMessage = Message>(
 	if (!firstKeptEntryId) {
 		throw new Error("First kept entry has no ID - session may need migration");
 	}
-	const shape = options?.shape ?? resolveShape(options?.model?.api);
+	const shape = options?.shape ?? resolveShape(options?.model);
 	const frameSize = options?.frameSize ?? shape.frameSize;
 	const maxFrames = Math.max(1, options?.maxFrames ?? MAX_FRAMES);
 	const geo = geometry(shape, frameSize);
@@ -999,8 +1092,15 @@ export async function compact<TMessage = Message>(
 
 	let truncatedChars = previousArchive?.truncatedChars ?? 0;
 
-	const newFrames: Frame[] = [];
-	const finish = pageFinisher(shape);
+	// The previous compaction's unframed text tail is the oldest part of this
+	// archive slice — prepend it so it ages into frames first.
+	if (previousArchive?.textTail) {
+		archiveText =
+			archiveText.length > 0
+				? `${previousArchive.textTail}${NEWLINE_GLYPH}${archiveText}`
+				: previousArchive.textTail;
+	}
+
 	const pages: string[] = [];
 	if (shape.columns === 2) {
 		pages.push(...docPages(archiveText, geo));
@@ -1009,7 +1109,31 @@ export async function compact<TMessage = Message>(
 			pages.push(archiveText.slice(offset, offset + geo.capacity));
 		}
 	}
-	for (const page of pages) {
+
+	// Fit the merged archive into the frame budget BEFORE rendering: pages
+	// that cannot ship are never rasterized. Old unpinned frames evict first
+	// (the archive fades oldest-first, as before); new pages that still do
+	// not fit stay behind as a verbatim text tail instead of being dropped.
+	const prevFrames = previousArchive?.frames ?? [];
+	let keptPrev = prevFrames;
+	if (prevFrames.length + pages.length > maxFrames) {
+		// Pin the earliest frame: it anchors the session head (the original
+		// request, or the filmed summary of even older history) the way the
+		// LLM-summary strategies keep the original goal alive across rounds.
+		// With a budget of one frame the pin is moot.
+		const pinCount = maxFrames >= 2 && prevFrames.length > 0 ? 1 : 0;
+		const evictable = prevFrames.slice(pinCount);
+		const surviving = Math.min(evictable.length, Math.max(0, maxFrames - pages.length - pinCount));
+		const dropped = evictable.slice(0, evictable.length - surviving);
+		for (const frame of dropped) truncatedChars += frame.chars;
+		keptPrev = [...prevFrames.slice(0, pinCount), ...evictable.slice(evictable.length - surviving)];
+	}
+	const renderPages = pages.slice(0, maxFrames - keptPrev.length);
+	const tailPages = pages.slice(renderPages.length);
+
+	const newFrames: Frame[] = [];
+	const finish = pageFinisher(shape);
+	for (const page of renderPages) {
 		const rendered = render(finish(page), shape, frameSize);
 		newFrames.push({
 			data: rendered.data,
@@ -1028,18 +1152,22 @@ export async function compact<TMessage = Message>(
 		await Bun.sleep(0);
 	}
 
-	const frames = [...(previousArchive?.frames ?? []), ...newFrames];
-	if (frames.length > maxFrames) {
-		// Pin the earliest frame: it anchors the session head (the original
-		// request, or the filmed summary of even older history) the way the
-		// LLM-summary strategies keep the original goal alive across rounds.
-		// Eviction removes the oldest *unpinned* frames, so the archive fades
-		// from the middle out — head and tail survive. With a budget of one
-		// frame the pin is moot; keep the newest frame instead.
-		const evictStart = maxFrames >= 2 ? 1 : 0;
-		const dropped = frames.splice(evictStart, frames.length - maxFrames);
-		for (const frame of dropped) truncatedChars += frame.chars;
+	// Pages past the budget survive as text, capped at two frames' capacity
+	// (middle-elided) so an oversized archive cannot blow the context back up.
+	let textTail = "";
+	if (tailPages.length > 0) {
+		const raw =
+			shape.columns === 2 ? tailPages.map(page => page.replaceAll("\n", " ")).join(" ") : tailPages.join("");
+		const tailCap = TEXT_TAIL_MAX_PAGES * geo.capacity;
+		if (raw.length > tailCap) truncatedChars += raw.length - tailCap;
+		// Re-open a dim span the render boundary cut through, so the carried
+		// tail keeps tool output dim when it lands on frames next compaction.
+		const renderedText = shape.columns === 2 ? renderPages.join("\n") : renderPages.join("");
+		const dimOpen = renderedText.lastIndexOf(DIM_ON) > renderedText.lastIndexOf(DIM_OFF);
+		textTail = (dimOpen ? DIM_ON : "") + truncateForSummary(raw, tailCap, TRUNCATE_HEAD_RATIO);
 	}
+
+	const frames = [...keptPrev, ...newFrames];
 	const totalChars = frames.reduce((sum, frame) => sum + frame.chars, 0);
 	const mixedShapes = frames.some(
 		frame =>
@@ -1070,6 +1198,7 @@ export async function compact<TMessage = Message>(
 			totalChars,
 			truncatedChars,
 			includedPreviousSummary,
+			textTail: textTail.length > 0 ? toPlainText(textTail) : undefined,
 		});
 	}
 	const { readFiles, modifiedFiles } = computeFileLists(fileOps);
@@ -1078,11 +1207,12 @@ export async function compact<TMessage = Message>(
 	// A snapcompact pass replaces any provider-side replacement history; strip the
 	// OpenAI remote-compaction payload like the default summarizer path does.
 	const basePreserve = stripOpenAiRemoteCompactionPreserveData(previousPreserveData) ?? {};
-	const archive: Archive = { frames, totalChars, truncatedChars };
+	const archive: Archive = { frames, totalChars, truncatedChars, ...(textTail ? { textTail } : {}) };
 
+	const textTailNote = textTail ? ` (+${textTail.length.toLocaleString()} chars as text)` : "";
 	return {
 		summary,
-		shortSummary: `Archived ${totalChars.toLocaleString()} chars of history onto ${frames.length} snapcompact frame${frames.length === 1 ? "" : "s"}`,
+		shortSummary: `Archived ${totalChars.toLocaleString()} chars of history onto ${frames.length} snapcompact frame${frames.length === 1 ? "" : "s"}${textTailNote}`,
 		firstKeptEntryId,
 		tokensBefore,
 		details: { readFiles, modifiedFiles },
