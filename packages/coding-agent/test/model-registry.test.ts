@@ -1149,8 +1149,9 @@ describe("ModelRegistry", () => {
 
 			expect(model?.thinking).toEqual({
 				...thinking,
-				// Versionless claude ids resolve to the 4-tier adaptive wire map.
-				effortMap: { minimal: "low", xhigh: "max" },
+				// Versionless claude ids resolve to the 4-tier adaptive wire map,
+				// filtered to the declared efforts (no xhigh).
+				effortMap: { minimal: "low" },
 			});
 		});
 

@@ -167,8 +167,8 @@ describe("ModelRegistry runtime provider registration", () => {
 			mode: "anthropic-adaptive",
 			efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High],
 			// Wire facts are backfilled from identity; non-claude ids get the
-			// 4-tier adaptive map.
-			effortMap: { minimal: "low", xhigh: "max" },
+			// 4-tier adaptive map, filtered to the declared efforts (no xhigh).
+			effortMap: { minimal: "low" },
 		});
 	});
 
