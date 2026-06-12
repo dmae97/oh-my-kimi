@@ -479,6 +479,66 @@ describe("tool live-region scrollback", () => {
 		}
 	});
 
+	it("scroll-appends a tall collapsed streaming task call into native scrollback mid-stream", async () => {
+		if (process.platform === "win32") return;
+
+		// Regression for the blanket commit-unstable gate: marking EVERY pending
+		// collapsed preview provisional meant a task call whose context markdown
+		// outgrew the viewport had its head neither on screen nor in scrollback
+		// until the result landed — the transcript read as cut off for the whole
+		// run. The task call preview streams top-anchored append-shaped rows the
+		// result render preserves, so it stays commit-eligible while collapsed.
+		const term = new VirtualTerminal(120, 12);
+		const tui = new TUI(term);
+		const chat = new TranscriptContainer();
+		const contextLines = Array.from({ length: 60 }, (_unused, i) => `ctx_line_${i} = ${i}`);
+		// Fenced code: each streamed line appends exactly one row, no re-wrap.
+		const buildContext = (count: number) => `\`\`\`\n${contextLines.slice(0, count).join("\n")}\n`;
+		const component = new ToolExecutionComponent(
+			"task",
+			{ agent: "task", context: buildContext(1) },
+			{},
+			undefined,
+			tui,
+			process.cwd(),
+		);
+
+		try {
+			chat.addChild(new Text("prior filler", 0, 0));
+			tui.addChild(chat);
+			tui.start();
+			await term.waitForRender();
+
+			chat.addChild(component);
+			tui.requestRender();
+			await term.waitForRender();
+
+			for (let count = 5; count <= contextLines.length; count += 5) {
+				component.updateArgs({ agent: "task", context: buildContext(count) });
+				tui.requestRender();
+				await term.waitForRender();
+			}
+
+			// Still streaming: no result, collapsed. The head of the context must
+			// already be in the buffer (committed above the window), not cut off —
+			// and the viewport itself only shows the streaming tail.
+			const rows = term.getScrollBuffer().map(row => Bun.stripANSI(row).trimEnd());
+			const bufferText = rows.join("\n");
+			expect(bufferText).toContain("ctx_line_0 = 0");
+			expect(bufferText).toContain("ctx_line_30 = 30");
+			expect(rows.length).toBeGreaterThan(term.rows);
+			const viewportText = term
+				.getViewport()
+				.map(row => Bun.stripANSI(row).trimEnd())
+				.join("\n");
+			expect(viewportText).not.toContain("ctx_line_0 = 0");
+		} finally {
+			component.stopAnimation();
+			tui.stop();
+			await term.flush();
+		}
+	});
+
 	it("scroll-appends a tall expanded streaming write into native scrollback mid-stream", async () => {
 		if (process.platform === "win32") return;
 

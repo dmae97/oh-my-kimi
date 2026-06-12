@@ -1385,6 +1385,9 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 		},
 		mergeCallAndResult: true,
 		inline: true,
+		// Pending preview caps the command to a viewport-sized tail window that
+		// shifts while args stream; keep it out of native scrollback mid-run.
+		provisionalPendingPreview: true,
 	};
 }
 

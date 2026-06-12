@@ -43,6 +43,19 @@ export type ToolRenderer = {
 	mergeCallAndResult?: boolean;
 	/** Render without background box, inline in the response flow */
 	inline?: boolean;
+	/**
+	 * Collapsed pending preview is provisional — a tail-window or otherwise
+	 * re-anchored view the result render replaces wholesale (an edit's
+	 * streamed-diff tail, bash/ssh command caps, eval cells whose outputs
+	 * interleave under each cell). Its rows must never commit to native
+	 * scrollback mid-run; see
+	 * `ToolExecutionComponent.isTranscriptBlockCommitStable`. Absent = the
+	 * pending preview streams top-anchored append-shaped rows the result
+	 * render preserves (task context/assignment, write content), which stay
+	 * commit-eligible so a call taller than the viewport scrolls into history
+	 * instead of reading as cut off.
+	 */
+	provisionalPendingPreview?: boolean;
 };
 
 export const toolRenderers: Record<string, ToolRenderer> = {
