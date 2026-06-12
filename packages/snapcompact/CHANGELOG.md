@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.12.1] - 2026-06-12
+
 ### Changed
 
 - `serializeConversation` now skips tool call/result pairs whose result is flagged contextually useless (`useless: true`, non-error), so archived frames stop carrying zero-match searches and timed-out waits
