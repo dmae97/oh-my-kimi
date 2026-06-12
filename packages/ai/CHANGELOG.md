@@ -19,6 +19,7 @@
 - Fixed websocket append fast-path to remain usable when only `client_metadata` changes between turns
 - Fixed `onModerationMetadata` handling so exceptions thrown by callback observers no longer terminate the response stream
 - Fixed local SQLite OAuth credential caches returning a stale Anthropic access token after another `omp` process refreshed and persisted the same row. `AuthStorage` now syncs the selected row from storage before returning or force-refreshing OAuth credentials, so concurrent sessions pick up peer-rotated tokens instead of surfacing a one-turn `401 Invalid authentication credentials`.
+- Fixed forced OAuth preflight refresh failures being swallowed silently in credential selection; they now emit a debug log (`OAuth preflight refresh failed`) so stale-refresh-token replays from concurrent sessions are diagnosable.
 
 ## [15.11.3] - 2026-06-11
 ### Fixed
