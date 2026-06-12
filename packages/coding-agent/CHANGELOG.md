@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Updated the session-continuation tip to mention Zellij and WezTerm panes.
+
 ## [15.12.3] - 2026-06-12
 
 ### Fixed
