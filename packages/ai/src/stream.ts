@@ -3,6 +3,7 @@ import { isVertexExpressOpenAIUrl, isVertexRawPredictUrl } from "@oh-my-pi/pi-ca
 import {
 	mapEffortToAnthropicAdaptiveEffort,
 	mapEffortToGoogleThinkingLevel,
+	minimumSupportedEffort,
 	requireSupportedEffort,
 	resolveWireModelId,
 } from "@oh-my-pi/pi-catalog/model-thinking";
@@ -668,11 +669,39 @@ function resolveOpenAiReasoningEffort<TApi extends Api>(
 
 const castApi = <TApi extends Api>(api: OptionsForApi<TApi>): OptionsForApi<Api> => api as OptionsForApi<Api>;
 
-function mapOptionsForApi<TApi extends Api>(
+/**
+ * Mandatory-reasoning endpoints (`thinking.requiresEffort`) reject disabled
+ * or omitted thinking ("Reasoning is mandatory for this endpoint and cannot
+ * be disabled") — clamp to the lowest supported effort instead.
+ * `suppressWhenOff` models handle off provider-side via explicit wire
+ * suppression. Collapsed pairs interplay: pair derivation strips member
+ * flags (off routes to a bare SKU that CAN disable), while identity backfill
+ * re-flags pairs whose logical id is itself mandatory (Gemini 3.x) — there
+ * the clamp wins and the floored effort routes to the thinking SKU.
+ */
+function normalizeMandatoryReasoningOptions<TApi extends Api>(
 	model: Model<TApi>,
 	options?: SimpleStreamOptions,
+): SimpleStreamOptions | undefined {
+	if (
+		!model.reasoning ||
+		!model.thinking?.requiresEffort ||
+		model.thinking.suppressWhenOff ||
+		(options?.reasoning !== undefined && !options.disableReasoning)
+	) {
+		return options;
+	}
+	const floor = minimumSupportedEffort(model);
+	if (floor === undefined) return options;
+	return { ...options, reasoning: floor, disableReasoning: undefined };
+}
+
+function mapOptionsForApi<TApi extends Api>(
+	model: Model<TApi>,
+	rawOptions?: SimpleStreamOptions,
 	apiKey?: string,
 ): OptionsForApi<TApi> {
+	const options = normalizeMandatoryReasoningOptions(model, rawOptions);
 	const base = {
 		temperature: options?.temperature,
 		topP: options?.topP,
