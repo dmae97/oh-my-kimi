@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { $env, isCompiledBinary, logger } from "@oh-my-pi/pi-utils";
+import { $env, isBunTestRuntime, isCompiledBinary, logger, workerHostEntry } from "@oh-my-pi/pi-utils";
 import type { Subprocess } from "bun";
 import { settings } from "../config/settings";
 import { tinyModelDeviceSettingToEnv } from "./device";
@@ -39,7 +39,31 @@ export interface TinyTitleDownloadOptions {
 	onProgress?: (event: TinyTitleProgressEvent) => void;
 }
 
-const SMOKE_TEST_TIMEOUT_MS = 5_000;
+/**
+ * Per-request controls for {@link TinyTitleClient.generate}.
+ *
+ * Carries the optional abort signal and title-system-prompt override used by
+ * callers that customize automatic session-title generation.
+ */
+export interface TinyTitleGenerateOptions {
+	signal?: AbortSignal;
+	systemPrompt?: string;
+}
+
+// Cold-starting the worker subprocess from a compiled binary (decompress + module
+// graph load) is slow on contended CI runners — the macos-15-intel release smoke
+// blew past 5s while arm64/linux/win passed. The probe only needs to prove the
+// worker spawns and ponges at all (a dead worker never ponges regardless), so a
+// generous bound removes the flake without weakening the check.
+const SMOKE_TEST_TIMEOUT_MS = 30_000;
+
+function normalizeTinyTitleGenerateOptions(
+	options: AbortSignal | TinyTitleGenerateOptions | undefined,
+): TinyTitleGenerateOptions {
+	if (!options) return {};
+	if ("aborted" in options && "addEventListener" in options) return { signal: options };
+	return options;
+}
 
 /**
  * Hidden subcommand on the main CLI that boots the tiny-model worker in the
@@ -103,21 +127,32 @@ function tinyWorkerEnv(): Record<string, string> {
 	for (const key in overlay) merged[key] = overlay[key];
 	return merged;
 }
+interface TinyWorkerSpawnCommand {
+	cmd: string[];
+	cwd?: string;
+}
 
 /**
- * Resolve the argv used to relaunch the agent CLI into tiny-worker mode. In a
- * compiled binary the entry point is the binary itself; in dev/source the
- * spawned `bun` needs the absolute path to `cli.ts` so it can resolve module
- * imports against the on-disk source tree.
+ * Resolve the command used to relaunch the agent CLI into tiny-worker mode.
+ * In a compiled binary the entry point is the binary itself (no script arg).
+ * Otherwise re-enter the declared worker-host entry (source cli.ts or
+ * npm-bundle cli.js) with a cwd-relative script path — Bun's subprocess IPC
+ * is more reliable that way than with an absolute `.ts` entry under
+ * `bun test` — and fall back to this package's own `src/cli.ts` when no host
+ * entry is declared (bun test, SDK embedding).
  */
-function tinyWorkerSpawnCmd(): string[] {
-	if (isCompiledBinary()) return [process.execPath, TINY_WORKER_ARG];
-	const cliPath = path.resolve(import.meta.dir, "..", "cli.ts");
-	return [process.execPath, cliPath, TINY_WORKER_ARG];
+function tinyWorkerSpawnCmd(): TinyWorkerSpawnCommand {
+	if (isCompiledBinary()) return { cmd: [process.execPath, TINY_WORKER_ARG] };
+	const hostEntry = workerHostEntry();
+	if (hostEntry) {
+		return { cmd: [process.execPath, path.basename(hostEntry), TINY_WORKER_ARG], cwd: path.dirname(hostEntry) };
+	}
+	const packageRoot = path.resolve(import.meta.dir, "..", "..");
+	return { cmd: [process.execPath, "src/cli.ts", TINY_WORKER_ARG], cwd: packageRoot };
 }
 
 interface SpawnedSubprocess {
-	proc: Subprocess<"ignore", "inherit", "inherit">;
+	proc: Subprocess<"ignore", "ignore", "ignore">;
 	inbound: Set<(message: TinyTitleWorkerOutbound) => void>;
 	errors: Set<(error: Error) => void>;
 	/**
@@ -138,14 +173,19 @@ export function createTinyTitleSubprocess(): SpawnedSubprocess {
 	const inbound = new Set<(message: TinyTitleWorkerOutbound) => void>();
 	const errors = new Set<(error: Error) => void>();
 	const intentionalExit = { value: false };
+	const spawnCommand = tinyWorkerSpawnCmd();
 	const proc = Bun.spawn({
-		cmd: tinyWorkerSpawnCmd(),
+		cmd: spawnCommand.cmd,
+		cwd: spawnCommand.cwd,
 		env: tinyWorkerEnv(),
 		stdin: "ignore",
-		stdout: "inherit",
-		stderr: "inherit",
+		stdout: "ignore",
+		stderr: "ignore",
 		serialization: "advanced",
 		windowsHide: true,
+		// The worker is an implementation detail of the interactive TUI. Native
+		// model runtimes may print progress or decoded text directly; never let
+		// those bytes inherit the terminal and corrupt the chat scrollback.
 		ipc(message) {
 			for (const handler of inbound) handler(message as TinyTitleWorkerOutbound);
 		},
@@ -167,7 +207,9 @@ export function createTinyTitleSubprocess(): SpawnedSubprocess {
 	});
 	// Don't keep the parent event loop alive on account of an idle worker; the
 	// agent dispose path calls `terminate()` explicitly when shutting down.
-	proc.unref();
+	// Bun's test runner can starve IPC delivery for unref'd subprocesses, so
+	// keep it referenced only under tests that assert the ping/pong contract.
+	if (!isBunTestRuntime()) proc.unref();
 	return { proc, inbound, errors, intentionalExit };
 }
 
@@ -272,9 +314,16 @@ export class TinyTitleClient {
 		return () => this.#progressListeners.delete(listener);
 	}
 
-	async generate(modelKey: string, message: string, signal?: AbortSignal): Promise<string | null> {
+	async generate(modelKey: string, message: string, signal?: AbortSignal): Promise<string | null>;
+	async generate(modelKey: string, message: string, options?: TinyTitleGenerateOptions): Promise<string | null>;
+	async generate(
+		modelKey: string,
+		message: string,
+		optionsOrSignal?: AbortSignal | TinyTitleGenerateOptions,
+	): Promise<string | null> {
+		const options = normalizeTinyTitleGenerateOptions(optionsOrSignal);
 		if (!isTinyTitleLocalModelKey(modelKey)) return null;
-		if (signal?.aborted) return null;
+		if (options.signal?.aborted) return null;
 
 		try {
 			const worker = this.#ensureWorker();
@@ -287,12 +336,15 @@ export class TinyTitleClient {
 				this.#pending.delete(id);
 				pending.resolve(null);
 			};
-			signal?.addEventListener("abort", abort, { once: true });
+			options.signal?.addEventListener("abort", abort, { once: true });
 			try {
-				worker.send({ type: "generate", id, modelKey, message });
+				const request: TinyTitleWorkerInbound = options.systemPrompt
+					? { type: "generate", id, modelKey, message, systemPrompt: options.systemPrompt }
+					: { type: "generate", id, modelKey, message };
+				worker.send(request);
 				return await promise;
 			} finally {
-				signal?.removeEventListener("abort", abort);
+				options.signal?.removeEventListener("abort", abort);
 				this.#pending.delete(id);
 			}
 		} catch (error) {

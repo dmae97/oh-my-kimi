@@ -1,9 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { getBundledModel } from "../src/models";
-import { type OpenAIResponsesOptions, streamOpenAIResponses } from "../src/providers/openai-responses";
-import type { Context, Model } from "../src/types";
+import { type OpenAIResponsesOptions, streamOpenAIResponses } from "@oh-my-pi/pi-ai/providers/openai-responses";
+import type { Context, FetchImpl, Model } from "@oh-my-pi/pi-ai/types";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 
-const originalFetch = global.fetch;
 const model = getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">;
 
 function createSseResponse(events: unknown[]): Response {
@@ -26,7 +25,7 @@ async function captureOpenAIResponseHeaders(
 		clientRequestId: null as string | null,
 		body: null as Record<string, unknown> | null,
 	};
-	const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+	const fetchMock: FetchImpl = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
 		captured.sessionId = getHeader(init?.headers, "session_id");
 		captured.clientRequestId = getHeader(init?.headers, "x-client-request-id");
 		captured.body = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : null;
@@ -61,13 +60,12 @@ async function captureOpenAIResponseHeaders(
 			},
 		]);
 	});
-	global.fetch = Object.assign(fetchMock, { preconnect: originalFetch.preconnect }) as typeof fetch;
 
 	const context: Context = {
 		systemPrompt: ["stable system", "stable durable context"],
 		messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
 	};
-	const stream = streamOpenAIResponses(model, context, { apiKey: "test-key", ...options });
+	const stream = streamOpenAIResponses(model, context, { apiKey: "test-key", ...options, fetch: fetchMock });
 
 	for await (const event of stream) {
 		if (event.type === "done" || event.type === "error") break;
@@ -77,7 +75,6 @@ async function captureOpenAIResponseHeaders(
 }
 
 afterEach(() => {
-	global.fetch = originalFetch;
 	vi.restoreAllMocks();
 });
 

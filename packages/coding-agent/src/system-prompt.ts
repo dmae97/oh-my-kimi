@@ -8,15 +8,27 @@ import { $env, getGpuCachePath, getProjectDir, hasFsCode, isEnoent, logger, prom
 import { $ } from "bun";
 import { contextFileCapability } from "./capability/context-file";
 import { systemPromptCapability } from "./capability/system-prompt";
-import type { SkillsSettings } from "./config/settings";
+import { findConfigFile } from "./config";
+import type { Personality, SkillsSettings } from "./config/settings";
 import { type ContextFile, loadCapability, type SystemPrompt as SystemPromptFile } from "./discovery";
+import { expandAtImports } from "./discovery/at-imports";
 import { loadSkills, type Skill } from "./extensibility/skills";
 import { hasObsidian } from "./internal-urls/vault-protocol";
 import customSystemPromptTemplate from "./prompts/system/custom-system-prompt.md" with { type: "text" };
+import defaultPersonality from "./prompts/system/personalities/default.md" with { type: "text" };
+import friendlyPersonality from "./prompts/system/personalities/friendly.md" with { type: "text" };
+import pragmaticPersonality from "./prompts/system/personalities/pragmatic.md" with { type: "text" };
 import projectPromptTemplate from "./prompts/system/project-prompt.md" with { type: "text" };
 import systemPromptTemplate from "./prompts/system/system-prompt.md" with { type: "text" };
 import { shortenPath } from "./tools/render-utils";
 import { AGENTS_MD_LIMIT, buildWorkspaceTree, type WorkspaceTree } from "./workspace-tree";
+
+/** Bundled personality specs, keyed by the `personality` setting value. */
+const PERSONALITY_SPECS: Record<Exclude<Personality, "none">, string> = {
+	default: defaultPersonality,
+	friendly: friendlyPersonality,
+	pragmatic: pragmaticPersonality,
+};
 
 interface AlwaysApplyRule {
 	name: string;
@@ -207,6 +219,19 @@ async function getEnvironmentInfo(): Promise<Array<{ label: string; value: strin
 	return entries.filter((e): e is { label: string; value: string } => !!e.value);
 }
 
+/** Discover TITLE_SYSTEM.md file for automatic session-title prompt overrides */
+export function discoverTitleSystemPromptFile(cwd?: string): string | undefined {
+	const projectPath = findConfigFile("TITLE_SYSTEM.md", { user: false, cwd });
+	if (projectPath) {
+		return projectPath;
+	}
+	const globalPath = findConfigFile("TITLE_SYSTEM.md", { user: true, cwd });
+	if (globalPath) {
+		return globalPath;
+	}
+	return undefined;
+}
+
 /** Resolve input as file path or literal string */
 export async function resolvePromptInput(input: string | undefined, description: string): Promise<string | undefined> {
 	if (!input) {
@@ -254,15 +279,20 @@ export async function loadProjectContextFiles(
 
 	const result = await loadCapability(contextFileCapability.id, { cwd: resolvedCwd });
 
-	// Convert ContextFile items and preserve depth info
-	const files = result.items.map(item => {
-		const contextFile = item as ContextFile;
-		return {
-			path: contextFile.path,
-			content: contextFile.content,
-			depth: contextFile.depth,
-		};
-	});
+	// Materialize ContextFile items, expanding any `@path/to/file` includes
+	// in their content. The expansion uses the file's own directory as the
+	// resolution base so relative imports work the same way Claude Code,
+	// Goose, and other tools document.
+	const files = await Promise.all(
+		result.items.map(async item => {
+			const contextFile = item as ContextFile;
+			return {
+				path: contextFile.path,
+				content: await expandAtImports(contextFile.content, contextFile.path),
+				depth: contextFile.depth,
+			};
+		}),
+	);
 
 	// Sort by depth (descending): higher depth (farther from cwd) comes first,
 	// so files closer to cwd appear later and are more prominent
@@ -365,6 +395,8 @@ export interface BuildSystemPromptOptions {
 	memoryRootEnabled?: boolean;
 	/** Active model identifier (e.g. "anthropic/claude-opus-4") surfaced to the agent. */
 	model?: string;
+	/** Personality preset rendered into the default system prompt. "none" omits the block. Default: "default" */
+	personality?: Personality;
 }
 
 /** Result of building provider-facing system prompt messages. */
@@ -399,6 +431,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		workspaceTree: providedWorkspaceTree,
 		memoryRootEnabled = false,
 		model,
+		personality = "default",
 	} = options;
 	const resolvedCwd = cwd ?? getProjectDir();
 
@@ -570,6 +603,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		dateTime,
 		cwd: promptCwd,
 		model: model ?? "",
+		personality: personality === "none" ? "" : PERSONALITY_SPECS[personality].trim(),
 		intentTracing: !!intentField,
 		intentField: intentField ?? "",
 		mcpDiscoveryMode,

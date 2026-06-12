@@ -13,6 +13,8 @@
  * deltas for thinking blocks, and holds partial tags across chunk boundaries.
  */
 
+import { isDeepseekModelIdOrName } from "@oh-my-pi/pi-catalog/identity";
+
 import { parseJsonWithRepair } from "./json-parse";
 
 const KIMI_SECTION_BEGIN = "<|tool_calls_section_begin|>";
@@ -36,6 +38,8 @@ const DSML_PARAMETER_OPEN_RE = new RegExp(
 	"y",
 );
 const DSML_PARAMETER_CLOSE_RE = new RegExp(`</${DSML_PIPE}DSML${DSML_PIPE}parameter>`, "y");
+/** Canonical DSML section-open shape; `|` positions accept either pipe variant. */
+const DSML_SECTION_OPEN_TEMPLATE = "<|DSML|tool_calls>";
 
 const THINK_OPEN = "<think>";
 const THINK_CLOSE = "</think>";
@@ -81,6 +85,7 @@ type XmlToolState =
 			readonly paramName: string;
 			readonly isString: boolean;
 			value: string;
+			truncated?: boolean;
 	  };
 
 type ThinkingTag = { readonly open: string; readonly close: string };
@@ -429,12 +434,25 @@ export class StreamMarkupHealing {
 					continue;
 				}
 			} else if (this.#tryMatch(config.parameterClose)) {
-				state.args[state.paramName] = coerceXmlParamValue(state.value, state.isString);
+				// A capped value executes with silently corrupted input unless the
+				// truncation is made explicit — the marker fails JSON params loudly
+				// and tells the model/tool what happened to string params.
+				const paramValue = state.truncated
+					? `${state.value}\n…[parameter truncated: exceeded ${MAX_XML_PARAM_VALUE_LENGTH} bytes]`
+					: state.value;
+				state.args[state.paramName] = coerceXmlParamValue(paramValue, state.isString);
 				config.setState({ kind: "invoke", name: state.invokeName, args: state.args });
 				continue;
 			}
 
-			if (this.#startsWithPartialXmlTag()) break;
+			if (state.kind === "idle") {
+				// In idle, a bare `<` is legitimate output (`a < b`, generics, JSX).
+				// Only hold back tails that could still grow into the DSML
+				// section-open tag; everything else flows through immediately.
+				if (this.#startsWithPartialDsmlSectionOpen()) break;
+			} else if (this.#startsWithPartialXmlTag()) {
+				break;
+			}
 
 			const ch = this.#buffer[this.#offset]!;
 			this.#offset += 1;
@@ -443,11 +461,15 @@ export class StreamMarkupHealing {
 				continue;
 			}
 			if (state.kind === "parameter") {
-				if (state.value.length >= MAX_XML_PARAM_VALUE_LENGTH) {
-					config.setState({ kind: "idle" });
-					continue;
+				if (state.value.length < MAX_XML_PARAM_VALUE_LENGTH) {
+					state.value += ch;
+				} else {
+					// Beyond the cap the value stops growing, but we stay in
+					// `parameter` state so the rest of the envelope — including its
+					// close tags — is still swallowed instead of leaking into
+					// visible text. The close handler appends an explicit marker.
+					state.truncated = true;
 				}
-				state.value += ch;
 			}
 		}
 
@@ -507,6 +529,21 @@ export class StreamMarkupHealing {
 		if (tailLength > MAX_XML_PARTIAL_HOLD) return false;
 		for (let i = this.#offset + 1; i < this.#buffer.length; i++) {
 			if (this.#buffer[i] === ">") return false;
+		}
+		return true;
+	}
+
+	#startsWithPartialDsmlSectionOpen(): boolean {
+		const tailLength = this.#buffer.length - this.#offset;
+		if (tailLength === 0 || tailLength >= DSML_SECTION_OPEN_TEMPLATE.length) return false;
+		for (let i = 0; i < tailLength; i++) {
+			const ch = this.#buffer[this.#offset + i]!;
+			const expected = DSML_SECTION_OPEN_TEMPLATE[i]!;
+			if (expected === "|") {
+				if (ch !== "|" && ch !== "｜") return false;
+			} else if (ch !== expected) {
+				return false;
+			}
 		}
 		return true;
 	}
@@ -587,7 +624,7 @@ export function modelMayLeakKimiToolCalls(provider: string, modelId: string): bo
 
 /** Cheap model/provider gate for DeepSeek DSML envelope leaks. */
 export function modelMayLeakDsmlToolCalls(provider: string, modelId: string): boolean {
-	if (!/deepseek/i.test(modelId)) return false;
+	if (!isDeepseekModelIdOrName(modelId)) return false;
 	return (
 		provider === "ollama" ||
 		provider === "ollama-cloud" ||
@@ -600,12 +637,17 @@ export function modelMayLeakDsmlToolCalls(provider: string, modelId: string): bo
 	);
 }
 
+/** Cheap model/provider gate for MiniMax plain thinking tag leaks. */
+export function modelMayLeakThinkingTags(provider: string, modelId: string): boolean {
+	return /minimax/i.test(provider) || /minimax/i.test(modelId);
+}
+
 export function getStreamMarkupHealingPattern(
 	provider: string,
 	modelId: string,
 	options?: { readonly parseThinkingTags?: boolean },
 ): StreamMarkupHealingPattern | undefined {
-	if (options?.parseThinkingTags) return "thinking";
+	if (options?.parseThinkingTags || modelMayLeakThinkingTags(provider, modelId)) return "thinking";
 	if (modelMayLeakKimiToolCalls(provider, modelId)) return "kimi";
 	if (modelMayLeakDsmlToolCalls(provider, modelId)) return "dsml";
 	return undefined;

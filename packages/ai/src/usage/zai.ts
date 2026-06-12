@@ -1,3 +1,4 @@
+import { toNumber } from "@oh-my-pi/pi-catalog/utils";
 import type {
 	UsageAmount,
 	UsageFetchContext,
@@ -8,7 +9,7 @@ import type {
 	UsageStatus,
 	UsageWindow,
 } from "../usage";
-import { isRecord, toNumber } from "../utils";
+import { isRecord } from "../utils";
 
 const DEFAULT_ENDPOINT = "https://api.z.ai";
 const QUOTA_PATH = "/api/monitor/usage/quota/limit";

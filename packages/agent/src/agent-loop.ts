@@ -23,6 +23,7 @@ import {
 	type HarmonyDetection,
 	type HarmonyRecoveredToolCall,
 	isHarmonyLeakMitigationTarget,
+	recoverHarmonyToolCall,
 	signalListLabel,
 } from "./harmony-leak";
 import { type AgentRunCoverage, type AgentRunSummary, ToolCallBlockedError } from "./run-collector";
@@ -49,12 +50,21 @@ import type {
 	AgentMessage,
 	AgentTool,
 	AgentToolResult,
+	AsideMessage,
 	StreamFn,
 } from "./types";
 import { yieldIfDue } from "./utils/yield";
 
 /** Sentinel returned by the abort race in `streamAssistantResponse`. */
 const ABORTED: unique symbol = Symbol("agent-loop-aborted");
+
+/**
+ * Cap on consecutive re-samples triggered by a non-terminal stop
+ * (`stopDetails.type === "pause_turn"`) without an intervening tool call. Each
+ * continuation is a full model request, so a backend that never stops pausing
+ * must not spin the loop forever. Resets whenever a turn carries tool calls.
+ */
+const MAX_PAUSED_TURN_CONTINUATIONS = 8;
 
 class HarmonyLeakInterruption extends Error {
 	constructor(
@@ -67,6 +77,76 @@ class HarmonyLeakInterruption extends Error {
 	}
 }
 
+type AssistantContentBlock = AssistantMessage["content"][number];
+type AssistantToolCallBlock = Extract<AssistantContentBlock, { type: "toolCall" }>;
+type CloneableRecord = Record<string, unknown>;
+
+function cloneUnknown(value: unknown): unknown {
+	if (Array.isArray(value)) return value.map(cloneUnknown);
+	if (!value || typeof value !== "object") return value;
+	const source = value as CloneableRecord;
+	const out: CloneableRecord = {};
+	for (const [key, child] of Object.entries(source)) {
+		out[key] = cloneUnknown(child);
+	}
+	return out;
+}
+
+function cloneToolArguments(args: AssistantToolCallBlock["arguments"]): AssistantToolCallBlock["arguments"] {
+	return cloneUnknown(args) as AssistantToolCallBlock["arguments"];
+}
+
+function snapshotAssistantContentBlock(block: AssistantContentBlock): AssistantContentBlock {
+	switch (block.type) {
+		case "text":
+			return { ...block };
+		case "thinking":
+			return { ...block };
+		case "redactedThinking":
+			return { ...block };
+		case "toolCall":
+			return { ...block, arguments: cloneToolArguments(block.arguments) };
+	}
+}
+
+function snapshotAssistantMessage(message: AssistantMessage): AssistantMessage {
+	return {
+		...message,
+		content: message.content.map(snapshotAssistantContentBlock),
+		usage: {
+			...message.usage,
+			cost: { ...message.usage.cost },
+		},
+		disabledFeatures: message.disabledFeatures ? [...message.disabledFeatures] : undefined,
+	};
+}
+
+function snapshotAssistantMessageEvent(event: AssistantMessageEvent): AssistantMessageEvent {
+	switch (event.type) {
+		case "start":
+			return { ...event, partial: snapshotAssistantMessage(event.partial) };
+		case "text_start":
+		case "text_delta":
+		case "text_end":
+		case "thinking_start":
+		case "thinking_delta":
+		case "thinking_end":
+		case "toolcall_start":
+		case "toolcall_delta":
+			return { ...event, partial: snapshotAssistantMessage(event.partial) };
+		case "toolcall_end":
+			return {
+				...event,
+				toolCall: snapshotAssistantContentBlock(event.toolCall) as AssistantToolCallBlock,
+				partial: snapshotAssistantMessage(event.partial),
+			};
+		case "done":
+			return { ...event, message: snapshotAssistantMessage(event.message) };
+		case "error":
+			return { ...event, error: snapshotAssistantMessage(event.error) };
+	}
+}
+
 /**
  * Normalize a value coming back from `tool.execute()` (or its streaming partial-update callback)
  * into a structurally valid {@link AgentToolResult}.
@@ -76,7 +156,17 @@ class HarmonyLeakInterruption extends Error {
  * (missing `content` array → crash on reload). We coerce at the single boundary where untyped
  * results enter the agent loop, so every downstream consumer can rely on the type.
  */
-function coerceToolResult(raw: unknown): { result: AgentToolResult<any>; malformed: boolean } {
+const EMPTY_ERROR_TOOL_RESULT_TEXT = "Tool failed with no output.";
+
+function hasSubstantiveToolResultContent(content: AgentToolResult["content"]): boolean {
+	for (const block of content) {
+		if (block.type === "image") return true;
+		if (block.type === "text" && block.text.trim().length > 0) return true;
+	}
+	return false;
+}
+
+function coerceToolResult(raw: unknown): { result: AgentToolResult<unknown>; malformed: boolean } {
 	const rawObj = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
 	const rawContent = rawObj?.content;
 	const details = rawObj && "details" in rawObj ? rawObj.details : {};
@@ -84,6 +174,9 @@ function coerceToolResult(raw: unknown): { result: AgentToolResult<any>; malform
 	// aggregator that catches per-entry errors and synthesizes a combined
 	// result). Preserve the flag so agent-loop can surface it on the wire.
 	const explicitError = Boolean(rawObj && "isError" in rawObj && rawObj.isError);
+	// Tools may flag the result contextually useless (zero matches, elapsed
+	// wait) so compaction can elide it once consumed. Errors are never useless.
+	const useless = Boolean(rawObj && "useless" in rawObj && rawObj.useless);
 
 	if (!Array.isArray(rawContent)) {
 		return {
@@ -97,8 +190,12 @@ function coerceToolResult(raw: unknown): { result: AgentToolResult<any>; malform
 	}
 
 	const content: AgentToolResult["content"] = [];
+	let invalidBlocks = 0;
 	for (const block of rawContent) {
-		if (!block || typeof block !== "object" || !("type" in block)) continue;
+		if (!block || typeof block !== "object" || !("type" in block)) {
+			invalidBlocks++;
+			continue;
+		}
 		if (block.type === "text" && typeof (block as { text?: unknown }).text === "string") {
 			content.push({ type: "text", text: sanitizeText((block as { text: string }).text) });
 		} else if (
@@ -107,9 +204,31 @@ function coerceToolResult(raw: unknown): { result: AgentToolResult<any>; malform
 			typeof (block as { mimeType?: unknown }).mimeType === "string"
 		) {
 			content.push(block as { type: "image"; data: string; mimeType: string });
+		} else {
+			invalidBlocks++;
 		}
 	}
-	return { result: { content, details, ...(explicitError ? { isError: true } : {}) }, malformed: false };
+	if (invalidBlocks > 0) {
+		content.push({
+			type: "text",
+			text: `Tool returned an invalid result: ${invalidBlocks} content block${invalidBlocks === 1 ? "" : "s"} had an unsupported shape.`,
+		});
+	}
+	const isError = explicitError || invalidBlocks > 0;
+	// Anthropic rejects tool_result blocks with is_error: true and empty content.
+	if (isError && !hasSubstantiveToolResultContent(content)) {
+		content.length = 0;
+		content.push({ type: "text", text: EMPTY_ERROR_TOOL_RESULT_TEXT });
+	}
+	return {
+		result: {
+			content,
+			details,
+			...(isError ? { isError: true } : {}),
+			...(useless && !isError ? { useless: true } : {}),
+		},
+		malformed: invalidBlocks > 0,
+	};
 }
 
 /**
@@ -175,7 +294,7 @@ export function agentLoopContinue(
 
 	(async () => {
 		const newMessages: AgentMessage[] = [];
-		const currentContext: AgentContext = { ...context };
+		const currentContext: AgentContext = { ...context, messages: [...context.messages] };
 
 		stream.push({ type: "agent_start" });
 		stream.push({ type: "turn_start" });
@@ -312,22 +431,26 @@ function normalizeMessagesForProvider(
 		return messages;
 	}
 
-	let changed = false;
-	const normalized = messages.map(message => {
+	let hasThinking = false;
+	for (const message of messages) {
+		if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
+		for (const block of message.content) {
+			if (block.type === "thinking") {
+				hasThinking = true;
+				break;
+			}
+		}
+		if (hasThinking) break;
+	}
+	if (!hasThinking) return messages;
+
+	return messages.map(message => {
 		if (message.role !== "assistant" || !Array.isArray(message.content)) {
 			return message;
 		}
-
 		const filtered = message.content.filter(block => block.type !== "thinking");
-		if (filtered.length === message.content.length) {
-			return message;
-		}
-
-		changed = true;
-		return { ...message, content: filtered };
+		return filtered.length === message.content.length ? message : { ...message, content: filtered };
 	});
-
-	return changed ? normalized : messages;
 }
 
 export const INTENT_FIELD = "_i";
@@ -444,25 +567,21 @@ interface StepCounter {
 	count: number;
 }
 
-function normalizeMaxToolCallsPerTurn(value: number | undefined): number | undefined {
-	if (value === undefined || !Number.isFinite(value)) return undefined;
-	const normalized = Math.trunc(value);
-	return normalized > 0 ? normalized : undefined;
-}
-
-function cloneAssistantMessageForToolCallCap(message: AssistantMessage): AssistantMessage {
-	return {
-		...message,
-		content: message.content.map(block => {
-			if (block.type === "toolCall") {
-				return { ...block, arguments: structuredClone(block.arguments) };
-			}
-			return { ...block };
-		}),
-		stopReason: "toolUse",
-		errorMessage: undefined,
-		errorStatus: undefined,
-	};
+/**
+ * Resolve aside entries at the moment the loop is about to inject them. Each entry
+ * is either a ready {@link AgentMessage} or a sync thunk evaluated here so the
+ * producer can make the final inject-or-drop decision (return null) against
+ * up-to-the-injection state — e.g. dropping late diagnostics a newer edit
+ * superseded. Kept sync so it can never stall the loop.
+ */
+function resolveAsides(entries: AsideMessage[] | undefined): AgentMessage[] {
+	if (!entries || entries.length === 0) return [];
+	const out: AgentMessage[] = [];
+	for (const entry of entries) {
+		const message = typeof entry === "function" ? entry() : entry;
+		if (message) out.push(message);
+	}
+	return out;
 }
 
 async function runLoopBody(
@@ -477,10 +596,13 @@ async function runLoopBody(
 	streamFn?: StreamFn,
 ): Promise<void> {
 	let firstTurn = true;
-	// Check for steering messages at start (user may have typed while waiting)
-	let pendingMessages: AgentMessage[] = (await config.getSteeringMessages?.()) || [];
+	// Check for steering messages at start (user may have typed while waiting).
+	// Skip when the run is already externally aborted — dequeuing would strand
+	// the messages in a run that is about to die.
+	let pendingMessages: AgentMessage[] = signal?.aborted ? [] : (await config.getSteeringMessages?.()) || [];
 	let harmonyRetryAttempt = 0;
 	let harmonyTruncateResumeCount = 0;
+	let pausedTurnContinuations = 0;
 
 	// Outer loop: continues when queued follow-up messages arrive after agent would stop
 	while (true) {
@@ -555,8 +677,13 @@ async function runLoopBody(
 					continue;
 				}
 			}
+			if (recovered) {
+				message = snapshotAssistantMessage(message);
+				currentContext.messages.push(message);
+				stream.push({ type: "message_start", message: snapshotAssistantMessage(message) });
+				stream.push({ type: "message_end", message: snapshotAssistantMessage(message) });
+			}
 			newMessages.push(message);
-			let steeringMessagesFromExecution: AgentMessage[] | undefined;
 
 			if (message.stopReason === "error" || message.stopReason === "aborted") {
 				// Create placeholder tool results for any tool calls in the aborted message
@@ -617,7 +744,6 @@ async function runLoopBody(
 				);
 
 				toolResults.push(...executionResult.toolResults);
-				steeringMessagesFromExecution = executionResult.steeringMessages;
 
 				for (const result of toolResults) {
 					currentContext.messages.push(result);
@@ -643,19 +769,61 @@ async function runLoopBody(
 						status: "skipped",
 					});
 				}
+				if (message.stopReason === "length" && toolResults.length > 0) {
+					hasMoreToolCalls = true;
+				}
+			}
+
+			if (toolCalls.length > 0) {
+				pausedTurnContinuations = 0;
+			} else if (
+				!hasMoreToolCalls &&
+				message.stopReason === "stop" &&
+				message.stopDetails?.type === "pause_turn" &&
+				pausedTurnContinuations < MAX_PAUSED_TURN_CONTINUATIONS
+			) {
+				// Non-terminal stop: the provider ended the response but not the turn
+				// (e.g. Codex `end_turn: false` on a commentary-only progress update).
+				// Re-sample with the assistant message replayed so the model keeps
+				// working; the next round folds steering/asides in like any other
+				// mid-work turn.
+				pausedTurnContinuations++;
+				hasMoreToolCalls = true;
 			}
 
 			stream.push({ type: "turn_end", message, toolResults });
 
-			pendingMessages = steeringMessagesFromExecution ?? ((await config.getSteeringMessages?.()) || []);
+			// On external abort (user interrupt), leave the steering queue intact: the
+			// session aborts then continues, delivering the queue into a fresh run.
+			// Draining it here would inject the messages right before a model call that
+			// instantly aborts — message lands in history, agent never responds. The
+			// mid-batch interrupt poll only peeks (hasSteeringMessages), so the queue
+			// still owns every message until this dequeue.
+			const steering = signal?.aborted ? [] : (await config.getSteeringMessages?.()) || [];
+			if (hasMoreToolCalls) {
+				// Mid-work: fold any non-interrupting asides into the next turn alongside steering.
+				const asides = resolveAsides(await config.getAsideMessages?.());
+				pendingMessages = asides.length > 0 ? [...steering, ...asides] : steering;
+			} else {
+				// Stop boundary: only steering (live user input) forces another turn here. Leave
+				// asides for the outer drain below so a passive aside can't trigger an extra model
+				// turn ahead of a queued follow-up — the outer drain batches asides + follow-ups together.
+				pendingMessages = steering;
+			}
 		}
 
-		// Agent would stop here. Check for follow-up messages.
+		// Agent would stop here. Drain non-interrupting asides + follow-up messages.
 		await config.onBeforeYield?.();
-		const followUpMessages = (await config.getFollowUpMessages?.()) || [];
-		if (followUpMessages.length > 0) {
-			// Set as pending so inner loop processes them
-			pendingMessages = followUpMessages;
+		// Skip queue drains when externally aborted (same stranding hazard as above).
+		// Re-poll steering too: a steer can land between the stop-boundary dequeue
+		// above and this yield point (e.g. queued while onBeforeYield ran). Without
+		// this poll it would strand in the queue until the next manual prompt.
+		const lateSteering = signal?.aborted ? [] : (await config.getSteeringMessages?.()) || [];
+		const asideMessages = signal?.aborted ? [] : resolveAsides(await config.getAsideMessages?.());
+		const followUpMessages = signal?.aborted ? [] : (await config.getFollowUpMessages?.()) || [];
+		if (lateSteering.length > 0 || asideMessages.length > 0 || followUpMessages.length > 0) {
+			// Set as pending so the inner loop processes them before stopping.
+			pendingMessages = [...lateSteering, ...asideMessages, ...followUpMessages];
 			continue;
 		}
 
@@ -722,6 +890,9 @@ async function streamAssistantResponse(
 			tools: normalizeTools(context.tools, !!config.intentTracing),
 		};
 	}
+	if (config.transformProviderContext) {
+		llmContext = config.transformProviderContext(llmContext, config.model);
+	}
 
 	const streamFunction = streamFn || streamSimple;
 
@@ -738,24 +909,19 @@ async function streamAssistantResponse(
 
 	const dynamicToolChoice = config.getToolChoice?.();
 	const dynamicReasoning = config.getReasoning?.();
+	const dynamicDisableReasoning = config.getDisableReasoning?.();
 	const harmonyMitigationEnabled = isHarmonyLeakMitigationTarget(config.model);
 	const harmonyAbortController = harmonyMitigationEnabled ? new AbortController() : undefined;
-	const maxToolCallsPerTurn = normalizeMaxToolCallsPerTurn(config.maxToolCallsPerTurn);
-	const toolCallCapAbortController = maxToolCallsPerTurn === undefined ? undefined : new AbortController();
-	const requestSignals: AbortSignal[] = [];
-	if (signal) requestSignals.push(signal);
-	if (harmonyAbortController) requestSignals.push(harmonyAbortController.signal);
-	if (toolCallCapAbortController) requestSignals.push(toolCallCapAbortController.signal);
-	const requestSignal =
-		requestSignals.length === 0
-			? undefined
-			: requestSignals.length === 1
-				? requestSignals[0]
-				: AbortSignal.any(requestSignals);
+	const requestSignal = harmonyAbortController
+		? signal
+			? AbortSignal.any([signal, harmonyAbortController.signal])
+			: harmonyAbortController.signal
+		: signal;
 	const effectiveTemperature =
 		harmonyRetryAttempt > 0 && config.temperature !== undefined ? config.temperature + 0.05 : config.temperature;
 	const effectiveToolChoice = dynamicToolChoice ?? config.toolChoice;
 	const effectiveReasoning = dynamicReasoning ?? config.reasoning;
+	const effectiveDisableReasoning = dynamicDisableReasoning ?? config.disableReasoning;
 
 	const chatStepNumber = stepCounter.count;
 	stepCounter.count += 1;
@@ -816,6 +982,7 @@ async function streamAssistantResponse(
 				metadata: resolvedMetadata,
 				toolChoice: effectiveToolChoice,
 				reasoning: effectiveReasoning,
+				disableReasoning: effectiveDisableReasoning,
 				temperature: effectiveTemperature,
 				signal: requestSignal,
 				onResponse: captureOnResponse,
@@ -823,27 +990,27 @@ async function streamAssistantResponse(
 
 			let partialMessage: AssistantMessage | null = null;
 			let addedPartial = false;
+			const completedToolCallIds = new Set<string>();
 
 			const responseIterator = response[Symbol.asyncIterator]();
-			let completedToolCalls = 0;
-			let cappedMessage: AssistantMessage | undefined;
-			let capFinalized = false;
-
-			const finishCappedAssistantMessage = async (): Promise<AssistantMessage | undefined> => {
-				if (!cappedMessage) return undefined;
-				responseIterator.return?.()?.catch(() => {});
-				if (!capFinalized) {
-					if (addedPartial) {
-						context.messages[context.messages.length - 1] = cappedMessage;
-					} else {
-						context.messages.push(cappedMessage);
-						stream.push({ type: "message_start", message: { ...cappedMessage } });
-					}
-					stream.push({ type: "message_end", message: cappedMessage });
-					await finishChat(cappedMessage);
-					capFinalized = true;
+			const finishAbortedStream = async (): Promise<AssistantMessage> => {
+				try {
+					const cleanup = responseIterator.return?.();
+					if (cleanup) void cleanup.catch(() => {});
+				} catch {
+					// Provider cancellation failures cannot change the committed aborted message.
 				}
-				return cappedMessage;
+				const aborted = emitAbortedAssistantMessage(
+					partialMessage,
+					addedPartial,
+					completedToolCallIds,
+					context,
+					config,
+					stream,
+					requestSignal,
+				);
+				await finishChat(aborted);
+				return aborted;
 			};
 
 			// Set up a single abort race: register the abort listener once for the whole
@@ -853,16 +1020,7 @@ async function streamAssistantResponse(
 			let detachAbortListener: (() => void) | undefined;
 			if (requestSignal) {
 				if (requestSignal.aborted) {
-					const aborted = emitAbortedAssistantMessage(
-						partialMessage,
-						addedPartial,
-						context,
-						config,
-						stream,
-						requestSignal,
-					);
-					await finishChat(aborted);
-					return aborted;
+					return await finishAbortedStream();
 				}
 				const { promise, resolve } = Promise.withResolvers<typeof ABORTED>();
 				const onAbort = () => resolve(ABORTED);
@@ -877,45 +1035,51 @@ async function streamAssistantResponse(
 					if (abortRacePromise) {
 						const result = await Promise.race([responseIterator.next(), abortRacePromise]);
 						if (result === ABORTED) {
-							if (toolCallCapAbortController?.signal.aborted) {
-								const capped = await finishCappedAssistantMessage();
-								if (capped) return capped;
-							}
-							responseIterator.return?.()?.catch(() => {});
-							const aborted = emitAbortedAssistantMessage(
-								partialMessage,
-								addedPartial,
-								context,
-								config,
-								stream,
-								requestSignal,
-							);
-							await finishChat(aborted);
-							return aborted;
+							return await finishAbortedStream();
 						}
 						next = result;
 					} else {
 						next = await responseIterator.next();
 					}
-					if (requestSignal?.aborted) {
-						if (toolCallCapAbortController?.signal.aborted) {
-							const capped = await finishCappedAssistantMessage();
-							if (capped) return capped;
-						}
-						const aborted = emitAbortedAssistantMessage(
-							partialMessage,
-							addedPartial,
-							context,
-							config,
-							stream,
-							requestSignal,
-						);
-						await finishChat(aborted);
-						return aborted;
-					}
 					if (next.done) break;
 
 					const event = next.value;
+					if (event.type === "done" || event.type === "error") {
+						let finalMessage = retainCompletedToolCalls(await response.result(), completedToolCallIds);
+						if (harmonyMitigationEnabled) {
+							const detection = detectHarmonyLeakInAssistantMessage(finalMessage);
+							if (detection) {
+								const recovered = recoverHarmonyToolCall(finalMessage, detection);
+								const removed = recovered?.removed ?? extractHarmonyRemoved(finalMessage, detection);
+								if (addedPartial) {
+									emitDiscardedHarmonyPartial(
+										partialMessage,
+										stream,
+										`Discarded after GPT-5 Harmony protocol leakage (${signalListLabel(detection.signals)})`,
+									);
+									context.messages.pop();
+									addedPartial = false;
+								}
+								throw new HarmonyLeakInterruption(detection, removed, recovered);
+							}
+						}
+						finalMessage = snapshotAssistantMessage(finalMessage);
+						if (addedPartial) {
+							context.messages[context.messages.length - 1] = finalMessage;
+						} else {
+							context.messages.push(finalMessage);
+						}
+						if (!addedPartial) {
+							stream.push({ type: "message_start", message: snapshotAssistantMessage(finalMessage) });
+						}
+						stream.push({ type: "message_end", message: snapshotAssistantMessage(finalMessage) });
+						await finishChat(finalMessage);
+						return finalMessage;
+					}
+					if (requestSignal?.aborted) {
+						return await finishAbortedStream();
+					}
+
 					// Yield to the event loop periodically to prevent busy-wait
 					// when the LLM is streaming chunks faster than the loop can rest.
 					await yieldIfDue();
@@ -925,7 +1089,7 @@ async function streamAssistantResponse(
 							partialMessage = event.partial;
 							context.messages.push(partialMessage);
 							addedPartial = true;
-							stream.push({ type: "message_start", message: { ...partialMessage } });
+							stream.push({ type: "message_start", message: snapshotAssistantMessage(partialMessage) });
 							break;
 
 						case "text_start":
@@ -938,71 +1102,47 @@ async function streamAssistantResponse(
 						case "toolcall_delta":
 						case "toolcall_end":
 							if (partialMessage) {
+								if (event.type === "toolcall_end") {
+									completedToolCallIds.add(event.toolCall.id);
+								}
 								partialMessage = event.partial;
 								context.messages[context.messages.length - 1] = partialMessage;
 								config.onAssistantMessageEvent?.(partialMessage, event);
-								if (signal?.aborted) {
-									continue;
-								}
 								stream.push({
 									type: "message_update",
-									assistantMessageEvent: event,
-									message: { ...partialMessage },
+									assistantMessageEvent: snapshotAssistantMessageEvent(event),
+									message: snapshotAssistantMessage(partialMessage),
 								});
-								if (event.type === "toolcall_end" && maxToolCallsPerTurn !== undefined) {
-									completedToolCalls++;
-									if (completedToolCalls >= maxToolCallsPerTurn) {
-										cappedMessage = cloneAssistantMessageForToolCallCap(partialMessage);
-										toolCallCapAbortController?.abort();
-										const capped = await finishCappedAssistantMessage();
-										if (capped) return capped;
-									}
-								}
 							}
 							break;
-
-						case "done":
-						case "error": {
-							const finalMessage = await response.result();
-							if (harmonyMitigationEnabled) {
-								const detection = detectHarmonyLeakInAssistantMessage(finalMessage);
-								if (detection) {
-									const removed = extractHarmonyRemoved(finalMessage, detection);
-									if (addedPartial) {
-										context.messages.pop();
-										addedPartial = false;
-									}
-									throw new HarmonyLeakInterruption(detection, removed);
-								}
-							}
-							if (addedPartial) {
-								context.messages[context.messages.length - 1] = finalMessage;
-							} else {
-								context.messages.push(finalMessage);
-							}
-							if (!addedPartial) {
-								stream.push({ type: "message_start", message: { ...finalMessage } });
-							}
-							stream.push({ type: "message_end", message: finalMessage });
-							await finishChat(finalMessage);
-							return finalMessage;
-						}
 					}
 				}
 			} finally {
 				detachAbortListener?.();
 			}
 
-			const trailing = await response.result();
+			let trailing = await response.result();
 			if (harmonyMitigationEnabled) {
 				const detection = detectHarmonyLeakInAssistantMessage(trailing);
 				if (detection) {
+					const recovered = recoverHarmonyToolCall(trailing, detection);
+					const removed = recovered?.removed ?? extractHarmonyRemoved(trailing, detection);
 					if (addedPartial) {
+						emitDiscardedHarmonyPartial(
+							partialMessage,
+							stream,
+							`Discarded after GPT-5 Harmony protocol leakage (${signalListLabel(detection.signals)})`,
+						);
 						context.messages.pop();
 						addedPartial = false;
 					}
-					throw new HarmonyLeakInterruption(detection, extractHarmonyRemoved(trailing, detection));
+					throw new HarmonyLeakInterruption(detection, removed, recovered);
 				}
+			}
+			trailing = snapshotAssistantMessage(trailing);
+			if (addedPartial) {
+				context.messages[context.messages.length - 1] = trailing;
+				stream.push({ type: "message_end", message: snapshotAssistantMessage(trailing) });
 			}
 			await finishChat(trailing);
 			return trailing;
@@ -1015,6 +1155,33 @@ async function streamAssistantResponse(
 		});
 		throw err;
 	}
+}
+
+function retainCompletedToolCalls(
+	message: AssistantMessage,
+	completedToolCallIds: ReadonlySet<string>,
+): AssistantMessage {
+	if (message.stopReason !== "error" && message.stopReason !== "aborted") return message;
+	let changed = false;
+	const content = message.content.filter(block => {
+		if (block.type !== "toolCall") return true;
+		const keep = completedToolCallIds.has(block.id);
+		if (!keep) changed = true;
+		return keep;
+	});
+	return changed ? { ...message, content } : message;
+}
+
+function emitDiscardedHarmonyPartial(
+	partialMessage: AssistantMessage | null,
+	stream: EventStream<AgentEvent, AgentMessage[]>,
+	errorMessage: string,
+): void {
+	if (!partialMessage) return;
+	stream.push({
+		type: "message_end",
+		message: snapshotAssistantMessage({ ...partialMessage, stopReason: "error", errorMessage }),
+	});
 }
 
 /** Resolve the human-readable reason an abort carried. A caller that aborts via
@@ -1032,16 +1199,31 @@ export function abortReasonText(signal: AbortSignal | undefined): string {
 	return "Request was aborted";
 }
 
+/** True when an abort carried a *deliberate*, human-meaningful reason — a string
+ *  reason or a non-`AbortError` `Error` (TTSR rule match, user-interrupt label).
+ *  A bare `abort()` (default `AbortError` `DOMException`) is anonymous and returns
+ *  false. Used to decide whether a mid-stream tool call survives the abort: a
+ *  deliberate interruption is a conscious decision made after the (partial) call
+ *  was observed, so the block is retained and paired with a labeled placeholder;
+ *  an anonymous abort drops incomplete calls whose args may be unsafe to replay. */
+function isExplicitAbortReason(signal: AbortSignal | undefined): boolean {
+	const reason = signal?.reason;
+	if (typeof reason === "string") return reason.trim().length > 0;
+	if (reason instanceof Error) return reason.name !== "AbortError" && reason.message.trim().length > 0;
+	return false;
+}
+
 function emitAbortedAssistantMessage(
 	partialMessage: AssistantMessage | null,
 	addedPartial: boolean,
+	completedToolCallIds: ReadonlySet<string>,
 	context: AgentContext,
 	config: AgentLoopConfig,
 	stream: EventStream<AgentEvent, AgentMessage[]>,
 	requestSignal: AbortSignal | undefined,
 ): AssistantMessage {
 	const errorMessage = abortReasonText(requestSignal);
-	const abortedMessage: AssistantMessage = partialMessage
+	const base: AssistantMessage = partialMessage
 		? { ...partialMessage, stopReason: "aborted", errorMessage }
 		: {
 				role: "assistant",
@@ -1061,13 +1243,19 @@ function emitAbortedAssistantMessage(
 				errorMessage,
 				timestamp: Date.now(),
 			};
+	// A deliberate, labeled abort (TTSR rule match, user interrupt) keeps every
+	// committed tool-call block so the loop pairs it with a placeholder labeled by
+	// `errorMessage`; an anonymous abort still drops calls that never completed
+	// (no `toolcall_end`), whose partial args are unsafe to replay.
+	const retained = isExplicitAbortReason(requestSignal) ? base : retainCompletedToolCalls(base, completedToolCallIds);
+	const abortedMessage = snapshotAssistantMessage(retained);
 	if (addedPartial) {
 		context.messages[context.messages.length - 1] = abortedMessage;
 	} else {
 		context.messages.push(abortedMessage);
-		stream.push({ type: "message_start", message: { ...abortedMessage } });
+		stream.push({ type: "message_start", message: snapshotAssistantMessage(abortedMessage) });
 	}
-	stream.push({ type: "message_end", message: abortedMessage });
+	stream.push({ type: "message_end", message: snapshotAssistantMessage(abortedMessage) });
 	return abortedMessage;
 }
 
@@ -1082,9 +1270,10 @@ async function executeToolCalls(
 	config: AgentLoopConfig,
 	telemetry: AgentTelemetry | undefined,
 	invokeAgentSpan: Span | undefined,
-): Promise<{ toolResults: ToolResultMessage[]; steeringMessages?: AgentMessage[] }> {
+): Promise<{ toolResults: ToolResultMessage[] }> {
 	const tools = currentContext.tools;
 	const {
+		hasSteeringMessages,
 		getSteeringMessages,
 		interruptMode = "immediate",
 		getToolContext,
@@ -1104,8 +1293,6 @@ async function executeToolCalls(
 		? AbortSignal.any([signal, steeringAbortController.signal])
 		: steeringAbortController.signal;
 	const interruptState = { triggered: false };
-	let steeringMessages: AgentMessage[] | undefined;
-	let steeringCheck: Promise<void> | null = null;
 
 	const records = toolCalls.map(toolCall => ({
 		toolCall,
@@ -1126,24 +1313,31 @@ async function executeToolCalls(
 	}));
 
 	const checkSteering = async (): Promise<void> => {
-		if (!shouldInterruptImmediately || !getSteeringMessages || interruptState.triggered) {
+		// `signal` (external/user abort) is checked separately from the internal
+		// steeringAbortController: once the run is externally aborted it is
+		// unwinding and the interrupt would be redundant.
+		if (!shouldInterruptImmediately || interruptState.triggered || signal?.aborted) {
 			return;
 		}
-		if (steeringCheck) {
-			await steeringCheck;
+		// Prefer the non-consuming peek (`hasSteeringMessages`) when available.
+		// Fall back to calling `getSteeringMessages` directly when only it is
+		// provided (e.g. in tests or minimal integrations without a separate
+		// peek function). In that case the message is consumed here rather than
+		// at the outer injection boundary, but the interrupt still fires.
+		let hasMessages: boolean;
+		if (hasSteeringMessages) {
+			hasMessages = await hasSteeringMessages();
+		} else if (getSteeringMessages) {
+			const msgs = await getSteeringMessages();
+			hasMessages = (msgs?.length ?? 0) > 0;
+		} else {
 			return;
 		}
-		steeringCheck = (async () => {
-			const steering = await getSteeringMessages();
-			if (steering.length > 0) {
-				steeringMessages = steering;
-				interruptState.triggered = true;
-				steeringAbortController.abort();
-			}
-		})().finally(() => {
-			steeringCheck = null;
-		});
-		await steeringCheck;
+		if (hasMessages) {
+			if (interruptState.triggered || signal?.aborted) return;
+			interruptState.triggered = true;
+			steeringAbortController.abort();
+		}
 	};
 
 	const emitToolResult = (record: (typeof records)[number], result: AgentToolResult<any>, isError: boolean): void => {
@@ -1173,6 +1367,7 @@ async function executeToolCalls(
 			content: result.content,
 			details: result.details,
 			isError,
+			...(result.useless && !isError ? { useless: true } : {}),
 			timestamp: Date.now(),
 		};
 		record.result = result;
@@ -1215,6 +1410,16 @@ async function executeToolCalls(
 			}
 		}
 		record.args = argsForExecution;
+		if (toolSignal.aborted) {
+			record.skipped = true;
+			recordSkippedTool(telemetry, {
+				toolCallId: toolCall.id,
+				toolName: toolCall.name,
+				status: "aborted",
+			});
+			emitToolResult(record, createToolSignalAbortedResult(toolSignal), true);
+			return;
+		}
 		record.started = true;
 		stream.push({
 			type: "tool_execution_start",
@@ -1238,10 +1443,16 @@ async function executeToolCalls(
 		let result: AgentToolResult<any> = { content: [], details: {} };
 		let isError = false;
 		let caughtError: unknown;
+		let completedToolExecution = false;
 
 		await runInActiveSpan(toolSpan, async () => {
 			try {
 				if (!tool) throw new Error(`Tool ${toolCall.name} not found`);
+				if (toolSignal.aborted) {
+					result = createToolSignalAbortedResult(toolSignal);
+					isError = true;
+					return;
+				}
 
 				let effectiveArgs: Record<string, unknown>;
 				try {
@@ -1268,8 +1479,15 @@ async function executeToolCalls(
 						throw new ToolCallBlockedError(beforeResult.reason);
 					}
 				}
-				// Reflect post-hook args so emitted tool results / afterToolCall see what actually executed.
-				record.args = effectiveArgs;
+				if (toolSignal.aborted) {
+					result = createToolSignalAbortedResult(toolSignal);
+					isError = true;
+					return;
+				}
+				const executionArgs = transformToolCallArguments
+					? transformToolCallArguments(effectiveArgs, toolCall.name)
+					: effectiveArgs;
+				record.args = executionArgs;
 
 				const toolContext = getToolContext
 					? getToolContext({
@@ -1281,19 +1499,20 @@ async function executeToolCalls(
 					: undefined;
 				const rawResult = await tool.execute(
 					toolCall.id,
-					transformToolCallArguments ? transformToolCallArguments(effectiveArgs, toolCall.name) : effectiveArgs,
-					tool.nonAbortable ? undefined : toolSignal,
+					executionArgs,
+					toolSignal,
 					partialResult => {
 						stream.push({
 							type: "tool_execution_update",
 							toolCallId: toolCall.id,
 							toolName: toolCall.name,
-							args: effectiveArgs,
+							args: executionArgs,
 							partialResult: coerceToolResult(partialResult).result,
 						});
 					},
 					toolContext,
 				);
+				completedToolExecution = true;
 				const coerced = coerceToolResult(rawResult);
 				result = coerced.result;
 				if (coerced.malformed || result.isError) isError = true;
@@ -1306,7 +1525,7 @@ async function executeToolCalls(
 				isError = true;
 			}
 
-			if (afterToolCall) {
+			if (afterToolCall && (!toolSignal.aborted || completedToolExecution)) {
 				try {
 					const after = await afterToolCall(
 						{
@@ -1320,12 +1539,18 @@ async function executeToolCalls(
 						toolSignal,
 					);
 					if (after) {
-						result = {
+						// Re-normalize the post-hook result: `afterToolCall` is untyped user/extension
+						// code and may return malformed `content` (non-array / invalid blocks), which
+						// would otherwise be persisted verbatim and corrupt the session — the same
+						// hazard `coerceToolResult` guards on the execute path.
+						const coerced = coerceToolResult({
 							content: after.content ?? result.content,
 							details: after.details ?? result.details,
 							isError: after.isError ?? result.isError,
-						};
-						isError = after.isError ?? isError;
+							useless: after.useless ?? result.useless,
+						});
+						result = coerced.result;
+						isError = coerced.malformed || (after.isError ?? isError);
 					}
 				} catch (e) {
 					caughtError = e;
@@ -1339,23 +1564,30 @@ async function executeToolCalls(
 		});
 
 		const interrupted = interruptState.triggered;
-		if (interrupted) {
+		const abortedDuringExecution = toolSignal.aborted && isError;
+		if (interrupted && isError) {
+			// Steering/abort fired AND this tool failed — it was cut off before producing a
+			// usable result, so report it as skipped.
 			record.skipped = true;
 			emitToolResult(record, createSkippedToolResult(), true);
 		} else {
+			// No interrupt, or the tool finished (successfully or with a genuine error) before
+			// the interrupt landed. Keep its real result: a completed tool already ran its side
+			// effects, so the model must see what actually happened rather than a false "skipped".
 			emitToolResult(record, result, isError);
 		}
 
 		const firstTextBlock = result.content?.[0];
 		const errorMessageForSpan =
 			caughtError === undefined && isError && firstTextBlock?.type === "text" ? firstTextBlock.text : undefined;
-		const status = interrupted
-			? "aborted"
-			: caughtError instanceof ToolCallBlockedError
-				? "blocked"
-				: isError
-					? "error"
-					: "ok";
+		const status =
+			(interrupted && isError) || abortedDuringExecution
+				? "aborted"
+				: caughtError instanceof ToolCallBlockedError
+					? "blocked"
+					: isError
+						? "error"
+						: "ok";
 		finishExecuteToolSpan(telemetry, toolSpan, {
 			result,
 			isError,
@@ -1375,7 +1607,19 @@ async function executeToolCalls(
 
 	for (let index = 0; index < records.length; index++) {
 		const record = records[index];
-		const concurrency = record.tool?.concurrency ?? "shared";
+		const concurrencyMode = record.tool?.concurrency;
+		let concurrency: "shared" | "exclusive";
+		if (typeof concurrencyMode === "function") {
+			// Resolved from raw pre-validation args; a throwing resolver must not
+			// take down the whole batch, so fall back to the safe (serial) mode.
+			try {
+				concurrency = concurrencyMode(record.args);
+			} catch {
+				concurrency = "exclusive";
+			}
+		} else {
+			concurrency = concurrencyMode ?? "shared";
+		}
 		const start = concurrency === "exclusive" ? Promise.all([lastExclusive, ...sharedTasks]) : lastExclusive;
 		const task = start.then(() => runTool(record, index));
 		tasks.push(task);
@@ -1404,7 +1648,7 @@ async function executeToolCalls(
 		}
 	}
 
-	return { toolResults: emittedToolResults, steeringMessages };
+	return { toolResults: emittedToolResults };
 }
 
 /**
@@ -1459,6 +1703,14 @@ function createAbortedToolResult(
 	stream.push({ type: "message_end", message: toolResultMessage });
 
 	return toolResultMessage;
+}
+
+function createToolSignalAbortedResult(signal: AbortSignal): AgentToolResult<unknown> {
+	const reason = abortReasonText(signal);
+	return {
+		content: [{ type: "text", text: `Tool was not executed because the run was aborted: ${reason}.` }],
+		details: {},
+	};
 }
 
 function createSkippedToolResult(): AgentToolResult<any> {

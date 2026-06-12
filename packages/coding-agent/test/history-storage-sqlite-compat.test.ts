@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { HistoryStorage } from "../src/session/history-storage";
+import { HistoryStorage } from "@oh-my-pi/pi-coding-agent/session/history-storage";
 import { readTableSql } from "./helpers/sqlite-inspect";
 
 const LEGACY_TIMESTAMP = 1_700_000_000;

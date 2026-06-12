@@ -14,10 +14,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import type { ChildProcess } from "node:child_process";
 import { execSync, spawn } from "node:child_process";
-import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import { complete } from "@oh-my-pi/pi-ai/stream";
 import type { AssistantMessage, Context, Model, Usage } from "@oh-my-pi/pi-ai/types";
 import { isContextOverflow } from "@oh-my-pi/pi-ai/utils/overflow";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { $which } from "@oh-my-pi/pi-utils";
 import { e2eApiKey, resolveApiKey } from "./oauth";
 
@@ -593,7 +594,7 @@ describe("Context overflow error handling", () => {
 				setTimeout(checkServer, 1000);
 			});
 
-			model = {
+			model = buildModel({
 				id: "gpt-oss:20b",
 				api: "openai-completions",
 				provider: "ollama",
@@ -604,7 +605,7 @@ describe("Context overflow error handling", () => {
 				maxTokens: 16000,
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 				name: "Ollama GPT-OSS 20B",
-			};
+			});
 		}, 60000);
 
 		afterAll(() => {
@@ -640,7 +641,7 @@ describe("Context overflow error handling", () => {
 	describe.skipIf(lmStudioModel === undefined)("LM Studio (local)", () => {
 		it("should detect overflow via isContextOverflow", async () => {
 			if (!lmStudioModel) return;
-			const model: Model<"openai-completions"> = {
+			const model: Model<"openai-completions"> = buildModel({
 				id: lmStudioModel.id,
 				api: "openai-completions",
 				provider: "lm-studio",
@@ -651,7 +652,7 @@ describe("Context overflow error handling", () => {
 				maxTokens: 2048,
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 				name: lmStudioModel.name,
-			};
+			});
 
 			const result = await testContextOverflow(model, Bun.env.LM_STUDIO_API_KEY || "lm-studio");
 			logResult(result);
@@ -676,7 +677,7 @@ describe("Context overflow error handling", () => {
 	describe.skipIf(!llamaCppRunning)("llama.cpp (local)", () => {
 		it("should detect overflow via isContextOverflow", async () => {
 			// Using small context (4096) to match server --ctx-size setting
-			const model: Model<"openai-completions"> = {
+			const model: Model<"openai-completions"> = buildModel({
 				id: "local-model",
 				api: "openai-completions",
 				provider: "llama.cpp",
@@ -687,7 +688,7 @@ describe("Context overflow error handling", () => {
 				maxTokens: 2048,
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 				name: "llama.cpp Local Model",
-			};
+			});
 
 			const result = await testContextOverflow(model, "llama.cpp");
 			logResult(result);

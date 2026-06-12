@@ -2,6 +2,91 @@
 
 ## [Unreleased]
 
+## [15.12.0] - 2026-06-12
+
+### Changed
+
+- Condensed all parser/applier/patcher error and warning messages: shorter wording, same diagnostic anchors (op names, line numbers, suggested fallback forms)
+
+## [15.11.4] - 2026-06-12
+
+### Added
+
+- Added inward landing correction for `insert after block N:`: a body indented deeper than the block's closing line now slides back across the block's trailing closer lines and lands inside the block at its claimed depth, with a warning naming the landing line. Same conservative guards as the outward shift — comparable indentation only, closers only, abandoned when another hunk targets a crossed line; plain `insert after M:` stays literal
+- Added closer-anchor lowering for `insert after block N:`: anchoring on a pure closing-delimiter line (where no block begins, so resolution previously failed the whole patch) now applies as plain `insert after N:` with a warning teaching the opener-only rule. `resolveBlockEdits` gained an `onWarning` callback; apply, preview, and patcher paths surface it on `warnings`
+
+### Changed
+
+- Condensed the edit-tool prompt: one-line op definitions, 5–20-word rules, and a tighter `<critical>` recap; landing-correction mechanics are no longer described to the agent
+
+## [15.11.1] - 2026-06-11
+
+### Fixed
+
+- Fixed the `insert after block N:` prompt guidance so it explicitly says N must be the block opener, not the closing delimiter or last visible line, and points visible closing-line edits to plain `insert after M:`. ([#2292](https://github.com/can1357/oh-my-pi/issues/2292))
+
+## [15.11.0] - 2026-06-10
+
+### Changed
+
+- Block-unresolved errors (`replace block N:` / `delete block N` / `insert after block N:` failing to resolve a syntactic block) now append a numbered preview of the file around the anchor line — same `*`-marked context rows the hash-mismatch error shows — so the offending line is visible without a re-read
+
+## [15.10.11] - 2026-06-10
+
+### Breaking Changes
+
+- Changed `BlockResolution.isDelete` to `BlockResolution.op` (`"replace" | "delete" | "insert_after"`) so resolutions can describe every block-anchored op
+
+### Added
+
+- Added `insert after block N:` patch syntax to insert body rows after the last line of the tree-sitter-resolved block beginning on line N, so a statement can be placed after a construct without counting to its closing line
+- Added depth-guided landing correction for `insert after N:` hunks: a body indented shallower than its anchor line slides past the structural closer lines below the anchor until depth returns to the body's level, with a warning naming the final landing line. The shift never crosses content lines, skips incomparable indentation styles and pure-closer bodies, and is abandoned when another hunk targets a crossed line
+- Added a global byte ceiling to `InMemorySnapshotStore` (`maxTotalBytes`, default 64 MiB): the cap was previously per-file only, so a session reading many large files retained up to 30 paths × 4 full-text versions indefinitely
+
+### Changed
+
+- Trimmed the `replace block N:` ops entry in the patch prompt to grammar and pointing rules; the usage doctrine it duplicated stays in the rules section
+- Changed `buildCompactDiffPreview` to treat blank rows as gap separators alongside `…` markers: separators never stack (removed lines omitted from the preview no longer leave two adjacent), and leading/trailing separators are trimmed
+
+### Fixed
+
+- Fixed the boundary-echo repair stripping payload edges without the balance-neutrality guard its own documentation promised: in brace-heavy code where bare `}` lines repeat, a payload intentionally beginning/ending with lines identical to the range's neighbors had both edges silently dropped, writing content that differed from what was authored
+- Fixed lenient bare-body handling silently mutating payloads: interior blank rows in an un-prefixed body were dropped outright, and a body of numeric-keyed literals (`1: "one"` dict/YAML shapes) satisfied the uniform line-prefix check and had its keys stripped from every line — blank rows are now preserved when proven interior, and the uniform strip refuses lone-literal remainders
+- Fixed the multi-section "all-or-nothing" claim being false for write failures: commits run serially, so a mid-batch write error left earlier sections on disk while the thrown error said nothing — the error now lists exactly which sections were written and which were not
+- Fixed `delete`/`replace` ranges ending on the phantom trailing line of a newline-terminated file silently stripping the file's final newline; such anchors are now rejected with guidance toward `N-1` / `insert tail:` (inserts there remain valid, and genuine empty last lines of unterminated files stay deletable)
+
+## [15.10.5] - 2026-06-08
+
+### Added
+
+- Added `maxAddedRunContext` option to control how many added lines are shown at each side of collapsed inserted runs, with `maxUnchangedRun` kept as a backward-compatible alias
+
+### Changed
+
+- Changed `buildCompactDiffPreview` to omit removed lines from the preview while preserving removal counts for offset tracking
+- Changed `buildCompactDiffPreview` to collapse long contiguous added runs with a bare `…` marker, keeping only the first and last `maxAddedRunContext` lines visible (the surrounding line numbers convey how many were elided)
+
+### Fixed
+
+- Fixed compact edit previews to omit deleted content, keep visible lines anchored to the current file, and collapse long inserted runs with a bare `…` elision marker.
+- Fixed compact edit previews to render added/current lines without diff-prefix padding and normalize adjacent ASCII/Unicode elision markers to one `…`.
+
+## [15.10.3] - 2026-06-08
+
+### Added
+
+- Added a `BlockResolution` type and surfaced resolved block spans on `ApplyResult.blockResolutions` / `PatchSectionResult.blockResolutions`. `resolveBlockEdits` now accepts an `onResolved` callback that reports each `replace block N:` / `delete block N` anchor's resolved `[start, end]` span (and whether it was a delete). Spans are surfaced only on the no-drift apply paths, where the resolved line numbers line up with the tag the caller read.
+
+### Changed
+
+- Reworked the `edit` tool prompt (`prompt.md`): added a `replace block N` vs `replace N..M` decision rule, documented that a leading decorator/attribute/doc-comment is a separate node not swept into the block (point N at the first decorator line, or use `replace N..M` for a Rust-style `///` sibling comment), reframed the blast-radius guidance so "block replace" no longer reads as the dangerous option, and added a decorated-definition example.
+
+## [15.10.2] - 2026-06-08
+
+### Fixed
+
+- Stripped read-output line-number prefixes (`N:`) from auto-piped bare body rows so that pasting `3:text` without a `+` prefix no longer injects `3:` as literal content. Stripping is applied only when *every* bare row in the hunk carries the prefix (the signature of a pasted snapshot) and removes at most one prefix per row, so a genuine body that merely starts with `digits:` (YAML port maps, timestamps) is left intact ([#1492](https://github.com/can1357/oh-my-pi/issues/1492)).
+
 ## [15.9.67] - 2026-06-06
 
 ### Breaking Changes
@@ -40,7 +125,7 @@
 ### Added
 
 - Added `maxPaths` and `maxVersionsPerPath` options to `InMemorySnapshotStore` to bound tracked paths and per-path snapshot history
-- Re-introduced balance-validated boundary repair in `applyEdits`. A replacement hunk (`replace N..M:` + body) is normalized so its payload preserves the deleted region's delimiter balance: when the body restates a closing delimiter that survives just outside the range (duplicate `}` / `);` / `]`) the echo is dropped, and when the range deletes a structural closer the body never restates (missing closer) the closer is spared instead of deleted. A repair fires only when one boundary operation drives the per-channel `()` / `[]` / `{}` imbalance to exactly zero while leaving surrounding text byte-identical (single-line ops are limited to pure structural-closer lines), so balance-preserving edits and intentional balanced duplicates are never touched. Bracket counting skips strings, template literals, and comments. Each repair surfaces a `delimiter-balance` warning through `ApplyResult.warnings`.
+- Re-introduced balance-validated boundary repair in `applyEdits`. A replacement hunk (`replace N..M:` + body) is normalized so its payload preserves the deleted region's delimiter balance: when the body restates a closing delimiter that survives just outside the range (duplicate `}` / `);` / `]`) the echo is dropped, and when the range deletes a structural closer the body never restates (missing closer) the closer is spared instead of deleted. A repair fires only when one boundary operation drives the per-channel `()` / `[]` / `{}` imbalance to exactly zero while leaving surrounding text byte-identical (single-line ops are limited to pure structural-closer lines), so balance-preserving edits and intentional balanced duplicates are never touched. Bracket couples are also bounded by line count: structural balance delta repair is capped to 10 duplicate lines across all channels combined, massive balanced blocks are skipped.
 
 ### Changed
 

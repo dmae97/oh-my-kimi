@@ -1,13 +1,11 @@
-import { afterEach, describe, expect, it } from "bun:test";
-import { getBundledModel } from "../src/models";
+import { describe, expect, it } from "bun:test";
 import {
-	getOpenAICompletionsStreamIdleTimeoutFallbackMs,
 	isOpenAICompletionsProgressChunk,
 	streamOpenAICompletions,
-} from "../src/providers/openai-completions";
-import type { Context, Model } from "../src/types";
-
-const originalFetch = global.fetch;
+} from "@oh-my-pi/pi-ai/providers/openai-completions";
+import type { Context, FetchImpl, Model, ModelSpec } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 
 const openAICompletionsModel = {
 	...(getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">),
@@ -80,36 +78,103 @@ function createKeepaliveOnlyCompletionsResponse(modelId: string, signal: AbortSi
 	});
 }
 
-afterEach(() => {
-	global.fetch = originalFetch;
-});
-describe("getOpenAICompletionsStreamIdleTimeoutFallbackMs", () => {
+describe("resolveOpenAICompat stream idle timeout", () => {
 	it("widens GLM 5.1 coding-plan stream watchdogs", () => {
-		const model = {
+		const model = buildModel({
 			...openAICompletionsModel,
 			id: "glm-5.1",
 			name: "GLM-5.1",
 			provider: "zhipu-coding-plan",
 			baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4",
-		} satisfies Model<"openai-completions">;
+			compat: openAICompletionsModel.compatConfig,
+		} as ModelSpec<"openai-completions">);
 
-		expect(getOpenAICompletionsStreamIdleTimeoutFallbackMs(model)).toBe(600_000);
+		expect(model.compat.streamIdleTimeoutMs).toBe(600_000);
 	});
 
 	it("also widens custom Z.AI OpenAI-compatible GLM 5.1 endpoints", () => {
-		const model = {
+		const model = buildModel({
 			...openAICompletionsModel,
 			id: "glm-5.1",
 			name: "GLM-5.1",
 			provider: "openai",
 			baseUrl: "https://api.z.ai/api/coding/paas/v4",
-		} satisfies Model<"openai-completions">;
+			compat: openAICompletionsModel.compatConfig,
+		} as ModelSpec<"openai-completions">);
 
-		expect(getOpenAICompletionsStreamIdleTimeoutFallbackMs(model)).toBe(600_000);
+		expect(model.compat.streamIdleTimeoutMs).toBe(600_000);
+	});
+
+	it("widens DeepSeek V4 reasoning streams on the official DeepSeek API", () => {
+		const model = buildModel({
+			...openAICompletionsModel,
+			id: "deepseek-v4-pro",
+			name: "DeepSeek V4 Pro",
+			provider: "deepseek",
+			baseUrl: "https://api.deepseek.com",
+			reasoning: true,
+			compat: openAICompletionsModel.compatConfig,
+		} as ModelSpec<"openai-completions">);
+
+		expect(model.compat.streamIdleTimeoutMs).toBe(300_000);
+	});
+
+	it("widens DeepSeek reasoning streams routed through an aliased OpenAI-compatible provider id", () => {
+		const model = buildModel({
+			...openAICompletionsModel,
+			id: "deepseek-v4-pro",
+			name: "DeepSeek V4 Pro",
+			provider: "openai",
+			baseUrl: "https://api.deepseek.com/v1",
+			reasoning: true,
+			compat: openAICompletionsModel.compatConfig,
+		} as ModelSpec<"openai-completions">);
+
+		expect(model.compat.streamIdleTimeoutMs).toBe(300_000);
+	});
+
+	it("widens Kimi K2.6 reasoning streams across OpenAI-compatible hosts", () => {
+		const bundled = getBundledModel<"openai-completions">("firepass", "kimi-k2.6-turbo");
+		const canonicalRouter = buildModel({
+			...bundled,
+			id: "accounts/fireworks/routers/kimi-k2p6-turbo",
+			compat: bundled.compatConfig,
+		} as ModelSpec<"openai-completions">);
+
+		expect(bundled.compat.streamIdleTimeoutMs).toBe(300_000);
+		expect(canonicalRouter.compat.streamIdleTimeoutMs).toBe(300_000);
+	});
+
+	it("leaves non-reasoning DeepSeek-hosted models on the global timeout", () => {
+		const model = buildModel({
+			...openAICompletionsModel,
+			id: "deepseek-chat",
+			name: "DeepSeek Chat",
+			provider: "deepseek",
+			baseUrl: "https://api.deepseek.com",
+			reasoning: false,
+			compat: openAICompletionsModel.compatConfig,
+		} as ModelSpec<"openai-completions">);
+
+		expect(model.compat.streamIdleTimeoutMs).toBeUndefined();
+	});
+
+	it("does not widen DeepSeek V4 reasoning models hosted on third-party OpenAI-compatible proxies", () => {
+		const model = buildModel({
+			...openAICompletionsModel,
+			id: "deepseek-v4-pro",
+			name: "DeepSeek V4 Pro",
+			provider: "aimlapi",
+			baseUrl: "https://api.aimlapi.com/v1",
+			reasoning: true,
+			compat: openAICompletionsModel.compatConfig,
+		} as ModelSpec<"openai-completions">);
+
+		expect(model.compat.streamIdleTimeoutMs).toBeUndefined();
 	});
 
 	it("keeps ordinary OpenAI-compatible models on the global timeout", () => {
-		expect(getOpenAICompletionsStreamIdleTimeoutFallbackMs(openAICompletionsModel)).toBeUndefined();
+		expect(openAICompletionsModel.compat.streamIdleTimeoutMs).toBeUndefined();
 	});
 });
 
@@ -278,13 +343,14 @@ describe("isOpenAICompletionsProgressChunk", () => {
 });
 describe("provider integration", () => {
 	it("times out a completions stream whose keepalives never make progress", async () => {
-		global.fetch = ((input: string | URL | Request, init?: RequestInit) =>
+		const fetchMock: FetchImpl = (input: string | URL | Request, init?: RequestInit) =>
 			Promise.resolve(
 				createKeepaliveOnlyCompletionsResponse(openAICompletionsModel.id, getRequestSignal(input, init)),
-			)) as typeof fetch;
+			);
 
 		const result = await streamOpenAICompletions(openAICompletionsModel, baseContext(), {
 			apiKey: "test-key",
+			fetch: fetchMock,
 			streamFirstEventTimeoutMs: 1_000,
 			streamIdleTimeoutMs: 20,
 		}).result();

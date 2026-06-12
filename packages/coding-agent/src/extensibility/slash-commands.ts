@@ -1,14 +1,8 @@
-import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
 import { parseFrontmatter, prompt } from "@oh-my-pi/pi-utils";
 import { slashCommandCapability } from "../capability/slash-command";
 import { appendInlineArgsFallback, templateUsesInlineArgPlaceholders } from "../config/prompt-templates";
 import type { SlashCommand } from "../discovery";
 import { loadCapability } from "../discovery";
-import {
-	BUILTIN_SLASH_COMMAND_DEFS,
-	type BuiltinSlashCommand,
-	type SubcommandDef,
-} from "../slash-commands/builtin-registry";
 import { EMBEDDED_COMMAND_TEMPLATES } from "../task/commands";
 import { parseCommandArgs, substituteArgs } from "../utils/command-args";
 
@@ -24,97 +18,7 @@ export interface SlashCommandInfo {
 	path?: string;
 }
 
-export type { BuiltinSlashCommand, SubcommandDef } from "../slash-commands/builtin-registry";
-
-/**
- * Build getArgumentCompletions from declarative subcommand definitions.
- * Returns subcommand names filtered by prefix in the dropdown.
- */
-function buildArgumentCompletions(subcommands: SubcommandDef[]): (prefix: string) => AutocompleteItem[] | null {
-	return (argumentPrefix: string) => {
-		if (argumentPrefix.includes(" ")) return null; // past the subcommand
-		const lower = argumentPrefix.toLowerCase();
-		const matches = subcommands
-			.filter(s => s.name.startsWith(lower))
-			.map(s => ({
-				value: `${s.name} `,
-				label: s.name,
-				description: s.description,
-				hint: s.usage,
-			}));
-		return matches.length > 0 ? matches : null;
-	};
-}
-
-/**
- * Build getInlineHint from declarative subcommand definitions.
- * Shows remaining completion + usage as dim ghost text after cursor.
- */
-function buildSubcommandInlineHint(subcommands: SubcommandDef[]): (argumentText: string) => string | null {
-	return (argumentText: string) => {
-		const trimmed = argumentText.trimStart();
-		const spaceIndex = trimmed.indexOf(" ");
-
-		if (spaceIndex === -1) {
-			// Still typing subcommand name — show remaining chars + usage
-			const prefix = trimmed.toLowerCase();
-			if (prefix.length === 0) return null;
-			const match = subcommands.find(s => s.name.startsWith(prefix));
-			if (!match) return null;
-			const remaining = match.name.slice(prefix.length);
-			return remaining + (match.usage ? ` ${match.usage}` : "");
-		}
-
-		// Subcommand typed — show remaining usage params
-		const subName = trimmed.slice(0, spaceIndex).toLowerCase();
-		const afterSub = trimmed.slice(spaceIndex + 1);
-		const sub = subcommands.find(s => s.name === subName);
-		if (!sub?.usage) return null;
-
-		if (afterSub.length > 0) {
-			const usageParts = sub.usage.split(" ");
-			const inputParts = afterSub.trim().split(/\s+/);
-			const remaining = usageParts.slice(inputParts.length);
-			return remaining.length > 0 ? remaining.join(" ") : null;
-		}
-
-		return sub.usage;
-	};
-}
-
-/**
- * Build getInlineHint for commands with a simple static hint string.
- * Shows the hint only when no arguments have been typed yet.
- */
-function buildStaticInlineHint(hint: string): (argumentText: string) => string | null {
-	return (argumentText: string) => (argumentText.trim().length === 0 ? hint : null);
-}
-
-/**
- * Materialized builtin slash commands with completion functions derived from
- * declarative subcommand/hint definitions.
- */
-export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<
-	BuiltinSlashCommand & {
-		getArgumentCompletions?: (prefix: string) => AutocompleteItem[] | null;
-		getInlineHint?: (argumentText: string) => string | null;
-	}
-> = BUILTIN_SLASH_COMMAND_DEFS.map(cmd => {
-	if (cmd.subcommands) {
-		return {
-			...cmd,
-			getArgumentCompletions: buildArgumentCompletions(cmd.subcommands),
-			getInlineHint: buildSubcommandInlineHint(cmd.subcommands),
-		};
-	}
-	if (cmd.inlineHint) {
-		return {
-			...cmd,
-			getInlineHint: buildStaticInlineHint(cmd.inlineHint),
-		};
-	}
-	return cmd;
-});
+export type { BuiltinSlashCommand, SubcommandDef } from "../slash-commands/types";
 
 /**
  * Represents a custom slash command loaded from a file

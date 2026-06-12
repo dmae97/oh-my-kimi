@@ -43,6 +43,7 @@ export class MemoryRecallTool implements AgentTool<typeof memoryRecallSchema> {
 						return {
 							content: [{ type: "text", text: "No relevant memories found." }],
 							details: {},
+							useless: true,
 						};
 					}
 					const formatted = state.formatScopedRecallWithIds(results);
@@ -79,6 +80,7 @@ export class MemoryRecallTool implements AgentTool<typeof memoryRecallSchema> {
 					return {
 						content: [{ type: "text", text: "No relevant memories found." }],
 						details: {},
+						useless: true,
 					};
 				}
 				const formatted = formatMemories(results);

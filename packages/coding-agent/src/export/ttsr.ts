@@ -5,6 +5,8 @@
  * the agent's output. When a match occurs, the stream is aborted, the rule is
  * injected as a system reminder, and the request is retried.
  */
+import * as path from "node:path";
+import { AstMatchStrictness, astMatch } from "@oh-my-pi/pi-natives";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { Rule } from "../capability/rule";
 import type { TtsrSettings } from "../config/settings";
@@ -38,6 +40,8 @@ interface TtsrScope {
 interface TtsrEntry {
 	rule: Rule;
 	conditions: RegExp[];
+	/** ast-grep pattern strings; matched only against edit/write tool snapshots. */
+	astConditions: string[];
 	scope: TtsrScope;
 	globalPathGlobs?: Bun.Glob[];
 }
@@ -70,6 +74,8 @@ export class TtsrManager {
 	readonly #rules = new Map<string, TtsrEntry>();
 	readonly #injectionRecords = new Map<string, InjectionRecord>();
 	readonly #buffers = new Map<string, string>();
+	/** Last snapshot evaluated for AST conditions, keyed by stream key, to dedupe matcher runs. */
+	readonly #lastAstSnapshots = new Map<string, string>();
 	#messageCount = 0;
 
 	constructor(settings?: TtsrSettings) {
@@ -302,7 +308,8 @@ export class TtsrManager {
 		}
 
 		const conditions = this.#compileConditions(rule);
-		if (conditions.length === 0) {
+		const astConditions = (rule.astCondition ?? []).map(pattern => pattern.trim()).filter(p => p.length > 0);
+		if (conditions.length === 0 && astConditions.length === 0) {
 			return false;
 		}
 
@@ -318,6 +325,7 @@ export class TtsrManager {
 		this.#rules.set(rule.name, {
 			rule,
 			conditions,
+			astConditions,
 			scope,
 			globalPathGlobs,
 		});
@@ -325,6 +333,7 @@ export class TtsrManager {
 		logger.debug("TTSR rule registered", {
 			ruleName: rule.name,
 			conditions: rule.condition,
+			astConditions: rule.astCondition,
 			scope: rule.scope,
 			globs: rule.globs,
 		});
@@ -357,6 +366,112 @@ export class TtsrManager {
 		const bufferKey = this.#bufferKey(context);
 		this.#buffers.set(bufferKey, snapshot);
 		return this.#matchBuffer(snapshot, context);
+	}
+
+	/** Derive an ast-grep language alias from candidate paths (bare extension, e.g. "ts"), if any. */
+	#deriveLang(filePaths: string[] | undefined): string | undefined {
+		for (const filePath of filePaths ?? []) {
+			const ext = path.extname(this.#normalizePath(filePath));
+			if (ext.length > 1) {
+				return ext.slice(1).toLowerCase();
+			}
+		}
+		return undefined;
+	}
+
+	/**
+	 * Evaluate ast-grep `astCondition` rules against a reconstructed tool snapshot.
+	 *
+	 * Only edit/write tool streams reach here (AST conditions need a language, which
+	 * we infer from the file extension on the tool's path argument). The snapshot is
+	 * matched in memory by the native engine (`astMatch`), so this is async and
+	 * intentionally throttled: identical consecutive snapshots (the common case when
+	 * only non-source arguments change between deltas) are skipped.
+	 */
+	async checkAstSnapshot(snapshot: string, context: TtsrMatchContext): Promise<Rule[]> {
+		if (!this.#settings.enabled || context.source !== "tool") {
+			return [];
+		}
+
+		const lang = this.#deriveLang(context.filePaths);
+		if (!lang) {
+			return [];
+		}
+
+		const candidates: TtsrEntry[] = [];
+		for (const [name, entry] of this.#rules) {
+			if (entry.astConditions.length === 0) {
+				continue;
+			}
+			if (
+				!this.#canTrigger(name) ||
+				!this.#matchesScope(entry, context) ||
+				!this.#matchesGlobalPaths(entry, context)
+			) {
+				continue;
+			}
+			candidates.push(entry);
+		}
+		if (candidates.length === 0) {
+			return [];
+		}
+
+		// Throttle: skip re-running the matcher when the source content is unchanged.
+		const bufferKey = this.#bufferKey(context);
+		if (this.#lastAstSnapshots.get(bufferKey) === snapshot) {
+			return [];
+		}
+		this.#lastAstSnapshots.set(bufferKey, snapshot);
+
+		const matches: Rule[] = [];
+		for (const entry of candidates) {
+			if (await this.#astConditionsMatch(entry.astConditions, snapshot, lang)) {
+				matches.push(entry.rule);
+				logger.debug("TTSR ast condition matched", {
+					ruleName: entry.rule.name,
+					astConditions: entry.rule.astCondition,
+					toolName: context.toolName,
+					filePaths: context.filePaths,
+				});
+			}
+		}
+		return matches;
+	}
+
+	async #astConditionsMatch(patterns: string[], source: string, lang: string): Promise<boolean> {
+		try {
+			const result = await astMatch({
+				patterns,
+				source,
+				lang,
+				strictness: AstMatchStrictness.Smart,
+				limit: 1,
+			});
+			if (result.parseErrors && result.parseErrors.length > 0) {
+				logger.debug("TTSR ast match reported parse errors", { parseErrors: result.parseErrors });
+			}
+			return result.totalMatches > 0;
+		} catch (error) {
+			logger.warn("TTSR ast match failed, treating as no match", {
+				patterns,
+				lang,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			return false;
+		}
+	}
+
+	/** True when any registered rule carries ast-grep conditions. */
+	hasAstRules(): boolean {
+		if (!this.#settings.enabled) {
+			return false;
+		}
+		for (const entry of this.#rules.values()) {
+			if (entry.astConditions.length > 0) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	#matchBuffer(buffer: string, context: TtsrMatchContext): Rule[] {
@@ -435,6 +550,7 @@ export class TtsrManager {
 	/** Reset stream buffers (called on new turn). */
 	resetBuffer(): void {
 		this.#buffers.clear();
+		this.#lastAstSnapshots.clear();
 	}
 
 	/** Check if any TTSR rules are registered. */
@@ -443,6 +559,11 @@ export class TtsrManager {
 			return false;
 		}
 		return this.#rules.size > 0;
+	}
+
+	/** All rules currently registered for TTSR monitoring, in registration order. */
+	getRules(): Rule[] {
+		return Array.from(this.#rules.values(), entry => entry.rule);
 	}
 
 	/** Increment message counter (call after each turn). */

@@ -39,8 +39,8 @@ import {
 	flattenWorkspaceTextEdits,
 	rangesOverlap,
 } from "./edits";
+import { resolveFormatOptions } from "./format-options";
 import { detectLspmux } from "./lspmux";
-import { renderCall, renderResult } from "./render";
 import {
 	type CodeAction,
 	type CodeActionContext,
@@ -106,7 +106,7 @@ export const LSP_READONLY_ACTIONS: ReadonlySet<string> = new Set([
 
 export interface LspStartupServerInfo {
 	name: string;
-	status: "connecting" | "ready" | "error";
+	status: "connecting" | "ready" | "error" | "available";
 	fileTypes: string[];
 	error?: string;
 }
@@ -122,11 +122,14 @@ export interface LspWarmupOptions {
 	onConnecting?: (serverNames: string[]) => void;
 }
 
-export function discoverStartupLspServers(cwd: string): LspStartupServerInfo[] {
+export function discoverStartupLspServers(
+	cwd: string,
+	status: LspStartupServerInfo["status"] = "connecting",
+): LspStartupServerInfo[] {
 	const config = loadConfig(cwd);
 	return getLspServers(config).map(([name, serverConfig]) => ({
 		name,
-		status: "connecting",
+		status,
 		fileTypes: serverConfig.fileTypes,
 	}));
 }
@@ -302,6 +305,22 @@ function isProjectAwareLspServer(serverConfig: ServerConfig): boolean {
 const DIAGNOSTIC_MESSAGE_LIMIT = 50;
 const SINGLE_DIAGNOSTICS_WAIT_TIMEOUT_MS = 3000;
 const BATCH_DIAGNOSTICS_WAIT_TIMEOUT_MS = 400;
+const DIAGNOSTICS_POLL_MS = 100;
+const DIAGNOSTICS_SETTLE_MS = 250;
+/**
+ * How long the edit/write writethrough blocks inline waiting for fresh
+ * diagnostics before handing slow servers off to the deferred late-injection
+ * channel. Keeps the common fast-server case inline while letting an edit
+ * return promptly when a server (e.g. a large-monorepo tsserver) is slow to
+ * publish fresh diagnostics.
+ */
+const INLINE_DIAGNOSTICS_WAIT_TIMEOUT_MS = 500;
+/**
+ * Inner per-server diagnostics wait budget for the background/deferred fetch.
+ * Longer than the inline cap (and the old 3s default) so a slow server still
+ * delivers late instead of giving up before it ever publishes.
+ */
+const DEFERRED_DIAGNOSTICS_WAIT_TIMEOUT_MS = 12_000;
 const MAX_GLOB_DIAGNOSTIC_TARGETS = 20;
 const WORKSPACE_SYMBOL_LIMIT = 200;
 const PROJECT_INDEXED_ACTIONS: ReadonlySet<string> = new Set([
@@ -439,21 +458,23 @@ function isMethodNotFoundError(err: unknown): boolean {
 }
 
 async function reloadServer(client: LspClient, serverName: string, signal?: AbortSignal): Promise<string> {
-	let output = `Restarted ${serverName}`;
-	const reloadMethods = ["rust-analyzer/reloadWorkspace", "workspace/didChangeConfiguration"];
-	for (const method of reloadMethods) {
-		try {
-			await sendRequest(client, method, method.includes("Configuration") ? { settings: {} } : null, signal);
-			output = `Reloaded ${serverName}`;
-			break;
-		} catch {
-			// Method not supported, try next
-		}
+	// rust-analyzer exposes a real reload request.
+	try {
+		await sendRequest(client, "rust-analyzer/reloadWorkspace", null, signal);
+		return `Reloaded ${serverName}`;
+	} catch {
+		// Method not supported — fall through.
 	}
-	if (output.startsWith("Restarted")) {
+	// workspace/didChangeConfiguration is a notification per spec; sending it
+	// as a request hangs until the tool deadline on servers that route it to
+	// the notification handler and never respond.
+	try {
+		await sendNotification(client, "workspace/didChangeConfiguration", { settings: {} });
+		return `Reloaded ${serverName}`;
+	} catch {
 		client.proc.kill();
+		return `Restarted ${serverName}`;
 	}
-	return output;
 }
 
 interface WaitForDiagnosticsOptions {
@@ -461,27 +482,15 @@ interface WaitForDiagnosticsOptions {
 	signal?: AbortSignal;
 	minVersion?: number;
 	expectedDocumentVersion?: number;
-	allowUnversioned?: boolean;
-}
-
-function getAcceptedDiagnostics(
-	publishedDiagnostics: PublishedDiagnostics | undefined,
-	expectedDocumentVersion?: number,
-	allowUnversioned = true,
-): Diagnostic[] | undefined {
-	if (!publishedDiagnostics) {
-		return undefined;
-	}
-	if (expectedDocumentVersion === undefined) {
-		return publishedDiagnostics.diagnostics;
-	}
-	if (publishedDiagnostics.version === expectedDocumentVersion) {
-		return publishedDiagnostics.diagnostics;
-	}
-	if (allowUnversioned && publishedDiagnostics.version == null) {
-		return publishedDiagnostics.diagnostics;
-	}
-	return undefined;
+	/**
+	 * Quiescence window (ms). typescript-language-server never echoes the document
+	 * version (issue #983) and emits diagnostics from several sources at different
+	 * times, so there is no single "complete, version-matched" publish to gate on.
+	 * When the server does not exact-version-match, accept the latest publish only
+	 * after no newer one has arrived for this long, letting an in-flight pre-edit
+	 * publish be superseded by the fresh one.
+	 */
+	settleMs?: number;
 }
 
 async function waitForDiagnostics(
@@ -489,26 +498,35 @@ async function waitForDiagnostics(
 	uri: string,
 	options: WaitForDiagnosticsOptions = {},
 ): Promise<Diagnostic[]> {
-	const { timeoutMs = 3000, signal, minVersion, expectedDocumentVersion, allowUnversioned = true } = options;
+	const { timeoutMs = 3000, signal, minVersion, expectedDocumentVersion, settleMs = DIAGNOSTICS_SETTLE_MS } = options;
 	const start = Date.now();
+	let settledRef: PublishedDiagnostics | undefined;
+	let settledAt = 0;
 	while (Date.now() - start < timeoutMs) {
 		throwIfAborted(signal);
 		const versionOk = minVersion === undefined || client.diagnosticsVersion > minVersion;
-		const diagnostics = getAcceptedDiagnostics(
-			client.diagnostics.get(uri),
-			expectedDocumentVersion,
-			allowUnversioned,
-		);
-		if (diagnostics !== undefined && versionOk) {
-			return diagnostics;
+		const published = client.diagnostics.get(uri);
+		if (published && versionOk) {
+			// Server honored our exact document version → authoritative, accept now.
+			if (expectedDocumentVersion !== undefined && published.version === expectedDocumentVersion) {
+				return published.diagnostics;
+			}
+			// Unversioned/mismatched publish: wait for the stream to go quiet so an
+			// in-flight publish for the pre-edit content is superseded by the fresh one.
+			if (published !== settledRef) {
+				settledRef = published;
+				settledAt = Date.now();
+			} else if (Date.now() - settledAt >= settleMs) {
+				return published.diagnostics;
+			}
 		}
-		await Bun.sleep(100);
+		await Bun.sleep(DIAGNOSTICS_POLL_MS);
 	}
 	const versionOk = minVersion === undefined || client.diagnosticsVersion > minVersion;
 	if (!versionOk) {
 		return [];
 	}
-	return getAcceptedDiagnostics(client.diagnostics.get(uri), expectedDocumentVersion, allowUnversioned) ?? [];
+	return client.diagnostics.get(uri)?.diagnostics ?? [];
 }
 
 /** Project type detection result */
@@ -613,7 +631,8 @@ interface GetDiagnosticsForFileOptions {
 	signal?: AbortSignal;
 	minVersions?: ServerVersionMap;
 	expectedDocumentVersions?: ServerVersionMap;
-	allowUnversionedLspDiagnostics?: boolean;
+	/** Per-server wait budget (ms). Defaults to {@link SINGLE_DIAGNOSTICS_WAIT_TIMEOUT_MS}. */
+	timeoutMs?: number;
 }
 
 /**
@@ -623,12 +642,13 @@ interface GetDiagnosticsForFileOptions {
 async function captureDiagnosticVersions(
 	cwd: string,
 	servers: Array<[string, ServerConfig]>,
+	initTimeoutMs?: number,
 ): Promise<ServerVersionMap> {
 	const versions = new Map<string, number>();
 	await Promise.allSettled(
 		servers.map(async ([serverName, serverConfig]) => {
 			if (serverConfig.createClient) return;
-			const client = await getOrCreateClient(serverConfig, cwd);
+			const client = await getOrCreateClient(serverConfig, cwd, initTimeoutMs);
 			versions.set(serverName, client.diagnosticsVersion);
 		}),
 	);
@@ -669,7 +689,7 @@ async function getDiagnosticsForFile(
 	servers: Array<[string, ServerConfig]>,
 	options: GetDiagnosticsForFileOptions = {},
 ): Promise<FileDiagnosticsResult | undefined> {
-	const { signal, minVersions, expectedDocumentVersions, allowUnversionedLspDiagnostics = true } = options;
+	const { signal, minVersions, expectedDocumentVersions, timeoutMs } = options;
 	if (servers.length === 0) {
 		return undefined;
 	}
@@ -701,11 +721,10 @@ async function getDiagnosticsForFile(
 			const minVersion = minVersions?.get(serverName);
 			const expectedDocumentVersion = expectedDocumentVersions?.get(serverName);
 			const diagnostics = await waitForDiagnostics(client, uri, {
-				timeoutMs: 3000,
+				timeoutMs: timeoutMs ?? SINGLE_DIAGNOSTICS_WAIT_TIMEOUT_MS,
 				signal,
 				minVersion,
 				expectedDocumentVersion,
-				allowUnversioned: allowUnversionedLspDiagnostics,
 			});
 			return { serverName, diagnostics };
 		}),
@@ -761,15 +780,6 @@ export enum FileFormatResult {
 	FORMATTED = "formatted",
 }
 
-/** Default formatting options for LSP */
-const DEFAULT_FORMAT_OPTIONS = {
-	tabSize: 3,
-	insertSpaces: true,
-	trimTrailingWhitespace: true,
-	insertFinalNewline: true,
-	trimFinalNewlines: true,
-};
-
 /**
  * Format content using LSP or custom linter client.
  *
@@ -816,7 +826,7 @@ async function formatContent(
 				"textDocument/formatting",
 				{
 					textDocument: { uri },
-					options: DEFAULT_FORMAT_OPTIONS,
+					options: resolveFormatOptions(absolutePath, content),
 				},
 				signal,
 			)) as TextEdit[] | null;
@@ -1007,12 +1017,77 @@ async function scheduleDeferredDiagnosticsFetch(args: {
 			signal: combined,
 			minVersions: args.minVersions,
 			expectedDocumentVersions: args.expectedDocumentVersions,
+			timeoutMs: DEFERRED_DIAGNOSTICS_WAIT_TIMEOUT_MS,
 		});
 		if (args.signal.aborted || diagnostics === undefined) return;
 		args.callback(diagnostics);
 	} catch {
 		// Cancelled or LSP gave up; silently discard.
 	}
+}
+
+/**
+ * Fetch post-write diagnostics without making the edit/write block on a slow
+ * language server.
+ *
+ * Blocks inline only briefly ({@link INLINE_DIAGNOSTICS_WAIT_TIMEOUT_MS}) for a
+ * fresh result. Freshness is enforced by the pre-edit `minVersions` baseline:
+ * exact document-version matches return immediately, and unversioned/mismatched
+ * publishes must settle with no newer publish before inline acceptance. If
+ * nothing fresh arrives in the inline window and a deferred
+ * channel is available, the in-flight fetch is handed off to deliver late via
+ * `onDeferredDiagnostics`, and this returns `undefined` so the tool result
+ * lands immediately. Without a deferred channel (direct/CI callers) it blocks
+ * for the standard budget so the result is still returned inline.
+ */
+async function fetchDiagnosticsWithDeferral(args: {
+	dst: string;
+	cwd: string;
+	servers: Array<[string, ServerConfig]>;
+	minVersions: ServerVersionMap | undefined;
+	expectedDocumentVersions: ServerVersionMap | undefined;
+	transformDiagnostics?: ResolvedWritethroughOptions["transformDiagnostics"];
+	deferred?: { onDeferredDiagnostics: (diagnostics: FileDiagnosticsResult) => void; signal: AbortSignal };
+	signal?: AbortSignal;
+}): Promise<FileDiagnosticsResult | undefined> {
+	const { dst, cwd, servers, minVersions, expectedDocumentVersions, transformDiagnostics, deferred, signal } = args;
+	const apply = (d: FileDiagnosticsResult | undefined) =>
+		d && transformDiagnostics ? transformDiagnostics(dst, d) : d;
+
+	if (!deferred) {
+		// No late-injection channel: block for the standard budget and return inline.
+		return apply(
+			await getDiagnosticsForFile(dst, cwd, servers, {
+				signal,
+				minVersions,
+				expectedDocumentVersions,
+			}),
+		);
+	}
+
+	// One background fetch with a generous inner budget; await it only briefly inline.
+	const fetchPromise = getDiagnosticsForFile(dst, cwd, servers, {
+		signal: deferred.signal,
+		minVersions,
+		expectedDocumentVersions,
+		timeoutMs: DEFERRED_DIAGNOSTICS_WAIT_TIMEOUT_MS,
+	});
+	const INLINE_TIMEOUT = Symbol("inline-diagnostics-timeout");
+	const raced = await Promise.race([
+		fetchPromise,
+		Bun.sleep(INLINE_DIAGNOSTICS_WAIT_TIMEOUT_MS).then(() => INLINE_TIMEOUT),
+	]);
+	if (raced !== INLINE_TIMEOUT) {
+		return apply(raced as FileDiagnosticsResult | undefined);
+	}
+	// Slow server: deliver late via the deferred channel; nothing inline. The
+	// deferred sink (edit tool) applies its own dedup, so pass the raw result.
+	void fetchPromise
+		.then(diagnostics => {
+			if (diagnostics && !deferred.signal.aborted) deferred.onDeferredDiagnostics(diagnostics);
+		})
+		.catch(() => {});
+	return undefined;
 }
 
 async function runLspWritethrough(
@@ -1041,12 +1116,15 @@ async function runLspWritethrough(
 	const useCustomFormatter = enableFormat && customLinterServers.length > 0;
 
 	// Capture diagnostic versions BEFORE syncing to detect stale diagnostics
-	const minVersions = enableDiagnostics ? await captureDiagnosticVersions(cwd, servers) : undefined;
+	// Bound client creation by the writethrough budget: a hung/broken server
+	// must not add its full init wait (30s default) to every edit.
+	const minVersions = enableDiagnostics ? await captureDiagnosticVersions(cwd, servers, 5_000) : undefined;
 	let expectedDocumentVersions: ServerVersionMap | undefined;
 
 	let formatter: FileFormatResult | undefined;
 	let diagnostics: FileDiagnosticsResult | undefined;
 	let timedOut = false;
+	let synced = false;
 	try {
 		const timeoutSignal = AbortSignal.timeout(5_000);
 		timeoutSignal.addEventListener(
@@ -1090,19 +1168,8 @@ async function runLspWritethrough(
 
 			// 5. Notify saved to LSP servers
 			await notifyFileSaved(dst, cwd, lspServers, operationSignal);
-
-			// 6. Get diagnostics from all servers (wait for fresh results)
-			if (enableDiagnostics) {
-				const fetched = await getDiagnosticsForFile(dst, cwd, servers, {
-					signal: operationSignal,
-					minVersions,
-					expectedDocumentVersions,
-					allowUnversionedLspDiagnostics: false,
-				});
-				diagnostics =
-					fetched && options.transformDiagnostics ? options.transformDiagnostics(dst, fetched) : fetched;
-			}
 		});
+		synced = true;
 	} catch {
 		if (timedOut) {
 			formatter = undefined;
@@ -1121,6 +1188,19 @@ async function runLspWritethrough(
 			}
 		}
 		await getWritePromise();
+	}
+
+	if (synced && enableDiagnostics) {
+		diagnostics = await fetchDiagnosticsWithDeferral({
+			dst,
+			cwd,
+			servers,
+			minVersions,
+			expectedDocumentVersions,
+			transformDiagnostics: options.transformDiagnostics,
+			deferred,
+			signal,
+		});
 	}
 
 	if (formatter !== undefined) {
@@ -1229,10 +1309,6 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 	readonly summary = "Query LSP (language server) for diagnostics, hover info, and references";
 	readonly description: string;
 	readonly parameters = lspSchema;
-	readonly renderCall = renderCall;
-	readonly renderResult = renderResult;
-	readonly mergeCallAndResult = true;
-	readonly inline = true;
 	readonly strict = true;
 
 	constructor(private readonly session: ToolSession) {
@@ -1261,7 +1337,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 
 		// Status action doesn't need a file
 		if (action === "status") {
-			const servers = Object.keys(config.servers);
+			const configuredNames = Object.keys(config.servers);
 			const lspmuxState = await detectLspmux();
 			const lspmuxStatus = lspmuxState.available
 				? lspmuxState.running
@@ -1269,14 +1345,40 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 					: "lspmux: installed but server not running"
 				: "";
 
-			const serverStatus =
-				servers.length > 0
-					? `Active language servers: ${servers.join(", ")}`
-					: "No language servers configured for this project";
+			// `Object.keys(config.servers)` reflects what is *configured & resolvable
+			// on PATH* — it does NOT prove the server actually starts. A wrapper
+			// binary that exits immediately (e.g. rustup without the rust-analyzer
+			// component) still appears here. Distinguish "configured" from
+			// "started" (have a live in-process client) so callers cannot mistake
+			// presence-on-PATH for a working server.
+			const startedClients = getActiveClients();
+			const startedByConfigName = new Map<string, LspServerStatus>();
+			// getActiveClients() reports `name = client.config.command` (the
+			// unresolved binary name from defaults.json), so match against
+			// `serverConfig.command`, not the resolved path.
+			for (const [name, serverConfig] of Object.entries(config.servers)) {
+				const matched = startedClients.find(c => c.name === serverConfig.command);
+				if (matched) startedByConfigName.set(name, matched);
+			}
 
-			const output = lspmuxStatus ? `${serverStatus}\n${lspmuxStatus}` : serverStatus;
+			const lines: string[] = [];
+			if (configuredNames.length === 0) {
+				lines.push("No language servers configured for this project");
+			} else {
+				const labelled = configuredNames.map(name => {
+					const started = startedByConfigName.get(name);
+					if (!started) return `${name} (configured, not started)`;
+					return `${name} (${started.status})`;
+				});
+				lines.push(`Language servers: ${labelled.join(", ")}`);
+				lines.push(
+					"  note: 'configured, not started' means the binary resolves on PATH but no request has spawned it yet; 'ready' means a client process is live for this cwd.",
+				);
+			}
+			if (lspmuxStatus) lines.push(lspmuxStatus);
+
 			return {
-				content: [{ type: "text", text: output }],
+				content: [{ type: "text", text: lines.join("\n") }],
 				details: { action, success: true, request: params },
 			};
 		}
@@ -1505,7 +1607,26 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 			}
 
 			const lspParams = { files: pairs };
-			const servers = getLspServers(config);
+			// Filter to servers whose fileTypes match either the source or any
+			// destination path. Asking every configured server about a .md/.sql/.txt
+			// rename used to stack up willRenameFiles requests against irrelevant
+			// language servers and hit the wall-clock timeout. A server only has
+			// something useful to say about a rename if it understands one of the
+			// affected file extensions.
+			const allLspServers = getLspServers(config);
+			const relevantNames = new Set<string>();
+			const collectRelevant = (filePath: string) => {
+				for (const [name] of getLspServersForFile(config, filePath)) {
+					relevantNames.add(name);
+				}
+			};
+			collectRelevant(source);
+			collectRelevant(dest);
+			for (const pair of pairs) {
+				collectRelevant(uriToFile(pair.oldUri));
+				collectRelevant(uriToFile(pair.newUri));
+			}
+			const servers = allLspServers.filter(([name]) => relevantNames.has(name));
 			const respondingServers = new Set<string>();
 			const perServerEdits: Array<{ serverName: string; edit: WorkspaceEdit }> = [];
 			const serverNotes: string[] = [];
@@ -1829,8 +1950,15 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 					throw new ToolAbortError();
 				}
 				const msg = err instanceof Error ? err.message : String(err);
+				// Echo a (truncated) preview of the params we sent so the caller can
+				// tell parse / shape errors (e.g. nested args dropped, missing field)
+				// apart from genuine server errors without spinning up another debug call.
+				const previewRaw = JSON.stringify(requestParams ?? null);
+				const preview = previewRaw.length > 400 ? `${previewRaw.slice(0, 397)}...` : previewRaw;
 				return {
-					content: [{ type: "text", text: `LSP error from ${chosenName} on ${method}: ${msg}` }],
+					content: [
+						{ type: "text", text: `LSP error from ${chosenName} on ${method}: ${msg}\n  params: ${preview}` },
+					],
 					details: { action, serverName: chosenName, success: false, request: params },
 				};
 			}
@@ -2004,6 +2132,11 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 			const position = { line: resolvedLine - 1, character: resolvedCharacter };
 
 			let output: string;
+			// Set on bare empty-lookup outcomes (no definition/references/…): the
+			// result carries no information once consumed, so compaction may elide
+			// it. Clean diagnostics runs are NOT useless — they are verification
+			// evidence.
+			let useless = false;
 
 			if (needsProjectIndex && !isRustAnalyzerServer) {
 				await waitForProjectLoaded(client, signal);
@@ -2029,6 +2162,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 
 					if (locations.length === 0) {
 						output = "No definition found";
+						useless = true;
 					} else {
 						const lines = await Promise.all(
 							locations.map(location => formatLocationWithContext(location, this.session.cwd)),
@@ -2053,6 +2187,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 
 					if (locations.length === 0) {
 						output = "No type definition found";
+						useless = true;
 					} else {
 						const lines = await Promise.all(
 							locations.map(location => formatLocationWithContext(location, this.session.cwd)),
@@ -2077,6 +2212,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 
 					if (locations.length === 0) {
 						output = "No implementation found";
+						useless = true;
 					} else {
 						const lines = await Promise.all(
 							locations.map(location => formatLocationWithContext(location, this.session.cwd)),
@@ -2114,6 +2250,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 
 					if (!result || result.length === 0) {
 						output = "No references found";
+						useless = true;
 					} else {
 						const contextualReferences = result.slice(0, REFERENCE_CONTEXT_LIMIT);
 						const plainReferences = result.slice(REFERENCE_CONTEXT_LIMIT);
@@ -2183,11 +2320,12 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 							break;
 						}
 						const parsedIndex = /^\d+$/.test(normalizedQuery) ? Number.parseInt(normalizedQuery, 10) : null;
-						const selectedAction = result.find(
-							(actionItem, index) =>
-								(parsedIndex !== null && index === parsedIndex) ||
-								actionItem.title.toLowerCase().includes(normalizedQuery.toLowerCase()),
-						);
+						const selectedAction =
+							parsedIndex !== null
+								? result[parsedIndex]
+								: result.find(actionItem =>
+										actionItem.title.toLowerCase().includes(normalizedQuery.toLowerCase()),
+									);
 
 						if (!selectedAction) {
 							const actionLines = result.map((actionItem, index) => `  ${formatCodeAction(actionItem, index)}`);
@@ -2252,6 +2390,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 
 					if (!result || result.length === 0) {
 						output = "No symbols found";
+						useless = true;
 					} else {
 						const relPath = formatPathRelativeToCwd(targetFile, this.session.cwd);
 						if ("selectionRange" in result[0]) {
@@ -2315,6 +2454,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 			return {
 				content: [{ type: "text", text: output }],
 				details: { serverName, action, success: true, request: params },
+				...(useless ? { useless: true } : {}),
 			};
 		} catch (err) {
 			if (err instanceof ToolError) throw err;

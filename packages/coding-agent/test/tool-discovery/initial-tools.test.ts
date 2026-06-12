@@ -1,16 +1,17 @@
 import { describe, expect, it } from "bun:test";
-import { Settings } from "../../src/config/settings";
-import type { ToolSession } from "../../src/tools/index";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { BuiltinToolLoadMode, ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import {
 	AskTool,
 	BUILTIN_TOOLS,
 	computeEssentialBuiltinNames,
 	createTools,
 	DEFAULT_ESSENTIAL_TOOL_NAMES,
+	filterInitialToolsForDiscoveryAll,
 	IrcTool,
 	JobTool,
 	SshTool,
-} from "../../src/tools/index";
+} from "@oh-my-pi/pi-coding-agent/tools";
 
 const allToolsSettings = Settings.isolated({
 	"astGrep.enabled": true,
@@ -119,5 +120,46 @@ describe("tools.discoveryMode settings schema", () => {
 	it("back-compat: mcp.discoveryMode still accepted", () => {
 		const settings = Settings.isolated({ "mcp.discoveryMode": true });
 		expect(settings.get("mcp.discoveryMode")).toBe(true);
+	});
+});
+
+describe("filterInitialToolsForDiscoveryAll", () => {
+	const loadModes: Record<string, BuiltinToolLoadMode> = {
+		read: "essential",
+		edit: "essential",
+		todo: "discoverable",
+		find: "discoverable",
+	};
+	const base = {
+		loadModeOf: (name: string): BuiltinToolLoadMode | undefined => loadModes[name],
+		essentialNames: new Set(["read", "bash", "edit"]),
+		explicitlyRequested: new Set<string>(),
+		restored: new Set<string>(),
+		forceActive: new Set<string>(),
+	};
+
+	it("hides non-essential discoverable built-ins", () => {
+		expect(filterInitialToolsForDiscoveryAll(["read", "edit", "todo", "find"], base)).toEqual(["read", "edit"]);
+	});
+
+	it("keeps discoverable tools required by a forced tool_choice (eager todo)", () => {
+		const result = filterInitialToolsForDiscoveryAll(["read", "todo", "find"], {
+			...base,
+			forceActive: new Set(["todo"]),
+		});
+		expect(result).toEqual(["read", "todo"]);
+	});
+
+	it("keeps explicitly requested and restored discoverable tools", () => {
+		const result = filterInitialToolsForDiscoveryAll(["todo", "find"], {
+			...base,
+			explicitlyRequested: new Set(["find"]),
+			restored: new Set(["todo"]),
+		});
+		expect([...result].sort()).toEqual(["find", "todo"]);
+	});
+
+	it("never hides tools without a built-in loadMode (MCP/custom/extension)", () => {
+		expect(filterInitialToolsForDiscoveryAll(["mcp__server__tool", "find"], base)).toEqual(["mcp__server__tool"]);
 	});
 });

@@ -10,7 +10,7 @@ const SIXEL = "\x1bPqabc\x1b\\";
 describe("BashExecutionComponent SIXEL sanitization", () => {
 	const originalForceProtocol = Bun.env.PI_FORCE_IMAGE_PROTOCOL;
 	const originalAllowPassthrough = Bun.env.PI_ALLOW_SIXEL_PASSTHROUGH;
-	const ui = { requestRender: () => {} } as unknown as TUI;
+	const ui = { requestRender: () => {}, requestComponentRender: () => {} } as unknown as TUI;
 
 	beforeEach(async () => {
 		const theme = await getThemeByName("dark");
@@ -81,7 +81,7 @@ describe("BashExecutionComponent SIXEL sanitization", () => {
 });
 
 describe("BashExecutionComponent streaming throttle", () => {
-	const ui = { requestRender: () => {} } as unknown as TUI;
+	const ui = { requestRender: () => {}, requestComponentRender: () => {} } as unknown as TUI;
 
 	beforeEach(async () => {
 		const theme = await getThemeByName("dark");

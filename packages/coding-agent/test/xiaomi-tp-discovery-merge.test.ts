@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Model } from "@oh-my-pi/pi-ai";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { mergeDiscoveredModel } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 
 /**
@@ -14,7 +15,7 @@ const STANDARD = "https://api.xiaomimimo.com/v1";
 const TOKEN_PLAN = "https://token-plan-sgp.xiaomimimo.com/v1";
 
 function bundled(baseUrl: string): Model<"openai-completions"> {
-	return {
+	return buildModel({
 		id: "mimo-v2.5",
 		name: "MiMo v2.5",
 		api: "openai-completions",
@@ -25,7 +26,7 @@ function bundled(baseUrl: string): Model<"openai-completions"> {
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 128000,
 		maxTokens: 8192,
-	};
+	});
 }
 
 describe("mergeDiscoveredModel", () => {

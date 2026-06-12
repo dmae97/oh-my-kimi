@@ -288,11 +288,16 @@ export const handleYouTube: SpecialHandler = async (
 			}
 		}
 	} finally {
-		throwIfAborted(signal);
 		// Cleanup temp files (fire-and-forget with error suppression)
 		Array.fromAsync(new Bun.Glob(`${tmpBase}*`).scan({ absolute: true }))
 			.then(tmpFiles => Promise.all(tmpFiles.map(f => fs.unlink(f).catch(() => {}))))
 			.catch(() => {});
+	}
+	// Only a user-initiated abort is fatal; the per-fetch time budget expiring
+	// just means partial metadata/transcript, which we surface as a note.
+	throwIfAborted(userSignal);
+	if (signal?.aborted) {
+		notes.push("Fetch time budget exhausted; metadata/transcript may be incomplete");
 	}
 
 	// Build markdown output

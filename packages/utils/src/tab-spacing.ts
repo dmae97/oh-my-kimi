@@ -340,3 +340,66 @@ export function getIndentation(file?: string | null, projectDir?: string | null)
 	indentationCache.set(absKey, clamped);
 	return clamped;
 }
+
+/**
+ * `.editorconfig`-derived formatting options for an LSP `textDocument/formatting` request.
+ *
+ * Both fields are absent when the resolved `.editorconfig` chain does not pin them, so callers
+ * can layer their own fallbacks (content sniffing, project defaults) underneath. Returned values
+ * are clamped to {@link MIN_TAB_WIDTH}..{@link MAX_TAB_WIDTH} for parity with {@link getIndentation}.
+ */
+export interface EditorConfigFormatting {
+	/** Effective indent width in columns, from `indent_size` or `tab_width`. */
+	tabSize?: number;
+	/** `true` for `indent_style = space`, `false` for `indent_style = tab` (or `indent_size = tab`). */
+	insertSpaces?: boolean;
+}
+
+/**
+ * Resolve `.editorconfig` formatting hints for `file` without falling back to any default.
+ *
+ * Used by the LSP format-on-write path so a missing `.editorconfig` declaration falls through
+ * to caller-provided defaults instead of clobbering the file with the renderer's display
+ * `defaultTabWidth` (issue #2329).
+ */
+export function getEditorConfigFormatting(file?: string | null, projectDir?: string | null): EditorConfigFormatting {
+	if (file === undefined || file === null || file === "") {
+		return {};
+	}
+
+	const cwd = projectDir ?? process.cwd();
+	const absoluteFile = resolveFilePath(cwd, file);
+
+	// Same NAME_MAX guard as `getIndentation`: editorconfig discovery is
+	// best-effort and must never escape as `ENAMETOOLONG` from a renderer's
+	// stray gibberish path.
+	if (hasOverlongPathComponent(absoluteFile)) {
+		return {};
+	}
+
+	const match = resolveEditorConfigMatch(absoluteFile);
+	if (match === undefined) {
+		return {};
+	}
+
+	const result: EditorConfigFormatting = {};
+
+	if (match.indentSize?.kind === "spaces") {
+		result.tabSize = clampTabWidth(match.indentSize.n);
+	} else if (match.tabWidth !== undefined) {
+		result.tabSize = clampTabWidth(match.tabWidth);
+	}
+
+	if (match.indentStyle === IndentStyle.Space) {
+		result.insertSpaces = true;
+	} else if (match.indentStyle === IndentStyle.Tab || match.indentSize?.kind === "tab") {
+		result.insertSpaces = false;
+	} else if (match.indentSize?.kind === "spaces") {
+		// `indent_size = <n>` without an explicit `indent_style` is universally
+		// read as "indent with N spaces" — both VSCode and Sublime infer
+		// `indent_style = space` in that case.
+		result.insertSpaces = true;
+	}
+
+	return result;
+}

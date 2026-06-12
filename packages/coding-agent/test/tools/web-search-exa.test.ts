@@ -2,15 +2,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { hookFetch } from "@oh-my-pi/pi-utils";
 import {
 	buildExaRequestBody,
 	ExaProvider,
 	normalizeSearchType,
 	searchExa,
 	synthesizeAnswer,
-} from "../../src/web/search/providers/exa";
+} from "@oh-my-pi/pi-coding-agent/web/search/providers/exa";
 
 async function withLocalAuthStorage<T>(run: (authStorage: AuthStorage) => Promise<T>): Promise<T> {
 	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "web-search-exa-auth-"));
@@ -224,21 +224,22 @@ describe("searchExa", () => {
 		delete process.env.EXA_API_KEY;
 	});
 
-	function mockFetch(responseBody: unknown, status = 200): Disposable {
-		return hookFetch((_url, init) => {
+	function mockFetch(responseBody: unknown, status = 200): FetchImpl {
+		return (_url, init) => {
 			if (init?.body) {
 				capturedRequestBody = JSON.parse(init.body as string);
 			}
-			return new Response(JSON.stringify(responseBody), {
-				status,
-				headers: { "Content-Type": "application/json" },
-			});
-		});
+			return Promise.resolve(
+				new Response(JSON.stringify(responseBody), {
+					status,
+					headers: { "Content-Type": "application/json" },
+				}),
+			);
+		};
 	}
 
 	it("populates answer from per-result summaries", async () => {
-		using _hook = mockFetch(makeMockExaResponse());
-		const result = await searchExa({ query: "test query" });
+		const result = await searchExa({ query: "test query", fetch: mockFetch(makeMockExaResponse()) });
 		expect(result.provider).toBe("exa");
 		expect(result.answer).toBeDefined();
 		expect(result.answer).toContain("**Page Alpha**: Alpha is about X.");
@@ -248,39 +249,39 @@ describe("searchExa", () => {
 	});
 
 	it("returns answer=undefined when no summaries are present", async () => {
-		using _hook = mockFetch(
-			makeMockExaResponse({ results: [{ title: "No Summary", url: "https://nosummary.com", text: "some text" }] }),
-		);
-		const result = await searchExa({ query: "no answer query" });
+		const result = await searchExa({
+			query: "no answer query",
+			fetch: mockFetch(
+				makeMockExaResponse({
+					results: [{ title: "No Summary", url: "https://nosummary.com", text: "some text" }],
+				}),
+			),
+		});
 		expect(result.provider).toBe("exa");
 		expect(result.answer).toBeUndefined();
 		expect(result.sources).toHaveLength(1);
 	});
 
 	it("returns answer=undefined when results array is empty", async () => {
-		using _hook = mockFetch(makeMockExaResponse({ results: [] }));
-		const result = await searchExa({ query: "empty" });
+		const result = await searchExa({ query: "empty", fetch: mockFetch(makeMockExaResponse({ results: [] })) });
 		expect(result.answer).toBeUndefined();
 		expect(result.sources).toHaveLength(0);
 	});
 
 	it("returns answer=undefined when results is missing from response", async () => {
-		using _hook = mockFetch({ requestId: "req-empty" });
-		const result = await searchExa({ query: "nothing" });
+		const result = await searchExa({ query: "nothing", fetch: mockFetch({ requestId: "req-empty" }) });
 		expect(result.answer).toBeUndefined();
 		expect(result.sources).toHaveLength(0);
 	});
 
 	it("sends contents.summary in request body", async () => {
-		using _hook = mockFetch(makeMockExaResponse());
-		await searchExa({ query: "check body" });
+		await searchExa({ query: "check body", fetch: mockFetch(makeMockExaResponse()) });
 		expect(capturedRequestBody).toBeDefined();
 		expect(capturedRequestBody!.contents).toEqual({ summary: { query: "check body" } });
 	});
 
 	it("sends correct full request shape", async () => {
-		using _hook = mockFetch(makeMockExaResponse());
-		await searchExa({ query: "shape test", num_results: 5, type: "neural" });
+		await searchExa({ query: "shape test", num_results: 5, type: "neural", fetch: mockFetch(makeMockExaResponse()) });
 		expect(capturedRequestBody).toEqual({
 			query: "shape test",
 			numResults: 5,
@@ -290,77 +291,91 @@ describe("searchExa", () => {
 	});
 
 	it("prefers summary over text for snippet field", async () => {
-		using _hook = mockFetch(
-			makeMockExaResponse({
-				results: [{ title: "Has Both", url: "https://both.com", text: "full text here", summary: "summary here" }],
-			}),
-		);
-		const result = await searchExa({ query: "snippet test" });
+		const result = await searchExa({
+			query: "snippet test",
+			fetch: mockFetch(
+				makeMockExaResponse({
+					results: [
+						{ title: "Has Both", url: "https://both.com", text: "full text here", summary: "summary here" },
+					],
+				}),
+			),
+		});
 		expect(result.sources[0].snippet).toBe("summary here");
 	});
 
 	it("falls back to text when summary is null", async () => {
-		using _hook = mockFetch(
-			makeMockExaResponse({
-				results: [{ title: "Text Only", url: "https://text.com", text: "fallback text", summary: null }],
-			}),
-		);
-		const result = await searchExa({ query: "fallback" });
+		const result = await searchExa({
+			query: "fallback",
+			fetch: mockFetch(
+				makeMockExaResponse({
+					results: [{ title: "Text Only", url: "https://text.com", text: "fallback text", summary: null }],
+				}),
+			),
+		});
 		expect(result.sources[0].snippet).toBe("fallback text");
 	});
 
 	it("falls back to highlights when both summary and text are null", async () => {
-		using _hook = mockFetch(
-			makeMockExaResponse({
-				results: [
-					{
-						title: "Highlight Only",
-						url: "https://hl.com",
-						text: null,
-						summary: null,
-						highlights: ["hl1", "hl2"],
-					},
-				],
-			}),
-		);
-		const result = await searchExa({ query: "highlights" });
+		const result = await searchExa({
+			query: "highlights",
+			fetch: mockFetch(
+				makeMockExaResponse({
+					results: [
+						{
+							title: "Highlight Only",
+							url: "https://hl.com",
+							text: null,
+							summary: null,
+							highlights: ["hl1", "hl2"],
+						},
+					],
+				}),
+			),
+		});
 		expect(result.sources[0].snippet).toBe("hl1 hl2");
 	});
 
 	it("skips results without url", async () => {
-		using _hook = mockFetch(
-			makeMockExaResponse({
-				results: [
-					{ title: "No URL", url: null, summary: "orphan" },
-					{ title: "Has URL", url: "https://valid.com", summary: "valid" },
-				],
-			}),
-		);
-		const result = await searchExa({ query: "url filter" });
+		const result = await searchExa({
+			query: "url filter",
+			fetch: mockFetch(
+				makeMockExaResponse({
+					results: [
+						{ title: "No URL", url: null, summary: "orphan" },
+						{ title: "Has URL", url: "https://valid.com", summary: "valid" },
+					],
+				}),
+			),
+		});
 		expect(result.sources).toHaveLength(1);
 		expect(result.sources[0].url).toBe("https://valid.com");
 	});
 
 	it("falls back to text when summary is empty string (not just null)", async () => {
-		using _hook = mockFetch(
-			makeMockExaResponse({
-				results: [{ title: "Empty Summary", url: "https://empty.com", text: "real text", summary: "" }],
-			}),
-		);
-		const result = await searchExa({ query: "empty summary fallback" });
+		const result = await searchExa({
+			query: "empty summary fallback",
+			fetch: mockFetch(
+				makeMockExaResponse({
+					results: [{ title: "Empty Summary", url: "https://empty.com", text: "real text", summary: "" }],
+				}),
+			),
+		});
 		expect(result.sources[0].snippet).toBe("real text");
 	});
 
 	it("does not include url-less results in synthesized answer", async () => {
-		using _hook = mockFetch(
-			makeMockExaResponse({
-				results: [
-					{ title: "No URL", url: null, summary: "ghost summary" },
-					{ title: "Has URL", url: "https://valid.com", summary: "real summary" },
-				],
-			}),
-		);
-		const result = await searchExa({ query: "url filter answer" });
+		const result = await searchExa({
+			query: "url filter answer",
+			fetch: mockFetch(
+				makeMockExaResponse({
+					results: [
+						{ title: "No URL", url: null, summary: "ghost summary" },
+						{ title: "Has URL", url: "https://valid.com", summary: "real summary" },
+					],
+				}),
+			),
+		});
 		expect(result.answer).toBeDefined();
 		expect(result.answer).not.toContain("ghost summary");
 		expect(result.answer).toContain("**Has URL**: real summary");
@@ -369,18 +384,20 @@ describe("searchExa", () => {
 	it("uses Exa MCP when API key is missing", async () => {
 		delete process.env.EXA_API_KEY;
 		let calledUrl = "";
-		using _hook = hookFetch((url, init) => {
+		const fetchMock: FetchImpl = (url, init) => {
 			calledUrl = String(url);
 			if (init?.body) {
 				capturedRequestBody = JSON.parse(init.body as string);
 			}
-			return new Response(JSON.stringify({ jsonrpc: "2.0", id: "mcp-1", result: makeMockExaResponse() }), {
-				status: 200,
-				headers: { "Content-Type": "application/json" },
-			});
-		});
+			return Promise.resolve(
+				new Response(JSON.stringify({ jsonrpc: "2.0", id: "mcp-1", result: makeMockExaResponse() }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				}),
+			);
+		};
 
-		const result = await searchExa({ query: "no key" });
+		const result = await searchExa({ query: "no key", fetch: fetchMock });
 
 		expect(result.provider).toBe("exa");
 		expect(result.sources).toHaveLength(3);
@@ -396,25 +413,27 @@ describe("searchExa", () => {
 
 	it("parses Exa MCP plain-text payloads when API key is missing", async () => {
 		delete process.env.EXA_API_KEY;
-		using _hook = hookFetch(() => {
-			return new Response(
-				JSON.stringify({
-					jsonrpc: "2.0",
-					id: "mcp-text",
-					result: {
-						content: [
-							{
-								type: "text",
-								text: "Title: Plain Result\nURL: https://plain.example\nAuthor: Reporter\nPublished Date: 2024-06-01\nText: Plain text body",
-							},
-						],
-					},
-				}),
-				{ status: 200, headers: { "Content-Type": "application/json" } },
+		const fetchMock: FetchImpl = () => {
+			return Promise.resolve(
+				new Response(
+					JSON.stringify({
+						jsonrpc: "2.0",
+						id: "mcp-text",
+						result: {
+							content: [
+								{
+									type: "text",
+									text: "Title: Plain Result\nURL: https://plain.example\nAuthor: Reporter\nPublished Date: 2024-06-01\nText: Plain text body",
+								},
+							],
+						},
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				),
 			);
-		});
+		};
 
-		const result = await searchExa({ query: "plain text" });
+		const result = await searchExa({ query: "plain text", fetch: fetchMock });
 
 		expect(result.provider).toBe("exa");
 		expect(result.sources).toEqual([
@@ -432,17 +451,19 @@ describe("searchExa", () => {
 	it("uses AuthStorage credentials when EXA_API_KEY is unset", async () => {
 		delete process.env.EXA_API_KEY;
 		let receivedKey: string | undefined;
-		using _hook = hookFetch((_url, init) => {
+		const fetchMock: FetchImpl = (_url, init) => {
 			receivedKey = (init?.headers as Record<string, string> | undefined)?.["x-api-key"];
-			return new Response(JSON.stringify(makeMockExaResponse()), {
-				status: 200,
-				headers: { "Content-Type": "application/json" },
-			});
-		});
+			return Promise.resolve(
+				new Response(JSON.stringify(makeMockExaResponse()), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				}),
+			);
+		};
 
 		await withLocalAuthStorage(async authStorage => {
 			authStorage.setRuntimeApiKey("exa", "stored-key-xyz");
-			const result = await searchExa({ query: "from auth storage", authStorage });
+			const result = await searchExa({ query: "from auth storage", authStorage, fetch: fetchMock });
 			expect(result.provider).toBe("exa");
 			expect(result.sources).toHaveLength(3);
 		});
@@ -483,7 +504,8 @@ describe("searchExa", () => {
 	});
 
 	it("throws SearchProviderError on non-ok HTTP response", async () => {
-		using _hook = mockFetch("Forbidden", 403);
-		await expect(searchExa({ query: "forbidden" })).rejects.toThrow("exa: 403 forbidden");
+		await expect(searchExa({ query: "forbidden", fetch: mockFetch("Forbidden", 403) })).rejects.toThrow(
+			"exa: 403 forbidden",
+		);
 	});
 });

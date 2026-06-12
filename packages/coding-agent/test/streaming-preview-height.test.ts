@@ -5,10 +5,11 @@ import * as path from "node:path";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { EDIT_MODE_STRATEGIES } from "@oh-my-pi/pi-coding-agent/edit";
+import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tool-execution";
 import { theme as activeTheme, initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { previewWindowRows } from "@oh-my-pi/pi-coding-agent/tools/render-utils";
 import { TUI, visibleWidth } from "@oh-my-pi/pi-tui";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal";
-import { ToolExecutionComponent } from "../src/modes/components/tool-execution";
 
 // The streaming edit preview is a fixed-height tail window ("cursor"): the last
 // EDIT_STREAMING_PREVIEW_LINES rows of the recomputed diff are pinned to the
@@ -126,7 +127,7 @@ describe("streaming edit preview height (stable, full tail window)", () => {
 		// resolves only when this chunk's recompute has updated the preview.
 		await component.whenPreviewSettled();
 
-		const trailingBlankRows = (rows: string[]): number => {
+		const trailingBlankRows = (rows: readonly string[]): number => {
 			let n = 0;
 			for (let i = rows.length - 1; i >= 0; i--) {
 				if (rows[i].replace(/\x1b\[[0-9;]*m/gu, "").trimEnd() === "") n++;
@@ -242,18 +243,12 @@ describe("streaming edit preview height (stable, full tail window)", () => {
 			expect(sawPreviewSentinel).toBe(true);
 			expect(maxStreamingHeight).toBeGreaterThan(term.rows);
 
-			const preCheckpointBufferText = normalizedBufferRows(term).join("\n");
-			const stalePreviewRowsExistedBeforeCheckpoint = preCheckpointBufferText.includes(previewPrefix);
 			term.scrollLines(1_000);
-			const checkpointRefreshed = tui.refreshNativeScrollbackIfDirty({ allowUnknownViewport: true });
 			await settleTerminal(term);
 
 			const finalBufferText = normalizedBufferRows(term).join("\n");
 			expect(finalBufferText).toContain(finalSentinel);
 			expect(finalBufferText).not.toContain(previewPrefix);
-			if (stalePreviewRowsExistedBeforeCheckpoint) {
-				expect(checkpointRefreshed).toBe(true);
-			}
 
 			term.scrollLines(-1_000);
 			await term.flush();
@@ -314,7 +309,7 @@ describe("streaming tool call preview height (bounded across renderers)", () => 
 		resetSettingsForTest();
 	});
 
-	function renderPending(toolName: string, args: unknown): { lines: string[]; text: string } {
+	function renderPending(toolName: string, args: unknown): { lines: readonly string[]; text: string } {
 		const term = new VirtualTerminal(80, 20);
 		const tui = new TUI(term);
 		const component = new ToolExecutionComponent(toolName, args, {}, undefined, tui, process.cwd());
@@ -339,71 +334,75 @@ describe("streaming tool call preview height (bounded across renderers)", () => 
 	});
 
 	test("bash/ssh pending previews stay short even with very long multiline args", () => {
-		const longLines = Array.from({ length: 80 }, (_, i) => `line-${i}`);
-		const cases: Array<{
-			name: string;
-			args: unknown;
-			mustContain: string[];
-			mustHide: string[];
-			marker: RegExp;
-		}> = [
-			{
-				// bash/ssh keep a bounded head+tail window: the start and the
-				// latest are both visible, the middle is elided.
-				name: "bash",
-				args: { command: longLines.join("\n") },
-				mustContain: ["line-0", "line-79"],
-				mustHide: ["line-40"],
-				marker: /more lines/,
-			},
-			{
-				name: "ssh",
-				args: { host: "example", command: longLines.join("\n") },
-				mustContain: ["line-0", "line-79"],
-				mustHide: ["line-40"],
-				marker: /more lines/,
-			},
+		// bash/ssh window the collapsed command to a viewport-sized TAIL: the end
+		// (the live edge while args stream) stays visible behind an "… N earlier
+		// lines" marker on top; the head is elided.
+		const window = previewWindowRows();
+		const total = window + 5;
+		const longLines = Array.from({ length: total }, (_, i) => `line-${i}`);
+		// Tail window = marker row + the last (window - 1) command lines.
+		const hidden = total - (window - 1);
+		const lastHidden = `line-${hidden - 1}`;
+		const firstVisible = `line-${hidden}`;
+		const lastVisible = `line-${total - 1}`;
+		const cases: Array<{ name: string; args: unknown }> = [
+			{ name: "bash", args: { command: longLines.join("\n") } },
+			{ name: "ssh", args: { host: "example", command: longLines.join("\n") } },
 		];
 
 		for (const testCase of cases) {
 			const { lines, text } = renderPending(testCase.name, testCase.args);
-			expect(lines.length, `${testCase.name} preview should stay bounded`).toBeLessThan(20);
-			for (const needle of testCase.mustContain) {
+			expect(lines.length, `${testCase.name} preview should stay bounded`).toBeLessThan(window + 10);
+			for (const needle of [firstVisible, lastVisible]) {
 				expect(text, `${testCase.name} preview should keep ${needle}`).toContain(needle);
 			}
-			for (const needle of testCase.mustHide) {
-				expect(text, `${testCase.name} preview should elide ${needle}`).not.toContain(needle);
-			}
-			expect(text, `${testCase.name} preview should advertise truncation`).toMatch(testCase.marker);
+			expect(text, `${testCase.name} preview should elide line-0`).not.toContain("line-0");
+			expect(text, `${testCase.name} preview should elide ${lastHidden}`).not.toContain(lastHidden);
+			expect(text, `${testCase.name} preview should advertise the elided head`).toContain(
+				`… ${hidden} earlier lines`,
+			);
 		}
-	});
+	}, 30_000);
 
-	test("task pending preview preserves full multiline context", () => {
+	test("task pending preview keeps the full assignment brief", () => {
+		// CONTRACT CHANGE with the single-spawn task rework: the old uncapped
+		// multi-task `context` rendering is gone with the field. The assignment
+		// brief is the durable record of what the subagent was asked to do, so
+		// the pending preview renders it in full instead of windowing it like
+		// bash/ssh command previews or eval cell code.
 		const longLines = Array.from({ length: 80 }, (_, i) => `line-${i}`);
 		const { lines, text } = renderPending("task", {
 			agent: "task",
-			context: longLines.join("\n"),
-			tasks: [{ id: "alpha", description: "preview" }],
+			id: "alpha",
+			description: "preview",
+			assignment: longLines.join("\n"),
 		});
 
-		expect(lines.length, "task preview should not be capped").toBeGreaterThan(80);
+		expect(lines.length, "task assignment brief should not be capped").toBeGreaterThan(80);
+		expect(text).toContain("preview");
 		expect(text).toContain("line-0");
 		expect(text).toContain("line-40");
 		expect(text).toContain("line-79");
-		expect(text).not.toMatch(/more lines/);
 	});
 
-	test("eval pending preview preserves full code (never collapsed)", () => {
-		const longLines = Array.from({ length: 80 }, (_, i) => `line-${i}`);
+	test("eval pending preview windows the code to the viewport tail", () => {
+		// Eval cell code is capped to the same viewport-sized TAIL window as
+		// bash/ssh: the live edge stays visible behind an "… N earlier lines"
+		// marker on top; ctrl+o uncaps. Unlike bash, the marker row sits above
+		// the window, so previewWindowRows() code lines stay visible.
+		const window = previewWindowRows();
+		const total = window + 5;
+		const hidden = total - window;
+		const longLines = Array.from({ length: total }, (_, i) => `line-${i}`);
 		const { lines, text } = renderPending("eval", {
 			cells: [{ language: "js", title: "big", code: longLines.map(line => `const ${line} = 1;`).join("\n") }],
 		});
 
-		expect(lines.length, "eval code preview should not be capped").toBeGreaterThan(80);
-		expect(text).toContain("const line-0 = 1;");
-		expect(text).toContain("const line-40 = 1;");
-		expect(text).toContain("const line-79 = 1;");
-		expect(text).not.toMatch(/more lines/);
-		expect(text).not.toMatch(/earlier lines/);
+		expect(lines.length, "eval code preview should stay bounded").toBeLessThan(window + 10);
+		expect(text).toContain(`const line-${total - 1} = 1;`);
+		expect(text).toContain(`const line-${hidden} = 1;`);
+		expect(text).not.toContain("const line-0 = 1;");
+		expect(text).not.toContain(`const line-${hidden - 1} = 1;`);
+		expect(text).toContain(`… ${hidden} earlier lines`);
 	});
 });

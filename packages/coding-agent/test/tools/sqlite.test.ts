@@ -3,17 +3,17 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import "../../src/tools/renderers";
-import { Settings } from "../../src/config/settings";
-import { ReadTool } from "../../src/tools/read";
+import "@oh-my-pi/pi-coding-agent/tools/renderers";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
 import {
 	listTables,
 	parseSqlitePathCandidates,
 	parseSqliteSelector,
 	renderTable,
 	renderTableList,
-} from "../../src/tools/sqlite-reader";
-import { WriteTool } from "../../src/tools/write";
+} from "@oh-my-pi/pi-coding-agent/tools/sqlite-reader";
+import { WriteTool } from "@oh-my-pi/pi-coding-agent/tools/write";
 
 type ToolTextResult = {
 	content: Array<{ type: string; text?: string }>;
@@ -327,6 +327,29 @@ describe("SQLite tool support", () => {
 				path: `${sqlitePath}?q=INSERT+INTO+users+(name,email,status,created)+VALUES+('X','x@example.com','active',7)`,
 			}),
 		).rejects.toThrow(/readonly/i);
+	});
+
+	it("caps raw ?q= queries at the row limit and surfaces a LIMIT hint", async () => {
+		const db = new Database(sqlitePath);
+		try {
+			db.run("CREATE TABLE big (id INTEGER PRIMARY KEY, value TEXT NOT NULL)");
+			const insert = db.prepare("INSERT INTO big (value) VALUES (?)");
+			const fill = db.transaction(() => {
+				for (let i = 1; i <= 1200; i++) {
+					insert.run(`val_${i}_end`);
+				}
+			});
+			fill();
+		} finally {
+			db.close();
+		}
+
+		const result = await readTool.execute("sqlite-raw-row-cap", { path: `${sqlitePath}?q=SELECT * FROM big` });
+		const text = getText(result);
+
+		expect(text).toContain("val_1000_end");
+		expect(text).not.toContain("val_1001_end");
+		expect(text).toContain("Output capped at 1000 rows");
 	});
 
 	it("rejects table names that do not exist instead of interpolating them", async () => {

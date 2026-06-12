@@ -16,9 +16,8 @@ import type { EvalCellResult, EvalLanguage, EvalStatusEvent, EvalToolDetails } f
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { formatContextUsage } from "../modes/components/status-line/context-thresholds";
 import { truncateToVisualLines } from "../modes/components/visual-truncate";
-import { shimmerEnabled } from "../modes/theme/shimmer";
 import { getMarkdownTheme, type Theme } from "../modes/theme/theme";
-import { borderShimmerTick, markFramedBlockComponent, renderCodeCell } from "../tui";
+import { markFramedBlockComponent, renderCodeCell } from "../tui";
 import {
 	JSON_TREE_MAX_DEPTH_COLLAPSED,
 	JSON_TREE_MAX_DEPTH_EXPANDED,
@@ -34,6 +33,7 @@ import {
 	formatDuration,
 	formatStatusIcon,
 	formatTitle,
+	previewWindowRows,
 	replaceTabs,
 	shortenPath,
 	truncateToWidth,
@@ -173,7 +173,7 @@ function renderAgentProgressEvents(events: EvalStatusEvent[], theme: Theme, spin
 		const status = agentEventStatus(event.status);
 		const iconStatus =
 			status === "completed"
-				? "success"
+				? "done"
 				: status === "failed"
 					? "error"
 					: status === "aborted"
@@ -183,10 +183,13 @@ function renderAgentProgressEvents(events: EvalStatusEvent[], theme: Theme, spin
 							: "running";
 		const iconColor =
 			status === "completed" ? "success" : status === "failed" || status === "aborted" ? "error" : "accent";
-		const icon = formatStatusIcon(iconStatus, theme, status === "running" ? spinnerFrame : undefined);
+		const icon =
+			status === "completed"
+				? theme.styledSymbol("tool.eval", "accent")
+				: theme.fg(iconColor, formatStatusIcon(iconStatus, theme, status === "running" ? spinnerFrame : undefined));
 
 		const id = eventString(event.id) ?? "agent";
-		let line = `${prefix} ${theme.fg(iconColor, icon)} ${theme.fg("accent", theme.bold(id))}`;
+		let line = `${prefix} ${icon} ${theme.fg("accent", theme.bold(id))}`;
 
 		if (status === "failed" || status === "aborted") {
 			line += ` ${formatBadge(status, iconColor, theme)}`;
@@ -247,7 +250,7 @@ function formatStatusEvent(event: EvalStatusEvent, theme: Theme): string {
 		sh: "icon.package",
 		env: "icon.package",
 		batch: "icon.package",
-		llm: "icon.package",
+		completion: "icon.package",
 		log: "icon.package",
 		phase: "icon.package",
 	};
@@ -316,7 +319,7 @@ function formatStatusEvent(event: EvalStatusEvent, theme: Theme): string {
 		case "batch":
 			parts.push(`${data.files} file${(data.files as number) !== 1 ? "s" : ""} processed`);
 			break;
-		case "llm":
+		case "completion":
 			if (data.model) parts.push(String(data.model));
 			if (data.tier && data.tier !== data.model) parts.push(`(${data.tier})`);
 			parts.push(`${data.chars ?? 0} chars`);
@@ -453,7 +456,7 @@ function formatCellOutputLines(
 	previewLines: number,
 	theme: Theme,
 	width: number,
-): { lines: string[]; hiddenCount: number } {
+): { lines: readonly string[]; hiddenCount: number } {
 	if (!cell.output) {
 		return { lines: [], hiddenCount: 0 };
 	}
@@ -490,9 +493,8 @@ export const evalToolRenderer = {
 		let cached: { key: string; width: number; result: string[] } | undefined;
 
 		return markFramedBlockComponent({
-			render: (width: number): string[] => {
-				const animate = options.isPartial && shimmerEnabled();
-				const key = `${animate ? borderShimmerTick() : 0}|${options.expanded ? 1 : 0}|${cells.map(c => `${c.language}:${c.title ?? ""}:${c.code.length}`).join("|")}`;
+			render: (width: number): readonly string[] => {
+				const key = `${options.expanded ? 1 : 0}|${previewWindowRows()}|${cells.map(c => `${c.language}:${c.title ?? ""}:${c.code.length}`).join("|")}`;
 				if (cached && cached.key === key && cached.width === width) {
 					return cached.result;
 				}
@@ -509,14 +511,12 @@ export const evalToolRenderer = {
 							title: cell.title,
 							status: "pending",
 							width,
-							// Always render the full source: the code is fixed input, not the
-							// streaming part, so it is never compacted. While still pending
-							// (args streaming) the block is not yet committed to native
-							// scrollback — its head is only committed once a result exists and
-							// the code has finalized (see `isStreamingPreviewAppendOnly`).
-							codeMaxLines: Number.POSITIVE_INFINITY,
+							// Viewport-sized tail window following the newest streamed code
+							// line; renderResult keeps the same cap so the cell never snaps
+							// open on completion. Only ctrl+o uncaps.
+							codeTail: true,
+							codeMaxLines: previewWindowRows(),
 							expanded: options.expanded,
-							animate,
 						},
 						uiTheme,
 					);
@@ -576,11 +576,10 @@ export const evalToolRenderer = {
 			let cached: { key: string; width: number; result: string[] } | undefined;
 
 			return markFramedBlockComponent({
-				render: (width: number): string[] => {
+				render: (width: number): readonly string[] => {
 					const expanded = options.renderContext?.expanded ?? options.expanded;
 					const previewLines = options.renderContext?.previewLines ?? EVAL_DEFAULT_PREVIEW_LINES;
-					const animate = options.isPartial && shimmerEnabled();
-					const key = `${expanded}|${previewLines}|${options.spinnerFrame}|${animate ? borderShimmerTick() : 0}`;
+					const key = `${expanded}|${previewLines}|${options.spinnerFrame}|${previewWindowRows()}`;
 					if (cached && cached.key === key && cached.width === width) {
 						return cached.result;
 					}
@@ -617,12 +616,13 @@ export const evalToolRenderer = {
 								duration: cell.durationMs,
 								output: outputLines.length > 0 ? outputLines.join("\n") : undefined,
 								outputMaxLines: outputLines.length,
-								// Code is fixed input — always shown in full, never compacted.
-								// Only `output` honors the collapsed preview cap above.
-								codeMaxLines: Number.POSITIVE_INFINITY,
+								// Same viewport-sized tail window as the pending preview so the
+								// cell never snaps open on completion; only ctrl+o uncaps.
+								// `output` keeps its own preview cap from above.
+								codeTail: true,
+								codeMaxLines: previewWindowRows(),
 								expanded,
 								width,
-								animate,
 							},
 							uiTheme,
 						);
@@ -702,12 +702,12 @@ export const evalToolRenderer = {
 		const textContent = `\n${styledOutput}`;
 
 		let cachedWidth: number | undefined;
-		let cachedLines: string[] | undefined;
+		let cachedLines: readonly string[] | undefined;
 		let cachedSkipped: number | undefined;
 		let cachedPreviewLines: number | undefined;
 
 		return {
-			render: (width: number): string[] => {
+			render: (width: number): readonly string[] => {
 				const previewLines = options.renderContext?.previewLines ?? EVAL_DEFAULT_PREVIEW_LINES;
 				if (cachedLines === undefined || cachedWidth !== width || cachedPreviewLines !== previewLines) {
 					const result = truncateToVisualLines(textContent, previewLines, width);
@@ -752,17 +752,10 @@ export const evalToolRenderer = {
 		};
 	},
 
-	// Append-only once a result exists (args complete → code finalized). The code
-	// is rendered in full as a fixed top-anchored prefix, and the streamed stdout
-	// below it only appends rows at the bottom, so the scrolled-off head commits
-	// to native scrollback instead of being yanked — collapsed or expanded, since
-	// the collapsed output cap keeps its sliding tail in the bottom live region.
-	// Returns false while still pending: the code is mid-stream (args incomplete)
-	// and its header still reads "pending", so committing it would strand a stale
-	// pending preview in history.
-	isStreamingPreviewAppendOnly(_args: EvalRenderArgs, _options: RenderResultOptions, result?: unknown): boolean {
-		return result != null;
-	},
 	mergeCallAndResult: true,
 	inline: true,
+	// Pending preview shows tail-window code cells; the result render
+	// interleaves each cell's output under its code, re-laying-out every row
+	// below the first cell. Keep the preview out of native scrollback mid-run.
+	provisionalPendingPreview: true,
 };

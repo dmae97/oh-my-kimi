@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "bun:test";
-import { highlightMagicKeywords } from "../../src/modes/magic-keywords";
-import { initTheme } from "../../src/modes/theme/theme";
+import { highlightMagicKeywords } from "@oh-my-pi/pi-coding-agent/modes/magic-keywords";
+import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 
 beforeAll(async () => {
 	// Gradient palettes read the active theme's color mode.
@@ -9,21 +9,21 @@ beforeAll(async () => {
 
 describe("highlightMagicKeywords", () => {
 	it("paints every magic keyword in a single prose pass, preserving visible text", () => {
-		const input = "first ultrathink then orchestrate the workflow";
+		const input = "first ultrathink then orchestrate the workflowz";
 		const decorated = highlightMagicKeywords(input);
 		expect(decorated).not.toBe(input);
 		expect(decorated).toContain("\x1b[38");
 		expect(Bun.stripANSI(decorated)).toBe(input);
 		// Each keyword is gradient-painted character-by-character, so none survives as a
 		// contiguous run in the decorated output.
-		for (const keyword of ["ultrathink", "orchestrate", "workflow"]) {
+		for (const keyword of ["ultrathink", "orchestrate", "workflowz"]) {
 			expect(decorated).not.toContain(keyword);
 			expect(Bun.stripANSI(decorated)).toContain(keyword);
 		}
 	});
 
 	it("never paints keywords inside code spans, fenced blocks, or XML sections", () => {
-		const input = "`ultrathink`\n```\norchestrate\n```\n<x>workflow</x>";
+		const input = "`ultrathink`\n```\norchestrate\n```\n<x>workflowz</x>";
 		expect(highlightMagicKeywords(input)).toBe(input);
 	});
 

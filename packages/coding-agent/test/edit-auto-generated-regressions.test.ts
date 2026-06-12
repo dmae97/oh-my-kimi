@@ -16,9 +16,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Agent, type AgentTool } from "@oh-my-pi/pi-agent-core";
-import { type AssistantMessage, getBundledModel, type StopReason, type ToolCall } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, StopReason, ToolCall } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { EditTool } from "@oh-my-pi/pi-coding-agent/edit";
@@ -288,11 +289,14 @@ it("multi-entry edit on an auto-generated file surfaces isError + error text ins
 		// the streaming preview as if it succeeded.
 		expect(result.isError).toBe(true);
 
-		// Both per-entry failures must be preserved in the content text so the
-		// agent (and the error renderer) see the real cause.
+		// The orchestrator stops at the first failing entry: the failure must
+		// carry the real cause and entry position, and the remaining entries
+		// must be explicitly reported as not applied (never silently skipped).
 		const text = (result.content?.find(c => c.type === "text") as { text?: string } | undefined)?.text ?? "";
 		const occurrences = text.match(/Cannot modify auto-generated file/g) ?? [];
-		expect(occurrences.length).toBe(2);
+		expect(occurrences.length).toBe(1);
+		expect(text).toContain("(entry 1 of 2)");
+		expect(text).toContain("Entry 2 was NOT applied");
 
 		// `details.diff` must not contain a fabricated diff that would mislead the
 		// renderer's preview-fallback branch into showing the proposed change.

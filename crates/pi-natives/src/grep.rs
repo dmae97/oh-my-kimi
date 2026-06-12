@@ -12,7 +12,10 @@ use std::{
 	fs::File,
 	io::{self, Read},
 	path::{Path, PathBuf},
-	sync::{Arc, Mutex},
+	sync::{
+		Arc, Mutex,
+		atomic::{AtomicU64, Ordering},
+	},
 };
 
 use globset::GlobSet;
@@ -87,41 +90,45 @@ pub struct SearchOptions {
 #[napi(object)]
 pub struct GrepOptions<'env> {
 	/// Regex pattern to search for.
-	pub pattern:        String,
+	pub pattern:            String,
 	/// Directory or file to search.
-	pub path:           String,
+	pub path:               String,
 	/// Glob filter for filenames (e.g., "*.ts").
-	pub glob:           Option<String>,
+	pub glob:               Option<String>,
 	/// Filter by file type (e.g., "js", "py", "rust").
-	pub r#type:         Option<String>,
+	pub r#type:             Option<String>,
 	/// Case-insensitive search.
-	pub ignore_case:    Option<bool>,
+	pub ignore_case:        Option<bool>,
 	/// Enable multiline matching.
-	pub multiline:      Option<bool>,
+	pub multiline:          Option<bool>,
 	/// Include hidden files (default: true).
-	pub hidden:         Option<bool>,
+	pub hidden:             Option<bool>,
 	/// Respect .gitignore files (default: true).
-	pub gitignore:      Option<bool>,
+	pub gitignore:          Option<bool>,
 	/// Enable shared filesystem scan cache (default: false).
-	pub cache:          Option<bool>,
+	pub cache:              Option<bool>,
 	/// Maximum number of matches to return.
-	pub max_count:      Option<u32>,
+	pub max_count:          Option<u32>,
 	/// Skip first N matches.
-	pub offset:         Option<u32>,
+	pub offset:             Option<u32>,
 	/// Lines of context before matches.
-	pub context_before: Option<u32>,
+	pub context_before:     Option<u32>,
 	/// Lines of context after matches.
-	pub context_after:  Option<u32>,
+	pub context_after:      Option<u32>,
 	/// Lines of context before/after matches (legacy).
-	pub context:        Option<u32>,
+	pub context:            Option<u32>,
 	/// Truncate lines longer than this (characters).
-	pub max_columns:    Option<u32>,
+	pub max_columns:        Option<u32>,
 	/// Output mode (content, filesWithMatches, or count).
-	pub mode:           Option<GrepOutputMode>,
+	pub mode:               Option<GrepOutputMode>,
+	/// Maximum matches collected per file (content mode). Keeps one hot file
+	/// from exhausting the global `max_count` budget before other files are
+	/// reached.
+	pub max_count_per_file: Option<u32>,
 	/// Abort signal for cancelling the operation.
-	pub signal:         Option<Unknown<'env>>,
+	pub signal:             Option<Unknown<'env>>,
 	/// Timeout in milliseconds for the operation.
-	pub timeout_ms:     Option<u32>,
+	pub timeout_ms:         Option<u32>,
 }
 
 /// A context line (before or after a match).
@@ -196,6 +203,8 @@ pub struct GrepResult {
 	pub files_searched:     u32,
 	/// Whether the limit/offset stopped the search early.
 	pub limit_reached:      Option<bool>,
+	/// Number of files skipped because they exceed the size limit.
+	pub skipped_oversized:  Option<u32>,
 }
 
 enum TypeFilter {
@@ -266,6 +275,16 @@ struct FileSearchResult {
 enum FileBytes {
 	Mapped(memmap2::Mmap),
 	Owned(Vec<u8>),
+}
+
+/// Outcome of attempting to read a file for searching.
+enum ReadFile {
+	Bytes(FileBytes),
+	/// File exceeds [`MAX_FILE_BYTES`]; callers count these so the skip can be
+	/// surfaced instead of silently returning no matches.
+	Oversized,
+	/// Unreadable or not a regular file; silently skipped.
+	Skipped,
 }
 
 impl FileBytes {
@@ -503,12 +522,14 @@ fn resolve_context(
 
 #[derive(Clone, Copy)]
 struct SearchParams {
-	context_before: u32,
-	context_after:  u32,
-	max_columns:    Option<u32>,
-	mode:           OutputMode,
-	max_count:      Option<u64>,
-	offset:         u64,
+	context_before:     u32,
+	context_after:      u32,
+	max_columns:        Option<u32>,
+	mode:               OutputMode,
+	max_count:          Option<u64>,
+	max_count_per_file: Option<u64>,
+	offset:             u64,
+	multiline:          bool,
 }
 
 fn run_search(
@@ -552,44 +573,46 @@ fn build_searcher_for_params(params: SearchParams) -> Searcher {
 		} else {
 			0
 		},
+		params.multiline,
 	)
 }
 
-fn build_searcher(context_before: u32, context_after: u32) -> Searcher {
+fn build_searcher(context_before: u32, context_after: u32, multiline: bool) -> Searcher {
 	SearcherBuilder::new()
 		.binary_detection(BinaryDetection::quit(b'\x00'))
 		.line_number(true)
+		.multi_line(multiline)
 		.before_context(context_before as usize)
 		.after_context(context_after as usize)
 		.build()
 }
 
-/// Read file bytes, returning `None` for oversized or non-file paths.
-fn read_file_bytes(path: &Path) -> io::Result<Option<FileBytes>> {
+/// Read file bytes, distinguishing oversized files from other skips.
+fn read_file_bytes(path: &Path) -> io::Result<ReadFile> {
 	let file = match File::open(path) {
 		Ok(file) => file,
 		Err(err)
 			if matches!(err.kind(), io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied) =>
 		{
-			return Ok(None);
+			return Ok(ReadFile::Skipped);
 		},
 		Err(err) => return Err(err),
 	};
 	let metadata = file.metadata()?;
 	if !metadata.is_file() {
-		return Ok(None);
+		return Ok(ReadFile::Skipped);
 	}
 	let size = metadata.len();
 	if size > MAX_FILE_BYTES {
-		return Ok(None);
+		return Ok(ReadFile::Oversized);
 	} else if size == 0 {
-		return Ok(Some(FileBytes::Owned(Vec::new())));
+		return Ok(ReadFile::Bytes(FileBytes::Owned(Vec::new())));
 	}
 	if size <= SMALL_FILE_READ_BYTES {
 		let mut buffer = Vec::with_capacity(size as usize);
 		let mut handle = file;
 		handle.read_to_end(&mut buffer)?;
-		return Ok(Some(FileBytes::Owned(buffer)));
+		return Ok(ReadFile::Bytes(FileBytes::Owned(buffer)));
 	}
 
 	let mapping = unsafe {
@@ -608,7 +631,7 @@ fn read_file_bytes(path: &Path) -> io::Result<Option<FileBytes>> {
 		FileBytes::Owned(buffer)
 	};
 
-	Ok(Some(bytes))
+	Ok(ReadFile::Bytes(bytes))
 }
 
 // ---------------------------------------------------------------------------
@@ -683,22 +706,23 @@ const fn empty_search_result(error: Option<String>) -> SearchResult {
 
 /// Internal configuration for grep, extracted from options.
 struct GrepConfig {
-	pattern:        String,
-	path:           String,
-	glob:           Option<String>,
-	type_filter:    Option<String>,
-	ignore_case:    Option<bool>,
-	multiline:      Option<bool>,
-	hidden:         Option<bool>,
-	gitignore:      Option<bool>,
-	cache:          Option<bool>,
-	max_count:      Option<u32>,
-	offset:         Option<u32>,
-	context_before: Option<u32>,
-	context_after:  Option<u32>,
-	context:        Option<u32>,
-	max_columns:    Option<u32>,
-	mode:           Option<GrepOutputMode>,
+	pattern:            String,
+	path:               String,
+	glob:               Option<String>,
+	type_filter:        Option<String>,
+	ignore_case:        Option<bool>,
+	multiline:          Option<bool>,
+	hidden:             Option<bool>,
+	gitignore:          Option<bool>,
+	cache:              Option<bool>,
+	max_count:          Option<u32>,
+	offset:             Option<u32>,
+	context_before:     Option<u32>,
+	context_after:      Option<u32>,
+	context:            Option<u32>,
+	max_columns:        Option<u32>,
+	mode:               Option<GrepOutputMode>,
+	max_count_per_file: Option<u32>,
 }
 
 fn collect_files(
@@ -979,22 +1003,23 @@ mod tests {
 	#[cfg(unix)]
 	fn base_grep_config(path: &Path) -> GrepConfig {
 		GrepConfig {
-			pattern:        "needle".to_string(),
-			path:           path.to_string_lossy().into_owned(),
-			glob:           None,
-			type_filter:    None,
-			ignore_case:    None,
-			multiline:      None,
-			hidden:         None,
-			gitignore:      Some(false),
-			cache:          Some(false),
-			max_count:      None,
-			offset:         None,
-			context_before: None,
-			context_after:  None,
-			context:        None,
-			max_columns:    None,
-			mode:           None,
+			pattern:            "needle".to_string(),
+			path:               path.to_string_lossy().into_owned(),
+			glob:               None,
+			type_filter:        None,
+			ignore_case:        None,
+			multiline:          None,
+			hidden:             None,
+			gitignore:          Some(false),
+			cache:              Some(false),
+			max_count:          None,
+			offset:             None,
+			context_before:     None,
+			context_after:      None,
+			context:            None,
+			max_columns:        None,
+			mode:               None,
+			max_count_per_file: None,
 		}
 	}
 
@@ -1139,6 +1164,49 @@ mod tests {
 		assert_eq!(result.files_searched, 0);
 		assert_eq!(result.limit_reached, None);
 	}
+
+	#[cfg(unix)]
+	#[test]
+	fn grep_multiline_matches_cross_line_patterns() {
+		let root = TempDirGuard::new();
+		write_file(&root.path().join("code.txt"), "fn foo() {\n  return 1;\n}\n");
+
+		let mut config = base_grep_config(root.path());
+		config.pattern = r"foo\(\) \{\n  return".to_string();
+		config.multiline = Some(true);
+
+		let result = grep_sync(config, None, task::CancelToken::default())
+			.expect("multiline grep should succeed");
+
+		assert_eq!(result.total_matches, 1, "cross-line pattern should match across lines");
+		assert_eq!(result.matches.len(), 1);
+		assert_eq!(result.matches[0].path, "code.txt");
+		assert_eq!(result.matches[0].line_number, 1);
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn grep_per_file_max_count_preserves_file_diversity() {
+		let root = TempDirGuard::new();
+		write_file(&root.path().join("a.txt"), "needle 1\nneedle 2\nneedle 3\nneedle 4\nneedle 5\n");
+		write_file(&root.path().join("z.txt"), "needle z\n");
+
+		let mut config = base_grep_config(root.path());
+		config.max_count = Some(4);
+		config.max_count_per_file = Some(2);
+
+		let result = grep_sync(config, None, task::CancelToken::default())
+			.expect("directory grep should succeed");
+
+		let paths: Vec<&str> = result
+			.matches
+			.iter()
+			.map(|matched| matched.path.as_str())
+			.collect();
+		assert_eq!(paths, ["a.txt", "a.txt", "z.txt"], "hot file must not starve later files");
+		assert_eq!(result.files_with_matches, 2);
+		assert_eq!(result.limit_reached, Some(true));
+	}
 }
 
 fn build_matcher(
@@ -1169,9 +1237,15 @@ fn build_matcher(
 
 fn per_file_params(params: SearchParams) -> SearchParams {
 	let file_limit = match params.mode {
-		OutputMode::Content => params
-			.max_count
-			.map(|max| max.saturating_add(params.offset)),
+		OutputMode::Content => {
+			let global = params
+				.max_count
+				.map(|max| max.saturating_add(params.offset));
+			match (global, params.max_count_per_file) {
+				(Some(global), Some(per_file)) => Some(global.min(per_file)),
+				(global, per_file) => global.or(per_file),
+			}
+		},
 		OutputMode::Count => None,
 		OutputMode::FilesWithMatches => Some(1),
 	};
@@ -1182,6 +1256,7 @@ fn run_parallel_search(
 	entries: &[FileEntry],
 	matcher: &grep_regex::RegexMatcher,
 	params: SearchParams,
+	skipped_oversized: &AtomicU64,
 ) -> Vec<FileSearchResult> {
 	let file_params = per_file_params(params);
 	let raw: Vec<Option<FileSearchResult>> = entries
@@ -1189,7 +1264,14 @@ fn run_parallel_search(
 		.map_init(
 			|| build_searcher_for_params(file_params),
 			|searcher, entry| {
-				let bytes = read_file_bytes(&entry.path).ok()??;
+				let bytes = match read_file_bytes(&entry.path).ok()? {
+					ReadFile::Bytes(bytes) => bytes,
+					ReadFile::Oversized => {
+						skipped_oversized.fetch_add(1, Ordering::Relaxed);
+						return None;
+					},
+					ReadFile::Skipped => return None,
+				};
 				let search = if file_params.mode == OutputMode::FilesWithMatches {
 					let matched = matcher.is_match(bytes.as_slice()).ok()?;
 					SearchResultInternal {
@@ -1215,17 +1297,18 @@ fn run_parallel_search(
 }
 
 struct StreamingGrepVisitor<'a> {
-	root:           &'a Path,
-	matcher:        &'a grep_regex::RegexMatcher,
-	glob_set:       Option<&'a GlobSet>,
-	type_filter:    Option<&'a TypeFilter>,
-	params:         SearchParams,
-	searcher:       Searcher,
-	results:        Vec<FileSearchResult>,
-	shared_results: Arc<Mutex<Vec<Vec<FileSearchResult>>>>,
-	error:          Arc<Mutex<Option<String>>>,
-	ct:             &'a task::CancelToken,
-	visited:        usize,
+	root:              &'a Path,
+	matcher:           &'a grep_regex::RegexMatcher,
+	glob_set:          Option<&'a GlobSet>,
+	type_filter:       Option<&'a TypeFilter>,
+	params:            SearchParams,
+	searcher:          Searcher,
+	results:           Vec<FileSearchResult>,
+	shared_results:    Arc<Mutex<Vec<Vec<FileSearchResult>>>>,
+	error:             Arc<Mutex<Option<String>>>,
+	skipped_oversized: Arc<AtomicU64>,
+	ct:                &'a task::CancelToken,
+	visited:           usize,
 }
 
 impl Drop for StreamingGrepVisitor<'_> {
@@ -1278,8 +1361,13 @@ impl ParallelVisitor for StreamingGrepVisitor<'_> {
 			return WalkState::Continue;
 		}
 
-		let Ok(Some(bytes)) = read_file_bytes(entry.path()) else {
-			return WalkState::Continue;
+		let bytes = match read_file_bytes(entry.path()) {
+			Ok(ReadFile::Bytes(bytes)) => bytes,
+			Ok(ReadFile::Oversized) => {
+				self.skipped_oversized.fetch_add(1, Ordering::Relaxed);
+				return WalkState::Continue;
+			},
+			Ok(ReadFile::Skipped) | Err(_) => return WalkState::Continue,
 		};
 		let search = if self.params.mode == OutputMode::FilesWithMatches {
 			let Ok(matched) = self.matcher.is_match(bytes.as_slice()) else {
@@ -1311,30 +1399,32 @@ impl ParallelVisitor for StreamingGrepVisitor<'_> {
 }
 
 struct StreamingGrepVisitorBuilder<'a> {
-	root:           &'a Path,
-	matcher:        &'a grep_regex::RegexMatcher,
-	glob_set:       Option<&'a GlobSet>,
-	type_filter:    Option<&'a TypeFilter>,
-	params:         SearchParams,
-	shared_results: Arc<Mutex<Vec<Vec<FileSearchResult>>>>,
-	error:          Arc<Mutex<Option<String>>>,
-	ct:             &'a task::CancelToken,
+	root:              &'a Path,
+	matcher:           &'a grep_regex::RegexMatcher,
+	glob_set:          Option<&'a GlobSet>,
+	type_filter:       Option<&'a TypeFilter>,
+	params:            SearchParams,
+	shared_results:    Arc<Mutex<Vec<Vec<FileSearchResult>>>>,
+	error:             Arc<Mutex<Option<String>>>,
+	skipped_oversized: Arc<AtomicU64>,
+	ct:                &'a task::CancelToken,
 }
 
 impl<'a> ParallelVisitorBuilder<'a> for StreamingGrepVisitorBuilder<'a> {
 	fn build(&mut self) -> Box<dyn ParallelVisitor + 'a> {
 		Box::new(StreamingGrepVisitor {
-			root:           self.root,
-			matcher:        self.matcher,
-			glob_set:       self.glob_set,
-			type_filter:    self.type_filter,
-			params:         self.params,
-			searcher:       build_searcher_for_params(self.params),
-			results:        Vec::new(),
-			shared_results: Arc::clone(&self.shared_results),
-			error:          Arc::clone(&self.error),
-			ct:             self.ct,
-			visited:        0,
+			root:              self.root,
+			matcher:           self.matcher,
+			glob_set:          self.glob_set,
+			type_filter:       self.type_filter,
+			params:            self.params,
+			searcher:          build_searcher_for_params(self.params),
+			results:           Vec::new(),
+			shared_results:    Arc::clone(&self.shared_results),
+			error:             Arc::clone(&self.error),
+			skipped_oversized: Arc::clone(&self.skipped_oversized),
+			ct:                self.ct,
+			visited:           0,
 		})
 	}
 }
@@ -1349,7 +1439,7 @@ fn run_streaming_grep(
 	use_gitignore: bool,
 	skip_node_modules: bool,
 	ct: &task::CancelToken,
-) -> Result<Vec<FileSearchResult>> {
+) -> Result<(Vec<FileSearchResult>, u64)> {
 	let mut builder =
 		fs_cache::build_walker(search_path, include_hidden, use_gitignore, skip_node_modules, false);
 	let workers = fs_cache::grep_workers();
@@ -1359,6 +1449,7 @@ fn run_streaming_grep(
 	let file_params = per_file_params(params);
 	let shared_results = Arc::new(Mutex::new(Vec::new()));
 	let error = Arc::new(Mutex::new(None));
+	let skipped_oversized = Arc::new(AtomicU64::new(0));
 	let mut visitor_builder = StreamingGrepVisitorBuilder {
 		root: search_path,
 		matcher,
@@ -1367,6 +1458,7 @@ fn run_streaming_grep(
 		params: file_params,
 		shared_results: Arc::clone(&shared_results),
 		error: Arc::clone(&error),
+		skipped_oversized: Arc::clone(&skipped_oversized),
 		ct,
 	};
 	ct.heartbeat()?;
@@ -1384,7 +1476,7 @@ fn run_streaming_grep(
 		.flatten()
 		.collect();
 	results.sort_unstable_by(|a, b| a.relative_path.cmp(&b.relative_path));
-	Ok(results)
+	Ok((results, skipped_oversized.load(Ordering::Relaxed)))
 }
 
 fn push_count_match(matches: &mut Vec<GrepMatch>, path: String, match_count: u64) {
@@ -1532,8 +1624,16 @@ fn search_sync(content: &[u8], options: SearchOptions) -> SearchResult {
 	let max_columns = options.max_columns;
 	let max_count = options.max_count.map(u64::from);
 	let offset = options.offset.unwrap_or(0) as u64;
-	let params =
-		SearchParams { context_before, context_after, max_columns, mode, max_count, offset };
+	let params = SearchParams {
+		context_before,
+		context_after,
+		max_columns,
+		mode,
+		max_count,
+		max_count_per_file: None,
+		offset,
+		multiline,
+	};
 	let result = match run_search(&matcher, content, params) {
 		Ok(result) => result,
 		Err(err) => return empty_search_result(Some(err.to_string())),
@@ -1582,7 +1682,9 @@ fn grep_sync(
 		max_columns,
 		mode: output_mode,
 		max_count,
+		max_count_per_file: options.max_count_per_file.map(u64::from),
 		offset,
+		multiline,
 	};
 
 	if !metadata.is_file() && !metadata.is_dir() {
@@ -1592,6 +1694,7 @@ fn grep_sync(
 			files_with_matches: 0,
 			files_searched:     0,
 			limit_reached:      None,
+			skipped_oversized:  None,
 		});
 	}
 
@@ -1605,17 +1708,32 @@ fn grep_sync(
 				files_with_matches: 0,
 				files_searched:     0,
 				limit_reached:      None,
+				skipped_oversized:  None,
 			});
 		}
 
-		let Ok(Some(bytes)) = read_file_bytes(&search_path) else {
-			return Ok(GrepResult {
-				matches:            Vec::new(),
-				total_matches:      0,
-				files_with_matches: 0,
-				files_searched:     0,
-				limit_reached:      None,
-			});
+		let bytes = match read_file_bytes(&search_path) {
+			Ok(ReadFile::Bytes(bytes)) => bytes,
+			Ok(ReadFile::Oversized) => {
+				return Ok(GrepResult {
+					matches:            Vec::new(),
+					total_matches:      0,
+					files_with_matches: 0,
+					files_searched:     0,
+					limit_reached:      None,
+					skipped_oversized:  Some(1),
+				});
+			},
+			Ok(ReadFile::Skipped) | Err(_) => {
+				return Ok(GrepResult {
+					matches:            Vec::new(),
+					total_matches:      0,
+					files_with_matches: 0,
+					files_searched:     0,
+					limit_reached:      None,
+					skipped_oversized:  None,
+				});
+			},
 		};
 
 		if output_mode == OutputMode::FilesWithMatches && max_count.is_none() && offset == 0 {
@@ -1629,6 +1747,7 @@ fn grep_sync(
 					files_with_matches: 0,
 					files_searched:     1,
 					limit_reached:      None,
+					skipped_oversized:  None,
 				});
 			}
 
@@ -1647,6 +1766,7 @@ fn grep_sync(
 				files_with_matches: 1,
 				files_searched:     1,
 				limit_reached:      None,
+				skipped_oversized:  None,
 			});
 		}
 
@@ -1660,6 +1780,7 @@ fn grep_sync(
 				files_with_matches: 0,
 				files_searched:     1,
 				limit_reached:      None,
+				skipped_oversized:  None,
 			});
 		}
 
@@ -1702,6 +1823,7 @@ fn grep_sync(
 			files_with_matches: 1,
 			files_searched: 1,
 			limit_reached: if limit_reached { Some(true) } else { None },
+			skipped_oversized: None,
 		});
 	}
 
@@ -1739,9 +1861,12 @@ fn grep_sync(
 				files_with_matches: 0,
 				files_searched:     0,
 				limit_reached:      None,
+				skipped_oversized:  None,
 			});
 		}
-		run_parallel_search(&entries, &matcher, params)
+		let skipped = AtomicU64::new(0);
+		let results = run_parallel_search(&entries, &matcher, params, &skipped);
+		(results, skipped.load(Ordering::Relaxed))
 	} else {
 		run_streaming_grep(
 			&search_path,
@@ -1755,6 +1880,7 @@ fn grep_sync(
 			&ct,
 		)?
 	};
+	let (results, skipped_oversized) = results;
 	let (matches, total_matches, files_with_matches, files_searched, limit_reached) =
 		aggregate_parallel_results(results, params);
 
@@ -1772,6 +1898,11 @@ fn grep_sync(
 		files_with_matches,
 		files_searched,
 		limit_reached: if limit_reached { Some(true) } else { None },
+		skipped_oversized: if skipped_oversized > 0 {
+			Some(crate::utils::clamp_u32(skipped_oversized))
+		} else {
+			None
+		},
 	})
 }
 
@@ -1880,6 +2011,7 @@ pub fn grep(
 		context,
 		max_columns,
 		mode,
+		max_count_per_file,
 		timeout_ms,
 		signal,
 	} = options;
@@ -1895,6 +2027,7 @@ pub fn grep(
 		gitignore,
 		cache,
 		max_count,
+		max_count_per_file,
 		offset,
 		context_before,
 		context_after,

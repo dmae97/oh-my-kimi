@@ -5,6 +5,7 @@
  * for both the shared gateway and local kernel spawning.
  */
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { $env, $which, getPythonEnvDir } from "@oh-my-pi/pi-utils";
 
@@ -180,6 +181,42 @@ function applyVenvEnv(
 
 function venvBinDir(venvPath: string): string {
 	return process.platform === "win32" ? path.join(venvPath, "Scripts") : path.join(venvPath, "bin");
+}
+
+function detectExplicitVenv(pythonPath: string): { venvPath: string; binDir: string } | undefined {
+	const binDir = path.dirname(pythonPath);
+	const venvPath = path.dirname(binDir);
+	if (fs.existsSync(path.join(venvPath, "pyvenv.cfg"))) {
+		return { venvPath, binDir };
+	}
+	return undefined;
+}
+
+/**
+ * Resolve an explicitly configured interpreter (`python.interpreter`) into a
+ * runtime, bypassing discovery. Does not probe or validate the executable —
+ * callers must check it actually runs. `~` expands to the home directory and
+ * relative paths resolve against `cwd`. When the interpreter sits inside a
+ * virtualenv (a `pyvenv.cfg` above its bin dir), the venv activation env is
+ * applied so subprocesses and `pip` resolve consistently.
+ */
+export function resolveExplicitPythonRuntime(
+	interpreter: string,
+	cwd: string,
+	baseEnv: Record<string, string | undefined>,
+): PythonRuntime {
+	const expanded =
+		interpreter === "~"
+			? os.homedir()
+			: interpreter.startsWith("~/")
+				? path.join(os.homedir(), interpreter.slice(2))
+				: interpreter;
+	const pythonPath = path.isAbsolute(expanded) ? expanded : path.resolve(cwd, expanded);
+	const venv = detectExplicitVenv(pythonPath);
+	if (venv) {
+		return { pythonPath, env: applyVenvEnv(baseEnv, venv.venvPath, venv.binDir), venvPath: venv.venvPath };
+	}
+	return { pythonPath, env: { ...baseEnv } };
 }
 
 /**

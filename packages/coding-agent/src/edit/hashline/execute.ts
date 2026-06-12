@@ -11,6 +11,7 @@
  * round-trip once.
  */
 import {
+	type BlockResolution,
 	buildCompactDiffPreview,
 	MismatchError as HashlineMismatchError,
 	Patch,
@@ -22,11 +23,13 @@ import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { FileDiagnosticsResult, WritethroughCallback, WritethroughDeferredHandle } from "../../lsp";
 import type { ToolSession } from "../../tools";
 import { outputMeta } from "../../tools/output-meta";
+import { ToolError } from "../../tools/tool-errors";
 import { generateDiffString } from "../diff";
 import { getFileSnapshotStore } from "../file-snapshot-store";
 import type { EditToolDetails, EditToolPerFileResult, LspBatchRequest } from "../renderer";
 import { nativeBlockResolver } from "./block-resolver";
 import { HashlineFilesystem } from "./filesystem";
+import { hashPatchInput, NOOP_HARD_LIMIT, recordNoopEdit, resetNoopEdit } from "./noop-loop-guard";
 import { type HashlineParams, hashlineEditParamsSchema } from "./params";
 
 export interface ExecuteHashlineSingleOptions {
@@ -53,6 +56,24 @@ function noChangeDiagnostic(path: string): string {
 	);
 }
 
+/**
+ * Escalated diagnostic surfaced once the same payload has no-op'd
+ * {@link NOOP_HARD_LIMIT} times in a row on the same canonical path. Thrown as
+ * a {@link ToolError} so the agent loop sees a tool *failure* — empirically
+ * far more effective at breaking a no-op edit loop than the soft hint alone
+ * (issue #2081 saw 182 byte-identical no-op results in 205 calls before the
+ * user aborted).
+ */
+function noChangeLoopDiagnostic(path: string, count: number): string {
+	return (
+		`STOP. Edits to ${path} have been a byte-identical no-op ${count} times in a row — ` +
+		`the patch body matches the file at the targeted lines and the soft hint did not break the cycle. ` +
+		`Cease re-issuing this payload. Either the intended change is already on disk (move on), ` +
+		`or your anchor is wrong (re-read the file with \`read\` to observe the current line numbers and ` +
+		`tag, then author a different edit). This exact payload will keep being rejected until it changes.`
+	);
+}
+
 function assertUniqueCanonicalPaths(prepared: readonly PreparedSection[]): void {
 	const seen = new Map<string, string>();
 	for (const entry of prepared) {
@@ -76,6 +97,20 @@ interface RenderedSection {
 	perFileResult: EditToolPerFileResult;
 }
 
+function formatBlockResolution(resolution: BlockResolution): string {
+	const op =
+		resolution.op === "delete"
+			? "delete block"
+			: resolution.op === "insert_after"
+				? "insert after block"
+				: "replace block";
+	const lines = resolution.end - resolution.start + 1;
+	const span =
+		resolution.start === resolution.end ? `line ${resolution.start}` : `lines ${resolution.start}-${resolution.end}`;
+	const suffix = resolution.op === "insert_after" ? `; body lands after line ${resolution.end}` : "";
+	return `${op} ${resolution.anchorLine} → resolved ${span} (${lines} line${lines === 1 ? "" : "s"})${suffix}`;
+}
+
 function renderSection(result: PatchSectionResult, diagnostics: FileDiagnosticsResult | undefined): RenderedSection {
 	if (result.op === "noop") {
 		const toolResult: AgentToolResult<EditToolDetails, typeof hashlineEditParamsSchema> = {
@@ -88,7 +123,7 @@ function renderSection(result: PatchSectionResult, diagnostics: FileDiagnosticsR
 		};
 	}
 
-	const diff = generateDiffString(result.before, result.after);
+	const diff = generateDiffString(result.before, result.after, undefined, { path: result.path });
 	const preview = buildCompactDiffPreview(diff.diff);
 	const meta = outputMeta()
 		.diagnostics(diagnostics?.summary ?? "", diagnostics?.messages ?? [])
@@ -96,10 +131,14 @@ function renderSection(result: PatchSectionResult, diagnostics: FileDiagnosticsR
 
 	const warningsBlock = result.warnings.length > 0 ? `\n\nWarnings:\n${result.warnings.join("\n")}` : "";
 	const previewBlock = preview.preview ? `\n${preview.preview}` : "";
+	const blockBlock =
+		result.blockResolutions && result.blockResolutions.length > 0
+			? `\n${result.blockResolutions.map(formatBlockResolution).join("\n")}`
+			: "";
 	const firstChangedLine = result.firstChangedLine ?? diff.firstChangedLine;
 	return {
 		toolResult: {
-			content: [{ type: "text", text: `${result.header}${previewBlock}${warningsBlock}` }],
+			content: [{ type: "text", text: `${result.header}${blockBlock}${previewBlock}${warningsBlock}` }],
 			details: {
 				diff: diff.diff,
 				firstChangedLine,
@@ -137,13 +176,19 @@ export async function executeHashlineSingle(
 	const patcher = new Patcher({ fs, snapshots, blockResolver: nativeBlockResolver });
 
 	// Single-section fast path: prepare, commit, render.
+	const inputHash = hashPatchInput(options.input);
 	if (patch.sections.length === 1) {
 		fs.setBatchRequest(narrowBatchRequest(options.batchRequest, true));
 		const prepared = await patcher.prepare(patch.sections[0]);
 		const sectionResult = await patcher.commit(prepared);
 		if (sectionResult.op === "noop") {
+			const { count, escalate } = recordNoopEdit(options.session, sectionResult.canonicalPath, inputHash);
+			if (escalate) {
+				throw new ToolError(noChangeLoopDiagnostic(sectionResult.path, count));
+			}
 			return renderSection(sectionResult, undefined).toolResult;
 		}
+		resetNoopEdit(options.session, sectionResult.canonicalPath);
 		return renderSection(sectionResult, fs.consumeDiagnostics(sectionResult.path)).toolResult;
 	}
 
@@ -153,7 +198,12 @@ export async function executeHashlineSingle(
 	for (const section of patch.sections) prepared.push(await patcher.prepare(section));
 	assertUniqueCanonicalPaths(prepared);
 	for (const entry of prepared) {
-		if (entry.isNoop) throw new Error(noChangeDiagnostic(entry.section.path));
+		if (entry.isNoop) {
+			const { count, escalate } = recordNoopEdit(options.session, entry.canonicalPath, inputHash);
+			throw escalate
+				? new ToolError(noChangeLoopDiagnostic(entry.section.path, count))
+				: new ToolError(noChangeDiagnostic(entry.section.path));
+		}
 	}
 	// Then commit each one, narrowing the LSP batch flush flag to the final
 	// section only. A no-op apply mid-batch is treated as a hard failure —
@@ -163,7 +213,13 @@ export async function executeHashlineSingle(
 		const isLast = i === prepared.length - 1;
 		fs.setBatchRequest(narrowBatchRequest(options.batchRequest, isLast));
 		const sectionResult = await patcher.commit(prepared[i]);
-		if (sectionResult.op === "noop") throw new Error(noChangeDiagnostic(sectionResult.path));
+		if (sectionResult.op === "noop") {
+			const { count, escalate } = recordNoopEdit(options.session, sectionResult.canonicalPath, inputHash);
+			throw escalate
+				? new ToolError(noChangeLoopDiagnostic(sectionResult.path, count))
+				: new ToolError(noChangeDiagnostic(sectionResult.path));
+		}
+		resetNoopEdit(options.session, sectionResult.canonicalPath);
 		rendered.push(renderSection(sectionResult, fs.consumeDiagnostics(sectionResult.path)));
 	}
 

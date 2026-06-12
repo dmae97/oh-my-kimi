@@ -76,4 +76,27 @@ describe("session title source persistence", () => {
 		expect(reopened.getSessionName()).toBe("Manual title");
 		expect(reopened.titleSource).toBe("user");
 	});
+	it("notifies name-change subscribers only after successful applied names", async () => {
+		const session = SessionManager.inMemory(cwd);
+		const names: Array<string | undefined> = [];
+		const unsubscribe = session.onSessionNameChanged(() => {
+			names.push(session.getSessionName());
+		});
+
+		try {
+			await expect(session.setSessionName("   ", "user")).resolves.toBe(false);
+			expect(names).toEqual([]);
+
+			await expect(session.setSessionName("Manual title", "user")).resolves.toBe(true);
+			expect(names).toEqual(["Manual title"]);
+
+			await expect(session.setSessionName("Ignored auto title", "auto")).resolves.toBe(false);
+			expect(names).toEqual(["Manual title"]);
+		} finally {
+			unsubscribe();
+		}
+
+		await expect(session.setSessionName("Second title", "user")).resolves.toBe(true);
+		expect(names).toEqual(["Manual title"]);
+	});
 });

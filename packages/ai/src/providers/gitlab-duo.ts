@@ -1,5 +1,6 @@
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { ANTHROPIC_THINKING, mapAnthropicToolChoice } from "../stream";
-import type { Api, Context, FetchImpl, Model, SimpleStreamOptions } from "../types";
+import type { Api, Context, FetchImpl, Model, ModelSpec, SimpleStreamOptions } from "../types";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { createProviderErrorMessage } from "./error-message";
 import type { OpenAICompletionsOptions } from "./openai-completions";
@@ -145,23 +146,25 @@ export function getModelMapping(modelId: string): GitLabModelMapping | undefined
 }
 
 export function getGitLabDuoModels(): Model<Api>[] {
-	return Object.entries(MODEL_MAPPINGS).map(([id, mapping]) => ({
-		id,
-		name: mapping.name,
-		api:
-			mapping.provider === "anthropic"
-				? "anthropic-messages"
-				: mapping.openaiApiType === "responses"
-					? "openai-responses"
-					: "openai-completions",
-		provider: "gitlab-duo",
-		baseUrl: mapping.provider === "anthropic" ? ANTHROPIC_PROXY_URL : OPENAI_PROXY_URL,
-		reasoning: mapping.reasoning,
-		input: [...mapping.input],
-		cost: { ...mapping.cost },
-		contextWindow: mapping.contextWindow,
-		maxTokens: mapping.maxTokens,
-	}));
+	return Object.entries(MODEL_MAPPINGS).map(([id, mapping]) =>
+		buildModel({
+			id,
+			name: mapping.name,
+			api:
+				mapping.provider === "anthropic"
+					? "anthropic-messages"
+					: mapping.openaiApiType === "responses"
+						? "openai-responses"
+						: "openai-completions",
+			provider: "gitlab-duo",
+			baseUrl: mapping.provider === "anthropic" ? ANTHROPIC_PROXY_URL : OPENAI_PROXY_URL,
+			reasoning: mapping.reasoning,
+			input: [...mapping.input],
+			cost: { ...mapping.cost },
+			contextWindow: mapping.contextWindow,
+			maxTokens: mapping.maxTokens,
+		} as ModelSpec<Api>),
+	);
 }
 
 interface DirectAccessToken {
@@ -255,12 +258,13 @@ export function streamGitLabDuo(
 			const inner =
 				mapping.provider === "anthropic"
 					? streamAnthropic(
-							{
+							buildModel({
 								...model,
 								id: mapping.model,
 								api: "anthropic-messages",
 								baseUrl: ANTHROPIC_PROXY_URL,
-							} as Model<"anthropic-messages">,
+								compat: model.compatConfig,
+							} as ModelSpec<"anthropic-messages">),
 							context,
 							{
 								apiKey: directAccess.token,
@@ -293,12 +297,13 @@ export function streamGitLabDuo(
 						)
 					: mapping.openaiApiType === "responses"
 						? streamOpenAIResponses(
-								{
+								buildModel({
 									...model,
 									id: mapping.model,
 									api: "openai-responses",
 									baseUrl: OPENAI_PROXY_URL,
-								} as Model<"openai-responses">,
+									compat: model.compatConfig,
+								} as ModelSpec<"openai-responses">),
 								context,
 								{
 									apiKey: directAccess.token,
@@ -325,12 +330,13 @@ export function streamGitLabDuo(
 								} satisfies OpenAIResponsesOptions,
 							)
 						: streamOpenAICompletions(
-								{
+								buildModel({
 									...model,
 									id: mapping.model,
 									api: "openai-completions",
 									baseUrl: OPENAI_PROXY_URL,
-								} as Model<"openai-completions">,
+									compat: model.compatConfig,
+								} as ModelSpec<"openai-completions">),
 								context,
 								{
 									apiKey: directAccess.token,

@@ -27,22 +27,17 @@ export { detectLanguageId } from "../utils/lang-from-path";
 
 /**
  * Convert a file path to a file:// URI.
+ * Uses the URL machinery so special characters (`%`, `#`, `?`, spaces) are
+ * percent-encoded; plain concatenation produced URIs that broke round-trips.
  * Handles Windows drive letters correctly.
  */
 export function fileToUri(filePath: string): string {
-	const resolved = path.resolve(filePath);
-
-	if (process.platform === "win32") {
-		// Windows: file:///C:/path/to/file
-		return `file:///${resolved.replace(/\\/g, "/")}`;
-	}
-
-	// Unix: file:///path/to/file
-	return `file://${resolved}`;
+	return Bun.pathToFileURL(path.resolve(filePath)).href;
 }
 
 /**
  * Convert a file:// URI to a file path.
+ * Tolerates both percent-encoded URIs and lax servers that send raw paths.
  * Handles Windows drive letters correctly.
  */
 export function uriToFile(uri: string): string {
@@ -50,7 +45,30 @@ export function uriToFile(uri: string): string {
 		return uri;
 	}
 
-	let filePath = decodeURIComponent(uri.slice(7));
+	// A raw `#`/`?` parses *successfully* as fragment/query and silently
+	// truncates the path — it never reaches the catch below. LSP servers do
+	// not use fragments or queries on file URIs (encoded forms are %23/%3F),
+	// so raw occurrences mean a lax server sent an unencoded path.
+	if (uri.includes("#") || uri.includes("?")) {
+		return laxUriToFile(uri);
+	}
+
+	try {
+		return Bun.fileURLToPath(uri);
+	} catch {
+		// Not a well-formed file URL (unencoded characters, stray `%`, host
+		// component). Fall back to a lenient manual conversion.
+		return laxUriToFile(uri);
+	}
+}
+
+function laxUriToFile(uri: string): string {
+	let filePath = uri.slice(7);
+	try {
+		filePath = decodeURIComponent(filePath);
+	} catch {
+		// Invalid percent-encoding — treat as a literal path.
+	}
 
 	// Windows: file:///C:/path → C:/path (strip leading slash before drive letter)
 	if (process.platform === "win32" && filePath.startsWith("/") && /^[A-Za-z]:/.test(filePath.slice(1))) {

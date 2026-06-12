@@ -441,6 +441,87 @@ describe("enforceStrictSchema", () => {
 		expect(optionalVariants).toEqual(["number", "null"]);
 	});
 
+	it("flattens optional union schemas instead of nesting anyOf wrappers", () => {
+		const schema = zodToWireSchema(
+			z.object({
+				paths: z.union([z.string(), z.array(z.string())]).optional(),
+			}),
+		);
+
+		const strict = enforceStrictSchema(schema);
+		const properties = strict.properties as Record<string, Record<string, unknown>>;
+		const branches = properties.paths.anyOf as Array<Record<string, unknown>>;
+
+		expect(branches.map(branch => branch.type)).toEqual(["string", "array", "null"]);
+		expect(branches.some(branch => Array.isArray(branch.anyOf))).toBe(false);
+	});
+
+	it("wraps constrained optional anyOf schemas so null is not blocked by sibling constraints", () => {
+		const strict = enforceStrictSchema({
+			type: "object",
+			properties: {
+				choice: {
+					type: "string",
+					anyOf: [{ enum: ["a"] }, { enum: ["b"] }],
+				},
+			},
+		});
+		const properties = strict.properties as Record<string, Record<string, unknown>>;
+		const branches = properties.choice.anyOf as Array<Record<string, unknown>>;
+
+		expect(branches).toHaveLength(2);
+		expect(branches[0].type).toBe("string");
+		expect(Array.isArray(branches[0].anyOf)).toBe(true);
+		expect(branches[1]).toEqual({ type: "null" });
+	});
+
+	it("splices natively nested pure unions into the parent anyOf", () => {
+		const strict = enforceStrictSchema({
+			type: "object",
+			properties: {
+				value: {
+					anyOf: [
+						{ anyOf: [{ type: "string" }, { type: "number" }], description: "inner union" },
+						{ type: "boolean" },
+					],
+				},
+				optionalValue: {
+					anyOf: [{ anyOf: [{ type: "string" }, { type: "number" }] }, { type: "boolean" }],
+				},
+			},
+			required: ["value"],
+		});
+		const properties = strict.properties as Record<string, Record<string, unknown>>;
+
+		const valueBranches = properties.value.anyOf as Array<Record<string, unknown>>;
+		expect(valueBranches.map(branch => branch.type)).toEqual(["string", "number", "boolean"]);
+		expect(properties.value.description).toBe("inner union");
+
+		// Optional property: splice happens first, then the nullable append stays flat.
+		const optionalBranches = properties.optionalValue.anyOf as Array<Record<string, unknown>>;
+		expect(optionalBranches.map(branch => branch.type)).toEqual(["string", "number", "boolean", "null"]);
+		expect(optionalBranches.some(branch => Array.isArray(branch.anyOf))).toBe(false);
+	});
+
+	it("does not splice anyOf branches that carry sibling constraints", () => {
+		const strict = enforceStrictSchema({
+			type: "object",
+			properties: {
+				value: {
+					anyOf: [{ type: "string", anyOf: [{ enum: ["a"] }, { enum: ["b"] }] }, { type: "number" }],
+				},
+			},
+			required: ["value"],
+		});
+		const properties = strict.properties as Record<string, Record<string, unknown>>;
+		const branches = properties.value.anyOf as Array<Record<string, unknown>>;
+
+		// `anyOf` is conjunctive with siblings — spreading would drop `type: "string"`.
+		expect(branches).toHaveLength(2);
+		expect(branches[0].type).toBe("string");
+		expect(Array.isArray(branches[0].anyOf)).toBe(true);
+	});
+
 	it("never emits undefined as a schema type", () => {
 		const schema = zodToWireSchema(
 			z.object({

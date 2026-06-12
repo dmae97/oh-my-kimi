@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
-import { Effort, getBundledModel, type Model } from "@oh-my-pi/pi-ai";
+import { Effort, type Model } from "@oh-my-pi/pi-ai";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -70,8 +71,7 @@ describe("issue #775: per-model defaultLevel", () => {
 			...opus,
 			thinking: {
 				mode: "anthropic-adaptive",
-				minLevel: Effort.Low,
-				maxLevel: Effort.XHigh,
+				efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
 				defaultLevel: Effort.XHigh,
 			},
 		};

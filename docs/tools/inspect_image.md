@@ -51,7 +51,7 @@ TUI rendering adds presentation-only truncation from `packages/coding-agent/src/
    - `{ type: "text", text: params.question }`
 10. `systemPrompt` is a one-element array rendered from `packages/coding-agent/src/prompts/tools/inspect-image-system.md`; telemetry is tagged with oneshot kind `inspect_image`.
 11. If the model response stop reason is `error` or `aborted`, the tool maps that to `ToolError`.
-12. `extractResponseText(...)` concatenates only `text` content blocks from the assistant message, trims the result, and fails if nothing remains.
+12. `extractTextContent(...)` from `packages/coding-agent/src/commit/utils.ts` concatenates only `text` content blocks from the assistant message, trims the result, and the tool fails if nothing remains.
 13. Success returns the text plus `details`; `inspectImageToolRenderer` formats the result for the TUI.
 
 ## Modes / Variants
@@ -75,16 +75,17 @@ TUI rendering adds presentation-only truncation from `packages/coding-agent/src/
 ## Limits & Caps
 - Supported detected input formats: `image/png`, `image/jpeg`, `image/gif`, `image/webp` (`SUPPORTED_IMAGE_MIME_TYPES` in `packages/utils/src/mime.ts`).
 - Metadata sniff cap: `DEFAULT_IMAGE_METADATA_HEADER_BYTES = 256 * 1024` bytes. Format detection only reads up to 256 KiB from the file header.
+- Availability is gated by `inspect_image.enabled`, default `false`, in `packages/coding-agent/src/config/settings-schema.ts` / `packages/coding-agent/src/tools/index.ts`.
 - Upload input cap: `MAX_IMAGE_INPUT_BYTES = 20 * 1024 * 1024` bytes (20 MiB) in `packages/coding-agent/src/utils/image-loading.ts`.
 - Auto-resize defaults in `packages/coding-agent/src/utils/image-resize.ts`:
   - `maxWidth: 1568`
   - `maxHeight: 1568`
   - `maxBytes: 500 * 1024` bytes (500 KiB target)
-  - `jpegQuality: 75`
+  - `jpegQuality: 80`
 - Resize fast path: if the original image is already within `1568x1568` and within `maxBytes / 4` (125 KiB by default), `resizeImage(...)` returns the original bytes unchanged.
 - Resize quality ladder: after the first encode pass, lossy retries use qualities `[70, 60, 50, 40]`.
 - Resize dimension ladder: if quality reduction still misses the byte target, retries scale dimensions by `[1.0, 0.75, 0.5, 0.35, 0.25]` and stop if either dimension would fall below `100` pixels.
-- First resize pass encodes PNG, JPEG, and WebP, then keeps the smallest encoded buffer. Fallback passes encode JPEG and WebP only, again keeping the smaller output.
+- First resize pass encodes PNG, JPEG, and WebP, then keeps the smallest encoded buffer. Fallback passes encode JPEG and WebP only, again keeping the smaller output. WebP is excluded from both ladders when `OMP_NO_WEBP=1`/`true` (or `excludeWebP` is passed).
 - Renderer caps:
   - `INSPECT_QUESTION_PREVIEW_WIDTH = 100`
   - `INSPECT_OUTPUT_COLLAPSED_LINES = 4`

@@ -3,8 +3,8 @@ import type { ToolSession } from "../../tools";
 import { ToolError } from "../../tools/tool-errors";
 import { EVAL_AGENT_BRIDGE_NAME, runEvalAgent } from "../agent-bridge";
 import { EVAL_BUDGET_BRIDGE_NAME, type EvalBudgetResult, runEvalBudget } from "../budget-bridge";
+import { EVAL_COMPLETION_BRIDGE_NAME, runEvalCompletion } from "../completion-bridge";
 import { EVAL_CONCURRENCY_BRIDGE_NAME, type EvalConcurrencyResult, runEvalConcurrency } from "../concurrency-bridge";
-import { EVAL_LLM_BRIDGE_NAME, runEvalLlm } from "../llm-bridge";
 import type { JsStatusEvent } from "./shared/types";
 
 export type { JsStatusEvent } from "./shared/types";
@@ -107,8 +107,8 @@ function summarizeToolResult(
 }
 
 export async function callSessionTool(name: string, args: unknown, options: ToolBridgeOptions): Promise<ToolValue> {
-	if (name === EVAL_LLM_BRIDGE_NAME) {
-		return await runEvalLlm(args, options);
+	if (name === EVAL_COMPLETION_BRIDGE_NAME) {
+		return await runEvalCompletion(args, options);
 	}
 	if (name === EVAL_AGENT_BRIDGE_NAME) {
 		return await runEvalAgent(args, options);

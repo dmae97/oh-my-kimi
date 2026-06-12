@@ -47,25 +47,30 @@ function jsonReplacer(_key: string, value: unknown): unknown {
 	return value;
 }
 
-/** Custom format that includes pid and flattens metadata */
-const logFormat = winston.format.combine(
-	winston.format.timestamp({ format: "YYYY-MM-DDTHH:mm:ss.SSSZ" }),
-	winston.format.printf(({ timestamp, level, message, ...meta }) => {
-		const entry: Record<string, unknown> = {
-			timestamp,
-			level,
-			pid: process.pid,
-			message,
-		};
-		// Flatten metadata into entry
-		for (const [key, value] of Object.entries(meta)) {
-			if (key !== "level" && key !== "timestamp" && key !== "message") {
-				entry[key] = value;
+/** Custom format that includes pid and flattens metadata; built on first use. */
+let logFormat: winston.Logform.Format | undefined;
+
+function getLogFormat(): winston.Logform.Format {
+	logFormat ??= winston.format.combine(
+		winston.format.timestamp({ format: "YYYY-MM-DDTHH:mm:ss.SSSZ" }),
+		winston.format.printf(({ timestamp, level, message, ...meta }) => {
+			const entry: Record<string, unknown> = {
+				timestamp,
+				level,
+				pid: process.pid,
+				message,
+			};
+			// Flatten metadata into entry
+			for (const [key, value] of Object.entries(meta)) {
+				if (key !== "level" && key !== "timestamp" && key !== "message") {
+					entry[key] = value;
+				}
 			}
-		}
-		return JSON.stringify(entry, jsonReplacer);
-	}),
-);
+			return JSON.stringify(entry, jsonReplacer);
+		}),
+	);
+	return logFormat;
+}
 
 /** Build a rotating file transport, materializing the target directory lazily. */
 function makeFileTransport(dir?: string): winston.transport {
@@ -80,17 +85,35 @@ function makeFileTransport(dir?: string): winston.transport {
 }
 
 function makeConsoleTransport(): winston.transport {
-	return new winston.transports.Console({ format: logFormat });
+	return new winston.transports.Console({ format: getLogFormat() });
 }
 
-/** The winston logger instance. Default: file ON (TUI-safe), console OFF. */
-const winstonLogger = winston.createLogger({
-	level: "debug",
-	format: logFormat,
-	transports: [makeFileTransport()],
-	// Don't exit on error - logging failures shouldn't crash the app
-	exitOnError: false,
-});
+/**
+ * Desired transport configuration, applied when the winston logger is built.
+ * Default: file ON (TUI-safe), console OFF.
+ */
+let transportOpts: { console?: boolean; file?: boolean | string } = { file: true };
+
+/** The winston logger instance, created lazily on first log emission. */
+let winstonLogger: winston.Logger | undefined;
+
+function buildTransports(opts: { console?: boolean; file?: boolean | string }): winston.transport[] {
+	const transports: winston.transport[] = [];
+	if (opts.file) transports.push(makeFileTransport(typeof opts.file === "string" ? opts.file : undefined));
+	if (opts.console) transports.push(makeConsoleTransport());
+	return transports;
+}
+
+function getWinstonLogger(): winston.Logger {
+	winstonLogger ??= winston.createLogger({
+		level: "debug",
+		format: getLogFormat(),
+		transports: buildTransports(transportOpts),
+		// Don't exit on error - logging failures shouldn't crash the app
+		exitOnError: false,
+	});
+	return winstonLogger;
+}
 
 /**
  * Replace the active log transports. Pass `console: true, file: false` for
@@ -98,11 +121,10 @@ const winstonLogger = winston.createLogger({
  * logs piped into a process supervisor instead of the rotating file.
  */
 export function setTransports(opts: { console?: boolean; file?: boolean | string }): void {
+	transportOpts = opts;
+	if (!winstonLogger) return; // applied lazily when the logger is first built
 	winstonLogger.clear();
-	if (opts.file) {
-		winstonLogger.add(makeFileTransport(typeof opts.file === "string" ? opts.file : undefined));
-	}
-	if (opts.console) winstonLogger.add(makeConsoleTransport());
+	for (const transport of buildTransports(opts)) winstonLogger.add(transport);
 }
 
 /**
@@ -112,7 +134,7 @@ export function setTransports(opts: { console?: boolean; file?: boolean | string
  */
 export function error(message: string, context?: Record<string, unknown>): void {
 	try {
-		winstonLogger.error(message, context);
+		getWinstonLogger().error(message, context);
 	} catch {
 		// Silently ignore logging failures
 	}
@@ -125,7 +147,7 @@ export function error(message: string, context?: Record<string, unknown>): void 
  */
 export function warn(message: string, context?: Record<string, unknown>): void {
 	try {
-		winstonLogger.warn(message, context);
+		getWinstonLogger().warn(message, context);
 	} catch {
 		// Silently ignore logging failures
 	}
@@ -138,7 +160,7 @@ export function warn(message: string, context?: Record<string, unknown>): void {
  */
 export function info(message: string, context?: Record<string, unknown>): void {
 	try {
-		winstonLogger.info(message, context);
+		getWinstonLogger().info(message, context);
 	} catch {
 		// Silently ignore logging failures
 	}
@@ -151,9 +173,26 @@ export function info(message: string, context?: Record<string, unknown>): void {
  */
 export function debug(message: string, context?: Record<string, unknown>): void {
 	try {
-		winstonLogger.debug(message, context);
+		getWinstonLogger().debug(message, context);
 	} catch {
 		// Silently ignore logging failures
+	}
+}
+
+/**
+ * Streaming startup markers, enabled by `PI_DEBUG_STARTUP`. Unlike the
+ * PI_TIMING tree (printed only after startup completes), these write one
+ * synchronous stderr line as each phase begins/ends, so a hard hang still
+ * shows the last phase that started. `fs.writeSync(2)` is used deliberately:
+ * it cannot be reordered or buffered past a synchronous block of the event
+ * loop (dlopen, sync fs on a dead mount, spawnSync).
+ */
+export function startupMarker(text: string): void {
+	if (!process.env.PI_DEBUG_STARTUP) return;
+	try {
+		fs.writeSync(2, `[startup] ${text}\n`);
+	} catch {
+		// stderr unavailable; markers are best-effort
 	}
 }
 
@@ -327,6 +366,29 @@ function shortenLoadPath(p: string): string {
 export function endTiming(): void {
 	gRootSpan = undefined;
 	gRecordTimings = false;
+}
+
+/**
+ * Ops of the currently-open span chain (root → deepest), following the most
+ * recently started unfinished child at each level. Lets a startup watchdog
+ * name the phase a stalled startup is stuck in.
+ */
+export function openSpanPath(): string[] {
+	const ops: string[] = [];
+	let node = gRootSpan;
+	while (node) {
+		let next: Span | undefined;
+		for (let i = node.children.length - 1; i >= 0; i--) {
+			if (node.children[i].end === undefined) {
+				next = node.children[i];
+				break;
+			}
+		}
+		if (!next) break;
+		ops.push(next.op);
+		node = next;
+	}
+	return ops;
 }
 
 function durationOf(span: Span): number {
@@ -550,33 +612,51 @@ function isParallel(span: Span): boolean {
 export function time(op: string): void;
 export function time<T, A extends unknown[]>(op: string, fn: (...args: A) => T, ...args: A): T;
 export function time<T, A extends unknown[]>(op: string, fn?: (...args: A) => T, ...args: A): T | undefined {
-	if (!gRecordTimings || !gRootSpan) {
-		if (fn === undefined) return undefined as T;
-		return fn(...args);
-	}
-
-	const parent = spanStorage.getStore() ?? gRootSpan;
-	const span: Span = { op, start: performance.now(), parent, children: [] };
-	parent.children.push(span);
+	const recording = gRecordTimings && gRootSpan !== undefined;
 
 	if (fn === undefined) {
-		span.end = span.start;
-		span.point = true;
+		startupMarker(op);
+		if (!recording) return undefined as T;
+		const parent = spanStorage.getStore() ?? gRootSpan!;
+		const now = performance.now();
+		parent.children.push({ op, start: now, end: now, parent, children: [], point: true });
 		return undefined as T;
 	}
 
-	const finish = (): void => {
-		span.end = performance.now();
+	if (!recording && !process.env.PI_DEBUG_STARTUP) {
+		return fn(...args);
+	}
+
+	startupMarker(`${op}:start`);
+	let span: Span | undefined;
+	if (recording) {
+		const parent = spanStorage.getStore() ?? gRootSpan!;
+		span = { op, start: performance.now(), parent, children: [] };
+		parent.children.push(span);
+	}
+
+	const finish = (ok: boolean): void => {
+		if (span) span.end = performance.now();
+		startupMarker(ok ? `${op}:done` : `${op}:fail`);
 	};
 	try {
-		const result = spanStorage.run(span, () => fn(...args));
+		const result = span ? spanStorage.run(span, () => fn(...args)) : fn(...args);
 		if (isPromise(result)) {
-			return result.finally(finish) as T;
+			return result.then(
+				value => {
+					finish(true);
+					return value;
+				},
+				error => {
+					finish(false);
+					throw error;
+				},
+			) as T;
 		}
-		finish();
+		finish(true);
 		return result;
 	} catch (error) {
-		finish();
+		finish(false);
 		throw error;
 	}
 }

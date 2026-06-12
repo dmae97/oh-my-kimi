@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import type { UsageFetchContext } from "../src/usage";
-import { claudeUsageProvider } from "../src/usage/claude";
+import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
+import type { UsageFetchContext } from "@oh-my-pi/pi-ai/usage";
+import { claudeUsageProvider } from "@oh-my-pi/pi-ai/usage/claude";
 
 const VALID_PAYLOAD = {
 	five_hour: { utilization: 42, resets_at: new Date(Date.now() + 5 * 60_000).toISOString() },
@@ -13,7 +14,7 @@ function jsonResponse(status: number, body: unknown, headers: Record<string, str
 	});
 }
 
-function makeContext(fetchImpl: typeof fetch, retryWait?: UsageFetchContext["retryWait"]): UsageFetchContext {
+function makeContext(fetchImpl: FetchImpl, retryWait?: UsageFetchContext["retryWait"]): UsageFetchContext {
 	return { fetch: fetchImpl, retryWait };
 }
 
@@ -43,7 +44,7 @@ describe("claudeUsageProvider retry contract", () => {
 			attempt += 1;
 			if (attempt < 3) return jsonResponse(429, { error: "rate_limited" });
 			return jsonResponse(200, VALID_PAYLOAD);
-		}) as unknown as typeof fetch;
+		}) as FetchImpl;
 
 		const report = await claudeUsageProvider.fetchUsage(baseParams(), makeContext(fetchMock, instantRetryWait));
 		expect(report).not.toBeNull();
@@ -57,7 +58,7 @@ describe("claudeUsageProvider retry contract", () => {
 			attempt += 1;
 			if (attempt === 1) return jsonResponse(503, { error: "unavailable" });
 			return jsonResponse(200, VALID_PAYLOAD);
-		}) as unknown as typeof fetch;
+		}) as FetchImpl;
 
 		const report = await claudeUsageProvider.fetchUsage(baseParams(), makeContext(fetchMock, instantRetryWait));
 		expect(report).not.toBeNull();
@@ -69,7 +70,7 @@ describe("claudeUsageProvider retry contract", () => {
 		const fetchMock = (async () => {
 			attempt += 1;
 			return jsonResponse(401, { error: "unauthorized" });
-		}) as unknown as typeof fetch;
+		}) as FetchImpl;
 
 		const report = await claudeUsageProvider.fetchUsage(baseParams(), makeContext(fetchMock));
 		expect(report).toBeNull();
@@ -81,7 +82,7 @@ describe("claudeUsageProvider retry contract", () => {
 		const fetchMock = (async () => {
 			attempt += 1;
 			return jsonResponse(404, { error: "not_found" });
-		}) as unknown as typeof fetch;
+		}) as FetchImpl;
 
 		const report = await claudeUsageProvider.fetchUsage(baseParams(), makeContext(fetchMock));
 		expect(report).toBeNull();
@@ -93,7 +94,7 @@ describe("claudeUsageProvider retry contract", () => {
 		const fetchMock = (async () => {
 			attempt += 1;
 			return jsonResponse(429, { error: "rate_limited" });
-		}) as unknown as typeof fetch;
+		}) as FetchImpl;
 
 		const report = await claudeUsageProvider.fetchUsage(baseParams(), makeContext(fetchMock, instantRetryWait));
 		expect(report).toBeNull();
@@ -110,7 +111,7 @@ describe("claudeUsageProvider retry contract", () => {
 				return jsonResponse(429, { error: "rate_limited" }, { "retry-after": "1" });
 			}
 			return jsonResponse(200, VALID_PAYLOAD);
-		}) as unknown as typeof fetch;
+		}) as FetchImpl;
 
 		const report = await claudeUsageProvider.fetchUsage(baseParams(), makeContext(fetchMock, retryWait));
 		expect(report).not.toBeNull();
@@ -131,7 +132,7 @@ describe("claudeUsageProvider retry contract", () => {
 				return jsonResponse(429, { error: "rate_limited" }, { "retry-after": "60" });
 			}
 			return jsonResponse(200, VALID_PAYLOAD);
-		}) as unknown as typeof fetch;
+		}) as FetchImpl;
 
 		const controller = new AbortController();
 		const retryWait = vi.fn(async (delayMs: number, signal?: AbortSignal) => {
@@ -170,7 +171,7 @@ describe("claudeUsageProvider retry contract", () => {
 				return jsonResponse(200, {});
 			}
 			return jsonResponse(429, { error: "rate_limited" });
-		}) as unknown as typeof fetch;
+		}) as FetchImpl;
 
 		const report = await claudeUsageProvider.fetchUsage(baseParams(), makeContext(fetchMock, instantRetryWait));
 		// The 200 set lastPayload but had no usage data; 429s mean no further

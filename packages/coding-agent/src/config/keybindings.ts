@@ -36,6 +36,7 @@ interface AppKeybindings {
 	"app.clipboard.pasteTextRaw": true;
 	"app.clipboard.copyLine": true;
 	"app.clipboard.copyPrompt": true;
+	"app.agents.hub": true;
 	"app.session.new": true;
 	"app.session.tree": true;
 	"app.session.fork": true;
@@ -136,7 +137,7 @@ export const KEYBINDINGS = {
 	},
 	"app.clipboard.pasteImage": {
 		defaultKeys: getDefaultPasteImageKeys(),
-		description: "Paste image from clipboard",
+		description: "Paste image or text from clipboard",
 	},
 	"app.clipboard.pasteTextRaw": {
 		defaultKeys: ["ctrl+shift+v", "alt+shift+v"],
@@ -166,9 +167,13 @@ export const KEYBINDINGS = {
 		defaultKeys: [],
 		description: "Resume session",
 	},
+	"app.agents.hub": {
+		defaultKeys: "alt+a",
+		description: "Open the agent hub",
+	},
 	"app.session.observe": {
 		defaultKeys: "ctrl+s",
-		description: "Observe subagent sessions",
+		description: "Open the agent hub",
 	},
 	"app.session.togglePath": {
 		defaultKeys: "ctrl+p",

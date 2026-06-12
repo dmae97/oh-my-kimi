@@ -102,7 +102,7 @@ export class LocalModuleLoader {
 		});
 		const moduleDir = path.dirname(modulePath);
 		const localDeps = new Set<string>();
-		for (const specifier of collectModuleSourceSpecifiers(stripped)) {
+		for (const specifier of await collectModuleSourceSpecifiers(stripped)) {
 			const resolved = resolveImportSpecifier(moduleDir, specifier);
 			if (isLocalPathSpecifier(specifier) && isManagedLocalModulePath(resolved)) {
 				localDeps.add(resolved);

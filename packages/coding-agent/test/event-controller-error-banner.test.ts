@@ -62,10 +62,11 @@ function createFixture(streamingMessage?: AssistantMessage) {
 	const showPinnedError = vi.fn();
 	const clearPinnedError = vi.fn();
 
+	const session = { isTtsrAbortPending: false, retryAttempt: 0 };
 	const ctx = {
 		isInitialized: true,
 		init: vi.fn(async () => {}),
-		ui: { requestRender: vi.fn(), setEagerNativeScrollbackRebuild: vi.fn() },
+		ui: { requestRender: vi.fn() },
 		statusLine: { invalidate: vi.fn() },
 		updateEditorTopBorder: vi.fn(),
 		ensureLoadingAnimation: vi.fn(),
@@ -75,7 +76,11 @@ function createFixture(streamingMessage?: AssistantMessage) {
 		pendingTools: new Map(),
 		showPinnedError,
 		clearPinnedError,
-		session: { isTtsrAbortPending: false, retryAttempt: 0 },
+		session,
+		get viewSession() {
+			return session;
+		},
+		clearTransientSessionUi: () => {},
 	} as unknown as InteractiveModeContext;
 
 	const controller = new EventController(ctx);

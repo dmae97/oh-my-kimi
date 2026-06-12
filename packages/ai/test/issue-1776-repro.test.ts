@@ -1,13 +1,7 @@
-import { afterEach, describe, expect, it } from "bun:test";
-import { getBundledModel } from "../src/models";
-import { streamOpenAICompletions } from "../src/providers/openai-completions";
-import type { Context, Model } from "../src/types";
-
-const originalFetch = global.fetch;
-
-afterEach(() => {
-	global.fetch = originalFetch;
-});
+import { describe, expect, it } from "bun:test";
+import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
+import type { Context, FetchImpl, Model } from "@oh-my-pi/pi-ai/types";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 
 function createSseResponse(events: unknown[]): Response {
 	const payload = `${events
@@ -19,11 +13,11 @@ function createSseResponse(events: unknown[]): Response {
 	});
 }
 
-function createMockFetch(events: unknown[]): typeof fetch {
+function createMockFetch(events: unknown[]): FetchImpl {
 	async function mockFetch(_input: string | URL | Request, _init?: RequestInit): Promise<Response> {
 		return createSseResponse(events);
 	}
-	return Object.assign(mockFetch, { preconnect: originalFetch.preconnect });
+	return Object.assign(mockFetch, { preconnect: fetch.preconnect });
 }
 
 function baseContext(): Context {
@@ -74,13 +68,16 @@ function stopChunk(model: Model<"openai-completions">): unknown {
 describe("issue #1776 - MiniMax object-shaped tool arguments", () => {
 	it("preserves object-shaped streamed tool arguments without a serialization round-trip", async () => {
 		const model = getBundledModel<"openai-completions">("minimax-code-cn", "MiniMax-M3");
-		global.fetch = createMockFetch([
+		const fetchMock = createMockFetch([
 			toolCallChunk(model, { name: "bash", arguments: { command: "printf '%s\\n' ok" } }),
 			stopChunk(model),
 			"[DONE]",
 		]);
 
-		const result = await streamOpenAICompletions(model, baseContext(), { apiKey: "test-key" }).result();
+		const result = await streamOpenAICompletions(model, baseContext(), {
+			apiKey: "test-key",
+			fetch: fetchMock,
+		}).result();
 
 		expect(result.stopReason).toBe("toolUse");
 		expect(result.content).toEqual([
@@ -90,14 +87,17 @@ describe("issue #1776 - MiniMax object-shaped tool arguments", () => {
 
 	it("still assembles tool arguments streamed as the standard JSON-string deltas", async () => {
 		const model = getBundledModel<"openai-completions">("minimax-code-cn", "MiniMax-M3");
-		global.fetch = createMockFetch([
+		const fetchMock = createMockFetch([
 			toolCallChunk(model, { name: "bash", arguments: '{"command":' }),
 			toolCallChunk(model, { arguments: ' "printf ok"}' }),
 			stopChunk(model),
 			"[DONE]",
 		]);
 
-		const result = await streamOpenAICompletions(model, baseContext(), { apiKey: "test-key" }).result();
+		const result = await streamOpenAICompletions(model, baseContext(), {
+			apiKey: "test-key",
+			fetch: fetchMock,
+		}).result();
 
 		expect(result.stopReason).toBe("toolUse");
 		expect(result.content).toEqual([

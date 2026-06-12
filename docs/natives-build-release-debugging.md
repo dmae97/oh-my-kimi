@@ -26,6 +26,7 @@ It follows the architecture terms from `docs/natives-architecture.md`:
 
 - `bun scripts/build-native.ts` (`build`) → N-API build, addon install, generated declarations install, explicit ESM export and enum runtime patch.
 - `bun scripts/embed-native.ts` (`embed:native`) → generate `native/embedded-addon.js` plus `native/embedded-addons.<tag>.tar.gz` from built files.
+- `bun scripts/gen-npm-packages.ts` (`gen:npm`) → generate per-platform npm leaf packages (`@oh-my-pi/pi-natives-<platform>-<arch>`, installed as optional dependencies of the core package) under `npm/` from built addon files.
 
 Root scripts include `build:native` as `bun --cwd=packages/natives run build`.
 
@@ -40,7 +41,8 @@ Root scripts include `build:native` as `bun --cwd=packages/natives run build`.
 - `--no-js`
 - `--dts index.d.ts`
 - `--profile local` for non-CI local native builds, otherwise `--profile ci`
-- optional `--target <CROSS_TARGET>`
+- `-o <isolated temp output dir>`
+- optional `--target <CROSS_TARGET>` plus `--cross-compile` (napi picks the `cargo-zigbuild` or `cargo-xwin` backend from the target) for cross builds
 
 `crates/pi-natives/Cargo.toml` declares `crate-type = ["cdylib"]`; napi-rs emits `.node` artifacts plus generated `index.d.ts` in an isolated temporary output directory under `packages/natives/native/.build/`.
 
@@ -131,7 +133,7 @@ Failure exits have explicit error text for invalid variants, failed napi build, 
 4. **Generate archive + manifest**: write `native/embedded-addons.<platform>-<arch>.tar.gz` containing all available target addon files and `native/embedded-addon.js` with package version, archive metadata, and file sizes.
 5. **Runtime extraction ready** for compiled mode.
 
-`--reset` writes the null manifest stub (`embeddedAddon = null`) without validating addon availability.
+`--reset` writes the null manifest stub (`embeddedAddon = null`) without validating addon availability, and deletes any existing `embedded-addons.*.tar.gz` archives from `native/`.
 
 ## Dev workflow vs shipped/compiled behavior
 
@@ -140,7 +142,7 @@ Failure exits have explicit error text for invalid variants, failed napi build, 
 Typical local loop:
 
 1. Build addon: `bun --cwd=packages/natives run build`.
-2. Loader resolves package-local `native/` candidates, then executable-dir fallback candidates.
+2. Loader resolves platform npm leaf-package candidates (`@oh-my-pi/pi-natives-<platform>-<arch>`, when resolvable), then package-local `native/` and executable-dir fallback candidates.
 3. Generated declarations in `native/index.d.ts` describe the public TS API.
 
 ## Shipped/compiled binary workflow

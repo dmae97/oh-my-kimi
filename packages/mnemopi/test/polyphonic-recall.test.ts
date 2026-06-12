@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { type BeamMemoryState, initBeam } from "../src/core/beam/index";
-import { PolyphonicRecallEngine, polyphonicRecall, polyphonicRecallIsEnabled } from "../src/core/polyphonic-recall";
-import { closeQuietly, openDatabase } from "../src/db";
+import { type BeamMemoryState, initBeam } from "@oh-my-pi/pi-mnemopi/core/beam";
+import {
+	PolyphonicRecallEngine,
+	polyphonicRecall,
+	polyphonicRecallIsEnabled,
+} from "@oh-my-pi/pi-mnemopi/core/polyphonic-recall";
+import { closeQuietly, openDatabase } from "@oh-my-pi/pi-mnemopi/db";
 
 function makeBeam(): BeamMemoryState {
 	const db = openDatabase(":memory:", { create: true, readwrite: true });

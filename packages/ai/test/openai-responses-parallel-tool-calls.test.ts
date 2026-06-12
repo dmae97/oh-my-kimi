@@ -15,10 +15,11 @@
 import { describe, expect, test } from "bun:test";
 import { processResponsesStream } from "@oh-my-pi/pi-ai/providers/openai-responses-shared";
 import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import type { ResponseStreamEvent } from "openai/resources/responses/responses";
 
 function makeModel(): Model<"openai-responses"> {
-	return {
+	return buildModel({
 		api: "openai-responses",
 		name: "Llama",
 		id: "llama-3",
@@ -29,7 +30,7 @@ function makeModel(): Model<"openai-responses"> {
 		input: ["text"],
 		reasoning: false,
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-	};
+	});
 }
 
 function makeOutput(): AssistantMessage {

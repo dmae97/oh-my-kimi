@@ -24,12 +24,13 @@ class MutableLines implements Component {
 class FocusedLine implements Component, Focusable {
 	focused = true;
 	cursorIndex = 0;
+	text = "cursor target";
 
 	invalidate(): void {}
 
 	render(): string[] {
-		const text = "cursor target";
-		return [`${text.slice(0, this.cursorIndex)}${CURSOR_MARKER}${text.slice(this.cursorIndex)}`];
+		if (!this.focused) return [this.text];
+		return [`${this.text.slice(0, this.cursorIndex)}${CURSOR_MARKER}${this.text.slice(this.cursorIndex)}`];
 	}
 }
 
@@ -56,9 +57,19 @@ const ENABLE_AUTOWRAP = "\x1b[?7h";
 function captureWrites(term: VirtualTerminal): string[] {
 	const writes: string[] = [];
 	const realWrite = term.write.bind(term);
+	const realHideCursor = term.hideCursor.bind(term);
+	const realShowCursor = term.showCursor.bind(term);
 	(term as { write: (data: string) => void }).write = (data: string) => {
 		writes.push(data);
 		realWrite(data);
+	};
+	(term as { hideCursor: () => void }).hideCursor = () => {
+		writes.push("\x1b[?25l");
+		realHideCursor();
+	};
+	(term as { showCursor: () => void }).showCursor = () => {
+		writes.push("\x1b[?25h");
+		realShowCursor();
 	};
 	return writes;
 }
@@ -156,6 +167,12 @@ describe("issue #1765: synchronized-output opt-out", () => {
 
 				expectNoSyncOutput(writes);
 				expect(writes.join("")).toContain("\x1b[7G");
+
+				writes.length = 0;
+				tui.requestRender();
+				await term.waitForRender();
+
+				expect(writes).toEqual([]);
 			} finally {
 				tui.stop();
 			}
@@ -201,6 +218,117 @@ describe("issue #1765: synchronized-output opt-out", () => {
 				tui.stop();
 			}
 		});
+	});
+});
+
+describe("cursor no-op renders", () => {
+	it("skips standalone cursor writes when row, column, and visibility are unchanged", async () => {
+		const term = new VirtualTerminal(32, 4, 100);
+		const component = new FocusedLine();
+		const tui = new TUI(term, true);
+		tui.addChild(component);
+		tui.setFocus(component);
+
+		try {
+			tui.start();
+			await term.waitForRender();
+			expect(term.getCursor()).toEqual({ row: 0, col: 0 });
+
+			const writes = captureWrites(term);
+			tui.requestRender();
+			await term.waitForRender();
+
+			expect(writes).toEqual([]);
+			expect(term.getCursor()).toEqual({ row: 0, col: 0 });
+		} finally {
+			tui.stop();
+		}
+	});
+
+	it("writes once when only the cursor column changes, then skips the next identical noop", async () => {
+		const term = new VirtualTerminal(32, 4, 100);
+		const component = new FocusedLine();
+		const tui = new TUI(term, true);
+		tui.addChild(component);
+		tui.setFocus(component);
+
+		try {
+			tui.start();
+			await term.waitForRender();
+
+			const writes = captureWrites(term);
+			component.cursorIndex = 6;
+			tui.requestRender();
+			await term.waitForRender();
+
+			expect(writes.join("")).toContain("\x1b[7G");
+			expect(term.getCursor()).toEqual({ row: 0, col: 6 });
+
+			writes.length = 0;
+			tui.requestRender();
+			await term.waitForRender();
+
+			expect(writes).toEqual([]);
+			expect(term.getCursor()).toEqual({ row: 0, col: 6 });
+		} finally {
+			tui.stop();
+		}
+	});
+
+	it("hides the hardware cursor once when the marker disappears, then skips repeated hides", async () => {
+		const term = new VirtualTerminal(32, 4, 100);
+		const component = new FocusedLine();
+		const tui = new TUI(term, true);
+		tui.addChild(component);
+		tui.setFocus(component);
+
+		try {
+			tui.start();
+			await term.waitForRender();
+
+			const writes = captureWrites(term);
+			tui.setFocus(null);
+			tui.requestRender();
+			await term.waitForRender();
+
+			expect(writes.join("")).toContain("\x1b[?25l");
+
+			writes.length = 0;
+			tui.requestRender();
+			await term.waitForRender();
+
+			expect(writes).toEqual([]);
+		} finally {
+			tui.stop();
+		}
+	});
+
+	it("records cursor state from content-changing renders before the next noop", async () => {
+		const term = new VirtualTerminal(32, 4, 100);
+		const component = new FocusedLine();
+		const tui = new TUI(term, true);
+		tui.addChild(component);
+		tui.setFocus(component);
+
+		try {
+			tui.start();
+			await term.waitForRender();
+
+			component.text = "cursor target updated";
+			component.cursorIndex = 8;
+			tui.requestRender();
+			await term.waitForRender();
+			expect(term.getCursor()).toEqual({ row: 0, col: 8 });
+
+			const writes = captureWrites(term);
+			tui.requestRender();
+			await term.waitForRender();
+
+			expect(writes).toEqual([]);
+			expect(term.getCursor()).toEqual({ row: 0, col: 8 });
+		} finally {
+			tui.stop();
+		}
 	});
 });
 

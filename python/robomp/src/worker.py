@@ -654,6 +654,13 @@ def _run_rpc_blocking(
                 hard_timer.cancel()
             if hard_timeout_fired.is_set():
                 raise TimeoutError("omp task exceeded hard timeout")
+            if turn is not None and turn.assistant_message is not None:
+                stop_reason = turn.assistant_message.get("stopReason")
+                if stop_reason == "error":
+                    error_msg = turn.assistant_message.get("errorMessage") or "model returned error"
+                    raise RuntimeError(
+                        f"omp agent error (stopReason=error): {error_msg}"
+                    )
             log.info(
                 "rpc_done",
                 extra={

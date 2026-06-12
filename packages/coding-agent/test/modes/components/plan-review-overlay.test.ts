@@ -3,7 +3,7 @@ import { stripVTControlCharacters } from "node:util";
 import { KeybindingsManager } from "@oh-my-pi/pi-coding-agent/config/keybindings";
 import type { HookSelectorSlider } from "@oh-my-pi/pi-coding-agent/modes/components/hook-selector";
 import { PlanReviewOverlay } from "@oh-my-pi/pi-coding-agent/modes/components/plan-review-overlay";
-import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { getThemeByName, setThemeInstance, theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { setKeybindings } from "@oh-my-pi/pi-tui";
 
 const UP = "\x1b[A";
@@ -341,6 +341,65 @@ describe("PlanReviewOverlay", () => {
 		const feedback = onFeedbackChange.mock.calls.at(-1)?.[0] as string;
 		expect(feedback).toContain("Overview");
 		expect(feedback).toContain("needs detail");
+		expect(feedback).toContain("## Overview\n- needs detail\n");
+		expect(feedback).not.toContain("```md");
+	});
+
+	it("opens the external editor for an active annotation draft", () => {
+		setKeybindings(KeybindingsManager.inMemory({ "tui.select.cancel": "ctrl+g", "app.editor.external": "ctrl+e" }));
+		const onFeedbackChange = vi.fn();
+		let editorDraft: string | undefined;
+		const overlay = new PlanReviewOverlay(
+			SECTION_PLAN,
+			{ promptTitle: "next", options: APPROVAL_OPTIONS, externalEditorLabel: "ctrl+e" },
+			{
+				onPick: vi.fn(),
+				onCancel: vi.fn(),
+				onFeedbackChange,
+				onAnnotationExternalEditor: (draft, commit) => {
+					editorDraft = draft;
+					commit("- add rollback command\n- include smoke test");
+				},
+			},
+		);
+		render(overlay);
+		overlay.handleInput(TAB); // -> toc (Overview)
+		overlay.handleInput("a");
+		for (const ch of "draft") overlay.handleInput(ch);
+		overlay.handleInput("\x05"); // ctrl+e
+
+		expect(editorDraft).toBe("draft");
+		const out = render(overlay);
+		expect(out).toContain("- add rollback command");
+		expect(out).toContain("- include smoke test");
+		expect(out).toContain("✎");
+		const feedback = onFeedbackChange.mock.calls.at(-1)?.[0] as string;
+		expect(feedback).toContain("## Overview\n```md\n- add rollback command\n- include smoke test\n```");
+	});
+
+	it("keeps the annotation draft when the external editor is cancelled", () => {
+		setKeybindings(KeybindingsManager.inMemory({ "tui.select.cancel": "ctrl+g", "app.editor.external": "ctrl+e" }));
+		const onFeedbackChange = vi.fn();
+		const overlay = new PlanReviewOverlay(
+			SECTION_PLAN,
+			{ promptTitle: "next", options: APPROVAL_OPTIONS, externalEditorLabel: "ctrl+e" },
+			{
+				onPick: vi.fn(),
+				onCancel: vi.fn(),
+				onFeedbackChange,
+				onAnnotationExternalEditor: (_draft, commit) => commit(null),
+			},
+		);
+		render(overlay);
+		overlay.handleInput(TAB); // -> toc (Overview)
+		overlay.handleInput("a");
+		for (const ch of "draft") overlay.handleInput(ch);
+		overlay.handleInput("\x05"); // ctrl+e
+
+		const out = render(overlay);
+		expect(out).toContain("Annotate");
+		expect(out).toContain("draft");
+		expect(onFeedbackChange).not.toHaveBeenCalled();
 	});
 
 	// Click a rendered row. The fullscreen overlay paints from screen row 0, so a
@@ -443,5 +502,55 @@ describe("PlanReviewOverlay", () => {
 		const base = firstRow();
 		overlay.handleInput(SHIFT_DOWN); // Shift+Down — fastScrollLines (5) at once
 		expect(firstRow() - base).toBe(5);
+	});
+
+	// SGR button 35 = no-button motion (0x20 motion flag | 0x03 no-button): the
+	// hover report a terminal sends while the pointer moves with no button held.
+	const hoverRow = (overlay: PlanReviewOverlay, needle: string, col = 6): boolean => {
+		const lines = overlay.render(80);
+		const row = lines.findIndex(line => stripVTControlCharacters(line).includes(needle));
+		if (row < 0) return false;
+		overlay.handleInput(`\x1b[<35;${col};${row + 1}M`);
+		return true;
+	};
+
+	const optionLineRaw = (overlay: PlanReviewOverlay, needle: string): string | undefined =>
+		overlay.render(80).find(line => stripVTControlCharacters(line).includes(needle));
+
+	it("paints a hover band on the option the pointer is over and clears it on leave", () => {
+		const onPick = vi.fn();
+		const overlay = new PlanReviewOverlay(
+			"plan body text",
+			{ promptTitle: "next", options: APPROVAL_OPTIONS },
+			{ onPick, onCancel: vi.fn() },
+		);
+		const selectedBg = theme.getBgAnsi("selectedBg");
+		render(overlay); // populate the click maps before hit-testing
+
+		// Hover a non-selected option (selection rests on index 0).
+		expect(optionLineRaw(overlay, "Approve and keep context")).not.toContain(selectedBg);
+		expect(hoverRow(overlay, "Approve and keep context")).toBe(true);
+		expect(optionLineRaw(overlay, "Approve and keep context")).toContain(selectedBg);
+
+		// Hover is visual only: the keyboard cursor stays on index 0, so Enter still
+		// confirms the first option rather than the hovered one.
+		overlay.handleInput(ENTER);
+		expect(onPick).toHaveBeenCalledWith("Approve and execute");
+
+		// Pointer onto the top border (a non-option row) drops the highlight.
+		overlay.handleInput("\x1b[<35;6;1M");
+		expect(optionLineRaw(overlay, "Approve and keep context")).not.toContain(selectedBg);
+	});
+
+	it("never hovers a disabled option", () => {
+		const overlay = new PlanReviewOverlay(
+			"plan body text",
+			{ promptTitle: "next", options: APPROVAL_OPTIONS, disabledIndices: [2] },
+			{ onPick: vi.fn(), onCancel: vi.fn() },
+		);
+		const selectedBg = theme.getBgAnsi("selectedBg");
+		render(overlay);
+		expect(hoverRow(overlay, "Approve and keep context")).toBe(true);
+		expect(optionLineRaw(overlay, "Approve and keep context")).not.toContain(selectedBg);
 	});
 });

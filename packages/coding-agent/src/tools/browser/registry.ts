@@ -58,6 +58,16 @@ export async function acquireBrowser(kind: BrowserKind, opts: AcquireBrowserOpti
 	return handle;
 }
 
+export function normalizeConnectedCdpUrl(rawCdpUrl: string): string {
+	const cdpUrl = rawCdpUrl.replace(/\/+$/, "");
+	if (/^wss?:\/\//i.test(cdpUrl)) {
+		throw new ToolError(
+			"browser app.cdp_url must be the HTTP CDP discovery endpoint (for example http://127.0.0.1:9222), not a ws:// browser websocket URL.",
+		);
+	}
+	return cdpUrl;
+}
+
 async function openBrowserHandle(kind: BrowserKind, opts: AcquireBrowserOptions): Promise<BrowserHandle> {
 	if (kind.kind === "headless") {
 		const browser = await launchHeadlessBrowser({ headless: kind.headless, viewport: opts.viewport });
@@ -70,7 +80,7 @@ async function openBrowserHandle(kind: BrowserKind, opts: AcquireBrowserOptions)
 		};
 	}
 	if (kind.kind === "connected") {
-		const cdpUrl = kind.cdpUrl.replace(/\/+$/, "");
+		const cdpUrl = normalizeConnectedCdpUrl(kind.cdpUrl);
 		await waitForCdp(cdpUrl, 5_000, opts.signal);
 		const puppeteer = await loadPuppeteer();
 		const browser = await puppeteer.connect({
@@ -157,7 +167,10 @@ export function holdBrowser(handle: BrowserHandle): void {
 export async function releaseBrowser(handle: BrowserHandle, opts: { kill: boolean }): Promise<void> {
 	handle.refCount = Math.max(0, handle.refCount - 1);
 	if (handle.refCount === 0) {
-		browsers.delete(handle.key);
+		// Only evict if the registry still points at THIS handle. After a disconnect,
+		// `acquireBrowser` may have already replaced the entry with a fresh live handle
+		// under the same key; deleting blindly would orphan that new browser.
+		if (browsers.get(handle.key) === handle) browsers.delete(handle.key);
 		await disposeBrowserHandle(handle, opts);
 	}
 }

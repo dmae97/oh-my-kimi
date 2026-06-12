@@ -27,6 +27,7 @@ import {
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core/types";
 import type { AssistantMessage, Model, Usage } from "@oh-my-pi/pi-ai";
 import * as ai from "@oh-my-pi/pi-ai";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { SpanStatusCode } from "@opentelemetry/api";
 import {
 	BasicTracerProvider,
@@ -35,7 +36,7 @@ import {
 	SimpleSpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
 
-const MODEL: Model = {
+const MODEL: Model = buildModel({
 	id: "mock-model",
 	name: "mock-model",
 	api: "mock",
@@ -46,7 +47,7 @@ const MODEL: Model = {
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 	contextWindow: 200_000,
 	maxTokens: 32_768,
-};
+});
 
 let exporter: InMemorySpanExporter;
 let provider: BasicTracerProvider;

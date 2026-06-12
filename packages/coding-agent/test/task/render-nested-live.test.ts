@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import type { AgentProgress, SingleResult, TaskParams, TaskToolDetails } from "@oh-my-pi/pi-coding-agent/task";
+import type { AgentProgress, SingleResult, TaskToolDetails } from "@oh-my-pi/pi-coding-agent/task";
 import { taskToolRenderer } from "@oh-my-pi/pi-coding-agent/task/render";
 import { formatDuration, formatNumber } from "@oh-my-pi/pi-utils";
 
@@ -41,6 +41,7 @@ describe("task renderer: nested live rendering", () => {
 			recentTools: [],
 			recentOutput: [],
 			toolCount: 1,
+			requests: 0,
 			tokens: 1000,
 			cost: 0,
 			durationMs: 1234,
@@ -63,6 +64,7 @@ describe("task renderer: nested live rendering", () => {
 			truncated: false,
 			durationMs: 500,
 			tokens: 200,
+			requests: 0,
 		};
 	}
 
@@ -79,6 +81,7 @@ describe("task renderer: nested live rendering", () => {
 			recentTools: [],
 			recentOutput: [],
 			toolCount: 0,
+			requests: 0,
 			tokens: 0,
 			cost: 0,
 			durationMs: 0,
@@ -209,33 +212,7 @@ describe("task renderer: nested live rendering", () => {
 		expect(text).not.toContain("Σ");
 	});
 
-	it("keeps the shared context visible while the task is in progress", async () => {
-		const theme = (await getThemeByName("dark"))!;
-		const details: TaskToolDetails = {
-			projectAgentsDir: null,
-			results: [],
-			totalDurationMs: 0,
-			progress: [makeRunningProgress({ id: "Probe", description: "Investigate padding" })],
-		};
-		const args = {
-			agent: "task",
-			context: "# Goal\nHarden the auth stack before the cut.",
-			tasks: [],
-		} as unknown as TaskParams;
-		const component = taskToolRenderer.renderResult(
-			{ content: [{ type: "text", text: "Running 1 agents..." }], details },
-			{ expanded: false, isPartial: true, spinnerFrame: 0 },
-			theme,
-			args,
-		);
-		const text = Bun.stripANSI(component.render(160).join("\n"));
-		// The brief no longer vanishes the moment the first progress snapshot
-		// replaces the streaming call view.
-		expect(text).toContain("Goal");
-		expect(text).toContain("Harden the auth stack before the cut.");
-	});
-
-	it("renders a static result header while the body shimmers the running task name", async () => {
+	it("renders a static result header and static running task row", async () => {
 		const theme = (await getThemeByName("dark"))!;
 		const details: TaskToolDetails = {
 			projectAgentsDir: null,
@@ -260,11 +237,10 @@ describe("task renderer: nested live rendering", () => {
 		const header1 = f1.find(l => Bun.stripANSI(l).includes("Task"))!;
 		const body0 = f0.find(l => Bun.stripANSI(l).includes("Probe"))!;
 		const body1 = f1.find(l => Bun.stripANSI(l).includes("Probe"))!;
-		// Header is static — no clock ticking beside "Task".
+		// Header and per-agent body rows are static; only the tool header owns live animation.
 		expect(header0).toBe(header1);
-		// The per-agent body line still animates via the shimmered task name.
-		expect(body0).not.toBe(body1);
-		expect(Bun.stripANSI(body1)).toContain("• Probe: Investigate padding");
+		expect(body0).toBe(body1);
+		expect(Bun.stripANSI(body1)).toContain(`${theme.status.done} Probe: Investigate padding`);
 	});
 
 	it("wraps the completed run summary in bracket glyphs, dropping the Total: label", async () => {

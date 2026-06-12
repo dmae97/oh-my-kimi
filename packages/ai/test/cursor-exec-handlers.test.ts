@@ -4,11 +4,12 @@ import {
 	buildCursorSystemPromptJsons,
 	resolveExecHandler,
 	streamCursor,
-} from "../src/providers/cursor";
-import type { AgentRunRequest } from "../src/providers/cursor/gen/agent_pb";
-import type { Context, Model } from "../src/types";
+} from "@oh-my-pi/pi-ai/providers/cursor";
+import type { Context, Model } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import type { AgentRunRequest } from "@oh-my-pi/pi-catalog/discovery/cursor-gen/agent_pb";
 
-const cursorModel: Model<"cursor-agent"> = {
+const cursorModel: Model<"cursor-agent"> = buildModel({
 	id: "cursor-composer-2.5",
 	name: "Cursor Composer 2.5",
 	api: "cursor-agent",
@@ -19,7 +20,7 @@ const cursorModel: Model<"cursor-agent"> = {
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 	contextWindow: 1,
 	maxTokens: 1,
-};
+});
 
 function captureCursorPayload(context: Context): Promise<AgentRunRequest> {
 	const { promise, resolve, reject } = Promise.withResolvers<AgentRunRequest>();

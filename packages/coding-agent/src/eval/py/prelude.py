@@ -3,7 +3,8 @@ from __future__ import annotations
 if "__omp_prelude_loaded__" not in globals():
     __omp_prelude_loaded__ = True
     from pathlib import Path
-    import os, json, math
+    import os, json, math, re
+    from urllib.parse import unquote
 
     # __omp_display is injected by runner.py before the prelude executes; it
     # mirrors IPython's display() semantics with the same MIME bundle output.
@@ -53,9 +54,47 @@ if "__omp_prelude_loaded__" not in globals():
         _emit_status("env", key=key, value=val, action="get")
         return val
 
-    def read(path: str | Path, *, offset: int = 1, limit: int | None = None) -> str:
+    _OMP_INTERNAL_URL_RE = re.compile(r"^([a-z][a-z0-9+.-]*)://(.*)$", re.IGNORECASE)
+
+    def _resolve_omp_path(path: str | Path) -> Path:
+        """Map a helper path to a real filesystem Path.
+
+        A `scheme://…` whose scheme has an injected on-disk root (e.g.
+        `local://`, via PI_EVAL_LOCAL_ROOTS) is rewritten under that root so it
+        lands where `read local://…` resolves — not a literal `local:/`
+        directory under the cwd (which `Path("local://x")` collapses to). Plain
+        paths pass through unchanged; any other `scheme://` is rejected."""
+        if not isinstance(path, str):
+            return Path(path)
+        match = _OMP_INTERNAL_URL_RE.match(path)
+        if not match:
+            return Path(path)
+        scheme = match.group(1).lower()
+        try:
+            roots = json.loads(os.environ.get("PI_EVAL_LOCAL_ROOTS") or "{}")
+        except (ValueError, TypeError):
+            roots = {}
+        root = roots.get(scheme) if isinstance(roots, dict) else None
+        if not root:
+            raise ValueError(f"Protocol paths are not supported by this helper: {path}")
+        relative = unquote(match.group(2).replace("\\", "/"))
+        # Mirror the host `path.resolve`/`resolveLocalUrlToPath`: normalize and
+        # make absolute WITHOUT realpath'ing symlinks (Path.resolve would turn
+        # /tmp into /private/tmp and diverge from the read-side resolution).
+        root_path = os.path.abspath(root)
+        if relative == "":
+            return Path(root_path)
+        rel_path = Path(relative)
+        if rel_path.is_absolute() or ".." in rel_path.parts:
+            raise ValueError(f"Unsafe {scheme}:// path (absolute or traversal): {path}")
+        resolved = os.path.abspath(os.path.join(root_path, relative))
+        if resolved != root_path and not resolved.startswith(root_path + os.sep):
+            raise ValueError(f"{scheme}:// path escapes its root: {path}")
+        return Path(resolved)
+
+    def read(path: str | Path, offset: int = 1, limit: int | None = None) -> str:
         """Read file contents. offset/limit are 1-indexed line numbers."""
-        p = Path(path)
+        p = _resolve_omp_path(path)
         data = p.read_text(encoding="utf-8")
         lines = data.splitlines(keepends=True)
         if offset > 1 or limit is not None:
@@ -69,7 +108,7 @@ if "__omp_prelude_loaded__" not in globals():
 
     def write(path: str | Path, content: str) -> Path:
         """Write file contents (create parents)."""
-        p = Path(path)
+        p = _resolve_omp_path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content, encoding="utf-8")
         _emit_status("write", path=str(p), chars=len(content))
@@ -77,7 +116,7 @@ if "__omp_prelude_loaded__" not in globals():
 
     def append(path: str | Path, content: str) -> Path:
         """Append to file."""
-        p = Path(path)
+        p = _resolve_omp_path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
         with p.open("a", encoding="utf-8") as f:
             f.write(content)
@@ -463,8 +502,8 @@ if "__omp_prelude_loaded__" not in globals():
 
     tool = _ToolProxy()
 
-    def llm(prompt, *, model="default", system=None, schema=None):
-        """Oneshot, stateless LLM call against a model tier.
+    def completion(prompt, *, model="default", system=None, schema=None):
+        """Oneshot, stateless completion against a model tier.
 
         `model` selects a tier: "smol", "default" (the session's active model),
         or "slow". Pass `system` for a system prompt. Pass a JSON-Schema dict
@@ -476,25 +515,24 @@ if "__omp_prelude_loaded__" not in globals():
             args["system"] = system
         if schema is not None:
             args["schema"] = schema
-        res = _bridge_call("__llm__", args)
+        res = _bridge_call("__completion__", args)
         text = res.get("text") if isinstance(res, dict) else res
         return json.loads(text) if schema is not None else text
 
-    def agent(prompt, *, agent_type="task", model=None, context=None, label=None, schema=None):
+    def agent(prompt, *, agent_type="task", model=None, label=None, schema=None):
         """Run a subagent and return its final output.
 
         `agent_type` selects the subagent definition (default "task"). Pass
-        `model` to override that agent's model, `context` for shared background,
-        `label` for the output artifact id, and `schema` to request structured
-        JSON output; when `schema` is supplied the parsed object is returned.
+        `model` to override that agent's model, `label` for the output artifact
+        id, and `schema` to request structured JSON output; when `schema` is
+        supplied the parsed object is returned. Share background by writing a
+        local:// file and referencing it in the prompt.
         """
         args = {"prompt": prompt}
         if agent_type is not None:
             args["agentType"] = agent_type
         if model is not None:
             args["model"] = model
-        if context is not None:
-            args["context"] = context
         if label is not None:
             args["label"] = label
         if schema is not None:

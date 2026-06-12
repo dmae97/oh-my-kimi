@@ -7,17 +7,12 @@
  * — when a forced tool_choice is sent to a Kimi reasoning model, we strip
  * reasoning for that single turn rather than dropping `tool_choice` outright.
  */
-import { afterEach, describe, expect, it } from "bun:test";
-import { getBundledModel } from "@oh-my-pi/pi-ai/models";
+import { describe, expect, it } from "bun:test";
 import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
-import type { Context, Model, Tool } from "@oh-my-pi/pi-ai/types";
+import type { Context, Model, ModelSpec, Tool } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import * as z from "zod/v4";
-
-const originalFetch = global.fetch;
-
-afterEach(() => {
-	global.fetch = originalFetch;
-});
 
 const echoTool: Tool = {
 	name: "echo",
@@ -37,27 +32,31 @@ function abortedSignal(): AbortSignal {
 }
 
 function kimiOpencodeGoModel(): Model<"openai-completions"> {
-	return {
-		...getBundledModel("openai", "gpt-4o-mini"),
+	const base = getBundledModel("openai", "gpt-4o-mini");
+	return buildModel({
+		...base,
 		api: "openai-completions",
 		provider: "opencode-go",
 		baseUrl: "https://opencode.ai/zen/v1",
 		id: "kimi-k2.6",
 		name: "Kimi K2.6",
 		reasoning: true,
-	};
+		compat: base.compatConfig,
+	} as ModelSpec<"openai-completions">);
 }
 
 function kimiOpenRouterModel(): Model<"openai-completions"> {
-	return {
-		...getBundledModel("openai", "gpt-4o-mini"),
+	const base = getBundledModel("openai", "gpt-4o-mini");
+	return buildModel({
+		...base,
 		api: "openai-completions",
 		provider: "openrouter",
 		baseUrl: "https://openrouter.ai/api/v1",
 		id: "moonshotai/kimi-k2",
 		name: "Kimi K2 (OpenRouter)",
 		reasoning: true,
-	};
+		compat: base.compatConfig,
+	} as ModelSpec<"openai-completions">);
 }
 
 function captureBody(
@@ -116,15 +115,17 @@ describe("issue #827 — kimi reasoning models drop reasoning under forced tool_
 		expect(body.reasoning_effort).toBeUndefined();
 	});
 	it("sends explicit thinking disabled for Moonshot Kimi K2.6 when a named tool is forced", async () => {
-		const model: Model<"openai-completions"> = {
-			...getBundledModel("openai", "gpt-4o-mini"),
+		const base = getBundledModel("openai", "gpt-4o-mini");
+		const model: Model<"openai-completions"> = buildModel({
+			...base,
 			api: "openai-completions",
 			provider: "moonshot",
 			baseUrl: "https://api.moonshot.ai/v1",
 			id: "kimi-k2.6",
 			name: "Kimi K2.6",
 			reasoning: false,
-		};
+			compat: base.compatConfig,
+		} as ModelSpec<"openai-completions">);
 		const body = (await captureBody(model, {
 			toolChoice: { type: "tool", name: "echo" },
 		})) as CompletionsBody;
@@ -139,15 +140,17 @@ describe("issue #827 — kimi reasoning models drop reasoning under forced tool_
 		// LiteLLM / Vertex proxies often expose Claude through chat-completions; Anthropic
 		// itself rejects reasoning + forced tool_choice (see anthropic.ts:disableThinkingIfToolChoiceForced),
 		// so the same constraint must follow the model when it's reached through the OpenAI shape.
-		const model: Model<"openai-completions"> = {
-			...getBundledModel("openai", "gpt-4o-mini"),
+		const base = getBundledModel("openai", "gpt-4o-mini");
+		const model: Model<"openai-completions"> = buildModel({
+			...base,
 			api: "openai-completions",
 			provider: "litellm",
 			baseUrl: "http://localhost:4000/v1",
 			id: "claude-sonnet-4-6",
 			name: "Claude Sonnet 4.6 (LiteLLM)",
 			reasoning: true,
-		};
+			compat: base.compatConfig,
+		} as ModelSpec<"openai-completions">);
 
 		const body = (await captureBody(model, {
 			reasoning: "high",
@@ -159,12 +162,14 @@ describe("issue #827 — kimi reasoning models drop reasoning under forced tool_
 	});
 	it("does not strip reasoning on non-Kimi models even with forced tool_choice", async () => {
 		// Non-kimi reasoning model — OpenAI itself accepts forced tool_choice with reasoning.
-		const model: Model<"openai-completions"> = {
-			...getBundledModel("openai", "gpt-4o-mini"),
+		const base = getBundledModel("openai", "gpt-4o-mini");
+		const model: Model<"openai-completions"> = buildModel({
+			...base,
 			api: "openai-completions",
 			id: "gpt-5-mini",
 			reasoning: true,
-		};
+			compat: base.compatConfig,
+		} as ModelSpec<"openai-completions">);
 
 		const body = (await captureBody(model, {
 			reasoning: "high",

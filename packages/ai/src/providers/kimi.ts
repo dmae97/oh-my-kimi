@@ -9,9 +9,9 @@
  * Note: Kimi calculates TPM rate limits based on max_tokens, not actual output.
  */
 
+import { getKimiCommonHeaders } from "../registry/oauth/kimi";
 import type { Api, Context, Model } from "../types";
 import type { AssistantMessageEventStream } from "../utils/event-stream";
-import { getKimiCommonHeaders } from "../utils/oauth/kimi";
 import {
 	type OpenAIAnthropicApiFormat,
 	type OpenAIAnthropicShimOptions,

@@ -1,16 +1,17 @@
 /**
- * Show what the read tool will return for a given path.
+ * Show what the read tool will return for a path, URL, or internal URI.
  */
 import { Args, Command } from "@oh-my-pi/pi-utils/cli";
 import { type ReadCommandArgs, runReadCommand } from "../cli/read-cli";
 import { initTheme } from "../modes/theme/theme";
 
 export default class Read extends Command {
-	static description = "Show what the read tool will return for a path or URL";
+	static description = "Show what the read tool will return for a path, URL, or internal URI";
 
 	static args = {
 		path: Args.string({
-			description: "Path or URL to read (append :sel for line ranges or raw mode, e.g. src/foo.ts:50-100)",
+			description:
+				"Path, URL, or internal URI to read (append :sel for line ranges or raw mode, e.g. src/foo.ts:50-100)",
 			required: true,
 		}),
 	};
@@ -20,6 +21,8 @@ export default class Read extends Command {
 		"omp read src/foo.ts:50-100",
 		"omp read src/foo.ts:raw",
 		"omp read https://example.com",
+		"omp read omp://",
+		"omp read issue://123",
 		"omp read path/to/archive.zip:dir/file.ts",
 		"omp read path/to/db.sqlite:users:42",
 	];

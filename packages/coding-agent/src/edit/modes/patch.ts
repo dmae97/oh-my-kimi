@@ -40,6 +40,7 @@ import {
 	countLeadingWhitespace,
 	detectLineEnding,
 	getLeadingWhitespace,
+	normalizeForFuzzy,
 	normalizeToLF,
 	restoreLineEndings,
 	stripBom,
@@ -1008,6 +1009,41 @@ async function readExistingPatchFile(fileSystem: FileSystem, absolutePath: strin
 }
 
 /**
+ * A prefix/substring strategy matched pattern lines that cover only part of
+ * the corresponding file lines; replacing whole lines would silently drop the
+ * uncovered text the model never saw. Allow the replacement only when every
+ * discarded piece (normalized) survives somewhere in the hunk's new lines.
+ */
+function assertPartialMatchPreservesDiscardedText(
+	path: string,
+	pattern: string[],
+	matchedLines: string[],
+	newLines: string[],
+	matchStartIndex: number,
+): void {
+	let newLinesNorm: string | undefined;
+	for (let j = 0; j < pattern.length; j++) {
+		const lineNorm = normalizeForFuzzy(matchedLines[j]);
+		const patternNorm = normalizeForFuzzy(pattern[j]);
+		if (lineNorm === patternNorm) continue;
+		const at = lineNorm.indexOf(patternNorm);
+		if (at === -1) continue;
+		const discardedParts = [lineNorm.slice(0, at).trim(), lineNorm.slice(at + patternNorm.length).trim()];
+		for (const part of discardedParts) {
+			if (part.length === 0) continue;
+			newLinesNorm ??= newLines.map(normalizeForFuzzy).join("\n");
+			if (!newLinesNorm.includes(part)) {
+				throw new ApplyPatchError(
+					`Refusing partial-line match in ${path} at line ${matchStartIndex + j + 1}: ` +
+						`the file line also contains ${JSON.stringify(part)}, which the replacement would silently drop. ` +
+						`Provide the complete line in the hunk.`,
+				);
+			}
+		}
+	}
+}
+
+/**
  * Compute replacements needed to transform originalLines using the diff hunks.
  */
 function computeReplacements(
@@ -1253,6 +1289,18 @@ function computeReplacements(
 		if (searchResult.strategy === "fuzzy-dominant") {
 			const similarity = Math.round(searchResult.confidence * 100);
 			warnings.push(`Dominant fuzzy match selected in ${path} near line ${found + 1} (${similarity}% similar).`);
+		} else if (
+			searchResult.strategy === "comment-prefix" ||
+			searchResult.strategy === "prefix" ||
+			searchResult.strategy === "substring" ||
+			searchResult.strategy === "fuzzy" ||
+			searchResult.strategy === "character"
+		) {
+			const similarity = Math.round(searchResult.confidence * 100);
+			warnings.push(
+				`Inexact match in ${path} near line ${found + 1}: matched via ${searchResult.strategy} strategy ` +
+					`(${similarity}% similar). Re-read the file if the result is not what you intended.`,
+			);
 		}
 
 		// Reject if match is ambiguous (prefix/substring matching found multiple matches)
@@ -1303,6 +1351,10 @@ function computeReplacements(
 		if (isNoOp) {
 			lineIndex = found + pattern.length;
 			continue;
+		}
+
+		if (searchResult.strategy === "prefix" || searchResult.strategy === "substring") {
+			assertPartialMatchPreservesDiscardedText(path, pattern, actualMatchedLines, newSlice, found);
 		}
 
 		const adjustedNewLines = adjustLinesIndentation(pattern, actualMatchedLines, newSlice);
@@ -1571,7 +1623,9 @@ export async function computePatchDiff(
 		if (!normalizedOld && !normalizedNew) {
 			return { diff: "", firstChangedLine: undefined };
 		}
-		return generateUnifiedDiffString(normalizedOld, normalizedNew);
+		return generateUnifiedDiffString(normalizedOld, normalizedNew, undefined, {
+			path: result.change.newPath ?? result.change.path,
+		});
 	} catch (err) {
 		return { error: err instanceof Error ? err.message : String(err) };
 	}
@@ -1785,7 +1839,9 @@ export async function executePatchSingle(
 	if (result.change.type === "update" && result.change.oldContent && result.change.newContent) {
 		const normalizedOld = normalizeToLF(stripBom(result.change.oldContent).text);
 		const normalizedNew = normalizeToLF(stripBom(result.change.newContent).text);
-		diffResult = generateUnifiedDiffString(normalizedOld, normalizedNew);
+		diffResult = generateUnifiedDiffString(normalizedOld, normalizedNew, undefined, {
+			path: result.change.newPath ?? result.change.path,
+		});
 	}
 
 	let resultText: string;

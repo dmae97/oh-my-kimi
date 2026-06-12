@@ -3,15 +3,17 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import { AuthStorage, Effort, getBundledModel, type Model } from "@oh-my-pi/pi-ai";
+import { AuthStorage, Effort, type Model } from "@oh-my-pi/pi-ai";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { CustomTool } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools/types";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { TOOL_DISCOVERY_AUTO_THRESHOLD } from "@oh-my-pi/pi-coding-agent/tool-discovery/mode";
 import { Snowflake } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
-import { TOOL_DISCOVERY_AUTO_THRESHOLD } from "../src/tool-discovery/mode";
 
 function createMcpCustomTool(name: string, serverName: string, mcpToolName: string): CustomTool {
 	return {
@@ -28,19 +30,19 @@ function createMcpCustomTool(name: string, serverName: string, mcpToolName: stri
 }
 
 function createReasoningModel(): Model<"openai-responses"> {
-	return {
+	return buildModel({
 		id: "mock-reasoning",
 		name: "mock-reasoning",
 		api: "openai-responses",
 		provider: "openai",
 		baseUrl: "https://example.invalid",
 		reasoning: true,
-		thinking: { mode: "effort", minLevel: Effort.Medium, maxLevel: Effort.High },
+		thinking: { mode: "effort", efforts: [Effort.Medium, Effort.High] },
 		input: ["text"],
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 8192,
 		maxTokens: 2048,
-	};
+	});
 }
 
 const oldSessionMtime = new Date("2000-01-01T00:00:00.000Z");
@@ -247,7 +249,7 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 
 		const searchTool = session.agent.state.tools.find(tool => tool.name === "search_tool_bm25");
 		expect(searchTool?.description).toContain("Total discoverable tools available: 1.");
-		expect(searchTool?.description).toContain("- `server_name`");
+		expect(searchTool?.description).toContain("Discoverable MCP servers in this session: github (1 tool).");
 	});
 
 	it("prunes deactivated builtin discoveries so they can be rediscovered", async () => {

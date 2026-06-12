@@ -8,27 +8,7 @@ export { isRecord } from "@oh-my-pi/pi-utils";
 export function normalizeSystemPrompts(systemPrompt: readonly string[] | string | undefined | null): string[] {
 	if (systemPrompt === undefined || systemPrompt === null) return [];
 	const prompts = Array.isArray(systemPrompt) ? systemPrompt : typeof systemPrompt === "string" ? [systemPrompt] : [];
-	return prompts.map(prompt => prompt.toWellFormed()).filter(prompt => prompt.length > 0);
-}
-
-export function toNumber(value: unknown): number | undefined {
-	if (typeof value === "number" && Number.isFinite(value)) return value;
-	if (typeof value === "string" && value.trim()) {
-		const parsed = Number(value);
-		return Number.isFinite(parsed) ? parsed : undefined;
-	}
-	return undefined;
-}
-
-export function toPositiveNumber(value: unknown, fallback: number): number {
-	if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-		return fallback;
-	}
-	return value;
-}
-
-export function toBoolean(value: unknown): boolean | undefined {
-	return typeof value === "boolean" ? value : undefined;
+	return prompts.map(prompt => prompt.toWellFormed()).filter(prompt => prompt.trim().length > 0);
 }
 
 export function normalizeToolCallId(id: string): string {
@@ -159,8 +139,4 @@ export function resolveCacheRetention(cacheRetention?: CacheRetention): CacheRet
 	if (cacheRetention) return cacheRetention;
 	if ($env.PI_CACHE_RETENTION === "long") return "long";
 	return "short";
-}
-
-export function isAnthropicOAuthToken(key: string): boolean {
-	return key.includes("sk-ant-oat");
 }

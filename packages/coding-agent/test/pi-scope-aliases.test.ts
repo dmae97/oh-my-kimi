@@ -29,10 +29,10 @@ const canonicalCodingAgentExtensions = Bun.resolveSync(
 );
 const canonicalUtils = Bun.resolveSync("@oh-my-pi/pi-utils", import.meta.dir);
 const canonicalTui = Bun.resolveSync("@oh-my-pi/pi-tui", import.meta.dir);
-// Subpath remap: upstream `pi-ai/oauth` re-exported `utils/oauth/index`; the
-// shim rewrites the legacy subpath onto its current home so plugins keep
-// importing the upstream layout.
-const canonicalAiOauth = Bun.resolveSync("@oh-my-pi/pi-ai/utils/oauth", import.meta.dir);
+// Subpath: upstream `pi-ai/oauth` re-exported `utils/oauth/index`; our pi-ai now
+// exposes the same surface at the real `@oh-my-pi/pi-ai/oauth` export, so the
+// legacy `@mariozechner/pi-ai/oauth` specifier canonicalizes straight to it.
+const canonicalAiOauth = Bun.resolveSync("@oh-my-pi/pi-ai/oauth", import.meta.dir);
 
 interface AliasCase {
 	id: string;
@@ -65,13 +65,13 @@ const CASES: readonly AliasCase[] = [
 		canonicalPath: canonicalCodingAgentExtensions,
 		symbol: "isToolCallEventType",
 	},
-	// Subpath remap: legacy `pi-ai/oauth` should resolve to `pi-ai/utils/oauth`.
+	// Subpath: legacy `pi-ai/oauth` resolves to the real `@oh-my-pi/pi-ai/oauth`.
 	{
 		id: "mariozechner-ai-oauth",
 		aliasSpecifier: "@mariozechner/pi-ai/oauth",
 		canonicalPath: canonicalAiOauth,
-		// `refreshOAuthToken` is exported by our `utils/oauth/index` and by
-		// upstream's `oauth.d.ts`; it makes a stable probe across both layouts.
+		// `refreshOAuthToken` is exported by our `oauth/index` and by upstream's
+		// `oauth.d.ts`; it makes a stable probe across both layouts.
 		symbol: "refreshOAuthToken",
 	},
 	// `Key` runtime helper restored on pi-tui (plannotator + rpiv-* import it).

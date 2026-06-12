@@ -2,8 +2,9 @@ import { describe, expect, it } from "bun:test";
 import { applyAnthropicUsageExtras } from "@oh-my-pi/pi-ai/providers/anthropic";
 import { parseChunkUsage } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import type { Model, Usage } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 
-const OPENAI_MODEL: Model<"openai-completions"> = {
+const OPENAI_MODEL: Model<"openai-completions"> = buildModel({
 	id: "gpt-5",
 	name: "GPT-5",
 	api: "openai-completions",
@@ -14,7 +15,7 @@ const OPENAI_MODEL: Model<"openai-completions"> = {
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 	contextWindow: 200_000,
 	maxTokens: 8_192,
-};
+});
 
 function blankUsage(): Usage {
 	return {

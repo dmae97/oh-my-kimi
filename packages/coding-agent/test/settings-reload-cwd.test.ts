@@ -43,6 +43,64 @@ describe("Settings.reloadForCwd", () => {
 		expect(settings.get("enabledModels")).toEqual(["model-a"]);
 	});
 
+	it("loads extra config overlays after project settings", async () => {
+		const testDir = path.join(os.tmpdir(), "test-config-overlay", Snowflake.next());
+		const projectDir = path.join(testDir, "project");
+		const overlayPath = path.join(testDir, "overlay.yml");
+		try {
+			resetSettingsForTest();
+			fs.mkdirSync(projectDir, { recursive: true });
+			fs.mkdirSync(getProjectAgentDir(projectDir), { recursive: true });
+			fs.writeFileSync(
+				path.join(getProjectAgentDir(projectDir), "settings.json"),
+				JSON.stringify({ compaction: { enabled: true } }),
+			);
+			fs.writeFileSync(overlayPath, "compaction:\n  enabled: false\n");
+
+			const settings = await Settings.init({ cwd: projectDir, inMemory: true, configFiles: [overlayPath] });
+			expect(settings.get("compaction.enabled")).toBe(false);
+
+			settings.override("compaction.enabled", true);
+			expect(settings.get("compaction.enabled")).toBe(true);
+		} finally {
+			resetSettingsForTest();
+			if (fs.existsSync(testDir)) fs.rmSync(testDir, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects a missing --config overlay instead of silently ignoring it", async () => {
+		const testDir = path.join(os.tmpdir(), "test-config-overlay-missing", Snowflake.next());
+		try {
+			resetSettingsForTest();
+			fs.mkdirSync(testDir, { recursive: true });
+
+			const missingPath = path.join(testDir, "nope.yml");
+			expect(Settings.init({ cwd: testDir, inMemory: true, configFiles: [missingPath] })).rejects.toThrow(
+				`Config overlay not found: ${missingPath}`,
+			);
+		} finally {
+			resetSettingsForTest();
+			if (fs.existsSync(testDir)) fs.rmSync(testDir, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects a malformed --config overlay", async () => {
+		const testDir = path.join(os.tmpdir(), "test-config-overlay-bad", Snowflake.next());
+		const overlayPath = path.join(testDir, "bad.yml");
+		try {
+			resetSettingsForTest();
+			fs.mkdirSync(testDir, { recursive: true });
+			fs.writeFileSync(overlayPath, "compaction: [unclosed\n");
+
+			expect(Settings.init({ cwd: testDir, inMemory: true, configFiles: [overlayPath] })).rejects.toThrow(
+				"Failed to parse config overlay",
+			);
+		} finally {
+			resetSettingsForTest();
+			if (fs.existsSync(testDir)) fs.rmSync(testDir, { recursive: true, force: true });
+		}
+	});
+
 	describe("project layer (on disk)", () => {
 		let testDir: string;
 		let agentDir: string;

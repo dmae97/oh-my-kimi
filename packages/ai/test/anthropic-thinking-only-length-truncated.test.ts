@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { convertAnthropicMessages } from "@oh-my-pi/pi-ai/providers/anthropic";
 import { transformMessages } from "@oh-my-pi/pi-ai/providers/transform-messages";
 import type { AssistantMessage, Message, Model, UserMessage } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 
 /**
  * Regression test for: "messages.X.content.Y: `thinking` or `redacted_thinking` blocks in
@@ -19,7 +20,7 @@ import type { AssistantMessage, Message, Model, UserMessage } from "@oh-my-pi/pi
  * keeps proper `user` / `assistant` alternation regardless of which provider is sending it.
  */
 describe("transformMessages drops thinking-only assistant turns", () => {
-	const model: Model<"anthropic-messages"> = {
+	const model: Model<"anthropic-messages"> = buildModel({
 		api: "anthropic-messages",
 		provider: "anthropic",
 		id: "claude-opus-4-7",
@@ -30,7 +31,7 @@ describe("transformMessages drops thinking-only assistant turns", () => {
 		maxTokens: 8192,
 		contextWindow: 200000,
 		reasoning: true,
-	};
+	});
 
 	const makeThinkingOnlyAssistant = (
 		thinking: string,
@@ -131,7 +132,7 @@ describe("transformMessages drops thinking-only assistant turns", () => {
 		expect(wireThinkingSignatures).toEqual(["sig_fresh"]);
 	});
 
-	it("drops error-stop thinking-only assistant turn AND emits the aborted-turn developer note", () => {
+	it("drops error-stop thinking-only assistant turn without injecting any synthetic note", () => {
 		const user: UserMessage = { role: "user", content: "do a thing", timestamp: 1 };
 		const errored = makeThinkingOnlyAssistant("partial reasoning", "sig_errored", "error");
 		const nextUser: UserMessage = { role: "user", content: "try again", timestamp: 3 };
@@ -147,10 +148,10 @@ describe("transformMessages drops thinking-only assistant turns", () => {
 		);
 		expect(erroredSurvivors.length).toBe(0);
 
-		// The aborted-turn developer guidance must still be emitted so the model sees
-		// the lifecycle marker; otherwise the next turn loses the abort context.
-		const developerNotes = transformed.filter(m => m.role === "developer");
-		expect(developerNotes.length).toBeGreaterThanOrEqual(1);
+		// No synthetic developer note is injected for a dropped aborted/errored turn —
+		// the abort lifecycle is conveyed by aborted tool results (when there are tool
+		// calls), not by a separate marker message.
+		expect(transformed.filter(m => m.role === "developer").length).toBe(0);
 	});
 
 	it("keeps assistant turns that have a `text` block even when stopped at length", () => {

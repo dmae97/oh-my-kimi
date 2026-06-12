@@ -1,29 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import {
-	detectTerminalEagerEraseScrollbackRisk,
 	shouldEnableSynchronizedOutputByDefault,
 	synchronizedOutputUserOverride,
 } from "@oh-my-pi/pi-tui/terminal-capabilities";
-
-describe("terminal capability defaults", () => {
-	it("treats SSH-stripped Linux truecolor sessions as ED3-risk", () => {
-		expect(
-			detectTerminalEagerEraseScrollbackRisk(
-				{ TERM: "xterm-256color", COLORTERM: "truecolor", SSH_TTY: "/dev/pts/3" },
-				"linux",
-			),
-		).toBe(true);
-	});
-
-	it("treats Ptyxis and unknown POSIX terminals as ED3-risk by default", () => {
-		expect(detectTerminalEagerEraseScrollbackRisk({ TERM_PROGRAM: "ptyxis" }, "linux")).toBe(true);
-		expect(detectTerminalEagerEraseScrollbackRisk({ TERM: "xterm-256color" }, "linux")).toBe(true);
-	});
-
-	it("keeps native win32 on the dedicated ConPTY deferral path", () => {
-		expect(detectTerminalEagerEraseScrollbackRisk({ WT_SESSION: "abc" }, "win32")).toBe(false);
-	});
-});
 
 describe("synchronizedOutputUserOverride", () => {
 	it("returns null when the user expresses no preference", () => {

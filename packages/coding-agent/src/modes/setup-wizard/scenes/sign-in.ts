@@ -1,19 +1,11 @@
 import type { AuthStorage } from "@oh-my-pi/pi-ai";
-import type { OAuthProvider } from "@oh-my-pi/pi-ai/utils/oauth/types";
-import { Input, matchesKey, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
+import { PASTE_CODE_LOGIN_PROVIDERS } from "@oh-my-pi/pi-ai";
+import type { OAuthProvider } from "@oh-my-pi/pi-ai/oauth/types";
+import { Input, matchesKey, type SgrMouseEvent, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
 import { getAgentDbPath } from "@oh-my-pi/pi-utils";
 import { OAuthSelectorComponent } from "../../components/oauth-selector";
 import { theme } from "../../theme/theme";
 import type { SetupSceneHost, SetupTab } from "./types";
-
-/** Providers whose OAuth flow needs a pasted code/redirect URL rather than a callback server. */
-const CALLBACK_SERVER_PROVIDERS: Partial<Record<OAuthProvider, true>> = {
-	anthropic: true,
-	"openai-codex": true,
-	"gitlab-duo": true,
-	"google-gemini-cli": true,
-	"google-antigravity": true,
-};
 
 function loginUrlLink(url: string): string {
 	return `\x1b]8;;${url}\x07Open login URL\x1b]8;;\x07`;
@@ -43,6 +35,8 @@ export class SignInTab implements SetupTab {
 	#loginAbort: AbortController | undefined;
 	#loggingInProvider: string | undefined;
 	#disposed = false;
+	/** Render line where the provider selector begins. */
+	#selectorRowStart = 2;
 
 	constructor(private readonly host: SetupSceneHost) {
 		this.#authStorage = host.ctx.session.modelRegistry.authStorage;
@@ -76,12 +70,19 @@ export class SignInTab implements SetupTab {
 		this.#selector.handleInput(data);
 	}
 
-	render(width: number): string[] {
+	/** Forward mouse to the provider selector; pointer is inert during an active login or code prompt. */
+	routeMouse(event: SgrMouseEvent, line: number, col: number): void {
+		if (this.#loggingInProvider || this.#prompt) return;
+		this.#selector.routeMouse(event, line - this.#selectorRowStart, col);
+	}
+
+	render(width: number): readonly string[] {
 		const lines: string[] = [];
 		if (this.#loggingInProvider) {
 			lines.push(theme.bold(`Signing in to ${this.#loggingInProvider}`));
 		} else {
 			lines.push(theme.fg("muted", "Pick a provider to sign in — you can connect more than one."), "");
+			this.#selectorRowStart = lines.length;
 			lines.push(...this.#selector.render(width));
 		}
 
@@ -119,7 +120,7 @@ export class SignInTab implements SetupTab {
 
 	async #login(providerId: string): Promise<void> {
 		if (this.#loggingInProvider || this.#disposed) return;
-		const useManualInput = CALLBACK_SERVER_PROVIDERS[providerId as OAuthProvider] === true;
+		const useManualInput = PASTE_CODE_LOGIN_PROVIDERS.has(providerId);
 		this.#selector.stopValidation();
 		this.#loggingInProvider = providerId;
 		this.#statusLines = [theme.fg("dim", "Starting OAuth flow…")];

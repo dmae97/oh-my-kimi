@@ -138,12 +138,13 @@ The runtime settings model is layered:
 
 1. Global settings: `~/.omp/agent/config.yml`
 2. Project settings: discovered via settings capability (`settings.json` and `config.yml` from providers)
-3. Runtime overrides: in-memory, non-persistent
-4. Schema defaults: from `SETTINGS_SCHEMA`
+3. CLI config overlays: `omp --config <path>` / repeated `--config` files, loaded as `config.yml`-style YAML for this process only
+4. Runtime overrides: in-memory, non-persistent
+5. Schema defaults: from `SETTINGS_SCHEMA`
 
-Effective read path:
+Effective precedence:
 
-`defaults <- global <- project <- overrides`
+`defaults <- global <- project <- CLI config overlays <- overrides`
 
 Write behavior:
 
@@ -242,6 +243,20 @@ Native provider (`id: native`) reads native config from:
 
 - `Settings.init()` loads global `config.yml` + discovered project settings capability items.
 - Only capability items with `level === "project"` are merged into project layer.
+
+### Session title prompt override
+
+Create `TITLE_SYSTEM.md` in the same config locations as `SYSTEM.md` / `APPEND_SYSTEM.md`:
+
+```text
+# ~/.omp/agent/TITLE_SYSTEM.md
+Generate a session name using lowercase `<type>:<primary-objective>`.
+```
+
+- Missing `TITLE_SYSTEM.md` keeps the bundled title prompts.
+- Discovery uses the same project-then-user config directory pattern as `SYSTEM.md`: project `.omp/TITLE_SYSTEM.md` first, then user `~/.omp/agent/TITLE_SYSTEM.md` and the other supported config bases.
+- The override replaces only the automatic session-title generation system prompt; normal `SYSTEM.md` / `APPEND_SYSTEM.md` prompt customization is unaffected.
+- The online path still forces the `set_title` tool call. The local tiny-title path keeps the `<title>...</title>` prefill/stop wrapper and uses this file as its system turn.
 
 ## Skills subsystem
 

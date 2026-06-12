@@ -6,7 +6,6 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, Model, TextContent, TSchema } from "@oh-my-pi/pi-ai";
-import * as PiCodingAgent from "@oh-my-pi/pi-coding-agent";
 import type { KeyId } from "@oh-my-pi/pi-tui";
 import { hasFsCode, isEacces, isEnoent, logger } from "@oh-my-pi/pi-utils";
 import * as Zod from "zod/v4";
@@ -15,6 +14,8 @@ import { loadCapability } from "../../discovery";
 import { getExtensionNameFromPath } from "../../discovery/helpers";
 import type { ExecOptions } from "../../exec/exec";
 import { execCommand } from "../../exec/exec";
+// Runtime self-reference: dereference this namespace only inside loader functions to keep the index.ts cycle safe.
+import * as PiCodingAgent from "../../index";
 import type { CustomMessage } from "../../session/messages";
 import { EventBus } from "../../utils/event-bus";
 import { installLegacyPiSpecifierShim, loadLegacyPiModule } from "../plugins/legacy-pi-compat";
@@ -475,16 +476,24 @@ async function discoverExtensionsInDir(dir: string): Promise<string[]> {
 
 	return discovered;
 }
-
 /**
- * Discover and load extensions from standard locations.
+ * Discover absolute paths of extensions to load, without importing or
+ * binding factories. Hot path on session startup — the scan walks native
+ * `.omp`/`.pi` extension capabilities, the installed-plugin tree, and any
+ * configured paths.
+ *
+ * Subagents reuse the parent's collected paths via the SDK's
+ * `preloadedExtensionPaths` option, then call {@link loadExtensions} themselves
+ * so each session rebuilds Extension instances bound to its OWN
+ * `ExtensionAPI` (cwd, eventBus, runtime). Forwarding the parent's
+ * `LoadExtensionsResult` directly would reuse handlers/tools/commands that
+ * closed over the parent's `cwd` and event bus.
  */
-export async function discoverAndLoadExtensions(
+export async function discoverExtensionPaths(
 	configuredPaths: string[],
 	cwd: string,
-	eventBus?: EventBus,
 	disabledExtensionIds: string[] = [],
-): Promise<LoadExtensionsResult> {
+): Promise<string[]> {
 	const allPaths: string[] = [];
 	const seen = new Set<string>();
 	const disabled = new Set(disabledExtensionIds);
@@ -545,5 +554,20 @@ export async function discoverAndLoadExtensions(
 		addPath(resolved);
 	}
 
-	return loadExtensions(allPaths, cwd, eventBus);
+	return allPaths;
+}
+
+/**
+ * Discover and load extensions from standard locations. Composed of
+ * {@link discoverExtensionPaths} (FS scan) + {@link loadExtensions}
+ * (per-session binding).
+ */
+export async function discoverAndLoadExtensions(
+	configuredPaths: string[],
+	cwd: string,
+	eventBus?: EventBus,
+	disabledExtensionIds: string[] = [],
+): Promise<LoadExtensionsResult> {
+	const paths = await discoverExtensionPaths(configuredPaths, cwd, disabledExtensionIds);
+	return loadExtensions(paths, cwd, eventBus);
 }

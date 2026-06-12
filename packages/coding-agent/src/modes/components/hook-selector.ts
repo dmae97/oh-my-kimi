@@ -31,13 +31,12 @@ import { CountdownTimer } from "./countdown-timer";
 import { DynamicBorder } from "./dynamic-border";
 import { renderSegmentTrack } from "./segment-track";
 
-/** One segment of a {@link HookSelectorSlider} — a label, its accent color, and
- *  an optional detail line (e.g. the resolved model name) shown beneath the
- *  track while the segment is active. */
+/** One segment of a {@link HookSelectorSlider} — a label and an optional
+ *  detail line (e.g. the resolved model name) shown beneath the track while
+ *  the segment is active. Segment colors come from the track's theme palette,
+ *  assigned by position. */
 export interface HookSelectorSliderSegment {
 	label: string;
-	/** Theme color for the segment label; defaults to `accent`. */
-	color?: ThemeColor;
 	/** Secondary line rendered under the track when this segment is selected. */
 	detail?: string;
 }
@@ -122,7 +121,7 @@ class OutlinedList extends Container {
 		this.invalidate();
 	}
 
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		const borderColor = (text: string) => theme.fg("border", text);
 		const horizontal = borderColor(theme.boxSharp.horizontal.repeat(Math.max(1, width)));
 		const innerWidth = Math.max(1, width - 2);
@@ -645,7 +644,7 @@ export class HookSelectorComponent extends Container {
 		}
 	}
 
-	override render(width: number): string[] {
+	override render(width: number): readonly string[] {
 		const renderWidth = Math.max(1, width);
 		if (this.#lastRenderWidth !== renderWidth) {
 			this.#lastRenderWidth = renderWidth;

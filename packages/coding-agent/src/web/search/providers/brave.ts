@@ -4,7 +4,7 @@
  * Calls Brave's web search REST API and maps results into the unified
  * SearchResponse shape used by the web search tool.
  */
-import { type AuthStorage, getEnvApiKey } from "@oh-my-pi/pi-ai";
+import { type AuthStorage, type FetchImpl, getEnvApiKey } from "@oh-my-pi/pi-ai";
 import type { SearchResponse, SearchSource } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
 import { clampNumResults, dateToAgeSeconds } from "../utils";
@@ -28,6 +28,7 @@ export interface BraveSearchParams {
 	num_results?: number;
 	recency?: "day" | "week" | "month" | "year";
 	signal?: AbortSignal;
+	fetch?: FetchImpl;
 }
 
 interface BraveSearchResult {
@@ -80,7 +81,8 @@ async function callBraveSearch(
 		url.searchParams.set("freshness", RECENCY_MAP[params.recency]);
 	}
 
-	const response = await fetch(url, {
+	const fetchImpl = params.fetch ?? fetch;
+	const response = await fetchImpl(url, {
 		headers: {
 			Accept: "application/json",
 			"X-Subscription-Token": apiKey,
@@ -144,6 +146,7 @@ export class BraveProvider extends SearchProvider {
 			num_results: params.numSearchResults ?? params.limit,
 			recency: params.recency,
 			signal: params.signal,
+			fetch: params.fetch,
 		});
 	}
 }

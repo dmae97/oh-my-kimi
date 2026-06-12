@@ -25,12 +25,15 @@ If your extension/tool can run in non-interactive mode, guard with `ctx.hasUI` /
 
 ```ts
 export interface Component {
-  render(width: number): string[];
+  render(width: number): readonly string[];
   handleInput?(data: string): void;
   wantsKeyRelease?: boolean;
   invalidate?(): void;
+  dispose?(): void;
 }
 ```
+
+Render results are component-owned and immutable to callers; a component that did not change should return the **same array reference** it returned last time (reference equality is what enables the renderer's memoization and row virtualization), and must return a new array whenever its content changed.
 
 `Focusable` is separate:
 
@@ -56,7 +59,7 @@ Minimal pattern:
 ```ts
 import { replaceTabs, truncateToWidth } from "@oh-my-pi/pi-tui";
 
-render(width: number): string[] {
+render(width: number): readonly string[] {
   return this.lines.map(line => truncateToWidth(replaceTabs(line), width));
 }
 ```
@@ -67,12 +70,12 @@ render(width: number): string[] {
 
 Use `matchesKey(data, "...")` for navigation keys and combos.
 
-### Respect user-configured app keybindings
+### Match app keybinding actions
 
-Extension UI factories receive a `KeybindingsManager` (interactive mode) so you can honor mapped actions instead of hardcoding keys:
+Extension UI factories receive a `KeybindingsManager` (interactive mode; an in-memory instance carrying the default bindings, not the user's `keybindings.yml`) so you can match action ids instead of hardcoding keys:
 
 ```ts
-if (keybindings.matches(data, "interrupt")) {
+if (keybindings.matches(data, "app.interrupt")) {
   done(undefined);
   return;
 }
@@ -211,14 +214,14 @@ class Picker implements Component {
   }
 
   handleInput(data: string): void {
-    if (this.keybindings.matches(data, "interrupt")) {
+    if (this.keybindings.matches(data, "app.interrupt")) {
       this.done(undefined);
       return;
     }
     this.list.handleInput(data);
   }
 
-  render(width: number): string[] {
+  render(width: number): readonly string[] {
     return this.list
       .render(width)
       .map((line) => truncateToWidth(replaceTabs(line), width));

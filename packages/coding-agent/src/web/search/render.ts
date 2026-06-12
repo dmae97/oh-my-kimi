@@ -65,7 +65,7 @@ function renderSearchErrorPanel(message: string, providerLabel: string | undefin
 	const body = theme.fg("error", `Error: ${replaceTabs(message)}`);
 	const outputBlock = new CachedOutputBlock();
 	return markFramedBlockComponent({
-		render(width: number): string[] {
+		render(width: number): readonly string[] {
 			return outputBlock.render({ header, state: "error", sections: [{ lines: [body] }], width }, theme);
 		},
 		invalidate() {
@@ -117,13 +117,21 @@ export function renderSearchResult(
 		: searchQueries[0]
 			? truncateToWidth(searchQueries[0], 80)
 			: undefined;
+	const success = sourceCount > 0;
 	const header = renderStatusLine(
-		{
-			icon: sourceCount > 0 ? "success" : "warning",
-			title: "Web Search",
-			description: providerLabel,
-			meta: [formatCount("source", sourceCount)],
-		},
+		success
+			? {
+					iconOverride: theme.styledSymbol("tool.webSearch", "accent"),
+					title: "Web Search",
+					description: providerLabel,
+					meta: [formatCount("source", sourceCount)],
+				}
+			: {
+					icon: "warning",
+					title: "Web Search",
+					description: providerLabel,
+					meta: [formatCount("source", sourceCount)],
+				},
 		theme,
 	);
 
@@ -146,23 +154,25 @@ export function renderSearchResult(
 	const outputBlock = new CachedOutputBlock();
 
 	return markFramedBlockComponent({
-		render(width: number): string[] {
+		render(width: number): readonly string[] {
 			// Read mutable state at render time
 			const { expanded } = options;
 
 			// Answer lines: full markdown when expanded, capped markdown preview when collapsed.
 			const answerWidth = Math.max(20, width - 3);
 			const renderedAnswer = answerMarkdown ? answerMarkdown.render(answerWidth) : [];
-			let answerLines: string[];
+			let answerLines: readonly string[];
 			if (renderedAnswer.length === 0) {
 				answerLines = [theme.fg("muted", "No answer text returned")];
 			} else if (args?.maxAnswerLines !== undefined && !expanded) {
 				// CLI compact mode (`omp q`) caps the answer; the TUI passes no cap and shows it in full.
-				answerLines = renderedAnswer.slice(0, args.maxAnswerLines);
-				const remaining = renderedAnswer.length - answerLines.length;
+				// `renderedAnswer` is the Markdown component's shared cache — slice copies before appending.
+				const capped = renderedAnswer.slice(0, args.maxAnswerLines);
+				const remaining = renderedAnswer.length - capped.length;
 				if (remaining > 0) {
-					answerLines.push(theme.fg("muted", formatMoreItems(remaining, "line")));
+					capped.push(theme.fg("muted", formatMoreItems(remaining, "line")));
 				}
+				answerLines = capped;
 			} else {
 				answerLines = renderedAnswer;
 			}

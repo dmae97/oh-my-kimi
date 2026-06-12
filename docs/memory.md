@@ -41,7 +41,7 @@ The agent can read memory files directly using `memory://` URLs with the `read` 
 
 ## How it works
 
-Local summary memories are built by a background pipeline that runs at startup or when manually triggered via slash command. The pipeline is skipped for subagents and for sessions that are not persisted to a session file.
+Local summary memories are built by a background pipeline that runs at startup; `/memory enqueue` marks consolidation work that the next startup picks up. The pipeline is skipped for subagents and for sessions that are not persisted to a session file.
 
 **Phase 1 — per-session extraction:** For each past session that has changed since it was last processed, a model reads the session history and extracts durable signal: technical decisions, constraints, resolved failures, recurring workflows. Sessions that are too recent, too old, currently active, or beyond the configured scan/age limits are skipped. Each extraction produces a raw memory block and a short synopsis for that session.
 
@@ -59,12 +59,13 @@ Consolidated output is redacted for common secret/token patterns before `MEMORY.
 
 Memory extraction and consolidation behavior is driven by static prompt files in `packages/coding-agent/src/prompts/memories/`.
 
-| File                  | Purpose                                     | Variables                                   |
-| --------------------- | ------------------------------------------- | ------------------------------------------- |
-| `stage_one_system.md` | System prompt for per-session extraction    | —                                           |
-| `stage_one_input.md`  | User-turn template wrapping session content | `{{thread_id}}`, `{{response_items_json}}`  |
-| `consolidation.md`    | Prompt for cross-session consolidation      | `{{raw_memories}}`, `{{rollout_summaries}}` |
-| `read_path.md`        | Memory guidance injected into live sessions | `{{memory_summary}}`                        |
+| File                     | Purpose                                      | Variables                                   |
+| ------------------------ | -------------------------------------------- | ------------------------------------------- |
+| `stage_one_system.md`    | System prompt for per-session extraction     | —                                           |
+| `stage_one_input.md`     | User-turn template wrapping session content  | `{{thread_id}}`, `{{response_items_json}}`  |
+| `consolidation_system.md`| System prompt for cross-session consolidation | —                                          |
+| `consolidation.md`       | User-turn prompt for cross-session consolidation | `{{raw_memories}}`, `{{rollout_summaries}}` |
+| `read-path.md`           | Memory guidance injected into live sessions  | `{{memory_summary}}`                        |
 
 ### Model selection
 
@@ -91,7 +92,7 @@ Additional tuning knobs (concurrency, lease durations, token budgets) are availa
 
 ## Key files
 
-- `packages/coding-agent/src/memories/index.ts` — pipeline orchestration, injection, slash command handling
+- `packages/coding-agent/src/memories/index.ts` — pipeline orchestration, injection, clear/enqueue entry points (the `/memory` command routes here via `packages/coding-agent/src/memory-backend/local-backend.ts`)
 - `packages/coding-agent/src/memories/storage.ts` — SQLite-backed job queue and thread registry
 - `packages/coding-agent/src/prompts/memories/` — memory prompt templates
 - `packages/coding-agent/src/internal-urls/memory-protocol.ts` — `memory://` URL handler

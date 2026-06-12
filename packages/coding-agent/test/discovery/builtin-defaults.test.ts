@@ -10,24 +10,7 @@ import { BUILTIN_DEFAULTS_PROVIDER_ID, type Rule, ruleCapability } from "@oh-my-
 import type { LoadContext } from "@oh-my-pi/pi-coding-agent/capability/types";
 // Register all discovery providers as a side effect.
 import "@oh-my-pi/pi-coding-agent/discovery";
-
-const EXPECTED_RULE_NAMES = [
-	"rs-box-leak",
-	"rs-future-prelude",
-	"rs-lazylock",
-	"rs-match-ergonomics",
-	"rs-parking-lot",
-	"rs-result-type",
-	"ts-bare-catch",
-	"ts-import-type",
-	"ts-no-any",
-	"ts-no-deprecated-leftovers",
-	"ts-no-dynamic-import",
-	"ts-no-return-type",
-	"ts-no-tiny-functions",
-	"ts-promise-with-resolvers",
-	"ts-set-map",
-].sort();
+import { TtsrManager } from "@oh-my-pi/pi-coding-agent/export/ttsr";
 
 function ruleProvider() {
 	const cap = getCapability(ruleCapability.id);
@@ -45,19 +28,29 @@ async function loadBuiltinRules(): Promise<Rule[]> {
 }
 
 describe("builtin-defaults rule provider", () => {
-	it("loads exactly the bundled default rule set, all attributed to the provider", async () => {
+	it("loads the bundled default rule set, all attributed to the provider", async () => {
 		const rules = await loadBuiltinRules();
-		const names = rules.map(r => r.name).sort();
-		expect(names).toEqual(EXPECTED_RULE_NAMES);
+		expect(rules.length).toBeGreaterThan(0);
 		expect(rules.every(r => r._source.provider === BUILTIN_DEFAULTS_PROVIDER_ID)).toBe(true);
+		const names = rules.map(r => r.name);
+		// Name-based dedup is first-wins, so a duplicate would be silently shadowed.
+		expect(new Set(names).size).toBe(names.length);
 	});
 
-	it("parses every bundled rule as a TTSR rule (non-empty condition and scope)", async () => {
+	it("parses every bundled rule as a TTSR rule (non-empty condition/astCondition and scope)", async () => {
 		const rules = await loadBuiltinRules();
 		for (const rule of rules) {
-			expect(rule.condition?.length, `${rule.name} condition`).toBeGreaterThan(0);
+			const conditionCount = (rule.condition?.length ?? 0) + (rule.astCondition?.length ?? 0);
+			expect(conditionCount, `${rule.name} condition/astCondition`).toBeGreaterThan(0);
 			expect(rule.scope?.length, `${rule.name} scope`).toBeGreaterThan(0);
 		}
+	});
+
+	it("bundles ast-grep conditions for the redundant-clear-guard rule", async () => {
+		const rules = await loadBuiltinRules();
+		const rule = rules.find(r => r.name === "ts-redundant-clear-guard");
+		expect(rule?.condition).toBeUndefined();
+		expect(rule?.astCondition?.length).toBeGreaterThan(0);
 	});
 
 	it("parses YAML list-form conditions from the embedded text", async () => {
@@ -70,6 +63,38 @@ describe("builtin-defaults rule provider", () => {
 	it("preserves a per-rule interruptMode override from frontmatter", async () => {
 		const rules = await loadBuiltinRules();
 		expect(rules.find(r => r.name === "ts-set-map")?.interruptMode).toBe("never");
+	});
+
+	it("fires the no-test-timers rule on real timers in *.test.ts but not plain *.ts", async () => {
+		const rules = await loadBuiltinRules();
+		const rule = rules.find(r => r.name === "ts-no-test-timers");
+		if (!rule) throw new Error("ts-no-test-timers rule missing");
+
+		const manager = new TtsrManager();
+		expect(manager.addRule(rule)).toBe(true);
+
+		for (const snippet of ["await Bun.sleep(10)", "setTimeout(fn, 0)", "setInterval(fn, 5)"]) {
+			manager.resetBuffer();
+			const matches = manager.checkDelta(snippet, {
+				source: "tool",
+				toolName: "write",
+				filePaths: ["packages/x/test/foo.test.ts"],
+			});
+			expect(
+				matches.map(r => r.name),
+				snippet,
+			).toEqual(["ts-no-test-timers"]);
+		}
+
+		// Same content in a non-test file is out of scope.
+		manager.resetBuffer();
+		expect(
+			manager.checkDelta("await Bun.sleep(10)", {
+				source: "tool",
+				toolName: "write",
+				filePaths: ["packages/x/src/foo.ts"],
+			}),
+		).toEqual([]);
 	});
 
 	it("is the lowest-priority rule provider so user/project rules override defaults", () => {

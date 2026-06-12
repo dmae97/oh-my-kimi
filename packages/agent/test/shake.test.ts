@@ -219,3 +219,20 @@ describe("shake config presets", () => {
 		expect(collectShakeRegions([] as SessionEntry[], AGGRESSIVE_SHAKE_CONFIG)).toHaveLength(0);
 	});
 });
+
+describe("collectShakeRegions — useless results", () => {
+	test("useless tool result inside the protect window yields a region; identical plain result does not", () => {
+		const text = "No matches found in any scanned file.\n".repeat(20);
+		const flagged = messageEntry(toolResultMessage("search", text, { useless: true }));
+		const plain = messageEntry(toolResultMessage("search", text));
+		// Window far larger than the whole branch: only the flagged result bypasses it.
+		const regions = collectShakeRegions([flagged, plain], cfg({ protectTokens: 1_000_000 }));
+		expect(regions).toHaveLength(1);
+		expect(regions[0].entry).toBe(flagged);
+	});
+
+	test("an error result never bypasses the window even when flagged", () => {
+		const entry = messageEntry(toolResultMessage("search", "boom\n".repeat(50), { useless: true, isError: true }));
+		expect(collectShakeRegions([entry], cfg({ protectTokens: 1_000_000 }))).toHaveLength(0);
+	});
+});

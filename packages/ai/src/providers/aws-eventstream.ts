@@ -161,6 +161,7 @@ export async function* decodeEventStream(source: ReadableStream<Uint8Array>): As
 	// Single growable buffer; we slide a read cursor along it and compact when a
 	// complete prefix has been consumed. Avoids per-message Uint8Array copies.
 	let buf: Uint8Array<ArrayBufferLike> = new Uint8Array(0);
+	let completed = false;
 	try {
 		while (true) {
 			const { value, done } = await reader.read();
@@ -179,7 +180,11 @@ export async function* decodeEventStream(source: ReadableStream<Uint8Array>): As
 			if (done) break;
 		}
 		if (buf.length > 0) throw new Error("eventstream: truncated message at end of stream");
+		completed = true;
 	} finally {
+		// On abnormal exit (consumer threw/broke, decode error) cancel the body so the
+		// HTTP connection is released instead of draining until GC.
+		if (!completed) await reader.cancel().catch(() => {});
 		reader.releaseLock();
 	}
 }

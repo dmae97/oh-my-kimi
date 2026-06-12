@@ -5,9 +5,10 @@ import {
 	streamAnthropic,
 } from "@oh-my-pi/pi-ai/providers/anthropic";
 import type { Context, Model, ProviderSessionState, ServiceTier } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 
 function makeAnthropicModel(id: string): Model<"anthropic-messages"> {
-	return {
+	return buildModel({
 		id,
 		name: id,
 		api: "anthropic-messages",
@@ -18,7 +19,7 @@ function makeAnthropicModel(id: string): Model<"anthropic-messages"> {
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 200_000,
 		maxTokens: 8_192,
-	};
+	});
 }
 
 const CONTEXT: Context = {

@@ -33,7 +33,7 @@ describe("shouldEnableAppendOnlyContext", () => {
 		expect(
 			shouldEnableAppendOnlyContext("auto", {
 				...GENERIC_PROXY,
-				compat: { supportsStore: true },
+				compatConfig: { supportsStore: true },
 			}),
 		).toBe(true);
 	});

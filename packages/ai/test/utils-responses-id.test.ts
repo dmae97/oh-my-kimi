@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { normalizeResponsesToolCallId } from "../src/utils";
+import { normalizeResponsesToolCallId } from "@oh-my-pi/pi-ai/utils";
 
 describe("normalizeResponsesToolCallId", () => {
 	it("preserves existing item prefix when truncating oversized ids", () => {

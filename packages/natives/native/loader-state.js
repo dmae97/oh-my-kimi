@@ -33,6 +33,21 @@ import { embeddedAddon } from "./embedded-addon.js";
 
 const SUPPORTED_PLATFORMS = ["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64", "win32-x64"];
 
+/**
+ * Streaming startup marker, enabled by `PI_DEBUG_STARTUP`. Local copy of the
+ * pi-utils helper (this loader cannot depend on pi-utils). Synchronous on
+ * purpose: extraction/dlopen hangs must still leave the `:start` marker.
+ * @param {string} text
+ */
+function startupMarker(text) {
+	if (!process.env.PI_DEBUG_STARTUP) return;
+	try {
+		fs.writeSync(2, `[startup] ${text}\n`);
+	} catch {
+		// stderr unavailable; markers are best-effort
+	}
+}
+
 function getNativesDir() {
 	const xdgDataHome = process.env.XDG_DATA_HOME;
 	if (xdgDataHome && fs.existsSync(path.join(xdgDataHome, "omp"))) {
@@ -366,6 +381,7 @@ function maybeExtractEmbeddedAddon(ctx, errors) {
 	if (!selectedEmbeddedFile) return null;
 	const targetPath = path.join(ctx.versionedDir, selectedEmbeddedFile.filename);
 
+	startupMarker("native:extractEmbeddedAddon:start");
 	try {
 		fs.mkdirSync(ctx.versionedDir, { recursive: true });
 	} catch (err) {
@@ -564,6 +580,7 @@ function initLoaderContext() {
 }
 
 export function loadNative() {
+	startupMarker("native:loadNative:start");
 	const ctx = initLoaderContext();
 	const require_ = createRequire(import.meta.url);
 
@@ -575,8 +592,10 @@ export function loadNative() {
 
 	for (const candidate of runtimeCandidates) {
 		try {
+			startupMarker(`native:require:${path.basename(candidate)}`);
 			const bindings = require_(candidate);
 			validateLoadedBindings(ctx, bindings, candidate);
+			startupMarker("native:loadNative:done");
 			return bindings;
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);

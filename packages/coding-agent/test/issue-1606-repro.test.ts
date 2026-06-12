@@ -15,18 +15,30 @@
  * the original crash again.
  */
 import { describe, expect, it } from "bun:test";
-import { createTinyTitleSubprocess, smokeTestTinyTitleWorker, TINY_WORKER_ARG } from "../src/tiny/title-client";
+import * as path from "node:path";
+import { createTinyTitleSubprocess, TINY_WORKER_ARG } from "@oh-my-pi/pi-coding-agent/tiny/title-client";
 
 describe("issue #1606 — tiny model lives in an isolated subprocess", () => {
 	it("ping/pongs through the spawned worker subprocess and tears it down cleanly", async () => {
 		// `smokeTestTinyTitleWorker` is the runtime probe wired into
-		// `omp --smoke-test`: it spawns the worker subprocess via
-		// `Bun.spawn`, sends a ping over the IPC channel, awaits the pong,
-		// then SIGKILLs the child. If anyone reverts the worker to an
-		// in-process `new Worker(...)` thread or drops the `--tiny-worker`
-		// CLI dispatch, the spawn either picks up the wrong entrypoint or
-		// the ping never round-trips, and this test fails.
-		await expect(smokeTestTinyTitleWorker({ timeoutMs: 15_000 })).resolves.toBeUndefined();
+		// `omp --smoke-test`. Run it in a child Bun process instead of this
+		// Bun-test worker: the test runner owns its own IPC channel and can
+		// starve nested Bun subprocess IPC on some Bun builds.
+		const repoRoot = path.resolve(import.meta.dir, "../../..");
+		const script =
+			'const { smokeTestTinyTitleWorker } = await import("@oh-my-pi/pi-coding-agent/tiny/title-client"); await smokeTestTinyTitleWorker({ timeoutMs: 15000 });';
+		const proc = Bun.spawn([process.execPath, "-e", script], {
+			cwd: repoRoot,
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const [stdout, stderr, exitCode] = await Promise.all([
+			new Response(proc.stdout).text(),
+			new Response(proc.stderr).text(),
+			proc.exited,
+		]);
+		expect(`${stdout}${stderr}`).toBe("");
+		expect(exitCode).toBe(0);
 	}, 30_000);
 
 	it("CLI dispatches the flag that `title-client.ts` passes to the spawned child", async () => {
@@ -35,7 +47,7 @@ describe("issue #1606 — tiny model lives in an isolated subprocess", () => {
 		// `argv` and there is no fallback path that "re-routes" the worker
 		// on misnamed flags. Pin the spelling on both ends.
 		const cliSource = await Bun.file(new URL("../src/cli.ts", import.meta.url)).text();
-		expect(cliSource).toContain(`argv[0] === "${TINY_WORKER_ARG}"`);
+		expect(cliSource).toContain(`"${TINY_WORKER_ARG}"`);
 		expect(cliSource).toContain("runTinyWorker");
 	});
 

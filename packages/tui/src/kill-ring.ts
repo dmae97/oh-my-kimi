@@ -5,6 +5,8 @@
  * into a single entry. Supports yank (paste most recent) and yank-pop
  * (cycle through older entries).
  */
+const MAX_ENTRIES = 60;
+
 export class KillRing {
 	#ring: string[] = [];
 
@@ -24,6 +26,9 @@ export class KillRing {
 			this.#ring.push(opts.prepend ? text + last : last + text);
 		} else {
 			this.#ring.push(text);
+			if (this.#ring.length > MAX_ENTRIES) {
+				this.#ring.shift();
+			}
 		}
 	}
 

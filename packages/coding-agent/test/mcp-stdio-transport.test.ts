@@ -1,5 +1,302 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { StdioTransport, writeFrame } from "../src/mcp/transports/stdio";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+
+import { resolveStdioSpawnCommand, StdioTransport, writeFrame } from "@oh-my-pi/pi-coding-agent/mcp/transports/stdio";
+
+describe("resolveStdioSpawnCommand", () => {
+	it("resolves bare Windows commands through PATHEXT and wraps .cmd shims with cmd.exe", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-mcp-stdio-"));
+		try {
+			const shim = path.join(tempDir, "codegraph.cmd");
+			await Bun.write(shim, "@echo off\r\n");
+
+			const result = await resolveStdioSpawnCommand(
+				{ type: "stdio", command: "codegraph", args: ["serve", "--mcp"] },
+				{
+					cwd: tempDir,
+					env: {
+						COMSPEC: "C:\\Windows\\System32\\cmd.exe",
+						PATH: tempDir,
+						PATHEXT: ".cmd",
+					},
+					platform: "win32",
+				},
+			);
+
+			expect(result.cmd).toEqual([
+				"C:\\Windows\\System32\\cmd.exe",
+				"/d",
+				"/s",
+				"/c",
+				`""${shim}" "serve" "--mcp""`,
+			]);
+			expect(result.windowsHide).toBe(true);
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	it("prefers a project-local .cmd shim over a same-named global one when no path segment is given", async () => {
+		const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-mcp-cwd-"));
+		const globalDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-mcp-global-"));
+		try {
+			const localShim = path.join(projectDir, "server.cmd");
+			const globalShim = path.join(globalDir, "server.cmd");
+			await Bun.write(localShim, "@echo off\r\nrem local\r\n");
+			await Bun.write(globalShim, "@echo off\r\nrem global\r\n");
+
+			const result = await resolveStdioSpawnCommand(
+				{ type: "stdio", command: "server.cmd", args: ["serve"] },
+				{
+					cwd: projectDir,
+					env: {
+						COMSPEC: "C:\\Windows\\System32\\cmd.exe",
+						PATH: globalDir,
+						PATHEXT: ".cmd",
+					},
+					platform: "win32",
+				},
+			);
+
+			expect(result.cmd).toEqual(["C:\\Windows\\System32\\cmd.exe", "/d", "/s", "/c", `""${localShim}" "serve""`]);
+			expect(result.windowsHide).toBe(true);
+		} finally {
+			await fs.rm(projectDir, { recursive: true, force: true });
+			await fs.rm(globalDir, { recursive: true, force: true });
+		}
+	});
+
+	it("launches npm .cmd shims through node so CodeGraph owns the stdio pipes", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-mcp-codegraph-"));
+		try {
+			const shim = path.join(tempDir, "codegraph.cmd");
+			const entry = path.join(tempDir, "node_modules", "@colbymchenry", "codegraph", "npm-shim.js");
+			await Bun.write(
+				shim,
+				[
+					"@ECHO off",
+					"GOTO start",
+					":find_dp0",
+					"SET dp0=%~dp0",
+					"EXIT /b",
+					":start",
+					"SETLOCAL",
+					"CALL :find_dp0",
+					"",
+					'IF EXIST "%dp0%\\node.exe" (',
+					'  SET "_prog=%dp0%\\node.exe"',
+					") ELSE (",
+					'  SET "_prog=node"',
+					"  SET PATHEXT=%PATHEXT:;.JS;=;%",
+					")",
+					"",
+					'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%" "%dp0%\\node_modules\\@colbymchenry\\codegraph\\npm-shim.js" %*',
+					"",
+				].join("\r\n"),
+			);
+
+			const result = await resolveStdioSpawnCommand(
+				{ type: "stdio", command: "codegraph.cmd", args: ["serve", "--mcp"] },
+				{
+					cwd: tempDir,
+					env: {
+						COMSPEC: "C:\\Windows\\System32\\cmd.exe",
+						PATH: tempDir,
+						PATHEXT: ".cmd",
+					},
+					platform: "win32",
+				},
+			);
+
+			expect(result.cmd).toEqual(["node", entry, "serve", "--mcp"]);
+			expect(result.windowsHide).toBe(true);
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps non-node cmd-shim wrappers on the cmd.exe path instead of mislaunching them via node", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-mcp-pyshim-"));
+		try {
+			const shim = path.join(tempDir, "pyserver.cmd");
+			await Bun.write(
+				shim,
+				[
+					"@ECHO off",
+					"SETLOCAL",
+					"CALL :find_dp0",
+					"",
+					'IF EXIST "%dp0%\\python.exe" (',
+					'  SET "_prog=%dp0%\\python.exe"',
+					") ELSE (",
+					'  SET "_prog=python"',
+					")",
+					"",
+					'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%" "%dp0%\\node_modules\\pyserver\\cli.py" %*',
+					"",
+				].join("\r\n"),
+			);
+
+			const result = await resolveStdioSpawnCommand(
+				{ type: "stdio", command: "pyserver.cmd", args: ["serve"] },
+				{
+					cwd: tempDir,
+					env: {
+						COMSPEC: "C:\\Windows\\System32\\cmd.exe",
+						PATH: tempDir,
+						PATHEXT: ".cmd",
+					},
+					platform: "win32",
+				},
+			);
+
+			expect(result.cmd).toEqual(["C:\\Windows\\System32\\cmd.exe", "/d", "/s", "/c", `""${shim}" "serve""`]);
+			expect(result.windowsHide).toBe(true);
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	it("escapes percent-delimited args before routing .cmd shims through cmd.exe", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-mcp-percent-"));
+		try {
+			const shim = path.join(tempDir, "codegraph.cmd");
+			await Bun.write(shim, "@echo off\r\n");
+
+			const result = await resolveStdioSpawnCommand(
+				{ type: "stdio", command: "codegraph", args: ["serve", "--header", "Authorization=%TOKEN%"] },
+				{
+					cwd: tempDir,
+					env: {
+						COMSPEC: "C:\\Windows\\System32\\cmd.exe",
+						PATH: tempDir,
+						PATHEXT: ".cmd",
+					},
+					platform: "win32",
+				},
+			);
+
+			expect(result.cmd).toEqual([
+				"C:\\Windows\\System32\\cmd.exe",
+				"/d",
+				"/s",
+				"/c",
+				`""${shim}" "serve" "--header" "Authorization=^%TOKEN^%""`,
+			]);
+			expect(result.windowsHide).toBe(true);
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	it("escapes quoted JSON args before routing .cmd shims through cmd.exe", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-mcp-quotes-"));
+		try {
+			const shim = path.join(tempDir, "codegraph.cmd");
+			await Bun.write(shim, "@echo off\r\n");
+
+			const result = await resolveStdioSpawnCommand(
+				{ type: "stdio", command: "codegraph", args: ["--config", '{"a":"b&c|d"}'] },
+				{
+					cwd: tempDir,
+					env: {
+						COMSPEC: "C:\\Windows\\System32\\cmd.exe",
+						PATH: tempDir,
+						PATHEXT: ".cmd",
+					},
+					platform: "win32",
+				},
+			);
+
+			expect(result.cmd).toEqual([
+				"C:\\Windows\\System32\\cmd.exe",
+				"/d",
+				"/s",
+				"/c",
+				`""${shim}" "--config" "{^"a^":^"b&c|d^"}""`,
+			]);
+			expect(result.windowsHide).toBe(true);
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	it("resolves extension-less absolute Windows paths to the sibling .cmd shim", async () => {
+		// Mirrors npm's Windows shim layout: bare `codegraph` (shebang script),
+		// `codegraph.cmd` (cmd.exe wrapper), and `codegraph.ps1` siblings under
+		// %AppData%\Roaming\npm. uv_spawn rejects the extensionless script;
+		// the resolver must promote the bare absolute path to its `.cmd`
+		// sibling so the launch succeeds (see #2174). The test rig pins
+		// PATHEXT to a single lowercase extension so the candidate filename
+		// matches the file we create on the case-sensitive test host.
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-mcp-abs-"));
+		try {
+			const bare = path.join(tempDir, "codegraph");
+			const shim = `${bare}.cmd`;
+			await Bun.write(bare, "#!/bin/sh\n");
+			await Bun.write(shim, "@echo off\r\n");
+
+			const result = await resolveStdioSpawnCommand(
+				{ type: "stdio", command: bare, args: ["serve", "--mcp"] },
+				{
+					cwd: tempDir,
+					env: {
+						COMSPEC: "C:\\Windows\\System32\\cmd.exe",
+						PATHEXT: ".cmd",
+					},
+					platform: "win32",
+				},
+			);
+
+			expect(result.cmd).toEqual([
+				"C:\\Windows\\System32\\cmd.exe",
+				"/d",
+				"/s",
+				"/c",
+				`""${shim}" "serve" "--mcp""`,
+			]);
+			expect(result.windowsHide).toBe(true);
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	it("wraps explicit Windows .cmd commands with cmd.exe while preserving quoted argv", async () => {
+		const result = await resolveStdioSpawnCommand(
+			{ type: "stdio", command: "codegraph.cmd", args: ["serve", "--mcp"] },
+			{
+				cwd: "C:\\project",
+				env: {
+					COMSPEC: "C:\\Windows\\System32\\cmd.exe",
+					PATH: "C:\\Users\\me\\AppData\\Roaming\\npm",
+					PATHEXT: ".COM;.EXE;.BAT;.CMD",
+				},
+				platform: "win32",
+			},
+		);
+
+		expect(result.cmd).toEqual([
+			"C:\\Windows\\System32\\cmd.exe",
+			"/d",
+			"/s",
+			"/c",
+			`""codegraph.cmd" "serve" "--mcp""`,
+		]);
+		expect(result.windowsHide).toBe(true);
+	});
+
+	it("leaves non-Windows commands untouched", async () => {
+		const result = await resolveStdioSpawnCommand(
+			{ type: "stdio", command: "codegraph", args: ["serve", "--mcp"] },
+			{ cwd: "/", env: {}, platform: "linux" },
+		);
+
+		expect(result.cmd).toEqual(["codegraph", "serve", "--mcp"]);
+		expect(result.windowsHide).toBeUndefined();
+	});
+});
 
 // ---------------------------------------------------------------------------
 // writeFrame — the seam that catches synchronous FileSink throws AND neutralizes
@@ -114,18 +411,17 @@ describe("writeFrame", () => {
 
 // ---------------------------------------------------------------------------
 // StdioTransport.notify — end-to-end behavior against a real subprocess that
-// exits between the `initialize` response and the `notifications/initialized`
-// send. Contract defended here:
+// exits before or while a notification is sent. Contract defended here:
 //
 //   1. notify() always settles — no unhandled rejection ever escapes when
-//      the underlying FileSink throws synchronously.
-//   2. A failed write tears the transport down (`onClose` fires) AND surfaces
-//      a rejection to the caller so `initializeConnection()` doesn't return a
-//      "connected" handle wrapping a dead transport.
+//      the underlying FileSink observes a closed pipe.
+//   2. A failed write tears the transport down (`onClose` fires) and surfaces
+//      a rejection to the caller when the platform reports one synchronously.
 //
-// On Linux, Bun's FileSink absorbs the EPIPE so the only failure surfaced is
-// the "Transport not connected" guard on subsequent calls; on Windows the
-// write actually throws. Either way the tracker must stay empty.
+// On platforms where the pipe accepts the write, read-loop EOF still closes the
+// transport. The request/response parsing path is covered separately; this test
+// intentionally avoids requiring subprocess stdout because Bun's test runner can
+// hand stdout-writing child processes an unusable fd on some hosts.
 // ---------------------------------------------------------------------------
 
 function trackUnhandled(): { release: () => unknown[]; capture: () => unknown[] } {
@@ -174,51 +470,29 @@ describe("StdioTransport.notify", () => {
 		await expect(transport.notify("noop")).rejects.toThrow("Transport not connected");
 	});
 
-	it("does not surface unhandled rejections when the subprocess exits mid-handshake", async () => {
-		// Subprocess that responds to a single line on stdin, echoes a stock
-		// initialize response, then exits. Mirrors the real-world MCP server
-		// that crashes between the initialize response and the
-		// notifications/initialized that the client sends right after.
-		const script = [
-			'let buf = "";',
-			'process.stdin.on("data", (chunk) => {',
-			"  buf += chunk;",
-			'  const nl = buf.indexOf("\\n");',
-			"  if (nl < 0) return;",
-			"  const line = buf.slice(0, nl);",
-			"  const msg = JSON.parse(line);",
-			"  process.stdout.write(",
-			'    JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: {} }) + "\\n",',
-			"  );",
-			"  process.exit(0);",
-			"});",
-		].join("\n");
-
+	it("does not surface unhandled rejections when the subprocess exits before notify settles", async () => {
 		const tracker = trackUnhandled();
-		transport = new StdioTransport({ type: "stdio", command: "bun", args: ["-e", script] });
-		let closed = false;
+		const closed = Promise.withResolvers<void>();
+		transport = new StdioTransport({
+			type: "stdio",
+			command: "bun",
+			args: ["-e", "process.exit(0)"],
+		});
 		transport.onClose = () => {
-			closed = true;
+			closed.resolve();
 		};
 
 		try {
 			await transport.connect();
-			await transport.request("initialize", {});
-			// Fire several notifies — covers both the "subprocess just exited"
-			// race (write may fail) and the "already torn down" guard path
-			// (subsequent calls reject with `Transport not connected`). Every
-			// rejection is handled here; the contract under test is that none
-			// of them leak as an unhandled rejection.
-			for (let i = 0; i < 5; i++) {
-				await transport.notify("notifications/initialized").catch(() => {});
-			}
+			const notify = transport.notify("notifications/initialized").catch((error: unknown) => {
+				expect(error).toBeInstanceOf(Error);
+			});
 
-			// Let any deferred microtasks settle so an escaped rejection has
-			// a chance to fire `unhandledRejection` before we assert.
-			await Bun.sleep(50);
+			await closed.promise;
+			await notify;
+			await Promise.resolve();
 
 			expect(tracker.capture()).toEqual([]);
-			expect(closed).toBe(true);
 			expect(transport.connected).toBe(false);
 		} finally {
 			tracker.release();

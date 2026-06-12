@@ -359,6 +359,11 @@ export function getFastembedCacheDir(): string {
 	return dirs.rootSubdir(path.join("cache", "fastembed"), "cache");
 }
 
+/** Get the on-demand fastembed runtime install root (~/.omp/cache/fastembed-runtime). */
+export function getFastembedRuntimeDir(): string {
+	return dirs.rootSubdir(path.join("cache", "fastembed-runtime"), "cache");
+}
+
 /** Get the natives directory (~/.omp/natives). */
 export function getNativesDir(): string {
 	return dirs.rootSubdir("natives", "cache");
@@ -396,6 +401,11 @@ export function getAutoresearchRunDir(encodedProject: string, runId: number): st
 /** Get the path to agent.db (SQLite database for settings and auth storage). */
 export function getAgentDbPath(agentDir?: string): string {
 	return dirs.agentSubdir(agentDir, "agent.db", "data");
+}
+
+/** Get the last-seen-changelog-version marker file (~/.omp/agent/last-changelog-version). */
+export function getLastChangelogVersionPath(agentDir?: string): string {
+	return dirs.agentSubdir(agentDir, "last-changelog-version", "state");
 }
 
 /** Get the path to history.db (SQLite database for session history). */

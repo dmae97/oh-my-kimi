@@ -17,10 +17,11 @@
  *   POST /v1/messages                      → Anthropic messages in/out
  *   POST /v1/responses                     → OpenAI Responses in/out
  */
+
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { extractRetryHint, logger } from "@oh-my-pi/pi-utils";
 import type { ApiKeyResolver } from "../auth-retry";
 import type { AuthStorage } from "../auth-storage";
-import { Effort } from "../effort";
 import * as anthropicMessages from "../providers/anthropic-messages-server";
 import * as openaiChat from "../providers/openai-chat-server";
 import * as openaiResponses from "../providers/openai-responses-server";
@@ -315,9 +316,10 @@ async function refreshGatewayApiKeyAfterAuthError(
 	const message = error instanceof Error ? error.message : String(error);
 	if (isUsageLimitError(message)) {
 		const retryAfterMs = extractRetryHint(undefined, message);
-		const switched = await storage.markUsageLimitReached(provider, sessionId, {
+		const { switched, retryAtMs } = await storage.markUsageLimitReached(provider, sessionId, {
 			retryAfterMs,
 			baseUrl: model.baseUrl,
+			modelId: model.id,
 			signal,
 		});
 		logger.debug("auth-gateway retrying provider request after usage-limit block", {
@@ -326,6 +328,7 @@ async function refreshGatewayApiKeyAfterAuthError(
 			peer,
 			switched,
 			retryAfterMs,
+			retryAtMs,
 			error: message,
 		});
 		if (!switched) return undefined;

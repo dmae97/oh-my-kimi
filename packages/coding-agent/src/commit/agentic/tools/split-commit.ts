@@ -68,6 +68,7 @@ export function createSplitCommitTool(
 			const errors: string[] = [];
 			const warnings: string[] = [];
 			const diffText = await git.diff(cwd, { cached: true });
+			const validateHunksForDiff = git.createHunkSelectionValidator(diffText);
 
 			const commits: SplitCommitGroup[] = params.commits.map((commit, index) => {
 				const scope = commit.scope?.trim() || null;
@@ -102,7 +103,7 @@ export function createSplitCommitTool(
 				}
 				warnings.push(...summaryValidation.warnings.map(warning => `Commit ${index + 1}: ${warning}`));
 				warnings.push(...typeValidation.warnings.map(warning => `Commit ${index + 1}: ${warning}`));
-				const hunkValidation = validateHunkSelectors(index, changes, files);
+				const hunkValidation = validateHunkSelectors(index, changes, files, validateHunksForDiff);
 				warnings.push(...hunkValidation.warnings);
 				errors.push(...hunkValidation.errors);
 				errors.push(...validateDependencies(index, dependencies, params.commits.length));
@@ -186,6 +187,7 @@ function validateHunkSelectors(
 	commitIndex: number,
 	changes: SplitCommitGroup["changes"],
 	files: string[],
+	validateHunksForDiff: (changes: SplitCommitGroup["changes"]) => git.HunkSelectionValidationError[],
 ): { errors: string[]; warnings: string[] } {
 	const errors: string[] = [];
 	const warnings: string[] = [];
@@ -213,6 +215,11 @@ function validateHunkSelectors(
 			if (Math.floor(start) !== start || Math.floor(end) !== end || start < 1 || end < start) {
 				errors.push(`${prefix}: invalid line range for ${change.path}`);
 			}
+		}
+	}
+	if (errors.length === 0) {
+		for (const error of validateHunksForDiff(changes)) {
+			errors.push(`${prefix}: ${error.message}`);
 		}
 	}
 	return { errors, warnings };

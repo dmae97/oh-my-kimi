@@ -1,4 +1,5 @@
-import type { Message, TextContent } from "@oh-my-pi/pi-ai";
+import type { Context, Message, Tool } from "@oh-my-pi/pi-ai";
+import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import type { SessionContext } from "../session/session-manager";
 import { compileSecretRegex } from "./regex";
 
@@ -184,6 +185,12 @@ export class SecretObfuscator {
 		return deepWalkStrings(obj, s => this.deobfuscate(s));
 	}
 
+	/** Deep-walk an object, obfuscating all string values. */
+	obfuscateObject<T>(obj: T): T {
+		if (!this.#hasAny) return obj;
+		return deepWalkStrings(obj, s => this.obfuscate(s));
+	}
+
 	/** Find the obfuscate index for a known secret value. */
 	#findObfuscateIndex(secret: string): number | undefined {
 		// Check plain mappings first
@@ -211,25 +218,34 @@ export function deobfuscateSessionContext(
 // Message obfuscation (outbound to LLM)
 // ═══════════════════════════════════════════════════════════════════════════
 
-/** Obfuscate all text content in LLM messages (for outbound interception). */
+/** Obfuscate all string content in LLM messages (for outbound interception). */
 export function obfuscateMessages(obfuscator: SecretObfuscator, messages: Message[]): Message[] {
-	return messages.map(msg => {
-		if (!Array.isArray(msg.content)) return msg;
+	return obfuscator.obfuscateObject(messages);
+}
 
-		let changed = false;
-		const content = msg.content.map(block => {
-			if (block.type === "text") {
-				const obfuscated = obfuscator.obfuscate(block.text);
-				if (obfuscated !== block.text) {
-					changed = true;
-					return { ...block, text: obfuscated } as TextContent;
-				}
-			}
-			return block;
-		});
+/** Obfuscate provider request context without walking live tool schema instances. */
+export function obfuscateProviderContext(obfuscator: SecretObfuscator | undefined, context: Context): Context {
+	if (!obfuscator?.hasSecrets()) return context;
+	return {
+		...context,
+		systemPrompt: obfuscator.obfuscateObject(context.systemPrompt),
+		messages: obfuscator.obfuscateObject(context.messages),
+		tools: obfuscateProviderTools(obfuscator, context.tools),
+	};
+}
 
-		return changed ? ({ ...msg, content } as typeof msg) : msg;
-	});
+/** Convert tool schemas to wire JSON Schema before obfuscating provider-visible strings. */
+export function obfuscateProviderTools(
+	obfuscator: SecretObfuscator | undefined,
+	tools: Tool[] | undefined,
+): Tool[] | undefined {
+	if (!tools || !obfuscator?.hasSecrets()) return tools;
+	return tools.map(tool => ({
+		...tool,
+		description: obfuscator.obfuscate(tool.description),
+		parameters: obfuscator.obfuscateObject(toolWireSchema(tool)),
+		customFormat: tool.customFormat ? obfuscator.obfuscateObject(tool.customFormat) : undefined,
+	}));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -262,7 +278,7 @@ function deepWalkStrings<T>(obj: T, transform: (s: string) => string): T {
 		});
 		return (changed ? result : obj) as unknown as T;
 	}
-	if (obj !== null && typeof obj === "object") {
+	if (obj !== null && typeof obj === "object" && isPlainRecord(obj)) {
 		let changed = false;
 		const result: Record<string, unknown> = {};
 		for (const key of Object.keys(obj)) {
@@ -274,4 +290,9 @@ function deepWalkStrings<T>(obj: T, transform: (s: string) => string): T {
 		return (changed ? result : obj) as T;
 	}
 	return obj;
+}
+
+function isPlainRecord(obj: object): obj is Record<string, unknown> {
+	const prototype = Object.getPrototypeOf(obj);
+	return prototype === Object.prototype || prototype === null;
 }

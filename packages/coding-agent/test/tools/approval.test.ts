@@ -115,6 +115,17 @@ describe("MCP fallback and prompt formatting", () => {
 		expect(resolveApproval(subject, {}, "yolo")).toMatchObject({ policy: "allow", tier: "exec" });
 	});
 
+	it("allows MCP tools with write approval in write mode", () => {
+		const subject = tool("mcp__server__safe", "write");
+		expect(resolveApproval(subject, {}, "write")).toMatchObject({ policy: "allow", tier: "write" });
+		expect(resolveApproval(subject, {}, "yolo")).toMatchObject({ policy: "allow", tier: "write" });
+	});
+
+	it("prompts for MCP tools with write approval in always-ask mode", () => {
+		const subject = tool("mcp__server__safe", "write");
+		expect(resolveApproval(subject, {}, "always-ask")).toMatchObject({ policy: "prompt", tier: "write" });
+	});
+
 	it("formats MCP origin, reason, and per-tool details", () => {
 		const subject = tool("mcp__server__dangerous", undefined, () => ["Path: /tmp/out", "Content:\nhello"]);
 		expect(formatApprovalPrompt(subject, {}, "Needs confirmation").split("\n")).toEqual([

@@ -1,9 +1,13 @@
 import { describe, expect, it } from "bun:test";
 import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
 import { validateToolArguments } from "@oh-my-pi/pi-ai/utils/validation";
-import type { BashInterceptorRule } from "../../src/config/settings-schema";
-import type { ToolSession } from "../../src/tools";
-import { BashTool, type BashToolInput } from "../../src/tools/bash";
+import {
+	type BashInterceptorRule,
+	DEFAULT_BASH_INTERCEPTOR_RULES,
+} from "@oh-my-pi/pi-coding-agent/config/settings-schema";
+import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { BashTool, type BashToolInput } from "@oh-my-pi/pi-coding-agent/tools/bash";
+import { checkBashInterception } from "@oh-my-pi/pi-coding-agent/tools/bash-interceptor";
 
 function createBashTool(rules: BashInterceptorRule[]): BashTool {
 	const session = {
@@ -55,6 +59,28 @@ describe("BashTool interception", () => {
 				toolNames: ["read"],
 			} as AgentToolContext),
 		).rejects.toThrow("Use read instead");
+	});
+});
+
+describe("default echo/printf redirect rule", () => {
+	const tools = ["write"];
+
+	it("blocks unquoted redirects to files", () => {
+		expect(checkBashInterception("echo hi > out.txt", tools, DEFAULT_BASH_INTERCEPTOR_RULES).block).toBe(true);
+		expect(checkBashInterception("echo hi >> out.txt", tools, DEFAULT_BASH_INTERCEPTOR_RULES).block).toBe(true);
+		expect(checkBashInterception('printf "%s" foo > /tmp/x', tools, DEFAULT_BASH_INTERCEPTOR_RULES).block).toBe(true);
+	});
+
+	it("blocks clobber and variable-target redirects", () => {
+		expect(checkBashInterception("echo hi >| out.txt", tools, DEFAULT_BASH_INTERCEPTOR_RULES).block).toBe(true);
+		expect(checkBashInterception("echo hi > $OUT", tools, DEFAULT_BASH_INTERCEPTOR_RULES).block).toBe(true);
+	});
+
+	it("does not block `>` inside quoted text or fd duplication", () => {
+		expect(checkBashInterception('echo "a -> b"', tools, DEFAULT_BASH_INTERCEPTOR_RULES).block).toBe(false);
+		expect(checkBashInterception('echo "<p>hi</p>"', tools, DEFAULT_BASH_INTERCEPTOR_RULES).block).toBe(false);
+		expect(checkBashInterception("printf 'use 2>&1'", tools, DEFAULT_BASH_INTERCEPTOR_RULES).block).toBe(false);
+		expect(checkBashInterception('echo "err" >&2', tools, DEFAULT_BASH_INTERCEPTOR_RULES).block).toBe(false);
 	});
 });
 

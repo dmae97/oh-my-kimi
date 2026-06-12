@@ -1,8 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import { convertAnthropicMessages } from "@oh-my-pi/pi-ai/providers/anthropic";
 import type { AssistantMessage, Model, UserMessage } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 
-const model: Model<"anthropic-messages"> = {
+const model: Model<"anthropic-messages"> = buildModel({
 	api: "anthropic-messages",
 	provider: "anthropic",
 	id: "claude-sonnet-4-6",
@@ -13,7 +14,7 @@ const model: Model<"anthropic-messages"> = {
 	maxTokens: 8_192,
 	contextWindow: 200_000,
 	reasoning: true,
-};
+});
 
 describe("Anthropic thinking replay immutability", () => {
 	it("preserves signed-thinking blocks while normalizing non-thinking content", () => {

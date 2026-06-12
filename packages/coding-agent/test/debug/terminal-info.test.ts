@@ -1,6 +1,10 @@
 import { describe, expect, it } from "bun:test";
+import {
+	collectTerminalState,
+	formatTerminalState,
+	type TerminalStateInfo,
+} from "@oh-my-pi/pi-coding-agent/debug/terminal-info";
 import { TERMINAL } from "@oh-my-pi/pi-tui";
-import { collectTerminalState, formatTerminalState, type TerminalStateInfo } from "../../src/debug/terminal-info";
 
 const sample: TerminalStateInfo = {
 	detectedId: "kitty",
@@ -15,7 +19,6 @@ const sample: TerminalStateInfo = {
 	hyperlinks: false,
 	deccara: true,
 	screenToScrollback: true,
-	eagerEraseScrollbackRisk: true,
 	synchronizedOutput: false,
 	multiplexer: null,
 	env: { TERM: "xterm-kitty", TERM_PROGRAM: undefined, TERM_PROGRAM_VERSION: undefined, COLORTERM: "truecolor" },
@@ -38,7 +41,6 @@ describe("formatTerminalState", () => {
 		expect(out).toContain("120x40 cells · cell 9x18px");
 		// supportsScreenToScrollback -> the non-destructive CSI 22 J clear.
 		expect(out).toContain("Screen->history clear: CSI 22 J");
-		expect(out).toContain("Eager-erase risk:      yes");
 	});
 
 	it("renders the redraw fallback when screen-to-scrollback is unsupported", () => {

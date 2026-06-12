@@ -7,7 +7,6 @@
 - Model-facing prompt: `packages/coding-agent/src/prompts/tools/job.md`
 - Key collaborators:
   - `packages/coding-agent/src/async/job-manager.ts` — job registry, cancellation, delivery suppression.
-  - `packages/coding-agent/src/async/support.ts` — feature gating for background jobs.
   - `packages/coding-agent/src/tools/bash.ts` — explicit async bash and auto-backgrounded bash jobs.
   - `packages/coding-agent/src/task/index.ts` — async task-job scheduling.
   - `packages/coding-agent/src/sdk.ts` — automatic follow-up delivery for unsuppressed completions.
@@ -17,8 +16,8 @@
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `poll` | `string[]` | No | Job ids to watch. Cannot be combined with `list`. If omitted (and `cancel` is also omitted), the tool watches all running jobs. If provided, missing ids are silently filtered out before waiting. |
-| `cancel` | `string[]` | No | Job ids to cancel before any polling. Missing ids are reported as `not_found`; non-running ids as `already_completed`. |
+| `poll` | `string[]` | No | Job ids to watch. Cannot be combined with `list`. If omitted (and `cancel` is also omitted), the tool watches all running jobs owned by the calling agent. If provided, missing ids — and ids owned by other agents — are silently filtered out before waiting. |
+| `cancel` | `string[]` | No | Job ids to cancel before any polling. Missing ids (and other agents' jobs) are reported as `not_found`; non-running ids as `already_completed`. |
 | `list` | `boolean` | No | Return an immediate snapshot of every job spawned by the calling agent (running + completed within retention) without waiting. Read-only — cannot be combined with `poll` or `cancel`. |
 
 ## Outputs
@@ -45,7 +44,7 @@ Read-only snapshot path:
 - Calling `job` with `list: true` returns a markdown summary of every job spawned by the calling agent (running + completed within retention) without waiting.
 
 ## Flow
-1. `JobTool.createIf(...)` in `packages/coding-agent/src/tools/job.ts` only exposes the tool when `isBackgroundJobSupportEnabled(...)` returns true for either `async.enabled` or `bash.autoBackground.enabled`.
+1. `JobTool` is registered unconditionally in `packages/coding-agent/src/tools/index.ts`; there is no `async.enabled` gate (the manager may still carry bash or task jobs from before a setting change).
 2. `execute(...)` fetches `session.asyncJobManager`. If absent, it returns `Async execution is disabled; no background jobs are available.`
 3. `cancel` ids are processed first:
    - `manager.getJob(id)` missing → `not_found`.
@@ -55,8 +54,8 @@ Read-only snapshot path:
    - only `cancel` present → return immediately, no wait.
    - explicit `poll`, or no args at all → proceed to watch jobs.
 5. Watch set resolution:
-   - explicit `poll` → map ids through `manager.getJob(...)` and drop missing ones.
-   - no `poll` and no `cancel` → `manager.getRunningJobs()`.
+   - explicit `poll` → resolve ids via `#visibleJobs(...)`, dropping missing ids and jobs owned by other agents.
+   - no `poll` and no `cancel` → `manager.getRunningJobs(ownerFilter)` (jobs owned by the calling agent).
 6. Empty watch set returns immediately:
    - if cancellations happened, return snapshots for the cancelled ids that still exist.
    - else return either `No matching jobs found for IDs: ...` or `No running background jobs to wait for.`
@@ -83,7 +82,7 @@ Spawn paths that produce jobs:
   - `async: true` always registers a `type: "bash"` job with `AsyncJobManager.register(...)` and returns a start message.
   - auto-background mode (`bash.autoBackground.enabled`) starts the same managed job path for non-PTY commands, waits up to `min(bash.autoBackground.thresholdMs, timeoutMs - 1000)`, and if the command is still running returns a background-job start result instead of inline command output.
 - `packages/coding-agent/src/task/index.ts`
-  - when `async.enabled` is on, the chosen agent is not blocking, and `tasks.length > 0`, each task item is registered as a `type: "task"` job.
+  - every `task` call registers one `type: "task"` job, unless the session has no job manager or the agent definition declares `blocking: true` (sync fallback).
 
 Lifecycle and exact state names:
 - Conceptual scheduling path: `pending` (only task-progress bookkeeping before work starts) → `running` → `completed` / `failed`; cancellation changes a running async job to `cancelled`.
@@ -129,6 +128,7 @@ Lifecycle and exact state names:
 - Tool-call abort during polling stops waiting and returns a final snapshot through `#buildResult(...)`; it does not cancel watched jobs.
 - Failures inside the underlying async work are stored on the job (`status: "failed"`, `errorText`) and reported in normal tool output, not rethrown by `job`.
 - Calling `list: true` against an empty manager returns a normal empty-list result rather than throwing; missing ids passed to `poll` are silently filtered.
+- Combining `list` with `poll` or `cancel` throws a `ToolError`: `` `list` cannot be combined with `poll` or `cancel`. ``
 
 ## Notes
 - `job` waits for the first watched running job to settle, not for all watched jobs. If others remain `running`, they are reported under `## Still Running`; the caller must invoke `job` again to continue waiting.

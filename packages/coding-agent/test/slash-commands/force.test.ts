@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "bun:test";
 import type { Model } from "@oh-my-pi/pi-ai";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 import { buildNamedToolChoice } from "@oh-my-pi/pi-coding-agent/utils/tool-choice";
@@ -98,7 +99,7 @@ describe("/force slash command", () => {
 	});
 
 	it("builds a named Ollama choice for local forced tools", () => {
-		const model = {
+		const model = buildModel({
 			id: "ggml-org/gemma-3-1b-it/GGUF",
 			name: "Gemma 3 1B",
 			api: "ollama-chat",
@@ -109,7 +110,7 @@ describe("/force slash command", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 32_768,
 			maxTokens: 8_192,
-		} satisfies Model<"ollama-chat">;
+		}) satisfies Model<"ollama-chat">;
 
 		expect(buildNamedToolChoice("write", model)).toEqual({ type: "function", name: "write" });
 	});

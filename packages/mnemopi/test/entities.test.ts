@@ -5,7 +5,7 @@ import {
 	findSimilarEntities,
 	levenshteinDistance,
 	similarity,
-} from "../src/core/entities";
+} from "@oh-my-pi/pi-mnemopi/core/entities";
 
 describe("entity utilities", () => {
 	it("computes edit distance with empty and unicode strings", () => {

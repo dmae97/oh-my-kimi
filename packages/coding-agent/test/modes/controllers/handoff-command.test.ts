@@ -48,7 +48,7 @@ describe("/handoff command", () => {
 			loadingAnimation: undefined,
 			statusContainer,
 			chatContainer,
-			ui: { requestRender },
+			ui: { requestRender, requestComponentRender: vi.fn() },
 			editor: { onEscape: originalOnEscape },
 			rebuildChatFromMessages: vi.fn(),
 			statusLine: { invalidate: vi.fn() },

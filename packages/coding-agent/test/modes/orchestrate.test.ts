@@ -1,8 +1,12 @@
 import { beforeAll, describe, expect, it } from "bun:test";
-import { containsOrchestrate, highlightOrchestrate, ORCHESTRATE_NOTICE } from "../../src/modes/orchestrate";
-import { initTheme } from "../../src/modes/theme/theme";
-import { containsUltrathink, highlightUltrathink } from "../../src/modes/ultrathink";
-import { clearBundledCommandsCache, loadBundledCommands } from "../../src/task/commands";
+import {
+	containsOrchestrate,
+	highlightOrchestrate,
+	ORCHESTRATE_NOTICE,
+} from "@oh-my-pi/pi-coding-agent/modes/orchestrate";
+import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { containsUltrathink, highlightUltrathink } from "@oh-my-pi/pi-coding-agent/modes/ultrathink";
+import { clearBundledCommandsCache, loadBundledCommands } from "@oh-my-pi/pi-coding-agent/task/commands";
 
 beforeAll(() => {
 	// highlightOrchestrate/highlightUltrathink read the global theme's color mode.

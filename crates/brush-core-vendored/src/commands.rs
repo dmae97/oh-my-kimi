@@ -814,8 +814,19 @@ pub(crate) async fn invoke_shell_function(
 
 	// Handle control-flow.
 	match result.next_control_flow {
-		ExecutionControlFlow::BreakLoop { .. } | ExecutionControlFlow::ContinueLoop { .. } => {
-			return error::unimp("break or continue returned from function invocation");
+		ExecutionControlFlow::BreakLoop { .. } => {
+			writeln!(
+				context.params.stderr(context.shell),
+				"break: only meaningful in a `for', `while', or `until' loop"
+			)?;
+			result.next_control_flow = ExecutionControlFlow::Normal;
+		},
+		ExecutionControlFlow::ContinueLoop { .. } => {
+			writeln!(
+				context.params.stderr(context.shell),
+				"continue: only meaningful in a `for', `while', or `until' loop"
+			)?;
+			result.next_control_flow = ExecutionControlFlow::Normal;
 		},
 		ExecutionControlFlow::ReturnFromFunctionOrScript => {
 			// It's now been handled.

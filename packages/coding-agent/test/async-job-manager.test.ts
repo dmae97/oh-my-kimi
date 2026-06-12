@@ -135,6 +135,47 @@ describe("AsyncJobManager", () => {
 		manager.cancel(firstJobId);
 	});
 
+	test("queued jobs do not count toward the cap until markRunning", async () => {
+		const manager = new AsyncJobManager({
+			maxRunningJobs: 1,
+			onJobComplete: async () => {},
+		});
+
+		const gate = Promise.withResolvers<void>();
+		const started = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const queuedJobId = manager.register(
+			"task",
+			"queued",
+			async ({ markRunning }) => {
+				await gate.promise;
+				markRunning();
+				started.resolve();
+				await release.promise;
+				return "queued done";
+			},
+			{ queued: true },
+		);
+
+		// Queued job holds no slot: another job registers fine at cap 1.
+		const runningJobId = manager.register("bash", "running", async ({ signal }) => {
+			await new Promise<void>(resolve => {
+				signal.addEventListener("abort", () => resolve(), { once: true });
+			});
+			return "done";
+		});
+
+		// Free the slot, then let the queued job start: it now occupies the slot.
+		manager.cancel(runningJobId);
+		gate.resolve();
+		await started.promise;
+		expect(() => manager.register("bash", "third", async () => "third")).toThrow(/Background job limit reached/);
+
+		release.resolve();
+		await manager.waitForAll();
+		expect(manager.getJob(queuedJobId)?.status).toBe("completed");
+	});
+
 	test("evicts completed jobs after retention period", async () => {
 		const manager = new AsyncJobManager({
 			retentionMs: 25,

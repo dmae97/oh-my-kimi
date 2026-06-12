@@ -1,15 +1,16 @@
 import { describe, expect, it } from "bun:test";
-import { convertAnthropicMessages } from "../src/providers/anthropic";
-import { convertMessages as convertGoogleMessages } from "../src/providers/google-shared";
-import { convertCodexResponsesMessages } from "../src/providers/openai-codex-responses";
-import { convertMessages as convertOpenAICompletionsMessages } from "../src/providers/openai-completions";
-import type { ResolvedOpenAICompat } from "../src/providers/openai-completions-compat";
+import { convertAnthropicMessages } from "@oh-my-pi/pi-ai/providers/anthropic";
+import { convertMessages as convertGoogleMessages } from "@oh-my-pi/pi-ai/providers/google-shared";
+import { convertCodexResponsesMessages } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
+import { convertMessages as convertOpenAICompletionsMessages } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import {
 	appendResponsesToolResultMessages,
 	convertResponsesInputContent,
-} from "../src/providers/openai-responses-shared";
-import { NON_VISION_IMAGE_PLACEHOLDER } from "../src/providers/vision-guard";
-import type { Api, AssistantMessage, Context, Model, ToolResultMessage, Usage } from "../src/types";
+} from "@oh-my-pi/pi-ai/providers/openai-responses-shared";
+import { NON_VISION_IMAGE_PLACEHOLDER } from "@oh-my-pi/pi-ai/providers/vision-guard";
+import type { Api, AssistantMessage, Context, Model, ModelSpec, ToolResultMessage, Usage } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import type { ResolvedOpenAICompat } from "@oh-my-pi/pi-catalog/types";
 
 const emptyUsage: Usage = {
 	input: 0,
@@ -25,6 +26,10 @@ const compat: ResolvedOpenAICompat = {
 	supportsDeveloperRole: true,
 	supportsMultipleSystemMessages: true,
 	supportsReasoningEffort: true,
+	supportsReasoningParams: true,
+	alwaysSendMaxTokens: false,
+	isOpenRouterHost: false,
+	isVercelGatewayHost: false,
 	reasoningEffortMap: {},
 	supportsUsageInStreaming: true,
 	supportsToolChoice: true,
@@ -48,7 +53,7 @@ const compat: ResolvedOpenAICompat = {
 };
 
 function makeModel<TApi extends Api>(api: TApi, provider: Model["provider"]): Model<TApi> {
-	return {
+	return buildModel({
 		id: `${provider}-${api}-text-only`,
 		name: `${provider} ${api}`,
 		api,
@@ -59,7 +64,7 @@ function makeModel<TApi extends Api>(api: TApi, provider: Model["provider"]): Mo
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 128_000,
 		maxTokens: 8_192,
-	};
+	} as ModelSpec<TApi>);
 }
 
 function makeAssistant(api: Model["api"], provider: Model["provider"], modelId: string): AssistantMessage {

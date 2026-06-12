@@ -1,7 +1,7 @@
 {
 	"type": "module",
 	"name": "@oh-my-pi/omp-stats",
-	"version": "15.10.1",
+	"version": "15.12.2",
 	"description": "Local observability dashboard for pi AI usage statistics",
 	"homepage": "https://omp.sh",
 	"author": "Can Boluk",
@@ -38,6 +38,7 @@
 	},
 	"dependencies": {
 		"@oh-my-pi/pi-ai": "catalog:",
+		"@oh-my-pi/pi-catalog": "catalog:",
 		"@oh-my-pi/pi-utils": "catalog:",
 		"@tailwindcss/node": "catalog:",
 		"chart.js": "catalog:",
@@ -61,7 +62,8 @@
 		"src",
 		"build.ts",
 		"tailwind.config.js",
-		"README.md"
+		"README.md",
+		"CHANGELOG.md"
 	],
 	"exports": {
 		".": {

@@ -2,7 +2,7 @@
 /**
  * Configure npm trusted publishers (OIDC) for every package this repo ships.
  *
- * Trusted publishing lets the `release-npm` CI job publish with provenance and
+ * Trusted publishing lets the `release_npm` CI job publish with provenance and
  * no long-lived token, but each package must be linked to this repo's workflow
  * once — see https://docs.npmjs.com/trusted-publishers. The npm website makes
  * you do this by hand, per package; this script drives `npm trust github` over

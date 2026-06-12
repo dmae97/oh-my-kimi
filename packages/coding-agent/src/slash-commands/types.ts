@@ -14,6 +14,7 @@ export interface SubcommandDef {
 /** Declarative builtin slash command metadata used by autocomplete and help UI. */
 export interface BuiltinSlashCommand {
 	name: string;
+	aliases?: string[];
 	description: string;
 	/** Subcommands for dropdown completion (e.g. /mcp add, /mcp list). */
 	subcommands?: SubcommandDef[];
@@ -82,7 +83,6 @@ export interface TuiSlashCommandRuntime {
 
 /** Unified slash-command spec consumed by both TUI and ACP dispatchers. */
 export interface SlashCommandSpec extends BuiltinSlashCommand {
-	aliases?: string[];
 	/** When false, the dispatcher refuses to handle invocations that include arguments. */
 	allowArgs?: boolean;
 	/**

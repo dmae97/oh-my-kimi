@@ -1,8 +1,8 @@
-import { afterEach, describe, expect, it } from "bun:test";
-import { getBundledModel } from "../src/models";
-import { streamSimple } from "../src/stream";
-import type { Context, Model, ProviderResponseMetadata } from "../src/types";
-import { normalizeProviderResponse, notifyProviderResponse } from "../src/utils/provider-response";
+import { describe, expect, it } from "bun:test";
+import { streamSimple } from "@oh-my-pi/pi-ai/stream";
+import type { Context, FetchImpl, Model, ProviderResponseMetadata } from "@oh-my-pi/pi-ai/types";
+import { normalizeProviderResponse, notifyProviderResponse } from "@oh-my-pi/pi-ai/utils/provider-response";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 
 describe("provider response metadata", () => {
 	it("normalizes response status, headers, and request id", () => {
@@ -54,12 +54,6 @@ describe("provider response metadata", () => {
 	});
 });
 
-const originalFetch = global.fetch;
-
-afterEach(() => {
-	global.fetch = originalFetch;
-});
-
 function createSseResponse(events: unknown[], headers: Record<string, string> = {}): Response {
 	const payload = `${events.map(event => `data: ${typeof event === "string" ? event : JSON.stringify(event)}`).join("\n\n")}\n\n`;
 	return new Response(payload, {
@@ -75,7 +69,7 @@ describe("streamSimple onResponse propagation", () => {
 			api: "openai-completions",
 		};
 
-		global.fetch = Object.assign(
+		const fetchMock: FetchImpl = Object.assign(
 			async (_input: string | URL | Request, _init?: RequestInit): Promise<Response> =>
 				createSseResponse(
 					[
@@ -97,13 +91,14 @@ describe("streamSimple onResponse propagation", () => {
 					],
 					{ "x-request-id": "req_stream_simple" },
 				),
-			{ preconnect: originalFetch.preconnect },
+			{ preconnect: fetch.preconnect },
 		);
 
 		const context: Context = { messages: [{ role: "user", content: "hello", timestamp: Date.now() }] };
 		const seen: ProviderResponseMetadata[] = [];
 		const result = await streamSimple(model, context, {
 			apiKey: "test-key",
+			fetch: fetchMock,
 			onResponse: response => {
 				seen.push(response);
 			},

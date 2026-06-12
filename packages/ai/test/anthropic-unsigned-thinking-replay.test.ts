@@ -1,6 +1,14 @@
 import { describe, expect, it } from "bun:test";
-import { convertAnthropicMessages } from "@oh-my-pi/pi-ai/providers/anthropic";
-import type { AssistantMessage, Message, Model, ToolResultMessage, UserMessage } from "@oh-my-pi/pi-ai/types";
+import { convertAnthropicMessages, streamAnthropic } from "@oh-my-pi/pi-ai/providers/anthropic";
+import type {
+	AssistantMessage,
+	Message,
+	Model,
+	ModelSpec,
+	ToolResultMessage,
+	UserMessage,
+} from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 
 /**
  * Regression: Anthropic-compatible reasoning endpoints often emit `thinking`
@@ -13,8 +21,8 @@ import type { AssistantMessage, Message, Model, ToolResultMessage, UserMessage }
  * Official Anthropic remains conservative: unsigned thinking is demoted to text
  * there because the first-party API enforces signature-based integrity.
  */
-function makeModel(overrides: Partial<Model<"anthropic-messages">> = {}): Model<"anthropic-messages"> {
-	return {
+function makeModel(overrides: Partial<ModelSpec<"anthropic-messages">> = {}): Model<"anthropic-messages"> {
+	return buildModel({
 		api: "anthropic-messages",
 		provider: "custom-anthropic",
 		id: "reasoning-model",
@@ -26,7 +34,7 @@ function makeModel(overrides: Partial<Model<"anthropic-messages">> = {}): Model<
 		contextWindow: 200_000,
 		reasoning: true,
 		...overrides,
-	};
+	} as ModelSpec<"anthropic-messages">);
 }
 
 function makeUser(text = "continue"): UserMessage {
@@ -93,6 +101,93 @@ describe("Anthropic-compatible unsigned thinking replay (#2005)", () => {
 		expect(blocks[1]).toEqual({ type: "text", text: "Sure." });
 	});
 
+	it("sanitizes lone surrogates in tool arguments regardless of origin API", () => {
+		const loneSurrogate = "broken \ud83d end";
+		const makeToolCallAssistant = (api: AssistantMessage["api"]): AssistantMessage => ({
+			role: "assistant",
+			content: [
+				{
+					type: "toolCall",
+					id: "call_1",
+					name: "write",
+					arguments: { text: loneSurrogate, nested: { parts: [loneSurrogate] } },
+				},
+			],
+			api,
+			provider: api === "anthropic-messages" ? "custom-anthropic" : "openai",
+			model: "reasoning-model",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+			timestamp: 0,
+		});
+
+		// Cross-API replay: Anthropic's strict UTF-8 validation rejects lone
+		// surrogates, so string leaves are deep-sanitized.
+		const crossBlocks = assistantWireBlocks([makeUser(), makeToolCallAssistant("openai-responses")], makeModel());
+		const crossToolUse = crossBlocks.find(block => block.type === "tool_use") as WireToolUseBlock;
+		expect(crossToolUse.input.text).toBe("broken \ufffd end");
+		expect((crossToolUse.input.nested as { parts: string[] }).parts[0]).toBe("broken \ufffd end");
+
+		// Same-API replay sanitizes too: the model itself can emit lone-surrogate
+		// escapes in its own tool-argument JSON (streamed out fine, 400 on replay).
+		const sameBlocks = assistantWireBlocks([makeUser(), makeToolCallAssistant("anthropic-messages")], makeModel());
+		const sameToolUse = sameBlocks.find(block => block.type === "tool_use") as WireToolUseBlock;
+		expect(sameToolUse.input.text).toBe("broken \ufffd end");
+		expect((sameToolUse.input.nested as { parts: string[] }).parts[0]).toBe("broken \ufffd end");
+	});
+
+	it("sanitizes payload replacements before SDK JSON serialization", async () => {
+		const splitSurrogate = `render \`"icon.ghost": "\\ud83d${String.fromCharCode(0xdc7b)}"\``;
+		const { promise: bodyPromise, resolve } = Promise.withResolvers<string>();
+		const controller = new AbortController();
+		const fakeFetch = async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+			const raw = init?.body;
+			resolve(typeof raw === "string" ? raw : new TextDecoder().decode(raw as Uint8Array));
+			controller.abort();
+			return new Response('event: message_stop\ndata: {"type":"message_stop"}\n\n', {
+				status: 200,
+				headers: { "content-type": "text/event-stream" },
+			});
+		};
+
+		streamAnthropic(
+			makeModel(),
+			{ systemPrompt: [], messages: [makeUser("continue")] },
+			{
+				apiKey: "sk-ant-test",
+				signal: controller.signal,
+				fetch: fakeFetch,
+				onPayload: payload => {
+					const request = payload as { messages?: Array<{ role: string; content: unknown }> };
+					if (!Array.isArray(request.messages)) throw new Error("Anthropic payload missing messages");
+					request.messages.push({
+						role: "assistant",
+						content: [
+							{
+								type: "tool_use",
+								id: "toolu_surrogate",
+								name: "write",
+								input: { text: splitSurrogate },
+							},
+						],
+					});
+					return request;
+				},
+			},
+		);
+
+		const body = await bodyPromise;
+		expect(body).not.toContain("\\udc7b");
+		expect(body).toContain("\ufffd");
+	});
+
 	it("covers the Xiaomi MiMo Anthropic-compatible reporter configuration without provider allowlists", () => {
 		const model = makeModel({
 			provider: "user-custom",
@@ -120,11 +215,11 @@ describe("Anthropic-compatible unsigned thinking replay (#2005)", () => {
 	});
 
 	it("treats a missing baseUrl as official Anthropic (resolveAnthropicBaseUrl default)", () => {
-		// `isAnthropicApiBaseUrl(undefined) === true` because the actual HTTP
+		// `isOfficialAnthropicApiUrl(undefined) === true` because the actual HTTP
 		// dispatch falls back to https://api.anthropic.com. Same-id custom
 		// overrides that only tweak model metadata (no baseUrl override) must
 		// not regress to native-thinking replay against the first-party API.
-		const model = { ...makeModel(), provider: "anthropic", baseUrl: "" };
+		const model = makeModel({ provider: "anthropic", baseUrl: "" });
 		const blocks = assistantWireBlocks([makeUser(), makeAssistantThinking("internal scratch")], model);
 		expect(blocks[0]?.type).toBe("text");
 		expect((blocks[0] as WireTextBlock).text).toBe("internal scratch");

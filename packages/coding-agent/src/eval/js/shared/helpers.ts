@@ -24,6 +24,12 @@ export interface HelperOptions {
 export interface HelperContext {
 	cwd(): string;
 	env: Map<string, string>;
+	/**
+	 * On-disk roots for internal-URL schemes the helpers accept (e.g.
+	 * `{ local: "/…/artifacts/local" }`). A path like `local://x.md` is rewritten
+	 * to `<root>/x.md` before any filesystem op; unknown schemes are rejected.
+	 */
+	localRoots(): Record<string, string>;
 	emitStatus(event: JsStatusEvent): void;
 }
 
@@ -66,7 +72,7 @@ export function createHelpers(ctx: HelperContext): HelperBundle {
 			if (!isWriteData(data)) {
 				throw new ToolError("write() expects string, Blob, ArrayBuffer, or TypedArray data");
 			}
-			const filePath = resolvePath(ctx, rawPath);
+			const filePath = resolveHelperPath(ctx, rawPath, "write");
 			if (typeof data === "string" || data instanceof Blob || data instanceof ArrayBuffer) {
 				await Bun.write(filePath, data);
 			} else {
@@ -76,13 +82,12 @@ export function createHelpers(ctx: HelperContext): HelperBundle {
 			return filePath;
 		},
 		append: async (rawPath, content) => {
-			const target = resolvePath(ctx, rawPath);
-			await Bun.write(
-				target,
-				`${await Bun.file(target)
-					.text()
-					.catch(() => "")}${content}`,
-			);
+			const target = resolveHelperPath(ctx, rawPath, "write");
+			// O(1) append; read-all+rewrite both raced concurrent writers and went
+			// quadratic when called in a loop. Bun.write creates parent dirs, so
+			// keep that behavior for the append path too.
+			await fs.promises.mkdir(path.dirname(target), { recursive: true });
+			await fs.promises.appendFile(target, content, "utf-8");
 			ctx.emitStatus({
 				op: "append",
 				path: target,
@@ -202,19 +207,60 @@ function getMergedEnv(ctx: HelperContext): Record<string, string> {
 	return merged;
 }
 
+const INTERNAL_URL_RE = /^([a-z][a-z0-9+.-]*):\/\/(.*)$/i;
+
 function resolvePath(ctx: HelperContext, value: string): string {
 	if (path.isAbsolute(value)) return path.normalize(value);
 	return path.resolve(ctx.cwd(), value);
+}
+
+/**
+ * Map a raw helper path to an absolute filesystem path. Plain paths resolve
+ * against the cwd; an internal-URL whose scheme has an injected root (e.g.
+ * `local://`) is rewritten under that root; any other `scheme://` is rejected
+ * so we never silently create a literal `scheme:/` directory.
+ */
+function resolveHelperPath(ctx: HelperContext, rawPath: string, op: "read" | "write"): string {
+	const match = INTERNAL_URL_RE.exec(rawPath);
+	if (!match) return resolvePath(ctx, rawPath);
+	const scheme = match[1].toLowerCase();
+	const root = ctx.localRoots()[scheme];
+	if (!root) {
+		throw new ToolError(`Protocol paths are not supported by ${op}(): ${rawPath}`);
+	}
+	return resolveUnderRoot(scheme, root, match[2], rawPath);
+}
+
+/** Resolve an internal-URL relative path under its root, mirroring the host
+ *  local-protocol handler: decode, reject absolute/traversal, confine to root. */
+function resolveUnderRoot(scheme: string, root: string, rawRelative: string, rawPath: string): string {
+	let relative: string;
+	try {
+		relative = decodeURIComponent(rawRelative.replaceAll("\\", "/"));
+	} catch {
+		throw new ToolError(`Invalid URL encoding in ${scheme}:// path: ${rawPath}`);
+	}
+	const rootPath = path.resolve(root);
+	if (relative === "") return rootPath;
+	if (path.isAbsolute(relative)) {
+		throw new ToolError(`Absolute paths are not allowed in ${scheme}:// URLs: ${rawPath}`);
+	}
+	const normalized = path.normalize(relative);
+	if (normalized.startsWith("..") || normalized.includes("/../") || normalized.includes("/..")) {
+		throw new ToolError(`Path traversal (..) is not allowed in ${scheme}:// URLs: ${rawPath}`);
+	}
+	const resolved = path.resolve(rootPath, normalized);
+	if (resolved !== rootPath && !resolved.startsWith(`${rootPath}${path.sep}`)) {
+		throw new ToolError(`${scheme}:// path escapes its root: ${rawPath}`);
+	}
+	return resolved;
 }
 
 async function resolveRegularFile(
 	ctx: HelperContext,
 	rawPath: string,
 ): Promise<{ filePath: string; file: Bun.BunFile; size: number }> {
-	if (/^[a-z][a-z0-9+.-]*:\/\//i.test(rawPath)) {
-		throw new ToolError(`Protocol paths are not supported by read(): ${rawPath}`);
-	}
-	const filePath = resolvePath(ctx, rawPath);
+	const filePath = resolveHelperPath(ctx, rawPath, "read");
 	const file = Bun.file(filePath);
 	const stat = await file.stat();
 	if (stat.isDirectory()) {

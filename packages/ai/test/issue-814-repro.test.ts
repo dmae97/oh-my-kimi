@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { convertAnthropicMessages } from "@oh-my-pi/pi-ai/providers/anthropic";
-import type { AssistantMessage, Model, ToolResultMessage, UserMessage } from "@oh-my-pi/pi-ai/types";
+import type { AssistantMessage, Model, ModelSpec, ToolResultMessage, UserMessage } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 
 /**
  * Issue #814: Z.AI returns 500
@@ -14,7 +15,7 @@ import type { AssistantMessage, Model, ToolResultMessage, UserMessage } from "@o
  * endpoints must remain unchanged (no `id` field).
  */
 
-const baseModel: Omit<Model<"anthropic-messages">, "provider" | "baseUrl"> = {
+const baseModel: Omit<ModelSpec<"anthropic-messages">, "provider" | "baseUrl"> = {
 	api: "anthropic-messages",
 	id: "glm-4.6",
 	name: "GLM-4.6",
@@ -25,19 +26,19 @@ const baseModel: Omit<Model<"anthropic-messages">, "provider" | "baseUrl"> = {
 	reasoning: false,
 };
 
-const zaiModel: Model<"anthropic-messages"> = {
+const zaiModel: Model<"anthropic-messages"> = buildModel({
 	...baseModel,
 	provider: "zai",
 	baseUrl: "https://api.z.ai/api/anthropic",
-};
+});
 
-const anthropicModel: Model<"anthropic-messages"> = {
+const anthropicModel: Model<"anthropic-messages"> = buildModel({
 	...baseModel,
 	id: "claude-3-5-sonnet-20241022",
 	name: "Claude 3.5 Sonnet",
 	provider: "anthropic",
 	baseUrl: "https://api.anthropic.com",
-};
+});
 
 const user: UserMessage = {
 	role: "user",

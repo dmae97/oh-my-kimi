@@ -113,6 +113,34 @@ describe("replace block — native tree-sitter resolution end-to-end", () => {
 		});
 	});
 
+	it("echoes the resolved span in the result text for replace block", async () => {
+		await withTempDir(async tempDir => {
+			const session = makeSession(tempDir);
+			const { header } = await seedFile(tempDir, session, "x.ts", TS_SOURCE);
+			const input = `${header}\nreplace block 1:\n+function x() {\n+  return 42;\n+}`;
+
+			const result = await executeHashlineSingle(executeOptions(tempDir, input, session));
+			const text = result.content.map(part => (part.type === "text" ? part.text : "")).join("\n");
+
+			// `function x() {` opens on line 1; tree-sitter resolves the whole body (lines 1-4).
+			expect(text).toContain("replace block 1 → resolved lines 1-4 (4 lines)");
+		});
+	});
+
+	it("echoes the resolved span in the result text for delete block", async () => {
+		await withTempDir(async tempDir => {
+			const session = makeSession(tempDir);
+			const { header } = await seedFile(tempDir, session, "x.ts", TS_SOURCE);
+			const input = `${header}\ndelete block 2`;
+
+			const result = await executeHashlineSingle(executeOptions(tempDir, input, session));
+			const text = result.content.map(part => (part.type === "text" ? part.text : "")).join("\n");
+
+			// `if (y) {` opens on line 2; resolves lines 2-3.
+			expect(text).toContain("delete block 2 → resolved lines 2-3 (2 lines)");
+		});
+	});
+
 	it("rejects a lone closing delimiter (no block begins there) and steers to `replace N..M:`", async () => {
 		await withTempDir(async tempDir => {
 			const session = makeSession(tempDir);
@@ -120,8 +148,9 @@ describe("replace block — native tree-sitter resolution end-to-end", () => {
 			// Line 3 is `  }` — a closing delimiter, not a block opener.
 			const input = `${header}\nreplace block 3:\n+  }`;
 
+			// Steers to the concrete form and previews the file around the anchor (`*`-marked).
 			await expect(executeHashlineSingle(executeOptions(tempDir, input, session))).rejects.toThrow(
-				/could not resolve a syntactic block beginning on line 3.*replace 3\.\.M:/s,
+				/could not resolve a syntactic block beginning on line 3.*replace 3\.\.M:.*^ 1:function x\(\) \{$.*^\*3: {2}\}$/ms,
 			);
 			// Disk untouched — refusal never leaves a partial write.
 			expect(await Bun.file(filePath).text()).toBe(TS_SOURCE);

@@ -6,7 +6,7 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { replaceTabs, Text } from "@oh-my-pi/pi-tui";
 import { $envpos, prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
-import { getFileSnapshotStore } from "../edit/file-snapshot-store";
+import { canonicalSnapshotKey, getFileSnapshotStore } from "../edit/file-snapshot-store";
 import { normalizeToLF } from "../edit/normalize";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
@@ -295,7 +295,7 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 					const absolutePath = path.resolve(this.session.cwd, relativePath);
 					try {
 						const fullText = normalizeToLF(await Bun.file(absolutePath).text());
-						const tag = snapshotStore.record(absolutePath, fullText);
+						const tag = snapshotStore.record(canonicalSnapshotKey(absolutePath), fullText);
 						hashContexts.set(relativePath, { tag });
 					} catch {
 						// Best-effort: if a file disappears between ast-edit and rendering, emit plain line output.
@@ -402,6 +402,23 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 						for (const change of applyResult.changes) {
 							recordAppliedFile(formatPath(change.path));
 						}
+						// The preview minted tags from pre-apply content; the rewrite just
+						// invalidated them. Re-record post-apply snapshots (canonical keys)
+						// so the model's next hashline edit anchors against fresh tags.
+						const freshTagLines: string[] = [];
+						if (useHashLines) {
+							const snapshotStore = getFileSnapshotStore(this.session);
+							for (const relativePath of appliedFileList) {
+								const appliedAbsolutePath = path.resolve(this.session.cwd, relativePath);
+								try {
+									const fullText = normalizeToLF(await Bun.file(appliedAbsolutePath).text());
+									const freshTag = snapshotStore.record(canonicalSnapshotKey(appliedAbsolutePath), fullText);
+									freshTagLines.push(formatHashlineHeader(relativePath, freshTag));
+								} catch {
+									// File disappeared between apply and re-read; skip its tag.
+								}
+							}
+						}
 						const appliedFileReplacements = appliedFileList.map(filePath => ({
 							path: filePath,
 							count: appliedFileReplacementCounts.get(filePath) ?? 0,
@@ -429,17 +446,20 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 								filePath => fileReplacementCounts.get(filePath) !== appliedFileReplacementCounts.get(filePath),
 							);
 						if (stalePreview) {
-							const text =
+							const staleText =
 								applyResult.totalReplacements === 0
 									? `Preview is stale / no longer matches; no replacements were applied. Preview expected ${result.totalReplacements} replacement${previewReplacementPlural} in ${result.filesTouched} file${previewFilePlural}.`
 									: applyResult.totalReplacements < result.totalReplacements
 										? `Preview is stale / no longer matches; only ${applyResult.totalReplacements} of ${result.totalReplacements} replacements were applied in ${applyResult.filesTouched} of ${result.filesTouched} files.`
 										: `Preview is stale / no longer matches; applied ${applyResult.totalReplacements} replacements but preview expected ${result.totalReplacements}.`;
-							return { ...toolResult(appliedDetails).text(text).done(), isError: true };
+							const staleWithTags =
+								freshTagLines.length > 0 ? `${staleText}\n${freshTagLines.join("\n")}` : staleText;
+							return { ...toolResult(appliedDetails).text(staleWithTags).done(), isError: true };
 						}
 						const appliedReplacementPlural = applyResult.totalReplacements !== 1 ? "s" : "";
 						const appliedFilePlural = applyResult.filesTouched !== 1 ? "s" : "";
-						const text = `Applied ${applyResult.totalReplacements} replacement${appliedReplacementPlural} in ${applyResult.filesTouched} file${appliedFilePlural}.`;
+						const appliedText = `Applied ${applyResult.totalReplacements} replacement${appliedReplacementPlural} in ${applyResult.filesTouched} file${appliedFilePlural}.`;
+						const text = freshTagLines.length > 0 ? `${appliedText}\n${freshTagLines.join("\n")}` : appliedText;
 						return toolResult(appliedDetails).text(text).done();
 					},
 				});

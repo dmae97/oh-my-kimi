@@ -525,29 +525,45 @@ function matchesAt(lines: string[], pattern: string[], i: number, compare: (a: s
 	return true;
 }
 
-/** Compute average similarity score for pattern at position */
-function fuzzyScoreAt(lines: string[], pattern: string[], i: number): number {
+/**
+ * Compute average similarity score for pre-normalized pattern lines at
+ * position `i` of pre-normalized file lines.
+ *
+ * `minScore` is a bail threshold: when even perfect similarity on the
+ * remaining lines cannot lift the average to `minScore`, returns the partial
+ * average early (always ≤ the true score). The length-difference lower bound
+ * on Levenshtein distance is used to skip the DP entirely for line pairs the
+ * bail test already rules out.
+ */
+function fuzzyScoreAt(linesNorm: string[], patternNorm: string[], i: number, minScore = 0): number {
+	const count = patternNorm.length;
 	let totalScore = 0;
-	for (let j = 0; j < pattern.length; j++) {
-		const lineNorm = normalizeForFuzzy(lines[i + j]);
-		const patternNorm = normalizeForFuzzy(pattern[j]);
-		totalScore += similarity(lineNorm, patternNorm);
+	for (let j = 0; j < count; j++) {
+		const lineNorm = linesNorm[i + j];
+		const patNorm = patternNorm[j];
+		if (lineNorm === patNorm) {
+			totalScore += 1;
+			continue;
+		}
+		const remaining = count - j - 1;
+		const maxLen = Math.max(lineNorm.length, patNorm.length);
+		// similarity ≤ 1 − |lenA−lenB|/maxLen: test the bound before the DP.
+		const upperBound = 1 - Math.abs(lineNorm.length - patNorm.length) / maxLen;
+		if ((totalScore + upperBound + remaining) / count < minScore) return totalScore / count;
+		if (upperBound > 0) totalScore += similarity(lineNorm, patNorm);
+		if ((totalScore + remaining) / count < minScore) return totalScore / count;
 	}
-	return totalScore / pattern.length;
+	return totalScore / count;
 }
 
-/** Check if line starts with pattern (normalized) */
-function lineStartsWithPattern(line: string, pattern: string): boolean {
-	const lineNorm = normalizeForFuzzy(line);
-	const patternNorm = normalizeForFuzzy(pattern);
+/** Check if pre-normalized line starts with pre-normalized pattern */
+function normStartsWith(lineNorm: string, patternNorm: string): boolean {
 	if (patternNorm.length === 0) return lineNorm.length === 0;
 	return lineNorm.startsWith(patternNorm);
 }
 
-/** Check if line contains pattern as significant substring */
-function lineIncludesPattern(line: string, pattern: string): boolean {
-	const lineNorm = normalizeForFuzzy(line);
-	const patternNorm = normalizeForFuzzy(pattern);
+/** Check if pre-normalized line contains pre-normalized pattern as significant substring */
+function normIncludes(lineNorm: string, patternNorm: string): boolean {
 	if (patternNorm.length === 0) return lineNorm.length === 0;
 	if (patternNorm.length < PARTIAL_MATCH_MIN_LENGTH) return false;
 	if (!lineNorm.includes(patternNorm)) return false;
@@ -613,6 +629,13 @@ export function seekSequence(
 	const searchStart = eof && lines.length >= pattern.length ? lines.length - pattern.length : start;
 	const maxStart = lines.length - pattern.length;
 
+	// Fuzzy and partial passes compare normalizeForFuzzy forms; normalize the
+	// file and pattern once per call instead of once per candidate position.
+	let linesNormCache: string[] | undefined;
+	let patternNormCache: string[] | undefined;
+	const getLinesNorm = () => (linesNormCache ??= lines.map(normalizeForFuzzy));
+	const getPatternNorm = () => (patternNormCache ??= pattern.map(normalizeForFuzzy));
+
 	const runExactPasses = (from: number, to: number): SequenceSearchResult | undefined => {
 		const comparisonPasses: Array<{
 			compare: (a: string, b: string) => boolean;
@@ -646,17 +669,19 @@ export function seekSequence(
 			return undefined;
 		}
 
+		const linesNorm = getLinesNorm();
+		const patternNorm = getPatternNorm();
 		const partialPasses: Array<{
-			compare: (line: string, patternLine: string) => boolean;
+			compare: (lineNorm: string, patternLineNorm: string) => boolean;
 			confidence: number;
 			strategy: SequenceMatchStrategy;
 		}> = [
-			{ compare: lineStartsWithPattern, confidence: 0.965, strategy: "prefix" },
-			{ compare: lineIncludesPattern, confidence: 0.94, strategy: "substring" },
+			{ compare: normStartsWith, confidence: 0.965, strategy: "prefix" },
+			{ compare: normIncludes, confidence: 0.94, strategy: "substring" },
 		];
 
 		for (const pass of partialPasses) {
-			const matches = collectIndexedMatches(from, to, i => matchesAt(lines, pattern, i, pass.compare));
+			const matches = collectIndexedMatches(from, to, i => matchesAt(linesNorm, patternNorm, i, pass.compare));
 			const result = toAmbiguousMatchResult(matches, pass.confidence, pass.strategy);
 			if (result) {
 				return result;
@@ -692,9 +717,14 @@ export function seekSequence(
 		matchIndices: [],
 	};
 
+	const fuzzyLinesNorm = getLinesNorm();
+	const fuzzyPatternNorm = getPatternNorm();
+	// Positions scoring below this can neither become a fuzzy match nor affect
+	// the dominant-fuzzy gap test; let fuzzyScoreAt bail early on them.
+	const fuzzyBail = SEQUENCE_FUZZY_THRESHOLD - DOMINANT_FUZZY_DELTA;
 	const scoreFuzzyRange = (from: number, to: number): void => {
 		for (let i = from; i <= to; i++) {
-			const score = fuzzyScoreAt(lines, pattern, i);
+			const score = fuzzyScoreAt(fuzzyLinesNorm, fuzzyPatternNorm, i, fuzzyBail);
 			if (score >= SEQUENCE_FUZZY_THRESHOLD) {
 				if (fuzzyMatches.firstMatch === undefined) {
 					fuzzyMatches.firstMatch = i;
@@ -787,12 +817,16 @@ export function findClosestSequenceMatch(
 	const eof = options?.eof ?? false;
 	const maxStart = lines.length - pattern.length;
 	const searchStart = eof && lines.length >= pattern.length ? maxStart : start;
+	const linesNorm = lines.map(normalizeForFuzzy);
+	const patternNorm = pattern.map(normalizeForFuzzy);
 
 	let bestIndex: number | undefined;
 	let bestScore = 0;
 
+	// Passing the running best as the bail threshold is exact: a bailed
+	// position returns a value strictly below it, so it can never win.
 	for (let i = searchStart; i <= maxStart; i++) {
-		const score = fuzzyScoreAt(lines, pattern, i);
+		const score = fuzzyScoreAt(linesNorm, patternNorm, i, bestScore);
 		if (score > bestScore) {
 			bestScore = score;
 			bestIndex = i;
@@ -801,7 +835,7 @@ export function findClosestSequenceMatch(
 
 	if (eof && searchStart > start) {
 		for (let i = start; i < searchStart; i++) {
-			const score = fuzzyScoreAt(lines, pattern, i);
+			const score = fuzzyScoreAt(linesNorm, patternNorm, i, bestScore);
 			if (score > bestScore) {
 				bestScore = score;
 				bestIndex = i;
@@ -1078,7 +1112,7 @@ export async function executeReplaceSingle(
 	);
 	invalidateFsScanAfterWrite(absolutePath);
 
-	const diffResult = generateDiffString(normalizedContent, result.content);
+	const diffResult = generateDiffString(normalizedContent, result.content, undefined, { path });
 	const resultText =
 		result.count > 1
 			? `Successfully replaced ${result.count} occurrences in ${path}.`

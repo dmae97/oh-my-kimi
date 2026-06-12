@@ -71,7 +71,7 @@ export class TinyTitleDownloadProgressComponent implements Component {
 		// No cached state.
 	}
 
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		width = Math.max(1, width);
 		const spec = getTinyTitleModelSpec(this.#modelKey);
 		const border = theme.fg("border", theme.boxSharp.horizontal.repeat(width));

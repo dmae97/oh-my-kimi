@@ -16,7 +16,7 @@ let cachedShellConfig: ShellConfig | null = null;
 /**
  * Check if a shell binary is executable.
  */
-function isExecutable(path: string): boolean {
+export function isExecutable(path: string): boolean {
 	try {
 		fs.accessSync(path, fs.constants.X_OK);
 		return true;

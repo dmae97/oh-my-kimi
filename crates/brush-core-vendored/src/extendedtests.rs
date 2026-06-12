@@ -4,7 +4,7 @@ use brush_parser::ast;
 
 use crate::{
 	ExecutionParameters, Shell, ShellFd, arithmetic, env, error, escape, expansion, extensions,
-	namedoptions, patterns,
+	namedoptions, patterns, regex,
 	sys::{
 		fs::{MetadataExt, PathExt},
 		users,
@@ -160,7 +160,13 @@ pub(crate) fn apply_unary_predicate_to_str(
 			Ok(md.gid() == users::get_effective_gid()?)
 		},
 		ast::UnaryPredicate::FileExistsAndModifiedSinceLastRead => {
-			error::unimp("unary extended test predicate: FileExistsAndModifiedSinceLastRead")
+			let path = shell.absolute_path(Path::new(operand));
+			if !path.exists() {
+				return Ok(false);
+			}
+
+			let md = path.metadata()?;
+			Ok(md.modified()? > md.accessed()?)
 		},
 		ast::UnaryPredicate::FileExistsAndOwnedByEffectiveUserId => {
 			let path = shell.absolute_path(Path::new(operand));
@@ -527,7 +533,15 @@ pub(crate) fn apply_binary_predicate_to_strs(
 		},
 		ast::BinaryPredicate::StringExactlyMatchesString => Ok(left == right),
 		ast::BinaryPredicate::StringDoesNotExactlyMatchString => Ok(left != right),
-		_ => error::unimp("unsupported test binary predicate"),
+		ast::BinaryPredicate::StringContainsSubstring => Ok(left.contains(right)),
+		ast::BinaryPredicate::StringMatchesRegex => {
+			let re = regex::compile_regex(
+				right.to_owned(),
+				shell.options().case_insensitive_conditionals,
+				true,
+			)?;
+			Ok(re.is_match(left)?)
+		},
 	}
 }
 

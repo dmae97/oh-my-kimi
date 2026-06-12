@@ -24,6 +24,8 @@ export interface JsExecutorOptions {
 	artifactPath?: string;
 	artifactId?: string;
 	session: ToolSession;
+	/** On-disk roots the helpers substitute for internal-URL schemes (e.g. `local://`). */
+	localRoots?: Record<string, string>;
 }
 
 export interface JsResult {
@@ -61,9 +63,13 @@ function isTimeoutReason(reason: unknown): boolean {
 }
 
 function formatJsTimeoutAnnotation(timeoutMs: number | undefined): string {
-	if (timeoutMs === undefined) return "Command timed out";
+	// Timeout cancellation force-kills the worker (the only way to interrupt
+	// synchronous user code), which discards the persistent VM state. Say so,
+	// or the model will keep referencing variables that no longer exist.
+	const reset = "The JS worker was force-killed and its VM state was reset; variables from earlier cells are gone.";
+	if (timeoutMs === undefined) return `Command timed out. ${reset}`;
 	const secs = Math.max(1, Math.round(timeoutMs / 1000));
-	return `Command timed out after ${secs} seconds`;
+	return `Command timed out after ${secs} seconds. ${reset}`;
 }
 
 export async function executeJs(code: string, options: JsExecutorOptions): Promise<JsResult> {
@@ -96,6 +102,7 @@ export async function executeJs(code: string, options: JsExecutorOptions): Promi
 			sessionId: options.sessionId,
 			cwd: options.cwd ?? options.session.cwd,
 			session: options.session,
+			localRoots: options.localRoots,
 			reset: options.reset,
 			code,
 			filename: `js-cell-${crypto.randomUUID()}.js`,

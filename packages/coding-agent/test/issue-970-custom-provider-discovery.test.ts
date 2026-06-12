@@ -10,7 +10,7 @@ import { ModelSelectorComponent } from "@oh-my-pi/pi-coding-agent/modes/componen
 import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import type { TUI } from "@oh-my-pi/pi-tui";
-import { hookFetch, Snowflake } from "@oh-my-pi/pi-utils";
+import { Snowflake } from "@oh-my-pi/pi-utils";
 
 function normalizeRenderedText(text: string): string {
 	return stripVTControlCharacters(text).replace(/\s+/g, " ").trim();
@@ -33,8 +33,7 @@ async function createSelector(state: ProviderDiscoveryState): Promise<ModelSelec
 		getAvailable: () => [],
 		getAll: () => [],
 		getDiscoverableProviders: () => [state.provider],
-		getCanonicalModels: () => [],
-		resolveCanonicalModel: () => undefined,
+		getCanonicalModelSelections: () => [],
 		getProviderDiscoveryState: () => state,
 	} as unknown as ModelRegistry;
 	const ui = { requestRender: vi.fn() } as unknown as TUI;
@@ -101,7 +100,10 @@ describe("issue #970 custom provider discovery", () => {
 			].join("\n"),
 		);
 
-		using _hook = hookFetch((input, init) => {
+		const fetchMock: (input: string | URL | Request, init?: RequestInit) => Promise<Response> = async (
+			input,
+			init,
+		) => {
 			const url = String(input);
 			if (url !== "http://192.168.5.3:8085/v1/models") {
 				throw new Error(`Unexpected URL: ${url}`);
@@ -113,9 +115,9 @@ describe("issue #970 custom provider discovery", () => {
 				status: 200,
 				headers: { "Content-Type": "application/json" },
 			});
-		});
+		};
 
-		const registry = new ModelRegistryImpl(authStorage, modelsPath);
+		const registry = new ModelRegistryImpl(authStorage, modelsPath, { fetch: fetchMock });
 		await registry.refreshProvider("vllm");
 
 		const providerModels = registry.getAll().filter(model => model.provider === "vllm");

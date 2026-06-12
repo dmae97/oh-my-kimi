@@ -7,6 +7,7 @@ import {
 	cleanOutput,
 	configuredLlmWillHandleCall,
 	llmAvailable,
+	type RemoteLlmOptions,
 } from "./local-llm";
 import { getMnemopiRuntimeOptions } from "./runtime-options";
 
@@ -231,7 +232,7 @@ async function localFallback(prompt: string, sourceText: string, diag = getDiagn
 	return [];
 }
 
-export async function extractFacts(text: string | null | undefined): Promise<string[]> {
+export async function extractFacts(text: string | null | undefined, options: RemoteLlmOptions = {}): Promise<string[]> {
 	const diag = getDiagnostics();
 	if (typeof text !== "string" || text.trim() === "") {
 		return [];
@@ -303,7 +304,7 @@ export async function extractFacts(text: string | null | undefined): Promise<str
 	if (llmEnabled() && llmBaseUrl() !== "") {
 		diag.recordAttempt("remote");
 		try {
-			const raw = await callRemoteLlm(prompt, 0);
+			const raw = await callRemoteLlm(prompt, 0, options);
 			if (raw !== null) {
 				const facts = parseFacts(cleanOutput(raw));
 				if (facts.length > 0) {

@@ -8,10 +8,12 @@ use crate::minimizer::{MinimizerCtx, MinimizerOutput, primitives};
 const SUPPORTED_TOOLS: &[&str] = &["next", "prettier", "prisma"];
 const NPX_ROUTABLE_TOOLS: &[&str] = &["tsc", "eslint", "prisma", "prettier", "next"];
 
+#[must_use]
 pub fn supports(program: &str, subcommand: Option<&str>) -> bool {
 	effective_tool(program, subcommand).is_some()
 }
 
+#[must_use]
 pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
 	let cleaned = primitives::strip_ansi(input);
 	let tool = effective_tool(ctx.program, ctx.subcommand)
@@ -31,6 +33,7 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 	}
 }
 
+#[must_use]
 pub fn effective_tool<'a>(program: &'a str, subcommand: Option<&'a str>) -> Option<&'a str> {
 	if SUPPORTED_TOOLS.contains(&program) {
 		return Some(program);
@@ -40,7 +43,7 @@ pub fn effective_tool<'a>(program: &'a str, subcommand: Option<&'a str>) -> Opti
 	{
 		return Some(tool);
 	}
-	if is_npx_like(program) {
+	if is_npx_like(program, subcommand) {
 		let tool = subcommand?;
 		if NPX_ROUTABLE_TOOLS.contains(&tool) {
 			return Some(tool);
@@ -62,8 +65,8 @@ fn effective_tool_from_command<'a>(
 		.find(|token| SUPPORTED_TOOLS.contains(token))
 }
 
-fn is_npx_like(program: &str) -> bool {
-	matches!(program, "npx" | "bunx" | "pnpm dlx")
+fn is_npx_like(program: &str, subcommand: Option<&str>) -> bool {
+	matches!(program, "npx" | "bunx") || matches!((program, subcommand), ("pnpm", Some("dlx")))
 }
 
 fn filter_next(input: &str, exit_code: i32) -> String {

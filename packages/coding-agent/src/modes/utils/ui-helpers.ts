@@ -1,15 +1,21 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent, Message } from "@oh-my-pi/pi-ai";
 import { type Component, Spacer, Text, TruncatedText } from "@oh-my-pi/pi-tui";
+import { COLLAB_PROMPT_MESSAGE_TYPE, type CollabPromptDetails } from "../../collab/protocol";
 import { settings } from "../../config/settings";
 import { getFileSnapshotStore } from "../../edit/file-snapshot-store";
 import { AssistantMessageComponent } from "../../modes/components/assistant-message";
 import { BashExecutionComponent } from "../../modes/components/bash-execution";
 import { BranchSummaryMessageComponent } from "../../modes/components/branch-summary-message";
+import { CollabPromptMessageComponent } from "../../modes/components/collab-prompt-message";
 import { CompactionSummaryMessageComponent } from "../../modes/components/compaction-summary-message";
 import { CustomMessageComponent } from "../../modes/components/custom-message";
 import { DynamicBorder } from "../../modes/components/dynamic-border";
 import { EvalExecutionComponent } from "../../modes/components/eval-execution";
+import {
+	type LateDiagnosticsFile,
+	LateDiagnosticsMessageComponent,
+} from "../../modes/components/late-diagnostics-message";
 import {
 	ReadToolGroupComponent,
 	readArgsHaveTarget,
@@ -25,11 +31,13 @@ import type { CompactionQueuedMessage, InteractiveModeContext } from "../../mode
 import {
 	type CustomMessage,
 	isSilentAbort,
+	LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE,
 	resolveAbortLabel,
 	SKILL_PROMPT_MESSAGE_TYPE,
 	type SkillPromptDetails,
 } from "../../session/messages";
 import type { SessionContext } from "../../session/session-manager";
+import { createIrcMessageCard } from "../../tools/irc";
 import { formatBytes, formatDuration } from "../../tools/render-utils";
 
 type TextBlock = { type: "text"; text: string };
@@ -156,7 +164,7 @@ export class UiHelpers {
 							const typeLabel = job.type ? `[${job.type}]` : "[job]";
 							const duration = typeof job.durationMs === "number" ? formatDuration(job.durationMs) : undefined;
 							const line = [
-								theme.fg("success", `${theme.status.success} Background job completed`),
+								theme.fg("success", `${theme.status.done} Background job completed`),
 								theme.fg("dim", typeLabel),
 								theme.fg("accent", jobId),
 								duration ? theme.fg("dim", `(${duration})`) : undefined,
@@ -166,6 +174,22 @@ export class UiHelpers {
 							block.addChild(new Text(line, 1, 0));
 						}
 						this.ctx.chatContainer.addChild(block);
+						break;
+					}
+					if (message.customType === LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE) {
+						const details = (
+							message as CustomMessage<{
+								files?: LateDiagnosticsFile[];
+							}>
+						).details;
+						const component = new LateDiagnosticsMessageComponent(details?.files ?? []);
+						component.setExpanded(this.ctx.toolOutputExpanded);
+						this.ctx.chatContainer.addChild(component);
+						break;
+					}
+					if (message.customType === COLLAB_PROMPT_MESSAGE_TYPE) {
+						const component = new CollabPromptMessageComponent(message as CustomMessage<CollabPromptDetails>);
+						this.ctx.chatContainer.addChild(component);
 						break;
 					}
 					if (message.customType === SKILL_PROMPT_MESSAGE_TYPE) {
@@ -184,41 +208,32 @@ export class UiHelpers {
 								from?: string;
 								to?: string;
 								message?: string;
-								reply?: string;
 								body?: string;
-								kind?: "message" | "reply";
+								replyTo?: string;
 							}>
 						).details;
-						let arrow: string;
-						let body: string;
-						if (message.customType === "irc:incoming") {
-							const peer = details?.from ?? "?";
-							body = details?.message ?? "";
-							arrow = `⇦ ${peer}`;
-						} else if (message.customType === "irc:autoreply") {
-							const peer = details?.to ?? "?";
-							body = details?.reply ?? "";
-							arrow = `⇨ ${peer}`;
-						} else {
-							const from = details?.from ?? "?";
-							const to = details?.to ?? "?";
-							body = details?.body ?? "";
-							arrow = `${from} ⇨ ${to}`;
-						}
-						const block = new TranscriptBlock();
-						const header = `${theme.fg("accent", `[IRC] ${arrow}`)}`;
-						const headerComponent = new Text(header, 1, 0);
-						block.addChild(headerComponent);
-						if (body) {
-							for (const line of body.split("\n")) {
-								const lineComponent = new Text(theme.fg("muted", `  ${line}`), 0, 0);
-								block.addChild(lineComponent);
-							}
-						}
-						this.ctx.chatContainer.addChild(block);
-						return [block];
+						const kind =
+							message.customType === "irc:incoming"
+								? ("incoming" as const)
+								: message.customType === "irc:autoreply"
+									? ("autoreply" as const)
+									: ("relay" as const);
+						const card = createIrcMessageCard(
+							{
+								kind,
+								from: details?.from,
+								to: details?.to,
+								body: kind === "incoming" ? details?.message : details?.body,
+								replyTo: details?.replyTo,
+								timestamp: message.timestamp,
+							},
+							() => this.ctx.toolOutputExpanded,
+							theme,
+						);
+						this.ctx.chatContainer.addChild(card);
+						return [card];
 					}
-					const renderer = this.ctx.session.extensionRunner?.getMessageRenderer(message.customType);
+					const renderer = this.ctx.viewSession.extensionRunner?.getMessageRenderer(message.customType);
 					// Both HookMessage and CustomMessage have the same structure, cast for compatibility
 					const component = new CustomMessageComponent(message as CustomMessage<unknown>, renderer);
 					component.setExpanded(this.ctx.toolOutputExpanded);
@@ -269,7 +284,10 @@ export class UiHelpers {
 					const isSynthetic = message.role === "developer" ? true : (message.synthetic ?? false);
 					const imageLinks =
 						options?.imageLinks ??
-						imageLinksForMessage(message, this.ctx.sessionManager.putBlobSync.bind(this.ctx.sessionManager));
+						imageLinksForMessage(
+							message,
+							this.ctx.viewSession.sessionManager.putBlobSync.bind(this.ctx.viewSession.sessionManager),
+						);
 					const userComponent = new UserMessageComponent(textContent, isSynthetic, imageLinks);
 					this.ctx.chatContainer.addChild(userComponent);
 					if (options?.populateHistory && message.role === "user" && !isSynthetic) {
@@ -283,7 +301,7 @@ export class UiHelpers {
 					message,
 					this.ctx.hideThinkingBlock,
 					() => this.ctx.ui.requestRender(),
-					this.ctx.session.extensionRunner?.getAssistantThinkingRenderers(),
+					this.ctx.viewSession.extensionRunner?.getAssistantThinkingRenderers(),
 					this.ctx.ui.imageBudget,
 				);
 				this.ctx.chatContainer.addChild(assistantComponent);
@@ -321,13 +339,23 @@ export class UiHelpers {
 		let readGroup: ReadToolGroupComponent | null = null;
 		const readToolCallArgs = new Map<string, Record<string, unknown>>();
 		const readToolCallAssistantComponents = new Map<string, AssistantMessageComponent>();
-		const deferredMessages: AgentMessage[] = [];
-		for (const message of sessionContext.messages) {
-			// Defer compaction summaries so they render at the bottom (visible after scroll)
-			if (message.role === "compactionSummary") {
-				deferredMessages.push(message);
-				continue;
+		// Rebuild-time mirror of the event controller's displaceable-poll
+		// bookkeeping: a `job` poll that found every watched job still running is
+		// superseded by the next `job` call, so a rebuilt transcript collapses a
+		// repeated-poll run to its final snapshot instead of replaying the spam.
+		let waitingPoll: ToolExecutionComponent | null = null;
+		const resolveWaitingPoll = (nextToolName?: string) => {
+			const previous = waitingPoll;
+			if (!previous) return;
+			waitingPoll = null;
+			if (nextToolName === "job" && previous.isDisplaceableBlock()) {
+				this.ctx.chatContainer.removeChild(previous);
 			}
+			// Sealing freezes the block and stops the waiting-poll spinner that
+			// updateResult armed.
+			previous.seal();
+		};
+		for (const message of sessionContext.messages) {
 			// Assistant messages need special handling for tool calls
 			if (message.role === "assistant") {
 				this.ctx.addMessageToChat(message);
@@ -342,7 +370,11 @@ export class UiHelpers {
 						(content.type === "thinking" && content.thinking.trim().length > 0),
 				);
 				if (hasVisibleAssistantContent) {
-					readGroup?.finalize();
+					// Rebuild reconstructs immutable history; seal (not finalize) so the
+					// group freezes even if a read's result was never persisted —
+					// finalize alone keeps a pending entry live and would stop the whole
+					// transcript below it from committing to native scrollback.
+					readGroup?.seal();
 					readGroup = null;
 				}
 				const isAbortedSilently = message.stopReason === "aborted" && isSilentAbort(message.errorMessage);
@@ -350,7 +382,7 @@ export class UiHelpers {
 					!isAbortedSilently && (message.stopReason === "aborted" || message.stopReason === "error");
 				const errorMessage = hasErrorStop
 					? message.stopReason === "aborted"
-						? resolveAbortLabel(message.errorMessage, this.ctx.session.retryAttempt)
+						? resolveAbortLabel(message.errorMessage, this.ctx.viewSession.retryAttempt)
 						: message.errorMessage || "Error"
 					: null;
 
@@ -359,6 +391,7 @@ export class UiHelpers {
 					if (content.type !== "toolCall") {
 						continue;
 					}
+					resolveWaitingPoll(content.name);
 
 					if (
 						content.name === "read" &&
@@ -392,9 +425,9 @@ export class UiHelpers {
 						continue;
 					}
 
-					readGroup?.finalize();
+					readGroup?.seal();
 					readGroup = null;
-					const tool = this.ctx.session.getToolByName(content.name);
+					const tool = this.ctx.viewSession.getToolByName(content.name);
 					const renderArgs =
 						"partialJson" in content
 							? { ...content.arguments, __partialJson: content.partialJson }
@@ -403,14 +436,15 @@ export class UiHelpers {
 						content.name,
 						renderArgs,
 						{
-							snapshots: getFileSnapshotStore(this.ctx.session),
+							snapshots: getFileSnapshotStore(this.ctx.viewSession),
 							showImages: settings.get("terminal.showImages"),
 							editFuzzyThreshold: settings.get("edit.fuzzyThreshold"),
 							editAllowFuzzy: settings.get("edit.fuzzyMatch"),
+							liveRegion: this.ctx.chatContainer,
 						},
 						tool,
 						this.ctx.ui,
-						this.ctx.sessionManager.getCwd(),
+						this.ctx.viewSession.sessionManager.getCwd(),
 						content.id,
 					);
 					component.setExpanded(this.ctx.toolOutputExpanded);
@@ -473,27 +507,35 @@ export class UiHelpers {
 				if (component) {
 					component.updateResult(message, false, message.toolCallId);
 					this.ctx.pendingTools.delete(message.toolCallId);
+					if (
+						message.toolName === "job" &&
+						component instanceof ToolExecutionComponent &&
+						component.isDisplaceableBlock()
+					) {
+						waitingPoll = component;
+					}
 				}
 			} else {
+				// A user prompt closes the displacement window, same as the live path.
+				if (message.role === "user") resolveWaitingPoll();
 				// All other messages use standard rendering
 				this.ctx.addMessageToChat(message, options);
 			}
 		}
 
-		// The trailing read run has no following break to close it; finalize so the
-		// rebuilt group commits to native scrollback like every other historical block.
-		readGroup?.finalize();
-
-		// Render deferred messages (compaction summaries) at the bottom so they're visible
-		for (const message of deferredMessages) {
-			this.ctx.addMessageToChat(message, options);
-		}
+		// The trailing read run has no following break to close it; seal so the
+		// rebuilt group freezes (even with a never-persisted result) and commits to
+		// native scrollback like every other historical block.
+		readGroup?.seal();
+		// A trailing waiting poll is final history on rebuild; seal it so it
+		// freezes (and its spinner timer stops) like every other block.
+		resolveWaitingPoll();
 
 		this.ctx.pendingTools.clear();
 		this.ctx.ui.requestRender();
 	}
 
-	renderInitialMessages(prebuiltContext?: SessionContext, options: RenderInitialMessagesOptions = {}): void {
+	renderInitialMessages(options: RenderInitialMessagesOptions = {}): void {
 		// This path is used to rebuild the visible chat transcript (e.g. after custom/debug UI).
 		// Clear existing rendered chat first to avoid duplicating the full session in the container.
 		// On a non-preserving rebuild the existing blocks are discarded for good, so
@@ -509,15 +551,16 @@ export class UiHelpers {
 		this.ctx.pendingBashComponents = [];
 		this.ctx.pendingPythonComponents = [];
 
-		// Reuse a pre-built context when available (e.g. from navigateTree) to avoid a second O(N) walk.
-		const context = prebuiltContext ?? this.ctx.sessionManager.buildSessionContext();
+		// Display always uses the full-history transcript: compactions show as
+		// inline dividers instead of restarting the visible conversation.
+		const context = this.ctx.viewSession.buildTranscriptSessionContext();
 		this.ctx.renderSessionContext(context, {
 			updateFooter: true,
-			populateHistory: true,
+			populateHistory: !this.ctx.focusedAgentId,
 		});
 
 		// Show compaction info if session was compacted
-		const allEntries = this.ctx.sessionManager.getEntries();
+		const allEntries = this.ctx.viewSession.sessionManager.getEntries();
 		let compactionCount = 0;
 		for (const entry of allEntries) {
 			if (entry.type === "compaction") {
@@ -574,7 +617,7 @@ export class UiHelpers {
 
 	updatePendingMessagesDisplay(): void {
 		this.ctx.pendingMessagesContainer.clear();
-		const queuedMessages = this.ctx.session.getQueuedMessages() as QueuedMessages;
+		const queuedMessages = this.ctx.viewSession.getQueuedMessages() as QueuedMessages;
 
 		const steeringMessages: Array<{ message: string; label: string }> = [];
 		for (const message of queuedMessages.steering) {
@@ -609,12 +652,18 @@ export class UiHelpers {
 		}
 	}
 
-	queueCompactionMessage(text: string, mode: "steer" | "followUp"): void {
-		this.ctx.compactionQueuedMessages.push({ text, mode } as CompactionQueuedMessage);
+	queueCompactionMessage(text: string, mode: "steer" | "followUp", images?: ImageContent[]): void {
+		const queuedImages = images && images.length > 0 ? images : undefined;
+		this.ctx.compactionQueuedMessages.push({ text, mode, images: queuedImages } as CompactionQueuedMessage);
 		this.ctx.editor.addToHistory(text);
 		this.ctx.editor.setText("");
+		this.ctx.editor.imageLinks = undefined;
+		this.ctx.pendingImages = [];
+		this.ctx.pendingImageLinks = [];
 		this.ctx.updatePendingMessagesDisplay();
-		this.ctx.showStatus("Queued message for after compaction");
+		this.ctx.showStatus(
+			queuedImages ? "Queued message with image for after compaction" : "Queued message for after compaction",
+		);
 	}
 
 	async #deliverQueuedMessage(message: CompactionQueuedMessage): Promise<void> {
@@ -622,8 +671,13 @@ export class UiHelpers {
 			await this.ctx.session.prompt(message.text);
 			return;
 		}
-		await this.ctx.withLocalSubmission(message.text, () =>
-			message.mode === "followUp" ? this.ctx.session.followUp(message.text) : this.ctx.session.steer(message.text),
+		await this.ctx.withLocalSubmission(
+			message.text,
+			() =>
+				message.mode === "followUp"
+					? this.ctx.session.followUp(message.text, message.images)
+					: this.ctx.session.steer(message.text, message.images),
+			{ imageCount: message.images?.length ?? 0 },
 		);
 	}
 
@@ -713,10 +767,11 @@ export class UiHelpers {
 			// firstPrompt is fire-and-forget — its rejection is funneled through
 			// `restoreQueue` rather than rethrown, so we use the primitive
 			// recordLocalSubmission and dispose manually in the catch.
-			const disposeFirstPrompt = this.ctx.recordLocalSubmission(firstPrompt.text);
+			const disposeFirstPrompt = this.ctx.recordLocalSubmission(firstPrompt.text, firstPrompt.images?.length ?? 0);
 			const promptPromise = this.ctx.session
 				.prompt(firstPrompt.text, {
 					streamingBehavior: firstPrompt.mode === "followUp" ? "followUp" : "steer",
+					images: firstPrompt.images,
 				})
 				.catch((error: unknown) => {
 					disposeFirstPrompt();
@@ -748,8 +803,8 @@ export class UiHelpers {
 	}
 
 	findLastAssistantMessage(): AssistantMessage | undefined {
-		for (let i = this.ctx.session.messages.length - 1; i >= 0; i--) {
-			const message = this.ctx.session.messages[i];
+		for (let i = this.ctx.viewSession.messages.length - 1; i >= 0; i--) {
+			const message = this.ctx.viewSession.messages[i];
 			if (message?.role === "assistant") {
 				return message as AssistantMessage;
 			}

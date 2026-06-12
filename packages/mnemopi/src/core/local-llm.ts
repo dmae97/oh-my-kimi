@@ -1,5 +1,14 @@
-import { type Api, type AssistantMessage, completeSimple, type Model } from "@oh-my-pi/pi-ai";
-import { callHostLlm, getHostLlmBackend } from "./llm-backends";
+import {
+	type Api,
+	type ApiKey,
+	type AssistantMessage,
+	completeSimple,
+	type FetchImpl,
+	type Model,
+	ProviderHttpError,
+	withAuth,
+} from "@oh-my-pi/pi-ai";
+import { type CompleteOptions, callHostLlm, getHostLlmBackend } from "./llm-backends";
 import {
 	getMnemopiRuntimeOptions,
 	isPiAiModel,
@@ -8,6 +17,10 @@ import {
 } from "./runtime-options";
 
 const ENV_MODEL_REPO = process.env.MNEMOPI_LLM_REPO ?? "";
+export interface RemoteLlmOptions {
+	fetch?: FetchImpl;
+}
+
 const ENV_MODEL_FILE = process.env.MNEMOPI_LLM_FILE ?? "";
 export const DEFAULT_MODEL_REPO =
 	ENV_MODEL_REPO !== "" && ENV_MODEL_FILE !== "" ? ENV_MODEL_REPO : "TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF";
@@ -105,7 +118,7 @@ function llmModelName(): string {
 	return env("MNEMOPI_LLM_MODEL") || "local";
 }
 
-function llmApiKey(): string {
+function llmApiKey(): ApiKey {
 	const active = activeLlmOptions();
 	if (active?.apiKey !== undefined) {
 		return active.apiKey;
@@ -309,30 +322,43 @@ export function llmAvailable(): boolean {
 	return llmEnabled() && llmBaseUrl() !== "";
 }
 
-export async function callRemoteLlm(prompt: string, temperature = 0.3): Promise<string | null> {
+export async function callRemoteLlm(
+	prompt: string,
+	temperature = 0.3,
+	options: RemoteLlmOptions = {},
+): Promise<string | null> {
 	const baseUrl = llmBaseUrl();
 	if (baseUrl === "") {
 		return null;
 	}
 
-	const headers: Record<string, string> = { "Content-Type": "application/json" };
-	const apiKey = llmApiKey();
-	if (apiKey !== "") {
-		headers.Authorization = `Bearer ${apiKey}`;
-	}
-
+	const body = JSON.stringify({
+		model: llmModelName(),
+		messages: [{ role: "user", content: prompt }],
+		max_tokens: llmMaxTokens(),
+		temperature,
+		stop: ["</s>", "<|user|>"],
+	});
+	const fetchImpl = options.fetch ?? fetch;
 	try {
-		const response = await fetch(`${baseUrl}/chat/completions`, {
-			method: "POST",
-			headers,
-			body: JSON.stringify({
-				model: llmModelName(),
-				messages: [{ role: "user", content: prompt }],
-				max_tokens: llmMaxTokens(),
-				temperature,
-				stop: ["</s>", "<|user|>"],
-			}),
-			signal: AbortSignal.timeout(60000),
+		// withAuth re-resolves the key on 401 (force-refresh, then sibling
+		// rotation) when the configured key is a resolver. An empty static key
+		// attempts without an Authorization header (local/proxy setups).
+		const response = await withAuth(llmApiKey(), async key => {
+			const headers: Record<string, string> = { "Content-Type": "application/json" };
+			if (key !== "") {
+				headers.Authorization = `Bearer ${key}`;
+			}
+			const res = await fetchImpl(`${baseUrl}/chat/completions`, {
+				method: "POST",
+				headers,
+				body,
+				signal: AbortSignal.timeout(60000),
+			});
+			if (res.status === 401) {
+				throw new ProviderHttpError("mnemopi remote LLM request unauthorized (401)", 401, { headers: res.headers });
+			}
+			return res;
 		});
 		if (!response.ok) {
 			return null;
@@ -355,7 +381,11 @@ export async function callLocalLlm(_prompt: string): Promise<string | null> {
 	return null;
 }
 
-async function summarizeChunk(memories: readonly string[], source = ""): Promise<string | null> {
+async function summarizeChunk(
+	memories: readonly string[],
+	source = "",
+	options: RemoteLlmOptions = {},
+): Promise<string | null> {
 	const hostPrompt = buildHostPrompt(memories, source);
 	const prompt = buildPrompt(memories, source);
 	if (configuredLlmWillHandleCall()) {
@@ -380,7 +410,7 @@ async function summarizeChunk(memories: readonly string[], source = ""): Promise
 	}
 
 	if (llmEnabled() && llmBaseUrl() !== "" && !envBool("MNEMOPI_FORCE_LOCAL", false)) {
-		const raw = await callRemoteLlm(prompt);
+		const raw = await callRemoteLlm(prompt, 0.3, options);
 		if (raw !== null) {
 			const cleaned = cleanOutput(raw);
 			return cleaned === "" ? null : cleaned;
@@ -395,7 +425,11 @@ async function summarizeChunk(memories: readonly string[], source = ""): Promise
 	return null;
 }
 
-export async function summarizeMemories(memories: readonly string[], source = ""): Promise<string | null> {
+export async function summarizeMemories(
+	memories: readonly string[],
+	source = "",
+	options: RemoteLlmOptions = {},
+): Promise<string | null> {
 	if (memories.length === 0) {
 		return null;
 	}
@@ -403,7 +437,7 @@ export async function summarizeMemories(memories: readonly string[], source = ""
 	const chunks = chunkMemoriesByBudget(memories, source);
 	const chunkSummaries: string[] = [];
 	for (const chunk of chunks) {
-		const summary = await summarizeChunk(chunk, source);
+		const summary = await summarizeChunk(chunk, source, options);
 		if (summary !== null) {
 			chunkSummaries.push(summary);
 		}
@@ -413,13 +447,17 @@ export async function summarizeMemories(memories: readonly string[], source = ""
 		return null;
 	}
 	if (chunkSummaries.length > 1) {
-		const final = await summarizeChunk(chunkSummaries, `${source} [chunked ${chunks.length} parts]`);
+		const final = await summarizeChunk(chunkSummaries, `${source} [chunked ${chunks.length} parts]`, options);
 		return final ?? chunkSummaries[0] ?? null;
 	}
 	return chunkSummaries[0] ?? null;
 }
 
-export async function complete(prompt: string, temperature = 0.3): Promise<string | null> {
+export async function complete(
+	prompt: string,
+	temperature = 0.3,
+	options: CompleteOptions = {},
+): Promise<string | null> {
 	if (configuredLlmWillHandleCall()) {
 		const raw = await callConfiguredCompletion(prompt, temperature, { maxTokens: llmMaxTokens() });
 		return raw === null ? null : cleanOutput(raw) || null;
@@ -429,7 +467,7 @@ export async function complete(prompt: string, temperature = 0.3): Promise<strin
 		return hostText;
 	}
 	if (llmEnabled() && llmBaseUrl() !== "" && !envBool("MNEMOPI_FORCE_LOCAL", false)) {
-		const remote = await callRemoteLlm(prompt, temperature);
+		const remote = await callRemoteLlm(prompt, temperature, options);
 		return remote === null ? null : cleanOutput(remote) || null;
 	}
 	return callLocalLlm(prompt);

@@ -1,49 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { formatFindGroupedOutput } from "../../src/tools/find";
-import { classifyGroupedLines, formatGroupedFiles, groupLineIndicesByBlank } from "../../src/tools/grouped-file-output";
-
-describe("formatFindGroupedOutput", () => {
-	it("folds a shared absolute prefix into one heading and nests the rest", () => {
-		const output = formatFindGroupedOutput([
-			"/Users/me/proj/shared/wasm/llvm.hpp",
-			"/Users/me/proj/shared/wasm/vm.hpp",
-			"/Users/me/proj/shared/xstd.hpp",
-			"/Users/me/proj/shared/apollo/details/hash.hpp",
-			"/Users/me/proj/flash/main.cpp",
-		]);
-
-		expect(output).toBe(
-			[
-				"# /Users/me/proj/",
-				"## shared/",
-				"xstd.hpp",
-				"### wasm/",
-				"llvm.hpp",
-				"vm.hpp",
-				"### apollo/details/",
-				"hash.hpp",
-				"## flash/",
-				"main.cpp",
-			].join("\n"),
-		);
-	});
-
-	it("lists a directory's own files before its subdirectories", () => {
-		const output = formatFindGroupedOutput(["pkg/sub/deep.txt", "pkg/top.txt"]);
-		// `top.txt` is a direct child of pkg; `sub/` is a subdirectory. Files first.
-		expect(output).toBe(["# pkg/", "top.txt", "## sub/", "deep.txt"].join("\n"));
-	});
-
-	it("emits a single root-level file with no directory heading", () => {
-		expect(formatFindGroupedOutput(["single.txt"])).toBe("single.txt");
-	});
-
-	it("keeps matched directories (trailing slash) as headings", () => {
-		expect(formatFindGroupedOutput(["alpha/tests/", "beta/tests/"])).toBe(
-			["# alpha/tests/", "# beta/tests/"].join("\n"),
-		);
-	});
-});
+import {
+	classifyGroupedLines,
+	formatGroupedFiles,
+	groupLineIndicesByBlank,
+} from "@oh-my-pi/pi-coding-agent/tools/grouped-file-output";
 
 describe("formatGroupedFiles", () => {
 	it("nests subdirectories with deeper headings and blank-separates top groups", () => {

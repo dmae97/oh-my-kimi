@@ -5,13 +5,8 @@ export { type AuthGatewayBootOptions, type ModelResolver, startAuthGateway } fro
 export * from "./auth-gateway/types";
 export * from "./auth-retry";
 export * from "./auth-storage";
-export * from "./effort";
-export * from "./model-cache";
-export * from "./model-manager";
-export * from "./model-thinking";
-export * from "./models";
+export * from "./errors";
 export * from "./provider-details";
-export * from "./provider-models";
 export * from "./providers/anthropic";
 export * from "./providers/anthropic-client";
 export * from "./providers/azure-openai-responses";
@@ -19,7 +14,6 @@ export type * from "./providers/cursor";
 export * from "./providers/gitlab-duo";
 export type * from "./providers/google";
 export type * from "./providers/google-gemini-cli";
-export * from "./providers/google-gemini-headers";
 export type * from "./providers/google-vertex";
 export * from "./providers/kimi";
 export * from "./providers/mock";
@@ -29,6 +23,7 @@ export * from "./providers/openai-completions";
 export * from "./providers/openai-responses";
 export * from "./providers/synthetic";
 export * from "./rate-limit-utils";
+export * from "./registry";
 export * from "./stream";
 export * from "./types";
 export * from "./usage";
@@ -39,17 +34,10 @@ export * from "./usage/google-antigravity";
 export * from "./usage/kimi";
 export * from "./usage/minimax-code";
 export * from "./usage/openai-codex";
+export * from "./usage/openai-codex-reset";
 export * from "./usage/zai";
 export * from "./utils/anthropic-auth";
-export * from "./utils/discovery";
 export * from "./utils/event-stream";
-export * from "./utils/oauth";
-export type {
-	OAuthCredentials,
-	OAuthProvider,
-	OAuthProviderId,
-	OAuthProviderInfo,
-} from "./utils/oauth/types";
 export * from "./utils/overflow";
 export * from "./utils/retry";
 export * from "./utils/schema";

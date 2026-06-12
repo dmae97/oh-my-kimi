@@ -5,7 +5,7 @@
  * cleaned content.
  */
 
-import { type AuthStorage, getEnvApiKey } from "@oh-my-pi/pi-ai";
+import { type AuthStorage, type FetchImpl, getEnvApiKey } from "@oh-my-pi/pi-ai";
 import type { SearchResponse, SearchSource } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
 import type { SearchParams } from "./base";
@@ -13,11 +13,13 @@ import { SearchProvider } from "./base";
 import { classifyProviderHttpError, withHardTimeout } from "./utils";
 
 const JINA_SEARCH_URL = "https://s.jina.ai";
+type SearchParamsWithFetch = SearchParams & { fetch?: FetchImpl };
 
 export interface JinaSearchParams {
 	query: string;
 	num_results?: number;
 	signal?: AbortSignal;
+	fetch?: FetchImpl;
 }
 
 interface JinaSearchResult {
@@ -34,9 +36,14 @@ export function findApiKey(): string | null {
 }
 
 /** Call Jina Reader search API. */
-async function callJinaSearch(apiKey: string, query: string, signal?: AbortSignal): Promise<JinaSearchResponse> {
+async function callJinaSearch(
+	apiKey: string,
+	query: string,
+	signal?: AbortSignal,
+	fetchImpl: FetchImpl = fetch,
+): Promise<JinaSearchResponse> {
 	const requestUrl = `${JINA_SEARCH_URL}/${encodeURIComponent(query)}`;
-	const response = await fetch(requestUrl, {
+	const response = await fetchImpl(requestUrl, {
 		headers: {
 			Accept: "application/json",
 			Authorization: `Bearer ${apiKey}`,
@@ -62,7 +69,7 @@ export async function searchJina(params: JinaSearchParams): Promise<SearchRespon
 		throw new Error("JINA_API_KEY not found. Set it in environment or .env file.");
 	}
 
-	const response = await callJinaSearch(apiKey, params.query, params.signal);
+	const response = await callJinaSearch(apiKey, params.query, params.signal, params.fetch);
 	const sources: SearchSource[] = [];
 
 	for (const result of response) {
@@ -91,11 +98,14 @@ export class JinaProvider extends SearchProvider {
 		return !!findApiKey();
 	}
 
-	search(params: SearchParams): Promise<SearchResponse> {
+	search(params: SearchParamsWithFetch): Promise<SearchResponse> {
+		const fetchImpl = params.fetch;
+
 		return searchJina({
 			query: params.query,
 			num_results: params.numSearchResults ?? params.limit,
 			signal: params.signal,
+			fetch: fetchImpl,
 		});
 	}
 }

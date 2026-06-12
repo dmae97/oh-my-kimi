@@ -6,6 +6,7 @@
  */
 import * as Diff from "diff";
 import { resolveToCwd } from "../tools/path-utils";
+import { type BlockContextSource, findBlockContextLines } from "../utils/block-context";
 import { DEFAULT_FUZZY_THRESHOLD, EditMatchError, findMatch } from "./modes/replace";
 import { adjustIndentation, normalizeToLF, stripBom } from "./normalize";
 import { readEditFileText } from "./read-file";
@@ -54,11 +55,186 @@ function formatNumberedDiffLine(prefix: "+" | "-" | " ", lineNum: number, conten
 	return `${prefix}${lineNum}|${content}`;
 }
 
+interface ParsedNumberedDiffRow {
+	prefix: "+" | "-" | " ";
+	lineNumber: number;
+	content: string;
+}
+
+function parseNumberedDiffRow(row: string): ParsedNumberedDiffRow | undefined {
+	const match = /^([+\- ])(\d+)\|(.*)$/s.exec(row);
+	if (!match) return undefined;
+	const prefix = match[1] as "+" | "-" | " ";
+	const lineNumber = Number.parseInt(match[2], 10);
+	if (!Number.isFinite(lineNumber)) return undefined;
+	return { prefix, lineNumber, content: match[3] ?? "" };
+}
+
+function isDiffChangeRow(row: string | undefined): boolean {
+	return row !== undefined && (row.startsWith("+") || row.startsWith("-"));
+}
+
+/** Blank row separating non-contiguous regions of a numbered diff. */
+const DIFF_GAP_ROW = "";
+
+/** Old-file line number of a source-visible row (`-` or context); `+`/gap/other rows yield undefined. */
+function parseSourceRowLineNumber(row: string): number | undefined {
+	const parsed = parseNumberedDiffRow(row);
+	return parsed === undefined || parsed.prefix === "+" ? undefined : parsed.lineNumber;
+}
+
+/**
+ * Drop gap rows that no longer separate anything. Context rows are inserted
+ * one at a time, each adding its own gap rows from a snapshot of the diff, so
+ * the raw result can contain adjacent gap rows, gap rows whose neighbors
+ * became contiguous after a later insert filled the hole, and gap rows at the
+ * diff edges. The sweep keeps a gap row only when it sits between two
+ * source-numbered rows (old-file coordinates — the same numbering the
+ * insertion gap test uses) that are actually non-contiguous, and never keeps
+ * two in a row.
+ */
+function normalizeDiffGapRows(rows: string[]): void {
+	const kept: string[] = [];
+	for (let i = 0; i < rows.length; i++) {
+		const row = rows[i];
+		if (row !== DIFF_GAP_ROW) {
+			kept.push(row);
+			continue;
+		}
+		if (kept.length === 0 || kept[kept.length - 1] === DIFF_GAP_ROW) continue;
+		let before: number | undefined;
+		for (let j = kept.length - 1; j >= 0 && before === undefined; j--) {
+			before = parseSourceRowLineNumber(kept[j]);
+		}
+		let after: number | undefined;
+		for (let j = i + 1; j < rows.length && after === undefined; j++) {
+			if (rows[j] === DIFF_GAP_ROW) continue;
+			after = parseSourceRowLineNumber(rows[j]);
+		}
+		if (before === undefined || after === undefined || after <= before + 1) continue;
+		kept.push(row);
+	}
+	if (kept.length !== rows.length) rows.splice(0, rows.length, ...kept);
+}
+
+function adjustedContextInsertIndex(rows: readonly string[], index: number): number {
+	let start = index;
+	while (start > 0 && isDiffChangeRow(rows[start - 1])) start--;
+	let end = index;
+	while (end < rows.length && isDiffChangeRow(rows[end])) end++;
+	return index > start && index < end ? end : index;
+}
+
+function insertBracketContextRows(
+	rows: string[],
+	contextLines: ReadonlyMap<number, string>,
+	seenRows: Set<string>,
+): void {
+	const context = [...contextLines].sort(([left], [right]) => left - right);
+	for (const [lineNumber, text] of context) {
+		const row = formatNumberedDiffLine(" ", lineNumber, text);
+		if (seenRows.has(row)) continue;
+
+		let insertIndex = rows.length;
+		let previousSourceLine: number | undefined;
+		let nextSourceLine: number | undefined;
+		for (let i = 0; i < rows.length; i++) {
+			const parsed = parseNumberedDiffRow(rows[i]);
+			if (!parsed || parsed.prefix === "+") continue;
+			if (parsed.lineNumber < lineNumber) {
+				previousSourceLine = parsed.lineNumber;
+				continue;
+			}
+			nextSourceLine = parsed.lineNumber;
+			insertIndex = i;
+			break;
+		}
+
+		const chunk: string[] = [];
+		if (previousSourceLine !== undefined && lineNumber > previousSourceLine + 1) chunk.push(DIFF_GAP_ROW);
+		chunk.push(row);
+		if (nextSourceLine !== undefined && nextSourceLine > lineNumber + 1) chunk.push(DIFF_GAP_ROW);
+
+		const adjustedIndex = adjustedContextInsertIndex(rows, insertIndex);
+		rows.splice(adjustedIndex, 0, ...chunk);
+		seenRows.add(row);
+	}
+}
+
+/**
+ * Insert off-window block-boundary rows (enclosing header, matching closing
+ * bracket, …) into a numbered diff. Context rows carry pre-edit line numbers —
+ * the renumbering contract of `buildCompactDiffPreview` — so boundary lines
+ * discovered in the new file are translated back to their pre-edit numbers
+ * and merged with the old-file pass before a single insertion sweep. Without
+ * the translation, a context line sitting in a net-offset region would be
+ * re-inserted under its post-edit number: duplicated, out of order, and
+ * renumbered incorrectly by the preview.
+ */
+function addMatchingBracketContextRows(
+	rows: string[],
+	oldLines: readonly string[],
+	newLines: readonly string[],
+	source: BlockContextSource,
+): void {
+	const oldVisible: number[] = [];
+	const newVisible: number[] = [];
+	const seenRows = new Set(rows);
+	// Change positions in new-file coordinates, used to translate an unchanged
+	// new-file line number back to its pre-edit equivalent.
+	const changes: { newPos: number; delta: 1 | -1 }[] = [];
+	let offset = 0;
+
+	for (const row of rows) {
+		const parsed = parseNumberedDiffRow(row);
+		if (!parsed) continue;
+		switch (parsed.prefix) {
+			case "-":
+				oldVisible.push(parsed.lineNumber);
+				changes.push({ newPos: parsed.lineNumber + offset, delta: -1 });
+				offset--;
+				break;
+			case "+":
+				newVisible.push(parsed.lineNumber);
+				changes.push({ newPos: parsed.lineNumber, delta: 1 });
+				offset++;
+				break;
+			default:
+				// Context rows are visible in BOTH files: pre-edit number as
+				// written, post-edit number shifted by the net change so far.
+				oldVisible.push(parsed.lineNumber);
+				newVisible.push(parsed.lineNumber + offset);
+				break;
+		}
+	}
+
+	const toOldLineNumber = (newLineNumber: number): number => {
+		let shift = 0;
+		for (const change of changes) {
+			if (change.newPos <= newLineNumber) shift += change.delta;
+		}
+		return newLineNumber - shift;
+	};
+
+	const contextRows = findBlockContextLines(oldLines, oldVisible, source);
+	for (const [lineNumber, text] of findBlockContextLines(newLines, newVisible, source)) {
+		const oldLineNumber = toOldLineNumber(lineNumber);
+		if (!contextRows.has(oldLineNumber)) contextRows.set(oldLineNumber, text);
+	}
+	insertBracketContextRows(rows, contextRows, seenRows);
+	normalizeDiffGapRows(rows);
+}
+
 /**
  * Generate a unified diff string with line numbers and context.
  * Returns both the diff string and the first changed line number (in the new file).
  */
-export function generateDiffString(oldContent: string, newContent: string, contextLines = 2): DiffResult {
+export function generateDiffString(
+	oldContent: string,
+	newContent: string,
+	contextLines = 2,
+	source: BlockContextSource = {},
+): DiffResult {
 	const parts = Diff.diffLines(oldContent, newContent);
 	const output: string[] = [];
 
@@ -133,8 +309,10 @@ export function generateDiffString(oldContent: string, newContent: string, conte
 					newLineNum++;
 				}
 
+				// Mid-skip placeholder is omitted too: the jump between the trailing
+				// number of the leading context and the leading number of the
+				// trailing context conveys the gap, just like leading/trailing skips.
 				if (middleSkip > 0) {
-					output.push(formatNumberedDiffLine(" ", oldLineNum, "..."));
 					oldLineNum += middleSkip;
 					newLineNum += middleSkip;
 					for (const line of linesToShow.slice(firstChunkLength)) {
@@ -159,6 +337,8 @@ export function generateDiffString(oldContent: string, newContent: string, conte
 			lastWasChange = false;
 		}
 	}
+
+	addMatchingBracketContextRows(output, oldContent.split("\n"), newContent.split("\n"), source);
 
 	return { diff: output.join("\n"), firstChangedLine };
 }
@@ -187,7 +367,12 @@ export interface ReplaceResult {
  * Generate a unified diff string without file headers.
  * Returns both the diff string and the first changed line number (in the new file).
  */
-export function generateUnifiedDiffString(oldContent: string, newContent: string, contextLines = 3): DiffResult {
+export function generateUnifiedDiffString(
+	oldContent: string,
+	newContent: string,
+	contextLines = 3,
+	source: BlockContextSource = {},
+): DiffResult {
 	const patch = Diff.structuredPatch("", "", oldContent, newContent, "", "", { context: contextLines });
 	const output: string[] = [];
 	let firstChangedLine: number | undefined;
@@ -217,6 +402,8 @@ export function generateUnifiedDiffString(oldContent: string, newContent: string
 			output.push(line);
 		}
 	}
+
+	addMatchingBracketContextRows(output, oldContent.split("\n"), newContent.split("\n"), source);
 
 	return { diff: output.join("\n"), firstChangedLine };
 }
@@ -805,7 +992,7 @@ export async function computeEditDiff(
 			};
 		}
 
-		return generateDiffString(normalizedContent, result.content);
+		return generateDiffString(normalizedContent, result.content, undefined, { path });
 	} catch (err) {
 		return { error: err instanceof Error ? err.message : String(err) };
 	}

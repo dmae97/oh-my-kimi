@@ -1,13 +1,7 @@
-import { afterEach, describe, expect, it } from "bun:test";
-import { getBundledModel } from "../src/models";
-import { streamOpenAICompletions } from "../src/providers/openai-completions";
-import type { Context, Model } from "../src/types";
-
-const originalFetch = global.fetch;
-
-afterEach(() => {
-	global.fetch = originalFetch;
-});
+import { describe, expect, it } from "bun:test";
+import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
+import type { Context, FetchImpl, Model } from "@oh-my-pi/pi-ai/types";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 
 function createSseResponse(events: unknown[]): Response {
 	const payload = `${events
@@ -19,11 +13,11 @@ function createSseResponse(events: unknown[]): Response {
 	});
 }
 
-function createMockFetch(events: unknown[]): typeof fetch {
+function createMockFetch(events: unknown[]): FetchImpl {
 	async function mockFetch(_input: string | URL | Request, _init?: RequestInit): Promise<Response> {
 		return createSseResponse(events);
 	}
-	return Object.assign(mockFetch, { preconnect: originalFetch.preconnect });
+	return Object.assign(mockFetch, { preconnect: fetch.preconnect });
 }
 
 function baseContext(): Context {
@@ -44,7 +38,7 @@ describe("issue #959 - deepseek chat-template token leakage", () => {
 	};
 
 	it("strips leaked deepseek chat-template markers from visible text for deepseek providers", async () => {
-		global.fetch = createMockFetch([
+		const fetchMock = createMockFetch([
 			{
 				id: "chatcmpl-deepseek-1",
 				object: "chat.completion.chunk",
@@ -76,7 +70,10 @@ describe("issue #959 - deepseek chat-template token leakage", () => {
 			"[DONE]",
 		]);
 
-		const result = await streamOpenAICompletions(model, baseContext(), { apiKey: "test-key" }).result();
+		const result = await streamOpenAICompletions(model, baseContext(), {
+			apiKey: "test-key",
+			fetch: fetchMock,
+		}).result();
 		const text = result.content
 			.filter(block => block.type === "text")
 			.map(block => (block as { text: string }).text)
@@ -87,7 +84,7 @@ describe("issue #959 - deepseek chat-template token leakage", () => {
 	});
 
 	it("holds partial deepseek markers across chunks before stripping them", async () => {
-		global.fetch = createMockFetch([
+		const fetchMock = createMockFetch([
 			{
 				id: "chatcmpl-deepseek-2",
 				object: "chat.completion.chunk",
@@ -112,7 +109,10 @@ describe("issue #959 - deepseek chat-template token leakage", () => {
 			"[DONE]",
 		]);
 
-		const result = await streamOpenAICompletions(model, baseContext(), { apiKey: "test-key" }).result();
+		const result = await streamOpenAICompletions(model, baseContext(), {
+			apiKey: "test-key",
+			fetch: fetchMock,
+		}).result();
 		const text = result.content
 			.filter(block => block.type === "text")
 			.map(block => (block as { text: string }).text)

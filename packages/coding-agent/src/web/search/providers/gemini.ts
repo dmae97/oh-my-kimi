@@ -8,12 +8,12 @@
  * sibling SQLite store and never POSTs the broker sentinel to a Google token
  * endpoint.
  */
+import { type AuthStorage, type FetchImpl, type OAuthAccess, withOAuthAccess } from "@oh-my-pi/pi-ai";
 import {
 	ANTIGRAVITY_SYSTEM_INSTRUCTION,
-	type AuthStorage,
 	getAntigravityUserAgent,
 	getGeminiCliHeaders,
-} from "@oh-my-pi/pi-ai";
+} from "@oh-my-pi/pi-catalog/wire/gemini-headers";
 import { fetchWithRetry } from "@oh-my-pi/pi-utils";
 
 import type { SearchCitation, SearchResponse, SearchSource } from "../../../web/search/types";
@@ -51,6 +51,7 @@ export interface GeminiSearchParams extends GeminiToolParams {
 	signal?: AbortSignal;
 	authStorage: AuthStorage;
 	sessionId?: string;
+	fetch?: FetchImpl;
 }
 
 export function buildGeminiRequestTools(params: GeminiToolParams): Array<Record<string, Record<string, unknown>>> {
@@ -71,25 +72,29 @@ interface GeminiAuth {
 	isAntigravity: boolean;
 }
 
+/** First configured Gemini OAuth provider plus its pre-resolved access. */
+interface GeminiAuthSeed {
+	provider: GeminiProviderId;
+	access: OAuthAccess;
+	projectId: string;
+}
+
 /**
  * Walks the configured Gemini OAuth providers in deterministic order and
  * returns the first one that yields a usable access token + projectId via
  * {@link AuthStorage.getOAuthAccess}. AuthStorage handles refresh + broker
  * routing internally; this helper never touches refresh tokens directly.
+ * The resolved access seeds `withOAuthAccess` so the happy path resolves once.
  */
 export async function findGeminiAuth(
 	authStorage: AuthStorage,
 	sessionId: string | undefined,
 	signal: AbortSignal | undefined,
-): Promise<GeminiAuth | null> {
+): Promise<GeminiAuthSeed | null> {
 	for (const provider of GEMINI_PROVIDERS) {
 		const access = await authStorage.getOAuthAccess(provider, sessionId, { signal });
 		if (!access?.accessToken || !access.projectId) continue;
-		return {
-			accessToken: access.accessToken,
-			projectId: access.projectId,
-			isAntigravity: provider === "google-antigravity",
-		};
+		return { provider, access, projectId: access.projectId };
 	}
 	return null;
 }
@@ -156,6 +161,7 @@ async function callGeminiSearch(
 	maxOutputTokens: number | undefined,
 	temperature: number | undefined,
 	toolParams: GeminiToolParams,
+	fetchImpl: FetchImpl | undefined,
 	signal: AbortSignal | undefined,
 ): Promise<{
 	answer: string;
@@ -237,6 +243,7 @@ async function callGeminiSearch(
 
 	const response = await fetchWithRetry(urlFor, {
 		...buildInit(),
+		fetch: fetchImpl,
 		maxAttempts: MAX_RETRIES + 1,
 		defaultDelayMs: attempt => BASE_DELAY_MS * 2 ** attempt,
 		maxDelayMs: RATE_LIMIT_BUDGET_MS,
@@ -387,25 +394,42 @@ async function callGeminiSearch(
  * Executes a web search using Google Gemini with Google Search grounding.
  */
 export async function searchGemini(params: GeminiSearchParams): Promise<SearchResponse> {
-	const auth = await findGeminiAuth(params.authStorage, params.sessionId, params.signal);
-	if (!auth) {
+	const seed = await findGeminiAuth(params.authStorage, params.sessionId, params.signal);
+	if (!seed) {
 		throw new Error(
 			"No Gemini OAuth credentials found. Login with 'omp /login google-gemini-cli' or 'omp /login google-antigravity' to enable Gemini web search.",
 		);
 	}
 
-	const result = await callGeminiSearch(
-		auth,
-		params.query,
-		params.system_prompt,
-		params.max_output_tokens,
-		params.temperature,
-		{
-			google_search: params.google_search,
-			code_execution: params.code_execution,
-			url_context: params.url_context,
-		},
-		params.signal,
+	const isAntigravity = seed.provider === "google-antigravity";
+	const result = await withOAuthAccess(
+		params.authStorage,
+		seed.provider,
+		access =>
+			// Derive bearer + projectId from the access this attempt received; a
+			// re-resolved access may omit projectId, in which case the seed's
+			// project is still the right tenant for the credential. The
+			// `fetchWithRetry` transport backoff stays INSIDE this attempt — auth
+			// retry wraps transport retry.
+			callGeminiSearch(
+				{
+					accessToken: access.accessToken,
+					projectId: access.projectId ?? seed.projectId,
+					isAntigravity,
+				},
+				params.query,
+				params.system_prompt,
+				params.max_output_tokens,
+				params.temperature,
+				{
+					google_search: params.google_search,
+					code_execution: params.code_execution,
+					url_context: params.url_context,
+				},
+				params.fetch,
+				params.signal,
+			),
+		{ sessionId: params.sessionId, signal: params.signal, seed: seed.access },
 	);
 
 	let sources = result.sources;
@@ -450,6 +474,7 @@ export class GeminiProvider extends SearchProvider {
 			signal: params.signal,
 			authStorage: params.authStorage,
 			sessionId: params.sessionId,
+			fetch: params.fetch,
 		});
 	}
 }

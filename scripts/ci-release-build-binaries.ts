@@ -14,20 +14,10 @@ interface BinaryTarget {
 const repoRoot = path.join(import.meta.dir, "..");
 const binariesDir = path.join(repoRoot, "packages", "coding-agent", "binaries");
 const entrypoint = "./packages/coding-agent/src/cli.ts";
-// Worker entrypoints. Bun's `--compile` static analyzer discovers the
-// literal in `new Worker("…", …)` at each spawn site, but only actually
-// emits the worker into the bunfs root when it is also listed here as an
-// explicit additional entry. Paths are repo-root-relative (matching
-// `--root .` below) so the workers land at
-// `/$bunfs/root/packages/<pkg>/src/<worker>.js`, which is exactly what the
-// literals at the spawn sites resolve to. Keep this in sync with the dev
-// script at `packages/coding-agent/scripts/build-binary.ts`; the
-// `issue-1150-repro` test pins both halves of the contract.
-const workerEntrypoints = [
-	"./packages/stats/src/sync-worker.ts",
-	"./packages/coding-agent/src/tools/browser/tab-worker-entry.ts",
-	"./packages/coding-agent/src/eval/js/worker-entry.ts",
-];
+// Legacy extension shims and package barrels in the build argv below are still
+// explicit `--compile` entrypoints because they are reached via computed bunfs
+// paths. Worker threads spawn `new Worker(Bun.main, { argv })` — they re-enter
+// the binary's own entry module — so no separate worker modules are compiled.
 const isDryRun = process.argv.includes("--dry-run");
 const targets: BinaryTarget[] = [
 	{
@@ -120,7 +110,7 @@ async function buildBinary(target: BinaryTarget): Promise<void> {
 	console.log(`Building ${target.outfile}...`);
 	await embedNative(target);
 	if (isDryRun) {
-		console.log(`DRY RUN bun build --compile --no-compile-autoload-bunfig --no-compile-autoload-dotenv --no-compile-autoload-tsconfig --no-compile-autoload-package-json --keep-names --define process.env.PI_COMPILED="true" --root . --external mupdf --target=${target.target} ${entrypoint} ${workerEntrypoints.join(" ")} --outfile ${target.outfile}`);
+		console.log(`DRY RUN bun build --compile --no-compile-autoload-bunfig --no-compile-autoload-dotenv --no-compile-autoload-tsconfig --no-compile-autoload-package-json --keep-names --define process.env.PI_COMPILED="true" --root . --external mupdf --target=${target.target} ${entrypoint} --outfile ${target.outfile}`);
 		return;
 	}
 
@@ -146,7 +136,6 @@ async function buildBinary(target: BinaryTarget): Promise<void> {
 			"--target",
 			target.target,
 			entrypoint,
-			...workerEntrypoints,
 			"--outfile",
 			target.outfile,
 		],

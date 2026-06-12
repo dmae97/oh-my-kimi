@@ -602,7 +602,7 @@ export class DebugLogViewerComponent implements Component {
 		// no cached child state
 	}
 
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		this.#lastRenderWidth = Math.max(20, width);
 		this.#ensureCursorVisible();
 

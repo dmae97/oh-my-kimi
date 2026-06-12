@@ -45,7 +45,16 @@ function createInitialRenderHarness(): { ctx: InteractiveModeContext; helpers: U
 		session: {
 			retryAttempt: 0,
 			getToolByName: () => undefined,
+			buildTranscriptSessionContext: () => buildSessionContext([]),
+			sessionManager: {
+				buildSessionContext: () => buildSessionContext([]),
+				getEntries: () => [],
+			},
 		},
+		get viewSession() {
+			return (this as typeof ctx).session;
+		},
+		clearTransientSessionUi: () => {},
 		toolOutputExpanded: false,
 		hideThinkingBlock: false,
 	} as unknown as InteractiveModeContext;
@@ -115,7 +124,7 @@ describe("InteractiveMode.showStatus", () => {
 		const { ctx, helpers } = createInitialRenderHarness();
 
 		helpers.showWarning("startup notification probe");
-		helpers.renderInitialMessages(undefined, { preserveExistingChat: true });
+		helpers.renderInitialMessages({ preserveExistingChat: true });
 
 		expect(renderContainer(ctx.chatContainer)).toContain("startup notification probe");
 	});

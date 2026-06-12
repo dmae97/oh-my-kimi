@@ -51,6 +51,8 @@ export interface CompactionSummaryMessage {
 	shortSummary?: string;
 	tokensBefore: number;
 	providerPayload?: ProviderPayload;
+	/** Snapcompact frames archived by this compaction; appended as image blocks after the summary text. */
+	images?: ImageContent[];
 	timestamp: number;
 }
 
@@ -98,6 +100,7 @@ export function createCompactionSummaryMessage(
 	timestamp: string,
 	shortSummary?: string,
 	providerPayload?: ProviderPayload,
+	images?: ImageContent[],
 ): CompactionSummaryMessage {
 	return {
 		role: "compactionSummary",
@@ -105,6 +108,7 @@ export function createCompactionSummaryMessage(
 		shortSummary,
 		tokensBefore,
 		providerPayload,
+		images: images && images.length > 0 ? images : undefined,
 		timestamp: new Date(timestamp).getTime(),
 	};
 }
@@ -138,6 +142,79 @@ function isCoreCompactionMessage(message: AgentMessage): message is AgentMessage
 }
 
 /**
+ * Transform a single core-domain agent message to its LLM form; `undefined`
+ * drops it from the provider request.
+ *
+ * Single source of truth for the core roles (user/developer/assistant/
+ * toolResult) and the compaction messages owned by this package. Embedders
+ * with their own app messages (e.g. the coding agent) handle their custom
+ * roles and delegate every core role here — duplicating these cases is how
+ * snapcompact frames once silently fell off the provider request.
+ */
+export function convertMessageToLlm(message: AgentMessage): Message | undefined {
+	if (isCoreCompactionMessage(message)) {
+		switch (message.role) {
+			case "custom":
+			case "hookMessage": {
+				const content =
+					typeof message.content === "string"
+						? [{ type: "text" as const, text: message.content }]
+						: message.content;
+				return {
+					role: "developer",
+					content,
+					attribution: message.attribution,
+					timestamp: message.timestamp,
+				};
+			}
+			case "branchSummary":
+				return {
+					role: "user",
+					content: [
+						{
+							type: "text" as const,
+							text: renderBranchSummaryContext(message.summary),
+						},
+					],
+					attribution: "agent",
+					timestamp: message.timestamp,
+				};
+			case "compactionSummary":
+				return {
+					role: "user",
+					content: [
+						{
+							type: "text" as const,
+							text: renderCompactionSummaryContext(message.summary),
+						},
+						...(message.images ?? []),
+					],
+					attribution: "agent",
+					providerPayload: message.providerPayload,
+					timestamp: message.timestamp,
+				};
+		}
+	}
+
+	switch (message.role) {
+		case "user":
+			return { ...message, attribution: message.attribution ?? "user" };
+		case "developer":
+			return { ...message, attribution: message.attribution ?? "agent" };
+		case "assistant":
+			return message as AssistantMessage;
+		case "toolResult":
+			return {
+				...message,
+				content: getPrunedToolResultContent(message as ToolResultMessage),
+				attribution: message.attribution ?? "agent",
+			};
+		default:
+			return undefined;
+	}
+}
+
+/**
  * Default compaction-domain transformer.
  *
  * Embedders with their own app messages should pass a richer transformer through
@@ -145,68 +222,5 @@ function isCoreCompactionMessage(message: AgentMessage): message is AgentMessage
  * core LLM roles and the compaction messages owned by this package.
  */
 export function defaultConvertToLlm(messages: AgentMessage[]): Message[] {
-	return messages
-		.map((message): Message | undefined => {
-			if (isCoreCompactionMessage(message)) {
-				switch (message.role) {
-					case "custom":
-					case "hookMessage": {
-						const content =
-							typeof message.content === "string"
-								? [{ type: "text" as const, text: message.content }]
-								: message.content;
-						return {
-							role: "user",
-							content,
-							attribution: message.attribution,
-							timestamp: message.timestamp,
-						};
-					}
-					case "branchSummary":
-						return {
-							role: "user",
-							content: [
-								{
-									type: "text" as const,
-									text: renderBranchSummaryContext(message.summary),
-								},
-							],
-							attribution: "agent",
-							timestamp: message.timestamp,
-						};
-					case "compactionSummary":
-						return {
-							role: "user",
-							content: [
-								{
-									type: "text" as const,
-									text: renderCompactionSummaryContext(message.summary),
-								},
-							],
-							attribution: "agent",
-							providerPayload: message.providerPayload,
-							timestamp: message.timestamp,
-						};
-				}
-			}
-
-			switch (message.role) {
-				case "user":
-					return { ...message, attribution: message.attribution ?? "user" };
-				case "developer":
-					return { ...message, attribution: message.attribution ?? "agent" };
-				case "assistant":
-					return message as AssistantMessage;
-				case "toolResult":
-					return {
-						...message,
-						content: getPrunedToolResultContent(message as ToolResultMessage),
-						attribution: message.attribution ?? "agent",
-					};
-				default:
-					return undefined;
-			}
-		})
-		.filter(message => message !== undefined);
+	return messages.map(convertMessageToLlm).filter(message => message !== undefined);
 }
-export const convertToLlm = defaultConvertToLlm;

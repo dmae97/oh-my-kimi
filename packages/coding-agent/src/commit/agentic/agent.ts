@@ -170,6 +170,7 @@ export async function runCommitAgentSession(input: CommitAgentInput): Promise<Co
 			await session.prompt(reminder, {
 				attribution: "agent",
 				expandPromptTemplates: false,
+				synthetic: true,
 			});
 		}
 
@@ -212,7 +213,7 @@ function writeAssistantMessage(message: string): void {
 	}
 }
 
-function renderMarkdownLines(message: string): string[] {
+function renderMarkdownLines(message: string): readonly string[] {
 	const width = Math.max(40, process.stdout.columns ?? 100);
 	const markdown = new Markdown(message, 0, 0, getMarkdownTheme());
 	return markdown.render(width);

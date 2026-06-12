@@ -1,16 +1,26 @@
 /**
- * AgentRegistry - Process-global registry of live AgentSession instances.
+ * AgentRegistry - Process-global registry of agents (the main session plus
+ * every subagent), keyed by stable id.
  *
- * Tracks every alive agent (the main session plus every subagent) so the
- * `irc` tool can address peers by id. Sessions are registered explicitly at
- * creation and removed when the owner releases them.
+ * Tracks each agent's status and (when live) its AgentSession so peers can be
+ * addressed by id (`irc`, `task resume`, `history://`). Sessions are
+ * registered explicitly at creation; finished agents stay registered as
+ * `idle` (live) or `parked` (session disposed, ref + sessionFile retained for
+ * revival) and are only removed on explicit release/teardown.
  */
 
 import type { AgentSession } from "../session/agent-session";
 
 export const MAIN_AGENT_ID = "Main";
 
-export type AgentStatus = "running" | "idle" | "completed" | "aborted";
+/**
+ * - `running`: a turn is in flight.
+ * - `idle`: live AgentSession in memory, awaiting work. Finished agents are
+ *   `idle`, not removed.
+ * - `parked`: session disposed; AgentRef + sessionFile retained, revivable.
+ * - `aborted`: hard-killed, terminal.
+ */
+export type AgentStatus = "running" | "idle" | "parked" | "aborted";
 export type AgentKind = "main" | "sub";
 
 export interface AgentRef {
@@ -19,6 +29,7 @@ export interface AgentRef {
 	kind: AgentKind;
 	parentId?: string;
 	status: AgentStatus;
+	/** Null exactly when parked/aborted. */
 	session: AgentSession | null;
 	sessionFile: string | null;
 	createdAt: number;

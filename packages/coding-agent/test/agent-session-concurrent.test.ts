@@ -8,9 +8,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
 import { Agent, AgentBusyError, type AgentTool } from "@oh-my-pi/pi-agent-core";
-import { type AssistantMessage, getBundledModel, type Message, type ToolCall } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, Message, ToolCall } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async";
 import type { Rule } from "@oh-my-pi/pi-coding-agent/capability/rule";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -226,6 +227,119 @@ describe("AgentSession concurrent prompt guard", () => {
 		expect(session.getQueuedMessages()).toEqual({ steering: [], followUp: [] });
 	});
 
+	it("delivers queued steering after interrupting mid-tool execution (queue survives external abort)", async () => {
+		// Regression: pressing Enter with a queued steer while a tool was running
+		// aborted the run, but the post-abort steering poll inside executeToolCalls
+		// drained the queue into the dying run — the message landed in history and
+		// interruptAndFlushQueuedMessages saw an empty queue, so it never resumed.
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const callMessages: Message[][] = [];
+		let toolStarted = false;
+
+		const blockingTool: AgentTool = {
+			name: "mock_blocker",
+			label: "Mock Blocker",
+			description: "Blocks until aborted",
+			parameters: z.object({}),
+			execute: async (_id, _args, signal) => {
+				toolStarted = true;
+				const { promise, resolve } = Promise.withResolvers<void>();
+				if (signal?.aborted) resolve();
+				else signal?.addEventListener("abort", () => resolve(), { once: true });
+				await promise;
+				return { content: [{ type: "text" as const, text: "tool aborted" }] };
+			},
+		};
+
+		const toolCallContent: ToolCall = {
+			type: "toolCall",
+			id: "call_steer_flush_001",
+			name: "mock_blocker",
+			arguments: {},
+		};
+
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [blockingTool] },
+			convertToLlm,
+			streamFn: (_model, context, options) => {
+				const callIndex = callMessages.length;
+				callMessages.push([...context.messages]);
+				const stream = new AssistantMessageEventStream();
+				const signal = options?.signal;
+				queueMicrotask(() => {
+					if (signal?.aborted) {
+						// Post-abort model call inside the dying run.
+						stream.push({ type: "error", reason: "aborted", error: createAssistantMessage("Interrupted") });
+						return;
+					}
+					if (callIndex === 0) {
+						const partial: AssistantMessage = {
+							...createAssistantMessage(""),
+							content: [toolCallContent],
+							stopReason: "toolUse",
+						};
+						stream.push({ type: "start", partial });
+						stream.push({ type: "toolcall_start", contentIndex: 0, partial });
+						stream.push({ type: "toolcall_end", contentIndex: 0, toolCall: toolCallContent, partial });
+						stream.push({ type: "done", reason: "toolUse", message: partial });
+						return;
+					}
+					const done = createAssistantMessage("Handled steer");
+					stream.push({ type: "start", partial: done });
+					stream.push({ type: "done", reason: "stop", message: done });
+					signal?.addEventListener(
+						"abort",
+						() => {
+							stream.push({ type: "error", reason: "aborted", error: createAssistantMessage("Interrupted") });
+						},
+						{ once: true },
+					);
+				});
+				return stream;
+			},
+		});
+
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated();
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth-steer-tool-abort.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models-steer-tool-abort.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		session = new AgentSession({
+			agent,
+			sessionManager,
+			settings,
+			modelRegistry,
+		});
+
+		const firstPrompt = session.prompt("First message").catch(() => {});
+		await waitFor(() => toolStarted);
+
+		await session.steer("Send this now");
+		expect(session.getQueuedMessages().steering).toEqual(["Send this now"]);
+
+		await session.interruptAndFlushQueuedMessages({ reason: "Interrupted by user" });
+		await firstPrompt;
+
+		// The resumed run's model call must carry the steer message.
+		const lastCall = callMessages[callMessages.length - 1];
+		expect(
+			lastCall?.some(message => {
+				if (typeof message.content === "string") return message.content.includes("Send this now");
+				return message.content.some(content => content.type === "text" && content.text.includes("Send this now"));
+			}),
+		).toBe(true);
+
+		// The agent actually resumed and produced a response after the steer.
+		const lastAssistant = [...agent.state.messages]
+			.reverse()
+			.find((m): m is AssistantMessage => m.role === "assistant");
+		expect(lastAssistant?.content).toEqual([{ type: "text", text: "Handled steer" }]);
+		expect(session.getQueuedMessages()).toEqual({ steering: [], followUp: [] });
+	});
+
 	it("should allow followUp() while streaming", async () => {
 		await createSession();
 
@@ -353,7 +467,7 @@ describe("AgentSession concurrent prompt guard", () => {
 		expect(session.isStreaming).toBe(false);
 
 		// Second prompt should work
-		await expect(session.prompt("Second message")).resolves.toBeUndefined();
+		await expect(session.prompt("Second message")).resolves.toBe(true);
 	});
 	it("queues extension follow-up user messages on an idle session without starting a turn", async () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;

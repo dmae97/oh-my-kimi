@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { type RequestBody, transformRequestBody } from "@oh-my-pi/pi-ai/providers/openai-codex/request-transformer";
-import { parseCodexError } from "@oh-my-pi/pi-ai/providers/openai-codex/response-handler";
+import { CodexApiError, parseCodexError } from "@oh-my-pi/pi-ai/providers/openai-codex/response-handler";
 import { convertOpenAICodexResponsesTools } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import type { Tool } from "@oh-my-pi/pi-ai/types";
 import { createCodexModel } from "./helpers";
@@ -125,6 +125,24 @@ describe("openai-codex orphan tool-call repair", () => {
 		expect(output).toBeDefined();
 		expect(output?.output as string).toMatch(/interrupted/i);
 	});
+
+	it("folds an orphan custom_tool_call_output into an assistant message", async () => {
+		const body: RequestBody = {
+			model: "gpt-5.1-codex",
+			input: [
+				{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] },
+				{ type: "custom_tool_call_output", call_id: "call_custom_orphan", name: "apply_patch", output: "Done!" },
+			],
+		};
+
+		const transformed = await transformRequestBody(body, createCodexModel(body.model), {});
+		const input = transformed.input || [];
+
+		expect(input.some(item => item.type === "custom_tool_call_output")).toBe(false);
+		const note = input.find(item => item.type === "message" && item.role === "assistant");
+		expect(note?.content).toMatch(/call_custom_orphan/);
+		expect(note?.content).toMatch(/Done!/);
+	});
 });
 
 describe("openai-codex reasoning effort validation", () => {
@@ -168,5 +186,21 @@ describe("openai-codex error parsing", () => {
 		const info = await parseCodexError(response);
 		expect(info.friendlyMessage?.toLowerCase()).toContain("usage limit");
 		expect(info.rateLimits?.primary?.used_percent).toBe(99);
+	});
+
+	it("CodexApiError carries status/headers/code for structural retry classification", async () => {
+		const response = new Response(JSON.stringify({ error: { code: "rate_limit_exceeded", message: "slow down" } }), {
+			status: 429,
+			headers: { "retry-after": "7" },
+		});
+
+		const error = await CodexApiError.fromResponse(response);
+		// Downstream reads these structurally: extractHttpStatusFromError (.status),
+		// getHeadersFromError → retry-after extraction (.headers), copilot/auth
+		// retry policies (.code). The message is the friendly text, not raw JSON.
+		expect(error.status).toBe(429);
+		expect(error.code).toBe("rate_limit_exceeded");
+		expect(error.headers?.get("retry-after")).toBe("7");
+		expect(error.message).toContain("rate limit exceeded");
 	});
 });

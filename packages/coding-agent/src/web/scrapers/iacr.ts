@@ -1,4 +1,3 @@
-import { parseHTML } from "linkedom";
 import type { RenderResult, SpecialHandler } from "./types";
 import { buildResult, loadPage } from "./types";
 import { convertWithMarkit, fetchBinary } from "./utils";
@@ -30,6 +29,7 @@ export const handleIacr: SpecialHandler = async (
 
 		if (!result.ok) return null;
 
+		const { parseHTML } = await import("linkedom");
 		const doc = parseHTML(result.content).document;
 
 		// Extract metadata from the page

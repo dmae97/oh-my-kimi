@@ -4,6 +4,7 @@
 	"name": "@oh-my-pi/typescript-edit-benchmark",
 	"version": "0.0.1",
 	"description": "Edit benchmark suite using TypeScript source code mutations",
+	"homepage": "https://omp.sh",
 	"author": "Can Boluk",
 	"license": "MIT",
 	"repository": {
@@ -12,6 +13,17 @@
 		"directory": "packages/typescript-edit-benchmark"
 	},
 	"main": "./src/index.ts",
+	"exports": {
+		".": {
+			"types": "./src/index.ts",
+			"import": "./src/index.ts"
+		},
+		"./*": {
+			"types": "./src/*.ts",
+			"import": "./src/*.ts"
+		},
+		"./*.js": "./src/*.ts"
+	},
 	"bin": {
 		"typescript-edit-benchmark": "src/index.ts"
 	},

@@ -10,16 +10,25 @@ import { theme } from "../../modes/theme/theme";
  */
 export class DynamicBorder implements Component {
 	#color: (str: string) => string;
+	#cachedWidth = -1;
+	#cachedLines: string[] | undefined;
 
 	constructor(color: (str: string) => string = str => theme.fg("border", str)) {
 		this.#color = color;
 	}
 
 	invalidate(): void {
-		// No cached state to invalidate currently
+		this.#cachedWidth = -1;
+		this.#cachedLines = undefined;
 	}
 
-	render(width: number): string[] {
-		return [this.#color(theme.boxSharp.horizontal.repeat(Math.max(1, width)))];
+	render(width: number): readonly string[] {
+		if (this.#cachedLines && this.#cachedWidth === width) {
+			return this.#cachedLines;
+		}
+		const lines = [this.#color(theme.boxSharp.horizontal.repeat(Math.max(1, width)))];
+		this.#cachedWidth = width;
+		this.#cachedLines = lines;
+		return lines;
 	}
 }

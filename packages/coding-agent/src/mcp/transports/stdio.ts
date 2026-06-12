@@ -5,6 +5,9 @@
  * Messages are newline-delimited JSON.
  */
 
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+
 import { getProjectDir, readJsonl, Snowflake } from "@oh-my-pi/pi-utils";
 import { type Subprocess, spawn } from "bun";
 import type {
@@ -18,6 +21,216 @@ import type {
 } from "../../mcp/types";
 import { toJsonRpcError } from "../../mcp/types";
 import { isMCPTimeoutEnabled, resolveMCPTimeoutMs } from "../timeout";
+
+/** Subprocess argv for launching an MCP stdio server. */
+export interface StdioSpawnCommand {
+	cmd: string[];
+	windowsHide?: boolean;
+}
+
+/** Inputs used to resolve platform-specific stdio spawn behavior. */
+export interface ResolveStdioSpawnOptions {
+	cwd: string;
+	env: Record<string, string | undefined>;
+	platform?: NodeJS.Platform;
+}
+
+const DEFAULT_WINDOWS_PATHEXT = [".COM", ".EXE", ".BAT", ".CMD"];
+const WINDOWS_BATCH_EXTENSIONS = new Set([".bat", ".cmd"]);
+
+function getCaseInsensitiveEnv(env: Record<string, string | undefined>, name: string): string | undefined {
+	const direct = env[name];
+	if (direct !== undefined) return direct;
+	const normalized = name.toLowerCase();
+	for (const [key, value] of Object.entries(env)) {
+		if (key.toLowerCase() === normalized) return value;
+	}
+	return undefined;
+}
+
+function getWindowsPathExt(env: Record<string, string | undefined>): string[] {
+	const raw = getCaseInsensitiveEnv(env, "PATHEXT");
+	if (!raw) return DEFAULT_WINDOWS_PATHEXT;
+	const extensions: string[] = [];
+	for (const part of raw.split(";")) {
+		const trimmed = part.trim();
+		if (!trimmed) continue;
+		extensions.push(trimmed.startsWith(".") ? trimmed : `.${trimmed}`);
+	}
+	return extensions.length > 0 ? extensions : DEFAULT_WINDOWS_PATHEXT;
+}
+
+async function fileExists(filePath: string): Promise<boolean> {
+	try {
+		await fs.access(filePath);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function hasPathSegment(command: string): boolean {
+	return command.includes("/") || command.includes("\\") || path.isAbsolute(command);
+}
+
+function hasExecutableExtension(command: string, extensions: string[]): boolean {
+	const ext = path.extname(command).toLowerCase();
+	if (!ext) return false;
+	return extensions.some(candidate => candidate.toLowerCase() === ext);
+}
+
+async function resolveWindowsCommandPath(
+	command: string,
+	cwd: string,
+	env: Record<string, string | undefined>,
+): Promise<string | null> {
+	const extensions = getWindowsPathExt(env);
+	const hasExt = hasExecutableExtension(command, extensions);
+	const candidates = hasExt ? [command] : extensions.map(ext => `${command}${ext}`);
+
+	if (hasPathSegment(command)) {
+		for (const candidate of candidates) {
+			const resolved = path.isAbsolute(candidate) ? candidate : path.resolve(cwd, candidate);
+			if (await fileExists(resolved)) return resolved;
+		}
+		return hasExt ? command : null;
+	}
+
+	// Match cmd.exe's lookup order for an unqualified name: current directory
+	// first, then PATH. Skipping cwd would launch a global shim instead of a
+	// project-local one with the same name.
+	const searchDirs = [cwd];
+	const pathValue = getCaseInsensitiveEnv(env, "PATH");
+	if (pathValue) {
+		for (const dir of pathValue.split(";")) {
+			if (dir) searchDirs.push(dir);
+		}
+	}
+	for (const dir of searchDirs) {
+		for (const candidate of candidates) {
+			const resolved = path.join(dir, candidate);
+			if (await fileExists(resolved)) return resolved;
+		}
+	}
+	return hasExt ? command : null;
+}
+
+function resolveWindowsShimPath(value: string, shimDir: string): string | null {
+	const match = /^%dp0%[\\/]*(.*)$/i.exec(value);
+	if (!match) return null;
+	const suffix = match[1];
+	if (!suffix) return shimDir;
+	return path.join(shimDir, ...suffix.split(/[\\/]+/).filter(Boolean));
+}
+
+function extractWindowsNpmShimTarget(content: string): string | null {
+	const match = /"%_prog%"\s+"([^"]+)"\s+%\*/i.exec(content);
+	return match?.[1] ?? null;
+}
+
+/**
+ * Extract the shim's PATH-fallback interpreter (`SET "_prog=node"`). The
+ * `IF EXIST` branch assigns a `%dp0%`-prefixed value, so requiring a
+ * non-`%`-leading value picks the bare program name.
+ */
+function extractWindowsNpmShimProg(content: string): string | null {
+	const match = /SET\s+"_prog=([^%"][^"]*)"/i.exec(content);
+	return match?.[1] ?? null;
+}
+
+async function resolveWindowsNpmShimCommand(
+	command: string,
+	args: readonly string[],
+	cwd: string,
+): Promise<StdioSpawnCommand | null> {
+	if (!isWindowsBatchCommand(command)) return null;
+	if (!hasPathSegment(command)) return null;
+	const commandPath = path.resolve(cwd, command);
+
+	let content: string;
+	try {
+		content = await Bun.file(commandPath).text();
+	} catch {
+		return null;
+	}
+
+	// cmd-shim emits the same invocation line for every interpreter; only
+	// bypass cmd.exe when the shim's fallback interpreter is actually node.
+	const prog = extractWindowsNpmShimProg(content);
+	if (
+		!prog ||
+		path
+			.basename(prog)
+			.replace(/\.exe$/i, "")
+			.toLowerCase() !== "node"
+	)
+		return null;
+
+	const rawTarget = extractWindowsNpmShimTarget(content);
+	if (!rawTarget) return null;
+
+	const target = resolveWindowsShimPath(rawTarget, path.dirname(commandPath));
+	if (!target) return null;
+
+	const siblingNode = path.join(path.dirname(commandPath), "node.exe");
+	const nodeCommand = (await fileExists(siblingNode)) ? siblingNode : "node";
+	return {
+		cmd: [nodeCommand, target, ...args],
+		windowsHide: true,
+	};
+}
+
+function quoteCmdArg(value: string): string {
+	if (value.length === 0) return '""';
+	let result = '"';
+	for (const char of value) {
+		if (char === '"') {
+			result += '^"';
+		} else if (char === "^") {
+			result += "^^";
+		} else if (char === "%") {
+			result += "^%";
+		} else {
+			result += char;
+		}
+	}
+	return `${result}"`;
+}
+
+function isWindowsBatchCommand(command: string): boolean {
+	return WINDOWS_BATCH_EXTENSIONS.has(path.extname(command).toLowerCase());
+}
+
+function resolveComSpec(env: Record<string, string | undefined>): string {
+	const comspec = getCaseInsensitiveEnv(env, "COMSPEC");
+	return comspec && comspec.length > 0 ? comspec : "cmd.exe";
+}
+
+/** `cmd /s /c` strips one outer quote pair; keep inner argv quotes intact. */
+function buildCmdExeCommand(command: string, args: readonly string[]): string {
+	const quotedCommand = [command, ...args].map(quoteCmdArg).join(" ");
+	return `"${quotedCommand}"`;
+}
+
+/** Resolve the subprocess argv used to launch an MCP stdio server. */
+export async function resolveStdioSpawnCommand(
+	config: MCPStdioServerConfig,
+	options: ResolveStdioSpawnOptions,
+): Promise<StdioSpawnCommand> {
+	const args = config.args ?? [];
+	if (options.platform !== "win32") return { cmd: [config.command, ...args] };
+
+	const resolvedCommand =
+		(await resolveWindowsCommandPath(config.command, options.cwd, options.env)) ?? config.command;
+	const npmShimCommand = await resolveWindowsNpmShimCommand(resolvedCommand, args, options.cwd);
+	if (npmShimCommand) return npmShimCommand;
+	if (!isWindowsBatchCommand(resolvedCommand)) return { cmd: [resolvedCommand, ...args] };
+
+	return {
+		cmd: [resolveComSpec(options.env), "/d", "/s", "/c", buildCmdExeCommand(resolvedCommand, args)],
+		windowsHide: true,
+	};
+}
 
 /** Minimal write surface of `Subprocess.stdin` we need for framed sends. */
 interface FrameSink {
@@ -100,19 +313,25 @@ export class StdioTransport implements MCPTransport {
 	async connect(): Promise<void> {
 		if (this.#connected) return;
 
-		const args = this.config.args ?? [];
 		const env = {
 			...Bun.env,
 			...this.config.env,
 		};
+		const cwd = this.config.cwd ?? getProjectDir();
+		const spawnCommand = await resolveStdioSpawnCommand(this.config, {
+			cwd,
+			env,
+			platform: process.platform,
+		});
 
 		this.#process = spawn({
-			cmd: [this.config.command, ...args],
-			cwd: this.config.cwd ?? getProjectDir(),
+			cmd: spawnCommand.cmd,
+			cwd,
 			env,
 			stdin: "pipe",
 			stdout: "pipe",
 			stderr: "pipe",
+			windowsHide: spawnCommand.windowsHide,
 		});
 
 		this.#connected = true;

@@ -7,10 +7,10 @@
  */
 import { afterEach, beforeEach, expect, it, spyOn } from "bun:test";
 import { Agent, type AgentTool } from "@oh-my-pi/pi-agent-core";
-import { getBundledModel } from "@oh-my-pi/pi-ai";
 import { createMockModel, type MockModelOptions } from "@oh-my-pi/pi-ai/providers/mock";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { type SettingPath, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { EditTool } from "@oh-my-pi/pi-coding-agent/edit";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type {
@@ -72,11 +72,15 @@ function makeBridge(outcome: ClientBridgePermissionOutcome): ClientBridge {
 	};
 }
 
-async function createSession(tools: AgentTool[], bridge?: ClientBridge): Promise<AgentSession> {
+async function createSession(
+	tools: AgentTool[],
+	bridge?: ClientBridge,
+	settingsOverrides: Partial<Record<SettingPath, unknown>> = {},
+): Promise<AgentSession> {
 	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 	if (!model) throw new Error("Expected claude-sonnet-4-5 model to exist");
 
-	const settings = Settings.isolated({ "compaction.enabled": false });
+	const settings = Settings.isolated({ "compaction.enabled": false, ...settingsOverrides });
 	const sessionManager = SessionManager.inMemory(tempDir.path());
 
 	const agent = new Agent({
@@ -156,6 +160,41 @@ it("allow_once: calls bridge once and executes the underlying tool", async () =>
 
 	await session.setActiveToolsByName(["bash"]);
 	// Get the wrapped tool from the agent's active set.
+	const wrappedBash = session.agent.state.tools.find(t => t.name === "bash");
+	expect(wrappedBash).toBeDefined();
+
+	await wrappedBash!.execute("call-1", { command: "echo hi" }, undefined, undefined as never, undefined as never);
+
+	expect(permissionSpy).toHaveBeenCalledTimes(1);
+	expect(bashTool.executeCalls).toBe(1);
+});
+
+it("explicit yolo approval mode skips the ACP permission gate", async () => {
+	const bashTool = makeFakeTool("bash");
+	const bridge = makeBridge({ outcome: "selected", optionId: "allow_once", kind: "allow_once" });
+	const permissionSpy = spyOn(bridge, "requestPermission");
+	session = await createSession([bashTool], bridge, { "tools.approvalMode": "yolo" });
+
+	await session.setActiveToolsByName(["bash"]);
+	const wrappedBash = session.agent.state.tools.find(t => t.name === "bash");
+	expect(wrappedBash).toBeDefined();
+
+	await wrappedBash!.execute("call-1", { command: "echo hi" }, undefined, undefined as never, undefined as never);
+
+	expect(permissionSpy).not.toHaveBeenCalled();
+	expect(bashTool.executeCalls).toBe(1);
+});
+
+it("explicit yolo still gates tools whose per-tool policy requires a prompt", async () => {
+	const bashTool = makeFakeTool("bash");
+	const bridge = makeBridge({ outcome: "selected", optionId: "allow_once", kind: "allow_once" });
+	const permissionSpy = spyOn(bridge, "requestPermission");
+	session = await createSession([bashTool], bridge, {
+		"tools.approvalMode": "yolo",
+		"tools.approval": { bash: "prompt" },
+	});
+
+	await session.setActiveToolsByName(["bash"]);
 	const wrappedBash = session.agent.state.tools.find(t => t.name === "bash");
 	expect(wrappedBash).toBeDefined();
 

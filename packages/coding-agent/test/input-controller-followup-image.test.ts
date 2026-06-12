@@ -1,0 +1,117 @@
+/**
+ * Regression: queuing a follow-up message (Ctrl+Enter / `app.message.followUp`)
+ * with a pending clipboard-pasted image must forward the image to
+ * `session.prompt`. Previously `handleFollowUp` ignored `pendingImages`, so the
+ * queued message reached the model as text only and the image was silently
+ * dropped.
+ */
+import { afterEach, describe, expect, it, vi } from "bun:test";
+import type { ImageContent } from "@oh-my-pi/pi-ai";
+import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
+import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
+
+interface StubEditor {
+	setText: (text: string) => void;
+	getText: () => string;
+	addToHistory: (text: string) => void;
+	imageLinks?: unknown;
+}
+interface PromptOptionsLike {
+	streamingBehavior?: "steer" | "followUp";
+	images?: ImageContent[];
+}
+
+function createContext(opts: { isStreaming: boolean; pendingImages: ImageContent[] }) {
+	let editorText = "";
+	const editor: StubEditor = {
+		setText(text) {
+			editorText = text;
+		},
+		getText() {
+			return editorText;
+		},
+		addToHistory: vi.fn(),
+	};
+	const prompt = vi.fn(async (_text: string, _options?: PromptOptionsLike) => {});
+	const updatePendingMessagesDisplay = vi.fn();
+	const requestRender = vi.fn();
+
+	const ctx = {
+		editor,
+		ui: { requestRender },
+		skillCommands: new Map<string, string>(),
+		session: {
+			isStreaming: opts.isStreaming,
+			isCompacting: false,
+			isBashRunning: false,
+			isEvalRunning: false,
+			extensionRunner: undefined,
+			prompt,
+		},
+		pendingImages: opts.pendingImages,
+		pendingImageLinks: opts.pendingImages.map(() => undefined),
+		loopModeEnabled: false,
+		compactionQueuedMessages: [],
+		locallySubmittedUserSignatures: new Set<string>(),
+		updatePendingMessagesDisplay,
+		withLocalSubmission: async (_text: string, fn: () => unknown) => fn(),
+	} as unknown as InteractiveModeContext;
+
+	return { ctx, editor, prompt };
+}
+
+describe("InputController.handleFollowUp image forwarding", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it("forwards pending images to session.prompt while streaming and clears them", async () => {
+		const image: ImageContent = { type: "image", mimeType: "image/png", data: "aGVsbG8=" };
+		const { ctx, editor, prompt } = createContext({ isStreaming: true, pendingImages: [image] });
+
+		const controller = new InputController(ctx);
+		editor.setText("[Image #1] look at this");
+		await controller.handleFollowUp();
+
+		expect(prompt).toHaveBeenCalledTimes(1);
+		const call = prompt.mock.calls[0];
+		if (!call) throw new Error("expected session.prompt to be called");
+		expect(call[0]).toBe("[Image #1] look at this");
+		expect(call[1]?.streamingBehavior).toBe("followUp");
+		expect(call[1]?.images).toEqual([image]);
+
+		// Pending image state is consumed so the next message does not resend it.
+		expect(ctx.pendingImages).toEqual([]);
+		expect(ctx.pendingImageLinks).toEqual([]);
+	});
+
+	it("forwards pending images when not streaming", async () => {
+		const image: ImageContent = { type: "image", mimeType: "image/png", data: "d29ybGQ=" };
+		const { ctx, editor, prompt } = createContext({ isStreaming: false, pendingImages: [image] });
+
+		const controller = new InputController(ctx);
+		editor.setText("[Image #1] describe it");
+		await controller.handleFollowUp();
+
+		expect(prompt).toHaveBeenCalledTimes(1);
+		const call = prompt.mock.calls[0];
+		if (!call) throw new Error("expected session.prompt to be called");
+		expect(call[1]?.images).toEqual([image]);
+		expect(call[1]?.streamingBehavior).toBeUndefined();
+		expect(ctx.pendingImages).toEqual([]);
+	});
+
+	it("omits images when none are pending", async () => {
+		const { ctx, editor, prompt } = createContext({ isStreaming: true, pendingImages: [] });
+
+		const controller = new InputController(ctx);
+		editor.setText("just text");
+		await controller.handleFollowUp();
+
+		expect(prompt).toHaveBeenCalledTimes(1);
+		const call = prompt.mock.calls[0];
+		if (!call) throw new Error("expected session.prompt to be called");
+		expect(call[1]?.images).toBeUndefined();
+		expect(call[1]?.streamingBehavior).toBe("followUp");
+	});
+});

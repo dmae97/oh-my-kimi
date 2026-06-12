@@ -49,3 +49,17 @@ export function createAbortSourceTracker(callerSignal?: AbortSignal): AbortSourc
 		},
 	};
 }
+
+/**
+ * Race a shared promise against a caller's AbortSignal without coupling the
+ * underlying work to that signal. The shared promise keeps running (and caches
+ * its result) even when an individual caller bails out.
+ */
+export function raceWithSignal<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+	if (!signal) return promise;
+	if (signal.aborted) return Promise.reject(signal.reason ?? new Error("Request was aborted"));
+	const { promise: aborted, reject } = Promise.withResolvers<never>();
+	const onAbort = () => reject(signal.reason ?? new Error("Request was aborted"));
+	signal.addEventListener("abort", onAbort, { once: true });
+	return Promise.race([promise, aborted]).finally(() => signal.removeEventListener("abort", onAbort));
+}

@@ -2,15 +2,15 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { StatusLineSegmentId } from "@oh-my-pi/pi-coding-agent/config/settings-schema";
+import { StatusLineComponent } from "@oh-my-pi/pi-coding-agent/modes/components/status-line";
+import type { SegmentContext } from "@oh-my-pi/pi-coding-agent/modes/components/status-line/segments";
+import { renderSegment } from "@oh-my-pi/pi-coding-agent/modes/components/status-line/segments";
+import { initTheme, theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { getSessionAccentAnsi, getSessionAccentHex } from "@oh-my-pi/pi-coding-agent/utils/session-color";
 import { visibleWidth } from "@oh-my-pi/pi-tui";
 import { getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
-import { resetSettingsForTest, Settings } from "../src/config/settings";
-import type { StatusLineSegmentId } from "../src/config/settings-schema";
-import { StatusLineComponent } from "../src/modes/components/status-line";
-import type { SegmentContext } from "../src/modes/components/status-line/segments";
-import { renderSegment } from "../src/modes/components/status-line/segments";
-import { initTheme, theme } from "../src/modes/theme/theme";
-import { getSessionAccentAnsi, getSessionAccentHex } from "../src/utils/session-color";
 
 const originalProjectDir = getProjectDir();
 
@@ -45,6 +45,7 @@ function createCtx(overrides?: { pathMaxLength?: number; branch?: string | null 
 		planMode: null,
 		loopMode: null,
 		goalMode: null,
+		collab: null,
 		usageStats: {
 			input: 0,
 			output: 0,
@@ -102,23 +103,29 @@ describe("status line session accent", () => {
 		return component;
 	}
 
-	const accentAnsi = getSessionAccentAnsi(getSessionAccentHex("Named session"));
+	// Computed lazily: `theme` is assigned by initTheme() in beforeAll, after module evaluation.
+	const accentAnsi = () =>
+		getSessionAccentAnsi(
+			getSessionAccentHex("Named session", theme.getMajorThemeColorHexes(), theme.accentSurfaceLuminance),
+		);
 
 	it("paints the gap with the session accent when enabled", () => {
-		expect(accentAnsi).toBeDefined();
+		const ansi = accentAnsi();
+		expect(ansi).toBeDefined();
 		const border = buildComponent(true).getTopBorder(80).content;
-		expect(border).toContain(`${accentAnsi}${theme.boxRound.horizontal}`);
+		expect(border).toContain(`${ansi}${theme.boxRound.horizontal}`);
 	});
 
 	it("paints the gap with the border color and omits the session accent when disabled", () => {
-		expect(accentAnsi).toBeDefined();
+		const ansi = accentAnsi();
+		expect(ansi).toBeDefined();
 		const border = buildComponent(false).getTopBorder(80).content;
 		// Positive: gap is rendered with the theme border color.
 		expect(border).toContain(`${theme.getFgAnsi("border")}${theme.boxRound.horizontal}`);
 		// Negative: the gap-painting pattern (accent ANSI directly followed by a horizontal
 		// glyph) must not appear. The session_name segment may still emit the accent ANSI
 		// for its own text — we only care that the gap is not accent-painted.
-		expect(border).not.toContain(`${accentAnsi}${theme.boxRound.horizontal}`);
+		expect(border).not.toContain(`${ansi}${theme.boxRound.horizontal}`);
 	});
 });
 

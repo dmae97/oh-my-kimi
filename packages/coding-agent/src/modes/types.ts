@@ -2,6 +2,8 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { CompactionOutcome } from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage, ImageContent, Message, UsageReport } from "@oh-my-pi/pi-ai";
 import type { Component, Container, EditorTheme, Loader, Spacer, Text, TUI } from "@oh-my-pi/pi-tui";
+import type { CollabGuestLink } from "../collab/guest";
+import type { CollabHost } from "../collab/host";
 import type { KeybindingsManager } from "../config/keybindings";
 import type { Settings } from "../config/settings";
 import type {
@@ -19,6 +21,7 @@ import type { HistoryStorage } from "../session/history-storage";
 import type { SessionContext, SessionManager } from "../session/session-manager";
 import type { ShakeMode } from "../session/shake-types";
 import type { LspStartupServerInfo } from "../tools";
+import type { EventBus } from "../utils/event-bus";
 import type { AssistantMessageComponent } from "./components/assistant-message";
 import type { BashExecutionComponent } from "./components/bash-execution";
 import type { CustomEditor } from "./components/custom-editor";
@@ -28,6 +31,8 @@ import type { HookInputComponent } from "./components/hook-input";
 import type { HookSelectorComponent, HookSelectorOptions } from "./components/hook-selector";
 import type { StatusLineComponent } from "./components/status-line";
 import type { ToolExecutionHandle } from "./components/tool-execution";
+import type { TranscriptContainer } from "./components/transcript-container";
+import type { EventController } from "./controllers/event-controller";
 import type { LoopLimitRuntime } from "./loop-limit";
 import type { OAuthManualInputManager } from "./oauth-manual-input";
 import type { Theme } from "./theme/theme";
@@ -35,6 +40,7 @@ import type { Theme } from "./theme/theme";
 export type CompactionQueuedMessage = {
 	text: string;
 	mode: "steer" | "followUp";
+	images?: ImageContent[];
 };
 
 export type SubmittedUserInput = {
@@ -42,6 +48,10 @@ export type SubmittedUserInput = {
 	images?: ImageContent[];
 	imageLinks?: (string | undefined)[];
 	customType?: string;
+	/** Route through `session.prompt(text, { synthetic: true })` so the text lands
+	 *  as a hidden agent-authored `developer` message rather than a visible user
+	 *  turn. Used by the `c`/`.` continue shortcut. */
+	synthetic?: boolean;
 	display?: boolean;
 	cancelled: boolean;
 	started: boolean;
@@ -71,10 +81,11 @@ export type InteractiveSelectorDialogOptions = ExtensionUIDialogOptions & Pick<H
 export interface InteractiveModeContext {
 	// UI access
 	ui: TUI;
-	chatContainer: Container;
+	chatContainer: TranscriptContainer;
 	pendingMessagesContainer: Container;
 	statusContainer: Container;
 	todoContainer: Container;
+	subagentContainer: Container;
 	btwContainer: Container;
 	omfgContainer: Container;
 	errorBannerContainer: Container;
@@ -87,12 +98,29 @@ export interface InteractiveModeContext {
 	// Session access
 	session: AgentSession;
 	sessionManager: SessionManager;
+	/** Session the transcript/editor/status are attached to: the focused agent's, else `session`. */
+	readonly viewSession: AgentSession;
+	/** Id of the focused agent, undefined when the main session is attached. */
+	readonly focusedAgentId: string | undefined;
+	/** Focus the main view on an agent's live session (delegates to SessionFocusController.focusAgent). */
+	focusAgentSession(id: string): Promise<void>;
+	/** Focus the focused agent's parent session, falling back to main (delegates to focusParent). */
+	focusParentSession(): Promise<void>;
+	/** Return the view to the main session (delegates to SessionFocusController.unfocus). */
+	unfocusSession(): Promise<void>;
+	/** Clear loader, status/pending containers, streaming state, and pending tools. */
+	clearTransientSessionUi(): void;
 	settings: Settings;
 	keybindings: KeybindingsManager;
 	agent: AgentSession["agent"];
 	historyStorage?: HistoryStorage;
 	mcpManager?: MCPManager;
 	lspServers?: LspStartupServerInfo[];
+	titleSystemPrompt?: string;
+	collabHost?: CollabHost;
+	collabGuest?: CollabGuestLink;
+	eventController: EventController;
+	eventBus?: EventBus;
 
 	// State
 	isInitialized: boolean;
@@ -129,6 +157,7 @@ export interface InteractiveModeContext {
 	locallySubmittedUserSignatures: Set<string>;
 	lastSigintTime: number;
 	lastEscapeTime: number;
+	lastLeftTapTime: number;
 	shutdownRequested: boolean;
 	hookSelector: HookSelectorComponent | undefined;
 	hookInput: HookInputComponent | undefined;
@@ -176,12 +205,15 @@ export interface InteractiveModeContext {
 	showNewVersionNotification(newVersion: string): void;
 	clearEditor(): void;
 	updatePendingMessagesDisplay(): void;
-	queueCompactionMessage(text: string, mode: "steer" | "followUp"): void;
+	queueCompactionMessage(text: string, mode: "steer" | "followUp", images?: ImageContent[]): void;
 	flushCompactionQueue(options?: { willRetry?: boolean }): Promise<void>;
 	flushPendingBashComponents(): void;
 	flushPendingModelSwitch(): Promise<void>;
 	setWorkingMessage(message?: string): void;
 	applyPendingWorkingMessage(): void;
+	/** Acknowledge a user interrupt (Esc) by switching the loader to an
+	 *  "Interrupting…" label until the agent turn unwinds. */
+	notifyInterrupting(): void;
 	ensureLoadingAnimation(): void;
 	startPendingSubmission(input: {
 		text: string;
@@ -215,10 +247,7 @@ export interface InteractiveModeContext {
 		sessionContext: SessionContext,
 		options?: { updateFooter?: boolean; populateHistory?: boolean },
 	): void;
-	renderInitialMessages(
-		prebuiltContext?: SessionContext,
-		options?: { preserveExistingChat?: boolean; clearTerminalHistory?: boolean },
-	): void;
+	renderInitialMessages(options?: { preserveExistingChat?: boolean; clearTerminalHistory?: boolean }): void;
 	getUserMessageText(message: Message): string;
 	findLastAssistantMessage(): AssistantMessage | undefined;
 	extractAssistantText(message: AssistantMessage): string;
@@ -279,9 +308,11 @@ export interface InteractiveModeContext {
 	handleResumeSession(sessionPath: string): Promise<void>;
 	handleSessionDeleteCommand(): Promise<void>;
 	showOAuthSelector(mode: "login" | "logout", providerId?: string): Promise<void>;
+	showResetUsageSelector(): Promise<void>;
+	showProviderSetup(): Promise<void>;
 	showHookConfirm(title: string, message: string): Promise<boolean>;
 	showDebugSelector(): Promise<void>;
-	showSessionObserver(): void;
+	showAgentHub(): void;
 	resetObserverRegistry(): void;
 
 	// Input handling
@@ -310,6 +341,7 @@ export interface InteractiveModeContext {
 	disableLoopMode(): void;
 	pauseLoop(): void;
 	handlePlanApproval(details: PlanApprovalDetails): Promise<void>;
+	openPlanReview(): Promise<void>;
 
 	// Hook UI methods
 	initHooksAndCustomTools(): Promise<void>;

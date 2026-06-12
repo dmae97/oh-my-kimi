@@ -1,16 +1,17 @@
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
-import { $env, $pickenv, extractHttpStatusFromError } from "@oh-my-pi/pi-utils";
-import { getCustomApi } from "./api-registry";
-import { AUTH_RETRY_STEPS, isApiKeyResolver, resolveRetryKey } from "./auth-retry";
-import type { Effort } from "./effort";
+import type { Effort } from "@oh-my-pi/pi-catalog/effort";
+import { isVertexExpressOpenAIUrl, isVertexRawPredictUrl } from "@oh-my-pi/pi-catalog/hosts";
 import {
 	mapEffortToAnthropicAdaptiveEffort,
 	mapEffortToGoogleThinkingLevel,
-	modelOmitsReasoningEffort,
+	minimumSupportedEffort,
 	requireSupportedEffort,
-} from "./model-thinking";
+	resolveWireModelId,
+} from "@oh-my-pi/pi-catalog/model-thinking";
+import { CATALOG_PROVIDERS, type ProviderCatalogEntry } from "@oh-my-pi/pi-catalog/provider-models";
+import { $env, $pickenv, extractHttpStatusFromError } from "@oh-my-pi/pi-utils";
+import { getCustomApi } from "./api-registry";
+import { AUTH_RETRY_STEPS, isApiKeyResolver, resolveRetryKey } from "./auth-retry";
+import { ProviderHttpError } from "./errors";
 import type { BedrockOptions } from "./providers/amazon-bedrock";
 import type { AnthropicOptions } from "./providers/anthropic";
 import type { CursorOptions } from "./providers/cursor";
@@ -47,6 +48,7 @@ import {
 import { isSyntheticModel, streamSynthetic } from "./providers/synthetic";
 import { streamXAIResponses } from "./providers/xai-responses";
 import { isUsageLimitError } from "./rate-limit-utils";
+import { PROVIDER_REGISTRY } from "./registry";
 import type {
 	Api,
 	AssistantMessage,
@@ -61,29 +63,13 @@ import type {
 	ToolChoice,
 } from "./types";
 import { AssistantMessageEventStream } from "./utils/event-stream";
-import { isFoundryEnabled } from "./utils/foundry";
 import { withRequestDebugFetch } from "./utils/request-debug";
 
-let cachedVertexAdcCredentialsExists: boolean | null = null;
-
-function hasVertexAdcCredentials(): boolean {
-	if (cachedVertexAdcCredentialsExists === null) {
-		const gacPath = $env.GOOGLE_APPLICATION_CREDENTIALS;
-		if (gacPath) {
-			cachedVertexAdcCredentialsExists = fs.existsSync(gacPath);
-		} else {
-			cachedVertexAdcCredentialsExists = fs.existsSync(
-				path.join(os.homedir(), ".config", "gcloud", "application_default_credentials.json"),
-			);
-		}
-	}
-	return cachedVertexAdcCredentialsExists;
-}
 function isGoogleVertexAuthenticatedModel(model: Model<Api>): boolean {
 	return (
 		model.provider === "google-vertex" &&
-		((model.api === "openai-completions" && model.baseUrl.includes("/endpoints/openapi")) ||
-			(model.api === "anthropic-messages" && model.baseUrl.includes(":streamRawPredict")))
+		((model.api === "openai-completions" && isVertexExpressOpenAIUrl(model.baseUrl)) ||
+			(model.api === "anthropic-messages" && isVertexRawPredictUrl(model.baseUrl)))
 	);
 }
 
@@ -95,7 +81,7 @@ function createVertexAuthenticatedFetch(options: StreamOptions | undefined): Fet
 		headers.set("Authorization", `Bearer ${token}`);
 		const rewritten = resolveVertexRequest(input);
 		const url = rewritten instanceof Request ? rewritten.url : rewritten.toString();
-		if (isVertexAnthropicRawPredict(url)) {
+		if (isVertexRawPredictUrl(url)) {
 			const bodyText = await readVertexRequestBody(rewritten, init);
 			const transformed = transformVertexAnthropicBody(bodyText);
 			return baseFetch(url, {
@@ -108,10 +94,6 @@ function createVertexAuthenticatedFetch(options: StreamOptions | undefined): Fet
 		return baseFetch(rewritten, { ...init, headers });
 	};
 	return Object.assign(vertexFetch, baseFetch.preconnect ? { preconnect: baseFetch.preconnect } : {});
-}
-
-function isVertexAnthropicRawPredict(url: string): boolean {
-	return url.includes(":streamRawPredict") || url.includes(":rawPredict");
 }
 
 async function readVertexRequestBody(input: string | URL | Request, init: RequestInit | undefined): Promise<string> {
@@ -175,101 +157,35 @@ function resolveVertexRequest(input: string | URL | Request): string | URL | Req
 
 type KeyResolver = string | (() => string | undefined);
 
-const serviceProviderMap: Record<string, KeyResolver> = {
-	"alibaba-coding-plan": "ALIBABA_CODING_PLAN_API_KEY",
-	openai: "OPENAI_API_KEY",
-	google: "GEMINI_API_KEY",
-	groq: "GROQ_API_KEY",
-	cerebras: "CEREBRAS_API_KEY",
-	xai: "XAI_API_KEY",
-	"xai-oauth": () => $pickenv("XAI_OAUTH_TOKEN", "XAI_API_KEY"),
-	fireworks: "FIREWORKS_API_KEY",
-	firepass: "FIREPASS_API_KEY",
-	"wafer-pass": "WAFER_PASS_API_KEY",
-	"wafer-serverless": "WAFER_SERVERLESS_API_KEY",
-	openrouter: "OPENROUTER_API_KEY",
-	kilo: "KILO_API_KEY",
-	"vercel-ai-gateway": "AI_GATEWAY_API_KEY",
-	zai: "ZAI_API_KEY",
-	"zhipu-coding-plan": "ZHIPU_API_KEY",
-	mistral: "MISTRAL_API_KEY",
-	minimax: "MINIMAX_API_KEY",
-	"minimax-code": "MINIMAX_CODE_API_KEY",
-	"minimax-code-cn": "MINIMAX_CODE_CN_API_KEY",
-	"opencode-go": "OPENCODE_API_KEY",
-	"opencode-zen": "OPENCODE_API_KEY",
-	cursor: "CURSOR_ACCESS_TOKEN",
-	deepseek: "DEEPSEEK_API_KEY",
-	"openai-codex": "OPENAI_CODEX_OAUTH_TOKEN",
+const LEGACY_ENV_KEYS: Record<string, KeyResolver> = {
+	// Non-provider / search-tool keys and API-name keys not modeled as registry provider defs.
 	"azure-openai-responses": "AZURE_OPENAI_API_KEY",
+	"llama.cpp": "LLAMA_CPP_API_KEY",
 	exa: "EXA_API_KEY",
 	jina: "JINA_API_KEY",
 	brave: "BRAVE_API_KEY",
-	perplexity: "PERPLEXITY_API_KEY",
-	tavily: "TAVILY_API_KEY",
-	parallel: "PARALLEL_API_KEY",
-	kagi: "KAGI_API_KEY",
-	// GitHub Copilot uses GitHub personal access token
-	"github-copilot": () => $pickenv("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"),
-	// Foundry mode optionally switches Anthropic auth to enterprise gateway credentials.
-	anthropic: () =>
-		isFoundryEnabled()
-			? $pickenv("ANTHROPIC_FOUNDRY_API_KEY", "ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY")
-			: $pickenv("ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"),
-	"gitlab-duo": "GITLAB_TOKEN",
-	// Vertex AI supports either GOOGLE_CLOUD_API_KEY or Application Default Credentials.
-	"google-vertex": () => {
-		if ($env.GOOGLE_CLOUD_API_KEY) {
-			return $env.GOOGLE_CLOUD_API_KEY;
-		}
-		const hasCredentials = hasVertexAdcCredentials();
-		const hasProject = !!($env.GOOGLE_CLOUD_PROJECT || $env.GCP_PROJECT || $env.GCLOUD_PROJECT);
-		const hasLocation = !!($env.GOOGLE_VERTEX_LOCATION || $env.GOOGLE_CLOUD_LOCATION || $env.VERTEX_LOCATION);
-		if (hasCredentials && hasProject && hasLocation) {
-			return "<authenticated>";
-		}
-	},
-	// Amazon Bedrock supports multiple credential sources:
-	// 1. AWS_BEARER_TOKEN_BEDROCK - Bedrock API keys (bearer token)
-	// 2. AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY - standard IAM keys
-	// 3. AWS_PROFILE - named profile from ~/.aws/credentials
-	// 4. AWS_CONTAINER_CREDENTIALS_* - ECS/Task IAM role credentials
-	// 5. AWS_WEB_IDENTITY_TOKEN_FILE + AWS_ROLE_ARN - IRSA (EKS) web identity
-	"amazon-bedrock": () => {
-		const hasEcsCredentials =
-			!!$env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI || !!$env.AWS_CONTAINER_CREDENTIALS_FULL_URI;
-		const hasWebIdentity = !!$env.AWS_WEB_IDENTITY_TOKEN_FILE && !!$env.AWS_ROLE_ARN;
-		if (
-			$env.AWS_PROFILE ||
-			($env.AWS_ACCESS_KEY_ID && $env.AWS_SECRET_ACCESS_KEY) ||
-			$env.AWS_BEARER_TOKEN_BEDROCK ||
-			hasEcsCredentials ||
-			hasWebIdentity
-		) {
-			return "<authenticated>";
-		}
-	},
-	synthetic: "SYNTHETIC_API_KEY",
-	"cloudflare-ai-gateway": "CLOUDFLARE_AI_GATEWAY_API_KEY",
-	huggingface: () => $pickenv("HUGGINGFACE_HUB_TOKEN", "HF_TOKEN"),
-	litellm: "LITELLM_API_KEY",
-	moonshot: "MOONSHOT_API_KEY",
-	nvidia: "NVIDIA_API_KEY",
-	nanogpt: "NANO_GPT_API_KEY",
-	"lm-studio": "LM_STUDIO_API_KEY",
-	ollama: "OLLAMA_API_KEY",
-	"ollama-cloud": "OLLAMA_CLOUD_API_KEY",
-	"llama.cpp": "LLAMA_CPP_API_KEY",
-	qianfan: "QIANFAN_API_KEY",
-	"qwen-portal": () => $pickenv("QWEN_OAUTH_TOKEN", "QWEN_PORTAL_API_KEY"),
-	together: "TOGETHER_API_KEY",
-	zenmux: "ZENMUX_API_KEY",
-	venice: "VENICE_API_KEY",
-	vllm: "VLLM_API_KEY",
-	xiaomi: "XIAOMI_API_KEY",
-	"xiaomi-token-plan-sgp": "XIAOMI_TOKEN_PLAN_SGP_API_KEY",
-	"xiaomi-token-plan-ams": "XIAOMI_TOKEN_PLAN_AMS_API_KEY",
-	"xiaomi-token-plan-cn": "XIAOMI_TOKEN_PLAN_CN_API_KEY",
+};
+
+/**
+ * Env fallbacks derived from the catalog table — the single source for plain
+ * provider env-var names. Registry defs override with computed resolvers
+ * (Foundry/ADC/Bedrock probes); legacy non-provider keys merge last.
+ */
+const CATALOG_ENTRY_ENV_KEYS = (CATALOG_PROVIDERS as readonly ProviderCatalogEntry[]).flatMap(provider => {
+	const envVars = provider.envVars;
+	if (!envVars || envVars.length === 0) return [];
+	const resolver: KeyResolver = envVars.length === 1 ? envVars[0] : () => $pickenv(...envVars);
+	return [[provider.id, resolver] as [string, KeyResolver]];
+});
+
+const serviceProviderMap: Record<string, KeyResolver> = {
+	...Object.fromEntries(CATALOG_ENTRY_ENV_KEYS),
+	...Object.fromEntries(
+		PROVIDER_REGISTRY.flatMap(provider =>
+			provider.envKeys != null ? [[provider.id, provider.envKeys] as [string, KeyResolver]] : [],
+		),
+	),
+	...LEGACY_ENV_KEYS,
 };
 
 /**
@@ -284,6 +200,18 @@ export function getEnvApiKey(provider: string): string | undefined {
 		return $env[resolver];
 	}
 	return resolver?.();
+}
+
+/**
+ * Name of the environment variable that backs `getEnvApiKey` for a provider,
+ * when that provider maps to a single named variable (e.g. `github-copilot` →
+ * `COPILOT_GITHUB_TOKEN`). Returns undefined for providers whose env fallback
+ * is computed (multi-var pickers, Vertex ADC / Bedrock probes, …) since no
+ * single variable name describes the source.
+ */
+export function getEnvApiKeyName(provider: string): string | undefined {
+	const resolver = serviceProviderMap[provider];
+	return typeof resolver === "string" ? resolver : undefined;
 }
 
 /**
@@ -425,11 +353,10 @@ function isRetryableUpstreamError(error: unknown, status: number | undefined, me
 	return !!message && isUsageLimitError(message);
 }
 
-function createAssistantAuthError(message: AssistantMessage): Error & { status?: number } {
-	const error: Error & { status?: number } = new Error(message.errorMessage ?? "Provider authentication failed");
+function createAssistantAuthError(message: AssistantMessage): Error {
+	const text = message.errorMessage ?? "Provider authentication failed";
 	const status = extractStatusFromAssistantError(message);
-	if (status !== undefined) error.status = status;
-	return error;
+	return status === undefined ? new Error(text) : new ProviderHttpError(text, status);
 }
 
 function emitBufferedEvents(stream: AssistantMessageEventStream, events: AssistantMessageEvent[]): void {
@@ -517,8 +444,16 @@ export function streamSimple<TApi extends Api>(
 			let lastKey: string | undefined;
 			try {
 				lastKey = (await apiKeyResolver({ lastChance: false, error: undefined, signal })) || undefined;
-			} catch {
-				lastKey = undefined;
+			} catch (error) {
+				// A thrown resolver is a broker/OAuth/network failure, not a missing
+				// key — surface the cause instead of masking it as "No API key".
+				outer.fail(
+					new Error(
+						`Failed to resolve API key for provider ${model.provider}: ${error instanceof Error ? error.message : String(error)}`,
+						{ cause: error },
+					),
+				);
+				return;
 			}
 			if (lastKey === undefined) {
 				outer.fail(new Error(`No API key for provider: ${model.provider}`));
@@ -531,6 +466,9 @@ export function streamSimple<TApi extends Api>(
 			// resolver yields the same key it just tried or `undefined`; the
 			// final step's attempt clears the capture flag so it emits directly.
 			for (let step = 0; step < AUTH_RETRY_STEPS.length; step++) {
+				// Caller aborted between attempts: don't mint a fresh token or fire
+				// another doomed request — emit the captured failure instead.
+				if (signal?.aborted) break;
 				const nextKey = await resolveRetryKey(apiKeyResolver, AUTH_RETRY_STEPS[step]!, failure.error, signal);
 				if (nextKey === undefined || nextKey === lastKey) continue;
 				lastKey = nextKey;
@@ -717,24 +655,53 @@ function resolveOpenAiReasoningEffort<TApi extends Api>(
 ): Effort | undefined {
 	const reasoning = options?.reasoning;
 	if (!reasoning || !model.reasoning) return undefined;
-	// Models with compat.supportsReasoningEffort: false reason natively but
-	// reject the wire effort param. The wire-side omitReasoningEffort gate
-	// (providers/xai-responses.ts:78) is the actual strip; returning
-	// undefined here avoids a redundant requireSupportedEffort throw that
-	// would defeat the gate and surface a confusing
-	// "Compaction failed: Thinking effort high is not supported by..." to
-	// the user.
-	if (modelOmitsReasoningEffort(model)) return undefined;
+	// Models that reason natively but expose no effort dial carry
+	// `thinking: undefined` (baked at build time from
+	// `compat.supportsReasoningEffort: false` on openai-responses*). The
+	// wire-side omitReasoningEffort gate (providers/xai-responses.ts:78) is the
+	// actual strip; returning undefined here avoids a redundant
+	// requireSupportedEffort throw that would defeat the gate and surface a
+	// confusing "Compaction failed: Thinking effort high is not supported
+	// by..." to the user.
+	if (!model.thinking) return undefined;
 	return requireSupportedEffort(model, reasoning);
 }
 
 const castApi = <TApi extends Api>(api: OptionsForApi<TApi>): OptionsForApi<Api> => api as OptionsForApi<Api>;
 
-function mapOptionsForApi<TApi extends Api>(
+/**
+ * Mandatory-reasoning endpoints (`thinking.requiresEffort`) reject disabled
+ * or omitted thinking ("Reasoning is mandatory for this endpoint and cannot
+ * be disabled") — clamp to the lowest supported effort instead.
+ * `suppressWhenOff` models handle off provider-side via explicit wire
+ * suppression. Collapsed pairs interplay: pair derivation strips member
+ * flags (off routes to a bare SKU that CAN disable), while identity backfill
+ * re-flags pairs whose logical id is itself mandatory (Gemini 3.x) — there
+ * the clamp wins and the floored effort routes to the thinking SKU.
+ */
+function normalizeMandatoryReasoningOptions<TApi extends Api>(
 	model: Model<TApi>,
 	options?: SimpleStreamOptions,
+): SimpleStreamOptions | undefined {
+	if (
+		!model.reasoning ||
+		!model.thinking?.requiresEffort ||
+		model.thinking.suppressWhenOff ||
+		(options?.reasoning !== undefined && !options.disableReasoning)
+	) {
+		return options;
+	}
+	const floor = minimumSupportedEffort(model);
+	if (floor === undefined) return options;
+	return { ...options, reasoning: floor, disableReasoning: undefined };
+}
+
+function mapOptionsForApi<TApi extends Api>(
+	model: Model<TApi>,
+	rawOptions?: SimpleStreamOptions,
 	apiKey?: string,
 ): OptionsForApi<TApi> {
+	const options = normalizeMandatoryReasoningOptions(model, rawOptions);
 	const base = {
 		temperature: options?.temperature,
 		topP: options?.topP,
@@ -770,6 +737,7 @@ function mapOptionsForApi<TApi extends Api>(
 			if (!reasoning || !model.reasoning) {
 				return castApi<"anthropic-messages">({
 					...base,
+					requestModelId: resolveWireModelId(model, undefined),
 					thinkingEnabled: false,
 					toolChoice: mapAnthropicToolChoice(options?.toolChoice),
 					thinkingDisplay: options?.hideThinkingSummary ? "omitted" : undefined,
@@ -781,6 +749,7 @@ function mapOptionsForApi<TApi extends Api>(
 			if (thinkingBudget <= 0) {
 				return castApi<"anthropic-messages">({
 					...base,
+					requestModelId: resolveWireModelId(model, undefined),
 					thinkingEnabled: false,
 					toolChoice: mapAnthropicToolChoice(options?.toolChoice),
 					thinkingDisplay: options?.hideThinkingSummary ? "omitted" : undefined,
@@ -794,6 +763,7 @@ function mapOptionsForApi<TApi extends Api>(
 				const effort = mapEffortToAnthropicAdaptiveEffort(model, reasoning);
 				return castApi<"anthropic-messages">({
 					...base,
+					requestModelId: resolveWireModelId(model, reasoning),
 					thinkingEnabled: true,
 					effort,
 					toolChoice: mapAnthropicToolChoice(options?.toolChoice),
@@ -805,6 +775,7 @@ function mapOptionsForApi<TApi extends Api>(
 			if (ANTHROPIC_USE_INTERLEAVED_THINKING) {
 				return castApi<"anthropic-messages">({
 					...base,
+					requestModelId: resolveWireModelId(model, reasoning),
 					thinkingEnabled: true,
 					thinkingBudgetTokens: thinkingBudget,
 					toolChoice: mapAnthropicToolChoice(options?.toolChoice),
@@ -825,6 +796,7 @@ function mapOptionsForApi<TApi extends Api>(
 			if (thinkingBudget <= 0) {
 				return castApi<"anthropic-messages">({
 					...base,
+					requestModelId: resolveWireModelId(model, undefined),
 					thinkingEnabled: false,
 					toolChoice: mapAnthropicToolChoice(options?.toolChoice),
 					thinkingDisplay: options?.hideThinkingSummary ? "omitted" : undefined,
@@ -834,6 +806,7 @@ function mapOptionsForApi<TApi extends Api>(
 				return castApi<"anthropic-messages">({
 					...base,
 					maxTokens,
+					requestModelId: resolveWireModelId(model, reasoning),
 					thinkingEnabled: true,
 					thinkingBudgetTokens: thinkingBudget,
 					toolChoice: mapAnthropicToolChoice(options?.toolChoice),
@@ -932,7 +905,7 @@ function mapOptionsForApi<TApi extends Api>(
 					...base,
 					thinking: {
 						enabled: true,
-						level: mapEffortToGoogleThinkingLevel(googleModel, effort),
+						level: mapEffortToGoogleThinkingLevel(effort),
 					},
 					toolChoice: mapGoogleToolChoice(options?.toolChoice),
 				});
@@ -950,53 +923,57 @@ function mapOptionsForApi<TApi extends Api>(
 
 		case "google-gemini-cli": {
 			const reasoning = options?.reasoning;
-			if (!reasoning || !model.reasoning) {
-				return castApi<"google-gemini-cli">({
-					...base,
-					thinking: { enabled: false },
-					toolChoice: mapGoogleToolChoice(options?.toolChoice),
-				});
+			const toolChoice = mapGoogleToolChoice(options?.toolChoice);
+			if (reasoning && model.reasoning) {
+				const effort = requireSupportedEffort(model, reasoning);
+
+				// Gemini 3+ models use thinkingLevel instead of thinkingBudget
+				if (model.thinking?.mode === "google-level") {
+					return castApi<"google-gemini-cli">({
+						...base,
+						requestModelId: resolveWireModelId(model, effort),
+						thinking: {
+							enabled: true,
+							level: mapEffortToGoogleThinkingLevel(effort),
+						},
+						toolChoice,
+					});
+				}
+
+				let thinkingBudget = options.thinkingBudgets?.[effort] ?? GOOGLE_THINKING[effort];
+
+				// Caller's maxTokens is the desired output; add thinking budget on top, capped at model limit
+				const maxTokens = Math.min((base.maxTokens || 0) + thinkingBudget, model.maxTokens);
+
+				// If not enough room for thinking + output, reduce thinking budget
+				if (maxTokens <= thinkingBudget) {
+					thinkingBudget = Math.max(0, maxTokens - MIN_OUTPUT_TOKENS);
+				}
+
+				if (thinkingBudget > 0) {
+					return castApi<"google-gemini-cli">({
+						...base,
+						maxTokens,
+						requestModelId: resolveWireModelId(model, effort),
+						thinking: { enabled: true, budgetTokens: thinkingBudget },
+						toolChoice,
+					});
+				}
+				// Budget clamped to zero — fall through to the thinking-off path.
 			}
 
-			const effort = requireSupportedEffort(model, reasoning);
-
-			// Gemini 3+ models use thinkingLevel instead of thinkingBudget
-			if (model.thinking?.mode === "google-level") {
-				return castApi<"google-gemini-cli">({
-					...base,
-					thinking: {
-						enabled: true,
-						level: mapEffortToGoogleThinkingLevel(model, effort),
-					},
-					toolChoice: mapGoogleToolChoice(options?.toolChoice),
-				});
+			const thinking: GoogleGeminiCliOptions["thinking"] = { enabled: false };
+			if (model.reasoning && model.thinking?.suppressWhenOff) {
+				// CCA re-applies the per-id baked server default when the config
+				// is omitted; suppression must be explicit on the wire.
+				thinking.suppress = model.thinking.mode === "google-level" ? { level: "MINIMAL" } : { budget: 0 };
 			}
-
-			let thinkingBudget = options.thinkingBudgets?.[effort] ?? GOOGLE_THINKING[effort];
-
-			// Caller's maxTokens is the desired output; add thinking budget on top, capped at model limit
-			const maxTokens = Math.min((base.maxTokens || 0) + thinkingBudget, model.maxTokens);
-
-			// If not enough room for thinking + output, reduce thinking budget
-			if (maxTokens <= thinkingBudget) {
-				thinkingBudget = Math.max(0, maxTokens - MIN_OUTPUT_TOKENS) ?? 0;
-			}
-
-			// If thinking budget is too low, disable thinking
-			if (thinkingBudget <= 0) {
-				return castApi<"google-gemini-cli">({
-					...base,
-					thinking: { enabled: false },
-					toolChoice: mapGoogleToolChoice(options?.toolChoice),
-				});
-			} else {
-				return castApi<"google-gemini-cli">({
-					...base,
-					maxTokens,
-					thinking: { enabled: true, budgetTokens: thinkingBudget },
-					toolChoice: mapGoogleToolChoice(options?.toolChoice),
-				});
-			}
+			return castApi<"google-gemini-cli">({
+				...base,
+				requestModelId: resolveWireModelId(model, undefined),
+				thinking,
+				toolChoice,
+			});
 		}
 
 		case "google-vertex": {
@@ -1019,7 +996,7 @@ function mapOptionsForApi<TApi extends Api>(
 					...base,
 					thinking: {
 						enabled: true,
-						level: mapEffortToGoogleThinkingLevel(geminiModel, effort),
+						level: mapEffortToGoogleThinkingLevel(effort),
 					},
 					toolChoice: mapGoogleToolChoice(options?.toolChoice),
 				});
@@ -1039,6 +1016,7 @@ function mapOptionsForApi<TApi extends Api>(
 			return castApi<"ollama-chat">({
 				...base,
 				reasoning: resolveOpenAiReasoningEffort(model, options),
+				disableReasoning: options?.disableReasoning,
 				toolChoice: options?.toolChoice,
 			});
 

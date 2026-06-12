@@ -1,4 +1,8 @@
-use std::io::Write;
+use std::{
+	fs::{self, OpenOptions},
+	io::Write,
+	path::{Path, PathBuf},
+};
 
 use brush_core::{ExecutionResult, builtins, error, history};
 use clap::Parser;
@@ -50,7 +54,7 @@ impl builtins::Command for FcCommand {
 			return self.do_list(&context);
 		}
 
-		error::unimp("fc editor mode is not yet implemented")
+		self.do_edit(context).await
 	}
 }
 
@@ -86,6 +90,96 @@ impl FcCommand {
 		}
 
 		Ok(ExecutionResult::success())
+	}
+
+	async fn do_edit(
+		&self,
+		context: brush_core::ExecutionContext<'_, impl brush_core::ShellExtensions>,
+	) -> Result<ExecutionResult, brush_core::Error> {
+		let history = context
+			.shell
+			.history()
+			.ok_or_else(|| brush_core::Error::from(brush_core::ErrorKind::HistoryNotEnabled))?;
+
+		let (first_idx, last_idx, reverse) = self.resolve_range(history)?;
+		let mut commands = String::new();
+		let indices: Vec<usize> = if reverse {
+			(first_idx..=last_idx).rev().collect()
+		} else {
+			(first_idx..=last_idx).collect()
+		};
+
+		for idx in indices {
+			let item = history
+				.get(idx)
+				.ok_or_else(|| brush_core::Error::from(error::ErrorKind::HistoryItemNotFound))?;
+			commands.push_str(&item.command_line);
+			commands.push('\n');
+		}
+
+		let editor = self.editor_name(&context);
+		if editor.as_deref() != Some("-") {
+			let temp_file = FcTempFile::create()?;
+			fs::write(temp_file.path(), commands)?;
+
+			let edit_cmd = format!(
+				"{} {}",
+				editor.as_deref().unwrap_or("vi"),
+				shell_quote_path(temp_file.path())
+			);
+			let source_info = brush_core::SourceInfo::from("(fc editor)");
+			let edit_result = context
+				.shell
+				.run_string(edit_cmd, &source_info, &context.params)
+				.await?;
+			if !edit_result.is_success() {
+				return Ok(edit_result);
+			}
+
+			commands = fs::read_to_string(temp_file.path())?;
+		}
+
+		let history_mut = context
+			.shell
+			.history_mut()
+			.ok_or_else(|| brush_core::Error::from(brush_core::ErrorKind::HistoryNotEnabled))?;
+		history_mut.remove_nth_item(history_mut.count().saturating_sub(1));
+
+		if commands.trim().is_empty() {
+			return Ok(ExecutionResult::success());
+		}
+
+		let source_info = brush_core::SourceInfo::from("(history)");
+		let result = context
+			.shell
+			.run_string(commands.clone(), &source_info, &context.params)
+			.await?;
+		context.shell.add_to_history(commands.trim_end())?;
+
+		Ok(result)
+	}
+
+	fn editor_name(
+		&self,
+		context: &brush_core::ExecutionContext<'_, impl brush_core::ShellExtensions>,
+	) -> Option<String> {
+		if let Some(editor) = self.editor.as_ref().filter(|value| !value.is_empty()) {
+			return Some(editor.clone());
+		}
+
+		context
+			.shell
+			.env()
+			.get_str("FCEDIT", context.shell)
+			.filter(|value| !value.is_empty())
+			.or_else(|| {
+				context
+					.shell
+					.env()
+					.get_str("EDITOR", context.shell)
+					.filter(|value| !value.is_empty())
+			})
+			.map(|value| value.into_owned())
 	}
 
 	async fn do_execute(
@@ -289,6 +383,55 @@ impl FcCommand {
 
 		Err(brush_core::Error::from(error::ErrorKind::HistoryItemNotFound))
 	}
+}
+
+struct FcTempFile {
+	path: PathBuf,
+}
+
+impl FcTempFile {
+	fn create() -> Result<Self, brush_core::Error> {
+		let temp_dir = std::env::temp_dir();
+		let process_id = std::process::id();
+
+		for attempt in 0_u32..100 {
+			let path = temp_dir.join(format!("brush-fc-{process_id}-{attempt}.sh"));
+			match OpenOptions::new().write(true).create_new(true).open(&path) {
+				Ok(_) => return Ok(Self { path }),
+				Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {},
+				Err(err) => return Err(err.into()),
+			}
+		}
+
+		Err(std::io::Error::new(
+			std::io::ErrorKind::AlreadyExists,
+			"failed to create a unique fc temporary file",
+		)
+		.into())
+	}
+
+	fn path(&self) -> &Path {
+		&self.path
+	}
+}
+
+impl Drop for FcTempFile {
+	fn drop(&mut self) {
+		let _ = fs::remove_file(&self.path);
+	}
+}
+
+fn shell_quote_path(path: &Path) -> String {
+	let mut quoted = String::from("'");
+	for ch in path.to_string_lossy().chars() {
+		if ch == '\'' {
+			quoted.push_str("'\\''");
+		} else {
+			quoted.push(ch);
+		}
+	}
+	quoted.push('\'');
+	quoted
 }
 
 /// Returns the effective history count (excluding the fc command itself).

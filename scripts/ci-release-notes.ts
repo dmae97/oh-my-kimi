@@ -12,7 +12,7 @@
  *   bun scripts/ci-release-notes.ts v15.4.3             # explicit tag/version
  *   bun scripts/ci-release-notes.ts 15.4.3 notes.md     # custom output path
  *
- * Intended for the `release-github` CI job: the output is passed to
+ * Intended for the `release_github` CI job: the output is passed to
  * `softprops/action-gh-release` via `body_path:`. The action's
  * `generate_release_notes: true` still appends the auto-generated PR list
  * underneath, so this only adds curated context — it does not replace it.

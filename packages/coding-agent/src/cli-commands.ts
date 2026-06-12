@@ -16,6 +16,7 @@ export const commands: CommandEntry[] = [
 	{ name: "auth-broker", load: () => import("./commands/auth-broker").then(m => m.default) },
 	{ name: "auth-gateway", load: () => import("./commands/auth-gateway").then(m => m.default) },
 	{ name: "agents", load: () => import("./commands/agents").then(m => m.default) },
+	{ name: "bench", load: () => import("./commands/bench").then(m => m.default) },
 	{ name: "commit", load: () => import("./commands/commit").then(m => m.default) },
 	{ name: "completions", load: () => import("./commands/completions").then(m => m.default) },
 	{ name: "__complete", load: () => import("./commands/complete").then(m => m.default) },
@@ -25,6 +26,7 @@ export const commands: CommandEntry[] = [
 	{ name: "gallery", load: () => import("./commands/gallery").then(m => m.default) },
 	{ name: "grievances", load: () => import("./commands/grievances").then(m => m.default) },
 	{ name: "install", load: () => import("./commands/install").then(m => m.default) },
+	{ name: "join", load: () => import("./commands/join").then(m => m.default) },
 	{ name: "plugin", load: () => import("./commands/plugin").then(m => m.default) },
 	{ name: "setup", load: () => import("./commands/setup").then(m => m.default) },
 	{ name: "shell", load: () => import("./commands/shell").then(m => m.default) },
@@ -32,10 +34,23 @@ export const commands: CommandEntry[] = [
 	{ name: "ssh", load: () => import("./commands/ssh").then(m => m.default) },
 	{ name: "stats", load: () => import("./commands/stats").then(m => m.default) },
 	{ name: "update", load: () => import("./commands/update").then(m => m.default) },
+	{ name: "usage", load: () => import("./commands/usage").then(m => m.default) },
 	{ name: "tiny-models", load: () => import("./commands/tiny-models").then(m => m.default) },
 	{ name: "worktree", load: () => import("./commands/worktree").then(m => m.default), aliases: ["wt"] },
 	{ name: "search", load: () => import("./commands/web-search").then(m => m.default), aliases: ["q"] },
 ];
+
+const RESERVED_TOP_LEVEL_WORDS = new Map<string, string>([
+	[
+		"extensions",
+		'`omp extensions` is not a management command. Use `omp plugin list` / `omp plugin install`, or run `omp launch extensions` if you meant to send "extensions" as a prompt.',
+	],
+]);
+
+export function reservedTopLevelWordMessage(first: string | undefined, argc = 1): string | undefined {
+	if (argc !== 1 || !first || first.startsWith("-") || first.startsWith("@")) return undefined;
+	return RESERVED_TOP_LEVEL_WORDS.get(first);
+}
 
 /**
  * Return true when `first` matches a registered subcommand name or alias.
@@ -46,4 +61,21 @@ export const commands: CommandEntry[] = [
 export function isSubcommand(first: string | undefined): boolean {
 	if (!first || first.startsWith("-") || first.startsWith("@")) return false;
 	return commands.some(entry => entry.name === first || entry.aliases?.includes(first));
+}
+
+export type ResolvedCliArgv = { argv: string[] } | { error: string };
+
+/**
+ * Decide what the CLI runner should do with raw argv: reject bare reserved
+ * management words, pass help/version through untouched, and route everything
+ * that is not a known subcommand to `launch`.
+ */
+export function resolveCliArgv(argv: string[]): ResolvedCliArgv {
+	const first = argv[0];
+	const reservedMessage = reservedTopLevelWordMessage(first, argv.length);
+	if (reservedMessage) return { error: reservedMessage };
+	if (first === "--help" || first === "-h" || first === "--version" || first === "-v" || first === "help") {
+		return { argv };
+	}
+	return { argv: isSubcommand(first) ? argv : ["launch", ...argv] };
 }

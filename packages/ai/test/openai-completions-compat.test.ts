@@ -1,19 +1,30 @@
-import { afterEach, describe, expect, it } from "bun:test";
-import { getBundledModel } from "../src/models";
+import { describe, expect, it } from "bun:test";
 import {
 	applyOpenRouterRoutingVariant,
 	convertMessages,
-	detectCompat,
 	streamOpenAICompletions,
-} from "../src/providers/openai-completions";
-import { type ResolvedOpenAICompat, resolveOpenAICompat } from "../src/providers/openai-completions-compat";
-import type { AssistantMessage, Context, Model, OpenAICompat } from "../src/types";
+} from "@oh-my-pi/pi-ai/providers/openai-completions";
+import type {
+	AssistantMessage,
+	Context,
+	FetchImpl,
+	Model,
+	ModelSpec,
+	OpenAICompat,
+	ToolResultMessage,
+} from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import type { ResolvedOpenAICompat } from "@oh-my-pi/pi-catalog/types";
 
-const originalFetch = global.fetch;
-
-afterEach(() => {
-	global.fetch = originalFetch;
-});
+const gpt4oMiniSpec: ModelSpec<"openai-completions"> = (() => {
+	const {
+		compat: _resolved,
+		compatConfig,
+		...rest
+	} = getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">;
+	return { ...rest, compat: compatConfig };
+})();
 
 function createAbortedSignal(): AbortSignal {
 	const controller = new AbortController();
@@ -46,12 +57,12 @@ function createSseResponse(events: unknown[]): Response {
 	});
 }
 
-function createMockFetch(events: unknown[]): typeof fetch {
+function createMockFetch(events: unknown[]): FetchImpl {
 	async function mockFetch(_input: string | URL | Request, _init?: RequestInit): Promise<Response> {
 		return createSseResponse(events);
 	}
 
-	return Object.assign(mockFetch, { preconnect: originalFetch.preconnect });
+	return Object.assign(mockFetch, { preconnect: fetch.preconnect });
 }
 
 function baseContext(): Context {
@@ -69,13 +80,16 @@ function baseContext(): Context {
 async function captureOpenAICompletionsPayload(
 	model: Model<"openai-completions">,
 	context: Context = baseContext(),
+	options?: { reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh" },
 ): Promise<unknown> {
 	const { promise, resolve } = Promise.withResolvers<unknown>();
-	global.fetch = createMockFetch(["[DONE]"]);
+	const fetchMock = createMockFetch(["[DONE]"]);
 	streamOpenAICompletions(model, context, {
 		apiKey: "test-key",
+		fetch: fetchMock,
 		signal: createAbortedSignal(),
 		onPayload: payload => resolve(payload),
+		...options,
 	});
 	return promise;
 }
@@ -108,10 +122,10 @@ function getLastTextPart(content: unknown): object | undefined {
 
 describe("openai-completions compatibility", () => {
 	it("serializes assistant text content as a plain string", () => {
-		const model: Model<"openai-completions"> = {
-			...getBundledModel("openai", "gpt-4o-mini"),
+		const model: Model<"openai-completions"> = buildModel({
+			...gpt4oMiniSpec,
 			api: "openai-completions",
-		};
+		} as ModelSpec<"openai-completions">);
 		const compat = {
 			supportsStore: true,
 			supportsDeveloperRole: true,
@@ -137,6 +151,10 @@ describe("openai-completions compatibility", () => {
 			extraBody: {},
 			supportsStrictMode: true,
 			toolStrictMode: "none",
+			supportsReasoningParams: true,
+			alwaysSendMaxTokens: false,
+			isOpenRouterHost: false,
+			isVercelGatewayHost: false,
 		} satisfies ResolvedOpenAICompat;
 		const assistantMessage: AssistantMessage = {
 			role: "assistant",
@@ -168,11 +186,89 @@ describe("openai-completions compatibility", () => {
 		expect(assistant.content).toBe("hello world");
 	});
 
-	it("preserves multiple system prompts as leading system messages for chat completions", () => {
-		const model: Model<"openai-completions"> = {
-			...getBundledModel("openai", "gpt-4o-mini"),
+	it("prepends thinking text to string assistant content when requiresThinkingAsText is set", () => {
+		const model: Model<"openai-completions"> = buildModel({
+			...gpt4oMiniSpec,
 			api: "openai-completions",
+		} as ModelSpec<"openai-completions">);
+		const assistantMessage: AssistantMessage = {
+			role: "assistant",
+			content: [
+				{ type: "thinking", thinking: "chain of thought" },
+				{ type: "text", text: "final answer" },
+			],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now(),
 		};
+		const messages = convertMessages(
+			model,
+			{ messages: [assistantMessage] },
+			{
+				...model.compat,
+				requiresThinkingAsText: true,
+			},
+		);
+		const assistant = messages.find(message => message.role === "assistant");
+		expect(assistant).toBeDefined();
+		if (assistant?.role !== "assistant") throw new Error("assistant message missing");
+		// Regression: thinking+text replay used to call `.unshift` on the string
+		// content set above (TypeError). Both blocks must survive as one string.
+		expect(typeof assistant.content).toBe("string");
+		expect(assistant.content).toBe("chain of thought\n\nfinal answer");
+	});
+
+	it("emits thinking-only assistant content as a plain string when requiresThinkingAsText is set", () => {
+		const model: Model<"openai-completions"> = buildModel({
+			...gpt4oMiniSpec,
+			api: "openai-completions",
+		} as ModelSpec<"openai-completions">);
+		const assistantMessage: AssistantMessage = {
+			role: "assistant",
+			content: [{ type: "thinking", thinking: "only thoughts" }],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now(),
+		};
+		const messages = convertMessages(
+			model,
+			{ messages: [assistantMessage] },
+			{
+				...model.compat,
+				requiresThinkingAsText: true,
+			},
+		);
+		const assistant = messages.find(message => message.role === "assistant");
+		expect(assistant).toBeDefined();
+		if (assistant?.role !== "assistant") throw new Error("assistant message missing");
+		expect(assistant.content).toBe("only thoughts");
+	});
+
+	it("preserves multiple system prompts as leading system messages for chat completions", () => {
+		const model: Model<"openai-completions"> = buildModel({
+			...gpt4oMiniSpec,
+			api: "openai-completions",
+		} as ModelSpec<"openai-completions">);
 
 		const messages = convertMessages(
 			model,
@@ -180,7 +276,7 @@ describe("openai-completions compatibility", () => {
 				systemPrompt: ["stable instructions", "cacheable policy"],
 				messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
 			},
-			detectCompat(model),
+			model.compat,
 		);
 
 		expect(messages.slice(0, 3)).toEqual([
@@ -191,11 +287,11 @@ describe("openai-completions compatibility", () => {
 	});
 
 	it("uses developer messages for reasoning chat models only when the target supports them", () => {
-		const model: Model<"openai-completions"> = {
-			...getBundledModel("openai", "gpt-4o-mini"),
+		const model: Model<"openai-completions"> = buildModel({
+			...gpt4oMiniSpec,
 			api: "openai-completions",
 			reasoning: true,
-		};
+		} as ModelSpec<"openai-completions">);
 
 		const supportedMessages = convertMessages(
 			model,
@@ -203,7 +299,7 @@ describe("openai-completions compatibility", () => {
 				systemPrompt: ["stable instructions", "cacheable policy"],
 				messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
 			},
-			detectCompat(model),
+			model.compat,
 		);
 
 		expect(supportedMessages.slice(0, 3)).toEqual([
@@ -218,7 +314,7 @@ describe("openai-completions compatibility", () => {
 				systemPrompt: ["stable instructions", "cacheable policy"],
 				messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
 			},
-			{ ...detectCompat(model), supportsDeveloperRole: false },
+			{ ...model.compat, supportsDeveloperRole: false },
 		);
 
 		expect(unsupportedMessages.slice(0, 3)).toEqual([
@@ -243,26 +339,26 @@ describe("openai-completions compatibility", () => {
 			{ provider: "github-copilot", baseUrl: "https://api.githubcopilot.com", expected: false },
 		];
 		for (const { provider, baseUrl, expected } of cases) {
-			const model: Model<"openai-completions"> = {
-				...getBundledModel("openai", "gpt-4o-mini"),
+			const model: Model<"openai-completions"> = buildModel({
+				...gpt4oMiniSpec,
 				api: "openai-completions",
 				provider: provider as Model["provider"],
 				baseUrl,
 				reasoning: true,
-			};
-			expect(detectCompat(model).supportsDeveloperRole).toBe(expected);
+			} as ModelSpec<"openai-completions">);
+			expect(model.compat.supportsDeveloperRole).toBe(expected);
 		}
 	});
 
 	it("emits system role for reasoning models on Moonshot (kimi tokenization rejects developer)", () => {
-		const model: Model<"openai-completions"> = {
-			...getBundledModel("openai", "gpt-4o-mini"),
+		const model: Model<"openai-completions"> = buildModel({
+			...gpt4oMiniSpec,
 			api: "openai-completions",
 			provider: "moonshot",
 			baseUrl: "https://api.moonshot.ai/v1",
 			id: "kimi-k2.5",
 			reasoning: true,
-		};
+		} as ModelSpec<"openai-completions">);
 
 		const messages = convertMessages(
 			model,
@@ -270,7 +366,7 @@ describe("openai-completions compatibility", () => {
 				systemPrompt: ["you are a helpful assistant"],
 				messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
 			},
-			detectCompat(model),
+			model.compat,
 		);
 
 		expect(messages.slice(0, 2)).toEqual([
@@ -280,10 +376,10 @@ describe("openai-completions compatibility", () => {
 	});
 
 	it("coalesces ordered system prompts when the host disables multi-system support", () => {
-		const model: Model<"openai-completions"> = {
-			...getBundledModel("openai", "gpt-4o-mini"),
+		const model: Model<"openai-completions"> = buildModel({
+			...gpt4oMiniSpec,
 			api: "openai-completions",
-		};
+		} as ModelSpec<"openai-completions">);
 
 		const messages = convertMessages(
 			model,
@@ -291,7 +387,7 @@ describe("openai-completions compatibility", () => {
 				systemPrompt: ["stable instructions", "cacheable policy"],
 				messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
 			},
-			{ ...detectCompat(model), supportsMultipleSystemMessages: false },
+			{ ...model.compat, supportsMultipleSystemMessages: false },
 		);
 
 		expect(messages.slice(0, 2)).toEqual([
@@ -301,11 +397,11 @@ describe("openai-completions compatibility", () => {
 	});
 
 	it("coalesces system prompts on a developer-role reasoning model when multi-system is disabled", () => {
-		const model: Model<"openai-completions"> = {
-			...getBundledModel("openai", "gpt-4o-mini"),
+		const model: Model<"openai-completions"> = buildModel({
+			...gpt4oMiniSpec,
 			api: "openai-completions",
 			reasoning: true,
-		};
+		} as ModelSpec<"openai-completions">);
 
 		const messages = convertMessages(
 			model,
@@ -313,7 +409,7 @@ describe("openai-completions compatibility", () => {
 				systemPrompt: ["stable instructions", "cacheable policy"],
 				messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
 			},
-			{ ...detectCompat(model), supportsMultipleSystemMessages: false },
+			{ ...model.compat, supportsMultipleSystemMessages: false },
 		);
 
 		expect(messages.slice(0, 2)).toEqual([
@@ -323,14 +419,14 @@ describe("openai-completions compatibility", () => {
 	});
 
 	it("emits separate system prompts for an unknown OpenAI-compatible host when explicitly enabled", () => {
-		const model: Model<"openai-completions"> = {
-			...getBundledModel("openai", "gpt-4o-mini"),
+		const model: Model<"openai-completions"> = buildModel({
+			...gpt4oMiniSpec,
 			api: "openai-completions",
 			provider: "custom" as Model["provider"],
 			baseUrl: "https://example.invalid/v1",
-		};
+		} as ModelSpec<"openai-completions">);
 
-		const detected = detectCompat(model);
+		const detected = model.compat;
 		expect(detected.supportsMultipleSystemMessages).toBe(false);
 
 		const overridden = convertMessages(
@@ -350,14 +446,14 @@ describe("openai-completions compatibility", () => {
 	});
 
 	it("auto-detects MiniMax OpenAI hosts as single-system to satisfy error 2013", () => {
-		const model: Model<"openai-completions"> = {
-			...getBundledModel("openai", "gpt-4o-mini"),
+		const model: Model<"openai-completions"> = buildModel({
+			...gpt4oMiniSpec,
 			api: "openai-completions",
 			provider: "minimax-code" as Model["provider"],
 			baseUrl: "https://api.minimax.io/v1",
-		};
+		} as ModelSpec<"openai-completions">);
 
-		const detected = detectCompat(model);
+		const detected = model.compat;
 		expect(detected.supportsMultipleSystemMessages).toBe(false);
 
 		const messages = convertMessages(
@@ -376,8 +472,8 @@ describe("openai-completions compatibility", () => {
 	});
 
 	it("respects an explicit compat override for strict-template local providers", () => {
-		const model: Model<"openai-completions"> = {
-			...getBundledModel("openai", "gpt-4o-mini"),
+		const model: Model<"openai-completions"> = buildModel({
+			...gpt4oMiniSpec,
 			api: "openai-completions",
 			provider: "custom" as Model["provider"],
 			baseUrl: "https://my-vllm.local/v1",
@@ -385,7 +481,7 @@ describe("openai-completions compatibility", () => {
 				supportsDeveloperRole: false,
 				supportsMultipleSystemMessages: false,
 			},
-		};
+		} as ModelSpec<"openai-completions">);
 
 		const messages = convertMessages(
 			model,
@@ -393,7 +489,7 @@ describe("openai-completions compatibility", () => {
 				systemPrompt: ["stable instructions", "cacheable policy"],
 				messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
 			},
-			resolveOpenAICompat(model),
+			model.compat,
 		);
 
 		expect(messages.slice(0, 2)).toEqual([
@@ -403,11 +499,11 @@ describe("openai-completions compatibility", () => {
 	});
 
 	it("reads usage from choice usage fallback", async () => {
-		const model: Model<"openai-completions"> = {
-			...getBundledModel("openai", "gpt-4o-mini"),
+		const model: Model<"openai-completions"> = buildModel({
+			...gpt4oMiniSpec,
 			api: "openai-completions",
-		};
-		global.fetch = createMockFetch([
+		} as ModelSpec<"openai-completions">);
+		const fetchMock = createMockFetch([
 			{
 				id: "chatcmpl-test",
 				object: "chat.completion.chunk",
@@ -435,7 +531,10 @@ describe("openai-completions compatibility", () => {
 			"[DONE]",
 		]);
 
-		const result = await streamOpenAICompletions(model, baseContext(), { apiKey: "test-key" }).result();
+		const result = await streamOpenAICompletions(model, baseContext(), {
+			apiKey: "test-key",
+			fetch: fetchMock,
+		}).result();
 		expect(result.stopReason).toBe("stop");
 		expect(result.usage.input).toBe(10);
 		expect(result.usage.output).toBe(3);
@@ -444,14 +543,14 @@ describe("openai-completions compatibility", () => {
 	});
 
 	it("maps qwen chat template reasoning into chat_template_kwargs", async () => {
-		const model: Model<"openai-completions"> = {
-			...getBundledModel("openai", "gpt-4o-mini"),
+		const model: Model<"openai-completions"> = buildModel({
+			...gpt4oMiniSpec,
 			api: "openai-completions",
 			reasoning: true,
 			compat: {
 				thinkingFormat: "qwen-chat-template",
 			},
-		};
+		} as ModelSpec<"openai-completions">);
 		const { promise, resolve } = Promise.withResolvers<unknown>();
 		streamOpenAICompletions(model, baseContext(), {
 			apiKey: "test-key",
@@ -465,11 +564,11 @@ describe("openai-completions compatibility", () => {
 	});
 
 	it("treats finish_reason end as stop", async () => {
-		const model: Model<"openai-completions"> = {
-			...getBundledModel("openai", "gpt-4o-mini"),
+		const model: Model<"openai-completions"> = buildModel({
+			...gpt4oMiniSpec,
 			api: "openai-completions",
-		};
-		global.fetch = createMockFetch([
+		} as ModelSpec<"openai-completions">);
+		const fetchMock = createMockFetch([
 			{
 				id: "chatcmpl-end",
 				object: "chat.completion.chunk",
@@ -487,14 +586,17 @@ describe("openai-completions compatibility", () => {
 			"[DONE]",
 		]);
 
-		const result = await streamOpenAICompletions(model, baseContext(), { apiKey: "test-key" }).result();
+		const result = await streamOpenAICompletions(model, baseContext(), {
+			apiKey: "test-key",
+			fetch: fetchMock,
+		}).result();
 		expect(result.stopReason).toBe("stop");
 		expect(result.content[0]).toMatchObject({ type: "text", text: "done" });
 	});
 
 	it("injects compat.extraBody into OpenAI payload", async () => {
-		const model: Model<"openai-completions"> = {
-			...getBundledModel("openai", "gpt-4o-mini"),
+		const model: Model<"openai-completions"> = buildModel({
+			...gpt4oMiniSpec,
 			api: "openai-completions",
 			compat: {
 				extraBody: {
@@ -502,12 +604,13 @@ describe("openai-completions compatibility", () => {
 					controller: "mlx",
 				},
 			},
-		};
+		} as ModelSpec<"openai-completions">);
 
 		const { promise, resolve } = Promise.withResolvers<unknown>();
-		global.fetch = createMockFetch(["[DONE]"]);
+		const fetchMock = createMockFetch(["[DONE]"]);
 		streamOpenAICompletions(model, baseContext(), {
 			apiKey: "test-key",
+			fetch: fetchMock,
 			signal: createAbortedSignal(),
 			onPayload: payload => resolve(payload),
 		});
@@ -522,11 +625,11 @@ describe("openai-completions compatibility", () => {
 	});
 
 	it("preserves the streamed reasoning field name when replay requires reasoning content", async () => {
-		const model: Model<"openai-completions"> = {
-			...getBundledModel("openai", "gpt-4o-mini"),
+		const model: Model<"openai-completions"> = buildModel({
+			...gpt4oMiniSpec,
 			api: "openai-completions",
-		};
-		global.fetch = createMockFetch([
+		} as ModelSpec<"openai-completions">);
+		const fetchMock = createMockFetch([
 			{
 				id: "chatcmpl-reasoning-text",
 				object: "chat.completion.chunk",
@@ -549,14 +652,17 @@ describe("openai-completions compatibility", () => {
 			"[DONE]",
 		]);
 
-		const result = await streamOpenAICompletions(model, baseContext(), { apiKey: "test-key" }).result();
+		const result = await streamOpenAICompletions(model, baseContext(), {
+			apiKey: "test-key",
+			fetch: fetchMock,
+		}).result();
 		expect(result.content).toContainEqual({
 			type: "thinking",
 			thinking: "inspect tool output",
 			thinkingSignature: "reasoning_text",
 		});
 
-		const compat = { ...detectCompat(model), requiresReasoningContentForToolCalls: true };
+		const compat = { ...model.compat, requiresReasoningContentForToolCalls: true };
 		const messages = convertMessages(model, { messages: [result] }, compat);
 		const assistant = messages.find(message => message.role === "assistant");
 		expect(assistant).toBeDefined();
@@ -569,25 +675,25 @@ describe("openai-completions compatibility", () => {
 
 describe("kimi model detection via detectCompat", () => {
 	function kimiOpenCodeModel(id: string): Model<"openai-completions"> {
-		return {
-			...getBundledModel("openai", "gpt-4o-mini"),
+		return buildModel({
+			...gpt4oMiniSpec,
 			api: "openai-completions",
 			provider: "opencode-go",
 			baseUrl: "https://opencode.ai/zen/go/v1",
 			id,
 			reasoning: true,
-		};
+		} as ModelSpec<"openai-completions">);
 	}
 
 	function kimiMoonshotModel(id: string): Model<"openai-completions"> {
-		return {
-			...getBundledModel("openai", "gpt-4o-mini"),
+		return buildModel({
+			...gpt4oMiniSpec,
 			api: "openai-completions",
 			provider: "moonshot",
 			baseUrl: "https://api.moonshot.ai/v1",
 			id,
 			reasoning: true,
-		};
+		} as ModelSpec<"openai-completions">);
 	}
 	// The z.ai binary `thinking: { type }` field is Kimi's *native* surface
 	// (Moonshot / Kimi-code, matched by isMoonshotKimi). Kimi reached through an
@@ -601,38 +707,55 @@ describe("kimi model detection via detectCompat", () => {
 	// `compat.thinkingFormat` per catalog entry (e.g. kimi-code, wafer-serverless).
 	it("reserves zai for native Kimi hosts and defaults proxies to OpenAI reasoning_effort", () => {
 		// Native Moonshot surface → z.ai binary thinking.
-		const moonshotK25 = detectCompat(kimiMoonshotModel("kimi-k2.5"));
+		const moonshotK25 = kimiMoonshotModel("kimi-k2.5").compat;
 		expect(moonshotK25.thinkingFormat).toBe("zai");
 		expect(moonshotK25.thinkingKeep).toBeUndefined();
-		const moonshotK26 = detectCompat(kimiMoonshotModel("kimi-k2.6"));
+		const moonshotK26 = kimiMoonshotModel("kimi-k2.6").compat;
 		expect(moonshotK26.thinkingFormat).toBe("zai");
 		expect(moonshotK26.thinkingKeep).toBe("all");
 
 		// OpenAI-compatible proxies → reasoning_effort ("openai").
-		const opencodeK26 = detectCompat(kimiOpenCodeModel("kimi-k2.6"));
+		const opencodeK26 = kimiOpenCodeModel("kimi-k2.6").compat;
 		expect(opencodeK26.thinkingFormat).toBe("openai");
 		expect(opencodeK26.thinkingKeep).toBeUndefined();
-		const kiloKimi: Model<"openai-completions"> = {
-			...getBundledModel("openai", "gpt-4o-mini"),
+		const kiloKimi: Model<"openai-completions"> = buildModel({
+			...gpt4oMiniSpec,
 			api: "openai-completions",
 			provider: "kilo",
 			baseUrl: "https://api.kilo.ai/api/gateway",
 			id: "moonshotai/kimi-k2.6",
 			reasoning: true,
-		};
-		expect(detectCompat(kiloKimi).thinkingFormat).toBe("openai");
+		} as ModelSpec<"openai-completions">);
+		expect(kiloKimi.compat.thinkingFormat).toBe("openai");
 
 		// OpenRouter normalizes reasoning via its own object and keeps precedence
 		// over the generic Kimi id match.
-		const openRouterKimi: Model<"openai-completions"> = {
-			...getBundledModel("openai", "gpt-4o-mini"),
+		const openRouterKimi: Model<"openai-completions"> = buildModel({
+			...gpt4oMiniSpec,
 			api: "openai-completions",
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			id: "moonshotai/kimi-k2.6",
 			reasoning: true,
-		};
-		expect(detectCompat(openRouterKimi).thinkingFormat).toBe("openrouter");
+		} as ModelSpec<"openai-completions">);
+		expect(openRouterKimi.compat.thinkingFormat).toBe("openrouter");
+	});
+
+	it("maps OpenRouter Anthropic adaptive reasoning efforts to the Anthropic scale", async () => {
+		const model: Model<"openai-completions"> = buildModel({
+			...gpt4oMiniSpec,
+			api: "openai-completions",
+			provider: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+			id: "anthropic/claude-fable-5",
+			reasoning: true,
+		} as ModelSpec<"openai-completions">);
+
+		const highPayload = await captureOpenAICompletionsPayload(model, baseContext(), { reasoning: "high" });
+		const xhighPayload = await captureOpenAICompletionsPayload(model, baseContext(), { reasoning: "xhigh" });
+
+		expect(getNestedObject(highPayload, "reasoning")).toEqual({ effort: "xhigh" });
+		expect(getNestedObject(xhighPayload, "reasoning")).toEqual({ effort: "max" });
 	});
 
 	// Regression for #1071: OpenCode-Go/Zen handle reasoning content server-side
@@ -640,7 +763,7 @@ describe("kimi model detection via detectCompat", () => {
 	// permitted"). Kimi on opencode-* MUST NOT have reasoning_content injected,
 	// even though it's still recognized as a Kimi model for other quirks.
 	it("does not require reasoning_content for tool calls on kimi-k2.5 (opencode-go)", () => {
-		const compat = detectCompat(kimiOpenCodeModel("kimi-k2.5"));
+		const compat = kimiOpenCodeModel("kimi-k2.5").compat;
 		expect(compat.requiresReasoningContentForToolCalls).toBe(false);
 		// Kimi-specific quirks still apply even on opencode hosts.
 		expect(compat.requiresAssistantContentForToolCalls).toBe(true);
@@ -648,7 +771,7 @@ describe("kimi model detection via detectCompat", () => {
 
 	it("does not inject reasoning_content placeholder for kimi on opencode-go", () => {
 		const model = kimiOpenCodeModel("kimi-k2.5");
-		const compat = detectCompat(model);
+		const compat = model.compat;
 		const toolCallMessage: AssistantMessage = {
 			role: "assistant",
 			content: [
@@ -682,7 +805,7 @@ describe("kimi model detection via detectCompat", () => {
 
 	it("does not replay streamed reasoning fields for kimi on opencode-go", () => {
 		const model = kimiOpenCodeModel("kimi-k2.6");
-		const compat = detectCompat(model);
+		const compat = model.compat;
 		const toolCallMessage: AssistantMessage = {
 			role: "assistant",
 			content: [
@@ -769,7 +892,7 @@ describe("kimi model detection via detectCompat", () => {
 		};
 
 		const { promise, resolve } = Promise.withResolvers<unknown>();
-		global.fetch = createMockFetch(["[DONE]"]);
+		const fetchMock = createMockFetch(["[DONE]"]);
 		streamOpenAICompletions(
 			model,
 			{
@@ -788,6 +911,7 @@ describe("kimi model detection via detectCompat", () => {
 			},
 			{
 				apiKey: "test-key",
+				fetch: fetchMock,
 				reasoning: "high",
 				signal: createAbortedSignal(),
 				onPayload: payload => resolve(payload),
@@ -835,7 +959,7 @@ describe("kimi model detection via detectCompat", () => {
 		};
 
 		const { promise, resolve } = Promise.withResolvers<unknown>();
-		global.fetch = createMockFetch(["[DONE]"]);
+		const fetchMock = createMockFetch(["[DONE]"]);
 		streamOpenAICompletions(
 			model,
 			{
@@ -854,6 +978,7 @@ describe("kimi model detection via detectCompat", () => {
 			},
 			{
 				apiKey: "test-key",
+				fetch: fetchMock,
 				signal: createAbortedSignal(),
 				onPayload: payload => resolve(payload),
 			},
@@ -905,7 +1030,7 @@ describe("kimi model detection via detectCompat", () => {
 		};
 
 		const { promise, resolve } = Promise.withResolvers<unknown>();
-		global.fetch = createMockFetch(["[DONE]"]);
+		const fetchMock = createMockFetch(["[DONE]"]);
 		streamOpenAICompletions(
 			model,
 			{
@@ -924,6 +1049,7 @@ describe("kimi model detection via detectCompat", () => {
 			},
 			{
 				apiKey: "test-key",
+				fetch: fetchMock,
 				reasoning: "high",
 				// Forced tool choice triggers `disableReasoningOnForcedToolChoice`
 				// for Kimi, suppressing reasoning_effort on the wire body.
@@ -955,14 +1081,14 @@ describe("kimi model detection via detectCompat", () => {
 	// `allowsSyntheticReasoningContentForToolCalls=false`, so DeepSeek V4
 	// payloads carry only `reasoning_content`.
 	it("emits only reasoning_content on deepseek-v4-flash opencode-go tool-call replays", async () => {
-		const model: Model<"openai-completions"> = {
-			...getBundledModel("openai", "gpt-4o-mini"),
+		const model: Model<"openai-completions"> = buildModel({
+			...gpt4oMiniSpec,
 			api: "openai-completions",
 			provider: "opencode-go",
 			baseUrl: "https://opencode.ai/zen/go/v1",
 			id: "deepseek-v4-flash",
 			reasoning: true,
-		};
+		} as ModelSpec<"openai-completions">);
 		const priorAssistant: AssistantMessage = {
 			role: "assistant",
 			content: [
@@ -994,7 +1120,7 @@ describe("kimi model detection via detectCompat", () => {
 		};
 
 		const { promise, resolve } = Promise.withResolvers<unknown>();
-		global.fetch = createMockFetch(["[DONE]"]);
+		const fetchMock = createMockFetch(["[DONE]"]);
 		streamOpenAICompletions(
 			model,
 			{
@@ -1013,6 +1139,7 @@ describe("kimi model detection via detectCompat", () => {
 			},
 			{
 				apiKey: "test-key",
+				fetch: fetchMock,
 				reasoning: "high",
 				signal: createAbortedSignal(),
 				onPayload: payload => resolve(payload),
@@ -1038,14 +1165,14 @@ describe("kimi model detection via detectCompat", () => {
 		{ id: "qwen3.7-max", reasoning: "high" as const, expectReplay: true },
 		{ id: "mimo-v2-pro", reasoning: "high" as const, expectReplay: true },
 	])("opencode-go/%s reasoning=%s → replay=%s", async ({ id, reasoning, expectReplay }) => {
-		const model: Model<"openai-completions"> = {
-			...getBundledModel("openai", "gpt-4o-mini"),
+		const model: Model<"openai-completions"> = buildModel({
+			...gpt4oMiniSpec,
 			api: "openai-completions",
 			provider: "opencode-go",
 			baseUrl: "https://opencode.ai/zen/go/v1",
 			id,
 			reasoning: true,
-		};
+		} as ModelSpec<"openai-completions">);
 		const priorAssistant: AssistantMessage = {
 			role: "assistant",
 			content: [
@@ -1077,7 +1204,7 @@ describe("kimi model detection via detectCompat", () => {
 		};
 
 		const { promise, resolve } = Promise.withResolvers<unknown>();
-		global.fetch = createMockFetch(["[DONE]"]);
+		const fetchMock = createMockFetch(["[DONE]"]);
 		streamOpenAICompletions(
 			model,
 			{
@@ -1096,6 +1223,7 @@ describe("kimi model detection via detectCompat", () => {
 			},
 			{
 				apiKey: "test-key",
+				fetch: fetchMock,
 				reasoning,
 				signal: createAbortedSignal(),
 				onPayload: payload => resolve(payload),
@@ -1118,7 +1246,7 @@ describe("kimi model detection via detectCompat", () => {
 
 	it("injects reasoning_content placeholder when kimi-on-moonshot has tool calls without reasoning field", () => {
 		const model = kimiMoonshotModel("kimi-k2.5");
-		const compat = detectCompat(model);
+		const compat = model.compat;
 		const toolCallMessage: AssistantMessage = {
 			role: "assistant",
 			content: [
@@ -1154,15 +1282,15 @@ describe("kimi model detection via detectCompat", () => {
 	});
 
 	it("injects reasoning_content placeholder for direct Moonshot Kimi after thinking-disabled forced tool calls", () => {
-		const model: Model<"openai-completions"> = {
-			...getBundledModel("openai", "gpt-4o-mini"),
+		const model: Model<"openai-completions"> = buildModel({
+			...gpt4oMiniSpec,
 			api: "openai-completions",
 			provider: "moonshot",
 			baseUrl: "https://api.moonshot.ai/v1",
 			id: "kimi-k2.6",
 			reasoning: false,
-		};
-		const compat = detectCompat(model);
+		} as ModelSpec<"openai-completions">);
+		const compat = model.compat;
 		const toolCallMessage: AssistantMessage = {
 			role: "assistant",
 			content: [
@@ -1197,14 +1325,14 @@ describe("kimi model detection via detectCompat", () => {
 	});
 
 	it("does not inject reasoning_content when model is not kimi", () => {
-		const model: Model<"openai-completions"> = {
-			...getBundledModel("openai", "gpt-4o-mini"),
+		const model: Model<"openai-completions"> = buildModel({
+			...gpt4oMiniSpec,
 			api: "openai-completions",
 			provider: "opencode-go",
 			baseUrl: "https://opencode.ai/zen/go/v1",
 			id: "some-other-model",
-		};
-		const compat = detectCompat(model);
+		} as ModelSpec<"openai-completions">);
+		const compat = model.compat;
 		expect(compat.requiresReasoningContentForToolCalls).toBe(false);
 		expect(compat.requiresAssistantContentForToolCalls).toBe(false);
 	});
@@ -1213,40 +1341,40 @@ describe("kimi model detection via detectCompat", () => {
 	// is provider-agnostic, so it's the cleanest signal that the id-pattern
 	// match recognizes every Kimi variant.
 	it.each(["kimi-k2.5", "kimi-k1.5", "kimi-k2-5"])("matches kimi model id: %s", id => {
-		const compat = detectCompat(kimiMoonshotModel(id));
+		const compat = kimiMoonshotModel(id).compat;
 		expect(compat.requiresAssistantContentForToolCalls).toBe(true);
 		expect(compat.requiresReasoningContentForToolCalls).toBe(true);
 	});
 
 	it("still matches moonshotai/kimi via openrouter", () => {
-		const model: Model<"openai-completions"> = {
-			...getBundledModel("openai", "gpt-4o-mini"),
+		const model: Model<"openai-completions"> = buildModel({
+			...gpt4oMiniSpec,
 			api: "openai-completions",
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			id: "moonshotai/kimi-k2-5",
 			reasoning: true,
-		};
-		const compat = detectCompat(model);
+		} as ModelSpec<"openai-completions">);
+		const compat = model.compat;
 		expect(compat.requiresReasoningContentForToolCalls).toBe(true);
 	});
 });
 
 describe("NVIDIA NIM DeepSeek special-token stripping", () => {
 	function nvidiaDeepseekModel(): Model<"openai-completions"> {
-		return {
-			...getBundledModel("openai", "gpt-4o-mini"),
+		return buildModel({
+			...gpt4oMiniSpec,
 			api: "openai-completions",
 			provider: "nvidia",
 			baseUrl: "https://integrate.api.nvidia.com/v1",
 			id: "deepseek-ai/deepseek-v4-flash",
 			reasoning: true,
-		};
+		} as ModelSpec<"openai-completions">);
 	}
 
 	it("strips leaked <\uff5cDSML\uff5c...\uff5c> markers from visible content", async () => {
 		const model = nvidiaDeepseekModel();
-		global.fetch = createMockFetch([
+		const fetchMock = createMockFetch([
 			{
 				id: "chatcmpl-nim-1",
 				object: "chat.completion.chunk",
@@ -1269,7 +1397,10 @@ describe("NVIDIA NIM DeepSeek special-token stripping", () => {
 			"[DONE]",
 		]);
 
-		const result = await streamOpenAICompletions(model, baseContext(), { apiKey: "test-key" }).result();
+		const result = await streamOpenAICompletions(model, baseContext(), {
+			apiKey: "test-key",
+			fetch: fetchMock,
+		}).result();
 		const text = result.content
 			.filter(b => b.type === "text")
 			.map(b => (b as { text: string }).text)
@@ -1281,7 +1412,7 @@ describe("NVIDIA NIM DeepSeek special-token stripping", () => {
 
 	it("holds back partial token split across chunks", async () => {
 		const model = nvidiaDeepseekModel();
-		global.fetch = createMockFetch([
+		const fetchMock = createMockFetch([
 			{
 				id: "chatcmpl-nim-2",
 				object: "chat.completion.chunk",
@@ -1306,7 +1437,10 @@ describe("NVIDIA NIM DeepSeek special-token stripping", () => {
 			"[DONE]",
 		]);
 
-		const result = await streamOpenAICompletions(model, baseContext(), { apiKey: "test-key" }).result();
+		const result = await streamOpenAICompletions(model, baseContext(), {
+			apiKey: "test-key",
+			fetch: fetchMock,
+		}).result();
 		const text = result.content
 			.filter(b => b.type === "text")
 			.map(b => (b as { text: string }).text)
@@ -1316,7 +1450,7 @@ describe("NVIDIA NIM DeepSeek special-token stripping", () => {
 
 	it("flushes a dangling partial open delimiter at end of stream", async () => {
 		const model = nvidiaDeepseekModel();
-		global.fetch = createMockFetch([
+		const fetchMock = createMockFetch([
 			{
 				id: "chatcmpl-nim-3",
 				object: "chat.completion.chunk",
@@ -1336,7 +1470,10 @@ describe("NVIDIA NIM DeepSeek special-token stripping", () => {
 
 		// At end-of-stream we have no way to know whether the partial is a real token,
 		// so we emit it verbatim rather than swallow legitimate text forever.
-		const result = await streamOpenAICompletions(model, baseContext(), { apiKey: "test-key" }).result();
+		const result = await streamOpenAICompletions(model, baseContext(), {
+			apiKey: "test-key",
+			fetch: fetchMock,
+		}).result();
 		const text = result.content
 			.filter(b => b.type === "text")
 			.map(b => (b as { text: string }).text)
@@ -1345,14 +1482,14 @@ describe("NVIDIA NIM DeepSeek special-token stripping", () => {
 	});
 
 	it("leaves visible content alone for non-deepseek nvidia models", async () => {
-		const model: Model<"openai-completions"> = {
-			...getBundledModel("openai", "gpt-4o-mini"),
+		const model: Model<"openai-completions"> = buildModel({
+			...gpt4oMiniSpec,
 			api: "openai-completions",
 			provider: "nvidia",
 			baseUrl: "https://integrate.api.nvidia.com/v1",
 			id: "meta/llama-3.3-70b-instruct",
-		};
-		global.fetch = createMockFetch([
+		} as ModelSpec<"openai-completions">);
+		const fetchMock = createMockFetch([
 			{
 				id: "chatcmpl-nim-4",
 				object: "chat.completion.chunk",
@@ -1370,7 +1507,10 @@ describe("NVIDIA NIM DeepSeek special-token stripping", () => {
 			"[DONE]",
 		]);
 
-		const result = await streamOpenAICompletions(model, baseContext(), { apiKey: "test-key" }).result();
+		const result = await streamOpenAICompletions(model, baseContext(), {
+			apiKey: "test-key",
+			fetch: fetchMock,
+		}).result();
 		const text = result.content
 			.filter(b => b.type === "text")
 			.map(b => (b as { text: string }).text)
@@ -1412,14 +1552,14 @@ describe("applyOpenRouterRoutingVariant", () => {
 
 describe("anthropic cache control for OpenAI-compatible chat completions", () => {
 	function claudeProxyModel(compat?: OpenAICompat): Model<"openai-completions"> {
-		return {
-			...getBundledModel("openai", "gpt-4o-mini"),
+		return buildModel({
+			...gpt4oMiniSpec,
 			api: "openai-completions",
 			provider: "litellm",
 			baseUrl: "https://litellm.example/v1",
 			id: "claude-opus-4-8",
 			compat,
-		};
+		} as ModelSpec<"openai-completions">);
 	}
 
 	function cacheContext(): Context {
@@ -1447,6 +1587,57 @@ describe("anthropic cache control for OpenAI-compatible chat completions", () =>
 		expect(Reflect.get(textPart ?? {}, "cache_control")).toEqual({ type: "ephemeral" });
 	});
 
+	it("does not attach Anthropic cache_control to empty assistant tool-call content", async () => {
+		const model = getBundledModel("openrouter", "anthropic/claude-sonnet-4") as Model<"openai-completions">;
+		const assistantMessage: AssistantMessage = {
+			role: "assistant",
+			content: [
+				{
+					type: "toolCall",
+					id: "call_read",
+					name: "read",
+					arguments: { path: "screenshot.png" },
+				},
+			],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+			timestamp: 1,
+		};
+		const toolResultMessage: ToolResultMessage = {
+			role: "toolResult",
+			toolCallId: "call_read",
+			toolName: "read",
+			content: [{ type: "text", text: "Read image file [image/webp]" }],
+			isError: false,
+			timestamp: 2,
+		};
+		const payload = await captureOpenAICompletionsPayload(model, {
+			messages: [{ role: "user", content: "cache me", timestamp: 0 }, assistantMessage, toolResultMessage],
+		});
+		const messages = getPayloadMessages(payload);
+		const assistant = messages.find(message => {
+			const toolCalls = Reflect.get(message, "tool_calls");
+			return Reflect.get(message, "role") === "assistant" && Array.isArray(toolCalls);
+		});
+		const firstUser = messages.find(message => Reflect.get(message, "role") === "user");
+		const userContent = firstUser ? Reflect.get(firstUser, "content") : undefined;
+		const textPart = getLastTextPart(userContent);
+
+		expect(assistant ? Reflect.get(assistant, "content") : undefined).toBe("");
+		expect(Reflect.get(textPart ?? {}, "text")).toBe("cache me");
+		expect(Reflect.get(textPart ?? {}, "cache_control")).toEqual({ type: "ephemeral" });
+	});
+
 	it("does not infer Anthropic cache_control for custom Claude ids without compat", async () => {
 		const payload = await captureOpenAICompletionsPayload(claudeProxyModel(), cacheContext());
 
@@ -1457,9 +1648,10 @@ describe("openrouterVariant request integration", () => {
 	it("appends the configured variant suffix to params.model for OpenRouter requests", async () => {
 		const model = getBundledModel("openrouter", "anthropic/claude-sonnet-4") as Model<"openai-completions">;
 		const { promise, resolve } = Promise.withResolvers<unknown>();
-		global.fetch = createMockFetch(["[DONE]"]);
+		const fetchMock = createMockFetch(["[DONE]"]);
 		streamOpenAICompletions(model, baseContext(), {
 			apiKey: "test-key",
+			fetch: fetchMock,
 			signal: createAbortedSignal(),
 			openrouterVariant: "nitro",
 			onPayload: payload => resolve(payload),
@@ -1470,14 +1662,16 @@ describe("openrouterVariant request integration", () => {
 
 	it("does not override an explicit variant in the model id", async () => {
 		const base = getBundledModel("openrouter", "anthropic/claude-sonnet-4") as Model<"openai-completions">;
-		const model: Model<"openai-completions"> = {
+		const model: Model<"openai-completions"> = buildModel({
 			...base,
 			id: `${base.id}:online`,
-		};
+			compat: base.compatConfig,
+		} as ModelSpec<"openai-completions">);
 		const { promise, resolve } = Promise.withResolvers<unknown>();
-		global.fetch = createMockFetch(["[DONE]"]);
+		const fetchMock = createMockFetch(["[DONE]"]);
 		streamOpenAICompletions(model, baseContext(), {
 			apiKey: "test-key",
+			fetch: fetchMock,
 			signal: createAbortedSignal(),
 			openrouterVariant: "nitro",
 			onPayload: payload => resolve(payload),
@@ -1487,14 +1681,15 @@ describe("openrouterVariant request integration", () => {
 	});
 
 	it("leaves params.model unchanged for non-OpenRouter providers", async () => {
-		const model: Model<"openai-completions"> = {
-			...getBundledModel("openai", "gpt-4o-mini"),
+		const model: Model<"openai-completions"> = buildModel({
+			...gpt4oMiniSpec,
 			api: "openai-completions",
-		};
+		} as ModelSpec<"openai-completions">);
 		const { promise, resolve } = Promise.withResolvers<unknown>();
-		global.fetch = createMockFetch(["[DONE]"]);
+		const fetchMock = createMockFetch(["[DONE]"]);
 		streamOpenAICompletions(model, baseContext(), {
 			apiKey: "test-key",
+			fetch: fetchMock,
 			signal: createAbortedSignal(),
 			openrouterVariant: "nitro",
 			onPayload: payload => resolve(payload),

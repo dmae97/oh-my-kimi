@@ -7,7 +7,8 @@
  * widget lose per-model visibility.
  */
 import { describe, expect, it } from "bun:test";
-import { openaiCodexUsageProvider } from "../src/usage/openai-codex";
+import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
+import { openaiCodexUsageProvider } from "@oh-my-pi/pi-ai/usage/openai-codex";
 
 const accessTokenFixture = (() => {
 	const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
@@ -44,7 +45,7 @@ function makePayload() {
 	};
 }
 
-function fakeFetch(payload: unknown): typeof fetch {
+function fakeFetch(payload: unknown): FetchImpl {
 	const fn = async () =>
 		new Response(JSON.stringify(payload), { status: 200, headers: { "content-type": "application/json" } });
 	return fn as unknown as typeof fetch;
@@ -124,5 +125,28 @@ describe("openai-codex usage parser", () => {
 		);
 		expect(report).not.toBeNull();
 		expect(report?.limits.map(l => l.id)).toEqual(["openai-codex:spark:primary"]);
+	});
+
+	it("surfaces rate_limit_reset_credits.available_count as report.resetCredits", async () => {
+		const payload = { ...makePayload(), rate_limit_reset_credits: { available_count: 1 } };
+		const report = await openaiCodexUsageProvider.fetchUsage(
+			{
+				provider: "openai-codex",
+				credential: { type: "oauth", accessToken: accessTokenFixture, accountId: "acct-1", email: "u@example.com" },
+			},
+			{ fetch: fakeFetch(payload) },
+		);
+		expect(report?.resetCredits).toEqual({ availableCount: 1 });
+	});
+
+	it("omits resetCredits when the account has no saved resets block", async () => {
+		const report = await openaiCodexUsageProvider.fetchUsage(
+			{
+				provider: "openai-codex",
+				credential: { type: "oauth", accessToken: accessTokenFixture, accountId: "acct-1", email: "u@example.com" },
+			},
+			{ fetch: fakeFetch(makePayload()) },
+		);
+		expect(report?.resetCredits).toBeUndefined();
 	});
 });

@@ -1,14 +1,41 @@
+import type { CollabSessionState } from "../../../collab/protocol";
 import type { StatusLinePreset, StatusLineSegmentId, StatusLineSeparatorStyle } from "../../../config/settings-schema";
 import type { AgentSession } from "../../../session/agent-session";
-import type { StatusLineSegmentOptions, StatusLineSettings } from "../status-line";
 
-export type {
-	StatusLinePreset,
-	StatusLineSegmentId,
-	StatusLineSegmentOptions,
-	StatusLineSeparatorStyle,
-	StatusLineSettings,
-};
+export type { StatusLinePreset, StatusLineSegmentId, StatusLineSeparatorStyle };
+
+/** Collab session indicator + (guest-only) host-state override for segments. */
+export interface CollabStatus {
+	role: "host" | "guest";
+	participantCount: number;
+	/** Guest only: host footer snapshot that overrides locally computed values. */
+	stateOverride?: CollabSessionState | null;
+}
+
+export interface StatusLineSegmentOptions {
+	model?: { showThinkingLevel?: boolean };
+	path?: { abbreviate?: boolean; maxLength?: number; stripWorkPrefix?: boolean };
+	git?: { showBranch?: boolean; showStaged?: boolean; showUnstaged?: boolean; showUntracked?: boolean };
+	time?: { format?: "12h" | "24h"; showSeconds?: boolean };
+}
+
+export interface StatusLineSettings {
+	preset?: StatusLinePreset;
+	leftSegments?: StatusLineSegmentId[];
+	rightSegments?: StatusLineSegmentId[];
+	separator?: StatusLineSeparatorStyle;
+	segmentOptions?: StatusLineSegmentOptions;
+	showHookStatus?: boolean;
+	sessionAccent?: boolean;
+	/** Drop the theme's `statusLineBg` fill and powerline caps so the bar
+	 *  inherits the terminal's default background. */
+	transparent?: boolean;
+}
+
+export type EffectiveStatusLineSettings = Required<
+	Pick<StatusLineSettings, "leftSegments" | "rightSegments" | "separator" | "segmentOptions">
+> &
+	StatusLineSettings;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Segment Rendering
@@ -18,6 +45,8 @@ export type RGB = readonly [number, number, number];
 
 export interface SegmentContext {
 	session: AgentSession;
+	/** Focused subagent id while the view is proxied at its session, undefined otherwise. */
+	focusedAgentId?: string | undefined;
 	width: number;
 	options: StatusLineSegmentOptions;
 	planMode: {
@@ -31,6 +60,7 @@ export interface SegmentContext {
 		enabled: boolean;
 		paused: boolean;
 	} | null;
+	collab: CollabStatus | null;
 	// Cached values for performance (computed once per render)
 	usageStats: {
 		input: number;

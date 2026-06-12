@@ -28,23 +28,6 @@ class SlashProvider implements AutocompleteProvider {
 	}
 }
 
-class UnknownViewportTerminal extends VirtualTerminal {
-	#eagerEraseScrollbackRisk: boolean | undefined;
-
-	constructor(columns: number, rows: number, eagerEraseScrollbackRisk?: boolean) {
-		super(columns, rows);
-		this.#eagerEraseScrollbackRisk = eagerEraseScrollbackRisk;
-	}
-
-	isNativeViewportAtBottom(): undefined {
-		return undefined;
-	}
-
-	hasEagerEraseScrollbackRisk(): boolean | undefined {
-		return this.#eagerEraseScrollbackRisk;
-	}
-}
-
 async function settle(term: VirtualTerminal): Promise<void> {
 	await new Promise<void>(resolve => process.nextTick(resolve));
 	// Each keystroke arms Editor's autocomplete debounce (100ms) before the
@@ -64,13 +47,13 @@ describe("slash command autocomplete with unknown native viewport state", () => 
 		const originalWtSession = Bun.env.WT_SESSION;
 		Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
 		Bun.env.WT_SESSION = "wt-test";
-		const term = new UnknownViewportTerminal(40, 8);
+		const term = new VirtualTerminal(40, 8);
 		const tui = new TUI(term);
 		const root = new Container();
 		root.addChild({ invalidate() {}, render: () => ["chat-0", "chat-1", "chat-2", "chat-3", "chat-4", "chat-5"] });
 		const editor = new Editor(defaultEditorTheme);
 		editor.setAutocompleteProvider(new SlashProvider());
-		editor.onAutocompleteUpdate = () => tui.requestRender(false, { allowUnknownViewportMutation: true });
+		editor.onAutocompleteUpdate = () => tui.requestRender();
 		root.addChild(editor);
 		tui.addChild(root);
 		tui.setFocus(editor);
@@ -98,7 +81,7 @@ describe("slash command autocomplete with unknown native viewport state", () => 
 		Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
 		let tui: TUI | undefined;
 		try {
-			const term = new UnknownViewportTerminal(40, 8, true);
+			const term = new VirtualTerminal(40, 8);
 			tui = new TUI(term);
 			const root = new Container();
 			root.addChild({
@@ -109,7 +92,7 @@ describe("slash command autocomplete with unknown native viewport state", () => 
 			let submitted: string | undefined;
 			editor.setAutocompleteProvider(new SlashProvider());
 			editor.onAutocompleteUpdate = () => {
-				tui?.requestRender(false, { allowUnknownViewportMutation: true });
+				tui?.requestRender();
 			};
 			editor.onSubmit = text => {
 				submitted = text;
@@ -179,7 +162,7 @@ describe("slash command autocomplete with unknown native viewport state", () => 
 		const originalWtSession = Bun.env.WT_SESSION;
 		Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
 		Bun.env.WT_SESSION = "wt-test";
-		const term = new UnknownViewportTerminal(40, 6);
+		const term = new VirtualTerminal(40, 6);
 		const tui = new TUI(term);
 		const root = new Container();
 		let transcriptCounter = 0;
@@ -188,7 +171,7 @@ describe("slash command autocomplete with unknown native viewport state", () => 
 		root.addChild(transcript);
 		const editor = new Editor(defaultEditorTheme);
 		editor.setAutocompleteProvider(new SlashProvider());
-		editor.onAutocompleteUpdate = () => tui.requestRender(false, { allowUnknownViewportMutation: true });
+		editor.onAutocompleteUpdate = () => tui.requestRender();
 		root.addChild(editor);
 		tui.addChild(root);
 		tui.setFocus(editor);

@@ -1,14 +1,13 @@
-import { afterEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { hookFetch } from "@oh-my-pi/pi-utils";
-import { resetSettingsForTest, Settings } from "../../src/config/settings";
-import { searchSearXNG } from "../../src/web/search/providers/searxng";
+import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { searchSearXNG } from "@oh-my-pi/pi-coding-agent/web/search/providers/searxng";
 
 describe("SearXNG web search provider", () => {
 	afterEach(() => {
-		vi.restoreAllMocks();
 		resetSettingsForTest();
 		delete process.env.SEARXNG_ENDPOINT;
 		delete process.env.SEARXNG_TOKEN;
@@ -22,19 +21,26 @@ describe("SearXNG web search provider", () => {
 		process.env.SEARXNG_BASIC_PASSWORD = "s3cret";
 
 		const captured: { url?: URL; headers?: Headers } = {};
-		using _hook = hookFetch((input, init) => {
+		const fetchMock: FetchImpl = (input, init) => {
 			captured.url = new URL(input.toString());
 			captured.headers = new Headers(init?.headers);
-			return new Response(
-				JSON.stringify({
-					results: [{ title: "SearXNG", url: "https://example.com/result", content: "Metasearch result" }],
-					suggestions: ["related search"],
-				}),
-				{ status: 200, headers: { "Content-Type": "application/json" } },
+			return Promise.resolve(
+				new Response(
+					JSON.stringify({
+						results: [{ title: "SearXNG", url: "https://example.com/result", content: "Metasearch result" }],
+						suggestions: ["related search"],
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				),
 			);
-		});
+		};
 
-		const response = await searchSearXNG({ query: "private search", num_results: 1, recency: "week" });
+		const response = await searchSearXNG({
+			query: "private search",
+			num_results: 1,
+			recency: "week",
+			fetch: fetchMock,
+		});
 
 		expect(captured.url?.origin).toBe("https://searx.example.org");
 		expect(captured.url?.pathname).toBe("/search");
@@ -67,15 +73,17 @@ describe("SearXNG web search provider", () => {
 			await Settings.init({ agentDir });
 
 			const captured: { headers?: Headers } = {};
-			using _hook = hookFetch((_input, init) => {
+			const fetchMock: FetchImpl = (_input, init) => {
 				captured.headers = new Headers(init?.headers);
-				return new Response(JSON.stringify({ results: [] }), {
-					status: 200,
-					headers: { "Content-Type": "application/json" },
-				});
-			});
+				return Promise.resolve(
+					new Response(JSON.stringify({ results: [] }), {
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					}),
+				);
+			};
 
-			await searchSearXNG({ query: "settings basic auth" });
+			await searchSearXNG({ query: "settings basic auth", fetch: fetchMock });
 
 			expect(captured.headers?.get("Authorization")).toBe(
 				`Basic ${Buffer.from("alice:s3cret", "utf-8").toString("base64")}`,
@@ -92,15 +100,17 @@ describe("SearXNG web search provider", () => {
 		process.env.SEARXNG_BASIC_PASSWORD = "s3cret";
 
 		const captured: { headers?: Headers } = {};
-		using _hook = hookFetch((_input, init) => {
+		const fetchMock: FetchImpl = (_input, init) => {
 			captured.headers = new Headers(init?.headers);
-			return new Response(JSON.stringify({ results: [] }), {
-				status: 200,
-				headers: { "Content-Type": "application/json" },
-			});
-		});
+			return Promise.resolve(
+				new Response(JSON.stringify({ results: [] }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				}),
+			);
+		};
 
-		await searchSearXNG({ query: "auth precedence" });
+		await searchSearXNG({ query: "auth precedence", fetch: fetchMock });
 
 		expect(captured.headers?.get("Authorization")).toBe(
 			`Basic ${Buffer.from("alice:s3cret", "utf-8").toString("base64")}`,
@@ -113,15 +123,17 @@ describe("SearXNG web search provider", () => {
 		process.env.SEARXNG_BASIC_PASSWORD = "";
 
 		const captured: { headers?: Headers } = {};
-		using _hook = hookFetch((_input, init) => {
+		const fetchMock: FetchImpl = (_input, init) => {
 			captured.headers = new Headers(init?.headers);
-			return new Response(JSON.stringify({ results: [] }), {
-				status: 200,
-				headers: { "Content-Type": "application/json" },
-			});
-		});
+			return Promise.resolve(
+				new Response(JSON.stringify({ results: [] }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				}),
+			);
+		};
 
-		await searchSearXNG({ query: "empty password" });
+		await searchSearXNG({ query: "empty password", fetch: fetchMock });
 
 		expect(captured.headers?.get("Authorization")).toBe(`Basic ${Buffer.from("alice:", "utf-8").toString("base64")}`);
 	});
@@ -132,15 +144,17 @@ describe("SearXNG web search provider", () => {
 		process.env.SEARXNG_BASIC_PASSWORD = "s3cret";
 
 		const captured: { headers?: Headers } = {};
-		using _hook = hookFetch((_input, init) => {
+		const fetchMock: FetchImpl = (_input, init) => {
 			captured.headers = new Headers(init?.headers);
-			return new Response(JSON.stringify({ results: [] }), {
-				status: 200,
-				headers: { "Content-Type": "application/json" },
-			});
-		});
+			return Promise.resolve(
+				new Response(JSON.stringify({ results: [] }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				}),
+			);
+		};
 
-		await searchSearXNG({ query: "empty username" });
+		await searchSearXNG({ query: "empty username", fetch: fetchMock });
 
 		expect(captured.headers?.get("Authorization")).toBe(
 			`Basic ${Buffer.from(":s3cret", "utf-8").toString("base64")}`,
@@ -200,15 +214,17 @@ describe("SearXNG web search provider", () => {
 		process.env.SEARXNG_TOKEN = "bearer-token";
 
 		const captured: { headers?: Headers } = {};
-		using _hook = hookFetch((_input, init) => {
+		const fetchMock: FetchImpl = (_input, init) => {
 			captured.headers = new Headers(init?.headers);
-			return new Response(JSON.stringify({ results: [] }), {
-				status: 200,
-				headers: { "Content-Type": "application/json" },
-			});
-		});
+			return Promise.resolve(
+				new Response(JSON.stringify({ results: [] }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				}),
+			);
+		};
 
-		await searchSearXNG({ query: "bearer search" });
+		await searchSearXNG({ query: "bearer search", fetch: fetchMock });
 
 		expect(captured.headers?.get("Authorization")).toBe("Bearer bearer-token");
 	});

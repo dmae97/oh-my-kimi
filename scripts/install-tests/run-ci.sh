@@ -21,12 +21,9 @@ smoke_cli() {
    XDG_DATA_HOME="$runtime_dir/xdg" HOME="$runtime_dir/home" "$omp_bin" --version
    XDG_DATA_HOME="$runtime_dir/xdg" HOME="$runtime_dir/home" "$omp_bin" --help >/dev/null
    XDG_DATA_HOME="$runtime_dir/xdg" HOME="$runtime_dir/home" "$omp_bin" stats --summary >/dev/null
-   # Spawns the stats sync worker via `new Worker(...)` and waits for a pong.
-   # Regression probe for #1011 (browser tab worker) and #1027 (stats sync
-   # worker) — both broke silently in compiled binaries because the `with
-   # { type: "file" }` import pattern only copies the worker as a raw asset
-   # without bundling its imports. `stats --summary` doesn't catch this on a
-   # fresh install (no session files = no Worker spawn).
+   # Spawns bundled workers and serves the stats dashboard once. Regression
+   # probe for #1011/#1027 worker loading and for npm/compiled distributions
+   # missing the dashboard assets that `stats --summary` never touches.
    XDG_DATA_HOME="$runtime_dir/xdg" HOME="$runtime_dir/home" "$omp_bin" --smoke-test
 }
 
@@ -93,24 +90,46 @@ core_rc=0
 cp "$natives_pkg_backup" "$ROOT_DIR/packages/natives/package.json"
 [ "$core_rc" -eq 0 ] || exit "$core_rc"
 
-# 3. Pack the remaining workspace packages (natives core handled above).
-for pkg in utils hashline ai mnemopi agent tui stats coding-agent; do
+# 3. Pack the remaining workspace packages (natives core and coding-agent
+#    handled separately). `collab-web` is private but still packed here so its
+#    prepack build and tarball file list stay release-safe.
+for pkg in utils wire hashline catalog ai mnemopi snapcompact agent tui stats collab-web; do
    (
       cd "$ROOT_DIR/packages/$pkg"
       bun pm pack --destination "$TARBALL_DIR" --quiet >/dev/null
    )
 done
 
+# 4. Pack the coding agent with its *published* manifest: release swaps
+#    `bin.omp` from `src/cli.ts` to the prepack bundle `dist/cli.js`. The repo
+#    manifest keeps pointing at source so `bun link`/`install.sh --source`
+#    work without a build, so the swap must be reproduced here for the smoke
+#    to exercise the bundled worker-host entry the published package ships.
+#    Always restore the working-tree manifest.
+agent_pkg_backup="$WORK_DIR/coding-agent-package.json.orig"
+cp "$ROOT_DIR/packages/coding-agent/package.json" "$agent_pkg_backup"
+agent_rc=0
+{
+   bun -e 'import { applyPublishBin } from "./scripts/ci-release-publish.ts"; await applyPublishBin("packages/coding-agent", true);' &&
+      (cd "$ROOT_DIR/packages/coding-agent" && bun pm pack --destination "$TARBALL_DIR" --quiet >/dev/null)
+} || agent_rc=$?
+cp "$agent_pkg_backup" "$ROOT_DIR/packages/coding-agent/package.json"
+[ "$agent_rc" -eq 0 ] || exit "$agent_rc"
+
 utils_tgz="$(find_tarball "$TARBALL_DIR"/oh-my-pi-pi-utils-*.tgz)"
+wire_tgz="$(find_tarball "$TARBALL_DIR"/oh-my-pi-pi-wire-*.tgz)"
 natives_tgz="$(find_tarball "$TARBALL_DIR"/oh-my-pi-pi-natives-[0-9]*.tgz)"
 natives_leaf_tgz="$(find_tarball "$TARBALL_DIR"/oh-my-pi-pi-natives-"$host_tag"-*.tgz)"
 hashline_tgz="$(find_tarball "$TARBALL_DIR"/oh-my-pi-hashline-*.tgz)"
+catalog_tgz="$(find_tarball "$TARBALL_DIR"/oh-my-pi-pi-catalog-*.tgz)"
 ai_tgz="$(find_tarball "$TARBALL_DIR"/oh-my-pi-pi-ai-*.tgz)"
 mnemopi_tgz="$(find_tarball "$TARBALL_DIR"/oh-my-pi-pi-mnemopi-*.tgz)"
+snapcompact_tgz="$(find_tarball "$TARBALL_DIR"/oh-my-pi-snapcompact-*.tgz)"
 agent_tgz="$(find_tarball "$TARBALL_DIR"/oh-my-pi-pi-agent-core-*.tgz)"
 tui_tgz="$(find_tarball "$TARBALL_DIR"/oh-my-pi-pi-tui-*.tgz)"
 stats_tgz="$(find_tarball "$TARBALL_DIR"/oh-my-pi-omp-stats-*.tgz)"
 coding_agent_tgz="$(find_tarball "$TARBALL_DIR"/oh-my-pi-pi-coding-agent-*.tgz)"
+collab_web_tgz="$(find_tarball "$TARBALL_DIR"/oh-my-pi-collab-web-*.tgz)"
 
 TARBALL_APP_DIR="$WORK_DIR/tarball-install"
 mkdir -p "$TARBALL_APP_DIR"
@@ -119,31 +138,44 @@ mkdir -p "$TARBALL_APP_DIR"
    bun init -y >/dev/null
 
    # Write overrides so bun resolves inter-package deps from tarballs, not the registry
-   # (version 12.x.y hasn't been published yet when CI runs pre-release)
+   # (the version under test has not necessarily been published yet).
    node -e "
 		const pkg = JSON.parse(require('fs').readFileSync('package.json', 'utf8'));
 		pkg.overrides = {
 			'@oh-my-pi/pi-utils': '$utils_tgz',
+			'@oh-my-pi/pi-wire': '$wire_tgz',
 			'@oh-my-pi/pi-natives': '$natives_tgz',
 			'@oh-my-pi/pi-natives-$host_tag': '$natives_leaf_tgz',
 			'@oh-my-pi/hashline': '$hashline_tgz',
 			'@oh-my-pi/pi-ai': '$ai_tgz',
+			'@oh-my-pi/pi-catalog': '$catalog_tgz',
 			'@oh-my-pi/pi-mnemopi': '$mnemopi_tgz',
+			'@oh-my-pi/snapcompact': '$snapcompact_tgz',
 			'@oh-my-pi/pi-agent-core': '$agent_tgz',
 			'@oh-my-pi/pi-tui': '$tui_tgz',
 			'@oh-my-pi/omp-stats': '$stats_tgz',
-			'@oh-my-pi/pi-coding-agent': '$coding_agent_tgz'
+			'@oh-my-pi/pi-coding-agent': '$coding_agent_tgz',
+			'@oh-my-pi/collab-web': '$collab_web_tgz'
 		};
 		require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2));
 	"
 
-   bun add "$utils_tgz" "$natives_tgz" "$hashline_tgz" "$ai_tgz" "$mnemopi_tgz" "$agent_tgz" "$tui_tgz" "$stats_tgz" "$coding_agent_tgz"
+   bun add "$utils_tgz" "$wire_tgz" "$natives_tgz" "$hashline_tgz" "$catalog_tgz" "$ai_tgz" "$mnemopi_tgz" "$snapcompact_tgz" "$agent_tgz" "$tui_tgz" "$stats_tgz" "$coding_agent_tgz" "$collab_web_tgz"
    # The platform leaf must arrive through the core's optionalDependencies +
    # override, not as a direct dependency — assert it landed before smoking so a
    # resolution regression is distinguishable from a runtime loader bug.
    leaf_dir="node_modules/@oh-my-pi/pi-natives-$host_tag"
    [ -d "$leaf_dir" ] || {
       echo "Platform leaf package not installed: $leaf_dir"
+      exit 1
+   }
+   wire_proto="$(bun -e 'import { COLLAB_PROTO } from "@oh-my-pi/pi-wire"; process.stdout.write(String(COLLAB_PROTO));')"
+   [ "$wire_proto" = "1" ] || {
+      echo "Unexpected @oh-my-pi/pi-wire COLLAB_PROTO: $wire_proto"
+      exit 1
+   }
+   [ -f "node_modules/@oh-my-pi/collab-web/dist/index.html" ] || {
+      echo "Collab web tarball did not install built dist/index.html"
       exit 1
    }
    smoke_cli ./node_modules/.bin/omp

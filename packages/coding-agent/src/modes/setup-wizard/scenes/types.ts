@@ -1,4 +1,4 @@
-import type { Component } from "@oh-my-pi/pi-tui";
+import type { Component, SgrMouseEvent } from "@oh-my-pi/pi-tui";
 import type { InteractiveModeContext } from "../../types";
 
 export type SetupSceneResult = "done" | "skipped";
@@ -17,6 +17,13 @@ export interface SetupSceneController extends Component {
 	onMount?(): void | Promise<void>;
 	onUnmount?(): void;
 	dispose?(): void;
+	/**
+	 * Route an SGR mouse report (tracking is on while the wizard holds the
+	 * alternate screen). `line`/`col` are 0-based within this controller's
+	 * last rendered output. When absent, the wizard falls back to synthesizing
+	 * arrow keys from wheel notches.
+	 */
+	routeMouse?(event: SgrMouseEvent, line: number, col: number): void;
 }
 
 /**
@@ -31,11 +38,13 @@ export interface SetupTab {
 	 * login). The parent scene MUST NOT switch tabs or finish while modal.
 	 */
 	readonly modal: boolean;
-	render(width: number): string[];
+	render(width: number): readonly string[];
 	handleInput(data: string): void;
 	invalidate(): void;
 	/** Called when the tab becomes active (including initial mount). */
 	onActivate?(): void;
+	/** Mouse routing at tab-local coordinates; see {@link SetupSceneController.routeMouse}. */
+	routeMouse?(event: SgrMouseEvent, line: number, col: number): void;
 	dispose(): void;
 }
 

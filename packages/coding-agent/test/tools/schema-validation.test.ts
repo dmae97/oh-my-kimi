@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { normalizeSchemaForGoogle } from "@oh-my-pi/pi-ai";
+import { normalizeSchemaForGoogle, toolWireSchema } from "@oh-my-pi/pi-ai";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createTools, HIDDEN_TOOLS, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 
@@ -267,6 +267,25 @@ describe("tool schema validation (post-sanitization)", () => {
 		}
 
 		expect(allViolations).toEqual([]);
+	});
+
+	it("read path schema advertises local, URL, and internal URI targets", async () => {
+		const session = createTestSession();
+		const tools = await createTools(session);
+		const readTool = tools.find(tool => tool.name === "read");
+		if (!readTool?.parameters) throw new Error("read tool parameters missing");
+
+		const schema = toolWireSchema(readTool) as {
+			properties?: { path?: { description?: string } };
+		};
+		const description = schema.properties?.path?.description ?? "";
+
+		expect(description).toContain("Local path");
+		expect(description).toContain("internal URI");
+		expect(description).toContain("URL");
+		expect(description).toContain("omp://");
+		expect(description).toContain("issue://123");
+		expect(description).toContain("pr://123");
 	});
 
 	it("hidden tools also have valid sanitized schemas", async () => {

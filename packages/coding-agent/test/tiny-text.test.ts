@@ -7,7 +7,7 @@ import {
 	normalizeGeneratedTitle,
 	prepareTitleInput,
 	stripCodeBlocks,
-} from "../src/tiny/text";
+} from "@oh-my-pi/pi-coding-agent/tiny/text";
 
 describe("stripCodeBlocks", () => {
 	it("drops fenced code blocks but keeps the surrounding prose", () => {

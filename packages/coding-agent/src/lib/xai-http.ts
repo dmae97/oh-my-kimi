@@ -1,6 +1,6 @@
 // Ported from NousResearch/hermes-agent (MIT) — tools/xai_http.py.
 
-import { getBundledModels } from "@oh-my-pi/pi-ai";
+import { getBundledModels } from "@oh-my-pi/pi-catalog/models";
 import { $env } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
 

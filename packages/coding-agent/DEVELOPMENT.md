@@ -1111,8 +1111,8 @@ Use only script names that exist in `packages/coding-agent/package.json`:
   - `bun --cwd=packages/coding-agent run format-prompts`
 - Regenerate docs index files for package docs:
   - `bun --cwd=packages/coding-agent run generate-docs-index`
-- Regenerate template artifacts:
-  - `bun --cwd=packages/coding-agent run generate-template`
+- Rebuild the embedded React tool renderers (after changing collab-web `src/tool-render/`):
+  - `bun --cwd=packages/collab-web run build:tool-views`
 - Build compiled binary artifact (`dist/omp`):
   - `bun --cwd=packages/coding-agent run build`
 

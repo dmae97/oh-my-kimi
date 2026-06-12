@@ -10,6 +10,111 @@ const TERMINAL_PROGRESS_ACTIVE_SEQUENCE = "\x1b]9;4;3\x07";
 const TERMINAL_PROGRESS_CLEAR_SEQUENCE = "\x1b]9;4;0;\x07";
 
 /**
+ * Maximum encoded UTF-8 bytes per `process.stdout.write` call on Windows.
+ *
+ * Windows ConPTY ties viewport tracking to per-`WriteFile` boundaries: when a
+ * single write exceeds ~32-64 KB, the pseudo-console stops following the
+ * cursor and the host UI's viewport stays parked at whatever scroll position
+ * the write started from. The visible symptom is that a full-paint of a long
+ * session (resume, history rebuild, large permission dialog) shows only the
+ * first ~30 lines until any focus event forces the host to re-query the
+ * cursor. The data is delivered correctly — it's purely a viewport-sync bug.
+ *
+ * The cap is on **encoded UTF-8 bytes**, not JS code units, because
+ * `process.stdout.write(string)` UTF-8-encodes before handing off to
+ * `WriteFile`. A pure-CJK transcript row encodes to ~3 bytes per BMP code
+ * unit, so a code-unit-based cap of 16 KiB could land at ~48 KiB of actual
+ * `WriteFile` traffic and reintroduce the #2034 parked-viewport bug for
+ * non-ASCII content.
+ *
+ * 16 KiB is half the smallest observed Windows Terminal threshold (32 KiB),
+ * which keeps the per-write parked-viewport bug fixed by #2034 while halving
+ * the WriteFile count on multi-megabyte paints (a 3 MB session resume splits
+ * into ~192 chunks instead of ~384). Fewer WriteFiles means fewer chances for
+ * WT's viewport-following logic to lose track of the cursor during the burst,
+ * which mitigates the residual mid-paint drift the original 8 KiB cap left
+ * behind (#2095). Still well clear of the threshold so the other ConPTY hosts
+ * (Tabby, Hyper, VS Code) — where the exact limit is undocumented — keep
+ * their safety margin.
+ */
+const MAX_CONPTY_WRITE_CHUNK_BYTES = 16 * 1024;
+
+/**
+ * Split `data` into chunks whose encoded UTF-8 byte length is no greater than
+ * `maxChunkBytes`, preferring a line boundary (`\n`) as the cut point so
+ * escape sequences (which never contain `\n`) stay intact. The TUI's
+ * full-paint buffers are line-structured (`buffer += "\r\n"` between rows),
+ * so a newline almost always exists within the window. The fallback for a
+ * buffer with no newline in range is a hard cut at the last UTF-8 code-point
+ * boundary that still fits — the ConPTY viewport bug from a single oversized
+ * write is strictly worse than a one-frame escape-sequence glitch on a
+ * buffer the renderer effectively never produces.
+ *
+ * UTF-16 code units are walked manually rather than measuring with
+ * `Buffer.byteLength` per slice candidate: each code unit's UTF-8 width is
+ * known from its value (BMP `<0x80` → 1, `<0x800` → 2, surrogate pair → 4
+ * bytes across two units, other BMP → 3), and surrogate pairs are kept
+ * together so the chunker never splits a non-BMP character.
+ *
+ * Exported for unit testing of the chunking contract; `#safeWrite` is the
+ * sole production caller.
+ */
+export function chunkForConPTY(data: string, maxChunkBytes: number = MAX_CONPTY_WRITE_CHUNK_BYTES): string[] {
+	// Fast path: whole buffer fits in one write.
+	if (Buffer.byteLength(data, "utf8") <= maxChunkBytes) return [data];
+	const chunks: string[] = [];
+	const len = data.length;
+	let pos = 0;
+	while (pos < len) {
+		let bytes = 0;
+		// Index just past the most recent `\n` we've consumed inside [pos, i):
+		// the natural cut point that leaves escape sequences intact.
+		let lastNewlineEnd = -1;
+		let i = pos;
+		while (i < len) {
+			const cu = data.charCodeAt(i);
+			let cuLen = 1;
+			let cuBytes: number;
+			if (cu < 0x80) {
+				cuBytes = 1;
+			} else if (cu < 0x800) {
+				cuBytes = 2;
+			} else if (cu >= 0xd800 && cu < 0xdc00) {
+				// High surrogate: pair with the following low surrogate (4 bytes
+				// across two code units); an unpaired surrogate UTF-8-encodes as
+				// the 3-byte U+FFFD replacement character.
+				const next = i + 1 < len ? data.charCodeAt(i + 1) : 0;
+				if (next >= 0xdc00 && next < 0xe000) {
+					cuBytes = 4;
+					cuLen = 2;
+				} else {
+					cuBytes = 3;
+				}
+			} else {
+				// BMP non-surrogate or unpaired low surrogate → 3 bytes.
+				cuBytes = 3;
+			}
+			if (bytes + cuBytes > maxChunkBytes && i > pos) {
+				// Would overflow the cap. Cut at the last newline if we found one,
+				// otherwise hard-cut at the current code-point boundary.
+				const cut = lastNewlineEnd > pos ? lastNewlineEnd : i;
+				chunks.push(data.slice(pos, cut));
+				pos = cut;
+				break;
+			}
+			bytes += cuBytes;
+			i += cuLen;
+			if (cu === 0x0a) lastNewlineEnd = i;
+		}
+		if (i >= len) {
+			chunks.push(data.slice(pos));
+			pos = len;
+		}
+	}
+	return chunks;
+}
+
+/**
  * Minimal terminal interface for TUI
  */
 
@@ -17,9 +122,113 @@ const TERMINAL_PROGRESS_CLEAR_SEQUENCE = "\x1b]9;4;0;\x07";
 let activeTerminal: ProcessTerminal | null = null;
 // Track if a terminal was ever started (for emergency restore logic)
 let terminalEverStarted = false;
+// Whether the alternate screen buffer is currently active (mirrors the TUI's
+// overlay enter/leave writes). Consulted by emergencyTerminalRestore: DECRST
+// 1049 must never be written blindly, because Windows' shared VT dispatcher
+// (conhost and Windows Terminal both use AdaptDispatch) executes an
+// unconditional cursor restore on it — with no prior DECSC save the cursor
+// jumps to the viewport home, dropping the parent shell prompt on top of the
+// dead frame after exit.
+let altScreenActive = false;
+
+/** Record alternate-screen state (called by the TUI on `?1049h`/`?1049l` writes). */
+export function setAltScreenActive(active: boolean): void {
+	altScreenActive = active;
+}
+
+const stdoutErrorHandlers = new Set<(err: Error) => void>();
+let stdoutErrorListenerInstalled = false;
+
+function onStdoutError(err: Error): void {
+	for (const handler of stdoutErrorHandlers) handler(err);
+}
+
+function registerStdoutErrorHandler(handler: (err: Error) => void): () => void {
+	stdoutErrorHandlers.add(handler);
+	if (!stdoutErrorListenerInstalled) {
+		process.stdout.on("error", onStdoutError);
+		stdoutErrorListenerInstalled = true;
+	}
+	return () => {
+		stdoutErrorHandlers.delete(handler);
+	};
+}
 
 const STD_INPUT_HANDLE = -10;
 const ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200;
+/** UTF-8 codepage id for SetConsoleCP/SetConsoleOutputCP. */
+const CP_UTF8 = 65001;
+
+/**
+ * Lazily-initialized closure re-asserting the UTF-8 console codepage, or
+ * `null` when unavailable (non-win32, FFI failure, console detached).
+ */
+let consoleCodepageGuard: (() => void) | null | undefined;
+
+/**
+ * Re-assert the UTF-8 console codepage before writing (win32 only).
+ *
+ * Bun sets both console codepages to UTF-8 (65001) at startup, and
+ * `process.stdout.write(string)` hands UTF-8 bytes to `WriteFile`, which
+ * conhost translates using the *current* console output codepage. Child
+ * processes spawned by tools (bash commands, MCP/LSP servers, eval kernels)
+ * share this console, and some flip the codepage behind our back: PHP >=7.1
+ * CLI issues the equivalent of `chcp` whenever `internal_encoding` mismatches
+ * the console codepage (php.net request #73716) and skips the restore when
+ * killed — and two PHP processes in a pipeline race their restores. Once the
+ * codepage falls back to an OEM page (437/850), every non-ASCII glyph the TUI
+ * paints is mis-translated: box-drawing borders degrade into `Γöé`/`ΓöÇ`
+ * mojibake on the next full repaint (most visibly ctrl+o expand, which
+ * rewrites every row).
+ *
+ * `GetConsoleOutputCP` is one cheap console call per `#safeWrite`; the setter
+ * only runs after a foreign flip. A reading of 0 means "no console" — leave
+ * that alone. Guarding the write chokepoint (rather than per-spawn cleanup)
+ * covers every console-sharing child and long-running processes that flip
+ * the codepage mid-session.
+ */
+function ensureWindowsConsoleUtf8(): void {
+	if (consoleCodepageGuard === undefined) consoleCodepageGuard = createConsoleCodepageGuard();
+	consoleCodepageGuard?.();
+}
+
+let lastWarnedCodepage = 0;
+
+function createConsoleCodepageGuard(): (() => void) | null {
+	if (process.platform !== "win32") return null;
+	try {
+		const kernel32 = dlopen("kernel32.dll", {
+			GetConsoleOutputCP: { args: [], returns: FFIType.u32 },
+			SetConsoleOutputCP: { args: [FFIType.u32], returns: FFIType.bool },
+			GetConsoleCP: { args: [], returns: FFIType.u32 },
+			SetConsoleCP: { args: [FFIType.u32], returns: FFIType.bool },
+		});
+		return () => {
+			try {
+				const outCp = kernel32.symbols.GetConsoleOutputCP();
+				if (outCp !== 0 && outCp !== CP_UTF8) {
+					kernel32.symbols.SetConsoleOutputCP(CP_UTF8);
+					if (outCp !== lastWarnedCodepage) {
+						lastWarnedCodepage = outCp;
+						logger.warn("console output codepage changed by a child process; restoring UTF-8", {
+							codepage: outCp,
+						});
+					}
+				}
+				const inCp = kernel32.symbols.GetConsoleCP();
+				if (inCp !== 0 && inCp !== CP_UTF8) {
+					kernel32.symbols.SetConsoleCP(CP_UTF8);
+				}
+			} catch {
+				// Console APIs failed (console detached mid-session); disable the guard.
+				consoleCodepageGuard = null;
+			}
+		};
+	} catch {
+		// bun:ffi unavailable; rendering proceeds without the guard.
+		return null;
+	}
+}
 /**
  * Emergency terminal restore - call this from signal/crash handlers
  * Resets terminal state without requiring access to the ProcessTerminal instance
@@ -29,6 +238,16 @@ export function emergencyTerminalRestore(): void {
 		const terminal = activeTerminal;
 		if (terminal) {
 			terminal.stop();
+			// stop() never touches the alternate screen — the TUI owns that
+			// state and exits it on the normal shutdown path. Only crash paths
+			// with a fullscreen overlay still hold the alt buffer here. The
+			// leave sequence is gated on the tracked state because it is NOT a
+			// universally safe no-op: Windows' VT dispatcher homes the cursor
+			// on DECRST 1049 even when the alt buffer is inactive.
+			if (altScreenActive) {
+				terminal.write("\x1b[?1049l");
+				altScreenActive = false;
+			}
 			terminal.showCursor();
 		} else if (terminalEverStarted) {
 			// Blind restore only if we know a terminal was started but lost track of it
@@ -42,8 +261,15 @@ export function emergencyTerminalRestore(): void {
 					"\x1b[?5522l" + // Disable enhanced paste notifications
 					"\x1b[<u" + // Pop kitty keyboard protocol
 					"\x1b[>4;0m" + // Disable modifyOtherKeys fallback
+					"\x1b[?1006l\x1b[?1003l\x1b[?1000l" + // Disable mouse tracking (fullscreen overlays)
+					// Leave the alternate screen only when a fullscreen overlay
+					// actually holds it — on Windows, DECRST 1049 on the main
+					// buffer homes the cursor (unconditional CursorRestoreState
+					// with no prior save), corrupting the shell handoff on exit.
+					(altScreenActive ? "\x1b[?1049l" : "") +
 					"\x1b[?25h", // Show cursor
 			);
+			altScreenActive = false;
 			if (process.stdin.setRawMode) {
 				process.stdin.setRawMode(false);
 			}
@@ -79,6 +305,11 @@ export interface Terminal {
 	// Whether Kitty keyboard protocol is active
 	get kittyProtocolActive(): boolean;
 
+	// The exact kitty keyboard push sequence in effect ("\x1b[>1u" or "\x1b[>7u"),
+	// or null when the protocol is not active. Kitty keyboard flags are per-screen,
+	// so the TUI re-pushes this after entering the alternate screen.
+	get kittyEnableSequence(): string | null;
+
 	// Cursor positioning (relative to current position)
 	moveBy(lines: number): void; // Move cursor up (negative) or down (positive) by N lines
 
@@ -98,44 +329,6 @@ export interface Terminal {
 	setProgress(active: boolean): void;
 
 	/**
-	 * Returns whether the native terminal viewport is at the scrollback tail when
-	 * the host exposes that state. `undefined` means the terminal cannot report it.
-	 *
-	 * `ProcessTerminal` deliberately does not implement this — no real terminal
-	 * can answer it truthfully:
-	 *
-	 * - POSIX terminals expose no scrollback-position API at all.
-	 * - Every modern Windows terminal host (Windows Terminal, VS Code, Tabby,
-	 *   Hyper, Alacritty, WezTerm, JetBrains, …) fronts console apps through
-	 *   ConPTY, where kernel32's `GetConsoleScreenBufferInfo` describes the
-	 *   pseudo-console buffer. That buffer is pinned to the visible grid —
-	 *   scrollback lives in the host UI, invisible to console APIs
-	 *   (microsoft/terminal#10191) — so a probe reads "at bottom" no matter
-	 *   where the user scrolled. Trusting it let streaming-time rebuilds emit
-	 *   `\x1b[3J` and yank scrolled readers: #1635 (Windows Terminal), #1746
-	 *   (Tabby and other ConPTY hosts). No env var distinguishes these hosts
-	 *   (Tabby sets none), so trust cannot be conditional on the environment.
-	 * - Legacy conhost (the only non-ConPTY host) keeps a real scrollback
-	 *   buffer, but its window follows the output cursor: a probe comparing
-	 *   `srWindow.Bottom` against `dwSize.Y - 1` reads "scrolled up" for a user
-	 *   following live output until all ~9001 buffer rows fill, permanently
-	 *   blocking checkpoint scrollback reconciliation.
-	 *
-	 * The renderer treats a missing implementation / `undefined` as "unknown":
-	 * live mutations defer destructive rebuilds and reconcile native scrollback
-	 * at explicit checkpoints (prompt submit), where the user's keystroke has
-	 * already pinned the host viewport to the bottom. Only test terminals
-	 * (xterm.js-backed) implement this with a real answer.
-	 */
-	isNativeViewportAtBottom?(): boolean | undefined;
-
-	/**
-	 * Override the global terminal-profile ED3 risk decision for custom/test
-	 * terminals. `undefined` falls back to the resolved `TERMINAL` profile.
-	 */
-	hasEagerEraseScrollbackRisk?(): boolean | undefined;
-
-	/**
 	 * Register a callback for terminal appearance (dark/light) changes.
 	 * Detection uses OSC 11 background color query with Mode 2031 as a change trigger.
 	 * Fires when the detected appearance changes, including the initial detection.
@@ -150,7 +343,17 @@ export interface Terminal {
 	onPrivateModeReport?(callback: (mode: number, supported: boolean) => void): void;
 }
 
-function isWindowsSubsystemForLinux(): boolean {
+/**
+ * True when stdout flows through a ConPTY pseudo-console (native win32, or
+ * Linux running under WSL where stdout still crosses into ConPTY at the
+ * `wslhost` boundary). ConPTY hosts share the per-WriteFile viewport-tracking
+ * quirks documented above and on {@link MAX_CONPTY_WRITE_CHUNK_BYTES}, so both
+ * `#safeWrite` and the renderer's post-big-paint settle gate hang off this
+ * single predicate.
+ */
+export function isConPTYHosted(): boolean {
+	if (process.platform === "win32") return true;
+	// WSL: stdout still crosses into ConPTY at the `wslhost` boundary.
 	return process.platform === "linux" && (!!$env.WSL_DISTRO_NAME || !!$env.WSL_INTEROP);
 }
 
@@ -181,12 +384,18 @@ export class ProcessTerminal implements Terminal {
 	#resizeHandler?: () => void;
 	#stdoutResizeListener?: () => void;
 	#kittyProtocolActive = false;
+	#kittyEnableSeq: string | null = null;
 	#modifyOtherKeysActive = false;
 	#modifyOtherKeysTimeout?: Timer;
 	#stdinBuffer?: StdinBuffer;
 	#stdinDataHandler?: (data: string) => void;
 	#dead = false;
 	#writeLogPath = $env.PI_TUI_WRITE_LOG || "";
+	#stdoutErrorCleanup?: () => void;
+	#stdoutErrorHandler = (err: Error) => {
+		this.#markTerminalWriteFailed(err);
+	};
+
 	#windowsVTInputRestore?: () => void;
 	#appearanceCallbacks: Array<(appearance: TerminalAppearance) => void> = [];
 	#appearance: TerminalAppearance | undefined;
@@ -203,6 +412,8 @@ export class ProcessTerminal implements Terminal {
 	#privateModeCallbacks: Array<(mode: number, supported: boolean) => void> = [];
 	/** Whether DEC 2048 in-band resize notifications are currently enabled. */
 	#inBandResizeActive = false;
+	/** Reassembly buffer for a DEC 2048 in-band resize report split across stdin reads. */
+	#inBandResizeBuffer = "";
 	#reportedColumns?: number;
 	#reportedRows?: number;
 	#osc11PollTimer?: Timer;
@@ -211,6 +422,10 @@ export class ProcessTerminal implements Terminal {
 
 	get kittyProtocolActive(): boolean {
 		return this.#kittyProtocolActive;
+	}
+
+	get kittyEnableSequence(): string | null {
+		return this.#kittyProtocolActive ? this.#kittyEnableSeq : null;
 	}
 
 	get appearance(): TerminalAppearance | undefined {
@@ -295,7 +510,8 @@ export class ProcessTerminal implements Terminal {
 		// Windows Terminal under WSL has been observed to close the hosting tab
 		// after repeated OSC 11/DA1 probes. Keep the initial/event-driven probes,
 		// but avoid background polling there.
-		if (!isWindowsSubsystemForLinux()) {
+		const isWSL = process.platform === "linux" && (!!$env.WSL_DISTRO_NAME || !!$env.WSL_INTEROP);
+		if (!isWSL) {
 			this.#startOsc11Poll();
 		}
 
@@ -370,7 +586,12 @@ export class ProcessTerminal implements Terminal {
 	 * to handle the case where the response arrives split across multiple events.
 	 */
 	#setupStdinBuffer(): void {
-		this.#stdinBuffer = new StdinBuffer({ timeout: 10 });
+		// 50ms balances two failure modes: a bare ESC keypress on legacy
+		// terminals waits this long before it is delivered, while a CSI key
+		// escape split across stdin reads (laggy ssh/tmux links) leaks as
+		// literal typed text if the flush fires between the fragments. 10ms
+		// proved too tight for split escapes (#1238 covered only probe replies).
+		this.#stdinBuffer = new StdinBuffer({ timeout: 50 });
 
 		// Kitty protocol response pattern: \x1b[?<flags>u
 		const kittyResponsePattern = /^\x1b\[\?(\d+)u$/;
@@ -433,6 +654,46 @@ export class ProcessTerminal implements Terminal {
 						// Still accumulating.
 						return;
 					}
+				}
+			}
+
+			// In-band resize report (DEC 2048) split across stdin reads. The report
+			// is `\x1b[48;rows;cols;yPx;xPx t`; when the StdinBuffer flush timeout
+			// elapses mid-sequence — common during a rapid resize that keeps the
+			// event loop busy — the `\x1b[48;…` prefix arrives as one event and the
+			// tail (`…;xPx t`) arrives as bare character events that would otherwise
+			// leak into the prompt as literal keystrokes. Reassemble until the
+			// terminator, then fall through to the resize handler below. A
+			// reassembled sequence that turns out not to be a resize report (e.g. a
+			// split kitty `\x1b[48;…u` for a digit key) is forwarded to the input
+			// handler rather than dropped.
+			const inBandResizePartialPattern = /^\x1b\[4[\d;]*$/;
+			const isInBandResizePartial = this.#inBandResizeActive && inBandResizePartialPattern.test(sequence);
+			if (this.#inBandResizeBuffer && sequence.startsWith("\x1b")) {
+				// A new escape interrupted the partial; the stale partial is
+				// unrecoverable. If the new escape is itself an in-band prefix,
+				// restart reassembly with it; otherwise let it flow through below.
+				this.#inBandResizeBuffer = isInBandResizePartial ? sequence : "";
+				if (isInBandResizePartial) return;
+			} else if (this.#inBandResizeBuffer || isInBandResizePartial) {
+				this.#inBandResizeBuffer += sequence;
+				if (this.#inBandResizeBuffer.length > 256) {
+					this.#inBandResizeBuffer = "";
+					return;
+				}
+				const lastCode = this.#inBandResizeBuffer.charCodeAt(this.#inBandResizeBuffer.length - 1);
+				if (lastCode >= 0x40 && lastCode <= 0x7e) {
+					// Terminator arrived: let the resize handler below claim it, or
+					// fall through to the input handler if it is not a resize report.
+					sequence = this.#inBandResizeBuffer;
+					this.#inBandResizeBuffer = "";
+				} else if (!inBandResizePartialPattern.test(this.#inBandResizeBuffer)) {
+					// Diverged from a valid in-band prefix — drop the garbled report.
+					this.#inBandResizeBuffer = "";
+					return;
+				} else {
+					// Still accumulating the report.
+					return;
 				}
 			}
 
@@ -504,10 +765,19 @@ export class ProcessTerminal implements Terminal {
 			}
 
 			const match = sequence.match(kittyResponsePattern);
-			if (match && !this.#modifyOtherKeysActive) {
+			if (match) {
 				if (this.#modifyOtherKeysTimeout) {
 					clearTimeout(this.#modifyOtherKeysTimeout);
 					this.#modifyOtherKeysTimeout = undefined;
+				}
+				// A DA1 sentinel that beat the kitty reply may have already
+				// engaged the modifyOtherKeys fallback (terminals such as
+				// Superset/xterm-on-Electron answer DA1 before `\x1b[?u`).
+				// Kitty is strictly preferred — undo the fallback so the two
+				// modes do not stack. See #2042.
+				if (this.#modifyOtherKeysActive) {
+					this.#safeWrite("\x1b[>4;0m");
+					this.#modifyOtherKeysActive = false;
 				}
 				// Any reply to `\x1b[?u` means the terminal speaks the kitty keyboard
 				// protocol. The reported flag value is the *current* stack-top — fresh
@@ -520,11 +790,13 @@ export class ProcessTerminal implements Terminal {
 				if (reportedFlags >= 3) {
 					// Already enriched (Ghostty/foot may keep flags from a parent app).
 					// Push level-2 to lock in event reporting.
-					this.#safeWrite("\x1b[>7u");
+					this.#kittyEnableSeq = "\x1b[>7u";
+					this.#safeWrite(this.#kittyEnableSeq);
 				} else {
 					// Level 1 (disambiguate escape codes) — enough for Shift+Enter
 					// without the modifyOtherKeys fallback that caused regression #3259.
-					this.#safeWrite("\x1b[>1u");
+					this.#kittyEnableSeq = "\x1b[>1u";
+					this.#safeWrite(this.#kittyEnableSeq);
 				}
 				return;
 			}
@@ -686,6 +958,9 @@ export class ProcessTerminal implements Terminal {
 	/**
 	 * Start periodic OSC 11 re-queries for terminals without Mode 2031 (Warp, Alacritty, WezTerm).
 	 * Self-disables once Mode 2031 fires (push-based is better than polling).
+	 * The interval is deliberately long: each poll's OSC 11 + DA1 write clears
+	 * an active text selection on several terminals, so polling exists only to
+	 * eventually notice a rare OS theme switch, not to track it promptly.
 	 */
 	#startOsc11Poll(): void {
 		this.#stopOsc11Poll();
@@ -695,7 +970,7 @@ export class ProcessTerminal implements Terminal {
 				return;
 			}
 			this.#queryBackgroundColor();
-		}, 2_000);
+		}, 30_000);
 		this.#osc11PollTimer.unref();
 	}
 
@@ -887,6 +1162,11 @@ export class ProcessTerminal implements Terminal {
 		this.#safeWrite("\x1b[?2004l");
 		this.#safeWrite("\x1b[?5522l");
 
+		// Disable mouse tracking (enabled only by fullscreen overlays; safe
+		// no-ops otherwise). Covers crash paths that reach stop() without the
+		// TUI's own overlay teardown running.
+		this.#safeWrite("\x1b[?1006l\x1b[?1003l\x1b[?1000l");
+
 		// Disable Mode 2031 appearance change notifications
 		this.#safeWrite("\x1b[?2031l");
 
@@ -909,6 +1189,7 @@ export class ProcessTerminal implements Terminal {
 		this.#osc99Capabilities.clear();
 		setOsc99Supported(false);
 		this.#privateCsiResponseBuffer = "";
+		this.#inBandResizeBuffer = "";
 		this.#da1SentinelOwners.length = 0;
 		this.#privateModeCallbacks = [];
 		this.#privateModeSupport.clear();
@@ -959,6 +1240,18 @@ export class ProcessTerminal implements Terminal {
 		if (process.stdin.setRawMode) {
 			process.stdin.setRawMode(this.#wasRaw);
 		}
+		this.#stdoutErrorCleanup?.();
+		this.#stdoutErrorCleanup = undefined;
+	}
+
+	#ensureStdoutErrorHandler(): void {
+		this.#stdoutErrorCleanup ??= registerStdoutErrorHandler(this.#stdoutErrorHandler);
+	}
+
+	#markTerminalWriteFailed(err: unknown): void {
+		if (this.#dead) return;
+		this.#dead = true;
+		logger.warn("terminal write failed; disabling terminal rendering", { err });
 	}
 
 	write(data: string): void {
@@ -977,12 +1270,34 @@ export class ProcessTerminal implements Terminal {
 		// Skip control sequences when stdout isn't a TTY (piped output, tests, log
 		// files). They serve no purpose there and would surface as visible noise.
 		if (!process.stdout.isTTY) return;
+		this.#ensureStdoutErrorHandler();
+		// A console-sharing child process may have flipped the console codepage
+		// away from UTF-8; repair it before any bytes hit WriteFile so no frame
+		// is ever translated through an OEM codepage. See ensureWindowsConsoleUtf8.
+		if (process.platform === "win32") ensureWindowsConsoleUtf8();
 		try {
-			process.stdout.write(data);
+			// Windows ConPTY drops viewport tracking when a single write exceeds
+			// ~32-64 KB: the host UI's scroll position stays parked at wherever
+			// the write began, even though every byte landed in scrollback. Split
+			// large paints into newline-aligned chunks so each underlying
+			// `WriteFile` stays well below the threshold. The gate also covers
+			// WSL — `process.platform === "linux"` there, but stdout still
+			// crosses into ConPTY at the `wslhost` boundary, so the same per-
+			// WriteFile cap applies. Non-ConPTY PTYs keep the single-write fast
+			// path. The cap is on encoded UTF-8 bytes, not JS code units, because
+			// `process.stdout.write(string)` UTF-8-encodes before `WriteFile`,
+			// and a code-unit cap would let CJK transcript rows expand past the
+			// threshold. See #2034 and #2095.
+			if (isConPTYHosted() && Buffer.byteLength(data, "utf8") > MAX_CONPTY_WRITE_CHUNK_BYTES) {
+				for (const chunk of chunkForConPTY(data, MAX_CONPTY_WRITE_CHUNK_BYTES)) {
+					if (this.#dead) break;
+					process.stdout.write(chunk);
+				}
+			} else {
+				process.stdout.write(data);
+			}
 		} catch (err) {
-			// Any write failure means terminal is dead - no recovery possible
-			this.#dead = true;
-			logger.warn("terminal is dead - no recovery possible", { error: err, data });
+			this.#markTerminalWriteFailed(err);
 		}
 	}
 

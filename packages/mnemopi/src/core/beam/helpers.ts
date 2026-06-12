@@ -1,8 +1,9 @@
 import type { Database } from "bun:sqlite";
+import { logger } from "@oh-my-pi/pi-utils";
 import { generateId as generateTimedId, sha256Hex16, stableMemoryId } from "../../util/ids";
 import { currentEmbeddingModel, embed } from "../embeddings";
-import { getMnemopiRuntimeOptions, withMnemopiRuntimeOptions } from "../runtime-options";
-import { cosineSimilarity as vectorCosineSimilarity } from "../vector-math";
+import { getMnemopiRuntimeOptions, mnemopiDebugEnabled, withMnemopiRuntimeOptions } from "../runtime-options";
+import { buildExactVectorIndex, searchExactVectorIndex } from "../vector-index";
 import type { BeamMemoryState, JsonValue, Metadata } from "./types";
 
 export type Vector = number[];
@@ -551,16 +552,10 @@ export function inMemoryVecSearch(db: Database, queryEmbedding: readonly number[
 				LIMIT 10000
 			`)
 			.all() as Record<string, unknown>[];
-		const results: VectorDistanceResult[] = [];
-		for (const row of rows) {
-			const vec = decodeVector(String(row.embedding_json ?? ""));
-			if (vec === null) continue;
-			const sim = vectorCosineSimilarity(queryEmbedding, vec);
-			if (sim === 0 && (queryEmbedding.every(n => n === 0) || vec.every(n => n === 0))) continue;
-			results.push({ rowid: Number(row.rowid), distance: 1 - sim });
-		}
-		results.sort((a, b) => a.distance - b.distance || a.rowid - b.rowid);
-		return results.slice(0, Math.max(0, Math.trunc(k)));
+		const index = buildExactVectorIndex(
+			rows.map(row => ({ id: Number(row.rowid), vector: decodeVector(String(row.embedding_json ?? "")) })),
+		);
+		return searchExactVectorIndex(index, queryEmbedding, k).map(hit => ({ rowid: hit.id, distance: 1 - hit.score }));
 	} catch {
 		return [];
 	}
@@ -585,16 +580,10 @@ export function workingMemoryVecSearch(
 				LIMIT ?
 			`)
 			.all(now.toISOString(), limit) as Record<string, unknown>[];
-		const results: WorkingVectorResult[] = [];
-		for (const row of rows) {
-			const vec = decodeVector(String(row.embedding_json ?? ""));
-			if (vec === null) continue;
-			const sim = vectorCosineSimilarity(queryEmbedding, vec);
-			if (sim === 0 && (queryEmbedding.every(n => n === 0) || vec.every(n => n === 0))) continue;
-			results.push({ id: String(row.id), sim });
-		}
-		results.sort((a, b) => b.sim - a.sim || a.id.localeCompare(b.id));
-		return results.slice(0, Math.max(0, Math.trunc(k)));
+		const index = buildExactVectorIndex(
+			rows.map(row => ({ id: String(row.id), vector: decodeVector(String(row.embedding_json ?? "")) })),
+		);
+		return searchExactVectorIndex(index, queryEmbedding, k).map(hit => ({ id: hit.id, sim: hit.score }));
 	} catch {
 		return [];
 	}
@@ -944,12 +933,16 @@ async function runEmbedding(beam: BeamMemoryState, items: readonly EmbedItem[]):
 			}
 		});
 		insertMany(items);
-	} catch {
+	} catch (error) {
 		// Background embedding generation is best-effort: a failing provider, a closed DB
 		// during shutdown, or a transient API error must never disrupt the synchronous
 		// remember()/consolidate() that scheduled it. Production recall silently degrades
 		// to FTS-only for the affected rows, which is the same shape as a misconfigured
-		// provider.
+		// provider. Log so the failure is diagnosable (#2322).
+		logger[mnemopiDebugEnabled() ? "warn" : "debug"]("mnemopi: background embedding failed", {
+			itemCount: items.length,
+			error: String(error),
+		});
 	}
 }
 

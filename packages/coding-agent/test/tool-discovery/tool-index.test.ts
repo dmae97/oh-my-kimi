@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import type { DiscoverableTool } from "../../src/tool-discovery/tool-index";
+import type { DiscoverableTool } from "@oh-my-pi/pi-coding-agent/tool-discovery/tool-index";
 import {
 	buildDiscoverableToolSearchIndex,
 	collectDiscoverableTools,
@@ -10,7 +10,8 @@ import {
 	searchDiscoverableTools,
 	selectDiscoverableToolNamesByServer,
 	summarizeDiscoverableTools,
-} from "../../src/tool-discovery/tool-index";
+} from "@oh-my-pi/pi-coding-agent/tool-discovery/tool-index";
+import { z } from "zod/v4";
 
 // ─── Minimal AgentTool stub ───────────────────────────────────────────────────
 
@@ -114,6 +115,14 @@ describe("getDiscoverableTool", () => {
 		});
 		const result = getDiscoverableTool(tool);
 		// sorted alphabetically
+		expect(result!.schemaKeys).toEqual(["alpha", "beta", "gamma"]);
+	});
+
+	it("extracts schema keys from Zod-schema parameters via wire conversion", () => {
+		const tool = makeAgentTool("foo", {
+			parameters: z.object({ gamma: z.string(), alpha: z.number().optional(), beta: z.boolean() }),
+		});
+		const result = getDiscoverableTool(tool);
 		expect(result!.schemaKeys).toEqual(["alpha", "beta", "gamma"]);
 	});
 });

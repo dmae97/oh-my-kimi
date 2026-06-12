@@ -27,6 +27,9 @@ export interface ImageOptions {
 
 const EMPTY_IDS: readonly number[] = [];
 const EMPTY_TRANSMITS: readonly string[] = [];
+// Direct placements reserve height with leading zero-width rows. Keep them
+// non-plain so transcript blank-edge trimming does not collapse image-only blocks.
+const RESERVED_IMAGE_ROW = "\x1b[0m";
 
 /** Default count of inline images kept as live graphics before older ones fall back to text. */
 export const DEFAULT_MAX_INLINE_IMAGES = 8;
@@ -188,6 +191,26 @@ export class ImageBudget {
 		this.#pendingTransmits.push(sequence);
 	}
 
+	/** Whether a frame has image data queued but not yet written to the terminal. */
+	hasPendingTransmits(): boolean {
+		return this.#pendingTransmits.length > 0;
+	}
+
+	/**
+	 * True when the budget has nothing in flight: no live images observed on
+	 * the last pass, no queued transmits, no pending purges, and no stricter
+	 * threshold left to apply. A component-scoped frame may skip the observe
+	 * pass only then — a partial tree walk would under-count display order.
+	 */
+	get quiescent(): boolean {
+		return (
+			this.#lastTotal === 0 &&
+			this.#pendingTransmits.length === 0 &&
+			this.#purgeIds.length === 0 &&
+			this.#planned === this.#onTerminal
+		);
+	}
+
 	/** Transmit sequences to write before this frame's placements; clears the queue. */
 	takeTransmits(): readonly string[] {
 		if (this.#pendingTransmits.length === 0) return EMPTY_TRANSMITS;
@@ -232,6 +255,10 @@ export class Image implements Component {
 	#cachedLines?: string[];
 	#cachedWidth?: number;
 	#cachedSuppressed = false;
+	// Tallest graphic placement this image has rendered. The text fallback
+	// pads itself to this height so a budget demotion never shrinks the block
+	// (its rows may already be committed to native scrollback).
+	#renderedGraphicRows = 0;
 
 	constructor(
 		base64Data: string,
@@ -254,7 +281,7 @@ export class Image implements Component {
 		this.#cachedWidth = undefined;
 	}
 
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		const hasProtocol = TERMINAL.imageProtocol != null;
 		// observe() must run on every pass — even a cache hit — so the image keeps
 		// its display-order slot in the budget. Only graphics-capable frames count
@@ -296,23 +323,43 @@ export class Image implements Component {
 				// moves the cursor back up, then emits the image sequence.
 				lines = [];
 				for (let i = 0; i < result.rows - 1; i++) {
-					lines.push("");
+					lines.push(RESERVED_IMAGE_ROW);
 				}
 				const moveUp = result.rows > 1 ? `\x1b[${result.rows - 1}A` : "";
 				lines.push(moveUp + (result.sequence ?? ""));
 			} else {
-				lines = [
-					this.#theme.fallbackColor(imageFallback(this.#mimeType, this.#dimensions, this.#options.filename)),
-				];
+				lines = this.#fallbackLines();
 			}
+			this.#renderedGraphicRows = Math.max(this.#renderedGraphicRows, lines.length);
 		} else {
-			lines = [this.#theme.fallbackColor(imageFallback(this.#mimeType, this.#dimensions, this.#options.filename))];
+			lines = this.#fallbackLines();
 		}
 
 		this.#cachedLines = lines;
 		this.#cachedWidth = width;
 		this.#cachedSuppressed = suppressed;
 
+		return lines;
+	}
+
+	/**
+	 * Text fallback, height-preserving once a graphic has rendered: a demoted
+	 * image must keep occupying the rows its placement used, because those
+	 * rows may already be committed to native scrollback — shrinking the block
+	 * would shift everything below it and force the renderer's commit-resync
+	 * (stale band + recommit). Reserved rows stay non-plain so blank-edge
+	 * trimming cannot collapse the block either.
+	 */
+	#fallbackLines(): string[] {
+		const fallback = this.#theme.fallbackColor(
+			imageFallback(this.#mimeType, this.#dimensions, this.#options.filename),
+		);
+		if (this.#renderedGraphicRows <= 1) return [fallback];
+		const lines: string[] = [];
+		for (let i = 0; i < this.#renderedGraphicRows - 1; i++) {
+			lines.push(RESERVED_IMAGE_ROW);
+		}
+		lines.push(fallback);
 		return lines;
 	}
 }

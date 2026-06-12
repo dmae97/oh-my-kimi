@@ -8,8 +8,8 @@
  */
 import * as fs from "node:fs/promises";
 import path from "node:path";
-import { getOAuthApiKey } from "@oh-my-pi/pi-ai/utils/oauth";
-import type { OAuthCredentials, OAuthProvider } from "@oh-my-pi/pi-ai/utils/oauth/types";
+import { getOAuthApiKey } from "@oh-my-pi/pi-ai/oauth";
+import type { OAuthCredentials, OAuthProvider } from "@oh-my-pi/pi-ai/oauth/types";
 import { $flag, getAgentDir, isEnoent } from "@oh-my-pi/pi-utils";
 
 /**

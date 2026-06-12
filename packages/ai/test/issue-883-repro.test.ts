@@ -1,15 +1,18 @@
 import { describe, expect, it } from "bun:test";
-import { getBundledModel } from "../src/models";
-import { convertMessages, detectCompat } from "../src/providers/openai-completions";
-import type { AssistantMessage, Model } from "../src/types";
+import { convertMessages } from "@oh-my-pi/pi-ai/providers/openai-completions";
+import type { AssistantMessage, Model, ModelSpec } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 
-function deepseekModel(overrides: Partial<Model<"openai-completions">>): Model<"openai-completions"> {
-	return {
-		...getBundledModel("openai", "gpt-4o-mini"),
+function deepseekModel(overrides: Partial<ModelSpec<"openai-completions">>): Model<"openai-completions"> {
+	const base = getBundledModel("openai", "gpt-4o-mini");
+	return buildModel({
+		...base,
 		api: "openai-completions",
 		reasoning: true,
+		compat: base.compatConfig,
 		...overrides,
-	};
+	} as ModelSpec<"openai-completions">);
 }
 
 function assistantWithToolCall(model: Model<"openai-completions">): AssistantMessage {
@@ -42,24 +45,20 @@ function assistantWithToolCall(model: Model<"openai-completions">): AssistantMes
 
 describe("issue #883 / #810 — DeepSeek V4 reasoning_content tool-call replay", () => {
 	it("flags requiresReasoningContentForToolCalls for deepseek-v4-pro on the official endpoint", () => {
-		const compat = detectCompat(
-			deepseekModel({
-				provider: "deepseek",
-				baseUrl: "https://api.deepseek.com/v1",
-				id: "deepseek-v4-pro",
-			}),
-		);
+		const compat = deepseekModel({
+			provider: "deepseek",
+			baseUrl: "https://api.deepseek.com/v1",
+			id: "deepseek-v4-pro",
+		}).compat;
 		expect(compat.requiresReasoningContentForToolCalls).toBe(true);
 	});
 
 	it("flags requiresReasoningContentForToolCalls for deepseek-v4 served by a non-deepseek host (e.g. Deepinfra)", () => {
-		const compat = detectCompat(
-			deepseekModel({
-				provider: "deepinfra",
-				baseUrl: "https://api.deepinfra.com/v1/openai",
-				id: "deepseek-ai/DeepSeek-V4-Flash",
-			}),
-		);
+		const compat = deepseekModel({
+			provider: "deepinfra",
+			baseUrl: "https://api.deepinfra.com/v1/openai",
+			id: "deepseek-ai/DeepSeek-V4-Flash",
+		}).compat;
 		expect(compat.requiresReasoningContentForToolCalls).toBe(true);
 	});
 
@@ -69,7 +68,7 @@ describe("issue #883 / #810 — DeepSeek V4 reasoning_content tool-call replay",
 			baseUrl: "https://api.deepseek.com/v1",
 			id: "deepseek-v4-pro",
 		});
-		const compat = detectCompat(model);
+		const compat = model.compat;
 		const messages = convertMessages(model, { messages: [assistantWithToolCall(model)] }, compat);
 		const assistant = messages.find(m => m.role === "assistant");
 		expect(assistant).toBeDefined();
@@ -85,7 +84,7 @@ describe("issue #883 / #810 — DeepSeek V4 reasoning_content tool-call replay",
 			baseUrl: "https://api.deepinfra.com/v1/openai",
 			id: "deepseek-ai/DeepSeek-V4-Pro",
 		});
-		const compat = detectCompat(model);
+		const compat = model.compat;
 		// Assistant turn whose only content is a tool call (no text) - matches what the SDK
 		// produces after a pure tool-use turn. content must end up "" (not null) because
 		// DeepSeek rejects null content alongside reasoning_content.

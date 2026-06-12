@@ -7,7 +7,7 @@ import { LspTool } from "@oh-my-pi/pi-coding-agent/lsp";
 import * as lspClient from "@oh-my-pi/pi-coding-agent/lsp/client";
 import * as lspConfig from "@oh-my-pi/pi-coding-agent/lsp/config";
 import { getServersForFile, loadConfig } from "@oh-my-pi/pi-coding-agent/lsp/config";
-import { applyWorkspaceEdit } from "@oh-my-pi/pi-coding-agent/lsp/edits";
+import { applyTextEditsToString, applyWorkspaceEdit } from "@oh-my-pi/pi-coding-agent/lsp/edits";
 import { renderCall, renderResult } from "@oh-my-pi/pi-coding-agent/lsp/render";
 import type {
 	CodeAction,
@@ -31,12 +31,14 @@ import {
 	hasGlobPattern,
 	resolveDiagnosticTargets,
 	resolveSymbolColumn,
+	uriToFile,
 } from "@oh-my-pi/pi-coding-agent/lsp/utils";
 import { getThemeByName } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { clampTimeout } from "@oh-my-pi/pi-coding-agent/tools/tool-timeouts";
 import * as piUtils from "@oh-my-pi/pi-utils";
 import { sanitizeText, TempDir } from "@oh-my-pi/pi-utils";
+import DEFAULTS from "../../src/lsp/defaults.json" with { type: "json" };
 
 describe("lsp regressions", () => {
 	afterEach(() => {
@@ -799,6 +801,7 @@ for await (const chunk of Bun.stdin.stream()) {
 				pendingRequests: new Map(),
 				messageBuffer: new Uint8Array(),
 				isReading: false,
+				status: "ready",
 				lastActivity: Date.now(),
 				writeQueue: Promise.resolve(),
 				activeProgressTokens: new Set(),
@@ -1002,6 +1005,7 @@ for await (const chunk of Bun.stdin.stream()) {
 				pendingRequests: new Map(),
 				messageBuffer: new Uint8Array(),
 				isReading: false,
+				status: "ready",
 				lastActivity: Date.now(),
 				writeQueue: Promise.resolve(),
 				activeProgressTokens: new Set(),
@@ -1103,6 +1107,7 @@ for await (const chunk of Bun.stdin.stream()) {
 				pendingRequests: new Map(),
 				messageBuffer: new Uint8Array(),
 				isReading: false,
+				status: "ready",
 				lastActivity: Date.now(),
 				writeQueue: Promise.resolve(),
 				activeProgressTokens: new Set(),
@@ -1163,6 +1168,7 @@ for await (const chunk of Bun.stdin.stream()) {
 				pendingRequests: new Map(),
 				messageBuffer: new Uint8Array(),
 				isReading: false,
+				status: "ready",
 				lastActivity: Date.now(),
 				writeQueue: Promise.resolve(),
 				activeProgressTokens: new Set(),
@@ -1232,6 +1238,7 @@ for await (const chunk of Bun.stdin.stream()) {
 				pendingRequests: new Map(),
 				messageBuffer: new Uint8Array(),
 				isReading: false,
+				status: "ready",
 				lastActivity: Date.now(),
 				writeQueue: Promise.resolve(),
 				activeProgressTokens: new Set(),
@@ -1301,6 +1308,7 @@ for await (const chunk of Bun.stdin.stream()) {
 				pendingRequests: new Map(),
 				messageBuffer: new Uint8Array(),
 				isReading: false,
+				status: "ready",
 				lastActivity: Date.now(),
 				writeQueue: Promise.resolve(),
 				activeProgressTokens: new Set(),
@@ -1358,6 +1366,7 @@ for await (const chunk of Bun.stdin.stream()) {
 				pendingRequests: new Map(),
 				messageBuffer: new Uint8Array(),
 				isReading: false,
+				status: "ready",
 				lastActivity: Date.now(),
 				writeQueue: Promise.resolve(),
 				activeProgressTokens: new Set(),
@@ -1506,6 +1515,67 @@ for await (const chunk of Bun.stdin.stream()) {
 			tempDir.removeSync();
 		}
 	});
+
+	it("applies equal-position inserts in array order", () => {
+		// LSP spec: multiple inserts at the same position land in the order they
+		// appear in the edits array (import + reference insertions rely on this).
+		const result = applyTextEditsToString("abc", [
+			{ range: { start: { line: 0, character: 1 }, end: { line: 0, character: 1 } }, newText: "X" },
+			{ range: { start: { line: 0, character: 1 }, end: { line: 0, character: 1 } }, newText: "Y" },
+		]);
+		expect(result).toBe("aXYbc");
+	});
+
+	it("validates every file's edits before writing any workspace-edit file", async () => {
+		const tempDir = TempDir.createSync("@omp-lsp-atomic-validate-");
+		try {
+			const okPath = path.join(tempDir.path(), "ok.ts");
+			const badPath = path.join(tempDir.path(), "bad.ts");
+			const okContent = "export const ok = 1;\n";
+			await Bun.write(okPath, okContent);
+			await Bun.write(badPath, "export const bad = 2;\n");
+
+			const workspaceEdit: WorkspaceEdit = {
+				changes: {
+					[fileToUri(okPath)]: [
+						{
+							range: { start: { line: 0, character: 13 }, end: { line: 0, character: 15 } },
+							newText: "changed",
+						},
+					],
+					[fileToUri(badPath)]: [
+						// Overlapping edits — must reject the whole workspace edit.
+						{
+							range: { start: { line: 0, character: 0 }, end: { line: 0, character: 10 } },
+							newText: "x",
+						},
+						{
+							range: { start: { line: 0, character: 5 }, end: { line: 0, character: 12 } },
+							newText: "y",
+						},
+					],
+				},
+			};
+
+			await expect(applyWorkspaceEdit(workspaceEdit, tempDir.path())).rejects.toThrow(/overlapping LSP edits/);
+			// The valid file must be untouched: validation runs before any write.
+			expect(fs.readFileSync(okPath, "utf8")).toBe(okContent);
+		} finally {
+			tempDir.removeSync();
+		}
+	});
+
+	it("round-trips file URIs containing percent and hash characters", () => {
+		const tricky = path.join("/tmp", "omp uri", "100% #1.ts");
+		const uri = fileToUri(tricky);
+		// Percent-encoded so the server cannot misparse a fragment or escape.
+		expect(uri).not.toContain("#");
+		expect(uri).not.toContain(" ");
+		expect(uriToFile(uri)).toBe(tricky);
+		// Lax servers sending unencoded paths are tolerated.
+		expect(uriToFile("file:///tmp/omp uri/plain.ts")).toBe("/tmp/omp uri/plain.ts");
+	});
+
 	it("resolves $-prefixed identifiers past compound matches", async () => {
 		// Pre-fix, BARE_IDENTIFIER_RE rejected leading `$`, so requireWordBoundary
 		// was false and `resolveSymbolColumn(_, _, "$store")` returned the column
@@ -1628,5 +1698,145 @@ for await (const chunk of Bun.stdin.stream()) {
 		} finally {
 			tempDir.removeSync();
 		}
+	});
+
+	it("sendRequest respects an explicit timeoutMs and reports it in the error", async () => {
+		// Synthesise a minimal in-memory LSP client and never resolve the request
+		// so the per-request timer is the only thing that can fire.
+		const client: LspClient = {
+			name: "test-lsp",
+			cwd: process.cwd(),
+			config: { command: "test-lsp", fileTypes: [".ts"], rootMarkers: [] },
+			proc: { stdin: { write() {}, flush: async () => {} } } as unknown as LspClient["proc"],
+			requestId: 0,
+			diagnostics: new Map(),
+			diagnosticsVersion: 0,
+			openFiles: new Map(),
+			pendingRequests: new Map(),
+			messageBuffer: new Uint8Array(),
+			isReading: false,
+			status: "ready",
+			lastActivity: Date.now(),
+			writeQueue: Promise.resolve(),
+			activeProgressTokens: new Set(),
+			projectLoaded: Promise.resolve(),
+			resolveProjectLoaded: () => {},
+		};
+		await expect(lspClient.sendRequest(client, "test/method", {}, undefined, 25)).rejects.toThrow(/after 25ms/);
+	});
+
+	it("sendRequest uses the signal as the deadline when no explicit timeout is set", async () => {
+		// With a signal but no explicit timeoutMs, the per-request 30s default
+		// MUST NOT fire — the signal owns the deadline. Otherwise `timeout: 60`
+		// on the LSP tool got truncated to 30000ms.
+		const client: LspClient = {
+			name: "test-lsp",
+			cwd: process.cwd(),
+			config: { command: "test-lsp", fileTypes: [".ts"], rootMarkers: [] },
+			proc: { stdin: { write() {}, flush: async () => {} } } as unknown as LspClient["proc"],
+			requestId: 0,
+			diagnostics: new Map(),
+			diagnosticsVersion: 0,
+			openFiles: new Map(),
+			pendingRequests: new Map(),
+			messageBuffer: new Uint8Array(),
+			isReading: false,
+			status: "ready",
+			lastActivity: Date.now(),
+			writeQueue: Promise.resolve(),
+			activeProgressTokens: new Set(),
+			projectLoaded: Promise.resolve(),
+			resolveProjectLoaded: () => {},
+		};
+		const signal = AbortSignal.timeout(20);
+		await expect(lspClient.sendRequest(client, "test/method", {}, signal)).rejects.toThrow();
+		// If the per-request 30s timer had fired, the message would say "after 30000ms".
+		// We assert the negative: the rejection came from the signal, not the timer.
+		try {
+			await lspClient.sendRequest(client, "test/method", {}, AbortSignal.timeout(20));
+		} catch (err) {
+			expect(String(err)).not.toContain("30000ms");
+		}
+	});
+
+	it("rename_file skips the LSP loop when no configured server handles the file extension", async () => {
+		const tempDir = TempDir.createSync("@omp-lsp-rename-irrelevant-");
+		try {
+			const sourceFile = path.join(tempDir.path(), "notes.md");
+			const destFile = path.join(tempDir.path(), "renamed.md");
+			await Bun.write(sourceFile, "# heading\n");
+
+			// Only a TS server is configured; .md should not trigger any willRenameFiles.
+			vi.spyOn(lspConfig, "loadConfig").mockReturnValue({
+				servers: { "test-ts": { command: "test-ts", fileTypes: [".ts"], rootMarkers: [] } },
+				idleTimeoutMs: undefined,
+			});
+			const sendSpy = vi.spyOn(lspClient, "sendRequest");
+			const notifySpy = vi.spyOn(lspClient, "sendNotification");
+			const getClientSpy = vi.spyOn(lspClient, "getOrCreateClient");
+
+			const tool = new LspTool({ cwd: tempDir.path() } as ToolSession);
+			const result = await tool.execute("rename-md", {
+				action: "rename_file",
+				file: sourceFile,
+				new_name: destFile,
+				timeout: 5,
+			});
+
+			expect(sendSpy).not.toHaveBeenCalled();
+			expect(notifySpy).not.toHaveBeenCalled();
+			expect(getClientSpy).not.toHaveBeenCalled();
+			expect(fs.existsSync(sourceFile)).toBe(false);
+			expect(fs.existsSync(destFile)).toBe(true);
+			const output = result.content
+				.filter(block => block.type === "text")
+				.map(block => block.text)
+				.join("\n");
+			expect(output).toContain("Renamed");
+		} finally {
+			vi.restoreAllMocks();
+			tempDir.removeSync();
+		}
+	});
+
+	it("status distinguishes configured servers from started clients", async () => {
+		// `loadConfig` claims rust-analyzer + tsls are configured, but only
+		// tsls has actually been spawned. Status must reflect that — claiming
+		// rust-analyzer is 'active' when the process never started was the
+		// original bug.
+		vi.spyOn(lspConfig, "loadConfig").mockReturnValue({
+			servers: {
+				"rust-analyzer": { command: "rust-analyzer", fileTypes: [".rs"], rootMarkers: ["Cargo.toml"] },
+				"typescript-language-server": {
+					command: "typescript-language-server",
+					fileTypes: [".ts"],
+					rootMarkers: ["tsconfig.json"],
+				},
+			},
+			idleTimeoutMs: undefined,
+		});
+		vi.spyOn(lspClient, "getActiveClients").mockReturnValue([
+			{ name: "typescript-language-server", status: "ready", fileTypes: [".ts"] },
+		]);
+
+		const tool = new LspTool({ cwd: process.cwd() } as ToolSession);
+		const result = await tool.execute("status-test", { action: "status" });
+		const output = result.content
+			.filter(block => block.type === "text")
+			.map(block => block.text)
+			.join("\n");
+
+		expect(output).toContain("rust-analyzer (configured, not started)");
+		expect(output).toContain("typescript-language-server (ready)");
+	});
+});
+
+describe("expert elixir lsp", () => {
+	it("registers expert for .ex while keeping elixirls primary", () => {
+		const config = { servers: DEFAULTS as unknown as Record<string, ServerConfig> };
+		const names = getServersForFile(config, "lib/app.ex").map(([name]) => name);
+		expect(names).toContain("expert");
+		expect(names).toContain("elixirls");
+		expect(names.indexOf("elixirls")).toBeLessThan(names.indexOf("expert"));
 	});
 });

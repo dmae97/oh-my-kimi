@@ -11,14 +11,15 @@ import {
 	type SessionNotification,
 } from "@agentclientprotocol/sdk";
 import type { Model } from "@oh-my-pi/pi-ai";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { createAcpConnection } from "@oh-my-pi/pi-coding-agent/modes/acp/acp-mode";
+import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
-import { Settings } from "../src/config/settings";
-import { createAcpConnection } from "../src/modes/acp/acp-mode";
-import type { AgentSession } from "../src/session/agent-session";
-import { AuthStorage } from "../src/session/auth-storage";
-import { SessionManager } from "../src/session/session-manager";
 
-const TEST_MODEL: Model = {
+const TEST_MODEL: Model = buildModel({
 	id: "claude-sonnet-4-20250514",
 	name: "Claude Sonnet",
 	api: "anthropic-messages",
@@ -29,7 +30,7 @@ const TEST_MODEL: Model = {
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 	contextWindow: 200_000,
 	maxTokens: 8_192,
-};
+});
 
 function emptyWorkspaceTree(cwd: string) {
 	return { rootPath: cwd, rendered: ".\n", truncated: false, totalLines: 1, agentsMdFiles: [] };
@@ -155,8 +156,8 @@ async function closeTransport(writable: WritableStream<unknown>): Promise<void> 
 }
 
 describe("ACP lazy startup", () => {
-	it("keeps ACP background jobs disabled by default and preserves explicit opt-ins", async () => {
-		const { runRootCommand } = await import("../src/main");
+	it("applies schema defaults for ACP background jobs and preserves explicit overrides", async () => {
+		const { runRootCommand } = await import("@oh-my-pi/pi-coding-agent/main");
 
 		type ObservedBackgroundSettings = {
 			asyncEnabled: boolean;
@@ -213,23 +214,27 @@ describe("ACP lazy startup", () => {
 			return observed;
 		};
 
+		// ACP startup must not clobber background-job settings: an unset config
+		// observes the schema defaults (async on since 844c8dbdfe)…
 		await expect(runAcpStartup(Settings.isolated())).resolves.toEqual({
-			asyncEnabled: false,
+			asyncEnabled: true,
 			asyncMaxJobs: 100,
 			bashAutoBackground: false,
 			bashAutoBackgroundThresholdMs: 60000,
 		});
+		// …and explicit overrides survive in both directions (here: async
+		// opted OUT against the default, auto-background opted IN).
 		await expect(
 			runAcpStartup(
 				Settings.isolated({
-					"async.enabled": true,
+					"async.enabled": false,
 					"async.maxJobs": 7,
 					"bash.autoBackground.enabled": true,
 					"bash.autoBackground.thresholdMs": 1234,
 				}),
 			),
 		).resolves.toEqual({
-			asyncEnabled: true,
+			asyncEnabled: false,
 			asyncMaxJobs: 7,
 			bashAutoBackground: true,
 			bashAutoBackgroundThresholdMs: 1234,
@@ -314,8 +319,8 @@ describe("ACP lazy startup", () => {
 		const authStorage = await AuthStorage.create(path.join(cwd, "auth.db"));
 		try {
 			const settings = Settings.isolated({ "marketplace.autoUpdate": "off" });
-			const { runRootCommand } = await import("../src/main");
-			const { createAgentSession } = await import("../src/sdk");
+			const { runRootCommand } = await import("@oh-my-pi/pi-coding-agent/main");
+			const { createAgentSession } = await import("@oh-my-pi/pi-coding-agent/sdk");
 			let session: AgentSession | undefined;
 
 			const stopped = runRootCommand(

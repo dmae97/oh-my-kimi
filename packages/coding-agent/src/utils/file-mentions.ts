@@ -11,6 +11,7 @@ import { formatHashlineHeader, formatNumberedLines, type SnapshotStore } from "@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { formatAge, formatBytes, readImageMetadata } from "@oh-my-pi/pi-utils";
+import { canonicalSnapshotKey } from "../edit/file-snapshot-store";
 import { normalizeToLF } from "../edit/normalize";
 import type { FileMentionMessage } from "../session/messages";
 import {
@@ -259,7 +260,7 @@ export async function generateFileMentionMessages(
 			const normalized = snapshotStore ? normalizeToLF(content) : content;
 			let { output, lineCount } = buildTextOutput(normalized);
 			if (snapshotStore) {
-				const tag = snapshotStore.record(absolutePath, normalized);
+				const tag = snapshotStore.record(canonicalSnapshotKey(absolutePath), normalized);
 				output = `${formatHashlineHeader(resolvedPath, tag)}\n${formatNumberedLines(output)}`;
 			}
 			files.push({ path: resolvedPath, content: output, lineCount });

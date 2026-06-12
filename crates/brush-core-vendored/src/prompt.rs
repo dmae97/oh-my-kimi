@@ -71,7 +71,7 @@ fn format_prompt_piece(
 			return error::unimp("prompt: current command number");
 		},
 		brush_parser::prompt::PromptPiece::CurrentHistoryNumber => {
-			return error::unimp("prompt: current history number");
+			format_current_history_number(shell)
 		},
 		brush_parser::prompt::PromptPiece::CurrentUser => users::get_current_username()?,
 		brush_parser::prompt::PromptPiece::CurrentWorkingDirectory { tilde_replaced, basename } => {
@@ -169,6 +169,13 @@ fn format_current_working_directory(
 	}
 
 	working_dir_str
+}
+
+fn format_current_history_number(shell: &Shell<impl extensions::ShellExtensions>) -> String {
+	// Bash renders \! as the history number that will be assigned to the next
+	// interactive command. When command history is disabled, bash keeps this at
+	// 1 rather than rendering 0.
+	shell.history().map_or(1, |history| history.count() + 1).to_string()
 }
 
 fn format_time<Tz: chrono::TimeZone>(

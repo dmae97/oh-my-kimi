@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "bun:test";
 import type { AuthStorage } from "@oh-my-pi/pi-ai";
-import { hookFetch } from "@oh-my-pi/pi-utils";
-import { AgentStorage } from "../../../src/session/agent-storage";
-import type { SearchParams } from "../../../src/web/search/providers/base";
-import { searchCodex } from "../../../src/web/search/providers/codex";
+import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
+import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
+import type { SearchParams } from "@oh-my-pi/pi-coding-agent/web/search/providers/base";
+import { searchCodex } from "@oh-my-pi/pi-coding-agent/web/search/providers/codex";
 
 function makeSseResponse(): string {
 	return [
@@ -39,10 +39,10 @@ describe("Codex web search broker auth", () => {
 		const openSpy = vi.spyOn(AgentStorage, "open");
 		let requestHeaders: Headers | undefined;
 
-		using _hook = hookFetch(async (_url, init) => {
+		const fetchMock: FetchImpl = async (_url, init) => {
 			requestHeaders = new Headers(init?.headers);
 			return new Response(makeSseResponse(), { status: 200, headers: { "Content-Type": "text/event-stream" } });
-		});
+		};
 
 		const params: SearchParams = {
 			query: "broker codex search",
@@ -51,7 +51,7 @@ describe("Codex web search broker auth", () => {
 			sessionId: "codex-broker-session",
 		};
 
-		const result = await searchCodex(params);
+		const result = await searchCodex({ ...params, fetch: fetchMock });
 
 		expect(result.provider).toBe("codex");
 		expect(getOAuthAccess).toHaveBeenCalledWith("openai-codex", "codex-broker-session", { signal: undefined });

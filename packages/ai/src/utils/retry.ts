@@ -1,5 +1,6 @@
 import { scheduler } from "node:timers/promises";
 import { extractHttpStatusFromError, isRetryableError } from "@oh-my-pi/pi-utils";
+import { getHeadersFromError, getRetryAfterMsFromHeaders } from "./retry-after";
 
 /**
  * GitHub Copilot intermittently rejects preview models (gpt-5.3-codex,
@@ -24,6 +25,8 @@ export function isCopilotTransientModelError(error: unknown): boolean {
 
 const COPILOT_MODEL_RETRY_MAX_ATTEMPTS = 3;
 const COPILOT_MODEL_RETRY_BASE_DELAY_MS = 400;
+/** Longest server-requested backoff we are willing to sit out before giving up. */
+const COPILOT_RETRY_AFTER_MAX_WAIT_MS = 30_000;
 
 /**
  * Wrap an initial Copilot request so transient `model_not_supported` 400s are
@@ -45,9 +48,27 @@ export async function callWithCopilotModelRetry<T>(
 			return await fn();
 		} catch (error) {
 			lastError = error;
-			if (!isCopilotTransientModelError(error) && !isRetryableError(error)) throw error;
+			// A latched abort (caller cancel or local watchdog) makes any retry a
+			// guaranteed-dead attempt — surface the original error, not the
+			// scheduler's AbortError.
+			if (options.signal?.aborted) throw error;
+			const transientModelError = isCopilotTransientModelError(error);
+			if (!transientModelError && !isRetryableError(error)) throw error;
 			if (attempt === COPILOT_MODEL_RETRY_MAX_ATTEMPTS - 1) break;
-			await scheduler.wait(retryBaseDelayMs * (attempt + 1), { signal: options.signal });
+			let delayMs = retryBaseDelayMs * (attempt + 1);
+			if (!transientModelError) {
+				const status = extractHttpStatusFromError(error);
+				if (status !== undefined) {
+					// Status-bearing retryable errors (429/5xx) are only re-sent when
+					// the server told us when to come back — a blind fixed-delay retry
+					// of a rate limit just burns the remaining attempts. Status-less
+					// transport blips (socket close, h2 reset) keep the linear backoff.
+					const retryAfterMs = getRetryAfterMsFromHeaders(getHeadersFromError(error));
+					if (retryAfterMs === undefined || retryAfterMs > COPILOT_RETRY_AFTER_MAX_WAIT_MS) throw error;
+					delayMs = Math.max(delayMs, retryAfterMs);
+				}
+			}
+			await scheduler.wait(delayMs, { signal: options.signal });
 		}
 	}
 	throw lastError;

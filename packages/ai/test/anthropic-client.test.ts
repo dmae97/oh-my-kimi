@@ -3,8 +3,9 @@ import {
 	AnthropicApiError,
 	AnthropicConnectionTimeoutError,
 	AnthropicMessagesClient,
-} from "../src/providers/anthropic-client";
-import type { MessageCreateParamsStreaming } from "../src/providers/anthropic-wire";
+} from "@oh-my-pi/pi-ai/providers/anthropic-client";
+import type { MessageCreateParamsStreaming } from "@oh-my-pi/pi-ai/providers/anthropic-wire";
+import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
 
 const params: MessageCreateParamsStreaming = {
 	model: "claude-sonnet-4-5",
@@ -15,7 +16,7 @@ const params: MessageCreateParamsStreaming = {
 
 type FetchCall = { url: string; init: RequestInit };
 
-function createFetchMock(responses: Array<Response | Error>): { calls: FetchCall[]; fetch: typeof fetch } {
+function createFetchMock(responses: Array<Response | Error>): { calls: FetchCall[]; fetch: FetchImpl } {
 	const calls: FetchCall[] = [];
 	const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
 		calls.push({ url: String(input), init: init ?? {} });
@@ -70,6 +71,25 @@ describe("AnthropicMessagesClient error mapping", () => {
 
 		expect(error).toBeInstanceOf(AnthropicApiError);
 		expect((error as AnthropicApiError).message).toBe("500 status code (no body)");
+	});
+
+	it("does not let fetchOptions override core request fields", async () => {
+		const { calls, fetch } = createFetchMock([new Response(null, { status: 200 })]);
+		const preAborted = AbortSignal.abort();
+		const client = new AnthropicMessagesClient({
+			apiKey: "sk-test",
+			maxRetries: 0,
+			fetch,
+			fetchOptions: { method: "GET", signal: preAborted },
+		});
+
+		const response = await client.messages.create(params).asResponse();
+
+		// fetchOptions exists for transport extras (tls); a caller-supplied signal
+		// or method must not disconnect the timeout controller or break the POST.
+		expect(response.status).toBe(200);
+		expect(calls[0]?.init.method).toBe("POST");
+		expect(calls[0]?.init.signal?.aborted).toBe(false);
 	});
 });
 

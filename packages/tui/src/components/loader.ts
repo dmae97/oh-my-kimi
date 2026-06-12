@@ -39,7 +39,7 @@ export class Loader extends Text {
 		this.start();
 	}
 
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		const lines = ["", ...super.render(width)];
 		for (let i = 0; i < lines.length; i++) {
 			const line = lines[i];
@@ -88,9 +88,13 @@ export class Loader extends Text {
 
 	#updateDisplay() {
 		const frame = this.#frames[this.#currentFrame];
-		this.setText(`${this.spinnerColorFn(frame)} ${this.messageColorFn(this.message)}`);
-		if (this.#ui) {
-			this.#ui.requestRender();
+		const text = `${this.spinnerColorFn(frame)} ${this.messageColorFn(this.message)}`;
+		if (this.setText(text) && this.#ui) {
+			// Component-scoped: a spinner tick changes only this component, so
+			// the TUI may reuse every other root subtree instead of re-walking
+			// the whole tree (full repaints at 12.5 Hz made huge transcripts
+			// lag as soon as the loader appeared).
+			this.#ui.requestComponentRender(this);
 		}
 	}
 }

@@ -70,6 +70,7 @@ const CP_KP_EQUALS: i32 = 57415;
 const MOD_SHIFT: u32 = 1;
 const MOD_ALT: u32 = 2;
 const MOD_CTRL: u32 = 4;
+const MOD_SUPER: u32 = 8;
 const MOD_NUM_LOCK: u32 = 128;
 
 /// Event types from Kitty keyboard protocol (flag 2).
@@ -455,6 +456,10 @@ fn parse_key_id(key_id: &str) -> Option<ParsedKeyId<'_>> {
 			},
 			b's' | b'S' if p.eq_ignore_ascii_case("shift") => {
 				modifier |= MOD_SHIFT;
+				continue;
+			},
+			b's' | b'S' if p.eq_ignore_ascii_case("super") => {
+				modifier |= MOD_SUPER;
 				continue;
 			},
 			b'a' | b'A' if p.eq_ignore_ascii_case("alt") => {
@@ -1378,7 +1383,7 @@ fn parse_functional(bytes: &[u8]) -> Option<ParsedKittySequence> {
 
 fn format_kitty_key(parsed: &ParsedKittySequence) -> Option<Cow<'static, str>> {
 	let effective_mod = parsed.modifier & !LOCK_MASK;
-	if effective_mod & !(MOD_SHIFT | MOD_CTRL | MOD_ALT) != 0 {
+	if effective_mod & !(MOD_SHIFT | MOD_CTRL | MOD_ALT | MOD_SUPER) != 0 {
 		return None;
 	}
 	let effective_codepoint =
@@ -1479,6 +1484,9 @@ fn format_with_mods(mods: u32, key_name: &str) -> String {
 	}
 	if mods & MOD_ALT != 0 {
 		result.push_str("alt+");
+	}
+	if mods & MOD_SUPER != 0 {
+		result.push_str("super+");
 	}
 	result.push_str(key_name);
 	result
@@ -1585,7 +1593,11 @@ mod tests {
 
 	#[test]
 	fn parse_key_ignores_kitty_sequences_with_unsupported_modifiers() {
-		assert_eq!(parse_key_inner(b"\x1b[99;9u", true).as_deref(), None);
+		// Hyper (16) and meta (32) are kitty modifier bits we do not surface
+		// because nothing in the editor binds them. Wire mod 17 = mask 16 = hyper.
+		assert_eq!(parse_key_inner(b"\x1b[99;17u", true).as_deref(), None);
+		// Wire mod 33 = mask 32 = meta.
+		assert_eq!(parse_key_inner(b"\x1b[99;33u", true).as_deref(), None);
 	}
 
 	#[test]
@@ -1674,5 +1686,34 @@ mod tests {
 		// CSI-u / modifyOtherKeys forms still resolve ctrl+alt+<colliding>.
 		assert!(matches_key_inner(b"\x1b[109;7u", "ctrl+alt+m", true));
 		assert!(matches_key_inner(b"\x1b[27;7;109~", "ctrl+alt+m", false));
+	}
+
+	#[test]
+	fn super_alt_backspace_matches_ghostty_default() {
+		// Issue #2064: Ghostty on macOS reports Option+Backspace as kitty
+		// modifier 11 (wire) = 10 (mask) = super(8)|alt(2). Before super
+		// support landed, the matcher rejected this entirely.
+		assert!(matches_key_inner(b"\x1b[127;11u", "super+alt+backspace", true));
+		assert!(matches_key_inner(b"\x1b[127;11u", "alt+super+backspace", true));
+		assert_eq!(parse_key_inner(b"\x1b[127;11u", true).as_deref(), Some("alt+super+backspace"));
+		// Plain alt+backspace must still NOT match — the modifier really is super|alt.
+		assert!(!matches_key_inner(b"\x1b[127;11u", "alt+backspace", true));
+		// And plain backspace (mod 0) must still not match a super+alt-modified press.
+		assert!(!matches_key_inner(b"\x1b[127;11u", "backspace", true));
+		// Release events stay ignored: super+alt+backspace release must not match a
+		// press.
+		assert!(!matches_key_inner(b"\x1b[127;11:3u", "super+alt+backspace", true));
+		assert_eq!(parse_key_inner(b"\x1b[127;11:3u", true).as_deref(), None);
+	}
+
+	#[test]
+	fn super_modifier_parses_for_arbitrary_keys() {
+		// Cmd+letter on macOS under kitty flag=1+: super(8)+'a'(97) → wire mod 9.
+		assert!(matches_key_inner(b"\x1b[97;9u", "super+a", true));
+		assert_eq!(parse_key_inner(b"\x1b[97;9u", true).as_deref(), Some("super+a"));
+		// Cmd+Shift+letter: super(8)|shift(1) = 9 mask, wire 10.
+		assert!(matches_key_inner(b"\x1b[97;10u", "super+shift+a", true));
+		assert!(matches_key_inner(b"\x1b[97;10u", "shift+super+a", true));
+		assert_eq!(parse_key_inner(b"\x1b[97;10u", true).as_deref(), Some("shift+super+a"));
 	}
 }

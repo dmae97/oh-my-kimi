@@ -1,26 +1,20 @@
-import { afterEach, describe, expect, it, vi } from "bun:test";
+import { describe, expect, it, vi } from "bun:test";
+import { loginDeepSeek, normalizeDeepSeekApiKey } from "@oh-my-pi/pi-ai/registry/deepseek";
+import type { OAuthController } from "@oh-my-pi/pi-ai/registry/oauth/types";
+import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
 
-import { loginDeepSeek, normalizeDeepSeekApiKey } from "../src/utils/oauth/deepseek";
-import type { OAuthController } from "../src/utils/oauth/types";
-
-const originalFetch = global.fetch;
-
-afterEach(() => {
-	global.fetch = originalFetch;
-	vi.restoreAllMocks();
-});
-
-function makeController(paste: string): OAuthController {
+function makeController(paste: string, fetchMock: FetchImpl): OAuthController {
 	return {
 		onAuth: () => {},
 		onPrompt: async () => paste,
+		fetch: fetchMock,
 	};
 }
 
 describe("loginDeepSeek validation", () => {
 	it("validates against GET /v1/models and returns the trimmed key on 200", async () => {
 		const calls: Array<{ url: string; method?: string; auth?: string | null }> = [];
-		const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+		const fetchMock: FetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
 			const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
 			const headers = new Headers(init?.headers ?? {});
 			calls.push({ url, method: init?.method, auth: headers.get("authorization") });
@@ -35,9 +29,8 @@ describe("loginDeepSeek validation", () => {
 				{ status: 200, headers: { "Content-Type": "application/json" } },
 			);
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
-		const key = await loginDeepSeek(makeController("  sk-valid-key  "));
+		const key = await loginDeepSeek(makeController("  sk-valid-key  ", fetchMock));
 
 		expect(key).toBe("sk-valid-key");
 		expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -47,34 +40,31 @@ describe("loginDeepSeek validation", () => {
 	});
 
 	it("throws a validation error when /v1/models returns 401", async () => {
-		const fetchMock = vi.fn(
+		const fetchMock: FetchImpl = vi.fn(
 			async () => new Response("invalid api key", { status: 401, headers: { "Content-Type": "text/plain" } }),
 		);
-		global.fetch = fetchMock as unknown as typeof fetch;
 
-		await expect(loginDeepSeek(makeController("sk-bad-key"))).rejects.toThrow(/deepseek.*401/i);
+		await expect(loginDeepSeek(makeController("sk-bad-key", fetchMock))).rejects.toThrow(/deepseek.*401/i);
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
 	it("strips a pasted 'Bearer ' prefix before validating", async () => {
 		const seen: string[] = [];
-		const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+		const fetchMock: FetchImpl = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
 			seen.push(new Headers(init?.headers ?? {}).get("authorization") ?? "");
 			return new Response(JSON.stringify({ object: "list", data: [] }), { status: 200 });
 		});
-		global.fetch = fetchMock as unknown as typeof fetch;
 
-		const key = await loginDeepSeek(makeController("Bearer sk-with-prefix"));
+		const key = await loginDeepSeek(makeController("Bearer sk-with-prefix", fetchMock));
 
 		expect(key).toBe("sk-with-prefix");
 		expect(seen[0]).toBe("Bearer sk-with-prefix"); // exactly one Bearer, not nested
 	});
 
 	it("rejects an empty paste before touching the network", async () => {
-		const fetchMock = vi.fn(async () => new Response("", { status: 200 }));
-		global.fetch = fetchMock as unknown as typeof fetch;
+		const fetchMock: FetchImpl = vi.fn(async () => new Response("", { status: 200 }));
 
-		await expect(loginDeepSeek(makeController("   "))).rejects.toThrow(/API key is required/i);
+		await expect(loginDeepSeek(makeController("   ", fetchMock))).rejects.toThrow(/API key is required/i);
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 });

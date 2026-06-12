@@ -84,12 +84,6 @@ impl builtins::Command for ReadCommand {
 		&self,
 		context: brush_core::ExecutionContext<'_, SE>,
 	) -> Result<brush_core::ExecutionResult, Self::Error> {
-		if self.use_readline {
-			return error::unimp("read -e");
-		}
-		if self.initial_text.is_some() {
-			return error::unimp("read -i");
-		}
 
 		// Validate timeout value if provided.
 		if let Some(result) = self.validate_timeout(&context)? {
@@ -105,6 +99,17 @@ impl builtins::Command for ReadCommand {
 		let input_stream = context
 			.try_fd(fd_num)
 			.ok_or_else(|| ErrorKind::BadFileDescriptor(fd_num))?;
+		// Bash only uses readline for `read -e` when reading from a terminal.
+		// For non-terminal input, `-e` and `-i` are accepted but do not affect
+		// the bytes read. `-i` only supplies initial text to readline, so without
+		// an available readline-backed terminal path it is likewise a no-op.
+		if self.use_readline && input_stream.is_terminal() {
+			return error::unimp(if self.initial_text.is_some() {
+				"read -e -i"
+			} else {
+				"read -e"
+			});
+		}
 
 		// Retrieve effective value of IFS for splitting.
 		// We convert to owned String to release the borrow before the mutable borrow
@@ -272,6 +277,7 @@ fn build_variable_fields(
 ///
 /// This enum clearly represents all possible outcomes of `read_line()`,
 /// making the contract with callers explicit.
+#[derive(Debug)]
 enum ReadResult {
 	/// Successfully read a complete line (delimiter or char limit reached).
 	Line(String),

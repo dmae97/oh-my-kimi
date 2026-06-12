@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { Effort, type Model } from "@oh-my-pi/pi-ai";
+import { type Api, Effort, type Model } from "@oh-my-pi/pi-ai";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import type { CanonicalModelVariant } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import {
 	expandRoleAlias,
+	filterAvailableModelsByEnabledPatterns,
 	parseModelPattern,
 	parseModelString,
 	resolveAgentModelPatterns,
@@ -15,7 +18,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 
 // Mock models for testing
 const mockModels: Model<"anthropic-messages">[] = [
-	{
+	buildModel({
 		id: "claude-sonnet-4-5",
 		name: "Claude Sonnet 4.5",
 		api: "anthropic-messages",
@@ -24,15 +27,14 @@ const mockModels: Model<"anthropic-messages">[] = [
 		reasoning: true,
 		thinking: {
 			mode: "budget",
-			minLevel: Effort.Minimal,
-			maxLevel: Effort.High,
+			efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High],
 		},
 		input: ["text", "image"],
 		cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
 		contextWindow: 200000,
 		maxTokens: 8192,
-	},
-	{
+	}),
+	buildModel({
 		id: "gpt-4o",
 		name: "GPT-4o",
 		api: "anthropic-messages", // Using same type for simplicity
@@ -43,12 +45,12 @@ const mockModels: Model<"anthropic-messages">[] = [
 		cost: { input: 5, output: 15, cacheRead: 0.5, cacheWrite: 5 },
 		contextWindow: 128000,
 		maxTokens: 4096,
-	},
+	}),
 ];
 
 // Mock OpenRouter models with colons in IDs
-const mockOpenRouterModels: Model<"anthropic-messages">[] = [
-	{
+const mockOpenRouterModels: Model<Api>[] = [
+	buildModel({
 		id: "qwen/qwen3-coder:exacto",
 		name: "Qwen3 Coder Exacto",
 		api: "anthropic-messages",
@@ -57,15 +59,14 @@ const mockOpenRouterModels: Model<"anthropic-messages">[] = [
 		reasoning: true,
 		thinking: {
 			mode: "budget",
-			minLevel: Effort.Minimal,
-			maxLevel: Effort.High,
+			efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High],
 		},
 		input: ["text"],
 		cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1 },
 		contextWindow: 128000,
 		maxTokens: 8192,
-	},
-	{
+	}),
+	buildModel({
 		id: "openai/gpt-4o:extended",
 		name: "GPT-4o Extended",
 		api: "anthropic-messages",
@@ -76,28 +77,27 @@ const mockOpenRouterModels: Model<"anthropic-messages">[] = [
 		cost: { input: 5, output: 15, cacheRead: 0.5, cacheWrite: 5 },
 		contextWindow: 128000,
 		maxTokens: 4096,
-	},
-	{
+	}),
+	buildModel({
 		id: "z-ai/glm-4.7",
 		name: "GLM 4.7",
-		api: "anthropic-messages",
+		api: "openai-completions",
 		provider: "openrouter",
 		baseUrl: "https://openrouter.ai/api/v1",
 		reasoning: true,
 		thinking: {
 			mode: "budget",
-			minLevel: Effort.Minimal,
-			maxLevel: Effort.High,
+			efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High],
 		},
 		input: ["text"],
 		cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1 },
 		contextWindow: 128000,
 		maxTokens: 8192,
-	},
+	}),
 ];
 
 const mockProviderOverlapModels: Model<"anthropic-messages">[] = [
-	{
+	buildModel({
 		id: "kimi-k2.5",
 		name: "Kimi K2.5",
 		api: "anthropic-messages",
@@ -108,8 +108,8 @@ const mockProviderOverlapModels: Model<"anthropic-messages">[] = [
 		cost: { input: 2, output: 6, cacheRead: 0.2, cacheWrite: 2 },
 		contextWindow: 128000,
 		maxTokens: 8192,
-	},
-	{
+	}),
+	buildModel({
 		id: "moonshotai/kimi-k2.5",
 		name: "Kimi K2.5 (OpenRouter)",
 		api: "anthropic-messages",
@@ -120,11 +120,11 @@ const mockProviderOverlapModels: Model<"anthropic-messages">[] = [
 		cost: { input: 2.2, output: 6.2, cacheRead: 0.22, cacheWrite: 2.2 },
 		contextWindow: 128000,
 		maxTokens: 8192,
-	},
+	}),
 ];
 
 const mockCodexOverlapModels: Model<"anthropic-messages">[] = [
-	{
+	buildModel({
 		id: "gpt-5.3-codex",
 		name: "GPT-5.3 Codex",
 		api: "anthropic-messages",
@@ -133,15 +133,14 @@ const mockCodexOverlapModels: Model<"anthropic-messages">[] = [
 		reasoning: true,
 		thinking: {
 			mode: "effort",
-			minLevel: Effort.Low,
-			maxLevel: Effort.XHigh,
+			efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
 		},
 		input: ["text"],
 		cost: { input: 1.5, output: 6, cacheRead: 0.15, cacheWrite: 1.5 },
 		contextWindow: 200000,
 		maxTokens: 8192,
-	},
-	{
+	}),
+	buildModel({
 		id: "gpt-5.3-codex-spark",
 		name: "GPT-5.3 Codex Spark",
 		api: "anthropic-messages",
@@ -150,18 +149,17 @@ const mockCodexOverlapModels: Model<"anthropic-messages">[] = [
 		reasoning: true,
 		thinking: {
 			mode: "effort",
-			minLevel: Effort.Low,
-			maxLevel: Effort.XHigh,
+			efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
 		},
 		input: ["text"],
 		cost: { input: 1, output: 4, cacheRead: 0.1, cacheWrite: 1 },
 		contextWindow: 200000,
 		maxTokens: 8192,
-	},
+	}),
 ];
 
 function createOpusModel(provider: string, id: string, name: string): Model<"anthropic-messages"> {
-	return {
+	return buildModel({
 		id,
 		name,
 		api: "anthropic-messages",
@@ -170,18 +168,17 @@ function createOpusModel(provider: string, id: string, name: string): Model<"ant
 		reasoning: true,
 		thinking: {
 			mode: "budget",
-			minLevel: Effort.Minimal,
-			maxLevel: Effort.XHigh,
+			efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
 		},
 		input: ["text", "image"],
 		cost: { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
 		contextWindow: 200000,
 		maxTokens: 32000,
-	};
+	});
 }
 
 const canonicalVariantModels: Model<"anthropic-messages">[] = [
-	{
+	buildModel({
 		id: "claude-sonnet-4-5",
 		name: "Claude Sonnet 4.5",
 		api: "anthropic-messages",
@@ -190,15 +187,14 @@ const canonicalVariantModels: Model<"anthropic-messages">[] = [
 		reasoning: true,
 		thinking: {
 			mode: "budget",
-			minLevel: Effort.Minimal,
-			maxLevel: Effort.High,
+			efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High],
 		},
 		input: ["text", "image"],
 		cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
 		contextWindow: 200000,
 		maxTokens: 8192,
-	},
-	{
+	}),
+	buildModel({
 		id: "anthropic/claude-sonnet-4.5",
 		name: "Claude Sonnet 4.5 (Copilot)",
 		api: "anthropic-messages",
@@ -207,14 +203,13 @@ const canonicalVariantModels: Model<"anthropic-messages">[] = [
 		reasoning: true,
 		thinking: {
 			mode: "budget",
-			minLevel: Effort.Minimal,
-			maxLevel: Effort.High,
+			efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High],
 		},
 		input: ["text", "image"],
 		cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
 		contextWindow: 200000,
 		maxTokens: 8192,
-	},
+	}),
 ];
 
 const canonicalRegistry = {
@@ -422,7 +417,7 @@ describe("parseModelPattern", () => {
 			expect(result.model?.provider).toBe("kimi-code");
 		});
 
-		test("falls back to deprioritizing openrouter when no usage data", () => {
+		test("prefers first-party providers over OpenRouter when no usage data exists", () => {
 			const result = parseModelPattern("k2.5", allModels, { usageOrder: [] });
 			expect(result.model?.provider).toBe("kimi-code");
 		});
@@ -472,6 +467,26 @@ describe("resolveModelRoleValue", () => {
 		expect(result.model?.id).toBe("qwen/qwen3-coder:exacto");
 		expect(result.thinkingLevel).toBeUndefined();
 		expect(result.explicitThinkingLevel).toBe(false);
+		expect(result.warning).toBeUndefined();
+	});
+
+	test("splits direct comma fallback chains before parsing thinking selectors", () => {
+		const result = resolveModelRoleValue("anthropic/claude-sonnet-4-5:off,openai/gpt-4o:off", allModels);
+
+		expect(result.model?.provider).toBe("anthropic");
+		expect(result.model?.id).toBe("claude-sonnet-4-5");
+		expect(result.thinkingLevel).toBe("off");
+		expect(result.explicitThinkingLevel).toBe(true);
+		expect(result.warning).toBeUndefined();
+	});
+
+	test("tries later direct comma fallback entries when earlier entries miss", () => {
+		const result = resolveModelRoleValue("anthropic/missing:off,openai/gpt-4o:off", allModels);
+
+		expect(result.model?.provider).toBe("openai");
+		expect(result.model?.id).toBe("gpt-4o");
+		expect(result.thinkingLevel).toBe("off");
+		expect(result.explicitThinkingLevel).toBe(true);
 		expect(result.warning).toBeUndefined();
 	});
 
@@ -530,12 +545,61 @@ describe("resolveAgentModelPatterns", () => {
 		expect(result).toEqual(["anthropic/claude-sonnet-4-5:high"]);
 	});
 
-	test("expands pi/designer to priority defaults", () => {
+	test("uses default for unconfigured smol, slow, and designer agent roles before priority defaults", () => {
 		const settings = Settings.isolated({
-			modelRoles: {
-				default: "anthropic/claude-sonnet-4-5",
-			},
+			modelRoles: { default: "local/llama" },
 		});
+
+		expect(resolveAgentModelPatterns({ agentModel: "pi/smol", settings })).toEqual(["local/llama"]);
+		expect(resolveAgentModelPatterns({ agentModel: "pi/slow", settings })).toEqual(["local/llama"]);
+		expect(resolveAgentModelPatterns({ agentModel: "pi/designer", settings })).toEqual(["local/llama"]);
+	});
+
+	test("keeps built-in priority defaults when default aliases the same unset role", () => {
+		const smolSettings = Settings.isolated({
+			modelRoles: { default: "pi/smol" },
+		});
+		const slowSettings = Settings.isolated({
+			modelRoles: { default: "pi/slow" },
+		});
+		const designerSettings = Settings.isolated({
+			modelRoles: { default: "pi/designer" },
+		});
+
+		expect(resolveAgentModelPatterns({ agentModel: "pi/smol", settings: smolSettings })).toEqual([
+			"cerebras/zai-glm-4.7",
+			"cerebras/zai-glm-4.6",
+			"cerebras/zai-glm",
+			"haiku-4-5",
+			"haiku-4.5",
+			"haiku",
+			"flash",
+			"mini",
+		]);
+		expect(resolveAgentModelPatterns({ agentModel: "pi/slow", settings: slowSettings })[0]).toBe("gpt-5.4");
+		expect(resolveAgentModelPatterns({ agentModel: "pi/designer", settings: designerSettings })[0]).toBe(
+			"google-gemini-cli/gemini-3.1-pro",
+		);
+	});
+
+	test("expands cross-role default aliases when inheriting for an unset role", () => {
+		const settings = Settings.isolated({
+			modelRoles: { default: "pi/slow", slow: "anthropic/claude-sonnet-4-5" },
+		});
+
+		expect(resolveAgentModelPatterns({ agentModel: "pi/smol", settings })).toEqual(["anthropic/claude-sonnet-4-5"]);
+	});
+
+	test("recurses into priority defaults when default points at another unset role", () => {
+		const settings = Settings.isolated({
+			modelRoles: { default: "pi/slow" },
+		});
+
+		expect(resolveAgentModelPatterns({ agentModel: "pi/smol", settings })[0]).toBe("gpt-5.4");
+	});
+
+	test("expands pi/designer to priority defaults when default is unset", () => {
+		const settings = Settings.isolated();
 
 		const result = resolveAgentModelPatterns({
 			agentModel: "pi/designer",
@@ -791,7 +855,7 @@ describe("resolveCliModel", () => {
 		// Simulates the zai/glm-5 bug: vercel-ai-gateway has id="zai/glm-5",
 		// zai has id="glm-5". Input "zai/glm-5" should resolve to provider=zai.
 		const ambiguousModels: Model<"anthropic-messages">[] = [
-			{
+			buildModel({
 				id: "zai/glm-5",
 				name: "GLM-5 (Vercel)",
 				api: "anthropic-messages",
@@ -802,8 +866,8 @@ describe("resolveCliModel", () => {
 				cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1 },
 				contextWindow: 128000,
 				maxTokens: 4096,
-			},
-			{
+			}),
+			buildModel({
 				id: "glm-5",
 				name: "GLM-5",
 				api: "anthropic-messages",
@@ -814,7 +878,7 @@ describe("resolveCliModel", () => {
 				cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1 },
 				contextWindow: 128000,
 				maxTokens: 4096,
-			},
+			}),
 		];
 		const registry = {
 			getAll: () => ambiguousModels,
@@ -920,5 +984,270 @@ describe("expandRoleAlias", () => {
 		settings.setModelRole("default", "anthropic/claude-sonnet-4-5");
 
 		expect(expandRoleAlias("pi/vision", settings)).toBe("pi/vision");
+	});
+});
+
+describe("provider routing selector (@upstream)", () => {
+	const openRouterOnly = (model: Model<Api> | undefined): string[] | undefined =>
+		(model?.compat as { openRouterRouting?: { only?: string[] } } | undefined)?.openRouterRouting?.only;
+
+	test("pins an OpenRouter model to one upstream via @slug", () => {
+		const result = parseModelPattern("openrouter/z-ai/glm-4.7@cerebras", allModels);
+		expect(result.model?.id).toBe("z-ai/glm-4.7");
+		expect(result.model?.provider).toBe("openrouter");
+		expect(result.upstream).toBe("cerebras");
+		expect(openRouterOnly(result.model)).toEqual(["cerebras"]);
+	});
+
+	test("resolves @slug without an explicit provider prefix", () => {
+		const result = parseModelPattern("z-ai/glm-4.7@cerebras", allModels);
+		expect(result.model?.id).toBe("z-ai/glm-4.7");
+		expect(openRouterOnly(result.model)).toEqual(["cerebras"]);
+	});
+
+	test("combines @slug with a trailing thinking level", () => {
+		const result = parseModelPattern("openrouter/z-ai/glm-4.7@cerebras:high", allModels);
+		expect(result.model?.id).toBe("z-ai/glm-4.7");
+		expect(result.thinkingLevel).toBe(Effort.High);
+		expect(openRouterOnly(result.model)).toEqual(["cerebras"]);
+	});
+
+	test("routes Vercel AI Gateway models via vercelGatewayRouting", () => {
+		const gatewayModel: Model<"openai-completions"> = buildModel({
+			id: "zai/glm-4.7",
+			name: "GLM 4.7 (Gateway)",
+			api: "openai-completions",
+			provider: "vercel-ai-gateway",
+			baseUrl: "https://ai-gateway.vercel.sh/v1",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1 },
+			contextWindow: 128000,
+			maxTokens: 8192,
+		});
+		const result = parseModelPattern("vercel-ai-gateway/zai/glm-4.7@cerebras", [gatewayModel]);
+		expect(result.model?.id).toBe("zai/glm-4.7");
+		expect(
+			(result.model?.compat as { vercelGatewayRouting?: { only?: string[] } } | undefined)?.vercelGatewayRouting
+				?.only,
+		).toEqual(["cerebras"]);
+		expect(openRouterOnly(result.model)).toBeUndefined();
+	});
+
+	test("does not split a model id that legitimately ends in @ (Vertex)", () => {
+		const vertexModel: Model<"anthropic-messages"> = buildModel({
+			id: "claude-opus-4-8@default",
+			name: "Claude Opus 4.8",
+			api: "anthropic-messages",
+			provider: "google-vertex",
+			baseUrl: "https://us-aiplatform.googleapis.com",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
+			contextWindow: 200000,
+			maxTokens: 32000,
+		});
+		const result = parseModelPattern("claude-opus-4-8@default", [vertexModel]);
+		expect(result.model?.id).toBe("claude-opus-4-8@default");
+		expect(result.upstream).toBeUndefined();
+		expect(openRouterOnly(result.model)).toBeUndefined();
+	});
+
+	test("ignores @slug on a non-aggregator model (no silent routing)", () => {
+		const result = parseModelPattern("gpt-4o@cerebras", allModels);
+		expect(result.model).toBeUndefined();
+	});
+
+	test("resolveCliModel round-trips @upstream in the selector and carries compat", () => {
+		const registry = { getAll: () => allModels } as unknown as Parameters<typeof resolveCliModel>[0]["modelRegistry"];
+		const result = resolveCliModel({ cliModel: "openrouter/z-ai/glm-4.7@cerebras", modelRegistry: registry });
+		expect(result.model?.id).toBe("z-ai/glm-4.7");
+		expect(result.selector).toBe("openrouter/z-ai/glm-4.7@cerebras");
+		expect(openRouterOnly(result.model)).toEqual(["cerebras"]);
+	});
+});
+
+describe("filterAvailableModelsByEnabledPatterns", () => {
+	const models = mockModels as Model[];
+	const registry = {
+		getCanonicalVariants: (_id: string, _opts?: unknown): CanonicalModelVariant[] => [],
+	};
+
+	test("returns all models when patterns is empty", () => {
+		expect(filterAvailableModelsByEnabledPatterns(models, [], registry)).toEqual(models);
+	});
+
+	test("filters by exact provider/modelId", () => {
+		const result = filterAvailableModelsByEnabledPatterns(models, ["anthropic/claude-sonnet-4-5"], registry);
+		expect(result).toHaveLength(1);
+		expect(result[0].id).toBe("claude-sonnet-4-5");
+	});
+
+	test("filters by bare model id matching across providers", () => {
+		const result = filterAvailableModelsByEnabledPatterns(models, ["claude-sonnet-4-5"], registry);
+		expect(result).toHaveLength(1);
+		expect(result[0].provider).toBe("anthropic");
+	});
+
+	test("expands canonical id via registry", () => {
+		const canonicalRegistry = {
+			getCanonicalVariants: (id: string, _opts?: unknown): CanonicalModelVariant[] =>
+				id === "claude-sonnet-4-5"
+					? [
+							{
+								canonicalId: "claude-sonnet-4-5",
+								selector: "anthropic/claude-sonnet-4-5",
+								model: models[0],
+								source: "bundled",
+							},
+						]
+					: [],
+		};
+		const result = filterAvailableModelsByEnabledPatterns(models, ["claude-sonnet-4-5"], canonicalRegistry);
+		expect(result).toHaveLength(1);
+		expect(result[0].id).toBe("claude-sonnet-4-5");
+	});
+
+	test("strips :thinkingLevel suffix before matching", () => {
+		const result = filterAvailableModelsByEnabledPatterns(models, ["anthropic/claude-sonnet-4-5:high"], registry);
+		expect(result).toHaveLength(1);
+		expect(result[0].id).toBe("claude-sonnet-4-5");
+	});
+
+	test("preserves colon-bearing OpenRouter ids (suffix is not a thinking level)", () => {
+		const openRouterModels = mockOpenRouterModels as Model[];
+		const result = filterAvailableModelsByEnabledPatterns(
+			openRouterModels,
+			["openrouter/qwen/qwen3-coder:exacto"],
+			registry,
+		);
+		expect(result).toHaveLength(1);
+		expect(result[0].id).toBe("qwen/qwen3-coder:exacto");
+	});
+
+	test("matches bare OpenRouter-style model id with slash but no provider prefix", () => {
+		const openRouterModels = mockOpenRouterModels as Model[];
+		const result = filterAvailableModelsByEnabledPatterns(openRouterModels, ["qwen/qwen3-coder:exacto"], registry);
+		expect(result).toHaveLength(1);
+		expect(result[0].id).toBe("qwen/qwen3-coder:exacto");
+		expect(result[0].provider).toBe("openrouter");
+	});
+
+	test("evaluates glob patterns against provider/modelId", () => {
+		const result = filterAvailableModelsByEnabledPatterns(models, ["anthropic/*"], registry);
+		expect(result).toHaveLength(1);
+		expect(result[0].provider).toBe("anthropic");
+	});
+
+	test("evaluates glob patterns against bare model id", () => {
+		const result = filterAvailableModelsByEnabledPatterns(models, ["claude-*"], registry);
+		expect(result).toHaveLength(1);
+		expect(result[0].id).toBe("claude-sonnet-4-5");
+	});
+
+	test("applies glob and exact patterns together", () => {
+		const result = filterAvailableModelsByEnabledPatterns(models, ["anthropic/*", "openai/gpt-4o"], registry);
+		expect(result).toHaveLength(2);
+	});
+
+	test("returns empty list when no pattern matches (misconfiguration)", () => {
+		const result = filterAvailableModelsByEnabledPatterns(models, ["nonexistent-model"], registry);
+		expect(result).toHaveLength(0);
+	});
+
+	test("includes multiple patterns from different providers", () => {
+		const result = filterAvailableModelsByEnabledPatterns(
+			models,
+			["anthropic/claude-sonnet-4-5", "openai/gpt-4o"],
+			registry,
+		);
+		expect(result).toHaveLength(2);
+	});
+});
+
+describe("effort-tier variant aliases", () => {
+	const variantModels: Model<Api>[] = [
+		buildModel({
+			id: "gemini-3.5-flash",
+			requestModelId: "gemini-3.5-flash-extra-low",
+			name: "Gemini 3.5 Flash",
+			api: "google-gemini-cli",
+			provider: "google-antigravity",
+			baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+			reasoning: true,
+			thinking: {
+				mode: "google-level",
+				efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High],
+				effortRouting: {
+					off: "gemini-3.5-flash-extra-low",
+					[Effort.Minimal]: "gemini-3-flash-agent",
+					[Effort.Low]: "gemini-3.5-flash-extra-low",
+					[Effort.Medium]: "gemini-3.5-flash-extra-low",
+					[Effort.High]: "gemini-3.5-flash-low",
+				},
+				suppressWhenOff: true,
+			},
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 1_048_576,
+			maxTokens: 65_535,
+		}),
+		// Live legacy model whose id is also a recycled alias of the family —
+		// exact matches must keep winning while it exists.
+		buildModel({
+			id: "gemini-3-flash",
+			name: "Gemini 3 Flash",
+			api: "google-gemini-cli",
+			provider: "google-antigravity",
+			baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+			reasoning: true,
+			thinking: { mode: "google-level", efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High] },
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 1_048_576,
+			maxTokens: 65_535,
+		}),
+		// Auto-derived pair target on a provider without a hand table.
+		buildModel({
+			id: "kimi-k2",
+			name: "Kimi K2",
+			api: "openai-completions",
+			provider: "venice",
+			baseUrl: "https://api.venice.ai/api/v1",
+			reasoning: true,
+			thinking: { mode: "budget", efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High] },
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128_000,
+			maxTokens: 8_192,
+		}),
+	];
+
+	test("provider-qualified retired tier ids resolve to the collapsed model", () => {
+		const result = parseModelPattern("google-antigravity/gemini-3.5-flash-low", variantModels);
+		expect(result.model?.id).toBe("gemini-3.5-flash");
+		expect(result.thinkingLevel).toBeUndefined();
+	});
+
+	test("retired tier ids keep explicit :level suffixes", () => {
+		const result = parseModelPattern("google-antigravity/gemini-3.5-flash-low:high", variantModels);
+		expect(result.model?.id).toBe("gemini-3.5-flash");
+		expect(result.thinkingLevel).toBe(Effort.High);
+	});
+
+	test("bare retired tier ids resolve through the alias table", () => {
+		const result = parseModelPattern("gemini-3.5-flash-extra-low", variantModels);
+		expect(result.model?.id).toBe("gemini-3.5-flash");
+		expect(result.model?.provider).toBe("google-antigravity");
+	});
+
+	test("live models always beat recycled aliases", () => {
+		const result = parseModelPattern("google-antigravity/gemini-3-flash", variantModels);
+		expect(result.model?.id).toBe("gemini-3-flash");
+	});
+
+	test("consumed X-thinking twins resolve via the grammar fallback", () => {
+		expect(parseModelPattern("venice/kimi-k2-thinking", variantModels).model?.id).toBe("kimi-k2");
+		expect(parseModelPattern("kimi-k2-thinking", variantModels).model?.id).toBe("kimi-k2");
 	});
 });

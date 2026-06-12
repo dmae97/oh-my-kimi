@@ -5,7 +5,8 @@ import {
 	getStreamFirstEventTimeoutMs,
 	getStreamIdleTimeoutMs,
 	iterateWithIdleTimeout,
-} from "../src/utils/idle-iterator";
+	iterateWithTerminalGrace,
+} from "@oh-my-pi/pi-ai/utils/idle-iterator";
 
 /**
  * Per-provider fallback overrides on the stream-watchdog helpers.
@@ -226,5 +227,106 @@ describe("iterateWithIdleTimeout", () => {
 
 		await Bun.sleep(20);
 		expect(firstItemTimedOut).toBe(false);
+	});
+
+	it("closes the upstream iterator when the consumer breaks early", async () => {
+		let upstreamClosed = false;
+		async function* source(): AsyncGenerator<string> {
+			try {
+				let n = 0;
+				while (true) {
+					await Bun.sleep(1);
+					yield `item-${n++}`;
+				}
+			} finally {
+				// Runs only if the wrapper forwards `.return()` to us.
+				upstreamClosed = true;
+			}
+		}
+
+		for await (const _item of iterateWithIdleTimeout(source(), {
+			idleTimeoutMs: 1_000,
+			errorMessage: "idle timeout",
+		})) {
+			break; // abandon the wrapper after the first item
+		}
+
+		// The wrapper must propagate the consumer's early termination to the source
+		// so the underlying SSE body / SDK stream (and its socket) is released
+		// instead of being left suspended.
+		await Bun.sleep(5);
+		expect(upstreamClosed).toBe(true);
+	});
+});
+
+describe("iterateWithTerminalGrace", () => {
+	it("passes items through untouched while the stream is not finished", async () => {
+		async function* source(): AsyncGenerator<string> {
+			yield "a";
+			yield "b";
+		}
+
+		const seen: string[] = [];
+		for await (const item of iterateWithTerminalGrace(source(), {
+			finishedAtMs: () => undefined,
+			graceMs: 50,
+		})) {
+			seen.push(item);
+		}
+		expect(seen).toEqual(["a", "b"]);
+	});
+
+	it("yields trailing items that arrive within the grace window", async () => {
+		let finishedAt: number | undefined;
+		async function* source(): AsyncGenerator<string> {
+			yield "finish";
+			await Bun.sleep(5);
+			yield "usage";
+			await new Promise<never>(() => {}); // server holds the connection open
+		}
+
+		const seen: string[] = [];
+		for await (const item of iterateWithTerminalGrace(source(), {
+			finishedAtMs: () => finishedAt,
+			graceMs: 100,
+		})) {
+			seen.push(item);
+			if (item === "finish") finishedAt = Date.now();
+			if (item === "usage") break;
+		}
+		expect(seen).toEqual(["finish", "usage"]);
+	});
+
+	it("ends cleanly and fires onGraceEnd when the source stays silent past the grace window", async () => {
+		let finishedAt: number | undefined;
+		let graceEnded = false;
+		let upstreamClosed = false;
+		async function* source(): AsyncGenerator<string> {
+			try {
+				yield "finish";
+				await new Promise<never>(() => {}); // never sends [DONE], never closes
+			} finally {
+				upstreamClosed = true;
+			}
+		}
+
+		const seen: string[] = [];
+		for await (const item of iterateWithTerminalGrace(source(), {
+			finishedAtMs: () => finishedAt,
+			graceMs: 20,
+			onGraceEnd: () => {
+				graceEnded = true;
+			},
+		})) {
+			seen.push(item);
+			finishedAt = Date.now();
+		}
+
+		// Clean end of iteration — no throw — with the grace hook invoked so the
+		// caller can abort the transport and release the parked source read.
+		expect(seen).toEqual(["finish"]);
+		expect(graceEnded).toBe(true);
+		await Bun.sleep(5);
+		expect(upstreamClosed).toBe(false); // parked mid-await; only the abort can release it
 	});
 });

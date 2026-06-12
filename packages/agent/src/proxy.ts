@@ -7,17 +7,18 @@ import {
 	type AssistantMessageEvent,
 	type Context,
 	EventStream,
+	type FetchImpl,
 	type Model,
 	type SimpleStreamOptions,
 	type StopReason,
 	type ToolCall,
 } from "@oh-my-pi/pi-ai";
-import { calculateCost } from "@oh-my-pi/pi-ai/models";
 import { parseStreamingJson } from "@oh-my-pi/pi-ai/utils/json-parse";
+import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import { readSseJson } from "@oh-my-pi/pi-utils";
 
-// Create stream class matching ProxyMessageEventStream
-class ProxyMessageEventStream extends EventStream<AssistantMessageEvent, AssistantMessage> {
+// Event stream adapter for proxy SSE events
+export class ProxyMessageEventStream extends EventStream<AssistantMessageEvent, AssistantMessage> {
 	constructor() {
 		super(
 			event => event.type === "done" || event.type === "error",
@@ -61,6 +62,8 @@ export interface ProxyStreamOptions extends SimpleStreamOptions {
 	authToken: string;
 	/** Proxy server URL (e.g., "https://genai.example.com") */
 	proxyUrl: string;
+	/** Optional fetch implementation; defaults to global fetch. */
+	fetch?: FetchImpl;
 }
 
 /**
@@ -117,7 +120,7 @@ export function streamProxy(model: Model, context: Context, options: ProxyStream
 		}
 
 		try {
-			response = await fetch(`${options.proxyUrl}/api/stream`, {
+			response = await (options.fetch ?? fetch)(`${options.proxyUrl}/api/stream`, {
 				method: "POST",
 				headers: {
 					Authorization: `Bearer ${options.authToken}`,
@@ -167,9 +170,12 @@ export function streamProxy(model: Model, context: Context, options: ProxyStream
 				}
 			}
 
-			if (options.signal?.aborted && !sawTerminalEvent) {
-				const reason = options.signal.reason;
-				throw reason instanceof Error ? reason : new Error(String(reason ?? "Request aborted"));
+			if (!sawTerminalEvent) {
+				if (options.signal?.aborted) {
+					const reason = options.signal.reason;
+					throw reason instanceof Error ? reason : new Error(String(reason ?? "Request aborted"));
+				}
+				throw new Error("Proxy stream ended without a terminal event (done or error)");
 			}
 
 			stream.end();

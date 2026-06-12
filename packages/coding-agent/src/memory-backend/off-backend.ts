@@ -13,4 +13,13 @@ export const offBackend: MemoryBackend = {
 	},
 	async clear() {},
 	async enqueue() {},
+	async status() {
+		return {
+			backend: "off" as const,
+			active: false,
+			writable: false,
+			searchable: false,
+			message: "Memory backend is off.",
+		};
+	},
 };

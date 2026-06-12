@@ -1,4 +1,7 @@
-use std::{borrow::Cow, os::unix::process::CommandExt};
+use std::{
+	borrow::Cow,
+	os::unix::process::{CommandExt, ExitStatusExt},
+};
 
 use brush_core::{ErrorKind, ExecutionExitCode, ExecutionResult, builtins, commands};
 use clap::Parser;
@@ -47,7 +50,7 @@ impl builtins::Command for ExecCommand {
 		// expectation of returning.
 		if context.shell.is_subshell() {
 			if self.empty_environment || self.exec_as_login || self.name_for_argv0.is_some() {
-				return brush_core::error::unimp("exec with options in subshell not yet supported");
+				return self.execute_external_in_subshell(context).await;
 			}
 
 			let cmd_cmd = crate::command::CommandCommand {
@@ -58,16 +61,12 @@ impl builtins::Command for ExecCommand {
 			return cmd_cmd.execute(context).await;
 		}
 
-		let mut argv0 = Cow::Borrowed(self.name_for_argv0.as_ref().unwrap_or(&self.args[0]));
-
-		if self.exec_as_login {
-			argv0 = Cow::Owned(std::format!("-{argv0}"));
-		}
+		let argv0 = self.argv0();
 
 		let mut cmd = commands::compose_std_command(
 			&context,
 			&self.args[0],
-			argv0.as_str(),
+			argv0.as_ref(),
 			&self.args[1..],
 			self.empty_environment,
 		)?;
@@ -79,5 +78,63 @@ impl builtins::Command for ExecCommand {
 		} else {
 			Err(ErrorKind::from(exec_error).into())
 		}
+	}
+}
+
+impl ExecCommand {
+	fn argv0(&self) -> Cow<'_, str> {
+		let argv0 = self
+			.name_for_argv0
+			.as_deref()
+			.unwrap_or_else(|| self.args[0].as_str());
+
+		if self.exec_as_login {
+			Cow::Owned(std::format!("-{argv0}"))
+		} else {
+			Cow::Borrowed(argv0)
+		}
+	}
+
+	async fn execute_external_in_subshell<SE: brush_core::ShellExtensions>(
+		&self,
+		context: brush_core::ExecutionContext<'_, SE>,
+	) -> Result<ExecutionResult, brush_core::Error> {
+		let argv0 = self.argv0();
+		let cmd = commands::compose_std_command(
+			&context,
+			&self.args[0],
+			argv0.as_ref(),
+			&self.args[1..],
+			self.empty_environment,
+		)?;
+
+		let mut cmd = tokio::process::Command::from(cmd);
+		cmd.kill_on_drop(true);
+
+		let mut child = match cmd.spawn() {
+			Ok(child) => child,
+			Err(spawn_err) => {
+				if spawn_err.kind() == std::io::ErrorKind::NotFound {
+					return Ok(ExecutionExitCode::NotFound.into());
+				}
+
+				return Err(ErrorKind::from(spawn_err).into());
+			},
+		};
+
+		let status = child.wait().await?;
+
+		if let Some(code) = status.code() {
+			#[expect(clippy::cast_sign_loss)]
+			return Ok(ExecutionResult::new((code & 0xff) as u8));
+		}
+
+		if let Some(signal) = status.signal() {
+			#[expect(clippy::cast_sign_loss)]
+			return Ok(ExecutionResult::new((signal & 0xff) as u8 + 128));
+		}
+
+		tracing::error!("unhandled process exit");
+		Ok(ExecutionExitCode::NotFound.into())
 	}
 }

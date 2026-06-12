@@ -1,9 +1,5 @@
 Runs commands on remote hosts.
 
-<instruction>
-You MUST build commands from the reference below
-</instruction>
-
 <commands>
 **linux/bash, linux/zsh, macos/bash, macos/zsh** — Unix-like:
 - Files: `ls`, `cat`, `head`, `tail`, `grep`, `find`

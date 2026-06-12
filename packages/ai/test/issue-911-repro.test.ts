@@ -1,13 +1,7 @@
-import { afterEach, describe, expect, it } from "bun:test";
-import { getBundledModel } from "../src/models";
-import { streamOpenAICompletions } from "../src/providers/openai-completions";
-import type { Context, Model } from "../src/types";
-
-const originalFetch = global.fetch;
-
-afterEach(() => {
-	global.fetch = originalFetch;
-});
+import { describe, expect, it } from "bun:test";
+import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
+import type { Context, FetchImpl, Model } from "@oh-my-pi/pi-ai/types";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 
 function createSseResponse(events: unknown[]): Response {
 	const payload = `${events
@@ -19,11 +13,10 @@ function createSseResponse(events: unknown[]): Response {
 	});
 }
 
-function createMockFetch(events: unknown[]): typeof fetch {
-	async function mockFetch(_input: string | URL | Request, _init?: RequestInit): Promise<Response> {
+function createMockFetch(events: unknown[]): FetchImpl {
+	return (async (_input: string | URL | Request, _init?: RequestInit): Promise<Response> => {
 		return createSseResponse(events);
-	}
-	return Object.assign(mockFetch, { preconnect: originalFetch.preconnect });
+	}) as typeof fetch;
 }
 
 function baseContext(): Context {
@@ -51,7 +44,7 @@ describe("issue #911 - Mistral Medium 3.5 array content parts", () => {
 	};
 
 	it("normalizes array-of-parts delta.content into the assembled text without [object Object]", async () => {
-		global.fetch = createMockFetch([
+		const fetchMock = createMockFetch([
 			{
 				id: "chatcmpl-mistral-1",
 				object: "chat.completion.chunk",
@@ -86,7 +79,10 @@ describe("issue #911 - Mistral Medium 3.5 array content parts", () => {
 			"[DONE]",
 		]);
 
-		const result = await streamOpenAICompletions(model, baseContext(), { apiKey: "test-key" }).result();
+		const result = await streamOpenAICompletions(model, baseContext(), {
+			apiKey: "test-key",
+			fetch: fetchMock,
+		}).result();
 		const text = result.content
 			.filter(b => b.type === "text")
 			.map(b => (b as { text: string }).text)
@@ -97,7 +93,7 @@ describe("issue #911 - Mistral Medium 3.5 array content parts", () => {
 	});
 
 	it("handles mixed string and array-of-parts content shapes within one stream", async () => {
-		global.fetch = createMockFetch([
+		const fetchMock = createMockFetch([
 			{
 				id: "chatcmpl-mistral-2",
 				object: "chat.completion.chunk",
@@ -132,7 +128,10 @@ describe("issue #911 - Mistral Medium 3.5 array content parts", () => {
 			"[DONE]",
 		]);
 
-		const result = await streamOpenAICompletions(model, baseContext(), { apiKey: "test-key" }).result();
+		const result = await streamOpenAICompletions(model, baseContext(), {
+			apiKey: "test-key",
+			fetch: fetchMock,
+		}).result();
 		const text = result.content
 			.filter(b => b.type === "text")
 			.map(b => (b as { text: string }).text)

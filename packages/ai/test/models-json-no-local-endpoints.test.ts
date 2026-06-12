@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import MODELS_JSON from "../src/models.json" with { type: "json" };
-import type { Model } from "../src/types";
+import type { Model } from "@oh-my-pi/pi-ai/types";
+import MODELS_JSON from "@oh-my-pi/pi-catalog/models.json" with { type: "json" };
 
 // Pins the invariant: the committed `models.json` must never carry a
 // local/self-hosted provider's catalog. Those providers default to an endpoint
@@ -16,7 +16,7 @@ import type { Model } from "../src/types";
 // Failure here means: a local provider slipped into models.json — add it to
 // DISCOVERY_ONLY_PROVIDERS, then `bun run generate-models` and commit the diff.
 describe("models.json local-endpoint leak guard (regression)", () => {
-	const catalog = MODELS_JSON as Record<string, Record<string, Model>>;
+	const catalog = MODELS_JSON as unknown as Record<string, Record<string, Model>>;
 
 	// Providers whose default endpoint is the local machine. They must never
 	// appear as a top-level key in the bundled catalog.

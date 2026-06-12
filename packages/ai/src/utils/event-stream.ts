@@ -5,6 +5,8 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
 	queue: T[] = [];
 	waiting: Array<{ resolve: (value: IteratorResult<T>) => void; reject: (err: unknown) => void }> = [];
 	done = false;
+	/** True once finalResultPromise has been resolved or rejected. */
+	resultSettled = false;
 	#failed = false;
 	#error: unknown = undefined;
 	finalResultPromise: Promise<R>;
@@ -30,6 +32,7 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
 
 		if (this.isComplete(event)) {
 			this.done = true;
+			this.resultSettled = true;
 			this.resolveFinalResult(this.extractResult(event));
 		}
 
@@ -54,7 +57,13 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
 	end(result?: R): void {
 		this.done = true;
 		if (result !== undefined) {
+			this.resultSettled = true;
 			this.resolveFinalResult(result);
+		} else if (!this.resultSettled) {
+			// end() without a terminal value must still settle result() —
+			// otherwise complete()/result() awaits hang forever.
+			this.resultSettled = true;
+			this.rejectFinalResult(new Error("Stream ended without a final result"));
 		}
 		// Notify all waiting consumers that we're done
 		while (this.waiting.length > 0) {
@@ -75,6 +84,7 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
 		this.done = true;
 		this.#failed = true;
 		this.#error = err;
+		this.resultSettled = true;
 		this.rejectFinalResult(err);
 		while (this.waiting.length > 0) {
 			const waiter = this.waiting.shift()!;
@@ -126,6 +136,7 @@ export class AssistantMessageEventStream extends EventStream<AssistantMessageEve
 		// Completion resolves the final result and still emits the terminal event.
 		if (this.isComplete(event)) {
 			this.done = true;
+			this.resultSettled = true;
 			this.resolveFinalResult(this.extractResult(event));
 		}
 
@@ -135,7 +146,13 @@ export class AssistantMessageEventStream extends EventStream<AssistantMessageEve
 	override end(result?: AssistantMessage): void {
 		this.done = true;
 		if (result !== undefined) {
+			this.resultSettled = true;
 			this.resolveFinalResult(result);
+		} else if (!this.resultSettled) {
+			// Mirror the base class: a result-less end() must not leave
+			// result() pending forever.
+			this.resultSettled = true;
+			this.rejectFinalResult(new Error("Stream ended without a final result"));
 		}
 		this.endWaiting();
 	}

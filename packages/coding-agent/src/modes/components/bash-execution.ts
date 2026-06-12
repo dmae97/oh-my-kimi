@@ -126,7 +126,7 @@ export class BashExecutionComponent extends Container {
 		this.#updateDisplay();
 	}
 
-	override render(width: number): string[] {
+	override render(width: number): readonly string[] {
 		if (this.#displayDirty) {
 			this.#displayDirty = false;
 			this.#updateDisplay();

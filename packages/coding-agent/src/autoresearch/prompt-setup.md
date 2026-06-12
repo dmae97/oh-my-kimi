@@ -18,16 +18,16 @@ Working directory: `{{working_dir}}`
 {{baseline_warning}}
 {{/if}}
 
-### What you must produce
+### What you MUST produce
 
-Write `./autoresearch.sh` at the working directory. It is the canonical benchmark entrypoint and must:
+Write `./autoresearch.sh` at the working directory. It is the canonical benchmark entrypoint and MUST:
 
 - exit 0 on success and non-zero on failure;
 - print the primary metric as a single line `METRIC <name>=<value>`;
 - print any secondary metrics as additional `METRIC <name>=<value>` lines;
 - run the same workload deterministically every time (no live network, no time-of-day dependencies, fixed seeds where applicable).
 
-You **may** edit anything else needed to make `autoresearch.sh` work — benchmark binaries, `Cargo.toml`, `package.json`, helper scripts, fixtures. All those edits are part of the harness baseline and will be committed for you when you call `init_experiment` on an autoresearch branch.
+You MAY edit anything else needed to make `autoresearch.sh` work — benchmark binaries, `Cargo.toml`, `package.json`, helper scripts, fixtures. All those edits are part of the harness baseline and will be committed for you when you call `init_experiment` on an autoresearch branch.
 
 ### Steps
 
@@ -38,6 +38,6 @@ You **may** edit anything else needed to make `autoresearch.sh` work — benchma
 
 ### Rules
 
-- Do **not** call `run_experiment`, `log_experiment`, or `update_notes` yet. They will error with "no active autoresearch session" until `init_experiment` runs.
-- Do **not** treat a compile-only check as a benchmark. The harness must actually execute the workload and emit `METRIC`.
-- Do **not** create `autoresearch.md`, `autoresearch.checks.sh`, `autoresearch.program.md`, `autoresearch.ideas.md`, `autoresearch.jsonl`, `.autoresearch/`, or `autoresearch.config.json`. Session state is tracked for you.
+- NEVER call `run_experiment`, `log_experiment`, or `update_notes` yet. They will error with "no active autoresearch session" until `init_experiment` runs.
+- NEVER treat a compile-only check as a benchmark. The harness MUST actually execute the workload and emit `METRIC`.
+- NEVER create `autoresearch.md`, `autoresearch.checks.sh`, `autoresearch.program.md`, `autoresearch.ideas.md`, `autoresearch.jsonl`, `.autoresearch/`, or `autoresearch.config.json`. Session state is tracked for you.

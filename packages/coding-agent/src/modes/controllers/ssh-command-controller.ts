@@ -209,7 +209,7 @@ export class SSHCommandController {
 			const scopeLabel = scope === "user" ? "user" : "project";
 			const lines = [
 				"",
-				theme.fg("success", `✓ Added SSH host "${name}" to ${scopeLabel} config`),
+				theme.fg("success", `+ Added SSH host "${name}" to ${scopeLabel} config`),
 				"",
 				`  Host: ${host}`,
 			];
@@ -368,7 +368,7 @@ export class SSHCommandController {
 			await this.ctx.session.refreshSshTool();
 
 			this.#showMessage(
-				["", theme.fg("success", `✓ Removed SSH host "${name}" from ${scope} config`), ""].join("\n"),
+				["", theme.fg("success", `- Removed SSH host "${name}" from ${scope} config`), ""].join("\n"),
 			);
 		} catch (error) {
 			this.ctx.showError(`Failed to remove host: ${error instanceof Error ? error.message : String(error)}`);

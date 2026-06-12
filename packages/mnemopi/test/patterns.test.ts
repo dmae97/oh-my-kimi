@@ -1,5 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { CompressionStats, DetectedPattern, MemoryCompressor, PatternDetector } from "../src/core/patterns";
+import {
+	CompressionStats,
+	DetectedPattern,
+	MemoryCompressor,
+	PatternDetector,
+} from "@oh-my-pi/pi-mnemopi/core/patterns";
 
 describe("memory compression", () => {
 	it("reports savings and zero-size stats", () => {

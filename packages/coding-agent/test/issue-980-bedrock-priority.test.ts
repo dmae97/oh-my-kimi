@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Model } from "@oh-my-pi/pi-ai";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import {
 	resolveCliModel,
 	resolveModelFromSettings,
@@ -8,7 +9,7 @@ import {
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 
 function model(provider: string, id: string): Model<"anthropic-messages"> {
-	return {
+	return buildModel({
 		provider,
 		id,
 		name: `${provider}/${id}`,
@@ -19,7 +20,7 @@ function model(provider: string, id: string): Model<"anthropic-messages"> {
 		cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 200000,
 		maxTokens: 8192,
-	};
+	});
 }
 
 describe("issue #980 provider-qualified model resolution", () => {

@@ -1,5 +1,7 @@
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import { getSupportedEfforts, type Model, modelsAreEqual } from "@oh-my-pi/pi-ai";
+import type { Model } from "@oh-my-pi/pi-ai";
+import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
+import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import {
 	Container,
 	fuzzyFilter,
@@ -16,8 +18,8 @@ import {
 } from "@oh-my-pi/pi-tui";
 import { formatNumber } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../../config/model-registry";
-import { getKnownRoleIds, getRoleInfo, MODEL_ROLE_IDS, MODEL_ROLES } from "../../config/model-registry";
-import { resolveModelRoleValue } from "../../config/model-resolver";
+import { getModelMatchPreferences, resolveModelRoleValue } from "../../config/model-resolver";
+import { getKnownRoleIds, getRoleInfo, MODEL_ROLE_IDS, MODEL_ROLES } from "../../config/model-roles";
 import type { Settings } from "../../config/settings";
 import { type ThemeColor, theme } from "../../modes/theme/theme";
 import { matchesSelectDown, matchesSelectUp } from "../../modes/utils/keybinding-matchers";
@@ -29,6 +31,25 @@ function makeInvertedBadge(label: string, color: ThemeColor): string {
 	const fgAnsi = theme.getFgAnsi(color);
 	const bgAnsi = fgAnsi.replace(/\x1b\[38;/g, "\x1b[48;");
 	return `${bgAnsi}\x1b[30m ${label} \x1b[39m\x1b[49m`;
+}
+
+function makeAutoSelectedBadge(label: string, color: ThemeColor): string {
+	return `${theme.fg("dim", "[")}${theme.fg(color, label)}${theme.fg("dim", " auto]")}`;
+}
+
+function makeRoleBadgeToken(label: string, color: ThemeColor, assigned: RoleAssignment): string {
+	if (assigned.autoSelected) {
+		const badge = makeAutoSelectedBadge(label, color);
+		if (assigned.thinkingLevel === ThinkingLevel.Inherit) {
+			return badge;
+		}
+		const thinkingLabel = getConfiguredThinkingLevelMetadata(assigned.thinkingLevel).label;
+		return `${badge} ${theme.fg("dim", `(${thinkingLabel})`)}`;
+	}
+
+	const badge = makeInvertedBadge(label, color);
+	const thinkingLabel = getConfiguredThinkingLevelMetadata(assigned.thinkingLevel).label;
+	return `${badge} ${theme.fg("dim", `(${thinkingLabel})`)}`;
 }
 
 function normalizeSearchText(value: string): string {
@@ -86,6 +107,7 @@ interface ScopedModelItem {
 interface RoleAssignment {
 	model: Model;
 	thinkingLevel: ConfiguredThinkingLevel;
+	autoSelected: boolean;
 }
 
 type RoleSelectCallback = (
@@ -243,21 +265,26 @@ export class ModelSelectorComponent extends Container {
 		// Add bottom border
 		this.addChild(new DynamicBorder());
 
-		// Load models and do initial render
-		this.#loadModels().then(() => {
-			this.#buildProviderTabs();
-			this.#updateTabBar();
-			// Always apply the current search query — the user may have typed
-			// while models were loading asynchronously.
-			const currentQuery = this.#searchInput.getValue();
-			if (currentQuery) {
-				this.#filterModels(currentQuery);
-			} else {
-				this.#updateList();
-			}
-			// Request re-render after models are loaded
-			this.#tui.requestRender();
-		});
+		// Hydrate synchronously from the current registry snapshot so the first
+		// Enter after opening the selector acts on cached models instead of being
+		// dropped while the offline refresh promise is still pending. This stays
+		// on the open path, so it must remain cheap — heavy lifting lives in the
+		// registry's one-pass getCanonicalModelSelections.
+		this.#syncFromRegistryState();
+
+		// Reconcile with cached discovery state in the background. A --models
+		// scope is registry-independent, so the offline reload would only repeat
+		// the synchronous hydration above.
+		if (this.#scopedModels.length === 0) {
+			this.#modelRegistry
+				.refresh("offline")
+				.then(() => this.#syncFromRegistryState())
+				.catch(error => {
+					this.#errorMessage = error instanceof Error ? error.message : String(error);
+					this.#updateList();
+				})
+				.finally(() => this.#tui.requestRender());
+		}
 	}
 
 	#buildMenuRoleActions(): void {
@@ -271,12 +298,17 @@ export class ModelSelectorComponent extends Container {
 		});
 	}
 
-	#loadRoleModels(): void {
+	#loadRoleModels(autoCandidateModels?: ReadonlyArray<Model>): void {
+		const nextRoles = {} as Record<string, RoleAssignment | undefined>;
 		const allModels = this.#modelRegistry.getAll();
-		const matchPreferences = { usageOrder: this.#settings.getStorage()?.getModelUsageOrder() };
-		for (const role of getKnownRoleIds(this.#settings)) {
+		const matchPreferences = getModelMatchPreferences(this.#settings);
+		const knownRoles = getKnownRoleIds(this.#settings);
+		const configuredRoles = new Set<string>();
+
+		for (const role of knownRoles) {
 			const roleValue = this.#settings.getModelRole(role);
 			if (!roleValue) continue;
+			configuredRoles.add(role);
 
 			const resolved = resolveModelRoleValue(roleValue, allModels, {
 				settings: this.#settings,
@@ -284,15 +316,39 @@ export class ModelSelectorComponent extends Container {
 				modelRegistry: this.#modelRegistry,
 			});
 			if (resolved.model) {
-				this.#roles[role] = {
+				nextRoles[role] = {
 					model: resolved.model,
 					thinkingLevel:
 						resolved.explicitThinkingLevel && resolved.thinkingLevel !== undefined
 							? resolved.thinkingLevel
 							: ThinkingLevel.Inherit,
+					autoSelected: false,
 				};
 			}
 		}
+
+		if (autoCandidateModels && autoCandidateModels.length > 0) {
+			const candidates = [...autoCandidateModels];
+			for (const role of knownRoles) {
+				if (configuredRoles.has(role)) continue;
+				const resolved = resolveModelRoleValue(`pi/${role}`, candidates, {
+					settings: this.#settings,
+					matchPreferences,
+					modelRegistry: this.#modelRegistry,
+				});
+				if (!resolved.model) continue;
+				nextRoles[role] = {
+					model: resolved.model,
+					thinkingLevel:
+						resolved.explicitThinkingLevel && resolved.thinkingLevel !== undefined
+							? resolved.thinkingLevel
+							: ThinkingLevel.Inherit,
+					autoSelected: true,
+				};
+			}
+		}
+
+		this.#roles = nextRoles;
 	}
 
 	/**
@@ -427,37 +483,31 @@ export class ModelSelectorComponent extends Container {
 		}
 
 		const candidates = models.map(item => item.model);
-		const canonicalRecords = this.#modelRegistry.getCanonicalModels({
+		this.#loadRoleModels(candidates);
+		const canonicalSelections = this.#modelRegistry.getCanonicalModelSelections({
 			availableOnly: this.#scopedModels.length === 0,
 			candidates,
 		});
-		const canonicalModels = canonicalRecords
-			.map(record => {
-				const selectedModel = this.#modelRegistry.resolveCanonicalModel(record.id, {
-					availableOnly: this.#scopedModels.length === 0,
-					candidates,
-				});
-				if (!selectedModel) return undefined;
-				const searchText = [
-					record.id,
-					record.name,
-					selectedModel.provider,
-					selectedModel.id,
-					selectedModel.name,
-					...record.variants.flatMap(variant => [variant.selector, variant.model.name]),
-				].join(" ");
-				return {
-					kind: "canonical" as const,
-					id: record.id,
-					model: selectedModel,
-					selector: record.id,
-					variantCount: record.variants.length,
-					searchText,
-					normalizedSearchText: normalizeSearchText(searchText),
-					compactSearchText: compactSearchText(searchText),
-				};
-			})
-			.filter((item): item is CanonicalModelItem => item !== undefined);
+		const canonicalModels = canonicalSelections.map(({ record, model: selectedModel }): CanonicalModelItem => {
+			const searchText = [
+				record.id,
+				record.name,
+				selectedModel.provider,
+				selectedModel.id,
+				selectedModel.name,
+				...record.variants.flatMap(variant => [variant.selector, variant.model.name]),
+			].join(" ");
+			return {
+				kind: "canonical",
+				id: record.id,
+				model: selectedModel,
+				selector: record.id,
+				variantCount: record.variants.length,
+				searchText,
+				normalizedSearchText: normalizeSearchText(searchText),
+				compactSearchText: compactSearchText(searchText),
+			};
+		});
 
 		this.#sortModels(models);
 		this.#sortCanonicalModels(canonicalModels);
@@ -473,12 +523,27 @@ export class ModelSelectorComponent extends Container {
 		);
 	}
 
-	async #loadModels(): Promise<void> {
-		if (this.#scopedModels.length === 0) {
-			// Reload config and cached discovery state without blocking on live provider refresh
-			await this.#modelRegistry.refresh("offline");
-		}
+	/**
+	 * Rebuild the visible model lists from the registry's in-memory state.
+	 * Re-entrant: runs once synchronously at construction and again whenever a
+	 * background refresh lands, so it re-applies the live search query and pins
+	 * the highlighted item by selector — a refresh that reorders or inserts
+	 * models must not yank the user's selection out from under a pending Enter.
+	 */
+	#syncFromRegistryState(): void {
+		const selectedKey = this.#getSelectedItem()?.selector;
 		this.#loadModelsFromCurrentRegistryState();
+		this.#buildProviderTabs();
+		this.#updateTabBar();
+		this.#applyTabFilter();
+		if (selectedKey) {
+			const visibleItems = this.#getVisibleItems();
+			const restoredIndex = visibleItems.findIndex(item => item.selector === selectedKey);
+			if (restoredIndex >= 0 && restoredIndex !== this.#selectedIndex) {
+				this.#selectedIndex = this.#coerceSelectedIndex(restoredIndex, visibleItems);
+				this.#updateList();
+			}
+		}
 	}
 
 	#buildProviderTabs(): void {
@@ -581,10 +646,7 @@ export class ModelSelectorComponent extends Container {
 			// here must stay purely in-memory — do not call modelRegistry.refresh()
 			// again or tab switches will pay an extra whole-registry reload after the
 			// network round-trip completes.
-			this.#loadModelsFromCurrentRegistryState();
-			this.#buildProviderTabs();
-			this.#updateTabBar();
-			this.#applyTabFilter();
+			this.#syncFromRegistryState();
 		} catch (error) {
 			this.#errorMessage = error instanceof Error ? error.message : String(error);
 			this.#updateList();
@@ -871,25 +933,21 @@ export class ModelSelectorComponent extends Container {
 			const isDisabled = this.#isItemDisabled(item);
 			const disabledSuffix = this.#formatContextLimitSuffix(item.model);
 
-			// Build role badges (inverted: color as background, black text)
+			// Build role badges. Solid badges are configured; outlined badges are auto-selected defaults.
 			const roleBadgeTokens: string[] = [];
 			for (const role of MODEL_ROLE_IDS) {
 				const { tag, color } = getRoleInfo(role, this.#settings);
 				const assigned = this.#roles[role];
 				if (!tag || !assigned || !modelsAreEqual(assigned.model, item.model)) continue;
 
-				const badge = makeInvertedBadge(tag, color ?? "success");
-				const thinkingLabel = getConfiguredThinkingLevelMetadata(assigned.thinkingLevel).label;
-				roleBadgeTokens.push(`${badge} ${theme.fg("dim", `(${thinkingLabel})`)}`);
+				roleBadgeTokens.push(makeRoleBadgeToken(tag, color ?? "success", assigned));
 			}
 			// Custom role badges
 			for (const [role, assigned] of Object.entries(this.#roles)) {
 				if (role in MODEL_ROLES || !assigned || !modelsAreEqual(assigned.model, item.model)) continue;
 				const roleInfo = getRoleInfo(role, this.#settings);
 				const badgeLabel = roleInfo.tag ?? roleInfo.name;
-				const badge = makeInvertedBadge(badgeLabel, roleInfo.color ?? "muted");
-				const thinkingLabel = getConfiguredThinkingLevelMetadata(assigned.thinkingLevel).label;
-				roleBadgeTokens.push(`${badge} ${theme.fg("dim", `(${thinkingLabel})`)}`);
+				roleBadgeTokens.push(makeRoleBadgeToken(badgeLabel, roleInfo.color ?? "muted", assigned));
 			}
 			const badgeText = roleBadgeTokens.length > 0 ? ` ${roleBadgeTokens.join(" ")}` : "";
 
@@ -1184,7 +1242,7 @@ export class ModelSelectorComponent extends Container {
 		const selectedThinkingLevel = thinkingLevel ?? this.#getCurrentRoleThinkingLevel(role);
 
 		// Update local state for UI
-		this.#roles[role] = { model: item.model, thinkingLevel: selectedThinkingLevel };
+		this.#roles[role] = { model: item.model, thinkingLevel: selectedThinkingLevel, autoSelected: false };
 
 		// Notify caller (for updating agent state if needed)
 		this.#onSelectCallback(item.model, role, selectedThinkingLevel, item.selector);

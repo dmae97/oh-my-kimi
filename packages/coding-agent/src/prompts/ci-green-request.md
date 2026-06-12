@@ -1,10 +1,10 @@
 <critical>
-Keep going until the current branch CI is green.
-Do not stop after a single fix attempt.
+You MUST keep going until the current branch CI is green.
+NEVER stop after a single fix attempt.
 </critical>
 
 <instruction>
-- Prefer `github` tool with `op: run_watch` and no other arguments if available.
+- You SHOULD use the `github` tool with `op: run_watch` and no other arguments if available.
 - Otherwise use `gh` cli.
 - Use workflow runs for current HEAD as source of truth after each push.
 </instruction>
@@ -26,13 +26,11 @@ Do not stop after a single fix attempt.
 
 {{#if headTag}}
 <instruction>
-Always push the branch and tag together atomically so the tag never points at an un-pushed or non-green commit:
-`git push --atomic "{{remote}}" "{{branch}}" "+refs/tags/{{headTag}}"`.
-The `--atomic` flag makes the branch and tag update succeed or fail as one ref transaction; `+refs/tags/{{headTag}}` force-moves the tag to the new HEAD. Do not push the branch first and retag later.
+Push the branch and tag together so the tag never points at an un-pushed or non-green commit. `--atomic` makes the branch and tag update succeed or fail as one ref transaction; `+refs/tags/{{headTag}}` force-moves the tag to the new HEAD. NEVER push the branch first and retag later.
 </instruction>
 {{/if}}
 
 <critical>
 The task is complete only when the workflow runs for the latest HEAD commit succeed.
-{{#if headTag}}The latest HEAD commit must carry tag `{{headTag}}`, pushed atomically with the branch via `git push --atomic`.{{/if}}
+{{#if headTag}}The latest HEAD commit MUST carry tag `{{headTag}}`, pushed atomically with the branch via `git push --atomic`.{{/if}}
 </critical>

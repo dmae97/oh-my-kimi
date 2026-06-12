@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { scheduler } from "node:timers/promises";
-import { ExponentialYield, yieldIfDue } from "../src/utils/yield";
+import { ExponentialYield, yieldIfDue } from "@oh-my-pi/pi-agent-core/utils/yield";
 
 const YIELD_INTERVAL_MS = 50;
 const YIELD_CLOCK_STEP_MS = 60_000;

@@ -8,7 +8,7 @@
  * entrypoint. Legacy extensions still author parameter schemas as
  * `Type.Object({ ... })`, so this file is served by `legacy-pi-compat.ts` in
  * place of the real pi-ai entrypoint whenever a legacy extension imports the
- * bare package root. Subpath imports (`@oh-my-pi/pi-ai/utils/oauth`, etc.)
+ * bare package root. Subpath imports (`@oh-my-pi/pi-ai/oauth`, etc.)
  * continue to resolve directly against the bundled pi-ai package.
  *
  * The `Type` runtime is borrowed from the Zod-backed TypeBox shim that

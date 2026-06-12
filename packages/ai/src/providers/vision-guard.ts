@@ -1,3 +1,6 @@
+import { isDashscopeCompatibleModeUrl } from "@oh-my-pi/pi-catalog/hosts";
+import { isQwenModelId } from "@oh-my-pi/pi-catalog/identity";
+
 import type { ImageContent, Model, TextContent } from "../types";
 
 export const NON_VISION_IMAGE_PLACEHOLDER = "[image omitted: model does not support vision]";
@@ -42,11 +45,10 @@ export function joinTextWithImagePlaceholder(text: string, omittedImages: boolea
  * provider (issue #1859) can't drive the request into an unrecoverable 400.
  */
 export function isDashscopeCompatibleModeTextOnlyQwen(model: Model<"openai-completions">): boolean {
-	const baseUrl = model.baseUrl.toLowerCase();
-	if (!baseUrl.includes("dashscope") || !baseUrl.includes("aliyuncs.com") || !baseUrl.includes("/compatible-mode")) {
+	if (!isDashscopeCompatibleModeUrl(model.baseUrl)) {
 		return false;
 	}
 	const id = model.id.toLowerCase();
-	if (!id.includes("qwen")) return false;
+	if (!isQwenModelId(model.id)) return false;
 	return /\bqwen(?:[\d.]+)?-max\b/.test(id) || /\bqwen(?:[\d.]+)?-coder\b/.test(id);
 }

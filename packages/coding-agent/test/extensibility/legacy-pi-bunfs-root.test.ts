@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
-import { __computeBunfsPackageRoot } from "../../src/extensibility/plugins/legacy-pi-compat";
+import { __computeBunfsPackageRoot } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/legacy-pi-compat";
 
 // Regression for issue #1514: legacy pi compat shim paths were built from a
 // hardcoded POSIX literal `/$bunfs/root/packages`. On Windows the bunfs root

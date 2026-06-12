@@ -8,9 +8,8 @@
  * - Collapsible/expandable views
  */
 import type { RenderResultOptions } from "@oh-my-pi/pi-agent-core";
-import { type HighlightColors, highlightCode as nativeHighlightCode, supportsLanguage } from "@oh-my-pi/pi-natives";
 import { type Component, Text } from "@oh-my-pi/pi-tui";
-import { getLanguageFromPath, type Theme } from "../modes/theme/theme";
+import { getLanguageFromPath, highlightCode as highlightThemeCode, type Theme } from "../modes/theme/theme";
 import {
 	formatExpandHint,
 	formatMoreItems,
@@ -139,7 +138,7 @@ export function renderResult(
 	const outputBlock = new CachedOutputBlock();
 
 	return markFramedBlockComponent({
-		render(width: number): string[] {
+		render(width: number): readonly string[] {
 			// Read mutable state at render time
 			const { expanded, isPartial, spinnerFrame } = options;
 
@@ -166,15 +165,17 @@ export function renderResult(
 			} else if (result.details?.action === "diagnostics" && text === "OK") {
 				label = "Diagnostics";
 				state = "success";
-				bodyLines = [`${theme.styledSymbol("status.success", "success")} ${theme.fg("dim", "OK")}`];
+				bodyLines = [`${theme.styledSymbol("tool.lsp", "accent")} ${theme.fg("dim", "OK")}`];
 			} else {
 				label = "Response";
 				bodyLines = renderGeneric(text, lines, expanded, theme);
 			}
 
 			const actionLabel = (request?.action ?? result.details?.action ?? label.toLowerCase()).replace(/_/g, " ");
-			const status = isPartial ? "running" : result.isError ? "error" : "success";
-			const icon = formatStatusIcon(status, theme, spinnerFrame);
+			const isSuccess = !isPartial && !result.isError;
+			const icon = isSuccess
+				? theme.styledSymbol("tool.lsp", "accent")
+				: formatStatusIcon(isPartial ? "running" : "error", theme, spinnerFrame);
 			const header = `${icon} LSP ${actionLabel}`;
 
 			return outputBlock.render(
@@ -217,7 +218,7 @@ function renderHover(
 	const beforeCode = fullText.slice(0, codeStart).trimEnd();
 	const afterCode = fullText.slice(fullText.indexOf("```", 3) + 3).trim();
 
-	const codeLines = highlightCode(code, lang, theme);
+	const codeLines = highlightThemeCode(code, lang, theme);
 	const icon = theme.styledSymbol("status.info", "accent");
 	const langLabel = lang ? theme.fg("mdCodeBlockBorder", ` ${lang}`) : "";
 
@@ -272,31 +273,6 @@ function renderHover(
 	return output.split("\n");
 }
 
-/**
- * Syntax highlight code using native highlighter.
- */
-function highlightCode(codeText: string, language: string, theme: Theme): string[] {
-	const validLang = language && supportsLanguage(language) ? language : undefined;
-	try {
-		const colors: HighlightColors = {
-			comment: theme.getFgAnsi("syntaxComment"),
-			keyword: theme.getFgAnsi("syntaxKeyword"),
-			function: theme.getFgAnsi("syntaxFunction"),
-			variable: theme.getFgAnsi("syntaxVariable"),
-			string: theme.getFgAnsi("syntaxString"),
-			number: theme.getFgAnsi("syntaxNumber"),
-			type: theme.getFgAnsi("syntaxType"),
-			operator: theme.getFgAnsi("syntaxOperator"),
-			punctuation: theme.getFgAnsi("syntaxPunctuation"),
-			inserted: theme.getFgAnsi("toolDiffAdded"),
-			deleted: theme.getFgAnsi("toolDiffRemoved"),
-		};
-		return nativeHighlightCode(codeText, validLang, colors).split("\n");
-	} catch {
-		return codeText.split("\n");
-	}
-}
-
 // =============================================================================
 // Diagnostics Rendering
 // =============================================================================
@@ -325,7 +301,7 @@ function renderDiagnostics(
 			? theme.styledSymbol("status.error", "error")
 			: warnCount > 0
 				? theme.styledSymbol("status.warning", "warning")
-				: theme.styledSymbol("status.success", "success");
+				: theme.styledSymbol("tool.lsp", "accent");
 
 	const meta: string[] = [];
 	if (errorCount > 0) meta.push(`${errorCount} error${errorCount !== 1 ? "s" : ""}`);
@@ -407,7 +383,7 @@ function renderDiagnostics(
 function renderReferences(refMatch: RegExpMatchArray, lines: string[], expanded: boolean, theme: Theme): string[] {
 	const refCount = Number.parseInt(refMatch[1], 10);
 	const icon =
-		refCount > 0 ? theme.styledSymbol("status.success", "success") : theme.styledSymbol("status.warning", "warning");
+		refCount > 0 ? theme.styledSymbol("tool.lsp", "accent") : theme.styledSymbol("status.warning", "warning");
 
 	const locLines = lines.filter(l => /^\s*\S+:\d+:\d+/.test(l));
 
@@ -598,7 +574,7 @@ function renderGeneric(text: string, lines: string[], expanded: boolean, theme: 
 		hasError && !hasSuccess
 			? theme.styledSymbol("status.error", "error")
 			: hasSuccess && !hasError
-				? theme.styledSymbol("status.success", "success")
+				? theme.styledSymbol("tool.lsp", "accent")
 				: theme.styledSymbol("status.info", "accent");
 
 	if (expanded) {

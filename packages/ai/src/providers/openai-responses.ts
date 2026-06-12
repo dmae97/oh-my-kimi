@@ -1,20 +1,22 @@
-import { $env, extractHttpStatusFromError, structuredCloneJSON } from "@oh-my-pi/pi-utils";
+import { hostMatchesUrl } from "@oh-my-pi/pi-catalog/hosts";
+import { parseGitHubCopilotApiKey } from "@oh-my-pi/pi-catalog/wire/github-copilot";
+import { $env, $flag, extractHttpStatusFromError, logger, structuredCloneJSON } from "@oh-my-pi/pi-utils";
 import OpenAI, { APIConnectionTimeoutError as OpenAIConnectionTimeoutError } from "openai";
 import type {
 	Tool as OpenAITool,
 	ResponseCreateParamsStreaming,
 	ResponseInput,
+	ResponseStreamEvent,
 } from "openai/resources/responses/responses";
 import { getEnvApiKey } from "../stream";
 import type {
 	AssistantMessage,
-	CacheRetention,
 	Context,
 	FetchImpl,
 	MessageAttribution,
 	Model,
-	OpenAICompat,
 	ProviderSessionState,
+	RawSseEvent,
 	ServiceTier,
 	StreamFunction,
 	StreamOptions,
@@ -37,12 +39,11 @@ import {
 	getOpenAIStreamIdleTimeoutMs,
 	iterateWithIdleTimeout,
 } from "../utils/idle-iterator";
-import { parseGitHubCopilotApiKey } from "../utils/oauth/github-copilot";
 import { notifyProviderResponse } from "../utils/provider-response";
 import { callWithCopilotModelRetry } from "../utils/retry";
 import { adaptSchemaForStrict, NO_STRICT, sanitizeSchemaForOpenAIResponses, toolWireSchema } from "../utils/schema";
 import { createSdkStreamRequestOptions } from "../utils/sdk-stream-timeout";
-import { wrapFetchForSseDebug } from "../utils/sse-debug";
+import { notifyRawSseEvent } from "../utils/sse-debug";
 import { mapToOpenAIResponsesToolChoice, type OpenAIResponsesToolChoice } from "../utils/tool-choice";
 import {
 	buildCopilotDynamicHeaders,
@@ -54,6 +55,7 @@ import {
 	appendResponsesToolResultMessages,
 	applyCommonResponsesSamplingParams,
 	applyResponsesReasoningParams,
+	buildResponsesDeltaInput,
 	collectCustomCallIds,
 	collectKnownCallIds,
 	convertResponsesAssistantMessage,
@@ -66,20 +68,6 @@ import {
 	repairOrphanResponsesToolOutputs,
 } from "./openai-responses-shared";
 import { transformMessages } from "./transform-messages";
-
-/**
- * Get prompt cache retention based on cacheRetention and base URL.
- * Only applies to direct OpenAI API calls (api.openai.com).
- */
-function getPromptCacheRetention(baseUrl: string, cacheRetention: CacheRetention): "24h" | undefined {
-	if (cacheRetention !== "long") {
-		return undefined;
-	}
-	if (baseUrl.includes("api.openai.com")) {
-		return "24h";
-	}
-	return undefined;
-}
 
 export function normalizeOpenAIResponsesPromptCacheKey(sessionId: string | undefined): string | undefined {
 	if (!sessionId || sessionId.length === 0) return undefined;
@@ -94,6 +82,16 @@ export interface OpenAIResponsesOptions extends StreamOptions {
 	reasoningSummary?: "auto" | "detailed" | "concise" | null;
 	serviceTier?: ServiceTier;
 	toolChoice?: ToolChoice;
+	/**
+	 * Stateful turns: chain via `previous_response_id` + delta input instead of
+	 * replaying the full transcript. Forces `store: true` (the platform only
+	 * resolves stored responses). Defaults ON against the official OpenAI API
+	 * and OFF for other Responses endpoints; `PI_OPENAI_STATEFUL` overrides the
+	 * default, and `false` here vetoes everything. Requires `sessionId` +
+	 * `providerSessionState`. Falls back to a full replay whenever history
+	 * mutates or the server reports a stale id.
+	 */
+	statefulResponses?: boolean;
 	/**
 	 * Enforce strict tool call/result pairing when building Responses API inputs.
 	 * Azure OpenAI and GitHub Copilot Responses paths require tool results to match prior tool calls.
@@ -137,16 +135,38 @@ export interface OpenAIResponsesOptions extends StreamOptions {
 const OPENAI_RESPONSES_PROVIDER_SESSION_STATE_PREFIX = "openai-responses:";
 const OPENAI_RESPONSES_FIRST_EVENT_TIMEOUT_MESSAGE =
 	"OpenAI responses stream timed out while waiting for the first event";
+/** Consecutive stale-previous-response failures before chaining is disabled for the session. */
+const OPENAI_RESPONSES_CHAIN_STALE_FAILURE_LIMIT = 3;
 
 interface OpenAIResponsesProviderSessionState extends ProviderSessionState {
 	nativeHistoryReplayWarmed: boolean;
+	/** Stateful `previous_response_id` chain baselines, keyed by baseUrl/model/session. */
+	chains: Map<string, OpenAIResponsesChainState>;
+}
+
+interface OpenAIResponsesChainState {
+	/**
+	 * Wire params of the last successful turn, with per-turn trailing
+	 * scaffolding stripped from `input` (never carries previous_response_id).
+	 */
+	lastParams?: OpenAIResponsesSamplingParams;
+	lastResponseId?: string;
+	/** Output items of the last response, in replay-sanitized form (matches next-turn input). */
+	lastResponseItems?: ResponseInput;
+	canAppend: boolean;
+	/** Consecutive stale-previous-response failures; reset on a successful chained completion. */
+	staleFailures: number;
+	/** Set once chaining is judged unsupported for this session (circuit breaker). */
+	disabled: boolean;
 }
 
 function createOpenAIResponsesProviderSessionState(): OpenAIResponsesProviderSessionState {
 	const state: OpenAIResponsesProviderSessionState = {
 		nativeHistoryReplayWarmed: false,
+		chains: new Map(),
 		close: () => {
 			state.nativeHistoryReplayWarmed = false;
+			state.chains.clear();
 		},
 	};
 	return state;
@@ -175,6 +195,142 @@ function canReplayOpenAIResponsesNativeHistory(
 	return providerSessionState?.nativeHistoryReplayWarmed ?? true;
 }
 
+function isOpenAIResponsesStatefulEnabled(
+	options: OpenAIResponsesOptions | undefined,
+	baseUrl: string | undefined,
+): boolean {
+	if (options?.statefulResponses === false) return false;
+	if (options?.statefulResponses === true) return true;
+	// Default ON only against the official OpenAI API: chaining forces
+	// `store: true`, and third-party /v1/responses proxies routinely ignore or
+	// reject `previous_response_id`. An unset baseUrl means the SDK default
+	// (api.openai.com).
+	return $flag("PI_OPENAI_STATEFUL", !baseUrl || hostMatchesUrl(baseUrl, "openai"));
+}
+
+function getOpenAIResponsesChainState(
+	providerSessionState: OpenAIResponsesProviderSessionState,
+	model: Model<"openai-responses">,
+	sessionId: string,
+): OpenAIResponsesChainState {
+	const key = `${model.baseUrl ?? ""}\u0000${model.id}\u0000${sessionId}`;
+	const existing = providerSessionState.chains.get(key);
+	if (existing) return existing;
+	const created: OpenAIResponsesChainState = { canAppend: false, staleFailures: 0, disabled: false };
+	providerSessionState.chains.set(key, created);
+	return created;
+}
+
+function resetOpenAIResponsesChainState(state: OpenAIResponsesChainState): void {
+	state.canAppend = false;
+	state.lastParams = undefined;
+	state.lastResponseId = undefined;
+	state.lastResponseItems = undefined;
+}
+
+interface OpenAIResponsesChainedParams {
+	params: OpenAIResponsesSamplingParams;
+	/** Set iff the params carry previous_response_id (delta request). */
+	previousResponseId?: string;
+}
+
+/**
+ * Drop the per-turn trailing scaffolding (the GPT-5 "Juice: 0" developer item)
+ * from `input`, yielding the wire form of the conversation arguments alone.
+ */
+function stripTrailingScaffolding(
+	params: OpenAIResponsesSamplingParams,
+	trailingScaffoldingItems: number,
+): OpenAIResponsesSamplingParams {
+	if (trailingScaffoldingItems <= 0 || !Array.isArray(params.input)) return params;
+	return { ...params, input: params.input.slice(0, params.input.length - trailingScaffoldingItems) };
+}
+
+/**
+ * Shape the next turn's request: when the session's append baseline is intact
+ * (same options, strict history prefix), chain via `previous_response_id` +
+ * delta-only `input`; otherwise break the chain and replay the full transcript.
+ *
+ * The prefix check runs on the wire form of the conversation arguments alone:
+ * per-turn trailing scaffolding is excluded from both sides and re-appended to
+ * the delta, so a decoration that trails every request can never masquerade as
+ * a history mutation.
+ */
+function buildOpenAIResponsesChainedParams(
+	params: OpenAIResponsesSamplingParams,
+	trailingScaffoldingItems: number,
+	chain: OpenAIResponsesChainState,
+): OpenAIResponsesChainedParams {
+	const historyParams = stripTrailingScaffolding(params, trailingScaffoldingItems);
+	const deltaInput = chain.canAppend
+		? buildResponsesDeltaInput<ResponseInput[number]>(chain.lastParams, chain.lastResponseItems, historyParams)
+		: null;
+	if (deltaInput && deltaInput.length > 0 && chain.lastResponseId) {
+		const scaffolding =
+			historyParams !== params && Array.isArray(params.input)
+				? params.input.slice(params.input.length - trailingScaffoldingItems)
+				: [];
+		return {
+			params: { ...params, previous_response_id: chain.lastResponseId, input: [...deltaInput, ...scaffolding] },
+			previousResponseId: chain.lastResponseId,
+		};
+	}
+	if (chain.canAppend) {
+		// History mutated or options changed — break the chain and replay in full.
+		resetOpenAIResponsesChainState(chain);
+	}
+	return { params };
+}
+
+function isOpenAIResponsesStalePreviousResponseError(error: unknown): boolean {
+	if (!(error instanceof Error)) return false;
+	if ((error as { code?: string }).code === "previous_response_not_found") return true;
+	// "unsupported" covers endpoints that reject the parameter outright
+	// (e.g. "Unsupported parameter: previous_response_id").
+	return (
+		/previous[ _]?response/i.test(error.message) &&
+		/not[ _]?found|invalid|expired|stale|unsupported/i.test(error.message)
+	);
+}
+
+/**
+ * Zero Data Retention orgs accept `store: true` but refuse to resolve any
+ * `previous_response_id` — the prior response was never persisted server-side.
+ * The 400 carries a fixed phrasing ("Zero Data Retention") that the generic
+ * stale-id regex above does not match, so it is classified separately and
+ * disables chaining categorically (one strike, not three).
+ */
+function isOpenAIResponsesZeroDataRetentionError(error: unknown): boolean {
+	if (!(error instanceof Error)) return false;
+	return /previous[ _]?response/i.test(error.message) && /zero[ _-]?data[ _-]?retention/i.test(error.message);
+}
+
+function registerOpenAIResponsesChainStaleFailure(chain: OpenAIResponsesChainState, error: unknown): void {
+	resetOpenAIResponsesChainState(chain);
+	chain.staleFailures += 1;
+	if (chain.staleFailures >= OPENAI_RESPONSES_CHAIN_STALE_FAILURE_LIMIT) {
+		chain.disabled = true;
+	}
+	logger.debug("OpenAI responses previous_response_id rejected; falling back to full context", {
+		error: error instanceof Error ? error.message : String(error),
+		consecutiveFailures: chain.staleFailures,
+		disabled: chain.disabled,
+	});
+}
+
+/**
+ * One-shot ZDR signal: the org will never resolve a stored response, so skip
+ * the staleFailures counter and disable chaining immediately for this session.
+ */
+function markOpenAIResponsesChainZeroDataRetention(chain: OpenAIResponsesChainState, error: unknown): void {
+	resetOpenAIResponsesChainState(chain);
+	chain.disabled = true;
+	chain.staleFailures = OPENAI_RESPONSES_CHAIN_STALE_FAILURE_LIMIT;
+	logger.debug("OpenAI responses chaining disabled (Zero Data Retention)", {
+		error: error instanceof Error ? error.message : String(error),
+	});
+}
+
 type OpenAIResponsesSamplingParams = ResponseCreateParamsStreaming & {
 	top_p?: number;
 	top_k?: number;
@@ -183,6 +339,18 @@ type OpenAIResponsesSamplingParams = ResponseCreateParamsStreaming & {
 	repetition_penalty?: number;
 	stream_options?: { include_obfuscation?: boolean };
 };
+
+async function* observeDecodedOpenAIResponsesEvents(
+	events: AsyncIterable<ResponseStreamEvent>,
+	observer: (event: RawSseEvent) => void,
+): AsyncGenerator<ResponseStreamEvent> {
+	for await (const event of events) {
+		const data = JSON.stringify(event);
+		// Reconstructed from decoded SDK event; not literal wire bytes.
+		notifyRawSseEvent(observer, { event: event.type, data, raw: [`event: ${event.type}`, `data: ${data}`] });
+		yield event;
+	}
+}
 
 /**
  * Generate function for OpenAI Responses API
@@ -205,9 +373,13 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 			model.id,
 		);
 		let rawRequestDump: RawHttpRequestDump | undefined;
+		let chainState: OpenAIResponsesChainState | undefined;
+		let sentPreviousResponseId: string | undefined;
 		const abortTracker = createAbortSourceTracker(options?.signal);
 		const firstEventTimeoutAbortError = new Error(OPENAI_RESPONSES_FIRST_EVENT_TIMEOUT_MESSAGE);
 		const { requestAbortController, requestSignal } = abortTracker;
+		const onSseEvent = options?.onSseEvent;
+		const rawSseObserver = onSseEvent ? (event: RawSseEvent) => onSseEvent(event, model) : undefined;
 
 		try {
 			// Keep request routing on `sessionId` while allowing callers to pin a
@@ -222,20 +394,33 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 				options?.headers,
 				options?.initiatorOverride,
 				routingSessionId,
-				options?.onSseEvent,
 				options?.fetch,
 			);
 			const premiumRequestsTotal = copilotPremiumRequests;
 			const providerSessionState = getOpenAIResponsesProviderSessionState(model, options?.providerSessionState);
-			let { params } = buildParams(model, context, options, providerSessionState, baseUrl);
+			const builtParams = buildParams(model, context, options, providerSessionState);
+			const params = builtParams.params;
+			const { trailingScaffoldingItems } = builtParams;
+			if (isOpenAIResponsesStatefulEnabled(options, baseUrl) && routingSessionId && providerSessionState) {
+				chainState = getOpenAIResponsesChainState(providerSessionState, model, routingSessionId);
+				if (!chainState.disabled) {
+					// Platform `previous_response_id` chaining only resolves stored responses.
+					params.store = true;
+				}
+			}
+			let chained: OpenAIResponsesChainedParams =
+				chainState && !chainState.disabled
+					? buildOpenAIResponsesChainedParams(params, trailingScaffoldingItems, chainState)
+					: { params };
+			sentPreviousResponseId = chained.previousResponseId;
 			const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs();
 			const firstEventTimeoutMs =
 				options?.streamFirstEventTimeoutMs ?? getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs);
 			const requestTimeoutMs =
 				firstEventTimeoutMs !== undefined && firstEventTimeoutMs > 0 ? firstEventTimeoutMs : undefined;
-			const replacementPayload = await options?.onPayload?.(params, model);
+			const replacementPayload = await options?.onPayload?.(chained.params, model);
 			if (replacementPayload !== undefined) {
-				params = replacementPayload as typeof params;
+				chained = { ...chained, params: replacementPayload as typeof chained.params };
 			}
 			rawRequestDump = {
 				provider: model.provider,
@@ -243,63 +428,102 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 				model: model.id,
 				method: "POST",
 				url: `${baseUrl ?? "https://api.openai.com/v1"}/responses`,
-				body: params,
+				body: chained.params,
 			};
-			const openaiStream = await callWithCopilotModelRetry(
-				async () => {
-					const requestOptions = createSdkStreamRequestOptions(requestSignal, requestTimeoutMs);
-					let requestTimeout: NodeJS.Timeout | undefined;
-					if (requestTimeoutMs !== undefined) {
-						requestTimeout = setTimeout(
-							() => abortTracker.abortLocally(firstEventTimeoutAbortError),
-							requestTimeoutMs,
-						);
-					}
-					try {
-						const { data, response, request_id } = await client.responses
-							.create(params, requestOptions)
-							.withResponse();
-						await notifyProviderResponse(options, response, model, request_id);
-						return data;
-					} catch (error) {
-						if (error instanceof OpenAIConnectionTimeoutError && !abortTracker.wasCallerAbort()) {
-							throw firstEventTimeoutAbortError;
+			const openResponsesStream = (requestParams: OpenAIResponsesSamplingParams) =>
+				callWithCopilotModelRetry(
+					async () => {
+						const requestOptions = createSdkStreamRequestOptions(requestSignal, requestTimeoutMs);
+						let requestTimeout: NodeJS.Timeout | undefined;
+						if (requestTimeoutMs !== undefined) {
+							requestTimeout = setTimeout(
+								() => abortTracker.abortLocally(firstEventTimeoutAbortError),
+								requestTimeoutMs,
+							);
 						}
-						throw error;
-					} finally {
-						if (requestTimeout !== undefined) clearTimeout(requestTimeout);
-					}
-				},
-				{ provider: model.provider, signal: requestSignal },
-			);
+						try {
+							const { data, response, request_id } = await client.responses
+								.create(requestParams, requestOptions)
+								.withResponse();
+							// Disarm the first-event watchdog as soon as headers arrive — a slow
+							// onResponse callback must not abort an already-connected stream.
+							if (requestTimeout !== undefined) {
+								clearTimeout(requestTimeout);
+								requestTimeout = undefined;
+							}
+							await notifyProviderResponse(options, response, model, request_id);
+							return data;
+						} catch (error) {
+							if (error instanceof OpenAIConnectionTimeoutError && !abortTracker.wasCallerAbort()) {
+								throw firstEventTimeoutAbortError;
+							}
+							throw error;
+						} finally {
+							if (requestTimeout !== undefined) clearTimeout(requestTimeout);
+						}
+					},
+					{ provider: model.provider, signal: requestSignal },
+				);
+			let openaiStream: AsyncIterable<ResponseStreamEvent>;
+			try {
+				openaiStream = await openResponsesStream(chained.params);
+			} catch (error) {
+				if (!chainState || !sentPreviousResponseId || requestSignal.aborted) {
+					throw error;
+				}
+				const zdrRejection = isOpenAIResponsesZeroDataRetentionError(error);
+				if (!zdrRejection && !isOpenAIResponsesStalePreviousResponseError(error)) {
+					throw error;
+				}
+				// Server rejected the chain baseline: reset, count the failure (or
+				// disable categorically on ZDR), and retry once with the full
+				// transcript. Structurally cannot loop — the retry carries no
+				// previous_response_id.
+				if (zdrRejection) {
+					markOpenAIResponsesChainZeroDataRetention(chainState, error);
+					// ZDR orgs cannot store responses; the original request forced
+					// `store: true` for chaining, which is meaningless here and would
+					// otherwise leave subsequent turns asking the server to retain
+					// data it must discard.
+					params.store = false;
+				} else {
+					registerOpenAIResponsesChainStaleFailure(chainState, error);
+				}
+				sentPreviousResponseId = undefined;
+				rawRequestDump.body = params;
+				openaiStream = await openResponsesStream(params);
+			}
 			if (premiumRequestsTotal !== undefined) output.usage.premiumRequests = premiumRequestsTotal;
 			stream.push({ type: "start", partial: output });
 
 			const nativeOutputItems: Array<Record<string, unknown>> = [];
-			await processResponsesStream(
-				iterateWithIdleTimeout(openaiStream, {
-					idleTimeoutMs,
-					firstItemTimeoutMs: firstEventTimeoutMs,
-					firstItemErrorMessage: OPENAI_RESPONSES_FIRST_EVENT_TIMEOUT_MESSAGE,
-					errorMessage: "OpenAI responses stream stalled while waiting for the next event",
-					onFirstItemTimeout: () => abortTracker.abortLocally(firstEventTimeoutAbortError),
-					onIdle: () => requestAbortController.abort(),
-					abortSignal: options?.signal,
-					isProgressItem: isOpenAIResponsesProgressEvent,
-				}),
-				output,
-				stream,
-				model,
-				{
-					onFirstToken: () => {
-						if (!firstTokenTime) firstTokenTime = Date.now();
-					},
-					onOutputItemDone: item => {
-						nativeOutputItems.push(structuredCloneJSON<unknown>(item) as unknown as Record<string, unknown>);
-					},
+			let sawCompleted = false;
+			const timedOpenaiStream = iterateWithIdleTimeout(openaiStream, {
+				idleTimeoutMs,
+				firstItemTimeoutMs: firstEventTimeoutMs,
+				firstItemErrorMessage: OPENAI_RESPONSES_FIRST_EVENT_TIMEOUT_MESSAGE,
+				errorMessage: "OpenAI responses stream stalled while waiting for the next event",
+				onFirstItemTimeout: () => abortTracker.abortLocally(firstEventTimeoutAbortError),
+				onIdle: () => requestAbortController.abort(),
+				abortSignal: options?.signal,
+				isProgressItem: isOpenAIResponsesProgressEvent,
+			});
+			const observedOpenaiStream = rawSseObserver
+				? observeDecodedOpenAIResponsesEvents(timedOpenaiStream, rawSseObserver)
+				: timedOpenaiStream;
+			await processResponsesStream(observedOpenaiStream, output, stream, model, {
+				onFirstToken: () => {
+					if (!firstTokenTime) firstTokenTime = Date.now();
 				},
-			);
-			if (premiumRequestsTotal !== undefined) output.usage.premiumRequests = premiumRequestsTotal;
+				onOutputItemDone: item => {
+					// `processResponsesStream` hands over a private clone already; no
+					// second deep copy needed (reasoning items carry multi-KB blobs).
+					nativeOutputItems.push(item as unknown as Record<string, unknown>);
+				},
+				onCompleted: () => {
+					sawCompleted = true;
+				},
+			});
 
 			const firstEventTimeoutError = abortTracker.getLocalAbortReason();
 			if (firstEventTimeoutError) {
@@ -309,12 +533,36 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 				throw new Error("Request was aborted");
 			}
 
+			// Detect premature stream closure: the HTTP stream ended without the
+			// provider sending `response.completed`. Custom/proxy providers may
+			// drop the connection mid-stream; without this guard the incomplete
+			// output is silently surfaced as a successful "stop".
+			if (!sawCompleted) {
+				throw new Error("OpenAI responses stream closed before response.completed was received");
+			}
+
 			if (output.stopReason === "aborted" || output.stopReason === "error") {
 				throw new Error(output.errorMessage ?? "An unknown error occurred");
 			}
 
 			output.providerPayload = createOpenAIResponsesHistoryPayload(model.provider, nativeOutputItems);
 			if (providerSessionState) providerSessionState.nativeHistoryReplayWarmed = true;
+			if (chainState) {
+				chainState.lastParams = structuredCloneJSON(stripTrailingScaffolding(params, trailingScaffoldingItems));
+				if (output.responseId) {
+					chainState.lastResponseId = output.responseId;
+					chainState.lastResponseItems = sanitizeOpenAIResponsesHistoryItemsForReplay(
+						structuredCloneJSON(nativeOutputItems),
+					);
+					chainState.canAppend = true;
+					// Only a successful CHAINED completion clears the stale counter — a
+					// full-context success must not mask categorical rejection.
+					if (sentPreviousResponseId) chainState.staleFailures = 0;
+				} else {
+					// Without a response id the append baseline cannot be trusted.
+					chainState.canAppend = false;
+				}
+			}
 
 			output.duration = Date.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
@@ -322,6 +570,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 			stream.end();
 		} catch (error) {
 			for (const block of output.content) delete (block as { index?: number }).index;
+			if (chainState) resetOpenAIResponsesChainState(chainState);
 			const firstEventTimeoutError = abortTracker.getLocalAbortReason();
 			output.stopReason = abortTracker.wasCallerAbort() ? "aborted" : "error";
 			output.errorStatus = extractHttpStatusFromError(error);
@@ -344,7 +593,6 @@ function createClient(
 	extraHeaders?: Record<string, string>,
 	initiatorOverride?: MessageAttribution,
 	sessionId?: string,
-	onSseEvent?: OpenAIResponsesOptions["onSseEvent"],
 	fetchOverride?: FetchImpl,
 ): {
 	client: OpenAI;
@@ -379,7 +627,7 @@ function createClient(
 		copilotPremiumRequests = copilot.premiumRequests;
 		baseUrl = resolveGitHubCopilotBaseUrl(model.baseUrl, rawApiKey) ?? model.baseUrl;
 	}
-	if (sessionId && model.provider === "openai" && (baseUrl ?? "").toLowerCase().includes("api.openai.com")) {
+	if (sessionId && model.provider === "openai") {
 		headers.session_id ??= sessionId;
 		headers["x-client-request-id"] ??= sessionId;
 	}
@@ -391,7 +639,7 @@ function createClient(
 			dangerouslyAllowBrowser: true,
 			maxRetries: 5,
 			defaultHeaders: headers,
-			fetch: onSseEvent ? wrapFetchForSseDebug(baseFetch, event => onSseEvent(event, model)) : baseFetch,
+			fetch: baseFetch,
 		}),
 		copilotPremiumRequests,
 		baseUrl,
@@ -422,24 +670,14 @@ function buildParams(
 	context: Context,
 	options: OpenAIResponsesOptions | undefined,
 	providerSessionState: OpenAIResponsesProviderSessionState | undefined,
-	resolvedBaseUrl?: string,
-): { conversationMessages: ResponseInput; params: OpenAIResponsesSamplingParams } {
-	const strictResponsesPairing =
-		options?.strictResponsesPairing ??
-		(isAzureOpenAIBaseUrl(model.baseUrl ?? "") || model.provider === "github-copilot");
-	const conversationMessages = convertConversationMessages(
-		model,
-		context,
-		strictResponsesPairing,
-		providerSessionState,
-		options,
-	);
-	const messages: ResponseInput = [...conversationMessages];
+): { params: OpenAIResponsesSamplingParams; trailingScaffoldingItems: number } {
+	const strictResponsesPairing = options?.strictResponsesPairing ?? model.compat.strictResponsesPairing;
+	const messages = convertConversationMessages(model, context, strictResponsesPairing, providerSessionState, options);
 
 	const systemPrompts = normalizeSystemPrompts(context.systemPrompt);
 	let systemInstructions: string | undefined;
 	if (systemPrompts.length > 0) {
-		const needsDeveloperRole = model.reasoning && supportsDeveloperRole(resolvedBaseUrl ?? model);
+		const needsDeveloperRole = model.reasoning && model.compat.supportsDeveloperRole;
 		if (needsDeveloperRole) {
 			// Reasoning models on known OpenAI-compatible endpoints require the
 			// `developer` role. Send all system prompts inline in `input`.
@@ -457,12 +695,16 @@ function buildParams(
 	const cacheRetention = resolveCacheRetention(options?.cacheRetention);
 	const promptCacheKey = getOpenAIResponsesPromptCacheKey(options);
 	const params: OpenAIResponsesSamplingParams = {
-		model: model.id,
+		model: model.requestModelId ?? model.id,
 		input: messages,
 		instructions: systemInstructions,
 		stream: true,
 		prompt_cache_key: promptCacheKey,
-		prompt_cache_retention: promptCacheKey ? getPromptCacheRetention(model.baseUrl, cacheRetention) : undefined,
+		prompt_cache_retention: promptCacheKey
+			? cacheRetention === "long" && model.compat.supportsLongPromptCacheRetention
+				? "24h"
+				: undefined
+			: undefined,
 		store: false,
 		stream_options: model.provider === "openai" ? { include_obfuscation: false } : undefined,
 	};
@@ -474,7 +716,7 @@ function buildParams(
 	// `StreamOptions.frequencyPenalty` is intentionally dropped for this provider.
 
 	if (context.tools) {
-		params.tools = convertTools(context.tools, supportsStrictMode(model), model);
+		params.tools = convertTools(context.tools, model.compat.supportsStrictMode, model);
 		if (options?.toolChoice) {
 			params.tool_choice = mapOpenAIResponsesToolChoiceForTools(options.toolChoice, context.tools, model);
 		}
@@ -489,16 +731,15 @@ function buildParams(
 		}
 	}
 
-	applyResponsesReasoningParams(
+	const trailingScaffoldingItems = applyResponsesReasoningParams(
 		params,
 		model,
 		options,
 		messages,
 		effort =>
-			mapReasoningEffort(
-				effort as NonNullable<OpenAIResponsesOptions["reasoning"]>,
-				model.compat?.reasoningEffortMap,
-			),
+			model.compat.reasoningEffortMap?.[effort as NonNullable<OpenAIResponsesOptions["reasoning"]>] ??
+			model.thinking?.effortMap?.[effort as NonNullable<OpenAIResponsesOptions["reasoning"]>] ??
+			effort,
 		options?.includeEncryptedReasoning ?? true,
 		options?.omitReasoningEffort ?? false,
 	);
@@ -507,42 +748,7 @@ function buildParams(
 		Object.assign(params, options.extraBody);
 	}
 
-	return { conversationMessages, params };
-}
-
-function mapReasoningEffort(
-	effort: NonNullable<OpenAIResponsesOptions["reasoning"]>,
-	reasoningEffortMap: OpenAICompat["reasoningEffortMap"] | undefined,
-): string {
-	return reasoningEffortMap?.[effort] ?? effort;
-}
-
-function isAzureOpenAIBaseUrl(baseUrl: string): boolean {
-	return baseUrl.includes(".openai.azure.com") || baseUrl.includes("azure.com/openai");
-}
-
-function supportsStrictMode(model: Model<"openai-responses">): boolean {
-	if (model.provider === "openai" || model.provider === "azure" || model.provider === "github-copilot") return true;
-
-	const baseUrl = model.baseUrl.toLowerCase();
-	return (
-		baseUrl.includes("api.openai.com") ||
-		baseUrl.includes(".openai.azure.com") ||
-		baseUrl.includes("models.inference.ai.azure.com")
-	);
-}
-
-export function supportsDeveloperRole(modelOrBaseUrl: Pick<Model, "provider" | "baseUrl"> | string): boolean {
-	const baseUrl =
-		typeof modelOrBaseUrl === "string" ? modelOrBaseUrl.toLowerCase() : (modelOrBaseUrl.baseUrl ?? "").toLowerCase();
-	return (
-		baseUrl.includes("api.openai.com") ||
-		baseUrl.includes(".openai.azure.com") ||
-		baseUrl.includes("azure.com/openai") ||
-		baseUrl.includes("models.inference.ai.azure.com") ||
-		baseUrl.includes("githubcopilot.com") ||
-		baseUrl.includes("copilot-api.")
-	);
+	return { params, trailingScaffoldingItems };
 }
 
 function convertConversationMessages(
@@ -585,9 +791,13 @@ function convertConversationMessages(
 			messages.push({ role: "user", content });
 		} else if (msg.role === "assistant") {
 			const assistantMsg = msg as AssistantMessage;
-			const providerPayload = shouldReplayNativeHistory
-				? getOpenAIResponsesHistoryPayload(assistantMsg.providerPayload, model.provider, assistantMsg.provider)
-				: undefined;
+			// Native items are model-bound (reasoning carries encrypted content minted
+			// by the producing model); after a mid-session model switch fall back to
+			// block re-encode, which strips foreign signatures.
+			const providerPayload =
+				shouldReplayNativeHistory && assistantMsg.api === model.api && assistantMsg.model === model.id
+					? getOpenAIResponsesHistoryPayload(assistantMsg.providerPayload, model.provider, assistantMsg.provider)
+					: undefined;
 			const historyItems = providerPayload?.items;
 			if (historyItems) {
 				const sanitizedHistoryItems = sanitizeOpenAIResponsesHistoryItemsForReplay(filterReasoning(historyItems));

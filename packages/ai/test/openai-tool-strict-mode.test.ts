@@ -1,16 +1,18 @@
-import { afterEach, describe, expect, it, vi } from "bun:test";
-import { getBundledModel } from "@oh-my-pi/pi-ai/models";
+import { describe, expect, it } from "bun:test";
 import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import { streamOpenAIResponses } from "@oh-my-pi/pi-ai/providers/openai-responses";
-import type { Context, Model, OpenAICompat, ProviderSessionState, Tool } from "@oh-my-pi/pi-ai/types";
+import type {
+	Context,
+	FetchImpl,
+	Model,
+	ModelSpec,
+	OpenAICompat,
+	ProviderSessionState,
+	Tool,
+} from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import * as z from "zod/v4";
-
-const originalFetch = global.fetch;
-
-afterEach(() => {
-	global.fetch = originalFetch;
-	vi.restoreAllMocks();
-});
 
 const testTool: Tool = {
 	name: "echo",
@@ -125,11 +127,11 @@ describe("OpenAI tool strict mode", () => {
 	});
 
 	it("omits strict for openai-completions when compatibility disables strict mode", async () => {
-		const model: Model<"openai-completions"> = {
+		const model: Model<"openai-completions"> = buildModel({
 			...(getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">),
 			api: "openai-completions",
 			compat: { supportsStrictMode: false } satisfies OpenAICompat,
-		};
+		} as ModelSpec<"openai-completions">);
 
 		const payload = (await captureCompletionsPayload(model)) as {
 			tools?: Array<{ function?: { strict?: boolean } }>;
@@ -182,11 +184,11 @@ describe("OpenAI tool strict mode", () => {
 	});
 
 	it("uses uniformly non-strict tool schemas when provider requires all-or-none strictness", async () => {
-		const model: Model<"openai-completions"> = {
+		const model: Model<"openai-completions"> = buildModel({
 			...(getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">),
 			api: "openai-completions",
 			compat: { toolStrictMode: "all_strict" } satisfies OpenAICompat,
-		};
+		} as ModelSpec<"openai-completions">);
 		const context: Context = {
 			...testContext,
 			tools: [
@@ -213,7 +215,7 @@ describe("OpenAI tool strict mode", () => {
 			...(getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">),
 			api: "openai-completions",
 		};
-		global.fetch = Object.assign(
+		const fetchMock: FetchImpl = Object.assign(
 			async (_input: string | URL | Request, _init?: RequestInit): Promise<Response> =>
 				new Response(
 					JSON.stringify({
@@ -227,10 +229,13 @@ describe("OpenAI tool strict mode", () => {
 						headers: { "content-type": "application/json" },
 					},
 				),
-			{ preconnect: originalFetch.preconnect },
+			{ preconnect: fetch.preconnect },
 		);
 
-		const result = await streamOpenAICompletions(model, testContext, { apiKey: "test-key" }).result();
+		const result = await streamOpenAICompletions(model, testContext, {
+			apiKey: "test-key",
+			fetch: fetchMock,
+		}).result();
 		expect(result.stopReason).toBe("error");
 		expect(result.errorMessage).toContain("Tools with mixed values for 'strict' are not allowed.");
 		expect(result.errorMessage).toContain("param=tools");
@@ -238,13 +243,13 @@ describe("OpenAI tool strict mode", () => {
 	});
 
 	it("retries with non-strict tool schemas after strict-mode request errors", async () => {
-		const model: Model<"openai-completions"> = {
+		const model: Model<"openai-completions"> = buildModel({
 			...(getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">),
 			api: "openai-completions",
 			compat: { toolStrictMode: "all_strict" } satisfies OpenAICompat,
-		};
+		} as ModelSpec<"openai-completions">);
 		const strictFlags: boolean[][] = [];
-		global.fetch = Object.assign(
+		const fetchMock: FetchImpl = Object.assign(
 			async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
 				const bodyText = typeof init?.body === "string" ? init.body : "";
 				const payload = JSON.parse(bodyText) as {
@@ -283,10 +288,13 @@ describe("OpenAI tool strict mode", () => {
 					"[DONE]",
 				]);
 			},
-			{ preconnect: originalFetch.preconnect },
+			{ preconnect: fetch.preconnect },
 		);
 
-		const result = await streamOpenAICompletions(model, testContext, { apiKey: "test-key" }).result();
+		const result = await streamOpenAICompletions(model, testContext, {
+			apiKey: "test-key",
+			fetch: fetchMock,
+		}).result();
 		expect(result.stopReason).toBe("stop");
 		expect(result.content).toContainEqual({ type: "text", text: "Hello" });
 		expect(strictFlags).toEqual([[true], [false]]);
@@ -297,7 +305,7 @@ describe("OpenAI tool strict mode", () => {
 		const providerSessionState = new Map<string, ProviderSessionState>();
 		const strictFlags: boolean[][] = [];
 		let attempt = 0;
-		global.fetch = Object.assign(
+		const fetchMock: FetchImpl = Object.assign(
 			async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
 				attempt += 1;
 				const bodyText = typeof init?.body === "string" ? init.body : "";
@@ -340,12 +348,13 @@ describe("OpenAI tool strict mode", () => {
 					"[DONE]",
 				]);
 			},
-			{ preconnect: originalFetch.preconnect },
+			{ preconnect: fetch.preconnect },
 		);
 
 		const result = await streamOpenAICompletions(model, testContext, {
 			apiKey: "test-key",
 			providerSessionState,
+			fetch: fetchMock,
 		}).result();
 
 		expect(result.stopReason).toBe("stop");
@@ -356,6 +365,7 @@ describe("OpenAI tool strict mode", () => {
 		const nextResult = await streamOpenAICompletions(model, testContext, {
 			apiKey: "test-key",
 			providerSessionState,
+			fetch: fetchMock,
 		}).result();
 
 		expect(nextResult.stopReason).toBe("stop");
@@ -367,7 +377,7 @@ describe("OpenAI tool strict mode", () => {
 		const model = getBundledModel("openrouter", "anthropic/claude-sonnet-4") as Model<"openai-completions">;
 		const providerSessionState = new Map<string, ProviderSessionState>();
 		const strictFlags: boolean[][] = [];
-		global.fetch = Object.assign(
+		const fetchMock: FetchImpl = Object.assign(
 			async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
 				const bodyText = typeof init?.body === "string" ? init.body : "";
 				const payload = JSON.parse(bodyText) as {
@@ -386,17 +396,88 @@ describe("OpenAI tool strict mode", () => {
 					},
 				);
 			},
-			{ preconnect: originalFetch.preconnect },
+			{ preconnect: fetch.preconnect },
 		);
 
 		const result = await streamOpenAICompletions(model, testContext, {
 			apiKey: "test-key",
 			providerSessionState,
+			fetch: fetchMock,
 		}).result();
 
 		expect(result.stopReason).toBe("error");
 		expect(result.errorMessage).toContain("Some other validation error");
 		expect(strictFlags).toEqual([[true]]);
+	});
+
+	it("falls back to non-strict tools when an upstream validator rejects strict schemas, and remembers it", async () => {
+		const model = getBundledModel("openrouter", "deepseek/deepseek-v4-flash") as Model<"openai-completions">;
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const strictFlags: boolean[][] = [];
+		let attempt = 0;
+		const fetchMock: FetchImpl = Object.assign(
+			async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+				attempt += 1;
+				const bodyText = typeof init?.body === "string" ? init.body : "";
+				const payload = JSON.parse(bodyText) as {
+					tools?: Array<{ function?: { strict?: boolean } }>;
+				};
+				strictFlags.push((payload.tools ?? []).map(tool => tool.function?.strict === true));
+				if (attempt === 1) {
+					return new Response(
+						JSON.stringify({
+							error: {
+								message: "Invalid tool parameters schema : field `anyOf`: missing field `type`",
+								type: "invalid_request_error",
+							},
+						}),
+						{
+							status: 400,
+							headers: { "content-type": "application/json" },
+						},
+					);
+				}
+				return createSseResponse([
+					{
+						id: "chatcmpl-deepseek-retry",
+						object: "chat.completion.chunk",
+						created: 0,
+						model: model.id,
+						choices: [{ index: 0, delta: { content: attempt === 2 ? "Recovered" : "Later" } }],
+					},
+					{
+						id: "chatcmpl-deepseek-retry",
+						object: "chat.completion.chunk",
+						created: 0,
+						model: model.id,
+						choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+					},
+					"[DONE]",
+				]);
+			},
+			{ preconnect: fetch.preconnect },
+		);
+
+		const result = await streamOpenAICompletions(model, testContext, {
+			apiKey: "test-key",
+			providerSessionState,
+			fetch: fetchMock,
+		}).result();
+
+		expect(result.stopReason).toBe("stop");
+		expect(result.content).toContainEqual({ type: "text", text: "Recovered" });
+		expect(strictFlags).toEqual([[true], [false]]);
+
+		// The schema is static per session — later requests skip the doomed strict attempt.
+		const nextResult = await streamOpenAICompletions(model, testContext, {
+			apiKey: "test-key",
+			providerSessionState,
+			fetch: fetchMock,
+		}).result();
+
+		expect(nextResult.stopReason).toBe("stop");
+		expect(nextResult.content).toContainEqual({ type: "text", text: "Later" });
+		expect(strictFlags).toEqual([[true], [false], [false]]);
 	});
 
 	it("sends strict=true for openai-responses tool schemas on OpenAI", async () => {

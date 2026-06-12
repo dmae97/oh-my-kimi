@@ -1,6 +1,14 @@
 import { afterEach, describe, expect, it, mock, spyOn } from "bun:test";
-import { streamPiNative } from "../src/providers/pi-native-client";
-import type { AssistantMessage, AssistantMessageEvent, Context, FetchImpl, Model } from "../src/types";
+import { streamPiNative } from "@oh-my-pi/pi-ai/providers/pi-native-client";
+import type {
+	AssistantMessage,
+	AssistantMessageEvent,
+	Context,
+	FetchImpl,
+	Model,
+	ModelSpec,
+} from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 
 function sseBytes(events: AssistantMessageEvent[]): Uint8Array {
 	const encoder = new TextEncoder();
@@ -58,7 +66,7 @@ function baseAssistant(overrides: Partial<AssistantMessage> = {}): AssistantMess
 }
 
 function fakeModel(overrides: Partial<Model<"anthropic-messages">> = {}): Model<"anthropic-messages"> {
-	return {
+	return buildModel({
 		id: "claude-sonnet-4-5",
 		name: "Claude Sonnet 4.5",
 		api: "anthropic-messages",
@@ -71,7 +79,7 @@ function fakeModel(overrides: Partial<Model<"anthropic-messages">> = {}): Model<
 		maxTokens: 64000,
 		transport: "pi-native",
 		...overrides,
-	};
+	} as ModelSpec<"anthropic-messages">);
 }
 
 const baseContext: Context = {
@@ -114,7 +122,9 @@ describe("streamPiNative request shape", () => {
 		expect(headers.Authorization).toBe("Bearer gw-bearer");
 
 		const body = JSON.parse(captured.init?.body as string);
-		expect(body.modelId).toBe("claude-sonnet-4-5");
+		// Provider-qualified to avoid cross-provider id collisions; the gateway
+		// registry keys on `${provider}/${id}` first (see auth-gateway-cli runServe).
+		expect(body.modelId).toBe("anthropic/claude-sonnet-4-5");
 		expect(body.context).toEqual(baseContext);
 		expect(body.stream).toBe(true);
 		expect(body.options.temperature).toBe(0.7);

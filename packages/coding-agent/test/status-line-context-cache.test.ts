@@ -15,12 +15,12 @@
  * (messages.length shrinks) resets the cache.
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { StatusLineComponent } from "@oh-my-pi/pi-coding-agent/modes/components/status-line";
+import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { computeNonMessageTokens, estimateToolSchemaTokens } from "@oh-my-pi/pi-coding-agent/modes/utils/context-usage";
+import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { countTokens } from "@oh-my-pi/pi-natives";
-import { resetSettingsForTest, Settings } from "../src/config/settings";
-import { StatusLineComponent } from "../src/modes/components/status-line";
-import { initTheme } from "../src/modes/theme/theme";
-import { computeNonMessageTokens, estimateToolSchemaTokens } from "../src/modes/utils/context-usage";
-import type { AgentSession } from "../src/session/agent-session";
 
 beforeAll(async () => {
 	resetSettingsForTest();
@@ -40,12 +40,26 @@ function makeSession(opts: {
 	contextWindow?: number;
 	modelId?: string;
 }): AgentSession {
+	const messages = opts.messages;
 	return {
-		messages: opts.messages,
+		messages,
 		systemPrompt: opts.systemPrompt ?? ["You are a helpful assistant."],
 		agent: { state: { tools: opts.tools ?? [] } },
 		skills: opts.skills ?? [],
 		model: { id: opts.modelId ?? "test-model", contextWindow: opts.contextWindow ?? 200_000 },
+		state: { messages, model: { contextWindow: opts.contextWindow ?? 200_000 } },
+		sessionManager: {
+			getUsageStatistics: () => ({
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				premiumRequests: 0,
+				cost: 0,
+			}),
+			getSessionName: () => "test",
+		},
+		getAsyncJobSnapshot: () => ({ running: [] }),
 	} as unknown as AgentSession;
 }
 
@@ -83,6 +97,24 @@ describe("StatusLineComponent incremental context breakdown cache", () => {
 
 		expect(after.usedTokens).toBeGreaterThan(before.usedTokens);
 		expect(after.contextWindow).toBe(before.contextWindow);
+	});
+
+	it("popping the streaming tail rebuilds instead of double-counting the new tail", () => {
+		const messages = [
+			userMessage("stable head"),
+			userMessage("tail that becomes stable after append".repeat(20)),
+			assistantMessage("streaming tail removed by retry".repeat(20)),
+		];
+		const session = makeSession({ messages });
+		const comp = new StatusLineComponent(session);
+
+		const withStreamingTail = comp.getCachedContextBreakdown();
+		messages.pop();
+		const afterPop = comp.getCachedContextBreakdown();
+		const freshAfterPop = new StatusLineComponent(session).getCachedContextBreakdown();
+
+		expect(afterPop.usedTokens).toBeLessThan(withStreamingTail.usedTokens);
+		expect(afterPop.usedTokens).toBe(freshAfterPop.usedTokens);
 	});
 
 	it("compaction (messages.length shrinks) resets the cache and recomputes correctly", () => {
@@ -164,18 +196,39 @@ describe("StatusLineComponent incremental context breakdown cache", () => {
 		expect(result.contextWindow).toBe(200_000);
 	});
 
-	it("in-place mutation of a non-last message recomputes its tokens", () => {
-		const original = userMessage("short") as { content: string };
+	it("in-place mutation of a recently promoted stable message recomputes its tokens", () => {
+		const head = userMessage("head");
+		const promoted = userMessage("promoted");
 		const tail = userMessage("tail");
-		const session = makeSession({ messages: [original, tail] });
+		const session = makeSession({ messages: [head, promoted, tail] });
 		const comp = new StatusLineComponent(session);
 
 		const before = comp.getCachedContextBreakdown();
-		// Mutate messages[0] in place — same object, larger content.
-		original.content = "a much longer body that should tokenize to more".repeat(20);
+		// Mutate the most recently promoted stable message in place — this is the
+		// only stable slot we intentionally revalidate on the hot path.
+		(promoted as { content: string }).content = "a much longer body that should tokenize to more".repeat(20);
 		const after = comp.getCachedContextBreakdown();
 
 		expect(after.usedTokens).toBeGreaterThan(before.usedTokens);
+	});
+
+	it("getTopBorder skips context accounting when no context segments are rendered", () => {
+		const session = makeSession({
+			messages: Array.from({ length: 20 }, (_, i) => userMessage(`message ${i}`.repeat(10))),
+		});
+		const comp = new StatusLineComponent(session);
+		const before = comp.getCachedContextBreakdown();
+
+		comp.updateSettings({
+			preset: "custom",
+			leftSegments: ["pi"],
+			rightSegments: ["session_name"],
+			separator: "powerline-thin",
+		});
+
+		const border = comp.getTopBorder(80);
+		expect(border.content.length).toBeGreaterThan(0);
+		expect(comp.getCachedContextBreakdown()).toEqual(before);
 	});
 
 	it("replaceMessages with same length but different shape recomputes tokens", () => {

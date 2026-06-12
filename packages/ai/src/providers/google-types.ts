@@ -157,11 +157,20 @@ export interface UsageMetadata {
 	cachedContentTokenCount?: number;
 }
 
+/** Prompt-level safety feedback; `blockReason` is set (with no candidates) when the prompt is blocked. */
+export interface PromptFeedback {
+	blockReason?: string;
+	blockReasonMessage?: string;
+	[key: string]: unknown;
+}
+
 /** Single SSE chunk's parsed JSON body. */
 export interface GenerateContentResponse {
 	candidates?: Candidate[];
 	usageMetadata?: UsageMetadata;
 	modelVersion?: string;
 	responseId?: string;
-	promptFeedback?: Record<string, unknown>;
+	promptFeedback?: PromptFeedback;
+	/** In-band stream failure (quota, internal error) delivered as a final JSON event. */
+	error?: { code?: number; message?: string; status?: string };
 }

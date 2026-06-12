@@ -83,6 +83,7 @@ const searchSchema = z
 		gitignore: z.boolean().optional().describe("respect gitignore"),
 		skip: z
 			.number()
+			.nullable()
 			.optional()
 			.describe("files to skip before collecting results — use to paginate when the prior call hit the file limit"),
 	})
@@ -107,6 +108,14 @@ export const SINGLE_FILE_MATCHES = 200;
  * (DEFAULT_FILE_LIMIT files × MULTI_FILE_PER_FILE_MATCHES matches) plus
  * pagination headroom so the caller can see total file count. */
 const INTERNAL_TOTAL_CAP = 2000;
+/** Mirrors `MAX_FILE_BYTES` in `crates/pi-natives/src/grep.rs`. Native grep
+ * silently returns no matches for files larger than this; surface a warning
+ * when the caller explicitly targeted such a file so they know to chunk it. */
+const NATIVE_GREP_MAX_FILE_BYTES = 4 * 1024 * 1024;
+/** Wall-clock budget for a single native grep invocation. Without it, an
+ * aborted or runaway search (huge tree, network mount) keeps burning CPU on
+ * the native thread pool after the JS promise is abandoned. */
+const SEARCH_GREP_TIMEOUT_MS = 30_000;
 
 /**
  * Parsed `paths` entry — a path (possibly archive-shaped) plus an optional
@@ -346,6 +355,8 @@ function makeVirtualMatch(
 	lineIndex: number,
 	contextBefore: number,
 	contextAfter: number,
+	lastEmittedLine: number,
+	nextMatchLine: number,
 ): GrepMatch {
 	const lineNumber = lineIndex + 1;
 	const { text, wasTruncated } = truncateLine(lines[lineIndex] ?? "", DEFAULT_MAX_COLUMN);
@@ -358,7 +369,9 @@ function makeVirtualMatch(
 
 	if (contextBefore > 0) {
 		const before: NonNullable<GrepMatch["contextBefore"]> = [];
-		const start = Math.max(0, lineIndex - contextBefore);
+		// Start after the previous match's last emitted line so adjacent matches
+		// never repeat or rewind context lines (mirrors native grep's sink).
+		const start = Math.max(0, lineIndex - contextBefore, lastEmittedLine);
 		for (let idx = start; idx < lineIndex; idx++) {
 			const contextLineNumber = idx + 1;
 			if (lineAllowed(contextLineNumber, resource.ranges)) {
@@ -370,7 +383,8 @@ function makeVirtualMatch(
 
 	if (contextAfter > 0) {
 		const after: NonNullable<GrepMatch["contextAfter"]> = [];
-		const end = Math.min(lines.length - 1, lineIndex + contextAfter);
+		// Stop before the next match line; it is emitted as a match itself.
+		const end = Math.min(lines.length - 1, lineIndex + contextAfter, nextMatchLine - 2);
 		for (let idx = lineIndex + 1; idx <= end; idx++) {
 			const contextLineNumber = idx + 1;
 			if (lineAllowed(contextLineNumber, resource.ranges)) {
@@ -381,6 +395,38 @@ function makeVirtualMatch(
 	}
 
 	return match;
+}
+
+/** Build matches for ascending matched line indexes with forward-only,
+ * deduplicated context windows (line numbers never repeat or go backwards
+ * within one resource). */
+function buildVirtualMatches(
+	resource: VirtualSearchResource,
+	lines: readonly string[],
+	matchedIndexes: readonly number[],
+	contextBefore: number,
+	contextAfter: number,
+	maxCount: number,
+): GrepMatch[] {
+	const matches: GrepMatch[] = [];
+	let lastEmittedLine = 0;
+	for (let i = 0; i < matchedIndexes.length && matches.length < maxCount; i++) {
+		const lineIndex = matchedIndexes[i];
+		const nextMatchLine = i + 1 < matchedIndexes.length ? matchedIndexes[i + 1] + 1 : Number.POSITIVE_INFINITY;
+		const match = makeVirtualMatch(
+			resource,
+			lines,
+			lineIndex,
+			contextBefore,
+			contextAfter,
+			lastEmittedLine,
+			nextMatchLine,
+		);
+		const after = match.contextAfter;
+		lastEmittedLine = after && after.length > 0 ? after[after.length - 1].lineNumber : match.lineNumber;
+		matches.push(match);
+	}
+	return matches;
 }
 
 function compileVirtualRegex(pattern: string, ignoreCase: boolean, multiline: boolean): RegExp {
@@ -401,24 +447,18 @@ function searchVirtualResourceLines(
 	maxCount: number,
 ): { matches: GrepMatch[]; totalMatches: number; limitReached: boolean } {
 	const lines = splitSearchLines(resource.content);
-	const matches: GrepMatch[] = [];
-	let totalMatches = 0;
-	let limitReached = false;
+	const matchedIndexes: number[] = [];
 
 	for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
 		const lineNumber = lineIndex + 1;
 		if (!lineAllowed(lineNumber, resource.ranges)) continue;
 		regex.lastIndex = 0;
 		if (!regex.test(lines[lineIndex] ?? "")) continue;
-		totalMatches++;
-		if (matches.length >= maxCount) {
-			limitReached = true;
-			continue;
-		}
-		matches.push(makeVirtualMatch(resource, lines, lineIndex, contextBefore, contextAfter));
+		matchedIndexes.push(lineIndex);
 	}
 
-	return { matches, totalMatches, limitReached };
+	const matches = buildVirtualMatches(resource, lines, matchedIndexes, contextBefore, contextAfter, maxCount);
+	return { matches, totalMatches: matchedIndexes.length, limitReached: matchedIndexes.length > matches.length };
 }
 
 function searchVirtualResourceMultiline(
@@ -429,10 +469,8 @@ function searchVirtualResourceMultiline(
 	maxCount: number,
 ): { matches: GrepMatch[]; totalMatches: number; limitReached: boolean } {
 	const indexed = indexSearchLines(resource.content);
-	const matches: GrepMatch[] = [];
 	const matchedLines = new Set<number>();
-	let totalMatches = 0;
-	let limitReached = false;
+	const matchedIndexes: number[] = [];
 
 	while (true) {
 		const match = regex.exec(resource.content);
@@ -442,12 +480,7 @@ function searchVirtualResourceMultiline(
 			const lineNumber = lineIndex + 1;
 			if (!matchedLines.has(lineNumber) && lineAllowed(lineNumber, resource.ranges)) {
 				matchedLines.add(lineNumber);
-				totalMatches++;
-				if (matches.length >= maxCount) {
-					limitReached = true;
-				} else {
-					matches.push(makeVirtualMatch(resource, indexed.lines, lineIndex, contextBefore, contextAfter));
-				}
+				matchedIndexes.push(lineIndex);
 			}
 		}
 		if (match[0].length === 0) {
@@ -455,7 +488,8 @@ function searchVirtualResourceMultiline(
 		}
 	}
 
-	return { matches, totalMatches, limitReached };
+	const matches = buildVirtualMatches(resource, indexed.lines, matchedIndexes, contextBefore, contextAfter, maxCount);
+	return { matches, totalMatches: matchedIndexes.length, limitReached: matchedIndexes.length > matches.length };
 }
 
 function searchVirtualResources(
@@ -661,12 +695,15 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 		const { pattern, paths: rawPaths, i, gitignore, skip } = params;
 
 		return untilAborted(signal, async () => {
-			const normalizedPattern = pattern.trim();
-			if (!normalizedPattern) {
+			// Preserve the pattern verbatim — leading/trailing whitespace is
+			// meaningful in regexes (indentation anchors, trailing-space matches).
+			if (!pattern.trim()) {
 				throw new ToolError("Pattern must not be empty");
 			}
+			const normalizedPattern = pattern;
 
-			const normalizedSkip = skip === undefined ? 0 : Number.isFinite(skip) ? Math.floor(skip) : Number.NaN;
+			const normalizedSkip =
+				skip === undefined || skip === null ? 0 : Number.isFinite(skip) ? Math.floor(skip) : Number.NaN;
 			if (normalizedSkip < 0 || !Number.isFinite(normalizedSkip)) {
 				throw new ToolError("Skip must be a non-negative number");
 			}
@@ -723,12 +760,16 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 					}
 				}
 
-				if (archiveUnreadable.length > 0 && searchablePaths.length === archiveUnreadable.length) {
+				if (
+					archiveUnreadable.length > 0 &&
+					searchablePaths.length === archiveUnreadable.length &&
+					virtualResources.length === 0
+				) {
 					// All inputs were archive selectors we couldn't materialize; surface the
 					// reason instead of a downstream "path not found" from the scope resolver.
 					throw new ToolError(
 						`Cannot search archive member(s): ${archiveUnreadable.join(", ")}. ` +
-							`Read the file directly with \`read <archive>:<member>\` and grep the returned content, ` +
+							`Read the member with \`read <archive>:<member>\` and inspect the returned text, ` +
 							`or pass a UTF-8 text member.`,
 					);
 				}
@@ -754,6 +795,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 						internalUrlAction: "search",
 						trackImmutableSources: true,
 						surfaceExactFilePaths: true,
+						fanOutFileTargets: true,
 						multipathStatHint: " (`paths` entries must each exist relative to cwd)",
 						settings: this.session.settings,
 						signal,
@@ -817,10 +859,12 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 					filesSearched: 0,
 					limitReached: false,
 				};
+				let skippedOversizedCount = 0;
 				try {
 					if (searchablePaths.length > 0) {
 						if (exactFilePaths || multiTargets) {
 							const matches: GrepMatch[] = [];
+							const seenMatchKeys = new Set<string>();
 							let limitReached = false;
 							let totalMatches = 0;
 							let filesSearched = 0;
@@ -846,14 +890,27 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 										contextAfter: normalizedContextAfter,
 										maxColumns: DEFAULT_MAX_COLUMN,
 										mode: effectiveOutputMode,
+										maxCountPerFile: perFileMatchCap + 1,
+										signal,
+										timeoutMs: SEARCH_GREP_TIMEOUT_MS,
 									},
 									undefined,
 								);
+								skippedOversizedCount += targetResult.skippedOversized ?? 0;
 								limitReached = limitReached || Boolean(targetResult.limitReached);
 								totalMatches += targetResult.totalMatches;
 								filesSearched += targetResult.filesSearched;
 								for (const match of targetResult.matches) {
 									const absolute = path.resolve(target.basePath, match.path);
+									// Overlapping targets (a directory plus a file nested
+									// inside it) surface the same physical line twice;
+									// keep the first occurrence.
+									const matchKey = `${absolute}\0${match.lineNumber}`;
+									if (seenMatchKeys.has(matchKey)) {
+										totalMatches = Math.max(0, totalMatches - 1);
+										continue;
+									}
+									seenMatchKeys.add(matchKey);
 									const rebased = path.relative(searchPath, absolute).replace(/\\/g, "/");
 									matches.push({ ...match, path: rebased });
 								}
@@ -881,14 +938,23 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 									contextAfter: normalizedContextAfter,
 									maxColumns: DEFAULT_MAX_COLUMN,
 									mode: effectiveOutputMode,
+									maxCountPerFile: perFileMatchCap + 1,
+									signal,
+									timeoutMs: SEARCH_GREP_TIMEOUT_MS,
 								},
 								undefined,
 							);
+							skippedOversizedCount = result.skippedOversized ?? 0;
 						}
 					}
 				} catch (err) {
 					if (err instanceof Error && /^regex(?: parse)? error/i.test(err.message)) {
 						throw new ToolError(err.message.replace(/^regex(?: parse)? error:?\s*/i, "Invalid regex: "));
+					}
+					if (err instanceof Error && err.message.includes("Aborted: Timeout")) {
+						throw new ToolError(
+							`Search timed out after ${SEARCH_GREP_TIMEOUT_MS / 1000}s; narrow paths or pattern, or scope with \`find\` first`,
+						);
 					}
 					throw err;
 				}
@@ -965,6 +1031,9 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 					}
 				}
 				const totalFiles = fileOrder.length;
+				// When native grep stopped at its internal cap, files past the cap were
+				// never surfaced — the file total is only a lower bound.
+				const totalFilesLabel = result.limitReached ? `${totalFiles}+` : `${totalFiles}`;
 				// Single-file scopes can't paginate — there is one file by definition.
 				const canPaginate = isMultiScope;
 				const skipFiles = canPaginate ? Math.min(normalizedSkip, totalFiles) : 0;
@@ -987,10 +1056,44 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 				}
 				const nextSkip = skipFiles + windowFiles.length;
 				const limitMessage = fileLimitReached
-					? `Showing files ${skipFiles + 1}-${nextSkip} of ${totalFiles}. Use skip=${nextSkip} for the next page, or narrow paths/pattern.`
+					? `Showing files ${skipFiles + 1}-${nextSkip} of ${totalFilesLabel}. Use skip=${nextSkip} for the next page, or narrow paths/pattern.`
 					: "";
 				const { record: recordFile, list: fileList } = createFileRecorder();
 				const fileMatchCounts = new Map<string, number>();
+				// Detect explicit file targets that exceed the native grep size cap.
+				// Native silently returns no matches above the cap; without this note the
+				// caller sees "no matches" for a literal pattern that visibly exists.
+				const oversizedNote = await (async (): Promise<string | undefined> => {
+					const explicitFileTargets: string[] = [];
+					if (exactFilePaths) {
+						explicitFileTargets.push(...exactFilePaths);
+					} else if (searchablePaths.length > 0 && !isDirectory && !multiTargets) {
+						explicitFileTargets.push(searchPath);
+					}
+					if (explicitFileTargets.length === 0) return undefined;
+					const oversized: string[] = [];
+					await Promise.all(
+						explicitFileTargets.map(async target => {
+							try {
+								const st = await stat(target);
+								if (st.isFile() && st.size > NATIVE_GREP_MAX_FILE_BYTES) {
+									oversized.push(path.relative(this.session.cwd, target) || target);
+								}
+							} catch {
+								// Stat failures here are surfaced by other code paths.
+							}
+						}),
+					);
+					if (oversized.length === 0) return undefined;
+					const limitMb = Math.floor(NATIVE_GREP_MAX_FILE_BYTES / (1024 * 1024));
+					return `Skipped oversized files (>${limitMb}MB grep limit; split the file or narrow with \`read\`): ${oversized.join(", ")}`;
+				})();
+				// Directory/multi-target scopes: native grep counts oversized skips but
+				// cannot name them; explicit-file scopes are covered (with names) above.
+				const oversizedScanNote =
+					!oversizedNote && skippedOversizedCount > 0
+						? `Skipped ${skippedOversizedCount} oversized file(s) (>${Math.floor(NATIVE_GREP_MAX_FILE_BYTES / (1024 * 1024))}MB grep limit); target them directly with \`read\``
+						: undefined;
 				const archiveNote =
 					archiveUnreadable.length > 0
 						? `Skipped archive entries (search supports text members only): ${archiveUnreadable.join(", ")}`
@@ -1002,7 +1105,9 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 				const missingPathsNote =
 					missingPathsForNote.length > 0 ? `Skipped missing paths: ${missingPathsForNote.join(", ")}` : undefined;
 				const warningNote =
-					[missingPathsNote, archiveNote].filter((s): s is string => Boolean(s)).join("\n") || undefined;
+					[missingPathsNote, archiveNote, oversizedNote, oversizedScanNote]
+						.filter((s): s is string => Boolean(s))
+						.join("\n") || undefined;
 				if (selectedMatches.length === 0) {
 					const details: SearchToolDetails = {
 						scopePath,
@@ -1014,8 +1119,14 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 						truncated: false,
 						missingPaths: missingPaths.length > 0 ? missingPaths : undefined,
 					};
-					const text = warningNote ? `No matches found\n${warningNote}` : "No matches found";
-					return toolResult(details).text(text).done();
+					const skipPastEnd = canPaginate && normalizedSkip > 0 && totalFiles > 0 && skipFiles >= totalFiles;
+					const noMatchText = skipPastEnd
+						? `No more results (${totalFilesLabel} files total; skip=${normalizedSkip} is past the end)`
+						: "No matches found";
+					const text = warningNote ? `${noMatchText}\n${warningNote}` : noMatchText;
+					// Zero matches is useless regardless of warnings: by the time
+					// compaction runs, the follow-up call has already corrected course.
+					return toolResult(details).text(text).useless().done();
 				}
 				const outputLines: string[] = [];
 				let linesTruncated = false;

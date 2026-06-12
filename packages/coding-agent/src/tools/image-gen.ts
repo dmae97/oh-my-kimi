@@ -1,13 +1,14 @@
 import * as os from "node:os";
 import * as path from "node:path";
-import { type ApiKey, getAntigravityUserAgent, getEnvApiKey, type Model, withAuth } from "@oh-my-pi/pi-ai";
+import { type ApiKey, type FetchImpl, getEnvApiKey, type Model, ProviderHttpError, withAuth } from "@oh-my-pi/pi-ai";
 import {
 	CODEX_BASE_URL,
 	getCodexAccountId,
 	OPENAI_HEADER_VALUES,
 	OPENAI_HEADERS,
 	URL_PATHS,
-} from "@oh-my-pi/pi-ai/providers/openai-codex/constants";
+} from "@oh-my-pi/pi-catalog/wire/codex";
+import { getAntigravityUserAgent } from "@oh-my-pi/pi-catalog/wire/gemini-headers";
 import {
 	$env,
 	isEnoent,
@@ -46,7 +47,7 @@ export type ImageProviderPreference = Exclude<ImageProvider, "openai-codex"> | "
 
 interface ImageApiKey {
 	provider: ImageProvider;
-	apiKey: string;
+	apiKey: ApiKey;
 	projectId?: string;
 	model?: Model;
 }
@@ -366,7 +367,11 @@ function toDataUrl(image: InlineImageData): string {
 	return `data:${image.mimeType};base64,${image.data}`;
 }
 
-async function loadImageFromUrl(imageUrl: string, signal?: AbortSignal): Promise<InlineImageData> {
+async function loadImageFromUrl(
+	imageUrl: string,
+	fetchImpl: FetchImpl,
+	signal?: AbortSignal,
+): Promise<InlineImageData> {
 	if (imageUrl.startsWith("data:")) {
 		const normalized = normalizeDataUrl(imageUrl.trim());
 		if (!normalized.mimeType) {
@@ -378,7 +383,7 @@ async function loadImageFromUrl(imageUrl: string, signal?: AbortSignal): Promise
 		return { data: normalized.data, mimeType: normalized.mimeType };
 	}
 
-	const response = await fetch(imageUrl, { signal });
+	const response = await fetchImpl(imageUrl, { signal });
 	if (!response.ok) {
 		const rawText = await response.text();
 		throw new Error(`Image download failed (${response.status}): ${rawText}`);
@@ -467,8 +472,13 @@ function parseAntigravityCredentials(raw: string): ParsedAntigravityCredentials 
 	return null;
 }
 
-async function findAntigravityCredentials(modelRegistry: ModelRegistry): Promise<ImageApiKey | null> {
-	const apiKey = await modelRegistry.getApiKeyForProvider("google-antigravity");
+async function findAntigravityCredentials(
+	modelRegistry: ModelRegistry,
+	sessionId?: string,
+): Promise<ImageApiKey | null> {
+	const apiKey = await modelRegistry.getApiKeyForProvider("google-antigravity", sessionId, {
+		modelId: DEFAULT_ANTIGRAVITY_MODEL,
+	});
 	if (!apiKey) return null;
 
 	const parsed = parseAntigravityCredentials(apiKey);
@@ -489,6 +499,39 @@ async function findXAIImageCredentials(modelRegistry?: ModelRegistry): Promise<I
 	}
 	const apiKey = $env.XAI_API_KEY;
 	if (apiKey) return { provider: "xai", apiKey };
+	return null;
+}
+
+async function findOpenRouterImageCredentials(
+	modelRegistry?: ModelRegistry,
+	sessionId?: string,
+): Promise<ImageApiKey | null> {
+	if (modelRegistry) {
+		// AuthStorage.getApiKey already falls back to env keys, so this covers OPENROUTER_API_KEY too.
+		const apiKey = await modelRegistry.getApiKeyForProvider("openrouter", sessionId);
+		if (apiKey) return { provider: "openrouter", apiKey: modelRegistry.resolver("openrouter", { sessionId }) };
+		return null;
+	}
+	const apiKey = getEnvApiKey("openrouter");
+	if (apiKey) return { provider: "openrouter", apiKey };
+	return null;
+}
+
+async function findGeminiImageCredentials(
+	modelRegistry?: ModelRegistry,
+	sessionId?: string,
+): Promise<ImageApiKey | null> {
+	if (modelRegistry) {
+		// AuthStorage.getApiKey already falls back to env keys (GEMINI_API_KEY), so only
+		// GOOGLE_API_KEY needs the explicit check below.
+		const apiKey = await modelRegistry.getApiKeyForProvider("google", sessionId);
+		if (apiKey) return { provider: "gemini", apiKey: modelRegistry.resolver("google", { sessionId }) };
+	} else {
+		const envKey = getEnvApiKey("google");
+		if (envKey) return { provider: "gemini", apiKey: envKey };
+	}
+	const googleKey = $env.GOOGLE_API_KEY;
+	if (googleKey) return { provider: "gemini", apiKey: googleKey };
 	return null;
 }
 
@@ -518,18 +561,16 @@ async function findImageApiKey(
 		if (openAI) return openAI;
 		// Fall through to auto-detect if preferred provider key not found.
 	} else if (preferredImageProvider === "antigravity" && modelRegistry) {
-		const antigravity = await findAntigravityCredentials(modelRegistry);
+		const antigravity = await findAntigravityCredentials(modelRegistry, sessionId);
 		if (antigravity) return antigravity;
 		// Fall through to auto-detect if preferred provider key not found.
 	} else if (preferredImageProvider === "gemini") {
-		const geminiKey = getEnvApiKey("google");
-		if (geminiKey) return { provider: "gemini", apiKey: geminiKey };
-		const googleKey = $env.GOOGLE_API_KEY;
-		if (googleKey) return { provider: "gemini", apiKey: googleKey };
+		const gemini = await findGeminiImageCredentials(modelRegistry, sessionId);
+		if (gemini) return gemini;
 		// Fall through to auto-detect if preferred provider key not found.
 	} else if (preferredImageProvider === "openrouter") {
-		const openRouterKey = getEnvApiKey("openrouter");
-		if (openRouterKey) return { provider: "openrouter", apiKey: openRouterKey };
+		const openRouter = await findOpenRouterImageCredentials(modelRegistry, sessionId);
+		if (openRouter) return openRouter;
 		// Fall through to auto-detect if preferred provider key not found.
 	} else if (preferredImageProvider === "xai") {
 		const xai = await findXAIImageCredentials(modelRegistry);
@@ -542,21 +583,18 @@ async function findImageApiKey(
 	if (openAI) return openAI;
 
 	if (modelRegistry) {
-		const antigravity = await findAntigravityCredentials(modelRegistry);
+		const antigravity = await findAntigravityCredentials(modelRegistry, sessionId);
 		if (antigravity) return antigravity;
 	}
 
 	const xai = await findXAIImageCredentials(modelRegistry);
 	if (xai) return xai;
 
-	const openRouterKey = getEnvApiKey("openrouter");
-	if (openRouterKey) return { provider: "openrouter", apiKey: openRouterKey };
+	const openRouter = await findOpenRouterImageCredentials(modelRegistry, sessionId);
+	if (openRouter) return openRouter;
 
-	const geminiKey = getEnvApiKey("google");
-	if (geminiKey) return { provider: "gemini", apiKey: geminiKey };
-
-	const googleKey = $env.GOOGLE_API_KEY;
-	if (googleKey) return { provider: "gemini", apiKey: googleKey };
+	const gemini = await findGeminiImageCredentials(modelRegistry, sessionId);
+	if (gemini) return gemini;
 
 	return null;
 }
@@ -850,13 +888,14 @@ async function generateOpenAIHostedImage(
 	model: Model,
 	params: ImageGenParams,
 	inputImages: InlineImageData[],
+	fetchImpl: FetchImpl,
 	signal: AbortSignal | undefined,
 	sessionId: string | undefined,
 ): Promise<OpenAIHostedImageResult> {
 	const promptText = assemblePrompt(params);
 	const stream = model.api === "openai-codex-responses" || model.provider === "openai-codex";
 	const requestBody = buildOpenAIHostedImageRequest(model, promptText, params, inputImages, stream);
-	const response = await fetch(getOpenAIResponsesUrl(model), {
+	const response = await fetchImpl(getOpenAIResponsesUrl(model), {
 		method: "POST",
 		headers: buildOpenAIImageHeaders(model, apiKey, sessionId),
 		body: JSON.stringify(requestBody),
@@ -1035,6 +1074,7 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 			}
 
 			const requestSignal = ptree.combineSignals(signal, IMAGE_TIMEOUT);
+			const fetchImpl = ctx.fetch ?? fetch;
 
 			if (provider === "openai" || provider === "openai-codex") {
 				if (!apiKey.model) {
@@ -1042,14 +1082,20 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 				}
 
 				const hostedModel = apiKey.model;
-				const hostedKey: ApiKey = ctx.modelRegistry.resolver(hostedModel.provider, {
-					sessionId,
-					baseUrl: hostedModel.baseUrl,
-				});
+				const hostedKey: ApiKey = ctx.modelRegistry.resolver(hostedModel, sessionId);
 
 				const parsed = await withAuth(
 					hostedKey,
-					key => generateOpenAIHostedImage(key, hostedModel, params, resolvedImages, requestSignal, sessionId),
+					key =>
+						generateOpenAIHostedImage(
+							key,
+							hostedModel,
+							params,
+							resolvedImages,
+							fetchImpl,
+							requestSignal,
+							sessionId,
+						),
 					{ signal: requestSignal },
 				);
 
@@ -1097,6 +1143,7 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 				const prompt = assemblePrompt(params);
 				const antigravityKey: ApiKey = ctx.modelRegistry.resolver("google-antigravity", {
 					sessionId,
+					modelId: DEFAULT_ANTIGRAVITY_MODEL,
 				});
 
 				const response = await withAuth(
@@ -1117,7 +1164,7 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 							resolvedImages,
 						);
 
-						const resp = await fetch(`${ANTIGRAVITY_ENDPOINT}/v1internal:streamGenerateContent?alt=sse`, {
+						const resp = await fetchImpl(`${ANTIGRAVITY_ENDPOINT}/v1internal:streamGenerateContent?alt=sse`, {
 							method: "POST",
 							headers: {
 								Authorization: `Bearer ${bearer}`,
@@ -1138,9 +1185,11 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 							} catch {
 								// Keep raw text.
 							}
-							throw Object.assign(new Error(`Antigravity image request failed (${resp.status}): ${message}`), {
-								status: resp.status,
-							});
+							throw new ProviderHttpError(
+								`Antigravity image request failed (${resp.status}): ${message}`,
+								resp.status,
+								{ headers: resp.headers },
+							);
 						}
 						return resp;
 					},
@@ -1225,7 +1274,7 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 				const xaiRawText = await withAuth(
 					xaiKey,
 					async key => {
-						const resp = await fetch(`${xaiCreds.baseURL}${xaiEndpoint}`, {
+						const resp = await fetchImpl(`${xaiCreds.baseURL}${xaiEndpoint}`, {
 							method: "POST",
 							headers: {
 								Authorization: `Bearer ${key}`,
@@ -1244,8 +1293,8 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 							} catch {
 								// Keep raw text.
 							}
-							throw Object.assign(new Error(`xAI image request failed (${resp.status}): ${message}`), {
-								status: resp.status,
+							throw new ProviderHttpError(`xAI image request failed (${resp.status}): ${message}`, resp.status, {
+								headers: resp.headers,
 							});
 						}
 						return rawText;
@@ -1263,7 +1312,7 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 						const mimeType = parseImageMetadata(bytes)?.mimeType ?? "image/png";
 						xaiInlineImages.push({ data: entry.b64_json, mimeType });
 					} else if (entry.url) {
-						xaiInlineImages.push(await loadImageFromUrl(entry.url, requestSignal));
+						xaiInlineImages.push(await loadImageFromUrl(entry.url, fetchImpl, requestSignal));
 					}
 				}
 
@@ -1308,34 +1357,40 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 					messages: [{ role: "user" as const, content: contentParts }],
 				};
 
-				const rawText = await withAuth(apiKey.apiKey, async key => {
-					const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-						method: "POST",
-						headers: {
-							"Content-Type": "application/json",
-							Authorization: `Bearer ${key}`,
-							"HTTP-Referer": "https://omp.sh/",
-							"X-OpenRouter-Title": "Oh-My-Pi",
-							"X-OpenRouter-Categories": "cli-agent",
-						},
-						body: JSON.stringify(requestBody),
-						signal: requestSignal,
-					});
-					const text = await resp.text();
-					if (!resp.ok) {
-						let message = text;
-						try {
-							const parsed = JSON.parse(text) as { error?: { message?: string } };
-							message = parsed.error?.message ?? message;
-						} catch {
-							// Keep raw text.
-						}
-						throw Object.assign(new Error(`OpenRouter image request failed (${resp.status}): ${message}`), {
-							status: resp.status,
+				const rawText = await withAuth(
+					apiKey.apiKey,
+					async key => {
+						const resp = await fetchImpl("https://openrouter.ai/api/v1/chat/completions", {
+							method: "POST",
+							headers: {
+								"Content-Type": "application/json",
+								Authorization: `Bearer ${key}`,
+								"HTTP-Referer": "https://omp.sh/",
+								"X-OpenRouter-Title": "Oh-My-Pi",
+								"X-OpenRouter-Categories": "cli-agent",
+							},
+							body: JSON.stringify(requestBody),
+							signal: requestSignal,
 						});
-					}
-					return text;
-				});
+						const text = await resp.text();
+						if (!resp.ok) {
+							let message = text;
+							try {
+								const parsed = JSON.parse(text) as { error?: { message?: string } };
+								message = parsed.error?.message ?? message;
+							} catch {
+								// Keep raw text.
+							}
+							throw new ProviderHttpError(
+								`OpenRouter image request failed (${resp.status}): ${message}`,
+								resp.status,
+								{ headers: resp.headers },
+							);
+						}
+						return text;
+					},
+					{ signal: requestSignal },
+				);
 
 				const data = JSON.parse(rawText) as OpenRouterResponse;
 				const message = data.choices?.[0]?.message;
@@ -1343,7 +1398,7 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 				const imageUrls = extractOpenRouterImageUrls(message);
 				const inlineImages: InlineImageData[] = [];
 				for (const imageUrl of imageUrls) {
-					inlineImages.push(await loadImageFromUrl(imageUrl, requestSignal));
+					inlineImages.push(await loadImageFromUrl(imageUrl, fetchImpl, requestSignal));
 				}
 
 				if (inlineImages.length === 0) {
@@ -1403,34 +1458,38 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 				generationConfig,
 			};
 
-			const rawText = await withAuth(apiKey.apiKey, async key => {
-				const resp = await fetch(
-					`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
-					{
-						method: "POST",
-						headers: {
-							"Content-Type": "application/json",
-							"x-goog-api-key": key,
+			const rawText = await withAuth(
+				apiKey.apiKey,
+				async key => {
+					const resp = await fetchImpl(
+						`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+						{
+							method: "POST",
+							headers: {
+								"Content-Type": "application/json",
+								"x-goog-api-key": key,
+							},
+							body: JSON.stringify(requestBody),
+							signal: requestSignal,
 						},
-						body: JSON.stringify(requestBody),
-						signal: requestSignal,
-					},
-				);
-				const text = await resp.text();
-				if (!resp.ok) {
-					let message = text;
-					try {
-						const parsed = JSON.parse(text) as { error?: { message?: string } };
-						message = parsed.error?.message ?? message;
-					} catch {
-						// Keep raw text.
+					);
+					const text = await resp.text();
+					if (!resp.ok) {
+						let message = text;
+						try {
+							const parsed = JSON.parse(text) as { error?: { message?: string } };
+							message = parsed.error?.message ?? message;
+						} catch {
+							// Keep raw text.
+						}
+						throw new ProviderHttpError(`Gemini image request failed (${resp.status}): ${message}`, resp.status, {
+							headers: resp.headers,
+						});
 					}
-					throw Object.assign(new Error(`Gemini image request failed (${resp.status}): ${message}`), {
-						status: resp.status,
-					});
-				}
-				return text;
-			});
+					return text;
+				},
+				{ signal: requestSignal },
+			);
 
 			const data = JSON.parse(rawText) as GeminiGenerateContentResponse;
 			const responseParts = combineParts(data);

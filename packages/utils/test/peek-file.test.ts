@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { peekFile, peekFileEnds, peekFileSync, peekFileTail } from "../src/peek-file";
+import { peekFile, peekFileEnds, peekFileSync, peekFileTail } from "@oh-my-pi/pi-utils/peek-file";
 
 function rangeBuffer(length: number): Buffer {
 	return Buffer.from(Array.from({ length }, (_, index) => index % 256));

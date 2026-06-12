@@ -56,6 +56,7 @@ pi-*.html
 
 # Generated files
 packages/coding-agent/src/internal-urls/docs-index.generated.ts
+packages/coding-agent/src/export/html/tool-views.generated.js
 packages/natives/npm/
 /runs/
 python/omp-rpc/src/omp_rpc.egg-info/
@@ -70,3 +71,6 @@ python/robomp/.cache/
 python/robomp/src/robomp/static/
 python/robomp/web/dist/
 python/robomp/.env
+
+# Local, machine-specific boot perf baseline (see packages/coding-agent/scripts/bench-guard.ts)
+packages/coding-agent/bench/boot-baseline.json

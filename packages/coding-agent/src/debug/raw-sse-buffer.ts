@@ -152,9 +152,9 @@ export class RawSseDebugBuffer {
 	}
 
 	// Ownership contract for `event.raw`:
-	//   The caller (either `notifyRawSseEvent` in `packages/ai/src/utils/sse-debug.ts`
-	//   or `SseTeeParser.#dispatch` directly) hands us a freshly-allocated
-	//   `string[]` per event and never retains, mutates, or re-dispatches it.
+	//   The caller (`notifyRawSseEvent` in `packages/ai/src/utils/sse-debug.ts`)
+	//   hands us a freshly-allocated `string[]` per event and never retains,
+	//   mutates, or re-dispatches it.
 	//   That lets `trimRawLines` keep the array by reference instead of
 	//   cloning on every chunk — a measurable savings on the streaming hot
 	//   path. If a future observer-chain mutates the array, restore the
@@ -192,7 +192,10 @@ export class RawSseDebugBuffer {
 	toRawText(): string {
 		// Reads the live array directly: `rawRecordText` only computes a string
 		// from each record, so no caller-visible mutation is possible.
-		return this.#records.map(rawRecordText).join("\n");
+		const body = this.#records.map(rawRecordText).join("\n");
+		if (this.#droppedRecords === 0) return body;
+		const dropped = `: omp-debug-dropped records=${this.#droppedRecords} chars=${this.#droppedChars}\n\n`;
+		return body.length > 0 ? `${dropped}${body}` : dropped;
 	}
 
 	#append(record: RawSseDebugRecord, chars: number): void {

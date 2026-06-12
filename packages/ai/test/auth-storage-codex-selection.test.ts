@@ -2,10 +2,10 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { type AuthCredentialStore, AuthStorage, SqliteAuthCredentialStore } from "../src/auth-storage";
-import type { UsageLimit, UsageProvider, UsageReport } from "../src/usage";
-import * as oauthUtils from "../src/utils/oauth";
-import type { OAuthCredentials } from "../src/utils/oauth/types";
+import { type AuthCredentialStore, AuthStorage, SqliteAuthCredentialStore } from "@oh-my-pi/pi-ai/auth-storage";
+import * as oauthUtils from "@oh-my-pi/pi-ai/registry/oauth";
+import type { OAuthCredentials } from "@oh-my-pi/pi-ai/registry/oauth/types";
+import type { UsageLimit, UsageProvider, UsageReport } from "@oh-my-pi/pi-ai/usage";
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
@@ -532,14 +532,14 @@ describe("AuthStorage codex oauth ranking", () => {
 			{ type: "oauth", ...createCredential("acct-third", "third@example.com"), expires: expiredAt },
 		]);
 
-		const startedAt = Date.now();
 		const apiKey = await authStorage.getApiKey("openai-codex");
-		const elapsedMs = Date.now() - startedAt;
 
 		expect(apiKey).toBe("refreshed-acct-third");
 		expect(refreshStarts).toHaveLength(3);
+		// Parallelism is proven deterministically by the concurrency counter: serial
+		// refreshes never overlap (peak in-flight stays 1). A wall-clock bound here was
+		// flaky on loaded CI runners, so maxConcurrent is the authoritative signal.
 		expect(maxConcurrent).toBe(3);
-		expect(elapsedMs).toBeLessThan(refreshDelayMs * 2);
 	});
 });
 

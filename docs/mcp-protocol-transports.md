@@ -96,7 +96,7 @@ If SSE stream ends before matching response, request fails with `No response rec
 
 Client emits JSON-RPC notifications via `transport.notify(...)`.
 
-- Stdio: writes notification frame to stdin (`jsonrpc`, `method`, optional `params`) plus newline.
+- Stdio: writes notification frame to stdin (`jsonrpc`, `method`, `params`) plus newline via `writeFrame()`; a failed write closes the transport and throws.
 - HTTP: sends POST body without `id`; success accepts `2xx` or `202 Accepted`.
 
 Server-initiated notifications are surfaced through transport `onNotification`; `MCPManager` consumes known MCP list/update notifications and can forward all notifications through its own callback.
@@ -112,11 +112,9 @@ Server-initiated notifications are surfaced through transport `onNotification`; 
   - start stdout read loop (`readJsonl`)
   - start stderr loop (read/discard; currently silent)
 - `close()`:
-  - mark disconnected
-  - reject all pending requests (`Transport closed`)
+  - `#handleClose()`: mark disconnected, reject all pending requests (`Transport closed`), emit `onClose`
   - kill subprocess
   - await read loop shutdown
-  - emit `onClose`
 
 If read loop exits unexpectedly, `finally` triggers `#handleClose()` which performs the same pending-request rejection and close callback.
 
@@ -124,7 +122,7 @@ If read loop exits unexpectedly, `finally` triggers `#handleClose()` which perfo
 
 Per request:
 
-- timeout defaults to `config.timeout ?? 30000`
+- timeout from `resolveMCPTimeoutMs`: `OMP_MCP_TIMEOUT_MS` env override, else `config.timeout ?? 30000`; `0` disables
 - optional `AbortSignal` from caller
 - abort and timeout both reject the pending promise and clean map entry
 
@@ -150,7 +148,7 @@ When process exits or stream closes:
 
 ## Backpressure/streaming notes
 
-- Outbound writes use `stdin.write()` + `flush()` without awaiting drain semantics.
+- `request()` awaits `stdin.write()` + `flush()` so broken-pipe failures reject the request; `notify()` writes through `writeFrame()`, which does not await and neutralizes async EPIPE rejections.
 - There is no explicit queue or high-watermark management in transport.
 - Inbound processing is stream-driven (`for await` over `readJsonl`), one parsed message at a time.
 
@@ -176,13 +174,13 @@ So `connected` means "transport usable", not "persistent stream established".
 
 For `request()`:
 
-- timeout uses `AbortController` (`config.timeout ?? 30000`)
+- timeout uses `AbortController` via `createMCPTimeout` (`OMP_MCP_TIMEOUT_MS` override, else `config.timeout ?? 30000`; `0` disables)
 - external signal, if provided, is merged via `AbortSignal.any([...])`
 - AbortError handling distinguishes caller abort vs timeout
 
 For `notify()`:
 
-- timeout uses an internal `AbortController` (`config.timeout ?? 30000`)
+- timeout uses an internal `AbortController` with the same resolved timeout
 - there is no external abort option on the transport interface
 
 For HTTP OAuth configs managed by `MCPManager`, outbound requests and best-effort server-request responses retry once on `HTTP 401`/`403` if token refresh returns replacement headers.
@@ -230,7 +228,7 @@ SSE JSON parsing errors bubble out of `readSseJson` and reject request/listener.
 Notable differences from `HttpTransport`:
 
 - parses entire response text first, then extracts first `data: ` line (`parseSSE`), with JSON fallback
-- no request timeout management, no abort API, no session-id handling, no transport lifecycle
+- optional caller `AbortSignal` (`CallMcpOptions`), with a hard 60s `AbortSignal.timeout` default when none is given; no session-id handling, no transport lifecycle
 - returns raw JSON-RPC envelope object
 
 This path is lightweight but less robust than full transport implementation.

@@ -204,6 +204,7 @@ export type BlockTarget =
 	| { kind: "delete_block"; anchor: Anchor }
 	| { kind: "insert_before"; anchor: Anchor }
 	| { kind: "insert_after"; anchor: Anchor }
+	| { kind: "insert_after_block"; anchor: Anchor }
 	| { kind: "bof" }
 	| { kind: "eof" };
 
@@ -238,6 +239,16 @@ function scanInsertTarget(line: string, index: number, end: number): TargetScan 
 	}
 	const afterEnd = scanKeyword(line, cursor, end, HL_INSERT_AFTER);
 	if (afterEnd !== null) {
+		// `insert after block N:` — resolve N to a tree-sitter block range at
+		// apply time and insert after its last line. Try the `block` sub-keyword
+		// before falling back to a literal `insert after N:` anchor.
+		const blockEnd = scanKeyword(line, skipWhitespace(line, afterEnd, end), end, HL_BLOCK_KEYWORD);
+		if (blockEnd !== null) {
+			const anchor = scanLineNumber(line, skipWhitespace(line, blockEnd, end), end);
+			if (anchor === null) return null;
+			const nextIndex = consumeOptionalColon(line, anchor.nextIndex, end);
+			return { target: { kind: "insert_after_block", anchor: { line: anchor.line } }, nextIndex };
+		}
 		const anchor = scanLineNumber(line, skipWhitespace(line, afterEnd, end), end);
 		if (anchor === null) return null;
 		const nextIndex = consumeOptionalColon(line, anchor.nextIndex, end);

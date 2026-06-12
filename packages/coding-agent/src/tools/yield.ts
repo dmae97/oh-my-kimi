@@ -20,6 +20,14 @@ export interface YieldDetails {
 	data: unknown;
 	status: "success" | "aborted";
 	error?: string;
+	/**
+	 * Set when the yield tool exhausted its in-tool schema-retry budget
+	 * (MAX_SCHEMA_RETRIES) and accepted the data anyway. Surfaced so the
+	 * executor's post-mortem finalizer can honor the override instead of
+	 * re-rejecting the same payload with `schema_violation` — keeping the
+	 * subagent's acceptance and the parent's view of the result in lockstep.
+	 */
+	schemaOverridden?: boolean;
 }
 
 function formatSchema(schema: unknown): string {
@@ -237,7 +245,7 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 					: "Result submitted.";
 		return {
 			content: [{ type: "text", text: responseText }],
-			details: { data, status, error: errorMessage },
+			details: { data, status, error: errorMessage, schemaOverridden: schemaValidationOverridden || undefined },
 		};
 	}
 }
@@ -254,6 +262,7 @@ subprocessToolRegistry.register<YieldDetails>("yield", {
 			data: record.data,
 			status,
 			error: typeof record.error === "string" ? record.error : undefined,
+			schemaOverridden: record.schemaOverridden === true ? true : undefined,
 		};
 	},
 	shouldTerminate: event => !event.isError,

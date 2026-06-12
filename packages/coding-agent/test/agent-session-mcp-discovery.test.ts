@@ -4,14 +4,15 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Agent, type AgentTool, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { Effort, type Model } from "@oh-my-pi/pi-ai";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { CustomTool } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools/types";
+import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import * as z from "zod/v4";
-import { Settings } from "../src/config/settings";
-import type { CustomTool } from "../src/extensibility/custom-tools/types";
-import { AgentSession } from "../src/session/agent-session";
-import { SessionManager } from "../src/session/session-manager";
 
 function createModel(): Model<"openai-responses"> {
-	return {
+	return buildModel({
 		id: "mock",
 		name: "mock",
 		api: "openai-responses",
@@ -22,7 +23,7 @@ function createModel(): Model<"openai-responses"> {
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 8192,
 		maxTokens: 2048,
-	};
+	});
 }
 
 function createBasicTool(name: string, label: string): AgentTool {
@@ -698,7 +699,7 @@ describe("AgentSession MCP discovery", () => {
 		const reasoningModel: Model<"openai-responses"> = {
 			...createModel(),
 			reasoning: true,
-			thinking: { mode: "effort", minLevel: Effort.Medium, maxLevel: Effort.Medium },
+			thinking: { mode: "effort", efforts: [Effort.Medium] },
 		};
 
 		const agent = new Agent({

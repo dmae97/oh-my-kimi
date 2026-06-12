@@ -13,6 +13,17 @@ describe("OAuthManualInputManager", () => {
 		expect(manager.hasPending()).toBe(false);
 	});
 
+	it("does not replace pending input when using tryWaitForInput", async () => {
+		const manager = new OAuthManualInputManager();
+		const first = manager.waitForInput("openai-codex");
+
+		expect(manager.tryWaitForInput("mcp")).toBeUndefined();
+		expect(manager.pendingProviderId).toBe("openai-codex");
+
+		expect(manager.submit("callback-url")).toBe(true);
+		expect(await first).toBe("callback-url");
+	});
+
 	it("returns false when no pending input", () => {
 		const manager = new OAuthManualInputManager();
 

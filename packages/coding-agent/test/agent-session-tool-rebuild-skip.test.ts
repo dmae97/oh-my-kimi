@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it, setSystemTime } from "bun:test";
 import { Agent, type AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { CustomTool } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools/types";
+import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import * as z from "zod/v4";
-import { Settings } from "../src/config/settings";
-import type { CustomTool } from "../src/extensibility/custom-tools/types";
-import { AgentSession } from "../src/session/agent-session";
-import { SessionManager } from "../src/session/session-manager";
 
 // Cache-stability invariant: when MCP servers reconnect with byte-identical tool
 // definitions, `refreshMCPTools` must not rebuild the system prompt. A rebuild
@@ -13,7 +14,7 @@ import { SessionManager } from "../src/session/session-manager";
 // and forces a full prefix re-encode on the next request.
 
 function createModel(): Model<"openai-responses"> {
-	return {
+	return buildModel({
 		id: "mock",
 		name: "mock",
 		api: "openai-responses",
@@ -24,7 +25,7 @@ function createModel(): Model<"openai-responses"> {
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 8192,
 		maxTokens: 2048,
-	};
+	});
 }
 
 function createBasicTool(name: string, label: string, description = `${label} tool`): AgentTool {

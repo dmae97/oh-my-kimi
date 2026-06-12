@@ -1,9 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import { streamOpenAICodexResponses } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import { type OpenAIResponsesOptions, streamOpenAIResponses } from "@oh-my-pi/pi-ai/providers/openai-responses";
-import type { Context, Model, ProviderSessionState } from "@oh-my-pi/pi-ai/types";
-import { createOpenAIResponsesHistoryPayload, truncateResponseItemId } from "../src/utils";
+import type { Context, Model, ModelSpec, ProviderSessionState } from "@oh-my-pi/pi-ai/types";
+import { createOpenAIResponsesHistoryPayload, truncateResponseItemId } from "@oh-my-pi/pi-ai/utils";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 
 function createAbortedSignal(): AbortSignal {
 	const controller = new AbortController();
@@ -20,18 +21,25 @@ function createCodexToken(accountId: string): string {
 }
 
 /**
- * Returns the bundled `gpt-5-mini` model with its `name` renamed so it doesn't
- * lowercase-startWith("gpt-5") and therefore doesn't trigger the GPT-5 "Juice: 0"
- * developer-message hack injected by `applyResponsesReasoningParams`. The hack
- * is exercised by its own targeted tests; these history-replay tests assert raw
- * payload shape and should stay independent of it.
+ * Returns the bundled `gpt-5-mini` model with `compat.requiresJuiceZeroHack`
+ * cleared so it doesn't trigger the GPT-5 "Juice: 0" developer-message hack
+ * injected by `applyResponsesReasoningParams`. The hack is exercised by its
+ * own targeted tests; these history-replay tests assert raw payload shape and
+ * should stay independent of it.
  */
 function getOpenAIReasoningModel(
 	provider: Parameters<typeof getBundledModel>[0],
 	id: string,
 ): Model<"openai-responses"> {
 	const base = getBundledModel(provider, id) as Model<"openai-responses">;
-	return { ...base, name: "Reasoning Mini" };
+	// Override both views: `compat` for direct use, `compatConfig` so tests
+	// that rebuild via `buildModel({ ..., compat: model.compatConfig })` keep
+	// the override through re-resolution.
+	return {
+		...base,
+		compat: { ...base.compat, requiresJuiceZeroHack: false },
+		compatConfig: { ...base.compatConfig, requiresJuiceZeroHack: false },
+	};
 }
 
 const preservedHistoryItems = [
@@ -323,10 +331,12 @@ describe("OpenAI responses history payload", () => {
 	});
 
 	it("uses canonical instructions field for endpoints without developer-role support", async () => {
-		const model = {
-			...getOpenAIReasoningModel("openai", "gpt-5-mini"),
+		const baseModel = getOpenAIReasoningModel("openai", "gpt-5-mini");
+		const model = buildModel({
+			...baseModel,
 			baseUrl: "https://proxy.example.com/v1",
-		};
+			compat: baseModel.compatConfig,
+		} as ModelSpec<"openai-responses">);
 		const payload = (await captureResponsesPayload(model, {
 			systemPrompt: ["stable instructions", "second instructions"],
 			messages: [{ role: "user", content: "hi", timestamp: Date.now() }],

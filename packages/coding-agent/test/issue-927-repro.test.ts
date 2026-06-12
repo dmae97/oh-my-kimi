@@ -44,7 +44,7 @@ describe("issue #927 optimistic pending spinner", () => {
 			settings: Settings.isolated(),
 			modelRegistry,
 		});
-		vi.spyOn(session, "prompt").mockResolvedValue(undefined);
+		vi.spyOn(session, "prompt").mockResolvedValue(true);
 		mode = new InteractiveMode(session, "test");
 		mode.addMessageToChat = vi.fn();
 		mode.ui.requestRender = vi.fn();

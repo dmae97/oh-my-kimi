@@ -25,6 +25,7 @@ function makeRule(partial: Partial<Rule>): Rule {
 		alwaysApply: partial.alwaysApply,
 		description: partial.description,
 		condition: partial.condition,
+		astCondition: partial.astCondition,
 		scope: partial.scope,
 		_source: partial._source ?? {
 			provider: "test",
@@ -99,6 +100,26 @@ describe("parseRuleConditionAndScope", () => {
 
 		expect(parsed.condition).toEqual([".*"]);
 		expect(parsed.scope).toEqual(["tool:edit(*.rs)", "tool:write(*.rs)"]);
+	});
+
+	it("normalizes astCondition strings and arrays without glob inference", () => {
+		expect(parseRuleConditionAndScope({ astCondition: "console.log($A)" }).astCondition).toEqual(["console.log($A)"]);
+		const parsed = parseRuleConditionAndScope({
+			astCondition: ["console.log($A)", "debugger"],
+		});
+		expect(parsed.astCondition).toEqual(["console.log($A)", "debugger"]);
+		// AST patterns never drive scope inference, and absent regex stays absent.
+		expect(parsed.condition).toBeUndefined();
+		expect(parsed.scope).toBeUndefined();
+	});
+
+	it("carries astCondition alongside a regex condition", () => {
+		const parsed = parseRuleConditionAndScope({
+			condition: "TODO",
+			astCondition: "console.log($A)",
+		});
+		expect(parsed.condition).toEqual(["TODO"]);
+		expect(parsed.astCondition).toEqual(["console.log($A)"]);
 	});
 });
 
@@ -391,6 +412,95 @@ describe("TtsrManager snapshot matching", () => {
 		expect(manager.checkSnapshot("const x = y as any;", context)).toEqual([rule]);
 		// A later digest without the pattern must not match stale buffered text.
 		expect(manager.checkSnapshot("const x = y as string;", context)).toEqual([]);
+	});
+});
+
+describe("TtsrManager ast condition matching", () => {
+	const editContext = {
+		source: "tool" as const,
+		toolName: "edit",
+		filePaths: ["src/main.ts"],
+		streamKey: "toolcall:ast-1",
+	};
+
+	it("registers and reports ast-only rules without a regex condition", () => {
+		const manager = new TtsrManager();
+		const rule = makeRule({ name: "no-console", astCondition: ["console.log($A)"] });
+
+		expect(manager.addRule(rule)).toBe(true);
+		expect(manager.hasRules()).toBe(true);
+		expect(manager.hasAstRules()).toBe(true);
+	});
+
+	it("does not report ast rules when only regex conditions are registered", () => {
+		const manager = new TtsrManager();
+		manager.addRule(makeRule({ name: "regex-only", condition: ["TODO"], scope: ["text"] }));
+		expect(manager.hasAstRules()).toBe(false);
+	});
+
+	it("matches an ast pattern against a reconstructed source snapshot", async () => {
+		const manager = new TtsrManager();
+		const rule = makeRule({
+			name: "no-console",
+			astCondition: ["console.log($A)"],
+			scope: ["tool:edit(*.ts)"],
+		});
+		manager.addRule(rule);
+
+		const matches = await manager.checkAstSnapshot('function greet() {\n\tconsole.log("hi");\n}', editContext);
+		expect(matches).toEqual([rule]);
+	});
+
+	it("does not match when the ast pattern is absent", async () => {
+		const manager = new TtsrManager();
+		manager.addRule(makeRule({ name: "no-console", astCondition: ["console.log($A)"] }));
+
+		const matches = await manager.checkAstSnapshot("function greet() {\n\treturn 1;\n}", editContext);
+		expect(matches).toEqual([]);
+	});
+
+	it("infers language from the file extension and isolates other languages", async () => {
+		const manager = new TtsrManager();
+		manager.addRule(makeRule({ name: "no-console", astCondition: ["console.log($A)"], scope: ["tool:edit(*.ts)"] }));
+
+		// A `.rs` path is out of the rule's tool scope, so the TS pattern never runs.
+		const rustMatches = await manager.checkAstSnapshot('println!("{}", x);', {
+			...editContext,
+			filePaths: ["src/main.rs"],
+			streamKey: "toolcall:ast-rs",
+		});
+		expect(rustMatches).toEqual([]);
+	});
+
+	it("skips ast evaluation when no file path is available to infer a language", async () => {
+		const manager = new TtsrManager();
+		manager.addRule(makeRule({ name: "no-console", astCondition: ["console.log($A)"] }));
+
+		const matches = await manager.checkAstSnapshot('console.log("hi");', {
+			source: "tool",
+			toolName: "edit",
+			streamKey: "toolcall:ast-nopath",
+		});
+		expect(matches).toEqual([]);
+	});
+
+	it("evaluates ast conditions only once for an unchanged snapshot", async () => {
+		const manager = new TtsrManager();
+		const rule = makeRule({ name: "no-console", astCondition: ["console.log($A)"] });
+		manager.addRule(rule);
+		const snapshot = 'console.log("hi");';
+
+		// First evaluation matches; the throttle returns nothing for the identical re-check.
+		expect(await manager.checkAstSnapshot(snapshot, editContext)).toEqual([rule]);
+		expect(await manager.checkAstSnapshot(snapshot, editContext)).toEqual([]);
+	});
+
+	it("returns no ast matches when ttsr is disabled", async () => {
+		const manager = ttsrManager({ enabled: false });
+		manager.addRule(makeRule({ name: "no-console", astCondition: ["console.log($A)"] }));
+
+		expect(manager.hasAstRules()).toBe(false);
+		expect(await manager.checkAstSnapshot('console.log("hi");', editContext)).toEqual([]);
 	});
 });
 

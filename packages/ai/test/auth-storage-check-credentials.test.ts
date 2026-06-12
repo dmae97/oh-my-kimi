@@ -29,8 +29,8 @@ import {
 	type CompletionProbeInput,
 	REMOTE_REFRESH_SENTINEL,
 	type StoredAuthCredential,
-} from "../src/auth-storage";
-import * as claudeUsage from "../src/usage/claude";
+} from "@oh-my-pi/pi-ai/auth-storage";
+import * as claudeUsage from "@oh-my-pi/pi-ai/usage/claude";
 
 function oauthRow(id: number, email: string, opts?: { expired?: boolean }): StoredAuthCredential {
 	const credential: AuthCredential = {

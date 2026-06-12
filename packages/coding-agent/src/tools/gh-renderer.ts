@@ -164,7 +164,7 @@ function getJobStateVisual(
 	if (job.conclusion && SUCCESS_CONCLUSIONS.has(job.conclusion)) {
 		return {
 			iconRaw: theme.status.success,
-			iconColor: "success",
+			iconColor: "accent",
 			textColor: "success",
 		};
 	}
@@ -327,14 +327,21 @@ function renderFallbackComponent(
 	const title = formatOpTitle(args.op);
 	const meta = buildOpMeta(args);
 	const isError = result.isError === true;
-	const status: ToolUIStatus = isError ? "error" : text ? "success" : "warning";
+	const success = !isError && Boolean(text);
 	const header = renderStatusLine(
-		{
-			icon: status,
-			title,
-			titleColor: isError ? "error" : "accent",
-			meta,
-		},
+		success
+			? {
+					iconOverride: theme.styledSymbol("tool.gh", "accent"),
+					title,
+					titleColor: "accent",
+					meta,
+				}
+			: {
+					icon: isError ? "error" : "warning",
+					title,
+					titleColor: isError ? "error" : "accent",
+					meta,
+				},
 		theme,
 	);
 
@@ -438,12 +445,19 @@ export const githubToolRenderer = {
 		if (watch) {
 			const isError = result.isError === true;
 			const header = renderStatusLine(
-				{
-					icon: isError ? "error" : "success",
-					title: "GitHub Run Watch",
-					titleColor: isError ? "error" : "accent",
-					meta: [getWatchHeader(watch)],
-				},
+				isError
+					? {
+							icon: "error",
+							title: "GitHub Run Watch",
+							titleColor: "error",
+							meta: [getWatchHeader(watch)],
+						}
+					: {
+							iconOverride: uiTheme.styledSymbol("tool.gh", "accent"),
+							title: "GitHub Run Watch",
+							titleColor: "accent",
+							meta: [getWatchHeader(watch)],
+						},
 				uiTheme,
 			);
 			return framedBlock(uiTheme, width => {

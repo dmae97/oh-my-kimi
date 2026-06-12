@@ -7,7 +7,7 @@ import { visibleWidth } from "@oh-my-pi/pi-tui";
 const MAX_DISPLAY_LINE_CHARS = 4000;
 
 describe("BashExecutionComponent #clampDisplayLine", () => {
-	const ui = { requestRender: () => {} } as unknown as TUI;
+	const ui = { requestRender: () => {}, requestComponentRender: () => {} } as unknown as TUI;
 
 	beforeEach(async () => {
 		const theme = await getThemeByName("dark");

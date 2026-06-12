@@ -6,7 +6,7 @@ import { Text } from "@oh-my-pi/pi-tui";
 
 export interface VisualTruncateResult {
 	/** The visual lines to display */
-	visualLines: string[];
+	visualLines: readonly string[];
 	/** Number of visual lines that were skipped (hidden) */
 	skippedCount: number;
 }

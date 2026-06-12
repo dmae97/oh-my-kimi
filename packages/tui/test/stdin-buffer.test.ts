@@ -5,7 +5,8 @@
  * MIT License - Copyright (c) 2025 opentui
  */
 
-import { beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { setKittyProtocolActive } from "@oh-my-pi/pi-tui/keys";
 import { StdinBuffer } from "@oh-my-pi/pi-tui/stdin-buffer";
 
 describe("StdinBuffer", () => {
@@ -13,6 +14,7 @@ describe("StdinBuffer", () => {
 	let emittedSequences: string[];
 
 	beforeEach(() => {
+		setKittyProtocolActive(false);
 		buffer = new StdinBuffer({ timeout: 10 });
 
 		// Collect emitted sequences
@@ -22,9 +24,29 @@ describe("StdinBuffer", () => {
 		});
 	});
 
+	afterEach(() => {
+		// Kill pending flush/watchdog timers: a stale timer from a prior test's
+		// buffer would otherwise emit into the current test's emittedSequences
+		// (the data listener closes over the reassigned module variable).
+		buffer.destroy();
+		setKittyProtocolActive(false);
+	});
+
 	// Helper to process data through the buffer
 	function processInput(data: string | Buffer): void {
 		buffer.process(data);
+	}
+
+	// Poll until `predicate` holds. Fixed sleeps race the flush timer chain
+	// (timeout -> setTimeout(0) deferral): under parallel test load, an expired
+	// sleep with an older deadline resolves before the deferral fires, so the
+	// assertion would observe pre-flush state. The deadline only guards against
+	// a hung test; the caller's expect() reports the real failure.
+	async function waitUntil(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
+		const deadline = Date.now() + timeoutMs;
+		while (!predicate() && Date.now() < deadline) {
+			await Bun.sleep(2);
+		}
 	}
 
 	describe("Regular Characters", () => {
@@ -82,13 +104,98 @@ describe("StdinBuffer", () => {
 		});
 
 		it("should flush incomplete sequence after timeout", async () => {
-			processInput("\x1b[<35");
+			// Non-mouse CSI partial: ambiguous, so it flushes after the timeout.
+			processInput("\x1b[1;5");
 			expect(emittedSequences).toEqual([]);
 
-			// Wait for timeout
-			await Bun.sleep(15);
+			// Wait for the flush timeout to deliver the partial
+			await waitUntil(() => emittedSequences.length > 0);
 
-			expect(emittedSequences).toEqual(["\x1b[<35"]);
+			expect(emittedSequences).toEqual(["\x1b[1;5"]);
+		});
+
+		it("should hold a split SGR mouse partial past the flush timeout and reassemble it", async () => {
+			// `\x1b[<…` is unambiguously a mouse report: the partial must never
+			// flush on timeout, or its tail leaks as typed text (settings search
+			// filling with `[<35;8;16M`).
+			processInput("\x1b[<35;8;16");
+			await Bun.sleep(30);
+			expect(emittedSequences).toEqual([]);
+
+			processInput("M");
+			expect(emittedSequences).toEqual(["\x1b[<35;8;16M"]);
+		});
+
+		it("should deliver a held mouse partial raw once the hold cap expires", async () => {
+			const capped = new StdinBuffer({ timeout: 5, partialHoldTimeout: 20 });
+			const emitted: string[] = [];
+			capped.on("data", sequence => emitted.push(sequence));
+			try {
+				capped.process("\x1b[<35;8;16");
+				await waitUntil(() => emitted.length > 0);
+				// Tail never arrived: delivered as one raw sequence (ESC intact,
+				// so downstream treats it as control data, not typed text).
+				expect(emitted).toEqual(["\x1b[<35;8;16"]);
+			} finally {
+				capped.destroy();
+			}
+		});
+
+		it("should hold a lone ESC while the kitty protocol is active and join the mouse tail", async () => {
+			setKittyProtocolActive(true);
+			try {
+				// Under kitty the ESC key arrives as \x1b[27u, so a bare \x1b is
+				// always the head of a split sequence.
+				processInput("\x1b");
+				await Bun.sleep(30);
+				expect(emittedSequences).toEqual([]);
+
+				processInput("[<35;8;16M");
+				expect(emittedSequences).toEqual(["\x1b[<35;8;16M"]);
+			} finally {
+				setKittyProtocolActive(false);
+			}
+		});
+
+		it("should flush a lone ESC after timeout when the kitty protocol is inactive", async () => {
+			// Legacy terminals: a bare ESC is a real keypress and must not lag
+			// behind the flush timeout by more than the deferral.
+			processInput("\x1b");
+			await waitUntil(() => emittedSequences.length > 0);
+			expect(emittedSequences).toEqual(["\x1b"]);
+		});
+	});
+
+	describe("Double-ESC disambiguation", () => {
+		it("joins a held bare ESC with a following CSI into one meta sequence", async () => {
+			processInput("\x1b");
+			processInput("\x1b[B");
+			await waitUntil(() => emittedSequences.length > 0);
+			expect(emittedSequences).toEqual(["\x1b\x1b[B"]);
+		});
+
+		it("splits a bare ESC from a following SGR mouse report", async () => {
+			processInput("\x1b");
+			processInput("\x1b[<35;22;17M");
+			await waitUntil(() => emittedSequences.length > 0);
+			expect(emittedSequences).toEqual(["\x1b", "\x1b[<35;22;17M"]);
+		});
+
+		it("flushes a trailing double-ESC as one sequence after the timeout", async () => {
+			processInput("\x1b\x1b");
+			expect(emittedSequences).toEqual([]);
+			await waitUntil(() => emittedSequences.length > 0);
+			expect(emittedSequences).toEqual(["\x1b\x1b"]);
+		});
+
+		it("keeps double-ESC followed by a non-CSI byte split as before", () => {
+			processInput("\x1b\x1bX");
+			expect(emittedSequences).toEqual(["\x1b\x1b", "X"]);
+		});
+
+		it("consumes a whole meta-CSI arrow in one chunk", () => {
+			processInput("\x1b\x1b[A");
+			expect(emittedSequences).toEqual(["\x1b\x1b[A"]);
 		});
 	});
 
@@ -126,6 +233,21 @@ describe("StdinBuffer", () => {
 			// Simulates typing "hi" quickly with releases interleaved
 			processInput("\x1b[104u\x1b[104;1:3u\x1b[105u\x1b[105;1:3u");
 			expect(emittedSequences).toEqual(["\x1b[104u", "\x1b[104;1:3u", "\x1b[105u", "\x1b[105;1:3u"]);
+		});
+	});
+
+	describe("Kitty Printable Dedup Window", () => {
+		it("swallows the immediate bare duplicate of a kitty printable", () => {
+			// Buggy double-report: CSI-u event plus the bare char in one write.
+			processInput("\x1b[97ua");
+			expect(emittedSequences).toEqual(["\x1b[97u"]);
+		});
+
+		it("does not swallow a real keystroke after the dedup window expires", async () => {
+			processInput("\x1b[97u");
+			await Bun.sleep(50);
+			processInput("a");
+			expect(emittedSequences).toEqual(["\x1b[97u", "a"]);
 		});
 	});
 
@@ -187,7 +309,7 @@ describe("StdinBuffer", () => {
 			expect(emittedSequences).toEqual([]);
 
 			// After timeout, should emit
-			await Bun.sleep(15);
+			await waitUntil(() => emittedSequences.length > 0);
 			expect(emittedSequences).toEqual(["\x1b"]);
 		});
 
@@ -211,6 +333,35 @@ describe("StdinBuffer", () => {
 		});
 	});
 
+	describe("Large Plain-Text Bursts", () => {
+		it("splits a large non-bracketed burst into per-character events quickly", () => {
+			// Pins the O(n) scan: the prior per-iteration slice/Array.from made
+			// this O(n²) — a 64KB burst would blow the test timeout.
+			const content = "0123456789abcdef".repeat(4096); // 64 KB
+			processInput(content);
+			expect(emittedSequences.length).toBe(content.length);
+			expect(emittedSequences[0]).toBe("0");
+			expect(emittedSequences[emittedSequences.length - 1]).toBe("f");
+		});
+
+		it("keeps escape parsing and surrogate pairs intact inside a burst", () => {
+			processInput("abc🙂\x1b[A\u{1f389}def\x1b[<35;20;5m\x1b");
+			expect(emittedSequences).toEqual([
+				"a",
+				"b",
+				"c",
+				"🙂",
+				"\x1b[A",
+				"\u{1f389}",
+				"d",
+				"e",
+				"f",
+				"\x1b[<35;20;5m",
+			]);
+			expect(buffer.getBuffer()).toBe("\x1b");
+		});
+	});
+
 	describe("Flush", () => {
 		it("should flush incomplete sequences", () => {
 			processInput("\x1b[<35");
@@ -225,13 +376,13 @@ describe("StdinBuffer", () => {
 		});
 
 		it("should emit flushed data via timeout", async () => {
-			processInput("\x1b[<35");
+			processInput("\x1b[1;5");
 			expect(emittedSequences).toEqual([]);
 
-			// Wait for timeout to flush
-			await Bun.sleep(15);
+			// Wait for the flush timeout to deliver the partial
+			await waitUntil(() => emittedSequences.length > 0);
 
-			expect(emittedSequences).toEqual(["\x1b[<35"]);
+			expect(emittedSequences).toEqual(["\x1b[1;5"]);
 		});
 	});
 
@@ -309,6 +460,101 @@ describe("StdinBuffer", () => {
 
 			expect(emittedPaste).toEqual(["Hello \u4e16\u754c \u{1f389}"]);
 			expect(emittedSequences).toEqual([]);
+		});
+
+		it("assembles paste when the end marker is split across chunks", () => {
+			processInput("\x1b[200~hello world\x1b[201");
+			expect(emittedPaste).toEqual([]);
+
+			processInput("~");
+			expect(emittedPaste).toEqual(["hello world"]);
+			expect(emittedSequences).toEqual([]);
+		});
+
+		it("assembles paste when the start and end markers arrive one byte at a time", () => {
+			for (const ch of "\x1b[200~ab\x1b[201~") {
+				processInput(ch);
+			}
+			expect(emittedPaste).toEqual(["ab"]);
+			expect(emittedSequences).toEqual([]);
+		});
+
+		it("preserves trailing input after a boundary-split end marker", () => {
+			processInput("\x1b[200~paste\x1b");
+			processInput("[201~x");
+			expect(emittedPaste).toEqual(["paste"]);
+			expect(emittedSequences).toEqual(["x"]);
+		});
+
+		it("does not end the paste on a partial end-marker prefix in the body", () => {
+			// Body contains the first five bytes of the end marker but no `~`.
+			processInput("\x1b[200~before\x1b[201");
+			expect(emittedPaste).toEqual([]);
+
+			processInput("after\x1b[201~");
+			expect(emittedPaste).toEqual(["before\x1b[201after"]);
+			expect(emittedSequences).toEqual([]);
+		});
+
+		it("reconstructs a large paste delivered in many small chunks", () => {
+			const content = "0123456789abcdef".repeat(8192); // 128 KB
+			processInput("\x1b[200~");
+			for (let i = 0; i < content.length; i += 64) {
+				processInput(content.slice(i, i + 64));
+			}
+			processInput("\x1b[201~");
+
+			expect(emittedPaste).toEqual([content]);
+			expect(emittedSequences).toEqual([]);
+		});
+	});
+
+	describe("Paste Recovery", () => {
+		it("recovers from a lost end marker via the inactivity watchdog", async () => {
+			buffer = new StdinBuffer({ timeout: 10, pasteTimeout: 20 });
+			const pastes: string[] = [];
+			const data: string[] = [];
+			buffer.on("paste", d => pastes.push(d));
+			buffer.on("data", s => data.push(s));
+
+			buffer.process("\x1b[200~lost marker content");
+			expect(pastes).toEqual([]);
+
+			await waitUntil(() => pastes.length > 0);
+			expect(pastes).toEqual(["lost marker content"]);
+
+			// Input is alive again after recovery.
+			buffer.process("a");
+			expect(data).toEqual(["a"]);
+		});
+
+		it("re-arms the watchdog while paste chunks keep arriving", async () => {
+			buffer = new StdinBuffer({ timeout: 10, pasteTimeout: 50 });
+			const pastes: string[] = [];
+			buffer.on("paste", d => pastes.push(d));
+
+			buffer.process("\x1b[200~part1 ");
+			await Bun.sleep(20);
+			buffer.process("part2");
+			await Bun.sleep(20);
+			expect(pastes).toEqual([]); // still inside the re-armed window
+
+			buffer.process("\x1b[201~");
+			expect(pastes).toEqual(["part1 part2"]);
+		});
+
+		it("aborts paste mode when the byte cap is exceeded", () => {
+			buffer = new StdinBuffer({ timeout: 10, pasteByteLimit: 8 });
+			const pastes: string[] = [];
+			const data: string[] = [];
+			buffer.on("paste", d => pastes.push(d));
+			buffer.on("data", s => data.push(s));
+
+			buffer.process("\x1b[200~0123456789abcdef");
+			expect(pastes).toEqual(["0123456789abcdef"]);
+
+			buffer.process("x");
+			expect(data).toEqual(["x"]);
 		});
 	});
 

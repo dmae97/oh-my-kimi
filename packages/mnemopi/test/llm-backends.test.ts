@@ -5,7 +5,7 @@ import {
 	getHostLlmBackend,
 	resetHostLlmBackendForTests,
 	setHostLlmBackend,
-} from "../src/core/llm-backends";
+} from "@oh-my-pi/pi-mnemopi/core/llm-backends";
 
 afterEach(() => resetHostLlmBackendForTests());
 

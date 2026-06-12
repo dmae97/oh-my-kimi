@@ -2,9 +2,10 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { hookFetch, Snowflake } from "@oh-my-pi/pi-utils";
+import { Snowflake } from "@oh-my-pi/pi-utils";
 
 /**
  * Issue #1528: auto-discovered OpenAI-compatible models defaulted to
@@ -49,7 +50,7 @@ describe("issue #1528 discovery maxTokens default", () => {
 			].join("\n"),
 		);
 
-		using _hook = hookFetch(input => {
+		const fetchMock: FetchImpl = async input => {
 			const url = String(input);
 			if (url !== "https://api.example.com/v1/models") {
 				throw new Error(`Unexpected URL: ${url}`);
@@ -58,9 +59,9 @@ describe("issue #1528 discovery maxTokens default", () => {
 				status: 200,
 				headers: { "Content-Type": "application/json" },
 			});
-		});
+		};
 
-		const registry = new ModelRegistry(authStorage, modelsPath);
+		const registry = new ModelRegistry(authStorage, modelsPath, { fetch: fetchMock });
 		await registry.refreshProvider("deepseek-compat");
 
 		const model = registry.find("deepseek-compat", "deepseek-v4-pro");
@@ -82,7 +83,7 @@ describe("issue #1528 discovery maxTokens default", () => {
 			].join("\n"),
 		);
 
-		using _hook = hookFetch(input => {
+		const fetchMock: FetchImpl = async input => {
 			const url = String(input);
 			if (url !== "https://proxy.example.com/v1/models") {
 				throw new Error(`Unexpected URL: ${url}`);
@@ -93,9 +94,9 @@ describe("issue #1528 discovery maxTokens default", () => {
 				}),
 				{ status: 200, headers: { "Content-Type": "application/json" } },
 			);
-		});
+		};
 
-		const registry = new ModelRegistry(authStorage, modelsPath);
+		const registry = new ModelRegistry(authStorage, modelsPath, { fetch: fetchMock });
 		await registry.refreshProvider("newapi-proxy");
 
 		const model = registry.find("newapi-proxy", "newapi-private-openai-model");
@@ -122,7 +123,7 @@ describe("issue #1528 discovery maxTokens default", () => {
 			].join("\n"),
 		);
 
-		using _hook = hookFetch(input => {
+		const fetchMock: FetchImpl = async input => {
 			const url = String(input);
 			if (url !== "https://proxy.example.com/v1/models") {
 				throw new Error(`Unexpected URL: ${url}`);
@@ -136,9 +137,9 @@ describe("issue #1528 discovery maxTokens default", () => {
 				}),
 				{ status: 200, headers: { "Content-Type": "application/json" } },
 			);
-		});
+		};
 
-		const registry = new ModelRegistry(authStorage, modelsPath);
+		const registry = new ModelRegistry(authStorage, modelsPath, { fetch: fetchMock });
 		await registry.refreshProvider("newapi-proxy");
 
 		const sonnet = registry.find("newapi-proxy", "claude-3-5-sonnet");
@@ -172,7 +173,7 @@ describe("issue #1528 discovery maxTokens default", () => {
 			].join("\n"),
 		);
 
-		using _hook = hookFetch(input => {
+		const fetchMock: FetchImpl = async input => {
 			const url = String(input);
 			if (url !== "https://anthropic-reseller.example.com/v1/models") {
 				throw new Error(`Unexpected URL: ${url}`);
@@ -181,9 +182,9 @@ describe("issue #1528 discovery maxTokens default", () => {
 				status: 200,
 				headers: { "Content-Type": "application/json" },
 			});
-		});
+		};
 
-		const registry = new ModelRegistry(authStorage, modelsPath);
+		const registry = new ModelRegistry(authStorage, modelsPath, { fetch: fetchMock });
 		await registry.refreshProvider("third-party-anthropic");
 
 		const sonnet = registry.find("third-party-anthropic", "claude-3-5-sonnet");

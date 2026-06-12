@@ -18,7 +18,7 @@ const ReasoningEffortMapSchema = z.object({
 	xhigh: z.string().optional(),
 });
 
-export const OpenAICompatSchema = z.object({
+const OpenAICompatFieldsSchema = z.object({
 	supportsStore: z.boolean().optional(),
 	supportsDeveloperRole: z.boolean().optional(),
 	supportsMultipleSystemMessages: z.boolean().optional(),
@@ -44,6 +44,18 @@ export const OpenAICompatSchema = z.object({
 	cacheControlFormat: z.enum(["anthropic"]).optional(),
 	supportsStrictMode: z.boolean().optional(),
 	toolStrictMode: z.enum(["all_strict", "none"]).optional(),
+	streamIdleTimeoutMs: z.number().positive().optional(),
+	supportsLongPromptCacheRetention: z.boolean().optional(),
+	supportsReasoningParams: z.boolean().optional(),
+	alwaysSendMaxTokens: z.boolean().optional(),
+	strictResponsesPairing: z.boolean().optional(),
+	// anthropic-messages compat flags (same `compat` slot, per-api interpretation)
+	requiresToolResultId: z.boolean().optional(),
+	replayUnsignedThinking: z.boolean().optional(),
+});
+
+export const OpenAICompatSchema = OpenAICompatFieldsSchema.extend({
+	whenThinking: OpenAICompatFieldsSchema.optional(),
 });
 
 const EffortSchema = z.enum(["minimal", "low", "medium", "high", "xhigh"]);
@@ -56,13 +68,50 @@ const ThinkingControlModeSchema = z.enum([
 	"anthropic-budget-effort",
 ]);
 
-const ModelThinkingSchema = z.object({
-	minLevel: EffortSchema,
-	maxLevel: EffortSchema,
-	mode: ThinkingControlModeSchema,
-	defaultLevel: EffortSchema.optional(),
-	levels: z.array(EffortSchema).optional(),
-});
+const EFFORT_ORDER = ["minimal", "low", "medium", "high", "xhigh"] as const;
+
+/**
+ * Accepts the canonical `efforts` vocabulary plus the legacy
+ * `minLevel`/`maxLevel`/`levels` range shape, normalizing both to
+ * `ThinkingConfig` (ordered `efforts`, never empty). Precedence mirrors the
+ * old runtime: explicit `levels` beat the min..max range; `efforts` beats both.
+ */
+const ModelThinkingSchema = z
+	.object({
+		mode: ThinkingControlModeSchema,
+		efforts: z.array(EffortSchema).min(1).optional(),
+		defaultLevel: EffortSchema.optional(),
+		effortMap: ReasoningEffortMapSchema.optional(),
+		supportsDisplay: z.boolean().optional(),
+		// Legacy range vocabulary (pre-efforts configs).
+		minLevel: EffortSchema.optional(),
+		maxLevel: EffortSchema.optional(),
+		levels: z.array(EffortSchema).min(1).optional(),
+	})
+	.refine(
+		value =>
+			value.efforts !== undefined ||
+			value.levels !== undefined ||
+			(value.minLevel !== undefined && value.maxLevel !== undefined),
+		{
+			message: "thinking requires `efforts` (or legacy `levels`/`minLevel`+`maxLevel`)",
+		},
+	)
+	.transform(({ efforts, levels, minLevel, maxLevel, mode, defaultLevel, effortMap, supportsDisplay }) => {
+		let resolved = efforts ?? levels;
+		if (!resolved) {
+			const minIndex = EFFORT_ORDER.indexOf(minLevel!);
+			const maxIndex = EFFORT_ORDER.indexOf(maxLevel!);
+			resolved = EFFORT_ORDER.slice(minIndex, Math.max(minIndex, maxIndex) + 1);
+		}
+		return {
+			mode,
+			efforts: resolved,
+			...(defaultLevel !== undefined && { defaultLevel }),
+			...(effortMap !== undefined && { effortMap }),
+			...(supportsDisplay !== undefined && { supportsDisplay }),
+		};
+	});
 
 const ModelDefinitionSchema = z.object({
 	id: z.string().min(1),

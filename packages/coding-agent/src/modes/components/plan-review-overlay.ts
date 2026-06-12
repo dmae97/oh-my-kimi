@@ -23,6 +23,7 @@ import {
 	Markdown,
 	type MarkdownTheme,
 	matchesKey,
+	parseSgrMouse,
 	ScrollView,
 	truncateToWidth,
 	visibleWidth,
@@ -83,6 +84,8 @@ export interface PlanReviewOverlayCallbacks {
 	onCancel: () => void;
 	/** Invoked when the external-editor key is pressed (overlay stays open). */
 	onExternalEditor?: () => void;
+	/** Invoked when the external-editor key edits the active annotation draft. */
+	onAnnotationExternalEditor?: (draft: string, commit: (text: string | null) => void) => void;
 	/** Invoked with the new full plan text after an in-overlay delete/undo. */
 	onPlanEdited?: (content: string) => void;
 	/** Invoked with the Refine feedback markdown whenever annotations change. */
@@ -139,8 +142,11 @@ export class PlanReviewOverlay implements Component {
 	#optionClickRows = new Map<number, number>();
 	#tocClickRows = new Map<number, number>();
 	#bodyClickRows = new Set<number>();
-	/** 1-based column at/under which a region-row click targets the sidebar. */
+	/** Exclusive 0-based column bound below which a region-row click targets the sidebar. */
 	#sidebarClickMaxCol = 0;
+	/** Option index the pointer is currently hovering, or undefined. Updated from
+	 *  motion mouse reports and cleared when the pointer leaves the option rows. */
+	#hoveredOption: number | undefined;
 
 	#annotating = false;
 	#input: Input;
@@ -279,6 +285,12 @@ export class PlanReviewOverlay implements Component {
 	handleInput(keyData: string): void {
 		if (keyData.startsWith("\x1b[<") && this.#handleMouse(keyData)) return;
 		if (this.#annotating) {
+			if (this.callbacks.onAnnotationExternalEditor && matchesAppExternalEditor(keyData)) {
+				this.callbacks.onAnnotationExternalEditor(this.#input.getValue(), text => {
+					if (text !== null) this.#submitAnnotation(text);
+				});
+				return;
+			}
 			this.#input.handleInput(keyData);
 			return;
 		}
@@ -315,25 +327,29 @@ export class PlanReviewOverlay implements Component {
 	 * Hit-test an SGR mouse report (`\x1b[<b;x;yM/m`) against the click maps the
 	 * last render recorded. Returns true when consumed. The fullscreen overlay
 	 * paints from screen row 0, so a 1-based mouse row maps directly to the
-	 * rendered-line index. Wheel scrolls the body; a left click on an option
-	 * activates it (select + confirm), on a ToC row jumps to that section, and on
-	 * the body column focuses the body.
+	 * rendered-line index. Wheel scrolls the body; pointer motion lights up the
+	 * hovered option row; a left click on an option activates it (select +
+	 * confirm), on a ToC row jumps to that section, and on the body column focuses
+	 * the body.
 	 */
 	#handleMouse(data: string): boolean {
-		const match = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/.exec(data);
-		if (!match) return false;
-		const button = Number(match[1]);
-		const x = Number(match[2]);
-		const row = Number(match[3]) - 1;
-		if (button & 64) {
-			// Scroll wheel: low bit selects direction (64 up, 65 down).
-			this.#scrollView.scroll(button & 1 ? 3 : -3);
+		const event = parseSgrMouse(data);
+		if (!event) return false;
+		if (event.wheel !== null) {
+			// Scroll wheel: three rows per notch.
+			this.#scrollView.scroll(event.wheel * 3);
 			return true;
 		}
-		if (match[4] !== "M") return true; // release
-		if (button & 32) return true; // motion/drag
-		if ((button & 3) !== 0) return true; // not the left button
-		const optionIndex = this.#optionClickRows.get(row);
+		if (event.release) return true;
+		if (event.motion) {
+			// Motion (hover or drag): light up the option row under the pointer so a
+			// mouse user gets the same affordance the keyboard cursor gives. Any
+			// non-option row clears the highlight.
+			this.#setHoveredOption(this.#optionClickRows.get(event.row));
+			return true;
+		}
+		if (!event.leftClick) return true;
+		const optionIndex = this.#optionClickRows.get(event.row);
 		if (optionIndex !== undefined) {
 			if (!this.#disabled.has(optionIndex)) {
 				this.#focus = "actions";
@@ -342,17 +358,23 @@ export class PlanReviewOverlay implements Component {
 			}
 			return true;
 		}
-		const tocPos = this.#tocClickRows.get(row);
-		if (tocPos !== undefined && x <= this.#sidebarClickMaxCol) {
+		const tocPos = this.#tocClickRows.get(event.row);
+		if (tocPos !== undefined && event.col < this.#sidebarClickMaxCol) {
 			this.#focus = "toc";
 			this.#tocCursor = tocPos;
 			this.#scrubBodyToToc();
 			return true;
 		}
-		if (this.#bodyClickRows.has(row)) {
+		if (this.#bodyClickRows.has(event.row)) {
 			this.#setFocus("body");
 		}
 		return true;
+	}
+
+	/** Set the hovered option from a hit-tested row, ignoring disabled rows and
+	 *  non-option rows (both clear the highlight). */
+	#setHoveredOption(index: number | undefined): void {
+		this.#hoveredOption = index !== undefined && !this.#disabled.has(index) ? index : undefined;
 	}
 
 	#cycleRegion(direction: number): void {
@@ -587,9 +609,21 @@ export class PlanReviewOverlay implements Component {
 		}
 		for (const section of annotated) {
 			feedback += `\n## ${section.title}\n`;
-			for (const note of section.annotations) feedback += `- ${note}\n`;
+			for (const note of section.annotations) feedback += this.#formatAnnotationFeedback(note);
 		}
 		this.callbacks.onFeedbackChange?.(feedback);
+	}
+
+	#formatAnnotationFeedback(note: string): string {
+		if (!note.includes("\n")) return `- ${note}\n`;
+		const fence = this.#markdownFenceFor(note);
+		return `${fence}md\n${note}\n${fence}\n`;
+	}
+
+	#markdownFenceFor(text: string): string {
+		let fence = "```";
+		while (text.includes(fence)) fence += "`";
+		return fence;
 	}
 
 	#renderSliderLines(): string[] {
@@ -611,14 +645,19 @@ export class PlanReviewOverlay implements Component {
 		return this.#options.map((label, i) => {
 			const selected = i === this.#selectedIndex;
 			const isDisabled = this.#disabled.has(i);
+			const hovered = !isDisabled && i === this.#hoveredOption;
 			// The cursor marks the selected option; it dims when actions are not the
 			// focused region so the active region's highlight stays unambiguous.
 			const cursor = selected ? theme.fg(active ? "accent" : "dim", `${theme.nav.cursor} `) : "  ";
-			const text = isDisabled
+			let text = isDisabled
 				? theme.fg("dim", label)
 				: selected && active
 					? theme.bold(theme.fg("accent", label))
 					: theme.fg("text", label);
+			// A pointer hovering an option paints a highlight band behind its label,
+			// distinct from the keyboard selection (cursor glyph + bold accent) which
+			// stays where it is. One space of padding gives the band a button shape.
+			if (hovered) text = theme.bg("selectedBg", ` ${text} `);
 			return cursor + text;
 		});
 	}
@@ -655,7 +694,14 @@ export class PlanReviewOverlay implements Component {
 			if (section.level >= 1 && section.annotations.length > 0 && rendered.length > 0) {
 				lines.push(rendered[0]!);
 				for (const note of section.annotations) {
-					lines.push(`${theme.fg("warning", "▎ ")}${theme.fg("dim", "note: ")}${theme.fg("accent", note)}`);
+					const noteLines = note.split(/\r?\n/);
+					for (let j = 0; j < noteLines.length; j++) {
+						const prefix =
+							j === 0
+								? `${theme.fg("warning", "▎ ")}${theme.fg("dim", "note: ")}`
+								: `${theme.fg("warning", "▎ ")}${theme.fg("dim", "      ")}`;
+						lines.push(`${prefix}${theme.fg("accent", noteLines[j] ?? "")}`);
+					}
 				}
 				for (let k = 1; k < rendered.length; k++) lines.push(rendered[k]!);
 			} else {
@@ -728,12 +774,14 @@ export class PlanReviewOverlay implements Component {
 			const section = this.#sections[this.#toc[this.#tocCursor]!];
 			const title = section?.title ?? "";
 			const caption = `${theme.fg("dim", "Annotate")} ${theme.fg("accent", `‹${title}›`)}`;
-			return [caption, this.#input.render(innerWidth)[0] ?? ""];
+			const hintParts = ["enter save", "esc cancel"];
+			if (this.#externalEditorLabel) hintParts.push(`${this.#externalEditorLabel} editor`);
+			return [caption, this.#input.render(innerWidth)[0] ?? "", theme.fg("dim", hintParts.join(" · "))];
 		}
 		return [theme.fg("dim", this.#buildHelp())];
 	}
 
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		const termHeight = process.stdout.rows || 40;
 		const sidebarShown = this.#sidebarVisible(width);
 		this.#sidebarShown = sidebarShown;

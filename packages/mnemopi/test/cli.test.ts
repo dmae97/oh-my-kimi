@@ -2,8 +2,8 @@ import { describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { cmdRecall, cmdRemember, cmdStats, runCli } from "../src/cli";
-import { BeamMemory } from "../src/core/beam";
+import { cmdRecall, cmdRemember, cmdStats, runCli } from "@oh-my-pi/pi-mnemopi/cli";
+import { BeamMemory } from "@oh-my-pi/pi-mnemopi/core/beam";
 
 function tempRoot(): string {
 	return mkdtempSync(join(tmpdir(), "mnemopi-ts-cli-"));

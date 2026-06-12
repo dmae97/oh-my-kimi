@@ -1,12 +1,17 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it, setDefaultTimeout, vi } from "bun:test";
 import * as path from "node:path";
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { disposeAllVmContexts } from "@oh-my-pi/pi-coding-agent/eval/js/context-manager";
+import { executeJs, type JsResult } from "@oh-my-pi/pi-coding-agent/eval/js/executor";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
-import { disposeAllVmContexts } from "../../src/eval/js/context-manager";
-import { executeJs, type JsResult } from "../../src/eval/js/executor";
+
+// JS eval cold-starts a Bun worker; under --isolate + high CI concurrency that startup
+// can exceed Bun's 5s default per-test timeout, flaking the suite. Give the worker-backed
+// tests headroom above the worker-init floor (context-manager WORKER_INIT_TIMEOUT_MS).
+setDefaultTimeout(20_000);
 
 function createTool(
 	name: string,
@@ -85,6 +90,29 @@ describe("executeJs", () => {
 		});
 		expect(resetResult.exitCode).toBe(0);
 		expect(resetResult.output.trim()).toBe("undefined");
+	});
+
+	it("parallel() barriers until every thunk settles and throws the lowest-index error", async () => {
+		const result = await executeJs(
+			[
+				"const settled = [];",
+				"try {",
+				"	await parallel([",
+				"		async () => { await new Promise(r => setTimeout(r, 30)); settled.push('slow'); },",
+				"		async () => { settled.push('bad1'); throw new Error('bad1'); },",
+				"		async () => { settled.push('bad2'); throw new Error('bad2'); },",
+				"	]);",
+				"	return 'no-throw';",
+				"} catch (err) {",
+				"	return JSON.stringify([err.message, settled.sort()]);",
+				"}",
+			].join("\n"),
+			{ sessionId, session, sessionFile },
+		);
+		expect(result.exitCode).toBe(0);
+		// Every thunk ran to completion (the slow one was not orphaned by the
+		// early rejections), and the lowest-index error propagated.
+		expect(JSON.parse(result.output.trim())).toEqual(["bad1", ["bad1", "bad2", "slow"]]);
 	});
 
 	it("persists bindings from cells that contain nested returns", async () => {

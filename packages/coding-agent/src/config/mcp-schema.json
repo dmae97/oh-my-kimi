@@ -62,6 +62,10 @@
         "clientSecret": {
           "type": "string",
           "description": "OAuth client secret persisted for refresh."
+        },
+        "resource": {
+          "type": "string",
+          "description": "MCP resource URI persisted for OAuth resource indicators."
         }
       }
     },

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "bun:test";
-import { InputController } from "../src/modes/controllers/input-controller";
-import type { InteractiveModeContext } from "../src/modes/types";
+import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
+import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
+import manualContinuePrompt from "../src/prompts/system/manual-continue.md" with { type: "text" };
 
 type FakeEditor = {
 	onEscape?: () => void;
@@ -236,8 +237,8 @@ describe("InputController keybinding setup", () => {
 		await controller.handleFollowUp();
 
 		expect(ctx.locallySubmittedUserSignatures.has("plain idle submit\u00000")).toBe(true);
-		// Idle submit calls prompt() with no streamingBehavior.
-		expect(spies.prompt).toHaveBeenCalledWith("plain idle submit");
+		// Idle submit calls prompt() with no streamingBehavior (images forwarded, undefined here).
+		expect(spies.prompt).toHaveBeenCalledWith("plain idle submit", { images: undefined });
 	});
 
 	it("removes the signature when an idle follow-up submission rejects", async () => {
@@ -269,5 +270,24 @@ describe("InputController keybinding setup", () => {
 		await expect(controller.handleFollowUp()).rejects.toThrow("queue full");
 
 		expect(ctx.locallySubmittedUserSignatures.has("queued during stream\u00000")).toBe(false);
+	});
+
+	it("continue shortcuts submit a hidden synthetic developer directive", async () => {
+		for (const shortcut of [".", "c"]) {
+			const { InputController, ctx, editor } = await createContext();
+			const onInput = vi.fn();
+			ctx.onInputCallback = onInput;
+			const controller = new InputController(ctx);
+
+			controller.setupEditorSubmitHandler();
+			await editor.onSubmit?.(shortcut);
+
+			expect(onInput, `shortcut ${shortcut}`).toHaveBeenCalledWith({
+				text: manualContinuePrompt,
+				cancelled: false,
+				started: true,
+				synthetic: true,
+			});
+		}
 	});
 });

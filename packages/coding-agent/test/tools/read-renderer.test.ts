@@ -1,12 +1,18 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tool-execution";
+import { theme as activeTheme, getThemeByName, initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { readToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/read";
 import type { TUI } from "@oh-my-pi/pi-tui";
-import { theme as activeTheme, getThemeByName, initTheme } from "../../src/modes/theme/theme";
-import { readToolRenderer } from "../../src/tools/read";
 
 function extractLinkUris(text: string): string[] {
 	return [...text.matchAll(/\x1b\]8;[^;]*;([^\x1b]+)\x1b\\/g)].map(match => match[1]!);
+}
+
+function extractLinkTexts(text: string): string[] {
+	return [...text.matchAll(/\x1b\]8;[^;]*;[^\x1b]+\x1b\\([\s\S]*?)\x1b\]8;;\x1b\\/g)].map(match =>
+		Bun.stripANSI(match[1]!),
+	);
 }
 
 beforeAll(async () => {
@@ -47,6 +53,26 @@ describe("readToolRenderer hyperlinks", () => {
 		expect(rendered).toContain("local://handoff.md");
 		expect(rendered).toContain(":2");
 		expect(extractLinkUris(rendered)).toContain("file:///tmp/omp-local/handoff.md?line=2");
+		expect(extractLinkTexts(rendered)).toContain("local://handoff.md");
+		expect(extractLinkTexts(rendered)).not.toContain("local://handoff.md:2");
+	});
+
+	it("links absolute read call paths to file URIs with selector lines", async () => {
+		settings.override("tui.hyperlinks", "always");
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+
+		const component = readToolRenderer.renderCall(
+			{ path: "/tmp/omp-read/example.ts:10-12" },
+			{ expanded: false, isPartial: false },
+			theme!,
+		);
+
+		const rendered = component.render(200).join("\n");
+		expect(Bun.stripANSI(rendered)).toContain("/tmp/omp-read/example.ts:10-12");
+		expect(extractLinkUris(rendered)).toContain("file:///tmp/omp-read/example.ts?line=10");
+		expect(extractLinkTexts(rendered)).toContain("/tmp/omp-read/example.ts");
+		expect(extractLinkTexts(rendered)).not.toContain("/tmp/omp-read/example.ts:10-12");
 	});
 
 	it("links HTTP read result headers to the final URL", async () => {

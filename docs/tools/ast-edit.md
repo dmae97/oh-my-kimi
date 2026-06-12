@@ -33,7 +33,7 @@ Shared AST pattern grammar and language catalog: see [`ast_grep`](./ast-grep.md#
 ## Outputs
 - Single-shot preview result from `ast_edit` itself.
 - Model-facing `content` is one text block showing proposed edits, grouped by file for directory/multi-file runs.
-  - Each change renders as two lines. Hashline mode uses `-LINE:before` / `+LINE:after` under a `¶PATH#TAG` header; plain mode uses `-LINE:COLUMN before` / `+LINE:COLUMN after`.
+  - Each change renders as two lines. Hashline mode uses `-LINE:before` / `+LINE:after` under a `[PATH#TAG]` header; plain mode uses `-LINE:COLUMN before` / `+LINE:COLUMN after`.
   - Only the first line of each `before`/`after` snippet is shown, truncated to 120 characters in the wrapper.
   - `Limit reached; narrow paths.` and formatted parse issues are appended when applicable.
 - If no rewrites match, text is `No replacements made` plus formatted parse issues when present.
@@ -63,7 +63,7 @@ Shared AST pattern grammar and language catalog: see [`ast_grep`](./ast-grep.md#
 7. The TS wrapper deduplicates parse errors, groups changes by file, and renders preview diff lines.
 8. If preview found replacements and `applied` is false, `queueResolveHandler(...)` registers a forced `resolve` action and injects a `resolve-reminder` steering message.
 9. On `resolve(action: "apply")`, the queued callback reruns the same rewrite set with `dryRun: false`, recomputes counts, and returns an error result if the live result no longer matches the preview (`stalePreview`). The current implementation compares replacement totals and per-file counts after the rerun; if the new run has already written different counts, the result is marked error.
-10. On a non-stale apply, the callback returns `Applied N replacements in M files.`; on discard, `resolve` returns a discard message without mutating files.
+10. On a non-stale apply, the callback returns `Applied N replacements in M files.` (in hashline mode followed by fresh `[path#tag]` snapshot headers re-recorded from the post-apply content); on discard, `resolve` returns a discard message without mutating files.
 
 ## Modes / Variants
 - Single file: preview or apply against one file.

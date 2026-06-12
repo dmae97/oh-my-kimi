@@ -234,6 +234,39 @@ describe("TodoTool ops operations", () => {
 		const tasks = result.details?.phases[0]?.tasks ?? [];
 		expect(tasks.map(task => task.status)).toEqual(["abandoned", "abandoned"]);
 	});
+
+	it("view echoes state without mutating it", async () => {
+		const session = createSession([
+			{
+				name: "Work",
+				tasks: [
+					{ content: "First", status: "pending" },
+					{ content: "Second", status: "pending" },
+				],
+			},
+		]);
+		const tool = new TodoTool(session);
+
+		const result = await tool.execute("call-1", { ops: [{ op: "view" }] });
+
+		const tasks = result.details?.phases[0]?.tasks ?? [];
+		expect(tasks.map(task => task.status)).toEqual(["pending", "pending"]);
+		// A read never normalizes or writes session state back.
+		expect(session.getTodoPhases?.()?.[0]?.tasks.map(task => task.status)).toEqual(["pending", "pending"]);
+		const summary = result.content.find(part => part.type === "text");
+		if (summary?.type !== "text") throw new Error("Expected text summary");
+		expect(summary.text).toContain("First");
+		expect(summary.text).toContain("Second");
+	});
+
+	it("view on an empty list reports empty, not cleared", async () => {
+		const tool = new TodoTool(createSession());
+		const result = await tool.execute("call-1", { ops: [{ op: "view" }] });
+		const summary = result.content.find(part => part.type === "text");
+		if (summary?.type !== "text") throw new Error("Expected text summary");
+		expect(summary.text).toContain("Todo list is empty.");
+		expect(result.isError).toBeUndefined();
+	});
 });
 
 describe("selectStickyTodoWindow", () => {

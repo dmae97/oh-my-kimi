@@ -1,11 +1,12 @@
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import { getOAuthProviders } from "@oh-my-pi/pi-ai/utils/oauth";
-import type { OAuthProvider } from "@oh-my-pi/pi-ai/utils/oauth/types";
+import { PASTE_CODE_LOGIN_PROVIDERS } from "@oh-my-pi/pi-ai";
+import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
+import type { OAuthProvider } from "@oh-my-pi/pi-ai/oauth/types";
 import type { Component, OverlayHandle } from "@oh-my-pi/pi-tui";
 import { Input, Loader, Spacer, Text } from "@oh-my-pi/pi-tui";
 import { getAgentDbPath, getProjectDir, normalizePathForComparison } from "@oh-my-pi/pi-utils";
-import { getRoleInfo } from "../../config/model-registry";
 import { formatModelSelectorValue } from "../../config/model-resolver";
+import { getRoleInfo } from "../../config/model-roles";
 import { settings } from "../../config/settings";
 import { disableProvider, enableProvider } from "../../discovery";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
@@ -26,8 +27,14 @@ import {
 	theme,
 } from "../../modes/theme/theme";
 import type { InteractiveModeContext } from "../../modes/types";
+import type { ResetCreditRedeemOutcome } from "../../session/auth-storage";
 import { type SessionInfo, SessionManager } from "../../session/session-manager";
 import { FileSessionStorage } from "../../session/session-storage";
+import {
+	describeRedeemOutcome,
+	type ResetUsageAccount,
+	toResetUsageAccounts,
+} from "../../slash-commands/helpers/reset-usage";
 import { AUTO_THINKING, type ConfiguredThinkingLevel } from "../../thinking";
 import {
 	isImageProviderPreference,
@@ -39,6 +46,7 @@ import { shortenPath } from "../../tools/render-utils";
 import { copyToClipboard } from "../../utils/clipboard";
 import { setSessionTerminalTitle } from "../../utils/title-generator";
 import { AgentDashboard } from "../components/agent-dashboard";
+import { AgentHubOverlayComponent } from "../components/agent-hub";
 import { AssistantMessageComponent } from "../components/assistant-message";
 import { CopySelectorComponent } from "../components/copy-selector";
 import { ExtensionDashboard } from "../components/extensions";
@@ -46,7 +54,7 @@ import { HistorySearchComponent } from "../components/history-search";
 import { ModelSelectorComponent } from "../components/model-selector";
 import { OAuthSelectorComponent } from "../components/oauth-selector";
 import { PluginSelectorComponent } from "../components/plugin-selector";
-import { SessionObserverOverlayComponent } from "../components/session-observer-overlay";
+import { ResetUsageSelectorComponent } from "../components/reset-usage-selector";
 import { SessionSelectorComponent } from "../components/session-selector";
 import { SettingsSelectorComponent } from "../components/settings-selector";
 import { ToolExecutionComponent } from "../components/tool-execution";
@@ -56,14 +64,6 @@ import { UserMessageSelectorComponent } from "../components/user-message-selecto
 import type { SessionObserverRegistry } from "../session-observer-registry";
 import { computeContextBreakdown } from "../utils/context-usage";
 import { buildCopyTargets } from "../utils/copy-targets";
-
-const CALLBACK_SERVER_PROVIDERS = new Set<OAuthProvider>([
-	"anthropic",
-	"openai-codex",
-	"gitlab-duo",
-	"google-gemini-cli",
-	"google-antigravity",
-]);
 
 const MANUAL_LOGIN_TIP = "Tip: You can complete pairing with /login <redirect URL>.";
 
@@ -99,69 +99,89 @@ export class SelectorController {
 
 	showSettingsSelector(): void {
 		getAvailableThemes().then(availableThemes => {
-			this.showSelector(done => {
-				const selector = new SettingsSelectorComponent(
-					{
-						availableThinkingLevels: [...this.ctx.session.getAvailableThinkingLevels()],
-						thinkingLevel: this.ctx.session.thinkingLevel,
-						availableThemes,
-						cwd: getProjectDir(),
-					},
-					{
-						onChange: (id, value) => this.handleSettingChange(id, value),
-						onThemePreview: async themeName => {
-							const result = await previewTheme(themeName);
-							if (result.success) {
-								this.ctx.statusLine.invalidate();
-								this.ctx.updateEditorTopBorder();
-								this.ctx.ui.invalidate();
-								this.ctx.ui.requestRender();
-							}
-						},
-						onStatusLinePreview: previewSettings => {
-							// Update status line with preview settings
-							this.ctx.statusLine.updateSettings({
-								preset: settings.get("statusLine.preset"),
-								leftSegments: settings.get("statusLine.leftSegments"),
-								rightSegments: settings.get("statusLine.rightSegments"),
-								separator: settings.get("statusLine.separator"),
-								showHookStatus: settings.get("statusLine.showHookStatus"),
-								sessionAccent: settings.get("statusLine.sessionAccent"),
-								...previewSettings,
-							});
+			// Fullscreen settings editor on the alternate screen: the overlay
+			// enables mouse tracking (click/hover/wheel) for its lifetime and
+			// the transcript stays untouched underneath.
+			let overlayHandle: OverlayHandle | undefined;
+			const done = () => {
+				overlayHandle?.hide();
+				this.ctx.ui.setFocus(this.ctx.editor);
+				this.ctx.ui.requestRender();
+			};
+			const selector = new SettingsSelectorComponent(
+				{
+					availableThinkingLevels: [...this.ctx.session.getAvailableThinkingLevels()],
+					thinkingLevel: this.ctx.session.thinkingLevel,
+					availableThemes,
+					cwd: getProjectDir(),
+					model: this.ctx.session.model,
+					imageBudget: this.ctx.ui.imageBudget,
+					requestRender: () => this.ctx.ui.requestRender(),
+				},
+				{
+					onChange: (id, value) => this.handleSettingChange(id, value),
+					onThemePreview: async themeName => {
+						const result = await previewTheme(themeName);
+						if (result.success) {
+							this.ctx.statusLine.invalidate();
 							this.ctx.updateEditorTopBorder();
+							this.ctx.ui.invalidate();
 							this.ctx.ui.requestRender();
-						},
-						getStatusLinePreview: () => {
-							// Return the rendered status line for inline preview
-							const availableWidth = this.ctx.editor.getTopBorderAvailableWidth(this.ctx.ui.terminal.columns);
-							return this.ctx.statusLine.getTopBorder(availableWidth).content;
-						},
-						onPluginsChanged: async () => {
-							const projectPath = await resolveActiveProjectRegistryPath(this.ctx.sessionManager.getCwd());
-							clearPluginRootsAndCaches(projectPath ? [projectPath] : undefined);
-							await this.ctx.refreshSlashCommandState();
-							await this.ctx.session.refreshSshTool({ activateIfAvailable: true });
-							this.ctx.ui.requestRender();
-						},
-						onCancel: () => {
-							done();
-							// Restore status line to saved settings
-							this.ctx.statusLine.updateSettings({
-								preset: settings.get("statusLine.preset"),
-								leftSegments: settings.get("statusLine.leftSegments"),
-								rightSegments: settings.get("statusLine.rightSegments"),
-								separator: settings.get("statusLine.separator"),
-								showHookStatus: settings.get("statusLine.showHookStatus"),
-								sessionAccent: settings.get("statusLine.sessionAccent"),
-							});
-							this.ctx.updateEditorTopBorder();
-							this.ctx.ui.requestRender();
-						},
+						}
 					},
-				);
-				return { component: selector, focus: selector };
+					onStatusLinePreview: previewSettings => {
+						// Update status line with preview settings
+						this.ctx.statusLine.updateSettings({
+							preset: settings.get("statusLine.preset"),
+							leftSegments: settings.get("statusLine.leftSegments"),
+							rightSegments: settings.get("statusLine.rightSegments"),
+							separator: settings.get("statusLine.separator"),
+							showHookStatus: settings.get("statusLine.showHookStatus"),
+							sessionAccent: settings.get("statusLine.sessionAccent"),
+							transparent: settings.get("statusLine.transparent"),
+							...previewSettings,
+						});
+						this.ctx.updateEditorTopBorder();
+						this.ctx.ui.requestRender();
+					},
+					getStatusLinePreview: () => {
+						// Return the rendered status line for inline preview
+						const availableWidth = this.ctx.editor.getTopBorderAvailableWidth(this.ctx.ui.terminal.columns);
+						return this.ctx.statusLine.getTopBorder(availableWidth).content;
+					},
+					onPluginsChanged: async () => {
+						const projectPath = await resolveActiveProjectRegistryPath(this.ctx.sessionManager.getCwd());
+						clearPluginRootsAndCaches(projectPath ? [projectPath] : undefined);
+						await this.ctx.refreshSlashCommandState();
+						await this.ctx.session.refreshSshTool({ activateIfAvailable: true });
+						this.ctx.ui.requestRender();
+					},
+					onCancel: () => {
+						done();
+						// Restore status line to saved settings
+						this.ctx.statusLine.updateSettings({
+							preset: settings.get("statusLine.preset"),
+							leftSegments: settings.get("statusLine.leftSegments"),
+							rightSegments: settings.get("statusLine.rightSegments"),
+							separator: settings.get("statusLine.separator"),
+							showHookStatus: settings.get("statusLine.showHookStatus"),
+							sessionAccent: settings.get("statusLine.sessionAccent"),
+							transparent: settings.get("statusLine.transparent"),
+						});
+						this.ctx.updateEditorTopBorder();
+						this.ctx.ui.requestRender();
+					},
+				},
+			);
+			overlayHandle = this.ctx.ui.showOverlay(selector, {
+				anchor: "bottom-center",
+				width: "100%",
+				maxHeight: "100%",
+				margin: 0,
+				fullscreen: true,
 			});
+			this.ctx.ui.setFocus(selector);
+			this.ctx.ui.requestRender();
 		});
 	}
 
@@ -272,9 +292,10 @@ export class SelectorController {
 				this.ctx.statusLine.invalidate();
 				this.ctx.updateEditorBorderColor();
 				break;
-
-			case "clearOnShrink":
-				this.ctx.ui.setClearOnShrink(value as boolean);
+			case "personality":
+				void this.ctx.session.refreshBaseSystemPrompt().catch(err => {
+					this.ctx.showError(`Failed to apply personality: ${err}`);
+				});
 				break;
 
 			case "autocompleteMaxVisible":
@@ -295,10 +316,9 @@ export class SelectorController {
 				for (const child of this.ctx.chatContainer.children) {
 					if (child instanceof AssistantMessageComponent) {
 						child.setHideThinkingBlock(value as boolean);
+						child.invalidate();
 					}
 				}
-				this.ctx.chatContainer.clear();
-				this.ctx.rebuildChatFromMessages();
 				break;
 			case "theme": {
 				setTheme(value as string, true).then(result => {
@@ -362,6 +382,7 @@ export class SelectorController {
 			case "statusLineShowHooks":
 			case "statusLine.showHookStatus":
 			case "statusLine.sessionAccent":
+			case "statusLine.transparent":
 			case "statusLineSegments":
 			case "statusLineModelThinking":
 			case "statusLinePathAbbreviate":
@@ -380,6 +401,7 @@ export class SelectorController {
 					separator: settings.get("statusLine.separator"),
 					showHookStatus: settings.get("statusLine.showHookStatus"),
 					sessionAccent: settings.get("statusLine.sessionAccent"),
+					transparent: settings.get("statusLine.transparent"),
 					segmentOptions: settings.get("statusLine.segmentOptions"),
 				};
 				this.ctx.statusLine.updateSettings(statusLineSettings);
@@ -589,7 +611,7 @@ export class SelectorController {
 					}
 
 					this.ctx.chatContainer.clear();
-					this.ctx.renderInitialMessages(undefined, { clearTerminalHistory: true });
+					this.ctx.renderInitialMessages({ clearTerminalHistory: true });
 					this.ctx.editor.setText(result.selectedText);
 					done();
 					this.ctx.showStatus("Branched to new session");
@@ -730,9 +752,10 @@ export class SelectorController {
 							return;
 						}
 
-						// Update UI — pass the context built by navigateTree to skip a second O(N) walk.
+						// Update UI — rebuild the display transcript for the new leaf (the
+						// context from navigateTree is the LLM context, not the transcript).
 						this.ctx.chatContainer.clear();
-						this.ctx.renderInitialMessages(result.sessionContext, { clearTerminalHistory: true });
+						this.ctx.renderInitialMessages({ clearTerminalHistory: true });
 						await this.ctx.reloadTodos();
 						if (result.editorText && !this.ctx.editor.getText().trim()) {
 							this.ctx.editor.setText(result.editorText);
@@ -818,19 +841,6 @@ export class SelectorController {
 		});
 	}
 
-	#clearTransientSessionUi(): void {
-		if (this.ctx.loadingAnimation) {
-			this.ctx.loadingAnimation.stop();
-			this.ctx.loadingAnimation = undefined;
-		}
-		this.ctx.statusContainer.clear();
-		this.ctx.pendingMessagesContainer.clear();
-		this.ctx.compactionQueuedMessages = [];
-		this.ctx.streamingComponent = undefined;
-		this.ctx.streamingMessage = undefined;
-		this.ctx.pendingTools.clear();
-	}
-
 	#refreshSessionTerminalTitle(): void {
 		const sessionManager = this.ctx.sessionManager as {
 			getSessionName?: () => string | undefined;
@@ -852,19 +862,19 @@ export class SelectorController {
 		}
 		this.#refreshSessionTerminalTitle();
 
-		this.#clearTransientSessionUi();
+		this.ctx.clearTransientSessionUi();
 		this.ctx.statusLine.invalidate();
 		this.ctx.statusLine.setSessionStartTime(Date.now());
 		this.ctx.updateEditorTopBorder();
 		this.ctx.updateEditorBorderColor();
-		this.ctx.renderInitialMessages(undefined, { clearTerminalHistory: true });
+		this.ctx.renderInitialMessages({ clearTerminalHistory: true });
 		await this.ctx.reloadTodos();
 		this.ctx.ui.requestRender(true, { clearScrollback: true });
 		return true;
 	}
 
 	async handleResumeSession(sessionPath: string): Promise<void> {
-		this.#clearTransientSessionUi();
+		this.ctx.clearTransientSessionUi();
 
 		const previousCwd = this.ctx.sessionManager.getCwd();
 		// Switch session via AgentSession (emits hook and tool session events). The
@@ -882,7 +892,7 @@ export class SelectorController {
 
 		// Clear and re-render the chat
 		this.ctx.chatContainer.clear();
-		this.ctx.renderInitialMessages(undefined, { clearTerminalHistory: true });
+		this.ctx.renderInitialMessages({ clearTerminalHistory: true });
 		await this.ctx.reloadTodos();
 		this.ctx.showStatus(movedProject ? `Resumed session in ${shortenPath(newCwd)}` : "Resumed session");
 	}
@@ -928,7 +938,7 @@ export class SelectorController {
 	async #handleOAuthLogin(providerId: string): Promise<void> {
 		this.ctx.showStatus(`Logging in to ${providerId}…`);
 		const manualInput = this.ctx.oauthManualInput;
-		const useManualInput = CALLBACK_SERVER_PROVIDERS.has(providerId as OAuthProvider);
+		const useManualInput = PASTE_CODE_LOGIN_PROVIDERS.has(providerId);
 		try {
 			await this.ctx.session.modelRegistry.authStorage.login(providerId as OAuthProvider, {
 				onAuth: (info: { url: string; instructions?: string }) => {
@@ -1077,6 +1087,67 @@ export class SelectorController {
 		});
 	}
 
+	async showResetUsageSelector(): Promise<void> {
+		const session = this.ctx.session;
+		this.ctx.showStatus("Checking saved rate-limit resets…", { dim: true });
+		let statuses: Awaited<ReturnType<typeof session.listResetCredits>>;
+		try {
+			statuses = await session.listResetCredits();
+		} catch (error) {
+			this.ctx.showError(`Could not load saved resets: ${error instanceof Error ? error.message : String(error)}`);
+			return;
+		}
+		const accounts = toResetUsageAccounts(statuses);
+		if (accounts.length === 0) {
+			this.ctx.showStatus("No Codex accounts found. Use /login to add one.");
+			return;
+		}
+		if (!accounts.some(account => account.availableCount > 0)) {
+			this.ctx.showStatus(
+				accounts.some(account => account.error)
+					? "No saved resets available — some accounts couldn't be reached (try /login)."
+					: "No saved rate-limit resets available to spend right now.",
+			);
+			return;
+		}
+		this.showSelector(done => {
+			const selector = new ResetUsageSelectorComponent(
+				accounts,
+				account => {
+					done();
+					void this.#redeemReset(account);
+				},
+				() => {
+					done();
+					this.ctx.ui.requestRender();
+				},
+			);
+			return { component: selector, focus: selector };
+		});
+	}
+
+	async #redeemReset(account: ResetUsageAccount): Promise<void> {
+		this.ctx.showStatus(`Spending 1 saved reset for ${account.label}…`, { dim: true });
+		let outcome: ResetCreditRedeemOutcome;
+		try {
+			outcome = await this.ctx.session.redeemResetCredit(account.target);
+		} catch (error) {
+			this.ctx.showError(
+				`Reset failed for ${account.label}: ${error instanceof Error ? error.message : String(error)}`,
+			);
+			return;
+		}
+		const message = describeRedeemOutcome(outcome, account.label);
+		if (outcome.ok) {
+			this.ctx.showStatus(message);
+			// Refresh the status-line usage so the freshly-reset window shows.
+			this.ctx.statusLine.invalidate();
+			this.ctx.ui.requestRender();
+		} else {
+			this.ctx.showWarning(message);
+		}
+	}
+
 	async showDebugSelector(): Promise<void> {
 		const { DebugSelectorComponent } = await import("../../debug");
 		this.showSelector(done => {
@@ -1085,31 +1156,45 @@ export class SelectorController {
 		});
 	}
 
-	showSessionObserver(registry: SessionObserverRegistry): void {
-		const observeKeys = this.ctx.keybindings.getKeys("app.session.observe");
-		let cleanup: (() => void) | undefined;
+	showAgentHub(observers: SessionObserverRegistry): void {
+		const hubKeys = [
+			...this.ctx.keybindings.getKeys("app.agents.hub"),
+			...this.ctx.keybindings.getKeys("app.session.observe"),
+		];
+		let hub: AgentHubOverlayComponent | undefined;
 		let overlayHandle: OverlayHandle | undefined;
 
 		const done = () => {
-			cleanup?.();
+			hub?.dispose();
 			overlayHandle?.hide();
+			this.ctx.ui.setFocus(this.ctx.editor);
 			this.ctx.ui.requestRender();
 		};
 
-		const selector = new SessionObserverOverlayComponent(registry, done, observeKeys);
-
-		cleanup = registry.onChange(() => {
-			selector.refreshFromRegistry();
-			this.ctx.ui.requestRender();
+		hub = new AgentHubOverlayComponent({
+			observers,
+			hubKeys,
+			expandKeys: this.ctx.keybindings.getKeys("app.tools.expand"),
+			onDone: done,
+			requestRender: () => this.ctx.ui.requestRender(),
+			registry: this.ctx.collabGuest?.agentRegistry,
+			remote: this.ctx.collabGuest?.hubRemote,
+			ui: this.ctx.ui,
+			getTool: name => this.ctx.session.getToolByName(name),
+			getMessageRenderer: type => this.ctx.session.extensionRunner?.getMessageRenderer(type),
+			cwd: this.ctx.sessionManager.getCwd(),
+			hideThinkingBlock: () => this.ctx.hideThinkingBlock,
+			focusAgent: id => this.ctx.focusAgentSession(id),
+			sessionFile: this.ctx.sessionManager.getSessionFile() ?? null,
 		});
 
-		overlayHandle = this.ctx.ui.showOverlay(selector, {
+		overlayHandle = this.ctx.ui.showOverlay(hub, {
 			anchor: "bottom-center",
 			width: "100%",
 			maxHeight: "100%",
 			margin: 0,
 		});
-		this.ctx.ui.setFocus(selector);
+		this.ctx.ui.setFocus(hub);
 		this.ctx.ui.requestRender();
 	}
 }

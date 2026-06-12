@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { completeSimple, Model } from "@oh-my-pi/pi-ai";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { getThemeByName } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
@@ -14,7 +15,7 @@ import { sanitizeText } from "@oh-my-pi/pi-utils";
 const TINY_PNG_BASE64 =
 	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==";
 
-const visionModel: Model<"openai-responses"> = {
+const visionModel: Model<"openai-responses"> = buildModel({
 	id: "gpt-4o",
 	name: "GPT-4o",
 	api: "openai-responses",
@@ -25,7 +26,7 @@ const visionModel: Model<"openai-responses"> = {
 	cost: { input: 5, output: 15, cacheRead: 0.5, cacheWrite: 5 },
 	contextWindow: 128000,
 	maxTokens: 4096,
-};
+});
 
 const textOnlyModel: Model<"openai-responses"> = {
 	...visionModel,

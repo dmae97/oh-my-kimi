@@ -346,7 +346,7 @@ describe("buildSessionContext", () => {
 			// Reproduces the rewind/restore loop: leaf = an assistant turn that emitted
 			// tool calls. Its results are off-path children, so without normalization the
 			// turn ends on unpaired tool_use and transformMessages fabricates phantom
-			// "aborted" results + a <turn-aborted> note, re-injecting the failed batch.
+			// "aborted" results, re-injecting the failed batch.
 			const assistantWithCalls: SessionMessageEntry = {
 				type: "message",
 				id: "a1",

@@ -3,7 +3,7 @@ import {
 	parseStreamingJson,
 	parseStreamingJsonThrottled,
 	STREAMING_JSON_PARSE_MIN_GROWTH,
-} from "../src/utils/json-parse";
+} from "@oh-my-pi/pi-ai/utils/json-parse";
 
 describe("parseStreamingJsonThrottled (F5)", () => {
 	it("parses the first non-empty buffer even when growth is below the threshold", () => {

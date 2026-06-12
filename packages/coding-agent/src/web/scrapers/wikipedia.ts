@@ -1,4 +1,3 @@
-import { parseHTML } from "linkedom";
 import type { RenderResult, SpecialHandler } from "./types";
 import { buildResult, loadPage } from "./types";
 
@@ -45,6 +44,7 @@ export const handleWikipedia: SpecialHandler = async (
 		const contentResult = await loadPage(contentUrl, { timeout, signal });
 
 		if (contentResult.ok) {
+			const { parseHTML } = await import("linkedom");
 			const doc = parseHTML(contentResult.content).document;
 
 			// Extract main content sections

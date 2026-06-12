@@ -11,8 +11,8 @@ import {
 	type SnapshotStreamEvent,
 	SqliteAuthCredentialStore,
 	startAuthBroker,
-} from "../src";
-import * as oauthUtils from "../src/utils/oauth";
+} from "@oh-my-pi/pi-ai";
+import * as oauthUtils from "@oh-my-pi/pi-ai/registry/oauth";
 
 const ANTHROPIC_ENV = ["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"] as const;
 const savedEnv: Partial<Record<(typeof ANTHROPIC_ENV)[number], string | undefined>> = {};

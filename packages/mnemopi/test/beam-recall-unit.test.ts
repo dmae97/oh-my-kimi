@@ -1,8 +1,8 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, it } from "bun:test";
-import { factRecall, formatContext, recall, recallEnhanced } from "../src/core/beam/recall";
-import { initBeam } from "../src/core/beam/schema";
-import type { BeamMemoryState } from "../src/core/beam/types";
+import { factRecall, formatContext, recall, recallEnhanced } from "@oh-my-pi/pi-mnemopi/core/beam/recall";
+import { initBeam } from "@oh-my-pi/pi-mnemopi/core/beam/schema";
+import type { BeamMemoryState } from "@oh-my-pi/pi-mnemopi/core/beam/types";
 
 type TestBeam = BeamMemoryState & { close(): void };
 

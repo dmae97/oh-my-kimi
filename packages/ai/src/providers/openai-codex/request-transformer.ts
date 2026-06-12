@@ -1,17 +1,25 @@
-import type { Effort } from "../../effort";
-import { requireSupportedEffort } from "../../model-thinking";
+import type { Effort } from "@oh-my-pi/pi-catalog/effort";
+import { requireSupportedEffort } from "@oh-my-pi/pi-catalog/model-thinking";
 import type { Api, Model } from "../../types";
+
+/** Reasoning replay scope for the Codex Responses API (`reasoning.context`). */
+export type CodexReasoningContext = "auto" | "current_turn" | "all_turns";
 
 export interface ReasoningConfig {
 	effort: "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
 	summary?: "auto" | "concise" | "detailed";
+	context?: CodexReasoningContext;
 }
 
 export interface CodexRequestOptions {
 	reasoningEffort?: ReasoningConfig["effort"];
 	reasoningSummary?: ReasoningConfig["summary"] | null;
+	/** Explicit `reasoning.context` override. Defaults to `all_turns` under {@link CodexRequestOptions.responsesLite}, otherwise omitted (server default is `current_turn`). */
+	reasoningContext?: CodexReasoningContext;
 	textVerbosity?: "low" | "medium" | "high";
 	include?: string[];
+	/** Responses Lite transport contract: strips image detail and defaults `reasoning.context` to `all_turns`, mirroring codex-rs. */
+	responsesLite?: boolean;
 }
 
 export interface InputItem {
@@ -46,6 +54,7 @@ export interface RequestBody {
 	include?: string[];
 	prompt_cache_key?: string;
 	prompt_cache_retention?: "in_memory" | "24h";
+	client_metadata?: Record<string, string>;
 	max_output_tokens?: number;
 	max_completion_tokens?: number;
 	[key: string]: unknown;
@@ -105,8 +114,8 @@ function orphanFunctionOutputToMessage(item: InputItem, callId: string): InputIt
  * Repair both halves of unpaired tool exchanges so the Responses input grammar
  * stays valid — the API rejects either orphan with a 400:
  *
- * - `function_call_output` with no matching `function_call` → folded into an
- *   assistant message (`400 No tool call found for function call output …`).
+ * - `function_call_output` / `custom_tool_call_output` with no matching call →
+ *   folded into an assistant message (`400 No tool call found for … output`).
  *   Regression of #472 / #1351.
  * - `function_call` / `custom_tool_call` with no matching `*_output` → a
  *   placeholder output is synthesized immediately after the call
@@ -131,7 +140,11 @@ function repairToolCallPairs(input: InputItem[]): InputItem[] {
 	for (const item of input) {
 		const callId = typeof item.call_id === "string" ? item.call_id : undefined;
 
-		if (item.type === "function_call_output" && callId !== undefined && !callIds.has(callId)) {
+		if (
+			(item.type === "function_call_output" || item.type === "custom_tool_call_output") &&
+			callId !== undefined &&
+			!callIds.has(callId)
+		) {
 			repaired.push(orphanFunctionOutputToMessage(item, callId));
 			continue;
 		}
@@ -151,6 +164,24 @@ function repairToolCallPairs(input: InputItem[]): InputItem[] {
 		}
 	}
 	return repaired;
+}
+
+/**
+ * Responses Lite requests must not pin image detail levels: codex-rs strips
+ * `detail` from every input image (message content and tool outputs) before
+ * sending, letting the server choose.
+ */
+function stripImageDetails(input: InputItem[]): void {
+	for (const item of input) {
+		for (const collection of [item.content, item.output]) {
+			if (!Array.isArray(collection)) continue;
+			for (const part of collection) {
+				if (part && typeof part === "object" && (part as { type?: unknown }).type === "input_image") {
+					delete (part as { detail?: unknown }).detail;
+				}
+			}
+		}
+	}
 }
 
 export async function transformRequestBody(
@@ -181,12 +212,30 @@ export async function transformRequestBody(
 		body.input = [...developerMessages, ...body.input];
 	}
 
+	if (options.responsesLite) {
+		if (Array.isArray(body.input)) {
+			stripImageDetails(body.input);
+		}
+		// Responses Lite does not support parallel tool calling; codex-rs forces
+		// it off (`prompt.parallel_tool_calls && !use_responses_lite`).
+		if (body.tools !== undefined) {
+			body.parallel_tool_calls = false;
+		}
+	}
+
 	if (options.reasoningEffort !== undefined) {
 		const reasoningConfig = getReasoningConfig(model, options);
 		body.reasoning = {
 			...body.reasoning,
 			...reasoningConfig,
 		};
+		// Responses Lite keeps reasoning replay server-side; codex-rs requests
+		// `all_turns` there and otherwise omits context so the server default
+		// (currently `current_turn`) applies.
+		const reasoningContext = options.reasoningContext ?? (options.responsesLite ? "all_turns" : undefined);
+		if (reasoningContext !== undefined) {
+			body.reasoning.context = reasoningContext;
+		}
 	} else {
 		delete body.reasoning;
 	}

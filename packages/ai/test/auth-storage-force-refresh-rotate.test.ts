@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { type AuthCredentialStore, AuthStorage, SqliteAuthCredentialStore } from "../src/auth-storage";
-import { registerOAuthProvider, unregisterOAuthProviders } from "../src/utils/oauth";
+import { type AuthCredentialStore, AuthStorage, SqliteAuthCredentialStore } from "@oh-my-pi/pi-ai/auth-storage";
+import { registerOAuthProvider, unregisterOAuthProviders } from "@oh-my-pi/pi-ai/registry/oauth";
 
 const PROVIDER = "unit-rotate-oauth";
 const SOURCE = "auth-storage-force-refresh-rotate-test";
@@ -159,5 +159,45 @@ describe("AuthStorage forceRefresh + rotateSessionCredential", () => {
 
 		// Never resolved a key for this session → nothing to rotate away from.
 		expect(await authStorage.rotateSessionCredential(PROVIDER, "untouched", { error: authError() })).toBe(false);
+	});
+
+	test("markUsageLimitReached reports the earliest sibling unblock time when every sibling is blocked", async () => {
+		if (!authStorage) throw new Error("test setup failed");
+		registerProvider();
+		await authStorage.set(PROVIDER, [
+			{ type: "oauth", access: "acc-A", refresh: "ref-A", expires: farExpiry() },
+			{ type: "oauth", access: "acc-B", refresh: "ref-B", expires: farExpiry() },
+		]);
+
+		// Session A takes one credential and parks it briefly (e.g. a transient
+		// probe block) — a sibling is still free, so this reports switched.
+		await authStorage.getApiKey(PROVIDER, "sess-a");
+		const blockedBefore = Date.now();
+		const first = await authStorage.markUsageLimitReached(PROVIDER, "sess-a", { retryAfterMs: 30_000 });
+		const blockedAfter = Date.now();
+		expect(first.switched).toBe(true);
+
+		// Session B lands on the remaining credential and hits a multi-hour
+		// usage limit. No sibling is free *right now*, but the result must
+		// carry session A's short unblock time — not the 1h window — so the
+		// retry layer can wait seconds instead of bailing on the long wait.
+		await authStorage.getApiKey(PROVIDER, "sess-b");
+		const second = await authStorage.markUsageLimitReached(PROVIDER, "sess-b", { retryAfterMs: 3_600_000 });
+		expect(second.switched).toBe(false);
+		expect(second.retryAtMs).toBeDefined();
+		expect(second.retryAtMs!).toBeGreaterThanOrEqual(blockedBefore + 30_000);
+		expect(second.retryAtMs!).toBeLessThanOrEqual(blockedAfter + 30_000);
+	});
+
+	test("markUsageLimitReached reports no retry time for a single-credential setup", async () => {
+		if (!authStorage) throw new Error("test setup failed");
+		registerProvider();
+		await authStorage.set(PROVIDER, [
+			{ type: "oauth", access: "only-access", refresh: "only-refresh", expires: farExpiry() },
+		]);
+
+		await authStorage.getApiKey(PROVIDER, "sess");
+		const outcome = await authStorage.markUsageLimitReached(PROVIDER, "sess", { retryAfterMs: 3_600_000 });
+		expect(outcome).toEqual({ switched: false, retryAtMs: undefined });
 	});
 });

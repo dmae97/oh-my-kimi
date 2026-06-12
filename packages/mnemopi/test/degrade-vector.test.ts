@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import "./setup";
-import { BeamMemory } from "../src/core/beam/index";
-import { maximallyInformativeBinarization } from "../src/core/binary-vectors";
+import { BeamMemory } from "@oh-my-pi/pi-mnemopi/core/beam";
+import { maximallyInformativeBinarization } from "@oh-my-pi/pi-mnemopi/core/binary-vectors";
 
 function oldIso(days: number): string {
 	return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();

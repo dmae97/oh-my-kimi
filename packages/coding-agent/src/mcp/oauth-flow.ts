@@ -5,9 +5,10 @@
  * by providing authorization URL, token URL, and client credentials.
  */
 
-import type { OAuthCallbackFlowOptions } from "@oh-my-pi/pi-ai/utils/oauth/callback-server";
-import { OAuthCallbackFlow } from "@oh-my-pi/pi-ai/utils/oauth/callback-server";
-import type { OAuthController, OAuthCredentials } from "@oh-my-pi/pi-ai/utils/oauth/types";
+import type { OAuthCallbackFlowOptions } from "@oh-my-pi/pi-ai/oauth/callback-server";
+import { OAuthCallbackFlow } from "@oh-my-pi/pi-ai/oauth/callback-server";
+import type { OAuthController, OAuthCredentials } from "@oh-my-pi/pi-ai/oauth/types";
+import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
 
 const DEFAULT_PORT = 3000;
 const CALLBACK_PATH = "/callback";
@@ -97,6 +98,23 @@ function resolveCallbackOptions(config: MCPOAuthConfig): OAuthCallbackFlowOption
 	};
 }
 
+function resolveResourceUri(resource: string | undefined): string | undefined {
+	const trimmed = resource?.trim();
+	if (!trimmed) return undefined;
+	if (trimmed !== resource) {
+		throw new Error("OAuth resource URI must not include surrounding whitespace");
+	}
+
+	const parsed = new URL(trimmed);
+	if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+		throw new Error("OAuth resource URI must use http or https");
+	}
+	if (parsed.hash) {
+		throw new Error("OAuth resource URI must not include a fragment");
+	}
+	return trimmed;
+}
+
 export interface MCPOAuthConfig {
 	/** Authorization endpoint URL */
 	authorizationUrl: string;
@@ -114,6 +132,10 @@ export interface MCPOAuthConfig {
 	callbackPort?: number;
 	/** Custom callback path (default: /callback or redirectUri pathname) */
 	callbackPath?: string;
+	/** MCP resource URI for RFC 8707 resource indicators */
+	resource?: string;
+	/** Fetch implementation for token exchange and discovery requests. */
+	fetch?: FetchImpl;
 }
 
 /**
@@ -124,6 +146,8 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 	#resolvedClientId?: string;
 	#registeredClientSecret?: string;
 	#codeVerifier?: string;
+	#fetch: FetchImpl;
+	#resource?: string;
 
 	constructor(
 		private config: MCPOAuthConfig,
@@ -131,6 +155,10 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 	) {
 		super(ctrl, resolveCallbackOptions(config));
 		this.#resolvedClientId = this.#resolveClientId(config);
+		this.#fetch = config.fetch ?? ctrl.fetch ?? fetch;
+		this.#resource = resolveResourceUri(
+			config.resource ?? this.#resourceFromAuthorizationUrl(config.authorizationUrl),
+		);
 	}
 
 	/**
@@ -152,6 +180,9 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 	get registeredClientSecret(): string | undefined {
 		return this.#registeredClientSecret;
 	}
+	get resource(): string | undefined {
+		return this.#resource;
+	}
 
 	async generateAuthUrl(state: string, redirectUri: string): Promise<{ url: string; instructions?: string }> {
 		if (!this.#resolvedClientId) {
@@ -170,6 +201,12 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 		}
 		if (this.config.scopes && !params.get("scope")) {
 			params.set("scope", this.config.scopes);
+		}
+		const existingResource = params.get("resource")?.trim();
+		if (existingResource) {
+			this.#resource = resolveResourceUri(existingResource);
+		} else if (this.#resource) {
+			params.set("resource", this.#resource);
 		}
 		params.set("redirect_uri", redirectUri);
 		params.set("state", state);
@@ -207,12 +244,15 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 		this.#codeVerifier = undefined;
 
 		// Add client secret if provided
+		if (this.#resource) {
+			params.set("resource", this.#resource);
+		}
 		const clientSecret = this.config.clientSecret ?? this.#registeredClientSecret;
 		if (clientSecret) {
 			params.set("client_secret", clientSecret);
 		}
 
-		const response = await fetch(this.config.tokenUrl, {
+		const response = await this.#fetch(this.config.tokenUrl, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/x-www-form-urlencoded",
@@ -280,6 +320,13 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 			return undefined;
 		}
 	}
+	#resourceFromAuthorizationUrl(authorizationUrl: string): string | undefined {
+		try {
+			return new URL(authorizationUrl).searchParams.get("resource") ?? undefined;
+		} catch {
+			return undefined;
+		}
+	}
 
 	/**
 	 * Try OAuth dynamic client registration when provider requires a client_id.
@@ -289,7 +336,7 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 		if (!registrationEndpoint) return;
 
 		try {
-			const response = await fetch(registrationEndpoint, {
+			const response = await this.#fetch(registrationEndpoint, {
 				method: "POST",
 				headers: {
 					"Content-Type": "application/json",
@@ -357,7 +404,7 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 
 	async #tryWellKnownForRegistration(wellKnownUrl: string): Promise<string | null> {
 		try {
-			const response = await fetch(wellKnownUrl, {
+			const response = await this.#fetch(wellKnownUrl, {
 				method: "GET",
 				headers: { Accept: "application/json" },
 			});
@@ -374,7 +421,7 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 
 	async #assertClientIdNotRequired(authorizationUrl: string): Promise<void> {
 		try {
-			const response = await fetch(authorizationUrl, {
+			const response = await this.#fetch(authorizationUrl, {
 				method: "GET",
 				redirect: "manual",
 				headers: { Accept: "text/plain,text/html,application/json" },
@@ -402,15 +449,21 @@ export async function refreshMCPOAuthToken(
 	refreshToken: string,
 	clientId?: string,
 	clientSecret?: string,
+	resourceOrOpts?: string | { fetch?: FetchImpl },
+	opts?: { fetch?: FetchImpl },
 ): Promise<OAuthCredentials> {
+	const fetchImpl: FetchImpl = (typeof resourceOrOpts === "string" ? opts?.fetch : resourceOrOpts?.fetch) ?? fetch;
+	const resource = typeof resourceOrOpts === "string" ? resourceOrOpts : undefined;
 	const params = new URLSearchParams({
 		grant_type: "refresh_token",
 		refresh_token: refreshToken,
 	});
 	if (clientId) params.set("client_id", clientId);
+	const resolvedResource = resolveResourceUri(resource);
+	if (resolvedResource) params.set("resource", resolvedResource);
 	if (clientSecret) params.set("client_secret", clientSecret);
 
-	const response = await fetch(tokenUrl, {
+	const response = await fetchImpl(tokenUrl, {
 		method: "POST",
 		headers: { "Content-Type": "application/x-www-form-urlencoded" },
 		body: params.toString(),

@@ -472,23 +472,24 @@ export class MCPManager {
 			const cachedTools = new Map<string, MCPToolDefinition[]>();
 			const pendingTasks = connectionTasks.filter(task => task.tracked.status === "pending");
 
-			if (pendingTasks.length > 0) {
-				if (this.toolCache) {
-					await Promise.all(
-						pendingTasks.map(async task => {
-							const cached = await this.toolCache?.get(task.name, task.config);
-							if (cached) {
-								cachedTools.set(task.name, cached);
-							}
-						}),
-					);
-				}
-
-				const pendingWithoutCache = pendingTasks.filter(task => !cachedTools.has(task.name));
-				if (pendingWithoutCache.length > 0) {
-					await Promise.allSettled(pendingWithoutCache.map(task => task.tracked.promise));
-				}
+			if (pendingTasks.length > 0 && this.toolCache) {
+				await Promise.all(
+					pendingTasks.map(async task => {
+						const cached = await this.toolCache?.get(task.name, task.config);
+						if (cached) {
+							cachedTools.set(task.name, cached);
+						}
+					}),
+				);
 			}
+
+			// Pending tasks without cached tools used to be awaited synchronously here,
+			// which gated the entire UI on the slowest server's per-request timeout
+			// (issue #2100: a single unresponsive MCP server blocked startup for the
+			// full 30 s `OMP_MCP_TIMEOUT_MS`). Leave them in flight — the background
+			// `void toolsPromise.then(...)` chain above registers their tools and
+			// fires `#onToolsChanged` once the connect finishes, or logs the failure
+			// after `allowBackgroundLogging` flips below.
 
 			for (const task of connectionTasks) {
 				const { name } = task;
@@ -1173,12 +1174,15 @@ export class MCPManager {
 					const shouldRefresh =
 						forceRefresh || (credential.expires && Date.now() >= credential.expires - REFRESH_BUFFER_MS);
 					if (shouldRefresh && credential.refresh && auth.tokenUrl) {
+						const resource =
+							auth.resource ?? (config.type === "http" || config.type === "sse" ? config.url : undefined);
 						try {
 							const refreshed = await refreshMCPOAuthToken(
 								auth.tokenUrl,
 								credential.refresh,
 								auth.clientId,
 								auth.clientSecret,
+								resource,
 							);
 							const refreshedCredential = { type: "oauth" as const, ...refreshed };
 							await this.#authStorage.set(credentialId, refreshedCredential);

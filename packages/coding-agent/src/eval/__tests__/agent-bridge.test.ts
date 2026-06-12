@@ -99,6 +99,7 @@ function singleResult(options: ExecutorOptions, overrides: Partial<SingleResult>
 		truncated: false,
 		durationMs: 1,
 		tokens: 0,
+		requests: 0,
 		...overrides,
 	};
 }
@@ -178,7 +179,7 @@ describe("runEvalAgent", () => {
 		expect(runSpy).not.toHaveBeenCalled();
 	});
 
-	it("passes the parent execution context and only sets outputSchema when schema is supplied", async () => {
+	it("passes parent execution options and only sets outputSchema when schema is supplied", async () => {
 		mockAgents();
 		const runSpy = vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => singleResult(options));
 		const abortController = new AbortController();
@@ -186,7 +187,7 @@ describe("runEvalAgent", () => {
 		const session = makeSession({ depth: 2, activeModel: "p/current", modelString: "p/fallback" });
 
 		await runEvalAgent(
-			{ prompt: " hello ", context: " context ", label: "My Agent", model: "p/override", schema },
+			{ prompt: " hello ", label: "My Agent", model: "p/override", schema },
 			{ session, signal: abortController.signal },
 		);
 		await runEvalAgent({ prompt: "plain" }, { session });
@@ -199,10 +200,22 @@ describe("runEvalAgent", () => {
 		expect(firstOptions.parentActiveModelPattern).toBe("p/current");
 		expect(firstOptions.outputSchema).toBe(schema);
 		expect(firstOptions.assignment).toBe("hello");
-		expect(firstOptions.context).toBe("context");
 		expect(firstOptions.description).toBe("My Agent");
 		expect(firstOptions.modelOverride).toEqual(["p/override"]);
 		expect(secondOptions.outputSchema).toBeUndefined();
+	});
+
+	it("forces LSP off for bridge subagents even when task.enableLsp is on", async () => {
+		mockAgents();
+		const runSpy = vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => singleResult(options));
+		// makeSession() defaults to enableLsp: true and task.enableLsp: true.
+		const session = makeSession();
+
+		await runEvalAgent({ prompt: "hello" }, { session });
+
+		const options = runSpy.mock.calls[0]?.[0];
+		if (!options) throw new Error("runSubprocess was not called");
+		expect(options.enableLsp).toBe(false);
 	});
 
 	it("maps successful and failed subagent results", async () => {
@@ -529,6 +542,7 @@ describe("agent() through eval runtimes", () => {
 			recentOutput: [],
 			toolCount: 0,
 			tokens: 0,
+			requests: 0,
 			cost: 0,
 			durationMs: 0,
 			...overrides,
@@ -661,6 +675,7 @@ describe("agent() through eval runtimes", () => {
 					recentOutput: [],
 					toolCount: i,
 					tokens: 0,
+					requests: 0,
 					cost: 0,
 					durationMs: i * 10,
 				});

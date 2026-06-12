@@ -27,4 +27,13 @@ export const localBackend: MemoryBackend = {
 	async enqueue(agentDir, cwd) {
 		enqueueMemoryConsolidation(agentDir, cwd);
 	},
+	async status() {
+		return {
+			backend: "local" as const,
+			active: true,
+			writable: false,
+			searchable: false,
+			message: "Local rollout-summary memory is active; structured search/save is not available.",
+		};
+	},
 };

@@ -1,6 +1,6 @@
-You MUST summarize the conversation above into a structured context checkpoint handoff summary for another LLM to resume task.
+You MUST summarize the conversation above into a structured handoff summary for another LLM to resume the task.
 
-IMPORTANT: If conversation ends with unanswered question to user or imperative/request awaiting user response (e.g., "Please run command and paste output"), you MUST preserve that exact question/request.
+IMPORTANT: If the conversation ends with an unanswered question or a request awaiting user response (e.g., "Please run command and paste output"), you MUST preserve that exact question/request.
 
 You MUST use this format (sections can be omitted if not applicable):
 

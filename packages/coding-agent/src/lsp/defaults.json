@@ -248,6 +248,12 @@
 			}
 		}
 	},
+	"expert": {
+		"command": "expert",
+		"args": ["--stdio"],
+		"fileTypes": [".ex", ".exs", ".heex", ".eex"],
+		"rootMarkers": ["mix.exs", "mix.lock"]
+	},
 	"erlangls": {
 		"command": "erlang_ls",
 		"args": [],

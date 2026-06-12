@@ -83,10 +83,7 @@ async function classifyOnline(input: string, deps: ClassifyDifficultyDeps): Prom
 			messages: [{ role: "user", content: input, timestamp: Date.now() }],
 		},
 		{
-			apiKey: deps.registry.resolver(model.provider, {
-				sessionId: deps.sessionId,
-				baseUrl: model.baseUrl,
-			}),
+			apiKey: deps.registry.resolver(model, deps.sessionId),
 			maxTokens,
 			disableReasoning: true,
 			metadata,

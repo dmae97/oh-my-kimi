@@ -1,9 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { Effort } from "../src/effort";
-import { streamAnthropic } from "../src/providers/anthropic";
-import type { Context, Model, Tool } from "../src/types";
+import { streamAnthropic } from "@oh-my-pi/pi-ai/providers/anthropic";
+import type { Context, Model, ModelSpec, Tool } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
 
-const baseModel: Model<"anthropic-messages"> = {
+const baseModel: Model<"anthropic-messages"> = buildModel({
 	id: "claude-sonnet-4-5",
 	name: "Claude Sonnet 4.5",
 	api: "anthropic-messages",
@@ -15,7 +16,7 @@ const baseModel: Model<"anthropic-messages"> = {
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 	contextWindow: 200_000,
 	maxTokens: 8_192,
-};
+});
 
 const bashTool: Tool = {
 	name: "bash",
@@ -64,26 +65,28 @@ describe("issue #826: Anthropic strict-tools opt-out for Vertex-style proxies", 
 	});
 
 	it("omits strict on tool defs when compat.disableStrictTools is set", async () => {
-		const params = await captureParams({
-			...baseModel,
-			compat: { disableStrictTools: true },
-		});
+		const params = await captureParams(
+			buildModel({
+				...baseModel,
+				compat: { ...baseModel.compatConfig, disableStrictTools: true },
+			} as ModelSpec<"anthropic-messages">),
+		);
 		const bash = params.tools?.find(t => t.name === "bash");
 		expect(bash).toBeDefined();
 		expect(bash?.strict).toBeUndefined();
 	});
 
 	it("preserves adaptive thinking by default", async () => {
-		const adaptiveModel: Model<"anthropic-messages"> = {
+		const adaptiveModel: Model<"anthropic-messages"> = buildModel({
 			...baseModel,
 			id: "claude-opus-4-7",
 			reasoning: true,
 			thinking: {
 				mode: "anthropic-adaptive",
-				minLevel: Effort.Minimal,
-				maxLevel: Effort.XHigh,
+				efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
 			},
-		};
+			compat: baseModel.compatConfig,
+		} as ModelSpec<"anthropic-messages">);
 		const { promise, resolve } = Promise.withResolvers<{ thinking?: { type?: string } }>();
 		void streamAnthropic(adaptiveModel, baseContext, {
 			apiKey: "sk-ant-api-test",
@@ -100,17 +103,16 @@ describe("issue #826: Anthropic strict-tools opt-out for Vertex-style proxies", 
 	});
 
 	it("maps adaptive thinking to enabled when compat.disableAdaptiveThinking is set", async () => {
-		const adaptiveModel: Model<"anthropic-messages"> = {
+		const adaptiveModel: Model<"anthropic-messages"> = buildModel({
 			...baseModel,
 			id: "claude-opus-4-7",
 			reasoning: true,
 			thinking: {
 				mode: "anthropic-adaptive",
-				minLevel: Effort.Minimal,
-				maxLevel: Effort.XHigh,
+				efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
 			},
-			compat: { disableAdaptiveThinking: true },
-		};
+			compat: { ...baseModel.compatConfig, disableAdaptiveThinking: true },
+		} as ModelSpec<"anthropic-messages">);
 		const { promise, resolve } = Promise.withResolvers<{ thinking?: { type?: string; budget_tokens?: number } }>();
 		void streamAnthropic(adaptiveModel, baseContext, {
 			apiKey: "sk-ant-api-test",

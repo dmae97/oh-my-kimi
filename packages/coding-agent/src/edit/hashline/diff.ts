@@ -12,6 +12,7 @@
 import {
 	type ApplyResult,
 	applyEdits,
+	type Cursor,
 	computeFileHash,
 	type Edit,
 	Patch as HashlinePatch,
@@ -54,6 +55,39 @@ async function readSectionText(absolutePath: string, sectionPath: string): Promi
 		const message = error instanceof Error ? error.message : String(error);
 		throw new Error(message || `Unable to read ${sectionPath}`);
 	}
+}
+
+/**
+ * Streaming previews recompute on every streamed chunk; re-reading the target
+ * file from disk each tick dominates the cost on large files. Cache the raw
+ * section text keyed by mtime+size so any on-disk change invalidates
+ * naturally. Used by the streaming path only — the args-complete pass always
+ * reads fresh.
+ */
+const streamingTextCache = new Map<string, { mtimeMs: number; size: number; rawContent: string }>();
+const STREAMING_TEXT_CACHE_MAX = 8;
+
+async function readSectionTextCached(absolutePath: string, sectionPath: string): Promise<string> {
+	let stamp: { mtimeMs: number; size: number } | undefined;
+	try {
+		const stat = await Bun.file(absolutePath).stat();
+		stamp = { mtimeMs: stat.mtimeMs, size: stat.size };
+	} catch {
+		stamp = undefined;
+	}
+	if (stamp) {
+		const cached = streamingTextCache.get(absolutePath);
+		if (cached && cached.mtimeMs === stamp.mtimeMs && cached.size === stamp.size) return cached.rawContent;
+	}
+	const rawContent = await readSectionText(absolutePath, sectionPath);
+	if (stamp) {
+		if (streamingTextCache.size >= STREAMING_TEXT_CACHE_MAX && !streamingTextCache.has(absolutePath)) {
+			const oldest = streamingTextCache.keys().next().value;
+			if (oldest !== undefined) streamingTextCache.delete(oldest);
+		}
+		streamingTextCache.set(absolutePath, { mtimeMs: stamp.mtimeMs, size: stamp.size, rawContent });
+	}
+	return rawContent;
 }
 
 function hasAnchorScopedEdit(edits: readonly Edit[]): boolean {
@@ -131,6 +165,86 @@ function applyPreviewEdits(args: {
 	throw createMismatchError(section, absolutePath, normalized, snapshots, expected);
 }
 
+/**
+ * Map an insert cursor to the 1-indexed line where its payload lands, used to
+ * number the `+` rows of a streaming preview. Deliberately approximate: it
+ * ignores line shifts introduced by sibling ops, because the args-complete
+ * pass renumbers everything through the real unified diff.
+ */
+function insertCursorLine(cursor: Cursor, fileLineCount: number): number {
+	switch (cursor.kind) {
+		case "bof":
+			return 1;
+		case "eof":
+			return fileLineCount + 1;
+		case "before_anchor":
+			return cursor.anchor.line;
+		case "after_anchor":
+			return cursor.anchor.line + 1;
+	}
+}
+
+/**
+ * Build a streaming diff preview by emitting, per op in patch order, the
+ * removed file lines followed by the op's `+` payload rows — never a whole-file
+ * Myers re-diff. {@link generateDiffString} re-aligns the in-flight payload
+ * against the removed block on every streamed chunk (it greedily matches shared
+ * `}`/blank/`return` rows), so additions jump between hunks and the tail window
+ * the renderer pins stutters tick to tick. Natural order keeps the removed
+ * block fixed and grows the payload monotonically at the bottom so the streamed
+ * cursor stays put. Mirrors the apply_patch streaming strategy; the
+ * args-complete pass still produces the real unified diff.
+ */
+function buildStreamingSectionDiff(
+	section: PatchSection,
+	normalized: string,
+): { diff: string; firstChangedLine: number | undefined } | { error: string } {
+	const { edits } = parsePatchStreaming(section.diff);
+	const resolved = resolveBlockEdits(edits, normalized, section.path, nativeBlockResolver, { onUnresolved: "drop" });
+	if (resolved.length === 0) return { error: `No changes would be made to ${section.path}.` };
+
+	const fileLines = normalized.split("\n");
+	const rows: string[] = [];
+	let firstChangedLine: number | undefined;
+
+	// Every edit emitted from one op header carries that header's patch line
+	// number and the edits sit contiguously (a replace lays down its replacement
+	// inserts then its range deletes; block ops expand to the same shape). Group
+	// on that boundary so each op stays intact and ordered.
+	for (let i = 0; i < resolved.length; ) {
+		const opLine = resolved[i].lineNum;
+		const deletes: number[] = [];
+		const inserts: string[] = [];
+		let insertBase: number | undefined;
+		while (i < resolved.length && resolved[i].lineNum === opLine) {
+			const edit = resolved[i];
+			if (edit.kind === "delete") deletes.push(edit.anchor.line);
+			else if (edit.kind === "insert") {
+				insertBase ??= insertCursorLine(edit.cursor, fileLines.length);
+				inserts.push(edit.text);
+			}
+			i++;
+		}
+		// Removed lines first (a fixed block), payload second (grows at the
+		// bottom = the streamed cursor).
+		deletes.sort((a, b) => a - b);
+		for (const line of deletes) {
+			firstChangedLine ??= line;
+			const content = line >= 1 && line <= fileLines.length ? fileLines[line - 1] : "";
+			rows.push(`-${line}|${content}`);
+		}
+		let newLine = insertBase ?? deletes[0] ?? 1;
+		for (const text of inserts) {
+			firstChangedLine ??= newLine;
+			rows.push(`+${newLine}|${text}`);
+			newLine++;
+		}
+	}
+
+	if (rows.length === 0) return { error: `No changes would be made to ${section.path}.` };
+	return { diff: rows.join("\n"), firstChangedLine };
+}
+
 export async function computeHashlineSectionDiff(
 	section: PatchSection,
 	cwd: string,
@@ -139,12 +253,19 @@ export async function computeHashlineSectionDiff(
 ): Promise<{ diff: string; firstChangedLine: number | undefined } | { error: string }> {
 	try {
 		const absolutePath = resolveToCwd(section.path, cwd);
-		const rawContent = await readSectionText(absolutePath, section.path);
+		const rawContent = options.streaming
+			? await readSectionTextCached(absolutePath, section.path)
+			: await readSectionText(absolutePath, section.path);
 		const { text: content } = stripBom(rawContent);
 		const normalized = normalizeToLF(content);
+		// Streaming favors a stable, monotonic preview over an exact unified
+		// diff: feed the in-flight ops through the natural-order builder so the
+		// streamed cursor stays pinned to the bottom. The args-complete pass
+		// (`streaming` unset) falls through to the real Myers diff below.
+		if (options.streaming) return buildStreamingSectionDiff(section, normalized);
 		const result = applyPreviewEdits({ section, absolutePath, normalized, snapshots, options });
 		if (normalized === result.text) return { error: `No changes would be made to ${section.path}.` };
-		return generateDiffString(normalized, result.text);
+		return generateDiffString(normalized, result.text, undefined, { path: section.path });
 	} catch (err) {
 		return { error: err instanceof Error ? err.message : String(err) };
 	}

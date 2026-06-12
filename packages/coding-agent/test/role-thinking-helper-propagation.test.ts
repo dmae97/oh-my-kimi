@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as ai from "@oh-my-pi/pi-ai";
-import { Effort, getBundledModel } from "@oh-my-pi/pi-ai";
-import { generateCommitMessage } from "../src/utils/commit-message-generator";
-import { generateSessionTitle } from "../src/utils/title-generator";
+import { Effort } from "@oh-my-pi/pi-ai";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { generateCommitMessage } from "@oh-my-pi/pi-coding-agent/utils/commit-message-generator";
+import { generateSessionTitle } from "@oh-my-pi/pi-coding-agent/utils/title-generator";
 
 function getModelOrThrow(id: string) {
 	const model = getBundledModel("anthropic", id);

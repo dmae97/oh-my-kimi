@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import { encodeResponse, encodeStream, parseRequest } from "../src/providers/anthropic-messages-server";
-import type { AssistantMessage, AssistantMessageEvent, ToolResultMessage } from "../src/types";
-import { AssistantMessageEventStream } from "../src/utils/event-stream";
+import { encodeResponse, encodeStream, parseRequest } from "@oh-my-pi/pi-ai/providers/anthropic-messages-server";
+import type { AssistantMessage, AssistantMessageEvent, ToolResultMessage } from "@oh-my-pi/pi-ai/types";
+import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 
 function emptyUsage(): AssistantMessage["usage"] {
 	return {
@@ -237,6 +237,37 @@ describe("anthropic-messages parseRequest", () => {
 		expect(withMetadata.options.extra).toBeUndefined();
 		expect(withMetadata.options.metadata).toEqual({ user_id: "u_1" });
 	});
+
+	it("rejects malformed known-type blocks instead of passing them through the unknown-block catch-all", () => {
+		// `{type:"text", text: 123}` fails the typed schema and must not fall
+		// into the loose catch-all (would corrupt history and TypeError downstream).
+		expect(() =>
+			parseRequest({
+				model: "m",
+				max_tokens: 1,
+				messages: [{ role: "user", content: [{ type: "text", text: 123 }] }],
+			}),
+		).toThrow();
+		expect(() =>
+			parseRequest({
+				model: "m",
+				max_tokens: 1,
+				messages: [
+					{ role: "user", content: "hi" },
+					{ role: "assistant", content: [{ type: "tool_use", id: "", name: "lookup" }] },
+				],
+			}),
+		).toThrow();
+		// Genuinely unknown variants are still accepted and flattened.
+		const unknown = parseRequest({
+			model: "m",
+			max_tokens: 1,
+			messages: [
+				{ role: "user", content: [{ type: "web_search_tool_result", tool_use_id: "srvtoolu_1", content: [] }] },
+			],
+		});
+		expect(unknown.context.messages).toHaveLength(1);
+	});
 });
 
 describe("anthropic-messages encodeResponse", () => {
@@ -465,5 +496,12 @@ describe("anthropic-messages encodeStream", () => {
 		const last = sse.at(-1)!;
 		expect(last.event).toBe("error");
 		expect(last.data).toEqual({ type: "error", error: { type: "api_error", message: "boom" } });
+	});
+
+	it("emits a complete envelope when the stream ends without an explicit done", async () => {
+		const sse = await collectSse(encodeStream(makeStream([]), "m"));
+		expect(sse.map(e => e.event)).toEqual(["message_start", "message_delta", "message_stop"]);
+		const delta = sse[1]!.data as { delta: { stop_reason: string } };
+		expect(delta.delta.stop_reason).toBe("end_turn");
 	});
 });

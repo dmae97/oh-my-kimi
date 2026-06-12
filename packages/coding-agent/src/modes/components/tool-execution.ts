@@ -15,11 +15,11 @@ import {
 } from "@oh-my-pi/pi-tui";
 import { getProjectDir, logger, sanitizeText } from "@oh-my-pi/pi-utils";
 import { EDIT_MODE_STRATEGIES, type EditMode, type PerFileDiffPreview } from "../../edit";
-import { shimmerEnabled } from "../../modes/theme/shimmer";
 import type { Theme } from "../../modes/theme/theme";
 import { theme } from "../../modes/theme/theme";
 import { BASH_DEFAULT_PREVIEW_LINES } from "../../tools/bash";
 import { EVAL_DEFAULT_PREVIEW_LINES } from "../../tools/eval";
+import { isWaitingPollDetails } from "../../tools/job";
 import {
 	formatArgsInline,
 	JSON_TREE_MAX_DEPTH_COLLAPSED,
@@ -31,7 +31,7 @@ import {
 	renderJsonTreeLines,
 } from "../../tools/json-tree";
 import { formatExpandHint, replaceTabs, resolveImageOptions, truncateToWidth } from "../../tools/render-utils";
-import { type ToolRenderer, toolRenderers } from "../../tools/renderers";
+import { toolRenderers } from "../../tools/renderers";
 import { TODO_STRIKE_TOTAL_FRAMES } from "../../tools/todo";
 import { isFramedBlockComponent, renderStatusLine } from "../../tui";
 import { sanitizeWithOptionalSixelPassthrough } from "../../utils/sixel";
@@ -111,11 +111,23 @@ function getArgsWithStreamedTextInput(args: unknown): unknown {
 	return input === undefined ? args : { ...record, input };
 }
 
+/**
+ * Transcript-side probe telling a block whether it is still inside the live
+ * (repaintable) region. Implemented by `TranscriptContainer`; injected rather
+ * than imported so the component stays decoupled from the transcript.
+ */
+export interface TranscriptLiveRegionProbe {
+	isBlockInLiveRegion(component: Component): boolean;
+}
+
 export interface ToolExecutionOptions {
 	snapshots?: SnapshotStore;
 	showImages?: boolean; // default: true (only used if terminal supports images)
 	editFuzzyThreshold?: number;
 	editAllowFuzzy?: boolean;
+	/** Live-region probe used to settle detached task progress once the block
+	 * leaves the repaintable transcript region. */
+	liveRegion?: TranscriptLiveRegionProbe;
 }
 
 export interface ToolExecutionHandle {
@@ -133,9 +145,9 @@ export interface ToolExecutionHandle {
 	setExpanded(expanded: boolean): void;
 }
 
-/** Drive pending-tool redraws at 30fps so the animated border sweep stays
- * smooth without spending twice the frame budget. The TUI throttles at the same
- * cadence, and static frames diff to a no-op redraw at ~zero cost. */
+/** Drive pending-tool redraws at 30fps for live tool headers and displaceable
+ * poll blocks. The TUI throttles at the same cadence, and static frames diff to
+ * a no-op redraw at ~zero cost. */
 const SPINNER_RENDER_INTERVAL_MS = 1000 / 30;
 /** Advance the spinner glyph at its classic ~12.5fps step, decoupled from the
  * render cadence (mirrors `Loader`). */
@@ -194,6 +206,19 @@ export class ToolExecutionComponent extends Container {
 	// sealed the block stays in the transcript's repaintable live region so a
 	// late result still repaints instead of stranding the streaming preview.
 	#sealed = false;
+	// A `job` poll result whose watched jobs are all still running. Such a
+	// block never finalizes (stays in the transcript live region) so a
+	// follow-up `job` call can displace it instead of stacking another
+	// "waiting on N jobs" frame. Cleared by `seal()`.
+	#displaceable = false;
+	// Probe into the owning transcript (absent outside the interactive
+	// transcript, e.g. in tests): whether this block is still repaintable.
+	#liveRegion?: TranscriptLiveRegionProbe;
+	// One-way latch for a detached (`async.state === "running"`) task block
+	// that left the transcript live region: its rows are commit-eligible
+	// history, so progress renders static gray and further partial snapshots are
+	// dropped (see #maybeFreezeBackgroundTask).
+	#backgroundTaskFrozen = false;
 	#renderState: {
 		spinnerFrame?: number;
 		expanded: boolean;
@@ -220,6 +245,7 @@ export class ToolExecutionComponent extends Container {
 		this.#editFuzzyThreshold = options.editFuzzyThreshold;
 		this.#editAllowFuzzy = options.editAllowFuzzy;
 		this.#snapshots = options.snapshots;
+		this.#liveRegion = options.liveRegion;
 		this.#tool = tool;
 		this.#ui = ui;
 		this.#cwd = cwd;
@@ -357,8 +383,22 @@ export class ToolExecutionComponent extends Container {
 		isPartial = false,
 		_toolCallId?: string,
 	): void {
+		// A detached task spawn keeps streaming progress snapshots after the
+		// block froze (left the transcript live region). Drop them: the rows are
+		// static gray history now, and repainting would rewrite rows the engine
+		// may already have committed to native scrollback. The terminal snapshot
+		// (async completed/failed → isPartial=false) still applies so a block
+		// that is still on screen settles on real results.
+		if (isPartial && this.#toolName === "task" && this.#maybeFreezeBackgroundTask()) {
+			return;
+		}
 		this.#result = result;
 		this.#isPartial = isPartial;
+		// A `job` poll that found every watched job still running is transient
+		// "still waiting" chrome; keep the block displaceable so the next `job`
+		// call replaces it instead of stacking another waiting frame (see the
+		// event controller's displaceable-poll bookkeeping).
+		this.#displaceable = this.#toolName === "job" && result.isError !== true && isWaitingPollDetails(result.details);
 		// When tool is complete, ensure args are marked complete so spinner stops
 		if (!isPartial) {
 			this.#argsComplete = true;
@@ -425,16 +465,10 @@ export class ToolExecutionComponent extends Container {
 			(this.#result?.details as { async?: { state?: string } } | undefined)?.async?.state === "running";
 		const isBackgroundAsyncTask = this.#toolName === "task" && isBackgroundAsyncRunning;
 		const isPartialTask = this.#isPartial && this.#toolName === "task" && !isBackgroundAsyncTask;
-		// Sweep the border of bash/eval execution blocks while they're pending — but
-		// not once they've been backgrounded: a backgrounded job's block gets
-		// committed to scrollback and finalizes later via the async update path, so a
-		// mid-sweep frame would freeze a stray dark "bar" segment into the border.
-		const isPendingExecBlock =
-			this.#isPartial &&
-			shimmerEnabled() &&
-			(this.#toolName === "bash" || this.#toolName === "eval") &&
-			!isBackgroundAsyncRunning;
-		const needsSpinner = isStreamingArgs || isPartialTask || isPendingExecBlock;
+		// Detached async task progress rows are static now; progress snapshots
+		// still call #maybeFreezeBackgroundTask before applying so rows settle
+		// once the block leaves the live region.
+		const needsSpinner = isStreamingArgs || isPartialTask || this.isDisplaceableBlock();
 		if (needsSpinner && !this.#spinnerInterval) {
 			const now = performance.now();
 			const frameCount = theme.spinnerFrames.length;
@@ -444,12 +478,15 @@ export class ToolExecutionComponent extends Container {
 				this.#renderState.spinnerFrame = 0;
 			}
 			this.#spinnerInterval = setInterval(() => {
+				// If a detached task interval from an older render path is still live,
+				// stop it the instant the block leaves the repaintable region.
+				if (this.#maybeFreezeBackgroundTask()) return;
 				const now = performance.now();
 				const frameCount = theme.spinnerFrames.length;
-				// Redraw at 30fps for a smooth border sweep, but keep the spinner
-				// glyph phase-locked to its classic ~12.5fps cadence. Advancing the
-				// anchor by elapsed frames instead of resetting to `now` avoids the
-				// 30fps timer quantizing the glyph down to one step every three ticks.
+				// Redraw at 30fps, but keep the spinner glyph phase-locked to its
+				// classic ~12.5fps cadence. Advancing the anchor by elapsed frames
+				// instead of resetting to `now` avoids the 30fps timer quantizing the
+				// glyph down to one step every three ticks.
 				if (frameCount > 0) {
 					const elapsed = now - this.#lastSpinnerAdvanceAt;
 					if (elapsed >= SPINNER_GLYPH_ADVANCE_MS) {
@@ -472,6 +509,26 @@ export class ToolExecutionComponent extends Container {
 				this.#renderState.spinnerFrame = undefined;
 			}
 		}
+	}
+
+	/**
+	 * Freeze a detached (`async.state === "running"`) task block once it leaves
+	 * the transcript's live region. Past that seam its rows are commit-eligible
+	 * native-scrollback history: repaint the progress rows static gray and drop
+	 * further partial snapshots. One-way — blocks never re-enter the live
+	 * region. Returns whether the block is frozen.
+	 */
+	#maybeFreezeBackgroundTask(): boolean {
+		if (this.#backgroundTaskFrozen) return true;
+		if (this.#toolName !== "task" || this.#liveRegion === undefined) return false;
+		const asyncState = (this.#result?.details as { async?: { state?: string } } | undefined)?.async?.state;
+		if (asyncState !== "running") return false;
+		if (this.#liveRegion.isBlockInLiveRegion(this)) return false;
+		this.#backgroundTaskFrozen = true;
+		this.#updateSpinnerAnimation();
+		this.#updateDisplay();
+		this.#ui.requestRender();
+		return true;
 	}
 
 	#updateTodoStrikeAnimation(): void {
@@ -522,6 +579,9 @@ export class ToolExecutionComponent extends Container {
 	isTranscriptBlockFinalized(): boolean {
 		if (this.#sealed) return true;
 		if (this.#result === undefined) return false;
+		// A displaceable waiting poll stays live: its rows are kept out of
+		// native scrollback so a follow-up `job` call can remove the block.
+		if (this.#displaceable) return false;
 		if (!this.#isPartial) return true;
 		// Partial result: a background async tool is accepted to freeze (the agent
 		// continues while it runs and would otherwise pin an unbounded live region);
@@ -530,36 +590,29 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	/**
-	 * While a tool's preview is still streaming, a block whose preview is
-	 * append-only (rows only grow at the bottom, never re-layout) lets the
-	 * renderer commit the scrolled-off head of an over-tall preview to native
-	 * scrollback instead of dropping it — the same anti-yank path a streaming
-	 * assistant reply uses (see {@link TranscriptContainer} +
-	 * `NativeScrollbackLiveRegion`). Covers both phases: a pre-result call preview
-	 * (a `write` whose content streams in) and a partial-result preview that
-	 * streams output below fixed input (an `eval`/`bash` whose stdout grows under
-	 * its code cell). Gated on {@link isTranscriptBlockFinalized} so the boundary
-	 * closes the instant the block reaches a terminal state — a final result that
-	 * may collapse to a compact view, a backgrounded async tool, or a seal — and
-	 * the renderer decides whether its current preview shape qualifies via
-	 * `isStreamingPreviewAppendOnly` (typically: only the expanded full view,
-	 * which is top-anchored; the collapsed tail window re-layouts but is bounded
-	 * so it never overflows anyway).
+	 * Whether this still-live block's settled rows may enter native scrollback
+	 * (see `FinalizableBlock.isTranscriptBlockCommitStable`). Classification is
+	 * per renderer (`ToolRenderer.provisionalPendingPreview`): tail-window
+	 * streaming views (edit's streamed-diff tail, bash/ssh command caps, eval
+	 * cells) are re-anchored top-first by the result render, so promoting
+	 * their visually static head — e.g. an edit preview idling on its last
+	 * frame while the apply + LSP pass runs — would strand a stale copy of
+	 * the call box above the final block the moment the result lands. Every
+	 * other pending preview streams top-anchored append-shaped rows the
+	 * result render preserves (a task call's context/assignment markdown, a
+	 * write's content), so it stays commit-eligible — a call taller than the
+	 * viewport scrolls into native history mid-stream instead of reading as
+	 * cut off until the result. Expanded blocks always stream top-anchored
+	 * (the over-tall write/eval scrollback contract). Displaceable waiting
+	 * polls are removed wholesale by the next poll and must never commit.
 	 */
-	isTranscriptBlockAppendOnly(): boolean {
-		// A finalized block's preview can collapse/re-layout; only a live,
-		// still-streaming block is a candidate.
-		if (this.isTranscriptBlockFinalized()) return false;
-		const predicate =
-			(this.#tool as { isStreamingPreviewAppendOnly?: ToolRenderer["isStreamingPreviewAppendOnly"] } | undefined)
-				?.isStreamingPreviewAppendOnly ?? toolRenderers[this.#toolName]?.isStreamingPreviewAppendOnly;
-		if (!predicate) return false;
-		try {
-			return predicate(this.#getCallArgsForRender(), this.#renderState, this.#result);
-		} catch (err) {
-			logger.warn("Tool append-only predicate failed", { tool: this.#toolName, error: String(err) });
+	isTranscriptBlockCommitStable(): boolean {
+		if (this.#displaceable) return false;
+		if (this.#expanded || this.isTranscriptBlockFinalized()) return true;
+		if ((this.#tool as { provisionalPendingPreview?: boolean } | undefined)?.provisionalPendingPreview) {
 			return false;
 		}
+		return !toolRenderers[this.#toolName]?.provisionalPendingPreview;
 	}
 
 	/**
@@ -570,9 +623,24 @@ export class ToolExecutionComponent extends Container {
 	seal(): void {
 		if (this.#sealed) return;
 		this.#sealed = true;
+		this.#displaceable = false;
+		// A sealed detached task is abandoned history: settle its progress rows
+		// on static gray.
+		this.#backgroundTaskFrozen = true;
 		this.stopAnimation();
 		this.#updateDisplay();
 		this.#ui.requestRender();
+	}
+
+	/**
+	 * Whether this block is a waiting `job` poll (every watched job still
+	 * running) that has not been sealed. Such a block never finalized, so none
+	 * of its rows entered native scrollback (the ticking spinner keeps the
+	 * stable-prefix ratchet at zero) and the whole block can be removed when a
+	 * follow-up `job` call supersedes it.
+	 */
+	isDisplaceableBlock(): boolean {
+		return this.#displaceable && !this.#sealed;
 	}
 
 	/**
@@ -900,6 +968,9 @@ export class ToolExecutionComponent extends Container {
 			// draws every dispatched agent as a progress/result line, so tell
 			// `renderCall` to drop its duplicate streaming preview list.
 			context.hasResult = Boolean(this.#result);
+			// Out of the transcript live region: progress rows render static gray
+			// (see task/render.ts).
+			context.frozen = this.#backgroundTaskFrozen;
 		} else if (isEditLikeToolName(this.#toolName)) {
 			context.editMode = this.#editMode;
 			const previews = this.#editDiffPreview;
@@ -956,7 +1027,7 @@ export class ToolExecutionComponent extends Container {
 	 */
 	#formatToolExecution(): string {
 		const lines: string[] = [];
-		const icon = this.#isPartial ? "pending" : this.#result?.isError ? "error" : "success";
+		const icon = this.#isPartial ? "pending" : this.#result?.isError ? "error" : "done";
 		lines.push(renderStatusLine({ icon, title: this.#toolLabel }, theme));
 
 		const argsObject = this.#args && typeof this.#args === "object" ? (this.#args as Record<string, unknown>) : null;

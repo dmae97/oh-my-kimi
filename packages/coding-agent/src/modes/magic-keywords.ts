@@ -4,7 +4,7 @@ import { highlightWorkflow } from "./workflow";
 
 /**
  * Gradient-highlight every magic keyword ("ultrathink", "orchestrate",
- * "workflow") that appears as standalone prose, skipping any occurrence inside a
+ * "workflowz") that appears as standalone prose, skipping any occurrence inside a
  * code block, inline code span, or XML/HTML section. Each highlighter paints its
  * own keyword with its own gradient, so chaining is order-independent — the
  * earlier passes only inject zero-width SGR escapes (no backticks or angle

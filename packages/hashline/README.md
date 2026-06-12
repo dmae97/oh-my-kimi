@@ -51,6 +51,7 @@ Inside a section:
 - `replace block A:` — replace the syntactic block beginning on line A.
 - `delete A..B` / `delete block A` — delete concrete lines or a resolved block.
 - `insert before A:` / `insert after A:` / `insert head:` / `insert tail:` — insert following body rows.
+- `insert after block A:` — insert following body rows after the resolved block's last line.
 - `+TEXT` — literal body row (use `+` alone for a blank line).
 
 ## Abstractions

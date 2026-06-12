@@ -1,8 +1,13 @@
 import { describe, expect, it } from "bun:test";
 import type { Model } from "@oh-my-pi/pi-ai";
-import { RawSseDebugBuffer, rawSseRecordLines, resolveRawSseDebugBuffer } from "../../src/debug/raw-sse-buffer";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import {
+	RawSseDebugBuffer,
+	rawSseRecordLines,
+	resolveRawSseDebugBuffer,
+} from "@oh-my-pi/pi-coding-agent/debug/raw-sse-buffer";
 
-const model: Model<"anthropic-messages"> = {
+const model: Model<"anthropic-messages"> = buildModel({
 	id: "claude-test",
 	name: "Claude Test",
 	api: "anthropic-messages",
@@ -13,7 +18,7 @@ const model: Model<"anthropic-messages"> = {
 	cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
 	contextWindow: 200_000,
 	maxTokens: 8_192,
-};
+});
 
 describe("RawSseDebugBuffer", () => {
 	it("records response metadata and raw SSE frame lines for diagnostics", () => {
@@ -67,5 +72,28 @@ describe("RawSseDebugBuffer", () => {
 
 		expect(resolveRawSseDebugBuffer(owner)).toBe(buffer);
 		expect(buffer.snapshot().totalEvents).toBe(1);
+	});
+
+	it("keeps session-owned records captured before the viewer resolves the buffer", () => {
+		const session = { rawSseDebugBuffer: new RawSseDebugBuffer() };
+		session.rawSseDebugBuffer.recordResponse(
+			{ status: 200, requestId: "req_pre_viewer", headers: {}, metadata: { lastTransport: "sse" } },
+			model,
+		);
+		session.rawSseDebugBuffer.recordEvent(
+			{ event: "message_start", data: "{}", raw: ["event: message_start", "data: {}"] },
+			model,
+		);
+		session.rawSseDebugBuffer.recordEvent(
+			{ event: "message_stop", data: "{}", raw: ["event: message_stop", "data: {}"] },
+			model,
+		);
+
+		const buffer = resolveRawSseDebugBuffer(session);
+
+		expect(buffer).toBe(session.rawSseDebugBuffer);
+		expect(buffer.snapshot().totalEvents).toBe(2);
+		expect(buffer.toRawText()).toContain("requestId=req_pre_viewer");
+		expect(buffer.toRawText()).toContain("event: message_stop");
 	});
 });

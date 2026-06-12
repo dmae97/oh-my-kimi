@@ -14,10 +14,9 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import { hookFetch } from "@oh-my-pi/pi-utils";
-
-import { xiaomiModelManagerOptions } from "../src/provider-models/openai-compat";
-import { loginXiaomi } from "../src/utils/oauth/xiaomi";
+import { loginXiaomi } from "@oh-my-pi/pi-ai/registry/oauth/xiaomi";
+import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
+import { xiaomiModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
 
 // Realistic tp- key (same format as user's key, but a dummy value for testing)
 const TP_KEY = "tp-ci1p8t1w4e1sbxgyc8v65tnrjbzro287igmvyf25van9mt76";
@@ -36,19 +35,20 @@ describe("loginXiaomi with tp- key", () => {
 	it("validates against SGP token-plan host with Bearer auth and mimo-v2.5 model", async () => {
 		const seen: { url: string; headers: Record<string, string>; body: string }[] = [];
 
-		using _hook = hookFetch((input, init) => {
+		const fetchMock: FetchImpl = async (input, init) => {
 			seen.push({
 				url: String(input),
 				headers: (init?.headers ?? {}) as Record<string, string>,
 				body: init?.body as string,
 			});
 			return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
-		});
+		};
 
 		await loginXiaomi({
 			onPrompt: async () => TP_KEY,
 			onAuth: () => {},
 			onProgress: () => {},
+			fetch: fetchMock,
 		});
 
 		expect(seen).toHaveLength(1);
@@ -71,19 +71,20 @@ describe("loginXiaomi with tp- key", () => {
 	it("falls back SGP → AMS → CN during validation", async () => {
 		const seen: string[] = [];
 
-		using _hook = hookFetch(input => {
+		const fetchMock: FetchImpl = async input => {
 			const url = String(input);
 			seen.push(url);
 			if (url.includes(TOKEN_PLAN_HOSTS.sgp) || url.includes(TOKEN_PLAN_HOSTS.ams)) {
 				return new Response("Invalid API Key", { status: 401 });
 			}
 			return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
-		});
+		};
 
 		await loginXiaomi({
 			onPrompt: async () => TP_KEY,
 			onAuth: () => {},
 			onProgress: () => {},
+			fetch: fetchMock,
 		});
 
 		// Tried SGP → AMS → succeeded on CN
@@ -94,15 +95,16 @@ describe("loginXiaomi with tp- key", () => {
 	});
 
 	it("throws when all three token-plan hosts return 401", async () => {
-		using _hook = hookFetch(_input => {
+		const fetchMock: FetchImpl = async () => {
 			return new Response("Invalid API Key", { status: 401 });
-		});
+		};
 
 		await expect(
 			loginXiaomi({
 				onPrompt: async () => TP_KEY,
 				onAuth: () => {},
 				onProgress: () => {},
+				fetch: fetchMock,
 			}),
 		).rejects.toThrow("Xiaomi MiMo API key validation failed (401)");
 	});
@@ -110,7 +112,7 @@ describe("loginXiaomi with tp- key", () => {
 	it("falls back through timeouts: SGP timeout → AMS timeout → CN success", async () => {
 		const seen: string[] = [];
 
-		using _hook = hookFetch(input => {
+		const fetchMock: FetchImpl = async input => {
 			const url = String(input);
 			seen.push(url);
 			if (url.includes(TOKEN_PLAN_HOSTS.sgp) || url.includes(TOKEN_PLAN_HOSTS.ams)) {
@@ -118,12 +120,13 @@ describe("loginXiaomi with tp- key", () => {
 				throw new DOMException("The operation was aborted due to timeout.", "AbortError");
 			}
 			return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
-		});
+		};
 
 		await loginXiaomi({
 			onPrompt: async () => TP_KEY,
 			onAuth: () => {},
 			onProgress: () => {},
+			fetch: fetchMock,
 		});
 
 		expect(seen).toHaveLength(3);
@@ -135,15 +138,16 @@ describe("loginXiaomi with tp- key", () => {
 	it("does NOT hit the standard api.xiaomimimo.com for tp- keys", async () => {
 		const seen: string[] = [];
 
-		using _hook = hookFetch(input => {
+		const fetchMock: FetchImpl = async input => {
 			seen.push(String(input));
 			return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
-		});
+		};
 
 		await loginXiaomi({
 			onPrompt: async () => TP_KEY,
 			onAuth: () => {},
 			onProgress: () => {},
+			fetch: fetchMock,
 		});
 
 		for (const url of seen) {
@@ -158,15 +162,15 @@ describe("xiaomiModelManagerOptions with tp- key", () => {
 	it("discovers models from SGP first", async () => {
 		const seen: string[] = [];
 
-		using _hook = hookFetch(input => {
+		const fetchMock: FetchImpl = async input => {
 			seen.push(String(input));
 			return new Response(JSON.stringify({ data: [{ id: "mimo-v2.5" }] }), {
 				status: 200,
 				headers: { "Content-Type": "application/json" },
 			});
-		});
+		};
 
-		const opts = xiaomiModelManagerOptions({ apiKey: TP_KEY });
+		const opts = xiaomiModelManagerOptions({ apiKey: TP_KEY, fetch: fetchMock });
 		const models = await opts.fetchDynamicModels?.();
 
 		expect(seen).toHaveLength(1);
@@ -178,7 +182,7 @@ describe("xiaomiModelManagerOptions with tp- key", () => {
 	it("falls back SGP → AMS → CN during discovery", async () => {
 		const seen: string[] = [];
 
-		using _hook = hookFetch(input => {
+		const fetchMock: FetchImpl = async input => {
 			const url = String(input);
 			seen.push(url);
 
@@ -190,9 +194,9 @@ describe("xiaomiModelManagerOptions with tp- key", () => {
 				status: 200,
 				headers: { "Content-Type": "application/json" },
 			});
-		});
+		};
 
-		const opts = xiaomiModelManagerOptions({ apiKey: TP_KEY });
+		const opts = xiaomiModelManagerOptions({ apiKey: TP_KEY, fetch: fetchMock });
 		const models = await opts.fetchDynamicModels?.();
 
 		// All three token-plan hosts tried in order
@@ -204,11 +208,11 @@ describe("xiaomiModelManagerOptions with tp- key", () => {
 	});
 
 	it("returns null when all token-plan hosts fail", async () => {
-		using _hook = hookFetch(() => {
+		const fetchMock: FetchImpl = async () => {
 			return new Response("error", { status: 500 });
-		});
+		};
 
-		const opts = xiaomiModelManagerOptions({ apiKey: TP_KEY });
+		const opts = xiaomiModelManagerOptions({ apiKey: TP_KEY, fetch: fetchMock });
 		const models = await opts.fetchDynamicModels?.();
 
 		expect(models).toBeNull();
@@ -217,15 +221,15 @@ describe("xiaomiModelManagerOptions with tp- key", () => {
 	it("does NOT use standard host for tp- key model discovery", async () => {
 		const seen: string[] = [];
 
-		using _hook = hookFetch(input => {
+		const fetchMock: FetchImpl = async input => {
 			seen.push(String(input));
 			return new Response(JSON.stringify({ data: [] }), {
 				status: 200,
 				headers: { "Content-Type": "application/json" },
 			});
-		});
+		};
 
-		const opts = xiaomiModelManagerOptions({ apiKey: TP_KEY });
+		const opts = xiaomiModelManagerOptions({ apiKey: TP_KEY, fetch: fetchMock });
 		await opts.fetchDynamicModels?.();
 
 		for (const url of seen) {
@@ -241,15 +245,16 @@ describe("Xiaomi tp- full round-trip", () => {
 		// Phase 1: Login
 		const loginUrls: string[] = [];
 
-		using _hook1 = hookFetch(input => {
+		const loginFetchMock: FetchImpl = async input => {
 			loginUrls.push(String(input));
 			return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
-		});
+		};
 
 		const returnedKey = await loginXiaomi({
 			onPrompt: async () => TP_KEY,
 			onAuth: () => {},
 			onProgress: () => {},
+			fetch: loginFetchMock,
 		});
 
 		expect(returnedKey).toBe(TP_KEY);
@@ -257,20 +262,18 @@ describe("Xiaomi tp- full round-trip", () => {
 		expect(loginUrls[0]).toContain(TOKEN_PLAN_HOSTS.sgp);
 		expect(loginUrls[0]).toContain("/v1/chat/completions");
 
-		// Dispose hook1 (restore original fetch)
-
 		// Phase 2: Model discovery with the returned key
 		const discoveryUrls: string[] = [];
 
-		using _hook2 = hookFetch(input => {
+		const discoveryFetchMock: FetchImpl = async input => {
 			discoveryUrls.push(String(input));
 			return new Response(JSON.stringify({ data: [{ id: "mimo-v2.5" }] }), {
 				status: 200,
 				headers: { "Content-Type": "application/json" },
 			});
-		});
+		};
 
-		const opts = xiaomiModelManagerOptions({ apiKey: returnedKey });
+		const opts = xiaomiModelManagerOptions({ apiKey: returnedKey, fetch: discoveryFetchMock });
 		const models = await opts.fetchDynamicModels?.();
 
 		expect(discoveryUrls).toHaveLength(1);

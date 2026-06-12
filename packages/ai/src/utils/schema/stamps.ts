@@ -9,11 +9,13 @@
  *
  * Caveats: the stamp lives as long as the host object, even after callers
  * release their references to the cached value — only use this for caches
- * whose lifetime should match the host. Frozen hosts will throw on write in
- * strict mode; callers that may receive frozen input must handle that.
+ * whose lifetime should match the host. Frozen hosts cannot be stamped;
+ * `define` silently skips them, so memoization/visit-tracking degrades to
+ * best-effort (recompute on every call, no cycle protection) instead of
+ * throwing.
  */
-
 function define<T extends object>(target: T, key: symbol, value: unknown): void {
+	if (Object.isFrozen(target)) return;
 	Object.defineProperty(target, key, { value, writable: true, configurable: true });
 }
 
@@ -79,7 +81,13 @@ export function once<T extends object>(target: T, epoch: number): boolean {
  */
 const kDepth = Symbol("pi.schema.depth");
 
-/** Returns `true` on first entry, `false` if `target` is already on the current path. */
+/**
+ * Returns `true` on first entry, `false` if `target` is already on the
+ * current path. A `false` return does NOT deepen the counter — callers pair
+ * `exit` only with successful enters (`if (!enter(n)) bail; try {…} finally
+ * { exit(n); }`), so incrementing on the cycle branch would leak depth and
+ * make every later top-level walk of the same object misreport a cycle.
+ */
 export function enter<T extends object>(target: T): boolean {
 	const slot = target as Record<symbol, number | undefined>;
 	const cur = slot[kDepth];
@@ -87,11 +95,15 @@ export function enter<T extends object>(target: T): boolean {
 		define(target, kDepth, 1);
 		return true;
 	}
-	slot[kDepth] = cur + 1;
-	return cur === 0;
+	if (cur !== 0) return false;
+	slot[kDepth] = 1;
+	return true;
 }
 
 export function exit<T extends object>(target: T): void {
-	const slot = target as Record<symbol, number>;
-	slot[kDepth]--;
+	const slot = target as Record<symbol, number | undefined>;
+	const cur = slot[kDepth];
+	// Frozen targets never received the kDepth stamp in `enter` — nothing to unwind.
+	if (cur === undefined) return;
+	slot[kDepth] = cur - 1;
 }

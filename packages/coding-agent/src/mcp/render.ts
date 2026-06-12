@@ -53,7 +53,13 @@ export function renderMCPResult(
 	const lines: string[] = [];
 	const isError = result.isError ?? result.details?.isError ?? false;
 	const title = result.details ? `${result.details.serverName}/${result.details.mcpToolName}` : "MCP";
-	lines.push(renderStatusLine({ icon: isError ? "error" : "success", title }, theme));
+	const success = !isError;
+	lines.push(
+		renderStatusLine(
+			success ? { iconOverride: theme.styledSymbol("tool.mcp", "accent"), title } : { icon: "error", title },
+			theme,
+		),
+	);
 
 	// Args section (when expanded)
 	if (expanded && args && typeof args === "object" && Object.keys(args).length > 0) {

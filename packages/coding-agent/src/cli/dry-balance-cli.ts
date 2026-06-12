@@ -12,14 +12,14 @@ import type {
 	SimpleStreamOptions,
 } from "@oh-my-pi/pi-ai";
 import { streamSimple } from "@oh-my-pi/pi-ai";
+import type { CanonicalModelVariant } from "@oh-my-pi/pi-catalog/identity";
 import { replaceTabs, truncateToWidth } from "@oh-my-pi/pi-tui";
 import { formatDuration, getProjectDir } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
-import type { CanonicalModelVariant } from "../config/model-equivalence";
 import { type CanonicalModelQueryOptions, ModelRegistry } from "../config/model-registry";
 import {
 	formatModelString,
-	type ModelMatchPreferences,
+	getModelMatchPreferences,
 	resolveAllowedModels,
 	resolveCliModel,
 	resolveModelRoleValue,
@@ -542,9 +542,7 @@ async function resolveDryBalanceModel(
 	settings: Settings | undefined,
 	randomSessionId: () => string,
 ): Promise<{ model: Model<Api>; warning?: string }> {
-	const preferences: ModelMatchPreferences = {
-		usageOrder: settings?.getStorage()?.getModelUsageOrder(),
-	};
+	const preferences = getModelMatchPreferences(settings);
 	if (modelSelector) {
 		const resolved = resolveCliModel({
 			cliModel: modelSelector,

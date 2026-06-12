@@ -1,18 +1,19 @@
-import { afterEach, describe, expect, it, vi } from "bun:test";
-import { hookFetch } from "@oh-my-pi/pi-utils";
-import * as geminiCliProvider from "../src/providers/google-gemini-cli";
+import { describe, expect, it } from "bun:test";
+import * as geminiCliProvider from "@oh-my-pi/pi-ai/providers/google-gemini-cli";
 import {
 	ANTIGRAVITY_SYSTEM_INSTRUCTION,
 	buildRequest,
 	parseGeminiCliCredentials,
 	shouldRefreshGeminiCliCredentials,
 	streamGoogleGeminiCli,
-} from "../src/providers/google-gemini-cli";
-import type { Context, Model, TJsonSchema } from "../src/types";
-import { getOAuthApiKey } from "../src/utils/oauth";
+} from "@oh-my-pi/pi-ai/providers/google-gemini-cli";
+import { getOAuthApiKey } from "@oh-my-pi/pi-ai/registry/oauth";
+import type { Context, FetchImpl, Model, TJsonSchema } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import type { ModelSpec } from "@oh-my-pi/pi-catalog/types";
 
 function createModel(provider: "google-gemini-cli" | "google-antigravity"): Model<"google-gemini-cli"> {
-	return {
+	return buildModel({
 		id: provider === "google-antigravity" ? "gemini-3-flash" : "gemini-2.5-flash",
 		name: provider,
 		api: "google-gemini-cli",
@@ -28,7 +29,7 @@ function createModel(provider: "google-gemini-cli" | "google-antigravity"): Mode
 		},
 		contextWindow: 200000,
 		maxTokens: 8192,
-	};
+	});
 }
 
 function createContext(): Context {
@@ -206,10 +207,10 @@ describe("Google Gemini CLI alignment", () => {
 		// "gemini-3-pro-high" (hyphen) but the deployed model IDs use "gemini-3.1-pro-high" (dot),
 		// so the injection was silently skipped and the Cloud Code Assist API returned HTTP 400.
 		for (const modelId of ["gemini-3.1-pro-high", "gemini-3.1-pro-low"] as const) {
-			const model: Model<"google-gemini-cli"> = {
+			const model: Model<"google-gemini-cli"> = buildModel({
 				...createModel("google-antigravity"),
 				id: modelId,
-			};
+			} as ModelSpec<"google-gemini-cli">);
 			const context: Context = {
 				systemPrompt: ["my instructions"],
 				messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
@@ -227,20 +228,21 @@ describe("Google Gemini CLI alignment", () => {
 	});
 	it("adds anthropic-beta for Antigravity Claude reasoning models without relying on id suffix", async () => {
 		let requestHeaders: Headers | undefined;
-		using _hook = hookFetch(async (_url, init) => {
+		const fetchMock: FetchImpl = async (_url, init) => {
 			requestHeaders = new Headers(init?.headers);
 			return new Response('{"error":{"message":"bad request"}}', { status: 400 });
-		});
+		};
 
-		const model: Model<"google-gemini-cli"> = {
+		const model: Model<"google-gemini-cli"> = buildModel({
 			...createModel("google-antigravity"),
 			id: "claude-sonnet-4-6",
 			name: "Claude Sonnet 4.6",
 			reasoning: true,
-		};
+		} as ModelSpec<"google-gemini-cli">);
 
 		const result = await streamGoogleGeminiCli(model, createContext(), {
 			apiKey: JSON.stringify({ token: "token", projectId: "proj-123" }),
+			fetch: fetchMock,
 		}).result();
 
 		expect(result.stopReason).toBe("error");
@@ -251,24 +253,21 @@ describe("Google Gemini CLI alignment", () => {
 	});
 
 	describe("retry guardrails", () => {
-		afterEach(() => {
-			vi.restoreAllMocks();
-		});
-
 		it("does not treat explicit HTTP failures as network retry errors", async () => {
 			let fetchCalls = 0;
-			using _hook = hookFetch(async () => {
+			const fetchMock: FetchImpl = async () => {
 				fetchCalls += 1;
 				return new Response('{"error":{"message":"busy"}}', {
 					status: 503,
 					headers: { "retry-after": "120" },
 				});
-			});
+			};
 
 			const model = createModel("google-gemini-cli");
 			const stream = streamGoogleGeminiCli(model, createContext(), {
 				apiKey: JSON.stringify({ token: "token", projectId: "proj-123" }),
 				maxRetryDelayMs: 1000,
+				fetch: fetchMock,
 			});
 
 			const result = await stream.result();

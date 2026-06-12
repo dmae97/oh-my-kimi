@@ -1,14 +1,20 @@
 import { rm } from "node:fs/promises";
 import * as path from "node:path";
-import { completeSimple } from "@oh-my-pi/pi-ai";
-import { Mnemopi } from "@oh-my-pi/pi-mnemopi";
-import { BankManager } from "@oh-my-pi/pi-mnemopi/core";
-import { type DiagnosticSummary, inspectDatabase } from "@oh-my-pi/pi-mnemopi/diagnose";
+import { type ApiKeyResolver, completeSimple } from "@oh-my-pi/pi-ai";
+import { hostMatchesUrl } from "@oh-my-pi/pi-catalog/hosts";
+import type { Mnemopi } from "@oh-my-pi/pi-mnemopi";
+import type * as MnemopiDiagnoseNs from "@oh-my-pi/pi-mnemopi/diagnose";
+import type { DiagnosticSummary } from "@oh-my-pi/pi-mnemopi/diagnose";
 import { logger } from "@oh-my-pi/pi-utils";
-
 import type { ModelRegistry } from "../config/model-registry";
 import { resolveRoleSelection } from "../config/model-resolver";
-import type { MemoryBackend, MemoryBackendStartOptions } from "../memory-backend/types";
+import type {
+	MemoryBackend,
+	MemoryBackendSaveInput,
+	MemoryBackendSearchItem,
+	MemoryBackendStartOptions,
+	MemoryBackendStatus,
+} from "../memory-backend/types";
 import memoryConsolidationPrompt from "../prompts/system/memory-consolidation-system.md" with { type: "text" };
 import memoryExtractionPrompt from "../prompts/system/memory-extraction-system.md" with { type: "text" };
 import type { AgentSession } from "../session/agent-session";
@@ -25,9 +31,24 @@ import {
 	getMnemopiScopedBanks,
 	getMnemopiScopedDbPaths,
 	getMnemopiSessionState,
+	loadMnemopi,
+	loadMnemopiCore,
 	MnemopiSessionState,
+	requireMnemopi,
+	requireMnemopiCore,
 	setMnemopiSessionState,
 } from "./state";
+
+// `/diagnose` is the only user of this subpath; load it lazily alongside the
+// loaders in ./state to keep mnemopi off the CLI startup module graph.
+let mnemopiDiagnoseMod: typeof MnemopiDiagnoseNs | undefined;
+
+async function loadMnemopiDiagnose(): Promise<typeof MnemopiDiagnoseNs> {
+	if (!mnemopiDiagnoseMod) {
+		mnemopiDiagnoseMod = await import("@oh-my-pi/pi-mnemopi/diagnose");
+	}
+	return mnemopiDiagnoseMod;
+}
 
 const STATIC_INSTRUCTIONS = [
 	"# Memory",
@@ -62,15 +83,16 @@ export const mnemopiBackend: MemoryBackend = {
 					hasRecalledForFirstTurn: true,
 				}),
 			);
-			previous?.dispose();
+			await previous?.dispose();
 			return;
 		}
 
 		try {
 			const config = await loadMnemopiConfigWithProviders(settings, agentDir, modelRegistry, sessionId);
+			await Promise.all([loadMnemopi(), loadMnemopiCore()]);
 			const state = new MnemopiSessionState({ sessionId, config, session });
 			const previous = setMnemopiSessionState(session, state);
-			previous?.dispose();
+			await previous?.dispose();
 			state.attachSessionListeners();
 		} catch (error) {
 			logger.warn("Mnemopi: backend startup failed; memory backend inert.", { error: String(error) });
@@ -94,9 +116,10 @@ export const mnemopiBackend: MemoryBackend = {
 
 	async clear(agentDir, _cwd, session): Promise<void> {
 		const previous = session ? setMnemopiSessionState(session, undefined) : undefined;
-		previous?.dispose();
+		await previous?.dispose({ consolidate: false });
 		const config = previous?.config ?? (session ? loadMnemopiConfig(session.settings, agentDir) : undefined);
 		if (!config) return;
+		await loadMnemopiCore();
 		await removeDbFiles(getMnemopiScopedDbPaths(config));
 	},
 
@@ -110,20 +133,18 @@ export const mnemopiBackend: MemoryBackend = {
 					session.modelRegistry,
 					session.sessionId,
 				);
+				await Promise.all([loadMnemopi(), loadMnemopiCore()]);
 				state = new MnemopiSessionState({ sessionId: session.sessionId, config, session });
 				setMnemopiSessionState(session, state);
 			}
-			await state?.forceRetainCurrentSession();
-			// Drain the background fact extraction scheduled by the final retain
-			// before the process can exit, otherwise the last turn's facts are lost.
-			await state?.memory.flushExtractions();
-			state?.memory.sleepAllSessions(false);
+			await state?.consolidate();
 		} catch (error) {
 			logger.warn("Mnemopi: enqueue failed.", { error: String(error) });
 		}
 	},
 
 	async stats(agentDir, _cwd, session): Promise<string | undefined> {
+		await Promise.all([loadMnemopi(), loadMnemopiCore()]);
 		const { targets, owned } = createStatsTargets(agentDir, session);
 		try {
 			if (targets.length === 0) return undefined;
@@ -137,6 +158,7 @@ export const mnemopiBackend: MemoryBackend = {
 		const state = getMnemopiSessionState(session);
 		const config = state?.config ?? (session ? loadMnemopiConfig(session.settings, agentDir) : undefined);
 		if (!config) return undefined;
+		const [{ inspectDatabase }] = await Promise.all([loadMnemopiDiagnose(), loadMnemopiCore()]);
 		const banks = getMnemopiScopedBanks(config);
 		const dbPaths = getMnemopiScopedDbPaths(config);
 		const summaries = dbPaths.map((dbPath, index) => ({
@@ -144,6 +166,101 @@ export const mnemopiBackend: MemoryBackend = {
 			summary: inspectDatabase({ dbPath, initialize: false }),
 		}));
 		return renderMnemopiDiagnostics(summaries);
+	},
+
+	async status({ agentDir, session }): Promise<MemoryBackendStatus> {
+		const state = getMnemopiSessionState(session);
+		const primary = state?.aliasOf ?? state;
+		if (!primary) {
+			return {
+				backend: "mnemopi",
+				active: false,
+				writable: false,
+				searchable: false,
+				message: "Mnemopi backend is not initialised for this session.",
+			};
+		}
+
+		const { targets, owned } = createStatsTargets(agentDir, session);
+		try {
+			if (targets.length === 0) {
+				return {
+					backend: "mnemopi",
+					active: false,
+					writable: false,
+					searchable: false,
+					message: "Mnemopi backend is configured but not initialised for this session.",
+				};
+			}
+			return summarizeMnemopiStatus(targets, session);
+		} finally {
+			for (const memory of owned) memory.close();
+		}
+	},
+
+	async search({ session }, query, options) {
+		const state = getMnemopiSessionState(session);
+		const primary = state?.aliasOf ?? state;
+		if (!primary) {
+			return {
+				backend: "mnemopi",
+				query,
+				count: 0,
+				items: [],
+				message: "Mnemopi backend is not initialised for this session.",
+			};
+		}
+		if (options?.signal?.aborted) {
+			return { backend: "mnemopi", query, count: 0, items: [], message: "Search aborted." };
+		}
+		const limit = clampLimit(options?.limit);
+		const results = (await primary.recallResultsScoped(query)).slice(0, limit);
+		if (options?.signal?.aborted) {
+			return { backend: "mnemopi", query, count: 0, items: [], message: "Search aborted." };
+		}
+		const items: MemoryBackendSearchItem[] = results.map(result => ({
+			id: result.id,
+			content: result.content,
+			source: result.source ?? undefined,
+			timestamp: result.timestamp ?? undefined,
+			score: result.score,
+		}));
+		return { backend: "mnemopi", query, count: items.length, items };
+	},
+
+	async save({ cwd, session }, input: MemoryBackendSaveInput) {
+		const state = getMnemopiSessionState(session);
+		const primary = state?.aliasOf ?? state;
+		if (!primary) {
+			return {
+				backend: "mnemopi",
+				stored: 0,
+				message: "Mnemopi backend is not initialised for this session.",
+			};
+		}
+		const content = input.content.trim();
+		if (!content) return { backend: "mnemopi", stored: 0, message: "Memory content is empty." };
+		const id = primary.rememberScoped(content, {
+			source: input.source || "coding-agent-memory-command",
+			importance: normalizeImportance(input.importance),
+			metadata: {
+				session_id: primary.sessionId,
+				cwd,
+				context: input.context ?? null,
+				operation: "memory.save",
+			},
+			scope: "bank",
+			extract: true,
+			extractEntities: true,
+			veracity: "user",
+			memoryType: "fact",
+		});
+		return {
+			backend: "mnemopi",
+			stored: id ? 1 : 0,
+			ids: id ? [id] : [],
+			message: id ? undefined : "Mnemopi did not return a stored memory id.",
+		};
 	},
 
 	async preCompactionContext(messages, _settings, session): Promise<string | undefined> {
@@ -179,6 +296,7 @@ function createStatsTargets(
 
 function createStatsMemory(config: MnemopiBackendConfig, bank: string): Mnemopi {
 	const providerOptions = config.providerOptions as Record<string, unknown>;
+	const { Mnemopi } = requireMnemopi();
 	return new Mnemopi({
 		dbPath: resolveBankDbPath(config, bank),
 		bank,
@@ -193,6 +311,7 @@ function createStatsMemory(config: MnemopiBackendConfig, bank: string): Mnemopi 
 function resolveBankDbPath(config: MnemopiBackendConfig, bank: string): string {
 	const sharedBank = config.globalBank ?? config.baseBank ?? "default";
 	if (bank === sharedBank) return config.dbPath;
+	const { BankManager } = requireMnemopiCore();
 	return new BankManager(path.dirname(config.dbPath)).getBankDbPath(bank);
 }
 
@@ -223,6 +342,52 @@ function renderMnemopiStats(targets: readonly MnemopiStatsTarget[]): string {
 		);
 	}
 	return lines.join("\n");
+}
+
+function summarizeMnemopiStatus(
+	targets: readonly MnemopiStatsTarget[],
+	session: AgentSession | undefined,
+): MemoryBackendStatus {
+	let workingCount = 0;
+	let episodicCount = 0;
+	let tripleCount = 0;
+	let lastMemory: string | undefined;
+	let database: string | undefined;
+	for (const target of targets) {
+		const stats = target.memory.getStats();
+		workingCount += statCount(stats.beam.working_memory);
+		episodicCount += statCount(stats.beam.episodic_memory);
+		tripleCount += stats.beam.triples.total;
+		lastMemory ??= stats.last_memory ?? undefined;
+		database ??= stats.database ? shortenPath(stats.database) : undefined;
+	}
+	const state = getMnemopiSessionState(session);
+	const primary = state?.aliasOf ?? state;
+	return {
+		backend: "mnemopi",
+		active: true,
+		writable: true,
+		searchable: true,
+		scope: primary?.config.scoping,
+		retainBank: primary?.getScopedRetainTarget().bank ?? targets[0]?.bank,
+		recallBanks: primary?.getScopedRecallTargets().map(target => target.bank) ?? targets.map(target => target.bank),
+		workingCount,
+		episodicCount,
+		tripleCount,
+		lastMemory,
+		lastRecall: Boolean(primary?.lastRecallSnippet),
+		database,
+	};
+}
+
+function clampLimit(limit: number | undefined): number {
+	if (!Number.isFinite(limit)) return 10;
+	return Math.max(1, Math.min(50, Math.trunc(limit ?? 10)));
+}
+
+function normalizeImportance(value: number | undefined): number {
+	if (!Number.isFinite(value)) return 0.75;
+	return Math.max(0, Math.min(1, value ?? 0.75));
 }
 
 function renderMnemopiDiagnostics(entries: readonly { bank: string; summary: DiagnosticSummary }[]): string {
@@ -269,6 +434,25 @@ async function loadMnemopiConfigWithProviders(
 	return config;
 }
 
+/**
+ * When mnemopi targets OpenRouter (its default embedding host) without a
+ * user-pinned key, hand it the central {@link ApiKeyResolver} so requests pick
+ * up AuthStorage credentials, force-refresh on 401, and rotate across sibling
+ * keys. Returns undefined when the URL points elsewhere or when no OpenRouter
+ * credential exists, preserving mnemopi's env-key fallback and its
+ * "no key -> API embeddings unavailable" gating.
+ */
+async function openrouterKeyResolver(
+	modelRegistry: ModelRegistry,
+	sessionId: string,
+	baseUrl: string | undefined,
+): Promise<ApiKeyResolver | undefined> {
+	if (baseUrl !== undefined && !hostMatchesUrl(baseUrl, "openrouter")) return undefined;
+	const key = await modelRegistry.getApiKeyForProvider("openrouter", sessionId);
+	if (key === undefined || key === "") return undefined;
+	return modelRegistry.resolver("openrouter", { sessionId });
+}
+
 async function resolveMnemopiProviderOptions(
 	config: MnemopiBackendConfig,
 	settings: MemoryBackendStartOptions["settings"],
@@ -279,7 +463,9 @@ async function resolveMnemopiProviderOptions(
 		noEmbeddings: config.providerOptions.noEmbeddings,
 		embeddingModel: config.providerOptions.embeddingModel,
 		embeddingApiUrl: config.providerOptions.embeddingApiUrl,
-		embeddingApiKey: config.providerOptions.embeddingApiKey,
+		embeddingApiKey:
+			config.providerOptions.embeddingApiKey ??
+			(await openrouterKeyResolver(modelRegistry, sessionId, config.providerOptions.embeddingApiUrl)),
 		llm: false,
 	};
 
@@ -305,7 +491,11 @@ async function resolveMnemopiProviderOptions(
 			...base,
 			llm: {
 				baseUrl: config.llmBaseUrl,
-				apiKey: config.llmApiKey,
+				apiKey:
+					config.llmApiKey ??
+					(config.llmBaseUrl === undefined
+						? undefined
+						: await openrouterKeyResolver(modelRegistry, sessionId, config.llmBaseUrl)),
 				model: config.llmModel,
 			},
 		};
@@ -321,8 +511,8 @@ async function resolveMnemopiProviderOptions(
 		return {
 			...base,
 			llm: async (prompt, opts) => {
-				const apiKey = await modelRegistry.getApiKey(model, sessionId);
-				if (!apiKey) {
+				const hasApiKey = await modelRegistry.getApiKey(model, sessionId);
+				if (!hasApiKey) {
 					logger.warn("Mnemopi: smol completion requested but no current API key is available.", {
 						provider: model.provider,
 						model: model.id,
@@ -335,10 +525,7 @@ async function resolveMnemopiProviderOptions(
 						messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
 					},
 					{
-						apiKey: modelRegistry.resolver(model.provider, {
-							sessionId,
-							baseUrl: model.baseUrl,
-						}),
+						apiKey: modelRegistry.resolver(model, sessionId),
 						maxTokens: opts?.maxTokens,
 						temperature: opts?.temperature,
 					},

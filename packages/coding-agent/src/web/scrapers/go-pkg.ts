@@ -1,5 +1,4 @@
 import { tryParseJson } from "@oh-my-pi/pi-utils";
-import { parseHTML } from "linkedom";
 import type { RenderResult, SpecialHandler } from "./types";
 import { buildResult, htmlToBasicMarkdown, loadPage } from "./types";
 
@@ -97,6 +96,7 @@ export const handleGoPkg: SpecialHandler = async (
 			});
 		}
 
+		const { parseHTML } = await import("linkedom");
 		const doc = parseHTML(pageResult.content).document;
 
 		// Extract actual module path from breadcrumb or header

@@ -1,15 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import { getBundledModel } from "../src/models";
-import { streamSimple } from "../src/stream";
-import type { Context, Model } from "../src/types";
-
-const originalFetch = global.fetch;
+import { streamSimple } from "@oh-my-pi/pi-ai/stream";
+import type { Context, FetchImpl, Model } from "@oh-my-pi/pi-ai/types";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 
 const baseModel = getBundledModel("openai", "gpt-4o-mini") as Model<"openai-responses">;
 
-function mockSseFetch(): Record<string, unknown> {
+function mockSseFetch(): { fetchMock: FetchImpl; captured: Record<string, unknown> } {
 	const captured: Record<string, unknown> = {};
-	const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+	const fetchMock: FetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
 		const body = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : {};
 		Object.assign(captured, body);
 		const event = {
@@ -29,8 +27,7 @@ function mockSseFetch(): Record<string, unknown> {
 			headers: { "content-type": "text/event-stream" },
 		});
 	});
-	global.fetch = Object.assign(fetchMock, { preconnect: originalFetch.preconnect }) as typeof fetch;
-	return captured;
+	return { fetchMock, captured };
 }
 
 const ctx: Context = {
@@ -39,8 +36,8 @@ const ctx: Context = {
 };
 
 async function drain(model: Model<"openai-responses">): Promise<Record<string, unknown>> {
-	const captured = mockSseFetch();
-	const stream = streamSimple(model, ctx, { apiKey: "k" });
+	const { fetchMock, captured } = mockSseFetch();
+	const stream = streamSimple(model, ctx, { apiKey: "k", fetch: fetchMock });
 	for await (const event of stream) {
 		if (event.type === "done" || event.type === "error") break;
 	}
@@ -52,7 +49,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-	global.fetch = originalFetch;
 	vi.restoreAllMocks();
 });
 

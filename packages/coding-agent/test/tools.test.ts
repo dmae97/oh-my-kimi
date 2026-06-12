@@ -567,6 +567,23 @@ describe("Coding Agent Tools", () => {
 			expect(output).toContain("Use :1 to read from the start, or :3 to read the last line.");
 		});
 
+		it("should emit a binary notice instead of mojibake for files with NUL bytes", async () => {
+			const testFile = path.join(testDir, "blob.bin");
+			fs.writeFileSync(testFile, Buffer.from([0x61, 0x62, 0x63, 0x00, 0xff, 0xfe, 0x64, 0x65]));
+
+			const result = await readTool.execute("test-call-binary-nul", { path: testFile });
+			const output = getTextOutput(result);
+
+			expect(output).toContain("Cannot read binary file");
+			expect(output).toContain("NUL bytes");
+		});
+
+		it("should reject malformed internal-URL selectors instead of dumping the whole resource", async () => {
+			await expect(readTool.execute("test-call-bad-internal-sel", { path: "artifact://3:-100" })).rejects.toThrow(
+				/Invalid selector ':-100'/,
+			);
+		});
+
 		it("should include truncation details when truncated", async () => {
 			const testFile = path.join(testDir, "large-file.txt");
 			const lines = Array.from({ length: 3500 }, (_, i) => `Line ${i + 1}`);
@@ -719,6 +736,53 @@ describe("Coding Agent Tools", () => {
 			});
 		}
 
+		it("should treat a selector-shaped archive subpath as a root listing selector", async () => {
+			const archivePath = path.join(testDir, "root-selector.tar");
+			fs.writeFileSync(
+				archivePath,
+				createTarArchive([
+					{ path: "alpha.txt", content: "alpha\n" },
+					{ path: "beta.txt", content: "beta\n" },
+				]),
+			);
+
+			// Previously misparsed as a member named "2" and failed with a
+			// misleading "not found inside archive" error. The selector is honored
+			// as a 1-indexed listing offset, so `:2` starts at the second entry.
+			const result = await readTool.execute("test-call-archive-root-selector", { path: `${archivePath}:2` });
+			const output = getTextOutput(result);
+
+			expect(output).toContain("beta.txt");
+			expect(output).not.toContain("alpha.txt");
+			expect(result.details?.isDirectory).toBe(true);
+		});
+
+		it("should prefer an archive member over a selector-shaped name", async () => {
+			const archivePath = path.join(testDir, "member-precedence.tar");
+			fs.writeFileSync(archivePath, createTarArchive([{ path: "raw", content: "member named raw\n" }]));
+
+			const result = await readTool.execute("test-call-archive-member-raw", { path: `${archivePath}:raw` });
+			const output = getTextOutput(result);
+
+			expect(output).toContain("member named raw");
+		});
+
+		it("should reject archive members larger than the in-memory extraction cap", async () => {
+			const archivePath = path.join(testDir, "bomb.zip");
+			fs.writeFileSync(
+				archivePath,
+				createZipArchiveWithRawDeflateEntry({
+					path: "bomb.bin",
+					compressed: Buffer.from([0xff, 0xff, 0xff, 0xff]),
+					originalSize: 3 * 1024 * 1024 * 1024, // 3GB declared, never allocated
+				}),
+			);
+
+			await expect(readTool.execute("test-call-archive-bomb", { path: `${archivePath}:bomb.bin` })).rejects.toThrow(
+				/too large to extract/i,
+			);
+		});
+
 		it("should detect image MIME type from file magic (not extension)", async () => {
 			const png1x1Base64 =
 				"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X2Z0AAAAASUVORK5CYII=";
@@ -868,6 +932,36 @@ describe("Coding Agent Tools", () => {
 			const archive = new Bun.Archive(await Bun.file(archivePath).bytes());
 			const files = await archive.files();
 			expect(await files.get("pkg/new.txt")?.text()).toBe(content);
+		});
+
+		it("should preserve gzip compression when writing into an existing .tar.gz", async () => {
+			const archivePath = path.join(testDir, "write-existing.tar.gz");
+			fs.writeFileSync(
+				archivePath,
+				zlib.gzipSync(
+					createTarArchive([
+						{ path: "pkg/README.md", content: "# Original\n" },
+						{ path: "pkg/src/index.ts", content: "export const archiveValue = 1;\n" },
+					]),
+				),
+			);
+
+			const content = "# Updated\nLine 2\n";
+			await writeTool.execute("test-call-archive-write-targz", {
+				path: `${archivePath}:pkg/README.md`,
+				content,
+			});
+
+			const bytes = fs.readFileSync(archivePath);
+			// gzip magic must survive the rewrite (regression: archive was
+			// silently rewritten as a bare tar under the .gz name).
+			expect(bytes[0]).toBe(0x1f);
+			expect(bytes[1]).toBe(0x8b);
+
+			const archive = new Bun.Archive(await Bun.file(archivePath).bytes());
+			const files = await archive.files();
+			expect(await files.get("pkg/README.md")?.text()).toBe(content);
+			expect(await files.get("pkg/src/index.ts")?.text()).toBe("export const archiveValue = 1;\n");
 		});
 
 		it("should treat a plain archive filename as a regular file write", async () => {
@@ -1407,15 +1501,6 @@ function b() {
 			expect(output).toContain("second");
 			expect(output).toContain("third");
 		});
-
-		it("should expose background-job tools when bash auto-background is enabled", () => {
-			const autoBackgroundSession = createTestToolSession(
-				testDir,
-				Settings.isolated({ "bash.autoBackground.enabled": true }),
-			);
-
-			expect(JobTool.createIf(autoBackgroundSession)).not.toBeNull();
-		});
 	});
 
 	describe("JobTool", () => {
@@ -1426,7 +1511,7 @@ function b() {
 			const session = createTestToolSession(testDir, Settings.isolated({ "bash.autoBackground.enabled": true }), {
 				asyncJobManager: manager,
 			});
-			const jobTool = JobTool.createIf(session)!;
+			const jobTool = new JobTool(session);
 
 			const jobId = manager.register("bash", "test job", async () => "success");
 
@@ -1442,6 +1527,46 @@ function b() {
 
 			// If it correctly acknowledged, the delivery is suppressed.
 			expect(manager.hasPendingDeliveries()).toBe(false);
+		});
+
+		it("flags still-waiting polls and all-running snapshots as contextually useless", async () => {
+			const manager = new AsyncJobManager({
+				onJobComplete: async () => {},
+			});
+			const session = createTestToolSession(testDir, Settings.isolated({ "bash.autoBackground.enabled": true }), {
+				asyncJobManager: manager,
+			});
+			const jobTool = new JobTool(session);
+			const gate = Promise.withResolvers<string>();
+			const jobId = manager.register("bash", "long job", () => gate.promise);
+
+			// Poll cut short while the job is still running: a pure "still
+			// waiting" snapshot carries no information once consumed.
+			const controller = new AbortController();
+			const pollPromise = jobTool.execute("test-call-useless-poll", { poll: [jobId] }, controller.signal);
+			controller.abort();
+			const polled = await pollPromise;
+			expect(polled.useless).toBe(true);
+
+			// A list snapshot showing only running jobs is equally uneventful.
+			const listed = await jobTool.execute("test-call-useless-list", { list: true });
+			expect(listed.useless).toBe(true);
+
+			// Once the job settles, the result is informative — flag absent.
+			gate.resolve("done");
+			const settled = await jobTool.execute("test-call-useless-settled", { poll: [jobId] });
+			expect(getTextOutput(settled)).toContain("Completed");
+			expect(settled.useless).toBeUndefined();
+
+			// Nothing left to wait for: noise once consumed.
+			const idle = await jobTool.execute("test-call-useless-idle", {});
+			expect(getTextOutput(idle)).toContain("No running background jobs");
+			expect(idle.useless).toBe(true);
+
+			// A poll naming unknown ids found nothing — equally uneventful.
+			const missing = await jobTool.execute("test-call-useless-missing", { poll: ["no-such-job"] });
+			expect(getTextOutput(missing)).toContain("No matching jobs found");
+			expect(missing.useless).toBe(true);
 		});
 	});
 
@@ -1459,6 +1584,30 @@ function b() {
 			expect(output).not.toContain("# example.txt");
 			// PI_EDIT_VARIANT=replace in beforeEach disables hashlines; expect line-number mode
 			expect(output).toMatch(/\*2\|match line/);
+		});
+
+		it("flags a zero-match search as contextually useless", async () => {
+			fs.writeFileSync(path.join(testDir, "plain.txt"), "nothing interesting here\n");
+
+			const result = await searchTool.execute("test-call-useless-search", {
+				pattern: "ZZZ_NO_SUCH_TOKEN_999",
+				paths: [testDir],
+			});
+
+			expect(getTextOutput(result)).toContain("No matches found");
+			expect(result.useless).toBe(true);
+		});
+
+		it("flags a zero-match search useless even when it reports missing paths", async () => {
+			fs.writeFileSync(path.join(testDir, "plain.txt"), "nothing interesting here\n");
+
+			const result = await searchTool.execute("test-call-useless-search-warn", {
+				pattern: "ZZZ_NO_SUCH_TOKEN_999",
+				paths: [testDir, path.join(testDir, "missing-file.txt")],
+			});
+
+			expect(getTextOutput(result)).toContain("Skipped missing paths");
+			expect(result.useless).toBe(true);
 		});
 
 		it("should accept wildcard patterns in paths", async () => {
@@ -1891,6 +2040,21 @@ function b() {
 
 			const files = (result.details?.files ?? []).slice().sort();
 			expect(files).toEqual(["alpha/tests/", "beta/tests/"]);
+		});
+
+		it("should not recurse into subdirectories for a single-star glob like dir/*", async () => {
+			const dir = path.join(testDir, "shallow");
+			const sub = path.join(dir, "sub");
+			fs.mkdirSync(sub, { recursive: true });
+			fs.writeFileSync(path.join(dir, "top.tsx"), "t");
+			fs.writeFileSync(path.join(sub, "nested.tsx"), "n");
+
+			const result = await findTool.execute("test-call-14h", {
+				paths: [`${dir}/*.tsx`],
+			});
+
+			const files = (result.details?.files ?? []).slice().sort();
+			expect(files).toEqual(["shallow/top.tsx"]);
 		});
 	});
 });

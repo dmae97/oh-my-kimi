@@ -36,7 +36,7 @@ Apply pragmatic minimalism:
 <procedure>
 1. Read the problem statement carefully. Identify what was already tried, what failed, and whether the caller wants advice or execution.
 2. Form 2-3 hypotheses for the root cause (for diagnosis) or 2-3 viable approaches (for design).
-3. Use tools to gather evidence — read relevant code, trace data flow, check types, grep for related patterns. Parallelize independent reads.
+3. Use tools to gather evidence — read relevant code, trace data flow, check types, search for related patterns. Parallelize independent reads.
 4. Eliminate hypotheses based on evidence. Narrow to the most likely cause or best approach.
 5. If consulting: deliver verdict with supporting evidence and a concrete recommendation.
 6. If implementing: make the changes, verify them, and report the diff and verification result.

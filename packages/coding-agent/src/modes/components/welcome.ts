@@ -17,6 +17,18 @@ const TIPS: readonly string[] = tipsText
 	.map(line => line.trim())
 	.filter(line => line.length > 0);
 
+/**
+ * Fixed number of session rows in the welcome box so its height stays stable
+ * across recent-session updates.
+ */
+export const WELCOME_SESSION_SLOTS = 4;
+
+/**
+ * Fixed number of LSP-server rows, for the same reason. Overflow is sliced so
+ * the box height is constant regardless of how many servers a project has.
+ */
+export const WELCOME_LSP_SLOTS = 4;
+
 export function renderWelcomeTip(tip: string, boxWidth: number): string[] {
 	const label = "Tip: ";
 	const labelWidth = visibleWidth(label);
@@ -48,7 +60,7 @@ export interface RecentSession {
 
 export interface LspServerInfo {
 	name: string;
-	status: "ready" | "error" | "connecting";
+	status: "ready" | "error" | "connecting" | "available";
 	fileTypes: string[];
 }
 
@@ -60,6 +72,11 @@ export class WelcomeComponent implements Component {
 	#animTimer: ReturnType<typeof setInterval> | null = null;
 	/** Tip chosen once per instance so re-renders (intro, LSP updates) don't shuffle it. */
 	readonly #tip: string | undefined = TIPS.length > 0 ? TIPS[Math.floor(Math.random() * TIPS.length)] : undefined;
+	// Render cache: the welcome box is the first transcript-area component, so
+	// returning a stable array reference keeps the whole frame prefix stable.
+	// Bypassed while the intro animation runs (every frame differs).
+	#cachedWidth = -1;
+	#cachedLines: string[] | undefined;
 
 	constructor(
 		private readonly version: string,
@@ -69,7 +86,10 @@ export class WelcomeComponent implements Component {
 		private lspServers: LspServerInfo[] = [],
 	) {}
 
-	invalidate(): void {}
+	invalidate(): void {
+		this.#cachedWidth = -1;
+		this.#cachedLines = undefined;
+	}
 
 	/**
 	 * Play a one-shot intro that sweeps the gradient through every phase
@@ -95,22 +115,43 @@ export class WelcomeComponent implements Component {
 			this.#animTimer = null;
 		}
 		this.#animStart = null;
+		// The settled (resting) frame differs from the last intro frame.
+		this.invalidate();
 	}
 
 	setModel(modelName: string, providerName: string): void {
 		this.modelName = modelName;
 		this.providerName = providerName;
+		this.invalidate();
 	}
 
 	setRecentSessions(sessions: RecentSession[]): void {
 		this.recentSessions = sessions;
+		this.invalidate();
 	}
 
 	setLspServers(servers: LspServerInfo[]): void {
 		this.lspServers = servers;
+		this.invalidate();
 	}
 
-	render(termWidth: number): string[] {
+	render(termWidth: number): readonly string[] {
+		const animating = this.#animStart != null;
+		if (!animating && this.#cachedLines && this.#cachedWidth === termWidth) {
+			return this.#cachedLines;
+		}
+		const lines = this.#renderLines(termWidth);
+		if (animating) {
+			this.#cachedLines = undefined;
+			this.#cachedWidth = -1;
+		} else {
+			this.#cachedLines = lines;
+			this.#cachedWidth = termWidth;
+		}
+		return lines;
+	}
+
+	#renderLines(termWidth: number): string[] {
 		// Box dimensions - responsive with max width and small-terminal support
 		const maxWidth = 100;
 		const boxWidth = Math.min(maxWidth, Math.max(0, termWidth - 2));
@@ -165,7 +206,7 @@ export class WelcomeComponent implements Component {
 			// absorbs whatever space is left.
 			const bulletPrefix = ` ${theme.md.bullet} `;
 			const prefixWidth = visibleWidth(bulletPrefix);
-			for (const session of this.recentSessions.slice(0, 3)) {
+			for (const session of this.recentSessions.slice(0, WELCOME_SESSION_SLOTS)) {
 				const timeSuffixRaw = ` (${session.timeAgo})`;
 				const timeWidth = visibleWidth(timeSuffixRaw);
 				const nameBudget = Math.max(1, rightCol - prefixWidth - timeWidth);
@@ -176,22 +217,32 @@ export class WelcomeComponent implements Component {
 				);
 			}
 		}
+		// Pad to the fixed slot count so the box height doesn't depend on session count.
+		while (sessionLines.length < WELCOME_SESSION_SLOTS) {
+			sessionLines.push("");
+		}
 
 		// LSP servers content
 		const lspLines: string[] = [];
 		if (this.lspServers.length === 0) {
 			lspLines.push(` ${theme.fg("dim", "No LSP servers")}`);
 		} else {
-			for (const server of this.lspServers) {
+			for (const server of this.lspServers.slice(0, WELCOME_LSP_SLOTS)) {
 				const icon =
 					server.status === "ready"
-						? theme.styledSymbol("status.success", "success")
-						: server.status === "connecting"
-							? theme.styledSymbol("status.pending", "muted")
-							: theme.styledSymbol("status.error", "error");
+						? theme.styledSymbol("status.enabled", "success")
+						: server.status === "available"
+							? theme.styledSymbol("status.enabled", "dim")
+							: server.status === "connecting"
+								? theme.styledSymbol("status.pending", "muted")
+								: theme.styledSymbol("status.error", "error");
 				const exts = server.fileTypes.slice(0, 3).join(" ");
 				lspLines.push(` ${icon} ${theme.fg("muted", server.name)} ${theme.fg("dim", exts)}`);
 			}
+		}
+		// Pad to the fixed slot count so the box height doesn't depend on server count.
+		while (lspLines.length < WELCOME_LSP_SLOTS) {
+			lspLines.push("");
 		}
 
 		// Right column
@@ -310,18 +361,7 @@ export class WelcomeComponent implements Component {
 		if (this.#animStart == null) return REST_FRAME;
 		const elapsed = performance.now() - this.#animStart;
 		if (elapsed >= INTRO_MS) return REST_FRAME;
-		// Ease-out cubic so the spin decelerates into the resting state.
-		const progress = elapsed / INTRO_MS;
-		const eased = 1 - (1 - progress) ** 3;
-		// Sweep backward through INTRO_SWEEPS full rotations so the gradient
-		// visibly spins multiple times. `eased == 1` → phase = 0 = resting frame.
-		const phase = ((((1 - eased) * INTRO_SWEEPS) % 1) + 1) % 1;
-		// Shine traverses the diagonal at a steady pace, decoupled from the
-		// gradient phase so the two layers parallax. Strength fades out with
-		// the same ease-out curve so the highlight is gone by the resting frame.
-		const shinePos = (((progress * INTRO_SHINE_TRAVERSALS) % 1) + 1) % 1;
-		const shineStrength = (1 - eased) ** 1.5;
-		return gradientLogo(PI_LOGO, phase, { strength: shineStrength, pos: shinePos });
+		return introLogoFrame(elapsed / INTRO_MS);
 	}
 }
 
@@ -430,6 +470,24 @@ const INTRO_TICK_MS = 33;
 const INTRO_SWEEPS = 2.5;
 /** Number of times the shine highlight crosses the diagonal across the intro. */
 const INTRO_SHINE_TRAVERSALS = 3;
+
+/**
+ * Logo frame for a normalized intro progress in [0, 1).
+ *
+ * Ease-out cubic so the spin decelerates into the resting state. The gradient
+ * sweeps backward through INTRO_SWEEPS full rotations (`eased == 1` → phase =
+ * 0 = resting frame) while the shine traverses the diagonal at a steady pace,
+ * decoupled from the gradient phase so the two layers parallax; its strength
+ * fades with the same ease-out curve so the highlight is gone by the resting
+ * frame.
+ */
+function introLogoFrame(progress: number): string[] {
+	const eased = 1 - (1 - progress) ** 3;
+	const phase = ((((1 - eased) * INTRO_SWEEPS) % 1) + 1) % 1;
+	const shinePos = (((progress * INTRO_SHINE_TRAVERSALS) % 1) + 1) % 1;
+	const shineStrength = (1 - eased) ** 1.5;
+	return gradientLogo(PI_LOGO, phase, { strength: shineStrength, pos: shinePos });
+}
 
 /** Resting gradient frame, cached for re-renders outside of the intro. */
 const REST_FRAME = gradientLogo(PI_LOGO, 0);

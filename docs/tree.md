@@ -14,7 +14,8 @@ This is an in-file leaf move, not a new session export.
 
 Primary implementation:
 
-- `src/modes/controllers/input-controller.ts` (`/tree`, keybinding wiring, double-escape behavior)
+- `src/slash-commands/builtin-registry.ts` (`/tree`, `/branch` command routing)
+- `src/modes/controllers/input-controller.ts` (keybinding wiring, double-escape behavior)
 - `src/modes/controllers/selector-controller.ts` (tree UI launch + summary prompt flow)
 - `src/modes/components/tree-selector.ts` (navigation, filters, search, labels, rendering)
 - `src/session/agent-session.ts` (`navigateTree` leaf switching + optional summary)
@@ -25,8 +26,8 @@ Primary implementation:
 Any of the following opens the same selector:
 
 - `/tree`
-- configured keybinding action `tree`
-- double-escape on empty editor when `doubleEscapeAction = "tree"` (default)
+- configured keybinding for the `app.session.tree` action
+- double-escape on empty editor when `doubleEscapeAction = "tree"`
 - `/branch` when `doubleEscapeAction = "tree"` (routes to tree selector instead of user-only branch picker)
 
 ## Tree UI model

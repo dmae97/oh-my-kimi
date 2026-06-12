@@ -178,7 +178,8 @@ OMP understands two auth-related objects.
   "credentialId": "optional-stored-credential-id",
   "tokenUrl": "optional-token-endpoint",
   "clientId": "optional-client-id",
-  "clientSecret": "optional-client-secret"
+  "clientSecret": "optional-client-secret",
+  "resource": "optional-mcp-resource-uri"
 }
 ```
 

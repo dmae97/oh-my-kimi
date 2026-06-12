@@ -26,14 +26,15 @@ export class Text implements Component {
 		return this.#text;
 	}
 
-	setText(text: string): void {
+	setText(text: string): boolean {
 		if (text === this.#text) {
-			return;
+			return false;
 		}
 		this.#text = text;
 		this.#cachedText = undefined;
 		this.#cachedWidth = undefined;
 		this.#cachedLines = undefined;
+		return true;
 	}
 
 	setCustomBgFn(customBgFn?: (text: string) => string): void {
@@ -49,7 +50,7 @@ export class Text implements Component {
 		this.#cachedLines = undefined;
 	}
 
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		// Check cache
 		if (this.#cachedLines && this.#cachedText === this.#text && this.#cachedWidth === width) {
 			return this.#cachedLines;

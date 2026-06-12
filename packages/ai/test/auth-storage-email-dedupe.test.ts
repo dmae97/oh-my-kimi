@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { AuthStorage, type OAuthCredential, SqliteAuthCredentialStore } from "../src/auth-storage";
+import { AuthStorage, type OAuthCredential, SqliteAuthCredentialStore } from "@oh-my-pi/pi-ai/auth-storage";
 
 const LEGACY_TIMESTAMP = 1_700_000_000;
 
@@ -466,6 +466,37 @@ describe("AuthStorage openai-codex email dedupe", () => {
 			expect(readAuthSchemaVersion(futureDbPath)).toBe(5);
 		} finally {
 			reopenedStore.close();
+		}
+	});
+
+	it("reopens a current-schema db without issuing write transactions", async () => {
+		if (!tempDir) throw new Error("test setup failed");
+
+		const reopenDbPath = path.join(tempDir, "reopen-noop-agent.db");
+		const first = await SqliteAuthCredentialStore.open(reopenDbPath);
+		// api_key rows never derive an identity_key, so this leaves a NULL row
+		// the boot-time backfill scan must skip without a no-op UPDATE.
+		first.saveApiKey("openai", "sk-reopen-noop");
+		first.close();
+
+		// PRAGMA data_version, read from a second connection, increments whenever
+		// another connection commits a write; reopening a current-schema store
+		// (already-WAL pragmas, IF NOT EXISTS DDL, current version row, and an
+		// underivable NULL identity_key row) must not move it.
+		const observer = new Database(reopenDbPath, { readonly: true });
+		try {
+			const before = (observer.prepare("PRAGMA data_version").get() as { data_version: number }).data_version;
+			const reopened = await SqliteAuthCredentialStore.open(reopenDbPath);
+			try {
+				expect(reopened.listAuthCredentials("openai")).toHaveLength(1);
+				expect(readAuthSchemaVersion(reopenDbPath)).toBe(4);
+			} finally {
+				reopened.close();
+			}
+			const after = (observer.prepare("PRAGMA data_version").get() as { data_version: number }).data_version;
+			expect(after).toBe(before);
+		} finally {
+			observer.close();
 		}
 	});
 

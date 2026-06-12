@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { repairDoubleEncodedJsonString, repairTaskParams } from "../../src/task/repair-args";
-import type { TaskParams } from "../../src/task/types";
+import { repairDoubleEncodedJsonString, repairTaskParams } from "@oh-my-pi/pi-coding-agent/task/repair-args";
+import type { TaskParams } from "@oh-my-pi/pi-coding-agent/task/types";
 
 describe("repairDoubleEncodedJsonString", () => {
 	it("decodes a uniformly double-encoded prose value", () => {
@@ -44,31 +44,27 @@ describe("repairDoubleEncodedJsonString", () => {
 });
 
 describe("repairTaskParams", () => {
-	it("repairs context and each task's assignment/description, leaving ids intact", () => {
+	it("repairs assignment and description, leaving agent/id intact", () => {
 		const params = {
 			agent: "task",
-			context: "# Goal\\nDo the thing \\u2014 carefully",
-			tasks: [
-				{
-					id: "FirstTask",
-					description: 'judge \\"sketch\\" accuracy',
-					assignment: "Score 0-100.\\nUse the full range.\\nNo bunching.",
-				},
-			],
+			id: "FirstTask",
+			description: 'judge \\"sketch\\" accuracy',
+			assignment: "Score 0-100.\\nUse the full range.\\nNo bunching.",
 		} as unknown as TaskParams;
 
 		const repaired = repairTaskParams(params);
-		expect(repaired.context).toBe("# Goal\nDo the thing — carefully");
-		expect(repaired.tasks[0].id).toBe("FirstTask");
-		expect(repaired.tasks[0].description).toBe('judge "sketch" accuracy');
-		expect(repaired.tasks[0].assignment).toBe("Score 0-100.\nUse the full range.\nNo bunching.");
+		expect(repaired.agent).toBe("task");
+		expect(repaired.id).toBe("FirstTask");
+		expect(repaired.description).toBe('judge "sketch" accuracy');
+		expect(repaired.assignment).toBe("Score 0-100.\nUse the full range.\nNo bunching.");
 	});
 
 	it("returns the same reference when nothing needs repair", () => {
 		const params = {
 			agent: "task",
-			context: "plain context",
-			tasks: [{ id: "A", description: "label", assignment: "do work" }],
+			id: "A",
+			description: "label",
+			assignment: "do work",
 		} as unknown as TaskParams;
 		expect(repairTaskParams(params)).toBe(params);
 	});

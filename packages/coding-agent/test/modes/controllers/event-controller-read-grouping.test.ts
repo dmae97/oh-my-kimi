@@ -68,19 +68,22 @@ function assistantMessage(content: Block[]): AssistantMessage {
 
 function createFixture() {
 	const chatContainer = new Container();
+	const sessionMock = { getToolByName: () => undefined, extensionRunner: undefined };
 	const ctx = {
 		isInitialized: true,
 		init: vi.fn(async () => {}),
 		statusLine: { invalidate: vi.fn() },
 		updateEditorTopBorder: vi.fn(),
-		ui: { requestRender: vi.fn(), setEagerNativeScrollbackRebuild: vi.fn(), imageBudget: undefined },
+		ui: { requestRender: vi.fn(), imageBudget: undefined },
 		chatContainer,
 		pendingTools: new Map(),
 		settings: { get: () => false },
 		toolOutputExpanded: false,
 		hideThinkingBlock: false,
 		setWorkingMessage: vi.fn(),
-		session: { getToolByName: () => undefined, extensionRunner: undefined },
+		clearTransientSessionUi: () => {},
+		session: sessionMock,
+		viewSession: sessionMock,
 	} as unknown as InteractiveModeContext;
 	return { controller: new EventController(ctx), chatContainer };
 }
@@ -105,11 +108,12 @@ describe("EventController read-group accretion", () => {
 		const { controller, chatContainer } = createFixture();
 
 		// Mirrors the reported session: first read carries reasoning, the rest have
-		// empty or absent thinking. None of them should break the run.
+		// empty or absent thinking. None of them should break the run. Distinct files
+		// keep one aggregated row per read so the count reflects the run size.
 		await streamCompletion(controller, [thinking("Considering performance optimizations"), read("a.ts:180-250")]);
-		await streamCompletion(controller, [thinking(""), read("a.ts:1-120")]);
-		await streamCompletion(controller, [read("b.ts:1-220")]);
-		await streamCompletion(controller, [read("b.ts:450-535")]);
+		await streamCompletion(controller, [thinking(""), read("b.ts:1-120")]);
+		await streamCompletion(controller, [read("c.ts:1-220")]);
+		await streamCompletion(controller, [read("d.ts:450-535")]);
 
 		const groups = readGroups(chatContainer);
 		expect(groups.length).toBe(1);
@@ -120,10 +124,10 @@ describe("EventController read-group accretion", () => {
 		const { controller, chatContainer } = createFixture();
 
 		await streamCompletion(controller, [read("a.ts:1-50")]);
-		await streamCompletion(controller, [read("a.ts:51-100")]);
+		await streamCompletion(controller, [read("b.ts:1-50")]);
 		// Visible reasoning is a separator: the next reads form a distinct group.
 		await streamCompletion(controller, [thinking("Now let me check the other files"), read("c.ts:1-40")]);
-		await streamCompletion(controller, [read("c.ts:41-80")]);
+		await streamCompletion(controller, [read("d.ts:1-40")]);
 
 		const groups = readGroups(chatContainer);
 		expect(groups.length).toBe(2);
@@ -138,6 +142,12 @@ describe("EventController read-group accretion", () => {
 		const [group] = readGroups(chatContainer);
 		// While it is the active run the block must stay in the live region so its
 		// header can re-layout from `Read <path>` to `Read (N)` on risk terminals.
+		expect(group!.isTranscriptBlockFinalized()).toBe(false);
+
+		// Settle the read so the group has no in-flight result. A finalized group
+		// only commits to native scrollback once its pending entries resolve, so an
+		// unsettled read would keep it live even after the run breaks.
+		group!.updateResult({ content: [{ type: "text", text: "x" }], isError: false }, false, "read-a.ts:1-50");
 		expect(group!.isTranscriptBlockFinalized()).toBe(false);
 
 		// A visible-reasoning completion breaks the run and finalizes the prior group.

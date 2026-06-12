@@ -4,12 +4,14 @@
  * Automatically detects OAuth requirements from MCP server responses
  * and extracts authentication endpoints.
  */
+import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
 
 export interface OAuthEndpoints {
 	authorizationUrl: string;
 	tokenUrl: string;
 	clientId?: string;
 	scopes?: string;
+	resource?: string;
 }
 
 export interface AuthDetectionResult {
@@ -93,7 +95,12 @@ export function extractOAuthEndpoints(error: Error): OAuthEndpoints | null {
 			(obj.default_client_id as string | undefined) ||
 			(obj.public_client_id as string | undefined);
 
-		return { authorizationUrl, tokenUrl, clientId, scopes };
+		const resource =
+			(obj.resource as string | undefined) ||
+			(obj.resource_uri as string | undefined) ||
+			(obj.resourceUri as string | undefined);
+
+		return { authorizationUrl, tokenUrl, clientId, scopes, resource };
 	};
 
 	const clientIdFromAuthUrl = (authorizationUrl: string): string | undefined => {
@@ -160,6 +167,7 @@ export function extractOAuthEndpoints(error: Error): OAuthEndpoints | null {
 			challengeValues.get("realm");
 		const tokenUrl =
 			challengeValues.get("token_url") || challengeValues.get("token_uri") || challengeValues.get("token_endpoint");
+		const resource = challengeValues.get("resource") || challengeValues.get("resource_uri");
 
 		if (authorizationUrl && tokenUrl) {
 			return {
@@ -167,6 +175,7 @@ export function extractOAuthEndpoints(error: Error): OAuthEndpoints | null {
 				tokenUrl,
 				clientId: challengeValues.get("client_id") || clientIdFromAuthUrl(authorizationUrl),
 				scopes: challengeValues.get("scope") || challengeValues.get("scopes") || scopeFromAuthUrl(authorizationUrl),
+				resource,
 			};
 		}
 	}
@@ -249,7 +258,9 @@ export async function discoverOAuthEndpoints(
 	serverUrl: string,
 	authServerUrl?: string,
 	resourceMetadataUrl?: string,
+	opts?: { fetch?: FetchImpl; protectedResource?: string },
 ): Promise<OAuthEndpoints | null> {
+	const fetchImpl: FetchImpl = opts?.fetch ?? fetch;
 	const wellKnownPaths = [
 		"/.well-known/oauth-authorization-server",
 		"/.well-known/openid-configuration",
@@ -261,18 +272,23 @@ export async function discoverOAuthEndpoints(
 	const urlsToQuery: string[] = [];
 	const visitedAuthServers = new Set<string>();
 
+	let protectedResource = opts?.protectedResource;
+
 	// Step 1: If a resource_metadata URL was provided, fetch it to discover auth servers.
 	// This follows the RFC 9728 chain: resource_metadata → authorization_servers.
 	if (resourceMetadataUrl && !visitedAuthServers.has(resourceMetadataUrl)) {
 		visitedAuthServers.add(resourceMetadataUrl);
 		try {
-			const metaResp = await fetch(resourceMetadataUrl, {
+			const metaResp = await fetchImpl(resourceMetadataUrl, {
 				method: "GET",
 				headers: { Accept: "application/json" },
 				redirect: "follow",
 			});
 			if (metaResp.ok) {
 				const meta = (await metaResp.json()) as Record<string, unknown>;
+				if (typeof meta.resource === "string" && meta.resource.trim() !== "") {
+					protectedResource = meta.resource;
+				}
 				const authServers = Array.isArray(meta.authorization_servers)
 					? meta.authorization_servers.filter((entry): entry is string => typeof entry === "string")
 					: [];
@@ -301,6 +317,8 @@ export async function discoverOAuthEndpoints(
 			const scopesSupported = Array.isArray(metadata.scopes_supported)
 				? metadata.scopes_supported.filter((scope): scope is string => typeof scope === "string").join(" ")
 				: undefined;
+			const resource = typeof metadata.resource === "string" ? metadata.resource : protectedResource;
+
 			return {
 				authorizationUrl: String(metadata.authorization_endpoint),
 				tokenUrl: String(metadata.token_endpoint),
@@ -321,12 +339,15 @@ export async function discoverOAuthEndpoints(
 						: typeof metadata.scope === "string"
 							? metadata.scope
 							: undefined),
+				resource,
 			};
 		}
 
 		if (metadata.oauth || metadata.authorization || metadata.auth) {
 			const oauthData = (metadata.oauth || metadata.authorization || metadata.auth) as Record<string, unknown>;
 			if (typeof oauthData.authorization_url === "string" && typeof oauthData.token_url === "string") {
+				const resource = typeof oauthData.resource === "string" ? oauthData.resource : protectedResource;
+
 				return {
 					authorizationUrl: oauthData.authorization_url || String(oauthData.authorizationUrl),
 					tokenUrl: oauthData.token_url || String(oauthData.tokenUrl),
@@ -346,6 +367,7 @@ export async function discoverOAuthEndpoints(
 							: typeof oauthData.scope === "string"
 								? oauthData.scope
 								: undefined,
+					resource,
 				};
 			}
 		}
@@ -359,7 +381,7 @@ export async function discoverOAuthEndpoints(
 			const urlsToTry = buildWellKnownUrls(path, baseUrl);
 			for (const url of urlsToTry) {
 				try {
-					const response = await fetch(url.toString(), {
+					const response = await fetchImpl(url.toString(), {
 						method: "GET",
 						headers: { Accept: "application/json" },
 						redirect: "follow",
@@ -375,11 +397,19 @@ export async function discoverOAuthEndpoints(
 								? metadata.authorization_servers.filter((entry): entry is string => typeof entry === "string")
 								: [];
 
+							const discoveredProtectedResource =
+								typeof metadata.resource === "string" && metadata.resource.trim() !== ""
+									? metadata.resource
+									: protectedResource;
+
 							for (const discoveredAuthServer of authServers) {
 								if (visitedAuthServers.has(discoveredAuthServer)) {
 									continue;
 								}
-								const discovered = await discoverOAuthEndpoints(serverUrl, discoveredAuthServer);
+								const discovered = await discoverOAuthEndpoints(serverUrl, discoveredAuthServer, undefined, {
+									fetch: fetchImpl,
+									protectedResource: discoveredProtectedResource,
+								});
 								if (discovered) return discovered;
 							}
 						}

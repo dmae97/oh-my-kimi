@@ -124,6 +124,18 @@ The dynamic project/environment footer that remains after `SYSTEM.md` is only bl
 
 There is currently no supported CLI mode for "replace the stable default instructions but keep the generated skills/rules/tool guidance." If you need automatic skills loading, keep the default block and add your customization via `APPEND_SYSTEM.md`. If you fully replace with `SYSTEM.md`, you must hard-code any skill names/instructions you want the model to know about, and those will not track discovery automatically.
 
+### "Customize automatic session titles"
+
+`SYSTEM.md` and `APPEND_SYSTEM.md` do not affect the model call that names a new session. Create the title-specific prompt file instead:
+
+```text
+# ~/.omp/agent/TITLE_SYSTEM.md
+Generate a session name using lowercase `<type>:<primary-objective>`.
+If the message carries no concrete task, output exactly `none`.
+```
+
+`TITLE_SYSTEM.md` is discovered with the same project-then-user config-directory pattern as `SYSTEM.md` / `APPEND_SYSTEM.md`. When absent, OMP uses the bundled `title-system.md` / `tiny-title-system.md` prompts. When present, the online title path still forces the `set_title` tool call, and the local tiny-model path keeps the `<title>...</title>` wrapper while using this file as the system turn.
+
 ### "Replace everything, including project context" — SDK-only
 
 The normal CLI file/flag path intentionally preserves `defaultPrompt.slice(1)`. Code using `CreateAgentSessionOptions.systemPrompt` directly can return a full replacement array and omit the project footer, but that is not what `.omp/SYSTEM.md`, `~/.omp/agent/SYSTEM.md`, or `--system-prompt` do.
@@ -163,6 +175,7 @@ Net effect for CLI users: put `SYSTEM.md` / `APPEND_SYSTEM.md` directly under `<
 | Add an instruction on top of the full default prompt | `APPEND_SYSTEM.md` or `--append-system-prompt` |
 | Replace the stable default instructions but keep project/environment context | `SYSTEM.md` or `--system-prompt` |
 | Preserve generated skills/rules/tool guidance while customizing | `APPEND_SYSTEM.md`; `SYSTEM.md` replaces that generated block |
+| Customize automatic session titles | `TITLE_SYSTEM.md`; chat-turn `SYSTEM.md` / `APPEND_SYSTEM.md` do not affect title generation |
 | Use `{{cwd}}` / `{{date}}` / other internals in my file | Not supported. Files are inserted verbatim. |
 | Inherit specific sections from `system-prompt.md` | Not supported; use append, or copy what you need into `SYSTEM.md`. |
 | Override at a per-repo level | Project `.omp/SYSTEM.md` under the cwd you launch `omp` from |

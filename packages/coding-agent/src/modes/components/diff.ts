@@ -109,10 +109,16 @@ export function renderDiff(diffText: string, options: RenderDiffOptions = {}): s
 	const lines = sanitizeText(diffText).split("\n");
 	const result: string[] = [];
 	const parsedLines = lines.map(parseDiffLine);
+	// Reserve 3 gutter digits: a streaming preview re-renders this diff as it
+	// grows, and a width derived purely from the current max line number widens
+	// at the 100-line crossing — re-padding every already-rendered row, which
+	// breaks the transcript's append-only commit detection and forces a full
+	// recommit of the block into native scrollback. A constant gutter through
+	// 999 lines keeps streamed rows byte-identical to the final result render.
 	const lineNumberWidth = parsedLines.reduce((width, parsed) => {
 		const lineNumber = parsed?.lineNum.trim() ?? "";
 		return Math.max(width, lineNumber.length);
-	}, 0);
+	}, 3);
 
 	// Batch-highlight context (unedited) lines so consecutive lines tokenize
 	// with full multi-line context. Highlighting is a no-op when no language
@@ -142,7 +148,12 @@ export function renderDiff(diffText: string, options: RenderDiffOptions = {}): s
 
 		if (!parsed) {
 			prevLineNum = "";
-			result.push(theme.fg("toolDiffContext", replaceTabs(line, options.filePath)));
+			// Blank gap rows (and legacy "..." markers from older transcripts)
+			// mark non-contiguous diff regions; display them as a single dim
+			// unicode ellipsis.
+			const trimmed = line.trim();
+			const isGapRow = trimmed.length === 0 || trimmed === "..." || trimmed === "…";
+			result.push(theme.fg("toolDiffContext", isGapRow ? "…" : replaceTabs(line, options.filePath)));
 			i++;
 			continue;
 		}

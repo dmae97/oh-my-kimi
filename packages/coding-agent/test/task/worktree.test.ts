@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import * as natives from "@oh-my-pi/pi-natives";
 import {
 	captureBaseline,
 	captureDeltaPatch,
@@ -10,7 +9,8 @@ import {
 	getGitNoIndexNullPath,
 	mergeTaskBranches,
 	parseIsolationMode,
-} from "../../src/task/worktree";
+} from "@oh-my-pi/pi-coding-agent/task/worktree";
+import * as natives from "@oh-my-pi/pi-natives";
 
 const tempDirs: string[] = [];
 

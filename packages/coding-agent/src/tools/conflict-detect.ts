@@ -68,7 +68,9 @@ export function scanConflictLines(lines: readonly string[], firstLineNumber: num
 	} | null = null;
 
 	for (let i = 0; i < lines.length; i++) {
-		const line = lines[i];
+		// Strip a trailing \r so CRLF checkouts match the same markers; stored
+		// section lines are LF-normalized (splice re-applies \r on write).
+		const line = stripTrailingCr(lines[i]);
 		const ln = firstLineNumber + i;
 
 		const oursLabel = matchMarker(line, OURS_PREFIX);
@@ -338,13 +340,22 @@ export function spliceConflict(originalText: string, entry: ConflictEntry, repla
 	}
 
 	const trimmed = normalizeTrailingNewline(replacement);
-	const replacementLines = trimmed.split("\n");
+	let replacementLines = trimmed.split("\n").map(stripTrailingCr);
+	// Round-trip fidelity for CRLF files: recorded sections are LF-normalized,
+	// so re-apply \r to spliced lines when the matched region used CRLF. The
+	// final replacement line only carries \r when another line follows it.
+	if (lines[match.startIdx]!.endsWith("\r")) {
+		const hasFollowingLine = match.endIdx + 1 < lines.length;
+		replacementLines = replacementLines.map((l, i) =>
+			i < replacementLines.length - 1 || hasFollowingLine ? `${l}\r` : l,
+		);
+	}
 	const next = [...lines.slice(0, match.startIdx), ...replacementLines, ...lines.slice(match.endIdx + 1)];
 	return next.join("\n");
 }
 
 /** Reconstruct the recorded marker block as it should appear in the file. */
-function buildRecordedRegion(entry: ConflictEntry): string[] {
+function buildRecordedRegion(entry: ConflictBlock): string[] {
 	const out: string[] = [];
 	out.push(entry.oursLabel ? `${OURS_PREFIX} ${entry.oursLabel}` : OURS_PREFIX);
 	out.push(...entry.oursLines);
@@ -356,6 +367,36 @@ function buildRecordedRegion(entry: ConflictEntry): string[] {
 	out.push(...entry.theirsLines);
 	out.push(entry.theirsLabel ? `${THEIRS_PREFIX} ${entry.theirsLabel}` : THEIRS_PREFIX);
 	return out;
+}
+
+/**
+ * True when two registered blocks record the same marker-block content
+ * (labels and all sides). Out-of-band edits can shift a block's line
+ * numbers between reads, registering a fresh id while the stale one
+ * persists; callers use content identity to treat a locate-miss for the
+ * stale twin as "already resolved" instead of a hard failure.
+ */
+export function conflictRegionsEqual(a: ConflictBlock, b: ConflictBlock): boolean {
+	const ra = buildRecordedRegion(a);
+	const rb = buildRecordedRegion(b);
+	if (ra.length !== rb.length) return false;
+	for (let i = 0; i < ra.length; i++) {
+		if (ra[i] !== rb[i]) return false;
+	}
+	return true;
+}
+
+/**
+ * True when the entry's recorded marker block still occurs in `content`
+ * (LF-normalized — recorded sections are stored LF). Distinguishes a stale
+ * re-registration of a just-resolved region (no longer present) from a
+ * DISTINCT conflict block that happens to be byte-identical (still present
+ * elsewhere in the file and must stay addressable).
+ */
+export function conflictRegionPresent(content: string, entry: ConflictBlock): boolean {
+	const region = buildRecordedRegion(entry).join("\n");
+	const normalized = content.includes("\r") ? content.replace(/\r\n/g, "\n") : content;
+	return normalized.includes(region);
 }
 
 /**
@@ -391,9 +432,14 @@ function locateRegion(
 function matchesAt(lines: readonly string[], startIdx: number, expected: readonly string[]): boolean {
 	if (startIdx < 0 || startIdx + expected.length > lines.length) return false;
 	for (let i = 0; i < expected.length; i++) {
-		if (lines[startIdx + i] !== expected[i]) return false;
+		// Recorded lines are LF-normalized; tolerate CRLF on-disk lines.
+		if (stripTrailingCr(lines[startIdx + i]!) !== expected[i]) return false;
 	}
 	return true;
+}
+
+function stripTrailingCr(line: string): string {
+	return line.endsWith("\r") ? line.slice(0, -1) : line;
 }
 
 function normalizeTrailingNewline(replacement: string): string {

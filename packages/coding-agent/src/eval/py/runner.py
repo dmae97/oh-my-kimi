@@ -51,8 +51,23 @@ from typing import Any
 # Frame writer
 # ---------------------------------------------------------------------------
 
-_RAW_STDOUT = sys.__stdout__
+# Frames travel on a private dup of the original stdout. fd 1 itself is then
+# repointed at a capture pipe: child processes spawned by user code without
+# stdout=PIPE inherit fd 1, and their output is forwarded to the host as
+# regular stdout frames by a drain thread instead of being written raw into
+# the NDJSON channel (where it would be dropped as invalid JSON — or worse,
+# spoof a frame). The wire protocol is unchanged: the host still reads NDJSON
+# frames from the subprocess stdout.
 _RAW_STDERR = sys.__stderr__
+try:
+    _FRAME_FD = os.dup(sys.__stdout__.fileno())
+    _RAW_STDOUT = os.fdopen(_FRAME_FD, "w", encoding="utf-8", errors="backslashreplace")
+    _CAPTURE_READ_FD, _capture_write_fd = os.pipe()
+    os.dup2(_capture_write_fd, sys.__stdout__.fileno())
+    os.close(_capture_write_fd)
+except (AttributeError, OSError, ValueError, io.UnsupportedOperation):
+    _RAW_STDOUT = sys.__stdout__
+    _CAPTURE_READ_FD = None
 _OUT_LOCK = threading.Lock()
 
 
@@ -78,11 +93,22 @@ def _emit(frame: dict) -> None:
 
 
 class _StreamProxy(io.TextIOBase):
-    """Emit each ``write()`` as a typed frame tied to the current request."""
+    """Emit ``write()`` data as typed frames tied to the current request.
+
+    Writes are coalesced per request: a frame is emitted once the buffer holds
+    a complete line (everything up to the last newline goes out together) or
+    grows past ``_MAX_BUFFER`` bytes, so the common ``print()`` pair of
+    ``write(text)`` + ``write("\\n")`` costs one frame instead of two. Partial
+    lines are bounded by ``flush()`` and the end-of-request flush.
+    """
+
+    _MAX_BUFFER = 8192
 
     def __init__(self, kind: str) -> None:
         super().__init__()
         self._kind = kind
+        self._lock = threading.Lock()
+        self._buffers: dict[str, str] = {}
 
     def writable(self) -> bool:  # noqa: D401 - protocol method
         return True
@@ -100,11 +126,43 @@ class _StreamProxy(io.TextIOBase):
             _RAW_STDERR.write(data)
             _RAW_STDERR.flush()
             return len(data)
-        _emit({"type": self._kind, "id": rid, "data": data})
+        emit_text = None
+        with self._lock:
+            buf = self._buffers.pop(rid, "") + data
+            if len(buf) >= self._MAX_BUFFER:
+                emit_text = buf
+            else:
+                nl = buf.rfind("\n")
+                if nl >= 0:
+                    emit_text = buf[: nl + 1]
+                    rest = buf[nl + 1 :]
+                    if rest:
+                        self._buffers[rid] = rest
+                else:
+                    self._buffers[rid] = buf
+        if emit_text:
+            _emit({"type": self._kind, "id": rid, "data": emit_text})
         return len(data)
 
     def flush(self) -> None:  # noqa: D401 - protocol method
+        rid = _CURRENT_RID.get()
+        if rid is not None:
+            self.flush_rid(rid)
         return None
+
+    def flush_rid(self, rid: str) -> None:
+        """Flush any buffered partial line for ``rid`` as its own frame."""
+        with self._lock:
+            buf = self._buffers.pop(rid, None)
+        if buf:
+            _emit({"type": self._kind, "id": rid, "data": buf})
+
+
+def _flush_stream_proxies(rid: str) -> None:
+    """Drain buffered proxy output for ``rid`` (called before its done frame)."""
+    for stream in (sys.stdout, sys.stderr):
+        if isinstance(stream, _StreamProxy):
+            stream.flush_rid(rid)
 
 
 # ---------------------------------------------------------------------------
@@ -125,11 +183,51 @@ class _RunnerState:
         self.last_install_marker: int = 0
         self.loop: asyncio.AbstractEventLoop | None = None
         self.active_executions: int = 0
+        # Best-effort attribution target for captured fd-1 bytes (child
+        # processes inheriting stdout). With overlapping requests the most
+        # recently started one wins — strictly better than dropping the bytes.
+        self.capture_rid: str | None = None
 
 
 _CURRENT_RID: contextvars.ContextVar[str | None] = contextvars.ContextVar("omp_current_rid", default=None)
 
 _STATE = _RunnerState()
+
+
+def _drain_captured_stdout() -> None:
+    """Forward bytes written to the captured fd 1 as stdout frames.
+
+    Runs on a daemon thread for the life of the process. Child processes that
+    inherit fd 1 (any ``subprocess`` call without ``stdout=PIPE``) land here.
+    """
+    if _CAPTURE_READ_FD is None:
+        return
+    import codecs
+
+    decoder = codecs.getincrementaldecoder("utf-8")("replace")
+    while True:
+        try:
+            chunk = os.read(_CAPTURE_READ_FD, 65536)
+        except OSError:
+            return
+        if not chunk:
+            return
+        text = decoder.decode(chunk)
+        if not text:
+            continue
+        rid = _STATE.capture_rid
+        if rid is None:
+            _RAW_STDERR.write(text)
+            _RAW_STDERR.flush()
+        else:
+            _emit({"type": "stdout", "id": rid, "data": text})
+
+
+def _start_capture_drain() -> None:
+    if _CAPTURE_READ_FD is None:
+        return
+    thread = threading.Thread(target=_drain_captured_stdout, name="omp-fd1-capture", daemon=True)
+    thread.start()
 
 
 # ---------------------------------------------------------------------------
@@ -819,6 +917,7 @@ _MANAGED_ENV_KEYS = (
     "PI_TOOL_BRIDGE_URL",
     "PI_TOOL_BRIDGE_TOKEN",
     "PI_TOOL_BRIDGE_SESSION",
+    "PI_EVAL_LOCAL_ROOTS",
 )
 
 
@@ -879,6 +978,7 @@ def _start_parent_watchdog() -> None:
 async def _handle_request_async(req: dict) -> None:
     rid = str(req.get("id"))
     token = _CURRENT_RID.set(rid)
+    _STATE.capture_rid = rid
     _STATE.user_ns["__omp_run_id__"] = rid
     _STATE.cancel_requested = False
     _STATE.execution_count += 1
@@ -933,6 +1033,7 @@ async def _handle_request_async(req: dict) -> None:
             except Exception:
                 pass
 
+        _flush_stream_proxies(rid)
         _emit({
             "type": "done",
             "id": rid,
@@ -941,6 +1042,9 @@ async def _handle_request_async(req: dict) -> None:
             "cancelled": cancelled,
         })
     finally:
+        if _STATE.capture_rid == rid:
+            _STATE.capture_rid = None
+        _flush_stream_proxies(rid)
         _CURRENT_RID.reset(token)
 
 
@@ -985,6 +1089,7 @@ async def _main_async() -> None:
     sys.stderr = _StreamProxy("stderr")
     _install_idle_sigint()
     _start_parent_watchdog()
+    _start_capture_drain()
 
     stdin = sys.__stdin__
     if stdin is None:

@@ -30,11 +30,22 @@ export function isSafeEnvValue(value: string): boolean {
 	return !value.includes("\0");
 }
 
+export function isMacosMallocStackLoggingEnvName(name: string): boolean {
+	return name === "MallocStackLogging" || name === "MallocStackLoggingNoCompact";
+}
+
 export function filterProcessEnv(env: Record<string, string | undefined>): Record<string, string> {
 	const result: Record<string, string> = {};
 	for (const key in env) {
 		const value = env[key];
-		if (!isSafeEnvName(key) || value === undefined || !isSafeEnvValue(value)) continue;
+		if (
+			!isSafeEnvName(key) ||
+			isMacosMallocStackLoggingEnvName(key) ||
+			value === undefined ||
+			!isSafeEnvValue(value)
+		) {
+			continue;
+		}
 		result[key] = value;
 	}
 	return result;
@@ -93,14 +104,14 @@ const projectEnv = parseEnvFile(path.join(process.cwd(), ".env"));
 
 for (const key of Object.keys(Bun.env)) {
 	const value = Bun.env[key];
-	if (!isSafeEnvName(key) || value === undefined || !isSafeEnvValue(value)) {
+	if (!isSafeEnvName(key) || isMacosMallocStackLoggingEnvName(key) || value === undefined || !isSafeEnvValue(value)) {
 		delete Bun.env[key];
 	}
 }
 
 for (const file of [projectEnv, agentEnv, piEnv, homeEnv]) {
 	for (const key in file) {
-		if (!Bun.env[key]) {
+		if (!isMacosMallocStackLoggingEnvName(key) && !Bun.env[key]) {
 			Bun.env[key] = file[key];
 		}
 	}
@@ -156,9 +167,29 @@ export function isBunTestRuntime(): boolean {
  * first for cheap fast-path detection.
  */
 export function isCompiledBinary(): boolean {
-	if (Bun.env.PI_COMPILED) return true;
+	if (process.env.PI_COMPILED || Bun.env.PI_COMPILED) return true;
 	const url = import.meta.url;
 	return url.includes("$bunfs") || url.includes("~BUN") || url.includes("%7EBUN");
+}
+
+/**
+ * Main-module path declared by self-dispatching CLI entrypoints — entries
+ * whose top-level argv handling routes hidden `__omp_*` worker selectors.
+ * Worker spawn sites re-enter this module via `new Worker(entry, { argv })`,
+ * so every distribution (source, npm bundle, compiled binary) needs exactly
+ * one JavaScript entrypoint. Never set under `bun test`, SDK embedding, or
+ * standalone package bins — those hosts load worker modules directly.
+ */
+let workerHostMain: string | null = null;
+
+/** Called by CLI entrypoints whose main module dispatches worker argv selectors. */
+export function declareWorkerHostEntry(): void {
+	workerHostMain = Bun.main;
+}
+
+/** Main-module path of the self-dispatching CLI host, or null outside it. */
+export function workerHostEntry(): string | null {
+	return workerHostMain;
 }
 
 const TRUTHY: Dict<boolean> = {

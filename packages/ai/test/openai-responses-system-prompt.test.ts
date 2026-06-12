@@ -1,9 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { getBundledModel } from "../src/models";
-import { streamOpenAIResponses } from "../src/providers/openai-responses";
-import type { Context, Model } from "../src/types";
-
-const originalFetch = global.fetch;
+import { streamOpenAIResponses } from "@oh-my-pi/pi-ai/providers/openai-responses";
+import type { Context, FetchImpl, Model, ModelSpec } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 
 // Non-reasoning model on api.openai.com (canonical path)
 const gpt4oMiniModel = getBundledModel("openai", "gpt-4o-mini") as Model<"openai-responses">;
@@ -45,13 +44,12 @@ async function captureRequestBody(
 	context: Context,
 ): Promise<Record<string, unknown>> {
 	let captured: Record<string, unknown> = {};
-	const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+	const fetchMock: FetchImpl = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
 		captured = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : {};
 		return createSseResponse();
 	});
-	global.fetch = Object.assign(fetchMock, { preconnect: originalFetch.preconnect }) as typeof fetch;
 
-	const stream = streamOpenAIResponses(model, context, { apiKey: "test-key" });
+	const stream = streamOpenAIResponses(model, context, { apiKey: "test-key", fetch: fetchMock });
 	for await (const event of stream) {
 		if (event.type === "done" || event.type === "error") break;
 	}
@@ -59,7 +57,6 @@ async function captureRequestBody(
 }
 
 afterEach(() => {
-	global.fetch = originalFetch;
 	vi.restoreAllMocks();
 });
 
@@ -100,10 +97,12 @@ describe("openai-responses system prompt routing", () => {
 		});
 
 		it("uses instructions for custom proxy base URL (third-party /v1/responses compatibility)", async () => {
-			const proxyModel: Model<"openai-responses"> = {
+			const proxyModel: Model<"openai-responses"> = buildModel({
 				...gpt4oMiniModel,
+				api: "openai-responses",
 				baseUrl: "https://proxy.example.com/v1",
-			};
+				compat: gpt4oMiniModel.compatConfig,
+			} as ModelSpec<"openai-responses">);
 			const context: Context = {
 				systemPrompt: ["You are a proxy assistant."],
 				messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
@@ -149,10 +148,12 @@ describe("openai-responses system prompt routing", () => {
 
 	describe("reasoning model on custom proxy (instructions path)", () => {
 		it("uses instructions for reasoning model on non-official endpoint", async () => {
-			const proxyModel: Model<"openai-responses"> = {
+			const proxyModel: Model<"openai-responses"> = buildModel({
 				...o4MiniModel,
+				api: "openai-responses",
 				baseUrl: "https://proxy.example.com/v1",
-			};
+				compat: o4MiniModel.compatConfig,
+			} as ModelSpec<"openai-responses">);
 			const context: Context = {
 				systemPrompt: ["Proxy reasoning prompt."],
 				messages: [{ role: "user", content: "hi", timestamp: Date.now() }],

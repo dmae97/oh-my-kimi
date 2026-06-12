@@ -1,10 +1,10 @@
-import { afterEach, beforeEach, describe, expect, type Mock, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { type AssistantMessageEventStream, clearCustomApis, Effort, getCustomApi } from "@oh-my-pi/pi-ai";
-import { getOAuthProviders, unregisterOAuthProviders } from "@oh-my-pi/pi-ai/utils/oauth";
-import type { OAuthCredentials } from "@oh-my-pi/pi-ai/utils/oauth/types";
+import { getOAuthProviders, unregisterOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
+import type { OAuthCredentials } from "@oh-my-pi/pi-ai/oauth/types";
 import { ModelRegistry, type ProviderConfigInput } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { Snowflake } from "@oh-my-pi/pi-utils";
@@ -13,9 +13,6 @@ describe("ModelRegistry runtime provider registration", () => {
 	let tempDir: string;
 	let modelsJsonPath: string;
 	let authStorage: AuthStorage;
-	// Neutralizes real network egress during "online" refresh tests so the merge
-	// path runs without wall-clock-bound DNS/socket latency. Restored in afterEach.
-	let fetchSpy: Mock<typeof fetch> | undefined;
 
 	const sourceIds = ["ext://atomic", "ext://runtime", "ext://oauth"];
 
@@ -27,8 +24,6 @@ describe("ModelRegistry runtime provider registration", () => {
 	});
 
 	afterEach(() => {
-		fetchSpy?.mockRestore();
-		fetchSpy = undefined;
 		clearCustomApis();
 		for (const sourceId of sourceIds) {
 			unregisterOAuthProviders(sourceId);
@@ -146,7 +141,7 @@ describe("ModelRegistry runtime provider registration", () => {
 		expectProviderHeader(registry, providerName, "Authorization", undefined);
 	});
 
-	test("registerProvider preserves explicit thinking on runtime models", () => {
+	test("registerProvider preserves explicit thinking and backfills wire facts", () => {
 		const registry = new ModelRegistry(authStorage, modelsJsonPath);
 		const config: ProviderConfigInput = {
 			baseUrl: "https://runtime.example.com/v1",
@@ -159,8 +154,7 @@ describe("ModelRegistry runtime provider registration", () => {
 					reasoning: true,
 					thinking: {
 						mode: "anthropic-adaptive",
-						minLevel: Effort.Minimal,
-						maxLevel: Effort.High,
+						efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High],
 					},
 				},
 			],
@@ -171,8 +165,11 @@ describe("ModelRegistry runtime provider registration", () => {
 
 		expect(model?.thinking).toEqual({
 			mode: "anthropic-adaptive",
-			minLevel: Effort.Minimal,
-			maxLevel: Effort.High,
+			efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High],
+			// Wire facts are backfilled from identity; non-claude ids get the
+			// 4-tier adaptive map, filtered to the declared efforts (no xhigh).
+			effortMap: { minimal: "low" },
+			requiresEffort: true,
 		});
 	});
 
@@ -197,11 +194,9 @@ describe("ModelRegistry runtime provider registration", () => {
 	});
 
 	test("extension-registered models survive refresh('online') cycle", async () => {
-		// The contract is overlay survival through the full online refresh path
-		// (static reload + discovery + merge), not discovery success. Stub fetch so
-		// the online branch runs identically to production-with-no-reachable-providers
-		// without paying real network latency (~400ms of DNS/socket time otherwise).
-		fetchSpy = spyOn(globalThis, "fetch").mockRejectedValue(new Error("network disabled in test"));
+		// ModelRegistry has no fetch injection seam; refresh("online") may hit real
+		// network. The contract under test is overlay survival, not discovery success —
+		// the online path is exercised but provider failures are intentionally swallowed.
 		const registry = new ModelRegistry(authStorage, modelsJsonPath);
 		const config: ProviderConfigInput = {
 			baseUrl: "https://runtime.example.com/v1",

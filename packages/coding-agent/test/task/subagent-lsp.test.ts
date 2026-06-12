@@ -1,24 +1,26 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import type { ModelRegistry } from "../../src/config/model-registry";
-import { Settings } from "../../src/config/settings";
-import type { LoadExtensionsResult } from "../../src/extensibility/extensions/types";
-import type { PlanModeState } from "../../src/plan-mode/state";
-import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "../../src/sdk";
-import * as sdkModule from "../../src/sdk";
-import type { AgentSession, AgentSessionEvent, PromptOptions } from "../../src/session/agent-session";
-import { TaskTool } from "../../src/task";
-import * as discoveryModule from "../../src/task/discovery";
-import type { AgentDefinition, TaskParams } from "../../src/task/types";
-import type { IsolationHandle, WorktreeBaseline } from "../../src/task/worktree";
-import * as worktreeModule from "../../src/task/worktree";
-import type { ToolSession } from "../../src/tools";
-import "../../src/tools/yield";
-import { EventBus } from "../../src/utils/event-bus";
+import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { LoadExtensionsResult } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
+import type { PlanModeState } from "@oh-my-pi/pi-coding-agent/plan-mode/state";
+import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "@oh-my-pi/pi-coding-agent/sdk";
+import * as sdkModule from "@oh-my-pi/pi-coding-agent/sdk";
+import type { AgentSession, AgentSessionEvent, PromptOptions } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { TaskTool } from "@oh-my-pi/pi-coding-agent/task";
+import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
+import type { AgentDefinition, TaskParams } from "@oh-my-pi/pi-coding-agent/task/types";
+import type { IsolationHandle, WorktreeBaseline } from "@oh-my-pi/pi-coding-agent/task/worktree";
+import * as worktreeModule from "@oh-my-pi/pi-coding-agent/task/worktree";
+import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import "@oh-my-pi/pi-coding-agent/tools/yield";
+import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 
 const TEST_TASK: TaskParams = {
 	agent: "task",
-	tasks: [{ id: "CheckLsp", description: "Check LSP availability", assignment: "Inspect LSP tools." }],
+	id: "CheckLsp",
+	description: "Check LSP availability",
+	assignment: "Inspect LSP tools.",
 };
 
 function createAssistantStopMessage(text: string): AssistantMessage {
@@ -236,13 +238,13 @@ describe("subagent LSP availability", () => {
 		expect(getOptions()?.enableLsp).toBe(false);
 	});
 
-	it("applies plan-mode subagent tools and honors task.enableLsp", async () => {
+	it("applies plan-mode subagent tools, preserves read-only agent tools, and honors task.enableLsp", async () => {
 		mockAgents({
 			name: "task",
-			description: "Task agent",
-			systemPrompt: "Use normal tools.",
+			description: "Reviewer-like task agent",
+			systemPrompt: "Review with read-only specialty tools.",
 			source: "bundled",
-			tools: ["bash"],
+			tools: ["bash", "ast_grep", "report_finding", "memory_edit", "retain", "todo"],
 		});
 		const { getOptions } = mockCreateAgentSession();
 		const planMode = { enabled: true, planFilePath: "local://PLAN.md" };
@@ -250,7 +252,12 @@ describe("subagent LSP availability", () => {
 		const tool = await TaskTool.create(createSession({ planMode, taskEnableLsp: true }));
 		await tool.execute("tool-call", TEST_TASK);
 
+		const toolNames = getOptions()?.toolNames;
 		expect(getOptions()?.enableLsp).toBe(true);
-		expect(getOptions()?.toolNames).toEqual(["read", "search", "find", "lsp", "web_search", "irc"]);
+		expect(toolNames).toEqual(["read", "search", "find", "lsp", "web_search", "ast_grep", "report_finding", "irc"]);
+		expect(toolNames).not.toContain("bash");
+		expect(toolNames).not.toContain("memory_edit");
+		expect(toolNames).not.toContain("retain");
+		expect(toolNames).not.toContain("todo");
 	});
 });

@@ -1,9 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { buildRequest } from "../src/providers/google-gemini-cli";
-import type { Context, Model } from "../src/types";
+import { buildRequest } from "@oh-my-pi/pi-ai/providers/google-gemini-cli";
+import type { Context, Model } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 
 function createModel(): Model<"google-gemini-cli"> {
-	return {
+	return buildModel({
 		id: "gemini-2.5-flash",
 		name: "gemini",
 		api: "google-gemini-cli",
@@ -19,7 +20,7 @@ function createModel(): Model<"google-gemini-cli"> {
 		},
 		contextWindow: 200000,
 		maxTokens: 8192,
-	};
+	});
 }
 
 describe("issue #976 — legacy string systemPrompt", () => {

@@ -18,7 +18,7 @@
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `paths` | `string[]` | Yes | One or more globs, files, directories, or internal URLs with backing files. Empty strings are rejected. Single entries accidentally joined with comma, semicolon, or whitespace are expanded only after existence validation; existing paths containing delimiters stay intact. Multiple entries may be merged into one brace-union search when their base paths can be resolved together. |
+| `paths` | `string[]` | Yes | One or more globs, files, directories, or internal URLs with backing files. Empty strings are rejected. Single entries accidentally joined with comma, semicolon, or whitespace are expanded only after existence validation; existing paths containing delimiters stay intact. Each entry becomes its own walk root; multi-entry calls run those scans concurrently. |
 | `hidden` | `boolean` | No | Whether hidden files are included. Defaults to `true` (`hidden ?? true`). |
 | `gitignore` | `boolean` | No | Whether `.gitignore` is respected during local native globbing. Defaults to `true`; set `false` to include gitignored files. |
 | `limit` | `number` | No | Max returned paths. Defaults to `200`; finite positive inputs are floored then clamped to `1..200`. |
@@ -27,7 +27,7 @@
 ## Outputs
 The tool returns a single text block plus structured `details`.
 
-- Success text: matching paths grouped by directory. Each non-root group starts with `# <dir>/` and then lists basenames; root-level matches are listed without a header. Directory matches carry a trailing `/`. Exact file inputs return that file path as one line.
+- Success text: matching paths grouped as a multi-level, prefix-folded directory tree (`formatGroupedPaths()`): one `#` per nesting level, single-child directory chains fold into one header (`# a/b/c/`), and files are listed bare under the deepest owning header; root-level matches are listed without a header. Directory matches carry a trailing `/`. Exact file inputs return that file path as one line.
 - Empty result text: `No files found matching pattern`, optionally followed by a timeout or missing-path notice.
 - Multi-path partial miss: appends `Skipped missing paths: ...` after the result block, or after the empty-result line.
 - `details` may include:
@@ -45,7 +45,7 @@ The tool returns a single text block plus structured `details`.
 1. `FindTool.execute()` expands delimiter-flattened local `paths` entries with `expandDelimitedPathEntries(..., parseFindPattern)` unless custom operations are injected. The splitter validates candidate parts by statting their parsed base paths, keeps existing delimiter-containing paths intact, accepts comma/semicolon splits when at least one part resolves, and accepts whitespace splits only when every part resolves.
 2. The tool normalizes each resulting entry with `normalizePathLikeInput()` and `/\\/g -> "/"` (`packages/coding-agent/src/tools/find.ts`). Empty normalized entries fail with `` `paths` must contain non-empty globs or paths ``.
 3. For multi-path local calls, `partitionExistingPaths(..., parseFindPattern)` (`packages/coding-agent/src/tools/path-utils.ts`) stats each base path. Missing entries are skipped; if all are missing, the tool throws `Path not found: ...`. Single missing paths still hard-fail.
-4. The tool tries `resolveExplicitFindPatterns()` to merge multiple inputs into one search rooted at a common base path. If that does not apply, it parses one input with `parseFindPattern()`.
+4. The tool calls `resolveExplicitFindPatterns()` for multi-entry calls; it parses each entry into its own `(basePath, globPattern, hasGlob)` target so every path is walked as its own root (collapsing to a shared ancestor would scan unrelated siblings). Single-entry calls parse with `parseFindPattern()` directly.
 5. `parseFindPattern()` determines `(basePath, globPattern, hasGlob)`:
    - no glob chars (`*`, `?`, `[`, `{`) => search that path with implicit `**/*`.
    - glob in the first segment => search from `.` and, unless the pattern already starts with `**/`, prefix it with `**/`.
@@ -54,17 +54,17 @@ The tool returns a single text block plus structured `details`.
 7. `limit` defaults to `DEFAULT_LIMIT` (`200`), must be positive and finite, is floored, then clamped to `MAX_LIMIT` (`200`). `hidden` and `gitignore` both default to `true`. `timeout` is converted to milliseconds and clamped to `500..60_000` before building an `AbortSignal.timeout(...)`.
 8. Execution then branches:
    - **Custom operations branch**: if `FindToolOptions.operations.glob` exists, the tool checks existence with `operations.exists()`, short-circuits exact-file inputs via `operations.stat()` when available, then calls `operations.glob(globPattern, searchPath, { ignore: ["**/node_modules/**", "**/.git/**"], limit })`.
-   - **Built-in local branch**: the tool stats `searchPath`. Exact-file inputs return immediately. Directory inputs call `natives.glob()` with `hidden`, `maxResults: effectiveLimit`, `sortByMtime: true`, `gitignore: useGitignore`, and the combined abort signal.
+   - **Built-in local branch**: the tool stats each target's `searchPath`. Exact-file inputs return immediately. Directory inputs call `natives.glob()` with `hidden`, `maxResults: effectiveLimit`, `sortByMtime: true`, `gitignore: useGitignore`, `recursive: false` (recursion comes from the `**/` prefix `parseFindPattern()` adds), and the combined abort signal; multi-target calls run their globs concurrently.
 9. In the local branch, optional `onMatch` callbacks convert each match to a cwd-relative display path and emit throttled progress updates.
-10. After native glob returns, JS sorts `result.matches` by `mtime` descending (`(b.mtime ?? 0) - (a.mtime ?? 0)`) before formatting paths.
-11. `buildResult()` applies `applyListLimit()` to cap the array again at `effectiveLimit`, formats paths with `formatFindGroupedOutput()`, appends notices, then runs `truncateHead()` with `maxLines: Number.MAX_SAFE_INTEGER`. In practice this leaves the 50 KB byte cap in place while disabling the default 3000-line cap.
+10. After native glob returns, JS merges per-target results, deduplicates repeated display paths, and sorts the merged list by `mtime` descending before formatting paths.
+11. `buildResult()` applies `applyListLimit()` to cap the array again at `effectiveLimit`, formats paths with `formatGroupedPaths()` (from `@oh-my-pi/pi-utils`), appends notices, then runs `truncateHead()` with `maxLines: Number.MAX_SAFE_INTEGER`. In practice this leaves the 50 KB byte cap in place while disabling the default 3000-line cap.
 12. `toolResult()` packages text plus `details`, and records result-limit / truncation metadata for renderers.
 
 ## Modes / Variants
 - **Exact file path**: if the parsed input has no glob and the resolved path stats as a file, output is that one path.
 - **Directory path**: if the parsed input has no glob and stats as a directory, the tool searches it with implicit `**/*`.
 - **Single glob path**: one input parsed by `parseFindPattern()`.
-- **Merged multi-path search**: multiple inputs resolved by `resolveExplicitFindPatterns()` into one brace-union glob rooted at a common base path.
+- **Multi-path search**: multiple inputs resolved by `resolveExplicitFindPatterns()` into per-entry targets, each walked as its own root concurrently and merged afterwards.
 - **Partial multi-path search with missing inputs**: local multi-path calls skip missing base paths and surface them as `missingPaths` / `Skipped missing paths: ...`.
 - **Internal URL input**: supported when the internal router resolves the URL to a backing file. Internal URL globs are rejected.
 - **Custom delegated search**: uses injected `FindOperations` instead of local fs + native glob.
@@ -107,6 +107,6 @@ The tool returns a single text block plus structured `details`.
 - Bare top-level globs are made recursive. `*.ts` is parsed as base `.` plus glob `**/*.ts`; `src/*.ts` stays rooted at `src` with a non-recursive `*.ts` segment; `src/**/*.ts` preserves explicit recursion.
 - `.gitignore` defaults to enabled in the built-in local branch. Use `gitignore: false` to disable it for native traversal.
 - `hidden` defaults to `true`; hidden-file exclusion is opt-out, not opt-in.
-- Multi-path missing-input tolerance only applies in the built-in local branch. The custom-operations branch hard-fails the first missing `searchPath` it checks.
+- Multi-path missing-input tolerance applies in both branches, but only the built-in local branch surfaces `missingPaths` / `Skipped missing paths: ...`. The custom-operations branch hard-fails a missing `searchPath` only for single-input calls; in multi-input calls a missing target silently contributes no results.
 - The custom `FindOperations.glob()` hook receives `ignore` and `limit`, but not the `hidden` flag or an explicit `.gitignore` toggle. A remote delegate must account for that itself if it wants parity with the local branch.
 - Built-in local globbing does not force `fileType: File`; it can return files and directories from native glob. Directory outputs also occur through exact-path passthrough or custom delegates that return them.

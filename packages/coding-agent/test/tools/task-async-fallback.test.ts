@@ -1,10 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { AsyncJobManager } from "../../src/async";
-import { Settings } from "../../src/config/settings";
-import { TaskTool } from "../../src/task";
-import * as discoveryModule from "../../src/task/discovery";
-import type { TaskParams } from "../../src/task/types";
-import type { ToolSession } from "../../src/tools";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { TaskTool } from "@oh-my-pi/pi-coding-agent/task";
+import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
+import type { TaskParams } from "@oh-my-pi/pi-coding-agent/task/types";
+import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 
 function createSession(overrides: Partial<Record<string, unknown>> = {}): ToolSession {
 	return {
@@ -24,15 +23,16 @@ function getFirstText(result: { content: Array<{ type: string; text?: string }> 
 describe("task.async-fallback", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
-		AsyncJobManager.resetForTests();
 	});
 
-	it("falls back to sync execution when async is enabled but no manager is registered", async () => {
+	it("falls back to sync execution when the session has no job manager", async () => {
 		// Two-stage spy: the initial discovery during `TaskTool.create` advertises
-		// `task` so the tool builds; the executor's later call (inside
-		// `#executeSync`) advertises *nothing*, forcing the unique "Unknown agent"
-		// message — which is only reachable from the sync codepath. Hitting it
-		// proves we fell back instead of returning the old hard error.
+		// `task` so the tool builds; the executor's later call (inside the sync
+		// `#runSpawn`) advertises *nothing*, forcing the unique "Unknown agent"
+		// message. That re-discovery only happens on the sync codepath — the
+		// async path resolves agents from the create-time snapshot and returns a
+		// job stub immediately — so hitting it proves the missing
+		// `session.asyncJobManager` routed us through the sync fallback.
 		const discoverSpy = vi.spyOn(discoveryModule, "discoverAgents");
 		discoverSpy.mockResolvedValueOnce({
 			agents: [
@@ -47,18 +47,20 @@ describe("task.async-fallback", () => {
 		});
 		discoverSpy.mockResolvedValue({ agents: [], projectAgentsDir: null });
 
-		AsyncJobManager.resetForTests();
-		expect(AsyncJobManager.instance()).toBeUndefined();
-
+		// Enable async so the missing `asyncJobManager` is the fallback trigger.
 		const tool = await TaskTool.create(createSession({ "async.enabled": true }));
 
 		const result = await tool.execute("tool-1", {
 			agent: "task",
-			tasks: [{ id: "One", description: "label", assignment: "Do the thing." }],
+			id: "One",
+			description: "label",
+			assignment: "Do the thing.",
 		} as TaskParams);
 
 		const text = getFirstText(result);
 		expect(text).toContain('Unknown agent "task"');
-		expect(text).not.toContain("no async job manager is available");
+		expect(text).toContain("Available: none");
+		// create + sync-path re-discovery; the async path would have stopped at one.
+		expect(discoverSpy).toHaveBeenCalledTimes(2);
 	});
 });

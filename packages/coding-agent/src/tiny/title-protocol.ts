@@ -29,7 +29,7 @@ export interface TinyTitleProgressEvent {
 
 export type TinyTitleWorkerInbound =
 	| { type: "ping"; id: string }
-	| { type: "generate"; id: string; modelKey: TinyTitleLocalModelKey; message: string }
+	| { type: "generate"; id: string; modelKey: TinyTitleLocalModelKey; message: string; systemPrompt?: string }
 	| { type: "complete"; id: string; modelKey: TinyLocalModelKey; prompt: string; maxTokens?: number }
 	| { type: "download"; id: string; modelKey: TinyLocalModelKey };
 

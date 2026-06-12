@@ -8,9 +8,10 @@
  *   2. The PR #1199 P2 fix (xhigh → max) actually clears the wire — without
  *      the mapping Fireworks 400s the request.
  */
-import { getBundledModel } from "../src/models";
-import { streamOpenAICompletions } from "../src/providers/openai-completions";
-import type { Context, Model } from "../src/types";
+
+import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
+import type { Context, FetchImpl, Model } from "@oh-my-pi/pi-ai/types";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 
 const apiKey = process.env.FIREPASS_API_KEY;
 if (!apiKey) {
@@ -20,7 +21,7 @@ if (!apiKey) {
 
 const model = getBundledModel<"openai-completions">("firepass", "kimi-k2.6-turbo");
 console.log(`Model: ${model.provider}/${model.id} -> ${model.baseUrl}`);
-console.log(`compat.reasoningEffortMap:`, model.compat?.reasoningEffortMap ?? "(none)");
+console.log(`thinking.effortMap:`, model.thinking?.effortMap ?? "(none)");
 
 // Capture the outbound request body so we can verify the wire-id translation
 // and the reasoning_effort mapping locally before reading the network result.
@@ -29,14 +30,14 @@ interface CapturedRequest {
 	body: string | null;
 }
 
-const originalFetch = global.fetch;
+const originalFetch = fetch;
 const captured: { value: CapturedRequest | null } = { value: null };
-type FetchInput = Parameters<typeof fetch>[0];
-global.fetch = (async (input: FetchInput, init?: RequestInit) => {
+type FetchInput = string | URL | Request;
+const fetchImpl: FetchImpl = async (input: FetchInput, init?: RequestInit) => {
 	const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
 	captured.value = { url, body: typeof init?.body === "string" ? init.body : null };
-	return originalFetch(input as Parameters<typeof fetch>[0], init);
-}) as typeof global.fetch;
+	return originalFetch(input, init);
+};
 
 const context: Context = {
 	systemPrompt: ["Reply with exactly two words."],
@@ -51,6 +52,7 @@ async function runEffort(label: string, reasoning: "xhigh" | undefined) {
 		// Intentionally omit maxTokens here so we can also assert that the Kimi-family
 		// safety net (openai-completions.ts isKimi) injects the catalog default.
 		...(reasoning ? { reasoning } : {}),
+		fetch: fetchImpl,
 	});
 	let text = "";
 	let stopReason: string | undefined;
@@ -108,7 +110,7 @@ if (xhigh.firstError) {
 if (xhigh.parsedBody?.reasoning_effort !== "xhigh") {
 	console.error(
 		`\nxhigh was rewritten on the wire (got ${xhigh.parsedBody?.reasoning_effort}); ` +
-			"expected verbatim passthrough — adding compat.reasoningEffortMap would silently downgrade the user",
+			"expected verbatim passthrough — adding thinking.effortMap would silently downgrade the user",
 	);
 	process.exit(1);
 }

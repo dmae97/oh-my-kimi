@@ -29,12 +29,13 @@ Boundary rule: the TUI engine is message-agnostic. It only knows `Component.rend
 
 ## Boot and component tree assembly
 
-`InteractiveMode` constructs `TUI(new ProcessTerminal(), settings.get("showHardwareCursor"))`, applies `clearOnShrink`, `tui.maxInlineImages`, and Kitty text-sizing settings, then creates persistent containers:
+`InteractiveMode` constructs `TUI(new ProcessTerminal(), settings.get("showHardwareCursor"))`, applies `tui.maxInlineImages` and Kitty text-sizing settings, then creates persistent containers:
 
 - `chatContainer`
 - `pendingMessagesContainer`
 - `statusContainer`
 - `todoContainer`
+- `subagentContainer`
 - `btwContainer`
 - `omfgContainer`
 - `errorBannerContainer`
@@ -97,29 +98,23 @@ Routing details:
 
 This keeps key parsing/editor mechanics in `packages/tui` and mode semantics in coding-agent controllers.
 
-## Render loop and diffing strategy
+## Render loop and the append-only contract
 
 `TUI.requestRender()` coalesces render requests and rate-limits ordinary frames:
 
-- forced renders (`requestRender(true, ...)`) schedule an immediate frame and set `#forceViewportRepaintOnNextRender`; with `clearScrollback`, they also queue `sessionReplace`
+- forced renders (`requestRender(true, ...)`) schedule an immediate frame and force a full window rewrite; with `clearScrollback`, they trigger a destructive full paint (ED3 outside multiplexers)
 - ordinary renders schedule through `#scheduleRender()` and respect `TUI.#MIN_RENDER_INTERVAL_MS`
 - repeated requests while a render is pending collapse into the same scheduled frame
+- `requestComponentRender(component)` requests on behalf of a single self-contained change (spinner frame, blink): when every request in the coalesced frame is component-scoped and the frame is quiet (no resize, overlays, inline images, forced repaint, or root-list change), compose re-renders only the root subtrees containing the requesting components and reuses every other root child's previous rows and seam report; any unsafe condition or concurrent full request downgrades to a full compose
 
 `#doRender()` pipeline:
 
-1. Render root component tree to `newLines`.
-2. Composite visible overlays (if any).
-3. Extract and strip `CURSOR_MARKER` from the visible viewport.
-4. Normalize non-image lines and append reset/hyperlink terminators.
-5. Classify the frame into a render intent:
-   - initial paint / forced viewport repaint
-   - explicit session replacement or native scrollback rebuild
-   - viewport repaint for width/height/offscreen mutations
-   - deferred mutation/shrink when native scrollback is scrolled
-   - trailing shrink
-   - changed-line diff
-   - noop
-6. Emit only the bytes required by the intent and commit cached frame/cursor/viewport state.
+1. Render root component tree, collecting the commit-boundary seam (`NativeScrollbackLiveRegion`) from the children.
+2. Advance the append-only ledger: `windowTop = max(committedRows, frame.length - height)`, commit chunk = settled rows crossing the window top (never past the seam).
+3. Extract and strip `CURSOR_MARKER`, normalize lines, slice the visible window, composite overlays into the window slice (screen coordinates; overlays freeze commits).
+4. Emit one of: gesture-driven full paint (initial / session replace / resize), scroll-append (chunk rows only), in-window row diff, or seam rewrite (chunk + full window).
+
+Native scrollback always equals the committed frame prefix — rows enter history exactly once, in order, when the seam says they are final. There are no viewport probes and no deferred reconciliation; see [`tui-core-renderer.md`](./tui-core-renderer.md).
 
 Render writes use synchronized output mode (`CSI ? 2026 h/l`) when enabled; capability detection, DECRQM, or `PI_NO_SYNC_OUTPUT` can disable the wrappers while leaving autowrap discipline on.
 
@@ -145,9 +140,8 @@ Resize events are event-driven from `ProcessTerminal` to `TUI.requestRender()`.
 
 Effects:
 
-- Width or height changes repaint or rebuild because terminal reflow invalidates wrapping, viewport, and cursor anchors.
-- Inside terminal multiplexers, resize uses viewport repaint instead of destructive native-scrollback replay; pane history cannot be erased safely and a full replay duplicates transcript rows.
-- Viewport/top tracking (`#viewportTopRow`, `#maxLinesRendered`, scrollback high-water state) avoids invalid relative cursor math and defers destructive native scrollback rewrites while the user is scrolled into history.
+- A resize is an explicit user gesture: outside multiplexers the engine erases and replays (`ED3` + full paint) so history rewraps at the new geometry; the commit ledger restarts from the replayed frame.
+- Inside terminal multiplexers, resize repaints the visible window in place after a settle debounce (issue #2088); pane history keeps its old wrap, like any shell output, because pane scrollback cannot be erased safely.
 - Overlay visibility can depend on terminal dimensions (`OverlayOptions.visible`); focus is corrected when overlays become non-visible after resize.
 
 ## Streaming and incremental UI updates
@@ -172,7 +166,7 @@ Status lane ownership:
 
 Loader behavior:
 
-- `Loader` updates every 80ms via interval and requests render each frame.
+- `Loader` advances its spinner every 80ms (animated message colorizers redraw at ~30fps) and requests a component-scoped render each frame (`requestComponentRender`), so idle spinner ticks repaint without re-walking the transcript.
 - Escape handlers are temporarily overridden during auto-compaction and auto-retry to cancel those operations.
 - On end/cancel paths, controllers restore prior escape handlers and stop/clear loader components.
 
@@ -222,7 +216,7 @@ Event-driven updates:
 Throttled/debounced paths:
 
 - TUI rendering is tick-debounced (`requestRender` coalescing).
-- Loader animation is fixed-interval (80ms), each frame requesting render.
+- Loader animation is interval-driven (80ms spinner advance; ~30fps when the message colorizer is animated), each frame requesting a component-scoped render.
 - Editor autocomplete updates (inside `Editor`) use debounce timers, reducing recompute churn during typing.
 
 The runtime therefore mixes event-driven state transitions with bounded render cadence to keep interactivity responsive without repaint storms.

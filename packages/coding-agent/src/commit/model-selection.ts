@@ -1,13 +1,14 @@
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Api, ApiKey, Model } from "@oh-my-pi/pi-ai";
 import type { ApiKeyResolverRegistry } from "../config/api-key-resolver";
-import { MODEL_ROLE_IDS } from "../config/model-registry";
 import {
+	getModelMatchPreferences,
 	type ModelLookupRegistry,
 	parseModelPattern,
 	resolveModelRoleValue,
 	resolveRoleSelection,
 } from "../config/model-resolver";
+import { MODEL_ROLE_IDS } from "../config/model-roles";
 import type { Settings } from "../config/settings";
 import MODEL_PRIO from "../priority.json" with { type: "json" };
 
@@ -33,7 +34,7 @@ export async function resolvePrimaryModel(
 	modelRegistry: CommitModelRegistry,
 ): Promise<ResolvedCommitModel> {
 	const available = modelRegistry.getAvailable();
-	const matchPreferences = { usageOrder: settings.getStorage()?.getModelUsageOrder() };
+	const matchPreferences = getModelMatchPreferences(settings);
 	const resolved = override
 		? resolveModelRoleValue(override, available, { settings, matchPreferences, modelRegistry })
 		: resolveRoleSelection(["commit", "smol", ...MODEL_ROLE_IDS], settings, available, modelRegistry);
@@ -47,7 +48,7 @@ export async function resolvePrimaryModel(
 	}
 	return {
 		model,
-		apiKey: modelRegistry.resolver(model.provider, { baseUrl: model.baseUrl }),
+		apiKey: modelRegistry.resolver(model),
 		thinkingLevel: resolved?.thinkingLevel,
 	};
 }
@@ -65,15 +66,13 @@ export async function resolveSmolModel(
 		if (apiKey) {
 			return {
 				model: resolvedSmol.model,
-				apiKey: modelRegistry.resolver(resolvedSmol.model.provider, {
-					baseUrl: resolvedSmol.model.baseUrl,
-				}),
+				apiKey: modelRegistry.resolver(resolvedSmol.model),
 				thinkingLevel: resolvedSmol.thinkingLevel,
 			};
 		}
 	}
 
-	const matchPreferences = { usageOrder: settings.getStorage()?.getModelUsageOrder() };
+	const matchPreferences = getModelMatchPreferences(settings);
 	for (const pattern of MODEL_PRIO.smol) {
 		const candidate = parseModelPattern(pattern, available, matchPreferences, { modelRegistry }).model;
 		if (!candidate) continue;
@@ -81,7 +80,7 @@ export async function resolveSmolModel(
 		if (apiKey) {
 			return {
 				model: candidate,
-				apiKey: modelRegistry.resolver(candidate.provider, { baseUrl: candidate.baseUrl }),
+				apiKey: modelRegistry.resolver(candidate),
 			};
 		}
 	}

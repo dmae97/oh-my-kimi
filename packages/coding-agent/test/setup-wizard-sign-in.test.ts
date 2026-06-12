@@ -1,9 +1,9 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import type { AuthStorage } from "@oh-my-pi/pi-ai";
-import type { OAuthLoginCallbacks, OAuthProviderId } from "@oh-my-pi/pi-ai/utils/oauth/types";
+import type { OAuthLoginCallbacks, OAuthProviderId } from "@oh-my-pi/pi-ai/oauth/types";
+import { SignInTab } from "@oh-my-pi/pi-coding-agent/modes/setup-wizard/scenes/sign-in";
+import type { SetupSceneHost } from "@oh-my-pi/pi-coding-agent/modes/setup-wizard/scenes/types";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import { SignInTab } from "../src/modes/setup-wizard/scenes/sign-in";
-import type { SetupSceneHost } from "../src/modes/setup-wizard/scenes/types";
 
 beforeAll(async () => {
 	await initTheme();
@@ -18,6 +18,7 @@ describe("SignInTab", () => {
 		const authStorage = {
 			has: (_providerId: string) => false,
 			hasAuth: (_providerId: string) => false,
+			getCredentialOrigin: (_providerId: string) => undefined,
 			async login(_provider: OAuthProviderId, ctrl: OAuthLoginCallbacks): Promise<void> {
 				ctrl.onAuth({ url });
 				const prompt = ctrl.onManualCodeInput?.();

@@ -17,6 +17,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { $envpos, isEnoent, logger } from "@oh-my-pi/pi-utils";
 import type { FetchImpl } from "../types";
+import { raceWithSignal } from "../utils/abort";
 
 const OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const METADATA_TOKEN_URL = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token";
@@ -42,7 +43,14 @@ interface AuthorizedUserCredentials {
 	refresh_token: string;
 }
 
-type AdcFileCredentials = ServiceAccountCredentials | AuthorizedUserCredentials;
+interface ImpersonatedServiceAccountCredentials {
+	type: "impersonated_service_account";
+	service_account_impersonation_url: string;
+	source_credentials: AuthorizedUserCredentials | ServiceAccountCredentials;
+	delegates?: string[];
+}
+
+type AdcFileCredentials = ServiceAccountCredentials | AuthorizedUserCredentials | ImpersonatedServiceAccountCredentials;
 
 interface TokenResponse {
 	access_token: string;
@@ -196,10 +204,52 @@ async function resolveAccessTokenUncached(
 ): Promise<{ source: string; token: TokenResponse }> {
 	const adc = await loadAdcCredentials();
 	if (adc) {
-		const token =
-			adc.creds.type === "service_account"
-				? await exchangeJwtForToken(adc.creds, signal, fetchImpl)
-				: await exchangeRefreshToken(adc.creds, signal, fetchImpl);
+		const creds = adc.creds;
+		let token: TokenResponse;
+
+		if (creds.type === "impersonated_service_account") {
+			const targetPrincipalMatch = /(?<target>[^/]+):(generateAccessToken|generateIdToken)$/.exec(
+				creds.service_account_impersonation_url,
+			);
+			const targetPrincipal = targetPrincipalMatch?.groups?.target;
+			if (!targetPrincipal) {
+				throw new RangeError(`Cannot extract target principal from ${creds.service_account_impersonation_url}`);
+			}
+
+			const sourceToken =
+				creds.source_credentials.type === "service_account"
+					? await exchangeJwtForToken(creds.source_credentials, signal, fetchImpl)
+					: await exchangeRefreshToken(creds.source_credentials, signal, fetchImpl);
+
+			const response = await fetchImpl(
+				`https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${targetPrincipal}:generateAccessToken`,
+				{
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						Authorization: `Bearer ${sourceToken.access_token}`,
+					},
+					body: JSON.stringify({
+						delegates: creds.delegates ?? [],
+						scope: [CLOUD_PLATFORM_SCOPE],
+						lifetime: "3600s",
+					}),
+					signal,
+				},
+			);
+			if (!response.ok) {
+				const detail = await response.text().catch(() => "");
+				throw new Error(`Google Impersonation token exchange failed (${response.status}): ${detail}`);
+			}
+			const data = (await response.json()) as { accessToken: string; expireTime: string };
+			const expiresIn = Math.max(0, Math.floor((new Date(data.expireTime).getTime() - Date.now()) / 1000));
+			token = { access_token: data.accessToken, expires_in: expiresIn, token_type: "Bearer" };
+		} else {
+			token =
+				creds.type === "service_account"
+					? await exchangeJwtForToken(creds, signal, fetchImpl)
+					: await exchangeRefreshToken(creds, signal, fetchImpl);
+		}
 		return { source: adc.source, token };
 	}
 	const metadata = await fetchMetadataToken(signal, fetchImpl);
@@ -208,6 +258,13 @@ async function resolveAccessTokenUncached(
 		"Vertex AI requires Application Default Credentials. Set GOOGLE_APPLICATION_CREDENTIALS, run `gcloud auth application-default login`, or run on a GCE/Cloud Run instance with a service account.",
 	);
 }
+
+/**
+ * Bound for the detached (signal-free) shared token resolution: a hung OAuth
+ * exchange or metadata fetch must not pin the inflight slot forever — every
+ * later call would await the stuck promise until process restart.
+ */
+const SHARED_TOKEN_RESOLVE_TIMEOUT_MS = 30_000;
 
 /**
  * Returns a Bearer access token suitable for the `Authorization` header on Vertex AI calls.
@@ -228,11 +285,17 @@ export async function getVertexAccessToken(options?: { signal?: AbortSignal; fet
 
 	const cacheKey = "vertex-adc";
 	const existing = inflight.get(cacheKey);
-	if (existing) return existing;
+	if (existing) return raceWithSignal(existing, options?.signal);
 
+	// Deliberately resolve without any caller's signal: the in-flight promise is shared
+	// by every concurrent caller, so aborting one request must not fail the whole batch.
+	// Each caller races its own signal against the shared promise instead.
 	const promise = (async () => {
 		try {
-			const { source, token } = await resolveAccessTokenUncached(options?.signal, fetchImpl);
+			const { source, token } = await resolveAccessTokenUncached(
+				AbortSignal.timeout(SHARED_TOKEN_RESOLVE_TIMEOUT_MS),
+				fetchImpl,
+			);
 			const expiresAtMs = Date.now() + Math.max(0, token.expires_in * 1000);
 			tokenCache.set(source, { token: token.access_token, expiresAtMs });
 			logger.debug("vertex.adc acquired access token", { source, expiresInSec: token.expires_in });
@@ -242,7 +305,7 @@ export async function getVertexAccessToken(options?: { signal?: AbortSignal; fet
 		}
 	})();
 	inflight.set(cacheKey, promise);
-	return promise;
+	return raceWithSignal(promise, options?.signal);
 }
 
 /** Test seam: clears every cached token. */

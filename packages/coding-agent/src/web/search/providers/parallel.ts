@@ -1,4 +1,4 @@
-import { type ApiKey, type AuthStorage, getEnvApiKey, withAuth } from "@oh-my-pi/pi-ai";
+import { type ApiKey, type AuthStorage, type FetchImpl, getEnvApiKey, withAuth } from "@oh-my-pi/pi-ai";
 import type { SearchResponse } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
 import { ParallelApiError, type ParallelSearchResult, type ParallelSearchSource } from "../../parallel";
@@ -112,6 +112,7 @@ async function searchWithAuthStorage(
 	queries: string[],
 	params: {
 		signal?: AbortSignal;
+		fetch?: FetchImpl;
 	},
 	authStorage: AuthStorage,
 	sessionId?: string,
@@ -131,7 +132,7 @@ async function searchWithAuthStorage(
 	return withAuth(
 		keyOrResolver,
 		async key => {
-			const response = await fetch(PARALLEL_SEARCH_URL, {
+			const response = await (params.fetch ?? fetch)(PARALLEL_SEARCH_URL, {
 				method: "POST",
 				headers: {
 					Accept: "application/json",
@@ -165,6 +166,7 @@ export async function searchParallel(
 		query: string;
 		num_results?: number;
 		signal?: AbortSignal;
+		fetch?: FetchImpl;
 	},
 	authStorage: AuthStorage,
 	sessionId?: string,
@@ -177,6 +179,7 @@ export async function searchParallel(
 			[params.query],
 			{
 				signal: params.signal,
+				fetch: params.fetch,
 			},
 			authStorage,
 			sessionId,
@@ -213,6 +216,7 @@ export class ParallelProvider extends SearchProvider {
 				query: params.query,
 				num_results: params.numSearchResults ?? params.limit,
 				signal: params.signal,
+				fetch: params.fetch,
 			},
 			params.authStorage,
 			params.sessionId,

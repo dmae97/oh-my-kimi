@@ -35,5 +35,5 @@ Performs structural AST-aware rewrites via native ast-grep.
 
 <critical>
 - Parse issues mean the rewrite is malformed or mis-scoped — fix the pattern before assuming a clean no-op
-- For one-off local text edits, prefer the Edit tool
+- For one-off local text edits, you SHOULD prefer the Edit tool
 </critical>

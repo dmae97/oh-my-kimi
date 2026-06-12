@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
+import { getThemeByName } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { findToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/find";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
-import { getThemeByName } from "../../src/modes/theme/theme";
-import { findToolRenderer } from "../../src/tools/find";
 
 describe("findToolRenderer", () => {
 	it("indents inline find output and avoids accent-colored success headers", async () => {

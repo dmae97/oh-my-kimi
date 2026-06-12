@@ -24,14 +24,12 @@ import {
 	type CredentialCompletionResult,
 	completeSimple,
 	DEFAULT_AUTH_GATEWAY_BIND,
-	type GeneratedProvider,
-	getBundledModels,
-	getBundledProviders,
 	type Model,
 	RemoteAuthCredentialStore,
 	type SnapshotResponse,
 	startAuthGateway,
 } from "@oh-my-pi/pi-ai";
+import { type GeneratedProvider, getBundledModels, getBundledProviders } from "@oh-my-pi/pi-catalog/models";
 import { getConfigRootDir, isEnoent, VERSION } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import { type AuthBrokerClientConfig, resolveAuthBrokerConfig } from "../session/auth-broker-config";
@@ -175,8 +173,9 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 	for (const provider of getBundledProviders()) {
 		if (!providersWithCreds.has(provider)) continue;
 		for (const model of getBundledModels(provider as GeneratedProvider)) {
-			// First-write-wins so a canonical model id collisions across providers
-			// stick to the provider listed first by getBundledProviders.
+			// Always set the qualified key (no collision possible)
+			modelById.set(`${model.provider}/${model.id}`, model);
+			// Bare id as fallback for legacy clients (first-write-wins)
 			if (!modelById.has(model.id)) modelById.set(model.id, model);
 		}
 	}
@@ -357,7 +356,7 @@ export async function runAuthGatewayCommand(cmd: AuthGatewayCommandArgs): Promis
 /**
  * Providers whose chat endpoint expects a JSON-serialized credential blob
  * (`{ token, projectId, refreshToken, expiresAt, … }`) rather than the raw
- * access token. Mirrors `getOAuthApiKey` in `packages/ai/src/utils/oauth`.
+ * access token. Mirrors `getOAuthApiKey` in `packages/ai/src/registry/oauth`.
  */
 const STRUCTURED_API_KEY_PROVIDERS: ReadonlySet<string> = new Set([
 	"github-copilot",

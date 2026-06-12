@@ -8,6 +8,8 @@ export class TruncatedText implements Component {
 	#text: string;
 	#paddingX: number;
 	#paddingY: number;
+	#cachedWidth = -1;
+	#cachedLines: string[] | undefined;
 
 	constructor(text: string, paddingX: number = 0, paddingY: number = 0) {
 		this.#text = text;
@@ -16,10 +18,14 @@ export class TruncatedText implements Component {
 	}
 
 	invalidate(): void {
-		// No cached state to invalidate currently
+		this.#cachedWidth = -1;
+		this.#cachedLines = undefined;
 	}
 
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
+		if (this.#cachedLines && this.#cachedWidth === width) {
+			return this.#cachedLines;
+		}
 		const result: string[] = [];
 
 		// Empty line padded to width
@@ -56,6 +62,8 @@ export class TruncatedText implements Component {
 			result.push(emptyLine);
 		}
 
+		this.#cachedWidth = width;
+		this.#cachedLines = result;
 		return result;
 	}
 }

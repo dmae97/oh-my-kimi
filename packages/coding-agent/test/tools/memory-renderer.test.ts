@@ -1,7 +1,11 @@
 import { describe, expect, it } from "bun:test";
+import { getThemeByName } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import {
+	recallToolRenderer,
+	reflectToolRenderer,
+	retainToolRenderer,
+} from "@oh-my-pi/pi-coding-agent/tools/memory-render";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
-import { getThemeByName } from "../../src/modes/theme/theme";
-import { recallToolRenderer, reflectToolRenderer, retainToolRenderer } from "../../src/tools/memory-render";
 
 async function theme() {
 	const t = await getThemeByName("dark");
@@ -9,7 +13,7 @@ async function theme() {
 	return t!;
 }
 
-const lines = (component: { render: (w: number) => string[] }, width = 200) =>
+const lines = (component: { render: (w: number) => readonly string[] }, width = 200) =>
 	sanitizeText(component.render(width).join("\n")).split("\n");
 
 describe("retainToolRenderer", () => {

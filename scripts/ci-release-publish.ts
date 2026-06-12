@@ -11,10 +11,12 @@
  *   1. Emit `.d.ts` declarations into `dist/types/` so consumers get
  *      stable types regardless of their tsconfig `lib`.
  *   2. Rewrite `package.json` in place — every `types`/`exports[*].types`
- *      that points at `./src/*.ts(x)` is repointed to `./dist/types/*.d.ts`
- *      and `dist/types` (plus `dist/client` for `stats`) is added to
- *      `files`. The on-repo manifest keeps pointing at source so local
- *      dev resolves types without any build.
+ *      that points at `./src/*.ts(x)` is repointed to `./dist/types/*.d.ts`,
+ *      `dist/types` (plus `dist/client` for `stats`) is added to `files`,
+ *      and packages with a `publishBin` override get their `bin` swapped to
+ *      the prepack bundle (coding-agent: `src/cli.ts` → `dist/cli.js`). The
+ *      on-repo manifest keeps pointing at source so local dev and source
+ *      installs (`bun link`, `install.sh --source`) work without a build.
  *   3. Pack with `bun pm pack` (resolves the `catalog:`/`workspace:`
  *      protocols npm cannot, and runs each package's `prepack` lifecycle),
  *      then publish the resolved tarball with `npm publish` — see
@@ -43,6 +45,12 @@ export interface PublishPackage {
 	extraFiles?: readonly string[];
 	/** Extra tsgo invocations beyond `tsconfig.publish.json`. */
 	extraTypeConfigs?: readonly string[];
+	/**
+	 * `bin` map for the published manifest. The on-repo manifest points `bin`
+	 * at TS source so source installs (`bun link`, `install.sh --source`) work
+	 * without a build; publish swaps in the `prepack` bundle.
+	 */
+	publishBin?: Readonly<Record<string, string>>;
 }
 
 type JsonValue = string | number | boolean | null | JsonObject | JsonValue[];
@@ -77,11 +85,14 @@ function nativeLeafTagFromArgs(argv: readonly string[]): string | null {
 const nativeLeafTag = nativeLeafTagFromArgs(process.argv.slice(2));
 export const packages: PublishPackage[] = [
 	{ dir: "packages/utils", kind: "typescript" },
+	{ dir: "packages/wire", kind: "typescript" },
+	{ dir: "packages/catalog", kind: "typescript" },
 	{ dir: "packages/ai", kind: "typescript" },
 	{ dir: "packages/natives", kind: "native" },
 	{ dir: "packages/tui", kind: "typescript" },
 	{ dir: "packages/hashline", kind: "typescript" },
 	{ dir: "packages/mnemopi", kind: "typescript" },
+	{ dir: "packages/snapcompact", kind: "typescript" },
 	{
 		dir: "packages/stats",
 		kind: "typescript",
@@ -90,7 +101,7 @@ export const packages: PublishPackage[] = [
 		extraTypeConfigs: ["tsconfig.publish.client.json"],
 	},
 	{ dir: "packages/agent", kind: "typescript" },
-	{ dir: "packages/coding-agent", kind: "typescript" },
+	{ dir: "packages/coding-agent", kind: "typescript", publishBin: { omp: "dist/cli.js" } },
 ];
 
 function rewriteSrcPath(value: string): string {
@@ -122,9 +133,10 @@ function rewriteExports(exports: JsonValue): JsonValue {
 	return out;
 }
 
-async function rewriteManifest(pkgDir: string, extraFiles: readonly string[], write: boolean): Promise<PackageManifest> {
-	const manifestPath = path.join(pkgDir, "package.json");
+async function rewriteManifest(pkg: PublishPackage, write: boolean): Promise<PackageManifest> {
+	const manifestPath = path.join(repoRoot, pkg.dir, "package.json");
 	const manifest = (await Bun.file(manifestPath).json()) as PackageManifest;
+	if (pkg.publishBin) manifest.bin = { ...pkg.publishBin };
 	if (typeof manifest.types === "string" && manifest.types.startsWith("./src/")) {
 		manifest.types = rewriteSrcPath(manifest.types);
 	}
@@ -132,7 +144,7 @@ async function rewriteManifest(pkgDir: string, extraFiles: readonly string[], wr
 	const files = Array.isArray(manifest.files) ? [...manifest.files] : [];
 	const hasDist = files.includes("dist");
 	if (!hasDist && !files.includes("dist/types")) files.push("dist/types");
-	for (const extra of extraFiles) {
+	for (const extra of pkg.extraFiles ?? []) {
 		if (!hasDist && !files.includes(extra)) files.push(extra);
 	}
 	manifest.files = files;
@@ -149,7 +161,23 @@ async function preparePackage(pkg: PublishPackage): Promise<PackageManifest> {
 	for (const cfg of pkg.extraTypeConfigs ?? []) {
 		await $`bun x tsgo -p ${cfg}`.cwd(pkgDir);
 	}
-	return rewriteManifest(pkgDir, pkg.extraFiles ?? [], !isDryRun);
+	return rewriteManifest(pkg, !isDryRun);
+}
+
+/**
+ * Apply only the published `bin` rewrite to a package's working-tree
+ * manifest. Used by `scripts/install-tests/run-ci.sh` to pack the coding
+ * agent with its published topology (bin → prepack bundle) without running
+ * the type-emission steps; the caller backs up and restores the manifest.
+ */
+export async function applyPublishBin(pkgRelDir: string, write: boolean): Promise<PackageManifest> {
+	const pkg = packages.find(entry => entry.dir === pkgRelDir);
+	if (!pkg?.publishBin) throw new Error(`No publishBin override declared for ${pkgRelDir}`);
+	const manifestPath = path.join(repoRoot, pkgRelDir, "package.json");
+	const manifest = (await Bun.file(manifestPath).json()) as PackageManifest;
+	manifest.bin = { ...pkg.publishBin };
+	if (write) await Bun.write(manifestPath, `${JSON.stringify(manifest, null, "\t")}\n`);
+	return manifest;
 }
 
 function buildNativeOptionalDependencies(version: string): JsonObject {

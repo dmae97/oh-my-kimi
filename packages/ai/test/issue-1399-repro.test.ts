@@ -2,12 +2,12 @@ import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { hookFetch } from "@oh-my-pi/pi-utils";
-import { streamBedrock } from "../src/providers/amazon-bedrock";
-import { clearAwsCredentialCache } from "../src/providers/aws-credentials";
-import type { Context, Model } from "../src/types";
+import { streamBedrock } from "@oh-my-pi/pi-ai/providers/amazon-bedrock";
+import { clearAwsCredentialCache } from "@oh-my-pi/pi-ai/providers/aws-credentials";
+import type { Context, FetchImpl, Model } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 
-const model: Model<"bedrock-converse-stream"> = {
+const model: Model<"bedrock-converse-stream"> = buildModel({
 	id: "zai.glm-5",
 	name: "GLM-5",
 	api: "bedrock-converse-stream",
@@ -18,7 +18,7 @@ const model: Model<"bedrock-converse-stream"> = {
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 	contextWindow: 131_072,
 	maxTokens: 16_384,
-};
+});
 
 const context: Context = {
 	systemPrompt: [],
@@ -82,12 +82,12 @@ describe("issue #1399: Bedrock bearer token precedence", () => {
 			clearAwsCredentialCache();
 
 			let requestHeaders: Headers | undefined;
-			using _hook = hookFetch((_input, init) => {
+			const fetchMock: FetchImpl = async (_input, init) => {
 				requestHeaders = new Headers(init?.headers);
 				return new Response('{"message":"unauthorized"}', { status: 401 });
-			});
+			};
 
-			const result = await streamBedrock(model, context, {}).result();
+			const result = await streamBedrock(model, context, { fetch: fetchMock }).result();
 
 			expect(requestHeaders?.get("authorization")).toBe("Bearer bedrock-api-key");
 			expect(requestHeaders?.has("x-amz-date")).toBe(false);
@@ -117,12 +117,12 @@ describe("issue #1399: Bedrock bearer token precedence", () => {
 			clearAwsCredentialCache();
 
 			let requestHeaders: Headers | undefined;
-			using _hook = hookFetch((_input, init) => {
+			const fetchMock: FetchImpl = async (_input, init) => {
 				requestHeaders = new Headers(init?.headers);
 				return new Response('{"message":"unauthorized"}', { status: 401 });
-			});
+			};
 
-			const result = await streamBedrock(model, context, { apiKey: "<authenticated>" }).result();
+			const result = await streamBedrock(model, context, { apiKey: "<authenticated>", fetch: fetchMock }).result();
 
 			expect(requestHeaders?.get("authorization")).toBe("Bearer bedrock-api-key");
 			expect(requestHeaders?.get("authorization")).not.toBe("Bearer <authenticated>");
@@ -150,12 +150,12 @@ describe("issue #1399: Bedrock bearer token precedence", () => {
 			clearAwsCredentialCache();
 
 			let requestHeaders: Headers | undefined;
-			using _hook = hookFetch((_input, init) => {
+			const fetchMock: FetchImpl = async (_input, init) => {
 				requestHeaders = new Headers(init?.headers);
 				return new Response('{"message":"unauthorized"}', { status: 401 });
-			});
+			};
 
-			const result = await streamBedrock(model, context, { apiKey: "<authenticated>" }).result();
+			const result = await streamBedrock(model, context, { apiKey: "<authenticated>", fetch: fetchMock }).result();
 
 			const authorization = requestHeaders?.get("authorization");
 			expect(authorization).toStartWith("AWS4-HMAC-SHA256 ");
