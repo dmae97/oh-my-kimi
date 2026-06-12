@@ -316,10 +316,9 @@ export class SelectorController {
 				for (const child of this.ctx.chatContainer.children) {
 					if (child instanceof AssistantMessageComponent) {
 						child.setHideThinkingBlock(value as boolean);
+						child.invalidate();
 					}
 				}
-				this.ctx.chatContainer.clear();
-				this.ctx.rebuildChatFromMessages();
 				break;
 			case "theme": {
 				setTheme(value as string, true).then(result => {

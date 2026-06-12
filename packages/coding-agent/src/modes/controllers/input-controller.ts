@@ -4,6 +4,7 @@ import type { AutocompleteProvider, SlashCommand } from "@oh-my-pi/pi-tui";
 import { $env, logger, sanitizeText } from "@oh-my-pi/pi-utils";
 import { getRoleInfo } from "../../config/model-roles";
 import { isSettingsInitialized, settings } from "../../config/settings";
+import { AssistantMessageComponent } from "../../modes/components/assistant-message";
 import { renderSegmentTrack } from "../../modes/components/segment-track";
 import { TinyTitleDownloadProgressComponent } from "../../modes/components/tiny-title-download-progress";
 import { expandEmoticons } from "../../modes/emoji-autocomplete";
@@ -1039,18 +1040,19 @@ export class InputController {
 
 	toggleThinkingBlockVisibility(): void {
 		this.ctx.hideThinkingBlock = !this.ctx.hideThinkingBlock;
-		settings.set("hideThinkingBlock", this.ctx.hideThinkingBlock);
+		this.ctx.settings.set("hideThinkingBlock", this.ctx.hideThinkingBlock);
 		this.ctx.session.agent.hideThinkingSummary = this.ctx.hideThinkingBlock;
 
-		// Rebuild chat from session messages
-		this.ctx.chatContainer.clear();
-		this.ctx.rebuildChatFromMessages();
+		for (const child of this.ctx.chatContainer.children) {
+			if (child instanceof AssistantMessageComponent) {
+				child.setHideThinkingBlock(this.ctx.hideThinkingBlock);
+				child.invalidate();
+			}
+		}
 
-		// If streaming, re-add the streaming component with updated visibility and re-render
 		if (this.ctx.streamingComponent && this.ctx.streamingMessage) {
 			this.ctx.streamingComponent.setHideThinkingBlock(this.ctx.hideThinkingBlock);
 			this.ctx.streamingComponent.updateContent(this.ctx.streamingMessage);
-			this.ctx.chatContainer.addChild(this.ctx.streamingComponent);
 		}
 
 		this.ctx.showStatus(`Thinking blocks: ${this.ctx.hideThinkingBlock ? "hidden" : "visible"}`);
