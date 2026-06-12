@@ -29,6 +29,7 @@ import {
 	COLLAB_PROTO,
 	type CollabFrame,
 	type CollabParticipant,
+	type CollabPromptDetails,
 	type CollabSessionState,
 	formatCollabLink,
 	formatCollabWebLink,
@@ -364,13 +365,24 @@ export class CollabHost {
 		const name = peer.name;
 		const content: string | (TextContent | ImageContent)[] =
 			images && images.length > 0 ? [{ type: "text", text }, ...images] : text;
+		const details: CollabPromptDetails & { __pendingDisplayTag?: string } = { from: name };
+		if (this.#ctx.session.isStreaming) {
+			// Mid-turn guest prompts are steered: register the pending-display twin
+			// so queuedMessageCount reflects the queued steer (host pending bar +
+			// guests' "queued ×N" badge). The tag dequeues the entry when the agent
+			// consumes the message (mirrors the skill-prompt path).
+			details.__pendingDisplayTag = this.#ctx.session.enqueueCustomMessageDisplay(text, "steer");
+			this.#ctx.updatePendingMessagesDisplay();
+			this.#ctx.ui.requestRender();
+			this.#scheduleStateBroadcast();
+		}
 		this.#ctx.session
 			.promptCustomMessage(
 				{
 					customType: COLLAB_PROMPT_MESSAGE_TYPE,
 					content,
 					display: true,
-					details: { from: name },
+					details,
 					attribution: "user",
 				},
 				{ streamingBehavior: "steer" },

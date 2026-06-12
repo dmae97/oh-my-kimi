@@ -28,7 +28,7 @@ function storedName(): string {
 	}
 }
 
-/** Deep link = everything after the FIRST `#` (the link itself contains another `#`). */
+/** Deep link = everything after the FIRST `#` (legacy links carry a second `#` inside the fragment). */
 function hashLink(): string | null {
 	const href = window.location.href;
 	const i = href.indexOf("#");

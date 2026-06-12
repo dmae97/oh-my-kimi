@@ -174,6 +174,9 @@ function coerceToolResult(raw: unknown): { result: AgentToolResult<unknown>; mal
 	// aggregator that catches per-entry errors and synthesizes a combined
 	// result). Preserve the flag so agent-loop can surface it on the wire.
 	const explicitError = Boolean(rawObj && "isError" in rawObj && rawObj.isError);
+	// Tools may flag the result contextually useless (zero matches, elapsed
+	// wait) so compaction can elide it once consumed. Errors are never useless.
+	const useless = Boolean(rawObj && "useless" in rawObj && rawObj.useless);
 
 	if (!Array.isArray(rawContent)) {
 		return {
@@ -218,7 +221,12 @@ function coerceToolResult(raw: unknown): { result: AgentToolResult<unknown>; mal
 		content.push({ type: "text", text: EMPTY_ERROR_TOOL_RESULT_TEXT });
 	}
 	return {
-		result: { content, details, ...(isError ? { isError: true } : {}) },
+		result: {
+			content,
+			details,
+			...(isError ? { isError: true } : {}),
+			...(useless && !isError ? { useless: true } : {}),
+		},
 		malformed: invalidBlocks > 0,
 	};
 }
@@ -807,11 +815,15 @@ async function runLoopBody(
 		// Agent would stop here. Drain non-interrupting asides + follow-up messages.
 		await config.onBeforeYield?.();
 		// Skip queue drains when externally aborted (same stranding hazard as above).
+		// Re-poll steering too: a steer can land between the stop-boundary dequeue
+		// above and this yield point (e.g. queued while onBeforeYield ran). Without
+		// this poll it would strand in the queue until the next manual prompt.
+		const lateSteering = signal?.aborted ? [] : (await config.getSteeringMessages?.()) || [];
 		const asideMessages = signal?.aborted ? [] : resolveAsides(await config.getAsideMessages?.());
 		const followUpMessages = signal?.aborted ? [] : (await config.getFollowUpMessages?.()) || [];
-		if (asideMessages.length > 0 || followUpMessages.length > 0) {
+		if (lateSteering.length > 0 || asideMessages.length > 0 || followUpMessages.length > 0) {
 			// Set as pending so the inner loop processes them before stopping.
-			pendingMessages = [...asideMessages, ...followUpMessages];
+			pendingMessages = [...lateSteering, ...asideMessages, ...followUpMessages];
 			continue;
 		}
 
@@ -1355,6 +1367,7 @@ async function executeToolCalls(
 			content: result.content,
 			details: result.details,
 			isError,
+			...(result.useless && !isError ? { useless: true } : {}),
 			timestamp: Date.now(),
 		};
 		record.result = result;
@@ -1534,6 +1547,7 @@ async function executeToolCalls(
 							content: after.content ?? result.content,
 							details: after.details ?? result.details,
 							isError: after.isError ?? result.isError,
+							useless: after.useless ?? result.useless,
 						});
 						result = coerced.result;
 						isError = coerced.malformed || (after.isError ?? isError);

@@ -14,14 +14,14 @@ prints
 
 ```
 Collab session started!
- • Join from another terminal: omp join "mgAYTZwEnpRQtca0CTgn-Q#gdJUbTovD94ofDaa8YvhY0-ty16w4fn8PgB6PLnoA30"
- • or any web browser: my.omp.sh/#mgAYTZwEnpRQtca0CTgn-Q#gdJUbTovD94ofDaa8YvhY0-ty16w4fn8PgB6PLnoA30
+ • Join from another terminal: omp join "mgAYTZwEnpRQtca0CTgn-Q.gdJUbTovD94ofDaa8YvhY0-ty16w4fn8PgB6PLnoA30"
+ • or any web browser: my.omp.sh/#mgAYTZwEnpRQtca0CTgn-Q.gdJUbTovD94ofDaa8YvhY0-ty16w4fn8PgB6PLnoA30
 ```
 
 The browser line is click-to-join (an OSC 8 hyperlink to the full `https://` deep link): the relay serves the web guest client at `/`, and the room id + key ride in the URL fragment. From another omp (any directory, any machine), either form works:
 
 ```
-/join my.omp.sh/#mgAYTZwEnpRQtca0CTgn-Q#gdJU…
+/join my.omp.sh/#mgAYTZwEnpRQtca0CTgn-Q.gdJU…
 ```
 
 The guest's previous session is restored on `/leave` (or when the host stops).
@@ -42,17 +42,17 @@ The guest's previous session is restored on `/leave` (or when the host stops).
 
 ```
 https://host[:port]/#<link>          → browser deep link (printed by /collab; /join accepts it too)
-<roomId>#<key>                       → default relay (my.omp.sh)
-host[:port]/r/<roomId>#<key>         → custom relay, wss:// inferred
-ws://localhost:7475/r/<roomId>#<key> → plain ws, allowed for localhost only
+<roomId>.<key>                       → default relay (my.omp.sh)
+host[:port]/r/<roomId>.<key>         → custom relay, wss:// inferred
+ws://localhost:7475/r/<roomId>.<key> → plain ws, allowed for localhost only
 ```
 
-The trailing fragment (`#<key>`) is the room secret, base64url-encoded, in one of two strengths:
+The trailing `.<key>` part is the room secret, base64url-encoded, in one of two strengths:
 
 - **Full link** — 48 bytes: the 32-byte AES-256-GCM room key followed by a 16-byte write token. Grants prompting, interrupting, and subagent control.
 - **View-only link** — the bare 32-byte key, no write token. Grants live read access only. Pre-token links parse as view-only.
 
-In the browser deep link, everything after the first `#` — room id and key — is a URL fragment: it never appears in any HTTP request, and neither secret is ever sent to the relay.
+The room secret is dot-joined rather than `#`-joined: RFC 3986 forbids a raw `#` inside a URL fragment, so strict URL stacks (macOS Foundation behind terminal click-to-open) percent-encode a second `#` to `%23` and break the link. Parsers leniently accept the legacy `#` form and the mangled `%23` form. In the browser deep link, everything after the `#` — room id and key — is a URL fragment: it never appears in any HTTP request, and neither secret is ever sent to the relay.
 
 ## End-to-end encryption
 
@@ -91,32 +91,18 @@ Known v1 limit for guests: a turn already streaming when you join becomes visibl
 |---|---|---|
 | `collab.relayUrl` | `wss://my.omp.sh` | Relay used by `/collab` when no relay is passed inline |
 | `collab.displayName` | OS username | Name shown to other participants |
-| `share.serverUrl` | `https://my.omp.sh/s` | Share viewer/upload base used by `/share` (same Go service; links are `<base>/<id>#<key>`) |
+| `share.serverUrl` | `https://my.omp.sh/s` | Share viewer/upload base used by `/share` (links are `<base>/<id>#<key>`) |
 | `share.redactSecrets` | `true` | Run the secret obfuscator over `/share` snapshots before upload |
 
 ## Self-hosting the relay
 
-The relay is a small content-blind Go service (`omp-collab-relay`, in the pi-www repo under `relay/`). It keeps no state beyond live connections and exposes:
+The relay is a small content-blind Go service. It keeps no state beyond live connections and exposes:
 
 - `GET /` — the static collab-web guest client (target of the `/collab` deep link),
 - `GET /r/<roomId>?role=host|guest` — WebSocket upgrade,
-- `POST /s` / `GET /s/<id>` / `GET /s/<id>/raw` — `/share` blob upload, viewer page, and blob fetch (see the relay README),
+- `POST /s` / `GET /s/<id>` / `GET /s/<id>/raw` — `/share` blob upload, viewer page, and blob fetch,
 - `GET /healthz` — liveness.
 
-Run it:
-
-```sh
-go build -o omp-collab-relay .
-RELAY_BIND=0.0.0.0:7475 ./omp-collab-relay
-```
-
-`RELAY_BIND` accepts `host:port`, a bare port (binds localhost), or a unix socket path (front it with a TLS-terminating reverse proxy — guests other than localhost require `wss://`). Then:
-
-```
-/collab my-relay.example.com
-```
-
-or set `collab.relayUrl` in `/settings`.
 
 ## Architecture notes
 

@@ -654,6 +654,15 @@ export function serializeConversation(messages: Message[], options?: SerializeOp
 	const dimToolResults = options?.dimToolResults !== false;
 	const parts: string[] = [];
 
+	// Tool results flagged contextually useless (and their paired calls) carry
+	// no information worth archiving — skip the whole pair.
+	const uselessCallIds = new Set<string>();
+	for (const msg of messages) {
+		if (msg.role === "toolResult" && msg.useless === true && msg.isError !== true) {
+			uselessCallIds.add(msg.toolCallId);
+		}
+	}
+
 	for (const msg of messages) {
 		if (msg.role === "user") {
 			const content =
@@ -675,6 +684,7 @@ export function serializeConversation(messages: Message[], options?: SerializeOp
 				} else if (block.type === "thinking") {
 					thinkingParts.push(stripDimMarkers(block.thinking));
 				} else if (block.type === "toolCall") {
+					if (uselessCallIds.has(block.id)) continue;
 					const args = block.arguments as Record<string, unknown>;
 					const argsStr = truncateForSummary(
 						Object.entries(args)
@@ -700,6 +710,7 @@ export function serializeConversation(messages: Message[], options?: SerializeOp
 				parts.push(`[Assistant tool calls]: ${toolCalls.join("; ")}`);
 			}
 		} else if (msg.role === "toolResult") {
+			if (uselessCallIds.has(msg.toolCallId)) continue;
 			const content = msg.content
 				.filter((block): block is { type: "text"; text: string } => block.type === "text")
 				.map(block => block.text)

@@ -1168,6 +1168,60 @@ it("refreshes tools and system prompt between same-turn model calls", async () =
 	expect(mock.calls[1]?.context.tools?.map(tool => tool.name)).toEqual(["alpha", "beta"]);
 });
 
+describe("agentLoop useless-flag propagation", () => {
+	async function runProbe(toolReturn: unknown): Promise<ToolResultMessage> {
+		const toolSchema = z.object({});
+		const tool: AgentTool<typeof toolSchema> = {
+			name: "probe",
+			label: "Probe",
+			description: "Probe tool",
+			parameters: toolSchema,
+			async execute() {
+				return toolReturn as never;
+			},
+		};
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [tool] };
+		const mock = createMockModel({
+			responses: [
+				{ content: [{ type: "toolCall", id: "tool-1", name: "probe", arguments: {} }] },
+				{ content: ["done"] },
+			],
+		});
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
+		const events: AgentEvent[] = [];
+		for await (const event of agentLoop([createUserMessage("go")], context, config, undefined, mock.stream)) {
+			events.push(event);
+		}
+		const message = events
+			.filter(e => e.type === "message_end")
+			.map(e => (e as { message: AgentMessage }).message)
+			.find(m => m.role === "toolResult");
+		expect(message).toBeDefined();
+		return message as ToolResultMessage;
+	}
+
+	it("copies a tool-declared useless flag onto the emitted tool result message", async () => {
+		const message = await runProbe({
+			content: [{ type: "text", text: "No matches found" }],
+			details: {},
+			useless: true,
+		});
+		expect(message.useless).toBe(true);
+		expect(message.isError).toBe(false);
+	});
+
+	it("drops the useless flag when the tool also reports an error", async () => {
+		const message = await runProbe({
+			content: [{ type: "text", text: "failed but flagged" }],
+			details: {},
+			isError: true,
+			useless: true,
+		});
+		expect(message.isError).toBe(true);
+		expect(message.useless).toBeUndefined();
+	});
+});
+
 describe("agentLoopContinue with AgentMessage", () => {
 	it("should throw when context has no messages", () => {
 		const context: AgentContext = {

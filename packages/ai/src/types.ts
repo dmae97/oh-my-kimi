@@ -518,6 +518,12 @@ export interface ToolResultMessage<TDetails = any> {
 	attribution?: MessageAttribution;
 	/** Timestamp when output was pruned (ms since epoch). Undefined if unpruned. */
 	prunedAt?: number;
+	/**
+	 * Tool-declared: this result carried no information worth retaining once
+	 * consumed (zero matches, elapsed wait). Compaction passes may elide it.
+	 * Never set together with isError.
+	 */
+	useless?: boolean;
 	timestamp: number; // Unix timestamp in milliseconds
 }
 

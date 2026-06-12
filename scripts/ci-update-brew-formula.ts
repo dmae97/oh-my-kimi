@@ -54,7 +54,17 @@ function sha256For(assets: readonly ReleaseAsset[], name: string): string {
 
 // `${...}` is JS interpolation; the literal `#{version}` / `#{bin}` below are
 // Ruby interpolations Homebrew resolves when it evaluates the formula.
-function renderFormula(version: string, sums: Record<string, string>): string {
+export function renderFormula(version: string, sums: Record<string, string>): string {
+	// Each `url` carries `using: :nounzip` because the release assets are bare
+	// Mach-O/ELF executables, not archives. Without it Homebrew's default
+	// CurlDownloadStrategy routes through UnpackStrategy::Uncompressed#extract_nestedly,
+	// which nests the file outside the staging CWD; `Dir["omp-*"].first` then
+	// returns `nil` and `bin.install nil => "omp"` raises.
+	//
+	// `with_env(HOME: buildpath)` redirects the CLI's `os.homedir()` lookup to
+	// the writable staging dir so `generate_completions_from_executable` does
+	// not touch the real `/Users/<user>/.omp` (denied by Homebrew's sandbox
+	// profile, which would otherwise fail the popen).
 	return `class Omp < Formula
   desc "${DESC}"
   homepage "${HOMEPAGE}"
@@ -63,22 +73,26 @@ function renderFormula(version: string, sums: Record<string, string>): string {
 
   on_macos do
     on_arm do
-      url "https://github.com/${REPO}/releases/download/v#{version}/omp-darwin-arm64"
+      url "https://github.com/${REPO}/releases/download/v#{version}/omp-darwin-arm64",
+          using: :nounzip
       sha256 "${sums["omp-darwin-arm64"]}"
     end
     on_intel do
-      url "https://github.com/${REPO}/releases/download/v#{version}/omp-darwin-x64"
+      url "https://github.com/${REPO}/releases/download/v#{version}/omp-darwin-x64",
+          using: :nounzip
       sha256 "${sums["omp-darwin-x64"]}"
     end
   end
 
   on_linux do
     on_arm do
-      url "https://github.com/${REPO}/releases/download/v#{version}/omp-linux-arm64"
+      url "https://github.com/${REPO}/releases/download/v#{version}/omp-linux-arm64",
+          using: :nounzip
       sha256 "${sums["omp-linux-arm64"]}"
     end
     on_intel do
-      url "https://github.com/${REPO}/releases/download/v#{version}/omp-linux-x64"
+      url "https://github.com/${REPO}/releases/download/v#{version}/omp-linux-x64",
+          using: :nounzip
       sha256 "${sums["omp-linux-x64"]}"
     end
   end
@@ -86,7 +100,9 @@ function renderFormula(version: string, sums: Record<string, string>): string {
   def install
     bin.install Dir["omp-*"].first => "omp"
     (bin/"omp").chmod 0555
-    generate_completions_from_executable(bin/"omp", "completions", shells: [:bash, :zsh, :fish])
+    with_env(HOME: buildpath) do
+      generate_completions_from_executable(bin/"omp", "completions", shells: [:bash, :zsh, :fish])
+    end
   end
 
   test do
@@ -114,4 +130,6 @@ async function main(): Promise<void> {
 	}
 }
 
-await main();
+if (import.meta.main) {
+	await main();
+}

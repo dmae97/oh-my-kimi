@@ -1132,7 +1132,7 @@ export const SETTINGS_SCHEMA = {
 	doubleEscapeAction: {
 		type: "enum",
 		values: ["branch", "tree", "none"] as const,
-		default: "tree",
+		default: "branch",
 		ui: {
 			tab: "interaction",
 			group: "Input",
@@ -1339,7 +1339,7 @@ export const SETTINGS_SCHEMA = {
 			tab: "interaction",
 			group: "Collab",
 			label: "Relay URL",
-			description: "Relay used by /collab (wss://host[:port]; self-host with the omp-collab-relay service)",
+			description: "Relay used by /collab (wss://host[:port])",
 		},
 	},
 
@@ -1618,6 +1618,18 @@ export const SETTINGS_SCHEMA = {
 			group: "Compaction",
 			label: "Supersede Stale Reads",
 			description: "Prune older read results when the same file is read again (cache-aware, runs every turn)",
+		},
+	},
+
+	"compaction.dropUseless": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "context",
+			group: "Compaction",
+			label: "Elide Uneventful Results",
+			description:
+				"Prune tool results flagged contextually useless (no matches, timed-out waits) once consumed (cache-aware)",
 		},
 	},
 
@@ -3936,9 +3948,6 @@ export const SETTINGS_SCHEMA = {
 
 	"dev.autoqaPush.endpoint": {
 		type: "string",
-		// Bundled QA collector — runs `/work/pi-www/autoqa` behind qa.omp.sh.
-		// Override via `PI_AUTO_QA_PUSH_URL` or `dev.autoqaPush.endpoint`
-		// in `config.yml` to point at a self-hosted instance.
 		default: "https://qa.omp.sh/v1/grievances" as const,
 		ui: {
 			tab: "tools",
@@ -4079,6 +4088,7 @@ export interface CompactionSettings {
 	idleThresholdTokens: number;
 	idleTimeoutSeconds: number;
 	supersedeReads: boolean;
+	dropUseless: boolean;
 }
 
 export interface ContextPromotionSettings {

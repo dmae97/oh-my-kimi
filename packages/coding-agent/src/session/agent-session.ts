@@ -1139,7 +1139,22 @@ export class AgentSession {
 		if (this.#promptInFlightCount === 0) {
 			this.#releasePowerAssertion();
 			this.#flushPendingAgentEnd();
+			this.#drainStrandedQueuedMessages();
 		}
+	}
+
+	/** A steer/follow-up can land after the agent loop's final queue poll but
+	 *  before the prompt unwinds: #promptInFlightCount keeps isStreaming true
+	 *  through post-prompt recovery, so senders (collab guests, skills) still
+	 *  queue via agent.steer()/followUp() instead of starting a fresh prompt.
+	 *  Without a drain those messages strand invisibly until the next manual
+	 *  prompt. Runs when the session settles; the guard makes it a no-op when
+	 *  the queue was consumed normally or a new turn already started. */
+	#drainStrandedQueuedMessages(): void {
+		if (!this.agent.hasQueuedMessages()) return;
+		this.#scheduleAgentContinue({
+			shouldContinue: () => this.#canAutoContinueForFollowUp() && this.agent.hasQueuedMessages(),
+		});
 	}
 
 	#resetInFlight(): void {
@@ -5255,6 +5270,14 @@ export class AgentSession {
 			} else {
 				this.agent.steer(normalizedAppMessage);
 			}
+			// The isStreaming check above can be stale: image normalization is
+			// awaited, so the turn may have ended in between, leaving the message
+			// queued on an idle agent. Mirror #queueSteer's idle-path delivery.
+			if (this.#canAutoContinueForFollowUp()) {
+				this.#scheduleAgentContinue({
+					shouldContinue: () => this.#canAutoContinueForFollowUp() && this.agent.hasQueuedMessages(),
+				});
+			}
 			return;
 		}
 
@@ -6155,7 +6178,13 @@ export class AgentSession {
 
 	async #pruneToolOutputs(): Promise<{ prunedCount: number; tokensSaved: number } | undefined> {
 		const branchEntries = this.sessionManager.getBranch();
-		const result = pruneToolOutputs(branchEntries, this.#withPlanProtection(DEFAULT_PRUNE_CONFIG));
+		const result = pruneToolOutputs(
+			branchEntries,
+			this.#withPlanProtection({
+				...DEFAULT_PRUNE_CONFIG,
+				pruneUseless: this.settings.getGroup("compaction").dropUseless,
+			}),
+		);
 		if (result.prunedCount === 0) {
 			return undefined;
 		}
@@ -6169,19 +6198,22 @@ export class AgentSession {
 	}
 
 	/**
-	 * Per-turn supersede pass: prune older `read` results that a newer read of
-	 * the same file has made stale. Cache-aware (only fires when the suffix
-	 * after a candidate is small or the session has been idle long enough that
-	 * the provider prompt cache is cold), so it is cheap to run every turn.
-	 * Gated on the `compaction.supersedeReads` setting.
+	 * Per-turn stale-result pass: prune older `read` results that a newer read
+	 * of the same file has made stale, plus results their tool flagged
+	 * contextually useless. Cache-aware (only fires when the suffix after a
+	 * candidate is small or the session has been idle long enough that the
+	 * provider prompt cache is cold), so it is cheap to run every turn. Gated
+	 * on the `compaction.supersedeReads` and `compaction.dropUseless` settings.
 	 */
-	async #pruneSupersededReads(): Promise<{ prunedCount: number; tokensSaved: number } | undefined> {
-		if (!this.settings.getGroup("compaction").supersedeReads) return undefined;
+	async #pruneStaleToolResults(): Promise<{ prunedCount: number; tokensSaved: number } | undefined> {
+		const { supersedeReads, dropUseless } = this.settings.getGroup("compaction");
+		if (!supersedeReads && !dropUseless) return undefined;
 		const branchEntries = this.sessionManager.getBranch();
 		const result = pruneSupersededToolResults(
 			branchEntries,
 			this.#withPlanProtection({
-				supersedeKey: readToolSupersedeKey,
+				supersedeKey: supersedeReads ? readToolSupersedeKey : undefined,
+				pruneUseless: dropUseless,
 				protectedTools: [...DEFAULT_PRUNE_CONFIG.protectedTools],
 			}),
 		);
@@ -6861,9 +6893,10 @@ export class AgentSession {
 			return false;
 		}
 
-		// Supersede pass runs every turn, before any threshold gating: it is cheap
-		// (bails when no candidate) and independent of the compaction setting.
-		const supersedeResult = await this.#pruneSupersededReads();
+		// Stale-result pass runs every turn, before any threshold gating: it is
+		// cheap (bails when no candidate) and independent of the compaction
+		// setting.
+		const supersedeResult = await this.#pruneStaleToolResults();
 
 		const compactionSettings = this.settings.getGroup("compaction");
 		if (!compactionSettings.enabled || compactionSettings.strategy === "off") return false;

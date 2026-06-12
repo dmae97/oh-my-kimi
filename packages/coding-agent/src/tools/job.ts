@@ -171,6 +171,9 @@ export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
 			return {
 				content: [{ type: "text", text: message }],
 				details: { jobs: [] },
+				// Nothing found / nothing to wait for is noise once consumed —
+				// the follow-up call has already corrected course.
+				useless: true,
 			};
 		}
 
@@ -334,12 +337,17 @@ export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
 			}
 		}
 
+		const details: JobToolDetails = {
+			jobs: jobResults,
+			...(cancelOutcomes.length ? { cancelled: cancelOutcomes.map(({ id, status }) => ({ id, status })) } : {}),
+		};
 		return {
 			content: [{ type: "text", text: lines.join("\n").trimEnd() }],
-			details: {
-				jobs: jobResults,
-				...(cancelOutcomes.length ? { cancelled: cancelOutcomes.map(({ id, status }) => ({ id, status })) } : {}),
-			},
+			details,
+			// A poll where everything is still running carries no new information
+			// once a later poll exists — same predicate the TUI uses to displace
+			// stale waiting frames.
+			...(isWaitingPollDetails(details) ? { useless: true } : {}),
 		};
 	}
 }

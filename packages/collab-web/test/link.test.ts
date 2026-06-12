@@ -15,7 +15,15 @@ const KEY_TEXT = encodeBase64Url(KEY);
 const ROOM = "AbCdEf123456_-Xy";
 
 describe("collab link parsing", () => {
-	it("parses a bare roomId#key link against the default relay", () => {
+	it("parses a bare roomId.key link against the default relay", () => {
+		const parsed = parseCollabLink(`${ROOM}.${KEY_TEXT}`);
+		if ("error" in parsed) throw new Error(parsed.error);
+		expect(parsed.wsUrl).toBe(`${DEFAULT_RELAY_URL}/r/${ROOM}`);
+		expect(parsed.roomId).toBe(ROOM);
+		expect(parsed.key).toEqual(KEY);
+	});
+
+	it("parses a legacy bare roomId#key link against the default relay", () => {
 		const parsed = parseCollabLink(`${ROOM}#${KEY_TEXT}`);
 		if ("error" in parsed) throw new Error(parsed.error);
 		expect(parsed.wsUrl).toBe(`${DEFAULT_RELAY_URL}/r/${ROOM}`);
@@ -72,6 +80,20 @@ describe("collab link parsing", () => {
 		const local = parseCollabLink(`http://localhost:7466/#ws://localhost:7466/r/${ROOM}#${KEY_TEXT}`);
 		if ("error" in local) throw new Error(local.error);
 		expect(local.wsUrl).toBe(`ws://localhost:7466/r/${ROOM}`);
+	});
+
+	it("parses dot-joined web deep links (https://<relay>/#<roomId>.<key>)", () => {
+		const parsed = parseCollabLink(`https://my.omp.sh/#${ROOM}.${KEY_TEXT}`);
+		if ("error" in parsed) throw new Error(parsed.error);
+		expect(parsed.wsUrl).toBe(`${DEFAULT_RELAY_URL}/r/${ROOM}`);
+		expect(parsed.key).toEqual(KEY);
+	});
+
+	it("accepts %23-mangled legacy deep links (macOS Foundation re-encoding)", () => {
+		const parsed = parseCollabLink(`https://my.omp.sh/#${ROOM}%23${KEY_TEXT}`);
+		if ("error" in parsed) throw new Error(parsed.error);
+		expect(parsed.wsUrl).toBe(`${DEFAULT_RELAY_URL}/r/${ROOM}`);
+		expect(parsed.key).toEqual(KEY);
 	});
 
 	it("round-trips format → parse for default, custom, and localhost relays", () => {

@@ -8,6 +8,7 @@ import {
 	readToolSupersedeKey,
 	SUPERSEDED_NOTICE,
 	type SupersedePruneConfig,
+	USELESS_NOTICE,
 } from "@oh-my-pi/pi-agent-core/compaction";
 import type { ProtectedToolContext } from "@oh-my-pi/pi-agent-core/compaction/tool-protection";
 import type { AssistantMessage, TextContent, ToolResultMessage } from "@oh-my-pi/pi-ai";
@@ -61,6 +62,23 @@ function readPair(path: string, text: string, timestamp: number): [SessionMessag
 			timestamp,
 		),
 		messageEntry(toolResultMessage("read", callId, text, timestamp), timestamp),
+	];
+}
+
+/** Assistant toolCall entry + paired toolResult entry flagged contextually useless. */
+function uselessPair(
+	toolName: string,
+	text: string,
+	timestamp: number,
+	extra: Partial<ToolResultMessage> = {},
+): [SessionMessageEntry, SessionMessageEntry] {
+	const callId = `call-${idCounter++}`;
+	return [
+		messageEntry(
+			assistantMessage([{ type: "toolCall", id: callId, name: toolName, arguments: { pattern: "zzz" } }], timestamp),
+			timestamp,
+		),
+		messageEntry({ ...toolResultMessage(toolName, callId, text, timestamp), useless: true, ...extra }, timestamp),
 	];
 }
 
@@ -342,5 +360,146 @@ describe("pruneToolOutputs — supersede priority fold", () => {
 		expect(DEFAULT_PRUNE_CONFIG.supersedeKey).toBeUndefined();
 		expect(DEFAULT_PRUNE_CONFIG.protectTokens).toBe(40_000);
 		expect(DEFAULT_PRUNE_CONFIG.minimumSavings).toBe(20_000);
+	});
+});
+
+// Large enough to clear the size guard (blanking must save tokens over the notice).
+const NO_MATCH_TEXT = "No matches found in any of the scanned files.\n".repeat(10);
+
+describe("pruneSupersededToolResults — useless results", () => {
+	test("(a) useless result blanked to exact notice on idle flush", () => {
+		const [call1, result1] = uselessPair("search", NO_MATCH_TEXT, T0);
+		const big = textEntry(BIG_TEXT, T0 + 1_000);
+		const entries: SessionEntry[] = [call1, result1, big];
+
+		// Suffix limit 0 blocks the tail rule; only the idle gap fires.
+		const result = pruneSupersededToolResults(
+			entries,
+			cfg({ pruneUseless: true, suffixTokenLimit: 0, now: T0 + 1_000 + 31 * 60_000 }),
+		);
+
+		expect(result.prunedCount).toBe(1);
+		expect(result.tokensSaved).toBeGreaterThan(0);
+		expect(resultText(result1)).toBe(USELESS_NOTICE);
+		expect(resultMessage(result1).prunedAt).toBeDefined();
+	});
+
+	test("(b) blanked under the suffix rule near the tail", () => {
+		const [call1, result1] = uselessPair("search", NO_MATCH_TEXT, T0);
+		const entries: SessionEntry[] = [call1, result1];
+
+		const result = pruneSupersededToolResults(entries, cfg({ pruneUseless: true, now: T0 + 1_000 }));
+
+		expect(result.prunedCount).toBe(1);
+		expect(resultText(result1)).toBe(USELESS_NOTICE);
+	});
+
+	test("(c) NOT blanked when suffix large and not idle", () => {
+		const [call1, result1] = uselessPair("search", NO_MATCH_TEXT, T0);
+		const big = textEntry(BIG_TEXT, T0 + 1_000);
+		const entries: SessionEntry[] = [call1, result1, big];
+
+		const result = pruneSupersededToolResults(
+			entries,
+			cfg({ pruneUseless: true, suffixTokenLimit: 200, now: T0 + 2_000 }),
+		);
+
+		expect(result.prunedCount).toBe(0);
+		expect(resultText(result1)).toBe(NO_MATCH_TEXT);
+		expect(resultMessage(result1).prunedAt).toBeUndefined();
+	});
+
+	test("(d) tiny useless result never blanked (notice would cost more than it saves)", () => {
+		const [call1, result1] = uselessPair("search", "No matches found", T0);
+		const entries: SessionEntry[] = [call1, result1];
+
+		const result = pruneSupersededToolResults(entries, cfg({ pruneUseless: true, now: T0 + 31 * 60_000 }));
+
+		expect(result.prunedCount).toBe(0);
+		expect(resultText(result1)).toBe("No matches found");
+	});
+
+	test("(e) protected matcher exempts a useless result", () => {
+		const [call1, result1] = uselessPair("search", NO_MATCH_TEXT, T0);
+		const entries: SessionEntry[] = [call1, result1];
+
+		const result = pruneSupersededToolResults(
+			entries,
+			cfg({ pruneUseless: true, protectedTools: ["search"], now: T0 + 31 * 60_000 }),
+		);
+
+		expect(result.prunedCount).toBe(0);
+		expect(resultText(result1)).toBe(NO_MATCH_TEXT);
+	});
+
+	test("(f) prunes useless results without a supersedeKey", () => {
+		const [call1, result1] = uselessPair("search", NO_MATCH_TEXT, T0);
+		const entries: SessionEntry[] = [call1, result1];
+
+		const result = pruneSupersededToolResults(entries, {
+			protectedTools: [],
+			pruneUseless: true,
+			now: T0 + 1_000,
+		});
+
+		expect(result.prunedCount).toBe(1);
+		expect(resultText(result1)).toBe(USELESS_NOTICE);
+	});
+
+	test("(g) a result both superseded and useless gets the supersede notice", () => {
+		const [call1, result1] = readPair("src/foo.ts", FILE_CONTENT, T0);
+		(resultMessage(result1) as ToolResultMessage).useless = true;
+		const [call2, result2] = readPair("src/foo.ts", FILE_CONTENT, T0 + 1_000);
+		const entries: SessionEntry[] = [call1, result1, call2, result2];
+
+		const result = pruneSupersededToolResults(entries, cfg({ pruneUseless: true, now: T0 + 1_000 }));
+
+		expect(result.prunedCount).toBe(1);
+		expect(resultText(result1)).toBe(SUPERSEDED_NOTICE);
+		expect(resultText(result2)).toBe(FILE_CONTENT);
+	});
+
+	test("never blanks an error result even when flagged", () => {
+		const [call1, result1] = uselessPair("search", NO_MATCH_TEXT, T0, { isError: true });
+		const entries: SessionEntry[] = [call1, result1];
+
+		const result = pruneSupersededToolResults(entries, cfg({ pruneUseless: true, now: T0 + 31 * 60_000 }));
+
+		expect(result.prunedCount).toBe(0);
+		expect(resultText(result1)).toBe(NO_MATCH_TEXT);
+	});
+});
+
+describe("pruneToolOutputs — useless results", () => {
+	test("(h) useless result inside the protect window blanked; non-flagged neighbor kept", () => {
+		const [call1, result1] = uselessPair("search", NO_MATCH_TEXT, T0);
+		const [call2, result2] = readPair("src/foo.ts", FILE_CONTENT, T0 + 1_000);
+		const entries: SessionEntry[] = [call1, result1, call2, result2];
+
+		const result = pruneToolOutputs(entries, {
+			protectTokens: 1_000_000, // everything inside the protect window
+			minimumSavings: 0,
+			protectedTools: [],
+			pruneUseless: true,
+		});
+
+		expect(result.prunedCount).toBe(1);
+		expect(resultText(result1)).toBe(USELESS_NOTICE);
+		expect(resultText(result2)).toBe(FILE_CONTENT);
+	});
+
+	test("pruneUseless: false leaves flagged results to the normal window rules", () => {
+		const [call1, result1] = uselessPair("search", NO_MATCH_TEXT, T0);
+		const entries: SessionEntry[] = [call1, result1];
+
+		const result = pruneToolOutputs(entries, {
+			protectTokens: 1_000_000,
+			minimumSavings: 0,
+			protectedTools: [],
+			pruneUseless: false,
+		});
+
+		expect(result.prunedCount).toBe(0);
+		expect(resultText(result1)).toBe(NO_MATCH_TEXT);
 	});
 });

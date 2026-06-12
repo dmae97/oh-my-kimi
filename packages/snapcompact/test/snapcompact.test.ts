@@ -504,6 +504,21 @@ describe("serializeConversation", () => {
 		const out = snapcompact.serializeConversation([createToolResultMessage("ok")], { dimToolResults: false });
 		expect(out).toBe("[Tool result]: ok");
 	});
+
+	it("skips tool call/result pairs flagged useless", () => {
+		const out = snapcompact.serializeConversation([
+			createAssistantMessage([
+				{ type: "toolCall", id: "c-keep", name: "search", arguments: { pattern: "alpha" } },
+				{ type: "toolCall", id: "c-drop", name: "search", arguments: { pattern: "zzz_nothing" } },
+			]),
+			{ ...createToolResultMessage("alpha match found"), toolCallId: "c-keep" } as Message,
+			{ ...createToolResultMessage("No matches found"), toolCallId: "c-drop", useless: true } as Message,
+		]);
+		expect(out).toContain('pattern="alpha"');
+		expect(out).toContain("alpha match found");
+		expect(out).not.toContain("zzz_nothing");
+		expect(out).not.toContain("No matches found");
+	});
 });
 
 describe("compact", () => {

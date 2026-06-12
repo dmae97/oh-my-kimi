@@ -1124,7 +1124,9 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 						? `No more results (${totalFilesLabel} files total; skip=${normalizedSkip} is past the end)`
 						: "No matches found";
 					const text = warningNote ? `${noMatchText}\n${warningNote}` : noMatchText;
-					return toolResult(details).text(text).done();
+					// Zero matches is useless regardless of warnings: by the time
+					// compaction runs, the follow-up call has already corrected course.
+					return toolResult(details).text(text).useless().done();
 				}
 				const outputLines: string[] = [];
 				let linesTruncated = false;
