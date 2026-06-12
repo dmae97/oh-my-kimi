@@ -1268,9 +1268,12 @@ export async function runRootCommand(
 			const versionCheckPromise = checkForNewVersion(VERSION).catch(() => undefined);
 			const changelogMarkdown = await logger.time("main:getChangelogForDisplay", getChangelogForDisplay, parsedArgs);
 
-			const scopedModelsForDisplay = sessionOptions.scopedModels ?? scopedModels;
-			if (scopedModelsForDisplay.length > 0) {
-				const modelList = formatModelScopeList(scopedModelsForDisplay);
+			if (scopedModels.length > 0) {
+				// Use the original `ScopedModel[]` here (not `sessionOptions.scopedModels`,
+				// whose thinking levels are pre-filled with the global default for Ctrl+P
+				// cycling) so the banner only shows `:level` suffixes the user actually
+				// scoped.
+				const modelList = formatModelScopeList(scopedModels);
 				// Routed through the TUI (not stdout): the startup capture owns the
 				// terminal in raw mode here, and the TUI's first clearScrollback paint
 				// would wipe a pre-TUI line anyway.

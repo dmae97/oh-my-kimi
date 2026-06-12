@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed the interactive Model scope startup banner so models without an explicit thinking level do not show `:undefined`, while scoped models with one still show `:<level>` ([#2385](https://github.com/can1357/oh-my-pi/issues/2385)).
+- Fixed the interactive Model scope startup banner so models without an explicit thinking level do not show `:undefined`, and entries that were scoped without a `:level` are no longer rendered with the global default thinking level (which `applyRootSessionOptions` pre-fills on the cycling array for Ctrl+P) ([#2385](https://github.com/can1357/oh-my-pi/issues/2385)).
 
 ## [15.11.8] - 2026-06-12
 
