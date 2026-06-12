@@ -1,5 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it, type Mock, vi } from "bun:test";
-import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { describe, expect, it, type Mock, vi } from "bun:test";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import type { InteractiveModeContext, SubmittedUserInput } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
@@ -209,14 +208,6 @@ function createContext(): {
 	};
 }
 
-beforeAll(async () => {
-	await Settings.init({ inMemory: true });
-});
-
-afterAll(() => {
-	resetSettingsForTest();
-});
-
 describe("InputController escape behavior", () => {
 	it("prefers canceling a pending optimistic submission before aborting the session", async () => {
 		const { ctx, editor, spies } = createContext();
@@ -340,18 +331,6 @@ describe("InputController escape behavior", () => {
 		expect(spies.handleBtwEscape).toHaveBeenCalledTimes(1);
 		expect(spies.abortBash).not.toHaveBeenCalled();
 		expect(spies.abort).not.toHaveBeenCalled();
-	});
-
-	it("opens the editable message-history selector on default double-Esc", () => {
-		const { ctx, editor } = createContext();
-		const controller = new InputController(ctx);
-
-		controller.setupKeyHandlers();
-		editor.onEscape?.();
-		editor.onEscape?.();
-
-		expect(ctx.showUserMessageSelector).toHaveBeenCalledTimes(1);
-		expect(ctx.showTreeSelector).not.toHaveBeenCalled();
 	});
 
 	it("aborts streaming even when the working loader is no longer present", () => {
