@@ -23,6 +23,10 @@ describe("isKimiK26ModelId", () => {
 		expect(isKimiK26ModelId("kimi-k2.6-thinking")).toBe(true);
 		expect(isKimiK26ModelId("kimi-k2.61")).toBe(false);
 		expect(isKimiK26ModelId("kimi-k2.5")).toBe(false);
+		// Router ids spell the version `k2p6` (e.g. Fireworks Fire Pass).
+		expect(isKimiK26ModelId("accounts/fireworks/routers/kimi-k2p6-turbo")).toBe(true);
+		expect(isKimiK26ModelId("kimi-k2p6")).toBe(true);
+		expect(isKimiK26ModelId("kimi-k2p61")).toBe(false);
 	});
 });
 

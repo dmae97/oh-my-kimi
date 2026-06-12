@@ -128,27 +128,51 @@ function extractWindowsNpmShimTarget(content: string): string | null {
 	return match?.[1] ?? null;
 }
 
+/**
+ * Extract the shim's PATH-fallback interpreter (`SET "_prog=node"`). The
+ * `IF EXIST` branch assigns a `%dp0%`-prefixed value, so requiring a
+ * non-`%`-leading value picks the bare program name.
+ */
+function extractWindowsNpmShimProg(content: string): string | null {
+	const match = /SET\s+"_prog=([^%"][^"]*)"/i.exec(content);
+	return match?.[1] ?? null;
+}
+
 async function resolveWindowsNpmShimCommand(
 	command: string,
 	args: readonly string[],
+	cwd: string,
 ): Promise<StdioSpawnCommand | null> {
 	if (!isWindowsBatchCommand(command)) return null;
-	if (!hasPathSegment(command) && !path.isAbsolute(command)) return null;
+	if (!hasPathSegment(command)) return null;
+	const commandPath = path.resolve(cwd, command);
 
 	let content: string;
 	try {
-		content = await Bun.file(command).text();
+		content = await Bun.file(commandPath).text();
 	} catch {
 		return null;
 	}
 
+	// cmd-shim emits the same invocation line for every interpreter; only
+	// bypass cmd.exe when the shim's fallback interpreter is actually node.
+	const prog = extractWindowsNpmShimProg(content);
+	if (
+		!prog ||
+		path
+			.basename(prog)
+			.replace(/\.exe$/i, "")
+			.toLowerCase() !== "node"
+	)
+		return null;
+
 	const rawTarget = extractWindowsNpmShimTarget(content);
 	if (!rawTarget) return null;
 
-	const target = resolveWindowsShimPath(rawTarget, path.dirname(command));
+	const target = resolveWindowsShimPath(rawTarget, path.dirname(commandPath));
 	if (!target) return null;
 
-	const siblingNode = path.join(path.dirname(command), "node.exe");
+	const siblingNode = path.join(path.dirname(commandPath), "node.exe");
 	const nodeCommand = (await fileExists(siblingNode)) ? siblingNode : "node";
 	return {
 		cmd: [nodeCommand, target, ...args],
@@ -198,7 +222,7 @@ export async function resolveStdioSpawnCommand(
 
 	const resolvedCommand =
 		(await resolveWindowsCommandPath(config.command, options.cwd, options.env)) ?? config.command;
-	const npmShimCommand = await resolveWindowsNpmShimCommand(resolvedCommand, args);
+	const npmShimCommand = await resolveWindowsNpmShimCommand(resolvedCommand, args, options.cwd);
 	if (npmShimCommand) return npmShimCommand;
 	if (!isWindowsBatchCommand(resolvedCommand)) return { cmd: [resolvedCommand, ...args] };
 
