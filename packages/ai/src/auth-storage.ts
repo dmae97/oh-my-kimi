@@ -24,18 +24,26 @@ import type {
 	UsageCredential,
 	UsageFetchContext,
 	UsageFetchParams,
+	UsageHistoryEntry,
+	UsageHistoryQuery,
 	UsageLimit,
 	UsageLogger,
 	UsageProvider,
 	UsageReport,
 } from "./usage";
+import { resolveUsedFraction } from "./usage";
 import { claudeRankingStrategy, claudeUsageProvider } from "./usage/claude";
 import { googleGeminiCliUsageProvider } from "./usage/gemini";
 import { githubCopilotUsageProvider } from "./usage/github-copilot";
 import { antigravityRankingStrategy, antigravityUsageProvider } from "./usage/google-antigravity";
 import { kimiUsageProvider } from "./usage/kimi";
 import { codexRankingStrategy, openaiCodexUsageProvider } from "./usage/openai-codex";
-import { type CodexResetConsumeCode, consumeCodexResetCredit, listCodexResetCredits } from "./usage/openai-codex-reset";
+import {
+	type CodexResetConsumeCode,
+	type CodexResetCredit,
+	consumeCodexResetCredit,
+	listCodexResetCredits,
+} from "./usage/openai-codex-reset";
 import { zaiUsageProvider } from "./usage/zai";
 
 const USAGE_RANKING_METRIC_EPSILON = 1e-9;
@@ -286,6 +294,14 @@ export interface AuthCredentialStore {
 	setCache(key: string, value: string, expiresAtSec: number): void;
 	cleanExpiredCache(): void;
 	/**
+	 * Append usage-limit snapshots for trend history. Optional: stores without
+	 * durable storage (e.g. the broker remote store) omit it and recording is
+	 * skipped — the broker host records into its own database instead.
+	 */
+	recordUsageSnapshots?(entries: UsageHistoryEntry[]): void;
+	/** Read recorded usage-limit snapshots, oldest first. */
+	listUsageHistory?(query?: UsageHistoryQuery): UsageHistoryEntry[];
+	/**
 	 * Optional store-supplied OAuth refresh. When present, `AuthStorage` uses
 	 * it before the per-provider local refresh path. `RemoteAuthCredentialStore`
 	 * implements this against the broker; SQLite stores leave it undefined.
@@ -484,6 +500,13 @@ const USAGE_CACHE_PREFIX = "usage_cache:";
 const USAGE_REPORT_TTL_MS = 5 * 60_000;
 const USAGE_HEADER_INGEST_INTERVAL_MS = 60_000;
 const USAGE_LAST_GOOD_RETENTION_MS = 24 * 60 * 60_000;
+/**
+ * Downsample usage history to at most one row per hour per account window: a
+ * snapshot landing in the same hour bucket as the series' latest row
+ * overwrites it in place. That bound makes further retention pruning
+ * unnecessary — 1 row/hour is ~9k rows per account window per year.
+ */
+const USAGE_HISTORY_BUCKET_MS = 60 * 60_000;
 /**
  * Per-credential cool-down after a usage fetch fails. While this window is
  * active we serve the last successful value to avoid dropping the credential
@@ -912,6 +935,14 @@ export class AuthStorage {
 		this.#usageProviderResolver = options.usageProviderResolver ?? resolveDefaultUsageProvider;
 		this.#rankingStrategyResolver = options.rankingStrategyResolver ?? resolveDefaultRankingStrategy;
 		this.#usageCache = new AuthStorageUsageCache(this.#store);
+		// Opportunistic hygiene, once per AuthStorage lifetime: drop expired
+		// cache rows (24h last-good retention). A cheap indexed DELETE;
+		// failures must never block construction.
+		try {
+			this.#store.cleanExpiredCache();
+		} catch {
+			// Best-effort.
+		}
 		this.#usageFetch = options.usageFetch ?? fetch;
 		this.#usageRequestTimeoutMs = options.usageRequestTimeoutMs ?? DEFAULT_USAGE_REQUEST_TIMEOUT_MS;
 		this.#refreshOAuthCredentialOverride = options.refreshOAuthCredential;
@@ -2002,6 +2033,7 @@ export class AuthStorage {
 				// fan-out trips 429s every cycle. With ±25% jitter on TTL the refresh
 				// times decorrelate within a few cycles.
 				this.#usageCache.set(cacheKey, { value: report, expiresAt: Date.now() + USAGE_REPORT_TTL_MS + ttlJitter });
+				this.#recordUsageHistory(request, report);
 				return report;
 			}
 			// Failure: cache the LAST GOOD value (if any) with a short jittered TTL
@@ -2021,6 +2053,50 @@ export class AuthStorage {
 
 		this.#usageRequestInFlight.set(cacheKey, promise);
 		return promise;
+	}
+
+	/**
+	 * Append a freshly fetched report to durable usage history (when the store
+	 * supports it). The usage cache is latest-snapshot-only — these rows are
+	 * the only place limit utilization is kept over time.
+	 */
+	#recordUsageHistory(request: UsageRequestDescriptor, report: UsageReport): void {
+		const record = this.#store.recordUsageSnapshots;
+		if (!record || report.limits.length === 0) return;
+		const recordedAt = Number.isFinite(report.fetchedAt) && report.fetchedAt > 0 ? report.fetchedAt : Date.now();
+		const accountKey = this.#buildUsageCacheIdentity(request.credential);
+		const metadata = report.metadata ?? {};
+		const metaEmail = typeof metadata.email === "string" ? metadata.email : undefined;
+		const metaAccountId = typeof metadata.accountId === "string" ? metadata.accountId : undefined;
+		const entries: UsageHistoryEntry[] = report.limits.map(limit => ({
+			recordedAt,
+			provider: request.provider,
+			accountKey,
+			email: request.credential.email ?? metaEmail,
+			accountId: request.credential.accountId ?? limit.scope.accountId ?? metaAccountId,
+			limitId: limit.id,
+			label: limit.label,
+			windowLabel: limit.window?.label ?? limit.scope.windowId,
+			usedFraction: resolveUsedFraction(limit),
+			status: limit.status,
+			resetsAt: limit.window?.resetsAt,
+		}));
+		try {
+			record.call(this.#store, entries);
+		} catch (error) {
+			this.#usageLogger?.debug("usage history record failed", {
+				provider: request.provider,
+				error: String(error),
+			});
+		}
+	}
+
+	/**
+	 * Recorded usage-limit snapshots, oldest first. Empty when the underlying
+	 * store has no durable history (e.g. a broker-backed remote store).
+	 */
+	listUsageHistory(query?: UsageHistoryQuery): UsageHistoryEntry[] {
+		return this.#store.listUsageHistory?.(query) ?? [];
 	}
 
 	ingestUsageHeaders(
@@ -4178,6 +4254,10 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 	#getCacheIncludingExpiredStmt: Statement;
 	#upsertCacheStmt: Statement;
 	#deleteExpiredCacheStmt: Statement;
+	#insertUsageHistoryStmt: Statement;
+	#lastUsageHistoryStmt: Statement;
+	#listUsageHistoryStmt: Statement;
+	#updateUsageHistoryStmt: Statement;
 	#closed = false;
 
 	constructor(db: Database) {
@@ -4217,6 +4297,18 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 			"INSERT INTO cache (key, value, expires_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, expires_at = excluded.expires_at",
 		);
 		this.#deleteExpiredCacheStmt = this.#db.prepare(`DELETE FROM cache WHERE expires_at <= ${SQLITE_NOW_EPOCH}`);
+		this.#insertUsageHistoryStmt = this.#db.prepare(
+			"INSERT INTO usage_history (recorded_at, provider, account_key, email, account_id, limit_id, label, window_label, used_fraction, status, resets_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		);
+		this.#lastUsageHistoryStmt = this.#db.prepare(
+			"SELECT id, recorded_at FROM usage_history WHERE provider = ? AND account_key = ? AND limit_id = ? ORDER BY recorded_at DESC LIMIT 1",
+		);
+		this.#updateUsageHistoryStmt = this.#db.prepare(
+			"UPDATE usage_history SET recorded_at = ?, email = ?, account_id = ?, label = ?, window_label = ?, used_fraction = ?, status = ?, resets_at = ? WHERE id = ?",
+		);
+		this.#listUsageHistoryStmt = this.#db.prepare(
+			"SELECT recorded_at, provider, account_key, email, account_id, limit_id, label, window_label, used_fraction, status, resets_at FROM usage_history WHERE recorded_at >= ? AND (? IS NULL OR provider = ?) ORDER BY recorded_at ASC",
+		);
 	}
 
 	static async open(dbPath: string = getAgentDbPath()): Promise<SqliteAuthCredentialStore> {
@@ -4254,6 +4346,22 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 				expires_at INTEGER NOT NULL
 			);
 			CREATE INDEX IF NOT EXISTS idx_cache_expires ON cache(expires_at);
+			CREATE TABLE IF NOT EXISTS usage_history (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				recorded_at INTEGER NOT NULL,
+				provider TEXT NOT NULL,
+				account_key TEXT NOT NULL,
+				email TEXT,
+				account_id TEXT,
+				limit_id TEXT NOT NULL,
+				label TEXT NOT NULL,
+				window_label TEXT,
+				used_fraction REAL,
+				status TEXT,
+				resets_at INTEGER
+			);
+			CREATE INDEX IF NOT EXISTS idx_usage_history_series ON usage_history(provider, account_key, limit_id, recorded_at);
+			CREATE INDEX IF NOT EXISTS idx_usage_history_recorded ON usage_history(recorded_at);
 		`);
 
 		if (!this.#authCredentialsTableExists()) {
@@ -4661,6 +4769,80 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		}
 	}
 
+	recordUsageSnapshots(entries: UsageHistoryEntry[]): void {
+		try {
+			for (const entry of entries) {
+				const bucket = Math.floor(entry.recordedAt / USAGE_HISTORY_BUCKET_MS);
+				const last = this.#lastUsageHistoryStmt.get(entry.provider, entry.accountKey, entry.limitId) as
+					| { id: number; recorded_at: number }
+					| undefined;
+				if (last && Math.floor(last.recorded_at / USAGE_HISTORY_BUCKET_MS) === bucket) {
+					this.#updateUsageHistoryStmt.run(
+						entry.recordedAt,
+						entry.email ?? null,
+						entry.accountId ?? null,
+						entry.label,
+						entry.windowLabel ?? null,
+						entry.usedFraction ?? null,
+						entry.status ?? null,
+						entry.resetsAt ?? null,
+						last.id,
+					);
+					continue;
+				}
+				this.#insertUsageHistoryStmt.run(
+					entry.recordedAt,
+					entry.provider,
+					entry.accountKey,
+					entry.email ?? null,
+					entry.accountId ?? null,
+					entry.limitId,
+					entry.label,
+					entry.windowLabel ?? null,
+					entry.usedFraction ?? null,
+					entry.status ?? null,
+					entry.resetsAt ?? null,
+				);
+			}
+		} catch {
+			// History is best-effort; never break the usage fetch path.
+		}
+	}
+
+	listUsageHistory(query?: UsageHistoryQuery): UsageHistoryEntry[] {
+		try {
+			const provider = query?.provider ?? null;
+			const rows = this.#listUsageHistoryStmt.all(query?.sinceMs ?? 0, provider, provider) as Array<{
+				recorded_at: number;
+				provider: string;
+				account_key: string;
+				email: string | null;
+				account_id: string | null;
+				limit_id: string;
+				label: string;
+				window_label: string | null;
+				used_fraction: number | null;
+				status: string | null;
+				resets_at: number | null;
+			}>;
+			return rows.map(row => ({
+				recordedAt: row.recorded_at,
+				provider: row.provider as Provider,
+				accountKey: row.account_key,
+				email: row.email ?? undefined,
+				accountId: row.account_id ?? undefined,
+				limitId: row.limit_id,
+				label: row.label,
+				windowLabel: row.window_label ?? undefined,
+				usedFraction: row.used_fraction ?? undefined,
+				status: (row.status ?? undefined) as UsageHistoryEntry["status"],
+				resetsAt: row.resets_at ?? undefined,
+			}));
+		} catch {
+			return [];
+		}
+	}
+
 	// ─── Convenience methods for CLI ────────────────────────────────────────
 
 	/**
@@ -4744,6 +4926,10 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		this.#getCacheIncludingExpiredStmt.finalize();
 		this.#upsertCacheStmt.finalize();
 		this.#deleteExpiredCacheStmt.finalize();
+		this.#insertUsageHistoryStmt.finalize();
+		this.#lastUsageHistoryStmt.finalize();
+		this.#listUsageHistoryStmt.finalize();
+		this.#updateUsageHistoryStmt.finalize();
 		this.#db.close();
 	}
 }

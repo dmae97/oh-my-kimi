@@ -1,9 +1,13 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
+- Added `--history` mode to `omp usage` to show recorded usage-limit history instead of a single live snapshot
+- Added `--days` (`-d`) support for `omp usage --history` to control the history window (default 7 days)
+- Added historical usage output for `omp usage --history`, including per-limit sparklines with latest and peak percentages
+- Added `--json` support in `omp usage --history` to emit timestamped usage-history snapshot data
+- Added guidance and exit code 1 when no usage history is available for the selected window
 - Added an anchored Subagents HUD above the editor (next to the Todos block) listing every running subagent as `Id: description`; rows appear on spawn and the block clears itself when the last subagent finishes
 - Added `/reset-usage` command to spend a saved Codex rate-limit reset by running `/reset-usage <active|account id|email>`, with a TUI selector flow for interactive reset redemption
 - Added `snapcompact.systemPrompt` enum modes `none`, `agents-md`, and `all`, so users can disable system-prompt imaging, image only loaded AGENTS.md/context-file instruction sections, or image the full system prompt
