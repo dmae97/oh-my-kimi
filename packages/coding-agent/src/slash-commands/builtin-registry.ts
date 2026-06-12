@@ -2,7 +2,6 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
-import type { UsageReport } from "@oh-my-pi/pi-ai";
 import { setNextRequestDebugPath } from "@oh-my-pi/pi-ai/utils/request-debug";
 import { Snowflake, setProjectDir } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
@@ -31,11 +30,11 @@ import { formatDuration } from "./helpers/format";
 import { createMarketplaceManager } from "./helpers/marketplace-manager";
 import { handleMcpAcp } from "./helpers/mcp";
 import { commandConsumed, errorMessage, parseSlashCommand, parseSubcommand, usage } from "./helpers/parse";
+import { describeRedeemOutcome, toResetUsageAccounts } from "./helpers/reset-usage";
 import { handleSshAcp } from "./helpers/ssh";
 import { launchStatsDashboard, parseStatsDashboardArgs } from "./helpers/stats-dashboard";
 import { handleTodoAcp } from "./helpers/todo";
 import { buildUsageReportText } from "./helpers/usage-report";
-import { buildResetUsageAccounts, describeRedeemOutcome } from "./helpers/reset-usage";
 import { parseMarketplaceInstallArgs, parsePluginScopeArgs } from "./marketplace-install-parser";
 import type {
 	BuiltinSlashCommand,
@@ -611,15 +610,15 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		allowArgs: true,
 		handle: async (command, runtime) => {
 			const { session } = runtime;
-			let reports: UsageReport[] | null = null;
+			let accounts: ReturnType<typeof toResetUsageAccounts>;
 			try {
-				reports = await session.fetchUsageReports();
-			} catch {
-				await runtime.output("Could not load usage data to find saved resets.");
+				accounts = toResetUsageAccounts(await session.listResetCredits());
+			} catch (error) {
+				await runtime.output(
+					`Could not load saved resets: ${error instanceof Error ? error.message : String(error)}`,
+				);
 				return commandConsumed();
 			}
-			const active = session.modelRegistry.authStorage.getOAuthAccountIdentity("openai-codex", session.sessionId);
-			const accounts = buildResetUsageAccounts(reports, active);
 			if (accounts.length === 0) {
 				await runtime.output("No Codex accounts found. Use /login to add one.");
 				return commandConsumed();
@@ -628,7 +627,8 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			if (!arg) {
 				const lines = ["Saved Codex rate-limit resets:"];
 				for (const account of accounts) {
-					lines.push(`- ${account.label}: ${account.availableCount} available${account.active ? " (active)" : ""}`);
+					const detail = account.error ? `unavailable (${account.error})` : `${account.availableCount} available`;
+					lines.push(`- ${account.label}: ${detail}${account.active ? " (active)" : ""}`);
 				}
 				lines.push("", "Spend one with `/reset-usage <account email>` or `/reset-usage active`.");
 				await runtime.output(lines.join("\n"));

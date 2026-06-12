@@ -1,10 +1,9 @@
 /**
- * Shared helpers for the `/reset-usage` command (TUI selector + ACP) and
- * auto-redeem: turn usage reports into a per-account list of redeemable saved
- * rate-limit resets, and map a redeem outcome code to a human message.
+ * Shared helpers for the `/reset-usage` command (TUI selector + ACP): turn the
+ * live per-account reset-credit status into selector rows, and map a redeem
+ * outcome code to a human message.
  */
-import type { UsageReport } from "@oh-my-pi/pi-ai";
-import type { OAuthAccountIdentity, ResetCreditRedeemOutcome, ResetCreditTarget } from "../../session/auth-storage";
+import type { ResetCreditAccountStatus, ResetCreditRedeemOutcome, ResetCreditTarget } from "../../session/auth-storage";
 
 export const CODEX_PROVIDER_ID = "openai-codex";
 
@@ -18,36 +17,32 @@ export interface ResetUsageAccount {
 	target: ResetCreditTarget;
 	/** Whether this is the session's active Codex account. */
 	active: boolean;
+	/** Set when this account could not be reached (token/list failure). */
+	error?: string;
 }
 
 /**
- * Build the per-account reset list from usage reports (Codex only). Sorted with
- * the active account first, then most-credits, then label.
+ * Map live per-account reset status to selector rows. Sorted with the active
+ * account first, then most-credits, then label.
  */
-export function buildResetUsageAccounts(
-	reports: UsageReport[] | null | undefined,
-	active?: OAuthAccountIdentity,
-): ResetUsageAccount[] {
-	const accounts = (reports ?? [])
-		.filter(report => report.provider === CODEX_PROVIDER_ID)
-		.map(report => {
-			const accountId = typeof report.metadata?.accountId === "string" ? report.metadata.accountId : undefined;
-			const email = typeof report.metadata?.email === "string" ? report.metadata.email : undefined;
-			const isActive =
-				!!active &&
-				((!!active.accountId && active.accountId === accountId) || (!!active.email && active.email === email));
-			return {
-				label: email ?? accountId ?? "account",
-				availableCount: report.resetCredits?.availableCount ?? 0,
-				target: { accountId, email } satisfies ResetCreditTarget,
-				active: isActive,
-			};
+export function toResetUsageAccounts(statuses: ResetCreditAccountStatus[]): ResetUsageAccount[] {
+	return statuses
+		.map(status => ({
+			label: status.email ?? status.accountId ?? "account",
+			availableCount: status.availableCount,
+			target: {
+				credentialId: status.credentialId,
+				accountId: status.accountId,
+				email: status.email,
+			} satisfies ResetCreditTarget,
+			active: status.active,
+			error: status.error,
+		}))
+		.sort((a, b) => {
+			if (a.active !== b.active) return a.active ? -1 : 1;
+			if (a.availableCount !== b.availableCount) return b.availableCount - a.availableCount;
+			return a.label.localeCompare(b.label);
 		});
-	return accounts.sort((a, b) => {
-		if (a.active !== b.active) return a.active ? -1 : 1;
-		if (a.availableCount !== b.availableCount) return b.availableCount - a.availableCount;
-		return a.label.localeCompare(b.label);
-	});
 }
 
 /** Human-facing summary of a redeem outcome for status lines and ACP output. */

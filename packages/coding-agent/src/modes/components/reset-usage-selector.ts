@@ -56,8 +56,14 @@ export class ResetUsageSelectorComponent extends Container {
 			if (!account) continue;
 			const isSelected = i === this.#selectedIndex;
 			const redeemable = account.availableCount > 0;
-			const countLabel = `${account.availableCount} saved reset${account.availableCount === 1 ? "" : "s"}`;
-			const countText = redeemable ? theme.fg("success", countLabel) : theme.fg("dim", countLabel);
+			const countLabel = account.error
+				? account.error
+				: `${account.availableCount} saved reset${account.availableCount === 1 ? "" : "s"}`;
+			const countText = account.error
+				? theme.fg("error", countLabel)
+				: redeemable
+					? theme.fg("success", countLabel)
+					: theme.fg("dim", countLabel);
 			const activeTag = account.active ? theme.fg("muted", " (active)") : "";
 			if (isSelected) {
 				const name = redeemable ? theme.fg("accent", account.label) : theme.fg("dim", account.label);

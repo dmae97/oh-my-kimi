@@ -73,6 +73,7 @@ import type {
 	Model,
 	ProviderResponseMetadata,
 	ProviderSessionState,
+	ResetCreditAccountStatus,
 	ResetCreditRedeemOutcome,
 	ResetCreditTarget,
 	ServiceTier,
@@ -10148,6 +10149,19 @@ export class AgentSession {
 	async redeemResetCredit(target: ResetCreditTarget, signal?: AbortSignal): Promise<ResetCreditRedeemOutcome> {
 		return this.#modelRegistry.authStorage.redeemResetCredit({
 			target,
+			baseUrlResolver: provider => this.#modelRegistry.getProviderBaseUrl?.(provider),
+			signal,
+		});
+	}
+
+	/**
+	 * List saved Codex rate-limit resets per stored account, fetched live from
+	 * the dedicated credits endpoint (bypasses the usage cache). Powers the
+	 * `/reset-usage` account selector.
+	 */
+	async listResetCredits(signal?: AbortSignal): Promise<ResetCreditAccountStatus[]> {
+		return this.#modelRegistry.authStorage.listResetCredits({
+			sessionId: this.sessionId,
 			baseUrlResolver: provider => this.#modelRegistry.getProviderBaseUrl?.(provider),
 			signal,
 		});

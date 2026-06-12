@@ -689,6 +689,20 @@ export interface ResetCreditRedeemOutcome {
 	creditId?: string;
 }
 
+/** One stored account's live saved-reset status, from {@link AuthStorage.listResetCredits}. */
+export interface ResetCreditAccountStatus {
+	credentialId?: number;
+	accountId?: string;
+	email?: string;
+	/** Resets redeemable for this account right now (live, not cached). */
+	availableCount: number;
+	credits: CodexResetCredit[];
+	/** Whether this is the given session's active account. */
+	active: boolean;
+	/** Set when the account's token refresh or list call failed. */
+	error?: string;
+}
+
 function isAbortSignalOption(
 	value: InvalidateCredentialMatchingOptions | AbortSignal | undefined,
 ): value is AbortSignal {
@@ -3616,6 +3630,53 @@ export class AuthStorage {
 						error: error instanceof Error ? error.message : String(error),
 					};
 				}
+			}),
+		);
+	}
+
+	/**
+	 * List saved rate-limit resets for every stored OAuth account of `provider`
+	 * (Codex), fetched LIVE from the dedicated `rate-limit-reset-credits` route.
+	 *
+	 * This deliberately bypasses the usage-report cache: `/wham/usage` is
+	 * IP-rate-limited and may serve stale (or pre-feature) snapshots when many
+	 * accounts are polled, which would hide redeemable credits. One entry per
+	 * account, with the session's active account flagged and unreachable
+	 * accounts carrying an `error`.
+	 */
+	async listResetCredits(options?: {
+		provider?: string;
+		sessionId?: string;
+		baseUrlResolver?: (provider: string) => string | undefined;
+		signal?: AbortSignal;
+	}): Promise<ResetCreditAccountStatus[]> {
+		const provider = options?.provider ?? "openai-codex";
+		const accesses = await this.getOAuthAccesses(provider);
+		if (accesses.length === 0) return [];
+		const baseUrl = options?.baseUrlResolver?.(provider);
+		const activeId = this.getOAuthAccountIdentity(provider, options?.sessionId);
+		return Promise.all(
+			accesses.map(async (access): Promise<ResetCreditAccountStatus> => {
+				const active =
+					!!activeId &&
+					((!!activeId.accountId && activeId.accountId === access.accountId) ||
+						(!!activeId.email && activeId.email === access.email));
+				const base = {
+					credentialId: access.credentialId,
+					accountId: access.accountId,
+					email: access.email,
+					active,
+				};
+				if (!access.ok) return { ...base, availableCount: 0, credits: [], error: access.error };
+				const list = await listCodexResetCredits({
+					accessToken: access.accessToken,
+					accountId: access.accountId,
+					baseUrl,
+					fetch: this.#usageFetch,
+					signal: options?.signal,
+				});
+				if (!list) return { ...base, availableCount: 0, credits: [], error: "Failed to load saved resets" };
+				return { ...base, availableCount: list.availableCount, credits: list.credits };
 			}),
 		);
 	}

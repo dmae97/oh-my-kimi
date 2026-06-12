@@ -14,6 +14,7 @@ export type {
 	CredentialOriginKind,
 	OAuthAccountIdentity,
 	OAuthCredential,
+	ResetCreditAccountStatus,
 	ResetCreditRedeemOutcome,
 	ResetCreditTarget,
 	SerializedAuthStorage,

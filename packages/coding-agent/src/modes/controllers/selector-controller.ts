@@ -1,5 +1,4 @@
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { UsageReport } from "@oh-my-pi/pi-ai";
 import { PASTE_CODE_LOGIN_PROVIDERS } from "@oh-my-pi/pi-ai";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import type { OAuthProvider } from "@oh-my-pi/pi-ai/oauth/types";
@@ -32,10 +31,9 @@ import type { ResetCreditRedeemOutcome } from "../../session/auth-storage";
 import { type SessionInfo, SessionManager } from "../../session/session-manager";
 import { FileSessionStorage } from "../../session/session-storage";
 import {
-	buildResetUsageAccounts,
-	CODEX_PROVIDER_ID,
 	describeRedeemOutcome,
 	type ResetUsageAccount,
+	toResetUsageAccounts,
 } from "../../slash-commands/helpers/reset-usage";
 import { AUTO_THINKING, type ConfiguredThinkingLevel } from "../../thinking";
 import {
@@ -1102,21 +1100,25 @@ export class SelectorController {
 
 	async showResetUsageSelector(): Promise<void> {
 		const session = this.ctx.session;
-		let reports: UsageReport[] | null = null;
+		this.ctx.showStatus("Checking saved rate-limit resets…", { dim: true });
+		let statuses: Awaited<ReturnType<typeof session.listResetCredits>>;
 		try {
-			reports = await session.fetchUsageReports();
-		} catch {
-			this.ctx.showError("Could not load usage data to find saved resets.");
+			statuses = await session.listResetCredits();
+		} catch (error) {
+			this.ctx.showError(`Could not load saved resets: ${error instanceof Error ? error.message : String(error)}`);
 			return;
 		}
-		const active = session.modelRegistry.authStorage.getOAuthAccountIdentity(CODEX_PROVIDER_ID, session.sessionId);
-		const accounts = buildResetUsageAccounts(reports, active);
+		const accounts = toResetUsageAccounts(statuses);
 		if (accounts.length === 0) {
 			this.ctx.showStatus("No Codex accounts found. Use /login to add one.");
 			return;
 		}
 		if (!accounts.some(account => account.availableCount > 0)) {
-			this.ctx.showStatus("No saved rate-limit resets available to spend right now.");
+			this.ctx.showStatus(
+				accounts.some(account => account.error)
+					? "No saved resets available — some accounts couldn't be reached (try /login)."
+					: "No saved rate-limit resets available to spend right now.",
+			);
 			return;
 		}
 		this.showSelector(done => {
