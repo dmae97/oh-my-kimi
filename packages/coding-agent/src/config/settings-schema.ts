@@ -1624,7 +1624,8 @@ export const SETTINGS_SCHEMA = {
 				{
 					value: "auto",
 					label: "Auto",
-					description: "Provider's eval winner: 8x8r-bw on Anthropic, 8x8r-sent on Gemini, 8on16-bw on OpenAI.",
+					description:
+						"Provider's eval winner: 8x8r-bw on Anthropic, doc-8on16-sent-dim on Gemini, 8on16-bw on OpenAI.",
 				},
 				{
 					value: "8x8r-bw",
@@ -1698,7 +1699,7 @@ export const SETTINGS_SCHEMA = {
 					value: "doc-8on16-sent-dim",
 					label: "Doc 8on16, sentence hues + dimmed stopwords",
 					description:
-						"Two-column doc layout, sentence-hue ink, function words dimmed gray. Gemini/Kimi eval winner.",
+						"Two-column doc layout, sentence-hue ink, function words dimmed gray. Gemini eval winner (mono .900 vs .853 for the repeated grid) and the Gemini auto default.",
 				},
 			],
 		},

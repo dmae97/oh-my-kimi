@@ -13,12 +13,14 @@
  *   printed twice with the copy on a pale highlight band. Read at F1 parity
  *   with raw text at ~2x lower cost; the colored variants drew refusals at
  *   scale, the repeated plain shape did not.
- * - **Google** (`8x8r-sent`): same repeated grid with six-hue sentence
- *   coloring (0.90 F1 at ~2.9x lower cost on gemini-3.5-flash).
- * - **OpenAI** (`6x6u-sent`): OpenAI bills a flat ~2.9k tokens per image, so
- *   image count is the only cost lever — unscii-8 Lanczos-stretched to 6x6
- *   cells packs the most readable chars per frame. Frames request
- *   `detail: "original"`; the default `auto` downscale destroys 6px glyphs.
+ * - **Google** (`doc-8on16-sent-dim`): two word-wrapped newspaper columns of
+ *   8x13 glyphs on a 16px pitch, sentence-hue ink, stopwords dimmed (0.90 F1
+ *   on gemini-3.5-flash vs 0.85 for the repeated grid, at lower cost; same
+ *   shape won the chunked round-2 evals).
+ * - **OpenAI** (`8on16-bw`): 8x13 glyphs on a patch-aligned 16px pitch, black
+ *   ink (gpt-5.5 mono F1 0.851 vs 0.602 for the previous dense `6x6u-sent`).
+ *   OpenAI bills a flat ~2.9k tokens per image; frames request
+ *   `detail: "original"` since the default `auto` downscale destroys glyphs.
  * - **Unknown providers** default to the Anthropic shape (most
  *   refusal-robust). Gateways that resize images (e.g. OpenRouter normalizes
  *   visual payloads to a fixed token budget) defeat any shape — optical
@@ -204,8 +206,10 @@ function priceShape(base: ShapeGeometry, family: BillingFamily): Shape {
 export const SHAPES = {
 	/** `8x8r-bw`: unscii square, black ink, lines doubled on highlight bands. */
 	anthropic: priceShape(SHAPE_VARIANTS["8x8r-bw"], "anthropic"),
-	/** `8x8r-sent`: the repeated grid with sentence-hue ink. */
-	google: priceShape(SHAPE_VARIANTS["8x8r-sent"], "google"),
+	/** `doc-8on16-sent-dim`: two word-wrapped columns, sentence hues, dimmed
+	 *  stopwords. Production mono eval on gemini-3.5-flash: f1 .900 vs .853
+	 *  for the repeated grid, at lower cost; also the chunked round-2 winner. */
+	google: priceShape(SHAPE_VARIANTS["doc-8on16-sent-dim"], "google"),
 	/** `8on16-bw`: 8x13 X.org glyphs on a 16px pitch, black ink. Mono eval on
 	 *  gpt-5.5 (200k-token single request, n=50): f1 .851 vs .602 for the
 	 *  previous `6x6u-sent` default at near-equal total cost; chunked exp14

@@ -1,8 +1,12 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
+- Added `bench` CLI command to benchmark model selectors with a shared prompt and report time-to-first-token and throughput
+- Added `omp bench` options `--runs`, `--max-tokens`, `--prompt`, and `--json` to control run count, response length, prompt text, and machine-readable output
+- Added benchmark failure reporting that shows per-run errors, flags failed runs in the summary, and exits with a non-zero status when any model benchmark fails
 - Added `snapcompact.shape` setting to pick the frame variant snapcompact prints text with — `auto` (each provider's eval winner) or any research-eval variant: the square grids (`8x8r`/`8x8u`/`6x6u`/`5x8` × sentence-hue/black ink) and the per-model winners (`6x12-dim`, `8x13-bw`, `8on16-bw`, `doc-8on16-bw`, `doc-8on16-sent`, `doc-8on16-sent-dim`); applies to both the compaction archive and inline system-prompt/tool-result imaging
 
 ### Changed
