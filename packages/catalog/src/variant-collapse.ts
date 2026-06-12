@@ -123,12 +123,17 @@ export const ANTIGRAVITY_VARIANT_COLLAPSE_TABLE: VariantCollapseTable = {
 		{
 			id: "gemini-3.1-pro",
 			name: "Gemini 3.1 Pro",
-			// `gemini-pro-agent` is consumed as a member but unused in routing.
-			members: ["gemini-3.1-pro-low", "gemini-3.1-pro-high", "gemini-pro-agent"],
+			// High routes to `gemini-pro-agent` — the upstream `gemini-3.1-pro-high`
+			// deployment returns INVALID_ARGUMENT on every streamGenerateContent
+			// request (both CCA endpoints) while discovery still lists it;
+			// `gemini-pro-agent` is the same model ("Gemini 3.1 Pro (High)", same
+			// thinking budget/caps) and accepts the identical request body.
+			// `gemini-3.1-pro-high` stays a member so the dead raw id is consumed.
+			members: ["gemini-3.1-pro-low", "gemini-pro-agent", "gemini-3.1-pro-high"],
 			routing: {
 				off: "gemini-3.1-pro-low",
 				[Effort.Low]: "gemini-3.1-pro-low",
-				[Effort.High]: "gemini-3.1-pro-high",
+				[Effort.High]: "gemini-pro-agent",
 			},
 			thinking: { mode: "google-level", efforts: GEMINI_3_PRO_FAMILY_EFFORTS },
 			suppressWhenOff: true,
