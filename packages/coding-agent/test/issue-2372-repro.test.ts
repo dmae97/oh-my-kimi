@@ -64,7 +64,7 @@ describe("issue #2372 pre-streaming chat rebuild preserves optimistic submission
 		resetSettingsForTest();
 	});
 
-	it("keeps the optimistic user message in chat after toggleThinkingBlockVisibility before streaming starts", () => {
+	it("keeps the optimistic user message in chat after rebuildChatFromMessages before streaming starts", () => {
 		const addMessageSpy = vi.spyOn(mode, "addMessageToChat");
 
 		mode.startPendingSubmission({ text: "hello world" });
@@ -72,11 +72,10 @@ describe("issue #2372 pre-streaming chat rebuild preserves optimistic submission
 		expect(addMessageSpy).toHaveBeenCalledTimes(1);
 		expect(mode.chatContainer.children.length).toBeGreaterThan(0);
 
-		// Pre-streaming Ctrl+T: no streamingComponent yet, message is NOT in
+		// Pre-streaming rebuild: no streamingComponent yet, message is NOT in
 		// session entries yet, signature is still set.
 		expect(mode.streamingComponent).toBeUndefined();
-		mode.toggleThinkingBlockVisibility();
-
+		mode.rebuildChatFromMessages();
 		// Signature stays set until EventController processes user message_start.
 		expect(mode.optimisticUserMessageSignature).toBe("hello world\u00000");
 		// The replay must have re-rendered the user message: total addMessageToChat
