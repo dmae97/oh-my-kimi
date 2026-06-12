@@ -122,10 +122,9 @@ function isRetryableRemoveError(err: unknown): boolean {
 }
 
 function sleepSync(ms: number): void {
-	const bunWithSleepSync = Bun as typeof Bun & { sleepSync?: (ms: number) => void };
-	if (bunWithSleepSync.sleepSync) {
-		bunWithSleepSync.sleepSync(ms);
-	} else {
-		Atomics.wait(kSleepBuffer, 0, 0, ms);
+	if ("sleepSync" in Bun && typeof Bun.sleepSync === "function") {
+		Bun.sleepSync(ms);
+		return;
 	}
+	Atomics.wait(kSleepBuffer, 0, 0, ms);
 }
