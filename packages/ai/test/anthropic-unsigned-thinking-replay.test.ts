@@ -101,7 +101,7 @@ describe("Anthropic-compatible unsigned thinking replay (#2005)", () => {
 		expect(blocks[1]).toEqual({ type: "text", text: "Sure." });
 	});
 
-	it("sanitizes lone surrogates in cross-API tool arguments only", () => {
+	it("sanitizes lone surrogates in tool arguments regardless of origin API", () => {
 		const loneSurrogate = "broken \ud83d end";
 		const makeToolCallAssistant = (api: AssistantMessage["api"]): AssistantMessage => ({
 			role: "assistant",
@@ -135,11 +135,12 @@ describe("Anthropic-compatible unsigned thinking replay (#2005)", () => {
 		expect(crossToolUse.input.text).toBe("broken \ufffd end");
 		expect((crossToolUse.input.nested as { parts: string[] }).parts[0]).toBe("broken \ufffd end");
 
-		// Same-API replay stays byte-identical (the args came from Anthropic's own
-		// JSON; rewriting them would destabilize prompt-cache prefixes).
+		// Same-API replay sanitizes too: the model itself can emit lone-surrogate
+		// escapes in its own tool-argument JSON (streamed out fine, 400 on replay).
 		const sameBlocks = assistantWireBlocks([makeUser(), makeToolCallAssistant("anthropic-messages")], makeModel());
 		const sameToolUse = sameBlocks.find(block => block.type === "tool_use") as WireToolUseBlock;
-		expect(sameToolUse.input.text).toBe(loneSurrogate);
+		expect(sameToolUse.input.text).toBe("broken \ufffd end");
+		expect((sameToolUse.input.nested as { parts: string[] }).parts[0]).toBe("broken \ufffd end");
 	});
 
 	it("covers the Xiaomi MiMo Anthropic-compatible reporter configuration without provider allowlists", () => {
