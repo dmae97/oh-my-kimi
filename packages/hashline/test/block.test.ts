@@ -335,9 +335,29 @@ describe("insert after block", () => {
 		expect(seen).toEqual([{ anchorLine: 2, start: 2, end: 3, op: "insert_after" }]);
 	});
 
-	it("throws an op-specific unresolved error when the resolver returns null", () => {
+	it("lowers an unresolvable anchor to plain `insert after N:` with a warning", () => {
 		const edits = parsePatch("insert after block 7:\n+X").edits;
-		expect(() => resolveBlockEdits(edits, "ignored", PATH, () => null)).toThrow("`insert after block 7:`");
+		const warnings: string[] = [];
+
+		const resolved = resolveBlockEdits(edits, "ignored", PATH, () => null, {
+			onWarning: warning => warnings.push(warning),
+		});
+
+		expect(normalizeEdits(resolved)).toEqual(normalizeEdits(parsePatch("insert after 7:\n+X").edits));
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toContain("applied as plain `insert after 7:`");
+	});
+
+	it("lowers `insert after block` even when no resolver is wired", () => {
+		const edits = parsePatch("insert after block 2:\n+X").edits;
+		const warnings: string[] = [];
+
+		const resolved = resolveBlockEdits(edits, "ignored", PATH, undefined, {
+			onWarning: warning => warnings.push(warning),
+		});
+
+		expect(normalizeEdits(resolved)).toEqual(normalizeEdits(parsePatch("insert after 2:\n+X").edits));
+		expect(warnings).toHaveLength(1);
 	});
 
 	it("lowers a closing-delimiter anchor to plain `insert after N:` with a warning", () => {
@@ -352,12 +372,15 @@ describe("insert after block", () => {
 		expect(result.warnings?.some(w => /applied as plain `insert after 3:`/.test(w))).toBe(true);
 	});
 
-	it("still rejects an unresolvable blank-line anchor (lowering is closer-only)", () => {
-		const blankAnchored = Patch.parseSingle(`[${PATH}#1A2B]\ninsert after block 2:\n+done();`);
+	it("lowers an unresolvable blank-line anchor to plain `insert after N:` instead of failing", () => {
+		const blankAnchored = Patch.parseSingle(`[notes.md#1A2B]\ninsert after block 2:\n+- new entry`);
 
-		expect(() => blankAnchored.applyTo("function x() {\n\n}\n", () => null)).toThrow(
-			"`insert after block 2:` could not resolve a syntactic block beginning on line 2",
-		);
+		const result = blankAnchored.applyTo("### Changed\n\n- old entry\n", () => null);
+
+		expect(result.text).toBe("### Changed\n\n- new entry\n- old entry\n");
+		expect(
+			result.warnings?.some(w => /could not resolve a syntactic block.*applied as plain `insert after 2:`/.test(w)),
+		).toBe(true);
 	});
 
 	it("Patcher surfaces the closer-anchor lowering warning", async () => {

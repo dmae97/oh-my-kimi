@@ -73,30 +73,24 @@ export const EMPTY_BLOCK =
 	"`replace block N:` needs at least one `+TEXT` body row. To delete a block, use `delete N..M` with the block's line range.";
 
 /**
- * Error text emitted when a block-anchored op cannot be resolved to a
- * syntactic block (unrecognized language, blank/out-of-range line, no node
- * begins on line N such as a lone closing delimiter, or the resolved block has
- * a syntax error). Names the offending line, steers back to an explicit
- * concrete-line form, and — when `fileLines` is provided — appends a
+ * Error text emitted when a block-anchored replace/delete cannot be resolved
+ * to a syntactic block (unrecognized language, blank/out-of-range line, no
+ * node begins on line N such as a lone closing delimiter, or the resolved
+ * block has a syntax error). Names the offending line, steers back to an
+ * explicit concrete-line form, and — when `fileLines` is provided — appends a
  * {@link formatAnchoredContext} preview of the file around the anchor line.
+ * `insert after block N:` never reaches this: an unresolvable insert-after
+ * anchor is lowered to plain `insert after N:` instead (see
+ * {@link insertAfterBlockUnresolvedLoweredWarning}).
  */
 export function blockUnresolvedMessage(
 	line: number,
-	op: "replace" | "delete" | "insert_after" = "replace",
+	op: "replace" | "delete" = "replace",
 	fileLines?: readonly string[],
 ): string {
-	const phrase =
-		op === "delete"
-			? `delete block ${line}`
-			: op === "insert_after"
-				? `insert after block ${line}:`
-				: `replace block ${line}:`;
+	const phrase = op === "delete" ? `delete block ${line}` : `replace block ${line}:`;
 	const fallback =
-		op === "delete"
-			? `\`delete ${line}..M\``
-			: op === "insert_after"
-				? `\`insert after M:\` with the block's explicit last line`
-				: `\`replace ${line}..M:\` with the block's explicit end line`;
+		op === "delete" ? `\`delete ${line}..M\`` : `\`replace ${line}..M:\` with the block's explicit end line`;
 	let message =
 		`\`${phrase}\` could not resolve a syntactic block beginning on line ${line}. ` +
 		`The language may be unsupported, the line may be blank or a closing delimiter, or the block may not parse. ` +
@@ -126,6 +120,21 @@ export function insertAfterBlockCloserLoweredWarning(line: number): string {
 	return (
 		`\`insert after block ${line}:\` anchors on a closing-delimiter line; no block begins there, so it was applied as plain \`insert after ${line}:\`. ` +
 		"Anchor `insert after block` on the line that OPENS the construct."
+	);
+}
+
+/**
+ * Warning emitted when an `insert after block N:` whose anchor cannot be
+ * resolved to a syntactic block (unsupported language, blank line, unparsable
+ * block, or no resolver wired) is lowered to plain `insert after N:`. With no
+ * resolvable construct, "after the block at N" degrades to "after line N" —
+ * applying with a warning beats failing the whole patch.
+ */
+export function insertAfterBlockUnresolvedLoweredWarning(line: number): string {
+	return (
+		`\`insert after block ${line}:\` could not resolve a syntactic block beginning on line ${line} ` +
+		`(unsupported language, blank line, or unparsable block), so it was applied as plain \`insert after ${line}:\`. ` +
+		"Verify the landing line, and anchor `insert after block` on a line that OPENS a construct."
 	);
 }
 
