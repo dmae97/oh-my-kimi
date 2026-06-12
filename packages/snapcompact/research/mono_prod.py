@@ -48,6 +48,12 @@ SHAPES = {
                 "lineRepeat": 2, "frameSize": SIZE, "frameTokenEstimate": 3300},
     "8x8r-sent": {"font": "8x8", "cellWidth": 8, "cellHeight": 8, "variant": "sent",
                   "lineRepeat": 2, "frameSize": SIZE, "frameTokenEstimate": 1100},
+    "8x8u-bw": {"font": "8x8", "cellWidth": 8, "cellHeight": 8, "variant": "bw",
+                "lineRepeat": 1, "frameSize": SIZE, "frameTokenEstimate": 3300},
+    "8x8u-sent": {"font": "8x8", "cellWidth": 8, "cellHeight": 8, "variant": "sent",
+                  "lineRepeat": 1, "frameSize": SIZE, "frameTokenEstimate": 3300},
+    "6x6u-sent": {"font": "8x8", "cellWidth": 6, "cellHeight": 6, "variant": "sent",
+                  "lineRepeat": 1, "frameSize": SIZE, "frameTokenEstimate": 3300},
 }
 
 

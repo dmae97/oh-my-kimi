@@ -737,6 +737,7 @@ function mapOptionsForApi<TApi extends Api>(
 			if (!reasoning || !model.reasoning) {
 				return castApi<"anthropic-messages">({
 					...base,
+					requestModelId: resolveWireModelId(model, undefined),
 					thinkingEnabled: false,
 					toolChoice: mapAnthropicToolChoice(options?.toolChoice),
 					thinkingDisplay: options?.hideThinkingSummary ? "omitted" : undefined,
@@ -748,6 +749,7 @@ function mapOptionsForApi<TApi extends Api>(
 			if (thinkingBudget <= 0) {
 				return castApi<"anthropic-messages">({
 					...base,
+					requestModelId: resolveWireModelId(model, undefined),
 					thinkingEnabled: false,
 					toolChoice: mapAnthropicToolChoice(options?.toolChoice),
 					thinkingDisplay: options?.hideThinkingSummary ? "omitted" : undefined,
@@ -761,24 +763,24 @@ function mapOptionsForApi<TApi extends Api>(
 				const effort = mapEffortToAnthropicAdaptiveEffort(model, reasoning);
 				return castApi<"anthropic-messages">({
 					...base,
+					requestModelId: resolveWireModelId(model, reasoning),
 					thinkingEnabled: true,
 					effort,
 					toolChoice: mapAnthropicToolChoice(options?.toolChoice),
 					thinkingDisplay: options?.hideThinkingSummary ? "omitted" : undefined,
 					serviceTier: options?.serviceTier,
-					requestModelId: resolveWireModelId(model, undefined),
 				});
 			}
 
 			if (ANTHROPIC_USE_INTERLEAVED_THINKING) {
 				return castApi<"anthropic-messages">({
 					...base,
+					requestModelId: resolveWireModelId(model, reasoning),
 					thinkingEnabled: true,
 					thinkingBudgetTokens: thinkingBudget,
 					toolChoice: mapAnthropicToolChoice(options?.toolChoice),
 					thinkingDisplay: options?.hideThinkingSummary ? "omitted" : undefined,
 					serviceTier: options?.serviceTier,
-					requestModelId: resolveWireModelId(model, undefined),
 				});
 			}
 
@@ -792,9 +794,9 @@ function mapOptionsForApi<TApi extends Api>(
 
 			// If thinking budget is too low, disable thinking
 			if (thinkingBudget <= 0) {
-					requestModelId: resolveWireModelId(model, reasoning),
 				return castApi<"anthropic-messages">({
 					...base,
+					requestModelId: resolveWireModelId(model, undefined),
 					thinkingEnabled: false,
 					toolChoice: mapAnthropicToolChoice(options?.toolChoice),
 					thinkingDisplay: options?.hideThinkingSummary ? "omitted" : undefined,
@@ -825,7 +827,6 @@ function mapOptionsForApi<TApi extends Api>(
 			// Adaptive mode sends effort directly, no budget_tokens — skip budget inflation.
 			if (model.thinking?.mode === "anthropic-adaptive") {
 				return castApi<"bedrock-converse-stream">(bedrockBase);
-					requestModelId: resolveWireModelId(model, undefined),
 			}
 			const budgetInfo = resolveBedrockThinkingBudget(model as Model<"bedrock-converse-stream">, options);
 			if (!budgetInfo) return bedrockBase as OptionsForApi<TApi>;
@@ -835,7 +836,6 @@ function mapOptionsForApi<TApi extends Api>(
 				const desiredMaxTokens = Math.min(model.maxTokens, budgetInfo.budget + MIN_OUTPUT_TOKENS);
 				if (desiredMaxTokens > maxTokens) {
 					maxTokens = desiredMaxTokens;
-					requestModelId: resolveWireModelId(model, reasoning),
 				}
 			}
 			if (maxTokens <= budgetInfo.budget) {
