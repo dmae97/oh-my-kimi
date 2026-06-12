@@ -144,13 +144,21 @@
         "@oh-my-pi/pi-ai": "catalog:",
         "@oh-my-pi/pi-catalog": "catalog:",
         "@oh-my-pi/pi-utils": "catalog:",
-        "fastembed": "catalog:",
         "lru-cache": "catalog:",
-        "onnxruntime-node": "catalog:",
       },
       "devDependencies": {
         "@types/bun": "catalog:",
+        "fastembed": "catalog:",
+        "onnxruntime-node": "catalog:",
       },
+      "peerDependencies": {
+        "fastembed": "2.1.0",
+        "onnxruntime-node": "1.24.3",
+      },
+      "optionalPeers": [
+        "fastembed",
+        "onnxruntime-node",
+      ],
     },
     "packages/natives": {
       "name": "@oh-my-pi/pi-natives",

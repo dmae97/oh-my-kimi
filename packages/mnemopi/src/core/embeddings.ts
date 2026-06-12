@@ -12,6 +12,7 @@ import {
 import type { EmbeddingModel } from "fastembed";
 import { LRUCache } from "lru-cache/raw";
 import packageJson from "../../package.json" with { type: "json" };
+import { loadFastembed } from "./fastembed-runtime";
 import {
 	type EmbeddingOutput,
 	getMnemopiRuntimeOptions,
@@ -61,17 +62,7 @@ const providerIds = new WeakMap<object, number>();
 let nextProviderId = 1;
 
 async function defaultLocalModelInitializer(options: LocalModelInitOptions): Promise<LocalEmbeddingModel> {
-	// Preload ORT 1.24 before fastembed's bundled ORT 1.21 — only on Windows,
-	// where loading the older binding first triggers a DLL-reuse crash. The 1.24
-	// line also has no darwin/x64 prebuilt, so importing it unconditionally breaks
-	// the darwin-x64 `bun build --compile` (Bun folds process.platform/arch and
-	// fails to resolve a binding that doesn't ship). The `win32` literal guard is
-	// statically foldable, so Bun dead-code-eliminates this import on every
-	// non-Windows target; fastembed loads its own ORT 1.21 binding there.
-	if (process.platform === "win32") {
-		await import("onnxruntime-node");
-	}
-	const { FlagEmbedding } = await import("fastembed");
+	const { FlagEmbedding } = await loadFastembed();
 	return FlagEmbedding.init(options);
 }
 
