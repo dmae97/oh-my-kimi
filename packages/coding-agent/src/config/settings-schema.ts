@@ -1132,7 +1132,7 @@ export const SETTINGS_SCHEMA = {
 	doubleEscapeAction: {
 		type: "enum",
 		values: ["branch", "tree", "none"] as const,
-		default: "tree",
+		default: "branch",
 		ui: {
 			tab: "interaction",
 			group: "Input",
