@@ -6,6 +6,7 @@
 //! - `5x8`  — X.org BDF font (legacy shape).
 //! - `8x8`  — unscii-8 hex font (Latin-1 subset), the square cell that won the
 //!   snapcompact `SQuAD` evals.
+//! - `6x12` / `8x13` — X.org misc BDF fonts (higher-density eval winners).
 //!
 //! Shape controls, all eval-validated in `packages/snapcompact`:
 //!
@@ -18,9 +19,19 @@
 //!   font's natural cell, glyphs are rasterized at native size and the canvas
 //!   is Lanczos3-resampled to the target (anisotropic stretch, e.g. the
 //!   OpenAI-optimal "6x6u" shape), producing an anti-aliased RGB frame.
+//! - **stretch** — `false` disables resampling: glyphs print at natural size on
+//!   the requested cell box while staying indexed (e.g. 8x13 glyphs on an 8x16
+//!   pitch, the "8on16" shapes). `true`/unset keeps the auto rule above.
+//! - **columns** — `2` flows pre-wrapped `\n`-separated lines down two
+//!   newspaper columns (the "doc" shapes); word wrap and pagination happen in
+//!   the TypeScript caller.
 //! - **dim spans** — `U+000E`/`U+000F` in the text toggle dim gray ink on/off
 //!   without occupying a cell; the TypeScript serializer wraps tool output in
 //!   them so archived conversation reads louder than archived tool noise.
+//! - **line breaks** — `U+2588` (FULL BLOCK) fills its entire cell with pitch
+//!   black ink regardless of variant or dim state; the TypeScript normalizer
+//!   folds newline runs to it so line structure survives whitespace collapse at
+//!   a one-cell cost.
 //!
 //! Text normalization, frame chunking, provider shape selection, and archive
 //! management live in `packages/snapcompact/src/snapcompact.ts`; this module
@@ -59,9 +70,17 @@ const INK_DIM: u8 = 9;
 /// Zero-width ink toggles embedded in the text stream (shift-out/shift-in).
 const DIM_ON: u32 = 0x0e;
 const DIM_OFF: u32 = 0x0f;
+/// FULL BLOCK: fills its entire cell box with pitch-black ink (`INK_BLACK`,
+/// ignoring sentence hue and dim state). The TypeScript normalizer folds
+/// newline runs to it.
+const FULL_BLOCK: u32 = 0x2588;
 
 static FONT_5X8: LazyLock<Font> = LazyLock::new(|| parse_bdf(include_str!("fonts/5x8.bdf"), 5, 8));
 static FONT_8X8: LazyLock<Font> = LazyLock::new(|| parse_hex(include_str!("fonts/unscii-8.hex")));
+static FONT_6X12: LazyLock<Font> =
+	LazyLock::new(|| parse_bdf(include_str!("fonts/6x12.bdf"), 6, 12));
+static FONT_8X13: LazyLock<Font> =
+	LazyLock::new(|| parse_bdf(include_str!("fonts/8x13.bdf"), 8, 13));
 
 struct Glyph {
 	/// Glyph width in pixels (≤ 8 for the bundled fonts).
@@ -150,25 +169,105 @@ fn resolve_font(name: &str) -> Option<&'static Font> {
 	match name {
 		"5x8" => Some(&FONT_5X8),
 		"8x8" => Some(&FONT_8X8),
+		"6x12" => Some(&FONT_6X12),
+		"8x13" => Some(&FONT_8X13),
 		_ => None,
 	}
 }
 
-/// Frame grid geometry shared with the TypeScript caller.
+/// Frame grid geometry shared with the TypeScript caller. The cell box
+/// (`cell_w` x `cell_h`) is the advance/pitch glyphs are laid out on; it may
+/// differ from the font's natural cell (e.g. 8x13 glyphs on an 8x16 pitch).
 struct Grid {
 	cols:   usize,
 	rows:   usize,
 	repeat: usize,
+	/// Cell advance (x) in pixels.
+	cell_w: usize,
+	/// Cell pitch (y) in pixels.
+	cell_h: usize,
 }
 
-/// Rasterize `text` onto a `width` x `height` palette-indexed bitmap at the
-/// font's natural cell size, row-major with no word wrap. Each text line is
-/// printed `grid.repeat` times; copies after the first sit on the highlight
-/// band. Ink cycles through six hues at sentence boundaries (terminator in
-/// `.!?` followed by a space) unless `black_ink` pins it to black; `U+000E`/
-/// `U+000F` toggle dim gray ink without occupying a cell, and dim wins over
-/// both variants. Characters beyond `cols * rows` are ignored; code points
-/// missing from the font leave their cell blank.
+/// Paint the pale highlight bands behind line copies after the first.
+fn fill_repeat_bands(pixels: &mut [u8], width: usize, height: usize, grid: &Grid) {
+	if grid.repeat <= 1 {
+		return;
+	}
+	for row in 0..grid.rows {
+		for copy in 1..grid.repeat {
+			let band_top = (row * grid.repeat + copy) * grid.cell_h;
+			for y in band_top..(band_top + grid.cell_h).min(height) {
+				pixels[y * width..y * width + width].fill(BG_REPEAT);
+			}
+		}
+	}
+}
+
+/// Blit one glyph's bitmask rows at (`left`, `top`), clipped to the canvas.
+fn blit_glyph(
+	pixels: &mut [u8],
+	width: usize,
+	height: usize,
+	glyph: &Glyph,
+	left: i32,
+	top: i32,
+	ink: u8,
+) {
+	for (r, &bits) in glyph.rows.iter().enumerate() {
+		if bits == 0 {
+			continue;
+		}
+		let y = top + r as i32;
+		if y < 0 || y >= height as i32 {
+			continue;
+		}
+		let row_base = y as usize * width;
+		for b in 0..glyph.w {
+			if bits & (0x80u8 >> b) != 0 {
+				let x = left + i32::from(b);
+				if x >= 0 && (x as usize) < width {
+					pixels[row_base + x as usize] = ink;
+				}
+			}
+		}
+	}
+}
+
+/// Fill one cell box (every repeat copy) with solid ink, clipped to canvas.
+fn fill_cell(
+	pixels: &mut [u8],
+	width: usize,
+	height: usize,
+	grid: &Grid,
+	x_origin: usize,
+	row: usize,
+	ink: u8,
+) {
+	let x0 = x_origin.min(width);
+	let x1 = (x_origin + grid.cell_w).min(width);
+	if x0 >= x1 {
+		return;
+	}
+	for copy in 0..grid.repeat {
+		let top = (row * grid.repeat + copy) * grid.cell_h;
+		for y in top..(top + grid.cell_h).min(height) {
+			pixels[y * width + x0..y * width + x1].fill(ink);
+		}
+	}
+}
+
+/// Rasterize `text` onto a `width` x `height` palette-indexed bitmap on the
+/// grid's cell box, row-major with no word wrap. Glyphs keep their natural
+/// size with the baseline at the font's ascent from the cell top, so a cell
+/// taller than the font pads below the baseline (the "8on16" shapes). Each
+/// text line is printed `grid.repeat` times; copies after the first sit on
+/// the highlight band. Ink cycles through six hues at sentence boundaries
+/// (terminator in `.!?` followed by a space or full block) unless `black_ink`
+/// pins it to black; `U+000E`/`U+000F` toggle dim gray ink without occupying a
+/// cell, and dim wins over both variants. `U+2588` fills its whole cell with
+/// pitch-black ink, ignoring hue and dim state. Characters beyond
+/// `cols * rows` are ignored; code points missing from the font leave their
+/// cell blank.
 fn render_bitmap(
 	text: &str,
 	width: usize,
@@ -182,16 +281,7 @@ fn render_bitmap(
 	if capacity == 0 {
 		return pixels;
 	}
-	if grid.repeat > 1 {
-		for row in 0..grid.rows {
-			for copy in 1..grid.repeat {
-				let band_top = (row * grid.repeat + copy) * font.cell_h;
-				for y in band_top..(band_top + font.cell_h).min(height) {
-					pixels[y * width..y * width + width].fill(BG_REPEAT);
-				}
-			}
-		}
-	}
+	fill_repeat_bands(&mut pixels, width, height, grid);
 	let codes: Vec<u32> = text.chars().map(|ch| ch as u32).collect();
 	let mut sentence = 0usize;
 	let mut dim = false;
@@ -219,40 +309,125 @@ fn render_bitmap(
 		} else {
 			(1 + sentence % INK_COLORS) as u8
 		};
-		if matches!(code, 0x2e | 0x21 | 0x3f) && codes.get(i + 1) == Some(&0x20) {
+		if matches!(code, 0x2e | 0x21 | 0x3f)
+			&& matches!(codes.get(i + 1), Some(&(0x20 | FULL_BLOCK)))
+		{
 			sentence += 1;
 		}
 		let row = cell / grid.cols;
 		let col = cell - row * grid.cols;
 		cell += 1;
+		if code == FULL_BLOCK {
+			fill_cell(&mut pixels, width, height, grid, col * grid.cell_w, row, INK_BLACK);
+			continue;
+		}
 		let Some(glyph) = font.glyphs.get(&code) else {
 			continue;
 		};
 		if glyph.rows.is_empty() {
 			continue;
 		}
-		let left = (col * font.cell_w) as i32 + glyph.xoff;
+		let left = (col * grid.cell_w) as i32 + glyph.xoff;
 		for copy in 0..grid.repeat {
-			let cell_top = ((row * grid.repeat + copy) * font.cell_h) as i32;
+			let cell_top = ((row * grid.repeat + copy) * grid.cell_h) as i32;
 			let top = cell_top + font.ascent - glyph.h - glyph.yoff;
-			for (r, &bits) in glyph.rows.iter().enumerate() {
-				if bits == 0 {
-					continue;
+			blit_glyph(&mut pixels, width, height, glyph, left, top, ink);
+		}
+	}
+	pixels
+}
+
+/// Character cells between the two doc columns (eval `exp14` layout).
+const GUTTER: usize = 3;
+
+/// Rasterize pre-wrapped text as a two-column "doc" page onto a `width` x
+/// `height` palette-indexed bitmap. Input splits on `'\n'` (zero-width): line
+/// `li` lands at column `li / rows`, row `li % rows`; each column is
+/// `(cols - GUTTER) / 2` cells wide, the second starts `col_w + GUTTER` cells
+/// in, and no rule is drawn between them. Lines longer than the column width
+/// are clipped (the TypeScript caller pre-wraps; clipping is the overflow
+/// guard) and lines past the second column are ignored. Sentence hues advance
+/// on a terminator in `.!?` followed by a space, newline, *or* full block;
+/// dim toggles, repeat bands, and the `U+2588` black cell fill behave exactly
+/// as in the grid renderer.
+fn render_doc_bitmap(
+	text: &str,
+	width: usize,
+	height: usize,
+	font: &Font,
+	grid: &Grid,
+	black_ink: bool,
+) -> Vec<u8> {
+	let mut pixels = vec![0u8; width * height]; // 0 = white background
+	let col_w = grid.cols.saturating_sub(GUTTER) / 2;
+	if col_w == 0 || grid.rows == 0 {
+		return pixels;
+	}
+	fill_repeat_bands(&mut pixels, width, height, grid);
+	let codes: Vec<u32> = text.chars().map(|ch| ch as u32).collect();
+	let mut sentence = 0usize;
+	let mut dim = false;
+	let mut line = 0usize;
+	let mut col = 0usize;
+	for i in 0..codes.len() {
+		let code = codes[i];
+		match code {
+			DIM_ON => {
+				dim = true;
+				continue;
+			},
+			DIM_OFF => {
+				dim = false;
+				continue;
+			},
+			0x0a => {
+				line += 1;
+				col = 0;
+				if line >= grid.rows * 2 {
+					break; // past the second column; the caller paginates
 				}
-				let y = top + r as i32;
-				if y < 0 || y >= height as i32 {
-					continue;
-				}
-				let row_base = y as usize * width;
-				for b in 0..glyph.w {
-					if bits & (0x80u8 >> b) != 0 {
-						let x = left + i32::from(b);
-						if x >= 0 && (x as usize) < width {
-							pixels[row_base + x as usize] = ink;
-						}
-					}
-				}
-			}
+				continue;
+			},
+			_ => {},
+		}
+		let ink = if dim {
+			INK_DIM
+		} else if black_ink {
+			INK_BLACK
+		} else {
+			(1 + sentence % INK_COLORS) as u8
+		};
+		if matches!(code, 0x2e | 0x21 | 0x3f)
+			&& matches!(codes.get(i + 1), Some(&(0x20 | 0x0a | FULL_BLOCK)))
+		{
+			sentence += 1;
+		}
+		let cell = col;
+		col += 1;
+		if cell >= col_w {
+			continue; // clip past the column width
+		}
+		if code == FULL_BLOCK {
+			let column = line / grid.rows;
+			let row = line - column * grid.rows;
+			let x_origin = (column * (col_w + GUTTER) + cell) * grid.cell_w;
+			fill_cell(&mut pixels, width, height, grid, x_origin, row, INK_BLACK);
+			continue;
+		}
+		let Some(glyph) = font.glyphs.get(&code) else {
+			continue;
+		};
+		if glyph.rows.is_empty() {
+			continue;
+		}
+		let column = line / grid.rows;
+		let row = line - column * grid.rows;
+		let x_origin = column * (col_w + GUTTER) * grid.cell_w;
+		let left = (x_origin + cell * grid.cell_w) as i32 + glyph.xoff;
+		for copy in 0..grid.repeat {
+			let cell_top = ((row * grid.repeat + copy) * grid.cell_h) as i32;
+			let top = cell_top + font.ascent - glyph.h - glyph.yoff;
+			blit_glyph(&mut pixels, width, height, glyph, left, top, ink);
 		}
 	}
 	pixels
@@ -418,7 +593,8 @@ fn encode_rgb_png(pixels: &[u8], size: usize, compression: png::Compression) -> 
 pub struct SnapcompactRenderOptions {
 	/// Frame edge in pixels.
 	pub size:        u32,
-	/// Bundled font: `"5x8"` (X.org BDF) or `"8x8"` (unscii-8). Default `"5x8"`.
+	/// Bundled font: `"5x8"`, `"6x12"`, `"8x13"` (X.org BDF) or `"8x8"`
+	/// (unscii-8). Default `"5x8"`.
 	pub font:        Option<String>,
 	/// Target cell advance in pixels. Differing from the font's natural cell
 	/// triggers the Lanczos stretch path. Default: font natural width.
@@ -431,6 +607,15 @@ pub struct SnapcompactRenderOptions {
 	/// Print each text line this many times; copies after the first sit on a
 	/// pale highlight band. Default 1.
 	pub line_repeat: Option<u32>,
+	/// Stretch behavior. Unset: auto — Lanczos-stretch whenever the target
+	/// cell differs from the font's natural cell. `false`: never stretch —
+	/// render indexed with glyphs at natural size on the requested cell box
+	/// (e.g. 8x13 glyphs on an 8x16 pitch, the "8on16" shapes). `true`: force
+	/// the stretch path (identical to auto; natural cells render indexed).
+	pub stretch:     Option<bool>,
+	/// Layout columns: `1` (default) row-major grid; `2` two newspaper "doc"
+	/// columns of pre-wrapped newline-separated lines.
+	pub columns:     Option<u32>,
 }
 
 /// Render one snapcompact frame: print pre-normalized text onto a square
@@ -440,8 +625,10 @@ pub struct SnapcompactRenderOptions {
 /// floor(size/cellHeight/lineRepeat)` characters; input beyond that is ignored
 /// (the caller chunks text to capacity). Native-cell shapes encode as 4-bit
 /// indexed PNG; stretched shapes (target cell != font cell) encode as RGB.
-/// `U+000E`/`U+000F` in `text` toggle dim-gray ink spans without occupying a
-/// cell.
+/// `stretch: false` pins the indexed path, printing natural-size glyphs on the
+/// requested cell box; `columns: 2` flows pre-wrapped newline-separated lines
+/// down two newspaper columns. `U+000E`/`U+000F` in `text` toggle dim-gray ink
+/// spans without occupying a cell.
 /// Returns the PNG encoded as base64, created as a one-byte (Latin-1) JS
 /// string straight from native code — no `Uint8Array` hop or JS-side
 /// re-encode.
@@ -459,7 +646,7 @@ pub fn render_snapcompact_png(
 	let font_name = options.font.as_deref().unwrap_or("5x8");
 	let font = resolve_font(font_name).ok_or_else(|| {
 		Error::from_reason(format!(
-			"Unknown snapcompact font {font_name:?}: expected \"5x8\" or \"8x8\""
+			"Unknown snapcompact font {font_name:?}: expected \"5x8\", \"8x8\", \"6x12\", or \"8x13\""
 		))
 	})?;
 	let black_ink = match options.variant.as_deref().unwrap_or("sent") {
@@ -474,29 +661,56 @@ pub fn render_snapcompact_png(
 	let target_w = options.cell_width.unwrap_or(font.cell_w as u32).max(1) as usize;
 	let target_h = options.cell_height.unwrap_or(font.cell_h as u32).max(1) as usize;
 	let repeat = options.line_repeat.unwrap_or(1).max(1) as usize;
+	let columns = options.columns.unwrap_or(1);
+	if !matches!(columns, 1 | 2) {
+		return Err(Error::from_reason(format!(
+			"Invalid snapcompact columns {columns}: expected 1 or 2"
+		)));
+	}
+	let doc = columns == 2;
 	let size = size as usize;
-	let grid = Grid { cols: size / target_w, rows: size / target_h / repeat, repeat };
+	let grid = Grid {
+		cols: size / target_w,
+		rows: size / target_h / repeat,
+		repeat,
+		cell_w: target_w,
+		cell_h: target_h,
+	};
 	if grid.cols == 0 || grid.rows == 0 {
 		return Err(Error::from_reason(format!(
 			"Frame size {size} cannot fit a {target_w}x{target_h} cell grid (repeat {repeat})"
 		)));
 	}
 
-	if (target_w, target_h) == (font.cell_w, font.cell_h) {
-		// Native cell: rasterize straight onto the frame, indexed.
-		let pixels = render_bitmap(&text, size, size, font, &grid, black_ink);
+	let stretch =
+		options.stretch != Some(false) && (target_w, target_h) != (font.cell_w, font.cell_h);
+	if !stretch {
+		// Indexed path: rasterize straight onto the frame at the requested
+		// cell box (the natural cell, or natural glyphs on a padded pitch
+		// when `stretch: false`).
+		let pixels = if doc {
+			render_doc_bitmap(&text, size, size, font, &grid, black_ink)
+		} else {
+			render_bitmap(&text, size, size, font, &grid, black_ink)
+		};
 		return Ok(STANDARD
 			.encode(encode_indexed_png(&pixels, size, png::Compression::Balanced)?)
 			.into());
 	}
 
-	// Stretch shape: rasterize at the font's natural cell on a tight canvas,
-	// Lanczos3-resample to the target cell, paste onto the white frame.
+	// Stretch shape: rasterize at the font's natural cell on a tight canvas
+	// (layout stays in character cells from the target grid), Lanczos3-
+	// resample to the target cell, paste onto the white frame.
+	let native = Grid { cell_w: font.cell_w, cell_h: font.cell_h, ..grid };
 	let src_w = grid.cols * font.cell_w;
 	let src_h = grid.rows * grid.repeat * font.cell_h;
 	let dst_w = grid.cols * target_w;
 	let dst_h = grid.rows * grid.repeat * target_h;
-	let indexed = render_bitmap(&text, src_w, src_h, font, &grid, black_ink);
+	let indexed = if doc {
+		render_doc_bitmap(&text, src_w, src_h, font, &native, black_ink)
+	} else {
+		render_bitmap(&text, src_w, src_h, font, &native, black_ink)
+	};
 	let mut rgb = vec![0f32; src_w * src_h * 3];
 	for (dst, &idx) in rgb.chunks_exact_mut(3).zip(&indexed) {
 		let [r, g, b] = PALETTE[idx as usize];
@@ -540,7 +754,7 @@ mod tests {
 	#[test]
 	fn bitmap_inks_sentences_and_caps_capacity() {
 		// 40px -> 8 cols x 5 rows = 40 cells (5x8 font).
-		let grid = Grid { cols: 8, rows: 5, repeat: 1 };
+		let grid = Grid { cols: 8, rows: 5, repeat: 1, cell_w: 5, cell_h: 8 };
 		let pixels = render_bitmap("Hi. Ok.", 40, 40, &FONT_5X8, &grid, false);
 		let inks: Vec<u8> = pixels.iter().copied().filter(|&p| p != 0).collect();
 		assert!(inks.contains(&1), "first sentence should use ink 1");
@@ -554,7 +768,7 @@ mod tests {
 
 	#[test]
 	fn bw_variant_prints_black_only() {
-		let grid = Grid { cols: 8, rows: 8, repeat: 1 };
+		let grid = Grid { cols: 8, rows: 8, repeat: 1, cell_w: 8, cell_h: 8 };
 		let pixels = render_bitmap("Hi. Ok.", 64, 64, &FONT_8X8, &grid, true);
 		let inks: Vec<u8> = pixels.iter().copied().filter(|&p| p != 0).collect();
 		assert!(!inks.is_empty());
@@ -563,7 +777,7 @@ mod tests {
 
 	#[test]
 	fn dim_markers_toggle_gray_without_consuming_cells() {
-		let grid = Grid { cols: 8, rows: 8, repeat: 1 };
+		let grid = Grid { cols: 8, rows: 8, repeat: 1, cell_w: 8, cell_h: 8 };
 		let pixels = render_bitmap("\u{e}AB\u{f}CD", 64, 64, &FONT_8X8, &grid, true);
 		let inks: Vec<u8> = pixels.iter().copied().filter(|&p| p != 0).collect();
 		assert!(inks.contains(&INK_DIM), "dim span must ink gray");
@@ -578,7 +792,7 @@ mod tests {
 	#[test]
 	fn line_repeat_duplicates_rows_on_highlight_bands() {
 		// 64px, 8x8 font, repeat 2 -> 8 cols x 4 unique rows.
-		let grid = Grid { cols: 8, rows: 4, repeat: 2 };
+		let grid = Grid { cols: 8, rows: 4, repeat: 2, cell_w: 8, cell_h: 8 };
 		let pixels = render_bitmap("ABCDEFGH", 64, 64, &FONT_8X8, &grid, true);
 		// Copy band (rows 8..16) carries the highlight background.
 		assert!(pixels[9 * 64..10 * 64].contains(&BG_REPEAT), "duplicate band must be highlighted");
@@ -589,6 +803,35 @@ mod tests {
 				let a = pixels[y * 64 + x];
 				let b = pixels[(y + 8) * 64 + x];
 				assert_eq!(a == INK_BLACK, b == INK_BLACK, "copy ink mismatch at ({x},{y})");
+			}
+		}
+	}
+
+	#[test]
+	fn full_block_fills_cell_pitch_black() {
+		let grid = Grid { cols: 8, rows: 4, repeat: 2, cell_w: 8, cell_h: 8 };
+		// The block's black fill beats both the dim span and the sent hues.
+		let pixels = render_bitmap("\u{e}a\u{2588}b\u{f}", 64, 64, &FONT_8X8, &grid, false);
+		for copy in 0..2 {
+			for y in copy * 8..(copy + 1) * 8 {
+				for x in 8..16 {
+					assert_eq!(pixels[y * 64 + x], INK_BLACK, "block pixel ({x},{y}) must be black");
+				}
+			}
+		}
+		assert!(pixels.contains(&INK_DIM), "neighbours keep their dim ink");
+		let hued = render_bitmap("Hi.\u{2588}Ok.", 64, 64, &FONT_8X8, &grid, false);
+		assert!(hued.contains(&2), "block must advance the sentence hue like a space");
+	}
+
+	#[test]
+	fn doc_full_block_fills_cell() {
+		// col_w = (13 - GUTTER) / 2 = 5; block at line 0, cell 1 -> x 8..16.
+		let grid = Grid { cols: 13, rows: 2, repeat: 1, cell_w: 8, cell_h: 8 };
+		let pixels = render_doc_bitmap("a\u{2588}b\nc", 104, 16, &FONT_8X8, &grid, true);
+		for y in 0..8 {
+			for x in 8..16 {
+				assert_eq!(pixels[y * 104 + x], INK_BLACK, "block pixel ({x},{y}) must be black");
 			}
 		}
 	}
@@ -650,5 +893,139 @@ mod tests {
 			})
 			.is_err()
 		);
+	}
+
+	#[test]
+	fn xorg_fonts_parse_and_render() {
+		for (font, ascent, name) in [(&*FONT_6X12, 10, "6x12"), (&*FONT_8X13, 11, "8x13")] {
+			assert_eq!(font.ascent, ascent, "{name} ascent");
+			for cp in 0x20u32..0x7f {
+				assert!(font.glyphs.contains_key(&cp), "{name} missing glyph U+{cp:04X}");
+			}
+		}
+		for (name, size) in [("6x12", 60u32), ("8x13", 104u32)] {
+			let png = png_bytes(
+				render_snapcompact_png("Hello world. Again!".into(), SnapcompactRenderOptions {
+					size,
+					font: Some(name.into()),
+					..Default::default()
+				})
+				.unwrap(),
+			);
+			assert_eq!(png[25], 3, "{name} natural cell must encode indexed");
+		}
+		// Non-blank: the raster must carry glyph ink.
+		let grid = Grid { cols: 10, rows: 5, repeat: 1, cell_w: 6, cell_h: 12 };
+		let pixels = render_bitmap("Hello", 60, 60, &FONT_6X12, &grid, true);
+		assert!(pixels.contains(&INK_BLACK), "6x12 must ink pixels");
+		let grid = Grid { cols: 8, rows: 8, repeat: 1, cell_w: 8, cell_h: 13 };
+		let pixels = render_bitmap("Hello", 64, 104, &FONT_8X13, &grid, true);
+		assert!(pixels.contains(&INK_BLACK), "8x13 must ink pixels");
+	}
+
+	#[test]
+	fn stretch_false_renders_natural_glyphs_on_padded_pitch() {
+		let png = png_bytes(
+			render_snapcompact_png("Hello there. General Kenobi!".into(), SnapcompactRenderOptions {
+				size: 128,
+				font: Some("8x13".into()),
+				cell_width: Some(8),
+				cell_height: Some(16),
+				stretch: Some(false),
+				variant: Some("bw".into()),
+				..Default::default()
+			})
+			.unwrap(),
+		);
+		assert_eq!(png[25], 3, "8on16 must stay indexed");
+		// IHDR width/height live at bytes 16..24, big-endian.
+		let dim = |off: usize| u32::from_be_bytes(png[off..off + 4].try_into().unwrap());
+		assert_eq!((dim(16), dim(20)), (128, 128), "declared geometry must match");
+
+		// Glyph ink must sit in the top 13px of every 16px pitch row.
+		let grid = Grid { cols: 16, rows: 8, repeat: 1, cell_w: 8, cell_h: 16 };
+		let pixels = render_bitmap("Hgjpqy. Mixed descenders!", 128, 128, &FONT_8X13, &grid, true);
+		assert!(pixels.contains(&INK_BLACK));
+		for (i, &p) in pixels.iter().enumerate() {
+			if p == INK_BLACK {
+				assert!((i / 128) % 16 < 13, "ink leaked into pitch padding at y={}", i / 128);
+			}
+		}
+	}
+
+	#[test]
+	fn doc_layout_flows_lines_into_second_column() {
+		// 64px, 8x16 cells -> cols 8, rows 4, col_w = (8 - 3) / 2 = 2.
+		let grid = Grid { cols: 8, rows: 4, repeat: 1, cell_w: 8, cell_h: 16 };
+		let pixels = render_doc_bitmap("A\nB\nC\nD\nE", 64, 64, &FONT_8X13, &grid, true);
+		// Line 4 (the rows+1-th) lands at the second column's x origin:
+		// 1 * (col_w + GUTTER) * cell_w = 40, row band 0.
+		let col2 = (0..13).any(|y| (40..48).any(|x| pixels[y * 64 + x] == INK_BLACK));
+		assert!(col2, "fifth line must start at the second column's x origin");
+		// '\n' consumes no cell: line 1 starts back at x 0 in row band 1.
+		let row1 = (16..29).any(|y| (0..8).any(|x| pixels[y * 64 + x] == INK_BLACK));
+		assert!(row1, "second line must start at column 0 of the next row band");
+		// One-char lines leave the rest of column 0 and the gutter blank.
+		for y in 0..64 {
+			for x in 8..40 {
+				assert_eq!(pixels[y * 64 + x], 0, "gutter must stay blank at ({x},{y})");
+			}
+		}
+	}
+
+	#[test]
+	fn doc_sentence_hue_advances_across_newline_boundary() {
+		// 152px wide: cols 19, col_w = (19 - 3) / 2 = 8.
+		let grid = Grid { cols: 19, rows: 4, repeat: 1, cell_w: 8, cell_h: 16 };
+		let pixels = render_doc_bitmap("Hi.\nOk", 152, 64, &FONT_8X13, &grid, false);
+		let inks: Vec<u8> = pixels.iter().copied().filter(|&p| p != 0).collect();
+		assert!(inks.contains(&1), "first sentence must use ink 1");
+		assert!(inks.contains(&2), "hue must advance across the newline boundary");
+		assert!(!inks.contains(&3), "no third sentence ink expected");
+
+		// Grid mode keeps the space-only rule: no advance across '\n'.
+		let gridmode = render_bitmap("Hi.\nOk", 152, 64, &FONT_8X13, &grid, false);
+		let inks: Vec<u8> = gridmode.iter().copied().filter(|&p| p != 0).collect();
+		assert!(inks.contains(&1));
+		assert!(!inks.contains(&2), "grid mode must not advance hue across newline");
+	}
+
+	#[test]
+	fn columns_validates_and_renders_doc_frames() {
+		assert!(
+			render_snapcompact_png("x".into(), SnapcompactRenderOptions {
+				size: 64,
+				columns: Some(3),
+				..Default::default()
+			})
+			.is_err()
+		);
+		// Indexed doc frame (stretch: false on a padded pitch).
+		let doc = png_bytes(
+			render_snapcompact_png("Hello there.\nSecond line".into(), SnapcompactRenderOptions {
+				size: 256,
+				font: Some("8x13".into()),
+				cell_width: Some(8),
+				cell_height: Some(16),
+				stretch: Some(false),
+				columns: Some(2),
+				..Default::default()
+			})
+			.unwrap(),
+		);
+		assert_eq!(doc[25], 3, "8on16 doc frame must encode indexed");
+		// Doc layout also applies on the stretch path (RGB output).
+		let stretched = png_bytes(
+			render_snapcompact_png("Hello there.\nSecond line".into(), SnapcompactRenderOptions {
+				size: 256,
+				font: Some("8x13".into()),
+				cell_width: Some(6),
+				cell_height: Some(12),
+				columns: Some(2),
+				..Default::default()
+			})
+			.unwrap(),
+		);
+		assert_eq!(stretched[25], 2, "stretched doc frame must encode RGB");
 	}
 }

@@ -1292,8 +1292,10 @@ export declare function readImageFromClipboard(): Promise<ClipboardImage | undef
  * floor(size/cellHeight/lineRepeat)` characters; input beyond that is ignored
  * (the caller chunks text to capacity). Native-cell shapes encode as 4-bit
  * indexed PNG; stretched shapes (target cell != font cell) encode as RGB.
- * `U+000E`/`U+000F` in `text` toggle dim-gray ink spans without occupying a
- * cell.
+ * `stretch: false` pins the indexed path, printing natural-size glyphs on the
+ * requested cell box; `columns: 2` flows pre-wrapped newline-separated lines
+ * down two newspaper columns. `U+000E`/`U+000F` in `text` toggle dim-gray ink
+ * spans without occupying a cell.
  * Returns the PNG encoded as base64, created as a one-byte (Latin-1) JS
  * string straight from native code — no `Uint8Array` hop or JS-side
  * re-encode.
@@ -1433,7 +1435,10 @@ export declare function sliceWithWidth(line: string, startCol: number, length: n
 export interface SnapcompactRenderOptions {
   /** Frame edge in pixels. */
   size: number
-  /** Bundled font: `"5x8"` (X.org BDF) or `"8x8"` (unscii-8). Default `"5x8"`. */
+  /**
+   * Bundled font: `"5x8"`, `"6x12"`, `"8x13"` (X.org BDF) or `"8x8"`
+   * (unscii-8). Default `"5x8"`.
+   */
   font?: string
   /**
    * Target cell advance in pixels. Differing from the font's natural cell
@@ -1452,6 +1457,19 @@ export interface SnapcompactRenderOptions {
    * pale highlight band. Default 1.
    */
   lineRepeat?: number
+  /**
+   * Stretch behavior. Unset: auto — Lanczos-stretch whenever the target
+   * cell differs from the font's natural cell. `false`: never stretch —
+   * render indexed with glyphs at natural size on the requested cell box
+   * (e.g. 8x13 glyphs on an 8x16 pitch, the "8on16" shapes). `true`: force
+   * the stretch path (identical to auto; natural cells render indexed).
+   */
+  stretch?: boolean
+  /**
+   * Layout columns: `1` (default) row-major grid; `2` two newspaper "doc"
+   * columns of pre-wrapped newline-separated lines.
+   */
+  columns?: number
 }
 
 export declare function summarizeCode(options: SummaryOptions): SummaryResult
