@@ -91,15 +91,12 @@ describe("SettingsSelectorComponent memory tab", () => {
 
 		const strip = (line: string): string => line.replace(/\x1b\[[0-9;]*m/g, "");
 
-		// Single visible group renders flat: the title is a standalone heading row.
-		// Mnemopi/Hindsight groups are fully condition-hidden and emit nothing.
+		// The fullscreen frame wraps every content line in │…│. A single visible
+		// group renders flat: the title is a standalone heading row inside the
+		// frame. Mnemopi/Hindsight groups are fully condition-hidden and emit nothing.
 		const flatHeadings = comp
 			.render(120)
-			.map(line =>
-				strip(line)
-					.replace(/[█│]\s*$/, "")
-					.trim(),
-			)
+			.map(line => strip(line).replace(/^│/, "").replace(/│$/, "").trim())
 			.filter(line => line === "General" || line === "Mnemopi" || line === "Hindsight");
 		expect(flatHeadings).toEqual(["General"]);
 
@@ -110,11 +107,13 @@ describe("SettingsSelectorComponent memory tab", () => {
 		comp.handleInput("\x1b[B");
 		comp.handleInput("\n");
 
+		// Split rows carry three │s — frame, sidebar divider, frame — so the
+		// sidebar cell is the segment between the first two.
 		const sidebarTitles = comp
 			.render(120)
-			.map(strip)
-			.filter(line => line.includes("│"))
-			.map(line => line.split("│")[0].trim())
+			.map(line => strip(line).split("│"))
+			.filter(parts => parts.length >= 4)
+			.map(parts => parts[1].trim())
 			.filter(title => title.length > 0);
 		expect(sidebarTitles).toEqual(["General", "Hindsight"]);
 	});
@@ -156,7 +155,7 @@ describe("SettingsSelectorComponent memory tab", () => {
 		const afterBack = comp.render(120).join("\n");
 		expect(cancelCount).toBe(0);
 		expect(afterBack).toContain("Memory Backend");
-		expect(afterBack).toContain("Esc to cancel");
+		expect(afterBack).toContain("Esc to close");
 		expect(afterBack).not.toContain("Esc to go back");
 
 		comp.handleInput("\x1b");
