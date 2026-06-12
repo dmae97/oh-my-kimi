@@ -50,6 +50,37 @@ interface SettingSection {
 	lastItemIndex: number;
 }
 
+/** Optional behavior overrides for {@link SettingsList}. */
+export interface SettingsListOptions {
+	/**
+	 * "auto" (default) renders the section sidebar layout when headings exist
+	 * and the width allows; "flat" always renders inline heading rows.
+	 */
+	layout?: "auto" | "flat";
+	/**
+	 * When false, printable input is ignored (no internal type-to-filter) and
+	 * the search status line is never rendered. Use when a parent component
+	 * owns the query. Default true.
+	 */
+	typeToSearch?: boolean;
+	/** Text shown when the list has no items at all. */
+	emptyText?: string;
+	/** Footer hint line (hint-styled, replaces the default navigation hint). */
+	hint?: string;
+}
+
+/** Searchable text for a setting item: label, id, value, description, and cycle values. */
+export function getSettingItemFilterText(item: SettingItem): string {
+	let text = `${item.label} ${item.id} ${item.currentValue}`;
+	if (item.description) {
+		text += ` ${item.description}`;
+	}
+	if (item.values) {
+		text += ` ${item.values.join(" ")}`;
+	}
+	return sanitizeSingleLine(text);
+}
+
 export class SettingsList implements Component {
 	#items: SettingItem[];
 	#filteredItems: SettingItem[];
@@ -58,17 +89,23 @@ export class SettingsList implements Component {
 	#maxVisible: number;
 	#onChange: (id: string, newValue: string) => void;
 	#onCancel: () => void;
+	#options: SettingsListOptions;
 	#filterQuery = "";
+	#lastNotifiedSelectionId: string | undefined;
+
+	/** Fired when the selected item changes (navigation, filtering, or setItems). */
+	onSelectionChange?: (item: SettingItem | undefined) => void;
 
 	// Submenu state
 	#submenuComponent: Component | null = null;
-	#submenuItemIndex: number | null = null;
+	#submenuItemId: string | null = null;
 	constructor(
 		items: SettingItem[],
 		maxVisible: number,
 		theme: SettingsListTheme,
 		onChange: (id: string, newValue: string) => void,
 		onCancel: () => void,
+		options: SettingsListOptions = {},
 	) {
 		this.#items = items;
 		this.#filteredItems = items;
@@ -76,7 +113,36 @@ export class SettingsList implements Component {
 		this.#theme = theme;
 		this.#onChange = onChange;
 		this.#onCancel = onCancel;
+		this.#options = options;
 		this.#selectedIndex = this.#firstSelectableIndex();
+		this.#lastNotifiedSelectionId = this.getSelectedItem()?.id;
+	}
+
+	/** The currently selected item, or undefined when empty or on a heading. */
+	getSelectedItem(): SettingItem | undefined {
+		const item = this.#filteredItems[this.#selectedIndex];
+		return item && !item.heading ? item : undefined;
+	}
+
+	/** Move selection to the item with `id`. Returns false when it is not visible. */
+	selectItem(id: string): boolean {
+		const index = this.#filteredItems.findIndex(item => !item.heading && item.id === id);
+		if (index === -1) return false;
+		this.#selectedIndex = index;
+		this.#notifySelection();
+		return true;
+	}
+
+	/** True while an item submenu owns input. */
+	hasOpenSubmenu(): boolean {
+		return this.#submenuComponent !== null;
+	}
+
+	#notifySelection(): void {
+		const item = this.getSelectedItem();
+		if (item?.id === this.#lastNotifiedSelectionId) return;
+		this.#lastNotifiedSelectionId = item?.id;
+		this.onSelectionChange?.(item);
 	}
 
 	getSearchQuery(): string {
@@ -109,28 +175,27 @@ export class SettingsList implements Component {
 	 * the previous selection still survives the active filter, otherwise
 	 * clamped to the last filtered item (or 0 if there are no matches).
 	 * An open submenu is left untouched — its lifetime is bounded by its own
-	 * done callback, and `#closeSubmenu` re-clamps the restored index on exit.
+	 * done callback, and `#closeSubmenu` re-resolves the restored item on exit.
 	 */
 	setItems(items: SettingItem[]): void {
 		const selectedId = this.#filteredItems[this.#selectedIndex]?.id;
 		this.#items = items;
 		this.#applyFilter();
 
-		if (selectedId) {
-			const nextIndex = this.#filteredItems.findIndex(item => item.id === selectedId);
-			if (nextIndex >= 0) {
-				this.#selectedIndex = nextIndex;
-				return;
-			}
+		const nextIndex = selectedId ? this.#filteredItems.findIndex(item => item.id === selectedId) : -1;
+		if (nextIndex >= 0) {
+			this.#selectedIndex = nextIndex;
+		} else {
+			this.#clampSelectedIndex();
 		}
-
-		this.#clampSelectedIndex();
+		this.#notifySelection();
 	}
 
 	#setFilter(filter: string): void {
 		this.#filterQuery = filter;
 		this.#applyFilter();
 		this.#selectedIndex = this.#firstSelectableIndex();
+		this.#notifySelection();
 	}
 
 	#applyFilter(): void {
@@ -138,7 +203,7 @@ export class SettingsList implements Component {
 			? fuzzyFilter(
 					this.#items.filter(item => !item.heading),
 					this.#filterQuery,
-					item => this.#getFilterText(item),
+					getSettingItemFilterText,
 				)
 			: this.#items;
 	}
@@ -157,6 +222,7 @@ export class SettingsList implements Component {
 			index = (index + delta + len) % len;
 			if (!this.#filteredItems[index]?.heading) {
 				this.#selectedIndex = index;
+				this.#notifySelection();
 				return;
 			}
 		}
@@ -198,10 +264,11 @@ export class SettingsList implements Component {
 			if (len === 0) return;
 			this.#selectedIndex = Math.max(0, Math.min(this.#selectedIndex + delta * this.#maxVisible, len - 1));
 			this.#clampSelectedIndex();
-			return;
+		} else {
+			const next = (this.#activeSectionIndex(sections) + delta + sections.length) % sections.length;
+			this.#selectedIndex = sections[next].firstItemIndex;
 		}
-		const next = (this.#activeSectionIndex(sections) + delta + sections.length) % sections.length;
-		this.#selectedIndex = sections[next].firstItemIndex;
+		this.#notifySelection();
 	}
 
 	#clampSelectedIndex(): void {
@@ -226,17 +293,6 @@ export class SettingsList implements Component {
 		}
 	}
 
-	#getFilterText(item: SettingItem): string {
-		let text = `${item.label} ${item.id} ${item.currentValue}`;
-		if (item.description) {
-			text += ` ${item.description}`;
-		}
-		if (item.values) {
-			text += ` ${item.values.join(" ")}`;
-		}
-		return sanitizeSingleLine(text);
-	}
-
 	#renderSearchStatus(width: number): string {
 		const query = sanitizeSingleLine(this.#filterQuery);
 		const statusText = query ? `  Search: ${query}` : "  Type to search";
@@ -244,10 +300,12 @@ export class SettingsList implements Component {
 	}
 
 	#shouldRenderSearchStatus(): boolean {
+		if (this.#options.typeToSearch === false) return false;
 		return this.#items.length > this.#maxVisible || this.#filterQuery.length > 0;
 	}
 
 	#handleSearchInput(data: string): boolean {
+		if (this.#options.typeToSearch === false) return false;
 		if (this.#items.length === 0) return false;
 
 		const kb = getKeybindings();
@@ -271,13 +329,31 @@ export class SettingsList implements Component {
 		this.#submenuComponent?.invalidate?.();
 	}
 
+	/**
+	 * Every render path is padded to the same stable height so interacting with
+	 * the list (navigating sections, opening submenus, filtering, condition-gated
+	 * rows appearing) never resizes the panel. A live region that thrashes its
+	 * height forces the terminal to re-anchor and can strand scrollback rows.
+	 */
+	#stableHeight(): number {
+		// viewport + description (1 blank + 3 lines) + search status + blank + hint.
+		// Without internal type-to-search the status row is never rendered.
+		return this.#maxVisible + (this.#options.typeToSearch === false ? 6 : 7);
+	}
+
+	#padLines(lines: string[]): string[] {
+		while (lines.length < this.#stableHeight()) lines.push("");
+		return lines;
+	}
+
 	render(width: number): readonly string[] {
-		// If submenu is active, render it instead
+		// If submenu is active, render it instead (padded to the list's stable
+		// height so opening/closing a submenu does not resize the panel).
 		if (this.#submenuComponent) {
-			return this.#submenuComponent.render(width);
+			return this.#padLines([...this.#submenuComponent.render(width)]);
 		}
 
-		return this.#renderMainList(width);
+		return this.#padLines(this.#renderMainList(width));
 	}
 
 	#renderItemRow(item: SettingItem, index: number, maxLabelWidth: number, rowWidth: number): string {
@@ -304,7 +380,7 @@ export class SettingsList implements Component {
 		const lines: string[] = [];
 
 		if (this.#items.length === 0) {
-			lines.push(this.#theme.hint("  No settings available"));
+			lines.push(this.#theme.hint(`  ${this.#options.emptyText ?? "No settings available"}`));
 			return lines;
 		}
 
@@ -320,7 +396,9 @@ export class SettingsList implements Component {
 
 		const sections = this.#sections();
 		const splitLines =
-			!this.#filterQuery.trim() && sections.length >= 2 ? this.#renderSplitList(width, sections) : null;
+			this.#options.layout !== "flat" && !this.#filterQuery.trim() && sections.length >= 2
+				? this.#renderSplitList(width, sections)
+				: null;
 		if (splitLines) {
 			lines.push(...splitLines);
 		} else {
@@ -348,31 +426,37 @@ export class SettingsList implements Component {
 			});
 			scrollView.setScrollOffset(startIndex);
 			lines.push(...scrollView.render(width));
+			// Pad short lists to the full viewport so the panel height is constant.
+			while (lines.length < this.#maxVisible) lines.push("");
 		}
 
-		// Add description for selected item
+		// Description area: 1 blank + exactly 3 rows, clamped with an ellipsis,
+		// so moving between items with/without descriptions never shifts rows.
+		lines.push("");
 		const selectedItem = this.#filteredItems[this.#selectedIndex];
-		if (selectedItem?.description) {
-			lines.push("");
+		const descLines: string[] = [];
+		if (selectedItem?.description && !selectedItem.heading) {
 			const wrappedDesc = wrapTextWithAnsi(selectedItem.description, width - 4);
-			for (const line of wrappedDesc) {
-				lines.push(this.#theme.description(`  ${line}`));
+			for (const line of wrappedDesc.slice(0, 3)) {
+				descLines.push(this.#theme.description(`  ${line}`));
+			}
+			if (wrappedDesc.length > 3) {
+				descLines[2] = truncateToWidth(`${descLines[2]}…`, width);
 			}
 		}
+		while (descLines.length < 3) descLines.push("");
+		lines.push(...descLines);
 
-		if (this.#shouldRenderSearchStatus()) {
+		// External-search mode: the host renders the query; skip the status row.
+		if (this.#options.typeToSearch !== false) {
 			lines.push(this.#renderSearchStatus(width));
 		}
 
 		// Add hint
 		lines.push("");
 		const jumpHint = sections.length >= 2 ? "PgUp/PgDn to jump sections · " : "";
-		lines.push(
-			truncateToWidth(
-				this.#theme.hint(`  Enter/Space to change · ${jumpHint}Type to search · Esc to cancel`),
-				width,
-			),
-		);
+		const hintText = this.#options.hint ?? `Enter/Space to change · ${jumpHint}Type to search · Esc to cancel`;
+		lines.push(truncateToWidth(this.#theme.hint(`  ${hintText}`), width));
 
 		return lines;
 	}
@@ -435,7 +519,7 @@ export class SettingsList implements Component {
 
 		const separator = this.#theme.hint("│ ");
 		const lines: string[] = [];
-		const height = Math.max(sidebarRows.length, paneRows.length);
+		const height = Math.max(this.#maxVisible, sidebarRows.length);
 		for (let i = 0; i < height; i++) {
 			const left = sidebarRows[i] ?? padding(sidebarWidth);
 			lines.push(truncateToWidth(left + separator + (paneRows[i] ?? ""), width));
@@ -487,7 +571,7 @@ export class SettingsList implements Component {
 
 		if (item.submenu) {
 			// Open submenu, passing current value so it can pre-select correctly
-			this.#submenuItemIndex = this.#selectedIndex;
+			this.#submenuItemId = item.id;
 			this.#submenuComponent = item.submenu(item.currentValue, (selectedValue?: string) => {
 				if (selectedValue !== undefined) {
 					item.currentValue = selectedValue;
@@ -507,11 +591,18 @@ export class SettingsList implements Component {
 
 	#closeSubmenu(): void {
 		this.#submenuComponent = null;
-		// Restore selection to the item that opened the submenu
-		if (this.#submenuItemIndex !== null) {
-			this.#selectedIndex = this.#submenuItemIndex;
-			this.#submenuItemIndex = null;
-			this.#clampSelectedIndex();
+		// Restore selection to the item that opened the submenu. Resolve by id:
+		// onChange handlers may have called setItems while the submenu was open,
+		// so a captured index could point at a different (or vanished) row.
+		if (this.#submenuItemId !== null) {
+			const index = this.#filteredItems.findIndex(item => !item.heading && item.id === this.#submenuItemId);
+			this.#submenuItemId = null;
+			if (index >= 0) {
+				this.#selectedIndex = index;
+			} else {
+				this.#clampSelectedIndex();
+			}
+			this.#notifySelection();
 		}
 	}
 }
