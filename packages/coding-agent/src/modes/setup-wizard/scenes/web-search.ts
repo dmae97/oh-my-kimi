@@ -1,4 +1,4 @@
-import { type SelectItem, SelectList, truncateToWidth } from "@oh-my-pi/pi-tui";
+import { type SelectItem, SelectList, type SgrMouseEvent, truncateToWidth } from "@oh-my-pi/pi-tui";
 import { SETTINGS_SCHEMA } from "../../../config/settings-schema";
 import { getSearchProvider, setPreferredSearchProvider } from "../../../web/search/provider";
 import { isSearchProviderPreference, type SearchProviderId } from "../../../web/search/types";
@@ -31,6 +31,8 @@ export class WebSearchTab implements SetupTab {
 	#availability = new Map<SearchProviderId, Availability>();
 	#status: string[] = [];
 	#disposed = false;
+	/** Render line where the select list begins. */
+	#listRowStart = 0;
 
 	constructor(private readonly host: SetupSceneHost) {
 		this.#list = new SelectList(WEB_SEARCH_ITEMS, MAX_VISIBLE, getSelectListTheme());
@@ -55,6 +57,22 @@ export class WebSearchTab implements SetupTab {
 		this.#list.handleInput(data);
 	}
 
+	/** Wheel moves the highlight; hover lights the row under the pointer; click confirms it. */
+	routeMouse(event: SgrMouseEvent, line: number, _col: number): void {
+		if (event.wheel !== null) {
+			this.#list.handleWheel(event.wheel);
+			return;
+		}
+		const index = this.#list.hitTest(line - this.#listRowStart);
+		if (event.motion) {
+			this.#list.setHoverIndex(index ?? null);
+			return;
+		}
+		if (event.leftClick && index !== undefined) {
+			this.#list.clickItem(index);
+		}
+	}
+
 	invalidate(): void {
 		this.#list.invalidate();
 	}
@@ -64,11 +82,9 @@ export class WebSearchTab implements SetupTab {
 	}
 
 	render(width: number): readonly string[] {
-		const lines = [
-			theme.fg("muted", "Choose the provider the web_search tool should prefer."),
-			"",
-			...this.#list.render(width),
-		];
+		const lines = [theme.fg("muted", "Choose the provider the web_search tool should prefer."), ""];
+		this.#listRowStart = lines.length;
+		lines.push(...this.#list.render(width));
 		const selected = this.#list.getSelectedItem();
 		if (selected) {
 			lines.push("", ...this.#readinessLines(selected.value).map(line => truncateToWidth(line, width)));

@@ -12,7 +12,7 @@ import {
 	selectSetupScenes,
 } from "@oh-my-pi/pi-coding-agent/modes/setup-wizard";
 import { WebSearchTab } from "@oh-my-pi/pi-coding-agent/modes/setup-wizard/scenes/web-search";
-import type { SetupWizardComponent } from "@oh-my-pi/pi-coding-agent/modes/setup-wizard/wizard-overlay";
+import { SetupWizardComponent } from "@oh-my-pi/pi-coding-agent/modes/setup-wizard/wizard-overlay";
 import { initTheme, theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { SEARCH_PROVIDER_OPTIONS, SEARCH_PROVIDER_PREFERENCES } from "@oh-my-pi/pi-coding-agent/web/search/types";
@@ -158,6 +158,103 @@ describe("setup wizard persistence", () => {
 		expect(playWelcomeIntro).not.toHaveBeenCalled();
 		expect(hideOverlay).toHaveBeenCalledTimes(1);
 		expect(setFocus).toHaveBeenCalled();
+	});
+});
+describe("setup wizard mouse routing", () => {
+	it("synthesizes arrow keys from wheel notches for scenes without routeMouse", () => {
+		const received: string[] = [];
+		const scene: SetupScene = {
+			id: "scrollable",
+			title: "scrollable",
+			minVersion: 1,
+			mount: () => ({
+				title: "scrollable",
+				handleInput: (data: string) => received.push(data),
+				render: () => [],
+				invalidate: () => {},
+			}),
+		};
+		const ctx = {
+			settings: Settings.isolated(),
+			ui: {
+				terminal: { rows: 24 },
+				setFocus: () => {},
+				requestRender: () => {},
+			},
+		} as unknown as InteractiveModeContext;
+		const component = new SetupWizardComponent(ctx, [scene]);
+		try {
+			void component.run();
+			// Left click during the splash advances into the scene, like Enter.
+			component.handleInput("\x1b[<0;5;5M");
+			component.handleInput("\x1b[<64;10;5M"); // wheel up
+			component.handleInput("\x1b[<65;10;5M"); // wheel down
+			component.handleInput("\x1b[<35;10;5M"); // pointer motion — swallowed
+			component.handleInput("\x1b[<0;10;5M"); // click in scene — swallowed
+			expect(received).toEqual(["\x1b[A", "\x1b[B"]);
+		} finally {
+			component.dispose();
+		}
+	});
+
+	it("routes hit-tested mouse events at scene-local coordinates to scenes with routeMouse", async () => {
+		await initTheme(false, "unicode", false, "titanium", "light");
+		const routed: { kind: string; line: number; col: number }[] = [];
+		const keys: string[] = [];
+		const scene: SetupScene = {
+			id: "mouse",
+			title: "mouse",
+			minVersion: 1,
+			mount: () => ({
+				title: "mouse",
+				handleInput: (data: string) => keys.push(data),
+				routeMouse: (event, line, col) => {
+					const kind =
+						event.wheel !== null
+							? `wheel:${event.wheel}`
+							: event.motion
+								? "motion"
+								: event.leftClick
+									? "click"
+									: "other";
+					routed.push({ kind, line, col });
+				},
+				render: () => ["MARKER-ROW"],
+				invalidate: () => {},
+			}),
+		};
+		const ctx = {
+			settings: Settings.isolated(),
+			ui: {
+				terminal: { rows: 24 },
+				setFocus: () => {},
+				requestRender: () => {},
+			},
+		} as unknown as InteractiveModeContext;
+		const component = new SetupWizardComponent(ctx, [scene]);
+		try {
+			void component.run();
+			component.handleInput("\r"); // splash → scene
+			await Bun.sleep(500); // let the splash→scene dissolve (420ms) finish so the frame is the scene
+			const frame = component.render(80);
+			const row = frame.findIndex(line => line.includes("MARKER-ROW"));
+			expect(row).toBeGreaterThan(0);
+			const indent = /^ */.exec(frame[row])?.[0].length ?? 0;
+			expect(indent).toBeGreaterThan(0);
+			// SGR reports are 1-based; two columns into the marker text.
+			component.handleInput(`\x1b[<35;${indent + 3};${row + 1}M`);
+			component.handleInput(`\x1b[<0;${indent + 3};${row + 1}M`);
+			component.handleInput("\x1b[<64;1;1M"); // wheel forwards regardless of pointer position
+			expect(routed.slice(0, 2)).toEqual([
+				{ kind: "motion", line: 0, col: 2 },
+				{ kind: "click", line: 0, col: 2 },
+			]);
+			expect(routed[2]?.kind).toBe("wheel:-1");
+			// routeMouse scenes get no synthesized arrows and no raw SGR bytes.
+			expect(keys).toEqual([]);
+		} finally {
+			component.dispose();
+		}
 	});
 });
 

@@ -169,6 +169,7 @@ describe("ModelRegistry runtime provider registration", () => {
 			// Wire facts are backfilled from identity; non-claude ids get the
 			// 4-tier adaptive map, filtered to the declared efforts (no xhigh).
 			effortMap: { minimal: "low" },
+			requiresEffort: true,
 		});
 	});
 

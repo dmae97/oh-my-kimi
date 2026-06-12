@@ -1,9 +1,11 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
+- Added mouse support to the setup wizard, including hover, wheel scrolling, and click-to-select for provider sign-in, web-search provider, glyph, and theme option lists
+- Added pointer support for the providers tab bar so tabs can be selected by click and wheel scrolling works inside the active panel
+- Added left-click navigation in setup wizard splash/outro screens to advance or exit without pressing Enter
 - Added `bench` CLI command to benchmark model selectors with a shared prompt and report time-to-first-token and throughput
 - Added `omp bench` options `--runs`, `--max-tokens`, `--prompt`, and `--json` to control run count, response length, prompt text, and machine-readable output
 - Added benchmark failure reporting that shows per-run errors, flags failed runs in the summary, and exits with a non-zero status when any model benchmark fails

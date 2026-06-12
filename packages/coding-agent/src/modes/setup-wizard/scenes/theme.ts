@@ -1,4 +1,11 @@
-import { padding, type SelectItem, SelectList, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
+import {
+	padding,
+	type SelectItem,
+	SelectList,
+	type SgrMouseEvent,
+	truncateToWidth,
+	visibleWidth,
+} from "@oh-my-pi/pi-tui";
 import {
 	enableAutoTheme,
 	getAvailableThemes,
@@ -89,6 +96,8 @@ class ThemeSceneController implements SetupSceneController {
 	#message: string | undefined;
 	#previewRequest = 0;
 	#disposed = false;
+	/** Render line where the select list began, or -1 while it is not shown. */
+	#listRowStart = -1;
 	readonly #originalTheme = getCurrentThemeName();
 	readonly #originalSymbolPreset: SymbolPreset;
 	readonly #originalColorBlindMode: boolean;
@@ -117,6 +126,22 @@ class ThemeSceneController implements SetupSceneController {
 		this.#selectList.handleInput(data);
 	}
 
+	/** Wheel moves the highlight (live preview); hover lights the row under the pointer; click confirms it. */
+	routeMouse(event: SgrMouseEvent, line: number, _col: number): void {
+		if (event.wheel !== null) {
+			this.#selectList.handleWheel(event.wheel);
+			return;
+		}
+		const index = this.#listRowStart >= 0 ? this.#selectList.hitTest(line - this.#listRowStart) : undefined;
+		if (event.motion) {
+			this.#selectList.setHoverIndex(index ?? null);
+			return;
+		}
+		if (event.leftClick && index !== undefined) {
+			this.#selectList.clickItem(index);
+		}
+	}
+
 	render(width: number): readonly string[] {
 		const lines = [
 			theme.fg("muted", "Theme changes preview live. Nothing is saved until you press Enter."),
@@ -128,8 +153,10 @@ class ThemeSceneController implements SetupSceneController {
 			"",
 		];
 		if (this.#loadingAllThemes) {
+			this.#listRowStart = -1;
 			lines.push(theme.fg("dim", "Loading themes…"));
 		} else {
+			this.#listRowStart = lines.length;
 			lines.push(...this.#selectList.render(width));
 		}
 		if (this.#message) {
