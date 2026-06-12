@@ -123,6 +123,20 @@ describe("Markdown incremental streaming lex (E2)", () => {
 		assertIdenticalGrowth(refDoc);
 	});
 
+	// Regression: HAS_REF_DEF must also catch labels with backslash-escaped
+	// brackets (`[a\]b]: …`). marked resolves such a definition document-wide,
+	// so if the detector misses it the already-frozen paragraph keeps its plain
+	// text inline tokens while a cold lex rewrites `[a\]b]` into a link.
+	it("an escaped-bracket reference definition falls back to a correct full render", () => {
+		const escapedRef =
+			"See [a\\]b] for details in the long discussion that follows below.\n\n" +
+			"More prose streams in before the definition finally arrives down here.\n\n" +
+			"[a\\]b]: https://example.com/escaped\n\n" +
+			"Trailing paragraph after the definition keeps the stream going on.";
+		assertIdenticalGrowth(escapedRef, 60, 1);
+		assertIdenticalGrowth(escapedRef, 60, 13);
+	});
+
 	// Regression: marked merges a list with a following same-marker list across a
 	// blank line into one renumbered loose list (CommonMark loose-list
 	// continuation). Freezing across that "\n\n" cut keeps them separate and

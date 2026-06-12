@@ -3,6 +3,7 @@ import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-coding-agent/modes/components/assistant-message";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { type Component, Container, Markdown } from "@oh-my-pi/pi-tui";
 
 const W = 100;
 
@@ -81,6 +82,46 @@ describe("AssistantMessageComponent streaming fast path", () => {
 			const m = msg([{ type: "text", text }]);
 			reused.updateContent(m);
 			expect(reused.render(W).join("\n")).toBe(teardownRender(m));
+		}
+	});
+
+	// Regression: theme/symbol changes reach the component via invalidate()
+	// (InteractiveMode clears the markdown render cache and invalidates the
+	// tree). Reused fast-path children captured getMarkdownTheme() at
+	// construction, so invalidate() MUST drop them and rebuild — otherwise a
+	// theme switch keeps rendering stale symbols until the message shape
+	// changes. Child identity is the load-bearing mechanism here: a kept
+	// instance is exactly a kept stale theme.
+	it("invalidate() rebuilds Markdown children instead of reusing fast-path state", () => {
+		const collectMarkdown = (component: Container): Markdown[] => {
+			const found: Markdown[] = [];
+			const walk = (node: Component): void => {
+				if (node instanceof Markdown) found.push(node);
+				if (node instanceof Container) for (const child of node.children) walk(child);
+			};
+			walk(component);
+			return found;
+		};
+
+		const reused = new AssistantMessageComponent();
+		reused.updateContent(msg([{ type: "text", text: "Hello **world**, part one." }]));
+		reused.updateContent(msg([{ type: "text", text: "Hello **world**, part one and two." }]));
+		const before = collectMarkdown(reused);
+		expect(before.length).toBeGreaterThan(0);
+
+		// Sanity: a same-shape streaming update reuses the children (fast path on).
+		reused.updateContent(msg([{ type: "text", text: "Hello **world**, part one, two, three." }]));
+		const streamed = collectMarkdown(reused);
+		expect(streamed.length).toBe(before.length);
+		for (let i = 0; i < streamed.length; i++) {
+			expect(streamed[i]).toBe(before[i]);
+		}
+
+		reused.invalidate();
+		const rebuilt = collectMarkdown(reused);
+		expect(rebuilt.length).toBe(before.length);
+		for (let i = 0; i < rebuilt.length; i++) {
+			expect(rebuilt[i]).not.toBe(before[i]);
 		}
 	});
 

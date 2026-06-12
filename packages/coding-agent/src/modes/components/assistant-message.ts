@@ -63,6 +63,12 @@ export class AssistantMessageComponent extends Container {
 
 	override invalidate(): void {
 		super.invalidate();
+		// Theme/symbol changes arrive via invalidate(). Fast-path children captured
+		// getMarkdownTheme() at construction, so drop them and force the teardown
+		// path to rebuild with the current theme. Streaming updates call
+		// updateContent() directly and keep the fast path.
+		this.#fastPathKey = undefined;
+		this.#fastPathItems = undefined;
 		if (this.#lastMessage) {
 			this.updateContent(this.#lastMessage);
 		}

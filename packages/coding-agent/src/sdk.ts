@@ -1610,16 +1610,59 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 							const mcpResult = await logger.time("discoverAndLoadMCPTools", () =>
 								deferredMCPManager.discoverAndConnect(mcpDiscoverOptions),
 							);
+							// The session can be torn down while servers are still connecting.
+							// Don't resurrect tools on a disposed session, and don't leak the
+							// transports/subprocesses the connect just spawned.
+							if (liveSession.isDisposed) {
+								await deferredMCPManager.disconnectAll();
+								return;
+							}
 							applyMCPEnvironment(mcpResult);
 							logMCPLoadErrors(mcpResult.errors);
-							await liveSession.refreshMCPTools(mcpResult.tools, {
-								activateAll: activation.activateAllMCPTools,
-							});
-							if (!activation.mcpDiscoveryEnabled && activation.explicitlyRequestedMCPToolNames.length > 0) {
-								await liveSession.setActiveToolsByName([
-									...liveSession.getActiveToolNames(),
-									...activation.explicitlyRequestedMCPToolNames,
-								]);
+							// `tools.discoveryMode: "auto"` was resolved against a registry that
+							// held only built-ins plus persisted placeholder names. Recompute with
+							// the real MCP tool count: a large toolset must flip discovery on
+							// BEFORE the refresh, or activateAll would dump every MCP tool into
+							// the active set with no search_tool_bm25 registered.
+							let discoveryEnabled = activation.mcpDiscoveryEnabled;
+							let activateAll = activation.activateAllMCPTools;
+							if (!discoveryEnabled) {
+								const nonMCPToolNames = [...toolRegistry.keys()].filter(name => !isMCPToolName(name));
+								const projectedMode = resolveEffectiveToolDiscoveryMode(
+									settings,
+									countToolsForAutoDiscovery([...nonMCPToolNames, ...mcpResult.tools.map(tool => tool.name)]),
+								);
+								if (projectedMode !== "off") {
+									effectiveDiscoveryMode = projectedMode;
+									mcpDiscoveryEnabled = true;
+									discoveryEnabled = true;
+									activateAll = false;
+									liveSession.enableMCPDiscovery();
+									if (!toolRegistry.has("search_tool_bm25")) {
+										const searchTool: Tool = new SearchToolBm25Tool(toolSession);
+										toolRegistry.set(
+											searchTool.name,
+											new ExtensionToolWrapper(wrapToolWithMetaNotice(searchTool), extensionRunner) as Tool,
+										);
+									}
+									await liveSession.setActiveToolsByName([
+										...liveSession.getActiveToolNames(),
+										"search_tool_bm25",
+									]);
+								}
+							}
+							await liveSession.refreshMCPTools(mcpResult.tools, { activateAll });
+							if (activation.explicitlyRequestedMCPToolNames.length > 0) {
+								if (discoveryEnabled && !activation.mcpDiscoveryEnabled) {
+									// Discovery flipped on mid-flight: route the explicit request
+									// through discovery-aware activation so selection persists.
+									await liveSession.activateDiscoveredMCPTools(activation.explicitlyRequestedMCPToolNames);
+								} else if (!discoveryEnabled) {
+									await liveSession.setActiveToolsByName([
+										...liveSession.getActiveToolNames(),
+										...activation.explicitlyRequestedMCPToolNames,
+									]);
+								}
 							}
 						} catch (error) {
 							logger.error("MCP tool load failed", {
@@ -1985,7 +2028,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}
 		}
 
-		const effectiveDiscoveryMode = resolveEffectiveToolDiscoveryMode(
+		// `let`: the deferred MCP discovery closure upgrades these when the real
+		// MCP tool count pushes `auto` past its threshold; `rebuildSystemPrompt`
+		// below reads the live bindings.
+		let effectiveDiscoveryMode = resolveEffectiveToolDiscoveryMode(
 			settings,
 			countToolsForAutoDiscovery(toolRegistry.keys()),
 		);
@@ -1996,7 +2042,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				new ExtensionToolWrapper(wrapToolWithMetaNotice(searchTool), extensionRunner) as Tool,
 			);
 		}
-		const mcpDiscoveryEnabled = effectiveDiscoveryMode !== "off"; // back-compat: true when any discovery active
+		let mcpDiscoveryEnabled = effectiveDiscoveryMode !== "off"; // back-compat: true when any discovery active
 
 		const reloadSshTool = async (): Promise<AgentTool | null> => {
 			if (!requestedToolNameSet.has("ssh")) return null;

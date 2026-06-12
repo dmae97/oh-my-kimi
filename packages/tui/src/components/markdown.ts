@@ -63,8 +63,10 @@ const renderCache = new LRUCache<string, readonly string[]>({ max: RENDER_CACHE_
 
 // A reference-link definition (`[label]: dest`) resolves across the whole
 // document, so a split lex cannot reproduce it — disable the streaming fast path
-// when one is present (rare in streamed output).
-const HAS_REF_DEF = /^ {0,3}\[[^\]]+\]:/m;
+// when one is present (rare in streamed output). The label may contain
+// backslash-escaped characters (`[a\]b]: x`), so escapes are matched explicitly;
+// over-matching is safe (it only costs the fast path), under-matching is not.
+const HAS_REF_DEF = /^ {0,3}\[(?:\\.|[^\]\\])+\]:/m;
 
 /** Drop all L2 cache entries. Call on theme change to prevent stale styled output. */
 export function clearRenderCache(): void {
@@ -328,6 +330,13 @@ export class Markdown implements Component {
 
 	setText(text: string): void {
 		this.#text = text;
+		if (!text.trim()) {
+			// Blank replacement: render() early-returns before #lexTokens can see
+			// the non-append edit, so drop the frozen stream state here or it
+			// outlives the content it indexed.
+			this.#streamPrefixText = undefined;
+			this.#streamPrefixTokens = undefined;
+		}
 		this.invalidate();
 	}
 

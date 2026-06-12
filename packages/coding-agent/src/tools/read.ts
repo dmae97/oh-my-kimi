@@ -107,12 +107,16 @@ import { toolResult } from "./tool-result";
 // is still read fresh on every call, so a hit only reuses the deterministic
 // parse — there is no staleness window and no stat guard is needed. Bounded LRU,
 // aged out with the session via WeakMap.
+// Unusable results (not parsed, or nothing elided) are memoized as `false`: the
+// full SummaryResult embeds the whole source in kept segments, and the caller
+// only ever renders `parsed && elided` summaries — caching the segments would
+// retain up to 48 near-2MiB sources just to remember "no summary".
 const SUMMARY_CACHE_MAX = 48;
-const summaryParseCaches = new WeakMap<object, LRUCache<string, SummaryResult>>();
-function getSummaryParseCache(session: object): LRUCache<string, SummaryResult> {
+const summaryParseCaches = new WeakMap<object, LRUCache<string, SummaryResult | false>>();
+function getSummaryParseCache(session: object): LRUCache<string, SummaryResult | false> {
 	let cache = summaryParseCaches.get(session);
 	if (!cache) {
-		cache = new LRUCache<string, SummaryResult>({ max: SUMMARY_CACHE_MAX });
+		cache = new LRUCache<string, SummaryResult | false>({ max: SUMMARY_CACHE_MAX });
 		summaryParseCaches.set(session, cache);
 	}
 	return cache;
@@ -1538,7 +1542,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			const cache = getSummaryParseCache(this.session);
 			const cacheKey = `${absolutePath}\0${Bun.hash(code)}\0${minBodyLines},${minCommentLines},${unfoldUntilLines},${unfoldLimitLines}`;
 			const memoized = cache.get(cacheKey);
-			if (memoized) return memoized;
+			if (memoized !== undefined) return memoized || null;
 			const result = summarizeCode({
 				code,
 				path: absolutePath,
@@ -1547,8 +1551,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				unfoldUntilLines,
 				unfoldLimitLines,
 			});
-			cache.set(cacheKey, result);
-			return result;
+			const usable = result.parsed && result.elided ? result : false;
+			cache.set(cacheKey, usable);
+			return usable || null;
 		} catch {
 			return null;
 		}
