@@ -42,6 +42,8 @@ pub fn supports(subcommand: Option<&str>) -> bool {
 pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
 	if exit_code == 0
 		&& (command_contains_any(ctx.command, &["--json"])
+			|| primitives::command_has_any_token(ctx.command, &["--format=json"])
+			|| primitives::command_has_ordered_tokens(ctx.command, "--format", "json")
 			|| ctx.program == "uv"
 				&& matches!(ctx.subcommand, Some("pip"))
 				&& command_contains_any(ctx.command, &["freeze"]))
@@ -72,6 +74,8 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 		} else if exit_code == 0
 			&& (is_package_tree_command(ctx) || is_package_export_command(ctx))
 			&& !command_contains_any(ctx.command, &["--json"])
+			&& !primitives::command_has_any_token(ctx.command, &["--format=json"])
+			&& !primitives::command_has_ordered_tokens(ctx.command, "--format", "json")
 		{
 			compact_package_tree_output(&deduped)
 		} else {
@@ -1187,5 +1191,23 @@ mod tests {
 		let out = filter(&context, input, 0);
 		assert!(!out.text.contains("==> Downloading"));
 		assert!(!out.text.contains("==> Pouring"));
+	}
+
+	#[test]
+	fn test_pip_list_format_json_passthrough() {
+		let input = r#"[{"name":"pip","version":"23.0"},{"name":"requests","version":"2.28.0"}]"#;
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+
+		// --format=json form: output must be byte-identical to input (no JSON rewrite)
+		let context = ctx("pip", Some("list"), "pip list --format=json", &cfg);
+		let out = filter(&context, input, 0);
+		assert!(!out.changed, "pip list --format=json must not be modified");
+		assert_eq!(out.text, input, "pip list --format=json must pass through as JSON");
+
+		// --format json form (two separate tokens): same contract
+		let context2 = ctx("pip", Some("list"), "pip list --format json", &cfg);
+		let out2 = filter(&context2, input, 0);
+		assert!(!out2.changed, "pip list --format json must not be modified");
+		assert_eq!(out2.text, input, "pip list --format json must pass through as JSON");
 	}
 }
