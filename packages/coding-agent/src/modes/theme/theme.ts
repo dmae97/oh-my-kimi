@@ -197,7 +197,8 @@ export type SymbolKey =
 	| "tab.model"
 	| "tab.interaction"
 	| "tab.context"
-	| "tab.editing"
+	| "tab.files"
+	| "tab.shell"
 	| "tab.tools"
 	| "tab.memory"
 	| "tab.tasks"
@@ -394,7 +395,8 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"tab.model": "🤖",
 	"tab.interaction": "⌨",
 	"tab.context": "📋",
-	"tab.editing": "💻",
+	"tab.files": "📁",
+	"tab.shell": "💻",
 	"tab.tools": "🔧",
 	"tab.memory": "🧠",
 	"tab.tasks": "📦",
@@ -693,7 +695,8 @@ const NERD_SYMBOLS: SymbolMap = {
 	"tab.model": "󰚩",
 	"tab.interaction": "󰌌",
 	"tab.context": "󰘸",
-	"tab.editing": "",
+	"tab.files": "󰈔",
+	"tab.shell": "󰆍",
 	"tab.tools": "󰠭",
 	"tab.memory": "󰧑",
 	"tab.tasks": "󰐱",
@@ -887,7 +890,8 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"tab.model": "[M]",
 	"tab.interaction": "[I]",
 	"tab.context": "[X]",
-	"tab.editing": "[E]",
+	"tab.files": "[F]",
+	"tab.shell": "[S]",
 	"tab.tools": "[T]",
 	"tab.memory": "[Y]",
 	"tab.tasks": "[K]",
@@ -2678,5 +2682,8 @@ export function getSettingsListTheme(): import("@oh-my-pi/pi-tui").SettingsListT
 		description: (text: string) => theme.fg("dim", text),
 		cursor: theme.fg("accent", `${theme.nav.cursor} `),
 		hint: (text: string) => theme.fg("dim", text),
+		heading: (text: string) => theme.fg("muted", theme.bold(text)),
+		section: (text: string, active: boolean) =>
+			active ? theme.fg("accent", theme.bold(text)) : theme.fg("muted", text),
 	};
 }

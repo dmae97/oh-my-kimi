@@ -43,8 +43,9 @@ describe("SettingsSelectorComponent memory tab", () => {
 		settings.set("memory.backend", "off");
 		const comp = createSelector();
 		focusMemoryTab(comp);
-
-		const before = comp.render(120).join("\n");
+		// Width 70 keeps the flat single-column layout (the wide split layout
+		// shows only the active section's rows, covered by the sidebar test).
+		const before = comp.render(70).join("\n");
 		expect(before).toContain("Memory Backend");
 		expect(before).not.toContain("Hindsight API URL");
 
@@ -56,7 +57,7 @@ describe("SettingsSelectorComponent memory tab", () => {
 		comp.handleInput("\n");
 
 		expect(settings.get("memory.backend")).toBe("hindsight");
-		const after = comp.render(120).join("\n");
+		const after = comp.render(70).join("\n");
 		expect(after).toContain("Memory Backend");
 		expect(after).toContain("Hindsight API URL");
 		expect(after).toContain("Hindsight Auto Recall");
@@ -66,8 +67,8 @@ describe("SettingsSelectorComponent memory tab", () => {
 		settings.set("memory.backend", "hindsight");
 		const comp = createSelector();
 		focusMemoryTab(comp);
-
-		expect(comp.render(120).join("\n")).toContain("Hindsight API URL");
+		// Width 70 keeps the flat layout so all sections' rows render inline.
+		expect(comp.render(70).join("\n")).toContain("Hindsight API URL");
 
 		// Open Memory Backend → SelectSubmenu pre-selects the current value
 		// ("hindsight" at index 2) → step up twice to reach "off" → Enter confirms.
@@ -77,10 +78,45 @@ describe("SettingsSelectorComponent memory tab", () => {
 		comp.handleInput("\n");
 
 		expect(settings.get("memory.backend")).toBe("off");
-		const after = comp.render(120).join("\n");
+		const after = comp.render(70).join("\n");
 		expect(after).toContain("Memory Backend");
 		expect(after).not.toContain("Hindsight API URL");
 		expect(after).not.toContain("Hindsight Auto Recall");
+	});
+
+	it("renders group titles, suppressing groups whose items are all condition-hidden", () => {
+		settings.set("memory.backend", "off");
+		const comp = createSelector();
+		focusMemoryTab(comp);
+
+		const strip = (line: string): string => line.replace(/\x1b\[[0-9;]*m/g, "");
+
+		// Single visible group renders flat: the title is a standalone heading row.
+		// Mnemopi/Hindsight groups are fully condition-hidden and emit nothing.
+		const flatHeadings = comp
+			.render(120)
+			.map(line =>
+				strip(line)
+					.replace(/[█│]\s*$/, "")
+					.trim(),
+			)
+			.filter(line => line === "General" || line === "Mnemopi" || line === "Hindsight");
+		expect(flatHeadings).toEqual(["General"]);
+
+		// Switch backend to hindsight: a second group materializes, so the wide
+		// render switches to the split layout with section titles in the sidebar.
+		comp.handleInput("\n");
+		comp.handleInput("\x1b[B");
+		comp.handleInput("\x1b[B");
+		comp.handleInput("\n");
+
+		const sidebarTitles = comp
+			.render(120)
+			.map(strip)
+			.filter(line => line.includes("│"))
+			.map(line => line.split("│")[0].trim())
+			.filter(title => title.length > 0);
+		expect(sidebarTitles).toEqual(["General", "Hindsight"]);
 	});
 
 	it("clears settings search on Escape before closing the selector", () => {

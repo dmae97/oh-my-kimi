@@ -553,12 +553,22 @@ export class SettingsSelectorComponent extends Container {
 		this.addChild(this.#currentList);
 	}
 
-	/** Map a definition list to UI items, dropping any whose condition is false. */
+	/**
+	 * Map a definition list to UI items, dropping any whose condition is false.
+	 * Inserts a heading row whenever the (group-sorted) definition list crosses
+	 * into a new group; groups whose items are all condition-hidden emit none.
+	 */
 	#buildItemsForDefs(defs: SettingDef[]): SettingItem[] {
 		const items: SettingItem[] = [];
+		let lastGroup: string | undefined;
 		for (const def of defs) {
 			const item = this.#defToItem(def);
-			if (item) items.push(item);
+			if (!item) continue;
+			if (def.group && def.group !== lastGroup) {
+				items.push({ id: `__heading:${def.group}`, label: def.group, currentValue: "", heading: true });
+				lastGroup = def.group;
+			}
+			items.push(item);
 		}
 		return items;
 	}
