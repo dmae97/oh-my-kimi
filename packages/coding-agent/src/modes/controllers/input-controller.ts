@@ -1,7 +1,8 @@
 import * as fs from "node:fs/promises";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import type { AutocompleteProvider, SlashCommand } from "@oh-my-pi/pi-tui";
-import { $env, logger, sanitizeText } from "@oh-my-pi/pi-utils";
+import { $env, isEnoent, logger, sanitizeText } from "@oh-my-pi/pi-utils";
+import { getRoleInfo } from "../../config/model-roles";
 import { isSettingsInitialized, settings } from "../../config/settings";
 import { AssistantMessageComponent } from "../../modes/components/assistant-message";
 import { renderSegmentTrack } from "../../modes/components/segment-track";
@@ -909,11 +910,30 @@ export class InputController {
 				`Unsupported pasted image format: ${image.mimeType}`,
 			);
 		} catch (error) {
+			if (error instanceof ImageInputTooLargeError) {
+				this.ctx.editor.pasteText(path);
+				this.ctx.ui.requestRender();
+				this.ctx.showStatus(error.message);
+				return;
+			}
+			if (isEnoent(error)) {
+				// #2375: the bracketed paste forwarded by a local terminal carries a
+				// path on the *local* filesystem. When omp itself runs over SSH, that
+				// path is unreachable here; pasting it as text would look like the
+				// image was attached when in fact nothing was sent. Refuse the silent
+				// degrade and tell the user how to send the bytes for real.
+				const env = process.env;
+				const overSsh = Boolean(env.SSH_CONNECTION || env.SSH_TTY || env.SSH_CLIENT);
+				this.ctx.showStatus(
+					overSsh
+						? `Image not found at ${path}. Over SSH this path is local to your terminal — paste the image directly (clipboard image-paste shortcut) to send its bytes.`
+						: `Image not found at ${path}`,
+				);
+				return;
+			}
 			this.ctx.editor.pasteText(path);
 			this.ctx.ui.requestRender();
-			this.ctx.showStatus(
-				error instanceof ImageInputTooLargeError ? error.message : "Failed to read pasted image path",
-			);
+			this.ctx.showStatus("Failed to read pasted image path");
 		}
 	}
 

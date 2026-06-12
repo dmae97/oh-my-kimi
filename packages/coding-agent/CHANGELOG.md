@@ -17,6 +17,10 @@
 
 - Rejected non-local `ws://` relay URLs and invalid room keys when parsing collab links to prevent insecure or malformed session joins
 
+### Fixed
+
+- Fixed remote (SSH) image attachment silently inserting the local-machine path as plain text: when omp runs over SSH and the terminal forwards a bracketed-paste image path, the path is unreachable from the remote host. The path-as-text fallback is gone for unreachable paths and the status now points the user at the clipboard image-paste shortcut so the bytes actually cross the connection ([#2375](https://github.com/can1357/oh-my-pi/issues/2375)).
+
 ## [15.11.7] - 2026-06-12
 ### Added
 
