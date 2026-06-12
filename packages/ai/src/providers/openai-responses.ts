@@ -288,6 +288,18 @@ function isOpenAIResponsesStalePreviousResponseError(error: unknown): boolean {
 	return /previous[ _]?response/i.test(error.message) && /not[ _]?found|invalid|expired|stale/i.test(error.message);
 }
 
+/**
+ * Zero Data Retention orgs accept `store: true` but refuse to resolve any
+ * `previous_response_id` — the prior response was never persisted server-side.
+ * The 400 carries a fixed phrasing ("Zero Data Retention") that the generic
+ * stale-id regex above does not match, so it is classified separately and
+ * disables chaining categorically (one strike, not three).
+ */
+function isOpenAIResponsesZeroDataRetentionError(error: unknown): boolean {
+	if (!(error instanceof Error)) return false;
+	return /previous[ _]?response/i.test(error.message) && /zero[ _-]?data[ _-]?retention/i.test(error.message);
+}
+
 function registerOpenAIResponsesChainStaleFailure(chain: OpenAIResponsesChainState, error: unknown): void {
 	resetOpenAIResponsesChainState(chain);
 	chain.staleFailures += 1;
@@ -298,6 +310,19 @@ function registerOpenAIResponsesChainStaleFailure(chain: OpenAIResponsesChainSta
 		error: error instanceof Error ? error.message : String(error),
 		consecutiveFailures: chain.staleFailures,
 		disabled: chain.disabled,
+	});
+}
+
+/**
+ * One-shot ZDR signal: the org will never resolve a stored response, so skip
+ * the staleFailures counter and disable chaining immediately for this session.
+ */
+function markOpenAIResponsesChainZeroDataRetention(chain: OpenAIResponsesChainState, error: unknown): void {
+	resetOpenAIResponsesChainState(chain);
+	chain.disabled = true;
+	chain.staleFailures = OPENAI_RESPONSES_CHAIN_STALE_FAILURE_LIMIT;
+	logger.debug("OpenAI responses chaining disabled (Zero Data Retention)", {
+		error: error instanceof Error ? error.message : String(error),
 	});
 }
 
@@ -433,18 +458,27 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 			try {
 				openaiStream = await openResponsesStream(chained.params);
 			} catch (error) {
-				if (
-					!chainState ||
-					!sentPreviousResponseId ||
-					requestSignal.aborted ||
-					!isOpenAIResponsesStalePreviousResponseError(error)
-				) {
+				if (!chainState || !sentPreviousResponseId || requestSignal.aborted) {
 					throw error;
 				}
-				// Server rejected the chain baseline: reset, count the failure, and
-				// retry once with the full transcript. Structurally cannot loop — the
-				// retry carries no previous_response_id.
-				registerOpenAIResponsesChainStaleFailure(chainState, error);
+				const zdrRejection = isOpenAIResponsesZeroDataRetentionError(error);
+				if (!zdrRejection && !isOpenAIResponsesStalePreviousResponseError(error)) {
+					throw error;
+				}
+				// Server rejected the chain baseline: reset, count the failure (or
+				// disable categorically on ZDR), and retry once with the full
+				// transcript. Structurally cannot loop — the retry carries no
+				// previous_response_id.
+				if (zdrRejection) {
+					markOpenAIResponsesChainZeroDataRetention(chainState, error);
+					// ZDR orgs cannot store responses; the original request forced
+					// `store: true` for chaining, which is meaningless here and would
+					// otherwise leave subsequent turns asking the server to retain
+					// data it must discard.
+					params.store = false;
+				} else {
+					registerOpenAIResponsesChainStaleFailure(chainState, error);
+				}
 				sentPreviousResponseId = undefined;
 				rawRequestDump.body = params;
 				openaiStream = await openResponsesStream(params);

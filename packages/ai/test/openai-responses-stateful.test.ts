@@ -279,6 +279,56 @@ describe("openai-responses stateful chaining", () => {
 		expect(sentRequests[7]?.store).toBe(false);
 	});
 
+	it("disables chaining categorically when the org has Zero Data Retention enabled", async () => {
+		const sentRequests: Array<Record<string, unknown>> = [];
+		const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+			const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
+			sentRequests.push(request);
+			if (typeof request.previous_response_id === "string") {
+				return new Response(
+					JSON.stringify({
+						error: {
+							message: "Previous response cannot be used for this organization due to Zero Data Retention.",
+							type: "invalid_request_error",
+							param: "previous_response_id",
+							code: "zero_data_retention",
+						},
+					}),
+					{ status: 400, headers: { "content-type": "application/json" } },
+				);
+			}
+			return createStatefulSse(`Answer ${sentRequests.length}`, `resp_${sentRequests.length}`);
+		}) as FetchImpl;
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const options = {
+			apiKey: "test-key",
+			sessionId: "stateful-zdr-session",
+			providerSessionState,
+			statefulResponses: true,
+			reasoning: "low" as const,
+			fetch: fetchMock,
+		};
+
+		const messages: Context["messages"] = [];
+		for (let turn = 1; turn <= 3; turn++) {
+			messages.push({ role: "user", content: `Question ${turn}`, timestamp: 1000 + turn });
+			const result = await streamOpenAIResponses(model, { systemPrompt, messages }, options).result();
+			expect(result.stopReason).toBe("stop");
+			messages.push(result);
+		}
+
+		// Turn 1: no previous_response_id (cold chain). Turn 2: tries chaining,
+		// gets a ZDR 400, retries once with full transcript and store: false.
+		// Turn 3: chain is permanently disabled — no second 400.
+		expect(sentRequests).toHaveLength(4);
+		expect(sentRequests[0]?.previous_response_id).toBeUndefined();
+		expect(sentRequests[1]?.previous_response_id).toBe("resp_1");
+		expect(sentRequests[2]?.previous_response_id).toBeUndefined();
+		expect(sentRequests[2]?.store).toBe(false);
+		expect(sentRequests[3]?.previous_response_id).toBeUndefined();
+		expect(sentRequests[3]?.store).toBe(false);
+	});
+
 	it("chains by default against the official OpenAI API", async () => {
 		const sentRequests: Array<Record<string, unknown>> = [];
 		const fetchMock = createCapturingFetch(sentRequests);

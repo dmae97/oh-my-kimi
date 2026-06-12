@@ -818,6 +818,84 @@ describe("AgentSession retry fallback", () => {
 		});
 	});
 
+	it("restarts Responses provider state before retrying Zero Data Retention errors", async () => {
+		const model = getBundledModel("openai", "gpt-4o-mini");
+		const fallbackModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model || !fallbackModel) {
+			throw new Error("Expected bundled test models to exist");
+		}
+
+		// Mirrors the live wire error from OpenAI ZDR orgs after the in-provider
+		// retry has already exhausted itself; the higher-level retry must still
+		// classify the failure as a stale-replay event so the session reset and
+		// zero-delay backoff fire instead of a model fallback.
+		const zdrReplayError = "400 Previous response cannot be used for this organization due to Zero Data Retention.";
+		const requestedModels: string[] = [];
+		const fallbackAppliedEvents: Array<Extract<AgentSessionEvent, { type: "retry_fallback_applied" }>> = [];
+		const mock = createMockModel({
+			responses: [{ throw: zdrReplayError }, { content: ["Recovered after ZDR reset"] }],
+		});
+		const agent = new Agent({
+			getApiKey: provider => `${provider}-test-key`,
+			initialState: {
+				model,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+			streamFn: (requestedModel, context, options) => {
+				requestedModels.push(`${requestedModel.provider}/${requestedModel.id}`);
+				return mock.stream(requestedModel, context, options);
+			},
+		});
+
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 5,
+			"retry.maxRetries": 1,
+			"retry.fallbackChains": {
+				default: [`${fallbackModel.provider}/${fallbackModel.id}`],
+			},
+		});
+		settings.setModelRole("default", `${model.provider}/${model.id}`);
+
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+		session.subscribe(event => {
+			if (event.type === "retry_fallback_applied") {
+				fallbackAppliedEvents.push(event);
+			}
+		});
+		const closeSpy = vi.fn();
+		session.providerSessionState.set("openai-responses:openai", {
+			close: closeSpy,
+		} satisfies ProviderSessionState);
+		const { retryStartEvents, retryEndEvents } = trackRetryEvents(session);
+
+		await session.prompt("Retry ZDR replay");
+		await session.waitForIdle();
+
+		expect(closeSpy).toHaveBeenCalledTimes(1);
+		expect(session.providerSessionState.has("openai-responses:openai")).toBe(false);
+		expect(requestedModels).toEqual([`${model.provider}/${model.id}`, `${model.provider}/${model.id}`]);
+		expect(fallbackAppliedEvents).toHaveLength(0);
+		expect(retryStartEvents).toHaveLength(1);
+		expect(retryStartEvents[0]).toMatchObject({
+			attempt: 1,
+			delayMs: 0,
+			errorMessage: zdrReplayError,
+		});
+		expect(retryEndEvents).toHaveLength(1);
+		expect(retryEndEvents[0]).toMatchObject({ success: true, attempt: 1 });
+		const lastAssistant = getLastAssistantMessage(session);
+		expect(lastAssistant.stopReason).toBe("stop");
+		expect(lastAssistant.content).toContainEqual({ type: "text", text: "Recovered after ZDR reset" });
+	});
+
 	it("auto-retries Anthropic stream-envelope failures before message_start", async () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!model) {
