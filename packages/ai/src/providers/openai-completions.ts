@@ -2109,6 +2109,13 @@ function mapStopReason(reason: ChatCompletionChunk.Choice["finish_reason"] | str
 			return { stopReason: "error", errorMessage: "Provider finish_reason: content_filter" };
 		case "network_error":
 			return { stopReason: "error", errorMessage: "Provider finish_reason: network_error" };
+		case "error":
+			// Gateways (OpenRouter, Vercel AI Gateway, …) report upstream model
+			// failures as a bare `finish_reason: "error"` with no detail. These are
+			// almost always transient (e.g. Gemini MALFORMED_FUNCTION_CALL), so word
+			// the message to match the session retry classifier's transient-transport
+			// pattern (`provider.?returned.?error`) and get the turn auto-retried.
+			return { stopReason: "error", errorMessage: "Provider returned error finish_reason" };
 		default:
 			return {
 				stopReason: "error",
