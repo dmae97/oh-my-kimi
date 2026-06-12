@@ -27,7 +27,7 @@ import {
 	Snowflake,
 	toError,
 } from "@oh-my-pi/pi-utils";
-import { getPreservedSnapcompactArchive, snapcompactImages } from "@oh-my-pi/snapcompact";
+import * as snapcompact from "@oh-my-pi/snapcompact";
 import { ArtifactManager } from "./artifacts";
 import {
 	type BlobPutOptions,
@@ -712,7 +712,7 @@ export function buildSessionContext(
 		// the component can report them.
 		for (const entry of path) {
 			if (entry.type === "compaction") {
-				const snapcompactArchive = getPreservedSnapcompactArchive(entry.preserveData);
+				const snapcompactArchive = snapcompact.getPreservedArchive(entry.preserveData);
 				messages.push(
 					createCompactionSummaryMessage(
 						entry.summary,
@@ -720,7 +720,7 @@ export function buildSessionContext(
 						entry.timestamp,
 						entry.shortSummary,
 						undefined,
-						snapcompactArchive ? snapcompactImages(snapcompactArchive) : undefined,
+						snapcompactArchive ? snapcompact.images(snapcompactArchive) : undefined,
 					),
 				);
 			} else {
@@ -744,7 +744,7 @@ export function buildSessionContext(
 
 		// Emit summary first; re-attach any archived snapcompact frames so the
 		// model can keep reading the archived history after every context rebuild.
-		const snapcompactArchive = getPreservedSnapcompactArchive(compaction.preserveData);
+		const snapcompactArchive = snapcompact.getPreservedArchive(compaction.preserveData);
 		messages.push(
 			createCompactionSummaryMessage(
 				compaction.summary,
@@ -752,7 +752,7 @@ export function buildSessionContext(
 				compaction.timestamp,
 				compaction.shortSummary,
 				providerPayload,
-				snapcompactArchive ? snapcompactImages(snapcompactArchive) : undefined,
+				snapcompactArchive ? snapcompact.images(snapcompactArchive) : undefined,
 			),
 		);
 

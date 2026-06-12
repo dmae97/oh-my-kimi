@@ -12,12 +12,7 @@
  */
 import type { Context, ImageContent, Model, TextContent, ToolResultMessage, UserMessage } from "@oh-my-pi/pi-ai";
 import { countTokens } from "@oh-my-pi/pi-natives";
-import {
-	renderSnapcompactFrames,
-	resolveSnapcompactShape,
-	type SnapcompactShape,
-	snapcompactFrameCount,
-} from "@oh-my-pi/snapcompact";
+import * as snapcompact from "@oh-my-pi/snapcompact";
 import systemFramesNote from "../prompts/system/snapcompact-system-frames-note.md" with { type: "text" };
 import systemStub from "../prompts/system/snapcompact-system-stub.md" with { type: "text" };
 import toolResultNote from "../prompts/system/snapcompact-toolresult-note.md" with { type: "text" };
@@ -66,7 +61,7 @@ function isTextContent(block: TextContent | ImageContent): block is TextContent 
 }
 
 /** Image tokens must undercut text tokens by the margin to be worth rendering. */
-function passesSavingsGate(frames: number, shape: SnapcompactShape, textTokens: number): boolean {
+function passesSavingsGate(frames: number, shape: snapcompact.Shape, textTokens: number): boolean {
 	return frames * shape.frameTokenEstimate <= textTokens * SAVINGS_MARGIN;
 }
 
@@ -92,7 +87,7 @@ export class SnapcompactInlineTransformer {
 		// rendering would lose the content entirely.
 		if (!model.input.includes("image")) return context;
 
-		const shape = resolveSnapcompactShape(model.api);
+		const shape = snapcompact.resolveShape(model.api);
 		let budget =
 			(INLINE_IMAGE_BUDGET_BY_PROVIDER[model.provider] ?? DEFAULT_INLINE_IMAGE_BUDGET) - countContextImages(context);
 		if (budget <= 0) return context;
@@ -122,7 +117,7 @@ export class SnapcompactInlineTransformer {
 					.join("\n");
 				const textTokens = countTokens(text);
 				if (textTokens < MIN_TOOL_RESULT_TOKENS) continue;
-				const needed = snapcompactFrameCount(text, { shape });
+				const needed = snapcompact.frames(text, { shape });
 				if (needed === 0 || needed > budget) continue;
 				if (!passesSavingsGate(needed, shape, textTokens)) continue;
 				const frames = this.#framesFor(this.#toolCache, message.toolCallId, text, shape);
@@ -140,7 +135,7 @@ export class SnapcompactInlineTransformer {
 		let systemPrompt = context.systemPrompt;
 		if (this.options.renderSystemPrompt && context.systemPrompt?.length && budget > 0) {
 			const joined = context.systemPrompt.join("\n\n");
-			const needed = snapcompactFrameCount(joined, { shape });
+			const needed = snapcompact.frames(joined, { shape });
 			const userIndex = messages.findIndex(message => message.role === "user");
 			if (
 				needed > 0 &&
@@ -154,7 +149,7 @@ export class SnapcompactInlineTransformer {
 				if (!cached || cached.hash !== hash) {
 					cached = {
 						hash,
-						frames: renderSnapcompactFrames(joined, { shape, maxFrames: MAX_SYSTEM_PROMPT_FRAMES }),
+						frames: snapcompact.renderMany(joined, { shape, maxFrames: MAX_SYSTEM_PROMPT_FRAMES }),
 					};
 					this.#systemCache = cached;
 				}
@@ -176,11 +171,16 @@ export class SnapcompactInlineTransformer {
 		return { ...context, systemPrompt, messages };
 	}
 
-	#framesFor(cache: Map<string, FrameCacheEntry>, key: string, text: string, shape: SnapcompactShape): ImageContent[] {
+	#framesFor(
+		cache: Map<string, FrameCacheEntry>,
+		key: string,
+		text: string,
+		shape: snapcompact.Shape,
+	): ImageContent[] {
 		const hash = Bun.hash(text);
 		const cached = cache.get(key);
 		if (cached && cached.hash === hash) return cached.frames;
-		const frames = renderSnapcompactFrames(text, { shape });
+		const frames = snapcompact.renderMany(text, { shape });
 		cache.set(key, { hash, frames });
 		return frames;
 	}

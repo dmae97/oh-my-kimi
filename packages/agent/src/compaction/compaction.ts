@@ -21,7 +21,7 @@ import {
 import { clampThinkingLevelForModel } from "@oh-my-pi/pi-catalog/model-thinking";
 import { countTokens } from "@oh-my-pi/pi-natives";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
-import { SNAPCOMPACT_FRAME_TOKEN_ESTIMATE } from "@oh-my-pi/snapcompact";
+import * as snapcompact from "@oh-my-pi/snapcompact";
 import { type AgentTelemetry, instrumentedCompleteSimple } from "../telemetry";
 import { ThinkingLevel } from "../thinking";
 import type { AgentMessage } from "../types";
@@ -327,7 +327,7 @@ export function estimateTokens(message: AgentMessage): number {
 			fragments.push(message.summary);
 			if (message.role === "compactionSummary" && message.images) {
 				// Snapcompact frames render at ≥1568px; providers bill the downscaled cap.
-				extra += message.images.length * SNAPCOMPACT_FRAME_TOKEN_ESTIMATE;
+				extra += message.images.length * snapcompact.FRAME_TOKEN_ESTIMATE;
 			}
 			break;
 		}

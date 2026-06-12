@@ -201,7 +201,7 @@ describe("SnapcompactInlineTransformer", () => {
 	});
 
 	it("caches renders across turns: identical input does not re-rasterize", () => {
-		const spy = spyOn(snapcompact, "renderSnapcompactFrames");
+		const spy = spyOn(snapcompact, "renderMany");
 		try {
 			const transformer = new SnapcompactInlineTransformer({ renderSystemPrompt: true, renderToolResults: true });
 			const context = makeContext();
