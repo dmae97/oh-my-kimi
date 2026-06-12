@@ -85,29 +85,34 @@ async function resolveWindowsCommandPath(
 	env: Record<string, string | undefined>,
 ): Promise<string | null> {
 	const extensions = getWindowsPathExt(env);
-	const candidates = hasExecutableExtension(command, extensions)
-		? [command]
-		: extensions.map(ext => `${command}${ext}`);
+	const hasExt = hasExecutableExtension(command, extensions);
+	const candidates = hasExt ? [command] : extensions.map(ext => `${command}${ext}`);
 
 	if (hasPathSegment(command)) {
 		for (const candidate of candidates) {
 			const resolved = path.isAbsolute(candidate) ? candidate : path.resolve(cwd, candidate);
 			if (await fileExists(resolved)) return resolved;
 		}
-		return hasExecutableExtension(command, extensions) ? command : null;
+		return hasExt ? command : null;
 	}
 
+	// Match cmd.exe's lookup order for an unqualified name: current directory
+	// first, then PATH. Skipping cwd would launch a global shim instead of a
+	// project-local one with the same name.
+	const searchDirs = [cwd];
 	const pathValue = getCaseInsensitiveEnv(env, "PATH");
 	if (pathValue) {
 		for (const dir of pathValue.split(";")) {
-			if (!dir) continue;
-			for (const candidate of candidates) {
-				const resolved = path.join(dir, candidate);
-				if (await fileExists(resolved)) return resolved;
-			}
+			if (dir) searchDirs.push(dir);
 		}
 	}
-	return hasExecutableExtension(command, extensions) ? command : null;
+	for (const dir of searchDirs) {
+		for (const candidate of candidates) {
+			const resolved = path.join(dir, candidate);
+			if (await fileExists(resolved)) return resolved;
+		}
+	}
+	return hasExt ? command : null;
 }
 
 function resolveWindowsShimPath(value: string, shimDir: string): string | null {
