@@ -144,12 +144,24 @@ fn filter_release_list(input: &str) -> Option<String> {
 	let mut lines = input.lines().peekable();
 	let mut filtered = String::new();
 
-	// Skip "Showing N releases..." preamble and blank lines until header
+	// Skip "Showing N releases..." preamble and blank lines until header.
+	// Parse the total count from the preamble line if present.
+	let mut total: Option<usize> = None;
 	while let Some(line) = lines.peek() {
 		let trimmed = line.trim();
 		if trimmed.starts_with("Name\t") || trimmed.starts_with("NAME\t") {
 			lines.next(); // consume header
 			break;
+		}
+		// Parse "Showing N releases on owner/repo." or similar
+		if total.is_none() {
+			if let Some(rest) = trimmed.strip_prefix("Showing ") {
+				if let Some(n_str) = rest.split_whitespace().next() {
+					if let Ok(n) = n_str.parse::<usize>() {
+						total = Some(n);
+					}
+				}
+			}
 		}
 		lines.next();
 	}
@@ -157,7 +169,8 @@ fn filter_release_list(input: &str) -> Option<String> {
 	filtered.push_str("Releases\n");
 
 	let mut count = 0;
-	for line in lines {
+	let mut has_more = false;
+	for line in &mut lines {
 		let trimmed = line.trim();
 		if trimmed.is_empty() {
 			continue;
@@ -166,6 +179,12 @@ fn filter_release_list(input: &str) -> Option<String> {
 		let parts: Vec<&str> = trimmed.split('\t').collect();
 		if parts.len() < 3 {
 			continue;
+		}
+
+		if count >= 20 {
+			// We've already emitted 20 rows and found a 21st valid row.
+			has_more = true;
+			break;
 		}
 
 		let name = parts[0].trim();
@@ -179,13 +198,19 @@ fn filter_release_list(input: &str) -> Option<String> {
 		}
 
 		count += 1;
-		if count >= 20 {
-			break;
-		}
 	}
 
 	if count == 0 {
 		return None;
+	}
+
+	// Append omission marker when there are more releases than shown.
+	let omitted = total.map(|t| t.saturating_sub(count)).unwrap_or(0);
+	if omitted > 0 {
+		filtered.push_str(&format!("… {} releases omitted …\n", omitted));
+	} else if has_more {
+		// Total not parsed from preamble but a 21st row was observed; signal truncation.
+		filtered.push_str("… releases omitted (showing first 20) …\n");
 	}
 
 	Some(filtered)
@@ -616,5 +641,25 @@ section_end:1711234600:build_script[0K
 
 		// Empty input passes through (no change)
 		assert!(!out.changed);
+	}
+
+	#[test]
+	fn release_list_marks_omitted_when_over_cap() {
+		// Build input with 25 releases so the cap of 20 is exceeded.
+		let mut input = String::from("Showing 25 releases on owner/repo.\n\nName\tTag\tCreated\n");
+		for i in 1..=25 {
+			input.push_str(&format!("Release {i}\tv{i}.0.0\t{i} days ago\n"));
+		}
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = test_ctx(Some("release"), "glab release list", &cfg);
+
+		let out = filter(&ctx, &input, 0);
+
+		assert!(out.changed);
+		// Output must signal that releases were omitted.
+		assert!(out.text.contains("omitted"), "expected omission marker, got: {}", out.text);
+		// First release present, 21st not shown verbatim in the list.
+		assert!(out.text.contains("Release 1"));
+		assert!(!out.text.contains("Release 21 ["));
 	}
 }
