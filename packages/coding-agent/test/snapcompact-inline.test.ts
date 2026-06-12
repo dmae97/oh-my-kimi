@@ -149,6 +149,18 @@ describe("SnapcompactInlineTransformer", () => {
 		const result = transformer.transform(context, makeModel());
 		expect(result.messages[1]).toBe(withImage);
 	});
+	it("leaves error tool results text-only even when they are large", () => {
+		const transformer = new SnapcompactInlineTransformer({ renderSystemPrompt: "none", renderToolResults: true });
+		const errorResult: ToolResultMessage = { ...toolResult("call_error", LARGE), isError: true };
+		const context: Context = {
+			messages: [userMessage("hi"), errorResult, toolResult("call_tail", LARGE)],
+		};
+		const result = transformer.transform(context, makeModel());
+		expect(result).toBe(context);
+		expect(result.messages[1]).toBe(errorResult);
+		expect(errorResult.content.every(block => block.type === "text")).toBe(true);
+		expect(imageCount(result)).toBe(0);
+	});
 
 	it("replaces a large system prompt with a stub and rides frames on the first user message", () => {
 		const transformer = new SnapcompactInlineTransformer({ renderSystemPrompt: "all", renderToolResults: false });
@@ -321,7 +333,7 @@ describe("planInlineSwaps", () => {
 		expect(plan.toolResults.map(swap => swap.id)).toEqual(["a"]);
 	});
 
-	it("skips image-carrying, below-floor, and below-margin candidates", () => {
+	it("skips error, image-carrying, below-floor, and below-margin candidates", () => {
 		const plan = planInlineSwaps({
 			options: toolOnly,
 			shape,
@@ -331,6 +343,7 @@ describe("planInlineSwaps", () => {
 				{ id: "small", textTokens: 2999, frames: 1, hasImage: false },
 				// 2 frames ≈ 6600 image tokens > 7000 * 0.9 — margin gate rejects.
 				{ id: "margin", textTokens: 7000, frames: 2, hasImage: false },
+				{ id: "err", textTokens: 10000, frames: 2, hasImage: false, isError: true },
 				{ id: "ok", textTokens: 10000, frames: 2, hasImage: false },
 				{ id: "last", textTokens: 10000, frames: 2, hasImage: false },
 			],

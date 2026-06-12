@@ -123,14 +123,16 @@ function selectSystemPromptImageTarget(
 
 /** Tool-result swap candidate, in context order. */
 export interface InlineToolResultCandidate {
-	/** toolCallId — stable identity for render caching and application. */
+	/** Stable identifier for rendering cache key and applying the swap. */
 	id: string;
-	/** Token count of the joined text blocks (0 when empty or image-carrying). */
+	/** Token count of the joined text blocks (0 for empty or image-carrying). */
 	textTokens: number;
-	/** Frames needed to render the text (0 = empty or below the token floor). */
+	/** Frames needed to render the text (0 = empty, below floor, image-carrying, or error). */
 	frames: number;
 	/** Already carries an image (screenshot etc.) — never re-imaged. */
 	hasImage: boolean;
+	/** Error tool results must stay text-only for provider API validation. */
+	isError?: boolean;
 }
 
 export interface InlineSystemPromptCandidate {
@@ -173,6 +175,7 @@ export function planInlineSwaps(input: InlinePlanInput): InlineSwapPlan {
 		for (let k = 0; k < input.toolResults.length - 1 && budget > 0; k++) {
 			const candidate = input.toolResults[k];
 			if (candidate.hasImage) continue;
+			if (candidate.isError) continue;
 			if (candidate.textTokens < MIN_TOOL_RESULT_TOKENS) continue;
 			if (candidate.frames === 0 || candidate.frames > budget) continue;
 			if (!passesSavingsGate(candidate.frames, input.shape, candidate.textTokens)) continue;
@@ -211,6 +214,7 @@ export interface InlineMessageView {
 	role: string;
 	toolCallId?: string;
 	content?: unknown;
+	isError?: boolean;
 }
 
 export interface SnapcompactSavingsEstimate {
@@ -280,6 +284,7 @@ export function estimateInlineSavings(input: {
 	if (options.renderToolResults) {
 		for (const message of input.messages) {
 			if (message.role !== "toolResult" || typeof message.toolCallId !== "string") continue;
+			if (message.isError) continue;
 			const blocks: BlockViews = Array.isArray(message.content) ? (message.content as BlockViews) : [];
 			const hasImage = blocks.some(block => block.type === "image");
 			const text = hasImage
@@ -418,6 +423,7 @@ export class SnapcompactInlineTransformer {
 				liveToolCallIds.add(message.toolCallId);
 				// Don't re-image results that already carry images (screenshots etc.).
 				const hasImage = message.content.some(block => block.type === "image");
+				if (message.isError) continue;
 				const text = hasImage
 					? ""
 					: message.content
