@@ -304,6 +304,92 @@ describe("SettingsList", () => {
 		expect(flat).not.toContain("[dim-heading]");
 	});
 
+	it("section focus routes arrows to section jumps, Enter drops into items, Esc exits without cancelling", () => {
+		const changes: Array<[string, string]> = [];
+		let cancelled = 0;
+		const list = new SettingsList(
+			sectionedItems(),
+			10,
+			testTheme,
+			(id, value) => {
+				changes.push([id, value]);
+			},
+			() => {
+				cancelled++;
+			},
+		);
+
+		expect(list.hasSectionFocusTargets()).toBe(true);
+		expect(list.toggleSectionFocus()).toBe(true);
+
+		// Down jumps a whole section (Group A → Group B), not one row.
+		list.handleInput("\x1b[B");
+		expect(list.getSelectedItem()?.id).toBe("beta");
+
+		// Enter returns focus to the rows without activating the setting…
+		list.handleInput("\n");
+		expect(list.sectionFocused).toBe(false);
+		expect(changes).toEqual([]);
+
+		// …after which Enter cycles the value again.
+		list.handleInput("\n");
+		expect(changes).toEqual([["beta", "on"]]);
+
+		// Esc exits section focus instead of cancelling the list.
+		list.toggleSectionFocus();
+		list.handleInput("\x1b");
+		expect(list.sectionFocused).toBe(false);
+		expect(cancelled).toBe(0);
+	});
+
+	it("section focus cannot engage without sections and drops when a filter removes them", () => {
+		const flat = new SettingsList(
+			[{ id: "only", label: "Only", currentValue: "off", values: ["off", "on"] }],
+			5,
+			testTheme,
+			() => {},
+			() => {},
+		);
+		expect(flat.hasSectionFocusTargets()).toBe(false);
+		expect(flat.toggleSectionFocus()).toBe(false);
+
+		const list = new SettingsList(
+			sectionedItems(),
+			10,
+			testTheme,
+			() => {},
+			() => {},
+		);
+		list.toggleSectionFocus();
+		for (const ch of "alpha") list.handleInput(ch);
+		expect(list.sectionFocused).toBe(false);
+	});
+
+	it("moves the cursor glyph to the active section while section-focused", () => {
+		const list = new SettingsList(
+			sectionedItems(),
+			10,
+			testTheme,
+			() => {},
+			() => {},
+		);
+
+		const unfocused = list.render(120).join("\n");
+		expect(unfocused).not.toContain("→ Group A");
+		expect(unfocused).toContain("→ Alpha");
+
+		list.toggleSectionFocus();
+		// Split layout: the sidebar entry carries the cursor and the row cursor hides.
+		const split = list.render(120).join("\n");
+		expect(split).toContain("→ Group A");
+		expect(split).not.toContain("→ Alpha");
+
+		// Flat layout: the active heading row carries the cursor instead.
+		const flat = list.render(60).join("\n");
+		expect(flat).toContain("→ Group A");
+		expect(flat).not.toContain("→ Alpha");
+	});
+
 	it("falls back to inline heading rows when the width cannot fit the sidebar", () => {
 		const list = new SettingsList(
 			sectionedItems(),
@@ -353,5 +439,117 @@ describe("SettingsList", () => {
 			["item5", "on"],
 			["item11", "on"],
 		]);
+	});
+
+	it("moves the selection with wheel events and reports it via onSelectionChange", () => {
+		const list = new SettingsList(
+			sectionedItems(),
+			10,
+			testTheme,
+			() => {},
+			() => {},
+		);
+		const seen: Array<string | undefined> = [];
+		list.onSelectionChange = item => seen.push(item?.id);
+
+		expect(list.getSelectedItem()?.id).toBe("alpha");
+		list.handleWheel(1);
+		expect(list.getSelectedItem()?.id).toBe("alpha2");
+		list.handleWheel(-1);
+		expect(list.getSelectedItem()?.id).toBe("alpha");
+		expect(seen).toEqual(["alpha2", "alpha"]);
+	});
+
+	it("hit-tests pane rows to items and sidebar rows to section jump targets", () => {
+		const list = new SettingsList(
+			sectionedItems(),
+			10,
+			testTheme,
+			() => {},
+			() => {},
+		);
+
+		// Split layout (wide): line 0 col 0 is the "Group A" sidebar row →
+		// resolves to that section's first item for clicks, but never for hover.
+		list.render(120);
+		expect(list.hitTest(0, 0)).toBe("alpha");
+		expect(list.hoverTest(0, 0)).toBeUndefined();
+		// Sidebar row 1 (Group B) resolves to its first item.
+		expect(list.hitTest(1, 0)).toBe("beta");
+		// Pane rows resolve to the item they render: row 0 is the Group A
+		// heading (not clickable), row 1 is Alpha.
+		const paneCol = 40;
+		expect(list.hitTest(0, paneCol)).toBeUndefined();
+		expect(list.hitTest(1, paneCol)).toBe("alpha");
+		expect(list.hoverTest(1, paneCol)).toBe("alpha");
+
+		// Flat layout (narrow): same rows, no sidebar region.
+		list.render(60);
+		expect(list.hitTest(0, 0)).toBeUndefined(); // heading row
+		expect(list.hitTest(1, 0)).toBe("alpha");
+	});
+
+	it("selects an item by id and resizes its viewport via setMaxVisible", () => {
+		const items = Array.from({ length: 12 }, (_, i) => ({
+			id: `item${i}`,
+			label: `Item ${i}`,
+			currentValue: "off",
+			values: ["off", "on"] as string[],
+		}));
+		const list = new SettingsList(
+			items,
+			5,
+			testTheme,
+			() => {},
+			() => {},
+		);
+
+		expect(list.selectItem("item9")).toBe(true);
+		expect(list.getSelectedItem()?.id).toBe("item9");
+		expect(list.selectItem("missing")).toBe(false);
+
+		// A taller viewport renders more item rows (flat list, no sections).
+		const before = list.render(60).join("\n");
+		expect(before).not.toContain("Item 0\u0020");
+		list.setMaxVisible(12);
+		const after = list.render(60).join("\n");
+		expect(after).toContain("Item 0");
+		expect(after).toContain("Item 11");
+	});
+
+	it("routes mouse events into an open submenu", () => {
+		const routed: Array<[number, number, boolean]> = [];
+		const submenu = {
+			render: () => ["submenu line"],
+			routeMouse: (event: { leftClick: boolean }, line: number, col: number) => {
+				routed.push([line, col, event.leftClick]);
+			},
+		};
+		const list = new SettingsList(
+			[
+				{
+					id: "picker",
+					label: "Picker",
+					currentValue: "x",
+					submenu: () => submenu,
+				},
+			],
+			5,
+			testTheme,
+			() => {},
+			() => {},
+		);
+
+		// No submenu open yet: nothing to route to.
+		expect(list.routeSubmenuMouse({ leftClick: true } as never, 0, 0)).toBe(false);
+
+		list.handleInput("\n"); // open the submenu
+		expect(list.hasOpenSubmenu()).toBe(true);
+		// Open submenu swallows hit-testing for the outer rows.
+		list.render(60);
+		expect(list.hitTest(0, 0)).toBeUndefined();
+
+		expect(list.routeSubmenuMouse({ leftClick: true } as never, 2, 7)).toBe(true);
+		expect(routed).toEqual([[2, 7, true]]);
 	});
 });

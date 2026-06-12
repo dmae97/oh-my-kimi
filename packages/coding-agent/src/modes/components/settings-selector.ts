@@ -359,8 +359,11 @@ export class SettingsSelectorComponent implements Component {
 		if (this.#currentTabId === "plugins") {
 			return "Tab to switch tabs · Esc to close";
 		}
-		const jump = this.#hasSectionJump ? "PgUp/PgDn to jump sections · " : "";
-		return `Enter/Space to change · ${jump}Tab to switch tabs · Type to search · Esc to close`;
+		if (this.#currentList?.sectionFocused) {
+			return "↑/↓ to jump sections · Tab/Enter to settings · ←/→ to switch tabs · Esc to close";
+		}
+		const nav = this.#hasSectionJump ? "Tab to jump sections · ←/→ to switch tabs" : "Tab to switch tabs";
+		return `Enter/Space to change · ${nav} · Type to search · Esc to close`;
 	}
 
 	/** Single-line search banner: accent icon, bold query + caret, right-aligned match count. */
@@ -987,12 +990,17 @@ export class SettingsSelectorComponent implements Component {
 			return;
 		}
 
-		if (
-			matchesKey(data, "tab") ||
-			matchesKey(data, "shift+tab") ||
-			matchesKey(data, "left") ||
-			matchesKey(data, "right")
-		) {
+		// Tab toggles keyboard focus between section headings and setting rows
+		// (fast section hopping); tabs without sections keep Tab switching tabs.
+		if (matchesKey(data, "tab") || matchesKey(data, "shift+tab")) {
+			if (this.#currentList?.hasSectionFocusTargets()) {
+				this.#currentList.toggleSectionFocus();
+				return;
+			}
+			this.#tabBar.handleInput(data);
+			return;
+		}
+		if (matchesKey(data, "left") || matchesKey(data, "right")) {
 			this.#tabBar.handleInput(data);
 			return;
 		}

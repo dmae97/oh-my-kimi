@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
 - Added `SettingsList.sidebarWidth` option for a fixed split-layout sidebar width
@@ -11,16 +12,19 @@
 - Added exported SGR mouse utilities `parseSgrMouse`, `SgrMouseEvent`, and `MouseRoutable`
 - Added section support to `SettingsList`: `SettingItem.heading` rows split the list into sections, PgUp/PgDn (`tui.select.pageUp`/`pageDown`) jump between sections (or page when none exist), and wide renders use a split layout — section sidebar on the left, the active section's items on the right — falling back to inline heading rows when the width cannot fit both panes. Headings are skipped by navigation, excluded from search, and styled through the optional `SettingsListTheme.heading` (which receives a `dimmed` flag for headings outside the active section) and `section`.
 - Added a host-integration surface to `SettingsList`: a `SettingsListOptions` constructor arg (`layout` to force the flat layout, `typeToSearch: false` to hand the query to a parent, `emptyText`, `hint`), `selectItem(id)`, `getSelectedItem()`, `onSelectionChange`, `hasOpenSubmenu()`, and the exported `getSettingItemFilterText` helper.
+- Added keyboard section focus to `SettingsList`: `toggleSectionFocus()` / `sectionFocused` / `hasSectionFocusTargets()` flip Up/Down between row navigation and whole-section jumps — the cursor glyph parks on the active sidebar entry (or the active heading row in the flat layout) while the row cursor hides, Enter/Esc drop focus back to the rows, and any explicit row selection (`selectItem`, wheel, filtering) exits it.
 - Added muted tabs to `TabBar` (`Tab.muted` + `TabBarTheme.mutedTab`, skipped by keyboard navigation), `setTabs(tabs, activeId?)`/`setActiveById(id)` for re-rendering the strip without firing `onTabChange`, an optional empty label (drops the `Label:` prefix), and a `showHint` switch for the trailing "(tab to cycle)" hint.
 
 ### Changed
 
+- Changed `SettingsList` section-focused keyboard handling so `Up`/`Down` now jump between sections and `Enter`/`Escape` exit section focus before confirming or cancelling a setting
 - Changed `SettingsList` split layout at wide widths to render the full list in the right pane and dim items outside the active section instead of showing only the active-section rows
 - Changed `SettingsList` to omit the default hint row (and preceding blank line) when `options.hint` is set to an empty string
 - Changed tab-bar overflow handling to collapse tabs to their `short` forms before wrapping to multiple lines
 
 ### Fixed
 
+- Fixed `SettingsList` to clear section-focus state when filtering items, changing data, scrolling with the mouse wheel, or selecting by ID so stale heading focus does not persist across interactions
 - `SettingsList` now renders every state — list, open submenu, filtered results, empty — at one stable height, so interacting with a bottom-anchored settings panel no longer resizes the live terminal region on each keystroke (which forced re-anchoring and could strand stale scrollback rows).
 
 ## [15.11.3] - 2026-06-11

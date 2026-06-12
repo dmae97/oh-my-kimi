@@ -100,6 +100,7 @@ export class SettingsList implements Component {
 	#onCancel: () => void;
 	#options: SettingsListOptions;
 	#filterQuery = "";
+	#sectionFocus = false;
 	#lastNotifiedSelectionId: string | undefined;
 
 	/** Fired when the selected item changes (navigation, filtering, or setItems). */
@@ -143,9 +144,30 @@ export class SettingsList implements Component {
 	selectItem(id: string): boolean {
 		const index = this.#filteredItems.findIndex(item => !item.heading && item.id === id);
 		if (index === -1) return false;
+		this.#sectionFocus = false;
 		this.#selectedIndex = index;
 		this.#notifySelection();
 		return true;
+	}
+
+	/** True while keyboard focus is on the section headings instead of the setting rows. */
+	get sectionFocused(): boolean {
+		return this.#sectionFocus;
+	}
+
+	/** Whether section focus has anywhere to go: 2+ derived sections in the current view. */
+	hasSectionFocusTargets(): boolean {
+		return this.#sections().length >= 2;
+	}
+
+	/**
+	 * Toggle keyboard focus between section headings and setting rows. While
+	 * focused, Up/Down jump whole sections and Enter/Esc return to the rows.
+	 * Engages only when {@link hasSectionFocusTargets}; returns the new state.
+	 */
+	toggleSectionFocus(): boolean {
+		this.#sectionFocus = !this.#sectionFocus && this.hasSectionFocusTargets();
+		return this.#sectionFocus;
 	}
 
 	/** True while an item submenu owns input. */
@@ -171,6 +193,8 @@ export class SettingsList implements Component {
 	/** Move the selection one step for a wheel notch. */
 	handleWheel(delta: -1 | 1): void {
 		if (this.#submenuComponent) return;
+		// Wheel is row-level interaction: it returns focus to the rows.
+		this.#sectionFocus = false;
 		this.#moveSelection(delta);
 	}
 
@@ -250,6 +274,7 @@ export class SettingsList implements Component {
 		const selectedId = this.#filteredItems[this.#selectedIndex]?.id;
 		this.#items = items;
 		this.#applyFilter();
+		if (this.#sectionFocus && !this.hasSectionFocusTargets()) this.#sectionFocus = false;
 
 		const nextIndex = selectedId ? this.#filteredItems.findIndex(item => item.id === selectedId) : -1;
 		if (nextIndex >= 0) {
@@ -262,6 +287,7 @@ export class SettingsList implements Component {
 
 	#setFilter(filter: string): void {
 		this.#filterQuery = filter;
+		if (filter.trim()) this.#sectionFocus = false;
 		this.#applyFilter();
 		this.#selectedIndex = this.#firstSelectableIndex();
 		this.#notifySelection();
@@ -432,12 +458,22 @@ export class SettingsList implements Component {
 		return this.#padLines(this.#renderMainList(width));
 	}
 
-	#renderItemRow(item: SettingItem, index: number, maxLabelWidth: number, rowWidth: number, dimmed = false): string {
+	#renderItemRow(
+		item: SettingItem,
+		index: number,
+		maxLabelWidth: number,
+		rowWidth: number,
+		dimmed = false,
+		headingCursor = false,
+	): string {
 		if (item.heading) {
 			const headingStyle = this.#theme.heading ?? ((text: string) => this.#theme.hint(text));
-			return truncateToWidth(`  ${headingStyle(item.label, dimmed)}`, Math.max(0, rowWidth));
+			const prefix = headingCursor ? this.#theme.cursor : "  ";
+			return truncateToWidth(`${prefix}${headingStyle(item.label, dimmed)}`, Math.max(0, rowWidth));
 		}
-		const isSelected = index === this.#selectedIndex;
+		// While section focus owns the keyboard, the row cursor hides so the
+		// section cursor is the single focus indicator.
+		const isSelected = index === this.#selectedIndex && !this.#sectionFocus;
 		const prefix = isSelected ? this.#theme.cursor : "  ";
 		const prefixWidth = visibleWidth(prefix);
 		const labelPadded = item.label + padding(Math.max(0, maxLabelWidth - visibleWidth(item.label)));
@@ -500,8 +536,19 @@ export class SettingsList implements Component {
 			const itemRowsOverflow = this.#filteredItems.length > viewportHeight;
 			const itemRowWidth = Math.max(0, width - (itemRowsOverflow ? 1 : 0));
 			const visibleItems = this.#filteredItems.slice(startIndex, startIndex + viewportHeight);
+			// In the flat layout the active section's heading row carries the
+			// section-focus cursor (the split layout shows it in the sidebar).
+			const active = sections[this.#activeSectionIndex(sections)];
+			const focusedHeadingIndex = this.#sectionFocus && active?.name ? active.firstItemIndex - 1 : -1;
 			const itemRows = visibleItems.map((item, index) =>
-				this.#renderItemRow(item, startIndex + index, maxLabelWidth, itemRowWidth),
+				this.#renderItemRow(
+					item,
+					startIndex + index,
+					maxLabelWidth,
+					itemRowWidth,
+					false,
+					startIndex + index === focusedHeadingIndex,
+				),
 			);
 			visibleItems.forEach((item, index) => {
 				this.#hitRows[index] = item.heading ? undefined : item.id;
@@ -579,7 +626,9 @@ export class SettingsList implements Component {
 				isActive ? this.#theme.label(text, true, false) : this.#theme.hint(text));
 		const sidebarRows = sectionNames.map((name, i) => {
 			const label = truncateToWidth(name, sidebarWidth - 4, Ellipsis.Omit);
-			return `  ${sectionStyle(label, i === activeIndex)}${padding(sidebarWidth - 2 - visibleWidth(label))}`;
+			// Section focus parks the cursor glyph on the active sidebar entry.
+			const prefix = this.#sectionFocus && i === activeIndex ? this.#theme.cursor : "  ";
+			return `${prefix}${sectionStyle(label, i === activeIndex)}${padding(sidebarWidth - visibleWidth(prefix) - visibleWidth(label))}`;
 		});
 
 		// Right pane: the whole list, continuously scrollable. The active
@@ -651,6 +700,10 @@ export class SettingsList implements Component {
 				this.clearSearch();
 				return;
 			}
+			if (this.#sectionFocus) {
+				this.#sectionFocus = false;
+				return;
+			}
 			this.#onCancel();
 			return;
 		}
@@ -662,15 +715,19 @@ export class SettingsList implements Component {
 		if (this.#filteredItems.length === 0) return;
 
 		if (kb.matches(data, "tui.select.up")) {
-			this.#moveSelection(-1);
+			if (this.#sectionFocus) this.#jumpSection(-1);
+			else this.#moveSelection(-1);
 		} else if (kb.matches(data, "tui.select.down")) {
-			this.#moveSelection(1);
+			if (this.#sectionFocus) this.#jumpSection(1);
+			else this.#moveSelection(1);
 		} else if (kb.matches(data, "tui.select.pageDown")) {
 			this.#jumpSection(1);
 		} else if (kb.matches(data, "tui.select.pageUp")) {
 			this.#jumpSection(-1);
 		} else if (kb.matches(data, "tui.select.confirm") || data === " " || data === "\n") {
-			this.#activateItem();
+			// Confirm on a focused heading drops into its first setting.
+			if (this.#sectionFocus) this.#sectionFocus = false;
+			else this.#activateItem();
 		}
 	}
 

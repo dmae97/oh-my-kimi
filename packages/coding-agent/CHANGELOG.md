@@ -6,6 +6,7 @@
 ### Fixed
 
 - Fixed local memory consolidation on Responses-style models that reject user-only requests by sending a dedicated stage-two system prompt.
+
 ### Added
 
 - Added mouse-driven interaction to `/settings`, including tab and setting row hover highlighting, wheel scrolling, and left-click activation for entries and submenus
@@ -15,6 +16,8 @@
 
 ### Changed
 
+- Changed `/settings` keyboard navigation so `Tab` and `Shift+Tab` toggle focus between section headings and setting rows in sectioned lists, with `↑/↓` jumping sections, `←/→` switching tabs, and status text reflecting the active controls
+- Updated `/settings` on-screen navigation hints to match the new section-focus behavior (`↑/↓` and `Tab/Enter`) and tab-switching arrows
 - Changed `/settings` to open as a full-screen overlay on the alternate screen so it no longer shares space with the underlying transcript
 - Codex, Gemini, and Perplexity web search now route their OAuth bearers through the new `withOAuthAccess` driver: a 401 or usage-limit force-refreshes the same account and then rotates to a sibling instead of failing the search, while identity metadata (`chatgpt-account-id`, Google `projectId`) is re-derived from the refreshed credential on every retry.
 - Kagi web search, the xAI TTS tool, and model-discovery list fetches now resolve their bearers through `withAuth` with an auth-storage resolver instead of a one-shot key snapshot, gaining the same force-refresh + rotate retry on 401.
@@ -24,6 +27,7 @@
 - Restyled the `/settings` chrome: the tab strip moved below the content as a label-less footer, the panel keeps one constant height across navigation, value changes, and submenus (no more viewport jumps after each change), and typing now runs a global cross-tab search — results group under per-tab headings, the footer shows live match counts with non-matching tabs muted, Tab hops between matching tabs, and Esc exits search landing on the selected result's tab.
 - Normalized `/settings` labels and descriptions: consistent Title Case labels (e.g. "Todo Auto-Clear Delay", "GitHub View Cache"), uniform unit placement, articles and verb-first phrasing in descriptions ("If false…"/"Whether to…" rewritten), and a stale browser-tool description (Ulixee Hero) corrected to the actual puppeteer/Chromium implementation.
 - `/settings` section headings are now underlined — the active section's heading stays bold, and headings outside the active section render dim with the same underline — so section boundaries read at a glance.
+- `/settings`: Tab now toggles keyboard focus between section headings and the setting rows — while headings are focused, ↑/↓ jump whole sections and Enter/Esc drop back into the rows — instead of cycling tabs. ←/→ still switch tabs everywhere, tabs without sections (e.g. Plugins) keep Tab as tab-switching, and the footer hint follows the focus state.
 - Image-generation (Antigravity, xAI, OpenRouter, Gemini) and xAI TTS request failures now throw pi-ai's typed `ProviderHttpError` carrying status and response headers instead of `Object.assign`-patched `Error`s.
 - Collapsed bash, ssh, and eval previews now cap the command/code section to a viewport-sized tail window (terminal rows minus a chrome reserve) that renders identically while streaming and after completion, with `ctrl+o` as the only way to uncap. Previously bash/ssh capped the command only while streaming and snapped it fully open the moment the tool finished, and eval never capped cell code at all.
 
