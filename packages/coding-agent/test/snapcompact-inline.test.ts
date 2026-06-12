@@ -79,13 +79,13 @@ function imageCount(context: Context): number {
 
 describe("SnapcompactInlineTransformer", () => {
 	it("is a no-op for text-only models", () => {
-		const transformer = new SnapcompactInlineTransformer({ renderSystemPrompt: true, renderToolResults: true });
+		const transformer = new SnapcompactInlineTransformer({ renderSystemPrompt: "all", renderToolResults: true });
 		const context = makeContext();
 		expect(transformer.transform(context, makeModel({ input: ["text"] }))).toBe(context);
 	});
 
 	it("images large historical tool results, keeping small and most-recent ones as text", () => {
-		const transformer = new SnapcompactInlineTransformer({ renderSystemPrompt: false, renderToolResults: true });
+		const transformer = new SnapcompactInlineTransformer({ renderSystemPrompt: "none", renderToolResults: true });
 		const context = makeContext();
 		const result = transformer.transform(context, makeModel());
 
@@ -109,7 +109,7 @@ describe("SnapcompactInlineTransformer", () => {
 	});
 
 	it("never mutates the input context (persisted history shares these references)", () => {
-		const transformer = new SnapcompactInlineTransformer({ renderSystemPrompt: true, renderToolResults: true });
+		const transformer = new SnapcompactInlineTransformer({ renderSystemPrompt: "all", renderToolResults: true });
 		const context = makeContext();
 		const originalMessages = context.messages;
 		const originalSystemPrompt = context.systemPrompt;
@@ -128,7 +128,7 @@ describe("SnapcompactInlineTransformer", () => {
 	});
 
 	it("leaves tool results that already carry images untouched", () => {
-		const transformer = new SnapcompactInlineTransformer({ renderSystemPrompt: false, renderToolResults: true });
+		const transformer = new SnapcompactInlineTransformer({ renderSystemPrompt: "none", renderToolResults: true });
 		const withImage: ToolResultMessage = {
 			...toolResult("call_img", LARGE),
 			content: [
@@ -144,7 +144,7 @@ describe("SnapcompactInlineTransformer", () => {
 	});
 
 	it("replaces a large system prompt with a stub and rides frames on the first user message", () => {
-		const transformer = new SnapcompactInlineTransformer({ renderSystemPrompt: true, renderToolResults: false });
+		const transformer = new SnapcompactInlineTransformer({ renderSystemPrompt: "all", renderToolResults: false });
 		const longPrompt = denseText(3000);
 		const context: Context = {
 			systemPrompt: [longPrompt],
@@ -164,8 +164,33 @@ describe("SnapcompactInlineTransformer", () => {
 		expect(carrier.content[carrier.content.length - 1]).toEqual({ type: "text", text: "do the thing" });
 	});
 
+	it("moves only loaded context-file instructions when AGENTS.md mode is selected", () => {
+		const transformer = new SnapcompactInlineTransformer({ renderSystemPrompt: "agents-md", renderToolResults: false });
+		const longContext = denseText(3000);
+		const context: Context = {
+			systemPrompt: [
+				`Core instructions.\n\n<context>\nYou MUST follow the context files below for all tasks:\n<file path="AGENTS.md">\n${longContext}\n</file>\n</context>\n\nToday is 2026-06-12.`,
+				"Final system block.",
+			],
+			messages: [userMessage("do the thing")],
+		};
+		const result = transformer.transform(context, makeModel());
+
+		expect(result.systemPrompt).toHaveLength(2);
+		expect(result.systemPrompt![0]).toContain("Core instructions.");
+		expect(result.systemPrompt![0]).toContain("Today is 2026-06-12.");
+		expect(result.systemPrompt![0]).toContain("Loaded context-file instructions were moved");
+		expect(result.systemPrompt![0]).not.toContain(longContext);
+		expect(result.systemPrompt![1]).toBe("Final system block.");
+
+		const carrier = result.messages[0] as { content: (TextContent | ImageContent)[] };
+		expect((carrier.content[0] as TextContent).text).toContain("CONTEXT FILE INSTRUCTIONS");
+		expect(carrier.content.some(block => block.type === "image")).toBe(true);
+		expect(carrier.content[carrier.content.length - 1]).toEqual({ type: "text", text: "do the thing" });
+	});
+
 	it("keeps a small system prompt as text and skips when no user message exists", () => {
-		const transformer = new SnapcompactInlineTransformer({ renderSystemPrompt: true, renderToolResults: false });
+		const transformer = new SnapcompactInlineTransformer({ renderSystemPrompt: "all", renderToolResults: false });
 		const small: Context = { systemPrompt: ["Be terse."], messages: [userMessage("hi")] };
 		expect(transformer.transform(small, makeModel())).toBe(small);
 
@@ -174,7 +199,7 @@ describe("SnapcompactInlineTransformer", () => {
 	});
 
 	it("never rasterizes tool results under the 3k-token floor, even when frames are cheaper", () => {
-		const transformer = new SnapcompactInlineTransformer({ renderSystemPrompt: false, renderToolResults: true });
+		const transformer = new SnapcompactInlineTransformer({ renderSystemPrompt: "none", renderToolResults: true });
 		// ~1.5k tokens: the google shape estimates 1 frame ≈ 1100 tokens, so the
 		// savings gate alone would rasterize this — the floor must keep it text.
 		const midsize = denseText(500);
@@ -186,7 +211,7 @@ describe("SnapcompactInlineTransformer", () => {
 	});
 
 	it("respects the per-provider image budget for unknown providers", () => {
-		const transformer = new SnapcompactInlineTransformer({ renderSystemPrompt: false, renderToolResults: true });
+		const transformer = new SnapcompactInlineTransformer({ renderSystemPrompt: "none", renderToolResults: true });
 		const context: Context = {
 			messages: [
 				userMessage("go"),
@@ -207,7 +232,7 @@ describe("SnapcompactInlineTransformer", () => {
 	it("caches renders across turns: identical input does not re-rasterize", () => {
 		const spy = spyOn(snapcompact, "renderMany");
 		try {
-			const transformer = new SnapcompactInlineTransformer({ renderSystemPrompt: true, renderToolResults: true });
+			const transformer = new SnapcompactInlineTransformer({ renderSystemPrompt: "all", renderToolResults: true });
 			const context = makeContext();
 			const model = makeModel();
 
@@ -232,8 +257,8 @@ describe("SnapcompactInlineTransformer", () => {
 
 describe("planInlineSwaps", () => {
 	const shape = snapcompact.resolveShape("anthropic-messages");
-	const toolOnly = { renderSystemPrompt: false, renderToolResults: true };
-	const promptOnly = { renderSystemPrompt: true, renderToolResults: false };
+	const toolOnly = { renderSystemPrompt: "none" as const, renderToolResults: true };
+	const promptOnly = { renderSystemPrompt: "all" as const, renderToolResults: false };
 
 	it("never swaps the most recent tool result", () => {
 		const plan = planInlineSwaps({
@@ -288,7 +313,7 @@ describe("planInlineSwaps", () => {
 
 	it("gives the system prompt only the budget tool results left over", () => {
 		const input = {
-			options: { renderSystemPrompt: true, renderToolResults: true },
+			options: { renderSystemPrompt: "all" as const, renderToolResults: true },
 			shape,
 			budget: 2,
 			toolResults: [
@@ -334,7 +359,7 @@ describe("planInlineSwaps", () => {
 describe("estimateInlineSavings", () => {
 	it("reports vision-incapable models as inactive with zero savings", () => {
 		const estimate = estimateInlineSavings({
-			options: { renderSystemPrompt: true, renderToolResults: true },
+			options: { renderSystemPrompt: "all", renderToolResults: true },
 			model: makeModel({ input: ["text"] }),
 			systemPrompt: [LARGE],
 			messages: [],
@@ -347,7 +372,7 @@ describe("estimateInlineSavings", () => {
 
 	it("assumes the next request carries a user message even with empty history", () => {
 		const estimate = estimateInlineSavings({
-			options: { renderSystemPrompt: true, renderToolResults: false },
+			options: { renderSystemPrompt: "all", renderToolResults: false },
 			model: makeModel(),
 			systemPrompt: [LARGE],
 			messages: [],
@@ -366,7 +391,7 @@ describe("estimateInlineSavings", () => {
 
 	it("explains why a small system prompt stays text", () => {
 		const estimate = estimateInlineSavings({
-			options: { renderSystemPrompt: true, renderToolResults: false },
+			options: { renderSystemPrompt: "all", renderToolResults: false },
 			model: makeModel(),
 			systemPrompt: ["Be terse."],
 			messages: [],
@@ -377,7 +402,7 @@ describe("estimateInlineSavings", () => {
 	});
 
 	it("matches what the transform actually swaps on the same context", () => {
-		const options = { renderSystemPrompt: true, renderToolResults: true };
+		const options = { renderSystemPrompt: "all" as const, renderToolResults: true };
 		const context = makeContext();
 		const model = makeModel();
 

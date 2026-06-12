@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Effort } from "@oh-my-pi/pi-ai";
 import {
+	type SettingPath,
 	getDefault,
 	onAppendOnlyModeChanged,
 	onStatusLineSessionAccentChanged,
@@ -120,6 +121,12 @@ describe("Settings", () => {
 
 			expect(settings.get("enabledModels")).toEqual(["always-model", "other-model"]);
 			expect(settings.get("disabledProviders")).toEqual(["always-provider", "other-provider"]);
+		});
+
+		it("migrates legacy snapcompact system prompt booleans to scoped modes", () => {
+			expect(Settings.isolated({ "snapcompact.systemPrompt": true }).get("snapcompact.systemPrompt")).toBe("all");
+			const nestedLegacy = { snapcompact: { systemPrompt: false } } as Partial<Record<SettingPath, unknown>>;
+			expect(Settings.isolated(nestedLegacy).get("snapcompact.systemPrompt")).toBe("none");
 		});
 	});
 

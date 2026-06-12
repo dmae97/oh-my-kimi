@@ -1572,14 +1572,24 @@ export const SETTINGS_SCHEMA = {
 
 	// Experimental: snapcompact inline imaging (transient, per-request; never persisted)
 	"snapcompact.systemPrompt": {
-		type: "boolean",
-		default: false,
+		type: "enum",
+		values: ["none", "agents-md", "all"] as const,
+		default: "none",
 		ui: {
 			tab: "context",
 			group: "Experimental",
 			label: "Snapcompact System Prompt",
 			description:
-				"Experimental: render the system prompt as dense PNG image(s) and attach to the first user message (vision models only). Saves tokens; loses system-prompt prompt caching.",
+				"Experimental: render selected system prompt text as dense PNG image(s) and attach to the first user message (vision models only). Saves tokens; loses prompt caching for imaged text.",
+			options: [
+				{ value: "none", label: "None", description: "Keep the system prompt as text." },
+				{
+					value: "agents-md",
+					label: "AGENTS.md",
+					description: "Only move loaded context-file instructions to images, when that saves tokens.",
+				},
+				{ value: "all", label: "All", description: "Move the full system prompt to images, when that saves tokens." },
+			],
 		},
 	},
 

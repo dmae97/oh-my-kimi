@@ -56,14 +56,14 @@ describe("renderContextUsage snapcompact section", () => {
 		const output = renderContextUsage(
 			breakdownWith({
 				visionCapable: true,
-				systemPrompt: { applied: true, textTokens: 9768, frames: 2, imageTokens: 6600, savedTokens: 3168 },
+				systemPrompt: { applied: true, scope: "all", textTokens: 9768, frames: 2, imageTokens: 6600, savedTokens: 3168 },
 				toolResults: { total: 3, swapped: 0, textTokens: 0, frames: 0, imageTokens: 0, savedTokens: 0 },
 				savedTokens: 3168,
 			}),
 			themeStub,
 		);
 		expect(output).toContain("Snapcompact (estimated wire savings)");
-		expect(output).toContain("System prompt: saves ~3.2K (9.8K text → 2 frames ≈ 6.6K)");
+		expect(output).toContain("System prompt (all): saves ~3.2K (9.8K text → 2 frames ≈ 6.6K)");
 		expect(output).toContain("Tool results: none imaged (3 in history)");
 		// 27929 logical − 3168 saved ≈ 25K on the wire.
 		expect(output).toContain("Next request: ~25K tokens on the wire");

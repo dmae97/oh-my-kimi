@@ -181,7 +181,7 @@ export function computeContextBreakdown(
 	if (options?.snapcompactSavings) {
 		const renderSystemPrompt = session.settings.get("snapcompact.systemPrompt");
 		const renderToolResults = session.settings.get("snapcompact.toolResults");
-		if (renderSystemPrompt || renderToolResults) {
+		if (renderSystemPrompt !== "none" || renderToolResults) {
 			snapcompactSavings = estimateInlineSavings({
 				options: { renderSystemPrompt, renderToolResults },
 				model,
@@ -332,7 +332,7 @@ function buildLegendLines(breakdown: ContextBreakdown, theme: typeof Theme): str
 				const sp = snap.systemPrompt;
 				if (sp.applied) {
 					lines.push(
-						`  System prompt: saves ${theme.bold(`~${formatNumber(sp.savedTokens)}`)} ` +
+						`  System prompt (${sp.scope === "agents-md" ? "AGENTS.md" : "all"}): saves ${theme.bold(`~${formatNumber(sp.savedTokens)}`)} ` +
 							theme.fg(
 								"dim",
 								`(${formatNumber(sp.textTokens)} text → ${sp.frames} frame${sp.frames === 1 ? "" : "s"} ≈ ${formatNumber(sp.imageTokens)})`,
@@ -345,7 +345,7 @@ function buildLegendLines(breakdown: ContextBreakdown, theme: typeof Theme): str
 							: sp.reason === "empty"
 								? "nothing to image"
 								: "frames would not save tokens";
-					lines.push(`  System prompt: ${theme.fg("dim", `stays text (${reason})`)}`);
+					lines.push(`  System prompt (${sp.scope === "agents-md" ? "AGENTS.md" : "all"}): ${theme.fg("dim", `stays text (${reason})`)}`);
 				}
 			}
 			if (snap.toolResults) {

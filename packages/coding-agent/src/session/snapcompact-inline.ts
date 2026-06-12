@@ -1,8 +1,7 @@
 /**
  * Snapcompact inline imaging: per-request transform that swaps the system
- * prompt and/or large historical tool results for dense PNG frames on
- * vision-capable models.
- *
+ * prompt, loaded context-file instructions, and/or large historical tool
+ * results for dense PNG frames on vision-capable models.
  * Runs inside the agent loop's `transformProviderContext` hook — after the
  * persisted history is converted to the outgoing `Context`, before the
  * provider stream call. It only ever builds NEW message objects/arrays; the
@@ -14,15 +13,20 @@
  * `planInlineSwaps`, shared by the transform and the `/context` savings
  * estimate (`estimateInlineSavings`) so the two can never disagree.
  */
+
 import type { Context, ImageContent, Model, TextContent, ToolResultMessage, UserMessage } from "@oh-my-pi/pi-ai";
 import { countTokens } from "@oh-my-pi/pi-natives";
 import * as snapcompact from "@oh-my-pi/snapcompact";
+import contextFramesNote from "../prompts/system/snapcompact-context-frames-note.md" with { type: "text" };
+import contextStub from "../prompts/system/snapcompact-context-stub.md" with { type: "text" };
 import systemFramesNote from "../prompts/system/snapcompact-system-frames-note.md" with { type: "text" };
 import systemStub from "../prompts/system/snapcompact-system-stub.md" with { type: "text" };
 import toolResultNote from "../prompts/system/snapcompact-toolresult-note.md" with { type: "text" };
 
+export type SnapcompactSystemPromptMode = "none" | "agents-md" | "all";
+
 export interface SnapcompactInlineOptions {
-	renderSystemPrompt: boolean;
+	renderSystemPrompt: SnapcompactSystemPromptMode;
 	renderToolResults: boolean;
 }
 
@@ -69,6 +73,57 @@ function passesSavingsGate(frames: number, shape: snapcompact.Shape, textTokens:
 	return frames * shape.frameTokenEstimate <= textTokens * SAVINGS_MARGIN;
 }
 
+interface SystemPromptImageTarget {
+	scope: Exclude<SnapcompactSystemPromptMode, "none">;
+	text: string;
+	replacement: string[];
+	userNote: string;
+}
+
+const CONTEXT_SECTION_PATTERNS = [
+	/<context>\n[\s\S]*?\n<\/context>/g,
+	/## Context\n<instructions>\n[\s\S]*?\n<\/instructions>/g,
+] as const;
+
+function replaceContextSections(block: string, extracted: string[]): string {
+	let replaced = block;
+	for (const pattern of CONTEXT_SECTION_PATTERNS) {
+		replaced = replaced.replace(pattern, match => {
+			extracted.push(match.trim());
+			return contextStub.trim();
+		});
+	}
+	return replaced;
+}
+
+function selectSystemPromptImageTarget(
+	systemPrompt: readonly string[] | undefined,
+	mode: SnapcompactSystemPromptMode,
+): SystemPromptImageTarget | undefined {
+	if (!systemPrompt?.length || mode === "none") return undefined;
+	if (mode === "all") {
+		const text = systemPrompt.join("\n\n");
+		if (!text) return undefined;
+		return {
+			scope: "all",
+			text,
+			replacement: [systemStub],
+			userNote: systemFramesNote,
+		};
+	}
+
+	const extracted: string[] = [];
+	const replacement = systemPrompt.map(block => replaceContextSections(block, extracted));
+	const text = extracted.join("\n\n");
+	if (!text) return undefined;
+	return {
+		scope: "agents-md",
+		text,
+		replacement,
+		userNote: contextFramesNote,
+	};
+}
+
 // ============================================================================
 // Swap planning (shared by the live transform and /context estimation)
 // ============================================================================
@@ -97,9 +152,9 @@ export interface InlinePlanInput {
 	budget: number;
 	/** All tool results in context order, INCLUDING the most recent one. */
 	toolResults: readonly InlineToolResultCandidate[];
-	/** Joined system prompt; undefined when absent or system-prompt imaging is off. */
+	/** Selected prompt text; undefined when system-prompt imaging is off or empty. */
 	systemPrompt: InlineSystemPromptCandidate | undefined;
-	/** Whether a user message exists to carry the system-prompt frames. */
+	/** Whether a user message exists to carry the prompt frames. */
 	hasUserMessage: boolean;
 }
 
@@ -135,7 +190,7 @@ export function planInlineSwaps(input: InlinePlanInput): InlineSwapPlan {
 
 	let systemPrompt: InlineSystemPromptCandidate | undefined;
 	if (
-		input.options.renderSystemPrompt &&
+		input.options.renderSystemPrompt !== "none" &&
 		input.systemPrompt &&
 		budget > 0 &&
 		input.systemPrompt.frames > 0 &&
@@ -178,6 +233,7 @@ export interface SnapcompactSavingsEstimate {
 		/** Estimated billed tokens for the frames (0 when there are none). */
 		imageTokens: number;
 		savedTokens: number;
+		scope: Exclude<SnapcompactSystemPromptMode, "none">;
 	};
 	/** Present iff tool-result imaging is enabled. */
 	toolResults?: {
@@ -249,13 +305,16 @@ export function estimateInlineSavings(input: {
 		}
 	}
 
+	let systemPromptTarget: SystemPromptImageTarget | undefined;
 	let systemPromptCandidate: InlineSystemPromptCandidate | undefined;
-	if (options.renderSystemPrompt && input.systemPrompt.length > 0) {
-		const joined = input.systemPrompt.join("\n\n");
-		systemPromptCandidate = {
-			textTokens: countTokens(joined),
-			frames: snapcompact.frames(joined, { shape }),
-		};
+	if (options.renderSystemPrompt !== "none") {
+		systemPromptTarget = selectSystemPromptImageTarget(input.systemPrompt, options.renderSystemPrompt);
+		if (systemPromptTarget) {
+			systemPromptCandidate = {
+				textTokens: countTokens(systemPromptTarget.text),
+				frames: snapcompact.frames(systemPromptTarget.text, { shape }),
+			};
+		}
 	}
 
 	const plan = planInlineSwaps({
@@ -269,7 +328,7 @@ export function estimateInlineSavings(input: {
 
 	let savedTokens = 0;
 	let systemPromptEstimate: SnapcompactSavingsEstimate["systemPrompt"];
-	if (options.renderSystemPrompt) {
+	if (options.renderSystemPrompt !== "none") {
 		const candidate = systemPromptCandidate ?? { textTokens: 0, frames: 0 };
 		const applied = plan.systemPrompt !== undefined;
 		const imageTokens = candidate.frames * shape.frameTokenEstimate;
@@ -288,6 +347,7 @@ export function estimateInlineSavings(input: {
 			frames: candidate.frames,
 			imageTokens,
 			savedTokens: saved,
+			scope: systemPromptTarget?.scope ?? options.renderSystemPrompt,
 		};
 		savedTokens += saved;
 	}
@@ -383,14 +443,16 @@ export class SnapcompactInlineTransformer {
 			}
 		}
 
+		let systemPromptTarget: SystemPromptImageTarget | undefined;
 		let systemPromptCandidate: InlineSystemPromptCandidate | undefined;
-		let joinedSystemPrompt = "";
-		if (this.options.renderSystemPrompt && context.systemPrompt?.length) {
-			joinedSystemPrompt = context.systemPrompt.join("\n\n");
-			systemPromptCandidate = {
-				textTokens: countTokens(joinedSystemPrompt),
-				frames: snapcompact.frames(joinedSystemPrompt, { shape }),
-			};
+		if (this.options.renderSystemPrompt !== "none") {
+			systemPromptTarget = selectSystemPromptImageTarget(context.systemPrompt, this.options.renderSystemPrompt);
+			if (systemPromptTarget) {
+				systemPromptCandidate = {
+					textTokens: countTokens(systemPromptTarget.text),
+					frames: snapcompact.frames(systemPromptTarget.text, { shape }),
+				};
+			}
 		}
 
 		const userIndex = messages.findIndex(message => message.role === "user");
@@ -420,13 +482,13 @@ export class SnapcompactInlineTransformer {
 		}
 
 		let systemPrompt = context.systemPrompt;
-		if (plan.systemPrompt && userIndex >= 0) {
-			const hash = Bun.hash(joinedSystemPrompt);
+		if (plan.systemPrompt && userIndex >= 0 && systemPromptTarget) {
+			const hash = Bun.hash(systemPromptTarget.text);
 			let cached = this.#systemCache;
 			if (!cached || cached.hash !== hash) {
 				cached = {
 					hash,
-					frames: snapcompact.renderMany(joinedSystemPrompt, { shape, maxFrames: MAX_SYSTEM_PROMPT_FRAMES }),
+					frames: snapcompact.renderMany(systemPromptTarget.text, { shape, maxFrames: MAX_SYSTEM_PROMPT_FRAMES }),
 				};
 				this.#systemCache = cached;
 			}
@@ -436,9 +498,9 @@ export class SnapcompactInlineTransformer {
 				typeof original.content === "string" ? [{ type: "text", text: original.content }] : original.content;
 			messages[userIndex] = {
 				...original,
-				content: [{ type: "text", text: systemFramesNote }, ...frames, ...originalContent],
+				content: [{ type: "text", text: systemPromptTarget.userNote }, ...frames, ...originalContent],
 			};
-			systemPrompt = [systemStub];
+			systemPrompt = systemPromptTarget.replacement;
 			changed = true;
 		}
 

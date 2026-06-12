@@ -2162,10 +2162,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// Per-request provider-context transforms. Obfuscate FIRST so secrets are
 		// redacted from text before snapcompact rasterizes it into PNG frames.
 		// Both operate on the transient outgoing Context only — never persisted.
+		const snapcompactSystemPromptMode = settings.get("snapcompact.systemPrompt");
 		const snapcompactInline =
-			settings.get("snapcompact.systemPrompt") || settings.get("snapcompact.toolResults")
+			snapcompactSystemPromptMode !== "none" || settings.get("snapcompact.toolResults")
 				? new SnapcompactInlineTransformer({
-						renderSystemPrompt: settings.get("snapcompact.systemPrompt"),
+						renderSystemPrompt: snapcompactSystemPromptMode,
 						renderToolResults: settings.get("snapcompact.toolResults"),
 					})
 				: undefined;
