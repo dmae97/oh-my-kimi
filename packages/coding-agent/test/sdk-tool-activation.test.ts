@@ -11,7 +11,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/sdk";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { Snowflake } from "@oh-my-pi/pi-utils";
-import * as z from "zod/v4";
+import { z } from "zod/v4";
 
 const toolActivationExtension: ExtensionFactory = pi => {
 	pi.registerTool({

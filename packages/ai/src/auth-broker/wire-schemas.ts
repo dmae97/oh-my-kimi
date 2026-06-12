@@ -10,7 +10,7 @@
  * keys are rejected — the previous implementation used a hand-rolled
  * `hasOnlyFields` allowlist for the same effect.
  */
-import * as z from "zod/v4";
+import { z } from "zod/v4";
 import { REMOTE_REFRESH_SENTINEL } from "../auth-storage";
 import { usageReportSchema } from "../usage";
 

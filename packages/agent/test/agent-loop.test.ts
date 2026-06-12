@@ -12,7 +12,7 @@ import type {
 import type { AssistantMessage, AssistantMessageEvent, Message, ToolResultMessage } from "@oh-my-pi/pi-ai";
 import { createMockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
-import * as z from "zod/v4";
+import { z } from "zod/v4";
 import { createAssistantMessage, createUserMessage } from "./helpers";
 
 // Simple identity converter for tests - just passes through standard messages

@@ -17,7 +17,7 @@ import type {
 	ResponseReasoningItem,
 	Tool as ResponsesTool,
 } from "openai/resources/responses/responses";
-import * as z from "zod/v4";
+import { z } from "zod/v4";
 
 // ─── Input content blocks ───────────────────────────────────────────────────
 

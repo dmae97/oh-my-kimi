@@ -12,7 +12,7 @@ import type {
 } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
-import * as z from "zod/v4";
+import { z } from "zod/v4";
 
 const testTool: Tool = {
 	name: "echo",

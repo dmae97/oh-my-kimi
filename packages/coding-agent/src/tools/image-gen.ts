@@ -19,7 +19,7 @@ import {
 	Snowflake,
 	untilAborted,
 } from "@oh-my-pi/pi-utils";
-import * as z from "zod/v4";
+import { z } from "zod/v4";
 import packageJson from "../../package.json" with { type: "json" };
 
 import { isAuthenticated, type ModelRegistry } from "../config/model-registry";

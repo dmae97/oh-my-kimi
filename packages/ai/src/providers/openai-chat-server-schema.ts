@@ -15,7 +15,7 @@ import type {
 	ChatCompletionTool,
 	ChatCompletionToolChoiceOption,
 } from "openai/resources/chat/completions";
-import * as z from "zod/v4";
+import { z } from "zod/v4";
 
 // ─── User-message content parts ─────────────────────────────────────────────
 

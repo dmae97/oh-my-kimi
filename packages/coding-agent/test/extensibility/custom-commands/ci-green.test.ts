@@ -4,7 +4,7 @@ import { GreenCommand } from "@oh-my-pi/pi-coding-agent/extensibility/custom-com
 import type { CustomCommandAPI } from "@oh-my-pi/pi-coding-agent/extensibility/custom-commands/types";
 import type { HookCommandContext } from "@oh-my-pi/pi-coding-agent/extensibility/hooks/types";
 import * as git from "@oh-my-pi/pi-coding-agent/utils/git";
-import * as z from "zod/v4";
+import { z } from "zod/v4";
 
 afterEach(() => {
 	vi.restoreAllMocks();

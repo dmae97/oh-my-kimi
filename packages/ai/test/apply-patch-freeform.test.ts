@@ -16,7 +16,7 @@ import {
 import type { AssistantMessage, Model, ModelSpec, Tool, ToolResultMessage } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import type { ResponseStreamEvent } from "openai/resources/responses/responses";
-import * as z from "zod/v4";
+import { z } from "zod/v4";
 
 const GRAMMAR = [
 	"// top-level comment",
