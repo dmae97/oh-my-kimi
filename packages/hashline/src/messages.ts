@@ -117,6 +117,19 @@ export const BLOCK_RESOLVER_UNAVAILABLE =
 	"Block-anchored ops (`replace block N:`, `delete block N`, `insert after block N:`) are not available here (no tree-sitter block resolver is configured). Use a concrete line range instead.";
 
 /**
+ * Warning emitted when an `insert after block N:` anchored on a pure
+ * closing-delimiter line is lowered to plain `insert after N:`. No block
+ * begins on a closer, but the closer IS the end of one — and inserting after
+ * the end of that block is exactly what the plain form does.
+ */
+export function insertAfterBlockCloserLoweredWarning(line: number): string {
+	return (
+		`\`insert after block ${line}:\` anchors on a closing-delimiter line; no block begins there, so it was applied as plain \`insert after ${line}:\`. ` +
+		"Anchor `insert after block` on the line that OPENS the construct."
+	);
+}
+
+/**
  * Internal invariant error: `applyEdits` received an unresolved `replace block
  * N:` edit. Block edits must be expanded by `resolveBlockEdits` before reaching
  * the applier; hitting this is a wiring bug, not authored-input error.

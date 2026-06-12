@@ -5,6 +5,7 @@
 ### Added
 
 - Added inward landing correction for `insert after block N:`: a body indented deeper than the block's closing line now slides back across the block's trailing closer lines and lands inside the block at its claimed depth, with a warning naming the landing line. Same conservative guards as the outward shift — comparable indentation only, closers only, abandoned when another hunk targets a crossed line; plain `insert after M:` stays literal
+- Added closer-anchor lowering for `insert after block N:`: anchoring on a pure closing-delimiter line (where no block begins, so resolution previously failed the whole patch) now applies as plain `insert after N:` with a warning teaching the opener-only rule. `resolveBlockEdits` gained an `onWarning` callback; apply, preview, and patcher paths surface it on `warnings`
 
 ### Changed
 

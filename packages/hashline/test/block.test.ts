@@ -340,21 +340,37 @@ describe("insert after block", () => {
 		expect(() => resolveBlockEdits(edits, "ignored", PATH, () => null)).toThrow("`insert after block 7:`");
 	});
 
-	it("rejects a closing-delimiter line as an insert-after-block anchor", () => {
+	it("lowers a closing-delimiter anchor to plain `insert after N:` with a warning", () => {
 		const section = Patch.parseSingle(`[${PATH}#1A2B]\ninsert after block 3:\n+  done();`);
 		const resolver: BlockResolver = ({ line }) => (line === 2 ? { start: 2, end: 3 } : null);
-		let error: Error | undefined;
-		try {
-			section.applyTo(text, resolver);
-		} catch (err) {
-			error = err instanceof Error ? err : new Error(String(err));
-		}
 
-		expect(error?.message).toContain(
-			"`insert after block 3:` could not resolve a syntactic block beginning on line 3",
+		const result = section.applyTo(text, resolver);
+
+		// line 3 is `  }` — no block begins there, but it ends one; the body
+		// lands after it, exactly where `insert after block` would have put it.
+		expect(result.text).toBe("function x() {\n  if (y) {\n  }\n  done();\n}\n");
+		expect(result.warnings?.some(w => /applied as plain `insert after 3:`/.test(w))).toBe(true);
+	});
+
+	it("still rejects an unresolvable blank-line anchor (lowering is closer-only)", () => {
+		const blankAnchored = Patch.parseSingle(`[${PATH}#1A2B]\ninsert after block 2:\n+done();`);
+
+		expect(() => blankAnchored.applyTo("function x() {\n\n}\n", () => null)).toThrow(
+			"`insert after block 2:` could not resolve a syntactic block beginning on line 2",
 		);
-		expect(error?.message).toContain("Use `insert after M:` with the block's explicit last line instead");
-		expect(error?.message).toContain("*3:  }");
+	});
+
+	it("Patcher surfaces the closer-anchor lowering warning", async () => {
+		const fs = new InMemoryFilesystem([[PATH, text]]);
+		const snapshots = new InMemorySnapshotStore();
+		const tag = snapshots.record(PATH, text);
+		const resolver: BlockResolver = ({ line }) => (line === 2 ? { start: 2, end: 3 } : null);
+		const patcher = new Patcher({ fs, snapshots, blockResolver: resolver });
+
+		const result = await patcher.apply(Patch.parse(`[${PATH}#${tag}]\ninsert after block 3:\n+  done();`));
+
+		expect(fs.get(PATH)).toBe("function x() {\n  if (y) {\n  }\n  done();\n}\n");
+		expect(result.sections[0]?.warnings.some(w => /applied as plain `insert after 3:`/.test(w))).toBe(true);
 	});
 
 	it("applyTo inserts the body after the resolved block's last line", () => {

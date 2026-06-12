@@ -123,7 +123,7 @@ function bucketAnchorEditsByLine(edits: IndexedEdit[]): Map<number, IndexedEdit[
 // wrapper" mistake.
 
 /** A line that is nothing but closing delimiters: `}`, `)`, `];`, `})`, `},`. */
-const STRUCTURAL_CLOSER_RE = /^\s*[)\]}]+[;,]?\s*$/;
+export const STRUCTURAL_CLOSER_RE = /^\s*[)\]}]+[;,]?\s*$/;
 
 interface DelimiterBalance {
 	paren: number;
