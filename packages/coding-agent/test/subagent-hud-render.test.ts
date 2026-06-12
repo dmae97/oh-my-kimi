@@ -5,9 +5,19 @@
  */
 import { beforeAll, describe, expect, it } from "bun:test";
 import { renderSubagentHudLines } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
-import type { ObservableSession } from "@oh-my-pi/pi-coding-agent/modes/session-observer-registry";
+import {
+	type ObservableSession,
+	SessionObserverRegistry,
+} from "@oh-my-pi/pi-coding-agent/modes/session-observer-registry";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import type { AgentProgress } from "@oh-my-pi/pi-coding-agent/task";
+import {
+	type AgentProgress,
+	type SubagentLifecyclePayload,
+	type SubagentProgressPayload,
+	TASK_SUBAGENT_LIFECYCLE_CHANNEL,
+	TASK_SUBAGENT_PROGRESS_CHANNEL,
+} from "@oh-my-pi/pi-coding-agent/task";
+import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 
 function makeSession(overrides: Partial<ObservableSession> & { id: string }): ObservableSession {
 	return {
@@ -34,6 +44,29 @@ function makeProgress(overrides: Partial<AgentProgress> & { id: string }): Agent
 		cost: 0,
 		durationMs: 0,
 		...overrides,
+	};
+}
+
+function makeLifecycle(id: string, index: number, description: string): SubagentLifecyclePayload {
+	return {
+		id,
+		index,
+		agent: "task",
+		agentSource: "bundled",
+		description,
+		status: "started",
+		parentToolCallId: "tool-call",
+	};
+}
+
+function makeProgressPayload(id: string, index: number, description: string): SubagentProgressPayload {
+	return {
+		index,
+		agent: "task",
+		agentSource: "bundled",
+		task: description,
+		parentToolCallId: "tool-call",
+		progress: makeProgress({ id, index, description, task: description }),
 	};
 }
 
@@ -89,5 +122,42 @@ describe("subagent HUD lines", () => {
 		for (const line of out.split("\n")) {
 			expect(Bun.stringWidth(line)).toBeLessThanOrEqual(60);
 		}
+	});
+
+	it("keeps subagent registry order stable while progress arrives out of order", () => {
+		const eventBus = new EventBus();
+		const registry = new SessionObserverRegistry();
+		registry.subscribeToEventBus(eventBus);
+		const activeIds = () =>
+			registry
+				.getSessions()
+				.filter(session => session.kind === "subagent" && session.status === "active")
+				.map(session => session.id);
+
+		eventBus.emit(
+			TASK_SUBAGENT_LIFECYCLE_CHANNEL,
+			makeLifecycle("BlastRadius", 1, "Survey id-keyed downstream consumers"),
+		);
+		eventBus.emit(
+			TASK_SUBAGENT_LIFECYCLE_CHANNEL,
+			makeLifecycle("SelectorSurfaces", 0, "Map model-selector resolution surfaces"),
+		);
+		eventBus.emit(
+			TASK_SUBAGENT_LIFECYCLE_CHANNEL,
+			makeLifecycle("VariantsSurvey", 2, "Survey tier-variant ids across catalog"),
+		);
+
+		expect(activeIds()).toEqual(["SelectorSurfaces", "BlastRadius", "VariantsSurvey"]);
+
+		eventBus.emit(
+			TASK_SUBAGENT_PROGRESS_CHANNEL,
+			makeProgressPayload("VariantsSurvey", 2, "Survey tier-variant ids across catalog"),
+		);
+		eventBus.emit(
+			TASK_SUBAGENT_PROGRESS_CHANNEL,
+			makeProgressPayload("BlastRadius", 1, "Survey id-keyed downstream consumers"),
+		);
+
+		expect(activeIds()).toEqual(["SelectorSurfaces", "BlastRadius", "VariantsSurvey"]);
 	});
 });
