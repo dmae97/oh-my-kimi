@@ -855,8 +855,13 @@ function extractPermissionLocations(
  *  `tag` is set only by `enqueueCustomMessageDisplay` (used for skill-prompt
  *  custom messages queued during streaming) and is matched by the custom-role
  *  `message_start` dequeue branch; user-message pushes leave it undefined and
- *  rely on the existing text-equality match. */
-type QueuedDisplayEntry = { text: string; tag?: string };
+ *  rely on the existing text-equality match. `images` carries the original
+ *  (pre-normalization) image blocks so queue restoration (Esc / Alt+Up) can
+ *  hand them back to the editor instead of dropping them. */
+type QueuedDisplayEntry = { text: string; tag?: string; images?: ImageContent[] };
+
+/** Entry returned by {@link AgentSession.clearQueue} / {@link AgentSession.popLastQueuedMessage}. */
+export type RestoredQueuedMessage = { text: string; images?: ImageContent[] };
 
 export class AgentSession {
 	readonly agent: Agent;
@@ -5028,7 +5033,7 @@ export class AgentSession {
 	async #queueSteer(text: string, images?: ImageContent[]): Promise<void> {
 		const normalizedImages = await normalizeModelContextImages(images);
 		const displayText = text || (images && images.length > 0 ? "[Image]" : "");
-		this.#steeringMessages.push({ text: displayText });
+		this.#steeringMessages.push({ text: displayText, images });
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
 		if (normalizedImages && normalizedImages.length > 0) {
 			content.push(...normalizedImages);
@@ -5058,7 +5063,7 @@ export class AgentSession {
 	async #queueFollowUp(text: string, images?: ImageContent[]): Promise<void> {
 		const normalizedImages = await normalizeModelContextImages(images);
 		const displayText = text || (images && images.length > 0 ? "[Image]" : "");
-		this.#followUpMessages.push({ text: displayText });
+		this.#followUpMessages.push({ text: displayText, images });
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
 		if (normalizedImages && normalizedImages.length > 0) {
 			content.push(...normalizedImages);
@@ -5307,12 +5312,14 @@ export class AgentSession {
 	}
 
 	/**
-	 * Clear queued messages and return them.
-	 * Useful for restoring to editor when user aborts.
+	 * Clear queued messages and return them (text plus any attached images).
+	 * Useful for restoring to editor when user aborts. The internal entry
+	 * arrays are handed out as-is — a `tag` (if any) is inert once the record
+	 * leaves the queue.
 	 */
-	clearQueue(): { steering: string[]; followUp: string[] } {
-		const steering = this.#steeringMessages.map(e => e.text);
-		const followUp = this.#followUpMessages.map(e => e.text);
+	clearQueue(): { steering: RestoredQueuedMessage[]; followUp: RestoredQueuedMessage[] } {
+		const steering = this.#steeringMessages;
+		const followUp = this.#followUpMessages;
 		this.#steeringMessages = [];
 		this.#followUpMessages = [];
 		this.agent.clearAllQueues();
@@ -5338,21 +5345,21 @@ export class AgentSession {
 	/**
 	 * Pop the last queued message (steering first, then follow-up).
 	 * Used by dequeue keybinding to restore messages to editor one at a time.
-	 * Returns the popped entry's `.text`; the tag (if any) dies with the
-	 * record — no orphan state can outlive the queue entry.
+	 * Returns the popped entry's text and images; the tag (if any) dies with
+	 * the record — no orphan state can outlive the queue entry.
 	 */
-	popLastQueuedMessage(): string | undefined {
+	popLastQueuedMessage(): RestoredQueuedMessage | undefined {
 		// Pop from steering first (LIFO)
 		if (this.#steeringMessages.length > 0) {
 			const entry = this.#steeringMessages.pop();
 			this.agent.popLastSteer();
-			return entry?.text;
+			return entry;
 		}
 		// Then from follow-up
 		if (this.#followUpMessages.length > 0) {
 			const entry = this.#followUpMessages.pop();
 			this.agent.popLastFollowUp();
-			return entry?.text;
+			return entry;
 		}
 		return undefined;
 	}

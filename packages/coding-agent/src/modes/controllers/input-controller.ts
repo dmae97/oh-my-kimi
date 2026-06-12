@@ -540,6 +540,15 @@ export class InputController {
 						imageCount: images?.length ?? 0,
 					});
 				} catch (error) {
+					// Don't lose the message: hand the text and images back to the
+					// editor so the user can retry (e.g. steer() rejecting an
+					// extension command).
+					this.ctx.editor.setText(text);
+					if (images && images.length > 0) {
+						this.ctx.pendingImages = [...images];
+						this.ctx.pendingImageLinks = inputImageLinks ? [...inputImageLinks] : images.map(() => undefined);
+						this.ctx.editor.imageLinks = this.ctx.pendingImageLinks;
+					}
 					this.ctx.showError(error instanceof Error ? error.message : String(error));
 				}
 				this.ctx.updatePendingMessagesDisplay();
@@ -758,10 +767,19 @@ export class InputController {
 			}
 			return 0;
 		}
-		const queuedText = allQueued.join("\n\n");
+		const queuedText = allQueued.map(e => e.text).join("\n\n");
 		const currentText = options?.currentText ?? this.ctx.editor.getText();
 		const combinedText = [queuedText, currentText].filter(t => t.trim()).join("\n\n");
 		this.ctx.editor.setText(combinedText);
+		// Hand queued images back to the pending-image buffer (links are
+		// re-materialized lazily; the restored text already carries the
+		// `[Image #N, WxH]` markers).
+		const queuedImages = allQueued.flatMap(e => e.images ?? []);
+		if (queuedImages.length > 0) {
+			this.ctx.pendingImages.push(...queuedImages);
+			this.ctx.pendingImageLinks.push(...queuedImages.map(() => undefined));
+			this.ctx.editor.imageLinks = this.ctx.pendingImageLinks;
+		}
 		this.ctx.updatePendingMessagesDisplay();
 		if (options?.abort) {
 			this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL });

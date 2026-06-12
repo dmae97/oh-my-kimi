@@ -30,6 +30,9 @@
 ### Fixed
 
 - Fixed prompt and image input typed while the agent is idle between turns from being dropped so steering now queues and auto-resumes processing once the session is ready
+- Fixed image-bearing prompts queued during compaction registering their local-submission signature without the image count, so the delivery event treated them as foreign messages — clearing any draft typed since queuing and leaking the stale signature.
+- Fixed Esc/Alt+Up queue restoration dropping attached images: `clearQueue()` and `popLastQueuedMessage()` now hand queued images back alongside the text, and the restore paths return them to the pending-image buffer instead of silently discarding them.
+- Fixed a failed steer submission in the no-input-waiter path discarding the message: the text and images are restored to the editor for retry instead of being lost to history-only recovery.
 - Fixed local memory consolidation on Responses-style models that reject user-only requests by sending a dedicated stage-two system prompt.
 - Fixed the settings sidebar divider alignment in `/settings` by locking sidebar width to the widest group name so switching tabs no longer shifts the layout
 - Fixed plan-review overlay mouse hit-testing so wheel, hover, TOC, and body clicks map to the intended regions
