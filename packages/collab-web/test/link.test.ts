@@ -60,7 +60,7 @@ describe("collab link parsing", () => {
 	});
 
 	it("parses web deep links (https://<relay>/#<link>)", () => {
-		const bare = parseCollabLink(`https://relay.omp.sh/#${ROOM}#${KEY_TEXT}`);
+		const bare = parseCollabLink(`https://my.omp.sh/#${ROOM}#${KEY_TEXT}`);
 		if ("error" in bare) throw new Error(bare.error);
 		expect(bare.wsUrl).toBe(`${DEFAULT_RELAY_URL}/r/${ROOM}`);
 		expect(bare.key).toEqual(KEY);
