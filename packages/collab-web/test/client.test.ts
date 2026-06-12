@@ -79,6 +79,13 @@ describe("GuestClient frame apply", () => {
 		expect(snap.activeTools.size).toBe(0);
 	});
 
+	it("welcome readOnly flag lands in the snapshot", () => {
+		const client = new GuestClient(LINK, "tester");
+		expect(client.getSnapshot().readOnly).toBe(false);
+		client.applyFrameForTest({ ...welcomeFrame(), readOnly: true } as HostFrame);
+		expect(client.getSnapshot().readOnly).toBe(true);
+	});
+
 	it("message_update sets the stream ghost (synthesizing a missed start)", () => {
 		const client = liveClient();
 		const partial = assistantMessage("hel");

@@ -26,7 +26,7 @@
 		"dev": "bun ./index.html",
 		"mock-host": "bun scripts/mock-host.ts",
 		"relay": "bun scripts/local-relay.ts",
-		"build": "bun build ./index.html --outdir=dist --minify",
+		"build": "rm -rf dist && bun build ./index.html --outdir=dist --minify --asset-naming=[name].[ext] && cp -R public/. dist/",
 		"prepack": "bun run build",
 		"test": "bun test --parallel",
 		"check": "biome check . && bun run check:types",
@@ -54,6 +54,7 @@
 		"dist",
 		"src",
 		"scripts",
+		"public",
 		"index.html",
 		"README.md",
 		"CHANGELOG.md"

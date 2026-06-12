@@ -15,9 +15,11 @@ export function AgentDrawer(props: {
 	agent: AgentSnapshot;
 	progress?: SubagentProgressPayload;
 	client: GuestClient;
+	/** View-link guests: hide kill/revive/chat (the host rejects them anyway). */
+	readOnly?: boolean;
 	onClose(): void;
 }): ReactNode {
-	const { agent, progress, client, onClose } = props;
+	const { agent, progress, client, readOnly, onClose } = props;
 	const [entries, setEntries] = useState<readonly SessionEntry[]>([]);
 	const [draft, setDraft] = useState("");
 
@@ -97,7 +99,7 @@ export function AgentDrawer(props: {
 					{model ? <span className="ag-chip ag-chip--model">{model}</span> : null}
 				</div>
 				<div className="ag-drawer-actions">
-					{agent.status === "running" ? (
+					{agent.status === "running" && !readOnly ? (
 						<button
 							type="button"
 							className="ag-btn ag-btn--danger"
@@ -107,7 +109,7 @@ export function AgentDrawer(props: {
 							kill
 						</button>
 					) : null}
-					{agent.status === "parked" || agent.status === "aborted" ? (
+					{(agent.status === "parked" || agent.status === "aborted") && !readOnly ? (
 						<button type="button" className="ag-btn" onClick={() => client.sendAgentCmd("revive", agent.id)}>
 							<RotateCcw size={13} aria-hidden />
 							revive
@@ -162,23 +164,25 @@ export function AgentDrawer(props: {
 					<div className="ag-empty">no transcript available</div>
 				)}
 			</div>
-			<form
-				className="ag-chat"
-				onSubmit={e => {
-					e.preventDefault();
-					sendChat();
-				}}
-			>
-				<input
-					className="ag-chat-input"
-					value={draft}
-					placeholder={`message ${agent.displayName}…`}
-					onChange={e => setDraft(e.target.value)}
-				/>
-				<button type="submit" className="ag-iconbtn" aria-label="send" disabled={draft.trim().length === 0}>
-					<SendHorizontal size={15} aria-hidden />
-				</button>
-			</form>
+			{!readOnly && (
+				<form
+					className="ag-chat"
+					onSubmit={e => {
+						e.preventDefault();
+						sendChat();
+					}}
+				>
+					<input
+						className="ag-chat-input"
+						value={draft}
+						placeholder={`message ${agent.displayName}…`}
+						onChange={e => setDraft(e.target.value)}
+					/>
+					<button type="submit" className="ag-iconbtn" aria-label="send" disabled={draft.trim().length === 0}>
+						<SendHorizontal size={15} aria-hidden />
+					</button>
+				</form>
+			)}
 		</aside>
 	);
 }

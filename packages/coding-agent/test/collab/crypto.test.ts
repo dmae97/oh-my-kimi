@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { generateRoomKey, importRoomKey, open, seal } from "@oh-my-pi/pi-coding-agent/collab/crypto";
+import { generateRoomKey, generateWriteToken, importRoomKey, open, seal } from "@oh-my-pi/pi-coding-agent/collab/crypto";
 import {
 	type CollabFrame,
 	DEFAULT_RELAY_URL,
@@ -100,6 +100,32 @@ describe("collab link format", () => {
 		if ("error" in parsed) throw new Error(parsed.error);
 		expect(parsed.wsUrl).toBe(`${DEFAULT_RELAY_URL}/r/${roomId}`);
 		expect(Buffer.from(parsed.key)).toEqual(Buffer.from(key));
+	});
+
+	it("embeds the write token in full links and omits it from view links", () => {
+		const token = generateWriteToken();
+		const full = parseCollabLink(formatCollabLink(DEFAULT_RELAY_URL, roomId, key, token));
+		if ("error" in full) throw new Error(full.error);
+		expect(Buffer.from(full.key)).toEqual(Buffer.from(key));
+		expect(Buffer.from(full.writeToken ?? new Uint8Array())).toEqual(Buffer.from(token));
+
+		const view = parseCollabLink(formatCollabLink(DEFAULT_RELAY_URL, roomId, key));
+		if ("error" in view) throw new Error(view.error);
+		expect(Buffer.from(view.key)).toEqual(Buffer.from(key));
+		expect(view.writeToken).toBeUndefined();
+	});
+
+	it("carries the write token through web deep links", () => {
+		const token = generateWriteToken();
+		const parsed = parseCollabLink(formatCollabWebLink(DEFAULT_RELAY_URL, roomId, key, token));
+		if ("error" in parsed) throw new Error(parsed.error);
+		expect(Buffer.from(parsed.key)).toEqual(Buffer.from(key));
+		expect(Buffer.from(parsed.writeToken ?? new Uint8Array())).toEqual(Buffer.from(token));
+	});
+
+	it("rejects secrets that are neither 32 nor 48 bytes", () => {
+		const bad = Buffer.alloc(40, 1).toString("base64url");
+		expect("error" in parseCollabLink(`${roomId}#${bad}`)).toBe(true);
 	});
 
 	it("keeps the key out of web-link path and query", () => {

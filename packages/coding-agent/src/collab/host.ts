@@ -8,8 +8,9 @@
  * agent-registry snapshots (Agent Hub table), hub chat/kill/revive commands,
  * and incremental subagent-transcript reads.
  */
-import * as fs from "node:fs/promises";
+
 import { timingSafeEqual } from "node:crypto";
+import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";

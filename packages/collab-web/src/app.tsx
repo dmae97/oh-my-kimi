@@ -160,6 +160,7 @@ function Session({ client, onLeave, onRejoin }: SessionProps): ReactNode {
 					agent={drawerAgent}
 					progress={snap.progress.get(drawerAgent.id)}
 					client={client}
+					readOnly={snap.readOnly}
 					onClose={() => setSelectedId(null)}
 				/>
 			)}
