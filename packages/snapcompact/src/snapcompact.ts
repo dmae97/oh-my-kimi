@@ -11,18 +11,23 @@
  * (`packages/snapcompact`, 200k-token monolithic runs):
  *
  * - **Anthropic** (`6x12-dim`): X.org 6x12 glyphs, black ink, stopwords
- *   dimmed gray. Production mono eval on claude-fable: f1 .840 vs .877 for
- *   the repeated `8x8r-bw` grid — within noise at n=25 — at 37% lower cost
- *   (12 frames vs 21 per 400k chars). `8x8r-bw` remains the max-recall
- *   choice via the shape setting; it never refused in any probe.
- * - **Google** (`doc-8on16-sent-dim`): two word-wrapped newspaper columns of
- *   8x13 glyphs on a 16px pitch, sentence-hue ink, stopwords dimmed (0.90 F1
- *   on gemini-3.5-flash vs 0.85 for the repeated grid, at lower cost; same
- *   shape won the chunked round-2 evals).
- * - **OpenAI** (`8on16-bw`): 8x13 glyphs on a patch-aligned 16px pitch, black
- *   ink (gpt-5.5 mono F1 0.851 vs 0.602 for the previous dense `6x6u-sent`).
- *   OpenAI bills a flat ~2.9k tokens per image; frames request
- *   `detail: "original"` since the default `auto` downscale destroys glyphs.
+ *   dimmed gray — recall within noise of the repeated `8x8r-bw` grid at
+ *   ~40% lower cost; `8x8r-bw` remains the max-recall choice via the shape
+ *   setting. Opus 4.7+/Fable/Mythos ingest high-res natively (2576px edge,
+ *   4,784 visual-token cap, no flag needed), so those lines get 1932px
+ *   frames: same recall and cost, a third fewer frames. Older Claude lines
+ *   downscale past 1568px and keep the standard frame.
+ * - **Google** (`doc-8on16-sent-dim` @2048): two word-wrapped newspaper
+ *   columns of 8x13 glyphs, sentence-hue ink, dimmed stopwords. Gemini 3.x
+ *   bills a fixed `media_resolution` budget per image (default 1,120
+ *   tokens) regardless of pixels, so the 2048px frame carries +70% chars at
+ *   the same bill (f1 .88 vs .90 at 1568). `ULTRA_HIGH` doubles the budget
+ *   and reads 3072px frames, but loses on chars/$ — deliberately unused.
+ * - **OpenAI** (`8on16-bw`): 8x13 glyphs on a patch-aligned 16px pitch,
+ *   black ink (gpt-5.5 mono F1 .867 vs .602 for the previous `6x6u-sent`).
+ *   Patch billing (32px × 1.2, 10k-patch budget at `detail: "original"`) is
+ *   area-proportional, so resolution cannot improve chars/$ — 1568 stays.
+ *   `detail: "high"` would downgrade (2,500-patch cap); `original` is sent.
  * - **Unknown providers** default to the Anthropic shape. Gateways can
  *   defeat any shape silently: OpenRouter enforces a per-model image cap
  *   (measured: 8 images for glm-4.6v — frames past the cap are dropped with
@@ -186,26 +191,34 @@ function billingFamily(api?: Api): BillingFamily {
 	}
 }
 
-/** Eval-measured per-frame billing for a standard 1568px frame, by family. */
-const FAMILY_BILLING: Record<BillingFamily, Pick<Shape, "frameTokenEstimate" | "imageDetail">> = {
-	// Anthropic bills pixel area: 1568*1568/750 ≈ 3,278.
-	anthropic: { frameTokenEstimate: 3300 },
-	google: { frameTokenEstimate: 1100 },
-	// OpenAI bills per image at `original` detail, ~2.9k tokens flat.
-	openai: { frameTokenEstimate: 2900, imageDetail: "original" },
-};
+/**
+ * Per-frame billing for a square frame of edge `frameSize`, by family.
+ * Formulas verified against live bills in the resolution benchmarks:
+ * - Anthropic: 28px patches, capped at 4,784 visual tokens (the API
+ *   downscales past the cap; 1568 → 3,136 measured) + 5% margin.
+ * - Google: Gemini 3.x bills a fixed `media_resolution` budget per image —
+ *   default HIGH = 1,120 tokens — regardless of pixel size.
+ * - OpenAI: 32px patches × 1.2 flagship multiplier, 10,000-patch budget at
+ *   `detail: "original"` (1568 → 2,881 measured).
+ */
+function familyBilling(family: BillingFamily, frameSize: number): Pick<Shape, "frameTokenEstimate" | "imageDetail"> {
+	switch (family) {
+		case "google":
+			return { frameTokenEstimate: 1120 };
+		case "openai": {
+			const patches = Math.min(Math.ceil(frameSize / 32) ** 2, 10_000);
+			return { frameTokenEstimate: Math.ceil(patches * 1.2), imageDetail: "original" };
+		}
+		default: {
+			const patches = Math.min(Math.ceil(frameSize / 28) ** 2, 4784);
+			return { frameTokenEstimate: Math.ceil(patches * 1.05) };
+		}
+	}
+}
 
 /** Attach a provider family's billing to a variant geometry. */
 function priceShape(base: ShapeGeometry, family: BillingFamily): Shape {
-	const billing = FAMILY_BILLING[family];
-	return {
-		...base,
-		// Family estimates are measured at 1568px; the larger legacy frame
-		// keeps the conservative pixel-area ceiling everywhere.
-		frameTokenEstimate:
-			base.frameSize > 1568 ? FAMILY_BILLING.anthropic.frameTokenEstimate : billing.frameTokenEstimate,
-		...(billing.imageDetail ? { imageDetail: billing.imageDetail } : {}),
-	};
+	return { ...base, ...familyBilling(family, base.frameSize) };
 }
 
 /** Eval-validated shapes, keyed by the provider family they won on. */
@@ -269,26 +282,40 @@ const FAMILY_SHAPE: Record<BillingFamily, Shape> = {
 	openai: SHAPES.openai,
 };
 
-/** Eval-winning variant per model line, matched against the model id. The
+/** One model line's ideal format: variant plus an optional frame-size
+ *  override when the line reads larger frames at no extra cost. */
+export interface IdealShape {
+	variant: ShapeVariantName;
+	frameSize?: number;
+}
+
+/** Eval-winning format per model line, matched against the model id. The
  *  wire API only identifies the gateway — a Claude served through Vertex or
  *  OpenRouter still reads best with its own shape. Patterns cover the model
  *  lines the mono evals measured; everything else falls back to the API
- *  family's winner. */
-const MODEL_VARIANTS: readonly (readonly [RegExp, ShapeVariantName])[] = [
-	// claude-fable .840 / opus .800 mono; within noise of 8x8r-bw at ~40% lower cost.
-	[/claude/i, "6x12-dim"],
-	// gemini-3.5-flash .900 mono; also the chunked round-2 winner.
-	[/gemini/i, "doc-8on16-sent-dim"],
-	// gpt-5.5 .851 mono / .906 chunked.
-	[/gpt|codex/i, "8on16-bw"],
-	// kimi-k2.6 .973 mono at <=8 frames per request.
-	[/kimi/i, "8on16-bw"],
+ *  family's winner at the standard 1568px frame. First match wins. */
+const MODEL_VARIANTS: readonly (readonly [RegExp, IdealShape])[] = [
+	// Opus 4.7+ and Fable/Mythos read high-res natively (2576px edge under a
+	// 4,784 visual-token cap → 1932px square sweet spot): same recall and
+	// cost as 1568, a third fewer frames (12 → 8 per 400k chars).
+	[/claude.*(fable|mythos)/i, { variant: "6x12-dim", frameSize: 1932 }],
+	[/claude-?opus-?4[.-][7-9]/i, { variant: "6x12-dim", frameSize: 1932 }],
+	// Older Claude lines downscale past 1568px — keep the safe size.
+	[/claude/i, { variant: "6x12-dim" }],
+	// Gemini 3.x bills a fixed 1,120-token budget per image regardless of
+	// pixels: 2048px packs +70% chars per frame at the same bill.
+	[/gemini/i, { variant: "doc-8on16-sent-dim", frameSize: 2048 }],
+	// gpt-5.5 patch billing is area-proportional; 1568 is already optimal.
+	[/gpt|codex/i, { variant: "8on16-bw" }],
+	// kimi's image processor downscales past 1792px (64×64 28px patches);
+	// 1568 wins on chars/$ and reads at f1 .973 (≤8 frames per request).
+	[/kimi/i, { variant: "8on16-bw" }],
 	// glm-4.6v .780 mono via direct vendor routing.
-	[/glm/i, "8on16-bw"],
+	[/glm/i, { variant: "8on16-bw" }],
 ];
 
-/** Eval-ideal variant for a model id, or undefined when unmeasured. */
-export function idealShapeVariant(modelId: string): ShapeVariantName | undefined {
+/** Eval-ideal format for a model id, or undefined when unmeasured. */
+export function idealShapeVariant(modelId: string): IdealShape | undefined {
 	return MODEL_VARIANTS.find(([pattern]) => pattern.test(modelId))?.[1];
 }
 
@@ -301,16 +328,20 @@ export interface ShapeTarget {
 /**
  * Pick the frame shape for a reader. An explicit `variant` (anything but
  * `"auto"`) forces that geometry; otherwise the model id selects the
- * eval-winning shape for its model line, falling back to the API family's
- * winner when the model is unmeasured. Billing (token estimate, detail
- * hint) always follows the API family actually carrying the request.
- * Accepts a full pi-ai `Model` or any `{ api, id }` subset.
+ * eval-winning shape — and frame size — for its model line, falling back to
+ * the API family's winner when the model is unmeasured. Billing (token
+ * estimate, detail hint) always follows the API family actually carrying
+ * the request, computed for the resolved frame size. Accepts a full pi-ai
+ * `Model` or any `{ api, id }` subset.
  */
 export function resolveShape(model?: ShapeTarget, variant?: ShapeVariantName | "auto"): Shape {
 	const family = billingFamily(model?.api);
-	const name =
-		variant && variant !== "auto" ? variant : (model?.id && idealShapeVariant(model.id)) || FAMILY_VARIANT[family];
-	return name === FAMILY_VARIANT[family] ? FAMILY_SHAPE[family] : priceShape(SHAPE_VARIANTS[name], family);
+	if (variant && variant !== "auto") return priceShape(SHAPE_VARIANTS[variant], family);
+	const ideal = model?.id ? idealShapeVariant(model.id) : undefined;
+	const name = ideal?.variant ?? FAMILY_VARIANT[family];
+	if (name === FAMILY_VARIANT[family] && ideal?.frameSize === undefined) return FAMILY_SHAPE[family];
+	const base = SHAPE_VARIANTS[name];
+	return priceShape(ideal?.frameSize ? { ...base, frameSize: ideal.frameSize } : base, family);
 }
 
 // ============================================================================

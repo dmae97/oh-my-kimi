@@ -167,22 +167,39 @@ describe("shape resolution", () => {
 	});
 
 	it("detects the ideal shape from the model id across gateways", () => {
-		// A Claude served through an OpenAI-compatible gateway keeps its own
-		// geometry but takes the gateway family's billing.
+		// A high-res Claude served through an OpenAI-compatible gateway keeps
+		// its own geometry AND its 1932px frame; billing follows the gateway
+		// family, computed for that frame size (32px patches × 1.2).
 		const claudeViaOpenRouter = snapcompact.resolveShape({
 			api: "openai-completions",
 			id: "anthropic/claude-fable-5",
 		});
 		expect(claudeViaOpenRouter.font).toBe("6x12");
 		expect(claudeViaOpenRouter.stopwordDim).toBe(true);
-		expect(claudeViaOpenRouter.frameTokenEstimate).toBe(snapcompact.SHAPES.openai.frameTokenEstimate);
+		expect(claudeViaOpenRouter.frameSize).toBe(1932);
+		expect(claudeViaOpenRouter.frameTokenEstimate).toBe(Math.ceil(Math.ceil(1932 / 32) ** 2 * 1.2));
 		expect(claudeViaOpenRouter.imageDetail).toBe("original");
 
-		// Claude on Vertex must not inherit the Gemini doc shape.
+		// Claude on Vertex must not inherit the Gemini doc shape; Gemini
+		// billing is a fixed per-image budget at any size.
 		const claudeOnVertex = snapcompact.resolveShape({ api: "google-vertex", id: "claude-fable-5@20250929" });
 		expect(claudeOnVertex.font).toBe("6x12");
 		expect(claudeOnVertex.columns).toBeUndefined();
+		expect(claudeOnVertex.frameSize).toBe(1932);
 		expect(claudeOnVertex.frameTokenEstimate).toBe(snapcompact.SHAPES.google.frameTokenEstimate);
+
+		// High-res frames are reserved for the lines that read them natively;
+		// older Claude lines keep the safe 1568px family default.
+		expect(snapcompact.resolveShape({ api: "anthropic-messages", id: "claude-opus-4-8" }).frameSize).toBe(1932);
+		expect(snapcompact.resolveShape({ api: "anthropic-messages", id: "claude-3-5-sonnet" })).toBe(
+			snapcompact.SHAPES.anthropic,
+		);
+
+		// Gemini reads 2048px frames at the same fixed bill.
+		const gemini = snapcompact.resolveShape({ api: "google-generative-ai", id: "gemini-3.5-flash" });
+		expect(gemini.frameSize).toBe(2048);
+		expect(gemini.columns).toBe(2);
+		expect(gemini.frameTokenEstimate).toBe(1120);
 
 		// Measured openai-compat readers map to the family winner object.
 		expect(snapcompact.resolveShape({ api: "openai-completions", id: "moonshotai/kimi-k2.6" })).toBe(
@@ -198,9 +215,11 @@ describe("shape resolution", () => {
 		);
 		expect(snapcompact.idealShapeVariant("qwen/qwen3-vl")).toBeUndefined();
 
-		// An explicit variant wins over identity detection.
+		// An explicit variant wins over identity detection, at the variant's
+		// own research frame size.
 		const forced = snapcompact.resolveShape({ api: "anthropic-messages", id: "claude-fable-5" }, "8x8r-bw");
 		expect(forced.lineRepeat).toBe(2);
+		expect(forced.frameSize).toBe(1568);
 	});
 
 	it("forces a named variant and re-prices it for the provider's billing", () => {
@@ -219,10 +238,14 @@ describe("shape resolution", () => {
 		expect(repeatedOnOpenai.frameTokenEstimate).toBe(snapcompact.SHAPES.openai.frameTokenEstimate);
 		expect(repeatedOnOpenai.imageDetail).toBe("original");
 
-		// Legacy 2576px frames keep the conservative ceiling on every provider.
+		// Billing is computed for the variant's own frame size: the legacy
+		// 2576px frame caps out Anthropic's visual-token budget but stays at
+		// Gemini's fixed per-image price.
 		const legacyOnGoogle = snapcompact.resolveShape({ api: "google-generative-ai" }, "5x8-bw");
 		expect(legacyOnGoogle.frameSize).toBe(2576);
-		expect(legacyOnGoogle.frameTokenEstimate).toBe(snapcompact.SHAPES.legacy.frameTokenEstimate);
+		expect(legacyOnGoogle.frameTokenEstimate).toBe(snapcompact.SHAPES.google.frameTokenEstimate);
+		const legacyOnAnthropic = snapcompact.resolveShape({ api: "anthropic-messages" }, "5x8-bw");
+		expect(legacyOnAnthropic.frameTokenEstimate).toBe(Math.ceil(4784 * 1.05));
 	});
 
 	it("every catalog variant resolves to a complete, renderable shape", () => {

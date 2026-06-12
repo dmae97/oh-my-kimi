@@ -426,7 +426,7 @@ describe("estimateInlineSavings", () => {
 		expect(estimate.visionCapable).toBe(true);
 		expect(estimate.systemPrompt?.applied).toBe(true);
 		expect(estimate.systemPrompt?.frames).toBe(2);
-		expect(estimate.systemPrompt?.imageTokens).toBe(2 * 3300);
+		expect(estimate.systemPrompt?.imageTokens).toBe(2 * snapcompact.SHAPES.anthropic.frameTokenEstimate);
 		expect(estimate.systemPrompt?.savedTokens).toBe(
 			estimate.systemPrompt!.textTokens - estimate.systemPrompt!.imageTokens,
 		);
