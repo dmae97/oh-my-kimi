@@ -2,9 +2,10 @@
  * Snapcompact compaction: archive conversation history as dense bitmap images.
  *
  * Instead of asking an LLM to summarize discarded history, the serialized
- * conversation is rendered into square PNG frames of pixel-font text that
- * vision models read back directly, like an archivist at a snapcompact frame
- * reader.
+ * conversation is rendered into PNG frames of pixel-font text that vision
+ * models read back directly, like an archivist at a snapcompact frame
+ * reader. Frames are `frameSize` wide; their height hugs the text rows
+ * actually printed, so a partially filled frame never bills blank rows.
  *
  * The frame shape is provider-aware, following the snapcompact SQuAD evals
  * (`packages/snapcompact`, 200k-token monolithic runs):

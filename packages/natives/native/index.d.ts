@@ -1285,10 +1285,12 @@ export interface PtyStartOptions {
 export declare function readImageFromClipboard(): Promise<ClipboardImage | undefined | null>
 
 /**
- * Render one snapcompact frame: print pre-normalized text onto a square
- * bitmap and encode it as PNG.
+ * Render one snapcompact frame: print pre-normalized text onto a
+ * `size`-wide bitmap and encode it as PNG.
  *
- * The glyph grid holds `floor(size/cellWidth) *
+ * The bitmap height hugs the rows the text actually occupies
+ * (`usedRows * lineRepeat * cellHeight`), so a partially filled frame never
+ * pays for blank padding rows. The glyph grid holds `floor(size/cellWidth) *
  * floor(size/cellHeight/lineRepeat)` characters; input beyond that is ignored
  * (the caller chunks text to capacity). Native-cell shapes encode as 4-bit
  * indexed PNG; stretched shapes (target cell != font cell) encode as RGB.
@@ -1433,7 +1435,11 @@ export declare function sliceWithWidth(line: string, startCol: number, length: n
 
 /** Shape options for one snapcompact frame. */
 export interface SnapcompactRenderOptions {
-  /** Frame edge in pixels. */
+  /**
+   * Frame width in pixels; also bounds the grid rows
+   * (`floor(size/cellHeight/lineRepeat)`). Output height hugs the rows the
+   * text actually uses instead of padding to a square.
+   */
   size: number
   /**
    * Bundled font: `"5x8"`, `"6x12"`, `"8x13"` (X.org BDF) or `"8x8"`

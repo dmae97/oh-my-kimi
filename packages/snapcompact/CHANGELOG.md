@@ -14,6 +14,7 @@
 
 ### Changed
 
+- Frames are no longer padded to a square: the native renderer clips each PNG's height to the text rows actually printed, so a partially filled frame (typically the newest) bills only the pixel rows it uses
 - **Changed the OpenAI default shape from `6x6u-sent` to `8on16-bw`.** A production-regime mono eval (gpt-5.5, the full 800k-char SQuAD flow in one request, n=50) scored the old dense default f1 .602 vs .851 for `8on16-bw` rendered by the production pipeline, at near-equal total cost (the dense cells burned the frame savings on reasoning tokens); chunked exp14 had already scored `8on16-bw` .906. `SHAPES.openaiDense` is renamed to `SHAPES.openai`
 - **Changed the Google default shape from `8x8r-sent` to `doc-8on16-sent-dim`.** Production-rendered mono eval on gemini-3.5-flash (400k chars, one request, n=25): f1 .900 vs .853 for the repeated grid at lower cost, agreeing with the chunked round-2 winner
 - **Changed the Anthropic default shape from `8x8r-bw` to `6x12-dim`.** Production mono eval on claude-fable (400k chars, one request, n=25): f1 .840 vs .877 for the repeated grid — within noise — at 37% lower cost (12 frames instead of 21 per 400k chars), with clean completions in every probe; opus reads the same trade (.800 vs .833 at 42% lower cost)

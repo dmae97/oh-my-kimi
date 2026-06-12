@@ -274,7 +274,9 @@ describe("render", () => {
 
 		const decoded = decodePng(Buffer.from(frame.data, "base64"));
 		expect(decoded.width).toBe(TEST_FRAME_SIZE);
-		expect(decoded.height).toBe(TEST_FRAME_SIZE);
+		// 40 chars on a 64-col grid: one 8px text row; height hugs it instead
+		// of padding the frame to a 320px square.
+		expect(decoded.height).toBe(8);
 		expect(decoded.colorType).toBe(3); // indexed color
 
 		// Two sentences → glyphs printed in ink 1 then ink 2; background stays 0.
