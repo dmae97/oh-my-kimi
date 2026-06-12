@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Breaking Changes
 
 - Removed the Codex SSE stateful transport path, so SSE turns no longer send `previous_response_id` with delta input and now always send the full transcript
@@ -15,7 +16,8 @@
 
 ### Fixed
 
-- Fixed OpenAI Codex stateful SSE turns surfacing an intermittent 400 (`{"detail":"Unsupported parameter: previous_response_id"}`) instead of recovering: the backend's FastAPI-style `detail` rejection carries no `error.code` and the stale-chain classifier's phrasing regex (`not found|invalid|expired|stale`) missed "Unsupported parameter", so the delta turn died instead of replaying with the full transcript. Both the Codex and platform Responses classifiers now also match "unsupported", routing the rejection through the existing reset-retry-and-circuit-break path. The HTTP-400 raw-request dump for Codex SSE now records the body actually sent on the wire (the chained delta with `previous_response_id`) instead of the pre-chaining full body, which made these failures look like the parameter was never sent.
+- Fixed the platform OpenAI Responses and Codex websocket stale-chain classifiers missing the "Unsupported parameter: previous_response_id" rejection phrasing (FastAPI-style `detail` body with no `error.code`), so a chained turn now falls back to a full-transcript replay instead of surfacing the 400
+- Fixed the HTTP-400 raw-request dump for Codex SSE to record the body actually sent on the wire instead of the pre-transport request body, which made chained-request failures look like the rejected parameter was never sent
 
 ## [15.11.7] - 2026-06-12
 
