@@ -1146,3 +1146,34 @@ export function populateResponsesUsageFromResponse(
 		output.usage.premiumRequests = premiumRequests;
 	}
 }
+
+/**
+ * Strict-prefix delta for stateful `previous_response_id` chaining (used by the
+ * platform Responses provider and the Codex provider on both transports):
+ * returns the input items the current request appends beyond the previous
+ * request's input plus the previous response's output items, or null when the
+ * request options differ or history mutated (the chain must break). Per-turn
+ * `client_metadata` (e.g. rotating turn ids) is excluded from the option
+ * comparison; codex-rs excludes it from the same check.
+ */
+export function buildResponsesDeltaInput<TItem>(
+	previous: { input?: unknown } | undefined,
+	previousResponseItems: readonly TItem[] | undefined,
+	current: { input?: unknown },
+): TItem[] | null {
+	if (!previous) return null;
+	if (!Array.isArray(previous.input) || !Array.isArray(current.input)) return null;
+	const previousWithoutInput = { ...previous, input: undefined, client_metadata: undefined };
+	const currentWithoutInput = { ...current, input: undefined, client_metadata: undefined };
+	if (JSON.stringify(previousWithoutInput) !== JSON.stringify(currentWithoutInput)) {
+		return null;
+	}
+	const baseline = [...previous.input, ...(previousResponseItems ?? [])];
+	if (current.input.length <= baseline.length) return null;
+	for (let index = 0; index < baseline.length; index += 1) {
+		if (JSON.stringify(baseline[index]) !== JSON.stringify(current.input[index])) {
+			return null;
+		}
+	}
+	return current.input.slice(baseline.length) as TItem[];
+}
