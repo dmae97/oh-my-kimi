@@ -271,6 +271,7 @@
 
 ### Fixed
 
+- Fixed npm prebuilt extension compatibility shims deriving their own package root through bare `@oh-my-pi/pi-coding-agent` resolution, which could select an older Bun cache copy in global installs and reintroduce mixed-runtime plugin loading stack overflows.
 - Fixed Ctrl+T thinking-block toggles clearing the pending user message and loader before the assistant stream starts ([#2370](https://github.com/can1357/oh-my-pi/issues/2370)).
 - Fixed Windows CodeGraph MCP launches from npm `.cmd` shims by resolving the shim's Node entry point and spawning it directly, keeping stdio attached to CodeGraph instead of the transient `cmd.exe` wrapper ([#2367](https://github.com/can1357/oh-my-pi/issues/2367)).
 - Fixed snapcompact archives going partially unreadable on OpenRouter, which hard-caps requests at 8 images and silently drops the excess: compaction now passes a provider-aware frame budget (`providerFrameBudget`) so the archive never exceeds the cap (unknown providers get a safe floor of 5), with overflow kept as a text tail on the summary instead of rendering frames the gateway would drop; inline system-prompt/tool-result imaging shares the same per-provider budget (`providerImageBudget`), so once existing images exhaust it (e.g. 8 archive frames on OpenRouter) tool results ship verbatim as text
