@@ -66,7 +66,7 @@ describe("task progress rendering", () => {
 		vi.restoreAllMocks();
 		resetSettingsForTest();
 	});
-	it("keeps the subagent label solid and shimmers the running description", async () => {
+	it("renders running task rows static with the agent dot", async () => {
 		const theme = (await getThemeByName("dark"))!;
 		expect(theme).toBeDefined();
 		const options: RenderResultOptions = { expanded: false, isPartial: true, spinnerFrame: 0 };
@@ -88,18 +88,14 @@ describe("task progress rendering", () => {
 		const rawRow1 = renderRow(700);
 		const strippedRow = Bun.stripANSI(rawRow0);
 
-		expect(strippedRow).toContain("• CountPackages: List workspace packages");
+		expect(strippedRow).toContain(`${theme.status.done} CountPackages: List workspace packages`);
+		expect(strippedRow).not.toContain(theme.symbol("tool.task"));
 		expect(strippedRow).not.toContain(theme.status.running);
 		expect(strippedRow).not.toContain(theme.getSpinnerFrames("status")[0]);
-		// The label is one solid bold-accent run, identical across shimmer frames.
-		const label = theme.fg("accent", theme.bold("CountPackages"));
-		expect(rawRow0).toContain(label);
-		expect(rawRow1).toContain(label);
-		// The description shimmers, so the row as a whole animates between frames.
-		expect(rawRow0).not.toBe(rawRow1);
+		expect(rawRow0).toBe(rawRow1);
 	});
 
-	it("keeps the bullet replacement when shimmer is disabled", async () => {
+	it("keeps the agent dot when shimmer is disabled", async () => {
 		const theme = (await getThemeByName("dark"))!;
 		resetSettingsForTest();
 		await Settings.init({ inMemory: true, overrides: { "display.shimmer": "disabled" } });
@@ -116,12 +112,12 @@ describe("task progress rendering", () => {
 			),
 		);
 
-		expect(strippedRow).toContain("• KeySettingsHotPaths");
+		expect(strippedRow).toContain(`${theme.status.done} KeySettingsHotPaths`);
 		expect(strippedRow).not.toContain(theme.status.running);
 		expect(strippedRow).not.toContain(theme.getSpinnerFrames("status")[0]);
 	});
 
-	it("shimmers the pending description like a running one (frozen async spawn snapshot)", async () => {
+	it("renders pending task rows with the agent dot, not the pending glyph", async () => {
 		const theme = (await getThemeByName("dark"))!;
 		const options: RenderResultOptions = { expanded: false, isPartial: true, spinnerFrame: 0 };
 		const progress = runningProgress({
@@ -144,14 +140,57 @@ describe("task progress rendering", () => {
 
 		const rawRow0 = renderRow(0);
 		const rawRow1 = renderRow(700);
+		const strippedRow = Bun.stripANSI(rawRow0);
 
-		expect(Bun.stripANSI(rawRow0)).toContain("BestGpt: Combine winners for gpt");
-		// The label stays one solid bold-accent run; the description shimmers,
-		// so the row animates across frames exactly like a running agent's.
-		const label = theme.fg("accent", theme.bold("BestGpt"));
-		expect(rawRow0).toContain(label);
-		expect(rawRow1).toContain(label);
-		expect(rawRow0).not.toBe(rawRow1);
+		expect(strippedRow).toContain(`${theme.status.done} BestGpt: Combine winners for gpt`);
+		expect(strippedRow).not.toContain(theme.status.pending);
+		expect(rawRow0).toBe(rawRow1);
+	});
+
+	it("settles completed rows to the foreground color with the same dot", async () => {
+		const theme = (await getThemeByName("dark"))!;
+		const options: RenderResultOptions = { expanded: false, isPartial: true, spinnerFrame: 0 };
+		const progress = runningProgress({
+			id: "DonePkg",
+			status: "completed",
+			description: "List workspace packages",
+		});
+
+		const row = findRow(
+			taskToolRenderer.renderResult(
+				{ content: [{ type: "text", text: "" }], details: detailsFor(progress) },
+				options,
+				theme,
+			),
+			"DonePkg",
+		);
+
+		const stripped = Bun.stripANSI(row);
+		expect(stripped).toContain(`${theme.status.done} DonePkg: List workspace packages`);
+		expect(stripped).not.toContain(theme.symbol("tool.task"));
+		// Same dot as live rows; completion reads as the label settling from
+		// accent to the plain foreground color.
+		const titlePart = `${theme.bold("DonePkg")}: List workspace packages`;
+		expect(row).toContain(theme.fg("text", titlePart));
+		expect(row).not.toContain(theme.fg("accent", titlePart));
+	});
+
+	it("shows the dispatch glyph in the header while agents run, not a spinner", async () => {
+		const theme = (await getThemeByName("dark"))!;
+		const options: RenderResultOptions = { expanded: false, isPartial: true, spinnerFrame: 0 };
+		const header = findRow(
+			taskToolRenderer.renderResult(
+				{ content: [{ type: "text", text: "" }], details: detailsFor(runningProgress()) },
+				options,
+				theme,
+			),
+			"Task",
+		);
+
+		const stripped = Bun.stripANSI(header);
+		expect(stripped).toContain(`${theme.symbol("tool.task")} Task`);
+		expect(stripped).not.toContain(theme.status.running);
+		expect(stripped).not.toContain(theme.getSpinnerFrames("status")[0]);
 	});
 
 	it("renders the assignment markdown inside the result frame", async () => {

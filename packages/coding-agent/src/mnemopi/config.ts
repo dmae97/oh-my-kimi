@@ -10,7 +10,7 @@ export type MnemopiScoping = "global" | "per-project" | "per-project-tagged";
 
 export type MnemopiProviderOptions = Pick<
 	MnemopiOptions,
-	"noEmbeddings" | "embeddingModel" | "embeddingApiUrl" | "embeddingApiKey" | "llm"
+	"noEmbeddings" | "embeddingModel" | "embeddingApiUrl" | "embeddingApiKey" | "llm" | "debug"
 >;
 
 export interface MnemopiBackendConfig {
@@ -23,6 +23,8 @@ export interface MnemopiBackendConfig {
 	scoping?: MnemopiScoping;
 	autoRecall: boolean;
 	autoRetain: boolean;
+	polyphonicRecall: boolean;
+	enhancedRecall: boolean;
 	retainEveryNTurns: number;
 	recallLimit: number;
 	recallContextTurns: number;
@@ -52,6 +54,8 @@ export function loadMnemopiConfig(settings: Settings, agentDir: string): Mnemopi
 		scoping,
 		autoRecall: settings.get("mnemopi.autoRecall"),
 		autoRetain: settings.get("mnemopi.autoRetain"),
+		polyphonicRecall: settings.get("mnemopi.polyphonicRecall"),
+		enhancedRecall: settings.get("mnemopi.enhancedRecall"),
 		retainEveryNTurns: Math.max(1, Math.floor(settings.get("mnemopi.retainEveryNTurns"))),
 		recallLimit: Math.max(1, Math.floor(settings.get("mnemopi.recallLimit"))),
 		recallContextTurns: Math.max(1, Math.floor(settings.get("mnemopi.recallContextTurns"))),
@@ -60,6 +64,7 @@ export function loadMnemopiConfig(settings: Settings, agentDir: string): Mnemopi
 		debug: settings.get("mnemopi.debug"),
 		providerOptions: {
 			noEmbeddings: settings.get("mnemopi.noEmbeddings"),
+			debug: settings.get("mnemopi.debug"),
 			embeddingModel: settings.get("mnemopi.embeddingModel"),
 			embeddingApiUrl: settings.get("mnemopi.embeddingApiUrl"),
 			embeddingApiKey: settings.get("mnemopi.embeddingApiKey"),

@@ -6,6 +6,7 @@ import {
 	collectUnreportedAccounts,
 	computeProviderWindowStats,
 	formatUsageBreakdown,
+	formatUsageHistory,
 	type UsageAccountIdentity,
 } from "@oh-my-pi/pi-coding-agent/cli/usage-cli";
 
@@ -182,5 +183,49 @@ describe("formatUsageBreakdown", () => {
 		expect(text).not.toContain("dummy.primary@example.test");
 		expect(text).not.toContain("dummy.secondary@example.test");
 		for (const mask of redaction.values()) expect(text).toContain(mask);
+	});
+});
+
+describe("formatUsageHistory", () => {
+	const NOW = Date.now();
+	const SINCE = NOW - 7 * 24 * HOUR;
+
+	function historyEntry(recordedAt: number, usedFraction: number | undefined, overrides?: Record<string, unknown>) {
+		return {
+			recordedAt,
+			provider: "anthropic",
+			accountKey: "oauth|email:dummy.primary@example.test",
+			email: "dummy.primary@example.test",
+			limitId: "anthropic:5h",
+			label: "Session",
+			windowLabel: "5 Hour",
+			usedFraction,
+			status: "ok" as const,
+			...overrides,
+		};
+	}
+
+	const entries = [
+		historyEntry(SINCE + HOUR, 0.2),
+		historyEntry(SINCE + 30 * HOUR, 0.95),
+		historyEntry(NOW - HOUR, 0.4),
+	];
+
+	it("renders one series per account window with latest and peak percentages", () => {
+		const text = stripVTControlCharacters(formatUsageHistory(entries, SINCE, NOW));
+		expect(text).toContain("Anthropic");
+		expect(text).toContain("dummy.primary@example.test");
+		// Window label is appended when the limit label doesn't carry it.
+		expect(text).toContain("Session (5 Hour)");
+		expect(text).toContain("latest 40.0%");
+		expect(text).toContain("peak 95.0%");
+		expect(text).toContain("3 snapshots");
+	});
+
+	it("redacts account labels through the provided map", () => {
+		const redaction = buildRedactionMap(["dummy.primary@example.test"]);
+		const text = stripVTControlCharacters(formatUsageHistory(entries, SINCE, NOW, redaction));
+		expect(text).not.toContain("dummy.primary@example.test");
+		expect(text).toContain("du*");
 	});
 });

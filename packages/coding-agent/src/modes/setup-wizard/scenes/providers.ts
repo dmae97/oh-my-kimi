@@ -1,4 +1,4 @@
-import { TabBar } from "@oh-my-pi/pi-tui";
+import { type SgrMouseEvent, TabBar } from "@oh-my-pi/pi-tui";
 import { getTabBarTheme } from "../../shared";
 import { SignInTab } from "./sign-in";
 import type { SetupScene, SetupSceneController, SetupSceneHost, SetupTab } from "./types";
@@ -16,6 +16,8 @@ class ProvidersSceneController implements SetupSceneController {
 
 	#tabs: SetupTab[];
 	#tabBar: TabBar;
+	/** Lines the tab bar occupied in the last render (body starts one blank line below). */
+	#tabRowCount = 1;
 
 	constructor(host: SetupSceneHost) {
 		this.#tabs = [new SignInTab(host), new WebSearchTab(host)];
@@ -52,8 +54,40 @@ class ProvidersSceneController implements SetupSceneController {
 		tab.handleInput(data);
 	}
 
+	/**
+	 * Hit-test mouse reports against the last render: rows inside the tab bar
+	 * hover/switch tabs (suppressed while the active panel is modal, matching
+	 * keyboard tab cycling); everything else forwards to the active panel at
+	 * panel-local coordinates. Wheel always goes to the panel so scrolling
+	 * works regardless of pointer position.
+	 */
+	routeMouse(event: SgrMouseEvent, line: number, col: number): void {
+		const tab = this.#activeTab();
+		if (event.wheel === null && line >= 0 && line < this.#tabRowCount) {
+			if (tab.modal) return;
+			const hit = this.#tabBar.tabAt(line, col);
+			if (event.motion) {
+				this.#tabBar.setHoverTab(hit && !hit.muted ? hit.id : null);
+			} else if (event.leftClick && hit) {
+				this.#tabBar.selectTab(hit.id);
+			}
+			return;
+		}
+		if (event.motion) this.#tabBar.setHoverTab(null);
+		const bodyLine = line - this.#tabRowCount - 1;
+		if (tab.routeMouse) {
+			tab.routeMouse(event, bodyLine, col);
+			return;
+		}
+		if (event.wheel !== null && !tab.modal) {
+			tab.handleInput(event.wheel === -1 ? "\x1b[A" : "\x1b[B");
+		}
+	}
+
 	render(width: number): readonly string[] {
-		return [...this.#tabBar.render(width), "", ...this.#activeTab().render(width)];
+		const tabLines = this.#tabBar.render(width);
+		this.#tabRowCount = tabLines.length;
+		return [...tabLines, "", ...this.#activeTab().render(width)];
 	}
 
 	dispose(): void {

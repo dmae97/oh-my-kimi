@@ -1,3 +1,4 @@
+export { configureRecallFeatures, type RecallFeatureFlags } from "../config";
 export * from "./banks";
 export * from "./beam/index";
 export * from "./memory";

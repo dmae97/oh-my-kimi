@@ -28,10 +28,12 @@ const SENSITIVE_AWS_KEYS: &[&str] = &[
 	"ResponseMetadata",
 ];
 
+#[must_use]
 pub fn supports(program: &str, _subcommand: Option<&str>) -> bool {
 	matches!(program, "aws" | "curl" | "wget" | "psql")
 }
 
+#[must_use]
 pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
 	let cleaned = primitives::strip_ansi(input);
 	let text = match ctx.program {
@@ -708,7 +710,7 @@ fn compact_aws_cloudwatch_events(events: &[&Value]) -> String {
 	for event in events {
 		let ts = event
 			.get("timestamp")
-			.and_then(|v| v.as_i64())
+			.and_then(serde_json::Value::as_i64)
 			.map_or_else(|| "?".to_string(), epoch_ms_to_iso);
 		let msg = event.get("message").and_then(|v| v.as_str()).unwrap_or("?");
 		// Truncate long messages
@@ -1479,7 +1481,8 @@ mod tests {
 		assert!(out.text.contains("age=42"));
 		assert!(out.text.contains("active=true"));
 		assert!(out.text.contains("tags=[a,b]"));
-		assert!(out.text.contains("meta={city:Paris}"));
+		const META_ATTR: &str = "meta={city:Paris}";
+		assert!(out.text.contains(META_ATTR));
 		assert!(out.text.contains("1 item(s)"));
 	}
 
@@ -1656,7 +1659,7 @@ mod tests {
 	fn sensitive_aws_keys_never_leak_from_generic() {
 		let mut fields = String::new();
 		for key in SENSITIVE_AWS_KEYS {
-			fields.push_str(&format!(r#""{key}":"LEAK_SENTINEL","#));
+			let _ = write!(fields, r#""{key}":"LEAK_SENTINEL","#);
 		}
 		let input = format!(r#"{{"Unknowns":[{{"Name":"safe",{fields}"Status":"ok"}}]}}"#);
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };

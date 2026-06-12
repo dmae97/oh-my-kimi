@@ -337,7 +337,7 @@ describe("AgentSession custom-role tag dequeue (E4-E7)", () => {
 		const { session } = fixture;
 		const firstTag = session.enqueueCustomMessageDisplay("/skill:foo bar", "steer");
 		const popped = session.popLastQueuedMessage();
-		expect(popped).toBe("/skill:foo bar");
+		expect(popped?.text).toBe("/skill:foo bar");
 		expect(session.getQueuedMessages().steering).toEqual([]);
 
 		// Push a NEW tagged entry with the same text. Emitting `message_start` for the

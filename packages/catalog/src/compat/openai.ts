@@ -8,7 +8,6 @@
  * never detect, resolve, or allocate.
  */
 import { hostMatchesUrl, modelMatchesHost } from "../hosts";
-import { bareModelId, isFableOrMythos, parseAnthropicModel, semverGte } from "../identity/classify";
 import {
 	isAnthropicNamespacedModelId,
 	isClaudeModelId,
@@ -18,17 +17,16 @@ import {
 	isMimoModelIdOrName,
 	isQwenModelId,
 } from "../identity/family";
-import { ANTHROPIC_ADAPTIVE_EFFORT_MAP_4_TIER, ANTHROPIC_ADAPTIVE_EFFORT_MAP_5_TIER } from "../model-thinking";
 import type { ModelSpec, OpenAICompat, ResolvedOpenAICompat, ResolvedOpenAIResponsesCompat } from "../types";
 import { applyCompatOverrides } from "./apply";
-
-type OpenAIReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
 
 /** GLM coding-plan SKUs idle for minutes mid-reasoning; see `streamIdleTimeoutMs`. */
 const GLM_CODING_PLAN_MODEL_PATTERN = /^glm-5(?:[.-]|$)/i;
 const GLM_CODING_PLAN_STREAM_IDLE_TIMEOUT_MS = 600_000;
 /** Direct DeepSeek reasoning models stall between thinking and answer phases. */
 const DEEPSEEK_REASONING_STREAM_IDLE_TIMEOUT_MS = 300_000;
+/** Kimi K2.6 can spend several minutes reasoning before the first visible token. */
+const KIMI_K26_REASONING_STREAM_IDLE_TIMEOUT_MS = 300_000;
 
 /**
  * OpenCode's gateways (https://opencode.ai/zen|go) gate `reasoning_content`
@@ -70,22 +68,6 @@ function detectStrictModeSupport(provider: string, baseUrl: string): boolean {
 		hostMatchesUrl(baseUrl, "openrouter") ||
 		hostMatchesUrl(baseUrl, "deepseekFamily")
 	);
-}
-
-function getOpenRouterAnthropicReasoningEffortMap(
-	modelId: string,
-): Partial<Record<OpenAIReasoningEffort, string>> | undefined {
-	const parsed = parseAnthropicModel(bareModelId(modelId));
-	if (!parsed) return undefined;
-	// Adaptive efforts on OpenRouter's completions front: Fable/Mythos and
-	// Opus 4.6+ only — Sonnet stays on the plain effort vocabulary there.
-	const isOpusAdaptive = parsed.kind === "opus" && semverGte(parsed.version, "4.6");
-	if (!isFableOrMythos(parsed.kind) && !isOpusAdaptive) return undefined;
-
-	const hasRealXHigh = isFableOrMythos(parsed.kind) || semverGte(parsed.version, "4.7");
-	return (hasRealXHigh ? ANTHROPIC_ADAPTIVE_EFFORT_MAP_5_TIER : ANTHROPIC_ADAPTIVE_EFFORT_MAP_4_TIER) as Partial<
-		Record<OpenAIReasoningEffort, string>
-	>;
 }
 
 /**
@@ -198,45 +180,17 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 			isCopilotHost ||
 			isZenmuxHost);
 
-	const openRouterAnthropicReasoningEffortMap = isOpenRouter
-		? getOpenRouterAnthropicReasoningEffortMap(lowerId)
-		: undefined;
-	const detectedReasoningEffortMap: NonNullable<OpenAICompat["reasoningEffortMap"]> =
-		provider === "groq" && spec.id === "qwen/qwen3-32b"
-			? ({
-					minimal: "default",
-					low: "default",
-					medium: "default",
-					high: "default",
-					xhigh: "default",
-				} satisfies Partial<Record<OpenAIReasoningEffort, string>>)
-			: isDeepseekFamily && spec.reasoning
-				? ({
-						minimal: "high",
-						low: "high",
-						medium: "high",
-						high: "high",
-						xhigh: "max",
-					} satisfies Partial<Record<OpenAIReasoningEffort, string>>)
-				: openRouterAnthropicReasoningEffortMap
-					? openRouterAnthropicReasoningEffortMap
-					: isFireworks
-						? ({
-								// Fireworks' OpenAI-compatible endpoint rejects OpenAI's
-								// `minimal` literal but accepts `none` for the lowest setting.
-								minimal: "none",
-							} satisfies Partial<Record<OpenAIReasoningEffort, string>>)
-						: {};
-
-	// Stream-watchdog floor: GLM coding-plan SKUs and direct DeepSeek reasoning
-	// models idle for minutes mid-reasoning; widen the idle timeout so warm-ups
-	// stop aborting and retrying.
+	// Stream-watchdog floor: GLM coding-plan SKUs, Kimi K2.6, and direct
+	// DeepSeek reasoning models can idle for minutes while reasoning; widen the
+	// idle timeout so warm-ups stop aborting and retrying.
 	const streamIdleTimeoutMs =
 		GLM_CODING_PLAN_MODEL_PATTERN.test(spec.id) && (isZai || isZhipu)
 			? GLM_CODING_PLAN_STREAM_IDLE_TIMEOUT_MS
-			: spec.reasoning && isDirectDeepseekApi
-				? DEEPSEEK_REASONING_STREAM_IDLE_TIMEOUT_MS
-				: undefined;
+			: spec.reasoning && isKimiK26ModelId(spec.id)
+				? KIMI_K26_REASONING_STREAM_IDLE_TIMEOUT_MS
+				: spec.reasoning && isDirectDeepseekApi
+					? DEEPSEEK_REASONING_STREAM_IDLE_TIMEOUT_MS
+					: undefined;
 
 	const compat: ResolvedOpenAICompat = {
 		supportsStore: !isNonStandard,
@@ -251,7 +205,7 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 		supportsReasoningEffort: !isGrok && !isZai && !isZhipu && !isXiaomiMimo,
 		// GitHub Copilot's chat-completions endpoint rejects reasoning params wholesale.
 		supportsReasoningParams: provider !== "github-copilot",
-		reasoningEffortMap: detectedReasoningEffortMap,
+		reasoningEffortMap: {},
 		supportsUsageInStreaming: !isCerebras,
 		// Kimi (including via OpenRouter and Fireworks router-form IDs such as
 		// `accounts/fireworks/routers/kimi-*`) calculates TPM rate limits based on
@@ -323,10 +277,6 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 	};
 
 	applyCompatOverrides(compat, spec.compat);
-	if (spec.compat?.reasoningEffortMap) {
-		// Effort maps merge per level instead of replacing wholesale.
-		compat.reasoningEffortMap = { ...detectedReasoningEffortMap, ...spec.compat.reasoningEffortMap };
-	}
 
 	const whenThinkingPolicy =
 		spec.compat?.whenThinking ?? (isOpenCodeProvider && spec.reasoning ? OPENCODE_WHEN_THINKING : undefined);
@@ -341,6 +291,7 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 
 interface OpenAIResponsesSpecLike {
 	provider: string;
+	name: string;
 	baseUrl: string;
 	compat?: OpenAICompat;
 }
@@ -351,7 +302,8 @@ interface OpenAIResponsesSpecLike {
  * endpoint accepts the `developer` role, while strict tool mode is scoped to
  * first-party OpenAI/Azure/Copilot providers. Developer-role and prompt-cache
  * detection are URL-only on purpose — the historical call sites never
- * consulted the provider id for them.
+ * consulted the provider id for them. The GPT-5 juice-zero hack keys on the
+ * model name, matching the historical request-time check.
  */
 export function buildOpenAIResponsesCompat(spec: OpenAIResponsesSpecLike): ResolvedOpenAIResponsesCompat {
 	const baseUrl = spec.baseUrl ?? "";
@@ -371,6 +323,7 @@ export function buildOpenAIResponsesCompat(spec: OpenAIResponsesSpecLike): Resol
 		// Azure OpenAI and GitHub Copilot Responses paths require tool results
 		// to strictly match prior tool calls when building Responses inputs.
 		strictResponsesPairing: hostMatchesUrl(baseUrl, "azureOpenAI") || spec.provider === "github-copilot",
+		requiresJuiceZeroHack: spec.name.toLowerCase().startsWith("gpt-5"),
 		reasoningEffortMap: {},
 	};
 	applyCompatOverrides(compat, spec.compat);

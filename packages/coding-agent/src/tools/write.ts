@@ -583,9 +583,10 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 
 	/**
 	 * Resolve a single `conflict://<N>` write by splicing the recorded
-	 * marker region in the registered file with `replacementContent`,
-	 * then routing the new file content through the normal writethrough
-	 * pipeline so LSP format/diagnostics still run.
+	 * marker region in the registered file with `replacementContent`.
+	 * The write deliberately bypasses the LSP writethrough: the file may
+	 * still hold other unresolved marker blocks, so formatting could
+	 * corrupt them and diagnostics would be marker-noise anyway.
 	 *
 	 * Entry ids are session-stable: they keep working even after later
 	 * writes resolve other blocks in the same file. The recorded range
@@ -597,7 +598,6 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		replacementContent: string,
 		stripped: boolean,
 		signal: AbortSignal | undefined,
-		context: AgentToolContext | undefined,
 	): Promise<AgentToolResult<WriteToolDetails>> {
 		const absolutePath = entry.absolutePath;
 		if (!(await fs.exists(absolutePath))) {
@@ -608,8 +608,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		const originalText = await Bun.file(absolutePath).text();
 		const newContent = spliceConflict(originalText, entry, expanded);
 
-		const batchRequest = getLspBatchRequest(context?.toolCall);
-		const diagnostics = await this.#writethrough(absolutePath, newContent, signal, undefined, batchRequest);
+		await writethroughNoop(absolutePath, newContent, signal);
 		invalidateFsScanAfterWrite(absolutePath);
 		this.session.bumpFileMutationVersion?.(absolutePath);
 		this.session.fileSnapshotStore?.invalidate(absolutePath);
@@ -643,21 +642,9 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			resultText += `\nNote: auto-stripped hashline display prefixes from content before writing.`;
 		}
 
-		if (!diagnostics) {
-			return {
-				content: [{ type: "text", text: resultText }],
-				details: { resolvedPath: absolutePath },
-			};
-		}
 		return {
 			content: [{ type: "text", text: resultText }],
-			details: {
-				resolvedPath: absolutePath,
-				diagnostics,
-				meta: outputMeta()
-					.diagnostics(diagnostics.summary, diagnostics.messages ?? [])
-					.get(),
-			},
+			details: { resolvedPath: absolutePath },
 		};
 	}
 
@@ -670,7 +657,6 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		replacementContent: string,
 		stripped: boolean,
 		signal: AbortSignal | undefined,
-		context: AgentToolContext | undefined,
 	): Promise<AgentToolResult<WriteToolDetails>> {
 		const entry = getConflictHistory(this.session).get(id);
 		if (!entry) {
@@ -678,7 +664,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 				`Conflict #${id} not found. Conflict ids are registered when \`read\` surfaces a marker block; re-read the file to get a current id.`,
 			);
 		}
-		return this.#resolveConflict(entry, replacementContent, stripped, signal, context);
+		return this.#resolveConflict(entry, replacementContent, stripped, signal);
 	}
 
 	/**
@@ -700,7 +686,6 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		replacementContent: string,
 		stripped: boolean,
 		signal: AbortSignal | undefined,
-		context: AgentToolContext | undefined,
 	): Promise<AgentToolResult<WriteToolDetails>> {
 		const history = getConflictHistory(this.session);
 		const allEntries = history.entries();
@@ -717,8 +702,6 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			byFile.set(entry.absolutePath, bucket);
 		}
 
-		const batchRequest = getLspBatchRequest(context?.toolCall);
-		const allDiagnostics: FileDiagnosticsResult[] = [];
 		const succeededFiles: { displayPath: string; count: number; header?: string }[] = [];
 		const failedFiles: { displayPath: string; count: number; error: string }[] = [];
 		let totalResolvedIds = 0;
@@ -776,7 +759,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 				continue;
 			}
 
-			const diagnostics = await this.#writethrough(absolutePath, text, signal, undefined, batchRequest);
+			await writethroughNoop(absolutePath, text, signal);
 			invalidateFsScanAfterWrite(absolutePath);
 			this.session.bumpFileMutationVersion?.(absolutePath);
 			this.session.fileSnapshotStore?.invalidate(absolutePath);
@@ -785,7 +768,6 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			const header = maybeWriteSnapshotHeader(this.session, absolutePath, text);
 			succeededFiles.push({ displayPath: sample.displayPath, count: resolvedEntries.length, header });
 			totalResolvedIds += resolvedEntries.length;
-			if (diagnostics) allDiagnostics.push(diagnostics);
 		}
 
 		const summaryLines: string[] = [];
@@ -819,23 +801,12 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		}
 		const resultText = summaryLines.join("\n");
 
-		if (allDiagnostics.length === 0) {
-			if (failedFiles.length > 0 && succeededFiles.length === 0) {
-				throw new ToolError(resultText);
-			}
-			return {
-				content: [{ type: "text", text: resultText }],
-				details: {},
-				isError: failedFiles.length > 0 ? true : undefined,
-			};
+		if (failedFiles.length > 0 && succeededFiles.length === 0) {
+			throw new ToolError(resultText);
 		}
-		const mergedSummary = allDiagnostics.map(d => d.summary).join("\n");
-		const mergedMessages = allDiagnostics.flatMap(d => d.messages ?? []);
 		return {
 			content: [{ type: "text", text: resultText }],
-			details: {
-				meta: outputMeta().diagnostics(mergedSummary, mergedMessages).get(),
-			},
+			details: {},
 			isError: failedFiles.length > 0 ? true : undefined,
 		};
 	}
@@ -885,8 +856,8 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 				}
 				const result =
 					conflictUri.id === "*"
-						? await this.#resolveAllConflicts(cleanContent, stripped, signal, context)
-						: await this.#resolveSingleConflictById(conflictUri.id, cleanContent, stripped, signal, context);
+						? await this.#resolveAllConflicts(cleanContent, stripped, signal)
+						: await this.#resolveSingleConflictById(conflictUri.id, cleanContent, stripped, signal);
 				if (conflictUri.recoveredPrefix !== undefined) {
 					appendNoteToResult(
 						result,

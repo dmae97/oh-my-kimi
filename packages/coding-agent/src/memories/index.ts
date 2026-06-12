@@ -274,11 +274,7 @@ async function runPhase1(options: {
 			const result = await runStage1Job({
 				claim,
 				model: phase1Model,
-				apiKey: modelRegistry.resolver(phase1Model.provider, {
-					sessionId: session.sessionId,
-					baseUrl: phase1Model.baseUrl,
-					modelId: phase1Model.id,
-				}),
+				apiKey: modelRegistry.resolver(phase1Model, session.sessionId),
 				modelMaxTokens: computeModelTokenBudget(phase1Model, config),
 				config,
 				metadata: session.agent?.metadataForProvider(phase1Model.provider),
@@ -435,11 +431,7 @@ async function runPhase2(options: {
 			const consolidated = await runConsolidationModel({
 				memoryRoot,
 				model: phase2Model,
-				apiKey: modelRegistry.resolver(phase2Model.provider, {
-					sessionId: session.sessionId,
-					baseUrl: phase2Model.baseUrl,
-					modelId: phase2Model.id,
-				}),
+				apiKey: modelRegistry.resolver(phase2Model, session.sessionId),
 				metadata: session.agent?.metadataForProvider(phase2Model.provider),
 			});
 			await applyConsolidation(memoryRoot, consolidated);

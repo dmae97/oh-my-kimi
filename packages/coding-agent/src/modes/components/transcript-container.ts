@@ -63,6 +63,19 @@ interface FinalizableBlock {
 	 * never mutate post-finalize simply omit the method.
 	 */
 	getTranscriptBlockVersion?(): number;
+	/**
+	 * Whether a still-live block's visually settled leading rows are durable —
+	 * guaranteed to survive the block's remaining transitions (finalize,
+	 * displacement) byte-stable — and may therefore be promoted as commit-safe
+	 * by {@link deriveLiveCommitState}. Blocks whose pending render is
+	 * provisional (a tool call's tail-window streaming preview, replaced
+	 * wholesale by the result render) return `false`: committing such rows
+	 * strands a stale copy in immutable terminal history the moment the real
+	 * content re-lays-out the block (the engine audit recommits below it —
+	 * "duplication, never loss"). Absent = `true`, the default for blocks
+	 * whose live rows persist (a streaming assistant message).
+	 */
+	isTranscriptBlockCommitStable?(): boolean;
 }
 
 function isBlockFinalized(child: Component): boolean {
@@ -73,6 +86,11 @@ function isBlockFinalized(child: Component): boolean {
 function getBlockVersion(child: Component): number | undefined {
 	const fn = (child as Component & FinalizableBlock).getTranscriptBlockVersion;
 	return fn ? fn.call(child) : undefined;
+}
+
+function isBlockCommitStable(child: Component): boolean {
+	const fn = (child as Component & FinalizableBlock).isTranscriptBlockCommitStable;
+	return fn ? fn.call(child) : true;
 }
 
 // A "plain blank" row is empty or whitespace-only with no ANSI bytes. It marks
@@ -476,6 +494,32 @@ export class TranscriptContainer
 		return false;
 	}
 
+	/**
+	 * Whether `component` is inside the live (repaintable) region exactly as
+	 * {@link render} computes it: at/after the first still-mutating block, or
+	 * the transcript tail when every block has finalized. Unlike
+	 * {@link isWithinLiveRegion} (strictly below a still-mutating block, i.e.
+	 * guaranteed-uncommitted), this also counts the trailing block that anchors
+	 * the live region. Self-animating finalized blocks (a detached task's
+	 * shimmering progress rows) poll this to stop animating — and settle on
+	 * static bytes — the moment they sit above the seam, where their rows
+	 * become commit-eligible native-scrollback history.
+	 */
+	isBlockInLiveRegion(component: Component): boolean {
+		const children = this.children;
+		const index = children.indexOf(component);
+		if (index < 0) return false;
+		for (let i = 0; i <= index; i++) {
+			if (!isBlockFinalized(children[i]!)) return true;
+		}
+		// Every block at/before `index` finalized: the live region starts at the
+		// first unfinalized block below it, or at the last child when none exists.
+		for (let i = index + 1; i < children.length; i++) {
+			if (!isBlockFinalized(children[i]!)) return false;
+		}
+		return index === children.length - 1;
+	}
+
 	override render(width: number): readonly string[] {
 		width = Math.max(1, width);
 		this.#nativeScrollbackLiveRegionStart = undefined;
@@ -572,7 +616,11 @@ export class TranscriptContainer
 					previous.generation === this.#generation);
 			const contribution = reusable ? previous.contribution : stripPlainBlankEdges(raw);
 			let liveCommitState: LiveCommitState | undefined;
-			if (i >= liveStartIndex && !finalized) {
+			// Provisional live renders (commit-unstable blocks) never feed the
+			// promotion machinery: their settled-looking rows are replaced
+			// wholesale on finalize, so offering them would commit a stale
+			// preview the result render can only duplicate, never erase.
+			if (i >= liveStartIndex && !finalized && isBlockCommitStable(child)) {
 				liveCommitState = deriveLiveCommitState(previousSnapshot, contribution, width, this.#generation);
 			}
 			// Cache the latest contribution as the next frame's diff input.

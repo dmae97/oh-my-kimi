@@ -1,4 +1,7 @@
-import type { ApiKeyResolver, AuthStorage } from "@oh-my-pi/pi-ai";
+import type { Api, ApiKeyResolver, AuthStorage, Model } from "@oh-my-pi/pi-ai";
+
+/** Model slice accepted by the model-form `resolver(model, sessionId)` overload. */
+export type ApiKeyResolverModel = Pick<Model<Api>, "provider" | "baseUrl" | "id">;
 
 export interface ApiKeyResolverOptions {
 	/** Session id for credential stickiness; read at resolve time by the caller. */
@@ -26,10 +29,14 @@ export interface ApiKeyResolverRegistry {
 	 * policy: initial → resolve; step (b) → force-refresh same account; step (c)
 	 * → rotate to a sibling credential, then re-resolve.
 	 *
-	 * The resolver is stateless (safe to reuse across requests). Callers that
-	 * need the initial key for a guard can call `resolveApiKeyOnce(resolver)`.
+	 * Two call forms: `resolver(provider, options?)` for provider-scoped keys,
+	 * and `resolver(model, sessionId?)` which derives `baseUrl`/`modelId` from
+	 * the model. The resolver is stateless (safe to reuse across requests).
+	 * Callers that need the initial key for a guard can call
+	 * `resolveApiKeyOnce(resolver)`.
 	 */
 	resolver(provider: string, options?: ApiKeyResolverOptions): ApiKeyResolver;
+	resolver(model: ApiKeyResolverModel, sessionId?: string): ApiKeyResolver;
 }
 
 /**

@@ -1149,8 +1149,9 @@ describe("ModelRegistry", () => {
 
 			expect(model?.thinking).toEqual({
 				...thinking,
-				// Versionless claude ids resolve to the 4-tier adaptive wire map.
-				effortMap: { minimal: "low", xhigh: "max" },
+				// Versionless claude ids resolve to the 4-tier adaptive wire map,
+				// filtered to the declared efforts (no xhigh).
+				effortMap: { minimal: "low" },
 			});
 		});
 
@@ -2049,5 +2050,47 @@ describe("ModelRegistry", () => {
 
 		expect(vertexModels.some(model => model.id === "zai-org/glm-4.7-maas")).toBe(true);
 		expect(vertexModels.some(model => model.id.startsWith("gemini-"))).toBe(true);
+	});
+
+	describe("effort-tier variant collapsing", () => {
+		test("collapses X/X-thinking twins from custom providers", () => {
+			writeRawModelsJson({
+				newapi: providerConfig("https://newapi.example.com/v1", [
+					{ id: "[Kiro] claude-opus-4-7" },
+					{ id: "[Kiro] claude-opus-4-7-thinking" },
+				]),
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const models = getModelsForProvider(registry, "newapi");
+			expect(models.map(m => m.id)).toEqual(["[Kiro] claude-opus-4-7"]);
+			// Effort routing to the consumed twin forces reasoning even though
+			// the config never marked it.
+			expect(models[0]?.reasoning).toBe(true);
+			expect(models[0]?.thinking?.effortRouting?.[Effort.High]).toBe("[Kiro] claude-opus-4-7-thinking");
+			expect(models[0]?.thinking?.effortRouting?.off).toBe("[Kiro] claude-opus-4-7");
+			// Saved selectors for the consumed twin resolve via the grammar alias.
+			expect(registry.find("newapi", "[Kiro] claude-opus-4-7-thinking")?.id).toBe("[Kiro] claude-opus-4-7");
+		});
+
+		test("modelOverrides keyed by retired variant ids re-key onto the collapsed model", () => {
+			writeRawModelsJson({
+				"google-antigravity": { modelOverrides: { "gemini-3-pro-high": { contextWindow: 222_222 } } },
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const collapsed = registry.find("google-antigravity", "gemini-3-pro");
+			expect(collapsed?.contextWindow).toBe(222_222);
+			// The retired selector resolves to the same collapsed model.
+			expect(registry.find("google-antigravity", "gemini-3-pro-high")?.id).toBe("gemini-3-pro");
+		});
+
+		test("suppressed selectors keyed by retired variant ids bind to the collapsed id", () => {
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			registry.suppressSelector("google-antigravity/gemini-3-pro-high", Date.now() + 60_000);
+			expect(registry.isSelectorSuppressed("google-antigravity/gemini-3-pro")).toBe(true);
+			expect(registry.isSelectorSuppressed("google-antigravity/gemini-3-pro-low")).toBe(true);
+			expect(registry.isSelectorSuppressed("google-antigravity/gemini-2.5-pro")).toBe(false);
+		});
 	});
 });

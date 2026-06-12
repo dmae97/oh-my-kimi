@@ -82,6 +82,7 @@ export async function runSetupWizard(
 		maxHeight: "100%",
 		anchor: "top-left",
 		margin: 0,
+		fullscreen: true,
 	});
 	try {
 		await component.run();

@@ -1,6 +1,7 @@
 // Ported from NousResearch/hermes-agent (MIT) — tools/tts_tool.py L167-171, L896-959.
 
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
+import { type ApiKey, ProviderHttpError, withAuth } from "@oh-my-pi/pi-ai";
 import * as z from "zod/v4";
 import type { CustomTool, CustomToolContext } from "../extensibility/custom-tools/types";
 import { ohMyPiXAIUserAgent, resolveXAIHttpCredentials } from "../lib/xai-http";
@@ -96,27 +97,46 @@ export const ttsTool: CustomTool<typeof ttsSchema, TtsToolDetails> = {
 		const timeoutSignal = AbortSignal.timeout(60_000);
 		const combinedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
 
-		const response = await fetch(`${creds.baseURL}/tts`, {
-			method: "POST",
-			headers: {
-				Authorization: `Bearer ${creds.apiKey}`,
-				"Content-Type": "application/json",
-				"User-Agent": ohMyPiXAIUserAgent(),
-			},
-			body: JSON.stringify(payload),
-			signal: combinedSignal,
+		const sessionId = ctx.sessionManager.getSessionId();
+		const apiKey: ApiKey = ctx.modelRegistry.resolver(creds.provider, {
+			sessionId,
+			baseUrl: creds.baseURL,
 		});
-		if (!response.ok) {
-			const detail = await response.text();
-			return {
-				isError: true,
-				content: [
-					{
-						type: "text",
-						text: `xAI TTS failed (${response.status}): ${detail.slice(0, 300)}`,
-					},
-				],
-			};
+
+		let response: Response;
+		try {
+			response = await withAuth(
+				apiKey,
+				async key => {
+					const resp = await fetch(`${creds.baseURL}/tts`, {
+						method: "POST",
+						headers: {
+							Authorization: `Bearer ${key}`,
+							"Content-Type": "application/json",
+							"User-Agent": ohMyPiXAIUserAgent(),
+						},
+						body: JSON.stringify(payload),
+						signal: combinedSignal,
+					});
+					if (!resp.ok) {
+						const detail = await resp.text();
+						throw new ProviderHttpError(`xAI TTS failed (${resp.status}): ${detail.slice(0, 300)}`, resp.status, {
+							headers: resp.headers,
+						});
+					}
+					return resp;
+				},
+				{ signal: combinedSignal },
+			);
+		} catch (error) {
+			const status = (error as { status?: unknown }).status;
+			if (error instanceof Error && typeof status === "number") {
+				return {
+					isError: true,
+					content: [{ type: "text", text: error.message }],
+				};
+			}
+			throw error;
 		}
 		const bytes = new Uint8Array(await response.arrayBuffer());
 		await Bun.write(outputPath, bytes);

@@ -1,4 +1,6 @@
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-ai";
+import { SHAPE_VARIANT_NAMES } from "@oh-my-pi/snapcompact";
+import { DEFAULT_RELAY_URL } from "../collab/protocol";
 import { AUTO_THINKING, getConfiguredThinkingLevelMetadata, getThinkingLevelMetadata } from "../thinking";
 import {
 	TINY_MODEL_DEVICE_DEFAULT,
@@ -25,11 +27,15 @@ import { EDIT_MODES } from "../utils/edit-mode";
 import { SEARCH_PROVIDER_OPTIONS, SEARCH_PROVIDER_PREFERENCES } from "../web/search/types";
 
 /** Unified settings schema - single source of truth for all settings.
- * Unified settings schema - single source of truth for all settings.
  *
  * Each setting is defined once here with:
  * - Type and default value
- * - Optional UI metadata (label, description, tab)
+ * - Optional UI metadata (label, description, tab, group)
+ *
+ * UI metadata places the setting in the settings panel: `tab` picks the
+ * panel tab, `group` the titled section within it (registered in
+ * TAB_GROUPS). Sections render in TAB_GROUPS order; settings within a
+ * section keep declaration order.
  *
  * The Settings singleton provides type-safe path-based access:
  *   settings.get("compaction.enabled")  // => boolean
@@ -46,7 +52,8 @@ export type SettingTab =
 	| "interaction"
 	| "context"
 	| "memory"
-	| "editing"
+	| "files"
+	| "shell"
 	| "tools"
 	| "tasks"
 	| "providers";
@@ -61,7 +68,8 @@ export const SETTING_TABS: SettingTab[] = [
 	"interaction",
 	"context",
 	"memory",
-	"editing",
+	"files",
+	"shell",
 	"tools",
 	"tasks",
 	"providers",
@@ -74,10 +82,47 @@ export const TAB_METADATA: Record<SettingTab, { label: string; icon: `tab.${stri
 	interaction: { label: "Interaction", icon: "tab.interaction" },
 	context: { label: "Context", icon: "tab.context" },
 	memory: { label: "Memory", icon: "tab.memory" },
-	editing: { label: "Editing", icon: "tab.editing" },
+	files: { label: "Files", icon: "tab.files" },
+	shell: { label: "Shell", icon: "tab.shell" },
 	tools: { label: "Tools", icon: "tab.tools" },
 	tasks: { label: "Tasks", icon: "tab.tasks" },
 	providers: { label: "Providers", icon: "tab.providers" },
+};
+
+/**
+ * Ordered section groups per tab. Settings declare their section via `ui.group`;
+ * the settings UI renders groups in this order with a heading row between them.
+ * Ungrouped settings render first, before any section heading.
+ */
+export const TAB_GROUPS: Record<SettingTab, readonly string[]> = {
+	appearance: ["Theme", "Status Line", "Display", "Images"],
+	model: ["Thinking", "Sampling", "Prompt", "Retry & Fallback"],
+	interaction: [
+		"Input",
+		"Approvals",
+		"Notifications",
+		"Speech",
+		"Collab",
+		"Magic Keywords",
+		"Startup & Updates",
+		"Power (macOS)",
+	],
+	context: ["General", "Compaction", "Rules (TTSR)", "Experimental"],
+	memory: ["General", "Mnemopi", "Hindsight"],
+	files: ["Editing", "Reading", "Read Summaries", "LSP"],
+	shell: ["Bash", "Eval & Python"],
+	tools: [
+		"Available Tools",
+		"Todos",
+		"Search & Browser",
+		"GitHub",
+		"Output Limits",
+		"Execution",
+		"Discovery & MCP",
+		"Developer",
+	],
+	tasks: ["Modes", "Subagents", "Isolation", "Commands & Skills"],
+	providers: ["Services", "Tiny Model", "Protocol", "Privacy"],
 };
 
 /** Status line segment identifiers */
@@ -104,7 +149,8 @@ export type StatusLineSegmentId =
 	| "cache_write"
 	| "cache_hit"
 	| "session_name"
-	| "usage";
+	| "usage"
+	| "collab";
 
 /** Submenu choice metadata. */
 export type SubmenuOption<V extends string = string> = {
@@ -115,6 +161,8 @@ export type SubmenuOption<V extends string = string> = {
 
 interface UiBase {
 	tab: SettingTab;
+	/** Section within the tab; must be listed in TAB_GROUPS[tab]. Ungrouped settings render at the top. */
+	group?: string;
 	label: string;
 	description: string;
 	/** Condition function name - setting only shown when true */
@@ -273,6 +321,7 @@ export const SETTINGS_SCHEMA = {
 		default: false,
 		ui: {
 			tab: "interaction",
+			group: "Startup & Updates",
 			label: "Auto Resume",
 			description: "Automatically resume the most recent session in the current directory",
 		},
@@ -284,8 +333,9 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: {
 			tab: "interaction",
-			label: "Prevent Idle Sleep (macOS)",
-			description: "caffeinate -i: keep the system awake while a session is open",
+			group: "Power (macOS)",
+			label: "Prevent Idle Sleep",
+			description: "Keep the system awake while a session is open (caffeinate -i)",
 		},
 	},
 	"power.preventSystemSleep": {
@@ -293,8 +343,9 @@ export const SETTINGS_SCHEMA = {
 		default: false,
 		ui: {
 			tab: "interaction",
-			label: "Prevent System Sleep on AC (macOS)",
-			description: "caffeinate -s: block all system sleep while on AC power",
+			group: "Power (macOS)",
+			label: "Prevent System Sleep on AC",
+			description: "Block all system sleep while on AC power (caffeinate -s)",
 		},
 	},
 	"power.declareUserActive": {
@@ -302,8 +353,9 @@ export const SETTINGS_SCHEMA = {
 		default: false,
 		ui: {
 			tab: "interaction",
-			label: "Declare User Active (macOS)",
-			description: "caffeinate -u: keep the display lit and treat the user as active",
+			group: "Power (macOS)",
+			label: "Declare User Active",
+			description: "Keep the display lit and treat the user as active (caffeinate -u)",
 		},
 	},
 	"power.preventDisplaySleep": {
@@ -311,29 +363,14 @@ export const SETTINGS_SCHEMA = {
 		default: false,
 		ui: {
 			tab: "interaction",
-			label: "Prevent Display Sleep (macOS)",
-			description: "caffeinate -d: keep the display from idle-sleeping while a session is open",
+			group: "Power (macOS)",
+			label: "Prevent Display Sleep",
+			description: "Keep the display from idle-sleeping while a session is open (caffeinate -d)",
 		},
 	},
 	shellPath: { type: "string", default: undefined },
 
 	extensions: { type: "array", default: EMPTY_STRING_ARRAY },
-
-	"marketplace.autoUpdate": {
-		type: "enum",
-		values: ["off", "notify", "auto"] as const,
-		default: "notify",
-		ui: {
-			tab: "tools",
-			label: "Marketplace Auto-Update",
-			description: "Check for plugin updates on startup (off/notify/auto)",
-			options: [
-				{ value: "off", label: "Off", description: "Don't check for plugin updates" },
-				{ value: "notify", label: "Notify", description: "Check on startup and notify when updates are available" },
-				{ value: "auto", label: "Auto", description: "Check on startup and auto-install updates" },
-			],
-		},
-	},
 
 	enabledModels: { type: "array", default: EMPTY_STRING_ARRAY },
 
@@ -359,8 +396,9 @@ export const SETTINGS_SCHEMA = {
 		default: "titanium",
 		ui: {
 			tab: "appearance",
+			group: "Theme",
 			label: "Dark Theme",
-			description: "Theme used when terminal has dark background",
+			description: "Theme used when the terminal has a dark background",
 			options: "runtime",
 		},
 	},
@@ -370,8 +408,9 @@ export const SETTINGS_SCHEMA = {
 		default: "light",
 		ui: {
 			tab: "appearance",
+			group: "Theme",
 			label: "Light Theme",
-			description: "Theme used when terminal has light background",
+			description: "Theme used when the terminal has a light background",
 			options: "runtime",
 		},
 	},
@@ -382,8 +421,9 @@ export const SETTINGS_SCHEMA = {
 		default: "unicode",
 		ui: {
 			tab: "appearance",
+			group: "Theme",
 			label: "Symbol Preset",
-			description: "Icon/symbol style",
+			description: "Glyph set for icons and symbols (Unicode, Nerd Font, or ASCII)",
 			options: [
 				{ value: "unicode", label: "Unicode", description: "Standard symbols (default)" },
 				{ value: "nerd", label: "Nerd Font", description: "Requires Nerd Font" },
@@ -397,6 +437,7 @@ export const SETTINGS_SCHEMA = {
 		default: false,
 		ui: {
 			tab: "appearance",
+			group: "Theme",
 			label: "Color-Blind Mode",
 			description: "Use blue instead of green for diff additions",
 		},
@@ -409,6 +450,7 @@ export const SETTINGS_SCHEMA = {
 		default: "default",
 		ui: {
 			tab: "appearance",
+			group: "Status Line",
 			label: "Status Line Preset",
 			description: "Pre-built status line configurations",
 			options: [
@@ -429,6 +471,7 @@ export const SETTINGS_SCHEMA = {
 		default: "powerline-thin",
 		ui: {
 			tab: "appearance",
+			group: "Status Line",
 			label: "Status Line Separator",
 			description: "Style of separators between segments",
 			options: [
@@ -448,6 +491,7 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: {
 			tab: "appearance",
+			group: "Status Line",
 			label: "Session Accent",
 			description: "Use the session name color for the editor border and status line gap",
 		},
@@ -458,6 +502,7 @@ export const SETTINGS_SCHEMA = {
 		default: false,
 		ui: {
 			tab: "appearance",
+			group: "Status Line",
 			label: "Transparent Status Line",
 			description:
 				"Use the terminal's default background for the status line instead of the theme's `statusLineBg`. Powerline end caps are dropped because they need a contrasting fill to bridge into the surrounding terminal.",
@@ -468,7 +513,8 @@ export const SETTINGS_SCHEMA = {
 		default: 50,
 		ui: {
 			tab: "tools",
-			label: "Artifact spill threshold (KB)",
+			group: "Output Limits",
+			label: "Artifact Spill Threshold (KB)",
 			description: "Tool output above this size is saved as an artifact; tail is kept inline",
 			options: [
 				{ value: "1", label: "1 KB", description: "~250 tokens" },
@@ -491,7 +537,8 @@ export const SETTINGS_SCHEMA = {
 		default: 20,
 		ui: {
 			tab: "tools",
-			label: "Artifact tail size (KB)",
+			group: "Output Limits",
+			label: "Artifact Tail Size (KB)",
 			description: "Amount of tail content kept inline when output spills to artifact",
 			options: [
 				{ value: "1", label: "1 KB", description: "~250 tokens" },
@@ -510,7 +557,8 @@ export const SETTINGS_SCHEMA = {
 		default: 20,
 		ui: {
 			tab: "tools",
-			label: "Artifact head size (KB)",
+			group: "Output Limits",
+			label: "Artifact Head Size (KB)",
 			description:
 				"Amount of head content kept inline alongside the tail when output spills to artifact (middle elision). 0 disables — keep tail only.",
 			options: [
@@ -531,7 +579,8 @@ export const SETTINGS_SCHEMA = {
 		default: 768,
 		ui: {
 			tab: "tools",
-			label: "Output column cap",
+			group: "Output Limits",
+			label: "Output Column Cap",
 			description:
 				"Per-line byte cap for streaming tool outputs (bash, ssh, python, js eval) and `read`. Lines wider than this are ellipsis-truncated; remaining bytes up to the next newline are dropped. 0 disables.",
 			options: [
@@ -550,7 +599,8 @@ export const SETTINGS_SCHEMA = {
 		default: 500,
 		ui: {
 			tab: "tools",
-			label: "Artifact tail lines",
+			group: "Output Limits",
+			label: "Artifact Tail Lines",
 			description: "Maximum lines of tail content kept inline when output spills to artifact",
 			options: [
 				{ value: "50", label: "50 lines", description: "~250 tokens" },
@@ -569,8 +619,9 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: {
 			tab: "appearance",
+			group: "Status Line",
 			label: "Show Hook Status",
-			description: "Display hook status messages below status line",
+			description: "Display hook status messages below the status line",
 		},
 	},
 
@@ -586,8 +637,9 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: {
 			tab: "appearance",
+			group: "Images",
 			label: "Show Inline Images",
-			description: "Render images inline in terminal",
+			description: "Render images inline in the terminal",
 			condition: "hasImageProtocol",
 		},
 	},
@@ -597,6 +649,7 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: {
 			tab: "appearance",
+			group: "Images",
 			label: "Auto-Resize Images",
 			description: "Resize large images to 2000x2000 max for better model compatibility",
 		},
@@ -605,7 +658,12 @@ export const SETTINGS_SCHEMA = {
 	"images.blockImages": {
 		type: "boolean",
 		default: false,
-		ui: { tab: "appearance", label: "Block Images", description: "Prevent images from being sent to LLM providers" },
+		ui: {
+			tab: "appearance",
+			group: "Images",
+			label: "Block Images",
+			description: "Prevent images from being sent to LLM providers",
+		},
 	},
 
 	"tui.maxInlineImageColumns": {
@@ -634,6 +692,7 @@ export const SETTINGS_SCHEMA = {
 		default: false,
 		ui: {
 			tab: "appearance",
+			group: "Display",
 			label: "Large Headings (Kitty)",
 			description:
 				"Render Markdown H1 headings at 2x scale using Kitty's OSC 66 text-sizing protocol. Only takes effect on Kitty terminals; ignored everywhere else. Off by default.",
@@ -646,6 +705,7 @@ export const SETTINGS_SCHEMA = {
 		default: "auto",
 		ui: {
 			tab: "appearance",
+			group: "Display",
 			label: "Terminal Hyperlinks",
 			description:
 				"Wrap paths and URLs in OSC 8 hyperlinks for terminal-native click-to-open (auto: detect support; off: never; always: unconditional)",
@@ -663,6 +723,7 @@ export const SETTINGS_SCHEMA = {
 		default: "classic",
 		ui: {
 			tab: "appearance",
+			group: "Display",
 			label: "Shimmer",
 			description: "Animation style for working/loading messages",
 			options: [
@@ -678,6 +739,7 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: {
 			tab: "appearance",
+			group: "Display",
 			label: "Smooth Streaming",
 			description: "Reveal assistant text and streamed tool input smoothly while chunks arrive",
 		},
@@ -688,6 +750,7 @@ export const SETTINGS_SCHEMA = {
 		default: false,
 		ui: {
 			tab: "appearance",
+			group: "Display",
 			label: "Show Token Usage",
 			description: "Show per-turn token usage on assistant messages",
 		},
@@ -696,7 +759,12 @@ export const SETTINGS_SCHEMA = {
 	showHardwareCursor: {
 		type: "boolean",
 		default: true, // will be computed based on platform if undefined
-		ui: { tab: "appearance", label: "Show Hardware Cursor", description: "Show terminal cursor for IME support" },
+		ui: {
+			tab: "appearance",
+			group: "Display",
+			label: "Show Hardware Cursor",
+			description: "Show terminal cursor for IME support",
+		},
 	},
 
 	// ────────────────────────────────────────────────────────────────────────
@@ -710,6 +778,7 @@ export const SETTINGS_SCHEMA = {
 		default: "high",
 		ui: {
 			tab: "model",
+			group: "Thinking",
 			label: "Thinking Level",
 			description: "Reasoning depth for thinking-capable models",
 			options: [
@@ -722,7 +791,12 @@ export const SETTINGS_SCHEMA = {
 	hideThinkingBlock: {
 		type: "boolean",
 		default: false,
-		ui: { tab: "model", label: "Hide Thinking Blocks", description: "Hide thinking blocks in assistant responses" },
+		ui: {
+			tab: "model",
+			group: "Thinking",
+			label: "Hide Thinking Blocks",
+			description: "Hide thinking blocks in assistant responses",
+		},
 	},
 
 	repeatToolDescriptions: {
@@ -730,6 +804,7 @@ export const SETTINGS_SCHEMA = {
 		default: false,
 		ui: {
 			tab: "model",
+			group: "Prompt",
 			label: "Repeat Tool Descriptions",
 			description: "Render full tool descriptions in the system prompt instead of a tool name list",
 		},
@@ -740,8 +815,39 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: {
 			tab: "model",
-			label: "Include Model In Prompt",
+			group: "Prompt",
+			label: "Include Model in Prompt",
 			description: "Surface the active model identifier in the system prompt so the agent knows which model it is",
+		},
+	},
+
+	personality: {
+		type: "enum",
+		values: ["default", "friendly", "pragmatic", "none"] as const,
+		default: "default",
+		ui: {
+			tab: "model",
+			group: "Prompt",
+			label: "Personality",
+			description: "Communication style rendered into the system prompt's personality block",
+			options: [
+				{
+					value: "default",
+					label: "Default",
+					description: "Terse, evidence-first engineer; dense, action-oriented replies",
+				},
+				{
+					value: "friendly",
+					label: "Friendly",
+					description: "Warm, encouraging collaborator focused on momentum and morale",
+				},
+				{
+					value: "pragmatic",
+					label: "Pragmatic",
+					description: "Direct, efficient engineer focused on clarity and rigor",
+				},
+				{ value: "none", label: "None", description: "Omit the personality block entirely" },
+			],
 		},
 	},
 
@@ -751,6 +857,7 @@ export const SETTINGS_SCHEMA = {
 		default: -1,
 		ui: {
 			tab: "model",
+			group: "Sampling",
 			label: "Temperature",
 			description: "Sampling temperature (0 = deterministic, 1 = creative, -1 = provider default)",
 			options: [
@@ -769,6 +876,7 @@ export const SETTINGS_SCHEMA = {
 		default: -1,
 		ui: {
 			tab: "model",
+			group: "Sampling",
 			label: "Top P",
 			description: "Nucleus sampling cutoff (0-1, -1 = provider default)",
 			options: [
@@ -787,6 +895,7 @@ export const SETTINGS_SCHEMA = {
 		default: -1,
 		ui: {
 			tab: "model",
+			group: "Sampling",
 			label: "Top K",
 			description: "Sample from top-K tokens (-1 = provider default)",
 			options: [
@@ -804,6 +913,7 @@ export const SETTINGS_SCHEMA = {
 		default: -1,
 		ui: {
 			tab: "model",
+			group: "Sampling",
 			label: "Min P",
 			description: "Minimum probability threshold (0-1, -1 = provider default)",
 			options: [
@@ -820,6 +930,7 @@ export const SETTINGS_SCHEMA = {
 		default: -1,
 		ui: {
 			tab: "model",
+			group: "Sampling",
 			label: "Presence Penalty",
 			description: "Penalty for introducing already-present tokens (-1 = provider default)",
 			options: [
@@ -837,6 +948,7 @@ export const SETTINGS_SCHEMA = {
 		default: -1,
 		ui: {
 			tab: "model",
+			group: "Sampling",
 			label: "Repetition Penalty",
 			description: "Penalty for repeated tokens (-1 = provider default)",
 			options: [
@@ -856,6 +968,7 @@ export const SETTINGS_SCHEMA = {
 		default: "none",
 		ui: {
 			tab: "model",
+			group: "Sampling",
 			label: "Service Tier",
 			description:
 				'Processing priority hint (none = omit). OpenAI accepts the tier values directly; Anthropic realizes `priority` as `speed: "fast"` on supported Opus models. Scoped values target one family.',
@@ -892,6 +1005,7 @@ export const SETTINGS_SCHEMA = {
 		default: 10,
 		ui: {
 			tab: "model",
+			group: "Retry & Fallback",
 			label: "Retry Attempts",
 			description: "Maximum retry attempts on API errors",
 			options: [
@@ -910,6 +1024,7 @@ export const SETTINGS_SCHEMA = {
 		default: 5 * 60 * 1000,
 		ui: {
 			tab: "model",
+			group: "Retry & Fallback",
 			label: "Max Retry Delay",
 			description:
 				"Maximum wait between retries, in ms. When the provider asks us to wait longer than this and no credential or model fallback succeeds, the request fails fast instead of sleeping (e.g. 3-hour Anthropic rate-limit windows).",
@@ -920,6 +1035,7 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: {
 			tab: "model",
+			group: "Retry & Fallback",
 			label: "Retry Model Fallback",
 			description: "Allow retry recovery to switch to configured fallback models",
 		},
@@ -931,6 +1047,7 @@ export const SETTINGS_SCHEMA = {
 		default: "cooldown-expiry",
 		ui: {
 			tab: "model",
+			group: "Retry & Fallback",
 			label: "Fallback Revert Policy",
 			description: "When to return to the primary model after a fallback",
 			options: [
@@ -955,6 +1072,7 @@ export const SETTINGS_SCHEMA = {
 		default: "one-at-a-time",
 		ui: {
 			tab: "interaction",
+			group: "Input",
 			label: "Steering Mode",
 			description: "How to process queued messages while agent is working",
 		},
@@ -966,6 +1084,7 @@ export const SETTINGS_SCHEMA = {
 		default: "one-at-a-time",
 		ui: {
 			tab: "interaction",
+			group: "Input",
 			label: "Follow-Up Mode",
 			description: "How to drain follow-up messages after a turn completes",
 		},
@@ -977,6 +1096,7 @@ export const SETTINGS_SCHEMA = {
 		default: "immediate",
 		ui: {
 			tab: "interaction",
+			group: "Input",
 			label: "Interrupt Mode",
 			description: "When steering messages interrupt tool execution",
 		},
@@ -988,6 +1108,7 @@ export const SETTINGS_SCHEMA = {
 		default: "prompt",
 		ui: {
 			tab: "interaction",
+			group: "Input",
 			label: "Loop Mode",
 			description: "What happens between /loop iterations before re-submitting the prompt",
 			options: [
@@ -1013,6 +1134,7 @@ export const SETTINGS_SCHEMA = {
 		default: "tree",
 		ui: {
 			tab: "interaction",
+			group: "Input",
 			label: "Double-Escape Action",
 			description: "Action when pressing Escape twice with empty editor",
 		},
@@ -1024,6 +1146,7 @@ export const SETTINGS_SCHEMA = {
 		default: "default",
 		ui: {
 			tab: "interaction",
+			group: "Input",
 			label: "Session Tree Filter",
 			description: "Default filter mode when opening the session tree",
 		},
@@ -1034,6 +1157,7 @@ export const SETTINGS_SCHEMA = {
 		default: 5,
 		ui: {
 			tab: "interaction",
+			group: "Input",
 			label: "Autocomplete Items",
 			description: "Max visible items in autocomplete dropdown (3-20)",
 			options: [
@@ -1052,6 +1176,7 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: {
 			tab: "interaction",
+			group: "Input",
 			label: "Emoji Autocomplete",
 			description: "Suggest emojis from `:name:` shortcodes and expand text emoticons like `:D` or `:-)`",
 		},
@@ -1062,6 +1187,7 @@ export const SETTINGS_SCHEMA = {
 		default: false,
 		ui: {
 			tab: "interaction",
+			group: "Startup & Updates",
 			label: "Quiet Startup",
 			description: "Skip welcome screen and startup status messages",
 		},
@@ -1072,6 +1198,7 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: {
 			tab: "interaction",
+			group: "Startup & Updates",
 			label: "Setup Wizard",
 			description: "Show newly added onboarding steps once per setup version",
 		},
@@ -1082,15 +1209,38 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: {
 			tab: "interaction",
+			group: "Startup & Updates",
 			label: "Check for Updates",
-			description: "If false, skip update check",
+			description: "Check for omp updates on startup",
+		},
+	},
+
+	"marketplace.autoUpdate": {
+		type: "enum",
+		values: ["off", "notify", "auto"] as const,
+		default: "notify",
+		ui: {
+			tab: "interaction",
+			group: "Startup & Updates",
+			label: "Marketplace Auto-Update",
+			description: "Check for plugin updates on startup",
+			options: [
+				{ value: "off", label: "Off", description: "Don't check for plugin updates" },
+				{ value: "notify", label: "Notify", description: "Check on startup and notify when updates are available" },
+				{ value: "auto", label: "Auto", description: "Check on startup and auto-install updates" },
+			],
 		},
 	},
 
 	collapseChangelog: {
 		type: "boolean",
 		default: false,
-		ui: { tab: "interaction", label: "Collapse Changelog", description: "Show condensed changelog after updates" },
+		ui: {
+			tab: "interaction",
+			group: "Startup & Updates",
+			label: "Collapse Changelog",
+			description: "Show condensed changelog after updates",
+		},
 	},
 
 	"magicKeywords.enabled": {
@@ -1098,6 +1248,7 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: {
 			tab: "interaction",
+			group: "Magic Keywords",
 			label: "Magic Keywords",
 			description: "Enable hidden notices for standalone ultrathink, orchestrate, and workflowz keywords",
 		},
@@ -1108,6 +1259,7 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: {
 			tab: "interaction",
+			group: "Magic Keywords",
 			label: "Ultrathink Keyword",
 			description: "Let standalone ultrathink request maximum automatic thinking and append its hidden notice",
 		},
@@ -1118,6 +1270,7 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: {
 			tab: "interaction",
+			group: "Magic Keywords",
 			label: "Orchestrate Keyword",
 			description: "Let standalone orchestrate append its hidden multi-agent orchestration notice",
 		},
@@ -1128,6 +1281,7 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: {
 			tab: "interaction",
+			group: "Magic Keywords",
 			label: "Workflow Keyword",
 			description: "Let standalone workflowz append its hidden eval workflow notice",
 		},
@@ -1138,7 +1292,12 @@ export const SETTINGS_SCHEMA = {
 		type: "enum",
 		values: ["on", "off"] as const,
 		default: "on",
-		ui: { tab: "interaction", label: "Completion Notification", description: "Notify when the agent completes" },
+		ui: {
+			tab: "interaction",
+			group: "Notifications",
+			label: "Completion Notification",
+			description: "Notify when the agent finishes a turn",
+		},
 	},
 
 	"ask.timeout": {
@@ -1146,8 +1305,9 @@ export const SETTINGS_SCHEMA = {
 		default: 0,
 		ui: {
 			tab: "interaction",
+			group: "Notifications",
 			label: "Ask Timeout",
-			description: "Auto-select recommended option after timeout (0 to disable)",
+			description: "Auto-select the recommended ask option after this many seconds (0 disables)",
 			options: [
 				{ value: "0", label: "Disabled" },
 				{ value: "15", label: "15 seconds" },
@@ -1162,14 +1322,47 @@ export const SETTINGS_SCHEMA = {
 		type: "enum",
 		values: ["on", "off"] as const,
 		default: "on",
-		ui: { tab: "interaction", label: "Ask Notification", description: "Notify when ask tool is waiting for input" },
+		ui: {
+			tab: "interaction",
+			group: "Notifications",
+			label: "Ask Notification",
+			description: "Notify when the ask tool is waiting for input",
+		},
+	},
+
+	// Collab
+	"collab.relayUrl": {
+		type: "string",
+		default: DEFAULT_RELAY_URL,
+		ui: {
+			tab: "interaction",
+			group: "Collab",
+			label: "Relay URL",
+			description: "Relay used by /collab (wss://host[:port]; self-host with the omp-collab-relay service)",
+		},
+	},
+
+	"collab.displayName": {
+		type: "string",
+		default: "",
+		ui: {
+			tab: "interaction",
+			group: "Collab",
+			label: "Display Name",
+			description: "Name shown to other collab participants (default: OS username)",
+		},
 	},
 
 	// Speech-to-text
 	"stt.enabled": {
 		type: "boolean",
 		default: false,
-		ui: { tab: "interaction", label: "Speech-to-Text", description: "Enable speech-to-text input via microphone" },
+		ui: {
+			tab: "interaction",
+			group: "Speech",
+			label: "Speech-to-Text",
+			description: "Enable speech-to-text input via microphone",
+		},
 	},
 
 	"stt.language": {
@@ -1183,6 +1376,7 @@ export const SETTINGS_SCHEMA = {
 		default: "base.en",
 		ui: {
 			tab: "interaction",
+			group: "Speech",
 			label: "Speech Model",
 			description: "Whisper model size (larger = more accurate but slower)",
 			options: [
@@ -1209,6 +1403,7 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: {
 			tab: "context",
+			group: "General",
 			label: "Auto-Promote Context",
 			description: "Promote to a larger-context model on context overflow instead of compacting",
 		},
@@ -1220,6 +1415,7 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: {
 			tab: "context",
+			group: "Compaction",
 			label: "Auto-Compact",
 			description: "Automatically compact context when it gets too large",
 		},
@@ -1231,6 +1427,7 @@ export const SETTINGS_SCHEMA = {
 		default: "context-full",
 		ui: {
 			tab: "context",
+			group: "Compaction",
 			label: "Compaction Strategy",
 			description:
 				"Choose in-place context-full maintenance, auto-handoff, surgical shake (drop heavy content), snapcompact (archive history as dense images), or disable auto maintenance (off)",
@@ -1265,6 +1462,7 @@ export const SETTINGS_SCHEMA = {
 		default: -1,
 		ui: {
 			tab: "context",
+			group: "Compaction",
 			label: "Compaction Threshold",
 			description: "Percent threshold for context maintenance; set to Default to use legacy reserve-based behavior",
 			options: [
@@ -1289,6 +1487,7 @@ export const SETTINGS_SCHEMA = {
 		default: -1,
 		ui: {
 			tab: "context",
+			group: "Compaction",
 			label: "Compaction Token Limit",
 			description: "Fixed token limit for context maintenance; overrides percentage if set",
 			options: [
@@ -1309,6 +1508,7 @@ export const SETTINGS_SCHEMA = {
 		default: false,
 		ui: {
 			tab: "context",
+			group: "Compaction",
 			label: "Save Handoff Docs",
 			description: "Save generated handoff documents to markdown files for the auto-handoff flow",
 		},
@@ -1319,6 +1519,7 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: {
 			tab: "context",
+			group: "Compaction",
 			label: "Remote Compaction",
 			description: "Use remote compaction endpoints when available instead of local summarization",
 		},
@@ -1338,6 +1539,7 @@ export const SETTINGS_SCHEMA = {
 		default: false,
 		ui: {
 			tab: "context",
+			group: "Compaction",
 			label: "Idle Compaction",
 			description: "Compact context while idle when token count exceeds threshold",
 		},
@@ -1348,6 +1550,7 @@ export const SETTINGS_SCHEMA = {
 		default: 200000,
 		ui: {
 			tab: "context",
+			group: "Compaction",
 			label: "Idle Compaction Threshold",
 			description: "Token count above which idle compaction triggers",
 			options: [
@@ -1369,6 +1572,7 @@ export const SETTINGS_SCHEMA = {
 		default: 300,
 		ui: {
 			tab: "context",
+			group: "Compaction",
 			label: "Idle Compaction Delay",
 			description: "Seconds to wait while idle before compacting",
 			options: [
@@ -1387,8 +1591,139 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: {
 			tab: "context",
+			group: "Compaction",
 			label: "Supersede Stale Reads",
 			description: "Prune older read results when the same file is read again (cache-aware, runs every turn)",
+		},
+	},
+
+	// Experimental: snapcompact inline imaging (transient, per-request; never persisted)
+	"snapcompact.systemPrompt": {
+		type: "enum",
+		values: ["none", "agents-md", "all"] as const,
+		default: "none",
+		ui: {
+			tab: "context",
+			group: "Experimental",
+			label: "Snapcompact System Prompt",
+			description:
+				"Experimental: render selected system prompt text as dense PNG image(s) and attach to the first user message (vision models only). Saves tokens; loses prompt caching for imaged text.",
+			options: [
+				{ value: "none", label: "None", description: "Keep the system prompt as text." },
+				{
+					value: "agents-md",
+					label: "AGENTS.md",
+					description: "Only move loaded context-file instructions to images, when that saves tokens.",
+				},
+				{
+					value: "all",
+					label: "All",
+					description: "Move the full system prompt to images, when that saves tokens.",
+				},
+			],
+		},
+	},
+
+	"snapcompact.toolResults": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "context",
+			group: "Experimental",
+			label: "Snapcompact Tool Results",
+			description:
+				"Experimental: render large historical tool results as dense PNG image(s) instead of text (vision models only). Saves tokens on accumulated read/search output.",
+		},
+	},
+
+	"snapcompact.shape": {
+		type: "enum",
+		values: ["auto", ...SHAPE_VARIANT_NAMES] as const,
+		default: "auto",
+		ui: {
+			tab: "context",
+			group: "Experimental",
+			label: "Snapcompact Shape",
+			description:
+				"Frame shape snapcompact prints text with (compaction archive and inline imaging). Auto picks a shape tuned for the current model.",
+			options: [
+				{
+					value: "auto",
+					label: "Auto",
+					description: "Picks a shape tuned for the current model, falling back to its provider family.",
+				},
+				{
+					value: "8x8r-bw",
+					label: "8x8 repeated, black",
+					description:
+						"unscii square cell, black ink, every line printed twice with the copy on a pale highlight band.",
+				},
+				{
+					value: "8x8r-sent",
+					label: "8x8 repeated, sentence hues",
+					description: "Repeated grid with ink cycling six hues at sentence boundaries.",
+				},
+				{
+					value: "8x8u-bw",
+					label: "8x8, black",
+					description: "Plain unscii square cell, single-printed lines, black ink.",
+				},
+				{
+					value: "8x8u-sent",
+					label: "8x8, sentence hues",
+					description: "Plain unscii square cell with sentence-hue ink.",
+				},
+				{
+					value: "6x6u-bw",
+					label: "6x6 dense, black",
+					description: "unscii squeezed to 6x6 — densest readable cell, fewest frames — in black ink.",
+				},
+				{
+					value: "6x6u-sent",
+					label: "6x6 dense, sentence hues",
+					description: "Densest cell with sentence-hue ink.",
+				},
+				{
+					value: "5x8-bw",
+					label: "5x8 legacy, black",
+					description: "Original X.org 5x8 glyphs on the 2576px frame, black ink.",
+				},
+				{
+					value: "5x8-sent",
+					label: "5x8 legacy, sentence hues",
+					description: "The original snapcompact shape (pre-shape-table sessions rendered this).",
+				},
+				{
+					value: "6x12-dim",
+					label: "6x12, dimmed stopwords",
+					description: "X.org 6x12 glyphs, black ink, function words dimmed gray.",
+				},
+				{
+					value: "8x13-bw",
+					label: "8x13, black",
+					description: "X.org 8x13 glyphs, black ink.",
+				},
+				{
+					value: "8on16-bw",
+					label: "8x13 on 16px pitch, black",
+					description: "8x13 glyphs on an 8x16 cell (extra leading), black ink.",
+				},
+				{
+					value: "doc-8on16-bw",
+					label: "Doc 8on16, black",
+					description: "Two word-wrapped newspaper columns of 8x13 glyphs on a 16px pitch, black ink.",
+				},
+				{
+					value: "doc-8on16-sent",
+					label: "Doc 8on16, sentence hues",
+					description: "Two-column doc layout with sentence-hue ink.",
+				},
+				{
+					value: "doc-8on16-sent-dim",
+					label: "Doc 8on16, sentence hues + dimmed stopwords",
+					description: "Two-column doc layout, sentence-hue ink, function words dimmed gray.",
+				},
+			],
 		},
 	},
 
@@ -1396,7 +1731,12 @@ export const SETTINGS_SCHEMA = {
 	"branchSummary.enabled": {
 		type: "boolean",
 		default: false,
-		ui: { tab: "context", label: "Branch Summaries", description: "Prompt to summarize when leaving a branch" },
+		ui: {
+			tab: "context",
+			group: "General",
+			label: "Branch Summaries",
+			description: "Prompt to summarize when leaving a branch",
+		},
 	},
 
 	"branchSummary.reserveTokens": { type: "number", default: 16384 },
@@ -1449,6 +1789,7 @@ export const SETTINGS_SCHEMA = {
 		default: "off",
 		ui: {
 			tab: "memory",
+			group: "General",
 			label: "Memory Backend",
 			description: "Off, local summary pipeline, Mnemopi SQLite, or Hindsight remote memory",
 			options: [
@@ -1470,6 +1811,7 @@ export const SETTINGS_SCHEMA = {
 		default: undefined,
 		ui: {
 			tab: "memory",
+			group: "Mnemopi",
 			label: "Mnemopi DB Path",
 			description: "Optional SQLite DB path. Defaults to the agent memories directory.",
 			condition: "mnemopiActive",
@@ -1480,6 +1822,7 @@ export const SETTINGS_SCHEMA = {
 		default: undefined,
 		ui: {
 			tab: "memory",
+			group: "Mnemopi",
 			label: "Mnemopi Bank",
 			description: "Optional shared bank base name. Per-project modes derive project-local banks from it.",
 			condition: "mnemopiActive",
@@ -1491,6 +1834,7 @@ export const SETTINGS_SCHEMA = {
 		default: "per-project",
 		ui: {
 			tab: "memory",
+			group: "Mnemopi",
 			label: "Mnemopi Scoping",
 			description:
 				"global = one shared bank; per-project = isolated bank per cwd; per-project-tagged = project-local writes plus global recall visibility",
@@ -1519,6 +1863,7 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: {
 			tab: "memory",
+			group: "Mnemopi",
 			label: "Mnemopi Auto Recall",
 			description: "Recall local memories into the first turn of each session",
 			condition: "mnemopiActive",
@@ -1529,8 +1874,31 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: {
 			tab: "memory",
+			group: "Mnemopi",
 			label: "Mnemopi Auto Retain",
 			description: "Retain completed conversation turns into local Mnemopi memory",
+			condition: "mnemopiActive",
+		},
+	},
+	"mnemopi.polyphonicRecall": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "memory",
+			group: "Mnemopi",
+			label: "Mnemopi Polyphonic Recall",
+			description: "Enable 4-voice recall (vector, graph, fact, temporal) fused with reciprocal rank fusion",
+			condition: "mnemopiActive",
+		},
+	},
+	"mnemopi.enhancedRecall": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "memory",
+			group: "Mnemopi",
+			label: "Mnemopi Enhanced Recall",
+			description: "Enable the tiered query result cache for repeated and similar recall queries",
 			condition: "mnemopiActive",
 		},
 	},
@@ -1539,6 +1907,7 @@ export const SETTINGS_SCHEMA = {
 		default: false,
 		ui: {
 			tab: "memory",
+			group: "Mnemopi",
 			label: "Mnemopi Disable Embeddings",
 			description: "Force deterministic FTS-only recall instead of vector embeddings",
 			condition: "mnemopiActive",
@@ -1549,6 +1918,7 @@ export const SETTINGS_SCHEMA = {
 		default: undefined,
 		ui: {
 			tab: "memory",
+			group: "Mnemopi",
 			label: "Mnemopi Embedding Model",
 			description: "Optional embedding model override passed to Mnemopi",
 			condition: "mnemopiActive",
@@ -1559,6 +1929,7 @@ export const SETTINGS_SCHEMA = {
 		default: undefined,
 		ui: {
 			tab: "memory",
+			group: "Mnemopi",
 			label: "Mnemopi Embedding API URL",
 			description: "Optional OpenAI-compatible embedding endpoint passed to Mnemopi",
 			condition: "mnemopiActive",
@@ -1569,6 +1940,7 @@ export const SETTINGS_SCHEMA = {
 		default: undefined,
 		ui: {
 			tab: "memory",
+			group: "Mnemopi",
 			label: "Mnemopi Embedding API Key",
 			description: "Optional embedding API key passed to Mnemopi",
 			condition: "mnemopiActive",
@@ -1580,6 +1952,7 @@ export const SETTINGS_SCHEMA = {
 		default: "smol",
 		ui: {
 			tab: "memory",
+			group: "Mnemopi",
 			label: "Mnemopi LLM Mode",
 			description: "Use no LLM, the configured smol model, or a remote OpenAI-compatible endpoint",
 			condition: "mnemopiActive",
@@ -1595,6 +1968,7 @@ export const SETTINGS_SCHEMA = {
 		default: undefined,
 		ui: {
 			tab: "memory",
+			group: "Mnemopi",
 			label: "Mnemopi LLM Base URL",
 			description: "Optional OpenAI-compatible LLM endpoint for Mnemopi remote mode",
 			condition: "mnemopiActive",
@@ -1605,6 +1979,7 @@ export const SETTINGS_SCHEMA = {
 		default: undefined,
 		ui: {
 			tab: "memory",
+			group: "Mnemopi",
 			label: "Mnemopi LLM API Key",
 			description: "Optional LLM API key for Mnemopi remote mode",
 			condition: "mnemopiActive",
@@ -1615,6 +1990,7 @@ export const SETTINGS_SCHEMA = {
 		default: undefined,
 		ui: {
 			tab: "memory",
+			group: "Mnemopi",
 			label: "Mnemopi LLM Model",
 			description: "Optional LLM model name for Mnemopi remote mode",
 			condition: "mnemopiActive",
@@ -1633,6 +2009,7 @@ export const SETTINGS_SCHEMA = {
 		default: "http://localhost:8888",
 		ui: {
 			tab: "memory",
+			group: "Hindsight",
 			label: "Hindsight API URL",
 			description: "Hindsight server URL (Cloud or self-hosted)",
 			condition: "hindsightActive",
@@ -1646,6 +2023,7 @@ export const SETTINGS_SCHEMA = {
 		default: undefined,
 		ui: {
 			tab: "memory",
+			group: "Hindsight",
 			label: "Hindsight Bank ID",
 			description: "Memory bank identifier (default: project name)",
 			condition: "hindsightActive",
@@ -1659,6 +2037,7 @@ export const SETTINGS_SCHEMA = {
 		default: "per-project-tagged",
 		ui: {
 			tab: "memory",
+			group: "Hindsight",
 			label: "Hindsight Scoping",
 			description:
 				"global = one shared bank; per-project = isolated bank per cwd; per-project-tagged = shared bank with project tags so global + project memories merge on recall",
@@ -1691,6 +2070,7 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: {
 			tab: "memory",
+			group: "Hindsight",
 			label: "Hindsight Auto Recall",
 			description: "Recall memories on the first turn of each session",
 			condition: "hindsightActive",
@@ -1701,6 +2081,7 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: {
 			tab: "memory",
+			group: "Hindsight",
 			label: "Hindsight Auto Retain",
 			description: "Retain transcript every N turns and at session boundaries",
 			condition: "hindsightActive",
@@ -1713,6 +2094,7 @@ export const SETTINGS_SCHEMA = {
 		default: "full-session",
 		ui: {
 			tab: "memory",
+			group: "Hindsight",
 			label: "Hindsight Retain Mode",
 			description: "full-session = upsert one document per session, last-turn = chunked",
 			options: [
@@ -1747,6 +2129,7 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: {
 			tab: "memory",
+			group: "Hindsight",
 			label: "Hindsight Mental Models",
 			description:
 				"Read curated reflect summaries (mental models) into developer instructions at boot. Loads existing models on the bank — does not write. Pair with hindsight.mentalModelAutoSeed to also auto-create the built-in seed set.",
@@ -1758,6 +2141,7 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: {
 			tab: "memory",
+			group: "Hindsight",
 			label: "Hindsight Mental Model Auto-Seed",
 			description:
 				"At session start, create any built-in mental models (project-conventions, project-decisions, user-preferences) that do not yet exist on the bank.",
@@ -1773,8 +2157,9 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: {
 			tab: "context",
+			group: "Rules (TTSR)",
 			label: "TTSR",
-			description: "Time Traveling Stream Rules: interrupt agent when output matches patterns",
+			description: "Interrupt the agent mid-stream when output matches rule patterns (Time-Traveling Stream Rules)",
 		},
 	},
 
@@ -1784,6 +2169,7 @@ export const SETTINGS_SCHEMA = {
 		default: "discard",
 		ui: {
 			tab: "context",
+			group: "Rules (TTSR)",
 			label: "TTSR Context Mode",
 			description: "What to do with partial output when TTSR triggers",
 		},
@@ -1795,6 +2181,7 @@ export const SETTINGS_SCHEMA = {
 		default: "always",
 		ui: {
 			tab: "context",
+			group: "Rules (TTSR)",
 			label: "TTSR Interrupt Mode",
 			description: "When to interrupt mid-stream vs inject warning after completion",
 			options: [
@@ -1812,6 +2199,7 @@ export const SETTINGS_SCHEMA = {
 		default: "once",
 		ui: {
 			tab: "context",
+			group: "Rules (TTSR)",
 			label: "TTSR Repeat Mode",
 			description: "How rules can repeat: once per session or after a message gap",
 		},
@@ -1822,6 +2210,7 @@ export const SETTINGS_SCHEMA = {
 		default: 10,
 		ui: {
 			tab: "context",
+			group: "Rules (TTSR)",
 			label: "TTSR Repeat Gap",
 			description: "Messages before a rule can trigger again",
 			options: [
@@ -1839,7 +2228,8 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: {
 			tab: "context",
-			label: "Builtin Rules",
+			group: "Rules (TTSR)",
+			label: "Built-in Rules",
 			description: "Load the default rules shipped with the agent (override individually with ttsr.disabledRules)",
 		},
 	},
@@ -1849,6 +2239,7 @@ export const SETTINGS_SCHEMA = {
 		default: [] as string[],
 		ui: {
 			tab: "context",
+			group: "Rules (TTSR)",
 			label: "Disabled Rules",
 			description: "Rule names to ignore entirely (applies to bundled defaults and your own rules)",
 		},
@@ -1864,7 +2255,8 @@ export const SETTINGS_SCHEMA = {
 		values: EDIT_MODES,
 		default: "hashline",
 		ui: {
-			tab: "editing",
+			tab: "files",
+			group: "Editing",
 			label: "Edit Mode",
 			description: "Select the edit tool variant (replace, patch, hashline, or apply_patch)",
 		},
@@ -1874,7 +2266,8 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
-			tab: "editing",
+			tab: "files",
+			group: "Editing",
 			label: "Fuzzy Match",
 			description: "Accept high-confidence fuzzy matches for whitespace differences",
 		},
@@ -1884,9 +2277,10 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: 0.95,
 		ui: {
-			tab: "editing",
+			tab: "files",
+			group: "Editing",
 			label: "Fuzzy Match Threshold",
-			description: "Similarity threshold for fuzzy matches",
+			description: "Similarity threshold (0-1) for accepting fuzzy matches",
 			options: [
 				{ value: "0.85", label: "0.85", description: "Lenient" },
 				{ value: "0.90", label: "0.90", description: "Moderate" },
@@ -1900,7 +2294,8 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
-			tab: "editing",
+			tab: "files",
+			group: "Editing",
 			label: "Abort on Failed Preview",
 			description: "Abort streaming edit tool calls when patch preview fails",
 		},
@@ -1910,7 +2305,8 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
-			tab: "editing",
+			tab: "files",
+			group: "Editing",
 			label: "Block Auto-Generated Files",
 			description: "Prevent editing of files that appear to be auto-generated (protoc, sqlc, swagger, etc.)",
 		},
@@ -1920,7 +2316,8 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
-			tab: "editing",
+			tab: "files",
+			group: "Reading",
 			label: "Line Numbers",
 			description: "Prepend line numbers to read tool output by default",
 		},
@@ -1930,7 +2327,8 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
-			tab: "editing",
+			tab: "files",
+			group: "Reading",
 			label: "Hash Lines",
 			description:
 				"Include snapshot-tag headers and line numbers in read output for hashline edit mode ([PATH#TAG] plus LINE:content)",
@@ -1941,7 +2339,8 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: 300,
 		ui: {
-			tab: "editing",
+			tab: "files",
+			group: "Reading",
 			label: "Default Read Limit",
 			description: "Default number of lines returned when agent calls read without a limit",
 			options: [
@@ -1958,7 +2357,8 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
-			tab: "editing",
+			tab: "files",
+			group: "Read Summaries",
 			label: "Read Summaries",
 			description: "Return structural code summaries when read is called without an explicit selector",
 		},
@@ -1968,7 +2368,8 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
-			tab: "editing",
+			tab: "files",
+			group: "Read Summaries",
 			label: "Prose Summaries",
 			description: "Return structural summaries for Markdown and plain text reads",
 		},
@@ -1978,7 +2379,8 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: 4,
 		ui: {
-			tab: "editing",
+			tab: "files",
+			group: "Read Summaries",
 			label: "Read Summary Body Lines",
 			description: "Minimum multiline body or literal length before read summaries collapse it",
 		},
@@ -1988,7 +2390,8 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: 6,
 		ui: {
-			tab: "editing",
+			tab: "files",
+			group: "Read Summaries",
 			label: "Read Summary Comment Lines",
 			description: "Minimum multiline block comment length before read summaries collapse it",
 		},
@@ -1998,7 +2401,8 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: 100,
 		ui: {
-			tab: "editing",
+			tab: "files",
+			group: "Read Summaries",
 			label: "Read Summary Minimum File Length",
 			description: "Files with fewer total lines are read verbatim instead of structurally summarized",
 		},
@@ -2008,7 +2412,8 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: 50,
 		ui: {
-			tab: "editing",
+			tab: "files",
+			group: "Read Summaries",
 			label: "Read Summary Unfold Target",
 			description:
 				"BFS-unfold elidable spans until the summary is at least this many visible lines. 0 keeps only the outermost elisions.",
@@ -2019,7 +2424,8 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: 100,
 		ui: {
-			tab: "editing",
+			tab: "files",
+			group: "Read Summaries",
 			label: "Read Summary Unfold Ceiling",
 			description:
 				"Hard ceiling on summary size while BFS-unfolding. An unfold that would exceed this is reverted and unfolding stops.",
@@ -2030,7 +2436,8 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
-			tab: "editing",
+			tab: "files",
+			group: "Reading",
 			label: "Inline Read Previews",
 			description: "Render read tool results inline in the transcript instead of summary rows",
 		},
@@ -2040,14 +2447,20 @@ export const SETTINGS_SCHEMA = {
 	"lsp.enabled": {
 		type: "boolean",
 		default: true,
-		ui: { tab: "editing", label: "LSP", description: "Enable the lsp tool for language server protocol" },
+		ui: {
+			tab: "files",
+			group: "LSP",
+			label: "LSP",
+			description: "Enable the lsp tool for code intelligence (definitions, references, diagnostics, rename)",
+		},
 	},
 
 	"lsp.lazy": {
 		type: "boolean",
 		default: true,
 		ui: {
-			tab: "editing",
+			tab: "files",
+			group: "LSP",
 			label: "Lazy LSP Startup",
 			description:
 				"Start language servers on first use (lsp tool or editing a matching file type) instead of at session startup",
@@ -2058,7 +2471,8 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
-			tab: "editing",
+			tab: "files",
+			group: "LSP",
 			label: "Format on Write",
 			description: "Automatically format code files using LSP after writing",
 		},
@@ -2068,7 +2482,8 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
-			tab: "editing",
+			tab: "files",
+			group: "LSP",
 			label: "Diagnostics on Write",
 			description: "Return LSP diagnostics after writing code files",
 		},
@@ -2078,7 +2493,8 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
-			tab: "editing",
+			tab: "files",
+			group: "LSP",
 			label: "Diagnostics on Edit",
 			description: "Return LSP diagnostics after editing code files",
 		},
@@ -2088,9 +2504,32 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
-			tab: "editing",
+			tab: "files",
+			group: "LSP",
 			label: "Deduplicate Diagnostics",
 			description: "Suppress post-edit LSP diagnostics already shown for a file; only surface new or changed ones",
+		},
+	},
+
+	"bash.enabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "shell",
+			group: "Bash",
+			label: "Bash",
+			description: "Enable the bash tool for shell command execution",
+		},
+	},
+
+	"bash.autoBackground.enabled": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "shell",
+			group: "Bash",
+			label: "Bash Auto-Background",
+			description: "Automatically background long-running bash commands and deliver the result later",
 		},
 	},
 
@@ -2098,7 +2537,12 @@ export const SETTINGS_SCHEMA = {
 	"bashInterceptor.enabled": {
 		type: "boolean",
 		default: false,
-		ui: { tab: "editing", label: "Bash Interceptor", description: "Block shell commands that have dedicated tools" },
+		ui: {
+			tab: "shell",
+			group: "Bash",
+			label: "Bash Interceptor",
+			description: "Block shell commands that have dedicated tools",
+		},
 	},
 	"bashInterceptor.patterns": { type: "array", default: DEFAULT_BASH_INTERCEPTOR_RULES },
 
@@ -2106,8 +2550,9 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
-			tab: "editing",
-			label: "Strip Trailing head/tail",
+			tab: "shell",
+			group: "Bash",
+			label: "Strip head/tail Pipes",
 			description:
 				"Silently drop trailing `| head`/`| tail` pipes from single-line bash commands. Output is already truncated automatically.",
 		},
@@ -2118,7 +2563,8 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
-			tab: "editing",
+			tab: "shell",
+			group: "Bash",
 			label: "Shell Minimizer",
 			description: "Compress verbose shell output (git, npm, cargo, etc.) before returning it to the agent",
 		},
@@ -2138,7 +2584,8 @@ export const SETTINGS_SCHEMA = {
 		values: ["default", "aggressive"] as const,
 		default: "default",
 		ui: {
-			tab: "editing",
+			tab: "shell",
+			group: "Bash",
 			label: "Shell Minimizer Source Outline",
 			description: "Source outline mode for cat/read of source files: default or aggressive",
 		},
@@ -2153,9 +2600,10 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
-			tab: "editing",
-			label: "Eval: Python backend",
-			description: "Allow the eval tool to dispatch to the IPython kernel",
+			tab: "shell",
+			group: "Eval & Python",
+			label: "Python Eval Backend",
+			description: "Allow the eval tool to dispatch Python cells to the IPython kernel",
 		},
 	},
 
@@ -2163,9 +2611,10 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: true,
 		ui: {
-			tab: "editing",
-			label: "Eval: JavaScript backend",
-			description: "Allow the eval tool to dispatch to the in-process JavaScript runtime",
+			tab: "shell",
+			group: "Eval & Python",
+			label: "JavaScript Eval Backend",
+			description: "Allow the eval tool to dispatch JavaScript cells to the in-process runtime",
 		},
 	},
 
@@ -2175,16 +2624,18 @@ export const SETTINGS_SCHEMA = {
 		values: ["session", "per-call"] as const,
 		default: "session",
 		ui: {
-			tab: "editing",
+			tab: "shell",
+			group: "Eval & Python",
 			label: "Python Kernel Mode",
-			description: "Whether to keep IPython kernel alive across calls",
+			description: "Keep the IPython kernel alive across eval calls or start fresh each time",
 		},
 	},
 	"python.interpreter": {
 		type: "string",
 		default: "",
 		ui: {
-			tab: "editing",
+			tab: "shell",
+			group: "Eval & Python",
 			label: "Python Interpreter",
 			description:
 				"Optional path to an exact Python executable. When set, automatic Python runtime discovery is skipped.",
@@ -2200,7 +2651,8 @@ export const SETTINGS_SCHEMA = {
 		type: "record",
 		default: {},
 		ui: {
-			tab: "tools",
+			tab: "interaction",
+			group: "Approvals",
 			label: "Tool Approval Policies",
 			description:
 				"Per-tool approval policies. Set to 'allow' to auto-approve, 'prompt' to require confirmation, or 'deny' to block. Overrides are honored in every approval mode.",
@@ -2217,9 +2669,10 @@ export const SETTINGS_SCHEMA = {
 		default: "yolo",
 		ui: {
 			tab: "interaction",
+			group: "Approvals",
 			label: "Tool Approval",
 			description:
-				"Default approval behaviour for tool calls. 'Always ask' auto-approves read-only tools only. 'Write' auto-approves read and workspace-write tools. 'Yolo' auto-approves all tiers; user policy may still prompt or block.",
+				"Default approval behavior for tool calls. 'Always ask' auto-approves read-only tools only. 'Write' auto-approves read and workspace-write tools. 'Yolo' auto-approves all tiers; user policy may still prompt or block.",
 			options: [
 				{
 					value: "always-ask",
@@ -2246,13 +2699,23 @@ export const SETTINGS_SCHEMA = {
 	"todo.enabled": {
 		type: "boolean",
 		default: true,
-		ui: { tab: "tools", label: "Todos", description: "Enable the todo tool for task tracking" },
+		ui: {
+			tab: "tools",
+			group: "Available Tools",
+			label: "Todos",
+			description: "Enable the todo tool for task tracking",
+		},
 	},
 
 	"todo.reminders": {
 		type: "boolean",
 		default: true,
-		ui: { tab: "tools", label: "Todo Reminders", description: "Remind agent to complete todos before stopping" },
+		ui: {
+			tab: "tools",
+			group: "Todos",
+			label: "Todo Reminders",
+			description: "Remind the agent to complete todos before stopping",
+		},
 	},
 
 	"todo.reminders.max": {
@@ -2260,8 +2723,9 @@ export const SETTINGS_SCHEMA = {
 		default: 3,
 		ui: {
 			tab: "tools",
+			group: "Todos",
 			label: "Todo Reminder Limit",
-			description: "Maximum reminders to complete todos before giving up",
+			description: "Maximum number of todo reminders before giving up",
 			options: [
 				{ value: "1", label: "1 reminder" },
 				{ value: "2", label: "2 reminders" },
@@ -2276,28 +2740,33 @@ export const SETTINGS_SCHEMA = {
 		default: false,
 		ui: {
 			tab: "tools",
+			group: "Todos",
 			label: "Create Todos Automatically",
 			description: "Automatically create a comprehensive todo list after the first message",
 		},
-	},
-
-	"bash.enabled": {
-		type: "boolean",
-		default: true,
-		ui: { tab: "tools", label: "Bash", description: "Enable the bash tool for shell command execution" },
 	},
 
 	// Search and AST tools
 	"find.enabled": {
 		type: "boolean",
 		default: true,
-		ui: { tab: "tools", label: "Find", description: "Enable the find tool for file searching" },
+		ui: {
+			tab: "tools",
+			group: "Available Tools",
+			label: "Find",
+			description: "Enable the find tool for glob-based file lookup",
+		},
 	},
 
 	"search.enabled": {
 		type: "boolean",
 		default: true,
-		ui: { tab: "tools", label: "Search", description: "Enable the search tool for content searching" },
+		ui: {
+			tab: "tools",
+			group: "Available Tools",
+			label: "Search",
+			description: "Enable the search tool for regex content search",
+		},
 	},
 
 	"search.contextBefore": {
@@ -2305,6 +2774,7 @@ export const SETTINGS_SCHEMA = {
 		default: 1,
 		ui: {
 			tab: "tools",
+			group: "Search & Browser",
 			label: "Search Context Before",
 			description: "Lines of context before each search match",
 			options: [
@@ -2322,6 +2792,7 @@ export const SETTINGS_SCHEMA = {
 		default: 3,
 		ui: {
 			tab: "tools",
+			group: "Search & Browser",
 			label: "Search Context After",
 			description: "Lines of context after each search match",
 			options: [
@@ -2340,6 +2811,7 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: {
 			tab: "tools",
+			group: "Available Tools",
 			label: "AST Grep",
 			description: "Enable the ast_grep tool for structural AST search",
 		},
@@ -2350,25 +2822,9 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: {
 			tab: "tools",
+			group: "Available Tools",
 			label: "AST Edit",
 			description: "Enable the ast_edit tool for structural AST rewrites",
-		},
-	},
-
-	"irc.timeoutMs": {
-		type: "number",
-		default: 120_000,
-		ui: {
-			tab: "tools",
-			label: "IRC Timeout",
-			description: "Default timeout for irc wait (and send await:true) in milliseconds; 0 disables the timeout",
-			options: [
-				{ value: "0", label: "Disabled" },
-				{ value: "30000", label: "30 seconds" },
-				{ value: "60000", label: "1 minute" },
-				{ value: "120000", label: "2 minutes" },
-				{ value: "300000", label: "5 minutes" },
-			],
 		},
 	},
 
@@ -2379,6 +2835,7 @@ export const SETTINGS_SCHEMA = {
 		default: false,
 		ui: {
 			tab: "tools",
+			group: "Available Tools",
 			label: "Render Mermaid",
 			description: "Enable the render_mermaid tool for Mermaid-to-ASCII rendering",
 		},
@@ -2389,6 +2846,7 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: {
 			tab: "tools",
+			group: "Available Tools",
 			label: "Debug",
 			description: "Enable the debug tool for DAP-based debugging",
 		},
@@ -2399,6 +2857,7 @@ export const SETTINGS_SCHEMA = {
 		default: false,
 		ui: {
 			tab: "tools",
+			group: "Available Tools",
 			label: "Text-to-Speech",
 			description: "Enable the tts tool for xAI Grok Voice speech synthesis",
 		},
@@ -2409,6 +2868,7 @@ export const SETTINGS_SCHEMA = {
 		default: false,
 		ui: {
 			tab: "tools",
+			group: "Available Tools",
 			label: "Inspect Image",
 			description: "Enable the inspect_image tool, delegating image understanding to a vision-capable model",
 		},
@@ -2419,6 +2879,7 @@ export const SETTINGS_SCHEMA = {
 		default: false,
 		ui: {
 			tab: "tools",
+			group: "Available Tools",
 			label: "Checkpoint/Rewind",
 			description: "Enable the checkpoint and rewind tools for context checkpointing",
 		},
@@ -2428,7 +2889,12 @@ export const SETTINGS_SCHEMA = {
 	"fetch.enabled": {
 		type: "boolean",
 		default: true,
-		ui: { tab: "tools", label: "Read URLs", description: "Allow the read tool to fetch and process URLs" },
+		ui: {
+			tab: "tools",
+			group: "Available Tools",
+			label: "Read URLs",
+			description: "Allow the read tool to fetch and process URLs",
+		},
 	},
 
 	"vault.enabled": {
@@ -2436,6 +2902,7 @@ export const SETTINGS_SCHEMA = {
 		default: false,
 		ui: {
 			tab: "tools",
+			group: "Available Tools",
 			label: "Obsidian Vault",
 			description:
 				"Enable the vault:// internal URL for reading and editing Obsidian vault content via the Obsidian CLI. When disabled, vault:// resolution is refused and the vault:// entry is omitted from the system prompt.",
@@ -2447,6 +2914,7 @@ export const SETTINGS_SCHEMA = {
 		default: false,
 		ui: {
 			tab: "tools",
+			group: "Available Tools",
 			label: "GitHub CLI",
 			description:
 				"Enable the github tool (op-based dispatch for repository, issue, pull request, diff, search, checkout, push, and Actions watch workflows)",
@@ -2458,7 +2926,8 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: {
 			tab: "tools",
-			label: "GitHub view cache",
+			group: "GitHub",
+			label: "GitHub View Cache",
 			description: "Cache rendered issue/PR view output in ~/.omp/cache/github-cache.db so repeated reads are free",
 		},
 	},
@@ -2468,8 +2937,10 @@ export const SETTINGS_SCHEMA = {
 		default: 300,
 		ui: {
 			tab: "tools",
-			label: "GitHub cache soft TTL (seconds)",
-			description: "Within this window, cached issue/PR view rows are returned directly. Default 5 minutes.",
+			group: "GitHub",
+			label: "GitHub Cache Soft TTL",
+			description:
+				"Within this window, cached issue/PR view rows are returned directly (seconds; default 5 minutes)",
 		},
 	},
 
@@ -2478,16 +2949,22 @@ export const SETTINGS_SCHEMA = {
 		default: 604800,
 		ui: {
 			tab: "tools",
-			label: "GitHub cache hard TTL (seconds)",
+			group: "GitHub",
+			label: "GitHub Cache Hard TTL",
 			description:
-				"Past soft TTL but within hard TTL, the tool returns the cached row and refreshes it in the background. Past hard TTL, the row is dropped. Default 7 days.",
+				"Past the soft TTL the cached row is returned and refreshed in the background; past the hard TTL it is dropped (seconds; default 7 days)",
 		},
 	},
 
 	"web_search.enabled": {
 		type: "boolean",
 		default: true,
-		ui: { tab: "tools", label: "Web Search", description: "Enable the web_search tool for web searching" },
+		ui: {
+			tab: "tools",
+			group: "Available Tools",
+			label: "Web Search",
+			description: "Enable the web_search tool for live web results",
+		},
 	},
 
 	"browser.enabled": {
@@ -2495,8 +2972,9 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: {
 			tab: "tools",
+			group: "Available Tools",
 			label: "Browser",
-			description: "Enable the browser tool (Ulixee Hero)",
+			description: "Enable the browser tool for scripted Chromium automation (puppeteer)",
 		},
 	},
 
@@ -2505,6 +2983,7 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: {
 			tab: "tools",
+			group: "Search & Browser",
 			label: "Headless Browser",
 			description: "Launch browser in headless mode (disable to show browser UI)",
 		},
@@ -2514,7 +2993,8 @@ export const SETTINGS_SCHEMA = {
 		default: undefined,
 		ui: {
 			tab: "tools",
-			label: "Screenshot directory",
+			group: "Search & Browser",
+			label: "Screenshot Directory",
 			description:
 				"Directory to save screenshots. If unset, screenshots go to a temp file. Supports ~. Examples: ~/Downloads, ~/Desktop, /sdcard/Download (Android)",
 		},
@@ -2526,6 +3006,7 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: {
 			tab: "tools",
+			group: "Execution",
 			label: "Intent Tracing",
 			description: "Ask the agent to describe the intent of each tool call before executing it",
 		},
@@ -2536,6 +3017,7 @@ export const SETTINGS_SCHEMA = {
 		default: 0,
 		ui: {
 			tab: "tools",
+			group: "Execution",
 			label: "Max Tool Timeout",
 			description: "Maximum timeout in seconds the agent can set for any tool (0 = no limit)",
 			options: [
@@ -2555,6 +3037,7 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: {
 			tab: "tools",
+			group: "Execution",
 			label: "Async Execution",
 			description: "Enable async bash commands and background task execution",
 		},
@@ -2571,6 +3054,7 @@ export const SETTINGS_SCHEMA = {
 		default: "30s",
 		ui: {
 			tab: "tools",
+			group: "Execution",
 			label: "Poll Wait Duration",
 			description: "How long the poll tool waits for background job updates before returning the current state",
 			options: [
@@ -2583,13 +3067,21 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	"bash.autoBackground.enabled": {
-		type: "boolean",
-		default: false,
+	"irc.timeoutMs": {
+		type: "number",
+		default: 120_000,
 		ui: {
 			tab: "tools",
-			label: "Bash Auto-Background",
-			description: "Automatically background long-running bash commands and deliver the result later",
+			group: "Execution",
+			label: "IRC Timeout",
+			description: "Default timeout for irc wait (and send await:true) in milliseconds; 0 disables the timeout",
+			options: [
+				{ value: "0", label: "Disabled" },
+				{ value: "30000", label: "30 seconds" },
+				{ value: "60000", label: "1 minute" },
+				{ value: "120000", label: "2 minutes" },
+				{ value: "300000", label: "5 minutes" },
+			],
 		},
 	},
 
@@ -2605,6 +3097,7 @@ export const SETTINGS_SCHEMA = {
 		default: "auto",
 		ui: {
 			tab: "tools",
+			group: "Discovery & MCP",
 			label: "Tool Discovery",
 			description:
 				"Hide tools behind a search tool to save tokens. 'auto' hides MCP tools once the tool set has more than 40 tools; 'mcp-only' always hides MCP tools; 'all' hides all non-essential built-ins too.",
@@ -2616,6 +3109,7 @@ export const SETTINGS_SCHEMA = {
 		default: [] as string[],
 		ui: {
 			tab: "tools",
+			group: "Discovery & MCP",
 			label: "Essential Tools Override",
 			description:
 				"Override the always-loaded built-in tools (default: read, bash, edit). Leave empty to use defaults.",
@@ -2626,7 +3120,12 @@ export const SETTINGS_SCHEMA = {
 	"mcp.enableProjectConfig": {
 		type: "boolean",
 		default: true,
-		ui: { tab: "tools", label: "MCP Project Config", description: "Load .mcp.json/mcp.json from project root" },
+		ui: {
+			tab: "tools",
+			group: "Discovery & MCP",
+			label: "MCP Project Config",
+			description: "Load .mcp.json/mcp.json from project root",
+		},
 	},
 
 	"mcp.discoveryMode": {
@@ -2634,6 +3133,7 @@ export const SETTINGS_SCHEMA = {
 		default: false,
 		ui: {
 			tab: "tools",
+			group: "Discovery & MCP",
 			label: "MCP Tool Discovery",
 			description: "Hide MCP tools by default and expose them through a tool discovery tool",
 		},
@@ -2644,6 +3144,7 @@ export const SETTINGS_SCHEMA = {
 		default: [] as string[],
 		ui: {
 			tab: "tools",
+			group: "Discovery & MCP",
 			label: "MCP Discovery Default Servers",
 			description: "Keep MCP tools from these servers visible while discovery mode hides other MCP tools",
 		},
@@ -2654,6 +3155,7 @@ export const SETTINGS_SCHEMA = {
 		default: false,
 		ui: {
 			tab: "tools",
+			group: "Discovery & MCP",
 			label: "MCP Update Injection",
 			description: "Inject MCP resource updates into the agent conversation",
 		},
@@ -2664,8 +3166,10 @@ export const SETTINGS_SCHEMA = {
 		default: 500,
 		ui: {
 			tab: "tools",
+			group: "Discovery & MCP",
 			label: "MCP Notification Debounce",
-			description: "Debounce window for MCP resource update notifications before injecting into conversation",
+			description:
+				"Debounce window in milliseconds for MCP resource updates before injecting them into the conversation",
 		},
 	},
 
@@ -2679,6 +3183,7 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: {
 			tab: "tasks",
+			group: "Modes",
 			label: "Plan Mode",
 			description: "Enable plan mode for read-only exploration and planning before execution",
 		},
@@ -2689,6 +3194,7 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: {
 			tab: "tasks",
+			group: "Modes",
 			label: "Goal Mode",
 			description: "Enable per-session goal mode and the hidden goal tool",
 		},
@@ -2699,7 +3205,8 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: {
 			tab: "tasks",
-			label: "Goal Status In Footer",
+			group: "Modes",
+			label: "Goal Status in Footer",
 			description: "Show token budget alongside the goal indicator in the status line",
 		},
 	},
@@ -2709,6 +3216,7 @@ export const SETTINGS_SCHEMA = {
 		default: ["interactive"],
 		ui: {
 			tab: "tasks",
+			group: "Modes",
 			label: "Goal Continuation Modes",
 			description: "Run modes where active goals may auto-continue between turns",
 		},
@@ -2732,6 +3240,7 @@ export const SETTINGS_SCHEMA = {
 		default: "none",
 		ui: {
 			tab: "tasks",
+			group: "Isolation",
 			label: "Isolation Mode",
 			description:
 				'Isolation backend for subagents. "auto" lets the native PAL pick the best available backend (CoW-aware filesystems, then overlayfs/ProjFS, then a git worktree / recursive-copy fallback).',
@@ -2768,6 +3277,7 @@ export const SETTINGS_SCHEMA = {
 		default: "patch",
 		ui: {
 			tab: "tasks",
+			group: "Isolation",
 			label: "Isolation Merge Strategy",
 			description: "How isolated task changes are integrated (patch apply or branch merge)",
 			options: [
@@ -2783,6 +3293,7 @@ export const SETTINGS_SCHEMA = {
 		default: "generic",
 		ui: {
 			tab: "tasks",
+			group: "Isolation",
 			label: "Isolation Commit Style",
 			description: "Commit message style for nested repo changes (generic or AI-generated)",
 			options: [
@@ -2797,6 +3308,7 @@ export const SETTINGS_SCHEMA = {
 		default: false,
 		ui: {
 			tab: "tasks",
+			group: "Subagents",
 			label: "Prefer Task Delegation",
 			description: "Encourage the agent to delegate work to subagents unless changes are trivial",
 		},
@@ -2807,6 +3319,7 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: {
 			tab: "tasks",
+			group: "Subagents",
 			label: "Batch Task Calls",
 			description:
 				"Switch the task tool to its batch shape: one call carries { agent, context, tasks[] } — one subagent per item (with per-item isolation) and a required shared context prepended to every assignment. With async.enabled=true, each spawn runs as an independent background agent with the normal idle/parked lifecycle; otherwise the call blocks for merged results. Disable to restore the flat single-spawn schema.",
@@ -2818,8 +3331,9 @@ export const SETTINGS_SCHEMA = {
 		default: 32,
 		ui: {
 			tab: "tasks",
+			group: "Subagents",
 			label: "Max Concurrent Tasks",
-			description: "Concurrent limit for subagents",
+			description: "Maximum number of subagents running concurrently",
 			options: [
 				{ value: "0", label: "Unlimited" },
 				{ value: "1", label: "1 task" },
@@ -2838,6 +3352,7 @@ export const SETTINGS_SCHEMA = {
 		default: false,
 		ui: {
 			tab: "tasks",
+			group: "Subagents",
 			label: "LSP in Subagents",
 			description:
 				"Allow subagents spawned via the task tool to use the lsp tool. Off by default to keep subagents cheap; enable when LSP-aware delegation is worth the extra tokens.",
@@ -2849,6 +3364,7 @@ export const SETTINGS_SCHEMA = {
 		default: 2,
 		ui: {
 			tab: "tasks",
+			group: "Subagents",
 			label: "Max Task Recursion",
 			description: "How many levels deep subagents can spawn their own subagents",
 			options: [
@@ -2866,6 +3382,7 @@ export const SETTINGS_SCHEMA = {
 		default: 0,
 		ui: {
 			tab: "tasks",
+			group: "Subagents",
 			label: "Max Subagent Runtime",
 			description:
 				"Hard wall-clock limit per subagent (ms). 0 disables it. Defense-in-depth against provider-side stream hangs that escape the inference-layer watchdog; triggers a normal subagent abort with a 'timed out' reason.",
@@ -2884,6 +3401,7 @@ export const SETTINGS_SCHEMA = {
 		default: 420_000,
 		ui: {
 			tab: "tasks",
+			group: "Subagents",
 			label: "Agent Idle TTL",
 			description:
 				"How long an idle subagent stays live in memory before being parked to disk (ms). Parked agents are revived automatically when messaged or resumed. 0 keeps idle agents live until exit.",
@@ -2895,6 +3413,7 @@ export const SETTINGS_SCHEMA = {
 		default: 90,
 		ui: {
 			tab: "tasks",
+			group: "Subagents",
 			label: "Soft Subagent Request Budget",
 			description:
 				"Soft per-subagent request budget (assistant requests per run). Crossing it injects one steering notice asking the subagent to wrap up; at 1.5x the budget the run is aborted gracefully, salvaging partial output. 0 disables the guard. Bundled explore/quick_task agents use a lower built-in budget.",
@@ -2921,9 +3440,10 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: 60,
 		ui: {
-			tab: "tasks",
-			label: "Todo auto-clear delay",
-			description: "How long to wait before removing completed/abandoned tasks from the list",
+			tab: "tools",
+			group: "Todos",
+			label: "Todo Auto-Clear Delay",
+			description: "Delay before completed or abandoned todos are removed from the todo widget",
 			options: [
 				{ value: "0", label: "Instant" },
 				{ value: "60", label: "1 minute", description: "Default" },
@@ -2941,6 +3461,7 @@ export const SETTINGS_SCHEMA = {
 		default: false,
 		ui: {
 			tab: "appearance",
+			group: "Display",
 			label: "Show Resolved Model Badge",
 			description: "Display the actual model ID used by each subagent in the task widget status line",
 		},
@@ -2952,7 +3473,12 @@ export const SETTINGS_SCHEMA = {
 	"skills.enableSkillCommands": {
 		type: "boolean",
 		default: true,
-		ui: { tab: "tasks", label: "Skill Commands", description: "Register skills as /skill:name commands" },
+		ui: {
+			tab: "tasks",
+			group: "Commands & Skills",
+			label: "Skill Commands",
+			description: "Register skills as /skill:name commands",
+		},
 	},
 
 	"skills.enableCodexUser": { type: "boolean", default: true },
@@ -2975,13 +3501,23 @@ export const SETTINGS_SCHEMA = {
 	"commands.enableClaudeUser": {
 		type: "boolean",
 		default: true,
-		ui: { tab: "tasks", label: "Claude User Commands", description: "Load commands from ~/.claude/commands/" },
+		ui: {
+			tab: "tasks",
+			group: "Commands & Skills",
+			label: "Claude User Commands",
+			description: "Load commands from ~/.claude/commands/",
+		},
 	},
 
 	"commands.enableClaudeProject": {
 		type: "boolean",
 		default: true,
-		ui: { tab: "tasks", label: "Claude Project Commands", description: "Load commands from .claude/commands/" },
+		ui: {
+			tab: "tasks",
+			group: "Commands & Skills",
+			label: "Claude Project Commands",
+			description: "Load commands from .claude/commands/",
+		},
 	},
 
 	"commands.enableOpencodeUser": {
@@ -2989,6 +3525,7 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: {
 			tab: "tasks",
+			group: "Commands & Skills",
 			label: "OpenCode User Commands",
 			description: "Load commands from ~/.config/opencode/commands/",
 		},
@@ -2997,7 +3534,12 @@ export const SETTINGS_SCHEMA = {
 	"commands.enableOpencodeProject": {
 		type: "boolean",
 		default: true,
-		ui: { tab: "tasks", label: "OpenCode Project Commands", description: "Load commands from .opencode/commands/" },
+		ui: {
+			tab: "tasks",
+			group: "Commands & Skills",
+			label: "OpenCode Project Commands",
+			description: "Load commands from .opencode/commands/",
+		},
 	},
 
 	// ────────────────────────────────────────────────────────────────────────
@@ -3008,7 +3550,12 @@ export const SETTINGS_SCHEMA = {
 	"secrets.enabled": {
 		type: "boolean",
 		default: false,
-		ui: { tab: "providers", label: "Hide Secrets", description: "Obfuscate secrets before sending to AI providers" },
+		ui: {
+			tab: "providers",
+			group: "Privacy",
+			label: "Hide Secrets",
+			description: "Obfuscate secrets before sending to AI providers",
+		},
 	},
 
 	// Provider selection
@@ -3018,8 +3565,9 @@ export const SETTINGS_SCHEMA = {
 		default: "auto",
 		ui: {
 			tab: "providers",
+			group: "Services",
 			label: "Web Search Provider",
-			description: "Provider for web search tool",
+			description: "Preferred provider for the web_search tool",
 			options: SEARCH_PROVIDER_OPTIONS,
 		},
 	},
@@ -3029,8 +3577,9 @@ export const SETTINGS_SCHEMA = {
 		default: "auto",
 		ui: {
 			tab: "providers",
+			group: "Services",
 			label: "Image Provider",
-			description: "Provider for image generation tool",
+			description: "Preferred provider for image generation",
 			options: [
 				{
 					value: "auto",
@@ -3059,6 +3608,7 @@ export const SETTINGS_SCHEMA = {
 		default: ONLINE_TINY_TITLE_MODEL_KEY,
 		ui: {
 			tab: "providers",
+			group: "Tiny Model",
 			label: "Tiny Model",
 			description: "Session-title model: online pi/smol by default, or a local on-device model",
 			options: TINY_TITLE_MODEL_OPTIONS,
@@ -3070,6 +3620,7 @@ export const SETTINGS_SCHEMA = {
 		default: TINY_MODEL_DEVICE_DEFAULT,
 		ui: {
 			tab: "providers",
+			group: "Tiny Model",
 			label: "Tiny Model Device",
 			description:
 				"ONNX execution provider for local tiny models (titles + memory). Default uses CPU-only inference. The PI_TINY_DEVICE env var overrides this.",
@@ -3082,6 +3633,7 @@ export const SETTINGS_SCHEMA = {
 		default: TINY_MODEL_DTYPE_DEFAULT,
 		ui: {
 			tab: "providers",
+			group: "Tiny Model",
 			label: "Tiny Model Precision",
 			description:
 				"ONNX quantization/precision for local tiny models. Default uses each model's shipped dtype (q4); lower precision is faster, higher is more faithful. The PI_TINY_DTYPE env var overrides this.",
@@ -3094,6 +3646,7 @@ export const SETTINGS_SCHEMA = {
 		default: ONLINE_MEMORY_MODEL_KEY,
 		ui: {
 			tab: "memory",
+			group: "General",
 			label: "Memory Model",
 			description:
 				"Mnemopi LLM for fact extraction + consolidation: online (smol/remote) by default, or a local on-device model",
@@ -3108,6 +3661,7 @@ export const SETTINGS_SCHEMA = {
 		default: ONLINE_AUTO_THINKING_MODEL_KEY,
 		ui: {
 			tab: "model",
+			group: "Thinking",
 			label: "Auto Thinking Model",
 			description:
 				"Difficulty classifier for the `auto` thinking level: online smol by default, or a local on-device model",
@@ -3122,6 +3676,7 @@ export const SETTINGS_SCHEMA = {
 		default: "anthropic",
 		ui: {
 			tab: "providers",
+			group: "Protocol",
 			label: "Kimi API Format",
 			description: "API format for Kimi Code provider",
 			options: [
@@ -3137,6 +3692,7 @@ export const SETTINGS_SCHEMA = {
 		default: "auto",
 		ui: {
 			tab: "providers",
+			group: "Protocol",
 			label: "OpenAI WebSockets",
 			description: "Websocket policy for OpenAI Codex models (auto uses model defaults, on forces, off disables)",
 			options: [
@@ -3153,6 +3709,7 @@ export const SETTINGS_SCHEMA = {
 		default: "default",
 		ui: {
 			tab: "providers",
+			group: "Protocol",
 			label: "OpenRouter Routing",
 			description:
 				"Default routing-variant suffix appended to OpenRouter model IDs (overridden when the selector already names a variant)",
@@ -3175,6 +3732,7 @@ export const SETTINGS_SCHEMA = {
 		default: "auto",
 		ui: {
 			tab: "providers",
+			group: "Services",
 			label: "Fetch Provider",
 			description: "Reader backend priority for the fetch/read URL tool",
 			options: [
@@ -3191,12 +3749,46 @@ export const SETTINGS_SCHEMA = {
 			],
 		},
 	},
+	// Codex saved rate-limit resets (auto-redeem)
+	"codexResets.autoRedeem": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "providers",
+			group: "Services",
+			label: "Codex Auto-Redeem Saved Resets",
+			description:
+				"When a turn is blocked by the Codex weekly limit on the active account and no other account is available, automatically spend one saved rate-limit reset (ChatGPT 'save rate limit resets'). Conservative: never fires for 5-hour-only or Spark limits, near a natural reset, or twice for the same block. Requires retries enabled.",
+		},
+	},
+	"codexResets.minBlockedMinutes": {
+		type: "number",
+		default: 60,
+		ui: {
+			tab: "providers",
+			group: "Services",
+			label: "Codex Auto-Redeem Min Block",
+			description:
+				"Only auto-redeem when the natural weekly reset is at least this many minutes away (don't spend a ~30-day credit to save a short wait).",
+		},
+	},
+	"codexResets.keepCredits": {
+		type: "number",
+		default: 0,
+		ui: {
+			tab: "providers",
+			group: "Services",
+			label: "Codex Auto-Redeem Reserve",
+			description: "Never auto-spend below this many saved resets (0 = the last credit may be spent automatically).",
+		},
+	},
 	"provider.appendOnlyContext": {
 		type: "enum",
 		values: ["auto", "on", "off"] as const,
 		default: "auto",
 		ui: {
 			tab: "providers",
+			group: "Protocol",
 			label: "Append-Only Context",
 			description:
 				"Cache system prompt + tool specs and keep an append-only message log so provider prefix caches (DeepSeek, Xiaomi/SGLang, Anthropic) hit at maximum rate. Auto enables for known prefix-cache providers.",
@@ -3212,25 +3804,40 @@ export const SETTINGS_SCHEMA = {
 	"exa.enabled": {
 		type: "boolean",
 		default: true,
-		ui: { tab: "providers", label: "Exa", description: "Master toggle for all Exa search tools" },
+		ui: { tab: "providers", group: "Services", label: "Exa", description: "Master toggle for all Exa search tools" },
 	},
 
 	"exa.enableSearch": {
 		type: "boolean",
 		default: true,
-		ui: { tab: "providers", label: "Exa Search", description: "Basic search, deep search, code search, crawl" },
+		ui: {
+			tab: "providers",
+			group: "Services",
+			label: "Exa Search",
+			description: "Enable Exa basic search, deep search, code search, and crawl tools",
+		},
 	},
 
 	"exa.enableResearcher": {
 		type: "boolean",
 		default: false,
-		ui: { tab: "providers", label: "Exa Researcher", description: "AI-powered deep research tasks" },
+		ui: {
+			tab: "providers",
+			group: "Services",
+			label: "Exa Researcher",
+			description: "Enable the Exa researcher tool for AI-powered deep research",
+		},
 	},
 
 	"exa.enableWebsets": {
 		type: "boolean",
 		default: false,
-		ui: { tab: "providers", label: "Exa Websets", description: "Webset management and enrichment tools" },
+		ui: {
+			tab: "providers",
+			group: "Services",
+			label: "Exa Websets",
+			description: "Enable Exa webset management and enrichment tools",
+		},
 	},
 
 	// SearXNG
@@ -3239,8 +3846,9 @@ export const SETTINGS_SCHEMA = {
 		default: undefined,
 		ui: {
 			tab: "providers",
+			group: "Services",
 			label: "SearXNG Endpoint",
-			description: "Self-hosted search base URL",
+			description: "Base URL of a self-hosted SearXNG instance used for web search",
 		},
 	},
 
@@ -3286,6 +3894,7 @@ export const SETTINGS_SCHEMA = {
 		default: false,
 		ui: {
 			tab: "tools",
+			group: "Developer",
 			label: "Auto QA",
 			description: "Enable automated tool issue reporting (report_tool_issue) for all agents",
 		},
@@ -3299,8 +3908,9 @@ export const SETTINGS_SCHEMA = {
 		default: "https://qa.omp.sh/v1/grievances" as const,
 		ui: {
 			tab: "tools",
+			group: "Developer",
 			label: "Auto QA Push Endpoint",
-			description: "Full URL that receives the JSON payload (default ships to https://qa.omp.sh/v1/grievances)",
+			description: "Full URL receiving Auto QA JSON reports (default https://qa.omp.sh/v1/grievances)",
 		},
 	},
 
@@ -3412,6 +4022,9 @@ export type StatusLineSeparatorStyle = SettingValue<"statusLine.separator">;
 
 /** Tree selector filter mode - derived from schema */
 export type TreeFilterMode = SettingValue<"treeFilterMode">;
+
+/** Personality preset - derived from schema */
+export type Personality = SettingValue<"personality">;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Typed Group Definitions
@@ -3557,6 +4170,11 @@ export interface ShellMinimizerSettings {
 	sourceOutlineLevel: "default" | "aggressive";
 	legacyFilters: boolean | undefined;
 }
+export interface CodexResetsSettings {
+	autoRedeem: boolean;
+	minBlockedMinutes: number;
+	keepCredits: number;
+}
 
 /** Map group prefix -> typed settings interface */
 export interface GroupTypeMap {
@@ -3576,6 +4194,7 @@ export interface GroupTypeMap {
 	modelTags: ModelTagsSettings;
 	cycleOrder: string[];
 	shellMinimizer: ShellMinimizerSettings;
+	codexResets: CodexResetsSettings;
 }
 
 export type GroupPrefix = keyof GroupTypeMap;

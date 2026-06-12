@@ -172,9 +172,9 @@ jobs:
                 echo "cross-platform-run-id=$cross_platform_run_id"
               } >> "$GITHUB_OUTPUT"
 
-   # Fast lint + type check (no Rust, no native build needed)
+   # Fast lint, type check, and browser bundle build (no Rust, no native build needed)
    check:
-      name: Lint & type check
+      name: Lint, type check & web build
       runs-on: ubuntu-22.04
       steps:
          - uses: actions/checkout@v4
@@ -189,6 +189,8 @@ jobs:
          - run: bun install --frozen-lockfile
          - name: Type check workspace
            run: bun run ci:check:full
+         - name: Build collab web
+           run: bun run collab:web:build
 
    # Linux x64 baseline + modern: required by `test`, so it runs on every PR
    # unless native_artifact_lookup found a cached run. Release runs always

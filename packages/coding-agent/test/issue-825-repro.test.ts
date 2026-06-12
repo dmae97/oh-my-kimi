@@ -31,8 +31,8 @@ beforeAll(() => {
 type PromptOpts = { streamingBehavior?: "steer" | "followUp" } | undefined;
 
 function makeFakeSession() {
-	const steering: string[] = [];
-	const followUp: string[] = [];
+	const steering: { text: string }[] = [];
+	const followUp: { text: string }[] = [];
 	const promptCalls: Array<{ text: string; opts: PromptOpts }> = [];
 
 	const prompt = mock(async (text: string, opts?: PromptOpts): Promise<void> => {
@@ -43,18 +43,18 @@ function makeFakeSession() {
 			throw new AgentBusyError();
 		}
 		if (opts.streamingBehavior === "followUp") {
-			followUp.push(text);
+			followUp.push({ text });
 		} else {
-			steering.push(text);
+			steering.push({ text });
 		}
 	});
 
 	const steer = mock(async (text: string): Promise<void> => {
-		steering.push(text);
+		steering.push({ text });
 	});
 
 	const followUpFn = mock(async (text: string): Promise<void> => {
-		followUp.push(text);
+		followUp.push({ text });
 	});
 
 	const session = {
@@ -62,7 +62,7 @@ function makeFakeSession() {
 		isCompacting: false,
 		extensionRunner: undefined,
 		customCommands: [] as Array<{ command: { name: string } }>,
-		getQueuedMessages: () => ({ steering, followUp }),
+		getQueuedMessages: () => ({ steering: steering.map(e => e.text), followUp: followUp.map(e => e.text) }),
 		clearQueue: () => {
 			const s = [...steering];
 			const f = [...followUp];
@@ -139,7 +139,7 @@ describe("issue #825: steer preview stuck after compaction", () => {
 		// that is what `restoreQueuedMessagesToEditor` (Alt+Up) and the
 		// post-stream drain consult. Otherwise it is stranded in
 		// compactionQueuedMessages with no consumer.
-		expect(fake.steering).toContain("address review feedback");
+		expect(fake.steering).toContainEqual({ text: "address review feedback" });
 
 		// And it must not also remain duplicated in compactionQueuedMessages.
 		const remaining = (ctx as unknown as { compactionQueuedMessages: CompactionQueuedMessage[] })

@@ -20,6 +20,11 @@ import {
 	UNK_CONTEXT_WINDOW,
 	UNK_MAX_TOKENS,
 } from "@oh-my-pi/pi-catalog/provider-models";
+import {
+	collapseBuiltModelVariants,
+	getVariantAliasSources,
+	resolveVariantAlias,
+} from "@oh-my-pi/pi-catalog/variant-collapse";
 
 // Sentinel for local-only OAuth token (LM Studio, vLLM) — declared inline to avoid loading
 // any provider module at startup. Must match `DEFAULT_LOCAL_TOKEN` in oauth/lm-studio.ts.
@@ -57,7 +62,7 @@ import {
 import { isRecord, logger } from "@oh-my-pi/pi-utils";
 import { parseModelString, resolveProviderModelReference } from "../config/model-resolver";
 import type { AuthStorage, OAuthCredential } from "../session/auth-storage";
-import { type ApiKeyResolverOptions, createApiKeyResolver } from "./api-key-resolver";
+import { type ApiKeyResolverModel, type ApiKeyResolverOptions, createApiKeyResolver } from "./api-key-resolver";
 import type { ConfigError, ConfigFile } from "./config-file";
 import {
 	DISCOVERY_DEFAULT_MAX_TOKENS,
@@ -542,7 +547,37 @@ function normalizeSuppressedSelector(selector: string): string {
 	if (!trimmed) return trimmed;
 	const parsed = parseModelString(trimmed);
 	if (!parsed) return trimmed;
-	return `${parsed.provider}/${parsed.id}`;
+	// Retired effort-tier variant ids normalize to their collapsed logical id
+	// so persisted suppressions keyed by raw member ids still bind.
+	const aliasId = resolveVariantAlias(parsed.provider, parsed.id);
+	return `${parsed.provider}/${aliasId ?? parsed.id}`;
+}
+
+/**
+ * Look up a model's override, falling back to entries keyed by retired
+ * effort-tier variant ids (models.yml authored before collapsing). A raw key
+ * only re-binds when no live model holds that id.
+ */
+function resolveModelOverrideWithAliases(
+	overrides: Map<string, ModelOverride>,
+	model: Model<Api>,
+	hasLiveModel: (provider: string, id: string) => boolean,
+): ModelOverride | undefined {
+	const direct = overrides.get(model.id);
+	if (direct) return direct;
+	for (const rawId of getVariantAliasSources(model.provider, model.id)) {
+		if (hasLiveModel(model.provider, rawId)) continue;
+		const remapped = overrides.get(rawId);
+		if (remapped) {
+			logger.debug("model override re-keyed through variant alias", {
+				provider: model.provider,
+				from: rawId,
+				to: model.id,
+			});
+			return remapped;
+		}
+	}
+	return undefined;
 }
 
 function getDisabledProviderIdsFromSettings(): Set<string> {
@@ -567,6 +602,7 @@ function getConfiguredProviderOrderFromSettings(): string[] {
 export class ModelRegistry {
 	#models: Model<Api>[] = [];
 	#canonicalIndex: CanonicalModelIndex = { records: [], byId: new Map(), bySelector: new Map() };
+	#canonicalIndexDirty: boolean = true;
 	#customProviderApiKeys: Map<string, string> = new Map();
 	#keylessProviders: Set<string> = new Set();
 	#discoverableProviders: DiscoveryProviderConfig[] = [];
@@ -799,7 +835,9 @@ export class ModelRegistry {
 		const withConfigModels = this.#mergeCustomModels(resolvedDefaults, this.#customModelOverlays);
 		// Merge runtime extension models so they survive refresh() cycles
 		const combined = this.#mergeCustomModels(withConfigModels, this.#runtimeModelOverlays);
-		const withModelOverrides = this.#applyModelOverrides(combined, this.#modelOverrides);
+		// Custom/config providers bypass the model-manager merge point —
+		// collapse effort-tier variants here so X/X-thinking twins fold.
+		const withModelOverrides = this.#applyModelOverrides(collapseBuiltModelVariants(combined), this.#modelOverrides);
 		this.#models = this.#applyRuntimeProviderOverrides(withModelOverrides);
 		this.#rebuildCanonicalIndex();
 		this.#lastStaticLoadMtime = this.#modelsConfigFile.getMtimeMs();
@@ -1152,7 +1190,7 @@ export class ModelRegistry {
 		const withConfigModels = this.#mergeCustomModels(resolved, this.#customModelOverlays);
 		// Merge runtime extension models so they survive online discovery completion
 		const combined = this.#mergeCustomModels(withConfigModels, this.#runtimeModelOverlays);
-		const withModelOverrides = this.#applyModelOverrides(combined, this.#modelOverrides);
+		const withModelOverrides = this.#applyModelOverrides(collapseBuiltModelVariants(combined), this.#modelOverrides);
 		this.#models = this.#applyRuntimeProviderOverrides(withModelOverrides);
 		this.#rebuildCanonicalIndex();
 	}
@@ -1238,9 +1276,10 @@ export class ModelRegistry {
 	#discoveryContext(): DiscoveryContext {
 		return {
 			fetch: this.#fetch,
-			getBearerApiKey: async provider => {
+			getBearerApiKeyResolver: async provider => {
 				const apiKey = await this.getApiKeyForProvider(provider);
-				return apiKey && apiKey !== DEFAULT_LOCAL_TOKEN && apiKey !== kNoAuth ? apiKey : undefined;
+				if (!apiKey || apiKey === DEFAULT_LOCAL_TOKEN || apiKey === kNoAuth) return undefined;
+				return this.resolver(provider);
 			},
 		};
 	}
@@ -1397,8 +1436,13 @@ export class ModelRegistry {
 	#applyProviderModelOverrides(provider: string, models: Model<Api>[]): Model<Api>[] {
 		const overrides = this.#modelOverrides.get(provider);
 		if (!overrides || overrides.size === 0) return models;
+		let liveIds: Set<string> | null = null;
+		const hasLiveModel = (_provider: string, id: string) => {
+			liveIds ??= new Set(models.map(m => m.id));
+			return liveIds.has(id);
+		};
 		return models.map(model => {
-			const override = overrides.get(model.id);
+			const override = resolveModelOverrideWithAliases(overrides, model, hasLiveModel);
 			if (!override) return model;
 			return applyModelOverride(model, override);
 		});
@@ -1442,10 +1486,15 @@ export class ModelRegistry {
 	}
 	#applyModelOverrides(models: Model<Api>[], overrides: Map<string, Map<string, ModelOverride>>): Model<Api>[] {
 		if (overrides.size === 0) return models;
+		let liveKeys: Set<string> | null = null;
+		const hasLiveModel = (provider: string, id: string) => {
+			liveKeys ??= new Set(models.map(m => `${m.provider}\u0000${m.id}`));
+			return liveKeys.has(`${provider}\u0000${id}`);
+		};
 		return models.map(model => {
 			const providerOverrides = overrides.get(model.provider);
 			if (!providerOverrides) return model;
-			const override = providerOverrides.get(model.id);
+			const override = resolveModelOverrideWithAliases(providerOverrides, model, hasLiveModel);
 			if (!override) return model;
 			return applyModelOverride(model, override);
 		});
@@ -1471,12 +1520,23 @@ export class ModelRegistry {
 			this.#rebuildPending = true;
 			return;
 		}
-		this.#canonicalIndex = buildCanonicalModelIndex(
-			this.#models,
-			getBundledCanonicalReferenceData(),
-			this.#equivalenceConfig,
-		);
+		// Defer the catalog-wide index build to first read. Boot model
+		// resolution reads it only when enabledModels or a default-role pattern
+		// is configured; the empty interactive launch never reads it pre-paint,
+		// so the ~200ms build over the full catalog moves off the first-paint
+		// critical path.
+		this.#canonicalIndexDirty = true;
 		this.#rebuildPending = false;
+	}
+
+	#ensureCanonicalIndex(): CanonicalModelIndex {
+		if (this.#canonicalIndexDirty) {
+			this.#canonicalIndex = logger.time("buildCanonicalModelIndex", () =>
+				buildCanonicalModelIndex(this.#models, getBundledCanonicalReferenceData(), this.#equivalenceConfig),
+			);
+			this.#canonicalIndexDirty = false;
+		}
+		return this.#canonicalIndex;
 	}
 
 	#suspendRebuild(): void {
@@ -1489,11 +1549,7 @@ export class ModelRegistry {
 		}
 		if (this.#rebuildSuspended === 0 && this.#rebuildPending) {
 			this.#rebuildPending = false;
-			this.#canonicalIndex = buildCanonicalModelIndex(
-				this.#models,
-				getBundledCanonicalReferenceData(),
-				this.#equivalenceConfig,
-			);
+			this.#canonicalIndexDirty = true;
 		}
 	}
 
@@ -1602,7 +1658,7 @@ export class ModelRegistry {
 	getCanonicalModels(options?: CanonicalModelQueryOptions): CanonicalModelRecord[] {
 		const { candidateKeys, isAvailable } = this.#canonicalQueryFilters(options);
 		const records: CanonicalModelRecord[] = [];
-		for (const record of this.#canonicalIndex.records) {
+		for (const record of this.#ensureCanonicalIndex().records) {
 			const variants = this.#filterCanonicalVariants(record, candidateKeys, isAvailable);
 			if (variants.length === 0) {
 				continue;
@@ -1628,7 +1684,7 @@ export class ModelRegistry {
 		const candidates = options?.candidates ?? (options?.availableOnly ? this.getAvailable() : this.getAll());
 		const preferences = this.#variantPreferences(candidates);
 		const selections: CanonicalModelSelection[] = [];
-		for (const record of this.#canonicalIndex.records) {
+		for (const record of this.#ensureCanonicalIndex().records) {
 			const variants = this.#filterCanonicalVariants(record, candidateKeys, isAvailable);
 			if (variants.length === 0) {
 				continue;
@@ -1646,7 +1702,7 @@ export class ModelRegistry {
 	}
 
 	getCanonicalVariants(canonicalId: string, options?: CanonicalModelQueryOptions): CanonicalModelVariant[] {
-		const record = this.#canonicalIndex.byId.get(canonicalId.trim().toLowerCase());
+		const record = this.#ensureCanonicalIndex().byId.get(canonicalId.trim().toLowerCase());
 		if (!record) {
 			return [];
 		}
@@ -1664,7 +1720,7 @@ export class ModelRegistry {
 	}
 
 	getCanonicalId(model: Model<Api>): string | undefined {
-		return this.#canonicalIndex.bySelector.get(formatCanonicalVariantSelector(model).toLowerCase());
+		return this.#ensureCanonicalIndex().bySelector.get(formatCanonicalVariantSelector(model).toLowerCase());
 	}
 
 	/**
@@ -1754,12 +1810,24 @@ export class ModelRegistry {
 	}
 
 	/**
-	 * Build an {@link ApiKeyResolver} for this provider, implementing the
-	 * central a/b/c auth-retry policy. Callers that need the initial key for
-	 * a guard can call `resolveApiKeyOnce(resolver)`.
+	 * Build an {@link ApiKeyResolver} implementing the central a/b/c auth-retry
+	 * policy. Accepts a provider id with options, or a model with an optional
+	 * session id (`resolver(model, sessionId)`) which derives `baseUrl`/`modelId`
+	 * from the model. Callers that need the initial key for a guard can call
+	 * `resolveApiKeyOnce(resolver)`.
 	 */
-	resolver(provider: string, options?: ApiKeyResolverOptions): ApiKeyResolver {
-		return createApiKeyResolver(this, provider, options);
+	resolver(provider: string, options?: ApiKeyResolverOptions): ApiKeyResolver;
+	resolver(model: ApiKeyResolverModel, sessionId?: string): ApiKeyResolver;
+	resolver(target: string | ApiKeyResolverModel, optionsOrSessionId?: ApiKeyResolverOptions | string): ApiKeyResolver {
+		const options = typeof optionsOrSessionId === "string" ? { sessionId: optionsOrSessionId } : optionsOrSessionId;
+		if (typeof target === "string") {
+			return createApiKeyResolver(this, target, options);
+		}
+		return createApiKeyResolver(this, target.provider, {
+			...options,
+			baseUrl: target.baseUrl,
+			modelId: target.id,
+		});
 	}
 
 	async #peekApiKeyForProvider(provider: string): Promise<string | undefined> {

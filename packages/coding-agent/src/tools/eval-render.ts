@@ -33,6 +33,7 @@ import {
 	formatDuration,
 	formatStatusIcon,
 	formatTitle,
+	previewWindowRows,
 	replaceTabs,
 	shortenPath,
 	truncateToWidth,
@@ -493,7 +494,7 @@ export const evalToolRenderer = {
 
 		return markFramedBlockComponent({
 			render: (width: number): readonly string[] => {
-				const key = `${options.expanded ? 1 : 0}|${cells.map(c => `${c.language}:${c.title ?? ""}:${c.code.length}`).join("|")}`;
+				const key = `${options.expanded ? 1 : 0}|${previewWindowRows()}|${cells.map(c => `${c.language}:${c.title ?? ""}:${c.code.length}`).join("|")}`;
 				if (cached && cached.key === key && cached.width === width) {
 					return cached.result;
 				}
@@ -510,9 +511,11 @@ export const evalToolRenderer = {
 							title: cell.title,
 							status: "pending",
 							width,
-							// Always render the full source: the code is fixed input, not the
-							// streaming part, so it is never compacted.
-							codeMaxLines: Number.POSITIVE_INFINITY,
+							// Viewport-sized tail window following the newest streamed code
+							// line; renderResult keeps the same cap so the cell never snaps
+							// open on completion. Only ctrl+o uncaps.
+							codeTail: true,
+							codeMaxLines: previewWindowRows(),
 							expanded: options.expanded,
 						},
 						uiTheme,
@@ -576,7 +579,7 @@ export const evalToolRenderer = {
 				render: (width: number): readonly string[] => {
 					const expanded = options.renderContext?.expanded ?? options.expanded;
 					const previewLines = options.renderContext?.previewLines ?? EVAL_DEFAULT_PREVIEW_LINES;
-					const key = `${expanded}|${previewLines}|${options.spinnerFrame}`;
+					const key = `${expanded}|${previewLines}|${options.spinnerFrame}|${previewWindowRows()}`;
 					if (cached && cached.key === key && cached.width === width) {
 						return cached.result;
 					}
@@ -613,9 +616,11 @@ export const evalToolRenderer = {
 								duration: cell.durationMs,
 								output: outputLines.length > 0 ? outputLines.join("\n") : undefined,
 								outputMaxLines: outputLines.length,
-								// Code is fixed input — always shown in full, never compacted.
-								// Only `output` honors the collapsed preview cap above.
-								codeMaxLines: Number.POSITIVE_INFINITY,
+								// Same viewport-sized tail window as the pending preview so the
+								// cell never snaps open on completion; only ctrl+o uncaps.
+								// `output` keeps its own preview cap from above.
+								codeTail: true,
+								codeMaxLines: previewWindowRows(),
 								expanded,
 								width,
 							},
@@ -749,4 +754,8 @@ export const evalToolRenderer = {
 
 	mergeCallAndResult: true,
 	inline: true,
+	// Pending preview shows tail-window code cells; the result render
+	// interleaves each cell's output under its code, re-laying-out every row
+	// below the first cell. Keep the preview out of native scrollback mid-run.
+	provisionalPendingPreview: true,
 };

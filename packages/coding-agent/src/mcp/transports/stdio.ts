@@ -85,27 +85,99 @@ async function resolveWindowsCommandPath(
 	env: Record<string, string | undefined>,
 ): Promise<string | null> {
 	const extensions = getWindowsPathExt(env);
-	if (hasExecutableExtension(command, extensions)) return command;
+	const hasExt = hasExecutableExtension(command, extensions);
+	const candidates = hasExt ? [command] : extensions.map(ext => `${command}${ext}`);
 
-	const candidates = extensions.map(ext => `${command}${ext}`);
 	if (hasPathSegment(command)) {
 		for (const candidate of candidates) {
 			const resolved = path.isAbsolute(candidate) ? candidate : path.resolve(cwd, candidate);
 			if (await fileExists(resolved)) return resolved;
 		}
-		return null;
+		return hasExt ? command : null;
 	}
 
+	// Match cmd.exe's lookup order for an unqualified name: current directory
+	// first, then PATH. Skipping cwd would launch a global shim instead of a
+	// project-local one with the same name.
+	const searchDirs = [cwd];
 	const pathValue = getCaseInsensitiveEnv(env, "PATH");
-	if (!pathValue) return null;
-	for (const dir of pathValue.split(";")) {
-		if (!dir) continue;
+	if (pathValue) {
+		for (const dir of pathValue.split(";")) {
+			if (dir) searchDirs.push(dir);
+		}
+	}
+	for (const dir of searchDirs) {
 		for (const candidate of candidates) {
 			const resolved = path.join(dir, candidate);
 			if (await fileExists(resolved)) return resolved;
 		}
 	}
-	return null;
+	return hasExt ? command : null;
+}
+
+function resolveWindowsShimPath(value: string, shimDir: string): string | null {
+	const match = /^%dp0%[\\/]*(.*)$/i.exec(value);
+	if (!match) return null;
+	const suffix = match[1];
+	if (!suffix) return shimDir;
+	return path.join(shimDir, ...suffix.split(/[\\/]+/).filter(Boolean));
+}
+
+function extractWindowsNpmShimTarget(content: string): string | null {
+	const match = /"%_prog%"\s+"([^"]+)"\s+%\*/i.exec(content);
+	return match?.[1] ?? null;
+}
+
+/**
+ * Extract the shim's PATH-fallback interpreter (`SET "_prog=node"`). The
+ * `IF EXIST` branch assigns a `%dp0%`-prefixed value, so requiring a
+ * non-`%`-leading value picks the bare program name.
+ */
+function extractWindowsNpmShimProg(content: string): string | null {
+	const match = /SET\s+"_prog=([^%"][^"]*)"/i.exec(content);
+	return match?.[1] ?? null;
+}
+
+async function resolveWindowsNpmShimCommand(
+	command: string,
+	args: readonly string[],
+	cwd: string,
+): Promise<StdioSpawnCommand | null> {
+	if (!isWindowsBatchCommand(command)) return null;
+	if (!hasPathSegment(command)) return null;
+	const commandPath = path.resolve(cwd, command);
+
+	let content: string;
+	try {
+		content = await Bun.file(commandPath).text();
+	} catch {
+		return null;
+	}
+
+	// cmd-shim emits the same invocation line for every interpreter; only
+	// bypass cmd.exe when the shim's fallback interpreter is actually node.
+	const prog = extractWindowsNpmShimProg(content);
+	if (
+		!prog ||
+		path
+			.basename(prog)
+			.replace(/\.exe$/i, "")
+			.toLowerCase() !== "node"
+	)
+		return null;
+
+	const rawTarget = extractWindowsNpmShimTarget(content);
+	if (!rawTarget) return null;
+
+	const target = resolveWindowsShimPath(rawTarget, path.dirname(commandPath));
+	if (!target) return null;
+
+	const siblingNode = path.join(path.dirname(commandPath), "node.exe");
+	const nodeCommand = (await fileExists(siblingNode)) ? siblingNode : "node";
+	return {
+		cmd: [nodeCommand, target, ...args],
+		windowsHide: true,
+	};
 }
 
 function quoteCmdArg(value: string): string {
@@ -150,6 +222,8 @@ export async function resolveStdioSpawnCommand(
 
 	const resolvedCommand =
 		(await resolveWindowsCommandPath(config.command, options.cwd, options.env)) ?? config.command;
+	const npmShimCommand = await resolveWindowsNpmShimCommand(resolvedCommand, args, options.cwd);
+	if (npmShimCommand) return npmShimCommand;
 	if (!isWindowsBatchCommand(resolvedCommand)) return { cmd: [resolvedCommand, ...args] };
 
 	return {

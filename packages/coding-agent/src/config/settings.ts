@@ -798,6 +798,15 @@ export class Settings {
 			raw["compaction.strategy"] = "shake";
 		}
 
+		// snapcompact.systemPrompt: boolean -> scoped enum.
+		const snapcompactObj = raw.snapcompact as Record<string, unknown> | undefined;
+		if (snapcompactObj && typeof snapcompactObj.systemPrompt === "boolean") {
+			snapcompactObj.systemPrompt = snapcompactObj.systemPrompt ? "all" : "none";
+		}
+		if (typeof raw["snapcompact.systemPrompt"] === "boolean") {
+			raw["snapcompact.systemPrompt"] = raw["snapcompact.systemPrompt"] ? "all" : "none";
+		}
+
 		// statusLine: rename "plan_mode" segment to "mode"
 		const statusLineObj = raw.statusLine as Record<string, unknown> | undefined;
 		if (statusLineObj) {

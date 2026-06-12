@@ -3,6 +3,7 @@ import { readModelCache, writeModelCache } from "./model-cache";
 import { type GeneratedProvider, getBundledModels } from "./models";
 import type { Api, Model, ModelSpec, Provider } from "./types";
 import { isRecord } from "./utils";
+import { collapseBuiltModelVariants } from "./variant-collapse";
 
 const DEFAULT_CACHE_TTL_MS = 2 * 60 * 60 * 1000;
 const NON_AUTHORITATIVE_RETRY_MS = 5 * 60 * 1000;
@@ -134,7 +135,7 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 	// Re-running `mergeDynamicModels(static, cache)` would just rebuild the same
 	// objects (~800ms in the steady-state cold-start profile for `omp -p hi`).
 	if (!shouldFetchFromNetwork && cache?.fresh && hasAuthoritativeCache && cacheFingerprintMatches) {
-		return { models: passModelList<TApi>(cache.models), stale: false };
+		return { models: collapseBuiltModelVariants(passModelList<TApi>(cache.models)), stale: false };
 	}
 
 	const [fetchedModelsDevModels, fetchedDynamicModels] = shouldFetchFromNetwork
@@ -148,8 +149,9 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 	const dynamicModels = fetchedDynamicModels ?? [];
 	const mergedWithCache = mergeDynamicModels(mergeModelSources(staticModels, modelsDevModels), cacheModels);
 	const mergedModels = mergeDynamicModels(mergedWithCache, dynamicModels);
-	const models =
-		dynamicModelsAuthoritative && dynamicFetchSucceeded ? retainModelIds(mergedModels, dynamicModels) : mergedModels;
+	const models = collapseBuiltModelVariants(
+		dynamicModelsAuthoritative && dynamicFetchSucceeded ? retainModelIds(mergedModels, dynamicModels) : mergedModels,
+	);
 	const dynamicAuthoritative = !hasDynamicFetcher || dynamicFetchSucceeded || shouldUseFreshCacheAsAuthoritative;
 	if (shouldFetchFromNetwork) {
 		if (dynamicFetchSucceeded) {
@@ -157,7 +159,14 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 			const snapshotModels = dynamicModelsAuthoritative
 				? retainModelIds(mergedSnapshot, dynamicModels)
 				: mergedSnapshot;
-			writeModelCache(options.providerId, now(), snapshotModels, true, staticFingerprint, dbPath);
+			writeModelCache(
+				options.providerId,
+				now(),
+				collapseBuiltModelVariants(snapshotModels),
+				true,
+				staticFingerprint,
+				dbPath,
+			);
 		} else {
 			// Dynamic fetch failed — update cache with a non-authoritative snapshot so
 			// stale state remains visible while retry backoff still applies.
@@ -165,9 +174,11 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 			writeModelCache(
 				options.providerId,
 				now(),
-				mergeDynamicModels(
-					mergeModelSources(staticModels, modelsDevModels),
-					normalizeModelList<TApi>(latestCache?.models ?? cache?.models ?? []),
+				collapseBuiltModelVariants(
+					mergeDynamicModels(
+						mergeModelSources(staticModels, modelsDevModels),
+						normalizeModelList<TApi>(latestCache?.models ?? cache?.models ?? []),
+					),
 				),
 				false,
 				staticFingerprint,
@@ -290,7 +301,7 @@ function retainModelIds<TApi extends Api>(
  * arms calling `resolveProviderModels` with the same `staticModels` array)
  * skip the JSON+hash work after the first call.
  */
-const MODEL_CACHE_FINGERPRINT_VERSION = "merge-v2";
+const MODEL_CACHE_FINGERPRINT_VERSION = "merge-v3";
 const kStaticFingerprint = Symbol("model-manager.staticFingerprint");
 type ModelArrayWithFingerprint = readonly Model<Api>[] & { [kStaticFingerprint]?: string };
 function fingerprintStatic<TApi extends Api>(

@@ -1,4 +1,10 @@
 import { describe, expect, it, spyOn } from "bun:test";
+import type {
+	ResetCreditAccountStatus,
+	ResetCreditRedeemOutcome,
+	ResetCreditTarget,
+	UsageReport,
+} from "@oh-my-pi/pi-ai";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -21,6 +27,7 @@ interface FakeAcpBuiltinSession {
 	formatSessionAsText: () => string;
 	getLastAssistantText: () => string | undefined;
 	messages: unknown[];
+	settings: Settings;
 	model: { provider: string; id: string } | undefined;
 	newSession(opts?: { drop?: boolean; parentSession?: string }): Promise<boolean>;
 	fork(): Promise<boolean>;
@@ -35,9 +42,12 @@ interface FakeAcpBuiltinSession {
 	getContextUsage(): { tokens?: number; contextWindow: number } | undefined;
 	getAvailableModels(): Array<{ provider: string; id: string; contextWindow?: number }>;
 	setModel(model: unknown): Promise<void>;
+	listResetCredits: () => Promise<ResetCreditAccountStatus[]>;
+	redeemResetCredit: (target: ResetCreditTarget) => Promise<ResetCreditRedeemOutcome>;
 }
 
 function createRuntime() {
+	const settings = Settings.isolated();
 	const output: string[] = [];
 	const session: FakeAcpBuiltinSession = {
 		fastMode: false,
@@ -59,6 +69,12 @@ function createRuntime() {
 		},
 		setForcedToolChoice(toolName: string) {
 			this.forcedToolChoice = toolName;
+		},
+		async listResetCredits() {
+			return [];
+		},
+		async redeemResetCredit(_target) {
+			return { ok: false, code: "no_credit" };
 		},
 		async newSession(_opts?: { drop?: boolean; parentSession?: string }) {
 			return true;
@@ -84,6 +100,7 @@ function createRuntime() {
 		getLastAssistantText: () => undefined,
 		messages: [],
 		model: undefined,
+		settings,
 		getToolByName: (_name: string) => undefined,
 		async compact(_args?: string) {},
 		getContextUsage: () => undefined,
@@ -138,7 +155,7 @@ function createRuntime() {
 		runtime: {
 			session: typedSession,
 			sessionManager: fakeSessionManager as unknown as SessionManager,
-			settings: Settings.isolated(),
+			settings,
 			cwd: "/tmp/project",
 			output: (text: string) => {
 				output.push(text);
@@ -197,6 +214,74 @@ describe("ACP builtin slash commands", () => {
 		expect(output[0]).toContain("5 hours (prolite)");
 		expect(output[0]).toContain("user@example.com: 0.24 unknown used (76.0% left)");
 		expect(output[0]).toContain("resets in");
+	});
+	it("/usage show renders the same report as plain /usage", async () => {
+		const now = 1_700_000_000_000;
+		const nowSpy = spyOn(Date, "now").mockReturnValue(now);
+		try {
+			const reports: UsageReport[] = [
+				{
+					provider: "openai-codex",
+					fetchedAt: now - 5_000,
+					limits: [
+						{
+							id: "codex-5h",
+							label: "5 hours",
+							scope: { provider: "openai-codex", tier: "prolite", accountId: "account-1" },
+							window: { id: "5h", label: "5 hours", resetsAt: now + 60 * 60 * 1000 },
+							amount: { used: 0.24, usedFraction: 0.24, unit: "unknown" },
+						},
+					],
+					metadata: { email: "user@example.com" },
+				},
+			];
+			const plain = createRuntime();
+			const show = createRuntime();
+			plain.runtime.session.fetchUsageReports = async () => reports;
+			show.runtime.session.fetchUsageReports = async () => reports;
+
+			const plainResult = await executeAcpBuiltinSlashCommand("/usage", plain.runtime);
+			const showResult = await executeAcpBuiltinSlashCommand("/usage show", show.runtime);
+
+			expect(showResult).toEqual(plainResult);
+			expect(show.output).toEqual(plain.output);
+		} finally {
+			nowSpy.mockRestore();
+		}
+	});
+
+	it("routes saved reset redemption through /usage reset", async () => {
+		const { output, runtime } = createRuntime();
+		let redeemedTarget: ResetCreditTarget | undefined;
+		runtime.session.listResetCredits = async () => [
+			{
+				credentialId: 42,
+				accountId: "account-1",
+				email: "user@example.com",
+				availableCount: 1,
+				credits: [],
+				active: true,
+			},
+		];
+		runtime.session.redeemResetCredit = async target => {
+			redeemedTarget = target;
+			return { ok: true, code: "reset", email: target.email };
+		};
+
+		const result = await executeAcpBuiltinSlashCommand("/usage reset active", runtime);
+
+		expect(result).toEqual({ consumed: true });
+		expect(redeemedTarget).toEqual({ credentialId: 42, accountId: "account-1", email: "user@example.com" });
+		expect(output).toEqual(["Reset applied for user@example.com — your rate-limit window has been refreshed."]);
+	});
+
+	it("does not dispatch the legacy /reset-usage command", async () => {
+		const { output, runtime } = createRuntime();
+
+		const result = await executeAcpBuiltinSlashCommand("/reset-usage active", runtime);
+
+		expect(result).toBe(false);
+		expect(output).toEqual([]);
 	});
 
 	it("returns false for unknown commands", async () => {
@@ -804,9 +889,6 @@ describe("wave 5 — adapters and polish", () => {
 		(session as unknown as Record<string, unknown>).skills = [];
 		(session as unknown as Record<string, unknown>).agent = { state: { tools: [] } };
 		(session as unknown as Record<string, unknown>).systemPrompt = ["You are a helpful assistant."];
-		(session as unknown as Record<string, unknown>).settings = {
-			getGroup: () => ({ enabled: false, strategy: "off" }),
-		};
 		session.messages = [
 			{ role: "user", content: "Hello, how are you?" },
 			{ role: "assistant", content: "I am doing well." },

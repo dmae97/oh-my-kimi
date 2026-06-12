@@ -12,17 +12,54 @@ pub struct CommandIdentity {
 /// The detector intentionally handles the common interactive subset instead
 /// of emulating a full shell parser. Ambiguous commands return `None` and are
 /// left streaming unchanged.
+#[must_use]
 pub fn detect(command: &str) -> Option<CommandIdentity> {
 	let tokens = tokenize(command);
 	detect_tokens(&tokens)
 }
 
 /// Extract command identity from an already-expanded argv vector.
+#[must_use]
 pub fn detect_tokens(tokens: &[String]) -> Option<CommandIdentity> {
 	let tokens = strip_launch_prefix(tokens)?;
 	let (program, rest) = tokens.split_first()?;
 	let normalized = normalize_program(program)?;
-	let subcommand = detect_subcommand(&normalized, rest);
+	let is_docker_compose = program
+		.rsplit('/')
+		.next()
+		.is_some_and(|n| n.eq_ignore_ascii_case("docker-compose"));
+	let subcommand = if is_docker_compose {
+		// docker-compose v1 flags that consume a value; skip them so the
+		// real action (up/down/ps/logs/etc.) is found, matching docker compose
+		// routing in docker.rs.
+		first_non_global_arg(
+			rest,
+			&[
+				"-f",
+				"--file",
+				"--profile",
+				"-p",
+				"--project-name",
+				"--env-file",
+				"--parallel",
+				"--progress",
+				"--project-directory",
+				"--workdir",
+				"-w",
+				"--ansi",
+				"--log-level",
+				"-H",
+				"--host",
+				"--tlscacert",
+				"--tlscert",
+				"--tlskey",
+			],
+			&["--compatibility", "--dry-run", "--verbose", "-v", "--no-ansi"],
+			&[],
+		)
+	} else {
+		detect_subcommand(&normalized, rest)
+	};
 	Some(CommandIdentity { program: normalized, subcommand })
 }
 
@@ -87,7 +124,17 @@ fn normalize_program(program: &str) -> Option<String> {
 	if name.is_empty() {
 		return None;
 	}
-	Some(name.to_lowercase())
+	let lowered = name.to_lowercase();
+	// Exact-match allowlist for Windows launcher scripts whose `.bat`/`.cmd`
+	// twin should dispatch identically to the bare wrapper. Kept explicit on
+	// purpose: a generic `.bat`/`.cmd` strip would over-match unrelated scripts
+	// (e.g. `foo.bat`, `deploy.cmd`).
+	Some(match lowered.as_str() {
+		"gradlew.bat" => "gradlew".to_string(),
+		"mvnw.cmd" => "mvnw".to_string(),
+		"docker-compose" => "docker".to_string(),
+		_ => lowered,
+	})
 }
 
 fn skip_env_options(tokens: &[String], mut index: usize) -> Option<usize> {
@@ -300,6 +347,10 @@ fn detect_subcommand(program: &str, args: &[String]) -> Option<String> {
 			&["--paginate", "--slurp", "--verbose"],
 			&[],
 		),
+		// glab's clap-level globals are `-R`/`--repo` and `-g`/`--group`
+		// (donor rtk/src/cmds/git/glab_cmd.rs + README); both take a value, so
+		// skip them and their argument to reach the real subcommand.
+		"glab" => first_non_global_arg(args, &["-R", "--repo", "-g", "--group"], &[], &[]),
 		"gt" => first_non_global_arg(
 			args,
 			&["--repo", "--cwd", "--config", "--debug-context"],
@@ -336,7 +387,15 @@ fn detect_subcommand(program: &str, args: &[String]) -> Option<String> {
 			],
 			&["--yes", "--no", "--no-install", "--quiet", "--silent", "--verbose"],
 			&[],
-		),
+		)
+		// Strip npm version qualifier from package specs (jest@latest → jest,
+		// @scope/pkg@1.0 → @scope/pkg). The idx > 0 guard preserves the leading
+		// `@` on scoped packages. This keeps version-pinned invocations routed to
+		// the same filter as their unpinned equivalents.
+		.map(|s| match s.rfind('@') {
+			Some(idx) if idx > 0 => s[..idx].to_string(),
+			_ => s,
+		}),
 		"pnpm" => first_non_global_arg(
 			args,
 			&["--dir", "-C", "--filter", "-F", "--workspace", "--config", "--store-dir"],
@@ -599,6 +658,50 @@ mod tests {
 	}
 
 	#[test]
+	fn detects_gradle_and_maven_wrapper_scripts() {
+		let command = detect("./gradlew build").expect("gradlew command is detected");
+		assert_eq!(command.program, "gradlew");
+		assert_eq!(command.subcommand.as_deref(), Some("build"));
+
+		let command = detect("gradlew.bat assembleDebug").expect("gradlew.bat normalizes to gradlew");
+		assert_eq!(command.program, "gradlew");
+		assert_eq!(command.subcommand.as_deref(), Some("assembledebug"));
+
+		let command = detect("mvnw.cmd package").expect("mvnw.cmd normalizes to mvnw");
+		assert_eq!(command.program, "mvnw");
+		assert_eq!(command.subcommand.as_deref(), Some("package"));
+	}
+
+	#[test]
+	fn wrapper_allowlist_does_not_strip_unrelated_bat_or_cmd() {
+		// The allowlist is exact-match only; arbitrary `.bat`/`.cmd` scripts keep
+		// their full basename so unrelated tools are not silently re-dispatched.
+		let command = detect("foo.bat run").expect("foo.bat command is detected");
+		assert_eq!(command.program, "foo.bat");
+		assert_eq!(command.subcommand.as_deref(), Some("run"));
+
+		let command = detect("deploy.cmd go").expect("deploy.cmd command is detected");
+		assert_eq!(command.program, "deploy.cmd");
+		assert_eq!(command.subcommand.as_deref(), Some("go"));
+	}
+
+	#[test]
+	fn detects_glab_subcommand_past_repo_global() {
+		let command = detect("glab -R owner/repo mr list").expect("glab command is detected");
+		assert_eq!(command.program, "glab");
+		assert_eq!(command.subcommand.as_deref(), Some("mr"));
+	}
+
+	#[test]
+	fn default_arm_returns_first_positional_for_unknown_program() {
+		// Regression pin: programs without a dedicated arm fall through to the
+		// default branch, which returns the first non-flag token verbatim.
+		let command = detect("rustc main.rs").expect("rustc command is detected");
+		assert_eq!(command.program, "rustc");
+		assert_eq!(command.subcommand.as_deref(), Some("main.rs"));
+	}
+
+	#[test]
 	fn detects_gt_through_wrappers_and_globals() {
 		let command = detect("env GRAPHITE_TOKEN=x command gt --repo owner/repo submit --stack")
 			.expect("gt command is detected");
@@ -701,4 +804,110 @@ fn npx_workspace_value_is_skipped_in_subcommand_detection() {
 	let command = detect("npx -w my-workspace vitest").expect("npx with workspace is detected");
 	assert_eq!(command.program, "npx");
 	assert_eq!(command.subcommand.as_deref(), Some("vitest"));
+
+	// version-qualified package specs are stripped to the bare tool name so
+	// `npx jest@latest` routes identically to `npx jest`
+	let command = detect("npx jest@latest --runInBand").expect("version-qualified npx detected");
+	assert_eq!(command.program, "npx");
+	assert_eq!(command.subcommand.as_deref(), Some("jest"), "jest@latest must normalise to jest");
+
+	// scoped package leading @ is preserved; only the trailing @version is stripped
+	let command = detect("npx @scope/pkg@1.0.0 --flag").expect("scoped npx detected");
+	assert_eq!(
+		command.subcommand.as_deref(),
+		Some("@scope/pkg"),
+		"@scope/pkg@1.0.0 must normalise to @scope/pkg"
+	);
+
+	// unversioned scoped package is unchanged
+	let command = detect("npx @scope/tool").expect("unversioned scoped npx detected");
+	assert_eq!(
+		command.subcommand.as_deref(),
+		Some("@scope/tool"),
+		"unversioned scoped package must be unchanged"
+	);
+}
+
+#[test]
+fn normalizes_docker_compose_to_docker() {
+	let command = detect("docker-compose up").expect("docker-compose command is detected");
+	assert_eq!(command.program, "docker");
+	assert_eq!(command.subcommand.as_deref(), Some("up"));
+
+	let command = detect("/usr/local/bin/docker-compose logs")
+		.expect("path-prefixed docker-compose is detected");
+	assert_eq!(command.program, "docker");
+	assert_eq!(command.subcommand.as_deref(), Some("logs"));
+}
+
+#[test]
+fn docker_composer_is_not_normalized() {
+	let command = detect("docker-composer up").expect("docker-composer command is detected");
+	assert_eq!(command.program, "docker-composer");
+	assert_eq!(command.subcommand.as_deref(), Some("up"));
+}
+
+#[test]
+fn docker_compose_with_flags_finds_real_subcommand() {
+	// Value-taking compose flags must be skipped so the real action is found.
+	let command =
+		detect("docker-compose -p myproj up").expect("docker-compose with -p flag is detected");
+	assert_eq!(command.program, "docker");
+	assert_eq!(command.subcommand.as_deref(), Some("up"));
+
+	let command = detect("docker-compose --profile logs up")
+		.expect("docker-compose with --profile flag is detected");
+	assert_eq!(command.program, "docker");
+	assert_eq!(command.subcommand.as_deref(), Some("up"));
+
+	let command = detect("docker-compose -f docker-compose.yml ps")
+		.expect("docker-compose with -f flag is detected");
+	assert_eq!(command.program, "docker");
+	assert_eq!(command.subcommand.as_deref(), Some("ps"));
+}
+
+#[test]
+fn docker_compose_global_value_flags_skip_correctly() {
+	// --log-level consumes its value; the next token is the subcommand.
+	let command = detect("docker-compose --log-level debug up")
+		.expect("docker-compose --log-level is detected");
+	assert_eq!(command.program, "docker");
+	assert_eq!(command.subcommand.as_deref(), Some("up"));
+
+	// -H consumes its value.
+	let command =
+		detect("docker-compose -H tcp://host:2376 ps").expect("docker-compose -H is detected");
+	assert_eq!(command.program, "docker");
+	assert_eq!(command.subcommand.as_deref(), Some("ps"));
+
+	// --host=inline also works.
+	let command = detect("docker-compose --host=tcp://host:2376 logs")
+		.expect("docker-compose --host= is detected");
+	assert_eq!(command.program, "docker");
+	assert_eq!(command.subcommand.as_deref(), Some("logs"));
+
+	// --tlscacert consumes its value.
+	let command = detect("docker-compose --tlscacert /path/ca.pem up")
+		.expect("docker-compose --tlscacert is detected");
+	assert_eq!(command.program, "docker");
+	assert_eq!(command.subcommand.as_deref(), Some("up"));
+
+	// --tlscert consumes its value.
+	let command = detect("docker-compose --tlscert /path/cert.pem ps")
+		.expect("docker-compose --tlscert is detected");
+	assert_eq!(command.program, "docker");
+	assert_eq!(command.subcommand.as_deref(), Some("ps"));
+
+	// --tlskey consumes its value.
+	let command = detect("docker-compose --tlskey /path/key.pem logs")
+		.expect("docker-compose --tlskey is detected");
+	assert_eq!(command.program, "docker");
+	assert_eq!(command.subcommand.as_deref(), Some("logs"));
+}
+
+#[test]
+fn docker_compose_without_flags_still_works() {
+	let command = detect("docker-compose up").expect("docker-compose command is detected");
+	assert_eq!(command.program, "docker");
+	assert_eq!(command.subcommand.as_deref(), Some("up"));
 }

@@ -17,6 +17,7 @@
  * MIT License - Copyright (c) 2025 opentui
  */
 import { EventEmitter } from "events";
+import { isKittyProtocolActive } from "./keys";
 
 const ESC = "\x1b";
 const BRACKETED_PASTE_START = "\x1b[200~";
@@ -29,7 +30,19 @@ const PASTE_MAX_BYTES = 64 * 1024 * 1024;
 // keypress) arrives in the same terminal write; a bare char that shows up
 // later than this window is a real keystroke and must not be swallowed.
 const KITTY_PRINTABLE_DEDUP_WINDOW_MS = 25;
-
+// An SGR mouse report prefix is unambiguous: no keyboard sequence starts with
+// `\x1b[<`, so a buffer still matching this is always the head of a split
+// mouse report. Flushing it on timeout would deliver the tail as literal
+// typed text to whatever component is focused (fullscreen overlays enable
+// any-motion tracking, so report floods plus render stalls make the split
+// routine — see the settings search leaking `[<35;8;16M`).
+const SGR_MOUSE_PARTIAL = /^\x1b\[<[\d;]*$/;
+// Upper bound on how long an unambiguous partial is held past the flush
+// timeout before being delivered raw anyway (terminal died mid-sequence).
+// This is also the worst-case added latency for a partial that never
+// completes (e.g. a bare ESC delivered while the kitty-active flag is
+// stale); keep it small.
+const PARTIAL_HOLD_MAX_MS = 150;
 /**
  * Check if a string is a complete escape sequence or needs more data
  */
@@ -228,6 +241,32 @@ function extractCompleteSequences(buffer: string): { sequences: string[]; remain
 					end++;
 					continue;
 				}
+				// "\x1b\x1b" alone parses as "complete" (legacy alt+esc), but when the
+				// next byte opens a CSI/SS3 ("[" or "O") this is really ESC prefixing
+				// another sequence (meta-CSI, or a held Esc keypress joined by a
+				// follower). Consuming two bytes here would tear the follower and leak
+				// its tail as typed text (settings search filling with "[B" or
+				// "[<35;22;17M"). Keep growing; when the buffer ends here, hold the
+				// partial for the flush window so the disambiguating byte can arrive.
+				if (candidate === `${ESC}${ESC}`) {
+					if (end >= length) {
+						return { sequences, remainder: buffer.slice(pos) };
+					}
+					const next = buffer.charCodeAt(end);
+					if (next === 0x5b || next === 0x4f) {
+						end++;
+						continue;
+					}
+				}
+				// ESC + SGR mouse report is never a meta chord: alt-modified mouse
+				// reports carry the modifier in the button bits, not an ESC prefix.
+				// Deliver the bare ESC (a real Esc keypress) and the report separately.
+				if (candidate.startsWith(`${ESC}${ESC}[<`)) {
+					sequences.push(ESC, candidate.slice(1));
+					pos = end;
+					consumed = true;
+					break;
+				}
 				// "complete" — or "not-escape", which should not happen when
 				// starting with ESC; both consume the candidate.
 				sequences.push(candidate);
@@ -258,6 +297,12 @@ export type StdinBufferOptions = {
 	 */
 	timeout?: number;
 	/**
+	 * Maximum extra time (default: 150ms) an unambiguous escape partial — an
+	 * SGR mouse prefix, or any dangling escape while the kitty keyboard
+	 * protocol is active — is held past `timeout` waiting for its tail.
+	 */
+	partialHoldTimeout?: number;
+	/**
 	 * Paste-mode inactivity watchdog (default: 1000ms). If no input arrives for
 	 * this long while waiting for the bracketed-paste end marker, the paste is
 	 * assumed truncated: accumulated bytes are delivered and input recovers.
@@ -282,7 +327,10 @@ export type StdinBufferEventMap = {
 export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 	#buffer: string = "";
 	#timeout?: NodeJS.Timeout;
+	#flushDeferral?: NodeJS.Timeout;
+	#partialHoldStartMs = 0;
 	readonly #timeoutMs: number;
+	readonly #partialHoldMaxMs: number;
 	readonly #pasteTimeoutMs: number;
 	readonly #pasteByteLimit: number;
 	#pasteMode: boolean = false;
@@ -296,17 +344,12 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 	constructor(options: StdinBufferOptions = {}) {
 		super();
 		this.#timeoutMs = options.timeout ?? 75;
+		this.#partialHoldMaxMs = options.partialHoldTimeout ?? PARTIAL_HOLD_MAX_MS;
 		this.#pasteTimeoutMs = options.pasteTimeout ?? PASTE_INACTIVITY_TIMEOUT_MS;
 		this.#pasteByteLimit = options.pasteByteLimit ?? PASTE_MAX_BYTES;
 	}
 
 	process(data: string | Buffer): void {
-		// Clear any pending timeout
-		if (this.#timeout) {
-			clearTimeout(this.#timeout);
-			this.#timeout = undefined;
-		}
-
 		// Handle high-byte conversion (for compatibility with parseKeypress)
 		// If buffer has single byte > 127, convert to ESC + (byte - 128)
 		let str: string;
@@ -319,6 +362,16 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 			}
 		} else {
 			str = data;
+		}
+
+		if (this.#flushDeferral && this.#isFreshEscapeAfterDeferredFlush(str)) {
+			// The buffered partial already hit its flush timeout. A new escape is
+			// a fresh sequence, not a tail; flush the stale partial first so the
+			// new sequence can be parsed from a clean buffer.
+			this.#flushExpired();
+		} else {
+			// Cancel any pending flush — new data may complete the buffered partial.
+			this.#clearFlushTimer();
 		}
 
 		if (str.length === 0 && this.#buffer.length === 0) {
@@ -365,13 +418,9 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 		}
 
 		if (this.#buffer.length > 0) {
-			this.#timeout = setTimeout(() => {
-				const flushed = this.flush();
-
-				for (const sequence of flushed) {
-					this.#emitDataSequence(sequence);
-				}
-			}, this.#timeoutMs);
+			this.#armFlushTimer();
+		} else {
+			this.#partialHoldStartMs = 0;
 		}
 	}
 
@@ -469,11 +518,88 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 		this.emit("data", sequence);
 	}
 
-	flush(): string[] {
+	/**
+	 * setTimeout(0): when the event loop stalls past the timeout (heavy render)
+	 * while the tail of a split escape is already queued on stdin, expired
+	 * timers run before the poll phase that delivers the tail — flushing
+	 * straight from the timer would tear the sequence apart and leak the tail
+	 * as typed text. The zero-delay deferral runs on the next timers pass,
+	 * after poll has had a chance to deliver the pending chunk to process()
+	 * and cancel the deferral.
+	 */
+	#armFlushTimer(): void {
+		this.#timeout = setTimeout(() => {
+			this.#timeout = undefined;
+			this.#flushDeferral = setTimeout(() => {
+				this.#flushDeferral = undefined;
+				this.#flushExpired();
+			});
+		}, this.#timeoutMs);
+	}
+
+	#clearFlushTimer(): void {
 		if (this.#timeout) {
 			clearTimeout(this.#timeout);
 			this.#timeout = undefined;
 		}
+		if (this.#flushDeferral) {
+			clearTimeout(this.#flushDeferral);
+			this.#flushDeferral = undefined;
+		}
+	}
+
+	/**
+	 * A deferred flush means the current buffer already waited for the
+	 * incomplete-sequence timeout. If the next chunk starts a fresh escape, do
+	 * not merge it into the stale partial. Keep ESC-backslash as a continuation
+	 * for OSC/DCS/APC string terminators (`ST`).
+	 */
+	#isFreshEscapeAfterDeferredFlush(str: string): boolean {
+		if (!str.startsWith(ESC) || this.#buffer.length === 0) return false;
+		if (
+			str.startsWith(`${ESC}\\`) &&
+			(this.#buffer.startsWith(`${ESC}]`) ||
+				this.#buffer.startsWith(`${ESC}P`) ||
+				this.#buffer.startsWith(`${ESC}_`))
+		) {
+			return false;
+		}
+		return true;
+	}
+
+	/**
+	 * Whether the dangling partial cannot be a finished keypress and is worth
+	 * holding for its tail instead of flushing:
+	 * - SGR mouse prefixes (`\x1b[<…`) — no keyboard sequence uses them.
+	 * - Any partial while the kitty keyboard protocol is active — the ESC key
+	 *   arrives as `\x1b[27u` and alt-chords as CSI-u, so a bare `\x1b` (or
+	 *   any unterminated escape) is always a split sequence, never a key.
+	 */
+	#shouldHoldPartial(): boolean {
+		return SGR_MOUSE_PARTIAL.test(this.#buffer) || isKittyProtocolActive();
+	}
+
+	/** Timeout-driven flush: hold unambiguous partials (bounded), else deliver. */
+	#flushExpired(): void {
+		if (this.#buffer.length === 0) {
+			this.#partialHoldStartMs = 0;
+			return;
+		}
+		if (this.#shouldHoldPartial()) {
+			if (this.#partialHoldStartMs === 0) this.#partialHoldStartMs = Date.now();
+			if (Date.now() - this.#partialHoldStartMs < this.#partialHoldMaxMs) {
+				this.#armFlushTimer();
+				return;
+			}
+		}
+		this.#partialHoldStartMs = 0;
+		for (const sequence of this.flush()) {
+			this.#emitDataSequence(sequence);
+		}
+	}
+
+	flush(): string[] {
+		this.#clearFlushTimer();
 
 		if (this.#buffer.length === 0) {
 			return [];
@@ -486,10 +612,7 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 	}
 
 	clear(): void {
-		if (this.#timeout) {
-			clearTimeout(this.#timeout);
-			this.#timeout = undefined;
-		}
+		this.#clearFlushTimer();
 		this.#clearPasteWatchdog();
 		this.#buffer = "";
 		this.#pasteMode = false;
@@ -497,6 +620,7 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 		this.#pasteOverlap = "";
 		this.#pasteBytes = 0;
 		this.#pendingKittyPrintableCodepoint = undefined;
+		this.#partialHoldStartMs = 0;
 	}
 
 	getBuffer(): string {

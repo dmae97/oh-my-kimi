@@ -12,14 +12,17 @@ enum CppTool {
 	GTest,
 }
 
+#[must_use]
 pub fn supports(program: &str, _subcommand: Option<&str>) -> bool {
 	direct_tool(program).is_some()
 }
 
+#[must_use]
 pub fn supports_invocation(command: &str) -> bool {
 	command_tokens(command).any(|token| token_tool(token).is_some())
 }
 
+#[must_use]
 pub fn is_gtest_binary_name(program: &str) -> bool {
 	matches!(program, "gtest" | "gtest-parallel")
 		|| program.ends_with("_test")
@@ -31,6 +34,7 @@ pub fn is_gtest_binary_name(program: &str) -> bool {
 			.is_some_and(|ext| ext.eq_ignore_ascii_case("test"))
 }
 
+#[must_use]
 pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
 	let cleaned = primitives::strip_ansi(input);
 	let tool = direct_tool(ctx.program).or_else(|| invocation_tool(ctx.command));

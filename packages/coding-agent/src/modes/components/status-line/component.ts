@@ -18,6 +18,7 @@ import { renderSegment, type SegmentContext } from "./segments";
 import { getSeparator } from "./separators";
 import { calculateTokensPerSecond } from "./token-rate";
 import type {
+	CollabStatus,
 	EffectiveStatusLineSettings,
 	StatusLineSegmentId,
 	StatusLineSegmentOptions,
@@ -152,6 +153,7 @@ export class StatusLineComponent implements Component {
 	#planModeStatus: { enabled: boolean; paused: boolean } | null = null;
 	#loopModeStatus: { enabled: boolean } | null = null;
 	#goalModeStatus: { enabled: boolean; paused: boolean } | null = null;
+	#collabStatus: CollabStatus | null = null;
 
 	// Git status caching (1s TTL)
 	#cachedGitStatus: { staged: number; unstaged: number; untracked: number } | null = null;
@@ -217,6 +219,11 @@ export class StatusLineComponent implements Component {
 		this.#subagentCount = count;
 	}
 
+	/** Active subagent count as currently displayed (collab state mirroring). */
+	get subagentCount(): number {
+		return this.#subagentCount;
+	}
+
 	setSessionStartTime(time: number): void {
 		this.#sessionStartTime = time;
 	}
@@ -231,6 +238,10 @@ export class StatusLineComponent implements Component {
 
 	setGoalModeStatus(status: { enabled: boolean; paused: boolean } | undefined): void {
 		this.#goalModeStatus = status ?? null;
+	}
+
+	setCollabStatus(status: CollabStatus | null): void {
+		this.#collabStatus = status;
 	}
 
 	setHookStatus(key: string, text: string | undefined): void {
@@ -642,7 +653,15 @@ export class StatusLineComponent implements Component {
 			contextTokens = breakdown.usedTokens;
 			contextWindow = breakdown.contextWindow || contextWindow;
 		}
-		const contextPercent = contextWindow > 0 ? (contextTokens / contextWindow) * 100 : 0;
+		let contextPercent = contextWindow > 0 ? (contextTokens / contextWindow) * 100 : 0;
+
+		// Collab guest: context comes from the host's state frames — the local
+		// replica does no accounting of its own.
+		const collabState = this.#collabStatus?.stateOverride;
+		if (collabState?.contextUsage) {
+			contextWindow = collabState.contextUsage.contextWindow || contextWindow;
+			contextPercent = collabState.contextUsage.percent ?? contextPercent;
+		}
 
 		return {
 			session: this.session,
@@ -651,6 +670,7 @@ export class StatusLineComponent implements Component {
 			planMode: this.#planModeStatus,
 			loopMode: this.#loopModeStatus,
 			goalMode: this.#goalModeStatus,
+			collab: this.#collabStatus,
 			usageStats,
 			contextPercent,
 			contextWindow,
@@ -849,7 +869,9 @@ export class StatusLineComponent implements Component {
 		const gapWidth = Math.max(1, topFillWidth - leftWidth - rightWidth);
 		const sessionName =
 			effectiveSettings.sessionAccent !== false ? this.session.sessionManager?.getSessionName() : undefined;
-		const accentHex = sessionName ? getSessionAccentHex(sessionName, theme.accentSurfaceLuminance) : undefined;
+		const accentHex = sessionName
+			? getSessionAccentHex(sessionName, theme.getMajorThemeColorHexes(), theme.accentSurfaceLuminance)
+			: undefined;
 		const gapColor = getSessionAccentAnsi(accentHex) ?? theme.getFgAnsi("border");
 		const gapFill = `${gapColor}${theme.boxRound.horizontal.repeat(gapWidth)}\x1b[39m`;
 		return leftGroup + gapFill + rightGroup;

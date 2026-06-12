@@ -1,7 +1,7 @@
 {
 	"type": "module",
 	"name": "@oh-my-pi/pi-coding-agent",
-	"version": "15.11.3",
+	"version": "15.11.8",
 	"description": "Coding agent CLI with read, bash, edit, write tools and session management",
 	"homepage": "https://omp.sh",
 	"author": "Can Boluk",
@@ -41,7 +41,8 @@
 		"format-prompts": "bun scripts/format-prompts.ts",
 		"generate-docs-index": "bun scripts/generate-docs-index.ts",
 		"prepack": "bun scripts/generate-docs-index.ts && bun scripts/bundle-dist.ts",
-		"generate-template": "bun scripts/generate-template.ts"
+		"generate-template": "bun scripts/generate-template.ts",
+		"bench:guard": "bun scripts/bench-guard.ts"
 	},
 	"dependencies": {
 		"@agentclientprotocol/sdk": "catalog:",
@@ -56,6 +57,7 @@
 		"@oh-my-pi/pi-natives": "catalog:",
 		"@oh-my-pi/pi-tui": "catalog:",
 		"@oh-my-pi/pi-utils": "catalog:",
+		"@oh-my-pi/pi-wire": "catalog:",
 		"@oh-my-pi/snapcompact": "catalog:",
 		"@opentelemetry/api": "catalog:",
 		"@opentelemetry/context-async-hooks": "catalog:",

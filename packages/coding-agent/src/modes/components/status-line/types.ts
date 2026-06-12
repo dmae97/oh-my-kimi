@@ -1,7 +1,16 @@
+import type { CollabSessionState } from "../../../collab/protocol";
 import type { StatusLinePreset, StatusLineSegmentId, StatusLineSeparatorStyle } from "../../../config/settings-schema";
 import type { AgentSession } from "../../../session/agent-session";
 
 export type { StatusLinePreset, StatusLineSegmentId, StatusLineSeparatorStyle };
+
+/** Collab session indicator + (guest-only) host-state override for segments. */
+export interface CollabStatus {
+	role: "host" | "guest";
+	participantCount: number;
+	/** Guest only: host footer snapshot that overrides locally computed values. */
+	stateOverride?: CollabSessionState | null;
+}
 
 export interface StatusLineSegmentOptions {
 	model?: { showThinkingLevel?: boolean };
@@ -49,6 +58,7 @@ export interface SegmentContext {
 		enabled: boolean;
 		paused: boolean;
 	} | null;
+	collab: CollabStatus | null;
 	// Cached values for performance (computed once per render)
 	usageStats: {
 		input: number;

@@ -305,6 +305,11 @@ export interface Terminal {
 	// Whether Kitty keyboard protocol is active
 	get kittyProtocolActive(): boolean;
 
+	// The exact kitty keyboard push sequence in effect ("\x1b[>1u" or "\x1b[>7u"),
+	// or null when the protocol is not active. Kitty keyboard flags are per-screen,
+	// so the TUI re-pushes this after entering the alternate screen.
+	get kittyEnableSequence(): string | null;
+
 	// Cursor positioning (relative to current position)
 	moveBy(lines: number): void; // Move cursor up (negative) or down (positive) by N lines
 
@@ -379,6 +384,7 @@ export class ProcessTerminal implements Terminal {
 	#resizeHandler?: () => void;
 	#stdoutResizeListener?: () => void;
 	#kittyProtocolActive = false;
+	#kittyEnableSeq: string | null = null;
 	#modifyOtherKeysActive = false;
 	#modifyOtherKeysTimeout?: Timer;
 	#stdinBuffer?: StdinBuffer;
@@ -416,6 +422,10 @@ export class ProcessTerminal implements Terminal {
 
 	get kittyProtocolActive(): boolean {
 		return this.#kittyProtocolActive;
+	}
+
+	get kittyEnableSequence(): string | null {
+		return this.#kittyProtocolActive ? this.#kittyEnableSeq : null;
 	}
 
 	get appearance(): TerminalAppearance | undefined {
@@ -780,11 +790,13 @@ export class ProcessTerminal implements Terminal {
 				if (reportedFlags >= 3) {
 					// Already enriched (Ghostty/foot may keep flags from a parent app).
 					// Push level-2 to lock in event reporting.
-					this.#safeWrite("\x1b[>7u");
+					this.#kittyEnableSeq = "\x1b[>7u";
+					this.#safeWrite(this.#kittyEnableSeq);
 				} else {
 					// Level 1 (disambiguate escape codes) — enough for Shift+Enter
 					// without the modifyOtherKeys fallback that caused regression #3259.
-					this.#safeWrite("\x1b[>1u");
+					this.#kittyEnableSeq = "\x1b[>1u";
+					this.#safeWrite(this.#kittyEnableSeq);
 				}
 				return;
 			}

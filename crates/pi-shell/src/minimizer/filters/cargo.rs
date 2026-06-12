@@ -4,6 +4,7 @@ use std::{collections::BTreeMap, fmt::Write as _};
 
 use crate::minimizer::{MinimizerCtx, MinimizerOutput, primitives};
 
+#[must_use]
 pub fn supports(subcommand: Option<&str>) -> bool {
 	matches!(
 		subcommand,
@@ -22,6 +23,7 @@ pub fn supports(subcommand: Option<&str>) -> bool {
 	)
 }
 
+#[must_use]
 pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
 	let cleaned = primitives::strip_ansi(input);
 	let text = match ctx.subcommand {
@@ -61,6 +63,21 @@ fn is_compiling_noise(line: &str) -> bool {
 		|| trimmed.starts_with("Downloaded ")
 		|| trimmed.starts_with("Locking ")
 		|| trimmed.starts_with("Updating ")
+		// `Blocking waiting for file lock on ...` is pure progress noise when a
+		// concurrent cargo holds the lock (snip strips it in cargo-build/clippy).
+		|| trimmed.starts_with("Blocking ")
+		|| is_generated_warnings_rollup(trimmed)
+}
+
+/// The per-crate rollup line warning: `crate` (lib) generated N warnings.
+/// The individual `warning: ...` diagnostic blocks are kept; this redundant
+/// tally is dropped.  Clippy/install paths already skip it explicitly, so
+/// stripping it here only affects build/check/doc/run condensing.
+fn is_generated_warnings_rollup(trimmed: &str) -> bool {
+	let Some(rest) = trimmed.strip_prefix("warning: ") else {
+		return false;
+	};
+	rest.contains(" generated ") && (rest.ends_with(" warnings") || rest.ends_with(" warning"))
 }
 
 fn failures_only(input: &str, exit_code: i32) -> String {
@@ -80,6 +97,12 @@ fn failures_only(input: &str, exit_code: i32) -> String {
 			|| trimmed.starts_with("test result: FAILED.")
 		{
 			keep = true;
+		}
+		// Passing test lines carry no failure signal — drop them unconditionally,
+		// even after the keep flag latches, so a later passing suite in a
+		// multi-suite run does not re-emit its `test <name> ... ok` lines.
+		if is_passing_test_line(trimmed) {
+			continue;
 		}
 		if keep || trimmed.starts_with("running ") {
 			out.push_str(line);
@@ -228,9 +251,16 @@ fn filter_nextest(input: &str) -> String {
 	let mut in_failure = false;
 	let mut summary = None;
 	let mut canceled = false;
+	let mut past_summary = false;
 
 	for line in input.lines() {
 		let trimmed = line.trim();
+		// Once the Summary line is seen, nextest re-lists the failing tests as a
+		// recap (duplicate `FAIL [...]` rows + trailing noise).  Drop everything
+		// after it; the captured Summary line is re-emitted verbatim at the end.
+		if past_summary {
+			continue;
+		}
 		if is_compiling_noise(trimmed)
 			|| trimmed.starts_with("PASS ")
 			|| trimmed.starts_with("────")
@@ -241,6 +271,7 @@ fn filter_nextest(input: &str) -> String {
 		if trimmed.starts_with("Summary [") {
 			summary = Some(trimmed.to_string());
 			in_failure = false;
+			past_summary = true;
 			continue;
 		}
 		if trimmed.starts_with("Cancelling") {
@@ -418,11 +449,28 @@ fn extract_lint_rule(line: &str) -> Option<String> {
 		return None;
 	}
 	let after_note = line.strip_prefix("= note:")?.trim();
-	let rest = after_note
+	// Attribute form: `#[warn(rule)]` / `#[deny(rule)]` / `#[allow(rule)]`.
+	if let Some(rest) = after_note
 		.strip_prefix("`#[warn(")
 		.or_else(|| after_note.strip_prefix("`#[deny("))
-		.or_else(|| after_note.strip_prefix("`#[allow("))?;
-	Some(rest.split(")]`").next()?.to_string())
+		.or_else(|| after_note.strip_prefix("`#[allow("))
+	{
+		return Some(rest.split(")]`").next()?.to_string());
+	}
+	// CLI form: `requested on the command line with `-W <rule>`` (also -D).
+	// Lints enabled this way carry no `#[warn(...)]` note, so without this
+	// branch they fall into the ungrouped bucket instead of grouping by rule.
+	let cli = after_note.strip_prefix("requested on the command line with ")?;
+	let flag = cli.strip_prefix('`')?.split('`').next()?.trim();
+	let rule = flag
+		.strip_prefix("-W ")
+		.or_else(|| flag.strip_prefix("-D "))
+		.or_else(|| flag.strip_prefix("-A "))?
+		.trim();
+	if rule.is_empty() {
+		return None;
+	}
+	Some(rule.to_string())
 }
 
 fn format_clippy_grouped(warnings: &[ClippyWarning], exit_code: i32) -> String {
@@ -490,6 +538,46 @@ mod tests {
 	}
 
 	#[test]
+	fn build_strips_blocking_lock_and_warning_rollup() {
+		// `Blocking waiting for file lock` is concurrent-cargo progress noise;
+		// the `warning: \`crate\` (lib) generated N warnings` rollup is a
+		// redundant tally of the per-warning blocks, which are kept.
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = MinimizerCtx {
+			program:    "cargo",
+			subcommand: Some("build"),
+			command:    "cargo build",
+			config:     &cfg,
+		};
+		let input = concat!(
+			"    Blocking waiting for file lock on build directory\n",
+			"   Compiling foo v0.1.0\n",
+			"warning: unused variable: `x`\n",
+			" --> src/lib.rs:2:9\n",
+			"warning: `foo` (lib) generated 1 warning\n",
+			"    Finished dev [unoptimized + debuginfo] target(s) in 1.2s\n",
+		);
+		let out = filter(&ctx, input, 0);
+		assert!(
+			!out.text.contains("Blocking"),
+			"blocking lock noise must be stripped: {:?}",
+			out.text
+		);
+		assert!(
+			!out.text.contains("generated 1 warning"),
+			"warning rollup must be stripped: {:?}",
+			out.text
+		);
+		// Per-warning diagnostic block is kept.
+		assert!(
+			out.text.contains("unused variable: `x`"),
+			"warning block must survive: {:?}",
+			out.text
+		);
+		assert!(out.text.contains("src/lib.rs:2:9"), "warning location must survive: {:?}", out.text);
+	}
+
+	#[test]
 	fn drops_passing_test_lines_on_success() {
 		let out =
 			strip_passing_tests("running 2 tests\ntest a ... ok\ntest b ... ok\ntest result: ok\n");
@@ -508,14 +596,25 @@ mod tests {
 	#[test]
 	fn supports_nextest_and_keeps_failures_with_summary() {
 		assert!(supports(Some("nextest")));
+		// nextest re-lists failing tests as a recap AFTER the Summary line.  The
+		// recap `FAIL [...]` row and `error: test run failed` trailer must be
+		// dropped (past_summary), while the in-run FAIL block + verbatim Summary
+		// line survive.
 		let out = filter_nextest(
 			"Starting 3 tests across 1 binary\nPASS crate::ok\nFAIL crate::bad\nstdout text\nSummary \
-			 [0.2s] 2 tests run: 1 passed, 1 failed\nerror: test run failed\n",
+			 [0.2s] 2 tests run: 1 passed, 1 failed\nFAIL [   0.011s] crate::bad\nerror: test run \
+			 failed\n",
 		);
 		assert!(!out.contains("PASS crate::ok"));
 		assert!(out.contains("FAIL crate::bad"));
 		assert!(out.contains("stdout text"));
 		assert!(out.contains("Summary [0.2s] 2 tests run: 1 passed, 1 failed"));
+		// Post-Summary recap row and trailing noise are dropped.
+		assert!(!out.contains("FAIL [   0.011s]"), "post-Summary recap must be dropped: {out:?}");
+		assert!(
+			!out.contains("error: test run failed"),
+			"post-Summary trailer must be dropped: {out:?}"
+		);
 	}
 	#[test]
 	fn install_strips_noise_keeps_summary() {
@@ -650,6 +749,56 @@ mod tests {
 	}
 
 	#[test]
+	fn clippy_groups_cli_enabled_lint_via_command_line_note() {
+		// A lint enabled on the command line (`-W clippy::needless_return`) emits
+		// a `requested on the command line with` note instead of `#[warn(...)]`.
+		// It must still GROUP under its rule, not fall into the ungrouped bucket.
+		let input = concat!(
+			"warning: unneeded `return` statement\n",
+			" --> src/lib.rs:3:5\n",
+			"  |\n",
+			"3 |     return x;\n",
+			"  |     ^^^^^^^^^\n",
+			"  |\n",
+			"  = note: requested on the command line with `-W clippy::needless_return`\n",
+			"\n",
+			"warning: `foo` (lib) generated 1 warning\n",
+		);
+		let out = filter_clippy(input, 0);
+		// Grouped renderer prefixes rule-grouped lines with `clippy: <rule>`.
+		assert!(
+			out.contains("clippy: clippy::needless_return"),
+			"CLI-enabled lint must group by rule: {out:?}"
+		);
+		// Not emitted via the ungrouped `clippy warning:` path.
+		assert!(!out.contains("clippy warning:"), "CLI-enabled lint must not be ungrouped: {out:?}");
+		assert!(out.contains("src/lib.rs:3:5"), "location must survive: {out:?}");
+	}
+
+	#[test]
+	fn extract_lint_rule_parses_note_forms() {
+		assert_eq!(
+			extract_lint_rule("  = note: `#[warn(unused_variables)]` on by default"),
+			Some("unused_variables".to_string())
+		);
+		assert_eq!(
+			extract_lint_rule(
+				"= note: requested on the command line with `-W clippy::needless_return`"
+			),
+			Some("clippy::needless_return".to_string())
+		);
+		assert_eq!(
+			extract_lint_rule("= note: requested on the command line with `-D warnings`"),
+			Some("warnings".to_string())
+		);
+		assert_eq!(
+			extract_lint_rule("= note: requested on the command line with `-W dead_code`"),
+			Some("dead_code".to_string())
+		);
+		assert_eq!(extract_lint_rule("= note: some other note"), None);
+	}
+
+	#[test]
 	fn clippy_compile_error_falls_back_to_build_style() {
 		let input = concat!(
 			"   Compiling foo v0.1.0\n",
@@ -745,6 +894,41 @@ mod tests {
 		assert!(!out.text.contains("Compiling"), "Compiling noise must be stripped");
 		assert!(!out.text.contains("test ok_one"), "passing test lines must be stripped");
 		assert!(!out.text.contains("test ok_two"), "passing test lines must be stripped");
+	}
+
+	#[test]
+	fn cargo_test_multi_suite_drops_passing_lines_after_keep_latches() {
+		// Suite 1 fails, latching the keep flag.  Suite 2 passes — its
+		// `test <name> ... ok` lines must NOT leak through just because keep
+		// is set.  Only failure evidence survives.
+		let input = concat!(
+			"running 1 tests\n",
+			"test suite1_bad ... FAILED\n",
+			"\n",
+			"failures:\n",
+			"    suite1_bad\n",
+			"\n",
+			"test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured\n",
+			"running 2 tests\n",
+			"test suite2_ok_a ... ok\n",
+			"test suite2_ok_b ... ok\n",
+			"test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured\n",
+		);
+
+		let out = failures_only(input, 101);
+
+		// Failure evidence from suite 1 survives.
+		assert!(out.contains("suite1_bad"), "failing test name must survive: {out:?}");
+		assert!(out.contains("test result: FAILED"), "failed summary must survive: {out:?}");
+		// Suite 2's passing lines must be dropped even though keep is latched.
+		assert!(
+			!out.contains("test suite2_ok_a"),
+			"passing line after keep latch must be dropped: {out:?}"
+		);
+		assert!(
+			!out.contains("test suite2_ok_b"),
+			"passing line after keep latch must be dropped: {out:?}"
+		);
 	}
 
 	#[test]

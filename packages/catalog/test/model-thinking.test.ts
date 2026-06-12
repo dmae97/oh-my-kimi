@@ -6,6 +6,7 @@ import {
 	getSupportedEfforts,
 	mapEffortToAnthropicAdaptiveEffort,
 	mapEffortToGoogleThinkingLevel,
+	minimumSupportedEffort,
 	requireSupportedEffort,
 } from "@oh-my-pi/pi-catalog/model-thinking";
 import type { Api, Model, ModelSpec, Provider } from "@oh-my-pi/pi-catalog/types";
@@ -65,7 +66,119 @@ describe("model thinking derivation", () => {
 		expect(requireSupportedEffort(model, Effort.XHigh)).toBe(Effort.XHigh);
 	});
 
-	it("encodes the Gemini 3 Pro effort gap directly in efforts", () => {
+	it("stores MiniMax M2 and GPT-OSS OpenAI-compatible effort limits in model metadata", () => {
+		const minimax = createModel({
+			id: "minimax-m2.7",
+			api: "openai-completions",
+			provider: "fireworks",
+			baseUrl: "https://api.fireworks.ai/inference/v1",
+		});
+		const gptOss = createModel({
+			id: "gpt-oss-120b",
+			api: "openai-completions",
+			provider: "fireworks",
+			baseUrl: "https://api.fireworks.ai/inference/v1",
+		});
+
+		expect(minimax.thinking).toEqual({
+			mode: "effort",
+			efforts: [Effort.Low, Effort.Medium, Effort.High],
+			// MiniMax M2 is a reasoning-first architecture — thinking-off clamps.
+			requiresEffort: true,
+		});
+		expect(gptOss.thinking).toEqual({
+			mode: "effort",
+			efforts: [Effort.Low, Effort.Medium, Effort.High],
+		});
+		expect(minimax.thinking?.effortMap).toBeUndefined();
+		expect(gptOss.thinking?.effortMap).toBeUndefined();
+	});
+
+	it("normalizes stale explicit MiniMax M2 / GPT-OSS effort metadata from caches", () => {
+		const staleMinimax = createModel({
+			id: "minimax-m2.7",
+			api: "openai-completions",
+			provider: "fireworks",
+			baseUrl: "https://api.fireworks.ai/inference/v1",
+			thinking: {
+				mode: "effort",
+				efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+				effortMap: { minimal: "none", xhigh: "max" },
+			},
+		});
+		const staleGptOss = createModel({
+			id: "gpt-oss-120b",
+			api: "openai-completions",
+			provider: "fireworks",
+			baseUrl: "https://api.fireworks.ai/inference/v1",
+			thinking: {
+				mode: "effort",
+				efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+			},
+		});
+
+		expect(staleMinimax.thinking).toEqual({
+			mode: "effort",
+			efforts: [Effort.Low, Effort.Medium, Effort.High],
+			requiresEffort: true,
+		});
+		expect(staleGptOss.thinking).toEqual({
+			mode: "effort",
+			efforts: [Effort.Low, Effort.Medium, Effort.High],
+		});
+	});
+
+	it("stores OpenAI-compatible provider effort maps in thinking metadata", () => {
+		const fireworks = createModel({
+			id: "glm-5.1",
+			api: "openai-completions",
+			provider: "fireworks",
+			baseUrl: "https://api.fireworks.ai/inference/v1",
+		});
+		const groqQwen = createModel({
+			id: "qwen/qwen3-32b",
+			api: "openai-completions",
+			provider: "groq",
+			baseUrl: "https://api.groq.com/openai/v1",
+		});
+		const deepseek = createModel({
+			id: "deepseek-v4-flash",
+			api: "openai-completions",
+			provider: "deepseek",
+			baseUrl: "https://api.deepseek.com/v1",
+			compat: { reasoningEffortMap: { xhigh: "max-plus" } },
+		});
+		const openRouterAnthropic = createModel({
+			id: "anthropic/claude-opus-4.7",
+			api: "openai-completions",
+			provider: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+		});
+
+		expect(fireworks.thinking?.effortMap).toEqual({ minimal: "none" });
+		expect(groqQwen.thinking?.effortMap).toEqual({
+			minimal: "default",
+			low: "default",
+			medium: "default",
+			high: "default",
+		});
+		expect(deepseek.thinking?.effortMap).toMatchObject({
+			minimal: "high",
+			low: "high",
+			medium: "high",
+			high: "high",
+			xhigh: "max-plus",
+		});
+		expect(openRouterAnthropic.thinking?.effortMap).toEqual({
+			minimal: "low",
+			low: "medium",
+			medium: "high",
+			high: "xhigh",
+			xhigh: "max",
+		});
+	});
+
+	it("encodes the Gemini 3 Pro effort gap and mandatory reasoning in metadata", () => {
 		const model = createModel({
 			id: "gemini-3-pro-preview",
 			api: "google-generative-ai",
@@ -75,11 +188,84 @@ describe("model thinking derivation", () => {
 		expect(model.thinking).toEqual({
 			mode: "google-level",
 			efforts: [Effort.Low, Effort.High],
+			requiresEffort: true,
 		});
 		expect(mapEffortToGoogleThinkingLevel(Effort.Low)).toBe("LOW");
 		expect(mapEffortToGoogleThinkingLevel(Effort.High)).toBe("HIGH");
 		expect(mapEffortToGoogleThinkingLevel(Effort.XHigh)).toBe("HIGH");
 		expect(() => requireSupportedEffort(model, Effort.Medium)).toThrow(/not supported/);
+	});
+
+	it("bakes requiresEffort for Gemini 3.x on any provider and backfills explicit metadata", () => {
+		// Derivation: aggregator-hosted Gemini 3.5 gets the flag, 2.5 does not.
+		const openRouterFlash = createModel({
+			id: "google/gemini-3.5-flash",
+			api: "openai-completions",
+			provider: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+		});
+		expect(openRouterFlash.thinking?.requiresEffort).toBe(true);
+
+		const legacyFlash = createModel({
+			id: "gemini-2.5-flash",
+			api: "google-generative-ai",
+			provider: "google",
+		});
+		expect(legacyFlash.thinking?.requiresEffort).toBeUndefined();
+
+		// Backfill: explicit (pre-flag) baked thinking gains the wire fact;
+		// explicit `false` wins over identity.
+		const baked = createModel({
+			id: "gemini-3.1-pro-preview",
+			api: "google-generative-ai",
+			provider: "google",
+			thinking: { mode: "google-level", efforts: [Effort.Low, Effort.High] },
+		});
+		expect(baked.thinking?.requiresEffort).toBe(true);
+
+		const optedOut = createModel({
+			id: "gemini-3.1-pro-preview",
+			api: "google-generative-ai",
+			provider: "google",
+			thinking: { mode: "google-level", efforts: [Effort.Low, Effort.High], requiresEffort: false },
+		});
+		expect(optedOut.thinking?.requiresEffort).toBe(false);
+
+		// Floor selection follows canonical order, not array order.
+		expect(minimumSupportedEffort(baked)).toBe(Effort.Low);
+		expect(minimumSupportedEffort(openRouterFlash)).toBe(Effort.Minimal);
+	});
+
+	it("flags reasoning-only families and thinking-variant orphans", () => {
+		expect(
+			createModel({
+				id: "openai/o3-mini",
+				api: "openai-completions",
+				provider: "openrouter",
+				baseUrl: "https://openrouter.ai/api/v1",
+			}).thinking?.requiresEffort,
+		).toBe(true);
+		expect(
+			createModel({ id: "minimax-m2.7", api: "openai-completions", provider: "fireworks" }).thinking?.requiresEffort,
+		).toBe(true);
+		expect(
+			createModel({ id: "kimi-k2-thinking", api: "openai-completions", provider: "venice" }).thinking
+				?.requiresEffort,
+		).toBe(true);
+		expect(
+			createModel({ id: "deepseek-reasoner", api: "openai-completions", provider: "deepseek" }).thinking
+				?.requiresEffort,
+		).toBe(true);
+		// Negated tokens name the NON-thinking SKU.
+		expect(
+			createModel({ id: "deepseek-non-thinking-v3.2-exp", api: "openai-completions", provider: "aimlapi" }).thinking
+				?.requiresEffort,
+		).toBeUndefined();
+		// Gemini 2.5: Pro floors thinkingBudget at 128; Flash keeps the off switch.
+		expect(
+			createModel({ id: "gemini-2.5-pro", api: "google-generative-ai", provider: "google" }).thinking
+				?.requiresEffort,
+		).toBe(true);
 	});
 
 	it("encodes anthropic transport mode and adaptive wire maps in metadata", () => {
@@ -164,7 +350,7 @@ describe("model thinking derivation", () => {
 		expect(filled.thinking).toEqual({
 			mode: "anthropic-adaptive",
 			efforts: [Effort.Low, Effort.High],
-			effortMap: { minimal: "low", low: "medium", medium: "high", high: "xhigh", xhigh: "max" },
+			effortMap: { low: "medium", high: "xhigh" },
 			supportsDisplay: true,
 		});
 
@@ -242,7 +428,9 @@ describe("model thinking runtime helpers", () => {
 			thinking: { mode: "effort", efforts: [Effort.Medium, Effort.High] },
 		});
 
-		expect(model.thinking).toEqual({ mode: "effort", efforts: [Effort.Medium, Effort.High] });
+		// `-reasoner` ids are thinking-only SKUs — the wire fact is backfilled
+		// onto explicit metadata like effortMap.
+		expect(model.thinking).toEqual({ mode: "effort", efforts: [Effort.Medium, Effort.High], requiresEffort: true });
 		expect(clampThinkingLevelForModel(model, Effort.Minimal)).toBe(Effort.Medium);
 		expect(clampThinkingLevelForModel(model, Effort.XHigh)).toBe(Effort.High);
 		expect(clampThinkingLevelForModel(model, Effort.High)).toBe(Effort.High);

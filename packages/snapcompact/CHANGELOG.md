@@ -2,6 +2,38 @@
 
 ## [Unreleased]
 
+## [15.11.7] - 2026-06-12
+
+### Added
+
+- Added `SHAPE_VARIANTS`, the catalog of research-eval frame variants the native renderer reproduces faithfully (`8x8r`/`8x8u`/`6x6u`/`5x8` × `sent`/`bw`), with `ShapeVariantName`, `SHAPE_VARIANT_NAMES`, and the `isShapeVariantName` guard
+- `resolveShape(api, variant?)` now accepts an explicit variant name (or `"auto"`); forced variants keep their geometry but are re-priced for the target provider's image billing (token estimate and OpenAI `original` detail hint)
+- Added the six research-eval winning frame variants to `SHAPE_VARIANTS`: `6x12-dim` (Claude fable), `8x13-bw` (Opus), `8on16-bw` (GPT grid runner-up), `doc-8on16-bw` (GPT), `doc-8on16-sent` (GLM), and `doc-8on16-sent-dim` (Gemini/Kimi), backed by new `Shape` fields `stretch` (disable Lanczos stretch: natural glyphs on a larger cell pitch), `columns` (two word-wrapped newspaper columns), `stopwordDim`, and the X.org `6x12`/`8x13` fonts
+- Added `dimStopwords()`, which prints high-frequency function words in dim ink via zero-width markers (skipping spans that are already dim), and `wrap()`, the greedy word-wrap used to typeset doc-layout pages; `geometry`/`render`/`renderMany`/`frames`/`compact` understand doc shapes (wrap once, paginate into `2 * rows`-line pages), and compaction frames persist `columns`/`stopwordDim` for mixed-shape detection
+- `resolveShape` now takes a `ShapeTarget` (`{ api, id }` — a pi-ai `Model` works as-is) and detects the ideal shape from the **model id**, not just the wire API: a Claude routed through Vertex or an OpenAI-compatible gateway keeps its Claude shape, with billing still priced by the API family actually carrying the request. `idealShapeVariant(modelId)` exposes the model-line table; unmeasured models fall back to the API family's winner
+- `resolveShape` now also resolves an ideal **frame size** per model line, and billing estimates come from verified per-family formulas instead of flat 1568px constants: Anthropic bills 28px patches capped at 4,784 visual tokens (+5% margin), Gemini 3.x bills a fixed 1,120-token `media_resolution` budget per image at any pixel size, and OpenAI bills 32px patches × 1.2 under the 10,000-patch `detail: "original"` budget. High-res Claude lines (Opus 4.7+, Fable, Mythos — native 2576px-edge ingestion) get 1932px frames (same recall and cost, a third fewer frames); Gemini gets 2048px frames (+70% chars per frame at the same bill); GPT and Kimi stay at 1568px (area-proportional billing and a model-side 1792px processor cap, respectively). `idealShapeVariant` now returns an `IdealShape` (`{ variant, frameSize? }`)
+- Added per-provider image-count budgets: `PROVIDER_IMAGE_BUDGETS`, `DEFAULT_PROVIDER_IMAGE_BUDGET`, `providerImageBudget()`, and `providerFrameBudget()` (the image budget clamped to `MAX_FRAMES`). OpenRouter is capped at its measured hard limit of 8 images per request (excess images are silently dropped with no error); unknown providers get a safe floor of 5
+- Added `Archive.textTail`: archive content past the frame budget is no longer dropped — `compact()` stops rendering at the budget and keeps the newest unframed slice as verbatim text on the summary (capped at two frame capacities with middle elision, counted into `truncatedChars` when elided). The tail persists in `preserveData` and is folded back into frames by the next compaction
+
+### Changed
+
+- Frames are no longer padded to a square: the native renderer clips each PNG's height to the text rows actually printed, so a partially filled frame (typically the newest) bills only the pixel rows it uses
+- **Changed the OpenAI default shape from `6x6u-sent` to `8on16-bw`.** A production-regime mono eval (gpt-5.5, the full 800k-char SQuAD flow in one request, n=50) scored the old dense default f1 .602 vs .851 for `8on16-bw` rendered by the production pipeline, at near-equal total cost (the dense cells burned the frame savings on reasoning tokens); chunked exp14 had already scored `8on16-bw` .906. `SHAPES.openaiDense` is renamed to `SHAPES.openai`
+- **Changed the Google default shape from `8x8r-sent` to `doc-8on16-sent-dim`.** Production-rendered mono eval on gemini-3.5-flash (400k chars, one request, n=25): f1 .900 vs .853 for the repeated grid at lower cost, agreeing with the chunked round-2 winner
+- **Changed the Anthropic default shape from `8x8r-bw` to `6x12-dim`.** Production mono eval on claude-fable (400k chars, one request, n=25): f1 .840 vs .877 for the repeated grid — within noise — at 37% lower cost (12 frames instead of 21 per 400k chars), with clean completions in every probe; opus reads the same trade (.800 vs .833 at 42% lower cost)
+- `normalize()` now keeps line structure: whitespace runs containing a line break collapse to `NEWLINE_GLYPH` (U+2588 FULL BLOCK, drawn by the native renderer as a pitch-black cell one character wide) instead of a plain space; leading/trailing breaks are trimmed, and the frame-reading prompt explains the marker
+- `normalize()` now skips characters the fonts cannot render instead of printing `?` blanks: whole ANSI escape sequences are stripped, and bare control characters, zero-width format characters (ZWSP, BOM, directional marks), combining marks, and lone surrogates are dropped without occupying a cell; `?` remains the fallback for unsupported graphic characters only
+
+## [15.11.4] - 2026-06-12
+
+### Breaking Changes
+
+- Renamed every export to drop the `snapcompact`/`Snapcompact`/`SNAPCOMPACT_` qualifier — the package is meant to be consumed via `import * as snapcompact from "@oh-my-pi/snapcompact"`. Functions: `snapcompactCompact` → `compact`, `renderSnapcompactFrame` → `render`, `snapcompactGeometry` → `geometry`, `normalizeForSnapcompact` → `normalize`, `serializeSnapcompactConversation` → `serializeConversation`, `snapcompactImages` → `images`, `getPreservedSnapcompactArchive` → `getPreservedArchive`, `isSnapcompactShape` → `isShape`, `resolveSnapcompactShape` → `resolveShape`, `createSnapcompactFileOps` → `createFileOps`, `computeSnapcompactFileLists` → `computeFileLists`, `upsertSnapcompactFileOperations` → `upsertFileOperations`. Types: `SnapcompactShape` → `Shape`, `SnapcompactFrame` → `Frame`, `SnapcompactArchive` → `Archive`, `SnapcompactGeometry` → `Geometry`, `SnapcompactOptions` → `Options`, `SnapcompactSerializeOptions` → `SerializeOptions`, `SnapcompactFileOperations` → `FileOperations`, `SnapcompactCompactionDetails`/`Preparation`/`Result` → `CompactionDetails`/`CompactionPreparation`/`CompactionResult`, `SnapcompactConvertToLlm` → `ConvertToLlm`. Constants: `SNAPCOMPACT_X` → `X` (`SHAPES`, `FRAME_SIZE`, `MAX_FRAMES`, `FRAME_TOKEN_ESTIMATE`, `PRESERVE_KEY`, `TOOL_RESULT_MAX_CHARS`, `TOOL_ARG_MAX_CHARS`, `TOOL_CALL_MAX_CHARS`, `TRUNCATE_HEAD_RATIO`, `DIM_ON`, `DIM_OFF`).
+
+### Added
+
+- Added `renderMany()` for paging arbitrary text into snapcompact PNG frames as LLM image blocks, and `frames()` for predicting the frame count without rendering
+
 ## [15.11.0] - 2026-06-10
 
 ### Breaking Changes

@@ -1,4 +1,4 @@
-import type { FetchImpl } from "@oh-my-pi/pi-ai";
+import { type ApiKey, type FetchImpl, withAuth } from "@oh-my-pi/pi-ai";
 
 import { getDiagnostics } from "./diagnostics";
 import { EXTRACTION_SYSTEM_PROMPT, EXTRACTION_USER_TEMPLATE } from "./prompts";
@@ -30,7 +30,7 @@ export interface ExtractedFact {
 
 export interface ExtractionClientOptions {
 	model?: string | null;
-	apiKey?: string | null;
+	apiKey?: ApiKey | null;
 	baseUrl?: string | null;
 	fetch?: FetchImpl;
 }
@@ -51,7 +51,7 @@ function authHeader(apiKey: string): Record<string, string> {
 
 export class ExtractionClient {
 	model: string;
-	apiKey: string;
+	apiKey: ApiKey;
 	baseUrl: string;
 	callCount = 0;
 	private readonly fetchImpl: FetchImpl;
@@ -70,22 +70,34 @@ export class ExtractionClient {
 		let lastError: unknown = null;
 
 		for (const model of models) {
-			for (let attempt = 0; attempt < 3; attempt += 1) {
-				try {
-					const result = await this.callApi(model, messages, temperature, maxTokens);
-					if (result === "") {
-						diag.recordNoOutput("cloud");
+			try {
+				// withAuth re-resolves the key on 401/usage-limit (force-refresh,
+				// then sibling rotation) when `apiKey` is a resolver; the 429
+				// backoff loop stays inside the attempt so rate-limit retries
+				// reuse the already-resolved key.
+				const result = await withAuth(this.apiKey, async key => {
+					let rateLimitError: unknown = null;
+					for (let attempt = 0; attempt < 3; attempt += 1) {
+						try {
+							return await this.callApi(model, messages, temperature, maxTokens, key);
+						} catch (exc) {
+							const msg = String(exc).toLowerCase();
+							if (msg.includes("429") || msg.includes("rate")) {
+								rateLimitError = exc;
+								await sleep(Math.min(RATE_LIMIT_BACKOFF_MAX_MS, RATE_LIMIT_BACKOFF_BASE_MS * 2 ** attempt));
+								continue;
+							}
+							throw exc;
+						}
 					}
-					return result;
-				} catch (exc) {
-					lastError = exc;
-					const msg = String(exc).toLowerCase();
-					if (msg.includes("429") || msg.includes("rate")) {
-						await sleep(Math.min(RATE_LIMIT_BACKOFF_MAX_MS, RATE_LIMIT_BACKOFF_BASE_MS * 2 ** attempt));
-						continue;
-					}
-					break;
+					throw rateLimitError;
+				});
+				if (result === "") {
+					diag.recordNoOutput("cloud");
 				}
+				return result;
+			} catch (exc) {
+				lastError = exc;
 			}
 			await sleep(FALLBACK_MODEL_DELAY_MS);
 		}
@@ -99,10 +111,11 @@ export class ExtractionClient {
 		messages: readonly ChatMessage[],
 		temperature: number,
 		maxTokens: number,
+		apiKey = "",
 	): Promise<string> {
 		const response = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
 			method: "POST",
-			headers: authHeader(this.apiKey),
+			headers: authHeader(apiKey),
 			body: JSON.stringify({ model, messages, temperature, max_tokens: maxTokens }),
 			signal: AbortSignal.timeout(60000),
 		});

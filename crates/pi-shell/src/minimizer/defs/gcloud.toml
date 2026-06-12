@@ -12,7 +12,7 @@ strip_lines_matching = [
 	"^\\s*\\$ gcloud components update",
 	"^Your current Cloud SDK version is:",
 	"^The latest available version is:",
-	"^WARNING: You do not appear to have access to project",
+	"^\\s*$",
 ]
 truncate_lines_at = 300
 max_lines = 120
@@ -27,3 +27,8 @@ expected = "NAME: my-project\nPROJECT_ID: my-project-123\n"
 name = "empty after stripping update notice"
 input = "Updates are available for some Google Cloud CLI components.\n"
 expected = "gcloud: ok"
+
+[[tests.gcloud]]
+name = "blank separator line removed between content"
+input = "NAME: my-project\n\nPROJECT_ID: my-project-123\n"
+expected = "NAME: my-project\nPROJECT_ID: my-project-123\n"

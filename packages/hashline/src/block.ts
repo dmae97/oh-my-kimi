@@ -12,7 +12,8 @@
  * it runs, no `block` edits remain, so {@link applyEdits} (and recovery) only
  * ever see resolved edits.
  */
-import { BLOCK_RESOLVER_UNAVAILABLE, blockUnresolvedMessage } from "./messages";
+import { STRUCTURAL_CLOSER_RE } from "./apply";
+import { BLOCK_RESOLVER_UNAVAILABLE, blockUnresolvedMessage, insertAfterBlockCloserLoweredWarning } from "./messages";
 import type { BlockResolution, BlockResolver, Cursor, Edit } from "./types";
 
 export interface ResolveBlockEditsOptions {
@@ -31,6 +32,12 @@ export interface ResolveBlockEditsOptions {
 	 * edits.
 	 */
 	onResolved?: (resolution: BlockResolution) => void;
+	/**
+	 * Invoked once per diagnostic produced while resolving — currently only the
+	 * closer-anchor lowering of `insert after block N:`. Hosts should surface
+	 * these on the apply result's `warnings`.
+	 */
+	onWarning?: (message: string) => void;
 }
 
 /** True when at least one edit is an unresolved deferred block edit. */
@@ -67,6 +74,22 @@ export function resolveBlockEdits(
 		const op = edit.mode === "insert_after" ? "insert_after" : edit.payloads.length === 0 ? "delete" : "replace";
 		const span = resolver ? resolver({ path, text, line: edit.anchor.line }) : null;
 		if (span === null) {
+			// `insert after block N` anchored on a pure closing-delimiter line:
+			// no block begins there, but line N IS the end of one — and "after
+			// the end of the block" is exactly plain `insert after N:`. Lower it
+			// instead of failing the patch; warn so the author learns the
+			// opener-only rule.
+			if (op === "insert_after" && resolver) {
+				const anchorText = text.split("\n")[edit.anchor.line - 1];
+				if (anchorText !== undefined && STRUCTURAL_CLOSER_RE.test(anchorText)) {
+					options.onWarning?.(insertAfterBlockCloserLoweredWarning(edit.anchor.line));
+					for (const payload of edit.payloads) {
+						const cursor: Cursor = { kind: "after_anchor", anchor: { line: edit.anchor.line } };
+						resolved.push({ kind: "insert", cursor, text: payload, lineNum: edit.lineNum, index: synthIndex++ });
+					}
+					continue;
+				}
+			}
 			if (onUnresolved === "drop") continue;
 			throw new Error(
 				`line ${edit.lineNum}: ${
@@ -82,10 +105,20 @@ export function resolveBlockEdits(
 		});
 		if (op === "insert_after") {
 			// Mirror the parser's `insert after N:` lowering: one `after_anchor`
-			// insert per payload row, anchored on the block's last line.
+			// insert per payload row, anchored on the block's last line. The
+			// `blockStart` tag lets the applier's landing correction slide a
+			// body that claims a depth inside the block back across the block's
+			// trailing closer lines.
 			for (const payload of edit.payloads) {
 				const cursor: Cursor = { kind: "after_anchor", anchor: { line: span.end } };
-				resolved.push({ kind: "insert", cursor, text: payload, lineNum: edit.lineNum, index: synthIndex++ });
+				resolved.push({
+					kind: "insert",
+					cursor,
+					text: payload,
+					lineNum: edit.lineNum,
+					index: synthIndex++,
+					blockStart: span.start,
+				});
 			}
 			continue;
 		}

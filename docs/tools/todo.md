@@ -28,18 +28,17 @@
 | `drop` | `task` or `phase` or neither | None | Marks the target task, phase, or all tasks `abandoned`. |
 | `rm` | `task` or `phase` or neither | None | Removes the target task, clears the phase's task list, or clears all task lists. |
 | `append` | `phase`, `items` | None | Appends new `pending` tasks to a phase; creates the phase if missing. |
-| `note` | `task`, `text` | None | Appends one trimmed note string to the task's `notes` array. |
+| `view` | None | None | Echoes the current list without mutating or normalizing session state. |
 
 ### Fields used inside ops
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `op` | `"init" | "start" | "done" | "rm" | "drop" | "append" | "note"` | Yes | Operation discriminator. |
+| `op` | `"init" | "start" | "done" | "rm" | "drop" | "append" | "view"` | Yes | Operation discriminator. |
 | `list` | `{ phase: string; items: string[] }[]` | For `init` | Full replacement payload. Each `items` array has `minItems: 1`. |
-| `task` | `string` | For `start`; for task-targeted `done`/`drop`/`rm`/`note` | Exact task content match. |
+| `task` | `string` | For `start`; for task-targeted `done`/`drop`/`rm` | Exact task content match. |
 | `phase` | `string` | For `append`; for phase-targeted `done`/`drop`/`rm` | Exact phase name match, except `append` lazily creates a missing phase. |
 | `items` | `string[]` | For `append` | Tasks to append. `minItems: 1`. |
-| `text` | `string` | For `note` | Note text; trailing whitespace is stripped before storing. Empty-after-trim is rejected. |
 
 ## Outputs
 The tool returns a single-shot `AgentToolResult`:
@@ -47,7 +46,6 @@ The tool returns a single-shot `AgentToolResult`:
 - `content`: one text part containing the summary from `formatSummary(...)`.
   - Empty final state with no errors: `Todo list cleared.`
   - Non-empty final state: remaining-item list, current phase progress, then a per-phase tree.
-  - If the active `in_progress` task has notes, the summary includes the note bodies inline.
   - If any op produced validation/runtime errors, the summary starts with `Errors: ...`; the returned tool result is marked `isError: true` and still includes the mutated state.
 - `details`:
   - `phases: TodoPhase[]`
@@ -57,9 +55,9 @@ The tool returns a single-shot `AgentToolResult`:
 `TodoPhase` / `TodoItem` state model:
 
 - `TodoPhase`: `{ name: string, tasks: TodoItem[] }`
-- `TodoItem`: `{ content: string, status: "pending" | "in_progress" | "completed" | "abandoned", notes?: string[] }`
+- `TodoItem`: `{ content: string, status: "pending" | "in_progress" | "completed" | "abandoned" }`
 
-The TUI renderer (`todoToolRenderer`) merges call and result into one transcript block, renders phases as a tree, shows note counts as superscripts, and renders the note bodies only for the current `in_progress` task. Collapsed transcript previews cap tree items at `PREVIEW_LIMITS.COLLAPSED_ITEMS` (`8`).
+The TUI renderer (`todoToolRenderer`) merges call and result into one transcript block and renders phases as a tree. Collapsed transcript previews cap tree items at `PREVIEW_LIMITS.COLLAPSED_ITEMS` (`8`).
 
 ## Flow
 1. `TodoTool.execute(...)` clones the current cached phases from `session.getTodoPhases?.() ?? []` (`packages/coding-agent/src/tools/todo.ts`).
@@ -70,7 +68,6 @@ The TUI renderer (`todoToolRenderer`) merges call and result into one transcript
    - `done` / `drop` use `getTaskTargets(...)` to target one task, one phase, or every task.
    - `rm` removes one task, clears one phase's `tasks`, or clears all phases' task arrays.
    - `appendItems(...)` resolves or creates the target phase and pushes new `pending` tasks unless the same task content already exists anywhere.
-   - `note` trims trailing whitespace, rejects empty text, and appends the note to `task.notes`.
 4. Missing task/phase references are recorded in an `errors` array by `resolveTaskOrError(...)` / `resolvePhaseOrError(...)`; execution continues through the rest of the batch.
 5. After the full batch, `normalizeInProgressTask(...)` enforces the single-active-task invariant:
    - if multiple tasks are `in_progress`, only the first stays active and the rest become `pending`;
@@ -83,12 +80,12 @@ The TUI renderer (`todoToolRenderer`) merges call and result into one transcript
 ## Modes / Variants
 ### State transitions
 
-| Current status | `start` | `done` | `drop` | `rm` | `append` | `note` |
-| --- | --- | --- | --- | --- | --- | --- |
-| `pending` | `in_progress` on target | `completed` | `abandoned` | Removed | New tasks enter as `pending` | No status change |
-| `in_progress` | Target stays `in_progress`; non-target active tasks become `pending` | `completed` | `abandoned` | Removed | No status change | No status change |
-| `completed` | Can be set back to `in_progress` if targeted | Stays `completed` | Becomes `abandoned` if targeted | Removed | No status change | No status change |
-| `abandoned` | Can be set back to `in_progress` if targeted | Becomes `completed` if targeted | Stays `abandoned` | Removed | No status change | No status change |
+| Current status | `start` | `done` | `drop` | `rm` | `append` |
+| --- | --- | --- | --- | --- | --- |
+| `pending` | `in_progress` on target | `completed` | `abandoned` | Removed | New tasks enter as `pending` |
+| `in_progress` | Target stays `in_progress`; non-target active tasks become `pending` | `completed` | `abandoned` | Removed | No status change |
+| `completed` | Can be set back to `in_progress` if targeted | Stays `completed` | Becomes `abandoned` if targeted | Removed | No status change |
+| `abandoned` | Can be set back to `in_progress` if targeted | Becomes `completed` if targeted | Stays `abandoned` | Removed | No status change |
 
 Normalization then re-applies the single-active-task rule after the full op batch.
 
@@ -98,12 +95,11 @@ Normalization then re-applies the single-active-task rule after the full op batc
   - else `phase` set: affect every task in that exact-name phase.
   - else: affect every task in every phase.
 - `append` is the only op that creates a missing phase.
-- `note` only targets a single task.
 - `init` discards previous phases entirely.
 
 ### Markdown round-trip helpers
 The same file also exposes non-tool helpers used by `/todo`:
-- `phasesToMarkdown(...)` serializes phases as headings plus checklist items (`[ ]`, `[/]`, `[x]`, `[-]`) with blockquote note bodies.
+- `phasesToMarkdown(...)` serializes phases as headings plus checklist items (`[ ]`, `[/]`, `[x]`, `[-]`).
 - `markdownToPhases(...)` parses that format, defaults orphan tasks into a `Todos` phase, accepts `>` as an `in_progress` marker and `~` as `abandoned`, and runs the same normalization step.
 
 ## Side Effects
@@ -140,7 +136,6 @@ The same file also exposes non-tool helpers used by `/todo`:
   - `Missing phase name for append operation`
   - `Missing items for append operation`
   - `Task "..." already exists`
-  - `Missing text for note operation`
 - Because ops are processed in order, earlier errors do not roll back later ops.
 - Runtime-level tool failure is handled outside the tool body: `agent-session` injects a hidden reminder and the event controller warns the user that visible progress may be stale.
 - Idempotency is op-specific:
@@ -148,7 +143,6 @@ The same file also exposes non-tool helpers used by `/todo`:
   - `start`, `done`, and `drop` are effectively idempotent on an existing target state, but `start` also demotes any other active task.
   - `rm` is not idempotent for targeted removals: the second call errors because the task or phase is gone.
   - `append` is not idempotent: duplicate task content is rejected with `Task "..." already exists`.
-  - `note` is append-only and never idempotent; replaying it adds another note entry.
 
 ## Notes
 - Task lookup is exact string equality inside the tool. The model-facing prompt says task content and phase names are identifiers and should stay unique; `append` enforces task uniqueness globally, but `init` does not validate duplicate task or phase names.

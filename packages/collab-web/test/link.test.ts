@@ -1,0 +1,75 @@
+import { describe, expect, it } from "bun:test";
+import {
+	DEFAULT_RELAY_URL,
+	encodeBase64Url,
+	formatCollabLink,
+	generateRoomId,
+	packEnvelope,
+	parseCollabLink,
+	rewriteEnvelopePeer,
+	unpackEnvelope,
+} from "../src/lib/link";
+
+const KEY = Uint8Array.from({ length: 32 }, (_, i) => i);
+const KEY_TEXT = encodeBase64Url(KEY);
+const ROOM = "AbCdEf123456_-Xy";
+
+describe("collab link parsing", () => {
+	it("parses a bare roomId#key link against the default relay", () => {
+		const parsed = parseCollabLink(`${ROOM}#${KEY_TEXT}`);
+		if ("error" in parsed) throw new Error(parsed.error);
+		expect(parsed.wsUrl).toBe(`${DEFAULT_RELAY_URL}/r/${ROOM}`);
+		expect(parsed.roomId).toBe(ROOM);
+		expect(parsed.key).toEqual(KEY);
+	});
+
+	it("infers wss for scheme-less custom hosts", () => {
+		const parsed = parseCollabLink(`relay.example.com:8443/r/${ROOM}#${KEY_TEXT}`);
+		if ("error" in parsed) throw new Error(parsed.error);
+		expect(parsed.wsUrl).toBe(`wss://relay.example.com:8443/r/${ROOM}`);
+	});
+
+	it("allows plain ws:// for localhost", () => {
+		const parsed = parseCollabLink(`ws://localhost:7466/r/${ROOM}#${KEY_TEXT}`);
+		if ("error" in parsed) throw new Error(parsed.error);
+		expect(parsed.wsUrl).toBe(`ws://localhost:7466/r/${ROOM}`);
+	});
+
+	it("rejects plain ws:// for non-localhost hosts", () => {
+		expect("error" in parseCollabLink(`ws://relay.example.com/r/${ROOM}#${KEY_TEXT}`)).toBe(true);
+	});
+
+	it("rejects keys that are not 32 base64url bytes", () => {
+		const shortKey = encodeBase64Url(new Uint8Array(16));
+		expect("error" in parseCollabLink(`${ROOM}#${shortKey}`)).toBe(true);
+	});
+
+	it("round-trips format → parse for default, custom, and localhost relays", () => {
+		const roomId = generateRoomId();
+		for (const relay of [DEFAULT_RELAY_URL, "wss://relay.example.com:8443", "ws://127.0.0.1:7466"]) {
+			const link = formatCollabLink(relay, roomId, KEY);
+			const parsed = parseCollabLink(link);
+			if ("error" in parsed) throw new Error(`${relay}: ${parsed.error}`);
+			expect(parsed.roomId).toBe(roomId);
+			expect(parsed.key).toEqual(KEY);
+		}
+	});
+});
+
+describe("collab wire envelope", () => {
+	it("round-trips peer id and payload, rewrites in place", () => {
+		const payload = new Uint8Array([1, 2, 3, 4, 5]);
+		const envelope = packEnvelope(7, payload);
+		const unpacked = unpackEnvelope(envelope);
+		expect(unpacked?.peerId).toBe(7);
+		expect(unpacked?.payload).toEqual(payload);
+		rewriteEnvelopePeer(envelope, 42);
+		const rewritten = unpackEnvelope(envelope);
+		expect(rewritten?.peerId).toBe(42);
+		expect(rewritten?.payload).toEqual(payload);
+	});
+
+	it("returns null for truncated envelopes", () => {
+		expect(unpackEnvelope(new Uint8Array([0, 0]))).toBeNull();
+	});
+});

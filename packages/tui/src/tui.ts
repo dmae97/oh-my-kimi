@@ -1335,7 +1335,8 @@ export class TUI extends Container {
 		// Leave the alt buffer first so the teardown cursor math below runs against
 		// the restored normal screen (which #previousLines still describes).
 		if (this.#altActive) {
-			this.terminal.write(`${MOUSE_TRACKING_OFF}\x1b[?1049l`);
+			const kittyPop = this.terminal.kittyEnableSequence ? "\x1b[<u" : "";
+			this.terminal.write(`${MOUSE_TRACKING_OFF}${kittyPop}\x1b[?1049l`);
 			setAltScreenActive(false);
 			this.#altActive = false;
 			this.#altPreviousLines = [];
@@ -2059,7 +2060,11 @@ export class TUI extends Container {
 		// modal there; the normal screen and all accounting stay untouched.
 		const wantAlt = this.#wantsAltScreen();
 		if (wantAlt && !this.#altActive) {
-			this.terminal.write(`\x1b[?1049h${MOUSE_TRACKING_ON}`);
+			// Kitty keyboard flags are per-screen: re-push our level on the freshly
+			// entered alternate screen, or Esc/modified keys revert to legacy
+			// encoding inside fullscreen overlays (Ghostty/kitty). See kitty
+			// keyboard-protocol docs: the mode stack is separate per screen.
+			this.terminal.write(`\x1b[?1049h${this.terminal.kittyEnableSequence ?? ""}${MOUSE_TRACKING_ON}`);
 			setAltScreenActive(true);
 			this.terminal.hideCursor();
 			this.#forgetHardwareCursorState();
@@ -2069,7 +2074,8 @@ export class TUI extends Container {
 			this.#altEnterWidth = width;
 			this.#altEnterHeight = height;
 		} else if (!wantAlt && this.#altActive) {
-			this.terminal.write(`${MOUSE_TRACKING_OFF}\x1b[?1049l`);
+			const kittyPop = this.terminal.kittyEnableSequence ? "\x1b[<u" : "";
+			this.terminal.write(`${MOUSE_TRACKING_OFF}${kittyPop}\x1b[?1049l`);
 			setAltScreenActive(false);
 			this.#forgetHardwareCursorState();
 			this.#altActive = false;
@@ -2706,6 +2712,18 @@ export class TUI extends Container {
 	#emitAltFrame(lines: string[], width: number, height: number): void {
 		const fitted: string[] = new Array(height);
 		for (let r = 0; r < height; r++) fitted[r] = lines[r] ?? "";
+		// Flush queued image-data transmits (`a=t`, no visible output) before the
+		// paint so id-keyed placements and placeholder cells composed into this
+		// frame resolve against loaded data. The normal-screen path flushes these
+		// ahead of its paint; without this, an image first shown inside a
+		// fullscreen overlay (e.g. the settings shape preview) would render as
+		// blank placeholder cells until the overlay closed.
+		const imageTransmits = this.#imageBudget.takeTransmits();
+		if (imageTransmits.length > 0) {
+			let transmitBuffer = "";
+			for (const seq of imageTransmits) transmitBuffer += seq;
+			this.terminal.write(transmitBuffer);
+		}
 		// Skip an identical repaint (the modal is mostly static between
 		// keystrokes) — unless a forced repaint (resetDisplay,
 		// requestRender(true)) is pending: the redraw gesture must repair a

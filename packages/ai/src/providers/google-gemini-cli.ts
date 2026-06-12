@@ -12,6 +12,7 @@ import {
 	getGeminiCliHeaders,
 } from "@oh-my-pi/pi-catalog/wire/gemini-headers";
 import { extractHttpStatusFromError, fetchWithRetry, readSseJson } from "@oh-my-pi/pi-utils";
+import { ProviderHttpError } from "../errors";
 import type {
 	Api,
 	AssistantMessage,
@@ -25,7 +26,7 @@ import type {
 } from "../types";
 import { normalizeSystemPrompts } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
-import { appendRawHttpRequestDumpFor400, type RawHttpRequestDump, withHttpStatus } from "../utils/http-inspector";
+import { appendRawHttpRequestDumpFor400, type RawHttpRequestDump } from "../utils/http-inspector";
 // Refresh is the sole responsibility of AuthStorage (broker-aware, single-flighted);
 // the stream provider trusts the access token threaded through `options.apiKey`.
 import { normalizeSchemaForCCA } from "../utils/schema";
@@ -50,6 +51,11 @@ import {
  */
 export type { GoogleThinkingLevel };
 
+/** Non-2xx response (or in-stream error chunk) from the Cloud Code Assist API. */
+export class GeminiCliApiError extends ProviderHttpError {
+	override readonly name = "GeminiCliApiError";
+}
+
 export interface GoogleGeminiCliOptions extends StreamOptions {
 	/**
 	 * Tool selection mode. String forms map directly to Gemini
@@ -70,7 +76,19 @@ export interface GoogleGeminiCliOptions extends StreamOptions {
 		budgetTokens?: number;
 		/** Thinking level. Use for Gemini 3 models (LOW/HIGH for Pro, MINIMAL/LOW/MEDIUM/HIGH for Flash). */
 		level?: GoogleThinkingLevel;
+		/**
+		 * Explicit wire suppression when `enabled` is false. Cloud Code Assist
+		 * re-applies the per-id baked server default when thinkingConfig is
+		 * omitted, so models with `thinking.suppressWhenOff` must send
+		 * `includeThoughts: false` plus a MINIMAL level (or zero budget).
+		 */
+		suppress?: { level: GoogleThinkingLevel } | { budget: number };
 	};
+	/**
+	 * Upstream wire model id override for collapsed effort-tier variants.
+	 * Serialized as `requestModelId ?? model.requestModelId ?? model.id`.
+	 */
+	requestModelId?: string;
 	projectId?: string;
 }
 
@@ -361,9 +379,10 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 			);
 			if (!response.ok) {
 				const errorText = await response.text();
-				throw withHttpStatus(
-					new Error(`Cloud Code Assist API error (${response.status}): ${extractErrorMessage(errorText)}`),
+				throw new GeminiCliApiError(
+					`Cloud Code Assist API error (${response.status}): ${extractErrorMessage(errorText)}`,
 					response.status,
+					{ headers: response.headers },
 				);
 			}
 			const requestUrl = response.url;
@@ -412,10 +431,10 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 				)) {
 					if (chunk.error) {
 						const detail = chunk.error.message || chunk.error.status || "unknown error";
-						const err = new Error(`Cloud Code Assist stream error: ${detail}`);
+						const message = `Cloud Code Assist stream error: ${detail}`;
 						throw typeof chunk.error.code === "number" && chunk.error.code >= 400
-							? withHttpStatus(err, chunk.error.code)
-							: err;
+							? new GeminiCliApiError(message, chunk.error.code)
+							: new Error(message);
 					}
 					const responseData = chunk.response;
 					if (!responseData) continue;
@@ -572,9 +591,10 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 
 					if (!currentResponse.ok) {
 						const retryErrorText = await currentResponse.text();
-						throw withHttpStatus(
-							new Error(`Cloud Code Assist API error (${currentResponse.status}): ${retryErrorText}`),
+						throw new GeminiCliApiError(
+							`Cloud Code Assist API error (${currentResponse.status}): ${retryErrorText}`,
 							currentResponse.status,
+							{ headers: currentResponse.headers },
 						);
 					}
 				}
@@ -762,6 +782,17 @@ export function buildRequest(
 		} else if (options.thinking.budgetTokens !== undefined) {
 			generationConfig.thinkingConfig.thinkingBudget = options.thinking.budgetTokens;
 		}
+	} else if (options.thinking?.suppress && model.reasoning) {
+		// Explicit off: omitting thinkingConfig re-applies the per-id baked
+		// server default (the model silently thinks and bills the tokens).
+		const suppress = options.thinking.suppress;
+		generationConfig.thinkingConfig = { includeThoughts: false };
+		if ("level" in suppress) {
+			// Cast to any since our GoogleThinkingLevel mirrors Google's ThinkingLevel enum values
+			generationConfig.thinkingConfig.thinkingLevel = suppress.level as any;
+		} else {
+			generationConfig.thinkingConfig.thinkingBudget = suppress.budget;
+		}
 	}
 
 	const request: CloudCodeAssistRequest["request"] = {
@@ -832,7 +863,7 @@ export function buildRequest(
 
 	return {
 		project: projectId,
-		model: model.id,
+		model: options.requestModelId ?? model.requestModelId ?? model.id,
 		request,
 		...(isAntigravity
 			? {

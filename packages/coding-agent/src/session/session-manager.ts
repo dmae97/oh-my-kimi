@@ -27,7 +27,7 @@ import {
 	Snowflake,
 	toError,
 } from "@oh-my-pi/pi-utils";
-import { getPreservedSnapcompactArchive, snapcompactImages } from "@oh-my-pi/snapcompact";
+import * as snapcompact from "@oh-my-pi/snapcompact";
 import { ArtifactManager } from "./artifacts";
 import {
 	type BlobPutOptions,
@@ -712,7 +712,7 @@ export function buildSessionContext(
 		// the component can report them.
 		for (const entry of path) {
 			if (entry.type === "compaction") {
-				const snapcompactArchive = getPreservedSnapcompactArchive(entry.preserveData);
+				const snapcompactArchive = snapcompact.getPreservedArchive(entry.preserveData);
 				messages.push(
 					createCompactionSummaryMessage(
 						entry.summary,
@@ -720,7 +720,7 @@ export function buildSessionContext(
 						entry.timestamp,
 						entry.shortSummary,
 						undefined,
-						snapcompactArchive ? snapcompactImages(snapcompactArchive) : undefined,
+						snapcompactArchive ? snapcompact.images(snapcompactArchive) : undefined,
 					),
 				);
 			} else {
@@ -744,7 +744,7 @@ export function buildSessionContext(
 
 		// Emit summary first; re-attach any archived snapcompact frames so the
 		// model can keep reading the archived history after every context rebuild.
-		const snapcompactArchive = getPreservedSnapcompactArchive(compaction.preserveData);
+		const snapcompactArchive = snapcompact.getPreservedArchive(compaction.preserveData);
 		messages.push(
 			createCompactionSummaryMessage(
 				compaction.summary,
@@ -752,7 +752,7 @@ export function buildSessionContext(
 				compaction.timestamp,
 				compaction.shortSummary,
 				providerPayload,
-				snapcompactArchive ? snapcompactImages(snapcompactArchive) : undefined,
+				snapcompactArchive ? snapcompact.images(snapcompactArchive) : undefined,
 			),
 		);
 
@@ -1994,6 +1994,12 @@ export class SessionManager {
 	#byId: Map<string, SessionEntry> = new Map();
 	#labelsById: Map<string, string> = new Map();
 	#leafId: string | null = null;
+	/**
+	 * Collab replication tap: invoked for every appended entry with the
+	 * in-memory (pre-blob-externalization) entry, so inline images survive.
+	 * Failures are swallowed — a broadcast error must never break persistence.
+	 */
+	onEntryAppended?: (entry: SessionEntry) => void;
 	#usageStatistics = {
 		input: 0,
 		output: 0,
@@ -2927,6 +2933,44 @@ export class SessionManager {
 				this.#usageStatistics.cost += usage.cost.total;
 			}
 		}
+		if (this.onEntryAppended) {
+			try {
+				this.onEntryAppended(entry);
+			} catch (err) {
+				logger.warn("collab entry hook failed", { error: String(err) });
+			}
+		}
+	}
+
+	/**
+	 * Append a foreign (host-authored) entry verbatim, preserving its
+	 * `id`/`parentId` — no id minting. Used by collab guests to mirror the
+	 * host session into the local replica file.
+	 */
+	ingestReplicatedEntry(entry: SessionEntry): void {
+		this.#appendEntry(entry);
+	}
+
+	/**
+	 * Snapshot the session for collab replication: the live header plus a deep
+	 * copy of every entry (the host mutates entries in place on
+	 * truncation/rewrite paths, so guests must not share references).
+	 */
+	snapshotForReplication(): { header: SessionHeader; entries: SessionEntry[] } {
+		const live = this.getHeader();
+		const header: SessionHeader = live
+			? structuredClone(live)
+			: {
+					type: "session",
+					version: CURRENT_SESSION_VERSION,
+					id: this.#sessionId,
+					title: this.#sessionName,
+					titleSource: this.#titleSource,
+					timestamp: new Date().toISOString(),
+					cwd: this.cwd,
+				};
+		const entries = structuredClone(this.#fileEntries.filter(e => e.type !== "session")) as SessionEntry[];
+		return { header, entries };
 	}
 
 	/** Append a message as child of current leaf, then advance leaf. Returns entry id.

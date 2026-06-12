@@ -3,6 +3,8 @@ import {
 	isClaudeModelId,
 	isKimiK26ModelId,
 	isKimiModelId,
+	isMinimaxM2FamilyModelId,
+	isOpenAIGptOssModelId,
 	supportsAdaptiveThinkingDisplay,
 } from "@oh-my-pi/pi-catalog/identity";
 
@@ -21,6 +23,10 @@ describe("isKimiK26ModelId", () => {
 		expect(isKimiK26ModelId("kimi-k2.6-thinking")).toBe(true);
 		expect(isKimiK26ModelId("kimi-k2.61")).toBe(false);
 		expect(isKimiK26ModelId("kimi-k2.5")).toBe(false);
+		// Router ids spell the version `k2p6` (e.g. Fireworks Fire Pass).
+		expect(isKimiK26ModelId("accounts/fireworks/routers/kimi-k2p6-turbo")).toBe(true);
+		expect(isKimiK26ModelId("kimi-k2p6")).toBe(true);
+		expect(isKimiK26ModelId("kimi-k2p61")).toBe(false);
 	});
 });
 
@@ -44,5 +50,59 @@ describe("supportsAdaptiveThinkingDisplay", () => {
 		expect(supportsAdaptiveThinkingDisplay("claude-opus-4.6")).toBe(false);
 		expect(supportsAdaptiveThinkingDisplay("claude-opus-4-20250514")).toBe(false);
 		expect(supportsAdaptiveThinkingDisplay("claude-sonnet-4-6")).toBe(false);
+	});
+});
+
+describe("isMinimaxM2FamilyModelId", () => {
+	test("matches every M2-generation id shape served by aggregator/native hosts", () => {
+		// Fireworks/OpenCode/openrouter direct ids and `-highspeed`/`-lightning` variants.
+		expect(isMinimaxM2FamilyModelId("minimax-m2.7")).toBe(true);
+		expect(isMinimaxM2FamilyModelId("MiniMax-M2.7")).toBe(true);
+		expect(isMinimaxM2FamilyModelId("MiniMax-M2.7-highspeed")).toBe(true);
+		expect(isMinimaxM2FamilyModelId("MiniMax-M2.1-lightning")).toBe(true);
+		// Vendor-namespaced ids on aggregators.
+		expect(isMinimaxM2FamilyModelId("minimax/minimax-m2")).toBe(true);
+		expect(isMinimaxM2FamilyModelId("minimax/minimax-m2.5:free")).toBe(true);
+		expect(isMinimaxM2FamilyModelId("minimaxai/minimax-m2.7")).toBe(true);
+		expect(isMinimaxM2FamilyModelId("minimax/minimax-m2-her")).toBe(true);
+		// Bedrock-shaped id and aimlapi short form.
+		expect(isMinimaxM2FamilyModelId("minimax.minimax-m2.7")).toBe(true);
+		expect(isMinimaxM2FamilyModelId("minimax/m2")).toBe(true);
+		expect(isMinimaxM2FamilyModelId("minimax/m2-7-highspeed")).toBe(true);
+		// Venice's dotless aliases.
+		expect(isMinimaxM2FamilyModelId("minimax-m21")).toBe(true);
+		expect(isMinimaxM2FamilyModelId("minimax-m25")).toBe(true);
+		expect(isMinimaxM2FamilyModelId("minimax-m27")).toBe(true);
+	});
+
+	test("excludes non-M2 MiniMax SKUs and unrelated families", () => {
+		expect(isMinimaxM2FamilyModelId("minimax/m1")).toBe(false);
+		expect(isMinimaxM2FamilyModelId("MiniMax-M1")).toBe(false);
+		expect(isMinimaxM2FamilyModelId("MiniMax-M3")).toBe(false);
+		expect(isMinimaxM2FamilyModelId("minimax/minimax-m3")).toBe(false);
+		expect(isMinimaxM2FamilyModelId("MiniMax-Text-01")).toBe(false);
+		expect(isMinimaxM2FamilyModelId("minimax-music")).toBe(false);
+		expect(isMinimaxM2FamilyModelId("minimax/hailuo-02")).toBe(false);
+		expect(isMinimaxM2FamilyModelId("minimax/music-2.0")).toBe(false);
+		// Lone "m2" string with no MiniMax context does not match.
+		expect(isMinimaxM2FamilyModelId("kimi-m2")).toBe(false);
+		expect(isMinimaxM2FamilyModelId("gpt-oss-120b")).toBe(false);
+	});
+});
+
+describe("isOpenAIGptOssModelId", () => {
+	test("matches gpt-oss across catalog id shapes", () => {
+		expect(isOpenAIGptOssModelId("gpt-oss-120b")).toBe(true);
+		expect(isOpenAIGptOssModelId("gpt-oss-20b")).toBe(true);
+		expect(isOpenAIGptOssModelId("gpt-oss:120b")).toBe(true);
+		expect(isOpenAIGptOssModelId("openai/gpt-oss-120b")).toBe(true);
+		expect(isOpenAIGptOssModelId("gpt-oss-120b-medium")).toBe(true);
+	});
+
+	test("excludes unrelated `gpt-*` and `oss` models", () => {
+		expect(isOpenAIGptOssModelId("gpt-4o")).toBe(false);
+		expect(isOpenAIGptOssModelId("gpt-4.1-mini")).toBe(false);
+		expect(isOpenAIGptOssModelId("oss-llm")).toBe(false);
+		expect(isOpenAIGptOssModelId("MiniMax-M2.7")).toBe(false);
 	});
 });

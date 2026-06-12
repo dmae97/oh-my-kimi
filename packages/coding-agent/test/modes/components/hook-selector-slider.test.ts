@@ -54,9 +54,9 @@ function modelSlider(index: number): HookSelectorSlider {
 		caption: "continue with",
 		index,
 		segments: [
-			{ label: "smol", color: "warning", detail: "gpt-5-mini" },
-			{ label: "default", color: "success", detail: "claude-sonnet" },
-			{ label: "slow", color: "accent", detail: "claude-opus" },
+			{ label: "smol", detail: "gpt-5-mini" },
+			{ label: "default", detail: "claude-sonnet" },
+			{ label: "slow", detail: "claude-opus" },
 		],
 	};
 }

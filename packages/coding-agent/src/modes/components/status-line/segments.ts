@@ -486,8 +486,22 @@ const sessionNameSegment: StatusLineSegment = {
 		if (!name) return { content: "", visible: false };
 
 		const ansi =
-			getSessionAccentAnsi(getSessionAccentHex(name, theme.accentSurfaceLuminance)) ?? theme.getFgAnsi("accent");
+			getSessionAccentAnsi(
+				getSessionAccentHex(name, theme.getMajorThemeColorHexes(), theme.accentSurfaceLuminance),
+			) ?? theme.getFgAnsi("accent");
 		return { content: `${ansi}${sanitizeStatusText(name)}\x1b[39m`, visible: true };
+	},
+};
+
+const collabSegment: StatusLineSegment = {
+	id: "collab",
+	render(ctx) {
+		if (!ctx.collab) return { content: "", visible: false };
+		const label =
+			ctx.collab.role === "host"
+				? `⇄ collab:${ctx.collab.participantCount}`
+				: `⇄ collab guest:${ctx.collab.participantCount}`;
+		return { content: theme.fg("accent", label), visible: true };
 	},
 };
 
@@ -571,6 +585,7 @@ export const SEGMENTS: Record<StatusLineSegmentId, StatusLineSegment> = {
 	cache_hit: cacheHitSegment,
 	session_name: sessionNameSegment,
 	usage: usageSegment,
+	collab: collabSegment,
 };
 
 export function renderSegment(id: StatusLineSegmentId, ctx: SegmentContext): RenderedSegment {

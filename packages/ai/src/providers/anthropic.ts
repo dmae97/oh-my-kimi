@@ -974,6 +974,11 @@ export interface AnthropicOptions extends StreamOptions {
 	 */
 	thinkingBudgetTokens?: number;
 	/**
+	 * Upstream wire model id override for collapsed effort-tier variants.
+	 * Serialized as `requestModelId ?? model.requestModelId ?? model.id`.
+	 */
+	requestModelId?: string;
+	/**
 	 * Effort level for adaptive thinking.
 	 * Controls how much thinking Claude allocates:
 	 * - "max": Always thinks with no constraints
@@ -2816,7 +2821,7 @@ function buildParams(
 	// Build params in the canonical field order: model → messages → system → tools →
 	// metadata → max_tokens → thinking → context_management → output_config → stream.
 	const params: MessageCreateParamsStreaming = {
-		model: model.requestModelId ?? model.id,
+		model: options?.requestModelId ?? model.requestModelId ?? model.id,
 		messages: convertAnthropicMessages(context.messages, model, isOAuthToken),
 		...(systemBlocks && { system: systemBlocks }),
 		...(tools !== undefined && { tools }),
@@ -2906,11 +2911,22 @@ function ensureErrorToolResultWireContent(
 		: [{ type: "text", text: EMPTY_ERROR_TOOL_RESULT_TEXT }];
 }
 
-function buildToolResultBlock(model: Model<"anthropic-messages">, msg: ToolResultMessage): ContentBlockParam {
-	const content = ensureErrorToolResultWireContent(
-		convertContentBlocks(msg.content, model.input.includes("image")),
-		msg.isError,
-	);
+function buildToolResultBlock(
+	model: Model<"anthropic-messages">,
+	msg: ToolResultMessage,
+	hoistedImages: ContentBlockParam[],
+): ContentBlockParam {
+	let content = convertContentBlocks(msg.content, model.input.includes("image"));
+	// Anthropic rejects images inside error tool results ("all content must be
+	// type `text` if `is_error` is true") — keep the text in the block and
+	// hoist the images after the message's tool_result run.
+	if (msg.isError && typeof content !== "string" && content.some(block => block.type === "image")) {
+		for (const block of content) {
+			if (block.type === "image") hoistedImages.push(block);
+		}
+		content = content.filter(block => block.type === "text");
+	}
+	content = ensureErrorToolResultWireContent(content, msg.isError);
 	const block: ContentBlockParam = {
 		type: "tool_result",
 		tool_use_id: msg.toolCallId,
@@ -3077,20 +3093,29 @@ export function convertAnthropicMessages(
 		} else if (msg.role === "toolResult") {
 			// Collect all consecutive toolResult messages, needed for z.ai Anthropic endpoint
 			const toolResults: ContentBlockParam[] = [];
+			// Images stripped out of error tool results, re-attached after the run.
+			const hoistedImages: ContentBlockParam[] = [];
 
 			// Add the current tool result
-			toolResults.push(buildToolResultBlock(model, msg));
+			toolResults.push(buildToolResultBlock(model, msg, hoistedImages));
 
 			// Look ahead for consecutive toolResult messages
 			let j = i + 1;
 			while (j < transformedMessages.length && transformedMessages[j].role === "toolResult") {
 				const nextMsg = transformedMessages[j] as ToolResultMessage; // We know it's a toolResult
-				toolResults.push(buildToolResultBlock(model, nextMsg));
+				toolResults.push(buildToolResultBlock(model, nextMsg, hoistedImages));
 				j++;
 			}
 
 			// Skip the messages we've already processed
 			i = j - 1;
+
+			if (hoistedImages.length > 0) {
+				toolResults.push(
+					{ type: "text", text: "Attached image(s) from the tool result(s) above:" },
+					...hoistedImages,
+				);
+			}
 
 			// Add a single user message with all tool results
 			params.push({

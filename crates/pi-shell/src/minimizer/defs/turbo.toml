@@ -11,6 +11,8 @@ strip_lines_matching = [
 	"^•\\s+Running ",
 	"^•\\s+Remote caching",
 	"cache hit, replaying logs",
+	"cache (miss, executing|bypass, force executing)",
+	"^\\s*\\d+ packages in scope",
 ]
 truncate_lines_at = 250
 max_lines = 80
@@ -25,3 +27,8 @@ expected = "app:build: > next build\n Tasks:    1 successful, 1 total\n"
 name = "preamble only collapses"
 input = "• Running build in 1 packages\n"
 expected = "turbo: ok"
+
+[[tests.turbo]]
+name = "strips cache noise keeps task output and summary"
+input = "app:build: cache hit, replaying logs abc123\ncache miss, executing abc456\n\n3 packages in scope\n\n> myapp:build\n\nCompiled successfully.\n\nTasks:    2 successful, 2 total (1 cached)\nDuration: 3.2s\n"
+expected = "> myapp:build\nCompiled successfully.\nTasks:    2 successful, 2 total (1 cached)\nDuration: 3.2s\n"

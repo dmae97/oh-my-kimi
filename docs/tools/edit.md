@@ -63,7 +63,7 @@ The canonical grammar is strict, but the hand parser accepts a few non-dangerous
 - `delete N..M:` and any body rows under `delete` / `delete block` are rejected.
 - Empty `replace` / `insert` / `replace block` hunks are rejected.
 - `-` body rows are rejected with `MINUS_ROW_REJECTED`.
-- `replace block N:` / `delete block N` / `insert after block N:` require a wired tree-sitter resolver; `replace block` and `insert after block` additionally need at least one `+TEXT` body row, while `delete block` takes none. An unresolvable block (unsupported language, blank/closing-delimiter line, no node beginning on N, or a syntax error in the resolved block) is rejected on the apply/final-preview path; the streaming preview silently drops it instead.
+- `replace block N:` / `delete block N` / `insert after block N:` require a wired tree-sitter resolver; `replace block` and `insert after block` additionally need at least one `+TEXT` body row, while `delete block` takes none. An unresolvable block (unsupported language, blank/closing-delimiter line, no node beginning on N, or a syntax error in the resolved block) is rejected on the apply/final-preview path; the streaming preview silently drops it instead. Exception: `insert after block N:` anchored on a pure closing-delimiter line is lowered to plain `insert after N:` with a warning — line N is the end of a block, and inserting after that end is exactly what the plain form does.
 
 ## Outputs
 - Single-shot tool result; hashline mode does not use a `resolve` preview/apply handshake.

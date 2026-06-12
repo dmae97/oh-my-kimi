@@ -17,3 +17,4 @@ Press ctrl+r to search your prompt history and reuse a past message
 `/force read` pins the next turn to one specific tool when the model keeps reaching for the wrong one
 `/copy code` grabs the last code block to your clipboard — `/copy cmd` grabs the last shell/python command
 `/shake` rips heavy tool results out of context to reclaim tokens without a full /compact — `/shake images` drops just images
+Pair up live: `/collab` shares your session through an end-to-end encrypted relay link — a teammate runs `/join <link>` to watch tool calls stream and prompt the agent from their own omp

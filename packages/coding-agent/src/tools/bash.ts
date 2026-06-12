@@ -31,7 +31,7 @@ import { expandInternalUrls, type InternalUrlExpansionOptions } from "./bash-ski
 import { invalidateGithubCacheForBashCommand } from "./gh-cache-invalidation";
 import { formatStyledTruncationWarning, type OutputMeta, stripOutputNotice } from "./output-meta";
 import { resolveToCwd } from "./path-utils";
-import { capPreviewLines, formatToolWorkingDirectory, replaceTabs } from "./render-utils";
+import { capPreviewLines, formatToolWorkingDirectory, previewWindowRows, replaceTabs } from "./render-utils";
 import { ToolAbortError, ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 import { clampTimeout, TOOL_TIMEOUTS } from "./tool-timeouts";
@@ -1241,6 +1241,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 			let cachedRawOutput: string | undefined;
 			let cachedIsPartial: boolean | undefined;
 			let cachedLines: readonly string[] | undefined;
+			let cachedPreviewWindow: number | undefined;
 
 			return markFramedBlockComponent({
 				render: (width: number): readonly string[] => {
@@ -1255,6 +1256,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 					const rawOutput = renderContext?.output ?? result.content?.find(c => c.type === "text")?.text ?? "";
 
 					const isPartial = options.isPartial === true;
+					const previewWindow = previewWindowRows();
 
 					if (
 						cachedLines !== undefined &&
@@ -1262,7 +1264,8 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 						cachedPreviewLines === previewLines &&
 						cachedExpanded === expanded &&
 						cachedRawOutput === rawOutput &&
-						cachedIsPartial === isPartial
+						cachedIsPartial === isPartial &&
+						cachedPreviewWindow === previewWindow
 					) {
 						return cachedLines;
 					}
@@ -1348,7 +1351,9 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 							state: isPartial ? "pending" : isError ? "error" : "success",
 							sections: [
 								{
-									lines: isPartial ? capPreviewLines(cmdLines ?? [], uiTheme, { expanded }) : (cmdLines ?? []),
+									// Viewport-sized tail window in every state — streaming and final
+									// render identically; only ctrl+o uncaps.
+									lines: capPreviewLines(cmdLines ?? [], uiTheme, { expanded }),
 								},
 								{ label: uiTheme.fg("toolTitle", "Output"), lines: outputLines },
 							],
@@ -1362,6 +1367,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 					cachedExpanded = expanded;
 					cachedRawOutput = rawOutput;
 					cachedIsPartial = isPartial;
+					cachedPreviewWindow = previewWindow;
 					cachedLines = framed;
 					return framed;
 				},
@@ -1373,11 +1379,15 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 					cachedExpanded = undefined;
 					cachedRawOutput = undefined;
 					cachedIsPartial = undefined;
+					cachedPreviewWindow = undefined;
 				},
 			});
 		},
 		mergeCallAndResult: true,
 		inline: true,
+		// Pending preview caps the command to a viewport-sized tail window that
+		// shifts while args stream; keep it out of native scrollback mid-run.
+		provisionalPendingPreview: true,
 	};
 }
 

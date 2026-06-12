@@ -3219,6 +3219,10 @@ describe("TUI terminal-state regressions", () => {
 				const modalWrites = writes.slice(showFrom).join("");
 				// Borrowed the alternate screen buffer …
 				expect(modalWrites).toContain("\x1b[?1049h");
+				// … re-pushed kitty keyboard flags in the same write: the mode stack
+				// is per-screen, so without this Esc reverts to legacy bare \x1b
+				// inside fullscreen overlays (settings Esc bug).
+				expect(modalWrites).toContain("\x1b[?1049h\x1b[>1u");
 				// … enabled mouse tracking for click/scroll/hover support …
 				expect(modalWrites).toContain("\x1b[?1000h");
 				expect(modalWrites).toContain("\x1b[?1003h"); // any-motion tracking drives hover
@@ -3233,6 +3237,8 @@ describe("TUI terminal-state regressions", () => {
 
 				const hideWrites = writes.slice(hideFrom).join("");
 				expect(hideWrites).toContain("\x1b[?1049l");
+				// The alt screen's kitty frame is popped before leaving it.
+				expect(hideWrites).toContain("\x1b[<u\x1b[?1049l");
 				// Mouse tracking is disabled again so the rest of the app keeps native
 				// terminal selection.
 				expect(hideWrites).toContain("\x1b[?1003l"); // motion tracking torn down too

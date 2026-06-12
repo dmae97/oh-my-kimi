@@ -1164,3 +1164,90 @@ describe("filterAvailableModelsByEnabledPatterns", () => {
 		expect(result).toHaveLength(2);
 	});
 });
+
+describe("effort-tier variant aliases", () => {
+	const variantModels: Model<Api>[] = [
+		buildModel({
+			id: "gemini-3.5-flash",
+			requestModelId: "gemini-3.5-flash-extra-low",
+			name: "Gemini 3.5 Flash",
+			api: "google-gemini-cli",
+			provider: "google-antigravity",
+			baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+			reasoning: true,
+			thinking: {
+				mode: "google-level",
+				efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High],
+				effortRouting: {
+					off: "gemini-3.5-flash-extra-low",
+					[Effort.Minimal]: "gemini-3-flash-agent",
+					[Effort.Low]: "gemini-3.5-flash-extra-low",
+					[Effort.Medium]: "gemini-3.5-flash-extra-low",
+					[Effort.High]: "gemini-3.5-flash-low",
+				},
+				suppressWhenOff: true,
+			},
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 1_048_576,
+			maxTokens: 65_535,
+		}),
+		// Live legacy model whose id is also a recycled alias of the family —
+		// exact matches must keep winning while it exists.
+		buildModel({
+			id: "gemini-3-flash",
+			name: "Gemini 3 Flash",
+			api: "google-gemini-cli",
+			provider: "google-antigravity",
+			baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+			reasoning: true,
+			thinking: { mode: "google-level", efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High] },
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 1_048_576,
+			maxTokens: 65_535,
+		}),
+		// Auto-derived pair target on a provider without a hand table.
+		buildModel({
+			id: "kimi-k2",
+			name: "Kimi K2",
+			api: "openai-completions",
+			provider: "venice",
+			baseUrl: "https://api.venice.ai/api/v1",
+			reasoning: true,
+			thinking: { mode: "budget", efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High] },
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128_000,
+			maxTokens: 8_192,
+		}),
+	];
+
+	test("provider-qualified retired tier ids resolve to the collapsed model", () => {
+		const result = parseModelPattern("google-antigravity/gemini-3.5-flash-low", variantModels);
+		expect(result.model?.id).toBe("gemini-3.5-flash");
+		expect(result.thinkingLevel).toBeUndefined();
+	});
+
+	test("retired tier ids keep explicit :level suffixes", () => {
+		const result = parseModelPattern("google-antigravity/gemini-3.5-flash-low:high", variantModels);
+		expect(result.model?.id).toBe("gemini-3.5-flash");
+		expect(result.thinkingLevel).toBe(Effort.High);
+	});
+
+	test("bare retired tier ids resolve through the alias table", () => {
+		const result = parseModelPattern("gemini-3.5-flash-extra-low", variantModels);
+		expect(result.model?.id).toBe("gemini-3.5-flash");
+		expect(result.model?.provider).toBe("google-antigravity");
+	});
+
+	test("live models always beat recycled aliases", () => {
+		const result = parseModelPattern("google-antigravity/gemini-3-flash", variantModels);
+		expect(result.model?.id).toBe("gemini-3-flash");
+	});
+
+	test("consumed X-thinking twins resolve via the grammar fallback", () => {
+		expect(parseModelPattern("venice/kimi-k2-thinking", variantModels).model?.id).toBe("kimi-k2");
+		expect(parseModelPattern("kimi-k2-thinking", variantModels).model?.id).toBe("kimi-k2");
+	});
+});

@@ -15,6 +15,7 @@ pub mod dotnet;
 
 pub mod generic;
 pub mod gh;
+pub mod glab;
 
 pub mod go;
 pub mod gt;
@@ -22,6 +23,8 @@ pub mod gt;
 pub mod git;
 
 pub mod js_tools;
+
+pub mod jvm;
 
 pub mod lint;
 pub mod listing;
@@ -33,6 +36,7 @@ pub mod ruby;
 pub mod rust_tools;
 pub mod system;
 
+#[must_use]
 pub fn supports(program: &str, subcommand: Option<&str>) -> bool {
 	match program {
 		"git" | "yadm" => git::supports(subcommand),
@@ -45,11 +49,19 @@ pub fn supports(program: &str, subcommand: Option<&str>) -> bool {
 		},
 		program if cpp::is_gtest_binary_name(program) => cpp::supports(program, subcommand),
 		"dotnet" => dotnet::supports(program, subcommand),
+		// JVM build tools: phase is decided inside jvm::filter (never by
+		// ctx.subcommand, which mis-reports `mvn clean install` as `clean`), so
+		// supports() claims every subcommand. Defensive `.cmd`/`.bat` arms cover
+		// the case where normalize_program is bypassed.
+		"mvn" | "mvnw" | "mvnw.cmd" | "gradle" | "gradlew" | "gradlew.bat" => {
+			jvm::supports(program, subcommand)
+		},
 		"ls" | "tree" | "find" | "grep" | "rg" | "wc" | "cat" | "read" | "stat" | "du" | "df"
 		| "jq" | "json" => true,
 		"aws" | "curl" | "wget" | "psql" => cloud::supports(program, subcommand),
 		"docker" | "kubectl" | "helm" => docker::supports(subcommand),
 		"gh" => gh::supports(subcommand),
+		"glab" => glab::supports(subcommand),
 		"pytest" | "ruff" | "mypy" | "python" | "python3" | "py" => {
 			python::supports(program, subcommand)
 		},
@@ -130,6 +142,7 @@ fn is_lint_script_token(token: &str) -> bool {
 }
 
 /// Apply the matching built-in filter.
+#[must_use]
 pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
 	let _ = ctx.command;
 	let _ = ctx.config.per_command(ctx.program);
@@ -140,6 +153,9 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 		"cargo" => cargo::filter(ctx, input, exit_code),
 		"go" | "golangci-lint" => go::filter(ctx, input, exit_code),
 		"dotnet" => dotnet::filter(ctx, input, exit_code),
+		"mvn" | "mvnw" | "mvnw.cmd" | "gradle" | "gradlew" | "gradlew.bat" => {
+			jvm::filter(ctx, input, exit_code)
+		},
 		"cmake" | "ctest" | "ninja" | "gtest" | "gtest-parallel" => {
 			cpp::filter(ctx, input, exit_code)
 		},
@@ -149,6 +165,7 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 		"aws" | "curl" | "wget" | "psql" => cloud::filter(ctx, input, exit_code),
 		"docker" | "kubectl" | "helm" => docker::filter(ctx, input, exit_code),
 		"gh" => gh::filter(ctx, input, exit_code),
+		"glab" => glab::filter(ctx, input, exit_code),
 		"pytest" | "ruff" | "mypy" | "python" | "python3" | "py" => {
 			python::filter(ctx, input, exit_code)
 		},
@@ -163,6 +180,9 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 		"pnpm" if matches!(ctx.subcommand, Some("dlx")) => filter_js_wrapper(ctx, input, exit_code),
 		"uv" if matches!(ctx.subcommand, Some("run" | "pytest" | "ruff" | "mypy" | "-m")) => {
 			filter_uv_wrapper(ctx, input, exit_code)
+		},
+		"bundle" if matches!(ctx.subcommand, Some("exec")) => {
+			filter_bundle_wrapper(ctx, input, exit_code)
 		},
 		"npm" | "pnpm" | "yarn" => {
 			if is_pkg_test_invocation(ctx) {
@@ -183,10 +203,22 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 }
 
 fn filter_js_wrapper(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
-	if wrapper_invokes(ctx, &["tsc", "eslint", "biome"]) {
-		lint::filter(ctx, input, exit_code)
-	} else if wrapper_invokes(ctx, &["jest", "vitest", "playwright"]) {
-		node_tests::filter(ctx, input, exit_code)
+	if let Some(tool) = wrapper_invoked_tool(ctx, &["tsc", "eslint", "biome"]) {
+		let routed = MinimizerCtx {
+			program:    tool,
+			subcommand: Some(tool),
+			command:    ctx.command,
+			config:     ctx.config,
+		};
+		lint::filter(&routed, input, exit_code)
+	} else if let Some(tool) = wrapper_invoked_tool(ctx, &["jest", "vitest", "playwright"]) {
+		let routed = MinimizerCtx {
+			program:    tool,
+			subcommand: Some(tool),
+			command:    ctx.command,
+			config:     ctx.config,
+		};
+		node_tests::filter(&routed, input, exit_code)
 	} else if js_tools::supports(ctx.program, ctx.subcommand) {
 		js_tools::filter(ctx, input, exit_code)
 	} else {
@@ -250,6 +282,40 @@ fn filter_uv_wrapper(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> Min
 		Some("jest" | "vitest" | "playwright") => node_tests::filter(ctx, input, exit_code),
 		_ => MinimizerOutput::passthrough(input),
 	}
+}
+
+fn filter_bundle_wrapper(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
+	let Some(inner_command) = bundle_wrapped_command(ctx.command) else {
+		return pkg::filter(ctx, input, exit_code);
+	};
+	crate::minimizer::apply(&inner_command, input, exit_code, ctx.config)
+}
+
+/// Extract the inner command from a `bundle exec <cmd> …` invocation so the
+/// engine can re-dispatch through the wrapped tool's filter/def. Returns
+/// `None` when the command does not follow the `bundle exec` pattern.
+fn bundle_wrapped_command(command: &str) -> Option<String> {
+	let tokens: Vec<&str> = command
+		.split(|ch: char| ch.is_whitespace() || matches!(ch, ';' | '|' | '&'))
+		.filter(|tok| !tok.is_empty())
+		.collect();
+	let bundle_pos = tokens.iter().position(|t| {
+		t.rsplit('/')
+			.next()
+			.is_some_and(|name| name.eq_ignore_ascii_case("bundle"))
+	})?;
+	let mut iter = tokens.iter().skip(bundle_pos + 1).copied();
+	let word = next_command_word(&mut iter)?;
+	if word != "exec" {
+		return None;
+	}
+	let tool = next_command_word(&mut iter)?;
+	let mut inner = String::from(tool);
+	for tok in iter {
+		inner.push(' ');
+		inner.push_str(tok);
+	}
+	Some(inner)
 }
 
 /// Normalize uv invocation forms into a routable tool name (B1 / m4).
@@ -340,6 +406,11 @@ const WRAPPER_VALUE_OPTIONS: &[&str] = &[
 	"--workspace",
 	"-w",
 	"--node-arg",
+	// bundle exec
+	"--gemfile",
+	"--path",
+	"--jobs",
+	"--retry",
 ];
 
 /// Advance `tokens` to the next invoked-command word, skipping flag tokens and
@@ -397,10 +468,6 @@ fn wrapper_command_word(command: &str) -> Option<&str> {
 	Some(word)
 }
 
-fn wrapper_invokes(ctx: &MinimizerCtx<'_>, tools: &[&str]) -> bool {
-	wrapper_invoked_tool(ctx, tools).is_some()
-}
-
 fn wrapper_invoked_tool<'a>(ctx: &'a MinimizerCtx<'_>, tools: &[&'a str]) -> Option<&'a str> {
 	// Prefer wrapper_command_word over ctx.subcommand: it properly skips
 	// value-taking option values (e.g. -w, --workspace, --with) that
@@ -451,6 +518,16 @@ mod tests {
 		let out = filter(&context, input, 0);
 		assert_eq!(out.text, input);
 		assert!(!out.changed);
+	}
+
+	#[test]
+	fn test_wrapper_eslint_json_format_preserved() {
+		// Simulates: npx eslint -f json src/
+		let config = MinimizerConfig::default();
+		let input = r#"[{"filePath":"a.ts","messages":[],"errorCount":0}]"#;
+		let context = ctx("npx", Some("eslint"), "npx eslint -f json src/", &config);
+		let out = filter(&context, input, 0);
+		assert!(out.text.contains("filePath"), "eslint -f json via npx must not be condensed");
 	}
 
 	#[test]
@@ -846,12 +923,96 @@ mod tests {
 	fn pytest_legacy_filters_active_passes_through() {
 		// Kill-switch parity (M2): legacy_filters_active=true skips the
 		// pytest state machine even when invoked via `uv pytest`.
-		let mut config = MinimizerConfig::default();
-		config.enabled = true;
-		config.legacy_filters_active = true;
+		let config =
+			MinimizerConfig { enabled: true, legacy_filters_active: true, ..Default::default() };
 		let context = ctx("uv", Some("pytest"), "uv pytest tests/", &config);
 		let out = filter(&context, PYTEST_FAILURE_INPUT, 1);
 		assert_eq!(out.text, PYTEST_FAILURE_INPUT);
+		assert!(!out.changed);
+	}
+
+	// -------------------------------------------------------------
+	// Tier 2b: bundle exec wrapper re-dispatch
+	// -------------------------------------------------------------
+
+	#[test]
+	fn bundle_wrapped_command_extracts_inner_command() {
+		assert_eq!(
+			super::bundle_wrapped_command("bundle exec rails db:migrate"),
+			Some("rails db:migrate".to_string())
+		);
+		assert_eq!(
+			super::bundle_wrapped_command("bundle exec rake db:migrate"),
+			Some("rake db:migrate".to_string())
+		);
+		assert_eq!(
+			super::bundle_wrapped_command("bundle exec rails routes"),
+			Some("rails routes".to_string())
+		);
+		assert_eq!(super::bundle_wrapped_command("bundle exec rspec"), Some("rspec".to_string()));
+		// Skips bundle-specific value-taking options
+		assert_eq!(
+			super::bundle_wrapped_command("bundle exec --gemfile foo/Gemfile rails db:migrate"),
+			Some("rails db:migrate".to_string())
+		);
+		// Non-exec subcommands return None
+		assert_eq!(super::bundle_wrapped_command("bundle install"), None);
+		// No bundle token returns None
+		assert_eq!(super::bundle_wrapped_command("gem install"), None);
+		// Path-prefixed bundle binary should still be recognized
+		assert_eq!(
+			super::bundle_wrapped_command("/usr/local/bin/bundle exec rails db:migrate"),
+			Some("rails db:migrate".to_string())
+		);
+		assert_eq!(
+			super::bundle_wrapped_command("bin/bundle exec rake db:migrate"),
+			Some("rake db:migrate".to_string())
+		);
+	}
+
+	#[test]
+	fn bundle_exec_rails_db_migrate_routes_to_def() {
+		let config = MinimizerConfig { enabled: true, ..Default::default() };
+		let context = ctx("bundle", Some("exec"), "bundle exec rails db:migrate", &config);
+		let input = "== 20240115 CreateUsers: migrating\n-- create_table(:users)\n   -> 0.0234s\n== \
+		             20240115 CreateUsers: migrated\n";
+		let out = filter(&context, input, 0);
+		assert!(out.changed);
+		assert!(out.text.contains("CreateUsers"));
+		assert!(!out.text.contains("-- create_table"));
+	}
+
+	#[test]
+	fn bundle_exec_rails_routes_routes_to_def() {
+		let config = MinimizerConfig { enabled: true, ..Default::default() };
+		let context = ctx("bundle", Some("exec"), "bundle exec rails routes", &config);
+		let input = "                                  Prefix Verb   URI Pattern                                                                                       Controller#Action\n                                    root GET    /                                                                                                 home#index\n";
+		let out = filter(&context, input, 0);
+		assert!(out.changed);
+		assert!(!out.text.contains("Prefix"));
+		assert!(out.text.contains("root GET"));
+	}
+
+	#[test]
+	fn bundle_exec_rspec_routes_to_ruby_filter() {
+		let config = MinimizerConfig { enabled: true, ..Default::default() };
+		let context = ctx("bundle", Some("exec"), "bundle exec rspec", &config);
+		let input = "Randomized with seed 12345\n\nUserController\n  GET /users\n    returns a list \
+		             of users\n\nFinished in 0.45 seconds\n5 examples, 0 failures\n";
+		let out = filter(&context, input, 0);
+		assert!(out.changed);
+		assert!(out.text.contains("5 examples, 0 failures"));
+		assert!(!out.text.contains("returns a list of users"));
+	}
+
+	#[test]
+	fn bundle_exec_unknown_tool_uses_pkg_filter() {
+		let config = MinimizerConfig { enabled: true, ..Default::default() };
+		let context = ctx("bundle", Some("exec"), "bundle exec ruby script.rb", &config);
+		let input = "hello from ruby\n";
+		let out = filter(&context, input, 0);
+		// No filter matches ruby script.rb, so it passes through
+		assert_eq!(out.text, input);
 		assert!(!out.changed);
 	}
 }

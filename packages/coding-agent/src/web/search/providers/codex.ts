@@ -7,7 +7,7 @@
  * SQLite store, never POSTs the broker sentinel to an OpenAI token endpoint.
  */
 import * as os from "node:os";
-import type { AuthStorage, FetchImpl } from "@oh-my-pi/pi-ai";
+import { type AuthStorage, type FetchImpl, type OAuthAccess, withOAuthAccess } from "@oh-my-pi/pi-ai";
 import { decodeJwt } from "@oh-my-pi/pi-ai/oauth/openai-codex";
 import { getBundledModels } from "@oh-my-pi/pi-catalog/models";
 import { $env, readSseJson } from "@oh-my-pi/pi-utils";
@@ -287,12 +287,12 @@ async function findCodexAuth(
 	authStorage: AuthStorage,
 	sessionId: string | undefined,
 	signal: AbortSignal | undefined,
-): Promise<{ accessToken: string; accountId: string } | null> {
+): Promise<{ access: OAuthAccess; accountId: string } | null> {
 	const access = await authStorage.getOAuthAccess("openai-codex", sessionId, { signal });
 	if (!access) return null;
 	const accountId = access.accountId ?? getAccountIdFromJwt(access.accessToken);
 	if (!accountId) return null;
-	return { accessToken: access.accessToken, accountId };
+	return { access, accountId };
 }
 
 /**
@@ -495,8 +495,8 @@ async function callCodexSearch(
  *   `gpt-5-codex-mini` first on ChatGPT accounts, which OpenAI rejects.
  */
 export async function searchCodex(params: SearchParams): Promise<SearchResponse> {
-	const auth = await findCodexAuth(params.authStorage, params.sessionId, params.signal);
-	if (!auth) {
+	const seed = await findCodexAuth(params.authStorage, params.sessionId, params.signal);
+	if (!seed) {
 		throw new Error(
 			"No Codex OAuth credentials found. Login with 'omp /login openai-codex' to enable Codex web search.",
 		);
@@ -505,42 +505,44 @@ export async function searchCodex(params: SearchParams): Promise<SearchResponse>
 	const configuredModel = getConfiguredModel();
 	const modelCandidates = configuredModel ? [configuredModel] : getDefaultModelCandidates();
 
-	let result:
-		| {
-				answer: string;
-				sources: SearchSource[];
-				model: string;
-				requestId: string;
-				usage?: { inputTokens: number; outputTokens: number; totalTokens: number };
-		  }
-		| undefined;
-	let lastError: unknown;
-
-	for (let index = 0; index < modelCandidates.length; index += 1) {
-		const modelId = modelCandidates[index];
-		if (!modelId) continue;
-
-		try {
-			result = await callCodexSearch(auth, params.query, {
-				signal: params.signal,
-				systemPrompt: params.systemPrompt,
-				searchContextSize: "high",
-				modelId,
-				fetch: params.fetch,
-			});
-			break;
-		} catch (error) {
-			lastError = error;
-			const isLastCandidate = index === modelCandidates.length - 1;
-			if (configuredModel || isLastCandidate || !shouldRetryWithNextDefaultModel(error)) {
-				throw error;
+	const result = await withOAuthAccess(
+		params.authStorage,
+		"openai-codex",
+		async access => {
+			// Derive ALL auth material from the access this attempt received —
+			// a refreshed/rotated credential carries a different bearer and
+			// ChatGPT account id than the seed.
+			const accountId = access.accountId ?? getAccountIdFromJwt(access.accessToken);
+			if (!accountId) {
+				throw new Error("Codex OAuth credential is missing a ChatGPT account id");
 			}
-		}
-	}
+			const auth = { accessToken: access.accessToken, accountId };
 
-	if (!result) {
-		throw lastError ?? new Error("Codex search failed without returning a result");
-	}
+			let lastError: unknown;
+			for (let index = 0; index < modelCandidates.length; index += 1) {
+				const modelId = modelCandidates[index];
+				if (!modelId) continue;
+
+				try {
+					return await callCodexSearch(auth, params.query, {
+						signal: params.signal,
+						systemPrompt: params.systemPrompt,
+						searchContextSize: "high",
+						modelId,
+						fetch: params.fetch,
+					});
+				} catch (error) {
+					lastError = error;
+					const isLastCandidate = index === modelCandidates.length - 1;
+					if (configuredModel || isLastCandidate || !shouldRetryWithNextDefaultModel(error)) {
+						throw error;
+					}
+				}
+			}
+			throw lastError ?? new Error("Codex search failed without returning a result");
+		},
+		{ sessionId: params.sessionId, signal: params.signal, seed: seed.access },
+	);
 
 	let sources = result.sources;
 
