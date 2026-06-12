@@ -259,6 +259,7 @@ import type {
 	SessionManager,
 } from "./session-manager";
 import { EPHEMERAL_MODEL_CHANGE_ROLE, getLatestCompactionEntry, getRestorableSessionModels } from "./session-manager";
+import { defaultCodexAutoRedeemCoordinator, evaluateCodexAutoRedeem } from "./codex-auto-reset";
 import type { ShakeMode, ShakeResult } from "./shake-types";
 import { ToolChoiceQueue } from "./tool-choice-queue";
 import { YieldQueue } from "./yield-queue";
@@ -5402,11 +5403,7 @@ export class AgentSession {
 	#cloneTodoPhases(phases: TodoPhase[]): TodoPhase[] {
 		return phases.map(phase => ({
 			name: phase.name,
-			tasks: phase.tasks.map(task => {
-				const out: TodoItem = { content: task.content, status: task.status };
-				if (task.notes && task.notes.length > 0) out.notes = [...task.notes];
-				return out;
-			}),
+			tasks: phase.tasks.map(task => ({ content: task.content, status: task.status })),
 		}));
 	}
 
@@ -8723,6 +8720,13 @@ export class AgentSession {
 			if (outcome.switched) {
 				switchedCredential = true;
 				delayMs = 0;
+			} else if (await this.#maybeAutoRedeemCodexReset()) {
+				// A live usage-limit 429 on the active Codex account, with a banked
+				// reset and the opt-in setting on: spend the reset and retry
+				// immediately instead of waiting out the window. Runs after the
+				// free sibling-switch above and before model fallback below.
+				switchedCredential = true;
+				delayMs = 0;
 			} else {
 				// No sibling credential is usable right now. Wait for whichever
 				// comes first: the provider's retry-after window for the current
@@ -10165,6 +10169,96 @@ export class AgentSession {
 			baseUrlResolver: provider => this.#modelRegistry.getProviderBaseUrl?.(provider),
 			signal,
 		});
+	}
+
+	/**
+	 * Auto-redeem hook for {@link AgentSession.#handleRetryableError}'s
+	 * usage-limit branch. Returns `true` only when a saved Codex reset was
+	 * actually spent (so the caller retries immediately). Opt-in, reactive, and
+	 * heavily gated — see `./codex-auto-reset` and the design in
+	 * `local://autoreset-spec.md`. Per-account in-flight dedup lets concurrent
+	 * sessions adopt one redeem instead of double-spending.
+	 */
+	async #maybeAutoRedeemCodexReset(coordinator = defaultCodexAutoRedeemCoordinator): Promise<boolean> {
+		const cfg = this.settings.getGroup("codexResets");
+		const model = this.model;
+		// Cheap exits before any IO.
+		if (!cfg.autoRedeem || !model || model.provider !== "openai-codex") return false;
+		const authStorage = this.#modelRegistry.authStorage;
+		// Capture identity BEFORE awaits: markUsageLimitReached leaves the
+		// usage-limit session credential sticky, so this names the blocked account.
+		const identity = authStorage.getOAuthAccountIdentity("openai-codex", this.sessionId);
+		const accountKey = (identity?.accountId ?? identity?.email)?.trim().toLowerCase();
+		if (!accountKey) return false;
+		const existing = coordinator.inFlightByAccount.get(accountKey);
+		if (existing) return existing;
+
+		const run = (async (): Promise<boolean> => {
+			const reports = await this.fetchUsageReports();
+			const decision = evaluateCodexAutoRedeem({
+				nowMs: Date.now(),
+				provider: model.provider,
+				modelId: model.id,
+				settings: {
+					autoRedeem: cfg.autoRedeem,
+					minBlockedMinutes: Math.max(0, cfg.minBlockedMinutes),
+					keepCredits: Math.max(0, Math.trunc(cfg.keepCredits)),
+				},
+				identity,
+				reports,
+				attemptedBlockKeys: coordinator.attemptedBlockKeys,
+				lastAttemptAtByAccount: coordinator.lastAttemptAtByAccount,
+			});
+			if (!decision.redeem) {
+				logger.debug("codex-auto-reset: skipped", { reason: decision.reason });
+				return false;
+			}
+			// Commit the attempt BEFORE acting so this block can never re-enter.
+			coordinator.attemptedBlockKeys.add(decision.blockKey);
+			coordinator.lastAttemptAtByAccount.set(decision.accountKey, Date.now());
+			const who = decision.target.email ?? decision.target.accountId ?? "the active account";
+			const outcome = await authStorage.redeemResetCredit({
+				target: decision.target,
+				baseUrlResolver: provider => this.#modelRegistry.getProviderBaseUrl?.(provider),
+				// Not tied to the retry abort controller: aborting a consume
+				// mid-flight leaves credit state unknown.
+				signal: AbortSignal.timeout(15_000),
+			});
+			switch (outcome.code) {
+				case "reset": {
+					const left = Math.max(0, decision.availableCount - 1);
+					this.emitNotice(
+						"info",
+						`Auto-redeemed a saved Codex rate-limit reset for ${who} (${left} left); retrying now.`,
+						"codex-auto-reset",
+					);
+					void this.fetchUsageReports();
+					return true;
+				}
+				case "already_redeemed":
+					this.emitNotice(
+						"warning",
+						"A saved Codex reset was already redeemed elsewhere; waiting for the window.",
+						"codex-auto-reset",
+					);
+					return false;
+				case "no_credit":
+					logger.debug("codex-auto-reset: no_credit (snapshot/live mismatch)", { account: accountKey });
+					return false;
+				case "nothing_to_reset":
+					this.emitNotice(
+						"warning",
+						"Codex reset reported nothing to reset; auto-redeem suppressed for this window.",
+						"codex-auto-reset",
+					);
+					return false;
+				default:
+					this.emitNotice("warning", `Codex auto-redeem failed (${outcome.code}).`, "codex-auto-reset");
+					return false;
+			}
+		})().finally(() => coordinator.inFlightByAccount.delete(accountKey));
+		coordinator.inFlightByAccount.set(accountKey, run);
+		return run;
 	}
 
 	/**

@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
 - Added `AuthStorage.listUsageHistory` to retrieve historical usage snapshots with optional `provider` and `sinceMs` filtering
@@ -17,6 +18,7 @@
 
 ### Fixed
 
+- Fixed temporary credential block state so redeemed reset credits immediately make the affected account selectable again after `redeemResetCredit` succeeds
 - Fixed one-shot request-debug path handling so an explicit request log target is consumed after the next request and no longer affects subsequent calls
 - Fixed explicit request-debug path mode to create missing parent directories before writing request logs
 - Fixed explicit request-debug mode to overwrite existing `.res.log` files for the requested path instead of failing when they already exist

@@ -3734,7 +3734,13 @@ export class AuthStorage {
 			fetch: this.#usageFetch,
 			signal: options.signal,
 		});
-		if (result.ok) this.#invalidateUsageReportCache(provider, baseUrl);
+		if (result.ok) {
+			this.#invalidateUsageReportCache(provider, baseUrl);
+			// The window this credential was blocked on (by markUsageLimitReached)
+			// is now reset, so lift its temporary block — otherwise selection
+			// keeps skipping/under-ranking the freshly-reset account.
+			if (match.credentialId !== undefined) this.#clearCredentialBlocks(provider, match.credentialId);
+		}
 		return { ok: result.ok, code: result.code, accountId: match.accountId, email: match.email, creditId };
 	}
 
@@ -3751,6 +3757,25 @@ export class AuthStorage {
 			);
 			const existing = this.#usageCache.getStale<UsageReport | null>(cacheKey);
 			this.#usageCache.set(cacheKey, { value: existing?.value ?? null, expiresAt: expired });
+		}
+	}
+
+	/**
+	 * Lift any temporary backoff blocks on one credential (across the bare
+	 * `provider:oauth` key and its scoped `\0`-suffixed derivatives). Called
+	 * after a saved reset is redeemed so the just-reset account is immediately
+	 * selectable again instead of being skipped/under-ranked by a stale block
+	 * that `markUsageLimitReached` set for the now-obsolete reset time.
+	 */
+	#clearCredentialBlocks(provider: string, credentialId: number): void {
+		const index = this.#getStoredCredentials(provider).findIndex(entry => entry.id === credentialId);
+		if (index < 0) return;
+		const providerKey = this.#getProviderTypeKey(provider, "oauth");
+		const scopedPrefix = `${providerKey}\0`;
+		for (const [key, backoffMap] of this.#credentialBackoff) {
+			if (key !== providerKey && !key.startsWith(scopedPrefix)) continue;
+			backoffMap.delete(index);
+			if (backoffMap.size === 0) this.#credentialBackoff.delete(key);
 		}
 	}
 

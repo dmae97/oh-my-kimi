@@ -1,8 +1,11 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
+- Added `codexResets.autoRedeem`, `codexResets.minBlockedMinutes`, and `codexResets.keepCredits` settings so Codex users can opt in to automatic spending of saved rate-limit resets
+- Added automatic Codex reset redemption flow so a blocked weekly usage-limit request can be retried immediately after consuming a saved reset when auto-redeem is enabled
 - Added `--history` mode to `omp usage` to show recorded usage-limit history instead of a single live snapshot
 - Added `--days` (`-d`) support for `omp usage --history` to control the history window (default 7 days)
 - Added historical usage output for `omp usage --history`, including per-limit sparklines with latest and peak percentages
@@ -25,16 +28,15 @@
 - Changed the task tool's TUI block: the header now shows the task dispatch glyph (`tool.task`) while agents are in flight instead of a spinner (async spawns return immediately, so a spinner misread the call as blocking), and per-agent rows use one static dot for every state — completed rows keep the same dot and settle from accent to the plain foreground color instead of switching to a different status glyph
 - Compressed the `eval`, `browser`, `read`, and `irc` tool prompts (6156 → 4932 tokens o200k, −20%): deduplicated claims across sections, tightened helper reference descriptions, trimmed redundant examples; input grammar, examples, and template conditionals (`py`/`js`/`spawns`, read display modes) unchanged
 
+### Removed
+
+- Removed the todo task notes feature: `op: "note"`, the `text` payload, task `notes` state, markdown note blocks, and note rendering are no longer supported.
+
 ### Fixed
 
 - Fixed settings search to rank matching tabs by relevance so exact matches appear before incidental matches
 - Fixed the `/settings` search bar ignoring regular editor hotkeys: the query is now a real single-line input with cursor movement (`←/→`, word jumps, Home/End), word deletion (`Alt+Backspace`, `Ctrl+W`), kill/yank, undo, and paste support
 - Fixed snapcompact `toolResults` imaging confusing models into reporting tool malfunctions: the note prepended to rasterized tool results now tells the model the result is in the PNG frame(s) below and that the image delivery is deliberate, not a tool error, instead of the bare `[Rasterized]` marker
-
-
-### Removed
-
-- Removed the todo task notes feature: `op: "note"`, the `text` payload, task `notes` state, markdown note blocks, and note rendering are no longer supported.
 
 ## [15.11.4] - 2026-06-12
 
