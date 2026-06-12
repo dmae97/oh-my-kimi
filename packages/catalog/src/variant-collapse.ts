@@ -329,9 +329,7 @@ function reconcileRetiredRouting<TSpec extends VariantSpecLike>(
 
 	const offTarget = family.routing.off;
 	const fallbackWireId =
-		offTarget !== undefined && !retired.has(offTarget)
-			? offTarget
-			: family.members.find(id => !retired.has(id));
+		offTarget !== undefined && !retired.has(offTarget) ? offTarget : family.members.find(id => !retired.has(id));
 	const next: TSpec = { ...spec };
 	if (routingRetired && routing !== undefined) {
 		const nextRouting: Partial<Record<Effort | "off", string>> = {};
