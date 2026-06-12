@@ -203,7 +203,9 @@ pub fn is_markdown_badge_or_image(line: &str) -> bool {
 }
 
 pub fn is_horizontal_rule(line: &str) -> bool {
-	line.len() >= 3 && line.chars().all(|ch| matches!(ch, '-' | '*' | '_' | ' '))
+	line.len() >= 3
+		&& line.chars().all(|ch| matches!(ch, '-' | '*' | '_' | ' '))
+		&& line.chars().any(|ch| matches!(ch, '-' | '*' | '_'))
 }
 
 /// Compact a long plain listing to head/tail form.
@@ -457,5 +459,14 @@ mod tests {
 		// Substring of a standalone word must not match.
 		assert!(!command_has_any_token("eslint --format foobar src", &["bar"]),
 			"substring of a token must not match");
+	}
+
+	#[test]
+	fn test_horizontal_rule_requires_non_space() {
+		assert!(is_horizontal_rule("---"));
+		assert!(is_horizontal_rule("- - -"));
+		assert!(is_horizontal_rule("***"));
+		assert!(!is_horizontal_rule("   "), "whitespace-only must not be a rule");
+		assert!(!is_horizontal_rule("  "), "short whitespace must not be a rule");
 	}
 }
