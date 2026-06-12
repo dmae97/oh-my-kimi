@@ -3140,6 +3140,12 @@ export class AgentSession {
 		state.resetConversationTracking();
 	}
 
+	/** True once dispose() has begun; deferred background work (e.g. the deferred
+	 *  MCP discovery task in sdk.ts) must not touch the session past this point. */
+	get isDisposed(): boolean {
+		return this.#isDisposed;
+	}
+
 	/**
 	 * Synchronously mark the session as disposing so new work is rejected
 	 * immediately: Python/eval starts throw, queued asides are dropped, and the
@@ -3471,6 +3477,17 @@ export class AgentSession {
 
 	isMCPDiscoveryEnabled(): boolean {
 		return this.#mcpDiscoveryEnabled;
+	}
+
+	/**
+	 * Flip MCP discovery on after deferred discovery learns the real tool count.
+	 * UI sessions resolve `tools.discoveryMode: "auto"` before MCP servers
+	 * connect, so a large MCP toolset discovered later must be able to upgrade
+	 * the session from the force-activate path to the discovery path. One-way:
+	 * discovery is never downgraded mid-session.
+	 */
+	enableMCPDiscovery(): void {
+		this.#mcpDiscoveryEnabled = true;
 	}
 
 	getSelectedMCPToolNames(): string[] {

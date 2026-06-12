@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { getSegmenter } from "@oh-my-pi/pi-tui";
+import { LRUCache } from "lru-cache/raw";
 import type { AssistantMessageComponent } from "../components/assistant-message";
 
 export const STREAMING_REVEAL_FRAME_MS = 1000 / 30;
@@ -15,11 +16,17 @@ type StreamingRevealControllerOptions = {
 	requestRender(): void;
 };
 
+const graphemeCountCache = new LRUCache<string, number>({ max: 128 });
+
 function countGraphemes(text: string): number {
+	if (text.length === 0) return 0;
+	const cached = graphemeCountCache.get(text);
+	if (cached !== undefined) return cached;
 	let count = 0;
 	for (const _segment of getSegmenter().segment(text)) {
 		count += 1;
 	}
+	graphemeCountCache.set(text, count);
 	return count;
 }
 
