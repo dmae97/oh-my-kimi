@@ -429,4 +429,33 @@ mod tests {
 		// Neither: identity modulo trailing-newline normalization.
 		assert_eq!(filter_lines_regex(input, None, None), input);
 	}
+
+	#[test]
+	fn test_command_has_ordered_tokens_basic() {
+		assert!(command_has_ordered_tokens("glab mr diff 42", "mr", "diff"));
+		assert!(!command_has_ordered_tokens("glab diff mr 42", "mr", "diff"), "wrong order must be false");
+		assert!(!command_has_ordered_tokens("glab mr", "mr", "diff"), "missing second token must be false");
+	}
+
+	#[test]
+	fn test_command_has_ordered_tokens_first_equals_second() {
+		// edge case: first == second — both must appear in order
+		assert!(command_has_ordered_tokens("git push push", "push", "push"));
+		assert!(!command_has_ordered_tokens("git push", "push", "push"), "only one occurrence — must be false");
+	}
+
+	#[test]
+	fn test_command_has_any_token_equals_form() {
+		// Exact token match and non-match.
+		assert!(command_has_any_token("eslint --format json src", &["json"]));
+		assert!(!command_has_any_token("eslint --format json src", &["xml"]));
+		// Equals-form: --flag=value matches when the search token is the flag prefix.
+		assert!(command_has_any_token("eslint --format=json src", &["--format"]));
+		// Value-only search does NOT match an equals-form part (token is prefix, not suffix).
+		assert!(!command_has_any_token("eslint --format=json src", &["json"]),
+			"value after = must not match when token is not the flag prefix");
+		// Substring of a standalone word must not match.
+		assert!(!command_has_any_token("eslint --format foobar src", &["bar"]),
+			"substring of a token must not match");
+	}
 }
