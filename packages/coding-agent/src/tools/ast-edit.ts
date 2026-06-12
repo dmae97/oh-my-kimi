@@ -512,6 +512,14 @@ function buildChangeBody(groups: string[][], expanded: boolean, budget: number, 
 	return lines;
 }
 
+/** One-line header preview of an AST pattern. `renderStatusLine` only flattens
+ * CR/LF, so a multi-line tab-indented pattern would otherwise punch raw tabs
+ * into the status line; collapse all whitespace runs to single spaces. */
+function patternPreview(pat: string | undefined): string | undefined {
+	const collapsed = pat?.replace(/\s+/g, " ").trim();
+	return collapsed || undefined;
+}
+
 export const astEditToolRenderer = {
 	inline: true,
 	renderCall(args: AstEditRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
@@ -520,7 +528,8 @@ export const astEditToolRenderer = {
 		const rewriteCount = args.ops?.length ?? 0;
 		if (rewriteCount > 1) meta.push(`${rewriteCount} rewrites`);
 
-		const description = rewriteCount === 1 ? args.ops?.[0]?.pat : rewriteCount ? `${rewriteCount} rewrites` : "?";
+		const description =
+			rewriteCount === 1 ? patternPreview(args.ops?.[0]?.pat) : rewriteCount ? `${rewriteCount} rewrites` : "?";
 		const header = renderStatusLine({ icon: "pending", title: "AST Edit", description, meta }, uiTheme);
 		// Pending call has no body yet — a lone status line is sleeker than an empty frame.
 		return new Text(header, 0, 0);
@@ -553,7 +562,7 @@ export const astEditToolRenderer = {
 
 		if (totalReplacements === 0) {
 			const rewriteCount = args?.ops?.length ?? 0;
-			const description = rewriteCount === 1 ? args?.ops?.[0]?.pat : undefined;
+			const description = rewriteCount === 1 ? patternPreview(args?.ops?.[0]?.pat) : undefined;
 			const meta = ["0 replacements"];
 			if (details?.scopePath) meta.push(`in ${details.scopePath}`);
 			if (filesSearched > 0) meta.push(`searched ${filesSearched}`);
@@ -578,7 +587,7 @@ export const astEditToolRenderer = {
 		meta.push(`searched ${filesSearched}`);
 		if (limitReached) meta.push(uiTheme.fg("warning", "limit reached"));
 		const rewriteCount = args?.ops?.length ?? 0;
-		const description = rewriteCount === 1 ? args?.ops?.[0]?.pat : undefined;
+		const description = rewriteCount === 1 ? patternPreview(args?.ops?.[0]?.pat) : undefined;
 
 		const textContent = result.details?.displayContent ?? result.content?.find(c => c.type === "text")?.text ?? "";
 		const allLines = textContent.split("\n");

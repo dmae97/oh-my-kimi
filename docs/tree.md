@@ -27,7 +27,7 @@ Any of the following opens the same selector:
 
 - `/tree`
 - configured keybinding for the `app.session.tree` action
-- double-escape on empty editor when `doubleEscapeAction = "tree"`
+- double-escape on empty editor when `doubleEscapeAction = "tree"` (default)
 - `/branch` when `doubleEscapeAction = "tree"` (routes to tree selector instead of user-only branch picker)
 
 ## Tree UI model
