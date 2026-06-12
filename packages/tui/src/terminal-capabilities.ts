@@ -249,6 +249,66 @@ export function detectRectangularSgrSupport(terminalId: TerminalId, env: NodeJS.
 	}
 	return true;
 }
+/**
+ * Resolve an explicit user override for OSC 8 hyperlinks. Returns `false` for
+ * an opt-out, `true` for a force-on, or `null` when the user has expressed no
+ * preference. Opt-out beats force-on so a kill switch is unambiguous, mirroring
+ * {@link synchronizedOutputUserOverride}.
+ */
+export function hyperlinksUserOverride(env: NodeJS.ProcessEnv = Bun.env): boolean | null {
+	if (env.PI_NO_HYPERLINKS === "1") return false;
+	if (env.PI_FORCE_HYPERLINKS === "1") return true;
+	return null;
+}
+
+/**
+ * Parse tmux's self-reported version from `TERM_PROGRAM_VERSION`. tmux sets
+ * `TERM_PROGRAM=tmux` and `TERM_PROGRAM_VERSION=<version>` automatically since
+ * 3.2a; older releases (or any path that does not surface the version) yield
+ * `null` and the caller treats tmux conservatively.
+ */
+function parseTmuxVersionFromEnv(env: NodeJS.ProcessEnv): { major: number; minor: number } | null {
+	if (env.TERM_PROGRAM?.toLowerCase() !== "tmux") return null;
+	return parseMajorMinorVersion(env.TERM_PROGRAM_VERSION);
+}
+
+/**
+ * Whether OSC 8 hyperlinks should be enabled by default.
+ *
+ * Policy (highest precedence first):
+ *   1. Explicit user override (`PI_NO_HYPERLINKS=1` off, `PI_FORCE_HYPERLINKS=1`
+ *      on). Opt-out wins ties.
+ *   2. Static terminal capability — terminals whose {@link TerminalInfo} marks
+ *      `hyperlinks: false` (e.g. `base`) stay off unless the user forced on.
+ *   3. GNU screen always off: screen never gained OSC 8 support.
+ *   4. tmux: enabled when tmux self-reports >= 3.4 via `TERM_PROGRAM_VERSION`
+ *      (tmux 3.4 stores OSC 8 as a cell attribute and forwards it to outer
+ *      terminals whose `terminal-features` include `hyperlinks`). Older or
+ *      unknown versions stay off; on outer terminals without the feature
+ *      configured, tmux silently drops the sequence — identical to today.
+ *   5. Otherwise honor the static terminal capability.
+ */
+export function shouldEnableHyperlinksByDefault(
+	env: NodeJS.ProcessEnv = Bun.env,
+	terminalId: TerminalId = TERMINAL_ID,
+): boolean {
+	const override = hyperlinksUserOverride(env);
+	if (override !== null) return override;
+
+	if (!getTerminalInfo(terminalId).hyperlinks) return false;
+
+	const term = env.TERM?.toLowerCase() ?? "";
+	if (env.STY || term.startsWith("screen")) return false;
+
+	if (env.TMUX || term.startsWith("tmux")) {
+		const version = parseTmuxVersionFromEnv(env);
+		if (!version) return false;
+		return version.major > 3 || (version.major === 3 && version.minor >= 4);
+	}
+
+	return true;
+}
+
 function getFallbackImageProtocol(terminalId: TerminalId): ImageProtocol | null {
 	if (!process.stdout.isTTY) return null;
 	if (terminalId === "vscode" || terminalId === "alacritty") return null;
@@ -336,12 +396,12 @@ export const TERMINAL: RuntimeTerminal = (() => {
 		const fallbackImageProtocol = getFallbackImageProtocol(resolved.id);
 		if (fallbackImageProtocol) resolved.imageProtocol = fallbackImageProtocol;
 	}
-	// tmux and screen multiplexers do not reliably forward OSC 8 hyperlinks
-	// to the outer terminal, so force them off regardless of detected terminal.
-	const term = Bun.env.TERM?.toLowerCase() ?? "";
-	if (resolved.hyperlinks && (Bun.env.TMUX || term.startsWith("tmux") || term.startsWith("screen"))) {
-		resolved.hyperlinks = false;
-	}
+	// Hyperlink (OSC 8) capability. The static per-terminal flag lives on
+	// KNOWN_TERMINALS; shouldEnableHyperlinksByDefault folds in runtime context —
+	// PI_FORCE_HYPERLINKS / PI_NO_HYPERLINKS overrides plus a tmux>=3.4 gate so
+	// modern tmux forwards OSC 8 to outer terminals that opt in via
+	// `terminal-features "*:hyperlinks"`.
+	resolved.hyperlinks = shouldEnableHyperlinksByDefault(Bun.env, resolved.id);
 	// DECCARA rectangular-SGR background fills. The static per-terminal capability
 	// lives on KNOWN_TERMINALS; here we fold in runtime context — multiplexer and
 	// the PI_NO_DECCARA kill switch via detectRectangularSgrSupport — and force it
