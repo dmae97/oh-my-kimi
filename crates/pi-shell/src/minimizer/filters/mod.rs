@@ -466,10 +466,6 @@ fn wrapper_command_word(command: &str) -> Option<&str> {
 	Some(word)
 }
 
-fn wrapper_invokes(ctx: &MinimizerCtx<'_>, tools: &[&str]) -> bool {
-	wrapper_invoked_tool(ctx, tools).is_some()
-}
-
 fn wrapper_invoked_tool<'a>(ctx: &'a MinimizerCtx<'_>, tools: &[&'a str]) -> Option<&'a str> {
 	// Prefer wrapper_command_word over ctx.subcommand: it properly skips
 	// value-taking option values (e.g. -w, --workspace, --with) that
