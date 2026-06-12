@@ -6978,10 +6978,11 @@ export class AgentSession {
 	#isEmptyAssistantStop(assistantMessage: AssistantMessage): boolean {
 		switch (assistantMessage.stopReason) {
 			case "stop":
+				// Reasoning/thinking-only turns are not actionable: they do not
+				// answer the user and do not give the agent loop a tool call to run.
 				for (const content of assistantMessage.content) {
 					if (content.type === "toolCall") return false;
 					if (content.type === "text" && hasNonWhitespace(content.text)) return false;
-					if (content.type === "thinking" && hasNonWhitespace(content.thinking)) return false;
 				}
 				return true;
 			case "toolUse":

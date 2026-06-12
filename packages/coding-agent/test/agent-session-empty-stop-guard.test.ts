@@ -59,6 +59,14 @@ function orphanedToolUseStop(): MockResponse {
 	};
 }
 
+function thinkingOnlyStop(): MockResponse {
+	return {
+		content: [{ type: "thinking", thinking: "I should inspect the next file." }],
+		stopReason: "stop",
+		usage: { output: 1, cacheRead: 100 },
+	};
+}
+
 async function createHarness(
 	responses: MockResponse[],
 	settingsOverrides: SettingsOverrides = {},
@@ -119,14 +127,13 @@ function emptyAssistantStops(messages: AgentMessage[]): AgentMessage[] {
 			message.stopReason === "stop" &&
 			!message.content.some(content => {
 				if (content.type === "text") return content.text.trim().length > 0;
-				if (content.type === "thinking") return content.thinking.trim().length > 0;
 				return content.type === "toolCall";
 			}),
 	);
 }
-
 function reminderMessages(messages: AgentMessage[]): AgentMessage[] {
-	const isEmptyStopRetryReminder = (text: string): boolean => text.includes("<system-reminder>");
+	const isEmptyStopRetryReminder = (text: string): boolean =>
+		text.includes("<system-reminder>") || text.includes("<system-injection>");
 
 	return messages.filter(message => {
 		if (message.role !== "developer") return false;
@@ -198,6 +205,22 @@ describe("AgentSession empty stop guard", () => {
 		expect(mock.calls).toHaveLength(3);
 		expect(assistantText(session.agent.state.messages)).toContain("finished after orphaned tool-use retry");
 		expect(reminderMessages(session.agent.state.messages)).toHaveLength(1);
+	});
+
+	it("retries a stop that only contains thinking", async () => {
+		const { session, mock } = await createHarness([
+			recordCall("thinking", "call-record-thinking"),
+			thinkingOnlyStop(),
+			{ content: ["finished after thinking-only retry"], stopReason: "stop" },
+		]);
+
+		await session.prompt("record thinking");
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(3);
+		expect(assistantText(session.agent.state.messages)).toContain("finished after thinking-only retry");
+		expect(reminderMessages(session.agent.state.messages)).toHaveLength(1);
+		expect(emptyAssistantStops(session.agent.state.messages)).toHaveLength(0);
 	});
 
 	it("removes orphaned tool-use stops even when retry cap is hit", async () => {
