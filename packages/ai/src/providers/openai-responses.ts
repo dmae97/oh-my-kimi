@@ -285,7 +285,12 @@ function buildOpenAIResponsesChainedParams(
 function isOpenAIResponsesStalePreviousResponseError(error: unknown): boolean {
 	if (!(error instanceof Error)) return false;
 	if ((error as { code?: string }).code === "previous_response_not_found") return true;
-	return /previous[ _]?response/i.test(error.message) && /not[ _]?found|invalid|expired|stale/i.test(error.message);
+	// "unsupported" covers endpoints that reject the parameter outright
+	// (e.g. "Unsupported parameter: previous_response_id").
+	return (
+		/previous[ _]?response/i.test(error.message) &&
+		/not[ _]?found|invalid|expired|stale|unsupported/i.test(error.message)
+	);
 }
 
 /**

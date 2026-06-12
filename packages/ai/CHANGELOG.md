@@ -1,6 +1,21 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Removed the Codex SSE stateful transport path, so SSE turns no longer send `previous_response_id` with delta input and now always send the full transcript
+
+### Changed
+
+- Scoped `x-codex-turn-state` handling to within-turn continuations so only tool-loop follow-ups include the turn-state header and new user turns start without it
+
+### Removed
+
+- Removed the `statefulResponses` option from `OpenAICodexResponsesOptions`, and SSE stateful mode is no longer controlled by the `PI_CODEX_STATEFUL`-style flag
+
+### Fixed
+
+- Fixed OpenAI Codex stateful SSE turns surfacing an intermittent 400 (`{"detail":"Unsupported parameter: previous_response_id"}`) instead of recovering: the backend's FastAPI-style `detail` rejection carries no `error.code` and the stale-chain classifier's phrasing regex (`not found|invalid|expired|stale`) missed "Unsupported parameter", so the delta turn died instead of replaying with the full transcript. Both the Codex and platform Responses classifiers now also match "unsupported", routing the rejection through the existing reset-retry-and-circuit-break path. The HTTP-400 raw-request dump for Codex SSE now records the body actually sent on the wire (the chained delta with `previous_response_id`) instead of the pre-chaining full body, which made these failures look like the parameter was never sent.
 
 ## [15.11.7] - 2026-06-12
 
