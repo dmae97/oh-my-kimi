@@ -529,10 +529,7 @@ mod tests {
 		let input = r#"[{"filePath":"a.ts","messages":[],"errorCount":0}]"#;
 		let context = ctx("npx", Some("eslint"), "npx eslint -f json src/", &config);
 		let out = filter(&context, input, 0);
-		assert!(
-			out.text.contains("filePath"),
-			"eslint -f json via npx must not be condensed"
-		);
+		assert!(out.text.contains("filePath"), "eslint -f json via npx must not be condensed");
 	}
 
 	#[test]

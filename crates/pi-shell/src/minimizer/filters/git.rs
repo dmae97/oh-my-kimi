@@ -2795,12 +2795,10 @@ error: could not apply abc1234... fix: something\nhint: Resolve all conflicts ma
 		// `git worktree list --porcelain` emits machine-readable records;
 		// the minimizer must not insert "… N lines omitted …" markers.
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
-		let ctx = test_ctx(
-			Some("worktree"),
-			"git worktree list --porcelain",
-			&cfg,
-		);
-		let input = "worktree /home/user/project\nHEAD abc1234def\nbranch refs/heads/main\n\nworktree /home/user/other\nHEAD 567890ab\nbranch refs/heads/feat\n";
+		let ctx = test_ctx(Some("worktree"), "git worktree list --porcelain", &cfg);
+		let input = "worktree /home/user/project\nHEAD abc1234def\nbranch \
+		             refs/heads/main\n\nworktree /home/user/other\nHEAD 567890ab\nbranch \
+		             refs/heads/feat\n";
 		let out = filter(&ctx, input, 0);
 		assert!(!out.changed, "porcelain worktree listing must pass through unchanged");
 		assert_eq!(out.text, input, "porcelain worktree listing must pass through");

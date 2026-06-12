@@ -213,7 +213,8 @@ fn filter_release_list(input: &str) -> Option<String> {
 	if omitted > 0 {
 		filtered.push_str(&format!("… {} releases omitted …\n", omitted));
 	} else if has_more {
-		// Total not parsed from preamble but a 21st row was observed; signal truncation.
+		// Total not parsed from preamble but a 21st row was observed; signal
+		// truncation.
 		filtered.push_str("… releases omitted (showing first 20) …\n");
 	}
 

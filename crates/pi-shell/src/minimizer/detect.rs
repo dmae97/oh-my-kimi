@@ -385,7 +385,15 @@ fn detect_subcommand(program: &str, args: &[String]) -> Option<String> {
 			],
 			&["--yes", "--no", "--no-install", "--quiet", "--silent", "--verbose"],
 			&[],
-		),
+		)
+		// Strip npm version qualifier from package specs (jest@latest → jest,
+		// @scope/pkg@1.0 → @scope/pkg). The idx > 0 guard preserves the leading
+		// `@` on scoped packages. This keeps version-pinned invocations routed to
+		// the same filter as their unpinned equivalents.
+		.map(|s| match s.rfind('@') {
+			Some(idx) if idx > 0 => s[..idx].to_string(),
+			_ => s,
+		}),
 		"pnpm" => first_non_global_arg(
 			args,
 			&["--dir", "-C", "--filter", "-F", "--workspace", "--config", "--store-dir"],
@@ -794,6 +802,28 @@ fn npx_workspace_value_is_skipped_in_subcommand_detection() {
 	let command = detect("npx -w my-workspace vitest").expect("npx with workspace is detected");
 	assert_eq!(command.program, "npx");
 	assert_eq!(command.subcommand.as_deref(), Some("vitest"));
+
+	// version-qualified package specs are stripped to the bare tool name so
+	// `npx jest@latest` routes identically to `npx jest`
+	let command = detect("npx jest@latest --runInBand").expect("version-qualified npx detected");
+	assert_eq!(command.program, "npx");
+	assert_eq!(command.subcommand.as_deref(), Some("jest"), "jest@latest must normalise to jest");
+
+	// scoped package leading @ is preserved; only the trailing @version is stripped
+	let command = detect("npx @scope/pkg@1.0.0 --flag").expect("scoped npx detected");
+	assert_eq!(
+		command.subcommand.as_deref(),
+		Some("@scope/pkg"),
+		"@scope/pkg@1.0.0 must normalise to @scope/pkg"
+	);
+
+	// unversioned scoped package is unchanged
+	let command = detect("npx @scope/tool").expect("unversioned scoped npx detected");
+	assert_eq!(
+		command.subcommand.as_deref(),
+		Some("@scope/tool"),
+		"unversioned scoped package must be unchanged"
+	);
 }
 
 #[test]
