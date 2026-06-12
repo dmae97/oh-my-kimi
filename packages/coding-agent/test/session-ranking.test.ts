@@ -49,18 +49,26 @@ describe("rankSessionSearchMatches", () => {
 
 	it("keeps literal substring matches ahead of pure fuzzy matches", () => {
 		const fuzzyRecent = makeSession("fuzzy-recent", {
-			title: "Render Shape Index Zone Endpoint",
+			title: "Render Buffer",
 			modified: new Date("2024-01-03T00:00:00Z"),
 		});
 		const literalOld = makeSession("literal-old", {
-			title: "Resize Buffer Issue",
+			title: "RB Notes",
 			modified: new Date("2024-01-01T00:00:00Z"),
 		});
 
-		expect(ids(rankSessionSearchMatches([fuzzyRecent, literalOld], "resize"))).toEqual([
-			"literal-old",
-			"fuzzy-recent",
-		]);
+		expect(ids(rankSessionSearchMatches([fuzzyRecent, literalOld], "rb"))).toEqual(["literal-old", "fuzzy-recent"]);
+	});
+
+	it("filters low-quality pure fuzzy matches while keeping exact matches", () => {
+		const exact = makeSession("exact", {
+			title: "MN Discussion",
+		});
+		const lowQuality = makeSession("low-quality", {
+			title: "Random Notes",
+		});
+
+		expect(ids(rankSessionSearchMatches([exact, lowQuality], "mn"))).toEqual(["exact"]);
 	});
 
 	it("returns all sessions unchanged for an empty query", () => {

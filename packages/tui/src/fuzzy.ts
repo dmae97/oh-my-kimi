@@ -33,6 +33,8 @@ interface SearchWord {
 interface SearchIndex {
 	normalized: string;
 	compact: string;
+	/** Start offsets of each word within `compact` (cumulative word lengths). */
+	compactWordStarts: Set<number>;
 	words: SearchWord[];
 }
 
@@ -53,19 +55,23 @@ function normalizeForSearch(value: string): string {
 function buildSearchIndex(text: string): SearchIndex {
 	const normalized = normalizeForSearch(text);
 	if (normalized.length === 0) {
-		return { normalized, compact: "", words: [] };
+		return { normalized, compact: "", compactWordStarts: new Set(), words: [] };
 	}
 
 	const words: SearchWord[] = [];
+	const compactWordStarts = new Set<number>();
 	let index = 0;
+	let compactIndex = 0;
 	let ordinal = 0;
 	for (const word of normalized.split(" ")) {
 		words.push({ text: word, index, ordinal });
+		compactWordStarts.add(compactIndex);
 		index += word.length + 1;
+		compactIndex += word.length;
 		ordinal++;
 	}
 
-	return { normalized, compact: normalized.replaceAll(" ", ""), words };
+	return { normalized, compact: normalized.replaceAll(" ", ""), compactWordStarts, words };
 }
 
 function scoreCharacters(queryLower: string, textLower: string): CharacterMatch {
@@ -129,6 +135,13 @@ function withPosition(score: number, index: number): number {
 	return score + index * 0.01;
 }
 
+function isWordBoundaryPhrase(normalized: string, index: number, length: number): boolean {
+	const before = index === 0 || normalized[index - 1] === " ";
+	const afterIndex = index + length;
+	const after = afterIndex === normalized.length || normalized[afterIndex] === " ";
+	return before && after;
+}
+
 function scoreTokenAgainstWord(token: string, word: SearchWord): FuzzyMatch | null {
 	if (word.text === token) {
 		return { matches: true, score: withPosition(-200, word.index) };
@@ -144,7 +157,7 @@ function scoreTokenAgainstWord(token: string, word: SearchWord): FuzzyMatch | nu
 
 	const substringIndex = word.text.indexOf(token);
 	if (substringIndex >= 0) {
-		return { matches: true, score: withPosition(-120 + substringIndex, word.index) };
+		return { matches: true, score: withPosition(-20 + substringIndex, word.index) };
 	}
 
 	const characterMatch = scoreCharacters(token, word.text);
@@ -188,7 +201,7 @@ function scoreTokenDirect(token: string, index: SearchIndex): FuzzyMatch {
 
 	let best: FuzzyMatch | null = null;
 	const compactIndex = index.compact.indexOf(token);
-	if (compactIndex >= 0) {
+	if (compactIndex >= 0 && index.compactWordStarts.has(compactIndex)) {
 		best = { matches: true, score: withPosition(-140, compactIndex) };
 	}
 
@@ -236,14 +249,14 @@ export function fuzzyMatch(query: string, text: string): FuzzyMatch {
 
 	let totalScore = 0;
 	const phraseIndex = index.normalized.indexOf(normalizedQuery);
-	if (phraseIndex >= 0) {
+	if (phraseIndex >= 0 && isWordBoundaryPhrase(index.normalized, phraseIndex, normalizedQuery.length)) {
 		totalScore -= PHRASE_BONUS;
 		totalScore += phraseIndex * 0.01;
 	}
 
 	const compactQuery = normalizedQuery.replaceAll(" ", "");
 	const compactPhraseIndex = index.compact.indexOf(compactQuery);
-	if (compactPhraseIndex >= 0) {
+	if (compactPhraseIndex >= 0 && index.compactWordStarts.has(compactPhraseIndex)) {
 		totalScore -= COMPACT_PHRASE_BONUS;
 		totalScore += compactPhraseIndex * 0.01;
 	}

@@ -27,6 +27,7 @@ interface FakeAcpBuiltinSession {
 	formatSessionAsText: () => string;
 	getLastAssistantText: () => string | undefined;
 	messages: unknown[];
+	settings: Settings;
 	model: { provider: string; id: string } | undefined;
 	newSession(opts?: { drop?: boolean; parentSession?: string }): Promise<boolean>;
 	fork(): Promise<boolean>;
@@ -46,6 +47,7 @@ interface FakeAcpBuiltinSession {
 }
 
 function createRuntime() {
+	const settings = Settings.isolated();
 	const output: string[] = [];
 	const session: FakeAcpBuiltinSession = {
 		fastMode: false,
@@ -98,6 +100,7 @@ function createRuntime() {
 		getLastAssistantText: () => undefined,
 		messages: [],
 		model: undefined,
+		settings,
 		getToolByName: (_name: string) => undefined,
 		async compact(_args?: string) {},
 		getContextUsage: () => undefined,
@@ -152,7 +155,7 @@ function createRuntime() {
 		runtime: {
 			session: typedSession,
 			sessionManager: fakeSessionManager as unknown as SessionManager,
-			settings: Settings.isolated(),
+			settings,
 			cwd: "/tmp/project",
 			output: (text: string) => {
 				output.push(text);
@@ -886,9 +889,6 @@ describe("wave 5 — adapters and polish", () => {
 		(session as unknown as Record<string, unknown>).skills = [];
 		(session as unknown as Record<string, unknown>).agent = { state: { tools: [] } };
 		(session as unknown as Record<string, unknown>).systemPrompt = ["You are a helpful assistant."];
-		(session as unknown as Record<string, unknown>).settings = {
-			getGroup: () => ({ enabled: false, strategy: "off" }),
-		};
 		session.messages = [
 			{ role: "user", content: "Hello, how are you?" },
 			{ role: "assistant", content: "I am doing well." },
