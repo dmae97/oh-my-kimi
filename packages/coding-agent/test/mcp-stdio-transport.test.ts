@@ -38,6 +38,42 @@ describe("resolveStdioSpawnCommand", () => {
 		}
 	});
 
+	it("launches npm .cmd shims through node so CodeGraph owns the stdio pipes", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-mcp-codegraph-"));
+		try {
+			const shim = path.join(tempDir, "codegraph.cmd");
+			const entry = path.join(tempDir, "node_modules", "@colbymchenry", "codegraph", "npm-shim.js");
+			await Bun.write(
+				shim,
+				[
+					"@ECHO off",
+					"SETLOCAL",
+					"CALL :find_dp0",
+					'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%" "%dp0%\\node_modules\\@colbymchenry\\codegraph\\npm-shim.js" %*',
+					"",
+				].join("\r\n"),
+			);
+
+			const result = await resolveStdioSpawnCommand(
+				{ type: "stdio", command: "codegraph.cmd", args: ["serve", "--mcp"] },
+				{
+					cwd: tempDir,
+					env: {
+						COMSPEC: "C:\\Windows\\System32\\cmd.exe",
+						PATH: tempDir,
+						PATHEXT: ".cmd",
+					},
+					platform: "win32",
+				},
+			);
+
+			expect(result.cmd).toEqual(["node", entry, "serve", "--mcp"]);
+			expect(result.windowsHide).toBe(true);
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
 	it("escapes percent-delimited args before routing .cmd shims through cmd.exe", async () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-mcp-percent-"));
 		try {

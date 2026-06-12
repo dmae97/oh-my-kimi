@@ -85,27 +85,70 @@ async function resolveWindowsCommandPath(
 	env: Record<string, string | undefined>,
 ): Promise<string | null> {
 	const extensions = getWindowsPathExt(env);
-	if (hasExecutableExtension(command, extensions)) return command;
+	const candidates = hasExecutableExtension(command, extensions)
+		? [command]
+		: extensions.map(ext => `${command}${ext}`);
 
-	const candidates = extensions.map(ext => `${command}${ext}`);
 	if (hasPathSegment(command)) {
 		for (const candidate of candidates) {
 			const resolved = path.isAbsolute(candidate) ? candidate : path.resolve(cwd, candidate);
 			if (await fileExists(resolved)) return resolved;
 		}
-		return null;
+		return hasExecutableExtension(command, extensions) ? command : null;
 	}
 
 	const pathValue = getCaseInsensitiveEnv(env, "PATH");
-	if (!pathValue) return null;
-	for (const dir of pathValue.split(";")) {
-		if (!dir) continue;
-		for (const candidate of candidates) {
-			const resolved = path.join(dir, candidate);
-			if (await fileExists(resolved)) return resolved;
+	if (pathValue) {
+		for (const dir of pathValue.split(";")) {
+			if (!dir) continue;
+			for (const candidate of candidates) {
+				const resolved = path.join(dir, candidate);
+				if (await fileExists(resolved)) return resolved;
+			}
 		}
 	}
-	return null;
+	return hasExecutableExtension(command, extensions) ? command : null;
+}
+
+function resolveWindowsShimPath(value: string, shimDir: string): string | null {
+	const match = /^%dp0%[\\/]*(.*)$/i.exec(value);
+	if (!match) return null;
+	const suffix = match[1];
+	if (!suffix) return shimDir;
+	return path.join(shimDir, ...suffix.split(/[\\/]+/).filter(Boolean));
+}
+
+function extractWindowsNpmShimTarget(content: string): string | null {
+	const match = /"%_prog%"\s+"([^"]+)"\s+%\*/i.exec(content);
+	return match?.[1] ?? null;
+}
+
+async function resolveWindowsNpmShimCommand(
+	command: string,
+	args: readonly string[],
+): Promise<StdioSpawnCommand | null> {
+	if (!isWindowsBatchCommand(command)) return null;
+	if (!hasPathSegment(command) && !path.isAbsolute(command)) return null;
+
+	let content: string;
+	try {
+		content = await Bun.file(command).text();
+	} catch {
+		return null;
+	}
+
+	const rawTarget = extractWindowsNpmShimTarget(content);
+	if (!rawTarget) return null;
+
+	const target = resolveWindowsShimPath(rawTarget, path.dirname(command));
+	if (!target) return null;
+
+	const siblingNode = path.join(path.dirname(command), "node.exe");
+	const nodeCommand = (await fileExists(siblingNode)) ? siblingNode : "node";
+	return {
+		cmd: [nodeCommand, target, ...args],
+		windowsHide: true,
+	};
 }
 
 function quoteCmdArg(value: string): string {
@@ -150,6 +193,8 @@ export async function resolveStdioSpawnCommand(
 
 	const resolvedCommand =
 		(await resolveWindowsCommandPath(config.command, options.cwd, options.env)) ?? config.command;
+	const npmShimCommand = await resolveWindowsNpmShimCommand(resolvedCommand, args);
+	if (npmShimCommand) return npmShimCommand;
 	if (!isWindowsBatchCommand(resolvedCommand)) return { cmd: [resolvedCommand, ...args] };
 
 	return {
