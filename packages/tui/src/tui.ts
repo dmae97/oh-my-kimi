@@ -2712,6 +2712,18 @@ export class TUI extends Container {
 	#emitAltFrame(lines: string[], width: number, height: number): void {
 		const fitted: string[] = new Array(height);
 		for (let r = 0; r < height; r++) fitted[r] = lines[r] ?? "";
+		// Flush queued image-data transmits (`a=t`, no visible output) before the
+		// paint so id-keyed placements and placeholder cells composed into this
+		// frame resolve against loaded data. The normal-screen path flushes these
+		// ahead of its paint; without this, an image first shown inside a
+		// fullscreen overlay (e.g. the settings shape preview) would render as
+		// blank placeholder cells until the overlay closed.
+		const imageTransmits = this.#imageBudget.takeTransmits();
+		if (imageTransmits.length > 0) {
+			let transmitBuffer = "";
+			for (const seq of imageTransmits) transmitBuffer += seq;
+			this.terminal.write(transmitBuffer);
+		}
 		// Skip an identical repaint (the modal is mostly static between
 		// keystrokes) — unless a forced repaint (resetDisplay,
 		// requestRender(true)) is pending: the redraw gesture must repair a
