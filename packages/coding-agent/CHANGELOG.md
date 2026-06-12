@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- Fixed `lsp.formatOnWrite` sending a hardcoded `tabSize: 3, insertSpaces: true` on every `textDocument/formatting` request, which silently re-indented 2-space YAML (and any LSP-formatted file) to 3-space on every write/edit through formatter-aware servers like `yaml-language-server`. Format options are now resolved per-file from `.editorconfig` (`indent_size`, `indent_style`, `tab_width`), falling back to the indent sniffed from the in-memory content the agent is about to write, then to a 2-space default. The duplicate `DEFAULT_FORMAT_OPTIONS` constant in `lsp/index.ts` and `lsp/clients/lsp-linter-client.ts` is replaced with a single shared `resolveFormatOptions` helper ([#2329](https://github.com/can1357/oh-my-pi/issues/2329)).
+
+### Fixed
+
 - Fixed `/settings` Escape handling so an open submenu receives Esc and returns to the settings list before a second Esc closes the panel ([#2331](https://github.com/can1357/oh-my-pi/issues/2331)).
 - Fixed unconfigured `pi/smol`, `pi/slow`, and `pi/designer` agent model roles using cloud-priority defaults before the user's configured `modelRoles.default`, which could route local-default setups to authenticated paid providers ([#2336](https://github.com/can1357/oh-my-pi/issues/2336)).
 
