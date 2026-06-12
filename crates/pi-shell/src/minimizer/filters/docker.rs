@@ -72,6 +72,21 @@ fn filter_docker(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> String 
 	if is_docker_lifecycle_command(ctx) {
 		return head_tail_dedup(input);
 	}
+	// docker-compose up / docker compose up (attached mode) streams container
+	// logs, not build progress.  Lines like "Downloading", "Waiting",
+	// "Extracting" that appear here are real application log lines, not
+	// layer-pull status noise.  Route through the log filter so they are
+	// preserved.
+	//
+	// Two detection paths:
+	//   • legacy `docker-compose up` — detect.rs normalises the binary name to
+	//     "docker" and sets subcommand="up" directly.
+	//   • Compose v2 `docker compose up` — subcommand="compose", action found
+	//     by scanning past compose global options (same pattern as the listing
+	//     and lifecycle helpers).
+	if is_compose_up_command(ctx) {
+		return filter_docker_logs(input);
+	}
 	compact_build_or_progress(input)
 }
 
@@ -593,6 +608,49 @@ fn is_compose_lifecycle_action(command: &str) -> bool {
 			},
 			Some(tok) if tok.starts_with('-') => {}, // skip boolean flag
 			Some(tok) => return matches!(tok, "start" | "stop" | "restart" | "rm"),
+		}
+	}
+}
+
+/// Returns `true` when the command is an attached `docker compose up` or
+/// legacy `docker-compose up` that streams container log output.
+///
+/// Two forms are handled:
+///   • `docker-compose up` — detect.rs normalises the binary to "docker" and
+///     sets `subcommand="up"` directly; the original command still contains
+///     "compose" so we can tell it apart from plain `docker build`.
+///   • `docker compose up` — `subcommand="compose"`, action resolved by
+///     scanning past compose global options (same logic as the listing /
+///     lifecycle helpers).
+fn is_compose_up_command(ctx: &MinimizerCtx<'_>) -> bool {
+	// Legacy docker-compose: subcommand is already the action.
+	if ctx.subcommand == Some("up") && ctx.command.contains("compose") {
+		return true;
+	}
+	// Compose v2: subcommand is "compose", scan for first non-option action.
+	if ctx.subcommand == Some("compose") {
+		return is_compose_up_action(ctx.command);
+	}
+	false
+}
+
+fn is_compose_up_action(command: &str) -> bool {
+	let mut tokens = command
+		.split_whitespace()
+		.skip_while(|token| *token != "compose");
+	if tokens.next() != Some("compose") {
+		return false;
+	}
+	loop {
+		match tokens.next() {
+			None => return false,
+			Some(tok)
+				if tok.starts_with('-') && !tok.contains('=') && compose_option_consumes_next(tok) =>
+			{
+				tokens.next(); // skip value
+			},
+			Some(tok) if tok.starts_with('-') => {}, // skip boolean flag
+			Some(tok) => return tok == "up",
 		}
 	}
 }
@@ -1524,5 +1582,108 @@ mod tests {
 			is_docker_lifecycle_command(&ctx),
 			"docker compose -p myproj start must be classified as a lifecycle command"
 		);
+	}
+
+	fn make_ctx<'a>(
+		program: &'a str,
+		subcommand: Option<&'a str>,
+		command: &'a str,
+		cfg: &'a MinimizerConfig,
+	) -> MinimizerCtx<'a> {
+		MinimizerCtx { program, subcommand, command, config: cfg }
+	}
+
+	// ── docker-compose up / docker compose up log preservation ──────────────
+
+	#[test]
+	fn test_compose_up_logs_preserved() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		// Legacy docker-compose up: detect.rs sets subcommand="up", command retains
+		// "docker-compose".
+		let input = "web_1    | [2024-01-01 00:00:00] INFO Server started\ndb_1     | 2024-01-01 \
+		             00:00:01 [Note] mysqld: ready for connections\n";
+		let ctx = make_ctx("docker", Some("up"), "docker-compose up", &cfg);
+		let out = filter(&ctx, input, 0);
+		// Log output must not be stripped by the build-progress condenser.
+		assert!(
+			out.text.contains("Server started"),
+			"compose up log lines must survive (legacy docker-compose): {}",
+			out.text
+		);
+		assert!(
+			out.text.contains("mysqld: ready for connections"),
+			"compose up db log lines must survive (legacy docker-compose): {}",
+			out.text
+		);
+	}
+
+	#[test]
+	fn test_compose_v2_up_logs_preserved() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		// Compose v2: subcommand="compose", action resolved by scanning tokens.
+		let input = "web_1    | [2024-01-01 00:00:00] INFO Server started\ndb_1     | 2024-01-01 \
+		             00:00:01 [Note] mysqld: ready for connections\n";
+		let ctx = make_ctx("docker", Some("compose"), "docker compose up", &cfg);
+		let out = filter(&ctx, input, 0);
+		assert!(
+			out.text.contains("Server started"),
+			"compose up log lines must survive (docker compose v2): {}",
+			out.text
+		);
+	}
+
+	#[test]
+	fn test_compose_up_with_global_flags_logs_preserved() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		// docker compose --progress plain up — global option before action.
+		let input = "app_1    | Downloading something\napp_1    | Waiting for db\n";
+		let ctx = make_ctx("docker", Some("compose"), "docker compose --progress plain up", &cfg);
+		let out = filter(&ctx, input, 0);
+		assert!(
+			out.text.contains("Downloading something"),
+			"'Downloading' log lines must not be stripped by progress condenser: {}",
+			out.text
+		);
+		assert!(
+			out.text.contains("Waiting for db"),
+			"'Waiting' log lines must not be stripped by progress condenser: {}",
+			out.text
+		);
+	}
+
+	#[test]
+	fn test_is_compose_up_command_both_forms() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		// Legacy form
+		assert!(is_compose_up_command(&make_ctx("docker", Some("up"), "docker-compose up", &cfg)));
+		// v2 form
+		assert!(is_compose_up_command(&make_ctx(
+			"docker",
+			Some("compose"),
+			"docker compose up",
+			&cfg
+		)));
+		// v2 with global flags
+		assert!(is_compose_up_command(&make_ctx(
+			"docker",
+			Some("compose"),
+			"docker compose --progress plain up",
+			&cfg
+		)));
+		// Must not match other actions
+		assert!(!is_compose_up_command(&make_ctx(
+			"docker",
+			Some("compose"),
+			"docker compose logs",
+			&cfg
+		)));
+		assert!(!is_compose_up_command(&make_ctx(
+			"docker",
+			Some("compose"),
+			"docker compose ps",
+			&cfg
+		)));
+		// Plain docker build must not be classified as compose up
+		assert!(!is_compose_up_command(&make_ctx("docker", Some("build"), "docker build .", &cfg)));
 	}
 }
