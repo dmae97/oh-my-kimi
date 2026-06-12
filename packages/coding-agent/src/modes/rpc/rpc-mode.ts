@@ -100,6 +100,67 @@ export async function tryRunRpcSkillCommand(session: RpcSkillCommandSession, tex
 	});
 	return true;
 }
+
+export function reportLocalOnlyPromptResult(input: {
+	id: string | undefined;
+	prompt: Promise<boolean>;
+	output: (obj: object) => void;
+	onError: (error: Error) => void;
+	hasExtensionUserMessageTask?: () => boolean;
+}): void {
+	void input.prompt
+		.then(agentInvoked => {
+			if (!agentInvoked && !input.hasExtensionUserMessageTask?.()) {
+				input.output({ type: "prompt_result", id: input.id, agentInvoked: false });
+			}
+		})
+		.catch(error => {
+			input.onError(error instanceof Error ? error : new Error(String(error)));
+		});
+}
+
+type RpcExtensionUserMessageScope = {
+	hasUserMessageTask: boolean;
+};
+
+/**
+ * Tracks extension-originated user messages while an RPC prompt is executing.
+ * A slash command can resolve the outer prompt as local-only while also
+ * scheduling agent work through pi.sendUserMessage(); that prompt must not
+ * report agentInvoked:false to the host.
+ */
+export class RpcExtensionUserMessageTracker {
+	#activePromptScopes = new Set<RpcExtensionUserMessageScope>();
+
+	track(task: Promise<void>): void {
+		void task;
+		for (const scope of this.#activePromptScopes) {
+			scope.hasUserMessageTask = true;
+		}
+	}
+
+	watchPrompt<T>(startPrompt: () => Promise<T>): {
+		prompt: Promise<T>;
+		hasUserMessageTask: () => boolean;
+	} {
+		const scope: RpcExtensionUserMessageScope = { hasUserMessageTask: false };
+		this.#activePromptScopes.add(scope);
+		let prompt: Promise<T>;
+		try {
+			prompt = startPrompt();
+		} catch (error) {
+			this.#activePromptScopes.delete(scope);
+			throw error;
+		}
+		return {
+			prompt: prompt.finally(() => {
+				this.#activePromptScopes.delete(scope);
+			}),
+			hasUserMessageTask: () => scope.hasUserMessageTask,
+		};
+	}
+}
+
 export type RpcSubagentResetRegistry = Pick<RpcSubagentRegistry, "clear">;
 
 export async function handleRpcSessionChange(
@@ -276,6 +337,8 @@ export async function runRpcMode(
 	const error = (id: string | undefined, command: string, message: string): RpcResponse => {
 		return { id, type: "response", command, success: false, error: message };
 	};
+
+	const extensionUserMessageTracker = new RpcExtensionUserMessageTracker();
 
 	const pendingExtensionRequests = new Map<string, PendingExtensionRequest>();
 	const hostToolBridge = new RpcHostToolBridge(output);
@@ -533,6 +596,9 @@ export async function runRpcMode(
 		onShutdown: () => {
 			shutdownState.requested = true;
 		},
+		trackUserMessageTask: task => {
+			extensionUserMessageTracker.track(task);
+		},
 		uiContext: rpcUiContext,
 	});
 
@@ -570,7 +636,7 @@ export async function runRpcMode(
 
 			case "prompt": {
 				if (await tryRunRpcSkillCommand(session, command.message)) {
-					return success(id, "prompt");
+					return success(id, "prompt", { agentInvoked: false });
 				}
 				const builtinResult = await executeAcpBuiltinSlashCommand(command.message, {
 					session,
@@ -592,19 +658,27 @@ export async function runRpcMode(
 						session
 							.prompt(builtinResult.prompt, { images: command.images })
 							.catch(e => output(error(id, "prompt", e.message)));
+						return success(id, "prompt", { agentInvoked: true });
 					}
-					return success(id, "prompt");
+					return success(id, "prompt", { agentInvoked: false });
 				}
 
 				// Don't await - events will stream
 				// Extension commands are executed immediately, file prompt templates are expanded
 				// If streaming and streamingBehavior specified, queues via steer/followUp
-				session
-					.prompt(command.message, {
+				const trackedPrompt = extensionUserMessageTracker.watchPrompt(() =>
+					session.prompt(command.message, {
 						images: command.images,
 						streamingBehavior: command.streamingBehavior,
-					})
-					.catch(e => output(error(id, "prompt", e.message)));
+					}),
+				);
+				reportLocalOnlyPromptResult({
+					id,
+					prompt: trackedPrompt.prompt,
+					output,
+					onError: promptError => output(error(id, "prompt", promptError.message)),
+					hasExtensionUserMessageTask: trackedPrompt.hasUserMessageTask,
+				});
 				return success(id, "prompt");
 			}
 
