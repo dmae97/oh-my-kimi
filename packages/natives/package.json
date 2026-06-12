@@ -54,7 +54,8 @@
   "files": [
     "src",
     "native",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md"
   ],
   "exports": {
     ".": {

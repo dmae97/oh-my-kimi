@@ -62,7 +62,8 @@
 		"src",
 		"build.ts",
 		"tailwind.config.js",
-		"README.md"
+		"README.md",
+		"CHANGELOG.md"
 	],
 	"exports": {
 		".": {
