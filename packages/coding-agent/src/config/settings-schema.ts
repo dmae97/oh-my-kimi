@@ -817,6 +817,36 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	personality: {
+		type: "enum",
+		values: ["default", "friendly", "pragmatic", "none"] as const,
+		default: "default",
+		ui: {
+			tab: "model",
+			group: "Prompt",
+			label: "Personality",
+			description: "Communication style rendered into the system prompt's personality block",
+			options: [
+				{
+					value: "default",
+					label: "Default",
+					description: "Terse, evidence-first engineer; dense, action-oriented replies",
+				},
+				{
+					value: "friendly",
+					label: "Friendly",
+					description: "Warm, encouraging collaborator focused on momentum and morale",
+				},
+				{
+					value: "pragmatic",
+					label: "Pragmatic",
+					description: "Direct, efficient engineer focused on clarity and rigor",
+				},
+				{ value: "none", label: "None", description: "Omit the personality block entirely" },
+			],
+		},
+	},
+
 	// Sampling
 	temperature: {
 		type: "number",
@@ -3805,6 +3835,9 @@ export type StatusLineSeparatorStyle = SettingValue<"statusLine.separator">;
 
 /** Tree selector filter mode - derived from schema */
 export type TreeFilterMode = SettingValue<"treeFilterMode">;
+
+/** Personality preset - derived from schema */
+export type Personality = SettingValue<"personality">;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Typed Group Definitions

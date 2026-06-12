@@ -1979,6 +1979,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				workspaceTree: workspaceTreePromise,
 				memoryRootEnabled: memoryBackend.id === "local",
 				model: settings.get("includeModelInPrompt") ? getActiveModelString() : undefined,
+				personality: agentKind === "sub" ? "none" : settings.get("personality"),
 			});
 
 			if (options.systemPrompt === undefined) {
