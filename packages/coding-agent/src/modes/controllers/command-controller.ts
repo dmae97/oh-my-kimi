@@ -36,9 +36,10 @@ import { computeContextBreakdown, renderContextUsage } from "../../modes/utils/c
 import { buildHotkeysMarkdown } from "../../modes/utils/hotkeys-markdown";
 import { buildToolsMarkdown } from "../../modes/utils/tools-markdown";
 import type { AsyncJobSnapshotItem } from "../../session/agent-session";
-import type { AuthStorage } from "../../session/auth-storage";
+import type { AuthStorage, OAuthAccountIdentity } from "../../session/auth-storage";
 import type { NewSessionOptions } from "../../session/session-manager";
 import { formatShakeSummary, type ShakeMode, type ShakeResult } from "../../session/shake-types";
+import { limitMatchesActiveAccount } from "../../slash-commands/helpers/active-oauth-account";
 import { outputMeta } from "../../tools/output-meta";
 import { resolveToCwd, stripOuterDoubleQuotes } from "../../tools/path-utils";
 import { replaceTabs } from "../../tools/render-utils";
@@ -404,10 +405,15 @@ export class CommandController {
 		}
 
 		const availableWidth = Math.max(40, (this.ctx.ui.terminal.columns ?? 100) - 2);
-		const activeAccounts = await resolveActiveAccountsForReports(this.ctx.session, usageReports);
 		const currentProvider = this.ctx.session.model?.provider;
+		const activeAccount = currentProvider
+			? this.ctx.session.modelRegistry.authStorage.getOAuthAccountIdentity(
+					currentProvider,
+					this.ctx.session.sessionId,
+				)
+			: undefined;
 		const output = renderUsageReports(usageReports, theme, Date.now(), availableWidth, provider =>
-			provider === currentProvider ? activeAccounts.get(provider) : undefined,
+			provider === currentProvider ? activeAccount : undefined,
 		);
 		this.ctx.present([new Spacer(1), new Text(output, 1, 0)]);
 	}
@@ -1309,22 +1315,18 @@ function formatResetShort(limit: UsageLimit, nowMs: number): string | undefined 
 	return formatDuration(resetsAt - nowMs);
 }
 
-function formatActiveAccountLabel(activeAccount: ActiveAccountIdentity | undefined): string | undefined {
-	return activeAccount?.email ?? activeAccount?.accountId;
-}
-
 function formatAccountHeaderRow(
 	limits: UsageLimit[],
 	reports: UsageReport[],
 	nowMs: number,
 	columnWidth: number,
 	uiTheme: typeof theme,
-	activeAccount?: ActiveAccountIdentity,
+	activeAccount?: OAuthAccountIdentity,
 ): string[] {
 	const parts = limits.map((limit, index) => {
 		const reset = formatResetShort(limit, nowMs);
 		const report = reports[index];
-		const active = reportMatchesActiveAccount(report, limit, activeAccount);
+		const active = report !== undefined && limitMatchesActiveAccount(report, limit, activeAccount);
 		const label = formatAccountLabel(limit, report, index);
 		return {
 			label: active ? `● ${label}` : label,
@@ -1471,7 +1473,7 @@ function renderUsageReports(
 	uiTheme: typeof theme,
 	nowMs: number,
 	availableWidth: number,
-	resolveActiveAccount?: (provider: string) => ActiveAccountIdentity | undefined,
+	resolveActiveAccount?: (provider: string) => OAuthAccountIdentity | undefined,
 ): string {
 	const lines: string[] = [];
 	const latestFetchedAt = Math.max(...reports.map(report => report.fetchedAt ?? 0));
@@ -1521,7 +1523,7 @@ function renderUsageReports(
 		}
 
 		lines.push(uiTheme.bold(uiTheme.fg("accent", providerName)));
-		const activeAccountLabel = formatActiveAccountLabel(activeAccount);
+		const activeAccountLabel = activeAccount?.email ?? activeAccount?.accountId ?? activeAccount?.projectId;
 		if (activeAccountLabel) {
 			lines.push(`  ${uiTheme.fg("accent", "in use by this session:")} ${activeAccountLabel}`);
 		}
@@ -1591,62 +1593,4 @@ function renderUsageReports(
 	}
 
 	return lines.join("\n");
-}
-
-type ActiveAccountIdentity = {
-	accountId?: string;
-	email?: string;
-};
-
-type OAuthAccessResolver = {
-	getOAuthAccountId?: (provider: string, sessionId?: string) => string | undefined;
-	getOAuthAccountIdentity?: (provider: string, sessionId?: string) => ActiveAccountIdentity | undefined;
-};
-
-function normalizeIdentityValue(value: unknown): string | undefined {
-	return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
-}
-
-function reportMatchesActiveAccount(
-	report: UsageReport | undefined,
-	limit: UsageLimit,
-	activeAccount: ActiveAccountIdentity | undefined,
-): boolean {
-	if (!report || !activeAccount) return false;
-	const activeAccountId = normalizeIdentityValue(activeAccount.accountId);
-	const activeEmail = normalizeIdentityValue(activeAccount.email);
-	const metadata = report.metadata ?? {};
-	const reportAccountId =
-		normalizeIdentityValue(metadata.accountId) ?? normalizeIdentityValue(metadata.account_id) ?? undefined;
-	const reportEmail = normalizeIdentityValue(metadata.email);
-	const scopeAccountId = normalizeIdentityValue(limit.scope.accountId);
-	return Boolean(
-		(activeAccountId && (reportAccountId === activeAccountId || scopeAccountId === activeAccountId)) ||
-			(activeEmail && (reportEmail === activeEmail || scopeAccountId === activeEmail)),
-	);
-}
-
-async function resolveActiveAccountsForReports(
-	sessionValue: unknown,
-	reports: UsageReport[],
-): Promise<Map<string, ActiveAccountIdentity>> {
-	const session = sessionValue as {
-		sessionId?: string;
-		modelRegistry?: { authStorage?: OAuthAccessResolver };
-	};
-	const authStorage = session.modelRegistry?.authStorage;
-	if (!authStorage) return new Map();
-	const providers = [...new Set(reports.map(report => report.provider))];
-	const entries = await Promise.all(
-		providers.map(provider => {
-			const identity = authStorage.getOAuthAccountIdentity?.(provider, session.sessionId);
-			const accountId = identity?.accountId ?? authStorage.getOAuthAccountId?.(provider, session.sessionId);
-			const activeIdentity: ActiveAccountIdentity = {
-				...(accountId ? { accountId } : {}),
-				...(identity?.email ? { email: identity.email } : {}),
-			};
-			return [provider, activeIdentity] as const;
-		}),
-	);
-	return new Map(entries.filter(([, identity]) => identity.accountId || identity.email));
 }
