@@ -285,10 +285,15 @@ class StatusContainer extends Container implements NativeScrollbackLiveRegion {
  * Build the anchored subagent HUD block: a bold accent "Subagents" header plus
  * one hooked row per running agent in the same `Id: description` shape the
  * inline task rows use (muted task preview when no description was given).
+ * Only detached background spawns are listed: a sync task call blocks the
+ * parent turn and its inline tool block already renders progress live, and
+ * eval `agent()` spawns are rendered by their own eval cell tree.
  * Returns an empty array when nothing is running so the container can clear.
  */
 export function renderSubagentHudLines(sessions: ObservableSession[], columns: number): string[] {
-	const running = sessions.filter(session => session.kind === "subagent" && session.status === "active");
+	const running = sessions.filter(
+		session => session.kind === "subagent" && session.status === "active" && session.detached === true,
+	);
 	if (running.length === 0) return [];
 
 	const indent = "  ";

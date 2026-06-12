@@ -1,7 +1,9 @@
 /**
  * Contract: the anchored subagent HUD (rendered above the editor, next to the
- * Todos block) lists exactly the running subagents as `Id: description` rows
- * and yields no output once nothing is running, so the block self-clears.
+ * Todos block) lists exactly the running *detached* subagents as
+ * `Id: description` rows and yields no output once nothing qualifies, so the
+ * block self-clears. Sync task spawns and eval `agent()` spawns are excluded:
+ * their progress is already rendered inline (tool block / eval cell).
  */
 import { beforeAll, describe, expect, it } from "bun:test";
 import { renderSubagentHudLines } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
@@ -24,6 +26,7 @@ function makeSession(overrides: Partial<ObservableSession> & { id: string }): Ob
 		kind: "subagent",
 		label: overrides.id,
 		status: "active",
+		detached: true,
 		lastUpdate: Date.now(),
 		...overrides,
 	};
@@ -47,7 +50,7 @@ function makeProgress(overrides: Partial<AgentProgress> & { id: string }): Agent
 	};
 }
 
-function makeLifecycle(id: string, index: number, description: string): SubagentLifecyclePayload {
+function makeLifecycle(id: string, index: number, description: string, detached?: boolean): SubagentLifecyclePayload {
 	return {
 		id,
 		index,
@@ -56,16 +59,23 @@ function makeLifecycle(id: string, index: number, description: string): Subagent
 		description,
 		status: "started",
 		parentToolCallId: "tool-call",
+		detached,
 	};
 }
 
-function makeProgressPayload(id: string, index: number, description: string): SubagentProgressPayload {
+function makeProgressPayload(
+	id: string,
+	index: number,
+	description: string,
+	detached?: boolean,
+): SubagentProgressPayload {
 	return {
 		index,
 		agent: "task",
 		agentSource: "bundled",
 		task: description,
 		parentToolCallId: "tool-call",
+		detached,
 		progress: makeProgress({ id, index, description, task: description }),
 	};
 }
@@ -113,6 +123,36 @@ describe("subagent HUD lines", () => {
 			makeSession({ id: "Worker", progress: makeProgress({ id: "Worker", task: "Investigate flaky CI on macOS" }) }),
 		]);
 		expect(fromTask).toContain("Worker Investigate flaky CI on macOS");
+	});
+
+	it("hides non-detached spawns: sync task calls and eval agent() helpers", () => {
+		// Sync task spawn (parent blocked on the call) and eval `agent()` spawn
+		// (no detached flag at all) both stay off the HUD.
+		const sessions = [
+			makeSession({ id: "SyncSpawn", description: "inline task work", detached: false }),
+			makeSession({ id: "EvalSpawn", description: "eval cell work", detached: undefined }),
+		];
+		expect(renderSubagentHudLines(sessions, 120)).toEqual([]);
+
+		const out = render([...sessions, makeSession({ id: "BackgroundSpawn", description: "detached work" })]);
+		expect(out).toContain("BackgroundSpawn: detached work");
+		expect(out).not.toContain("SyncSpawn");
+		expect(out).not.toContain("EvalSpawn");
+	});
+
+	it("threads the detached flag from lifecycle and progress payloads", () => {
+		const eventBus = new EventBus();
+		const registry = new SessionObserverRegistry();
+		registry.subscribeToEventBus(eventBus);
+
+		eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, makeLifecycle("Detached", 0, "background work", true));
+		eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, makeLifecycle("Inline", 1, "sync work"));
+		eventBus.emit(TASK_SUBAGENT_PROGRESS_CHANNEL, makeProgressPayload("FromProgress", 2, "background work", true));
+
+		const out = render(registry.getSessions());
+		expect(out).toContain("Detached: background work");
+		expect(out).toContain("FromProgress: background work");
+		expect(out).not.toContain("Inline");
 	});
 
 	it("renders nested ids as a breadcrumb and truncates long descriptions to the viewport", () => {

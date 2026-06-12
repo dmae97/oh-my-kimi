@@ -705,6 +705,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 						undefined,
 						agentId,
 						progress.index,
+						true,
 					);
 					const finalText = result.content.find(part => part.type === "text")?.text ?? "(no output)";
 					const singleResult = result.details?.results[0];
@@ -897,8 +898,9 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		onUpdate?: AgentToolUpdateCallback<TaskToolDetails>,
 		preAllocatedId?: string,
 		spawnIndex = 0,
+		detached = false,
 	): Promise<AgentToolResult<TaskToolDetails>> {
-		return this.#runSpawn(toolCallId, params, signal, onUpdate, preAllocatedId, spawnIndex);
+		return this.#runSpawn(toolCallId, params, signal, onUpdate, preAllocatedId, spawnIndex, detached);
 	}
 
 	/** Spawn a fresh subagent and run it to completion. */
@@ -909,6 +911,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		onUpdate?: AgentToolUpdateCallback<TaskToolDetails>,
 		preAllocatedId?: string,
 		spawnIndex = 0,
+		detached = false,
 	): Promise<AgentToolResult<TaskToolDetails>> {
 		const startTime = Date.now();
 		const { agents, projectAgentsDir } = await discoverAgents(this.session.cwd);
@@ -1145,6 +1148,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				description: params.description,
 				index: spawnIndex,
 				parentToolCallId: toolCallId,
+				detached,
 				id: agentId,
 				taskDepth,
 				modelOverride,
