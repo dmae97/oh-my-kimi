@@ -341,6 +341,7 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 
 interface OpenAIResponsesSpecLike {
 	provider: string;
+	name: string;
 	baseUrl: string;
 	compat?: OpenAICompat;
 }
@@ -351,7 +352,8 @@ interface OpenAIResponsesSpecLike {
  * endpoint accepts the `developer` role, while strict tool mode is scoped to
  * first-party OpenAI/Azure/Copilot providers. Developer-role and prompt-cache
  * detection are URL-only on purpose — the historical call sites never
- * consulted the provider id for them.
+ * consulted the provider id for them. The GPT-5 juice-zero hack keys on the
+ * model name, matching the historical request-time check.
  */
 export function buildOpenAIResponsesCompat(spec: OpenAIResponsesSpecLike): ResolvedOpenAIResponsesCompat {
 	const baseUrl = spec.baseUrl ?? "";
@@ -371,6 +373,7 @@ export function buildOpenAIResponsesCompat(spec: OpenAIResponsesSpecLike): Resol
 		// Azure OpenAI and GitHub Copilot Responses paths require tool results
 		// to strictly match prior tool calls when building Responses inputs.
 		strictResponsesPairing: hostMatchesUrl(baseUrl, "azureOpenAI") || spec.provider === "github-copilot",
+		requiresJuiceZeroHack: spec.name.toLowerCase().startsWith("gpt-5"),
 		reasoningEffortMap: {},
 	};
 	applyCompatOverrides(compat, spec.compat);

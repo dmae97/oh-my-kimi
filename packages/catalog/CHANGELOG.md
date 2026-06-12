@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `requiresJuiceZeroHack` Responses-API compat flag, resolved by `buildOpenAIResponsesCompat` from GPT-5-family model names and overridable via sparse model `compat` config. Replaces the request-time `model.name.startsWith("gpt-5")` sniff that gated the trailing `# Juice: 0 !important` no-reasoning developer item.
+
 ## [15.11.3] - 2026-06-11
 ### Added
 
