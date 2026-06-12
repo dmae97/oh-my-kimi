@@ -82,10 +82,20 @@ export function resolveBlockEdits(
 		});
 		if (op === "insert_after") {
 			// Mirror the parser's `insert after N:` lowering: one `after_anchor`
-			// insert per payload row, anchored on the block's last line.
+			// insert per payload row, anchored on the block's last line. The
+			// `blockStart` tag lets the applier's landing correction slide a
+			// body that claims a depth inside the block back across the block's
+			// trailing closer lines.
 			for (const payload of edit.payloads) {
 				const cursor: Cursor = { kind: "after_anchor", anchor: { line: span.end } };
-				resolved.push({ kind: "insert", cursor, text: payload, lineNum: edit.lineNum, index: synthIndex++ });
+				resolved.push({
+					kind: "insert",
+					cursor,
+					text: payload,
+					lineNum: edit.lineNum,
+					index: synthIndex++,
+					blockStart: span.start,
+				});
 			}
 			continue;
 		}

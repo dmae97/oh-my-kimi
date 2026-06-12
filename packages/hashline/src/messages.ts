@@ -150,6 +150,22 @@ export function afterInsertLandingShiftWarning(anchorLine: number, landingLine: 
 	);
 }
 
+/**
+ * Warning emitted when an `insert after block N:` body is indented deeper
+ * than the block's closing line and the landing was pulled back inside the
+ * block. `insert after block` places content AFTER the block at sibling
+ * depth; a deeper body almost always means "append inside the block's body"
+ * — the misuse this corrects.
+ */
+export function blockInsertLandingShiftWarning(blockStart: number, closerLine: number, landingLine: number): string {
+	return (
+		`insert after block ${blockStart}: the body is indented deeper than the block's closing line ${closerLine}, ` +
+		`so it was placed inside the block, after line ${landingLine}. ` +
+		"`insert after block` always lands AFTER the block at sibling depth — if you meant that, " +
+		`re-issue as plain \`insert after ${closerLine}:\` with the body indented to match line ${closerLine}.`
+	);
+}
+
 /** Warning text emitted by `Recovery` when an external write fits a cached snapshot. */
 export const RECOVERY_EXTERNAL_WARNING =
 	"Recovered from a stale file hash using a previous read snapshot (file changed externally between read and edit).";
