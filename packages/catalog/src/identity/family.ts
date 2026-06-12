@@ -14,9 +14,9 @@ export function isKimiModelId(modelId: string): boolean {
 	return modelId.includes("moonshotai/kimi") || /(^|\/)kimi[-.]/i.test(modelId);
 }
 
-/** Kimi K2.6 specifically (preserved-thinking transport on Moonshot-native hosts). */
+/** Kimi K2.6 specifically, including router ids that spell the version `k2p6`. */
 export function isKimiK26ModelId(modelId: string): boolean {
-	return /(^|\/)kimi-k2\.6(?:[-:]|$)/i.test(modelId);
+	return /(^|\/)kimi-k2(?:\.6|p6)(?:[-:]|$)/i.test(modelId);
 }
 
 /** Claude ids in any namespace form (`claude-*`, `vendor/claude.x`). */
