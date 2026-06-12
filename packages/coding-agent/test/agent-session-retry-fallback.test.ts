@@ -829,8 +829,7 @@ describe("AgentSession retry fallback", () => {
 		// retry has already exhausted itself; the higher-level retry must still
 		// classify the failure as a stale-replay event so the session reset and
 		// zero-delay backoff fire instead of a model fallback.
-		const zdrReplayError =
-			"400 Previous response cannot be used for this organization due to Zero Data Retention.";
+		const zdrReplayError = "400 Previous response cannot be used for this organization due to Zero Data Retention.";
 		const requestedModels: string[] = [];
 		const fallbackAppliedEvents: Array<Extract<AgentSessionEvent, { type: "retry_fallback_applied" }>> = [];
 		const mock = createMockModel({

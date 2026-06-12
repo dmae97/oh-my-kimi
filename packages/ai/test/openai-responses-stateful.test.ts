@@ -288,8 +288,7 @@ describe("openai-responses stateful chaining", () => {
 				return new Response(
 					JSON.stringify({
 						error: {
-							message:
-								"Previous response cannot be used for this organization due to Zero Data Retention.",
+							message: "Previous response cannot be used for this organization due to Zero Data Retention.",
 							type: "invalid_request_error",
 							param: "previous_response_id",
 							code: "zero_data_retention",

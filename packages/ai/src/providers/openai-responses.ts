@@ -317,10 +317,7 @@ function registerOpenAIResponsesChainStaleFailure(chain: OpenAIResponsesChainSta
  * One-shot ZDR signal: the org will never resolve a stored response, so skip
  * the staleFailures counter and disable chaining immediately for this session.
  */
-function markOpenAIResponsesChainZeroDataRetention(
-	chain: OpenAIResponsesChainState,
-	error: unknown,
-): void {
+function markOpenAIResponsesChainZeroDataRetention(chain: OpenAIResponsesChainState, error: unknown): void {
 	resetOpenAIResponsesChainState(chain);
 	chain.disabled = true;
 	chain.staleFailures = OPENAI_RESPONSES_CHAIN_STALE_FAILURE_LIMIT;
