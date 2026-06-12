@@ -4154,6 +4154,17 @@ type SerializedCredentialRecord = {
 const AUTH_SCHEMA_VERSION = 4;
 const SQLITE_NOW_EPOCH = "CAST(strftime('%s','now') AS INTEGER)";
 
+/**
+ * SQLite's busy result code family — base `SQLITE_BUSY` plus the extended
+ * variants `SQLITE_BUSY_RECOVERY` (concurrent WAL recovery), `SQLITE_BUSY_SNAPSHOT`,
+ * and `SQLITE_BUSY_TIMEOUT`. All warrant the same backoff-and-retry treatment.
+ */
+export function isSqliteBusyError(err: unknown): boolean {
+	if (err === null || typeof err !== "object") return false;
+	const code = (err as { code?: unknown }).code;
+	return typeof code === "string" && code.startsWith("SQLITE_BUSY");
+}
+
 function normalizeStoredAccountId(accountId: string | null | undefined): string | null {
 	const normalized = accountId?.trim();
 	return normalized && normalized.length > 0 ? normalized : null;
@@ -4407,21 +4418,49 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 			await fs.mkdir(dir, { recursive: true, mode: 0o700 });
 		}
 
-		const db = new Database(dbPath);
-		try {
-			await fs.chmod(dbPath, 0o600);
-		} catch {
-			// Ignore chmod failures (e.g., Windows)
+		// Concurrent omp startups can race against WAL recovery and the schema
+		// init's first lock-taking statement. Bun's default `busy_timeout` is 0,
+		// so retry the open on `SQLITE_BUSY` / `SQLITE_BUSY_RECOVERY` with bounded
+		// exponential backoff before surfacing the failure. See issue #2421.
+		const maxAttempts = 4;
+		const baseDelayMs = 100;
+		let lastBusyError: Error | undefined;
+		for (let attempt = 0; attempt < maxAttempts; attempt++) {
+			let db: Database | undefined;
+			try {
+				db = new Database(dbPath);
+				try {
+					await fs.chmod(dbPath, 0o600);
+				} catch {
+					// Ignore chmod failures (e.g., Windows)
+				}
+				return new SqliteAuthCredentialStore(db);
+			} catch (err) {
+				db?.close();
+				if (!isSqliteBusyError(err)) {
+					throw err;
+				}
+				lastBusyError = err instanceof Error ? err : new Error(String(err));
+				if (attempt < maxAttempts - 1) {
+					await Bun.sleep(baseDelayMs * 2 ** attempt);
+				}
+			}
 		}
-
-		return new SqliteAuthCredentialStore(db);
+		throw new Error(
+			`Failed to open auth database at '${dbPath}' after ${maxAttempts} attempts: ${lastBusyError?.message}`,
+			{ cause: lastBusyError },
+		);
 	}
 
 	#initializeSchema(): void {
+		// Install the busy handler BEFORE any lock-taking statement (incl.
+		// `PRAGMA journal_mode=WAL`, which acquires an exclusive lock during WAL
+		// recovery). Without this, concurrent omp startups can crash here with
+		// `SQLITE_BUSY` / `SQLITE_BUSY_RECOVERY`. See issue #2421.
+		this.#db.run("PRAGMA busy_timeout = 5000");
 		this.#db.run(`
 			PRAGMA journal_mode=WAL;
 			PRAGMA synchronous=NORMAL;
-			PRAGMA busy_timeout=5000;
 			CREATE TABLE IF NOT EXISTS auth_schema_version (
 				id INTEGER PRIMARY KEY CHECK (id = 1),
 				version INTEGER NOT NULL
