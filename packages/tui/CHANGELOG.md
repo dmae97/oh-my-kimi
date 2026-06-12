@@ -1,9 +1,9 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
+- Added `partialHoldTimeout` to `StdinBufferOptions` to control the maximum extra delay held for unambiguous incomplete escape sequences before they are flushed
 - Added `SettingsList.sidebarWidth` option for a fixed split-layout sidebar width
 - Added mouse pointer support APIs to `SettingsList` with `setHoverItem`, `hitTest`, `hoverTest`, and `routeSubmenuMouse` for row targeting and submenu routing
 - Added `SettingsList.setMaxVisible(rows)` and `SettingsList.handleWheel(delta)` for dynamic viewport sizing and mouse-wheel step selection
@@ -24,6 +24,9 @@
 
 ### Fixed
 
+- Fixed `StdinBuffer` handling of split SGR mouse reports so fragmented sequences are reassembled instead of leaking their tail bytes as literal input
+- Fixed deferred partial-flush behavior so pending incomplete escapes are not split across timer boundaries and can still complete when the next chunk arrives
+- Fixed kitty keyboard-mode handling of a dangling `ESC` so it can be joined with subsequent CSI mouse/kitty input instead of being emitted as a standalone sequence
 - Fixed `SettingsList` to clear section-focus state when filtering items, changing data, scrolling with the mouse wheel, or selecting by ID so stale heading focus does not persist across interactions
 - `SettingsList` now renders every state — list, open submenu, filtered results, empty — at one stable height, so interacting with a bottom-anchored settings panel no longer resizes the live terminal region on each keystroke (which forced re-anchoring and could strand stale scrollback rows).
 

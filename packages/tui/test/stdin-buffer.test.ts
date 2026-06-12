@@ -6,6 +6,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { setKittyProtocolActive } from "@oh-my-pi/pi-tui/keys";
 import { StdinBuffer } from "@oh-my-pi/pi-tui/stdin-buffer";
 
 describe("StdinBuffer", () => {
@@ -13,6 +14,7 @@ describe("StdinBuffer", () => {
 	let emittedSequences: string[];
 
 	beforeEach(() => {
+		setKittyProtocolActive(false);
 		buffer = new StdinBuffer({ timeout: 10 });
 
 		// Collect emitted sequences
@@ -27,6 +29,7 @@ describe("StdinBuffer", () => {
 		// buffer would otherwise emit into the current test's emittedSequences
 		// (the data listener closes over the reassigned module variable).
 		buffer.destroy();
+		setKittyProtocolActive(false);
 	});
 
 	// Helper to process data through the buffer
@@ -89,13 +92,65 @@ describe("StdinBuffer", () => {
 		});
 
 		it("should flush incomplete sequence after timeout", async () => {
-			processInput("\x1b[<35");
+			// Non-mouse CSI partial: ambiguous, so it flushes after the timeout.
+			processInput("\x1b[1;5");
 			expect(emittedSequences).toEqual([]);
 
 			// Wait for timeout
-			await Bun.sleep(15);
+			await Bun.sleep(25);
 
-			expect(emittedSequences).toEqual(["\x1b[<35"]);
+			expect(emittedSequences).toEqual(["\x1b[1;5"]);
+		});
+
+		it("should hold a split SGR mouse partial past the flush timeout and reassemble it", async () => {
+			// `\x1b[<…` is unambiguously a mouse report: the partial must never
+			// flush on timeout, or its tail leaks as typed text (settings search
+			// filling with `[<35;8;16M`).
+			processInput("\x1b[<35;8;16");
+			await Bun.sleep(30);
+			expect(emittedSequences).toEqual([]);
+
+			processInput("M");
+			expect(emittedSequences).toEqual(["\x1b[<35;8;16M"]);
+		});
+
+		it("should deliver a held mouse partial raw once the hold cap expires", async () => {
+			const capped = new StdinBuffer({ timeout: 5, partialHoldTimeout: 20 });
+			const emitted: string[] = [];
+			capped.on("data", sequence => emitted.push(sequence));
+			try {
+				capped.process("\x1b[<35;8;16");
+				await Bun.sleep(60);
+				// Tail never arrived: delivered as one raw sequence (ESC intact,
+				// so downstream treats it as control data, not typed text).
+				expect(emitted).toEqual(["\x1b[<35;8;16"]);
+			} finally {
+				capped.destroy();
+			}
+		});
+
+		it("should hold a lone ESC while the kitty protocol is active and join the mouse tail", async () => {
+			setKittyProtocolActive(true);
+			try {
+				// Under kitty the ESC key arrives as \x1b[27u, so a bare \x1b is
+				// always the head of a split sequence.
+				processInput("\x1b");
+				await Bun.sleep(30);
+				expect(emittedSequences).toEqual([]);
+
+				processInput("[<35;8;16M");
+				expect(emittedSequences).toEqual(["\x1b[<35;8;16M"]);
+			} finally {
+				setKittyProtocolActive(false);
+			}
+		});
+
+		it("should flush a lone ESC after timeout when the kitty protocol is inactive", async () => {
+			// Legacy terminals: a bare ESC is a real keypress and must not lag
+			// behind the flush timeout by more than the deferral.
+			processInput("\x1b");
+			await Bun.sleep(30);
+			expect(emittedSequences).toEqual(["\x1b"]);
 		});
 	});
 
@@ -276,13 +331,13 @@ describe("StdinBuffer", () => {
 		});
 
 		it("should emit flushed data via timeout", async () => {
-			processInput("\x1b[<35");
+			processInput("\x1b[1;5");
 			expect(emittedSequences).toEqual([]);
 
 			// Wait for timeout to flush
-			await Bun.sleep(15);
+			await Bun.sleep(25);
 
-			expect(emittedSequences).toEqual(["\x1b[<35"]);
+			expect(emittedSequences).toEqual(["\x1b[1;5"]);
 		});
 	});
 

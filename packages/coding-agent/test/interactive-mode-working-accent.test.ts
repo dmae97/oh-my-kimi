@@ -148,14 +148,14 @@ describe("InteractiveMode working-message session accent cache", () => {
 		try {
 			startStableLoader(mode);
 			expect(getHex).toHaveBeenCalledTimes(1);
-			expect(getHex.mock.calls[0]).toEqual([sessionName, undefined]);
+			expect(getHex.mock.calls[0]).toEqual([sessionName, theme.getMajorThemeColorHexes(), undefined]);
 
 			restoreInitial();
 			const restoreLight = shadowAccentSurfaceLuminance(0.72);
 			try {
 				mode.loadingAnimation?.setMessage("Light theme");
 				expect(getHex).toHaveBeenCalledTimes(2);
-				expect(getHex.mock.calls[1]).toEqual([sessionName, 0.72]);
+				expect(getHex.mock.calls[1]).toEqual([sessionName, theme.getMajorThemeColorHexes(), 0.72]);
 			} finally {
 				restoreLight();
 			}
