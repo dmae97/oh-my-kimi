@@ -1,87 +1,55 @@
 /**
- * Collab live-session wire protocol.
+ * Collab link + wire-envelope handling (browser-safe vendored mirror of the
+ * link/envelope half of `@oh-my-pi/pi-coding-agent/src/collab/protocol.ts`;
+ * base64url goes through atob/btoa instead of Buffer).
  *
- * Hub topology: the host is authoritative, guests never peer. All session
- * payloads (`CollabFrame`) travel AES-256-GCM sealed; the relay only sees the
- * plaintext envelope (`[4B uint32 BE peerId][sealed payload]`) plus TEXT JSON
- * control messages that carry no session data.
+ * Link format: `wss://<host[:port]>/r/<roomId>#<base64url-32-byte-key>`
+ * Wire envelope: `[4B uint32 BE peerId][sealed payload]` — the guest always
+ * sends peerId 0; the relay rewrites it to the sender's id.
  */
 
-import type { ImageContent, Model } from "@oh-my-pi/pi-ai";
-import type {
-	BusChannel,
-	GuestFrame,
-	ParsedCollabLink,
-	Participant,
-	SessionState,
-	AgentSnapshot as WireAgentSnapshot,
-} from "@oh-my-pi/pi-wire";
+import type { ParsedCollabLink } from "@oh-my-pi/pi-wire";
 import { DEFAULT_RELAY_URL, ENVELOPE_HEADER_LENGTH, ROOM_ID_BYTES } from "@oh-my-pi/pi-wire";
-import type { ContextUsage } from "../extensibility/extensions/types";
-import type { AgentSessionEvent } from "../session/agent-session";
-import type { SessionEntry, SessionHeader } from "../session/session-manager";
 
-export type {
-	CollabPromptDetails,
-	ParsedCollabLink,
-	RelayControlMessage,
-	RelayControlToGuest,
-	RelayControlToHost,
-} from "@oh-my-pi/pi-wire";
-export { COLLAB_PROMPT_MESSAGE_TYPE, COLLAB_PROTO } from "@oh-my-pi/pi-wire";
+export { COLLAB_PROTO } from "@oh-my-pi/pi-wire";
+export type { ParsedCollabLink };
 export { DEFAULT_RELAY_URL, ENVELOPE_HEADER_LENGTH, ROOM_ID_BYTES };
 
-export type CollabParticipant = Participant;
-export type AgentSnapshot = WireAgentSnapshot;
-
-/** Debounced footer snapshot broadcast by the host. */
-export type CollabSessionState = SessionState & {
-	/**
-	 * Host model (full catalog object). Guests apply it to their replica
-	 * agent state so model display and context-window math are native.
-	 */
-	model?: Model;
-	/** Host status-line context numbers (guest system prompt/tools differ, so local estimates drift). */
-	contextUsage?: ContextUsage;
-};
-
-/**
- * Encrypted payload frames (inside AES-GCM, JSON). The wire package pins the
- * JSON skeleton (`WireFrame`); host-side frames carry the rich session types
- * that serialize into those shapes.
- */
-export type CollabFrame =
-	// guest -> host (hello/abort/agent-cmd/fetch-transcript are taken verbatim from the wire grammar)
-	| Exclude<GuestFrame, { t: "prompt" }>
-	| { t: "prompt"; text: string; images?: ImageContent[] }
-	// host -> guest
-	| {
-			t: "welcome";
-			proto: number;
-			header: SessionHeader;
-			entries: SessionEntry[];
-			state: CollabSessionState;
-			agents: AgentSnapshot[];
-	  }
-	| { t: "entry"; entry: SessionEntry }
-	| { t: "event"; event: AgentSessionEvent }
-	| { t: "state"; state: CollabSessionState }
-	/** Mirrored EventBus traffic (task subagent lifecycle/progress channels only). */
-	| { t: "bus"; channel: BusChannel; data: unknown }
-	/** Full agent-registry snapshot (debounced on registry change). */
-	| { t: "agents"; agents: AgentSnapshot[] }
-	/** Targeted reply to fetch-transcript; `text` is decoded JSONL from `fromByte`, `newSize` the next offset base. */
-	| { t: "transcript"; reqId: number; text: string; newSize: number; error?: string }
-	| { t: "bye"; reason: string }
-	| { t: "error"; message: string };
+const ROOM_PATH_RE = /^\/r\/([A-Za-z0-9_-]{10,64})$/;
+const BARE_LINK_RE = /^([A-Za-z0-9_-]{10,64})#([A-Za-z0-9_-]+)$/;
+const B64URL_RE = /^[A-Za-z0-9_-]+$/;
+const LOCAL_HOSTNAMES: Record<string, true> = { localhost: true, "127.0.0.1": true, "::1": true, "[::1]": true };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Wire envelope: [4B uint32 BE peerId][sealed payload]
-// Host→relay: peerId 0 broadcasts to all guests; peerId N targets guest N.
-// Guest→relay: always 0; the relay rewrites it to the sender's id.
+// base64url (no Buffer in the browser)
 // ═══════════════════════════════════════════════════════════════════════════
 
-export function packEnvelope(peerId: number, sealed: Uint8Array): Uint8Array {
+export function encodeBase64Url(bytes: Uint8Array): string {
+	let binary = "";
+	for (const byte of bytes) binary += String.fromCharCode(byte);
+	return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+}
+
+export function decodeBase64Url(text: string): Uint8Array | null {
+	if (!B64URL_RE.test(text)) return null;
+	const base64 = text.replaceAll("-", "+").replaceAll("_", "/");
+	const padded = base64.length % 4 === 0 ? base64 : base64 + "=".repeat(4 - (base64.length % 4));
+	let binary: string;
+	try {
+		binary = atob(padded);
+	} catch {
+		return null;
+	}
+	const out = new Uint8Array(binary.length);
+	for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
+	return out;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Wire envelope
+// ═══════════════════════════════════════════════════════════════════════════
+
+export function packEnvelope(peerId: number, sealed: Uint8Array): Uint8Array<ArrayBuffer> {
 	const out = new Uint8Array(ENVELOPE_HEADER_LENGTH + sealed.byteLength);
 	new DataView(out.buffer).setUint32(0, peerId, false);
 	out.set(sealed, ENVELOPE_HEADER_LENGTH);
@@ -100,18 +68,13 @@ export function rewriteEnvelopePeer(data: Uint8Array, peerId: number): void {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Link format: wss://<host[:port]>/r/<roomId>#<base64url-32-byte-key>
+// Link format
 // ═══════════════════════════════════════════════════════════════════════════
-
-const ROOM_PATH_RE = /^\/r\/([A-Za-z0-9_-]{10,64})$/;
-const BARE_LINK_RE = /^([A-Za-z0-9_-]{10,64})#([A-Za-z0-9_-]+)$/;
-const B64URL_RE = /^[A-Za-z0-9_-]+$/;
-const LOCAL_HOSTNAMES: Record<string, true> = { localhost: true, "127.0.0.1": true, "::1": true, "[::1]": true };
 
 export function generateRoomId(): string {
 	const bytes = new Uint8Array(ROOM_ID_BYTES);
 	crypto.getRandomValues(bytes);
-	return Buffer.from(bytes).toString("base64url");
+	return encodeBase64Url(bytes);
 }
 
 /** Normalize a relay base URL (ws/wss/http/https) into a ws/wss origin, or an error. */
@@ -144,14 +107,13 @@ function normalizeRelayOrigin(relayUrl: string): { origin: string } | { error: s
 
 /**
  * Render the shareable link. Compact forms: the default relay collapses to
- * `<roomId>#<key>`, other wss relays drop the scheme (`host[:port]/r/…`);
- * only localhost ws:// links keep their full URL so parsing cannot
- * mis-infer wss.
+ * `<roomId>#<key>`; custom wss relays drop the scheme (`host[:port]/r/…`);
+ * plain-ws localhost relays keep the full `ws://` URL.
  */
 export function formatCollabLink(relayUrl: string, roomId: string, key: Uint8Array): string {
 	const normalized = normalizeRelayOrigin(relayUrl);
 	if ("error" in normalized) throw new Error(normalized.error);
-	const keyText = Buffer.from(key).toString("base64url");
+	const keyText = encodeBase64Url(key);
 	if (normalized.origin === DEFAULT_RELAY_URL) return `${roomId}#${keyText}`;
 	const compact = normalized.origin.startsWith("wss://")
 		? normalized.origin.slice("wss://".length)
@@ -178,12 +140,12 @@ export function parseCollabLink(link: string): ParsedCollabLink | { error: strin
 	if (!match) {
 		return { error: "Collab link must contain a /r/<roomId> path" };
 	}
-	const roomId = match[1]!;
+	const roomId = match[1] as string;
 	const fragment = url.hash.startsWith("#") ? url.hash.slice(1) : url.hash;
 	if (!fragment) {
 		return { error: "Collab link is missing the #<key> fragment" };
 	}
-	const key = B64URL_RE.test(fragment) ? new Uint8Array(Buffer.from(fragment, "base64url")) : null;
+	const key = decodeBase64Url(fragment);
 	if (key?.byteLength !== 32) {
 		return { error: "Collab link key must be 32 base64url bytes" };
 	}

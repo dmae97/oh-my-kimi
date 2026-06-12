@@ -1,0 +1,44 @@
+/* Design tokens — dark-only devtool aesthetic, warm amber-gold accent.
+ * The ONLY file allowed to contain raw color values. */
+:root {
+	color-scheme: dark;
+
+	/* surfaces — neutral ramp tinted by the accent hue (80) */
+	--bg: oklch(0.16 0.008 80);
+	--bg-raised: oklch(0.19 0.01 80);
+	--bg-inset: oklch(0.13 0.006 80);
+	--bg-overlay: oklch(0.22 0.012 80);
+
+	/* text */
+	--fg: oklch(0.92 0.012 80);
+	--fg-muted: oklch(0.71 0.014 80);
+	--fg-faint: oklch(0.53 0.012 80);
+
+	/* one accent: warm amber-gold */
+	--accent: oklch(0.8 0.13 80);
+	--accent-fg: oklch(0.2 0.05 80);
+	--accent-muted: oklch(0.8 0.13 80 / 18%);
+
+	/* status — used sparingly */
+	--ok: oklch(0.76 0.14 150);
+	--warn: oklch(0.79 0.14 85);
+	--err: oklch(0.66 0.19 25);
+
+	/* hairlines */
+	--border: oklch(1 0 0 / 9%);
+	--border-strong: oklch(1 0 0 / 13%);
+	--ring: oklch(0.8 0.13 80 / 70%);
+
+	/* type — system stacks only */
+	--font-ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Helvetica Neue", sans-serif;
+	--font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+
+	/* radii */
+	--radius-sm: 2px;
+	--radius: 4px;
+	--radius-lg: 8px;
+
+	/* non-pinned helpers (kept here so no raw colors leak outside this file) */
+	--shadow-overlay: 0 12px 32px oklch(0 0 0 / 45%), 0 2px 8px oklch(0 0 0 / 30%);
+	--backdrop: oklch(0.1 0.005 80 / 62%);
+}

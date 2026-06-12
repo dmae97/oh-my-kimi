@@ -68,6 +68,10 @@ Everything that mutates the host session or machine is host-only: `/model`, `/co
 
 Known v1 limit for guests: a turn already streaming when you join becomes visible from its next message boundary.
 
+## Web client
+
+`packages/collab-web` is a standalone browser client for the same links — no omp install needed on the guest side. It renders the live transcript (streaming text, thinking, tool cards), a subagent panel with on-demand transcripts, and a composer with the same guest powers (prompt, interrupt, hub actions). Run `bun run dev` in the package for a local instance, `bun run mock-host` for an offline scripted host to develop against, and `bun run build` to emit a static `dist/` deployable anywhere (HTTPS required for WebCrypto). The client never talks to anything but the relay, and the key stays in the URL fragment.
+
 ## Settings
 
 | Setting | Default | Meaning |

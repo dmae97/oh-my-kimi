@@ -12,11 +12,13 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
+import type { BusChannel, AgentEvent as WireAgentEvent, SessionEntry as WireSessionEntry } from "@oh-my-pi/pi-wire";
 import type { InteractiveModeContext } from "../modes/types";
 import { AgentLifecycleManager } from "../registry/agent-lifecycle";
 import { AgentRegistry } from "../registry/agent-registry";
 import type { AgentSessionEvent } from "../session/agent-session";
 import { stripImagesFromMessage, USER_INTERRUPT_LABEL } from "../session/messages";
+import type { SessionEntry as StoredSessionEntry } from "../session/session-manager";
 import { TASK_SUBAGENT_LIFECYCLE_CHANNEL, TASK_SUBAGENT_PROGRESS_CHANNEL } from "../task";
 import { generateRoomKey, importRoomKey } from "./crypto";
 import {
@@ -46,6 +48,45 @@ const STATE_DEBOUNCE_MS = 100;
 const AGENTS_DEBOUNCE_MS = 100;
 const STREAMING_STATE_INTERVAL_MS = 2000;
 const WELCOME_IMAGE_STRIP_THRESHOLD = 24 * 1024 * 1024;
+const WIRE_AGENT_EVENT_TYPES: Record<WireAgentEvent["type"], true> = {
+	agent_start: true,
+	agent_end: true,
+	turn_start: true,
+	turn_end: true,
+	message_start: true,
+	message_update: true,
+	message_end: true,
+	tool_execution_start: true,
+	tool_execution_update: true,
+	tool_execution_end: true,
+	notice: true,
+	auto_compaction_start: true,
+	auto_compaction_end: true,
+	auto_retry_start: true,
+	auto_retry_end: true,
+	thinking_level_changed: true,
+};
+
+const WIRE_SESSION_ENTRY_TYPES: Record<WireSessionEntry["type"], true> = {
+	message: true,
+	custom_message: true,
+	compaction: true,
+	branch_summary: true,
+	model_change: true,
+	thinking_level_change: true,
+};
+const COLLAB_BUS_CHANNELS = [
+	TASK_SUBAGENT_LIFECYCLE_CHANNEL,
+	TASK_SUBAGENT_PROGRESS_CHANNEL,
+] as const satisfies readonly BusChannel[];
+
+function isWireAgentEvent(event: AgentSessionEvent): event is AgentSessionEvent & WireAgentEvent {
+	return event.type in WIRE_AGENT_EVENT_TYPES;
+}
+
+function isWireSessionEntry(entry: StoredSessionEntry): entry is StoredSessionEntry & WireSessionEntry {
+	return entry.type in WIRE_SESSION_ENTRY_TYPES;
+}
 const CONNECT_TIMEOUT_MS = 15_000;
 /** Max bytes served per fetch-transcript reply (guest re-requests from `newSize`). */
 const TRANSCRIPT_READ_CAP = 4 * 1024 * 1024;
@@ -145,18 +186,18 @@ export class CollabHost {
 		}
 
 		this.#unsubscribe = this.#ctx.session.subscribe(event => {
-			this.#broadcast({ t: "event", event });
+			if (isWireAgentEvent(event)) this.#broadcast({ t: "event", event });
 			this.#onEventForState(event);
 		});
 		const bus = this.#ctx.eventBus;
 		if (bus) {
-			for (const channel of [TASK_SUBAGENT_LIFECYCLE_CHANNEL, TASK_SUBAGENT_PROGRESS_CHANNEL]) {
+			for (const channel of COLLAB_BUS_CHANNELS) {
 				this.#busUnsubscribers.push(bus.on(channel, data => this.#broadcast({ t: "bus", channel, data })));
 			}
 		}
 		this.#registryUnsubscribe = AgentRegistry.global().onChange(() => this.#scheduleAgentsBroadcast());
 		this.#ctx.sessionManager.onEntryAppended = entry => {
-			this.#broadcast({ t: "entry", entry });
+			if (isWireSessionEntry(entry)) this.#broadcast({ t: "entry", entry });
 			// Model/thinking/title changes land as entries while idle; refresh
 			// guest state promptly (debounce + JSON diff dedupe).
 			this.#scheduleStateBroadcast();
@@ -249,12 +290,13 @@ export class CollabHost {
 			}
 			logger.info("collab welcome exceeded size threshold; stripped images", { stripped });
 		}
+		const entries = snapshot.entries.filter(isWireSessionEntry);
 		this.#socket?.send(
 			{
 				t: "welcome",
 				proto: COLLAB_PROTO,
 				header: snapshot.header,
-				entries: snapshot.entries,
+				entries,
 				state: this.#buildState(),
 				agents: this.#snapshotAgents(),
 			},
