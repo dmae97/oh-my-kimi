@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -18,6 +18,24 @@ const expectedFixtureSkillOrder: string[] = [
 	"unknown-field",
 	"valid-skill",
 ];
+
+/**
+ * Disable every named built-in skill source. Used by `loadSkills` option tests
+ * that need to isolate a custom directory or assert "no built-in leakage". Tests
+ * MUST spread this in: the discovery surface only ignores `~/.<dir>/skills/*` if
+ * every provider toggle resolves to false, otherwise stray skills from the
+ * developer's real `$HOME` (e.g. `~/.agents/skills/<name>/SKILL.md`) leak into
+ * the assertion.
+ */
+const DISABLE_ALL_BUILTIN_SKILLS = {
+	enableCodexUser: false,
+	enableClaudeUser: false,
+	enableClaudeProject: false,
+	enablePiUser: false,
+	enablePiProject: false,
+	enableAgentsUser: false,
+	enableAgentsProject: false,
+} as const;
 
 describe("skills", () => {
 	describe("loadSkillsFromDir", () => {
@@ -133,28 +151,14 @@ describe("skills", () => {
 
 	describe("loadSkills with options", () => {
 		it("should load from customDirectories only when built-ins disabled", async () => {
-			const { skills } = await loadSkills({
-				enableCodexUser: false,
-				enableClaudeUser: false,
-				enableClaudeProject: false,
-				enablePiUser: false,
-				enablePiProject: false,
-				customDirectories: [fixturesDir],
-			});
+			const { skills } = await loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS, customDirectories: [fixturesDir], });
 			expect(skills.length).toBeGreaterThan(0);
 			// Custom directory skills have source "custom:user"
 			expect(skills.every(s => s.source.startsWith("custom"))).toBe(true);
 		});
 
 		it("should return customDirectory skills sorted by name (case-insensitive)", async () => {
-			const { skills } = await loadSkills({
-				enableCodexUser: false,
-				enableClaudeUser: false,
-				enableClaudeProject: false,
-				enablePiUser: false,
-				enablePiProject: false,
-				customDirectories: [fixturesDir],
-			});
+			const { skills } = await loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS, customDirectories: [fixturesDir], });
 
 			expect(skills.map(s => s.name)).toEqual(expectedFixtureSkillOrder);
 		});
@@ -191,29 +195,73 @@ describe("skills", () => {
 			}
 		});
 
+
+		// Regression for issue #2401: a user who disables the named third-party
+		// CLI toggles (codex/claude/native) MUST still see skills from the
+		// canonical OMP-native `~/.agent[s]/skills` (the `agents` provider).
+		// Pre-fix `loadSkills` gated `agents` on `anyBuiltInSkillSourceEnabled`,
+		// so flipping the five third-party toggles off silently disabled it.
+		it("should still load ~/.agents/skills when codex/claude/native toggles are off (#2401)", async () => {
+			const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "pi-agents-home-"));
+			const tempCwd = await fs.mkdtemp(path.join(os.tmpdir(), "pi-agents-cwd-"));
+			const skillDir = path.join(tempHome, ".agents", "skills", "user-agents-skill");
+			await fs.mkdir(skillDir, { recursive: true });
+			await fs.writeFile(
+				path.join(skillDir, "SKILL.md"),
+				["---", "description: Loaded from ~/.agents/skills", "---", "", "# user-agents-skill"].join("\n"),
+			);
+			const homedirSpy = spyOn(os, "homedir").mockReturnValue(tempHome);
+			try {
+				const { skills } = await loadSkills({
+					enableCodexUser: false,
+					enableClaudeUser: false,
+					enableClaudeProject: false,
+					enablePiUser: false,
+					enablePiProject: false,
+					// enableAgentsUser/enableAgentsProject left at their default-true value
+					cwd: tempCwd,
+				});
+				expect(skills.some(s => s.name === "user-agents-skill" && s.source === "agents:user")).toBe(true);
+			} finally {
+				homedirSpy.mockRestore();
+				await fs.rm(tempHome, { recursive: true, force: true });
+				await fs.rm(tempCwd, { recursive: true, force: true });
+			}
+		});
+
+		it("respects an explicit enableAgentsUser: false (#2401)", async () => {
+			const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "pi-agents-home-off-"));
+			const tempCwd = await fs.mkdtemp(path.join(os.tmpdir(), "pi-agents-cwd-off-"));
+			const skillDir = path.join(tempHome, ".agents", "skills", "opted-out");
+			await fs.mkdir(skillDir, { recursive: true });
+			await fs.writeFile(
+				path.join(skillDir, "SKILL.md"),
+				["---", "description: Should be filtered out", "---", "", "# opted-out"].join("\n"),
+			);
+			const homedirSpy = spyOn(os, "homedir").mockReturnValue(tempHome);
+			try {
+				const { skills } = await loadSkills({
+					...DISABLE_ALL_BUILTIN_SKILLS,
+					enableAgentsUser: false,
+					cwd: tempCwd,
+				});
+				expect(skills.some(s => s.name === "opted-out")).toBe(false);
+			} finally {
+				homedirSpy.mockRestore();
+				await fs.rm(tempHome, { recursive: true, force: true });
+				await fs.rm(tempCwd, { recursive: true, force: true });
+			}
+		});
+
 		it("should filter out ignoredSkills", async () => {
-			const { skills } = await loadSkills({
-				enableCodexUser: false,
-				enableClaudeUser: false,
-				enableClaudeProject: false,
-				enablePiUser: false,
-				enablePiProject: false,
-				customDirectories: [fixturesDir],
-				ignoredSkills: ["valid-skill"],
-			});
+			const { skills } = await loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS, customDirectories: [fixturesDir],
+				ignoredSkills: ["valid-skill"], });
 			expect(skills.some(s => s.name === "valid-skill")).toBe(false);
 		});
 
 		it("should support glob patterns in ignoredSkills", async () => {
-			const { skills } = await loadSkills({
-				enableCodexUser: false,
-				enableClaudeUser: false,
-				enableClaudeProject: false,
-				enablePiUser: false,
-				enablePiProject: false,
-				customDirectories: [fixturesDir],
-				ignoredSkills: ["valid-*"],
-			});
+			const { skills } = await loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS, customDirectories: [fixturesDir],
+				ignoredSkills: ["valid-*"], });
 			expect(skills.every(s => !s.name.startsWith("valid-"))).toBe(true);
 		});
 
@@ -234,14 +282,7 @@ enabled: false
 			);
 
 			try {
-				const { skills } = await loadSkills({
-					enableCodexUser: false,
-					enableClaudeUser: false,
-					enableClaudeProject: false,
-					enablePiUser: false,
-					enablePiProject: false,
-					customDirectories: [tempDir],
-				});
+				const { skills } = await loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS, customDirectories: [tempDir], });
 				expect(skills.some(s => s.name === "disabled-skill")).toBe(false);
 			} finally {
 				await fs.rm(tempDir, { recursive: true, force: true });
@@ -258,14 +299,7 @@ enabled: false
 			);
 
 			try {
-				const { skills } = await loadSkills({
-					enableCodexUser: false,
-					enableClaudeUser: false,
-					enableClaudeProject: false,
-					enablePiUser: false,
-					enablePiProject: false,
-					customDirectories: [tempDir],
-				});
+				const { skills } = await loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS, customDirectories: [tempDir], });
 				const skill = skills.find(s => s.name === "hidden-by-spec");
 				expect(skill).toBeDefined();
 				expect(skill!.hide).toBe(true);
@@ -275,16 +309,9 @@ enabled: false
 		});
 
 		it("should let ignoredSkills override includeSkills", async () => {
-			const { skills } = await loadSkills({
-				enableCodexUser: false,
-				enableClaudeUser: false,
-				enableClaudeProject: false,
-				enablePiUser: false,
-				enablePiProject: false,
-				customDirectories: [fixturesDir],
+			const { skills } = await loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS, customDirectories: [fixturesDir],
 				includeSkills: ["valid-*"],
-				ignoredSkills: ["valid-skill"],
-			});
+				ignoredSkills: ["valid-skill"], });
 			expect(skills.every(s => s.name !== "valid-skill")).toBe(true);
 		});
 	});
@@ -308,22 +335,8 @@ description: Skill loaded from a tilde-expanded custom directory.
 		);
 
 		try {
-			const { skills: withTilde } = await loadSkills({
-				enableCodexUser: false,
-				enableClaudeUser: false,
-				enableClaudeProject: false,
-				enablePiUser: false,
-				enablePiProject: false,
-				customDirectories: [tildeDir],
-			});
-			const { skills: withoutTilde } = await loadSkills({
-				enableCodexUser: false,
-				enableClaudeUser: false,
-				enableClaudeProject: false,
-				enablePiUser: false,
-				enablePiProject: false,
-				customDirectories: [tempHomeSkillsDir],
-			});
+			const { skills: withTilde } = await loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS, customDirectories: [tildeDir], });
+			const { skills: withoutTilde } = await loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS, customDirectories: [tempHomeSkillsDir], });
 			expect(withTilde.length).toBe(withoutTilde.length);
 			expect(withTilde.some(skill => skill.name === "tilde-skill")).toBe(true);
 		} finally {
@@ -332,74 +345,33 @@ description: Skill loaded from a tilde-expanded custom directory.
 	});
 
 	it("should return empty when all sources disabled and no custom dirs", async () => {
-		const { skills } = await loadSkills({
-			enableCodexUser: false,
-			enableClaudeUser: false,
-			enableClaudeProject: false,
-			enablePiUser: false,
-			enablePiProject: false,
-		});
+		const { skills } = await loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS,  });
 		expect(skills).toHaveLength(0);
 	});
 
 	it("should filter skills with includeSkills glob patterns", async () => {
 		// Load all skills from fixtures
-		const { skills: allSkills } = await loadSkills({
-			enableCodexUser: false,
-			enableClaudeUser: false,
-			enableClaudeProject: false,
-			enablePiUser: false,
-			enablePiProject: false,
-			customDirectories: [fixturesDir],
-		});
+		const { skills: allSkills } = await loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS, customDirectories: [fixturesDir], });
 		expect(allSkills.length).toBeGreaterThan(0);
 
 		// Filter to only include "valid-skill"
-		const { skills: filtered } = await loadSkills({
-			enableCodexUser: false,
-			enableClaudeUser: false,
-			enableClaudeProject: false,
-			enablePiUser: false,
-			enablePiProject: false,
-			customDirectories: [fixturesDir],
-			includeSkills: ["valid-skill"],
-		});
+		const { skills: filtered } = await loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS, customDirectories: [fixturesDir],
+			includeSkills: ["valid-skill"], });
 		expect(filtered).toHaveLength(1);
 		expect(filtered[0].name).toBe("valid-skill");
 	});
 
 	it("should support glob patterns in includeSkills", async () => {
-		const { skills } = await loadSkills({
-			enableCodexUser: false,
-			enableClaudeUser: false,
-			enableClaudeProject: false,
-			enablePiUser: false,
-			enablePiProject: false,
-			customDirectories: [fixturesDir],
-			includeSkills: ["valid-*"],
-		});
+		const { skills } = await loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS, customDirectories: [fixturesDir],
+			includeSkills: ["valid-*"], });
 		expect(skills.length).toBeGreaterThan(0);
 		expect(skills.every(s => s.name.startsWith("valid-"))).toBe(true);
 	});
 
 	it("should return all skills when includeSkills is empty", async () => {
-		const { skills: withEmpty } = await loadSkills({
-			enableCodexUser: false,
-			enableClaudeUser: false,
-			enableClaudeProject: false,
-			enablePiUser: false,
-			enablePiProject: false,
-			customDirectories: [fixturesDir],
-			includeSkills: [],
-		});
-		const { skills: withoutOption } = await loadSkills({
-			enableCodexUser: false,
-			enableClaudeUser: false,
-			enableClaudeProject: false,
-			enablePiUser: false,
-			enablePiProject: false,
-			customDirectories: [fixturesDir],
-		});
+		const { skills: withEmpty } = await loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS, customDirectories: [fixturesDir],
+			includeSkills: [], });
+		const { skills: withoutOption } = await loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS, customDirectories: [fixturesDir], });
 		expect(withEmpty.length).toBe(withoutOption.length);
 	});
 });
