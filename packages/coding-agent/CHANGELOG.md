@@ -7,6 +7,10 @@
 - Added isolated profile support via `--profile <name>` / `OMP_PROFILE` and shell alias bootstrap via `--alias <command>`, including launch/ACP bootstrap handling, extension-flag-safe parsing, profile-scoped user config discovery, and symlinked extension-directory discovery.
 - MCP OAuth credentials are now bound per server URL (`mcp_oauth:<url>`) in each profile's agent.db, with refresh material embedded in the stored credential. A server *definition* in a shared project `mcp.json` (no `auth` block needed) now resolves each profile's own credential, so two profiles can stay signed into the same project server with different accounts instead of clobbering each other's `auth.credentialId` pointer. Stale pointers from other profiles fall back to the url-keyed binding, the fallback always yields to an explicit `Authorization` header, mid-session 401s refresh definition-only bindings too, `/mcp reauth` no longer writes auth state into definition-only entries, OAuth reauthorization sends `prompt=consent` by default so users can switch accounts/workspaces, stdio reauth fails fast with a `mcp-remote` machine-cache hint, and DCR-issued client secrets are never written into config files. Note: committed `mcp.json` definitions are trusted input — any checkout naming an authorized URL connects with that profile's credential (see docs/mcp-config.md).
 
+### Fixed
+
+- Fixed `/mcp reauth` for definition-only MCP URLs containing `${...}` env expansion: OAuth credentials are now keyed by the expanded runtime URL, reload finds the row without writing an explicit `auth.credentialId`, embedded DCR client secrets survive token exchange, and `/mcp unauth` clears the expanded key too.
+
 ## [15.11.3] - 2026-06-11
 
 ### Fixed

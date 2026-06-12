@@ -7,6 +7,7 @@ import * as path from "node:path";
 import { type Component, replaceTabs, Spacer, Text } from "@oh-my-pi/pi-tui";
 import { getMCPConfigPath, getProjectDir } from "@oh-my-pi/pi-utils";
 import type { SourceMeta } from "../../capability/types";
+import { expandEnvVarsDeep } from "../../discovery/helpers";
 import { analyzeAuthError, discoverOAuthEndpoints, MCPManager } from "../../mcp";
 import { connectToServer, disconnectServer, listTools } from "../../mcp/client";
 import {
@@ -838,6 +839,21 @@ export class MCPCommandController {
 		await this.ctx.session.modelRegistry.authStorage.remove(credentialId);
 	}
 
+	#lookupExistingMcpOAuthCredential(
+		auth: MCPAuthConfig | undefined,
+		serverUrl: string | undefined,
+	): MCPStoredOAuthCredential | undefined {
+		const authStorage = this.ctx.session.modelRegistry.authStorage;
+		if (auth?.type === "oauth" && auth.credentialId) {
+			const credential = authStorage.get(auth.credentialId);
+			if (credential?.type === "oauth") return credential;
+		}
+		if (!serverUrl) return undefined;
+		const credential = authStorage.get(mcpOAuthCredentialId(serverUrl));
+		if (credential?.type === "oauth") return credential;
+		return undefined;
+	}
+
 	#stripOAuthAuth(config: MCPServerConfig): MCPServerConfig {
 		const next = { ...config } as MCPServerConfig & { auth?: MCPAuthConfig };
 		delete next.auth;
@@ -1435,9 +1451,15 @@ export class MCPCommandController {
 				await this.#removeManagedOAuthCredential(currentAuth.credentialId);
 			}
 			// Also drop this profile's url-keyed binding so the server is truly
-			// signed out even when the config carries no auth block.
+			// signed out even when the config carries no auth block. Runtime
+			// discovery expands `${...}` URL values before MCPManager looks up the
+			// deterministic credential row, so unauth must clear that same key.
 			if ((found.config.type === "http" || found.config.type === "sse") && found.config.url) {
-				await this.#removeManagedOAuthCredential(mcpOAuthCredentialId(found.config.url));
+				const runtimeServerUrl = expandEnvVarsDeep(found.config.url);
+				await this.#removeManagedOAuthCredential(mcpOAuthCredentialId(runtimeServerUrl));
+				if (runtimeServerUrl !== found.config.url) {
+					await this.#removeManagedOAuthCredential(mcpOAuthCredentialId(found.config.url));
+				}
 			}
 
 			const updated = this.#stripOAuthAuth(found.config);
@@ -1472,26 +1494,37 @@ export class MCPCommandController {
 
 			const currentAuth = (found.config as MCPServerConfig & { auth?: MCPAuthConfig }).auth;
 			const baseConfig = this.#stripOAuthAuth(found.config);
+			const runtimeBaseConfig = expandEnvVarsDeep(baseConfig);
 			// Resolve endpoints first: this fails fast for stdio transports and
 			// probes http/sse with { oauth: false }, so nothing destructive has
 			// happened yet if the server turns out not to need (or support) OAuth.
-			const oauth = await this.#resolveOAuthEndpointsFromServer(baseConfig);
-			const serverUrl = found.config.type === "http" || found.config.type === "sse" ? found.config.url : undefined;
+			// Use the same env-expanded config shape runtime discovery passes to
+			// MCPManager; the raw file value may contain `${...}` placeholders.
+			const oauth = await this.#resolveOAuthEndpointsFromServer(runtimeBaseConfig);
+			const serverUrl =
+				runtimeBaseConfig.type === "http" || runtimeBaseConfig.type === "sse" ? runtimeBaseConfig.url : undefined;
 			// A user-supplied client secret may live in either block (the wizard
 			// writes it to auth.clientSecret); DCR secrets are embedded in the
 			// stored credential and never echoed back into config files.
+			const configuredClientId = found.config.oauth?.clientId ?? currentAuth?.clientId;
+			const existingCredential = this.#lookupExistingMcpOAuthCredential(currentAuth, serverUrl);
+			const flowClientId = oauth.clientId ?? configuredClientId ?? existingCredential?.clientId ?? "";
+			const storedClientSecret =
+				existingCredential?.clientId === flowClientId ? existingCredential.clientSecret : undefined;
 			const userClientSecret = found.config.oauth?.clientSecret ?? currentAuth?.clientSecret;
+			const flowClientSecret = userClientSecret ?? storedClientSecret ?? "";
 
 			this.#showMessage(["", theme.fg("muted", `Reauthorizing "${name}"...`), ""].join("\n"));
 
+			const currentAuthResource = currentAuth?.resource ? expandEnvVarsDeep(currentAuth.resource) : undefined;
 			const oauthResource =
-				oauth.resource ?? currentAuth?.resource ?? ("url" in baseConfig ? baseConfig.url : undefined);
+				oauth.resource ?? currentAuthResource ?? ("url" in runtimeBaseConfig ? runtimeBaseConfig.url : undefined);
 
 			const oauthResult = await this.#handleOAuthFlow(
 				oauth.authorizationUrl,
 				oauth.tokenUrl,
-				oauth.clientId ?? found.config.oauth?.clientId ?? "",
-				userClientSecret ?? "",
+				flowClientId,
+				flowClientSecret,
 				oauth.scopes ?? "",
 				{
 					callbackPort: found.config.oauth?.callbackPort,
