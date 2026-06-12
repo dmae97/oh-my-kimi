@@ -499,11 +499,7 @@ async function resolveMnemopiProviderOptions(
 						messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
 					},
 					{
-						apiKey: modelRegistry.resolver(model.provider, {
-							sessionId,
-							baseUrl: model.baseUrl,
-							modelId: model.id,
-						}),
+						apiKey: modelRegistry.resolver(model, sessionId),
 						maxTokens: opts?.maxTokens,
 						temperature: opts?.temperature,
 					},

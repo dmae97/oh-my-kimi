@@ -112,11 +112,7 @@ export async function generateCommitMessage(
 					messages: [{ role: "user", content: userMessage, timestamp: Date.now() }],
 				},
 				{
-					apiKey: registry.resolver(candidate.model.provider, {
-						sessionId,
-						baseUrl: candidate.model.baseUrl,
-						modelId: candidate.model.id,
-					}),
+					apiKey: registry.resolver(candidate.model, sessionId),
 					maxTokens,
 					reasoning: toReasoningEffort(candidate.thinkingLevel),
 				},
