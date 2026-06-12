@@ -166,6 +166,39 @@ describe("StdinBuffer", () => {
 		});
 	});
 
+	describe("Double-ESC disambiguation", () => {
+		it("joins a held bare ESC with a following CSI into one meta sequence", async () => {
+			processInput("\x1b");
+			processInput("\x1b[B");
+			await waitUntil(() => emittedSequences.length > 0);
+			expect(emittedSequences).toEqual(["\x1b\x1b[B"]);
+		});
+
+		it("splits a bare ESC from a following SGR mouse report", async () => {
+			processInput("\x1b");
+			processInput("\x1b[<35;22;17M");
+			await waitUntil(() => emittedSequences.length > 0);
+			expect(emittedSequences).toEqual(["\x1b", "\x1b[<35;22;17M"]);
+		});
+
+		it("flushes a trailing double-ESC as one sequence after the timeout", async () => {
+			processInput("\x1b\x1b");
+			expect(emittedSequences).toEqual([]);
+			await waitUntil(() => emittedSequences.length > 0);
+			expect(emittedSequences).toEqual(["\x1b\x1b"]);
+		});
+
+		it("keeps double-ESC followed by a non-CSI byte split as before", () => {
+			processInput("\x1b\x1bX");
+			expect(emittedSequences).toEqual(["\x1b\x1b", "X"]);
+		});
+
+		it("consumes a whole meta-CSI arrow in one chunk", () => {
+			processInput("\x1b\x1b[A");
+			expect(emittedSequences).toEqual(["\x1b\x1b[A"]);
+		});
+	});
+
 	describe("Mixed Content", () => {
 		it("should handle partial sequence with preceding characters", () => {
 			processInput("abc\x1b[<35");

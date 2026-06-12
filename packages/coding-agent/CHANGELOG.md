@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
 - Added mouse-driven interaction to `/settings`, including tab and setting row hover highlighting, wheel scrolling, and left-click activation for entries and submenus
@@ -30,6 +31,8 @@
 - The `job` renderer now shimmers running-job labels while the poll block is live, freezing to static once the block seals, and drops the id column when the label repeats it — task jobs label themselves with their agent id, so rows read `⟨task⟩ SessionTree` instead of `SessionTree ⟨task⟩ SessionTree`.
 
 - Task progress rows now render static text with the task icon instead of shimmering the description or showing the pending/hourglass status glyph.
+- `app.clipboard.pasteImage` (`Ctrl+V`) now falls back to pasting clipboard text when no image is present, so hosts that deliver only that chord (VS Code's integrated terminal forwarding `Ctrl+V`, Windows clipboard history via `Win+V`) cover both payload kinds; WSL text reads now reach the Windows clipboard through host PowerShell like image reads already did ([#1628](https://github.com/can1357/oh-my-pi/issues/1628)).
+- Changed `/usage` to show the OAuth account currently selected for the active model provider when usage reports include multiple accounts, making multi-account sessions easier to verify without marking unrelated providers.
 
 ### Fixed
 
@@ -171,14 +174,6 @@
 - Fixed the `thinking.autoPending` statusbar indicator using question-mark glyphs (`▣?`, nf-md-help_box, `[?]`) in every symbol preset, which made the auto-thinking pending state indistinguishable from a terminal missing-glyph fallback. Replaced with clear loading indicators (`⟳`, fa-circle-o-notch, `[~]`) ([#2267](https://github.com/can1357/oh-my-pi/issues/2267)).
 - Fixed `tab.screenshot({ save })` ignoring the save path's extension: an explicit `.webp`/`.jpg` destination received hardcoded PNG bytes behind a mismatched name. The full-res capture format is now derived from the save path (`png`/`jpeg`/`webp`, puppeteer-native), and the reported mime type follows the bytes actually written; unknown or missing extensions still capture PNG
 - Fixed an infinite `compaction.strategy: shake` auto-continue loop in thinking-heavy sessions: the post-shake check now uses the provider-anchored trigger metric (instead of a local estimate that undercounts `thinkingSignature` payloads) and only treats pressure as resolved when residual context lands inside an 80% recovery band, so shake reliably falls back to context-full compaction when it cannot create real headroom ([#2275](https://github.com/can1357/oh-my-pi/issues/2275)).
-
-### Changed
-
-- `app.clipboard.pasteImage` (`Ctrl+V`) now falls back to pasting clipboard text when no image is present, so hosts that deliver only that chord (VS Code's integrated terminal forwarding `Ctrl+V`, Windows clipboard history via `Win+V`) cover both payload kinds; WSL text reads now reach the Windows clipboard through host PowerShell like image reads already did ([#1628](https://github.com/can1357/oh-my-pi/issues/1628)).
-
-### Changed
-
-- Changed `/usage` to show the OAuth account currently selected for the active model provider when usage reports include multiple accounts, making multi-account sessions easier to verify without marking unrelated providers.
 
 ## [15.10.12] - 2026-06-10
 

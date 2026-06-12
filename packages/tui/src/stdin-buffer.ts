@@ -39,8 +39,10 @@ const KITTY_PRINTABLE_DEDUP_WINDOW_MS = 25;
 const SGR_MOUSE_PARTIAL = /^\x1b\[<[\d;]*$/;
 // Upper bound on how long an unambiguous partial is held past the flush
 // timeout before being delivered raw anyway (terminal died mid-sequence).
-const PARTIAL_HOLD_MAX_MS = 500;
-
+// This is also the worst-case added latency for a partial that never
+// completes (e.g. a bare ESC delivered while the kitty-active flag is
+// stale); keep it small.
+const PARTIAL_HOLD_MAX_MS = 150;
 /**
  * Check if a string is a complete escape sequence or needs more data
  */
@@ -239,6 +241,32 @@ function extractCompleteSequences(buffer: string): { sequences: string[]; remain
 					end++;
 					continue;
 				}
+				// "\x1b\x1b" alone parses as "complete" (legacy alt+esc), but when the
+				// next byte opens a CSI/SS3 ("[" or "O") this is really ESC prefixing
+				// another sequence (meta-CSI, or a held Esc keypress joined by a
+				// follower). Consuming two bytes here would tear the follower and leak
+				// its tail as typed text (settings search filling with "[B" or
+				// "[<35;22;17M"). Keep growing; when the buffer ends here, hold the
+				// partial for the flush window so the disambiguating byte can arrive.
+				if (candidate === `${ESC}${ESC}`) {
+					if (end >= length) {
+						return { sequences, remainder: buffer.slice(pos) };
+					}
+					const next = buffer.charCodeAt(end);
+					if (next === 0x5b || next === 0x4f) {
+						end++;
+						continue;
+					}
+				}
+				// ESC + SGR mouse report is never a meta chord: alt-modified mouse
+				// reports carry the modifier in the button bits, not an ESC prefix.
+				// Deliver the bare ESC (a real Esc keypress) and the report separately.
+				if (candidate.startsWith(`${ESC}${ESC}[<`)) {
+					sequences.push(ESC, candidate.slice(1));
+					pos = end;
+					consumed = true;
+					break;
+				}
 				// "complete" — or "not-escape", which should not happen when
 				// starting with ESC; both consume the candidate.
 				sequences.push(candidate);
@@ -269,7 +297,7 @@ export type StdinBufferOptions = {
 	 */
 	timeout?: number;
 	/**
-	 * Maximum extra time (default: 500ms) an unambiguous escape partial — an
+	 * Maximum extra time (default: 150ms) an unambiguous escape partial — an
 	 * SGR mouse prefix, or any dangling escape while the kitty keyboard
 	 * protocol is active — is held past `timeout` waiting for its tail.
 	 */
