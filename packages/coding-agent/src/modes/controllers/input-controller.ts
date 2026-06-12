@@ -891,7 +891,11 @@ export class InputController {
 				// newlines, collapse home to `~`, and bound the displayed length
 				// before splicing it into the status string.
 				const displayPath = truncateToWidth(
-					shortenPath(sanitizeText(path).replace(/[\r\n\t]+/g, " ").trim()),
+					shortenPath(
+						sanitizeText(path)
+							.replace(/[\r\n\t]+/g, " ")
+							.trim(),
+					),
 					TRUNCATE_LENGTHS.CONTENT,
 				);
 				const env = process.env;
