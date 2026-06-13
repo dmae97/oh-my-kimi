@@ -25,7 +25,7 @@
  *   200 JSON (stream=false): { message: AssistantMessage }
  *   4xx/5xx: { error: { type, message } }
  */
-import type { AuthGatewayParsedRequestOptions, AuthGatewayStreamControl } from "../auth-gateway/types";
+import type { AuthGatewayStreamControl } from "../auth-gateway/types";
 import type { AssistantMessageEventStream, Context, SimpleStreamOptions } from "../types";
 
 export interface PiNativeParsedRequest {
@@ -165,7 +165,7 @@ const SSE_DONE = SSE_ENCODER.encode("data: [DONE]\n\n");
 export function encodeStream(
 	events: AssistantMessageEventStream,
 	_requestedModelId?: string,
-	_options?: AuthGatewayParsedRequestOptions,
+	_options?: SimpleStreamOptions,
 	control?: AuthGatewayStreamControl,
 ): ReadableStream<Uint8Array> {
 	let cancelled = control?.signal?.aborted === true;

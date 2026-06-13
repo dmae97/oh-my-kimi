@@ -22,6 +22,7 @@
 
 ### Fixed
 
+- Fixed ACP thinking-delta mapping to tolerate live chunks that only carry delta text.
 - Fixed image input to Ollama (local `ollama`, `ollama-cloud`, and any `ollama-chat` model) failing with an opaque HTTP 400 when an attached image was encoded as WebP. Ollama decodes images through llama.cpp / `stb_image`, which is built without WebP support, so the resize pipeline now auto-excludes WebP for those models — the automatic equivalent of `OMP_NO_WEBP=1`, applied across every image path (`@file` mentions and prompt/paste/CLI attachments, the `read`/`inspect_image` tools, `eval` display images, `fetch`ed images, and browser screenshots). Other providers are unaffected and still honor `OMP_NO_WEBP`.
 - Fixed queued steering/follow-up display to derive from the agent-core queue, so queued chips clear when the core dequeues them and no longer strand after empty-Enter aborts.
 - Fixed model auth gateway probing to avoid skipping candidates with unknown `maxTokens` limits (`null`)

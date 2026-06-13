@@ -186,4 +186,39 @@ describe("StatusLineComponent context breakdown", () => {
 		expect(border.content.length).toBeGreaterThan(0);
 		expect(usageCalls()).toBe(0);
 	});
+
+	it("renders the anchored percent against the (sub-)budget window in the context segment", () => {
+		const { session } = makeSession({
+			messages: [userMessage("hi"), assistantMessage("done")],
+			usage: { tokens: 5000, contextWindow: 272_000, percent: 1.8 },
+		});
+		const comp = new StatusLineComponent(session);
+		comp.updateSettings({
+			preset: "custom",
+			leftSegments: ["context_pct"],
+			rightSegments: [],
+			separator: "powerline-thin",
+		});
+
+		// 5000 / 272000 → 1.8%, window formatted as 272K (matches the footer gauge).
+		const plain = comp.getTopBorder(80).content.replaceAll(/\x1b\[[0-9;]*m/g, "");
+		expect(plain).toContain("1.8%/272K");
+	});
+
+	it("renders ? for the percent while the token count is unknown (post-compaction)", () => {
+		const { session } = makeSession({
+			messages: [userMessage("compaction summary")],
+			usage: { tokens: null, contextWindow: 272_000, percent: null },
+		});
+		const comp = new StatusLineComponent(session);
+		comp.updateSettings({
+			preset: "custom",
+			leftSegments: ["context_pct"],
+			rightSegments: [],
+			separator: "powerline-thin",
+		});
+
+		const plain = comp.getTopBorder(80).content.replaceAll(/\x1b\[[0-9;]*m/g, "");
+		expect(plain).toContain("?/272K");
+	});
 });
