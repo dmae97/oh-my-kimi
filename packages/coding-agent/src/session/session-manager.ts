@@ -2028,6 +2028,7 @@ export class SessionManager {
 	#persistWriter: NdjsonFileWriter | undefined;
 	#persistWriterPath: string | undefined;
 	#persistChain: Promise<void> = Promise.resolve();
+	#pendingPersistTasks = 0;
 	#persistError: Error | undefined;
 	#persistErrorReported = false;
 	#artifactManager: ArtifactManager | null = null;
@@ -2430,14 +2431,18 @@ export class SessionManager {
 	}
 
 	#queuePersistTask(task: () => Promise<void>, options?: { ignoreError?: boolean }): Promise<void> {
+		this.#pendingPersistTasks++;
 		const next = this.#persistChain.then(async () => {
 			if (this.#persistError && !options?.ignoreError) throw this.#persistError;
 			await task();
 		});
-		this.#persistChain = next.catch(err => {
+		const tracked = next.finally(() => {
+			this.#pendingPersistTasks--;
+		});
+		this.#persistChain = tracked.catch(err => {
 			this.#recordPersistError(err);
 		});
-		return next;
+		return tracked;
 	}
 
 	#ensurePersistWriter(): NdjsonFileWriter | undefined {
@@ -2561,6 +2566,85 @@ export class SessionManager {
 				// Ignore cleanup errors
 			}
 			throw toError(err);
+		}
+	}
+
+	#writeEntriesToWriterSync(writer: NdjsonFileWriter): void {
+		for (const entry of this.#fileEntries) {
+			writer.writeSync(prepareEntryForPersistenceSync(entry, this.#blobStore));
+		}
+	}
+
+	/**
+	 * First durable-session write: synchronously materialize the current in-memory
+	 * entries into the real session file, then keep that writer open so every
+	 * later append goes through the hot `writeSync` path. This intentionally does
+	 * not fsync; it only guarantees the JSONL bytes are handed to the kernel
+	 * before `appendMessage()` returns.
+	 */
+	#tryStartImmediatePersistWriter(): boolean {
+		if (!this.#sessionFile) return false;
+		if (this.#flushed || this.#needsFullRewriteOnNextPersist) return false;
+		if (this.#persistWriter || this.#pendingPersistTasks > 0) return false;
+		if (this.storage.existsSync(this.#sessionFile)) return false;
+
+		const writer = new NdjsonFileWriter(this.storage, this.#sessionFile, {
+			flags: "w",
+			onError: err => this.#recordPersistError(err),
+		});
+		try {
+			this.#writeEntriesToWriterSync(writer);
+		} catch (err) {
+			void writer.close().catch(() => {});
+			throw toError(err);
+		}
+
+		this.#persistWriter = writer;
+		this.#persistWriterPath = this.#sessionFile;
+		this.#needsFullRewriteOnNextPersist = false;
+		this.#flushed = true;
+		return true;
+	}
+
+	#rewriteFileInPlaceSync(): void {
+		if (!this.#sessionFile) return;
+		const previousWriter = this.#persistWriter;
+		this.#persistWriter = undefined;
+		this.#persistWriterPath = undefined;
+		if (previousWriter) {
+			void previousWriter.close().catch(err => {
+				this.#recordPersistError(err);
+			});
+		}
+
+		const writer = new NdjsonFileWriter(this.storage, this.#sessionFile, {
+			flags: "w",
+			onError: err => this.#recordPersistError(err),
+		});
+		try {
+			this.#writeEntriesToWriterSync(writer);
+		} catch (err) {
+			void writer.close().catch(() => {});
+			throw toError(err);
+		}
+
+		this.#persistWriter = writer;
+		this.#persistWriterPath = this.#sessionFile;
+		this.#needsFullRewriteOnNextPersist = false;
+		this.#flushed = true;
+	}
+
+	#appendEntryWithOneShotWriter(entry: SessionEntry): void {
+		if (!this.#sessionFile) return;
+		const writer = new NdjsonFileWriter(this.storage, this.#sessionFile, {
+			onError: err => this.#recordPersistError(err),
+		});
+		try {
+			writer.writeSync(prepareEntryForPersistenceSync(entry, this.#blobStore));
+		} finally {
+			void writer.close().catch(err => {
+				this.#recordPersistError(err);
+			});
 		}
 	}
 
@@ -2992,12 +3076,15 @@ export class SessionManager {
 		}
 
 		if (this.#needsFullRewriteOnNextPersist || !this.#flushed) {
-			// Cold path: rewrite the whole file atomically. Async — the writer is
-			// closed/reopened and every entry is re-prepared. Errors flow through
-			// `#persistChain` → `#recordPersistError`; we swallow the rejection
-			// here to avoid an unhandled rejection when the persist dir races with
-			// test-level tempDir cleanup.
-			this.#rewriteFile().catch(() => {});
+			// First assistant turn after lazy session creation: write the full file
+			// synchronously and leave the append writer open. After this returns,
+			// subsequent entries are never pending only in memory.
+			try {
+				if (this.#tryStartImmediatePersistWriter()) return;
+				this.#rewriteFileInPlaceSync();
+			} catch (err) {
+				this.#recordPersistError(err);
+			}
 			return;
 		}
 
@@ -3009,11 +3096,10 @@ export class SessionManager {
 		try {
 			const writer = this.#ensurePersistWriter();
 			if (!writer) {
-				// `#ensurePersistWriter` returns undefined here only when the cached
-				// writer is mid-close (the `!persist`/`!sessionFile` cases are
-				// rejected above). Route through `#rewriteFile` so the entry — which
-				// is already in `#fileEntries` — persists once the close drains.
-				this.#rewriteFile().catch(() => {});
+				// The cached writer is mid-close. Write the new entry through a
+				// short-lived append writer instead of queueing a rewrite, so the
+				// JSONL line is on disk before this append returns.
+				this.#appendEntryWithOneShotWriter(entry);
 				return;
 			}
 			const persistedEntry = prepareEntryForPersistenceSync(entry, this.#blobStore);

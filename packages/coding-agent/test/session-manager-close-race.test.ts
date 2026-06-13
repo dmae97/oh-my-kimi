@@ -207,6 +207,11 @@ describe("SessionManager close/appendMessage race", () => {
 			});
 		}).not.toThrow();
 
+		const sessionFile = sm.getSessionFile();
+		if (!sessionFile) throw new Error("Expected session file");
+		const duringCloseContent = await storage.readText(sessionFile);
+		expect(duringCloseContent).toContain('"content":"during-close"');
+
 		// Drain everything.
 		await settle(closePromise, storage);
 		// Pre-fix `flush()` rejects with the stashed Error("Writer closed").
