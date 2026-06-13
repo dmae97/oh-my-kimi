@@ -1217,6 +1217,11 @@ async function createRequestSetup(
 	};
 }
 
+function getForcedCompletionsToolName(toolChoice: OpenAICompletionsParams["tool_choice"]): string | undefined {
+	if (typeof toolChoice !== "object" || toolChoice === null || !("function" in toolChoice)) return undefined;
+	return toolChoice.function.name;
+}
+
 function buildParams(
 	model: Model<"openai-completions">,
 	context: Context,
@@ -1339,6 +1344,19 @@ function buildParams(
 		// Side-channel turns hit this: `/btw` and IRC background replies route
 		// through `AgentSession.runEphemeralTurn`, which sets `context.tools = []`
 		// and `toolChoice: "none"` (see packages/coding-agent/src/session/agent-session.ts).
+		delete params.tool_choice;
+	}
+
+	const forcedToolName = getForcedCompletionsToolName(params.tool_choice);
+	if (
+		forcedToolName !== undefined &&
+		(!Array.isArray(params.tools) ||
+			!params.tools.some(tool => tool.type === "function" && tool.function.name === forcedToolName))
+	) {
+		// A forced named tool_choice is only valid when the same request offers
+		// that function in `tools`. Active-tool filtering normally enforces this
+		// before provider dispatch; this guard keeps raw provider callers from
+		// emitting a self-inconsistent OpenAI-compatible payload.
 		delete params.tool_choice;
 	}
 

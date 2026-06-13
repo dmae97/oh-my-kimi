@@ -6,6 +6,10 @@
 
 - Fixed tool schema conversion for non-Cloud Code Assist Google Gemini models by normalizing parameters with `normalizeSchemaForGoogle` to prevent un-normalized schema properties (such as `additionalProperties: false` or type arrays) from causing Gemini API errors.
 
+### Fixed
+
+- Fixed OpenAI-family request builders dropping forced named `tool_choice` directives when the named tool is absent from the serialized `tools` array, preventing spec-strict providers from rejecting self-inconsistent requests. ([#1701](https://github.com/can1357/oh-my-pi/issues/1701))
+
 ## [15.12.4] - 2026-06-13
 
 ### Added

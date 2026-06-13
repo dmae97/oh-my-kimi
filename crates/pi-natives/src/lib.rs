@@ -53,7 +53,93 @@ pub mod tokens;
 pub(crate) mod utils;
 pub mod workspace;
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use napi::bindgen_prelude::create_custom_tokio_runtime;
 use napi_derive::{module_init, napi};
+
+/// Upper bound on Tokio *scheduler* workers. These only drive async I/O
+/// futures (shell/process/PTY/ISO) and light glue tasks; all CPU-heavy and
+/// blocking native work runs elsewhere — libuv tasks (`task::blocking`), Rayon,
+/// or Tokio's separate blocking pool via `spawn_blocking` — so a handful of
+/// async workers is plenty regardless of core count.
+const NAPI_TOKIO_MAX_WORKER_THREADS: usize = 4;
+/// Cap on Tokio's lazily-grown blocking pool (used by `spawn_blocking` offloads
+/// such as `iso_start`/`iso_stop`/`pty.start`/`walk_diff`). Threads here are
+/// created on demand, not at load, so this only bounds peak fan-out.
+const NAPI_TOKIO_MAX_BLOCKING_THREADS: usize = 8;
+
+/// Worker count we'd *like*, before checking what the OS will actually grant:
+/// the Tokio default (one per core) clamped to [`NAPI_TOKIO_MAX_WORKER_THREADS`].
+fn desired_worker_threads() -> usize {
+	std::thread::available_parallelism()
+		.map_or(1, |threads| threads.get())
+		.clamp(1, NAPI_TOKIO_MAX_WORKER_THREADS)
+}
+
+/// Probe how many worker threads the OS will let us hold alive *simultaneously*,
+/// up to `target`. Returns the count actually spawned (0 when not even one
+/// extra thread is possible).
+///
+/// `Builder::build()` for a multi-thread runtime spawns every worker eagerly and
+/// **panics** (not `Err`) when the OS refuses one — on a memory-constrained
+/// Windows host (tiny pagefile / commit limit, `os error 1455`) that aborts the
+/// whole process at addon load before any JS error can surface. The release
+/// profile is `panic = "abort"`, so the panic can't even be caught. We instead
+/// pre-flight with `std::thread::Builder::spawn`, which returns an `io::Result`,
+/// holding each probe thread alive (so their stacks are committed concurrently,
+/// matching how real workers coexist) until we know the safe count. Probe
+/// threads use the std default stack, exactly like Tokio's workers (it leaves
+/// `thread_stack_size` unset), so the probe is representative.
+fn probe_spawnable_workers(target: usize) -> usize {
+	let keep_running = Arc::new(AtomicBool::new(true));
+	let mut handles = Vec::with_capacity(target);
+	for _ in 0..target {
+		let keep = Arc::clone(&keep_running);
+		match std::thread::Builder::new().spawn(move || {
+			while keep.load(Ordering::Relaxed) {
+				std::thread::park_timeout(std::time::Duration::from_millis(1));
+			}
+		}) {
+			Ok(handle) => handles.push(handle),
+			Err(_) => break,
+		}
+	}
+	let spawned = handles.len();
+	keep_running.store(false, Ordering::Relaxed);
+	for handle in handles {
+		handle.thread().unpark();
+		let _ = handle.join();
+	}
+	spawned
+}
+
+/// Build the Tokio runtime napi-rs hands async exports, sized to what the host
+/// can actually spawn. Never panics: backs off from [`desired_worker_threads`]
+/// to whatever the probe allows, and falls back to a current-thread runtime
+/// (which spawns no workers at build time, so it can't abort under commit-limit
+/// pressure) when not even one worker is available. Returns `None` only if even
+/// that fails, in which case we leave napi-rs to construct its own default.
+fn create_napi_tokio_runtime() -> Option<tokio::runtime::Runtime> {
+	let workers = probe_spawnable_workers(desired_worker_threads());
+	let multi_thread = (workers > 0)
+		.then(|| {
+			tokio::runtime::Builder::new_multi_thread()
+				.worker_threads(workers)
+				.max_blocking_threads(NAPI_TOKIO_MAX_BLOCKING_THREADS)
+				.enable_all()
+				.build()
+				.ok()
+		})
+		.flatten();
+	multi_thread.or_else(|| {
+		tokio::runtime::Builder::new_current_thread()
+			.enable_all()
+			.build()
+			.ok()
+	})
+}
 
 /// Version sentinel — exists solely so the JS loader can prove at load time
 /// that the `.node` file on disk is from the same package release as the
@@ -75,8 +161,17 @@ use napi_derive::{module_init, napi};
 pub const fn pi_natives_version_sentinel() {}
 
 /// Native module entry point: install crash diagnostics before any tool can
-/// invoke a panicking or allocating native call. Runs once at `.node` load.
+/// invoke a panicking or allocating native call, then hand napi-rs a
+/// host-sized Tokio runtime before it registers the module. napi-rs would
+/// otherwise build its own default runtime — one worker per CPU spawned eagerly
+/// at load — which aborts the whole process (`os error 1455`) on a
+/// memory-constrained Windows host before any JS error can surface. See
+/// [`create_napi_tokio_runtime`]. If we can't build any runtime we leave
+/// napi-rs to its default rather than failing here.
 #[module_init]
 fn install_native_crash_handler() {
 	crash_handler::install();
+	if let Some(runtime) = create_napi_tokio_runtime() {
+		create_custom_tokio_runtime(runtime);
+	}
 }

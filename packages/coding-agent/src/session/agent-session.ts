@@ -238,7 +238,7 @@ import { type EditMode, resolveEditMode } from "../utils/edit-mode";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { extractFileMentions, generateFileMentionMessages } from "../utils/file-mentions";
 import { normalizeModelContextImages } from "../utils/image-loading";
-import { buildNamedToolChoice } from "../utils/tool-choice";
+import { buildNamedToolChoice, isToolChoiceActive } from "../utils/tool-choice";
 import type { AuthStorage } from "./auth-storage";
 import type { ClientBridge, ClientBridgePermissionOption, ClientBridgePermissionOutcome } from "./client-bridge";
 import {
@@ -1373,7 +1373,12 @@ export class AgentSession {
 
 	/** Advance the tool-choice queue and return the next directive for the upcoming LLM call. */
 	nextToolChoice(): ToolChoice | undefined {
-		return this.#toolChoiceQueue.nextToolChoice();
+		const choice = this.#toolChoiceQueue.nextToolChoice();
+		if (isToolChoiceActive(choice, this.agent.state.tools)) {
+			return choice;
+		}
+		this.#toolChoiceQueue.reject("unavailable");
+		return undefined;
 	}
 
 	/**

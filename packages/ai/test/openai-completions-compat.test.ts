@@ -11,6 +11,7 @@ import type {
 	Model,
 	ModelSpec,
 	OpenAICompat,
+	Tool,
 	ToolResultMessage,
 } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
@@ -1029,6 +1030,16 @@ describe("kimi model detection via detectCompat", () => {
 			timestamp: Date.now(),
 		};
 
+		const readTool: Tool = {
+			name: "read",
+			description: "Read a file",
+			parameters: {
+				type: "object",
+				properties: { path: { type: "string" } },
+				required: ["path"],
+			},
+		};
+
 		const { promise, resolve } = Promise.withResolvers<unknown>();
 		const fetchMock = createMockFetch(["[DONE]"]);
 		streamOpenAICompletions(
@@ -1046,6 +1057,7 @@ describe("kimi model detection via detectCompat", () => {
 						timestamp: Date.now(),
 					},
 				],
+				tools: [readTool],
 			},
 			{
 				apiKey: "test-key",

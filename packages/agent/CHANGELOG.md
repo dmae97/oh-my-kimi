@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed dynamic forced tool choices from queue hooks being filtered against the active per-turn tool set before provider dispatch. ([#1701](https://github.com/can1357/oh-my-pi/issues/1701))
+
 ## [15.12.4] - 2026-06-13
 ### Fixed
 

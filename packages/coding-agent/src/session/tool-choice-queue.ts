@@ -10,7 +10,7 @@ export interface ResolveInfo {
 export interface RejectInfo {
 	/** The ToolChoice that was yielded but never (or unsuccessfully) served. */
 	choice: ToolChoice;
-	reason: "aborted" | "error" | "cleared" | "removed";
+	reason: "aborted" | "error" | "cleared" | "removed" | "unavailable";
 }
 
 /** "requeue" replays the lost yield next turn; "drop" (or void/undefined) discards it. */
