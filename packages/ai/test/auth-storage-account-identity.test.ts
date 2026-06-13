@@ -130,4 +130,36 @@ describe("AuthStorage.getOAuthAccountIdentity", () => {
 		// account may be reported as "in use".
 		expect(authStorage.getOAuthAccountIdentity(PROVIDER)).toBeUndefined();
 	});
+
+	test("removes one stored OAuth credential without clearing sibling accounts", async () => {
+		if (!authStorage) throw new Error("test setup failed");
+		await authStorage.set(PROVIDER, [
+			{
+				type: "oauth",
+				access: "access-a",
+				refresh: "refresh-a",
+				expires: Date.now() + 60 * 60_000,
+				accountId: "acc-a",
+				email: "a@example.com",
+			},
+			{
+				type: "oauth",
+				access: "access-b",
+				refresh: "refresh-b",
+				expires: Date.now() + 60 * 60_000,
+				accountId: "acc-b",
+				email: "b@example.com",
+			},
+		]);
+		const before = authStorage.listStoredCredentials(PROVIDER);
+		const target = before.find(row => row.credential.type === "oauth" && row.credential.accountId === "acc-a");
+		if (!target) throw new Error("missing target credential");
+
+		const removed = await authStorage.removeCredential(PROVIDER, target.id);
+
+		expect(removed).toBe(true);
+		const after = authStorage.listStoredCredentials(PROVIDER);
+		expect(after.map(row => (row.credential.type === "oauth" ? row.credential.accountId : ""))).toEqual(["acc-b"]);
+		expect(await authStorage.removeCredential(PROVIDER, target.id)).toBe(false);
+	});
 });
