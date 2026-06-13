@@ -25,7 +25,6 @@ import type { Args } from "./cli/args";
 import { applyExtensionFlags, type ExtensionFlagSink } from "./cli/extension-flags";
 import { processFileArguments } from "./cli/file-processor";
 import { buildInitialMessage } from "./cli/initial-message";
-import { runListModelsCommand } from "./cli/list-models";
 import { selectSession } from "./cli/session-picker";
 import { applyStartupCwd } from "./cli/startup-cwd";
 import { findConfigFile } from "./config";
@@ -917,30 +916,6 @@ export async function runRootCommand(
 
 	if (parsedArgs.version) {
 		process.stdout.write(`${VERSION}\n`);
-		process.exit(0);
-	}
-
-	if (parsedArgs.listModels !== undefined) {
-		const settingsInstance = await logger.time("settings:init:list-models", Settings.init, {
-			cwd: getProjectDir(),
-			configFiles: parsedArgs.config,
-		});
-		await modelRegistry.refresh("online");
-		const cliExtensionPaths = parsedArgs.noExtensions
-			? []
-			: [...(parsedArgs.extensions ?? []), ...(parsedArgs.hooks ?? [])];
-		const settingsExtensions = settingsInstance.get("extensions") ?? [];
-		const disabledExtensionIds = settingsInstance.get("disabledExtensions") ?? [];
-		const searchPattern = typeof parsedArgs.listModels === "string" ? parsedArgs.listModels : undefined;
-		await runListModelsCommand({
-			modelRegistry,
-			cwd: getProjectDir(),
-			additionalExtensionPaths: cliExtensionPaths,
-			settingsExtensions,
-			disabledExtensionIds,
-			disableExtensionDiscovery: Boolean(parsedArgs.noExtensions),
-			searchPattern,
-		});
 		process.exit(0);
 	}
 

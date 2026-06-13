@@ -1,17 +1,27 @@
 # Changelog
 
 ## [Unreleased]
+
+### Breaking Changes
+
+- Removed the top-level `--list-models` flag path and migrated model listing to the new `omp models` command
+
 ### Added
 
+- Added `omp models` command to list and manage models with `ls`, `find`, `canonical`, and `refresh` actions
+- Added `--json` output plus `-e/--extension`, `--no-extensions`, and `--config` controls to `omp models` listings
 - Added `skills.enableAgentsUser` and `skills.enableAgentsProject` settings (default on) so the canonical OMP-native `~/.agent[s]/skills` and project-walkup `.agent[s]/skills` are configurable independently from the third-party Claude/Codex/Pi toggles.
 
 ### Changed
 
+- Changed `omp models` to use cached provider data by default and require `omp models refresh` for a forced online re-fetch
+- Updated model-resolution errors to point to `omp models` when a provider or model is not found
 - Upgraded workspace catalog packages to their latest versions as of 3 days ago, and refactored the ACP agent implementation to be compatible with `@agentclientprotocol/sdk` version `0.25.0`.
 - Made the `zod` version requirement in the workspace catalog more tolerant (`^4.0.0` instead of `4.4.3`), and aligned type definitions in coding-agent extensibility modules.
 
 ### Fixed
 
+- Fixed model listings so providers registered via extensions are now included from `-e` and configured `extensions` sources
 - Fixed `/mcp reauth`, `/mcp test`, and `/mcp unauth` to find and operate on MCP servers reported by `/mcp list` even when they are only runtime-discovered and not stored in writable config, including namespaced plugin servers like `cloudflare:cloudflare-api`
 - Fixed MCP server name validation so colon-namespaced server IDs are accepted when persisting reauth overrides so namespaced OAuth MCP servers can be stored in user config as `server:subserver` entries
 - Retried assistant turns that stop with reasoning/thinking only and no final text or tool call, so Gemini/Antigravity thought-only `STOP` responses continue instead of silently ending the session.
