@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.12.4] - 2026-06-13
+
 ### Added
 
 - Added bundled Fireworks models `deepseek-v4-flash`, `kimi-k2.7-code`, `minimax-m2.5`, `minimax-m3`, `nemotron-3-ultra-nvfp4`, `qwen3.6-plus`, and `qwen3.7-plus`

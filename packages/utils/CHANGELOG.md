@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.12.4] - 2026-06-13
+
 ### Fixed
 
 - Fixed abortable stream wrappers to cancel the source stream on abort, so timeout watchdogs release upstream HTTP bodies instead of only stopping the local reader.

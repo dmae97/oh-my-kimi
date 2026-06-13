@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.12.4] - 2026-06-13
 ### Fixed
 
 - Fixed remote compaction input trimming to use unlimited context when `model.contextWindow` is unset

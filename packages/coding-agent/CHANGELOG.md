@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.12.4] - 2026-06-13
+
 ### Breaking Changes
 
 - Removed the top-level `--list-models` flag path and migrated model listing to the new `omp models` command
