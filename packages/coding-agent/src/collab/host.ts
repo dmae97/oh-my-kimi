@@ -411,10 +411,11 @@ export class CollabHost {
 
 	#buildState(): CollabSessionState {
 		const session = this.#ctx.session;
-		// Context numbers come from the status line's breakdown — not
-		// session.getContextUsage() — so guests render exactly what the host's
-		// own footer shows.
+		// Context numbers come from the status line's memoized breakdown so guests
+		// render exactly the same anchored, provider-real count the host's own
+		// status line shows.
 		const breakdown = this.#ctx.statusLine.getCachedContextBreakdown();
+		const tokens = breakdown.usedTokens;
 		return {
 			isStreaming: session.isStreaming,
 			isAborting: session.isAborting,
@@ -424,9 +425,9 @@ export class CollabHost {
 			model: session.model,
 			thinkingLevel: session.thinkingLevel,
 			contextUsage: {
-				tokens: breakdown.usedTokens,
+				tokens,
 				contextWindow: breakdown.contextWindow,
-				percent: breakdown.contextWindow > 0 ? (breakdown.usedTokens / breakdown.contextWindow) * 100 : null,
+				percent: tokens !== null && breakdown.contextWindow > 0 ? (tokens / breakdown.contextWindow) * 100 : null,
 			},
 			participants: this.participants,
 		};
