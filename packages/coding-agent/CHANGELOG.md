@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed plan approval's "Approve and compact context" running the compaction summarizer on the pre-plan model instead of the plan model: `#exitPlanMode` restored the pre-plan model before compaction, cold-missing the plan model's prompt cache. Compaction now runs on the plan model (warm cache) and the switch to the execution/pre-plan model happens only after a successful compaction; a failed compaction stays on the plan model.
+
 ## [15.12.5] - 2026-06-13
 ### Changed
 

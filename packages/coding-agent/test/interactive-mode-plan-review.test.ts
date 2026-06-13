@@ -663,6 +663,143 @@ describe("InteractiveMode plan review rendering", () => {
 		expect(session.model?.id).toBe(slow.id);
 	});
 
+	it("compaction runs on the plan model and restores the pre-plan model after success", async () => {
+		const planModel = session.modelRegistry.find("anthropic", "claude-opus-4-5");
+		const prePlanModel = session.modelRegistry.find("anthropic", "claude-sonnet-4-5");
+		if (!planModel || !prePlanModel) throw new Error("Expected sonnet + opus to exist in registry");
+
+		session.settings.setModelRole("default", "anthropic/claude-sonnet-4-5");
+		session.settings.setModelRole("plan", "anthropic/claude-opus-4-5");
+
+		const planFilePath = "local://PLAN.md";
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		await Bun.write(resolvedPlanPath, "# Plan\n\nCompact on the plan model.");
+
+		await mode.handlePlanModeCommand();
+		expect(session.model?.id).toBe(planModel.id);
+
+		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: null, contextWindow: 200000, percent: null });
+		vi.spyOn(mode, "showPlanReview").mockResolvedValue("Approve and compact context");
+		vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
+
+		let compactModelId: string | undefined;
+		vi.spyOn(mode, "handleCompactCommand").mockImplementation(async () => {
+			compactModelId = session.model?.id;
+			return "ok";
+		});
+
+		await mode.handlePlanApproval({
+			planFilePath,
+			planExists: true,
+			title: "PLAN",
+		});
+
+		expect(compactModelId).toBe(planModel.id);
+		expect(session.model?.id).toBe(prePlanModel.id);
+	});
+
+	it("failed compaction stays on the plan model and still dispatches", async () => {
+		const planModel = session.modelRegistry.find("anthropic", "claude-opus-4-5");
+		if (!planModel) throw new Error("Expected opus to exist in registry");
+
+		session.settings.setModelRole("default", "anthropic/claude-sonnet-4-5");
+		session.settings.setModelRole("plan", "anthropic/claude-opus-4-5");
+
+		const planFilePath = "local://PLAN.md";
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		await Bun.write(resolvedPlanPath, "# Plan\n\nCompact failure still dispatches.");
+
+		await mode.handlePlanModeCommand();
+		expect(session.model?.id).toBe(planModel.id);
+
+		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: null, contextWindow: 200000, percent: null });
+		vi.spyOn(mode, "showPlanReview").mockResolvedValue("Approve and compact context");
+		const promptSpy = vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
+
+		let compactModelId: string | undefined;
+		vi.spyOn(mode, "handleCompactCommand").mockImplementation(async () => {
+			compactModelId = session.model?.id;
+			return "failed";
+		});
+
+		await mode.handlePlanApproval({
+			planFilePath,
+			planExists: true,
+			title: "PLAN",
+		});
+
+		expect(compactModelId).toBe(planModel.id);
+		expect(session.model?.id).toBe(planModel.id);
+		expect(promptSpy.mock.calls.some(isPlanApprovedCall)).toBe(true);
+	});
+
+	it("slider tier on the compact path applies after successful compaction", async () => {
+		const planModel = session.modelRegistry.find("anthropic", "claude-opus-4-5");
+		const execModel = session.modelRegistry.find("anthropic", "claude-sonnet-4-5");
+		if (!planModel || !execModel) throw new Error("Expected sonnet + opus to exist in registry");
+
+		// Plan model (opus) differs from the execution tier the operator slides to
+		// (default = sonnet) so the assertions distinguish the new defer-restore +
+		// success-gated transition from the old "restore pre-plan before compaction"
+		// path: under the old behavior compaction would have run on sonnet and the
+		// restore (not applyRoleModel) would have produced the final model.
+		session.settings.setModelRole("default", "anthropic/claude-sonnet-4-5");
+		session.settings.setModelRole("slow", "anthropic/claude-opus-4-5");
+		session.settings.setModelRole("plan", "anthropic/claude-opus-4-5");
+
+		const planFilePath = "local://PLAN.md";
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		await Bun.write(resolvedPlanPath, "# Plan\n\nCompact on plan model, execute on default.");
+
+		await mode.handlePlanModeCommand();
+		expect(session.model?.id).toBe(planModel.id);
+
+		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: null, contextWindow: 200000, percent: null });
+		vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
+
+		let compactModelId: string | undefined;
+		vi.spyOn(mode, "handleCompactCommand").mockImplementation(async () => {
+			compactModelId = session.model?.id;
+			return "ok";
+		});
+		const applyRoleSpy = vi.spyOn(session, "applyRoleModel");
+
+		vi.spyOn(mode, "showPlanReview").mockImplementation(
+			async (_planContent, _title, _options, _dialogOptions, extra?: { slider?: HookSelectorSlider }) => {
+				const slider = extra?.slider;
+				expect(slider).toBeDefined();
+				const defaultIndex = slider!.segments.findIndex(segment => segment.label === "default");
+				expect(defaultIndex).toBeGreaterThanOrEqual(0);
+				// Operator planned on opus but slides execution down to the default tier.
+				slider!.onChange?.(defaultIndex);
+				return "Approve and compact context";
+			},
+		);
+
+		await mode.handlePlanApproval({
+			planFilePath,
+			planExists: true,
+			title: "PLAN",
+		});
+
+		// Compaction ran on the plan model (defer-restore kept it warm) …
+		expect(compactModelId).toBe(planModel.id);
+		// … and the slider-selected execution tier was applied via applyRoleModel
+		// (the executionModel branch, not the pre-plan restore which goes through
+		// setModelTemporary), only after the successful compaction.
+		expect(applyRoleSpy.mock.calls.some(call => call[0]?.model?.id === execModel.id)).toBe(true);
+		expect(session.model?.id).toBe(execModel.id);
+	});
+
 	it("re-enters plan mode on the approved titled artifact after approve-and-execute", async () => {
 		const planFilePath = "local://PLAN.md";
 		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
