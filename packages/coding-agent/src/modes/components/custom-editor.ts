@@ -1,7 +1,8 @@
 import { addKeyAliases, canonicalKeyId, Editor, type KeyId, parseKey, parseKittySequence } from "@oh-my-pi/pi-tui";
 import type { AppKeybinding } from "../../config/keybindings";
+import { isSettingsInitialized, settings } from "../../config/settings";
 import { imageReferenceHyperlink, PLACEHOLDER_REGEX, renderPlaceholders } from "../image-references";
-import { highlightMagicKeywords } from "../magic-keywords";
+import { hasMagicKeyword, highlightMagicKeywords } from "../magic-keywords";
 import { theme } from "../theme/theme";
 
 type ConfigurableEditorAction = Extract<
@@ -136,12 +137,36 @@ export class CustomEditor extends Editor {
 	 *  instead of corrupting `[Paste #1, +30 lines]` into plain text. */
 	override atomicTokenPattern = PLACEHOLDER_REGEX;
 
+	/** Magic-keyword shimmer cadence — drives one editor repaint every 70 ms while
+	 *  a keyword is on screen and the prompt is focused. ~14 frames/s is smooth
+	 *  without flooding the renderer. */
+	static readonly SHIMMER_FRAME_MS = 70;
+	/** Time for the gradient to sweep one full cycle across each keyword. */
+	static readonly SHIMMER_PERIOD_MS = 1800;
+
+	/** Per-render scratch flag: did any layout line in this render contain a magic
+	 *  keyword that should shimmer? Reset by {@link #scheduleShimmerIfNeeded} each
+	 *  time a frame is queued. */
+	#shimmerTimer: ReturnType<typeof setTimeout> | undefined;
+	/** Repaint hook the host wires once at construction. Called from the shimmer
+	 *  timer to request the next animation frame. Undefined when nobody is
+	 *  listening (tests, headless callers); the timer chain still self-cleans. */
+	#requestShimmerRepaint: (() => void) | undefined;
+
 	/** Gradient-highlight the "ultrathink" / "orchestrate" / "workflowz" keywords as the user types
 	 *  them, skipping any occurrence inside code spans, fenced blocks, or XML sections. Also make
-	 *  pasted image placeholders visually distinct and hyperlink them once their blob file exists. */
-	decorateText = (text: string): string =>
-		renderPlaceholders(text, {
-			renderText: value => highlightMagicKeywords(value),
+	 *  pasted image placeholders visually distinct and hyperlink them once their blob file exists.
+	 *  When the editor is focused, the buffer contains a magic keyword, and `magicKeywords.enabled`
+	 *  is on, the gradient shifts every frame to produce a Claude-Code-style shimmer; each render
+	 *  schedules the next frame, so losing focus, deleting the keyword, or flipping the setting
+	 *  stops the animation on its own. The static glow itself runs even when shimmering is gated
+	 *  off, matching existing behavior for the editor and sent bubbles. */
+	decorateText = (text: string): string => {
+		const animated = this.focused && this.#shimmerEnabled() && hasMagicKeyword(this.getText());
+		const phase = animated ? (Date.now() % CustomEditor.SHIMMER_PERIOD_MS) / CustomEditor.SHIMMER_PERIOD_MS : 0;
+		if (animated) this.#scheduleShimmerFrame();
+		return renderPlaceholders(text, {
+			renderText: value => highlightMagicKeywords(value, undefined, phase),
 			renderReference: (value, kind, index) =>
 				kind === "image"
 					? imageReferenceHyperlink(value, index, this.imageLinks, label =>
@@ -149,6 +174,38 @@ export class CustomEditor extends Editor {
 						)
 					: theme.fg("accent", `\x1b[1m${value}\x1b[22m`),
 		});
+	};
+
+	/** Whether the shimmer should advance this frame. Defaults to "on" before
+	 *  settings have initialised (tests, early boot) so the animation does not
+	 *  silently disappear during a race; settings disabling the feature wins
+	 *  once they are loaded. */
+	#shimmerEnabled(): boolean {
+		return isSettingsInitialized() ? settings.get("magicKeywords.enabled") : true;
+	}
+
+	/** Bind the host's render request callback. Idempotent — the host wires this
+	 *  once after construction (and again after `setEditorComponent` swaps the
+	 *  editor). Passing `undefined` clears any pending frame. */
+	setShimmerRepaintHandler(handler: (() => void) | undefined): void {
+		this.#requestShimmerRepaint = handler;
+		if (!handler && this.#shimmerTimer) {
+			clearTimeout(this.#shimmerTimer);
+			this.#shimmerTimer = undefined;
+		}
+	}
+
+	/** Schedule one shimmer frame if none is already pending. The next render
+	 *  decides whether to schedule another, so the chain stops by itself when
+	 *  `focused` flips off or the keyword leaves the buffer. */
+	#scheduleShimmerFrame(): void {
+		if (this.#shimmerTimer || !this.#requestShimmerRepaint) return;
+		this.#shimmerTimer = setTimeout(() => {
+			this.#shimmerTimer = undefined;
+			this.#requestShimmerRepaint?.();
+		}, CustomEditor.SHIMMER_FRAME_MS);
+		this.#shimmerTimer.unref?.();
+	}
 	onEscape?: () => void;
 	onClear?: () => void;
 	onExit?: () => void;

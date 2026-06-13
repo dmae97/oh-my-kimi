@@ -660,10 +660,20 @@ export class Editor implements Component, Focusable {
 	}
 
 	/** Apply the optional input decorator to a plain (ANSI-free) text segment.
-	 *  Decoration only adds zero-width SGR codes, so visible width is unchanged. */
+	 *  Decoration only adds zero-width SGR codes, so visible width is unchanged.
+	 *  Splits around CURSOR_MARKER so each user-text segment is decorated in
+	 *  isolation: the marker begins with ESC, and a keyword regex that pins
+	 *  the right boundary with `(?!\S)` would otherwise reject an otherwise-
+	 *  valid match at the cursor seam (e.g. `ultrathink` immediately followed
+	 *  by the marker stops glowing until a trailing character is typed). */
 	#decorate(text: string): string {
 		const decorate = this.decorateText;
-		return decorate !== undefined && text.length > 0 ? decorate(text) : text;
+		if (decorate === undefined || text.length === 0) return text;
+		const idx = text.indexOf(CURSOR_MARKER);
+		if (idx === -1) return decorate(text);
+		const before = text.slice(0, idx);
+		const after = text.slice(idx + CURSOR_MARKER.length);
+		return (before.length > 0 ? decorate(before) : "") + CURSOR_MARKER + (after.length > 0 ? decorate(after) : "");
 	}
 
 	#getStyledInputCursor(): { text: string; width: number } {
@@ -947,9 +957,9 @@ export class Editor implements Component, Focusable {
 				}
 			}
 
-			// No cursor on this line, or a branch that left the user text intact: decorate the
-			// whole line. CURSOR_MARKER and cursor glyphs begin with ESC, so word boundaries
-			// around a decorated keyword stay intact when matched against the assembled line.
+			// No cursor on this line, or a branch that left the user text intact: decorate
+			// the whole line. `#decorate` splits around CURSOR_MARKER so a keyword glued to
+			// the cursor still satisfies its right-boundary lookahead.
 			if (!decorated) {
 				displayText = this.#decorate(displayText);
 			}

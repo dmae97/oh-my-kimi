@@ -1,10 +1,17 @@
-import { describe, expect, it, vi } from "bun:test";
+import { beforeAll, describe, expect, it, vi } from "bun:test";
 import {
 	CustomEditor,
 	extractBracketedImagePastePath,
 	extractBracketedImagePastePaths,
 } from "@oh-my-pi/pi-coding-agent/modes/components/custom-editor";
+import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { defaultEditorTheme } from "../../tui/test/test-themes";
+
+beforeAll(async () => {
+	// CustomEditor.decorateText resolves theme colors during shimmer rendering;
+	// load a deterministic theme so colour-mode-dependent palettes are cached.
+	await initTheme(false);
+});
 
 function ctrl(key: string): string {
 	return String.fromCharCode(key.toLowerCase().charCodeAt(0) & 31);
@@ -238,5 +245,101 @@ describe("CustomEditor configurable key dispatch precedence", () => {
 		expect(onClear).not.toHaveBeenCalled();
 		expect(customHandler).not.toHaveBeenCalled();
 		expect(editor.getText()).toBe("hello");
+	});
+});
+
+describe("CustomEditor magic-keyword shimmer", () => {
+	function createFocusedEditor() {
+		const editor = new CustomEditor(defaultEditorTheme);
+		editor.focused = true;
+		return editor;
+	}
+
+	it("schedules a repaint frame after rendering a focused editor that contains a keyword", async () => {
+		const editor = createFocusedEditor();
+		const repaint = vi.fn();
+		editor.setShimmerRepaintHandler(repaint);
+		editor.setText("please ultrathink this carefully");
+
+		// Drive a render frame: that's what arms the shimmer setTimeout chain.
+		editor.render(80);
+		await Bun.sleep(CustomEditor.SHIMMER_FRAME_MS + 30);
+
+		expect(repaint).toHaveBeenCalledTimes(1);
+		// Clean up so the next render does not arm a stray timer leaking into other tests.
+		editor.setShimmerRepaintHandler(undefined);
+	});
+
+	it("does not schedule a repaint when the editor is not focused", async () => {
+		const editor = new CustomEditor(defaultEditorTheme);
+		editor.focused = false;
+		const repaint = vi.fn();
+		editor.setShimmerRepaintHandler(repaint);
+		editor.setText("please ultrathink this carefully");
+
+		editor.render(80);
+		await Bun.sleep(CustomEditor.SHIMMER_FRAME_MS + 30);
+
+		expect(repaint).not.toHaveBeenCalled();
+		editor.setShimmerRepaintHandler(undefined);
+	});
+
+	it("does not schedule a repaint when no magic keyword is in the buffer", async () => {
+		const editor = createFocusedEditor();
+		const repaint = vi.fn();
+		editor.setShimmerRepaintHandler(repaint);
+		editor.setText("just a plain prompt");
+
+		editor.render(80);
+		await Bun.sleep(CustomEditor.SHIMMER_FRAME_MS + 30);
+
+		expect(repaint).not.toHaveBeenCalled();
+		editor.setShimmerRepaintHandler(undefined);
+	});
+
+	it("clears any pending shimmer frame when the handler is unbound", async () => {
+		const editor = createFocusedEditor();
+		const repaint = vi.fn();
+		editor.setShimmerRepaintHandler(repaint);
+		editor.setText("ultrathink please");
+
+		editor.render(80);
+		// Unbind the handler before the in-flight frame fires; the timer is dropped.
+		editor.setShimmerRepaintHandler(undefined);
+		await Bun.sleep(CustomEditor.SHIMMER_FRAME_MS + 30);
+
+		expect(repaint).not.toHaveBeenCalled();
+	});
+
+	it("paints the keyword glyph through the trailing CURSOR_MARKER (no cursor seam)", () => {
+		const editor = createFocusedEditor();
+		editor.setText("ultrathink");
+
+		const rendered = editor.render(40).join("\n");
+		// The keyword is broken into per-character runs by SGR escapes once the
+		// gradient paints it; with the cursor-seam bug the keyword would survive
+		// verbatim. Strip ANSI to make the visible-width invariant explicit.
+		expect(rendered).not.toContain("ultrathink");
+		expect(rendered).toContain("\x1b[38");
+	});
+
+	it("respects the magicKeywords.enabled setting (no shimmer when disabled)", async () => {
+		const { Settings, resetSettingsForTest } = await import("@oh-my-pi/pi-coding-agent/config/settings");
+		resetSettingsForTest();
+		await Settings.init({ inMemory: true, overrides: { "magicKeywords.enabled": false } });
+		try {
+			const editor = createFocusedEditor();
+			const repaint = vi.fn();
+			editor.setShimmerRepaintHandler(repaint);
+			editor.setText("ultrathink please");
+
+			editor.render(80);
+			await Bun.sleep(CustomEditor.SHIMMER_FRAME_MS + 30);
+
+			expect(repaint).not.toHaveBeenCalled();
+			editor.setShimmerRepaintHandler(undefined);
+		} finally {
+			resetSettingsForTest();
+		}
 	});
 });

@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `ultrathink` / `orchestrate` / `workflowz` keywords not glowing while typing — the editor appended a CURSOR_MARKER (ESC-prefixed) after each render, so the magic-keyword regex's right-boundary `(?!\S)` tripped on ESC and dropped the gradient until a trailing character was typed. The marker-aware editor decorate (`packages/tui`) plus a phase-aware `highlightMagicKeywords` overload restore the live glow and add a Claude-Code-style shimmer while the prompt is focused, gated on `magicKeywords.enabled` ([#2475](https://github.com/can1357/oh-my-pi/issues/2475)).
+
+### Added
+
+- `highlightMagicKeywords(text, resetTo?, phase?)` now accepts an optional `phase` ∈ [0, 1) that rotates the gradient cyclically; sent bubbles omit it (static palette unchanged). `hasMagicKeyword(text)` exported from `modes/magic-keywords` is the cheap shimmer-gate the editor uses on every render.
+
 ## [15.12.5] - 2026-06-13
 ### Changed
 
