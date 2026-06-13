@@ -55,6 +55,7 @@ import { adaptSchemaForStrict, NO_STRICT, toolWireSchema } from "../utils/schema
 import {
 	getStreamMarkupHealingPattern,
 	type HealedToolCall,
+	modelMayLeakThinkingTags,
 	StreamMarkupHealing,
 	type StreamMarkupHealingEvent,
 } from "../utils/stream-markup-healing";
@@ -698,10 +699,24 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				if (!firstTokenTime) firstTokenTime = Date.now();
 				appendText(output, stream, text);
 			};
-			const appendThinkingDelta = (thinking: string, signature?: string): void => {
+			const appendThinkingDelta = (
+				thinking: string,
+				signature?: string,
+				source: "delta" | "cumulative" = "delta",
+			): void => {
 				if (!thinking) return;
+				let emittedThinking = thinking;
+				if (
+					source === "cumulative" &&
+					currentBlock?.type === "thinking" &&
+					(signature === undefined || currentBlock.thinkingSignature === signature) &&
+					thinking.startsWith(currentBlock.thinking)
+				) {
+					emittedThinking = thinking.slice(currentBlock.thinking.length);
+					if (!emittedThinking) return;
+				}
 				if (!firstTokenTime) firstTokenTime = Date.now();
-				appendThinking(output, stream, thinking, signature);
+				appendThinking(output, stream, emittedThinking, signature);
 			};
 
 			let deepseekStripBuffer = "";
@@ -728,11 +743,11 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 					appendTextDelta(processedText);
 				}
 			};
-
 			const streamMarkupHealingPattern = getStreamMarkupHealingPattern(model.provider, model.id);
 			const streamMarkupHealing = streamMarkupHealingPattern
 				? new StreamMarkupHealing({ pattern: streamMarkupHealingPattern })
 				: undefined;
+			const explicitReasoningDeltasMayBeCumulative = modelMayLeakThinkingTags(model.provider, model.id);
 			let healedToolCallEmitted = false;
 			const emitHealedToolCall = (call: HealedToolCall): void => {
 				finishCurrentBlock(currentBlock);
@@ -841,11 +856,38 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				}
 
 				if (choice.delta) {
+					// Some endpoints return reasoning in reasoning_content (llama.cpp),
+					// or reasoning (other openai compatible endpoints). Use the first
+					// non-empty reasoning field to avoid duplication when a chunk carries
+					// multiple aliases for the same reasoning text.
+					const reasoningFields = ["reasoning_content", "reasoning", "reasoning_text"];
+					const deltaRecord = choice.delta as Record<string, unknown>;
+					let foundReasoningField: string | undefined;
+					let foundReasoningDelta = "";
+					for (const field of reasoningFields) {
+						const reasoningDelta = deltaRecord[field];
+						if (typeof reasoningDelta === "string" && reasoningDelta.length > 0) {
+							foundReasoningField = field;
+							foundReasoningDelta = reasoningDelta;
+							break;
+						}
+					}
+
+					if (foundReasoningField) {
+						appendThinkingDelta(
+							foundReasoningDelta,
+							foundReasoningField,
+							explicitReasoningDeltasMayBeCumulative ? "cumulative" : "delta",
+						);
+					}
+
 					const normalizedDeltaText = normalizeStreamingContentText(choice.delta.content);
 					if (normalizedDeltaText.length > 0) {
 						if (!firstTokenTime) firstTokenTime = Date.now();
 						const hasStructuredToolCalls =
 							Array.isArray(choice.delta.tool_calls) && choice.delta.tool_calls.length > 0;
+						const suppressContentThinking =
+							foundReasoningField !== undefined && streamMarkupHealing?.pattern === "thinking";
 
 						if (streamMarkupHealing) {
 							if (hasStructuredToolCalls) {
@@ -856,36 +898,13 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 								appendProcessedText(streamMarkupHealing.consumeWithoutCalls(normalizedDeltaText));
 							} else {
 								for (const event of streamMarkupHealing.feedEvents(normalizedDeltaText)) {
+									if (suppressContentThinking && event.type === "thinking") continue;
 									emitHealingEvent(event);
 								}
 							}
 						} else {
 							appendProcessedText(normalizedDeltaText);
 						}
-					}
-
-					// Some endpoints return reasoning in reasoning_content (llama.cpp),
-					// or reasoning (other openai compatible endpoints)
-					// Use the first non-empty reasoning field to avoid duplication
-					// (e.g., chutes.ai returns both reasoning_content and reasoning with same content)
-					const reasoningFields = ["reasoning_content", "reasoning", "reasoning_text"];
-					let foundReasoningField: string | null = null;
-					for (const field of reasoningFields) {
-						if (
-							(choice.delta as any)[field] !== null &&
-							(choice.delta as any)[field] !== undefined &&
-							(choice.delta as any)[field].length > 0
-						) {
-							if (!foundReasoningField) {
-								foundReasoningField = field;
-								break;
-							}
-						}
-					}
-
-					if (foundReasoningField) {
-						const delta = (choice.delta as any)[foundReasoningField];
-						appendThinkingDelta(delta, foundReasoningField);
 					}
 
 					if (choice?.delta?.tool_calls && choice.delta.tool_calls.length > 0) {
