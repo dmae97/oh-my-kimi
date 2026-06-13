@@ -111,10 +111,13 @@ export function reportLocalOnlyPromptResult(input: {
 	output: (obj: object) => void;
 	onError: (error: Error) => void;
 	hasExtensionAgentMessageTask?: () => boolean;
+	waitForExtensionAgentMessageTasks?: () => Promise<void>;
 }): void {
 	void input.prompt
-		.then(agentInvoked => {
-			if (!agentInvoked && !input.hasExtensionAgentMessageTask?.()) {
+		.then(async agentInvoked => {
+			if (agentInvoked) return;
+			await input.waitForExtensionAgentMessageTasks?.();
+			if (!input.hasExtensionAgentMessageTask?.()) {
 				input.output({ type: "prompt_result", id: input.id, agentInvoked: false });
 			}
 		})
@@ -125,6 +128,7 @@ export function reportLocalOnlyPromptResult(input: {
 
 type RpcExtensionUserMessageScope = {
 	hasAgentMessageTask: boolean;
+	pendingAgentMessageTasks: Set<Promise<void>>;
 };
 
 /**
@@ -142,11 +146,40 @@ export class RpcExtensionUserMessageTracker {
 		}
 	}
 
+	trackAgentMessageTask(task: Promise<void>): void {
+		for (const scope of this.#activePromptScopes) {
+			this.#trackAgentMessageTaskForScope(scope, task);
+		}
+	}
+
+	#trackAgentMessageTaskForScope(scope: RpcExtensionUserMessageScope, task: Promise<void>): void {
+		const scopedTask = task.then(
+			() => {
+				scope.hasAgentMessageTask = true;
+			},
+			() => {},
+		);
+		scope.pendingAgentMessageTasks.add(scopedTask);
+		void scopedTask.finally(() => {
+			scope.pendingAgentMessageTasks.delete(scopedTask);
+		});
+	}
+
+	async #waitForAgentMessageTasks(scope: RpcExtensionUserMessageScope): Promise<void> {
+		while (scope.pendingAgentMessageTasks.size > 0) {
+			await Promise.allSettled(Array.from(scope.pendingAgentMessageTasks));
+		}
+	}
+
 	watchPrompt<T>(startPrompt: () => Promise<T>): {
 		prompt: Promise<T>;
 		hasAgentMessageTask: () => boolean;
+		waitForAgentMessageTasks: () => Promise<void>;
 	} {
-		const scope: RpcExtensionUserMessageScope = { hasAgentMessageTask: false };
+		const scope: RpcExtensionUserMessageScope = {
+			hasAgentMessageTask: false,
+			pendingAgentMessageTasks: new Set(),
+		};
 		this.#activePromptScopes.add(scope);
 		let prompt: Promise<T>;
 		try {
@@ -160,6 +193,7 @@ export class RpcExtensionUserMessageTracker {
 				this.#activePromptScopes.delete(scope);
 			}),
 			hasAgentMessageTask: () => scope.hasAgentMessageTask,
+			waitForAgentMessageTasks: () => this.#waitForAgentMessageTasks(scope),
 		};
 	}
 }
@@ -178,6 +212,7 @@ export function watchAndReportLocalOnlyPromptResult(input: {
 		output: input.output,
 		onError: input.onError,
 		hasExtensionAgentMessageTask: trackedPrompt.hasAgentMessageTask,
+		waitForExtensionAgentMessageTasks: trackedPrompt.waitForAgentMessageTasks,
 	});
 }
 
@@ -616,8 +651,8 @@ export async function runRpcMode(
 		onShutdown: () => {
 			shutdownState.requested = true;
 		},
-		markAgentInvokingMessage: () => {
-			extensionUserMessageTracker.markAgentMessageTask();
+		trackAgentInvokingMessage: task => {
+			extensionUserMessageTracker.trackAgentMessageTask(task);
 		},
 		uiContext: rpcUiContext,
 	});

@@ -25,6 +25,8 @@ export interface InitializeExtensionsOptions {
 	uiContext?: ExtensionUIContext;
 	/** Optional lifecycle hook for extension-originated messages that can start an agent turn. */
 	markAgentInvokingMessage?: () => void;
+	/** Optional lifecycle hook for extension-originated sends whose success/failure determines turn ownership. */
+	trackAgentInvokingMessage?: (task: Promise<void>) => void;
 }
 
 /**
@@ -37,23 +39,40 @@ export async function initializeExtensions(session: AgentSession, options: Initi
 	const runner = session.extensionRunner;
 	if (!runner) return;
 
-	const { reportSendError, reportRuntimeError, onShutdown, uiContext, markAgentInvokingMessage } = options;
+	const {
+		reportSendError,
+		reportRuntimeError,
+		onShutdown,
+		uiContext,
+		markAgentInvokingMessage,
+		trackAgentInvokingMessage,
+	} = options;
 	const shutdown = onShutdown ?? (() => {});
 
 	runner.initialize(
 		// ExtensionActions
 		{
 			sendMessage: (message, sendOptions) => {
+				const sendTask = session.sendCustomMessage(message, sendOptions);
 				if (sendOptions?.triggerTurn) {
-					markAgentInvokingMessage?.();
+					if (trackAgentInvokingMessage) {
+						trackAgentInvokingMessage(sendTask);
+					} else {
+						markAgentInvokingMessage?.();
+					}
 				}
-				session.sendCustomMessage(message, sendOptions).catch(e => {
+				sendTask.catch(e => {
 					reportSendError("extension_send", e instanceof Error ? e : new Error(String(e)));
 				});
 			},
 			sendUserMessage: (content, sendOptions) => {
-				markAgentInvokingMessage?.();
-				session.sendUserMessage(content, sendOptions).catch(e => {
+				const sendTask = session.sendUserMessage(content, sendOptions);
+				if (trackAgentInvokingMessage) {
+					trackAgentInvokingMessage(sendTask);
+				} else {
+					markAgentInvokingMessage?.();
+				}
+				sendTask.catch(e => {
 					reportSendError("extension_send_user", e instanceof Error ? e : new Error(String(e)));
 				});
 			},

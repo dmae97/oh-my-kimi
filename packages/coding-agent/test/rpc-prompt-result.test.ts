@@ -13,6 +13,16 @@ async function waitForPromptHandlers(prompt: Promise<unknown>): Promise<void> {
 	await Promise.resolve();
 }
 
+async function waitForTrackedPromptHandlers(trackedPrompt: {
+	prompt: Promise<unknown>;
+	waitForAgentMessageTasks: () => Promise<void>;
+}): Promise<void> {
+	await trackedPrompt.prompt.catch(() => undefined);
+	await trackedPrompt.waitForAgentMessageTasks();
+	await Promise.resolve();
+	await Promise.resolve();
+}
+
 describe("reportLocalOnlyPromptResult", () => {
 	test("emits prompt_result when prompt resolves without invoking the agent or extension user message", async () => {
 		const output: object[] = [];
@@ -138,6 +148,109 @@ describe("reportLocalOnlyPromptResult", () => {
 
 		expect(markCount).toBe(1);
 		expect(sentOptions).toEqual({ triggerTurn: true });
+	});
+
+	test("suppresses prompt_result when extension sendUserMessage succeeds", async () => {
+		let extensionActions: ExtensionActions | undefined;
+		let sentContent: unknown;
+		const output: object[] = [];
+		const extensionUserMessages = new RpcExtensionUserMessageTracker();
+		const session = {
+			extensionRunner: {
+				initialize: (actions: ExtensionActions) => {
+					extensionActions = actions;
+				},
+				onError: () => {},
+				emit: async () => {},
+			},
+			sendUserMessage: async (content: unknown) => {
+				sentContent = content;
+			},
+		} as unknown as AgentSession;
+
+		await initializeExtensions(session, {
+			reportSendError: (_action, error) => {
+				throw error;
+			},
+			reportRuntimeError: error => {
+				throw error.error;
+			},
+			trackAgentInvokingMessage: task => {
+				extensionUserMessages.trackAgentMessageTask(task);
+			},
+		});
+
+		const trackedPrompt = extensionUserMessages.watchPrompt(() => {
+			if (!extensionActions) throw new Error("extensions not initialized");
+			extensionActions.sendUserMessage("start work");
+			return Promise.resolve(false);
+		});
+		reportLocalOnlyPromptResult({
+			id: "req_success",
+			prompt: trackedPrompt.prompt,
+			output: frame => output.push(frame),
+			onError: error => {
+				throw error;
+			},
+			hasExtensionAgentMessageTask: trackedPrompt.hasAgentMessageTask,
+			waitForExtensionAgentMessageTasks: trackedPrompt.waitForAgentMessageTasks,
+		});
+		await waitForTrackedPromptHandlers(trackedPrompt);
+
+		expect(sentContent).toBe("start work");
+		expect(output).toEqual([]);
+	});
+
+	test("emits prompt_result when extension sendUserMessage rejects", async () => {
+		let extensionActions: ExtensionActions | undefined;
+		const output: object[] = [];
+		const reportedErrors: Error[] = [];
+		const thrown = new Error("missing model");
+		const extensionUserMessages = new RpcExtensionUserMessageTracker();
+		const session = {
+			extensionRunner: {
+				initialize: (actions: ExtensionActions) => {
+					extensionActions = actions;
+				},
+				onError: () => {},
+				emit: async () => {},
+			},
+			sendUserMessage: async () => {
+				throw thrown;
+			},
+		} as unknown as AgentSession;
+
+		await initializeExtensions(session, {
+			reportSendError: (_action, error) => {
+				reportedErrors.push(error);
+			},
+			reportRuntimeError: error => {
+				throw error.error;
+			},
+			trackAgentInvokingMessage: task => {
+				extensionUserMessages.trackAgentMessageTask(task);
+			},
+		});
+
+		const trackedPrompt = extensionUserMessages.watchPrompt(() => {
+			if (!extensionActions) throw new Error("extensions not initialized");
+			extensionActions.sendUserMessage("start work");
+			return Promise.resolve(false);
+		});
+		reportLocalOnlyPromptResult({
+			id: "req_rejected",
+			prompt: trackedPrompt.prompt,
+			output: frame => output.push(frame),
+			onError: error => {
+				throw error;
+			},
+			hasExtensionAgentMessageTask: trackedPrompt.hasAgentMessageTask,
+			waitForExtensionAgentMessageTasks: trackedPrompt.waitForAgentMessageTasks,
+		});
+		await waitForTrackedPromptHandlers(trackedPrompt);
+
+		expect(reportedErrors).toEqual([thrown]);
+		expect(output).toEqual([{ type: "prompt_result", id: "req_rejected", agentInvoked: false }]);
 	});
 
 	test("does not emit when prompt invokes the agent", async () => {
