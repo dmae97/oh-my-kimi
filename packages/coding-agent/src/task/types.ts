@@ -203,6 +203,15 @@ export function resolveSubagentDisplayName(role: string | undefined, agentName: 
 	return trimmed ? oneLineLabel(trimmed) : agentName;
 }
 
+/**
+ * Whether an agent at `taskDepth` may still spawn children — i.e. it currently
+ * holds the `task` tool. Mirrors the task-tool availability gate;
+ * `maxRecursionDepth < 0` disables the cap entirely.
+ */
+export function canSpawnAtDepth(maxRecursionDepth: number, taskDepth: number): boolean {
+	return maxRecursionDepth < 0 || taskDepth < maxRecursionDepth;
+}
+
 /** A code review finding reported by the reviewer agent */
 export interface ReviewFinding {
 	title: string;

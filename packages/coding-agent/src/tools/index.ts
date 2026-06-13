@@ -25,6 +25,7 @@ import type { CustomMessage } from "../session/messages";
 import type { ToolChoiceQueue } from "../session/tool-choice-queue";
 import { TaskTool } from "../task";
 import type { AgentOutputManager } from "../task/output-manager";
+import { canSpawnAtDepth } from "../task/types";
 import { countToolsForAutoDiscovery, resolveEffectiveToolDiscoveryMode } from "../tool-discovery/mode";
 import type { DiscoverableTool, DiscoverableToolSearchIndex } from "../tool-discovery/tool-index";
 import type { EventBus } from "../utils/event-bus";
@@ -144,6 +145,13 @@ export interface ToolSession {
 	cwd: string;
 	/** Whether UI is available */
 	hasUI: boolean;
+	/**
+	 * Suppress the spawn specialization/coordination advisory appended to `task`
+	 * results. Set by internal/programmatic callers (e.g. the commit agent's
+	 * file-analysis fan-out) whose results are consumed by code — not by a model
+	 * orchestrating further spawns — so the nudge would only be noise.
+	 */
+	suppressSpawnAdvisory?: boolean;
 	/** Optional fetch implementation injected into the URL read pipeline (tests, proxies). Defaults to global fetch. */
 	fetch?: FetchImpl;
 	/** Skip Python kernel availability check and warmup */
@@ -544,9 +552,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 			return ["hindsight", "mnemopi"].includes(session.settings.get("memory.backend") ?? "");
 		}
 		if (name === "task") {
-			const maxDepth = session.settings.get("task.maxRecursionDepth") ?? 2;
-			const currentDepth = session.taskDepth ?? 0;
-			return maxDepth < 0 || currentDepth < maxDepth;
+			return canSpawnAtDepth(session.settings.get("task.maxRecursionDepth") ?? 2, session.taskDepth ?? 0);
 		}
 		return true;
 	};

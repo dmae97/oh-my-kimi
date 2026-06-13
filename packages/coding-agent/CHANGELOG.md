@@ -120,6 +120,7 @@
 ### Added
 
 - Added an optional `role` field to `task` spawns that gives each subagent a tailored specialist identity: the role is injected as a system-prompt specialization preamble and becomes the subagent's display name and telemetry identity in the registry, IRC roster, and Agent Hub, so delegated trees are no longer clones of one generic worker ([#2467](https://github.com/can1357/oh-my-pi/issues/2467))
+- Added a non-blocking specialization advisory to the `task` tool: when a spawner with remaining depth capacity spawns generic role-less workers (a `task`/`quick_task` spawn without a `role`, or the same agent cloned ≥2× all without roles), the result steers it toward tailored specialists. Gated so a leaf at max recursion depth is never nudged; the task-tool depth gate is extracted into a shared `canSpawnAtDepth` helper ([#2469](https://github.com/can1357/oh-my-pi/issues/2469))
 
 ### Changed
 

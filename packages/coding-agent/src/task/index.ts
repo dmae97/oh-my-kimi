@@ -33,6 +33,7 @@ import { formatBytes, formatDuration } from "../tools/render-utils";
 import {
 	type AgentDefinition,
 	type AgentProgress,
+	canSpawnAtDepth,
 	getTaskSchema,
 	type SingleResult,
 	type TaskItem,
@@ -335,6 +336,36 @@ function spawnParamsFor(params: TaskParams, item: TaskItem): TaskParams {
 	return spawn;
 }
 
+/** Generic worker agents whose output sharpens with a tailored `role` rather than the bare type. */
+const GENERIC_SPAWN_AGENTS: ReadonlySet<string> = new Set(["task", "quick_task"]);
+
+/**
+ * Advisory — never a rejection — nudging the spawner toward tailored
+ * specialists when it spawns generic role-less workers and still holds spawn
+ * capacity (DepthCapacity: it currently has the `task` tool). Fires when a
+ * generic `task`/`quick_task` spawn carries no `role`, or when one call clones
+ * the same agent ≥2× all without roles. Returns undefined when no nudge applies.
+ */
+export function buildSpecializationAdvisory(
+	agentName: string | undefined,
+	items: TaskItem[],
+	depthCapacity: boolean,
+): string | undefined {
+	if (!depthCapacity) return undefined;
+	const rolelessCount = items.filter(item => !item.role?.trim()).length;
+	if (rolelessCount === 0) return undefined;
+	const generic = agentName !== undefined && GENERIC_SPAWN_AGENTS.has(agentName);
+	const cloned = items.length >= 2 && rolelessCount === items.length;
+	if (!generic && !cloned) return undefined;
+	const label = agentName ?? "task";
+	return (
+		`Tip: spawned ${rolelessCount} \`${label}\` worker${rolelessCount === 1 ? "" : "s"} without a \`role\`. ` +
+		`Tailored specialists outperform generic workers — give each spawn a \`role\` naming its expertise ` +
+		`(e.g. "Auth-flow security reviewer"). Depth budget remains, so decompose into named specialists ` +
+		`rather than cloning one generic worker.`
+	);
+}
+
 /** Sentinel for async jobs whose subagent finished with a failing result; progress is already updated. */
 class TaskJobError extends Error {}
 
@@ -504,6 +535,21 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		const selectedAgent = this.#discoveredAgents.find(agent => agent.name === params.agent);
 		const asyncEnabled = this.session.settings.get("async.enabled");
 		const manager = asyncEnabled ? this.session.asyncJobManager : undefined;
+		const depthCapacity = canSpawnAtDepth(
+			this.session.settings.get("task.maxRecursionDepth") ?? 2,
+			this.session.taskDepth ?? 0,
+		);
+		const advisory = buildSpecializationAdvisory(params.agent, spawnItems, depthCapacity);
+		const withAdvisory = (result: AgentToolResult<TaskToolDetails>): AgentToolResult<TaskToolDetails> => {
+			if (!advisory) return result;
+			const textPart = result.content.find(part => part.type === "text");
+			if (textPart && typeof textPart.text === "string") {
+				textPart.text = `${textPart.text}\n\n${advisory}`;
+			} else {
+				result.content.push({ type: "text", text: advisory });
+			}
+			return result;
+		};
 		if (!asyncEnabled || !manager || selectedAgent?.blocking === true) {
 			// Sync fallback: async execution disabled, orphaned host that never
 			// wired a job manager, or an agent definition that declares
@@ -512,7 +558,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			if (asyncEnabled && !manager) {
 				logger.warn("task: no AsyncJobManager registered; falling back to sync execution");
 			}
-			return this.#executeSyncFanout(toolCallId, params, spawnItems, signal, onUpdate);
+			return withAdvisory(await this.#executeSyncFanout(toolCallId, params, spawnItems, signal, onUpdate));
 		}
 
 		// Resolve agent ids up front so the immediate result can name them.
@@ -620,7 +666,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				content: [{ type: "text", text: `Spawned agent \`${agentId}\`...` }],
 				details: buildAsyncDetails("running", jobId),
 			});
-			return {
+			return withAdvisory({
 				content: [
 					{
 						type: "text",
@@ -628,7 +674,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 					},
 				],
 				details: buildAsyncDetails("running", jobId),
-			};
+			});
 		}
 
 		const coordinationHint = ircEnabled
@@ -648,7 +694,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			content: [{ type: "text", text: `Spawned ${started.length} agents...` }],
 			details: buildAsyncDetails("running", primaryJobId),
 		});
-		return {
+		return withAdvisory({
 			content: [
 				{
 					type: "text",
@@ -656,7 +702,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				},
 			],
 			details: buildAsyncDetails("running", primaryJobId),
-		};
+		});
 	}
 
 	/**
