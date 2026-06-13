@@ -23,7 +23,7 @@ interface BrowserRenderArgs {
 	code?: string;
 	all?: boolean;
 	kill?: boolean;
-	app?: { path?: string; cdp_url?: string; target?: string };
+	app?: { path?: string; cdp_url?: string; target?: string; cmux?: boolean; surface?: string };
 	viewport?: { width: number; height: number; scale?: number };
 	timeout?: number;
 }
@@ -36,6 +36,9 @@ interface BrowserRenderContext {
 function describeBrowser(args: BrowserRenderArgs, details: BrowserToolDetails | undefined): string | undefined {
 	if (args.app?.cdp_url) return `connected ${args.app.cdp_url}`;
 	if (args.app?.path) return `spawned ${shortenPath(args.app.path)}`;
+	if (args.app?.cmux !== false && (args.app?.cmux === true || args.app?.surface)) {
+		return args.app.surface ? `cmux ${args.app.surface}` : "cmux";
+	}
 	switch (details?.browser) {
 		case "headless":
 			return "headless";
@@ -43,6 +46,8 @@ function describeBrowser(args: BrowserRenderArgs, details: BrowserToolDetails | 
 			return "spawned";
 		case "connected":
 			return "connected";
+		case "cmux":
+			return "cmux";
 		default:
 			return undefined;
 	}
