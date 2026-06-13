@@ -29,6 +29,7 @@ tree-sitter-css.workspace = true
 tree-sitter-diff.workspace = true
 tree-sitter-dockerfile.workspace = true
 tree-sitter-elixir.workspace = true
+tree-sitter-elisp.workspace = true
 tree-sitter-erlang.workspace = true
 tree-sitter-go.workspace = true
 tree-sitter-graphql.workspace = true

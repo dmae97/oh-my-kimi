@@ -317,6 +317,7 @@ tree-sitter-dart = "0.2"
 tree-sitter-diff = "0.1"
 tree-sitter-dockerfile = { version = "0.2.0", package = "tree-sitter-dockerfile-updated" }
 tree-sitter-elixir = "0.3"
+tree-sitter-elisp = "1.6.1"
 tree-sitter-erlang = "0.16.0"
 tree-sitter-go = "0.25"
 tree-sitter-graphql = "0.1.0"

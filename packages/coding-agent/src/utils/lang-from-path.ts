@@ -66,6 +66,7 @@ const EXTENSION_LANG: Record<string, readonly [string, string]> = {
 	cljc: ["clojure", "clojure"],
 	cljs: ["clojure", "clojure"],
 	edn: ["clojure", "clojure"],
+	el: ["emacs-lisp", "emacs-lisp"],
 
 	// .NET
 	cs: ["csharp", "csharp"],

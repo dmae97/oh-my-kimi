@@ -407,6 +407,7 @@ fn is_comment_kind(language: SupportLang, kind: &str) -> bool {
 		SupportLang::Kotlin => kind == "block_comment",
 		SupportLang::Scala => kind == "block_comment",
 		SupportLang::Lua => kind == "comment",
+		SupportLang::EmacsLisp => kind == "comment",
 		_ => false,
 	}
 }
@@ -655,6 +656,17 @@ fn is_elidable_kind(language: SupportLang, kind: &str) -> bool {
 				| "list" | "map_expr"
 				| "tuple"
 		),
+		SupportLang::EmacsLisp => matches!(
+			kind,
+			"function_definition"
+				| "macro_definition"
+				| "special_form"
+				| "list" | "vector"
+				| "hash_table"
+				| "bytecode"
+				| "string_text_properties"
+				| "string"
+		),
 		SupportLang::Clojure => {
 			matches!(kind, "list_lit" | "map_lit" | "vec_lit" | "set_lit" | "str_lit")
 		},
@@ -764,6 +776,7 @@ fn is_groupable_kind(language: SupportLang, kind: &str) -> bool {
 		| SupportLang::Lua
 		| SupportLang::Elixir
 		| SupportLang::Erlang
+		| SupportLang::EmacsLisp
 		| SupportLang::Clojure
 		| SupportLang::Sql
 		| SupportLang::Zig
@@ -966,6 +979,29 @@ mod tests {
 				.unwrap_or_default()
 				.contains("return")
 		);
+	}
+
+	#[test]
+	fn summarizes_emacs_lisp_defun_body() {
+		let code = "(defun greet (name)\n  \"Doc.\"\n  (let ((message (format \"Hello %s\" \
+		            name)))\n    (message \"%s\" message)\n    message)\n)\n";
+		let result = summarize(code, "fixture.el");
+
+		assert!(result.parsed);
+		assert!(result.elided);
+		assert_eq!(result.language.as_deref(), Some("emacs-lisp"));
+		assert_eq!(segment_kinds(&result), vec!["kept", "elided", "kept"]);
+	}
+
+	#[test]
+	fn summarizes_emacs_lisp_special_form() {
+		let code =
+			"(let ((count 0))\n  (setq count (1+ count))\n  (setq count (1+ count))\n  count\n)\n";
+		let result = summarize(code, "fixture.el");
+
+		assert!(result.parsed);
+		assert!(result.elided);
+		assert_eq!(segment_kinds(&result), vec!["kept", "elided", "kept"]);
 	}
 
 	#[test]
