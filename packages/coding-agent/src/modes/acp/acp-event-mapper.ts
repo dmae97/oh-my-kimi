@@ -258,7 +258,7 @@ function mapAssistantMessageUpdate(
 			}
 			break;
 		case "thinking_delta": {
-			const block = event.assistantMessageEvent.partial.content[event.assistantMessageEvent.contentIndex];
+			const block = event.assistantMessageEvent.partial?.content?.[event.assistantMessageEvent.contentIndex];
 			if (block?.type === "thinking" && !hasVisibleThinking(block)) return [];
 			sessionUpdate = "agent_thought_chunk";
 			text = event.assistantMessageEvent.delta;
