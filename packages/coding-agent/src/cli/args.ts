@@ -53,8 +53,19 @@ export interface Args {
 	approvalMode?: "always-ask" | "write" | "yolo";
 	messages: string[];
 	fileArgs: string[];
-	/** Unknown flags (potentially extension flags) - map of flag name to value */
+	/** Extension-registered flags this parse recognized — name to value. */
 	unknownFlags: Map<string, boolean | string>;
+	/**
+	 * `--`/`-` prefixed tokens this parse could not match against any built-in
+	 * or {@link extensionFlags} entry. The startup parse runs *before*
+	 * extensions load, so it always lists every extension-registered flag here;
+	 * the post-extension reparse in {@link applyExtensionFlags} clears those
+	 * once the real flag set is known. Anything still present after that
+	 * reparse is a genuine typo or stale flag and {@link reportUnrecognizedFlags}
+	 * surfaces it as a hard error so the agent does not silently start a
+	 * session with the misparsed positionals as a prompt (issue #2459).
+	 */
+	unrecognizedFlags: string[];
 }
 
 export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { type: "boolean" | "string" }>): Args {
@@ -67,6 +78,7 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 		messages: [],
 		fileArgs: [],
 		unknownFlags: new Map(),
+		unrecognizedFlags: [],
 	};
 
 	for (let i = 0; i < args.length; i++) {
@@ -229,8 +241,17 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 			result.skills = args[++i].split(",").map(s => s.trim());
 		} else if (arg.startsWith("@")) {
 			result.fileArgs.push(arg.slice(1)); // Remove @ prefix
-		} else if (!arg.startsWith("-")) {
-			result.messages.push(arg);
+		} else if (!arg.startsWith("-") || arg === "-" || arg === "--") {
+			// Plain positional, lone `-` (stdin marker), or POSIX positional
+			// separator `--` — pass through as a message rather than flagging it.
+			if (arg !== "--") result.messages.push(arg);
+		} else {
+			// Flag-shaped (`-x`, `--name`) but unrecognized at this parse. Record
+			// it so the post-extension reparse can decide whether to surface it
+			// as a hard error. `--flag=value` already split `value` into the next
+			// slot; the standard "drop unconsumed equals value" guard below
+			// removes it so it does not leak into messages (issue #2459).
+			result.unrecognizedFlags.push(arg);
 		}
 		// Drop an unconsumed `--flag=value` value (e.g. a boolean flag): when no
 		// branch advanced past the spliced token, remove it so it does not fall
@@ -241,6 +262,24 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 	}
 
 	return result;
+}
+
+/**
+ * Emit a stderr error listing the unrecognized flags and return `true` when
+ * there were any. Caller is expected to exit with a non-zero status. Splitting
+ * the print from the exit keeps the helper unit-testable without forking a
+ * process (issue #2459).
+ */
+export function reportUnrecognizedFlags(
+	args: Pick<Args, "unrecognizedFlags">,
+	write: (text: string) => void = text => process.stderr.write(text),
+): boolean {
+	if (args.unrecognizedFlags.length === 0) return false;
+	const flags = args.unrecognizedFlags;
+	const plural = flags.length === 1 ? "" : "s";
+	write(`${chalk.red(`Error: unknown flag${plural}: ${flags.join(", ")}`)}\n`);
+	write(`Run \`${APP_NAME} --help\` for available flags.\n`);
+	return true;
 }
 
 export function getExtraHelpText(): string {
