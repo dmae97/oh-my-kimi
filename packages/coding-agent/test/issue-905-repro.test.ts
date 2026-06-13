@@ -1,13 +1,13 @@
 /**
  * Regression test for issue #905.
  *
- * `omp --list-models` did not include providers contributed by extensions
+ * Model listing did not include providers contributed by extensions
  * (via `pi.registerProvider(...)`), regardless of whether the extension was
  * supplied via `-e <path>` or configured under `extensions:` in the user
- * settings. The `--list-models` short-circuit in `runRootCommand` exited
- * before extensions were loaded.
+ * settings. The original `--list-models` short-circuit in `runRootCommand`
+ * exited before extensions were loaded.
  *
- * Contract under test: the public list-models entry point loads extensions
+ * Contract under test: the `omp models` listing entry point loads extensions
  * (CLI `-e` paths and configured `settings.extensions`) before listing, so
  * extension-registered providers/models appear in the output.
  */
@@ -17,7 +17,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { AuthStorage } from "@oh-my-pi/pi-ai";
-import { runListModelsCommand } from "@oh-my-pi/pi-coding-agent/cli/list-models";
+import { runModelsListing } from "@oh-my-pi/pi-coding-agent/cli/models-cli";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 
 let tmp: string;
@@ -54,7 +54,7 @@ afterAll(async () => {
 	await fs.rm(tmp, { recursive: true, force: true });
 });
 
-test("--list-models surfaces extension-registered providers (issue #905)", async () => {
+test("omp models surfaces extension-registered providers (issue #905)", async () => {
 	const authStorage = await AuthStorage.create(dbPath);
 	const modelRegistry = new ModelRegistry(authStorage);
 
@@ -66,9 +66,10 @@ test("--list-models surfaces extension-registered providers (issue #905)", async
 	}) as typeof process.stdout.write;
 
 	try {
-		await runListModelsCommand({
+		await runModelsListing({
 			modelRegistry,
 			cwd: tmp,
+			action: "ls",
 			additionalExtensionPaths: [extPath],
 			disableExtensionDiscovery: true,
 		});

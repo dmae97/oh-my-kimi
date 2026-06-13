@@ -13,7 +13,7 @@ import type { EditorTheme, MarkdownTheme, SelectListTheme, SettingsListTheme, Sy
 import { adjustHsv, colorLuma, getCustomThemesDir, isEnoent, logger, relativeLuminance } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import { LRUCache } from "lru-cache/raw";
-import * as z from "zod/v4";
+import { z } from "zod/v4";
 // Embed theme JSON files at build time
 import darkThemeJson from "./dark.json" with { type: "json" };
 import { defaultThemes } from "./defaults";

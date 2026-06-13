@@ -205,12 +205,12 @@ export interface WireModel {
 	id: string;
 	name: string;
 	provider: string;
-	contextWindow: number;
+	contextWindow: number | null;
 }
 
 export interface ContextUsage {
 	tokens: number | null;
-	contextWindow: number;
+	contextWindow: number | null;
 	percent: number | null;
 }
 
@@ -232,6 +232,7 @@ export interface SessionState {
 	thinkingLevel?: string;
 	contextUsage?: ContextUsage;
 	participants: Participant[];
+	isAborting?: boolean;
 }
 
 export interface AgentSnapshot {

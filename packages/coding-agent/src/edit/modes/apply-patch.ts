@@ -8,7 +8,7 @@
  * the `patch` mode.
  */
 
-import * as z from "zod/v4";
+import { z } from "zod/v4";
 import { parseApplyPatch, parseApplyPatchStreaming } from "../apply-patch/parser";
 import { ApplyPatchError } from "../diff";
 import type { PatchEditEntry } from "./patch";

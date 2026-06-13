@@ -3024,6 +3024,18 @@ export const SETTINGS_SCHEMA = {
 			description: "Launch browser in headless mode (disable to show browser UI)",
 		},
 	},
+
+	"browser.cmux": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "tools",
+			group: "Search & Browser",
+			label: "cmux Browser",
+			description:
+				"Use cmux WKWebView surfaces for browser automation when a cmux socket is available. Set PI_BROWSER_CMUX=0 or PI_BROWSER_CMUX=1 to override.",
+		},
+	},
 	"browser.screenshotDir": {
 		type: "string",
 		default: undefined,
@@ -3526,6 +3538,10 @@ export const SETTINGS_SCHEMA = {
 	"skills.enablePiUser": { type: "boolean", default: true },
 
 	"skills.enablePiProject": { type: "boolean", default: true },
+
+	"skills.enableAgentsUser": { type: "boolean", default: true },
+
+	"skills.enableAgentsProject": { type: "boolean", default: true },
 
 	"skills.customDirectories": { type: "array", default: [] as string[] },
 
@@ -4138,6 +4154,8 @@ export interface SkillsSettings {
 	enableClaudeProject?: boolean;
 	enablePiUser?: boolean;
 	enablePiProject?: boolean;
+	enableAgentsUser?: boolean;
+	enableAgentsProject?: boolean;
 	customDirectories?: string[];
 	ignoredSkills?: string[];
 	includeSkills?: string[];

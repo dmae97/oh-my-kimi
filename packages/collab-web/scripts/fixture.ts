@@ -356,7 +356,7 @@ export function makeProbeProgress(tick: number): SubagentProgressPayload {
 			requests: 4 + Math.floor(tick / 3),
 			tokens: 18_400 + tick * 450,
 			contextTokens: 22_300 + tick * 510,
-			contextWindow: fixtureModel.contextWindow,
+			contextWindow: fixtureModel.contextWindow ?? undefined,
 			cost: 0.041 + tick * 0.0012,
 			durationMs: 95_000 + tick * 2_000,
 			resolvedModel: fixtureModel.id,

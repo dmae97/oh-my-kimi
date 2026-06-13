@@ -32,7 +32,7 @@ import type {
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/oauth/types";
 import type { AutocompleteItem, Component, EditorTheme, KeyId, TUI } from "@oh-my-pi/pi-tui";
 import type { logger as PiLogger } from "@oh-my-pi/pi-utils";
-import type * as Zod from "zod/v4";
+import type { z } from "zod/v4";
 import type { KeybindingsManager } from "../../config/keybindings";
 import type { ModelRegistry } from "../../config/model-registry";
 import type { EditToolDetails } from "../../edit";
@@ -890,7 +890,7 @@ export interface ExtensionAPI {
 	typebox: typeof TypeBox;
 
 	/** Injected zod module for Zod-authored extension tools (canonical going forward). */
-	zod: typeof Zod;
+	zod: typeof z;
 
 	/** Injected pi-coding-agent exports for accessing SDK utilities */
 	pi: typeof PiCodingAgent;

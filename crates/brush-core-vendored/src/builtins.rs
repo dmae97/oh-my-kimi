@@ -164,6 +164,10 @@ pub struct Registration<SE: extensions::ShellExtensions> {
 
 	/// Is this builtin one that takes specially handled declarations?
 	pub declaration_builtin: bool,
+
+	/// Can async background job spawning skip this builtin and launch its first
+	/// word argument directly?
+	pub transparent_background_wrapper: bool,
 }
 
 impl<SE: extensions::ShellExtensions> Registration<SE> {
@@ -171,6 +175,14 @@ impl<SE: extensions::ShellExtensions> Registration<SE> {
 	#[must_use]
 	pub const fn special(self) -> Self {
 		Self { special_builtin: true, ..self }
+	}
+
+	/// Marks this builtin as a transparent wrapper when used as an asynchronous
+	/// background command. The first word argument becomes the launched command,
+	/// and the wrapper itself is skipped so `$!` can refer to the real child PID.
+	#[must_use]
+	pub const fn transparent_background_wrapper(self) -> Self {
+		Self { transparent_background_wrapper: true, ..self }
 	}
 }
 
@@ -510,6 +522,7 @@ pub fn simple_builtin<B: SimpleCommand + Send + Sync, SE: extensions::ShellExten
 		disabled:            false,
 		special_builtin:     false,
 		declaration_builtin: false,
+		transparent_background_wrapper: false,
 	}
 }
 
@@ -522,6 +535,7 @@ pub fn builtin<B: Command + Send + Sync, SE: extensions::ShellExtensions>() -> R
 		disabled:            false,
 		special_builtin:     false,
 		declaration_builtin: false,
+		transparent_background_wrapper: false,
 	}
 }
 
@@ -536,6 +550,7 @@ pub fn decl_builtin<B: DeclarationCommand + Send + Sync, SE: extensions::ShellEx
 		disabled:            false,
 		special_builtin:     false,
 		declaration_builtin: true,
+		transparent_background_wrapper: false,
 	}
 }
 
@@ -556,6 +571,7 @@ pub fn raw_arg_builtin<
 		disabled:            false,
 		special_builtin:     false,
 		declaration_builtin: true,
+		transparent_background_wrapper: false,
 	}
 }
 

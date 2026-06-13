@@ -1005,7 +1005,21 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "logout",
 		description: "Logout from OAuth provider",
-		handleTui: (_command, runtime) => {
+		inlineHint: "[provider]",
+		allowArgs: true,
+		handleTui: (command, runtime) => {
+			const providerId = command.args.trim();
+			if (providerId) {
+				const matchedProvider = getOAuthProviders().find(provider => provider.id === providerId);
+				if (!matchedProvider) {
+					runtime.ctx.showWarning(`Unknown OAuth provider: ${providerId}`);
+					runtime.ctx.editor.setText("");
+					return;
+				}
+				void runtime.ctx.showOAuthSelector("logout", matchedProvider.id);
+				runtime.ctx.editor.setText("");
+				return;
+			}
 			void runtime.ctx.showOAuthSelector("logout");
 			runtime.ctx.editor.setText("");
 		},

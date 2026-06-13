@@ -76,12 +76,17 @@ describe("createSessionManager — cross-project --resume cancellation (#1668)",
 	});
 
 	it("throws when the cross-project fork prompt is unavailable in non-interactive mode", async () => {
-		expect(process.stdin.isTTY).toBeFalsy();
-		vi.spyOn(sessionManagerModule, "resolveResumableSession").mockResolvedValue(buildGlobalMatch(existingProject));
+		const originalIsTTY = process.stdin.isTTY;
+		Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
+		try {
+			vi.spyOn(sessionManagerModule, "resolveResumableSession").mockResolvedValue(buildGlobalMatch(existingProject));
 
-		await expect(createSessionManager(buildArgs("019e84ed"), "/current/project", stubSettings)).rejects.toThrow(
-			`Session "019e84ed" is in another project (${existingProject}); run interactively to fork it into the current project.`,
-		);
+			await expect(createSessionManager(buildArgs("019e84ed"), "/current/project", stubSettings)).rejects.toThrow(
+				`Session "019e84ed" is in another project (${existingProject}); run interactively to fork it into the current project.`,
+			);
+		} finally {
+			Object.defineProperty(process.stdin, "isTTY", { value: originalIsTTY, configurable: true });
+		}
 	});
 });
 
@@ -118,12 +123,17 @@ describe("createSessionManager — cross-project --resume relocation (moved work
 	});
 
 	it("throws the move-specific error when unavailable in non-interactive mode", async () => {
-		expect(process.stdin.isTTY).toBeFalsy();
-		vi.spyOn(sessionManagerModule, "resolveResumableSession").mockResolvedValue(buildGlobalMatch(missingProject));
+		const originalIsTTY = process.stdin.isTTY;
+		Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
+		try {
+			vi.spyOn(sessionManagerModule, "resolveResumableSession").mockResolvedValue(buildGlobalMatch(missingProject));
 
-		await expect(createSessionManager(buildArgs("019e84ed"), "/current/project", stubSettings)).rejects.toThrow(
-			`Session "019e84ed" belongs to a directory that no longer exists (${missingProject}); run interactively to move it into the current project.`,
-		);
+			await expect(createSessionManager(buildArgs("019e84ed"), "/current/project", stubSettings)).rejects.toThrow(
+				`Session "019e84ed" belongs to a directory that no longer exists (${missingProject}); run interactively to move it into the current project.`,
+			);
+		} finally {
+			Object.defineProperty(process.stdin, "isTTY", { value: originalIsTTY, configurable: true });
+		}
 	});
 
 	it("moves a local explicit-session-dir match whose recorded cwd is gone", async () => {

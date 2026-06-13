@@ -25,6 +25,7 @@
  *   200 JSON (stream=false): { message: AssistantMessage }
  *   4xx/5xx: { error: { type, message } }
  */
+import type { AuthGatewayStreamControl } from "../auth-gateway/types";
 import type { AssistantMessageEventStream, Context, SimpleStreamOptions } from "../types";
 
 export interface PiNativeParsedRequest {
@@ -161,30 +162,56 @@ const SSE_DONE = SSE_ENCODER.encode("data: [DONE]\n\n");
  * and the client gets to feed the events straight into its existing
  * `AssistantMessageEventStream.push()` plumbing with zero translation.
  */
-export function encodeStream(events: AssistantMessageEventStream): ReadableStream<Uint8Array> {
+export function encodeStream(
+	events: AssistantMessageEventStream,
+	_requestedModelId?: string,
+	_options?: SimpleStreamOptions,
+	control?: AuthGatewayStreamControl,
+): ReadableStream<Uint8Array> {
+	let cancelled = control?.signal?.aborted === true;
+	const markCancelled = () => {
+		cancelled = true;
+	};
+	control?.signal?.addEventListener("abort", markCancelled, { once: true });
 	return new ReadableStream<Uint8Array>({
 		async start(controller) {
 			try {
+				if (cancelled) {
+					controller.close();
+					return;
+				}
 				for await (const event of events) {
+					if (cancelled) return;
 					controller.enqueue(SSE_ENCODER.encode(`data: ${JSON.stringify(event)}\n\n`));
 					if (event.type === "done" || event.type === "error") break;
 				}
-				controller.enqueue(SSE_DONE);
-				controller.close();
+				if (!cancelled) {
+					controller.enqueue(SSE_DONE);
+					controller.close();
+				}
 			} catch (err) {
-				// Best-effort error envelope so the client iterator resolves
-				// instead of hanging on the dropped connection. Shape matches the
-				// canonical `error` event minus the unrecoverable `error:
-				// AssistantMessage` payload (we don't have a usable one here).
-				const message = err instanceof Error ? err.message : String(err);
-				controller.enqueue(
-					SSE_ENCODER.encode(
-						`data: ${JSON.stringify({ type: "error", reason: "error", errorMessage: message })}\n\n`,
-					),
-				);
-				controller.enqueue(SSE_DONE);
-				controller.close();
+				if (!cancelled) {
+					// Best-effort error envelope so the client iterator resolves
+					// instead of hanging on the dropped connection. Shape matches the
+					// canonical `error` event minus the unrecoverable `error:
+					// AssistantMessage` payload (we don't have a usable one here).
+					const message = err instanceof Error ? err.message : String(err);
+					controller.enqueue(
+						SSE_ENCODER.encode(
+							`data: ${JSON.stringify({ type: "error", reason: "error", errorMessage: message })}\n\n`,
+						),
+					);
+					controller.enqueue(SSE_DONE);
+					controller.close();
+				}
+			} finally {
+				control?.signal?.removeEventListener("abort", markCancelled);
 			}
+		},
+		cancel(reason) {
+			cancelled = true;
+			control?.signal?.removeEventListener("abort", markCancelled);
+			control?.onCancel?.(reason);
 		},
 	});
 }

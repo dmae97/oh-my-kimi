@@ -37,11 +37,11 @@ export function createReferenceResolver<TApi extends Api>(
 			if (!existing) {
 				globalRefs.set(candidate.id, candidate);
 			} else if (candidate.contextWindow !== existing.contextWindow) {
-				if (candidate.contextWindow > existing.contextWindow) {
+				if ((candidate.contextWindow ?? 0) > (existing.contextWindow ?? 0)) {
 					globalRefs.set(candidate.id, candidate);
 				}
 			} else if (candidate.maxTokens !== existing.maxTokens) {
-				if (candidate.maxTokens > existing.maxTokens) {
+				if ((candidate.maxTokens ?? 0) > (existing.maxTokens ?? 0)) {
 					globalRefs.set(candidate.id, candidate);
 				}
 			} else if (existing.provider !== "openai" && candidate.provider === "openai") {

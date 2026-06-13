@@ -10,8 +10,21 @@ export class AbortError extends Error {
 	}
 }
 
+type AbortableStreamReadResult<T> = { done: true; value?: T } | { done: false; value: T };
+
+interface AbortableStreamReader<T> {
+	read(): Promise<AbortableStreamReadResult<T>>;
+	cancel(reason?: unknown): Promise<void>;
+	releaseLock(): void;
+}
+
 /**
  * Creates an abortable stream from a given stream and signal.
+ *
+ * Unlike `stream.pipeThrough(..., { signal })`, this explicitly cancels the
+ * source reader when the signal aborts. That propagates HTTP-client disconnects
+ * and stream watchdog timeouts all the way to the backend request instead of
+ * only stopping the local consumer.
  *
  * @param stream - The stream to make abortable
  * @param signal - The signal to abort the stream
@@ -19,7 +32,79 @@ export class AbortError extends Error {
  */
 export function createAbortableStream<T>(stream: ReadableStream<T>, signal?: AbortSignal): ReadableStream<T> {
 	if (!signal) return stream;
-	return stream.pipeThrough(new TransformStream<T, T>(), { signal });
+	let reader: AbortableStreamReader<T> | undefined;
+	let closed = false;
+	let onAbort: (() => void) | undefined;
+
+	const cleanup = () => {
+		if (onAbort) signal.removeEventListener("abort", onAbort);
+		onAbort = undefined;
+		const currentReader = reader;
+		reader = undefined;
+		try {
+			currentReader?.releaseLock();
+		} catch {}
+	};
+
+	const cancelReader = (reason: unknown): Promise<void> => {
+		if (closed) return Promise.resolve();
+		closed = true;
+		const currentReader = reader;
+		reader = undefined;
+		if (onAbort) signal.removeEventListener("abort", onAbort);
+		onAbort = undefined;
+		if (!currentReader) return Promise.resolve();
+		return currentReader
+			.cancel(reason)
+			.catch(() => {})
+			.finally(() => {
+				try {
+					currentReader.releaseLock();
+				} catch {}
+			});
+	};
+
+	return new ReadableStream<T>({
+		start(controller) {
+			reader = stream.getReader();
+			onAbort = () => {
+				void cancelReader(signal.reason);
+				try {
+					controller.error(new AbortError(signal));
+				} catch {}
+			};
+			if (signal.aborted) {
+				onAbort();
+				return;
+			}
+			signal.addEventListener("abort", onAbort, { once: true });
+			void (async () => {
+				try {
+					for (;;) {
+						const currentReader = reader;
+						if (!currentReader) return;
+						const { value, done } = await currentReader.read();
+						if (closed) return;
+						if (done) {
+							closed = true;
+							cleanup();
+							controller.close();
+							return;
+						}
+						controller.enqueue(value);
+					}
+				} catch (error) {
+					if (closed) return;
+					closed = true;
+					cleanup();
+					controller.error(signal.aborted ? new AbortError(signal) : error);
+				}
+			})();
+		},
+		cancel(reason) {
+			return cancelReader(reason);
+		},
+	});
 }
 
 /**

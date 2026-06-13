@@ -1,5 +1,4 @@
-import * as z from "zod/v4";
-import { UNK_CONTEXT_WINDOW, UNK_MAX_TOKENS } from "../provider-models/discovery-constants";
+import { z } from "zod/v4";
 import type { Api, FetchImpl, ModelSpec, Provider } from "../types";
 
 const MODELS_PATH = "/models";
@@ -165,8 +164,8 @@ export async function fetchOpenAICompatibleModels<TApi extends Api>(
 			reasoning: false,
 			input: ["text"],
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-			contextWindow: UNK_CONTEXT_WINDOW,
-			maxTokens: UNK_MAX_TOKENS,
+			contextWindow: null,
+			maxTokens: null,
 		};
 
 		// `mapModel` returning null skips the entry (documented contract); only a

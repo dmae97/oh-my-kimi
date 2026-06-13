@@ -1,4 +1,4 @@
-import * as z from "zod/v4";
+import { z } from "zod/v4";
 import type { ModelSpec } from "../types";
 import { toPositiveNumber } from "../utils";
 import { ANTIGRAVITY_VARIANT_COLLAPSE_TABLE, collapseEffortVariants } from "../variant-collapse";

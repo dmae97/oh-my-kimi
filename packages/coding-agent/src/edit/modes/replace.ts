@@ -5,7 +5,7 @@
  * fallback strategies for finding text in files.
  */
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
-import * as z from "zod/v4";
+import { z } from "zod/v4";
 import type { WritethroughCallback, WritethroughDeferredHandle } from "../../lsp";
 import type { ToolSession } from "../../tools";
 import { invalidateFsScanAfterWrite } from "../../tools/fs-cache-invalidation";

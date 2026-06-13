@@ -17,6 +17,7 @@ import type { AgentStorage } from "../session/agent-storage";
 import { DEFAULT_MAX_BYTES, truncateHead } from "../session/streaming-output";
 import { renderStatusLine, urlHyperlink } from "../tui";
 import { CachedOutputBlock, markFramedBlockComponent } from "../tui/output-block";
+import { webpExclusionForModel } from "../utils/image-loading";
 import { formatDimensionNote, resizeImage } from "../utils/image-resize";
 import { ensureTool } from "../utils/tools-manager";
 import { extractWithParallel, findParallelApiKey, getParallelExtractContent } from "../web/parallel";
@@ -1077,6 +1078,7 @@ async function renderUrl(
 	signal: AbortSignal | undefined,
 	storage: AgentStorage | null,
 	fetchOverride?: FetchImpl,
+	excludeWebP?: true,
 ): Promise<FetchRenderResult> {
 	const notes: string[] = [];
 	const fetchedAt = new Date().toISOString();
@@ -1190,7 +1192,7 @@ async function renderUrl(
 
 				const resized = await resizeImage(
 					{ type: "image", data: Buffer.from(binary.buffer).toBase64(), mimeType: imageMimeType },
-					{ maxBytes: MAX_INLINE_IMAGE_OUTPUT_BYTES },
+					{ maxBytes: MAX_INLINE_IMAGE_OUTPUT_BYTES, excludeWebP },
 				);
 				const isDecodedImage =
 					resized.originalWidth > 0 && resized.originalHeight > 0 && resized.width > 0 && resized.height > 0;
@@ -1666,7 +1668,16 @@ async function buildReadUrlCacheEntry(
 	}
 
 	const storage = session.settings.getStorage();
-	const result = await renderUrl(url, effectiveTimeout, raw, session.settings, signal, storage, session.fetch);
+	const result = await renderUrl(
+		url,
+		effectiveTimeout,
+		raw,
+		session.settings,
+		signal,
+		storage,
+		session.fetch,
+		webpExclusionForModel(session.getActiveModel?.()),
+	);
 	const output = buildUrlReadOutput(result, result.content);
 	const artifactId = options?.ensureArtifact ? await persistReadUrlArtifact(session, output) : undefined;
 

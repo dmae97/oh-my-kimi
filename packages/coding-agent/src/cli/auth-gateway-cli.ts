@@ -409,7 +409,7 @@ function pickProbeCandidates(provider: string): Model<Api>[] {
 		if (!model.input.includes("text")) return false;
 		const totalCost = (model.cost?.input ?? 0) + (model.cost?.output ?? 0);
 		if (!Number.isFinite(totalCost) || totalCost < 0) return false;
-		if (model.maxTokens <= 0) return false;
+		if (model.maxTokens !== null && model.maxTokens <= 0) return false;
 		return true;
 	});
 	candidates.sort((a, b) => a.cost.input + a.cost.output - (b.cost.input + b.cost.output) || a.id.localeCompare(b.id));

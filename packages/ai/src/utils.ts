@@ -1,5 +1,5 @@
 import { $env } from "@oh-my-pi/pi-utils";
-import type { ResponseInput } from "openai/resources/responses/responses";
+import type { ResponseInput } from "./providers/openai-responses-wire";
 import type { CacheRetention, OpenAIResponsesHistoryPayload, ProviderPayload } from "./types";
 
 type OpenAIResponsesReplayItem = ResponseInput[number];

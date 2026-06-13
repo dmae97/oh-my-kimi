@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [15.12.4] - 2026-06-13
+
+### Fixed
+
+- Fixed the stats dashboard's SQLite init never setting `PRAGMA busy_timeout`, so a concurrent `omp` startup hitting WAL recovery could crash `initDb()` with `SQLITE_BUSY` instead of waiting through it. The busy handler is now installed before `PRAGMA journal_mode=WAL` ([#2421](https://github.com/can1357/oh-my-pi/issues/2421)).
+
 ## [15.11.0] - 2026-06-10
 ### Added
 

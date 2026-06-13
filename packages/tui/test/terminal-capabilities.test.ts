@@ -1,5 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import {
+	hyperlinksUserOverride,
+	shouldEnableHyperlinksByDefault,
 	shouldEnableSynchronizedOutputByDefault,
 	synchronizedOutputUserOverride,
 } from "@oh-my-pi/pi-tui/terminal-capabilities";
@@ -90,5 +92,170 @@ describe("shouldEnableSynchronizedOutputByDefault", () => {
 		expect(
 			shouldEnableSynchronizedOutputByDefault({ PI_FORCE_SYNC_OUTPUT: "1", SSH_CONNECTION: "1 2 3 4" }, "base"),
 		).toBe(true);
+	});
+});
+
+describe("hyperlinksUserOverride", () => {
+	it("returns null when neither override is set", () => {
+		expect(hyperlinksUserOverride({})).toBeNull();
+		expect(hyperlinksUserOverride({ TERM: "xterm-256color" })).toBeNull();
+	});
+
+	it("returns true for the force-on flag", () => {
+		expect(hyperlinksUserOverride({ PI_FORCE_HYPERLINKS: "1" })).toBe(true);
+	});
+
+	it("returns false for the opt-out flag", () => {
+		expect(hyperlinksUserOverride({ PI_NO_HYPERLINKS: "1" })).toBe(false);
+	});
+
+	it("resolves opt-out ahead of force-on when both are set", () => {
+		expect(hyperlinksUserOverride({ PI_NO_HYPERLINKS: "1", PI_FORCE_HYPERLINKS: "1" })).toBe(false);
+	});
+
+	it("ignores values other than the literal '1'", () => {
+		// Mirrors the sync-output knobs: only the canonical `1` toggles them;
+		// `true`/`yes` are not accepted to keep the contract obvious.
+		expect(hyperlinksUserOverride({ PI_FORCE_HYPERLINKS: "true" })).toBeNull();
+		expect(hyperlinksUserOverride({ PI_FORCE_HYPERLINKS: "0" })).toBeNull();
+		expect(hyperlinksUserOverride({ PI_NO_HYPERLINKS: "0" })).toBeNull();
+	});
+});
+
+describe("shouldEnableHyperlinksByDefault", () => {
+	it("enables hyperlinks on every known direct terminal", () => {
+		for (const id of ["kitty", "ghostty", "wezterm", "iterm2", "alacritty", "vscode"] as const) {
+			expect(shouldEnableHyperlinksByDefault({}, id)).toBe(true);
+		}
+	});
+
+	it("keeps the base/trueColor fallback terminals off", () => {
+		expect(shouldEnableHyperlinksByDefault({}, "base")).toBe(false);
+		expect(shouldEnableHyperlinksByDefault({}, "trueColor")).toBe(false);
+	});
+
+	it("keeps GNU screen always off, even when the inner terminal supports OSC 8", () => {
+		expect(shouldEnableHyperlinksByDefault({ STY: "1234.pts-0.host" }, "wezterm")).toBe(false);
+		expect(shouldEnableHyperlinksByDefault({ TERM: "screen-256color" }, "kitty")).toBe(false);
+	});
+
+	it("treats TMUX as authoritative even when TERM is screen-family (tmux's historical default-terminal)", () => {
+		// tmux's historical `default-terminal` is `screen-256color`, so a tmux
+		// session can have a screen-family TERM. The TMUX env signals tmux is the
+		// immediate layer and its version gate must run regardless of TERM.
+		expect(
+			shouldEnableHyperlinksByDefault(
+				{
+					TMUX: "/tmp/tmux-1000/default,1,0",
+					TERM: "screen-256color",
+					TERM_PROGRAM: "tmux",
+					TERM_PROGRAM_VERSION: "3.4",
+				},
+				"wezterm",
+			),
+		).toBe(true);
+		expect(
+			shouldEnableHyperlinksByDefault(
+				{
+					TMUX: "/tmp/tmux-1000/default,1,0",
+					TERM: "screen",
+					TERM_PROGRAM: "tmux",
+					TERM_PROGRAM_VERSION: "3.3a",
+				},
+				"wezterm",
+			),
+		).toBe(false);
+	});
+
+	it("lets GNU screen's STY marker veto tmux enabling in nested multiplexer sessions", () => {
+		expect(
+			shouldEnableHyperlinksByDefault(
+				{
+					STY: "1234.pts-0.host",
+					TMUX: "/tmp/tmux-1000/default,1,0",
+					TERM_PROGRAM: "tmux",
+					TERM_PROGRAM_VERSION: "3.4",
+				},
+				"wezterm",
+			),
+		).toBe(false);
+		expect(
+			shouldEnableHyperlinksByDefault(
+				{
+					STY: "1234.pts-0.host",
+					TMUX: "/tmp/tmux-1000/default,1,0",
+					TERM: "screen-256color",
+					TERM_PROGRAM: "tmux",
+					TERM_PROGRAM_VERSION: "3.5a",
+				},
+				"kitty",
+			),
+		).toBe(false);
+	});
+
+	it("keeps tmux off when no version is reported (old tmux without TERM_PROGRAM_VERSION)", () => {
+		expect(shouldEnableHyperlinksByDefault({ TMUX: "/tmp/tmux-1000/default,1,0" }, "wezterm")).toBe(false);
+		expect(shouldEnableHyperlinksByDefault({ TERM: "tmux-256color" }, "wezterm")).toBe(false);
+	});
+
+	it("keeps tmux off when self-reported version is below 3.4", () => {
+		expect(
+			shouldEnableHyperlinksByDefault(
+				{ TMUX: "/tmp/tmux-1000/default,1,0", TERM_PROGRAM: "tmux", TERM_PROGRAM_VERSION: "3.3a" },
+				"wezterm",
+			),
+		).toBe(false);
+		expect(
+			shouldEnableHyperlinksByDefault(
+				{ TMUX: "/tmp/tmux-1000/default,1,0", TERM_PROGRAM: "tmux", TERM_PROGRAM_VERSION: "2.9" },
+				"kitty",
+			),
+		).toBe(false);
+	});
+
+	it("enables tmux >= 3.4 since tmux forwards OSC 8 cell attributes to the outer terminal", () => {
+		expect(
+			shouldEnableHyperlinksByDefault(
+				{ TMUX: "/tmp/tmux-1000/default,1,0", TERM_PROGRAM: "tmux", TERM_PROGRAM_VERSION: "3.4" },
+				"wezterm",
+			),
+		).toBe(true);
+		expect(
+			shouldEnableHyperlinksByDefault(
+				{ TMUX: "/tmp/tmux-1000/default,1,0", TERM_PROGRAM: "tmux", TERM_PROGRAM_VERSION: "3.5a" },
+				"wezterm",
+			),
+		).toBe(true);
+		expect(
+			shouldEnableHyperlinksByDefault(
+				{ TMUX: "/tmp/tmux-1000/default,1,0", TERM_PROGRAM: "tmux", TERM_PROGRAM_VERSION: "4.0" },
+				"kitty",
+			),
+		).toBe(true);
+	});
+
+	it("respects the static per-terminal flag even when force-on is absent", () => {
+		expect(
+			shouldEnableHyperlinksByDefault(
+				{ TMUX: "/tmp/tmux-1000/default,1,0", TERM_PROGRAM: "tmux", TERM_PROGRAM_VERSION: "3.5a" },
+				"base",
+			),
+		).toBe(false);
+	});
+
+	it("lets PI_NO_HYPERLINKS beat every positive heuristic", () => {
+		expect(shouldEnableHyperlinksByDefault({ PI_NO_HYPERLINKS: "1" }, "kitty")).toBe(false);
+		expect(
+			shouldEnableHyperlinksByDefault(
+				{ PI_NO_HYPERLINKS: "1", TERM_PROGRAM: "tmux", TERM_PROGRAM_VERSION: "3.5a", TMUX: "1" },
+				"wezterm",
+			),
+		).toBe(false);
+	});
+
+	it("lets PI_FORCE_HYPERLINKS override the conservative defaults (old tmux, screen, base terminal)", () => {
+		expect(shouldEnableHyperlinksByDefault({ PI_FORCE_HYPERLINKS: "1" }, "base")).toBe(true);
+		expect(shouldEnableHyperlinksByDefault({ PI_FORCE_HYPERLINKS: "1", TMUX: "1" }, "wezterm")).toBe(true);
+		expect(shouldEnableHyperlinksByDefault({ PI_FORCE_HYPERLINKS: "1", STY: "1.pts-0" }, "kitty")).toBe(true);
 	});
 });

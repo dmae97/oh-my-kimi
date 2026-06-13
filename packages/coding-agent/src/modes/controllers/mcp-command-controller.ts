@@ -813,6 +813,43 @@ export class MCPCommandController {
 		return null;
 	}
 
+	/**
+	 * Resolve a server for an auth/test operation.
+	 *
+	 * Unlike {@link #findConfiguredServer} (which only reads writable OMP config
+	 * files), this also recognizes runtime-discovered servers that `/mcp list`
+	 * surfaces but that live in no writable config — e.g. servers from a Claude
+	 * Code marketplace plugin (`cloudflare:cloudflare-api`), `.cursor/mcp.json`,
+	 * etc. Without this, `/mcp reauth|test|unauth` reports "not found" for a
+	 * server the list just showed.
+	 *
+	 * For a discovered server, any persisted change is written into the *user*
+	 * config under the same (namespaced) name; the native provider (priority 100)
+	 * shadows the discovered entry on the next reload, so an OAuth `auth` block
+	 * persisted by `/mcp reauth` takes effect. `discovered` lets callers tailor
+	 * messaging and skip pointless writes when there is nothing to persist.
+	 */
+	async #resolveServerForAuth(name: string): Promise<{
+		filePath: string;
+		scope: "user" | "project";
+		config: MCPServerConfig;
+		discovered: boolean;
+	} | null> {
+		const found = await this.#findConfiguredServer(name);
+		if (found) return { ...found, discovered: false };
+
+		const config = this.ctx.mcpManager?.getServerConfig(name);
+		const source = this.ctx.mcpManager?.getSource(name);
+		if (!config || !source) return null;
+
+		return {
+			filePath: getMCPConfigPath("user", getProjectDir()),
+			scope: "user",
+			config,
+			discovered: true,
+		};
+	}
+
 	async #removeManagedOAuthCredential(credentialId: string | undefined): Promise<void> {
 		if (!credentialId?.startsWith("mcp_oauth_")) return;
 		await this.ctx.session.modelRegistry.authStorage.remove(credentialId);
@@ -1199,7 +1236,7 @@ export class MCPCommandController {
 
 		let connection: MCPServerConnection | undefined;
 		try {
-			const found = await this.#findConfiguredServer(name);
+			const found = await this.#resolveServerForAuth(name);
 
 			if (!found) {
 				this.ctx.showError(
@@ -1389,13 +1426,17 @@ export class MCPCommandController {
 		}
 
 		try {
-			const found = await this.#findConfiguredServer(name);
+			const found = await this.#resolveServerForAuth(name);
 			if (!found) {
 				this.ctx.showError(`Server "${name}" not found.`);
 				return;
 			}
 
 			const currentAuth = (found.config as MCPServerConfig & { auth?: MCPAuthConfig }).auth;
+			if (found.discovered && currentAuth?.type !== "oauth") {
+				this.#showMessage(["", theme.fg("muted", `No stored OAuth auth to remove for "${name}".`), ""].join("\n"));
+				return;
+			}
 			if (currentAuth?.type === "oauth") {
 				await this.#removeManagedOAuthCredential(currentAuth.credentialId);
 			}
@@ -1419,7 +1460,7 @@ export class MCPCommandController {
 		}
 
 		try {
-			const found = await this.#findConfiguredServer(name);
+			const found = await this.#resolveServerForAuth(name);
 			if (!found) {
 				this.ctx.showError(`Server "${name}" not found.`);
 				return;

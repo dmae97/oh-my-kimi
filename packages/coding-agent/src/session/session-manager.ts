@@ -1527,6 +1527,17 @@ class NdjsonFileWriter {
 		}
 	}
 
+	/** Synchronously fsync the underlying file descriptor to physical disk. */
+	fsyncSync(): void {
+		if (this.#closed) return;
+		if (this.#error) throw this.#error;
+		try {
+			this.#writer.fsyncSync();
+		} catch (err) {
+			throw this.#recordError(err);
+		}
+	}
+
 	/** Close the writer, flushing all data. */
 	async close(): Promise<void> {
 		if (this.#closed || this.#closing) return;
@@ -2590,6 +2601,111 @@ export class SessionManager {
 			}
 		});
 		if (this.#persistError) throw this.#persistError;
+	}
+
+	/**
+	 * Synchronously flush all in-memory entries to disk and fsync.
+	 * Use when the process may exit before an async flush settles (e.g. Ctrl+C
+	 * in the TUI, where raw mode consumes the keystroke so postmortem's SIGINT
+	 * handler never fires).
+	 *
+	 * Hot path: the persist writer is open and flushed, so a single fsyncSync
+	 * pushes the page-cache data to physical disk.
+	 *
+	 * Cold path: entries are only in memory (session just started, or a rewrite
+	 * is pending). Writes all entries to a temp file, fsyncs, and atomically
+	 * renames over the session file — then re-opens an append writer so the
+	 * hot path resumes on subsequent `_persist` calls.
+	 */
+	flushSync(): void {
+		if (!this.persist || !this.#sessionFile) return;
+		if (this.#persistError) throw this.#persistError;
+
+		// Hot path: writer is open and all entries have been written via writeSync.
+		// Just fsync the fd — the data is already in the kernel page cache.
+		if (this.#persistWriter?.isOpen() && this.#flushed && !this.#needsFullRewriteOnNextPersist) {
+			this.#persistWriter.fsyncSync();
+			return;
+		}
+
+		// Cold path: write all in-memory entries to a temp file and atomically
+		// replace the session file. This is safe to run even when an async
+		// rewrite is queued on #persistChain: the async task won't progress
+		// while we're on the sync call stack, and the file we produce is a
+		// superset of whatever the async rewrite would write.
+		const dir = path.resolve(this.#sessionFile, "..");
+		const tempPath = path.join(dir, `.${path.basename(this.#sessionFile)}.${Snowflake.next()}.tmp`);
+		const fd = fs.openSync(tempPath, "w");
+		try {
+			for (const entry of this.#fileEntries) {
+				const persisted = prepareEntryForPersistenceSync(entry, this.#blobStore);
+				const line = `${JSON.stringify(persisted)}\n`;
+				fs.writeSync(fd, line);
+			}
+			fs.fsyncSync(fd);
+		} finally {
+			fs.closeSync(fd);
+		}
+
+		// Atomic replace (with EPERM retry for Windows)
+		try {
+			fs.renameSync(tempPath, this.#sessionFile);
+		} catch (err) {
+			if (!hasFsCode(err, "EPERM")) {
+				try {
+					fs.unlinkSync(tempPath);
+				} catch {
+					/* best effort */
+				}
+				throw toError(err);
+			}
+			// Windows: move the old file aside, then rename
+			const backupPath = path.join(dir, `${path.basename(this.#sessionFile)}.${Snowflake.next()}.bak`);
+			try {
+				fs.renameSync(this.#sessionFile, backupPath);
+			} catch (moveAsideErr) {
+				if (isEnoent(moveAsideErr)) {
+					fs.renameSync(tempPath, this.#sessionFile);
+					return;
+				}
+				try {
+					fs.unlinkSync(tempPath);
+				} catch {
+					/* best effort */
+				}
+				throw toError(err);
+			}
+			try {
+				fs.renameSync(tempPath, this.#sessionFile);
+			} catch (replaceErr) {
+				// Roll back
+				try {
+					fs.renameSync(backupPath, this.#sessionFile);
+				} catch {
+					/* best effort */
+				}
+				throw toError(replaceErr);
+			}
+			try {
+				fs.unlinkSync(backupPath);
+			} catch {
+				/* best effort */
+			}
+		}
+
+		// Re-open the persist writer in append mode so the hot path resumes.
+		if (this.#persistWriter) {
+			// The old writer is stale (pointed at the pre-rewrite file or was
+			// mid-close). Close it asynchronously — it's a no-op if already
+			// closed, and we don't want to block on draining its queue.
+			void this.#persistWriter.close().catch(() => {});
+		}
+		this.#persistWriter = new NdjsonFileWriter(this.storage, this.#sessionFile, {
+			onError: err => this.#recordPersistError(err),
+		});
+		this.#persistWriterPath = this.#sessionFile;
+		this.#flushed = true;
+		this.#needsFullRewriteOnNextPersist = false;
 	}
 
 	/** Close the persistent writer after flushing all pending data. */

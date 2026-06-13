@@ -1166,20 +1166,15 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			SessionManager.create(cwd, SessionManager.getDefaultSessionDir(cwd, agentDir)),
 		);
 	const providerSessionId = options.providerSessionId ?? sessionManager.getSessionId();
-	const modelApiKeyAvailability = new Map<string, boolean>();
-	const getModelAvailabilityKey = (candidate: Model): string =>
-		`${candidate.provider}\u0000${candidate.baseUrl ?? ""}`;
-	const hasModelApiKey = async (candidate: Model): Promise<boolean> => {
-		const availabilityKey = getModelAvailabilityKey(candidate);
-		const cached = modelApiKeyAvailability.get(availabilityKey);
-		if (cached !== undefined) {
-			return cached;
-		}
-
-		const hasKey = !!(await modelRegistry.getApiKey(candidate, providerSessionId));
-		modelApiKeyAvailability.set(availabilityKey, hasKey);
-		return hasKey;
-	};
+	// Startup model *selection* only needs to know whether auth is configured for
+	// a candidate's provider — never the resolved key bytes. Use the synchronous,
+	// side-effect-free probe (`hasConfiguredAuth`): it refreshes no OAuth tokens,
+	// executes no `!command` keys, and issues no auth-broker requests. Resolving the
+	// real key here (`getApiKey`) blocks resume on those network paths — a slow or
+	// unreachable OAuth/broker endpoint stalls startup for the full ~10s refresh
+	// timeout per candidate (observed as a hang in `restoreSessionModel`). The real
+	// key is resolved lazily per request via ModelRegistry.resolver.
+	const hasModelAuth = (candidate: Model): boolean => modelRegistry.hasConfiguredAuth(candidate);
 
 	// Load and create secret obfuscator early so resumed session state and prompt warnings
 	// reflect actual loaded secrets, not just the setting toggle.
@@ -1228,7 +1223,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			: [];
 	let restoredSessionModelIndex = -1;
 	if (!hasExplicitModel && !model && sessionModelStrings.length > 0) {
-		await logger.time("restoreSessionModel", async () => {
+		logger.time("restoreSessionModel", () => {
 			let failedSessionModel: string | undefined;
 			for (let i = 0; i < sessionModelStrings.length; i++) {
 				const sessionModelStr = sessionModelStrings[i];
@@ -1239,7 +1234,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				}
 
 				const restoredModel = modelRegistry.find(parsedModel.provider, parsedModel.id);
-				if (restoredModel && (await hasModelApiKey(restoredModel))) {
+				if (restoredModel && hasModelAuth(restoredModel)) {
 					model = restoredModel;
 					restoredSessionModelIndex = i;
 					break;
@@ -1492,6 +1487,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			getSessionSpawns: () => options.spawns ?? "*",
 			getModelString: () => (hasExplicitModel && model ? formatModelString(model) : undefined),
 			getActiveModelString,
+			getActiveModel: () => agent?.state.model ?? model,
 			getPlanModeState: () => session?.getPlanModeState(),
 			getPlanReferencePath: () => session?.getPlanReferencePath() ?? "local://PLAN.md",
 			getGoalModeState: () => session?.getGoalModeState(),
@@ -1866,7 +1862,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				const parsedModel = parseModelString(sessionModelStr);
 				if (!parsedModel) continue;
 				const restoredModel = modelRegistry.find(parsedModel.provider, parsedModel.id);
-				if (restoredModel && (await hasModelApiKey(restoredModel))) {
+				if (restoredModel && hasModelAuth(restoredModel)) {
 					model = restoredModel;
 					modelFallbackMessage = undefined;
 					restoredSessionModelIndex = i;
@@ -1918,7 +1914,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				const preferred = fallbackCandidates.find(
 					candidate => candidate.provider === provider && candidate.id === defaultId,
 				);
-				if (preferred && (await hasModelApiKey(preferred))) {
+				if (preferred && hasModelAuth(preferred)) {
 					model = preferred;
 					break;
 				}
@@ -1926,7 +1922,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			// Otherwise, first available model with a valid API key.
 			if (!model) {
 				for (const candidate of fallbackCandidates) {
-					if (await hasModelApiKey(candidate)) {
+					if (hasModelAuth(candidate)) {
 						model = candidate;
 						break;
 					}

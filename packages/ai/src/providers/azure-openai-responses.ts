@@ -1,11 +1,4 @@
 import { $env, extractHttpStatusFromError } from "@oh-my-pi/pi-utils";
-import { AzureOpenAI, APIConnectionTimeoutError as OpenAIConnectionTimeoutError } from "openai";
-import type {
-	Tool as OpenAITool,
-	ResponseCreateParamsStreaming,
-	ResponseInput,
-	ResponseStreamEvent,
-} from "openai/resources/responses/responses";
 import { getEnvApiKey } from "../stream";
 import type {
 	AssistantMessage,
@@ -27,9 +20,8 @@ import {
 	getOpenAIStreamIdleTimeoutMs,
 	iterateWithIdleTimeout,
 } from "../utils/idle-iterator";
+import { postOpenAIStream } from "../utils/openai-http";
 import { sanitizeSchemaForOpenAIResponses, toolWireSchema } from "../utils/schema";
-import { createSdkStreamRequestOptions } from "../utils/sdk-stream-timeout";
-import { notifyRawSseEvent } from "../utils/sse-debug";
 import { mapToOpenAIResponsesToolChoice } from "../utils/tool-choice";
 import { getOpenAIResponsesCacheSessionId } from "./openai-responses";
 import {
@@ -44,6 +36,12 @@ import {
 	processResponsesStream,
 	repairOrphanResponsesToolCalls,
 } from "./openai-responses-shared";
+import type {
+	Tool as OpenAITool,
+	ResponseCreateParamsStreaming,
+	ResponseInput,
+	ResponseStreamEvent,
+} from "./openai-responses-wire";
 import { transformMessages } from "./transform-messages";
 
 const DEFAULT_AZURE_API_VERSION = "v1";
@@ -91,18 +89,6 @@ type AzureOpenAIResponsesSamplingParams = ResponseCreateParamsStreaming & {
 	repetition_penalty?: number;
 };
 
-async function* observeDecodedAzureResponsesEvents(
-	events: AsyncIterable<ResponseStreamEvent>,
-	observer: (event: RawSseEvent) => void,
-): AsyncGenerator<ResponseStreamEvent> {
-	for await (const event of events) {
-		const data = JSON.stringify(event);
-		// Reconstructed from decoded SDK event; not literal wire bytes.
-		notifyRawSseEvent(observer, { event: event.type, data, raw: [`event: ${event.type}`, `data: ${data}`] });
-		yield event;
-	}
-}
-
 /**
  * Generate function for Azure OpenAI Responses API
  */
@@ -129,13 +115,30 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 		const firstEventTimeoutAbortError = new Error(AZURE_OPENAI_RESPONSES_FIRST_EVENT_TIMEOUT_MESSAGE);
 		const { requestAbortController, requestSignal } = abortTracker;
 		const onSseEvent = options?.onSseEvent;
-		const rawSseObserver = onSseEvent ? (event: RawSseEvent) => onSseEvent(event, model) : undefined;
+		const rawSseObserver = onSseEvent
+			? (event: RawSseEvent) => {
+					if (!event.event && event.data && event.data !== "[DONE]") {
+						try {
+							const parsed = JSON.parse(event.data);
+							const resolvedEvent =
+								typeof parsed.type === "string"
+									? parsed.type
+									: typeof parsed.object === "string"
+										? parsed.object
+										: null;
+							if (resolvedEvent) {
+								event.event = resolvedEvent;
+								event.raw = [`event: ${resolvedEvent}`, ...event.raw];
+							}
+						} catch {}
+					}
+					onSseEvent(event, model);
+				}
+			: undefined;
 
 		try {
-			// Create Azure OpenAI client
 			const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-			const client = createClient(model, apiKey, options);
-			const { baseUrl } = resolveAzureConfig(model, options);
+			const { url, headers } = buildAzureResponsesRequest(model, apiKey, options);
 			let params = buildParams(model, context, options, deploymentName);
 			const replacementPayload = await options?.onPayload?.(params, model);
 			if (replacementPayload !== undefined) {
@@ -151,7 +154,7 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 				api: output.api,
 				model: model.id,
 				method: "POST",
-				url: `${baseUrl}/responses`,
+				url,
 				body: params,
 			};
 			let requestTimeout: NodeJS.Timeout | undefined;
@@ -160,13 +163,21 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 			}
 			let openaiStream: AsyncIterable<ResponseStreamEvent>;
 			try {
-				const requestOptions = createSdkStreamRequestOptions(requestSignal, requestTimeoutMs);
-				openaiStream = await client.responses.create(params, requestOptions);
-			} catch (error) {
-				if (error instanceof OpenAIConnectionTimeoutError && !abortTracker.wasCallerAbort()) {
-					throw firstEventTimeoutAbortError;
+				const headersWithTimeout = { ...headers };
+				if (requestTimeoutMs !== undefined) {
+					headersWithTimeout["X-Stainless-Timeout"] = Math.floor(requestTimeoutMs / 1000).toString();
 				}
-				throw error;
+				const handle = await postOpenAIStream<ResponseStreamEvent>({
+					url,
+					headers: headersWithTimeout,
+					body: params,
+					signal: requestSignal,
+					fetch: options?.fetch,
+					// Watchdog armed → no retries, so they cannot silently extend the deadline.
+					maxAttempts: requestTimeoutMs !== undefined ? 1 : undefined,
+					onSseEvent: rawSseObserver,
+				});
+				openaiStream = handle.events;
 			} finally {
 				if (requestTimeout !== undefined) clearTimeout(requestTimeout);
 			}
@@ -183,10 +194,7 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 				isProgressItem: isOpenAIResponsesProgressEvent,
 			});
 			let sawCompleted = false;
-			const observedOpenaiStream = rawSseObserver
-				? observeDecodedAzureResponsesEvents(timedOpenaiStream, rawSseObserver)
-				: timedOpenaiStream;
-			await processResponsesStream(observedOpenaiStream, output, stream, model, {
+			await processResponsesStream(timedOpenaiStream, output, stream, model, {
 				onFirstToken: () => {
 					if (!firstTokenTime) firstTokenTime = Date.now();
 				},
@@ -271,7 +279,20 @@ function resolveAzureConfig(
 	};
 }
 
-function createClient(model: Model<"azure-openai-responses">, apiKey: string, options?: AzureOpenAIResponsesOptions) {
+/**
+ * Replicates the `AzureOpenAI` SDK client's request shape for `/responses`:
+ * a string api key becomes a single `api-key` header (azure.mjs `authHeaders`;
+ * never `Authorization: Bearer`), `api-version` rides as a query parameter
+ * (azure.mjs constructor `defaultQuery`), and `/responses` is not a
+ * deployment-scoped path, so no `/deployments/{model}` URL rewriting applies.
+ * Custom model/options headers may override the auth header, matching the SDK's
+ * `buildHeaders` precedence.
+ */
+function buildAzureResponsesRequest(
+	model: Model<"azure-openai-responses">,
+	apiKey: string,
+	options?: AzureOpenAIResponsesOptions,
+): { url: string; headers: Record<string, string> } {
 	if (!apiKey) {
 		const envKey = $env.AZURE_OPENAI_API_KEY;
 		if (!envKey) {
@@ -282,24 +303,17 @@ function createClient(model: Model<"azure-openai-responses">, apiKey: string, op
 		apiKey = envKey;
 	}
 
-	const headers = { ...(model.headers ?? {}) };
-
+	const headers: Record<string, string> = { "api-key": apiKey, ...(model.headers ?? {}) };
 	if (options?.headers) {
 		Object.assign(headers, options.headers);
 	}
 
 	const { baseUrl, apiVersion } = resolveAzureConfig(model, options);
 
-	const baseFetch = options?.fetch ?? fetch;
-	return new AzureOpenAI({
-		apiKey,
-		apiVersion,
-		dangerouslyAllowBrowser: true,
-		maxRetries: 5,
-		defaultHeaders: headers,
-		baseURL: baseUrl,
-		fetch: baseFetch,
-	});
+	return {
+		url: `${baseUrl}/responses?api-version=${encodeURIComponent(apiVersion)}`,
+		headers,
+	};
 }
 
 function buildParams(

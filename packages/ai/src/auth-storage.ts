@@ -377,6 +377,11 @@ export interface AuthCredentialStore {
 	 */
 	replaceAuthCredentialsRemote?(provider: string, credentials: AuthCredential[]): Promise<StoredAuthCredential[]>;
 	/**
+	 * Optional async write hook for disabling one stored credential. Remote stores
+	 * use it to await broker persistence before AuthStorage updates its snapshot.
+	 */
+	deleteAuthCredentialRemote?(id: number, disabledCause: string): Promise<boolean>;
+	/**
 	 * Optional async write hook for clearing every credential for a provider
 	 * (logout). When present, `AuthStorage.remove` routes through this instead
 	 * of the sync `deleteAuthCredentialsForProvider`.
@@ -1519,6 +1524,32 @@ export class AuthStorage {
 	}
 
 	/**
+	 * List stored credential rows, optionally filtered by provider.
+	 */
+	listStoredCredentials(provider?: string): StoredAuthCredential[] {
+		if (provider !== undefined) {
+			return this.#getStoredCredentials(provider).map(entry => ({
+				id: entry.id,
+				provider,
+				credential: entry.credential,
+				disabledCause: null,
+			}));
+		}
+		const rows: StoredAuthCredential[] = [];
+		for (const [storedProvider, entries] of this.#data) {
+			for (const entry of entries) {
+				rows.push({
+					id: entry.id,
+					provider: storedProvider,
+					credential: entry.credential,
+					disabledCause: null,
+				});
+			}
+		}
+		return rows;
+	}
+
+	/**
 	 * Remove credential for a provider.
 	 */
 	async remove(provider: string): Promise<void> {
@@ -1529,6 +1560,28 @@ export class AuthStorage {
 		}
 		this.#setStoredCredentials(provider, []);
 		this.#resetProviderAssignments(provider);
+	}
+
+	/**
+	 * Remove one stored credential for a provider.
+	 */
+	async removeCredential(provider: string, credentialId: number): Promise<boolean> {
+		const entries = this.#getStoredCredentials(provider);
+		const index = entries.findIndex(entry => entry.id === credentialId);
+		if (index === -1) return false;
+
+		if (this.#store.deleteAuthCredentialRemote) {
+			const deleted = await this.#store.deleteAuthCredentialRemote(credentialId, "deleted by user");
+			if (!deleted) return false;
+		} else {
+			this.#store.deleteAuthCredential(credentialId, "deleted by user");
+		}
+		this.#setStoredCredentials(
+			provider,
+			entries.filter((_entry, entryIndex) => entryIndex !== index),
+		);
+		this.#resetProviderAssignments(provider);
+		return true;
 	}
 
 	/**
@@ -4154,6 +4207,17 @@ type SerializedCredentialRecord = {
 const AUTH_SCHEMA_VERSION = 4;
 const SQLITE_NOW_EPOCH = "CAST(strftime('%s','now') AS INTEGER)";
 
+/**
+ * SQLite's busy result code family — base `SQLITE_BUSY` plus the extended
+ * variants `SQLITE_BUSY_RECOVERY` (concurrent WAL recovery), `SQLITE_BUSY_SNAPSHOT`,
+ * and `SQLITE_BUSY_TIMEOUT`. All warrant the same backoff-and-retry treatment.
+ */
+export function isSqliteBusyError(err: unknown): boolean {
+	if (err === null || typeof err !== "object") return false;
+	const code = (err as { code?: unknown }).code;
+	return typeof code === "string" && code.startsWith("SQLITE_BUSY");
+}
+
 function normalizeStoredAccountId(accountId: string | null | undefined): string | null {
 	const normalized = accountId?.trim();
 	return normalized && normalized.length > 0 ? normalized : null;
@@ -4407,21 +4471,49 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 			await fs.mkdir(dir, { recursive: true, mode: 0o700 });
 		}
 
-		const db = new Database(dbPath);
-		try {
-			await fs.chmod(dbPath, 0o600);
-		} catch {
-			// Ignore chmod failures (e.g., Windows)
+		// Concurrent omp startups can race against WAL recovery and the schema
+		// init's first lock-taking statement. Bun's default `busy_timeout` is 0,
+		// so retry the open on `SQLITE_BUSY` / `SQLITE_BUSY_RECOVERY` with bounded
+		// exponential backoff before surfacing the failure. See issue #2421.
+		const maxAttempts = 4;
+		const baseDelayMs = 100;
+		let lastBusyError: Error | undefined;
+		for (let attempt = 0; attempt < maxAttempts; attempt++) {
+			let db: Database | undefined;
+			try {
+				db = new Database(dbPath);
+				try {
+					await fs.chmod(dbPath, 0o600);
+				} catch {
+					// Ignore chmod failures (e.g., Windows)
+				}
+				return new SqliteAuthCredentialStore(db);
+			} catch (err) {
+				db?.close();
+				if (!isSqliteBusyError(err)) {
+					throw err;
+				}
+				lastBusyError = err instanceof Error ? err : new Error(String(err));
+				if (attempt < maxAttempts - 1) {
+					await Bun.sleep(baseDelayMs * 2 ** attempt);
+				}
+			}
 		}
-
-		return new SqliteAuthCredentialStore(db);
+		throw new Error(
+			`Failed to open auth database at '${dbPath}' after ${maxAttempts} attempts: ${lastBusyError?.message}`,
+			{ cause: lastBusyError },
+		);
 	}
 
 	#initializeSchema(): void {
+		// Install the busy handler BEFORE any lock-taking statement (incl.
+		// `PRAGMA journal_mode=WAL`, which acquires an exclusive lock during WAL
+		// recovery). Without this, concurrent omp startups can crash here with
+		// `SQLITE_BUSY` / `SQLITE_BUSY_RECOVERY`. See issue #2421.
+		this.#db.run("PRAGMA busy_timeout = 5000");
 		this.#db.run(`
 			PRAGMA journal_mode=WAL;
 			PRAGMA synchronous=NORMAL;
-			PRAGMA busy_timeout=5000;
 			CREATE TABLE IF NOT EXISTS auth_schema_version (
 				id INTEGER PRIMARY KEY CHECK (id = 1),
 				version INTEGER NOT NULL

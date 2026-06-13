@@ -1071,7 +1071,9 @@ function truncateByApproxTokens(text: string, tokenLimit: number): string {
 
 function computeModelTokenBudget(model: Model, config: MemoryRuntimeConfig): number {
 	const maxTokens =
-		Number.isFinite(model.contextWindow) && model.contextWindow > 0 ? model.contextWindow : config.fallbackTokenLimit;
+		model.contextWindow !== null && Number.isFinite(model.contextWindow) && model.contextWindow > 0
+			? model.contextWindow
+			: config.fallbackTokenLimit;
 	return Math.max(2048, Math.floor(maxTokens));
 }
 

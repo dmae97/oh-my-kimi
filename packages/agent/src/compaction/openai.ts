@@ -35,6 +35,23 @@ import { logger } from "@oh-my-pi/pi-utils";
 
 export const OPENAI_REMOTE_COMPACTION_PRESERVE_KEY = "openaiRemoteCompaction";
 
+/**
+ * Hard ceiling on remote compaction HTTP requests. Unlike every provider
+ * stream (guarded by first-event/idle watchdogs in pi-ai), these are raw
+ * fetches awaiting one non-streamed JSON body — a connection silently dropped
+ * by a middlebox would otherwise hang the whole compaction pipeline forever
+ * (frozen "Auto context-full maintenance…" spinner, manual /compact queueing
+ * behind it). On timeout the caller falls back to local summarization.
+ */
+export const REMOTE_COMPACTION_TIMEOUT_MS = 180_000;
+
+/** Race the caller's signal against the request timeout; `timeoutMs <= 0` disables the watchdog. */
+function withRequestTimeout(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal | undefined {
+	if (timeoutMs <= 0) return signal;
+	const timeout = AbortSignal.timeout(timeoutMs);
+	return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
+
 export type OpenAiRemoteCompactionItem = {
 	type: "compaction" | "compaction_summary";
 	encrypted_content?: string;
@@ -147,14 +164,6 @@ export function withOpenAiRemoteCompactionPreserveData(
 // Input/output filtering for OpenAI compact endpoint
 // ============================================================================
 
-function estimateOpenAiCompactInputTokens(input: Array<Record<string, unknown>>, instructions: string): number {
-	let chars = instructions.length;
-	for (const item of input) {
-		chars += JSON.stringify(item).length;
-	}
-	return Math.ceil(chars / 4);
-}
-
 function shouldTrimOpenAiCompactInputItem(item: Record<string, unknown>): boolean {
 	return item.type === "function_call_output" || (item.type === "message" && item.role === "developer");
 }
@@ -171,16 +180,29 @@ function trimOpenAiCompactInput(
 	instructions: string,
 ): Array<Record<string, unknown>> {
 	const trimmed = [...input];
-	while (trimmed.length > 0 && estimateOpenAiCompactInputTokens(trimmed, instructions) > contextWindow) {
+	// Per-item serialized sizes are cached and decremented on removal.
+	// Re-stringifying the whole input per popped item was O(N²) in total chars
+	// — hundreds of MB of stringify churn on a 200k-token codex history,
+	// blocking the event loop for seconds (same class as the addOpenAiCallIds
+	// fix above).
+	const sizes = trimmed.map(item => JSON.stringify(item).length);
+	let chars = instructions.length;
+	for (const size of sizes) chars += size;
+	const removeAt = (index: number): void => {
+		chars -= sizes[index] ?? 0;
+		trimmed.splice(index, 1);
+		sizes.splice(index, 1);
+	};
+	while (trimmed.length > 0 && Math.ceil(chars / 4) > contextWindow) {
 		const last = trimmed[trimmed.length - 1];
 		if (last?.type === "function_call_output" || last?.type === "custom_tool_call_output") {
 			const callId = typeof last.call_id === "string" ? last.call_id : undefined;
 			const callType = last.type === "custom_tool_call_output" ? "custom_tool_call" : "function_call";
-			trimmed.pop();
+			removeAt(trimmed.length - 1);
 			if (callId) {
 				const matchingCallIndex = trimmed.findLastIndex(item => item.type === callType && item.call_id === callId);
 				if (matchingCallIndex >= 0) {
-					trimmed.splice(matchingCallIndex, 1);
+					removeAt(matchingCallIndex);
 				}
 			}
 			continue;
@@ -188,7 +210,7 @@ function trimOpenAiCompactInput(
 		if (!last || !shouldTrimOpenAiCompactInputItem(last)) {
 			break;
 		}
-		trimmed.pop();
+		removeAt(trimmed.length - 1);
 	}
 	return trimmed;
 }
@@ -429,12 +451,12 @@ export async function requestOpenAiRemoteCompaction(
 	compactInput: Array<Record<string, unknown>>,
 	instructions: string,
 	signal?: AbortSignal,
-	opts?: { fetch?: FetchImpl },
+	opts?: { fetch?: FetchImpl; timeoutMs?: number },
 ): Promise<OpenAiRemoteCompactionResponse> {
 	const endpoint = resolveOpenAiCompactEndpoint(model);
 	const request: OpenAiRemoteCompactionRequest = {
 		model: model.id,
-		input: trimOpenAiCompactInput(compactInput, model.contextWindow, instructions),
+		input: trimOpenAiCompactInput(compactInput, model.contextWindow ?? Number.POSITIVE_INFINITY, instructions),
 		instructions,
 	};
 	const headers: Record<string, string> = {
@@ -457,7 +479,7 @@ export async function requestOpenAiRemoteCompaction(
 		method: "POST",
 		headers,
 		body: JSON.stringify(request),
-		signal,
+		signal: withRequestTimeout(signal, opts?.timeoutMs ?? REMOTE_COMPACTION_TIMEOUT_MS),
 	});
 
 	if (!response.ok) {
@@ -509,13 +531,13 @@ export async function requestRemoteCompaction(
 	endpoint: string,
 	request: RemoteCompactionRequest,
 	signal?: AbortSignal,
-	opts?: { fetch?: FetchImpl },
+	opts?: { fetch?: FetchImpl; timeoutMs?: number },
 ): Promise<RemoteCompactionResponse> {
 	const response = await (opts?.fetch ?? fetch)(endpoint, {
 		method: "POST",
 		headers: { "content-type": "application/json" },
 		body: JSON.stringify(request),
-		signal,
+		signal: withRequestTimeout(signal, opts?.timeoutMs ?? REMOTE_COMPACTION_TIMEOUT_MS),
 	});
 
 	if (!response.ok) {

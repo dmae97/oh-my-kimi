@@ -1,4 +1,4 @@
-import * as z from "zod/v4";
+import { z } from "zod/v4";
 
 const OpenRouterRoutingSchema = z.object({
 	only: z.array(z.string()).optional(),

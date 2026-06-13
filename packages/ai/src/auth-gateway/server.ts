@@ -568,7 +568,14 @@ async function handleFormatEndpoint(
 	}
 	if (controller.signal.aborted) return clientClosedResponse(route);
 
-	const sseStream = route.module.encodeStream(events, parsed.modelId, parsed.options);
+	const sseStream = route.module.encodeStream(events, parsed.modelId, parsed.options, {
+		signal: controller.signal,
+		onCancel: reason => {
+			if (!controller.signal.aborted) {
+				controller.abort(reason instanceof Error ? reason : new Error("client closed request"));
+			}
+		},
+	});
 	return new Response(sseStream, {
 		status: 200,
 		headers: {
@@ -726,7 +733,14 @@ async function handlePiNative(bootOpts: AuthGatewayBootOptions, req: Request, pe
 	}
 	if (controller.signal.aborted) return aborted();
 
-	const sseStream = piNative.encodeStream(events);
+	const sseStream = piNative.encodeStream(events, parsed.modelId, parsed.options, {
+		signal: controller.signal,
+		onCancel: reason => {
+			if (!controller.signal.aborted) {
+				controller.abort(reason instanceof Error ? reason : new Error("client closed request"));
+			}
+		},
+	});
 	return new Response(sseStream, {
 		status: 200,
 		headers: {

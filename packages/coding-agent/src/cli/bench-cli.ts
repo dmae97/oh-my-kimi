@@ -180,7 +180,7 @@ async function runBenchRequest(
 			apiKey: options.apiKey,
 			sessionId: options.sessionId,
 			maxTokens:
-				Number.isFinite(model.maxTokens) && model.maxTokens > 0
+				model.maxTokens !== null && Number.isFinite(model.maxTokens) && model.maxTokens > 0
 					? Math.min(options.maxTokens, model.maxTokens)
 					: options.maxTokens,
 			reasoning: options.reasoning,

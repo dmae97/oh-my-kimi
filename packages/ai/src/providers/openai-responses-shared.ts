@@ -1,17 +1,5 @@
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import { logger, structuredCloneJSON } from "@oh-my-pi/pi-utils";
-import type OpenAI from "openai";
-import type {
-	ResponseCustomToolCall,
-	ResponseFunctionToolCall,
-	ResponseInput,
-	ResponseInputContent,
-	ResponseInputImage,
-	ResponseInputText,
-	ResponseOutputItem,
-	ResponseOutputMessage,
-	ResponseReasoningItem,
-} from "openai/resources/responses/responses";
 import {
 	type Api,
 	type AssistantMessage,
@@ -32,6 +20,20 @@ import {
 import { normalizeResponsesToolCallId } from "../utils";
 import type { AssistantMessageEventStream } from "../utils/event-stream";
 import { parseStreamingJson, parseStreamingJsonThrottled } from "../utils/json-parse";
+import type {
+	ResponseCreateParamsStreaming,
+	ResponseCustomToolCall,
+	ResponseFunctionToolCall,
+	ResponseInput,
+	ResponseInputContent,
+	ResponseInputImage,
+	ResponseInputText,
+	ResponseOutputItem,
+	ResponseOutputMessage,
+	ResponseReasoningItem,
+	ResponseStatus,
+	ResponseStreamEvent,
+} from "./openai-responses-wire";
 import { joinTextWithImagePlaceholder, NON_VISION_IMAGE_PLACEHOLDER, partitionVisionContent } from "./vision-guard";
 export const OPENAI_RESPONSES_PROGRESS_EVENT_TYPES: ReadonlySet<string> = new Set([
 	"response.created",
@@ -470,7 +472,7 @@ export interface ProcessResponsesStreamOptions {
 }
 
 export async function processResponsesStream<TApi extends Api>(
-	openaiStream: AsyncIterable<OpenAI.Responses.ResponseStreamEvent>,
+	openaiStream: AsyncIterable<ResponseStreamEvent>,
 	output: AssistantMessage,
 	stream: AssistantMessageEventStream,
 	model: Model<TApi>,
@@ -947,7 +949,7 @@ export async function processResponsesStream<TApi extends Api>(
 	}
 }
 
-export function mapOpenAIResponsesStopReason(status: OpenAI.Responses.ResponseStatus | undefined): StopReason {
+export function mapOpenAIResponsesStopReason(status: ResponseStatus | undefined): StopReason {
 	if (!status) return "stop";
 	switch (status) {
 		case "completed":
@@ -1001,7 +1003,7 @@ export type ResponsesSamplingParamsExtras = {
 	repetition_penalty?: number;
 };
 
-type CommonResponsesParams = OpenAI.Responses.ResponseCreateParamsStreaming & ResponsesSamplingParamsExtras;
+type CommonResponsesParams = ResponseCreateParamsStreaming & ResponsesSamplingParamsExtras;
 
 type CommonSamplingOptions = Pick<
 	StreamOptions,
@@ -1023,7 +1025,11 @@ export function applyCommonResponsesSamplingParams<P extends CommonResponsesPara
 	model: Pick<Model, "provider" | "omitMaxOutputTokens" | "maxTokens">,
 ): void {
 	if (options?.maxTokens && !model.omitMaxOutputTokens) {
-		params.max_output_tokens = Math.min(options.maxTokens, model.maxTokens, OPENAI_MAX_OUTPUT_TOKENS);
+		params.max_output_tokens = Math.min(
+			options.maxTokens,
+			model.maxTokens ?? Number.POSITIVE_INFINITY,
+			OPENAI_MAX_OUTPUT_TOKENS,
+		);
 	}
 	if (options?.temperature !== undefined) params.temperature = options.temperature;
 	if (options?.topP !== undefined) params.top_p = options.topP;
@@ -1062,7 +1068,7 @@ type ReasoningOptions = {
  *   without needing explicit activation. Callers that pass `options.reasoning` for such models
  *   should expect this documented downgrade: the model will reason, but at its default effort.
  */
-export function applyResponsesReasoningParams<P extends OpenAI.Responses.ResponseCreateParamsStreaming>(
+export function applyResponsesReasoningParams<P extends ResponseCreateParamsStreaming>(
 	params: P,
 	model: Model<"openai-responses" | "azure-openai-responses" | "openai-codex-responses">,
 	options: ReasoningOptions | undefined,
@@ -1093,12 +1099,12 @@ export function applyResponsesReasoningParams<P extends OpenAI.Responses.Respons
 			// When only options.reasoning (effort level) is set, params.reasoning
 			// is intentionally omitted — see @param omitReasoningEffort above.
 			if (options?.reasoningSummary !== undefined && options?.reasoningSummary !== null) {
-				type ReasoningParam = NonNullable<OpenAI.Responses.ResponseCreateParamsStreaming["reasoning"]>;
+				type ReasoningParam = NonNullable<ResponseCreateParamsStreaming["reasoning"]>;
 				params.reasoning = { summary: options.reasoningSummary || "auto" } as P["reasoning"] & ReasoningParam;
 			}
 		} else {
 			const requested = options?.reasoning || "medium";
-			type ReasoningParam = NonNullable<OpenAI.Responses.ResponseCreateParamsStreaming["reasoning"]>;
+			type ReasoningParam = NonNullable<ResponseCreateParamsStreaming["reasoning"]>;
 			const reasoningParams: ReasoningParam = {
 				effort: (mapEffort ? mapEffort(requested) : requested) as ReasoningParam["effort"],
 			};

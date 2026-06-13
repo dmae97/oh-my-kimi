@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { createAbortableStream } from "@oh-my-pi/pi-utils";
 import { sanitizeText } from "@oh-my-pi/pi-utils/sanitize-text";
 import {
 	parseJsonlLenient,
@@ -60,6 +61,29 @@ describe("readLines", () => {
 		}
 
 		expect(output).toEqual(["alpha", "beta", "gamma"]);
+	});
+});
+
+describe("createAbortableStream", () => {
+	it("cancels the source stream when the abort signal fires", async () => {
+		let cancelReason: unknown;
+		const controller = new AbortController();
+		const readable = new ReadableStream<Uint8Array>({
+			start(streamController) {
+				streamController.enqueue(encoder.encode("alpha\n"));
+			},
+			cancel(reason) {
+				cancelReason = reason;
+			},
+		});
+		const reader = createAbortableStream(readable, controller.signal).getReader();
+
+		const first = await reader.read();
+		expect(first.done).toBe(false);
+		controller.abort("timeout");
+		await reader.read().catch(() => undefined);
+
+		expect(cancelReason).toBe("timeout");
 	});
 });
 

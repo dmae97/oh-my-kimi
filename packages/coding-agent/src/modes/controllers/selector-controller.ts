@@ -30,6 +30,7 @@ import type { InteractiveModeContext } from "../../modes/types";
 import type { ResetCreditRedeemOutcome } from "../../session/auth-storage";
 import { type SessionInfo, SessionManager } from "../../session/session-manager";
 import { FileSessionStorage } from "../../session/session-storage";
+import { type LogoutAccount, toLogoutAccounts } from "../../slash-commands/helpers/logout";
 import {
 	describeRedeemOutcome,
 	type ResetUsageAccount,
@@ -51,6 +52,7 @@ import { AssistantMessageComponent } from "../components/assistant-message";
 import { CopySelectorComponent } from "../components/copy-selector";
 import { ExtensionDashboard } from "../components/extensions";
 import { HistorySearchComponent } from "../components/history-search";
+import { LogoutAccountSelectorComponent } from "../components/logout-account-selector";
 import { ModelSelectorComponent } from "../components/model-selector";
 import { OAuthSelectorComponent } from "../components/oauth-selector";
 import { PluginSelectorComponent } from "../components/plugin-selector";
@@ -1000,23 +1002,28 @@ export class SelectorController {
 		}
 	}
 
-	async #handleOAuthLogout(providerId: string): Promise<void> {
+	async #handleCredentialLogout(providerId: string, account: LogoutAccount): Promise<void> {
 		try {
 			const authStorage = this.ctx.session.modelRegistry.authStorage;
-			if (!authStorage.has(providerId)) {
-				const source = authStorage.describeCredentialSource(providerId, this.ctx.session.sessionId);
-				const suffix = source ? ` Current auth comes from ${source}; remove that source to log out.` : "";
-				this.ctx.showError(`Logout skipped: no stored credentials for ${providerId}.${suffix}`);
+			const removed = await authStorage.removeCredential(providerId, account.credentialId);
+			if (!removed) {
+				this.ctx.showError(`Logout skipped: ${account.label} is no longer stored for ${providerId}.`);
 				return;
 			}
 
-			await authStorage.logout(providerId);
 			await this.ctx.session.modelRegistry.refresh();
 			const block = new TranscriptBlock();
 			block.addChild(
-				new Text(theme.fg("success", `${theme.status.success} Successfully logged out of ${providerId}`), 1, 0),
+				new Text(
+					theme.fg(
+						"success",
+						`${theme.status.success} Successfully logged out ${account.label} from ${providerId}`,
+					),
+					1,
+					0,
+				),
 			);
-			block.addChild(new Text(theme.fg("dim", `Credentials removed from ${getAgentDbPath()}`), 1, 0));
+			block.addChild(new Text(theme.fg("dim", `Credential removed from ${getAgentDbPath()}`), 1, 0));
 			const remainingSource = authStorage.describeCredentialSource(providerId, this.ctx.session.sessionId);
 			if (remainingSource) {
 				block.addChild(
@@ -1029,12 +1036,51 @@ export class SelectorController {
 		}
 	}
 
+	async #showOAuthLogoutAccountSelector(providerId: string): Promise<void> {
+		const authStorage = this.ctx.session.modelRegistry.authStorage;
+		try {
+			await authStorage.reload();
+		} catch (error: unknown) {
+			this.ctx.showError(
+				`Could not load stored credentials: ${error instanceof Error ? error.message : String(error)}`,
+			);
+			return;
+		}
+		const provider = getOAuthProviders().find(candidate => candidate.id === providerId);
+		const accounts = toLogoutAccounts(providerId, authStorage.listStoredCredentials(providerId), {
+			activeIdentity: authStorage.getOAuthAccountIdentity(providerId, this.ctx.session.sessionId),
+			activeApiKey: authStorage.getCredentialOrigin(providerId)?.kind === "api_key",
+		});
+		if (accounts.length === 0) {
+			const source = authStorage.describeCredentialSource(providerId, this.ctx.session.sessionId);
+			const suffix = source ? ` Current auth comes from ${source}; remove that source to log out.` : "";
+			this.ctx.showError(`Logout skipped: no stored credentials for ${providerId}.${suffix}`);
+			return;
+		}
+
+		this.showSelector(done => {
+			const selector = new LogoutAccountSelectorComponent(
+				provider?.name ?? providerId,
+				accounts,
+				account => {
+					done();
+					void this.#handleCredentialLogout(providerId, account);
+				},
+				() => {
+					done();
+					this.ctx.ui.requestRender();
+				},
+			);
+			return { component: selector, focus: selector };
+		});
+	}
+
 	async showOAuthSelector(mode: "login" | "logout", providerId?: string): Promise<void> {
 		if (providerId) {
 			if (mode === "login") {
 				await this.#handleOAuthLogin(providerId);
 			} else {
-				await this.#handleOAuthLogout(providerId);
+				await this.#showOAuthLogoutAccountSelector(providerId);
 			}
 			return;
 		}
@@ -1062,7 +1108,7 @@ export class SelectorController {
 					if (mode === "login") {
 						await this.#handleOAuthLogin(selectedProviderId);
 					} else {
-						await this.#handleOAuthLogout(selectedProviderId);
+						await this.#showOAuthLogoutAccountSelector(selectedProviderId);
 					}
 				},
 				() => {

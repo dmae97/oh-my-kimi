@@ -106,6 +106,17 @@ describe("streaming reveal", () => {
 		expect(textAt(display, 1)).toBe("a");
 	});
 
+	it("excludes dot-only reasoning placeholders from the reveal budget", () => {
+		const thinkingBlock = { type: "thinking" as const, thinking: "...", thinkingSignature: "reasoning_content" };
+		const target = makeMessage([thinkingBlock, { type: "text", text: "answer" }]);
+
+		expect(visibleUnits(target, false)).toBe("answer".length);
+		const display = buildDisplayMessage(target, 1, false);
+
+		expect(display.content[0]).toBe(thinkingBlock);
+		expect(textAt(display, 1)).toBe("a");
+	});
+
 	it("smooths thinking content when thinking is shown", () => {
 		const target = makeMessage([
 			{ type: "thinking", thinking: "thought" },

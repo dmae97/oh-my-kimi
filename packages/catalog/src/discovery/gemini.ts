@@ -1,7 +1,6 @@
-import * as z from "zod/v4";
+import { z } from "zod/v4";
 import { getBundledModels } from "../models";
 import { toModelSpec } from "../provider-models/bundled-references";
-import { UNK_CONTEXT_WINDOW, UNK_MAX_TOKENS } from "../provider-models/discovery-constants";
 import type { FetchImpl, Model, ModelSpec } from "../types";
 
 const GOOGLE_GENERATIVE_AI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
@@ -148,7 +147,9 @@ function normalizeBaseUrl(baseUrl?: string): string {
 	return value.replace(/\/+$/, "");
 }
 
-function normalizePositiveInt(value: number | undefined, fallback: number): number {
+function normalizePositiveInt(value: number | undefined, fallback: number): number;
+function normalizePositiveInt(value: number | undefined, fallback: number | null): number | null;
+function normalizePositiveInt(value: number | undefined, fallback: number | null): number | null {
 	if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
 		return fallback;
 	}
@@ -178,8 +179,8 @@ function normalizeModel(
 	}
 
 	const reference = bundledById.get(id);
-	const contextWindow = normalizePositiveInt(item.inputTokenLimit, reference?.contextWindow ?? UNK_CONTEXT_WINDOW);
-	const maxTokens = normalizePositiveInt(item.outputTokenLimit, reference?.maxTokens ?? UNK_MAX_TOKENS);
+	const contextWindow = normalizePositiveInt(item.inputTokenLimit, reference?.contextWindow ?? null);
+	const maxTokens = normalizePositiveInt(item.outputTokenLimit, reference?.maxTokens ?? null);
 	const name = normalizeModelName(item.displayName, reference?.name ?? id);
 
 	if (reference) {

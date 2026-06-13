@@ -52,6 +52,9 @@ class CloseHoldingStorage implements SessionStorage {
 			fsync() {
 				return inner.fsync();
 			},
+			fsyncSync() {
+				inner.fsyncSync();
+			},
 			async close() {
 				const gate = Promise.withResolvers<void>();
 				gates.push(gate);

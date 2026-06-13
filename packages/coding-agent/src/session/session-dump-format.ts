@@ -5,6 +5,7 @@ import type { AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { INTENT_FIELD } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai";
 import { isZodSchema, zodToWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
+import { getVisibleThinkingText } from "../utils/thinking-display";
 import {
 	type BashExecutionMessage,
 	type BranchSummaryMessage,
@@ -126,9 +127,10 @@ export function formatSessionDumpText(options: FormatSessionDumpTextOptions): st
 				if (c.type === "text") {
 					lines.push(c.text);
 				} else if (c.type === "thinking") {
-					if (c.thinking.trim().length === 0) continue;
+					const thinking = getVisibleThinkingText(c);
+					if (thinking.length === 0) continue;
 					lines.push("<thinking>");
-					lines.push(c.thinking);
+					lines.push(thinking);
 					lines.push("</thinking>\n");
 				} else if (c.type === "toolCall") {
 					lines.push(`<invoke name="${c.name}">`);

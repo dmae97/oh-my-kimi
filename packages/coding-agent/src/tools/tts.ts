@@ -2,7 +2,7 @@
 
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { type ApiKey, ProviderHttpError, withAuth } from "@oh-my-pi/pi-ai";
-import * as z from "zod/v4";
+import { z } from "zod/v4";
 import type { CustomTool, CustomToolContext } from "../extensibility/custom-tools/types";
 import { ohMyPiXAIUserAgent, resolveXAIHttpCredentials } from "../lib/xai-http";
 import { formatPathRelativeToCwd, resolveToCwd } from "./path-utils";

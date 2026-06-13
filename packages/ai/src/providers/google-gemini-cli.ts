@@ -34,8 +34,11 @@ import type { Content, FunctionCallingConfigMode, ThinkingConfig } from "./googl
 import {
 	convertMessages,
 	convertTools,
+	EMPTY_STREAM_BASE_DELAY_MS,
 	type GoogleThinkingLevel,
+	hasMeaningfulGoogleContent,
 	isThinkingPart,
+	MAX_EMPTY_STREAM_RETRIES,
 	mapStopReasonString,
 	mapToolChoice,
 	nextToolCallId,
@@ -107,8 +110,6 @@ export {
 // Retry configuration
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 1000;
-const MAX_EMPTY_STREAM_RETRIES = 2;
-const EMPTY_STREAM_BASE_DELAY_MS = 500;
 const RATE_LIMIT_BUDGET_MS = 5 * 60 * 1000;
 const CLAUDE_THINKING_BETA_HEADER = "interleaved-thinking-2025-05-14";
 const GOOGLE_GEMINI_REFRESH_SKEW_MS = 60_000;
@@ -410,7 +411,6 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 				output.stopReason = "stop";
 				output.errorMessage = undefined;
 				output.timestamp = Date.now();
-				started = false;
 				sawFinishReason = false;
 			};
 
@@ -419,7 +419,6 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 					throw new Error("No response body");
 				}
 
-				let hasContent = false;
 				let currentBlock: TextContent | ThinkingContent | null = null;
 				const blocks = output.content;
 				const blockIndex = () => blocks.length - 1;
@@ -449,7 +448,6 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 					if (candidate?.content?.parts) {
 						for (const part of candidate.content.parts) {
 							if (part.text !== undefined) {
-								hasContent = true;
 								const isThinking = isThinkingPart(part);
 								if (
 									!currentBlock ||
@@ -489,7 +487,6 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 							}
 
 							if (part.functionCall) {
-								hasContent = true;
 								if (currentBlock) {
 									pushBlockEndEvent(currentBlock, blockIndex(), output, stream);
 									currentBlock = null;
@@ -558,7 +555,7 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 					pushBlockEndEvent(currentBlock, blockIndex(), output, stream);
 				}
 
-				return hasContent;
+				return hasMeaningfulGoogleContent(output);
 			};
 
 			let receivedContent = false;

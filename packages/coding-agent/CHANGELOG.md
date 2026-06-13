@@ -2,6 +2,48 @@
 
 ## [Unreleased]
 
+## [15.12.4] - 2026-06-13
+
+### Breaking Changes
+
+- Removed the top-level `--list-models` flag path and migrated model listing to the new `omp models` command
+
+### Added
+
+- Added `omp models` command to list and manage models with `ls`, `find`, `canonical`, and `refresh` actions
+- Added `--json` output plus `-e/--extension`, `--no-extensions`, and `--config` controls to `omp models` listings
+- Added `skills.enableAgentsUser` and `skills.enableAgentsProject` settings (default on) so the canonical OMP-native `~/.agent[s]/skills` and project-walkup `.agent[s]/skills` are configurable independently from the third-party Claude/Codex/Pi toggles.
+
+### Changed
+
+- Model registry merge and `omp models` / model picker handle unknown context/output limits (`null`) — unknown limits render as `-` instead of a fake `222K`/`8.9K`.
+- Changed `omp models` to use cached provider data by default and require `omp models refresh` for a forced online re-fetch
+- Updated model-resolution errors to point to `omp models` when a provider or model is not found
+- Upgraded workspace catalog packages to their latest versions as of 3 days ago, and refactored the ACP agent implementation to be compatible with `@agentclientprotocol/sdk` version `0.25.0`.
+- Made the `zod` version requirement in the workspace catalog more tolerant (`^4.0.0` instead of `4.4.3`), and aligned type definitions in coding-agent extensibility modules.
+- Changed `/logout` to pick a stored account after the provider, so multi-account OAuth providers can remove one credential without logging out every account.
+- Changed the status-line context% to report the provider's real prompt-token count — anchored on the last assistant response, matching the `/context` panel and the collab host broadcast — instead of an independent cl100k estimate of the whole conversation. The estimate could read several points high and climb past 100% on subscription/Codex models (whose advertised window, e.g. `272K`, is already the input budget after reserving max output) while the request was still well within the real limit. Right after compaction the segment now shows `?` until the next response re-establishes the true count, and the redundant per-message estimate cache was dropped in favor of memoizing `getContextUsage()`.
+
+### Fixed
+
+- Fixed ACP thinking-delta mapping to tolerate live chunks that only carry delta text.
+- Fixed image input to Ollama (local `ollama`, `ollama-cloud`, and any `ollama-chat` model) failing with an opaque HTTP 400 when an attached image was encoded as WebP. Ollama decodes images through llama.cpp / `stb_image`, which is built without WebP support, so the resize pipeline now auto-excludes WebP for those models — the automatic equivalent of `OMP_NO_WEBP=1`, applied across every image path (`@file` mentions and prompt/paste/CLI attachments, the `read`/`inspect_image` tools, `eval` display images, `fetch`ed images, and browser screenshots). Other providers are unaffected and still honor `OMP_NO_WEBP`.
+- Fixed queued steering/follow-up display to derive from the agent-core queue, so queued chips clear when the core dequeues them and no longer strand after empty-Enter aborts.
+- Fixed model auth gateway probing to avoid skipping candidates with unknown `maxTokens` limits (`null`)
+- Fixed model listings so providers registered via extensions are now included from `-e` and configured `extensions` sources
+- Fixed `/mcp reauth`, `/mcp test`, and `/mcp unauth` to find and operate on MCP servers reported by `/mcp list` even when they are only runtime-discovered and not stored in writable config, including namespaced plugin servers like `cloudflare:cloudflare-api`
+- Fixed MCP server name validation so colon-namespaced server IDs are accepted when persisting reauth overrides so namespaced OAuth MCP servers can be stored in user config as `server:subserver` entries
+- Retried assistant turns that stop with reasoning/thinking only and no final text or tool call, so Gemini/Antigravity thought-only `STOP` responses continue instead of silently ending the session.
+- Fixed `~/.agent[s]/skills` not appearing as `/skill:<name>` commands when every named source toggle (`skills.enableCodexUser`, `skills.enableClaudeUser`, `skills.enableClaudeProject`, `skills.enablePiUser`, `skills.enablePiProject`) was off: `loadSkills` gated the `agents` provider on `anyBuiltInSkillSourceEnabled`, so a user who turned off the Claude/Codex/Pi sources to clean noise also lost their own canonical OMP-native skills. The `agents` provider now reads the dedicated `enableAgentsUser`/`enableAgentsProject` toggles, decoupled from the third-party fall-through ([#2401](https://github.com/can1357/oh-my-pi/issues/2401)).
+- Fixed Windows PowerShell image paste so Ctrl+V can fall back to the PowerShell clipboard bridge when the native clipboard reader reports no image ([#2429](https://github.com/can1357/oh-my-pi/issues/2429)).
+- Fixed misaligned box borders in Mermaid ASCII rendering for CJK (Korean/Japanese/Chinese) and emoji labels — affects both fenced `mermaid` code blocks in assistant messages and the `render_mermaid` tool. `beautiful-mermaid@1.1.3` measures label width in UTF-16 code units while terminals render East Asian characters 2 columns wide; a `patchedDependencies` entry rebuilds its ASCII renderer to measure terminal display columns (grapheme-cluster aware, wcwidth-style policy). The patch mirrors the upstream PR (lukilabs/beautiful-mermaid#128) and should be dropped once it ships in a release.
+- Fixed interrupt loader state getting stuck after queued-message aborts by removing the session-layer flush/latch path; empty Enter now aborts the active turn and lets the existing post-unwind queue drain resume normally.
+- Fixed `/goal <objective>` and `/goal set <objective>` during streaming so goal context is steered immediately but objective submission waits for the active turn to finish instead of spamming `AgentBusyError` ([#2454](https://github.com/can1357/oh-my-pi/issues/2454)).
+- Fixed concurrent `omp --session` startups (e.g. cmux pane restore after an unclean shutdown) crashing with `SQLITE_BUSY_RECOVERY` while the agent SQLite databases were still under WAL recovery. The auth credential store and `AgentStorage.open()` retry the `SQLITE_BUSY` family with bounded backoff, and every shared SQLite open path (`AgentStorage`, history, autoresearch, memories, github cache, auto-QA grievances, catalog model cache, stats) now installs the busy handler before the first lock-taking statement so transient WAL recovery contention waits instead of crashing ([#2421](https://github.com/can1357/oh-my-pi/issues/2421)).
+- Mnemopi `per-project` / `per-project-tagged` bank derivation is now stable for one cwd, ignoring the surrounding git layout. Previously the bank id was hashed from `git.repo.resolveSync(cwd)?.repoRoot ?? path.resolve(cwd)`, so adding or removing a `.git` anywhere above the working directory silently repointed the same conversation to a new bank and stranded its memories (e.g. `/home/x/projects/repo` flipping between `projects-…` and `repo-…`). The derivation in `packages/coding-agent/src/mnemopi/config.ts` now hashes `path.resolve(cwd)` directly, and session startup widens the recall set with any sibling bank under `<dbDir>/banks/` whose `working_memory` rows already carry the active cwd in `metadata_json.$.cwd`, so memories stranded by the old, less-stable derivation become visible again on the next session without manual migration ([#2412](https://github.com/can1357/oh-my-pi/issues/2412)).
+- Fixed model switching (Ctrl+P role cycling and the alt+p / `/switch` / `/models` selector) intermittently freezing the UI for several seconds. `AgentSession.setModel`/`setModelTemporary` ran an eager `await modelRegistry.getApiKey(model)` purely as an existence pre-flight and discarded the value — but `getApiKey` does real work: it synchronously executes command-backed key programs (`apiKey: "!cmd"`, `execSync` with a 10s timeout, blocking the event loop) and refreshes OAuth tokens over the network when one crosses the expiry window (the "fine for a few switches, then a multi-second stall" symptom). Switching now uses the synchronous, side-effect-free `ModelRegistry.hasConfiguredAuth` check; the concrete key (command execution + OAuth refresh) is still resolved lazily per request via the existing resolver, so an unconfigured provider still fails fast with `No API key` while a healthy switch never touches the network or spawns a subprocess. `hasConfiguredAuth` no longer runs the command program or refreshes tokens either, matching its documented "probe without resolving an API key" contract.
+- Fixed session resume (`pi -c` / `--continue` / `--session`) hanging for ~10s at startup — surfaced by the watchdog as `Still starting … phase: createAgentSession > restoreSessionModel` — when an OAuth token needed refreshing or the auth broker (`OMP_AUTH_BROKER_URL`) was unreachable. Picking which saved model to restore is a pure *selection* that only needs to know whether auth is configured, but `restoreSessionModel` probed each candidate with the async `getApiKey`, which refreshes OAuth tokens over the network, executes command-backed key programs, and issues auth-broker requests — so a slow or unreachable endpoint stalled resume for the full refresh timeout per candidate. Startup model selection now uses the synchronous, side-effect-free `ModelRegistry.hasConfiguredAuth` probe (the same fix already applied to interactive model switching); the concrete key is still resolved lazily on the first request via the resolver.
+
 ## [15.12.3] - 2026-06-12
 
 ### Fixed

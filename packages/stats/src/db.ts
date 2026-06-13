@@ -54,6 +54,9 @@ export async function initDb(): Promise<Database> {
 	await fs.mkdir(getConfigRootDir(), { recursive: true });
 
 	db = new Database(getStatsDbPath());
+	// Install the busy handler BEFORE any lock-taking statement. See
+	// https://github.com/can1357/oh-my-pi/issues/2421.
+	db.exec("PRAGMA busy_timeout = 5000");
 	db.exec("PRAGMA journal_mode = WAL");
 
 	// Create tables

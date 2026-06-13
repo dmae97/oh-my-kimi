@@ -23,6 +23,11 @@ export interface SessionStorageWriter {
 	writeLineSync(line: string): void;
 	flush(): Promise<void>;
 	fsync(): Promise<void>;
+	/**
+	 * Synchronously fsync the underlying file descriptor. Returns once the data
+	 * is on the physical disk. Throws synchronously on I/O error.
+	 */
+	fsyncSync(): void;
 	close(): Promise<void>;
 	getError(): Error | undefined;
 }
@@ -109,6 +114,16 @@ class FileSessionStorageWriter implements SessionStorageWriter {
 	}
 
 	async fsync(): Promise<void> {
+		if (this.#closed) throw new Error("Writer closed");
+		if (this.#error) throw this.#error;
+		try {
+			fs.fsyncSync(this.#fd);
+		} catch (err) {
+			throw this.#recordError(err);
+		}
+	}
+
+	fsyncSync(): void {
 		if (this.#closed) throw new Error("Writer closed");
 		if (this.#error) throw this.#error;
 		try {
@@ -287,6 +302,11 @@ class MemorySessionStorageWriter implements SessionStorageWriter {
 	}
 
 	async fsync(): Promise<void> {
+		// No-op for in-memory storage
+		if (this.#error) throw this.#error;
+	}
+
+	fsyncSync(): void {
 		// No-op for in-memory storage
 		if (this.#error) throw this.#error;
 	}

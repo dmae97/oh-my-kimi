@@ -6,23 +6,12 @@ import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import type { ResolvedOpenAICompat } from "@oh-my-pi/pi-catalog/types";
 import { parseGitHubCopilotApiKey } from "@oh-my-pi/pi-catalog/wire/github-copilot";
 import { $env, extractHttpStatusFromError } from "@oh-my-pi/pi-utils";
-import OpenAI, { APIConnectionTimeoutError as OpenAIConnectionTimeoutError } from "openai";
-import type {
-	ChatCompletionAssistantMessageParam,
-	ChatCompletionChunk,
-	ChatCompletionContentPart,
-	ChatCompletionContentPartImage,
-	ChatCompletionContentPartText,
-	ChatCompletionMessageParam,
-	ChatCompletionToolMessageParam,
-} from "openai/resources/chat/completions";
 import packageJson from "../../package.json" with { type: "json" };
 import { getKimiCommonHeaders } from "../registry/oauth/kimi";
 import { getEnvApiKey } from "../stream";
 import {
 	type AssistantMessage,
 	type Context,
-	type FetchImpl,
 	type Message,
 	type MessageAttribution,
 	type Model,
@@ -59,13 +48,14 @@ import {
 	iterateWithTerminalGrace,
 } from "../utils/idle-iterator";
 import { parseStreamingJson, parseStreamingJsonThrottled } from "../utils/json-parse";
+import { OpenAIHttpError, postOpenAIStream } from "../utils/openai-http";
 import { notifyProviderResponse } from "../utils/provider-response";
 import { callWithCopilotModelRetry } from "../utils/retry";
 import { adaptSchemaForStrict, NO_STRICT, toolWireSchema } from "../utils/schema";
-import { notifyRawSseEvent } from "../utils/sse-debug";
 import {
 	getStreamMarkupHealingPattern,
 	type HealedToolCall,
+	modelMayLeakThinkingTags,
 	StreamMarkupHealing,
 	type StreamMarkupHealingEvent,
 } from "../utils/stream-markup-healing";
@@ -76,6 +66,17 @@ import {
 	hasCopilotVisionInput,
 	resolveGitHubCopilotBaseUrl,
 } from "./github-copilot-headers";
+import type {
+	ChatCompletionAssistantMessageParam,
+	ChatCompletionChunk,
+	ChatCompletionContentPart,
+	ChatCompletionContentPartImage,
+	ChatCompletionContentPartText,
+	ChatCompletionCreateParamsStreaming,
+	ChatCompletionMessageParam,
+	ChatCompletionTool,
+	ChatCompletionToolMessageParam,
+} from "./openai-chat-wire";
 import { createInitialResponsesAssistantMessage } from "./openai-responses-shared";
 import { transformMessages } from "./transform-messages";
 import {
@@ -267,7 +268,7 @@ export interface OpenAICompletionsOptions extends StreamOptions {
 	openrouterVariant?: string;
 }
 
-type OpenAICompletionsParams = OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming & {
+type OpenAICompletionsParams = ChatCompletionCreateParamsStreaming & {
 	top_k?: number;
 	min_p?: number;
 	repetition_penalty?: number;
@@ -283,7 +284,7 @@ type AppliedToolStrictMode = "mixed" | "all_strict" | "none";
 type ToolStrictModeOverride = Exclude<ResolvedOpenAICompat["toolStrictMode"], "mixed"> | undefined;
 
 type BuiltOpenAICompletionTools = {
-	tools: OpenAI.Chat.Completions.ChatCompletionTool[];
+	tools: ChatCompletionTool[];
 	toolStrictMode: AppliedToolStrictMode;
 	/** True when at least one wire tool was sent with `strict: true`. */
 	strictToolsApplied: boolean;
@@ -407,20 +408,6 @@ const OPENAI_COMPLETIONS_FIRST_EVENT_TIMEOUT_MESSAGE =
 // converts the already-successful response into a timeout error.
 const OPENAI_COMPLETIONS_POST_FINISH_GRACE_MS = 2_500;
 
-async function* observeDecodedOpenAICompletionChunks(
-	chunks: AsyncIterable<ChatCompletionChunk>,
-	observer: (event: RawSseEvent) => void,
-): AsyncGenerator<ChatCompletionChunk> {
-	for await (const chunk of chunks) {
-		const data = JSON.stringify(chunk);
-		const event = typeof chunk.object === "string" ? chunk.object : null;
-		const raw = event === null ? [`data: ${data}`] : [`event: ${event}`, `data: ${data}`];
-		// Reconstructed from decoded SDK event; not literal wire bytes.
-		notifyRawSseEvent(observer, { event, data, raw });
-		yield chunk;
-	}
-}
-
 export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 	model: Model<"openai-completions">,
 	context: Context,
@@ -431,7 +418,6 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 	(async () => {
 		const startTime = Date.now();
 		let firstTokenTime: number | undefined;
-		let getCapturedErrorResponse: (() => CapturedHttpErrorResponse | undefined) | undefined;
 
 		const output: AssistantMessage = createInitialResponsesAssistantMessage(model.api, model.provider, model.id);
 		let rawRequestDump: RawHttpRequestDump | undefined;
@@ -439,7 +425,26 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 		const firstEventTimeoutAbortError = new Error(OPENAI_COMPLETIONS_FIRST_EVENT_TIMEOUT_MESSAGE);
 		const { requestAbortController, requestSignal } = abortTracker;
 		const onSseEvent = options?.onSseEvent;
-		const rawSseObserver = onSseEvent ? (event: RawSseEvent) => onSseEvent(event, model) : undefined;
+		const rawSseObserver = onSseEvent
+			? (event: RawSseEvent) => {
+					if (!event.event && event.data && event.data !== "[DONE]") {
+						try {
+							const parsed = JSON.parse(event.data);
+							const resolvedEvent =
+								typeof parsed.type === "string"
+									? parsed.type
+									: typeof parsed.object === "string"
+										? parsed.object
+										: null;
+							if (resolvedEvent) {
+								event.event = resolvedEvent;
+								event.raw = [`event: ${resolvedEvent}`, ...event.raw];
+							}
+						} catch {}
+					}
+					onSseEvent(event, model);
+				}
+			: undefined;
 		// Assigned once the block helpers exist (they are scoped to the `try`);
 		// the catch handler uses it to close any open blocks before emitting the
 		// terminal error so both exit paths obey the same block lifecycle.
@@ -453,16 +458,14 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				options?.streamFirstEventTimeoutMs ?? getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs);
 			const requestTimeoutMs =
 				firstEventTimeoutMs !== undefined && firstEventTimeoutMs > 0 ? firstEventTimeoutMs : undefined;
-			const {
-				client,
-				copilotPremiumRequests,
-				baseUrl,
-				requestHeaders,
-				getCapturedErrorResponse: captureErrorResponse,
-				clearCapturedErrorResponse,
-			} = await createClient(model, context, apiKey, options?.headers, options?.initiatorOverride, options?.fetch);
+			const { copilotPremiumRequests, baseUrl, headers, query, requestHeaders } = await createRequestSetup(
+				model,
+				context,
+				apiKey,
+				options?.headers,
+				options?.initiatorOverride,
+			);
 			const premiumRequestsTotal = copilotPremiumRequests;
-			getCapturedErrorResponse = captureErrorResponse;
 			let appliedStrictTools = false;
 			const providerSessionState = getOpenAICompletionsProviderSessionState(
 				model,
@@ -471,8 +474,11 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 			);
 			let disableStrictTools = providerSessionState?.strictToolsDisabled ?? false;
 			let strictFallbackErrorMessage: string | undefined;
+			const trimmedBaseUrl = baseUrl.replace(/\/+$/, "");
+			const completionsUrl = query
+				? `${trimmedBaseUrl}/chat/completions?${new URLSearchParams(query)}`
+				: `${trimmedBaseUrl}/chat/completions`;
 			const createCompletionsStream = async (toolStrictModeOverride?: ToolStrictModeOverride) => {
-				clearCapturedErrorResponse();
 				const effectiveToolStrictModeOverride = disableStrictTools ? "none" : toolStrictModeOverride;
 				const { params, strictToolsApplied } = buildParams(
 					model,
@@ -487,14 +493,10 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 					api: output.api,
 					model: model.id,
 					method: "POST",
-					url: `${baseUrl}/chat/completions`,
+					url: completionsUrl,
 					headers: requestHeaders,
 					body: params,
 				};
-				const requestOptions =
-					requestTimeoutMs === undefined
-						? { signal: requestSignal }
-						: { signal: requestSignal, timeout: requestTimeoutMs };
 				let requestTimeout: NodeJS.Timeout | undefined;
 				if (requestTimeoutMs !== undefined) {
 					requestTimeout = setTimeout(
@@ -503,17 +505,26 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 					);
 				}
 				try {
-					const { data, response, request_id } = await client.chat.completions
-						.create(params, requestOptions)
-						.withResponse();
-					await notifyProviderResponse(options, response, model, request_id);
-					return data;
-				} catch (error) {
-					if (error instanceof OpenAIConnectionTimeoutError && !abortTracker.wasCallerAbort()) {
-						throw firstEventTimeoutAbortError;
+					const headersWithTimeout = { ...headers };
+					if (requestTimeoutMs !== undefined) {
+						headersWithTimeout["X-Stainless-Timeout"] = Math.floor(requestTimeoutMs / 1000).toString();
 					}
-					throw error;
+					const { events, response, requestId } = await postOpenAIStream<ChatCompletionChunk>({
+						url: completionsUrl,
+						headers: headersWithTimeout,
+						body: params,
+						signal: requestSignal,
+						fetch: options?.fetch,
+						// With a first-event watchdog armed, transport retries must
+						// not silently extend the deadline (old SDK `maxRetries: 0`).
+						maxAttempts: requestTimeoutMs === undefined ? undefined : 1,
+						onSseEvent: rawSseObserver,
+					});
+					await notifyProviderResponse(options, response, model, requestId);
+					return events;
 				} finally {
+					// Headers arrived (or the request failed); from here the
+					// first-event deadline is enforced by `iterateWithIdleTimeout`.
 					if (requestTimeout !== undefined) clearTimeout(requestTimeout);
 				}
 			};
@@ -524,7 +535,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 					signal: requestSignal,
 				});
 			} catch (error) {
-				const capturedErrorResponse = getCapturedErrorResponse();
+				const capturedErrorResponse = error instanceof OpenAIHttpError ? error.captured : undefined;
 				if (
 					isOpenRouterAnthropicModel(model) &&
 					!disableStrictTools &&
@@ -688,10 +699,24 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				if (!firstTokenTime) firstTokenTime = Date.now();
 				appendText(output, stream, text);
 			};
-			const appendThinkingDelta = (thinking: string, signature?: string): void => {
+			const appendThinkingDelta = (
+				thinking: string,
+				signature?: string,
+				source: "delta" | "cumulative" = "delta",
+			): void => {
 				if (!thinking) return;
+				let emittedThinking = thinking;
+				if (
+					source === "cumulative" &&
+					currentBlock?.type === "thinking" &&
+					(signature === undefined || currentBlock.thinkingSignature === signature) &&
+					thinking.startsWith(currentBlock.thinking)
+				) {
+					emittedThinking = thinking.slice(currentBlock.thinking.length);
+					if (!emittedThinking) return;
+				}
 				if (!firstTokenTime) firstTokenTime = Date.now();
-				appendThinking(output, stream, thinking, signature);
+				appendThinking(output, stream, emittedThinking, signature);
 			};
 
 			let deepseekStripBuffer = "";
@@ -718,11 +743,11 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 					appendTextDelta(processedText);
 				}
 			};
-
 			const streamMarkupHealingPattern = getStreamMarkupHealingPattern(model.provider, model.id);
 			const streamMarkupHealing = streamMarkupHealingPattern
 				? new StreamMarkupHealing({ pattern: streamMarkupHealingPattern })
 				: undefined;
+			const explicitReasoningDeltasMayBeCumulative = modelMayLeakThinkingTags(model.provider, model.id);
 			let healedToolCallEmitted = false;
 			const emitHealedToolCall = (call: HealedToolCall): void => {
 				finishCurrentBlock(currentBlock);
@@ -777,10 +802,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				abortSignal: options?.signal,
 				isProgressItem: isOpenAICompletionsProgressChunk,
 			});
-			const observedOpenaiStream = rawSseObserver
-				? observeDecodedOpenAICompletionChunks(timedOpenaiStream, rawSseObserver)
-				: timedOpenaiStream;
-			const terminalAwareStream = iterateWithTerminalGrace(observedOpenaiStream, {
+			const terminalAwareStream = iterateWithTerminalGrace(timedOpenaiStream, {
 				finishedAtMs: () => streamFinishedAt,
 				graceMs: OPENAI_COMPLETIONS_POST_FINISH_GRACE_MS,
 				// The inner idle-timeout generator is parked mid-`next()` when the
@@ -834,11 +856,38 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				}
 
 				if (choice.delta) {
+					// Some endpoints return reasoning in reasoning_content (llama.cpp),
+					// or reasoning (other openai compatible endpoints). Use the first
+					// non-empty reasoning field to avoid duplication when a chunk carries
+					// multiple aliases for the same reasoning text.
+					const reasoningFields = ["reasoning_content", "reasoning", "reasoning_text"];
+					const deltaRecord = choice.delta as Record<string, unknown>;
+					let foundReasoningField: string | undefined;
+					let foundReasoningDelta = "";
+					for (const field of reasoningFields) {
+						const reasoningDelta = deltaRecord[field];
+						if (typeof reasoningDelta === "string" && reasoningDelta.length > 0) {
+							foundReasoningField = field;
+							foundReasoningDelta = reasoningDelta;
+							break;
+						}
+					}
+
+					if (foundReasoningField) {
+						appendThinkingDelta(
+							foundReasoningDelta,
+							foundReasoningField,
+							explicitReasoningDeltasMayBeCumulative ? "cumulative" : "delta",
+						);
+					}
+
 					const normalizedDeltaText = normalizeStreamingContentText(choice.delta.content);
 					if (normalizedDeltaText.length > 0) {
 						if (!firstTokenTime) firstTokenTime = Date.now();
 						const hasStructuredToolCalls =
 							Array.isArray(choice.delta.tool_calls) && choice.delta.tool_calls.length > 0;
+						const suppressContentThinking =
+							foundReasoningField !== undefined && streamMarkupHealing?.pattern === "thinking";
 
 						if (streamMarkupHealing) {
 							if (hasStructuredToolCalls) {
@@ -849,36 +898,13 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 								appendProcessedText(streamMarkupHealing.consumeWithoutCalls(normalizedDeltaText));
 							} else {
 								for (const event of streamMarkupHealing.feedEvents(normalizedDeltaText)) {
+									if (suppressContentThinking && event.type === "thinking") continue;
 									emitHealingEvent(event);
 								}
 							}
 						} else {
 							appendProcessedText(normalizedDeltaText);
 						}
-					}
-
-					// Some endpoints return reasoning in reasoning_content (llama.cpp),
-					// or reasoning (other openai compatible endpoints)
-					// Use the first non-empty reasoning field to avoid duplication
-					// (e.g., chutes.ai returns both reasoning_content and reasoning with same content)
-					const reasoningFields = ["reasoning_content", "reasoning", "reasoning_text"];
-					let foundReasoningField: string | null = null;
-					for (const field of reasoningFields) {
-						if (
-							(choice.delta as any)[field] !== null &&
-							(choice.delta as any)[field] !== undefined &&
-							(choice.delta as any)[field].length > 0
-						) {
-							if (!foundReasoningField) {
-								foundReasoningField = field;
-								break;
-							}
-						}
-					}
-
-					if (foundReasoningField) {
-						const delta = (choice.delta as any)[foundReasoningField];
-						appendThinkingDelta(delta, foundReasoningField);
 					}
 
 					if (choice?.delta?.tool_calls && choice.delta.tool_calls.length > 0) {
@@ -1079,10 +1105,11 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 			for (const block of output.content) delete (block as any).index;
 			const firstEventTimeoutError = abortTracker.getLocalAbortReason();
 			output.stopReason = abortTracker.wasCallerAbort() ? "aborted" : "error";
-			output.errorStatus = extractHttpStatusFromError(error) ?? getCapturedErrorResponse?.()?.status;
+			const capturedErrorResponse = error instanceof OpenAIHttpError ? error.captured : undefined;
+			output.errorStatus = extractHttpStatusFromError(error) ?? capturedErrorResponse?.status;
 			output.errorMessage =
 				firstEventTimeoutError?.message ??
-				(await finalizeErrorMessage(error, rawRequestDump, getCapturedErrorResponse?.()));
+				(await finalizeErrorMessage(error, rawRequestDump, capturedErrorResponse));
 			// Some providers via OpenRouter include extra details here.
 			const rawMetadata = (error as { error?: { metadata?: { raw?: string } } })?.error?.metadata?.raw;
 			if (rawMetadata) output.errorMessage += `\n${rawMetadata}`;
@@ -1097,20 +1124,21 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 	return stream;
 };
 
-async function createClient(
+async function createRequestSetup(
 	model: Model<"openai-completions">,
 	context: Context,
 	apiKey?: string,
 	extraHeaders?: Record<string, string>,
 	initiatorOverride?: MessageAttribution,
-	fetchOverride?: FetchImpl,
 ): Promise<{
-	client: OpenAI;
 	copilotPremiumRequests: number | undefined;
-	baseUrl: string | undefined;
+	baseUrl: string;
+	/** Headers sent on the wire, including `Authorization`. */
+	headers: Record<string, string>;
+	/** Query params appended to the request URL (Azure `api-version`). */
+	query: Record<string, string> | undefined;
+	/** Headers recorded in `rawRequestDump` (sans `Authorization`). */
 	requestHeaders: Record<string, string>;
-	getCapturedErrorResponse: () => CapturedHttpErrorResponse | undefined;
-	clearCapturedErrorResponse: () => void;
 }> {
 	if (!apiKey) {
 		if (!$env.OPENAI_API_KEY) {
@@ -1128,8 +1156,8 @@ async function createClient(
 		// analytics. `HTTP-Referer` is the unique app identifier; without it nothing is
 		// tracked. `X-OpenRouter-Title` is the display name (`X-Title` is the legacy
 		// alias kept for back-compat). `X-OpenRouter-Categories` slots us into the
-		// `cli-agent` marketplace category. `User-Agent` overrides the default OpenAI
-		// SDK UA so traffic is identifiable in upstream provider logs.
+		// `cli-agent` marketplace category. `User-Agent` makes our traffic
+		// identifiable in upstream provider logs.
 		// https://openrouter.ai/docs/app-attribution
 		headers["User-Agent"] = `Oh-My-Pi/${packageJson.version}`;
 		headers["HTTP-Referer"] = "https://omp.sh/";
@@ -1176,52 +1204,16 @@ async function createClient(
 		}
 		azureDefaultQuery = { "api-version": apiVersion };
 	}
-	let capturedErrorResponse: CapturedHttpErrorResponse | undefined;
-	const baseFetch = fetchOverride ?? fetch;
-	const wrappedFetch = Object.assign(
-		async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
-			const response = await baseFetch(input, init);
-			if (response.ok) {
-				capturedErrorResponse = undefined;
-				return response;
-			}
-			let bodyText: string | undefined;
-			let bodyJson: unknown;
-			try {
-				bodyText = await response.clone().text();
-				if (bodyText.trim().length > 0) {
-					try {
-						bodyJson = JSON.parse(bodyText);
-					} catch {}
-				}
-			} catch {}
-			capturedErrorResponse = {
-				status: response.status,
-				headers: response.headers,
-				bodyText,
-				bodyJson,
-			};
-			return response;
-		},
-		baseFetch.preconnect ? { preconnect: baseFetch.preconnect } : {},
-	);
+	// The removed SDK client resolved its base URL as
+	// `baseURL ?? $OPENAI_BASE_URL ?? https://api.openai.com/v1`; keep that
+	// resolution explicit now that we build the request URL ourselves.
+	const resolvedBaseUrl = baseUrl ?? ($env.OPENAI_BASE_URL?.trim() || "https://api.openai.com/v1");
 	return {
-		client: new OpenAI({
-			apiKey,
-			baseURL: baseUrl,
-			dangerouslyAllowBrowser: true,
-			maxRetries: 5,
-			defaultHeaders: headers,
-			defaultQuery: azureDefaultQuery,
-			fetch: wrappedFetch,
-		}),
 		copilotPremiumRequests,
-		baseUrl,
+		baseUrl: resolvedBaseUrl,
+		headers: { Authorization: `Bearer ${apiKey}`, ...headers },
+		query: azureDefaultQuery,
 		requestHeaders: headers,
-		getCapturedErrorResponse: () => capturedErrorResponse,
-		clearCapturedErrorResponse: () => {
-			capturedErrorResponse = undefined;
-		},
 	};
 }
 
@@ -1247,7 +1239,8 @@ function buildParams(
 	// Kimi-family models calculate TPM rate limits from max_tokens (not actual
 	// output) and the official guidance requires sending it on every call —
 	// `compat.alwaysSendMaxTokens` carries that detection.
-	const requestedMaxTokens = options?.maxTokens ?? (compat.alwaysSendMaxTokens ? model.maxTokens : undefined);
+	const requestedMaxTokens =
+		options?.maxTokens ?? (compat.alwaysSendMaxTokens ? (model.maxTokens ?? OPENAI_MAX_OUTPUT_TOKENS) : undefined);
 	// OpenRouter fans out to upstreams whose output caps differ from the catalog
 	// value (which tracks the highest-cap provider). A max_tokens above the routed
 	// upstream's cap makes OpenRouter silently skip that provider (e.g. Cerebras
@@ -1258,7 +1251,7 @@ function buildParams(
 	const effectiveMaxTokens =
 		requestedMaxTokens === undefined || omitMaxTokensForRouting
 			? undefined
-			: Math.min(requestedMaxTokens, model.maxTokens, OPENAI_MAX_OUTPUT_TOKENS);
+			: Math.min(requestedMaxTokens, model.maxTokens ?? Number.POSITIVE_INFINITY, OPENAI_MAX_OUTPUT_TOKENS);
 
 	const requestModelId = resolveOpenAICompletionsModelId(model, options);
 	const params: OpenAICompletionsParams = {
@@ -2109,6 +2102,13 @@ function mapStopReason(reason: ChatCompletionChunk.Choice["finish_reason"] | str
 			return { stopReason: "error", errorMessage: "Provider finish_reason: content_filter" };
 		case "network_error":
 			return { stopReason: "error", errorMessage: "Provider finish_reason: network_error" };
+		case "error":
+			// Gateways (OpenRouter, Vercel AI Gateway, …) report upstream model
+			// failures as a bare `finish_reason: "error"` with no detail. These are
+			// almost always transient (e.g. Gemini MALFORMED_FUNCTION_CALL), so word
+			// the message to match the session retry classifier's transient-transport
+			// pattern (`provider.?returned.?error`) and get the turn auto-retried.
+			return { stopReason: "error", errorMessage: "Provider returned error finish_reason" };
 		default:
 			return {
 				stopReason: "error",
