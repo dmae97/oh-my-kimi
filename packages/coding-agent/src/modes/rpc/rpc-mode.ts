@@ -80,7 +80,7 @@ export type RpcSessionChangeResult =
 export type RpcSessionChangeSession = Pick<AgentSession, "newSession" | "switchSession" | "branch">;
 
 export type RpcSkillCommandSession = Pick<AgentSession, "promptCustomMessage" | "skills" | "skillsSettings">;
-export type RpcSkillCommandResult = { agentInvoked: true };
+export type RpcSkillCommandResult = { agentInvoked: false };
 
 export async function tryRunRpcSkillCommand(
 	session: RpcSkillCommandSession,
@@ -102,7 +102,7 @@ export async function tryRunRpcSkillCommand(
 		details: built.details,
 		attribution: "user",
 	});
-	return { agentInvoked: true };
+	return { agentInvoked: false };
 }
 
 export function reportLocalOnlyPromptResult(input: {

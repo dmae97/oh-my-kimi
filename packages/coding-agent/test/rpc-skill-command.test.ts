@@ -30,7 +30,7 @@ describe("tryRunRpcSkillCommand", () => {
 			"/skill:reviewer focus on risks",
 		);
 
-		expect(handled).toEqual({ agentInvoked: true });
+		expect(handled).toEqual({ agentInvoked: false });
 		expect(message?.customType).toBe(SKILL_PROMPT_MESSAGE_TYPE);
 		expect(message?.content).toContain("Review the supplied code carefully.");
 		expect(message?.content).toContain("User: focus on risks");

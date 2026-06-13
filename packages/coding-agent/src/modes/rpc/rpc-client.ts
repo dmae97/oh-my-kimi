@@ -23,6 +23,7 @@ import type {
 	RpcHostToolDefinition,
 	RpcHostToolResult,
 	RpcHostToolUpdate,
+	RpcPromptResultFrame,
 	RpcResponse,
 	RpcSessionState,
 	RpcSubagentEventFrame,
@@ -38,6 +39,12 @@ type DistributiveOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : n
 
 /** RpcCommand without the id field (for internal send) */
 type RpcCommandBody = DistributiveOmit<RpcCommand, "id">;
+
+type PromptCompletion = {
+	promise: Promise<void>;
+	resolve: () => void;
+	settled: boolean;
+};
 
 export interface RpcClientOptions {
 	/** Path to the CLI entry point (default: searches for dist/cli.js) */
@@ -169,6 +176,15 @@ function isRpcAvailableCommandsUpdateFrame(value: unknown): value is RpcAvailabl
 	return value.type === "available_commands_update" && Array.isArray(value.commands);
 }
 
+function isRpcPromptResultFrame(value: unknown): value is RpcPromptResultFrame {
+	if (!isRecord(value)) return false;
+	return (
+		value.type === "prompt_result" &&
+		(value.id === undefined || typeof value.id === "string") &&
+		typeof value.agentInvoked === "boolean"
+	);
+}
+
 function isRpcHostToolCallRequest(value: unknown): value is RpcHostToolCallRequest {
 	if (!isRecord(value)) return false;
 	return (
@@ -218,6 +234,9 @@ export class RpcClient {
 	#requestId = 0;
 	#extensionUiListeners: Set<(req: RpcExtensionUIRequest) => void> = new Set();
 	#abortController = new AbortController();
+	#promptCompletions = new Map<string, PromptCompletion>();
+	#lastPromptCompletion: PromptCompletion | undefined;
+	#promptCompletionListeners = new Set<() => void>();
 
 	constructor(private options: RpcClientOptions = {}) {
 		this.#customTools = [...(options.customTools ?? [])];
@@ -417,7 +436,7 @@ export class RpcClient {
 	 * Use waitForIdle() to wait for completion.
 	 */
 	async prompt(message: string, images?: ImageContent[]): Promise<void> {
-		await this.#send({ type: "prompt", message, images });
+		await this.#sendPrompt(message, images);
 	}
 
 	/**
@@ -738,18 +757,26 @@ export class RpcClient {
 
 	/**
 	 * Wait for agent to become idle (no streaming).
-	 * Resolves when agent_end event is received.
+	 * Resolves on `agent_end` or a local-only `prompt_result`.
 	 */
 	waitForIdle(timeout = 60000): Promise<void> {
+		const completion = this.#lastPromptCompletion;
+		if (completion) {
+			return this.#withIdleTimeout(
+				completion.promise,
+				timeout,
+				`Timeout waiting for agent to become idle. Stderr: ${this.#process?.peekStderr() ?? ""}`,
+			);
+		}
+
 		const { promise, resolve, reject } = Promise.withResolvers<void>();
 		let settled = false;
-		const unsubscribe = this.onEvent(event => {
-			if (event.type === "agent_end") {
-				settled = true;
-				unsubscribe();
-				clearTimeout(timeoutId);
-				resolve();
-			}
+		const unsubscribe = this.#onPromptCompletion(() => {
+			if (settled) return;
+			settled = true;
+			unsubscribe();
+			clearTimeout(timeoutId);
+			resolve();
 		});
 
 		const timeoutId = this.#startTimeout(timeout, () => {
@@ -768,20 +795,34 @@ export class RpcClient {
 		const { promise, resolve, reject } = Promise.withResolvers<AgentEvent[]>();
 		const events: AgentEvent[] = [];
 		let settled = false;
+		let unsubscribeCompletion = () => {};
+		const finish = () => {
+			if (settled) return;
+			settled = true;
+			unsubscribe();
+			unsubscribeCompletion();
+			clearTimeout(timeoutId);
+			resolve(events);
+		};
 		const unsubscribe = this.onEvent(event => {
 			events.push(event);
 			if (event.type === "agent_end") {
-				settled = true;
-				unsubscribe();
-				clearTimeout(timeoutId);
-				resolve(events);
+				finish();
 			}
 		});
+
+		const completion = this.#lastPromptCompletion;
+		if (completion) {
+			void completion.promise.then(finish);
+		} else {
+			unsubscribeCompletion = this.#onPromptCompletion(finish);
+		}
 
 		const timeoutId = this.#startTimeout(timeout, () => {
 			if (settled) return;
 			settled = true;
 			unsubscribe();
+			unsubscribeCompletion();
 			reject(new Error(`Timeout collecting events. Stderr: ${this.#process?.peekStderr() ?? ""}`));
 		});
 		return promise;
@@ -791,12 +832,122 @@ export class RpcClient {
 	 * Send prompt and wait for completion, returning all events.
 	 */
 	async promptAndWait(message: string, images?: ImageContent[], timeout = 60000): Promise<AgentEvent[]> {
-		const eventsPromise = this.collectEvents(timeout);
-		await this.prompt(message, images);
-		return eventsPromise;
+		const events: AgentEvent[] = [];
+		const unsubscribe = this.onEvent(event => {
+			events.push(event);
+		});
+		try {
+			await this.prompt(message, images);
+			await this.waitForIdle(timeout);
+			return events;
+		} finally {
+			unsubscribe();
+		}
 	}
 
 	// =========================================================================
+	async #sendPrompt(message: string, images?: ImageContent[]): Promise<void> {
+		const id = this.#nextRequestId();
+		this.#createPromptCompletion(id);
+		try {
+			const response = await this.#send({ type: "prompt", message, images }, 30_000, id);
+			if (!response.success) {
+				this.#resolvePromptCompletion(id);
+				return;
+			}
+			if (response.command === "prompt" && response.data?.agentInvoked === false) {
+				this.#resolvePromptCompletion(id);
+			}
+		} catch (error) {
+			this.#resolvePromptCompletion(id);
+			throw error;
+		}
+	}
+
+	#nextRequestId(): string {
+		return `req_${++this.#requestId}`;
+	}
+
+	#createPromptCompletion(id: string): PromptCompletion {
+		const { promise, resolve } = Promise.withResolvers<void>();
+		const completion: PromptCompletion = {
+			promise,
+			resolve: () => {
+				if (completion.settled) return;
+				completion.settled = true;
+				resolve();
+				this.#notifyPromptCompletion();
+			},
+			settled: false,
+		};
+		this.#promptCompletions.set(id, completion);
+		this.#lastPromptCompletion = completion;
+		return completion;
+	}
+
+	#resolvePromptCompletion(id: string | undefined): void {
+		if (!id) {
+			this.#resolveAllPromptCompletions();
+			return;
+		}
+		const completion = this.#promptCompletions.get(id);
+		if (!completion) {
+			this.#notifyPromptCompletion();
+			return;
+		}
+		this.#promptCompletions.delete(id);
+		completion.resolve();
+	}
+
+	#resolveAllPromptCompletions(): void {
+		if (this.#promptCompletions.size === 0) {
+			this.#notifyPromptCompletion();
+			return;
+		}
+		const completions = Array.from(this.#promptCompletions.values());
+		this.#promptCompletions.clear();
+		for (const completion of completions) {
+			completion.resolve();
+		}
+	}
+
+	#onPromptCompletion(listener: () => void): () => void {
+		this.#promptCompletionListeners.add(listener);
+		return () => {
+			this.#promptCompletionListeners.delete(listener);
+		};
+	}
+
+	#notifyPromptCompletion(): void {
+		for (const listener of [...this.#promptCompletionListeners]) {
+			listener();
+		}
+	}
+
+	#withIdleTimeout<T>(source: Promise<T>, timeoutMs: number, timeoutMessage: string): Promise<T> {
+		const { promise, resolve, reject } = Promise.withResolvers<T>();
+		let settled = false;
+		const timeoutId = this.#startTimeout(timeoutMs, () => {
+			if (settled) return;
+			settled = true;
+			reject(new Error(timeoutMessage));
+		});
+		void source.then(
+			value => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timeoutId);
+				resolve(value);
+			},
+			error => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timeoutId);
+				reject(error);
+			},
+		);
+		return promise;
+	}
 	// Internal
 	// =========================================================================
 
@@ -810,6 +961,13 @@ export class RpcClient {
 				pending.resolve(data);
 				return;
 			}
+		}
+
+		if (isRpcPromptResultFrame(data)) {
+			if (!data.agentInvoked) {
+				this.#resolvePromptCompletion(data.id);
+			}
+			return;
 		}
 
 		if (isRpcHostToolCallRequest(data)) {
@@ -868,14 +1026,16 @@ export class RpcClient {
 		for (const listener of this.#eventListeners) {
 			listener(data);
 		}
+
+		if (data.type === "agent_end") {
+			this.#resolveAllPromptCompletions();
+		}
 	}
 
-	#send(command: RpcCommandBody, timeoutMs = 30_000): Promise<RpcResponse> {
+	#send(command: RpcCommandBody, timeoutMs = 30_000, id = this.#nextRequestId()): Promise<RpcResponse> {
 		if (!this.#process?.stdin) {
 			throw new Error("Client not started");
 		}
-
-		const id = `req_${++this.#requestId}`;
 		const fullCommand = { ...command, id } as RpcCommand;
 		const { promise, resolve, reject } = Promise.withResolvers<RpcResponse>();
 		let settled = false;

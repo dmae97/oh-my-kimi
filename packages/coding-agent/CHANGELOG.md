@@ -164,6 +164,7 @@
 - Fixed interrupt loader state getting stuck after queued-message aborts by removing the session-layer flush/latch path; empty Enter now aborts the active turn and lets the existing post-unwind queue drain resume normally.
 - Fixed `/goal <objective>` and `/goal set <objective>` during streaming so goal context is steered immediately but objective submission waits for the active turn to finish instead of spamming `AgentBusyError` ([#2454](https://github.com/can1357/oh-my-pi/issues/2454)).
 - Fixed RPC local-only prompt completion for extension `pi.sendUserMessage(..., { deliverAs: "followUp" | "steer" })` calls that only queue messages, so hosts no longer wait for an `agent_end` that will not be emitted.
+- Fixed RPC prompt completion for local-only or already-finished slash command paths, including `/skill:*` prompts and extension `pi.sendUserMessage(..., { deliverAs: "followUp" | "steer" })` calls that only queue messages, so hosts and `RpcClient` waits no longer wait for an `agent_end` that will not be emitted.
 
 ### Fixed
 
