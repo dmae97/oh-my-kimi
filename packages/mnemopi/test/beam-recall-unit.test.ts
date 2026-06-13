@@ -250,6 +250,23 @@ describe("beam recall free functions", () => {
 		expect(results[0]?.content).toBe("Alice");
 	});
 
+	it("scores exact fact hits above filler-heavy working memories", async () => {
+		const beam = makeBeam();
+		insertWorking(beam, "wm-filler", "you know about my old onboarding checklist", { importance: 1.0 });
+		beam.db.run(
+			"INSERT INTO facts (fact_id, session_id, subject, predicate, object, timestamp, confidence) VALUES (?, ?, ?, ?, ?, ?, ?)",
+			["fact-name", beam.sessionId, "name", "is", "Alice", "2026-05-30T00:00:00.000Z", 0.95],
+		);
+
+		const results = await recallEnhanced(beam, "what do you know about my name", 1, {
+			includeFacts: true,
+			queryEmbedding: null,
+			useMmr: false,
+		});
+
+		expect(results[0]?.id).toBe("fact-name");
+	});
+
 	it("keeps exact working-memory hits above weak matching facts in enhanced recall", async () => {
 		const beam = makeBeam();
 		insertWorking(

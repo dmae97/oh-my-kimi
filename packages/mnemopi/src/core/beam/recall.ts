@@ -101,6 +101,21 @@ const STOP_WORDS = new Set([
 	"with",
 ]);
 
+const FACT_QUERY_FILLER_WORDS = new Set([
+	"about",
+	"can",
+	"did",
+	"do",
+	"does",
+	"know",
+	"me",
+	"my",
+	"please",
+	"tell",
+	"you",
+	"your",
+]);
+
 function nowIso(): string {
 	return new Date().toISOString();
 }
@@ -174,6 +189,29 @@ function expandedTokenGroups(query: string, useSynonyms = true): string[][] {
 		if (seen.size > 0) groups.push([...seen]);
 	}
 	return groups;
+}
+
+function factExpandedTokenGroups(query: string): string[][] {
+	const groups: string[][] = [];
+	for (const token of tokenize(query)) {
+		if (FACT_QUERY_FILLER_WORDS.has(token)) continue;
+		const seen = new Set<string>();
+		for (const variant of recallSynonyms(token, true)) {
+			for (const part of tokenize(variant)) {
+				if (!FACT_QUERY_FILLER_WORDS.has(part)) seen.add(part);
+			}
+		}
+		if (seen.size > 0) groups.push([...seen]);
+	}
+	return groups;
+}
+
+function tokensFromGroups(groups: readonly (readonly string[])[]): string[] {
+	const seen = new Set<string>();
+	for (const group of groups) {
+		for (const token of group) seen.add(token);
+	}
+	return [...seen];
 }
 
 function contentMatchesToken(contentLower: string, contentTokens: ReadonlySet<string>, token: string): boolean {
@@ -1066,8 +1104,8 @@ export function factRecall(beam: BeamMemoryState, query: string, topK = 30): Fac
 	if (rowids.length === 0) return [];
 	const visibility = factVisibilityWhere(beam, "");
 	const ranks = normalizeRanks(matched, "rowid");
-	const queryTokens = expandedTokens(query);
-	const queryGroups = expandedTokenGroups(query);
+	const queryGroups = factExpandedTokenGroups(query);
+	const queryTokens = tokensFromGroups(queryGroups);
 	const normalized = normalizeQuery(query).toLowerCase();
 	const rows = queryAll(
 		beam,
@@ -1114,7 +1152,6 @@ export function factRecall(beam: BeamMemoryState, query: string, topK = 30): Fac
 			};
 			return result;
 		})
-		.filter((result): result is FactRecallResult => result !== null)
 		.sort((left, right) => (right.score ?? 0) - (left.score ?? 0))
 		.slice(0, topK);
 }
