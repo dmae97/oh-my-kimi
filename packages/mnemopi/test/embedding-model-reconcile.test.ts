@@ -156,4 +156,37 @@ describe("reconcileEmbeddingModel on store open", () => {
 			db.close();
 		}
 	});
+
+	it("recovers an interrupted rebuild: re-enqueues live memories missing an active-model embedding", async () => {
+		// Simulate a wipe that completed but whose async rebuild never finished (a process exit
+		// or transient embed failure): live memories remain but `memory_embeddings` is empty. A
+		// prior bug treated the empty table as "reconciled" and stranded them FTS-only forever.
+		const db = new Database(":memory:");
+		initBeam(db);
+		const ts = new Date().toISOString();
+		db.prepare(
+			"INSERT INTO working_memory (id, content, source, timestamp, session_id) VALUES (?, ?, 'test', ?, 'default')",
+		).run("wm-1", "alpha working memory", ts);
+		db.prepare(
+			"INSERT INTO episodic_memory (id, content, source, timestamp, session_id) VALUES (?, ?, 'test', ?, 'default')",
+		).run("ep-1", "beta episodic memory", ts);
+
+		const memory = new Mnemopi({ db, embeddings: { model: NEW_MODEL, provider: fakeEmbed() } });
+		try {
+			// No stale rows to wipe, but the missing-embedding recovery enqueues the live rows.
+			expect(countEmbeddings(memory)).toBe(0);
+			expect(memory.beam.pendingExtractions.size).toBeGreaterThanOrEqual(1);
+
+			await memory.flushExtractions();
+			const rows = memory.conn.query("SELECT memory_id, model FROM memory_embeddings ORDER BY memory_id").all() as {
+				memory_id: string;
+				model: string;
+			}[];
+			expect(rows.map(row => row.memory_id).sort()).toEqual(["ep-1", "wm-1"]);
+			expect(rows.every(row => row.model === NEW_MODEL)).toBe(true);
+		} finally {
+			memory.close();
+			db.close();
+		}
+	});
 });

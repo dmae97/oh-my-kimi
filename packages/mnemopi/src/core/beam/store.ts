@@ -278,47 +278,66 @@ export function reconcileEmbeddingModel(beam: BeamMemoryState): void {
 	const active = currentEmbeddingModel().trim();
 	if (active === "") return;
 
-	// Stop at the first row whose stamped model differs from the active one
-	// (NULL/unstamped counts as a mismatch via `IS NOT`); an empty store or an
-	// all-current store short-circuits here without gathering the DISTINCT set.
-	const mismatch = beam.db.query("SELECT 1 FROM memory_embeddings WHERE model IS NOT ? LIMIT 1").get(active);
-	if (!mismatch) return;
-
-	const staleModels = beam.db
-		.query("SELECT DISTINCT model FROM memory_embeddings WHERE model IS NOT ?")
-		.all(active) as { model: string | null }[];
-
-	const live = beam.db
-		.query(`
-			SELECT id AS memoryId, content FROM working_memory WHERE superseded_by IS NULL
-			UNION ALL
-			SELECT id AS memoryId, content FROM episodic_memory WHERE superseded_by IS NULL
-		`)
-		.all() as EmbedItem[];
-
-	transaction(beam.db, () => {
-		beam.db.prepare("DELETE FROM memory_embeddings").run();
-		beam.db.prepare("UPDATE episodic_memory SET binary_vector = NULL").run();
-		if (vecAvailable(beam.db)) {
-			try {
-				beam.db.prepare("DELETE FROM vec_episodes").run();
-			} catch {
-				// sqlite-vec cleanup is best-effort; rebuild correctness takes precedence.
-			}
-		}
-	});
-
-	logger.info("mnemopi: embedding model changed, rebuilding", {
-		from: staleModels.map(row => row.model ?? "(unstamped)"),
-		to: active,
-		count: live.length,
-	});
-
 	// Re-embed in bounded batches so a corpus-wide rebuild never issues one giant
 	// embedding request; each batch is its own tracked background task.
-	for (let offset = 0; offset < live.length; offset += EMBED_REBUILD_BATCH) {
-		scheduleEmbedding(beam, live.slice(offset, offset + EMBED_REBUILD_BATCH));
+	const rebuild = (items: readonly EmbedItem[]): void => {
+		for (let offset = 0; offset < items.length; offset += EMBED_REBUILD_BATCH) {
+			scheduleEmbedding(beam, items.slice(offset, offset + EMBED_REBUILD_BATCH));
+		}
+	};
+
+	// Stop at the first row whose stamped model differs from the active one
+	// (NULL/unstamped counts as a mismatch via `IS NOT`).
+	const mismatch = beam.db.query("SELECT 1 FROM memory_embeddings WHERE model IS NOT ? LIMIT 1").get(active);
+	if (mismatch) {
+		const staleModels = beam.db
+			.query("SELECT DISTINCT model FROM memory_embeddings WHERE model IS NOT ?")
+			.all(active) as { model: string | null }[];
+		const live = beam.db
+			.query(`
+				SELECT id AS memoryId, content FROM working_memory WHERE superseded_by IS NULL
+				UNION ALL
+				SELECT id AS memoryId, content FROM episodic_memory WHERE superseded_by IS NULL
+			`)
+			.all() as EmbedItem[];
+
+		transaction(beam.db, () => {
+			beam.db.prepare("DELETE FROM memory_embeddings").run();
+			beam.db.prepare("UPDATE episodic_memory SET binary_vector = NULL").run();
+			if (vecAvailable(beam.db)) {
+				try {
+					beam.db.prepare("DELETE FROM vec_episodes").run();
+				} catch {
+					// sqlite-vec cleanup is best-effort; rebuild correctness takes precedence.
+				}
+			}
+		});
+
+		logger.info("mnemopi: embedding model changed, rebuilding", {
+			from: staleModels.map(row => row.model ?? "(unstamped)"),
+			to: active,
+			count: live.length,
+		});
+		rebuild(live);
+		return;
 	}
+
+	// No stale embeddings, but a previously-interrupted rebuild (a failed embed or a process
+	// exit after the wipe) can leave live memories with no active-model embedding. Treating an
+	// empty/partial table as "reconciled" would strand them FTS-only, so re-enqueue any live
+	// row still missing an active-model embedding.
+	const missing = beam.db
+		.query(`
+			SELECT id AS memoryId, content FROM working_memory
+			WHERE superseded_by IS NULL AND id NOT IN (SELECT memory_id FROM memory_embeddings WHERE model = ?)
+			UNION ALL
+			SELECT id AS memoryId, content FROM episodic_memory
+			WHERE superseded_by IS NULL AND id NOT IN (SELECT memory_id FROM memory_embeddings WHERE model = ?)
+		`)
+		.all(active, active) as EmbedItem[];
+	if (missing.length === 0) return;
+	logger.info("mnemopi: resuming interrupted embedding rebuild", { to: active, count: missing.length });
+	rebuild(missing);
 }
 
 export function remember(beam: BeamMemoryState, content: string, options: StoreRememberOptions = {}): string {
