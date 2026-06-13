@@ -178,14 +178,18 @@ function expandedTokenGroups(query: string, useSynonyms = true): string[][] {
 	return groups;
 }
 
-function factExpandedTokenGroups(query: string): string[][] {
+function factExpandedTokenGroups(query: string, content: string): string[][] {
+	const contentLower = content.toLowerCase();
+	const contentTokens = new Set(tokenize(contentLower));
 	const groups: string[][] = [];
 	for (const token of tokenize(query)) {
-		if (FACT_QUERY_FILLER_WORDS.has(token)) continue;
+		if (FACT_QUERY_FILLER_WORDS.has(token) && !contentMatchesToken(contentLower, contentTokens, token)) continue;
 		const seen = new Set<string>();
 		for (const variant of recallSynonyms(token, true)) {
 			for (const part of tokenize(variant)) {
-				if (!FACT_QUERY_FILLER_WORDS.has(part)) seen.add(part);
+				if (!FACT_QUERY_FILLER_WORDS.has(part) || contentMatchesToken(contentLower, contentTokens, part)) {
+					seen.add(part);
+				}
 			}
 		}
 		if (seen.size > 0) groups.push([...seen]);
@@ -1091,8 +1095,6 @@ export function factRecall(beam: BeamMemoryState, query: string, topK = 30): Fac
 	if (rowids.length === 0) return [];
 	const visibility = factVisibilityWhere(beam, "");
 	const ranks = normalizeRanks(matched, "rowid");
-	const queryGroups = factExpandedTokenGroups(query);
-	const queryTokens = tokensFromGroups(queryGroups);
 	const normalized = normalizeQuery(query).toLowerCase();
 	const rows = queryAll(
 		beam,
@@ -1111,6 +1113,8 @@ export function factRecall(beam: BeamMemoryState, query: string, topK = 30): Fac
 			const confidence = asNumber(row.confidence, 0.5);
 			const content = object.length > 0 ? object : `${subject} ${predicate}`.trim();
 			const searchable = `${subject} ${predicate} ${object}`.trim();
+			const queryGroups = factExpandedTokenGroups(query, searchable);
+			const queryTokens = tokensFromGroups(queryGroups);
 			const lexical =
 				queryGroups.length > 0
 					? lexicalGroupRelevance(queryGroups, searchable, normalized)

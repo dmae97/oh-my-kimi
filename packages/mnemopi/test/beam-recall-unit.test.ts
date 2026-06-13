@@ -266,6 +266,26 @@ describe("beam recall free functions", () => {
 		expect(results[0]?.id).toBe("fact-name");
 	});
 
+	it("preserves stop-word-looking entity tokens when scoring facts", async () => {
+		const beam = makeBeam();
+		beam.db.run(
+			"INSERT INTO facts (fact_id, session_id, subject, predicate, object, timestamp, confidence) VALUES (?, ?, ?, ?, ?, ?, ?)",
+			["fact-may", beam.sessionId, "May", "birthday", "June 1", "2026-05-30T00:00:00.000Z", 0.1],
+		);
+		beam.db.run(
+			"INSERT INTO facts (fact_id, session_id, subject, predicate, object, timestamp, confidence) VALUES (?, ?, ?, ?, ?, ?, ?)",
+			["fact-bob", beam.sessionId, "Bob", "birthday", "June 2", "2026-05-30T00:00:00.000Z", 1.0],
+		);
+
+		const results = await recallEnhanced(beam, "May birthday", 1, {
+			includeFacts: true,
+			queryEmbedding: null,
+			useMmr: false,
+		});
+
+		expect(results[0]?.id).toBe("fact-may");
+	});
+
 	it("keeps exact working-memory hits above weak matching facts in enhanced recall", async () => {
 		const beam = makeBeam();
 		insertWorking(
