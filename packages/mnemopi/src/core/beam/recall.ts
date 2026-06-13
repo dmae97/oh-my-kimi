@@ -1069,7 +1069,6 @@ export function factRecall(beam: BeamMemoryState, query: string, topK = 30): Fac
 	const queryTokens = expandedTokens(query);
 	const queryGroups = expandedTokenGroups(query);
 	const normalized = normalizeQuery(query).toLowerCase();
-	const minRel = minimumRelevance(queryTokens);
 	const rows = queryAll(
 		beam,
 		`SELECT rowid, fact_id, subject, predicate, object, timestamp, confidence
@@ -1091,7 +1090,6 @@ export function factRecall(beam: BeamMemoryState, query: string, topK = 30): Fac
 				queryGroups.length > 0
 					? lexicalGroupRelevance(queryGroups, searchable, normalized)
 					: lexicalRelevance(queryTokens, searchable, normalized);
-			if (lexical < minRel) return null;
 			const rank = ranks.get(asNumber(row.rowid)) ?? 0;
 			const result: FactRecallResult = {
 				id: asString(row.fact_id),

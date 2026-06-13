@@ -237,6 +237,19 @@ describe("beam recall free functions", () => {
 		expect(results[0]?.subject).toBe("service");
 	});
 
+	it("keeps exact fact hits for conversational questions", () => {
+		const beam = makeBeam();
+		beam.db.run(
+			"INSERT INTO facts (fact_id, session_id, subject, predicate, object, timestamp, confidence) VALUES (?, ?, ?, ?, ?, ?, ?)",
+			["fact-name", beam.sessionId, "name", "is", "Alice", "2026-05-30T00:00:00.000Z", 0.95],
+		);
+
+		const results = factRecall(beam, "what do you know about my name", 3);
+
+		expect(results[0]?.fact_id).toBe("fact-name");
+		expect(results[0]?.content).toBe("Alice");
+	});
+
 	it("keeps exact working-memory hits above weak matching facts in enhanced recall", async () => {
 		const beam = makeBeam();
 		insertWorking(
