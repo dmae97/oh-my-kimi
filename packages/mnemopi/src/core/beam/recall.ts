@@ -101,7 +101,21 @@ const STOP_WORDS = new Set([
 	"with",
 ]);
 
-const FACT_QUERY_FILLER_WORDS = new Set([...QUERY_STOP_WORDS, "know", "please", "remind", "remember", "tell"]);
+const FACT_QUERY_FILLER_WORDS = new Set([
+	...QUERY_STOP_WORDS,
+	"d",
+	"know",
+	"ll",
+	"m",
+	"please",
+	"re",
+	"remind",
+	"remember",
+	"s",
+	"t",
+	"tell",
+	"ve",
+]);
 
 function nowIso(): string {
 	return new Date().toISOString();
@@ -183,11 +197,18 @@ function factExpandedTokenGroups(query: string, content: string): string[][] {
 	const contentTokens = new Set(tokenize(contentLower));
 	const groups: string[][] = [];
 	for (const token of tokenize(query)) {
-		if (FACT_QUERY_FILLER_WORDS.has(token) && !contentMatchesToken(contentLower, contentTokens, token)) continue;
+		if (
+			FACT_QUERY_FILLER_WORDS.has(token) &&
+			(token.length <= 2 || !contentMatchesToken(contentLower, contentTokens, token))
+		)
+			continue;
 		const seen = new Set<string>();
 		for (const variant of recallSynonyms(token, true)) {
 			for (const part of tokenize(variant)) {
-				if (!FACT_QUERY_FILLER_WORDS.has(part) || contentMatchesToken(contentLower, contentTokens, part)) {
+				if (
+					!FACT_QUERY_FILLER_WORDS.has(part) ||
+					(part.length > 2 && contentMatchesToken(contentLower, contentTokens, part))
+				) {
 					seen.add(part);
 				}
 			}
