@@ -22818,6 +22818,36 @@
 			"contextWindow": 222222,
 			"maxTokens": 8888
 		},
+		"moonshotai/kimi-k2.7-code": {
+			"id": "moonshotai/kimi-k2.7-code",
+			"name": "Kimi K2.7 Code",
+			"api": "openai-completions",
+			"provider": "kilo",
+			"baseUrl": "https://api.kilo.ai/api/gateway",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 262144,
+			"maxTokens": 262144,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				]
+			}
+		},
 		"morph-warp-grep-v2": {
 			"id": "morph-warp-grep-v2",
 			"name": "WarpGrep V2",
@@ -38049,6 +38079,36 @@
 				]
 			}
 		},
+		"moonshotai/kimi-k2.7-code": {
+			"id": "moonshotai/kimi-k2.7-code",
+			"name": "Kimi K2.7 Code",
+			"api": "openai-completions",
+			"provider": "nanogpt",
+			"baseUrl": "https://nano-gpt.com/api/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 262144,
+			"maxTokens": 262144,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				]
+			}
+		},
 		"moonshotai/kimi-latest": {
 			"id": "moonshotai/kimi-latest",
 			"name": "moonshotai/kimi-latest",
@@ -50725,6 +50785,36 @@
 				]
 			}
 		},
+		"kimi-k2.7-code": {
+			"id": "kimi-k2.7-code",
+			"name": "Kimi K2.7 Code",
+			"api": "openai-completions",
+			"provider": "opencode-go",
+			"baseUrl": "https://opencode.ai/zen/go/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.95,
+				"output": 4,
+				"cacheRead": 0.19,
+				"cacheWrite": 0
+			},
+			"contextWindow": 262144,
+			"maxTokens": 262144,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				]
+			}
+		},
 		"mimo-v2-omni": {
 			"id": "mimo-v2-omni",
 			"name": "MiMo-V2-Omni",
@@ -50903,7 +50993,7 @@
 		},
 		"minimax-m3": {
 			"id": "minimax-m3",
-			"name": "MiniMax M3",
+			"name": "MiniMax M3 (3x usage)",
 			"api": "openai-completions",
 			"provider": "opencode-go",
 			"baseUrl": "https://opencode.ai/zen/go/v1",
@@ -50913,9 +51003,9 @@
 				"image"
 			],
 			"cost": {
-				"input": 0.3,
-				"output": 1.2,
-				"cacheRead": 0.06,
+				"input": 0.1,
+				"output": 0.4,
+				"cacheRead": 0.02,
 				"cacheWrite": 0
 			},
 			"contextWindow": 512000,
@@ -53117,13 +53207,13 @@
 				"image"
 			],
 			"cost": {
-				"input": 0.67,
-				"output": 3.39,
-				"cacheRead": 0.14,
+				"input": 0.6799999999999999,
+				"output": 3.41,
+				"cacheRead": 0.33999999999999997,
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 262144,
+			"maxTokens": 262142,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -54417,7 +54507,7 @@
 				"cacheRead": 0.135,
 				"cacheWrite": 0
 			},
-			"contextWindow": 131072,
+			"contextWindow": 163840,
 			"maxTokens": 16384,
 			"thinking": {
 				"mode": "effort",
@@ -56660,8 +56750,8 @@
 				"image"
 			],
 			"cost": {
-				"input": 0.35,
-				"output": 1.89,
+				"input": 0.375,
+				"output": 2.025,
 				"cacheRead": 0.09,
 				"cacheWrite": 0
 			},
@@ -56689,13 +56779,13 @@
 				"image"
 			],
 			"cost": {
-				"input": 0.67,
-				"output": 3.39,
-				"cacheRead": 0.14,
+				"input": 0.6799999999999999,
+				"output": 3.41,
+				"cacheRead": 0.33999999999999997,
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 262144,
+			"maxTokens": 262142,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -56725,6 +56815,35 @@
 			},
 			"contextWindow": 262144,
 			"maxTokens": 8888,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high"
+				]
+			}
+		},
+		"moonshotai/kimi-k2.7-code": {
+			"id": "moonshotai/kimi-k2.7-code",
+			"name": "Kimi K2.7 Code",
+			"api": "openai-completions",
+			"provider": "openrouter",
+			"baseUrl": "https://openrouter.ai/api/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.95,
+				"output": 4,
+				"cacheRead": 0.19,
+				"cacheWrite": 0
+			},
+			"contextWindow": 262144,
+			"maxTokens": 262144,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -60077,13 +60196,13 @@
 				"image"
 			],
 			"cost": {
-				"input": 0.28900000000000003,
-				"output": 2.4,
+				"input": 0.28850000000000003,
+				"output": 3.17,
 				"cacheRead": 0.15,
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 131072,
+			"maxTokens": 262140,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -61792,6 +61911,25 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 191488,
+			"maxTokens": 8192
+		},
+		"hf:MiniMaxAI/MiniMax-M3": {
+			"id": "hf:MiniMaxAI/MiniMax-M3",
+			"name": "MiniMaxAI/MiniMax-M3",
+			"api": "openai-completions",
+			"provider": "synthetic",
+			"baseUrl": "https://api.synthetic.new/openai/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 524288,
 			"maxTokens": 8192
 		},
 		"hf:moonshotai/Kimi-K2-Instruct-0905": {
@@ -63939,7 +64077,7 @@
 		},
 		"minimax-m3": {
 			"id": "minimax-m3",
-			"name": "MiniMax M3",
+			"name": "MiniMax M3 (3x usage)",
 			"api": "openai-completions",
 			"provider": "venice",
 			"baseUrl": "https://api.venice.ai/api/v1",
@@ -63966,6 +64104,28 @@
 					"xhigh"
 				]
 			},
+			"compat": {
+				"supportsUsageInStreaming": false
+			}
+		},
+		"minimax-m3-preview": {
+			"id": "minimax-m3-preview",
+			"name": "minimax-m3-preview",
+			"api": "openai-completions",
+			"provider": "venice",
+			"baseUrl": "https://api.venice.ai/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888,
 			"compat": {
 				"supportsUsageInStreaming": false
 			}
@@ -67740,6 +67900,36 @@
 			},
 			"contextWindow": 262000,
 			"maxTokens": 262000,
+			"thinking": {
+				"mode": "budget",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				]
+			}
+		},
+		"moonshotai/kimi-k2.7-code": {
+			"id": "moonshotai/kimi-k2.7-code",
+			"name": "Kimi K2.7 Code",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.95,
+				"output": 4,
+				"cacheRead": 0.19,
+				"cacheWrite": 0
+			},
+			"contextWindow": 256000,
+			"maxTokens": 32768,
 			"thinking": {
 				"mode": "budget",
 				"efforts": [
@@ -73937,6 +74127,66 @@
 			},
 			"contextWindow": 262140,
 			"maxTokens": 262140,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				]
+			}
+		},
+		"moonshotai/kimi-k2.7-code": {
+			"id": "moonshotai/kimi-k2.7-code",
+			"name": "Kimi K2.7 Code",
+			"api": "openai-completions",
+			"provider": "zenmux",
+			"baseUrl": "https://zenmux.ai/api/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.95,
+				"output": 4,
+				"cacheRead": 0.16,
+				"cacheWrite": 0
+			},
+			"contextWindow": 262144,
+			"maxTokens": 262144,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				]
+			}
+		},
+		"moonshotai/kimi-k2.7-code-free": {
+			"id": "moonshotai/kimi-k2.7-code-free",
+			"name": "Kimi K2.7 Code (Free)",
+			"api": "openai-completions",
+			"provider": "zenmux",
+			"baseUrl": "https://zenmux.ai/api/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 262144,
+			"maxTokens": 262144,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
