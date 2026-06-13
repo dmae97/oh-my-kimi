@@ -55,6 +55,7 @@ function createContext(): {
 		abort: Spy;
 		abortBash: Spy;
 		abortEval: Spy;
+		abortHandoff: Spy;
 		addMessageToChat: Spy;
 		cancelPendingSubmission: Spy;
 		clearEditor: Spy;
@@ -81,6 +82,7 @@ function createContext(): {
 	const abort = vi.fn();
 	const abortBash = vi.fn();
 	const abortEval = vi.fn();
+	const abortHandoff = vi.fn();
 	const addMessageToChat = vi.fn();
 	const cancelPendingSubmission = vi.fn(() => false);
 	const clearQueue = vi.fn(() => ({ steering: [], followUp: [] }));
@@ -161,7 +163,7 @@ function createContext(): {
 			isGeneratingHandoff: false,
 			isRetrying: false,
 			abortCompaction: vi.fn(),
-			abortHandoff: vi.fn(),
+			abortHandoff,
 			abortRetry: vi.fn(),
 		} as unknown as InteractiveModeContext["viewSession"],
 		sessionManager: {
@@ -212,6 +214,7 @@ function createContext(): {
 			abort,
 			abortBash,
 			abortEval,
+			abortHandoff,
 			addMessageToChat,
 			cancelPendingSubmission,
 			clearQueue,
@@ -319,6 +322,19 @@ describe("InputController escape behavior", () => {
 		// The Esc interrupt threads a user-facing reason so the aborted turn and its
 		// synthetic tool results read as a deliberate interrupt, not "Request was aborted".
 		expect(spies.abort).toHaveBeenCalledWith({ reason: USER_INTERRUPT_LABEL });
+	});
+
+	it("aborts active handoff generation before default Esc handling", () => {
+		const { ctx, editor, spies } = createContext();
+		(ctx.viewSession as { isGeneratingHandoff: boolean }).isGeneratingHandoff = true;
+		const controller = new InputController(ctx);
+
+		controller.setupKeyHandlers();
+		editor.onEscape?.();
+
+		expect(spies.abortHandoff).toHaveBeenCalledTimes(1);
+		expect(ctx.showTreeSelector).not.toHaveBeenCalled();
+		expect(spies.abort).not.toHaveBeenCalled();
 	});
 
 	it("prefers aborting bash before aborting an overlapping stream", () => {
