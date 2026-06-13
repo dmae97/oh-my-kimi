@@ -128,6 +128,10 @@
 - Fixed empty-Enter steering interrupts leaving the newest queued steer visible after aborting an auto-continued queued turn; queued turns now re-drain after every abort/settle cycle.
 - Added an agent-visible notice when the write tool auto-marks shebang files executable, so agents do not redundantly run `chmod +x`.
 
+### Added
+
+- Added RPC prompt lifecycle hints so hosts can distinguish scheduled agent turns from local-only slash commands via `data.agentInvoked` and `prompt_result`.
+
 ## [15.12.4] - 2026-06-13
 
 ### Breaking Changes
