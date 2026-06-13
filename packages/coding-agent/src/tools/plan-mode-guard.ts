@@ -30,13 +30,21 @@ function isWithinRoot(absolutePath: string, root: string): boolean {
 	return absolutePath.startsWith(sep);
 }
 
+/** Strip the hashline wrapper from an edit section header before sandbox checks. */
+function unwrapHashlineHeaderPath(targetPath: string): string {
+	if (targetPath.length >= 2 && targetPath[0] === "[" && targetPath[targetPath.length - 1] === "]") {
+		return targetPath.slice(1, -1);
+	}
+	return targetPath;
+}
+
 /** True when `targetPath` addresses the session-local artifact sandbox.
- *  Accepts both `local://…` URLs and absolute paths pointing inside the
- *  resolved sandbox root — the latter is what `read local://…` echoes back
- *  in the `[path#tag]` header. Those files are not part of the working tree,
- *  so plan mode treats them as freely writable scratch/plan space. */
+ *  Accepts `local://…` URLs, absolute paths pointing inside the resolved
+ *  sandbox root, and bracketed hashline headers carrying those paths. Those
+ *  files are not part of the working tree, so plan mode treats them as freely
+ *  writable scratch/plan space. */
 function targetsLocalSandbox(session: ToolSession, targetPath: string): boolean {
-	const normalized = normalizeLocalScheme(targetPath);
+	const normalized = normalizeLocalScheme(unwrapHashlineHeaderPath(targetPath));
 	if (normalized.startsWith(LOCAL_SCHEME_PREFIX)) return true;
 	if (!path.isAbsolute(normalized)) return false;
 	const root = localSandboxRoot(session);

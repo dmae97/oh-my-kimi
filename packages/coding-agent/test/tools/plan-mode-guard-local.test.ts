@@ -104,9 +104,22 @@ describe("enforcePlanModeWrite accepts absolute local-sandbox paths", () => {
 		expect(() => enforcePlanModeWrite(session, absolute, { op: "update" })).not.toThrow();
 	});
 
-	it("still rejects an absolute path outside the local sandbox", () => {
+	it("allows bracketed hashline headers for local sandbox paths", async () => {
+		const artifactsDir = await fs.mkdtemp(path.join(os.tmpdir(), "plan-guard-test-"));
+		const session = makeSession({ artifactsDir, planMode });
+		const absolute = resolvePlanPath(session, "local://my-plan.md");
+
+		expect(() => enforcePlanModeWrite(session, `[${absolute}#ABCD]`, { op: "update" })).not.toThrow();
+		expect(() => enforcePlanModeWrite(session, `[${absolute}#ABCD:1-2]`, { op: "update" })).not.toThrow();
+	});
+
+	it("still rejects absolute paths outside the local sandbox", () => {
 		const session = makeSession({ artifactsDir: "/tmp/agent-artifacts", cwd: "/repo", planMode });
+
 		expect(() => enforcePlanModeWrite(session, "/repo/src/foo.ts", { op: "update" })).toThrow(
+			/working tree is read-only/,
+		);
+		expect(() => enforcePlanModeWrite(session, "[/repo/src/foo.ts#ABCD]", { op: "update" })).toThrow(
 			/working tree is read-only/,
 		);
 	});
