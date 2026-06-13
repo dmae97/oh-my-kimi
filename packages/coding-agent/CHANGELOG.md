@@ -1,21 +1,15 @@
 # Changelog
 
 ## [Unreleased]
+### Changed
+
+- Terminal resize now repaints only the viewport while a drag is in flight and defers the full transcript replay until the drag settles. Outside a multiplexer, every SIGWINCH used to erase and replay the entire transcript at the new width — re-laying-out (and, for markdown, re-lexing) all of history on each event, work thrown away the instant the next event arrived and re-done dozens of times a second during a drag. The TUI now composes and paints only the visible tail mid-drag — a new `ViewportTailProvider` fast path that the transcript implements by rendering blocks bottom-up and skipping everything above the fold, touching no commit/scrollback state — then runs the single authoritative rewrap + native-scrollback rebuild ~120 ms after the last resize event.
 
 ### Fixed
 
 - Updated `docs/models.md` and `docs/providers.md` to reference the `omp models` subcommand (and `omp models canonical` / `omp models find`) instead of the removed top-level `--list-models` flag ([#2458](https://github.com/can1357/oh-my-pi/issues/2458))
-
-### Fixed
-
 - Fixed unknown `--`-prefixed flags being silently consumed as prompt text, which let a stale or typoed flag start a real agent session (connecting to MCP servers, waiting on the model) instead of failing fast. `parseArgs` now tracks unrecognized flag-shaped tokens and `runRootCommand` calls `reportUnrecognizedFlags` immediately after the post-extension reparse, exiting `2` with `Error: unknown flag: --…` before any session, MCP, or initial-message work runs. Extension-registered flags still pass cleanly since the validation runs after the extension-aware reparse ([#2459](https://github.com/can1357/oh-my-pi/issues/2459)).
-
-### Fixed
-
 - Fixed prompt templates discovered from `cwd/.omp/prompts/` and the agent prompts directory not appearing in the slash-command autocomplete picker. `InteractiveMode.refreshSlashCommandState()` now feeds `session.promptTemplates` into the autocomplete provider alongside builtins and file-based slash commands; templates whose names collide with an existing command are skipped to mirror the runtime expansion order (`expandSlashCommand` precedes `expandPromptTemplate`) ([#2462](https://github.com/can1357/oh-my-pi/issues/2462)).
-
-### Fixed
-
 - Fixed empty-Enter steering interrupts leaving the newest queued steer visible after aborting an auto-continued queued turn; queued turns now re-drain after every abort/settle cycle.
 - Added an agent-visible notice when the write tool auto-marks shebang files executable, so agents do not redundantly run `chmod +x`.
 

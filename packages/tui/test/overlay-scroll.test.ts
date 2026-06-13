@@ -110,6 +110,15 @@ async function flushRender(term: VirtualTerminal): Promise<void> {
 	await term.flush();
 }
 
+// A non-multiplexer resize paints the viewport immediately and defers the
+// authoritative full replay (the native-scrollback rebuild) until the drag has
+// been quiet for the resize settle window (120 ms). Integration test against the
+// real render scheduler, so the window is driven with a real delay.
+async function settleResize(term: VirtualTerminal): Promise<void> {
+	await Bun.sleep(160);
+	await flushRender(term);
+}
+
 describe("TUI overlays", () => {
 	it("does not scroll the terminal when an overlay is shown with a large historical working area", async () => {
 		const term = new VirtualTerminal(80, 24);
@@ -383,7 +392,7 @@ describe("TUI overlays", () => {
 			expect(term.getScrollBuffer().join("\n").includes("wide-row-0")).toBeTruthy();
 
 			term.resize(20, 4);
-			await flushRender(term);
+			await settleResize(term);
 
 			const scrollback = term.getScrollBuffer().join("\n");
 			expect(scrollback.includes("narrow-row-0")).toBeTruthy();
@@ -408,6 +417,9 @@ describe("TUI overlays", () => {
 				term.resize(40, count % 2 === 0 ? 4 : 5);
 				await flushRender(term);
 			}
+			// The drag only painted the viewport; let the settle window elapse so
+			// the authoritative rebuild commits the overflow into native scrollback.
+			await settleResize(term);
 
 			const scrollbackLines = term.getScrollBuffer().map(line => line.trim());
 			expect(scrollbackLines).toContain("row-0");

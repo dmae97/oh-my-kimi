@@ -53,6 +53,15 @@ async function settle(term: VirtualTerminal): Promise<void> {
 	await term.flush();
 }
 
+// A non-multiplexer resize paints the viewport immediately (plain rows) and
+// defers the authoritative full paint — which is where DECCARA rectangle fills
+// are planned — until the drag has been quiet for the resize settle window
+// (120 ms). Integration test against the real scheduler, so wait it out.
+async function settleResize(term: VirtualTerminal): Promise<void> {
+	await Bun.sleep(160);
+	await settle(term);
+}
+
 function captureWrites(term: VirtualTerminal): string[] {
 	const writes: string[] = [];
 	const realWrite = term.write.bind(term);
@@ -499,8 +508,8 @@ describe("TUI DECCARA integration", () => {
 			await settle(term);
 
 			const writes = captureWrites(term);
-			term.resize(40, 10); // height change, content unchanged -> viewportRepaint
-			await settle(term);
+			term.resize(40, 10); // height change, content unchanged
+			await settleResize(term); // DECCARA fills land on the deferred full paint
 			const out = writes.join("");
 
 			expect(out).toContain(DECSACE_RECT);

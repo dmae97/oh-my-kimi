@@ -71,6 +71,18 @@ async function settle(term: VirtualTerminal): Promise<void> {
 	await term.flush();
 }
 
+// Pad the non-multiplexer resize viewport settle window (120 ms) so the test
+// reliably observes the deferred authoritative full paint. These are
+// integration tests against the real render scheduler (process.nextTick
+// immediates interleaved with setTimeout debounces), so the settle window is
+// driven with a real delay rather than fake timers.
+const RESIZE_VIEWPORT_SETTLE_WAIT_MS = 160;
+
+async function settleResize(term: VirtualTerminal): Promise<void> {
+	await Bun.sleep(RESIZE_VIEWPORT_SETTLE_WAIT_MS);
+	await settle(term);
+}
+
 function captureWrites(term: VirtualTerminal): string[] {
 	const writes: string[] = [];
 	const realWrite = term.write.bind(term);
@@ -142,7 +154,7 @@ describe("issue #2088: tmux pane-resize race produces viewport flash", () => {
 		});
 	});
 
-	it("renders immediately on resize outside a multiplexer", async () => {
+	it("paints the viewport immediately on resize outside a multiplexer, then replays on settle", async () => {
 		await withEnvPatch(NO_MULTIPLEXER_ENV, async () => {
 			const term = new VirtualTerminal(40, 10, 1000);
 			const tui = new TUI(term);
@@ -153,10 +165,21 @@ describe("issue #2088: tmux pane-resize race produces viewport flash", () => {
 				await settle(term);
 
 				const baselineRedraws = tui.fullRedraws;
+				const baselinePaints = tui.resizeViewportPaints;
+				const expectedViewport = Array.from({ length: 10 }, (_v, i) => `line-${i + 10}`);
 				term.resize(80, 10);
 				await settle(term);
+
+				// In flight: a cheap viewport-only paint lands at once (no native
+				// scrollback replay), and the authoritative full paint is deferred.
+				expect(tui.resizeViewportPaints).toBeGreaterThan(baselinePaints);
+				expect(tui.fullRedraws).toBe(baselineRedraws);
+				expect(visible(term)).toEqual(expectedViewport);
+
+				// Once the drag goes quiet the full replay fires exactly once.
+				await settleResize(term);
 				expect(tui.fullRedraws).toBeGreaterThan(baselineRedraws);
-				expect(visible(term)).toEqual(Array.from({ length: 10 }, (_v, i) => `line-${i + 10}`));
+				expect(visible(term)).toEqual(expectedViewport);
 			} finally {
 				tui.stop();
 			}

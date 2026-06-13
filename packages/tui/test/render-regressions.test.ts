@@ -129,6 +129,16 @@ async function settle(term: VirtualTerminal): Promise<void> {
 	await term.flush();
 }
 
+// Outside a multiplexer a resize paints the viewport immediately and defers the
+// authoritative full replay (rewrap + ED3 + history rebuild) until the drag has
+// been quiet for the resize settle window (120 ms). Tests asserting the settled
+// end state wait past that window. These are integration tests against the real
+// render scheduler, so the window is driven with a real delay, not fake timers.
+async function settleResize(term: VirtualTerminal): Promise<void> {
+	await Bun.sleep(160);
+	await settle(term);
+}
+
 function captureWrites(term: VirtualTerminal): string[] {
 	const writes: string[] = [];
 	const realWrite = term.write.bind(term);
@@ -509,7 +519,7 @@ describe("TUI terminal-state regressions", () => {
 				await settle(term);
 
 				term.resize(49, 5);
-				await settle(term);
+				await settleResize(term);
 
 				const buffer = term.getScrollBuffer().join("\n");
 				expect(buffer.includes("shell-")).toBeFalsy();
@@ -589,7 +599,7 @@ describe("TUI terminal-state regressions", () => {
 						expect(narrow).toContain(`L0:${"x".repeat(17)}`);
 
 						term.resize(40, 4);
-						await settle(term);
+						await settleResize(term);
 
 						const wide = term.getScrollBuffer().map(line => line.trimEnd());
 						// The resize rewraps history at the new width; the narrow fragment is gone.
@@ -647,7 +657,7 @@ describe("TUI terminal-state regressions", () => {
 				await settle(term);
 				component.setLines(["A".repeat(20), "B".repeat(20), "C".repeat(20)]);
 				tui.requestRender();
-				await settle(term);
+				await settleResize(term);
 
 				expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual([
 					"AAAAAAAAAA",
@@ -1169,7 +1179,7 @@ describe("TUI terminal-state regressions", () => {
 				const final = [...lines, "stream-0", "tail-0", "tail-1", "tail-2"];
 				component.setLines(final);
 				tui.requestRender();
-				await settle(term);
+				await settleResize(term);
 
 				// Scrolling back must show exactly the transcript: no phantom blank
 				// row, no offset rows, no duplicates.
@@ -1240,7 +1250,7 @@ describe("TUI terminal-state regressions", () => {
 					const final = [...lines, "row-12"];
 					component.setLines(final);
 					tui.requestRender();
-					await settle(term);
+					await settleResize(term);
 
 					expect(visible(term)).toEqual(final.slice(7));
 					expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual(final);
@@ -1593,6 +1603,9 @@ describe("TUI terminal-state regressions", () => {
 					tui.requestRender();
 					await settle(term);
 				}
+				// The aggressive drag only ever painted the viewport; let the settle
+				// window elapse so the authoritative rebuild commits the full history.
+				await settleResize(term);
 
 				const scrollback = term.getScrollBuffer();
 				const duplicated: number[] = [];
@@ -1631,7 +1644,7 @@ describe("TUI terminal-state regressions", () => {
 
 				// User sits at the bottom (not scrolled) and narrows the terminal.
 				term.resize(28, 5);
-				await settle(term);
+				await settleResize(term);
 
 				const scrollback = term.getScrollBuffer();
 				for (let i = 0; i < 12; i++) {
@@ -1657,7 +1670,7 @@ describe("TUI terminal-state regressions", () => {
 
 				component.setLines(rows("line-", 8));
 				term.resize(28, 5);
-				await settle(term);
+				await settleResize(term);
 
 				// A resize is a clean reset: history is rebuilt in place at the new
 				// geometry instead of deferring to keep the reader scrolled. Each line
@@ -3069,7 +3082,7 @@ describe("TUI terminal-state regressions", () => {
 
 				// Grow the terminal so it has more rows than the rendered content.
 				term.resize(40, 20);
-				await settle(term);
+				await settleResize(term);
 
 				// Regression: the cursor must follow the marker, not the bottom
 				// of the now-taller viewport.
@@ -4239,6 +4252,9 @@ describe("foreground-tool streaming on ED3-risk terminals", () => {
 				tui.requestRender();
 				await settle(term);
 			}
+			// Each drag step only repainted the viewport; let the settle window
+			// elapse so the authoritative rebuild collapses history to one copy.
+			await settleResize(term);
 			const scrollback = term.getScrollBuffer();
 			for (let i = 0; i < body.length; i++) {
 				expect(
