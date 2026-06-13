@@ -66,6 +66,28 @@ describe("AssistantMessageComponent mermaid markdown", () => {
 		expect(rendered).not.toContain("flowchart TD");
 	});
 
+	it("aligns box borders for CJK labels in display columns", () => {
+		// Defends the beautiful-mermaid patchedDependencies entry: Hangul is 2
+		// terminal columns wide, so every row of a single-node diagram must
+		// measure the same display width or the right border drifts.
+		const rendered = renderAssistantMessage("```mermaid\nflowchart TD\n  A[수집 스케줄러]\n```");
+		const displayCols = (line: string): number => {
+			let width = 0;
+			for (const ch of line) {
+				const code = ch.codePointAt(0) ?? 0;
+				const wide =
+					(code >= 0xac00 && code <= 0xd7a3) || // Hangul syllables
+					(code >= 0x2e80 && code <= 0x9fff) || // CJK radicals/ideographs
+					(code >= 0xff00 && code <= 0xff60); // fullwidth forms
+				width += wide ? 2 : 1;
+			}
+			return width;
+		};
+		const boxRows = rendered.split("\n").filter(line => /[┌│└]/.test(line));
+		expect(boxRows.length).toBeGreaterThanOrEqual(3);
+		expect(new Set(boxRows.map(displayCols)).size).toBe(1);
+	});
+
 	it("falls back to the fenced code block when Mermaid rendering fails", () => {
 		const rendered = renderAssistantMessage("```mermaid\nthis is not mermaid\n```");
 
