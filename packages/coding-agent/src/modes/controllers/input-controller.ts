@@ -747,6 +747,18 @@ export class InputController {
 			this.ctx.clearEditor();
 			this.ctx.lastSigintTime = now;
 		}
+		// Sync-flush the session JSONL so in-flight writes survive a hard exit.
+		// The TUI consumes Ctrl+C as a key event in raw mode, so postmortem's
+		// process-level SIGINT handler never fires. The second press still
+		// funnels through shutdown() which awaits its own async flush — the
+		// sync flush here is a superset that also covers the first-press case.
+		try {
+			this.ctx.sessionManager.flushSync();
+		} catch (err) {
+			logger.warn("session-manager sync flush on Ctrl+C failed", {
+				error: err instanceof Error ? err.message : String(err),
+			});
+		}
 	}
 
 	handleCtrlD(): void {
