@@ -14,6 +14,7 @@ import {
 	semverEqual,
 } from "../src/identity/classify";
 import { buildCanonicalModelIndex, buildCanonicalReferenceData } from "../src/identity/equivalence";
+import { isMimoModelIdOrName } from "../src/identity/family";
 import { getLongestModelLikeIdSegment } from "../src/identity/id";
 import { buildModelReferenceIndex, resolveModelReference } from "../src/identity/reference";
 import { resolveModelThinking } from "../src/model-thinking";
@@ -203,6 +204,12 @@ function applyGeneratedModelPolicy(model: ModelSpec<Api>): void {
 			reasoningContentField: "reasoning_content",
 		};
 		delete model.compat.thinkingFormat;
+	}
+	if (model.api === "openai-completions" && model.provider === "opencode-go" && isMimoModelIdOrName(model.id)) {
+		model.compat = {
+			...(model.compat ?? {}),
+			supportsToolChoice: false,
+		};
 	}
 	if (
 		model.api === "openai-completions" &&

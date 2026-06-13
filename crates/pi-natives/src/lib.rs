@@ -53,7 +53,9 @@ pub mod tokens;
 pub(crate) mod utils;
 pub mod workspace;
 
+use napi::bindgen_prelude::create_custom_tokio_runtime;
 use napi_derive::{module_init, napi};
+use tokio::runtime::{Builder, Runtime};
 
 /// Version sentinel — exists solely so the JS loader can prove at load time
 /// that the `.node` file on disk is from the same package release as the
@@ -74,9 +76,43 @@ use napi_derive::{module_init, napi};
 #[napi(js_name = "__piNativesV15_12_5")]
 pub const fn pi_natives_version_sentinel() {}
 
-/// Native module entry point: install crash diagnostics before any tool can
-/// invoke a panicking or allocating native call. Runs once at `.node` load.
+const NAPI_TOKIO_WORKER_THREADS: usize = 1;
+const NAPI_TOKIO_MAX_BLOCKING_THREADS: usize = 4;
+const NAPI_TOKIO_THREAD_STACK_SIZE: usize = 1024 * 1024;
+
+fn build_napi_tokio_runtime() -> std::io::Result<Runtime> {
+	Builder::new_multi_thread()
+		.enable_all()
+		.worker_threads(NAPI_TOKIO_WORKER_THREADS)
+		.max_blocking_threads(NAPI_TOKIO_MAX_BLOCKING_THREADS)
+		.thread_stack_size(NAPI_TOKIO_THREAD_STACK_SIZE)
+		.thread_name("pi-natives-tokio")
+		.build()
+}
+
+/// Native module entry point: install crash diagnostics and replace napi-rs's
+/// default Tokio runtime before any async export can initialize it.
 #[module_init]
-fn install_native_crash_handler() {
+fn initialize_native_module() {
 	crash_handler::install();
+	create_custom_tokio_runtime(
+		build_napi_tokio_runtime().expect("create pi-natives napi Tokio runtime"),
+	);
+}
+
+#[cfg(test)]
+mod tests {
+	use super::build_napi_tokio_runtime;
+
+	#[test]
+	fn napi_tokio_runtime_drives_async_and_blocking_tasks() {
+		let runtime = build_napi_tokio_runtime().expect("runtime builds");
+		let thread_name = runtime.block_on(async {
+			tokio::task::spawn_blocking(|| std::thread::current().name().map(str::to_owned))
+				.await
+				.expect("blocking task joins")
+		});
+
+		assert_eq!(thread_name.as_deref(), Some("pi-natives-tokio"));
+	}
 }

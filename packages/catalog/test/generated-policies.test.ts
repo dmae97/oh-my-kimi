@@ -161,6 +161,20 @@ describe("generated model policies", () => {
 		expect(models[2]?.maxTokens).toBe(64000);
 	});
 
+	it("marks OpenCode Go MiMo models as not supporting tool_choice", () => {
+		const models: ModelSpec<"openai-completions">[] = [
+			createSpec({
+				id: "mimo-v2.5-pro",
+				api: "openai-completions",
+				provider: "opencode-go",
+			}),
+		];
+
+		applyGeneratedModelPolicies(models);
+
+		expect(models[0]?.compat?.supportsToolChoice).toBe(false);
+	});
+
 	it("links spark variants and gpt-5.5 to their context promotion targets", () => {
 		const models = [
 			createSpec({ id: "gpt-5.3-codex-spark", api: "openai-codex-responses", provider: "openai-codex" }),

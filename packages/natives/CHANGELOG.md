@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `pi-natives` using napi-rs's default multi-worker Tokio runtime on Windows, reducing native worker/thread reservation so low-pagefile machines are less likely to abort while creating the async runtime ([#2509](https://github.com/can1357/oh-my-pi/issues/2509)).
+
 ## [15.12.4] - 2026-06-13
 
 ### Fixed
