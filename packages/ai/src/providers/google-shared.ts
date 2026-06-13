@@ -372,7 +372,7 @@ export function convertTools(
 				description: tool.description || "",
 				...(useParameters
 					? { parameters: normalizeSchemaForCCA(toolWireSchema(tool)) }
-					: { parametersJsonSchema: toolWireSchema(tool) }),
+					: { parametersJsonSchema: normalizeSchemaForGoogle(toolWireSchema(tool)) }),
 			})),
 		},
 	];
