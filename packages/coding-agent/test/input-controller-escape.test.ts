@@ -111,6 +111,21 @@ function createContext(): {
 		setCustomKeyHandler: vi.fn(),
 		clearCustomKeyHandlers: vi.fn(),
 	};
+	const session = {
+		isStreaming: false,
+		isCompacting: false,
+		isGeneratingHandoff: false,
+		isBashRunning: false,
+		isEvalRunning: false,
+		queuedMessageCount: 0,
+		messages: [],
+		extensionRunner: undefined,
+		abort,
+		abortBash,
+		abortEval,
+		clearQueue,
+		prompt,
+	};
 
 	let ctx!: InteractiveModeContext;
 	const ensureLoadingAnimation = vi.fn(() => {
@@ -133,21 +148,8 @@ function createContext(): {
 		retryLoader: undefined,
 		autoCompactionEscapeHandler: undefined,
 		retryEscapeHandler: undefined,
-		session: {
-			isStreaming: false,
-			isCompacting: false,
-			isGeneratingHandoff: false,
-			isBashRunning: false,
-			isEvalRunning: false,
-			queuedMessageCount: 0,
-			messages: [],
-			extensionRunner: undefined,
-			abort,
-			abortBash,
-			abortEval,
-			clearQueue,
-			prompt,
-		} as unknown as InteractiveModeContext["session"],
+		session: session as unknown as InteractiveModeContext["session"],
+		viewSession: session as unknown as InteractiveModeContext["viewSession"],
 		sessionManager: {
 			getSessionName: () => "existing session",
 		} as unknown as InteractiveModeContext["sessionManager"],

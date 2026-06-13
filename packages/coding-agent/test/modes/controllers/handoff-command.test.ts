@@ -65,9 +65,8 @@ describe("/handoff command", () => {
 		await handoffStarted.promise;
 
 		expect(statusContainer.children).toHaveLength(1);
-		expect(ctx.editor.onEscape).not.toBe(originalOnEscape);
-		ctx.editor.onEscape?.();
-		expect(abortHandoff).toHaveBeenCalledTimes(1);
+		expect(ctx.editor.onEscape).toBe(originalOnEscape);
+		expect(abortHandoff).not.toHaveBeenCalled();
 
 		handoffDone.resolve({ document: "## Goal\nContinue" });
 		await commandPromise;
