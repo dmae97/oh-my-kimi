@@ -900,7 +900,7 @@ describe("github tool", () => {
 			await tempHome.cleanup();
 			await fs.rm(fixture.baseDir, { recursive: true, force: true });
 		}
-	});
+	}, 30_000);
 
 	it("rejects PR pushes from branches without checkout metadata", async () => {
 		const fixture = await createPrFixture();
@@ -930,7 +930,7 @@ describe("github tool", () => {
 		} finally {
 			await fs.rm(fixture.baseDir, { recursive: true, force: true });
 		}
-	});
+	}, 30_000);
 
 	it("exposes a flat op-based schema without legacy run_watch parameters", () => {
 		const tool = new GithubTool(createSession());

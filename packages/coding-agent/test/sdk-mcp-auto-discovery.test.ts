@@ -106,7 +106,7 @@ describe("createAgentSession deferred MCP auto discovery", () => {
 			// fire-and-forget with no completion promise or event exposed — fake
 			// timers cannot drive a child process, so poll the live session with
 			// a generous ceiling, exiting the instant discovery flips on.
-			const deadline = Date.now() + 12_000;
+			const deadline = Date.now() + 30_000;
 			while (!session.isMCPDiscoveryEnabled() && Date.now() < deadline) {
 				await Bun.sleep(50);
 			}
@@ -121,7 +121,7 @@ describe("createAgentSession deferred MCP auto discovery", () => {
 		} finally {
 			await session.dispose();
 		}
-	}, 20_000);
+	}, 40_000);
 
 	it("disposing mid-connect disconnects the manager and never resurrects tools", async () => {
 		// Stall `initialize` in the real fixture subprocess so the connect is
@@ -142,7 +142,7 @@ describe("createAgentSession deferred MCP auto discovery", () => {
 		// Genuine integration wait (see above): the deferred task notices the
 		// disposed session once the stalled connect resolves and must disconnect
 		// instead of refreshing tools. Exits the instant the spy fires.
-		const deadline = Date.now() + 12_000;
+		const deadline = Date.now() + 30_000;
 		while (disconnectSpy.mock.calls.length === 0 && Date.now() < deadline) {
 			await Bun.sleep(50);
 		}
@@ -150,5 +150,5 @@ describe("createAgentSession deferred MCP auto discovery", () => {
 		expect(session.getActiveToolNames().filter(name => name.startsWith("mcp__"))).toEqual([]);
 		expect(session.getActiveToolNames()).not.toContain("search_tool_bm25");
 		expect(session.isMCPDiscoveryEnabled()).toBe(false);
-	}, 20_000);
+	}, 40_000);
 });

@@ -369,6 +369,17 @@ export async function discoverLlamaCppModels(
 	return discovered;
 }
 
+function readPositiveInteger(value: unknown): number | undefined {
+	if (typeof value === "number") {
+		return Number.isSafeInteger(value) && value > 0 ? value : undefined;
+	}
+	if (typeof value === "string" && value.trim()) {
+		const parsed = Number(value);
+		return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+	}
+	return undefined;
+}
+
 export async function discoverOpenAIModelsList(
 	providerConfig: DiscoveryProviderConfig,
 	ctx: DiscoveryContext,
@@ -393,12 +404,16 @@ export async function discoverOpenAIModelsList(
 	const response = apiKey
 		? await withAuth(apiKey, key => attempt({ ...baseHeaders, Authorization: `Bearer ${key}` }))
 		: await attempt(baseHeaders);
-	const payload = (await response.json()) as { data?: Array<{ id: string }> };
+	const payload = (await response.json()) as {
+		data?: Array<{ id?: string; max_model_len?: unknown; context_length?: unknown }>;
+	};
 	const models = payload.data ?? [];
 	const discovered: Model<Api>[] = [];
 	for (const item of models) {
 		const id = item.id;
 		if (!id) continue;
+		const contextWindow =
+			readPositiveInteger(item.max_model_len) ?? readPositiveInteger(item.context_length) ?? 128000;
 		discovered.push(
 			buildModel({
 				id,
@@ -409,8 +424,8 @@ export async function discoverOpenAIModelsList(
 				reasoning: false,
 				input: ["text"],
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-				contextWindow: 128000,
-				maxTokens: discoveryDefaultMaxTokens(providerConfig.api),
+				contextWindow,
+				maxTokens: Math.min(contextWindow, discoveryDefaultMaxTokens(providerConfig.api)),
 				headers,
 				compat: {
 					supportsStore: false,

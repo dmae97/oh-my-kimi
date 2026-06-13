@@ -271,6 +271,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 			slashCommands: [],
 			enableMCP: false,
 			enableLsp: false,
+			skipPythonPreflight: true,
 		});
 
 		try {
