@@ -2805,13 +2805,16 @@ export class TUI extends Container {
 	 */
 	#renderResizeViewport(width: number, height: number): void {
 		if (width <= 0 || height <= 0) return;
-		// Tail renders call block.render(), which can push image ids onto the
-		// budget's in-flight pass. Reset the pass each frame so a long drag does
+		// Tail renders call block.render(), which observes inline images on the
+		// budget. This is a STABLE (partial) pass: the tail walk is bottom-up and
+		// sees only the visible subset, so display-order-by-call-order is wrong
+		// here — `beginPass(true)` makes observe() replay the last committed
+		// live/text split per image id instead, so images keep their on-screen
+		// state through the drag. Reset the pass each frame so a long drag does
 		// not accumulate; never endPass() here — that mutates the demotion ledger
-		// off a partial (tail-only) walk. The settle paint's own
-		// beginPass()/endPass() is the authoritative accounting, and its
-		// beginPass() wipes whatever these frames observed.
-		this.#imageBudget.beginPass();
+		// off a partial walk. The settle paint's own beginPass()/endPass() is the
+		// authoritative accounting, and its beginPass() wipes these frames.
+		this.#imageBudget.beginPass(true);
 		const { window, contentRows } = this.#composeResizeViewport(width, height);
 		this.#emitResizeViewport(window, height, contentRows);
 		this.#resizeViewportPaintCount += 1;
