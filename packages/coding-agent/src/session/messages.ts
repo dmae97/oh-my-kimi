@@ -40,13 +40,11 @@ export interface SkillPromptDetails {
 	path: string;
 	args?: string;
 	lineCount: number;
-	/** Internal: tag used by AgentSession to remove the pending-display chip
-	 *  from `#steeringMessages` / `#followUpMessages` when the agent consumes
-	 *  this message. Not surfaced to renderers; the `__` prefix signals
-	 *  "private". Optional — non-streaming skill prompts never set it. Stripped
-	 *  from persisted `details` by `SessionManager.appendCustomMessageEntry`
-	 *  via the `INTERNAL_DETAILS_FIELDS` allowlist below. */
-	__pendingDisplayTag?: string;
+	/** Internal: compact label shown for a queued custom message. Optional —
+	 *  non-streaming skill prompts never set it. Stripped from persisted
+	 *  `details` by `SessionManager.appendCustomMessageEntry` via the
+	 *  `INTERNAL_DETAILS_FIELDS` allowlist below. */
+	__queueChipText?: string;
 }
 
 /** Sentinel value for `AssistantMessage.errorMessage` indicating that the abort
@@ -104,12 +102,12 @@ export function resolveAbortLabel(errorMessage: string | undefined, retryAttempt
 	return "Operation aborted";
 }
 
-/** Extract the optional `__pendingDisplayTag` field from a CustomMessage's
+/** Extract the optional `__queueChipText` field from a CustomMessage's
  *  `details` blob. Safe over `unknown`; returns undefined when the field is
  *  absent or non-string. */
-export function readPendingDisplayTag(details: unknown): string | undefined {
+export function readQueueChipText(details: unknown): string | undefined {
 	if (typeof details !== "object" || details === null) return undefined;
-	const candidate = (details as { __pendingDisplayTag?: unknown }).__pendingDisplayTag;
+	const candidate = (details as { __queueChipText?: unknown }).__queueChipText;
 	return typeof candidate === "string" ? candidate : undefined;
 }
 
@@ -118,7 +116,7 @@ export function readPendingDisplayTag(details: unknown): string | undefined {
  *  the CustomMessageEntry to disk. Scoped intentionally narrow: only fields
  *  declared here are stripped. Adding a new entry is a deliberate, reviewed
  *  change — unrelated future payload fields are never silently dropped. */
-export const INTERNAL_DETAILS_FIELDS = ["__pendingDisplayTag"] as const;
+export const INTERNAL_DETAILS_FIELDS = ["__queueChipText"] as const;
 
 /** Return a `details` copy with every key in `INTERNAL_DETAILS_FIELDS`
  *  removed. Returns the input unchanged when there is nothing to strip

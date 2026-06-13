@@ -9,10 +9,10 @@ import { TERMINAL } from "@oh-my-pi/pi-tui";
 /**
  * Models the loader lifecycle InteractiveMode owns: `agent_start` creates the
  * loader via `ensureLoadingAnimation`; `agent_end` stops and drops it. The
- * streaming/resume getters are backed by mutable flags the tests drive directly.
+ * streaming getter is backed by mutable flags the tests drive directly.
  */
 function createContext() {
-	const streamState = { isStreaming: false, isResumingQueuedMessages: false, queuedMessageCount: 0 };
+	const streamState = { isStreaming: false };
 	const loader = { stop: vi.fn() };
 	const ctx = {
 		isInitialized: true,
@@ -38,12 +38,6 @@ function createContext() {
 		session: {
 			get isStreaming() {
 				return streamState.isStreaming;
-			},
-			get isResumingQueuedMessages() {
-				return streamState.isResumingQueuedMessages;
-			},
-			get queuedMessageCount() {
-				return streamState.queuedMessageCount;
 			},
 			getToolByName: () => undefined,
 		},
@@ -82,9 +76,9 @@ describe("EventController superseded agent_end", () => {
 		await controller.handleEvent(AGENT_START);
 		expect(ctx.loadingAnimation).toBeDefined();
 
-		// User interrupt-and-flush of a queued steer: the resumed turn's agent_start
-		// arrives and the agent is streaming again. The interrupted turn's agent_end
-		// is still in flight through the async event pipeline.
+		// User abort of a queued steer: the resumed turn's agent_start arrives and
+		// the agent is streaming again. The interrupted turn's agent_end is still in
+		// flight through the async event pipeline.
 		streamState.isStreaming = true;
 		await controller.handleEvent(AGENT_START);
 
@@ -96,32 +90,6 @@ describe("EventController superseded agent_end", () => {
 		expect(loader.stop).not.toHaveBeenCalled();
 		expect(ctx.loadingAnimation).toBeDefined();
 		expect(TERMINAL.sendNotification).not.toHaveBeenCalled();
-	});
-
-	it("keeps the loader alive while an interrupted queued resume is being armed", async () => {
-		vi.useFakeTimers();
-		const { ctx, streamState, loader } = createContext();
-		const controller = new EventController(ctx);
-
-		await controller.handleEvent(AGENT_START);
-		controller.notifyInterrupting();
-		streamState.isStreaming = false;
-		streamState.isResumingQueuedMessages = true;
-		streamState.queuedMessageCount = 1;
-
-		await controller.handleEvent(AGENT_END);
-		vi.advanceTimersByTime(16);
-
-		expect(loader.stop).not.toHaveBeenCalled();
-		expect(ctx.loadingAnimation).toBeDefined();
-
-		streamState.isStreaming = true;
-		streamState.isResumingQueuedMessages = false;
-		await controller.handleEvent(AGENT_START);
-		vi.advanceTimersByTime(16);
-
-		expect(loader.stop).not.toHaveBeenCalled();
-		expect(ctx.loadingAnimation).toBeDefined();
 	});
 
 	it("tears the loader down on the live turn's own final agent_end", async () => {

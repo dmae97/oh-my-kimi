@@ -17,10 +17,10 @@ import { getSymbolTheme, theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext, TodoPhase } from "../../modes/types";
 import type { PlanApprovalDetails } from "../../plan-mode/approved-plan";
 import type { AgentSessionEvent } from "../../session/agent-session";
-import { isSilentAbort, readPendingDisplayTag, resolveAbortLabel } from "../../session/messages";
+import { isSilentAbort, readQueueChipText, resolveAbortLabel } from "../../session/messages";
 import type { ResolveToolDetails } from "../../tools/resolve";
-import { interruptHint } from "../shared";
 import { hasVisibleThinking } from "../../utils/thinking-display";
+import { interruptHint } from "../shared";
 import { StreamingRevealController } from "./streaming-reveal";
 import { ToolArgsRevealController } from "./tool-args-reveal";
 
@@ -38,16 +38,6 @@ const IRC_MESSAGE_VISIBLE_TTL_MS = 10_000;
  */
 const MAX_LIVE_IRC_CARDS = 4;
 
-/**
- * Loader label shown the instant a user interrupt (Esc) is requested, kept until
- * the agent turn fully unwinds. Esc fires the abort synchronously, but the loop
- * only stops the spinner at `agent_end`, which it cannot reach until every
- * in-flight tool settles its abort in `executeToolCalls` (`Promise.allSettled`).
- * Swapping the steady "Working…" for this acknowledges the keypress instead of
- * reading as an ignored Esc for the seconds a slow tool takes to tear down.
- */
-export const INTERRUPTING_WORKING_MESSAGE = "Interrupting…";
-
 type AgentSessionEventHandlers = {
 	[E in AgentSessionEventKind]: (event: Extract<AgentSessionEvent, { type: E }>) => Promise<void>;
 };
@@ -64,8 +54,6 @@ export class EventController {
 	#renderedCustomMessages = new Set<string>();
 	#lastIntent: string | undefined = undefined;
 	#backgroundToolCallIds = new Set<string>();
-	#agentTurnActive = false;
-	#interrupting = false;
 	#readToolCallArgs = new Map<string, Record<string, unknown>>();
 	#readToolCallAssistantComponents = new Map<string, AssistantMessageComponent>();
 	#lastAssistantComponent: AssistantMessageComponent | undefined = undefined;
@@ -75,7 +63,6 @@ export class EventController {
 	// #handleMessageEnd / #handleAgentStart).
 	#pinnedErrorComponent: AssistantMessageComponent | undefined = undefined;
 	#idleCompactionTimer?: NodeJS.Timeout;
-	#deferredInterruptedEndTimer?: NodeJS.Timeout;
 	#ircExpiryTimers = new Map<string, NodeJS.Timeout>();
 	// Insertion-ordered IRC cards not yet retired; values are the transcript
 	// components each card contributed (see #retireIrcCard for the guard).
@@ -137,7 +124,6 @@ export class EventController {
 		this.#streamingReveal.stop();
 		this.#toolArgsReveal.stop();
 		this.#cancelIdleCompaction();
-		this.#cancelDeferredInterruptedEnd();
 		for (const timer of this.#ircExpiryTimers.values()) {
 			clearTimeout(timer);
 		}
@@ -196,7 +182,7 @@ export class EventController {
 		return true;
 	}
 	#updateWorkingMessageFromIntent(intent: unknown): void {
-		if (this.#interrupting) return;
+		if (this.ctx.session.isAborting) return;
 		// Streamed JSON can deliver non-string `_i` (object, number, boolean) before
 		// schema validation; `?.` only guards null/undefined, so guard the type too.
 		if (typeof intent !== "string") return;
@@ -204,24 +190,6 @@ export class EventController {
 		if (!trimmed || trimmed === this.#lastIntent) return;
 		this.#lastIntent = trimmed;
 		this.ctx.setWorkingMessage(`${trimmed}${interruptHint()}`);
-	}
-
-	/**
-	 * Acknowledge a user interrupt immediately: keep/recreate the loader, switch
-	 * it to `INTERRUPTING_WORKING_MESSAGE`, and freeze intent-driven
-	 * working-message updates for the rest of the turn so a late
-	 * `tool_execution_start` intent cannot repaint a "Working…/<intent>" line
-	 * over the acknowledgment. Reset at the next `agent_start`. No-op outside an
-	 * active turn or if already set.
-	 */
-	notifyInterrupting(): void {
-		if ((!this.#agentTurnActive && !this.ctx.session.isStreaming) || this.#interrupting) return;
-		this.#agentTurnActive = true;
-		this.#interrupting = true;
-		this.#cancelDeferredInterruptedEnd();
-		this.ctx.ensureLoadingAnimation();
-		this.ctx.setWorkingMessage(INTERRUPTING_WORKING_MESSAGE);
-		this.ctx.ui.requestRender();
 	}
 
 	subscribeToAgent(): void {
@@ -241,14 +209,11 @@ export class EventController {
 		this.#renderedCustomMessages.clear();
 		this.#lastIntent = undefined;
 		this.#backgroundToolCallIds.clear();
-		this.#agentTurnActive = false;
-		this.#interrupting = false;
 		this.#readToolCallArgs.clear();
 		this.#readToolCallAssistantComponents.clear();
 		this.#lastAssistantComponent = undefined;
 		this.#pinnedErrorComponent = undefined;
 		this.#cancelIdleCompaction();
-		this.#cancelDeferredInterruptedEnd();
 		for (const timer of this.#ircExpiryTimers.values()) {
 			clearTimeout(timer);
 		}
@@ -273,9 +238,6 @@ export class EventController {
 	}
 
 	async #handleAgentStart(_event: Extract<AgentSessionEvent, { type: "agent_start" }>): Promise<void> {
-		this.#agentTurnActive = true;
-		this.#interrupting = false;
-		this.#cancelDeferredInterruptedEnd();
 		this.#lastIntent = undefined;
 		this.#readToolCallArgs.clear();
 		this.#readToolCallAssistantComponents.clear();
@@ -305,15 +267,10 @@ export class EventController {
 			this.#renderedCustomMessages.add(signature);
 			this.#resetReadGroup();
 			this.ctx.addMessageToChat(event.message);
-			// Tag-keyed pending-bar refresh: when AgentSession.#handleAgentEvent
-			// spliced this dequeued custom message out of #steeringMessages /
-			// #followUpMessages (it ran before this emit), the array state is
-			// already correct — pendingMessagesContainer just needs to be
-			// re-rendered to match. Gated on tag presence so non-queued customs
-			// (ttsr-injection, irc:*, async-result, hookMessage) skip the
-			// rebuild; their dispatch path never registered a pending chip.
-			// Mirrors the user-role refresh at the bottom of this function.
-			if (event.message.role === "custom" && readPendingDisplayTag(event.message.details)) {
+			// Queued custom-message chips are derived from the agent queue; refresh the
+			// pending bar when the queued custom is consumed so the chip disappears
+			// immediately.
+			if (event.message.role === "custom" && readQueueChipText(event.message.details)) {
 				this.ctx.updatePendingMessagesDisplay();
 			}
 			this.ctx.ui.requestRender();
@@ -833,35 +790,17 @@ export class EventController {
 		// this event belongs to a turn that has already been replaced. The session
 		// dispatches to listeners fire-and-forget across an async extension-emit hop
 		// (#emitSessionEvent), so an interrupted turn's agent_end can land AFTER the
-		// resumed turn's agent_start — e.g. empty-Enter interrupt-and-flush of a
-		// queued steer (interruptAndFlushQueuedMessages) or any post-turn
-		// agent.continue(). Running the turn-end teardown now would stop the loader
-		// the live turn just created, leaving "Working…" gone while the agent keeps
-		// running. The live turn owns the loader and finalizes it at its own
-		// agent_end (isStreaming === false by then). Mirrors the collab guest's
-		// !isStreaming loader reconciler.
+		// resumed turn's agent_start (e.g. any post-turn agent.continue()). Running
+		// the turn-end teardown now would stop the loader the live turn just created,
+		// leaving "Working…" gone while the agent keeps running. The live turn owns
+		// the loader and finalizes it at its own agent_end (isStreaming === false by
+		// then). Mirrors the collab guest's !isStreaming loader reconciler.
 		if (this.ctx.session.isStreaming) return;
 
-		// Empty-Enter interrupt-and-flush has one more race: the interrupted turn's
-		// final agent_end can arrive in the short gap after abort teardown but before
-		// the queued continuation calls agent.continue() (and flips isStreaming). Keep
-		// the "Interrupting…" loader alive while AgentSession says a queued resume is
-		// being armed; the deferred reconciler tears it down if no new stream starts.
-		if (
-			this.#interrupting &&
-			(this.ctx.session.isResumingQueuedMessages || this.ctx.session.queuedMessageCount > 0)
-		) {
-			this.#deferInterruptedEndTeardown();
-			return;
-		}
-
-		this.#cancelDeferredInterruptedEnd();
 		await this.#finishAgentEnd();
 	}
 
 	async #finishAgentEnd(): Promise<void> {
-		this.#agentTurnActive = false;
-		this.#interrupting = false;
 		this.#streamingReveal.stop();
 		this.#toolArgsReveal.flushAll();
 		if (this.ctx.loadingAnimation) {
@@ -1061,27 +1000,6 @@ export class EventController {
 
 	async #handleTodoAutoClear(_event: Extract<AgentSessionEvent, { type: "todo_auto_clear" }>): Promise<void> {
 		await this.ctx.reloadTodos();
-	}
-
-	#cancelDeferredInterruptedEnd(): void {
-		if (this.#deferredInterruptedEndTimer) {
-			clearTimeout(this.#deferredInterruptedEndTimer);
-			this.#deferredInterruptedEndTimer = undefined;
-		}
-	}
-
-	#deferInterruptedEndTeardown(): void {
-		if (this.#deferredInterruptedEndTimer) return;
-		this.#deferredInterruptedEndTimer = setTimeout(() => {
-			this.#deferredInterruptedEndTimer = undefined;
-			if (this.ctx.session.isStreaming) return;
-			if (this.ctx.session.isResumingQueuedMessages) {
-				this.#deferInterruptedEndTeardown();
-				return;
-			}
-			void this.#finishAgentEnd();
-		}, 16);
-		this.#deferredInterruptedEndTimer.unref?.();
 	}
 
 	#cancelIdleCompaction(): void {

@@ -3023,10 +3023,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.setWorkingMessage(message);
 	}
 
-	notifyInterrupting(): void {
-		this.#eventController.notifyInterrupting();
-	}
-
 	showNewVersionNotification(newVersion: string): void {
 		this.#uiHelpers.showNewVersionNotification(newVersion);
 	}

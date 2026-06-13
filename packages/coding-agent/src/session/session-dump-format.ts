@@ -5,6 +5,7 @@ import type { AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { INTENT_FIELD } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai";
 import { isZodSchema, zodToWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
+import { getVisibleThinkingText } from "../utils/thinking-display";
 import {
 	type BashExecutionMessage,
 	type BranchSummaryMessage,
@@ -16,7 +17,6 @@ import {
 	type PythonExecutionMessage,
 	pythonExecutionToText,
 } from "./messages";
-import { getVisibleThinkingText } from "../utils/thinking-display";
 
 /** Minimal tool shape for dump output (matches AgentTool fields used by formatSessionDumpText). */
 export interface SessionDumpToolInfo {

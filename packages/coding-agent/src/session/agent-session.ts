@@ -253,7 +253,7 @@ import {
 	type CustomMessage,
 	convertToLlm,
 	type PythonExecutionMessage,
-	readPendingDisplayTag,
+	readQueueChipText,
 	SILENT_ABORT_MARKER,
 	SKILL_PROMPT_MESSAGE_TYPE,
 	stripImagesFromMessage,
@@ -862,17 +862,41 @@ function extractPermissionLocations(
 // AgentSession Class
 // ============================================================================
 
-/** Internal record stored in the steering/followUp display queues. The optional
- *  `tag` is set only by `enqueueCustomMessageDisplay` (used for skill-prompt
- *  custom messages queued during streaming) and is matched by the custom-role
- *  `message_start` dequeue branch; user-message pushes leave it undefined and
- *  rely on the existing text-equality match. `images` carries the original
- *  (pre-normalization) image blocks so queue restoration (Esc / Alt+Up) can
- *  hand them back to the editor instead of dropping them. */
-type QueuedDisplayEntry = { text: string; tag?: string; images?: ImageContent[] };
-
 /** Entry returned by {@link AgentSession.clearQueue} / {@link AgentSession.popLastQueuedMessage}. */
 export type RestoredQueuedMessage = { text: string; images?: ImageContent[] };
+
+function queuedTextContent(message: AgentMessage): string | undefined {
+	if (!("content" in message)) return undefined;
+	const content = message.content;
+	if (typeof content === "string") return content;
+	return content.find((part): part is TextContent => part.type === "text")?.text;
+}
+
+function queuedImageContent(message: AgentMessage): ImageContent[] | undefined {
+	if (!("content" in message) || typeof message.content === "string") return undefined;
+	const images = message.content.filter(
+		(part): part is ImageContent =>
+			part.type === "image" && typeof part.data === "string" && typeof part.mimeType === "string",
+	);
+	return images.length > 0 ? images : undefined;
+}
+
+function isDisplayableQueuedMessage(message: AgentMessage): boolean {
+	return !(message.role === "custom" && message.display === false);
+}
+
+function queueChipText(message: AgentMessage): string {
+	if (message.role === "custom") {
+		return readQueueChipText(message.details) ?? queuedTextContent(message) ?? "";
+	}
+	const text = queuedTextContent(message) ?? "";
+	if (text) return text;
+	return queuedImageContent(message) ? "[Image]" : "";
+}
+
+function toRestoredQueuedMessage(message: AgentMessage): RestoredQueuedMessage {
+	return { text: queueChipText(message), images: queuedImageContent(message) };
+}
 
 export class AgentSession {
 	readonly agent: Agent;
@@ -904,15 +928,6 @@ export class AgentSession {
 	#eventListeners: AgentSessionEventListener[] = [];
 	#commandMetadataChangedListeners: CommandMetadataChangedListener[] = [];
 
-	/** Tracks pending steering messages for UI display. Removed when delivered.
-	 *  Entry shape: `{ text }` for plain-text steers (user-message dequeue
-	 *  matches by `.text`); `{ text, tag }` for queued custom messages (skill
-	 *  invocations dispatched while streaming) — the custom-role dequeue
-	 *  matches by `.tag` so duplicate-args queued skills cannot collide. */
-	#steeringMessages: QueuedDisplayEntry[] = [];
-	/** Tracks pending follow-up messages for UI display. Removed when delivered.
-	 *  See `#steeringMessages` for entry shape. */
-	#followUpMessages: QueuedDisplayEntry[] = [];
 	/** Messages queued to be included with the next user prompt as context ("asides"). */
 	#pendingNextTurnMessages: CustomMessage[] = [];
 	#scheduledHiddenNextTurnGeneration: number | undefined = undefined;
@@ -1058,10 +1073,6 @@ export class AgentSession {
 	 *  without producing an aborted message_end). */
 	#planCompactAbortPending = false;
 
-	/** Monotonic counter for `enqueueCustomMessageDisplay` tag generation;
-	 *  combined with `Date.now()` so tags stay unique even across rapid
-	 *  same-tick enqueues. */
-	#customDisplayTagCounter = 0;
 	#postPromptTasks = new Set<Promise<unknown>>();
 	#postPromptTasksPromise: Promise<void> | undefined = undefined;
 	#postPromptTasksResolve: (() => void) | undefined = undefined;
@@ -1083,8 +1094,6 @@ export class AgentSession {
 	// has decremented #promptInFlightCount, hitting AgentBusyError. Flushed from
 	// both #endInFlight (normal) and #resetInFlight (abort).
 	#pendingAgentEndEmit: AgentSessionEvent | undefined;
-	#resumingQueuedMessages = false;
-	#queuedFlushInterrupt: Promise<void> | undefined;
 	#obfuscator: SecretObfuscator | undefined;
 	#checkpointState: CheckpointState | undefined = undefined;
 	#pendingRewindReport: string | undefined = undefined;
@@ -1473,28 +1482,6 @@ export class AgentSession {
 		this.#planCompactAbortPending = false;
 	}
 
-	/** Register a compact display string for a custom message that the caller is
-	 *  about to dispatch via `promptCustomMessage` / `sendCustomMessage`.
-	 *  Returns a stable tag the caller MUST embed in
-	 *  `CustomMessage.details.__pendingDisplayTag` so the agent-side
-	 *  `message_start` handler can remove the matching display entry when the
-	 *  queued message is consumed.
-	 *
-	 *  Does NOT push to the agent's steering/followUp queue — that happens
-	 *  separately inside `sendCustomMessage`. */
-	enqueueCustomMessageDisplay(text: string, mode: "steer" | "followUp"): string {
-		const tag = `omp-cmd-${Date.now()}-${++this.#customDisplayTagCounter}`;
-		const displayText = text.trim();
-		if (!displayText) return tag;
-		const entry: QueuedDisplayEntry = { text: displayText, tag };
-		if (mode === "steer") {
-			this.#steeringMessages.push(entry);
-		} else {
-			this.#followUpMessages.push(entry);
-		}
-		return tag;
-	}
-
 	getAsyncJobSnapshot(options?: { recentLimit?: number }): AsyncJobSnapshot | null {
 		const manager = this.#asyncJobManager;
 		if (!manager) return null;
@@ -1616,45 +1603,6 @@ export class AgentSession {
 
 	/** Internal handler for agent events - shared by subscribe and reconnect */
 	#handleAgentEvent = async (event: AgentEvent): Promise<void> => {
-		// When a user message starts, check if it's from either queue and remove it BEFORE emitting
-		// This ensures the UI sees the updated queue state
-		if (event.type === "message_start" && event.message.role === "user") {
-			const messageText = this.#getUserMessageText(event.message);
-			if (messageText) {
-				// Check steering queue first (match by .text on tagged records)
-				const steeringIndex = this.#steeringMessages.findIndex(e => e.text === messageText);
-				if (steeringIndex !== -1) {
-					this.#steeringMessages.splice(steeringIndex, 1);
-				} else {
-					// Check follow-up queue
-					const followUpIndex = this.#followUpMessages.findIndex(e => e.text === messageText);
-					if (followUpIndex !== -1) {
-						this.#followUpMessages.splice(followUpIndex, 1);
-					}
-				}
-			}
-		}
-
-		// Tag-based dequeue for custom messages (skills queued via promptCustomMessage).
-		// The InputController attached a stable tag via CustomMessage.details when it
-		// registered the display chip; pull it back here to remove the matching entry
-		// from the pending bar atomically with the agent's queue consumption. Match by
-		// tag (not text) — two queued skills with identical args cannot collide.
-		if (event.type === "message_start" && event.message.role === "custom") {
-			const tag = readPendingDisplayTag(event.message.details);
-			if (tag) {
-				const steerIdx = this.#steeringMessages.findIndex(e => e.tag === tag);
-				if (steerIdx !== -1) {
-					this.#steeringMessages.splice(steerIdx, 1);
-				} else {
-					const followUpIdx = this.#followUpMessages.findIndex(e => e.tag === tag);
-					if (followUpIdx !== -1) {
-						this.#followUpMessages.splice(followUpIdx, 1);
-					}
-				}
-			}
-		}
-
 		// Plan-mode → compaction transition: stamp `SILENT_ABORT_MARKER` on the
 		// persisted message BEFORE the obfuscator's display-side copy below.
 		// Invariant (must hold across refactors): this branch precedes the
@@ -2622,18 +2570,6 @@ export class AgentSession {
 
 		return Array.from(candidates);
 	}
-	/** Extract text content from a message */
-	#getUserMessageText(message: Message): string {
-		if (message.role !== "user") return "";
-		const content = message.content;
-		if (typeof content === "string") return content;
-		const textBlocks = content.filter(c => c.type === "text");
-		const text = textBlocks.map(c => (c as TextContent).text).join("");
-		if (text.length > 0) return text;
-		const hasImages = content.some(c => c.type === "image");
-		return hasImages ? "[Image]" : "";
-	}
-
 	/** Find the last assistant message in agent state (including aborted ones) */
 	#findLastAssistantMessage(): AssistantMessage | undefined {
 		const messages = this.agent.state.messages;
@@ -3342,9 +3278,8 @@ export class AgentSession {
 		return this.agent.state.isStreaming || this.#promptInFlightCount > 0;
 	}
 
-	/** True while an explicit interrupt-and-flush is between aborting the old turn and starting the queued continuation. */
-	get isResumingQueuedMessages(): boolean {
-		return this.#resumingQueuedMessages;
+	get isAborting(): boolean {
+		return this.agent.isAborting;
 	}
 
 	/** Wait until streaming and deferred recovery work are fully settled. */
@@ -4657,9 +4592,9 @@ export class AgentSession {
 				throw new AgentBusyError();
 			}
 			if (options.streamingBehavior === "followUp") {
-				await this.#queueFollowUp(expandedText, options?.images);
+				await this.#queueUserMessage(expandedText, options?.images, "followUp");
 			} else {
-				await this.#queueSteer(expandedText, options?.images);
+				await this.#queueUserMessage(expandedText, options?.images, "steer");
 			}
 			// Steer/follow-up the keyword notices alongside the queued user message.
 			for (const notice of keywordNotices) {
@@ -4710,7 +4645,7 @@ export class AgentSession {
 
 	async promptCustomMessage<T = unknown>(
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution">,
-		options?: Pick<PromptOptions, "streamingBehavior" | "toolChoice">,
+		options?: Pick<PromptOptions, "streamingBehavior" | "toolChoice"> & { queueChipText?: string },
 	): Promise<void> {
 		const textContent =
 			typeof message.content === "string"
@@ -4734,7 +4669,10 @@ export class AgentSession {
 			if (!options?.streamingBehavior) {
 				throw new AgentBusyError();
 			}
-			await this.sendCustomMessage(message, { deliverAs: options.streamingBehavior });
+			await this.sendCustomMessage(message, {
+				deliverAs: options.streamingBehavior,
+				queueChipText: options.queueChipText,
+			});
 			for (const notice of keywordNotices) {
 				await this.sendCustomMessage(notice, { deliverAs: options.streamingBehavior });
 			}
@@ -5071,7 +5009,7 @@ export class AgentSession {
 		}
 
 		const expandedText = expandPromptTemplate(text, [...this.#promptTemplates]);
-		await this.#queueSteer(expandedText, images);
+		await this.#queueUserMessage(expandedText, images, "steer");
 	}
 
 	/**
@@ -5083,73 +5021,47 @@ export class AgentSession {
 		}
 
 		const expandedText = expandPromptTemplate(text, [...this.#promptTemplates]);
-		await this.#queueFollowUp(expandedText, images);
+		await this.#queueUserMessage(expandedText, images, "followUp");
 	}
 
-	/**
-	 * Internal: Queue a steering message (already expanded, no extension command check).
-	 */
-	async #queueSteer(text: string, images?: ImageContent[]): Promise<void> {
+	async #queueUserMessage(
+		text: string,
+		images: ImageContent[] | undefined,
+		mode: "steer" | "followUp",
+	): Promise<void> {
 		const normalizedImages = await this.#normalizeImagesForModel(images);
-		const displayText = text || (images && images.length > 0 ? "[Image]" : "");
-		this.#steeringMessages.push({ text: displayText, images });
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
-		if (normalizedImages && normalizedImages.length > 0) {
+		if (normalizedImages?.length) {
 			content.push(...normalizedImages);
 		}
-		this.agent.steer({
-			role: "user",
-			content,
-			steering: true,
-			attribution: "user",
-			timestamp: Date.now(),
-		});
-		// A steer can land on an idle session: the caller checked isStreaming
-		// before the (potentially slow) image normalization above, so the turn
-		// may have ended in between. Without a drain the message would strand in
-		// the queue until the next manual prompt — schedule an immediate continue,
-		// mirroring #queueFollowUp's idle-path delivery.
-		if (this.#canAutoContinueForFollowUp()) {
-			this.#scheduleAgentContinue({
-				shouldContinue: () => this.#canAutoContinueForFollowUp() && this.agent.hasQueuedMessages(),
+		if (mode === "followUp") {
+			this.agent.followUp({
+				role: "user",
+				content,
+				attribution: "user",
+				timestamp: Date.now(),
+			});
+		} else {
+			this.agent.steer({
+				role: "user",
+				content,
+				steering: true,
+				attribution: "user",
+				timestamp: Date.now(),
 			});
 		}
+		this.#scheduleIdleQueueDrain();
+	}
+
+	#scheduleIdleQueueDrain(): void {
+		if (!this.#canAutoContinueForFollowUp()) return;
+		this.#scheduleAgentContinue({
+			shouldContinue: () => this.#canAutoContinueForFollowUp() && this.agent.hasQueuedMessages(),
+		});
 	}
 
 	/**
-	 * Internal: Queue a follow-up message (already expanded, no extension command check).
-	 */
-	async #queueFollowUp(text: string, images?: ImageContent[]): Promise<void> {
-		const normalizedImages = await this.#normalizeImagesForModel(images);
-		const displayText = text || (images && images.length > 0 ? "[Image]" : "");
-		this.#followUpMessages.push({ text: displayText, images });
-		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
-		if (normalizedImages && normalizedImages.length > 0) {
-			content.push(...normalizedImages);
-		}
-		this.agent.followUp({
-			role: "user",
-			content,
-			attribution: "user",
-			timestamp: Date.now(),
-		});
-		// When fully idle AND the session is in a resumable assistant-ended state,
-		// schedule an immediate continue so the queued follow-up is delivered
-		// without waiting for the next user turn. We gate on isStreaming (model
-		// actively producing), isRetrying (auto-retry backoff is sleeping between
-		// attempts, #retryPromise set), and the last message being assistant —
-		// agent.continue() only dequeues follow-ups from an assistant-ended state;
-		// resuming from user/toolResult state runs an extra model call on the
-		// stale prompt before draining the queue.
-		if (this.#canAutoContinueForFollowUp()) {
-			this.#scheduleAgentContinue({
-				shouldContinue: () => this.#canAutoContinueForFollowUp() && this.agent.hasQueuedMessages(),
-			});
-		}
-	}
-
-	/**
-	 * Gate for idle-path follow-up auto-continue. See `#queueFollowUp` for rationale.
+	 * Gate for idle-path queued-message auto-continue. See `#scheduleIdleQueueDrain` for rationale.
 	 */
 	#canAutoContinueForFollowUp(): boolean {
 		if (this.isStreaming) return false;
@@ -5258,14 +5170,24 @@ export class AgentSession {
 	 */
 	async sendCustomMessage<T = unknown>(
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution">,
-		options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" },
+		options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn"; queueChipText?: string },
 	): Promise<void> {
+		const details =
+			options?.queueChipText && options.deliverAs !== "nextTurn"
+				? ({
+						...((message.details && typeof message.details === "object" ? message.details : {}) as Record<
+							string,
+							unknown
+						>),
+						__queueChipText: options.queueChipText,
+					} as T)
+				: message.details;
 		const appMessage: CustomMessage<T> = {
 			role: "custom",
 			customType: message.customType,
 			content: message.content,
 			display: message.display,
-			details: message.details,
+			details,
 			attribution: message.attribution ?? "agent",
 			timestamp: Date.now(),
 		};
@@ -5281,14 +5203,7 @@ export class AgentSession {
 			} else {
 				this.agent.steer(normalizedAppMessage);
 			}
-			// The isStreaming check above can be stale: image normalization is
-			// awaited, so the turn may have ended in between, leaving the message
-			// queued on an idle agent. Mirror #queueSteer's idle-path delivery.
-			if (this.#canAutoContinueForFollowUp()) {
-				this.#scheduleAgentContinue({
-					shouldContinue: () => this.#canAutoContinueForFollowUp() && this.agent.hasQueuedMessages(),
-				});
-			}
+			this.#scheduleIdleQueueDrain();
 			return;
 		}
 
@@ -5363,11 +5278,11 @@ export class AgentSession {
 		}
 
 		if (options?.deliverAs === "followUp") {
-			await this.#queueFollowUp(text, images);
+			await this.#queueUserMessage(text, images, "followUp");
 			return;
 		}
 		if (options?.deliverAs === "steer") {
-			await this.#queueSteer(text, images);
+			await this.#queueUserMessage(text, images, "steer");
 			return;
 		}
 
@@ -5378,57 +5293,37 @@ export class AgentSession {
 		});
 	}
 
-	/**
-	 * Clear queued messages and return them (text plus any attached images).
-	 * Useful for restoring to editor when user aborts. The internal entry
-	 * arrays are handed out as-is — a `tag` (if any) is inert once the record
-	 * leaves the queue.
-	 */
+	/** Clear queued messages and return them (text plus any attached images). */
 	clearQueue(): { steering: RestoredQueuedMessage[]; followUp: RestoredQueuedMessage[] } {
-		const steering = this.#steeringMessages;
-		const followUp = this.#followUpMessages;
-		this.#steeringMessages = [];
-		this.#followUpMessages = [];
+		const steering = this.agent.peekSteeringQueue().map(toRestoredQueuedMessage);
+		const followUp = this.agent.peekFollowUpQueue().map(toRestoredQueuedMessage);
 		this.agent.clearAllQueues();
 		return { steering, followUp };
 	}
 
-	/** Number of pending messages (includes steering, follow-up, and next-turn messages) */
+	/** Number of pending displayable messages (includes steering, follow-up, and next-turn messages) */
 	get queuedMessageCount(): number {
-		return this.#steeringMessages.length + this.#followUpMessages.length + this.#pendingNextTurnMessages.length;
+		return (
+			this.agent.peekSteeringQueue().filter(isDisplayableQueuedMessage).length +
+			this.agent.peekFollowUpQueue().filter(isDisplayableQueuedMessage).length +
+			this.#pendingNextTurnMessages.length
+		);
 	}
 
-	/** Get pending messages (read-only). Returns the public text-only view;
-	 *  internal `{text, tag?}` records are mapped to `.text` so callers
-	 *  (`updatePendingMessagesDisplay`, `restoreQueuedMessagesToEditor`) see
-	 *  the unchanged historical shape. */
 	getQueuedMessages(): { steering: readonly string[]; followUp: readonly string[] } {
 		return {
-			steering: this.#steeringMessages.map(e => e.text),
-			followUp: this.#followUpMessages.map(e => e.text),
+			steering: this.agent.peekSteeringQueue().filter(isDisplayableQueuedMessage).map(queueChipText),
+			followUp: this.agent.peekFollowUpQueue().filter(isDisplayableQueuedMessage).map(queueChipText),
 		};
 	}
 
 	/**
 	 * Pop the last queued message (steering first, then follow-up).
 	 * Used by dequeue keybinding to restore messages to editor one at a time.
-	 * Returns the popped entry's text and images; the tag (if any) dies with
-	 * the record — no orphan state can outlive the queue entry.
 	 */
 	popLastQueuedMessage(): RestoredQueuedMessage | undefined {
-		// Pop from steering first (LIFO)
-		if (this.#steeringMessages.length > 0) {
-			const entry = this.#steeringMessages.pop();
-			this.agent.popLastSteer();
-			return entry;
-		}
-		// Then from follow-up
-		if (this.#followUpMessages.length > 0) {
-			const entry = this.#followUpMessages.pop();
-			this.agent.popLastFollowUp();
-			return entry;
-		}
-		return undefined;
+		const message = this.agent.popLastSteer() ?? this.agent.popLastFollowUp();
+		return message ? toRestoredQueuedMessage(message) : undefined;
 	}
 
 	get skillsSettings(): SkillsSettings | undefined {
@@ -5511,56 +5406,6 @@ export class AgentSession {
 	}
 
 	/**
-	 * Abort active work, then immediately resume the agent so queued steer/follow-up
-	 * messages drain instead of waiting for another natural turn boundary.
-	 *
-	 * The drained queue is re-run via `agent.prompt()`, which appends and runs
-	 * regardless of the trailing message role. Earlier this called
-	 * `agent.continue()`, which only dequeues steers after an assistant message
-	 * and throws "No messages to continue from" on an empty context — both states
-	 * a flushed empty-Enter can land in, which stranded the steer in the queue and
-	 * surfaced that error in the TUI.
-	 *
-	 * Concurrent calls (e.g. a double empty-Enter) coalesce: the first owns the
-	 * abort→resume handoff while the rest await it and return. The guard clears
-	 * once the resumed turn has started (not at turn end), so a genuinely-later
-	 * flush of a freshly queued steer still works.
-	 */
-	async interruptAndFlushQueuedMessages(options?: { reason?: string }): Promise<void> {
-		const inFlight = this.#queuedFlushInterrupt;
-		if (inFlight) {
-			await inFlight;
-			return;
-		}
-		if (!this.agent.hasQueuedMessages()) return;
-
-		const { promise: handoff, resolve: settleHandoff } = Promise.withResolvers<void>();
-		this.#queuedFlushInterrupt = handoff;
-		this.#resumingQueuedMessages = true;
-		let turn: Promise<void> | undefined;
-		try {
-			await this.abort({ reason: options?.reason });
-			if (this.isCompacting || this.isGeneratingHandoff) return;
-			await this.#maybeRestoreRetryFallbackPrimary();
-			// A turn slipped in while we were settling (e.g. a fresh user prompt):
-			// leave the queue for its next steering boundary rather than draining
-			// and double-running, which would throw AgentBusyError. Checking
-			// isStreaming and prompting below is synchronous, so no turn can start
-			// between the drain and the resume.
-			if (this.agent.state.isStreaming) return;
-			const queued = this.agent.takeQueuedMessages();
-			if (queued.length === 0) return;
-			this.#resumingQueuedMessages = false;
-			turn = this.agent.prompt(queued);
-		} finally {
-			this.#resumingQueuedMessages = false;
-			this.#queuedFlushInterrupt = undefined;
-			settleHandoff();
-		}
-		await turn;
-	}
-
-	/**
 	 * Start a new session, optionally with initial messages and parent tracking.
 	 * Clears all messages and starts a new session.
 	 * Listeners are preserved and will continue receiving events.
@@ -5610,8 +5455,6 @@ export class AgentSession {
 		this.#rekeyMnemopiMemoryForCurrentSessionId();
 		this.#resetHindsightConversationTrackingIfHindsight();
 		this.#resetMnemopiConversationTrackingIfMnemopi();
-		this.#steeringMessages = [];
-		this.#followUpMessages = [];
 		this.#pendingNextTurnMessages = [];
 		this.#scheduledHiddenNextTurnGeneration = undefined;
 
@@ -6756,8 +6599,6 @@ export class AgentSession {
 			this.#rekeyMnemopiMemoryForCurrentSessionId();
 			this.#resetHindsightConversationTrackingIfHindsight();
 			this.#resetMnemopiConversationTrackingIfMnemopi();
-			this.#steeringMessages = [];
-			this.#followUpMessages = [];
 			this.#pendingNextTurnMessages = [];
 			this.#scheduledHiddenNextTurnGeneration = undefined;
 			this.#todoReminderCount = 0;
@@ -9655,8 +9496,8 @@ export class AgentSession {
 		// the existing message objects is sufficient and avoids structured-clone failures for
 		// extension/custom metadata that is valid to persist but not cloneable.
 		const previousAgentMessages = [...this.agent.state.messages];
-		const previousSteeringMessages = [...this.#steeringMessages];
-		const previousFollowUpMessages = [...this.#followUpMessages];
+		const previousSteeringMessages = [...this.agent.peekSteeringQueue()];
+		const previousFollowUpMessages = [...this.agent.peekFollowUpQueue()];
 		const previousPendingNextTurnMessages = [...this.#pendingNextTurnMessages];
 		const previousScheduledHiddenNextTurnGeneration = this.#scheduledHiddenNextTurnGeneration;
 		const previousModel = this.model;
@@ -9673,8 +9514,7 @@ export class AgentSession {
 			? this.#getSessionDefaultSelectedMCPToolNames(previousSessionFile)
 			: undefined;
 
-		this.#steeringMessages = [];
-		this.#followUpMessages = [];
+		this.agent.clearAllQueues();
 		this.#pendingNextTurnMessages = [];
 		this.#scheduledHiddenNextTurnGeneration = undefined;
 
@@ -9815,8 +9655,7 @@ export class AgentSession {
 			this.#baseSystemPrompt = previousBaseSystemPrompt;
 			this.agent.setSystemPrompt(previousSystemPrompt);
 			this.agent.replaceMessages(previousAgentMessages);
-			this.#steeringMessages = previousSteeringMessages;
-			this.#followUpMessages = previousFollowUpMessages;
+			this.agent.replaceQueues(previousSteeringMessages, previousFollowUpMessages);
 			this.#pendingNextTurnMessages = previousPendingNextTurnMessages;
 			this.#scheduledHiddenNextTurnGeneration = previousScheduledHiddenNextTurnGeneration;
 			if (previousModel) {

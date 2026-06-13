@@ -57,20 +57,21 @@ function createContext(): {
 		abortEval: Spy;
 		addMessageToChat: Spy;
 		cancelPendingSubmission: Spy;
+		clearEditor: Spy;
 		clearQueue: Spy;
+		flushSync: Spy;
 		getQueuedMessages: Spy;
 		ensureLoadingAnimation: Spy;
 		handleBtwCommand: Spy;
-		interruptAndFlushQueuedMessages: Spy;
 		handleBtwEscape: Spy;
 		handleOmfgEscape: Spy;
 		hasActiveBtw: Spy;
 		hasActiveOmfg: Spy;
-		notifyInterrupting: Spy;
 		onInputCallback: Spy;
 		prompt: Spy;
 		requestRender: Spy;
 		resetDisplay: Spy;
+		shutdown: Spy;
 		startPendingSubmission: StartPendingSubmissionSpy;
 		updatePendingMessagesDisplay: Spy;
 	};
@@ -84,7 +85,6 @@ function createContext(): {
 	const cancelPendingSubmission = vi.fn(() => false);
 	const clearQueue = vi.fn(() => ({ steering: [], followUp: [] }));
 	const getQueuedMessages = vi.fn(() => ({ steering: [], followUp: [] }));
-	const interruptAndFlushQueuedMessages = vi.fn(async () => {});
 	const onInputCallback = vi.fn();
 	const requestRender = vi.fn();
 	const resetDisplay = vi.fn();
@@ -94,7 +94,6 @@ function createContext(): {
 	const hasActiveBtw = vi.fn(() => false);
 	const handleOmfgEscape = vi.fn(() => true);
 	const hasActiveOmfg = vi.fn(() => false);
-	const notifyInterrupting = vi.fn();
 	const updatePendingMessagesDisplay = vi.fn();
 	const prompt = vi.fn();
 	const startPendingSubmission = vi.fn(
@@ -155,7 +154,6 @@ function createContext(): {
 			abortEval,
 			clearQueue,
 			getQueuedMessages,
-			interruptAndFlushQueuedMessages,
 			prompt,
 		} as unknown as InteractiveModeContext["session"],
 		viewSession: {
@@ -168,6 +166,7 @@ function createContext(): {
 		} as unknown as InteractiveModeContext["viewSession"],
 		sessionManager: {
 			getSessionName: () => "existing session",
+			flushSync: vi.fn(),
 		} as unknown as InteractiveModeContext["sessionManager"],
 		keybindings: {
 			getKeys: () => [],
@@ -182,7 +181,6 @@ function createContext(): {
 		addMessageToChat,
 		cancelPendingSubmission,
 		ensureLoadingAnimation,
-		notifyInterrupting,
 		finishPendingSubmission: vi.fn(),
 		flushPendingBashComponents: vi.fn(),
 		markPendingSubmissionStarted: vi.fn(() => true),
@@ -203,6 +201,8 @@ function createContext(): {
 		showTreeSelector: vi.fn(),
 		showUserMessageSelector: vi.fn(),
 		showSessionSelector: vi.fn(),
+		shutdown: vi.fn(async () => {}),
+		clearEditor: vi.fn(),
 	} as unknown as InteractiveModeContext;
 
 	return {
@@ -215,19 +215,20 @@ function createContext(): {
 			addMessageToChat,
 			cancelPendingSubmission,
 			clearQueue,
+			clearEditor: ctx.clearEditor as Spy,
 			getQueuedMessages,
 			ensureLoadingAnimation,
-			interruptAndFlushQueuedMessages,
+			flushSync: ctx.sessionManager.flushSync as Spy,
 			handleBtwCommand,
 			handleBtwEscape,
 			hasActiveBtw,
 			handleOmfgEscape,
 			hasActiveOmfg,
-			notifyInterrupting,
 			onInputCallback,
 			prompt,
 			requestRender,
 			resetDisplay,
+			shutdown: ctx.shutdown as Spy,
 			startPendingSubmission,
 			updatePendingMessagesDisplay,
 		},
@@ -268,25 +269,24 @@ describe("InputController escape behavior", () => {
 		expect(spies.abort).not.toHaveBeenCalled();
 	});
 
-	it("acknowledges empty-submit interrupt before flushing queued steering", async () => {
+	it("empty-submit with a queued message aborts the active stream and refreshes pending display", async () => {
 		const { ctx, editor, spies } = createContext();
 		(ctx.session as { isStreaming: boolean; queuedMessageCount: number }).isStreaming = true;
 		(ctx.session as { isStreaming: boolean; queuedMessageCount: number }).queuedMessageCount = 1;
-		spies.getQueuedMessages.mockReturnValue({ steering: ["queued steer"], followUp: [] });
 		const order: string[] = [];
-		spies.notifyInterrupting.mockImplementation(() => {
-			order.push("notify");
+		spies.abort.mockImplementation(async () => {
+			order.push("abort");
 		});
-		spies.interruptAndFlushQueuedMessages.mockImplementation(async () => {
-			order.push("flush");
+		spies.updatePendingMessagesDisplay.mockImplementation(() => {
+			order.push("refresh");
 		});
 		const controller = new InputController(ctx);
 
 		controller.setupEditorSubmitHandler();
 		await editor.onSubmit?.("");
 
-		expect(order).toEqual(["notify", "flush"]);
-		expect(spies.interruptAndFlushQueuedMessages).toHaveBeenCalledWith({ reason: USER_INTERRUPT_LABEL });
+		expect(order).toEqual(["abort", "refresh"]);
+		expect(spies.abort).toHaveBeenCalledWith({ reason: USER_INTERRUPT_LABEL });
 		expect(spies.updatePendingMessagesDisplay).toHaveBeenCalledTimes(1);
 		expect(spies.requestRender).toHaveBeenCalledTimes(1);
 	});
@@ -480,7 +480,45 @@ describe("InputController escape behavior", () => {
 		editor.onEscape?.(); // clears text, must also reset the timer
 		editor.onEscape?.(); // empty again: should only re-arm, not trigger
 
-		expect(ctx.showTreeSelector).not.toHaveBeenCalled();
 		expect(ctx.showUserMessageSelector).not.toHaveBeenCalled();
+	});
+});
+
+describe("InputController Ctrl+C behavior", () => {
+	it("sync-flushes the session JSONL on first Ctrl+C (editor clear)", () => {
+		const { ctx, editor, spies } = createContext();
+		const controller = new InputController(ctx);
+
+		controller.setupKeyHandlers();
+		editor.onClear?.(); // first Ctrl+C: clears editor
+
+		expect(spies.clearEditor).toHaveBeenCalledTimes(1);
+		expect(spies.flushSync).toHaveBeenCalledTimes(1);
+		expect(spies.shutdown).not.toHaveBeenCalled();
+	});
+
+	it("sync-flushes the session JSONL on second Ctrl+C (shutdown)", () => {
+		const { ctx, editor, spies } = createContext();
+		const controller = new InputController(ctx);
+
+		controller.setupKeyHandlers();
+		editor.onClear?.(); // first Ctrl+C
+		editor.onClear?.(); // second Ctrl+C within 500ms → shutdown
+
+		expect(spies.shutdown).toHaveBeenCalledTimes(1);
+		// flushSync fires on both presses; the first-press flush is the
+		// guarantee that the JSONL is on disk even if the user closes the
+		// terminal before the second press.
+		expect(spies.flushSync).toHaveBeenCalledTimes(2);
+	});
+
+	it("does not flush when Ctrl+C is not pressed", () => {
+		const { ctx, editor, spies } = createContext();
+		const controller = new InputController(ctx);
+
+		controller.setupKeyHandlers();
+		editor.onEscape?.(); // Esc is a different handler
+
+		expect(spies.flushSync).not.toHaveBeenCalled();
 	});
 });

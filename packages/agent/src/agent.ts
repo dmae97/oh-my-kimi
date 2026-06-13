@@ -706,6 +706,11 @@ export class Agent {
 		this.#state.messages = ms.slice();
 	}
 
+	replaceQueues(steering: AgentMessage[], followUp: AgentMessage[]) {
+		this.#steeringQueue = steering.slice();
+		this.#followUpQueue = followUp.slice();
+	}
+
 	appendMessage(m: AgentMessage) {
 		this.#state.messages.push(m);
 	}
@@ -751,16 +756,22 @@ export class Agent {
 		return this.#steeringQueue.length > 0 || this.#followUpQueue.length > 0;
 	}
 
-	/**
-	 * Drain queued messages for an immediate resume: all steering messages if any
-	 * (honoring steeringMode), otherwise follow-ups. Mirrors continue()'s dequeue
-	 * precedence so an empty-Enter flush and the natural turn-end resume agree on
-	 * what to deliver next.
-	 */
-	takeQueuedMessages(): AgentMessage[] {
-		const steering = this.#dequeueSteeringMessages();
-		if (steering.length > 0) return steering;
-		return this.#dequeueFollowUpMessages();
+	/** Non-consuming view of the pending steering queue (insertion order, newest
+	 *  last). The session layer derives its queued-message display/count from
+	 *  this live view instead of a mirror, so the agent-core queue stays the
+	 *  single source of truth. */
+	peekSteeringQueue(): readonly AgentMessage[] {
+		return this.#steeringQueue;
+	}
+
+	/** Non-consuming view of the pending follow-up queue. See
+	 *  {@link peekSteeringQueue}. */
+	peekFollowUpQueue(): readonly AgentMessage[] {
+		return this.#followUpQueue;
+	}
+
+	get isAborting(): boolean {
+		return this.#abortController?.signal.aborted === true && this.#state.isStreaming;
 	}
 
 	#dequeueSteeringMessages(): AgentMessage[] {

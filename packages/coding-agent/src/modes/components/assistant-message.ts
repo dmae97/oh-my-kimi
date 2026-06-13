@@ -371,9 +371,9 @@ export class AssistantMessageComponent extends Container {
 				}
 				// Add spacing only when another visible assistant content block follows.
 				// This avoids a superfluous blank line before separately-rendered tool execution blocks.
-				const hasVisibleContentAfter = message.content.slice(i + 1).some(
-					c => (c.type === "text" && c.text.trim()) || (c.type === "thinking" && hasVisibleThinking(c)),
-				);
+				const hasVisibleContentAfter = message.content
+					.slice(i + 1)
+					.some(c => (c.type === "text" && c.text.trim()) || (c.type === "thinking" && hasVisibleThinking(c)));
 
 				// Thinking traces in thinkingText color, italic
 				const md = new Markdown(thinkingText, 1, 0, getMarkdownTheme(), {

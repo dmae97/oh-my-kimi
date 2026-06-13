@@ -232,6 +232,7 @@ export interface SessionState {
 	thinkingLevel?: string;
 	contextUsage?: ContextUsage;
 	participants: Participant[];
+	isAborting?: boolean;
 }
 
 export interface AgentSnapshot {

@@ -2623,11 +2623,7 @@ export class SessionManager {
 
 		// Hot path: writer is open and all entries have been written via writeSync.
 		// Just fsync the fd — the data is already in the kernel page cache.
-		if (
-			this.#persistWriter?.isOpen() &&
-			this.#flushed &&
-			!this.#needsFullRewriteOnNextPersist
-		) {
+		if (this.#persistWriter?.isOpen() && this.#flushed && !this.#needsFullRewriteOnNextPersist) {
 			this.#persistWriter.fsyncSync();
 			return;
 		}
