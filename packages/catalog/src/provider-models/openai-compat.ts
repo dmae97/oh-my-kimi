@@ -179,48 +179,6 @@ export const ANTHROPIC_CURATED_FALLBACK_MODELS: readonly ModelSpec<"anthropic-me
 		maxTokens: 128_000,
 	},
 ];
-const ZAI_CODING_PLAN_ANTHROPIC_BASE_URL = "https://api.z.ai/api/anthropic";
-
-/** GLM Coding Plan models on the zai provider before models.dev lists them. */
-export const ZAI_CODING_PLAN_STATIC_SEED_MODELS: readonly ModelSpec<"anthropic-messages">[] = [
-	{
-		id: "glm-5.2",
-		name: "GLM-5.2",
-		api: "anthropic-messages",
-		provider: "zai",
-		baseUrl: ZAI_CODING_PLAN_ANTHROPIC_BASE_URL,
-		reasoning: true,
-		input: ["text"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 1_000_000,
-		maxTokens: 131_072,
-		thinking: {
-			mode: "budget",
-			efforts: ["minimal", "low", "medium", "high", "xhigh"],
-		},
-	},
-	{
-		id: "glm-5.2[1m]",
-		name: "GLM-5.2 (1M)",
-		api: "anthropic-messages",
-		provider: "zai",
-		baseUrl: ZAI_CODING_PLAN_ANTHROPIC_BASE_URL,
-		reasoning: true,
-		input: ["text"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 1_000_000,
-		maxTokens: 131_072,
-		thinking: {
-			mode: "budget",
-			efforts: ["minimal", "low", "medium", "high", "xhigh"],
-		},
-	},
-];
-
-/** Seed {@link ZAI_CODING_PLAN_STATIC_SEED_MODELS} for catalog generation. */
-export function buildZaiCodingPlanStaticSeed(): ModelSpec<"anthropic-messages">[] {
-	return ZAI_CODING_PLAN_STATIC_SEED_MODELS.map(model => ({ ...model }));
-}
 
 function mapWithBundledReference<TApi extends Api>(
 	entry: OpenAICompatibleModelRecord,

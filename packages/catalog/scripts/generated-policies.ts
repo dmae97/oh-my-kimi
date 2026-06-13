@@ -184,9 +184,9 @@ function applyGeneratedModelPolicy(model: ModelSpec<Api>): void {
 		model.maxTokens = copilotLimits.maxTokens;
 	}
 
-	// GLM Coding Plan (zai): Z.AI docs advertise 1M context for GLM-5.2; discovery
-	// and models.dev can report 200k until upstream metadata catches up.
-	if (model.provider === "zai" && (model.id === "glm-5.2" || model.id === "glm-5.2[1m]")) {
+	// GLM Coding Plan (zai): GLM-5.2 is the selectable 1M served id; pin it
+	// so endpoint discovery or older bundled fallbacks cannot regress to 200k.
+	if (model.provider === "zai" && model.id === "glm-5.2") {
 		model.contextWindow = 1_000_000;
 		model.maxTokens = 131_072;
 	}
