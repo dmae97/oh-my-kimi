@@ -128,7 +128,8 @@ import {
 	LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE,
 	wrapSteeringForModel,
 } from "./session/messages";
-import { getRestorableSessionModels, SessionManager } from "./session/session-manager";
+import { getRestorableSessionModels } from "./session/session-context";
+import { SessionManager } from "./session/session-manager";
 import { SnapcompactInlineTransformer } from "./session/snapcompact-inline";
 import { closeAllConnections } from "./ssh/connection-manager";
 import { unmountAll } from "./ssh/sshfs-mount";

@@ -8,6 +8,7 @@ import {
 	Image,
 	ImageProtocol,
 	imageFallback,
+	type NativeScrollbackLiveRegion,
 	Spacer,
 	TERMINAL,
 	Text,
@@ -160,7 +161,7 @@ let toolExecutionInstanceSeq = 0;
 /**
  * Component that renders a tool call with its result (updateable)
  */
-export class ToolExecutionComponent extends Container {
+export class ToolExecutionComponent extends Container implements NativeScrollbackLiveRegion {
 	#contentBox: Box; // Used for custom tools and bash visual truncation
 	#contentText: Text; // For built-in tools (with its own padding/bg)
 	#multiFileBoxes: (Box | Spacer)[] = []; // Extra boxes for multi-file edit results
@@ -569,6 +570,17 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	/**
+	 * Standalone harnesses may mount a tool component directly under `TUI`
+	 * instead of inside `TranscriptContainer`. In that shape the component must
+	 * report its own live-region seam for provisional previews, or the core
+	 * renderer treats it like shell output and commits tail-window edit/eval/bash
+	 * previews to immutable native scrollback before the result replaces them.
+	 */
+	getNativeScrollbackLiveRegionStart(): number | undefined {
+		return !this.isTranscriptBlockFinalized() && !this.isTranscriptBlockCommitStable() ? 0 : undefined;
+	}
+
+	/**
 	 * Whether this block has reached a terminal state for transcript freezing.
 	 * Reports `false` while it can still visually change so the
 	 * {@link TranscriptContainer} keeps it inside the repaintable live region:
@@ -591,28 +603,20 @@ export class ToolExecutionComponent extends Container {
 
 	/**
 	 * Whether this still-live block's settled rows may enter native scrollback
-	 * (see `FinalizableBlock.isTranscriptBlockCommitStable`). Classification is
-	 * per renderer (`ToolRenderer.provisionalPendingPreview`): tail-window
-	 * streaming views (edit's streamed-diff tail, bash/ssh command caps, eval
-	 * cells) are re-anchored top-first by the result render, so promoting
-	 * their visually static head — e.g. an edit preview idling on its last
-	 * frame while the apply + LSP pass runs — would strand a stale copy of
-	 * the call box above the final block the moment the result lands. Every
-	 * other pending preview streams top-anchored append-shaped rows the
-	 * result render preserves (a task call's context/assignment markdown, a
-	 * write's content), so it stays commit-eligible — a call taller than the
-	 * viewport scrolls into native history mid-stream instead of reading as
-	 * cut off until the result. Expanded blocks always stream top-anchored
-	 * (the over-tall write/eval scrollback contract). Displaceable waiting
-	 * polls are removed wholesale by the next poll and must never commit.
+	 * (see `FinalizableBlock.isTranscriptBlockCommitStable`). Renderers classify
+	 * pending views by durability instead of by tool name: a provisional view is
+	 * allowed to be useful on screen, but finalization may replace or re-anchor
+	 * it wholesale, so committing any of its rows would strand stale preview
+	 * bytes in immutable scrollback. Non-provisional views stream rows whose
+	 * committed prefix survives the remaining transitions.
 	 */
 	isTranscriptBlockCommitStable(): boolean {
 		if (this.#displaceable) return false;
-		if (this.#expanded || this.isTranscriptBlockFinalized()) return true;
-		if ((this.#tool as { provisionalPendingPreview?: boolean } | undefined)?.provisionalPendingPreview) {
-			return false;
-		}
-		return !toolRenderers[this.#toolName]?.provisionalPendingPreview;
+		if (this.isTranscriptBlockFinalized()) return true;
+		const tool = this.#tool as { provisionalPendingPreview?: boolean | "collapsed" } | undefined;
+		const provisionalPendingPreview =
+			tool?.provisionalPendingPreview ?? toolRenderers[this.#toolName]?.provisionalPendingPreview;
+		return provisionalPendingPreview !== true && (provisionalPendingPreview !== "collapsed" || this.#expanded);
 	}
 
 	/**

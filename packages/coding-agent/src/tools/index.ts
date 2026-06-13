@@ -22,6 +22,7 @@ import type { AgentRegistry } from "../registry/agent-registry";
 import type { ArtifactManager } from "../session/artifacts";
 import type { ClientBridge } from "../session/client-bridge";
 import type { CustomMessage } from "../session/messages";
+import type { UsageStatistics } from "../session/session-entries";
 import type { ToolChoiceQueue } from "../session/tool-choice-queue";
 import { TaskTool } from "../task";
 import type { AgentOutputManager } from "../task/output-manager";
@@ -255,7 +256,7 @@ export interface ToolSession {
 	/** Goal runtime for the active agent session. */
 	getGoalRuntime?: () => GoalRuntime | undefined;
 	/** Get cumulative session usage statistics (input/output tokens, cost). */
-	getUsageStatistics?: () => import("../session/session-manager").UsageStatistics;
+	getUsageStatistics?: () => UsageStatistics;
 	/** Current per-turn token budget {total, spent, hard} for the eval `budget` helper. */
 	getTurnBudget?: () => { total: number | null; spent: number; hard: boolean };
 	/** Record output tokens consumed by an eval-spawned subagent toward the current turn budget. */

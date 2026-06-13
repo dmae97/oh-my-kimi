@@ -35,8 +35,8 @@ import {
 	type SkillPromptDetails,
 	USER_INTERRUPT_LABEL,
 } from "../../session/messages";
-import type { SessionMessageEntry } from "../../session/session-manager";
-import { parseSessionEntries } from "../../session/session-manager";
+import type { SessionMessageEntry } from "../../session/session-entries";
+import { parseSessionEntries } from "../../session/session-loader";
 import { createIrcMessageCard } from "../../tools/irc";
 import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "../../tools/render-utils";
 import { hasVisibleThinking } from "../../utils/thinking-display";

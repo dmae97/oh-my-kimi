@@ -77,11 +77,11 @@ describe("SqlSessionStorage (SQLite backend)", () => {
 		await client.end();
 	});
 
-	it("writer.writeLineSync appends to SQL after drain", async () => {
+	it("writer.append appends to SQL after drain", async () => {
 		const { client, storage } = await createSqlite();
 		const writer = storage.openWriter("/sessions/p/session.jsonl");
-		writer.writeLineSync('{"type":"session"}\n');
-		writer.writeLineSync('{"type":"message"}\n');
+		await writer.append('{"type":"session"}\n');
+		await writer.append('{"type":"message"}\n');
 
 		// Reads await queued appends and fetch content from SQL.
 		expect(await storage.readText("/sessions/p/session.jsonl")).toBe('{"type":"session"}\n{"type":"message"}\n');
@@ -101,7 +101,7 @@ describe("SqlSessionStorage (SQLite backend)", () => {
 		await storage.writeText("/sessions/p/keep.jsonl", "old content\n");
 
 		const writer = storage.openWriter("/sessions/p/keep.jsonl", { flags: "w" });
-		writer.writeLineSync("fresh\n");
+		await writer.append("fresh\n");
 		await writer.close();
 
 		expect(await storage.readText("/sessions/p/keep.jsonl")).toBe("fresh\n");
@@ -132,7 +132,7 @@ describe("SqlSessionStorage (SQLite backend)", () => {
 
 		// Force a SQL error: drop the table so the next append throws.
 		await client.unsafe("DROP TABLE omp_session_files");
-		writer.writeLineSync("doomed\n");
+		void writer.append("doomed\n").catch(() => {});
 
 		await expect(storage.drain()).rejects.toThrow();
 		expect(writer.getError()).toBeDefined();
@@ -328,7 +328,7 @@ describe("SqlSessionStorage (dialect-specific SQL)", () => {
 		const { client, queries } = capturingClient("postgres");
 		const storage = await SqlSessionStorage.create({ client });
 		const writer = storage.openWriter("/s/p.jsonl");
-		writer.writeLineSync("chunk\n");
+		await writer.append("chunk\n");
 		await writer.close();
 
 		const ddl = queries.find(q => q.sql.startsWith("CREATE TABLE"));
@@ -352,7 +352,7 @@ describe("SqlSessionStorage (dialect-specific SQL)", () => {
 		const { client, queries } = capturingClient("mysql");
 		const storage = await SqlSessionStorage.create({ client });
 		const writer = storage.openWriter("/s/m.jsonl");
-		writer.writeLineSync("chunk\n");
+		await writer.append("chunk\n");
 		await writer.close();
 
 		const ddl = queries.find(q => q.sql.startsWith("CREATE TABLE"));

@@ -2,7 +2,8 @@ import { ProcessTerminal, TUI } from "@oh-my-pi/pi-tui";
 import { logger } from "@oh-my-pi/pi-utils";
 import { SessionSelectorComponent } from "../modes/components/session-selector";
 import { HistoryStorage } from "../session/history-storage";
-import { type SessionInfo, SessionManager } from "../session/session-manager";
+import type { SessionInfo } from "../session/session-listing";
+import { SessionManager } from "../session/session-manager";
 import { FileSessionStorage } from "../session/session-storage";
 
 /**

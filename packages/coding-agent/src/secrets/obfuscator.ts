@@ -1,6 +1,6 @@
 import type { Context, Message, Tool } from "@oh-my-pi/pi-ai";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
-import type { SessionContext } from "../session/session-manager";
+import type { SessionContext } from "../session/session-context";
 import { compileSecretRegex } from "./regex";
 
 // ═══════════════════════════════════════════════════════════════════════════

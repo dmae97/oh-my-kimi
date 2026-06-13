@@ -762,6 +762,11 @@ export class TUI extends Container {
 	// fast path (`#renderResizeViewport`) instead of an authoritative full
 	// paint, and no commit/window/diff state is advanced.
 	#resizeViewportActive = false;
+	// Set only by the resize callback's cheap-paint request. A concurrent
+	// caller-forced render (tool finalization, reset, image reconciliation) must
+	// not be downgraded to the throwaway viewport path just because a resize
+	// settle window is active.
+	#resizeViewportPaintPending = false;
 	// Quiet-window timer that ends the drag: its callback clears the flag and
 	// drives the one authoritative full paint. Reset on every resize event so it
 	// only fires once the drag stops. Cancelled on stop().
@@ -1219,7 +1224,7 @@ export class TUI extends Container {
 					// request the cheap viewport-only paint. The authoritative full
 					// replay fires from the settle timer once the drag goes quiet.
 					this.#beginResizeViewport();
-					this.requestRender(true);
+					this.#requestResizeViewportPaint();
 					return;
 				}
 				this.#armMultiplexerResizeTimer(false);
@@ -1503,6 +1508,7 @@ export class TUI extends Container {
 		// Any non-component-scoped request makes the pending frame a full one.
 		this.#pendingRenderComponentsOnly = false;
 		if (force) {
+			this.#resizeViewportPaintPending = false;
 			// Forced repaints landing inside the multiplexer resize debounce
 			// (e.g. `#finishSixelProbe`, image-budget eviction, a programmatic
 			// `requestRender(true)`) would paint into a still-reflowing pane
@@ -2181,7 +2187,13 @@ export class TUI extends Container {
 		// ran. A visible overlay composites over the transcript and needs the
 		// whole window, so fall through to the normal forced paint when one is up
 		// (overlay resizes are not on the drag-cost hot path).
-		if (this.#resizeViewportActive && this.#hasEverRendered && this.#getTopmostVisibleOverlay() === undefined) {
+		if (
+			this.#resizeViewportPaintPending &&
+			this.#resizeViewportActive &&
+			this.#hasEverRendered &&
+			this.#getTopmostVisibleOverlay() === undefined
+		) {
+			this.#resizeViewportPaintPending = false;
 			this.#componentRenderTargets.clear();
 			this.#renderResizeViewport(width, height);
 			return;
@@ -2795,6 +2807,20 @@ export class TUI extends Container {
 			this.#resizeEventPending = true;
 			this.requestRender(true, { clearScrollback: !isMultiplexerSession() });
 		}, TUI.#RESIZE_VIEWPORT_SETTLE_MS);
+	}
+
+	#requestResizeViewportPaint(): void {
+		if (this.#stopped) return;
+		this.#resizeViewportPaintPending = true;
+		if (this.#renderRequested) return;
+		this.#renderRequested = true;
+		this.#renderScheduler.scheduleImmediate(() => {
+			if (this.#stopped || !this.#renderRequested) return;
+			this.#renderRequested = false;
+			this.#lastRenderAt = this.#renderScheduler.now();
+			this.#doRender();
+			if (this.#renderRequested) this.#scheduleRender();
+		});
 	}
 
 	/**

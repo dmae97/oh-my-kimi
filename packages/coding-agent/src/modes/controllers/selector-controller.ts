@@ -28,7 +28,8 @@ import {
 } from "../../modes/theme/theme";
 import type { InteractiveModeContext } from "../../modes/types";
 import type { ResetCreditRedeemOutcome } from "../../session/auth-storage";
-import { type SessionInfo, SessionManager } from "../../session/session-manager";
+import type { SessionInfo } from "../../session/session-listing";
+import { SessionManager } from "../../session/session-manager";
 import { FileSessionStorage } from "../../session/session-storage";
 import { type LogoutAccount, toLogoutAccounts } from "../../slash-commands/helpers/logout";
 import {

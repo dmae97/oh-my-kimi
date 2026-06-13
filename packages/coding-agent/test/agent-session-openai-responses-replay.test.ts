@@ -17,11 +17,8 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import {
-	type SessionEntry,
-	SessionManager,
-	type SessionMessageEntry,
-} from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import type { SessionEntry, SessionMessageEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { Snowflake } from "@oh-my-pi/pi-utils";
 
 function createUsage(): Usage {
@@ -483,7 +480,7 @@ describe("AgentSession OpenAI Responses replay boundaries", () => {
 		sessionManager.appendCustomMessageEntry("proxy-details", "Proxy metadata", true, proxyDetails);
 
 		const snapshot = sessionManager.captureState();
-		const customEntry = snapshot.fileEntries.find(
+		const customEntry = snapshot.entries.find(
 			entry => entry.type === "custom_message" && entry.customType === "proxy-details",
 		);
 		if (customEntry?.type !== "custom_message") {

@@ -3,12 +3,9 @@ import * as path from "node:path";
 import type { AgentState } from "@oh-my-pi/pi-agent-core";
 import { APP_NAME, isEnoent } from "@oh-my-pi/pi-utils";
 import { getResolvedThemeColors, getThemeExportColors } from "../../modes/theme/theme";
-import {
-	loadEntriesFromFile,
-	type SessionEntry,
-	type SessionHeader,
-	SessionManager,
-} from "../../session/session-manager";
+import type { SessionEntry, SessionHeader } from "../../session/session-entries";
+import { loadEntriesFromFile } from "../../session/session-loader";
+import { SessionManager } from "../../session/session-manager";
 import templateCss from "./template.css" with { type: "text" };
 import templateHtml from "./template.html" with { type: "text" };
 import templateJs from "./template.js" with { type: "text" };

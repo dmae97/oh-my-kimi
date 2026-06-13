@@ -1,13 +1,13 @@
 import { describe, expect, it } from "bun:test";
-import {
-	type BranchSummaryEntry,
-	buildSessionContext,
-	type CompactionEntry,
-	type ModelChangeEntry,
-	type SessionEntry,
-	type SessionMessageEntry,
-	type ThinkingLevelChangeEntry,
-} from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { buildSessionContext } from "@oh-my-pi/pi-coding-agent/session/session-context";
+import type {
+	BranchSummaryEntry,
+	CompactionEntry,
+	ModelChangeEntry,
+	SessionEntry,
+	SessionMessageEntry,
+	ThinkingLevelChangeEntry,
+} from "@oh-my-pi/pi-coding-agent/session/session-entries";
 
 function msg(id: string, parentId: string | null, role: "user" | "assistant", text: string): SessionMessageEntry {
 	const base = { type: "message" as const, id, parentId, timestamp: "2025-01-01T00:00:00Z" };

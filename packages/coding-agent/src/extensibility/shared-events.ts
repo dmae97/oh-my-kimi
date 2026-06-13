@@ -17,7 +17,7 @@ import type { CompactionPreparation, CompactionResult } from "@oh-my-pi/pi-agent
 import type { ImageContent, TextContent, ToolResultMessage } from "@oh-my-pi/pi-ai";
 import type { Rule } from "../capability/rule";
 import type { Goal, GoalModeState } from "../goals/state";
-import type { BranchSummaryEntry, CompactionEntry, SessionEntry } from "../session/session-manager";
+import type { BranchSummaryEntry, CompactionEntry, SessionEntry } from "../session/session-entries";
 import type { TodoItem } from "../tools/todo";
 
 // ============================================================================

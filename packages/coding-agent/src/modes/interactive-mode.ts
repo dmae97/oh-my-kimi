@@ -80,8 +80,9 @@ import planModeCompactInstructionsPrompt from "../prompts/system/plan-mode-compa
 };
 import type { AgentSession, AgentSessionEvent, ResolvedRoleModel } from "../session/agent-session";
 import { HistoryStorage } from "../session/history-storage";
-import type { SessionContext, SessionManager } from "../session/session-manager";
-import { getRecentSessions } from "../session/session-manager";
+import type { SessionContext } from "../session/session-context";
+import { getRecentSessions } from "../session/session-listing";
+import type { SessionManager } from "../session/session-manager";
 import type { ShakeMode } from "../session/shake-types";
 import { BUILTIN_SLASH_COMMAND_RESERVED_NAMES, BUILTIN_SLASH_COMMANDS } from "../slash-commands/builtin-registry";
 import { formatDuration } from "../slash-commands/helpers/format";

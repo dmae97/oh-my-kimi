@@ -36,7 +36,7 @@ import {
 	SKILL_PROMPT_MESSAGE_TYPE,
 	type SkillPromptDetails,
 } from "../../session/messages";
-import type { SessionContext } from "../../session/session-manager";
+import type { SessionContext } from "../../session/session-context";
 import { createIrcMessageCard } from "../../tools/irc";
 import { formatBytes, formatDuration } from "../../tools/render-utils";
 import { hasVisibleThinking } from "../../utils/thinking-display";

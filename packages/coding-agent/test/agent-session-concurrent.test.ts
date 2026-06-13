@@ -46,6 +46,9 @@ describe("AgentSession concurrent prompt guard", () => {
 	const authStorages: AuthStorage[] = [];
 
 	beforeEach(() => {
+		// Collapse scheduler settle delays so the post-abort auto-continue and
+		// dispose teardown are deterministic instead of racing the wall clock.
+		collapseSchedulerSettleDelays();
 		tempDir = path.join(os.tmpdir(), `pi-concurrent-test-${Snowflake.next()}`);
 		fs.mkdirSync(tempDir, { recursive: true });
 	});

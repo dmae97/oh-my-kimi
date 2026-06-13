@@ -12,7 +12,7 @@
 import type { AgentRef } from "../registry/agent-registry";
 import { AgentRegistry } from "../registry/agent-registry";
 import { formatSessionHistoryMarkdown } from "../session/session-history-format";
-import { loadSessionMessagesReadOnly } from "../session/session-manager";
+import { loadSessionMessagesReadOnly } from "../session/session-loader";
 import type { InternalResource, InternalUrl, ProtocolHandler, UrlCompletion } from "./types";
 
 /** Humanize a last-activity timestamp as `Ns/Nm/Nh/Nd ago`. */

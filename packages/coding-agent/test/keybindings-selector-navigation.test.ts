@@ -12,7 +12,8 @@ import { TreeSelectorComponent } from "@oh-my-pi/pi-coding-agent/modes/component
 import { UserMessageSelectorComponent } from "@oh-my-pi/pi-coding-agent/modes/components/user-message-selector";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { HistoryStorage } from "@oh-my-pi/pi-coding-agent/session/history-storage";
-import type { SessionInfo, SessionTreeNode } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import type { SessionTreeNode } from "@oh-my-pi/pi-coding-agent/session/session-entries";
+import type { SessionInfo } from "@oh-my-pi/pi-coding-agent/session/session-listing";
 import { setKeybindings } from "@oh-my-pi/pi-tui";
 
 const CTRL_N = "\x0e";

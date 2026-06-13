@@ -3,11 +3,9 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import {
-	loadEntriesFromFile,
-	type SessionHeader,
-	SessionManager,
-} from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import type { SessionHeader } from "@oh-my-pi/pi-coding-agent/session/session-entries";
+import { loadEntriesFromFile } from "@oh-my-pi/pi-coding-agent/session/session-loader";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { stripOuterDoubleQuotes } from "@oh-my-pi/pi-coding-agent/tools/path-utils";
 import { getConfigRootDir, setAgentDir } from "@oh-my-pi/pi-utils";
 
