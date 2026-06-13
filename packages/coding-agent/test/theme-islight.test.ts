@@ -1,9 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import {
-	getResolvedThemeColors,
-	getThemeByName,
-	isLightTheme,
-} from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { getResolvedThemeColors, getThemeByName, isLightTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 
 describe("Theme.isLight", () => {
 	it("classifies built-in themes by their status-line surface", async () => {
