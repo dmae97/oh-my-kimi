@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Fixed
+
+- Fixed the compaction flow (`/compact` and plan-mode "Approve and compact context") leaving UI artifacts. `executeCompaction` added a `Spacer(1)` to the transcript that the sibling handoff path never adds and that leaked as an orphan blank line whenever compaction was cancelled or failed; that spacer is removed. On success the compaction loader is now stopped and the status container cleared *before* the transcript is rebuilt, so the live loader row no longer flickers over the reconciled transcript near the status seam (the idempotent `finally` still covers the cancel/fail paths) ([#2486](https://github.com/can1357/oh-my-pi/issues/2486))
 
 ## [15.12.5] - 2026-06-13
 ### Changed
