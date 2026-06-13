@@ -2,7 +2,7 @@ import { normalizedRecallWeights, temporalHalflifeHours } from "../../config";
 import { embedQuery } from "../embeddings";
 import { mmrRerank } from "../mmr";
 import { adjustWeights, classifyIntent } from "../query-intent";
-import { getSynonyms, normalizeQuery } from "../synonyms";
+import { getSynonyms, normalizeQuery, STOP_WORDS as QUERY_STOP_WORDS } from "../synonyms";
 import { extractTemporal } from "../temporal-parser";
 import { cosineSimilarity } from "../vector-math";
 import type { BeamMemoryState, RecallEnhancedOptions, RecallOptions, RecallResult } from "./types";
@@ -101,20 +101,7 @@ const STOP_WORDS = new Set([
 	"with",
 ]);
 
-const FACT_QUERY_FILLER_WORDS = new Set([
-	"about",
-	"can",
-	"did",
-	"do",
-	"does",
-	"know",
-	"me",
-	"my",
-	"please",
-	"tell",
-	"you",
-	"your",
-]);
+const FACT_QUERY_FILLER_WORDS = new Set([...QUERY_STOP_WORDS, "know", "please", "remind", "remember", "tell"]);
 
 function nowIso(): string {
 	return new Date().toISOString();
