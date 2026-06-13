@@ -266,6 +266,23 @@ describe("beam recall free functions", () => {
 		expect(results[0]?.id).toBe("fact-name");
 	});
 
+	it("treats current-intent words as optional fact-query scaffolding", async () => {
+		const beam = makeBeam();
+		insertWorking(beam, "wm-current", "my current name profile is stale", { importance: 1.0 });
+		beam.db.run(
+			"INSERT INTO facts (fact_id, session_id, subject, predicate, object, timestamp, confidence) VALUES (?, ?, ?, ?, ?, ?, ?)",
+			["fact-name", beam.sessionId, "name", "called", "Alice", "2026-05-30T00:00:00.000Z", 0.1],
+		);
+
+		const results = await recallEnhanced(beam, "what my current name", 1, {
+			includeFacts: true,
+			queryEmbedding: null,
+			useMmr: false,
+		});
+
+		expect(results[0]?.id).toBe("fact-name");
+	});
+
 	it("strips clitic fragments before scoring conversational fact queries", async () => {
 		const beam = makeBeam();
 		insertWorking(beam, "wm-clitic", "what s my name onboarding checklist", { importance: 1.0 });

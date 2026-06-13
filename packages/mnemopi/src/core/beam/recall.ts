@@ -103,17 +103,24 @@ const STOP_WORDS = new Set([
 
 const FACT_QUERY_FILLER_WORDS = new Set([
 	...QUERY_STOP_WORDS,
+	"active",
+	"current",
+	"currently",
 	"d",
 	"know",
+	"latest",
 	"ll",
 	"m",
 	"please",
+	"present",
 	"re",
+	"recent",
 	"remind",
 	"remember",
 	"s",
 	"t",
 	"tell",
+	"today",
 	"ve",
 ]);
 
