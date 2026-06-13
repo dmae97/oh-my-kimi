@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added `subagent:<id>` loop-phase breadcrumbs around in-process subagent event dispatch and finalization so the TUI event-loop watchdog can attribute a main-thread stall to subagent execution ([#2485](https://github.com/can1357/oh-my-pi/issues/2485))
 
 ## [15.12.5] - 2026-06-13
 ### Changed
