@@ -16,6 +16,9 @@
 ### Fixed
 
 - Fixed dynamic forced tool choices from queue hooks being filtered against the active per-turn tool set before provider dispatch. ([#1701](https://github.com/can1357/oh-my-pi/issues/1701))
+### Fixed
+- Honor `context_length` reported by OpenAI-compatible proxy `/v1/models` discovery (`discovery: { type: "proxy" }` or `discovery: { type: "openai-models-list" }`), so aggregator-reported windows override the bundled reference when they differ.
+
 
 ## [15.12.4] - 2026-06-13
 ### Fixed
