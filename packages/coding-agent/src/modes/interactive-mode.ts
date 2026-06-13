@@ -810,8 +810,24 @@ export class InteractiveMode implements InteractiveModeContext {
 			name: cmd.name,
 			description: cmd.description,
 		}));
+		// Surface discovered prompt templates in the picker. AgentSession.prompt() expands
+		// `expandSlashCommand` before `expandPromptTemplate`, so a file-based slash command
+		// of the same name shadows the template at runtime — mirror that here by skipping
+		// templates whose names already appear in builtins/hooks/custom/skill/file commands.
+		const reservedNames = new Set<string>([
+			...this.#pendingSlashCommands.map(cmd => cmd.name),
+			...fileSlashCommands.map(cmd => cmd.name),
+		]);
+		const promptTemplateCommands: SlashCommand[] = this.session.promptTemplates
+			.filter(template => !reservedNames.has(template.name))
+			.map(template => ({
+				name: template.name,
+				// `PromptTemplate.description` from `loadTemplatesFromDir` already includes the
+				// source suffix (e.g. "Review code (project)"), so pass it through verbatim.
+				description: template.description,
+			}));
 		const autocompleteProvider = this.#inputController.createAutocompleteProvider(
-			[...this.#pendingSlashCommands, ...fileSlashCommands],
+			[...this.#pendingSlashCommands, ...fileSlashCommands, ...promptTemplateCommands],
 			basePath,
 		);
 		this.editor.setAutocompleteProvider(autocompleteProvider);
