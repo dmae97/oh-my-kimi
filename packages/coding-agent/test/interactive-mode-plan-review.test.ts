@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { Agent } from "@oh-my-pi/pi-agent-core";
+import { Agent, AgentBusyError } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, Usage } from "@oh-my-pi/pi-ai";
 import { KeybindingsManager } from "@oh-my-pi/pi-coding-agent/config/keybindings";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -575,6 +575,50 @@ describe("InteractiveMode plan review rendering", () => {
 		expect(prompt).toHaveBeenCalledWith(expect.any(String), {
 			synthetic: true,
 		});
+	});
+
+	it("aborts an in-flight turn before dispatching the approved plan instead of surfacing AgentBusyError", async () => {
+		const planFilePath = "local://PLAN.md";
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		await Bun.write(resolvedPlanPath, "# Plan\n\nbody");
+		mode.planModeEnabled = true;
+		mode.planModePlanFilePath = planFilePath;
+
+		let streaming = false;
+		Object.defineProperty(session, "isStreaming", {
+			configurable: true,
+			get: () => streaming,
+		});
+		const abortSpy = vi.spyOn(session, "abort").mockImplementation(async () => {
+			// Clear the streaming flag only after an awaited tick, so the test fails
+			// if #approvePlan dispatches the prompt without awaiting abort() — the
+			// real abort() resolves only once the agent loop is idle.
+			await Promise.resolve();
+			streaming = false;
+		});
+		const promptSpy = vi.spyOn(session, "prompt").mockImplementation(async (_text, opts) => {
+			if (streaming && !(opts as { streamingBehavior?: string } | undefined)?.streamingBehavior)
+				throw new AgentBusyError();
+			return true;
+		});
+		// Simulate a re-stream landing during the overlay, then pick keep-context
+		// (options[2]) — that branch skips clear/compact so `this.session` stays the
+		// instance the spies are on.
+		vi.spyOn(mode, "showPlanReview").mockImplementation(async (_plan, _title, options) => {
+			streaming = true;
+			return options[2];
+		});
+		const errorSpy = vi.spyOn(mode, "showError");
+
+		await mode.handlePlanApproval({ planFilePath, planExists: true, title: "PLAN" });
+
+		expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining("Failed to finalize approved plan"));
+		expect(promptSpy).toHaveBeenCalledTimes(1);
+		expect(isPlanApprovedCall(promptSpy.mock.calls[0] as unknown[])).toBe(true);
+		expect(abortSpy).toHaveBeenCalled();
 	});
 
 	it("keeps the existing approve-and-execute path clearing the session", async () => {
