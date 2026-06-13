@@ -7,6 +7,7 @@ import type { MemoryInput, Metadata } from "../types";
 import { AnnotationStore } from "./annotations";
 import { BankManager } from "./banks";
 import { BeamMemory, initBeam } from "./beam/index";
+import { reconcileEmbeddingModel } from "./beam/store";
 import type { RecallEnhancedOptions, RecallOptions, RecallResult, SleepResult } from "./beam/types";
 import { EpisodicGraph } from "./episodic-graph";
 import {
@@ -388,6 +389,10 @@ export class Mnemopi {
 		}
 		this.conn = this.beam.db;
 		this.db = this.beam.db;
+		// Wipe-and-rebuild stale embeddings when the configured model changed since
+		// the vectors were written. Runs inside the runtime scope so
+		// `currentEmbeddingModel()` reflects this instance's configured model.
+		this.#withRuntimeOptions(() => reconcileEmbeddingModel(this.beam));
 	}
 
 	close(): void {

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added the `mnemopi.embeddingVariant` setting (`en` | `multilingual`) selecting a stronger SOTA local embedding model — `en` → `BAAI/bge-base-en-v1.5` (768d), `multilingual` → `intfloat/multilingual-e5-large` (1024d). `mnemopi.embeddingModel` still works as an advanced explicit override (it wins over the variant). Changing the active model wipes and rebuilds stored embeddings on the next start ([#2476](https://github.com/can1357/oh-my-pi/issues/2476))
+
 ## [15.12.5] - 2026-06-13
 ### Changed
 

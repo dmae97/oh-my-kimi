@@ -48,6 +48,14 @@ export function loadMnemopiConfig(settings: Settings, agentDir: string): Mnemopi
 	const recallBanks =
 		scoping === "global" ? scope.recallBanks : extendRecallWithLegacyBanks(scope.recallBanks, dbPath, cwd);
 	const llmMode = settings.get("mnemopi.llmMode");
+	const embeddingOverride = settings.get("mnemopi.embeddingModel");
+	const embeddingVariant = settings.get("mnemopi.embeddingVariant");
+	// Map the variant explicitly rather than indexing an object with the raw config
+	// value (which could resolve an inherited property like `__proto__`); any value
+	// other than the multilingual variant falls back to the English default.
+	const variantModel =
+		embeddingVariant === "multilingual" ? "intfloat/multilingual-e5-large" : "BAAI/bge-base-en-v1.5";
+	const embeddingModel = embeddingOverride?.trim() || variantModel;
 	return {
 		dbPath,
 		baseBank: scope.baseBank,
@@ -69,7 +77,7 @@ export function loadMnemopiConfig(settings: Settings, agentDir: string): Mnemopi
 		providerOptions: {
 			noEmbeddings: settings.get("mnemopi.noEmbeddings"),
 			debug: settings.get("mnemopi.debug"),
-			embeddingModel: settings.get("mnemopi.embeddingModel"),
+			embeddingModel,
 			embeddingApiUrl: settings.get("mnemopi.embeddingApiUrl"),
 			embeddingApiKey: settings.get("mnemopi.embeddingApiKey"),
 			llm:
