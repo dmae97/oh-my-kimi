@@ -491,6 +491,42 @@ interface ExtensionModuleManifest {
 	extensions?: string[];
 }
 
+async function discoverLinkedExtensionModuleFiles(dir: string): Promise<{
+	indexFiles: Array<{ path: string }>;
+	packageJsonFiles: Array<{ path: string }>;
+}> {
+	const entries = await readDirEntries(dir);
+	const indexFiles: Array<{ path: string }> = [];
+	const packageJsonFiles: Array<{ path: string }> = [];
+
+	await Promise.all(
+		entries.map(async entry => {
+			if (entry.name.startsWith(".") || entry.isDirectory()) return;
+
+			const entryPath = path.join(dir, entry.name);
+			const stat = await fs.promises.stat(entryPath).catch(() => null);
+			if (!stat?.isDirectory()) return;
+
+			const [packageJsonContent, indexTsContent, indexJsContent] = await Promise.all([
+				readFile(path.join(entryPath, "package.json")),
+				readFile(path.join(entryPath, "index.ts")),
+				readFile(path.join(entryPath, "index.js")),
+			]);
+
+			if (packageJsonContent !== null) {
+				packageJsonFiles.push({ path: `${entry.name}/package.json` });
+			}
+			if (indexTsContent !== null) {
+				indexFiles.push({ path: `${entry.name}/index.ts` });
+			} else if (indexJsContent !== null) {
+				indexFiles.push({ path: `${entry.name}/index.js` });
+			}
+		}),
+	);
+
+	return { indexFiles, packageJsonFiles };
+}
+
 async function readExtensionModuleManifest(
 	_ctx: LoadContext,
 	packageJsonPath: string,
@@ -520,14 +556,18 @@ async function readExtensionModuleManifest(
 export async function discoverExtensionModulePaths(_ctx: LoadContext, dir: string): Promise<string[]> {
 	const discovered = new Set<string>();
 	// Find all candidate files in parallel using glob
-	const [directFiles, indexFiles, packageJsonFiles] = await Promise.all([
+	const [directFiles, globIndexFiles, globPackageJsonFiles, linkedFiles] = await Promise.all([
 		// 1. Direct *.ts or *.js files
 		globIf(dir, "*.{ts,js}", FileType.File, false),
 		// 2. Subdirectory index files
 		globIf(dir, "*/index.{ts,js}", FileType.File, false),
 		// 3. Subdirectory package.json files
 		globIf(dir, "*/package.json", FileType.File, false),
+		// Native glob does not follow linked extension directories.
+		discoverLinkedExtensionModuleFiles(dir),
 	]);
+	const indexFiles = [...globIndexFiles, ...linkedFiles.indexFiles];
+	const packageJsonFiles = [...globPackageJsonFiles, ...linkedFiles.packageJsonFiles];
 
 	// Process direct files
 	for (const match of directFiles) {
