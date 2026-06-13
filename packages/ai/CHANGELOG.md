@@ -11,6 +11,7 @@
 
 ### Fixed
 
+- Fixed: provider request builders treat unknown `model.maxTokens` (`null`) as "no model cap" instead of coercing to `0` via `Math.min`; Anthropic falls back to the 64k Claude-Code cap for its required `max_tokens`.
 - Fixed transient stream failures on OpenAI-compatible providers by retrying HTTP 408/429/5xx responses and transient network errors with Retry-After/quota-hint aware backoff
 - Fixed SSE stream handling for OpenAI-compatible responses by parsing wire-level JSON frames directly and honoring `[DONE]` termination
 - Fixed stream error handling for OpenAI-compatible providers by preserving structured HTTP status/headers and response body details from failed requests for retry and strict-tool fallback logic

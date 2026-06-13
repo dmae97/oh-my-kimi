@@ -7328,7 +7328,7 @@ export class AgentSession {
 		const candidate = this.#resolveContextPromotionConfiguredTarget(currentModel, availableModels);
 		if (!candidate) return undefined;
 		if (modelsAreEqual(candidate, currentModel)) return undefined;
-		if (candidate.contextWindow <= contextWindow) return undefined;
+		if (candidate.contextWindow == null || candidate.contextWindow <= contextWindow) return undefined;
 		const apiKey = await this.#modelRegistry.getApiKey(candidate, this.sessionId);
 		if (!apiKey) return undefined;
 		return candidate;
@@ -7639,7 +7639,7 @@ export class AgentSession {
 			addCandidate(this.#resolveRoleModelFull(role, availableModels, currentModel).model);
 		}
 
-		const sortedByContext = [...availableModels].sort((a, b) => b.contextWindow - a.contextWindow);
+		const sortedByContext = [...availableModels].sort((a, b) => (b.contextWindow ?? 0) - (a.contextWindow ?? 0));
 		for (const model of sortedByContext) {
 			if (!seen.has(this.#getModelKey(model))) {
 				addCandidate(model);

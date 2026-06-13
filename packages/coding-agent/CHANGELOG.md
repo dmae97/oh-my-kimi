@@ -1,7 +1,6 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Breaking Changes
 
 - Removed the top-level `--list-models` flag path and migrated model listing to the new `omp models` command
@@ -14,6 +13,7 @@
 
 ### Changed
 
+- Model registry merge and `omp models` / model picker handle unknown context/output limits (`null`) — unknown limits render as `-` instead of a fake `222K`/`8.9K`.
 - Changed `omp models` to use cached provider data by default and require `omp models refresh` for a forced online re-fetch
 - Updated model-resolution errors to point to `omp models` when a provider or model is not found
 - Upgraded workspace catalog packages to their latest versions as of 3 days ago, and refactored the ACP agent implementation to be compatible with `@agentclientprotocol/sdk` version `0.25.0`.
@@ -21,6 +21,7 @@
 
 ### Fixed
 
+- Fixed model auth gateway probing to avoid skipping candidates with unknown `maxTokens` limits (`null`)
 - Fixed model listings so providers registered via extensions are now included from `-e` and configured `extensions` sources
 - Fixed `/mcp reauth`, `/mcp test`, and `/mcp unauth` to find and operate on MCP servers reported by `/mcp list` even when they are only runtime-discovered and not stored in writable config, including namespaced plugin servers like `cloudflare:cloudflare-api`
 - Fixed MCP server name validation so colon-namespaced server IDs are accepted when persisting reauth overrides so namespaced OAuth MCP servers can be stored in user config as `server:subserver` entries

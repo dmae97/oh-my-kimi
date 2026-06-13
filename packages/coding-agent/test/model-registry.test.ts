@@ -1860,8 +1860,8 @@ describe("ModelRegistry", () => {
 					reasoning: false,
 					input: ["text"],
 					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-					contextWindow: 222_222, // UNK_CONTEXT_WINDOW
-					maxTokens: 8_888, // UNK_MAX_TOKENS
+					contextWindow: null, // unknown limit
+					maxTokens: null, // unknown limit
 				}),
 			],
 			true,
@@ -1872,9 +1872,9 @@ describe("ModelRegistry", () => {
 
 		expect(model).toBeDefined();
 		// The bundled gpt-4o has a correct contextWindow, not the UNK sentinel
-		expect(model!.contextWindow).not.toBe(222_222);
+		expect(model!.contextWindow).not.toBeNull();
 		expect(model!.contextWindow).toBeGreaterThan(100_000);
-		expect(model!.maxTokens).not.toBe(8_888);
+		expect(model!.maxTokens).not.toBeNull();
 		expect(model!.maxTokens).toBeGreaterThan(1000);
 	});
 

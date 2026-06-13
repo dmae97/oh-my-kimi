@@ -16,10 +16,15 @@ import type { ChildProcess } from "node:child_process";
 import { execSync, spawn } from "node:child_process";
 import { complete } from "@oh-my-pi/pi-ai/stream";
 import type { AssistantMessage, Context, Model, Usage } from "@oh-my-pi/pi-ai/types";
-import { isContextOverflow } from "@oh-my-pi/pi-ai/utils/overflow";
+import { isContextOverflow as originalIsContextOverflow } from "@oh-my-pi/pi-ai/utils/overflow";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { $which } from "@oh-my-pi/pi-utils";
+
+function isContextOverflow(message: AssistantMessage, contextWindow: number | null): boolean {
+	return originalIsContextOverflow(message, contextWindow ?? 0);
+}
+
 import { e2eApiKey, resolveApiKey } from "./oauth";
 
 // Resolve OAuth tokens at module level (async, runs before tests)
@@ -55,7 +60,7 @@ interface OverflowResult {
 }
 
 async function testContextOverflow(model: Model, apiKey: string): Promise<OverflowResult> {
-	const overflowContent = generateOverflowContent(model.contextWindow);
+	const overflowContent = generateOverflowContent(model.contextWindow ?? 0);
 
 	const context: Context = {
 		systemPrompt: ["You are a helpful assistant."],
@@ -75,7 +80,7 @@ async function testContextOverflow(model: Model, apiKey: string): Promise<Overfl
 	return {
 		provider: model.provider,
 		model: model.id,
-		contextWindow: model.contextWindow,
+		contextWindow: model.contextWindow ?? 0,
 		stopReason: response.stopReason,
 		errorMessage: response.errorMessage,
 		usage: response.usage,
@@ -459,7 +464,7 @@ describe("Context overflow error handling", () => {
 			// Either way, isContextOverflow should detect it (via usage check or we skip if rate limited)
 			if (result.stopReason === "stop") {
 				expect(result.hasUsageData).toBe(true);
-				expect(result.usage.input).toBeGreaterThan(model.contextWindow);
+				expect(result.usage.input).toBeGreaterThan(model.contextWindow ?? 0);
 				expect(isContextOverflow(result.response, model.contextWindow)).toBe(true);
 			} else {
 				// Rate limited or other error - just log and pass

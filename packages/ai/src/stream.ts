@@ -557,6 +557,7 @@ export async function completeSimple<TApi extends Api>(
 }
 
 const MIN_OUTPUT_TOKENS = 1024;
+const OUTPUT_CAP_WHEN_UNKNOWN = 64_000;
 export const OUTPUT_FALLBACK_BUFFER = 4000;
 const ANTHROPIC_USE_INTERLEAVED_THINKING = Bun.env.PI_NO_INTERLEAVED_THINKING !== "1";
 
@@ -709,7 +710,7 @@ function mapOptionsForApi<TApi extends Api>(
 		minP: options?.minP,
 		presencePenalty: options?.presencePenalty,
 		repetitionPenalty: options?.repetitionPenalty,
-		maxTokens: options?.maxTokens ?? model.maxTokens,
+		maxTokens: options?.maxTokens ?? model.maxTokens ?? undefined,
 		signal: options?.signal,
 		apiKey: apiKey ?? (typeof options?.apiKey === "string" ? options.apiKey : undefined),
 		cacheRetention: options?.cacheRetention,
@@ -785,7 +786,10 @@ function mapOptionsForApi<TApi extends Api>(
 			}
 
 			// Caller's maxTokens is the desired output; add thinking budget on top, capped at model limit
-			const maxTokens = Math.min((base.maxTokens || 0) + thinkingBudget, model.maxTokens);
+			const maxTokens = Math.min(
+				(base.maxTokens || 0) + thinkingBudget,
+				model.maxTokens ?? Number.POSITIVE_INFINITY,
+			);
 
 			// If not enough room for thinking + output, reduce thinking budget
 			if (maxTokens <= thinkingBudget) {
@@ -830,10 +834,13 @@ function mapOptionsForApi<TApi extends Api>(
 			}
 			const budgetInfo = resolveBedrockThinkingBudget(model as Model<"bedrock-converse-stream">, options);
 			if (!budgetInfo) return bedrockBase as OptionsForApi<TApi>;
-			let maxTokens = bedrockBase.maxTokens ?? model.maxTokens;
+			let maxTokens = bedrockBase.maxTokens ?? model.maxTokens ?? OUTPUT_CAP_WHEN_UNKNOWN;
 			let thinkingBudgets = bedrockBase.thinkingBudgets;
 			if (maxTokens <= budgetInfo.budget) {
-				const desiredMaxTokens = Math.min(model.maxTokens, budgetInfo.budget + MIN_OUTPUT_TOKENS);
+				const desiredMaxTokens = Math.min(
+					model.maxTokens ?? Number.POSITIVE_INFINITY,
+					budgetInfo.budget + MIN_OUTPUT_TOKENS,
+				);
 				if (desiredMaxTokens > maxTokens) {
 					maxTokens = desiredMaxTokens;
 				}
@@ -943,7 +950,10 @@ function mapOptionsForApi<TApi extends Api>(
 				let thinkingBudget = options.thinkingBudgets?.[effort] ?? GOOGLE_THINKING[effort];
 
 				// Caller's maxTokens is the desired output; add thinking budget on top, capped at model limit
-				const maxTokens = Math.min((base.maxTokens || 0) + thinkingBudget, model.maxTokens);
+				const maxTokens = Math.min(
+					(base.maxTokens || 0) + thinkingBudget,
+					model.maxTokens ?? Number.POSITIVE_INFINITY,
+				);
 
 				// If not enough room for thinking + output, reduce thinking budget
 				if (maxTokens <= thinkingBudget) {

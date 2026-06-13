@@ -68,8 +68,8 @@ interface ModelJson {
 	id: string;
 	selector: string;
 	name: string;
-	contextWindow: number;
-	maxTokens: number;
+	contextWindow: number | null;
+	maxTokens: number | null;
 	reasoning: boolean;
 	/** Supported thinking efforts when the model thinks, otherwise null. */
 	thinking: readonly Effort[] | null;
@@ -81,8 +81,8 @@ interface CanonicalJson {
 	id: string;
 	selected: string;
 	variants: number;
-	contextWindow: number;
-	maxTokens: number;
+	contextWindow: number | null;
+	maxTokens: number | null;
 }
 
 interface ModelsJson {
@@ -95,6 +95,10 @@ interface CanonicalModelsJson {
 
 function writeLine(line = ""): void {
 	process.stdout.write(`${line}\n`);
+}
+
+function formatLimit(n: number | null): string {
+	return n === null ? "-" : formatNumber(n);
 }
 
 function byProviderThenId(left: Model<Api>, right: Model<Api>): number {
@@ -229,8 +233,8 @@ function renderProviderModels(
 		writeLine(`${chalk.bold.cyan(provider)} ${chalk.dim(`(${models.length})`)}`);
 		const rows = models.map(model => [
 			model.id,
-			formatNumber(model.contextWindow),
-			formatNumber(model.maxTokens),
+			formatLimit(model.contextWindow),
+			formatLimit(model.maxTokens),
 			model.thinking ? getSupportedEfforts(model).join(",") : model.reasoning ? "yes" : "-",
 			model.input.includes("image") ? "yes" : "no",
 		]);
@@ -293,8 +297,8 @@ function renderCanonicalModels(modelRegistry: ModelRegistry, pattern: string | u
 			record.id,
 			`${model.provider}/${model.id}`,
 			String(record.variants.length),
-			formatNumber(model.contextWindow),
-			formatNumber(model.maxTokens),
+			formatLimit(model.contextWindow),
+			formatLimit(model.maxTokens),
 		]);
 	for (const line of boxTable(
 		[

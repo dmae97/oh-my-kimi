@@ -17,8 +17,6 @@ import {
 	googleGeminiCliModelManagerOptions,
 	openaiCodexModelManagerOptions,
 	PROVIDER_DESCRIPTORS,
-	UNK_CONTEXT_WINDOW,
-	UNK_MAX_TOKENS,
 } from "@oh-my-pi/pi-catalog/provider-models";
 import {
 	collapseBuiltModelVariants,
@@ -530,9 +528,8 @@ function finalizeCustomModel(model: CustomModelOverlay, options: CustomModelBuil
 		thinking: resolvedModel.thinking ?? reference?.thinking,
 		input: input as ("text" | "image")[],
 		cost,
-		contextWindow:
-			resolvedModel.contextWindow ?? reference?.contextWindow ?? (options.useDefaults ? 128000 : undefined),
-		maxTokens: resolvedModel.maxTokens ?? reference?.maxTokens ?? (options.useDefaults ? 16384 : undefined),
+		contextWindow: resolvedModel.contextWindow ?? reference?.contextWindow ?? (options.useDefaults ? 128000 : null),
+		maxTokens: resolvedModel.maxTokens ?? reference?.maxTokens ?? (options.useDefaults ? 16384 : null),
 		headers: resolvedModel.headers,
 		omitMaxOutputTokens: resolvedModel.omitMaxOutputTokens ?? reference?.omitMaxOutputTokens,
 		compat: mergeCompat(reference?.compatConfig, resolvedModel.compat),
@@ -866,11 +863,8 @@ export class ModelRegistry {
 			if (!existing) return replacementModel;
 			return {
 				...replacementModel,
-				contextWindow:
-					replacementModel.contextWindow === UNK_CONTEXT_WINDOW
-						? existing.contextWindow
-						: replacementModel.contextWindow,
-				maxTokens: replacementModel.maxTokens === UNK_MAX_TOKENS ? existing.maxTokens : replacementModel.maxTokens,
+				contextWindow: replacementModel.contextWindow ?? existing.contextWindow,
+				maxTokens: replacementModel.maxTokens ?? existing.maxTokens,
 			};
 		});
 	}

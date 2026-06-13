@@ -7,6 +7,7 @@
 - Changed
 
 ### Changed
+- Model `contextWindow`/`maxTokens` are now `number | null`; discovery emits `null` when a provider reports no limit, replacing the `222222`/`8888` (`UNK_CONTEXT_WINDOW`/`UNK_MAX_TOKENS`) sentinels (now removed). Bundled `models.json` unknown limits are `null`.
 
 - Changed the `github-copilot` model context window to `524288` tokens
 - Changed Fireworks model discovery to source the control-plane `List Models` API (`GET /v1/accounts/fireworks/models?filter=supports_serverless=true`) instead of the OpenAI-compatible `/v1/models` inference listing. The inference endpoint returns a sparse, account-specific subset that omits on-demand serverless models (e.g. `kimi-k2.7-code`), so newly published serverless models stayed invisible in the picker until hand-added to the bundled catalog. The control-plane catalog enumerates every serverless model with capability metadata (`supportsServerless`/`supportsTools`/`supportsImageInput`/`contextLength`/`displayName`), paginated and filtered to tool-capable `READY` entries, then merged with bundled/models.dev references — the Kimi K2 max-output clamp and DeepSeek V4 thinking-toggle strip are preserved, and unbundled models default to reasoning so `buildModel` derives the Fireworks effort map. New serverless releases now surface automatically with no catalog edits.

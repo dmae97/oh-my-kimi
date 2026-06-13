@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Fixed
+
+- Fixed context usage percentage calculations to return null when context window is missing or non-positive, preventing invalid or Infinity/NaN usage display
 
 ## [15.12.2] - 2026-06-12
 

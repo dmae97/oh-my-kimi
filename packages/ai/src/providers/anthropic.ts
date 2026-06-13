@@ -2817,7 +2817,8 @@ function buildParams(
 	// Claude Code requests at most 64k output tokens; clamp only OAuth requests,
 	// where the wire fingerprint must match. API-key callers keep the full model
 	// ceiling (e.g. 128k on Opus 4.8).
-	const maxOutputTokens = isOAuthToken ? Math.min(CLAUDE_CODE_MAX_OUTPUT_TOKENS, model.maxTokens) : model.maxTokens;
+	const modelMaxTokens = model.maxTokens ?? CLAUDE_CODE_MAX_OUTPUT_TOKENS;
+	const maxOutputTokens = isOAuthToken ? Math.min(CLAUDE_CODE_MAX_OUTPUT_TOKENS, modelMaxTokens) : modelMaxTokens;
 
 	// Build params in the canonical field order: model → messages → system → tools →
 	// metadata → max_tokens → thinking → context_management → output_config → stream.
@@ -2827,7 +2828,7 @@ function buildParams(
 		...(systemBlocks && { system: systemBlocks }),
 		...(tools !== undefined && { tools }),
 		...(metadata && { metadata }),
-		max_tokens: Math.min(maxOutputTokens, options?.maxTokens || model.maxTokens),
+		max_tokens: Math.min(maxOutputTokens, options?.maxTokens || modelMaxTokens),
 		...(thinking && { thinking }),
 		...(contextManagement && { context_management: contextManagement }),
 		...(outputConfig && { output_config: outputConfig }),

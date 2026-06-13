@@ -11,7 +11,6 @@ import type { Api, FetchImpl, Model, ModelSpec, Provider, ThinkingConfig } from 
 import { isAnthropicOAuthToken, isRecord, toBoolean, toNumber, toPositiveNumber } from "../utils";
 import { COPILOT_API_HEADERS, getGitHubCopilotBaseUrl, parseGitHubCopilotApiKey } from "../wire/github-copilot";
 import { createBundledReferenceMap, createReferenceResolver, toModelSpec } from "./bundled-references";
-import { UNK_CONTEXT_WINDOW, UNK_MAX_TOKENS } from "./discovery-constants";
 
 const MODELS_DEV_URL = "https://models.dev/api.json";
 const ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1";
@@ -103,8 +102,8 @@ function mapAnthropicModelsDev(payload: unknown, baseUrl: string): ModelSpec<"an
 				cacheRead: toNumber(model.cost?.cache_read) ?? 0,
 				cacheWrite: toNumber(model.cost?.cache_write) ?? 0,
 			},
-			contextWindow: toPositiveNumber(model.limit?.context, UNK_CONTEXT_WINDOW),
-			maxTokens: toPositiveNumber(model.limit?.output, UNK_MAX_TOKENS),
+			contextWindow: toPositiveNumber(model.limit?.context, null),
+			maxTokens: toPositiveNumber(model.limit?.output, null),
 		});
 	}
 
@@ -1095,7 +1094,10 @@ export function isFireworksKimiK2ModelId(modelId: string): boolean {
  * Clamp the Kimi K2 family's `maxTokens` to {@link FIREWORKS_KIMI_MAX_TOKENS}
  * on Fireworks-backed providers, leaving every other model untouched.
  */
-export function clampFireworksKimiMaxTokens(modelId: string, candidate: number): number {
+export function clampFireworksKimiMaxTokens(modelId: string, candidate: number): number;
+export function clampFireworksKimiMaxTokens(modelId: string, candidate: number | null): number | null;
+export function clampFireworksKimiMaxTokens(modelId: string, candidate: number | null): number | null {
+	if (candidate === null) return null;
 	return isFireworksKimiK2ModelId(modelId) ? Math.min(candidate, FIREWORKS_KIMI_MAX_TOKENS) : candidate;
 }
 
@@ -1176,10 +1178,10 @@ function mapFireworksControlPlaneModel(
 ): ModelSpec<"openai-completions"> {
 	const name = toModelName(record.displayName, reference?.name ?? publicModelId);
 	const supportsImage = toBoolean(record.supportsImageInput) === true;
-	const contextWindow = toPositiveNumber(record.contextLength, reference?.contextWindow ?? UNK_CONTEXT_WINDOW);
+	const contextWindow = toPositiveNumber(record.contextLength, reference?.contextWindow ?? null);
 	// The control plane reports no max-output budget; default the Kimi family to
 	// its published cap, everyone else to the discovery fallback, then clamp.
-	const fallbackMaxTokens = isFireworksKimiK2ModelId(publicModelId) ? FIREWORKS_KIMI_MAX_TOKENS : UNK_MAX_TOKENS;
+	const fallbackMaxTokens = isFireworksKimiK2ModelId(publicModelId) ? FIREWORKS_KIMI_MAX_TOKENS : null;
 	const maxTokens = clampFireworksKimiMaxTokens(publicModelId, reference?.maxTokens ?? fallbackMaxTokens);
 	const base: ModelSpec<"openai-completions"> = reference ?? {
 		id: publicModelId,
@@ -1290,11 +1292,14 @@ function createModelsDevReferenceMap<TApi extends Api>(
 			references.set(candidate.id, candidate);
 			continue;
 		}
-		if (candidate.contextWindow > existing.contextWindow) {
+		if ((candidate.contextWindow ?? 0) > (existing.contextWindow ?? 0)) {
 			references.set(candidate.id, candidate);
 			continue;
 		}
-		if (candidate.contextWindow === existing.contextWindow && candidate.maxTokens > existing.maxTokens) {
+		if (
+			candidate.contextWindow === existing.contextWindow &&
+			(candidate.maxTokens ?? 0) > (existing.maxTokens ?? 0)
+		) {
 			references.set(candidate.id, candidate);
 		}
 	}
@@ -1413,7 +1418,7 @@ function mapWaferModel(
 		wafer?.context_length,
 		toPositiveNumber((entry as { max_model_len?: unknown }).max_model_len, defaults.contextWindow),
 	);
-	const maxTokens = Math.min(contextWindow, WAFER_MAX_TOKENS_CAP);
+	const maxTokens = contextWindow !== null ? Math.min(contextWindow, WAFER_MAX_TOKENS_CAP) : null;
 	const pricing = wafer?.pricing ?? {};
 	// Wafer's `/v1/models` exposes pricing through `*_cents_per_million` fields,
 	// but the values are an internal wholesale unit, not literal cents — across
@@ -2610,16 +2615,16 @@ function copilotTierCost(
  */
 function createCopilotLongContextVariant(
 	base: ModelSpec<Api>,
-	fullContextWindow: number,
-	maxTokens: number,
+	fullContextWindow: number | null,
+	maxTokens: number | null,
 	longContext: CopilotTokenPriceTier | undefined,
 ): ModelSpec<Api> | undefined {
 	const longContextMax = longContext?.contextMax;
-	if (longContextMax === undefined || longContextMax <= 0) {
+	if (longContextMax === undefined || longContextMax <= 0 || fullContextWindow === null || maxTokens === null) {
 		return undefined;
 	}
 	const variantWindow = Math.min(fullContextWindow, longContextMax + maxTokens);
-	if (variantWindow <= base.contextWindow) {
+	if (base.contextWindow === null || variantWindow <= base.contextWindow) {
 		return undefined;
 	}
 	const longCost = copilotTierCost(longContext);
@@ -2708,7 +2713,10 @@ export function githubCopilotModelManagerOptions(config?: GithubCopilotModelMana
 						const tokenPrices = extractCopilotTokenPrices(entry);
 						const defaultContextMax = tokenPrices.defaultTier?.contextMax;
 						const defaultTierWindow =
-							defaultContextMax !== undefined && defaultContextMax > 0
+							defaultContextMax !== undefined &&
+							defaultContextMax > 0 &&
+							contextWindow !== null &&
+							maxTokens !== null
 								? Math.min(contextWindow, defaultContextMax + maxTokens)
 								: contextWindow;
 						const base: ModelSpec<Api> = reference
@@ -2853,8 +2861,6 @@ export function anthropicModelManagerOptions(
 // Models.dev provider descriptors for generate-models.ts
 // ---------------------------------------------------------------------------
 
-export { UNK_CONTEXT_WINDOW, UNK_MAX_TOKENS } from "./discovery-constants";
-
 /** Describes how to map models.dev API data for a single provider. */
 export interface ModelsDevProviderDescriptor {
 	/** Key in the models.dev API response JSON (e.g., "anthropic", "amazon-bedrock") */
@@ -2934,8 +2940,8 @@ export function mapModelsDevToModels(
 					cacheRead: toNumber(m.cost?.cache_read) ?? 0,
 					cacheWrite: toNumber(m.cost?.cache_write) ?? 0,
 				},
-				contextWindow: toPositiveNumber(m.limit?.context, desc.defaultContextWindow ?? UNK_CONTEXT_WINDOW),
-				maxTokens: toPositiveNumber(m.limit?.output, desc.defaultMaxTokens ?? UNK_MAX_TOKENS),
+				contextWindow: toPositiveNumber(m.limit?.context, desc.defaultContextWindow ?? null),
+				maxTokens: toPositiveNumber(m.limit?.output, desc.defaultMaxTokens ?? null),
 				...(desc.compat && { compat: desc.compat }),
 				...(desc.headers && { headers: { ...desc.headers } }),
 			};
