@@ -3004,7 +3004,7 @@ function compositeExpectedOverlays(
 		if (!isExpectedOverlayVisible(entry, termWidth, termHeight)) continue;
 		const firstLayout = resolveExpectedOverlayLayout(entry.options, 0, termWidth, termHeight);
 		let overlayLines = entry.component.render(firstLayout.width);
-		if (firstLayout.maxHeight !== undefined && overlayLines.length > firstLayout.maxHeight) {
+		if (overlayLines.length > firstLayout.maxHeight) {
 			overlayLines = overlayLines.slice(0, firstLayout.maxHeight);
 		}
 		const layout = resolveExpectedOverlayLayout(entry.options, overlayLines.length, termWidth, termHeight);
@@ -3039,7 +3039,7 @@ export function resolveExpectedOverlayLayout(
 	overlayHeight: number,
 	termWidth: number,
 	termHeight: number,
-): { width: number; row: number; col: number; maxHeight: number | undefined } {
+): { width: number; row: number; col: number; maxHeight: number } {
 	const opt = options ?? {};
 	const margin =
 		typeof opt.margin === "number"
@@ -3056,11 +3056,9 @@ export function resolveExpectedOverlayLayout(
 		width = Math.max(width, opt.minWidth);
 	}
 	width = Math.max(1, Math.min(width, availWidth));
-	let maxHeight = parseOverlaySizeValue(opt.maxHeight, termHeight);
-	if (maxHeight !== undefined) {
-		maxHeight = Math.max(1, Math.min(maxHeight, availHeight));
-	}
-	const effectiveHeight = maxHeight !== undefined ? Math.min(overlayHeight, maxHeight) : overlayHeight;
+	let maxHeight = parseOverlaySizeValue(opt.maxHeight, termHeight) ?? availHeight;
+	maxHeight = Math.max(1, Math.min(maxHeight, availHeight));
+	const effectiveHeight = Math.min(overlayHeight, maxHeight);
 	let row: number;
 	let col: number;
 	if (opt.row !== undefined) {

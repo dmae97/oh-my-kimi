@@ -210,13 +210,24 @@ const EDITOR_MAX_HEIGHT_MIN = 6;
 const EDITOR_MAX_HEIGHT_MAX = 18;
 const EDITOR_RESERVED_ROWS = 12;
 const EDITOR_FALLBACK_ROWS = 24;
-const EDITOR_MIN_CHROME_ROWS = 4; // rows reserved for transcript + status + chrome on tiny terms
+const EDITOR_MIN_CHROME_ROWS = 4; // rows reserved for transcript + status on small terms
+const EDITOR_MIN_RENDERED_ROWS = 3; // bordered editor floor: top+bottom border + 1 content row
 
+/**
+ * Editor max-height cap for a terminal of `terminalRows` rows.
+ *
+ * Roomy terminals get the comfortable [6, 18] band. Small terminals shrink the
+ * cap so the editor leaves at least EDITOR_MIN_CHROME_ROWS rows for the
+ * transcript + status line. The editor is bordered, so it never renders fewer
+ * than EDITOR_MIN_RENDERED_ROWS rows; once the terminal is too small for both
+ * (terminalRows < EDITOR_MIN_RENDERED_ROWS + EDITOR_MIN_CHROME_ROWS) the cap is
+ * pinned to that floor — returning a smaller number would not shrink the editor
+ * any further, it would only misreport the rows it actually occupies.
+ */
 export function computeEditorMaxHeight(terminalRows: number): number {
 	const rows = Number.isFinite(terminalRows) && terminalRows > 0 ? terminalRows : EDITOR_FALLBACK_ROWS;
-	const desired = Math.max(EDITOR_MAX_HEIGHT_MIN, Math.min(EDITOR_MAX_HEIGHT_MAX, rows - EDITOR_RESERVED_ROWS));
-	// Never let the editor crowd out the rest of the UI on small terminals.
-	return Math.max(1, Math.min(desired, rows - EDITOR_MIN_CHROME_ROWS));
+	const comfortable = Math.max(EDITOR_MAX_HEIGHT_MIN, Math.min(EDITOR_MAX_HEIGHT_MAX, rows - EDITOR_RESERVED_ROWS));
+	return Math.max(EDITOR_MIN_RENDERED_ROWS, Math.min(comfortable, rows - EDITOR_MIN_CHROME_ROWS));
 }
 
 const HUD_NOTE_SUP_DIGITS: Record<string, string> = {
