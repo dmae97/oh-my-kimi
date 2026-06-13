@@ -148,10 +148,16 @@ export interface ToolExecutionHandle {
 /** Drive pending-tool redraws at 30fps for live tool headers and displaceable
  * poll blocks. The TUI throttles at the same cadence, and static frames diff to
  * a no-op redraw at ~zero cost. */
-const SPINNER_RENDER_INTERVAL_MS = 1000 / 30;
+export const SPINNER_RENDER_INTERVAL_MS = 1000 / 30;
 /** Advance the spinner glyph at its classic ~12.5fps step, decoupled from the
  * render cadence (mirrors `Loader`). */
-const SPINNER_GLYPH_ADVANCE_MS = 80;
+export const SPINNER_GLYPH_ADVANCE_MS = 80;
+
+/** Phase-locked spinner glyph index shared by every live tool block so parallel
+ * spinners advance in lockstep instead of each tracking its own start time. */
+export function sharedSpinnerFrame(frameCount: number, now: number = performance.now()): number {
+	return frameCount > 0 ? Math.floor(now / SPINNER_GLYPH_ADVANCE_MS) % frameCount : 0;
+}
 
 // Stable per-instance counter so each tool execution's inline images get a
 // graphics id that survives child re-creation (the image budget keys off it).
@@ -196,7 +202,6 @@ export class ToolExecutionComponent extends Container {
 	// Spinner animation for partial task results
 	#spinnerFrame?: number;
 	#spinnerInterval?: NodeJS.Timeout;
-	#lastSpinnerAdvanceAt = 0;
 	// Todo write completion strikethrough reveal animation
 	#todoStrikeInterval?: NodeJS.Timeout;
 	// Track if args are still being streamed (for edit/write spinner)
@@ -470,32 +475,18 @@ export class ToolExecutionComponent extends Container {
 		// once the block leaves the live region.
 		const needsSpinner = isStreamingArgs || isPartialTask || this.isDisplaceableBlock();
 		if (needsSpinner && !this.#spinnerInterval) {
-			const now = performance.now();
 			const frameCount = theme.spinnerFrames.length;
-			this.#lastSpinnerAdvanceAt = now;
-			if (frameCount > 0 && this.#spinnerFrame === undefined) {
-				this.#spinnerFrame = 0;
-				this.#renderState.spinnerFrame = 0;
-			}
+			const frame = sharedSpinnerFrame(frameCount);
+			this.#spinnerFrame = frame;
+			this.#renderState.spinnerFrame = frame;
 			this.#spinnerInterval = setInterval(() => {
 				// If a detached task interval from an older render path is still live,
 				// stop it the instant the block leaves the repaintable region.
 				if (this.#maybeFreezeBackgroundTask()) return;
 				const now = performance.now();
 				const frameCount = theme.spinnerFrames.length;
-				// Redraw at 30fps, but keep the spinner glyph phase-locked to its
-				// classic ~12.5fps cadence. Advancing the anchor by elapsed frames
-				// instead of resetting to `now` avoids the 30fps timer quantizing the
-				// glyph down to one step every three ticks.
-				if (frameCount > 0) {
-					const elapsed = now - this.#lastSpinnerAdvanceAt;
-					if (elapsed >= SPINNER_GLYPH_ADVANCE_MS) {
-						const steps = Math.floor(elapsed / SPINNER_GLYPH_ADVANCE_MS);
-						this.#spinnerFrame = ((this.#spinnerFrame ?? 0) + steps) % frameCount;
-						this.#renderState.spinnerFrame = this.#spinnerFrame;
-						this.#lastSpinnerAdvanceAt += steps * SPINNER_GLYPH_ADVANCE_MS;
-					}
-				}
+				this.#spinnerFrame = sharedSpinnerFrame(frameCount, now);
+				this.#renderState.spinnerFrame = this.#spinnerFrame;
 				this.#ui.requestRender();
 			}, SPINNER_RENDER_INTERVAL_MS);
 		} else if (!needsSpinner && this.#spinnerInterval) {

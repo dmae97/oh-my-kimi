@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed tool-call spinners animating out of phase across parallel tool calls — each live tool block advanced its glyph from its own per-instance start time, so concurrent spinners showed different frames. Glyphs now derive from a single shared monotonic clock (`sharedSpinnerFrame`), keeping every live block in lockstep.
+
 ## [15.12.5] - 2026-06-13
 ### Changed
 
