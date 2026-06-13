@@ -367,8 +367,8 @@ ls $OMK_RUNTIME_HOME/.agents/skills/headroom/
 
 ### 13.1 학습 리소스
 - [Headroom 문서](https://headroom-docs.vercel.app/docs)
-- [OMK 문서](https://github.com/open_multi-agent_kit)
-- [OMK 런타임 문서](https://github.com/dmae97/open_multi-agent_kit)
+- [OMK 문서](https://github.com/dmae97/open-multi-agent-kit)
+- [OMK 런타임 문서](https://github.com/dmae97/open-multi-agent-kit)
 
 ### 13.2 커뮤니티 참여
 - GitHub 이슈 및 PR

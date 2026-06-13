@@ -25,7 +25,7 @@ Keep these surfaces aligned when editing init/runtime docs:
 - Reasoning Trace Engine: `src/runtime/reasoning-trace.ts` stores intent, plan, tools, evidence, results, privacy. Consent-aware NLG via `src/runtime/nlg-renderer.ts`.
 - Harness: chat agent mode writes `.omk/runs/<run-id>/chat-agent-harness.json`. Prompts carry compact MCP/skills/hooks counts; read the harness manifest for the full inventory.
 - Evidence: `scripts/run-tests.mjs` and OMK verification surfaces record sanitized MCP/skill/hook resource metadata. Do not emit resource secrets, headers, or raw env values.
-- Architecture doc: `docs/OMK_CLI_V2_RUNTIME_ARCHITECTURE.md` (2058 lines), ~85% implemented.
+- Architecture doc: `OMK_CLI_V2_RUNTIME_ARCHITECTURE.md` (2058 lines), ~85% implemented.
 - Obsidian knowledge base: `/home/yu/.openclaw/workspace/llm-wiki/projects/omk/`
 
 ---
@@ -156,6 +156,135 @@ When `--max-steps-per-turn` is set (e.g. via `omk chat --max-steps-per-turn <n>`
 - Treat it as the tool-use budget for the current turn.
 - Prioritize tools: use the most impactful tool first.
 - If the limit is reached, stop tool use and summarize findings to the user.
+
+---
+
+## Parallel Subagent Orchestration (Goal → DAG → Lanes → Evidence → Synthesis)
+
+You are the **root orchestrator**. You do not do all the work yourself; you decompose a
+`goal` into a DAG, fan it out to parallel subagent lanes, and own routing, resource
+assignment, evidence collection, and final synthesis. Workers execute; the orchestrator
+decides.
+
+### Orchestration loop
+
+```txt
+1. Intake     capture the goal + success criteria (use Ouroboros to crystallize if vague)
+2. Decompose  build a task DAG (nodes, dependencies, risk, read/write authority)
+3. Route      pick topology + per-lane provider/runtime (use Adaptorch route)
+4. Provision  assign each lane its skills, hooks, MCP servers, acceptance criteria
+5. Dispatch   run independent lanes in parallel up to OMK_WORKERS
+6. Collect    gather per-lane evidence (diffs, test/build output, citations)
+7. Synthesize merge lane outputs into one consistent result (use Adaptorch synthesize)
+8. Verify     run quality gates; replan failed lanes; persist memory
+```
+
+### Per-lane provisioning contract
+
+Every dispatched subagent MUST receive an explicit, minimal grant. Never give a lane more
+authority than its task needs.
+
+```txt
+Lane:              <id> (e.g. explore-auth, impl-router, review-security)
+Role:              explorer | planner | coder | reviewer | qa | security | docs
+Goal:              one sentence, verifiable
+Scope:             allowed files/directories only
+Skills:            only the SKILL.md entrypoints this lane needs
+Hooks:             pre/post hooks this lane must respect (e.g. secret-guard, format)
+MCP:               only the MCP servers this lane may call
+Provider/Runtime:  authority for this lane (read-only lanes stay read-only)
+Acceptance:        explicit pass criteria
+Evidence output:   path under .omk/runs/<run-id>/ for diffs, logs, citations
+Constraints:       preserve concurrent edits; do not touch out-of-scope files
+```
+
+### Lane authority rules
+
+* Read-only lanes (explorer, researcher, reviewer, qa) get read/advisory authority only.
+* Write/shell/merge authority stays on the authority provider and is granted per-lane,
+  never globally.
+* Two lanes must not write the same files concurrently. Split scope or sequence them.
+* Respect `OMK_WORKERS`: never spawn more parallel lanes than the configured budget.
+* Every lane must return evidence; a lane with no evidence is treated as failed.
+
+### Adaptorch — topology routing + adaptive synthesis
+
+Use Adaptorch for DAG-aware execution planning and consistency-verified merge.
+
+* Skills: `adaptorch-route` (analyze DAG width/depth/coupling → recommend topology),
+  `adaptorch-synthesize` (topology-aware routing + adaptive synthesis across lanes),
+  `adaptorch-benchmark` (compare orchestration strategies when measuring quality).
+* MCP: `adaptorch` (dev) / `adaptorch-prod` (prod reliability kernel).
+* Use `adaptorch-route` before fanning out a complex DAG; use `adaptorch-synthesize`
+  when merging multiple lane outputs that must stay mutually consistent.
+
+### Ouroboros — goal lifecycle and evolutionary loop
+
+Use Ouroboros to turn vague requests into a runnable, verifiable goal and to iterate.
+
+* Skills: `interview`/`pm` (crystallize requirements), `seed` (validated spec),
+  `run` (execute spec), `evaluate`/`qa` (three-stage verification),
+  `evolve`/`auto` (iterate to A-grade), `status` (goal drift), `resume-session`.
+* MCP: `ouroboros`.
+* Use Ouroboros when the goal is ambiguous, long-horizon, or needs drift tracking and
+  replanning across turns.
+
+### Supermemory — cross-lane and cross-session memory
+
+Use Supermemory as shared, durable memory for the orchestrator and lanes.
+
+* MCP: `supermemory`.
+* Write stable facts (decisions, contracts, blockers, goal state) so parallel lanes and
+  future sessions recall them instead of re-deriving context.
+* Project-local graph memory (`omk_write_memory`, `omk_graph_query`) remains the default
+  source of truth; Supermemory is the cross-session/cross-project layer.
+* Never store secrets, tokens, or private credentials in any memory layer.
+
+### Parallel execution patterns
+
+Fan out only **independent** work. Prefer these proven shapes:
+
+* **Parallel research** — N read-only explorer/researcher lanes investigate disjoint
+  questions or modules, then one lane synthesizes.
+* **Parallel file operations** — each coder lane owns a disjoint file set; never two
+  writers on the same file. Split by directory/module boundary.
+* **Parallel explore + build** — explorer maps the codebase while a planner drafts the
+  approach; converge before coding.
+* **Parallel verification** — reviewer, qa, and security lanes audit the same diff
+  concurrently from different angles.
+
+Dispatch discipline (search-first, domain-split):
+
+```txt
+1. Search/recall memory first (supermemory + project graph) to avoid re-deriving context
+2. Anchor the goal; analyze it into independent domains/lanes
+3. One subtask per domain, each with its own provisioning contract
+4. Run independent lanes in parallel (≤ OMK_WORKERS); sequence dependent ones
+5. Persist domain analysis + decisions to memory so lanes/sessions share them
+```
+
+### When NOT to parallelize
+
+* Tasks with tight data dependencies (output of A is input of B) — sequence them.
+* Multiple writers touching the same files — serialize or re-split scope.
+* Trivial single-step tasks — the orchestration overhead is not worth it.
+* When `OMK_WORKERS=1` — run lanes sequentially.
+
+### Orchestration guardrails
+
+* Decompose first, read targeted files second — do not dump the whole repo into context.
+* Keep evidence under `.omk/runs/<run-id>/` or `.omk/goals/<goal-id>/`.
+* Prefer small, reviewable per-lane diffs; integrate via a reviewer/qa lane before done.
+* Do not claim success until lane evidence and quality gates confirm it.
+
+### References (external patterns this section draws on)
+
+* `github/awesome-copilot` — agents and subagents guidance
+* `microsoft/vscode-docs` — subagents docs
+* `cloudflare/cloudflare-docs` — sub-agent runtime execution
+* `lastmile-ai/mcp-agent` — MCP agent core components
+* `teren-papercutlabs/pcl-workshop` — parallel-subagents technique
+* `vincents-ai/engram` — dispatching parallel agents (search-first, domain-split, memory)
 
 ---
 
@@ -304,7 +433,7 @@ test/v2-regression.test.mjs                 # 10 regression tests
 
 ## Okabe / D-Mail Policy
 
-This project is a provider-neutral agent runtime for coding workflows. Generated agents should inherit the Okabe-compatible base agent so the `SendDMail` tool is available. Use Okabe smart context management plus D-Mail checkpoints before risky refactors, context compaction, multi-agent handoffs, or rollback-prone work. D-Mail notes should be concise recovery records: current goal, changed files, verification state, blockers, and intended next action.
+This project is a provider-neutral agent runtime for coding workflows, originally built with deep Kimi integration. Generated agents should inherit the Okabe-compatible base agent so the `SendDMail` tool is available. Use Okabe smart context management plus D-Mail checkpoints before risky refactors, context compaction, multi-agent handoffs, or rollback-prone work. D-Mail notes should be concise recovery records: current goal, changed files, verification state, blockers, and intended next action.
 
 ## Context Policy
 

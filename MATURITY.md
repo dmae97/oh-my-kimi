@@ -1,7 +1,7 @@
 # OMK Command Maturity Matrix
 
-Last updated: 2026-06-11
-Current source version: v0.78.8 (`v1.2` runtime contract family)
+Last updated: 2026-05-24
+Current source version: v0.78.8
 
 | Level | Meaning |
 |-------|---------|
@@ -15,7 +15,7 @@ Current source version: v0.78.8 (`v1.2` runtime contract family)
 |---------|-------|
 | `omk init` | Project scaffold for AGENTS.md, DESIGN.md, and local `.omk/` state. |
 | `omk doctor` | Runtime/toolchain/project diagnostics. Supports `--json` for CI-style consumption. |
-| `omk chat` | Interactive chat coordinator with startup status/HUD preview and run-scoped harness manifest generation. The authority-provider path is the most mature path; provider-neutral routing remains release-candidate gated by the hardening items below. |
+| `omk chat` | Interactive chat coordinator with startup status/HUD preview and run-scoped harness manifest generation. The Kimi-default path is stable; native provider-neutral routing remains gated by the hardening items below. |
 | `omk hud` | Execution status and local system usage HUD. |
 | `omk cockpit` | Sidecar cockpit for run state, TODOs, and ETA. |
 | `omk plan` | Plan-only execution entrypoint. |
@@ -39,8 +39,8 @@ Current source version: v0.78.8 (`v1.2` runtime contract family)
 | `omk sync` | Asset sync with dry-run/diff/rollback support; manifest-backed rollback coverage is still incomplete for some global assets. |
 | `omk verify` | Evidence gate verification for runs. Supports `--json`. |
 | `omk goal` | Codex-style goal create/list/show/run/verify/close/block/continue with generated plan/evidence criteria. |
-| `omk provider` / `omk deepseek` / `omk deepseekset` | Provider listing, doctor, enable/disable, auth metadata, API-key environment naming, DeepSeek setup, and provider-neutral opportunistic routing. JSON exists for provider doctor and state changes; see `docs/provider-maturity.md`. |
-| `omk graph view` / `omk graph audit` | Generates HTML from `.omk/memory/graph-state.json` and validates run/evidence/decision/provider-route links for proof fixtures; useful now, but live ontology coverage and ingestion are still maturing. |
+| `omk provider` / `omk deepseek` / `omk deepseekset` | DeepSeek availability, enable/disable, API-key setup, and provider-neutral opportunistic routing with Kimi as the most mature adapter. JSON exists for provider doctor and state changes. |
+| `omk graph view` | Generates HTML from `.omk/memory/graph-state.json`; useful now, but ontology coverage and run-linking are still maturing. |
 | `omk mcp` | Project/global MCP list, doctor, test, serve, add/remove/install/sync-global with structured diagnostics and explicit project/global scope handling. |
 | `omk dag` | Spec DAG validation/show/replay/from-spec. Replay supports provider policy. |
 | `omk screenshot` | Clipboard screenshot store/list/clean utility with JSON on subcommands. |
@@ -63,20 +63,14 @@ Current source version: v0.78.8 (`v1.2` runtime contract family)
 | `omk research` | Core runtime web research wrapper; depends on Kimi tool availability. |
 | `omk open-design-agent` | Local Open Design CLI bridge. |
 
-## Regression Proof Matrix Claim Boundary
-
-Regression Proof Matrix is a release-defense gate, not a stable-release claim. Stable promotion still requires full `npm test`, live provider maturity data, and a minimal verified demo pass.
-
 ## Automation Contract Status
 
 | Area | Current state | Next hardening |
 |------|---------------|----------------|
 | JSON output | Present on `doctor`, `runs/history`, `update`, `verify`, `goal` read/verify commands, provider commands, and screenshot subcommands; provider/screenshot JSON contracts are now regression-tested. | Expand consistent JSON to MCP diagnostics, graph, DAG, summary, and workflow entrypoints. |
-| Provider routing | Provider routing exists for low-risk/read-heavy paths and explicit provider policies. Kimi remains the most mature authority/fallback path in this RC line; run summaries/reports include provider attempt and fallback totals. See `docs/provider-maturity.md`. | Add HUD provider route metrics and broader release-gate tests for fallback/metadata contracts. |
+| Provider routing | DeepSeek opportunistic worker routing exists for low-risk/read-heavy paths; Kimi remains the most mature adapter, orchestrator, and fallback; run summaries/reports now include provider attempt and fallback totals. | Add HUD provider route metrics and broader release-gate tests for fallback/metadata contracts. |
 | Native runtime safety | OMK owns the root-orchestrator direction, but native chat must still lock turn-risk inference, approval/sandbox propagation, authority resolution, provider health probes, and DeepSeek read-only enforcement before stable provider-neutral claims. | Treat `docs/native-root-runtime-hardening.md` and `.omk/specs/native-orchestrator-phase1/` as the active hardening contract. |
 | MCP diagnostics | `mcp list/doctor/test` exist; invalid project/global MCP JSON now fails visibly through diagnostics without exposing config contents. | Add machine-readable MCP JSON and structured failure categories for command resolution, timeout, permission, and server health. |
 | Skills and harness templates | `omk skill` exposes current core/TypeScript/review packs, while init templates document project MCP scope, runtime skills, portable `.agents/skills`, and run-scoped harness manifests. | Keep external-inspired skills compact, source-linked, and non-vendored; verify install/sync through `skill-command` tests and package audit. |
-| Release docs and site | README, CHANGELOG, MATURITY, ROADMAP, versioning docs, provider-maturity docs, package audit, and release-gate commands distinguish the `0.78.x` public package line from the `v1.2` runtime contract family while documenting alpha/experimental surfaces, current harness templates, provider limits, and the public project repository at `https://github.com/dmae97/open-multi-agent-kit`. | Treat `npm run release:check`, native safety packaging, tarball install smoke, and CI evidence on the exact commit as the publish/deploy gate before claiming `0.78.8` published or release-ready. |
-| Decision calibration | Route source priors are bounded as strict tiebreakers (`project=0.02`, `builtin=0.01`, `global=0`) with a load-time lattice invariant. Route traces, route-weight calibration helpers, proof-trust calibration helpers, Hedge persona weights, provenance-ratio reporting, and a new-file size guard are implemented. See `docs/decision-layer-calibration.md`. | Run the benchmark replay suite with at least 50 paired tasks before adopting route-weight changes; collect at least 100 labeled proof bundles before adopting trust/Hedge learned weights. |
-| Public proof bundles | `omk.proof-bundle.v1`, `npm run proof:check`, `npm run proof:index`, and ten scoped RC hardening bundles now cover no-Kimi, provider/doctor, fallback routing, native safety, contract/version, evidence-block, replay/inspect, and graph-audit axes. Proof integrity includes runId/commit/evidence/decision linkage and per-bundle `sha256sums.txt` artifact hashes. | Keep strengthening proof authenticity with sanitized repo-relative artifacts, non-empty known limitations, and broader provider fallback variants. |
+| Release docs and site | README, CHANGELOG, MATURITY, ROADMAP, getting-started docs, package audit, and release-gate commands now distinguish the v0.78.8 source target from registry-published claims while documenting alpha/experimental surfaces, parallel subagent orchestration, typed doctor repair plans, startup update prompts, native safety package readiness, current harness templates, packaged workflow skills, and the public project repository at `https://github.com/dmae97/open-multi-agent-kit`. | Treat `npm run release:check`, native safety packaging, tarball install smoke, GitHub Smoke Test, registry verification, and GitHub CI evidence on the exact commit as the publish/deploy gate before claiming v0.78.8 as released. |
 | Goal planner | Goal lifecycle exists, including continue, generated plan/evidence criteria, and verification. | Expand planner quality scoring and release evidence. |

@@ -1,12 +1,12 @@
 name: Feedback
-description: Share your experience installing or running oh-my-kimi.
+description: Share your experience installing or running open-multi-agent-kit.
 title: "[Feedback] "
 labels: ["feedback", "triage"]
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks for trying oh-my-kimi! Your feedback helps us improve.
+        Thanks for trying open-multi-agent-kit! Your feedback helps us improve.
   - type: input
     id: os
     attributes:
@@ -20,13 +20,13 @@ body:
   - type: input
     id: omk
     attributes:
-      label: oh-my-kimi version
-      placeholder: "npm list -g @oh-my-kimi/cli"
+      label: open-multi-agent-kit version
+      placeholder: "npm list -g @open-multi-agent-kit/cli"
   - type: textarea
     id: install
     attributes:
       label: Install experience
-      placeholder: "Did npm install -g @oh-my-kimi/cli work smoothly?"
+      placeholder: "Did npm install -g @open-multi-agent-kit/cli work smoothly?"
   - type: textarea
     id: doctor
     attributes:

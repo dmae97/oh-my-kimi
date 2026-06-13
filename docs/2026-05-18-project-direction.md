@@ -2,7 +2,7 @@
 
 ## Summary
 
-open-multi-agent-kit(OMK)의 현재 방향성은 **provider-neutral verified agent runtime**이다. Kimi는 하나의 강한 adapter/provider lane일 뿐이며, OMK는 그 주변의 실행 제어면을 담당한다: DAG 실행, evidence gate, 로컬 그래프 메모리, MCP/skills/hooks 라우팅, provider fallback, run replay/inspect, HUD/cockpit 가시성, worktree 격리.
+open-multi-agent-kit(OMK)의 현재 방향성은 **Kimi-native verified agent runtime**이다. Kimi가 작성·병합·최종 판단 권한을 유지하고, OMK는 그 주변의 실행 제어면을 담당한다: DAG 실행, evidence gate, 로컬 그래프 메모리, MCP/skills/hooks 라우팅, provider fallback, run replay/inspect, HUD/cockpit 가시성, worktree 격리.
 
 핵심 문장:
 

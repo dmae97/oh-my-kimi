@@ -1,5 +1,5 @@
 name: Bug Report
-description: Report a bug in oh-my-kimi
+description: Report a bug in open-multi-agent-kit
 title: "[Bug] "
 labels: [bug]
 body:
@@ -18,6 +18,6 @@ body:
   - type: input
     attributes:
       label: Version
-      description: oh-my-kimi version
+      description: open-multi-agent-kit version
     validations:
       required: true

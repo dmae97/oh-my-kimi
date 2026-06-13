@@ -46,7 +46,7 @@ Native chat turns must be default-safe. A turn should request only the minimum c
 | `shell` | run tests, build, execute commands | `read`, `write`, `shell` with approval policy |
 | `merge` | publish, release, push, merge, destructive changes | authority provider plus release/security gates |
 
-DeepSeek remains an advisory/read/review lane unless an explicit future contract grants safe write/shell execution. Write/shell tasks should route only to the configured authority provider, such as Kimi or Codex, when the matching approval and sandbox policy is present.
+DeepSeek remains an advisory/read/review lane unless an explicit future contract grants safe write/shell execution. Write/shell tasks should route to Kimi, Codex, or a configured authority provider with the matching approval and sandbox policy.
 
 ### Approval and sandbox propagation
 
