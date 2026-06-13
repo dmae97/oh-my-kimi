@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.12.5] - 2026-06-13
 ### Changed
 
 - Terminal resize now repaints only the viewport while a drag is in flight and defers the full transcript replay until the drag settles. Outside a multiplexer, every SIGWINCH used to erase and replay the entire transcript at the new width — re-laying-out (and, for markdown, re-lexing) all of history on each event, work thrown away the instant the next event arrived and re-done dozens of times a second during a drag. The TUI now composes and paints only the visible tail mid-drag — a new `ViewportTailProvider` fast path that the transcript implements by rendering blocks bottom-up and skipping everything above the fold, touching no commit/scrollback state — then runs the single authoritative rewrap + native-scrollback rebuild ~120 ms after the last resize event.

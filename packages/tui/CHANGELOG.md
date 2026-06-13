@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.12.5] - 2026-06-13
 ### Added
 
 - Added `ViewportTailProvider` to let child components provide their visible tail rows during fast-path non-multiplexer resize rendering
