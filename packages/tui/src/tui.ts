@@ -2812,8 +2812,8 @@ export class TUI extends Container {
 		// beginPass()/endPass() is the authoritative accounting, and its
 		// beginPass() wipes whatever these frames observed.
 		this.#imageBudget.beginPass();
-		const window = this.#composeResizeViewport(width, height);
-		this.#emitResizeViewport(window, height);
+		const { window, contentRows } = this.#composeResizeViewport(width, height);
+		this.#emitResizeViewport(window, height, contentRows);
 		this.#resizeViewportPaintCount += 1;
 	}
 
@@ -2828,7 +2828,7 @@ export class TUI extends Container {
 	 * (the drag hides the hardware cursor) and rows are width-fitted via the
 	 * stateless preparer, so no persistent prepared-frame cache is touched.
 	 */
-	#composeResizeViewport(width: number, height: number): string[] {
+	#composeResizeViewport(width: number, height: number): { window: readonly string[]; contentRows: number } {
 		const tail: string[] = []; // bottom-first
 		const children = this.children;
 		for (let i = children.length - 1; i >= 0 && tail.length < height; i--) {
@@ -2848,7 +2848,7 @@ export class TUI extends Container {
 			window[screenRow] = screenRow < count ? tail[count - 1 - screenRow]! : "";
 		}
 		this.#extractCursorMarkers(window);
-		return this.#prepareLinesArray(window, width);
+		return { window: this.#prepareLinesArray(window, width), contentRows: count };
 	}
 
 	/**
@@ -2858,12 +2858,19 @@ export class TUI extends Container {
 	 * scrollback push, no committed-prefix write, no `#commit` — none of the
 	 * paint accounting is advanced.
 	 */
-	#emitResizeViewport(window: readonly string[], height: number): void {
+	#emitResizeViewport(window: readonly string[], height: number, contentRows: number): void {
 		let buffer = `${this.#paintBeginSequence}\x1b[2J\x1b[H`;
 		for (let r = 0; r < height; r++) {
 			if (r > 0) buffer += "\r\n";
 			buffer += this.#terminalLine(window[r] ?? "");
 		}
+		// Park the hardware cursor at the real content bottom, not the padded
+		// viewport bottom: a subsequent height shrink (the next drag step) would
+		// otherwise scroll the live rows below the cursor into native scrollback
+		// and duplicate them — one stray copy per resize event — until the settle
+		// rebuild erases it. Mirrors the authoritative paint's park (#doFullPaint).
+		const parkUp = height - Math.max(1, contentRows);
+		if (parkUp > 0) buffer += `\x1b[${parkUp}A`;
 		buffer += this.#paintEndSequence;
 		this.terminal.write(buffer);
 	}

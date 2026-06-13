@@ -4252,8 +4252,21 @@ describe("foreground-tool streaming on ED3-risk terminals", () => {
 				tui.requestRender();
 				await settle(term);
 			}
-			// Each drag step only repainted the viewport; let the settle window
-			// elapse so the authoritative rebuild collapses history to one copy.
+			// The drag itself must not have accreted duplicate copies into
+			// scrollback. Assert this BEFORE the settle: the authoritative rebuild
+			// erases scrollback (ED3) and replays once, so it would collapse — and
+			// thereby mask — any drag-time duplication. Checking only the settled
+			// state would make this regression test pass even if the in-flight
+			// viewport repaints duplicated every visible row per step.
+			const draggedScrollback = term.getScrollBuffer();
+			for (let i = 0; i < body.length; i++) {
+				expect(
+					countMatches(draggedScrollback, new RegExp(`\\bline-${i}\\b`)),
+					`line-${i} must not duplicate during the drag`,
+				).toBeLessThanOrEqual(1);
+			}
+			// Then let the settle window elapse so the authoritative rebuild
+			// collapses history to one copy, and confirm the end state holds too.
 			await settleResize(term);
 			const scrollback = term.getScrollBuffer();
 			for (let i = 0; i < body.length; i++) {

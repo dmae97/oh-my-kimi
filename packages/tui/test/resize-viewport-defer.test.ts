@@ -235,8 +235,11 @@ describe("non-multiplexer resize viewport fast path", () => {
 				await scheduler.flushAll(term);
 
 				expect(tui.resizeViewportActive).toBe(false);
-				expect(tui.fullRedraws).toBeGreaterThan(baselineFull);
-				expect(eraseScrollbackCount(writes)).toBeGreaterThan(0);
+				// Exactly one authoritative full paint with exactly one ED3 — the
+				// interleaved viewport-only frames must not have leaked a second
+				// full replay or a stray scrollback erase into the settle.
+				expect(tui.fullRedraws).toBe(baselineFull + 1);
+				expect(eraseScrollbackCount(writes)).toBe(1);
 				// The full replay lays out the whole transcript, off-screen blocks
 				// included.
 				expect(blocks.every(b => b.renderCount > 0)).toBe(true);
