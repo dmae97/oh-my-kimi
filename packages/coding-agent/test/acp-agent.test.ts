@@ -330,7 +330,9 @@ class FakeAgentSession {
 
 	async sendCustomMessage(_message: string, _options?: unknown): Promise<void> {}
 
-	async sendUserMessage(_content: string, _options?: unknown): Promise<void> {}
+	async sendUserMessage(_content: string, _options?: unknown): Promise<boolean> {
+		return false;
+	}
 
 	async compact(_instructions?: string, _options?: unknown): Promise<void> {}
 

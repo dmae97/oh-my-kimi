@@ -146,6 +146,7 @@ describe("runSubprocess yield reminders", () => {
 			messageInFlight = true;
 			await Bun.sleep(20);
 			messageInFlight = false;
+			return true;
 		};
 		mutableSession.extensionRunner = {
 			initialize: (actions: ExtensionActions) => {

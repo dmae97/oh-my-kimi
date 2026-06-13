@@ -140,6 +140,112 @@ describe("reportLocalOnlyPromptResult", () => {
 		expect(sentOptions).toEqual({ triggerTurn: true });
 	});
 
+	test("emits prompt_result when extension sendUserMessage only queues follow-up", async () => {
+		let extensionActions: ExtensionActions | undefined;
+		let sentOptions: { deliverAs?: "steer" | "followUp" } | undefined;
+		const delivery = Promise.withResolvers<boolean>();
+		const extensionUserMessages = new RpcExtensionUserMessageTracker();
+		const session = {
+			extensionRunner: {
+				initialize: (actions: ExtensionActions) => {
+					extensionActions = actions;
+				},
+				onError: () => {},
+				emit: async () => {},
+			},
+			sendUserMessage: async (_content: unknown, options?: { deliverAs?: "steer" | "followUp" }) => {
+				sentOptions = options;
+				return await delivery.promise;
+			},
+		} as unknown as AgentSession;
+
+		await initializeExtensions(session, {
+			reportSendError: (_action, error) => {
+				throw error;
+			},
+			reportRuntimeError: error => {
+				throw error.error;
+			},
+			trackAgentInvokingUserMessage: task => {
+				extensionUserMessages.trackAgentMessageTask(task);
+			},
+		});
+
+		const output: object[] = [];
+		const trackedPrompt = extensionUserMessages.watchPrompt(() => {
+			if (!extensionActions) throw new Error("extensions not initialized");
+			extensionActions.sendUserMessage("queued locally", { deliverAs: "followUp" });
+			return Promise.resolve(false);
+		});
+		reportLocalOnlyPromptResult({
+			id: "req_queued",
+			prompt: trackedPrompt.prompt,
+			output: frame => output.push(frame),
+			onError: error => {
+				throw error;
+			},
+			hasExtensionAgentMessageTask: trackedPrompt.hasAgentMessageTask,
+			waitForExtensionAgentMessageTasks: trackedPrompt.waitForAgentMessageTasks,
+		});
+
+		await waitForPromptHandlers(trackedPrompt.prompt);
+		expect(output).toEqual([]);
+
+		delivery.resolve(false);
+		await waitForPromptHandlers(delivery.promise);
+		await waitForPromptHandlers(trackedPrompt.prompt);
+
+		expect(sentOptions).toEqual({ deliverAs: "followUp" });
+		expect(output).toEqual([{ type: "prompt_result", id: "req_queued", agentInvoked: false }]);
+	});
+
+	test("suppresses prompt_result when extension sendUserMessage starts agent work", async () => {
+		let extensionActions: ExtensionActions | undefined;
+		const extensionUserMessages = new RpcExtensionUserMessageTracker();
+		const session = {
+			extensionRunner: {
+				initialize: (actions: ExtensionActions) => {
+					extensionActions = actions;
+				},
+				onError: () => {},
+				emit: async () => {},
+			},
+			sendUserMessage: async () => true,
+		} as unknown as AgentSession;
+
+		await initializeExtensions(session, {
+			reportSendError: (_action, error) => {
+				throw error;
+			},
+			reportRuntimeError: error => {
+				throw error.error;
+			},
+			trackAgentInvokingUserMessage: task => {
+				extensionUserMessages.trackAgentMessageTask(task);
+			},
+		});
+
+		const output: object[] = [];
+		const trackedPrompt = extensionUserMessages.watchPrompt(() => {
+			if (!extensionActions) throw new Error("extensions not initialized");
+			extensionActions.sendUserMessage("start work");
+			return Promise.resolve(false);
+		});
+		reportLocalOnlyPromptResult({
+			id: "req_agent",
+			prompt: trackedPrompt.prompt,
+			output: frame => output.push(frame),
+			onError: error => {
+				throw error;
+			},
+			hasExtensionAgentMessageTask: trackedPrompt.hasAgentMessageTask,
+			waitForExtensionAgentMessageTasks: trackedPrompt.waitForAgentMessageTasks,
+		});
+		await waitForPromptHandlers(trackedPrompt.prompt);
+
+		expect(output).toEqual([]);
+	});
+
 	test("does not emit when prompt invokes the agent", async () => {
 		const output: object[] = [];
 		const prompt = Promise.resolve(true);

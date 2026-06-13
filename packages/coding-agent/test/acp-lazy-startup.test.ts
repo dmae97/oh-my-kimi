@@ -133,7 +133,9 @@ class LazyFakeSession {
 	}
 	setPlanModeState(): void {}
 	async sendCustomMessage(): Promise<void> {}
-	async sendUserMessage(): Promise<void> {}
+	async sendUserMessage(): Promise<boolean> {
+		return false;
+	}
 	async compact(): Promise<void> {}
 	async fork(): Promise<boolean> {
 		return false;

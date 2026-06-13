@@ -2018,11 +2018,14 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 							pendingExtensionMessages.push(sendPromise);
 						},
 						sendUserMessage: (content, options) => {
-							const sendPromise = session.sendUserMessage(content, options).catch(e => {
-								logger.error("Extension sendUserMessage failed", {
-									error: e instanceof Error ? e.message : String(e),
-								});
-							});
+							const sendPromise = session.sendUserMessage(content, options).then(
+								() => undefined,
+								e => {
+									logger.error("Extension sendUserMessage failed", {
+										error: e instanceof Error ? e.message : String(e),
+									});
+								},
+							);
 							pendingExtensionMessages.push(sendPromise);
 						},
 						appendEntry: (customType, data) => {
