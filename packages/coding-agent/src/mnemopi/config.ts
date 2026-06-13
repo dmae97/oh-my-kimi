@@ -55,7 +55,10 @@ export function loadMnemopiConfig(settings: Settings, agentDir: string): Mnemopi
 	// other than the multilingual variant falls back to the English default.
 	const variantModel =
 		embeddingVariant === "multilingual" ? "intfloat/multilingual-e5-large" : "BAAI/bge-base-en-v1.5";
-	const embeddingModel = embeddingOverride?.trim() || variantModel;
+	// Precedence: explicit `mnemopi.embeddingModel` setting > `MNEMOPI_EMBEDDING_MODEL`
+	// env (documented model-level override) > variant-derived default. Without the env
+	// term a variant default would silently shadow a user's configured env model.
+	const embeddingModel = embeddingOverride?.trim() || Bun.env.MNEMOPI_EMBEDDING_MODEL?.trim() || variantModel;
 	return {
 		dbPath,
 		baseBank: scope.baseBank,

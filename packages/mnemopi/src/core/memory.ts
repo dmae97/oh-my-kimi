@@ -45,6 +45,13 @@ export interface MnemopiOptions {
 	readonly llm?: false | MnemopiLlmRuntimeOptions | Model<Api> | MnemopiLlmCompletion;
 	/** Escalate best-effort failure logs (embedding pipeline) from debug to warn. */
 	readonly debug?: boolean;
+	/**
+	 * When `false`, skip the embedding-model reconcile (wipe-and-rebuild) on open.
+	 * Read-only / ephemeral consumers (e.g. a stats snapshot) set this so an open
+	 * never triggers a destructive migration whose background rebuild the process
+	 * would exit before completing. Defaults to `true`.
+	 */
+	readonly reconcile?: boolean;
 }
 
 export interface RememberInput extends MemoryInput {
@@ -392,7 +399,12 @@ export class Mnemopi {
 		// Wipe-and-rebuild stale embeddings when the configured model changed since
 		// the vectors were written. Runs inside the runtime scope so
 		// `currentEmbeddingModel()` reflects this instance's configured model.
-		this.#withRuntimeOptions(() => reconcileEmbeddingModel(this.beam));
+		// Skipped for read-only opens (`reconcile: false`) so an ephemeral stats
+		// reader never triggers a destructive migration whose async rebuild it would
+		// exit before completing — which would otherwise lose the embeddings.
+		if (options.reconcile !== false) {
+			this.#withRuntimeOptions(() => reconcileEmbeddingModel(this.beam));
+		}
 	}
 
 	close(): void {

@@ -33,4 +33,29 @@ describe("loadMnemopiConfig embedding variant resolution", () => {
 			"BAAI/bge-base-en-v1.5",
 		);
 	});
+
+	it("honors MNEMOPI_EMBEDDING_MODEL when no explicit model setting is present", () => {
+		const previous = Bun.env.MNEMOPI_EMBEDDING_MODEL;
+		Bun.env.MNEMOPI_EMBEDDING_MODEL = "BAAI/bge-large-en-v1.5";
+		try {
+			// The documented env override must not be shadowed by the variant default.
+			expect(embeddingModelFor({ "mnemopi.embeddingVariant": "en" })).toBe("BAAI/bge-large-en-v1.5");
+		} finally {
+			if (previous === undefined) delete Bun.env.MNEMOPI_EMBEDDING_MODEL;
+			else Bun.env.MNEMOPI_EMBEDDING_MODEL = previous;
+		}
+	});
+
+	it("lets an explicit embeddingModel setting win over the env var", () => {
+		const previous = Bun.env.MNEMOPI_EMBEDDING_MODEL;
+		Bun.env.MNEMOPI_EMBEDDING_MODEL = "BAAI/bge-large-en-v1.5";
+		try {
+			expect(embeddingModelFor({ "mnemopi.embeddingModel": "openai/text-embedding-3-small" })).toBe(
+				"openai/text-embedding-3-small",
+			);
+		} finally {
+			if (previous === undefined) delete Bun.env.MNEMOPI_EMBEDDING_MODEL;
+			else Bun.env.MNEMOPI_EMBEDDING_MODEL = previous;
+		}
+	});
 });

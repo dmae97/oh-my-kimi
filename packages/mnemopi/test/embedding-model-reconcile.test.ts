@@ -137,4 +137,23 @@ describe("reconcileEmbeddingModel on store open", () => {
 			db.close();
 		}
 	});
+
+	it("does not reconcile a read-only open (reconcile: false), even on a model change", () => {
+		const { db } = seedDb(OLD_MODEL);
+		let memory: Mnemopi | undefined;
+		try {
+			// A stats/read-only open is short-lived and would exit before its async
+			// rebuild completed, so it must not perform the destructive wipe.
+			memory = new Mnemopi({ db, embeddings: { model: NEW_MODEL, provider: fakeEmbed() }, reconcile: false });
+			expect(countEmbeddings(memory)).toBe(2);
+			expect(memory.beam.pendingExtractions.size).toBe(0);
+			const ep = memory.conn.query("SELECT binary_vector AS v FROM episodic_memory WHERE id = 'ep-1'").get() as {
+				v: Uint8Array | null;
+			};
+			expect(ep.v).not.toBeNull();
+		} finally {
+			memory?.close();
+			db.close();
+		}
+	});
 });
