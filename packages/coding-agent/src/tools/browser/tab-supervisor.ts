@@ -2,6 +2,7 @@ import { getPuppeteerDir, logger, Snowflake, workerHostEntry } from "@oh-my-pi/p
 import type { Page, Target } from "puppeteer-core";
 import { callSessionTool } from "../../eval/js/tool-bridge";
 import type { ToolSession } from "../../sdk";
+import { webpExclusionForModel } from "../../utils/image-loading";
 import { expandPath } from "../path-utils";
 import { ToolAbortError, ToolError } from "../tool-errors";
 import { pickElectronTarget } from "./attach";
@@ -221,7 +222,11 @@ export async function runInTab(name: string, opts: RunInTabOptions): Promise<Run
 	return await runInTabWithSnapshot(
 		name,
 		{ code: opts.code, timeoutMs: opts.timeoutMs, signal: opts.signal, session: opts.session },
-		{ cwd: opts.session.cwd, browserScreenshotDir: expandBrowserScreenshotDir(opts.session) },
+		{
+			cwd: opts.session.cwd,
+			browserScreenshotDir: expandBrowserScreenshotDir(opts.session),
+			excludeWebP: webpExclusionForModel(opts.session.getActiveModel?.()),
+		},
 	);
 }
 

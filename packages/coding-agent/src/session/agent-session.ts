@@ -4534,13 +4534,17 @@ export class AgentSession {
 		};
 	}
 
+	#normalizeImagesForModel(images: ImageContent[] | undefined): Promise<ImageContent[] | undefined> {
+		return normalizeModelContextImages(images, { model: this.model });
+	}
+
 	async #normalizeMessageContentImages(
 		content: string | (TextContent | ImageContent)[],
 	): Promise<string | (TextContent | ImageContent)[]> {
 		if (typeof content === "string") return content;
 		const images = content.filter((part): part is ImageContent => part.type === "image");
 		if (images.length === 0) return content;
-		const normalizedImages = await normalizeModelContextImages(images);
+		const normalizedImages = await this.#normalizeImagesForModel(images);
 		if (!normalizedImages) return content;
 		let imageIndex = 0;
 		return content.map(part => (part.type === "image" ? normalizedImages[imageIndex++]! : part));
@@ -4668,7 +4672,7 @@ export class AgentSession {
 		const hasPendingUserDirective = this.#toolChoiceQueue.inspect().includes("user-force");
 		const eagerTodoPrelude =
 			!options?.synthetic && !hasPendingUserDirective ? this.#createEagerTodoPrelude(expandedText) : undefined;
-		const normalizedImages = await normalizeModelContextImages(options?.images);
+		const normalizedImages = await this.#normalizeImagesForModel(options?.images);
 
 		const userContent: (TextContent | ImageContent)[] = [{ type: "text", text: expandedText }];
 		if (normalizedImages) {
@@ -5086,7 +5090,7 @@ export class AgentSession {
 	 * Internal: Queue a steering message (already expanded, no extension command check).
 	 */
 	async #queueSteer(text: string, images?: ImageContent[]): Promise<void> {
-		const normalizedImages = await normalizeModelContextImages(images);
+		const normalizedImages = await this.#normalizeImagesForModel(images);
 		const displayText = text || (images && images.length > 0 ? "[Image]" : "");
 		this.#steeringMessages.push({ text: displayText, images });
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
@@ -5116,7 +5120,7 @@ export class AgentSession {
 	 * Internal: Queue a follow-up message (already expanded, no extension command check).
 	 */
 	async #queueFollowUp(text: string, images?: ImageContent[]): Promise<void> {
-		const normalizedImages = await normalizeModelContextImages(images);
+		const normalizedImages = await this.#normalizeImagesForModel(images);
 		const displayText = text || (images && images.length > 0 ? "[Image]" : "");
 		this.#followUpMessages.push({ text: displayText, images });
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
