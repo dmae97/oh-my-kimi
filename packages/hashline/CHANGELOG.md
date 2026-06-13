@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed delimiter-balance boundary repair so it does not keep a deleted structural closer when the replacement payload already restates that closer.
+
 ## [15.12.0] - 2026-06-12
 
 ### Changed

@@ -138,6 +138,19 @@ describe("boundary-balance repair", () => {
 		expect(warnings.some(w => /delimiter-balance/.test(w))).toBe(true);
 	});
 
+	// If the selected range is already imbalanced internally, a payload that
+	// restates the range's final closer must not trigger "missing closer" repair;
+	// keeping the deleted suffix would duplicate the closer outside the payload.
+	it("does not spare a deleted closing line that the payload already restates", () => {
+		const file = ["class Foo {", "\tok();", "\t}", "}"].join("\n");
+		const diff = ["replace 1..4:", "+class Foo {", "+\tok();", "+}"].join("\n");
+		const { text, warnings } = apply(file, diff);
+
+		expect(text).toBe(["class Foo {", "\tok();", "}"].join("\n"));
+		expect(text.split("\n").filter(line => line === "}")).toHaveLength(1);
+		expect(warnings).toHaveLength(0);
+	});
+
 	it("drops duplicated leading and trailing boundary lines around a range replacement", () => {
 		const file = [
 			"func _cmd_travel_homeworld():",
