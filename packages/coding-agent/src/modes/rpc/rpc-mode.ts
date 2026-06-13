@@ -80,8 +80,12 @@ export type RpcSessionChangeResult =
 export type RpcSessionChangeSession = Pick<AgentSession, "newSession" | "switchSession" | "branch">;
 
 export type RpcSkillCommandSession = Pick<AgentSession, "promptCustomMessage" | "skills" | "skillsSettings">;
+export type RpcSkillCommandResult = { agentInvoked: true };
 
-export async function tryRunRpcSkillCommand(session: RpcSkillCommandSession, text: string): Promise<boolean> {
+export async function tryRunRpcSkillCommand(
+	session: RpcSkillCommandSession,
+	text: string,
+): Promise<RpcSkillCommandResult | false> {
 	if (!text.startsWith("/skill:")) return false;
 	if (!session.skillsSettings?.enableSkillCommands) return false;
 	const spaceIndex = text.indexOf(" ");
@@ -98,7 +102,7 @@ export async function tryRunRpcSkillCommand(session: RpcSkillCommandSession, tex
 		details: built.details,
 		attribution: "user",
 	});
-	return true;
+	return { agentInvoked: true };
 }
 
 export function reportLocalOnlyPromptResult(input: {
@@ -635,8 +639,9 @@ export async function runRpcMode(
 			// =================================================================
 
 			case "prompt": {
-				if (await tryRunRpcSkillCommand(session, command.message)) {
-					return success(id, "prompt", { agentInvoked: false });
+				const skillResult = await tryRunRpcSkillCommand(session, command.message);
+				if (skillResult) {
+					return success(id, "prompt", skillResult);
 				}
 				const builtinResult = await executeAcpBuiltinSlashCommand(command.message, {
 					session,
