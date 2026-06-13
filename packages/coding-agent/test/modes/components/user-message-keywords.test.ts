@@ -47,6 +47,13 @@ describe("UserMessageComponent magic-keyword highlighting", () => {
 		expect(raw).toContain("orchestrate");
 	});
 
+	it("closes OSC 133 prompt zones without opening a command-output zone", () => {
+		const raw = render("first line\nsecond line");
+		expect(raw).toContain("\x1b]133;A\x07");
+		expect(raw).toContain("\x1b]133;B\x07");
+		expect(raw).not.toContain("\x1b]133;C\x07");
+	});
+
 	it("bolds and underlines image references in the rendered message bubble", () => {
 		const raw = render("please inspect [Image #1] before continuing");
 		expect(Bun.stripANSI(raw)).toContain("[Image #1]");

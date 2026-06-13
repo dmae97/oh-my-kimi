@@ -4,6 +4,9 @@ import { imageReferenceHyperlink, renderPlaceholders } from "../image-references
 import { highlightMagicKeywords } from "../magic-keywords";
 
 // OSC 133 shell integration: marks prompt zones for terminal multiplexers
+// Do not emit OSC 133 C ("command start") here: the transcript has no matching
+// command-finished marker, so terminals can group later assistant/tool output
+// under the first submitted prompt.
 const OSC133_ZONE_START = "\x1b]133;A\x07";
 const OSC133_ZONE_END = "\x1b]133;B\x07";
 
