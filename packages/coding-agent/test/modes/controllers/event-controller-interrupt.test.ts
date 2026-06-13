@@ -132,4 +132,5 @@ describe("EventController user interrupt acknowledgement", () => {
 
 		expect(setWorkingMessage).not.toHaveBeenCalled();
 	});
+
 });

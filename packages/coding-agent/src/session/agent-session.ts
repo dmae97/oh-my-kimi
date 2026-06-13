@@ -1084,7 +1084,7 @@ export class AgentSession {
 	// both #endInFlight (normal) and #resetInFlight (abort).
 	#pendingAgentEndEmit: AgentSessionEvent | undefined;
 	#resumingQueuedMessages = false;
-	#queuedMessageFlushStartPromise: Promise<{ continuation: Promise<void> | undefined }> | undefined;
+	#queuedFlushInterrupt: Promise<void> | undefined;
 	#obfuscator: SecretObfuscator | undefined;
 	#checkpointState: CheckpointState | undefined = undefined;
 	#pendingRewindReport: string | undefined = undefined;
@@ -5509,61 +5509,51 @@ export class AgentSession {
 	/**
 	 * Abort active work, then immediately resume the agent so queued steer/follow-up
 	 * messages drain instead of waiting for another natural turn boundary.
+	 *
+	 * The drained queue is re-run via `agent.prompt()`, which appends and runs
+	 * regardless of the trailing message role. Earlier this called
+	 * `agent.continue()`, which only dequeues steers after an assistant message
+	 * and throws "No messages to continue from" on an empty context — both states
+	 * a flushed empty-Enter can land in, which stranded the steer in the queue and
+	 * surfaced that error in the TUI.
+	 *
+	 * Concurrent calls (e.g. a double empty-Enter) coalesce: the first owns the
+	 * abort→resume handoff while the rest await it and return. The guard clears
+	 * once the resumed turn has started (not at turn end), so a genuinely-later
+	 * flush of a freshly queued steer still works.
 	 */
 	async interruptAndFlushQueuedMessages(options?: { reason?: string }): Promise<void> {
-		const existingStart = this.#queuedMessageFlushStartPromise;
-		if (existingStart) {
-			const { continuation } = await existingStart;
-			await continuation;
+		const inFlight = this.#queuedFlushInterrupt;
+		if (inFlight) {
+			await inFlight;
 			return;
 		}
 		if (!this.agent.hasQueuedMessages()) return;
 
-		const start = this.#beginQueuedMessageFlush(options);
-		this.#queuedMessageFlushStartPromise = start;
-		let continuation: Promise<void> | undefined;
-		try {
-			({ continuation } = await start);
-		} finally {
-			if (this.#queuedMessageFlushStartPromise === start) {
-				this.#queuedMessageFlushStartPromise = undefined;
-			}
-		}
-		await continuation;
-	}
-
-	async #beginQueuedMessageFlush(options?: { reason?: string }): Promise<{ continuation: Promise<void> | undefined }> {
-		if (!this.agent.hasQueuedMessages()) return { continuation: undefined };
+		const { promise: handoff, resolve: settleHandoff } = Promise.withResolvers<void>();
+		this.#queuedFlushInterrupt = handoff;
 		this.#resumingQueuedMessages = true;
+		let turn: Promise<void> | undefined;
 		try {
 			await this.abort({ reason: options?.reason });
-			if (!this.agent.hasQueuedMessages()) return { continuation: undefined };
+			if (this.isCompacting || this.isGeneratingHandoff) return;
 			await this.#maybeRestoreRetryFallbackPrimary();
-			if (!this.agent.hasQueuedMessages()) return { continuation: undefined };
-			const continuation = this.#continueQueuedMessagesWithIdleRetry();
-			return { continuation };
+			// A turn slipped in while we were settling (e.g. a fresh user prompt):
+			// leave the queue for its next steering boundary rather than draining
+			// and double-running, which would throw AgentBusyError. Checking
+			// isStreaming and prompting below is synchronous, so no turn can start
+			// between the drain and the resume.
+			if (this.agent.state.isStreaming) return;
+			const queued = this.agent.takeQueuedMessages();
+			if (queued.length === 0) return;
+			this.#resumingQueuedMessages = false;
+			turn = this.agent.prompt(queued);
 		} finally {
 			this.#resumingQueuedMessages = false;
+			this.#queuedFlushInterrupt = undefined;
+			settleHandoff();
 		}
-	}
-
-	async #continueQueuedMessagesWithIdleRetry(): Promise<void> {
-		const deadline = Date.now() + 30_000;
-		for (;;) {
-			if (!this.agent.hasQueuedMessages()) return;
-			try {
-				await this.agent.continue();
-				return;
-			} catch (err) {
-				if (!(err instanceof AgentBusyError)) {
-					throw err;
-				}
-				if (Date.now() >= deadline) {
-					throw new Error("Timed out waiting for prior agent run to finish before continuing queued messages.");
-				}
-				await this.agent.waitForIdle();
-			}
-		}
+		await turn;
 	}
 
 	/**

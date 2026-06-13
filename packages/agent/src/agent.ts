@@ -751,6 +751,18 @@ export class Agent {
 		return this.#steeringQueue.length > 0 || this.#followUpQueue.length > 0;
 	}
 
+	/**
+	 * Drain queued messages for an immediate resume: all steering messages if any
+	 * (honoring steeringMode), otherwise follow-ups. Mirrors continue()'s dequeue
+	 * precedence so an empty-Enter flush and the natural turn-end resume agree on
+	 * what to deliver next.
+	 */
+	takeQueuedMessages(): AgentMessage[] {
+		const steering = this.#dequeueSteeringMessages();
+		if (steering.length > 0) return steering;
+		return this.#dequeueFollowUpMessages();
+	}
+
 	#dequeueSteeringMessages(): AgentMessage[] {
 		if (this.#steeringMode === "one-at-a-time") {
 			if (this.#steeringQueue.length > 0) {
