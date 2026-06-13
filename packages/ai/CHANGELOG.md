@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed tool schema conversion for non-Cloud Code Assist Google Gemini models by normalizing parameters with `normalizeSchemaForGoogle` to prevent un-normalized schema properties (such as `additionalProperties: false` or type arrays) from causing Gemini API errors.
+
 ## [15.12.4] - 2026-06-13
 
 ### Added
