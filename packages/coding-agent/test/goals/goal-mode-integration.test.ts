@@ -112,6 +112,25 @@ async function toolNamesFor(harness: GoalHarness): Promise<string[]> {
 	return (await createTools(harness.toolSession, harness.session.getActiveToolNames())).map(tool => tool.name);
 }
 
+async function waitForMicrotasks(): Promise<void> {
+	await Bun.sleep(0);
+}
+
+async function armInputWaiter(mode: InteractiveMode): Promise<{
+	inputPromise: Promise<void>;
+	getResolvedText: () => string | undefined;
+}> {
+	let resolvedText: string | undefined;
+	const inputPromise = mode.getUserInput().then(input => {
+		resolvedText = input.text;
+	});
+	await waitForMicrotasks();
+	return {
+		inputPromise,
+		getResolvedText: () => resolvedText,
+	};
+}
+
 describe("InteractiveMode goal mode integration", () => {
 	let harness: GoalHarness;
 	let shared: SharedFixture;
@@ -167,6 +186,43 @@ describe("InteractiveMode goal mode integration", () => {
 		expect(state?.goal.id).not.toBe(originalGoal.id);
 		expect(harness.mode.goalModeEnabled).toBe(true);
 		expect(await toolNamesFor(harness)).toContain("goal");
+	});
+
+	it("defers initial goal objective submission while streaming", async () => {
+		let streaming = true;
+		Object.defineProperty(harness.session, "isStreaming", { configurable: true, get: () => streaming });
+		const sendGoalModeContext = vi.spyOn(harness.session, "sendGoalModeContext").mockResolvedValue();
+		const waiter = await armInputWaiter(harness.mode);
+
+		await harness.mode.handleGoalModeCommand("Ship the release");
+		await waitForMicrotasks();
+
+		expect(harness.session.getGoalModeState()?.goal.objective).toBe("Ship the release");
+		expect(sendGoalModeContext).toHaveBeenCalledWith({ deliverAs: "steer" });
+		expect(waiter.getResolvedText()).toBeUndefined();
+
+		streaming = false;
+		harness.mode.onInputCallback?.(harness.mode.startPendingSubmission({ text: "cleanup" }));
+		await waiter.inputPromise;
+	});
+
+	it("defers replacement goal objective submission while streaming", async () => {
+		await harness.mode.handleGoalModeCommand("Ship the release");
+		let streaming = true;
+		Object.defineProperty(harness.session, "isStreaming", { configurable: true, get: () => streaming });
+		const sendGoalModeContext = vi.spyOn(harness.session, "sendGoalModeContext").mockResolvedValue();
+		const waiter = await armInputWaiter(harness.mode);
+
+		await harness.mode.handleGoalModeCommand("set Replace the objective");
+		await waitForMicrotasks();
+
+		expect(harness.session.getGoalModeState()?.goal.objective).toBe("Replace the objective");
+		expect(sendGoalModeContext).toHaveBeenCalledWith({ deliverAs: "steer" });
+		expect(waiter.getResolvedText()).toBeUndefined();
+
+		streaming = false;
+		harness.mode.onInputCallback?.(harness.mode.startPendingSubmission({ text: "cleanup" }));
+		await waiter.inputPromise;
 	});
 
 	it("refuses /goal while plan mode is active", async () => {
