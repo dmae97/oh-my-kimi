@@ -13,6 +13,7 @@ import {
 import { TodoReminderComponent } from "../../modes/components/todo-reminder";
 import { ToolExecutionComponent } from "../../modes/components/tool-execution";
 import { TtsrNotificationComponent } from "../../modes/components/ttsr-notification";
+import { createUsageRowBlock } from "../../modes/components/usage-row";
 import { getSymbolTheme, theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext, TodoPhase } from "../../modes/types";
 import type { PlanApprovalDetails } from "../../plan-mode/approved-plan";
@@ -454,14 +455,7 @@ export class EventController {
 			// stream (a big write/edit/eval) sits below a still-live block and
 			// can never reach native scrollback: the head of the preview is
 			// neither committed nor on screen and the transcript reads as cut.
-			// Skipped when the per-turn usage row is enabled: that row is only
-			// known at message_end and appends to this block, which would shift
-			// committed tool rows below it every turn (audit recommit →
-			// duplicated preview copies in scrollback).
-			if (
-				this.ctx.streamingMessage.content.some(content => content.type === "toolCall") &&
-				!settings.get("display.showTokenUsage")
-			) {
+			if (this.ctx.streamingMessage.content.some(content => content.type === "toolCall")) {
 				this.ctx.streamingComponent.markTranscriptBlockFinalized();
 			}
 			for (const content of this.ctx.streamingMessage.content) {
@@ -614,8 +608,10 @@ export class EventController {
 				this.#resolveDisplaceablePoll();
 			}
 			this.#lastAssistantComponent = this.ctx.streamingComponent;
-			this.#lastAssistantComponent.setUsageInfo(event.message.usage);
 			this.#lastAssistantComponent.markTranscriptBlockFinalized();
+			if (settings.get("display.showTokenUsage")) {
+				this.ctx.chatContainer.addChild(createUsageRowBlock(event.message.usage));
+			}
 			this.ctx.streamingComponent = undefined;
 			this.ctx.streamingMessage = undefined;
 			// Pin a turn-ending provider error (e.g. Anthropic content-filter block)

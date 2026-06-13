@@ -103,7 +103,7 @@ describe("EventController finalizes assistant block when tool-call args stream",
 		expect(finalized).not.toHaveBeenCalled();
 	});
 
-	it("defers finalization to message_end when the per-turn usage row is enabled", async () => {
+	it("marks the streaming assistant finalized even when the per-turn usage row is enabled", async () => {
 		await Settings.init({ inMemory: true, cwd: process.cwd() });
 		settings.set("display.showTokenUsage", true);
 		const message = makeStreamingMessage([
@@ -111,6 +111,6 @@ describe("EventController finalizes assistant block when tool-call args stream",
 			{ type: "toolCall", id: "tc-2", name: "write", arguments: { file_path: "/tmp/b.ts", content: "y" } },
 		]);
 		const finalized = await dispatchUpdate(message);
-		expect(finalized).not.toHaveBeenCalled();
+		expect(finalized).toHaveBeenCalled();
 	});
 });

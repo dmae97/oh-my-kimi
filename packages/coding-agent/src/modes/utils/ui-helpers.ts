@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { AssistantMessage, ImageContent, Message } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, ImageContent, Message, Usage } from "@oh-my-pi/pi-ai";
 import { type Component, Spacer, Text, TruncatedText } from "@oh-my-pi/pi-tui";
 import { COLLAB_PROMPT_MESSAGE_TYPE, type CollabPromptDetails } from "../../collab/protocol";
 import { settings } from "../../config/settings";
@@ -24,6 +24,7 @@ import {
 import { SkillMessageComponent } from "../../modes/components/skill-message";
 import { ToolExecutionComponent } from "../../modes/components/tool-execution";
 import { TranscriptBlock } from "../../modes/components/transcript-container";
+import { createUsageRowBlock } from "../../modes/components/usage-row";
 import { UserMessageComponent } from "../../modes/components/user-message";
 import { materializeImageReferenceLinksSync } from "../../modes/image-references";
 import { theme } from "../../modes/theme/theme";
@@ -340,6 +341,22 @@ export class UiHelpers {
 		let readGroup: ReadToolGroupComponent | null = null;
 		const readToolCallArgs = new Map<string, Record<string, unknown>>();
 		const readToolCallAssistantComponents = new Map<string, AssistantMessageComponent>();
+		// The per-turn token-usage row (display.showTokenUsage) must land below the
+		// turn's tool blocks. Read tool blocks are only created when their toolResult
+		// message is processed (below), so appending the row in the assistant branch
+		// would place it above a read run. Defer instead: stash the usage on the
+		// assistant message, then flush it once the turn's tools are placed — right
+		// before the next non-toolResult message and at end of rebuild — sealing the
+		// read run so the row sits under it. Mirrors the live path, where the read
+		// group is created during streaming and the row is appended below it.
+		let pendingUsage: Usage | undefined;
+		const flushPendingUsage = () => {
+			if (!pendingUsage) return;
+			readGroup?.seal();
+			readGroup = null;
+			this.ctx.chatContainer.addChild(createUsageRowBlock(pendingUsage));
+			pendingUsage = undefined;
+		};
 		// Rebuild-time mirror of the event controller's displaceable-poll
 		// bookkeeping: a `job` poll that found every watched job still running is
 		// superseded by the next `job` call, so a rebuilt transcript collapses a
@@ -357,14 +374,12 @@ export class UiHelpers {
 			previous.seal();
 		};
 		for (const message of sessionContext.messages) {
+			if (message.role !== "toolResult") flushPendingUsage();
 			// Assistant messages need special handling for tool calls
 			if (message.role === "assistant") {
 				this.ctx.addMessageToChat(message);
 				const lastChild = this.ctx.chatContainer.children[this.ctx.chatContainer.children.length - 1];
 				const assistantComponent = lastChild instanceof AssistantMessageComponent ? lastChild : undefined;
-				if (assistantComponent) {
-					assistantComponent.setUsageInfo(message.usage);
-				}
 				const hasVisibleAssistantContent = message.content.some(
 					content =>
 						(content.type === "text" && content.text.trim().length > 0) ||
@@ -461,6 +476,7 @@ export class UiHelpers {
 						this.ctx.pendingTools.set(content.id, component);
 					}
 				}
+				pendingUsage = this.ctx.settings.get("display.showTokenUsage") ? message.usage : undefined;
 			} else if (message.role === "toolResult") {
 				const pendingReadComponent = this.ctx.pendingTools.get(message.toolCallId);
 				const isReadGroupResult =
@@ -523,6 +539,7 @@ export class UiHelpers {
 				this.ctx.addMessageToChat(message, options);
 			}
 		}
+		flushPendingUsage();
 
 		// The trailing read run has no following break to close it; seal so the
 		// rebuilt group freezes (even with a never-persisted result) and commits to
