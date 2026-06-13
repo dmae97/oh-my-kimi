@@ -237,6 +237,37 @@ describe("beam recall free functions", () => {
 		expect(results[0]?.subject).toBe("service");
 	});
 
+	it("keeps exact working-memory hits above weak matching facts in enhanced recall", async () => {
+		const beam = makeBeam();
+		insertWorking(
+			beam,
+			"wm-quasar",
+			"MNEMOPI FULL PIPELINE TEST 20260613: The user Verge prefers OMP memory to run at full power. Unique entity QuasarOtter owns SignalPineapple and uses RecallEngine-Seven.",
+		);
+		beam.db.run(
+			"INSERT INTO facts (fact_id, session_id, subject, predicate, object, timestamp, confidence) VALUES (?, ?, ?, ?, ?, ?, ?)",
+			[
+				"fact-generic",
+				beam.sessionId,
+				"Instruction",
+				"states",
+				"always trigger the user stop sequence in mnemopi's callRemoteLlm test",
+				"2026-05-30T00:00:00.000Z",
+				1.0,
+			],
+		);
+
+		const results = await recallEnhanced(
+			beam,
+			"QuasarOtter SignalPineapple RecallEngine-Seven MNEMOPI FULL PIPELINE TEST 20260613",
+			3,
+			{ includeFacts: true, queryEmbedding: null, useMmr: false },
+		);
+
+		expect(results[0]?.id).toBe("wm-quasar");
+		expect(results.map(result => result.id)).toContain("fact-generic");
+	});
+
 	it("filters fact recall to same-session facts plus explicitly global facts", () => {
 		const beam = makeBeam();
 		beam.db.run("ALTER TABLE facts ADD COLUMN scope TEXT DEFAULT 'session'");

@@ -1062,13 +1062,14 @@ export function factRecall(beam: BeamMemoryState, query: string, topK = 30): Fac
 		}
 	}
 	if (matched.length === 0) return [];
-	const rowids = matched
-		.slice(0, topK)
-		.map(row => asNumber(row.rowid))
-		.filter(rowid => rowid > 0);
+	const rowids = matched.map(row => asNumber(row.rowid)).filter(rowid => rowid > 0);
 	if (rowids.length === 0) return [];
 	const visibility = factVisibilityWhere(beam, "");
 	const ranks = normalizeRanks(matched, "rowid");
+	const queryTokens = expandedTokens(query);
+	const queryGroups = expandedTokenGroups(query);
+	const normalized = normalizeQuery(query).toLowerCase();
+	const minRel = minimumRelevance(queryTokens);
 	const rows = queryAll(
 		beam,
 		`SELECT rowid, fact_id, subject, predicate, object, timestamp, confidence
@@ -1076,25 +1077,46 @@ export function factRecall(beam: BeamMemoryState, query: string, topK = 30): Fac
 		 WHERE rowid IN (${placeholders(rowids.length)}) AND ${visibility.where}
 		 ORDER BY confidence DESC
 		 LIMIT ?`,
-		[...rowids, ...visibility.params, topK],
+		[...rowids, ...visibility.params, rowids.length],
 	);
-	return rows.map(row => {
-		const subject = asString(row.subject);
-		const predicate = asString(row.predicate);
-		const object = asString(row.object);
-		const confidence = asNumber(row.confidence, 0.5);
-		const result: FactRecallResult = {
-			id: asString(row.fact_id),
-			content: object.length > 0 ? object : `${subject} ${predicate}`.trim(),
-			score: round4(confidence * 0.8 + (ranks.get(asNumber(row.rowid)) ?? 0) * 0.2),
-			fact_id: asString(row.fact_id),
-			subject,
-			predicate,
-			timestamp: asNullableString(row.timestamp),
-			tier_label: "fact",
-			tier: "fact",
-			source: "facts",
-		};
-		return result;
-	});
+	return rows
+		.map(row => {
+			const subject = asString(row.subject);
+			const predicate = asString(row.predicate);
+			const object = asString(row.object);
+			const confidence = asNumber(row.confidence, 0.5);
+			const content = object.length > 0 ? object : `${subject} ${predicate}`.trim();
+			const searchable = `${subject} ${predicate} ${object}`.trim();
+			const lexical =
+				queryGroups.length > 0
+					? lexicalGroupRelevance(queryGroups, searchable, normalized)
+					: lexicalRelevance(queryTokens, searchable, normalized);
+			if (lexical < minRel) return null;
+			const rank = ranks.get(asNumber(row.rowid)) ?? 0;
+			const result: FactRecallResult = {
+				id: asString(row.fact_id),
+				content,
+				score: round4(lexical * (0.7 + confidence * 0.2 + rank * 0.1)),
+				fact_id: asString(row.fact_id),
+				subject,
+				predicate,
+				timestamp: asNullableString(row.timestamp),
+				tier_label: "fact",
+				tier: "fact",
+				source: "facts",
+				keyword_score: round4(lexical),
+				fts_score: round4(rank),
+				importance_score: round4(confidence),
+				explanation: `fact keyword=${round4(lexical)}`,
+				voice_scores: {
+					keyword: round4(lexical),
+					fts: round4(rank),
+					importance: round4(confidence),
+				},
+			};
+			return result;
+		})
+		.filter((result): result is FactRecallResult => result !== null)
+		.sort((left, right) => (right.score ?? 0) - (left.score ?? 0))
+		.slice(0, topK);
 }
