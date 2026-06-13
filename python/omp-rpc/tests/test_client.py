@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import os
+import shutil
+import signal
 import sys
+import tempfile
 import textwrap
 import threading
 import time
@@ -1123,6 +1127,95 @@ class StopUnblocksPromptAndWaitTests(unittest.TestCase):
         finally:
             # stop() is idempotent; safe to call again on cleanup paths.
             client.stop()
+
+
+class TerminatesProcessGroupTests(unittest.TestCase):
+    """Regression: stop() must reap descendants the agent spawned, not only
+    the omp leader.
+
+    A `bun test` launched by the agent's `bash` tool runs as a grandchild of
+    the omp process. Before the fix, stop() signalled only the leader pid, so
+    such grandchildren reparented to the container init and kept running —
+    once ballooning to tens of GB of RAM. omp is now spawned in its own
+    session and stop() tears down the whole process group.
+    """
+
+    @unittest.skipUnless(hasattr(os, "killpg"), "POSIX process groups only")
+    def test_stop_kills_grandchild_spawned_by_server(self) -> None:
+        work = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, work, ignore_errors=True)
+        pid_file = os.path.join(work, "gc.pid")
+        beat_file = os.path.join(work, "gc.beat")
+        gc_script = os.path.join(work, "gc.py")
+        with open(gc_script, "w", encoding="utf-8") as handle:
+            handle.write(
+                textwrap.dedent(
+                    f"""
+                    import os, time
+                    with open({pid_file!r}, "w") as f:
+                        f.write(str(os.getpid()))
+                    while True:
+                        with open({beat_file!r}, "w") as f:
+                            f.write(str(time.time()))
+                        time.sleep(0.02)
+                    """
+                )
+            )
+
+        def _reap_leaked_grandchild() -> None:
+            try:
+                with open(pid_file, encoding="utf-8") as f:
+                    os.kill(int(f.read()), signal.SIGKILL)
+            except (OSError, ValueError):
+                pass
+
+        self.addCleanup(_reap_leaked_grandchild)
+
+        # Fake omp server: spawn the long-lived grandchild, signal ready, then
+        # idle until torn down (sleep past stdin EOF so the group is still
+        # alive when stop() fires).
+        server = textwrap.dedent(
+            f"""
+            import json, subprocess, sys, time
+            subprocess.Popen([sys.executable, {gc_script!r}])
+            print(json.dumps({{"type": "ready"}}), flush=True)
+            for _line in sys.stdin:
+                pass
+            time.sleep(30)
+            """
+        )
+
+        client = RpcClient(
+            command=[sys.executable, "-u", "-c", server],
+            startup_timeout=2.0,
+            request_timeout=2.0,
+        )
+        client.start()
+        try:
+            deadline = time.time() + 2.0
+            while time.time() < deadline and not os.path.exists(pid_file):
+                time.sleep(0.02)
+            self.assertTrue(os.path.exists(pid_file), "grandchild never started")
+            with open(pid_file, encoding="utf-8") as f:
+                os.kill(int(f.read()), 0)  # alive before teardown
+        finally:
+            client.stop()
+
+        # The grandchild writes `time.time()` every 20ms. Once the group is
+        # killed it stops writing, so the file contents stay frozen. Compare
+        # contents (not mtime) to stay independent of filesystem timestamp
+        # resolution.
+        time.sleep(0.2)
+        with open(beat_file, encoding="utf-8") as f:
+            first = f.read()
+        time.sleep(0.3)
+        with open(beat_file, encoding="utf-8") as f:
+            second = f.read()
+        self.assertEqual(
+            second,
+            first,
+            "grandchild kept running after stop() — process group leaked",
+        )
 
 
 if __name__ == "__main__":
