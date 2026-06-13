@@ -9,7 +9,13 @@ import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/typ
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 
 function createContext() {
-	const setWorkingMessage = vi.fn();
+	const order: string[] = [];
+	const setWorkingMessage = vi.fn((_message?: string) => {
+		order.push("setWorkingMessage");
+	});
+	const ensureLoadingAnimation = vi.fn(() => {
+		order.push("ensureLoadingAnimation");
+	});
 	const pendingTools = new Map<string, unknown>();
 	const ctx = {
 		isInitialized: true,
@@ -20,11 +26,11 @@ function createContext() {
 		hideThinkingBlock: false,
 		setWorkingMessage,
 		clearPinnedError: vi.fn(),
-		ensureLoadingAnimation: vi.fn(),
+		ensureLoadingAnimation,
 		ui: { requestRender: vi.fn() },
 		session: { getToolByName: () => undefined },
 	} as unknown as InteractiveModeContext;
-	return { ctx, pendingTools, setWorkingMessage };
+	return { ctx, pendingTools, setWorkingMessage, ensureLoadingAnimation, order };
 }
 
 const AGENT_START = { type: "agent_start" } as unknown as AgentSessionEvent;
@@ -58,12 +64,17 @@ describe("EventController user interrupt acknowledgement", () => {
 	});
 
 	it("swaps the loader to the interrupting label once a turn is active", async () => {
-		const { ctx, setWorkingMessage } = createContext();
+		const { ctx, setWorkingMessage, ensureLoadingAnimation, order } = createContext();
 		const controller = new EventController(ctx);
 		await controller.handleEvent(AGENT_START);
+		setWorkingMessage.mockClear();
+		ensureLoadingAnimation.mockClear();
+		order.length = 0;
 
 		controller.notifyInterrupting();
 
+		expect(order).toEqual(["ensureLoadingAnimation", "setWorkingMessage"]);
+		expect(ensureLoadingAnimation).toHaveBeenCalledTimes(1);
 		expect(setWorkingMessage).toHaveBeenCalledWith(INTERRUPTING_WORKING_MESSAGE);
 	});
 

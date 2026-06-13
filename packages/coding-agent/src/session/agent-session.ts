@@ -1083,6 +1083,7 @@ export class AgentSession {
 	// has decremented #promptInFlightCount, hitting AgentBusyError. Flushed from
 	// both #endInFlight (normal) and #resetInFlight (abort).
 	#pendingAgentEndEmit: AgentSessionEvent | undefined;
+	#resumingQueuedMessages = false;
 	#obfuscator: SecretObfuscator | undefined;
 	#checkpointState: CheckpointState | undefined = undefined;
 	#pendingRewindReport: string | undefined = undefined;
@@ -3340,6 +3341,11 @@ export class AgentSession {
 		return this.agent.state.isStreaming || this.#promptInFlightCount > 0;
 	}
 
+	/** True while an explicit interrupt-and-flush is between aborting the old turn and starting the queued continuation. */
+	get isResumingQueuedMessages(): boolean {
+		return this.#resumingQueuedMessages;
+	}
+
 	/** Wait until streaming and deferred recovery work are fully settled. */
 	async waitForIdle(): Promise<void> {
 		await this.agent.waitForIdle();
@@ -5505,11 +5511,17 @@ export class AgentSession {
 	 */
 	async interruptAndFlushQueuedMessages(options?: { reason?: string }): Promise<void> {
 		if (!this.agent.hasQueuedMessages()) return;
-		await this.abort({ reason: options?.reason });
-		if (!this.agent.hasQueuedMessages()) return;
-		if (this.isCompacting || this.isGeneratingHandoff) return;
-		await this.#maybeRestoreRetryFallbackPrimary();
-		await this.agent.continue();
+		this.#resumingQueuedMessages = true;
+		try {
+			await this.abort({ reason: options?.reason });
+			if (!this.agent.hasQueuedMessages()) return;
+			if (this.isCompacting || this.isGeneratingHandoff) return;
+			await this.#maybeRestoreRetryFallbackPrimary();
+			this.#resumingQueuedMessages = false;
+			await this.agent.continue();
+		} finally {
+			this.#resumingQueuedMessages = false;
+		}
 	}
 
 	/**

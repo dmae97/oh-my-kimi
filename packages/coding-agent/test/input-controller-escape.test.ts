@@ -58,17 +58,21 @@ function createContext(): {
 		addMessageToChat: Spy;
 		cancelPendingSubmission: Spy;
 		clearQueue: Spy;
+		getQueuedMessages: Spy;
 		ensureLoadingAnimation: Spy;
 		handleBtwCommand: Spy;
+		interruptAndFlushQueuedMessages: Spy;
 		handleBtwEscape: Spy;
 		handleOmfgEscape: Spy;
 		hasActiveBtw: Spy;
 		hasActiveOmfg: Spy;
+		notifyInterrupting: Spy;
 		onInputCallback: Spy;
 		prompt: Spy;
 		requestRender: Spy;
 		resetDisplay: Spy;
 		startPendingSubmission: StartPendingSubmissionSpy;
+		updatePendingMessagesDisplay: Spy;
 	};
 	inputListeners: Array<(data: string) => { consume?: boolean; data?: string } | undefined>;
 } {
@@ -79,6 +83,8 @@ function createContext(): {
 	const addMessageToChat = vi.fn();
 	const cancelPendingSubmission = vi.fn(() => false);
 	const clearQueue = vi.fn(() => ({ steering: [], followUp: [] }));
+	const getQueuedMessages = vi.fn(() => ({ steering: [], followUp: [] }));
+	const interruptAndFlushQueuedMessages = vi.fn(async () => {});
 	const onInputCallback = vi.fn();
 	const requestRender = vi.fn();
 	const resetDisplay = vi.fn();
@@ -88,6 +94,8 @@ function createContext(): {
 	const hasActiveBtw = vi.fn(() => false);
 	const handleOmfgEscape = vi.fn(() => true);
 	const hasActiveOmfg = vi.fn(() => false);
+	const notifyInterrupting = vi.fn();
+	const updatePendingMessagesDisplay = vi.fn();
 	const prompt = vi.fn();
 	const startPendingSubmission = vi.fn(
 		(input: {
@@ -146,8 +154,18 @@ function createContext(): {
 			abortBash,
 			abortEval,
 			clearQueue,
+			getQueuedMessages,
+			interruptAndFlushQueuedMessages,
 			prompt,
 		} as unknown as InteractiveModeContext["session"],
+		viewSession: {
+			isCompacting: false,
+			isGeneratingHandoff: false,
+			isRetrying: false,
+			abortCompaction: vi.fn(),
+			abortHandoff: vi.fn(),
+			abortRetry: vi.fn(),
+		} as unknown as InteractiveModeContext["viewSession"],
 		sessionManager: {
 			getSessionName: () => "existing session",
 		} as unknown as InteractiveModeContext["sessionManager"],
@@ -164,12 +182,12 @@ function createContext(): {
 		addMessageToChat,
 		cancelPendingSubmission,
 		ensureLoadingAnimation,
-		notifyInterrupting: vi.fn(),
+		notifyInterrupting,
 		finishPendingSubmission: vi.fn(),
 		flushPendingBashComponents: vi.fn(),
 		markPendingSubmissionStarted: vi.fn(() => true),
 		startPendingSubmission,
-		updatePendingMessagesDisplay: vi.fn(),
+		updatePendingMessagesDisplay,
 		updateEditorBorderColor: vi.fn(),
 		showDebugSelector: vi.fn(),
 		toggleTodoExpansion: vi.fn(),
@@ -197,17 +215,21 @@ function createContext(): {
 			addMessageToChat,
 			cancelPendingSubmission,
 			clearQueue,
+			getQueuedMessages,
 			ensureLoadingAnimation,
+			interruptAndFlushQueuedMessages,
 			handleBtwCommand,
 			handleBtwEscape,
 			hasActiveBtw,
 			handleOmfgEscape,
 			hasActiveOmfg,
+			notifyInterrupting,
 			onInputCallback,
 			prompt,
 			requestRender,
 			resetDisplay,
 			startPendingSubmission,
+			updatePendingMessagesDisplay,
 		},
 		inputListeners,
 	};
@@ -246,6 +268,28 @@ describe("InputController escape behavior", () => {
 		expect(spies.abort).not.toHaveBeenCalled();
 	});
 
+	it("acknowledges empty-submit interrupt before flushing queued steering", async () => {
+		const { ctx, editor, spies } = createContext();
+		(ctx.session as { isStreaming: boolean; queuedMessageCount: number }).isStreaming = true;
+		(ctx.session as { isStreaming: boolean; queuedMessageCount: number }).queuedMessageCount = 1;
+		spies.getQueuedMessages.mockReturnValue({ steering: ["queued steer"], followUp: [] });
+		const order: string[] = [];
+		spies.notifyInterrupting.mockImplementation(() => {
+			order.push("notify");
+		});
+		spies.interruptAndFlushQueuedMessages.mockImplementation(async () => {
+			order.push("flush");
+		});
+		const controller = new InputController(ctx);
+
+		controller.setupEditorSubmitHandler();
+		await editor.onSubmit?.("");
+
+		expect(order).toEqual(["notify", "flush"]);
+		expect(spies.interruptAndFlushQueuedMessages).toHaveBeenCalledWith({ reason: USER_INTERRUPT_LABEL });
+		expect(spies.updatePendingMessagesDisplay).toHaveBeenCalledTimes(1);
+		expect(spies.requestRender).toHaveBeenCalledTimes(1);
+	});
 	it("runs /btw as a builtin side request instead of steering the active stream", async () => {
 		const { ctx, editor, spies } = createContext();
 		(ctx.session as { isStreaming: boolean }).isStreaming = true;

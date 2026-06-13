@@ -74,6 +74,7 @@ export class EventController {
 	// #handleMessageEnd / #handleAgentStart).
 	#pinnedErrorComponent: AssistantMessageComponent | undefined = undefined;
 	#idleCompactionTimer?: NodeJS.Timeout;
+	#deferredInterruptedEndTimer?: NodeJS.Timeout;
 	#ircExpiryTimers = new Map<string, NodeJS.Timeout>();
 	// Insertion-ordered IRC cards not yet retired; values are the transcript
 	// components each card contributed (see #retireIrcCard for the guard).
@@ -135,6 +136,7 @@ export class EventController {
 		this.#streamingReveal.stop();
 		this.#toolArgsReveal.stop();
 		this.#cancelIdleCompaction();
+		this.#cancelDeferredInterruptedEnd();
 		for (const timer of this.#ircExpiryTimers.values()) {
 			clearTimeout(timer);
 		}
@@ -204,16 +206,21 @@ export class EventController {
 	}
 
 	/**
-	 * Acknowledge a user interrupt (Esc) immediately: switch the loader to
-	 * `INTERRUPTING_WORKING_MESSAGE` and freeze intent-driven working-message
-	 * updates for the rest of the turn so a late `tool_execution_start` intent
-	 * cannot repaint a "Working…/<intent>" line over the acknowledgment. Reset at
-	 * the next `agent_start`. No-op outside an active turn or if already set.
+	 * Acknowledge a user interrupt immediately: keep/recreate the loader, switch
+	 * it to `INTERRUPTING_WORKING_MESSAGE`, and freeze intent-driven
+	 * working-message updates for the rest of the turn so a late
+	 * `tool_execution_start` intent cannot repaint a "Working…/<intent>" line
+	 * over the acknowledgment. Reset at the next `agent_start`. No-op outside an
+	 * active turn or if already set.
 	 */
 	notifyInterrupting(): void {
-		if (!this.#agentTurnActive || this.#interrupting) return;
+		if ((!this.#agentTurnActive && !this.ctx.session.isStreaming) || this.#interrupting) return;
+		this.#agentTurnActive = true;
 		this.#interrupting = true;
+		this.#cancelDeferredInterruptedEnd();
+		this.ctx.ensureLoadingAnimation();
 		this.ctx.setWorkingMessage(INTERRUPTING_WORKING_MESSAGE);
+		this.ctx.ui.requestRender();
 	}
 
 	subscribeToAgent(): void {
@@ -240,6 +247,7 @@ export class EventController {
 		this.#lastAssistantComponent = undefined;
 		this.#pinnedErrorComponent = undefined;
 		this.#cancelIdleCompaction();
+		this.#cancelDeferredInterruptedEnd();
 		for (const timer of this.#ircExpiryTimers.values()) {
 			clearTimeout(timer);
 		}
@@ -266,6 +274,7 @@ export class EventController {
 	async #handleAgentStart(_event: Extract<AgentSessionEvent, { type: "agent_start" }>): Promise<void> {
 		this.#agentTurnActive = true;
 		this.#interrupting = false;
+		this.#cancelDeferredInterruptedEnd();
 		this.#lastIntent = undefined;
 		this.#readToolCallArgs.clear();
 		this.#readToolCallAssistantComponents.clear();
@@ -831,7 +840,27 @@ export class EventController {
 		// agent_end (isStreaming === false by then). Mirrors the collab guest's
 		// !isStreaming loader reconciler.
 		if (this.ctx.session.isStreaming) return;
+
+		// Empty-Enter interrupt-and-flush has one more race: the interrupted turn's
+		// final agent_end can arrive in the short gap after abort teardown but before
+		// the queued continuation calls agent.continue() (and flips isStreaming). Keep
+		// the "Interrupting…" loader alive while AgentSession says a queued resume is
+		// being armed; the deferred reconciler tears it down if no new stream starts.
+		if (
+			this.#interrupting &&
+			(this.ctx.session.isResumingQueuedMessages || this.ctx.session.queuedMessageCount > 0)
+		) {
+			this.#deferInterruptedEndTeardown();
+			return;
+		}
+
+		this.#cancelDeferredInterruptedEnd();
+		await this.#finishAgentEnd();
+	}
+
+	async #finishAgentEnd(): Promise<void> {
 		this.#agentTurnActive = false;
+		this.#interrupting = false;
 		this.#streamingReveal.stop();
 		this.#toolArgsReveal.flushAll();
 		if (this.ctx.loadingAnimation) {
@@ -1031,6 +1060,27 @@ export class EventController {
 
 	async #handleTodoAutoClear(_event: Extract<AgentSessionEvent, { type: "todo_auto_clear" }>): Promise<void> {
 		await this.ctx.reloadTodos();
+	}
+
+	#cancelDeferredInterruptedEnd(): void {
+		if (this.#deferredInterruptedEndTimer) {
+			clearTimeout(this.#deferredInterruptedEndTimer);
+			this.#deferredInterruptedEndTimer = undefined;
+		}
+	}
+
+	#deferInterruptedEndTeardown(): void {
+		if (this.#deferredInterruptedEndTimer) return;
+		this.#deferredInterruptedEndTimer = setTimeout(() => {
+			this.#deferredInterruptedEndTimer = undefined;
+			if (this.ctx.session.isStreaming) return;
+			if (this.ctx.session.isResumingQueuedMessages) {
+				this.#deferInterruptedEndTeardown();
+				return;
+			}
+			void this.#finishAgentEnd();
+		}, 16);
+		this.#deferredInterruptedEndTimer.unref?.();
 	}
 
 	#cancelIdleCompaction(): void {

@@ -411,6 +411,7 @@ export class InputController {
 			if (!text && this.ctx.session.isStreaming) {
 				const queuedMessages = this.ctx.session.getQueuedMessages();
 				if (queuedMessages.steering.length > 0) {
+					this.ctx.notifyInterrupting();
 					await this.ctx.session.interruptAndFlushQueuedMessages({ reason: USER_INTERRUPT_LABEL });
 					this.ctx.updatePendingMessagesDisplay();
 					this.ctx.ui.requestRender();
@@ -418,6 +419,7 @@ export class InputController {
 				}
 				if (this.ctx.session.queuedMessageCount > 0) {
 					// Preserve the existing empty-submit flush for non-steer queues.
+					this.ctx.notifyInterrupting();
 					await this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL });
 					return;
 				}
