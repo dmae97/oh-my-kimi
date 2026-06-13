@@ -5,6 +5,7 @@
 ### Fixed
 
 - Fixed session JSONL persistence so the first assistant turn materializes the file synchronously, leaves the append writer open, and writes later entries with a sync append writer even during writer-close races instead of waiting on a queued rewrite.
+- Fixed `Alt+Up` (dequeue) reporting "No queued messages to restore" for messages — including skills — typed while the session was compacting. `restoreQueuedMessagesToEditor` now drains `compactionQueuedMessages` alongside the agent queue, so the `Alt+Up to edit` hint restores every pending message it advertises.
 
 ## [15.12.5] - 2026-06-13
 ### Changed

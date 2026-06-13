@@ -924,7 +924,20 @@ export class InputController {
 	restoreQueuedMessagesToEditor(options?: { abort?: boolean; currentText?: string }): number {
 		this.ctx.locallySubmittedUserSignatures.clear();
 		const { steering, followUp } = this.ctx.session.clearQueue();
-		const allQueued = [...steering, ...followUp];
+		// Messages typed while compacting live in `compactionQueuedMessages`, not the
+		// agent queue `clearQueue()` drains — but the pending bar shows the same
+		// "Alt+Up to edit" hint for them (ui-helpers `updatePendingMessagesDisplay`).
+		// Drain them here too so the dequeue restores every message the hint
+		// advertises; otherwise a skill/text queued during compaction is stranded and
+		// Alt+Up reports "No queued messages to restore".
+		const compactionQueued = this.ctx.compactionQueuedMessages;
+		this.ctx.compactionQueuedMessages = [];
+		const allQueued = [
+			...steering,
+			...compactionQueued.filter(e => e.mode === "steer").map(e => ({ text: e.text, images: e.images })),
+			...followUp,
+			...compactionQueued.filter(e => e.mode === "followUp").map(e => ({ text: e.text, images: e.images })),
+		];
 		if (allQueued.length === 0) {
 			this.ctx.updatePendingMessagesDisplay();
 			if (options?.abort) {
