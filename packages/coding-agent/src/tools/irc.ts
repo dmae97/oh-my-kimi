@@ -19,6 +19,7 @@ import { IrcBus, type IrcDeliveryReceipt, type IrcMessage } from "../irc/bus";
 import type { Theme } from "../modes/theme/theme";
 import ircDescription from "../prompts/tools/irc.md" with { type: "text" };
 import type { AgentRegistry } from "../registry/agent-registry";
+import { canSpawnAtDepth } from "../task/types";
 import { Ellipsis, renderStatusLine, renderTreeList, truncateToWidth } from "../tui";
 import type { ToolSession } from ".";
 import {
@@ -41,8 +42,10 @@ const DEFAULT_IRC_TIMEOUT_MS = 120_000;
  */
 export function isIrcEnabled(settings: Settings, taskDepth: number): boolean {
 	if (taskDepth > 0) return true;
+	// Top-level session: peers exist only if it can still spawn subagents — the
+	// same capacity gate the task tool uses, reused here to avoid drift.
 	const maxDepth = settings.get("task.maxRecursionDepth") ?? 2;
-	return maxDepth < 0 || taskDepth < maxDepth;
+	return canSpawnAtDepth(maxDepth, taskDepth);
 }
 
 const ircSchema = z.object({
@@ -66,6 +69,7 @@ interface IrcPeerInfo {
 	parentId?: string;
 	unread: number;
 	lastActivity: number;
+	activity?: string;
 }
 
 export interface IrcDetails {
@@ -146,6 +150,7 @@ export class IrcTool implements AgentTool<typeof ircSchema, IrcDetails> {
 				parentId: ref.parentId,
 				unread: bus.unreadCount(ref.id),
 				lastActivity: ref.lastActivity,
+				activity: ref.activity,
 			}));
 		const lines: string[] = [];
 		if (peers.length === 0) {
@@ -154,6 +159,7 @@ export class IrcTool implements AgentTool<typeof ircSchema, IrcDetails> {
 			lines.push(`${peers.length} peer(s):`);
 			for (const peer of peers) {
 				const extras = [
+					peer.activity || undefined,
 					peer.unread > 0 ? `unread ${peer.unread}` : undefined,
 					peer.parentId ? `parent ${peer.parentId}` : undefined,
 					`active ${formatDuration(Date.now() - peer.lastActivity)} ago`,
@@ -673,7 +679,9 @@ function renderListResult(details: Partial<IrcDetails>, expanded: boolean, theme
 				const kindText = peer.parentId ? `${peer.kind}${theme.sep.dot}of ${peer.parentId}` : peer.kind;
 				const unread = peer.unread > 0 ? ` ${formatBadge(`${peer.unread} unread`, "warning", theme)}` : "";
 				const age = messageAge(peer.lastActivity);
-				return `${peerStatusBadge(peer.status, theme)} ${theme.bold(replaceTabs(peer.id))} ${theme.fg("dim", kindText)}${unread}${age ? ` ${theme.fg("dim", age)}` : ""}`;
+				const activity = peer.activity ? ` ${theme.fg("dim", replaceTabs(peer.activity))}` : "";
+				const name = theme.fg("dim", replaceTabs(peer.displayName));
+				return `${peerStatusBadge(peer.status, theme)} ${theme.bold(replaceTabs(peer.id))} ${name} ${theme.fg("dim", kindText)}${activity}${unread}${age ? ` ${theme.fg("dim", age)}` : ""}`;
 			},
 		},
 		theme,
