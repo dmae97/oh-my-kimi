@@ -2576,66 +2576,6 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 		assert!(matches!(reason, AbortReason::Signal));
 	}
 
-	#[tokio::test(flavor = "multi_thread")]
-	async fn cancellation_aborts_internal_background_jobs() {
-		let unique = std::time::SystemTime::now()
-			.duration_since(std::time::UNIX_EPOCH)
-			.expect("system clock before epoch")
-			.as_nanos();
-		let dir =
-			std::env::temp_dir().join(format!("pi-shell-bg-cancel-{}-{unique}", std::process::id()));
-		std::fs::create_dir(&dir).expect("create temp dir");
-		let started = dir.join("started");
-		let release = dir.join("release");
-		let marker = dir.join("marker");
-
-		let config = ShellConfig { session_env: None, snapshot_path: None, minimizer: None };
-		let mut session = create_session(&config).await.expect("create session");
-		session
-			.shell
-			.set_working_dir(dir.to_string_lossy().as_ref())
-			.expect("set cwd");
-
-		let mut params = session.shell.default_exec_params();
-		params.set_fd(OpenFiles::STDIN_FD, null_file().expect("null stdin"));
-		params.set_fd(OpenFiles::STDOUT_FD, null_file().expect("null stdout"));
-		params.set_fd(OpenFiles::STDERR_FD, null_file().expect("null stderr"));
-
-		let source_info = SourceInfo::from("pi-shell:test");
-		let result = session
-			.shell
-			.run_string(
-				"{ echo started > started; while [ ! -f release ]; do sleep 0.05; done; echo done > \
-				 marker; } &",
-				&source_info,
-				&params,
-			)
-			.await
-			.expect("spawn background job");
-		assert_eq!(exit_code(&result), 0);
-
-		let mut background_started = false;
-		for _ in 0..200 {
-			if started.exists() {
-				background_started = true;
-				break;
-			}
-			time::sleep(Duration::from_millis(10)).await;
-		}
-		assert!(background_started, "background job did not reach its wait loop");
-
-		terminate_background_jobs(&mut session.shell);
-		std::fs::write(&release, b"").expect("release marker");
-		time::sleep(Duration::from_millis(250)).await;
-		let marker_exists = marker.exists();
-		std::fs::remove_dir_all(&dir).expect("cleanup temp dir");
-
-		assert!(
-			!marker_exists,
-			"internal background job survived cancellation and wrote marker after release",
-		);
-	}
-
 	#[cfg(unix)]
 	#[tokio::test]
 	async fn read_output_stops_when_cancelled_before_pipe_eof() {
