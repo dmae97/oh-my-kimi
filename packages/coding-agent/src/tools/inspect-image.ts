@@ -13,6 +13,7 @@ import {
 	type LoadedImageInput,
 	loadImageInput,
 	MAX_IMAGE_INPUT_BYTES,
+	webpExclusionForModel,
 } from "../utils/image-loading";
 import type { ToolSession } from "./index";
 import { ToolError } from "./tool-errors";
@@ -109,6 +110,7 @@ export class InspectImageTool implements AgentTool<typeof inspectImageSchema, In
 				cwd: this.session.cwd,
 				autoResize: this.session.settings.get("images.autoResize"),
 				maxBytes: MAX_IMAGE_INPUT_BYTES,
+				excludeWebP: webpExclusionForModel(model),
 			});
 		} catch (error) {
 			if (error instanceof ImageInputTooLargeError) {

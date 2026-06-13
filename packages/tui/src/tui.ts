@@ -240,6 +240,36 @@ function getRenderStablePrefixRows(component: Component): number | undefined {
 }
 
 /**
+ * Opt-in fast path for composing only the visible tail of a tall component
+ * during a terminal resize. A drag emits a SIGWINCH burst, and the width
+ * changes on every event: a full compose re-lays-out (and, for markdown,
+ * re-lexes) the entire transcript per event — O(history) work that is
+ * discarded the instant the next event arrives. While the resize is in flight
+ * the engine paints only the viewport, so it asks each tall root child for at
+ * most `maxRows` rows from the bottom of its render at `width` and skips
+ * composing everything above the fold. The authoritative full paint replays
+ * once the drag settles (see {@link TUI} resize handling).
+ *
+ * Contract:
+ * - Returns the BOTTOM rows of the component's full render at `width`, in
+ *   top-to-bottom order, capped at `maxRows` (fewer when the component is
+ *   shorter). The rows MUST be byte-identical to the corresponding tail of
+ *   what `render(width)` would have returned, modulo a one-row separator at
+ *   the very top edge (a transient frame the settle paint overwrites).
+ * - MUST NOT mutate any persistent full-compose state: the next `render()`
+ *   (the settle paint) has to reconcile exactly as if the tail render never
+ *   happened. Warming pure per-width render caches is fine and desirable.
+ */
+export interface ViewportTailProvider {
+	renderViewportTail(width: number, maxRows: number): readonly string[];
+}
+
+function asViewportTailProvider(component: Component): ViewportTailProvider | undefined {
+	const candidate = component as Component & Partial<ViewportTailProvider>;
+	return typeof candidate.renderViewportTail === "function" ? (candidate as ViewportTailProvider) : undefined;
+}
+
+/**
  * Interface for components that can receive focus and display a cursor.
  * When focused, the component should emit CURSOR_MARKER at the cursor position
  * in its render output. TUI will find this marker and position the hardware
@@ -629,6 +659,20 @@ export class TUI extends Container {
 	// arrives (issue #2088). Coalescing every SIGWINCH inside this window into
 	// a single forced render lets the multiplexer settle first.
 	static readonly #MULTIPLEXER_RESIZE_DEBOUNCE_MS = 50;
+	// Resize viewport fast path (non-multiplexer). A drag emits a SIGWINCH burst,
+	// and outside a multiplexer the host gets each new geometry atomically. The
+	// authoritative resize paint erases and replays the entire transcript so it
+	// rewraps at the new width — O(history) compose (markdown re-lexes every
+	// block, the per-width cache missing on every distinct drag width) plus an
+	// O(history) write that pushes all of it back through native scrollback. At
+	// drag rates that whole-history pass is recomputed dozens of times a second
+	// and discarded the instant the next event lands. While the drag is in
+	// flight the engine instead composes and paints ONLY the viewport (see
+	// `#renderResizeViewport`): a state-isolated, throwaway frame that never
+	// touches the commit ledger. The authoritative full replay fires once, after
+	// the drag has been quiet for this long. Multiplexer sessions keep their own
+	// debounce (`#armMultiplexerResizeTimer`, see #2088) and never take this path.
+	static readonly #RESIZE_VIEWPORT_SETTLE_MS = 120;
 	// Ghostty can drop Kitty graphics commands sent during its first post-startup
 	// settle window, leaving only Unicode placeholder cells. Hold the first image
 	// paint until that window has passed; later images render normally.
@@ -713,6 +757,19 @@ export class TUI extends Container {
 	// flag below so the settled paint still honours every caller's request.
 	#multiplexerResizeTimer: RenderTimer | undefined;
 	#deferredForcedClearScrollback = false;
+	// True from the first SIGWINCH of a non-multiplexer drag until the settle
+	// timer fires. While set, every `#doRender` short-circuits to the viewport
+	// fast path (`#renderResizeViewport`) instead of an authoritative full
+	// paint, and no commit/window/diff state is advanced.
+	#resizeViewportActive = false;
+	// Quiet-window timer that ends the drag: its callback clears the flag and
+	// drives the one authoritative full paint. Reset on every resize event so it
+	// only fires once the drag stops. Cancelled on stop().
+	#resizeViewportSettleTimer: RenderTimer | undefined;
+	// Count of transient viewport-only resize paints emitted. Distinct from
+	// `#fullRedrawCount`: these never enter native scrollback and exist only for
+	// the lifetime of the drag. Exposed for tests/diagnostics.
+	#resizeViewportPaintCount = 0;
 	#stopped = false;
 
 	// Transient alternate-screen state for a fullscreen overlay. While active, the
@@ -944,6 +1001,20 @@ export class TUI extends Container {
 		return this.#fullRedrawCount;
 	}
 
+	/**
+	 * Transient viewport-only paints emitted by the non-multiplexer resize fast
+	 * path. These never touch native scrollback or the commit ledger, so they
+	 * are counted apart from {@link fullRedraws}.
+	 */
+	get resizeViewportPaints(): number {
+		return this.#resizeViewportPaintCount;
+	}
+
+	/** Whether a non-multiplexer resize drag is currently in flight. */
+	get resizeViewportActive(): boolean {
+		return this.#resizeViewportActive;
+	}
+
 	/** Shared budget that caps how many inline images render as live graphics. */
 	get imageBudget(): ImageBudget {
 		return this.#imageBudget;
@@ -1144,6 +1215,10 @@ export class TUI extends Container {
 				// classifies as a resize.
 				this.#resizeEventPending = true;
 				if (!isMultiplexerSession()) {
+					// Enter the viewport fast path and (re)arm the settle timer, then
+					// request the cheap viewport-only paint. The authoritative full
+					// replay fires from the settle timer once the drag goes quiet.
+					this.#beginResizeViewport();
 					this.requestRender(true);
 					return;
 				}
@@ -1360,6 +1435,11 @@ export class TUI extends Container {
 			this.#multiplexerResizeTimer.cancel();
 			this.#multiplexerResizeTimer = undefined;
 		}
+		if (this.#resizeViewportSettleTimer) {
+			this.#resizeViewportSettleTimer.cancel();
+			this.#resizeViewportSettleTimer = undefined;
+		}
+		this.#resizeViewportActive = false;
 		this.#clearPostFullPaintSettle();
 		this.#deferredForcedClearScrollback = false;
 		// Place the parent shell on the first line after the rendered content. When
@@ -2093,6 +2173,20 @@ export class TUI extends Container {
 			return;
 		}
 
+		// Resize viewport fast path. While a non-multiplexer drag is in flight,
+		// paint only the viewport and skip composing the off-screen history.
+		// Strictly state-isolated: it never consumes #resizeEventPending nor
+		// advances any commit/window/diff field, so the authoritative full paint
+		// the settle timer queues reconciles as if these throwaway frames never
+		// ran. A visible overlay composites over the transcript and needs the
+		// whole window, so fall through to the normal forced paint when one is up
+		// (overlay resizes are not on the drag-cost hot path).
+		if (this.#resizeViewportActive && this.#hasEverRendered && this.#getTopmostVisibleOverlay() === undefined) {
+			this.#componentRenderTargets.clear();
+			this.#renderResizeViewport(width, height);
+			return;
+		}
+
 		// 1. Compose the frame. Bracket the render so the image budget observes
 		// every inline image in display order (overlays carry none). A
 		// component-scoped frame skips the budget pass instead — it is gated on
@@ -2677,6 +2771,101 @@ export class TUI extends Container {
 		this.#committedRows = chunkTo;
 		this.#windowTopRow = windowTop;
 		this.#commit(frame, window, width, height, cursorControl);
+	}
+
+	/**
+	 * Enter (or extend) the non-multiplexer resize fast path. Marks the drag
+	 * active so subsequent `#doRender` calls paint viewport-only, then (re)arms
+	 * the quiet-window timer whose callback ends the drag with one authoritative
+	 * full paint. Reset on every SIGWINCH, so the full replay fires only once the
+	 * user stops dragging.
+	 */
+	#beginResizeViewport(): void {
+		this.#resizeViewportActive = true;
+		this.#resizeViewportSettleTimer?.cancel();
+		this.#resizeViewportSettleTimer = this.#renderScheduler.scheduleRender(() => {
+			this.#resizeViewportSettleTimer = undefined;
+			this.#resizeViewportActive = false;
+			if (this.#stopped) return;
+			// The drag is quiet: replay the rewrapped transcript authoritatively.
+			// #resizeEventPending was preserved across every viewport-only frame
+			// (the fast path never consumes it), so this classifies as a geometry
+			// rebuild — ED3 + full history — and the clearScrollback intent below
+			// matches the gesture-driven reset path.
+			this.#resizeEventPending = true;
+			this.requestRender(true, { clearScrollback: !isMultiplexerSession() });
+		}, TUI.#RESIZE_VIEWPORT_SETTLE_MS);
+	}
+
+	/**
+	 * Compose and paint only the viewport for one resize fast-path frame.
+	 * State-isolated: advances no commit/window/diff field and calls neither
+	 * `#commit` nor `#emitFullPaint`, so the settle full paint reconciles against
+	 * the pre-drag screen state.
+	 */
+	#renderResizeViewport(width: number, height: number): void {
+		if (width <= 0 || height <= 0) return;
+		// Tail renders call block.render(), which can push image ids onto the
+		// budget's in-flight pass. Reset the pass each frame so a long drag does
+		// not accumulate; never endPass() here — that mutates the demotion ledger
+		// off a partial (tail-only) walk. The settle paint's own
+		// beginPass()/endPass() is the authoritative accounting, and its
+		// beginPass() wipes whatever these frames observed.
+		this.#imageBudget.beginPass();
+		const window = this.#composeResizeViewport(width, height);
+		this.#emitResizeViewport(window, height);
+		this.#resizeViewportPaintCount += 1;
+	}
+
+	/**
+	 * Build the viewport window for a resize fast-path frame: the bottom
+	 * `height` rows of the would-be full frame, collected bottom-up across root
+	 * children. {@link ViewportTailProvider}s (the transcript) yield only their
+	 * tail; the small live-region children below render in full — so every child
+	 * entirely above the fold is skipped. A frame shorter than the viewport is
+	 * top-aligned with blank rows below, matching the full-paint window geometry
+	 * (windowTop = max(0, frameLength - height)). Cursor markers are stripped
+	 * (the drag hides the hardware cursor) and rows are width-fitted via the
+	 * stateless preparer, so no persistent prepared-frame cache is touched.
+	 */
+	#composeResizeViewport(width: number, height: number): string[] {
+		const tail: string[] = []; // bottom-first
+		const children = this.children;
+		for (let i = children.length - 1; i >= 0 && tail.length < height; i--) {
+			const child = children[i]!;
+			const provider = asViewportTailProvider(child);
+			const rows = provider ? provider.renderViewportTail(width, height - tail.length) : child.render(width);
+			for (let r = rows.length - 1; r >= 0 && tail.length < height; r--) {
+				tail.push(rows[r]!);
+			}
+		}
+		const count = tail.length;
+		const window: string[] = new Array(height);
+		for (let screenRow = 0; screenRow < height; screenRow++) {
+			// `tail` holds the bottom `count` frame rows, bottom-first. They fill
+			// the viewport when the frame overflows it and sit at the top (blanks
+			// below) when it underflows.
+			window[screenRow] = screenRow < count ? tail[count - 1 - screenRow]! : "";
+		}
+		this.#extractCursorMarkers(window);
+		return this.#prepareLinesArray(window, width);
+	}
+
+	/**
+	 * Emit a throwaway viewport repaint for the resize fast path: erase the
+	 * visible screen (ED2 — never ED3, so native scrollback survives the drag)
+	 * and write the prepared window from home with the cursor held hidden. No
+	 * scrollback push, no committed-prefix write, no `#commit` — none of the
+	 * paint accounting is advanced.
+	 */
+	#emitResizeViewport(window: readonly string[], height: number): void {
+		let buffer = `${this.#paintBeginSequence}\x1b[2J\x1b[H`;
+		for (let r = 0; r < height; r++) {
+			if (r > 0) buffer += "\r\n";
+			buffer += this.#terminalLine(window[r] ?? "");
+		}
+		buffer += this.#paintEndSequence;
+		this.terminal.write(buffer);
 	}
 
 	/** Topmost visible overlay requests the alternate-screen buffer. */

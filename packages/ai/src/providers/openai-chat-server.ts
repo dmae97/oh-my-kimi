@@ -4,7 +4,7 @@ import { resolvePromptCacheKey } from "../auth-gateway/http";
  * Parsed inbound OpenAI chat-completions request, ready to feed into pi-ai
  * `stream(model, context, options)`.
  */
-import type { AuthGatewayParsedRequest as ParsedRequest } from "../auth-gateway/types";
+import type { AuthGatewayStreamControl, AuthGatewayParsedRequest as ParsedRequest } from "../auth-gateway/types";
 import type {
 	AssistantMessage,
 	AssistantMessageEventStream,
@@ -501,11 +501,17 @@ export function encodeStream(
 	events: AssistantMessageEventStream,
 	requestedModelId: string,
 	options?: ParsedRequest["options"],
+	control?: AuthGatewayStreamControl,
 ): ReadableStream<Uint8Array> {
 	const encoder = new TextEncoder();
 	const id = makeId();
 	const created = Math.floor(Date.now() / 1000);
 	const includeUsage = options?.extra?.includeStreamingUsage === true;
+	let cancelled = control?.signal?.aborted === true;
+	const markCancelled = () => {
+		cancelled = true;
+	};
+	control?.signal?.addEventListener("abort", markCancelled, { once: true });
 
 	const baseChunk = (delta: Record<string, unknown>, finishReason: string | null) => ({
 		id,
@@ -518,7 +524,7 @@ export function encodeStream(
 	});
 
 	const writeSse = (controller: ReadableStreamDefaultController<Uint8Array>, payload: unknown): void => {
-		controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
+		if (!cancelled) controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
 	};
 
 	const writeUsage = (controller: ReadableStreamDefaultController<Uint8Array>, message: AssistantMessage): void => {
@@ -545,10 +551,15 @@ export function encodeStream(
 			let finishReason: string = "stop";
 
 			try {
+				if (cancelled) {
+					controller.close();
+					return;
+				}
 				// Initial role chunk.
 				writeSse(controller, baseChunk({ role: "assistant" }, null));
 
 				for await (const event of events) {
+					if (cancelled) return;
 					switch (event.type) {
 						case "text_delta":
 							if (event.delta.length > 0) {
@@ -662,14 +673,25 @@ export function encodeStream(
 				}
 
 				// Stream ended without a terminal `done` (defensive). Close gracefully.
-				writeSse(controller, baseChunk({}, hasToolCalls ? "tool_calls" : "stop"));
-				controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-				controller.close();
+				if (!cancelled) {
+					writeSse(controller, baseChunk({}, hasToolCalls ? "tool_calls" : "stop"));
+					controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+					controller.close();
+				}
 			} catch (err) {
-				const msg = err instanceof Error ? err.message : String(err);
-				writeSse(controller, { error: { message: msg, type: "upstream_error" } });
-				controller.close();
+				if (!cancelled) {
+					const msg = err instanceof Error ? err.message : String(err);
+					writeSse(controller, { error: { message: msg, type: "upstream_error" } });
+					controller.close();
+				}
+			} finally {
+				control?.signal?.removeEventListener("abort", markCancelled);
 			}
+		},
+		cancel(reason) {
+			cancelled = true;
+			control?.signal?.removeEventListener("abort", markCancelled);
+			control?.onCancel?.(reason);
 		},
 	});
 }

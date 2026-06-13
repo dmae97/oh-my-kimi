@@ -63,7 +63,7 @@ function getRequestHeader(input: string | URL | Request, init: RequestInit | und
 	}
 	return null;
 }
-function createHangingSseResponse(signal: AbortSignal | undefined): Response {
+function createHangingSseResponse(signal: AbortSignal | undefined, onCancel?: (reason: unknown) => void): Response {
 	let abortListener: (() => void) | undefined;
 	const stream = new ReadableStream<Uint8Array>({
 		start(controller) {
@@ -84,7 +84,8 @@ function createHangingSseResponse(signal: AbortSignal | undefined): Response {
 			}
 			signal?.addEventListener("abort", abortListener, { once: true });
 		},
-		cancel() {
+		cancel(reason) {
+			onCancel?.(reason);
 			if (abortListener) {
 				signal?.removeEventListener("abort", abortListener);
 			}
@@ -521,6 +522,24 @@ describe("OpenAI-family first-event timeouts", () => {
 		);
 	});
 
+	it("cancels the OpenAI completions response body when the first-event watchdog fires", async () => {
+		let cancelled = false;
+		const fetchMock: FetchImpl = () =>
+			Promise.resolve(
+				createHangingSseResponse(undefined, () => {
+					cancelled = true;
+				}),
+			);
+		const result = await streamOpenAICompletions(openAICompletionsModel, baseContext(), {
+			apiKey: "test-key",
+			streamFirstEventTimeoutMs: 20,
+			fetch: fetchMock,
+		}).result();
+
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toBe("OpenAI completions stream timed out while waiting for the first event");
+		expect(cancelled).toBe(true);
+	});
 	it("surfaces the Azure OpenAI responses first-event timeout message", async () => {
 		await expectFirstEventTimeout(
 			(streamFirstEventTimeoutMs, fetchMock) =>

@@ -438,8 +438,8 @@ export interface Model<TApi extends Api = Api> {
 	};
 	/** Premium Copilot requests charged per user-initiated request (defaults to 1). */
 	premiumMultiplier?: number;
-	contextWindow: number;
-	maxTokens: number;
+	contextWindow: number | null;
+	maxTokens: number | null;
 	/**
 	 * When `true`, providers MUST omit `max_output_tokens` (Responses) /
 	 * `max_tokens` / `max_completion_tokens` (Completions) from the outbound

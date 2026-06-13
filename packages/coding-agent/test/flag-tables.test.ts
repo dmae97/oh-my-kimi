@@ -66,12 +66,6 @@ describe("OPTIONAL_FLAGS per-flag quirks", () => {
 		expect(result.resume).toBe(true);
 		expect(result.messages).toEqual([""]);
 	});
-
-	it("preserves existing empty-string behavior for --list-models", () => {
-		const result = parseArgs(["--list-models", ""]);
-		expect(result.listModels).toBe("");
-		expect(result.messages).toEqual([]);
-	});
 });
 
 describe("parseArgs end-of-options (--)", () => {

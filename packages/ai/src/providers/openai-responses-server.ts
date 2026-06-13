@@ -11,7 +11,7 @@
 
 import { logger } from "@oh-my-pi/pi-utils";
 import { resolvePromptCacheKey } from "../auth-gateway/http";
-import type { AuthGatewayParsedRequest as ParsedRequest } from "../auth-gateway/types";
+import type { AuthGatewayStreamControl, AuthGatewayParsedRequest as ParsedRequest } from "../auth-gateway/types";
 import type {
 	AssistantMessage,
 	AssistantMessageEventStream,
@@ -725,18 +725,28 @@ function sseEvent(name: string, data: unknown): string {
 export function encodeStream(
 	events: AssistantMessageEventStream,
 	requestedModelId: string,
+	_options?: ParsedRequest["options"],
+	control?: AuthGatewayStreamControl,
 ): ReadableStream<Uint8Array> {
 	const encoder = new TextEncoder();
 	const responseId = makeRespId();
 	let sequenceNumber = 0;
+	let cancelled = control?.signal?.aborted === true;
+	const markCancelled = () => {
+		cancelled = true;
+	};
+	control?.signal?.addEventListener("abort", markCancelled, { once: true });
 	const seq = () => sequenceNumber++;
 
 	return new ReadableStream<Uint8Array>({
 		async start(controller) {
 			const emit = (name: string, data: Record<string, unknown>) => {
-				controller.enqueue(encoder.encode(sseEvent(name, { type: name, sequence_number: seq(), ...data })));
+				if (!cancelled)
+					controller.enqueue(encoder.encode(sseEvent(name, { type: name, sequence_number: seq(), ...data })));
 			};
-			const emitDone = () => controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+			const emitDone = () => {
+				if (!cancelled) controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+			};
 
 			let createdAt = Math.floor(Date.now() / 1000);
 			let outputIndex = 0;
@@ -939,35 +949,23 @@ export function encodeStream(
 				if (byIndex) return byIndex;
 				return state.open?.kind === "function_call" ? state.open : undefined;
 			};
+			let finalMessage: AssistantMessage | undefined;
+			let failureMessage: AssistantMessage | undefined;
 			try {
-				let finalMessage: AssistantMessage | null = null;
-				let failureMessage: AssistantMessage | null = null;
-
+				if (cancelled) {
+					controller.close();
+					return;
+				}
 				for await (const ev of events) {
+					if (cancelled) return;
 					switch (ev.type) {
 						case "start": {
 							createdAt = Math.floor((ev.partial.timestamp || Date.now()) / 1000);
 							// response.created — initial envelope.
-							controller.enqueue(
-								encoder.encode(
-									sseEvent("response.created", {
-										type: "response.created",
-										sequence_number: seq(),
-										response: responseSnapshot("in_progress", []),
-									}),
-								),
-							);
+							emit("response.created", { response: responseSnapshot("in_progress", []) });
 							// response.in_progress — mirrors real OpenAI; some clients gate
 							// on it before reading items.
-							controller.enqueue(
-								encoder.encode(
-									sseEvent("response.in_progress", {
-										type: "response.in_progress",
-										sequence_number: seq(),
-										response: responseSnapshot("in_progress", []),
-									}),
-								),
-							);
+							emit("response.in_progress", { response: responseSnapshot("in_progress", []) });
 							break;
 						}
 						case "text_start": {
@@ -1196,26 +1194,35 @@ export function encodeStream(
 				emitDone();
 				controller.close();
 			} catch (err) {
-				controller.enqueue(
-					encoder.encode(
-						sseEvent("response.failed", {
-							type: "response.failed",
-							sequence_number: seq(),
-							response: {
-								id: responseId,
-								object: "response",
-								created_at: Math.floor(Date.now() / 1000),
-								status: "failed",
-								model: requestedModelId,
-								output: [],
-								error: { message: err instanceof Error ? err.message : String(err) },
-							},
-						}),
-					),
-				);
-				emitDone();
-				controller.close();
+				if (!cancelled) {
+					controller.enqueue(
+						encoder.encode(
+							sseEvent("response.failed", {
+								type: "response.failed",
+								sequence_number: seq(),
+								response: {
+									id: responseId,
+									object: "response",
+									created_at: Math.floor(Date.now() / 1000),
+									status: "failed",
+									model: requestedModelId,
+									output: [],
+									error: { message: err instanceof Error ? err.message : String(err) },
+								},
+							}),
+						),
+					);
+					emitDone();
+					controller.close();
+				}
+			} finally {
+				control?.signal?.removeEventListener("abort", markCancelled);
 			}
+		},
+		cancel(reason) {
+			cancelled = true;
+			control?.signal?.removeEventListener("abort", markCancelled);
+			control?.onCancel?.(reason);
 		},
 	});
 }

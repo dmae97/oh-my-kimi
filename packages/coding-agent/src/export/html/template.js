@@ -450,6 +450,26 @@
         return div.innerHTML;
       }
 
+      function isDotOnlyThinking(text) {
+        let sawDot = false;
+        for (let i = 0; i < text.length; i++) {
+          const code = text.charCodeAt(i);
+          if (code === 0x2e || code === 0x2026) {
+            sawDot = true;
+            continue;
+          }
+          if (code === 0x20 || code === 0x09 || code === 0x0a || code === 0x0d) continue;
+          return false;
+        }
+        return sawDot;
+      }
+
+      function visibleThinkingText(block) {
+        const text = block.thinking.trim();
+        if (!text) return '';
+        return isDotOnlyThinking(text) ? '' : text;
+      }
+
       /**
        * Truncate string to maxLen chars, append "..." if truncated.
        */
@@ -1056,9 +1076,11 @@
             for (const block of msg.content) {
               if (block.type === 'text' && block.text.trim()) {
                 html += `<div class="assistant-text markdown-content">${safeMarkedParse(block.text)}</div>`;
-              } else if (block.type === 'thinking' && block.thinking.trim()) {
+              } else if (block.type === 'thinking') {
+                const thinking = visibleThinkingText(block);
+                if (!thinking) continue;
                 html += `<div class="thinking-block">
-                  <div class="thinking-text">${escapeHtml(block.thinking)}</div>
+                  <div class="thinking-text">${escapeHtml(thinking)}</div>
                   <div class="thinking-collapsed">Thinking ...</div>
                 </div>`;
               }

@@ -17,6 +17,7 @@ function buildResumeArgs(resume: string): Args {
 		messages: [],
 		fileArgs: [],
 		unknownFlags: new Map(),
+		unrecognizedFlags: [],
 	};
 }
 
@@ -27,6 +28,7 @@ function buildForkArgs(fork: string, noSession = false): Args {
 		messages: [],
 		fileArgs: [],
 		unknownFlags: new Map(),
+		unrecognizedFlags: [],
 	};
 }
 

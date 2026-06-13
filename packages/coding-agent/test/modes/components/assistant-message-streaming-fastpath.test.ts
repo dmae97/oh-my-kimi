@@ -74,6 +74,18 @@ describe("AssistantMessageComponent streaming fast path", () => {
 		}
 	});
 
+	it("does not render dot-only reasoning placeholders", () => {
+		const rendered = teardownRender(
+			msg([
+				{ type: "thinking", thinking: ". . .", thinkingSignature: "reasoning_content" },
+				{ type: "text", text: "answer" },
+			]),
+		);
+
+		expect(rendered).toContain("answer");
+		expect(rendered).not.toContain(". . .");
+	});
+
 	it("matches teardown for a single growing text block", () => {
 		const reused = new AssistantMessageComponent();
 		let text = "";

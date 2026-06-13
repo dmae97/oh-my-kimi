@@ -1,7 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { estimateTokens } from "@oh-my-pi/pi-agent-core/compaction";
 import { type Component, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
 import { getProjectDir } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
@@ -11,7 +10,6 @@ import * as git from "../../../utils/git";
 import { getSessionAccentAnsi, getSessionAccentHex } from "../../../utils/session-color";
 import { sanitizeStatusText } from "../../shared";
 import { theme } from "../../theme/theme";
-import { computeNonMessageTokens } from "../../utils/context-usage";
 import { canReuseCachedPr, createPrCacheContext, isSamePrCacheContext, type PrCacheContext } from "./git-utils";
 import { getPreset } from "./presets";
 import { renderSegment, type SegmentContext } from "./segments";
@@ -26,30 +24,15 @@ import type {
 } from "./types";
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Per-message token cache
+// Context-usage memo
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
- * Symbol-keyed sidecar tagged onto each `AgentMessage` to memoize its
- * `estimateTokens` result. Keyed by message identity (the object itself);
- * a cheap content fingerprint detects in-place mutations (post-hoc error
- * attachment, retry-truncated branch rebuild, etc.) and forces recompute.
- *
- * Cache lives on the message — multiple `StatusLineComponent` instances
- * share it for free, and entries collect with the message itself when the
- * conversation is replaced or compacted.
- */
-const kTokenCache = Symbol("statusLine.tokenCache");
-interface TaggedMessage {
-	[kTokenCache]?: { fingerprint: string; tokens: number };
-}
-
-/**
- * Cheap structural fingerprint mirroring `estimateTokens`'s content walk.
- * O(blocks) — only reads string `.length` and primitives, never copies or
- * serializes content. Any in-place mutation that alters total tokenized
- * content also alters one of the byte-length sums or block counts captured
- * here, forcing the cached `estimateTokens` value to be recomputed.
+ * Cheap structural fingerprint of a message's tokenizable content. O(blocks) —
+ * only reads string `.length` and primitives, never copies or serializes.
+ * Detects in-place growth of the streaming tail (and other in-place mutations)
+ * so the cached `getContextUsage()` result is recomputed when — and only when —
+ * the numbers it depends on change.
  */
 function messageFingerprint(msg: AgentMessage): string {
 	const role = (msg as { role?: string }).role ?? "";
@@ -107,28 +90,16 @@ function messageFingerprint(msg: AgentMessage): string {
 	return `${role}:${ts}:${textLen}:${blocks}:${images}`;
 }
 
-/**
- * Token count for a single message, using the per-message sidecar cache.
- * The caller MUST skip caching for the last message during streaming —
- * it may still be growing and its tokens belong recomputed each refresh.
- */
-function tokensForMessage(msg: AgentMessage): number {
-	const fp = messageFingerprint(msg);
-	const tagged = msg as TaggedMessage;
-	const cached = tagged[kTokenCache];
-	if (cached && cached.fingerprint === fp) return cached.tokens;
-	const tokens = estimateTokens(msg);
-	tagged[kTokenCache] = { fingerprint: fp, tokens };
-	return tokens;
+interface ContextUsageMemo {
+	messagesRef: readonly AgentMessage[];
+	length: number;
+	lastFingerprint: string | undefined;
+	modelContextWindow: number;
+	usedTokens: number | null;
+	contextWindow: number;
 }
 
-interface MessageTokenTotalsCache {
-	messagesRef: readonly AgentMessage[];
-	stableCount: number;
-	stableTokens: number;
-	lastStableMessage: AgentMessage | undefined;
-	lastStableFingerprint: string | undefined;
-}
+const EMPTY_MESSAGES: readonly AgentMessage[] = [];
 
 function hasContextSegment(segments: readonly StatusLineSegmentId[]): boolean {
 	return segments.includes("context_pct") || segments.includes("context_total");
@@ -176,19 +147,12 @@ export class StatusLineComponent implements Component {
 	} | null = null;
 	#usageFetchedAt = 0;
 	#usageInFlight = false;
-	// Context breakdown — incremental rolling cache. The status line refreshes
-	// on every agent event, so the hot path must not re-tokenize the full
-	// message list. Stable messages are accumulated once; normal streaming
-	// refreshes only recompute the current tail message and newly appended
-	// entries. History rewrites/compaction replace or shrink the message array
-	// and rebuild this cache. Stable messages are treated as immutable after
-	// promotion, matching the normal append-only session flow.
-	// Cached non-message total (system prompt + tools + skills). Invalidated
-	// when the inputs-identity fingerprint changes (model swap, skill toggle,
-	// tool registration).
-	#nonMessageTokensCache: number | undefined;
-	#nonMessageInputsKey: string | undefined;
-	#messageTokenTotalsCache: MessageTokenTotalsCache | undefined;
+	// Context-usage memo. The status line redraws on every agent event, so the
+	// hot path must not recompute context tokens unless an input changed.
+	// `getContextUsage()` anchors on the last assistant's real prompt-token
+	// count (matching the provider and the `/context` panel), so a stable
+	// message list + model window yields a stable result we can return verbatim.
+	#contextUsageCache: ContextUsageMemo | undefined;
 
 	constructor(private session: AgentSession) {
 		this.#settings = {
@@ -310,9 +274,7 @@ export class StatusLineComponent implements Component {
 		this.#cachedUsage = null;
 		this.#usageFetchedAt = 0;
 		this.#usageInFlight = false;
-		this.#nonMessageTokensCache = undefined;
-		this.#nonMessageInputsKey = undefined;
-		this.#messageTokenTotalsCache = undefined;
+		this.#contextUsageCache = undefined;
 		this.#lastTokensPerSecond = null;
 		this.#lastTokensPerSecondTimestamp = null;
 	}
@@ -544,109 +506,44 @@ export class StatusLineComponent implements Component {
 	}
 
 	/**
-	 * Compute the (cached) used-tokens / context-window totals for the
-	 * status-line context% segment. Exposed (non-private) so unit tests can
-	 * verify the incremental-cache invariants; not part of any external
-	 * API.
+	 * Used-tokens / context-window totals for the status-line context% segment,
+	 * memoized so the per-event redraw stays O(1) when nothing changed.
+	 *
+	 * The numerator comes from `session.getContextUsage()`, which anchors on the
+	 * last assistant's real prompt-token count — so the bar matches the provider
+	 * and the `/context` panel — and reports `null` while that count is unknown
+	 * (right after compaction, before the next response). Exposed (non-private)
+	 * for unit tests and the collab host's state broadcast.
 	 */
-	getCachedContextBreakdown(): { usedTokens: number; contextWindow: number } {
-		const messages = this.session.messages ?? [];
-		const contextWindow = this.session.model?.contextWindow ?? 0;
+	getCachedContextBreakdown(): { usedTokens: number | null; contextWindow: number } {
+		const messages = this.session.messages ?? EMPTY_MESSAGES;
+		const modelContextWindow = this.session.model?.contextWindow ?? 0;
+		const length = messages.length;
+		const lastFingerprint = length > 0 ? messageFingerprint(messages[length - 1]!) : undefined;
 
-		// 1) Non-message tokens (system prompt + tools + skills). Refresh only
-		//    when the inputs identity fingerprint changes — usually never
-		//    during a streaming turn. ~10-30 ms when it does refresh.
-		const inputsKey = this.#computeNonMessageInputsKey();
-		if (this.#nonMessageTokensCache === undefined || this.#nonMessageInputsKey !== inputsKey) {
-			this.#nonMessageTokensCache = computeNonMessageTokens(this.session);
-			this.#nonMessageInputsKey = inputsKey;
-		}
-
-		// 2) Message tokens — incremental rolling total. The sidecar cache lives
-		//    on each stable message object (all but the current tail). Normal
-		//    streaming turns only recompute the last message and newly appended
-		//    entries. Full rebuild only when the message array is replaced,
-		//    shrinks, or the recently-promoted stable tail mutates in place.
-		const messagesTokens = this.#getCachedMessageTokens(messages);
-
-		const usedTokens = this.#nonMessageTokensCache + messagesTokens;
-		return { usedTokens, contextWindow };
-	}
-
-	#getCachedMessageTokens(messages: readonly AgentMessage[]): number {
-		const cache = this.#messageTokenTotalsCache;
-		if (!cache || cache.messagesRef !== messages || messages.length <= cache.stableCount) {
-			return this.#rebuildMessageTokenTotals(messages);
-		}
-
-		let stableTokens = cache.stableTokens;
-		let stableCount = cache.stableCount;
-		const stableLimit = Math.max(0, messages.length - 1);
-
+		const cache = this.#contextUsageCache;
 		if (
-			cache.lastStableMessage &&
-			stableCount > 0 &&
-			messages[stableCount - 1] === cache.lastStableMessage &&
-			cache.lastStableFingerprint !== undefined &&
-			cache.lastStableFingerprint !== messageFingerprint(cache.lastStableMessage)
+			cache &&
+			cache.messagesRef === messages &&
+			cache.length === length &&
+			cache.lastFingerprint === lastFingerprint &&
+			cache.modelContextWindow === modelContextWindow
 		) {
-			return this.#rebuildMessageTokenTotals(messages);
+			return { usedTokens: cache.usedTokens, contextWindow: cache.contextWindow };
 		}
 
-		while (stableCount < stableLimit) {
-			const promoted = messages[stableCount]!;
-			stableTokens += tokensForMessage(promoted);
-			stableCount++;
-		}
-
-		const lastStableMessage = stableCount > 0 ? messages[stableCount - 1] : undefined;
-		const lastStableFingerprint = lastStableMessage ? messageFingerprint(lastStableMessage) : undefined;
-		const lastMessage = messages.at(-1);
-		const lastTokens = lastMessage ? estimateTokens(lastMessage) : 0;
-		this.#messageTokenTotalsCache = {
+		const usage = this.session.getContextUsage();
+		const usedTokens = usage?.tokens ?? null;
+		const contextWindow = usage?.contextWindow ?? modelContextWindow;
+		this.#contextUsageCache = {
 			messagesRef: messages,
-			stableCount,
-			stableTokens,
-			lastStableMessage,
-			lastStableFingerprint,
+			length,
+			lastFingerprint,
+			modelContextWindow,
+			usedTokens,
+			contextWindow,
 		};
-		return stableTokens + lastTokens;
-	}
-
-	#rebuildMessageTokenTotals(messages: readonly AgentMessage[]): number {
-		let stableTokens = 0;
-		const stableLimit = Math.max(0, messages.length - 1);
-		for (let i = 0; i < stableLimit; i++) {
-			stableTokens += tokensForMessage(messages[i]!);
-		}
-
-		const lastStableMessage = stableLimit > 0 ? messages[stableLimit - 1] : undefined;
-		const lastStableFingerprint = lastStableMessage ? messageFingerprint(lastStableMessage) : undefined;
-		const lastMessage = messages.at(-1);
-		const lastTokens = lastMessage ? estimateTokens(lastMessage) : 0;
-
-		this.#messageTokenTotalsCache = {
-			messagesRef: messages,
-			stableCount: stableLimit,
-			stableTokens,
-			lastStableMessage,
-			lastStableFingerprint,
-		};
-		return stableTokens + lastTokens;
-	}
-
-	/**
-	 * Build an identity fingerprint for the non-message inputs (system prompt,
-	 * tools, skills). When this changes, the non-message token cache must be
-	 * recomputed. Cheap: just lengths + first-string-length. Doesn't need to
-	 * be cryptographically unique — only stable for the same inputs.
-	 */
-	#computeNonMessageInputsKey(): string {
-		const sp = this.session.systemPrompt ?? [];
-		const tools = this.session.agent?.state?.tools ?? [];
-		const skills = this.session.skills ?? [];
-		const modelId = this.session.model?.id ?? "";
-		return `${modelId}|${sp.length}:${sp[0]?.length ?? 0}|${tools.length}|${skills.length}`;
+		return { usedTokens, contextWindow };
 	}
 
 	#buildSegmentContext(
@@ -673,14 +570,14 @@ export class StatusLineComponent implements Component {
 			tokensPerSecond: this.#getTokensPerSecond(),
 		};
 
-		let contextTokens = 0;
 		let contextWindow = state.model?.contextWindow ?? this.session.model?.contextWindow ?? 0;
+		let contextPercent: number | null = 0;
 		if (includeContext) {
 			const breakdown = this.getCachedContextBreakdown();
-			contextTokens = breakdown.usedTokens;
 			contextWindow = breakdown.contextWindow || contextWindow;
+			contextPercent =
+				breakdown.usedTokens === null ? null : contextWindow > 0 ? (breakdown.usedTokens / contextWindow) * 100 : 0;
 		}
-		let contextPercent = contextWindow > 0 ? (contextTokens / contextWindow) * 100 : 0;
 
 		// Collab guest: context comes from the host's state frames — the local
 		// replica does no accounting of its own.

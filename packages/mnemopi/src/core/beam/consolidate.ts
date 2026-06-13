@@ -1,6 +1,7 @@
 import type { SQLQueryBindings } from "bun:sqlite";
 import { generateId, stableMemoryId } from "../../util/ids";
 import { aaakEncode } from "../aaak";
+import { EpisodicGraph } from "../episodic-graph";
 import { heuristicExtractFacts } from "../extraction";
 import { clampVeracity } from "../veracity-consolidation";
 import { scheduleEmbedding } from "./helpers";
@@ -261,6 +262,33 @@ function insertKg(
 	});
 }
 
+/**
+ * Populate the episodic graph (gists, facts, edges) for a freshly consolidated
+ * memory. The graph backs Polyphonic Recall's `graph` voice, which relies on
+ * `findGistsByParticipant`, `findFactsBySubject`, and `findRelatedMemories`.
+ *
+ * Best-effort: failures (closed DB, missing optional tables) MUST NOT roll back
+ * the consolidation that already wrote the episodic row, so any throw here is
+ * swallowed. Unlike the proactive-link path in `store.ts` this is unconditional
+ * — consolidation is the explicit "settle and compress" step where the graph
+ * is supposed to gain edges.
+ */
+function ingestIntoEpisodicGraph(beam: BeamMemoryState, memoryId: string, summary: string): void {
+	try {
+		const graph =
+			beam.episodicGraph instanceof EpisodicGraph
+				? beam.episodicGraph
+				: new EpisodicGraph({ db: beam.db, dbPath: beam.dbPath });
+		graph.ingestMemory(summary, memoryId, {
+			sessionId: sourceSession(beam),
+			linkExisting: true,
+			extractEntities: true,
+		});
+	} catch {
+		// Graph enrichment is best-effort and never blocks consolidation.
+	}
+}
+
 export function consolidateToEpisodic(
 	beam: BeamMemoryState,
 	summary: string,
@@ -299,6 +327,7 @@ export function consolidateToEpisodic(
 		],
 	);
 	extractAndStoreFacts(beam, summary, 0, memoryId);
+	ingestIntoEpisodicGraph(beam, memoryId, summary);
 	scheduleEmbedding(beam, [{ memoryId, content: summary }]);
 	emitEvent(beam, "MEMORY_CONSOLIDATED", memoryId, summary, source, importance, {
 		summary_of: [...sourceWmIds],

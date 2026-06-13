@@ -71,6 +71,15 @@ async function settle(term: VirtualTerminal): Promise<void> {
 	await term.flush();
 }
 
+// The non-multiplexer resize fast path paints the viewport at once and defers
+// the authoritative full replay (the ED3 scrollback rebuild) until the drag has
+// been quiet for the resize settle window (120 ms). This is an integration test
+// against the real render scheduler, so the window is driven with a real delay.
+async function settleResize(term: VirtualTerminal): Promise<void> {
+	await Bun.sleep(160);
+	await settle(term);
+}
+
 function capture(term: VirtualTerminal): string[] {
 	const writes: string[] = [];
 	const realWrite = term.write.bind(term);
@@ -459,10 +468,11 @@ describe("streaming scrollback defer", () => {
 			expect(streamed).toEqual([...rows("stream-", 30), "prompt"].slice(0, streamed.length));
 
 			// Resize mid-stream. The terminal re-wrapped its saved lines at the old
-			// width, so the rebuild must erase them (ED 3) rather than capping to a
-			// viewport repaint that would leave the corrupt history on screen.
+			// width, so the authoritative rebuild must erase them (ED 3) rather than
+			// leaving the corrupt history on screen. That rebuild is deferred until
+			// the drag settles; while in flight only the viewport is repainted.
 			term.resize(30, 10);
-			await settle(term);
+			await settleResize(term);
 
 			expect(eraseScrollbackCount(writes)).toBeGreaterThan(0);
 			expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual([...rows("stream-", 30), "prompt"]);

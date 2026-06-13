@@ -55,8 +55,6 @@ async function createContext() {
 	const terminalWrite = vi.fn();
 	const prompt = vi.fn(async () => {});
 	const abort = vi.fn(async () => {});
-	const interruptAndFlushQueuedMessages = vi.fn(async () => {});
-	const getQueuedMessages = vi.fn(() => ({ steering: [] as string[], followUp: [] as string[] }));
 	const updatePendingMessagesDisplay = vi.fn();
 	const editor: FakeEditor = {
 		setText(text: string) {
@@ -96,9 +94,7 @@ async function createContext() {
 			extensionRunner: undefined,
 			prompt,
 			queuedMessageCount: 0,
-			getQueuedMessages,
 			abort,
-			interruptAndFlushQueuedMessages,
 		} as unknown as InteractiveModeContext["session"],
 		keybindings: {
 			getKeys(action: string) {
@@ -149,6 +145,7 @@ async function createContext() {
 		showModelSelector,
 		updateEditorBorderColor: vi.fn(),
 		hasActiveBtw: vi.fn(() => false),
+		showError: vi.fn(),
 	} as unknown as InteractiveModeContext;
 
 	return {
@@ -163,8 +160,6 @@ async function createContext() {
 			updatePendingMessagesDisplay,
 			requestRender,
 			abort,
-			interruptAndFlushQueuedMessages,
-			getQueuedMessages,
 			resetDisplay,
 		},
 	};
@@ -194,19 +189,17 @@ describe("InputController keybinding setup", () => {
 		expect(spies.resetDisplay).toHaveBeenCalledTimes(1);
 	});
 
-	it("empty Enter interrupts and sends a queued steering message", async () => {
+	it("empty Enter aborts the active stream when queued messages are pending", async () => {
 		const { InputController, ctx, editor, spies } = await createContext();
 		const session = ctx.session as unknown as { isStreaming: boolean; queuedMessageCount: number };
 		session.isStreaming = true;
 		session.queuedMessageCount = 1;
-		spies.getQueuedMessages.mockReturnValue({ steering: ["Send this now"], followUp: [] });
 		const controller = new InputController(ctx);
 
 		controller.setupEditorSubmitHandler();
 		await editor.onSubmit?.("");
 
-		expect(spies.interruptAndFlushQueuedMessages).toHaveBeenCalledWith({ reason: "Interrupted by user" });
-		expect(spies.abort).not.toHaveBeenCalled();
+		expect(spies.abort).toHaveBeenCalledWith({ reason: "Interrupted by user" });
 		expect(spies.updatePendingMessagesDisplay).toHaveBeenCalledTimes(1);
 		expect(spies.requestRender).toHaveBeenCalledTimes(1);
 		expect(spies.prompt).not.toHaveBeenCalled();

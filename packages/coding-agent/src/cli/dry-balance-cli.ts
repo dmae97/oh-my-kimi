@@ -279,7 +279,7 @@ function isBenchFirstTokenEvent(event: AssistantMessageEvent): boolean {
 }
 
 function resolveBenchMaxTokens(model: Model<Api>): number {
-	return Number.isFinite(model.maxTokens) && model.maxTokens > 0
+	return model.maxTokens !== null && Number.isFinite(model.maxTokens) && model.maxTokens > 0
 		? Math.min(BENCH_MAX_TOKENS, model.maxTokens)
 		: BENCH_MAX_TOKENS;
 }

@@ -414,6 +414,13 @@ class IndexedSessionStorageWriter implements SessionStorageWriter {
 		await this.flush();
 	}
 
+	fsyncSync(): void {
+		// Indexed storage has no real fd to fsync; drain the pending chain
+		// synchronously is not possible, so this is a no-op. The async flush()
+		// above already ensures durability for the indexed backend.
+		if (this.#error) throw this.#error;
+	}
+
 	async close(): Promise<void> {
 		if (this.#closed) return;
 		this.#closed = true;

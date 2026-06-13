@@ -34,10 +34,10 @@ export function isZeroCostXaiOAuthReference(candidate: Model<Api>): boolean {
 function shouldReplaceReference(existing: Model<Api> | undefined, candidate: Model<Api>): boolean {
 	if (!existing) return true;
 	if (candidate.contextWindow !== existing.contextWindow) {
-		return candidate.contextWindow > existing.contextWindow;
+		return (candidate.contextWindow ?? 0) > (existing.contextWindow ?? 0);
 	}
 	if (candidate.maxTokens !== existing.maxTokens) {
-		return candidate.maxTokens > existing.maxTokens;
+		return (candidate.maxTokens ?? 0) > (existing.maxTokens ?? 0);
 	}
 	const existingHasCachePricing = existing.cost.cacheRead > 0 || existing.cost.cacheWrite > 0;
 	const candidateHasCachePricing = candidate.cost.cacheRead > 0 || candidate.cost.cacheWrite > 0;

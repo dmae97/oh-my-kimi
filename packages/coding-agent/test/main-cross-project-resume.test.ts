@@ -25,6 +25,7 @@ function buildArgs(resume: string, sessionDir?: string): Args {
 		messages: [],
 		fileArgs: [],
 		unknownFlags: new Map(),
+		unrecognizedFlags: [],
 	};
 }
 

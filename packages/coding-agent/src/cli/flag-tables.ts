@@ -5,10 +5,9 @@
  *     `--profile` / `--alias` pre-parser)
  *
  * `parseArgs` dispatches string-valued flags by looking up their setter in
- * {@link STRING_SETTERS}. Optional-value flags use the richer metadata in
- * {@link OPTIONAL_FLAGS} so per-flag quirks (empty-string rejection for
- * `--resume`, `@`-prefix rejection for `--list-models`) live here instead of
- * being hard-coded in the dispatch loop.
+ * {@link STRING_SETTERS}. Optional-value flags use {@link OPTIONAL_FLAGS} so
+ * per-flag quirks (currently empty-string rejection for `--resume`) live here
+ * instead of being hard-coded in the dispatch loop.
  *
  * The bootstrap doesn't dispatch — it only needs to know which flags consume
  * a value — so it consults {@link STRING_VALUE_FLAGS} and
@@ -54,8 +53,7 @@ export type StringSetter = (result: Args, value: string, deps: ParseDeps) => voi
 
 /**
  * Setter for a flag that may or may not consume the next argv token.
- * Receives `undefined` for the bare form (`--resume` with no value,
- * `--list-models` without a search pattern, etc.).
+ * Receives `undefined` for the bare form (`--resume` with no value, etc.).
  */
 export type OptionalSetter = (result: Args, value: string | undefined) => void;
 
@@ -70,13 +68,10 @@ export type OptionalSetter = (result: Args, value: string | undefined) => void;
  *   `--resume` / `-r` / `--session`. Without it, an empty string
  *   gets consumed as the session prefix and downstream resolution can match
  *   every session.
- * - `rejectAtPrefix`: reject `@foo` as a value. Used only by
- *   `--list-models`, which reserves `@...` for file arguments.
  */
 export interface OptionalFlagConfig {
 	set: OptionalSetter;
 	rejectEmpty?: boolean;
-	rejectAtPrefix?: boolean;
 }
 
 // Shared setters for flags that alias the same field.
@@ -209,12 +204,6 @@ export const OPTIONAL_FLAGS: Record<string, OptionalFlagConfig> = {
 	"--resume": { set: setResume, rejectEmpty: true },
 	"-r": { set: setResume, rejectEmpty: true },
 	"--session": { set: setResume, rejectEmpty: true },
-	"--list-models": {
-		set: (result, value) => {
-			result.listModels = value !== undefined ? value : true;
-		},
-		rejectAtPrefix: true,
-	},
 };
 
 /**

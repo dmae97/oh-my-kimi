@@ -152,7 +152,6 @@ export class InputController {
 			if (this.ctx.loopModeEnabled) {
 				this.ctx.pauseLoop();
 				if (this.ctx.session.isStreaming) {
-					this.ctx.notifyInterrupting();
 					void this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL });
 				} else {
 					this.ctx.cancelPendingSubmission();
@@ -182,7 +181,6 @@ export class InputController {
 				// session is never streaming, so the native abort path below would
 				// no-op.
 				if (this.ctx.collabGuest.state?.isStreaming || this.ctx.loadingAnimation) {
-					if (!this.ctx.collabGuest.readOnly) this.ctx.notifyInterrupting();
 					this.ctx.collabGuest.sendAbort();
 				}
 				return;
@@ -205,7 +203,6 @@ export class InputController {
 				this.ctx.isPythonMode = false;
 				this.ctx.updateEditorBorderColor();
 			} else if (this.ctx.session.isStreaming) {
-				this.ctx.notifyInterrupting();
 				void this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL });
 			} else if (this.ctx.editor.getText().trim()) {
 				// Esc with typed text clears the draft instead of (or before) any double-Esc action
@@ -405,22 +402,16 @@ export class InputController {
 				return;
 			}
 
-			// Empty submit while streaming with queued steering: interrupt now and
-			// immediately resume so the visible `Steer:` entry is sent without
-			// waiting for the current tool/model boundary.
+			// Empty submit while streaming with queued messages: abort the active
+			// turn and let the post-unwind drain deliver the agent-core queue.
 			if (!text && this.ctx.session.isStreaming) {
-				const queuedMessages = this.ctx.session.getQueuedMessages();
-				if (queuedMessages.steering.length > 0) {
-					await this.ctx.session.interruptAndFlushQueuedMessages({ reason: USER_INTERRUPT_LABEL });
+				if (this.ctx.session.queuedMessageCount > 0) {
+					const aborting = this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL });
+					await aborting;
 					this.ctx.updatePendingMessagesDisplay();
 					this.ctx.ui.requestRender();
-					return;
 				}
-				if (this.ctx.session.queuedMessageCount > 0) {
-					// Preserve the existing empty-submit flush for non-steer queues.
-					await this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL });
-					return;
-				}
+				return;
 			}
 
 			if (!text) return;
@@ -692,9 +683,9 @@ export class InputController {
 	async #submitToFocusedSession(text: string, streamingBehavior: "steer" | "followUp"): Promise<void> {
 		const target = this.ctx.viewSession;
 		if (!text) {
-			// Mirror the empty-submit steer flush against the focused session.
-			if (target.isStreaming && target.getQueuedMessages().steering.length > 0) {
-				await target.interruptAndFlushQueuedMessages({ reason: USER_INTERRUPT_LABEL });
+			if (target.isStreaming && target.queuedMessageCount > 0) {
+				const aborting = target.abort({ reason: USER_INTERRUPT_LABEL });
+				await aborting;
 				this.ctx.updatePendingMessagesDisplay();
 				this.ctx.ui.requestRender();
 			}
@@ -730,6 +721,18 @@ export class InputController {
 		} else {
 			this.ctx.clearEditor();
 			this.ctx.lastSigintTime = now;
+		}
+		// Sync-flush the session JSONL so in-flight writes survive a hard exit.
+		// The TUI consumes Ctrl+C as a key event in raw mode, so postmortem's
+		// process-level SIGINT handler never fires. The second press still
+		// funnels through shutdown() which awaits its own async flush — the
+		// sync flush here is a superset that also covers the first-press case.
+		try {
+			this.ctx.sessionManager.flushSync();
+		} catch (err) {
+			logger.warn("session-manager sync flush on Ctrl+C failed", {
+				error: err instanceof Error ? err.message : String(err),
+			});
 		}
 	}
 
@@ -827,15 +830,6 @@ export class InputController {
 				args: args || undefined,
 				lineCount: body ? body.split("\n").length : 0,
 			};
-			// When the agent is streaming, register the compact slash-form text as
-			// the pending-display twin BEFORE dispatching the CustomMessage. The
-			// returned tag is embedded in details so AgentSession.#handleAgentEvent
-			// can remove the matching display entry when the agent consumes this
-			// message (mirrors the user-message dequeue path).
-			if (this.ctx.session.isStreaming) {
-				const tag = this.ctx.session.enqueueCustomMessageDisplay(text, streamingBehavior);
-				details.__pendingDisplayTag = tag;
-			}
 			await this.ctx.session.promptCustomMessage(
 				{
 					customType: SKILL_PROMPT_MESSAGE_TYPE,
@@ -844,7 +838,7 @@ export class InputController {
 					details,
 					attribution: "user",
 				},
-				{ streamingBehavior },
+				{ streamingBehavior, queueChipText: text },
 			);
 			if (this.ctx.session.isStreaming) {
 				this.ctx.updatePendingMessagesDisplay();
@@ -934,7 +928,7 @@ export class InputController {
 		if (allQueued.length === 0) {
 			this.ctx.updatePendingMessagesDisplay();
 			if (options?.abort) {
-				this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL });
+				void this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL });
 			}
 			return 0;
 		}
@@ -953,7 +947,7 @@ export class InputController {
 		}
 		this.ctx.updatePendingMessagesDisplay();
 		if (options?.abort) {
-			this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL });
+			void this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL });
 		}
 		return allQueued.length;
 	}

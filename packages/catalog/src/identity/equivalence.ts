@@ -61,10 +61,10 @@ const FAMILY_EXTRACTION_PATTERNS = [
 function shouldReplaceReference(existing: Model<Api> | undefined, candidate: Model<Api>): boolean {
 	if (!existing) return true;
 	if (candidate.contextWindow !== existing.contextWindow) {
-		return candidate.contextWindow > existing.contextWindow;
+		return (candidate.contextWindow ?? 0) > (existing.contextWindow ?? 0);
 	}
 	if (candidate.maxTokens !== existing.maxTokens) {
-		return candidate.maxTokens > existing.maxTokens;
+		return (candidate.maxTokens ?? 0) > (existing.maxTokens ?? 0);
 	}
 	return existing.provider !== "openai" && candidate.provider === "openai";
 }

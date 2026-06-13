@@ -93,6 +93,45 @@ describe("beam consolidation free functions", () => {
 		expect(getEpisodicStats(beam).total).toBe(1);
 	});
 
+	it("consolidateToEpisodic populates the episodic graph (gists, edges) for the new memory (#2435)", () => {
+		const beam = trackedState();
+		insertWorking(beam.db, "wm1", "s1", "Alice deployed the staging cluster checklist");
+
+		const id = consolidateToEpisodic(
+			beam,
+			"Alice deployed the staging cluster checklist",
+			["wm1"],
+			"consolidation",
+			0.7,
+		);
+
+		const gist = beam.db.query("SELECT id, memory_id FROM gists WHERE memory_id = ?").get(id) as {
+			id: string;
+			memory_id: string;
+		} | null;
+		expect(gist).not.toBeNull();
+		expect(gist?.id).toBe(`gist_${id}`);
+		const edges = beam.db
+			.query("SELECT source, target, edge_type FROM graph_edges WHERE source = ? OR target = ?")
+			.all(id, id) as { source: string; target: string; edge_type: string }[];
+		expect(edges.some(edge => edge.source === id && edge.target === `gist_${id}` && edge.edge_type === "ctx")).toBe(
+			true,
+		);
+	});
+
+	it("sleepAllSessions adds gists and edges for every consolidated session (#2435)", () => {
+		const beam = trackedState("maintenance");
+		insertWorking(beam.db, "wm-a1", "a", "Alpha launch checklist");
+		insertWorking(beam.db, "wm-b1", "b", "Beta launch checklist");
+
+		const result = sleepAllSessions(beam, false);
+		expect(result.items_consolidated).toBe(2);
+		const gistCount = (beam.db.query("SELECT COUNT(*) AS count FROM gists").get() as { count: number }).count;
+		const edgeCount = (beam.db.query("SELECT COUNT(*) AS count FROM graph_edges").get() as { count: number }).count;
+		expect(gistCount).toBe(2);
+		expect(edgeCount).toBeGreaterThan(0);
+	});
+
 	it("sleep dry-run is side-effect-free and real sleep marks originals, writes summary and log", () => {
 		const beam = trackedState();
 		insertWorking(beam.db, "wm1", "s1", "task alpha", "conversation");

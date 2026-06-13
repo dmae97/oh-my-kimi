@@ -1025,7 +1025,11 @@ export function applyCommonResponsesSamplingParams<P extends CommonResponsesPara
 	model: Pick<Model, "provider" | "omitMaxOutputTokens" | "maxTokens">,
 ): void {
 	if (options?.maxTokens && !model.omitMaxOutputTokens) {
-		params.max_output_tokens = Math.min(options.maxTokens, model.maxTokens, OPENAI_MAX_OUTPUT_TOKENS);
+		params.max_output_tokens = Math.min(
+			options.maxTokens,
+			model.maxTokens ?? Number.POSITIVE_INFINITY,
+			OPENAI_MAX_OUTPUT_TOKENS,
+		);
 	}
 	if (options?.temperature !== undefined) params.temperature = options.temperature;
 	if (options?.topP !== undefined) params.top_p = options.topP;

@@ -363,11 +363,13 @@ function preferDiscoveryName(discoveryName: string, fallbackName: string, modelI
 	return normalizedDiscoveryName;
 }
 
-function preferDiscoveryLimit(discoveryLimit: number, fallbackLimit: number): number {
-	if (!Number.isFinite(discoveryLimit) || discoveryLimit <= 0) {
+function preferDiscoveryLimit(discoveryLimit: number, fallbackLimit: number): number;
+function preferDiscoveryLimit(discoveryLimit: number | null, fallbackLimit: number | null): number | null;
+function preferDiscoveryLimit(discoveryLimit: number | null, fallbackLimit: number | null): number | null {
+	if (discoveryLimit === null || !Number.isFinite(discoveryLimit) || discoveryLimit <= 0) {
 		return fallbackLimit;
 	}
-	if (discoveryLimit === 4096 && fallbackLimit > discoveryLimit) {
+	if (discoveryLimit === 4096 && fallbackLimit !== null && fallbackLimit > discoveryLimit) {
 		return fallbackLimit;
 	}
 	return discoveryLimit;
@@ -428,11 +430,11 @@ function isModelLike(value: unknown): value is ModelSpec<Api> {
 	}
 	// Finite positive: NaN > 0 is false, +Infinity < Infinity is false.
 	const cw = v.contextWindow;
-	if (typeof cw !== "number" || !(cw > 0 && cw < Infinity)) {
+	if (cw !== null && (typeof cw !== "number" || !(cw > 0 && cw < Infinity))) {
 		return false;
 	}
 	const mt = v.maxTokens;
-	if (typeof mt !== "number" || !(mt > 0 && mt < Infinity)) {
+	if (mt !== null && (typeof mt !== "number" || !(mt > 0 && mt < Infinity))) {
 		return false;
 	}
 	return true;

@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## [15.12.5] - 2026-06-13
+### Added
+
+- Added `ViewportTailProvider` to let child components provide their visible tail rows during fast-path non-multiplexer resize rendering
+- Added `TUI.resizeViewportPaints` and `TUI.resizeViewportActive` getters to expose deferred resize viewport repaint diagnostics
+
+### Changed
+
+- Changed non-multiplexer terminal resize handling so each SIGWINCH paints only the visible viewport and defers the full rewrap and native scrollback replay until the resize settles
+
+### Fixed
+
+- Fixed issue #2088 viewport flash and repeated full rewrites during rapid terminal drags outside multiplexers by replaying the full transcript only after the resize settle window
+
+## [15.12.4] - 2026-06-13
+
 ### Added
 
 - `PI_FORCE_HYPERLINKS=1` / `PI_NO_HYPERLINKS=1` env overrides for the OSC 8 hyperlink capability, mirroring the `PI_FORCE_SYNC_OUTPUT`/`PI_NO_SYNC_OUTPUT` shape (opt-out beats force-on).
