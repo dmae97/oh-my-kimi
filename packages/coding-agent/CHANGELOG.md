@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a `fastModeScope` setting (`both` | `openai` | `claude`, default `both`) controlling which providers `/fast on` (and the fast-mode toggle) target. `both` keeps the prior unscoped priority behavior; `openai`/`claude` scope fast mode to one family. `/fast status` now reports the active scope.
+
 ## [15.12.5] - 2026-06-13
 ### Changed
 

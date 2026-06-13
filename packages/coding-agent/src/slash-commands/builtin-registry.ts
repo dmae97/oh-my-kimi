@@ -359,7 +359,15 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 				return commandConsumed();
 			}
 			if (arg === "status") {
-				await runtime.output(`Fast mode is ${runtime.session.isFastModeEnabled() ? "on" : "off"}.`);
+				const tier = runtime.session.serviceTier;
+				const label = !runtime.session.isFastModeEnabled()
+					? "off"
+					: tier === "openai-only"
+						? "on (OpenAI only)"
+						: tier === "claude-only"
+							? "on (Claude only)"
+							: "on";
+				await runtime.output(`Fast mode is ${label}.`);
 				return commandConsumed();
 			}
 			return usage("Usage: /fast [on|off|status]", runtime);
@@ -388,8 +396,15 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 				return;
 			}
 			if (arg === "status") {
-				const enabled = runtime.ctx.session.isFastModeEnabled();
-				runtime.ctx.showStatus(`Fast mode is ${enabled ? "on" : "off"}.`);
+				const tier = runtime.ctx.session.serviceTier;
+				const label = !runtime.ctx.session.isFastModeEnabled()
+					? "off"
+					: tier === "openai-only"
+						? "on (OpenAI only)"
+						: tier === "claude-only"
+							? "on (Claude only)"
+							: "on";
+				runtime.ctx.showStatus(`Fast mode is ${label}.`);
 				runtime.ctx.editor.setText("");
 				return;
 			}
