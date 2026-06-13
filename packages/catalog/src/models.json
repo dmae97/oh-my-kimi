@@ -92,8 +92,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 8192
 		},
 		"alibaba/qwen3-32b": {
 			"id": "alibaba/qwen3-32b",
@@ -111,8 +111,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 40960
 		},
 		"alibaba/qwen3-coder-480b-a35b-instruct": {
 			"id": "alibaba/qwen3-coder-480b-a35b-instruct",
@@ -130,8 +130,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 256000,
+			"maxTokens": 8192
 		},
 		"alibaba/qwen3-max-instruct": {
 			"id": "alibaba/qwen3-max-instruct",
@@ -168,8 +168,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 16384
 		},
 		"alibaba/qwen3-next-80b-a3b-thinking": {
 			"id": "alibaba/qwen3-next-80b-a3b-thinking",
@@ -187,8 +187,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 32768
 		},
 		"alibaba/wan2.2-14b-animate-move": {
 			"id": "alibaba/wan2.2-14b-animate-move",
@@ -1422,8 +1422,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null,
+			"contextWindow": 131072,
+			"maxTokens": 8000,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -1554,8 +1554,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 8000
 		},
 		"baidu/ernie-4-5-vl-424b-a47b": {
 			"id": "baidu/ernie-4-5-vl-424b-a47b",
@@ -1611,8 +1611,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 64000
 		},
 		"baidu/ernie-x1-1-preview": {
 			"id": "baidu/ernie-x1-1-preview",
@@ -1630,7 +1630,7 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
+			"contextWindow": 65536,
 			"maxTokens": null
 		},
 		"baidu/ernie-x1-turbo-32k": {
@@ -2496,8 +2496,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 163840,
+			"maxTokens": 16384
 		},
 		"deepseek/deepseek-chat-v3.1": {
 			"id": "deepseek/deepseek-chat-v3.1",
@@ -2515,8 +2515,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 163840,
+			"maxTokens": 32768
 		},
 		"deepseek/deepseek-r1": {
 			"id": "deepseek/deepseek-r1",
@@ -2534,8 +2534,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 163840,
+			"maxTokens": 16000
 		},
 		"elevenlabs/eleven_multilingual_v2": {
 			"id": "elevenlabs/eleven_multilingual_v2",
@@ -2706,8 +2706,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1048576,
+			"maxTokens": 65536
 		},
 		"gemini-2.5-pro": {
 			"id": "gemini-2.5-pro",
@@ -2903,8 +2903,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 16384
 		},
 		"gemma-3-27b-it": {
 			"id": "gemma-3-27b-it",
@@ -2922,8 +2922,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 8192
 		},
 		"gemma-3-4b-it": {
 			"id": "gemma-3-4b-it",
@@ -2960,8 +2960,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 4096
 		},
 		"gemma-4-31b-it": {
 			"id": "gemma-4-31b-it",
@@ -3066,8 +3066,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 98304
 		},
 		"glm-4.5-air": {
 			"id": "glm-4.5-air",
@@ -3114,8 +3114,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 204800,
+			"maxTokens": 131072
 		},
 		"glm-4.7": {
 			"id": "glm-4.7",
@@ -3239,8 +3239,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 16385,
+			"maxTokens": 4096
 		},
 		"gpt-3.5-turbo-0125": {
 			"id": "gpt-3.5-turbo-0125",
@@ -3277,8 +3277,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 4095,
+			"maxTokens": 4096
 		},
 		"gpt-3.5-turbo-1106": {
 			"id": "gpt-3.5-turbo-1106",
@@ -3315,8 +3315,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 16385,
+			"maxTokens": 4096
 		},
 		"gpt-3.5-turbo-instruct": {
 			"id": "gpt-3.5-turbo-instruct",
@@ -3372,8 +3372,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 8191,
+			"maxTokens": 4096
 		},
 		"gpt-4-1106-vision-preview": {
 			"id": "gpt-4-1106-vision-preview",
@@ -3449,8 +3449,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 4096
 		},
 		"gpt-4.1": {
 			"id": "gpt-4.1",
@@ -3685,8 +3685,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 16384
 		},
 		"gpt-4o-mini-search-preview": {
 			"id": "gpt-4o-mini-search-preview",
@@ -3828,8 +3828,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 16384
 		},
 		"gpt-5-chat-latest": {
 			"id": "gpt-5-chat-latest",
@@ -3847,8 +3847,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 16384
 		},
 		"gpt-5-mini": {
 			"id": "gpt-5-mini",
@@ -3895,8 +3895,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 16384
 		},
 		"gpt-5-nano": {
 			"id": "gpt-5-nano",
@@ -3991,8 +3991,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 16384
 		},
 		"gpt-5.1-chat-latest": {
 			"id": "gpt-5.1-chat-latest",
@@ -4323,8 +4323,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 65536
 		},
 		"grok-4-1-fast-non-reasoning": {
 			"id": "grok-4-1-fast-non-reasoning",
@@ -4342,8 +4342,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 2000000,
+			"maxTokens": 30000
 		},
 		"grok-4-1-fast-reasoning": {
 			"id": "grok-4-1-fast-reasoning",
@@ -4418,8 +4418,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 2000000,
+			"maxTokens": 30000
 		},
 		"grok-4-fast-reasoning": {
 			"id": "grok-4-fast-reasoning",
@@ -4437,8 +4437,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 2000000,
+			"maxTokens": 256000
 		},
 		"happyhorse-1.0-r2v": {
 			"id": "happyhorse-1.0-r2v",
@@ -4627,8 +4627,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 8192
 		},
 		"meta-llama/llama-3.3-70b-versatile": {
 			"id": "meta-llama/llama-3.3-70b-versatile",
@@ -4646,8 +4646,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 32768
 		},
 		"microsoft/mai-transcribe-1.5": {
 			"id": "microsoft/mai-transcribe-1.5",
@@ -5132,8 +5132,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 65536
 		},
 		"moonshot/kimi-k2-6": {
 			"id": "moonshot/kimi-k2-6",
@@ -5151,8 +5151,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 65536
 		},
 		"moonshot/kimi-k2-preview": {
 			"id": "moonshot/kimi-k2-preview",
@@ -5706,8 +5706,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 200000,
+			"maxTokens": 100000
 		},
 		"o3-pro": {
 			"id": "o3-pro",
@@ -5806,8 +5806,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 200000,
+			"maxTokens": 100000
 		},
 		"octave-2": {
 			"id": "octave-2",
@@ -5977,8 +5977,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 8192
 		},
 		"qwen3-32b": {
 			"id": "qwen3-32b",
@@ -5996,8 +5996,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 40960
 		},
 		"qwen3-coder-480b-a35b-instruct": {
 			"id": "qwen3-coder-480b-a35b-instruct",
@@ -6015,8 +6015,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 256000,
+			"maxTokens": 8192
 		},
 		"qwen3-max": {
 			"id": "qwen3-max",
@@ -6034,8 +6034,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 65536
 		},
 		"qwen3-max-preview": {
 			"id": "qwen3-max-preview",
@@ -6053,8 +6053,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 32768
 		},
 		"qwen3-next-80b-a3b-instruct": {
 			"id": "qwen3-next-80b-a3b-instruct",
@@ -6072,8 +6072,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 16384
 		},
 		"qwen3-next-80b-a3b-thinking": {
 			"id": "qwen3-next-80b-a3b-thinking",
@@ -6091,8 +6091,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 32768
 		},
 		"qwen3-omni-30b-a3b-captioner": {
 			"id": "qwen3-omni-30b-a3b-captioner",
@@ -6129,8 +6129,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 32768
 		},
 		"qwen3-vl-32b-thinking": {
 			"id": "qwen3-vl-32b-thinking",
@@ -6186,7 +6186,7 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
+			"contextWindow": 262144,
 			"maxTokens": null
 		},
 		"qwen3.5-flash": {
@@ -6205,8 +6205,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1024000,
+			"maxTokens": 1020000
 		},
 		"qwen3.5-omni-flash": {
 			"id": "qwen3.5-omni-flash",
@@ -6291,8 +6291,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 262140
 		},
 		"qwen3.6-35b-a3b": {
 			"id": "qwen3.6-35b-a3b",
@@ -6310,8 +6310,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 256000,
+			"maxTokens": 65536
 		},
 		"qwen3.6-flash": {
 			"id": "qwen3.6-flash",
@@ -6358,8 +6358,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 65536
 		},
 		"qwen3.6-plus": {
 			"id": "qwen3.6-plus",
@@ -7006,7 +7006,7 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
+			"contextWindow": 131072,
 			"maxTokens": null
 		},
 		"x-ai/grok-3-mini-beta": {
@@ -7025,7 +7025,7 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
+			"contextWindow": 131072,
 			"maxTokens": null
 		},
 		"x-ai/grok-4-07-09": {
@@ -7063,8 +7063,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1000000,
+			"maxTokens": 30000
 		},
 		"x-ai/grok-code-fast-1": {
 			"id": "x-ai/grok-code-fast-1",
@@ -7111,8 +7111,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 256000,
+			"maxTokens": 256000
 		},
 		"xiaomi/mimo-v2-flash": {
 			"id": "xiaomi/mimo-v2-flash",
@@ -18512,8 +18512,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1048576,
+			"maxTokens": 65536
 		},
 		"~google/gemini-pro-latest": {
 			"id": "~google/gemini-pro-latest",
@@ -18607,8 +18607,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 256000,
+			"maxTokens": 4096
 		},
 		"aion-labs/aion-1.0": {
 			"id": "aion-labs/aion-1.0",
@@ -18721,8 +18721,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 131072
 		},
 		"allenai/molmo-2-8b": {
 			"id": "allenai/molmo-2-8b",
@@ -19096,8 +19096,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 200000,
+			"maxTokens": 64000
 		},
 		"anthropic/claude-fable-5": {
 			"id": "anthropic/claude-fable-5",
@@ -19285,8 +19285,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1000000,
+			"maxTokens": 128000
 		},
 		"anthropic/claude-opus-4.7": {
 			"id": "anthropic/claude-opus-4.7",
@@ -19334,8 +19334,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1000000,
+			"maxTokens": 128000
 		},
 		"anthropic/claude-opus-4.8": {
 			"id": "anthropic/claude-opus-4.8",
@@ -19383,8 +19383,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1000000,
+			"maxTokens": 128000
 		},
 		"anthropic/claude-sonnet-4": {
 			"id": "anthropic/claude-sonnet-4",
@@ -19549,8 +19549,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131000,
+			"maxTokens": 131000
 		},
 		"arcee-ai/trinity-large-preview:free": {
 			"id": "arcee-ai/trinity-large-preview:free",
@@ -19568,8 +19568,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131000,
+			"maxTokens": 131000
 		},
 		"arcee-ai/trinity-large-thinking": {
 			"id": "arcee-ai/trinity-large-thinking",
@@ -19587,8 +19587,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 80000
 		},
 		"arcee-ai/trinity-large-thinking:free": {
 			"id": "arcee-ai/trinity-large-thinking:free",
@@ -19606,8 +19606,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 80000
 		},
 		"arcee-ai/trinity-mini": {
 			"id": "arcee-ai/trinity-mini",
@@ -19625,8 +19625,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 131072
 		},
 		"arcee-ai/virtuoso-large": {
 			"id": "arcee-ai/virtuoso-large",
@@ -19644,8 +19644,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 64000
 		},
 		"baidu/cobuddy:free": {
 			"id": "baidu/cobuddy:free",
@@ -19663,8 +19663,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 65536
 		},
 		"baidu/ernie-4.5-21b-a3b": {
 			"id": "baidu/ernie-4.5-21b-a3b",
@@ -19682,8 +19682,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null,
+			"contextWindow": 131072,
+			"maxTokens": 8000,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -19765,8 +19765,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 8000
 		},
 		"baidu/ernie-4.5-vl-424b-a47b": {
 			"id": "baidu/ernie-4.5-vl-424b-a47b",
@@ -19974,8 +19974,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 4000
 		},
 		"cohere/command-r-plus-08-2024": {
 			"id": "cohere/command-r-plus-08-2024",
@@ -19993,8 +19993,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 4000
 		},
 		"cohere/command-r7b-12-2024": {
 			"id": "cohere/command-r7b-12-2024",
@@ -20088,8 +20088,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 163840,
+			"maxTokens": 16384
 		},
 		"deepseek/deepseek-chat-v3.1": {
 			"id": "deepseek/deepseek-chat-v3.1",
@@ -20107,8 +20107,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 163840,
+			"maxTokens": 32768
 		},
 		"deepseek/deepseek-r1": {
 			"id": "deepseek/deepseek-r1",
@@ -20126,8 +20126,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 163840,
+			"maxTokens": 16000
 		},
 		"deepseek/deepseek-r1-0528": {
 			"id": "deepseek/deepseek-r1-0528",
@@ -20145,8 +20145,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 163840,
+			"maxTokens": 32768
 		},
 		"deepseek/deepseek-r1-distill-llama-70b": {
 			"id": "deepseek/deepseek-r1-distill-llama-70b",
@@ -20164,8 +20164,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 8192
 		},
 		"deepseek/deepseek-r1-distill-qwen-32b": {
 			"id": "deepseek/deepseek-r1-distill-qwen-32b",
@@ -20202,8 +20202,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 163840,
+			"maxTokens": 32768
 		},
 		"deepseek/deepseek-v3.1-terminus:exacto": {
 			"id": "deepseek/deepseek-v3.1-terminus:exacto",
@@ -20221,8 +20221,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 163840,
+			"maxTokens": 32768
 		},
 		"deepseek/deepseek-v3.2": {
 			"id": "deepseek/deepseek-v3.2",
@@ -20367,8 +20367,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1048576,
+			"maxTokens": 384000
 		},
 		"deepseek/deepseek-v4-flash:free": {
 			"id": "deepseek/deepseek-v4-flash:free",
@@ -20386,8 +20386,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1048576,
+			"maxTokens": 384000
 		},
 		"deepseek/deepseek-v4-pro": {
 			"id": "deepseek/deepseek-v4-pro",
@@ -20441,8 +20441,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1048576,
+			"maxTokens": 384000
 		},
 		"eleutherai/llemma_7b": {
 			"id": "eleutherai/llemma_7b",
@@ -20479,7 +20479,7 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
+			"contextWindow": 32768,
 			"maxTokens": null
 		},
 		"giga-potato": {
@@ -20562,8 +20562,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1000000,
+			"maxTokens": 8192
 		},
 		"google/gemini-2.0-flash-lite-001": {
 			"id": "google/gemini-2.0-flash-lite-001",
@@ -20581,8 +20581,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1048576,
+			"maxTokens": 8192
 		},
 		"google/gemini-2.5-flash": {
 			"id": "google/gemini-2.5-flash",
@@ -20668,8 +20668,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1048576,
+			"maxTokens": 65536
 		},
 		"google/gemini-2.5-pro": {
 			"id": "google/gemini-2.5-pro",
@@ -20717,8 +20717,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1048576,
+			"maxTokens": 65536
 		},
 		"google/gemini-2.5-pro-preview-05-06": {
 			"id": "google/gemini-2.5-pro-preview-05-06",
@@ -20736,8 +20736,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1048576,
+			"maxTokens": 65536
 		},
 		"google/gemini-3-flash-preview": {
 			"id": "google/gemini-3-flash-preview",
@@ -20786,8 +20786,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null,
+			"contextWindow": 1048000,
+			"maxTokens": 64000,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -20938,8 +20938,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1048576,
+			"maxTokens": 65536
 		},
 		"google/gemini-3.5-flash": {
 			"id": "google/gemini-3.5-flash",
@@ -20987,8 +20987,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 4096
 		},
 		"google/gemma-2-9b-it": {
 			"id": "google/gemma-2-9b-it",
@@ -21025,8 +21025,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 16384
 		},
 		"google/gemma-3-27b-it": {
 			"id": "google/gemma-3-27b-it",
@@ -21045,8 +21045,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null,
+			"contextWindow": 131072,
+			"maxTokens": 8192,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -21113,8 +21113,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 32768
 		},
 		"google/gemma-4-31b-it": {
 			"id": "google/gemma-4-31b-it",
@@ -21238,8 +21238,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 131072
 		},
 		"inception/mercury": {
 			"id": "inception/mercury",
@@ -21257,8 +21257,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 32000
 		},
 		"inception/mercury-2": {
 			"id": "inception/mercury-2",
@@ -21276,7 +21276,7 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
+			"contextWindow": 128000,
 			"maxTokens": null
 		},
 		"inception/mercury-coder": {
@@ -21295,8 +21295,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 32000
 		},
 		"inclusionai/ling-2.6-1t": {
 			"id": "inclusionai/ling-2.6-1t",
@@ -21314,8 +21314,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 32768
 		},
 		"inclusionai/ling-2.6-1t:free": {
 			"id": "inclusionai/ling-2.6-1t:free",
@@ -21333,8 +21333,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 32768
 		},
 		"inclusionai/ling-2.6-flash": {
 			"id": "inclusionai/ling-2.6-flash",
@@ -21352,8 +21352,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 32768
 		},
 		"inclusionai/ling-2.6-flash:free": {
 			"id": "inclusionai/ling-2.6-flash:free",
@@ -21371,8 +21371,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 32768
 		},
 		"inclusionai/ring-2.6-1t": {
 			"id": "inclusionai/ring-2.6-1t",
@@ -21419,8 +21419,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 65536
 		},
 		"inflection/inflection-3-pi": {
 			"id": "inflection/inflection-3-pi",
@@ -21552,8 +21552,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 2000000,
+			"maxTokens": 30000
 		},
 		"kilo/auto-free": {
 			"id": "kilo/auto-free",
@@ -21571,8 +21571,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 2000000,
+			"maxTokens": 30000
 		},
 		"kilo/auto-small": {
 			"id": "kilo/auto-small",
@@ -21723,8 +21723,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 131072
 		},
 		"meta-llama/llama-3-70b-instruct": {
 			"id": "meta-llama/llama-3-70b-instruct",
@@ -21761,8 +21761,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 8192,
+			"maxTokens": 16384
 		},
 		"meta-llama/llama-3.1-405b": {
 			"id": "meta-llama/llama-3.1-405b",
@@ -21799,7 +21799,7 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
+			"contextWindow": 131000,
 			"maxTokens": null
 		},
 		"meta-llama/llama-3.1-70b-instruct": {
@@ -21818,8 +21818,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 16384
 		},
 		"meta-llama/llama-3.1-8b-instruct": {
 			"id": "meta-llama/llama-3.1-8b-instruct",
@@ -21837,8 +21837,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 16384
 		},
 		"meta-llama/llama-3.2-11b-vision-instruct": {
 			"id": "meta-llama/llama-3.2-11b-vision-instruct",
@@ -21856,8 +21856,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 4096
 		},
 		"meta-llama/llama-3.2-1b-instruct": {
 			"id": "meta-llama/llama-3.2-1b-instruct",
@@ -21875,8 +21875,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 4096
 		},
 		"meta-llama/llama-3.2-3b-instruct": {
 			"id": "meta-llama/llama-3.2-3b-instruct",
@@ -21913,8 +21913,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 16384
 		},
 		"meta-llama/llama-4-maverick": {
 			"id": "meta-llama/llama-4-maverick",
@@ -21932,8 +21932,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1048576,
+			"maxTokens": 16384
 		},
 		"meta-llama/llama-4-scout": {
 			"id": "meta-llama/llama-4-scout",
@@ -21951,8 +21951,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 10000000,
+			"maxTokens": 16384
 		},
 		"meta-llama/llama-guard-2-8b": {
 			"id": "meta-llama/llama-guard-2-8b",
@@ -22122,8 +22122,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1000000,
+			"maxTokens": 40000
 		},
 		"minimax/minimax-m2": {
 			"id": "minimax/minimax-m2",
@@ -22169,7 +22169,7 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
+			"contextWindow": 64000,
 			"maxTokens": null
 		},
 		"minimax/minimax-m2.1": {
@@ -22244,8 +22244,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 204800,
+			"maxTokens": 131072
 		},
 		"minimax/minimax-m2.7": {
 			"id": "minimax/minimax-m2.7",
@@ -22321,8 +22321,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 512000,
+			"maxTokens": 131072
 		},
 		"mistralai/codestral-2508": {
 			"id": "mistralai/codestral-2508",
@@ -22359,8 +22359,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 262144
 		},
 		"mistralai/devstral-medium": {
 			"id": "mistralai/devstral-medium",
@@ -22568,8 +22568,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 16384
 		},
 		"mistralai/mistral-large-2512": {
 			"id": "mistralai/mistral-large-2512",
@@ -22587,8 +22587,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 262144
 		},
 		"mistralai/mistral-medium-3": {
 			"id": "mistralai/mistral-medium-3",
@@ -22663,8 +22663,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 128000
 		},
 		"mistralai/mistral-saba": {
 			"id": "mistralai/mistral-saba",
@@ -22720,8 +22720,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 256000,
+			"maxTokens": 256000
 		},
 		"mistralai/mistral-small-3.1-24b-instruct": {
 			"id": "mistralai/mistral-small-3.1-24b-instruct",
@@ -22758,7 +22758,7 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
+			"contextWindow": 256000,
 			"maxTokens": null
 		},
 		"mistralai/mistral-small-creative": {
@@ -22853,7 +22853,7 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
+			"contextWindow": 32000,
 			"maxTokens": null
 		},
 		"moonshotai/kimi-k2": {
@@ -22872,8 +22872,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null,
+			"contextWindow": 262144,
+			"maxTokens": 262144,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -22955,8 +22955,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 262144
 		},
 		"moonshotai/kimi-k2.5": {
 			"id": "moonshotai/kimi-k2.5",
@@ -23004,8 +23004,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 65536
 		},
 		"moonshotai/kimi-k2.6": {
 			"id": "moonshotai/kimi-k2.6",
@@ -23053,8 +23053,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 65536
 		},
 		"moonshotai/kimi-k2.7-code": {
 			"id": "moonshotai/kimi-k2.7-code",
@@ -23197,8 +23197,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 163840
 		},
 		"nex-agi/nex-n2-pro:free": {
 			"id": "nex-agi/nex-n2-pro:free",
@@ -23254,8 +23254,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 8192
 		},
 		"nousresearch/hermes-3-llama-3.1-70b": {
 			"id": "nousresearch/hermes-3-llama-3.1-70b",
@@ -23273,8 +23273,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 8192
 		},
 		"nousresearch/hermes-4-405b": {
 			"id": "nousresearch/hermes-4-405b",
@@ -23311,8 +23311,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 131072
 		},
 		"nvidia/llama-3.1-nemotron-70b-instruct": {
 			"id": "nvidia/llama-3.1-nemotron-70b-instruct",
@@ -23378,8 +23378,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 16384
 		},
 		"nvidia/nemotron-3-nano-30b-a3b": {
 			"id": "nvidia/nemotron-3-nano-30b-a3b",
@@ -23598,8 +23598,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 16385,
+			"maxTokens": 4096
 		},
 		"openai/gpt-3.5-turbo-0613": {
 			"id": "openai/gpt-3.5-turbo-0613",
@@ -23617,8 +23617,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 4095,
+			"maxTokens": 4096
 		},
 		"openai/gpt-3.5-turbo-16k": {
 			"id": "openai/gpt-3.5-turbo-16k",
@@ -23636,8 +23636,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 16385,
+			"maxTokens": 4096
 		},
 		"openai/gpt-3.5-turbo-instruct": {
 			"id": "openai/gpt-3.5-turbo-instruct",
@@ -23693,8 +23693,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 8191,
+			"maxTokens": 4096
 		},
 		"openai/gpt-4-1106-preview": {
 			"id": "openai/gpt-4-1106-preview",
@@ -23712,8 +23712,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 4096
 		},
 		"openai/gpt-4-turbo": {
 			"id": "openai/gpt-4-turbo",
@@ -23751,8 +23751,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 4096
 		},
 		"openai/gpt-4.1": {
 			"id": "openai/gpt-4.1",
@@ -23770,8 +23770,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1047576,
+			"maxTokens": 32768
 		},
 		"openai/gpt-4.1-mini": {
 			"id": "openai/gpt-4.1-mini",
@@ -23789,8 +23789,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1047576,
+			"maxTokens": 32768
 		},
 		"openai/gpt-4.1-nano": {
 			"id": "openai/gpt-4.1-nano",
@@ -23808,8 +23808,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1047576,
+			"maxTokens": 32768
 		},
 		"openai/gpt-4o": {
 			"id": "openai/gpt-4o",
@@ -23847,8 +23847,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 4096
 		},
 		"openai/gpt-4o-2024-08-06": {
 			"id": "openai/gpt-4o-2024-08-06",
@@ -23866,8 +23866,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 16384
 		},
 		"openai/gpt-4o-2024-11-20": {
 			"id": "openai/gpt-4o-2024-11-20",
@@ -23885,8 +23885,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 16384
 		},
 		"openai/gpt-4o-audio-preview": {
 			"id": "openai/gpt-4o-audio-preview",
@@ -23904,8 +23904,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 16384
 		},
 		"openai/gpt-4o-mini": {
 			"id": "openai/gpt-4o-mini",
@@ -23943,8 +23943,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 16384
 		},
 		"openai/gpt-4o-mini-search-preview": {
 			"id": "openai/gpt-4o-mini-search-preview",
@@ -24000,8 +24000,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 16384
 		},
 		"openai/gpt-5": {
 			"id": "openai/gpt-5",
@@ -24048,8 +24048,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 16384
 		},
 		"openai/gpt-5-codex": {
 			"id": "openai/gpt-5-codex",
@@ -24096,8 +24096,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 400000,
+			"maxTokens": 128000
 		},
 		"openai/gpt-5-image-mini": {
 			"id": "openai/gpt-5-image-mini",
@@ -24115,8 +24115,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 400000,
+			"maxTokens": 128000
 		},
 		"openai/gpt-5-mini": {
 			"id": "openai/gpt-5-mini",
@@ -24134,8 +24134,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 400000,
+			"maxTokens": 128000
 		},
 		"openai/gpt-5-nano": {
 			"id": "openai/gpt-5-nano",
@@ -24153,8 +24153,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 400000,
+			"maxTokens": 128000
 		},
 		"openai/gpt-5-pro": {
 			"id": "openai/gpt-5-pro",
@@ -24172,8 +24172,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 400000,
+			"maxTokens": 272000
 		},
 		"openai/gpt-5.1": {
 			"id": "openai/gpt-5.1",
@@ -24270,7 +24270,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 272000,
-			"maxTokens": null
+			"maxTokens": 128000
 		},
 		"openai/gpt-5.1-codex-mini": {
 			"id": "openai/gpt-5.1-codex-mini",
@@ -24344,8 +24344,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 16384
 		},
 		"openai/gpt-5.2-codex": {
 			"id": "openai/gpt-5.2-codex",
@@ -24726,8 +24726,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 40960
 		},
 		"openai/gpt-oss-20b": {
 			"id": "openai/gpt-oss-20b",
@@ -24830,8 +24830,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 200000,
+			"maxTokens": 100000
 		},
 		"openai/o3": {
 			"id": "openai/o3",
@@ -24880,8 +24880,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 200000,
+			"maxTokens": 100000
 		},
 		"openai/o3-mini": {
 			"id": "openai/o3-mini",
@@ -24929,8 +24929,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 200000,
+			"maxTokens": 100000
 		},
 		"openai/o3-pro": {
 			"id": "openai/o3-pro",
@@ -25010,8 +25010,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 200000,
+			"maxTokens": 100000
 		},
 		"openai/o4-mini-high": {
 			"id": "openai/o4-mini-high",
@@ -25029,8 +25029,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 200000,
+			"maxTokens": 100000
 		},
 		"opengvlab/internvl3-78b": {
 			"id": "opengvlab/internvl3-78b",
@@ -25067,8 +25067,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 2000000,
+			"maxTokens": 30000
 		},
 		"openrouter/bodybuilder": {
 			"id": "openrouter/bodybuilder",
@@ -25105,8 +25105,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 32768
 		},
 		"openrouter/free": {
 			"id": "openrouter/free",
@@ -25124,7 +25124,7 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
+			"contextWindow": 200000,
 			"maxTokens": null
 		},
 		"openrouter/fusion": {
@@ -25162,8 +25162,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 32000
 		},
 		"openrouter/hunter-alpha": {
 			"id": "openrouter/hunter-alpha",
@@ -25181,8 +25181,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1048576,
+			"maxTokens": 32000
 		},
 		"openrouter/owl-alpha": {
 			"id": "openrouter/owl-alpha",
@@ -25200,8 +25200,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1048756,
+			"maxTokens": 262144
 		},
 		"openrouter/pareto-code": {
 			"id": "openrouter/pareto-code",
@@ -25416,8 +25416,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 131072
 		},
 		"qwen/qwen-2.5-72b-instruct": {
 			"id": "qwen/qwen-2.5-72b-instruct",
@@ -25435,8 +25435,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 16384
 		},
 		"qwen/qwen-2.5-7b-instruct": {
 			"id": "qwen/qwen-2.5-7b-instruct",
@@ -25454,8 +25454,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 32768
 		},
 		"qwen/qwen-2.5-coder-32b-instruct": {
 			"id": "qwen/qwen-2.5-coder-32b-instruct",
@@ -25549,8 +25549,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1000000,
+			"maxTokens": 32768
 		},
 		"qwen/qwen-plus-2025-07-28:thinking": {
 			"id": "qwen/qwen-plus-2025-07-28:thinking",
@@ -25568,8 +25568,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1000000,
+			"maxTokens": 32768
 		},
 		"qwen/qwen-turbo": {
 			"id": "qwen/qwen-turbo",
@@ -25701,8 +25701,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131702,
+			"maxTokens": 40960
 		},
 		"qwen/qwen3-235b-a22b": {
 			"id": "qwen/qwen3-235b-a22b",
@@ -25720,8 +25720,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null,
+			"contextWindow": 131072,
+			"maxTokens": 8192,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -25748,8 +25748,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null,
+			"contextWindow": 262144,
+			"maxTokens": 16384,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -25810,8 +25810,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 16384
 		},
 		"qwen/qwen3-30b-a3b-instruct-2507": {
 			"id": "qwen/qwen3-30b-a3b-instruct-2507",
@@ -25829,8 +25829,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 32000
 		},
 		"qwen/qwen3-30b-a3b-thinking-2507": {
 			"id": "qwen/qwen3-30b-a3b-thinking-2507",
@@ -25848,8 +25848,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 131072
 		},
 		"qwen/qwen3-32b": {
 			"id": "qwen/qwen3-32b",
@@ -25895,8 +25895,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 8192
 		},
 		"qwen/qwen3-coder": {
 			"id": "qwen/qwen3-coder",
@@ -25914,8 +25914,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1048576,
+			"maxTokens": 65536
 		},
 		"qwen/qwen3-coder-30b-a3b-instruct": {
 			"id": "qwen/qwen3-coder-30b-a3b-instruct",
@@ -25933,8 +25933,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 160000,
+			"maxTokens": 32768
 		},
 		"qwen/qwen3-coder-flash": {
 			"id": "qwen/qwen3-coder-flash",
@@ -25952,8 +25952,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1000000,
+			"maxTokens": 65536
 		},
 		"qwen/qwen3-coder-next": {
 			"id": "qwen/qwen3-coder-next",
@@ -25971,8 +25971,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 65536
 		},
 		"qwen/qwen3-coder-plus": {
 			"id": "qwen/qwen3-coder-plus",
@@ -26009,8 +26009,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1048576,
+			"maxTokens": 65536
 		},
 		"qwen/qwen3-max": {
 			"id": "qwen/qwen3-max",
@@ -26109,8 +26109,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null,
+			"contextWindow": 262144,
+			"maxTokens": 32768,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -26138,8 +26138,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 16384
 		},
 		"qwen/qwen3-vl-235b-a22b-thinking": {
 			"id": "qwen/qwen3-vl-235b-a22b-thinking",
@@ -26157,8 +26157,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 256000,
+			"maxTokens": 8192
 		},
 		"qwen/qwen3-vl-30b-a3b-instruct": {
 			"id": "qwen/qwen3-vl-30b-a3b-instruct",
@@ -26176,8 +26176,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 32768
 		},
 		"qwen/qwen3-vl-30b-a3b-thinking": {
 			"id": "qwen/qwen3-vl-30b-a3b-thinking",
@@ -26195,8 +26195,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 32768
 		},
 		"qwen/qwen3-vl-32b-instruct": {
 			"id": "qwen/qwen3-vl-32b-instruct",
@@ -26214,8 +26214,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 32768
 		},
 		"qwen/qwen3-vl-8b-instruct": {
 			"id": "qwen/qwen3-vl-8b-instruct",
@@ -26233,8 +26233,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 256000,
+			"maxTokens": 32768
 		},
 		"qwen/qwen3-vl-8b-thinking": {
 			"id": "qwen/qwen3-vl-8b-thinking",
@@ -26252,8 +26252,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 256000,
+			"maxTokens": 32768
 		},
 		"qwen/qwen3.5-122b-a10b": {
 			"id": "qwen/qwen3.5-122b-a10b",
@@ -26300,8 +26300,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 65536
 		},
 		"qwen/qwen3.5-35b-a3b": {
 			"id": "qwen/qwen3.5-35b-a3b",
@@ -26319,8 +26319,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 262144
 		},
 		"qwen/qwen3.5-397b-a17b": {
 			"id": "qwen/qwen3.5-397b-a17b",
@@ -26367,8 +26367,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 262144
 		},
 		"qwen/qwen3.5-flash-02-23": {
 			"id": "qwen/qwen3.5-flash-02-23",
@@ -26386,8 +26386,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1000000,
+			"maxTokens": 65536
 		},
 		"qwen/qwen3.5-plus-02-15": {
 			"id": "qwen/qwen3.5-plus-02-15",
@@ -26405,8 +26405,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1000000,
+			"maxTokens": 65536
 		},
 		"qwen/qwen3.5-plus-20260420": {
 			"id": "qwen/qwen3.5-plus-20260420",
@@ -26424,8 +26424,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1000000,
+			"maxTokens": 65536
 		},
 		"qwen/qwen3.6-27b": {
 			"id": "qwen/qwen3.6-27b",
@@ -26443,8 +26443,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 262140
 		},
 		"qwen/qwen3.6-35b-a3b": {
 			"id": "qwen/qwen3.6-35b-a3b",
@@ -26462,8 +26462,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 256000,
+			"maxTokens": 65536
 		},
 		"qwen/qwen3.6-flash": {
 			"id": "qwen/qwen3.6-flash",
@@ -26481,8 +26481,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1000000,
+			"maxTokens": 65536
 		},
 		"qwen/qwen3.6-max-preview": {
 			"id": "qwen/qwen3.6-max-preview",
@@ -26500,8 +26500,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 65536
 		},
 		"qwen/qwen3.6-plus": {
 			"id": "qwen/qwen3.6-plus",
@@ -26547,8 +26547,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1000000,
+			"maxTokens": 32000
 		},
 		"qwen/qwen3.6-plus:free": {
 			"id": "qwen/qwen3.6-plus:free",
@@ -26566,8 +26566,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1000000,
+			"maxTokens": 65536
 		},
 		"qwen/qwen3.7-max": {
 			"id": "qwen/qwen3.7-max",
@@ -26642,8 +26642,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1000000,
+			"maxTokens": 65536
 		},
 		"qwen/qwq-32b": {
 			"id": "qwen/qwq-32b",
@@ -26699,8 +26699,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 16384,
+			"maxTokens": 16384
 		},
 		"rekaai/reka-edge": {
 			"id": "rekaai/reka-edge",
@@ -26718,8 +26718,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 16384,
+			"maxTokens": 16384
 		},
 		"rekaai/reka-flash-3": {
 			"id": "rekaai/reka-flash-3",
@@ -26775,8 +26775,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 256000,
+			"maxTokens": 128000
 		},
 		"sao10k/l3-euryale-70b": {
 			"id": "sao10k/l3-euryale-70b",
@@ -26794,8 +26794,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 8192,
+			"maxTokens": 8192
 		},
 		"sao10k/l3-lunaris-8b": {
 			"id": "sao10k/l3-lunaris-8b",
@@ -26851,8 +26851,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 16384
 		},
 		"sao10k/l3.3-euryale-70b": {
 			"id": "sao10k/l3.3-euryale-70b",
@@ -26889,8 +26889,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1000000,
+			"maxTokens": 128000
 		},
 		"stealth/claude-opus-4.7": {
 			"id": "stealth/claude-opus-4.7",
@@ -26908,8 +26908,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1000000,
+			"maxTokens": 128000
 		},
 		"stealth/claude-opus-4.8": {
 			"id": "stealth/claude-opus-4.8",
@@ -26927,8 +26927,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1000000,
+			"maxTokens": 128000
 		},
 		"stealth/claude-sonnet-4.6": {
 			"id": "stealth/claude-sonnet-4.6",
@@ -26946,8 +26946,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1000000,
+			"maxTokens": 128000
 		},
 		"stealth/qwen3.6-plus": {
 			"id": "stealth/qwen3.6-plus",
@@ -26965,8 +26965,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1000000,
+			"maxTokens": 65536
 		},
 		"stepfun/step-3.5-flash": {
 			"id": "stepfun/step-3.5-flash",
@@ -27003,8 +27003,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 16384
 		},
 		"stepfun/step-3.7-flash": {
 			"id": "stepfun/step-3.7-flash",
@@ -27052,8 +27052,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 256000,
+			"maxTokens": 256000
 		},
 		"switchpoint/router": {
 			"id": "switchpoint/router",
@@ -27138,8 +27138,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 64000
 		},
 		"thedrummer/cydonia-24b-v4.1": {
 			"id": "thedrummer/cydonia-24b-v4.1",
@@ -27176,8 +27176,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 32768,
+			"maxTokens": 32768
 		},
 		"thedrummer/skyfall-36b-v2": {
 			"id": "thedrummer/skyfall-36b-v2",
@@ -27214,8 +27214,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 32768,
+			"maxTokens": 32768
 		},
 		"tngtech/deepseek-r1t2-chimera": {
 			"id": "tngtech/deepseek-r1t2-chimera",
@@ -27233,8 +27233,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 163840,
+			"maxTokens": 163840
 		},
 		"undi95/remm-slerp-l2-13b": {
 			"id": "undi95/remm-slerp-l2-13b",
@@ -27271,7 +27271,7 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
+			"contextWindow": 128000,
 			"maxTokens": null
 		},
 		"writer/palmyra-x5": {
@@ -27309,8 +27309,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 8192
 		},
 		"x-ai/grok-3-beta": {
 			"id": "x-ai/grok-3-beta",
@@ -27328,7 +27328,7 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
+			"contextWindow": 131072,
 			"maxTokens": null
 		},
 		"x-ai/grok-3-mini": {
@@ -27347,8 +27347,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 8192
 		},
 		"x-ai/grok-3-mini-beta": {
 			"id": "x-ai/grok-3-mini-beta",
@@ -27366,7 +27366,7 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
+			"contextWindow": 131072,
 			"maxTokens": null
 		},
 		"x-ai/grok-4": {
@@ -27475,7 +27475,7 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
+			"contextWindow": 2000000,
 			"maxTokens": null
 		},
 		"x-ai/grok-4.20-beta": {
@@ -27494,7 +27494,7 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
+			"contextWindow": 2000000,
 			"maxTokens": null
 		},
 		"x-ai/grok-4.20-multi-agent": {
@@ -27513,8 +27513,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 2000000,
+			"maxTokens": 2000000
 		},
 		"x-ai/grok-4.20-multi-agent-beta": {
 			"id": "x-ai/grok-4.20-multi-agent-beta",
@@ -27532,8 +27532,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 2000000,
+			"maxTokens": 2000000
 		},
 		"x-ai/grok-4.3": {
 			"id": "x-ai/grok-4.3",
@@ -27640,8 +27640,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 256000,
+			"maxTokens": 10000
 		},
 		"xiaomi/mimo-v2-flash": {
 			"id": "xiaomi/mimo-v2-flash",
@@ -27718,8 +27718,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 131072
 		},
 		"xiaomi/mimo-v2-pro": {
 			"id": "xiaomi/mimo-v2-pro",
@@ -27766,8 +27766,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1048576,
+			"maxTokens": 131072
 		},
 		"xiaomi/mimo-v2.5": {
 			"id": "xiaomi/mimo-v2.5",
@@ -27844,7 +27844,7 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
+			"contextWindow": 128000,
 			"maxTokens": null
 		},
 		"z-ai/glm-4.5": {
@@ -27921,8 +27921,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 64000,
+			"maxTokens": 16384
 		},
 		"z-ai/glm-4.6": {
 			"id": "z-ai/glm-4.6",
@@ -27969,8 +27969,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 204800,
+			"maxTokens": 131072
 		},
 		"z-ai/glm-4.6v": {
 			"id": "z-ai/glm-4.6v",
@@ -28047,8 +28047,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 200000,
+			"maxTokens": 131072
 		},
 		"z-ai/glm-5": {
 			"id": "z-ai/glm-5",
@@ -30209,8 +30209,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null,
+			"contextWindow": 262144,
+			"maxTokens": 262140,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -30237,8 +30237,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1000000,
+			"maxTokens": 65536
 		},
 		"allenai/molmo-2-8b": {
 			"id": "allenai/molmo-2-8b",
@@ -30517,8 +30517,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 200000,
+			"maxTokens": 64000
 		},
 		"anthropic/claude-opus-4.6": {
 			"id": "anthropic/claude-opus-4.6",
@@ -30626,8 +30626,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1000000,
+			"maxTokens": 128000
 		},
 		"anthropic/claude-sonnet-4.6": {
 			"id": "anthropic/claude-sonnet-4.6",
@@ -30675,8 +30675,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1000000,
+			"maxTokens": 128000
 		},
 		"arcee-ai/trinity-large": {
 			"id": "arcee-ai/trinity-large",
@@ -30777,8 +30777,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null,
+			"contextWindow": 131072,
+			"maxTokens": 131072,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -30901,8 +30901,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 4096
 		},
 		"azure-gpt-4o": {
 			"id": "azure-gpt-4o",
@@ -30920,8 +30920,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 16384
 		},
 		"azure-gpt-4o-mini": {
 			"id": "azure-gpt-4o-mini",
@@ -30939,8 +30939,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 16384
 		},
 		"azure-o1": {
 			"id": "azure-o1",
@@ -30977,8 +30977,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 200000,
+			"maxTokens": 100000
 		},
 		"Baichuan-M2": {
 			"id": "Baichuan-M2",
@@ -31073,8 +31073,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null,
+			"contextWindow": 131072,
+			"maxTokens": 8000,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -31102,8 +31102,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 16384
 		},
 		"brave": {
 			"id": "brave",
@@ -31514,8 +31514,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 200000,
+			"maxTokens": 32000
 		},
 		"claude-opus-4-1-thinking:1024": {
 			"id": "claude-opus-4-1-thinking:1024",
@@ -31533,8 +31533,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 200000,
+			"maxTokens": 32000
 		},
 		"claude-opus-4-1-thinking:32000": {
 			"id": "claude-opus-4-1-thinking:32000",
@@ -31552,8 +31552,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 200000,
+			"maxTokens": 32000
 		},
 		"claude-opus-4-1-thinking:32768": {
 			"id": "claude-opus-4-1-thinking:32768",
@@ -31571,8 +31571,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 200000,
+			"maxTokens": 32000
 		},
 		"claude-opus-4-1-thinking:8192": {
 			"id": "claude-opus-4-1-thinking:8192",
@@ -31590,8 +31590,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 200000,
+			"maxTokens": 32000
 		},
 		"claude-opus-4-20250514": {
 			"id": "claude-opus-4-20250514",
@@ -31859,8 +31859,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1000000,
+			"maxTokens": 64000
 		},
 		"claude-sonnet-4-thinking:1024": {
 			"id": "claude-sonnet-4-thinking:1024",
@@ -31878,8 +31878,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1000000,
+			"maxTokens": 64000
 		},
 		"claude-sonnet-4-thinking:32768": {
 			"id": "claude-sonnet-4-thinking:32768",
@@ -31897,8 +31897,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1000000,
+			"maxTokens": 64000
 		},
 		"claude-sonnet-4-thinking:64000": {
 			"id": "claude-sonnet-4-thinking:64000",
@@ -31916,8 +31916,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1000000,
+			"maxTokens": 64000
 		},
 		"claude-sonnet-4-thinking:8192": {
 			"id": "claude-sonnet-4-thinking:8192",
@@ -31935,8 +31935,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1000000,
+			"maxTokens": 64000
 		},
 		"claw-high": {
 			"id": "claw-high",
@@ -32049,8 +32049,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 4000
 		},
 		"command-a-plus-05-2026": {
 			"id": "command-a-plus-05-2026",
@@ -32182,8 +32182,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 163840,
+			"maxTokens": 32768
 		},
 		"deepseek-ai/DeepSeek-V3.1": {
 			"id": "deepseek-ai/DeepSeek-V3.1",
@@ -32237,8 +32237,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null,
+			"contextWindow": 163840,
+			"maxTokens": 32768,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -32273,8 +32273,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null,
+			"contextWindow": 163840,
+			"maxTokens": 65536,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -32401,8 +32401,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 163840,
+			"maxTokens": 16000
 		},
 		"deepseek-r1-sambanova": {
 			"id": "deepseek-r1-sambanova",
@@ -32477,8 +32477,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 8192
 		},
 		"deepseek/deepseek-latest": {
 			"id": "deepseek/deepseek-latest",
@@ -33122,8 +33122,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 64000
 		},
 		"ernie-5.1": {
 			"id": "ernie-5.1",
@@ -33141,7 +33141,7 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
+			"contextWindow": 128000,
 			"maxTokens": null,
 			"thinking": {
 				"mode": "effort",
@@ -33227,7 +33227,7 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
+			"contextWindow": 65536,
 			"maxTokens": null
 		},
 		"essentialai/rnj-1-instruct": {
@@ -33246,7 +33246,7 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
+			"contextWindow": 32768,
 			"maxTokens": null
 		},
 		"EVA-UNIT-01/EVA-LLaMA-3.33-70B-v0.0": {
@@ -33474,8 +33474,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1000000,
+			"maxTokens": 8192
 		},
 		"gemini-2.0-flash-lite": {
 			"id": "gemini-2.0-flash-lite",
@@ -34170,8 +34170,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 8192
 		},
 		"Gemma-3-27B-it-Abliterated": {
 			"id": "Gemma-3-27B-it-Abliterated",
@@ -34360,8 +34360,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 32768
 		},
 		"gemma-4-31B-K1-v5": {
 			"id": "gemma-4-31B-K1-v5",
@@ -35062,8 +35062,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1048576,
+			"maxTokens": 65536
 		},
 		"google/gemini-3.1-pro-preview-low": {
 			"id": "google/gemini-3.1-pro-preview-low",
@@ -35081,8 +35081,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1048576,
+			"maxTokens": 65536
 		},
 		"google/gemini-3.5-flash": {
 			"id": "google/gemini-3.5-flash",
@@ -35183,8 +35183,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1048576,
+			"maxTokens": 65536
 		},
 		"google/gemini-flash-lite-latest": {
 			"id": "google/gemini-flash-lite-latest",
@@ -35202,8 +35202,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1048576,
+			"maxTokens": 65536
 		},
 		"google/gemini-pro-latest": {
 			"id": "google/gemini-pro-latest",
@@ -35300,7 +35300,7 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
+			"contextWindow": 131072,
 			"maxTokens": null
 		},
 		"grok-3-fast-beta": {
@@ -35338,7 +35338,7 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
+			"contextWindow": 131072,
 			"maxTokens": null
 		},
 		"grok-3-mini-fast-beta": {
@@ -35614,8 +35614,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 131072
 		},
 		"inclusionai/ling-2.6-1t": {
 			"id": "inclusionai/ling-2.6-1t",
@@ -35633,8 +35633,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 32768
 		},
 		"inclusionai/ling-2.6-flash": {
 			"id": "inclusionai/ling-2.6-flash",
@@ -35652,8 +35652,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 32768
 		},
 		"inclusionai/ring-2.6-1t": {
 			"id": "inclusionai/ring-2.6-1t",
@@ -35814,8 +35814,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 256000,
+			"maxTokens": 4096
 		},
 		"jamba-mini": {
 			"id": "jamba-mini",
@@ -37087,7 +37087,7 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
+			"contextWindow": 128000,
 			"maxTokens": null
 		},
 		"mercury-coder-small": {
@@ -37144,8 +37144,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 16384
 		},
 		"meta-llama/llama-3.2-3b-instruct": {
 			"id": "meta-llama/llama-3.2-3b-instruct",
@@ -37182,8 +37182,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 16384
 		},
 		"meta-llama/llama-4-maverick": {
 			"id": "meta-llama/llama-4-maverick",
@@ -37279,8 +37279,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1000000,
+			"maxTokens": 40000
 		},
 		"MiniMax-M2": {
 			"id": "MiniMax-M2",
@@ -37369,7 +37369,7 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
+			"contextWindow": 64000,
 			"maxTokens": null
 		},
 		"minimax/minimax-m2.1": {
@@ -37769,8 +37769,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 128000
 		},
 		"mistralai/ministral-14b-2512": {
 			"id": "mistralai/ministral-14b-2512",
@@ -38235,8 +38235,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 262144
 		},
 		"moonshotai/kimi-k2-thinking-turbo-original": {
 			"id": "moonshotai/kimi-k2-thinking-turbo-original",
@@ -38254,8 +38254,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262000,
+			"maxTokens": 64000
 		},
 		"moonshotai/kimi-k2.5": {
 			"id": "moonshotai/kimi-k2.5",
@@ -38515,8 +38515,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 163840
 		},
 		"nex-agi/nex-n2-pro": {
 			"id": "nex-agi/nex-n2-pro",
@@ -38591,8 +38591,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 8192
 		},
 		"nousresearch/hermes-4-405b": {
 			"id": "nousresearch/hermes-4-405b",
@@ -38639,8 +38639,8 @@
 				"cacheRead": 0.055,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null,
+			"contextWindow": 131072,
+			"maxTokens": 131072,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -38668,8 +38668,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 131072
 		},
 		"nvidia/Llama-3.1-Nemotron-70B-Instruct-HF": {
 			"id": "nvidia/Llama-3.1-Nemotron-70B-Instruct-HF",
@@ -38706,8 +38706,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 8192
 		},
 		"nvidia/Llama-3.3-Nemotron-Super-49B-v1": {
 			"id": "nvidia/Llama-3.3-Nemotron-Super-49B-v1",
@@ -38929,8 +38929,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 16385,
+			"maxTokens": 4096
 		},
 		"openai/gpt-4-turbo": {
 			"id": "openai/gpt-4-turbo",
@@ -38968,8 +38968,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 4096
 		},
 		"openai/gpt-4.1": {
 			"id": "openai/gpt-4.1",
@@ -39068,8 +39068,8 @@
 				"cacheRead": 1.25,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 16384
 		},
 		"openai/gpt-4o-2024-11-20": {
 			"id": "openai/gpt-4o-2024-11-20",
@@ -39088,8 +39088,8 @@
 				"cacheRead": 1.25,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 16384
 		},
 		"openai/gpt-4o-mini": {
 			"id": "openai/gpt-4o-mini",
@@ -39358,8 +39358,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 16384
 		},
 		"openai/gpt-5.1-chat": {
 			"id": "openai/gpt-5.1-chat",
@@ -39397,8 +39397,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 16384
 		},
 		"openai/gpt-5.1-codex": {
 			"id": "openai/gpt-5.1-codex",
@@ -39531,8 +39531,8 @@
 				"cacheRead": 0.175,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 16384
 		},
 		"openai/gpt-5.2-codex": {
 			"id": "openai/gpt-5.2-codex",
@@ -39950,8 +39950,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 200000,
+			"maxTokens": 100000
 		},
 		"openai/o3": {
 			"id": "openai/o3",
@@ -40001,8 +40001,8 @@
 				"cacheRead": 2.5,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null,
+			"contextWindow": 200000,
+			"maxTokens": 100000,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -40061,8 +40061,8 @@
 				"cacheRead": 0.55,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 200000,
+			"maxTokens": 100000
 		},
 		"openai/o3-mini-low": {
 			"id": "openai/o3-mini-low",
@@ -40080,8 +40080,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 200000,
+			"maxTokens": 100000
 		},
 		"openai/o3-pro-2025-06-10": {
 			"id": "openai/o3-pro-2025-06-10",
@@ -40150,8 +40150,8 @@
 				"cacheRead": 0.5,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null,
+			"contextWindow": 200000,
+			"maxTokens": 100000,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -40181,8 +40181,8 @@
 				"cacheRead": 0.275,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null,
+			"contextWindow": 200000,
+			"maxTokens": 100000,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -40496,8 +40496,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 16384
 		},
 		"Qwen/Qwen2.5-Coder-32B-Instruct": {
 			"id": "Qwen/Qwen2.5-Coder-32B-Instruct",
@@ -40515,8 +40515,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 4096
 		},
 		"qwen/qwen3-14b": {
 			"id": "qwen/qwen3-14b",
@@ -40534,8 +40534,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null,
+			"contextWindow": 131702,
+			"maxTokens": 40960,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -40590,8 +40590,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 8192
 		},
 		"Qwen/Qwen3-235B-A22B-Instruct-2507": {
 			"id": "Qwen/Qwen3-235B-A22B-Instruct-2507",
@@ -40609,8 +40609,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 8192
 		},
 		"Qwen/Qwen3-235B-A22B-Instruct-2507-TEE": {
 			"id": "Qwen/Qwen3-235B-A22B-Instruct-2507-TEE",
@@ -40647,8 +40647,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 8192
 		},
 		"qwen/qwen3-30b-a3b": {
 			"id": "qwen/qwen3-30b-a3b",
@@ -40666,8 +40666,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null,
+			"contextWindow": 131072,
+			"maxTokens": 16384,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -40722,8 +40722,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 8192
 		},
 		"qwen/qwen3-coder": {
 			"id": "qwen/qwen3-coder",
@@ -40845,8 +40845,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 16384
 		},
 		"qwen/qwen3-next-80b-a3b-thinking": {
 			"id": "qwen/qwen3-next-80b-a3b-thinking",
@@ -40893,8 +40893,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 16384
 		},
 		"qwen/qwen3.5-397b-a17b": {
 			"id": "qwen/qwen3.5-397b-a17b",
@@ -41067,8 +41067,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null,
+			"contextWindow": 256000,
+			"maxTokens": 65536,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -41152,8 +41152,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 32000
 		},
 		"qwen3-coder-30b-a3b-instruct": {
 			"id": "qwen3-coder-30b-a3b-instruct",
@@ -41171,8 +41171,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 160000,
+			"maxTokens": 32768
 		},
 		"qwen3-max-2026-01-23": {
 			"id": "qwen3-max-2026-01-23",
@@ -41228,8 +41228,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 256000,
+			"maxTokens": 8192
 		},
 		"qwen3.5-122b-a10b": {
 			"id": "qwen3.5-122b-a10b",
@@ -41247,8 +41247,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null,
+			"contextWindow": 262144,
+			"maxTokens": 262144,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -41275,8 +41275,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null,
+			"contextWindow": 262144,
+			"maxTokens": 65536,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -41873,8 +41873,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null,
+			"contextWindow": 262144,
+			"maxTokens": 262144,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -41901,8 +41901,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null,
+			"contextWindow": 1024000,
+			"maxTokens": 1020000,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -41967,8 +41967,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 65536
 		},
 		"qwen3.7-max": {
 			"id": "qwen3.7-max",
@@ -42290,8 +42290,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 8192
 		},
 		"shisa-ai/shisa-v2.1-llama3.3-70b": {
 			"id": "shisa-ai/shisa-v2.1-llama3.3-70b",
@@ -42309,8 +42309,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 8192
 		},
 		"sonar": {
 			"id": "sonar",
@@ -42449,8 +42449,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 8192
 		},
 		"soob3123/Veiled-Calla-12B": {
 			"id": "soob3123/Veiled-Calla-12B",
@@ -42639,8 +42639,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 65536,
+			"maxTokens": 64000
 		},
 		"step-r1-v-mini": {
 			"id": "step-r1-v-mini",
@@ -42763,8 +42763,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 163840,
+			"maxTokens": 32768
 		},
 		"TEE/deepseek-v3.1": {
 			"id": "TEE/deepseek-v3.1",
@@ -42782,8 +42782,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 163840,
+			"maxTokens": 8192
 		},
 		"TEE/deepseek-v3.2": {
 			"id": "TEE/deepseek-v3.2",
@@ -42801,8 +42801,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 160000,
+			"maxTokens": 8192
 		},
 		"TEE/deepseek-v4-flash": {
 			"id": "TEE/deepseek-v4-flash",
@@ -42820,8 +42820,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1048576,
+			"maxTokens": 384000
 		},
 		"TEE/deepseek-v4-pro": {
 			"id": "TEE/deepseek-v4-pro",
@@ -42839,8 +42839,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null,
+			"contextWindow": 1048576,
+			"maxTokens": 384000,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -42875,8 +42875,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 8192
 		},
 		"TEE/gemma-4-26b-a4b-uncensored": {
 			"id": "TEE/gemma-4-26b-a4b-uncensored",
@@ -42913,8 +42913,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 32768
 		},
 		"TEE/gemma4-31b": {
 			"id": "TEE/gemma4-31b",
@@ -42932,8 +42932,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null,
+			"contextWindow": 256000,
+			"maxTokens": 8192,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -42961,8 +42961,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 204800,
+			"maxTokens": 131072
 		},
 		"TEE/glm-4.7": {
 			"id": "TEE/glm-4.7",
@@ -42980,8 +42980,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 204800,
+			"maxTokens": 131072
 		},
 		"TEE/glm-4.7-flash": {
 			"id": "TEE/glm-4.7-flash",
@@ -42999,8 +42999,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 200000,
+			"maxTokens": 131072
 		},
 		"TEE/glm-5": {
 			"id": "TEE/glm-5",
@@ -43018,8 +43018,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 204800,
+			"maxTokens": 131072
 		},
 		"TEE/glm-5-1": {
 			"id": "TEE/glm-5-1",
@@ -43037,8 +43037,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null,
+			"contextWindow": 204800,
+			"maxTokens": 131072,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -43101,8 +43101,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null,
+			"contextWindow": 204800,
+			"maxTokens": 131072,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -43165,8 +43165,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 40960
 		},
 		"TEE/gpt-oss-20b": {
 			"id": "TEE/gpt-oss-20b",
@@ -43184,8 +43184,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 65536
 		},
 		"TEE/kimi-k2-thinking": {
 			"id": "TEE/kimi-k2-thinking",
@@ -43203,8 +43203,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 262144
 		},
 		"TEE/kimi-k2.5": {
 			"id": "TEE/kimi-k2.5",
@@ -43222,8 +43222,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null,
+			"contextWindow": 262144,
+			"maxTokens": 65536,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -43286,8 +43286,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 65536
 		},
 		"TEE/llama3-3-70b": {
 			"id": "TEE/llama3-3-70b",
@@ -43305,8 +43305,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 8192
 		},
 		"TEE/mimo-v2-flash": {
 			"id": "TEE/mimo-v2-flash",
@@ -43324,8 +43324,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 65536
 		},
 		"TEE/minimax-m2.1": {
 			"id": "TEE/minimax-m2.1",
@@ -43343,8 +43343,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 204800,
+			"maxTokens": 131072
 		},
 		"TEE/minimax-m2.5": {
 			"id": "TEE/minimax-m2.5",
@@ -43362,8 +43362,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 204800,
+			"maxTokens": 131072
 		},
 		"TEE/qwen2.5-vl-72b-instruct": {
 			"id": "TEE/qwen2.5-vl-72b-instruct",
@@ -43400,8 +43400,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 32000
 		},
 		"TEE/qwen3-coder": {
 			"id": "TEE/qwen3-coder",
@@ -43419,8 +43419,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1048576,
+			"maxTokens": 65536
 		},
 		"TEE/qwen3-coder-next": {
 			"id": "TEE/qwen3-coder-next",
@@ -43438,8 +43438,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 65536
 		},
 		"TEE/qwen3.5-122b-a10b": {
 			"id": "TEE/qwen3.5-122b-a10b",
@@ -43457,8 +43457,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 262144
 		},
 		"TEE/qwen3.5-27b": {
 			"id": "TEE/qwen3.5-27b",
@@ -43476,8 +43476,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 65536
 		},
 		"TEE/qwen3.5-397b-a17b": {
 			"id": "TEE/qwen3.5-397b-a17b",
@@ -43495,8 +43495,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 65536
 		},
 		"TEE/qwen3.6-27b": {
 			"id": "TEE/qwen3.6-27b",
@@ -43514,8 +43514,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 262140
 		},
 		"TEE/qwen3.6-35b-a3b": {
 			"id": "TEE/qwen3.6-35b-a3b",
@@ -43533,8 +43533,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 256000,
+			"maxTokens": 65536
 		},
 		"TEE/qwen3.6-35b-a3b-uncensored": {
 			"id": "TEE/qwen3.6-35b-a3b-uncensored",
@@ -44047,8 +44047,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 16384
 		},
 		"unsloth/gemma-3-1b-it": {
 			"id": "unsloth/gemma-3-1b-it",
@@ -44066,8 +44066,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 4096
 		},
 		"unsloth/gemma-3-27b-it": {
 			"id": "unsloth/gemma-3-27b-it",
@@ -44085,8 +44085,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 8192
 		},
 		"unsloth/gemma-3-4b-it": {
 			"id": "unsloth/gemma-3-4b-it",
@@ -44123,7 +44123,7 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
+			"contextWindow": 128000,
 			"maxTokens": null
 		},
 		"v0-1.0-md": {
@@ -44441,8 +44441,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 2000000,
+			"maxTokens": 2000000
 		},
 		"x-ai/grok-4.20-multi-agent-beta": {
 			"id": "x-ai/grok-4.20-multi-agent-beta",
@@ -44460,8 +44460,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 2000000,
+			"maxTokens": 2000000
 		},
 		"x-ai/grok-4.3": {
 			"id": "x-ai/grok-4.3",
@@ -44651,8 +44651,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null,
+			"contextWindow": 262144,
+			"maxTokens": 65536,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -44833,8 +44833,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 1048576,
+			"maxTokens": 131072
 		},
 		"yi-large": {
 			"id": "yi-large",
@@ -44910,8 +44910,8 @@
 				"cacheRead": 0.11,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null,
+			"contextWindow": 64000,
+			"maxTokens": 16384,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -45027,8 +45027,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 98304
 		},
 		"zai-org/GLM-4.5-Air": {
 			"id": "zai-org/GLM-4.5-Air",
@@ -45046,8 +45046,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null,
+			"contextWindow": 131072,
+			"maxTokens": 98304,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -45075,8 +45075,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 204800,
+			"maxTokens": 131072
 		},
 		"zai-org/GLM-4.6-turbo": {
 			"id": "zai-org/GLM-4.6-turbo",
@@ -45094,8 +45094,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null,
+			"contextWindow": 204800,
+			"maxTokens": 131072,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -45123,8 +45123,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 32768
 		},
 		"zai-org/glm-4.6v-flash-original": {
 			"id": "zai-org/glm-4.6v-flash-original",
@@ -45142,8 +45142,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 200000,
+			"maxTokens": 64000
 		},
 		"zai-org/glm-4.6v-original": {
 			"id": "zai-org/glm-4.6v-original",
@@ -45161,8 +45161,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 128000,
+			"maxTokens": 32768
 		},
 		"zai-org/glm-4.7": {
 			"id": "zai-org/glm-4.7",
@@ -45180,8 +45180,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null,
+			"contextWindow": 204800,
+			"maxTokens": 131072,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -45209,8 +45209,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null,
+			"contextWindow": 200000,
+			"maxTokens": 131072,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -45238,8 +45238,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null,
+			"contextWindow": 200000,
+			"maxTokens": 131072,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -45267,8 +45267,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null,
+			"contextWindow": 204800,
+			"maxTokens": 131072,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -45296,8 +45296,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null,
+			"contextWindow": 204800,
+			"maxTokens": 131072,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -45344,8 +45344,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null,
+			"contextWindow": 204800,
+			"maxTokens": 131072,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -45373,8 +45373,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null,
+			"contextWindow": 204800,
+			"maxTokens": 131072,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -45461,8 +45461,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 16384
 		},
 		"adept/fuyu-8b": {
 			"id": "adept/fuyu-8b",
@@ -47679,8 +47679,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 131072,
+			"maxTokens": 16384
 		},
 		"nvidia/llama-nemotron-embed-1b-v2": {
 			"id": "nvidia/llama-nemotron-embed-1b-v2",
@@ -54288,7 +54288,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 131000,
-			"maxTokens": null,
+			"maxTokens": 131000,
 			"compat": {
 				"supportsToolChoice": false
 			}
@@ -54310,7 +54310,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 131000,
-			"maxTokens": null,
+			"maxTokens": 131000,
 			"compat": {
 				"supportsToolChoice": false
 			}
@@ -54418,7 +54418,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 131072,
-			"maxTokens": null,
+			"maxTokens": 131072,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -54916,7 +54916,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 163840,
-			"maxTokens": null,
+			"maxTokens": 32768,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -55640,7 +55640,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": null,
+			"maxTokens": 32768,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -56124,7 +56124,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 131072,
-			"maxTokens": null
+			"maxTokens": 16384
 		},
 		"meta-llama/llama-4-maverick": {
 			"id": "meta-llama/llama-4-maverick",
@@ -56402,7 +56402,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": null
+			"maxTokens": 262144
 		},
 		"mistralai/devstral-medium": {
 			"id": "mistralai/devstral-medium",
@@ -56557,7 +56557,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 131072,
-			"maxTokens": null
+			"maxTokens": 16384
 		},
 		"mistralai/mistral-large-2512": {
 			"id": "mistralai/mistral-large-2512",
@@ -56577,7 +56577,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": null
+			"maxTokens": 262144
 		},
 		"mistralai/mistral-medium-3": {
 			"id": "mistralai/mistral-medium-3",
@@ -56665,7 +56665,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 131072,
-			"maxTokens": null
+			"maxTokens": 128000
 		},
 		"mistralai/mistral-saba": {
 			"id": "mistralai/mistral-saba",
@@ -56723,7 +56723,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": null,
+			"maxTokens": 256000,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -56945,7 +56945,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": null
+			"maxTokens": 262144
 		},
 		"moonshotai/kimi-k2-thinking": {
 			"id": "moonshotai/kimi-k2-thinking",
@@ -57052,7 +57052,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": null,
+			"maxTokens": 65536,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -57697,7 +57697,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 1047576,
-			"maxTokens": null
+			"maxTokens": 32768
 		},
 		"openai/gpt-4.1-mini": {
 			"id": "openai/gpt-4.1-mini",
@@ -58061,7 +58061,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 400000,
-			"maxTokens": null,
+			"maxTokens": 128000,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -58646,7 +58646,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 131072,
-			"maxTokens": null,
+			"maxTokens": 40960,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -59078,7 +59078,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 2000000,
-			"maxTokens": null,
+			"maxTokens": 30000,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -59724,7 +59724,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 40960,
-			"maxTokens": null,
+			"maxTokens": 8192,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -61118,7 +61118,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 131072,
-			"maxTokens": null
+			"maxTokens": 8192
 		},
 		"x-ai/grok-3-beta": {
 			"id": "x-ai/grok-3-beta",
@@ -61156,7 +61156,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 131072,
-			"maxTokens": null,
+			"maxTokens": 8192,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -63324,7 +63324,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 32000,
-			"maxTokens": null,
+			"maxTokens": 8192,
 			"compat": {
 				"supportsUsageInStreaming": false
 			}
@@ -63390,7 +63390,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 198000,
-			"maxTokens": null,
+			"maxTokens": 131072,
 			"compat": {
 				"supportsUsageInStreaming": false
 			}
@@ -63412,7 +63412,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 200000,
-			"maxTokens": null,
+			"maxTokens": 131072,
 			"compat": {
 				"supportsUsageInStreaming": false
 			}
@@ -63632,7 +63632,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 1000000,
-			"maxTokens": null,
+			"maxTokens": 65536,
 			"compat": {
 				"supportsUsageInStreaming": false
 			}
@@ -63654,7 +63654,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 1000000,
-			"maxTokens": null,
+			"maxTokens": 65536,
 			"compat": {
 				"supportsUsageInStreaming": false
 			}
@@ -63785,7 +63785,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 256000,
-			"maxTokens": null,
+			"maxTokens": 32768,
 			"compat": {
 				"supportsUsageInStreaming": false
 			}
@@ -63807,7 +63807,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 256000,
-			"maxTokens": null,
+			"maxTokens": 32768,
 			"compat": {
 				"supportsUsageInStreaming": false
 			}
@@ -63828,8 +63828,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null,
+			"contextWindow": 262144,
+			"maxTokens": 32768,
 			"compat": {
 				"supportsUsageInStreaming": false
 			}
@@ -63850,8 +63850,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null,
+			"contextWindow": 262144,
+			"maxTokens": 32768,
 			"compat": {
 				"supportsUsageInStreaming": false
 			}
@@ -63961,7 +63961,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 1000000,
-			"maxTokens": null,
+			"maxTokens": 30000,
 			"compat": {
 				"supportsUsageInStreaming": false
 			}
@@ -64016,7 +64016,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 256000,
-			"maxTokens": null,
+			"maxTokens": 256000,
 			"compat": {
 				"supportsUsageInStreaming": false
 			}
@@ -64125,7 +64125,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 256000,
-			"maxTokens": null,
+			"maxTokens": 65536,
 			"compat": {
 				"supportsUsageInStreaming": false
 			}
@@ -64561,7 +64561,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 128000,
-			"maxTokens": null,
+			"maxTokens": 16384,
 			"compat": {
 				"supportsUsageInStreaming": false
 			}
@@ -64670,7 +64670,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 400000,
-			"maxTokens": null,
+			"maxTokens": 128000,
 			"compat": {
 				"supportsUsageInStreaming": false
 			}
@@ -64692,7 +64692,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 1000000,
-			"maxTokens": null,
+			"maxTokens": 128000,
 			"compat": {
 				"supportsUsageInStreaming": false
 			}
@@ -64714,7 +64714,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 400000,
-			"maxTokens": null,
+			"maxTokens": 128000,
 			"compat": {
 				"supportsUsageInStreaming": false
 			}
@@ -64736,7 +64736,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 1000000,
-			"maxTokens": null,
+			"maxTokens": 128000,
 			"compat": {
 				"supportsUsageInStreaming": false
 			}
@@ -64758,7 +64758,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 1000000,
-			"maxTokens": null,
+			"maxTokens": 128000,
 			"compat": {
 				"supportsUsageInStreaming": false
 			}
@@ -64780,7 +64780,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 1000000,
-			"maxTokens": null,
+			"maxTokens": 128000,
 			"compat": {
 				"supportsUsageInStreaming": false
 			}
@@ -65262,7 +65262,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 200000,
-			"maxTokens": null,
+			"maxTokens": 131072,
 			"compat": {
 				"supportsUsageInStreaming": false
 			}
@@ -65284,7 +65284,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 200000,
-			"maxTokens": null,
+			"maxTokens": 131072,
 			"compat": {
 				"supportsUsageInStreaming": false
 			}
@@ -65306,7 +65306,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 198000,
-			"maxTokens": null,
+			"maxTokens": 131072,
 			"compat": {
 				"supportsUsageInStreaming": false
 			}
@@ -65424,7 +65424,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 200000,
-			"maxTokens": null,
+			"maxTokens": 131072,
 			"compat": {
 				"supportsUsageInStreaming": false
 			}
@@ -72764,7 +72764,7 @@
 				"cacheWrite": 0.0024
 			},
 			"contextWindow": 256000,
-			"maxTokens": null,
+			"maxTokens": 64000,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -72794,7 +72794,7 @@
 				"cacheWrite": 0.0024
 			},
 			"contextWindow": 256000,
-			"maxTokens": null,
+			"maxTokens": 32000,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -72824,7 +72824,7 @@
 				"cacheWrite": 0.0024
 			},
 			"contextWindow": 256000,
-			"maxTokens": null,
+			"maxTokens": 64000,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -72854,7 +72854,7 @@
 				"cacheWrite": 0.0024
 			},
 			"contextWindow": 256000,
-			"maxTokens": null,
+			"maxTokens": 64000,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -72884,7 +72884,7 @@
 				"cacheWrite": 0.0024
 			},
 			"contextWindow": 256000,
-			"maxTokens": null,
+			"maxTokens": 64000,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -72962,7 +72962,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 128000,
-			"maxTokens": null
+			"maxTokens": 32768
 		},
 		"deepseek/deepseek-r1-0528": {
 			"id": "deepseek/deepseek-r1-0528",
@@ -72981,7 +72981,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 64000,
-			"maxTokens": null,
+			"maxTokens": 32768,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -73162,7 +73162,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 1000000,
-			"maxTokens": null,
+			"maxTokens": 384000,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -73234,7 +73234,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 1000000,
-			"maxTokens": null,
+			"maxTokens": 384000,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -73271,7 +73271,7 @@
 				"cacheWrite": 1
 			},
 			"contextWindow": 1048576,
-			"maxTokens": null
+			"maxTokens": 8192
 		},
 		"google/gemini-2.0-flash-lite-001": {
 			"id": "google/gemini-2.0-flash-lite-001",
@@ -73291,7 +73291,7 @@
 				"cacheWrite": 1
 			},
 			"contextWindow": 1048576,
-			"maxTokens": null
+			"maxTokens": 8192
 		},
 		"google/gemini-2.5-flash": {
 			"id": "google/gemini-2.5-flash",
@@ -73584,7 +73584,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 1048576,
-			"maxTokens": null,
+			"maxTokens": 65536,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -73614,7 +73614,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 128000,
-			"maxTokens": null
+			"maxTokens": 16384
 		},
 		"inclusionai/ling-1t": {
 			"id": "inclusionai/ling-1t",
@@ -73652,7 +73652,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": null
+			"maxTokens": 32768
 		},
 		"inclusionai/ling-2.6-flash": {
 			"id": "inclusionai/ling-2.6-flash",
@@ -73671,7 +73671,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": null
+			"maxTokens": 32768
 		},
 		"inclusionai/ling-flash-2.0": {
 			"id": "inclusionai/ling-flash-2.0",
@@ -73979,7 +73979,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 131072,
-			"maxTokens": null
+			"maxTokens": 32768
 		},
 		"minimax/minimax-m2": {
 			"id": "minimax/minimax-m2",
@@ -74216,7 +74216,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 256000,
-			"maxTokens": null
+			"maxTokens": 262144
 		},
 		"moonshotai/kimi-k2-0711": {
 			"id": "moonshotai/kimi-k2-0711",
@@ -74474,7 +74474,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 1047576,
-			"maxTokens": null
+			"maxTokens": 32768
 		},
 		"openai/gpt-4.1-mini": {
 			"id": "openai/gpt-4.1-mini",
@@ -74494,7 +74494,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 1047576,
-			"maxTokens": null
+			"maxTokens": 32768
 		},
 		"openai/gpt-4.1-nano": {
 			"id": "openai/gpt-4.1-nano",
@@ -74514,7 +74514,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 1047576,
-			"maxTokens": null
+			"maxTokens": 32768
 		},
 		"openai/gpt-4o": {
 			"id": "openai/gpt-4o",
@@ -74603,7 +74603,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 128000,
-			"maxTokens": null
+			"maxTokens": 16384
 		},
 		"openai/gpt-5-codex": {
 			"id": "openai/gpt-5-codex",
@@ -74652,7 +74652,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 400000,
-			"maxTokens": null,
+			"maxTokens": 128000,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -74681,7 +74681,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 400000,
-			"maxTokens": null,
+			"maxTokens": 128000,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -74710,7 +74710,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 400000,
-			"maxTokens": null,
+			"maxTokens": 272000,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -74873,7 +74873,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 128000,
-			"maxTokens": null,
+			"maxTokens": 16384,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -75298,7 +75298,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 32000,
-			"maxTokens": null,
+			"maxTokens": 40960,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -75326,7 +75326,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 256000,
-			"maxTokens": null
+			"maxTokens": 16384
 		},
 		"qwen/qwen3-235b-a22b-thinking-2507": {
 			"id": "qwen/qwen3-235b-a22b-thinking-2507",
@@ -75345,7 +75345,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 256000,
-			"maxTokens": null,
+			"maxTokens": 8192,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -75374,7 +75374,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 256000,
-			"maxTokens": null
+			"maxTokens": 65536
 		},
 		"qwen/qwen3-coder-plus": {
 			"id": "qwen/qwen3-coder-plus",
@@ -75440,7 +75440,7 @@
 				"cacheWrite": 1.5
 			},
 			"contextWindow": 262144,
-			"maxTokens": null,
+			"maxTokens": 32768,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -75547,7 +75547,7 @@
 				"cacheWrite": 0.3125
 			},
 			"contextWindow": 1000000,
-			"maxTokens": null,
+			"maxTokens": 65536,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -75575,7 +75575,7 @@
 				"cacheWrite": 1.625
 			},
 			"contextWindow": 262144,
-			"maxTokens": null,
+			"maxTokens": 65536,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -76254,7 +76254,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 2000000,
-			"maxTokens": null
+			"maxTokens": 30000
 		},
 		"x-ai/grok-4.1-fast": {
 			"id": "x-ai/grok-4.1-fast",

@@ -40,6 +40,7 @@ import { cleanModelName } from "../src/utils";
 import { collapseEffortVariantsAcrossProviders } from "../src/variant-collapse";
 import { JWT_CLAIM_PATH } from "../src/wire/codex";
 import {
+	applyCanonicalLimitFallback,
 	applyGeneratedModelPolicies,
 	CLOUDFLARE_FALLBACK_MODEL,
 	linkOpenAIPromotionTargets,
@@ -475,6 +476,9 @@ async function generateModels() {
 	// entries are already collapsed (rebake skips them); this pass folds
 	// previous-snapshot raw members into their logical families.
 	allModels = collapseEffortVariantsAcrossProviders(allModels);
+	// Fill remaining null endpoint limits from each model's canonical-family
+	// reference. Runs last so canonical ids and explicit policy limits are final.
+	applyCanonicalLimitFallback(allModels);
 
 	// Group by provider and sort each provider's models
 	const providers: Record<string, Record<string, ModelSpec>> = {};
