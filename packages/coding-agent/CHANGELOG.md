@@ -10,6 +10,10 @@
 
 - Fixed unknown `--`-prefixed flags being silently consumed as prompt text, which let a stale or typoed flag start a real agent session (connecting to MCP servers, waiting on the model) instead of failing fast. `parseArgs` now tracks unrecognized flag-shaped tokens and `runRootCommand` calls `reportUnrecognizedFlags` immediately after the post-extension reparse, exiting `2` with `Error: unknown flag: --…` before any session, MCP, or initial-message work runs. Extension-registered flags still pass cleanly since the validation runs after the extension-aware reparse ([#2459](https://github.com/can1357/oh-my-pi/issues/2459)).
 
+### Fixed
+
+- Fixed prompt templates discovered from `cwd/.omp/prompts/` and the agent prompts directory not appearing in the slash-command autocomplete picker. `InteractiveMode.refreshSlashCommandState()` now feeds `session.promptTemplates` into the autocomplete provider alongside builtins and file-based slash commands; templates whose names collide with an existing command are skipped to mirror the runtime expansion order (`expandSlashCommand` precedes `expandPromptTemplate`) ([#2462](https://github.com/can1357/oh-my-pi/issues/2462)).
+
 ## [15.12.4] - 2026-06-13
 
 ### Breaking Changes
