@@ -80,7 +80,7 @@ export type RpcSessionChangeResult =
 export type RpcSessionChangeSession = Pick<AgentSession, "newSession" | "switchSession" | "branch">;
 
 export type RpcSkillCommandSession = Pick<AgentSession, "promptCustomMessage" | "skills" | "skillsSettings">;
-export type RpcSkillCommandResult = { agentInvoked: false };
+export type RpcSkillCommandResult = { agentInvoked: true };
 
 export async function tryRunRpcSkillCommand(
 	session: RpcSkillCommandSession,
@@ -102,7 +102,7 @@ export async function tryRunRpcSkillCommand(
 		details: built.details,
 		attribution: "user",
 	});
-	return { agentInvoked: false };
+	return { agentInvoked: true };
 }
 
 export function reportLocalOnlyPromptResult(input: {
@@ -111,13 +111,10 @@ export function reportLocalOnlyPromptResult(input: {
 	output: (obj: object) => void;
 	onError: (error: Error) => void;
 	hasExtensionAgentMessageTask?: () => boolean;
-	waitForExtensionAgentMessageTasks?: () => Promise<void>;
 }): void {
 	void input.prompt
-		.then(async agentInvoked => {
-			if (agentInvoked) return;
-			await input.waitForExtensionAgentMessageTasks?.();
-			if (!input.hasExtensionAgentMessageTask?.()) {
+		.then(agentInvoked => {
+			if (!agentInvoked && !input.hasExtensionAgentMessageTask?.()) {
 				input.output({ type: "prompt_result", id: input.id, agentInvoked: false });
 			}
 		})
@@ -128,7 +125,6 @@ export function reportLocalOnlyPromptResult(input: {
 
 type RpcExtensionUserMessageScope = {
 	hasAgentMessageTask: boolean;
-	pendingAgentMessageTasks: Set<Promise<void>>;
 };
 
 /**
@@ -146,42 +142,11 @@ export class RpcExtensionUserMessageTracker {
 		}
 	}
 
-	trackAgentMessageTask(task: Promise<boolean>): void {
-		for (const scope of this.#activePromptScopes) {
-			this.#trackAgentMessageTaskForScope(scope, task);
-		}
-	}
-
-	#trackAgentMessageTaskForScope(scope: RpcExtensionUserMessageScope, task: Promise<boolean>): void {
-		const scopedTask = task.then(
-			agentInvoked => {
-				if (agentInvoked) {
-					scope.hasAgentMessageTask = true;
-				}
-			},
-			() => {},
-		);
-		scope.pendingAgentMessageTasks.add(scopedTask);
-		void scopedTask.finally(() => {
-			scope.pendingAgentMessageTasks.delete(scopedTask);
-		});
-	}
-
-	async #waitForAgentMessageTasks(scope: RpcExtensionUserMessageScope): Promise<void> {
-		while (scope.pendingAgentMessageTasks.size > 0) {
-			await Promise.allSettled(Array.from(scope.pendingAgentMessageTasks));
-		}
-	}
-
 	watchPrompt<T>(startPrompt: () => Promise<T>): {
 		prompt: Promise<T>;
 		hasAgentMessageTask: () => boolean;
-		waitForAgentMessageTasks: () => Promise<void>;
 	} {
-		const scope: RpcExtensionUserMessageScope = {
-			hasAgentMessageTask: false,
-			pendingAgentMessageTasks: new Set(),
-		};
+		const scope: RpcExtensionUserMessageScope = { hasAgentMessageTask: false };
 		this.#activePromptScopes.add(scope);
 		let prompt: Promise<T>;
 		try {
@@ -195,7 +160,6 @@ export class RpcExtensionUserMessageTracker {
 				this.#activePromptScopes.delete(scope);
 			}),
 			hasAgentMessageTask: () => scope.hasAgentMessageTask,
-			waitForAgentMessageTasks: () => this.#waitForAgentMessageTasks(scope),
 		};
 	}
 }
@@ -214,7 +178,6 @@ export function watchAndReportLocalOnlyPromptResult(input: {
 		output: input.output,
 		onError: input.onError,
 		hasExtensionAgentMessageTask: trackedPrompt.hasAgentMessageTask,
-		waitForExtensionAgentMessageTasks: trackedPrompt.waitForAgentMessageTasks,
 	});
 }
 
@@ -655,9 +618,6 @@ export async function runRpcMode(
 		},
 		markAgentInvokingMessage: () => {
 			extensionUserMessageTracker.markAgentMessageTask();
-		},
-		trackAgentInvokingUserMessage: task => {
-			extensionUserMessageTracker.trackAgentMessageTask(task);
 		},
 		uiContext: rpcUiContext,
 	});
