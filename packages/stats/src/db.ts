@@ -38,7 +38,7 @@ let db: Database | null = null;
 
 const BACKFILL_COMPLETE = "complete";
 const BACKFILL_PENDING = "pending";
-const USER_MESSAGES_BACKFILL_KEY = "user_messages_v5";
+const USER_MESSAGES_BACKFILL_KEY = "user_messages_v6";
 const USER_MESSAGE_LINKS_REPAIR_KEY = "user_message_links_v1";
 const PRIORITY_PREMIUM_REQUESTS_BACKFILL_KEY = "premium_requests_priority_v1";
 function shouldResetBackfill(value: string | undefined): boolean {
@@ -776,6 +776,8 @@ export function getCostTimeSeries(days = 90, cutoff?: number | null): CostTimeSe
  *   left those metrics matching nothing in real prose.
  * - v5: renamed `yelling_sentences` column to `yelling` to match the other
  *   single-word signal columns (profanity, anguish, negation, ...).
+ * - v6: dropped `git` from the profanity word list - it collided with the
+ *   version-control tool name, so existing rows over-counted profanity.
  *
  * Existing `messages` rows are unaffected - `INSERT OR IGNORE` keeps them.
  */
