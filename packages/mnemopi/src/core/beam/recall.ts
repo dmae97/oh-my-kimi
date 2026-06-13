@@ -117,6 +117,8 @@ const FACT_QUERY_FILLER_WORDS = new Set([
 	"ve",
 ]);
 
+const FACT_CLITIC_FRAGMENTS = new Set(["d", "ll", "m", "re", "s", "t", "ve"]);
+
 function nowIso(): string {
 	return new Date().toISOString();
 }
@@ -199,15 +201,16 @@ function factExpandedTokenGroups(query: string, content: string): string[][] {
 	for (const token of tokenize(query)) {
 		if (
 			FACT_QUERY_FILLER_WORDS.has(token) &&
-			(token.length <= 2 || !contentMatchesToken(contentLower, contentTokens, token))
-		)
+			(FACT_CLITIC_FRAGMENTS.has(token) || !contentMatchesToken(contentLower, contentTokens, token))
+		) {
 			continue;
+		}
 		const seen = new Set<string>();
 		for (const variant of recallSynonyms(token, true)) {
 			for (const part of tokenize(variant)) {
 				if (
 					!FACT_QUERY_FILLER_WORDS.has(part) ||
-					(part.length > 2 && contentMatchesToken(contentLower, contentTokens, part))
+					(!FACT_CLITIC_FRAGMENTS.has(part) && contentMatchesToken(contentLower, contentTokens, part))
 				) {
 					seen.add(part);
 				}

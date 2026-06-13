@@ -303,6 +303,26 @@ describe("beam recall free functions", () => {
 		expect(results[0]?.id).toBe("fact-may");
 	});
 
+	it("preserves matching two-letter fact entities when scoring facts", async () => {
+		const beam = makeBeam();
+		beam.db.run(
+			"INSERT INTO facts (fact_id, session_id, subject, predicate, object, timestamp, confidence) VALUES (?, ?, ?, ?, ?, ?, ?)",
+			["fact-us", beam.sessionId, "US", "timezone", "Eastern", "2026-05-30T00:00:00.000Z", 0.1],
+		);
+		beam.db.run(
+			"INSERT INTO facts (fact_id, session_id, subject, predicate, object, timestamp, confidence) VALUES (?, ?, ?, ?, ?, ?, ?)",
+			["fact-eu", beam.sessionId, "EU", "timezone", "Central European", "2026-05-30T00:00:00.000Z", 1.0],
+		);
+
+		const results = await recallEnhanced(beam, "US timezone", 1, {
+			includeFacts: true,
+			queryEmbedding: null,
+			useMmr: false,
+		});
+
+		expect(results[0]?.id).toBe("fact-us");
+	});
+
 	it("keeps exact working-memory hits above weak matching facts in enhanced recall", async () => {
 		const beam = makeBeam();
 		insertWorking(
