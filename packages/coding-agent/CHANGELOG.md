@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Updated `docs/models.md` and `docs/providers.md` to reference the `omp models` subcommand (and `omp models canonical` / `omp models find`) instead of the removed top-level `--list-models` flag ([#2458](https://github.com/can1357/oh-my-pi/issues/2458))
+
 ## [15.12.4] - 2026-06-13
 
 ### Breaking Changes
