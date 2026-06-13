@@ -5690,7 +5690,10 @@ export class AgentSession {
 
 	/**
 	 * Set model directly.
-	 * Validates API key and saves to the active session. Persists settings only when requested.
+	 * Validates that a credential source is configured (synchronously, without
+	 * refreshing OAuth or running command-backed key programs) and saves to the
+	 * active session. Persists settings only when requested. The concrete key is
+	 * resolved lazily per request, so switching never blocks the event loop.
 	 * @throws Error if no API key available for the model
 	 */
 	async setModel(
@@ -5699,8 +5702,7 @@ export class AgentSession {
 		options?: { selector?: string; thinkingLevel?: ThinkingLevel; persist?: boolean },
 	): Promise<void> {
 		const previousEditMode = this.#resolveActiveEditMode();
-		const apiKey = await this.#modelRegistry.getApiKey(model, this.sessionId);
-		if (!apiKey) {
+		if (!this.#modelRegistry.hasConfiguredAuth(model)) {
 			throw new Error(`No API key for ${model.provider}/${model.id}`);
 		}
 
@@ -5723,7 +5725,9 @@ export class AgentSession {
 
 	/**
 	 * Set model temporarily (for this session only).
-	 * Validates API key, saves to session log but NOT to settings.
+	 * Validates that a credential source is configured (synchronously, without
+	 * refreshing OAuth or running command-backed key programs), saves to session
+	 * log but NOT to settings.
 	 * @throws Error if no API key available for the model
 	 */
 	async setModelTemporary(
@@ -5732,8 +5736,7 @@ export class AgentSession {
 		options?: { ephemeral?: boolean },
 	): Promise<void> {
 		const previousEditMode = this.#resolveActiveEditMode();
-		const apiKey = await this.#modelRegistry.getApiKey(model, this.sessionId);
-		if (!apiKey) {
+		if (!this.#modelRegistry.hasConfiguredAuth(model)) {
 			throw new Error(`No API key for ${model.provider}/${model.id}`);
 		}
 

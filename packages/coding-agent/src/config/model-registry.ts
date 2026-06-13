@@ -1733,11 +1733,20 @@ export class ModelRegistry {
 	 * paths that pre-flight auth before model resolution) can probe a model
 	 * without resolving an API key. Returns true for keyless providers as well
 	 * as providers with stored credentials. See issue #993.
+	 *
+	 * Side-effect-free and synchronous: a command-backed key (`!cmd`) counts as
+	 * configured by its presence alone — the program is NOT executed — and OAuth
+	 * tokens are NOT refreshed (`authStorage.hasAuth`). This is what keeps the
+	 * model-switch pre-flight off the event loop's hot path; the real key
+	 * (command execution + OAuth refresh) is resolved lazily per request via
+	 * {@link ModelRegistry.resolver}.
 	 */
 	hasConfiguredAuth(model: Model<Api>): boolean {
-		const commandKey = this.#resolveCommandBackedApiKey(model.provider);
+		const keyConfig = this.#customProviderApiKeys.get(model.provider);
 		return (
-			commandKey.configured || this.#keylessProviders.has(model.provider) || this.authStorage.hasAuth(model.provider)
+			isCommandConfigValue(keyConfig) ||
+			this.#keylessProviders.has(model.provider) ||
+			this.authStorage.hasAuth(model.provider)
 		);
 	}
 

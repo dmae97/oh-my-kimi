@@ -94,7 +94,6 @@ describe("applyCanonicalLimitFallback", () => {
 		expect(proxy.maxTokens).toBe(40960);
 	});
 
-
 	it("leaves holes null when no canonical-family reference exists", () => {
 		const models: ModelSpec<Api>[] = [
 			spec({ id: "some-bespoke-model-xyz", provider: "custom", contextWindow: null, maxTokens: null }),
