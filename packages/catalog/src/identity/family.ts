@@ -100,6 +100,9 @@ export function isGlmVisionModelId(modelId: string): boolean {
  * lineage via {@link parseKnownModel}'s `bareModelId` normalization. Opaque and
  * comparison-only — not a stable key to persist, since the vocabulary tracks new
  * releases. Returns `""` for ids it cannot classify; callers fall back to the provider.
+ *
+ * Vendor-only by design: a model's kind/variant (opus vs sonnet, codex vs base) is
+ * collapsed onto the single vendor token; use {@link parseKnownModel} for finer breakdowns.
  */
 export function modelFamilyToken(modelId: string): string {
 	const parsed = parseKnownModel(modelId);

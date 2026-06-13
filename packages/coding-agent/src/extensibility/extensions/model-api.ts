@@ -9,7 +9,7 @@
 import type { Api, Model } from "@oh-my-pi/pi-ai";
 import { modelFamilyToken } from "@oh-my-pi/pi-catalog/identity";
 import type { ModelRegistry } from "../../config/model-registry";
-import { expandRoleAlias, getModelMatchPreferences, resolveModelFromString } from "../../config/model-resolver";
+import { getModelMatchPreferences, resolveModelRoleValue } from "../../config/model-resolver";
 import type { Settings } from "../../config/settings";
 import type { ExtensionModelQuery } from "./types";
 
@@ -25,13 +25,16 @@ export function createExtensionModelQuery(
 	return {
 		list: () => modelRegistry.getAvailable(),
 		current: () => getModel(),
+		// resolveModelRoleValue expands a role alias (`pi/slow`) to its full configured
+		// priority list and tries each pattern — the same path core selection uses — so a
+		// fallback model lower in the list still resolves. Plain model strings pass through
+		// as a single pattern.
 		resolve: (spec: string): Model<Api> | undefined =>
-			resolveModelFromString(
-				expandRoleAlias(spec, settings),
-				modelRegistry.getAvailable(),
-				getModelMatchPreferences(settings),
+			resolveModelRoleValue(spec, modelRegistry.getAvailable(), {
+				settings,
+				matchPreferences: getModelMatchPreferences(settings),
 				modelRegistry,
-			),
+			}).model,
 		family: (model: Model<Api>): string =>
 			modelFamilyToken(modelRegistry.getCanonicalId(model) ?? model.id) || model.provider.toLowerCase(),
 	};

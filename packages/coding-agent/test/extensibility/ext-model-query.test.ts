@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { Api, Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import type { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createExtensionModelQuery } from "../../src/extensibility/extensions/model-api";
 
 function model(id: string, name: string, provider: string): Model<"anthropic-messages"> {
@@ -55,17 +56,29 @@ describe("createExtensionModelQuery", () => {
 		expect(q.resolve("definitely-not-a-model")).toBeUndefined();
 	});
 
+	test("resolve() honors configured role aliases via the same settings-backed path as core", () => {
+		const settings = {
+			getModelRole: (role: string) => (role === "slow" ? "anthropic/claude-opus-4-8" : undefined),
+		} as unknown as Settings;
+		const q = createExtensionModelQuery(registry(), settings, () => undefined);
+		expect(q.resolve("pi/slow")).toBe(claude);
+	});
+
 	test("family() groups a vendor's point releases and separates vendors", () => {
 		const q = createExtensionModelQuery(registry(), undefined, () => undefined);
 		expect(q.family(claude)).toBe(q.family(claudePrev));
 		expect(q.family(claude)).not.toBe(q.family(gpt));
 	});
 
-	test("supports cross-family reviewer selection (the second-opinion use case)", () => {
-		const q = createExtensionModelQuery(registry(), undefined, () => claude);
-		const current = q.current();
-		expect(current).toBeDefined();
-		const reviewer = q.list().find(m => q.family(m) !== q.family(current as Model<Api>));
-		expect(reviewer).toBe(gpt);
+	test("family() folds an opaque proxy id onto its canonical lineage", () => {
+		// "proxy-xyz-1" classifies to no family on its own; canonical resolution maps it
+		// onto claude-opus-4-8, so it must group with Claude rather than its own provider.
+		const proxy = model("proxy-xyz-1", "Proxy Claude", "someproxy") as Model<Api>;
+		const reg = {
+			getAvailable: () => available,
+			getCanonicalId: (m: Model<Api>) => (m === proxy ? "claude-opus-4-8" : m.id),
+		} as unknown as ModelRegistry;
+		const q = createExtensionModelQuery(reg, undefined, () => undefined);
+		expect(q.family(proxy)).toBe(q.family(claude));
 	});
 });
