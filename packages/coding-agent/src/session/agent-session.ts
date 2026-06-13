@@ -1084,6 +1084,7 @@ export class AgentSession {
 	// both #endInFlight (normal) and #resetInFlight (abort).
 	#pendingAgentEndEmit: AgentSessionEvent | undefined;
 	#resumingQueuedMessages = false;
+	#queuedMessageFlushStartPromise: Promise<{ continuation: Promise<void> | undefined }> | undefined;
 	#obfuscator: SecretObfuscator | undefined;
 	#checkpointState: CheckpointState | undefined = undefined;
 	#pendingRewindReport: string | undefined = undefined;
@@ -5510,17 +5511,58 @@ export class AgentSession {
 	 * messages drain instead of waiting for another natural turn boundary.
 	 */
 	async interruptAndFlushQueuedMessages(options?: { reason?: string }): Promise<void> {
+		const existingStart = this.#queuedMessageFlushStartPromise;
+		if (existingStart) {
+			const { continuation } = await existingStart;
+			await continuation;
+			return;
+		}
 		if (!this.agent.hasQueuedMessages()) return;
+
+		const start = this.#beginQueuedMessageFlush(options);
+		this.#queuedMessageFlushStartPromise = start;
+		let continuation: Promise<void> | undefined;
+		try {
+			({ continuation } = await start);
+		} finally {
+			if (this.#queuedMessageFlushStartPromise === start) {
+				this.#queuedMessageFlushStartPromise = undefined;
+			}
+		}
+		await continuation;
+	}
+
+	async #beginQueuedMessageFlush(options?: { reason?: string }): Promise<{ continuation: Promise<void> | undefined }> {
+		if (!this.agent.hasQueuedMessages()) return { continuation: undefined };
 		this.#resumingQueuedMessages = true;
 		try {
 			await this.abort({ reason: options?.reason });
-			if (!this.agent.hasQueuedMessages()) return;
-			if (this.isCompacting || this.isGeneratingHandoff) return;
+			if (!this.agent.hasQueuedMessages()) return { continuation: undefined };
 			await this.#maybeRestoreRetryFallbackPrimary();
-			this.#resumingQueuedMessages = false;
-			await this.agent.continue();
+			if (!this.agent.hasQueuedMessages()) return { continuation: undefined };
+			const continuation = this.#continueQueuedMessagesWithIdleRetry();
+			return { continuation };
 		} finally {
 			this.#resumingQueuedMessages = false;
+		}
+	}
+
+	async #continueQueuedMessagesWithIdleRetry(): Promise<void> {
+		const deadline = Date.now() + 30_000;
+		for (;;) {
+			if (!this.agent.hasQueuedMessages()) return;
+			try {
+				await this.agent.continue();
+				return;
+			} catch (err) {
+				if (!(err instanceof AgentBusyError)) {
+					throw err;
+				}
+				if (Date.now() >= deadline) {
+					throw new Error("Timed out waiting for prior agent run to finish before continuing queued messages.");
+				}
+				await this.agent.waitForIdle();
+			}
 		}
 	}
 

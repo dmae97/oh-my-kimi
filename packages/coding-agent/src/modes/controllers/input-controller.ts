@@ -412,7 +412,14 @@ export class InputController {
 				const queuedMessages = this.ctx.session.getQueuedMessages();
 				if (queuedMessages.steering.length > 0) {
 					this.ctx.notifyInterrupting();
-					await this.ctx.session.interruptAndFlushQueuedMessages({ reason: USER_INTERRUPT_LABEL });
+					try {
+						await this.ctx.session.interruptAndFlushQueuedMessages({ reason: USER_INTERRUPT_LABEL });
+					} catch (error) {
+						logger.warn("queued steer interrupt failed", {
+							error: error instanceof Error ? error.message : String(error),
+						});
+						this.ctx.showError(error instanceof Error ? error.message : String(error));
+					}
 					this.ctx.updatePendingMessagesDisplay();
 					this.ctx.ui.requestRender();
 					return;
@@ -696,7 +703,14 @@ export class InputController {
 		if (!text) {
 			// Mirror the empty-submit steer flush against the focused session.
 			if (target.isStreaming && target.getQueuedMessages().steering.length > 0) {
-				await target.interruptAndFlushQueuedMessages({ reason: USER_INTERRUPT_LABEL });
+				try {
+					await target.interruptAndFlushQueuedMessages({ reason: USER_INTERRUPT_LABEL });
+				} catch (error) {
+					logger.warn("focused queued steer interrupt failed", {
+						error: error instanceof Error ? error.message : String(error),
+					});
+					this.ctx.showError(error instanceof Error ? error.message : String(error));
+				}
 				this.ctx.updatePendingMessagesDisplay();
 				this.ctx.ui.requestRender();
 			}

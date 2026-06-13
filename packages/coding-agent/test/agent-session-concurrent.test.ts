@@ -226,6 +226,152 @@ describe("AgentSession concurrent prompt guard", () => {
 		).toBe(true);
 		expect(session.getQueuedMessages()).toEqual({ steering: [], followUp: [] });
 	});
+	it("coalesces repeated interrupt-and-flush requests for one queued steer", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const callMessages: Message[][] = [];
+
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: {
+				model,
+				systemPrompt: ["Test"],
+				tools: [],
+			},
+			convertToLlm,
+			streamFn: (_model, context, options) => {
+				const callIndex = callMessages.length;
+				callMessages.push([...context.messages]);
+				const stream = new AssistantMessageEventStream();
+				queueMicrotask(() => {
+					stream.push({ type: "start", partial: createAssistantMessage("") });
+					if (callIndex > 0) {
+						stream.push({ type: "done", reason: "stop", message: createAssistantMessage("Handled steer") });
+					}
+				});
+				options?.signal?.addEventListener(
+					"abort",
+					() => {
+						stream.push({
+							type: "error",
+							reason: "aborted",
+							error: createAssistantMessage("Interrupted"),
+						});
+					},
+					{ once: true },
+				);
+				return stream;
+			},
+		});
+
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated();
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth-interrupt-flush-repeat.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models-interrupt-flush-repeat.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		session = new AgentSession({
+			agent,
+			sessionManager,
+			settings,
+			modelRegistry,
+		});
+
+		const firstPrompt = session.prompt("First message").catch(() => {});
+		await waitFor(() => session.isStreaming && callMessages.length === 1);
+
+		await session.steer("Send this once");
+		expect(session.getQueuedMessages().steering).toEqual(["Send this once"]);
+
+		const flushes = Array.from({ length: 6 }, () =>
+			session.interruptAndFlushQueuedMessages({ reason: "Interrupted by user" }),
+		);
+		await expect(Promise.all(flushes)).resolves.toEqual([
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+		]);
+		await firstPrompt;
+
+		expect(callMessages).toHaveLength(2);
+		const resumedCall = callMessages[1];
+		expect(
+			resumedCall?.some(message => {
+				if (typeof message.content === "string") {
+					return message.content.includes("Send this once");
+				}
+
+				return message.content.some(content => content.type === "text" && content.text.includes("Send this once"));
+			}),
+		).toBe(true);
+		expect(session.getQueuedMessages()).toEqual({ steering: [], followUp: [] });
+	});
+	it("does not resume when the queued steer is cleared during interrupt-and-flush", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const callMessages: Message[][] = [];
+
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: {
+				model,
+				systemPrompt: ["Test"],
+				tools: [],
+			},
+			convertToLlm,
+			streamFn: (_model, context, options) => {
+				callMessages.push([...context.messages]);
+				const stream = new AssistantMessageEventStream();
+				queueMicrotask(() => {
+					stream.push({ type: "start", partial: createAssistantMessage("") });
+				});
+				options?.signal?.addEventListener(
+					"abort",
+					() => {
+						stream.push({
+							type: "error",
+							reason: "aborted",
+							error: createAssistantMessage("Interrupted"),
+						});
+					},
+					{ once: true },
+				);
+				return stream;
+			},
+		});
+
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated();
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth-interrupt-flush-clear.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models-interrupt-flush-clear.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		session = new AgentSession({
+			agent,
+			sessionManager,
+			settings,
+			modelRegistry,
+		});
+
+		const firstPrompt = session.prompt("First message").catch(() => {});
+		await waitFor(() => session.isStreaming && callMessages.length === 1);
+
+		await session.steer("Restore this to the editor instead");
+		const abort = session.abort.bind(session);
+		vi.spyOn(session, "abort").mockImplementation(async options => {
+			await abort(options);
+			session.clearQueue();
+		});
+
+		await expect(session.interruptAndFlushQueuedMessages({ reason: "Interrupted by user" })).resolves.toBeUndefined();
+		await firstPrompt;
+
+		expect(callMessages).toHaveLength(1);
+		expect(session.getQueuedMessages()).toEqual({ steering: [], followUp: [] });
+	});
 
 	it("delivers queued steering after interrupting mid-tool execution (queue survives external abort)", async () => {
 		// Regression: pressing Enter with a queued steer while a tool was running

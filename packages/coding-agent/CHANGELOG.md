@@ -21,6 +21,7 @@
 
 ### Fixed
 
+- Fixed empty-Enter steering injection so repeated submits coalesce into one interrupt/resume cycle instead of racing `agent.continue()` and surfacing `AgentBusyError`; failed flushes are now reported in the TUI instead of becoming unhandled rejections.
 - Fixed model auth gateway probing to avoid skipping candidates with unknown `maxTokens` limits (`null`)
 - Fixed model listings so providers registered via extensions are now included from `-e` and configured `extensions` sources
 - Fixed `/mcp reauth`, `/mcp test`, and `/mcp unauth` to find and operate on MCP servers reported by `/mcp list` even when they are only runtime-discovered and not stored in writable config, including namespaced plugin servers like `cloudflare:cloudflare-api`

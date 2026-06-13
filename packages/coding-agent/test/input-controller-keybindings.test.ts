@@ -149,6 +149,8 @@ async function createContext() {
 		showModelSelector,
 		updateEditorBorderColor: vi.fn(),
 		hasActiveBtw: vi.fn(() => false),
+		notifyInterrupting: vi.fn(),
+		showError: vi.fn(),
 	} as unknown as InteractiveModeContext;
 
 	return {
