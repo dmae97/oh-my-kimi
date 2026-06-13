@@ -1057,6 +1057,7 @@ const ZHIPU_REASONING_MODELS: Readonly<Record<string, true>> = {
 	"glm-5": true,
 	"glm-5-turbo": true,
 	"glm-5.1": true,
+	"glm-5.2": true,
 };
 
 // Vision-capable GLM models follow the `glm-<N>[.<N>]v[-<variant>]` shape

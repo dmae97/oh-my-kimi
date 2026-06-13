@@ -109,6 +109,23 @@ describe("generated model policies", () => {
 		});
 	});
 
+	it("pins zai glm-5.2 base id to 1M context", () => {
+		const models = [
+			createSpec({
+				id: "glm-5.2",
+				api: "anthropic-messages",
+				provider: "zai",
+				contextWindow: 200_000,
+				maxTokens: 8192,
+			}),
+		];
+
+		applyGeneratedModelPolicies(models);
+
+		expect(models[0]?.contextWindow).toBe(1_000_000);
+		expect(models[0]?.maxTokens).toBe(131_072);
+	});
+
 	it("normalizes Copilot generated fallback limits", () => {
 		const models: ModelSpec<Api>[] = [
 			createSpec({

@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added GLM-5.2 to the bundled zai (GLM Coding Plan) catalog as the selectable 1M served model.
+
+### Changed
+
+- Pinned zai `glm-5.2` to 1M context during catalog generation so endpoint discovery and older fallbacks cannot regress it to 200k.
+
 ## [15.12.4] - 2026-06-13
 
 ### Added

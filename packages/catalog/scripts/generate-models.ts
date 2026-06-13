@@ -276,6 +276,20 @@ function applyFireworksDeepSeekReasoningShape(models: readonly ModelSpec[]): Mod
 	});
 }
 
+/**
+ * Z.AI's `/v1/models` advertises context-tier variants with a `[1m]` suffix
+ * (e.g. `glm-5.2[1m]`). That suffix is a Claude Code-side convention — Z.AI's
+ * own docs instruct users to append `[1m]` to enable 1M context *inside Claude
+ * Code* — but the inference endpoint rejects the bracketed id outright with
+ * `[1211][Unknown Model, please check the model code.]`. The base id
+ * (`glm-5.2`) already carries the full 1M context window (pinned by
+ * {@link applyGeneratedModelPolicy}), so drop the unusable bracketed siblings
+ * from the bundled catalog rather than ship a model that 400s on first use.
+ */
+function dropUnusableZaiContextTierIds(models: readonly ModelSpec[]): ModelSpec[] {
+	return models.filter(model => !(model.provider === "zai" && model.id.endsWith("[1m]")));
+}
+
 const ANTIGRAVITY_ENDPOINT = "https://daily-cloudcode-pa.sandbox.googleapis.com";
 
 async function getOAuthAccessFromStorage(provider: OAuthProvider): Promise<OAuthAccess | null> {
@@ -463,6 +477,7 @@ async function generateModels() {
 	allModels = applyCodexPricingFallback(allModels);
 	allModels = applyFireworksKimiMaxTokensCap(allModels);
 	allModels = applyFireworksDeepSeekReasoningShape(allModels);
+	allModels = dropUnusableZaiContextTierIds(allModels);
 	// Normalize display names: gateway author prefixes ("OpenAI: …"), alias
 	// markers ("(latest)"), provider attribution ("(Antigravity)"), and
 	// price/promo tags are model-extrinsic — strip them from the bundle.
