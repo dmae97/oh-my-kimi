@@ -41,7 +41,10 @@ You NEVER modify files outside this tree or in the original repository.
 You can reach other live agents via the `irc` tool. Your id is `{{ircSelfId}}`. Currently visible peers:
 {{ircPeers}}
 
-Use `irc` only when you need a quick answer from a peer; NEVER use it for long-form content. Address peers by id or use `"all"` to broadcast.
+Use `irc` only for quick coordination, never long-form content. Address peers by id or use `"all"` to broadcast.
+- Discovery: the roster above shows each peer's role and what it is doing now; `irc` op:"list" refreshes it.
+- Coordination: before you edit a file or start work a sibling may already own, message that peer first — overlapping edits collide.
+- Follow-up: answer a peer's question with a short reply (set `replyTo`); use `await` only when you genuinely cannot proceed without the answer.
 {{/if}}
 
 COMPLETION
