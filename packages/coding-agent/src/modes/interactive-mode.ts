@@ -210,6 +210,14 @@ const EDITOR_MAX_HEIGHT_MIN = 6;
 const EDITOR_MAX_HEIGHT_MAX = 18;
 const EDITOR_RESERVED_ROWS = 12;
 const EDITOR_FALLBACK_ROWS = 24;
+const EDITOR_MIN_CHROME_ROWS = 4; // rows reserved for transcript + status + chrome on tiny terms
+
+export function computeEditorMaxHeight(terminalRows: number): number {
+	const rows = Number.isFinite(terminalRows) && terminalRows > 0 ? terminalRows : EDITOR_FALLBACK_ROWS;
+	const desired = Math.max(EDITOR_MAX_HEIGHT_MIN, Math.min(EDITOR_MAX_HEIGHT_MAX, rows - EDITOR_RESERVED_ROWS));
+	// Never let the editor crowd out the rest of the UI on small terminals.
+	return Math.max(1, Math.min(desired, rows - EDITOR_MIN_CHROME_ROWS));
+}
 
 const HUD_NOTE_SUP_DIGITS: Record<string, string> = {
 	"0": "\u2070",
@@ -1156,10 +1164,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	#computeEditorMaxHeight(): number {
-		const rows = this.ui.terminal.rows;
-		const terminalRows = Number.isFinite(rows) && rows > 0 ? rows : EDITOR_FALLBACK_ROWS;
-		const maxHeight = terminalRows - EDITOR_RESERVED_ROWS;
-		return Math.max(EDITOR_MAX_HEIGHT_MIN, Math.min(EDITOR_MAX_HEIGHT_MAX, maxHeight));
+		return computeEditorMaxHeight(this.ui.terminal.rows);
 	}
 
 	#syncEditorMaxHeight(): void {

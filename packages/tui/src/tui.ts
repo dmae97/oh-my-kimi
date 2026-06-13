@@ -1902,11 +1902,8 @@ export class TUI extends Container {
 		width = Math.max(1, Math.min(width, availWidth));
 
 		// === Resolve maxHeight ===
-		let maxHeight = parseSizeValue(opt.maxHeight, termHeight);
-		// Clamp to available space
-		if (maxHeight !== undefined) {
-			maxHeight = Math.max(1, Math.min(maxHeight, availHeight));
-		}
+		let maxHeight = parseSizeValue(opt.maxHeight, termHeight) ?? availHeight;
+		maxHeight = Math.max(1, Math.min(maxHeight, availHeight));
 
 		// Effective overlay height (may be clamped by maxHeight)
 		const effectiveHeight = maxHeight !== undefined ? Math.min(overlayHeight, maxHeight) : overlayHeight;

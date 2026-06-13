@@ -140,6 +140,49 @@ describe("TUI overlays", () => {
 		expect(term.getScrollBuffer().length).toBeLessThan(200);
 	});
 
+	it("clamps tall overlays without an explicit maxHeight to the available rows", async () => {
+		const term = new VirtualTerminal(80, 24);
+		const tui = new TUI(term);
+
+		tui.addChild(new LineComponent("base-", 3));
+
+		tui.start();
+		await flushRender(term);
+
+		// A bottom margin reserves rows the overlay must NOT paint into. The overlay
+		// has no explicit maxHeight, so before the fix it rendered all 40 lines and
+		// the compositor only skipped rows past the terminal edge — ov-0..ov-(rows-1)
+		// were painted, including the reserved bottom band. The maxHeight=availHeight
+		// default slices the overlay to availHeight = rows - marginBottom.
+		const marginBottom = 6;
+		tui.showOverlay(new LineComponent("ov-", 40), { anchor: "top-center", margin: { bottom: marginBottom } });
+		await flushRender(term);
+
+		const maxVisibleOverlayIndex = (): number => {
+			let max = -1;
+			for (const line of term.getViewport()) {
+				const match = line.trim().match(/^ov-(\d+)$/);
+				if (!match) continue;
+				max = Math.max(max, Number.parseInt(match[1], 10));
+			}
+			return max;
+		};
+
+		// availHeight = 24 - 6 = 18 → overlay sliced to ov-0..ov-17, nothing in the
+		// reserved bottom 6 rows. The old unclamped behavior surfaced ov-18..ov-23.
+		expect(maxVisibleOverlayIndex()).toBeGreaterThanOrEqual(0);
+		expect(maxVisibleOverlayIndex()).toBeLessThan(24 - marginBottom);
+
+		term.resize(80, 10);
+		await settleResize(term);
+
+		// availHeight = 10 - 6 = 4 → overlay re-clamped to ov-0..ov-3.
+		expect(maxVisibleOverlayIndex()).toBeGreaterThanOrEqual(0);
+		expect(maxVisibleOverlayIndex()).toBeLessThan(10 - marginBottom);
+
+		tui.stop();
+	});
+
 	it("clears stale viewport content on launch", async () => {
 		const term = new VirtualTerminal(40, 4);
 		term.write("shell-0\r\nshell-1\r\nshell-2\r\nshell-3\r\nshell-4\r\n");

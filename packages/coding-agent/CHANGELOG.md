@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the editor input box claiming a disproportionate share of small terminals (<=18 rows): the editor max-height floor (6 rows) ignored the available space. The height now yields to terminal size (`EDITOR_MIN_CHROME_ROWS`), always reserving rows for the transcript and status line.
+
 ## [15.12.5] - 2026-06-13
 ### Changed
 
