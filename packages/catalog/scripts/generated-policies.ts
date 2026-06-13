@@ -184,6 +184,13 @@ function applyGeneratedModelPolicy(model: ModelSpec<Api>): void {
 		model.maxTokens = copilotLimits.maxTokens;
 	}
 
+	// GLM Coding Plan (zai): Z.AI docs advertise 1M context for GLM-5.2; discovery
+	// and models.dev can report 200k until upstream metadata catches up.
+	if (model.provider === "zai" && (model.id === "glm-5.2" || model.id === "glm-5.2[1m]")) {
+		model.contextWindow = 1_000_000;
+		model.maxTokens = 131_072;
+	}
+
 	if (
 		model.api === "openai-completions" &&
 		(model.provider === "minimax-code" || model.provider === "minimax-code-cn")

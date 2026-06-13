@@ -12,6 +12,7 @@
 ### Changed
 
 - Replaced the OpenAI SDK client usage in `openai-completions`, `openai-responses`, `azure-openai-responses`, and `openai-codex-responses` with the new internal `postOpenAIStream` OpenAI-wire JSON/SSE transport
+- Bumped Z.AI (GLM Coding Plan) API key validation probe to glm-5.2.
 
 ### Fixed
 

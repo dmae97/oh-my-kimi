@@ -29,6 +29,7 @@ import { PROVIDER_DESCRIPTORS } from "../src/provider-models/descriptors";
 import {
 	ANTHROPIC_CURATED_FALLBACK_MODELS,
 	buildXaiOAuthStaticSeed,
+	buildZaiCodingPlanStaticSeed,
 	clampFireworksKimiMaxTokens,
 	isFireworksKimiK2ModelId,
 	MODELS_DEV_PROVIDER_DESCRIPTORS,
@@ -408,6 +409,7 @@ async function generateModels() {
 	// release but that models.dev has not catalogued yet (e.g. Claude Fable 5 /
 	// Mythos 5). Deduped behind upstream entries; metadata is pinned in
 	// applyAnthropicCatalogPolicy.
+	allModels.push(...buildZaiCodingPlanStaticSeed());
 	allModels.push(...ANTHROPIC_CURATED_FALLBACK_MODELS);
 
 	const specialDiscoverySources = [
