@@ -27,6 +27,9 @@
 - Added `--json` output plus `-e/--extension`, `--no-extensions`, and `--config` controls to `omp models` listings
 - Added `skills.enableAgentsUser` and `skills.enableAgentsProject` settings (default on) so the canonical OMP-native `~/.agent[s]/skills` and project-walkup `.agent[s]/skills` are configurable independently from the third-party Claude/Codex/Pi toggles.
 
+
+- Added extension lifecycle events for tool approval prompts: `tool_approval_requested` before the approval wait and `tool_approval_resolved` after approve, deny, or approval prompt failure.
+
 ### Changed
 
 - Model registry merge and `omp models` / model picker handle unknown context/output limits (`null`) — unknown limits render as `-` instead of a fake `222K`/`8.9K`.
