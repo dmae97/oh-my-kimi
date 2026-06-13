@@ -1764,6 +1764,27 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 	}
 
+	/**
+	 * Idempotent post-compaction model transition for the plan-approval compact
+	 * path. The deferred pre-plan state is consumed on first application, so a
+	 * second call (the before-flush hook vs. the short-circuit fallback) is a
+	 * no-op. "failed" intentionally stays on the plan model — the context is
+	 * intact and we dispatch best-effort.
+	 */
+	async #applyDeferredPlanModelTransition(
+		outcome: CompactionOutcome | undefined,
+		executionModel: ResolvedRoleModel | undefined,
+	): Promise<void> {
+		const deferredPrev = this.#planModePreviousModelState;
+		if (deferredPrev === undefined || outcome === "failed") return;
+		this.#planModePreviousModelState = undefined;
+		if (executionModel) {
+			await this.#applyPlanExecutionModel(executionModel);
+		} else {
+			await this.#restorePlanPreviousModel(deferredPrev);
+		}
+	}
+
 	async #exitPlanMode(options?: { silent?: boolean; paused?: boolean; deferModelRestore?: boolean }): Promise<void> {
 		if (!this.planModeEnabled) {
 			return;
@@ -2173,7 +2194,9 @@ export class InteractiveMode implements InteractiveModeContext {
 				// the try/finally is idempotent and kept for the !compactBeforeExecute
 				// branch.
 				this.session.setPlanReferencePath(options.planFilePath);
-				compactOutcome = await this.handleCompactCommand(compactionPrompt);
+				compactOutcome = await this.handleCompactCommand(compactionPrompt, outcome =>
+					this.#applyDeferredPlanModelTransition(outcome, options.executionModel),
+				);
 			}
 		} finally {
 			// Unconditional clear. Idempotent: a no-op when the flag was never set
@@ -2190,36 +2213,31 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		this.session.setPlanReferencePath(options.planFilePath);
 
+		// Resolve the deferred plan-approval model transition. On the compact path
+		// the before-flush hook passed to handleCompactCommand already ran this (so
+		// any input queued during compaction executed on the post-compaction
+		// model); the re-run here is idempotent and covers the short-circuit where
+		// compaction never executed. It runs for "cancelled" too — the operator
+		// aborted only the compaction, not the approval — so the next turn no longer
+		// lands on the plan model. "failed" stays on the plan model (context
+		// intact) and dispatches best-effort.
+		if (options.compactBeforeExecute) {
+			await this.#applyDeferredPlanModelTransition(compactOutcome, options.executionModel);
+		} else {
+			await this.#applyPlanExecutionModel(options.executionModel);
+		}
+
 		if (compactOutcome === "cancelled") {
 			// Explicit abort: honor it. `executeCompaction` already surfaced
-			// `showError("Compaction cancelled")` to the operator; we add the
-			// deferred-dispatch warning and exit. `markPlanReferenceSent` is
-			// intentionally skipped here: `#planReferenceSent` stays false, so
-			// `AgentSession.#buildPlanReferenceMessage` will inject the plan
-			// reference on the operator's next `prompt()` call. If we marked it
-			// sent here, the executor's first turn would have no plan context.
+			// `showError("Compaction cancelled")`; we add the deferred-dispatch
+			// warning and exit without dispatching the synthetic plan-approved
+			// prompt. `markPlanReferenceSent` stays unset so
+			// `AgentSession.#buildPlanReferenceMessage` injects the plan reference
+			// on the operator's next `prompt()` call.
 			this.showWarning(
 				"Plan approved, but compaction was cancelled — execution not dispatched. Submit a turn to continue.",
 			);
 			return;
-		}
-
-		if (options.compactBeforeExecute) {
-			// We kept the plan model active through compaction (deferModelRestore) so the
-			// summarizer hit its warm cache. Switch only after a SUCCESSFUL compaction;
-			// on "failed" stay on the plan model (the context is intact) and dispatch
-			// best-effort. "cancelled" already returned above.
-			const deferredPrev = this.#planModePreviousModelState;
-			this.#planModePreviousModelState = undefined;
-			if (compactOutcome === "ok") {
-				if (options.executionModel) {
-					await this.#applyPlanExecutionModel(options.executionModel);
-				} else if (deferredPrev) {
-					await this.#restorePlanPreviousModel(deferredPrev);
-				}
-			}
-		} else {
-			await this.#applyPlanExecutionModel(options.executionModel);
 		}
 
 		// Approved plans land in a fresh (or compacted) session whose first user-visible
@@ -3324,8 +3342,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		await controller.handle(text);
 	}
 
-	handleCompactCommand(customInstructions?: string): Promise<CompactionOutcome> {
-		return this.#commandController.handleCompactCommand(customInstructions);
+	handleCompactCommand(
+		customInstructions?: string,
+		beforeFlush?: (outcome: CompactionOutcome) => void | Promise<void>,
+	): Promise<CompactionOutcome> {
+		return this.#commandController.handleCompactCommand(customInstructions, beforeFlush);
 	}
 
 	handleHandoffCommand(customInstructions?: string): Promise<void> {
