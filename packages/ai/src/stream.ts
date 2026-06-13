@@ -557,7 +557,16 @@ export async function completeSimple<TApi extends Api>(
 }
 
 const MIN_OUTPUT_TOKENS = 1024;
+// Fallback total output cap for models whose catalog entry has no maxTokens.
 const OUTPUT_CAP_WHEN_UNKNOWN = 64_000;
+function maxTokensWithThinkingBudget(
+	baseMaxTokens: number | undefined,
+	modelMaxTokens: number | null,
+	thinkingBudget: number,
+): number {
+	const uncappedMaxTokens = baseMaxTokens === undefined ? OUTPUT_CAP_WHEN_UNKNOWN : baseMaxTokens + thinkingBudget;
+	return Math.min(uncappedMaxTokens, modelMaxTokens ?? Number.POSITIVE_INFINITY);
+}
 export const OUTPUT_FALLBACK_BUFFER = 4000;
 const ANTHROPIC_USE_INTERLEAVED_THINKING = Bun.env.PI_NO_INTERLEAVED_THINKING !== "1";
 
@@ -785,11 +794,8 @@ function mapOptionsForApi<TApi extends Api>(
 				});
 			}
 
-			// Caller's maxTokens is the desired output; add thinking budget on top, capped at model limit
-			const maxTokens = Math.min(
-				(base.maxTokens || 0) + thinkingBudget,
-				model.maxTokens ?? Number.POSITIVE_INFINITY,
-			);
+			// Caller's maxTokens is desired output, so add thinking budget on top. With no caller/model cap, use a finite total fallback.
+			const maxTokens = maxTokensWithThinkingBudget(base.maxTokens, model.maxTokens, thinkingBudget);
 
 			// If not enough room for thinking + output, reduce thinking budget
 			if (maxTokens <= thinkingBudget) {
@@ -949,11 +955,8 @@ function mapOptionsForApi<TApi extends Api>(
 
 				let thinkingBudget = options.thinkingBudgets?.[effort] ?? GOOGLE_THINKING[effort];
 
-				// Caller's maxTokens is the desired output; add thinking budget on top, capped at model limit
-				const maxTokens = Math.min(
-					(base.maxTokens || 0) + thinkingBudget,
-					model.maxTokens ?? Number.POSITIVE_INFINITY,
-				);
+				// Caller's maxTokens is desired output, so add thinking budget on top. With no caller/model cap, use a finite total fallback.
+				const maxTokens = maxTokensWithThinkingBudget(base.maxTokens, model.maxTokens, thinkingBudget);
 
 				// If not enough room for thinking + output, reduce thinking budget
 				if (maxTokens <= thinkingBudget) {

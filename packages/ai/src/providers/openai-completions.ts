@@ -1240,7 +1240,7 @@ function buildParams(
 	// output) and the official guidance requires sending it on every call —
 	// `compat.alwaysSendMaxTokens` carries that detection.
 	const requestedMaxTokens =
-		options?.maxTokens ?? (compat.alwaysSendMaxTokens ? (model.maxTokens ?? undefined) : undefined);
+		options?.maxTokens ?? (compat.alwaysSendMaxTokens ? (model.maxTokens ?? OPENAI_MAX_OUTPUT_TOKENS) : undefined);
 	// OpenRouter fans out to upstreams whose output caps differ from the catalog
 	// value (which tracks the highest-cap provider). A max_tokens above the routed
 	// upstream's cap makes OpenRouter silently skip that provider (e.g. Cerebras

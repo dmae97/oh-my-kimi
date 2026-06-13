@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -1834,7 +1835,7 @@ describe("ModelRegistry", () => {
 		});
 	});
 
-	test("cached discovery with UNK contextWindow preserves bundled value", () => {
+	test("legacy cached discovery sentinels are ignored after nullable limit cutover", () => {
 		// Configure openai as a discoverable provider through models.json
 		writeRawModelsJson({
 			openai: {
@@ -1845,8 +1846,9 @@ describe("ModelRegistry", () => {
 				models: [],
 			},
 		});
-		// Pre-populate the cache with a model that has UNK sentinel values
-		// (simulating a discovery that didn't return limit.context)
+		// Pre-populate a legacy cache row with the retired sentinel values from
+		// schema v5. The schema bump should ignore this row rather than treating
+		// 222222/8888 as real discovered limits.
 		writeModelCache<"openai-completions">(
 			"openai",
 			Date.now(),
@@ -1860,22 +1862,29 @@ describe("ModelRegistry", () => {
 					reasoning: false,
 					input: ["text"],
 					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-					contextWindow: null, // unknown limit
-					maxTokens: null, // unknown limit
+					contextWindow: 222_222,
+					maxTokens: 8_888,
 				}),
 			],
 			true,
+			"",
 			cacheDbPath,
 		);
+		const db = new Database(cacheDbPath);
+		try {
+			db.run("UPDATE model_cache SET version = 5 WHERE provider_id = ?", ["openai"]);
+		} finally {
+			db.close();
+		}
 		const registry = new ModelRegistry(authStorage, modelsJsonPath);
 		const model = registry.find("openai", "gpt-4o");
 
 		expect(model).toBeDefined();
-		// The bundled gpt-4o has a correct contextWindow, not the UNK sentinel
-		expect(model!.contextWindow).not.toBeNull();
+		// The bundled gpt-4o has correct limits, not the retired sentinels.
+		expect(model!.contextWindow).not.toBe(222_222);
 		expect(model!.contextWindow).toBeGreaterThan(100_000);
-		expect(model!.maxTokens).not.toBeNull();
-		expect(model!.maxTokens).toBeGreaterThan(1000);
+		expect(model!.maxTokens).not.toBe(8_888);
+		expect(model!.maxTokens).toBeGreaterThan(10_000);
 	});
 
 	test("loads cached standard provider discovery models on startup", () => {
