@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
 	isClaudeModelId,
+	isGlmVisionModelId,
 	isKimiK26ModelId,
 	isKimiModelId,
 	isMinimaxM2FamilyModelId,
 	isOpenAIGptOssModelId,
+	isReasoningGlmModelId,
 	supportsAdaptiveThinkingDisplay,
 } from "@oh-my-pi/pi-catalog/identity";
 
@@ -104,5 +106,47 @@ describe("isOpenAIGptOssModelId", () => {
 		expect(isOpenAIGptOssModelId("gpt-4.1-mini")).toBe(false);
 		expect(isOpenAIGptOssModelId("oss-llm")).toBe(false);
 		expect(isOpenAIGptOssModelId("MiniMax-M2.7")).toBe(false);
+	});
+});
+
+describe("isReasoningGlmModelId", () => {
+	test("matches the glm-4.5+ base / air / turbo reasoning lines", () => {
+		expect(isReasoningGlmModelId("glm-4.5")).toBe(true);
+		expect(isReasoningGlmModelId("glm-4.5-air")).toBe(true);
+		expect(isReasoningGlmModelId("glm-4.6")).toBe(true);
+		expect(isReasoningGlmModelId("glm-4.7")).toBe(true);
+		expect(isReasoningGlmModelId("glm-5")).toBe(true);
+		expect(isReasoningGlmModelId("glm-5-turbo")).toBe(true);
+		expect(isReasoningGlmModelId("glm-5.1")).toBe(true);
+		expect(isReasoningGlmModelId("glm-5.2")).toBe(true);
+		// Family match is future-proof: new integers need no allowlist entry.
+		expect(isReasoningGlmModelId("glm-5.3")).toBe(true);
+		expect(isReasoningGlmModelId("glm-6")).toBe(true);
+		// Namespaced ids are stripped before classification.
+		expect(isReasoningGlmModelId("z-ai/glm-5-turbo")).toBe(true);
+	});
+
+	test("excludes pre-4.5, vision, flash, and preview SKUs", () => {
+		expect(isReasoningGlmModelId("glm-4")).toBe(false);
+		expect(isReasoningGlmModelId("glm-4.4")).toBe(false);
+		expect(isReasoningGlmModelId("glm-5-preview")).toBe(false);
+		expect(isReasoningGlmModelId("glm-4.5-flash")).toBe(false);
+		expect(isReasoningGlmModelId("glm-4.7-flashx")).toBe(false);
+		expect(isReasoningGlmModelId("glm-4.5v")).toBe(false);
+		expect(isReasoningGlmModelId("qwen3.5")).toBe(false);
+	});
+});
+
+describe("isGlmVisionModelId", () => {
+	test("matches the `v` vision shape across versions and variants", () => {
+		expect(isGlmVisionModelId("glm-4v")).toBe(true);
+		expect(isGlmVisionModelId("glm-4.5v")).toBe(true);
+		expect(isGlmVisionModelId("glm-4v-plus")).toBe(true);
+	});
+
+	test("excludes non-vision GLM ids (the old `includes('v')` false positives)", () => {
+		expect(isGlmVisionModelId("glm-5-preview")).toBe(false);
+		expect(isGlmVisionModelId("glm-4.5")).toBe(false);
+		expect(isGlmVisionModelId("glm-5-turbo")).toBe(false);
 	});
 });

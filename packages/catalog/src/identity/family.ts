@@ -7,7 +7,7 @@
  * here.
  */
 
-import { bareModelId, isFableOrMythos, parseAnthropicModel, semverGte } from "./classify";
+import { bareModelId, isFableOrMythos, parseAnthropicModel, parseGlmModel, semverGte } from "./classify";
 
 /** Kimi family ids in any namespace form (`moonshotai/kimi-*`, `kimi-k2.6`, `vendor/kimi.x`). */
 export function isKimiModelId(modelId: string): boolean {
@@ -69,6 +69,29 @@ export function isMinimaxM2FamilyModelId(modelId: string): boolean {
  */
 export function isOpenAIGptOssModelId(modelId: string): boolean {
 	return /(^|\/)gpt-oss[-:]/i.test(modelId);
+}
+
+/**
+ * Reasoning-capable GLM coding SKUs: glm-4.5 and up on the base / `-air` /
+ * `-turbo` lines. Excludes the vision (`…v`) shape, the non-reasoning
+ * `-flash`/`-flashx`/`-preview` variants, and pre-4.5 ids. Matching the family
+ * keeps newly-bumped integers (`glm-5.3`, `glm-6`, …) covered without a per-id
+ * allowlist.
+ */
+export function isReasoningGlmModelId(modelId: string): boolean {
+	const glm = parseGlmModel(bareModelId(modelId));
+	if (!glm || glm.vision) {
+		return false;
+	}
+	if (glm.variant !== "base" && glm.variant !== "air" && glm.variant !== "turbo") {
+		return false;
+	}
+	return semverGte(glm.version, "4.5");
+}
+
+/** GLM vision SKUs — the `v` that attaches to the version (`glm-4v`, `glm-4.5v`). */
+export function isGlmVisionModelId(modelId: string): boolean {
+	return parseGlmModel(bareModelId(modelId))?.vision === true;
 }
 
 /**
