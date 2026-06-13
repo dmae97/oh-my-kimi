@@ -332,6 +332,7 @@ export interface InteractiveModeContext {
 	registerExtensionShortcuts(): void;
 	handlePlanModeCommand(initialPrompt?: string): Promise<void>;
 	handleGoalModeCommand(rest?: string): Promise<void>;
+	handleGuidedGoalCommand(rest?: string): Promise<void>;
 	handleLoopCommand(args?: string): Promise<void>;
 	disableLoopMode(): void;
 	pauseLoop(): void;
