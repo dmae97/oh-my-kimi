@@ -343,4 +343,30 @@ describe("auth-gateway openai-chat: encodeStream", () => {
 		const payloads = lines.map(parseSseLine) as Array<Record<string, unknown>>;
 		expect(payloads[1]).toEqual({ error: { message: "upstream went away", type: "upstream_error" } });
 	});
+
+	it("aborts the upstream gateway request when the client cancels the response body", async () => {
+		const aborted: unknown[] = [];
+		async function* neverEndingEvents() {
+			await new Promise(() => {});
+		}
+		const events = neverEndingEvents() as unknown as AssistantMessageEventStream;
+		(events as { result(): Promise<AssistantMessage> }).result = async () => emptyAssistant();
+		const requestController = new AbortController();
+		const stream = encodeStream(events, "gpt-test", undefined, {
+			signal: requestController.signal,
+			onCancel(reason) {
+				aborted.push(reason);
+				requestController.abort(reason);
+			},
+		});
+		const reader = stream.getReader();
+
+		const firstChunk = await reader.read();
+		expect(firstChunk.done).toBe(false);
+		await reader.cancel("client timeout");
+
+		expect(aborted).toEqual(["client timeout"]);
+		expect(requestController.signal.aborted).toBe(true);
+		expect(requestController.signal.reason).toBe("client timeout");
+	});
 });

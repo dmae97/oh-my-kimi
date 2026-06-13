@@ -94,7 +94,7 @@ interface ViewportOptions {
 	deviceScaleFactor?: number;
 }
 
-const PAGE_SELECTOR_HELPERS = String.raw`
+const PAGE_SELECTOR_HELPERS = `
 const isVisible = element => {
 	const style = getComputedStyle(element);
 	const rect = element.getBoundingClientRect();
