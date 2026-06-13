@@ -199,19 +199,13 @@ function factExpandedTokenGroups(query: string, content: string): string[][] {
 	const contentTokens = new Set(tokenize(contentLower));
 	const groups: string[][] = [];
 	for (const token of tokenize(query)) {
-		if (
-			FACT_QUERY_FILLER_WORDS.has(token) &&
-			(FACT_CLITIC_FRAGMENTS.has(token) || !contentMatchesToken(contentLower, contentTokens, token))
-		) {
+		if (FACT_QUERY_FILLER_WORDS.has(token) && (FACT_CLITIC_FRAGMENTS.has(token) || !contentTokens.has(token))) {
 			continue;
 		}
 		const seen = new Set<string>();
 		for (const variant of recallSynonyms(token, true)) {
 			for (const part of tokenize(variant)) {
-				if (
-					!FACT_QUERY_FILLER_WORDS.has(part) ||
-					(!FACT_CLITIC_FRAGMENTS.has(part) && contentMatchesToken(contentLower, contentTokens, part))
-				) {
+				if (!FACT_QUERY_FILLER_WORDS.has(part) || (!FACT_CLITIC_FRAGMENTS.has(part) && contentTokens.has(part))) {
 					seen.add(part);
 				}
 			}

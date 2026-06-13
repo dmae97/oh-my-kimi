@@ -323,6 +323,26 @@ describe("beam recall free functions", () => {
 		expect(results[0]?.id).toBe("fact-us");
 	});
 
+	it("does not preserve filler tokens through substring matches", async () => {
+		const beam = makeBeam();
+		beam.db.run(
+			"INSERT INTO facts (fact_id, session_id, subject, predicate, object, timestamp, confidence) VALUES (?, ?, ?, ?, ?, ?, ?)",
+			["fact-my", beam.sessionId, "my", "birthday", "June 1", "2026-05-30T00:00:00.000Z", 0.1],
+		);
+		beam.db.run(
+			"INSERT INTO facts (fact_id, session_id, subject, predicate, object, timestamp, confidence) VALUES (?, ?, ?, ?, ?, ?, ?)",
+			["fact-amy", beam.sessionId, "Amy", "birthday", "June 2", "2026-05-30T00:00:00.000Z", 1.0],
+		);
+
+		const results = await recallEnhanced(beam, "what is my birthday", 1, {
+			includeFacts: true,
+			queryEmbedding: null,
+			useMmr: false,
+		});
+
+		expect(results[0]?.id).toBe("fact-my");
+	});
+
 	it("keeps exact working-memory hits above weak matching facts in enhanced recall", async () => {
 		const beam = makeBeam();
 		insertWorking(
