@@ -1,35 +1,45 @@
 # open-multi-agent-kit
 
-> Provider-neutral multi-agent orchestration harness for OMK-managed coding agents.
+> OMK is an evidence-gated control plane for AI coding agents. It routes coding tasks into scoped DAG lanes, limits provider authority, requires evidence before completion, and saves replayable artifacts under `.omk/runs/`.
 
-## What is open-multi-agent-kit?
+OMK is useful for developers running Codex, Claude Code, OpenCode, DeepSeek, Qwen, OpenRouter, MiMo, optional Kimi-compatible adapters, or local LLMs in the same repository.
 
-open-multi-agent-kit (OMK) is an open-source CLI tool that turns agent CLIs and model APIs into a parallel, multi-role coding team. OMK is the root orchestrator: it assigns provider lanes, skills, hooks, MCP scope, real-time quality gates, Git worktree-based isolated agent workspaces, local graph memory, and built-in MCP / LSP integration.
+## Core docs
 
-## Key Features
+- [README](https://github.com/dmae97/open-multi-agent-kit): Installation, quick start, and project overview.
+- [What is OMK?](https://github.com/dmae97/open-multi-agent-kit/blob/main/docs/what-is-omk.md): Canonical definition and use cases.
+- [Evidence-gated coding agents](https://github.com/dmae97/open-multi-agent-kit/blob/main/docs/use-cases/evidence-gated-coding-agents.md): How OMK requires evidence before completion.
+- [Provider routing for AI coding](https://github.com/dmae97/open-multi-agent-kit/blob/main/docs/use-cases/provider-routing-for-ai-coding.md): How OMK routes Codex, OpenCode, DeepSeek, and local models.
+- [Scoped MCP for coding agents](https://github.com/dmae97/open-multi-agent-kit/blob/main/docs/use-cases/scoped-mcp-for-coding-agents.md): Project-scoped MCP and tool authority.
+- [Replayable agent runs](https://github.com/dmae97/open-multi-agent-kit/blob/main/docs/use-cases/replayable-agent-runs.md): The `.omk/runs/` artifacts.
+- [No-Kimi mode](https://github.com/dmae97/open-multi-agent-kit/blob/main/docs/use-cases/no-kimi-mode.md): Running OMK without Kimi.
+- [OMK claims and evidence](https://github.com/dmae97/open-multi-agent-kit/blob/main/docs/claims.md): Claim, status, evidence, and verification command for each capability.
 
-- **Multi-Agent Orchestration** — Run planner, coder, reviewer, QA, and security agents in parallel via Git worktrees
-- **DESIGN.md Integration** — Generate UI from Google DESIGN.md standards
-- **Real-Time Quality Gates** — Automated lint, typecheck, test, and build verification
-- **Live HUD / Cockpit** — Terminal dashboard for monitoring parallel agent execution
-- **Local Graph Memory** — Project/session memory stored in `.omk/memory/graph-state.json` with optional Neo4j/Kuzu backends
-- **MCP & LSP Integration** — Seamless Model Context Protocol servers and bundled TypeScript language server
-- **16 Built-in Agent Roles** — planner, coder, reviewer, qa, security, architect, explorer, tester, docs, merger, release, integrator, interviewer, researcher, vision-debugger
+## Comparisons
+
+- [OMK vs Codex](https://github.com/dmae97/open-multi-agent-kit/blob/main/docs/comparisons/omk-vs-codex.md)
+- [OMK vs Claude Code](https://github.com/dmae97/open-multi-agent-kit/blob/main/docs/comparisons/omk-vs-claude-code.md)
+- [OMK vs OpenCode](https://github.com/dmae97/open-multi-agent-kit/blob/main/docs/comparisons/omk-vs-opencode.md)
+- [OMK vs MCP agent frameworks](https://github.com/dmae97/open-multi-agent-kit/blob/main/docs/comparisons/omk-vs-mcp-agent.md)
 
 ## Install
 
 ```bash
 npm install -g open-multi-agent-kit
+omk init
+omk doctor
+omk do "review this repo for release risk" --dry-run --json
 ```
 
-## Quick Start
+## Key terms
 
-```bash
-omk init      # Scaffold project
-omk doctor    # Verify environment
-omk chat      # Start interactive OMK session
-omk hud       # Launch live dashboard
-```
+- evidence-gated coding agents
+- AI coding agent control plane
+- scoped DAG runner
+- MCP orchestration for coding agents
+- provider authority and routing
+- replayable agent runs
+- local-first coding agent runtime
 
 ## Repository
 
