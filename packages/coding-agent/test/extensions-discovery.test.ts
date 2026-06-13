@@ -152,6 +152,32 @@ describe("extensions discovery", () => {
 		expect(result.extensions[0].path).toContain("linked-package/src/main.ts");
 	});
 
+	it("discovers index.ts in a symlinked extension directory", async () => {
+		const packageDir = path.join(tempDir.path(), "linked-index-ts");
+		fs.mkdirSync(packageDir);
+		fs.writeFileSync(path.join(packageDir, "index.ts"), extensionCode);
+		fs.symlinkSync(packageDir, path.join(extensionsDir, "linked-index-ts"), "dir");
+
+		const result = await discoverForTest();
+
+		expect(result.errors).toHaveLength(0);
+		expect(result.extensions).toHaveLength(1);
+		expect(result.extensions[0].path).toContain("linked-index-ts/index.ts");
+	});
+
+	it("discovers index.js in a symlinked extension directory", async () => {
+		const packageDir = path.join(tempDir.path(), "linked-index-js");
+		fs.mkdirSync(packageDir);
+		fs.writeFileSync(path.join(packageDir, "index.js"), extensionCode);
+		fs.symlinkSync(packageDir, path.join(extensionsDir, "linked-index-js"), "dir");
+
+		const result = await discoverForTest();
+
+		expect(result.errors).toHaveLength(0);
+		expect(result.extensions).toHaveLength(1);
+		expect(result.extensions[0].path).toContain("linked-index-js/index.js");
+	});
+
 	it("package.json can declare multiple extensions", async () => {
 		const subdir = path.join(extensionsDir, "my-package");
 		fs.mkdirSync(subdir);
