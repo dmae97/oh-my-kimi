@@ -438,6 +438,7 @@ export class AgentHubOverlayComponent extends Container {
 	#renderRow(ref: AgentRef, selected: boolean, width: number): string {
 		const cursor = selected ? theme.fg("accent", theme.nav.cursor) : " ";
 		const parts: string[] = [statusBadge(ref.status), theme.bold(replaceTabs(ref.id))];
+		parts.push(theme.fg("dim", replaceTabs(ref.displayName)));
 		parts.push(theme.fg("dim", ref.parentId ? `${ref.kind} · of ${ref.parentId}` : ref.kind));
 		const observed = this.#observableFor(ref.id);
 		const task = observed?.description ?? observed?.progress?.task;

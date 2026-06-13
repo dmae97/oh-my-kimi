@@ -310,7 +310,7 @@ function resolveSpawnItems(params: TaskParams): TaskItem[] {
 	if (Array.isArray(params.tasks) && params.tasks.length > 0) {
 		return params.tasks;
 	}
-	return [{ id: params.id, description: params.description, assignment: params.assignment }];
+	return [{ id: params.id, description: params.description, role: params.role, assignment: params.assignment }];
 }
 
 /**
@@ -324,6 +324,7 @@ function spawnParamsFor(params: TaskParams, item: TaskItem): TaskParams {
 	const spawn: TaskParams = { agent: params.agent };
 	if (item.id !== undefined) spawn.id = item.id;
 	if (item.description !== undefined) spawn.description = item.description;
+	if (item.role !== undefined) spawn.role = item.role;
 	if (item.assignment !== undefined) spawn.assignment = item.assignment;
 	if (params.context !== undefined) spawn.context = params.context;
 	if (item.isolated !== undefined) {
@@ -388,6 +389,9 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		if (typeof params.agent === "string") {
 			lines.push(`Agent: ${truncateForPrompt(params.agent)}`);
 		}
+		if (typeof params.role === "string" && params.role.trim()) {
+			lines.push(`Role: ${truncateForPrompt(params.role)}`);
+		}
 		if (typeof params.id === "string" && params.id.trim()) {
 			lines.push(`Task: ${truncateForPrompt(params.id)}`);
 		}
@@ -402,6 +406,9 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		if (firstTask) {
 			if (typeof firstTask.id === "string" && firstTask.id.trim()) {
 				lines.push(`Task: ${truncateForPrompt(firstTask.id)}`);
+			}
+			if (typeof firstTask.role === "string" && firstTask.role.trim()) {
+				lines.push(`Role: ${truncateForPrompt(firstTask.role)}`);
 			}
 			if (typeof firstTask.assignment === "string") {
 				lines.push(`Assignment:\n${truncateForPrompt(firstTask.assignment)}`);
@@ -1146,6 +1153,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				context: sharedContext,
 				planReference,
 				description: params.description,
+				role: params.role,
 				index: spawnIndex,
 				parentToolCallId: toolCallId,
 				detached,
