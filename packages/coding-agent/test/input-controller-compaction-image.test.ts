@@ -21,6 +21,7 @@ import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/inp
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { CompactionQueuedMessage, InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
+import type { RestoredQueuedMessage } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 
 beforeAll(() => {
 	initTheme();
@@ -39,7 +40,7 @@ function makeCtx(initialQueue: CompactionQueuedMessage[] = []) {
 		extensionRunner: undefined,
 		customCommands: [] as Array<{ command: { name: string } }>,
 		getQueuedMessages: () => ({ steering: [] as string[], followUp: [] as string[] }),
-		clearQueue: () => ({ steering: [] as string[], followUp: [] as string[] }),
+		clearQueue: () => ({ steering: [] as RestoredQueuedMessage[], followUp: [] as RestoredQueuedMessage[] }),
 		prompt: mock(async (text: string, opts?: PromptOpts): Promise<void> => {
 			promptCalls.push({ text, opts });
 		}),
@@ -155,7 +156,7 @@ describe("compaction queue Alt+Up restore", () => {
 			{ text: "compaction steer", mode: "steer", images: undefined },
 			{ text: "compaction followup", mode: "followUp", images: undefined },
 		]);
-		(session as unknown as { clearQueue: () => unknown }).clearQueue = () => ({
+		session.clearQueue = () => ({
 			steering: [{ text: "session steer" }],
 			followUp: [{ text: "session followup" }],
 		});
