@@ -5,13 +5,13 @@ interface BundledModel {
 	api: string;
 	provider: string;
 	baseUrl: string;
-	contextWindow: number;
-	maxTokens: number;
+	contextWindow: number | null;
+	maxTokens: number | null;
 }
 
 describe("zai bundled catalog", () => {
 	it("pins glm-5.2 base entry to 1M context", () => {
-		const zaiModels = (modelsJson as Record<string, Record<string, BundledModel>>).zai;
+		const zaiModels = modelsJson.zai as Record<string, BundledModel>;
 		const model = zaiModels["glm-5.2"];
 
 		expect(model).toBeDefined();
