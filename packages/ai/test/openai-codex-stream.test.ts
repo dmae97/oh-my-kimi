@@ -299,16 +299,17 @@ describe("openai-codex streaming", () => {
 		const context = createCodexTestContext();
 		const model = { ...createCodexTestModel("https://chatgpt.com/backend-api"), preferWebsockets: false };
 		let capturedBody: Record<string, unknown> | undefined;
-		global.fetch = vi.fn(async (_input: string | URL, init?: RequestInit) => {
+		const fetchMock = vi.fn(async (_input: string | URL, init?: RequestInit) => {
 			capturedBody = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
 			return new Response(createCompletedCodexSse("Hello"), {
 				status: 200,
 				headers: { "content-type": "text/event-stream" },
 			});
-		}) as unknown as typeof fetch;
+		});
 
 		const result = await streamOpenAICodexResponses(model, context, {
 			apiKey: token,
+			fetch: fetchMock as unknown as typeof fetch,
 			onPayload: async payload => ({
 				...(payload as Record<string, unknown>),
 				input: [{ role: "user", content: [{ type: "input_text", text: "replacement" }] }],

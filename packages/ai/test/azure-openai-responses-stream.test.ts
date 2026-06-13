@@ -97,7 +97,7 @@ describe("azure openai responses streaming", () => {
 
 	it("sends an async onPayload replacement body", async () => {
 		let capturedBody: Record<string, unknown> | undefined;
-		global.fetch = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+		const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
 			capturedBody = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
 			return createSseResponse([
 				{
@@ -113,13 +113,14 @@ describe("azure openai responses streaming", () => {
 					},
 				},
 			]);
-		}) as unknown as typeof fetch;
+		});
 
 		const result = await streamAzureOpenAIResponses(
 			azureModel,
 			{ messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }] },
 			{
 				apiKey: "test-key",
+				fetch: fetchMock as unknown as typeof fetch,
 				azureBaseUrl: azureModel.baseUrl,
 				azureApiVersion: "v1",
 				onPayload: async payload => ({
