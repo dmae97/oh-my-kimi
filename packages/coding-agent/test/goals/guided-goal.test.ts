@@ -171,6 +171,32 @@ describe("guided goal setup", () => {
 		expect(result).toEqual({ kind: "question", question: "What is done?", objective: "Ship the feature." });
 	});
 
+	it("obfuscates secrets in the transcript before the request and deobfuscates the echoed objective", async () => {
+		const obfuscator = {
+			hasSecrets: () => true,
+			obfuscate: (text: string) => text.replaceAll("SECRET123", "#S0#"),
+			deobfuscate: (text: string) => text.replaceAll("#S0#", "SECRET123"),
+		};
+		const session = { ...createSession(), obfuscator } as unknown as AgentSession;
+		const complete = spyOn(core, "instrumentedCompleteSimple").mockResolvedValue(
+			// The model echoes the obfuscated placeholder back inside its objective.
+			mockResponse({ kind: "ready", objective: "Rotate the key #S0# and redeploy." }) as never,
+		);
+
+		const result = await runGuidedGoalTurn(session, {
+			messages: [{ role: "user", content: "my api key is SECRET123, automate rotation" }],
+		});
+
+		// The provider never sees the raw secret — only the placeholder.
+		const sentContext = complete.mock.calls[0]?.[1] as { messages: Array<{ content: Array<{ text: string }> }> };
+		const sentText = sentContext.messages[0]!.content[0]!.text;
+		expect(sentText).not.toContain("SECRET123");
+		expect(sentText).toContain("#S0#");
+
+		// The objective is restored to the real secret before the goal starts.
+		expect(result).toEqual({ kind: "ready", objective: "Rotate the key SECRET123 and redeploy." });
+	});
+
 	it("salvages the latest guided objective when the turn cap ends on a question without one", async () => {
 		const harness = await createInteractiveGoalHarness();
 		try {

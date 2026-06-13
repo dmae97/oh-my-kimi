@@ -79,11 +79,16 @@ export async function runGuidedGoalTurn(
 	const userPrompt = prompt.render(guidedGoalInterviewPrompt, {
 		messages: options.messages.map(message => ({ label: message.role.toUpperCase(), content: message.content })),
 	});
+	// Secret obfuscation: route the user-authored transcript through the session obfuscator the
+	// same way normal turns do, so an API key / secret typed into the rough goal or an answer is
+	// never sent verbatim to the plan/slow provider. Deobfuscated again below before display/use.
+	const obfuscator = session.obfuscator;
+	const promptText = obfuscator?.hasSecrets() ? obfuscator.obfuscate(userPrompt) : userPrompt;
 	const response = await instrumentedCompleteSimple(
 		resolved.model,
 		{
 			systemPrompt: [prompt.render(guidedGoalSystemPrompt)],
-			messages: [{ role: "user", content: [{ type: "text", text: userPrompt }], timestamp: Date.now() }],
+			messages: [{ role: "user", content: [{ type: "text", text: promptText }], timestamp: Date.now() }],
 			tools: [RESPOND_TOOL],
 		},
 		{
@@ -103,13 +108,26 @@ export async function runGuidedGoalTurn(
 	}
 
 	const call = extractToolCall(response, RESPOND_TOOL_NAME);
+	let result: GuidedGoalTurnResult;
 	if (call) {
-		return parseGuidedGoalPayload(parseToolArguments(call.arguments));
+		result = parseGuidedGoalPayload(parseToolArguments(call.arguments));
+	} else {
+		const text = extractTextContent(response);
+		if (!text) {
+			throw new Error("guided goal returned an invalid response");
+		}
+		result = parseGuidedGoalPayload(parseJsonPayload(text));
 	}
 
-	const text = extractTextContent(response);
-	if (!text) {
-		throw new Error("guided goal returned an invalid response");
+	// Reverse the obfuscation: restore any secret placeholders the model echoed back before the
+	// question/objective is shown or the goal is started.
+	if (!obfuscator?.hasSecrets()) return result;
+	if (result.kind === "question") {
+		return {
+			kind: "question",
+			question: obfuscator.deobfuscate(result.question),
+			objective: result.objective !== undefined ? obfuscator.deobfuscate(result.objective) : undefined,
+		};
 	}
-	return parseGuidedGoalPayload(parseJsonPayload(text));
+	return { kind: "ready", objective: obfuscator.deobfuscate(result.objective) };
 }
