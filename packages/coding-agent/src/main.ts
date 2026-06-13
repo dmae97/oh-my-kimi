@@ -21,7 +21,7 @@ import {
 } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import { reset as resetCapabilities } from "./capability";
-import type { Args } from "./cli/args";
+import { type Args, reportUnrecognizedFlags } from "./cli/args";
 import { applyExtensionFlags, type ExtensionFlagSink } from "./cli/extension-flags";
 import { processFileArguments } from "./cli/file-processor";
 import { buildInitialMessage } from "./cli/initial-message";
@@ -1197,6 +1197,15 @@ export async function runRootCommand(
 			},
 		};
 		const initialArgs = applyExtensionFlags(extensionFlagSink, rawArgs) ?? parsedArgs;
+		// Fail fast on stale/typo flags (e.g. `omp --list-models`) now that we
+		// know the real extension flag set. Without this check the unrecognized
+		// token gets silently consumed and any following positional leaks as the
+		// initial prompt — kicking off a real LLM session, MCP connection, and
+		// tool calls (issue #2459). Exit code 2 matches the conventional
+		// "command line usage error" convention.
+		if (reportUnrecognizedFlags(initialArgs)) {
+			process.exit(2);
+		}
 		const processedFiles =
 			initialArgs.fileArgs.length > 0
 				? await logger.time("processFileArguments", () =>
