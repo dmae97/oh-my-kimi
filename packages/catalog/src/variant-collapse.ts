@@ -444,8 +444,8 @@ export function collapseEffortVariants<TSpec extends VariantSpecLike>(
 			name: family.name,
 			reasoning,
 			input,
-			contextWindow: Math.max(...memberSpecs.map(spec => spec.contextWindow)),
-			maxTokens: Math.max(...memberSpecs.map(spec => spec.maxTokens)),
+			contextWindow: maxOrNull(memberSpecs.map(spec => spec.contextWindow)),
+			maxTokens: maxOrNull(memberSpecs.map(spec => spec.maxTokens)),
 		};
 		// The default wire id is the highest-priority live member; omit when it
 		// equals the logical id (bare/thinking pairs) — `resolveWireModelId`
@@ -619,4 +619,9 @@ export function getVariantAliasSources(provider: Provider, modelId: string): rea
 	const table = VARIANT_COLLAPSE_TABLES[provider] ?? VARIANT_COLLAPSE_TABLES[provider.toLowerCase()];
 	if (!table) return [];
 	return getAliasIndex(table).reverse.get(modelId) ?? [];
+}
+
+function maxOrNull(values: ReadonlyArray<number | null>): number | null {
+	const known = values.filter((v): v is number => v != null);
+	return known.length ? Math.max(...known) : null;
 }

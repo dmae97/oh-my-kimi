@@ -870,7 +870,7 @@ async fn run_shell_command_segmented_chain(
 
 async fn run_shell_command_once(
 	session: &mut ShellSessionCore,
-	command: String,
+	mut command: String,
 	mut params: ExecutionParameters,
 	on_chunk: Option<mpsc::UnboundedSender<String>>,
 	cancel_token: CancellationToken,
@@ -933,6 +933,7 @@ async fn run_shell_command_once(
 			terminate_new_descendants(&baseline_descendants).await;
 		}
 	});
+	ensure_trailing_newline_for_heredoc(&mut command);
 	let source_info = SourceInfo::from("pi-natives:command");
 	let result = session
 		.shell
@@ -1094,10 +1095,12 @@ async fn run_shell_command_streams(
 			}
 		}
 	});
+	let mut command = options.command.clone();
+	ensure_trailing_newline_for_heredoc(&mut command);
 	let source_info = SourceInfo::from("pi-shell:streams");
 	let result = session
 		.shell
-		.run_string(options.command.clone(), &source_info, &params)
+		.run_string(command, &source_info, &params)
 		.await;
 
 	if cancel_token.is_cancelled() {
@@ -1406,6 +1409,13 @@ fn should_skip_env_var(key: &str) -> bool {
 			| "HOSTNAME"
 			| "HOSTTYPE"
 	)
+}
+
+fn ensure_trailing_newline_for_heredoc(command: &mut String) {
+	if command.ends_with('\n') || !command.as_bytes().windows(2).any(|window| window == b"<<") {
+		return;
+	}
+	command.push('\n');
 }
 
 const fn session_keepalive(result: &ExecutionResult) -> bool {
@@ -2733,6 +2743,25 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 			stdout.extend_from_slice(&chunk);
 		}
 		assert_eq!(stdout, b"prod:8080");
+	}
+
+	/// Quoted heredoc delimiters at EOF must behave like bash. `brush-parser`
+	/// currently rejects that shape unless the input stream ends with a newline,
+	/// which surfaced as `unterminated here document sequence; tag(s) [...]` for
+	/// normal paste-run Python snippets.
+	#[cfg(unix)]
+	#[tokio::test(flavor = "multi_thread")]
+	async fn quoted_heredoc_without_trailing_newline_runs() {
+		let (result, output) = run_command_capture(
+			"/bin/cat <<'PY'\nhello $USER\nPY",
+			None,
+			None,
+			CancelToken::default(),
+		)
+		.await;
+
+		assert_eq!(result.exit_code, Some(0));
+		assert_eq!(output, "hello $USER\n");
 	}
 
 	/// Regression for a Windows/macOS deadlock in

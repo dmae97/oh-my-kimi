@@ -106,7 +106,10 @@ function buildState(): SessionState {
 		contextUsage: {
 			tokens,
 			contextWindow: fixtureModel.contextWindow,
-			percent: (tokens / fixtureModel.contextWindow) * 100,
+			percent:
+				fixtureModel.contextWindow !== null && fixtureModel.contextWindow > 0
+					? (tokens / fixtureModel.contextWindow) * 100
+					: null,
 		},
 		participants,
 	};

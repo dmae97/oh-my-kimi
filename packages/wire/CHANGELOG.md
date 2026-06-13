@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [15.12.4] - 2026-06-13
+### Changed
+
+- Changed `WireModel.contextWindow` and `ContextUsage.contextWindow` to `number | null` to allow representing unavailable context-window values
+
 ## [15.12.0] - 2026-06-12
 ### Added
 

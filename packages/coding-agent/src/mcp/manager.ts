@@ -644,6 +644,17 @@ export class MCPManager {
 	}
 
 	/**
+	 * Get the preserved (pre-auth) config for a known server — whether currently
+	 * connected or merely discovered (a connect was attempted but may have failed,
+	 * e.g. an OAuth server that has not been authorized yet). Mirrors the
+	 * reconnect lookup at {@link reconnectServer} so callers like `/mcp reauth`
+	 * can recover a discovered server's config without re-reading config files.
+	 */
+	getServerConfig(name: string): MCPServerConfig | undefined {
+		return this.#connections.get(name)?.config ?? this.#serverConfigs.get(name);
+	}
+
+	/**
 	 * Wait for a connection to complete (or fail).
 	 */
 	async waitForConnection(name: string): Promise<MCPServerConnection> {

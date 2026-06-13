@@ -39,6 +39,7 @@ import type { SessionMessageEntry } from "../../session/session-manager";
 import { parseSessionEntries } from "../../session/session-manager";
 import { createIrcMessageCard } from "../../tools/irc";
 import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "../../tools/render-utils";
+import { hasVisibleThinking } from "../../utils/thinking-display";
 import type { ObservableSession, SessionObserverRegistry } from "../session-observer-registry";
 import { getEditorTheme, theme } from "../theme/theme";
 import { matchesSelectDown, matchesSelectUp } from "../utils/keybinding-matchers";
@@ -992,7 +993,7 @@ export class AgentHubOverlayComponent extends Container {
 		const hasVisibleAssistantContent = message.content.some(
 			content =>
 				(content.type === "text" && content.text.trim().length > 0) ||
-				(content.type === "thinking" && content.thinking.trim().length > 0),
+				(content.type === "thinking" && hasVisibleThinking(content)),
 		);
 		if (hasVisibleAssistantContent) {
 			// New visible turn content closes the current read run (mirrors rebuild).

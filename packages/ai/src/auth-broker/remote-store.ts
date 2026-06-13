@@ -275,6 +275,15 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		});
 	}
 
+	async deleteAuthCredentialRemote(id: number, disabledCause: string): Promise<boolean> {
+		const found = this.#snapshot.credentials.some(entry => entry.id === id);
+		if (!found) return false;
+		await this.#client.disableCredential(id, disabledCause);
+		this.#removeCredentialById(id);
+		this.#maybeRefreshSnapshot("delete credential");
+		return true;
+	}
+
 	tryDisableAuthCredentialIfMatches(id: number, _expectedData: string, disabledCause: string): boolean {
 		const found = this.#snapshot.credentials.find(entry => entry.id === id);
 		if (!found) return false;

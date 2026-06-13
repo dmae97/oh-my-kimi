@@ -1,26 +1,24 @@
 /**
- * Regression guard for the incremental per-message token cache in
- * `StatusLineComponent.getCachedContextBreakdown`.
+ * Contract for `StatusLineComponent.getCachedContextBreakdown`.
  *
- * Before the cache: every call walked `session.messages` and ran
- * `estimateTokens` per message (~0.5 ms each native). For a 2,300-message
- * session this was a ~1.1 s blocking call. `updateEditorTopBorder()` is
- * invoked on every agent event (event-controller.ts:163), so during
- * streaming the UI froze for ~1.1 s every 2 s (the prior cache TTL).
+ * The status-line context% segment no longer keeps its own cl100k estimate of
+ * the whole conversation. It surfaces `session.getContextUsage()`, which
+ * anchors on the last assistant's real provider prompt-token count — so the bar
+ * matches the provider and the `/context` panel instead of an independent
+ * estimate that drifted past 100%.
  *
- * After the cache: messages are walked ONCE during warm-up; subsequent
- * refreshes append-only update the cache by `messages.length - cached`
- * (typically 0–1 new messages). The LAST message is recomputed every call
- * because its content may still be growing during streaming. Compaction
- * (messages.length shrinks) resets the cache.
+ * `getTopBorder()` runs on every agent event (event-controller.ts), so the
+ * breakdown is memoized: it re-queries `getContextUsage()` only when an input
+ * it depends on changes (a new/grown message, a replaced message array, or the
+ * model's context window). A stable conversation must not re-query on every
+ * redraw — that per-event recompute is what previously froze large sessions.
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { ContextUsage } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import { StatusLineComponent } from "@oh-my-pi/pi-coding-agent/modes/components/status-line";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import { computeNonMessageTokens, estimateToolSchemaTokens } from "@oh-my-pi/pi-coding-agent/modes/utils/context-usage";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { countTokens } from "@oh-my-pi/pi-natives";
 
 beforeAll(async () => {
 	resetSettingsForTest();
@@ -32,22 +30,25 @@ afterAll(() => {
 	resetSettingsForTest();
 });
 
-function makeSession(opts: {
-	messages: unknown[];
-	systemPrompt?: string[];
-	tools?: { name: string; description: string; parameters?: unknown }[];
-	skills?: { name: string; description: string }[];
-	contextWindow?: number;
-	modelId?: string;
-}): AgentSession {
-	const messages = opts.messages;
-	return {
-		messages,
-		systemPrompt: opts.systemPrompt ?? ["You are a helpful assistant."],
-		agent: { state: { tools: opts.tools ?? [] } },
-		skills: opts.skills ?? [],
-		model: { id: opts.modelId ?? "test-model", contextWindow: opts.contextWindow ?? 200_000 },
-		state: { messages, model: { contextWindow: opts.contextWindow ?? 200_000 } },
+interface Fake {
+	session: AgentSession;
+	/** Number of times `getContextUsage()` was queried. */
+	usageCalls: () => number;
+	/** Swap the value the next `getContextUsage()` query returns. */
+	setUsage: (usage: ContextUsage | undefined) => void;
+}
+
+function makeSession(opts: { messages: unknown[]; contextWindow?: number; usage?: ContextUsage | undefined }): Fake {
+	const contextWindow = opts.contextWindow ?? 200_000;
+	let usage: ContextUsage | undefined = "usage" in opts ? opts.usage : { tokens: 1234, contextWindow, percent: 0.6 };
+	let calls = 0;
+	const session = {
+		messages: opts.messages,
+		systemPrompt: ["You are a helpful assistant."],
+		agent: { state: { tools: [] } },
+		skills: [],
+		model: { id: "test-model", contextWindow },
+		state: { messages: opts.messages, model: { contextWindow } },
 		sessionManager: {
 			getUsageStatistics: () => ({
 				input: 0,
@@ -60,7 +61,18 @@ function makeSession(opts: {
 			getSessionName: () => "test",
 		},
 		getAsyncJobSnapshot: () => ({ running: [] }),
+		getContextUsage: () => {
+			calls++;
+			return usage;
+		},
 	} as unknown as AgentSession;
+	return {
+		session,
+		usageCalls: () => calls,
+		setUsage: next => {
+			usage = next;
+		},
+	};
 }
 
 function userMessage(text: string): unknown {
@@ -70,155 +82,99 @@ function assistantMessage(text: string): unknown {
 	return { role: "assistant", content: [{ type: "text", text }] };
 }
 
-describe("StatusLineComponent incremental context breakdown cache", () => {
-	it("first call computes from scratch, second call returns same value", () => {
-		const session = makeSession({
-			messages: Array.from({ length: 50 }, (_, i) => userMessage(`message ${i}`.repeat(10))),
-		});
-		const comp = new StatusLineComponent(session);
-
-		const first = comp.getCachedContextBreakdown();
-		const second = comp.getCachedContextBreakdown();
-
-		expect(first.usedTokens).toBeGreaterThan(0);
-		expect(second.usedTokens).toBe(first.usedTokens);
-		expect(second.contextWindow).toBe(200_000);
-	});
-
-	it("appending a message increases the total by approximately the new message's tokens", () => {
-		const session = makeSession({
-			messages: [userMessage("hello world"), userMessage("another message here")],
-		});
-		const comp = new StatusLineComponent(session);
-
-		const before = comp.getCachedContextBreakdown();
-		(session.messages as unknown[]).push(assistantMessage("a third message reply with more text content"));
-		const after = comp.getCachedContextBreakdown();
-
-		expect(after.usedTokens).toBeGreaterThan(before.usedTokens);
-		expect(after.contextWindow).toBe(before.contextWindow);
-	});
-
-	it("popping the streaming tail rebuilds instead of double-counting the new tail", () => {
-		const messages = [
-			userMessage("stable head"),
-			userMessage("tail that becomes stable after append".repeat(20)),
-			assistantMessage("streaming tail removed by retry".repeat(20)),
-		];
-		const session = makeSession({ messages });
-		const comp = new StatusLineComponent(session);
-
-		const withStreamingTail = comp.getCachedContextBreakdown();
-		messages.pop();
-		const afterPop = comp.getCachedContextBreakdown();
-		const freshAfterPop = new StatusLineComponent(session).getCachedContextBreakdown();
-
-		expect(afterPop.usedTokens).toBeLessThan(withStreamingTail.usedTokens);
-		expect(afterPop.usedTokens).toBe(freshAfterPop.usedTokens);
-	});
-
-	it("compaction (messages.length shrinks) resets the cache and recomputes correctly", () => {
-		const session = makeSession({
-			messages: Array.from({ length: 20 }, (_, i) => userMessage(`message ${i}`.repeat(10))),
-		});
-		const comp = new StatusLineComponent(session);
-
-		const before = comp.getCachedContextBreakdown();
-		expect(before.usedTokens).toBeGreaterThan(0);
-
-		(session.messages as unknown[]).length = 0;
-		(session.messages as unknown[]).push(userMessage("compacted summary"));
-
-		const after = comp.getCachedContextBreakdown();
-		expect(after.usedTokens).toBeLessThan(before.usedTokens);
-		expect(after.usedTokens).toBeGreaterThan(0);
-	});
-
-	it("non-message inputs change → recomputes non-message portion", () => {
-		const session = makeSession({
+describe("StatusLineComponent context breakdown", () => {
+	it("surfaces the provider-anchored tokens and context window from getContextUsage", () => {
+		const { session } = makeSession({
 			messages: [userMessage("hi")],
-			systemPrompt: ["You are an assistant."],
-			tools: [{ name: "bash", description: "Run shell commands", parameters: {} }],
-			skills: [{ name: "code", description: "Write code" }],
+			usage: { tokens: 5000, contextWindow: 272_000, percent: 1.8 },
 		});
-		const comp = new StatusLineComponent(session);
-
-		const v1 = comp.getCachedContextBreakdown();
-		const v2 = comp.getCachedContextBreakdown();
-		expect(v2.usedTokens).toBe(v1.usedTokens);
-
-		(session.agent as { state: { tools: unknown[] } }).state.tools.push({
-			name: "edit",
-			description: "Edit files",
-			parameters: {},
-		});
-		const v3 = comp.getCachedContextBreakdown();
-		expect(v3.usedTokens).toBeGreaterThan(v2.usedTokens);
+		const breakdown = new StatusLineComponent(session).getCachedContextBreakdown();
+		expect(breakdown.usedTokens).toBe(5000);
+		expect(breakdown.contextWindow).toBe(272_000);
 	});
 
-	it("non-message token shortcut matches previous category sum semantics", () => {
-		const session = makeSession({
-			messages: [],
-			systemPrompt: [
-				"You are an assistant.\n\n<skills>\n- code: Write code\n- review: Review code\n</skills>",
-				"Loaded context file",
-				"Runtime note",
-			],
-			tools: [
-				{
-					name: "bash",
-					description: "Run shell commands",
-					parameters: { type: "object", properties: { command: { type: "string" } } },
-				},
-			],
-			skills: [
-				{ name: "code", description: "Write code" },
-				{ name: "review", description: "Review code" },
-			],
+	it("memoizes: repeated redraws with no change do not re-query usage", () => {
+		const { session, usageCalls } = makeSession({ messages: [userMessage("hi")] });
+		const comp = new StatusLineComponent(session);
+
+		comp.getCachedContextBreakdown();
+		comp.getCachedContextBreakdown();
+		comp.getCachedContextBreakdown();
+
+		expect(usageCalls()).toBe(1);
+	});
+
+	it("re-queries and surfaces the new total when a message is appended", () => {
+		const fake = makeSession({
+			messages: [userMessage("hi")],
+			usage: { tokens: 100, contextWindow: 200_000, percent: 0.05 },
 		});
+		const comp = new StatusLineComponent(fake.session);
+		expect(comp.getCachedContextBreakdown().usedTokens).toBe(100);
 
-		const skillsTokens = countTokens(["code", "Write code", "review", "Review code"]);
-		const previousCategorySum =
-			Math.max(0, countTokens(session.systemPrompt?.[0] ?? "") - skillsTokens) +
-			countTokens((session.systemPrompt ?? []).slice(1)) +
-			estimateToolSchemaTokens(session.agent?.state?.tools ?? []) +
-			skillsTokens;
+		(fake.session.messages as unknown[]).push(assistantMessage("a reply that bumped the real prompt size"));
+		fake.setUsage({ tokens: 250, contextWindow: 200_000, percent: 0.125 });
 
-		expect(new StatusLineComponent(session).getCachedContextBreakdown().usedTokens).toBe(previousCategorySum);
-		expect(computeNonMessageTokens(session)).toBe(previousCategorySum);
+		expect(comp.getCachedContextBreakdown().usedTokens).toBe(250);
+		expect(fake.usageCalls()).toBe(2);
 	});
 
-	it("zero messages: produces only non-message tokens, no crash", () => {
-		const session = makeSession({ messages: [] });
-		const comp = new StatusLineComponent(session);
-		const result = comp.getCachedContextBreakdown();
-		expect(result.usedTokens).toBeGreaterThanOrEqual(0);
-		expect(result.contextWindow).toBe(200_000);
-	});
-
-	it("in-place mutation of a recently promoted stable message recomputes its tokens", () => {
-		const head = userMessage("head");
-		const promoted = userMessage("promoted");
-		const tail = userMessage("tail");
-		const session = makeSession({ messages: [head, promoted, tail] });
+	it("re-queries when the streaming tail grows in place", () => {
+		const tail = assistantMessage("partial") as { content: { type: string; text: string }[] };
+		const { session, usageCalls } = makeSession({ messages: [userMessage("hi"), tail] });
 		const comp = new StatusLineComponent(session);
 
-		const before = comp.getCachedContextBreakdown();
-		// Mutate the most recently promoted stable message in place — this is the
-		// only stable slot we intentionally revalidate on the hot path.
-		(promoted as { content: string }).content = "a much longer body that should tokenize to more".repeat(20);
-		const after = comp.getCachedContextBreakdown();
+		comp.getCachedContextBreakdown();
+		tail.content[0]!.text = "partial response that kept streaming".repeat(8);
+		comp.getCachedContextBreakdown();
 
-		expect(after.usedTokens).toBeGreaterThan(before.usedTokens);
+		expect(usageCalls()).toBe(2);
 	});
 
-	it("getTopBorder skips context accounting when no context segments are rendered", () => {
-		const session = makeSession({
-			messages: Array.from({ length: 20 }, (_, i) => userMessage(`message ${i}`.repeat(10))),
+	it("re-queries when the message array is replaced (branch switch / rebuild)", () => {
+		const { session, usageCalls } = makeSession({
+			messages: [userMessage("a"), userMessage("b")],
 		});
 		const comp = new StatusLineComponent(session);
-		const before = comp.getCachedContextBreakdown();
+		comp.getCachedContextBreakdown();
 
+		(session as { messages: unknown[] }).messages = [userMessage("c"), userMessage("d")];
+		comp.getCachedContextBreakdown();
+
+		expect(usageCalls()).toBe(2);
+	});
+
+	it("re-queries when the model context window changes", () => {
+		const { session, usageCalls } = makeSession({ messages: [userMessage("hi")], contextWindow: 200_000 });
+		const comp = new StatusLineComponent(session);
+		comp.getCachedContextBreakdown();
+
+		(session.model as { contextWindow: number }).contextWindow = 400_000;
+		comp.getCachedContextBreakdown();
+
+		expect(usageCalls()).toBe(2);
+	});
+
+	it("propagates an unknown (null) token count, e.g. right after compaction", () => {
+		const { session } = makeSession({
+			messages: [userMessage("compaction summary")],
+			usage: { tokens: null, contextWindow: 272_000, percent: null },
+		});
+		const breakdown = new StatusLineComponent(session).getCachedContextBreakdown();
+		expect(breakdown.usedTokens).toBeNull();
+		expect(breakdown.contextWindow).toBe(272_000);
+	});
+
+	it("falls back to the model window with null tokens when usage is unavailable", () => {
+		const { session } = makeSession({ messages: [userMessage("hi")], usage: undefined, contextWindow: 128_000 });
+		const breakdown = new StatusLineComponent(session).getCachedContextBreakdown();
+		expect(breakdown.usedTokens).toBeNull();
+		expect(breakdown.contextWindow).toBe(128_000);
+	});
+
+	it("does not query usage when no context segment is rendered", () => {
+		const { session, usageCalls } = makeSession({ messages: [userMessage("hi")] });
+		const comp = new StatusLineComponent(session);
 		comp.updateSettings({
 			preset: "custom",
 			leftSegments: ["pi"],
@@ -228,45 +184,41 @@ describe("StatusLineComponent incremental context breakdown cache", () => {
 
 		const border = comp.getTopBorder(80);
 		expect(border.content.length).toBeGreaterThan(0);
-		expect(comp.getCachedContextBreakdown()).toEqual(before);
+		expect(usageCalls()).toBe(0);
 	});
 
-	it("replaceMessages with same length but different shape recomputes tokens", () => {
-		const session = makeSession({
-			messages: [userMessage("short a"), userMessage("short b")],
+	it("renders the anchored percent against the (sub-)budget window in the context segment", () => {
+		const { session } = makeSession({
+			messages: [userMessage("hi"), assistantMessage("done")],
+			usage: { tokens: 5000, contextWindow: 272_000, percent: 1.8 },
 		});
 		const comp = new StatusLineComponent(session);
+		comp.updateSettings({
+			preset: "custom",
+			leftSegments: ["context_pct"],
+			rightSegments: [],
+			separator: "powerline-thin",
+		});
 
-		const before = comp.getCachedContextBreakdown();
-		// Same-length replace: distinct message objects with larger payloads.
-		(session as { messages: unknown[] }).messages = [
-			userMessage("a much longer payload".repeat(20)),
-			userMessage("another longer payload".repeat(20)),
-		];
-		const after = comp.getCachedContextBreakdown();
-
-		expect(after.usedTokens).toBeGreaterThan(before.usedTokens);
+		// 5000 / 272000 → 1.8%, window formatted as 272K (matches the footer gauge).
+		const plain = comp.getTopBorder(80).content.replaceAll(/\x1b\[[0-9;]*m/g, "");
+		expect(plain).toContain("1.8%/272K");
 	});
 
-	it("usage fetch error backs off — a failed fetch does not retrigger within the TTL window", async () => {
-		const session = makeSession({ messages: [userMessage("hi")] });
-		let calls = 0;
-		(session as { fetchUsageReports?: () => Promise<unknown> }).fetchUsageReports = () => {
-			calls++;
-			return Promise.reject(new Error("network"));
-		};
+	it("renders ? for the percent while the token count is unknown (post-compaction)", () => {
+		const { session } = makeSession({
+			messages: [userMessage("compaction summary")],
+			usage: { tokens: null, contextWindow: 272_000, percent: null },
+		});
 		const comp = new StatusLineComponent(session);
+		comp.updateSettings({
+			preset: "custom",
+			leftSegments: ["context_pct"],
+			rightSegments: [],
+			separator: "powerline-thin",
+		});
 
-		// First refresh → kicks off fetch #1.
-		comp.refreshUsageInBackground();
-		// Let the rejected fetch settle so the .catch backoff stamp lands.
-		await Bun.sleep(0);
-		expect(calls).toBe(1);
-
-		// Subsequent refreshes within the TTL window must not refetch.
-		comp.refreshUsageInBackground();
-		comp.refreshUsageInBackground();
-		await Bun.sleep(0);
-		expect(calls).toBe(1);
+		const plain = comp.getTopBorder(80).content.replaceAll(/\x1b\[[0-9;]*m/g, "");
+		expect(plain).toContain("?/272K");
 	});
 });

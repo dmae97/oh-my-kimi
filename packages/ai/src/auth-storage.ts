@@ -377,6 +377,11 @@ export interface AuthCredentialStore {
 	 */
 	replaceAuthCredentialsRemote?(provider: string, credentials: AuthCredential[]): Promise<StoredAuthCredential[]>;
 	/**
+	 * Optional async write hook for disabling one stored credential. Remote stores
+	 * use it to await broker persistence before AuthStorage updates its snapshot.
+	 */
+	deleteAuthCredentialRemote?(id: number, disabledCause: string): Promise<boolean>;
+	/**
 	 * Optional async write hook for clearing every credential for a provider
 	 * (logout). When present, `AuthStorage.remove` routes through this instead
 	 * of the sync `deleteAuthCredentialsForProvider`.
@@ -1519,6 +1524,32 @@ export class AuthStorage {
 	}
 
 	/**
+	 * List stored credential rows, optionally filtered by provider.
+	 */
+	listStoredCredentials(provider?: string): StoredAuthCredential[] {
+		if (provider !== undefined) {
+			return this.#getStoredCredentials(provider).map(entry => ({
+				id: entry.id,
+				provider,
+				credential: entry.credential,
+				disabledCause: null,
+			}));
+		}
+		const rows: StoredAuthCredential[] = [];
+		for (const [storedProvider, entries] of this.#data) {
+			for (const entry of entries) {
+				rows.push({
+					id: entry.id,
+					provider: storedProvider,
+					credential: entry.credential,
+					disabledCause: null,
+				});
+			}
+		}
+		return rows;
+	}
+
+	/**
 	 * Remove credential for a provider.
 	 */
 	async remove(provider: string): Promise<void> {
@@ -1529,6 +1560,28 @@ export class AuthStorage {
 		}
 		this.#setStoredCredentials(provider, []);
 		this.#resetProviderAssignments(provider);
+	}
+
+	/**
+	 * Remove one stored credential for a provider.
+	 */
+	async removeCredential(provider: string, credentialId: number): Promise<boolean> {
+		const entries = this.#getStoredCredentials(provider);
+		const index = entries.findIndex(entry => entry.id === credentialId);
+		if (index === -1) return false;
+
+		if (this.#store.deleteAuthCredentialRemote) {
+			const deleted = await this.#store.deleteAuthCredentialRemote(credentialId, "deleted by user");
+			if (!deleted) return false;
+		} else {
+			this.#store.deleteAuthCredential(credentialId, "deleted by user");
+		}
+		this.#setStoredCredentials(
+			provider,
+			entries.filter((_entry, entryIndex) => entryIndex !== index),
+		);
+		this.#resetProviderAssignments(provider);
+		return true;
 	}
 
 	/**

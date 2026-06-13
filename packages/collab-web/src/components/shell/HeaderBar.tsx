@@ -19,7 +19,9 @@ export function HeaderBar({ snapshot, subCount, railOpen, onToggleRail, onLeave 
 	if (usage) {
 		pct =
 			usage.percent ??
-			(usage.tokens != null && usage.contextWindow > 0 ? (usage.tokens / usage.contextWindow) * 100 : null);
+			(usage.tokens != null && usage.contextWindow !== null && usage.contextWindow > 0
+				? (usage.tokens / usage.contextWindow) * 100
+				: null);
 	}
 
 	return (

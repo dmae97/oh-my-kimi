@@ -71,7 +71,8 @@ export interface SegmentContext {
 		cost: number;
 		tokensPerSecond: number | null;
 	};
-	contextPercent: number;
+	/** Context usage percent, or null when unknown (e.g. right after compaction). */
+	contextPercent: number | null;
 	contextWindow: number;
 	autoCompactEnabled: boolean;
 	subagentCount: number;

@@ -11,7 +11,6 @@ import type { Api, FetchImpl, Model, ModelSpec, Provider, ThinkingConfig } from 
 import { isAnthropicOAuthToken, isRecord, toBoolean, toNumber, toPositiveNumber } from "../utils";
 import { COPILOT_API_HEADERS, getGitHubCopilotBaseUrl, parseGitHubCopilotApiKey } from "../wire/github-copilot";
 import { createBundledReferenceMap, createReferenceResolver, toModelSpec } from "./bundled-references";
-import { UNK_CONTEXT_WINDOW, UNK_MAX_TOKENS } from "./discovery-constants";
 
 const MODELS_DEV_URL = "https://models.dev/api.json";
 const ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1";
@@ -103,8 +102,8 @@ function mapAnthropicModelsDev(payload: unknown, baseUrl: string): ModelSpec<"an
 				cacheRead: toNumber(model.cost?.cache_read) ?? 0,
 				cacheWrite: toNumber(model.cost?.cache_write) ?? 0,
 			},
-			contextWindow: toPositiveNumber(model.limit?.context, UNK_CONTEXT_WINDOW),
-			maxTokens: toPositiveNumber(model.limit?.output, UNK_MAX_TOKENS),
+			contextWindow: toPositiveNumber(model.limit?.context, null),
+			maxTokens: toPositiveNumber(model.limit?.output, null),
 		});
 	}
 
@@ -1095,7 +1094,10 @@ export function isFireworksKimiK2ModelId(modelId: string): boolean {
  * Clamp the Kimi K2 family's `maxTokens` to {@link FIREWORKS_KIMI_MAX_TOKENS}
  * on Fireworks-backed providers, leaving every other model untouched.
  */
-export function clampFireworksKimiMaxTokens(modelId: string, candidate: number): number {
+export function clampFireworksKimiMaxTokens(modelId: string, candidate: number): number;
+export function clampFireworksKimiMaxTokens(modelId: string, candidate: number | null): number | null;
+export function clampFireworksKimiMaxTokens(modelId: string, candidate: number | null): number | null {
+	if (candidate === null) return null;
 	return isFireworksKimiK2ModelId(modelId) ? Math.min(candidate, FIREWORKS_KIMI_MAX_TOKENS) : candidate;
 }
 
@@ -1128,17 +1130,155 @@ export interface FireworksModelManagerConfig {
 	fetch?: FetchImpl;
 }
 
-function toFireworksModelName(entry: OpenAICompatibleModelRecord, fallback: string): string {
-	const name = toModelName(entry.name, "");
-	if (name) return name;
-	const id = typeof entry.id === "string" ? entry.id : fallback;
-	const shortName = id.split("/").at(-1) ?? fallback;
-	if (fallback !== id && fallback !== shortName) return fallback;
-	return shortName
-		.split("-")
-		.filter(Boolean)
-		.map(part => part.charAt(0).toUpperCase() + part.slice(1))
-		.join(" ");
+const FIREWORKS_CONTROL_PLANE_ACCOUNT = "fireworks";
+const FIREWORKS_SERVERLESS_FILTER = "supports_serverless=true";
+const FIREWORKS_CONTROL_PLANE_PAGE_SIZE = 200;
+const FIREWORKS_CONTROL_PLANE_MAX_PAGES = 25;
+
+/**
+ * One record from the Fireworks control-plane catalog
+ * (`GET /v1/accounts/{account}/models`). This is distinct from the
+ * OpenAI-compatible `/v1/models` inference envelope: the control plane
+ * enumerates the full serverless catalog with camelCase capability metadata,
+ * including on-demand models (e.g. `kimi-k2p7-code`) that never surface in
+ * `/v1/models`. Discovering here is what keeps new serverless models appearing
+ * without catalog edits — see the Fireworks docs `List Models` API.
+ */
+interface FireworksControlPlaneModel {
+	/** Resource name, e.g. `accounts/fireworks/models/kimi-k2p7-code`. */
+	name?: unknown;
+	displayName?: unknown;
+	contextLength?: unknown;
+	supportsImageInput?: unknown;
+	supportsTools?: unknown;
+	supportsServerless?: unknown;
+	state?: unknown;
+}
+
+/**
+ * Derive the control-plane list endpoint from the inference base URL. The
+ * inference API lives under `/inference/v1` while the control plane is
+ * `/v1/accounts/<account>/models` on the same origin, so we route off origin.
+ * Returns null for unparseable overrides (custom gateways) so discovery falls
+ * back to the cached/bundled catalog.
+ */
+function toFireworksControlPlaneModelsUrl(baseUrl: string, account: string): string | null {
+	try {
+		return `${new URL(baseUrl).origin}/v1/accounts/${account}/models`;
+	} catch {
+		return null;
+	}
+}
+
+function mapFireworksControlPlaneModel(
+	record: FireworksControlPlaneModel,
+	publicModelId: string,
+	reference: ModelSpec<"openai-completions"> | undefined,
+	baseUrl: string,
+): ModelSpec<"openai-completions"> {
+	const name = toModelName(record.displayName, reference?.name ?? publicModelId);
+	const supportsImage = toBoolean(record.supportsImageInput) === true;
+	const contextWindow = toPositiveNumber(record.contextLength, reference?.contextWindow ?? null);
+	// The control plane reports no max-output budget; default the Kimi family to
+	// its published cap, everyone else to the discovery fallback, then clamp.
+	const fallbackMaxTokens = isFireworksKimiK2ModelId(publicModelId) ? FIREWORKS_KIMI_MAX_TOKENS : null;
+	const maxTokens = clampFireworksKimiMaxTokens(publicModelId, reference?.maxTokens ?? fallbackMaxTokens);
+	const base: ModelSpec<"openai-completions"> = reference ?? {
+		id: publicModelId,
+		name,
+		api: "openai-completions",
+		provider: "fireworks",
+		baseUrl,
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow,
+		maxTokens,
+	};
+	const model: ModelSpec<"openai-completions"> = {
+		...base,
+		id: publicModelId,
+		api: "openai-completions",
+		provider: "fireworks",
+		baseUrl,
+		name,
+		// The control plane exposes capability flags but no reasoning bit. Every
+		// serverless chat LLM Fireworks ships reasons, and `buildModel` derives
+		// the Fireworks effort map from the id at build time — so default
+		// unbundled models to reasoning while bundled references keep their value.
+		reasoning: reference?.reasoning ?? true,
+		input: supportsImage ? ["text", "image"] : (reference?.input ?? ["text"]),
+		contextWindow,
+		maxTokens,
+	};
+	return stripFireworksDeepSeekThinkingToggle(model, publicModelId);
+}
+
+/**
+ * Discover Fireworks serverless models via the control-plane `List Models`
+ * API (`supports_serverless=true`), paginating the full catalog. Returns null
+ * on any transport/protocol failure so the model manager keeps the cached or
+ * bundled catalog rather than caching a truncated list as authoritative.
+ */
+async function fetchFireworksServerlessModels(options: {
+	baseUrl: string;
+	apiKey: string;
+	resolveReference: (publicModelId: string) => ModelSpec<"openai-completions"> | undefined;
+	fetch?: FetchImpl;
+}): Promise<ModelSpec<"openai-completions">[] | null> {
+	const listUrl = toFireworksControlPlaneModelsUrl(options.baseUrl, FIREWORKS_CONTROL_PLANE_ACCOUNT);
+	if (!listUrl) return null;
+	const fetchImpl = options.fetch ?? fetch;
+	const collected = new Map<string, ModelSpec<"openai-completions">>();
+	let pageToken = "";
+	for (let page = 0; page < FIREWORKS_CONTROL_PLANE_MAX_PAGES; page++) {
+		const url = new URL(listUrl);
+		url.searchParams.set("filter", FIREWORKS_SERVERLESS_FILTER);
+		url.searchParams.set("pageSize", String(FIREWORKS_CONTROL_PLANE_PAGE_SIZE));
+		if (pageToken) url.searchParams.set("pageToken", pageToken);
+		let response: Response;
+		try {
+			response = await fetchImpl(url.toString(), {
+				method: "GET",
+				headers: { Accept: "application/json", Authorization: `Bearer ${options.apiKey}` },
+			});
+		} catch {
+			return null;
+		}
+		if (!response.ok) return null;
+		let payload: unknown;
+		try {
+			payload = await response.json();
+		} catch {
+			return null;
+		}
+		if (!isRecord(payload)) return null;
+		const models = Array.isArray(payload.models) ? payload.models : [];
+		for (const entry of models) {
+			if (!isRecord(entry)) continue;
+			const record = entry as FireworksControlPlaneModel;
+			if (toBoolean(record.supportsServerless) !== true) continue;
+			if (toBoolean(record.supportsTools) !== true) continue;
+			if (typeof record.state === "string" && record.state !== "READY") continue;
+			const wireName = typeof record.name === "string" ? record.name : "";
+			if (!wireName) continue;
+			const publicModelId = toFireworksPublicModelId(wireName);
+			if (!publicModelId) continue;
+			collected.set(
+				publicModelId,
+				mapFireworksControlPlaneModel(
+					record,
+					publicModelId,
+					options.resolveReference(publicModelId),
+					options.baseUrl,
+				),
+			);
+		}
+		const next = typeof payload.nextPageToken === "string" ? payload.nextPageToken : "";
+		if (!next) break;
+		pageToken = next;
+	}
+	return Array.from(collected.values());
 }
 
 function createModelsDevReferenceMap<TApi extends Api>(
@@ -1152,11 +1292,14 @@ function createModelsDevReferenceMap<TApi extends Api>(
 			references.set(candidate.id, candidate);
 			continue;
 		}
-		if (candidate.contextWindow > existing.contextWindow) {
+		if ((candidate.contextWindow ?? 0) > (existing.contextWindow ?? 0)) {
 			references.set(candidate.id, candidate);
 			continue;
 		}
-		if (candidate.contextWindow === existing.contextWindow && candidate.maxTokens > existing.maxTokens) {
+		if (
+			candidate.contextWindow === existing.contextWindow &&
+			(candidate.maxTokens ?? 0) > (existing.maxTokens ?? 0)
+		) {
 			references.set(candidate.id, candidate);
 		}
 	}
@@ -1184,35 +1327,11 @@ export function fireworksModelManagerOptions(
 		...(apiKey && {
 			fetchDynamicModels: async () => {
 				const modelsDevReferences = await loadModelsDevReferences<"openai-completions">(config?.fetch);
-				return fetchOpenAICompatibleModels({
-					api: "openai-completions",
-					provider: "fireworks",
+				return fetchFireworksServerlessModels({
 					baseUrl,
 					apiKey,
-					filterModel: entry =>
-						toBoolean(entry.supports_chat) === true && toBoolean(entry.supports_tools) === true,
-					mapModel: (entry, defaults) => {
-						const publicModelId = toFireworksPublicModelId(defaults.id);
-						const reference = modelsDevReferences.get(publicModelId) ?? bundledReferences(publicModelId);
-						const model = stripFireworksDeepSeekThinkingToggle(
-							mapWithBundledReference(entry, defaults, reference),
-							publicModelId,
-						);
-						return {
-							...model,
-							id: publicModelId,
-							api: "openai-completions",
-							provider: "fireworks",
-							baseUrl,
-							name: toFireworksModelName(entry, model.name),
-							input: toBoolean(entry.supports_image_input) === true ? ["text", "image"] : ["text"],
-							contextWindow: toPositiveNumber(entry.context_length, model.contextWindow),
-							maxTokens: clampFireworksKimiMaxTokens(
-								publicModelId,
-								toPositiveNumber(entry.max_completion_tokens, model.maxTokens),
-							),
-						};
-					},
+					resolveReference: publicModelId =>
+						modelsDevReferences.get(publicModelId) ?? bundledReferences(publicModelId),
 					fetch: config?.fetch,
 				});
 			},
@@ -1299,7 +1418,7 @@ function mapWaferModel(
 		wafer?.context_length,
 		toPositiveNumber((entry as { max_model_len?: unknown }).max_model_len, defaults.contextWindow),
 	);
-	const maxTokens = Math.min(contextWindow, WAFER_MAX_TOKENS_CAP);
+	const maxTokens = contextWindow !== null ? Math.min(contextWindow, WAFER_MAX_TOKENS_CAP) : null;
 	const pricing = wafer?.pricing ?? {};
 	// Wafer's `/v1/models` exposes pricing through `*_cents_per_million` fields,
 	// but the values are an internal wholesale unit, not literal cents — across
@@ -2496,16 +2615,16 @@ function copilotTierCost(
  */
 function createCopilotLongContextVariant(
 	base: ModelSpec<Api>,
-	fullContextWindow: number,
-	maxTokens: number,
+	fullContextWindow: number | null,
+	maxTokens: number | null,
 	longContext: CopilotTokenPriceTier | undefined,
 ): ModelSpec<Api> | undefined {
 	const longContextMax = longContext?.contextMax;
-	if (longContextMax === undefined || longContextMax <= 0) {
+	if (longContextMax === undefined || longContextMax <= 0 || fullContextWindow === null || maxTokens === null) {
 		return undefined;
 	}
 	const variantWindow = Math.min(fullContextWindow, longContextMax + maxTokens);
-	if (variantWindow <= base.contextWindow) {
+	if (base.contextWindow === null || variantWindow <= base.contextWindow) {
 		return undefined;
 	}
 	const longCost = copilotTierCost(longContext);
@@ -2594,7 +2713,10 @@ export function githubCopilotModelManagerOptions(config?: GithubCopilotModelMana
 						const tokenPrices = extractCopilotTokenPrices(entry);
 						const defaultContextMax = tokenPrices.defaultTier?.contextMax;
 						const defaultTierWindow =
-							defaultContextMax !== undefined && defaultContextMax > 0
+							defaultContextMax !== undefined &&
+							defaultContextMax > 0 &&
+							contextWindow !== null &&
+							maxTokens !== null
 								? Math.min(contextWindow, defaultContextMax + maxTokens)
 								: contextWindow;
 						const base: ModelSpec<Api> = reference
@@ -2739,8 +2861,6 @@ export function anthropicModelManagerOptions(
 // Models.dev provider descriptors for generate-models.ts
 // ---------------------------------------------------------------------------
 
-export { UNK_CONTEXT_WINDOW, UNK_MAX_TOKENS } from "./discovery-constants";
-
 /** Describes how to map models.dev API data for a single provider. */
 export interface ModelsDevProviderDescriptor {
 	/** Key in the models.dev API response JSON (e.g., "anthropic", "amazon-bedrock") */
@@ -2820,8 +2940,8 @@ export function mapModelsDevToModels(
 					cacheRead: toNumber(m.cost?.cache_read) ?? 0,
 					cacheWrite: toNumber(m.cost?.cache_write) ?? 0,
 				},
-				contextWindow: toPositiveNumber(m.limit?.context, desc.defaultContextWindow ?? UNK_CONTEXT_WINDOW),
-				maxTokens: toPositiveNumber(m.limit?.output, desc.defaultMaxTokens ?? UNK_MAX_TOKENS),
+				contextWindow: toPositiveNumber(m.limit?.context, desc.defaultContextWindow ?? null),
+				maxTokens: toPositiveNumber(m.limit?.output, desc.defaultMaxTokens ?? null),
 				...(desc.compat && { compat: desc.compat }),
 				...(desc.headers && { headers: { ...desc.headers } }),
 			};

@@ -110,6 +110,13 @@ export interface AuthGatewayParsedRequest {
 	options: AuthGatewayParsedRequestOptions;
 }
 
+export interface AuthGatewayStreamControl {
+	/** Gateway request signal. Encoders stop producing frames when it aborts. */
+	signal?: AbortSignal;
+	/** Called when the HTTP response body is cancelled by the client. */
+	onCancel?: (reason?: unknown) => void;
+}
+
 export interface AuthGatewayFormatModule {
 	parseRequest(body: unknown, headers?: Headers): AuthGatewayParsedRequest;
 	encodeResponse(message: AssistantMessage, requestedModelId: string): Record<string, unknown>;
@@ -117,6 +124,7 @@ export interface AuthGatewayFormatModule {
 		events: AssistantMessageEventStream,
 		requestedModelId: string,
 		options?: AuthGatewayParsedRequestOptions,
+		control?: AuthGatewayStreamControl,
 	): ReadableStream<Uint8Array>;
 	/**
 	 * Emit a protocol-specific error envelope. OpenAI returns

@@ -1,6 +1,7 @@
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { getSegmenter } from "@oh-my-pi/pi-tui";
 import { LRUCache } from "lru-cache/raw";
+import { hasVisibleThinking } from "../../utils/thinking-display";
 import type { AssistantMessageComponent } from "../components/assistant-message";
 
 export const STREAMING_REVEAL_FRAME_MS = 1000 / 30;
@@ -87,7 +88,7 @@ export function visibleUnits(message: AssistantMessage, hideThinking: boolean): 
 	for (const block of message.content) {
 		if (block.type === "text") {
 			total += countGraphemes(block.text);
-		} else if (block.type === "thinking" && !hideThinking) {
+		} else if (block.type === "thinking" && !hideThinking && hasVisibleThinking(block)) {
 			total += countGraphemes(block.thinking);
 		}
 	}
@@ -128,7 +129,7 @@ export function buildDisplayMessage(
 			const units = countOf(i, block.text);
 			content.push(revealTextBlock(block, remaining, units));
 			remaining = Math.max(0, remaining - units);
-		} else if (block.type === "thinking" && !hideThinking) {
+		} else if (block.type === "thinking" && !hideThinking && hasVisibleThinking(block)) {
 			const units = countOf(i, block.thinking);
 			content.push(revealThinkingBlock(block, remaining, units));
 			remaining = Math.max(0, remaining - units);
@@ -230,7 +231,7 @@ export class StreamingRevealController {
 			const block = message.content[i]!;
 			if (block.type === "text") {
 				total += this.#unitCounter.count(i, block.text);
-			} else if (block.type === "thinking" && !this.#hideThinkingBlock) {
+			} else if (block.type === "thinking" && !this.#hideThinkingBlock && hasVisibleThinking(block)) {
 				total += this.#unitCounter.count(i, block.thinking);
 			}
 		}

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.12.4] - 2026-06-13
+
 ### Added
 
 - `PI_FORCE_HYPERLINKS=1` / `PI_NO_HYPERLINKS=1` env overrides for the OSC 8 hyperlink capability, mirroring the `PI_FORCE_SYNC_OUTPUT`/`PI_NO_SYNC_OUTPUT` shape (opt-out beats force-on).

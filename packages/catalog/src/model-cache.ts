@@ -7,10 +7,12 @@ import { getModelDbPath } from "@oh-my-pi/pi-utils";
 import type { Api, Model, ModelSpec } from "./types";
 
 // Rows persist ModelSpec JSON (sparse `compat`, never the resolved record);
-// the model manager rebuilds via `buildModel` on load. v5 invalidates rows
-// predating effort-tier variant collapsing (raw `-low`/`-high`/`-thinking`
-// member ids); v4 dropped the pre-efforts ThinkingConfig shape.
-const CACHE_SCHEMA_VERSION = 5;
+// the model manager rebuilds via `buildModel` on load. v6 invalidates rows
+// that may contain the retired unknown-limit sentinels (222222/8888); v5
+// invalidated rows predating effort-tier variant collapsing (raw
+// `-low`/`-high`/`-thinking` member ids); v4 dropped the pre-efforts
+// ThinkingConfig shape.
+const CACHE_SCHEMA_VERSION = 6;
 
 interface CacheRow {
 	provider_id: string;

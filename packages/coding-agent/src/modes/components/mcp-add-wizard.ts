@@ -262,7 +262,7 @@ export class MCPAddWizard extends Container {
 		}
 
 		this.#contentContainer.addChild(
-			new Text(theme.fg("muted", "[Only letters, numbers, dash, underscore, dot]"), 0, 0),
+			new Text(theme.fg("muted", "[Only letters, numbers, dash, underscore, dot, colon]"), 0, 0),
 		);
 		this.#contentContainer.addChild(new Text(theme.fg("muted", "[Enter to continue, Esc to cancel]"), 0, 0));
 	}

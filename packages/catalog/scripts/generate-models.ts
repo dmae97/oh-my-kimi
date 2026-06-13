@@ -34,14 +34,13 @@ import {
 	MODELS_DEV_PROVIDER_DESCRIPTORS,
 	mapModelsDevToModels,
 	stripFireworksDeepSeekThinkingToggle,
-	UNK_CONTEXT_WINDOW,
-	UNK_MAX_TOKENS,
 } from "../src/provider-models/openai-compat";
 import type { ModelSpec } from "../src/types";
 import { cleanModelName } from "../src/utils";
 import { collapseEffortVariantsAcrossProviders } from "../src/variant-collapse";
 import { JWT_CLAIM_PATH } from "../src/wire/codex";
 import {
+	applyCanonicalLimitFallback,
 	applyGeneratedModelPolicies,
 	CLOUDFLARE_FALLBACK_MODEL,
 	linkOpenAIPromotionTargets,
@@ -158,19 +157,18 @@ function createGlobalModelsDevReferenceMap(modelsDevModels: readonly ModelSpec[]
 			references.set(model.id, model);
 			continue;
 		}
-		if (model.contextWindow > existing.contextWindow) {
+		if ((model.contextWindow ?? 0) > (existing.contextWindow ?? 0)) {
 			references.set(model.id, model);
 			continue;
 		}
-		if (model.contextWindow === existing.contextWindow && model.maxTokens > existing.maxTokens) {
+		if (
+			(model.contextWindow ?? 0) === (existing.contextWindow ?? 0) &&
+			(model.maxTokens ?? 0) > (existing.maxTokens ?? 0)
+		) {
 			references.set(model.id, model);
 		}
 	}
 	return references;
-}
-
-function inheritModelsDevLimit(value: number, referenceValue: number, unspecifiedValue: number): number {
-	return value === unspecifiedValue ? referenceValue : value;
 }
 
 function applyGlobalModelsDevFallback(
@@ -194,8 +192,8 @@ function applyGlobalModelsDevFallback(
 			input: reference.input,
 			// Fill unknown endpoint limits from same-id models.dev references, but keep
 			// provider-specific values when discovery returned them explicitly.
-			contextWindow: inheritModelsDevLimit(model.contextWindow, reference.contextWindow, UNK_CONTEXT_WINDOW),
-			maxTokens: inheritModelsDevLimit(model.maxTokens, reference.maxTokens, UNK_MAX_TOKENS),
+			contextWindow: model.contextWindow ?? reference.contextWindow,
+			maxTokens: model.maxTokens ?? reference.maxTokens,
 		};
 	});
 }
@@ -478,6 +476,9 @@ async function generateModels() {
 	// entries are already collapsed (rebake skips them); this pass folds
 	// previous-snapshot raw members into their logical families.
 	allModels = collapseEffortVariantsAcrossProviders(allModels);
+	// Fill remaining null endpoint limits from each model's canonical-family
+	// reference. Runs last so canonical ids and explicit policy limits are final.
+	applyCanonicalLimitFallback(allModels);
 
 	// Group by provider and sort each provider's models
 	const providers: Record<string, Record<string, ModelSpec>> = {};
