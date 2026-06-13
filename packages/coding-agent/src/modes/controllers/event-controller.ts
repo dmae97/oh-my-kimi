@@ -819,6 +819,18 @@ export class EventController {
 		}
 	}
 	async #handleAgentEnd(_event: Extract<AgentSessionEvent, { type: "agent_end" }>): Promise<void> {
+		// A superseded agent_end: the agent is already streaming a fresh turn, so
+		// this event belongs to a turn that has already been replaced. The session
+		// dispatches to listeners fire-and-forget across an async extension-emit hop
+		// (#emitSessionEvent), so an interrupted turn's agent_end can land AFTER the
+		// resumed turn's agent_start — e.g. empty-Enter interrupt-and-flush of a
+		// queued steer (interruptAndFlushQueuedMessages) or any post-turn
+		// agent.continue(). Running the turn-end teardown now would stop the loader
+		// the live turn just created, leaving "Working…" gone while the agent keeps
+		// running. The live turn owns the loader and finalizes it at its own
+		// agent_end (isStreaming === false by then). Mirrors the collab guest's
+		// !isStreaming loader reconciler.
+		if (this.ctx.session.isStreaming) return;
 		this.#agentTurnActive = false;
 		this.#streamingReveal.stop();
 		this.#toolArgsReveal.flushAll();
