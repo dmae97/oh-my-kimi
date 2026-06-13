@@ -876,6 +876,20 @@ describe("Coding Agent Tools", () => {
 
 			expect(getTextOutput(result)).toContain("Successfully wrote");
 		});
+		it.skipIf(process.platform === "win32")(
+			"should tell the model when a shebang write was chmodded executable",
+			async () => {
+				const testFile = path.join(testDir, "script.sh");
+				const content = "#!/usr/bin/env bash\nprintf 'ok\\n'\n";
+
+				const result = await writeTool.execute("test-call-3-shebang", { path: testFile, content });
+
+				expect(getTextOutput(result)).toContain("[Notice: Made executable via chmod +x]");
+				expect(result.details?.madeExecutable).toBe(true);
+				expect(fs.statSync(testFile).mode & 0o111).toBe(0o111);
+			},
+		);
+
 		it("should write to a new local:// path under the session local root", async () => {
 			const localPath = "local://handoffs/new-output.json";
 			const content = '{"ok":true}\n';

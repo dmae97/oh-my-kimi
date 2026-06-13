@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
-import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, ToolResultMessage } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -38,6 +38,17 @@ function createAssistantMessage(): AssistantMessage {
 			totalTokens: 120,
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 		},
+		timestamp: Date.now(),
+	};
+}
+
+function createToolResultMessage(): ToolResultMessage {
+	return {
+		role: "toolResult",
+		toolCallId: "call_1",
+		toolName: "read",
+		content: [{ type: "text", text: "Interrupted" }],
+		isError: true,
 		timestamp: Date.now(),
 	};
 }
@@ -80,15 +91,13 @@ describe("AgentSession steer idle drain", () => {
 
 	it("delivers a steer queued on an idle resumable session via continue()", async () => {
 		await createSession([{ role: "user", content: "hello", timestamp: Date.now() }, createAssistantMessage()]);
-		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
+		const continueSpy = vi.spyOn(session.agent, "continue").mockImplementation(async () => {
+			session.agent.clearAllQueues();
+		});
 
 		await session.steer("steer me please");
 
-		// Queued and visible immediately...
-		expect(session.getQueuedMessages().steering).toContain("steer me please");
-		expect(session.agent.hasQueuedMessages()).toBe(true);
-
-		// ...and drained without waiting for the next manual prompt.
+		// Drained without waiting for the next manual prompt.
 		vi.advanceTimersByTime(200);
 		await session.waitForIdle();
 		expect(continueSpy).toHaveBeenCalledTimes(1);
@@ -107,6 +116,23 @@ describe("AgentSession steer idle drain", () => {
 		expect(continueSpy).not.toHaveBeenCalled();
 		expect(session.agent.hasQueuedMessages()).toBe(true);
 		expect(session.getQueuedMessages().steering).toContain("wait for the run");
+	});
+
+	it("delivers a steer queued after an interrupted tool result", async () => {
+		await createSession([
+			{ role: "user", content: "hello", timestamp: Date.now() },
+			createAssistantMessage(),
+			createToolResultMessage(),
+		]);
+		const continueSpy = vi.spyOn(session.agent, "continue").mockImplementation(async () => {
+			session.agent.clearAllQueues();
+		});
+
+		await session.steer("deliver after interrupt");
+
+		vi.advanceTimersByTime(200);
+		await session.waitForIdle();
+		expect(continueSpy).toHaveBeenCalledTimes(1);
 	});
 
 	it("round-trips queued images through clearQueue for editor restoration", async () => {

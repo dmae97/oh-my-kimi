@@ -1154,13 +1154,11 @@ export class AgentSession {
 		}
 	}
 
-	/** A steer/follow-up can land after the agent loop's final queue poll but
-	 *  before the prompt unwinds: #promptInFlightCount keeps isStreaming true
-	 *  through post-prompt recovery, so senders (collab guests, skills) still
-	 *  queue via agent.steer()/followUp() instead of starting a fresh prompt.
-	 *  Without a drain those messages strand invisibly until the next manual
-	 *  prompt. Runs when the session settles; the guard makes it a no-op when
-	 *  the queue was consumed normally or a new turn already started. */
+	/** A steer/follow-up can land after the agent loop's final queue poll, or
+	 *  after an abort stops an auto-continued queued turn. In both cases the
+	 *  agent-core queue still owns the message, but no loop is left to poll it.
+	 *  Runs whenever the session settles; the guard makes it a no-op when the
+	 *  queue was consumed normally or a new turn already started. */
 	#drainStrandedQueuedMessages(): void {
 		if (!this.agent.hasQueuedMessages()) return;
 		this.#scheduleAgentContinue({
@@ -1172,6 +1170,7 @@ export class AgentSession {
 		this.#promptInFlightCount = 0;
 		this.#releasePowerAssertion();
 		this.#flushPendingAgentEnd();
+		this.#drainStrandedQueuedMessages();
 	}
 
 	#flushPendingAgentEnd(): void {
@@ -2044,6 +2043,7 @@ export class AgentSession {
 					options?.onSkip?.();
 					return;
 				}
+				this.#beginInFlight();
 				try {
 					await this.#maybeRestoreRetryFallbackPrimary();
 					await this.agent.continue();
@@ -2052,6 +2052,8 @@ export class AgentSession {
 						error: error instanceof Error ? error.message : String(error),
 					});
 					options?.onError?.();
+				} finally {
+					this.#endInFlight();
 				}
 			},
 			{
@@ -5068,7 +5070,11 @@ export class AgentSession {
 		if (this.isRetrying) return false;
 		const messages = this.agent.state.messages;
 		const last = messages[messages.length - 1];
-		return last?.role === "assistant";
+		// A user interrupt during tool execution can leave the transcript ending
+		// with the emitted tool result, not the aborted assistant message. Continuing
+		// from that state is still resumable: Agent.continue() first polls queued
+		// steering before making the next model call.
+		return last?.role === "assistant" || last?.role === "toolResult";
 	}
 
 	queueDeferredMessage(message: CustomMessage): void {

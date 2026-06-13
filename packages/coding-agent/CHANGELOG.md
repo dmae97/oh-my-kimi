@@ -14,6 +14,11 @@
 
 - Fixed prompt templates discovered from `cwd/.omp/prompts/` and the agent prompts directory not appearing in the slash-command autocomplete picker. `InteractiveMode.refreshSlashCommandState()` now feeds `session.promptTemplates` into the autocomplete provider alongside builtins and file-based slash commands; templates whose names collide with an existing command are skipped to mirror the runtime expansion order (`expandSlashCommand` precedes `expandPromptTemplate`) ([#2462](https://github.com/can1357/oh-my-pi/issues/2462)).
 
+### Fixed
+
+- Fixed empty-Enter steering interrupts leaving the newest queued steer visible after aborting an auto-continued queued turn; queued turns now re-drain after every abort/settle cycle.
+- Added an agent-visible notice when the write tool auto-marks shebang files executable, so agents do not redundantly run `chmod +x`.
+
 ## [15.12.4] - 2026-06-13
 
 ### Breaking Changes
