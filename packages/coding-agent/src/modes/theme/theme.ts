@@ -2521,16 +2521,37 @@ function ansi256ToHex(index: number): string {
 }
 
 /**
+ * Classify a parsed theme JSON as light/dark by the perceived luminance of its
+ * status-line background. Mirrors {@link Theme.isLight} so the synchronous
+ * helpers below stay in lockstep with the runtime classifier — see the comment
+ * on `Theme.statusLineLuminance` for why `statusLineBg` is the source of truth
+ * (themes like `porcelain` style a dark chat bubble on an otherwise-light
+ * theme, so `userMessageBg` is unreliable).
+ */
+function isLightThemeJson(themeJson: ThemeJson): boolean {
+	try {
+		const resolved = resolveVarRefs(themeJson.colors.statusLineBg, themeJson.vars ?? {});
+		const luminance = colorLuma(resolved);
+		return luminance !== undefined && luminance > 0.5;
+	} catch {
+		return false;
+	}
+}
+
+/**
  * Get resolved theme colors as CSS-compatible hex strings.
  * Used by HTML export to generate CSS custom properties.
  */
 export async function getResolvedThemeColors(themeName?: string): Promise<Record<string, string>> {
 	const name = themeName ?? getDefaultTheme();
-	const isLight = name === "light";
 	const themeJson = await loadThemeJson(name);
+	const isLight = isLightThemeJson(themeJson);
 	const resolved = resolveThemeColors(themeJson.colors, themeJson.vars);
 
-	// Default text color for empty values (terminal uses default fg color)
+	// Default text color for empty values (terminal uses default fg color).
+	// Must follow the actual theme appearance — hardcoding `name === "light"`
+	// makes every custom light theme (sandstone, limestone, porcelain, …) fall
+	// through to the dark-theme grey and renders the HTML export illegible.
 	const defaultText = isLight ? "#000000" : "#e5e5e7";
 
 	const cssColors: Record<string, string> = {};
@@ -2548,8 +2569,9 @@ export async function getResolvedThemeColors(themeName?: string): Promise<Record
 }
 
 /**
- * Check if a theme is a "light" theme by analyzing its background color luminance.
- * Loads theme JSON synchronously (built-in or custom file) and resolves userMessageBg.
+ * Check if a theme is a "light" theme by analyzing its status-line background
+ * luminance. Loads theme JSON synchronously (built-in or custom file on disk)
+ * for callers in synchronous flows (settings migration, setup wizard).
  */
 export function isLightTheme(themeName?: string): boolean {
 	const name = themeName ?? "dark";
@@ -2566,13 +2588,7 @@ export function isLightTheme(themeName?: string): boolean {
 			return false;
 		}
 	}
-	try {
-		const resolved = resolveVarRefs(themeJson.colors.userMessageBg, themeJson.vars ?? {});
-		const luminance = colorLuma(resolved);
-		return luminance !== undefined && luminance > 0.5;
-	} catch {
-		return false;
-	}
+	return isLightThemeJson(themeJson);
 }
 
 /**

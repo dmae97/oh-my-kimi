@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed HTML session export rendering empty text tokens (`text`, `userMessageText`, `customMessageText`, `toolTitle`) as the dark-theme grey `#e5e5e7` on every theme not literally named `light`, making transcripts illegible on custom light themes like `sandstone`, `limestone`, and `porcelain`. `getResolvedThemeColors` and the standalone `isLightTheme` helper now classify against the resolved `statusLineBg` luminance (the same surface `Theme.isLight` uses), so the HTML `defaultText` falls back to `#000000` on light themes and the standalone helper stays in lockstep with `Theme.isLight` ([#2516](https://github.com/can1357/oh-my-pi/issues/2516)).
+
 ## [15.12.5] - 2026-06-13
 ### Changed
 
