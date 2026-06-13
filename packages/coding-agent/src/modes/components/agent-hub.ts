@@ -42,6 +42,7 @@ import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "../../tools/rend
 import type { ObservableSession, SessionObserverRegistry } from "../session-observer-registry";
 import { getEditorTheme, theme } from "../theme/theme";
 import { matchesSelectDown, matchesSelectUp } from "../utils/keybinding-matchers";
+import { hasVisibleThinking } from "../../utils/thinking-display";
 import { AssistantMessageComponent } from "./assistant-message";
 import { BashExecutionComponent } from "./bash-execution";
 import { BranchSummaryMessageComponent } from "./branch-summary-message";
@@ -992,7 +993,7 @@ export class AgentHubOverlayComponent extends Container {
 		const hasVisibleAssistantContent = message.content.some(
 			content =>
 				(content.type === "text" && content.text.trim().length > 0) ||
-				(content.type === "thinking" && content.thinking.trim().length > 0),
+				(content.type === "thinking" && hasVisibleThinking(content)),
 		);
 		if (hasVisibleAssistantContent) {
 			// New visible turn content closes the current read run (mirrors rebuild).

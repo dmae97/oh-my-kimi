@@ -39,6 +39,7 @@ import {
 import type { SessionContext } from "../../session/session-manager";
 import { createIrcMessageCard } from "../../tools/irc";
 import { formatBytes, formatDuration } from "../../tools/render-utils";
+import { hasVisibleThinking } from "../../utils/thinking-display";
 
 type TextBlock = { type: "text"; text: string };
 interface RenderInitialMessagesOptions {
@@ -367,7 +368,7 @@ export class UiHelpers {
 				const hasVisibleAssistantContent = message.content.some(
 					content =>
 						(content.type === "text" && content.text.trim().length > 0) ||
-						(content.type === "thinking" && content.thinking.trim().length > 0),
+						(content.type === "thinking" && hasVisibleThinking(content)),
 				);
 				if (hasVisibleAssistantContent) {
 					// Rebuild reconstructs immutable history; seal (not finalize) so the

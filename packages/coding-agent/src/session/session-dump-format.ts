@@ -16,6 +16,7 @@ import {
 	type PythonExecutionMessage,
 	pythonExecutionToText,
 } from "./messages";
+import { getVisibleThinkingText } from "../utils/thinking-display";
 
 /** Minimal tool shape for dump output (matches AgentTool fields used by formatSessionDumpText). */
 export interface SessionDumpToolInfo {
@@ -126,9 +127,10 @@ export function formatSessionDumpText(options: FormatSessionDumpTextOptions): st
 				if (c.type === "text") {
 					lines.push(c.text);
 				} else if (c.type === "thinking") {
-					if (c.thinking.trim().length === 0) continue;
+					const thinking = getVisibleThinkingText(c);
+					if (thinking.length === 0) continue;
 					lines.push("<thinking>");
-					lines.push(c.thinking);
+					lines.push(thinking);
 					lines.push("</thinking>\n");
 				} else if (c.type === "toolCall") {
 					lines.push(`<invoke name="${c.name}">`);

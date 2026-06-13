@@ -20,6 +20,7 @@ import type { AgentSessionEvent } from "../../session/agent-session";
 import { isSilentAbort, readPendingDisplayTag, resolveAbortLabel } from "../../session/messages";
 import type { ResolveToolDetails } from "../../tools/resolve";
 import { interruptHint } from "../shared";
+import { hasVisibleThinking } from "../../utils/thinking-display";
 import { StreamingRevealController } from "./streaming-reveal";
 import { ToolArgsRevealController } from "./tool-args-reveal";
 
@@ -480,7 +481,7 @@ export class EventController {
 			const visibleBlockCount = this.ctx.streamingMessage.content.filter(
 				content =>
 					(content.type === "text" && content.text.trim().length > 0) ||
-					(content.type === "thinking" && content.thinking.trim().length > 0),
+					(content.type === "thinking" && hasVisibleThinking(content)),
 			).length;
 			if (visibleBlockCount > this.#lastVisibleBlockCount) {
 				this.#resetReadGroup();
