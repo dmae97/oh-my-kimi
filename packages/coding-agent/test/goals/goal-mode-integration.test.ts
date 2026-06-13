@@ -131,7 +131,6 @@ async function armInputWaiter(mode: InteractiveMode): Promise<{
 	};
 }
 
-
 describe("InteractiveMode goal mode integration", () => {
 	let harness: GoalHarness;
 	let shared: SharedFixture;
@@ -225,7 +224,6 @@ describe("InteractiveMode goal mode integration", () => {
 		harness.mode.onInputCallback?.(harness.mode.startPendingSubmission({ text: "cleanup" }));
 		await waiter.inputPromise;
 	});
-
 
 	it("refuses /goal while plan mode is active", async () => {
 		const showWarning = vi.spyOn(harness.mode, "showWarning");
