@@ -490,7 +490,10 @@ async fn create_session(config: &ShellConfig) -> Result<ShellSessionCore> {
 	}
 	shell.register_builtin("sleep", builtins::builtin::<SleepCommand, _>());
 	shell.register_builtin("timeout", builtins::builtin::<TimeoutCommand, _>());
-	shell.register_builtin("nohup", builtins::builtin::<NohupCommand, _>());
+	shell.register_builtin(
+		"nohup",
+		builtins::builtin::<NohupCommand, _>().transparent_background_wrapper(),
+	);
 
 	let mut merged_path: Option<String> = None;
 	for (key, value) in std::env::vars() {
@@ -2774,6 +2777,36 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 		assert_eq!(result.exit_code, Some(7));
 		assert!(!result.cancelled);
 		assert!(!result.timed_out);
+	}
+
+	/// `nohup` is a no-op builtin in this embedded shell, but `nohup cmd &`
+	/// must still behave like a process-launching background command for `$!`.
+	#[cfg(unix)]
+	#[tokio::test(flavor = "multi_thread")]
+	async fn nohup_background_captures_operand_pid() {
+		let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+		let options = ShellExecuteOptions {
+			command: "nohup /bin/sh -c 'exit 0' >/dev/null 2>&1 & pid=$!; printf 'pid=%s\n' \
+			          \"$pid\"; test -n \"$pid\""
+				.to_string(),
+			..Default::default()
+		};
+		let result = execute_shell(options, Some(tx), CancelToken::default())
+			.await
+			.expect("execute should succeed");
+		assert_eq!(result.exit_code, Some(0));
+		assert!(!result.cancelled);
+		assert!(!result.timed_out);
+
+		let mut out = String::new();
+		while let Some(chunk) = rx.recv().await {
+			out.push_str(&chunk);
+		}
+		let pid = out
+			.trim()
+			.strip_prefix("pid=")
+			.expect("nohup background PID output should include pid= prefix");
+		assert!(pid.parse::<i32>().is_ok_and(|pid| pid > 0), "invalid PID output: {out:?}");
 	}
 
 	/// `nohup` with no operand mirrors coreutils: a `missing operand` diagnostic

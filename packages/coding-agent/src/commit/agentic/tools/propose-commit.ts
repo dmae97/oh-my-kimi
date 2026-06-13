@@ -1,4 +1,4 @@
-import * as z from "zod/v4";
+import { z } from "zod/v4";
 import type { CommitAgentState } from "../../../commit/agentic/state";
 import {
 	capDetails,

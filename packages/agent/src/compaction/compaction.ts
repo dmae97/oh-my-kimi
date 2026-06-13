@@ -807,6 +807,7 @@ async function generateShortSummary(
 				prompt: promptText,
 			},
 			signal,
+			{ fetch: options?.fetch },
 		);
 		return remote.summary;
 	}
@@ -1047,6 +1048,10 @@ export async function compact(
 				);
 				preserveData = withOpenAiRemoteCompactionPreserveData(previousPreserveData, remote);
 			} catch (err) {
+				// A user/session abort is a cancellation, not a remote failure —
+				// swallowing it here would downgrade Esc into "fall back to local
+				// summarization" and keep compaction running on an aborted signal.
+				if (signal?.aborted) throw err;
 				logger.warn("OpenAI remote compaction failed, falling back to local summarization", {
 					error: err instanceof Error ? err.message : String(err),
 					model: model.id,
@@ -1114,6 +1119,7 @@ export async function compact(
 			// Same propagation as summaryOptions above — generateShortSummary
 			// resolves its own reasoning via resolveCompactionEffort.
 			thinkingLevel: options?.thinkingLevel,
+			fetch: summaryOptions.fetch,
 		},
 	);
 

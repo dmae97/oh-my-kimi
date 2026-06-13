@@ -5,6 +5,7 @@
 ### Added
 
 - Added profile-aware directory helpers and isolated profile state roots, while keeping the install ID shared across profiles.
+
 ## [15.12.0] - 2026-06-12
 
 ### Added

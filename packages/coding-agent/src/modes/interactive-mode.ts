@@ -383,8 +383,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	get #defaultWorkingMessage(): string {
 		return `Working…${interruptHint()}`;
 	}
-	autoCompactionEscapeHandler?: () => void;
-	retryEscapeHandler?: () => void;
 	unsubscribe?: () => void;
 	onInputCallback?: (input: SubmittedUserInput) => void;
 	optimisticUserMessageSignature: string | undefined = undefined;

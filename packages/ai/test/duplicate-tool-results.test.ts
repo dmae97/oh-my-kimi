@@ -1,4 +1,9 @@
 import { describe, expect, it } from "bun:test";
+import type {
+	ChatCompletionAssistantMessageParam,
+	ChatCompletionMessageParam,
+	ChatCompletionToolMessageParam,
+} from "@oh-my-pi/pi-ai/providers/openai-chat-wire";
 import { convertMessages } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import { transformMessages } from "@oh-my-pi/pi-ai/providers/transform-messages";
 import type {
@@ -13,11 +18,6 @@ import type {
 	UserMessage,
 } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import type {
-	ChatCompletionAssistantMessageParam,
-	ChatCompletionMessageParam,
-	ChatCompletionToolMessageParam,
-} from "openai/resources/chat/completions";
 
 /**
  * Regression test for: "each tool_use must have a single result. Found multiple tool_result blocks with id"

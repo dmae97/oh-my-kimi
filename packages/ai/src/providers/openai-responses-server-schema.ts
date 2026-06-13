@@ -7,6 +7,8 @@
  * Real clients (codex, openai-python, llm-git) routinely send these and a 400
  * is a worse outcome than dropping them on the floor.
  */
+
+import { z } from "zod/v4";
 import type {
 	EasyInputMessage,
 	ResponseCreateParams,
@@ -16,8 +18,7 @@ import type {
 	ResponseOutputMessage,
 	ResponseReasoningItem,
 	Tool as ResponsesTool,
-} from "openai/resources/responses/responses";
-import * as z from "zod/v4";
+} from "./openai-responses-wire";
 
 // ─── Input content blocks ───────────────────────────────────────────────────
 

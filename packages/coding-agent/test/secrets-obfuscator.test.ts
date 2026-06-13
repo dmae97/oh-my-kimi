@@ -10,7 +10,7 @@ import {
 	SecretObfuscator,
 } from "@oh-my-pi/pi-coding-agent/secrets/obfuscator";
 import { compileSecretRegex } from "@oh-my-pi/pi-coding-agent/secrets/regex";
-import { z } from "zod";
+import { z } from "zod/v4";
 
 describe("compileSecretRegex", () => {
 	it("adds global flag when not provided", () => {

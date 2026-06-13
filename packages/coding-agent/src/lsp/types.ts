@@ -1,5 +1,5 @@
 import type { ptree } from "@oh-my-pi/pi-utils";
-import * as z from "zod/v4";
+import { z } from "zod/v4";
 
 // =============================================================================
 // Tool Schema

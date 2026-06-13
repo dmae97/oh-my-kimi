@@ -4,7 +4,7 @@
  * keys without rejection; only `input` is required. `_input` is accepted as a
  * provider-emitted alias for `input`.
  */
-import * as z from "zod/v4";
+import { z } from "zod/v4";
 
 export const hashlineEditParamsSchema = z.preprocess(raw => {
 	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;

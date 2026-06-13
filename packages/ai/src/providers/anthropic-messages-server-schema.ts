@@ -8,7 +8,7 @@
  * before walking it into pi-ai's canonical `Context`.
  */
 
-import * as z from "zod/v4";
+import { z } from "zod/v4";
 import type {
 	ContentBlockParam,
 	ImageBlockParam,

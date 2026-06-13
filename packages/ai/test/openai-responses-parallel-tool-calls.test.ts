@@ -14,9 +14,9 @@
 // arrival order.
 import { describe, expect, test } from "bun:test";
 import { processResponsesStream } from "@oh-my-pi/pi-ai/providers/openai-responses-shared";
+import type { ResponseStreamEvent } from "@oh-my-pi/pi-ai/providers/openai-responses-wire";
 import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import type { ResponseStreamEvent } from "openai/resources/responses/responses";
 
 function makeModel(): Model<"openai-responses"> {
 	return buildModel({
