@@ -69,7 +69,7 @@ Important edge behavior from runtime:
 - Parse/handler exceptions in the input loop emit `command: "parse"` with `id: undefined`.
 - `prompt` and `abort_and_prompt` return immediate success, then may emit a later error response with the **same** id if async prompt scheduling fails.
 - `prompt` success responses may include `data.agentInvoked`. `false` means the prompt completed locally without an agent turn; `true` means an agent turn was scheduled; omitted means the host must use session events for completion.
-
+- `abort_and_prompt` does not currently emit `data.agentInvoked` or `prompt_result`; hosts should treat it as the legacy abort-then-schedule path and rely on session events or same-id scheduling errors.
 ## Command Schema (canonical)
 
 `RpcCommand` is defined in `src/modes/rpc/rpc-types.ts`:

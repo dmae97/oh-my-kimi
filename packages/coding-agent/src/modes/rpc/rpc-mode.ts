@@ -110,11 +110,11 @@ export function reportLocalOnlyPromptResult(input: {
 	prompt: Promise<boolean>;
 	output: (obj: object) => void;
 	onError: (error: Error) => void;
-	hasExtensionUserMessageTask?: () => boolean;
+	hasExtensionAgentMessageTask?: () => boolean;
 }): void {
 	void input.prompt
 		.then(agentInvoked => {
-			if (!agentInvoked && !input.hasExtensionUserMessageTask?.()) {
+			if (!agentInvoked && !input.hasExtensionAgentMessageTask?.()) {
 				input.output({ type: "prompt_result", id: input.id, agentInvoked: false });
 			}
 		})
@@ -124,30 +124,29 @@ export function reportLocalOnlyPromptResult(input: {
 }
 
 type RpcExtensionUserMessageScope = {
-	hasUserMessageTask: boolean;
+	hasAgentMessageTask: boolean;
 };
 
 /**
- * Tracks extension-originated user messages while an RPC prompt is executing.
+ * Tracks extension-originated messages while an RPC prompt is executing.
  * A slash command can resolve the outer prompt as local-only while also
- * scheduling agent work through pi.sendUserMessage(); that prompt must not
- * report agentInvoked:false to the host.
+ * scheduling agent work through pi.sendUserMessage() or pi.sendMessage()
+ * with triggerTurn; that prompt must not report agentInvoked:false to the host.
  */
 export class RpcExtensionUserMessageTracker {
 	#activePromptScopes = new Set<RpcExtensionUserMessageScope>();
 
-	track(task: Promise<void>): void {
-		void task;
+	markAgentMessageTask(): void {
 		for (const scope of this.#activePromptScopes) {
-			scope.hasUserMessageTask = true;
+			scope.hasAgentMessageTask = true;
 		}
 	}
 
 	watchPrompt<T>(startPrompt: () => Promise<T>): {
 		prompt: Promise<T>;
-		hasUserMessageTask: () => boolean;
+		hasAgentMessageTask: () => boolean;
 	} {
-		const scope: RpcExtensionUserMessageScope = { hasUserMessageTask: false };
+		const scope: RpcExtensionUserMessageScope = { hasAgentMessageTask: false };
 		this.#activePromptScopes.add(scope);
 		let prompt: Promise<T>;
 		try {
@@ -160,9 +159,26 @@ export class RpcExtensionUserMessageTracker {
 			prompt: prompt.finally(() => {
 				this.#activePromptScopes.delete(scope);
 			}),
-			hasUserMessageTask: () => scope.hasUserMessageTask,
+			hasAgentMessageTask: () => scope.hasAgentMessageTask,
 		};
 	}
+}
+
+export function watchAndReportLocalOnlyPromptResult(input: {
+	id: string | undefined;
+	startPrompt: () => Promise<boolean>;
+	output: (obj: object) => void;
+	onError: (error: Error) => void;
+	extensionUserMessageTracker: RpcExtensionUserMessageTracker;
+}): void {
+	const trackedPrompt = input.extensionUserMessageTracker.watchPrompt(input.startPrompt);
+	reportLocalOnlyPromptResult({
+		id: input.id,
+		prompt: trackedPrompt.prompt,
+		output: input.output,
+		onError: input.onError,
+		hasExtensionAgentMessageTask: trackedPrompt.hasAgentMessageTask,
+	});
 }
 
 export type RpcSubagentResetRegistry = Pick<RpcSubagentRegistry, "clear">;
@@ -600,8 +616,8 @@ export async function runRpcMode(
 		onShutdown: () => {
 			shutdownState.requested = true;
 		},
-		trackUserMessageTask: task => {
-			extensionUserMessageTracker.track(task);
+		markAgentInvokingMessage: () => {
+			extensionUserMessageTracker.markAgentMessageTask();
 		},
 		uiContext: rpcUiContext,
 	});
@@ -660,10 +676,14 @@ export async function runRpcMode(
 				});
 				if (builtinResult !== false) {
 					if ("prompt" in builtinResult) {
-						session
-							.prompt(builtinResult.prompt, { images: command.images })
-							.catch(e => output(error(id, "prompt", e.message)));
-						return success(id, "prompt", { agentInvoked: true });
+						watchAndReportLocalOnlyPromptResult({
+							id,
+							startPrompt: () => session.prompt(builtinResult.prompt, { images: command.images }),
+							output,
+							onError: promptError => output(error(id, "prompt", promptError.message)),
+							extensionUserMessageTracker,
+						});
+						return success(id, "prompt");
 					}
 					return success(id, "prompt", { agentInvoked: false });
 				}
@@ -671,18 +691,16 @@ export async function runRpcMode(
 				// Don't await - events will stream
 				// Extension commands are executed immediately, file prompt templates are expanded
 				// If streaming and streamingBehavior specified, queues via steer/followUp
-				const trackedPrompt = extensionUserMessageTracker.watchPrompt(() =>
-					session.prompt(command.message, {
-						images: command.images,
-						streamingBehavior: command.streamingBehavior,
-					}),
-				);
-				reportLocalOnlyPromptResult({
+				watchAndReportLocalOnlyPromptResult({
 					id,
-					prompt: trackedPrompt.prompt,
+					startPrompt: () =>
+						session.prompt(command.message, {
+							images: command.images,
+							streamingBehavior: command.streamingBehavior,
+						}),
 					output,
 					onError: promptError => output(error(id, "prompt", promptError.message)),
-					hasExtensionUserMessageTask: trackedPrompt.hasUserMessageTask,
+					extensionUserMessageTracker,
 				});
 				return success(id, "prompt");
 			}
