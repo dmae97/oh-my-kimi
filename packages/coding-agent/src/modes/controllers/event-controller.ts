@@ -840,10 +840,27 @@ export class EventController {
 		this.sendCompletionNotification();
 	}
 
+	/**
+	 * Tear down the live "Working…" loader: stop its animation timer AND clear the
+	 * reference. A transient overlay (auto-compaction / auto-retry) that only ran
+	 * `statusContainer.clear()` detached the loader from the container but left
+	 * `ctx.loadingAnimation` set, so the resumed turn's `agent_start` →
+	 * `ensureLoadingAnimation()` (guarded by `if (!this.loadingAnimation)`) skipped
+	 * re-adding it and the spinner vanished while the agent kept streaming. Nulling
+	 * the reference here lets the next `agent_start` recreate and re-attach it.
+	 */
+	#stopWorkingLoader(): void {
+		if (this.ctx.loadingAnimation) {
+			this.ctx.loadingAnimation.stop();
+			this.ctx.loadingAnimation = undefined;
+		}
+	}
+
 	async #handleAutoCompactionStart(
 		event: Extract<AgentSessionEvent, { type: "auto_compaction_start" }>,
 	): Promise<void> {
 		this.#cancelIdleCompaction();
+		this.#stopWorkingLoader();
 		this.ctx.statusContainer.clear();
 		const reasonText =
 			event.reason === "overflow"
@@ -929,6 +946,7 @@ export class EventController {
 	}
 
 	async #handleAutoRetryStart(event: Extract<AgentSessionEvent, { type: "auto_retry_start" }>): Promise<void> {
+		this.#stopWorkingLoader();
 		this.ctx.statusContainer.clear();
 		const delaySeconds = Math.round(event.delayMs / 1000);
 		this.ctx.retryLoader = new Loader(

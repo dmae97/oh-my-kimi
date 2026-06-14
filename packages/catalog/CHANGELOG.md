@@ -1,6 +1,10 @@
 # Changelog
 
 ## [Unreleased]
+### Changed
+
+- Changed catalog metadata to update a model’s per-token pricing to input 0.09 and output 0.18
+- Changed the same cataloged model’s maximum token limit from 384000 to 65536
 
 ### Fixed
 

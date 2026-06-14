@@ -55024,13 +55024,13 @@
 				"text"
 			],
 			"cost": {
-				"input": 0.098,
-				"output": 0.196,
+				"input": 0.09,
+				"output": 0.18,
 				"cacheRead": 0.02,
 				"cacheWrite": 0
 			},
 			"contextWindow": 1048576,
-			"maxTokens": 384000,
+			"maxTokens": 65536,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [

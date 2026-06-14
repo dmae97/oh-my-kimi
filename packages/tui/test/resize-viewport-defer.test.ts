@@ -18,6 +18,8 @@ import { VirtualTerminal } from "./virtual-terminal";
 // drag settles.
 
 const NO_MULTIPLEXER_ENV: Record<string, string | undefined> = { TMUX: undefined, STY: undefined, ZELLIJ: undefined };
+const ALT_SCREEN_ENTER = "\x1b[?1049h";
+const ALT_SCREEN_EXIT = "\x1b[?1049l";
 
 async function withEnvPatch<T>(patch: Record<string, string | undefined>, run: () => T | Promise<T>): Promise<T> {
 	const saved: Record<string, string | undefined> = {};
@@ -39,10 +41,10 @@ async function withEnvPatch<T>(patch: Record<string, string | undefined>, run: (
 }
 
 // Deterministic scheduler so the test drives the resize settle window itself
-// instead of waiting on the wall clock. `scheduleImmediate` callbacks are the
-// per-event viewport paints; `scheduleRender` callbacks are delayed timers (the
-// settle). `flushImmediates` paints the mid-drag state without firing the
-// settle; `flushAll` fires the settle and the authoritative replay it queues.
+// instead of waiting on the wall clock. Resize viewport paints are synchronous;
+// `scheduleImmediate` callbacks are ordinary follow-up renders, and
+// `scheduleRender` callbacks are delayed timers (the settle). `flushAll` fires
+// the settle and the authoritative replay it queues.
 class DeferScheduler implements RenderScheduler {
 	#time = 0;
 	#immediates: (() => void)[] = [];
@@ -277,7 +279,52 @@ describe("non-multiplexer resize viewport fast path", () => {
 		});
 	});
 
-	it("overwrites the viewport in place mid-drag (no ED2) and still rewraps at settle", async () => {
+	it("uses the alternate screen during width-drag frames so terminal reflow cannot show wrapped fragments", async () => {
+		await withEnvPatch(NO_MULTIPLEXER_ENV, async () => {
+			const term = new VirtualTerminal(40, 10, 1000);
+			const scheduler = new DeferScheduler();
+			const blocks = Array.from(
+				{ length: 10 },
+				(_v, i) => new CountingBlock([`row-${i}`.padEnd(40, String(i % 10))]),
+			);
+			const expected = Array.from({ length: 10 }, (_v, i) => `row-${i}`.padEnd(20, String(i % 10)));
+			const tui = new TUI(term, undefined, { renderScheduler: scheduler });
+			tui.addChild(new TailTranscript(blocks));
+			try {
+				tui.start();
+				await scheduler.flushImmediates(term);
+
+				const writes = captureWrites(term);
+
+				// Shrinking full-width normal-screen rows makes Ghostty reflow them
+				// into wrapped fragments before the app writes again. The resize
+				// handler must synchronously switch to the alternate screen and
+				// repaint the new-width viewport in that same write.
+				term.resize(20, 10);
+				await term.flush();
+
+				expect(tui.resizeViewportActive).toBe(true);
+				expect(tui.resizeViewportPaints).toBe(1);
+				const drag = writes.join("");
+				expect(drag).toContain(ALT_SCREEN_ENTER);
+				expect(drag).not.toContain("\x1b[2J");
+				expect(drag).not.toContain("\x1b[3J");
+				expect(visible(term)).toEqual(expected);
+
+				const dragWrites = writes.length;
+				await scheduler.flushAll(term);
+
+				const settle = writes.slice(dragWrites).join("");
+				expect(settle).toContain(ALT_SCREEN_EXIT);
+				expect(settle.indexOf(ALT_SCREEN_EXIT)).toBeLessThan(settle.indexOf("\x1b[3J"));
+				expect(visible(term)).toEqual(expected);
+			} finally {
+				tui.stop();
+			}
+		});
+	});
+
+	it("overwrites the viewport without a normal-screen clear mid-drag and still rewraps at settle", async () => {
 		await withEnvPatch(NO_MULTIPLEXER_ENV, async () => {
 			const term = new VirtualTerminal(40, 10, 1000);
 			const { tui, scheduler } = makeTui(term);
@@ -289,18 +336,16 @@ describe("non-multiplexer resize viewport fast path", () => {
 
 				// One mid-drag SIGWINCH: the fast path repaints just the viewport.
 				term.resize(60, 10);
-				await scheduler.flushImmediates(term);
 
 				expect(tui.resizeViewportActive).toBe(true);
 				const drag = writes.join("");
-				// In-place overwrite: NO ED2 full-screen clear (and no ED3) — the
-				// screen never blanks mid-drag, so even a terminal that ignores DEC
-				// 2026 synchronized output cannot show a cleared-but-unpainted frame.
+				// The drag frame borrows the alternate screen and performs per-row
+				// self-clearing rewrites there. It must not clear/replay the normal
+				// screen, so even terminals that expose resize reflow between app
+				// writes cannot show a blanked normal-screen frame.
+				expect(drag).toContain(ALT_SCREEN_ENTER);
 				expect(drag).not.toContain("\x1b[2J");
 				expect(drag).not.toContain("\x1b[3J");
-				// Home anchor + per-row self-clearing rewrites (CSI K), with the new
-				// viewport content in the SAME frame: each row goes old -> new with
-				// no intervening blank.
 				expect(drag).toContain("\x1b[H");
 				expect(drag).toContain("\x1b[K");
 				expect(drag).toContain("b14-y");
