@@ -175,6 +175,20 @@ describe("generated model policies", () => {
 		expect(models[0]?.compat?.supportsToolChoice).toBe(false);
 	});
 
+	it("marks OpenCode Go Kimi K2.7 Code as not supporting forced tool_choice", () => {
+		const models: ModelSpec<"openai-completions">[] = [
+			createSpec({
+				id: "kimi-k2.7-code",
+				api: "openai-completions",
+				provider: "opencode-go",
+			}),
+		];
+
+		applyGeneratedModelPolicies(models);
+
+		expect(models[0]?.compat?.supportsForcedToolChoice).toBe(false);
+	});
+
 	it("links spark variants and gpt-5.5 to their context promotion targets", () => {
 		const models = [
 			createSpec({ id: "gpt-5.3-codex-spark", api: "openai-codex-responses", provider: "openai-codex" }),

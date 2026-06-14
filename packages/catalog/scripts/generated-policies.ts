@@ -211,6 +211,12 @@ function applyGeneratedModelPolicy(model: ModelSpec<Api>): void {
 			supportsToolChoice: false,
 		};
 	}
+	if (model.api === "openai-completions" && model.provider === "opencode-go" && model.id === "kimi-k2.7-code") {
+		model.compat = {
+			...(model.compat ?? {}),
+			supportsForcedToolChoice: false,
+		};
+	}
 	if (
 		model.api === "openai-completions" &&
 		model.provider === "opencode-go" &&

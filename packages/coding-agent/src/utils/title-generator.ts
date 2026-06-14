@@ -57,8 +57,10 @@ const TITLE_MARKER_RE = /<title>([\s\S]*?)<\/title>/i;
 function modelSupportsForcedToolChoice(model: Model<Api>): boolean {
 	const compat = model.compat;
 	if (!compat) return true;
-	if ("supportsForcedToolChoice" in compat) return compat.supportsForcedToolChoice;
-	if ("supportsToolChoice" in compat) return compat.supportsToolChoice;
+	const forcedToolChoice = Reflect.get(compat, "supportsForcedToolChoice");
+	if (typeof forcedToolChoice === "boolean") return forcedToolChoice;
+	const toolChoice = Reflect.get(compat, "supportsToolChoice");
+	if (typeof toolChoice === "boolean") return toolChoice;
 	return true;
 }
 
