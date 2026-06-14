@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
-import type { AssistantMessage, ToolCall, ToolResultContent } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, TextContent, ToolCall } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -78,7 +78,7 @@ describe("AgentSession todo reminder self-continuation suppression", () => {
 			timestamp: Date.now(),
 		};
 		session.agent.emitExternalEvent({ type: "message_end", message: assistantMsg });
-		const content: ToolResultContent[] = [{ type: "text", text: "ok" }];
+		const content: TextContent[] = [{ type: "text", text: "ok" }];
 		session.agent.emitExternalEvent({
 			type: "message_end",
 			message: {
