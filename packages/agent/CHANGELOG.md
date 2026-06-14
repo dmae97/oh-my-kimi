@@ -2,128 +2,68 @@
 
 ## [Unreleased]
 
-## [15.13.0] - 2026-06-14
+### Breaking Changes
+
+- Changed `pruneSupersededToolResults` to allow `supersedeKey` to be omitted so useless-result pruning can run without read-style supersede grouping
+- Removed `compaction/index.ts` re-export of snapcompact helpers, so snapcompact utilities are no longer available from the agent compaction barrel and should be imported from `@oh-my-pi/snapcompact`
+- Removed the `convertToLlm` alias export from `compaction/messages` — it duplicated `defaultConvertToLlm` under a second name. Import `defaultConvertToLlm` (array form) or the new `convertMessageToLlm` (single-message form) instead
+
 ### Added
 
 - Added repetition-loop detection to the streaming agent loop for Gemini-family providers. A runaway run of a repeated text or thinking unit is detected mid-stream from a bounded rolling tail (O(1) per delta), the provider request is aborted, the repeated tail is collapsed to a single representative copy, and the turn ends gracefully with an `error` stop reason. Legitimate all-numeric/whitespace/punctuation runs (hexdumps, zero-fills, numeric tables) are not misclassified as loops ([#2549](https://github.com/can1357/oh-my-pi/pull/2549) by [@usr-bin-roygbiv](https://github.com/usr-bin-roygbiv)).
+- Added `pruneUseless` controls to `PruneConfig` and `SupersedePruneConfig` so callers can toggle compaction of `toolResult` entries marked `useless`
+- Added the ability to disable useless-result pruning by setting `pruneUseless` to false
+- Tools can flag a result contextually useless (`AgentToolResult.useless`; overridable via `AfterToolCallResult.useless`): the agent loop copies the flag onto the persisted `ToolResultMessage` (errors always win), and compaction consumes it — the cache-aware supersede pass and the threshold prune blank flagged results to the exact `USELESS_NOTICE` placeholder (bypassing the protect window, skipping results smaller than the notice), shake collects them inside the protect-recent window, and `serializeConversation` drops the whole tool call/result pair from summarizer input
+- Added `hasSteeringMessages` to `AgentLoopConfig` (wired by `Agent` to its steering queue): a peek used by the immediate-interrupt poll during tool execution, so the loop can detect queued steering without dequeuing and the queue keeps owning its messages until the injection boundary
+- The agent loop now re-samples after a non-terminal stop (`stopReason: "stop"` with `stopDetails: { type: "pause_turn" }`, emitted by the Codex providers for `end_turn: false` commentary-only responses): the assistant message is committed to history and the model is called again without ending the turn. Consecutive pause continuations without an intervening tool call are capped at 8 to bound a backend that never stops pausing.
+- `AgentTool.concurrency` now also accepts a per-call resolver function `(args) => "shared" | "exclusive"`, letting tools pick the scheduling mode from the call's arguments (a throwing resolver falls back to `"exclusive"`)
+- Added `convertMessageToLlm()`: the single-message core transformer behind `defaultConvertToLlm()`. Embedders with app-specific message roles should handle their own roles and delegate every core role (`user`/`developer`/`assistant`/`toolResult`/`custom`/`hookMessage`/`branchSummary`/`compactionSummary`) to it instead of duplicating the conversion — a duplicated `compactionSummary` case is how snapcompact frames once silently dropped off provider requests
+- Added `pruneSupersededToolResults()` and the opt-in `PruneConfig.supersedeKey` hook so harnesses can prune stale tool results superseded by a newer read of the same file; superseded results are pruned ahead of age-based victims during overflow pruning and replaced with a `[Superseded by a newer read of this file]` placeholder. Without the new config, `pruneToolOutputs()` behavior is unchanged.
+- Added `readToolSupersedeKey()` implementing the read-tool path/selector grammar (selector-free reads supersede range reads of the same file; URL-scheme paths exempt). Pruning honors prompt-cache economics: per-turn prunes only fire when the post-candidate suffix is small or the cache is cold (idle gap).
+- Added the `snapcompact` compaction strategy via `@oh-my-pi/snapcompact`: instead of an LLM summary, discarded history is printed onto dense bitmap frames and re-attached to the compaction summary message as image blocks. `CompactionSummaryMessage` gains an optional `images` field, `estimateTokens()` charges per attached frame, and frames persist under `preserveData.snapcompact` with an 8-frame middle-out eviction budget.
+- Snapcompact frames are now rendered in a provider-aware shape (`SNAPCOMPACT_SHAPES` + `resolveSnapcompactShape(api)`), following the snapcompact 200k-token monolithic evals: Anthropic-family and unknown APIs get `8x8r-bw` (unscii-8 square cells, black ink, every line printed twice with the copy on a pale highlight band — read at F1 parity with raw text at ~2x lower cost and the most refusal-robust), Google gets `8x8r-sent` (sentence-hue ink, ~2.9x cheaper), and OpenAI gets `6x6u-sent` (unscii Lanczos-stretched to 6x6 cells — OpenAI bills a flat ~2.9k tokens per image, so frame count is the only cost lever) with `detail: "original"` on the frame images. `snapcompactCompact()` accepts `model`/`shape` options, frames persist their shape metadata, mixed-shape archives (provider switches, legacy 5x8 frames) are flagged in the reading instructions, and `snapcompactGeometry()`/`renderSnapcompactFrame()` now take a shape
+- Added `AgentLoopConfig.getDisableReasoning` so callers can override `disableReasoning` per LLM call, mirroring `getReasoning`.
+- Added `transformProviderContext` to `AgentOptions`/`AgentLoopConfig`: an optional hook applied to the assembled provider context after conversion, normalization, and append-only handling, but before telemetry capture and provider send.
+- Added optional `fetch` overrides to `SummaryOptions` and `compact`/`generateSummary` so remote compaction can use custom HTTP clients
+- Added optional `fetch` option to `ProxyStreamOptions` to control the HTTP request used by `streamProxy`
+- Added optional `fetch` overrides to `requestOpenAiRemoteCompaction` and `requestRemoteCompaction` for injectable HTTP transport
+- Added the upstream provider that served a request (`AssistantMessage.upstreamProvider`, e.g. OpenRouter's routed provider) as a `pi.gen_ai.response.upstream_provider` chat-span telemetry attribute, alongside the existing response id and time-to-first-chunk.
+- Added a non-interrupting "aside" message channel to the agent loop (`AgentLoopConfig.getAsideMessages` / `Agent.setAsideMessageProvider`). Asides are drained at each step boundary (after a tool batch, before the next model call) and at the yield check, so passive notifications (e.g. background-job completions, late LSP diagnostics) reach the model *between requests* without waiting for the agent to stop and without aborting in-flight tools the way steering does.
+- Added optional `promptCacheKey` support to `AgentOptions` and `Agent` via a new `promptCacheKey` property so providers can receive a caller-provided prompt cache key
+- Added optional `ApiKeyResolveContext` parameter to `getApiKey` in `AgentOptions` and `AgentLoopConfig` so key resolvers can receive retry context
+- Added `getReadToolPath(context)` to `@oh-my-pi/pi-agent-core/compaction/tool-protection` to extract a paired `read` tool call's `path` for embedders building read-targeted protection matchers
+- Added `getReadToolPath(context)` to `@oh-my-pi/pi-agent-core/compaction/tool-protection`: the shared primitive that extracts a paired `read` tool call's `path` argument, so embedders can build their own read-targeted compaction protection matchers (e.g. plan-file reads) the same way `isSkillReadToolResult` does.
+- Added optional `AgentTool.matcherDigest(args)` hook: tools whose streamed arguments encode content in a wire grammar (patch formats, escaped strings) can expose the real content they introduce, so stream-content matchers (e.g. TTSR rules) run against plain source text instead of the wire format.
+- Added `shake` compaction primitives (`collectShakeRegions`, `applyShakeRegion`, `applyShakeRegions`, `summarizeShakeRegions`, `DEFAULT_SHAKE_CONFIG`, `AGGRESSIVE_SHAKE_CONFIG`, plus the `ShakeRegion`/`ShakeConfig`/`ShakeSummaryItem`/`ShakeSummaryComplete`/`ProtectedToolMatcher` types) under `@oh-my-pi/pi-agent-core/compaction`. These detect heavy context regions — whole tool-call results plus large fenced/XML blocks — and either elide them with placeholders or extractively compress them through an injected completion backend (no LLM summary cut-point). The compressor is provider-agnostic: callers wire it to a local on-device model. Pure detection/mutation; no I/O.
+
+### Changed
+
+- Changed `pruneSupersededToolResults` to allow omitted `supersedeKey` when `pruneUseless` is enabled, so useless-result pruning can run without read-style supersede grouping
+- Changed steering handling so queued steering messages are now dequeued only at injection boundaries, with immediate mid-batch interrupt polling using `hasSteeringMessages`. Consumers constructing `AgentLoopConfig` directly with only `getSteeringMessages` no longer get mid-batch interrupts — steering degrades to boundary-only delivery until they also supply `hasSteeringMessages`
+- Compaction, handoff, short-summary, and branch-summarization helpers now accept an `ApiKey` (static string or resolver) instead of a pre-resolved string, so a 401 mid-compaction force-refreshes and rotates the credential through the central auth-retry policy before any model-level fallback. The remote OpenAI compaction request is wrapped in `withAuth` and its HTTP failures now carry `.status`, so the retry classifier actually fires on remote-compaction 401s.
+- `transformProviderContext` now receives the dispatch model as a second argument (`(context, model) => Context`), so per-request transforms can gate on model capabilities (vision input, provider, API family). Existing single-argument implementations keep working unchanged.
+- Remote-compaction and summarization failures now throw pi-ai's typed `ProviderHttpError` instead of mutating plain `Error`s with a `.status` property; the generic `requestRemoteCompaction` error now carries `.status` (and response headers) too.
+- Compaction and branch-summary file lists are now a single `<files>` tag instead of `<read-files>`/`<modified-files>`: paths render as the grouped, prefix-folded directory tree the find/search tools emit (`# dir/` headers, bare basenames), each annotated `(Read)`, `(Write)`, or `(RW)` — modified files that were also read get `(RW)`. Legacy tags in summaries written by earlier versions are still stripped and self-heal on the next compaction
+- Editorial pass over the compaction prompts: fixed garbled grammar and missing articles, RFC-keyed prohibitions, deduped restated instructions; parsed markers (`<read-files>`/`<modified-files>`/`<previous-summary>`) and all output-format headings left byte-identical
+- Catalog imports moved to the new `@oh-my-pi/pi-catalog` package: subpath imports (`calculateCost`, Codex wire constants) plus catalog values previously taken from the `@oh-my-pi/pi-ai` root (`getBundledModel`, `clampThinkingLevelForModel`), which pi-ai no longer re-exports; type-only `Model`/`Api`/`Effort` imports from pi-ai are unchanged
+- Changed core custom and hook messages to convert to `developer` messages for provider context.
+- Enabled streaming API calls to re-resolve credentials through the `getApiKey` callback when retries occur after authentication-related errors
+- `Agent.abort(reason?)` now forwards `reason` to the underlying `AbortController`, and the synthesized aborted assistant message carries that reason on `errorMessage` (string or non-`AbortError` `Error` message) instead of always defaulting to `"Request was aborted"`. Bare `abort()` is unchanged.
+- Changed `Agent.appendMessage`, `popMessage`, `clearMessages`, and `reset` to mutate `state.messages` and `state.pendingToolCalls` in place instead of allocating a fresh array/Set on every transition. Subscribers that capture `state.messages` by reference now observe updates without needing to re-read `state` after each event. The public type signature is unchanged (always `AgentMessage[]` / `Set<string>`).
 
 ### Fixed
 
 - Fixed repetition loop handling to collapse repeated `thinking` blocks to a single representative copy when a loop is detected
 - Fixed repetition-loop detection to ignore repeats that contain only digits, whitespace, or punctuation so legitimate numeric outputs no longer stop with a repetition-loop error
 - Fixed false-positive repetition-loop checks across `text` and `thinking` stream boundaries by tracking loop detection per block type
-
-## [15.12.6] - 2026-06-14
-
-### Fixed
-
 - Fixed dynamic forced tool choices from queue hooks being filtered against the active per-turn tool set before provider dispatch. ([#1701](https://github.com/can1357/oh-my-pi/issues/1701))
-
-## [15.12.4] - 2026-06-13
-### Fixed
-
 - Fixed remote compaction input trimming to use unlimited context when `model.contextWindow` is unset
-
-## [15.12.1] - 2026-06-12
-### Breaking Changes
-
-- Changed `pruneSupersededToolResults` to allow `supersedeKey` to be omitted so useless-result pruning can run without read-style supersede grouping
-
-### Added
-
-- Added `pruneUseless` controls to `PruneConfig` and `SupersedePruneConfig` so callers can toggle compaction of `toolResult` entries marked `useless`
-- Added the ability to disable useless-result pruning by setting `pruneUseless` to false
-- Tools can flag a result contextually useless (`AgentToolResult.useless`; overridable via `AfterToolCallResult.useless`): the agent loop copies the flag onto the persisted `ToolResultMessage` (errors always win), and compaction consumes it — the cache-aware supersede pass and the threshold prune blank flagged results to the exact `USELESS_NOTICE` placeholder (bypassing the protect window, skipping results smaller than the notice), shake collects them inside the protect-recent window, and `serializeConversation` drops the whole tool call/result pair from summarizer input
-
-### Changed
-
-- Changed `pruneSupersededToolResults` to allow omitted `supersedeKey` when `pruneUseless` is enabled, so useless-result pruning can run without read-style supersede grouping
-
-## [15.11.4] - 2026-06-12
-### Added
-
-- Added `hasSteeringMessages` to `AgentLoopConfig` (wired by `Agent` to its steering queue): a peek used by the immediate-interrupt poll during tool execution, so the loop can detect queued steering without dequeuing and the queue keeps owning its messages until the injection boundary
-- The agent loop now re-samples after a non-terminal stop (`stopReason: "stop"` with `stopDetails: { type: "pause_turn" }`, emitted by the Codex providers for `end_turn: false` commentary-only responses): the assistant message is committed to history and the model is called again without ending the turn. Consecutive pause continuations without an intervening tool call are capped at 8 to bound a backend that never stops pausing.
-
-### Changed
-
-- Changed steering handling so queued steering messages are now dequeued only at injection boundaries, with immediate mid-batch interrupt polling using `hasSteeringMessages`. Consumers constructing `AgentLoopConfig` directly with only `getSteeringMessages` no longer get mid-batch interrupts — steering degrades to boundary-only delivery until they also supply `hasSteeringMessages`
-- Compaction, handoff, short-summary, and branch-summarization helpers now accept an `ApiKey` (static string or resolver) instead of a pre-resolved string, so a 401 mid-compaction force-refreshes and rotates the credential through the central auth-retry policy before any model-level fallback. The remote OpenAI compaction request is wrapped in `withAuth` and its HTTP failures now carry `.status`, so the retry classifier actually fires on remote-compaction 401s.
-- `transformProviderContext` now receives the dispatch model as a second argument (`(context, model) => Context`), so per-request transforms can gate on model capabilities (vision input, provider, API family). Existing single-argument implementations keep working unchanged.
-- Remote-compaction and summarization failures now throw pi-ai's typed `ProviderHttpError` instead of mutating plain `Error`s with a `.status` property; the generic `requestRemoteCompaction` error now carries `.status` (and response headers) too.
-
-### Fixed
-
 - Fixed a regression where steering messages could be injected into history during an aborted in-flight tool batch, leaving them hidden from queue consumers for post-abort continue
-
-## [15.11.2] - 2026-06-11
-
-### Added
-
-- `AgentTool.concurrency` now also accepts a per-call resolver function `(args) => "shared" | "exclusive"`, letting tools pick the scheduling mode from the call's arguments (a throwing resolver falls back to `"exclusive"`)
-
-### Fixed
-
 - Fixed whitespace-only error tool results so Anthropic requests no longer 400 with `tool_result: content cannot be empty if is_error is true` and wedge the session on every subsequent turn
-## [15.11.0] - 2026-06-10
-### Breaking Changes
-
-- Removed `compaction/index.ts` re-export of snapcompact helpers, so snapcompact utilities are no longer available from the agent compaction barrel and should be imported from `@oh-my-pi/snapcompact`
-- Removed the `convertToLlm` alias export from `compaction/messages` — it duplicated `defaultConvertToLlm` under a second name. Import `defaultConvertToLlm` (array form) or the new `convertMessageToLlm` (single-message form) instead
-
-### Added
-
-- Added `convertMessageToLlm()`: the single-message core transformer behind `defaultConvertToLlm()`. Embedders with app-specific message roles should handle their own roles and delegate every core role (`user`/`developer`/`assistant`/`toolResult`/`custom`/`hookMessage`/`branchSummary`/`compactionSummary`) to it instead of duplicating the conversion — a duplicated `compactionSummary` case is how snapcompact frames once silently dropped off provider requests
-- Added `pruneSupersededToolResults()` and the opt-in `PruneConfig.supersedeKey` hook so harnesses can prune stale tool results superseded by a newer read of the same file; superseded results are pruned ahead of age-based victims during overflow pruning and replaced with a `[Superseded by a newer read of this file]` placeholder. Without the new config, `pruneToolOutputs()` behavior is unchanged.
-- Added `readToolSupersedeKey()` implementing the read-tool path/selector grammar (selector-free reads supersede range reads of the same file; URL-scheme paths exempt). Pruning honors prompt-cache economics: per-turn prunes only fire when the post-candidate suffix is small or the cache is cold (idle gap).
-- Added the `snapcompact` compaction strategy via `@oh-my-pi/snapcompact`: instead of an LLM summary, discarded history is printed onto dense bitmap frames and re-attached to the compaction summary message as image blocks. `CompactionSummaryMessage` gains an optional `images` field, `estimateTokens()` charges per attached frame, and frames persist under `preserveData.snapcompact` with an 8-frame middle-out eviction budget.
-- Snapcompact frames are now rendered in a provider-aware shape (`SNAPCOMPACT_SHAPES` + `resolveSnapcompactShape(api)`), following the snapcompact 200k-token monolithic evals: Anthropic-family and unknown APIs get `8x8r-bw` (unscii-8 square cells, black ink, every line printed twice with the copy on a pale highlight band — read at F1 parity with raw text at ~2x lower cost and the most refusal-robust), Google gets `8x8r-sent` (sentence-hue ink, ~2.9x cheaper), and OpenAI gets `6x6u-sent` (unscii Lanczos-stretched to 6x6 cells — OpenAI bills a flat ~2.9k tokens per image, so frame count is the only cost lever) with `detail: "original"` on the frame images. `snapcompactCompact()` accepts `model`/`shape` options, frames persist their shape metadata, mixed-shape archives (provider switches, legacy 5x8 frames) are flagged in the reading instructions, and `snapcompactGeometry()`/`renderSnapcompactFrame()` now take a shape
-
-### Changed
-
-- Compaction and branch-summary file lists are now a single `<files>` tag instead of `<read-files>`/`<modified-files>`: paths render as the grouped, prefix-folded directory tree the find/search tools emit (`# dir/` headers, bare basenames), each annotated `(Read)`, `(Write)`, or `(RW)` — modified files that were also read get `(RW)`. Legacy tags in summaries written by earlier versions are still stripped and self-heal on the next compaction
-
-### Fixed
-
 - Fixed queued steering messages being drained into an externally aborted run: interrupting mid-tool execution (e.g. Enter with a pending steer) dequeued the steer into the dying run — it landed in history without a response and the post-abort resume saw an empty queue, so the agent stopped instead of continuing. Steering/follow-up/aside queue polls are now skipped once the run's abort signal fires, leaving the queue intact for `Agent.continue()`.
 - Fixed `<read-files>` compaction lists recording the same file once per line-range/raw selector (`src/foo.ts:50-200`, `:raw`, `:1-50:raw`, …): read-tool selectors are now stripped before tracking, so reads dedupe to the base path and match their write/edit path when splitting read-only vs modified lists. Selector-polluted lists stored by earlier compactions self-heal on the next compaction. `readToolSupersedeKey()` now shares the same splitter (`splitReadSelector()`), gaining the `..` range alias and `L`-prefix forms it previously missed.
 - Fixed `estimateTokens()` undercounting thinking-heavy assistant messages on replay: `thinkingSignature` payloads (OpenAI Responses encrypted reasoning items, Anthropic signed thinking blocks, etc.) and `redactedThinking.data` are now charged alongside the visible thinking text, so the local estimate tracks provider-reported usage instead of straddling the threshold on every turn ([#2275](https://github.com/can1357/oh-my-pi/issues/2275)).
-
-## [15.10.12] - 2026-06-10
-
-### Added
-
-- Added `AgentLoopConfig.getDisableReasoning` so callers can override `disableReasoning` per LLM call, mirroring `getReasoning`.
-- Added `transformProviderContext` to `AgentOptions`/`AgentLoopConfig`: an optional hook applied to the assembled provider context after conversion, normalization, and append-only handling, but before telemetry capture and provider send.
-
-### Fixed
-
 - Fixed `Agent` runs so explicit reasoning disablement is forwarded to provider stream options and re-resolved per continuation, keeping mid-run thinking-off changes in sync with the next provider request.
-
-## [15.10.11] - 2026-06-10
-
-### Changed
-
-- Editorial pass over the compaction prompts: fixed garbled grammar and missing articles, RFC-keyed prohibitions, deduped restated instructions; parsed markers (`<read-files>`/`<modified-files>`/`<previous-summary>`) and all output-format headings left byte-identical
-- Catalog imports moved to the new `@oh-my-pi/pi-catalog` package: subpath imports (`calculateCost`, Codex wire constants) plus catalog values previously taken from the `@oh-my-pi/pi-ai` root (`getBundledModel`, `clampThinkingLevelForModel`), which pi-ai no longer re-exports; type-only `Model`/`Api`/`Effort` imports from pi-ai are unchanged
-
-## [15.10.8] - 2026-06-09
-
-### Added
-
-- Added optional `fetch` overrides to `SummaryOptions` and `compact`/`generateSummary` so remote compaction can use custom HTTP clients
-- Added optional `fetch` option to `ProxyStreamOptions` to control the HTTP request used by `streamProxy`
-- Added optional `fetch` overrides to `requestOpenAiRemoteCompaction` and `requestRemoteCompaction` for injectable HTTP transport
-- Added the upstream provider that served a request (`AssistantMessage.upstreamProvider`, e.g. OpenRouter's routed provider) as a `pi.gen_ai.response.upstream_provider` chat-span telemetry attribute, alongside the existing response id and time-to-first-chunk.
-
-## [15.10.5] - 2026-06-08
-
-### Removed
-
-- Removed the `maxToolCallsPerTurn` option from `AgentOptions` and `AgentLoopConfig`, so assistant turns are no longer capped after a configured number of completed tool calls
-
-### Fixed
-
 - Fixed stalled aborted assistant responses so the run now stops without waiting for provider iterator cleanup and returns the aborted message promptly
 - Fixed `afterToolCall` handling so it now runs for completed tool executions even after a run is aborted so tool post-processing still applies
 - Fixed `agentLoopDetailed().detailed()` so run telemetry and coverage are captured before `stream.result()` resolves.
@@ -134,95 +74,63 @@
 - Fixed tool-call completion so assistant messages on abort keep only completed tool-call blocks and continue processing tool calls when a length stop still included results
 - Fixed deliberate aborts (TTSR rule matches, user-interrupt labels) so a mid-stream tool-call block that never reached `toolcall_end` is retained on the aborted assistant message and paired with a placeholder result labeled by the abort reason, instead of being dropped; anonymous aborts (bare `abort()`) still drop incomplete tool calls whose partial arguments are unsafe to replay
 - Fixed runs that stopped with reason `length` after returning tool results so execution continues to handle additional tool calls
-
-## [15.10.3] - 2026-06-08
-
-### Added
-
-- Added a non-interrupting "aside" message channel to the agent loop (`AgentLoopConfig.getAsideMessages` / `Agent.setAsideMessageProvider`). Asides are drained at each step boundary (after a tool batch, before the next model call) and at the yield check, so passive notifications (e.g. background-job completions, late LSP diagnostics) reach the model *between requests* without waiting for the agent to stop and without aborting in-flight tools the way steering does.
-
-### Changed
-
-- Changed core custom and hook messages to convert to `developer` messages for provider context.
-
-### Fixed
-
 - Fixed the compaction spinner freezing (only repainting on a terminal resize) when compacting very large codex/OpenAI contexts. `buildOpenAiNativeHistory` re-collected the full known/custom tool-call id sets on every history-bearing message, rescanning the entire growing native history each time — O(N²) in history items — which blocked the event loop for seconds and starved the loader's animation timer and render scheduler. The sets are now maintained incrementally (linear), so building the compaction request no longer monopolizes the main thread.
-
-### Removed
-
-- Removed the now-dead `<turn-aborted>` marker from the OpenAI compaction output user-message filter, since `transformMessages` no longer emits that note.
-- Removed stale synthetic user-message tag filters from OpenAI remote compaction output preservation; developer messages are now dropped by role instead.
-- Tool executions now receive the active turn `AbortSignal` unconditionally.
-
-## [15.10.2] - 2026-06-08
-
-### Fixed
-
 - Fixed proxy stream silently returning a zero-token success response when the server disconnects without sending a `done` or `error` terminal SSE event. The stream now throws an error, surfacing the disconnect as an `error` event with `stopReason: "error"` and resolving `finalResultPromise`, instead of defaulting to `stopReason: "stop"` with empty content and leaving `stream.result()` callers hanging indefinitely.
-
-## [15.10.1] - 2026-06-07
-
-### Added
-
-- Added optional `promptCacheKey` support to `AgentOptions` and `Agent` via a new `promptCacheKey` property so providers can receive a caller-provided prompt cache key
-- Added optional `ApiKeyResolveContext` parameter to `getApiKey` in `AgentOptions` and `AgentLoopConfig` so key resolvers can receive retry context
-
-### Changed
-
-- Enabled streaming API calls to re-resolve credentials through the `getApiKey` callback when retries occur after authentication-related errors
-- `Agent.abort(reason?)` now forwards `reason` to the underlying `AbortController`, and the synthesized aborted assistant message carries that reason on `errorMessage` (string or non-`AbortError` `Error` message) instead of always defaulting to `"Request was aborted"`. Bare `abort()` is unchanged.
-
-### Fixed
-
 - Fixed handling of short-lived API keys so that expired tokens are retried with a refreshed value during 401/usage-limit failures
 - Ensured fallback API key resolution uses the initially configured static `apiKey` when `getApiKey` is present
 - Wrapped oneshot LLM completions (`instrumentedCompleteSimple`: handoff, compaction/branch summaries) in an `EventLoopKeepalive`. These run outside the agent `#runLoop`, so without the keepalive Bun's event loop stopped servicing timers while parked on the completion promise — freezing host spinners (e.g. the `/handoff` loader) until an unrelated terminal resize poked the loop into rendering again.
-
-## [15.9.5] - 2026-06-05
-
-### Fixed
-
 - Surfaced Anthropic stream failures whose message starts with `Output blocked by conten` as normal assistant error lifecycle events, so interactive clients render content-filter blocks instead of silently dropping the streaming bubble at `agent_end`.
-
-## [15.8.3] - 2026-06-03
-
-### Added
-
-- Added `getReadToolPath(context)` to `@oh-my-pi/pi-agent-core/compaction/tool-protection` to extract a paired `read` tool call's `path` for embedders building read-targeted protection matchers
-- Added `getReadToolPath(context)` to `@oh-my-pi/pi-agent-core/compaction/tool-protection`: the shared primitive that extracts a paired `read` tool call's `path` argument, so embedders can build their own read-targeted compaction protection matchers (e.g. plan-file reads) the same way `isSkillReadToolResult` does.
-
-## [15.8.2] - 2026-06-03
-
-### Added
-
-- Added optional `AgentTool.matcherDigest(args)` hook: tools whose streamed arguments encode content in a wire grammar (patch formats, escaped strings) can expose the real content they introduce, so stream-content matchers (e.g. TTSR rules) run against plain source text instead of the wire format.
-
-### Fixed
-
 - Fixed the agent loop wedging the model when a `write`/`edit` tool call is truncated by `stop_reason: length` (e.g. an OpenCode Zen / Claude-3.5-Haiku turn that emits >~1000 lines of code, blowing past the 8K `max_tokens` output cap). The skipped tool result now surfaces an actionable hint — naming `stop_reason: length` and telling the model to split the payload into multiple smaller calls — instead of the generic "Tool call was not executed because the assistant ended its turn" placeholder, which left the auto-continue loop re-emitting the same oversized payload until the user gave up. Tools are still NOT executed when the arguments are truncated. ([#1785](https://github.com/can1357/oh-my-pi/issues/1785))
-
-## [15.8.0] - 2026-06-02
-
-### Fixed
-
 - Engaged GPT-5 Harmony leak detection on the committed assistant message (openai-codex only). `detectHarmonyLeakInAssistantMessage` now runs on the streamed `done`/`error` result and the trailing fallback, so a leaked final response is aborted-and-retried by the existing mitigation instead of being committed as-is. Tool-argument (`tool_arg`) scanning is gated on the trailing-garbage `T` co-signal and only fires when a caller supplies a parse boundary via `detectHarmonyLeakInAssistantMessage`'s new optional `toolArgParseEnd` resolver. The agent loop passes none — it cannot bound a streamed tool DSL — so that surface stays inert and a legitimate codex tool call whose content legitimately carries `to=functions.*` next to a channel word or non-Latin script (e.g. editing the harmony fixtures) is never hard-aborted.
-
-## [15.7.4] - 2026-05-31
+- Fixed tool-output pruning and shake protection for `read`: ordinary file/URL reads are now eligible for compaction, while `read` calls whose `path` starts with `skill://` remain protected like native `skill` results.
 
 ### Removed
 
+- Removed the `maxToolCallsPerTurn` option from `AgentOptions` and `AgentLoopConfig`, so assistant turns are no longer capped after a configured number of completed tool calls
+- Removed the now-dead `<turn-aborted>` marker from the OpenAI compaction output user-message filter, since `transformMessages` no longer emits that note.
+- Removed stale synthetic user-message tag filters from OpenAI remote compaction output preservation; developer messages are now dropped by role instead.
+- Tool executions now receive the active turn `AbortSignal` unconditionally.
 - Removed the local-model `summarizeShakeRegions` compressor and related shake-summary prompt/types; shake now only provides mechanical artifact-backed elision primitives.
 
+## [15.13.0] - 2026-06-14
+
+## [15.12.6] - 2026-06-14
+
+## [15.12.4] - 2026-06-13
+
+## [15.12.1] - 2026-06-12
+
+## [15.11.4] - 2026-06-12
+
+## [15.11.2] - 2026-06-11
+
+## [15.11.0] - 2026-06-10
+
+## [15.10.12] - 2026-06-10
+
+## [15.10.11] - 2026-06-10
+
+## [15.10.8] - 2026-06-09
+
+## [15.10.5] - 2026-06-08
+
+## [15.10.3] - 2026-06-08
+
+## [15.10.2] - 2026-06-08
+
+## [15.10.1] - 2026-06-07
+
+## [15.9.5] - 2026-06-05
+
+## [15.8.3] - 2026-06-03
+
+## [15.8.2] - 2026-06-03
+
+## [15.8.0] - 2026-06-02
+
+## [15.7.4] - 2026-05-31
+
 ## [15.7.3] - 2026-05-31
-
-### Added
-
-- Added `shake` compaction primitives (`collectShakeRegions`, `applyShakeRegion`, `applyShakeRegions`, `summarizeShakeRegions`, `DEFAULT_SHAKE_CONFIG`, `AGGRESSIVE_SHAKE_CONFIG`, plus the `ShakeRegion`/`ShakeConfig`/`ShakeSummaryItem`/`ShakeSummaryComplete`/`ProtectedToolMatcher` types) under `@oh-my-pi/pi-agent-core/compaction`. These detect heavy context regions — whole tool-call results plus large fenced/XML blocks — and either elide them with placeholders or extractively compress them through an injected completion backend (no LLM summary cut-point). The compressor is provider-agnostic: callers wire it to a local on-device model. Pure detection/mutation; no I/O.
-
-### Fixed
-
-- Fixed tool-output pruning and shake protection for `read`: ordinary file/URL reads are now eligible for compaction, while `read` calls whose `path` starts with `skill://` remain protected like native `skill` results.
 
 ## [15.5.15] - 2026-05-30
 
@@ -245,10 +153,6 @@
 ### Fixed
 
 - Fixed compaction summarizer throws losing the provider's HTTP status. `generateSummary`, `generateHandoff`, `generateShortSummary`, and `generateTurnPrefixSummary` now route their `stopReason === "error"` throws through a `createSummarizationError` helper that copies `AssistantMessage.errorStatus` onto the thrown `Error` as `.status`, letting downstream consumers (e.g. `AgentSession.#isCompactionAuthFailure` in `@oh-my-pi/pi-coding-agent`) branch on real provider 401/403s without regex-scraping the message body.
-
-### Changed
-
-- Changed `Agent.appendMessage`, `popMessage`, `clearMessages`, and `reset` to mutate `state.messages` and `state.pendingToolCalls` in place instead of allocating a fresh array/Set on every transition. Subscribers that capture `state.messages` by reference now observe updates without needing to re-read `state` after each event. The public type signature is unchanged (always `AgentMessage[]` / `Set<string>`).
 
 ## [15.5.0] - 2026-05-26
 

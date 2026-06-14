@@ -184,11 +184,21 @@ export class CustomEditor extends Editor {
 		});
 	};
 
+	/** Optional test/host override for the magic-keyword shimmer gate. When
+	 *  defined, takes precedence over the global `magicKeywords.enabled` setting,
+	 *  letting tests assert the gating behaviour without mutating the
+	 *  process-wide Settings singleton (which races with parallel test files —
+	 *  see issue #2582). Production wires this through the host's Settings
+	 *  reader and updates it on the relevant setting change. */
+	magicKeywordsEnabledOverride: boolean | undefined;
+
 	/** Whether the shimmer should advance this frame. Defaults to "on" before
 	 *  settings have initialised (tests, early boot) so the animation does not
 	 *  silently disappear during a race; settings disabling the feature wins
-	 *  once they are loaded. */
+	 *  once they are loaded. An explicit `magicKeywordsEnabledOverride` overrides
+	 *  both paths. */
 	#shimmerEnabled(): boolean {
+		if (this.magicKeywordsEnabledOverride !== undefined) return this.magicKeywordsEnabledOverride;
 		return isSettingsInitialized() ? settings.get("magicKeywords.enabled") : true;
 	}
 

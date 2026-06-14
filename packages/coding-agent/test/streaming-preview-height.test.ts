@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -294,21 +294,15 @@ describe("streaming edit preview height (stable, full tail window)", () => {
 });
 
 describe("streaming tool call preview height (bounded across renderers)", () => {
-	let themed = false;
-
-	beforeEach(async () => {
-		if (!themed) {
-			await initTheme();
-			themed = true;
-		}
-		resetSettingsForTest();
-		await Settings.init({ inMemory: true, cwd: process.cwd() });
+	beforeAll(async () => {
+		// `evalToolRenderer.renderCall` walks the theme during highlighting; the
+		// bash/ssh/eval pending previews exercised below DO NOT read
+		// `settings.*`, so the global Settings singleton is intentionally left
+		// untouched here. Resetting/initialising it in `beforeEach` raced with
+		// parallel test files that do the same dance (issue #2582), flipping the
+		// proxy under us and timing the eval test out.
+		await initTheme();
 	});
-
-	afterEach(() => {
-		resetSettingsForTest();
-	});
-
 	function renderPending(toolName: string, args: unknown): { lines: readonly string[]; text: string } {
 		const term = new VirtualTerminal(80, 20);
 		const tui = new TUI(term);
