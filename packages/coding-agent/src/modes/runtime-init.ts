@@ -26,7 +26,7 @@ export interface InitializeExtensionsOptions {
 	/** Optional lifecycle hook for extension-originated messages that can start an agent turn. */
 	markAgentInvokingMessage?: () => void;
 	/** Optional lifecycle hook for extension-originated sends whose success/failure determines turn ownership. */
-	trackAgentInvokingMessage?: (task: Promise<void>) => void;
+	trackAgentInvokingMessage?: (task: Promise<unknown>) => void;
 }
 
 /**

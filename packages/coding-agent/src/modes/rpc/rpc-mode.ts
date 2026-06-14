@@ -146,13 +146,13 @@ export class RpcExtensionUserMessageTracker {
 		}
 	}
 
-	trackAgentMessageTask(task: Promise<void>): void {
+	trackAgentMessageTask(task: Promise<unknown>): void {
 		for (const scope of this.#activePromptScopes) {
 			this.#trackAgentMessageTaskForScope(scope, task);
 		}
 	}
 
-	#trackAgentMessageTaskForScope(scope: RpcExtensionUserMessageScope, task: Promise<void>): void {
+	#trackAgentMessageTaskForScope(scope: RpcExtensionUserMessageScope, task: Promise<unknown>): void {
 		const scopedTask = task.then(
 			() => {
 				scope.hasAgentMessageTask = true;

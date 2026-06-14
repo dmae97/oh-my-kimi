@@ -2,10 +2,6 @@
 
 ## [Unreleased]
 
-### Fixed
-
-- Fixed npm plugin installs to reject packages whose declared extension entry points cannot load because imports or nested dependencies are unresolved ([#2312](https://github.com/can1357/oh-my-pi/issues/2312)).
-
 ### Breaking Changes
 
 - Replaced the `omp setup stt` command with `omp setup speech`. The old `stt` setup component is gone (no alias); `omp setup speech` now provisions the full speech stack — audio recorder, speech-to-text model, and text-to-speech model.
@@ -32,6 +28,7 @@
 - Added a read-only `ctx.models` facade for extensions: `list()` (authenticated models), `current()` (live session model), `resolve(spec)` (a model string or role alias → `Model`, using the same settings-backed aliases and match preferences as core selection), and `family(model)` (opaque canonical-identity lineage token for cross-family comparisons). Lets extension tools select models the way core does without reaching into the mutable registry ([#2406](https://github.com/can1357/oh-my-pi/issues/2406))
 
 - Added RPC prompt lifecycle hints so hosts can distinguish scheduled agent turns from local-only slash commands via `data.agentInvoked` and `prompt_result`.
+- Added extension lifecycle events for tool approval prompts: `tool_approval_requested` before the approval wait and `tool_approval_resolved` after approve, deny, or approval prompt failure.
 
 ### Changed
 
@@ -47,6 +44,7 @@
 
 ### Fixed
 
+- Fixed npm plugin installs to reject packages whose declared extension entry points cannot load because imports or nested dependencies are unresolved ([#2312](https://github.com/can1357/oh-my-pi/issues/2312)).
 - Fixed the deferred MCP discovery banner (`Connecting to MCP servers: …`) overdrawing the chat input bar. `onMCPConnecting` wrote the banner straight to `process.stderr` while the TUI owned the terminal; it now emits on an `mcp:connecting` event channel that `InteractiveMode` renders through `showStatus` (the status container), mirroring the existing LSP-startup pattern so the banner can never paint over the input box border ([#2483](https://github.com/can1357/oh-my-pi/issues/2483))
 - Fixed Win+Shift+S screenshot paste on Windows dead-ending on `Image not found`: Windows Terminal forwards a bracketed paste of the Snipping Tool's transient `…\MicrosoftWindows.Client.Core_*\TempState\…` file path, which is already gone (or never materialized) by the time omp reads it, so `handleImagePathPaste` failed with ENOENT even though the screenshot bitmap was still on the clipboard. The handler now falls back to the clipboard image across every local read failure (missing file, undecodable file, or generic error) before degrading, and the fallback is skipped over SSH where the clipboard lives on the remote host rather than the terminal holding the screenshot.
 - Fixed npm prebuilt extension compatibility shims deriving their own package root through bare `@oh-my-pi/pi-coding-agent` resolution, which could select an older Bun cache copy in global installs and reintroduce mixed-runtime plugin loading stack overflows.
@@ -150,9 +148,6 @@
 - Added `omp models` command to list and manage models with `ls`, `find`, `canonical`, and `refresh` actions
 - Added `--json` output plus `-e/--extension`, `--no-extensions`, and `--config` controls to `omp models` listings
 - Added `skills.enableAgentsUser` and `skills.enableAgentsProject` settings (default on) so the canonical OMP-native `~/.agent[s]/skills` and project-walkup `.agent[s]/skills` are configurable independently from the third-party Claude/Codex/Pi toggles.
-
-
-- Added extension lifecycle events for tool approval prompts: `tool_approval_requested` before the approval wait and `tool_approval_resolved` after approve, deny, or approval prompt failure.
 
 ### Changed
 
