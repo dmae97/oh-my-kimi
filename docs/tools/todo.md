@@ -28,27 +28,25 @@
 | `drop` | `task` or `phase` or neither | None | Marks the target task, phase, or all tasks `abandoned`. |
 | `rm` | `task` or `phase` or neither | None | Removes the target task, clears the phase's task list, or clears all task lists. |
 | `append` | `phase`, `items` | None | Appends new `pending` tasks to a phase; creates the phase if missing. |
-| `note` | `task`, `text` | None | Appends one trimmed note string to the task's `notes` array. |
+| `view` | None | None | Echoes the current list. A call whose ops are all `view` is read-only: no normalization, no state write. |
 
 ### Fields used inside ops
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `op` | `"init" | "start" | "done" | "rm" | "drop" | "append" | "note"` | Yes | Operation discriminator. |
+| `op` | `"init" | "start" | "done" | "rm" | "drop" | "append" | "view"` | Yes | Operation discriminator. |
 | `list` | `{ phase: string; items: string[] }[]` | For `init` | Full replacement payload. Each `items` array has `minItems: 1`. |
-| `task` | `string` | For `start`; for task-targeted `done`/`drop`/`rm`/`note` | Exact task content match. |
+| `task` | `string` | For `start`; for task-targeted `done`/`drop`/`rm` | Exact task content match. |
 | `phase` | `string` | For `append`; for phase-targeted `done`/`drop`/`rm` | Exact phase name match, except `append` lazily creates a missing phase. |
 | `items` | `string[]` | For `append` | Tasks to append. `minItems: 1`. |
-| `text` | `string` | For `note` | Note text; trailing whitespace is stripped before storing. Empty-after-trim is rejected. |
 
 ## Outputs
 The tool returns a single-shot `AgentToolResult`:
 
 - `content`: one text part containing the summary from `formatSummary(...)`.
-  - Empty final state with no errors: `Todo list cleared.`
+  - Empty final state with no errors: `Todo list cleared.` (`Todo list is empty.` for a pure-`view` call).
   - Non-empty final state: remaining-item list, current phase progress, then a per-phase tree.
-  - If the active `in_progress` task has notes, the summary includes the note bodies inline.
-  - If any op produced validation/runtime errors, the summary starts with `Errors: ...`; the returned tool result is marked `isError: true` and still includes the mutated state.
+  - If any op produced validation/runtime errors, the summary starts with `Errors: ...` and the result is marked `isError: true`; the whole batch is discarded — the returned and persisted state stay at the pre-call list.
 - `details`:
   - `phases: TodoPhase[]`
   - `storage: "session" | "memory"`
@@ -57,9 +55,9 @@ The tool returns a single-shot `AgentToolResult`:
 `TodoPhase` / `TodoItem` state model:
 
 - `TodoPhase`: `{ name: string, tasks: TodoItem[] }`
-- `TodoItem`: `{ content: string, status: "pending" | "in_progress" | "completed" | "abandoned", notes?: string[] }`
+- `TodoItem`: `{ content: string, status: "pending" | "in_progress" | "completed" | "abandoned" }`
 
-The TUI renderer (`todoToolRenderer`) merges call and result into one transcript block, renders phases as a tree, shows note counts as superscripts, and renders the note bodies only for the current `in_progress` task. Collapsed transcript previews cap tree items at `PREVIEW_LIMITS.COLLAPSED_ITEMS` (`8`).
+The TUI renderer (`todoToolRenderer`) merges call and result into one transcript block and renders phases as a tree. Collapsed transcript previews cap tree items at `PREVIEW_LIMITS.COLLAPSED_ITEMS` (`8`).
 
 ## Flow
 1. `TodoTool.execute(...)` clones the current cached phases from `session.getTodoPhases?.() ?? []` (`packages/coding-agent/src/tools/todo.ts`).
@@ -70,25 +68,24 @@ The TUI renderer (`todoToolRenderer`) merges call and result into one transcript
    - `done` / `drop` use `getTaskTargets(...)` to target one task, one phase, or every task.
    - `rm` removes one task, clears one phase's `tasks`, or clears all phases' task arrays.
    - `appendItems(...)` resolves or creates the target phase and pushes new `pending` tasks unless the same task content already exists anywhere.
-   - `note` trims trailing whitespace, rejects empty text, and appends the note to `task.notes`.
-4. Missing task/phase references are recorded in an `errors` array by `resolveTaskOrError(...)` / `resolvePhaseOrError(...)`; execution continues through the rest of the batch.
+4. Missing task/phase references are recorded in an `errors` array by `resolveTaskOrError(...)` / `resolvePhaseOrError(...)`; execution continues through the rest of the batch, but any error discards the batch's mutations at the end.
 5. After the full batch, `normalizeInProgressTask(...)` enforces the single-active-task invariant:
    - if multiple tasks are `in_progress`, only the first stays active and the rest become `pending`;
    - if none are `in_progress`, the first `pending` task in phase/task order is auto-promoted to `in_progress`.
-6. `execute(...)` stores the normalized phases with `session.setTodoPhases?.(...)` and reports `storage` as `"session"` when `session.getSessionFile()` exists, else `"memory"`.
-7. `getCompletionTransitions(...)` compares the previous and updated phases; newly completed tasks are returned in `details.completedTasks`.
+6. `execute(...)` stores the updated phases with `session.setTodoPhases?.(...)` only when the batch produced no errors and was not pure-`view`; a failed batch is discarded wholesale (persisting a half-applied batch would make the natural retry hit "already exists"). `storage` is `"session"` when `session.getSessionFile()` exists, else `"memory"`.
+7. `getCompletionTransitions(...)` compares the previous and updated phases (skipped for failed or pure-`view` calls); newly completed tasks are returned in `details.completedTasks`.
 8. The agent runtime also watches `todo` tool results in `packages/coding-agent/src/session/agent-session.ts`; successful results refresh cached todos, failed results inject a hidden next-turn reminder telling the model that todo progress is not visible until it retries.
 9. The event controller updates the visible todo UI from `result.details.phases` on success, or shows a warning on error (`packages/coding-agent/src/modes/controllers/event-controller.ts`).
 
 ## Modes / Variants
 ### State transitions
 
-| Current status | `start` | `done` | `drop` | `rm` | `append` | `note` |
-| --- | --- | --- | --- | --- | --- | --- |
-| `pending` | `in_progress` on target | `completed` | `abandoned` | Removed | New tasks enter as `pending` | No status change |
-| `in_progress` | Target stays `in_progress`; non-target active tasks become `pending` | `completed` | `abandoned` | Removed | No status change | No status change |
-| `completed` | Can be set back to `in_progress` if targeted | Stays `completed` | Becomes `abandoned` if targeted | Removed | No status change | No status change |
-| `abandoned` | Can be set back to `in_progress` if targeted | Becomes `completed` if targeted | Stays `abandoned` | Removed | No status change | No status change |
+| Current status | `start` | `done` | `drop` | `rm` | `append` |
+| --- | --- | --- | --- | --- | --- |
+| `pending` | `in_progress` on target | `completed` | `abandoned` | Removed | New tasks enter as `pending` |
+| `in_progress` | Target stays `in_progress`; non-target active tasks become `pending` | `completed` | `abandoned` | Removed | No status change |
+| `completed` | Can be set back to `in_progress` if targeted | Stays `completed` | Becomes `abandoned` if targeted | Removed | No status change |
+| `abandoned` | Can be set back to `in_progress` if targeted | Becomes `completed` if targeted | Stays `abandoned` | Removed | No status change |
 
 Normalization then re-applies the single-active-task rule after the full op batch.
 
@@ -98,12 +95,11 @@ Normalization then re-applies the single-active-task rule after the full op batc
   - else `phase` set: affect every task in that exact-name phase.
   - else: affect every task in every phase.
 - `append` is the only op that creates a missing phase.
-- `note` only targets a single task.
 - `init` discards previous phases entirely.
 
 ### Markdown round-trip helpers
 The same file also exposes non-tool helpers used by `/todo`:
-- `phasesToMarkdown(...)` serializes phases as headings plus checklist items (`[ ]`, `[/]`, `[x]`, `[-]`) with blockquote note bodies.
+- `phasesToMarkdown(...)` serializes phases as headings plus checklist items (`[ ]`, `[/]`, `[x]`, `[-]`).
 - `markdownToPhases(...)` parses that format, defaults orphan tasks into a `Todos` phase, accepts `>` as an `in_progress` marker and `~` as `abandoned`, and runs the same normalization step.
 
 ## Side Effects
@@ -119,39 +115,38 @@ The same file also exposes non-tool helpers used by `/todo`:
   - `event-controller` updates the visible todo panel from successful results.
   - On error, `event-controller` shows `Todo update failed...`; the visible panel may stay stale until a later successful call.
 - Background work / cancellation
-  - `AgentSession.setTodoPhases(...)` schedules auto-clear timers for `completed` / `abandoned` tasks via `tasks.todoClearDelay`.
+  - Session-level auto-clear of `completed`/`abandoned` tasks was removed (the timer mutated canonical phases between tool calls); the TUI todo widget still clears closed entries after `tasks.todoClearDelay` (display-only, `packages/coding-agent/src/modes/interactive-mode.ts`).
 
 ## Limits & Caps
 - `ops` array: `minItems: 1` (`todoSchema`).
 - `init.list[*].items`: `minItems: 1`.
 - `append.items`: `minItems: 1`.
 - Renderer collapsed preview: `PREVIEW_LIMITS.COLLAPSED_ITEMS = 8` (`packages/coding-agent/src/tools/render-utils.ts`).
-- Auto-clear delay: `tasks.todoClearDelay` default `60` seconds; `< 0` disables auto-clear, `0` clears on the next microtask (`packages/coding-agent/src/session/agent-session.ts`).
+- Auto-clear delay: `tasks.todoClearDelay` default `60` seconds; `< 0` disables auto-clear, `0` clears immediately. Display-only — applied by the TUI widget (`packages/coding-agent/src/modes/interactive-mode.ts`); the setting is inert at the session level.
 - Tool execution mode: `concurrency = "exclusive"`, `strict = true`, `loadMode = "discoverable"`.
 
 ## Errors
-- Ordinary bad op payloads are accumulated as human-readable strings in `errors`; the tool still returns the mutated state, but marks the result `isError: true`.
+- Ordinary bad op payloads are accumulated as human-readable strings in `errors`; the result is marked `isError: true` and the whole batch is discarded — the returned and persisted state stay at the pre-call list.
 - Error strings come from the helpers in `packages/coding-agent/src/tools/todo.ts`, including:
   - `Missing list for init operation`
   - `Missing task content`
+  - `Duplicate phase "..." in init list` / `Duplicate task "..." in init list`
   - `Task "..." not found` with an extra empty-list hint when applicable
   - `Missing phase name`
   - `Phase "..." not found`
   - `Missing phase name for append operation`
   - `Missing items for append operation`
   - `Task "..." already exists`
-  - `Missing text for note operation`
-- Because ops are processed in order, earlier errors do not roll back later ops.
+- Ops are processed in order and an early error does not stop later ops from being attempted, but any error in the batch discards every mutation the batch made.
 - Runtime-level tool failure is handled outside the tool body: `agent-session` injects a hidden reminder and the event controller warns the user that visible progress may be stale.
 - Idempotency is op-specific:
   - `init` is a full replacement; replaying the same payload yields the same state.
   - `start`, `done`, and `drop` are effectively idempotent on an existing target state, but `start` also demotes any other active task.
   - `rm` is not idempotent for targeted removals: the second call errors because the task or phase is gone.
-  - `append` is not idempotent: duplicate task content is rejected with `Task "..." already exists`.
-  - `note` is append-only and never idempotent; replaying it adds another note entry.
+  - `append` is not idempotent: duplicate task content is rejected with `Task "..." already exists`; the whole `append` op validates up front, so a batch with any duplicate appends nothing.
 
 ## Notes
-- Task lookup is exact string equality inside the tool. The model-facing prompt says task content and phase names are identifiers and should stay unique; `append` enforces task uniqueness globally, but `init` does not validate duplicate task or phase names.
+- Task lookup is exact string equality inside the tool. The model-facing prompt says task content and phase names are identifiers and should stay unique; `append` enforces task uniqueness globally, and `init` rejects duplicate phase names and duplicate task contents in its payload.
 - `findTaskByContent(...)` returns the first matching task across phases. Duplicate task contents make later targeted ops ambiguous.
 - `normalizeInProgressTask(...)` runs after the whole batch, not after each op. A single call can intentionally build an intermediate invalid state and rely on final normalization.
 - `storage: "session"` means the session has a session-file backing; it does not mean this tool wrote a durable custom entry.

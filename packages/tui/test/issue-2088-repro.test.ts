@@ -71,6 +71,18 @@ async function settle(term: VirtualTerminal): Promise<void> {
 	await term.flush();
 }
 
+// Pad the non-multiplexer resize viewport settle window (120 ms) so the test
+// reliably observes the deferred authoritative full paint. These are
+// integration tests against the real render scheduler (process.nextTick
+// immediates interleaved with setTimeout debounces), so the settle window is
+// driven with a real delay rather than fake timers.
+const RESIZE_VIEWPORT_SETTLE_WAIT_MS = 160;
+
+async function settleResize(term: VirtualTerminal): Promise<void> {
+	await Bun.sleep(RESIZE_VIEWPORT_SETTLE_WAIT_MS);
+	await settle(term);
+}
+
 function captureWrites(term: VirtualTerminal): string[] {
 	const writes: string[] = [];
 	const realWrite = term.write.bind(term);
@@ -86,7 +98,15 @@ function visible(term: VirtualTerminal): string[] {
 }
 
 const TMUX_ENV: Record<string, string | undefined> = { TMUX: "1", STY: undefined, ZELLIJ: undefined };
-const NO_MULTIPLEXER_ENV: Record<string, string | undefined> = { TMUX: undefined, STY: undefined, ZELLIJ: undefined };
+// Pin TERM to a non-multiplexer value: `isMultiplexerSession()` falls back to
+// the TERM prefix, so leaving the host's TERM (which may be `tmux-*`/`screen-*`
+// under CI-in-tmux) would misclassify this "direct terminal" case.
+const NO_MULTIPLEXER_ENV: Record<string, string | undefined> = {
+	TMUX: undefined,
+	STY: undefined,
+	ZELLIJ: undefined,
+	TERM: "xterm-256color",
+};
 
 describe("issue #2088: tmux pane-resize race produces viewport flash", () => {
 	let monotonicNow = 0;
@@ -142,7 +162,7 @@ describe("issue #2088: tmux pane-resize race produces viewport flash", () => {
 		});
 	});
 
-	it("renders immediately on resize outside a multiplexer", async () => {
+	it("paints the viewport immediately on resize outside a multiplexer, then replays on settle", async () => {
 		await withEnvPatch(NO_MULTIPLEXER_ENV, async () => {
 			const term = new VirtualTerminal(40, 10, 1000);
 			const tui = new TUI(term);
@@ -153,10 +173,21 @@ describe("issue #2088: tmux pane-resize race produces viewport flash", () => {
 				await settle(term);
 
 				const baselineRedraws = tui.fullRedraws;
+				const baselinePaints = tui.resizeViewportPaints;
+				const expectedViewport = Array.from({ length: 10 }, (_v, i) => `line-${i + 10}`);
 				term.resize(80, 10);
 				await settle(term);
+
+				// In flight: a cheap viewport-only paint lands at once (no native
+				// scrollback replay), and the authoritative full paint is deferred.
+				expect(tui.resizeViewportPaints).toBeGreaterThan(baselinePaints);
+				expect(tui.fullRedraws).toBe(baselineRedraws);
+				expect(visible(term)).toEqual(expectedViewport);
+
+				// Once the drag goes quiet the full replay fires exactly once.
+				await settleResize(term);
 				expect(tui.fullRedraws).toBeGreaterThan(baselineRedraws);
-				expect(visible(term)).toEqual(Array.from({ length: 10 }, (_v, i) => `line-${i + 10}`));
+				expect(visible(term)).toEqual(expectedViewport);
 			} finally {
 				tui.stop();
 			}
@@ -296,6 +327,103 @@ describe("issue #2088: tmux pane-resize race produces viewport flash", () => {
 				await Bun.sleep(DEBOUNCE_SETTLE_WAIT_MS);
 				await settle(term);
 				expect(tui.fullRedraws - baselineRedraws).toBe(1);
+				expect(visible(term)).toEqual(Array.from({ length: 10 }, (_v, i) => `line-${i + 10}`));
+			} finally {
+				tui.stop();
+			}
+		});
+	});
+});
+
+// Regression for tmux auto-detection: `isMultiplexerSession()` gates the
+// renderer's resize behavior. It previously checked only TMUX/STY/ZELLIJ, while
+// every sibling multiplexer check (terminal-capabilities.ts) also falls back to
+// the TERM prefix. When TMUX is stripped but TERM survives (`sudo` without -E,
+// `su`, env-sanitizing launchers/ssh), the engine misclassified tmux as a direct
+// terminal and emitted ED3 (CSI 3 J) on resize — which wipes tmux pane history
+// (verified against tmux 3.6a: a 20-line pane drops to its 6 on-screen rows
+// after ED3), so scrollback only reappeared after a full rerender.
+describe("multiplexer detection: TERM prefix gates ED3 when TMUX is stripped", () => {
+	let monotonicNow = 0;
+
+	beforeEach(() => {
+		monotonicNow = 0;
+		vi.spyOn(performance, "now").mockImplementation(() => {
+			monotonicNow += 40;
+			return monotonicNow;
+		});
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	// ED3 clears native scrollback; the renderer must never emit it in a mux.
+	const ED3 = "\x1b[3J";
+
+	// tmux/screen panes whose authoritative env signal was stripped but whose
+	// TERM still names the multiplexer — the case previously misclassified.
+	const strippedMuxTerms: Array<[string, Record<string, string | undefined>]> = [
+		["tmux-256color", { TERM: "tmux-256color", TMUX: undefined, STY: undefined, ZELLIJ: undefined }],
+		["screen-256color", { TERM: "screen-256color", TMUX: undefined, STY: undefined, ZELLIJ: undefined }],
+	];
+
+	for (const [label, env] of strippedMuxTerms) {
+		it(`debounces the resize and emits no ED3 when only TERM=${label} marks the multiplexer`, async () => {
+			await withEnvPatch(env, async () => {
+				const term = new VirtualTerminal(40, 10, 1000);
+				const tui = new TUI(term);
+				tui.addChild(new MutableLinesComponent(Array.from({ length: 20 }, (_v, i) => `line-${i}`)));
+
+				try {
+					tui.start();
+					await settle(term);
+
+					const baselineRedraws = tui.fullRedraws;
+					const writes = captureWrites(term);
+
+					// SIGWINCH must route through the multiplexer debounce, not the
+					// immediate forced render: detection via TERM alone is the proof.
+					term.resize(80, 10);
+					await Bun.sleep(10);
+					expect(writes.length).toBe(0);
+					expect(tui.fullRedraws).toBe(baselineRedraws);
+
+					// The settled paint repaints at the new geometry without clearing
+					// native scrollback, so the pane keeps its history.
+					await Bun.sleep(DEBOUNCE_SETTLE_WAIT_MS);
+					await settle(term);
+					const out = writes.join("");
+					expect(out.length).toBeGreaterThan(0);
+					expect(out).not.toContain(ED3);
+					expect(tui.fullRedraws - baselineRedraws).toBe(1);
+					expect(visible(term)).toEqual(Array.from({ length: 10 }, (_v, i) => `line-${i + 10}`));
+				} finally {
+					tui.stop();
+				}
+			});
+		});
+	}
+
+	it("still clears native scrollback (ED3) on a genuine direct-terminal resize", async () => {
+		await withEnvPatch(NO_MULTIPLEXER_ENV, async () => {
+			const term = new VirtualTerminal(40, 10, 1000);
+			const tui = new TUI(term);
+			tui.addChild(new MutableLinesComponent(Array.from({ length: 20 }, (_v, i) => `line-${i}`)));
+
+			try {
+				tui.start();
+				await settle(term);
+
+				// Capture only the resize-driven paint; the initial paint never
+				// clears scrollback, so any ED3 in `out` belongs to the resize.
+				// Wait past the 120 ms viewport-settle window — that deferred
+				// `requestRender(true, { clearScrollback: true })` is what emits ED3.
+				const writes = captureWrites(term);
+				term.resize(80, 10);
+				await settleResize(term);
+				const out = writes.join("");
+				expect(out).toContain(ED3);
 				expect(visible(term)).toEqual(Array.from({ length: 10 }, (_v, i) => `line-${i + 10}`));
 			} finally {
 				tui.stop();

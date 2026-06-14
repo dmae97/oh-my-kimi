@@ -76,10 +76,12 @@ impl From<()> for CancelToken {
 }
 
 impl CancelToken {
+	#[must_use]
 	pub fn new(timeout_ms: Option<u32>) -> Self {
 		Self::with_timeout(timeout_ms.map(|ms| Duration::from_millis(u64::from(ms))))
 	}
 
+	#[must_use]
 	pub fn with_timeout(timeout: Option<Duration>) -> Self {
 		Self { deadline: timeout.map(|duration| Instant::now() + duration), flag: None }
 	}
@@ -132,6 +134,7 @@ impl CancelToken {
 		AbortToken(Some(Arc::downgrade(self.flag.get_or_insert_default())))
 	}
 
+	#[must_use]
 	pub fn aborted(&self) -> bool {
 		if let Some(flag) = &self.flag
 			&& flag.cause().is_some()

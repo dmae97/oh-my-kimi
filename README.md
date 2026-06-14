@@ -24,7 +24,7 @@
 
 The most capable agent surface that ships. Continuously tuned by real-world use — complete out of the box, open all the way down.
 
-**40+** providers · **32** built-in tools · **13** lsp ops · **27** dap ops · **~27k** lines of Rust core.
+**40+** providers · **32** built-in tools · **14** lsp ops · **28** dap ops · **~55k** lines of Rust core.
 
 ## Install
 
@@ -171,11 +171,11 @@ Every other agent ships an importer and expects you to convert. omp reads the ei
 
 ### 14 · omp commit: atomic splits, validated messages
 
-omp reads the working tree through git-overview, git-file-diff, and git-hunk, then splits unrelated changes into atomic commits ordered by their dependencies. Cycles are rejected before anything is written. Source files score above tests, docs, and configs, so the headline commit is the one that matters. Lock files are excluded from analysis entirely.
+omp reads the working tree through git_overview, git_file_diff, and git_hunk, then splits unrelated changes into atomic commits ordered by their dependencies. Cycles are rejected before anything is written. Source files score above tests, docs, and configs, so the headline commit is the one that matters. Lock files are excluded from analysis entirely.
 
 ### 15 · Read PRs. _Walk skills._ Pull JSON out of subagents.
 
-Ten internal schemes — `pr://`, `issue://`, `agent://`, `skill://`, `rule://`, and the rest — resolve transparently inside every FS-shaped tool the agent already calls. `read pr://1428` returns the same shape as `read src/foo.ts`. `search` walks a diff like a directory. `agent://<id>/findings.0.path` pulls a field out of a subagent's output by path.
+Twelve internal schemes — `pr://`, `issue://`, `agent://`, `skill://`, `rule://`, and the rest — resolve transparently inside every FS-shaped tool the agent already calls. `read pr://1428` returns the same shape as `read src/foo.ts`. `search` walks a diff like a directory. `agent://<id>/findings.0.path` pulls a field out of a subagent's output by path.
 
 ![omp TUI reading pr://can1357/oh-my-pi/1063 and then /diff/1, showing hunk headers, added lines, and a [MODIFIED] (+12 -0) summary.](https://omp.sh/captures/pr.webp)
 
@@ -239,9 +239,10 @@ Stealth's on by default, so pages see a normal user instead of a headless bot. T
 - `browser` — Puppeteer tabs over headless Chromium or CDP-attached apps.
 - `web_search` — one query across configured providers, returning answer plus citations.
 - `github` — GitHub CLI ops — repo, PR, issues, code search, Actions run-watch.
-- `generate_image` — generate or edit raster images via Gemini image models.
+- `generate_image` — generate or edit raster images via Gemini, GPT, or xAI Grok image models.
 - `inspect_image` — vision-model analysis of a local image file.
 - `render_mermaid` — Mermaid source to terminal-friendly ASCII or PNG.
+- `tts` — text-to-speech via xAI Grok Voice — five built-in voices, WAV or MP3.
 
 **Memory & state**
 
@@ -256,7 +257,7 @@ Stealth's on by default, so pages see a normal user instead of a headless bot. T
 - `resolve` — apply or discard a queued preview action.
 - `search_tool_bm25` — BM25 over the hidden tool index; activates top matches mid-session.
 
-Setting-gated, off by default: `github`, `inspect_image`, `render_mermaid`, `checkpoint`, `rewind`, `search_tool_bm25`, `retain`, `recall`, `reflect`. Flip them on once, scoped per project.
+Setting-gated, off by default: `github`, `inspect_image`, `render_mermaid`, `tts`, `checkpoint`, `rewind`, `search_tool_bm25`, `retain`, `recall`, `reflect`. Flip them on once, scoped per project.
 
 [Full reference →](https://omp.sh/docs/tools)
 
@@ -288,7 +289,7 @@ Ollama `local` · Ollama Cloud · LM Studio `local` · llama.cpp `local` · vLLM
 
 - **Custom providers** — Declare anything that speaks `openai-completions`, `openai-responses`, `openai-codex-responses`, `azure-openai-responses`, `anthropic-messages`, `google-generative-ai`, or `google-vertex` in `~/.omp/agent/models.yml`.
 - **Fallback chains** — Per-role chains under `retry.fallbackChains`. When the primary throws 429s or hits a quota wall, the next entry takes the rest of the turn — restored on cooldown.
-- **Path-scoped roles** — Nest `paths:` under `modelRoles` to pin a heavier `default` on one repo without touching the global config. Closest path wins.
+- **Path-scoped models** — Scope `enabledModels` and `disabledProviders` entries to a `path:` prefix to pin a different model set on one repo without touching the global config. Scoped entries cover the path and everything under it.
 - **Round-robin credentials** — Stack API keys per provider and the runtime rotates with session affinity and per-credential backoff. Useful when one key would burn its quota by lunch.
 
 Full provider & routing reference at [omp.sh/docs/providers](https://omp.sh/docs/providers).
@@ -341,11 +342,11 @@ Vuln lookups answer with vendor data, not blog summaries.
 
 [`web_search` reference ↗](https://omp.sh/docs/tools#web_search)
 
-## Roughly **~27,000** lines of Rust, doing the work other harnesses shell out for.
+## Roughly **~55,000** lines of Rust, doing the work other harnesses shell out for.
 
-Three crates, one platform-tagged N-API addon. Search, shell, AST, highlight, PTY, image decode, BPE counting — all in-process on the libuv pool. No fork/exec on the hot path.
+Four crates, one platform-tagged N-API addon. Search, shell, AST, highlight, PTY, image decode, BPE counting — all in-process on the libuv pool. No fork/exec on the hot path.
 
-- Crates: `pi-natives`, `pi-shell`, `pi-ast`
+- Crates: `pi-natives`, `pi-shell`, `pi-ast`, `pi-iso`
 - Platforms: `linux-x64`, `linux-arm64`, `darwin-x64`, `darwin-arm64`, `win32-x64`
 
 The table below is a per-module breakdown that intentionally omits glue and tests.
@@ -356,13 +357,13 @@ The table below is a per-module breakdown that intentionally omits glue and test
 | grep       | Regex search · parallel/sequential · glob & type filters · fuzzy find                | grep-regex · grep-searcher                | 1,900 |
 | keys       | Kitty keyboard protocol with xterm fallback · PHF perfect-hash lookup                | phf                                       | 1,490 |
 | text       | ANSI-aware width · truncation · column slicing · SGR-preserving wrap                 | unicode-width · segmentation              | 1,450 |
-| summarize  | Tree-sitter structural source summaries with elision controls                        | tree-sitter · ast-grep-core               | 1,040 |
+| summary    | Tree-sitter structural source summaries with elision controls                        | tree-sitter · ast-grep-core               | 1,040 |
 | ast        | ast-grep pattern matching and structural rewrites                                    | ast-grep-core                             | 1,000 |
 | fs_cache   | Mtime-keyed file cache shared by read · grep · lsp                                   | in-tree                                   |   840 |
 | highlight  | Syntax highlighting · 11 semantic categories · 30+ aliases                           | syntect                                   |   470 |
 | pty        | Native PTY allocation for sudo · ssh interactive prompts                             | portable-pty                              |   455 |
 | glob       | Discovery with glob · type filters · mtime sort · gitignore respect                  | ignore · globset                          |   410 |
-| workspace  | Workspace walker with gitignore + AGENTS.md discovery in one pass                    | ignore · git2                             |   385 |
+| workspace  | Workspace walker with gitignore + AGENTS.md discovery in one pass                    | ignore                                    |   385 |
 | appearance | Mode 2031 + native macOS dark/light via CoreFoundation FFI                           | core-foundation                           |   270 |
 | power      | macOS power-assertion API for idle/system/display-sleep prevention                   | IOKit FFI                                 |   270 |
 | task       | Blocking work on libuv thread pool · cancellation · timeout · profiling              | tokio · napi                              |   260 |
@@ -370,9 +371,9 @@ The table below is a per-module breakdown that intentionally omits glue and test
 | iso        | Workspace isolation shim · apfs · btrfs · zfs · reflink · overlayfs · projfs · rcopy | pi-iso (PAL)                              |   245 |
 | prof       | Circular buffer profiler with folded-stack and SVG flamegraph output                 | inferno                                   |   240 |
 | ps         | Cross-platform process-tree kill and descendant listing                              | libc · libproc · CreateToolhelp32Snapshot |   195 |
-| image      | Decode/encode PNG · JPEG · WebP · GIF · resize with 5 filters                        | image                                     |   190 |
 | clipboard  | Text copy and image read from system clipboard · no xclip/pbcopy                     | arboard                                   |    80 |
 | tokens     | O200k / Cl100k BPE token counting · both tables embedded                             | tiktoken-rs                               |    65 |
+| sixel      | Terminal image rendering · decode PNG · JPEG · WebP · GIF · resize · SIXEL encode    | icy_sixel · image                         |    55 |
 | html       | HTML to Markdown with optional content cleaning                                      | html-to-markdown-rs                       |    50 |
 
 ## Four entry points: _interactive_, _one-shot_, RPC, and ACP.
@@ -394,16 +395,21 @@ The same prompt cards surface over ACP, so editors get the picker without writin
 Node and TypeScript hosts pull the engine in directly. The package exposes `ModelRegistry`, `SessionManager`, `createAgentSession`, and `discoverAuthStorage`; the session emits typed events you subscribe to.
 
 ```ts
-import { ModelRegistry, SessionManager, createAgentSession, discoverAuthStorage } from "@oh-my-pi/pi-coding-agent";
+import {
+  ModelRegistry,
+  SessionManager,
+  createAgentSession,
+  discoverAuthStorage,
+} from "@oh-my-pi/pi-coding-agent";
 
 const auth = await discoverAuthStorage();
 const models = new ModelRegistry(auth);
 await models.refresh();
 
 const { session } = await createAgentSession({
-	sessionManager: SessionManager.inMemory(),
-	authStorage: auth,
-	modelRegistry: models,
+  sessionManager: SessionManager.inMemory(),
+  authStorage: auth,
+  modelRegistry: models,
 });
 await session.prompt("list .ts files");
 ```
@@ -433,7 +439,7 @@ The [Agent Client Protocol](https://github.com/zed-industries/agent-client-proto
 | `bash`                        | `terminal/create + terminal/output` |
 | `read`                        | `fs/read_text_file`                 |
 | `write`                       | `fs/write_text_file`                |
-| `edit, ast_edit, write, bash` | `session/request_permission`        |
+| `edit, bash`                  | `session/request_permission`        |
 
 Full reference: [omp.sh/docs/sdk](https://omp.sh/docs/sdk).
 
@@ -481,6 +487,7 @@ For architecture and contribution guidelines, see [packages/coding-agent/DEVELOP
 
 | Package                                                   | Description                                                                |
 | --------------------------------------------------------- | -------------------------------------------------------------------------- |
+| **[@oh-my-pi/collab-web](packages/collab-web)**           | Browser guest client, mock host, and local relay for collab live sessions  |
 | **[@oh-my-pi/pi-ai](packages/ai)**                        | Multi-provider LLM client with streaming and model/provider integration    |
 | **[@oh-my-pi/pi-catalog](packages/catalog)**              | Model catalog: bundled model database, provider descriptors, and identity  |
 | **[@oh-my-pi/pi-agent-core](packages/agent)**             | Agent runtime with tool calling and state management                       |
@@ -489,6 +496,7 @@ For architecture and contribution guidelines, see [packages/coding-agent/DEVELOP
 | **[@oh-my-pi/pi-natives](packages/natives)**              | N-API bindings for grep, shell, image, text, syntax highlighting, and more |
 | **[@oh-my-pi/omp-stats](packages/stats)**                 | Local observability dashboard for AI usage statistics                      |
 | **[@oh-my-pi/pi-utils](packages/utils)**                  | Shared utilities (logging, streams, dirs/env/process helpers)              |
+| **[@oh-my-pi/pi-wire](packages/wire)**                    | Shared collab live-session protocol types and relay constants              |
 | **[@oh-my-pi/hashline](packages/hashline)**               | Line-anchored patch language and applier behind the `edit` tool            |
 | **[@oh-my-pi/pi-mnemopi](packages/mnemopi)**              | Local SQLite memory engine for Oh My Pi agents                             |
 | **[@oh-my-pi/snapcompact](packages/snapcompact)**         | Bitmap-frame context compression package and SQuAD eval suite              |

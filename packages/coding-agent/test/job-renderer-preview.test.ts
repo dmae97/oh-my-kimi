@@ -101,4 +101,13 @@ describe("job renderer task-result preview", () => {
 		const output = renderLines("42 pass, 0 fail (18.4s)");
 		expect(output).toContain("42 pass, 0 fail (18.4s)");
 	});
+
+	it("drops the id column when the label repeats it", () => {
+		// Task jobs label themselves with their agent id; rendering both columns
+		// stutters ("SpawnProbe ⟨task⟩ SpawnProbe").
+		const output = Bun.stripANSI(renderLines("done"));
+		const header = output.split("\n").find(line => line.includes("SpawnProbe"));
+		expect(header).toBeDefined();
+		expect(header!.match(/SpawnProbe/g)).toHaveLength(1);
+	});
 });

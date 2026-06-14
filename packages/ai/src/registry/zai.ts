@@ -4,7 +4,7 @@ import type { ProviderDefinition } from "./types";
 
 const AUTH_URL = "https://z.ai/manage-apikey/apikey-list";
 const API_BASE_URL = "https://api.z.ai/api/coding/paas/v4";
-const VALIDATION_MODEL = "glm-4.7";
+const VALIDATION_MODEL = "glm-5.2";
 
 export async function loginZai(options: OAuthController): Promise<string> {
 	if (!options.onPrompt) {

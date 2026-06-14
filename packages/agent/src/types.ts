@@ -113,7 +113,7 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * normalization, and append-only context handling, but before telemetry capture
 	 * and provider send.
 	 */
-	transformProviderContext?: (context: Context) => Context;
+	transformProviderContext?: (context: Context, model: Model) => Context;
 
 	/**
 	 * Resolves an API key dynamically for each LLM call.
@@ -126,11 +126,27 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	/**
 	 * Returns steering messages to inject into the conversation mid-run.
 	 *
-	 * Called after each tool execution to check for user interruptions unless interruptMode is "wait".
-	 * If messages are returned, remaining tool calls are skipped and
-	 * these messages are added to the context before the next LLM call.
+	 * Called at injection boundaries only (loop start and after a tool batch
+	 * fully settles), so dequeued messages are immediately injected. The
+	 * mid-batch interrupt poll uses {@link hasSteeringMessages} instead and
+	 * never consumes the queue.
 	 */
 	getSteeringMessages?: () => Promise<AgentMessage[]>;
+
+	/**
+	 * Peeks whether steering messages are queued, without consuming them.
+	 *
+	 * Called after each tool execution (unless interruptMode is "wait") to decide
+	 * whether to skip the remaining tool calls in the batch. The queue keeps
+	 * owning its messages until the loop reaches the next injection boundary and
+	 * dequeues via {@link getSteeringMessages} — so callers can still cancel or
+	 * restore queued messages while in-flight tools settle, and an external
+	 * abort in that window leaves the queue intact for a post-abort continue.
+	 *
+	 * When omitted, steering never interrupts a running tool batch; queued
+	 * messages are still delivered at the next injection boundary.
+	 */
+	hasSteeringMessages?: () => boolean | Promise<boolean>;
 
 	/**
 	 * Returns follow-up messages to process after the agent would otherwise stop.
@@ -310,6 +326,8 @@ export interface AfterToolCallResult {
 	details?: unknown;
 	/** If provided, replaces the error flag carried with the tool result. */
 	isError?: boolean;
+	/** If provided, replaces the contextually-useless flag carried with the tool result. */
+	useless?: boolean;
 }
 
 /** Context passed to `beforeToolCall`. */
@@ -392,6 +410,8 @@ export interface AgentToolResult<T = any, _TInput = unknown> {
 	// Marks a non-throwing failure (e.g. an aggregator catching per-entry errors).
 	// agent-loop honors this and surfaces it as a tool error on the wire.
 	isError?: boolean;
+	/** Marks the result as contextually useless: safe for compaction to elide once consumed (e.g. zero matches, wait timeout). Ignored when isError is set. */
+	useless?: boolean;
 }
 
 // Callback for streaming tool execution updates

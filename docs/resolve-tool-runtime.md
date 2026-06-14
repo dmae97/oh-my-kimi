@@ -18,9 +18,11 @@ This document explains how preview/apply workflows are modeled in coding-agent a
 - `action: "discard"` invokes `reject(reason, extra)` if provided; otherwise returns `Discarded: <label>. Reason: <reason>`.
 - `extra` is optional free-form metadata. Queue handlers receive it; producers decide whether it has meaning.
 
-If no pending action exists, `resolve` fails with:
+If no pending action exists, `resolve(action="apply")` fails with:
 
 - `No pending action to resolve. Nothing to apply or discard.`
+
+`resolve(action="discard")` with no pending action succeeds instead, returning `Nothing to discard; no pending action remains.` — the desired end-state (no staged change) already holds.
 
 ## Pending actions use the tool-choice queue
 

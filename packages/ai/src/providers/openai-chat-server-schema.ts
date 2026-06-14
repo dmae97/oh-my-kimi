@@ -7,6 +7,8 @@
  * non-strict defaults (e.g. `stream_options.include_obfuscation`) — does not
  * trip 400s on shapes we simply ignore.
  */
+
+import { z } from "zod/v4";
 import type {
 	ChatCompletionContentPart,
 	ChatCompletionCreateParams,
@@ -14,8 +16,7 @@ import type {
 	ChatCompletionMessageToolCall,
 	ChatCompletionTool,
 	ChatCompletionToolChoiceOption,
-} from "openai/resources/chat/completions";
-import * as z from "zod/v4";
+} from "./openai-chat-wire";
 
 // ─── User-message content parts ─────────────────────────────────────────────
 

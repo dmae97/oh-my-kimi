@@ -139,6 +139,35 @@ describe("ImageBudget", () => {
 		const result = pass(budget, 3);
 		expect(result.suppressed).toEqual([false, false, false]);
 	});
+
+	it("replays the committed live/text split by id during a stable (partial) pass", () => {
+		const budget = new ImageBudget(2, () => {});
+		// Settle to the steady split for 4 images at cap 2: oldest two (ids 1,2)
+		// demoted to text, newest two (ids 3,4) live.
+		pass(budget, 4); // threshold rises to 2
+		pass(budget, 4); // applies the demotion of ids 1,2
+		expect(pass(budget, 4).suppressed).toEqual([true, true, false, false]);
+
+		// The resize fast path observes the visible tail bottom-up and only a
+		// subset of images. A stable pass must therefore decide live/text by the
+		// committed per-id split, NOT by call order: observing the newest images
+		// first (4, then 3) must still report them live, and the oldest text —
+		// the index-based path would wrongly suppress whichever arrives first.
+		budget.beginPass(true);
+		expect(budget.observe(4)).toBe(false); // newest, stays live
+		expect(budget.observe(3)).toBe(false); // stays live
+		expect(budget.observe(2)).toBe(true); // committed text
+		expect(budget.observe(1)).toBe(true); // committed text
+		// An id with no committed state (a brand-new image) defaults to live.
+		expect(budget.observe(99)).toBe(false);
+
+		// The stable pass left the ledger untouched: the next full pass reports
+		// the same split and schedules no purge or redraw.
+		const after = pass(budget, 4);
+		expect(after.suppressed).toEqual([true, true, false, false]);
+		expect(after.reset).toBe(false);
+		expect(after.purge).toEqual([]);
+	});
 });
 
 describe("encodeKittyDeleteImage", () => {

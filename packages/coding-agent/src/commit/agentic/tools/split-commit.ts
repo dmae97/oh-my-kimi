@@ -1,4 +1,4 @@
-import * as z from "zod/v4";
+import { z } from "zod/v4";
 import type { CommitAgentState, SplitCommitGroup, SplitCommitPlan } from "../../../commit/agentic/state";
 import { computeDependencyOrder } from "../../../commit/agentic/topo-sort";
 import {

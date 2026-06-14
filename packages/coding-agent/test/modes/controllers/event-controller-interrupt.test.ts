@@ -1,16 +1,18 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import {
-	EventController,
-	INTERRUPTING_WORKING_MESSAGE,
-} from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
+import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 
 function createContext() {
 	const setWorkingMessage = vi.fn();
+	const ensureLoadingAnimation = vi.fn();
 	const pendingTools = new Map<string, unknown>();
+	const session = {
+		getToolByName: () => undefined,
+		isAborting: false,
+	};
 	const ctx = {
 		isInitialized: true,
 		settings: { get: () => false },
@@ -20,11 +22,11 @@ function createContext() {
 		hideThinkingBlock: false,
 		setWorkingMessage,
 		clearPinnedError: vi.fn(),
-		ensureLoadingAnimation: vi.fn(),
+		ensureLoadingAnimation,
 		ui: { requestRender: vi.fn() },
-		session: { getToolByName: () => undefined },
+		session,
 	} as unknown as InteractiveModeContext;
-	return { ctx, pendingTools, setWorkingMessage };
+	return { ctx, pendingTools, setWorkingMessage, session };
 }
 
 const AGENT_START = { type: "agent_start" } as unknown as AgentSessionEvent;
@@ -42,7 +44,7 @@ function toolStartWithIntent(toolCallId: string, intent: string): AgentSessionEv
 	} as unknown as AgentSessionEvent;
 }
 
-describe("EventController user interrupt acknowledgement", () => {
+describe("EventController aborted-turn working messages", () => {
 	beforeAll(async () => {
 		await initTheme(false);
 	});
@@ -57,33 +59,20 @@ describe("EventController user interrupt acknowledgement", () => {
 		resetSettingsForTest();
 	});
 
-	it("swaps the loader to the interrupting label once a turn is active", async () => {
-		const { ctx, setWorkingMessage } = createContext();
+	it("suppresses late intent-driven working-message updates while aborting", async () => {
+		const { ctx, pendingTools, setWorkingMessage, session } = createContext();
 		const controller = new EventController(ctx);
 		await controller.handleEvent(AGENT_START);
-
-		controller.notifyInterrupting();
-
-		expect(setWorkingMessage).toHaveBeenCalledWith(INTERRUPTING_WORKING_MESSAGE);
-	});
-
-	it("freezes intent-driven working-message updates while interrupting", async () => {
-		const { ctx, pendingTools, setWorkingMessage } = createContext();
-		const controller = new EventController(ctx);
-		await controller.handleEvent(AGENT_START);
-		controller.notifyInterrupting();
 		setWorkingMessage.mockClear();
+		session.isAborting = true;
 
-		// A tool whose args already started streaming before the abort still emits a
-		// late tool_execution_start; without the freeze its intent would repaint the
-		// loader over the "Interrupting…" acknowledgement.
 		pendingTools.set("late-call", {});
 		await controller.handleEvent(toolStartWithIntent("late-call", "Reticulating splines"));
 
 		expect(setWorkingMessage).not.toHaveBeenCalled();
 	});
 
-	it("lets intent updates drive the loader when not interrupting", async () => {
+	it("lets intent updates drive the loader when not aborting", async () => {
 		const { ctx, pendingTools, setWorkingMessage } = createContext();
 		const controller = new EventController(ctx);
 		await controller.handleEvent(AGENT_START);
@@ -96,29 +85,21 @@ describe("EventController user interrupt acknowledgement", () => {
 		expect(setWorkingMessage.mock.calls[0]?.[0]).toContain("Searching files");
 	});
 
-	it("clears the interrupt freeze at the next agent_start", async () => {
-		const { ctx, pendingTools, setWorkingMessage } = createContext();
+	it("resumes intent updates once aborting clears", async () => {
+		const { ctx, pendingTools, setWorkingMessage, session } = createContext();
 		const controller = new EventController(ctx);
 		await controller.handleEvent(AGENT_START);
-		controller.notifyInterrupting();
+		session.isAborting = true;
 
-		// New turn: the freeze must lift so the next turn's intents render again.
-		await controller.handleEvent(AGENT_START);
+		pendingTools.set("late-call", {});
+		await controller.handleEvent(toolStartWithIntent("late-call", "Reticulating splines"));
 		setWorkingMessage.mockClear();
+		session.isAborting = false;
 
 		pendingTools.set("call-2", {});
 		await controller.handleEvent(toolStartWithIntent("call-2", "Editing module"));
 
 		expect(setWorkingMessage).toHaveBeenCalledTimes(1);
 		expect(setWorkingMessage.mock.calls[0]?.[0]).toContain("Editing module");
-	});
-
-	it("is a no-op before any turn starts", () => {
-		const { ctx, setWorkingMessage } = createContext();
-		const controller = new EventController(ctx);
-
-		controller.notifyInterrupting();
-
-		expect(setWorkingMessage).not.toHaveBeenCalled();
 	});
 });

@@ -1,6 +1,58 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added repetition-loop detection to the streaming agent loop for Gemini-family providers. A runaway run of a repeated text or thinking unit is detected mid-stream from a bounded rolling tail (O(1) per delta), the provider request is aborted, the repeated tail is collapsed to a single representative copy, and the turn ends gracefully with an `error` stop reason. Legitimate all-numeric/whitespace/punctuation runs (hexdumps, zero-fills, numeric tables) are not misclassified as loops ([#2549](https://github.com/can1357/oh-my-pi/pull/2549) by [@usr-bin-roygbiv](https://github.com/usr-bin-roygbiv)).
+
+### Fixed
+
+- Fixed repetition loop handling to collapse repeated `thinking` blocks to a single representative copy when a loop is detected
+- Fixed repetition-loop detection to ignore repeats that contain only digits, whitespace, or punctuation so legitimate numeric outputs no longer stop with a repetition-loop error
+- Fixed false-positive repetition-loop checks across `text` and `thinking` stream boundaries by tracking loop detection per block type
+
+## [15.12.6] - 2026-06-14
+
+### Fixed
+
+- Fixed dynamic forced tool choices from queue hooks being filtered against the active per-turn tool set before provider dispatch. ([#1701](https://github.com/can1357/oh-my-pi/issues/1701))
+
+## [15.12.4] - 2026-06-13
+### Fixed
+
+- Fixed remote compaction input trimming to use unlimited context when `model.contextWindow` is unset
+
+## [15.12.1] - 2026-06-12
+### Breaking Changes
+
+- Changed `pruneSupersededToolResults` to allow `supersedeKey` to be omitted so useless-result pruning can run without read-style supersede grouping
+
+### Added
+
+- Added `pruneUseless` controls to `PruneConfig` and `SupersedePruneConfig` so callers can toggle compaction of `toolResult` entries marked `useless`
+- Added the ability to disable useless-result pruning by setting `pruneUseless` to false
+- Tools can flag a result contextually useless (`AgentToolResult.useless`; overridable via `AfterToolCallResult.useless`): the agent loop copies the flag onto the persisted `ToolResultMessage` (errors always win), and compaction consumes it — the cache-aware supersede pass and the threshold prune blank flagged results to the exact `USELESS_NOTICE` placeholder (bypassing the protect window, skipping results smaller than the notice), shake collects them inside the protect-recent window, and `serializeConversation` drops the whole tool call/result pair from summarizer input
+
+### Changed
+
+- Changed `pruneSupersededToolResults` to allow omitted `supersedeKey` when `pruneUseless` is enabled, so useless-result pruning can run without read-style supersede grouping
+
+## [15.11.4] - 2026-06-12
+### Added
+
+- Added `hasSteeringMessages` to `AgentLoopConfig` (wired by `Agent` to its steering queue): a peek used by the immediate-interrupt poll during tool execution, so the loop can detect queued steering without dequeuing and the queue keeps owning its messages until the injection boundary
+- The agent loop now re-samples after a non-terminal stop (`stopReason: "stop"` with `stopDetails: { type: "pause_turn" }`, emitted by the Codex providers for `end_turn: false` commentary-only responses): the assistant message is committed to history and the model is called again without ending the turn. Consecutive pause continuations without an intervening tool call are capped at 8 to bound a backend that never stops pausing.
+
+### Changed
+
+- Changed steering handling so queued steering messages are now dequeued only at injection boundaries, with immediate mid-batch interrupt polling using `hasSteeringMessages`. Consumers constructing `AgentLoopConfig` directly with only `getSteeringMessages` no longer get mid-batch interrupts — steering degrades to boundary-only delivery until they also supply `hasSteeringMessages`
+- Compaction, handoff, short-summary, and branch-summarization helpers now accept an `ApiKey` (static string or resolver) instead of a pre-resolved string, so a 401 mid-compaction force-refreshes and rotates the credential through the central auth-retry policy before any model-level fallback. The remote OpenAI compaction request is wrapped in `withAuth` and its HTTP failures now carry `.status`, so the retry classifier actually fires on remote-compaction 401s.
+- `transformProviderContext` now receives the dispatch model as a second argument (`(context, model) => Context`), so per-request transforms can gate on model capabilities (vision input, provider, API family). Existing single-argument implementations keep working unchanged.
+- Remote-compaction and summarization failures now throw pi-ai's typed `ProviderHttpError` instead of mutating plain `Error`s with a `.status` property; the generic `requestRemoteCompaction` error now carries `.status` (and response headers) too.
+
+### Fixed
+
+- Fixed a regression where steering messages could be injected into history during an aborted in-flight tool batch, leaving them hidden from queue consumers for post-abort continue
 
 ## [15.11.2] - 2026-06-11
 

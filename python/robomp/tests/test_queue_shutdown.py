@@ -256,6 +256,7 @@ async def test_run_event_marks_failed_for_unrelated_failure_during_drain(
     """
     pool = _make_pool(settings, db)
     pool._shutting_down = True  # noqa: SLF001
+    monkeypatch.setattr(settings, "event_max_retries", 0)  # assert terminal failure, not retry
     # Crucially: this delivery is NOT in `_shutdown_cancelled` — stop()
     # never targeted it. Its failure is its own.
 

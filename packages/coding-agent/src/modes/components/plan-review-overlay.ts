@@ -23,6 +23,7 @@ import {
 	Markdown,
 	type MarkdownTheme,
 	matchesKey,
+	parseSgrMouse,
 	ScrollView,
 	truncateToWidth,
 	visibleWidth,
@@ -141,7 +142,7 @@ export class PlanReviewOverlay implements Component {
 	#optionClickRows = new Map<number, number>();
 	#tocClickRows = new Map<number, number>();
 	#bodyClickRows = new Set<number>();
-	/** 1-based column at/under which a region-row click targets the sidebar. */
+	/** Exclusive 0-based column bound below which a region-row click targets the sidebar. */
 	#sidebarClickMaxCol = 0;
 	/** Option index the pointer is currently hovering, or undefined. Updated from
 	 *  motion mouse reports and cleared when the pointer leaves the option rows. */
@@ -332,26 +333,23 @@ export class PlanReviewOverlay implements Component {
 	 * the body.
 	 */
 	#handleMouse(data: string): boolean {
-		const match = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/.exec(data);
-		if (!match) return false;
-		const button = Number(match[1]);
-		const x = Number(match[2]);
-		const row = Number(match[3]) - 1;
-		if (button & 64) {
-			// Scroll wheel: low bit selects direction (64 up, 65 down).
-			this.#scrollView.scroll(button & 1 ? 3 : -3);
+		const event = parseSgrMouse(data);
+		if (!event) return false;
+		if (event.wheel !== null) {
+			// Scroll wheel: three rows per notch.
+			this.#scrollView.scroll(event.wheel * 3);
 			return true;
 		}
-		if (match[4] !== "M") return true; // release
-		if (button & 32) {
+		if (event.release) return true;
+		if (event.motion) {
 			// Motion (hover or drag): light up the option row under the pointer so a
 			// mouse user gets the same affordance the keyboard cursor gives. Any
 			// non-option row clears the highlight.
-			this.#setHoveredOption(this.#optionClickRows.get(row));
+			this.#setHoveredOption(this.#optionClickRows.get(event.row));
 			return true;
 		}
-		if ((button & 3) !== 0) return true; // not the left button
-		const optionIndex = this.#optionClickRows.get(row);
+		if (!event.leftClick) return true;
+		const optionIndex = this.#optionClickRows.get(event.row);
 		if (optionIndex !== undefined) {
 			if (!this.#disabled.has(optionIndex)) {
 				this.#focus = "actions";
@@ -360,14 +358,14 @@ export class PlanReviewOverlay implements Component {
 			}
 			return true;
 		}
-		const tocPos = this.#tocClickRows.get(row);
-		if (tocPos !== undefined && x <= this.#sidebarClickMaxCol) {
+		const tocPos = this.#tocClickRows.get(event.row);
+		if (tocPos !== undefined && event.col < this.#sidebarClickMaxCol) {
 			this.#focus = "toc";
 			this.#tocCursor = tocPos;
 			this.#scrubBodyToToc();
 			return true;
 		}
-		if (this.#bodyClickRows.has(row)) {
+		if (this.#bodyClickRows.has(event.row)) {
 			this.#setFocus("body");
 		}
 		return true;

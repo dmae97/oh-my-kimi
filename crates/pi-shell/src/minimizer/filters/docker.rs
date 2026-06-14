@@ -6,6 +6,7 @@ use serde_json::Value;
 
 use crate::minimizer::{MinimizerCtx, MinimizerOutput, primitives};
 
+#[must_use]
 pub fn supports(subcommand: Option<&str>) -> bool {
 	matches!(
 		subcommand,
@@ -21,11 +22,22 @@ pub fn supports(subcommand: Option<&str>) -> bool {
 				| "install"
 				| "upgrade"
 				| "template"
-				| "lint"
+				| "lint" | "apply"
+				| "delete"
+				| "rollout"
+				| "scale"
+				| "create"
+				| "wait" | "label"
+				| "annotate"
+				| "up" | "down"
+				| "start"
+				| "stop" | "restart"
+				| "rm"
 		)
 	)
 }
 
+#[must_use]
 pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
 	let cleaned = primitives::strip_ansi(input);
 	let text = match ctx.program {
@@ -55,6 +67,27 @@ fn filter_docker(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> String 
 		} else {
 			input.to_string()
 		};
+	}
+	// start/stop/restart/rm output is container names or confirmation messages;
+	// compact_build_or_progress would strip legitimate lines that happen to
+	// contain progress substrings (e.g. a container named "my-Downloading-app").
+	if is_docker_lifecycle_command(ctx) {
+		return head_tail_dedup(input);
+	}
+	// docker-compose up / docker compose up (attached mode) streams container
+	// logs, not build progress.  Lines like "Downloading", "Waiting",
+	// "Extracting" that appear here are real application log lines, not
+	// layer-pull status noise.  Route through the log filter so they are
+	// preserved.
+	//
+	// Two detection paths:
+	//   • legacy `docker-compose up` — detect.rs normalises the binary name to
+	//     "docker" and sets subcommand="up" directly.
+	//   • Compose v2 `docker compose up` — subcommand="compose", action found
+	//     by scanning past compose global options (same pattern as the listing
+	//     and lifecycle helpers).
+	if is_compose_up_command(ctx) {
+		return filter_docker_logs(input);
 	}
 	compact_build_or_progress(input)
 }
@@ -86,6 +119,9 @@ fn filter_kubectl(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> String
 		},
 		Some("describe") => {
 			primitives::head_tail_lines(&primitives::dedup_consecutive_lines(input), 120, 80)
+		},
+		Some("apply" | "delete" | "rollout" | "scale" | "create" | "wait" | "label" | "annotate") => {
+			head_tail_dedup(input)
 		},
 		_ => compact_build_or_progress(input),
 	}
@@ -305,10 +341,17 @@ fn compute_pod_container_stats(status: &Value) -> (usize, usize, i32) {
 	let mut ready = 0usize;
 	let mut restarts = 0i32;
 	for cs in container_statuses {
-		if cs.get("ready").and_then(|v| v.as_bool()).unwrap_or(false) {
+		if cs
+			.get("ready")
+			.and_then(serde_json::Value::as_bool)
+			.unwrap_or(false)
+		{
 			ready += 1;
 		}
-		restarts += cs.get("restartCount").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+		restarts += cs
+			.get("restartCount")
+			.and_then(serde_json::Value::as_i64)
+			.unwrap_or(0) as i32;
 	}
 	(ready, total, restarts)
 }
@@ -374,15 +417,19 @@ fn format_k8s_ports(ports: Option<&Vec<Value>>) -> String {
 		.map(|p| {
 			let port = p
 				.get("port")
-				.and_then(|v| v.as_i64())
+				.and_then(serde_json::Value::as_i64)
 				.map_or_else(|| "?".to_string(), |v| v.to_string());
 			let proto = p.get("protocol").and_then(|v| v.as_str()).unwrap_or("TCP");
-			let node_port = p.get("nodePort").and_then(|v| v.as_i64());
+			let node_port = p.get("nodePort").and_then(serde_json::Value::as_i64);
 			let target_port = p.get("targetPort");
 			let target = target_port
-				.and_then(|v| v.as_i64())
+				.and_then(serde_json::Value::as_i64)
 				.map(|v| v.to_string())
-				.or_else(|| target_port.and_then(|v| v.as_str()).map(|s| s.to_string()));
+				.or_else(|| {
+					target_port
+						.and_then(|v| v.as_str())
+						.map(std::string::ToString::to_string)
+				});
 			match (target, node_port) {
 				(Some(t), Some(np)) => format!("{port}/{t}:{np}->{port}/{proto}"),
 				(Some(t), None) => format!("{port}/{t}:{port}/{proto}"),
@@ -398,12 +445,63 @@ fn filter_helm(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> String {
 	if exit_code != 0 {
 		return input.to_string();
 	}
+	let cleaned = strip_helm_noise(input);
 	match ctx.subcommand {
-		Some("list" | "ls" | "status") => compact_table(input, 20),
-		Some("install" | "upgrade" | "lint") => compact_build_or_progress(input),
+		Some("list" | "ls" | "status") => compact_table(&cleaned, 20),
+		Some("install" | "upgrade" | "lint") => compact_build_or_progress(&cleaned),
 		Some("template") => input.to_string(),
-		_ => head_tail_dedup(input),
+		_ => head_tail_dedup(&cleaned),
 	}
+}
+
+fn strip_helm_noise(input: &str) -> String {
+	let mut out = String::new();
+	for line in input.lines() {
+		let trimmed = line.trim_start();
+		if is_glog_prefix(trimmed) {
+			continue;
+		}
+		if trimmed.starts_with("WARNING: Kubernetes configuration file is") {
+			continue;
+		}
+		out.push_str(line);
+		out.push('\n');
+	}
+	out
+}
+
+fn is_glog_prefix(line: &str) -> bool {
+	let bytes = line.as_bytes();
+	if bytes.len() < 6
+		|| bytes[0] != b'W'
+		|| bytes[5] != b' '
+		|| !bytes[1..5].iter().all(u8::is_ascii_digit)
+	{
+		return false;
+	}
+	// Validate month (01-12) and day (01-31) to avoid stripping legitimate
+	// output that happens to start with W + 4 digits + space.
+	let month = (bytes[1] - b'0') * 10 + (bytes[2] - b'0');
+	let day = (bytes[3] - b'0') * 10 + (bytes[4] - b'0');
+	if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+		return false;
+	}
+	// Require a time stamp (hh:mm...) after the space to distinguish real
+	// glog lines from space-separated table output where a release name
+	// happens to match W + MMDD + space.
+	if bytes.len() < 11 {
+		return false;
+	}
+	if !bytes[6].is_ascii_digit() || !bytes[7].is_ascii_digit() {
+		return false;
+	}
+	if bytes[8] != b':' {
+		return false;
+	}
+	if !bytes[9].is_ascii_digit() || !bytes[10].is_ascii_digit() {
+		return false;
+	}
+	true
 }
 
 /// Returns `true` when `tok` is a known docker-compose option that consumes
@@ -419,7 +517,7 @@ fn compose_option_consumes_next(tok: &str) -> bool {
 			| "--progress"
 			| "--project-directory"
 			| "--project-name"
-			| "--workdir"
+			| "-p" | "--workdir"
 			| "-w"
 	)
 }
@@ -501,6 +599,75 @@ fn is_compose_listing_action(command: &str) -> bool {
 	}
 }
 
+fn is_docker_lifecycle_command(ctx: &MinimizerCtx<'_>) -> bool {
+	matches!(ctx.subcommand, Some("start" | "stop" | "restart" | "rm"))
+		|| ctx.subcommand == Some("compose") && is_compose_lifecycle_action(ctx.command)
+}
+
+fn is_compose_lifecycle_action(command: &str) -> bool {
+	let mut tokens = command
+		.split_whitespace()
+		.skip_while(|token| *token != "compose");
+	if tokens.next() != Some("compose") {
+		return false;
+	}
+	loop {
+		match tokens.next() {
+			None => return false,
+			Some(tok)
+				if tok.starts_with('-') && !tok.contains('=') && compose_option_consumes_next(tok) =>
+			{
+				tokens.next(); // skip value
+			},
+			Some(tok) if tok.starts_with('-') => {}, // skip boolean flag
+			Some(tok) => return matches!(tok, "start" | "stop" | "restart" | "rm"),
+		}
+	}
+}
+
+/// Returns `true` when the command is an attached `docker compose up` or
+/// legacy `docker-compose up` that streams container log output.
+///
+/// Two forms are handled:
+///   • `docker-compose up` — detect.rs normalises the binary to "docker" and
+///     sets `subcommand="up"` directly; the original command still contains
+///     "compose" so we can tell it apart from plain `docker build`.
+///   • `docker compose up` — `subcommand="compose"`, action resolved by
+///     scanning past compose global options (same logic as the listing /
+///     lifecycle helpers).
+fn is_compose_up_command(ctx: &MinimizerCtx<'_>) -> bool {
+	// Legacy docker-compose: subcommand is already the action.
+	if ctx.subcommand == Some("up") && ctx.command.contains("compose") {
+		return true;
+	}
+	// Compose v2: subcommand is "compose", scan for first non-option action.
+	if ctx.subcommand == Some("compose") {
+		return is_compose_up_action(ctx.command);
+	}
+	false
+}
+
+fn is_compose_up_action(command: &str) -> bool {
+	let mut tokens = command
+		.split_whitespace()
+		.skip_while(|token| *token != "compose");
+	if tokens.next() != Some("compose") {
+		return false;
+	}
+	loop {
+		match tokens.next() {
+			None => return false,
+			Some(tok)
+				if tok.starts_with('-') && !tok.contains('=') && compose_option_consumes_next(tok) =>
+			{
+				tokens.next(); // skip value
+			},
+			Some(tok) if tok.starts_with('-') => {}, // skip boolean flag
+			Some(tok) => return tok == "up",
+		}
+	}
+}
+
 fn docker_listing_requests_table(command: &str) -> bool {
 	let mut tokens = command.split_whitespace();
 	while let Some(token) = tokens.next() {
@@ -524,58 +691,29 @@ fn docker_format_requests_table(format: &str) -> bool {
 
 fn filter_logs(input: &str) -> String {
 	let without_empty_runs = drop_repeated_blank_lines(input);
-	let deduped = primitives::dedup_consecutive_lines(&without_empty_runs);
-	primitives::head_tail_lines(&deduped, 120, 80)
+	crate::minimizer::filters::system::compact_log_lines(
+		&without_empty_runs,
+		120,
+		80,
+		crate::minimizer::filters::system::normalize_log_line,
+	)
 }
 
 fn filter_docker_logs(input: &str) -> String {
 	let without_empty_runs = drop_repeated_blank_lines(input);
-	let deduped = dedup_consecutive_log_lines(&without_empty_runs);
-	primitives::head_tail_lines(&deduped, 120, 80)
+	crate::minimizer::filters::system::compact_log_lines(&without_empty_runs, 120, 80, log_dedup_key)
 }
 
-fn dedup_consecutive_log_lines(input: &str) -> String {
-	let mut out = String::new();
-	let mut previous: Option<&str> = None;
-	let mut previous_key: Option<&str> = None;
-	let mut count = 0usize;
-
-	for line in input.lines() {
-		let key = log_dedup_key(line);
-		if previous_key == Some(key) {
-			count += 1;
-			continue;
-		}
-		flush_repeated_log_line(&mut out, previous, count);
-		previous = Some(line);
-		previous_key = Some(key);
-		count = 1;
-	}
-	flush_repeated_log_line(&mut out, previous, count);
-	out
-}
-
-fn flush_repeated_log_line(out: &mut String, line: Option<&str>, count: usize) {
-	let Some(line) = line else {
-		return;
-	};
-	out.push_str(line);
-	if count > 1 {
-		out.push_str(" (×");
-		out.push_str(&count.to_string());
-		out.push(')');
-	}
-	out.push('\n');
-}
-
-fn log_dedup_key(line: &str) -> &str {
+fn log_dedup_key(line: &str) -> String {
 	if let Some((service, message)) = line.split_once('|') {
 		let service = service.trim();
 		if is_compose_log_service(service) {
-			return message.trim_start();
+			let message = message.trim_start();
+			let normalized = crate::minimizer::filters::system::normalize_log_line(message);
+			return format!("{service}|{normalized}");
 		}
 	}
-	line
+	crate::minimizer::filters::system::normalize_log_line(line)
 }
 
 fn is_compose_log_service(value: &str) -> bool {
@@ -691,8 +829,11 @@ mod tests {
 	fn dedups_compose_service_prefixed_log_messages() {
 		let input = "api-1  | ready\napi-2  | ready\napi | ready\nworker | busy\n";
 		let out = filter_docker_logs(input);
-		assert!(out.contains("api-1  | ready (×3)"));
-		assert!(out.contains("worker | busy"));
+		// Different services with the same message must NOT be collapsed together.
+		assert!(out.contains("api-1  | ready"), "distinct service must be preserved: {out}");
+		assert!(out.contains("api-2  | ready"), "distinct service must be preserved: {out}");
+		assert!(out.contains("api | ready"), "distinct service must be preserved: {out}");
+		assert!(out.contains("worker | busy"), "distinct service must be preserved: {out}");
 	}
 
 	#[test]
@@ -706,7 +847,10 @@ mod tests {
 		};
 		let input = "api-1  | ready\napi-2  | ready\napi | ready\n";
 		let out = filter(&compose_ctx, input, 0).text;
-		assert!(out.contains("api-1  | ready (×3)"));
+		// Per-service dedup: same message from different services stays distinct.
+		assert!(out.contains("api-1  | ready"), "distinct service line must be preserved: {out}");
+		assert!(out.contains("api-2  | ready"), "distinct service line must be preserved: {out}");
+		assert!(out.contains("api | ready"), "distinct service line must be preserved: {out}");
 	}
 
 	#[test]
@@ -759,7 +903,7 @@ mod tests {
 		};
 		let mut input = String::from("NAME IMAGE COMMAND SERVICE CREATED STATUS PORTS\n");
 		for idx in 0..20 {
-			input.push_str(&format!("svc-{idx} img command api 1m running 8080/tcp\n"));
+			let _ = writeln!(input, "svc-{idx} img command api 1m running 8080/tcp");
 		}
 		let out = filter(&compose_ctx, &input, 0).text;
 		assert!(out.contains("20 rows"));
@@ -1079,7 +1223,7 @@ mod tests {
 		let kubectl_ctx = ctx("kubectl", Some("get"), &cfg);
 		let mut input = String::from("NAME STATUS\n");
 		for i in 0..25 {
-			input.push_str(&format!("pod-{} running\n", i));
+			let _ = writeln!(input, "pod-{i} running");
 		}
 		let out = filter(&kubectl_ctx, &input, 0).text;
 		// Should use table compaction, not crash
@@ -1199,9 +1343,360 @@ mod tests {
 		};
 		let mut input = String::from("NAME READY STATUS RESTARTS AGE IP NODE\n");
 		for i in 0..25 {
-			input.push_str(&format!("pod-{i} 1/1 Running 0 1h 10.0.0.{i} node\n"));
+			let _ = writeln!(input, "pod-{i} 1/1 Running 0 1h 10.0.0.{i} node");
 		}
 		let out = filter(&ctx, input.as_str(), 0).text;
 		assert!(out.contains("rows"), "-owide is a table format and must be compacted, got: {out}");
+	}
+
+	// ── Global normalized log dedup tests ───────────────────────────────
+
+	#[test]
+	fn dedups_non_consecutive_log_lines_globally() {
+		let input = "ready\nstarting\nready\nstarting\nready\ndone\n";
+		let out = filter_docker_logs(input);
+		assert!(out.contains("ready (×3)"), "global dedup should count all occurrences: {out}");
+		assert!(out.contains("starting (×2)"), "global dedup should count all occurrences: {out}");
+		assert!(out.contains("done"), "global dedup should preserve unique lines: {out}");
+	}
+
+	#[test]
+	fn dedups_compose_service_prefixed_lines_non_consecutive() {
+		let input = "api-1  | ready\nworker | busy\napi-2  | ready\nworker | busy\n";
+		let out = filter_docker_logs(input);
+		assert!(
+			out.contains("api-1  | ready"),
+			"compose service-prefixed lines should dedup per service: {out}"
+		);
+		assert!(
+			out.contains("api-2  | ready"),
+			"compose service-prefixed lines should preserve distinct services: {out}"
+		);
+		assert!(
+			out.contains("worker | busy (×2)"),
+			"compose same-service lines should dedup globally: {out}"
+		);
+	}
+
+	// ── kubectl uncovered subcommands tests ───────────────────────────────
+
+	#[test]
+	fn kubectl_apply_output_condensed() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let kubectl_ctx = ctx("kubectl", Some("apply"), &cfg);
+		let mut input = String::new();
+		for i in 0..250 {
+			let _ = writeln!(input, "deployment.apps/app-{i} unchanged");
+		}
+		let out = filter(&kubectl_ctx, &input, 0).text;
+		assert!(
+			out.contains("lines omitted") || out.contains("lines truncated"),
+			"kubectl apply output should be head/tail condensed: {out}"
+		);
+	}
+
+	// ── helm glog strip tests ───────────────────────────────────────────
+
+	#[test]
+	fn helm_list_strips_glog_warning_lines() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let helm_ctx = ctx("helm", Some("list"), &cfg);
+		let input = "W0115 10:30:00 warning message from internal\nNAME: my-release\nLAST DEPLOYED: \
+		             Mon Jan 15 10:30:00 2024\nNAMESPACE: default\nSTATUS: deployed\nREVISION: 3\n";
+		let out = filter(&helm_ctx, input, 0).text;
+		assert!(!out.contains("W0115"), "glog W-prefixed lines should be stripped: {out}");
+		assert!(out.contains("NAME: my-release"), "release info should be preserved: {out}");
+		assert!(out.contains("STATUS: deployed"), "release info should be preserved: {out}");
+	}
+
+	#[test]
+	fn helm_list_strips_kubernetes_config_warning() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let helm_ctx = ctx("helm", Some("list"), &cfg);
+		let input = "WARNING: Kubernetes configuration file is group-readable\nNAME: \
+		             my-release\nSTATUS: deployed\n";
+		let out = filter(&helm_ctx, input, 0).text;
+		assert!(
+			!out.contains("WARNING: Kubernetes configuration file"),
+			"Kubernetes config warning should be stripped: {out}"
+		);
+		assert!(out.contains("NAME: my-release"), "release info should be preserved: {out}");
+	}
+
+	// ── Blocking-issue regression tests ─────────────────────────────────
+
+	#[test]
+	fn docker_logs_preserves_blank_lines() {
+		let input = "a\n\nb\n";
+		let out = filter_docker_logs(input);
+		assert_eq!(out, "a\n\nb\n", "blank lines must not be silently dropped: {out}");
+	}
+
+	#[test]
+	fn docker_logs_preserves_non_consecutive_blank_lines() {
+		let input = "a\n\nb\n\nc\n";
+		let out = filter_docker_logs(input);
+		assert_eq!(
+			out, "a\n\nb\n\nc\n",
+			"non-consecutive blank lines must not be globally deduplicated: {out}"
+		);
+	}
+
+	#[test]
+	fn docker_logs_dedups_empty_compose_messages_per_service() {
+		let input = "api | \napi | \napi | \nworker | \nworker | \n";
+		let out = filter_docker_logs(input);
+		assert!(out.contains("api |  (×3)"), "same-service empty messages should dedup: {out}");
+		assert!(out.contains("worker |  (×2)"), "same-service empty messages should dedup: {out}");
+	}
+
+	#[test]
+	fn docker_start_preserves_container_names_with_progress_keywords() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		for sub in &["start", "stop", "restart", "rm"] {
+			let ctx = MinimizerCtx {
+				program:    "docker",
+				subcommand: Some(sub),
+				command:    &format!("docker {sub} my-Downloading-app"),
+				config:     &cfg,
+			};
+			let input = "my-Downloading-app\n";
+			let out = filter(&ctx, input, 0).text;
+			assert_eq!(
+				out, input,
+				"docker {sub} must not strip container names matching progress heuristics"
+			);
+		}
+	}
+
+	#[test]
+	fn docker_compose_start_preserves_container_names_with_progress_keywords() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		for action in &["start", "stop", "restart", "rm"] {
+			let ctx = MinimizerCtx {
+				program:    "docker",
+				subcommand: Some("compose"),
+				command:    &format!("docker compose {action} my-Downloading-app"),
+				config:     &cfg,
+			};
+			let input = "my-Downloading-app\n";
+			let out = filter(&ctx, input, 0).text;
+			assert_eq!(
+				out, input,
+				"docker compose {action} must not strip container names matching progress heuristics"
+			);
+		}
+	}
+
+	#[test]
+	fn helm_list_preserves_release_names_starting_with_w_digit() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let helm_ctx = ctx("helm", Some("list"), &cfg);
+		let input = "NAME\tNAMESPACE\nW2024-app\tdefault\nmy-app\tdefault\n";
+		let out = filter(&helm_ctx, input, 0).text;
+		assert!(
+			out.contains("W2024-app"),
+			"release names starting with W+digits must not be stripped: {out}"
+		);
+		assert!(out.contains("my-app"), "other releases must be preserved: {out}");
+	}
+
+	#[test]
+	fn glog_prefix_requires_trailing_space() {
+		assert!(is_glog_prefix("W0115 10:30:00 warning"));
+		assert!(!is_glog_prefix("W2024-app"));
+		assert!(!is_glog_prefix("W123"));
+		assert!(!is_glog_prefix("W12345"));
+	}
+
+	#[test]
+	fn glog_prefix_rejects_invalid_month_day() {
+		// W2024 has month=20 (invalid) — must not be treated as glog.
+		assert!(!is_glog_prefix("W2024 default"));
+		assert!(!is_glog_prefix("W0015 10:30:00 warning"));
+		assert!(!is_glog_prefix("W1301 10:30:00 warning"));
+		assert!(!is_glog_prefix("W1232 10:30:00 warning"));
+	}
+
+	#[test]
+	fn glog_prefix_rejects_space_separated_without_time() {
+		// W1231 looks like a valid glog date, but "default" is not a time stamp.
+		assert!(!is_glog_prefix("W1231 default"));
+		// Valid glog with time stamp must still pass.
+		assert!(is_glog_prefix("W1231 10:30:00 warning"));
+	}
+
+	#[test]
+	fn helm_list_preserves_release_names_starting_with_w_digit_space() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let helm_ctx = ctx("helm", Some("list"), &cfg);
+		// W2024 default looks like a glog prefix but month=20 is invalid.
+		let input = "NAME\tNAMESPACE\nW2024 default\tdefault\nmy-app\tdefault\n";
+		let out = filter(&helm_ctx, input, 0).text;
+		assert!(
+			out.contains("W2024 default"),
+			"release names like 'W2024 default' must not be stripped: {out}"
+		);
+		assert!(out.contains("my-app"), "other releases must be preserved: {out}");
+	}
+
+	#[test]
+	fn helm_list_preserves_space_separated_valid_w_digit_release_names() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let helm_ctx = ctx("helm", Some("list"), &cfg);
+		// W1231 default has a valid month/day but lacks a time stamp, so it must
+		// NOT be stripped as a glog line.
+		let input = "NAME NAMESPACE\nW1231 default\nmy-app default\n";
+		let out = filter(&helm_ctx, input, 0).text;
+		assert!(
+			out.contains("W1231 default"),
+			"space-separated release name W1231 must not be stripped: {out}"
+		);
+		assert!(out.contains("my-app default"), "other releases must be preserved: {out}");
+	}
+
+	#[test]
+	fn docker_compose_p_project_name_routes_logs() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = MinimizerCtx {
+			program:    "docker",
+			subcommand: Some("compose"),
+			command:    "docker compose -p myproj logs api",
+			config:     &cfg,
+		};
+		assert!(is_log_command(&ctx), "docker compose -p myproj logs must be a log command");
+	}
+
+	#[test]
+	fn docker_compose_p_project_name_routes_ps() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = MinimizerCtx {
+			program:    "docker",
+			subcommand: Some("compose"),
+			command:    "docker compose -p myproj ps",
+			config:     &cfg,
+		};
+		assert!(
+			is_table_command(&ctx),
+			"docker compose -p myproj ps must be classified as a table command"
+		);
+	}
+
+	#[test]
+	fn docker_compose_p_project_name_routes_start() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = MinimizerCtx {
+			program:    "docker",
+			subcommand: Some("compose"),
+			command:    "docker compose -p myproj start api",
+			config:     &cfg,
+		};
+		assert!(
+			is_docker_lifecycle_command(&ctx),
+			"docker compose -p myproj start must be classified as a lifecycle command"
+		);
+	}
+
+	fn make_ctx<'a>(
+		program: &'a str,
+		subcommand: Option<&'a str>,
+		command: &'a str,
+		cfg: &'a MinimizerConfig,
+	) -> MinimizerCtx<'a> {
+		MinimizerCtx { program, subcommand, command, config: cfg }
+	}
+
+	// ── docker-compose up / docker compose up log preservation ──────────────
+
+	#[test]
+	fn test_compose_up_logs_preserved() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		// Legacy docker-compose up: detect.rs sets subcommand="up", command retains
+		// "docker-compose".
+		let input = "web_1    | [2024-01-01 00:00:00] INFO Server started\ndb_1     | 2024-01-01 \
+		             00:00:01 [Note] mysqld: ready for connections\n";
+		let ctx = make_ctx("docker", Some("up"), "docker-compose up", &cfg);
+		let out = filter(&ctx, input, 0);
+		// Log output must not be stripped by the build-progress condenser.
+		assert!(
+			out.text.contains("Server started"),
+			"compose up log lines must survive (legacy docker-compose): {}",
+			out.text
+		);
+		assert!(
+			out.text.contains("mysqld: ready for connections"),
+			"compose up db log lines must survive (legacy docker-compose): {}",
+			out.text
+		);
+	}
+
+	#[test]
+	fn test_compose_v2_up_logs_preserved() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		// Compose v2: subcommand="compose", action resolved by scanning tokens.
+		let input = "web_1    | [2024-01-01 00:00:00] INFO Server started\ndb_1     | 2024-01-01 \
+		             00:00:01 [Note] mysqld: ready for connections\n";
+		let ctx = make_ctx("docker", Some("compose"), "docker compose up", &cfg);
+		let out = filter(&ctx, input, 0);
+		assert!(
+			out.text.contains("Server started"),
+			"compose up log lines must survive (docker compose v2): {}",
+			out.text
+		);
+	}
+
+	#[test]
+	fn test_compose_up_with_global_flags_logs_preserved() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		// docker compose --progress plain up — global option before action.
+		let input = "app_1    | Downloading something\napp_1    | Waiting for db\n";
+		let ctx = make_ctx("docker", Some("compose"), "docker compose --progress plain up", &cfg);
+		let out = filter(&ctx, input, 0);
+		assert!(
+			out.text.contains("Downloading something"),
+			"'Downloading' log lines must not be stripped by progress condenser: {}",
+			out.text
+		);
+		assert!(
+			out.text.contains("Waiting for db"),
+			"'Waiting' log lines must not be stripped by progress condenser: {}",
+			out.text
+		);
+	}
+
+	#[test]
+	fn test_is_compose_up_command_both_forms() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		// Legacy form
+		assert!(is_compose_up_command(&make_ctx("docker", Some("up"), "docker-compose up", &cfg)));
+		// v2 form
+		assert!(is_compose_up_command(&make_ctx(
+			"docker",
+			Some("compose"),
+			"docker compose up",
+			&cfg
+		)));
+		// v2 with global flags
+		assert!(is_compose_up_command(&make_ctx(
+			"docker",
+			Some("compose"),
+			"docker compose --progress plain up",
+			&cfg
+		)));
+		// Must not match other actions
+		assert!(!is_compose_up_command(&make_ctx(
+			"docker",
+			Some("compose"),
+			"docker compose logs",
+			&cfg
+		)));
+		assert!(!is_compose_up_command(&make_ctx(
+			"docker",
+			Some("compose"),
+			"docker compose ps",
+			&cfg
+		)));
+		// Plain docker build must not be classified as compose up
+		assert!(!is_compose_up_command(&make_ctx("docker", Some("build"), "docker build .", &cfg)));
 	}
 }

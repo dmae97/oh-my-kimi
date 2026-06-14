@@ -6,6 +6,7 @@
 import { buildCompat } from "../src/build";
 import {
 	type AnthropicModel,
+	bareModelId,
 	isFableOrMythos,
 	type OpenAIModel,
 	type OpenAIVariant,
@@ -13,8 +14,13 @@ import {
 	parseKnownModel,
 	semverEqual,
 } from "../src/identity/classify";
+import { buildCanonicalModelIndex, buildCanonicalReferenceData } from "../src/identity/equivalence";
+import { isMimoModelIdOrName } from "../src/identity/family";
+import { getLongestModelLikeIdSegment } from "../src/identity/id";
+import { buildModelReferenceIndex, resolveModelReference } from "../src/identity/reference";
 import { resolveModelThinking } from "../src/model-thinking";
-import type { Api, ModelSpec } from "../src/types";
+import type { Api, Model, ModelSpec } from "../src/types";
+import { isVariantCollapsedSpec } from "../src/variant-collapse";
 
 const CLOUDFLARE_AI_GATEWAY_BASE_URL = "https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/anthropic";
 
@@ -70,9 +76,12 @@ export function applyGeneratedModelPolicies(models: ModelSpec<Api>[]): void {
 /**
  * Recompute `thinking` from the canonical deriver, replacing any baked value.
  * Mirrors `buildModel`'s trust-or-derive resolution with trust disabled: the
- * generator is the authority that produces the trusted values.
+ * generator is the authority that produces the trusted values. Collapsed
+ * effort-tier variants are exempt — their collapse table authored the
+ * routing/off-suppression metadata and the deriver cannot reproduce it.
  */
 export function rebakeModelThinking(model: ModelSpec<Api>): void {
+	if (isVariantCollapsedSpec(model)) return;
 	const thinking = resolveModelThinking({ ...model, thinking: undefined }, buildCompat(model));
 	if (thinking) {
 		model.thinking = thinking;
@@ -84,28 +93,109 @@ export function rebakeModelThinking(model: ModelSpec<Api>): void {
 /**
  * Link OpenAI model variants to their context promotion targets.
  *
- * When a model's context is exhausted, the agent can promote to a sibling
- * model with a larger context window on the same provider:
- * - `codex-spark` variants promote to `gpt-5.5`.
- * - `gpt-5.5` (270K input) promotes to `gpt-5.4` (1M input).
+ * When a model's context is exhausted, the agent can promote to a sibling model
+ * on the same provider:
+ * - `codex-spark` variants promote to the full `gpt-5.5`.
+ * - every `gpt-5.5` flavor (base, `-pro`, `-instant`, dated snapshots, and
+ *   namespaced ids like `openai/gpt-5.5`) promotes to its `gpt-5.4` sibling.
+ *
+ * The sibling is resolved by parsed version + matching provider/api, not a
+ * hardcoded bare id, so namespaced (`openrouter/openai/gpt-5.4`), dotted
+ * (`amazon-bedrock` `openai.gpt-5.4`), and dated (`gpt-5.4-2026-03-05`) ids all
+ * link. The runtime still gates on the target actually being larger
+ * (`#resolveContextPromotionTarget`), so an equal/smaller sibling is a harmless
+ * no-op rather than a counterproductive switch.
  */
 export function linkOpenAIPromotionTargets(models: ModelSpec<Api>[]): void {
 	for (const candidate of models) {
 		const parsedCandidate = parseKnownModel(candidate.id);
 		if (parsedCandidate.family !== "openai") continue;
-		let targetId: string | undefined;
+		let targetVersion: string | undefined;
 		if (parsedCandidate.variant === "codex-spark") {
-			targetId = "gpt-5.5";
-		} else if (parsedCandidate.variant === "base" && semverEqual(parsedCandidate.version, "5.5")) {
-			targetId = "gpt-5.4";
+			targetVersion = "5.5";
+		} else if (semverEqual(parsedCandidate.version, "5.5")) {
+			targetVersion = "5.4";
 		} else {
 			continue;
 		}
-		const fallback = models.find(
-			model => model.provider === candidate.provider && model.api === candidate.api && model.id === targetId,
-		);
+		// Prefer the plainest sibling id (shortest bare segment) so the base model
+		// wins over `-pro`/`-mini`/`-nano` siblings that parse to the same version.
+		let fallback: ModelSpec<Api> | undefined;
+		let fallbackBareLength = Number.POSITIVE_INFINITY;
+		for (const model of models) {
+			if (model === candidate) continue;
+			if (model.provider !== candidate.provider || model.api !== candidate.api) continue;
+			const parsed = parseKnownModel(model.id);
+			if (parsed.family !== "openai" || !semverEqual(parsed.version, targetVersion)) continue;
+			const bareLength = bareModelId(model.id).length;
+			if (bareLength < fallbackBareLength) {
+				fallback = model;
+				fallbackBareLength = bareLength;
+			}
+		}
 		if (!fallback) continue;
 		candidate.contextPromotionTarget = `${fallback.provider}/${fallback.id}`;
+	}
+}
+
+/**
+ * Fill `null` `contextWindow` / `maxTokens` from a model's family reference.
+ * Proxies and resellers serve first-party models under mangled ids and report
+ * no limits, so discovery emits `null` rather than a magic number. Two lookups
+ * cover the two ways an id drifts from its family head:
+ *
+ * 1. Compact / re-spelled versions (`venice/openai-gpt-54-mini`,
+ *    `aimlapi/moonshot/kimi-k2-5`) — the canonical-equivalence index maps these
+ *    to their head (`gpt-5.4-mini`, `kimi-k2.5`).
+ * 2. Org-namespace variance (`aimlapi/alibaba/qwen3-32b` vs `groq/qwen/qwen3-32b`)
+ *    — these never share an exact id, so the bare model-segment (`qwen3-32b`)
+ *    is resolved through the proxy-reference suffix-alias map instead.
+ *
+ * Both lookups draw metadata from the proxy-reference index, which prefers the
+ * largest limits with complete cache pricing and first-party providers, and
+ * excludes zero-cost xai-oauth subscription entries (inflated `maxTokens`) as
+ * sources. The canonical head is tried first (more precise); the segment alias
+ * backfills any field it leaves null.
+ *
+ * Only `null` fields are filled; provider-specific limits that discovery
+ * returned explicitly are never overwritten.
+ */
+export function applyCanonicalLimitFallback(models: ModelSpec<Api>[]): void {
+	if (!models.some(model => model.contextWindow === null || model.maxTokens === null)) {
+		return;
+	}
+	// The identity indices read only id/provider/name/limit/cost fields, all of
+	// which ModelSpec carries — no built-only field (compat/thinking) is read —
+	// so reusing the runtime Model<Api> builders over raw specs is sound.
+	const catalog = models as unknown as readonly Model<Api>[];
+	const referenceData = buildCanonicalReferenceData(catalog);
+	const canonicalIndex = buildCanonicalModelIndex(catalog, referenceData);
+	const referenceIndex = buildModelReferenceIndex(catalog);
+
+	for (const model of models) {
+		if (model.contextWindow !== null && model.maxTokens !== null) {
+			continue;
+		}
+		const canonicalId = canonicalIndex.bySelector.get(`${model.provider}/${model.id}`.toLowerCase());
+		const segment = getLongestModelLikeIdSegment(model.id);
+		const references = [
+			canonicalId ? resolveModelReference(canonicalId, referenceIndex) : undefined,
+			segment ? referenceIndex.suffixAlias.get(segment) : undefined,
+		];
+		for (const reference of references) {
+			if (!reference || (reference.provider === model.provider && reference.id === model.id)) {
+				continue;
+			}
+			if (model.contextWindow === null && reference.contextWindow !== null) {
+				model.contextWindow = reference.contextWindow;
+			}
+			if (model.maxTokens === null && reference.maxTokens !== null) {
+				model.maxTokens = reference.maxTokens;
+			}
+			if (model.contextWindow !== null && model.maxTokens !== null) {
+				break;
+			}
+		}
 	}
 }
 
@@ -114,6 +204,13 @@ function applyGeneratedModelPolicy(model: ModelSpec<Api>): void {
 	if (copilotLimits) {
 		model.contextWindow = copilotLimits.contextWindow;
 		model.maxTokens = copilotLimits.maxTokens;
+	}
+
+	// GLM Coding Plan (zai): GLM-5.2 is the selectable 1M served id; pin it
+	// so endpoint discovery or older bundled fallbacks cannot regress to 200k.
+	if (model.provider === "zai" && model.id === "glm-5.2") {
+		model.contextWindow = 1_000_000;
+		model.maxTokens = 131_072;
 	}
 
 	if (
@@ -128,6 +225,18 @@ function applyGeneratedModelPolicy(model: ModelSpec<Api>): void {
 			reasoningContentField: "reasoning_content",
 		};
 		delete model.compat.thinkingFormat;
+	}
+	if (model.api === "openai-completions" && model.provider === "opencode-go" && isMimoModelIdOrName(model.id)) {
+		model.compat = {
+			...(model.compat ?? {}),
+			supportsToolChoice: false,
+		};
+	}
+	if (model.api === "openai-completions" && model.provider === "opencode-go" && model.id === "kimi-k2.7-code") {
+		model.compat = {
+			...(model.compat ?? {}),
+			supportsForcedToolChoice: false,
+		};
 	}
 	if (
 		model.api === "openai-completions" &&

@@ -3,11 +3,9 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import {
-	loadEntriesFromFile,
-	type SessionHeader,
-	SessionManager,
-} from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import type { SessionHeader } from "@oh-my-pi/pi-coding-agent/session/session-entries";
+import { loadEntriesFromFile } from "@oh-my-pi/pi-coding-agent/session/session-loader";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { getTerminalId } from "@oh-my-pi/pi-tui";
 import { getConfigRootDir, getTerminalSessionsDir, setAgentDir } from "@oh-my-pi/pi-utils";
 
@@ -243,17 +241,9 @@ describe("SessionManager.continueRecent relocation", () => {
 	});
 
 	it("re-roots past a cwd-less legacy session in a shared explicit sessionDir", async () => {
-		// Regression: SessionInfo.cwd is "" for sessions whose header has no cwd, and
-		// path.resolve("") === process.cwd(). A guard that only excluded `undefined`
-		// treated such a legacy session as "belongs to the current cwd" whenever
-		// --continue ran from process.cwd(), hijacking the moved session. Resume must
-		// be invoked with process.cwd() to reproduce the path.resolve("") collision.
 		const explicitSessionDir = path.join(testAgentDir, "shared-legacy-sessions");
-		const currentCwd = process.cwd();
-
-		// Older session with no recorded cwd (header cwd stripped → "" on load).
 		const legacy = SessionManager.create(cwdB, explicitSessionDir);
-		legacy.appendMessage({ role: "user", content: "legacy cwd-less", timestamp: 1 });
+		legacy.appendMessage({ role: "user", content: "legacy without cwd", timestamp: 1 });
 		legacy.appendMessage(makeAssistantMessage());
 		await legacy.flush();
 		const legacyFile = legacy.getSessionFile();
@@ -261,10 +251,10 @@ describe("SessionManager.continueRecent relocation", () => {
 		await legacy.close();
 		stripHeaderCwd(legacyFile);
 
-		// Newer moved session, recorded under the now-missing worktree cwd.
+		// Ensure the stale moved session is newer than the cwd-less legacy session.
 		await new Promise(resolve => setTimeout(resolve, 20));
 		const moved = SessionManager.create(cwdA, explicitSessionDir);
-		moved.appendMessage({ role: "user", content: "newer moved cwd", timestamp: 2 });
+		moved.appendMessage({ role: "user", content: "newer stale moved cwd", timestamp: 2 });
 		moved.appendMessage(makeAssistantMessage());
 		await moved.flush();
 		const movedFile = moved.getSessionFile();
@@ -274,12 +264,13 @@ describe("SessionManager.continueRecent relocation", () => {
 		writeBreadcrumb(cwdA, movedFile);
 		await fsp.rm(cwdA, { recursive: true, force: true });
 
-		const resumed = await SessionManager.continueRecent(currentCwd, explicitSessionDir);
+		const resumed = await SessionManager.continueRecent(cwdB, explicitSessionDir);
 		try {
 			// The moved session is re-rooted; the cwd-less legacy session is not hijacked.
 			expect(resumed.getSessionFile()).toBe(movedFile);
-			expect(resumed.getCwd()).toBe(path.resolve(currentCwd));
+			expect(resumed.getCwd()).toBe(path.resolve(cwdB));
 			expect(fs.existsSync(legacyFile)).toBe(true);
+			expect(getHeader(await loadEntriesFromFile(movedFile))?.cwd).toBe(path.resolve(cwdB));
 		} finally {
 			await resumed.close();
 		}

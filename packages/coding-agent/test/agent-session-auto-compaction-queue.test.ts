@@ -144,7 +144,13 @@ describe("AgentSession auto-compaction queue resume", () => {
 
 		expect(session.agent.hasQueuedMessages()).toBe(true);
 
-		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
+		const continueSpy = vi.spyOn(session.agent, "continue").mockImplementation(async () => {
+			// Real continue() polls and consumes the queued steering/follow-up
+			// messages. Mirror that here so the stranded-queue drain settles after
+			// one resume instead of rescheduling itself forever (a no-op mock
+			// leaves the queue populated, spinning the drain into an OOM loop).
+			session.agent.clearAllQueues();
+		});
 
 		// Wait for auto_compaction_end event to know when the async handler is done
 		const { promise: compactionDone, resolve: onCompactionDone } = Promise.withResolvers<void>();

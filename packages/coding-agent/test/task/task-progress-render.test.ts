@@ -66,7 +66,7 @@ describe("task progress rendering", () => {
 		vi.restoreAllMocks();
 		resetSettingsForTest();
 	});
-	it("keeps the subagent label solid and shimmers the running description", async () => {
+	it("renders running task rows static with the agent dot", async () => {
 		const theme = (await getThemeByName("dark"))!;
 		expect(theme).toBeDefined();
 		const options: RenderResultOptions = { expanded: false, isPartial: true, spinnerFrame: 0 };
@@ -88,18 +88,14 @@ describe("task progress rendering", () => {
 		const rawRow1 = renderRow(700);
 		const strippedRow = Bun.stripANSI(rawRow0);
 
-		expect(strippedRow).toContain("• CountPackages: List workspace packages");
+		expect(strippedRow).toContain(`${theme.status.done} CountPackages: List workspace packages`);
+		expect(strippedRow).not.toContain(theme.symbol("tool.task"));
 		expect(strippedRow).not.toContain(theme.status.running);
 		expect(strippedRow).not.toContain(theme.getSpinnerFrames("status")[0]);
-		// The label is one solid bold-accent run, identical across shimmer frames.
-		const label = theme.fg("accent", theme.bold("CountPackages"));
-		expect(rawRow0).toContain(label);
-		expect(rawRow1).toContain(label);
-		// The description shimmers, so the row as a whole animates between frames.
-		expect(rawRow0).not.toBe(rawRow1);
+		expect(rawRow0).toBe(rawRow1);
 	});
 
-	it("keeps the bullet replacement when shimmer is disabled", async () => {
+	it("keeps the agent dot when shimmer is disabled", async () => {
 		const theme = (await getThemeByName("dark"))!;
 		resetSettingsForTest();
 		await Settings.init({ inMemory: true, overrides: { "display.shimmer": "disabled" } });
@@ -116,12 +112,12 @@ describe("task progress rendering", () => {
 			),
 		);
 
-		expect(strippedRow).toContain("• KeySettingsHotPaths");
+		expect(strippedRow).toContain(`${theme.status.done} KeySettingsHotPaths`);
 		expect(strippedRow).not.toContain(theme.status.running);
 		expect(strippedRow).not.toContain(theme.getSpinnerFrames("status")[0]);
 	});
 
-	it("shimmers the pending description like a running one (frozen async spawn snapshot)", async () => {
+	it("renders pending task rows with the agent dot, not the pending glyph", async () => {
 		const theme = (await getThemeByName("dark"))!;
 		const options: RenderResultOptions = { expanded: false, isPartial: true, spinnerFrame: 0 };
 		const progress = runningProgress({
@@ -144,14 +140,57 @@ describe("task progress rendering", () => {
 
 		const rawRow0 = renderRow(0);
 		const rawRow1 = renderRow(700);
+		const strippedRow = Bun.stripANSI(rawRow0);
 
-		expect(Bun.stripANSI(rawRow0)).toContain("BestGpt: Combine winners for gpt");
-		// The label stays one solid bold-accent run; the description shimmers,
-		// so the row animates across frames exactly like a running agent's.
-		const label = theme.fg("accent", theme.bold("BestGpt"));
-		expect(rawRow0).toContain(label);
-		expect(rawRow1).toContain(label);
-		expect(rawRow0).not.toBe(rawRow1);
+		expect(strippedRow).toContain(`${theme.status.done} BestGpt: Combine winners for gpt`);
+		expect(strippedRow).not.toContain(theme.status.pending);
+		expect(rawRow0).toBe(rawRow1);
+	});
+
+	it("settles completed rows to the foreground color with the same dot", async () => {
+		const theme = (await getThemeByName("dark"))!;
+		const options: RenderResultOptions = { expanded: false, isPartial: true, spinnerFrame: 0 };
+		const progress = runningProgress({
+			id: "DonePkg",
+			status: "completed",
+			description: "List workspace packages",
+		});
+
+		const row = findRow(
+			taskToolRenderer.renderResult(
+				{ content: [{ type: "text", text: "" }], details: detailsFor(progress) },
+				options,
+				theme,
+			),
+			"DonePkg",
+		);
+
+		const stripped = Bun.stripANSI(row);
+		expect(stripped).toContain(`${theme.status.done} DonePkg: List workspace packages`);
+		expect(stripped).not.toContain(theme.symbol("tool.task"));
+		// Same dot as live rows; completion reads as the label settling from
+		// accent to the plain foreground color.
+		const titlePart = `${theme.bold("DonePkg")}: List workspace packages`;
+		expect(row).toContain(theme.fg("text", titlePart));
+		expect(row).not.toContain(theme.fg("accent", titlePart));
+	});
+
+	it("shows the dispatch glyph in the header while agents run, not a spinner", async () => {
+		const theme = (await getThemeByName("dark"))!;
+		const options: RenderResultOptions = { expanded: false, isPartial: true, spinnerFrame: 0 };
+		const header = findRow(
+			taskToolRenderer.renderResult(
+				{ content: [{ type: "text", text: "" }], details: detailsFor(runningProgress()) },
+				options,
+				theme,
+			),
+			"Task",
+		);
+
+		const stripped = Bun.stripANSI(header);
+		expect(stripped).toContain(`${theme.symbol("tool.task")} Task`);
+		expect(stripped).not.toContain(theme.status.running);
+		expect(stripped).not.toContain(theme.getSpinnerFrames("status")[0]);
 	});
 
 	it("renders the assignment markdown inside the result frame", async () => {
@@ -230,6 +269,92 @@ describe("task progress rendering", () => {
 		const positions = ["FastFinish", "MidFinish", "SlowFinish"].map(id => rendered.indexOf(id));
 		expect(positions.every(p => p >= 0)).toBe(true);
 		expect(positions).toEqual([...positions].sort((a, b) => a - b));
+	});
+
+	it("folds collapsed progress lists to the live edge with a status summary", async () => {
+		const theme = (await getThemeByName("dark"))!;
+		const details: TaskToolDetails = {
+			projectAgentsDir: null,
+			results: [],
+			totalDurationMs: 0,
+			progress: [
+				runningProgress({ index: 0, id: "DoneOne", status: "completed", durationMs: 1000 }),
+				runningProgress({ index: 1, id: "DoneTwo", status: "completed", durationMs: 2000 }),
+				runningProgress({ index: 2, id: "DoneThree", status: "completed", durationMs: 3000 }),
+				runningProgress({ index: 3, id: "LiveOne", status: "running" }),
+				runningProgress({ index: 4, id: "LiveTwo", status: "running" }),
+				runningProgress({ index: 5, id: "LiveThree", status: "pending" }),
+				runningProgress({ index: 6, id: "LiveFour", status: "pending" }),
+			],
+		};
+		const result = { content: [{ type: "text", text: "" }], details };
+
+		const collapsed = Bun.stripANSI(
+			taskToolRenderer
+				.renderResult(result, { expanded: false, isPartial: true, spinnerFrame: 0 }, theme)
+				.render(120)
+				.join("\n"),
+		);
+		// Finished rows fold into the summary; the live edge stays visible.
+		for (const id of ["LiveOne", "LiveTwo", "LiveThree", "LiveFour"]) {
+			expect(collapsed).toContain(id);
+		}
+		for (const id of ["DoneOne", "DoneTwo", "DoneThree"]) {
+			expect(collapsed).not.toContain(id);
+		}
+		expect(collapsed).toContain("… 3 more agents (3 done)");
+		// The summary line sits above the visible rows (live edge at the bottom).
+		expect(collapsed.indexOf("more agents")).toBeLessThan(collapsed.indexOf("LiveOne"));
+
+		const expanded = Bun.stripANSI(
+			taskToolRenderer
+				.renderResult(result, { expanded: true, isPartial: true, spinnerFrame: 0 }, theme)
+				.render(120)
+				.join("\n"),
+		);
+		for (const id of ["DoneOne", "DoneTwo", "DoneThree", "LiveOne", "LiveFour"]) {
+			expect(expanded).toContain(id);
+		}
+		expect(expanded).not.toContain("more agents");
+	});
+
+	it("keeps problem rows visible when the collapsed result list folds", async () => {
+		const theme = (await getThemeByName("dark"))!;
+		const details: TaskToolDetails = {
+			projectAgentsDir: null,
+			results: [
+				finishedResult({ index: 0, id: "FastOne", durationMs: 1000 }),
+				finishedResult({ index: 1, id: "FastTwo", durationMs: 2000 }),
+				finishedResult({ index: 2, id: "FastThree", durationMs: 3000 }),
+				finishedResult({ index: 3, id: "SlowOne", durationMs: 8000 }),
+				finishedResult({ index: 4, id: "SlowTwo", durationMs: 9000 }),
+				finishedResult({ index: 5, id: "SlowFailed", exitCode: 1, error: "boom", durationMs: 10000 }),
+			],
+			totalDurationMs: 10000,
+		};
+
+		const collapsed = Bun.stripANSI(
+			taskToolRenderer
+				.renderResult(
+					{ content: [{ type: "text", text: "" }], details },
+					{ expanded: false, isPartial: false },
+					theme,
+				)
+				.render(120)
+				.join("\n"),
+		);
+		// The failed agent claims a slot even though it finished last; the
+		// slowest successes fold away instead.
+		expect(collapsed).toContain("SlowFailed");
+		for (const id of ["FastOne", "FastTwo", "FastThree"]) {
+			expect(collapsed).toContain(id);
+		}
+		expect(collapsed).not.toContain("SlowOne");
+		expect(collapsed).not.toContain("SlowTwo");
+		expect(collapsed).toContain("… 2 more agents");
+		// The run summary footer still counts the full batch.
+		expect(collapsed).toContain("5 succeeded");
+		expect(collapsed).toContain("1 failed");
 	});
 });
 

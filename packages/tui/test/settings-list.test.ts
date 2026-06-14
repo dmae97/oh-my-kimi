@@ -160,4 +160,396 @@ describe("SettingsList", () => {
 		list.handleInput("\x1b");
 		expect(cancelCount).toBe(1);
 	});
+	it("skips heading rows during navigation and starts on the first selectable item", () => {
+		const changes: Array<[string, string]> = [];
+		const list = new SettingsList(
+			[
+				{ id: "__heading:a", label: "Group A", currentValue: "", heading: true },
+				{ id: "alpha", label: "Alpha", currentValue: "off", values: ["off", "on"] },
+				{ id: "__heading:b", label: "Group B", currentValue: "", heading: true },
+				{ id: "beta", label: "Beta", currentValue: "off", values: ["off", "on"] },
+			],
+			10,
+			testTheme,
+			(id, value) => {
+				changes.push([id, value]);
+			},
+			() => {},
+		);
+
+		// Initial selection lands past the leading heading
+		list.handleInput("\n");
+		expect(changes).toEqual([["alpha", "on"]]);
+
+		// Down crosses the Group B heading directly to Beta
+		list.handleInput("\x1b[B");
+		list.handleInput("\n");
+		expect(changes).toEqual([
+			["alpha", "on"],
+			["beta", "on"],
+		]);
+
+		// Down from the last item wraps past the leading heading back to Alpha
+		list.handleInput("\x1b[B");
+		list.handleInput("\n");
+		expect(changes).toEqual([
+			["alpha", "on"],
+			["beta", "on"],
+			["alpha", "off"],
+		]);
+	});
+
+	it("excludes heading rows from search results", () => {
+		const list = new SettingsList(
+			[
+				{ id: "__heading:group", label: "Group Alpha", currentValue: "", heading: true },
+				{ id: "alpha", label: "Alpha Mode", currentValue: "off", values: ["off", "on"] },
+				{ id: "beta", label: "Beta Mode", currentValue: "off", values: ["off", "on"] },
+			],
+			5,
+			testTheme,
+			() => {},
+			() => {},
+		);
+
+		// "group" fuzzy-matches the heading label but headings are not searchable
+		for (const ch of "group") list.handleInput(ch);
+
+		const output = list.render(80).join("\n");
+		expect(output).not.toContain("Group Alpha");
+		expect(output).toContain("No matching settings");
+	});
+	function sectionedItems() {
+		return [
+			{ id: "__heading:a", label: "Group A", currentValue: "", heading: true },
+			{ id: "alpha", label: "Alpha", currentValue: "off", values: ["off", "on"] },
+			{ id: "alpha2", label: "Alpha Two", currentValue: "off", values: ["off", "on"] },
+			{ id: "__heading:b", label: "Group B", currentValue: "", heading: true },
+			{ id: "beta", label: "Beta", currentValue: "off", values: ["off", "on"] },
+			{ id: "__heading:c", label: "Group C", currentValue: "", heading: true },
+			{ id: "gamma", label: "Gamma", currentValue: "off", values: ["off", "on"] },
+		];
+	}
+
+	it("jumps between sections with PgDn/PgUp, wrapping at the ends", () => {
+		const changes: Array<[string, string]> = [];
+		const list = new SettingsList(
+			sectionedItems(),
+			10,
+			testTheme,
+			(id, value) => {
+				changes.push([id, value]);
+			},
+			() => {},
+		);
+
+		// PgDn from Alpha jumps to the first item of Group B
+		list.handleInput("\x1b[6~");
+		list.handleInput("\n");
+		expect(changes).toEqual([["beta", "on"]]);
+
+		// PgUp twice wraps from Group A to Group C
+		list.handleInput("\x1b[5~");
+		list.handleInput("\x1b[5~");
+		list.handleInput("\n");
+		expect(changes).toEqual([
+			["beta", "on"],
+			["gamma", "on"],
+		]);
+	});
+
+	it("renders a section sidebar at wide widths with the whole list in the pane", () => {
+		const list = new SettingsList(
+			sectionedItems(),
+			10,
+			testTheme,
+			() => {},
+			() => {},
+		);
+
+		const output = list.render(120).join("\n");
+		// Sidebar lists every section beside the pane separator
+		expect(output).toMatch(/Group A\s+│/);
+		expect(output).toMatch(/Group B\s+│/);
+		expect(output).toMatch(/Group C\s+│/);
+		// Pane shows every item — sections outside the active one stay visible
+		expect(output).toContain("Alpha");
+		expect(output).toContain("Beta");
+		expect(output).toContain("Gamma");
+	});
+
+	it("styles heading rows through theme.heading with the dimmed flag for out-of-section headings", () => {
+		const themed: SettingsListTheme = {
+			...testTheme,
+			heading: (text: string, dimmed: boolean) => (dimmed ? `[dim-heading]${text}` : `[heading]${text}`),
+		};
+		const list = new SettingsList(
+			sectionedItems(),
+			10,
+			themed,
+			() => {},
+			() => {},
+		);
+
+		// Split layout: the active section's heading is bright, the rest dim.
+		const split = list.render(120).join("\n");
+		expect(split).toContain("[heading]Group A");
+		expect(split).toContain("[dim-heading]Group B");
+		expect(split).toContain("[dim-heading]Group C");
+
+		// Flat layout has no active section: every heading renders undimmed.
+		const flat = list.render(60).join("\n");
+		expect(flat).toContain("[heading]Group A");
+		expect(flat).toContain("[heading]Group B");
+		expect(flat).not.toContain("[dim-heading]");
+	});
+
+	it("section focus routes arrows to section jumps, Enter drops into items, Esc exits without cancelling", () => {
+		const changes: Array<[string, string]> = [];
+		let cancelled = 0;
+		const list = new SettingsList(
+			sectionedItems(),
+			10,
+			testTheme,
+			(id, value) => {
+				changes.push([id, value]);
+			},
+			() => {
+				cancelled++;
+			},
+		);
+
+		expect(list.hasSectionFocusTargets()).toBe(true);
+		expect(list.toggleSectionFocus()).toBe(true);
+
+		// Down jumps a whole section (Group A → Group B), not one row.
+		list.handleInput("\x1b[B");
+		expect(list.getSelectedItem()?.id).toBe("beta");
+
+		// Enter returns focus to the rows without activating the setting…
+		list.handleInput("\n");
+		expect(list.sectionFocused).toBe(false);
+		expect(changes).toEqual([]);
+
+		// …after which Enter cycles the value again.
+		list.handleInput("\n");
+		expect(changes).toEqual([["beta", "on"]]);
+
+		// Esc exits section focus instead of cancelling the list.
+		list.toggleSectionFocus();
+		list.handleInput("\x1b");
+		expect(list.sectionFocused).toBe(false);
+		expect(cancelled).toBe(0);
+	});
+
+	it("section focus cannot engage without sections and drops when a filter removes them", () => {
+		const flat = new SettingsList(
+			[{ id: "only", label: "Only", currentValue: "off", values: ["off", "on"] }],
+			5,
+			testTheme,
+			() => {},
+			() => {},
+		);
+		expect(flat.hasSectionFocusTargets()).toBe(false);
+		expect(flat.toggleSectionFocus()).toBe(false);
+
+		const list = new SettingsList(
+			sectionedItems(),
+			10,
+			testTheme,
+			() => {},
+			() => {},
+		);
+		list.toggleSectionFocus();
+		for (const ch of "alpha") list.handleInput(ch);
+		expect(list.sectionFocused).toBe(false);
+	});
+
+	it("moves the cursor glyph to the active section while section-focused", () => {
+		const list = new SettingsList(
+			sectionedItems(),
+			10,
+			testTheme,
+			() => {},
+			() => {},
+		);
+
+		const unfocused = list.render(120).join("\n");
+		expect(unfocused).not.toContain("→ Group A");
+		expect(unfocused).toContain("→ Alpha");
+
+		list.toggleSectionFocus();
+		// Split layout: the sidebar entry carries the cursor and the row cursor hides.
+		const split = list.render(120).join("\n");
+		expect(split).toContain("→ Group A");
+		expect(split).not.toContain("→ Alpha");
+
+		// Flat layout: the active heading row carries the cursor instead.
+		const flat = list.render(60).join("\n");
+		expect(flat).toContain("→ Group A");
+		expect(flat).not.toContain("→ Alpha");
+	});
+
+	it("falls back to inline heading rows when the width cannot fit the sidebar", () => {
+		const list = new SettingsList(
+			sectionedItems(),
+			10,
+			testTheme,
+			() => {},
+			() => {},
+		);
+
+		const output = list.render(60);
+		const joined = output.join("\n");
+		// No split separator; headings render as standalone rows and every item is inline
+		expect(joined).not.toContain("│");
+		expect(joined).toContain("Group A");
+		expect(joined).toContain("Group C");
+		expect(joined).toContain("Alpha");
+		expect(joined).toContain("Gamma");
+	});
+
+	it("pages through items with PgDn when the list has no sections", () => {
+		const changes: Array<[string, string]> = [];
+		const items = Array.from({ length: 12 }, (_, i) => ({
+			id: `item${i}`,
+			label: `Item ${i}`,
+			currentValue: "off",
+			values: ["off", "on"] as string[],
+		}));
+		const list = new SettingsList(
+			items,
+			5,
+			testTheme,
+			(id, value) => {
+				changes.push([id, value]);
+			},
+			() => {},
+		);
+
+		// PgDn advances by one viewport (5); PgDn again clamps to the last item.
+		list.handleInput("\x1b[6~");
+		list.handleInput("\n");
+		expect(changes).toEqual([["item5", "on"]]);
+
+		list.handleInput("\x1b[6~");
+		list.handleInput("\x1b[6~");
+		list.handleInput("\n");
+		expect(changes).toEqual([
+			["item5", "on"],
+			["item11", "on"],
+		]);
+	});
+
+	it("moves the selection with wheel events and reports it via onSelectionChange", () => {
+		const list = new SettingsList(
+			sectionedItems(),
+			10,
+			testTheme,
+			() => {},
+			() => {},
+		);
+		const seen: Array<string | undefined> = [];
+		list.onSelectionChange = item => seen.push(item?.id);
+
+		expect(list.getSelectedItem()?.id).toBe("alpha");
+		list.handleWheel(1);
+		expect(list.getSelectedItem()?.id).toBe("alpha2");
+		list.handleWheel(-1);
+		expect(list.getSelectedItem()?.id).toBe("alpha");
+		expect(seen).toEqual(["alpha2", "alpha"]);
+	});
+
+	it("hit-tests pane rows to items and sidebar rows to section jump targets", () => {
+		const list = new SettingsList(
+			sectionedItems(),
+			10,
+			testTheme,
+			() => {},
+			() => {},
+		);
+
+		// Split layout (wide): line 0 col 0 is the "Group A" sidebar row →
+		// resolves to that section's first item for clicks, but never for hover.
+		list.render(120);
+		expect(list.hitTest(0, 0)).toBe("alpha");
+		expect(list.hoverTest(0, 0)).toBeUndefined();
+		// Sidebar row 1 (Group B) resolves to its first item.
+		expect(list.hitTest(1, 0)).toBe("beta");
+		// Pane rows resolve to the item they render: row 0 is the Group A
+		// heading (not clickable), row 1 is Alpha.
+		const paneCol = 40;
+		expect(list.hitTest(0, paneCol)).toBeUndefined();
+		expect(list.hitTest(1, paneCol)).toBe("alpha");
+		expect(list.hoverTest(1, paneCol)).toBe("alpha");
+
+		// Flat layout (narrow): same rows, no sidebar region.
+		list.render(60);
+		expect(list.hitTest(0, 0)).toBeUndefined(); // heading row
+		expect(list.hitTest(1, 0)).toBe("alpha");
+	});
+
+	it("selects an item by id and resizes its viewport via setMaxVisible", () => {
+		const items = Array.from({ length: 12 }, (_, i) => ({
+			id: `item${i}`,
+			label: `Item ${i}`,
+			currentValue: "off",
+			values: ["off", "on"] as string[],
+		}));
+		const list = new SettingsList(
+			items,
+			5,
+			testTheme,
+			() => {},
+			() => {},
+		);
+
+		expect(list.selectItem("item9")).toBe(true);
+		expect(list.getSelectedItem()?.id).toBe("item9");
+		expect(list.selectItem("missing")).toBe(false);
+
+		// A taller viewport renders more item rows (flat list, no sections).
+		const before = list.render(60).join("\n");
+		expect(before).not.toContain("Item 0\u0020");
+		list.setMaxVisible(12);
+		const after = list.render(60).join("\n");
+		expect(after).toContain("Item 0");
+		expect(after).toContain("Item 11");
+	});
+
+	it("routes mouse events into an open submenu", () => {
+		const routed: Array<[number, number, boolean]> = [];
+		const submenu = {
+			render: () => ["submenu line"],
+			routeMouse: (event: { leftClick: boolean }, line: number, col: number) => {
+				routed.push([line, col, event.leftClick]);
+			},
+		};
+		const list = new SettingsList(
+			[
+				{
+					id: "picker",
+					label: "Picker",
+					currentValue: "x",
+					submenu: () => submenu,
+				},
+			],
+			5,
+			testTheme,
+			() => {},
+			() => {},
+		);
+
+		// No submenu open yet: nothing to route to.
+		expect(list.routeSubmenuMouse({ leftClick: true } as never, 0, 0)).toBe(false);
+
+		list.handleInput("\n"); // open the submenu
+		expect(list.hasOpenSubmenu()).toBe(true);
+		// Open submenu swallows hit-testing for the outer rows.
+		list.render(60);
+		expect(list.hitTest(0, 0)).toBeUndefined();
+
+		expect(list.routeSubmenuMouse({ leftClick: true } as never, 2, 7)).toBe(true);
+		expect(routed).toEqual([[2, 7, true]]);
+	});
 });

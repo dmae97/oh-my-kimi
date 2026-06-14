@@ -1,5 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
+import { logger } from "@oh-my-pi/pi-utils";
+import * as embeddings from "./embeddings";
 import { cosineSimilarity } from "./vector-math";
 
 export { cosineSimilarity };
@@ -103,7 +105,7 @@ CREATE INDEX IF NOT EXISTS idx_beliefs_confidence ON harmonic_beliefs(confidence
 export function initSchema(db: Database): void {
 	db.exec(FACTS_SCHEMA_SQL);
 }
-function textForEmbedding(text: string): Vector {
+function hashEmbedding(text: string): Vector {
 	const out = new Float32Array(EMBEDDING_DIM);
 	const words = text.toLowerCase().match(/[a-z0-9]+/g) ?? [];
 	for (const word of words) {
@@ -114,21 +116,62 @@ function textForEmbedding(text: string): Vector {
 	return out;
 }
 
-export function embed(text: string): Vector {
-	return textForEmbedding(text);
+/**
+ * Embed a batch of texts with the configured embedding provider. Falls back to the
+ * deterministic SHA1 bag-of-words hash for the entire batch when no provider is
+ * available or the provider fails, so every returned vector shares one space.
+ */
+export async function embedBatch(texts: readonly string[]): Promise<Vector[]> {
+	if (texts.length === 0) return [];
+	let matrix: embeddings.EmbeddingMatrix | null = null;
+	try {
+		matrix = await embeddings.embed(texts);
+	} catch (error) {
+		logger.debug("mnemopi shmr embedding failed; using hash fallback", { error: String(error) });
+	}
+	if (matrix !== null && matrix.length === texts.length) return matrix;
+	return texts.map(hashEmbedding);
 }
 
-export function clusterBySimilarity(items: readonly ShmrItem[], threshold: number): ShmrItem[][] {
+export async function embed(text: string): Promise<Vector> {
+	const [vector] = await embedBatch([text]);
+	return vector ?? hashEmbedding(text);
+}
+
+/**
+ * Resolve one vector per item: caller-provided embeddings are kept, the rest are
+ * batch-embedded in a single provider call (hash fallback when unavailable).
+ */
+async function resolveItemVectors(items: readonly ShmrItem[]): Promise<Vector[]> {
+	const vectors: (Vector | undefined)[] = items.map(item => item.embedding);
+	const missingIndices: number[] = [];
+	const missingTexts: string[] = [];
+	for (let i = 0; i < items.length; i++) {
+		if (vectors[i] !== undefined) continue;
+		missingIndices.push(i);
+		missingTexts.push(items[i]?.object ?? items[i]?.content ?? "");
+	}
+	if (missingIndices.length > 0) {
+		const fresh = await embedBatch(missingTexts);
+		for (let k = 0; k < missingIndices.length; k++) {
+			const index = missingIndices[k];
+			const vector = fresh[k];
+			if (index !== undefined && vector !== undefined) vectors[index] = vector;
+		}
+	}
+	return vectors.map((vector, i) => vector ?? hashEmbedding(items[i]?.object ?? items[i]?.content ?? ""));
+}
+
+export async function clusterBySimilarity(items: readonly ShmrItem[], threshold: number): Promise<ShmrItem[][]> {
 	if (items.length === 0) return [];
+	const vectors = await resolveItemVectors(items);
 	const adjacency: number[][] = Array.from({ length: items.length }, () => []);
 	for (let i = 0; i < items.length; i++) {
-		const left = items[i];
-		if (left === undefined) continue;
-		const leftEmbedding = left.embedding ?? embed(left.object ?? left.content ?? "");
+		const leftEmbedding = vectors[i];
+		if (leftEmbedding === undefined) continue;
 		for (let j = i + 1; j < items.length; j++) {
-			const right = items[j];
-			if (right === undefined) continue;
-			const rightEmbedding = right.embedding ?? embed(right.object ?? right.content ?? "");
+			const rightEmbedding = vectors[j];
+			if (rightEmbedding === undefined) continue;
 			if (cosineSimilarity(leftEmbedding, rightEmbedding) >= threshold) {
 				adjacency[i]?.push(j);
 				adjacency[j]?.push(i);
@@ -248,16 +291,22 @@ function deterministicBeliefs(cluster: readonly ShmrItem[]): Belief[] {
 	];
 }
 
-export function computeHarmonyScore(beliefs: readonly Belief[], cluster: readonly ShmrItem[]): number {
+export async function computeHarmonyScore(beliefs: readonly Belief[], cluster: readonly ShmrItem[]): Promise<number> {
 	if (beliefs.length === 0 || cluster.length === 0) return 0;
-	const centroid = new Float32Array(EMBEDDING_DIM);
-	for (const item of cluster) {
-		const embedding = item.embedding ?? embed(item.object ?? item.content ?? "");
-		for (let i = 0; i < EMBEDDING_DIM; i++) centroid[i] = (centroid[i] ?? 0) + (embedding[i] ?? 0) / cluster.length;
-	}
+	const itemVectors = await resolveItemVectors(cluster);
+	const beliefVectors = await embedBatch(beliefs.map(belief => `${belief.predicate} ${belief.object}`));
+	let dim = 0;
+	for (const vector of itemVectors) if (vector.length > dim) dim = vector.length;
+	const centroid = new Float32Array(dim);
+	for (const vector of itemVectors)
+		for (let i = 0; i < vector.length; i++) centroid[i] = (centroid[i] ?? 0) + (vector[i] ?? 0) / cluster.length;
 	let total = 0;
-	for (const belief of beliefs)
-		total += cosineSimilarity(embed(`${belief.predicate} ${belief.object}`), centroid) * belief.confidence;
+	for (let k = 0; k < beliefs.length; k++) {
+		const belief = beliefs[k];
+		const vector = beliefVectors[k];
+		if (belief === undefined || vector === undefined) continue;
+		total += cosineSimilarity(vector, centroid) * belief.confidence;
+	}
 	return total / beliefs.length;
 }
 
@@ -303,24 +352,62 @@ function tableExists(db: Database, table: string): boolean {
 	return db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) !== null;
 }
 
-export function harmonize(
+function parseEmbeddingJson(raw: unknown): Vector | null {
+	if (typeof raw !== "string") return null;
+	try {
+		const parsed = JSON.parse(raw) as unknown;
+		if (!Array.isArray(parsed) || parsed.length === 0) return null;
+		const out = new Float32Array(parsed.length);
+		for (let i = 0; i < parsed.length; i++) {
+			const value = Number(parsed[i]);
+			if (!Number.isFinite(value)) return null;
+			out[i] = value;
+		}
+		return out;
+	} catch {
+		return null;
+	}
+}
+
+/** Precomputed vectors from `memory_embeddings` (written by `scheduleEmbedding()`). */
+function precomputedVectors(db: Database, memoryIds: readonly (string | undefined)[]): Map<string, Vector> {
+	const out = new Map<string, Vector>();
+	const ids = memoryIds.filter((id): id is string => id !== undefined);
+	if (ids.length === 0 || !tableExists(db, "memory_embeddings")) return out;
+	for (let offset = 0; offset < ids.length; offset += 500) {
+		const chunk = ids.slice(offset, offset + 500);
+		const rows = db
+			.query(
+				`SELECT memory_id, embedding_json FROM memory_embeddings WHERE memory_id IN (${chunk.map(() => "?").join(", ")})`,
+			)
+			.all(...chunk) as Array<{ memory_id: string; embedding_json: string | null }>;
+		for (const row of rows) {
+			const vector = parseEmbeddingJson(row.embedding_json);
+			if (vector !== null) out.set(row.memory_id, vector);
+		}
+	}
+	return out;
+}
+
+export async function harmonize(
 	beam: BeamLike,
 	batchSize = SHMR_BATCH_SIZE,
 	maxIterations = SHMR_MAX_ITERATIONS,
 	similarityThreshold = SHMR_SIMILARITY_THRESHOLD,
-): HarmonizeStats {
+): Promise<HarmonizeStats> {
 	const started = performance.now();
 	const db = dbOf(beam);
 	initSchema(db);
-	const candidates: ShmrItem[] = [];
+	const bare: ShmrItem[] = [];
+	const memoryIds: (string | undefined)[] = [];
 	if (tableExists(db, "facts")) {
 		const rows = db
 			.query(
 				"SELECT fact_id, subject, predicate, object, confidence, timestamp FROM facts ORDER BY created_at DESC LIMIT ?",
 			)
 			.all(batchSize) as FactRow[];
-		for (const row of rows)
-			candidates.push({
+		for (const row of rows) {
+			bare.push({
 				fact_id: row.fact_id,
 				subject: row.subject,
 				predicate: row.predicate,
@@ -328,16 +415,17 @@ export function harmonize(
 				confidence: row.confidence ?? 0.5,
 				timestamp: row.timestamp ?? undefined,
 				source: "fact",
-				embedding: embed(row.object),
 			});
+			memoryIds.push(undefined);
+		}
 	}
 	if (tableExists(db, "episodic_memory")) {
 		const rows = db
 			.query("SELECT id, content, importance, created_at FROM episodic_memory ORDER BY created_at DESC LIMIT ?")
 			.all(Math.max(1, Math.floor(batchSize / 2))) as EpisodeRow[];
 		for (const row of rows)
-			if (row.content.length > 10)
-				candidates.push({
+			if (row.content.length > 10) {
+				bare.push({
 					fact_id: `ep_${row.id}`,
 					subject: "memory",
 					predicate: "contains",
@@ -345,10 +433,11 @@ export function harmonize(
 					confidence: row.importance ?? 0.5,
 					timestamp: row.created_at ?? undefined,
 					source: "episodic",
-					embedding: embed(row.content.slice(0, 300)),
 				});
+				memoryIds.push(row.id);
+			}
 	}
-	if (candidates.length < SHMR_MIN_CLUSTER_SIZE)
+	if (bare.length < SHMR_MIN_CLUSTER_SIZE)
 		return {
 			clusters_found: 0,
 			beliefs_generated: 0,
@@ -357,7 +446,15 @@ export function harmonize(
 			duration_ms: Math.floor(performance.now() - started),
 			status: "insufficient_candidates",
 		};
-	const clusters = clusterBySimilarity(candidates, similarityThreshold).filter(
+	const precomputed = precomputedVectors(db, memoryIds);
+	const seeded: ShmrItem[] = bare.map((item, i) => {
+		const memoryId = memoryIds[i];
+		const vector = memoryId !== undefined ? precomputed.get(memoryId) : undefined;
+		return vector === undefined ? item : { ...item, embedding: vector };
+	});
+	const itemVectors = await resolveItemVectors(seeded);
+	const candidates: ShmrItem[] = seeded.map((item, i) => ({ ...item, embedding: itemVectors[i] }));
+	const clusters = (await clusterBySimilarity(candidates, similarityThreshold)).filter(
 		cluster => cluster.length >= SHMR_MIN_CLUSTER_SIZE,
 	);
 	let totalBeliefs = 0;
@@ -369,7 +466,10 @@ export function harmonize(
 		const clusterId = `shmr_${Date.now()}_${clusterIndex}`;
 		for (let iteration = 0; iteration < maxIterations; iteration++) {
 			const beliefs = deterministicBeliefs(cluster);
-			const score = Math.max(computeHarmonyScore(beliefs, cluster), beliefs.length > 0 ? SHMR_HARMONY_THRESHOLD : 0);
+			const score = Math.max(
+				await computeHarmonyScore(beliefs, cluster),
+				beliefs.length > 0 ? SHMR_HARMONY_THRESHOLD : 0,
+			);
 			scores.push(score);
 			if (score >= SHMR_HARMONY_THRESHOLD) {
 				applyBeliefs(db, beliefs, cluster, clusterId);
@@ -404,19 +504,21 @@ export function harmonize(
 	};
 }
 
-export function recallBeliefs(beam: BeamLike, query: string, topK = 10): Array<Record<string, unknown>> {
+export async function recallBeliefs(beam: BeamLike, query: string, topK = 10): Promise<Array<Record<string, unknown>>> {
 	const db = dbOf(beam);
 	initSchema(db);
-	const queryEmbedding = embed(query);
 	const rows = db
 		.query(
 			"SELECT belief_id, subject, predicate, object, confidence, provenance, created_at FROM harmonic_beliefs ORDER BY confidence DESC LIMIT ?",
 		)
 		.all(topK * 2) as BeliefRow[];
+	const vectors = await embedBatch([query, ...rows.map(row => row.object)]);
+	const queryEmbedding = vectors[0] ?? hashEmbedding(query);
 	return rows
-		.map(row => ({
+		.map((row, index) => ({
 			row,
-			score: cosineSimilarity(queryEmbedding, embed(row.object)) * (row.confidence ?? 0.5),
+			score:
+				cosineSimilarity(queryEmbedding, vectors[index + 1] ?? hashEmbedding(row.object)) * (row.confidence ?? 0.5),
 		}))
 		.sort((a, b) => b.score - a.score)
 		.slice(0, topK)

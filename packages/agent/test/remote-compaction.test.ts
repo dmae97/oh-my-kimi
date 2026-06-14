@@ -1,5 +1,12 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, vi } from "bun:test";
+import {
+	type CompactionPreparation,
+	compact,
+	createFileOps,
+	DEFAULT_COMPACTION_SETTINGS,
+} from "@oh-my-pi/pi-agent-core/compaction";
 import { buildOpenAiNativeHistory, requestOpenAiRemoteCompaction } from "@oh-my-pi/pi-agent-core/compaction/openai";
+import * as ai from "@oh-my-pi/pi-ai";
 import type { AssistantMessage, FetchImpl, Model, ToolResultMessage } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import type { ModelSpec } from "@oh-my-pi/pi-catalog/types";
@@ -253,5 +260,101 @@ describe("requestOpenAiRemoteCompaction abort", () => {
 		queueMicrotask(() => controller.abort());
 
 		await expect(promise).rejects.toThrow();
+	});
+});
+
+describe("requestOpenAiRemoteCompaction timeout", () => {
+	test("a never-responding endpoint rejects with TimeoutError instead of hanging", async () => {
+		// Contract: the compact endpoint is a raw fetch outside the pi-ai stream
+		// watchdogs — a silently dropped connection must not hang compaction
+		// forever (frozen "Auto context-full maintenance…" spinner).
+		const fetchMock: FetchImpl = (_input, init) => {
+			const signal = init?.signal as AbortSignal | undefined;
+			const { promise, reject } = Promise.withResolvers<Response>();
+			signal?.addEventListener("abort", () => reject(signal.reason));
+			return promise;
+		};
+
+		await expect(
+			requestOpenAiRemoteCompaction(
+				makeOpenAiModel(),
+				"test-key",
+				[{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }],
+				"compact",
+				undefined,
+				{ fetch: fetchMock, timeoutMs: 20 },
+			),
+		).rejects.toMatchObject({ name: "TimeoutError" });
+	});
+});
+
+describe("compact() remote compaction failure handling", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	function localSummaryMessage(text: string): AssistantMessage {
+		return {
+			role: "assistant",
+			content: [{ type: "text", text }],
+			timestamp: Date.now(),
+			provider: "mock",
+			model: "mock",
+			api: "mock",
+			usage: ZERO_USAGE,
+			stopReason: "stop",
+		};
+	}
+
+	function makePreparation(): CompactionPreparation {
+		return {
+			firstKeptEntryId: "kept-1",
+			messagesToSummarize: [{ role: "user", content: "long history", timestamp: 1 }],
+			turnPrefixMessages: [],
+			recentMessages: [{ role: "user", content: "recent", timestamp: 2 }],
+			isSplitTurn: false,
+			tokensBefore: 100_000,
+			fileOps: createFileOps(),
+			settings: { ...DEFAULT_COMPACTION_SETTINGS },
+		};
+	}
+
+	test("user abort during the remote compact request rejects without falling back to local summarization", async () => {
+		// Contract: Esc is a cancellation, not a remote failure. Before the fix
+		// the AbortError was swallowed by the fallback catch and compaction kept
+		// running local summarization on an already-aborted signal.
+		const completeSpy = vi.spyOn(ai, "completeSimple").mockResolvedValue(localSummaryMessage("local summary"));
+		const controller = new AbortController();
+		const fetchMock: FetchImpl = (_input, init) => {
+			const signal = init?.signal as AbortSignal | undefined;
+			const { promise, reject } = Promise.withResolvers<Response>();
+			const fail = () =>
+				reject(signal?.reason instanceof Error ? signal.reason : new DOMException("Aborted", "AbortError"));
+			if (signal?.aborted) fail();
+			else signal?.addEventListener("abort", fail);
+			// Esc lands while the compact POST is in flight.
+			queueMicrotask(() => controller.abort());
+			return promise;
+		};
+
+		await expect(
+			compact(makePreparation(), makeOpenAiModel(), "test-key", undefined, controller.signal, {
+				fetch: fetchMock,
+			}),
+		).rejects.toThrow();
+		expect(completeSpy).not.toHaveBeenCalled();
+	});
+
+	test("remote compact server failure without abort still falls back to local summarization", async () => {
+		const completeSpy = vi.spyOn(ai, "completeSimple").mockResolvedValue(localSummaryMessage("local summary"));
+		const fetchMock: FetchImpl = async () =>
+			new Response("nope", { status: 500, statusText: "Internal Server Error" });
+
+		const result = await compact(makePreparation(), makeOpenAiModel(), "test-key", undefined, undefined, {
+			fetch: fetchMock,
+		});
+
+		expect(result.summary).toContain("local summary");
+		expect(completeSpy).toHaveBeenCalled();
 	});
 });

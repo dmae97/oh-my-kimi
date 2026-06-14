@@ -1,12 +1,12 @@
 {{#if asyncEnabled}}{{#if batchEnabled}}Spawns subagents to work in the background — one per `tasks[]` item; a single spawn is a one-item batch.{{else}}Spawns ONE subagent per call to work in the background.{{/if}}
 
 - Spawning is non-blocking: the call returns immediately with the agent id{{#if batchEnabled}}s{{/if}} and job id{{#if batchEnabled}}s{{/if}}; each result is delivered automatically when that agent yields.
-- Parallelism = {{#if batchEnabled}}`tasks[]` items in one call, and/or multiple `task` calls in one assistant message{{else}}multiple `task` calls in one assistant message{{/if}}. Concurrency is bounded at {{MAX_CONCURRENCY}} running subagents per session.
+- Parallelism = {{#if batchEnabled}}multiple `tasks[]` items in ONE call. To launch several subagents, you MUST batch them into a single call's `tasks[]` — they share `context` once instead of duplicating it. Separate `task` calls in one message are ONLY for spawns needing a different `agent` type or unrelated `context`{{else}}multiple `task` calls in one assistant message{{/if}}. Concurrency is bounded at {{MAX_CONCURRENCY}} running subagents per session.
 - If genuinely blocked on a result, wait with `job poll`; otherwise keep working. `job cancel` terminates a task and **cannot carry a message** — only for stalled/abandoned work.
 {{else}}{{#if batchEnabled}}Runs subagents synchronously — one per `tasks[]` item; a single spawn is a one-item batch.{{else}}Runs ONE subagent synchronously per call.{{/if}}
 
 - Spawning is blocking: the call returns only after the agent{{#if batchEnabled}}s{{/if}} finish; results arrive inline.
-- Parallelism = {{#if batchEnabled}}`tasks[]` items in one call, and/or multiple `task` calls in one assistant message{{else}}multiple `task` calls in one assistant message{{/if}}. Concurrency is bounded at {{MAX_CONCURRENCY}} running subagents per session.
+- Parallelism = {{#if batchEnabled}}multiple `tasks[]` items in ONE call. To launch several subagents, you MUST batch them into a single call's `tasks[]` — they share `context` once instead of duplicating it. Separate `task` calls in one message are ONLY for spawns needing a different `agent` type or unrelated `context`{{else}}multiple `task` calls in one assistant message{{/if}}. Concurrency is bounded at {{MAX_CONCURRENCY}} running subagents per session.
 {{/if}}
 {{#if ircEnabled}}
 - Coordinate with agents via `irc` using their ids. Agents reach you and their siblings live the same way.
@@ -25,12 +25,14 @@
   - `assignment`: complete self-contained instructions; one-liners and missing acceptance criteria are PROHIBITED
   - `id`: stable agent id, CamelCase, ≤32 chars; generated when omitted
   - `description`: UI label only — subagent never sees it
+  - `role`: specialist identity this subagent embodies (e.g. "Auth-flow security reviewer") — sets its system-prompt persona and roster display name; tailor every spawn rather than cloning a generic worker
 {{#if isolationEnabled}}
   - `isolated`: run this spawn in an isolated env; returns patches. Isolated agents are torn down at completion — not addressable afterwards
 {{/if}}
 {{else}}
 - `id`: stable agent id, CamelCase, ≤32 chars; generated when omitted
 - `description`: UI label only — subagent never sees it
+- `role`: specialist identity this subagent embodies (e.g. "Auth-flow security reviewer") — sets its system-prompt persona and roster display name; tailor every spawn rather than cloning a generic worker
 - `assignment`: complete self-contained instructions; one-liners and missing acceptance criteria are PROHIBITED
 {{#if isolationEnabled}}
 - `isolated`: run in isolated env; returns patches. Isolated agents are torn down at completion — not addressable afterwards
@@ -39,9 +41,10 @@
 </parameters>
 
 <rules>
-- **Maximize fan-out.** Issue the widest {{#if batchEnabled}}`tasks[]` batch (or set of parallel `task` calls){{else}}set of parallel `task` calls{{/if}} the work decomposes into. NEVER serialize work that could run concurrently.
+- **Maximize fan-out.** Issue the widest {{#if batchEnabled}}`tasks[]` batch{{else}}set of parallel `task` calls{{/if}} the work decomposes into. NEVER serialize work that could run concurrently.
 - **Subagents do not verify, lint, or format.** Every assignment MUST instruct the subagent to skip all gates, formatters, and project-wide build/test/lint. You run them once at the end across the union of changed files.
 - No globs, no "update all", no package-wide scope. Fan out.
+- **Tailor every spawn with a `role`.** A role naming the specialist (e.g. "Parser edge-case tester", "SSE backpressure specialist") makes a sharper agent than a bare generic `task`/`quick_task` worker; decompose into named specialists, never clones of one generic worker. A role-less generic spawn is the exception.
 - NEVER slow down or serialize because tasks might overlap on some files. Agents resolve collisions among themselves in real time.
 - Subagents have no conversation history. Every fact, file path, and direction they need MUST be explicit in {{#if batchEnabled}}`context` or the item's `assignment`{{else}}the `assignment`{{/if}}.
 {{#if batchEnabled}}

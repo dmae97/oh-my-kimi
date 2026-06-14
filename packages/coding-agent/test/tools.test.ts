@@ -876,6 +876,20 @@ describe("Coding Agent Tools", () => {
 
 			expect(getTextOutput(result)).toContain("Successfully wrote");
 		});
+		it.skipIf(process.platform === "win32")(
+			"should tell the model when a shebang write was chmodded executable",
+			async () => {
+				const testFile = path.join(testDir, "script.sh");
+				const content = "#!/usr/bin/env bash\nprintf 'ok\\n'\n";
+
+				const result = await writeTool.execute("test-call-3-shebang", { path: testFile, content });
+
+				expect(getTextOutput(result)).toContain("[Notice: Made executable via chmod +x]");
+				expect(result.details?.madeExecutable).toBe(true);
+				expect(fs.statSync(testFile).mode & 0o111).toBe(0o111);
+			},
+		);
+
 		it("should write to a new local:// path under the session local root", async () => {
 			const localPath = "local://handoffs/new-output.json";
 			const content = '{"ok":true}\n';
@@ -1528,6 +1542,46 @@ function b() {
 			// If it correctly acknowledged, the delivery is suppressed.
 			expect(manager.hasPendingDeliveries()).toBe(false);
 		});
+
+		it("flags still-waiting polls and all-running snapshots as contextually useless", async () => {
+			const manager = new AsyncJobManager({
+				onJobComplete: async () => {},
+			});
+			const session = createTestToolSession(testDir, Settings.isolated({ "bash.autoBackground.enabled": true }), {
+				asyncJobManager: manager,
+			});
+			const jobTool = new JobTool(session);
+			const gate = Promise.withResolvers<string>();
+			const jobId = manager.register("bash", "long job", () => gate.promise);
+
+			// Poll cut short while the job is still running: a pure "still
+			// waiting" snapshot carries no information once consumed.
+			const controller = new AbortController();
+			const pollPromise = jobTool.execute("test-call-useless-poll", { poll: [jobId] }, controller.signal);
+			controller.abort();
+			const polled = await pollPromise;
+			expect(polled.useless).toBe(true);
+
+			// A list snapshot showing only running jobs is equally uneventful.
+			const listed = await jobTool.execute("test-call-useless-list", { list: true });
+			expect(listed.useless).toBe(true);
+
+			// Once the job settles, the result is informative — flag absent.
+			gate.resolve("done");
+			const settled = await jobTool.execute("test-call-useless-settled", { poll: [jobId] });
+			expect(getTextOutput(settled)).toContain("Completed");
+			expect(settled.useless).toBeUndefined();
+
+			// Nothing left to wait for: noise once consumed.
+			const idle = await jobTool.execute("test-call-useless-idle", {});
+			expect(getTextOutput(idle)).toContain("No running background jobs");
+			expect(idle.useless).toBe(true);
+
+			// A poll naming unknown ids found nothing — equally uneventful.
+			const missing = await jobTool.execute("test-call-useless-missing", { poll: ["no-such-job"] });
+			expect(getTextOutput(missing)).toContain("No matching jobs found");
+			expect(missing.useless).toBe(true);
+		});
 	});
 
 	describe("search tool", () => {
@@ -1544,6 +1598,30 @@ function b() {
 			expect(output).not.toContain("# example.txt");
 			// PI_EDIT_VARIANT=replace in beforeEach disables hashlines; expect line-number mode
 			expect(output).toMatch(/\*2\|match line/);
+		});
+
+		it("flags a zero-match search as contextually useless", async () => {
+			fs.writeFileSync(path.join(testDir, "plain.txt"), "nothing interesting here\n");
+
+			const result = await searchTool.execute("test-call-useless-search", {
+				pattern: "ZZZ_NO_SUCH_TOKEN_999",
+				paths: [testDir],
+			});
+
+			expect(getTextOutput(result)).toContain("No matches found");
+			expect(result.useless).toBe(true);
+		});
+
+		it("flags a zero-match search useless even when it reports missing paths", async () => {
+			fs.writeFileSync(path.join(testDir, "plain.txt"), "nothing interesting here\n");
+
+			const result = await searchTool.execute("test-call-useless-search-warn", {
+				pattern: "ZZZ_NO_SUCH_TOKEN_999",
+				paths: [testDir, path.join(testDir, "missing-file.txt")],
+			});
+
+			expect(getTextOutput(result)).toContain("Skipped missing paths");
+			expect(result.useless).toBe(true);
 		});
 
 		it("should accept wildcard patterns in paths", async () => {

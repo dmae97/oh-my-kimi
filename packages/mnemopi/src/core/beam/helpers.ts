@@ -1,7 +1,8 @@
 import type { Database } from "bun:sqlite";
+import { logger } from "@oh-my-pi/pi-utils";
 import { generateId as generateTimedId, sha256Hex16, stableMemoryId } from "../../util/ids";
 import { currentEmbeddingModel, embed } from "../embeddings";
-import { getMnemopiRuntimeOptions, withMnemopiRuntimeOptions } from "../runtime-options";
+import { getMnemopiRuntimeOptions, mnemopiDebugEnabled, withMnemopiRuntimeOptions } from "../runtime-options";
 import { buildExactVectorIndex, searchExactVectorIndex } from "../vector-index";
 import type { BeamMemoryState, JsonValue, Metadata } from "./types";
 
@@ -932,12 +933,16 @@ async function runEmbedding(beam: BeamMemoryState, items: readonly EmbedItem[]):
 			}
 		});
 		insertMany(items);
-	} catch {
+	} catch (error) {
 		// Background embedding generation is best-effort: a failing provider, a closed DB
 		// during shutdown, or a transient API error must never disrupt the synchronous
 		// remember()/consolidate() that scheduled it. Production recall silently degrades
 		// to FTS-only for the affected rows, which is the same shape as a misconfigured
-		// provider.
+		// provider. Log so the failure is diagnosable (#2322).
+		logger[mnemopiDebugEnabled() ? "warn" : "debug"]("mnemopi: background embedding failed", {
+			itemCount: items.length,
+			error: String(error),
+		});
 	}
 }
 

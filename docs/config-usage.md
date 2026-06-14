@@ -256,7 +256,7 @@ Generate a session name using lowercase `<type>:<primary-objective>`.
 - Missing `TITLE_SYSTEM.md` keeps the bundled title prompts.
 - Discovery uses the same project-then-user config directory pattern as `SYSTEM.md`: project `.omp/TITLE_SYSTEM.md` first, then user `~/.omp/agent/TITLE_SYSTEM.md` and the other supported config bases.
 - The override replaces only the automatic session-title generation system prompt; normal `SYSTEM.md` / `APPEND_SYSTEM.md` prompt customization is unaffected.
-- The online path still forces the `set_title` tool call. The local tiny-title path keeps the `<title>...</title>` prefill/stop wrapper and uses this file as its system turn.
+- The online path forces the `set_title` tool call when the title model honors a forced `tool_choice`. Tool-choice-less providers (chat-completions hosts without `tool_choice` support, Claude Fable/Mythos) instead receive a marker-based prompt and emit the title wrapped in `<title>...</title>`, which is parsed leniently (a plain sentence or a truncated/unclosed tag still works). A `TITLE_SYSTEM.md` override is reused in both modes; in marker mode the wrap-in-`<title>` instruction is appended after it. The local tiny-title path keeps the `<title>...</title>` prefill/stop wrapper and uses this file as its system turn.
 
 ## Skills subsystem
 

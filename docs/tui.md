@@ -29,6 +29,7 @@ export interface Component {
   handleInput?(data: string): void;
   wantsKeyRelease?: boolean;
   invalidate?(): void;
+  dispose?(): void;
 }
 ```
 
@@ -69,12 +70,12 @@ render(width: number): readonly string[] {
 
 Use `matchesKey(data, "...")` for navigation keys and combos.
 
-### Respect user-configured app keybindings
+### Match app keybinding actions
 
-Extension UI factories receive a `KeybindingsManager` (interactive mode) so you can honor mapped actions instead of hardcoding keys:
+Extension UI factories receive a `KeybindingsManager` (interactive mode; an in-memory instance carrying the default bindings, not the user's `keybindings.yml`) so you can match action ids instead of hardcoding keys:
 
 ```ts
-if (keybindings.matches(data, "interrupt")) {
+if (keybindings.matches(data, "app.interrupt")) {
   done(undefined);
   return;
 }
@@ -213,7 +214,7 @@ class Picker implements Component {
   }
 
   handleInput(data: string): void {
-    if (this.keybindings.matches(data, "interrupt")) {
+    if (this.keybindings.matches(data, "app.interrupt")) {
       this.done(undefined);
       return;
     }

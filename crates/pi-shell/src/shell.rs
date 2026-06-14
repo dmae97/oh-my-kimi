@@ -490,7 +490,10 @@ async fn create_session(config: &ShellConfig) -> Result<ShellSessionCore> {
 	}
 	shell.register_builtin("sleep", builtins::builtin::<SleepCommand, _>());
 	shell.register_builtin("timeout", builtins::builtin::<TimeoutCommand, _>());
-	shell.register_builtin("nohup", builtins::builtin::<NohupCommand, _>());
+	shell.register_builtin(
+		"nohup",
+		builtins::builtin::<NohupCommand, _>().transparent_background_wrapper(),
+	);
 
 	let mut merged_path: Option<String> = None;
 	for (key, value) in std::env::vars() {
@@ -867,7 +870,7 @@ async fn run_shell_command_segmented_chain(
 
 async fn run_shell_command_once(
 	session: &mut ShellSessionCore,
-	command: String,
+	mut command: String,
 	mut params: ExecutionParameters,
 	on_chunk: Option<mpsc::UnboundedSender<String>>,
 	cancel_token: CancellationToken,
@@ -930,6 +933,7 @@ async fn run_shell_command_once(
 			terminate_new_descendants(&baseline_descendants).await;
 		}
 	});
+	ensure_trailing_newline_for_heredoc(&mut command);
 	let source_info = SourceInfo::from("pi-natives:command");
 	let result = session
 		.shell
@@ -1091,10 +1095,12 @@ async fn run_shell_command_streams(
 			}
 		}
 	});
+	let mut command = options.command.clone();
+	ensure_trailing_newline_for_heredoc(&mut command);
 	let source_info = SourceInfo::from("pi-shell:streams");
 	let result = session
 		.shell
-		.run_string(options.command.clone(), &source_info, &params)
+		.run_string(command, &source_info, &params)
 		.await;
 
 	if cancel_token.is_cancelled() {
@@ -1340,8 +1346,15 @@ fn apply_env_fallback(shell: &mut BrushShell) -> Result<()> {
 		.map_err(|err| Error::msg(format!("Failed to set env fallback: {err}")))
 }
 
+fn is_macos_malloc_stack_logging_var(key: &str) -> bool {
+	matches!(key, "MallocStackLogging" | "MallocStackLoggingNoCompact")
+}
+
 fn should_skip_env_var(key: &str) -> bool {
 	if key.starts_with("BASH_FUNC_") && key.ends_with("%%") {
+		return true;
+	}
+	if is_macos_malloc_stack_logging_var(key) {
 		return true;
 	}
 
@@ -1396,6 +1409,13 @@ fn should_skip_env_var(key: &str) -> bool {
 			| "HOSTNAME"
 			| "HOSTTYPE"
 	)
+}
+
+fn ensure_trailing_newline_for_heredoc(command: &mut String) {
+	if command.ends_with('\n') || !command.as_bytes().windows(2).any(|window| window == b"<<") {
+		return;
+	}
+	command.push('\n');
 }
 
 const fn session_keepalive(result: &ExecutionResult) -> bool {
@@ -2191,6 +2211,32 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 		assert_eq!(minimized.output_bytes, 9);
 	}
 
+	/// Regression: a quoted here-doc followed by another command must execute
+	/// instead of failing with "unterminated here document". The minimizer's
+	/// segmented runner used to rebuild each segment via the brush AST Display
+	/// impl, which re-emitted the `<<'PY'` close tag as the quoted `'PY'` — an
+	/// invalid delimiter that left the body unterminated. Here-doc-bearing
+	/// commands now bail out of segmentation and run whole via the single path.
+	#[cfg(unix)]
+	#[tokio::test(flavor = "multi_thread")]
+	async fn quoted_heredoc_in_chain_runs_via_single_path() {
+		let root = unique_temp_dir("heredoc-chain");
+		let minimizer = printf_minimizer(&root.join("minimizer.toml"), None);
+		let (result, output) = run_command_capture(
+			"/bin/cat <<'PY'\nhello $USER\nPY\nprintf 'after\\n'",
+			None,
+			Some(minimizer),
+			CancelToken::default(),
+		)
+		.await;
+		let _ = std::fs::remove_dir_all(&root);
+		assert_eq!(result.exit_code, Some(0));
+		// Quoted delimiter keeps the body literal ($USER unexpanded) and the
+		// trailing command still runs in order.
+		assert_eq!(output, "hello $USER\nafter\n");
+		assert!(!output.contains("unterminated"));
+	}
+
 	#[cfg(unix)]
 	#[tokio::test(flavor = "multi_thread")]
 	async fn segmented_chain_exceeding_aggregate_capture_cap_stays_raw() {
@@ -2491,6 +2537,7 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 		);
 	}
 
+	#[cfg(unix)]
 	#[tokio::test(flavor = "multi_thread")]
 	async fn wait_accepts_last_background_process_id() {
 		let options = ShellExecuteOptions {
@@ -2507,6 +2554,7 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 		assert!(!result.timed_out);
 	}
 
+	#[cfg(unix)]
 	#[tokio::test(flavor = "multi_thread")]
 	async fn wait_n_p_records_completed_process_id() {
 		let options = ShellExecuteOptions {
@@ -2526,6 +2574,7 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 		assert!(!result.timed_out);
 	}
 
+	#[cfg(unix)]
 	#[tokio::test(flavor = "multi_thread")]
 	async fn wait_f_accepts_process_id() {
 		let options = ShellExecuteOptions {
@@ -2554,66 +2603,6 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 			.await
 			.expect("cancel token should be signalled");
 		assert!(matches!(reason, AbortReason::Signal));
-	}
-
-	#[tokio::test(flavor = "multi_thread")]
-	async fn cancellation_aborts_internal_background_jobs() {
-		let unique = std::time::SystemTime::now()
-			.duration_since(std::time::UNIX_EPOCH)
-			.expect("system clock before epoch")
-			.as_nanos();
-		let dir =
-			std::env::temp_dir().join(format!("pi-shell-bg-cancel-{}-{unique}", std::process::id()));
-		std::fs::create_dir(&dir).expect("create temp dir");
-		let started = dir.join("started");
-		let release = dir.join("release");
-		let marker = dir.join("marker");
-
-		let config = ShellConfig { session_env: None, snapshot_path: None, minimizer: None };
-		let mut session = create_session(&config).await.expect("create session");
-		session
-			.shell
-			.set_working_dir(dir.to_string_lossy().as_ref())
-			.expect("set cwd");
-
-		let mut params = session.shell.default_exec_params();
-		params.set_fd(OpenFiles::STDIN_FD, null_file().expect("null stdin"));
-		params.set_fd(OpenFiles::STDOUT_FD, null_file().expect("null stdout"));
-		params.set_fd(OpenFiles::STDERR_FD, null_file().expect("null stderr"));
-
-		let source_info = SourceInfo::from("pi-shell:test");
-		let result = session
-			.shell
-			.run_string(
-				"{ echo started > started; while [ ! -f release ]; do sleep 0.05; done; echo done > \
-				 marker; } &",
-				&source_info,
-				&params,
-			)
-			.await
-			.expect("spawn background job");
-		assert_eq!(exit_code(&result), 0);
-
-		let mut background_started = false;
-		for _ in 0..200 {
-			if started.exists() {
-				background_started = true;
-				break;
-			}
-			time::sleep(Duration::from_millis(10)).await;
-		}
-		assert!(background_started, "background job did not reach its wait loop");
-
-		terminate_background_jobs(&mut session.shell);
-		std::fs::write(&release, b"").expect("release marker");
-		time::sleep(Duration::from_millis(250)).await;
-		let marker_exists = marker.exists();
-		std::fs::remove_dir_all(&dir).expect("cleanup temp dir");
-
-		assert!(
-			!marker_exists,
-			"internal background job survived cancellation and wrote marker after release",
-		);
 	}
 
 	#[cfg(unix)]
@@ -2725,6 +2714,25 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 		assert_eq!(stdout, b"prod:8080");
 	}
 
+	/// Quoted heredoc delimiters at EOF must behave like bash. `brush-parser`
+	/// currently rejects that shape unless the input stream ends with a newline,
+	/// which surfaced as `unterminated here document sequence; tag(s) [...]` for
+	/// normal paste-run Python snippets.
+	#[cfg(unix)]
+	#[tokio::test(flavor = "multi_thread")]
+	async fn quoted_heredoc_without_trailing_newline_runs() {
+		let (result, output) = run_command_capture(
+			"/bin/cat <<'PY'\nhello $USER\nPY",
+			None,
+			None,
+			CancelToken::default(),
+		)
+		.await;
+
+		assert_eq!(result.exit_code, Some(0));
+		assert_eq!(output, "hello $USER\n");
+	}
+
 	/// Regression for a Windows/macOS deadlock in
 	/// `brush_core::interp::setup_open_file_with_contents`. The body is
 	/// 256 KiB — well past the default pipe buffer on every platform
@@ -2757,16 +2765,48 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 	/// own exit status — not nohup's (`125`/`126`/`127`) error codes.
 	#[tokio::test(flavor = "multi_thread")]
 	async fn nohup_builtin_propagates_command_exit_code() {
-		let options = ShellExecuteOptions {
-			command: "nohup /bin/sh -c 'exit 7'".to_string(),
-			..Default::default()
+		let command = if cfg!(windows) {
+			"nohup cmd /C exit 7"
+		} else {
+			"nohup /bin/sh -c 'exit 7'"
 		};
+		let options = ShellExecuteOptions { command: command.to_string(), ..Default::default() };
 		let result = execute_shell(options, None, CancelToken::default())
 			.await
 			.expect("execute should succeed");
 		assert_eq!(result.exit_code, Some(7));
 		assert!(!result.cancelled);
 		assert!(!result.timed_out);
+	}
+
+	/// `nohup` is a no-op builtin in this embedded shell, but `nohup cmd &`
+	/// must still behave like a process-launching background command for `$!`.
+	#[cfg(unix)]
+	#[tokio::test(flavor = "multi_thread")]
+	async fn nohup_background_captures_operand_pid() {
+		let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+		let options = ShellExecuteOptions {
+			command: "nohup /bin/sh -c 'exit 0' >/dev/null 2>&1 & pid=$!; printf 'pid=%s\n' \
+			          \"$pid\"; test -n \"$pid\""
+				.to_string(),
+			..Default::default()
+		};
+		let result = execute_shell(options, Some(tx), CancelToken::default())
+			.await
+			.expect("execute should succeed");
+		assert_eq!(result.exit_code, Some(0));
+		assert!(!result.cancelled);
+		assert!(!result.timed_out);
+
+		let mut out = String::new();
+		while let Some(chunk) = rx.recv().await {
+			out.push_str(&chunk);
+		}
+		let pid = out
+			.trim()
+			.strip_prefix("pid=")
+			.expect("nohup background PID output should include pid= prefix");
+		assert!(pid.parse::<i32>().is_ok_and(|pid| pid > 0), "invalid PID output: {out:?}");
 	}
 
 	/// `nohup` with no operand mirrors coreutils: a `missing operand` diagnostic

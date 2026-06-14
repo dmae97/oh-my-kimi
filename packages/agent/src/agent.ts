@@ -23,6 +23,7 @@ import {
 	type ToolResultMessage,
 } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { logger } from "@oh-my-pi/pi-utils";
 import { abortReasonText, agentLoop, agentLoopContinue } from "./agent-loop";
 import type { AppendOnlyContextManager } from "./append-only-context";
 import type { HarmonyAuditEvent } from "./harmony-leak";
@@ -98,7 +99,7 @@ export interface AgentOptions {
 	 * Optional transform applied after provider context assembly and before
 	 * telemetry capture/provider send.
 	 */
-	transformProviderContext?: (context: Context) => Context;
+	transformProviderContext?: (context: Context, model: Model) => Context;
 
 	/**
 	 * Steering mode: "all" = send all steering messages at once, "one-at-a-time" = one per turn
@@ -285,7 +286,7 @@ export class Agent {
 	#abortController?: AbortController;
 	#convertToLlm: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
 	#transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>;
-	#transformProviderContext?: (context: Context) => Context;
+	#transformProviderContext?: (context: Context, model: Model) => Context;
 	#steeringQueue: AgentMessage[] = [];
 	#followUpQueue: AgentMessage[] = [];
 	#steeringMode: "all" | "one-at-a-time";
@@ -706,6 +707,11 @@ export class Agent {
 		this.#state.messages = ms.slice();
 	}
 
+	replaceQueues(steering: AgentMessage[], followUp: AgentMessage[]) {
+		this.#steeringQueue = steering.slice();
+		this.#followUpQueue = followUp.slice();
+	}
+
 	appendMessage(m: AgentMessage) {
 		this.#state.messages.push(m);
 	}
@@ -749,6 +755,24 @@ export class Agent {
 
 	hasQueuedMessages(): boolean {
 		return this.#steeringQueue.length > 0 || this.#followUpQueue.length > 0;
+	}
+
+	/** Non-consuming view of the pending steering queue (insertion order, newest
+	 *  last). The session layer derives its queued-message display/count from
+	 *  this live view instead of a mirror, so the agent-core queue stays the
+	 *  single source of truth. */
+	peekSteeringQueue(): readonly AgentMessage[] {
+		return this.#steeringQueue;
+	}
+
+	/** Non-consuming view of the pending follow-up queue. See
+	 *  {@link peekSteeringQueue}. */
+	peekFollowUpQueue(): readonly AgentMessage[] {
+		return this.#followUpQueue;
+	}
+
+	get isAborting(): boolean {
+		return this.#abortController?.signal.aborted === true && this.#state.isStreaming;
 	}
 
 	#dequeueSteeringMessages(): AgentMessage[] {
@@ -950,8 +974,13 @@ export class Agent {
 					}
 				: undefined;
 
-		const getToolChoice = () =>
-			this.#getToolChoice?.() ?? refreshToolChoiceForActiveTools(options?.toolChoice, this.#state.tools);
+		const getToolChoice = () => {
+			const queuedToolChoice = this.#getToolChoice?.();
+			if (queuedToolChoice !== undefined) {
+				return refreshToolChoiceForActiveTools(queuedToolChoice, this.#state.tools);
+			}
+			return refreshToolChoiceForActiveTools(options?.toolChoice, this.#state.tools);
+		};
 
 		const config: AgentLoopConfig = {
 			model,
@@ -1009,6 +1038,7 @@ export class Agent {
 				}
 				return this.#dequeueSteeringMessages();
 			},
+			hasSteeringMessages: () => this.#steeringQueue.length > 0,
 			getFollowUpMessages: async () => this.#dequeueFollowUpMessages(),
 			getAsideMessages: async () => (await this.#asideMessageProvider?.()) ?? [],
 			onBeforeYield: () => this.#onBeforeYield?.(),
@@ -1152,11 +1182,15 @@ export class Agent {
 				const result = listener(e) as unknown;
 				if (isPromise(result)) {
 					result.catch(err => {
-						console.error("Agent listener rejected:", err instanceof Error ? err.message : err);
+						logger.warn("Agent listener rejected", {
+							error: err instanceof Error ? err.message : String(err),
+						});
 					});
 				}
 			} catch (err) {
-				console.error("Agent listener threw:", err instanceof Error ? err.message : err);
+				logger.warn("Agent listener threw", {
+					error: err instanceof Error ? err.message : String(err),
+				});
 			}
 		}
 	}

@@ -43,6 +43,15 @@ export type ToolRenderer = {
 	mergeCallAndResult?: boolean;
 	/** Render without background box, inline in the response flow */
 	inline?: boolean;
+	/**
+	 * Whether pending-call rows are provisional: useful on screen while a tool is
+	 * streaming, but not durable transcript history. `true` means every pending
+	 * shape is provisional. `"collapsed"` means only the collapsed pending shape
+	 * is provisional; expanded rendering is top-anchored/append-shaped enough to
+	 * let the transcript commit its settled prefix. Absent = the pending preview
+	 * streams rows the result render preserves.
+	 */
+	provisionalPendingPreview?: boolean | "collapsed";
 };
 
 export const toolRenderers: Record<string, ToolRenderer> = {

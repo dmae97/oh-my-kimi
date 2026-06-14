@@ -88,8 +88,9 @@ function normalizeHashlinePath(rawPath: string, cwd?: string): string {
 	const unquoted = stripApplyPatchPathNoise(unquoteHashlinePath(rawPath.trim()));
 	if (!cwd || !path.isAbsolute(unquoted)) return unquoted;
 	const relative = path.relative(path.resolve(cwd), path.resolve(unquoted));
+	const normalizedRelative = relative.split(path.sep).join("/");
 	const isWithinCwd = relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-	return isWithinCwd ? relative || "." : unquoted;
+	return isWithinCwd ? normalizedRelative || "." : unquoted;
 }
 
 interface RawSection {
@@ -309,12 +310,16 @@ export class PatchSection {
 	 */
 	applyTo(text: string, blockResolver?: BlockResolver): ApplyResult {
 		const { edits, warnings } = this.parse();
-		const resolved = resolveBlockEdits(edits, text, this.path, blockResolver, { onUnresolved: "throw" });
+		const resolveWarnings: string[] = [];
+		const resolved = resolveBlockEdits(edits, text, this.path, blockResolver, {
+			onUnresolved: "throw",
+			onWarning: warning => resolveWarnings.push(warning),
+		});
 		const result = applyEdits(text, resolved);
 		// Preserve parse warnings so consumers don't need to call `parse()`
 		// separately.
-		const merged = warnings.length === 0 ? result.warnings : [...warnings, ...(result.warnings ?? [])];
-		return merged && merged.length > 0
+		const merged = [...warnings, ...resolveWarnings, ...(result.warnings ?? [])];
+		return merged.length > 0
 			? { ...result, warnings: merged }
 			: { text: result.text, firstChangedLine: result.firstChangedLine };
 	}
@@ -332,10 +337,14 @@ export class PatchSection {
 	 */
 	applyPartialTo(text: string, blockResolver?: BlockResolver): ApplyResult {
 		const { edits, warnings } = parsePatchStreaming(this.diff);
-		const resolved = resolveBlockEdits(edits, text, this.path, blockResolver, { onUnresolved: "drop" });
+		const resolveWarnings: string[] = [];
+		const resolved = resolveBlockEdits(edits, text, this.path, blockResolver, {
+			onUnresolved: "drop",
+			onWarning: warning => resolveWarnings.push(warning),
+		});
 		const result = applyEdits(text, resolved);
-		const merged = warnings.length === 0 ? result.warnings : [...warnings, ...(result.warnings ?? [])];
-		return merged && merged.length > 0
+		const merged = [...warnings, ...resolveWarnings, ...(result.warnings ?? [])];
+		return merged.length > 0
 			? { ...result, warnings: merged }
 			: { text: result.text, firstChangedLine: result.firstChangedLine };
 	}

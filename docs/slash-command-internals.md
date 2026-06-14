@@ -29,12 +29,14 @@ The capability registry loads all registered providers, sorted by provider prior
 Current slash-command providers and priorities:
 
 1. `native` (OMP) — priority `100`
-2. `claude` — priority `80`
-3. `claude-plugins` — priority `70`
-4. `codex` — priority `70`
-5. `opencode` — priority `55`
+2. `omp-plugins` (extension packages) — priority `90`
+3. `claude` — priority `80`
+4. `claude-plugins` — priority `70`
+5. `agents` (`.agent`/`.agents` standard dirs) — priority `70`
+6. `codex` — priority `70`
+7. `opencode` — priority `55`
 
-Tie behavior: equal-priority providers keep registration order. Current import order registers `claude-plugins` before `codex`, so plugin commands win over codex commands on name collisions.
+Tie behavior: equal-priority providers keep registration order. Current import order registers `claude-plugins` before `agents` before `codex`, so plugin commands win over both on name collisions.
 
 ### Name-collision behavior
 
@@ -70,8 +72,10 @@ Search roots come from `.omp` directories:
 
 Loads, subject to `commands.enableClaudeUser` and `commands.enableClaudeProject` settings:
 
-- user: `~/.claude/commands/*.md`
-- project: `<cwd>/.claude/commands/*.md`
+- user: `~/.claude/commands/**/*.md` (recursive)
+- project: `<cwd>/.claude/commands/**/*.md` (recursive)
+
+Commands in subdirectories additionally get a namespaced alias: `foo/bar.md` is registered under both `bar` and `foo:bar` (`addClaudeCommandNamespaceAliases`).
 
 The provider pushes user items before project items, so **user Claude commands beat project Claude commands** on same-name collisions inside this provider.
 
@@ -97,7 +101,7 @@ Both sides are loaded then flattened in user-first order, so **user OpenCode com
 
 ## `claude-plugins` provider (`claude-plugins.ts`)
 
-Loads plugin command roots from `~/.claude/plugins/installed_plugins.json`, then scans `<pluginRoot>/commands/*.md`.
+Loads plugin command roots via `listClaudePluginRoots(...)`, which reads `~/.claude/plugins/installed_plugins.json`, `~/.omp/plugins/installed_plugins.json`, and the nearest project-scoped registry resolved from cwd. For each root it scans `<pluginRoot>/commands/*.md` (the directory can be remapped by plugin config keys `commands`/`slash-commands`), and command names are prefixed with the plugin name: `<plugin>:<command>`.
 
 Ordering follows registry iteration order and per-plugin entry order from that JSON data. There is no additional sort step.
 
@@ -110,7 +114,7 @@ For each command:
 1. parse frontmatter/body (`parseFrontmatter`)
 2. description source:
    - `frontmatter.description` if present
-   - else first non-empty body line (trimmed, max 60 chars with `...`)
+   - else first non-empty body line (max 60 chars with `...`)
 3. keep parsed body as executable template content
 4. compute a display source string like `via Claude Code Project`
 
@@ -136,7 +140,7 @@ At construction time it builds a pending command list from:
 - TypeScript custom commands (`session.customCommands`), mapped to slash command labels
 - optional skill commands (`/skill:<name>`) when `skills.enableSkillCommands` is enabled
 
-Then `init()` calls `refreshSlashCommandState(...)` to load file-based commands and install one `CombinedAutocompleteProvider` containing:
+Then `init()` calls `refreshSlashCommandState(...)` to load file-based commands and install one autocomplete provider (`createPromptActionAutocompleteProvider`, a `PromptActionAutocompleteProvider` wrapping a `CombinedAutocompleteProvider`) containing:
 
 - pending commands above
 - discovered file-based commands
@@ -148,7 +152,8 @@ Then `init()` calls `refreshSlashCommandState(...)` to load file-based commands 
 Slash command state is refreshed:
 
 - during interactive init
-- after `/move` changes working directory (`handleMoveCommand` calls `resetCapabilities()` then `refreshSlashCommandState(newCwd)`)
+- after `/move` changes working directory (`handleMoveCommand` -> `applyCwdChange`, which calls `resetCapabilities()` then `refreshSlashCommandState(newCwd)`)
+- when the editor component is swapped (`setEditorComponent` re-runs `refreshSlashCommandState()`)
 
 There is no continuous file watcher for command directories.
 
@@ -162,7 +167,7 @@ The Extensions dashboard also loads `slash-commands` capability and displays act
 
 1. **Extension commands** (`#tryExecuteExtensionCommand`)  
    If `/name` matches extension-registered command, handler executes immediately and prompt returns.
-2. **TypeScript custom commands** (`#tryExecuteCustomCommand`)  
+2. **TypeScript custom commands and MCP prompt commands** (`#tryExecuteCustomCommand`)  
    Boundary only: if matched, it executes and may return:
    - `string` -> replace prompt text with that string
    - `void/undefined` -> treated as handled; no LLM prompt

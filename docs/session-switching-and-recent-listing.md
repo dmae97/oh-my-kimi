@@ -22,7 +22,7 @@ It focuses on current implementation behavior, including fallback paths and cave
 
 `SessionManager` stores sessions under a cwd-scoped directory by default:
 
-- `~/.omp/agent/sessions/--<cwd-encoded>--/*.jsonl`
+- `~/.omp/agent/sessions/<dir-encoded>/*.jsonl` (home-relative `-<rel>` names, `-tmp-<rel>` for temp paths, legacy `--<abs>--` otherwise)
 
 `SessionManager.list(cwd, sessionDir?)` reads only that directory unless an explicit `sessionDir` is provided.
 
@@ -62,10 +62,10 @@ For `SessionInfo` list entries:
 1. Read terminal-scoped breadcrumb (`~/.omp/agent/terminal-sessions/<terminal-id>`)
 2. Validate breadcrumb:
    - current terminal can be identified
-   - breadcrumb cwd matches current cwd (resolved path compare)
    - referenced file still exists
-3. If breadcrumb is invalid/missing, fall back to newest file by mtime in the session dir (`findMostRecentSession`)
-4. If none found, create a new session
+3. If the breadcrumb's cwd differs from the current cwd, that cwd no longer exists (moved/renamed dir), and the current directory has no sessions of its own, the breadcrumb session is re-rooted into the current directory (`SessionManager.open` + `moveTo`) instead of starting fresh
+4. Otherwise, if the breadcrumb cwd matches the current cwd (resolved path compare), use the breadcrumb session; else fall back to newest file by mtime in the session dir (`findMostRecentSession`)
+5. If none found, create a new session
 
 Terminal ID derivation prefers TTY path and falls back to env-based identifiers (`TMUX_PANE`, `CMUX_SURFACE_ID`, `KITTY_WINDOW_ID`, `TERM_SESSION_ID`, `WT_SESSION`).
 
@@ -87,9 +87,11 @@ Breadcrumb writes are best-effort and non-fatal.
 
 Cross-project match behavior:
 
-- if matched session cwd differs from current cwd, CLI prompts whether to fork into current project
-- yes -> `SessionManager.forkFrom(...)`
-- no -> throws error (`Session "..." is in another project (...)`)
+- if the matched session's recorded cwd no longer exists (moved/renamed dir), CLI prompts `Move (re-root) it into the current directory? [Y/n]`; yes opens the session and `moveTo(cwd)` re-roots it (this also applies to local-scope matches whose recorded cwd is gone)
+- otherwise, if a global match's cwd differs from the current cwd, CLI prompts `Fork into current directory? [y/N]`
+- fork accepted -> `SessionManager.forkFrom(...)`
+- either prompt declined -> command cancels (`Resume cancelled: session is in another project.`)
+- non-TTY -> throws `SessionResolutionError` instead of prompting
 
 No match -> throws error (`Session "..." not found.`).
 
@@ -98,10 +100,10 @@ No match -> throws error (`Session "..." not found.`).
 Handled after initial session-manager construction:
 
 1. list local sessions with `SessionManager.list(cwd, parsed.sessionDir)`
-2. if empty: print `No sessions found` and exit early
-3. open TUI picker (`selectSession`)
+2. if empty: preload `SessionManager.listAll()` and open the picker in all-projects scope; print `No sessions found` and exit early only when the global list is also empty
+3. open TUI picker (`selectSession`, with optional preloaded `allSessions`/`startInAllScope`)
 4. if canceled: print `No session selected` and exit early
-5. if selected: `SessionManager.open(selectedPath)`
+5. if selected: when the session belongs to another project, switch the process into that project's directory (`setProjectDir`, cache resets, settings reload) first; then `SessionManager.open(selected.path)`
 
 ### `--continue`
 
@@ -111,18 +113,20 @@ Uses `SessionManager.continueRecent(...)` directly (breadcrumb-first behavior ab
 
 ## CLI picker (`src/cli/session-picker.ts`)
 
-`selectSession(sessions)` creates a standalone TUI with `SessionSelectorComponent` and resolves exactly once:
+`selectSession(sessions, { allSessions?, startInAllScope? })` creates a standalone TUI with `SessionSelectorComponent` and resolves exactly once:
 
-- selection -> resolves selected path
+- selection -> resolves selected `SessionInfo` (caller uses `.path` / `.cwd`)
 - cancel (Esc) -> resolves `null`
 - hard exit (Ctrl+C path) -> stops TUI and `process.exit(0)`
+- Tab toggles current-folder / all-projects scope; the all-projects list is loaded lazily via `SessionManager.listAll` (or preloaded via `allSessions`)
+- search ranking is augmented with prompt-history matches from `history.db` (`HistoryStorage.matchingSessionIds`) when available
 
 ## Interactive in-session picker (`SelectorController.showSessionSelector`)
 
 Flow:
 
-1. fetch sessions from current session dir via `SessionManager.list(currentCwd, currentSessionDir)`
-2. mount `SessionSelectorComponent` in editor area using `showSelector(...)`
+1. fetch sessions from current session dir via `SessionManager.list(currentCwd, currentSessionDir)`; if empty, preload `SessionManager.listAll()` and open in all-projects scope
+2. mount `SessionSelectorComponent` in editor area using `showSelector(...)`, wired with `loadAllSessions: () => SessionManager.listAll()` and a `history.db` prompt matcher
 3. callbacks:
    - select -> close selector and call `handleResumeSession(sessionPath)`
    - cancel -> restore editor and rerender
@@ -137,15 +141,14 @@ Flow:
 - Delete to delete after confirmation
 - Esc to cancel
 - Ctrl+C to exit
-- fuzzy search across session id/title/cwd/first message/all messages/path
+- Tab to toggle current-folder / all-projects scope
+- ranked fuzzy search across session id/title/cwd/first message/all messages/path, merged with prompt-history matches from `history.db`
 
 Empty-list render behavior:
 
-- renders `No sessions in current folder. Press Tab to view all.`
+- current-folder scope renders `No sessions in current folder. Press Tab to view all.`; all-projects scope renders `No sessions found`
 - Enter/Delete on empty do nothing (no callback)
 - Esc/Ctrl+C still work
-
-Caveat: the empty-state UI mentions Tab, but this component currently has no Tab handler and current wiring only lists current-scope sessions.
 
 ## Runtime switch execution (`AgentSession.switchSession`)
 
@@ -158,8 +161,8 @@ Lifecycle/state transition:
 3. if canceled -> return `false` with no switch
 4. disconnect from current agent event stream
 5. abort active generation/tool flow
-6. clear queued steering/follow-up/next-turn message buffers
-7. flush session writer (`sessionManager.flush()`) to persist pending writes
+6. flush session writer (`sessionManager.flush()`) to persist pending writes, then capture rollback state
+7. clear queued steering/follow-up/next-turn message buffers
 8. `sessionManager.setSessionFile(sessionPath)`
    - updates session file pointer
    - writes terminal breadcrumb
@@ -171,11 +174,11 @@ Lifecycle/state transition:
 12. emit `session_switch` hook event (`reason: "resume"`, `previousSessionFile`)
 13. replace agent messages with rebuilt context and sync todos
 14. close provider sessions when switching to a different session or when same-session reload changed replay messages
-15. restore default model from `sessionContext.models.default` if available and present in model registry
+15. restore model via `getRestorableSessionModels(sessionContext.models, lastModelChangeRole)` — tries the recorded models in fallback order and uses the first one present in the model registry
 16. restore thinking level and service tier:
     - thinking uses persisted `thinking_level_change`, otherwise the configured default clamped to model capability
     - service tier uses persisted `service_tier_change`, otherwise the configured `serviceTier` setting (`"none"` becomes unset)
-17. reconnect agent listeners and return `true`
+17. reconnect agent listeners, run the registered session-switch reconciler if any (interactive mode re-enters persisted modes; errors logged, not fatal), and return `true`
 
 ## UI state rebuild after interactive switch
 
@@ -186,9 +189,10 @@ Lifecycle/state transition:
 - clear pending-message UI and pending tool map
 - reset streaming component/message references
 - call `session.switchSession(...)`
+- if the resumed session's cwd differs from the previous one, re-point the process and cwd-derived caches at it (`applyCwdChange`)
 - clear chat container and rerender from session context (`renderInitialMessages`)
 - reload todos from new session artifacts
-- show `Resumed session`
+- show `Resumed session` (or `Resumed session in <dir>` for a cross-project resume)
 
 So visible conversation/todo state is rebuilt from the new session file.
 
@@ -200,7 +204,7 @@ So visible conversation/todo state is rebuilt from the new session file.
 - `sdk.ts` builds `existingSession = sessionManager.buildSessionContext()`.
 - Agent messages are restored once during session creation.
 - Model/thinking are selected during creation (including restore/fallback logic).
-- Interactive mode then runs `#restoreModeFromSession()` to re-enter persisted mode state (currently plan/plan_paused).
+- Interactive mode then runs `#reconcileModeFromSession()` to re-enter persisted mode state (e.g. plan mode).
 
 ### In-session switch (`/resume`-style selector path)
 
@@ -208,7 +212,7 @@ So visible conversation/todo state is rebuilt from the new session file.
 - Messages/model/thinking are rebuilt immediately in place.
 - Hook `session_before_switch`/`session_switch` events are emitted.
 - UI chat/todos are refreshed.
-- No dedicated post-switch mode restore call is made in selector flow; mode re-entry behavior is not symmetric with startup `#restoreModeFromSession()`.
+- Mode re-entry is symmetric with startup: interactive mode registers `#reconcileModeFromSession()` as the session-switch reconciler (`setSessionSwitchReconciler`), and `switchSession()` invokes it after reconnecting.
 
 ## Failure and edge-case behavior
 

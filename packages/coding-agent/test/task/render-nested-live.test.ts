@@ -160,6 +160,29 @@ describe("task renderer: nested live rendering", () => {
 		expect(text).toContain("Parent>DeltaSub");
 	});
 
+	it("does not recurse forever when a nested task snapshot points at itself", async () => {
+		const inflight: TaskToolDetails = {
+			projectAgentsDir: null,
+			results: [],
+			totalDurationMs: 0,
+			progress: [],
+		};
+		const child = makeRunningSubProgress("Parent.CycleSub", "Cycle child running");
+		child.inflightTaskDetails = inflight;
+		inflight.progress = [child];
+		const parent = makeRunningProgress({
+			id: "Parent",
+			currentTool: "task",
+			currentToolStartMs: Date.now(),
+			inflightTaskDetails: inflight,
+		});
+
+		const text = await render(parent);
+
+		expect(text).toContain("Cycle child running");
+		expect(text).toContain("nested task progress already shown");
+	});
+
 	it("combines completed and in-flight nested snapshots in one tree", async () => {
 		const parent = makeRunningProgress({
 			currentTool: "task",
@@ -212,7 +235,7 @@ describe("task renderer: nested live rendering", () => {
 		expect(text).not.toContain("Σ");
 	});
 
-	it("renders a static result header while the body shimmers the running task name", async () => {
+	it("renders a static result header and static running task row", async () => {
 		const theme = (await getThemeByName("dark"))!;
 		const details: TaskToolDetails = {
 			projectAgentsDir: null,
@@ -237,11 +260,10 @@ describe("task renderer: nested live rendering", () => {
 		const header1 = f1.find(l => Bun.stripANSI(l).includes("Task"))!;
 		const body0 = f0.find(l => Bun.stripANSI(l).includes("Probe"))!;
 		const body1 = f1.find(l => Bun.stripANSI(l).includes("Probe"))!;
-		// Header is static — no clock ticking beside "Task".
+		// Header and per-agent body rows are static; only the tool header owns live animation.
 		expect(header0).toBe(header1);
-		// The per-agent body line still animates via the shimmered task name.
-		expect(body0).not.toBe(body1);
-		expect(Bun.stripANSI(body1)).toContain("• Probe: Investigate padding");
+		expect(body0).toBe(body1);
+		expect(Bun.stripANSI(body1)).toContain(`${theme.status.done} Probe: Investigate padding`);
 	});
 
 	it("wraps the completed run summary in bracket glyphs, dropping the Total: label", async () => {

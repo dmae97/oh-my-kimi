@@ -27,8 +27,16 @@ import {
 	theme,
 } from "../../modes/theme/theme";
 import type { InteractiveModeContext } from "../../modes/types";
-import { type SessionInfo, SessionManager } from "../../session/session-manager";
+import type { ResetCreditRedeemOutcome } from "../../session/auth-storage";
+import type { SessionInfo } from "../../session/session-listing";
+import { SessionManager } from "../../session/session-manager";
 import { FileSessionStorage } from "../../session/session-storage";
+import { type LogoutAccount, toLogoutAccounts } from "../../slash-commands/helpers/logout";
+import {
+	describeRedeemOutcome,
+	type ResetUsageAccount,
+	toResetUsageAccounts,
+} from "../../slash-commands/helpers/reset-usage";
 import { AUTO_THINKING, type ConfiguredThinkingLevel } from "../../thinking";
 import {
 	isImageProviderPreference,
@@ -45,9 +53,11 @@ import { AssistantMessageComponent } from "../components/assistant-message";
 import { CopySelectorComponent } from "../components/copy-selector";
 import { ExtensionDashboard } from "../components/extensions";
 import { HistorySearchComponent } from "../components/history-search";
+import { LogoutAccountSelectorComponent } from "../components/logout-account-selector";
 import { ModelSelectorComponent } from "../components/model-selector";
 import { OAuthSelectorComponent } from "../components/oauth-selector";
 import { PluginSelectorComponent } from "../components/plugin-selector";
+import { ResetUsageSelectorComponent } from "../components/reset-usage-selector";
 import { SessionSelectorComponent } from "../components/session-selector";
 import { SettingsSelectorComponent } from "../components/settings-selector";
 import { ToolExecutionComponent } from "../components/tool-execution";
@@ -92,71 +102,89 @@ export class SelectorController {
 
 	showSettingsSelector(): void {
 		getAvailableThemes().then(availableThemes => {
-			this.showSelector(done => {
-				const selector = new SettingsSelectorComponent(
-					{
-						availableThinkingLevels: [...this.ctx.session.getAvailableThinkingLevels()],
-						thinkingLevel: this.ctx.session.thinkingLevel,
-						availableThemes,
-						cwd: getProjectDir(),
-					},
-					{
-						onChange: (id, value) => this.handleSettingChange(id, value),
-						onThemePreview: async themeName => {
-							const result = await previewTheme(themeName);
-							if (result.success) {
-								this.ctx.statusLine.invalidate();
-								this.ctx.updateEditorTopBorder();
-								this.ctx.ui.invalidate();
-								this.ctx.ui.requestRender();
-							}
-						},
-						onStatusLinePreview: previewSettings => {
-							// Update status line with preview settings
-							this.ctx.statusLine.updateSettings({
-								preset: settings.get("statusLine.preset"),
-								leftSegments: settings.get("statusLine.leftSegments"),
-								rightSegments: settings.get("statusLine.rightSegments"),
-								separator: settings.get("statusLine.separator"),
-								showHookStatus: settings.get("statusLine.showHookStatus"),
-								sessionAccent: settings.get("statusLine.sessionAccent"),
-								transparent: settings.get("statusLine.transparent"),
-								...previewSettings,
-							});
+			// Fullscreen settings editor on the alternate screen: the overlay
+			// enables mouse tracking (click/hover/wheel) for its lifetime and
+			// the transcript stays untouched underneath.
+			let overlayHandle: OverlayHandle | undefined;
+			const done = () => {
+				overlayHandle?.hide();
+				this.ctx.ui.setFocus(this.ctx.editor);
+				this.ctx.ui.requestRender();
+			};
+			const selector = new SettingsSelectorComponent(
+				{
+					availableThinkingLevels: [...this.ctx.session.getAvailableThinkingLevels()],
+					thinkingLevel: this.ctx.session.thinkingLevel,
+					availableThemes,
+					cwd: getProjectDir(),
+					model: this.ctx.session.model,
+					imageBudget: this.ctx.ui.imageBudget,
+					requestRender: () => this.ctx.ui.requestRender(),
+				},
+				{
+					onChange: (id, value) => this.handleSettingChange(id, value),
+					onThemePreview: async themeName => {
+						const result = await previewTheme(themeName);
+						if (result.success) {
+							this.ctx.statusLine.invalidate();
 							this.ctx.updateEditorTopBorder();
+							this.ctx.ui.invalidate();
 							this.ctx.ui.requestRender();
-						},
-						getStatusLinePreview: () => {
-							// Return the rendered status line for inline preview
-							const availableWidth = this.ctx.editor.getTopBorderAvailableWidth(this.ctx.ui.terminal.columns);
-							return this.ctx.statusLine.getTopBorder(availableWidth).content;
-						},
-						onPluginsChanged: async () => {
-							const projectPath = await resolveActiveProjectRegistryPath(this.ctx.sessionManager.getCwd());
-							clearPluginRootsAndCaches(projectPath ? [projectPath] : undefined);
-							await this.ctx.refreshSlashCommandState();
-							await this.ctx.session.refreshSshTool({ activateIfAvailable: true });
-							this.ctx.ui.requestRender();
-						},
-						onCancel: () => {
-							done();
-							// Restore status line to saved settings
-							this.ctx.statusLine.updateSettings({
-								preset: settings.get("statusLine.preset"),
-								leftSegments: settings.get("statusLine.leftSegments"),
-								rightSegments: settings.get("statusLine.rightSegments"),
-								separator: settings.get("statusLine.separator"),
-								showHookStatus: settings.get("statusLine.showHookStatus"),
-								sessionAccent: settings.get("statusLine.sessionAccent"),
-								transparent: settings.get("statusLine.transparent"),
-							});
-							this.ctx.updateEditorTopBorder();
-							this.ctx.ui.requestRender();
-						},
+						}
 					},
-				);
-				return { component: selector, focus: selector };
+					onStatusLinePreview: previewSettings => {
+						// Update status line with preview settings
+						this.ctx.statusLine.updateSettings({
+							preset: settings.get("statusLine.preset"),
+							leftSegments: settings.get("statusLine.leftSegments"),
+							rightSegments: settings.get("statusLine.rightSegments"),
+							separator: settings.get("statusLine.separator"),
+							showHookStatus: settings.get("statusLine.showHookStatus"),
+							sessionAccent: settings.get("statusLine.sessionAccent"),
+							transparent: settings.get("statusLine.transparent"),
+							...previewSettings,
+						});
+						this.ctx.updateEditorTopBorder();
+						this.ctx.ui.requestRender();
+					},
+					getStatusLinePreview: () => {
+						// Return the rendered status line for inline preview
+						const availableWidth = this.ctx.editor.getTopBorderAvailableWidth(this.ctx.ui.terminal.columns);
+						return this.ctx.statusLine.getTopBorder(availableWidth).content;
+					},
+					onPluginsChanged: async () => {
+						const projectPath = await resolveActiveProjectRegistryPath(this.ctx.sessionManager.getCwd());
+						clearPluginRootsAndCaches(projectPath ? [projectPath] : undefined);
+						await this.ctx.refreshSlashCommandState();
+						await this.ctx.session.refreshSshTool({ activateIfAvailable: true });
+						this.ctx.ui.requestRender();
+					},
+					onCancel: () => {
+						done();
+						// Restore status line to saved settings
+						this.ctx.statusLine.updateSettings({
+							preset: settings.get("statusLine.preset"),
+							leftSegments: settings.get("statusLine.leftSegments"),
+							rightSegments: settings.get("statusLine.rightSegments"),
+							separator: settings.get("statusLine.separator"),
+							showHookStatus: settings.get("statusLine.showHookStatus"),
+							sessionAccent: settings.get("statusLine.sessionAccent"),
+							transparent: settings.get("statusLine.transparent"),
+						});
+						this.ctx.updateEditorTopBorder();
+						this.ctx.ui.requestRender();
+					},
+				},
+			);
+			overlayHandle = this.ctx.ui.showOverlay(selector, {
+				anchor: "bottom-center",
+				width: "100%",
+				maxHeight: "100%",
+				margin: 0,
+				fullscreen: true,
 			});
+			this.ctx.ui.setFocus(selector);
+			this.ctx.ui.requestRender();
 		});
 	}
 
@@ -267,6 +295,11 @@ export class SelectorController {
 				this.ctx.statusLine.invalidate();
 				this.ctx.updateEditorBorderColor();
 				break;
+			case "personality":
+				void this.ctx.session.refreshBaseSystemPrompt().catch(err => {
+					this.ctx.showError(`Failed to apply personality: ${err}`);
+				});
+				break;
 
 			case "autocompleteMaxVisible":
 				this.ctx.editor.setAutocompleteMaxVisible(typeof value === "number" ? value : Number(value));
@@ -286,10 +319,9 @@ export class SelectorController {
 				for (const child of this.ctx.chatContainer.children) {
 					if (child instanceof AssistantMessageComponent) {
 						child.setHideThinkingBlock(value as boolean);
+						child.invalidate();
 					}
 				}
-				this.ctx.chatContainer.clear();
-				this.ctx.rebuildChatFromMessages();
 				break;
 			case "theme": {
 				setTheme(value as string, true).then(result => {
@@ -812,19 +844,6 @@ export class SelectorController {
 		});
 	}
 
-	#clearTransientSessionUi(): void {
-		if (this.ctx.loadingAnimation) {
-			this.ctx.loadingAnimation.stop();
-			this.ctx.loadingAnimation = undefined;
-		}
-		this.ctx.statusContainer.clear();
-		this.ctx.pendingMessagesContainer.clear();
-		this.ctx.compactionQueuedMessages = [];
-		this.ctx.streamingComponent = undefined;
-		this.ctx.streamingMessage = undefined;
-		this.ctx.pendingTools.clear();
-	}
-
 	#refreshSessionTerminalTitle(): void {
 		const sessionManager = this.ctx.sessionManager as {
 			getSessionName?: () => string | undefined;
@@ -846,7 +865,7 @@ export class SelectorController {
 		}
 		this.#refreshSessionTerminalTitle();
 
-		this.#clearTransientSessionUi();
+		this.ctx.clearTransientSessionUi();
 		this.ctx.statusLine.invalidate();
 		this.ctx.statusLine.setSessionStartTime(Date.now());
 		this.ctx.updateEditorTopBorder();
@@ -858,7 +877,7 @@ export class SelectorController {
 	}
 
 	async handleResumeSession(sessionPath: string): Promise<void> {
-		this.#clearTransientSessionUi();
+		this.ctx.clearTransientSessionUi();
 
 		const previousCwd = this.ctx.sessionManager.getCwd();
 		// Switch session via AgentSession (emits hook and tool session events). The
@@ -984,23 +1003,28 @@ export class SelectorController {
 		}
 	}
 
-	async #handleOAuthLogout(providerId: string): Promise<void> {
+	async #handleCredentialLogout(providerId: string, account: LogoutAccount): Promise<void> {
 		try {
 			const authStorage = this.ctx.session.modelRegistry.authStorage;
-			if (!authStorage.has(providerId)) {
-				const source = authStorage.describeCredentialSource(providerId, this.ctx.session.sessionId);
-				const suffix = source ? ` Current auth comes from ${source}; remove that source to log out.` : "";
-				this.ctx.showError(`Logout skipped: no stored credentials for ${providerId}.${suffix}`);
+			const removed = await authStorage.removeCredential(providerId, account.credentialId);
+			if (!removed) {
+				this.ctx.showError(`Logout skipped: ${account.label} is no longer stored for ${providerId}.`);
 				return;
 			}
 
-			await authStorage.logout(providerId);
 			await this.ctx.session.modelRegistry.refresh();
 			const block = new TranscriptBlock();
 			block.addChild(
-				new Text(theme.fg("success", `${theme.status.success} Successfully logged out of ${providerId}`), 1, 0),
+				new Text(
+					theme.fg(
+						"success",
+						`${theme.status.success} Successfully logged out ${account.label} from ${providerId}`,
+					),
+					1,
+					0,
+				),
 			);
-			block.addChild(new Text(theme.fg("dim", `Credentials removed from ${getAgentDbPath()}`), 1, 0));
+			block.addChild(new Text(theme.fg("dim", `Credential removed from ${getAgentDbPath()}`), 1, 0));
 			const remainingSource = authStorage.describeCredentialSource(providerId, this.ctx.session.sessionId);
 			if (remainingSource) {
 				block.addChild(
@@ -1013,12 +1037,51 @@ export class SelectorController {
 		}
 	}
 
+	async #showOAuthLogoutAccountSelector(providerId: string): Promise<void> {
+		const authStorage = this.ctx.session.modelRegistry.authStorage;
+		try {
+			await authStorage.reload();
+		} catch (error: unknown) {
+			this.ctx.showError(
+				`Could not load stored credentials: ${error instanceof Error ? error.message : String(error)}`,
+			);
+			return;
+		}
+		const provider = getOAuthProviders().find(candidate => candidate.id === providerId);
+		const accounts = toLogoutAccounts(providerId, authStorage.listStoredCredentials(providerId), {
+			activeIdentity: authStorage.getOAuthAccountIdentity(providerId, this.ctx.session.sessionId),
+			activeApiKey: authStorage.getCredentialOrigin(providerId)?.kind === "api_key",
+		});
+		if (accounts.length === 0) {
+			const source = authStorage.describeCredentialSource(providerId, this.ctx.session.sessionId);
+			const suffix = source ? ` Current auth comes from ${source}; remove that source to log out.` : "";
+			this.ctx.showError(`Logout skipped: no stored credentials for ${providerId}.${suffix}`);
+			return;
+		}
+
+		this.showSelector(done => {
+			const selector = new LogoutAccountSelectorComponent(
+				provider?.name ?? providerId,
+				accounts,
+				account => {
+					done();
+					void this.#handleCredentialLogout(providerId, account);
+				},
+				() => {
+					done();
+					this.ctx.ui.requestRender();
+				},
+			);
+			return { component: selector, focus: selector };
+		});
+	}
+
 	async showOAuthSelector(mode: "login" | "logout", providerId?: string): Promise<void> {
 		if (providerId) {
 			if (mode === "login") {
 				await this.#handleOAuthLogin(providerId);
 			} else {
-				await this.#handleOAuthLogout(providerId);
+				await this.#showOAuthLogoutAccountSelector(providerId);
 			}
 			return;
 		}
@@ -1046,7 +1109,7 @@ export class SelectorController {
 					if (mode === "login") {
 						await this.#handleOAuthLogin(selectedProviderId);
 					} else {
-						await this.#handleOAuthLogout(selectedProviderId);
+						await this.#showOAuthLogoutAccountSelector(selectedProviderId);
 					}
 				},
 				() => {
@@ -1071,6 +1134,67 @@ export class SelectorController {
 		});
 	}
 
+	async showResetUsageSelector(): Promise<void> {
+		const session = this.ctx.session;
+		this.ctx.showStatus("Checking saved rate-limit resets…", { dim: true });
+		let statuses: Awaited<ReturnType<typeof session.listResetCredits>>;
+		try {
+			statuses = await session.listResetCredits();
+		} catch (error) {
+			this.ctx.showError(`Could not load saved resets: ${error instanceof Error ? error.message : String(error)}`);
+			return;
+		}
+		const accounts = toResetUsageAccounts(statuses);
+		if (accounts.length === 0) {
+			this.ctx.showStatus("No Codex accounts found. Use /login to add one.");
+			return;
+		}
+		if (!accounts.some(account => account.availableCount > 0)) {
+			this.ctx.showStatus(
+				accounts.some(account => account.error)
+					? "No saved resets available — some accounts couldn't be reached (try /login)."
+					: "No saved rate-limit resets available to spend right now.",
+			);
+			return;
+		}
+		this.showSelector(done => {
+			const selector = new ResetUsageSelectorComponent(
+				accounts,
+				account => {
+					done();
+					void this.#redeemReset(account);
+				},
+				() => {
+					done();
+					this.ctx.ui.requestRender();
+				},
+			);
+			return { component: selector, focus: selector };
+		});
+	}
+
+	async #redeemReset(account: ResetUsageAccount): Promise<void> {
+		this.ctx.showStatus(`Spending 1 saved reset for ${account.label}…`, { dim: true });
+		let outcome: ResetCreditRedeemOutcome;
+		try {
+			outcome = await this.ctx.session.redeemResetCredit(account.target);
+		} catch (error) {
+			this.ctx.showError(
+				`Reset failed for ${account.label}: ${error instanceof Error ? error.message : String(error)}`,
+			);
+			return;
+		}
+		const message = describeRedeemOutcome(outcome, account.label);
+		if (outcome.ok) {
+			this.ctx.showStatus(message);
+			// Refresh the status-line usage so the freshly-reset window shows.
+			this.ctx.statusLine.invalidate();
+			this.ctx.ui.requestRender();
+		} else {
+			this.ctx.showWarning(message);
+		}
+	}
+
 	async showDebugSelector(): Promise<void> {
 		const { DebugSelectorComponent } = await import("../../debug");
 		this.showSelector(done => {
@@ -1079,7 +1203,7 @@ export class SelectorController {
 		});
 	}
 
-	showAgentHub(observers: SessionObserverRegistry): void {
+	showAgentHub(observers: SessionObserverRegistry, options?: { requireContent?: boolean }): void {
 		const hubKeys = [
 			...this.ctx.keybindings.getKeys("app.agents.hub"),
 			...this.ctx.keybindings.getKeys("app.session.observe"),
@@ -1090,15 +1214,35 @@ export class SelectorController {
 		const done = () => {
 			hub?.dispose();
 			overlayHandle?.hide();
+			this.ctx.ui.setFocus(this.ctx.editor);
 			this.ctx.ui.requestRender();
 		};
 
 		hub = new AgentHubOverlayComponent({
 			observers,
 			hubKeys,
+			expandKeys: this.ctx.keybindings.getKeys("app.tools.expand"),
 			onDone: done,
 			requestRender: () => this.ctx.ui.requestRender(),
+			registry: this.ctx.collabGuest?.agentRegistry,
+			remote: this.ctx.collabGuest?.hubRemote,
+			ui: this.ctx.ui,
+			getTool: name => this.ctx.session.getToolByName(name),
+			getMessageRenderer: type => this.ctx.session.extensionRunner?.getMessageRenderer(type),
+			cwd: this.ctx.sessionManager.getCwd(),
+			hideThinkingBlock: () => this.ctx.hideThinkingBlock,
+			focusAgent: id => this.ctx.focusAgentSession(id),
+			sessionFile: this.ctx.sessionManager.getSessionFile() ?? null,
 		});
+
+		// The double-← gesture passes requireContent so it stays inert when there
+		// are no subagents to show; the explicit hub/observe keys still open the
+		// empty roster. The freshly built hub already ran the persisted-subagent
+		// scan, so its row count is the authoritative "is there anything to show".
+		if (options?.requireContent && hub.isEmpty) {
+			hub.dispose();
+			return;
+		}
 
 		overlayHandle = this.ctx.ui.showOverlay(hub, {
 			anchor: "bottom-center",

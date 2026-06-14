@@ -16,8 +16,9 @@
  *       → `updateContent` receives a message with `stopReason: "stop"`;
  *         `errorMessage` is NOT set (TTSR existing behavior unchanged).
  */
-import { describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -50,13 +51,12 @@ function createFixture(opts: {
 	retryAttempt?: number;
 }) {
 	const updateContent = vi.fn();
-	const setUsageInfo = vi.fn();
 	const setComplete = vi.fn();
 	const markTranscriptBlockFinalized = vi.fn();
-	const streamingComponent = { updateContent, setUsageInfo, setComplete, markTranscriptBlockFinalized };
+	const streamingComponent = { updateContent, setComplete, markTranscriptBlockFinalized };
 	const requestRender = vi.fn();
 
-	const ctx = {
+	const ctxBase = {
 		isInitialized: true,
 		init: vi.fn(async () => {}),
 		ui: { requestRender },
@@ -65,10 +65,16 @@ function createFixture(opts: {
 		streamingComponent,
 		streamingMessage: opts.streamingMessage,
 		pendingTools: new Map(),
-		session: {
-			isTtsrAbortPending: opts.isTtsrAbortPending ?? false,
-			retryAttempt: opts.retryAttempt ?? 0,
-		},
+	};
+	const sessionMock = {
+		isTtsrAbortPending: opts.isTtsrAbortPending ?? false,
+		retryAttempt: opts.retryAttempt ?? 0,
+	};
+	const ctx = {
+		...ctxBase,
+		session: sessionMock,
+		viewSession: sessionMock,
+		clearTransientSessionUi: () => {},
 	} as unknown as InteractiveModeContext;
 
 	const controller = new EventController(ctx);
@@ -76,6 +82,13 @@ function createFixture(opts: {
 }
 
 describe("EventController #handleMessageEnd abort labeling", () => {
+	beforeEach(async () => {
+		await Settings.init({ inMemory: true, cwd: process.cwd() });
+	});
+	afterEach(() => {
+		resetSettingsForTest();
+	});
+
 	it("C1: SILENT_ABORT_MARKER + aborted -> updateContent stopReason='stop', errorMessage NOT overwritten", async () => {
 		const message = makeAssistantMessage({
 			stopReason: "aborted",

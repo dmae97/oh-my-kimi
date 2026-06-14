@@ -3,7 +3,7 @@
  */
 import * as path from "node:path";
 import { logger } from "@oh-my-pi/pi-utils";
-import * as zod from "zod/v4";
+import { z as zod } from "zod/v4";
 import { hookCapability } from "../../capability/hook";
 import type { Hook } from "../../discovery";
 import { loadCapability } from "../../discovery";

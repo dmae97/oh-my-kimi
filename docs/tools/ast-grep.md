@@ -36,7 +36,7 @@ Pattern grammar and language support exposed to the model:
 - Single-shot tool result.
 - Model-facing `content` is one text block:
   - grouped by file for directory/multi-file searches,
-  - match lines rendered under `¶PATH#HASH` as `*LINE:text` in hashline mode or `*LINE|text` otherwise,
+  - match lines rendered under `[PATH#HASH]` as `*LINE:text` in hashline mode or `*LINE|text` otherwise,
   - continuation lines for multi-line matches rendered with a leading space,
   - optional `meta: NAME=value` lines when ast-grep captured metavariables.
 - If no matches are found, text is `No matches found` or `No matches found. Parse issues mean the query may be mis-scoped; narrow paths before concluding absence.` plus formatted parse issues.
@@ -70,7 +70,7 @@ Pattern grammar and language support exposed to the model:
 - Directory + optional glob: native scan walks the directory, then filters by compiled glob.
 - Multiple explicit paths/globs: wrapper unions them into one synthetic scope or runs per-target native calls when paths only meet at root.
 - Internal URL inputs: only supported when the router can resolve them to a backing file path.
-- Hashline output mode vs plain line-number mode: controlled by `resolveFileDisplayMode()`; hashline mode requires the edit tool and non-raw, mutable sources.
+- Hashline output mode vs plain line-number mode: controlled by `resolveFileDisplayMode()`; hashline mode requires the edit tool and hashline edit mode, and per-file anchors additionally require a successful whole-file snapshot (`recordFileSnapshot()`) — over-cap or unreadable files fall back to plain output.
 
 ## Side Effects
 - Filesystem

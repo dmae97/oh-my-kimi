@@ -3,6 +3,7 @@ import { readModelCache, writeModelCache } from "./model-cache";
 import { type GeneratedProvider, getBundledModels } from "./models";
 import type { Api, Model, ModelSpec, Provider } from "./types";
 import { isRecord } from "./utils";
+import { collapseBuiltModelVariants } from "./variant-collapse";
 
 const DEFAULT_CACHE_TTL_MS = 2 * 60 * 60 * 1000;
 const NON_AUTHORITATIVE_RETRY_MS = 5 * 60 * 1000;
@@ -32,6 +33,8 @@ export interface ModelManagerOptions<TApi extends Api = Api, TModelsDevPayload =
 	staticModels?: readonly ModelSpec<TApi>[];
 	/** Optional override for the cache database path. Default: <agent-dir>/models.db. */
 	cacheDbPath?: string;
+	/** Optional provider id override for cache namespacing. Defaults to providerId. */
+	cacheProviderId?: string;
 	/** Maximum cache age in milliseconds before considered stale. Default: 24h. */
 	cacheTtlMs?: number;
 	/** When true, a successful dynamic fetch is the complete provider catalog and prunes static-only models. */
@@ -106,13 +109,14 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 	options: ModelManagerOptions<TApi, TModelsDevPayload>,
 	strategy: ModelRefreshStrategy = "online-if-uncached",
 ): Promise<ModelResolutionResult<TApi>> {
+	const cacheProviderId = options.cacheProviderId ?? options.providerId;
 	const now = options.now ?? Date.now;
 	const ttlMs = options.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
 	const dbPath = options.cacheDbPath;
 	const staticModels = options.staticModels
 		? passModelList<TApi>(options.staticModels)
 		: (getBundledModels(options.providerId as GeneratedProvider) as Model<TApi>[]);
-	const cache = readModelCache<TApi>(options.providerId, ttlMs, now, dbPath);
+	const cache = readModelCache<TApi>(cacheProviderId, ttlMs, now, dbPath);
 	const dynamicModelsAuthoritative = options.dynamicModelsAuthoritative ?? false;
 	const staticFingerprint = fingerprintStatic(staticModels, dynamicModelsAuthoritative);
 	const cacheFingerprintMatches = cache?.staticFingerprint === staticFingerprint && staticFingerprint.length > 0;
@@ -134,7 +138,7 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 	// Re-running `mergeDynamicModels(static, cache)` would just rebuild the same
 	// objects (~800ms in the steady-state cold-start profile for `omp -p hi`).
 	if (!shouldFetchFromNetwork && cache?.fresh && hasAuthoritativeCache && cacheFingerprintMatches) {
-		return { models: passModelList<TApi>(cache.models), stale: false };
+		return { models: collapseBuiltModelVariants(passModelList<TApi>(cache.models)), stale: false };
 	}
 
 	const [fetchedModelsDevModels, fetchedDynamicModels] = shouldFetchFromNetwork
@@ -148,8 +152,9 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 	const dynamicModels = fetchedDynamicModels ?? [];
 	const mergedWithCache = mergeDynamicModels(mergeModelSources(staticModels, modelsDevModels), cacheModels);
 	const mergedModels = mergeDynamicModels(mergedWithCache, dynamicModels);
-	const models =
-		dynamicModelsAuthoritative && dynamicFetchSucceeded ? retainModelIds(mergedModels, dynamicModels) : mergedModels;
+	const models = collapseBuiltModelVariants(
+		dynamicModelsAuthoritative && dynamicFetchSucceeded ? retainModelIds(mergedModels, dynamicModels) : mergedModels,
+	);
 	const dynamicAuthoritative = !hasDynamicFetcher || dynamicFetchSucceeded || shouldUseFreshCacheAsAuthoritative;
 	if (shouldFetchFromNetwork) {
 		if (dynamicFetchSucceeded) {
@@ -157,17 +162,26 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 			const snapshotModels = dynamicModelsAuthoritative
 				? retainModelIds(mergedSnapshot, dynamicModels)
 				: mergedSnapshot;
-			writeModelCache(options.providerId, now(), snapshotModels, true, staticFingerprint, dbPath);
+			writeModelCache(
+				cacheProviderId,
+				now(),
+				collapseBuiltModelVariants(snapshotModels),
+				true,
+				staticFingerprint,
+				dbPath,
+			);
 		} else {
 			// Dynamic fetch failed — update cache with a non-authoritative snapshot so
 			// stale state remains visible while retry backoff still applies.
-			const latestCache = readModelCache<TApi>(options.providerId, ttlMs, now, dbPath);
+			const latestCache = readModelCache<TApi>(cacheProviderId, ttlMs, now, dbPath);
 			writeModelCache(
-				options.providerId,
+				cacheProviderId,
 				now(),
-				mergeDynamicModels(
-					mergeModelSources(staticModels, modelsDevModels),
-					normalizeModelList<TApi>(latestCache?.models ?? cache?.models ?? []),
+				collapseBuiltModelVariants(
+					mergeDynamicModels(
+						mergeModelSources(staticModels, modelsDevModels),
+						normalizeModelList<TApi>(latestCache?.models ?? cache?.models ?? []),
+					),
 				),
 				false,
 				staticFingerprint,
@@ -290,7 +304,7 @@ function retainModelIds<TApi extends Api>(
  * arms calling `resolveProviderModels` with the same `staticModels` array)
  * skip the JSON+hash work after the first call.
  */
-const MODEL_CACHE_FINGERPRINT_VERSION = "merge-v2";
+const MODEL_CACHE_FINGERPRINT_VERSION = "merge-v3";
 const kStaticFingerprint = Symbol("model-manager.staticFingerprint");
 type ModelArrayWithFingerprint = readonly Model<Api>[] & { [kStaticFingerprint]?: string };
 function fingerprintStatic<TApi extends Api>(
@@ -352,11 +366,13 @@ function preferDiscoveryName(discoveryName: string, fallbackName: string, modelI
 	return normalizedDiscoveryName;
 }
 
-function preferDiscoveryLimit(discoveryLimit: number, fallbackLimit: number): number {
-	if (!Number.isFinite(discoveryLimit) || discoveryLimit <= 0) {
+function preferDiscoveryLimit(discoveryLimit: number, fallbackLimit: number): number;
+function preferDiscoveryLimit(discoveryLimit: number | null, fallbackLimit: number | null): number | null;
+function preferDiscoveryLimit(discoveryLimit: number | null, fallbackLimit: number | null): number | null {
+	if (discoveryLimit === null || !Number.isFinite(discoveryLimit) || discoveryLimit <= 0) {
 		return fallbackLimit;
 	}
-	if (discoveryLimit === 4096 && fallbackLimit > discoveryLimit) {
+	if (discoveryLimit === 4096 && fallbackLimit !== null && fallbackLimit > discoveryLimit) {
 		return fallbackLimit;
 	}
 	return discoveryLimit;
@@ -417,11 +433,11 @@ function isModelLike(value: unknown): value is ModelSpec<Api> {
 	}
 	// Finite positive: NaN > 0 is false, +Infinity < Infinity is false.
 	const cw = v.contextWindow;
-	if (typeof cw !== "number" || !(cw > 0 && cw < Infinity)) {
+	if (cw !== null && (typeof cw !== "number" || !(cw > 0 && cw < Infinity))) {
 		return false;
 	}
 	const mt = v.maxTokens;
-	if (typeof mt !== "number" || !(mt > 0 && mt < Infinity)) {
+	if (mt !== null && (typeof mt !== "number" || !(mt > 0 && mt < Infinity))) {
 		return false;
 	}
 	return true;

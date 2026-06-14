@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import type { Api, Model } from "@oh-my-pi/pi-ai";
+import type { Api, ApiKey, Model } from "@oh-my-pi/pi-ai";
 
 import { dbPath as configuredDbPath } from "../config";
 import { closeQuietly } from "../db";
@@ -7,6 +7,7 @@ import type { MemoryInput, Metadata } from "../types";
 import { AnnotationStore } from "./annotations";
 import { BankManager } from "./banks";
 import { BeamMemory, initBeam } from "./beam/index";
+import { reconcileEmbeddingModel } from "./beam/store";
 import type { RecallEnhancedOptions, RecallOptions, RecallResult, SleepResult } from "./beam/types";
 import { EpisodicGraph } from "./episodic-graph";
 import {
@@ -35,13 +36,22 @@ export interface MnemopiOptions {
 	readonly noEmbeddings?: boolean;
 	readonly embeddingModel?: string;
 	readonly embeddingApiUrl?: string;
-	readonly embeddingApiKey?: string;
+	readonly embeddingApiKey?: ApiKey;
 	readonly embeddings?: false | MnemopiEmbeddingRuntimeOptions;
 	readonly llmEnabled?: boolean;
 	readonly llmBaseUrl?: string;
-	readonly llmApiKey?: string;
+	readonly llmApiKey?: ApiKey;
 	readonly llmModel?: string | Model<Api>;
 	readonly llm?: false | MnemopiLlmRuntimeOptions | Model<Api> | MnemopiLlmCompletion;
+	/** Escalate best-effort failure logs (embedding pipeline) from debug to warn. */
+	readonly debug?: boolean;
+	/**
+	 * When `false`, skip the embedding-model reconcile (wipe-and-rebuild) on open.
+	 * Read-only / ephemeral consumers (e.g. a stats snapshot) set this so an open
+	 * never triggers a destructive migration whose background rebuild the process
+	 * would exit before completing. Defaults to `true`.
+	 */
+	readonly reconcile?: boolean;
 }
 
 export interface RememberInput extends MemoryInput {
@@ -219,10 +229,11 @@ function resolveRuntimeOptions(options: MnemopiOptions): ResolvedMnemopiRuntimeO
 		}
 	}
 
-	if (embeddings === undefined && llm === undefined) {
+	const debug = options.debug ? true : undefined;
+	if (embeddings === undefined && llm === undefined && debug === undefined) {
 		return undefined;
 	}
-	return { embeddings, llm };
+	return { embeddings, llm, debug };
 }
 
 let defaultInstance: Mnemopi | null = null;
@@ -385,6 +396,15 @@ export class Mnemopi {
 		}
 		this.conn = this.beam.db;
 		this.db = this.beam.db;
+		// Wipe-and-rebuild stale embeddings when the configured model changed since
+		// the vectors were written. Runs inside the runtime scope so
+		// `currentEmbeddingModel()` reflects this instance's configured model.
+		// Skipped for read-only opens (`reconcile: false`) so an ephemeral stats
+		// reader never triggers a destructive migration whose async rebuild it would
+		// exit before completing — which would otherwise lose the embeddings.
+		if (options.reconcile !== false) {
+			this.#withRuntimeOptions(() => reconcileEmbeddingModel(this.beam));
+		}
 	}
 
 	close(): void {

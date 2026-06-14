@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -628,6 +629,62 @@ describe("ModelRegistry", () => {
 
 			expect(getModelsForProvider(registry, "anthropic")[0].baseUrl).toBe("https://second-proxy.example.com/v1");
 		});
+
+		test("refresh keeps transport override on built-in provider (#2555 openrouter gateway)", async () => {
+			// Reporter ran `omp` with the auth-gateway broker proxying OpenRouter.
+			// Default model worked; switching via `/model` produced
+			// `404 No route: POST /chat/completions` until restart. Root cause:
+			// background discovery refresh re-fetched the openrouter catalog and
+			// `mergeDiscoveredModel` dropped `transport: pi-native` (raw catalog
+			// rows carry no transport), so the next stream went out as plain
+			// openai-completions to `${baseUrl}/chat/completions` instead of the
+			// gateway's `/v1/pi/stream`.
+			writeRawModelsJson({
+				openrouter: {
+					baseUrl: "http://localhost:4000",
+					apiKey: "gateway-token",
+					transport: "pi-native",
+				},
+			});
+
+			const requestedUrls: string[] = [];
+			const fetchMock: FetchImpl = async input => {
+				const url = input instanceof Request ? input.url : String(input);
+				requestedUrls.push(url);
+				if (url === "http://localhost:4000/models") {
+					return new Response(
+						JSON.stringify({
+							data: [
+								{ id: "openai/gpt-5.4", name: "GPT-5.4", supported_parameters: ["tools"] },
+								{ id: "anthropic/claude-opus-4.6", name: "Claude Opus 4.6", supported_parameters: ["tools"] },
+							],
+						}),
+						{ status: 200, headers: { "Content-Type": "application/json" } },
+					);
+				}
+				throw new Error(`Unexpected URL: ${url}`);
+			};
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+
+			// Pre-refresh: every bundled openrouter model already carries the override.
+			const preRefresh = getModelsForProvider(registry, "openrouter");
+			expect(preRefresh.length).toBeGreaterThan(0);
+			expect(preRefresh.every(m => m.transport === "pi-native")).toBe(true);
+			expect(preRefresh.every(m => m.baseUrl === "http://localhost:4000")).toBe(true);
+
+			await registry.refreshProvider("openrouter", "online");
+			expect(requestedUrls).toContain("http://localhost:4000/models");
+
+			// Post-refresh: every openrouter model — bundled or freshly
+			// discovered — must still route through the pi-native transport.
+			const postRefresh = getModelsForProvider(registry, "openrouter");
+			expect(postRefresh.length).toBeGreaterThan(0);
+			for (const model of postRefresh) {
+				expect(model.transport).toBe("pi-native");
+				expect(model.baseUrl).toBe("http://localhost:4000");
+			}
+		});
 	});
 
 	describe("provider compat overrides", () => {
@@ -1149,8 +1206,9 @@ describe("ModelRegistry", () => {
 
 			expect(model?.thinking).toEqual({
 				...thinking,
-				// Versionless claude ids resolve to the 4-tier adaptive wire map.
-				effortMap: { minimal: "low", xhigh: "max" },
+				// Versionless claude ids resolve to the 4-tier adaptive wire map,
+				// filtered to the declared efforts (no xhigh).
+				effortMap: { minimal: "low" },
 			});
 		});
 
@@ -1833,7 +1891,7 @@ describe("ModelRegistry", () => {
 		});
 	});
 
-	test("cached discovery with UNK contextWindow preserves bundled value", () => {
+	test("legacy cached discovery sentinels are ignored after nullable limit cutover", () => {
 		// Configure openai as a discoverable provider through models.json
 		writeRawModelsJson({
 			openai: {
@@ -1844,8 +1902,9 @@ describe("ModelRegistry", () => {
 				models: [],
 			},
 		});
-		// Pre-populate the cache with a model that has UNK sentinel values
-		// (simulating a discovery that didn't return limit.context)
+		// Pre-populate a legacy cache row with the retired sentinel values from
+		// schema v5. The schema bump should ignore this row rather than treating
+		// 222222/8888 as real discovered limits.
 		writeModelCache<"openai-completions">(
 			"openai",
 			Date.now(),
@@ -1859,22 +1918,29 @@ describe("ModelRegistry", () => {
 					reasoning: false,
 					input: ["text"],
 					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-					contextWindow: 222_222, // UNK_CONTEXT_WINDOW
-					maxTokens: 8_888, // UNK_MAX_TOKENS
+					contextWindow: 222_222,
+					maxTokens: 8_888,
 				}),
 			],
 			true,
+			"",
 			cacheDbPath,
 		);
+		const db = new Database(cacheDbPath);
+		try {
+			db.run("UPDATE model_cache SET version = 5 WHERE provider_id = ?", ["openai"]);
+		} finally {
+			db.close();
+		}
 		const registry = new ModelRegistry(authStorage, modelsJsonPath);
 		const model = registry.find("openai", "gpt-4o");
 
 		expect(model).toBeDefined();
-		// The bundled gpt-4o has a correct contextWindow, not the UNK sentinel
+		// The bundled gpt-4o has correct limits, not the retired sentinels.
 		expect(model!.contextWindow).not.toBe(222_222);
 		expect(model!.contextWindow).toBeGreaterThan(100_000);
 		expect(model!.maxTokens).not.toBe(8_888);
-		expect(model!.maxTokens).toBeGreaterThan(1000);
+		expect(model!.maxTokens).toBeGreaterThan(10_000);
 	});
 
 	test("loads cached standard provider discovery models on startup", () => {
@@ -2049,5 +2115,47 @@ describe("ModelRegistry", () => {
 
 		expect(vertexModels.some(model => model.id === "zai-org/glm-4.7-maas")).toBe(true);
 		expect(vertexModels.some(model => model.id.startsWith("gemini-"))).toBe(true);
+	});
+
+	describe("effort-tier variant collapsing", () => {
+		test("collapses X/X-thinking twins from custom providers", () => {
+			writeRawModelsJson({
+				newapi: providerConfig("https://newapi.example.com/v1", [
+					{ id: "[Kiro] claude-opus-4-7" },
+					{ id: "[Kiro] claude-opus-4-7-thinking" },
+				]),
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const models = getModelsForProvider(registry, "newapi");
+			expect(models.map(m => m.id)).toEqual(["[Kiro] claude-opus-4-7"]);
+			// Effort routing to the consumed twin forces reasoning even though
+			// the config never marked it.
+			expect(models[0]?.reasoning).toBe(true);
+			expect(models[0]?.thinking?.effortRouting?.[Effort.High]).toBe("[Kiro] claude-opus-4-7-thinking");
+			expect(models[0]?.thinking?.effortRouting?.off).toBe("[Kiro] claude-opus-4-7");
+			// Saved selectors for the consumed twin resolve via the grammar alias.
+			expect(registry.find("newapi", "[Kiro] claude-opus-4-7-thinking")?.id).toBe("[Kiro] claude-opus-4-7");
+		});
+
+		test("modelOverrides keyed by retired variant ids re-key onto the collapsed model", () => {
+			writeRawModelsJson({
+				"google-antigravity": { modelOverrides: { "gemini-3-pro-high": { contextWindow: 222_222 } } },
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const collapsed = registry.find("google-antigravity", "gemini-3-pro");
+			expect(collapsed?.contextWindow).toBe(222_222);
+			// The retired selector resolves to the same collapsed model.
+			expect(registry.find("google-antigravity", "gemini-3-pro-high")?.id).toBe("gemini-3-pro");
+		});
+
+		test("suppressed selectors keyed by retired variant ids bind to the collapsed id", () => {
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			registry.suppressSelector("google-antigravity/gemini-3-pro-high", Date.now() + 60_000);
+			expect(registry.isSelectorSuppressed("google-antigravity/gemini-3-pro")).toBe(true);
+			expect(registry.isSelectorSuppressed("google-antigravity/gemini-3-pro-low")).toBe(true);
+			expect(registry.isSelectorSuppressed("google-antigravity/gemini-2.5-pro")).toBe(false);
+		});
 	});
 });

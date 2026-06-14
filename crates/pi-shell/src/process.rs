@@ -805,7 +805,7 @@ mod platform {
 			}
 		}
 
-		fn as_raw(&self) -> Handle {
+		const fn as_raw(&self) -> Handle {
 			self.raw as Handle
 		}
 	}
@@ -932,7 +932,7 @@ mod platform {
 			unsafe { TerminateProcess(self.handle.as_raw(), 1) != 0 }
 		}
 
-		pub const fn group_id(&self) -> Option<i32> {
+		pub const fn group_id() -> Option<i32> {
 			None
 		}
 
@@ -1047,7 +1047,7 @@ mod platform {
 	}
 
 	fn read_remote_unicode_string(handle: Handle, value: UnicodeString) -> Option<String> {
-		if value.length == 0 || value.buffer == 0 || value.length % 2 != 0 {
+		if value.length == 0 || value.buffer == 0 || !value.length.is_multiple_of(2) {
 			return None;
 		}
 		let code_units = usize::from(value.length) / size_of::<u16>();
@@ -1135,7 +1135,7 @@ mod platform {
 		OwnedHandle::from_raw(snapshot)
 	}
 
-	fn process_entry() -> PROCESSENTRY32W {
+	const fn process_entry() -> PROCESSENTRY32W {
 		PROCESSENTRY32W {
 			dwSize:              mem::size_of::<PROCESSENTRY32W>() as u32,
 			cntUsage:            0,
@@ -1259,16 +1259,19 @@ impl Process {
 	}
 
 	/// Operating-system process identifier for this process reference.
+	#[must_use]
 	pub const fn pid(&self) -> i32 {
 		self.inner.pid()
 	}
 
 	/// Parent process id for this process, when available.
+	#[must_use]
 	pub fn ppid(&self) -> Option<i32> {
 		self.inner.parent_pid()
 	}
 
 	/// Launch arguments for this process.
+	#[must_use]
 	pub fn args(&self) -> Vec<String> {
 		self.inner.args()
 	}
@@ -1279,11 +1282,19 @@ impl Process {
 	/// signal abstraction, so the `signal` argument is ignored and the entire
 	/// tree is hard-killed via `TerminateProcess`. Defaults to the POSIX
 	/// hard-kill signal.
+	#[must_use]
 	pub fn kill_tree(&self, signal: Option<i32>) -> u32 {
 		self.signal_tree(signal.unwrap_or(KILL_SIGNAL))
 	}
 
 	/// Process group id for this process, when supported by the platform.
+	#[cfg(target_os = "windows")]
+	#[must_use]
+	pub const fn group_id(&self) -> Option<i32> {
+		platform::Process::group_id()
+	}
+	#[cfg(not(target_os = "windows"))]
+	#[must_use]
 	pub fn group_id(&self) -> Option<i32> {
 		self.inner.group_id()
 	}
@@ -1299,6 +1310,7 @@ impl Process {
 	}
 
 	/// Current status of this process reference.
+	#[must_use]
 	pub fn status(&self) -> ProcessStatus {
 		self.inner.status()
 	}
@@ -1351,7 +1363,7 @@ impl Process {
 		// If self leads its own process group, also signal the group — this catches
 		// grandchildren reparented to init when their immediate parent died inside
 		// the descendant walk.
-		if let Some(pgid) = self.inner.group_id()
+		if let Some(pgid) = self.group_id()
 			&& pgid == self.inner.pid()
 		{
 			let _ = kill_process_group(pgid, signal);
@@ -1463,6 +1475,7 @@ async fn wait_for_exit(
 /// Send `signal` to the process group `pgid`.
 /// Returns false when process groups are unsupported on the platform.
 #[allow(clippy::missing_const_for_fn, reason = "Dispatches to platform-specific implementation")]
+#[must_use]
 pub fn kill_process_group(pgid: i32, signal: i32) -> bool {
 	// Defense in depth: refuse to deliver a signal to the harness's own
 	// process group. Doing so terminates the harness along with the targets.
@@ -1510,6 +1523,7 @@ pub struct TerminationTargets {
 
 impl TerminationTargets {
 	/// Create an empty target set.
+	#[must_use]
 	pub fn new() -> Self {
 		Self::default()
 	}
@@ -1533,6 +1547,7 @@ impl TerminationTargets {
 	}
 
 	/// True when no targets have been recorded.
+	#[must_use]
 	pub const fn is_empty(&self) -> bool {
 		self.pgids.is_empty() && self.processes.is_empty()
 	}

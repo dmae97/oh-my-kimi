@@ -37,9 +37,9 @@ export interface ThinkingConfig {
 	/** Optional default effort applied when this model is selected. Falls back to global default if absent. */
 	defaultLevel?: Effort;
 	/**
-	 * Effort → wire-value remap for `anthropic-adaptive` transports, baked at
-	 * build time (4-tier legacy scale vs the 5-tier Opus 4.7+/Fable/Mythos
-	 * scale). Identity for efforts the map omits.
+	 * Effort → provider wire-value remap, baked at build time. Identity for
+	 * efforts the map omits. Used by Anthropic adaptive thinking, OpenAI-
+	 * compatible `reasoning_effort`, and Responses-style reasoning params.
 	 */
 	effortMap?: Partial<Record<Effort, string>>;
 	/**
@@ -47,6 +47,28 @@ export interface ThinkingConfig {
 	 * 5). Also implies native interleaved thinking — no beta header needed.
 	 */
 	supportsDisplay?: boolean;
+	/**
+	 * Per-effort upstream wire-id routing for collapsed effort-tier variants
+	 * (`variant-collapse.ts`). Keyed by pi effort; `"off"` applies when
+	 * thinking is disabled. Missing keys fall back to `requestModelId ?? id`.
+	 */
+	effortRouting?: Readonly<Partial<Record<Effort | "off", string>>>;
+	/**
+	 * When true, a thinking-off request MUST explicitly suppress thinking on
+	 * the wire (google-level: `thinkingLevel: "MINIMAL"` + `includeThoughts:
+	 * false`; budget: `thinkingBudget: 0`) instead of omitting thinkingConfig —
+	 * Cloud Code Assist re-applies the per-id baked server default when the
+	 * config is absent.
+	 */
+	suppressWhenOff?: boolean;
+	/**
+	 * Reasoning is mandatory upstream: the endpoint rejects disabled or
+	 * omitted thinking (e.g. OpenRouter Gemini 3.x — "Reasoning is mandatory
+	 * for this endpoint and cannot be disabled"). Request mapping clamps
+	 * thinking-off to the lowest supported effort unless `suppressWhenOff`
+	 * provides an explicit wire off-path.
+	 */
+	requiresEffort?: boolean;
 }
 
 // `Provider` is any provider-id string; `KnownProvider` (re-exported above) enumerates
@@ -165,6 +187,12 @@ export interface OpenAICompat {
 	/** Whether the provider supports the `tool_choice` parameter. Default: true. */
 	supportsToolChoice?: boolean;
 	/**
+	 * Whether forced `tool_choice` values (`"required"` or named tools) are accepted.
+	 * When false, request builders keep tools available but downgrade forced choices
+	 * to provider-default auto selection. Default: true.
+	 */
+	supportsForcedToolChoice?: boolean;
+	/**
 	 * Drop reasoning fields (`reasoning_effort`, OpenRouter `reasoning`) for
 	 * the request when `tool_choice` forces a tool call. Mirrors the Anthropic
 	 * `disableThinkingIfToolChoiceForced` rule for backends like Kimi that
@@ -204,6 +232,14 @@ export interface OpenAICompat {
 	alwaysSendMaxTokens?: boolean;
 	/** Whether Responses-API tool-call/result history must be strictly paired. Default: auto-detected (Azure OpenAI, GitHub Copilot). */
 	strictResponsesPairing?: boolean;
+	/**
+	 * Append a trailing `# Juice: 0 !important` developer item when the caller
+	 * did not request reasoning, suppressing default reasoning on models that
+	 * cannot disable it via request params (Responses APIs only; see
+	 * https://community.openai.com/t/need-reasoning-false-option-for-gpt-5/1351588/7).
+	 * Default: auto-detected (GPT-5-family model names).
+	 */
+	requiresJuiceZeroHack?: boolean;
 	/**
 	 * Compat deltas applied when a request actually engages thinking mode
 	 * (reasoning requested and not disabled, model reasoning-capable, and not
@@ -321,6 +357,7 @@ export type ResolvedOpenAICompat = Required<
 		| "cacheControlFormat"
 		| "thinkingKeep"
 		| "strictResponsesPairing"
+		| "requiresJuiceZeroHack"
 		| "whenThinking"
 	>
 > & {
@@ -346,6 +383,7 @@ export interface ResolvedOpenAIResponsesCompat {
 	supportsReasoningEffort: boolean;
 	supportsLongPromptCacheRetention: boolean;
 	strictResponsesPairing: boolean;
+	requiresJuiceZeroHack: boolean;
 	reasoningEffortMap: Partial<Record<Effort, string>>;
 }
 
@@ -383,6 +421,15 @@ export type CompatOf<TApi extends Api> = TApi extends "openai-completions"
 // Model interface for the unified model system
 export interface Model<TApi extends Api = Api> {
 	id: string;
+	/**
+	 * Model id to send on the wire when it differs from `id`. Used by catalog
+	 * variants that present one upstream model under several local entries —
+	 * e.g. GitHub Copilot long-context variants (`claude-opus-4.7-1m` requests
+	 * upstream `claude-opus-4.7`; the tier is a client-side context budget, not
+	 * a served model id). Providers MUST serialize `requestModelId ?? id`;
+	 * everything local (selection, caching, usage attribution) keys on `id`.
+	 */
+	requestModelId?: string;
 	name: string;
 	api: TApi;
 	provider: Provider;
@@ -397,8 +444,8 @@ export interface Model<TApi extends Api = Api> {
 	};
 	/** Premium Copilot requests charged per user-initiated request (defaults to 1). */
 	premiumMultiplier?: number;
-	contextWindow: number;
-	maxTokens: number;
+	contextWindow: number | null;
+	maxTokens: number | null;
 	/**
 	 * When `true`, providers MUST omit `max_output_tokens` (Responses) /
 	 * `max_tokens` / `max_completion_tokens` (Completions) from the outbound

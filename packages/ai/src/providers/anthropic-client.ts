@@ -21,6 +21,7 @@
  *   with up to 25% jitter).
  */
 import { scheduler } from "node:timers/promises";
+import { ProviderHttpError } from "../errors";
 import type { FetchImpl } from "../types";
 import type { MessageCreateParamsStreaming } from "./anthropic-wire";
 
@@ -56,6 +57,8 @@ export type AnthropicFetchOptions = RequestInit & {
 		cert?: string;
 		key?: string;
 	};
+	/** Bun extension: see {@link FetchWithRetryOptions.timeout} — `false` disables Bun's native fetch TTFT timeout (issue #2422). */
+	timeout?: number | false;
 };
 
 export interface AnthropicClientOptions {
@@ -73,16 +76,13 @@ export interface AnthropicClientOptions {
 }
 
 /** Non-2xx response from the Anthropic API. */
-export class AnthropicApiError extends Error {
-	readonly status: number;
-	readonly headers: Headers;
+export class AnthropicApiError extends ProviderHttpError {
+	declare readonly headers: Headers;
 	readonly requestId: string | null;
 
 	constructor(status: number, message: string, headers: Headers) {
-		super(message);
+		super(message, status, { headers });
 		this.name = "AnthropicApiError";
-		this.status = status;
-		this.headers = headers;
 		this.requestId = headers.get("request-id");
 	}
 

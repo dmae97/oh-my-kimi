@@ -2,6 +2,7 @@
 
 use crate::minimizer::{MinimizerCtx, MinimizerOutput, primitives};
 
+#[must_use]
 pub fn filter(_ctx: &MinimizerCtx<'_>, input: &str, _exit_code: i32) -> MinimizerOutput {
 	let stripped = primitives::strip_ansi(input);
 	let deduped = primitives::dedup_consecutive_lines(&stripped);

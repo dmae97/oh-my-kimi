@@ -1,6 +1,6 @@
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { validateToolCall } from "@oh-my-pi/pi-ai";
-import * as z from "zod/v4";
+import { z } from "zod/v4";
 import type { ChangelogCategory, ConventionalAnalysis } from "./types";
 import { extractTextContent, extractToolCall, normalizeAnalysis, parseJsonPayload } from "./utils";
 

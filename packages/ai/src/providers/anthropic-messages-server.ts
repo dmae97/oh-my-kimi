@@ -30,7 +30,7 @@ import {
  * omp AssistantMessage[Stream] → Anthropic-shaped JSON / SSE.
  */
 
-import type { AuthGatewayParsedRequest as ParsedRequest } from "../auth-gateway/types";
+import type { AuthGatewayStreamControl, AuthGatewayParsedRequest as ParsedRequest } from "../auth-gateway/types";
 
 export type { ParsedRequest };
 
@@ -503,8 +503,15 @@ const ZERO_WIRE_USAGE: Record<string, unknown> = {
 export function encodeStream(
 	events: AssistantMessageEventStream,
 	requestedModelId: string,
+	_options?: ParsedRequest["options"],
+	control?: AuthGatewayStreamControl,
 ): ReadableStream<Uint8Array> {
 	let pingTimer: NodeJS.Timeout | undefined;
+	let cancelled = control?.signal?.aborted === true;
+	const markCancelled = () => {
+		cancelled = true;
+	};
+	control?.signal?.addEventListener("abort", markCancelled, { once: true });
 	const stopPings = () => {
 		if (pingTimer !== undefined) {
 			clearInterval(pingTimer);
@@ -548,6 +555,10 @@ export function encodeStream(
 
 			pingTimer = setInterval(() => {
 				try {
+					if (cancelled) {
+						stopPings();
+						return;
+					}
 					controller.enqueue(sseFrame("ping", { type: "ping" }));
 				} catch {
 					// Controller already closed/errored (client gone); stop the timer.
@@ -556,8 +567,12 @@ export function encodeStream(
 			}, STREAM_PING_INTERVAL_MS);
 
 			try {
+				if (cancelled) {
+					controller.close();
+					return;
+				}
 				for await (const ev of events) {
-					if ("partial" in ev) lastPartial = ev.partial;
+					if (cancelled) return;
 					switch (ev.type) {
 						case "start":
 							ensureStart(ev.partial);
@@ -691,18 +706,24 @@ export function encodeStream(
 				controller.enqueue(sseFrame("message_stop", { type: "message_stop" }));
 				controller.close();
 			} catch (err) {
-				controller.enqueue(
-					sseFrame("error", {
-						type: "error",
-						error: { type: "api_error", message: err instanceof Error ? err.message : String(err) },
-					}),
-				);
-				controller.close();
+				if (!cancelled) {
+					controller.enqueue(
+						sseFrame("error", {
+							type: "error",
+							error: { type: "api_error", message: err instanceof Error ? err.message : String(err) },
+						}),
+					);
+					controller.close();
+				}
 			} finally {
+				control?.signal?.removeEventListener("abort", markCancelled);
 				stopPings();
 			}
 		},
-		cancel() {
+		cancel(reason) {
+			cancelled = true;
+			control?.signal?.removeEventListener("abort", markCancelled);
+			control?.onCancel?.(reason);
 			stopPings();
 		},
 	});

@@ -124,9 +124,6 @@ export default class Index extends Command {
 		export: Flags.string({
 			description: "Export session file to HTML and exit",
 		}),
-		"list-models": Flags.string({
-			description: "List available models (with optional fuzzy search)",
-		}),
 		"no-title": Flags.boolean({
 			description: "Disable title auto-generation",
 		}),

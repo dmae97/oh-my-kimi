@@ -3,7 +3,7 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
-import { buildSessionContext, type SessionContext } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { buildSessionContext, type SessionContext } from "@oh-my-pi/pi-coding-agent/session/session-context";
 import { type Component, Container } from "@oh-my-pi/pi-tui";
 
 function renderLastLine(container: Container, width = 120): string {
@@ -46,7 +46,15 @@ function createInitialRenderHarness(): { ctx: InteractiveModeContext; helpers: U
 			retryAttempt: 0,
 			getToolByName: () => undefined,
 			buildTranscriptSessionContext: () => buildSessionContext([]),
+			sessionManager: {
+				buildSessionContext: () => buildSessionContext([]),
+				getEntries: () => [],
+			},
 		},
+		get viewSession() {
+			return (this as typeof ctx).session;
+		},
+		clearTransientSessionUi: () => {},
 		toolOutputExpanded: false,
 		hideThinkingBlock: false,
 	} as unknown as InteractiveModeContext;

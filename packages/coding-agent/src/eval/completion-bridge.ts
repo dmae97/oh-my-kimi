@@ -14,7 +14,7 @@
 import { instrumentedCompleteSimple, resolveTelemetry } from "@oh-my-pi/pi-agent-core";
 import { type Api, Effort, type Model, type Tool } from "@oh-my-pi/pi-ai";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
-import * as z from "zod/v4";
+import { z } from "zod/v4";
 import { extractTextContent, extractToolCall, parseJsonPayload } from "../commit/utils";
 
 import {
@@ -160,11 +160,7 @@ export async function runEvalCompletion(
 				tools,
 			},
 			{
-				apiKey: registry.resolver(model.provider, {
-					sessionId: options.session.getSessionId?.() ?? undefined,
-					baseUrl: model.baseUrl,
-					modelId: model.id,
-				}),
+				apiKey: registry.resolver(model, options.session.getSessionId?.() ?? undefined),
 				signal: options.signal,
 				reasoning: reasoningForTier(tier, model),
 				toolChoice: schema ? { type: "tool", name: STRUCTURED_TOOL_NAME } : undefined,

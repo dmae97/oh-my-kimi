@@ -1,6 +1,6 @@
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { logger, untilAborted } from "@oh-my-pi/pi-utils";
-import * as z from "zod/v4";
+import { z } from "zod/v4";
 import { formatCurrentTime, formatMemories } from "../hindsight/content";
 import recallDescription from "../prompts/tools/recall.md" with { type: "text" };
 import type { ToolSession } from ".";
@@ -43,6 +43,7 @@ export class MemoryRecallTool implements AgentTool<typeof memoryRecallSchema> {
 						return {
 							content: [{ type: "text", text: "No relevant memories found." }],
 							details: {},
+							useless: true,
 						};
 					}
 					const formatted = state.formatScopedRecallWithIds(results);
@@ -79,6 +80,7 @@ export class MemoryRecallTool implements AgentTool<typeof memoryRecallSchema> {
 					return {
 						content: [{ type: "text", text: "No relevant memories found." }],
 						details: {},
+						useless: true,
 					};
 				}
 				const formatted = formatMemories(results);

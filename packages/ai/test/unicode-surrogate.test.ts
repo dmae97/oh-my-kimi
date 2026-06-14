@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { complete } from "@oh-my-pi/pi-ai/stream";
 import type { Api, Context, Model, OptionsForApi, ToolResultMessage } from "@oh-my-pi/pi-ai/types";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
-import * as z from "zod/v4";
+import { z } from "zod/v4";
 import { e2eApiKey, resolveApiKey } from "./oauth";
 
 // Empty schema for test tools - must be proper OBJECT type for Cloud Code Assist

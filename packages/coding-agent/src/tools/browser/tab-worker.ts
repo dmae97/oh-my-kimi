@@ -981,7 +981,7 @@ export class WorkerCore {
 		}
 		const resized = await resizeImage(
 			{ type: "image", data: buffer.toBase64(), mimeType: captureMime },
-			{ maxWidth: 1024, maxHeight: 1024, maxBytes: 150 * 1024, jpegQuality: 70 },
+			{ maxWidth: 1024, maxHeight: 1024, maxBytes: 150 * 1024, jpegQuality: 70, excludeWebP: session.excludeWebP },
 		);
 		const saveFullRes = !!(explicitPath || session.browserScreenshotDir);
 		const savedBuffer = saveFullRes ? buffer : resized.buffer;

@@ -8,7 +8,7 @@ import path from "node:path";
 import type { AgentEvent, AgentIdentity, AgentTelemetryConfig, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { recordHandoff, resolveTelemetry } from "@oh-my-pi/pi-agent-core";
 import type { Usage } from "@oh-my-pi/pi-ai";
-import { logger, prompt, untilAborted } from "@oh-my-pi/pi-utils";
+import { logger, popLoopPhase, prompt, pushLoopPhase, untilAborted } from "@oh-my-pi/pi-utils";
 import type { Rule } from "../capability/rule";
 import { ModelRegistry } from "../config/model-registry";
 import { resolveModelOverrideWithAuthFallback } from "../config/model-resolver";
@@ -56,7 +56,9 @@ import {
 	type AgentProgress,
 	MAX_OUTPUT_BYTES,
 	MAX_OUTPUT_LINES,
+	oneLineLabel,
 	type ReviewFinding,
+	resolveSubagentDisplayName,
 	type SingleResult,
 	TASK_SUBAGENT_EVENT_CHANNEL,
 	TASK_SUBAGENT_LIFECYCLE_CHANNEL,
@@ -123,7 +125,10 @@ function renderIrcPeerRoster(selfId: string): string {
 		.list()
 		.filter(ref => ref.id !== selfId && ref.status !== "aborted");
 	if (peers.length === 0) return "- (no other agents)";
-	const lines = peers.map(peer => `- \`${peer.id}\` — ${peer.displayName} (${peer.kind}, ${peer.status})`);
+	const lines = peers.map(
+		peer =>
+			`- \`${peer.id}\` — ${peer.displayName} (${peer.kind}, ${peer.status})${peer.activity ? `: ${peer.activity}` : ""}`,
+	);
 	if (peers.some(peer => peer.status === "idle" || peer.status === "parked")) {
 		lines.push("Idle/parked peers are not gone: messaging them wakes (or revives) them.");
 	}
@@ -192,9 +197,18 @@ export interface ExecutorOptions {
 	 */
 	planReference?: { path: string; content: string };
 	description?: string;
+	/** Specialist role/expertise for this spawn; drives the system-prompt preamble, display name, and telemetry identity. */
+	role?: string;
 	index: number;
 	id: string;
 	parentToolCallId?: string;
+	/**
+	 * Spawn runs as a detached background job (parent turn not blocked on it).
+	 * Rides the subagent lifecycle/progress payloads so HUD-style surfaces can
+	 * skip spawns the transcript already renders inline. See
+	 * {@link SubagentLifecyclePayload.detached}.
+	 */
+	detached?: boolean;
 	modelOverride?: string | string[];
 	/**
 	 * Active model selector of the parent session, used as an auth-aware fallback
@@ -656,6 +670,7 @@ interface RunMonitorArgs {
 	onProgress?: (progress: AgentProgress) => void;
 	eventBus?: EventBus;
 	parentToolCallId?: string;
+	detached?: boolean;
 	sessionFile?: string;
 	/** Soft assistant-request budget; 0 disables the guard. */
 	softRequestBudget: number;
@@ -829,6 +844,9 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 	const emitProgressNow = () => {
 		progress.durationMs = Date.now() - startTime;
 		onProgress?.({ ...progress });
+		const activityGist =
+			progress.lastIntent ?? (progress.currentTool ? `running ${progress.currentTool}` : undefined);
+		if (activityGist) AgentRegistry.global().setActivity(id, activityGist);
 		if (args.eventBus) {
 			args.eventBus.emit(TASK_SUBAGENT_PROGRESS_CHANNEL, {
 				index,
@@ -836,6 +854,7 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 				agentSource: agent.source,
 				task,
 				parentToolCallId: args.parentToolCallId,
+				detached: args.detached,
 				assignment,
 				progress: { ...progress },
 				sessionFile: args.sessionFile,
@@ -1189,6 +1208,9 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 				return;
 			}
 			if (isAgentEvent(event)) {
+				// Breadcrumb the synchronous subagent event handling so the loop
+				// watchdog can attribute any block to this in-process subagent.
+				pushLoopPhase(`subagent:${id}`);
 				try {
 					processEvent(event);
 				} catch (err) {
@@ -1196,6 +1218,8 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 						error: err instanceof Error ? err.message : String(err),
 					});
 					requestAbort("terminate");
+				} finally {
+					popLoopPhase();
 				}
 			}
 		});
@@ -1413,6 +1437,7 @@ interface FinalizeRunArgs {
 	artifactsDir?: string;
 	eventBus?: EventBus;
 	parentToolCallId?: string;
+	detached?: boolean;
 	sessionFile?: string;
 	startTime: number;
 }
@@ -1434,16 +1459,24 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 	const yieldItems = progress.extractedToolData?.yield as YieldItem[] | undefined;
 	const reportFindingDetails = progress.extractedToolData?.report_finding as ReportFindingDetails[] | undefined;
 	const reportFindings: ReviewFinding[] | undefined = reportFindingDetails?.map(toReviewFinding);
-	const finalized = finalizeSubprocessOutput({
-		rawOutput,
-		exitCode,
-		stderr,
-		doneAborted: Boolean(done.aborted),
-		signalAborted: Boolean(signal?.aborted),
-		yieldItems,
-		reportFindings,
-		outputSchema: args.outputSchema,
-	});
+	// Breadcrumb the synchronous yield-payload shaping (O(rawOutput)) so a block
+	// here is attributed to this subagent rather than logged as "unknown".
+	pushLoopPhase(`subagent:${id}`);
+	let finalized: FinalizeSubprocessOutputResult;
+	try {
+		finalized = finalizeSubprocessOutput({
+			rawOutput,
+			exitCode,
+			stderr,
+			doneAborted: Boolean(done.aborted),
+			signalAborted: Boolean(signal?.aborted),
+			yieldItems,
+			reportFindings,
+			outputSchema: args.outputSchema,
+		});
+	} finally {
+		popLoopPhase();
+	}
 	rawOutput = finalized.rawOutput;
 	exitCode = finalized.exitCode;
 	stderr = finalized.stderr;
@@ -1511,6 +1544,7 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 			id,
 			agent: agent.name,
 			parentToolCallId: args.parentToolCallId,
+			detached: args.detached,
 			agentSource: agent.source,
 			description: args.description,
 			status: progress.status as "completed" | "failed" | "aborted",
@@ -1607,6 +1641,12 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		agent.readSummarize === false ? { "read.summarize.enabled": false } : undefined,
 	);
 	const maxRecursionDepth = settings.get("task.maxRecursionDepth") ?? 2;
+	// Tailored specialist identity for this spawn. `subagentRole` is the full
+	// (trimmed) role text fed to the system-prompt preamble; `subagentDisplayName`
+	// is the label-normalized form the registry/roster show, falling back to the
+	// agent type name when no role was given.
+	const subagentRole = options.role?.trim() || undefined;
+	const subagentDisplayName = resolveSubagentDisplayName(options.role, agent.name);
 	const maxRuntimeMs = Math.max(
 		0,
 		Math.trunc(Number(options.maxRuntimeMs ?? settings.get("task.maxRuntimeMs") ?? 0) || 0),
@@ -1677,6 +1717,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		onProgress,
 		eventBus: options.eventBus,
 		parentToolCallId: options.parentToolCallId,
+		detached: options.detached,
 		sessionFile: subtaskSessionFile,
 		softRequestBudget,
 		maxRuntimeMs,
@@ -1804,7 +1845,11 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			// carry the subagent's own agent identity, and use the subagent's
 			// own session id for `gen_ai.conversation.id`.
 			const subagentAgentIdentity: AgentIdentity | undefined = options.parentTelemetry
-				? { id, name: agent.name, description: agent.description }
+				? {
+						id,
+						name: subagentDisplayName,
+						description: subagentRole ? oneLineLabel(subagentRole) : agent.description,
+					}
 				: undefined;
 			const subagentTelemetry: AgentTelemetryConfig | undefined =
 				options.parentTelemetry && subagentAgentIdentity
@@ -1854,6 +1899,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				systemPrompt: defaultPrompt => {
 					const subagentPrompt = prompt.render(subagentSystemPromptTemplate, {
 						agent: agent.systemPrompt,
+						role: subagentRole ? oneLineLabel(subagentRole) : "",
 						context: options.context?.trim() ?? "",
 						planReference: options.planReference?.content ?? "",
 						planReferencePath: options.planReference?.path ?? "",
@@ -1874,7 +1920,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				parentMnemopiSessionState: options.parentMnemopiSessionState,
 				parentTaskPrefix: id,
 				agentId: id,
-				agentDisplayName: agent.name,
+				agentDisplayName: subagentDisplayName,
 				enableLsp: lspEnabled,
 				skipPythonPreflight,
 				enableMCP,
@@ -1921,6 +1967,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					id,
 					agent: agent.name,
 					parentToolCallId: options.parentToolCallId,
+					detached: options.detached,
 					agentSource: agent.source,
 					description: options.description,
 					status: "started",
@@ -1958,7 +2005,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			}
 
 			const extensionRunner = session.extensionRunner;
-			const pendingExtensionMessages: Promise<void>[] = [];
+			const pendingExtensionMessages: Promise<unknown>[] = [];
 			if (extensionRunner) {
 				extensionRunner.initialize(
 					{
@@ -2127,6 +2174,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		artifactsDir: options.artifactsDir,
 		eventBus: options.eventBus,
 		parentToolCallId: options.parentToolCallId,
+		detached: options.detached,
 		sessionFile: subtaskSessionFile,
 		startTime,
 	});

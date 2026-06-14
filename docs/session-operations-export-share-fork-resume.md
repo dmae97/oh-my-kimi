@@ -18,7 +18,7 @@ This document describes operator-visible behavior for session export/share/fork/
 | `/dump`                                 | Interactive slash command | No                                    | No                                                                                 | Clipboard text                                                  |
 | `/export [path]`                        | Interactive slash command | No                                    | No                                                                                 | HTML file                                                       |
 | `--export <session.jsonl> [outputPath]` | CLI startup fast-path     | No runtime session mutation           | No active session; reads target file                                               | HTML file                                                       |
-| `/share`                                | Interactive slash command | No                                    | No                                                                                 | Temp HTML + share URL/gist                                      |
+| `/share`                                | Interactive slash command | No                                    | No                                                                                 | Encrypted share link (gist or share server); temp HTML only for custom handlers |
 | `/fresh`                               | Interactive slash command | Yes (provider-facing in-memory id/state only) | No; keeps current session file/header                                               | None                                                            |
 | `/fork`                                 | Interactive slash command | Yes (active session identity changes) | Creates new session file and switches current session to it (persistent mode only) | Copies artifact directory to new session namespace when present |
 | `--fork <id\|path>`                     | CLI startup               | Yes after session creation            | Creates a new session fork from the selected source into current cwd/session dir   | None                                                            |
@@ -33,7 +33,7 @@ This document describes operator-visible behavior for session export/share/fork/
 
 Flow:
 
-1. `InputController` routes `/export...` to `CommandController.handleExportCommand`.
+1. The builtin slash-command registry (`src/slash-commands/builtin-registry.ts`) routes `/export...` to `CommandController.handleExportCommand` in the TUI.
 2. The command splits on whitespace and uses only the first argument after `/export` as `outputPath`.
 3. `AgentSession.exportToHtml()` calls `exportSessionToHtml(sessionManager, state, { outputPath, themeName })`.
 4. On success, UI shows path and opens the file in browser.
@@ -42,6 +42,8 @@ Behavior details:
 
 - `--copy`, `clipboard`, and `copy` arguments are explicitly rejected with a warning to use `/dump`.
 - Export embeds session header/entries/leaf plus current `systemPrompt` and tool descriptions from agent state.
+- Subagent transcripts stored next to the session file (`<session>/<AgentId>.jsonl`, recursively for nested spawns) are embedded as `subSessions` (`collectSubSessions` in `src/export/html/index.ts`; disable with `includeSubSessions: false` in `ExportOptions`). In the page, agent ids in task tool cards open a breadcrumbed sub-session overlay.
+- Tool calls render through the `<omp-tool-view>` web component — the React per-tool renderers shared with collab-web (`packages/collab-web/src/tool-render/`), prebuilt into `src/export/html/tool-views.generated.js` by `bun --cwd=packages/collab-web run build:tool-views`.
 - No session entries are appended during export.
 
 Caveat:
@@ -84,15 +86,10 @@ No session persistence changes are made by dumping.
 
 ## Share
 
-`/share` is interactive-only and always starts by exporting current session to a temp HTML file.
+`/share` publishes an end-to-end encrypted snapshot of the session and prints
+a viewer link. Implementation: [`../packages/coding-agent/src/export/share.ts`](../packages/coding-agent/src/export/share.ts).
 
-### Phase 1: temp export
-
-- Temp file path: `${os.tmpdir()}/${Snowflake.next()}.html`
-- Uses `session.exportToHtml(tmpFile)`
-- If export fails (notably in-memory sessions), share ends with error.
-
-### Phase 2: custom share handler (if present)
+### Phase 1: custom share handler (if present)
 
 `loadCustomShare()` checks `~/.omp/agent` for first existing candidate:
 
@@ -104,36 +101,57 @@ Requirements:
 
 - Module must default-export a function `(htmlPath) => Promise<CustomShareResult | string | undefined>`.
 
-If present and valid:
+If present and valid, the legacy contract is preserved: the session is
+exported to a temp HTML file (`${os.tmpdir()}/${Snowflake.next()}.html`),
+the handler receives its path, and the temp file is removed afterwards.
+Handler result interpretation:
 
-- UI enters `Sharing...` loader state.
-- Handler result interpretation:
-  - string => treated as URL, shown and opened
-  - object => `url` and/or `message` shown; `url` opened
-  - `undefined`/falsy => generic `Session shared`
-- Temp file is removed after completion.
+- string => treated as URL, shown and opened
+- object => `url` and/or `message` shown; `url` opened
+- `undefined`/falsy => generic `Session shared`
 
 Critical fallback behavior:
 
 - If custom handler exists but loading fails, command errors and returns.
 - If custom handler executes and throws, command errors and returns.
-- In both failure cases, it **does not** fall back to GitHub gist.
-- Gist fallback happens only when no custom share script exists.
+- In both failure cases, it **does not** fall back to the default flow.
+- The default flow runs only when no custom share script exists.
 
-### Phase 3: default gist fallback
+### Phase 2: default encrypted share
 
-Only when no custom share handler is found:
+Only when no custom share handler is found (`shareSession()`):
 
-1. Validates `gh auth status`.
-2. Shows `Creating gist...` loader.
-3. Runs `gh gist create --public=false <tmpFile>`.
-4. Parses gist URL, derives gist id, builds preview URL `https://gistpreview.github.io/?<id>`.
-5. Shows both preview and gist URLs; opens preview.
+1. Builds the session snapshot (`header`, `entries`, `leafId`, plus current
+   `systemPrompt` and tool descriptions from agent state).
+2. If `share.redactSecrets` is enabled (default) and secrets are configured
+   (`secrets.*`), the secret obfuscator deep-walks every string in the
+   snapshot, replacing configured/discovered secrets with placeholders.
+3. The JSON is gzipped and sealed with a fresh AES-256-GCM key
+   (`[12B IV][ciphertext+tag]`).
+4. Upload, first match wins:
+   - **Secret gist** — when `gh` is installed and authenticated, the sealed
+     blob is pushed base64-encoded as `session.ompshare.txt` (budget 5 MB
+     sealed; gist raw fetches cap at 10 MB).
+   - **Share server** — `POST <share.serverUrl>` (default
+     `https://my.omp.sh/s`) with the raw blob, capped at 1 MB. Oversized
+     snapshots are trimmed until they fit: inline images first, then long
+     strings (32 KB → 8 KB → 2 KB → 512 B caps), then oldest entries.
+5. The link is `<share.serverUrl>/<id>#<base64url key>` in both cases. The
+   viewer page served there fetches the blob (hex ids via the GitHub gist
+   API, anything else from the server's blob store) and decrypts it
+   client-side; the key lives only in the URL fragment and never appears in
+   any HTTP request.
+
+The UI reports the share URL (plus the underlying gist URL and a truncation
+note when applicable). Headless `/share` prints the same lines. Unlike
+`/export`, `/share` works for in-memory (`--no-session`) sessions: the
+snapshot is built from live entries, no session file required.
 
 Cancellation/abort semantics in share:
 
 - Loader has `onAbort` hook that restores editor UI and reports `Share cancelled`.
-- The underlying `gh gist create` command is not passed an abort signal in this code path; cancellation is UI-level and checked after command returns.
+- The upload itself is not aborted mid-flight; cancellation is UI-level and
+  checked after the upload returns.
 
 ## Fork
 
@@ -187,21 +205,20 @@ Startup `--fork` is resolved before normal session creation:
 
 Flow:
 
-1. Opens session selector populated via `SessionManager.list(currentCwd, currentSessionDir)`.
+1. Opens session selector populated via `SessionManager.list(currentCwd, currentSessionDir)`. If the current folder has no sessions, `SessionManager.listAll()` is preloaded and the picker opens directly in all-projects scope.
 2. On selection, `SelectorController.handleResumeSession(sessionPath)` calls `session.switchSession(sessionPath)`.
-3. UI clears/rebuilds chat and todos, then reports `Resumed session`.
+3. UI clears/rebuilds chat and todos, then reports `Resumed session` (or `Resumed session in <dir>` when the resumed session belongs to another project, in which case the process cwd and cwd-derived caches are re-pointed via `applyCwdChange`).
 
 Notes:
 
-- This picker only lists sessions in the current session directory scope.
-- It does not use global cross-project search.
+- The picker starts in current-folder scope; Tab toggles to all-projects scope (lazily loading `SessionManager.listAll()` on first toggle, cached afterwards).
 
 ## CLI `--resume`
 
 ### `--resume` (no value)
 
-- `main.ts` lists sessions for current cwd/sessionDir and opens picker.
-- Selected path is opened with `SessionManager.open(selectedPath)` before session creation.
+- `main.ts` lists sessions for current cwd/sessionDir and opens picker. When the current folder is empty, it falls back to `SessionManager.listAll()` and opens the picker in all-projects scope; `No sessions found` is printed only when the global list is also empty.
+- Selected path is opened with `SessionManager.open(selectedPath)` before session creation. Selecting a session from another project first switches the process into that project's directory and reloads cwd-scoped settings/caches.
 
 ### `--resume <value>`
 
@@ -253,6 +270,7 @@ This is startup-only behavior; there is no interactive `/continue` slash command
 12. Restore model (if available in current registry).
 13. Restore or initialize thinking level and service tier.
 14. Reconnect agent event subscription.
+15. Run the registered session-switch reconciler, if any (interactive mode registers `#reconcileModeFromSession()` via `setSessionSwitchReconciler` to re-enter persisted modes such as plan); reconciler errors are logged, not fatal.
 
 If any step after the capture fails, `switchSession()` restores the captured state and reconnects the previous agent subscription before rethrowing.
 
@@ -290,14 +308,14 @@ These callbacks are observational; they do not cancel switch/fork.
 - `/fork` is blocked while streaming (user must wait/abort current response first).
 - `/resume` selector can be cancelled by user closing selector.
 - Cross-project `--resume <id>` can be cancelled by declining fork prompt.
-- `/share` has UI abort path (`Share cancelled`) for gist flow; it does not wire process-kill semantics for `gh gist create` in this code path.
+- `/share` has a UI abort path (`Share cancelled`); the upload itself is not killed mid-flight.
 
 ## Non-persistent (in-memory) session behavior
 
 When session manager is created with `SessionManager.inMemory()` (`--no-session`):
 
 - Session file path is absent.
-- `/export` and `/share` fail with `Cannot export in-memory session to HTML` (propagated to command error UI).
+- `/export` fails with `Cannot export in-memory session to HTML` (propagated to command error UI). `/share` still works: the snapshot is built from live entries.
 - `/fork` fails because `SessionManager.fork()` requires persistence.
 - `/dump` still works because it serializes in-memory agent state.
 - CLI resume/continue semantics are bypassed if `--no-session` is set, because manager creation returns in-memory immediately.
@@ -305,5 +323,5 @@ When session manager is created with `SessionManager.inMemory()` (`--no-session`
 ## Known implementation caveats (as of current code)
 
 - `SelectorController.handleResumeSession()` does not check the boolean result from `session.switchSession(...)`; a hook-cancelled switch can still proceed through UI "Resumed session" repaint/status path.
-- `/share` custom-share failures do not degrade to default gist fallback; they terminate the command with error.
+- `/share` custom-share failures do not degrade to the default encrypted share flow; they terminate the command with error.
 - `/export` argument tokenization is simplistic and does not preserve quoted paths with spaces.

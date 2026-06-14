@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { SessionSelectorComponent } from "@oh-my-pi/pi-coding-agent/modes/components/session-selector";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import type { SessionInfo } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import type { SessionInfo } from "@oh-my-pi/pi-coding-agent/session/session-listing";
 
 beforeAll(() => {
 	initTheme();

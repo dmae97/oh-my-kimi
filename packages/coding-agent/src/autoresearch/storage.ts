@@ -194,7 +194,6 @@ const SCHEMA_VERSION = 1;
 const SCHEMA_SQL = `
 PRAGMA journal_mode=WAL;
 PRAGMA synchronous=NORMAL;
-PRAGMA busy_timeout=5000;
 PRAGMA foreign_keys=ON;
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -263,6 +262,8 @@ export class AutoresearchStorage {
 		this.#projectDir = projectDir;
 		fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 		this.#db = new Database(dbPath);
+		// Install the busy handler BEFORE any lock-taking statement. See #2421.
+		this.#db.run("PRAGMA busy_timeout = 5000");
 		this.#db.run(SCHEMA_SQL);
 		const versionRow = this.#db.query("PRAGMA user_version").get() as { user_version: number } | null;
 		const currentVersion = versionRow?.user_version ?? 0;

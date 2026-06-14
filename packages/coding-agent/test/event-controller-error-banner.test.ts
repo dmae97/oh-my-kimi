@@ -54,7 +54,6 @@ afterEach(() => {
 function createFixture(streamingMessage?: AssistantMessage) {
 	const streamingComponent = {
 		updateContent: vi.fn(),
-		setUsageInfo: vi.fn(),
 		setComplete: vi.fn(),
 		markTranscriptBlockFinalized: vi.fn(),
 		setErrorPinned: vi.fn(),
@@ -62,6 +61,7 @@ function createFixture(streamingMessage?: AssistantMessage) {
 	const showPinnedError = vi.fn();
 	const clearPinnedError = vi.fn();
 
+	const session = { isTtsrAbortPending: false, retryAttempt: 0 };
 	const ctx = {
 		isInitialized: true,
 		init: vi.fn(async () => {}),
@@ -75,7 +75,11 @@ function createFixture(streamingMessage?: AssistantMessage) {
 		pendingTools: new Map(),
 		showPinnedError,
 		clearPinnedError,
-		session: { isTtsrAbortPending: false, retryAttempt: 0 },
+		session,
+		get viewSession() {
+			return session;
+		},
+		clearTransientSessionUi: () => {},
 	} as unknown as InteractiveModeContext;
 
 	const controller = new EventController(ctx);

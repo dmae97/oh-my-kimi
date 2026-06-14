@@ -5,7 +5,7 @@ import { type AstFindMatch, astGrep } from "@oh-my-pi/pi-natives";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
-import * as z from "zod/v4";
+import { z } from "zod/v4";
 import { recordFileSnapshot } from "../edit/file-snapshot-store";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
@@ -221,7 +221,9 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 				const parseMessage = cappedParseErrors.length
 					? `\n${formatParseErrors(cappedParseErrors, parseErrorsTotal).join("\n")}`
 					: "";
-				return toolResult(baseDetails).text(`${noMatchMessage}${parseMessage}`).done();
+				// Zero matches is useless even with parse issues: the follow-up
+				// call has already corrected course by the time compaction runs.
+				return toolResult(baseDetails).text(`${noMatchMessage}${parseMessage}`).useless().done();
 			}
 
 			const useHashLines = resolveFileDisplayMode(this.session).hashLines;

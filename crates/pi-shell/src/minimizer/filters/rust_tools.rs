@@ -11,10 +11,12 @@ use std::fmt::Write;
 
 use crate::minimizer::{MinimizerCtx, MinimizerOutput, primitives};
 
+#[must_use]
 pub fn supports(program: &str, _subcommand: Option<&str>) -> bool {
 	matches!(program, "rustfmt")
 }
 
+#[must_use]
 pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
 	// Kill-switch parity (M2): legacy_filters_active=true skips this
 	// filter so callers can rollback without recompile.
@@ -112,7 +114,7 @@ mod tests {
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
 		let mut input = String::new();
 		for i in 0..50 {
-			input.push_str(&format!("Diff in src/file_{i}.rs at line 10:\n"));
+			let _ = writeln!(input, "Diff in src/file_{i}.rs at line 10:");
 			for _ in 0..8 {
 				input.push_str("-    old line\n");
 				input.push_str("+    new line\n");
@@ -147,7 +149,7 @@ mod tests {
 		// Simulate a long usage/error dump with no `Diff in ` headers.
 		let mut input = String::new();
 		for i in 0..400 {
-			input.push_str(&format!("error: usage line {i}\n"));
+			let _ = writeln!(input, "error: usage line {i}");
 		}
 		let out = filter(&context, &input, 1);
 		assert!(out.changed);
@@ -158,9 +160,8 @@ mod tests {
 	#[test]
 	fn rustfmt_legacy_filters_active_passes_through() {
 		// Kill-switch parity (M2).
-		let mut cfg = MinimizerConfig::default();
-		cfg.enabled = true;
-		cfg.legacy_filters_active = true;
+		let cfg =
+			MinimizerConfig { enabled: true, legacy_filters_active: true, ..Default::default() };
 		let context = ctx("rustfmt", "rustfmt --check src/", &cfg);
 		let input = "Diff in src/a.rs at line 1:\n-old\n+new\n";
 		let out = filter(&context, input, 1);

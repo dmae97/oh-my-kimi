@@ -607,4 +607,78 @@ describe("ModelRegistry runtime discovery", () => {
 		expect(llama?.maxTokens).toBe(32_768);
 		expect(llama?.input).toEqual(["text", "image"]);
 	});
+	test("openai-models-list discovery honors API-reported context_length over fallback", async () => {
+		writeRawModelsJson({
+			"openai-test": {
+				baseUrl: "http://127.0.0.1:9999",
+				api: "openai-completions",
+				auth: "none",
+				discovery: { type: "openai-models-list" },
+			},
+		});
+		const fetchMock: FetchImpl = async input => {
+			const url = String(input);
+			if (url === "http://127.0.0.1:9999/v1/models") {
+				return new Response(
+					JSON.stringify({
+						data: [
+							{ id: "openai-test/contextual-model", context_length: 16385 },
+							{ id: "openai-test/no-context-model" },
+						],
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		};
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		await registry.refresh();
+		const contextual = registry
+			.getAll()
+			.find(m => m.provider === "openai-test" && m.id === "openai-test/contextual-model");
+		expect(contextual?.contextWindow).toBe(16385);
+		const fallback = registry
+			.getAll()
+			.find(m => m.provider === "openai-test" && m.id === "openai-test/no-context-model");
+		expect(fallback?.contextWindow).toBe(128000);
+	});
+
+	test("proxy discovery honors API-reported context_length and endpoint routing", async () => {
+		writeRawModelsJson({
+			"proxy-test": {
+				baseUrl: "http://127.0.0.1:9998",
+				auth: "none",
+				discovery: { type: "proxy" },
+			},
+		});
+		const fetchMock: FetchImpl = async input => {
+			const url = String(input);
+			if (url === "http://127.0.0.1:9998/v1/models") {
+				return new Response(
+					JSON.stringify({
+						data: [
+							{ id: "anthropic-model", supported_endpoint_types: ["anthropic"], context_length: 200000 },
+							{ id: "openai-model", supported_endpoint_types: ["openai"], context_length: 65536 },
+							{ id: "zero-context-model", supported_endpoint_types: ["openai"], context_length: 0 },
+						],
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		};
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		await registry.refresh();
+		const anthropic = registry.getAll().find(m => m.provider === "proxy-test" && m.id === "anthropic-model");
+		expect(anthropic?.api).toBe("anthropic-messages");
+		expect(anthropic?.contextWindow).toBe(200000);
+		const openai = registry.getAll().find(m => m.provider === "proxy-test" && m.id === "openai-model");
+		expect(openai?.api).toBe("openai-completions");
+		expect(openai?.contextWindow).toBe(65536);
+		// A non-positive upstream context_length must be rejected by the guard and
+		// fall through to the bundled reference (absent here) then the default,
+		// never pinning the model at a broken `0` window.
+		const zeroCtx = registry.getAll().find(m => m.provider === "proxy-test" && m.id === "zero-context-model");
+		expect(zeroCtx?.contextWindow).toBe(128000);
+	});
 });

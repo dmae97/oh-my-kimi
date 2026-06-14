@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import type { ApiKeyResolveContext } from "@oh-my-pi/pi-ai";
-import { isApiKeyResolver, isAuthRetryableError, resolveApiKeyOnce, withAuth } from "@oh-my-pi/pi-ai";
+import type { ApiKeyResolveContext, OAuthAccess, OAuthAccessSource } from "@oh-my-pi/pi-ai";
+import { isApiKeyResolver, isAuthRetryableError, resolveApiKeyOnce, withAuth, withOAuthAccess } from "@oh-my-pi/pi-ai";
 
 function authError(status = 401): Error & { status: number } {
 	return Object.assign(new Error(`${status} authentication_error`), { status });
@@ -158,5 +158,113 @@ describe("withAuth", () => {
 		);
 		expect(result).toBe("ok");
 		expect(keys).toEqual(["k0", "k1"]);
+	});
+});
+
+describe("withOAuthAccess", () => {
+	type FakeStorage = OAuthAccessSource & {
+		calls: Array<{ forceRefresh: boolean | undefined } | "rotate">;
+	};
+
+	function fakeStorage(tokens: { initial?: OAuthAccess; forced?: OAuthAccess; rotated?: OAuthAccess }): FakeStorage {
+		const storage: FakeStorage = {
+			calls: [],
+			async getOAuthAccess(_provider, _sessionId, options) {
+				storage.calls.push({ forceRefresh: options?.forceRefresh });
+				if (options?.forceRefresh) return tokens.forced;
+				// After a rotate, the next plain resolve yields the sibling.
+				if (storage.calls.includes("rotate")) return tokens.rotated;
+				return tokens.initial;
+			},
+			async rotateSessionCredential() {
+				storage.calls.push("rotate");
+				return tokens.rotated !== undefined;
+			},
+		};
+		return storage;
+	}
+
+	const access = (token: string, extra?: Partial<OAuthAccess>): OAuthAccess => ({
+		accessToken: token,
+		...extra,
+	});
+
+	it("returns the first attempt without extra resolves", async () => {
+		const storage = fakeStorage({ initial: access("t1") });
+		const result = await withOAuthAccess(storage, "prov", async a => `ok:${a.accessToken}`);
+		expect(result).toBe("ok:t1");
+		expect(storage.calls).toEqual([{ forceRefresh: undefined }]);
+	});
+
+	it("uses the seed for the initial attempt and skips the initial resolve", async () => {
+		const storage = fakeStorage({ initial: access("t1") });
+		const result = await withOAuthAccess(storage, "prov", async a => a.accessToken, {
+			seed: access("seeded"),
+		});
+		expect(result).toBe("seeded");
+		expect(storage.calls).toEqual([]);
+	});
+
+	it("force-refreshes the same account on 401, carrying identity metadata", async () => {
+		const storage = fakeStorage({
+			initial: access("stale"),
+			forced: access("fresh", { accountId: "acc-2", projectId: "proj-2" }),
+		});
+		const attempts: OAuthAccess[] = [];
+		const result = await withOAuthAccess(storage, "prov", async a => {
+			attempts.push(a);
+			if (a.accessToken === "stale") throw authError();
+			return a.projectId;
+		});
+		expect(result).toBe("proj-2");
+		expect(attempts.map(a => a.accessToken)).toEqual(["stale", "fresh"]);
+		expect(storage.calls).toEqual([{ forceRefresh: undefined }, { forceRefresh: true }]);
+	});
+
+	it("skips an unchanged force-refresh token and rotates to a sibling", async () => {
+		const storage = fakeStorage({
+			initial: access("dead"),
+			forced: access("dead"),
+			rotated: access("sibling"),
+		});
+		const attempts: string[] = [];
+		const result = await withOAuthAccess(storage, "prov", async a => {
+			attempts.push(a.accessToken);
+			if (a.accessToken === "dead") throw usageLimitError();
+			return "ok";
+		});
+		expect(result).toBe("ok");
+		// "dead" must not be re-attempted after the no-op force refresh.
+		expect(attempts).toEqual(["dead", "sibling"]);
+		expect(storage.calls).toEqual([
+			{ forceRefresh: undefined },
+			{ forceRefresh: true },
+			"rotate",
+			{ forceRefresh: undefined },
+		]);
+	});
+
+	it("propagates non-auth errors immediately and surfaces the last auth error when exhausted", async () => {
+		const boom = new Error("syntax error");
+		await expect(
+			withOAuthAccess(fakeStorage({ initial: access("t1") }), "prov", async () => {
+				throw boom;
+			}),
+		).rejects.toBe(boom);
+
+		const dead = authError();
+		await expect(
+			withOAuthAccess(fakeStorage({ initial: access("t1") }), "prov", async () => {
+				throw dead;
+			}),
+		).rejects.toBe(dead);
+	});
+
+	it("throws the missing-access message when no credential resolves", async () => {
+		await expect(
+			withOAuthAccess(fakeStorage({}), "prov", async () => "never", {
+				missingAccessMessage: "no codex account",
+			}),
+		).rejects.toThrow("no codex account");
 	});
 });

@@ -5,7 +5,7 @@
  * `discoverModelsByProviderType` with a `DiscoveryContext`; built-in provider
  * discovery lives in pi-catalog's provider-models.
  */
-import type { FetchImpl } from "@oh-my-pi/pi-ai";
+import { type ApiKey, type FetchImpl, withAuth } from "@oh-my-pi/pi-ai";
 import type { Api, Model } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import {
@@ -97,10 +97,12 @@ export interface DiscoveryContext {
 	/** Injected fetch implementation (tests stub this). */
 	fetch: FetchImpl;
 	/**
-	 * Resolve a provider's API key for `Authorization: Bearer …`. Returns
-	 * undefined when no key is stored or it is a local/no-auth sentinel.
+	 * Resolve a provider's bearer credential for `Authorization: Bearer …`.
+	 * Returns undefined when no key is stored or it is a local/no-auth
+	 * sentinel; otherwise an {@link ApiKey} whose resolver participates in the
+	 * central force-refresh/rotate auth-retry policy on 401/usage-limit.
 	 */
-	getBearerApiKey(provider: string): Promise<string | undefined>;
+	getBearerApiKeyResolver(provider: string): Promise<ApiKey | undefined>;
 }
 
 type OllamaDiscoveredModelMetadata = {
@@ -314,22 +316,26 @@ export async function discoverLlamaCppModels(
 	const baseUrl = normalizeLlamaCppBaseUrl(providerConfig.baseUrl);
 	const modelsUrl = `${baseUrl}/models`;
 
-	const headers: Record<string, string> = { ...(providerConfig.headers ?? {}) };
-	const apiKey = await ctx.getBearerApiKey(providerConfig.provider);
-	if (apiKey) {
-		headers.Authorization = `Bearer ${apiKey}`;
-	}
-
-	const [response, serverMetadata] = await Promise.all([
-		ctx.fetch(modelsUrl, {
-			headers,
-			signal: AbortSignal.timeout(250),
-		}),
-		discoverLlamaCppServerMetadata(ctx, baseUrl, headers),
-	]);
-	if (!response.ok) {
-		throw new Error(`HTTP ${response.status} from ${modelsUrl}`);
-	}
+	const baseHeaders: Record<string, string> = { ...(providerConfig.headers ?? {}) };
+	let headers = baseHeaders;
+	const attempt = async (h: Record<string, string>) => {
+		const [response, metadata] = await Promise.all([
+			ctx.fetch(modelsUrl, {
+				headers: h,
+				signal: AbortSignal.timeout(250),
+			}),
+			discoverLlamaCppServerMetadata(ctx, baseUrl, h),
+		]);
+		if (!response.ok) {
+			throw new Error(`HTTP ${response.status} from ${modelsUrl}`);
+		}
+		headers = h;
+		return [response, metadata] as const;
+	};
+	const apiKey = await ctx.getBearerApiKeyResolver(providerConfig.provider);
+	const [response, serverMetadata] = apiKey
+		? await withAuth(apiKey, key => attempt({ ...baseHeaders, Authorization: `Bearer ${key}` }))
+		: await attempt(baseHeaders);
 	const payload = (await response.json()) as { data?: Array<{ id: string }> };
 	const models = payload.data ?? [];
 	const discovered: Model<Api>[] = [];
@@ -370,25 +376,33 @@ export async function discoverOpenAIModelsList(
 	const baseUrl = normalizeOpenAIModelsListBaseUrl(providerConfig.baseUrl);
 	const modelsUrl = `${baseUrl}/models`;
 
-	const headers: Record<string, string> = { ...(providerConfig.headers ?? {}) };
-	const apiKey = await ctx.getBearerApiKey(providerConfig.provider);
-	if (apiKey) {
-		headers.Authorization = `Bearer ${apiKey}`;
-	}
-
-	const response = await ctx.fetch(modelsUrl, {
-		headers,
-		signal: AbortSignal.timeout(10_000),
-	});
-	if (!response.ok) {
-		throw new Error(`HTTP ${response.status} from ${modelsUrl}`);
-	}
-	const payload = (await response.json()) as { data?: Array<{ id: string }> };
+	const baseHeaders: Record<string, string> = { ...(providerConfig.headers ?? {}) };
+	let headers = baseHeaders;
+	const attempt = async (h: Record<string, string>) => {
+		const res = await ctx.fetch(modelsUrl, {
+			headers: h,
+			signal: AbortSignal.timeout(10_000),
+		});
+		if (!res.ok) {
+			throw new Error(`HTTP ${res.status} from ${modelsUrl}`);
+		}
+		headers = h;
+		return res;
+	};
+	const apiKey = await ctx.getBearerApiKeyResolver(providerConfig.provider);
+	const response = apiKey
+		? await withAuth(apiKey, key => attempt({ ...baseHeaders, Authorization: `Bearer ${key}` }))
+		: await attempt(baseHeaders);
+	const payload = (await response.json()) as {
+		data?: Array<{ id?: string; max_model_len?: unknown; context_length?: unknown }>;
+	};
 	const models = payload.data ?? [];
 	const discovered: Model<Api>[] = [];
 	for (const item of models) {
 		const id = item.id;
 		if (!id) continue;
+		const contextWindow =
+			toPositiveNumberOrUndefined(item.max_model_len) ?? toPositiveNumberOrUndefined(item.context_length) ?? 128000;
 		discovered.push(
 			buildModel({
 				id,
@@ -399,8 +413,8 @@ export async function discoverOpenAIModelsList(
 				reasoning: false,
 				input: ["text"],
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-				contextWindow: 128000,
-				maxTokens: discoveryDefaultMaxTokens(providerConfig.api),
+				contextWindow,
+				maxTokens: Math.min(contextWindow, discoveryDefaultMaxTokens(providerConfig.api)),
 				headers,
 				compat: {
 					supportsStore: false,
@@ -435,21 +449,25 @@ export async function discoverProxyModels(
 	const baseUrl = normalizeOpenAIModelsListBaseUrl(providerConfig.baseUrl);
 	const modelsUrl = `${baseUrl}/models`;
 
-	const headers: Record<string, string> = { ...(providerConfig.headers ?? {}) };
-	const apiKey = await ctx.getBearerApiKey(providerConfig.provider);
-	if (apiKey) {
-		headers.Authorization = `Bearer ${apiKey}`;
-	}
-
-	const response = await ctx.fetch(modelsUrl, {
-		headers,
-		signal: AbortSignal.timeout(10_000),
-	});
-	if (!response.ok) {
-		throw new Error(`HTTP ${response.status} from ${modelsUrl}`);
-	}
+	const baseHeaders: Record<string, string> = { ...(providerConfig.headers ?? {}) };
+	let headers = baseHeaders;
+	const attempt = async (h: Record<string, string>) => {
+		const res = await ctx.fetch(modelsUrl, {
+			headers: h,
+			signal: AbortSignal.timeout(10_000),
+		});
+		if (!res.ok) {
+			throw new Error(`HTTP ${res.status} from ${modelsUrl}`);
+		}
+		headers = h;
+		return res;
+	};
+	const apiKey = await ctx.getBearerApiKeyResolver(providerConfig.provider);
+	const response = apiKey
+		? await withAuth(apiKey, key => attempt({ ...baseHeaders, Authorization: `Bearer ${key}` }))
+		: await attempt(baseHeaders);
 	const payload = (await response.json()) as {
-		data?: Array<{ id?: string; name?: string; supported_endpoint_types?: string[] }>;
+		data?: Array<{ id?: string; name?: string; supported_endpoint_types?: string[]; context_length?: number }>;
 	};
 	const items = payload.data ?? [];
 	const discovered: Model<Api>[] = [];
@@ -485,7 +503,9 @@ export async function discoverProxyModels(
 				// upstream bundled catalogs, so keep costs local-unknown even when
 				// we successfully recover the upstream model identity.
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-				contextWindow: reference?.contextWindow ?? 128000,
+				// Prefer the context_length the API reports for this model; fall
+				// back to the bundled reference, then a sane default.
+				contextWindow: toPositiveNumberOrUndefined(item.context_length) ?? reference?.contextWindow ?? 128000,
 				maxTokens: reference?.maxTokens ?? discoveryDefaultMaxTokens(api),
 				headers,
 				// OpenAI-compat fields are no-ops on anthropic models; the

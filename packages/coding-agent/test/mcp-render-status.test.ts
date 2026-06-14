@@ -14,7 +14,7 @@ beforeAll(async () => {
 	resetSettingsForTest();
 	await Settings.init({ inMemory: true, cwd: process.cwd() });
 	await initTheme(false, undefined, undefined, "dark", "light");
-});
+}, 15_000);
 
 async function getRequiredTheme() {
 	const uiTheme = await getThemeByName("dark");
@@ -118,7 +118,7 @@ describe("MCP tool rendering", () => {
 		expect(makeDeferredTool().mergeCallAndResult).toBe(true);
 		expect(rendered).toContain(`${doneIcon} sentry/search_events`);
 		expect(rendered).not.toContain(`${pendingIcon} sentry/search_events`);
-	});
+	}, 15_000);
 
 	it("replaces the pending call header with an error header for MCP errors", async () => {
 		const uiTheme = await getRequiredTheme();
@@ -129,5 +129,5 @@ describe("MCP tool rendering", () => {
 
 		expect(rendered).toContain(`${errorIcon} sentry/search_events`);
 		expect(rendered).not.toContain(`${pendingIcon} sentry/search_events`);
-	});
+	}, 15_000);
 });

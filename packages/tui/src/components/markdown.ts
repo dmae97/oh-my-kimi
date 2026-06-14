@@ -61,6 +61,13 @@ const RENDER_CACHE_MAX = 256; // sane cap: ~256 distinct message × width combos
 const EMPTY_RENDER_LINES: readonly string[] = [];
 const renderCache = new LRUCache<string, readonly string[]>({ max: RENDER_CACHE_MAX });
 
+// A reference-link definition (`[label]: dest`) resolves across the whole
+// document, so a split lex cannot reproduce it — disable the streaming fast path
+// when one is present (rare in streamed output). The label may contain
+// backslash-escaped characters (`[a\]b]: x`), so escapes are matched explicitly;
+// over-matching is safe (it only costs the fast path), under-matching is not.
+const HAS_REF_DEF = /^ {0,3}\[(?:\\.|[^\]\\])+\]:/m;
+
 /** Drop all L2 cache entries. Call on theme change to prevent stale styled output. */
 export function clearRenderCache(): void {
 	renderCache.clear();
@@ -297,6 +304,16 @@ export class Markdown implements Component {
 	#cachedLines?: readonly string[];
 	#transientRenderCache = false;
 
+	// Streaming-lex cache: the largest blank-line-bounded prefix of #text whose
+	// block tokens are frozen, plus those tokens. marked has no resumable lexer,
+	// but block tokenization is local across a "\n\n" boundary with balanced
+	// fences, so lex(prefix) ++ lex(tail) === lex(prefix+tail). On append-only
+	// growth (the streaming path) this re-lexes only the grown tail instead of the
+	// whole buffer, turning O(N^2) reveal cost into O(N). Width/theme do not affect
+	// tokenization, so this cache is independent of the render caches above.
+	#streamPrefixText?: string;
+	#streamPrefixTokens?: Token[];
+
 	constructor(
 		text: string,
 		paddingX: number,
@@ -315,6 +332,13 @@ export class Markdown implements Component {
 
 	setText(text: string): void {
 		this.#text = text;
+		if (!text.trim()) {
+			// Blank replacement: render() early-returns before #lexTokens can see
+			// the non-append edit, so drop the frozen stream state here or it
+			// outlives the content it indexed.
+			this.#streamPrefixText = undefined;
+			this.#streamPrefixTokens = undefined;
+		}
 		this.invalidate();
 	}
 
@@ -332,6 +356,76 @@ export class Markdown implements Component {
 		if (this.#transientRenderCache === next) return;
 		this.#transientRenderCache = next;
 		this.invalidate();
+	}
+
+	// Lex `text` into block tokens, reusing the frozen stable prefix when the text
+	// only grew (the streaming path). Falls back to a full lex whenever the prefix
+	// is no longer a prefix (non-append edit), the text carries reference-link
+	// definitions, or it contains CR (marked normalizes CRLF, which would desync
+	// raw-span offsets). Every fallback is correctness-preserving — only speed
+	// differs; the render loop sees the identical token list either way.
+	#lexTokens(text: string): Token[] {
+		const canStream = !HAS_REF_DEF.test(text) && !text.includes("\r");
+		const prefix = this.#streamPrefixText;
+		const prefixTokens = this.#streamPrefixTokens;
+		if (
+			canStream &&
+			prefix !== undefined &&
+			prefixTokens !== undefined &&
+			text.length > prefix.length &&
+			text.startsWith(prefix)
+		) {
+			const tailTokens = markdownParser.lexer(text.slice(prefix.length));
+			const tokens = [...prefixTokens, ...tailTokens];
+			this.#freezeStablePrefix(text, tokens);
+			return tokens;
+		}
+		const tokens = markdownParser.lexer(text);
+		if (canStream) {
+			this.#freezeStablePrefix(text, tokens);
+		} else {
+			this.#streamPrefixText = undefined;
+			this.#streamPrefixTokens = undefined;
+		}
+		return tokens;
+	}
+
+	// Freeze the largest run of leading blocks that end on a hard "\n\n" boundary
+	// (complete and immutable under append-only growth) so the next streaming
+	// render re-lexes only the unfrozen tail. Caller guarantees no CR / no
+	// reference definitions, so each token's `raw` is a verbatim slice of `text`
+	// and the summed offsets address `text` exactly.
+	#freezeStablePrefix(text: string, tokens: Token[]): void {
+		let pos = 0;
+		let frozenEnd = 0;
+		let frozenCount = 0;
+		for (let i = 0; i < tokens.length; i++) {
+			const raw = tokens[i].raw;
+			const end = pos + raw.length;
+			// A `space` token ending in "\n\n" closes the preceding block, but a
+			// `list` before it can still be extended by a following same-marker
+			// item across the blank line (CommonMark loose-list continuation),
+			// which marked merges into one renumbered loose list. Freezing across
+			// such a cut would keep the lists separate. Never freeze right after a
+			// list — it stays in the re-lexed tail.
+			if (raw.endsWith("\n\n") && tokens[i - 1]?.type !== "list") {
+				frozenEnd = end;
+				frozenCount = i + 1;
+			}
+			pos = end;
+		}
+		// Freeze only when the tail begins with real block content. If the next
+		// char is whitespace (an extra blank line, or an indented continuation),
+		// the block separator straddles the cut and lex(prefix)++lex(tail) would
+		// desync from a full lex — e.g. a fence followed by "\n\n\n- list". When
+		// frozenEnd is at end-of-text the next char is unknown, so defer.
+		if (frozenCount > 0 && frozenEnd < text.length) {
+			const next = text.charCodeAt(frozenEnd);
+			if (next !== 0x20 /* space */ && next !== 0x0a /* \n */) {
+				this.#streamPrefixText = text.slice(0, frozenEnd);
+				this.#streamPrefixTokens = tokens.slice(0, frozenCount);
+			}
+		}
 	}
 
 	render(width: number): readonly string[] {
@@ -385,7 +479,7 @@ export class Markdown implements Component {
 		}
 
 		// Parse markdown to HTML-like tokens
-		const tokens = markdownParser.lexer(normalizedText);
+		const tokens = this.#lexTokens(normalizedText);
 
 		// Convert tokens to styled terminal output
 		const renderedLines: string[] = [];

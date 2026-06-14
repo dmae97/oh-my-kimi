@@ -11,10 +11,12 @@ import { VirtualTerminal } from "../../tui/test/virtual-terminal";
 class MutableLiveBlock implements Component {
 	#lines: string[];
 	#finalized: boolean;
+	#commitStable: boolean | undefined;
 
-	constructor(lines: string[], finalized = false) {
+	constructor(lines: string[], finalized = false, commitStable?: boolean) {
 		this.#lines = [...lines];
 		this.#finalized = finalized;
+		this.#commitStable = commitStable;
 	}
 
 	render(width: number): string[] {
@@ -27,6 +29,13 @@ class MutableLiveBlock implements Component {
 
 	isTranscriptBlockFinalized(): boolean {
 		return this.#finalized;
+	}
+
+	// Defaults to commit-stable (matches a block that omits the method). Pass
+	// false to model a provisional block (a collapsing tool preview) whose live
+	// rows must never reach native scrollback.
+	isTranscriptBlockCommitStable(): boolean {
+		return this.#commitStable ?? true;
 	}
 }
 
@@ -387,8 +396,151 @@ describe("tool live-region scrollback", () => {
 				.map(row => Bun.stripANSI(row).trimEnd())
 				.join("\n");
 			expect(bufferText).not.toContain("pending [1/1]");
-			expect(bufferText).toContain("const line9 = 9;");
+			// The running cell renders the bounded TAIL window of the code: the
+			// live edge stays visible; the head is elided behind a marker.
 			expect(bufferText).toContain("const line19 = 19;");
+			expect(bufferText).toContain("earlier lines");
+			expect(bufferText).not.toContain("const line0 = 0;");
+		} finally {
+			component.stopAnimation();
+			tui.stop();
+			await term.flush();
+		}
+	});
+
+	it("does not strand a stale pending edit preview in scrollback when the result re-lays-out the block", async () => {
+		if (process.platform === "win32") return;
+
+		// Regression for the "tool call rendered inside itself" spray: an edit's
+		// pending preview is a TAIL window of the streamed diff ("… N more lines
+		// above" + last rows), and it goes byte-static once args complete — the
+		// spinner stops while the apply + LSP pass runs. The stable-prefix
+		// ratchet used to promote that settled head after
+		// STABLE_PREFIX_COMMIT_FRAMES and commit it to native scrollback; the
+		// result render then re-anchors the block top-first (stats header +
+		// head-anchored diff), the committed-prefix audit re-anchors at the
+		// divergence, and the stale call-box fragment stayed stranded above the
+		// final box. Pending collapsed previews are provisional and must never
+		// commit.
+		const term = new VirtualTerminal(120, 10);
+		const tui = new TUI(term);
+		const chat = new TranscriptContainer();
+		const diffLines: string[] = [];
+		for (let i = 0; i < 14; i++) {
+			diffLines.push(`-const before_${i} = ${i};`);
+			diffLines.push(`+const after_${i} = ${i};`);
+		}
+		const diff = diffLines.join("\n");
+		const args = { path: "src/sample.ts", op: "update", diff };
+		const component = new ToolExecutionComponent("edit", args, {}, undefined, tui, process.cwd());
+
+		try {
+			chat.addChild(new Text("prior filler\n".repeat(6).trimEnd(), 0, 0));
+			tui.addChild(chat);
+			tui.start();
+			await term.waitForRender();
+
+			chat.addChild(component);
+			component.setArgsComplete();
+			tui.requestRender();
+			await term.waitForRender();
+
+			// The tail-window preview's live edge is on screen while the tool
+			// executes (its head sits above the viewport and stays uncommitted).
+			const pending = term
+				.getScrollBuffer()
+				.map(row => Bun.stripANSI(row).trimEnd())
+				.join("\n");
+			expect(pending).toContain("(streaming)");
+
+			// The tool runs with a byte-static preview — far past the
+			// stable-prefix promotion window.
+			for (let frame = 0; frame < 40; frame++) {
+				tui.requestRender();
+				await term.waitForRender();
+			}
+
+			component.updateResult(
+				{
+					content: [{ type: "text", text: "" }],
+					details: { diff, path: "src/sample.ts", firstChangedLine: 1 },
+				},
+				false,
+			);
+			tui.requestRender();
+			await term.waitForRender();
+
+			const bufferText = term
+				.getScrollBuffer()
+				.map(row => Bun.stripANSI(row).trimEnd())
+				.join("\n");
+			// The tail-window marker exists only in the pending preview's head; any
+			// occurrence after the result means a committed fragment of the call
+			// box was stranded above the final block.
+			expect(bufferText).not.toContain("more lines above");
+			expect(bufferText).not.toContain("(streaming)");
+			// The result's head-anchored diff is present.
+			expect(bufferText).toContain("+const after_0 = 0;");
+		} finally {
+			component.stopAnimation();
+			tui.stop();
+			await term.flush();
+		}
+	});
+
+	it("scroll-appends a tall collapsed streaming task call into native scrollback mid-stream", async () => {
+		if (process.platform === "win32") return;
+
+		// Regression for the blanket commit-unstable gate: marking EVERY pending
+		// collapsed preview provisional meant a task call whose context markdown
+		// outgrew the viewport had its head neither on screen nor in scrollback
+		// until the result landed — the transcript read as cut off for the whole
+		// run. The task call preview streams top-anchored append-shaped rows the
+		// result render preserves, so it stays commit-eligible while collapsed.
+		const term = new VirtualTerminal(120, 12);
+		const tui = new TUI(term);
+		const chat = new TranscriptContainer();
+		const contextLines = Array.from({ length: 60 }, (_unused, i) => `ctx_line_${i} = ${i}`);
+		// Fenced code: each streamed line appends exactly one row, no re-wrap.
+		const buildContext = (count: number) => `\`\`\`\n${contextLines.slice(0, count).join("\n")}\n`;
+		const component = new ToolExecutionComponent(
+			"task",
+			{ agent: "task", context: buildContext(1) },
+			{},
+			undefined,
+			tui,
+			process.cwd(),
+		);
+
+		try {
+			chat.addChild(new Text("prior filler", 0, 0));
+			tui.addChild(chat);
+			tui.start();
+			await term.waitForRender();
+
+			chat.addChild(component);
+			tui.requestRender();
+			await term.waitForRender();
+
+			for (let count = 5; count <= contextLines.length; count += 5) {
+				component.updateArgs({ agent: "task", context: buildContext(count) });
+				tui.requestRender();
+				await term.waitForRender();
+			}
+
+			// Still streaming: no result, collapsed. The head of the context must
+			// already be in the buffer (committed above the window), not cut off —
+			// and the viewport itself only shows the streaming tail.
+			const rows = term.getScrollBuffer().map(row => Bun.stripANSI(row).trimEnd());
+			const bufferText = rows.join("\n");
+			expect(bufferText).toContain("ctx_line_0 = 0");
+			expect(bufferText).toContain("ctx_line_30 = 30");
+			expect(rows.length).toBeGreaterThan(term.rows);
+			const viewportText = term
+				.getViewport()
+				.map(row => Bun.stripANSI(row).trimEnd())
+				.join("\n");
+			expect(viewportText).not.toContain("ctx_line_0 = 0");
 		} finally {
 			component.stopAnimation();
 			tui.stop();
@@ -566,10 +718,11 @@ describe("tool live-region scrollback", () => {
 	it("commits the scrolled-off head of an over-tall pending eval cell to scrollback", async () => {
 		if (process.platform === "win32") return;
 
-		// The single-spawn task renderer bounds its pending preview (the old
-		// uncapped multi-task `context` field is gone), so the eval tool —
-		// whose pending code preview is intentionally never capped — now
-		// carries the over-tall pending content.
+		// Collapsed eval previews are head-capped (renderCodeCell's default
+		// window), so they can no longer go over-tall on their own. Expanded
+		// (ctrl+o) lifts the cap — the preview renders the whole brief
+		// top-anchored, append-only as chunks stream in — so the expanded eval
+		// cell carries the over-tall pending content here.
 		const term = new VirtualTerminal(120, 12);
 		const tui = new TUI(term);
 		const chat = new TranscriptContainer();
@@ -578,6 +731,7 @@ describe("tool live-region scrollback", () => {
 			cells: [{ language: "js", title: "probe", code: code(n) }],
 		});
 		const component = new ToolExecutionComponent("eval", args(4), {}, undefined, tui, process.cwd());
+		component.setExpanded(true);
 
 		try {
 			chat.addChild(component);
@@ -796,13 +950,57 @@ describe("tool live-region scrollback", () => {
 		}
 	});
 
-	it("keeps a re-layouting live block's changed head out of scrollback", async () => {
+	it("commits a re-layouting commit-stable live block's durable head to scrollback (no loss)", async () => {
 		if (process.platform === "win32") return;
 
+		// A commit-stable block (a streaming assistant reply) whose interior rows
+		// re-lay-out as it grows — the markdown-table shape: every previous row
+		// changes when the block swaps to a taller render. Its current snapshot is
+		// durable content, so the rows that scroll above the viewport MUST reach
+		// native scrollback (frozen snapshot) rather than vanish — committed
+		// nowhere, repainted nowhere.
 		const term = new VirtualTerminal(120, 12);
 		const tui = new TUI(term);
 		const chat = new TranscriptContainer();
 		const block = new MutableLiveBlock(markerLines("OLD-", 8));
+
+		try {
+			chat.addChild(block);
+			tui.addChild(chat);
+			tui.start();
+			await term.waitForRender();
+
+			block.setLines(markerLines("NEW-", 40));
+			tui.requestRender();
+			await term.waitForRender();
+
+			const scrollText = stripRows(term.getScrollBuffer());
+			const viewportText = stripRows(term.getViewport());
+
+			// The head scrolled above the viewport but is durable: it lives in
+			// native scrollback, not nowhere.
+			expect(viewportText).not.toContain("NEW-0");
+			expect(scrollText).toContain("NEW-0");
+			expect(scrollText).toContain("NEW-20");
+			expect(viewportText).toContain("NEW-39");
+		} finally {
+			tui.stop();
+			await term.flush();
+		}
+	});
+
+	it("keeps a re-layouting commit-UNSTABLE live block's changed head out of scrollback", async () => {
+		if (process.platform === "win32") return;
+
+		// A provisional block (a collapsing tool/edit preview) reports
+		// isTranscriptBlockCommitStable() === false: its head is a throwaway tail
+		// window that the result render replaces wholesale, so committing it would
+		// strand a stale fragment in history. Its re-laid-out head must stay out of
+		// scrollback (the provisional-defer contract behind #402/#351).
+		const term = new VirtualTerminal(120, 12);
+		const tui = new TUI(term);
+		const chat = new TranscriptContainer();
+		const block = new MutableLiveBlock(markerLines("OLD-", 8), false, false);
 
 		try {
 			chat.addChild(block);
@@ -1078,6 +1276,51 @@ describe("assistant live-region scrollback", () => {
 			expect(scrollText).toContain("PARA-4");
 			// The tail is still on screen.
 			expect(viewportText).toContain("PARA-7");
+		} finally {
+			tui.stop();
+			await term.flush();
+		}
+	});
+
+	it("commits the scrolled-off head of a streamed markdown table whose columns keep re-aligning", async () => {
+		if (process.platform === "win32") return;
+
+		// The reported content-loss shape: a streaming reply with a markdown table
+		// whose column widths grow as rows arrive, so every already-rendered row
+		// re-lays-out each frame (perpetual interior re-layout, never byte-stable
+		// append-only). The block is commit-stable, so its scrolled-off head is
+		// durable and must reach native scrollback rather than vanish.
+		const term = new VirtualTerminal(70, 12);
+		const tui = new TUI(term);
+		const chat = new TranscriptContainer();
+		const component = new AssistantMessageComponent(undefined, false);
+
+		const lines: string[] = ["Here is a summary of the MARK files:", ""];
+		for (let i = 0; i < 6; i++) lines.push(`Paragraph PARA-${i} with some descriptive prose about the topic.`);
+		lines.push("", "| Name | Description |", "|------|-------------|");
+		for (let i = 0; i < 16; i++) {
+			lines.push(`| ITEM-${i} | description number ${i} growing wider and wider ${"x".repeat(i)} |`);
+		}
+
+		try {
+			chat.addChild(component);
+			tui.addChild(chat);
+			tui.start();
+			await term.waitForRender();
+
+			const acc: string[] = [];
+			for (const line of lines) {
+				acc.push(line);
+				component.updateContent(makeAssistantMessage(acc.join("\n")));
+				tui.requestRender();
+				await term.waitForRender();
+			}
+
+			const scrollText = stripRows(term.getScrollBuffer());
+			// No row may vanish: every paragraph and table row reaches the tape,
+			// even the band that scrolled off while the table was re-aligning.
+			for (let i = 0; i < 6; i++) expect(scrollText).toContain(`PARA-${i}`);
+			for (let i = 0; i < 16; i++) expect(scrollText).toContain(`ITEM-${i}`);
 		} finally {
 			tui.stop();
 			await term.flush();

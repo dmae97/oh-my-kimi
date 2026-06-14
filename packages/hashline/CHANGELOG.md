@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Normalized cwd-relative hashline paths to forward-slash form on Windows.
+
+## [15.12.5] - 2026-06-13
+
+### Fixed
+
+- Fixed delimiter-balance boundary repair so it does not keep a deleted structural closer when the replacement payload already restates that closer.
+
+## [15.12.0] - 2026-06-12
+
+### Changed
+
+- Condensed all parser/applier/patcher error and warning messages: shorter wording, same diagnostic anchors (op names, line numbers, suggested fallback forms)
+
+## [15.11.4] - 2026-06-12
+
+### Added
+
+- Added inward landing correction for `insert after block N:`: a body indented deeper than the block's closing line now slides back across the block's trailing closer lines and lands inside the block at its claimed depth, with a warning naming the landing line. Same conservative guards as the outward shift — comparable indentation only, closers only, abandoned when another hunk targets a crossed line; plain `insert after M:` stays literal
+- Added closer-anchor lowering for `insert after block N:`: anchoring on a pure closing-delimiter line (where no block begins, so resolution previously failed the whole patch) now applies as plain `insert after N:` with a warning teaching the opener-only rule. `resolveBlockEdits` gained an `onWarning` callback; apply, preview, and patcher paths surface it on `warnings`
+
+### Changed
+
+- Condensed the edit-tool prompt: one-line op definitions, 5–20-word rules, and a tighter `<critical>` recap; landing-correction mechanics are no longer described to the agent
+
 ## [15.11.1] - 2026-06-11
 
 ### Fixed
@@ -93,6 +120,7 @@
 - Fixed hashline replacements that accidentally restated unchanged lines above and below the selected range so they no longer duplicate both boundary lines ([#1664](https://github.com/can1357/oh-my-pi/issues/1664)).
 
 ## [15.7.0] - 2026-05-31
+
 ### Added
 
 - Added `replace block N:` and `delete block N` patch syntax to replace or delete the entire syntactic block that begins on line N using tree-sitter-resolved spans
@@ -100,6 +128,7 @@
 - Added `resolveBlockEdits` and block edit type definitions to the package API for resolving deferred `replace block` / `delete block` edits
 
 ## [15.5.13] - 2026-05-29
+
 ### Breaking Changes
 
 - Changed hashline section tags from 3-hex to 4-hex content-hash tags, so legacy 3-digit tags are no longer valid
@@ -135,6 +164,7 @@
 - `MismatchError` now distinguishes "hash recognized but file content drifted" from "hash never recorded for this path". The latter (likely fabricated or carried over from a prior session) emits a dedicated `hash #X is not from this session` rejection message with explicit "never invent the tag" guidance. The `MismatchDetails` interface gains an optional `hashRecognized?: boolean` (defaults to `true` for backward compatibility); `MismatchError` exposes it as a readonly field so callers can branch on the cause.
 
 ## [15.5.8] - 2026-05-28
+
 ### Breaking Changes
 
 - Removed the single-number hunk header shorthand. A hunk header now REQUIRES two line numbers (`A A` for a single line, `A B` for a range); a bare `A` row throws `single-number hunk header "A" is no longer accepted`. The `&A` body-row shorthand for `&A..A` is unchanged.
@@ -193,6 +223,7 @@
 All notable changes to this package will be documented in this file.
 
 ## [15.5.4] - 2026-05-27
+
 ### Added
 
 - Added a high-level `Patcher` API with all-or-nothing `apply` and staged `prepare`/`commit` flows for multi-file patch updates

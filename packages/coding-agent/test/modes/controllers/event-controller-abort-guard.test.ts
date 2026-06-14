@@ -48,13 +48,15 @@ function makeAssistantMessage(stopReason: StopReason): AssistantMessage {
 }
 
 function makeContext(lastMessage: AssistantMessage | undefined): InteractiveModeContext {
+	const sessionMock = {
+		getLastAssistantMessage: () => lastMessage,
+	};
 	return {
 		sessionManager: {
 			getSessionName: () => "test-session",
 		},
-		session: {
-			getLastAssistantMessage: () => lastMessage,
-		},
+		session: sessionMock,
+		viewSession: sessionMock,
 	} as unknown as InteractiveModeContext;
 }
 

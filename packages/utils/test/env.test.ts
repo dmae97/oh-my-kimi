@@ -67,6 +67,18 @@ describe("filterProcessEnv", () => {
 		});
 	});
 
+	it("drops macOS malloc stack logging toggles instead of forwarding disabled values", () => {
+		expect(
+			filterProcessEnv({
+				GOOD: "value",
+				MallocStackLogging: "0",
+				MallocStackLoggingNoCompact: "0",
+			}),
+		).toEqual({
+			GOOD: "value",
+		});
+	});
+
 	it("preserves Windows-style variable names containing parentheses", () => {
 		// `ProgramFiles(x86)` and friends are standard on Windows and must
 		// survive the scrub so Git Bash discovery in procmgr.ts can resolve

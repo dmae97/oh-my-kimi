@@ -32,7 +32,10 @@ So: overload/rate/server/network-style failures use this retry policy; context-w
 - assistant `stopReason === "error"`
 - `errorMessage` exists
 - message is **not** context overflow
-- `errorMessage` matches transient transport/envelope patterns or `isUsageLimitError(...)`
+- one of:
+  - the stop is a classifier refusal (`stopDetails.type` is `"refusal"` or `"sensitive"`)
+  - the error is a stale OpenAI Responses replay failure (`Item with id '…' not found`, or an invalid/expired/not-found `previous_response`)
+  - `errorMessage` matches transient transport/envelope patterns or `isUsageLimitError(...)`
 
 Current retryable inputs are regex/string-classified:
 
@@ -44,7 +47,7 @@ Current retryable inputs are regex/string-classified:
 - provider-suggested retry wording, including OpenAI `retry your request` failures
 - network/connection/socket failures, refused/closed connections, upstream connect/reset-before-headers, socket hang up, timeout/timed out, fetch failed, terminated, retry delay wording, and unexpected socket close messages
 
-This is string-pattern classification, not typed provider error codes.
+Transport classification is regex text matching, not typed provider error codes; classifier refusals are the exception, detected from the typed `stopDetails` field.
 
 ## Retry lifecycle and state transitions
 
@@ -62,9 +65,9 @@ Flow (`#handleRetryableError`):
 3. Increment `#retryAttempt`.
 4. Create `#retryPromise` once (first attempt in a chain).
 5. If attempt exceeded `retry.maxRetries`, emit final failure event and stop.
-6. Compute capped jittered local delay: `min(retry.baseDelayMs * 2^(attempt-1), 8000ms) * (75–100% jitter)`.
-7. For usage-limit errors, parse retry hints and call auth storage (`markUsageLimitReached(...)`); if credential switching succeeds, force delay to `0`. Otherwise wait for whichever comes first — the provider's retry-after/backoff hint, or the earliest moment a temporarily blocked sibling credential frees up (`retryAtMs` + 1s buffer) so the next attempt can pick it up.
-8. If no credential switch occurred, suppress the current model selector for cooldown, try configured retry model fallback chains, and force delay to `0` on model switch.
+6. Compute capped jittered local delay: `min(retry.baseDelayMs * 2^(attempt-1), 8000ms) * (75–100% jitter)`. Stale OpenAI Responses replay errors skip the backoff entirely (delay `0`) after resetting the cached provider session.
+7. For usage-limit errors, parse retry hints and call auth storage (`markUsageLimitReached(...)`); if credential switching succeeds — including spending a banked Codex reset via the opt-in auto-redeem — force delay to `0`. Otherwise wait for whichever comes first — the provider's retry-after/backoff hint, or the earliest moment a temporarily blocked sibling credential frees up (`retryAtMs` + 1s buffer) so the next attempt can pick it up.
+8. If no credential switch occurred and `retry.modelFallback` is enabled, suppress the current model selector for cooldown and try configured retry model fallback chains, forcing delay to `0` on model switch. Classifier refusals skip the cooldown and only proceed when a fallback model was actually applied (pinned); with no fallback, the chain ends without an `auto_retry_start`.
 9. If the final delay exceeds `retry.maxDelayMs` and no credential/model switch happened, emit final failure and do not sleep.
 10. Emit `auto_retry_start`.
 11. Remove the trailing assistant error message from agent runtime state (kept in persisted session history).
@@ -79,8 +82,9 @@ Flow (`#handleRetryableError`):
 - retry cancellation during backoff sleep
 - max retries exceeded path
 - max delay exceeded path
+- classifier refusal with no fallback model applied (chain ends silently, no retry started)
 
-`#retryPromise` resolves/clears when retry chain ends (success, cancellation, max-exceeded, or max-delay failure), via `#resolveRetry()`.
+`#retryPromise` resolves/clears when retry chain ends (success, cancellation, max-exceeded, max-delay failure, or classifier-refusal stop), via `#resolveRetry()`.
 
 ## Backoff and max-attempt semantics
 
@@ -138,7 +142,7 @@ On `auto_retry_end`, it restores prior `Esc` handler and clears loader state.
 
 ## Streaming and prompt completion behavior
 
-`prompt()` ultimately waits on `#waitForRetry()` after `agent.prompt(...)` returns.
+`prompt()` ultimately waits on `#waitForPostPromptRecovery()` after `agent.prompt(...)` returns; that loop awaits the retry lifecycle promise alongside TTSR resume and deferred post-prompt tasks.
 
 Effect:
 
@@ -157,6 +161,7 @@ Defined in settings schema under retry group:
 - `retry.maxRetries`
 - `retry.baseDelayMs`
 - `retry.maxDelayMs`
+- `retry.modelFallback` (default `true`; gates retry model-fallback switching)
 - `retry.fallbackChains`
 - `retry.fallbackRevertPolicy` (`"cooldown-expiry"` by default; `"never"` disables automatic restoration)
 

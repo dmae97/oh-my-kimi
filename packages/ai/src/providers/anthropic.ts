@@ -974,6 +974,11 @@ export interface AnthropicOptions extends StreamOptions {
 	 */
 	thinkingBudgetTokens?: number;
 	/**
+	 * Upstream wire model id override for collapsed effort-tier variants.
+	 * Serialized as `requestModelId ?? model.requestModelId ?? model.id`.
+	 */
+	requestModelId?: string;
+	/**
 	 * Effort level for adaptive thinking.
 	 * Controls how much thinking Claude allocates:
 	 * - "max": Always thinks with no constraints
@@ -1634,6 +1639,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 				if (replacementPayload !== undefined) {
 					nextParams = replacementPayload as typeof nextParams;
 				}
+				nextParams = toWellFormedDeep(nextParams) as typeof nextParams;
 				rawRequestDump = {
 					provider: model.provider,
 					api: output.api,
@@ -2299,16 +2305,22 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 	const baseUrl = resolveAnthropicBaseUrl(model, apiKey);
 	const foundryCustomHeaders = resolveAnthropicCustomHeaders(model);
 	const tlsFetchOptions = buildClaudeCodeTlsFetchOptions(model, baseUrl);
+	// Disable Bun's native ~300s pre-response fetch timeout (issue #2422).
+	// `AnthropicMessagesClient` already arms its own DEFAULT_TIMEOUT_MS timer
+	// per request, so the native ceiling can only short-circuit slow-prefill
+	// streams before the configured watchdog gets to govern them.
+	const fetchOptions: AnthropicFetchOptions = { ...(tlsFetchOptions ?? {}), timeout: false };
 	const baseFetch = args.fetch ?? fetch;
 	// Only OAuth requests inject the CC billing header; no API-key request can ever
 	// contain it, so there is no need to install the rewriter for those.
 	const cchFetch = oauthToken ? wrapFetchForCch(baseFetch) : baseFetch;
 	if (model.provider === "github-copilot") {
 		const copilotApiKey = parseGitHubCopilotApiKey(apiKey).accessToken;
+		// The GitHub Copilot Anthropic proxy doesn't accept Anthropic beta
+		// features (and the catalog already forces `supportsEagerToolInputStreaming
+		// = false` for this host, so `needsFineGrainedToolStreamingBeta` is true
+		// whenever tools are present). Forward only caller-supplied betas.
 		const betaFeatures = [...extraBetas];
-		if (needsFineGrainedToolStreamingBeta) {
-			betaFeatures.push(fineGrainedToolStreamingBeta);
-		}
 		const defaultHeaders = mergeHeaders(
 			{
 				Accept: stream ? "text/event-stream" : "application/json",
@@ -2331,7 +2343,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 			maxRetries: 5,
 			defaultHeaders,
 			fetch: cchFetch,
-			...(tlsFetchOptions ? { fetchOptions: tlsFetchOptions } : {}),
+			fetchOptions,
 		};
 	}
 
@@ -2366,6 +2378,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 			maxRetries: 5,
 			defaultHeaders,
 			fetch: cchFetch,
+			fetchOptions,
 		};
 	}
 
@@ -2382,7 +2395,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 			maxRetries: 5,
 			defaultHeaders,
 			fetch: cchFetch,
-			...(tlsFetchOptions ? { fetchOptions: tlsFetchOptions } : {}),
+			fetchOptions,
 		};
 	}
 	// OpenCode Zen's Anthropic-compatible gateway accepts bearer auth only;
@@ -2396,7 +2409,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 			maxRetries: 5,
 			defaultHeaders,
 			fetch: cchFetch,
-			...(tlsFetchOptions ? { fetchOptions: tlsFetchOptions } : {}),
+			fetchOptions,
 		};
 	}
 
@@ -2415,7 +2428,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		maxRetries: 5,
 		defaultHeaders,
 		fetch: cchFetch,
-		...(tlsFetchOptions ? { fetchOptions: tlsFetchOptions } : {}),
+		fetchOptions,
 	};
 }
 
@@ -2811,17 +2824,18 @@ function buildParams(
 	// Claude Code requests at most 64k output tokens; clamp only OAuth requests,
 	// where the wire fingerprint must match. API-key callers keep the full model
 	// ceiling (e.g. 128k on Opus 4.8).
-	const maxOutputTokens = isOAuthToken ? Math.min(CLAUDE_CODE_MAX_OUTPUT_TOKENS, model.maxTokens) : model.maxTokens;
+	const modelMaxTokens = model.maxTokens ?? CLAUDE_CODE_MAX_OUTPUT_TOKENS;
+	const maxOutputTokens = isOAuthToken ? Math.min(CLAUDE_CODE_MAX_OUTPUT_TOKENS, modelMaxTokens) : modelMaxTokens;
 
 	// Build params in the canonical field order: model → messages → system → tools →
 	// metadata → max_tokens → thinking → context_management → output_config → stream.
 	const params: MessageCreateParamsStreaming = {
-		model: model.id,
+		model: options?.requestModelId ?? model.requestModelId ?? model.id,
 		messages: convertAnthropicMessages(context.messages, model, isOAuthToken),
 		...(systemBlocks && { system: systemBlocks }),
 		...(tools !== undefined && { tools }),
 		...(metadata && { metadata }),
-		max_tokens: Math.min(maxOutputTokens, options?.maxTokens || model.maxTokens),
+		max_tokens: Math.min(maxOutputTokens, options?.maxTokens || modelMaxTokens),
 		...(thinking && { thinking }),
 		...(contextManagement && { context_management: contextManagement }),
 		...(outputConfig && { output_config: outputConfig }),
@@ -2906,11 +2920,22 @@ function ensureErrorToolResultWireContent(
 		: [{ type: "text", text: EMPTY_ERROR_TOOL_RESULT_TEXT }];
 }
 
-function buildToolResultBlock(model: Model<"anthropic-messages">, msg: ToolResultMessage): ContentBlockParam {
-	const content = ensureErrorToolResultWireContent(
-		convertContentBlocks(msg.content, model.input.includes("image")),
-		msg.isError,
-	);
+function buildToolResultBlock(
+	model: Model<"anthropic-messages">,
+	msg: ToolResultMessage,
+	hoistedImages: ContentBlockParam[],
+): ContentBlockParam {
+	let content = convertContentBlocks(msg.content, model.input.includes("image"));
+	// Anthropic rejects images inside error tool results ("all content must be
+	// type `text` if `is_error` is true") — keep the text in the block and
+	// hoist the images after the message's tool_result run.
+	if (msg.isError && typeof content !== "string" && content.some(block => block.type === "image")) {
+		for (const block of content) {
+			if (block.type === "image") hoistedImages.push(block);
+		}
+		content = content.filter(block => block.type === "text");
+	}
+	content = ensureErrorToolResultWireContent(content, msg.isError);
 	const block: ContentBlockParam = {
 		type: "tool_result",
 		tool_use_id: msg.toolCallId,
@@ -3059,13 +3084,12 @@ export function convertAnthropicMessages(
 						type: "tool_use",
 						id: block.id,
 						name: isOAuthToken ? applyClaudeToolPrefix(block.name) : block.name,
-						// Anthropic-origin arguments are guaranteed well-formed (they came
-						// from the API's own JSON); cross-API replays can carry lone
-						// surrogates that Anthropic's strict UTF-8 validation rejects.
-						input:
-							msg.api === "anthropic-messages"
-								? (block.arguments ?? {})
-								: toWellFormedDeep(block.arguments ?? {}),
+						// Always sanitize: the model itself can emit lone-surrogate escapes
+						// in tool-argument JSON (streamed out fine, rejected with a 400 on
+						// replay by Anthropic's strict UTF-8 validation). toWellFormedDeep
+						// is identity-preserving, so well-formed arguments stay
+						// byte-identical and prompt-cache prefixes are unaffected.
+						input: toWellFormedDeep(block.arguments ?? {}),
 					});
 				}
 			}
@@ -3077,20 +3101,29 @@ export function convertAnthropicMessages(
 		} else if (msg.role === "toolResult") {
 			// Collect all consecutive toolResult messages, needed for z.ai Anthropic endpoint
 			const toolResults: ContentBlockParam[] = [];
+			// Images stripped out of error tool results, re-attached after the run.
+			const hoistedImages: ContentBlockParam[] = [];
 
 			// Add the current tool result
-			toolResults.push(buildToolResultBlock(model, msg));
+			toolResults.push(buildToolResultBlock(model, msg, hoistedImages));
 
 			// Look ahead for consecutive toolResult messages
 			let j = i + 1;
 			while (j < transformedMessages.length && transformedMessages[j].role === "toolResult") {
 				const nextMsg = transformedMessages[j] as ToolResultMessage; // We know it's a toolResult
-				toolResults.push(buildToolResultBlock(model, nextMsg));
+				toolResults.push(buildToolResultBlock(model, nextMsg, hoistedImages));
 				j++;
 			}
 
 			// Skip the messages we've already processed
 			i = j - 1;
+
+			if (hoistedImages.length > 0) {
+				toolResults.push(
+					{ type: "text", text: "Attached image(s) from the tool result(s) above:" },
+					...hoistedImages,
+				);
+			}
 
 			// Add a single user message with all tool results
 			params.push({

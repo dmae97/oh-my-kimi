@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use super::git;
 use crate::minimizer::{MinimizerCtx, MinimizerOutput, primitives};
 
+#[must_use]
 pub fn supports(program: &str) -> bool {
 	matches!(
 		program,
@@ -23,6 +24,7 @@ pub fn supports(program: &str) -> bool {
 	)
 }
 
+#[must_use]
 pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
 	let cleaned = primitives::strip_ansi(input);
 	let command = ctx.program;
@@ -223,7 +225,7 @@ struct LogLine {
 	count:    usize,
 }
 
-fn normalize_log_line(line: &str) -> String {
+pub(super) fn normalize_log_line(line: &str) -> String {
 	let without_timestamp = strip_leading_timestamp(line.trim());
 	let mut out = String::new();
 	for token in without_timestamp.split_whitespace() {
@@ -308,6 +310,41 @@ fn flush_digits(out: &mut String, digits: &mut String) {
 		out.push_str(digits);
 	}
 	digits.clear();
+}
+
+pub(super) fn compact_log_lines(
+	input: &str,
+	head: usize,
+	tail: usize,
+	key_fn: impl Fn(&str) -> String,
+) -> String {
+	let mut unique: Vec<LogLine> = Vec::new();
+	let mut by_key: HashMap<String, usize> = HashMap::new();
+
+	for (idx, line) in input.lines().enumerate() {
+		let key = if line.trim().is_empty() {
+			// Blank lines are section separators; do not globally deduplicate them.
+			// drop_repeated_blank_lines already collapsed consecutive blanks.
+			format!("<blank-{idx}>")
+		} else {
+			let key = key_fn(line);
+			if key.is_empty() {
+				line.to_string()
+			} else {
+				key
+			}
+		};
+		if let Some(index) = by_key.get(&key).copied() {
+			if let Some(entry) = unique.get_mut(index) {
+				entry.count += 1;
+			}
+		} else {
+			by_key.insert(key, unique.len());
+			unique.push(LogLine { original: line.to_string(), count: 1 });
+		}
+	}
+
+	render_counted_lines(&unique, head, tail)
 }
 
 fn render_counted_lines(lines: &[LogLine], head: usize, tail: usize) -> String {

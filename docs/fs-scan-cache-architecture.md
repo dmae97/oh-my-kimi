@@ -108,10 +108,10 @@ Current defaults in native APIs:
 - `fuzzyFind`: `hidden=false`, `gitignore=true`, `cache=false`, `node_modules` is skipped, `follow_links=true`, minimal detail
 - `grep`: `hidden=true`, `gitignore=true`, `cache=false`; cached directory mode skips `node_modules` unless the glob mentions `node_modules`; minimal detail
 
-Coding-agent callers today:
+Current callers:
 
-- High-volume mention candidate discovery enables cache:
-  - `packages/coding-agent/src/utils/file-mentions.ts`
+- `@`-mention fuzzy file autocomplete enables cache (`fuzzyFind` with `cache: true`):
+  - `packages/tui/src/autocomplete.ts`
 - Mutation flows invalidate through `packages/coding-agent/src/tools/fs-cache-invalidation.ts`.
 - Tool-level search integration (`packages/coding-agent/src/tools/search.ts`) currently calls native `grep` with `cache: false`.
 

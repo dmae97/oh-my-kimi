@@ -11,7 +11,7 @@ import type {
 } from "@oh-my-pi/pi-agent-core";
 
 import { getWorktreeDir, hashPath, isEnoent, prompt, untilAborted } from "@oh-my-pi/pi-utils";
-import * as z from "zod/v4";
+import { z } from "zod/v4";
 import type { Settings } from "../config/settings";
 import githubDescription from "../prompts/tools/github.md" with { type: "text" };
 import * as git from "../utils/git";
@@ -63,6 +63,44 @@ const GH_ISSUE_FIELDS_NO_COMMENTS = [
 	"updatedAt",
 	"url",
 ];
+
+const GH_ISSUE_STATE_REASON_FIELD = "stateReason";
+
+function ghJsonErrorNamesField(err: unknown, field: string): boolean {
+	if (!(err instanceof Error) || !err.message.includes("Unknown JSON field")) return false;
+	return err.message.includes(`"${field}"`) || err.message.includes(`'${field}'`) || err.message.includes(field);
+}
+
+function dropJsonField(args: readonly string[], field: string): string[] | undefined {
+	const next = [...args];
+	const jsonIndex = next.indexOf("--json");
+	if (jsonIndex < 0) return undefined;
+	const fields = next[jsonIndex + 1];
+	if (!fields) return undefined;
+	const splitFields = fields.split(",");
+	const kept = splitFields.filter(candidate => candidate !== field);
+	if (kept.length === splitFields.length) return undefined;
+	next[jsonIndex + 1] = kept.join(",");
+	return next;
+}
+
+/** Runs `gh --json` for issue data, retrying without optional stateReason on older gh releases. */
+export async function githubIssueJsonWithStateReasonFallback<T>(
+	cwd: string,
+	args: readonly string[],
+	signal: AbortSignal | undefined,
+	options?: git.GhCommandOptions,
+): Promise<T> {
+	try {
+		return await git.github.json<T>(cwd, [...args], signal, options);
+	} catch (err) {
+		if (!ghJsonErrorNamesField(err, GH_ISSUE_STATE_REASON_FIELD)) throw err;
+		const retryArgs = dropJsonField(args, GH_ISSUE_STATE_REASON_FIELD);
+		if (!retryArgs) throw err;
+		return await git.github.json<T>(cwd, retryArgs, signal, options);
+	}
+}
+
 const GH_PR_FIELDS = [
 	"author",
 	"baseRefName",
@@ -2414,13 +2452,16 @@ function buildTextResult(
 	text: string,
 	sourceUrl?: string,
 	details?: GhToolDetails,
-	options?: { artifactId?: string; artifactLabel?: string },
+	options?: { artifactId?: string; artifactLabel?: string; useless?: boolean },
 ): AgentToolResult<GhToolDetails> {
 	const builder = toolResult<GhToolDetails>(details).text(
 		appendArtifactReference(text, options?.artifactId, options?.artifactLabel ?? "Saved artifact"),
 	);
 	if (sourceUrl) {
 		builder.sourceUrl(sourceUrl);
+	}
+	if (options?.useless) {
+		builder.useless();
 	}
 	return builder.done();
 }
@@ -2549,7 +2590,7 @@ async function fetchIssueViewFresh(
 	const args = ["issue", "view", identifier];
 	appendRepoFlag(args, repo, identifier);
 	args.push("--json", (includeComments ? GH_ISSUE_FIELDS : GH_ISSUE_FIELDS_NO_COMMENTS).join(","));
-	const data = await git.github.json<GhIssueViewData>(cwd, args, signal, {
+	const data = await githubIssueJsonWithStateReasonFallback<GhIssueViewData>(cwd, args, signal, {
 		repoProvided: Boolean(repo),
 	});
 	const rendered = formatIssueView(data, { issue: identifier, repo, comments: includeComments });
@@ -3367,7 +3408,9 @@ async function executeSearchIssues(
 
 	const response = await git.github.json<GhApiSearchResponse<GhApiSearchIssueItem>>(session.cwd, args, signal);
 	const items = (response.items ?? []).map(apiIssueToSearchResult);
-	return buildTextResult(formatSearchResults("issues", displayQuery, repo, items));
+	return buildTextResult(formatSearchResults("issues", displayQuery, repo, items), undefined, undefined, {
+		useless: items.length === 0,
+	});
 }
 
 async function executeSearchPrs(
@@ -3385,7 +3428,9 @@ async function executeSearchPrs(
 
 	const response = await git.github.json<GhApiSearchResponse<GhApiSearchIssueItem>>(session.cwd, args, signal);
 	const items = (response.items ?? []).map(apiIssueToSearchResult);
-	return buildTextResult(formatSearchResults("pull requests", displayQuery, repo, items));
+	return buildTextResult(formatSearchResults("pull requests", displayQuery, repo, items), undefined, undefined, {
+		useless: items.length === 0,
+	});
 }
 
 async function executeSearchCode(
@@ -3404,7 +3449,9 @@ async function executeSearchCode(
 
 	const response = await git.github.json<GhApiSearchResponse<GhApiSearchCodeItem>>(session.cwd, args, signal);
 	const items = (response.items ?? []).map(apiCodeToSearchResult);
-	return buildTextResult(formatSearchCodeResults(query, repo, items));
+	return buildTextResult(formatSearchCodeResults(query, repo, items), undefined, undefined, {
+		useless: items.length === 0,
+	});
 }
 
 async function executeSearchCommits(
@@ -3422,7 +3469,9 @@ async function executeSearchCommits(
 
 	const response = await git.github.json<GhApiSearchResponse<GhApiSearchCommitItem>>(session.cwd, args, signal);
 	const items = (response.items ?? []).map(apiCommitToSearchResult);
-	return buildTextResult(formatSearchCommitsResults(displayQuery, repo, items));
+	return buildTextResult(formatSearchCommitsResults(displayQuery, repo, items), undefined, undefined, {
+		useless: items.length === 0,
+	});
 }
 
 async function executeSearchRepos(
@@ -3438,7 +3487,9 @@ async function executeSearchRepos(
 
 	const response = await git.github.json<GhApiSearchResponse<GhApiSearchRepoItem>>(session.cwd, args, signal);
 	const items = (response.items ?? []).map(apiRepoToSearchResult);
-	return buildTextResult(formatSearchReposResults(query, items));
+	return buildTextResult(formatSearchReposResults(query, items), undefined, undefined, {
+		useless: items.length === 0,
+	});
 }
 
 async function executeRunWatch(
@@ -3713,6 +3764,7 @@ async function executeRunWatch(
 				`No workflow runs found for ${repo}@${formatShortSha(headSha) ?? headSha} after ${elapsedSec}s (${pollCount} polls). The commit may not trigger any GitHub Actions workflows, or Actions may be disabled for this repository. Pass \`run\` to watch a specific run.`,
 				undefined,
 				buildCommitRunWatchDetails(repo, headSha, branch, runs, { state: "completed", pollCount }),
+				{ useless: true },
 			);
 		}
 		await scheduler.wait(currentIntervalSeconds() * 1000, { signal });

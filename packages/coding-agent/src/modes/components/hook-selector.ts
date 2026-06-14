@@ -31,13 +31,12 @@ import { CountdownTimer } from "./countdown-timer";
 import { DynamicBorder } from "./dynamic-border";
 import { renderSegmentTrack } from "./segment-track";
 
-/** One segment of a {@link HookSelectorSlider} — a label, its accent color, and
- *  an optional detail line (e.g. the resolved model name) shown beneath the
- *  track while the segment is active. */
+/** One segment of a {@link HookSelectorSlider} — a label and an optional
+ *  detail line (e.g. the resolved model name) shown beneath the track while
+ *  the segment is active. Segment colors come from the track's theme palette,
+ *  assigned by position. */
 export interface HookSelectorSliderSegment {
 	label: string;
-	/** Theme color for the segment label; defaults to `accent`. */
-	color?: ThemeColor;
 	/** Secondary line rendered under the track when this segment is selected. */
 	detail?: string;
 }

@@ -4,6 +4,8 @@
 import type { AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { INTENT_FIELD } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai";
+import { isZodSchema, zodToWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
+import { getVisibleThinkingText } from "../utils/thinking-display";
 import {
 	type BashExecutionMessage,
 	type BranchSummaryMessage,
@@ -45,6 +47,12 @@ function stripTypeBoxFields(obj: unknown): unknown {
 		return result;
 	}
 	return obj;
+}
+
+/** Resolve tool parameters to a plain JSON Schema object for dump output. */
+function toolParametersToJsonSchema(parameters: unknown): unknown {
+	if (isZodSchema(parameters)) return zodToWireSchema(parameters);
+	return stripTypeBoxFields(parameters);
 }
 
 /** Serialize an object as XML parameter elements, one per key. */
@@ -89,7 +97,7 @@ export function formatSessionDumpText(options: FormatSessionDumpTextOptions): st
 		for (const tool of tools) {
 			lines.push(`<tool name="${tool.name}">`);
 			lines.push(tool.description);
-			const parametersClean = stripTypeBoxFields(tool.parameters);
+			const parametersClean = toolParametersToJsonSchema(tool.parameters);
 			lines.push(`\nParameters:\n${formatArgsAsXml(parametersClean as Record<string, unknown>)}`);
 			lines.push("<" + "/tool>\n");
 		}
@@ -119,9 +127,10 @@ export function formatSessionDumpText(options: FormatSessionDumpTextOptions): st
 				if (c.type === "text") {
 					lines.push(c.text);
 				} else if (c.type === "thinking") {
-					if (c.thinking.trim().length === 0) continue;
+					const thinking = getVisibleThinkingText(c);
+					if (thinking.length === 0) continue;
 					lines.push("<thinking>");
-					lines.push(c.thinking);
+					lines.push(thinking);
 					lines.push("</thinking>\n");
 				} else if (c.type === "toolCall") {
 					lines.push(`<invoke name="${c.name}">`);

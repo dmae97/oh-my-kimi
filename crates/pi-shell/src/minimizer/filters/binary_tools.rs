@@ -14,10 +14,12 @@ use crate::minimizer::{MinimizerCtx, MinimizerOutput, primitives};
 const HEAD_LINES: usize = 50;
 const TAIL_LINES: usize = 20;
 
+#[must_use]
 pub fn supports(program: &str, _subcommand: Option<&str>) -> bool {
 	matches!(program, "xxd" | "strings" | "od")
 }
 
+#[must_use]
 pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
 	// Kill-switch parity (M2): legacy_filters_active=true skips this
 	// filter so callers can rollback without recompile.
@@ -44,6 +46,8 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 
 #[cfg(test)]
 mod tests {
+	use std::fmt::Write as _;
+
 	use super::*;
 	use crate::minimizer::MinimizerConfig;
 
@@ -54,7 +58,7 @@ mod tests {
 	fn build_lines(prefix: &str, count: usize) -> String {
 		let mut s = String::new();
 		for i in 0..count {
-			s.push_str(&format!("{prefix}{i:08x}\n"));
+			let _ = writeln!(s, "{prefix}{i:08x}");
 		}
 		s
 	}
@@ -107,9 +111,8 @@ mod tests {
 	#[test]
 	fn binary_tools_legacy_filters_active_passes_through() {
 		// Kill-switch parity (M2).
-		let mut cfg = MinimizerConfig::default();
-		cfg.enabled = true;
-		cfg.legacy_filters_active = true;
+		let cfg =
+			MinimizerConfig { enabled: true, legacy_filters_active: true, ..Default::default() };
 		let input = build_lines("00000000: ", 5000);
 		for prog in ["xxd", "strings", "od"] {
 			let context = ctx(prog, "binary-tool", &cfg);

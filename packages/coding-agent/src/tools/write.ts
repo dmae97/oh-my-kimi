@@ -6,7 +6,7 @@ import { formatHashlineHeader, stripHashlinePrefixes } from "@oh-my-pi/hashline"
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { isEnoent, isRecord, prompt, untilAborted } from "@oh-my-pi/pi-utils";
-import * as z from "zod/v4";
+import { z } from "zod/v4";
 
 import { canonicalSnapshotKey, getFileSnapshotStore } from "../edit/file-snapshot-store";
 import { normalizeToLF } from "../edit/normalize";
@@ -35,7 +35,7 @@ import {
 import { invalidateFsScanAfterWrite } from "./fs-cache-invalidation";
 import { type OutputMeta, outputMeta } from "./output-meta";
 import { formatPathRelativeToCwd, isInternalUrlPath } from "./path-utils";
-import { enforcePlanModeWrite, resolvePlanPath } from "./plan-mode-guard";
+import { enforcePlanModeWrite, resolvePlanPath, unwrapHashlineHeaderPath } from "./plan-mode-guard";
 import {
 	cachedRenderedString,
 	createRenderedStringCache,
@@ -63,6 +63,7 @@ import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 
 const LOOSE_HASHLINE_HEADER_RE = /^\s*\[[^#\r\n]+#[^ \t\r\n]*\]\s*$/;
+const EXECUTABLE_NOTICE = "[Notice: Made executable via chmod +x]";
 
 let fflateModulePromise: Promise<typeof import("fflate")> | undefined;
 async function loadFflate(): Promise<typeof import("fflate")> {
@@ -583,9 +584,10 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 
 	/**
 	 * Resolve a single `conflict://<N>` write by splicing the recorded
-	 * marker region in the registered file with `replacementContent`,
-	 * then routing the new file content through the normal writethrough
-	 * pipeline so LSP format/diagnostics still run.
+	 * marker region in the registered file with `replacementContent`.
+	 * The write deliberately bypasses the LSP writethrough: the file may
+	 * still hold other unresolved marker blocks, so formatting could
+	 * corrupt them and diagnostics would be marker-noise anyway.
 	 *
 	 * Entry ids are session-stable: they keep working even after later
 	 * writes resolve other blocks in the same file. The recorded range
@@ -597,7 +599,6 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		replacementContent: string,
 		stripped: boolean,
 		signal: AbortSignal | undefined,
-		context: AgentToolContext | undefined,
 	): Promise<AgentToolResult<WriteToolDetails>> {
 		const absolutePath = entry.absolutePath;
 		if (!(await fs.exists(absolutePath))) {
@@ -608,8 +609,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		const originalText = await Bun.file(absolutePath).text();
 		const newContent = spliceConflict(originalText, entry, expanded);
 
-		const batchRequest = getLspBatchRequest(context?.toolCall);
-		const diagnostics = await this.#writethrough(absolutePath, newContent, signal, undefined, batchRequest);
+		await writethroughNoop(absolutePath, newContent, signal);
 		invalidateFsScanAfterWrite(absolutePath);
 		this.session.bumpFileMutationVersion?.(absolutePath);
 		this.session.fileSnapshotStore?.invalidate(absolutePath);
@@ -643,21 +643,9 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			resultText += `\nNote: auto-stripped hashline display prefixes from content before writing.`;
 		}
 
-		if (!diagnostics) {
-			return {
-				content: [{ type: "text", text: resultText }],
-				details: { resolvedPath: absolutePath },
-			};
-		}
 		return {
 			content: [{ type: "text", text: resultText }],
-			details: {
-				resolvedPath: absolutePath,
-				diagnostics,
-				meta: outputMeta()
-					.diagnostics(diagnostics.summary, diagnostics.messages ?? [])
-					.get(),
-			},
+			details: { resolvedPath: absolutePath },
 		};
 	}
 
@@ -670,7 +658,6 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		replacementContent: string,
 		stripped: boolean,
 		signal: AbortSignal | undefined,
-		context: AgentToolContext | undefined,
 	): Promise<AgentToolResult<WriteToolDetails>> {
 		const entry = getConflictHistory(this.session).get(id);
 		if (!entry) {
@@ -678,7 +665,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 				`Conflict #${id} not found. Conflict ids are registered when \`read\` surfaces a marker block; re-read the file to get a current id.`,
 			);
 		}
-		return this.#resolveConflict(entry, replacementContent, stripped, signal, context);
+		return this.#resolveConflict(entry, replacementContent, stripped, signal);
 	}
 
 	/**
@@ -700,7 +687,6 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		replacementContent: string,
 		stripped: boolean,
 		signal: AbortSignal | undefined,
-		context: AgentToolContext | undefined,
 	): Promise<AgentToolResult<WriteToolDetails>> {
 		const history = getConflictHistory(this.session);
 		const allEntries = history.entries();
@@ -717,8 +703,6 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			byFile.set(entry.absolutePath, bucket);
 		}
 
-		const batchRequest = getLspBatchRequest(context?.toolCall);
-		const allDiagnostics: FileDiagnosticsResult[] = [];
 		const succeededFiles: { displayPath: string; count: number; header?: string }[] = [];
 		const failedFiles: { displayPath: string; count: number; error: string }[] = [];
 		let totalResolvedIds = 0;
@@ -776,7 +760,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 				continue;
 			}
 
-			const diagnostics = await this.#writethrough(absolutePath, text, signal, undefined, batchRequest);
+			await writethroughNoop(absolutePath, text, signal);
 			invalidateFsScanAfterWrite(absolutePath);
 			this.session.bumpFileMutationVersion?.(absolutePath);
 			this.session.fileSnapshotStore?.invalidate(absolutePath);
@@ -785,7 +769,6 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			const header = maybeWriteSnapshotHeader(this.session, absolutePath, text);
 			succeededFiles.push({ displayPath: sample.displayPath, count: resolvedEntries.length, header });
 			totalResolvedIds += resolvedEntries.length;
-			if (diagnostics) allDiagnostics.push(diagnostics);
 		}
 
 		const summaryLines: string[] = [];
@@ -819,23 +802,12 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		}
 		const resultText = summaryLines.join("\n");
 
-		if (allDiagnostics.length === 0) {
-			if (failedFiles.length > 0 && succeededFiles.length === 0) {
-				throw new ToolError(resultText);
-			}
-			return {
-				content: [{ type: "text", text: resultText }],
-				details: {},
-				isError: failedFiles.length > 0 ? true : undefined,
-			};
+		if (failedFiles.length > 0 && succeededFiles.length === 0) {
+			throw new ToolError(resultText);
 		}
-		const mergedSummary = allDiagnostics.map(d => d.summary).join("\n");
-		const mergedMessages = allDiagnostics.flatMap(d => d.messages ?? []);
 		return {
 			content: [{ type: "text", text: resultText }],
-			details: {
-				meta: outputMeta().diagnostics(mergedSummary, mergedMessages).get(),
-			},
+			details: {},
 			isError: failedFiles.length > 0 ? true : undefined,
 		};
 	}
@@ -847,11 +819,20 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 	}
 	async execute(
 		_toolCallId: string,
-		{ path, content }: WriteParams,
+		{ path: rawPath, content }: WriteParams,
 		signal?: AbortSignal,
 		_onUpdate?: AgentToolUpdateCallback<WriteToolDetails>,
 		context?: AgentToolContext,
 	): Promise<AgentToolResult<WriteToolDetails>> {
+		// Strip a hashline `[path#TAG]` wrapper up front so every downstream
+		// decision (scheme routing, internal-URL handler dispatch, plan-mode
+		// guard, plan path resolution, ACP bridge routing) sees the same
+		// filesystem target. Without this, a model that pastes a `read`
+		// header as the `path` arg would slip past `isInternalUrlPath`
+		// (which fails on a leading `[`) and the bridge router would send a
+		// `[local://scratch.md#ABCD]` write to the editor instead of the
+		// session-local sandbox.
+		const path = unwrapHashlineHeaderPath(rawPath);
 		return untilAborted(signal, async () => {
 			// Strip hashline display prefixes ([PATH#HASH] + LINE:) if the model copied them from read output
 			const { text: cleanContent, stripped } = stripWriteContent(this.session, content);
@@ -885,8 +866,8 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 				}
 				const result =
 					conflictUri.id === "*"
-						? await this.#resolveAllConflicts(cleanContent, stripped, signal, context)
-						: await this.#resolveSingleConflictById(conflictUri.id, cleanContent, stripped, signal, context);
+						? await this.#resolveAllConflicts(cleanContent, stripped, signal)
+						: await this.#resolveSingleConflictById(conflictUri.id, cleanContent, stripped, signal);
 				if (conflictUri.recoveredPrefix !== undefined) {
 					appendNoteToResult(
 						result,
@@ -961,6 +942,9 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 				if (stripped) {
 					resultText += `\nNote: auto-stripped hashline display prefixes from content before writing.`;
 				}
+				if (madeExecutable) {
+					resultText += `\n${EXECUTABLE_NOTICE}`;
+				}
 				return {
 					content: [{ type: "text", text: resultText }],
 					details: { resolvedPath: absolutePath, madeExecutable: madeExecutable || undefined },
@@ -978,6 +962,9 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			let resultText = header ? `${header}\n${writeLine}` : writeLine;
 			if (stripped) {
 				resultText += `\nNote: auto-stripped hashline display prefixes from content before writing.`;
+			}
+			if (madeExecutable) {
+				resultText += `\n${EXECUTABLE_NOTICE}`;
 			}
 			if (!diagnostics) {
 				return {

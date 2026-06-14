@@ -1,0 +1,9 @@
+Create, update, or delete a managed skill — a `SKILL.md` written to an isolated directory (`~/.omp/agent/managed-skills`) and surfaced like a normal skill in future sessions.
+
+Managed skills are for repeatable procedures worth codifying: a setup sequence, a debugging recipe, a project-specific workflow. They are kept separate from user-authored skills and this tool NEVER edits those.
+
+- `action: "create"` — requires `name`, `description`, and `body`. Fails if the skill already exists.
+- `action: "update"` — requires `name`, `description`, and `body`. Fails if the skill does not exist. Overwrites the body.
+- `action: "delete"` — requires `name`. Fails if the skill does not exist.
+
+`name` is kebab-case (lowercase letters, digits, hyphens). `description` is a single line stating when to use the skill — it drives discovery, so make it specific. `body` is the SKILL.md content in markdown; do not include frontmatter (it is generated from `name` and `description`).

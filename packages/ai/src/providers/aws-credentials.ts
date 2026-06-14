@@ -335,7 +335,6 @@ async function readCredentialProcess(
 	signal: AbortSignal | undefined,
 ): Promise<ResolvedCredentials> {
 	const argv = buildCredentialProcessArgv(profile, command);
-
 	const child = Bun.spawn(argv, {
 		stdin: "ignore",
 		stdout: "pipe",

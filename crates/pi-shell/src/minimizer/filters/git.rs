@@ -4,6 +4,7 @@ use std::fmt::Write as _;
 
 use crate::minimizer::{MinimizerCtx, MinimizerOutput, primitives};
 
+#[must_use]
 pub fn supports(subcommand: Option<&str>) -> bool {
 	matches!(
 		subcommand,
@@ -29,6 +30,7 @@ pub fn supports(subcommand: Option<&str>) -> bool {
 	)
 }
 
+#[must_use]
 pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
 	if is_show_path_content(ctx.command) || is_stash_patch(ctx.command) {
 		return MinimizerOutput::passthrough(input);
@@ -66,7 +68,16 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 		Some("tag") if is_tag_non_listing(ctx.command) => cleaned,
 		Some("tag") => primitives::compact_listing(&cleaned, 40),
 		Some("stash") => condense_stash(ctx.command, &cleaned, exit_code),
-		Some("worktree") => cleaned,
+		Some("worktree") => {
+			if has_token(ctx.command, "--porcelain")
+				|| has_token(ctx.command, "-z")
+				|| has_token(ctx.command, "--null")
+			{
+				cleaned
+			} else {
+				condense_worktree(&cleaned)
+			}
+		},
 		Some("push") if has_token(ctx.command, "--porcelain") => cleaned,
 		Some("push") => condense_push(&cleaned, exit_code),
 		Some("pull") => condense_pull(&cleaned, exit_code),
@@ -266,7 +277,15 @@ fn condense_status(input: &str) -> String {
 			summary.clean = true;
 			continue;
 		}
-		if let Some(detected) = detect_status_state(trimmed) {
+		// Only detect in-progress state headers OUTSIDE the "Untracked files:"
+		// section. Real `git status` prints these blocks before/after the file
+		// listings, never as untracked entries; but several progress phrases
+		// ("Last command done", "Next command to do", "No commands remaining")
+		// are plausible filenames, so an untracked file so named would otherwise
+		// be mis-read as `state: rebasing` and swallowed via the `continue`
+		// below, losing the real untracked count. Gating on `!in_untracked`
+		// lets such filenames fall through to the untracked path handling.
+		if !in_untracked && let Some(detected) = detect_status_state(trimmed) {
 			if state.is_none() {
 				state = Some(detected);
 			}
@@ -320,7 +339,20 @@ fn condense_status(input: &str) -> String {
 	}
 }
 fn detect_status_state(line: &str) -> Option<&str> {
-	if line.starts_with("You are currently rebasing") {
+	if line.starts_with("You are currently rebasing")
+		// Interactive-rebase sub-states all print under the same in-progress
+		// rebase header in default long-format `git status`; collapse them to
+		// the single `rebasing` label so an interactive-rebase edit/split is not
+		// mistaken for a clean tree. "You are currently editing a commit"/"…
+		// splitting the commit" are the rebase-edit/-split phase lines, and the
+		// "Last command done"/"Next command to do"/"No commands remaining"
+		// progress lines accompany them.
+		|| line.starts_with("You are currently editing")
+		|| line.starts_with("You are currently splitting")
+		|| line.starts_with("Last command done")
+		|| line.starts_with("Next command to do")
+		|| line.starts_with("No commands remaining")
+	{
 		Some("rebasing")
 	} else if line.starts_with("You are currently cherry-picking") {
 		Some("cherry-pick")
@@ -332,6 +364,11 @@ fn detect_status_state(line: &str) -> Option<&str> {
 		Some("am")
 	} else if line.starts_with("You are in a sparse checkout") {
 		Some("sparse-checkout")
+	} else if line.starts_with("All conflicts fixed but you are still merging") {
+		// Distinct from `merge-conflict`: the merge is staged and ready to
+		// conclude with `git commit`, so surface a separate "ready to commit"
+		// label rather than implying unresolved conflicts.
+		Some("merge (ready to commit)")
 	} else if line == "You have unmerged paths." {
 		Some("merge-conflict")
 	} else {
@@ -528,19 +565,32 @@ struct LogEntry {
 	hash:    String,
 	subject: String,
 	body:    Vec<String>,
+	/// Body lines dropped past the per-commit body cap, surfaced as an explicit
+	/// `[+N lines omitted]` marker instead of being silently lost.
+	omitted: usize,
 }
+
+/// Soft cap on rendered subject/body line width. Long commit subjects and body
+/// lines are truncated through `truncate_line`, which appends a `…[+N]`
+/// dropped-char marker so the elision is visible rather than silent.
+const LOG_LINE_WIDTH: usize = 160;
 
 fn push_log_entry(out: &mut String, entry: &LogEntry) {
 	out.push_str(&entry.hash);
 	if !entry.subject.is_empty() {
 		out.push(' ');
-		out.push_str(&entry.subject);
+		out.push_str(&primitives::truncate_line(&entry.subject, LOG_LINE_WIDTH));
 	}
 	out.push('\n');
 	for line in &entry.body {
 		out.push_str("  ");
-		out.push_str(line);
+		out.push_str(&primitives::truncate_line(line, LOG_LINE_WIDTH));
 		out.push('\n');
+	}
+	if entry.omitted > 0 {
+		out.push_str("  [+");
+		out.push_str(&entry.omitted.to_string());
+		out.push_str(" lines omitted]\n");
 	}
 }
 
@@ -561,6 +611,7 @@ fn parse_log_entries(input: &str) -> Vec<LogEntry> {
 				hash:    short_hash(hash),
 				subject: subject.to_string(),
 				body:    Vec::new(),
+				omitted: 0,
 			});
 			continue;
 		}
@@ -574,8 +625,15 @@ fn parse_log_entries(input: &str) -> Vec<LogEntry> {
 		}
 		if entry.subject.is_empty() {
 			entry.subject = trimmed.to_string();
-		} else if entry.body.len() < 3 && !is_git_trailer(trimmed) {
-			entry.body.push(trimmed.to_string());
+		} else if !is_git_trailer(trimmed) {
+			// Real (non-trailer) body lines past the 3-line cap are tallied so
+			// `push_log_entry` can emit an explicit `[+N lines omitted]` marker
+			// rather than dropping them silently.
+			if entry.body.len() < 3 {
+				entry.body.push(trimmed.to_string());
+			} else {
+				entry.omitted += 1;
+			}
 		}
 	}
 
@@ -1051,11 +1109,31 @@ fn condense_noisy_output(input: &str) -> String {
 
 fn condense_commit(input: &str, exit_code: i32) -> String {
 	if exit_code == 0 {
+		let mut hash = None;
+		let mut stat = None;
 		for line in input.lines() {
 			let trimmed = line.trim();
-			if let Some(hash) = parse_commit_hash(trimmed) {
-				return format!("ok {hash}\n");
+			if hash.is_none()
+				&& let Some(found) = parse_commit_hash(trimmed)
+			{
+				hash = Some(found);
+				continue;
 			}
+			// Default `git commit` success prints a "N files changed, …" stat line
+			// below the "[branch hash] msg" line; fold it back into the summary so
+			// the files/insertions signal survives the condense.
+			if stat.is_none() {
+				stat = parse_stat_summary(trimmed);
+			}
+		}
+		if let Some(hash) = hash {
+			return match stat {
+				Some((files, added, deleted)) => {
+					format!("ok {hash} ({files} files +{added} -{deleted})\n")
+				},
+				// `--quiet` (or otherwise stat-less) success keeps the bare hash.
+				None => format!("ok {hash}\n"),
+			};
 		}
 		// No commit hash found — likely a `--dry-run` invocation that exits 0
 		// but prints a status-style listing instead of a "[branch hash]" line.
@@ -1435,6 +1513,90 @@ fn stash_subcommand(command: &str) -> &str {
 	""
 }
 
+const WORKTREE_LIMIT: usize = 20;
+
+fn condense_worktree(input: &str) -> String {
+	// Home is re-derived from the environment (never shelled out) so a leading
+	// `$HOME` in worktree paths can be abbreviated to `~`. Falls back to no
+	// abbreviation when `HOME` is unset.
+	let home = std::env::var("HOME").unwrap_or_default();
+	condense_worktree_with_home(input, &home)
+}
+
+/// Condense `git worktree` output, shape-detected from the OUTPUT rather than
+/// the args so it covers both `worktree list` and bare confirmations.
+///
+/// Listing-shaped lines (`<abs-path> <hash> [<branch>]`, plus the `(bare)` and
+/// `(detached HEAD)` variants) get a leading `$HOME` abbreviated to `~` and are
+/// capped with an omitted-count marker. Any non-listing output (`add`'s
+/// "Preparing worktree…"/"HEAD is now at …" confirmations, errors) is left to
+/// `condense_noisy_output`/passthrough so its meaning is preserved.
+fn condense_worktree_with_home(input: &str, home: &str) -> String {
+	let mut entries = Vec::new();
+	for line in input.lines() {
+		if line.trim().is_empty() {
+			continue;
+		}
+		if !is_worktree_listing_line(line) {
+			// Not a listing: confirmation / error / progress — hand off untouched.
+			return condense_noisy_output(input);
+		}
+		entries.push(abbreviate_worktree_home(line, home));
+	}
+
+	if entries.is_empty() {
+		return input.to_string();
+	}
+
+	let mut out = String::new();
+	for entry in entries.iter().take(WORKTREE_LIMIT) {
+		out.push_str(entry);
+		out.push('\n');
+	}
+	if entries.len() > WORKTREE_LIMIT {
+		out.push_str("… ");
+		out.push_str(&(entries.len() - WORKTREE_LIMIT).to_string());
+		out.push_str(" worktrees omitted …\n");
+	}
+	out
+}
+
+/// A `git worktree list` row is `<abs-path>  <hash> [<branch>]`, with the
+/// trailing column being `(bare)` for a bare repo or `(detached HEAD)` for a
+/// detached worktree. The discriminator: an absolute first token followed by a
+/// hex hash or the literal `(bare)`.
+fn is_worktree_listing_line(line: &str) -> bool {
+	let mut parts = line.split_whitespace();
+	let Some(path) = parts.next() else {
+		return false;
+	};
+	if !path.starts_with('/') {
+		return false;
+	}
+	let Some(second) = parts.next() else {
+		return false;
+	};
+	second == "(bare)" || is_short_hex(second)
+}
+
+fn is_short_hex(token: &str) -> bool {
+	token.len() >= 7 && token.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn abbreviate_worktree_home(line: &str, home: &str) -> String {
+	if home.is_empty() {
+		return line.to_string();
+	}
+	// Only abbreviate a leading `$HOME` path prefix; a bare `$HOME` exactly is
+	// rendered as `~`. Mid-line occurrences are left untouched.
+	if let Some(rest) = line.strip_prefix(home)
+		&& (rest.is_empty() || rest.starts_with(['/', ' ', '\t']))
+	{
+		return format!("~{rest}");
+	}
+	line.to_string()
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -1579,9 +1741,10 @@ mod tests {
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
 		let ctx =
 			test_ctx(Some("tag"), "git tag --format=%(refname:short)|%(taggerdate:short)", &cfg);
-		let input = (0..45)
-			.map(|idx| format!("v1.{idx}|2026-06-06\n"))
-			.collect::<String>();
+		let input = (0..45).fold(String::new(), |mut s, idx| {
+			let _ = writeln!(s, "v1.{idx}|2026-06-06");
+			s
+		});
 
 		let out = filter(&ctx, &input, 0);
 
@@ -1593,9 +1756,10 @@ mod tests {
 	fn tag_delete_output_is_passthrough() {
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
 		let ctx = test_ctx(Some("tag"), "git tag -d v1.0 v1.1", &cfg);
-		let input = (0..45)
-			.map(|idx| format!("Deleted tag 'v1.{idx}' (was abc1234)\n"))
-			.collect::<String>();
+		let input = (0..45).fold(String::new(), |mut s, idx| {
+			let _ = writeln!(s, "Deleted tag 'v1.{idx}' (was abc1234)");
+			s
+		});
 
 		let out = filter(&ctx, &input, 0);
 
@@ -1607,7 +1771,10 @@ mod tests {
 	fn tag_listing_is_compacted() {
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
 		let ctx = test_ctx(Some("tag"), "git tag --list", &cfg);
-		let input = (0..45).map(|idx| format!("v1.{idx}\n")).collect::<String>();
+		let input = (0..45).fold(String::new(), |mut s, idx| {
+			let _ = writeln!(s, "v1.{idx}");
+			s
+		});
 
 		let out = filter(&ctx, &input, 0);
 
@@ -1797,6 +1964,41 @@ mod tests {
 	}
 
 	#[test]
+	fn log_long_subject_is_truncated_with_dropped_marker() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = test_ctx(Some("log"), "git log", &cfg);
+		let long_subject = "x".repeat(200);
+		let input = format!(
+			"commit abcdef1234567890\nAuthor: A <a@x.com>\nDate: today\n\n    {long_subject}\n"
+		);
+		let out = filter(&ctx, &input, 0);
+		// 200 chars → first 160 kept, 40 dropped, surfaced by truncate_line's marker.
+		assert!(
+			out.text
+				.contains(&format!("abcdef1 {}…[+40]", "x".repeat(160))),
+			"{:?}",
+			out.text
+		);
+		assert!(!out.text.contains(&long_subject), "full subject must not survive");
+	}
+
+	#[test]
+	fn log_body_over_cap_shows_omitted_marker() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = test_ctx(Some("log"), "git log", &cfg);
+		// Subject + 5 body lines: 3 kept, 2 past the cap surfaced as a marker.
+		let input = "commit abcdef1234567890\nAuthor: A <a@x.com>\nDate: today\n\n    feat: add \
+		             API\n\n    body line one\n    body line two\n    body line three\n    body \
+		             line four\n    body line five\n";
+		let out = filter(&ctx, input, 0);
+		assert!(out.text.contains("abcdef1 feat: add API"), "{:?}", out.text);
+		assert!(out.text.contains("body line one"));
+		assert!(out.text.contains("body line three"));
+		assert!(!out.text.contains("body line four"), "{:?}", out.text);
+		assert!(out.text.contains("[+2 lines omitted]"), "{:?}", out.text);
+	}
+
+	#[test]
 	fn diff_condenses_unified_patch_to_stat_and_hunk_samples() {
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
 		let ctx = test_ctx(Some("diff"), "git diff HEAD~1", &cfg);
@@ -1878,10 +2080,8 @@ mod tests {
 			if idx % 3 == 0 {
 				input.push_str(".rs\tnew-");
 				input.push_str(&idx.to_string());
-				input.push_str(".rs\n");
-			} else {
-				input.push_str(".rs\n");
 			}
+			input.push_str(".rs\n");
 		}
 
 		let out = filter(&ctx, &input, 0);
@@ -1965,7 +2165,7 @@ mod tests {
 	}
 
 	#[test]
-	fn commit_success_compacts_to_hash_only() {
+	fn commit_success_compacts_to_hash_with_stat_summary() {
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
 		let ctx = test_ctx(Some("commit"), "git commit -m msg", &cfg);
 		let input = "\
@@ -1976,9 +2176,30 @@ mod tests {
 ";
 		let out = filter(&ctx, input, 0);
 
-		assert_eq!(out.text, "ok 5f490f764\n");
+		// Best-of: the change summary from the stat line is folded into `ok <hash>`.
+		assert_eq!(out.text, "ok 5f490f764 (70 files +3081 -403)\n");
 		assert!(!out.text.contains("files changed"));
 		assert!(!out.text.contains("create mode"));
+	}
+
+	#[test]
+	fn commit_success_with_stat_appends_change_summary() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = test_ctx(Some("commit"), "git commit -m msg", &cfg);
+		// Default `git commit` success body: "[branch hash] msg" + stat line.
+		let input = "[main 1a2b3c4] msg\n 3 files changed, 10 insertions(+), 2 deletions(-)\n";
+		let out = filter(&ctx, input, 0);
+		assert_eq!(out.text, "ok 1a2b3c4 (3 files +10 -2)\n");
+	}
+
+	#[test]
+	fn commit_success_without_stat_keeps_bare_hash() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = test_ctx(Some("commit"), "git commit -m msg --quiet", &cfg);
+		// `--quiet` suppresses the stat line; the bare hash summary is preserved.
+		let input = "[main 1a2b3c4] msg\n";
+		let out = filter(&ctx, input, 0);
+		assert_eq!(out.text, "ok 1a2b3c4\n");
 	}
 
 	#[test]
@@ -2162,6 +2383,39 @@ hint: See the 'Note about fast-forwards' in 'git push --help' for details.
 	}
 
 	#[test]
+	fn status_detects_interactive_rebase_edit() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = test_ctx(Some("status"), "git status", &cfg);
+		// Realistic default long-format body for an interactive-rebase `edit` stop.
+		let input = "On branch feature\n\ninteractive rebase in progress; onto abc1234\nLast \
+		             command done (1 command done):\n   edit abc123 some message\nNo commands \
+		             remaining.\nYou are currently editing a commit while rebasing branch 'feature' \
+		             on 'abc1234'.\n  (use \"git commit --amend\" to amend the current commit)\n  \
+		             (use \"git rebase --continue\" once you are satisfied with your \
+		             changes)\n\nnothing to commit, working tree clean\n";
+		let out = filter(&ctx, input, 0);
+		assert!(out.changed);
+		assert!(out.text.starts_with("state: rebasing\n"), "{:?}", out.text);
+		assert!(out.text.contains("branch feature"));
+	}
+
+	#[test]
+	fn status_detects_merge_all_conflicts_fixed() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = test_ctx(Some("status"), "git status", &cfg);
+		// Realistic default long-format body after all merge conflicts are resolved.
+		let input = "On branch main\n\nAll conflicts fixed but you are still merging.\n  (use \"git \
+		             commit\" to conclude merge)\n\nChanges to be committed:\n  modified:   \
+		             src/main.rs\n";
+		let out = filter(&ctx, input, 0);
+		assert!(out.changed);
+		assert!(out.text.starts_with("state: merge (ready to commit)\n"), "{:?}", out.text);
+		// Distinct from the unresolved-conflict label.
+		assert!(!out.text.contains("merge-conflict"));
+		assert!(out.text.contains("M src/main.rs"));
+	}
+
+	#[test]
 	fn status_state_not_emitted_when_no_state() {
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
 		let ctx = test_ctx(Some("status"), "git status", &cfg);
@@ -2171,6 +2425,25 @@ hint: See the 'Note about fast-forwards' in 'git push --help' for details.
 		assert!(out.changed);
 		assert!(!out.text.contains("state:"));
 		assert_eq!(out.text, "branch main\nclean\n");
+	}
+
+	#[test]
+	fn status_untracked_file_named_like_rebase_progress_not_misread_as_state() {
+		// A clean tree whose only untracked file is named like a rebase
+		// progress line must NOT be reported as `state: rebasing`, and the
+		// untracked file must still be counted. Regression for the
+		// detect_status_state false positive inside the untracked section.
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = test_ctx(Some("status"), "git status", &cfg);
+		let input = "On branch main\nUntracked files:\n  (use \"git add <file>...\" to include in \
+		             what will be committed)\n\tNext command to do.md\n";
+		let out = filter(&ctx, input, 0);
+		assert!(out.changed);
+		// Pre-fix this body was reported as `state: rebasing` with the filename
+		// swallowed; the fix keeps state detection out of the untracked section.
+		assert!(!out.text.contains("state:"), "{:?}", out.text);
+		assert!(out.text.contains("untracked 1"), "{:?}", out.text);
+		assert!(out.text.contains("?? Next command to do.md"), "{:?}", out.text);
 	}
 
 	// --- Pull summaries ---
@@ -2483,6 +2756,90 @@ error: could not apply abc1234... fix: something\nhint: Resolve all conflicts ma
 	}
 
 	// --- Push porcelain passthrough ---
+
+	// --- Worktree condense ---
+
+	#[test]
+	fn worktree_list_caps_and_abbreviates_home() {
+		let home = "/home/alice";
+		let mut input = String::new();
+		// 22 listing entries under $HOME, including a bare and a detached-HEAD row.
+		input.push_str("/home/alice/repo                  abc1234 (bare)\n");
+		input.push_str("/home/alice/repo-detached         def5678 (detached HEAD)\n");
+		for idx in 0..20 {
+			let _ = writeln!(
+				input,
+				"/home/alice/wt-{idx:02}                    aaaaaaa{idx:02} [wt-{idx}]"
+			);
+		}
+		let out = condense_worktree_with_home(&input, home);
+
+		// Leading $HOME abbreviated to '~'.
+		assert!(out.starts_with("~/repo "), "{out:?}");
+		assert!(out.contains("~/repo-detached "));
+		assert!(out.contains("(bare)"));
+		assert!(out.contains("(detached HEAD)"));
+		assert!(!out.contains("/home/alice"), "no absolute $HOME paths should survive: {out:?}");
+		// 22 entries → capped at 20 with a 2-omitted marker.
+		assert!(out.contains("… 2 worktrees omitted …"), "{out:?}");
+		assert_eq!(out.lines().filter(|l| l.starts_with('~')).count(), 20);
+	}
+
+	#[test]
+	fn worktree_add_confirmation_passes_through() {
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = test_ctx(Some("worktree"), "git worktree add ../wt feature", &cfg);
+		// `worktree add` confirmation is not listing-shaped; it must survive.
+		let input = "Preparing worktree (new branch 'feature')\nHEAD is now at abc1234 commit msg\n";
+		let out = filter(&ctx, input, 0);
+		assert!(!out.changed, "{:?}", out.text);
+		assert_eq!(out.text, input);
+	}
+
+	#[test]
+	fn worktree_porcelain_passthrough() {
+		// `git worktree list --porcelain` emits machine-readable records;
+		// the minimizer must not insert "… N lines omitted …" markers.
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = test_ctx(Some("worktree"), "git worktree list --porcelain", &cfg);
+		let input = "worktree /home/user/project\nHEAD abc1234def\nbranch \
+		             refs/heads/main\n\nworktree /home/user/other\nHEAD 567890ab\nbranch \
+		             refs/heads/feat\n";
+		let out = filter(&ctx, input, 0);
+		assert!(!out.changed, "porcelain worktree listing must pass through unchanged");
+		assert_eq!(out.text, input, "porcelain worktree listing must pass through");
+	}
+
+	#[test]
+	fn worktree_null_passthrough() {
+		// `git worktree list -z` also produces machine-readable NUL-delimited output.
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = test_ctx(Some("worktree"), "git worktree list -z", &cfg);
+		let input = "worktree /home/user/project\0HEAD abc1234def\0branch refs/heads/main\0";
+		let out = filter(&ctx, input, 0);
+		assert!(!out.changed, "-z worktree output must pass through unchanged");
+		assert_eq!(out.text, input);
+	}
+
+	#[test]
+	fn worktree_non_porcelain_still_condensed() {
+		// Normal (non-porcelain) listing should still go through the condenser.
+		// Build 22 listing-shaped entries so the cap (20) is exceeded; the condenser
+		// would insert an "… N worktrees omitted …" marker that a passthrough would
+		// never emit.
+		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
+		let ctx = test_ctx(Some("worktree"), "git worktree list", &cfg);
+		let mut input = String::new();
+		for idx in 0..22usize {
+			let _ = writeln!(input, "/repo/wt-{idx:02}  aaaaaaa{idx:02} [branch-{idx}]");
+		}
+		let out = filter(&ctx, &input, 0);
+		assert!(
+			out.text.contains("worktrees omitted"),
+			"non-porcelain output over the cap must show omitted marker; got: {:?}",
+			out.text
+		);
+	}
 
 	#[test]
 	fn push_porcelain_output_is_passthrough() {

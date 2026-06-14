@@ -1,17 +1,5 @@
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import { logger, structuredCloneJSON } from "@oh-my-pi/pi-utils";
-import type OpenAI from "openai";
-import type {
-	ResponseCustomToolCall,
-	ResponseFunctionToolCall,
-	ResponseInput,
-	ResponseInputContent,
-	ResponseInputImage,
-	ResponseInputText,
-	ResponseOutputItem,
-	ResponseOutputMessage,
-	ResponseReasoningItem,
-} from "openai/resources/responses/responses";
 import {
 	type Api,
 	type AssistantMessage,
@@ -32,6 +20,20 @@ import {
 import { normalizeResponsesToolCallId } from "../utils";
 import type { AssistantMessageEventStream } from "../utils/event-stream";
 import { parseStreamingJson, parseStreamingJsonThrottled } from "../utils/json-parse";
+import type {
+	ResponseCreateParamsStreaming,
+	ResponseCustomToolCall,
+	ResponseFunctionToolCall,
+	ResponseInput,
+	ResponseInputContent,
+	ResponseInputImage,
+	ResponseInputText,
+	ResponseOutputItem,
+	ResponseOutputMessage,
+	ResponseReasoningItem,
+	ResponseStatus,
+	ResponseStreamEvent,
+} from "./openai-responses-wire";
 import { joinTextWithImagePlaceholder, NON_VISION_IMAGE_PLACEHOLDER, partitionVisionContent } from "./vision-guard";
 export const OPENAI_RESPONSES_PROGRESS_EVENT_TYPES: ReadonlySet<string> = new Set([
 	"response.created",
@@ -470,7 +472,7 @@ export interface ProcessResponsesStreamOptions {
 }
 
 export async function processResponsesStream<TApi extends Api>(
-	openaiStream: AsyncIterable<OpenAI.Responses.ResponseStreamEvent>,
+	openaiStream: AsyncIterable<ResponseStreamEvent>,
 	output: AssistantMessage,
 	stream: AssistantMessageEventStream,
 	model: Model<TApi>,
@@ -913,6 +915,15 @@ export async function processResponsesStream<TApi extends Api>(
 			if (output.content.some(block => block.type === "toolCall") && output.stopReason === "stop") {
 				output.stopReason = "toolUse";
 			}
+			// Codex-lineage backends/gateways mark an unfinished turn with
+			// `end_turn: false` on the terminal event (the response ended on
+			// commentary only). Not in the SDK types or the platform API today —
+			// inert when absent. Same mapping as openai-codex-responses: surface a
+			// non-terminal stop so the agent loop re-samples instead of ending the
+			// turn.
+			if ((response as { end_turn?: boolean } | undefined)?.end_turn === false && output.stopReason === "stop") {
+				output.stopDetails = { type: "pause_turn" };
+			}
 			options?.onCompleted?.();
 			// `response.completed`/`response.incomplete` is the last event of a
 			// Responses stream. Stop pulling instead of waiting for the server to
@@ -923,7 +934,10 @@ export async function processResponsesStream<TApi extends Api>(
 			// reaches the SDK stream), actively releasing the connection.
 			break;
 		} else if (event.type === "error") {
-			throw new Error(`Error Code ${event.code}: ${event.message}`);
+			const err = (event as any).error ?? event;
+			const code = err.code ?? "unknown";
+			const message = err.message ?? "no message";
+			throw new Error(`Error Code ${code}: ${message}`);
 		} else if (event.type === "response.failed") {
 			populateResponsesUsageFromResponse(output, event.response?.usage);
 			const error = event.response?.error ?? (event.response as any)?.status_details?.error;
@@ -938,7 +952,7 @@ export async function processResponsesStream<TApi extends Api>(
 	}
 }
 
-export function mapOpenAIResponsesStopReason(status: OpenAI.Responses.ResponseStatus | undefined): StopReason {
+export function mapOpenAIResponsesStopReason(status: ResponseStatus | undefined): StopReason {
 	if (!status) return "stop";
 	switch (status) {
 		case "completed":
@@ -992,7 +1006,7 @@ export type ResponsesSamplingParamsExtras = {
 	repetition_penalty?: number;
 };
 
-type CommonResponsesParams = OpenAI.Responses.ResponseCreateParamsStreaming & ResponsesSamplingParamsExtras;
+type CommonResponsesParams = ResponseCreateParamsStreaming & ResponsesSamplingParamsExtras;
 
 type CommonSamplingOptions = Pick<
 	StreamOptions,
@@ -1014,7 +1028,11 @@ export function applyCommonResponsesSamplingParams<P extends CommonResponsesPara
 	model: Pick<Model, "provider" | "omitMaxOutputTokens" | "maxTokens">,
 ): void {
 	if (options?.maxTokens && !model.omitMaxOutputTokens) {
-		params.max_output_tokens = Math.min(options.maxTokens, model.maxTokens, OPENAI_MAX_OUTPUT_TOKENS);
+		params.max_output_tokens = Math.min(
+			options.maxTokens,
+			model.maxTokens ?? Number.POSITIVE_INFINITY,
+			OPENAI_MAX_OUTPUT_TOKENS,
+		);
 	}
 	if (options?.temperature !== undefined) params.temperature = options.temperature;
 	if (options?.topP !== undefined) params.top_p = options.topP;
@@ -1037,8 +1055,12 @@ type ReasoningOptions = {
 
 /**
  * Apply reasoning-related Responses parameters: enable encrypted reasoning content for replay,
- * set effort/summary when requested, and otherwise inject the GPT-5 "Juice: 0" no-reasoning hack.
- * Mutates `params` and may push a developer message into `messages`.
+ * set effort/summary when requested, and otherwise inject the "Juice: 0" no-reasoning hack
+ * when `model.compat.requiresJuiceZeroHack` is set (GPT-5 family by default).
+ * Mutates `params` and may push a developer message into `messages`. Returns
+ * the number of per-turn trailing scaffolding items appended to `messages`
+ * (the "Juice: 0" developer item), so callers doing stateful
+ * `previous_response_id` chaining can exclude them from append-baseline math.
  *
  * @param omitReasoningEffort - When `true`, suppresses `params.reasoning.effort` from the wire
  *   body. Set by `xai-responses.ts` via {@link OpenAIResponsesOptions.omitReasoningEffort} for
@@ -1049,16 +1071,16 @@ type ReasoningOptions = {
  *   without needing explicit activation. Callers that pass `options.reasoning` for such models
  *   should expect this documented downgrade: the model will reason, but at its default effort.
  */
-export function applyResponsesReasoningParams<P extends OpenAI.Responses.ResponseCreateParamsStreaming>(
+export function applyResponsesReasoningParams<P extends ResponseCreateParamsStreaming>(
 	params: P,
-	model: Model<Api>,
+	model: Model<"openai-responses" | "azure-openai-responses" | "openai-codex-responses">,
 	options: ReasoningOptions | undefined,
 	messages: ResponseInput,
 	mapEffort?: (effort: string) => string,
 	includeEncryptedReasoning: boolean = true,
 	omitReasoningEffort: boolean = false,
-): void {
-	if (!model.reasoning) return;
+): number {
+	if (!model.reasoning) return 0;
 	// Always request encrypted reasoning content so reasoning items can be replayed in
 	// multi-turn conversations when store is false (items aren't persisted server-side, so
 	// we must include the full content). See: https://github.com/can1357/oh-my-pi/issues/41
@@ -1080,12 +1102,12 @@ export function applyResponsesReasoningParams<P extends OpenAI.Responses.Respons
 			// When only options.reasoning (effort level) is set, params.reasoning
 			// is intentionally omitted — see @param omitReasoningEffort above.
 			if (options?.reasoningSummary !== undefined && options?.reasoningSummary !== null) {
-				type ReasoningParam = NonNullable<OpenAI.Responses.ResponseCreateParamsStreaming["reasoning"]>;
+				type ReasoningParam = NonNullable<ResponseCreateParamsStreaming["reasoning"]>;
 				params.reasoning = { summary: options.reasoningSummary || "auto" } as P["reasoning"] & ReasoningParam;
 			}
 		} else {
 			const requested = options?.reasoning || "medium";
-			type ReasoningParam = NonNullable<OpenAI.Responses.ResponseCreateParamsStreaming["reasoning"]>;
+			type ReasoningParam = NonNullable<ResponseCreateParamsStreaming["reasoning"]>;
 			const reasoningParams: ReasoningParam = {
 				effort: (mapEffort ? mapEffort(requested) : requested) as ReasoningParam["effort"],
 			};
@@ -1094,13 +1116,15 @@ export function applyResponsesReasoningParams<P extends OpenAI.Responses.Respons
 			}
 			params.reasoning = reasoningParams as P["reasoning"];
 		}
-	} else if (model.name.toLowerCase().startsWith("gpt-5")) {
+	} else if (model.compat.requiresJuiceZeroHack) {
 		// Jesus Christ, see https://community.openai.com/t/need-reasoning-false-option-for-gpt-5/1351588/7
 		messages.push({
 			role: "developer",
 			content: [{ type: "input_text", text: "# Juice: 0 !important" }],
 		});
+		return 1;
 	}
+	return 0;
 }
 
 /** Populate `output.usage` from a Responses-API `response.usage` payload. Does not invoke `calculateCost`. */
@@ -1136,4 +1160,35 @@ export function populateResponsesUsageFromResponse(
 	if (premiumRequests !== undefined) {
 		output.usage.premiumRequests = premiumRequests;
 	}
+}
+
+/**
+ * Strict-prefix delta for stateful `previous_response_id` chaining (used by the
+ * platform Responses provider and the Codex provider on both transports):
+ * returns the input items the current request appends beyond the previous
+ * request's input plus the previous response's output items, or null when the
+ * request options differ or history mutated (the chain must break). Per-turn
+ * `client_metadata` (e.g. rotating turn ids) is excluded from the option
+ * comparison; codex-rs excludes it from the same check.
+ */
+export function buildResponsesDeltaInput<TItem>(
+	previous: { input?: unknown } | undefined,
+	previousResponseItems: readonly TItem[] | undefined,
+	current: { input?: unknown },
+): TItem[] | null {
+	if (!previous) return null;
+	if (!Array.isArray(previous.input) || !Array.isArray(current.input)) return null;
+	const previousWithoutInput = { ...previous, input: undefined, client_metadata: undefined };
+	const currentWithoutInput = { ...current, input: undefined, client_metadata: undefined };
+	if (JSON.stringify(previousWithoutInput) !== JSON.stringify(currentWithoutInput)) {
+		return null;
+	}
+	const baseline = [...previous.input, ...(previousResponseItems ?? [])];
+	if (current.input.length <= baseline.length) return null;
+	for (let index = 0; index < baseline.length; index += 1) {
+		if (JSON.stringify(baseline[index]) !== JSON.stringify(current.input[index])) {
+			return null;
+		}
+	}
+	return current.input.slice(baseline.length) as TItem[];
 }

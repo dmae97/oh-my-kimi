@@ -7,7 +7,7 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { AuthStorage } from "@oh-my-pi/pi-ai";
 import { prompt } from "@oh-my-pi/pi-utils";
-import * as z from "zod/v4";
+import { z } from "zod/v4";
 import type { CustomTool, CustomToolContext, RenderResultOptions } from "../../extensibility/custom-tools/types";
 import type { Theme } from "../../modes/theme/theme";
 import webSearchSystemPrompt from "../../prompts/system/web-search.md" with { type: "text" };
@@ -115,6 +115,15 @@ function formatForLLM(response: SearchResponse): string {
 	return parts.join("\n");
 }
 
+function hasRenderableSearchContent(response: SearchResponse): boolean {
+	if (response.answer?.trim()) return true;
+	if (response.sources.length > 0) return true;
+	if (response.citations?.length) return true;
+	if (response.relatedQuestions?.some(question => question.trim())) return true;
+	if (response.searchQueries?.some(query => query.trim())) return true;
+	return false;
+}
+
 interface ExecuteSearchOptions {
 	authStorage: AuthStorage;
 	sessionId?: string;
@@ -161,6 +170,10 @@ async function executeSearch(
 				authStorage,
 				sessionId,
 			});
+
+			if (!hasRenderableSearchContent(response)) {
+				throw new SearchProviderError(provider.id, `${provider.label} returned no renderable search content.`, 204);
+			}
 
 			const text = formatForLLM(response);
 

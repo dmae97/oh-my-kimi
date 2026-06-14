@@ -231,6 +231,40 @@ describe("ircToolRenderer list", () => {
 		expect(authIndex).toBeLessThan(rateIndex);
 		expect(rendered.some(line => line.includes("RateLimiter") && line.includes("2 unread"))).toBe(true);
 	});
+
+	it("renders a peer's role displayName and current activity in the row", async () => {
+		const uiTheme = await theme();
+		const rendered = lines(
+			ircToolRenderer.renderResult(
+				{
+					content: [{ type: "text", text: "" }],
+					details: {
+						op: "list",
+						from: "Main",
+						peers: [
+							{
+								id: "AuthScout",
+								displayName: "Auth-flow security reviewer",
+								kind: "sub",
+								status: "running",
+								parentId: "Main",
+								unread: 0,
+								lastActivity: Date.now() - 5_000,
+								activity: "auditing the token refresh path",
+							},
+						],
+					} satisfies IrcDetails,
+				},
+				{ expanded: false, isPartial: false },
+				uiTheme,
+				{ op: "list" },
+			),
+		);
+		const row = rendered.find(line => line.includes("AuthScout"));
+		expect(row).toBeDefined();
+		expect(row).toContain("Auth-flow security reviewer");
+		expect(row).toContain("auditing the token refresh path");
+	});
 });
 
 describe("ircToolRenderer body truncation", () => {

@@ -5,6 +5,7 @@ export { type AuthGatewayBootOptions, type ModelResolver, startAuthGateway } fro
 export * from "./auth-gateway/types";
 export * from "./auth-retry";
 export * from "./auth-storage";
+export * from "./errors";
 export * from "./provider-details";
 export * from "./providers/anthropic";
 export * from "./providers/anthropic-client";
@@ -33,6 +34,7 @@ export * from "./usage/google-antigravity";
 export * from "./usage/kimi";
 export * from "./usage/minimax-code";
 export * from "./usage/openai-codex";
+export * from "./usage/openai-codex-reset";
 export * from "./usage/zai";
 export * from "./utils/anthropic-auth";
 export * from "./utils/event-stream";

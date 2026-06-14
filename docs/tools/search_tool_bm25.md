@@ -48,7 +48,7 @@
    - missing discovery hooks -> `ToolError("Tool discovery is unavailable in this session.")`
    - discovery disabled -> `ToolError("Tool discovery is disabled. Enable tools.discoveryMode or mcp.discoveryMode to use search_tool_bm25.")`
 4. `query` is trimmed and validated; `limit` is defaulted/validated.
-5. `getDiscoverableToolSearchIndexForExecution()` fetches the cached generic search index from the session when available, otherwise falls back to the legacy MCP cache, otherwise rebuilds an index from the current discoverable-tool list.
+5. `getDiscoverableToolSearchIndexForExecution()` fetches the cached generic search index from the session when available, otherwise rebuilds an index from the current discoverable-tool list.
 6. `getSelectedToolNames()` reads the current discovered selections so already-selected tools can be excluded from fresh results.
 7. `searchDiscoverableTools()` in `packages/coding-agent/src/tool-discovery/tool-index.ts` tokenizes the query, scores every document with BM25, sorts by descending score then `tool.name`, and returns up to `searchIndex.documents.length` results; `execute()` then filters already-selected names and slices to `limit`.
 8. If any matches remain, `activateTools()` activates all matched tool names through `session.activateDiscoveredTools()` or legacy `activateDiscoveredMCPTools()`.
@@ -64,9 +64,8 @@
   - `tools.discoveryMode = "mcp-only"`: searches hidden MCP tools only.
   - legacy `mcp.discoveryMode = true`: same as MCP-only.
 - Search-index source:
-  - generic cached discoverable index from the session
-  - legacy cached MCP index, cast to the generic shape
-  - rebuilt ad hoc from the current discoverable-tool list if neither cache path works
+  - generic cached discoverable index from the session (`getDiscoverableToolSearchIndex()`)
+  - rebuilt ad hoc from the current discoverable-tool list when the cache path fails
 - Activation backend:
   - generic `activateDiscoveredTools()`
   - legacy `activateDiscoveredMCPTools()` fallback

@@ -9,16 +9,26 @@ import { $ } from "bun";
 import { contextFileCapability } from "./capability/context-file";
 import { systemPromptCapability } from "./capability/system-prompt";
 import { findConfigFile } from "./config";
-import type { SkillsSettings } from "./config/settings";
+import type { Personality, SkillsSettings } from "./config/settings";
 import { type ContextFile, loadCapability, type SystemPrompt as SystemPromptFile } from "./discovery";
 import { expandAtImports } from "./discovery/at-imports";
 import { loadSkills, type Skill } from "./extensibility/skills";
 import { hasObsidian } from "./internal-urls/vault-protocol";
 import customSystemPromptTemplate from "./prompts/system/custom-system-prompt.md" with { type: "text" };
+import defaultPersonality from "./prompts/system/personalities/default.md" with { type: "text" };
+import friendlyPersonality from "./prompts/system/personalities/friendly.md" with { type: "text" };
+import pragmaticPersonality from "./prompts/system/personalities/pragmatic.md" with { type: "text" };
 import projectPromptTemplate from "./prompts/system/project-prompt.md" with { type: "text" };
 import systemPromptTemplate from "./prompts/system/system-prompt.md" with { type: "text" };
 import { shortenPath } from "./tools/render-utils";
 import { AGENTS_MD_LIMIT, buildWorkspaceTree, type WorkspaceTree } from "./workspace-tree";
+
+/** Bundled personality specs, keyed by the `personality` setting value. */
+const PERSONALITY_SPECS: Record<Exclude<Personality, "none">, string> = {
+	default: defaultPersonality,
+	friendly: friendlyPersonality,
+	pragmatic: pragmaticPersonality,
+};
 
 interface AlwaysApplyRule {
 	name: string;
@@ -375,6 +385,10 @@ export interface BuildSystemPromptOptions {
 	mcpDiscoveryServerSummaries?: string[];
 	/** Encourage the agent to delegate via tasks unless changes are trivial. */
 	eagerTasks?: boolean;
+	/** When true, the Eager Tasks section uses the hard MUST/ONLY wording (`task.eager: always`) rather than the softer `preferred` nudge. */
+	eagerTasksAlways?: boolean;
+	/** Whether `task.batch` is enabled; gates batch-call guidance in the Eager Tasks section. */
+	taskBatch?: boolean;
 	/** Rules with alwaysApply=true — their full content is injected into the prompt. */
 	alwaysApplyRules?: AlwaysApplyRule[];
 	/** Whether secret obfuscation is active. When true, explains the redaction format in the prompt. */
@@ -385,6 +399,8 @@ export interface BuildSystemPromptOptions {
 	memoryRootEnabled?: boolean;
 	/** Active model identifier (e.g. "anthropic/claude-opus-4") surfaced to the agent. */
 	model?: string;
+	/** Personality preset rendered into the default system prompt. "none" omits the block. Default: "default" */
+	personality?: Personality;
 }
 
 /** Result of building provider-facing system prompt messages. */
@@ -415,10 +431,13 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		mcpDiscoveryMode = false,
 		mcpDiscoveryServerSummaries = [],
 		eagerTasks = false,
+		eagerTasksAlways = false,
+		taskBatch = true,
 		secretsEnabled = false,
 		workspaceTree: providedWorkspaceTree,
 		memoryRootEnabled = false,
 		model,
+		personality = "default",
 	} = options;
 	const resolvedCwd = cwd ?? getProjectDir();
 
@@ -590,12 +609,15 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		dateTime,
 		cwd: promptCwd,
 		model: model ?? "",
+		personality: personality === "none" ? "" : PERSONALITY_SPECS[personality].trim(),
 		intentTracing: !!intentField,
 		intentField: intentField ?? "",
 		mcpDiscoveryMode,
 		hasMCPDiscoveryServers: mcpDiscoveryServerSummaries.length > 0,
 		mcpDiscoveryServerSummaries,
 		eagerTasks,
+		eagerTasksAlways,
+		taskBatch,
 		secretsEnabled,
 		hasMemoryRoot: memoryRootEnabled,
 		hasObsidian: hasObsidian(),

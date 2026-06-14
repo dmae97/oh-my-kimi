@@ -173,6 +173,10 @@ export class IndexedSessionStorage implements SessionStorage {
 		}
 	}
 
+	writeTextAtomic(path: string, content: string): Promise<void> {
+		return this.writeText(path, content);
+	}
+
 	async rename(src: string, dst: string): Promise<void> {
 		await this.#awaitPath(src);
 		await this.#awaitPath(dst);
@@ -390,14 +394,7 @@ class IndexedSessionStorageWriter implements SessionStorageWriter {
 		return next;
 	}
 
-	writeLineSync(line: string): void {
-		if (this.#closed) throw new Error("Writer closed");
-		if (this.#error) throw this.#error;
-		const mtimeMs = this.#storage._appendForWriter(this.#path, line);
-		this.#trackPromise(this.#storage._queueAppend(this.#path, line, mtimeMs, () => this.#error));
-	}
-
-	async writeLine(line: string): Promise<void> {
+	async append(line: string): Promise<void> {
 		if (this.#closed) throw new Error("Writer closed");
 		if (this.#error) throw this.#error;
 		const mtimeMs = this.#storage._appendForWriter(this.#path, line);
@@ -410,8 +407,8 @@ class IndexedSessionStorageWriter implements SessionStorageWriter {
 		if (this.#error) throw this.#error;
 	}
 
-	async fsync(): Promise<void> {
-		await this.flush();
+	isOpen(): boolean {
+		return !this.#closed;
 	}
 
 	async close(): Promise<void> {

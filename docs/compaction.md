@@ -44,11 +44,12 @@ When context is rebuilt (`buildSessionContext`):
 4. `branch_summary` entries are converted to `branchSummary` messages.
 5. `custom_message` entries are converted to `custom` messages.
 
-Those custom roles are then transformed into LLM-facing user messages in `convertToLlm()` using the static templates:
+Those custom roles are then transformed into LLM-facing messages in `convertToLlm()`: `compactionSummary` and `branchSummary` become user messages rendered through the static templates
 
 - `packages/agent/src/compaction/prompts/compaction-summary-context.md`
 - `packages/agent/src/compaction/prompts/branch-summary-context.md`
-- `packages/agent/src/compaction/prompts/handoff-document.md`
+
+while `custom` messages pass through as developer messages with their raw content (no template).
 
 ## Compaction pipeline
 
@@ -129,12 +130,12 @@ The automatic paths are intentionally different:
 
 ### Snapcompact strategy
 
-`compaction.strategy: "snapcompact"` replaces the LLM summarization call with a local, deterministic archival pass (`snapcompactCompact` from `@oh-my-pi/snapcompact`):
+`compaction.strategy: "snapcompact"` replaces the LLM summarization call with a local, deterministic archival pass (`compact` from `@oh-my-pi/snapcompact`):
 
-- The discarded history is serialized, whitespace-collapsed, and printed onto provider-aware square PNG frames using bundled public-domain pixel fonts. Anthropic-family and unknown APIs use repeated black `8x8` cells, Google uses repeated sentence-colored `8x8` cells, and OpenAI uses dense stretched `6x6` cells with `detail: "original"`.
-- Serialization keeps the archive conversation-dense: tool results are truncated head+tail (default 2,000 chars at a 0.6 head ratio), tool-call argument values are capped per value (500) and per call (2,000), and tool output is printed in dim gray ink so conversation reads louder than tool noise. All budgets and the dimming are configurable via `SnapcompactSerializeOptions` (`toolResultMaxChars`, `toolArgMaxChars`, `toolCallMaxChars`, `truncateHeadRatio`, `dimToolResults`).
+- The discarded history is serialized, whitespace-collapsed, and printed onto model-aware PNG frames (frame width fixed per shape; frame height hugs the rows actually printed) using bundled public-domain pixel fonts. The shape — and frame size — resolve from the **model id** when the model line was measured: Claude reads X.org `6x12` glyphs with dimmed stopwords (`6x12-dim`; high-res lines — Opus 4.7+, Fable, Mythos — get 1932px frames under Anthropic's 4,784 visual-token cap, older lines stay at 1568px), Gemini reads two word-wrapped columns of `8x13` glyphs with sentence-hue ink and dimmed stopwords (`doc-8on16-sent-dim` at 2048px — Gemini 3.x bills a fixed 1,120-token budget per image at any pixel size), GPT/Kimi/GLM read `8x13` glyphs on a 16px pitch (`8on16-bw` at 1568px — patch billing is area-proportional, and kimi's processor downscales past 1792px). A Claude routed through Vertex or OpenRouter keeps its Claude shape. Unmeasured models fall back to their wire API family (Anthropic-family/unknown → `6x12-dim`, Google → `doc-8on16-sent-dim`, OpenAI-compatible → `8on16-bw`); billing (per-family patch/budget formulas, OpenAI's `detail: "original"` hint) always follows the API carrying the request, computed for the resolved frame size. The `snapcompact.shape` setting (default `auto`) forces one of the research-eval variants instead: square grids (`8x8r`/`8x8u`/`6x6u`/`5x8` × sentence-hue/black ink) or the per-model eval winners (`6x12-dim`, `8x13-bw`, `8on16-bw`, and the two-column word-wrapped `doc-8on16-bw`/`-sent`/`-sent-dim`, where `dim` prints stopwords in gray). A forced variant keeps its geometry but is re-priced for the target provider's image billing. The same setting governs inline system-prompt/tool-result imaging (`snapcompact.systemPrompt`, `snapcompact.toolResults`).
+- Serialization keeps the archive conversation-dense: tool results are truncated head+tail (default 2,000 chars at a 0.6 head ratio), tool-call argument values are capped per value (500) and per call (2,000), and tool output is printed in dim gray ink so conversation reads louder than tool noise. All budgets and the dimming are configurable via `SerializeOptions` (`toolResultMaxChars`, `toolArgMaxChars`, `toolCallMaxChars`, `truncateHeadRatio`, `dimToolResults`).
 - Frames persist under `CompactionEntry.preserveData.snapcompact` and are re-attached to the `compactionSummary` message as image blocks on every context rebuild; the entry's `summary` is a deterministic reading guide (grid geometry, role tags, truncation notes) plus the usual file-operation lists.
-- Later compactions carry earlier frames forward. Beyond an 8-frame budget the archive fades from the middle out: the earliest frame (session head — the original request, or the filmed summary of older history) is pinned, and the oldest *unpinned* frames are evicted, so head and tail both survive. If the previous compaction was text-based, its summary is printed at the head of the frame archive as `[Summary of earlier history]`.
+- Later compactions carry earlier frames forward. The frame budget is provider-aware (`providerFrameBudget`): the per-provider image cap clamped to 8 (`MAX_FRAMES`) — OpenRouter hard-caps requests at 8 images and silently drops the excess, unknown providers get a safe floor of 5. Beyond the budget the archive fades from the middle out: the earliest frame (session head — the original request, or the filmed summary of older history) is pinned, and the oldest *unpinned* frames are evicted. Pages of the *current* compaction that no longer fit are never rendered or dropped — the newest unframed slice survives verbatim as a text tail on the summary (`Archive.textTail`, capped at two frame capacities with middle elision) and is folded back into frames by the next compaction. If the previous compaction was text-based, its summary is printed at the head of the frame archive as `[Summary of earlier history]`.
 - No model, API key, or network is involved, so snapcompact is also safe for overflow recovery. It requires a vision-capable current model (`model.input` includes `"image"`); otherwise the run falls back to context-full and emits a warning notice (auto and manual paths). Manual `/compact` honors the strategy unless custom instructions are given (those imply a directed LLM summary).
 - Rationale: the shape table comes from the snapcompact 200k-token evals in `packages/snapcompact`, where bitmap frames preserved QA recall at lower billed-token cost than raw text for vision-capable models.
 
@@ -150,13 +151,23 @@ Default prune policy:
 
 - Protect newest `40_000` tool-output tokens.
 - Require at least `20_000` total estimated savings.
-- Never prune tool results from `skill` or `read`.
+- Never prune `skill` tool results, `read` results of `skill://` paths, or reads of the active plan reference file (added via `AgentSession`'s plan protection).
 
 Pruned tool results are replaced with:
 
 - `[Output truncated - N tokens]`
 
 If pruning changes entries, session storage is rewritten and agent message state is refreshed before compaction decisions.
+
+### Useless-result elision
+
+Tools can flag a finished result as contextually useless — a search with zero matches, a `job` poll that timed out with everything still running, an empty `irc` inbox drain. The flag originates on the tool result (`AgentToolResult.useless`, set via `ToolResultBuilder.useless()` or directly on the returned object), is copied by the agent loop onto the persisted `ToolResultMessage` (never together with `isError` — errors always win), and is consumed in three places:
+
+- **Per-turn stale-result pass** (`pruneSupersededToolResults`, gated by `compaction.dropUseless`, default on): flagged results are blanked to the exact placeholder `[Uneventful result elided]` (`USELESS_NOTICE`) with the same cache-aware timing as superseded reads — only when the suffix after the candidate is small (≤ ~8k tokens) or the session has idled past the provider prompt-cache lifetime. Results smaller than the notice itself are never blanked (no savings), and protected tools are exempt.
+- **Threshold prune** (`pruneToolOutputs`): flagged results bypass the protect-recent window, same as superseded reads, and receive `USELESS_NOTICE` instead of the token-count placeholder.
+- **Summary serialization**: `serializeConversation` (agent and snapcompact) drops the whole tool call/result pair from summarizer/archive input — the source region is discarded after summarization anyway, so the exclusion costs no cache.
+
+The flag never reaches provider wire formats, and flagged pairs are never removed from history (only blanked in place), so tool-call/result pairing and provider-native history replay stay intact.
 
 ### Boundary and cut-point logic
 

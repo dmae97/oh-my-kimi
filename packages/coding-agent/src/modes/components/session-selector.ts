@@ -15,7 +15,7 @@ import {
 import { formatBytes } from "@oh-my-pi/pi-utils";
 import { theme } from "../../modes/theme/theme";
 import { matchesAppInterrupt, matchesSelectDown, matchesSelectUp } from "../../modes/utils/keybinding-matchers";
-import type { SessionInfo, SessionStatus } from "../../session/session-manager";
+import type { SessionInfo, SessionStatus } from "../../session/session-listing";
 import { shortenPath } from "../../tools/render-utils";
 import { DynamicBorder } from "./dynamic-border";
 import { HookSelectorComponent } from "./hook-selector";
@@ -67,13 +67,15 @@ function compareSessionRecency(a: SessionInfo, b: SessionInfo): number {
 	return b.modified.getTime() - a.modified.getTime();
 }
 
+const MIN_PURE_FUZZY_TOKEN_SCORE = -20;
+
 /**
  * Filter and rank session picker search results.
  *
  * Resume search narrows a recency-sorted list: once every query token appears
  * as a literal substring, newer sessions should beat a slightly better fuzzy
  * position match. Pure fuzzy/acronym matches still sort by fuzzy score after
- * literal matches.
+ * literal matches, but weak pure fuzzy tokens are dropped as noise.
  */
 export function rankSessionSearchMatches(allSessions: SessionInfo[], query: string): SessionInfo[] {
 	const tokens = tokenizeSessionQuery(query);
@@ -85,6 +87,7 @@ export function rankSessionSearchMatches(allSessions: SessionInfo[], query: stri
 		const text = sessionSearchText(session);
 		const textLower = text.toLowerCase();
 		let score = 0;
+		let worstTokenScore = Number.NEGATIVE_INFINITY;
 		let literal = true;
 		let matches = true;
 
@@ -95,10 +98,13 @@ export function rankSessionSearchMatches(allSessions: SessionInfo[], query: stri
 				break;
 			}
 			score += match.score;
+			worstTokenScore = Math.max(worstTokenScore, match.score);
 			if (!textLower.includes(token)) literal = false;
 		}
 
-		if (matches) results.push({ session, score, literal, index });
+		if (matches && (literal || worstTokenScore < MIN_PURE_FUZZY_TOKEN_SCORE)) {
+			results.push({ session, score, literal, index });
+		}
 	}
 
 	results.sort((a, b) => {

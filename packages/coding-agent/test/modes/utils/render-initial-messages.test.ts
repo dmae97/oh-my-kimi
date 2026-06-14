@@ -16,7 +16,7 @@ import { beforeAll, describe, expect, it, type Mock, vi } from "bun:test";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
-import type { SessionContext } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import type { SessionContext } from "@oh-my-pi/pi-coding-agent/session/session-context";
 
 beforeAll(() => {
 	initTheme();
@@ -52,6 +52,14 @@ function makeCtx(): {
 		pendingBashComponents: [],
 		pendingPythonComponents: [],
 		session: { buildTranscriptSessionContext: transcriptSpy },
+		viewSession: {
+			buildTranscriptSessionContext: transcriptSpy,
+			sessionManager: {
+				buildSessionContext: llmContextSpy,
+				getEntries: vi.fn(() => []),
+				getCwd: vi.fn(() => "/tmp"),
+			},
+		},
 		sessionManager: {
 			buildSessionContext: llmContextSpy,
 			getEntries: vi.fn(() => []),

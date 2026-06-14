@@ -1,0 +1,209 @@
+import { describe, expect, it } from "bun:test";
+import type {
+	AgentSnapshot,
+	AssistantMessage,
+	HostFrame,
+	SessionEntry,
+	SessionHeader,
+	SessionState,
+	SubagentProgressPayload,
+	WireMessage,
+} from "@oh-my-pi/pi-wire";
+import { GuestClient } from "../src/lib/client";
+import { encodeBase64Url } from "../src/lib/link";
+
+const LINK = `roomroomroom1234#${encodeBase64Url(new Uint8Array(32))}`;
+
+const HEADER: SessionHeader = { type: "session", id: "s1", timestamp: "2026-06-12T00:00:00Z", cwd: "/work" };
+
+const STATE: SessionState = {
+	isStreaming: false,
+	queuedMessageCount: 0,
+	cwd: "/work",
+	participants: [{ name: "host", role: "host" }],
+};
+
+const AGENTS: AgentSnapshot[] = [
+	{
+		id: "main",
+		displayName: "Main",
+		kind: "main",
+		status: "running",
+		hasSessionFile: true,
+		createdAt: 1,
+		lastActivity: 2,
+	},
+];
+
+function assistantMessage(text: string): AssistantMessage {
+	return {
+		role: "assistant",
+		content: [{ type: "text", text }],
+		model: "test/model",
+		usage: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 3, cost: { total: 0 } },
+		stopReason: "stop",
+		timestamp: 1,
+	};
+}
+
+function messageEntry(id: string, message: WireMessage): SessionEntry {
+	return { type: "message", id, parentId: null, timestamp: "2026-06-12T00:00:01Z", message };
+}
+
+function welcomeFrame(entries: SessionEntry[] = [], readOnly?: boolean): HostFrame {
+	return { t: "welcome", proto: 1, header: HEADER, entries, state: STATE, agents: AGENTS, readOnly };
+}
+
+function liveClient(entries: SessionEntry[] = []): GuestClient {
+	const client = new GuestClient(LINK, "tester");
+	client.applyFrameForTest(welcomeFrame(entries));
+	return client;
+}
+
+describe("GuestClient frame apply", () => {
+	it("throws on an invalid link", () => {
+		expect(() => new GuestClient("not a link", "tester")).toThrow();
+	});
+
+	it("welcome populates the snapshot and goes live", () => {
+		const userEntry = messageEntry("e1", { role: "user", content: "hi", timestamp: 1 });
+		const client = liveClient([userEntry]);
+		const snap = client.getSnapshot();
+		expect(snap.phase).toBe("live");
+		expect(snap.header).toEqual(HEADER);
+		expect(snap.entries).toEqual([userEntry]);
+		expect(snap.state).toEqual(STATE);
+		expect(snap.agents).toEqual(AGENTS);
+		expect(snap.working).toBe(false);
+		expect(snap.stream).toBeNull();
+		expect(snap.activeTools.size).toBe(0);
+	});
+
+	it("welcome readOnly flag lands in the snapshot", () => {
+		const client = new GuestClient(LINK, "tester");
+		expect(client.getSnapshot().readOnly).toBe(false);
+		client.applyFrameForTest(welcomeFrame([], true));
+		expect(client.getSnapshot().readOnly).toBe(true);
+	});
+
+	it("message_update sets the stream ghost (synthesizing a missed start)", () => {
+		const client = liveClient();
+		const partial = assistantMessage("hel");
+		client.applyFrameForTest({ t: "event", event: { type: "message_update", message: partial } });
+		const snap = client.getSnapshot();
+		expect(snap.stream).toEqual(partial);
+		expect(snap.streamDone).toBe(false);
+	});
+
+	it("message_end keeps the ghost until the matching entry lands", () => {
+		const client = liveClient();
+		const message = assistantMessage("hello");
+		client.applyFrameForTest({ t: "event", event: { type: "message_update", message } });
+		client.applyFrameForTest({ t: "event", event: { type: "message_end", message } });
+		let snap = client.getSnapshot();
+		expect(snap.streamDone).toBe(true);
+		expect(snap.stream).toEqual(message);
+
+		client.applyFrameForTest({ t: "entry", entry: messageEntry("e2", message) });
+		snap = client.getSnapshot();
+		expect(snap.stream).toBeNull();
+		expect(snap.streamDone).toBe(false);
+		expect(snap.entries).toHaveLength(1);
+	});
+
+	it("tool start/update/end maintains activeTools", () => {
+		const client = liveClient();
+		client.applyFrameForTest({
+			t: "event",
+			event: {
+				type: "tool_execution_start",
+				toolCallId: "tc1",
+				toolName: "bash",
+				args: { command: "ls" },
+				intent: "Listing",
+			},
+		});
+		let tool = client.getSnapshot().activeTools.get("tc1");
+		expect(tool?.toolName).toBe("bash");
+		expect(tool?.intent).toBe("Listing");
+
+		client.applyFrameForTest({
+			t: "event",
+			event: {
+				type: "tool_execution_update",
+				toolCallId: "tc1",
+				toolName: "bash",
+				args: { command: "ls" },
+				partialResult: "src",
+			},
+		});
+		tool = client.getSnapshot().activeTools.get("tc1");
+		expect(tool?.partialResult).toBe("src");
+
+		client.applyFrameForTest({
+			t: "event",
+			event: { type: "tool_execution_end", toolCallId: "tc1", toolName: "bash", result: "src\ntest" },
+		});
+		expect(client.getSnapshot().activeTools.size).toBe(0);
+	});
+
+	it("agent_start/agent_end and state reconcile the working flag", () => {
+		const client = liveClient();
+		client.applyFrameForTest({ t: "event", event: { type: "agent_start" } });
+		expect(client.getSnapshot().working).toBe(true);
+		client.applyFrameForTest({ t: "state", state: { ...STATE, isStreaming: false } });
+		expect(client.getSnapshot().working).toBe(false);
+	});
+
+	it("bus progress frames update the progress map", () => {
+		const client = liveClient();
+		const payload: SubagentProgressPayload = {
+			index: 0,
+			agent: "task",
+			task: "do things",
+			progress: {
+				index: 0,
+				id: "Sub1",
+				agent: "task",
+				status: "running",
+				task: "do things",
+				recentTools: [],
+				recentOutput: [],
+				toolCount: 1,
+				requests: 1,
+				tokens: 100,
+				cost: 0.01,
+				durationMs: 1000,
+			},
+		};
+		client.applyFrameForTest({ t: "bus", channel: "task:subagent:progress", data: payload });
+		expect(client.getSnapshot().progress.get("Sub1")).toEqual(payload);
+	});
+
+	it("bye ends the session with a reason", () => {
+		const client = liveClient();
+		client.applyFrameForTest({ t: "bye", reason: "host left" });
+		const snap = client.getSnapshot();
+		expect(snap.phase).toBe("ended");
+		expect(snap.endedReason).toBe("host left");
+	});
+
+	it("error frames append notices", () => {
+		const client = liveClient();
+		client.applyFrameForTest({ t: "error", message: "boom" });
+		const notices = client.getSnapshot().notices;
+		expect(notices).toHaveLength(1);
+		expect(notices[0]).toMatchObject({ level: "error", message: "boom" });
+	});
+
+	it("snapshot reference is stable between frames and replaced per frame", () => {
+		const client = liveClient();
+		const before = client.getSnapshot();
+		expect(client.getSnapshot()).toBe(before);
+		client.applyFrameForTest({ t: "agents", agents: AGENTS });
+		const after = client.getSnapshot();
+		expect(after).not.toBe(before);
+		expect(after.agents).not.toBe(before.agents);
+		expect(after.entries).toBe(before.entries);
+	});
+});

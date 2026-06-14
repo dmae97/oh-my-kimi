@@ -368,8 +368,12 @@ async function cmdRelease(version: string): Promise<void> {
 	if (success) {
 		console.log(`=== Released v${version} ===`);
 	} else {
+		// CI's `concurrency` block (.github/workflows/ci.yml) recognizes a
+		// release run by its `chore: bump version to vX.Y.Z` subject (#2564),
+		// so retries that keep that subject also get the per-sha, never-cancel
+		// group. Reword the body, not the subject.
 		console.log("\nTo retry after fixing (repeat until CI passes):");
-		console.log("  git commit -m \"fix: <brief description>\"");
+		console.log(`  git commit -m "chore: bump version to ${version}" -m "<what was fixed>"`);
 		console.log(`  git tag -f v${version}`);
 		console.log(
 			`  git push --atomic origin refs/heads/main:refs/heads/main "+$(git rev-parse HEAD):refs/tags/v${version}"`,

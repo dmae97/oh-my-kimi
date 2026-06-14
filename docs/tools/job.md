@@ -16,8 +16,8 @@
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `poll` | `string[]` | No | Job ids to watch. Cannot be combined with `list`. If omitted (and `cancel` is also omitted), the tool watches all running jobs. If provided, missing ids are silently filtered out before waiting. |
-| `cancel` | `string[]` | No | Job ids to cancel before any polling. Missing ids are reported as `not_found`; non-running ids as `already_completed`. |
+| `poll` | `string[]` | No | Job ids to watch. Cannot be combined with `list`. If omitted (and `cancel` is also omitted), the tool watches all running jobs owned by the calling agent. If provided, missing ids — and ids owned by other agents — are silently filtered out before waiting. |
+| `cancel` | `string[]` | No | Job ids to cancel before any polling. Missing ids (and other agents' jobs) are reported as `not_found`; non-running ids as `already_completed`. |
 | `list` | `boolean` | No | Return an immediate snapshot of every job spawned by the calling agent (running + completed within retention) without waiting. Read-only — cannot be combined with `poll` or `cancel`. |
 
 ## Outputs
@@ -54,15 +54,15 @@ Read-only snapshot path:
    - only `cancel` present → return immediately, no wait.
    - explicit `poll`, or no args at all → proceed to watch jobs.
 5. Watch set resolution:
-   - explicit `poll` → map ids through `manager.getJob(...)` and drop missing ones.
-   - no `poll` and no `cancel` → `manager.getRunningJobs()`.
+   - explicit `poll` → resolve ids via `#visibleJobs(...)`, dropping missing ids and jobs owned by other agents.
+   - no `poll` and no `cancel` → `manager.getRunningJobs(ownerFilter)` (jobs owned by the calling agent).
 6. Empty watch set returns immediately:
    - if cancellations happened, return snapshots for the cancelled ids that still exist.
    - else return either `No matching jobs found for IDs: ...` or `No running background jobs to wait for.`
 7. If every watched job is already non-running, `#buildResult(...)` returns immediately without waiting.
 8. Otherwise the tool waits on `Promise.race(...)` across:
    - every watched running job's `job.promise`,
-   - a timeout promise for `async.pollWaitDuration`,
+   - a timeout promise for the poll wait window — `manager.nextPollWaitMs(ownerId)` when `async.pollWaitDuration` is `smart`, otherwise the fixed duration,
    - the tool-call abort signal when present.
 9. Before waiting, it calls `manager.watchJobs(watchedJobIds)`. This suppresses automatic completion delivery for those ids while they are being watched.
 10. If `onUpdate` exists, a 500 ms interval sends progress snapshots from `#snapshotJobs(...)`; one snapshot is emitted immediately before entering the race.
@@ -106,9 +106,10 @@ Lifecycle and exact state names:
   - Cancelling a job does not synchronously await teardown; it flips state, aborts, and returns control to the manager/job promise.
 
 ## Limits & Caps
-- Poll wait duration comes from `async.pollWaitDuration` in `packages/coding-agent/src/config/settings-schema.ts`:
-  - allowed values: `5s`, `10s`, `30s`, `1m`, `5m`
-  - default: `30s`
+- Poll wait duration comes from `async.pollWaitDuration` ("Max Poll Time") in `packages/coding-agent/src/config/settings-schema.ts`:
+  - allowed values: `5s`, `10s`, `30s`, `1m`, `5m`, `smart`
+  - default: `smart`
+  - fixed values block for exactly that long; `smart` uses the adaptive ladder `POLL_WAIT_LADDER_MS = [5s, 10s, 30s, 1m, 5m]` in `packages/coding-agent/src/async/job-manager.ts`, climbing one rung per back-to-back poll and resetting to the 5s floor after `POLL_ESCALATION_RESET_MS = 60_000` ms without polling. Per-owner state is driven by `nextPollWaitMs(...)` / `recordPollWaitEnd(...)`.
 - Progress update cadence while polling: `PROGRESS_INTERVAL_MS = 500` in `packages/coding-agent/src/tools/job.ts`.
 - Async job retention default: `DEFAULT_RETENTION_MS = 5 * 60 * 1000` in `packages/coding-agent/src/async/job-manager.ts`.
 - Manager fallback max-running limit: `DEFAULT_MAX_RUNNING_JOBS = 15` in `packages/coding-agent/src/async/job-manager.ts`.
@@ -128,6 +129,7 @@ Lifecycle and exact state names:
 - Tool-call abort during polling stops waiting and returns a final snapshot through `#buildResult(...)`; it does not cancel watched jobs.
 - Failures inside the underlying async work are stored on the job (`status: "failed"`, `errorText`) and reported in normal tool output, not rethrown by `job`.
 - Calling `list: true` against an empty manager returns a normal empty-list result rather than throwing; missing ids passed to `poll` are silently filtered.
+- Combining `list` with `poll` or `cancel` throws a `ToolError`: `` `list` cannot be combined with `poll` or `cancel`. ``
 
 ## Notes
 - `job` waits for the first watched running job to settle, not for all watched jobs. If others remain `running`, they are reported under `## Still Running`; the caller must invoke `job` again to continue waiting.

@@ -10,7 +10,7 @@ import type { Effort, ImageContent, Model } from "@oh-my-pi/pi-ai";
 import type { BashResult } from "../../exec/bash-executor";
 import type { ContextUsage } from "../../extensibility/extensions/types";
 import type { AgentSessionEvent, SessionStats } from "../../session/agent-session";
-import type { FileEntry } from "../../session/session-manager";
+import type { FileEntry } from "../../session/session-entries";
 import type { AvailableSlashCommandSource } from "../../slash-commands/available-commands";
 import type {
 	AgentProgress,
@@ -126,6 +126,12 @@ export interface RpcAvailableCommandsUpdateFrame {
 	commands: RpcAvailableSlashCommand[];
 }
 
+export interface RpcPromptResultFrame {
+	type: "prompt_result";
+	id?: string;
+	agentInvoked: boolean;
+}
+
 export interface RpcHandoffResult {
 	savedPath?: string;
 }
@@ -163,7 +169,7 @@ export interface RpcSubagentMessagesResult {
 // Success responses with data
 export type RpcResponse =
 	// Prompting (async - events follow)
-	| { id?: string; type: "response"; command: "prompt"; success: true }
+	| { id?: string; type: "response"; command: "prompt"; success: true; data?: { agentInvoked: boolean } }
 	| { id?: string; type: "response"; command: "steer"; success: true }
 	| { id?: string; type: "response"; command: "follow_up"; success: true }
 	| { id?: string; type: "response"; command: "abort"; success: true }

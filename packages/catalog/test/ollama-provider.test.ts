@@ -84,14 +84,16 @@ describe("ollama local provider discovery", () => {
 		const models = await ollamaModelManagerOptions({ fetch: fetchMock }).fetchDynamicModels?.();
 		const reasoningModel = models?.find(candidate => candidate.id === "gemma4:e4b");
 		const plainModel = models?.find(candidate => candidate.id === "llama-plain:latest");
+		const builtReasoningModel = reasoningModel ? buildModel(reasoningModel) : undefined;
+		const builtPlainModel = plainModel ? buildModel(plainModel) : undefined;
 
-		// Ollama's OpenAI-compatible endpoint rejects "minimal"/"xhigh" with HTTP 400;
-		// reasoning models must remap them onto accepted levels (low/max).
+		// Ollama's OpenAI-compatible endpoint rejects "minimal" with HTTP 400;
+		// reasoning models must bake a thinking effort map to an accepted level (low).
 		expect(reasoningModel?.reasoning).toBe(true);
-		expect(reasoningModel?.compat?.reasoningEffortMap).toMatchObject({ minimal: "low", xhigh: "max" });
-		// Non-reasoning models never send an effort, so they carry no remap.
+		expect(builtReasoningModel?.thinking?.effortMap).toMatchObject({ minimal: "low" });
+		// Non-reasoning models never send an effort, so they carry no thinking metadata.
 		expect(plainModel?.reasoning).toBe(false);
-		expect(plainModel?.compat?.reasoningEffortMap).toBeUndefined();
+		expect(builtPlainModel?.thinking).toBeUndefined();
 	});
 });
 

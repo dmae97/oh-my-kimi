@@ -3,7 +3,7 @@ import { SessionSelectorComponent } from "@oh-my-pi/pi-coding-agent/modes/compon
 import { SelectorController } from "@oh-my-pi/pi-coding-agent/modes/controllers/selector-controller";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
-import type { SessionInfo } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import type { SessionInfo } from "@oh-my-pi/pi-coding-agent/session/session-listing";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { FileSessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
 
@@ -56,6 +56,10 @@ function createContext(currentSessionFile: string): {
 		sessionFile = "/tmp/project/sessions/detached.jsonl";
 		return true;
 	});
+	const session = {
+		newSession,
+		switchSession: vi.fn(async () => true),
+	};
 	const ctx = {
 		editorContainer,
 		editor: {},
@@ -66,9 +70,9 @@ function createContext(currentSessionFile: string): {
 			}),
 			terminal: { columns: 120 },
 		},
-		session: {
-			newSession,
-			switchSession: vi.fn(async () => true),
+		session,
+		get viewSession() {
+			return session;
 		},
 		sessionManager: {
 			getCwd: () => "/tmp/project",
@@ -124,6 +128,12 @@ function createContext(currentSessionFile: string): {
 		showError: vi.fn(),
 		showHookConfirm,
 		shutdown: vi.fn(async () => undefined),
+		clearTransientSessionUi() {
+			ctx.loadingAnimation?.stop();
+			ctx.statusContainer.clear();
+			ctx.pendingMessagesContainer.clear();
+			ctx.pendingTools.clear();
+		},
 	} as unknown as TestContext;
 
 	return {

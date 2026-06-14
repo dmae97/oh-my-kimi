@@ -5,6 +5,7 @@ import { initTheme, theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import * as sessionColor from "@oh-my-pi/pi-coding-agent/utils/session-color";
+import type { Container, NativeScrollbackLiveRegion } from "@oh-my-pi/pi-tui";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 type Harness = {
@@ -78,6 +79,18 @@ afterEach(() => {
 });
 
 describe("InteractiveMode working-message session accent cache", () => {
+	it("reports a live seam only while status content is mounted", async () => {
+		const { mode } = await createHarness("Live status");
+		const statusContainer = mode.statusContainer as Container & NativeScrollbackLiveRegion;
+
+		// Empty: no seam — the engine may commit freely past the container.
+		expect(statusContainer.getNativeScrollbackLiveRegionStart()).toBeUndefined();
+		// Loader mounted: every row is live, so the seam sits at 0 and keeps
+		// the animating loader out of immutable native scrollback.
+		startStableLoader(mode);
+		expect(statusContainer.getNativeScrollbackLiveRegionStart()).toBe(0);
+	});
+
 	it("reuses one computed accent across loader spinner and message colorizers", async () => {
 		const { mode } = await createHarness("Cached session");
 		const getHex = vi.spyOn(sessionColor, "getSessionAccentHex");
@@ -97,10 +110,22 @@ describe("InteractiveMode working-message session accent cache", () => {
 		const renamedName = "Beta session";
 		const { mode, sessionManager } = await createHarness(initialName);
 		const initialAnsi = defined(
-			sessionColor.getSessionAccentAnsi(sessionColor.getSessionAccentHex(initialName, theme.accentSurfaceLuminance)),
+			sessionColor.getSessionAccentAnsi(
+				sessionColor.getSessionAccentHex(
+					initialName,
+					theme.getMajorThemeColorHexes(),
+					theme.accentSurfaceLuminance,
+				),
+			),
 		);
 		const renamedAnsi = defined(
-			sessionColor.getSessionAccentAnsi(sessionColor.getSessionAccentHex(renamedName, theme.accentSurfaceLuminance)),
+			sessionColor.getSessionAccentAnsi(
+				sessionColor.getSessionAccentHex(
+					renamedName,
+					theme.getMajorThemeColorHexes(),
+					theme.accentSurfaceLuminance,
+				),
+			),
 		);
 		const getHex = vi.spyOn(sessionColor, "getSessionAccentHex");
 
@@ -123,14 +148,14 @@ describe("InteractiveMode working-message session accent cache", () => {
 		try {
 			startStableLoader(mode);
 			expect(getHex).toHaveBeenCalledTimes(1);
-			expect(getHex.mock.calls[0]).toEqual([sessionName, undefined]);
+			expect(getHex.mock.calls[0]).toEqual([sessionName, theme.getMajorThemeColorHexes(), undefined]);
 
 			restoreInitial();
 			const restoreLight = shadowAccentSurfaceLuminance(0.72);
 			try {
 				mode.loadingAnimation?.setMessage("Light theme");
 				expect(getHex).toHaveBeenCalledTimes(2);
-				expect(getHex.mock.calls[1]).toEqual([sessionName, 0.72]);
+				expect(getHex.mock.calls[1]).toEqual([sessionName, theme.getMajorThemeColorHexes(), 0.72]);
 			} finally {
 				restoreLight();
 			}
@@ -143,7 +168,13 @@ describe("InteractiveMode working-message session accent cache", () => {
 		const sessionName = "Toggle session";
 		const { mode } = await createHarness(sessionName);
 		const accentAnsi = defined(
-			sessionColor.getSessionAccentAnsi(sessionColor.getSessionAccentHex(sessionName, theme.accentSurfaceLuminance)),
+			sessionColor.getSessionAccentAnsi(
+				sessionColor.getSessionAccentHex(
+					sessionName,
+					theme.getMajorThemeColorHexes(),
+					theme.accentSurfaceLuminance,
+				),
+			),
 		);
 		const getHex = vi.spyOn(sessionColor, "getSessionAccentHex");
 

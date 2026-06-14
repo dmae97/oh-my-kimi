@@ -13,11 +13,13 @@ import { buildAnthropicCompat } from "./compat/anthropic";
 import { buildOpenAICompat, buildOpenAIResponsesCompat } from "./compat/openai";
 import { resolveModelThinking } from "./model-thinking";
 import type { Api, CompatOf, Model, ModelSpec } from "./types";
+import { cleanModelName } from "./utils";
 
 export function buildModel<TApi extends Api>(spec: ModelSpec<TApi>): Model<TApi> {
 	const compat = buildCompat(spec) as CompatOf<TApi>;
 	return {
 		...spec,
+		name: cleanModelName(spec.name),
 		thinking: resolveModelThinking(spec, compat),
 		compat,
 		compatConfig: spec.compat,

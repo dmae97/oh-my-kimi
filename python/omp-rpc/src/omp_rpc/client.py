@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import signal
 import subprocess
 import threading
 import time
@@ -110,6 +111,69 @@ THistoryItem = TypeVar("THistoryItem")
 _ASYNC_COMMANDS = frozenset({"prompt", "abort_and_prompt"})
 _DEFAULT_ERROR_HISTORY_LIMIT = 128
 _TODO_STATUS_VALUES = frozenset({"pending", "in_progress", "completed", "abandoned"})
+
+
+def _process_group_id(process: subprocess.Popen[Any]) -> int | None:
+    """Process-group id of `process`, or `None` when groups are unavailable.
+
+    Captured right after spawn so teardown can signal the whole group even
+    after the leader is reaped — POSIX `os.getpgid` fails on a reaped pid.
+    """
+    getpgid = getattr(os, "getpgid", None)
+    if getpgid is None:
+        return None
+    try:
+        return getpgid(process.pid)
+    except OSError:
+        return None
+
+
+def _terminate_process_group(process: subprocess.Popen[Any], pgid: int | None) -> None:
+    """Terminate the subprocess *and* every descendant sharing its group.
+
+    omp is spawned with `start_new_session=True`, so it leads a session/group
+    that also contains children spawned by the agent's `bash` tool (e.g. a
+    `bun test` run). Signalling only the leader pid would orphan those
+    grandchildren: they reparent to the container init and keep running
+    untracked — how a runaway test ballooned to tens of GB of RAM. Signal the
+    whole group, escalating SIGTERM -> SIGKILL, so descendants die with the
+    task even when the leader has already exited on its own (the graceful
+    stdin-close path).
+
+    `pgid` is captured at spawn; `os.killpg` is POSIX-only, so without it
+    (Windows) we fall back to terminating the leader process alone.
+    """
+    killpg = getattr(os, "killpg", None)
+    if pgid is None or killpg is None:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=1.0)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                try:
+                    process.wait(timeout=1.0)
+                except subprocess.TimeoutExpired:
+                    pass
+        return
+
+    def _signal_group(sig: int) -> None:
+        try:
+            killpg(pgid, sig)
+        except OSError:
+            # ESRCH: the group is already empty. Teardown is best-effort.
+            pass
+
+    _signal_group(signal.SIGTERM)
+    try:
+        process.wait(timeout=1.0)
+    except subprocess.TimeoutExpired:
+        pass
+    _signal_group(signal.SIGKILL)
+    try:
+        process.wait(timeout=1.0)
+    except subprocess.TimeoutExpired:
+        pass
 
 
 def _clone_json_value(value: object) -> JsonValue:
@@ -330,6 +394,7 @@ class RpcClient:
         )
 
         self._process: subprocess.Popen[str] | None = None
+        self._pgid: int | None = None
         self._stdout_thread: threading.Thread | None = None
         self._stderr_thread: threading.Thread | None = None
         self._ready = threading.Event()
@@ -429,8 +494,10 @@ class RpcClient:
             encoding="utf-8",
             errors="replace",
             bufsize=1,
+            start_new_session=True,
         )
         self._process = process
+        self._pgid = _process_group_id(process)
 
         self._stdout_thread = threading.Thread(
             target=self._read_stdout_loop, name="omp-rpc-stdout", daemon=True
@@ -486,13 +553,7 @@ class RpcClient:
                 except OSError:
                     pass
 
-            if process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=1.0)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=1.0)
+            _terminate_process_group(process, self._pgid)
         finally:
             if process.stdout is not None:
                 try:
@@ -516,6 +577,7 @@ class RpcClient:
             self._pending_host_tool_calls.clear()
             self._pending_host_uri_requests.clear()
             self._process = None
+            self._pgid = None
             if self._stdout_thread is not None:
                 self._stdout_thread.join(timeout=1.0)
             if self._stderr_thread is not None:

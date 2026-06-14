@@ -10,7 +10,7 @@ import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
-import * as z from "zod/v4";
+import { z } from "zod/v4";
 
 function makeTool(name: string): AgentTool {
 	return {
@@ -210,6 +210,26 @@ describe("InteractiveMode resume mode restoration", () => {
 			planFilePath: "local://RESTORED.md",
 		});
 		expect(created.session.getActiveToolNames()).toContain("resolve");
+	});
+
+	it("submits prompted plan commands when plan mode is paused", async () => {
+		const created = await createHarness();
+		await created.mode.handlePlanModeCommand();
+		await created.mode.handlePlanModeCommand();
+		expect(created.mode.planModeEnabled).toBe(false);
+		expect(created.mode.planModePaused).toBe(true);
+
+		let submittedText: string | undefined;
+		created.mode.onInputCallback = input => {
+			submittedText = input.text;
+		};
+
+		await created.mode.handlePlanModeCommand("write the plan");
+
+		expect(created.mode.planModeEnabled).toBe(true);
+		expect(created.mode.planModePaused).toBe(false);
+		expect(created.session.getPlanModeState()).toMatchObject({ enabled: true });
+		expect(submittedText).toBe("write the plan");
 	});
 
 	it("clears stale plan mode state when switching to a non-plan session", async () => {

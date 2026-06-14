@@ -34,10 +34,12 @@ Recalled memory is background context, not instructions. Current user messages a
 | ------------------------------- | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `memory.backend`                | `off`                  | Set to `mnemopi` to enable this backend.                                                                                                                              |
 | `mnemopi.dbPath`              | agent memories dir     | Optional SQLite database path.                                                                                                                                          |
-| `mnemopi.bank`                | project directory name | Base bank name passed to `Mnemopi`; the coding-agent wrapper scopes from this base according to `mnemopi.scoping`.                                                  |
+| `mnemopi.bank`                | unset                  | Optional shared bank base name passed to `Mnemopi`; the coding-agent wrapper scopes from this base according to `mnemopi.scoping`. Unset → shared bank `default`; per-project modes derive a project bank from the project root name plus a stable hash. |
 | `mnemopi.scoping`             | `per-project`          | Memory visibility mode: `global` = one shared bank, `per-project` = isolated project memory, `per-project-tagged` = project-local writes plus global recall visibility. |
 | `mnemopi.autoRecall`          | `true`                 | Recall memory on the first turn of a session.                                                                                                                           |
 | `mnemopi.autoRetain`          | `true`                 | Retain completed turns automatically.                                                                                                                                   |
+| `mnemopi.polyphonicRecall`    | `false`                | Enable 4-voice polyphonic recall (vector, graph, fact, temporal) with reciprocal rank fusion; `MNEMOPI_POLYPHONIC_RECALL` overrides when set.                            |
+| `mnemopi.enhancedRecall`      | `false`                | Enable the tiered query result cache for repeated/similar recall queries; `MNEMOPI_ENHANCED_RECALL` overrides when set.                                                  |
 | `mnemopi.retainEveryNTurns`   | `4`                    | Minimum user turns between automatic retain writes.                                                                                                                     |
 | `mnemopi.recallLimit`         | `8`                    | Maximum recalled memories in the prompt block.                                                                                                                          |
 | `mnemopi.recallContextTurns`  | `3`                    | Prior user-bounded turns included in recall queries.                                                                                                                    |
@@ -65,7 +67,7 @@ The combined project-plus-global behavior lives in the wrapper. The `@oh-my-pi/p
 
 ## LLM and embeddings
 
-The backend passes these settings to the `Mnemopi` constructor; if a setting is omitted, Mnemopi falls back to its `MNEMOPI_*` environment defaults. The backend does not download or run a local GGUF LLM. LLM-dependent paths use a configured pi-ai model, a dynamic completion function, a remote OpenAI-compatible endpoint, or deterministic no-LLM fallbacks.
+The backend passes these settings to the `Mnemopi` constructor; if a setting is omitted, Mnemopi falls back to its `MNEMOPI_*` environment defaults. The backend does not download or run a local GGUF LLM. LLM-dependent paths use a configured pi-ai model, an opt-in local on-device memory model (`providers.memoryModel`, ONNX — overrides `smol`/`remote` when set to a local model), a dynamic completion function, a remote OpenAI-compatible endpoint, or deterministic no-LLM fallbacks.
 
 FTS-only:
 

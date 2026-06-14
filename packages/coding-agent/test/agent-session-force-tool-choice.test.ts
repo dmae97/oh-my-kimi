@@ -10,7 +10,7 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
-import * as z from "zod/v4";
+import { z } from "zod/v4";
 
 let tempDir: TempDir;
 let authStorage: AuthStorage | undefined;
@@ -85,6 +85,18 @@ it("forces specific tool, then transitions to none, then clears", () => {
 	expect(second).toBe("none");
 	// After "none" is consumed, override clears entirely
 	expect(third).toBeUndefined();
+});
+
+it("requeues a forced choice whose tool is filtered out before dequeue", async () => {
+	session.setForcedToolChoice("write");
+
+	await session.setActiveToolsByName(["bash"]);
+	expect(session.nextToolChoice()).toBeUndefined();
+	expect(session.toolChoiceQueue.hasInFlight).toBe(false);
+
+	await session.setActiveToolsByName(["bash", "write"]);
+	expect(session.nextToolChoice()).toEqual({ type: "tool", name: "write" });
+	session.toolChoiceQueue.clear();
 });
 
 it("throws when forcing a non-active tool", () => {

@@ -32,7 +32,7 @@ import type {
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/oauth/types";
 import type { AutocompleteItem, Component, EditorTheme, KeyId, TUI } from "@oh-my-pi/pi-tui";
 import type { logger as PiLogger } from "@oh-my-pi/pi-utils";
-import type * as Zod from "zod/v4";
+import type { z } from "zod/v4";
 import type { KeybindingsManager } from "../../config/keybindings";
 import type { ModelRegistry } from "../../config/model-registry";
 import type { EditToolDetails } from "../../edit";
@@ -293,6 +293,32 @@ export interface CompactOptions {
 // surface (model registry, system prompt, shutdown, full session manager
 // access). Field overlap is incidental; merging into a base would require
 // hooks to widen their public contract.
+/**
+ * Read-only model query facade exposed at `ctx.models`. Lets an extension select a
+ * model the same way core does — list authenticated models, read the session model,
+ * resolve a model string or role alias, and compare model families — without reaching
+ * into the mutable registry or re-implementing matching/family heuristics.
+ */
+export interface ExtensionModelQuery {
+	/** Authenticated models available this session (the same set `--model` selection sees). */
+	list(): Model[];
+	/** The current session model, if one is set. */
+	current(): Model | undefined;
+	/**
+	 * Resolve a model string (`provider/id`, bare id) or role alias (`pi/slow`, a
+	 * configured role) to a Model, using the same settings-backed aliases and match
+	 * preferences as core selection. Thinking/routing suffixes are accepted and resolved
+	 * to the base model (pass effort separately). Returns undefined when nothing matches.
+	 */
+	resolve(spec: string): Model | undefined;
+	/**
+	 * Opaque lineage token for "are these the same family?" comparisons — every Claude
+	 * point release shares a token, Claude and GPT differ. Backed by catalog canonical
+	 * identity. Compare it; do not persist it (the vocabulary tracks new releases).
+	 */
+	family(model: Model): string;
+}
+
 export interface ExtensionContext {
 	/** UI methods for user interaction */
 	ui: ExtensionUIContext;
@@ -310,6 +336,8 @@ export interface ExtensionContext {
 	modelRegistry: ModelRegistry;
 	/** Current model (may be undefined) */
 	model: Model | undefined;
+	/** Read-only model query facade: list / current / resolve / family. */
+	models: ExtensionModelQuery;
 	/** Whether the agent is idle (not streaming) */
 	isIdle(): boolean;
 	/** Abort the current agent operation */
@@ -890,7 +918,7 @@ export interface ExtensionAPI {
 	typebox: typeof TypeBox;
 
 	/** Injected zod module for Zod-authored extension tools (canonical going forward). */
-	zod: typeof Zod;
+	zod: typeof z;
 
 	/** Injected pi-coding-agent exports for accessing SDK utilities */
 	pi: typeof PiCodingAgent;

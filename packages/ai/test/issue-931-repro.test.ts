@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { streamOpenAIResponses } from "@oh-my-pi/pi-ai/providers/openai-responses";
 import type { Context, Model, OpenAICompat } from "@oh-my-pi/pi-ai/types";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
 
 const testContext: Context = {
 	messages: [{ role: "user", content: "hello", timestamp: 0 }],
@@ -39,12 +40,17 @@ function customResponsesModel(compat: OpenAICompat): Model<"openai-responses"> {
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 1_048_576,
 		maxTokens: 65_536,
+		thinking: {
+			mode: "effort",
+			efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+			effortMap: compat.reasoningEffortMap,
+		},
 		compat,
 	} as Model<"openai-responses">;
 }
 
-describe("issue #931 — openai-responses reasoning effort compat mapping", () => {
-	it("maps configured xhigh reasoning effort before sending Responses reasoning payload", async () => {
+describe("issue #931 — openai-responses reasoning effort mapping", () => {
+	it("maps configured xhigh thinking effort before sending Responses reasoning payload", async () => {
 		const payload = await captureResponsesPayload(
 			customResponsesModel({
 				supportsReasoningEffort: true,

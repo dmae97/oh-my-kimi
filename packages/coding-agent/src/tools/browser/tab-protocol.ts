@@ -38,6 +38,8 @@ export interface ScreenshotResult {
 export interface SessionSnapshot {
 	cwd: string;
 	browserScreenshotDir?: string;
+	/** Force non-WebP screenshot encoding (e.g. for Ollama). Unset honors `OMP_NO_WEBP`. */
+	excludeWebP?: boolean;
 }
 
 export type WorkerInitPayload =

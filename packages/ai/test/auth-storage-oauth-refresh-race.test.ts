@@ -282,6 +282,63 @@ describe("AuthStorage OAuth refresh race", () => {
 		await expect(second).resolves.toBe("access-rotated");
 		expect(refreshCalls).toBe(1);
 	});
+
+	test("syncs peer-updated SQLite OAuth rows before returning access tokens", async () => {
+		if (!authStorage || !store) throw new Error("test setup failed");
+
+		const expires = Date.now() + 60 * 60_000;
+		let refreshCalls = 0;
+		oauthUtils.registerOAuthProvider({
+			id: "unit-oauth-peer-sync",
+			name: "Unit OAuth Peer Sync",
+			sourceId: "auth-storage-oauth-refresh-race-test",
+			async login() {
+				return { access: "unused", refresh: "unused", expires };
+			},
+			async refreshToken(credentials) {
+				refreshCalls += 1;
+				return {
+					...credentials,
+					access: `${credentials.access}-rotated`,
+					refresh: `${credentials.refresh}-rotated`,
+					expires,
+				};
+			},
+			getApiKey(credentials) {
+				return credentials.access;
+			},
+		});
+
+		await authStorage.set("unit-oauth-peer-sync", [
+			{ type: "oauth", access: "access-old", refresh: "refresh-old", expires },
+		]);
+		const storedBefore = store.listAuthCredentials("unit-oauth-peer-sync");
+		expect(storedBefore).toHaveLength(1);
+		const credentialId = storedBefore[0]!.id;
+
+		store.updateAuthCredential(credentialId, {
+			type: "oauth",
+			access: "access-peer",
+			refresh: "refresh-peer",
+			expires,
+		});
+		const apiKey = await authStorage.getApiKey("unit-oauth-peer-sync", "session-peer-sync");
+		expect(apiKey).toBe("access-peer");
+		expect(refreshCalls).toBe(0);
+
+		store.updateAuthCredential(credentialId, {
+			type: "oauth",
+			access: "access-peer-force",
+			refresh: "refresh-peer-force",
+			expires,
+		});
+		const forcedKey = await authStorage.getApiKey("unit-oauth-peer-sync", "session-peer-sync", {
+			forceRefresh: true,
+		});
+		expect(forcedKey).toBe("access-peer-force");
+		expect(refreshCalls).toBe(0);
+	});
+
 	test("invalidating a session-sticky OAuth credential rotates the retry to another active credential", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 

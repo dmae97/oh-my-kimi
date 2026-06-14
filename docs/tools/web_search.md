@@ -33,8 +33,8 @@
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `query` | `string` | Yes | Search query. `executeSearch()` rewrites any `2020`-`2029` substring to the current year before dispatch. |
-| `recency` | `"day" \| "week" \| "month" \| "year"` | No | Time filter. Only providers that implement it use it. Prompt text says Brave and Perplexity; code also maps it for Tavily and SearXNG. |
+| `query` | `string` | Yes | Search query, passed to providers unchanged. |
+| `recency` | `"day" \| "week" \| "month" \| "year"` | No | Time filter. Only providers that implement it use it; code maps it for Brave, Perplexity, Tavily, SearXNG, and Kagi. |
 | `limit` | `number` | No | Max results to return. Usually becomes the provider request's result-count parameter when `num_search_results` is absent. |
 | `max_tokens` | `number` | No | Passed through as `maxOutputTokens` / `max_tokens` only by Anthropic, Gemini, and Perplexity API-key mode. Ignored by the other providers. |
 | `temperature` | `number` | No | Passed through only by Anthropic, Gemini, and Perplexity API-key mode. Ignored by the other providers. |
@@ -51,7 +51,7 @@ The tool returns a single text content block plus structured `details`.
 `text` is produced by `formatForLLM()` in `packages/coding-agent/src/web/search/index.ts`:
 
 - If `response.answer` exists, it is emitted first.
-- If sources exist, a `## Sources` section follows with a source count, then one entry per source:
+- If sources exist, one entry per source follows (the `## Sources` header with a source count is emitted only when an answer was also produced):
   - `[n] <title> (<formatted age or published date>)`
   - `    <url>`
   - optional snippet line truncated to 240 chars.
@@ -70,14 +70,14 @@ Streaming: none. `WebSearchTool.execute()` forwards its `AbortSignal` into `exec
 ## Flow
 1. `WebSearchTool.execute()` in `packages/coding-agent/src/web/search/index.ts` delegates directly to `executeSearch()`.
 2. `executeSearch()` chooses a provider list:
-   - if `params.provider` is set and not `"auto"`, it loads that provider with `getSearchProvider()`; if `isAvailable()` returns true, the list is `[that provider]`, otherwise it falls back to `resolveProviderChain("auto")`.
+   - if `params.provider` is set and not `"auto"`, it loads that provider with `getSearchProvider()`; if `isExplicitlyAvailable()` returns true, the list is `[that provider]`, otherwise it falls back to `resolveProviderChain(authStorage, "auto")`.
    - otherwise it calls `resolveProviderChain()` with the module-global preferred provider from `packages/coding-agent/src/web/search/provider.ts`.
-3. `resolveProviderChain()` lazily loads each provider module on demand, checks `isAvailable()`, and returns only available providers. If a preferred provider is set, it is tried first, then the static `SEARCH_PROVIDER_ORDER` excluding that provider.
+3. `resolveProviderChain()` lazily loads each provider module on demand and returns only available providers. If a preferred provider is set, it is tried first (gated by `isExplicitlyAvailable()`), then the static `SEARCH_PROVIDER_ORDER` excluding that provider, each gated by `isAvailable()`.
 4. If no providers are available, `executeSearch()` returns `Error: No web search provider configured.` with `details.response.provider = "none"`.
 5. For each provider in order, `executeSearch()` calls `provider.search()` with:
-   - `query` after year-rewrite,
+   - `query`,
    - `limit`, `recency`, `temperature`, `maxOutputTokens`, `numSearchResults`,
-   - `systemPrompt` from `packages/coding-agent/src/prompts/tools/web-search.md`.
+   - `systemPrompt` from `packages/coding-agent/src/prompts/system/web-search.md`.
 6. On the first successful `SearchResponse`, `formatForLLM()` renders answer/sources/citations/related/search-queries into one text block and returns it with `details.response`.
 7. If a provider throws, `executeSearch()` records the error and tries the next provider. There is no provider-level parallel fan-out; fallback is sequential.
 8. After all candidates fail, `formatProviderError()` normalizes each error:
@@ -99,8 +99,8 @@ Streaming: none. `WebSearchTool.execute()` forwards its `AbortSignal` into `exec
     - `limit` / `num_search_results`: adapter uses `params.numSearchResults ?? params.limit`, clamped to `5..20` with default `5`.
     - Output: `answer`, `sources`, `requestId`, `authMode: "api_key"`.
   - **Perplexity** — `packages/coding-agent/src/web/search/providers/perplexity.ts`
-    - Availability: auth precedence is `PERPLEXITY_COOKIES` -> OAuth token in `agent.db` -> `PERPLEXITY_API_KEY` / `PPLX_API_KEY`.
-    - OAuth/cookie mode: POSTs to `https://www.perplexity.ai/rest/sse/perplexity_ask`, consumes SSE, merges partial events, extracts answer and source URLs, sets `authMode: "oauth"`.
+    - Availability: auth precedence is `PERPLEXITY_COOKIES` -> OAuth token in `agent.db` -> `PERPLEXITY_API_KEY` / `PPLX_API_KEY` -> anonymous ask-endpoint fallback. `isAvailable()` gates the auto chain on credentials, but `isExplicitlyAvailable()` is always true, so explicit selection works unauthenticated.
+    - OAuth/cookie/anonymous mode: POSTs to `https://www.perplexity.ai/rest/sse/perplexity_ask`, consumes SSE, merges partial events, extracts answer and source URLs, sets `authMode: "oauth"` (`"anonymous"` for the unauthenticated fallback).
     - API-key mode: POSTs to `https://api.perplexity.ai/chat/completions` with `model: "sonar-pro"`, `search_mode: "web"`, `num_search_results`, optional `search_recency_filter`, `max_tokens`, `temperature`.
     - `num_search_results` controls upstream API breadth only in API-key mode. `limit` is preserved separately as `num_results` and slices returned `sources` after parsing in both auth modes.
     - Output may include `answer`, `sources`, `citations`, `usage`, `model`, `requestId`, `authMode`.
@@ -201,7 +201,7 @@ Streaming: none. `WebSearchTool.execute()` forwards its `AbortSignal` into `exec
 - Parallel result count: default `10`, max `40`; per-result excerpt cap `10_000` chars (`packages/coding-agent/src/web/search/providers/parallel.ts`, `packages/coding-agent/src/web/parallel.ts`).
 - Kagi result count: default `10`, max `40` (`packages/coding-agent/src/web/search/providers/kagi.ts`).
 - SearXNG result count: default `10`, max `20` (`packages/coding-agent/src/web/search/providers/searxng.ts`).
-- Perplexity API-key mode defaults: `max_tokens = 8192`, `temperature = 0.2`, `num_search_results = 10` (`packages/coding-agent/src/web/search/providers/perplexity.ts`).
+- Perplexity API-key mode defaults: `max_tokens = 8192`, `temperature = 0.2`, `num_search_results = 20` (`packages/coding-agent/src/web/search/providers/perplexity.ts`).
 - Anthropic defaults: model `claude-haiku-4-5`, `DEFAULT_MAX_TOKENS = 4096` when the provider omits `max_tokens` (`packages/coding-agent/src/web/search/providers/anthropic.ts`).
 - Gemini retries: up to `3` retries per endpoint, base delay `1000` ms, rate-limit delay budget `5 * 60 * 1000` ms (`packages/coding-agent/src/web/search/providers/gemini.ts`).
 
@@ -222,7 +222,6 @@ Streaming: none. `WebSearchTool.execute()` forwards its `AbortSignal` into `exec
 - The model-facing schema does not expose `provider`, but internal callers can force one through `SearchQueryParams`.
 - `resolveProviderChain()` lazily imports provider modules and caches singleton instances. Just asking for labels via `getSearchProviderLabel()` does not trigger those imports.
 - Most providers treat `limit` and `num_search_results` as the same number because adapters pass `params.numSearchResults ?? params.limit`. Perplexity is the only implementation that preserves both concepts.
-- The prompt says `recency` is for Brave and Perplexity, but code also implements it for Tavily and SearXNG.
-- The year rewrite in `executeSearch()` is blunt: any `2020`-`2029` substring is replaced with the current year.
+- `recency` is implemented by Brave, Perplexity, Tavily, SearXNG, and Kagi; the model-facing prompt does not name specific providers.
 - `packages/coding-agent/src/config/settings-schema.ts` uses the shared `SEARCH_PROVIDER_PREFERENCES` / `SEARCH_PROVIDER_OPTIONS` metadata, so the settings selector and setup wizard expose `auto` plus every provider in the auto chain.
 - Exa uses `authStorage.getApiKey("exa")`, then `EXA_API_KEY`, then unauthenticated `https://mcp.exa.ai/mcp` fallback.

@@ -5,13 +5,13 @@ import {
 } from "../discovery/openai-compatible";
 import { Effort } from "../effort";
 import { toFireworksPublicModelId } from "../fireworks-model-id";
+import { isGlmVisionModelId, isReasoningGlmModelId } from "../identity/family";
 import type { ModelManagerOptions } from "../model-manager";
 import { getBundledModels } from "../models";
 import type { Api, FetchImpl, Model, ModelSpec, Provider, ThinkingConfig } from "../types";
 import { isAnthropicOAuthToken, isRecord, toBoolean, toNumber, toPositiveNumber } from "../utils";
-import { getGitHubCopilotBaseUrl, OPENCODE_HEADERS, parseGitHubCopilotApiKey } from "../wire/github-copilot";
+import { COPILOT_API_HEADERS, getGitHubCopilotBaseUrl, parseGitHubCopilotApiKey } from "../wire/github-copilot";
 import { createBundledReferenceMap, createReferenceResolver, toModelSpec } from "./bundled-references";
-import { UNK_CONTEXT_WINDOW, UNK_MAX_TOKENS } from "./discovery-constants";
 
 const MODELS_DEV_URL = "https://models.dev/api.json";
 const ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1";
@@ -103,8 +103,8 @@ function mapAnthropicModelsDev(payload: unknown, baseUrl: string): ModelSpec<"an
 				cacheRead: toNumber(model.cost?.cache_read) ?? 0,
 				cacheWrite: toNumber(model.cost?.cache_write) ?? 0,
 			},
-			contextWindow: toPositiveNumber(model.limit?.context, UNK_CONTEXT_WINDOW),
-			maxTokens: toPositiveNumber(model.limit?.output, UNK_MAX_TOKENS),
+			contextWindow: toPositiveNumber(model.limit?.context, null),
+			maxTokens: toPositiveNumber(model.limit?.output, null),
 		});
 	}
 
@@ -761,8 +761,8 @@ const XAI_NON_CHAT_PREFIXES = ["grok-imagine-", "grok-stt-", "grok-voice-"] as c
 // hermes-agent/agent/transports/codex.py:92 `_effort_clamp = {"minimal":
 // "low"}`). Hermes sends `xhigh` to xAI verbatim and we match that contract
 // — let xAI decide if the level is valid for the specific Grok model.
-// applyResponsesReasoningParams runs this through `model.compat.reasoningEffortMap`
-// at request time, downstream of the omitReasoningEffort gate in xai-responses.ts.
+// `resolveModelThinking` folds this into `model.thinking.effortMap`, downstream
+// of the omitReasoningEffort gate in xai-responses.ts.
 const XAI_REASONING_EFFORT_MAP = { minimal: "low" } as const;
 
 // xai-oauth's /v1/models exposes no per-request output limit on the OAuth
@@ -1031,8 +1031,8 @@ export function zhipuCodingPlanModelManagerOptions(
 						const id = defaults.id;
 						return {
 							...defaults,
-							reasoning: ZHIPU_REASONING_MODELS[id] === true || id.includes("thinking"),
-							input: ZHIPU_VISION_PATTERN.test(id) ? (["text", "image"] as const) : ["text"],
+							reasoning: isReasoningGlmModelId(id) || id.includes("thinking"),
+							input: isGlmVisionModelId(id) ? (["text", "image"] as const) : ["text"],
 							compat: {
 								thinkingFormat: "zai",
 								reasoningContentField: "reasoning_content",
@@ -1045,25 +1045,6 @@ export function zhipuCodingPlanModelManagerOptions(
 		}),
 	};
 }
-
-// Reasoning-capable GLM models on the BigModel coding-plan SKU. Keep this
-// explicit rather than regex-matching `glm-[45]\.\d` so newly-added integers
-// like `glm-5` / `glm-5-turbo` are covered and unrelated future SKUs (e.g.
-// `glm-5-preview`) do not silently flip into thinking mode.
-const ZHIPU_REASONING_MODELS: Readonly<Record<string, true>> = {
-	"glm-4.5": true,
-	"glm-4.5-air": true,
-	"glm-4.6": true,
-	"glm-4.7": true,
-	"glm-5": true,
-	"glm-5-turbo": true,
-	"glm-5.1": true,
-};
-
-// Vision-capable GLM models follow the `glm-<N>[.<N>]v[-<variant>]` shape
-// (e.g. `glm-4v`, `glm-4.5v`, `glm-4v-plus`). The previous `id.includes("v")`
-// check matched anything with a `v` — including the non-vision `glm-5-preview`.
-const ZHIPU_VISION_PATTERN = /^glm-[45](?:\.\d+)?v(?:-|$)/;
 
 // ---------------------------------------------------------------------------
 // 7.5 Fireworks
@@ -1095,7 +1076,10 @@ export function isFireworksKimiK2ModelId(modelId: string): boolean {
  * Clamp the Kimi K2 family's `maxTokens` to {@link FIREWORKS_KIMI_MAX_TOKENS}
  * on Fireworks-backed providers, leaving every other model untouched.
  */
-export function clampFireworksKimiMaxTokens(modelId: string, candidate: number): number {
+export function clampFireworksKimiMaxTokens(modelId: string, candidate: number): number;
+export function clampFireworksKimiMaxTokens(modelId: string, candidate: number | null): number | null;
+export function clampFireworksKimiMaxTokens(modelId: string, candidate: number | null): number | null {
+	if (candidate === null) return null;
 	return isFireworksKimiK2ModelId(modelId) ? Math.min(candidate, FIREWORKS_KIMI_MAX_TOKENS) : candidate;
 }
 
@@ -1128,17 +1112,155 @@ export interface FireworksModelManagerConfig {
 	fetch?: FetchImpl;
 }
 
-function toFireworksModelName(entry: OpenAICompatibleModelRecord, fallback: string): string {
-	const name = toModelName(entry.name, "");
-	if (name) return name;
-	const id = typeof entry.id === "string" ? entry.id : fallback;
-	const shortName = id.split("/").at(-1) ?? fallback;
-	if (fallback !== id && fallback !== shortName) return fallback;
-	return shortName
-		.split("-")
-		.filter(Boolean)
-		.map(part => part.charAt(0).toUpperCase() + part.slice(1))
-		.join(" ");
+const FIREWORKS_CONTROL_PLANE_ACCOUNT = "fireworks";
+const FIREWORKS_SERVERLESS_FILTER = "supports_serverless=true";
+const FIREWORKS_CONTROL_PLANE_PAGE_SIZE = 200;
+const FIREWORKS_CONTROL_PLANE_MAX_PAGES = 25;
+
+/**
+ * One record from the Fireworks control-plane catalog
+ * (`GET /v1/accounts/{account}/models`). This is distinct from the
+ * OpenAI-compatible `/v1/models` inference envelope: the control plane
+ * enumerates the full serverless catalog with camelCase capability metadata,
+ * including on-demand models (e.g. `kimi-k2p7-code`) that never surface in
+ * `/v1/models`. Discovering here is what keeps new serverless models appearing
+ * without catalog edits — see the Fireworks docs `List Models` API.
+ */
+interface FireworksControlPlaneModel {
+	/** Resource name, e.g. `accounts/fireworks/models/kimi-k2p7-code`. */
+	name?: unknown;
+	displayName?: unknown;
+	contextLength?: unknown;
+	supportsImageInput?: unknown;
+	supportsTools?: unknown;
+	supportsServerless?: unknown;
+	state?: unknown;
+}
+
+/**
+ * Derive the control-plane list endpoint from the inference base URL. The
+ * inference API lives under `/inference/v1` while the control plane is
+ * `/v1/accounts/<account>/models` on the same origin, so we route off origin.
+ * Returns null for unparseable overrides (custom gateways) so discovery falls
+ * back to the cached/bundled catalog.
+ */
+function toFireworksControlPlaneModelsUrl(baseUrl: string, account: string): string | null {
+	try {
+		return `${new URL(baseUrl).origin}/v1/accounts/${account}/models`;
+	} catch {
+		return null;
+	}
+}
+
+function mapFireworksControlPlaneModel(
+	record: FireworksControlPlaneModel,
+	publicModelId: string,
+	reference: ModelSpec<"openai-completions"> | undefined,
+	baseUrl: string,
+): ModelSpec<"openai-completions"> {
+	const name = toModelName(record.displayName, reference?.name ?? publicModelId);
+	const supportsImage = toBoolean(record.supportsImageInput) === true;
+	const contextWindow = toPositiveNumber(record.contextLength, reference?.contextWindow ?? null);
+	// The control plane reports no max-output budget; default the Kimi family to
+	// its published cap, everyone else to the discovery fallback, then clamp.
+	const fallbackMaxTokens = isFireworksKimiK2ModelId(publicModelId) ? FIREWORKS_KIMI_MAX_TOKENS : null;
+	const maxTokens = clampFireworksKimiMaxTokens(publicModelId, reference?.maxTokens ?? fallbackMaxTokens);
+	const base: ModelSpec<"openai-completions"> = reference ?? {
+		id: publicModelId,
+		name,
+		api: "openai-completions",
+		provider: "fireworks",
+		baseUrl,
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow,
+		maxTokens,
+	};
+	const model: ModelSpec<"openai-completions"> = {
+		...base,
+		id: publicModelId,
+		api: "openai-completions",
+		provider: "fireworks",
+		baseUrl,
+		name,
+		// The control plane exposes capability flags but no reasoning bit. Every
+		// serverless chat LLM Fireworks ships reasons, and `buildModel` derives
+		// the Fireworks effort map from the id at build time — so default
+		// unbundled models to reasoning while bundled references keep their value.
+		reasoning: reference?.reasoning ?? true,
+		input: supportsImage ? ["text", "image"] : (reference?.input ?? ["text"]),
+		contextWindow,
+		maxTokens,
+	};
+	return stripFireworksDeepSeekThinkingToggle(model, publicModelId);
+}
+
+/**
+ * Discover Fireworks serverless models via the control-plane `List Models`
+ * API (`supports_serverless=true`), paginating the full catalog. Returns null
+ * on any transport/protocol failure so the model manager keeps the cached or
+ * bundled catalog rather than caching a truncated list as authoritative.
+ */
+async function fetchFireworksServerlessModels(options: {
+	baseUrl: string;
+	apiKey: string;
+	resolveReference: (publicModelId: string) => ModelSpec<"openai-completions"> | undefined;
+	fetch?: FetchImpl;
+}): Promise<ModelSpec<"openai-completions">[] | null> {
+	const listUrl = toFireworksControlPlaneModelsUrl(options.baseUrl, FIREWORKS_CONTROL_PLANE_ACCOUNT);
+	if (!listUrl) return null;
+	const fetchImpl = options.fetch ?? fetch;
+	const collected = new Map<string, ModelSpec<"openai-completions">>();
+	let pageToken = "";
+	for (let page = 0; page < FIREWORKS_CONTROL_PLANE_MAX_PAGES; page++) {
+		const url = new URL(listUrl);
+		url.searchParams.set("filter", FIREWORKS_SERVERLESS_FILTER);
+		url.searchParams.set("pageSize", String(FIREWORKS_CONTROL_PLANE_PAGE_SIZE));
+		if (pageToken) url.searchParams.set("pageToken", pageToken);
+		let response: Response;
+		try {
+			response = await fetchImpl(url.toString(), {
+				method: "GET",
+				headers: { Accept: "application/json", Authorization: `Bearer ${options.apiKey}` },
+			});
+		} catch {
+			return null;
+		}
+		if (!response.ok) return null;
+		let payload: unknown;
+		try {
+			payload = await response.json();
+		} catch {
+			return null;
+		}
+		if (!isRecord(payload)) return null;
+		const models = Array.isArray(payload.models) ? payload.models : [];
+		for (const entry of models) {
+			if (!isRecord(entry)) continue;
+			const record = entry as FireworksControlPlaneModel;
+			if (toBoolean(record.supportsServerless) !== true) continue;
+			if (toBoolean(record.supportsTools) !== true) continue;
+			if (typeof record.state === "string" && record.state !== "READY") continue;
+			const wireName = typeof record.name === "string" ? record.name : "";
+			if (!wireName) continue;
+			const publicModelId = toFireworksPublicModelId(wireName);
+			if (!publicModelId) continue;
+			collected.set(
+				publicModelId,
+				mapFireworksControlPlaneModel(
+					record,
+					publicModelId,
+					options.resolveReference(publicModelId),
+					options.baseUrl,
+				),
+			);
+		}
+		const next = typeof payload.nextPageToken === "string" ? payload.nextPageToken : "";
+		if (!next) break;
+		pageToken = next;
+	}
+	return Array.from(collected.values());
 }
 
 function createModelsDevReferenceMap<TApi extends Api>(
@@ -1152,11 +1274,14 @@ function createModelsDevReferenceMap<TApi extends Api>(
 			references.set(candidate.id, candidate);
 			continue;
 		}
-		if (candidate.contextWindow > existing.contextWindow) {
+		if ((candidate.contextWindow ?? 0) > (existing.contextWindow ?? 0)) {
 			references.set(candidate.id, candidate);
 			continue;
 		}
-		if (candidate.contextWindow === existing.contextWindow && candidate.maxTokens > existing.maxTokens) {
+		if (
+			candidate.contextWindow === existing.contextWindow &&
+			(candidate.maxTokens ?? 0) > (existing.maxTokens ?? 0)
+		) {
 			references.set(candidate.id, candidate);
 		}
 	}
@@ -1184,35 +1309,11 @@ export function fireworksModelManagerOptions(
 		...(apiKey && {
 			fetchDynamicModels: async () => {
 				const modelsDevReferences = await loadModelsDevReferences<"openai-completions">(config?.fetch);
-				return fetchOpenAICompatibleModels({
-					api: "openai-completions",
-					provider: "fireworks",
+				return fetchFireworksServerlessModels({
 					baseUrl,
 					apiKey,
-					filterModel: entry =>
-						toBoolean(entry.supports_chat) === true && toBoolean(entry.supports_tools) === true,
-					mapModel: (entry, defaults) => {
-						const publicModelId = toFireworksPublicModelId(defaults.id);
-						const reference = modelsDevReferences.get(publicModelId) ?? bundledReferences(publicModelId);
-						const model = stripFireworksDeepSeekThinkingToggle(
-							mapWithBundledReference(entry, defaults, reference),
-							publicModelId,
-						);
-						return {
-							...model,
-							id: publicModelId,
-							api: "openai-completions",
-							provider: "fireworks",
-							baseUrl,
-							name: toFireworksModelName(entry, model.name),
-							input: toBoolean(entry.supports_image_input) === true ? ["text", "image"] : ["text"],
-							contextWindow: toPositiveNumber(entry.context_length, model.contextWindow),
-							maxTokens: clampFireworksKimiMaxTokens(
-								publicModelId,
-								toPositiveNumber(entry.max_completion_tokens, model.maxTokens),
-							),
-						};
-					},
+					resolveReference: publicModelId =>
+						modelsDevReferences.get(publicModelId) ?? bundledReferences(publicModelId),
 					fetch: config?.fetch,
 				});
 			},
@@ -1299,7 +1400,7 @@ function mapWaferModel(
 		wafer?.context_length,
 		toPositiveNumber((entry as { max_model_len?: unknown }).max_model_len, defaults.contextWindow),
 	);
-	const maxTokens = Math.min(contextWindow, WAFER_MAX_TOKENS_CAP);
+	const maxTokens = contextWindow !== null ? Math.min(contextWindow, WAFER_MAX_TOKENS_CAP) : null;
 	const pricing = wafer?.pricing ?? {};
 	// Wafer's `/v1/models` exposes pricing through `*_cents_per_million` fields,
 	// but the values are an internal wholesale unit, not literal cents — across
@@ -2274,6 +2375,8 @@ export function litellmModelManagerOptions(
 // 22. vLLM
 // ---------------------------------------------------------------------------
 
+const VLLM_DISCOVERY_TIMEOUT_MS = 10_000;
+
 export interface VllmModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
@@ -2286,6 +2389,7 @@ export function vllmModelManagerOptions(config?: VllmModelManagerConfig): ModelM
 	const references = createBundledReferenceMap<"openai-completions">("vllm" as Parameters<typeof getBundledModels>[0]);
 	return {
 		providerId: "vllm",
+		cacheProviderId: `vllm:${Bun.hash(baseUrl).toString(36)}`,
 		fetchDynamicModels: () =>
 			fetchOpenAICompatibleModels({
 				api: "openai-completions",
@@ -2300,6 +2404,7 @@ export function vllmModelManagerOptions(config?: VllmModelManagerConfig): ModelM
 					};
 				},
 				fetch: config?.fetch,
+				signal: AbortSignal.timeout(VLLM_DISCOVERY_TIMEOUT_MS),
 			}),
 	};
 }
@@ -2371,7 +2476,7 @@ export interface GithubCopilotModelManagerConfig {
 	fetch?: FetchImpl;
 }
 
-const COPILOT_ANTHROPIC_MODEL_PATTERN = /^claude-(haiku|sonnet|opus)-4([.-]|$)/;
+const COPILOT_ANTHROPIC_MODEL_PATTERN = /^claude-(haiku|sonnet|opus|fable|mythos)-\d/;
 const isCopilotResponsesModelId = (modelId: string): boolean =>
 	modelId.startsWith("gpt-5") || modelId.startsWith("oswe");
 
@@ -2406,6 +2511,122 @@ function extractCopilotLimits(entry: OpenAICompatibleModelRecord): {
 	};
 }
 
+/** Local id/name suffixes for synthesized Copilot long-context variants. */
+export const COPILOT_LONG_CONTEXT_ID_SUFFIX = "-1m";
+const COPILOT_LONG_CONTEXT_NAME_SUFFIX = " (1M)";
+
+/** One tier of Copilot token pricing (`billing.token_prices.{default,long_context}`). Prices are hundredths of a dollar per 1M tokens. */
+interface CopilotTokenPriceTier {
+	contextMax?: number;
+	inputPrice?: number;
+	outputPrice?: number;
+	cachePrice?: number;
+}
+
+function parseCopilotTokenPriceTier(value: unknown): CopilotTokenPriceTier | undefined {
+	if (!isRecord(value)) {
+		return undefined;
+	}
+	return {
+		contextMax: toNumber(value.context_max),
+		inputPrice: toNumber(value.input_price),
+		outputPrice: toNumber(value.output_price),
+		cachePrice: toNumber(value.cache_price),
+	};
+}
+
+/**
+ * Tiered context boundaries/prices from `billing.token_prices`. Served only
+ * when discovery requests `X-GitHub-Api-Version` ≥ 2026-06-01; absent on the
+ * legacy response shape (where `capabilities.limits` is already tier-capped).
+ */
+function extractCopilotTokenPrices(entry: OpenAICompatibleModelRecord): {
+	defaultTier?: CopilotTokenPriceTier;
+	longContext?: CopilotTokenPriceTier;
+} {
+	if (!isRecord(entry.billing)) {
+		return {};
+	}
+	const tokenPrices = entry.billing.token_prices;
+	if (!isRecord(tokenPrices)) {
+		return {};
+	}
+	return {
+		defaultTier: parseCopilotTokenPriceTier(tokenPrices.default),
+		longContext: parseCopilotTokenPriceTier(tokenPrices.long_context),
+	};
+}
+
+function extractCopilotSupportsVision(entry: OpenAICompatibleModelRecord): boolean | undefined {
+	if (!isRecord(entry.capabilities)) {
+		return undefined;
+	}
+	const supports = entry.capabilities.supports;
+	if (!isRecord(supports)) {
+		return undefined;
+	}
+	return toBoolean(supports.vision);
+}
+
+/** Copilot's `/models` mixes chat and embedding models; only `type: "chat"` entries are usable here. */
+function isCopilotChatModel(entry: OpenAICompatibleModelRecord): boolean {
+	if (!isRecord(entry.capabilities)) {
+		return true;
+	}
+	const type = entry.capabilities.type;
+	return typeof type !== "string" || type === "chat";
+}
+
+function copilotTierCost(
+	tier: CopilotTokenPriceTier | undefined,
+): Omit<ModelSpec<Api>["cost"], "cacheWrite"> | undefined {
+	if (tier?.inputPrice === undefined || tier.outputPrice === undefined) {
+		return undefined;
+	}
+	return {
+		input: tier.inputPrice / 100,
+		output: tier.outputPrice / 100,
+		cacheRead: (tier.cachePrice ?? 0) / 100,
+	};
+}
+
+/**
+ * Synthesize the opt-in long-context sibling for a Copilot model that reports
+ * a `billing.token_prices.long_context` tier (e.g. Claude Opus 200k → 1M, as
+ * selectable in copilot-cli). The variant is a local catalog entry: it keeps
+ * the upstream model id on the wire via `requestModelId` — the tier is purely
+ * a client-side context budget with its own pricing, not a served model id.
+ * The base entry stays on the default tier so nobody silently pays
+ * long-context rates.
+ */
+function createCopilotLongContextVariant(
+	base: ModelSpec<Api>,
+	fullContextWindow: number | null,
+	maxTokens: number | null,
+	longContext: CopilotTokenPriceTier | undefined,
+): ModelSpec<Api> | undefined {
+	const longContextMax = longContext?.contextMax;
+	if (longContextMax === undefined || longContextMax <= 0 || fullContextWindow === null || maxTokens === null) {
+		return undefined;
+	}
+	const variantWindow = Math.min(fullContextWindow, longContextMax + maxTokens);
+	if (base.contextWindow === null || variantWindow <= base.contextWindow) {
+		return undefined;
+	}
+	const longCost = copilotTierCost(longContext);
+	return {
+		...base,
+		id: `${base.id}${COPILOT_LONG_CONTEXT_ID_SUFFIX}`,
+		requestModelId: base.id,
+		name: `${base.name}${COPILOT_LONG_CONTEXT_NAME_SUFFIX}`,
+		contextWindow: variantWindow,
+		// Long-context tier has its own token prices (Gemini/GPT bill ~2x above
+		// the default boundary). cacheWrite is not reported per tier; inherit.
+		...(longCost && { cost: { ...longCost, cacheWrite: base.cost.cacheWrite } }),
+		contextPromotionTarget: undefined,
+	};
+}
+
 export function githubCopilotModelManagerOptions(config?: GithubCopilotModelManagerConfig): ModelManagerOptions<Api> {
 	const rawApiKey = config?.apiKey;
 	const configuredBaseUrl = config?.baseUrl ?? "https://api.githubcopilot.com";
@@ -2420,18 +2641,22 @@ export function githubCopilotModelManagerOptions(config?: GithubCopilotModelMana
 	return {
 		providerId: "github-copilot",
 		...(apiKey && {
-			fetchDynamicModels: () =>
-				fetchOpenAICompatibleModels<Api>({
+			fetchDynamicModels: async () => {
+				const longContextVariants: ModelSpec<Api>[] = [];
+				const models = await fetchOpenAICompatibleModels<Api>({
 					api: "openai-completions",
 					provider: "github-copilot",
 					baseUrl,
 					apiKey,
-					headers: OPENCODE_HEADERS,
+					headers: COPILOT_API_HEADERS,
 					mapModel: (
 						entry: OpenAICompatibleModelRecord,
 						defaults: ModelSpec<Api>,
 						_context: OpenAICompatibleModelMapperContext<Api>,
-					): ModelSpec<Api> => {
+					): ModelSpec<Api> | null => {
+						if (!isCopilotChatModel(entry)) {
+							return null;
+						}
 						const reference = resolveReference(defaults.id);
 						const copilotLimits = extractCopilotLimits(entry);
 						// Copilot exposes token limits under capabilities.limits.*.
@@ -2463,48 +2688,94 @@ export function githubCopilotModelManagerOptions(config?: GithubCopilotModelMana
 								? entry.name
 								: (reference?.name ?? defaults.name);
 						const api = inferCopilotApi(defaults.id);
-						if (reference) {
-							return {
-								...reference,
-								api,
-								provider: "github-copilot",
-								baseUrl,
-								name,
-								contextWindow,
-								maxTokens,
-								headers: { ...OPENCODE_HEADERS, ...(providerRefs.get(defaults.id)?.headers ?? {}) },
-								...(api === "openai-completions"
-									? {
-											compat: {
-												supportsStore: false,
-												supportsDeveloperRole: false,
-												supportsReasoningEffort: false,
-											},
-										}
-									: {}),
-							};
-						}
-						return {
-							...defaults,
-							api,
-							baseUrl,
-							name,
+						const supportsVision = extractCopilotSupportsVision(entry);
+						const input: ModelSpec<Api>["input"] = supportsVision
+							? ["text", "image"]
+							: (reference?.input ?? defaults.input);
+						// With COPILOT_API_HEADERS the served window is the long-context
+						// ceiling; the default tier ends at token_prices.default.context_max
+						// prompt tokens. Cap the base entry to the default tier — the long
+						// tier is the opt-in `-1m` sibling below.
+						const tokenPrices = extractCopilotTokenPrices(entry);
+						const defaultContextMax = tokenPrices.defaultTier?.contextMax;
+						const defaultTierWindow =
+							defaultContextMax !== undefined &&
+							defaultContextMax > 0 &&
+							contextWindow !== null &&
+							maxTokens !== null
+								? Math.min(contextWindow, defaultContextMax + maxTokens)
+								: contextWindow;
+						const base: ModelSpec<Api> = reference
+							? {
+									...reference,
+									api,
+									provider: "github-copilot",
+									baseUrl,
+									name,
+									input,
+									contextWindow: defaultTierWindow,
+									maxTokens,
+									headers: { ...COPILOT_API_HEADERS, ...(providerRefs.get(defaults.id)?.headers ?? {}) },
+									...(api === "openai-completions"
+										? {
+												compat: {
+													supportsStore: false,
+													supportsDeveloperRole: false,
+													supportsReasoningEffort: false,
+												},
+											}
+										: {}),
+								}
+							: {
+									...defaults,
+									api,
+									baseUrl,
+									name,
+									input,
+									contextWindow: defaultTierWindow,
+									maxTokens,
+									headers: { ...COPILOT_API_HEADERS },
+									...(api === "openai-completions"
+										? {
+												compat: {
+													supportsStore: false,
+													supportsDeveloperRole: false,
+													supportsReasoningEffort: false,
+												},
+											}
+										: {}),
+								};
+						const variant = createCopilotLongContextVariant(
+							base,
 							contextWindow,
 							maxTokens,
-							headers: { ...OPENCODE_HEADERS },
-							...(api === "openai-completions"
-								? {
-										compat: {
-											supportsStore: false,
-											supportsDeveloperRole: false,
-											supportsReasoningEffort: false,
-										},
-									}
-								: {}),
-						};
+							tokenPrices.longContext,
+						);
+						if (variant) {
+							longContextVariants.push(variant);
+							// Overflowing the default tier promotes into the 1M sibling
+							// unless the reference already pins a target.
+							base.contextPromotionTarget ??= `github-copilot/${variant.id}`;
+						}
+						return base;
 					},
 					fetch: config?.fetch,
-				}),
+				});
+				if (models === null) {
+					return null;
+				}
+				// Append synthesized tiers; a real upstream id always wins over a
+				// local variant with the same id.
+				const takenIds = new Set(models.map(model => model.id));
+				for (const variant of longContextVariants) {
+					if (takenIds.has(variant.id)) {
+						continue;
+					}
+					takenIds.add(variant.id);
+					models.push(variant);
+				}
+				return models.sort((left, right) => left.id.localeCompare(right.id));
+			},
 		}),
 	};
 }
@@ -2575,8 +2846,6 @@ export function anthropicModelManagerOptions(
 // ---------------------------------------------------------------------------
 // Models.dev provider descriptors for generate-models.ts
 // ---------------------------------------------------------------------------
-
-export { UNK_CONTEXT_WINDOW, UNK_MAX_TOKENS } from "./discovery-constants";
 
 /** Describes how to map models.dev API data for a single provider. */
 export interface ModelsDevProviderDescriptor {
@@ -2657,8 +2926,8 @@ export function mapModelsDevToModels(
 					cacheRead: toNumber(m.cost?.cache_read) ?? 0,
 					cacheWrite: toNumber(m.cost?.cache_write) ?? 0,
 				},
-				contextWindow: toPositiveNumber(m.limit?.context, desc.defaultContextWindow ?? UNK_CONTEXT_WINDOW),
-				maxTokens: toPositiveNumber(m.limit?.output, desc.defaultMaxTokens ?? UNK_MAX_TOKENS),
+				contextWindow: toPositiveNumber(m.limit?.context, desc.defaultContextWindow ?? null),
+				maxTokens: toPositiveNumber(m.limit?.output, desc.defaultMaxTokens ?? null),
 				...(desc.compat && { compat: desc.compat }),
 				...(desc.headers && { headers: { ...desc.headers } }),
 			};
@@ -2947,12 +3216,10 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_CORE: readonly ModelsDevProviderDescriptor
 		// ids are kept off the catalog until the issue thread asks for them.
 		filterModel: (id, m) => m.tool_call === true && id.startsWith("deepseek-v4"),
 		compat: {
-			// DeepSeek V4 only accepts `high`/`max`; map lower OMP levels upward so
-			// subagent "minimal" turns stay in documented thinking mode instead of
-			// sending unsupported effort strings.
+			// DeepSeek V4 effort remapping is derived in model-thinking metadata; this
+			// descriptor keeps only transport-shape compat.
 			supportsDeveloperRole: false,
 			supportsReasoningEffort: true,
-			reasoningEffortMap: { minimal: "high", low: "high", medium: "high", high: "high", xhigh: "max" },
 			maxTokensField: "max_tokens",
 			// DeepSeek V4 thinking mode rejects the `tool_choice` control parameter.
 			// Tool calls still work without it; the API defaults to auto when tools exist.
@@ -3077,7 +3344,7 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_SPECIALIZED: readonly ModelsDevProviderDes
 	openAiCompletionsDescriptor("github-copilot", "github-copilot", COPILOT_BASE_URL, {
 		defaultContextWindow: 128000,
 		defaultMaxTokens: 8192,
-		headers: { ...OPENCODE_HEADERS },
+		headers: { ...COPILOT_API_HEADERS },
 		filterModel: filterActiveToolCallModels,
 		resolveApi: (modelId, raw) =>
 			resolveApiByRules(modelId, raw, COPILOT_API_RESOLUTION_RULES, COPILOT_DEFAULT_RESOLUTION),

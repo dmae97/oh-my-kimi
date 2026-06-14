@@ -3,12 +3,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentEvent, AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { RpcClient } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-client";
-import {
-	type BranchSummaryEntry,
-	type CustomMessageEntry,
-	parseSessionEntries,
-	type SessionMessageEntry,
-} from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import type {
+	BranchSummaryEntry,
+	CustomMessageEntry,
+	SessionMessageEntry,
+} from "@oh-my-pi/pi-coding-agent/session/session-entries";
+import { parseSessionEntries } from "@oh-my-pi/pi-coding-agent/session/session-loader";
 
 function extractText(message: AgentMessage): string {
 	if (message.role !== "assistant") return "";

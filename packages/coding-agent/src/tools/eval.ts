@@ -1,7 +1,7 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { prompt } from "@oh-my-pi/pi-utils";
-import * as z from "zod/v4";
+import { z } from "zod/v4";
 import { jsBackend, pythonBackend } from "../eval";
 import type { ExecutorBackend, ExecutorBackendResult } from "../eval/backend";
 import { EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP } from "../eval/bridge-timeout";
@@ -10,6 +10,7 @@ import { defaultEvalSessionId } from "../eval/session-id";
 import type { EvalCellResult, EvalDisplayOutput, EvalLanguage, EvalStatusEvent, EvalToolDetails } from "../eval/types";
 import evalDescription from "../prompts/tools/eval.md" with { type: "text" };
 import { DEFAULT_MAX_BYTES, OutputSink, type OutputSummary, TailBuffer } from "../session/streaming-output";
+import { webpExclusionForModel } from "../utils/image-loading";
 import { formatDimensionNote, resizeImage } from "../utils/image-resize";
 import type { ToolSession } from ".";
 import { truncateForPrompt } from "./approval";
@@ -219,6 +220,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 			throw new ToolError("Eval tool requires a session when not using proxy executor");
 		}
 		const session = this.session;
+		const excludeWebP = webpExclusionForModel(session.getActiveModel?.());
 
 		const cells: ResolvedEvalCell[] = [];
 		for (let i = 0; i < params.cells.length; i++) {
@@ -390,11 +392,14 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 							cellDisplayOutputs.push(output);
 						}
 						if (output.type === "image") {
-							const resized = await resizeImage({
-								type: "image",
-								data: output.data,
-								mimeType: output.mimeType,
-							});
+							const resized = await resizeImage(
+								{
+									type: "image",
+									data: output.data,
+									mimeType: output.mimeType,
+								},
+								{ excludeWebP },
+							);
 							const image: ImageContent = {
 								type: "image",
 								data: resized.data,

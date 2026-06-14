@@ -17,6 +17,7 @@ import type {
 	TerminalInputHandler,
 } from "../../extensibility/extensions";
 import { getSessionSlashCommands } from "../../extensibility/extensions/get-commands-handler";
+import { createExtensionModelQuery } from "../../extensibility/extensions/model-api";
 import { HookEditorComponent } from "../../modes/components/hook-editor";
 import { HookInputComponent } from "../../modes/components/hook-input";
 import { HookSelectorComponent, type HookSelectorSlider } from "../../modes/components/hook-selector";
@@ -491,6 +492,11 @@ export class ExtensionUiController {
 						sessionManager: this.ctx.session.sessionManager,
 						modelRegistry: this.ctx.session.modelRegistry,
 						model: this.ctx.session.model,
+						models: createExtensionModelQuery(
+							this.ctx.session.modelRegistry,
+							this.ctx.session.settings,
+							() => this.ctx.session.model,
+						),
 						isIdle: () => !this.ctx.session.isStreaming,
 						hasPendingMessages: () => this.ctx.session.queuedMessageCount > 0,
 						abort: () => {

@@ -2,8 +2,11 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
-import { Snowflake, setProjectDir } from "@oh-my-pi/pi-utils";
-import { $ } from "bun";
+import { setNextRequestDebugPath } from "@oh-my-pi/pi-ai/utils/request-debug";
+import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
+import { APP_NAME, setProjectDir } from "@oh-my-pi/pi-utils";
+import { COLLAB_GUEST_ALLOWED_COMMANDS, CollabGuestLink } from "../collab/guest";
+import { CollabHost } from "../collab/host";
 import type { SettingPath, SettingValue } from "../config/settings";
 import { settings } from "../config/settings";
 import {
@@ -11,6 +14,7 @@ import {
 	resolveActiveProjectRegistryPath,
 	resolveOrDefaultProjectRegistryPath,
 } from "../discovery/helpers.js";
+import { shareSession } from "../export/share";
 import { PluginManager } from "../extensibility/plugins";
 import {
 	getInstalledPluginsRegistryPath,
@@ -20,15 +24,18 @@ import {
 	MarketplaceManager,
 } from "../extensibility/plugins/marketplace";
 import { resolveMemoryBackend } from "../memory-backend";
+import { theme } from "../modes/theme/theme";
 import type { InteractiveModeContext } from "../modes/types";
-import type { FreshSessionResult } from "../session/agent-session";
+import type { AgentSession, FreshSessionResult } from "../session/agent-session";
 import { formatShakeSummary, type ShakeMode } from "../session/shake-types";
+import { urlHyperlinkAlways } from "../tui";
 import { getChangelogPath, parseChangelog } from "../utils/changelog";
 import { buildContextReportText } from "./helpers/context-report";
 import { formatDuration } from "./helpers/format";
 import { createMarketplaceManager } from "./helpers/marketplace-manager";
 import { handleMcpAcp } from "./helpers/mcp";
 import { commandConsumed, errorMessage, parseSlashCommand, parseSubcommand, usage } from "./helpers/parse";
+import { describeRedeemOutcome, type ResetUsageAccount, toResetUsageAccounts } from "./helpers/reset-usage";
 import { handleSshAcp } from "./helpers/ssh";
 import { launchStatsDashboard, parseStatsDashboardArgs } from "./helpers/stats-dashboard";
 import { handleTodoAcp } from "./helpers/todo";
@@ -40,6 +47,7 @@ import type {
 	SlashCommandResult,
 	SlashCommandRuntime,
 	SlashCommandSpec,
+	SubcommandDef,
 	TuiSlashCommandRuntime,
 } from "./types";
 
@@ -54,6 +62,43 @@ function refreshStatusLine(ctx: InteractiveModeContext): void {
 	ctx.ui.requestRender();
 }
 
+/** `/fast status` label: "off", "on", or scope-qualified "on (… only)". */
+function formatFastModeStatus(session: AgentSession): string {
+	if (!session.isFastModeEnabled()) return "off";
+	switch (session.serviceTier) {
+		case "openai-only":
+			return "on (OpenAI only)";
+		case "claude-only":
+			return "on (Claude only)";
+		default:
+			return "on";
+	}
+}
+
+/** Scheme-less display form of a browser deep link: accent + underline, OSC-8 linked to the full URL. */
+function collabWebLinkClickable(webLink: string): string {
+	const display = theme.fg("accent", `\x1b[4m${webLink.replace(/^https?:\/\//, "")}\x1b[24m`);
+	return urlHyperlinkAlways(webLink, display);
+}
+
+/** Join hint printed by /collab: compact terminal link + clickable browser deep link. */
+function collabLinkHint(host: CollabHost, heading: string, view = false): string {
+	const bullet = theme.fg("accent", theme.format.bullet);
+	const link = view ? host.viewLink : host.link;
+	const webLink = view ? host.webViewLink : host.webLink;
+	return [
+		theme.fg("success", heading),
+		` ${bullet} ${theme.fg("muted", view ? "Watch from another terminal:" : "Join from another terminal:")} ${APP_NAME} join "${link}"`,
+		` ${bullet} ${theme.fg("muted", "or any web browser:")} ${collabWebLinkClickable(webLink)}`,
+		theme.fg(
+			"dim",
+			view
+				? "Anyone with this link can watch the session but cannot prompt the agent."
+				: "Anyone with the link can read the session and prompt the agent. Read-only link: /collab view",
+		),
+	].join("\n");
+}
+
 function formatFreshSessionResult(result: FreshSessionResult): string {
 	const stateLabel = result.closedProviderSessions === 1 ? "provider state" : "provider states";
 	return `Fresh provider session started (${result.closedProviderSessions} ${stateLabel} pruned).`;
@@ -64,6 +109,95 @@ const shutdownHandlerTui = (_command: ParsedSlashCommand, runtime: TuiSlashComma
 	void runtime.ctx.shutdown();
 	return commandConsumed();
 };
+
+async function handleUsageResetCommand(
+	arg: string,
+	session: AgentSession,
+	output: SlashCommandRuntime["output"],
+): Promise<void> {
+	let accounts: ResetUsageAccount[];
+	try {
+		accounts = toResetUsageAccounts(await session.listResetCredits());
+	} catch (error) {
+		await output(`Could not load saved resets: ${errorMessage(error)}`);
+		return;
+	}
+	if (accounts.length === 0) {
+		await output("No Codex accounts found. Use /login to add one.");
+		return;
+	}
+	const targetArg = arg.trim();
+	if (!targetArg) {
+		const lines = ["Saved Codex rate-limit resets:"];
+		for (const account of accounts) {
+			const detail = account.error ? `unavailable (${account.error})` : `${account.availableCount} available`;
+			lines.push(`- ${account.label}: ${detail}${account.active ? " (active)" : ""}`);
+		}
+		lines.push("", "Spend one with `/usage reset <account email>` or `/usage reset active`.");
+		await output(lines.join("\n"));
+		return;
+	}
+	const wanted = targetArg.toLowerCase();
+	const target =
+		wanted === "active"
+			? accounts.find(account => account.active)
+			: accounts.find(
+					account =>
+						account.label.toLowerCase() === wanted ||
+						account.target.email?.toLowerCase() === wanted ||
+						account.target.accountId?.toLowerCase() === wanted,
+				);
+	if (!target) {
+		await output(`No Codex account matches "${targetArg}".`);
+		return;
+	}
+	if (target.availableCount <= 0) {
+		await output(`${target.label}: no saved resets to spend.`);
+		return;
+	}
+	const outcome = await session.redeemResetCredit(target.target);
+	await output(describeRedeemOutcome(outcome, target.label));
+}
+
+const DEBUG_DUMP_NEXT_REQUEST_USAGE = "Usage: /debug dump-next-request <path>";
+
+function resolveDebugRequestDumpPath(target: string, cwd: string): string {
+	const expanded =
+		target === "~"
+			? os.homedir()
+			: target.startsWith("~/") || target.startsWith("~\\")
+				? path.join(os.homedir(), target.slice(2))
+				: target;
+	return path.resolve(cwd, expanded);
+}
+
+async function handleDebugSubcommand(
+	args: string,
+	cwd: string,
+	output: (text: string) => Promise<void> | void,
+): Promise<SlashCommandResult> {
+	const { verb, rest } = parseSubcommand(args);
+	switch (verb) {
+		case "":
+			await output(DEBUG_DUMP_NEXT_REQUEST_USAGE);
+			return commandConsumed();
+		case "dump-next-request":
+		case "dump-request":
+		case "next-request": {
+			if (!rest) {
+				await output(DEBUG_DUMP_NEXT_REQUEST_USAGE);
+				return commandConsumed();
+			}
+			const requestPath = resolveDebugRequestDumpPath(rest, cwd);
+			setNextRequestDebugPath(requestPath);
+			await output(`Next AI provider request will be dumped to ${requestPath}`);
+			return commandConsumed();
+		}
+		default:
+			await output(`Unknown /debug subcommand "${verb}". ${DEBUG_DUMP_NEXT_REQUEST_USAGE}`);
+			return commandConsumed();
+	}
+}
 
 /** Parse the `/shake` subcommand into a {@link ShakeMode}; empty defaults to elide. */
 function parseShakeMode(args: string): ShakeMode | { error: string } {
@@ -147,6 +281,16 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			if (hadArgs && wasGoalModeEnabled) {
 				runtime.ctx.editor.addToHistory(command.text);
 			}
+			runtime.ctx.editor.setText("");
+		},
+	},
+	{
+		name: "guided-goal",
+		description: "Interview and refine a goal before enabling goal mode",
+		inlineHint: "[rough objective]",
+		allowArgs: true,
+		handleTui: async (command, runtime) => {
+			await runtime.ctx.handleGuidedGoalCommand(command.args || undefined);
 			runtime.ctx.editor.setText("");
 		},
 	},
@@ -238,7 +382,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 				return commandConsumed();
 			}
 			if (arg === "status") {
-				await runtime.output(`Fast mode is ${runtime.session.isFastModeEnabled() ? "on" : "off"}.`);
+				await runtime.output(`Fast mode is ${formatFastModeStatus(runtime.session)}.`);
 				return commandConsumed();
 			}
 			return usage("Usage: /fast [on|off|status]", runtime);
@@ -267,8 +411,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 				return;
 			}
 			if (arg === "status") {
-				const enabled = runtime.ctx.session.isFastModeEnabled();
-				runtime.ctx.showStatus(`Fast mode is ${enabled ? "on" : "off"}.`);
+				runtime.ctx.showStatus(`Fast mode is ${formatFastModeStatus(runtime.ctx.session)}.`);
 				runtime.ctx.editor.setText("");
 				return;
 			}
@@ -319,36 +462,146 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "share",
-		description: "Share session as a secret GitHub gist",
+		description: "Share session via an encrypted link (secret gist or share server)",
 		handle: async (_command, runtime) => {
-			const tmpFile = path.join(os.tmpdir(), `${Snowflake.next()}.html`);
 			try {
-				try {
-					await runtime.session.exportToHtml(tmpFile);
-				} catch (err) {
-					return usage(`Failed to export session: ${errorMessage(err)}`, runtime);
-				}
-				const result = await $`gh gist create --public=false ${tmpFile}`.quiet().nothrow();
-				if (result.exitCode !== 0) {
-					return usage(
-						`Failed to create gist: ${result.stderr.toString("utf-8").trim() || "unknown error"}`,
-						runtime,
-					);
-				}
-				const gistUrl = result.stdout.toString("utf-8").trim();
-				const gistId = gistUrl.split("/").pop();
-				if (!gistId) return usage("Failed to parse gist ID from gh output", runtime);
-				await runtime.output(`Share URL: https://gistpreview.github.io/?${gistId}\nGist: ${gistUrl}`);
+				const result = await shareSession(runtime.sessionManager, {
+					serverUrl: runtime.settings.get("share.serverUrl"),
+					state: runtime.session.state,
+					obfuscator: runtime.settings.get("share.redactSecrets") ? runtime.session.obfuscator : undefined,
+				});
+				const lines = [`Share URL: ${result.url}`];
+				if (result.gistUrl) lines.push(`Gist: ${result.gistUrl}`);
+				if (result.truncated) lines.push("Note: large content was trimmed to fit the share size limit.");
+				await runtime.output(lines.join("\n"));
 				return commandConsumed();
-			} catch {
-				return usage("GitHub CLI (gh) is required for /share. Install it from https://cli.github.com/.", runtime);
-			} finally {
-				await fs.rm(tmpFile, { force: true }).catch(() => {});
+			} catch (err) {
+				return usage(`Failed to share session: ${errorMessage(err)}`, runtime);
 			}
 		},
 		handleTui: async (_command, runtime) => {
 			await runtime.ctx.handleShareCommand();
 			runtime.ctx.editor.setText("");
+		},
+	},
+	{
+		name: "collab",
+		description: "Share this session live via a relay",
+		inlineHint: "[start|view|stop|status] [relayUrl]",
+		subcommands: [
+			{ name: "view", description: "Share a read-only link (guests can watch, not prompt)" },
+			{ name: "status", description: "Show link + participants" },
+			{ name: "stop", description: "Stop sharing" },
+		],
+		allowArgs: true,
+		handleTui: async (command, runtime) => {
+			const ctx = runtime.ctx;
+			ctx.editor.setText("");
+			const args = command.args.trim();
+			const [first = ""] = args.split(/\s+/, 1);
+			if (first === "stop") {
+				if (!ctx.collabHost) {
+					ctx.showStatus("Not hosting a collab session");
+					return;
+				}
+				await ctx.collabHost.stop("host stopped");
+				ctx.showStatus("Collab stopped");
+				return;
+			}
+			if (first === "status") {
+				if (ctx.collabHost) {
+					const names = ctx.collabHost.participants.map(p =>
+						p.role === "host" ? `${p.name} (host)` : p.readOnly ? `${p.name} (view-only)` : p.name,
+					);
+					ctx.showStatus(`Collab: ${names.join(", ")} — ${collabWebLinkClickable(ctx.collabHost.webLink)}`);
+				} else if (ctx.collabGuest) {
+					ctx.showStatus(
+						ctx.collabGuest.readOnly
+							? "In a collab session as a read-only guest (/leave to exit)"
+							: "In a collab session as a guest (/leave to exit)",
+					);
+				} else {
+					ctx.showStatus("Not in a collab session");
+				}
+				return;
+			}
+			if (ctx.collabGuest) {
+				ctx.showError("Already in a collab session as a guest (/leave first)");
+				return;
+			}
+			const view = first === "view";
+			if (ctx.collabHost) {
+				ctx.showStatus(
+					collabLinkHint(ctx.collabHost, view ? "Read-only collab link" : "Collab session active", view),
+					{ dim: false },
+				);
+				return;
+			}
+			const explicitUrl = first === "start" || view ? args.slice(first.length).trim() : args;
+			const relayInput = explicitUrl || ctx.settings.get("collab.relayUrl") || "";
+			if (!relayInput) {
+				ctx.showError(
+					"No relay configured. Set collab.relayUrl in /settings or pass one: /collab relay.example.com",
+				);
+				return;
+			}
+			// Scheme-less relay args default to wss (ws:// must be spelled out for localhost).
+			const relayUrl = relayInput.includes("://") ? relayInput : `wss://${relayInput}`;
+			const host = new CollabHost(ctx);
+			try {
+				await host.start(relayUrl);
+			} catch (err) {
+				ctx.showError(`Failed to start collab session: ${errorMessage(err)}`);
+				return;
+			}
+			ctx.collabHost = host;
+			ctx.showStatus(collabLinkHint(host, "Collab session started!", view), { dim: false });
+		},
+	},
+	{
+		name: "join",
+		description: "Join a shared collab session",
+		inlineHint: "<link>",
+		allowArgs: true,
+		handleTui: async (command, runtime) => {
+			const ctx = runtime.ctx;
+			ctx.editor.setText("");
+			const link = command.args.trim();
+			if (!link) {
+				ctx.showError("Usage: /join <link>");
+				return;
+			}
+			if (ctx.collabHost) {
+				ctx.showError("Stop hosting first (/collab stop)");
+				return;
+			}
+			if (ctx.collabGuest) {
+				ctx.showError("Already in a collab session (/leave first)");
+				return;
+			}
+			try {
+				await new CollabGuestLink(ctx).join(link);
+			} catch (err) {
+				ctx.showError(`Failed to join collab session: ${errorMessage(err)}`);
+			}
+		},
+	},
+	{
+		name: "leave",
+		description: "Leave the collab session",
+		handleTui: async (_command, runtime) => {
+			const ctx = runtime.ctx;
+			ctx.editor.setText("");
+			if (ctx.collabGuest) {
+				await ctx.collabGuest.leave("left");
+				return;
+			}
+			if (ctx.collabHost) {
+				await ctx.collabHost.stop("host stopped");
+				ctx.showStatus("Collab stopped");
+				return;
+			}
+			ctx.showStatus("Not in a collab session");
 		},
 	},
 	{
@@ -551,12 +804,41 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		name: "usage",
 		description: "Show provider usage and limits",
 		acpDescription: "Show token usage",
-		handle: async (_command, runtime) => {
-			await runtime.output(await buildUsageReportText(runtime));
-			return commandConsumed();
+		acpInputHint: "[show|reset [account|active]]",
+		subcommands: [
+			{ name: "show", description: "Show provider usage and limits" },
+			{ name: "reset", description: "Spend a saved Codex rate-limit reset", usage: "[account|active]" },
+		],
+		allowArgs: true,
+		handle: async (command, runtime) => {
+			const { verb, rest } = parseSubcommand(command.args);
+			if (!verb || (verb === "show" && !rest)) {
+				await runtime.output(await buildUsageReportText(runtime));
+				return commandConsumed();
+			}
+			if (verb === "reset") {
+				await handleUsageResetCommand(rest, runtime.session, runtime.output);
+				return commandConsumed();
+			}
+			return usage("Usage: /usage [show|reset [account|active]]", runtime);
 		},
-		handleTui: async (_command, runtime) => {
-			await runtime.ctx.handleUsageCommand();
+		handleTui: async (command, runtime) => {
+			const { verb, rest } = parseSubcommand(command.args);
+			if (!verb || (verb === "show" && !rest)) {
+				await runtime.ctx.handleUsageCommand();
+				runtime.ctx.editor.setText("");
+				return;
+			}
+			if (verb === "reset") {
+				if (rest) {
+					await handleUsageResetCommand(rest, runtime.ctx.session, text => runtime.ctx.showStatus(text));
+				} else {
+					await runtime.ctx.showResetUsageSelector();
+				}
+				runtime.ctx.editor.setText("");
+				return;
+			}
+			runtime.ctx.showStatus("Usage: /usage [show|reset [account|active]]");
 			runtime.ctx.editor.setText("");
 		},
 	},
@@ -745,7 +1027,21 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "logout",
 		description: "Logout from OAuth provider",
-		handleTui: (_command, runtime) => {
+		inlineHint: "[provider]",
+		allowArgs: true,
+		handleTui: (command, runtime) => {
+			const providerId = command.args.trim();
+			if (providerId) {
+				const matchedProvider = getOAuthProviders().find(provider => provider.id === providerId);
+				if (!matchedProvider) {
+					runtime.ctx.showWarning(`Unknown OAuth provider: ${providerId}`);
+					runtime.ctx.editor.setText("");
+					return;
+				}
+				void runtime.ctx.showOAuthSelector("logout", matchedProvider.id);
+				runtime.ctx.editor.setText("");
+				return;
+			}
 			void runtime.ctx.showOAuthSelector("logout");
 			runtime.ctx.editor.setText("");
 		},
@@ -974,8 +1270,25 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "debug",
 		description: "Open debug tools selector",
-		handleTui: (_command, runtime) => {
-			runtime.ctx.showDebugSelector();
+		allowArgs: true,
+		subcommands: [
+			{
+				name: "dump-next-request",
+				description: "Dump the next AI provider HTTP request as JSON",
+				usage: "<path>",
+			},
+		],
+		handle: async (command, runtime) =>
+			handleDebugSubcommand(command.args, runtime.cwd, text => runtime.output(text)),
+		handleTui: async (command, runtime) => {
+			const args = command.args.trim();
+			if (args.length === 0) {
+				runtime.ctx.showDebugSelector();
+			} else {
+				await handleDebugSubcommand(args, runtime.ctx.sessionManager.getCwd(), text =>
+					runtime.ctx.showStatus(text),
+				);
+			}
 			runtime.ctx.editor.setText("");
 		},
 	},
@@ -1716,6 +2029,70 @@ for (const command of BUILTIN_SLASH_COMMAND_REGISTRY) {
 
 export const BUILTIN_SLASH_COMMAND_RESERVED_NAMES: ReadonlySet<string> = new Set(BUILTIN_SLASH_COMMAND_LOOKUP.keys());
 
+/**
+ * Build getArgumentCompletions from declarative subcommand definitions.
+ * Returns subcommand names filtered by prefix in the dropdown.
+ */
+function buildArgumentCompletions(subcommands: SubcommandDef[]): (prefix: string) => AutocompleteItem[] | null {
+	return (argumentPrefix: string) => {
+		if (argumentPrefix.includes(" ")) return null; // past the subcommand
+		const lower = argumentPrefix.toLowerCase();
+		const matches = subcommands
+			.filter(s => s.name.startsWith(lower))
+			.map(s => ({
+				value: `${s.name} `,
+				label: s.name,
+				description: s.description,
+				hint: s.usage,
+			}));
+		return matches.length > 0 ? matches : null;
+	};
+}
+
+/**
+ * Build getInlineHint from declarative subcommand definitions.
+ * Shows remaining completion + usage as dim ghost text after cursor.
+ */
+function buildSubcommandInlineHint(subcommands: SubcommandDef[]): (argumentText: string) => string | null {
+	return (argumentText: string) => {
+		const trimmed = argumentText.trimStart();
+		const spaceIndex = trimmed.indexOf(" ");
+
+		if (spaceIndex === -1) {
+			// Still typing subcommand name — show remaining chars + usage
+			const prefix = trimmed.toLowerCase();
+			if (prefix.length === 0) return null;
+			const match = subcommands.find(s => s.name.startsWith(prefix));
+			if (!match) return null;
+			const remaining = match.name.slice(prefix.length);
+			return remaining + (match.usage ? ` ${match.usage}` : "");
+		}
+
+		// Subcommand typed — show remaining usage params
+		const subName = trimmed.slice(0, spaceIndex).toLowerCase();
+		const afterSub = trimmed.slice(spaceIndex + 1);
+		const sub = subcommands.find(s => s.name === subName);
+		if (!sub?.usage) return null;
+
+		if (afterSub.length > 0) {
+			const usageParts = sub.usage.split(" ");
+			const inputParts = afterSub.trim().split(/\s+/);
+			const remaining = usageParts.slice(inputParts.length);
+			return remaining.length > 0 ? remaining.join(" ") : null;
+		}
+
+		return sub.usage;
+	};
+}
+
+/**
+ * Build getInlineHint for commands with a simple static hint string.
+ * Shows the hint only when no arguments have been typed yet.
+ */
+function buildStaticInlineHint(hint: string): (argumentText: string) => string | null {
+	return (argumentText: string) => (argumentText.trim().length === 0 ? hint : null);
+}
+
 /** Builtin command metadata used for slash-command autocomplete and help text. */
 export const BUILTIN_SLASH_COMMAND_DEFS: ReadonlyArray<BuiltinSlashCommand> = BUILTIN_SLASH_COMMAND_REGISTRY.map(
 	command => ({
@@ -1726,6 +2103,32 @@ export const BUILTIN_SLASH_COMMAND_DEFS: ReadonlyArray<BuiltinSlashCommand> = BU
 		inlineHint: command.inlineHint,
 	}),
 );
+
+/**
+ * Materialized builtin slash commands with completion functions derived from
+ * declarative subcommand/hint definitions.
+ */
+export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<
+	BuiltinSlashCommand & {
+		getArgumentCompletions?: (prefix: string) => AutocompleteItem[] | null;
+		getInlineHint?: (argumentText: string) => string | null;
+	}
+> = BUILTIN_SLASH_COMMAND_DEFS.map(cmd => {
+	if (cmd.subcommands) {
+		return {
+			...cmd,
+			getArgumentCompletions: buildArgumentCompletions(cmd.subcommands),
+			getInlineHint: buildSubcommandInlineHint(cmd.subcommands),
+		};
+	}
+	if (cmd.inlineHint) {
+		return {
+			...cmd,
+			getInlineHint: buildStaticInlineHint(cmd.inlineHint),
+		};
+	}
+	return cmd;
+});
 
 /**
  * Unified registry exposed for cross-mode tooling. Each spec carries at least
@@ -1752,6 +2155,13 @@ export async function executeBuiltinSlashCommand(
 	if (!command) return false;
 	if (parsed.args.length > 0 && !command.allowArgs) {
 		return false;
+	}
+	// Collab guests run a read-mostly replica: session-mutating builtins are
+	// host-only; the allowlist covers purely local/read-only commands.
+	if (runtime.ctx.collabGuest && !COLLAB_GUEST_ALLOWED_COMMANDS[command.name]) {
+		runtime.ctx.showStatus(`/${command.name} is host-only during a collab session`);
+		runtime.ctx.editor.setText("");
+		return true;
 	}
 	if (command.handleTui) {
 		const result = await command.handleTui(parsed, runtime);

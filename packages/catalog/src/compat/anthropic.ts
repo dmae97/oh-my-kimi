@@ -34,11 +34,17 @@ export function buildAnthropicCompat(spec: ModelSpec<"anthropic-messages">): Res
 	const official = isOfficialAnthropicApiUrl(baseUrl);
 	// Z.AI's Anthropic-compatible proxy lives at `api.z.ai/api/anthropic`.
 	const isZai = modelMatchesHost(spec, "zai");
+	// GitHub Copilot's Anthropic-compatible proxy (api.githubcopilot.com/v1/messages)
+	// rejects the per-tool `eager_input_streaming` field with
+	// `tools.0.custom.eager_input_streaming: Extra inputs are not permitted` and
+	// doesn't whitelist the `fine-grained-tool-streaming-2025-05-14` beta either
+	// (issue #2558), so eager tool-input streaming is unavailable on this host.
+	const isCopilot = modelMatchesHost(spec, "githubCopilot");
 	const compat: ResolvedAnthropicCompat = {
 		officialEndpoint: official,
 		disableStrictTools: false,
 		disableAdaptiveThinking: false,
-		supportsEagerToolInputStreaming: true,
+		supportsEagerToolInputStreaming: !isCopilot,
 		// Long cache retention is only sent to the official API by default;
 		// proxies opt in explicitly via `compat.supportsLongCacheRetention: true`.
 		supportsLongCacheRetention: official,

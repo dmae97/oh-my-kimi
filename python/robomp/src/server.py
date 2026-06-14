@@ -715,23 +715,65 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         db: Database = bag["db"]
         pool: WorkerPool = bag["pool"]
         started = float(bag.get("started_at") or time.time())
-        issues_rows = db.list_issues(limit=200)
-        latest_events = db.latest_events_for_issues(r.key for r in issues_rows)
 
-        def _latest_event_payload(key: str) -> dict[str, Any] | None:
-            latest = latest_events.get(key)
-            if latest is None:
-                return None
+        def _collect() -> dict[str, Any]:
+            # All SQLite reads run off the event loop. The dashboard polls this
+            # every 3s, and the queries (200 issues + per-issue latest events +
+            # state counts) can take seconds under load; doing them inline
+            # would block the loop and stall every other endpoint — including
+            # /healthz — which is how the dashboard ends up "never loading".
+            issues_rows = db.list_issues(limit=200)
+            latest_events = db.latest_events_for_issues(r.key for r in issues_rows)
+
+            def _latest_event_payload(key: str) -> dict[str, Any] | None:
+                latest = latest_events.get(key)
+                if latest is None:
+                    return None
+                return {
+                    "delivery_id": latest.delivery_id,
+                    "event_type": latest.event_type,
+                    "state": latest.state,
+                    "attempts": latest.attempts,
+                    "received_at": latest.received_at,
+                    "last_error": latest.last_error,
+                }
+
+            events_rows = db.list_events(limit=25)
             return {
-                "delivery_id": latest.delivery_id,
-                "event_type": latest.event_type,
-                "state": latest.state,
-                "attempts": latest.attempts,
-                "received_at": latest.received_at,
-                "last_error": latest.last_error,
+                "event_counts": db.event_state_counts(),
+                "issue_event_counts": db.latest_issue_event_state_counts(),
+                "running_events": db.list_running_events(),
+                "issues": [
+                    {
+                        "key": r.key,
+                        "repo": r.repo,
+                        "number": r.number,
+                        "branch": r.branch,
+                        "pr_number": r.pr_number,
+                        "state": r.state,
+                        "classification": r.classification,
+                        "updated_at": r.updated_at,
+                        "latest_event": _latest_event_payload(r.key),
+                    }
+                    for r in issues_rows
+                ],
+                "recent_events": [
+                    {
+                        "delivery_id": r.delivery_id,
+                        "event_type": r.event_type,
+                        "repo": r.repo,
+                        "issue_key": r.issue_key,
+                        "state": r.state,
+                        "attempts": r.attempts,
+                        "received_at": r.received_at,
+                        "last_error": r.last_error,
+                    }
+                    for r in events_rows
+                ],
             }
 
-        events_rows = db.list_events(limit=25)
+        collected = await asyncio.to_thread(_collect)
+        inflight = await pool.inflight_snapshot()
         return {
             "runtime": {
                 "bot_login": cfg.bot_login,
@@ -741,37 +783,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "thinking_level": cfg.thinking_level,
                 "uptime_seconds": max(0.0, time.time() - started),
             },
-            "event_counts": db.event_state_counts(),
-            "issue_event_counts": db.latest_issue_event_state_counts(),
-            "running_events": db.list_running_events(),
-            "inflight": await pool.inflight_snapshot(),
-            "issues": [
-                {
-                    "key": r.key,
-                    "repo": r.repo,
-                    "number": r.number,
-                    "branch": r.branch,
-                    "pr_number": r.pr_number,
-                    "state": r.state,
-                    "classification": r.classification,
-                    "updated_at": r.updated_at,
-                    "latest_event": _latest_event_payload(r.key),
-                }
-                for r in issues_rows
-            ],
-            "recent_events": [
-                {
-                    "delivery_id": r.delivery_id,
-                    "event_type": r.event_type,
-                    "repo": r.repo,
-                    "issue_key": r.issue_key,
-                    "state": r.state,
-                    "attempts": r.attempts,
-                    "received_at": r.received_at,
-                    "last_error": r.last_error,
-                }
-                for r in events_rows
-            ],
+            "inflight": inflight,
+            **collected,
         }
 
     @app.get("/api/logs")

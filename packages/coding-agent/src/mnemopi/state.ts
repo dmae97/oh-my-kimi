@@ -370,18 +370,63 @@ export class MnemopiSessionState {
 		}
 	}
 
-	dispose(): void {
+	/**
+	 * Drain in-flight fact extraction and run beam consolidation on every owned
+	 * bank, after capturing the current transcript. Mirrors the manual
+	 * `/memory enqueue` slash command, but stops short of closing the DBs so
+	 * callers can keep using the state. {@link dispose} composes this with the
+	 * close step so normal session shutdown promotes working memory to
+	 * episodic/gists/graph automatically (see issue #2320).
+	 *
+	 * Aliased subagent states share `scoped` (and therefore the actual SQLite
+	 * banks) with their parent. `consolidate()` deliberately does NOT
+	 * short-circuit on `aliasOf`: `forceRetainCurrentSession` already guards
+	 * itself, and an explicit `/memory enqueue` invoked from within a subagent
+	 * still needs to flush extractions and sleep the parent's shared banks —
+	 * otherwise enqueue would report success while leaving the subagent's
+	 * retained memories unconsolidated until the parent eventually shuts down
+	 * (PR #2327 review).
+	 */
+	async consolidate(): Promise<void> {
+		await this.forceRetainCurrentSession();
+		for (const memory of this.scoped.owned) {
+			await memory.flushExtractions();
+			memory.sleepAllSessions(false);
+		}
+	}
+
+	/**
+	 * Release the per-session resources. Defaults to running {@link consolidate}
+	 * before closing handles so normal session shutdown promotes working memory
+	 * into long-term storage. Callers that are about to delete the DB files —
+	 * e.g. `mnemopiBackend.clear` — pass `{ consolidate: false }` to skip the
+	 * extraction/sleep pass, since spending tokens on memories that will be
+	 * wiped on the next line is wasted work (PR #2327 review).
+	 */
+	async dispose(options: { consolidate?: boolean } = {}): Promise<void> {
 		this.unsubscribe?.();
 		this.unsubscribe = undefined;
-		if (!this.aliasOf) {
-			for (const memory of this.scoped.owned) memory.close();
+		if (this.aliasOf) return;
+		if (options.consolidate !== false) {
+			try {
+				await this.consolidate();
+			} catch (error) {
+				logger.warn("Mnemopi: consolidation on dispose failed.", { error: String(error) });
+			}
 		}
+		for (const memory of this.scoped.owned) memory.close();
 	}
 }
 
 // `per-project-tagged` is implemented by opening both the project bank and the
 // shared bank, then merging recall results while keeping writes project-local.
 function createScopedResources(config: MnemopiBackendConfig): MnemopiScopedResources {
+	// Env vars (MNEMOPI_POLYPHONIC_RECALL / MNEMOPI_ENHANCED_RECALL) still override
+	// these config-driven defaults inside the core gates.
+	requireMnemopi().configureRecallFeatures({
+		polyphonicRecall: config.polyphonicRecall,
+		enhancedRecall: config.enhancedRecall,
+	});
 	const banks = resolveScopedBanks(config);
 	const memories = new Map<string, MnemopiScopedMemory>();
 	const open = (bank: string): MnemopiScopedMemory => {

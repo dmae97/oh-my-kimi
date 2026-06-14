@@ -2,6 +2,7 @@
 
 use crate::minimizer::{MinimizerCtx, MinimizerOutput, primitives};
 
+#[must_use]
 pub fn filter(_ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerOutput {
 	let cleaned = primitives::strip_ansi(input);
 	let text = if exit_code == 0 {
@@ -27,6 +28,11 @@ fn drop_passed_lines(input: &str) -> String {
 			push_line(&mut out, line);
 			continue;
 		}
+		// snip jest.yaml strips: console.log noise and the zero-information
+		// "Ran all test suites" line carry no signal even on success.
+		if is_noise_line(trimmed) {
+			continue;
+		}
 		if is_pass_noise(trimmed) {
 			continue;
 		}
@@ -49,6 +55,13 @@ fn failures_only(input: &str) -> String {
 
 	for line in input.lines() {
 		let trimmed = line.trim_start();
+
+		// snip jest.yaml strips: drop console.log noise and the zero-information
+		// "Ran all test suites" line transparently, without breaking the kept
+		// failure block around them.
+		if is_noise_line(trimmed) {
+			continue;
+		}
 
 		if is_summary_line(trimmed) {
 			keeping_block = false;
@@ -105,7 +118,6 @@ fn is_summary_line(trimmed: &str) -> bool {
 		|| trimmed.starts_with("Tests:")
 		|| trimmed.starts_with("Snapshots:")
 		|| trimmed.starts_with("Time:")
-		|| trimmed.starts_with("Ran all test suites")
 		|| trimmed.starts_with("Test Files")
 		|| trimmed.starts_with("Duration")
 		|| trimmed.starts_with("Start at")
@@ -125,6 +137,13 @@ fn starts_count_summary(trimmed: &str) -> bool {
 		return false;
 	}
 	matches!(parts.next(), Some("failed" | "passed" | "skipped" | "flaky" | "pass" | "fail"))
+}
+
+/// Zero-information lines worth dropping regardless of pass/fail context.
+/// Ported from snip/filters/jest.yaml's `remove_lines` strips: jest console.log
+/// echoes (`^\s+console\.`) and the trailing `Ran all test suites.` banner.
+fn is_noise_line(trimmed: &str) -> bool {
+	trimmed.starts_with("console.") || trimmed.starts_with("Ran all test suites")
 }
 
 fn is_pass_noise(trimmed: &str) -> bool {
@@ -184,7 +203,7 @@ fn is_playwright_numbered_failure(trimmed: &str) -> bool {
 			saw_digit = true;
 			continue;
 		}
-		return saw_digit && ch == ')' && chars.next().is_some_and(|next| next.is_whitespace());
+		return saw_digit && ch == ')' && chars.next().is_some_and(char::is_whitespace);
 	}
 	false
 }
@@ -341,5 +360,86 @@ Time:        2.345s
 		assert!(filtered.contains("Test Suites: 5 passed, 5 total"));
 		assert!(filtered.contains("Tests:       32 passed, 32 total"));
 		assert!(filtered.contains("Time:        2.345s"));
+	}
+
+	// Ported from snip/filters/jest.yaml's "all passing" inline test. snip keeps
+	// PASS lines; the minimizer collapses pass runs to the count summary, which is
+	// strictly less noisy, so the expectation is adjusted to drop the PASS lines.
+	#[test]
+	fn jest_all_passing_collapses_to_summary() {
+		let input = "PASS  src/__tests__/utils.test.js\nPASS  src/__tests__/main.test.js\n\nTest \
+		             Suites: 2 passed, 2 total\nTests:       5 passed, 5 total\nSnapshots:   0 \
+		             total\nTime:        1.234 s\n";
+		let filtered = drop_passed_lines(input);
+
+		assert!(!filtered.contains("utils.test.js"));
+		assert!(!filtered.contains("main.test.js"));
+		assert!(filtered.contains("Test Suites: 2 passed, 2 total"));
+		assert!(filtered.contains("Tests:       5 passed, 5 total"));
+		assert!(filtered.contains("Time:        1.234 s"));
+	}
+
+	// Ported from snip/filters/jest.yaml's "with failures and stack traces" inline
+	// test. snip strips the code frame and `at` stack lines; the minimizer keeps
+	// that richer failure context. The new strips fold in here: the trailing "Ran
+	// all test suites." banner is dropped and the PASS line collapses.
+	#[test]
+	fn jest_failures_drop_ran_banner_and_keep_rich_context() {
+		let input =
+			"PASS  src/__tests__/utils.test.js\nFAIL  src/__tests__/main.test.js\n  ● Main > should \
+			 return correct value\n\n    expect(received).toBe(expected)\n\n    Expected: 4\n    \
+			 Received: 3\n\n      5 |   test('should return correct value', () => {\n      6 |     \
+			 expect(calculate(2, 2)).toBe(4);\n        |             ^\n      7 |   });\n\n    at \
+			 Object.<anonymous> (src/__tests__/main.test.js:6:29)\n\nTest Suites: 1 failed, 1 \
+			 passed, 2 total\nTests:       1 failed, 3 passed, 4 total\nSnapshots:   0 total\nTime:    \
+			 1.234 s\nRan all test suites.\n";
+		let filtered = failures_only(input);
+
+		// PASS line collapses; failure context survives.
+		assert!(!filtered.contains("PASS  src/__tests__/utils.test.js"));
+		assert!(filtered.contains("FAIL  src/__tests__/main.test.js"));
+		assert!(filtered.contains("● Main > should return correct value"));
+		assert!(filtered.contains("Expected: 4"));
+		assert!(filtered.contains("Received: 3"));
+		assert!(filtered.contains("Test Suites: 1 failed, 1 passed, 2 total"));
+		// New snip strip: the zero-information banner is gone.
+		assert!(!filtered.contains("Ran all test suites"));
+	}
+
+	// New jest console.log strip (snip jest.yaml `^\s+console\.`): echoed
+	// console output is dropped on both the pass and fail paths.
+	#[test]
+	fn jest_console_log_noise_is_dropped() {
+		let pass_input = "PASS  src/a.test.ts\n  console.log\n    debugging value 42\n      at \
+		                  log.ts:3:9\n\nTests:       1 passed, 1 total\n";
+		let pass_filtered = drop_passed_lines(pass_input);
+		assert!(!pass_filtered.contains("console.log"));
+		assert!(pass_filtered.contains("Tests:       1 passed, 1 total"));
+
+		let fail_input = "FAIL  src/a.test.ts\n  ● breaks\n    console.error\n      noisy log \
+		                  line\n    Expected: 1\n    Received: 2\n\nTests:       1 failed, 1 total\n";
+		let fail_filtered = failures_only(fail_input);
+		assert!(!fail_filtered.contains("console.error"));
+		assert!(fail_filtered.contains("Expected: 1"));
+		assert!(fail_filtered.contains("Received: 2"));
+		assert!(fail_filtered.contains("Tests:       1 failed, 1 total"));
+	}
+
+	// Vitest default-reporter regression (keep-minimizer; pure lock). A failing
+	// file's multi-line `AssertionError: expected X to be Y` block plus the
+	// `❯ file:line` pointer must survive failures_only.
+	#[test]
+	fn vitest_assertion_error_block_and_pointer_survive() {
+		let input = " ✓ src/passing.test.ts (3)\n ❯ src/math.test.ts (1)\n   × adds numbers\n\n  \
+		             AssertionError: expected 3 to be 4 // Object.is equality\n\n  - Expected\n  + \
+		             Received\n\n  - 4\n  + 3\n\n ❯ src/math.test.ts:7:23\n\n Test Files  1 failed \
+		             | 1 passed (2)\n      Tests  1 failed | 1 passed (2)\n";
+		let filtered = failures_only(input);
+
+		assert!(!filtered.contains("src/passing.test.ts"));
+		assert!(filtered.contains("× adds numbers"));
+		assert!(filtered.contains("AssertionError: expected 3 to be 4"));
+		assert!(filtered.contains("❯ src/math.test.ts:7:23"));
+		assert!(filtered.contains("Test Files  1 failed | 1 passed (2)"));
 	}
 }

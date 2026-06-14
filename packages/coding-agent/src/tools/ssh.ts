@@ -1,7 +1,7 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { prompt } from "@oh-my-pi/pi-utils";
-import * as z from "zod/v4";
+import { z } from "zod/v4";
 import type { SSHHost } from "../capability/ssh";
 import { sshCapability } from "../capability/ssh";
 import { loadCapability } from "../discovery";
@@ -329,9 +329,9 @@ export const sshToolRenderer = {
 						state: "success",
 						sections: [
 							{
-								lines: options.isPartial
-									? capPreviewLines(cmdLines, uiTheme, { expanded: options.expanded })
-									: cmdLines,
+								// Viewport-sized tail window in every state — streaming and final
+								// render identically; only ctrl+o uncaps.
+								lines: capPreviewLines(cmdLines, uiTheme, { expanded }),
 							},
 							{ label: uiTheme.fg("toolTitle", "Output"), lines: outputLines },
 						],
@@ -346,4 +346,8 @@ export const sshToolRenderer = {
 		});
 	},
 	mergeCallAndResult: true,
+	// Collapsed pending preview caps the command to a viewport-sized tail window
+	// that shifts while args stream. Expanded output is top-anchored enough for
+	// the transcript to commit its settled prefix.
+	provisionalPendingPreview: "collapsed",
 };

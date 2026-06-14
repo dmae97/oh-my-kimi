@@ -189,6 +189,64 @@ describe("PluginSettingsComponent", () => {
 			setEnabledSpy.mockRestore();
 		}
 	});
+
+	it("closes on Escape while the plugin list is still loading", async () => {
+		const pending = Promise.withResolvers<InstalledPlugin[]>();
+		const npmListSpy = spyOn(PluginManager.prototype, "list").mockReturnValue(pending.promise);
+		const listInstalledSpy = spyOn(MarketplaceManager.prototype, "listInstalledPlugins").mockResolvedValue([]);
+
+		try {
+			let closed = 0;
+			const component = new PluginSettingsComponent(process.cwd(), {
+				onClose: () => {
+					closed++;
+				},
+				onPluginChanged: () => {},
+			});
+
+			// No child view has mounted yet — Escape must still dismiss the panel.
+			component.handleInput("\x1b");
+			expect(closed).toBe(1);
+
+			// Other keys are swallowed, not treated as close.
+			component.handleInput("\n");
+			expect(closed).toBe(1);
+		} finally {
+			pending.resolve([]);
+			npmListSpy.mockRestore();
+			listInstalledSpy.mockRestore();
+		}
+	});
+
+	it("still mounts the list when the npm plugin listing rejects", async () => {
+		const npmListSpy = spyOn(PluginManager.prototype, "list").mockRejectedValue(new Error("corrupt registry"));
+		const listInstalledSpy = spyOn(MarketplaceManager.prototype, "listInstalledPlugins").mockResolvedValue([
+			marketplace("survivor@mkt"),
+		]);
+
+		try {
+			let closed = 0;
+			const component = new PluginSettingsComponent(process.cwd(), {
+				onClose: () => {
+					closed++;
+				},
+				onPluginChanged: () => {},
+			});
+
+			for (let i = 0; i < 20; i++) {
+				if (stripVTControlCharacters(component.render(120).join("\n")).includes("survivor@mkt")) break;
+				await Bun.sleep(1);
+			}
+			expect(stripVTControlCharacters(component.render(120).join("\n"))).toContain("survivor@mkt");
+
+			// Once mounted, Escape routes through the list view's cancel path.
+			component.handleInput("\x1b");
+			expect(closed).toBe(1);
+		} finally {
+			npmListSpy.mockRestore();
+			listInstalledSpy.mockRestore();
+		}
+	});
 });
 
 describe("MarketplacePluginDetailComponent", () => {

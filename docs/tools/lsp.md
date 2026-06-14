@@ -27,7 +27,7 @@
 | `action` | string enum | Yes | One of `diagnostics`, `definition`, `references`, `hover`, `symbols`, `rename`, `rename_file`, `code_actions`, `type_definition`, `implementation`, `status`, `reload`, `capabilities`, `request`. |
 | `file` | string | No | File path; for `diagnostics` also a glob; for workspace forms use `"*"`; for `rename_file` this is the source path. |
 | `line` | number | No | 1-indexed line number for position-based actions. Defaults to `1` on the single-file action path. |
-| `symbol` | string | No | Substring used to resolve the column on `line`. Supports `name#N` occurrence selectors; `N` is 1-indexed and defaults to `1`. |
+| `symbol` | string | No | Substring used to resolve the column on `line`. Supports `name#N` occurrence selectors; `N` is 1-indexed and defaults to `1`. Required when `line` is given for `definition`/`references`/`rename` against project-aware servers. |
 | `query` | string | No | Workspace symbol query, code-action selector/filter, or LSP method name for `action=request`. |
 | `new_name` | string | No | Required for `rename` and `rename_file`. |
 | `apply` | boolean | No | For `rename`/`rename_file`, apply unless explicitly `false`. For `code_actions`, list unless explicitly `true`. |
@@ -62,7 +62,7 @@
 - `status` ignores `file`.
 - `capabilities` with omitted `file` or `"*"` inspects all non-custom LSP servers; with a concrete file it scopes to matching non-custom servers.
 - `request` with omitted `file` or `"*"` chooses the first available non-custom LSP server; with a concrete file it chooses that file's primary non-linter server.
-- `rename_file` sends `workspace/willRenameFiles` and `workspace/didRenameFiles` to every non-custom LSP server from `getLspServers(config)`, not just one file-scoped server.
+- `rename_file` sends `workspace/willRenameFiles` and `workspace/didRenameFiles` to every non-custom LSP server from `getLspServers(config)` whose `fileTypes` match the source, destination, or any enumerated rename pair — not just one file-scoped server.
 - Diagnostics are the only tool action that queries both normal LSP servers and custom linter clients (`BiomeClient`, `SwiftLintClient`, or `LspLinterClient`).
 
 ### `diagnostics`
@@ -71,7 +71,7 @@
 - Optional: `timeout`.
 
 **Execution**
-- `file: "*"`: `runWorkspaceDiagnostics()` detects project type from root markers and runs one subprocess command: Rust `cargo check --message-format=short`, TypeScript `npx tsc --noEmit`, Go `go build ./...`, Python `pyright`.
+- `file: "*"`: `runWorkspaceDiagnostics()` detects project type from root markers and runs one subprocess command: Rust `cargo check --message-format=short`, TypeScript `npx tsc --noEmit`, Python `pyright`.
 - Concrete file or glob: `resolveDiagnosticTargets()` treats non-globs as one target, otherwise expands a `Bun.Glob` up to `MAX_GLOB_DIAGNOSTIC_TARGETS`.
 - Per file, every matching server runs: custom clients call `lint(file)`; real LSP servers optionally wait for project load, capture `diagnosticsVersion`, `refreshFile()`, then `waitForDiagnostics()` for fresh `publishDiagnostics` (settles on the latest publish; exact-version match accepted immediately).
 - Results are deduplicated by range+message and severity-sorted.
@@ -90,6 +90,7 @@
 **Execution**
 - Sends `textDocument/definition` with `{ textDocument, position }`.
 - Accepts `Location`, `Location[]`, `LocationLink`, or `LocationLink[]`; `normalizeLocationResult()` converts `LocationLink` to `targetSelectionRange ?? targetRange`.
+- Requires `symbol` when `line` is given on project-aware servers (the first-non-whitespace-column fallback is disabled for this action).
 - Waits for project load before the request.
 
 **Output text**
@@ -108,6 +109,7 @@ Same as `definition`, but sends `textDocument/implementation` and reports `imple
 
 **Execution**
 - Sends `textDocument/references` with `includeDeclaration: true`.
+- Requires `symbol` when `line` is given on project-aware servers (the first-non-whitespace-column fallback is disabled for this action).
 - For project-aware servers, retries up to `REFERENCES_RETRY_COUNT` times when the only hit is the queried declaration; between retries it waits for project load and sleeps `REFERENCES_RETRY_DELAY_MS`.
 - First `REFERENCE_CONTEXT_LIMIT` references include surrounding context; the rest are location-only.
 
@@ -146,7 +148,7 @@ Same as `definition`, but sends `textDocument/implementation` and reports `imple
 - Optional: `line`, `symbol`, `apply`, `timeout`.
 
 **Execution**
-- Waits for project load, sends `textDocument/rename`, receives a `WorkspaceEdit`.
+- Requires `symbol` when `line` is given on project-aware servers, then waits for project load, sends `textDocument/rename`, receives a `WorkspaceEdit`.
 - `apply !== false` applies edits immediately with `applyWorkspaceEdit()`.
 - `apply === false` renders a preview with `formatWorkspaceEdit()`.
 
@@ -161,9 +163,9 @@ Same as `definition`, but sends `textDocument/implementation` and reports `imple
 **Execution**
 - Resolves absolute source and destination, rejects identical paths, missing source, existing destination, empty rename set, or directories with more than `MAX_RENAME_PAIRS` files.
 - `enumerateRenamePairs()` returns one `{oldUri,newUri}` pair for a file or walks every regular file in a directory tree.
-- Sends `workspace/willRenameFiles` with `{ files: pairs }` to every non-custom LSP server; collects returned `WorkspaceEdit`s and server notes.
+- Sends `workspace/willRenameFiles` with `{ files: pairs }` to every non-custom LSP server whose `fileTypes` match an affected path; collects returned `WorkspaceEdit`s and server notes.
 - Preview mode (`apply === false`) only formats those edits.
-- Apply mode runs each returned `WorkspaceEdit`, renames the source path on disk, sends `textDocument/didClose` for every renamed open file, deletes those `openFiles` entries, then sends `workspace/didRenameFiles`.
+- Apply mode coalesces the returned text edits per URI (a project-aware server's edits win on overlap; overlapping edits from other servers are discarded with a note), applies each URI once from a single snapshot, creates the destination parent directory and renames the source path on disk, sends `textDocument/didClose` for every renamed open file, deletes those `openFiles` entries, then sends `workspace/didRenameFiles`.
 
 **Output text**
 - Preview: `Rename preview: <file-count label> → <dest>` plus per-server edit summaries and optional server notes.
@@ -192,11 +194,11 @@ Same as `definition`, but sends `textDocument/implementation` and reports `imple
 - None.
 
 **Execution**
-- Reads configured servers from cached `LspConfig`, not `getActiveClients()`.
+- Reads configured servers from cached `LspConfig` and cross-references `getActiveClients()` so each server is labelled `(configured, not started)` or with its live client status.
 - Calls `detectLspmux()` and appends status text when `lspmux` is installed.
 
 **Output text**
-- `Active language servers: ...` or `No language servers configured for this project`, optionally followed by `lspmux: active (multiplexing enabled)` or `lspmux: installed but server not running`.
+- `Language servers: <name (configured, not started) | name (<status>)>` plus an explanatory note line, or `No language servers configured for this project`, optionally followed by `lspmux: active (multiplexing enabled)` or `lspmux: installed but server not running`.
 
 ### `reload`
 **Inputs**
@@ -240,7 +242,7 @@ Same as `definition`, but sends `textDocument/implementation` and reports `imple
 
 **Output text**
 - Success: `<server> ← <method>:\n<formatted result>`, where non-string results are `JSON.stringify(..., null, 2)` and nullish values become `null`.
-- Failure: `LSP error from <server> on <method>: ...`.
+- Failure: `LSP error from <server> on <method>: ...` followed by `  params: <preview>` echoing the request params (truncated to 400 chars).
 
 ## Side Effects
 - Filesystem
@@ -297,13 +299,14 @@ Same as `definition`, but sends `textDocument/implementation` and reports `imple
   - diagnostics continue when one server fails
   - `rename_file` suppresses `workspace/willRenameFiles` “method not found” errors and records other server errors as notes
   - `code_actions` ignores `codeAction/resolve` failures and applies unresolved actions when possible
-- Aborts are not converted to text: `ToolAbortError` is rethrown.
+- Caller aborts are not converted to text: `ToolAbortError` is rethrown. A wall-clock tool timeout without a caller abort instead throws `ToolError`: `LSP <action> timed out after <N>s on <server>. ...`.
 
 ## Notes
-- `status` reports configured/available servers from `LspConfig`, not currently active client processes from `getActiveClients()`.
+- `status` reports configured servers from `LspConfig` and labels each one via `getActiveClients()`: `(configured, not started)` means the binary resolves on PATH but no request has spawned it; a live client reports its status.
 - `getLspServerForFile()` excludes `createClient` adapters and linter-only servers; navigation/refactor actions never target Biome/SwiftLint custom clients.
 - `getServersForFile()` matches both file extensions and exact basenames from `fileTypes`; config can target names like `Dockerfile` if present.
 - `symbol` matching is exact first, then case-insensitive, and falls back to the Nth occurrence on the specified line only; it never scans other lines.
+- For `definition`, `references`, and `rename` against project-aware servers, omitting `symbol` while passing `line` is rejected with a `ToolError` instead of silently falling back to the first non-whitespace column.
 - `code_actions` uses `query` in two different ways: server-side `context.only` filter in list mode, client-side title/index selector in apply mode.
 - `rename` and `rename_file` default to apply. Preview requires `apply: false`.
 - `request` with `file: "*"` is treated the same as omitted `file`: it does not build workspace-specific params.

@@ -16,7 +16,7 @@ import {
 	hashlineEditParamsSchema,
 } from "@oh-my-pi/pi-coding-agent/edit";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import * as z from "zod/v4";
+import { z } from "zod/v4";
 
 beforeAll(async () => {
 	resetSettingsForTest();

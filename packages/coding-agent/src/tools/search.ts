@@ -7,7 +7,7 @@ import { type GrepMatch, GrepOutputMode, type GrepResult, grep } from "@oh-my-pi
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
-import * as z from "zod/v4";
+import { z } from "zod/v4";
 import { recordFileSnapshot } from "../edit/file-snapshot-store";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { LocalProtocolOptions } from "../internal-urls/local-protocol";
@@ -795,6 +795,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 						internalUrlAction: "search",
 						trackImmutableSources: true,
 						surfaceExactFilePaths: true,
+						fanOutFileTargets: true,
 						multipathStatHint: " (`paths` entries must each exist relative to cwd)",
 						settings: this.session.settings,
 						signal,
@@ -863,6 +864,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 					if (searchablePaths.length > 0) {
 						if (exactFilePaths || multiTargets) {
 							const matches: GrepMatch[] = [];
+							const seenMatchKeys = new Set<string>();
 							let limitReached = false;
 							let totalMatches = 0;
 							let filesSearched = 0;
@@ -900,6 +902,15 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 								filesSearched += targetResult.filesSearched;
 								for (const match of targetResult.matches) {
 									const absolute = path.resolve(target.basePath, match.path);
+									// Overlapping targets (a directory plus a file nested
+									// inside it) surface the same physical line twice;
+									// keep the first occurrence.
+									const matchKey = `${absolute}\0${match.lineNumber}`;
+									if (seenMatchKeys.has(matchKey)) {
+										totalMatches = Math.max(0, totalMatches - 1);
+										continue;
+									}
+									seenMatchKeys.add(matchKey);
 									const rebased = path.relative(searchPath, absolute).replace(/\\/g, "/");
 									matches.push({ ...match, path: rebased });
 								}
@@ -1113,7 +1124,9 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 						? `No more results (${totalFilesLabel} files total; skip=${normalizedSkip} is past the end)`
 						: "No matches found";
 					const text = warningNote ? `${noMatchText}\n${warningNote}` : noMatchText;
-					return toolResult(details).text(text).done();
+					// Zero matches is useless regardless of warnings: by the time
+					// compaction runs, the follow-up call has already corrected course.
+					return toolResult(details).text(text).useless().done();
 				}
 				const outputLines: string[] = [];
 				let linesTruncated = false;

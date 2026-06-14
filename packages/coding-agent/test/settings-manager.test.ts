@@ -8,6 +8,7 @@ import {
 	onAppendOnlyModeChanged,
 	onStatusLineSessionAccentChanged,
 	resetSettingsForTest,
+	type SettingPath,
 	Settings,
 } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { getProjectAgentDir, Snowflake } from "@oh-my-pi/pi-utils";
@@ -120,6 +121,12 @@ describe("Settings", () => {
 
 			expect(settings.get("enabledModels")).toEqual(["always-model", "other-model"]);
 			expect(settings.get("disabledProviders")).toEqual(["always-provider", "other-provider"]);
+		});
+
+		it("migrates legacy snapcompact system prompt booleans to scoped modes", () => {
+			expect(Settings.isolated({ "snapcompact.systemPrompt": true }).get("snapcompact.systemPrompt")).toBe("all");
+			const nestedLegacy = { snapcompact: { systemPrompt: false } } as Partial<Record<SettingPath, unknown>>;
+			expect(Settings.isolated(nestedLegacy).get("snapcompact.systemPrompt")).toBe("none");
 		});
 	});
 
@@ -403,6 +410,33 @@ describe("Settings", () => {
 			const settings = await Settings.init({ cwd: projectDir, agentDir });
 
 			expect(settings.get("mnemopi.dbPath")).toBe("/tmp/new.db");
+		});
+
+		it("migrates boolean task.eager/todo.eager true to always", async () => {
+			await writeSettings({
+				task: { eager: true },
+				todo: { eager: true },
+			});
+
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+
+			// `true` reproduced the previous "on" behavior, now `always`.
+			expect(settings.get("task.eager")).toBe("always");
+			expect(settings.get("todo.eager")).toBe("always");
+		});
+
+		it("migrates boolean task.eager/todo.eager false to default", async () => {
+			await writeSettings({
+				task: { eager: false },
+				todo: { eager: false },
+			});
+
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+
+			// Load-bearing direction: consumers treat any non-`default` value as enabled
+			// (`false !== "default"`), so an un-coerced boolean `false` would read as ON.
+			expect(settings.get("task.eager")).toBe("default");
+			expect(settings.get("todo.eager")).toBe("default");
 		});
 
 		it("moves legacy lastChangelogVersion out of config.yml into the marker file", async () => {

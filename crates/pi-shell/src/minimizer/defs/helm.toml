@@ -8,6 +8,8 @@ match_command = "^helm$"
 match_subcommand = "^(repo|search|list|history)$"
 strip_ansi = true
 strip_lines_matching = [
+	"^\\s*$",
+	"^W\\d{4}",
 	"^Hang tight while we grab the latest",
 	"^\\.\\.\\.Successfully got an update from",
 	"^\\.\\.\\.Unable to get an update from",
@@ -28,3 +30,8 @@ expected = "NAME\tURL\nbitnami\thttps://charts.bitnami.com/bitnami\n"
 name = "empty after stripping"
 input = "Hang tight while we grab the latest from your chart repositories...\n"
 expected = "helm: ok"
+
+[[tests.helm]]
+name = "strips glog W-prefix warning and blank line keeps table rows"
+input = "W0419 10:30:00.123456   1234 warnings.go:70] cannot validate\nNAME\tNAMESPACE\tREVISION\nmy-release\tdefault\t3\n\nother-release\tdefault\t1\n"
+expected = "NAME\tNAMESPACE\tREVISION\nmy-release\tdefault\t3\nother-release\tdefault\t1\n"

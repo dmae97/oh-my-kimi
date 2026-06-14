@@ -6,7 +6,12 @@ import { clearCustomApis, registerCustomApi } from "@oh-my-pi/pi-ai/api-registry
 import { stream } from "@oh-my-pi/pi-ai/stream";
 import type { AssistantMessage, FetchImpl, Model, ModelSpec } from "@oh-my-pi/pi-ai/types";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
-import { wrapFetchForRequestDebug } from "@oh-my-pi/pi-ai/utils/request-debug";
+import {
+	clearNextRequestDebugPath,
+	getNextRequestDebugPath,
+	setNextRequestDebugPath,
+	wrapFetchForRequestDebug,
+} from "@oh-my-pi/pi-ai/utils/request-debug";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 
 const enc = new TextEncoder();
@@ -24,6 +29,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
 	clearCustomApis();
+	clearNextRequestDebugPath();
 	process.chdir(previousCwd);
 	if (previousDebugFlag === undefined) delete Bun.env.PI_REQ_DEBUG;
 	else Bun.env.PI_REQ_DEBUG = previousDebugFlag;
@@ -84,6 +90,44 @@ describe("PI_REQ_DEBUG request/response recording", () => {
 		delete Bun.env.PI_REQ_DEBUG;
 		const fetchImpl: FetchImpl = async () => new Response("ok");
 		expect(wrapFetchForRequestDebug(fetchImpl)).toBe(fetchImpl);
+	});
+
+	it("records only the next fetch to an explicit request path", async () => {
+		delete Bun.env.PI_REQ_DEBUG;
+		const requestPath = path.join(tempDir!, "nested", "next-request.json");
+		setNextRequestDebugPath(requestPath);
+		let calls = 0;
+		const fetchImpl: FetchImpl = async () => {
+			calls += 1;
+			return new Response(calls === 1 ? "first" : "second", { headers: { "x-call": String(calls) } });
+		};
+		const wrapped = wrapFetchForRequestDebug(fetchImpl);
+
+		const first = await wrapped("https://provider.test/first", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ first: true }),
+		});
+		await first.text();
+		const second = await wrapped("https://provider.test/second", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ second: true }),
+		});
+		await second.text();
+
+		expect(calls).toBe(2);
+		expect(getNextRequestDebugPath()).toBeUndefined();
+		const request = JSON.parse(await fs.readFile(requestPath, "utf8")) as Record<string, unknown>;
+		expect(request).toMatchObject({
+			protocol: "http",
+			method: "POST",
+			url: "https://provider.test/first",
+			body: { first: true },
+		});
+		const log = splitResponseLog(await fs.readFile(`${requestPath}.res.log`));
+		expect(log.headers).toContain("x-call: 1");
+		expect(new TextDecoder().decode(log.body)).toBe("first");
 	});
 
 	it("records request JSON before fetch and raw response bytes after headers", async () => {

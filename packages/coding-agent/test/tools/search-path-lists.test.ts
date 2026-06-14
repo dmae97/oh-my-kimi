@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { validateToolArguments } from "@oh-my-pi/pi-ai/utils/validation";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { canonicalSnapshotKey } from "@oh-my-pi/pi-coding-agent/edit/file-snapshot-store";
 import type { RenderResultOptions } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools/types";
 import { AgentHubOverlayComponent } from "@oh-my-pi/pi-coding-agent/modes/components/agent-hub";
@@ -16,7 +16,7 @@ import type {
 import type { Theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
-import type { SessionEntry, SessionTreeNode } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import type { SessionEntry, SessionTreeNode } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { ToolChoiceQueue } from "@oh-my-pi/pi-coding-agent/session/tool-choice-queue";
 import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { searchToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/search";
@@ -129,12 +129,15 @@ describe("tool path arrays", () => {
 	});
 	beforeEach(async () => {
 		treeEntryCounter = 0;
+		resetSettingsForTest();
+		await Settings.init({ inMemory: true });
 		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "search-path-lists-"));
 		await createSearchFixture(tempDir);
 	});
 
 	afterEach(async () => {
 		await fs.rm(tempDir, { recursive: true, force: true });
+		resetSettingsForTest();
 	});
 
 	it("search accepts explicit path arrays", async () => {
@@ -325,20 +328,6 @@ describe("tool path arrays", () => {
 					timestamp: 2,
 				},
 			},
-			{
-				type: "message",
-				id: "msg-tool-1",
-				parentId: "msg-assistant-1",
-				timestamp: new Date().toISOString(),
-				message: {
-					role: "toolResult",
-					toolName: "search",
-					toolCallId: "search-call-1",
-					content: [{ type: "text", text: "note.txt" }],
-					isError: false,
-					timestamp: 3,
-				},
-			},
 		]);
 		const observers = makeSubagentRegistry([
 			{
@@ -372,7 +361,10 @@ describe("tool path arrays", () => {
 		const rendered = Bun.stripANSI(hub.render(120).join("\n"));
 		hub.dispose();
 
-		expect(rendered).toContain("paths: folder with spaces/");
+		// The hub chat now renders through searchToolRenderer.renderCall; the
+		// single-string `paths` arg shows up as the "in <paths>" scope meta on the
+		// pending call line (a completed result merges the call line away).
+		expect(rendered).toContain("in folder with spaces/");
 	});
 
 	it("tree selector renders a single-string search path summary", () => {

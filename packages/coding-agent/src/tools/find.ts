@@ -5,7 +5,7 @@ import * as natives from "@oh-my-pi/pi-natives";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { formatGroupedPaths, isEnoent, prompt, untilAborted } from "@oh-my-pi/pi-utils";
-import * as z from "zod/v4";
+import { z } from "zod/v4";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { InternalUrlRouter } from "../internal-urls";
 import type { Theme } from "../modes/theme/theme";
@@ -239,7 +239,9 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 					const parts = ["No files found matching pattern"];
 					if (notice) parts.push(notice);
 					if (missingPathsNote) parts.push(missingPathsNote);
-					return toolResult(details).text(parts.join("\n")).done();
+					// Zero results is useless regardless of notices: the follow-up
+					// call has already corrected course by the time compaction runs.
+					return toolResult(details).text(parts.join("\n")).useless().done();
 				}
 
 				const listLimit = applyListLimit(files, { limit: effectiveLimit });

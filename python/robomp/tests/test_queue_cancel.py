@@ -161,6 +161,7 @@ async def test_non_cancelled_failure_keeps_real_traceback(
 ) -> None:
     """A garden-variety dispatch failure still records the traceback path."""
     pool = _make_pool(settings, db)
+    monkeypatch.setattr(settings, "event_max_retries", 0)  # assert terminal failure, not retry
     db.record_event(
         delivery_id="d4",
         event_type="issues",
@@ -191,6 +192,7 @@ async def test_run_event_marks_failed_when_not_shutting_down(
 ) -> None:
     """When `_shutting_down` is False, a dispatch failure still marks the row failed."""
     pool = _make_pool(settings, db)
+    monkeypatch.setattr(settings, "event_max_retries", 0)  # assert terminal failure, not retry
     assert pool._shutting_down is False  # noqa: SLF001
     db.record_event(
         delivery_id="d5",

@@ -579,6 +579,11 @@ function wrapEditRendererLine(line: string, width: number): string[] {
 
 export const editToolRenderer = {
 	mergeCallAndResult: true,
+	// Pending preview is a TAIL window of the streamed diff ("… N more lines
+	// above" + last rows); the result render re-anchors the block top-first, so
+	// committing the preview's settled head would strand a stale call-box
+	// fragment in native scrollback.
+	provisionalPendingPreview: true,
 
 	renderCall(
 		args: EditRenderArgs,
