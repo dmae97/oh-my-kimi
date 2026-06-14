@@ -77,8 +77,6 @@ describe("issue #2558 — GitHub Copilot Anthropic transport rejects eager_input
 		});
 		// Either the header is absent or, if other betas pile in later, it must
 		// not list `fine-grained-tool-streaming-2025-05-14`.
-		expect(options.defaultHeaders["anthropic-beta"] ?? "").not.toContain(
-			"fine-grained-tool-streaming-2025-05-14",
-		);
+		expect(options.defaultHeaders["anthropic-beta"] ?? "").not.toContain("fine-grained-tool-streaming-2025-05-14");
 	});
 });
