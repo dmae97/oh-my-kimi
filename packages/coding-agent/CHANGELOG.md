@@ -62,6 +62,7 @@
 
 - Fixed plan approval's "Approve and compact context" running the compaction summarizer on the pre-plan model instead of the plan model, cold-missing the plan model's prompt cache. Compaction now runs on the plan model (warm cache); the switch to the execution/pre-plan model happens only after a successful compaction and before any input queued during compaction is dispatched, so the queued turn runs on the post-compaction model. A cancelled compaction now also restores the pre-plan model (it previously stranded the session on the plan model), while a failed compaction stays on the plan model with its context intact.
 - Fixed `Alt+Up` (dequeue) reporting "No queued messages to restore" for messages — including skills — typed while the session was compacting. `restoreQueuedMessagesToEditor` now drains `compactionQueuedMessages` alongside the agent queue, so the `Alt+Up to edit` hint restores every pending message it advertises.
+- Fixed `restoreQueuedMessagesToEditor` (Alt+Up dequeue and Esc-abort) producing colliding `[Image #N]` markers when the editor draft already held pending image(s): queued text was prepended but queued images were appended, so positional marker → image lookup at submit time resolved to the wrong image. Each queued message's image markers are now renumbered by the running pending-image count before merge so the combined text stays aligned with the merged `pendingImages` order ([#2531](https://github.com/can1357/oh-my-pi/issues/2531)).
 
 ## [15.12.5] - 2026-06-13
 ### Changed
