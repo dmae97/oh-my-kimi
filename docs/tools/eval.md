@@ -134,11 +134,11 @@ Implemented in `packages/coding-agent/src/eval/js/worker-core.ts`, `packages/cod
   - `completion(prompt, opts?)` for oneshot, stateless model calls (see _Oneshot completion helper_ below)
   - `agent(prompt, opts?)` for a single subagent call, plus `parallel()` / `pipeline()` bounded-pool helpers (see _Subagent helper_ below)
 - JS helpers that touch the host/runtime boundary are async and `await`able; pure text helpers (`sort`, `uniq`, `counter`) return synchronously but may still be safely awaited.
-- JS helper signatures use a trailing options object rather than Python keyword arguments:
-  - `await read(path, { offset?, limit? })`
-  - `await tree(path = ".", { maxDepth?, hidden? })`
-  - `sort(text, { reverse?, unique? })`, `uniq(text, { count? })`, `counter(items, { limit?, reverse? })`
-  - `await agent(prompt, { agentType?, model?, label?, schema? })`
+- JS helper options may be passed either positionally in the Python order or as a trailing options object. `null` and `undefined` skip positional slots:
+  - `await read(path, offset?, limit?)` or `await read(path, { offset?, limit? })`
+  - `await tree(path = ".", maxDepth?, showHidden?)` or `await tree(path, { maxDepth?, showHidden? })`
+  - `sort(text, reverse?, unique?)`, `uniq(text, count?)`, `counter(items, limit?, reverse?)`
+  - `await agent(prompt, agentType?, model?, label?, schema?)` or `await agent(prompt, { agentType?, model?, label?, schema? })`
   - `await parallel([() => agent("a"), () => agent("b")])`
   - `await pipeline(items, stage1, stage2)`
 - `display(value)` behavior:
@@ -192,7 +192,7 @@ Both runtimes expose `completion()` — a single stateless completion against a 
 Both runtimes expose `agent()` — a single subagent invocation routed through `packages/coding-agent/src/eval/agent-bridge.ts` into the same `runSubprocess(...)` path used by the `task` tool. It uses the current eval session's spawn policy and inherits the parent eval executor id, so parent and subagent code share JS/Python runtime state.
 
 - Signatures:
-  - JS: `await agent(prompt, { agentType?, model?, label?, schema? })`
+  - JS: `await agent(prompt, agentType?, model?, label?, schema?)` or `await agent(prompt, { agentType?, model?, label?, schema? })`
   - Python: `agent(prompt, *, agent_type="task", model=None, label=None, schema=None)`
 - `agentType` / `agent_type` defaults to the bundled `task` agent and resolves through normal agent discovery, so project and user agents work.
 - `model` overrides the selected agent's model. Without it, normal per-agent settings and the agent frontmatter model apply.

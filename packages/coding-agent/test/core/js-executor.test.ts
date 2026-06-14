@@ -311,8 +311,11 @@ describe("executeJs", () => {
 		const result = await executeJs(
 			[
 				"const full = await read('config.json');",
-				"const sliced = await read('config.json', { offset: 2, limit: 1 });",
-				"return { isString: typeof full === 'string', full, sliced };",
+				"const objectSliced = await read('config.json', { offset: 2, limit: 1 });",
+				"const positionalSliced = await read('config.json', 3, 1);",
+				"const nullOffsetLimit = await read('config.json', null, 2);",
+				"const undefinedOffsetLimit = await read('config.json', undefined, 1);",
+				"return { isString: typeof full === 'string', full, objectSliced, positionalSliced, nullOffsetLimit, undefinedOffsetLimit };",
 			].join("\n"),
 			{
 				sessionId,
@@ -322,23 +325,58 @@ describe("executeJs", () => {
 		);
 
 		expect(result.exitCode).toBe(0);
-		expect(getStatusEvents(result)).toHaveLength(2);
+		expect(getStatusEvents(result)).toHaveLength(5);
 		expect(getJsonData(result)).toEqual({
 			isString: true,
 			full: '{\n  "name": "demo",\n  "enabled": true\n}',
-			sliced: '  "name": "demo",',
+			objectSliced: '  "name": "demo",',
+			positionalSliced: '  "enabled": true',
+			nullOffsetLimit: '{\n  "name": "demo",',
+			undefinedOffsetLimit: "{",
 		});
 	});
 
-	it("rejects protocol paths and directory reads from native read()", async () => {
-		const protocolResult = await executeJs("await read('agent://demo');", {
-			sessionId,
-			session,
-			sessionFile,
+	it("delegates URI reads through the read tool with positional slicing", async () => {
+		const execute = vi.fn(async (_toolCallId: string, args: unknown): Promise<AgentToolResult> => {
+			const record = args as { path: string };
+			return { content: [{ type: "text", text: record.path.endsWith(":1-1400") ? "wide" : "limited" }] };
 		});
-		expect(protocolResult.exitCode).toBe(1);
-		expect(protocolResult.output).toContain("Protocol paths are not supported");
+		const toolSession: ToolSession = {
+			...session,
+			getToolByName: name => (name === "read" ? createTool("read", execute) : undefined),
+		};
 
+		const result = await executeJs(
+			[
+				"const wide = await read('artifact://15:raw', 1, 1400);",
+				"const limited = await read('artifact://15:raw', null, 2);",
+				"return { wide, limited };",
+			].join("\n"),
+			{
+				sessionId,
+				session: toolSession,
+				sessionFile,
+			},
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(getStatusEvents(result)).toHaveLength(2);
+		expect(getJsonData(result)).toEqual({ wide: "wide", limited: "limited" });
+		expect(execute).toHaveBeenNthCalledWith(
+			1,
+			expect.stringMatching(/^js-read-/),
+			{ path: "artifact://15:raw:1-1400", _i: "js prelude" },
+			expect.any(AbortSignal),
+		);
+		expect(execute).toHaveBeenNthCalledWith(
+			2,
+			expect.stringMatching(/^js-read-/),
+			{ path: "artifact://15:raw:1-2", _i: "js prelude" },
+			expect.any(AbortSignal),
+		);
+	});
+
+	it("rejects directory reads from native read()", async () => {
 		const directoryResult = await executeJs("await read('.');", {
 			sessionId,
 			session,
