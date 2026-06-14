@@ -16,6 +16,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentMessage, AgentTool } from "@oh-my-pi/pi-agent-core";
+import type { Usage } from "@oh-my-pi/pi-ai";
 import { Container, Editor, matchesKey, ScrollView, Text, type TUI } from "@oh-my-pi/pi-tui";
 import { formatAge, formatBytes, formatDuration, formatNumber, getProjectDir, logger } from "@oh-my-pi/pi-utils";
 import { COLLAB_PROMPT_MESSAGE_TYPE, type CollabPromptDetails } from "../../collab/protocol";
@@ -57,6 +58,7 @@ import { SkillMessageComponent } from "./skill-message";
 import { formatContextUsage } from "./status-line/context-thresholds";
 import { ToolExecutionComponent } from "./tool-execution";
 import { TranscriptBlock, TranscriptContainer } from "./transcript-container";
+import { createUsageRowBlock } from "./usage-row";
 import { UserMessageComponent } from "./user-message";
 
 /** Lines per page for PageUp/PageDown */
@@ -213,6 +215,7 @@ export class AgentHubOverlayComponent extends Container {
 	#chatPendingTools = new Map<string, ToolExecutionComponent | ReadToolGroupComponent>();
 	#chatReadArgs = new Map<string, Record<string, unknown>>();
 	#chatReadGroup: ReadToolGroupComponent | null = null;
+	#pendingUsage: Usage | undefined;
 	#chatWaitingPoll: ToolExecutionComponent | null = null;
 	#chatExpandables: Array<{ setExpanded(expanded: boolean): void }> = [];
 	#chatExpanded = false;
@@ -851,6 +854,7 @@ export class AgentHubOverlayComponent extends Container {
 		this.#chatPendingTools.clear();
 		this.#chatReadArgs.clear();
 		this.#chatReadGroup = null;
+		this.#pendingUsage = undefined;
 		this.#chatWaitingPoll = null;
 		this.#chatExpandables = [];
 		this.#chatLog.dispose();
@@ -870,6 +874,13 @@ export class AgentHubOverlayComponent extends Container {
 			this.#appendChatMessage(entries[i].message);
 		}
 		this.#chatBuiltCount = entries.length;
+		// Flush the trailing turn's usage row only once its tools are materialized.
+		// A read (or any tool) whose toolResult lands in a later debounced sync stays
+		// pending in #chatReadArgs / #chatPendingTools; flushing now would emit the
+		// row above it. The sync that drains the maps flushes it below the tools.
+		if (this.#chatReadArgs.size === 0 && this.#chatPendingTools.size === 0) {
+			this.#flushPendingUsage();
+		}
 	}
 
 	#trackExpandable(component: { setExpanded(expanded: boolean): void }): void {
@@ -899,7 +910,21 @@ export class AgentHubOverlayComponent extends Container {
 		return this.#chatReadGroup;
 	}
 
+	// The per-turn token-usage row must land below the turn's tool blocks, but
+	// normal `read` calls only materialize their group in #appendToolResult. Defer
+	// the row: stash it on the assistant message and flush once the turn's tools
+	// are placed — before the next non-toolResult message and at the end of each
+	// sync pass — sealing the read run so the row sits under it.
+	#flushPendingUsage(): void {
+		if (!this.#pendingUsage) return;
+		this.#chatReadGroup?.seal();
+		this.#chatReadGroup = null;
+		this.#chatLog.addChild(createUsageRowBlock(this.#pendingUsage));
+		this.#pendingUsage = undefined;
+	}
+
 	#appendChatMessage(message: AgentMessage): void {
+		if (message.role !== "toolResult") this.#flushPendingUsage();
 		switch (message.role) {
 			case "assistant":
 				this.#appendAssistantMessage(message);
@@ -988,7 +1013,6 @@ export class AgentHubOverlayComponent extends Container {
 		const assistantComponent = new AssistantMessageComponent(message, this.#hideThinkingBlock?.() ?? false, () =>
 			this.#requestRender(),
 		);
-		assistantComponent.setUsageInfo(message.usage);
 		this.#chatLog.addChild(assistantComponent);
 
 		const hasVisibleAssistantContent = message.content.some(
@@ -1067,6 +1091,8 @@ export class AgentHubOverlayComponent extends Container {
 				this.#chatPendingTools.set(content.id, component);
 			}
 		}
+
+		this.#pendingUsage = settings.get("display.showTokenUsage") ? message.usage : undefined;
 	}
 
 	#appendToolResult(message: Extract<AgentMessage, { role: "toolResult" }>): void {
