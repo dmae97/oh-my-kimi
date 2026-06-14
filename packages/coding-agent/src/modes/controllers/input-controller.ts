@@ -1116,6 +1116,35 @@ export class InputController {
 		return true;
 	}
 
+	/**
+	 * Win+Shift+S on Windows 11 leaves the screenshot bitmap on the clipboard
+	 * while the terminal pastes a transient packaged-app TempState path
+	 * (…\MicrosoftWindows.Client.Core_*\TempState\…) that is already gone — or
+	 * never materialized — by the time we read it. Whenever a pasted image path
+	 * can't be turned into an image locally, those clipboard bytes are the real
+	 * payload, so prefer them before degrading to a text paste.
+	 *
+	 * Skipped over SSH: the clipboard read would hit the remote host, not the
+	 * terminal that holds the screenshot. Returns true when the clipboard owned
+	 * the outcome (image attached, or an unsupported-format status surfaced), so
+	 * the caller stops without emitting its own degraded diagnostic.
+	 */
+	async #tryPasteClipboardImage(): Promise<boolean> {
+		const env = process.env;
+		if (env.SSH_CONNECTION || env.SSH_TTY || env.SSH_CLIENT) return false;
+		try {
+			const image = await this.clipboard.readImage();
+			if (!image) return false;
+			await this.#normalizeAndInsertPastedImage(
+				{ type: "image", data: image.data.toBase64(), mimeType: image.mimeType },
+				`Unsupported clipboard image format: ${image.mimeType}`,
+			);
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
 	async handleImagePathPaste(path: string): Promise<void> {
 		try {
 			const image = await loadImageInput({
@@ -1124,6 +1153,9 @@ export class InputController {
 				autoResize: false,
 			});
 			if (!image) {
+				// Path resolved but is not a readable image (e.g. a zero-byte or
+				// locked transient screenshot file). Prefer the clipboard bytes.
+				if (await this.#tryPasteClipboardImage()) return;
 				this.ctx.editor.pasteText(path);
 				this.ctx.ui.requestRender();
 				this.ctx.showStatus("Pasted path is not a supported image");
@@ -1142,13 +1174,17 @@ export class InputController {
 			}
 			if (isEnoent(error)) {
 				// #2375: the bracketed paste forwarded by a local terminal carries a
-				// path on the *local* filesystem. When omp itself runs over SSH, that
-				// path is unreachable here; pasting it as text would look like the
-				// image was attached when in fact nothing was sent. Refuse the silent
-				// degrade and tell the user how to send the bytes for real. The
-				// pasted path is untrusted terminal input — strip control/ANSI/
-				// newlines, collapse home to `~`, and bound the displayed length
-				// before splicing it into the status string.
+				// path on the *local* filesystem. The bytes may still be on the
+				// clipboard (Win+Shift+S), so try those before giving up.
+				if (await this.#tryPasteClipboardImage()) return;
+				// Over SSH the clipboard lives on the remote host, so the path is
+				// genuinely unreachable; pasting it as text would look like the
+				// image was attached when nothing was sent. Surface an SSH-aware
+				// diagnostic instead. The pasted path is untrusted terminal input —
+				// strip control/ANSI/newlines, collapse home to `~`, and bound the
+				// displayed length before splicing it into the status string.
+				const env = process.env;
+				const overSsh = Boolean(env.SSH_CONNECTION || env.SSH_TTY || env.SSH_CLIENT);
 				const displayPath = truncateToWidth(
 					shortenPath(
 						sanitizeText(path)
@@ -1157,8 +1193,6 @@ export class InputController {
 					),
 					TRUNCATE_LENGTHS.CONTENT,
 				);
-				const env = process.env;
-				const overSsh = Boolean(env.SSH_CONNECTION || env.SSH_TTY || env.SSH_CLIENT);
 				this.ctx.showStatus(
 					overSsh
 						? `Image not found at ${displayPath}. Over SSH this path is local to your terminal — paste the image directly (clipboard image-paste shortcut) to send its bytes.`
@@ -1166,6 +1200,7 @@ export class InputController {
 				);
 				return;
 			}
+			if (await this.#tryPasteClipboardImage()) return;
 			this.ctx.editor.pasteText(path);
 			this.ctx.ui.requestRender();
 			this.ctx.showStatus("Failed to read pasted image path");

@@ -14,8 +14,23 @@
  * paste image bytes directly instead.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
+
+// A clipboard with no image on it — the deterministic default for the
+// not-found assertions so a real screenshot on the dev's clipboard cannot
+// flip the new fallback path and break them.
+const EMPTY_CLIPBOARD = {
+	readImage: async () => null,
+	readText: async () => "",
+};
+
+// Minimal 1x1 PNG used to stand in for a Win+Shift+S bitmap on the clipboard.
+const ONE_PX_PNG = Buffer.from(
+	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC",
+	"base64",
+);
 
 function createContext() {
 	const pasteText = vi.fn();
@@ -23,9 +38,14 @@ function createContext() {
 	const requestRender = vi.fn();
 	const showStatus = vi.fn();
 	const ctx = {
-		editor: { pasteText, insertText } as unknown as InteractiveModeContext["editor"],
+		editor: { pasteText, insertText, imageLinks: undefined } as unknown as InteractiveModeContext["editor"],
 		ui: { requestRender, getFocused: () => null } as unknown as InteractiveModeContext["ui"],
-		sessionManager: { getCwd: () => process.cwd() } as unknown as InteractiveModeContext["sessionManager"],
+		sessionManager: {
+			getCwd: () => process.cwd(),
+			putBlob: async () => ({ hash: "h", path: "/tmp/h.png", displayPath: "/tmp/h.png" }),
+		} as unknown as InteractiveModeContext["sessionManager"],
+		pendingImages: [] as InteractiveModeContext["pendingImages"],
+		pendingImageLinks: [] as InteractiveModeContext["pendingImageLinks"],
 		showStatus,
 	} as unknown as InteractiveModeContext;
 	return { ctx, spies: { pasteText, insertText, requestRender, showStatus } };
@@ -36,10 +56,12 @@ describe("InputController.handleImagePathPaste (issue #2375)", () => {
 	const originalSshTty = process.env.SSH_TTY;
 	const originalSshClient = process.env.SSH_CLIENT;
 
-	beforeEach(() => {
+	beforeEach(async () => {
 		delete process.env.SSH_CONNECTION;
 		delete process.env.SSH_TTY;
 		delete process.env.SSH_CLIENT;
+		resetSettingsForTest();
+		await Settings.init({ inMemory: true, overrides: { "images.autoResize": false } });
 	});
 
 	afterEach(() => {
@@ -49,6 +71,7 @@ describe("InputController.handleImagePathPaste (issue #2375)", () => {
 		else process.env.SSH_TTY = originalSshTty;
 		if (originalSshClient === undefined) delete process.env.SSH_CLIENT;
 		else process.env.SSH_CLIENT = originalSshClient;
+		resetSettingsForTest();
 		vi.restoreAllMocks();
 	});
 
@@ -70,7 +93,7 @@ describe("InputController.handleImagePathPaste (issue #2375)", () => {
 
 	it("locally: still avoids the misleading path-as-text fallback when the file is unreachable", async () => {
 		const { ctx, spies } = createContext();
-		const controller = new InputController(ctx);
+		const controller = new InputController(ctx, EMPTY_CLIPBOARD);
 		const missing = "/tmp/definitely-does-not-exist-omp-2375.png";
 
 		await controller.handleImagePathPaste(missing);
@@ -83,7 +106,7 @@ describe("InputController.handleImagePathPaste (issue #2375)", () => {
 
 	it("sanitizes untrusted pasted-path characters and bounds length before splicing into status", async () => {
 		const { ctx, spies } = createContext();
-		const controller = new InputController(ctx);
+		const controller = new InputController(ctx, EMPTY_CLIPBOARD);
 		// Path carrying ANSI, control chars, a CR/LF, and a tab — all of which
 		// would corrupt the TUI status line if interpolated verbatim. Long
 		// enough to exceed the status-line truncation budget (TRUNCATE_LENGTHS
@@ -104,5 +127,51 @@ describe("InputController.handleImagePathPaste (issue #2375)", () => {
 		// The hostile path runs well past the status truncation budget; the
 		// displayed path must be clamped strictly inside that budget.
 		expect(status.length).toBeLessThan(hostile.length);
+	});
+
+	it("locally: attaches the clipboard image when the pasted path is a stale transient file (Win+Shift+S)", async () => {
+		// Windows 11 Win+Shift+S leaves the bitmap on the clipboard, but the
+		// terminal pastes the snip's packaged-app TempState path, which is
+		// already gone by the time omp reads it. The bytes are still on the
+		// clipboard, so the paste must succeed from there instead of dead-ending
+		// on "Image not found".
+		const { ctx, spies } = createContext();
+		const controller = new InputController(ctx, {
+			readImage: async () => ({ data: ONE_PX_PNG, mimeType: "image/png" }),
+			readText: async () => "",
+		});
+		const stale =
+			"C:\\Users\\u\\AppData\\Local\\Packages\\MicrosoftWindows.Client.Core_cw5n1h2txyewy\\TempState\\gone.png";
+
+		await controller.handleImagePathPaste(stale);
+
+		expect(spies.pasteText).not.toHaveBeenCalled();
+		expect(spies.showStatus).not.toHaveBeenCalled();
+		expect(ctx.pendingImages.length).toBe(1);
+		expect(ctx.pendingImages[0]?.mimeType).toBe("image/png");
+	});
+
+	it("locally: attaches the clipboard image when the pasted path resolves to a non-image file", async () => {
+		// The bracketed paste can resolve to an existing file that is not a
+		// decodable image (zero-byte/locked transient snip), which surfaces as a
+		// null load result rather than ENOENT. The clipboard bytes must still win
+		// over a degraded text paste.
+		const { ctx, spies } = createContext();
+		const controller = new InputController(ctx, {
+			readImage: async () => ({ data: ONE_PX_PNG, mimeType: "image/png" }),
+			readText: async () => "",
+		});
+		// This test file itself: resolvable, readable, but not an image.
+		const nonImage = import.meta.path.replace(/\.ts$/, ".png");
+		await Bun.write(nonImage, "not really a png");
+		try {
+			await controller.handleImagePathPaste(nonImage);
+		} finally {
+			await Bun.file(nonImage).delete();
+		}
+
+		expect(spies.pasteText).not.toHaveBeenCalled();
+		expect(ctx.pendingImages.length).toBe(1);
+		expect(ctx.pendingImages[0]?.mimeType).toBe("image/png");
 	});
 });
