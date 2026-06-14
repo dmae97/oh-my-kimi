@@ -4,8 +4,20 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { getProjectAgentDir, Snowflake } from "@oh-my-pi/pi-utils";
+import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
 describe("Settings.reloadForCwd", () => {
+	let settingsState: SettingsTestState | undefined;
+
+	beforeEach(() => {
+		settingsState = beginSettingsTest();
+	});
+
+	afterEach(() => {
+		restoreSettingsTestState(settingsState);
+		settingsState = undefined;
+	});
+
 	it("re-resolves path-scoped settings against the new directory in place", async () => {
 		const projectA = path.resolve("/tmp", `reload-a-${Snowflake.next()}`);
 		const projectB = path.resolve("/tmp", `reload-b-${Snowflake.next()}`);
@@ -75,7 +87,7 @@ describe("Settings.reloadForCwd", () => {
 			fs.mkdirSync(testDir, { recursive: true });
 
 			const missingPath = path.join(testDir, "nope.yml");
-			expect(Settings.init({ cwd: testDir, inMemory: true, configFiles: [missingPath] })).rejects.toThrow(
+			await expect(Settings.init({ cwd: testDir, inMemory: true, configFiles: [missingPath] })).rejects.toThrow(
 				`Config overlay not found: ${missingPath}`,
 			);
 		} finally {
@@ -92,7 +104,7 @@ describe("Settings.reloadForCwd", () => {
 			fs.mkdirSync(testDir, { recursive: true });
 			fs.writeFileSync(overlayPath, "compaction: [unclosed\n");
 
-			expect(Settings.init({ cwd: testDir, inMemory: true, configFiles: [overlayPath] })).rejects.toThrow(
+			await expect(Settings.init({ cwd: testDir, inMemory: true, configFiles: [overlayPath] })).rejects.toThrow(
 				"Failed to parse config overlay",
 			);
 		} finally {
@@ -129,7 +141,7 @@ describe("Settings.reloadForCwd", () => {
 		afterEach(() => {
 			resetSettingsForTest();
 			if (fs.existsSync(testDir)) {
-				fs.rmSync(testDir, { recursive: true });
+				fs.rmSync(testDir, { recursive: true, force: true });
 			}
 		});
 

@@ -13,15 +13,16 @@ import {
 } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { getProjectAgentDir, Snowflake } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
+import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
 describe("Settings", () => {
-	let testDir: string;
+	let settingsState: SettingsTestState | undefined;
+	let testDir = "";
 	let agentDir: string;
 	let projectDir: string;
 
 	beforeEach(() => {
-		// Reset global singleton so each test gets a fresh instance
-		resetSettingsForTest();
+		settingsState = beginSettingsTest();
 
 		// Use snowflake to isolate parallel test runs (SQLite files can't be shared)
 		testDir = path.join(os.tmpdir(), "test-settings-tmp", Snowflake.next());
@@ -29,7 +30,7 @@ describe("Settings", () => {
 		projectDir = path.join(testDir, "project");
 
 		if (fs.existsSync(testDir)) {
-			fs.rmSync(testDir, { recursive: true });
+			fs.rmSync(testDir, { recursive: true, force: true });
 		}
 		fs.mkdirSync(agentDir, { recursive: true });
 		fs.mkdirSync(getProjectAgentDir(projectDir), { recursive: true });
@@ -51,9 +52,12 @@ describe("Settings", () => {
 	};
 
 	afterEach(() => {
-		if (fs.existsSync(testDir)) {
-			fs.rmSync(testDir, { recursive: true });
+		restoreSettingsTestState(settingsState);
+		settingsState = undefined;
+		if (testDir && fs.existsSync(testDir)) {
+			fs.rmSync(testDir, { recursive: true, force: true });
 		}
+		testDir = "";
 	});
 	describe("defaults", () => {
 		it("keeps eight inline images live by default", async () => {

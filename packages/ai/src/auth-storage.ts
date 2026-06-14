@@ -450,7 +450,7 @@ export type AuthStorageOptions = {
 	 *
 	 * Examples:
 	 * - `"local ~/.omp/agent/agent.db"`
-	 * - `"broker http://can.internal:8765"`
+	 * - `"broker http://omp.internal:8765"`
 	 */
 	sourceLabel?: string;
 	/**

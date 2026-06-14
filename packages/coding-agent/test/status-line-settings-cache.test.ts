@@ -1,31 +1,33 @@
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { stripVTControlCharacters } from "node:util";
-import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { StatusLineComponent, type StatusLineSettings } from "@oh-my-pi/pi-coding-agent/modes/components/status-line";
 import { STATUS_LINE_PRESETS } from "@oh-my-pi/pi-coding-agent/modes/components/status-line/presets";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import { getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
+import { setProjectDir } from "@oh-my-pi/pi-utils";
+import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
-const originalProjectDir = getProjectDir();
-let projectDir: string;
+let settingsState: SettingsTestState | undefined;
+let projectDir = "";
 
-beforeAll(async () => {
+beforeEach(async () => {
+	settingsState = beginSettingsTest();
 	projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-status-line-settings-cache-"));
 	setProjectDir(projectDir);
-	resetSettingsForTest();
 	await Settings.init({ inMemory: true, cwd: projectDir });
 	await initTheme();
 });
 
-afterAll(() => {
-	resetSettingsForTest();
-	setProjectDir(originalProjectDir);
+afterEach(() => {
+	restoreSettingsTestState(settingsState);
+	settingsState = undefined;
 	if (projectDir) {
 		fs.rmSync(projectDir, { recursive: true, force: true });
 	}
+	projectDir = "";
 });
 
 function makeSession(sessionName = "Cache Session") {

@@ -36,6 +36,12 @@ runs:
            toolchain: nightly-2026-04-29
            components: ${{ inputs.rust_checks == 'true' && 'clippy, rustfmt' || '' }}
            targets: ${{ inputs.target }}
+      - name: Install Linux build prerequisites
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+           sudo apt-get update
+           sudo apt-get install -y build-essential
       - name: Prepend rustup toolchain bin to PATH
         shell: bash
         run: |
