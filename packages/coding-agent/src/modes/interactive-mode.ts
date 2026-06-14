@@ -954,6 +954,14 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#goalContinuationTimer = undefined;
 			if (!this.onInputCallback) return;
 			if (!this.goalModeEnabled || this.goalModePaused) return;
+			// The 800ms timer can outlive the idle window that scheduled it: a
+			// `/goal set` taken via the streaming branch (or any extension/hook
+			// path that starts a turn while we wait) leaves the agent busy. Firing
+			// the continuation now would route through `submitInteractiveInput` →
+			// `promptCustomMessage` with no `streamingBehavior` and resurface
+			// `AgentBusyError`. Drop this tick; `#handleGoalSessionEvent` reschedules
+			// on the next `agent_end`.
+			if (this.#isAutoSubmitBlocked()) return;
 			if (this.#pendingSubmittedInput) return;
 			if (this.editor.getText().trim().length > 0) return;
 			if ((this.pendingImages?.length ?? 0) > 0) return;
@@ -977,7 +985,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 	}
 
-	#isLoopAutoSubmitBlocked(): boolean {
+	#isAutoSubmitBlocked(): boolean {
 		return this.session.isStreaming || this.session.isCompacting || this.session.hasPostPromptWork;
 	}
 
@@ -987,7 +995,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.disableLoopMode("Loop time limit reached. Loop mode disabled.");
 			return;
 		}
-		if (this.#isLoopAutoSubmitBlocked()) {
+		if (this.#isAutoSubmitBlocked()) {
 			this.#deferLoopAutoSubmit(() => this.#submitLoopPromptWhenReady(prompt));
 			return;
 		}
@@ -996,7 +1004,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	async #runLoopIteration(action: "prompt" | "compact" | "reset", prompt: string): Promise<void> {
 		if (!this.loopModeEnabled || this.loopPrompt !== prompt || !this.onInputCallback) return;
-		if (this.#isLoopAutoSubmitBlocked()) {
+		if (this.#isAutoSubmitBlocked()) {
 			this.#deferLoopAutoSubmit(() => {
 				void this.#runLoopIteration(action, prompt);
 			});
