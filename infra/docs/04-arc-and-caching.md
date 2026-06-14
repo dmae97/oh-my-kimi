@@ -196,13 +196,14 @@ Field by field:
   overridden explicitly because the custom image keeps the upstream layout.
 - **`envFrom.secretRef.name: sccache-s3`** - injects the shared-cache S3
   configuration into every job's environment ([step 5](#5-shared-cache-rustfs-s3)).
-- **`resources`** - requests `2` CPU / `4Gi`, limits `6` CPU / `12Gi`. Kata reads
-  these and sizes the guest accordingly: the VM boots at the runtime defaults
-  (`default_vcpus: 1`, `default_memory: 2048`) and **hotplugs** vCPUs and RAM to
-  cover the pod's containers, with `default_maxvcpus: 0` allowing up to all host
-  CPUs. Effectively the **requests are the guaranteed VM size** and the **limits
-  are the hotplug ceiling**. See [02-kata-runtime.md](02-kata-runtime.md) for the
-  hotplug mechanics.
+- **`resources`** - requests `2` CPU / `4Gi`, limits `8` CPU / `12Gi`. Kata reads
+  these and sizes the guest accordingly: the VM now boots at the same
+  guaranteed floor (`default_vcpus: 2`, `default_memory: 4096`) and only
+  hotplugs beyond that toward the limits, with `default_maxvcpus: 0` allowing up
+  to all host CPUs. Effectively the **requests are the boot-time VM size** and
+  the **limits are the hotplug ceiling**. See [02-kata-runtime.md](02-kata-runtime.md)
+  for the runtime knobs and [`infra/tune-kata-runtime.sh`](../tune-kata-runtime.sh)
+  for the SSH-driven patch helper.
 
 ---
 
@@ -455,6 +456,39 @@ with a **gzip** (`.tgz`) fallback so the action still works on an older image; t
 suffix records the codec and restore only inflates what the host can decompress.
 On **save**, it writes the store/`node_modules` objects only when this exact
 lockfile has none yet (`s3_exists` check), avoiding redundant uploads.
+
+### 5d. Retention and PVC pressure
+
+The Bun cache intentionally keeps exact lockfile objects once written:
+
+- `store-<os>-<lockhash>` and `nm-<os>-<lockhash>` are immutable warm caches;
+- only `store-<os>-latest` is overwritten.
+
+That means `bun.lock` churn will accumulate old exact objects on the `rustfs-data`
+PVC. The repo ships [`infra/rustfs-cache-maintenance.sh`](../rustfs-cache-maintenance.sh)
+to keep that under control from an ops checkout:
+
+```bash
+CI_HOST=<CI_HOST> ./infra/rustfs-cache-maintenance.sh report
+CI_HOST=<CI_HOST> ./infra/rustfs-cache-maintenance.sh prune
+```
+
+Its policy is deliberately conservative:
+
+- always keep every `store-<os>-latest` alias;
+- always keep the newest exact `store-*` object that matches each `latest` alias
+  by ETag;
+- always keep the newest `KEEP_EXACT_PER_OS` exact objects per OS (`3` by default)
+  for both `store-*` and `nm-*`;
+- never delete exact objects newer than `MAX_AGE_DAYS` (`30` by default);
+- once the PVC reaches `PRUNE_TRIGGER_PERCENT` (`80` by default), prune oldest
+  remaining exact objects toward `TARGET_PERCENT` (`70` by default), even if they
+  are newer than the age threshold.
+
+The same script is the PVC-pressure alert: after `report` or `prune` it reads
+`df -P /data` from the live RustFS pod and exits `1` at `WARN_PERCENT` (`80`)
+and `2` at `CRITICAL_PERCENT` (`90`). Wire that into cron / systemd / your
+monitoring runner; a failing exit is the signal that the PVC is too full.
 
 This caching is why RustFS sits inside the egress allow-list on `tcp/9000`
 ([step 6](#6-runner-egress-lockdown)).

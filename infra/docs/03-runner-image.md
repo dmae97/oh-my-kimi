@@ -143,9 +143,9 @@ RUN curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs \
  && rustc --version \
  && sccache --version \
  && zig version \
- && cargo nextest --version \
- && cargo zigbuild --version \
- && cargo xwin --version
+ && cargo-nextest --version \
+ && cargo-zigbuild --help >/dev/null \
+ && cargo-xwin --help >/dev/null
 ```
 
 ### Stage-by-stage annotation
@@ -323,12 +323,11 @@ old one (the scale set is scale-to-zero, so this drains quickly).
 ### Running it from the repo (over SSH)
 
 You do not have to keep `reload.sh` on the host. The repo ships the version-
-controlled Dockerfile plus an SSH-driven wrapper that performs the same build,
-import, and rollout remotely, so the whole image lifecycle is managed from a
-checkout:
+controlled Dockerfile plus an SSH-driven wrapper that performs the rollout
+remotely from a checkout:
 
 - [`infra/runner.Dockerfile`](../runner.Dockerfile) - the image definition (source of truth).
-- [`infra/reload-runner.sh`](../reload-runner.sh) - copies that Dockerfile to the host, then runs the build / verify / import / `helm upgrade` / verify steps over SSH.
+- [`infra/reload-runner.sh`](../reload-runner.sh) - copies that Dockerfile to the host, then prefers a **direct containerd build path**: bootstrap pinned `buildkitd` + `buildctl` + `nerdctl` under the remote build dir if needed, build straight into the k3s `k8s.io` namespace, smoke-test from that image store, then `helm upgrade` ARC. Set `BUILD_BACKEND=docker` to force the legacy `docker build` + `docker save | ctr images import` path.
 
 The host is never hardcoded; point it at your node with `CI_HOST`:
 
@@ -417,10 +416,10 @@ standalone:
 ```bash
 docker run --rm --entrypoint bash omp-kata-runner:preloaded -lc '
   set -e
-  for b in gh fd rg magick bun cargo rustc pkg-config zstd; do
+  for b in gh fd rg magick bun cargo rustc pkg-config zstd clang lld sccache zig cargo-nextest cargo-zigbuild cargo-xwin; do
     command -v "$b" >/dev/null || { echo "MISSING: $b"; exit 1; }
   done
-  echo "tools OK | $(bun --version) | $(rustc --version)"
+  echo "tools OK | bun $(bun --version) | rust $(rustc --version) | sccache $(sccache --version | cut -d\" \" -f2) | zig $(zig version) | gh $(gh --version | head -1 | cut -d\" \" -f3)"
 '
 ```
 

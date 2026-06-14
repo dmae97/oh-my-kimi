@@ -71,6 +71,6 @@ RUN curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs \
  && rustc --version \
  && sccache --version \
  && zig version \
- && cargo nextest --version \
- && cargo zigbuild --version \
- && cargo xwin --version
+ && cargo-nextest --version \
+ && cargo-zigbuild --help >/dev/null \
+ && cargo-xwin --help >/dev/null

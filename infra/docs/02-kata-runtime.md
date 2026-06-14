@@ -266,16 +266,16 @@ rootfs_type  = "ext4"
 cpu_features  = "pmu=off"
 kernel_params = "cgroup_no_v1=all systemd.unified_cgroup_hierarchy=1"
 
-default_vcpus    = 1
+default_vcpus    = 2
 default_maxvcpus = 0
-default_memory   = 2048
+default_memory   = 4096
 default_maxmemory = 0
 memory_slots     = 10
 
 shared_fs        = "virtio-fs"
 virtio_fs_daemon = "/opt/kata/libexec/virtiofsd"
 virtio_fs_cache  = "auto"
-virtio_fs_extra_args = ["--thread-pool-size=1", "--announce-submounts"]
+virtio_fs_extra_args = ["--thread-pool-size=4", "--announce-submounts"]
 
 disable_block_device_use = true
 block_device_driver = "virtio-scsi"
@@ -308,24 +308,24 @@ guest, matching a modern systemd userspace.
 
 This is the most important block to understand for a CI runner.
 
-- `default_vcpus = 1` and `default_memory = 2048` (MiB) are the **boot-time**
-  size. Every microVM starts tiny: 1 vCPU, 2 GiB.
+- `default_vcpus = 2` and `default_memory = 4096` (MiB) are the **boot-time**
+  size. Runner microVMs now start at the runner pod's guaranteed request: 2 vCPU,
+  4 GiB, rather than booting tiny and immediately hotplugging to that floor.
 - `default_maxvcpus = 0` means "no fixed ceiling — use the host's physical CPU
   count" (32 on this box). `default_maxmemory = 0` likewise means "host total
   RAM". `memory_slots = 10` is the number of ACPI DIMM hotplug slots, i.e. how
   many memory-grow operations the guest can accept.
-- `static_sandbox_resource_mgmt = false` enables **dynamic** sizing: Kata reads
-  the pod's container CPU/memory **limits** that the kubelet/CRI hands the shim
-  and **hotplugs** vCPUs and memory after boot to match. (Set it to `true` and
-  the VM stays fixed at the defaults regardless of pod limits.) So a runner pod
-  requesting `2 CPU / 4Gi` with limits `6 CPU / 12Gi` boots at 1 vCPU/2 GiB and
-  grows toward 6 vCPU / 12 GiB. If a pod sets no limits, the VM stays at the
-  defaults.
+- `static_sandbox_resource_mgmt = false` still enables **dynamic** sizing: Kata
+  reads the pod's CPU/memory **limits** that the kubelet/CRI hands the shim and
+  hotplugs beyond the boot floor as needed. So a runner pod requesting `2 CPU /
+  4Gi` with limits `8 CPU / 12Gi` now boots at 2 vCPU/4 GiB and grows toward
+  8 vCPU / 12 GiB. If a pod sets no limits, the VM stays at the defaults.
 
-The practical knobs: raise `default_vcpus`/`default_memory` only if jobs need a
-big VM *immediately* at boot (hotplug has latency); otherwise leave them small
-and let the pod's `resources.limits` drive the size. Sizing the runner pod is
-covered in [`04-arc-and-caching.md`](./04-arc-and-caching.md).
+The practical rule here is simple: align the defaults to the runner pod's
+requests when every job creates a fresh VM and immediately needs that baseline
+anyway; let `resources.limits` remain the hotplug ceiling. The repo ships
+[`infra/tune-kata-runtime.sh`](../tune-kata-runtime.sh) to apply exactly this
+change (plus the virtiofsd worker-pool tuning below) over SSH to the host.
 
 ### `shared_fs = "virtio-fs"` — sharing the container rootfs into the VM
 
@@ -336,9 +336,10 @@ directory over **virtio-fs**, and the guest mounts it as the container root.
 This is why `disable_block_device_use = true`: the rootfs travels in over the
 shared filesystem, not as a block device. Benefits: no image-to-block
 conversion, near-instant rootfs availability, and host/guest can both see the
-files. `virtio_fs_cache = "auto"` and `--thread-pool-size=1` are conservative
-caching/concurrency defaults; `--announce-submounts` makes nested mounts visible
-to the guest.
+files. `virtio_fs_cache = "auto"` keeps the conservative page-cache behavior, but
+the active worker pool is now `--thread-pool-size=4` rather than `1` so the
+metadata-heavy Bun cache restore / extract path has a few host workers to fan out
+across. `--announce-submounts` keeps nested mounts visible to the guest.
 
 `emptydir_mode = "shared-fs"` extends the same mechanism to Kubernetes
 `emptyDir` volumes — they are shared into the guest over virtio-fs instead of
