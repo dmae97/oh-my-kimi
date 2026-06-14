@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { HL_FILE_HASH_LENGTH, HL_FILE_HASH_SEP, HL_FILE_PREFIX, HL_FILE_SUFFIX } from "@oh-my-pi/hashline";
 import { resolveLocalRoot, resolveLocalUrlToPath, resolveVaultUrlToPath } from "../internal-urls";
 import type { ToolSession } from ".";
 import { normalizeLocalScheme, resolveToCwd } from "./path-utils";
@@ -7,6 +8,7 @@ import { ToolError } from "./tool-errors";
 
 const VAULT_SCHEME_PREFIX = "vault:";
 const LOCAL_SCHEME_PREFIX = "local:";
+const HL_TRAILING_TAG_RE = new RegExp(`${HL_FILE_HASH_SEP}[0-9A-Fa-f]{${HL_FILE_HASH_LENGTH}}$`);
 
 /** Resolve the absolute path of the session's `local://` artifact sandbox.
  *  Returns `null` when the session has no artifact wiring (e.g. tests). */
@@ -30,29 +32,57 @@ function isWithinRoot(absolutePath: string, root: string): boolean {
 	return absolutePath.startsWith(sep);
 }
 
-/** True when `targetPath` addresses the session-local artifact sandbox.
- *  Accepts both `local://…` URLs and absolute paths pointing inside the
- *  resolved sandbox root — the latter is what `read local://…` echoes back
- *  in the `[path#tag]` header. Those files are not part of the working tree,
- *  so plan mode treats them as freely writable scratch/plan space. */
+/** Strip the hashline `[path#TAG]` wrapper from a write/edit target so the inner
+ *  filesystem path drives both authorization and resolution. Only unwraps inputs
+ *  that match the strict hashline header shape (`[path]` or `[path#XXXX]` with a
+ *  4-hex tag); anything else returns the original string so the downstream
+ *  resolver surfaces the real error. Exported for callers (e.g. `write`) that
+ *  make scheme/bridge-routing decisions before {@link resolvePlanPath} runs. */
+export function unwrapHashlineHeaderPath(targetPath: string): string {
+	const trimmed = targetPath.trimEnd();
+	if (
+		trimmed.length < HL_FILE_PREFIX.length + HL_FILE_SUFFIX.length ||
+		trimmed[0] !== HL_FILE_PREFIX ||
+		trimmed[trimmed.length - 1] !== HL_FILE_SUFFIX
+	) {
+		return targetPath;
+	}
+	const inner = trimmed.slice(HL_FILE_PREFIX.length, trimmed.length - HL_FILE_SUFFIX.length);
+	const tagMatch = HL_TRAILING_TAG_RE.exec(inner);
+	const pathPart = tagMatch ? inner.slice(0, tagMatch.index) : inner;
+	// A valid header is exactly `PATH` or `PATH#XXXX`; reject any other shape
+	// (selectors, non-hex tags, embedded `#`) so we never silently rewrite a
+	// path the model did not author.
+	if (pathPart.length === 0 || pathPart.includes(HL_FILE_HASH_SEP)) return targetPath;
+	return pathPart;
+}
+
+/** True when `targetPath` resolves into the session-local artifact sandbox.
+ *  Routes through {@link resolvePlanPath} so the guard and the eventual write
+ *  always agree on the absolute target (including bracketed hashline headers,
+ *  `local://` URLs, and bare absolute paths). Files inside the sandbox are not
+ *  part of the working tree, so plan mode treats them as freely writable
+ *  scratch/plan space. */
 function targetsLocalSandbox(session: ToolSession, targetPath: string): boolean {
-	const normalized = normalizeLocalScheme(targetPath);
-	if (normalized.startsWith(LOCAL_SCHEME_PREFIX)) return true;
-	if (!path.isAbsolute(normalized)) return false;
 	const root = localSandboxRoot(session);
 	if (!root) return false;
-	// Compare both raw and realpath-normalized forms so that
-	// `/tmp/…` vs `/private/tmp/…` (macOS) and other symlink-collapsed
-	// roots both resolve to the same sandbox identity.
-	const resolved = path.resolve(normalized);
-	if (isWithinRoot(resolved, root)) return true;
+	let resolved: string;
+	try {
+		resolved = resolvePlanPath(session, targetPath);
+	} catch {
+		return false;
+	}
+	if (!path.isAbsolute(resolved)) return false;
+	const absolute = path.resolve(resolved);
+	if (isWithinRoot(absolute, root)) return true;
+	// Compare realpath-normalized forms so that `/tmp/…` vs `/private/tmp/…`
+	// (macOS) and other symlink-collapsed roots both resolve to the same
+	// sandbox identity.
 	try {
 		const realRoot = fs.realpathSync.native(root);
-		if (isWithinRoot(resolved, realRoot)) return true;
-		// `resolved` itself may live in `/tmp/...` while `realRoot` is `/private/tmp/...`;
-		// realpath the parent dir of `resolved` so we catch that direction too.
-		const realParent = fs.realpathSync.native(path.dirname(resolved));
-		return isWithinRoot(path.join(realParent, path.basename(resolved)), realRoot);
+		if (isWithinRoot(absolute, realRoot)) return true;
+		const realParent = fs.realpathSync.native(path.dirname(absolute));
+		return isWithinRoot(path.join(realParent, path.basename(absolute)), realRoot);
 	} catch {
 		return false;
 	}
@@ -61,9 +91,13 @@ function targetsLocalSandbox(session: ToolSession, targetPath: string): boolean 
 /**
  * Resolve a write/edit target to its absolute filesystem path, honoring the
  * `local://` and `vault://` schemes. Plain paths resolve against the session cwd.
+ * Bracketed hashline headers (`[path#TAG]`) are unwrapped first so the inner
+ * filesystem path drives resolution — keeping the plan-mode guard and the
+ * eventual write in lockstep.
  */
 export function resolvePlanPath(session: ToolSession, targetPath: string): string {
-	const normalized = normalizeLocalScheme(targetPath);
+	const unwrapped = unwrapHashlineHeaderPath(targetPath);
+	const normalized = normalizeLocalScheme(unwrapped);
 	if (normalized.startsWith(LOCAL_SCHEME_PREFIX)) {
 		return resolveLocalUrlToPath(normalized, {
 			getArtifactsDir: session.getArtifactsDir,
