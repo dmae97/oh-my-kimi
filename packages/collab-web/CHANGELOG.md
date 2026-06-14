@@ -2,15 +2,6 @@
 
 ## [Unreleased]
 
-### Fixed
-
-- Fixed mobile layout issues where the entire chat flow would overflow horizontally and text was rendered too large on iOS Safari (by setting `text-size-adjust: 100%`)
-- Pinned the app shell grid to a single `minmax(0, 1fr)` column so a long session title can no longer set a min-content floor that pushes the header, transcript, and composer wider than narrow or in-app mobile viewports; the title now ellipsizes instead of clipping every row's right edge
-- Made transcript rows stack vertically on small screens to optimize reading space, and prevented grid track expansion
-- Hid non-essential metadata (such as the model name, thinking level, and working directory path) and context gauge tracks on mobile headers to prevent overflow
-- Wrapped composer button labels to display icon-only on mobile devices for a more compact and readable layout
-- Made the connect screen, ended session card, and notification toasts fully responsive for smaller device viewports
-
 ### Added
 
 - Added `16px` font-size overrides for all text inputs and textareas on mobile viewports to prevent iOS Safari from automatically zooming in the page on focus
@@ -43,6 +34,12 @@
 
 ### Fixed
 
+- Fixed mobile layout issues where the entire chat flow would overflow horizontally and text was rendered too large on iOS Safari (by setting `text-size-adjust: 100%`)
+- Pinned the app shell grid to a single `minmax(0, 1fr)` column so a long session title can no longer set a min-content floor that pushes the header, transcript, and composer wider than narrow or in-app mobile viewports; the title now ellipsizes instead of clipping every row's right edge
+- Made transcript rows stack vertically on small screens to optimize reading space, and prevented grid track expansion
+- Hid non-essential metadata (such as the model name, thinking level, and working directory path) and context gauge tracks on mobile headers to prevent overflow
+- Wrapped composer button labels to display icon-only on mobile devices for a more compact and readable layout
+- Made the connect screen, ended session card, and notification toasts fully responsive for smaller device viewports
 - Fixed mobile layout issues where the entire chat flow would overflow horizontally and text was rendered too large on iOS Safari (by setting `text-size-adjust: 100%`)
 - Made transcript rows stack vertically on small screens to optimize reading space, and prevented grid track expansion
 - Hid non-essential metadata (such as the model name, thinking level, and working directory path) and context gauge tracks on mobile headers to prevent overflow
