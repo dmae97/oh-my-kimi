@@ -36,8 +36,9 @@ function isWithinRoot(absolutePath: string, root: string): boolean {
  *  filesystem path drives both authorization and resolution. Only unwraps inputs
  *  that match the strict hashline header shape (`[path]` or `[path#XXXX]` with a
  *  4-hex tag); anything else returns the original string so the downstream
- *  resolver surfaces the real error. */
-function unwrapHashlineHeaderPath(targetPath: string): string {
+ *  resolver surfaces the real error. Exported for callers (e.g. `write`) that
+ *  make scheme/bridge-routing decisions before {@link resolvePlanPath} runs. */
+export function unwrapHashlineHeaderPath(targetPath: string): string {
 	const trimmed = targetPath.trimEnd();
 	if (
 		trimmed.length < HL_FILE_PREFIX.length + HL_FILE_SUFFIX.length ||
