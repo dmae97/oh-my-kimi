@@ -1,31 +1,47 @@
 name: "bun install (shared cache)"
 description: >
-   Run `bun install --frozen-lockfile` with a shared dependency cache. On
-   self-hosted omp-kata runners (where the sccache S3 credentials are injected)
-   the bun store and node_modules are cached in the in-cluster RustFS S3; every
-   other runner falls back to the stock actions/cache backend.
+   Ensure bun is on PATH, then run `bun install --frozen-lockfile` with a shared
+   dependency cache. bun setup is skipped when the runner image already ships it
+   (the preloaded omp-kata image), and only fetched on runners that lack it
+   (e.g. GitHub-hosted). The cache uses the in-cluster RustFS S3 when the sccache
+   credentials are present, and the stock actions/cache backend otherwise.
 
 runs:
    using: composite
    steps:
-      # The whole repo already keys "are we on hosted infra?" off
-      # $SCCACHE_BUCKET (see actions/build-native). RUNNER_ENVIRONMENT is empty
-      # on ARC pods, so it is not a usable signal here.
-      - name: Detect cache backend
-        id: backend
+      - name: Detect environment
+        id: env
         shell: bash
         run: |
+           # bun is baked into the omp-kata runner image — only fetch it when the
+           # runner doesn't already provide it (GitHub-hosted), so we don't
+           # re-download bun from GitHub releases on every job.
+           if command -v bun >/dev/null 2>&1; then
+             echo "setup_bun=false" >> "$GITHUB_OUTPUT"
+             echo "bun present: $(bun --version) (preloaded image)"
+           else
+             echo "setup_bun=true" >> "$GITHUB_OUTPUT"
+           fi
+           # The repo keys "are we on can.internal infra?" off $SCCACHE_BUCKET (see
+           # actions/build-native). RUNNER_ENVIRONMENT is empty on ARC pods, so it
+           # is not a usable signal here.
            if [ -n "${SCCACHE_BUCKET:-}" ] && [ -n "${AWS_ACCESS_KEY_ID:-}" ]; then
-             echo "kind=rustfs" >> "$GITHUB_OUTPUT"
+             echo "cache=rustfs" >> "$GITHUB_OUTPUT"
              echo "bun cache backend: RustFS S3 ($SCCACHE_BUCKET @ $SCCACHE_ENDPOINT)"
            else
-             echo "kind=gha" >> "$GITHUB_OUTPUT"
+             echo "cache=gha" >> "$GITHUB_OUTPUT"
              echo "bun cache backend: GitHub Actions cache"
-           fi
+      - name: Install bun when absent
+        if: steps.env.outputs.setup_bun == 'true'
+        shell: bash
+        run: |
+           export BUN_INSTALL="${HOME}/.bun"
+           curl -fsSL https://bun.sh/install | bash -s "bun-v1.3.14"
+           echo "${BUN_INSTALL}/bin" >> "$GITHUB_PATH"
 
       # Off-infra (GitHub-hosted): stock actions/cache for the bun store.
       - name: Cache bun store (GitHub cache)
-        if: steps.backend.outputs.kind == 'gha'
+        if: steps.env.outputs.cache == 'gha'
         uses: actions/cache@v4
         with:
            path: ~/.bun/install/cache
@@ -33,7 +49,7 @@ runs:
 
       # On-infra (omp-kata): RustFS store + node_modules over the LAN.
       - name: Restore bun caches (RustFS)
-        if: steps.backend.outputs.kind == 'rustfs'
+        if: steps.env.outputs.cache == 'rustfs'
         shell: bash
         run: bash "$GITHUB_ACTION_PATH/rustfs-cache.sh" restore
 
@@ -42,6 +58,6 @@ runs:
         run: bun install --frozen-lockfile
 
       - name: Save bun caches (RustFS)
-        if: steps.backend.outputs.kind == 'rustfs'
+        if: steps.env.outputs.cache == 'rustfs'
         shell: bash
         run: bash "$GITHUB_ACTION_PATH/rustfs-cache.sh" save
