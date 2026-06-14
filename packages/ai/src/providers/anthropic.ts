@@ -2311,10 +2311,11 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 	const cchFetch = oauthToken ? wrapFetchForCch(baseFetch) : baseFetch;
 	if (model.provider === "github-copilot") {
 		const copilotApiKey = parseGitHubCopilotApiKey(apiKey).accessToken;
+		// The GitHub Copilot Anthropic proxy doesn't accept Anthropic beta
+		// features (and the catalog already forces `supportsEagerToolInputStreaming
+		// = false` for this host, so `needsFineGrainedToolStreamingBeta` is true
+		// whenever tools are present). Forward only caller-supplied betas.
 		const betaFeatures = [...extraBetas];
-		if (needsFineGrainedToolStreamingBeta) {
-			betaFeatures.push(fineGrainedToolStreamingBeta);
-		}
 		const defaultHeaders = mergeHeaders(
 			{
 				Accept: stream ? "text/event-stream" : "application/json",
