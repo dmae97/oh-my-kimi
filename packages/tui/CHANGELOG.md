@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.13.0] - 2026-06-14
 ### Added
 
 - Added volatile speech-to-text preview support to `Editor` with `setVolatileText(text)`, `clearVolatileText()`, and `commitVolatileText(text)` so hosts can replace, discard, or commit live dictated text at the cursor without appending

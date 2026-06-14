@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.13.0] - 2026-06-14
+
 ### Added
 
 - Added support for a runtime `overrides` map in `RuntimeInstallSpec`, which is now written into generated runtime `package.json` manifests to force dependency pins (including transitive ones) across the runtime tree

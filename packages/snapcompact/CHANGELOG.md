@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.13.0] - 2026-06-14
+
 ### Added
 
 - Added two spacing-tuned frame variants to `SHAPE_VARIANTS`: `8on22-bw` (8x13 glyphs on a 22px pitch — extra line spacing) and `11on16-bw` (8x13 glyphs on an 11px advance — extra letter spacing). Both pin the indexed `stretch: false` path, so the native renderer draws natural-size glyphs on the padded cell box (the Rust path already advances by `cellWidth` and the new variants validate horizontal padding)

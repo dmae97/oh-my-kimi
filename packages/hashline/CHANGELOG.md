@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.13.0] - 2026-06-14
+
 ### Fixed
 
 - Normalized cwd-relative hashline paths to forward-slash form on Windows.

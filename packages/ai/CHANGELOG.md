@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.13.0] - 2026-06-14
+
 ### Fixed
 - Fixed OpenAI Responses/Realtime SSE stream handler crashing with "Error Code undefined: undefined" when parsing error events with nested error details by falling back to the nested error object fields.
 

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.13.0] - 2026-06-14
+
 ### Breaking Changes
 
 - Replaced the `omp setup stt` command with `omp setup speech`. The old `stt` setup component is gone (no alias); `omp setup speech` now provisions the full speech stack — audio recorder, speech-to-text model, and text-to-speech model.
