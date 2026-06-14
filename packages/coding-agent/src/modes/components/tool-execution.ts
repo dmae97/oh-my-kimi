@@ -624,6 +624,18 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 	isTranscriptBlockCommitStable(): boolean {
 		if (this.#displaceable) return false;
 		if (this.isTranscriptBlockFinalized()) return true;
+		// `provisionalPendingPreview` describes only the PENDING call preview
+		// (`renderCall`, before any result): the result render may re-anchor it
+		// wholesale, so its rows must never commit. Once a (streaming partial)
+		// result exists the result renderer is the live shape — its body is
+		// top-anchored and grows append-only, and `deriveLiveCommitState` gates
+		// per-row durability — so the block is commit-stable like any settled
+		// stream. Gating the flag on the pending phase is what keeps a collapsed
+		// streaming eval/bash/ssh whose box outgrows the viewport from stranding
+		// its head: while commit-unstable its scrolled-off top committed nowhere
+		// and repainted nowhere, so it read as truncated until ctrl+o (expanded)
+		// flipped it stable.
+		if (this.#result !== undefined) return true;
 		const tool = this.#tool as { provisionalPendingPreview?: boolean | "collapsed" } | undefined;
 		const provisionalPendingPreview =
 			tool?.provisionalPendingPreview ?? toolRenderers[this.#toolName]?.provisionalPendingPreview;
