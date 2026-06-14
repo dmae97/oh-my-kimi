@@ -1026,7 +1026,6 @@ export class CommandController {
 		}
 		this.ctx.statusContainer.clear();
 
-		this.ctx.chatContainer.addChild(new Spacer(1));
 		const label = isAuto ? "Auto-compacting context... (esc to cancel)" : "Compacting context... (esc to cancel)";
 		const compactingLoader = new Loader(
 			this.ctx.ui,
@@ -1047,6 +1046,8 @@ export class CommandController {
 					: undefined;
 			await this.ctx.session.compact(instructions, options);
 
+			compactingLoader.stop();
+			this.ctx.statusContainer.clear();
 			this.ctx.rebuildChatFromMessages();
 
 			this.ctx.statusLine.invalidate();
