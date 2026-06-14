@@ -103,10 +103,9 @@ export async function writeManagedSkill(input: WriteManagedSkillInput): Promise<
 	}
 	const dir = path.join(getManagedSkillsDir(), name);
 	const file = path.join(dir, "SKILL.md");
-	// Reject a symlinked skill directory or SKILL.md: Bun.write follows symlinks,
-	// so a planted link could escape the isolated managed root and clobber a file
-	// elsewhere (e.g. a user-authored skill). lstat does not follow the final
-	// component; an intermediate symlinked `dir` is caught before the file check.
+	// Reject a symlinked skill directory: an intermediate symlink would let the
+	// write escape the isolated managed root (e.g. clobber a user-authored skill).
+	// lstat does not follow the final component, so a symlinked `dir` is caught here.
 	const dirStat = await fs.lstat(dir).catch(err => {
 		if (isEnoent(err)) return null;
 		throw err;
@@ -116,21 +115,31 @@ export async function writeManagedSkill(input: WriteManagedSkillInput): Promise<
 			`Managed skill "${name}" resolves through a symlink; refusing to write outside the managed directory.`,
 		);
 	}
-	const fileStat = dirStat
-		? await fs.lstat(file).catch(err => {
-				if (isEnoent(err)) return null;
-				throw err;
-			})
-		: null;
-	if (fileStat?.isSymbolicLink()) {
-		throw new Error(`Managed skill "${name}" SKILL.md is a symlink; refusing to overwrite it.`);
+	if (input.action === "create") {
+		await fs.mkdir(dir, { recursive: true });
+		// O_CREAT|O_EXCL ("wx"): atomic create that fails if the file already
+		// exists — closing the check-then-write race two concurrent creates would
+		// otherwise lose — and refuses to follow a symlinked SKILL.md (EEXIST).
+		try {
+			await fs.writeFile(file, content, { flag: "wx" });
+		} catch (err) {
+			if ((err as { code?: string }).code === "EEXIST") {
+				throw new Error(`Managed skill "${name}" already exists. Use action "update" to change it.`);
+			}
+			throw err;
+		}
+		return { path: file };
 	}
-	const exists = fileStat !== null;
-	if (input.action === "create" && exists) {
-		throw new Error(`Managed skill "${name}" already exists. Use action "update" to change it.`);
-	}
-	if (input.action === "update" && !exists) {
+	// update: the file must already exist and must not be a symlink.
+	const fileStat = await fs.lstat(file).catch(err => {
+		if (isEnoent(err)) return null;
+		throw err;
+	});
+	if (fileStat === null) {
 		throw new Error(`Managed skill "${name}" does not exist. Use action "create" to add it.`);
+	}
+	if (fileStat.isSymbolicLink()) {
+		throw new Error(`Managed skill "${name}" SKILL.md is a symlink; refusing to overwrite it.`);
 	}
 	await Bun.write(file, content);
 	return { path: file };
