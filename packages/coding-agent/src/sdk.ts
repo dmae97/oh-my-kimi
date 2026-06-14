@@ -34,7 +34,6 @@ import {
 	prompt,
 	Snowflake,
 } from "@oh-my-pi/pi-utils";
-import chalk from "chalk";
 import { type AsyncJob, AsyncJobManager } from "./async";
 import { AutoLearnController, buildAutoLearnInstructions } from "./autolearn/controller";
 import { loadCapability } from "./capability";
@@ -98,6 +97,7 @@ import {
 	type MCPToolsLoadResult,
 	parseMCPToolName,
 } from "./mcp";
+import { MCP_CONNECTING_EVENT_CHANNEL, type McpConnectingEvent } from "./mcp/startup-events";
 import { createSessionMemoryRuntimeContext, resolveMemoryBackend } from "./memory-backend";
 import type { MnemopiSessionState } from "./mnemopi/state";
 import asyncResultTemplate from "./prompts/tools/async-result.md" with { type: "text" };
@@ -318,10 +318,6 @@ type DeferredMCPActivation = {
 	explicitlyRequestedMCPToolNames: string[];
 	activateAllMCPTools: boolean;
 };
-
-function formatMCPConnectingMessage(serverNames: string[]): string {
-	return `Connecting to MCP servers: ${serverNames.join(", ")}…`;
-}
 
 function createPendingMCPTool(name: string): Tool {
 	const parsed = parseMCPToolName(name);
@@ -1602,7 +1598,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			| undefined;
 		const onMCPConnecting = (serverNames: string[]) => {
 			if (!options.hasUI || serverNames.length === 0) return;
-			process.stderr.write(`${chalk.gray(formatMCPConnectingMessage(serverNames))}\n`);
+			eventBus.emit(MCP_CONNECTING_EVENT_CHANNEL, { serverNames } satisfies McpConnectingEvent);
 		};
 		const mcpDiscoverOptions = {
 			onConnecting: onMCPConnecting,
