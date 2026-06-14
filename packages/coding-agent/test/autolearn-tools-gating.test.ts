@@ -71,6 +71,20 @@ describe("autolearn tool gating", () => {
 		expect(noBackend).toContain("manage_skill");
 		expect(noBackend).not.toContain("learn");
 	});
+
+	it("offers learn with the file-based local backend", async () => {
+		const names = (await createTools(makeSession({ "autolearn.enabled": true, "memory.backend": "local" }))).map(
+			t => t.name,
+		);
+		expect(names).toContain("learn");
+		expect(names).toContain("manage_skill");
+
+		// Force-included into an explicit restricted toolNames list too.
+		const restricted = (
+			await createTools(makeSession({ "autolearn.enabled": true, "memory.backend": "local" }), ["read"])
+		).map(t => t.name);
+		expect(restricted).toContain("learn");
+	});
 });
 
 describe("manage_skill execute", () => {

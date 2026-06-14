@@ -1,6 +1,7 @@
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { z } from "zod/v4";
 import { writeManagedSkill } from "../autolearn/managed-skills";
+import { localBackend } from "../memory-backend/local-backend";
 import learnDescription from "../prompts/tools/learn.md" with { type: "text" };
 import type { ToolSession } from ".";
 
@@ -24,11 +25,15 @@ export type LearnParams = z.infer<typeof learnSchema>;
  * Orchestrating "learn" tool: persists a lesson to long-term memory and,
  * given a `skill` payload, mints/enhances a managed skill via the shared
  * `writeManagedSkill` primitive. Gated behind `autolearn.enabled` plus a live
- * memory backend (the memory half needs one).
+ * memory backend — `hindsight`/`mnemopi` (remote/SQLite) or `local` (the
+ * file-based rollout backend, where lessons append to `learned.md`).
  */
 export class LearnTool implements AgentTool<typeof learnSchema> {
 	readonly name = "learn";
-	readonly approval = (args: unknown) => ((args as Partial<LearnParams>).skill ? "write" : "read");
+	readonly approval = (args: unknown) =>
+		(args as Partial<LearnParams>).skill || this.session.settings.get("memory.backend") === "local"
+			? "write"
+			: "read";
 	readonly label = "Learn";
 	readonly description = learnDescription;
 	readonly parameters = learnSchema;
@@ -41,7 +46,7 @@ export class LearnTool implements AgentTool<typeof learnSchema> {
 	static createIf(session: ToolSession): LearnTool | null {
 		if (!session.settings.get("autolearn.enabled")) return null;
 		const backend = session.settings.get("memory.backend");
-		if (backend !== "hindsight" && backend !== "mnemopi") return null;
+		if (backend !== "hindsight" && backend !== "mnemopi" && backend !== "local") return null;
 		return new LearnTool(session);
 	}
 
@@ -68,6 +73,14 @@ export class LearnTool implements AgentTool<typeof learnSchema> {
 				veracity: "tool",
 				memoryType: "fact",
 			});
+		} else if (backend === "local") {
+			const result = await localBackend.save?.(
+				{ agentDir: this.session.settings.getAgentDir(), cwd: this.session.settings.getCwd() },
+				{ content: params.memory, context: params.context, source: "coding-agent-learn", importance: 0.8 },
+			);
+			if (!result || result.stored === 0) {
+				throw new Error("Lesson was empty after sanitization; nothing stored.");
+			}
 		} else {
 			const state = this.session.getHindsightSessionState?.();
 			if (!state) {

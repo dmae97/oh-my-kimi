@@ -23,11 +23,12 @@ const DEFAULT_MIN_TOOL_CALLS = 5;
 /**
  * Build the standing auto-learn guidance for the system prompt, or null when
  * the feature is disabled. The `learn` addendum is included only when a memory
- * backend is live (the `learn` tool requires one).
+ * backend is live (the `learn` tool requires one — `hindsight`, `mnemopi`, or
+ * the file-based `local` backend).
  */
 export function buildAutoLearnInstructions(settings: Settings): string | null {
 	if (!settings.get("autolearn.enabled")) return null;
-	const learnEnabled = ["hindsight", "mnemopi"].includes(settings.get("memory.backend") ?? "");
+	const learnEnabled = ["hindsight", "mnemopi", "local"].includes(settings.get("memory.backend") ?? "");
 	const parts = [autolearnGuidance.trim()];
 	if (learnEnabled) parts.push(autolearnGuidanceLearn.trim());
 	return parts.join("\n\n");

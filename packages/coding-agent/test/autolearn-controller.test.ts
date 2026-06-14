@@ -183,6 +183,14 @@ describe("buildAutoLearnInstructions", () => {
 		expect(text).toContain("long-term memory");
 	});
 
+	it("includes the learn addendum for the file-based local backend", () => {
+		const text = buildAutoLearnInstructions(
+			Settings.isolated({ "autolearn.enabled": true, "memory.backend": "local" }),
+		);
+		expect(text).toContain("manage_skill");
+		expect(text).toContain("long-term memory");
+	});
+
 	it("omits the learn addendum when no memory backend is configured", () => {
 		const text = buildAutoLearnInstructions(
 			Settings.isolated({ "autolearn.enabled": true, "memory.backend": "off" }),

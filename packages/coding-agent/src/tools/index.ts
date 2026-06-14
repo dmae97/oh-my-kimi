@@ -532,7 +532,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		if (session.settings.get("autolearn.enabled")) {
 			if (!requestedTools.includes("manage_skill")) requestedTools.push("manage_skill");
 			if (
-				["hindsight", "mnemopi"].includes(session.settings.get("memory.backend") ?? "") &&
+				["hindsight", "mnemopi", "local"].includes(session.settings.get("memory.backend") ?? "") &&
 				!requestedTools.includes("learn")
 			) {
 				requestedTools.push("learn");
@@ -575,7 +575,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		if (name === "learn") {
 			return (
 				session.settings.get("autolearn.enabled") &&
-				["hindsight", "mnemopi"].includes(session.settings.get("memory.backend") ?? "")
+				["hindsight", "mnemopi", "local"].includes(session.settings.get("memory.backend") ?? "")
 			);
 		}
 		if (name === "task") {
