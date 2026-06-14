@@ -699,6 +699,14 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				if (!firstTokenTime) firstTokenTime = Date.now();
 				appendText(output, stream, text);
 			};
+			// Tracks the last full cumulative reasoning snapshot per signature (the
+			// reasoning field name) so dedup survives block transitions. Required
+			// for MiniMax-M3: once `</think>` and visible text arrive, currentBlock
+			// flips to "text", but later chunks keep carrying the same cumulative
+			// `reasoning_content` snapshot. Without an external tracker the guard
+			// below misses and the snapshot gets re-emitted as a fresh thinking
+			// block after the answer has started.
+			const lastCumulativeReasoningBySignature = new Map<string, string>();
 			const appendThinkingDelta = (
 				thinking: string,
 				signature?: string,
@@ -706,13 +714,13 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 			): void => {
 				if (!thinking) return;
 				let emittedThinking = thinking;
-				if (
-					source === "cumulative" &&
-					currentBlock?.type === "thinking" &&
-					(signature === undefined || currentBlock.thinkingSignature === signature) &&
-					thinking.startsWith(currentBlock.thinking)
-				) {
-					emittedThinking = thinking.slice(currentBlock.thinking.length);
+				if (source === "cumulative") {
+					const key = signature ?? "";
+					const lastSnapshot = lastCumulativeReasoningBySignature.get(key) ?? "";
+					if (thinking.startsWith(lastSnapshot)) {
+						emittedThinking = thinking.slice(lastSnapshot.length);
+					}
+					lastCumulativeReasoningBySignature.set(key, thinking);
 					if (!emittedThinking) return;
 				}
 				if (!firstTokenTime) firstTokenTime = Date.now();
