@@ -19,6 +19,7 @@
 - Fixed a crash in subagent task execution and extensions when a string (instead of a string array) was returned or set for the system prompt. Gracefully wrap string values in arrays.
 - Fixed profile bootstrap so an extension-shadowed `--plan` flag no longer swallows a following global `--profile`.
 - Fixed MCP OAuth URL-keyed credentials to stay profile-scoped under shared auth-broker storage and to clear discovered definition-only server auth during `/mcp unauth`.
+- Fixed auto-learn managed skills to use the active profile's agent directory, so authored profile skills keep priority over managed fallbacks.
 
 ## [15.13.0] - 2026-06-14
 

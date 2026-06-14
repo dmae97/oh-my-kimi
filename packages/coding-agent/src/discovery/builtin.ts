@@ -303,7 +303,7 @@ async function loadSkills(ctx: LoadContext): Promise<LoadResult<Skill>> {
 const MANAGED_SKILLS_PRIORITY = 5;
 async function loadManagedSkills(ctx: LoadContext): Promise<LoadResult<Skill>> {
 	return scanSkillsFromDir(ctx, {
-		dir: getManagedSkillsDir(ctx.home),
+		dir: getManagedSkillsDir(),
 		providerId: MANAGED_SKILLS_PROVIDER_ID,
 		level: "user",
 		requireDescription: true,
