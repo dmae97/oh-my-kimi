@@ -85,6 +85,7 @@
 - Fixed Claude Code marketplace plugin skills installed under `skills/<name>/SKILL.md` to also appear as bare slash commands such as `/understand`, matching Claude-native plugin docs. The slash command name is taken from the skill directory basename so display-style frontmatter names like `name: Understand Anything` still resolve to `/understand` ([#2415](https://github.com/can1357/oh-my-pi/issues/2415)).
 - Fixed ACP `/move` builtin test expectations to compare the resolved destination path so the test is portable on Windows and Unix ([#2381](https://github.com/can1357/oh-my-pi/pull/2381) by [@oldschoola](https://github.com/oldschoola)).
 - Fixed vLLM discovery so `providers.vllm.baseUrl` drives the built-in endpoint, additional OpenAI-compatible vLLM provider IDs work through `openai-models-list`, and discovered `max_model_len` or fallback `context_length` values set context windows instead of falling back to 128k.
+- Fixed extension discovery ignoring package directories symlinked into an `extensions/` directory.
 
 ### Removed
 
@@ -165,7 +166,6 @@
 - Fixed model listings so providers registered via extensions are now included from `-e` and configured `extensions` sources
 - Fixed `/mcp reauth`, `/mcp test`, and `/mcp unauth` to find and operate on MCP servers reported by `/mcp list` even when they are only runtime-discovered and not stored in writable config, including namespaced plugin servers like `cloudflare:cloudflare-api`
 - Fixed MCP server name validation so colon-namespaced server IDs are accepted when persisting reauth overrides so namespaced OAuth MCP servers can be stored in user config as `server:subserver` entries
-- Fixed extension discovery ignoring package directories symlinked into an `extensions/` directory.
 - Retried assistant turns that stop with reasoning/thinking only and no final text or tool call, so Gemini/Antigravity thought-only `STOP` responses continue instead of silently ending the session.
 - Fixed `~/.agent[s]/skills` not appearing as `/skill:<name>` commands when every named source toggle (`skills.enableCodexUser`, `skills.enableClaudeUser`, `skills.enableClaudeProject`, `skills.enablePiUser`, `skills.enablePiProject`) was off: `loadSkills` gated the `agents` provider on `anyBuiltInSkillSourceEnabled`, so a user who turned off the Claude/Codex/Pi sources to clean noise also lost their own canonical OMP-native skills. The `agents` provider now reads the dedicated `enableAgentsUser`/`enableAgentsProject` toggles, decoupled from the third-party fall-through ([#2401](https://github.com/can1357/oh-my-pi/issues/2401)).
 - Fixed Windows PowerShell image paste so Ctrl+V can fall back to the PowerShell clipboard bridge when the native clipboard reader reports no image ([#2429](https://github.com/can1357/oh-my-pi/issues/2429)).
