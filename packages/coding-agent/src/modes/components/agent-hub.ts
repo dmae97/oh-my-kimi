@@ -267,6 +267,15 @@ export class AgentHubOverlayComponent extends Container {
 		this.#refreshRows();
 	}
 
+	/**
+	 * Whether the table view has no agents to show (every registered agent except
+	 * Main, after the persisted-subagent scan in the constructor). The double-←
+	 * gesture reads this to stay inert when there is nothing to open.
+	 */
+	get isEmpty(): boolean {
+		return this.#rows.length === 0;
+	}
+
 	/** Tear down every subscription and timer. Called by the overlay owner on close. */
 	dispose(): void {
 		for (const unsubscribe of this.#unsubscribers.splice(0)) unsubscribe();
