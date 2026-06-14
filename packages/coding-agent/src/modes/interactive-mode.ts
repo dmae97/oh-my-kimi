@@ -2280,6 +2280,15 @@ export class InteractiveMode implements InteractiveModeContext {
 			planFilePath: options.planFilePath,
 			contextPreserved: options.preserveContext === true,
 		});
+		// The executor's first turn must start on an idle session. The agent may still
+		// be streaming the post-`resolve` continuation (Agent.#emit is fire-and-forget)
+		// or a turn kicked off by the compaction/clear above; prompt() would then throw
+		// AgentBusyError ("Failed to finalize approved plan"). Abort the now-irrelevant
+		// in-flight turn first — abort() bumps the prompt generation and cancels pending
+		// continuations, so nothing re-streams in the synchronous gap before prompt().
+		if (this.session.isStreaming) {
+			await this.session.abort();
+		}
 		await this.session.prompt(planModePrompt, { synthetic: true });
 	}
 

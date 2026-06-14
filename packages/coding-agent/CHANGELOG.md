@@ -64,6 +64,10 @@
 - Fixed `Alt+Up` (dequeue) reporting "No queued messages to restore" for messages — including skills — typed while the session was compacting. `restoreQueuedMessagesToEditor` now drains `compactionQueuedMessages` alongside the agent queue, so the `Alt+Up to edit` hint restores every pending message it advertises.
 - Fixed `restoreQueuedMessagesToEditor` (Alt+Up dequeue and Esc-abort) producing colliding `[Image #N]` markers when the editor draft already held pending image(s): queued text was prepended but queued images were appended, so positional marker → image lookup at submit time resolved to the wrong image. Each queued message's image markers are now renumbered by the running pending-image count before merge so the combined text stays aligned with the merged `pendingImages` order ([#2531](https://github.com/can1357/oh-my-pi/issues/2531)).
 
+### Fixed
+
+- Fixed `AgentBusyError` ("Agent is already processing. Use steer() or followUp()...") surfacing on mode transitions — as `Failed to finalize approved plan: ...` when a plan was approved while the agent was still streaming the post-`resolve` continuation (or a turn started by the approve-time compaction/clear), and as an error toast when a loop auto-submit or goal continuation fired during a streaming/compaction race. Plan approval now aborts any in-flight turn before dispatching the executor's first prompt, and `submitInteractiveInput` routes streaming-time loop, goal-continuation, and manual submissions through the follow-up queue (`streamingBehavior: "followUp"`) instead of throwing (synthetic continue-shortcuts stay developer-attributed and keep their prior behavior). Extends the manual-`/goal` fix in [#2454](https://github.com/can1357/oh-my-pi/issues/2454) to the continuation and plan-approval paths.
+
 ## [15.12.5] - 2026-06-13
 ### Changed
 

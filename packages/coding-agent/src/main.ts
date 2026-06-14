@@ -265,7 +265,7 @@ export async function submitInteractiveInput(
 		InteractiveMode,
 		"markPendingSubmissionStarted" | "finishPendingSubmission" | "showError" | "checkShutdownRequested"
 	>,
-	session: Pick<AgentSession, "prompt" | "promptCustomMessage">,
+	session: Pick<AgentSession, "prompt" | "promptCustomMessage" | "isStreaming">,
 	input: SubmittedUserInput,
 ): Promise<void> {
 	if (input.cancelled) {
@@ -274,22 +274,32 @@ export async function submitInteractiveInput(
 
 	try {
 		using _keepalive = new EventLoopKeepalive();
+		const streamingBehavior = session.isStreaming ? ("followUp" as const) : undefined;
 		// Continue shortcuts submit an already-started synthetic developer prompt with
 		// no optimistic user message.
 		if (!input.started && !mode.markPendingSubmissionStarted(input)) {
 			return;
 		}
 		if (input.customType) {
-			await session.promptCustomMessage({
+			const message = {
 				customType: input.customType,
 				content: input.text,
 				display: input.display ?? false,
-				attribution: "agent",
-			});
+				attribution: "agent" as const,
+			};
+			await (streamingBehavior
+				? session.promptCustomMessage(message, { streamingBehavior })
+				: session.promptCustomMessage(message));
 		} else if (input.synthetic) {
+			// Synthetic continue shortcuts are hidden developer prompts. The streaming
+			// queue (#queueUserMessage) only carries user-attributed messages, so we do
+			// NOT pass streamingBehavior here: queueing would silently demote the
+			// developer directive to a visible user message. A synthetic submit while
+			// streaming keeps its prior behavior (rejected as busy) rather than changing
+			// its role.
 			await session.prompt(input.text, { synthetic: true, expandPromptTemplates: false });
 		} else {
-			await session.prompt(input.text, { images: input.images });
+			await session.prompt(input.text, { images: input.images, ...(streamingBehavior && { streamingBehavior }) });
 		}
 	} catch (error: unknown) {
 		const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
