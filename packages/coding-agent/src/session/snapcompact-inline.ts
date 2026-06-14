@@ -485,7 +485,10 @@ export class SnapcompactInlineTransformer {
 			const frames = this.#framesFor(this.#toolCache, swap.id, target.text, shape);
 			messages[target.index] = { ...target.message, content: [{ type: "text", text: toolResultNote }, ...frames] };
 			changed = true;
-			savings.push({ toolCallId: swap.id, savedTokens: Math.max(0, swap.textTokens - swap.frames * shape.frameTokenEstimate) });
+			savings.push({
+				toolCallId: swap.id,
+				savedTokens: Math.max(0, swap.textTokens - swap.frames * shape.frameTokenEstimate),
+			});
 		}
 		if (savings.length > 0) this.onToolResultSavings?.(savings, model);
 		if (this.options.renderToolResults) {

@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
 - Added `snapcompact-savings.jsonl` journaling for snapcompact tool-result compaction, recording session, provider, model, tool call, and estimated token savings whenever tool output is rendered as image frames
@@ -9,6 +10,10 @@
 - Added a `fastModeScope` setting (`both` | `openai` | `claude`, default `both`) controlling which providers `/fast on` (and the fast-mode toggle) target. `both` keeps the prior unscoped priority behavior; `openai`/`claude` scope fast mode to one family. `/fast status` now reports the active scope.
 - Added the `mnemopi.embeddingVariant` setting (`en` | `multilingual`) selecting a stronger SOTA local embedding model — `en` → `BAAI/bge-base-en-v1.5` (768d), `multilingual` → `intfloat/multilingual-e5-large` (1024d). Resolution precedence is `mnemopi.embeddingModel` setting > `MNEMOPI_EMBEDDING_MODEL` env > variant default, so the documented env override is still honored. Changing the active model wipes and rebuilds stored embeddings on the next writable start ([#2476](https://github.com/can1357/oh-my-pi/issues/2476))
 - Added a `/guided-goal` slash command that interviews you to refine an objective before enabling goal mode, then seeds goal mode with the agreed objective. The bounded interview (up to six turns) runs on the plan or slow model and falls back with a hint when the goal is still too vague ([#2502](https://github.com/can1357/oh-my-pi/issues/2502)).
+
+### Changed
+
+- Changed `handoff` custom messages (`customType: "handoff"`) to render in the transcript as a compaction-style expandable divider in both the main session and Agent Hub views, and expanded handoff details now show the handoff context body without `<handoff-context>` tags
 
 ### Fixed
 

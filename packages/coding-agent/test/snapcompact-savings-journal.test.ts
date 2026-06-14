@@ -72,11 +72,11 @@ describe("snapcompact savings journal", () => {
 
 	it("writes nothing without a session or for non-positive savings", async () => {
 		const journal = await tmpJournal();
-		await createSnapcompactSavingsRecorder(() => null, journal)([{ toolCallId: "call_1", savedTokens: 5000 }], model());
-		await createSnapcompactSavingsRecorder(
-			() => "/proj/session.jsonl",
-			journal,
-		)(
+		await createSnapcompactSavingsRecorder(() => null, journal)(
+			[{ toolCallId: "call_1", savedTokens: 5000 }],
+			model(),
+		);
+		await createSnapcompactSavingsRecorder(() => "/proj/session.jsonl", journal)(
 			[
 				{ toolCallId: "call_zero", savedTokens: 0 },
 				{ toolCallId: "call_neg", savedTokens: -10 },

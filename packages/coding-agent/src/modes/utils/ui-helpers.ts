@@ -8,7 +8,10 @@ import { AssistantMessageComponent } from "../../modes/components/assistant-mess
 import { BashExecutionComponent } from "../../modes/components/bash-execution";
 import { BranchSummaryMessageComponent } from "../../modes/components/branch-summary-message";
 import { CollabPromptMessageComponent } from "../../modes/components/collab-prompt-message";
-import { CompactionSummaryMessageComponent } from "../../modes/components/compaction-summary-message";
+import {
+	CompactionSummaryMessageComponent,
+	createHandoffSummaryMessageComponent,
+} from "../../modes/components/compaction-summary-message";
 import { CustomMessageComponent } from "../../modes/components/custom-message";
 import { DynamicBorder } from "../../modes/components/dynamic-border";
 import { EvalExecutionComponent } from "../../modes/components/eval-execution";
@@ -234,6 +237,14 @@ export class UiHelpers {
 						);
 						this.ctx.chatContainer.addChild(card);
 						return [card];
+					}
+					const handoffComponent = createHandoffSummaryMessageComponent(
+						message as CustomMessage<unknown>,
+						this.ctx.toolOutputExpanded,
+					);
+					if (handoffComponent) {
+						this.ctx.chatContainer.addChild(handoffComponent);
+						break;
 					}
 					const renderer = this.ctx.viewSession.extensionRunner?.getMessageRenderer(message.customType);
 					// Both HookMessage and CustomMessage have the same structure, cast for compatibility
