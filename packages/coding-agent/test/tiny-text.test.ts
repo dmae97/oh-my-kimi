@@ -69,8 +69,8 @@ describe("formatTitleUserMessage", () => {
 
 describe("normalizeGeneratedTitle", () => {
 	it("returns the cleaned first line of a real title", () => {
-		expect(normalizeGeneratedTitle('"Investigate the resolver"')).toBe("Investigate the resolver");
-		expect(normalizeGeneratedTitle("Investigate the resolver.")).toBe("Investigate the resolver");
+		expect(normalizeGeneratedTitle('"Investigate the resolver"')).toBe("Investigate The Resolver");
+		expect(normalizeGeneratedTitle("Investigate the resolver.")).toBe("Investigate The Resolver");
 	});
 
 	it("treats the bare none sentinel as no title (case/punctuation-insensitive)", () => {
@@ -81,7 +81,7 @@ describe("normalizeGeneratedTitle", () => {
 	});
 
 	it("keeps a title that merely contains the word none", () => {
-		expect(normalizeGeneratedTitle("Explain python None keyword")).toBe("Explain python None keyword");
+		expect(normalizeGeneratedTitle("Explain python None keyword")).toBe("Explain Python None Keyword");
 	});
 
 	it("returns null for empty or whitespace-only output", () => {

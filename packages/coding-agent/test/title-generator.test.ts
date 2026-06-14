@@ -291,7 +291,7 @@ describe("title generator", () => {
 			createSettings(model),
 		);
 
-		expect(title).toBe("Add OAuth authentication");
+		expect(title).toBe("Add OAuth Authentication");
 		const request = completeSimpleMock.mock.calls[0]?.[1] as { systemPrompt?: string[]; tools?: unknown };
 		const options = completeSimpleMock.mock.calls[0]?.[2] as { toolChoice?: unknown };
 		expect(request?.tools).toBeUndefined();
@@ -312,7 +312,7 @@ describe("title generator", () => {
 			createSettings(model),
 		);
 
-		expect(title).toBe("Investigate the resolver");
+		expect(title).toBe("Investigate The Resolver");
 		expect((completeSimpleMock.mock.calls[0]?.[1] as { tools?: unknown }).tools).toBeUndefined();
 		expect((completeSimpleMock.mock.calls[0]?.[2] as { toolChoice?: unknown }).toolChoice).toBeUndefined();
 	});
@@ -330,7 +330,7 @@ describe("title generator", () => {
 			createSettings(model),
 		);
 
-		expect(title).toBe("Fix login button on mobile");
+		expect(title).toBe("Fix Login Button On Mobile");
 	});
 
 	it("strips an unclosed <title> tag from a truncated response", async () => {
@@ -346,7 +346,7 @@ describe("title generator", () => {
 			createSettings(model),
 		);
 
-		expect(title).toBe("Refactor API client error handling");
+		expect(title).toBe("Refactor API Client Error Handling");
 	});
 
 	it("appends the marker instruction after a custom prompt in marker mode", async () => {
@@ -367,7 +367,7 @@ describe("title generator", () => {
 			customPrompt,
 		);
 
-		expect(title).toBe("fix:resolver");
+		expect(title).toBe("Fix:Resolver");
 		const request = completeSimpleMock.mock.calls[0]?.[1] as { systemPrompt?: string[] };
 		expect(request?.systemPrompt).toHaveLength(2);
 		expect(request?.systemPrompt?.[0]).toBe(customPrompt);
