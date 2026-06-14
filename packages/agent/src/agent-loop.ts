@@ -11,8 +11,8 @@ import {
 	isZodSchema,
 	streamSimple,
 	type ToolResultMessage,
-	type UserMessage,
 	type TSchema,
+	type UserMessage,
 	validateToolArguments,
 	zodToWireSchema,
 } from "@oh-my-pi/pi-ai";
@@ -1048,17 +1048,26 @@ async function streamAssistantResponse(
 					partialMessage.stopReason = "error";
 					partialMessage.errorMessage = `Repetition loop detected: assistant repeated "${pattern.trim()}" ${count} times consecutively.`;
 				}
-				const finalMsg = snapshotAssistantMessage(partialMessage ?? {
-					role: "assistant",
-					content: [],
-					api: config.model.api,
-					provider: config.model.provider,
-					model: config.model.id,
-					usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-					stopReason: "error",
-					errorMessage: `Repetition loop detected.`,
-					timestamp: Date.now(),
-				});
+				const finalMsg = snapshotAssistantMessage(
+					partialMessage ?? {
+						role: "assistant",
+						content: [],
+						api: config.model.api,
+						provider: config.model.provider,
+						model: config.model.id,
+						usage: {
+							input: 0,
+							output: 0,
+							cacheRead: 0,
+							cacheWrite: 0,
+							totalTokens: 0,
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+						},
+						stopReason: "error",
+						errorMessage: `Repetition loop detected.`,
+						timestamp: Date.now(),
+					},
+				);
 				if (addedPartial) {
 					context.messages[context.messages.length - 1] = finalMsg;
 				} else {
@@ -1183,7 +1192,10 @@ async function streamAssistantResponse(
 									const repetition = detectRepetition(fullText);
 									if (repetition) {
 										const [pattern, count] = repetition;
-										logger.warn("Repetition loop detected during assistant stream, aborting.", { pattern, count });
+										logger.warn("Repetition loop detected during assistant stream, aborting.", {
+											pattern,
+											count,
+										});
 										return await finishRepetitionStream(pattern, count);
 									}
 								}
@@ -1841,4 +1853,3 @@ function truncateRepetition(message: AssistantMessage, pattern: string, count: n
 		}
 	}
 }
-
