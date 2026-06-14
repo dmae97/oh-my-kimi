@@ -934,7 +934,10 @@ export async function processResponsesStream<TApi extends Api>(
 			// reaches the SDK stream), actively releasing the connection.
 			break;
 		} else if (event.type === "error") {
-			throw new Error(`Error Code ${event.code}: ${event.message}`);
+			const err = (event as any).error ?? event;
+			const code = err.code ?? "unknown";
+			const message = err.message ?? "no message";
+			throw new Error(`Error Code ${code}: ${message}`);
 		} else if (event.type === "response.failed") {
 			populateResponsesUsageFromResponse(output, event.response?.usage);
 			const error = event.response?.error ?? (event.response as any)?.status_details?.error;
