@@ -752,6 +752,16 @@ export class Settings {
 			delete taskObj.simple;
 		}
 
+		// task.eager / todo.eager: boolean -> enum (default | preferred | always).
+		// `true` reproduced the previous "on" behavior, which is now `always`.
+		if (taskObj && typeof taskObj.eager === "boolean") {
+			taskObj.eager = taskObj.eager ? "always" : "default";
+		}
+		const todoObj = raw.todo as Record<string, unknown> | undefined;
+		if (todoObj && typeof todoObj.eager === "boolean") {
+			todoObj.eager = todoObj.eager ? "always" : "default";
+		}
+
 		// task.isolation.mode: legacy values from before the pi-iso PAL refactor.
 		// `worktree` was git worktree → now lives under `rcopy`. `fuse-overlay`
 		// and `fuse-projfs` are now the platform-named `overlayfs` / `projfs`

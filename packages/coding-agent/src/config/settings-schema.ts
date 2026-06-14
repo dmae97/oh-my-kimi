@@ -2772,13 +2772,23 @@ export const SETTINGS_SCHEMA = {
 	},
 
 	"todo.eager": {
-		type: "boolean",
-		default: false,
+		type: "enum",
+		values: ["default", "preferred", "always"] as const,
+		default: "default",
 		ui: {
 			tab: "tools",
 			group: "Todos",
 			label: "Create Todos Automatically",
-			description: "Automatically create a comprehensive todo list after the first message",
+			description: "How strongly to push automatic todo-list creation after the first message",
+			options: [
+				{ value: "default", label: "Default", description: "Model decides; no automatic todo list" },
+				{
+					value: "preferred",
+					label: "Preferred",
+					description: "Suggests a todo list on the first message (reminder, not forced)",
+				},
+				{ value: "always", label: "Always", description: "Forces a comprehensive todo list on the first message" },
+			],
 		},
 	},
 
@@ -3352,13 +3362,19 @@ export const SETTINGS_SCHEMA = {
 	},
 
 	"task.eager": {
-		type: "boolean",
-		default: false,
+		type: "enum",
+		values: ["default", "preferred", "always"] as const,
+		default: "default",
 		ui: {
 			tab: "tasks",
 			group: "Subagents",
 			label: "Prefer Task Delegation",
-			description: "Encourage the agent to delegate work to subagents unless changes are trivial",
+			description: "How strongly to push delegating work to subagents",
+			options: [
+				{ value: "default", label: "Default", description: "Model decides when to delegate" },
+				{ value: "preferred", label: "Preferred", description: "Adds delegation guidance to the system prompt" },
+				{ value: "always", label: "Always", description: "Prompt guidance plus a first-turn delegation reminder" },
+			],
 		},
 	},
 

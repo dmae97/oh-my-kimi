@@ -412,6 +412,33 @@ describe("Settings", () => {
 			expect(settings.get("mnemopi.dbPath")).toBe("/tmp/new.db");
 		});
 
+		it("migrates boolean task.eager/todo.eager true to always", async () => {
+			await writeSettings({
+				task: { eager: true },
+				todo: { eager: true },
+			});
+
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+
+			// `true` reproduced the previous "on" behavior, now `always`.
+			expect(settings.get("task.eager")).toBe("always");
+			expect(settings.get("todo.eager")).toBe("always");
+		});
+
+		it("migrates boolean task.eager/todo.eager false to default", async () => {
+			await writeSettings({
+				task: { eager: false },
+				todo: { eager: false },
+			});
+
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+
+			// Load-bearing direction: consumers treat any non-`default` value as enabled
+			// (`false !== "default"`), so an un-coerced boolean `false` would read as ON.
+			expect(settings.get("task.eager")).toBe("default");
+			expect(settings.get("todo.eager")).toBe("default");
+		});
+
 		it("moves legacy lastChangelogVersion out of config.yml into the marker file", async () => {
 			await writeSettings({ lastChangelogVersion: "0.40.0" });
 

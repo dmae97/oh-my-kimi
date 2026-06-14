@@ -187,6 +187,7 @@ import { containsWorkflow, WORKFLOW_NOTICE } from "../modes/workflow";
 import { createPlanReadMatcher } from "../plan-mode/plan-protection";
 import type { PlanModeState } from "../plan-mode/state";
 import autoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
+import eagerTaskPrompt from "../prompts/system/eager-task.md" with { type: "text" };
 import eagerTodoPrompt from "../prompts/system/eager-todo.md" with { type: "text" };
 import emptyStopRetryTemplate from "../prompts/system/empty-stop-retry.md" with { type: "text" };
 import ircAutoReplyTemplate from "../prompts/system/irc-autoreply.md" with { type: "text" };
@@ -198,6 +199,7 @@ import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool
 };
 import ttsrInterruptTemplate from "../prompts/system/ttsr-interrupt.md" with { type: "text" };
 import ttsrToolReminderTemplate from "../prompts/system/ttsr-tool-reminder.md" with { type: "text" };
+import { MAIN_AGENT_ID } from "../registry/agent-registry";
 import {
 	deobfuscateSessionContext,
 	obfuscateProviderContext,
@@ -4617,10 +4619,12 @@ export class AgentSession {
 			return true;
 		}
 
-		// Skip eager todo prelude when the user has already queued a directive
+		// Skip eager preludes when the user has already queued a directive
 		const hasPendingUserDirective = this.#toolChoiceQueue.inspect().includes("user-force");
 		const eagerTodoPrelude =
 			!options?.synthetic && !hasPendingUserDirective ? this.#createEagerTodoPrelude(expandedText) : undefined;
+		const eagerTaskPrelude =
+			!options?.synthetic && !hasPendingUserDirective ? this.#createEagerTaskPrelude(expandedText) : undefined;
 		const normalizedImages = await this.#normalizeImagesForModel(options?.images);
 
 		const userContent: (TextContent | ImageContent)[] = [{ type: "text", text: expandedText }];
@@ -4633,17 +4637,24 @@ export class AgentSession {
 			? { role: "developer" as const, content: userContent, attribution: promptAttribution, timestamp: Date.now() }
 			: { role: "user" as const, content: userContent, attribution: promptAttribution, timestamp: Date.now() };
 
+		const preludeMessages: AgentMessage[] = [];
 		if (eagerTodoPrelude) {
-			this.#toolChoiceQueue.pushOnce(eagerTodoPrelude.toolChoice, {
-				label: "eager-todo",
-			});
+			if (eagerTodoPrelude.toolChoice) {
+				this.#toolChoiceQueue.pushOnce(eagerTodoPrelude.toolChoice, {
+					label: "eager-todo",
+				});
+			}
+			preludeMessages.push(eagerTodoPrelude.message);
+		}
+		if (eagerTaskPrelude) {
+			preludeMessages.push(eagerTaskPrelude);
 		}
 
 		try {
 			await this.#promptWithMessage(message, expandedText, {
 				...options,
 				images: normalizedImages,
-				prependMessages: eagerTodoPrelude ? [eagerTodoPrelude.message] : undefined,
+				prependMessages: preludeMessages.length > 0 ? preludeMessages : undefined,
 				appendMessages: keywordNotices.length > 0 ? keywordNotices : undefined,
 			});
 		} finally {
@@ -7068,10 +7079,28 @@ export class AgentSession {
 		});
 	}
 
-	#createEagerTodoPrelude(promptText: string): { message: AgentMessage; toolChoice: ToolChoice } | undefined {
-		const eagerTodosEnabled = this.settings.get("todo.eager");
+	/**
+	 * Render context shared by the eager todo/task preludes. `toolRefs` resolves each
+	 * tool's wire name (matching `buildSystemPrompt`'s `toolRefs`) so the reminder names
+	 * the tool the model actually sees when an extension renames it; `taskBatch` gates
+	 * batch-call guidance that would steer toward a failing call shape when `task.batch`
+	 * is off (the flat single-spawn schema rejects `tasks`/`context`).
+	 */
+	#buildEagerPreludeContext(): { toolRefs: Record<string, string>; taskBatch: boolean } {
+		const wireName = (name: string): string => {
+			const tool = this.#toolRegistry.get(name);
+			return typeof tool?.customWireName === "string" ? tool.customWireName : name;
+		};
+		return {
+			toolRefs: { task: wireName("task"), todo: wireName("todo") },
+			taskBatch: this.settings.get("task.batch"),
+		};
+	}
+
+	#createEagerTodoPrelude(promptText: string): { message: AgentMessage; toolChoice?: ToolChoice } | undefined {
+		const mode = this.settings.get("todo.eager");
 		const todosEnabled = this.settings.get("todo.enabled");
-		if (!eagerTodosEnabled || !todosEnabled) {
+		if (mode === "default" || !todosEnabled) {
 			return undefined;
 		}
 
@@ -7106,27 +7135,53 @@ export class AgentSession {
 			return undefined;
 		}
 
+		const message: AgentMessage = {
+			role: "custom",
+			customType: "eager-todo-prelude",
+			content: prompt.render(eagerTodoPrompt, this.#buildEagerPreludeContext()),
+			display: false,
+			attribution: "agent",
+			timestamp: Date.now(),
+		};
+		// `preferred` suggests a todo list (reminder only); `always` also forces the
+		// `todo` tool on the first turn — the previous boolean-on behavior.
+		if (mode === "preferred") {
+			return { message };
+		}
 		const todoToolChoice = buildNamedToolChoice("todo", this.model);
 		if (!todoToolChoice) {
-			logger.warn("Eager todo enforcement skipped because the current model does not support forcing todo", {
-				modelApi: this.model?.api,
-				modelId: this.model?.id,
-			});
-			return undefined;
+			// `always` on a model that can't be forced degrades to reminder-only (no
+			// tool_choice). For `todo.eager: true` users migrated to `always`, such
+			// models now receive the first-turn reminder where they previously got
+			// nothing (see the CHANGELOG entry); `always ⊇ preferred` is preserved.
+			logger.warn(
+				"Eager todo proceeding with the reminder only because the current model does not support a forced todo tool_choice",
+				{ modelApi: this.model?.api, modelId: this.model?.id },
+			);
+			return { message };
 		}
+		return { message, toolChoice: todoToolChoice };
+	}
 
-		const eagerTodoReminder = prompt.render(eagerTodoPrompt);
-
+	#createEagerTaskPrelude(promptText: string): AgentMessage | undefined {
+		if (this.settings.get("task.eager") !== "always") return undefined;
+		// Main agent only: subagents keep `task` active (the parent only filters `todo`),
+		// so a salient delegate-reminder there would amplify nested fan-out. Eager-todo
+		// avoids subs only because `todo` is filtered; `task` is not, so gate explicitly.
+		const agentId = this.getAgentId();
+		if (agentId !== undefined && agentId !== MAIN_AGENT_ID) return undefined;
+		if (this.#planModeState?.enabled) return undefined;
+		if (this.agent.state.messages.some(m => m.role === "user")) return undefined;
+		const trimmed = promptText.trimEnd();
+		if (trimmed.endsWith("?") || trimmed.endsWith("!")) return undefined;
+		if (!this.getActiveToolNames().includes("task")) return undefined;
 		return {
-			message: {
-				role: "custom",
-				customType: "eager-todo-prelude",
-				content: eagerTodoReminder,
-				display: false,
-				attribution: "agent",
-				timestamp: Date.now(),
-			},
-			toolChoice: todoToolChoice,
+			role: "custom",
+			customType: "eager-task-prelude",
+			content: prompt.render(eagerTaskPrompt, this.#buildEagerPreludeContext()),
+			display: false,
+			attribution: "agent",
+			timestamp: Date.now(),
 		};
 	}
 	/**
