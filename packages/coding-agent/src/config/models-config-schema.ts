@@ -124,6 +124,7 @@ const ModelDefinitionSchema = z.object({
 			"azure-openai-responses",
 			"anthropic-messages",
 			"google-generative-ai",
+			"google-gemini-cli",
 			"google-vertex",
 		])
 		.optional(),
@@ -192,6 +193,7 @@ const ProviderConfigSchema = z.object({
 			"azure-openai-responses",
 			"anthropic-messages",
 			"google-generative-ai",
+			"google-gemini-cli",
 			"google-vertex",
 		])
 		.optional(),
