@@ -51,7 +51,7 @@ describe("render stress oracle helpers", () => {
 			width: 10,
 			row: 6,
 			col: 29,
-			maxHeight: undefined,
+			maxHeight: 8,
 		});
 	});
 

@@ -1889,7 +1889,7 @@ export class TUI extends Container {
 		overlayHeight: number,
 		termWidth: number,
 		termHeight: number,
-	): { width: number; row: number; col: number; maxHeight: number | undefined } {
+	): { width: number; row: number; col: number; maxHeight: number } {
 		const opt = options ?? {};
 
 		// Parse margin (clamp to non-negative)
@@ -1916,14 +1916,12 @@ export class TUI extends Container {
 		width = Math.max(1, Math.min(width, availWidth));
 
 		// === Resolve maxHeight ===
-		let maxHeight = parseSizeValue(opt.maxHeight, termHeight);
-		// Clamp to available space
-		if (maxHeight !== undefined) {
-			maxHeight = Math.max(1, Math.min(maxHeight, availHeight));
-		}
+		let maxHeight = parseSizeValue(opt.maxHeight, termHeight) ?? availHeight;
+		maxHeight = Math.max(1, Math.min(maxHeight, availHeight));
 
-		// Effective overlay height (may be clamped by maxHeight)
-		const effectiveHeight = maxHeight !== undefined ? Math.min(overlayHeight, maxHeight) : overlayHeight;
+		// Effective overlay height: maxHeight is always resolved (defaults to
+		// availHeight above), so the overlay is unconditionally clamped to fit.
+		const effectiveHeight = Math.min(overlayHeight, maxHeight);
 
 		// === Resolve position ===
 		let row: number;
@@ -2034,7 +2032,7 @@ export class TUI extends Container {
 			// (width and maxHeight don't depend on overlay height).
 			const { width, maxHeight } = this.#resolveOverlayLayout(options, 0, termWidth, termHeight);
 			let overlayLines = component.render(width);
-			if (maxHeight !== undefined && overlayLines.length > maxHeight) {
+			if (overlayLines.length > maxHeight) {
 				overlayLines = overlayLines.slice(0, maxHeight);
 			}
 			const { row, col } = this.#resolveOverlayLayout(options, overlayLines.length, termWidth, termHeight);

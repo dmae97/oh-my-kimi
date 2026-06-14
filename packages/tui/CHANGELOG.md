@@ -12,6 +12,10 @@
 - Fixed live transcript rows duplicating into native scrollback during a non-multiplexer resize drag: the viewport fast-path repaint now parks the hardware cursor at the real content bottom (mirroring the authoritative paint) instead of the padded viewport bottom, so a subsequent height shrink no longer scrolls live rows into history before the settle replay
 - Fixed inline images flipping to their text fallback during a non-multiplexer resize drag: the viewport fast path now drives the image budget as a stable partial pass that replays the committed per-image live/text split by id, instead of deriving it from the reversed, tail-only walk order
 
+### Fixed
+
+- Fixed overlays without an explicit `maxHeight` dropping their bottom rows off-screen when taller than the terminal: `#resolveOverlayLayout` now defaults the height cap to the available rows, so a tall overlay is sliced to fit (and re-clamps on resize) instead of overflowing the visible region.
+
 ## [15.12.5] - 2026-06-13
 ### Added
 

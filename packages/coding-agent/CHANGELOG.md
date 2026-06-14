@@ -43,6 +43,10 @@
 
 - Fixed the per-turn token-usage row (`display.showTokenUsage`) churning and duplicating in scrollback, most visibly with parallel tool calls. The row was rendered inside the assistant block above the turn's tool blocks, so finalizing the block was deferred and late appends recommitted the already-committed tool rows. The assistant block now always finalizes as soon as a tool-call appears, and the usage row is emitted as a standalone finalized block below the turn's tool blocks across all three render paths (live, transcript rebuild, agent-hub).
 
+### Fixed
+
+- Fixed the editor input box claiming a disproportionate share of small terminals (<=18 rows): the editor max-height floor (6 rows) ignored the available space. The height now yields to terminal size (`EDITOR_MIN_CHROME_ROWS`), reserving rows for the transcript and status line whenever the terminal can host both; on terminals too small for both, the editor collapses to its real bordered minimum instead of overshooting a fictitious cap.
+
 ## [15.12.5] - 2026-06-13
 ### Changed
 
