@@ -1981,7 +1981,7 @@ describe("openai-codex streaming", () => {
 				{ role: "user", content: "Second question", timestamp: Date.now() },
 			],
 		};
-		await streamOpenAICodexResponses(model, secondContext, {
+		const secondResponse = await streamOpenAICodexResponses(model, secondContext, {
 			fetch: fetchMock as FetchImpl,
 			apiKey: token,
 			sessionId: "ws-hook-session",
@@ -2003,9 +2003,23 @@ describe("openai-codex streaming", () => {
 				};
 			},
 		}).result();
+		const thirdContext: Context = {
+			systemPrompt: ["You are a helpful assistant."],
+			messages: [
+				...secondContext.messages,
+				secondResponse,
+				{ role: "user", content: "Third question", timestamp: Date.now() },
+			],
+		};
+		await streamOpenAICodexResponses(model, thirdContext, {
+			fetch: fetchMock as FetchImpl,
+			apiKey: token,
+			sessionId: "ws-hook-session",
+			providerSessionState,
+		}).result();
 
 		expect(fetchMock).not.toHaveBeenCalled();
-		expect(sentRequests).toHaveLength(2);
+		expect(sentRequests).toHaveLength(3);
 		expect(sentRequests[0]?.previous_response_id).toBeUndefined();
 		expect(sentRequests[1]?.type).toBe("response.create");
 		expect(sentRequests[1]?.previous_response_id).toBe("resp_1");
@@ -2013,6 +2027,11 @@ describe("openai-codex streaming", () => {
 		expect(capturedSecondPayload?.type).toBe("response.create");
 		const secondInput = sentRequests[1]?.input as Array<Record<string, unknown>>;
 		expect(secondInput).toEqual([{ role: "user", content: [{ type: "input_text", text: "replaced by hook" }] }]);
+		expect(sentRequests[2]?.previous_response_id).toBe("resp_2");
+		const thirdInput = sentRequests[2]?.input as Array<Record<string, unknown>>;
+		expect(thirdInput).toHaveLength(1);
+		expect(JSON.stringify(thirdInput)).toContain("Third question");
+		expect(JSON.stringify(thirdInput)).not.toContain("First question");
 	});
 
 	it("retries websocket continuations with full context when previous_response_id expires", async () => {

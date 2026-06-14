@@ -667,11 +667,6 @@ async function applyCodexPayloadReplacement<T extends Record<string, unknown>>(
 	return replacementPayload !== undefined ? (replacementPayload as T) : payload;
 }
 
-function stripWebSocketFrameType(payload: Record<string, unknown>): RequestBody {
-	const { type: _type, ...body } = payload;
-	return body as RequestBody;
-}
-
 function removeTransientBlockIndices(output: AssistantMessage): void {
 	for (const block of output.content) {
 		delete (block as { index?: number }).index;
@@ -932,7 +927,7 @@ async function openCodexWebSocketTransport(
 		websocketState,
 		requestContext.responsesLite,
 	);
-	const requestBodyForState = stripWebSocketFrameType(websocketRequest);
+	const requestBodyForState = structuredCloneJSON(requestContext.transformedBody);
 	requestContext.rawRequestDump.body = websocketRequest;
 	logCodexDebug("codex websocket request", {
 		url: toWebSocketUrl(requestContext.url),
