@@ -197,6 +197,22 @@ describe("learned-lesson read-back", () => {
 		expect(out).not.toContain(token);
 		expect(out).toContain("[REDACTED]");
 	});
+
+	it("drops learned lessons when the summary already fills the injection budget", async () => {
+		const settings = Settings.isolated({ "memory.backend": "local" });
+		const root = getMemoryRoot(agentDir, settings.getCwd());
+		// A summary far larger than any injection budget: after truncation it
+		// consumes the whole token budget, leaving no room for lessons.
+		const hugeSummary = `${"summary ".repeat(50_000)}\n`;
+		await Bun.write(path.join(root, "memory_summary.md"), hugeSummary);
+		await saveLearnedLesson(agentDir, settings.getCwd(), { content: "UNIQUE_LESSON_MARKER" });
+		const out = await buildMemoryToolDeveloperInstructions(agentDir, settings);
+		expect(out).toBeDefined();
+		expect(out).toContain("summary"); // summary is still injected (truncated)
+		expect(out).not.toContain("UNIQUE_LESSON_MARKER"); // lesson dropped: budget exhausted
+		// The combined block stays bounded — it never grows to the raw summary size.
+		expect((out ?? "").length).toBeLessThan(hugeSummary.length);
+	});
 });
 
 describe("learn tool (local backend)", () => {
