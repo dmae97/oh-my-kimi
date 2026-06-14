@@ -19,11 +19,12 @@ import {
 	updateMCPServer,
 } from "../../mcp/config-writer";
 import {
-	isManagedMCPOAuthCredentialId,
-	MCPOAuthFlow,
-	type MCPStoredOAuthCredential,
-	mcpOAuthCredentialId,
-} from "../../mcp/oauth-flow";
+	lookupMcpOAuthCredentialForServer,
+	mcpOAuthCredentialIdsForServerUrl,
+	removeManagedMcpOAuthCredential,
+	removeManagedMcpOAuthCredentials,
+} from "../../mcp/oauth-credentials";
+import { MCPOAuthFlow, type MCPStoredOAuthCredential, mcpOAuthCredentialId } from "../../mcp/oauth-flow";
 import {
 	clearSmitheryApiKey,
 	createSmitheryCliAuthSession,
@@ -871,26 +872,6 @@ export class MCPCommandController {
 		};
 	}
 
-	async #removeManagedOAuthCredential(credentialId: string | undefined): Promise<void> {
-		if (!isManagedMCPOAuthCredentialId(credentialId)) return;
-		await this.ctx.session.modelRegistry.authStorage.remove(credentialId);
-	}
-
-	#lookupExistingMcpOAuthCredential(
-		auth: MCPAuthConfig | undefined,
-		serverUrl: string | undefined,
-	): MCPStoredOAuthCredential | undefined {
-		const authStorage = this.ctx.session.modelRegistry.authStorage;
-		if (auth?.type === "oauth" && auth.credentialId) {
-			const credential = authStorage.get(auth.credentialId);
-			if (credential?.type === "oauth") return credential;
-		}
-		if (!serverUrl) return undefined;
-		const credential = authStorage.get(mcpOAuthCredentialId(serverUrl));
-		if (credential?.type === "oauth") return credential;
-		return undefined;
-	}
-
 	#stripOAuthAuth(config: MCPServerConfig): MCPServerConfig {
 		const next = { ...config } as MCPServerConfig & { auth?: MCPAuthConfig };
 		delete next.auth;
@@ -1484,23 +1465,34 @@ export class MCPCommandController {
 			}
 
 			const currentAuth = (found.config as MCPServerConfig & { auth?: MCPAuthConfig }).auth;
-			if (found.discovered && currentAuth?.type !== "oauth") {
-				this.#showMessage(["", theme.fg("muted", `No stored OAuth auth to remove for "${name}".`), ""].join("\n"));
-				return;
-			}
+			const authStorage = this.ctx.session.modelRegistry.authStorage;
 			if (currentAuth?.type === "oauth") {
-				await this.#removeManagedOAuthCredential(currentAuth.credentialId);
+				await removeManagedMcpOAuthCredential(authStorage, currentAuth.credentialId);
 			}
 			// Also drop this profile's url-keyed binding so the server is truly
 			// signed out even when the config carries no auth block. Runtime
 			// discovery expands `${...}` URL values before MCPManager looks up the
 			// deterministic credential row, so unauth must clear that same key.
+			let removedUrlKeyedCredential = false;
 			if ((found.config.type === "http" || found.config.type === "sse") && found.config.url) {
-				const runtimeServerUrl = expandEnvVarsDeep(found.config.url);
-				await this.#removeManagedOAuthCredential(mcpOAuthCredentialId(runtimeServerUrl));
-				if (runtimeServerUrl !== found.config.url) {
-					await this.#removeManagedOAuthCredential(mcpOAuthCredentialId(found.config.url));
+				removedUrlKeyedCredential = await removeManagedMcpOAuthCredentials(
+					authStorage,
+					mcpOAuthCredentialIdsForServerUrl(found.config.url),
+				);
+			}
+
+			if (found.discovered && currentAuth?.type !== "oauth") {
+				if (!removedUrlKeyedCredential) {
+					this.#showMessage(
+						["", theme.fg("muted", `No stored OAuth auth to remove for "${name}".`), ""].join("\n"),
+					);
+					return;
 				}
+				await this.#reloadMCP();
+				this.#showMessage(
+					["", theme.fg("success", `- Cleared auth for "${name}" (${found.scope} config)`), ""].join("\n"),
+				);
+				return;
 			}
 
 			const updated = this.#stripOAuthAuth(found.config);
@@ -1534,6 +1526,7 @@ export class MCPCommandController {
 			}
 
 			const currentAuth = (found.config as MCPServerConfig & { auth?: MCPAuthConfig }).auth;
+			const authStorage = this.ctx.session.modelRegistry.authStorage;
 			const baseConfig = this.#stripOAuthAuth(found.config);
 			const runtimeBaseConfig = expandEnvVarsDeep(baseConfig);
 			// Resolve endpoints first: this fails fast for stdio transports and
@@ -1548,7 +1541,7 @@ export class MCPCommandController {
 			// writes it to auth.clientSecret); DCR secrets are embedded in the
 			// stored credential and never echoed back into config files.
 			const configuredClientId = found.config.oauth?.clientId ?? currentAuth?.clientId;
-			const existingCredential = this.#lookupExistingMcpOAuthCredential(currentAuth, serverUrl);
+			const existingCredential = lookupMcpOAuthCredentialForServer(authStorage, currentAuth, serverUrl)?.credential;
 			const flowClientId = oauth.clientId ?? configuredClientId ?? existingCredential?.clientId ?? "";
 			const storedClientSecret =
 				existingCredential?.clientId === flowClientId ? existingCredential.clientSecret : undefined;
@@ -1582,7 +1575,7 @@ export class MCPCommandController {
 			// after success so cancelling the browser step leaves the previous
 			// session signed in.
 			if (currentAuth?.type === "oauth" && currentAuth.credentialId !== oauthResult.credentialId) {
-				await this.#removeManagedOAuthCredential(currentAuth.credentialId);
+				await removeManagedMcpOAuthCredential(authStorage, currentAuth.credentialId);
 			}
 
 			// Definition-only entries resolve through the url-keyed binding alone;

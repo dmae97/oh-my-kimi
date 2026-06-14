@@ -8,11 +8,12 @@
  * crack open argv before the lazy command modules load.
  *
  * Because of that, this preparser must respect the same value-consumption
- * contract as `args.ts`: known string-valued flags consume the next token
- * unconditionally (so the value can legitimately start with `-`), and the
- * optional-value flags (`--resume`, `--session`, `-r`, `--list-models`)
- * consume the next token only when it doesn't look like another flag. Without
- * this, `omp --system-prompt --profile foo` silently activates profile `foo`
+ * contract as `args.ts`: known string-valued flags usually consume the next
+ * token even when it starts with `-`, except for string flags that can be
+ * shadowed by preloaded boolean extensions (currently `--plan`). Optional-value
+ * flags (`--resume`, `--session`, `-r`) consume the next token only when it
+ * doesn't look like another flag. Without this, `omp --system-prompt --profile
+ * foo` silently activates profile `foo`
  * instead of passing the literal `--profile` to the system prompt and `foo`
  * as a positional message.
  *
@@ -34,6 +35,7 @@
 
 import { isSubcommand } from "../cli-commands";
 import {
+	EXTENSION_SHADOWABLE_STRING_FLAGS,
 	OPTIONAL_FLAGS,
 	OPTIONAL_VALUE_FLAGS,
 	PROFILE_BOOTSTRAP_BOUNDARY_ARG,
@@ -57,7 +59,12 @@ function isUnknownLongValueCandidate(arg: string): boolean {
 
 function needsBoundaryAfterGlobalStrip(stripped: readonly string[]): boolean {
 	const previous = stripped[stripped.length - 1];
-	return previous !== undefined && (OPTIONAL_VALUE_FLAGS.has(previous) || isUnknownLongValueCandidate(previous));
+	return (
+		previous !== undefined &&
+		(OPTIONAL_VALUE_FLAGS.has(previous) ||
+			EXTENSION_SHADOWABLE_STRING_FLAGS.has(previous) ||
+			isUnknownLongValueCandidate(previous))
+	);
 }
 
 export interface ProfileBootstrapResult {
@@ -149,6 +156,22 @@ export function extractProfileFlags(argv: readonly string[]): ProfileBootstrapRe
 			}
 			aliasName = value;
 			insertBoundaryBeforeNextValue = needsBoundaryAfterGlobalStrip(stripped);
+			continue;
+		}
+
+		// Known string flags normally consume flag-looking values (for example
+		// `--system-prompt --profile foo` means the system prompt is literally
+		// `--profile`). A small allow-list of built-ins can be shadowed by boolean
+		// extensions before extension metadata is loaded; those mirror extension
+		// consumption here so `--plan --profile work` still activates `work`.
+		if (EXTENSION_SHADOWABLE_STRING_FLAGS.has(arg)) {
+			canDispatchSubcommand = false;
+			stripped.push(arg);
+			const next = argv[index + 1];
+			if (next !== undefined && !next.startsWith("-")) {
+				stripped.push(next);
+				index += 1;
+			}
 			continue;
 		}
 

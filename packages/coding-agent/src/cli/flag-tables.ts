@@ -85,8 +85,10 @@ const setResume: OptionalSetter = (result, value) => {
 };
 
 /**
- * Setters for flags that ALWAYS consume the next argv token, even when that
- * token starts with `-`.
+ * Setters for flags with string values. Most built-ins consume the next argv
+ * token even when it starts with `-`; flags listed in
+ * {@link EXTENSION_SHADOWABLE_STRING_FLAGS} use extension-style consumption so
+ * a registered boolean extension can shadow them before profile bootstrap.
  */
 export const STRING_SETTERS: Record<string, StringSetter> = {
 	"--cwd": (result, value) => {
@@ -209,16 +211,25 @@ export const OPTIONAL_FLAGS: Record<string, OptionalFlagConfig> = {
 /**
  * Derived from {@link STRING_SETTERS}. A flag is in this set if and only if
  * it has a setter — by construction, drift between "the bootstrap thinks
- * this flag consumes a value" and "the launch parser actually consumes one"
- * is structurally impossible.
+ * this flag accepts a value" and "the launch parser can set one" is
+ * structurally impossible.
  */
 export const STRING_VALUE_FLAGS: ReadonlySet<string> = new Set(Object.keys(STRING_SETTERS));
+
+/**
+ * Built-in string flags known to be shadowed by bundled/common boolean
+ * extensions before extension metadata is available. They still accept a
+ * value-like successor for the built-in form (`--plan opus`), but a
+ * flag-looking successor remains a fresh flag (`--plan --profile work`).
+ */
+export const EXTENSION_SHADOWABLE_STRING_FLAGS: ReadonlySet<string> = new Set(["--plan"]);
 
 /**
  * Derived from {@link OPTIONAL_FLAGS}. Same single-source contract as
  * {@link STRING_VALUE_FLAGS}.
  */
 export const OPTIONAL_VALUE_FLAGS: ReadonlySet<string> = new Set(Object.keys(OPTIONAL_FLAGS));
+
 /**
  * Internal marker inserted by the profile bootstrap when removing `--profile`
  * or `--alias` would otherwise make the following value-like token become the

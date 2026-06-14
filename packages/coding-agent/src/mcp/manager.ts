@@ -27,7 +27,12 @@ import {
 	unsubscribeFromResources,
 } from "./client";
 import { loadAllMCPConfigs, validateServerConfig } from "./config";
-import { type MCPStoredOAuthCredential, mcpOAuthCredentialId, refreshMCPOAuthToken } from "./oauth-flow";
+import {
+	lookupMcpOAuthCredential,
+	type MCPOAuthCredentialLookup,
+	selectMcpOAuthRefreshMaterial,
+} from "./oauth-credentials";
+import { type MCPStoredOAuthCredential, refreshMCPOAuthToken } from "./oauth-flow";
 import type { MCPToolDetails } from "./tool-bridge";
 import { DeferredMCPTool, MCPTool } from "./tool-bridge";
 import type { MCPToolCache } from "./tool-cache";
@@ -403,7 +408,10 @@ export class MCPManager {
 					// Gate on a resolvable managed credential, not on the auth block:
 					// definition-only configs (url-keyed fallback) get Bearer injection
 					// too and need the same mid-session refresh hook.
-					if (connection.transport instanceof HttpTransport && this.#lookupOAuthCredential(config)) {
+					if (
+						connection.transport instanceof HttpTransport &&
+						lookupMcpOAuthCredential(this.#authStorage, config)
+					) {
 						connection.transport.onAuthError = async () => {
 							const refreshed = await this.#resolveAuthConfig(config, { forceRefresh: true });
 							if (refreshed.type === "http" || refreshed.type === "sse") {
@@ -931,7 +939,7 @@ export class MCPManager {
 
 		// Wire auth refresh for HTTP transports, and reconnect for any transport.
 		// Same gate as connectServers: any resolvable managed credential.
-		if (connection.transport instanceof HttpTransport && this.#lookupOAuthCredential(config)) {
+		if (connection.transport instanceof HttpTransport && lookupMcpOAuthCredential(this.#authStorage, config)) {
 			connection.transport.onAuthError = async () => {
 				const refreshed = await this.#resolveAuthConfig(config, { forceRefresh: true });
 				if (refreshed.type === "http" || refreshed.type === "sse") {
@@ -1174,40 +1182,6 @@ export class MCPManager {
 	}
 
 	/**
-	 * Look up the OAuth credential for a config: an explicit `auth.credentialId`
-	 * wins; otherwise (or when the pointer misses this profile's storage) fall
-	 * back to the deterministic per-URL id. The fallback is what lets a shared
-	 * project-scope server definition resolve per-profile credentials.
-	 */
-	#lookupOAuthCredential(
-		config: MCPServerConfig,
-	): { credentialId: string; credential: MCPStoredOAuthCredential } | undefined {
-		if (!this.#authStorage) return undefined;
-		const auth = config.auth;
-		if (auth && auth.type !== "oauth") return undefined;
-		if (auth?.credentialId) {
-			const credential = this.#authStorage.get(auth.credentialId);
-			if (credential?.type === "oauth") {
-				return { credentialId: auth.credentialId, credential };
-			}
-		}
-		if (config.type !== "http" && config.type !== "sse") return undefined;
-		if (!config.url) return undefined;
-		// Never clobber an explicitly configured Authorization header. An auth
-		// block whose pointer resolved returns above (legacy semantics); the
-		// url-keyed fallback always yields to a pinned header.
-		if (Object.keys(config.headers ?? {}).some(h => h.toLowerCase() === "authorization")) {
-			return undefined;
-		}
-		const urlKeyId = mcpOAuthCredentialId(config.url);
-		const credential = this.#authStorage.get(urlKeyId);
-		if (credential?.type === "oauth") {
-			return { credentialId: urlKeyId, credential };
-		}
-		return undefined;
-	}
-
-	/**
 	 * Resolve OAuth credentials and shell commands in config.
 	 * `oauth: false` skips credential injection (reauth's unauthenticated probe);
 	 * `forceRefresh` bypasses the expiry buffer (401/403 auth-error hook).
@@ -1219,7 +1193,8 @@ export class MCPManager {
 		let resolved: MCPServerConfig = { ...config };
 
 		const auth = config.auth;
-		const lookup = opts?.oauth !== false ? this.#lookupOAuthCredential(config) : undefined;
+		const lookup: MCPOAuthCredentialLookup | undefined =
+			opts?.oauth !== false ? lookupMcpOAuthCredential(this.#authStorage, config) : undefined;
 		if (lookup && this.#authStorage) {
 			const { credentialId } = lookup;
 			try {
@@ -1230,7 +1205,7 @@ export class MCPManager {
 				// config auth block. Never mix the two: a shared file's auth block
 				// can belong to another profile, whose client the grant is NOT
 				// bound to.
-				const material = credential.tokenUrl ? credential : auth;
+				const material = selectMcpOAuthRefreshMaterial(credential, auth);
 				const tokenUrl = material?.tokenUrl;
 				const clientId = material?.clientId;
 				const clientSecret = material?.clientSecret;

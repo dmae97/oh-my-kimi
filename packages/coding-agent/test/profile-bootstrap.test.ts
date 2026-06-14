@@ -36,6 +36,20 @@ describe("extractProfileFlags", () => {
 		expect(result.argv).toEqual(["--approval-mode", "--profile", "foo", "bar"]);
 	});
 
+	it("honors extension-shadowed --plan before a global profile", () => {
+		const extracted = extractProfileFlags(["--plan", "--profile", "work", "follow up"]);
+		expect(extracted).toEqual({
+			argv: ["--plan", PROFILE_BOOTSTRAP_BOUNDARY_ARG, "follow up"],
+			profile: "work",
+			aliasName: undefined,
+		});
+
+		const parsed = parseArgs(extracted.argv, new Map([["plan", { type: "boolean" }]]));
+		expect(parsed.unknownFlags.get("plan")).toBe(true);
+		expect(parsed.plan).toBeUndefined();
+		expect(parsed.messages).toEqual(["follow up"]);
+	});
+
 	it("still extracts --profile after an unrelated string-valued flag", () => {
 		// Mirror image: when the user does mean to activate a profile *after*
 		// a string-valued flag, we must skip past the flag's value but still

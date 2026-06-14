@@ -23,6 +23,7 @@ import {
 	setProfile,
 	VERSION,
 } from "@oh-my-pi/pi-utils/dirs";
+import { declareWorkerHostEntry } from "@oh-my-pi/pi-utils/worker-host";
 import { installProfileAlias, resolveProfileAliasCommandFromProcess } from "./cli/profile-alias";
 import { extractProfileFlags } from "./cli/profile-bootstrap";
 
@@ -259,9 +260,8 @@ export async function runCli(argv: string[]): Promise<void> {
 	}
 
 	// Declare this module as the worker-host entry now that the active profile
-	// is resolved — importing pi-utils/env earlier would snapshot the wrong
-	// agent directory's `.env`.
-	const { declareWorkerHostEntry } = await import("@oh-my-pi/pi-utils/env");
+	// is resolved. The worker-host module is side-effect-free; importing
+	// `@oh-my-pi/pi-utils/env` here would snapshot the wrong agent `.env`.
 	declareWorkerHostEntry();
 
 	if (resolvedArgv[0] === "--smoke-test") {

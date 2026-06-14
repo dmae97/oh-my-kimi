@@ -15,7 +15,7 @@ Shared utilities for [oh-my-pi](https://github.com/can1357/oh-my-pi) packages. Z
 | `which` | `$which()` binary lookup with caching |
 | `fetch-retry` | `fetch` with retry/backoff policies |
 | `fs-error` | Errno guards (`isEnoent` and friends) |
-| `env` | Environment plumbing, worker-host entry contract (`workerHostEntry`) |
+| `env` / `worker-host` | Environment plumbing and side-effect-free worker-host entry contract (`workerHostEntry`) |
 | `abortable` / `async` | AbortSignal-aware stream/promise helpers |
 | `peek-file` | Read the first N bytes of a file with pooled buffers |
 | `frontmatter`, `glob`, `mime`, `temp`, `format`, `color`, `snowflake`, `tab-spacing`, `path-tree`, `sanitize-text` | Smaller single-purpose helpers |

@@ -9,7 +9,7 @@ import * as oauthFlow from "@oh-my-pi/pi-coding-agent/mcp/oauth-flow";
 import type { MCPServerConfig } from "@oh-my-pi/pi-coding-agent/mcp/types";
 import { MCPCommandController } from "@oh-my-pi/pi-coding-agent/modes/controllers/mcp-command-controller";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import { getConfigRootDir, getProjectDir, setAgentDir, setProjectDir } from "@oh-my-pi/pi-utils";
+import { getConfigRootDir, getMCPConfigPath, getProjectDir, setAgentDir, setProjectDir } from "@oh-my-pi/pi-utils";
 
 const RAW_SERVER_URL = `https://\${MCP_HOST}/mcp`;
 const EXPANDED_SERVER_URL = "https://mcp.example.com/mcp";
@@ -34,9 +34,18 @@ function restoreEnvValue(name: string, value: string | undefined): void {
 	Bun.env[name] = value;
 	process.env[name] = value;
 }
-function createController(authStorage: AuthStorage) {
+function createController(authStorage: AuthStorage, mcpManagerOverrides: Record<string, unknown> = {}) {
 	const showError = vi.fn();
 	const prepareConfig = vi.fn(async (config: MCPServerConfig) => config);
+	const mcpManager = {
+		prepareConfig,
+		disconnectAll: vi.fn(async () => {}),
+		discoverAndConnect: vi.fn(async () => ({ errors: new Map<string, string>() })),
+		getTools: vi.fn(() => []),
+		waitForConnection: vi.fn(async () => {}),
+		getConnectionStatus: vi.fn(() => "connected"),
+		...mcpManagerOverrides,
+	};
 	const controller = new MCPCommandController({
 		chatContainer: { addChild: vi.fn() },
 		present: vi.fn(),
@@ -53,17 +62,10 @@ function createController(authStorage: AuthStorage) {
 			refreshMCPTools: vi.fn(),
 			modelRegistry: { authStorage },
 		},
-		mcpManager: {
-			prepareConfig,
-			disconnectAll: vi.fn(async () => {}),
-			discoverAndConnect: vi.fn(async () => ({ errors: new Map<string, string>() })),
-			getTools: vi.fn(() => []),
-			waitForConnection: vi.fn(async () => {}),
-			getConnectionStatus: vi.fn(() => "connected"),
-		},
+		mcpManager,
 	} as never);
 
-	return { controller, showError, prepareConfig };
+	return { controller, showError, prepareConfig, mcpManager };
 }
 
 describe("/mcp auth commands", () => {
@@ -225,5 +227,32 @@ describe("/mcp auth commands", () => {
 		const savedUrl = savedServer?.type === "http" || savedServer?.type === "sse" ? savedServer.url : undefined;
 		expect(savedUrl).toBe(RAW_SERVER_URL);
 		expect(savedServer?.auth).toBeUndefined();
+	});
+
+	test("clears url-keyed auth for discovered definition-only servers", async () => {
+		const authStorage = new AuthStorage(new SqliteAuthCredentialStore(new Database(":memory:")));
+		await authStorage.reload();
+		await authStorage.set(oauthFlow.mcpOAuthCredentialId(EXPANDED_SERVER_URL), {
+			type: "oauth",
+			access: "discovered-access",
+			refresh: "discovered-refresh",
+			expires: Date.now() + 3_600_000,
+		});
+		const { controller, showError } = createController(authStorage, {
+			getServerConfig: vi.fn(() => ({ type: "http", url: EXPANDED_SERVER_URL })),
+			getSource: vi.fn(() => ({ provider: "test", path: "/tmp/discovered.json" })),
+		});
+
+		await controller.handle("/mcp unauth discovered");
+
+		expect(showError).not.toHaveBeenCalled();
+		expect(authStorage.get(oauthFlow.mcpOAuthCredentialId(EXPANDED_SERVER_URL))).toBeUndefined();
+		const userConfigPath = getMCPConfigPath("user", projectDir);
+		const userConfig = JSON.parse(
+			await Bun.file(userConfigPath)
+				.text()
+				.catch(() => "{}"),
+		) as TestConfigFile;
+		expect(userConfig.mcpServers?.discovered).toBeUndefined();
 	});
 });

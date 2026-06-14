@@ -199,20 +199,22 @@ OMP understands two auth-related objects.
 Use this when OMP should remember how to rehydrate credentials for a server.
 
 You normally do not need to write this block: when OMP completes an OAuth flow
-for an `http`/`sse` server it stores the credential in the active profile's
-`agent.db` under a deterministic id derived from the server URL
-(`mcp_oauth:<url>`), with the refresh material embedded. Any config that points
-at the same URL — including a *definition-only* entry in a shared project
-`mcp.json` with no `auth` block at all — resolves the active profile's own
-credential automatically. This is what makes project-scoped servers safe across
+for an `http`/`sse` server it stores the credential under a deterministic id
+derived from the active profile and server URL
+(`mcp_oauth:profile:<profile>:<url>`), with the refresh material embedded. Any
+config that points at the same URL — including a *definition-only* entry in a
+shared project `mcp.json` with no `auth` block at all — resolves the active
+profile's own credential automatically, including when auth storage is backed by
+a shared auth broker. This is what makes project-scoped servers safe across
 profiles: commit the definition, and each profile authorizes (and stays signed
 in as) its own account via `/mcp reauth <name>`. An explicit `credentialId` is
-still honored when it resolves; if it points at another profile's row, OMP
-falls back to the url-keyed binding.
+still honored when it resolves; if it points at another profile's row, OMP falls
+back to the profile-scoped url-keyed binding.
 
 `/mcp reauth` on a definition-only entry leaves the file untouched — the
-credential (refresh material included) lives entirely in `agent.db`, so a
-committed project config never picks up local auth state. An explicitly
+credential (refresh material included) lives entirely in the active profile's
+auth storage (local `agent.db` or broker), so a committed project config never
+picks up local auth state. An explicitly
 configured `Authorization` header always wins over the url-keyed binding.
 
 The binding is per profile but not per project: once a profile has authorized

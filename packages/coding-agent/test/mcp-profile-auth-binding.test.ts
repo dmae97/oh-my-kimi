@@ -3,9 +3,10 @@
  *
  * A server *definition* may live in a shared project `mcp.json` while each
  * profile holds its own credential row in agent.db under the deterministic
- * `mcp_oauth:<url>` id. Before this scheme, the random `auth.credentialId`
- * written into the shared file pointed at exactly one profile's row, so two
- * profiles reauthorizing the same project server clobbered each other.
+ * `mcp_oauth:profile:<profile>:<url>` id. Before this scheme, the random
+ * `auth.credentialId` written into the shared file pointed at exactly one
+ * profile's row, so two profiles reauthorizing the same project server
+ * clobbered each other.
  */
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
@@ -14,6 +15,7 @@ import { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
 import * as oauthFlow from "@oh-my-pi/pi-coding-agent/mcp/oauth-flow";
 import { mcpOAuthCredentialId } from "@oh-my-pi/pi-coding-agent/mcp/oauth-flow";
 import type { MCPServerConfig } from "@oh-my-pi/pi-coding-agent/mcp/types";
+import { getActiveProfile, setProfile } from "@oh-my-pi/pi-utils/dirs";
 
 const SERVER_URL = "https://mcp.example.com/mcp";
 const URL_KEY_ID = mcpOAuthCredentialId(SERVER_URL);
@@ -26,8 +28,10 @@ function authorizationHeader(config: MCPServerConfig): string | undefined {
 describe("per-profile MCP OAuth binding", () => {
 	let manager: MCPManager;
 	let authStorage: AuthStorage;
+	let originalProfile: string | undefined;
 
 	beforeEach(async () => {
+		originalProfile = getActiveProfile();
 		const store = new SqliteAuthCredentialStore(new Database(":memory:"));
 		authStorage = new AuthStorage(store);
 		await authStorage.reload();
@@ -36,7 +40,75 @@ describe("per-profile MCP OAuth binding", () => {
 	});
 
 	afterEach(() => {
+		setProfile(originalProfile);
 		vi.restoreAllMocks();
+	});
+
+	test("scopes url-keyed credentials by active profile in a shared auth namespace", async () => {
+		const workKey = mcpOAuthCredentialId(SERVER_URL, "work");
+		const personalKey = mcpOAuthCredentialId(SERVER_URL, "personal");
+		expect(workKey).not.toBe(personalKey);
+		await authStorage.set(workKey, {
+			type: "oauth",
+			access: "work-token",
+			refresh: "r",
+			expires: Date.now() + 3_600_000,
+		});
+		await authStorage.set(personalKey, {
+			type: "oauth",
+			access: "personal-token",
+			refresh: "r",
+			expires: Date.now() + 3_600_000,
+		});
+
+		setProfile("work");
+		expect(authorizationHeader(await manager.prepareConfig({ type: "http", url: SERVER_URL }))).toBe(
+			"Bearer work-token",
+		);
+
+		setProfile("personal");
+		expect(authorizationHeader(await manager.prepareConfig({ type: "http", url: SERVER_URL }))).toBe(
+			"Bearer personal-token",
+		);
+	});
+
+	test("ignores another profile's explicit profile-scoped credentialId in shared storage", async () => {
+		const workKey = mcpOAuthCredentialId(SERVER_URL, "work");
+		const personalKey = mcpOAuthCredentialId(SERVER_URL, "personal");
+		await authStorage.set(workKey, {
+			type: "oauth",
+			access: "work-token",
+			refresh: "r",
+			expires: Date.now() + 3_600_000,
+		});
+
+		setProfile("personal");
+		expect(
+			authorizationHeader(
+				await manager.prepareConfig({
+					type: "http",
+					url: SERVER_URL,
+					auth: { type: "oauth", credentialId: workKey },
+				}),
+			),
+		).toBeUndefined();
+
+		await authStorage.set(personalKey, {
+			type: "oauth",
+			access: "personal-token",
+			refresh: "r",
+			expires: Date.now() + 3_600_000,
+		});
+
+		expect(
+			authorizationHeader(
+				await manager.prepareConfig({
+					type: "http",
+					url: SERVER_URL,
+					auth: { type: "oauth", credentialId: workKey },
+				}),
+			),
+		).toBe("Bearer personal-token");
 	});
 
 	test("resolves the url-keyed credential when the file's credentialId belongs to another profile", async () => {

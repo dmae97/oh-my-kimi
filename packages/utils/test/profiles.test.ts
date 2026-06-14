@@ -318,6 +318,51 @@ describe("dirs module import behavior", () => {
 			await fs.rm(root, { recursive: true, force: true });
 		}
 	});
+	it("exposes worker-host without loading agent env", async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-utils-worker-host-import-"));
+		try {
+			const workerHostUrl = import.meta.resolve("@oh-my-pi/pi-utils/worker-host");
+			const agentDir = path.join(root, "agent");
+			await fs.mkdir(agentDir, { recursive: true });
+			await Bun.write(path.join(agentDir, ".env"), "OMP_WORKER_HOST_PROBE=from-agent-env\n");
+			const probePath = path.join(root, "probe.ts");
+			await Bun.write(
+				probePath,
+				[
+					`import { declareWorkerHostEntry, workerHostEntry } from ${JSON.stringify(workerHostUrl)};`,
+					"declareWorkerHostEntry();",
+					"process.stdout.write(JSON.stringify({",
+					"	envProbe: process.env.OMP_WORKER_HOST_PROBE ?? null,",
+					"	hostDeclared: workerHostEntry() === Bun.main,",
+					"}));",
+				].join("\n"),
+			);
+
+			const childEnv: Record<string, string | undefined> = {
+				...process.env,
+				PI_CODING_AGENT_DIR: agentDir,
+			};
+			delete childEnv.OMP_WORKER_HOST_PROBE;
+			const proc = Bun.spawn([process.execPath, probePath], {
+				stdout: "pipe",
+				stderr: "pipe",
+				env: childEnv,
+			});
+			const [stdout, stderr, exitCode] = await Promise.all([
+				readStream(proc.stdout as ReadableStream<Uint8Array>),
+				readStream(proc.stderr as ReadableStream<Uint8Array>),
+				proc.exited,
+			]);
+
+			expect(exitCode, stderr).toBe(0);
+			expect(JSON.parse(stdout)).toEqual({
+				envProbe: null,
+				hostDeclared: true,
+			});
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
 
 	it("ignores inherited profile agent dir when OMP_PROFILE explicitly selects default", async () => {
 		const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-utils-dirs-default-profile-"));

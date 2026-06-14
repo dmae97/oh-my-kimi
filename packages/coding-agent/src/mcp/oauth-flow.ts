@@ -9,23 +9,24 @@ import type { OAuthCallbackFlowOptions } from "@oh-my-pi/pi-ai/oauth/callback-se
 import { OAuthCallbackFlow } from "@oh-my-pi/pi-ai/oauth/callback-server";
 import type { OAuthController, OAuthCredentials } from "@oh-my-pi/pi-ai/oauth/types";
 import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
+import { getActiveProfile } from "@oh-my-pi/pi-utils/dirs";
 import type { OAuthCredential } from "../session/auth-storage";
 
-/** Credential-id prefix for OMP-managed MCP OAuth credentials keyed by server URL. */
+/** Credential-id prefix for OMP-managed MCP OAuth credentials keyed by profile and server URL. */
 const MCP_OAUTH_URL_CREDENTIAL_PREFIX = "mcp_oauth:";
 
 /**
- * Deterministic credential id for an MCP server URL.
+ * Deterministic credential id for an MCP server URL scoped to an OMP profile.
  *
- * The id is identical across profiles and projects while each profile's
- * agent.db holds its own row under it, so a server *definition* in a shared
- * project `mcp.json` resolves to per-profile credentials instead of one
- * profile's random `mcp_oauth_<ts>_<rand>` pointer clobbering the others.
- * The URL is used verbatim (query string included) because it can carry
- * tenant selectors such as `?project_ref=`.
+ * Local profile stores are already separate, but auth-broker storage shares one
+ * provider namespace across profiles. Including the profile in the provider key
+ * keeps a shared project `mcp.json` definition from making profile B overwrite
+ * or read profile A's OAuth row for the same server URL. The URL is used
+ * verbatim (query string included) because it can carry tenant selectors such
+ * as `?project_ref=`.
  */
-export function mcpOAuthCredentialId(serverUrl: string): string {
-	return `${MCP_OAUTH_URL_CREDENTIAL_PREFIX}${serverUrl}`;
+export function mcpOAuthCredentialId(serverUrl: string, profile: string | undefined = getActiveProfile()): string {
+	return `${MCP_OAUTH_URL_CREDENTIAL_PREFIX}profile:${profile ?? "default"}:${serverUrl}`;
 }
 
 /** Whether a credential id was minted by OMP's MCP OAuth flows (either era). */
