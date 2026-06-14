@@ -172,8 +172,11 @@ export async function buildMemoryToolDeveloperInstructions(
 	// Lessons share ONE injection budget with the summary so the combined block
 	// stays within `summaryInjectionTokenLimit` (~4 chars/token, matching
 	// truncateByApproxTokens). With no summary, lessons get the whole budget.
-	const learnedBudget = cfg.summaryInjectionTokenLimit - Math.ceil(summaryOut.length / 4);
-	const learnedOut = learned ? truncateByApproxTokens(learned, learnedBudget).trim() : "";
+	// Clamp to 0: truncateByApproxTokens appends a marker, so a truncated summary
+	// can exceed `limit * 4` chars and drive the remainder negative — when the
+	// summary already fills the budget, lessons are simply dropped.
+	const learnedBudget = Math.max(0, cfg.summaryInjectionTokenLimit - Math.ceil(summaryOut.length / 4));
+	const learnedOut = learned && learnedBudget > 0 ? truncateByApproxTokens(learned, learnedBudget).trim() : "";
 	if (!summaryOut && !learnedOut) return undefined;
 
 	return prompt.render(readPathTemplate, {
