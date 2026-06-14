@@ -129,8 +129,7 @@ runs:
       - uses: oven-sh/setup-bun@v2
         with:
            bun-version: "1.3"
-      - shell: bash
-        run: bun install --frozen-lockfile
+      - uses: ./.github/actions/bun-install
       # Cross-compile toolchain selection: non-MSVC targets (e.g.
       # `aarch64-unknown-linux-gnu`) build with `cargo-zigbuild`; MSVC targets
       # (e.g. `x86_64-pc-windows-msvc`) build with `cargo-xwin`. The napi CLI's

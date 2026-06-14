@@ -679,13 +679,14 @@ describe("agent() through eval runtimes", () => {
 					cost: 0,
 					durationMs: i * 10,
 				});
-				await Bun.sleep(5);
+				await Bun.sleep(40);
 			}
 			return singleResult(options, { output: "done" });
 		});
 
 		const ops: string[] = [];
-		using idle = new IdleTimeout(40);
+		// Timing invariant (keep, do not re-tighten): total mock work (20*40ms = 800ms) > idle window (250ms) > scheduling jitter (~tens of ms).
+		using idle = new IdleTimeout(250);
 		const result = await runEvalAgent(
 			{ prompt: "investigate" },
 			{
