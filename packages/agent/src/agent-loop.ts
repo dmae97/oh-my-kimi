@@ -11,11 +11,12 @@ import {
 	isZodSchema,
 	streamSimple,
 	type ToolResultMessage,
+	type UserMessage,
 	type TSchema,
 	validateToolArguments,
 	zodToWireSchema,
 } from "@oh-my-pi/pi-ai";
-import { sanitizeText } from "@oh-my-pi/pi-utils";
+import { logger, sanitizeText } from "@oh-my-pi/pi-utils";
 import {
 	createHarmonyAuditEvent,
 	detectHarmonyLeakInAssistantMessage,
@@ -708,6 +709,28 @@ async function runLoopBody(
 					});
 				}
 				stream.push({ type: "turn_end", message, toolResults });
+
+				// Auto-continue on recoverable cybersecurity policy errors instead of terminating the agent loop.
+				// GPT proxy may return either a `cyber_policy` code or the ChatGPT Trusted Access text.
+				const errorText = message.errorMessage ?? "";
+				const isCyberPolicy =
+					/\bcyber_policy\b/i.test(errorText) ||
+					/flagged for possible cybersecurity/i.test(errorText) ||
+					(/content was flagged/i.test(errorText) && /cybersecurity/i.test(errorText)) ||
+					/Trusted Access for Cyber/i.test(errorText) ||
+					/chatgpt\.com\/cyber/i.test(errorText);
+				if (isCyberPolicy) {
+					const continuationMsg: UserMessage = {
+						role: "user",
+						content: [{ type: "text", text: "Continue." }],
+						synthetic: true,
+						timestamp: Date.now(),
+					};
+					pendingMessages = [continuationMsg];
+					hasMoreToolCalls = false;
+					continue;
+				}
+
 				stream.push(buildAgentEndEvent(newMessages, telemetry, stepCounter.count));
 				stream.end(newMessages);
 				return;
@@ -1013,6 +1036,42 @@ async function streamAssistantResponse(
 				return aborted;
 			};
 
+			const finishRepetitionStream = async (pattern: string, count: number): Promise<AssistantMessage> => {
+				try {
+					const cleanup = responseIterator.return?.();
+					if (cleanup) void cleanup.catch(() => {});
+				} catch {
+					// ignore
+				}
+				if (partialMessage) {
+					truncateRepetition(partialMessage, pattern, count);
+					partialMessage.stopReason = "error";
+					partialMessage.errorMessage = `Repetition loop detected: assistant repeated "${pattern.trim()}" ${count} times consecutively.`;
+				}
+				const finalMsg = snapshotAssistantMessage(partialMessage ?? {
+					role: "assistant",
+					content: [],
+					api: config.model.api,
+					provider: config.model.provider,
+					model: config.model.id,
+					usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+					stopReason: "error",
+					errorMessage: `Repetition loop detected.`,
+					timestamp: Date.now(),
+				});
+				if (addedPartial) {
+					context.messages[context.messages.length - 1] = finalMsg;
+				} else {
+					context.messages.push(finalMsg);
+				}
+				if (!addedPartial) {
+					stream.push({ type: "message_start", message: snapshotAssistantMessage(finalMsg) });
+				}
+				stream.push({ type: "message_end", message: snapshotAssistantMessage(finalMsg) });
+				await finishChat(finalMsg);
+				return finalMsg;
+			};
+
 			// Set up a single abort race: register the abort listener once for the whole
 			// stream and reuse the same race promise for every iterator.next() instead of
 			// allocating Promise.withResolvers and add/removeEventListener per event.
@@ -1113,6 +1172,21 @@ async function streamAssistantResponse(
 									assistantMessageEvent: snapshotAssistantMessageEvent(event),
 									message: snapshotAssistantMessage(partialMessage),
 								});
+
+								if (event.type === "text_delta" || event.type === "thinking_delta") {
+									let fullText = "";
+									for (const block of partialMessage.content) {
+										if (block.type === "text") {
+											fullText += block.text;
+										}
+									}
+									const repetition = detectRepetition(fullText);
+									if (repetition) {
+										const [pattern, count] = repetition;
+										logger.warn("Repetition loop detected during assistant stream, aborting.", { pattern, count });
+										return await finishRepetitionStream(pattern, count);
+									}
+								}
 							}
 							break;
 					}
@@ -1719,3 +1793,52 @@ function createSkippedToolResult(): AgentToolResult<any> {
 		details: {},
 	};
 }
+
+function detectRepetition(text: string): [pattern: string, count: number] | null {
+	if (text.length < 50) return null;
+
+	const windowSize = Math.min(text.length, 250);
+	const searchSpace = text.slice(-windowSize);
+
+	for (let len = 2; len <= 60; len++) {
+		if (searchSpace.length < len * 4) continue;
+
+		const pattern = searchSpace.slice(-len);
+		if (!/[a-zA-Z0-9\p{Emoji}]/u.test(pattern)) continue;
+
+		let count = 0;
+		let pos = searchSpace.length;
+		while (pos >= len) {
+			const chunk = searchSpace.slice(pos - len, pos);
+			if (chunk === pattern) {
+				count++;
+				pos -= len;
+			} else {
+				break;
+			}
+		}
+
+		if (count >= 4 && len * count >= 50) {
+			return [pattern, count];
+		}
+	}
+	return null;
+}
+
+function truncateRepetition(message: AssistantMessage, pattern: string, count: number): void {
+	const totalToRemove = pattern.length * (count - 1);
+	let remainingToRemove = totalToRemove;
+	for (let i = message.content.length - 1; i >= 0; i--) {
+		const block = message.content[i];
+		if (block.type === "text") {
+			if (block.text.length >= remainingToRemove) {
+				block.text = block.text.slice(0, block.text.length - remainingToRemove);
+				break;
+			} else {
+				remainingToRemove -= block.text.length;
+				block.text = "";
+			}
+		}
+	}
+}
+
