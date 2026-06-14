@@ -161,7 +161,7 @@
 
 ### Changed
 
-- Replaced the `omp bench` default prompt with a concrete query-planning trace that requires deriving selectivities, cardinalities, and I/O/CPU costs from given schema and data. The old prompt was open-ended prose recall, which rewarded not-thinking: adaptive-thinking models (Opus 4.6+/Sonnet 4.6+) minimized reasoning on the trivial task and streamed faster, skewing throughput comparisons. The new task forces multi-step reasoning so adaptive thinking engages and the benchmark measures generation under real cognitive load.
+- Replaced the `omp bench` default prompt with a concrete query-planning trace that requires deriving selectivities, cardinalities, and I/O/CPU costs from given schema and data. The old prompt was open-ended prose recall, which rewarded not-thinking: adaptive-thinking models (Opus 4.6+/Sonnet 4.6+) minimized reasoning on the trivial task and streamed faster, skewing throughput comparisons. The new task forces multi-step reasoning so adaptive thinking engages and the benchmark measures generation under real cognitive load. The prompt also demands explicit upfront deliberation and exhaustive enumeration/costing of every join order, so adaptive-thinking models cannot short-circuit to a quick answer and each model is measured over a sustained generation up to the token cap.
 
 ### Fixed
 
