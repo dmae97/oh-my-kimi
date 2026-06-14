@@ -31,6 +31,7 @@ runs:
            else
              echo "cache=gha" >> "$GITHUB_OUTPUT"
              echo "bun cache backend: GitHub Actions cache"
+           fi
       - name: Install bun when absent
         if: steps.env.outputs.setup_bun == 'true'
         shell: bash
