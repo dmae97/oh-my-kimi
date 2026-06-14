@@ -351,7 +351,13 @@ function parseSizeValue(value: SizeValue | undefined, referenceSize: number): nu
 
 /** Detect terminal multiplexers where scrollback clearing and height-change redraws are hostile. */
 function isMultiplexerSession(): boolean {
-	return Boolean(Bun.env.TMUX || Bun.env.STY || Bun.env.ZELLIJ);
+	// TMUX/STY/ZELLIJ are the authoritative signals, but they can be stripped while
+	// TERM survives (`sudo` without -E, `su`, env-sanitizing launchers/ssh). Fall back to
+	// the TERM prefix like every sibling multiplexer check (terminal-capabilities.ts) so a
+	// resize never emits ED3 into a tmux/screen pane and wipes its scrollback history.
+	if (Bun.env.TMUX || Bun.env.STY || Bun.env.ZELLIJ) return true;
+	const term = Bun.env.TERM?.toLowerCase() ?? "";
+	return term.startsWith("tmux") || term.startsWith("screen");
 }
 
 /**
