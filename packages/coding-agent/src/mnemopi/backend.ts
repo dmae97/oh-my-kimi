@@ -305,6 +305,7 @@ function createStatsMemory(config: MnemopiBackendConfig, bank: string): Mnemopi 
 		authorType: "agent",
 		channelId: bank,
 		...providerOptions,
+		reconcile: false,
 	} as ConstructorParameters<typeof Mnemopi>[0]);
 }
 

@@ -99,7 +99,7 @@ function inTestRuntime(): boolean {
 	return $env.NODE_ENV === "test" || $env.BUN_ENV === "test";
 }
 
-function embeddingsDisabled(): boolean {
+export function embeddingsDisabled(): boolean {
 	const active = activeEmbeddingOptions();
 	if (active?.disabled !== undefined) {
 		return active.disabled;
