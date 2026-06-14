@@ -113,6 +113,28 @@ export function __computeBunfsPackageRoot(metaDir: string, pathImpl: typeof path
 	return pathImpl.join(metaDir, "packages");
 }
 
+/**
+ * Compute the package root for the npm prebuilt `dist/cli.js` bundle.
+ *
+ * `bundle-dist.ts` defines `process.env.PI_BUNDLED="true"`; after bundling,
+ * `import.meta.dir` points at `<package>/dist`. Do not resolve the package via
+ * bare `@oh-my-pi/pi-coding-agent` here: from a global install Bun can pick an
+ * older cache entry, recreating mixed-runtime plugin loading.
+ */
+export function __computeBundledSelfPackageRoot(metaDir: string, pathImpl: typeof path = path): string {
+	const normalizedMetaDir = pathImpl.normalize(metaDir);
+	if (pathImpl.basename(normalizedMetaDir) === "dist") {
+		return pathImpl.resolve(metaDir, "..");
+	}
+
+	const pluginsDirSuffix = pathImpl.join("src", "extensibility", "plugins");
+	if (normalizedMetaDir.endsWith(pluginsDirSuffix)) {
+		return pathImpl.resolve(metaDir, "..", "..", "..");
+	}
+
+	return pathImpl.resolve(metaDir);
+}
+
 const BUNFS_PACKAGE_ROOT = IS_COMPILED_BINARY ? __computeBunfsPackageRoot(import.meta.dir) : null;
 
 function bunfsPath(...segments: string[]): string {
@@ -124,11 +146,7 @@ function bunfsPath(...segments: string[]): string {
 
 function resolveBundledSelfPackageRoot(): string | undefined {
 	if (!process.env.PI_BUNDLED) return undefined;
-	try {
-		return path.dirname(Bun.resolveSync("@oh-my-pi/pi-coding-agent/package.json", import.meta.dir));
-	} catch {
-		return undefined;
-	}
+	return __computeBundledSelfPackageRoot(import.meta.dir);
 }
 
 const BUNDLED_SELF_PACKAGE_ROOT = resolveBundledSelfPackageRoot();
