@@ -81,9 +81,19 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 		unrecognizedFlags: [],
 	};
 
+	let sawSeparator = false;
 	for (let i = 0; i < args.length; i++) {
 		let arg = args[i];
 		const flagIndex = i;
+
+		// POSIX positional separator: once `--` lands, every remaining token is
+		// a positional regardless of shape. Without this, a flag-looking message
+		// (`omp -p -- --explain-this`) would be re-validated by the loop below
+		// and rejected by the unknown-flag guard (#2461 review).
+		if (sawSeparator) {
+			result.messages.push(arg);
+			continue;
+		}
 
 		// Support --flag=value syntax (e.g. --tools=ask,read). The value is
 		// spliced in as the next token so value-consuming flags pick it up via
@@ -241,10 +251,15 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 			result.skills = args[++i].split(",").map(s => s.trim());
 		} else if (arg.startsWith("@")) {
 			result.fileArgs.push(arg.slice(1)); // Remove @ prefix
-		} else if (!arg.startsWith("-") || arg === "-" || arg === "--") {
-			// Plain positional, lone `-` (stdin marker), or POSIX positional
-			// separator `--` — pass through as a message rather than flagging it.
-			if (arg !== "--") result.messages.push(arg);
+		} else if (!arg.startsWith("-") || arg === "-") {
+			// Plain positional or lone `-` (stdin marker) — pass through as a
+			// message rather than flagging it.
+			result.messages.push(arg);
+		} else if (arg === "--") {
+			// POSIX positional separator: drop the token and switch the loop
+			// into "everything from here is a positional" mode. The guard at
+			// the top of the loop body handles the remaining tokens.
+			sawSeparator = true;
 		} else {
 			// Flag-shaped (`-x`, `--name`) but unrecognized at this parse. Record
 			// it so the post-extension reparse can decide whether to surface it
