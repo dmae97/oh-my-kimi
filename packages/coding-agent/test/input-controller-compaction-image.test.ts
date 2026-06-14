@@ -17,9 +17,11 @@
 
 import { beforeAll, describe, expect, mock, test } from "bun:test";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
+import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { CompactionQueuedMessage, InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
+import type { RestoredQueuedMessage } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 
 beforeAll(() => {
 	initTheme();
@@ -38,7 +40,7 @@ function makeCtx(initialQueue: CompactionQueuedMessage[] = []) {
 		extensionRunner: undefined,
 		customCommands: [] as Array<{ command: { name: string } }>,
 		getQueuedMessages: () => ({ steering: [] as string[], followUp: [] as string[] }),
-		clearQueue: () => ({ steering: [] as string[], followUp: [] as string[] }),
+		clearQueue: () => ({ steering: [] as RestoredQueuedMessage[], followUp: [] as RestoredQueuedMessage[] }),
 		prompt: mock(async (text: string, opts?: PromptOpts): Promise<void> => {
 			promptCalls.push({ text, opts });
 		}),
@@ -50,6 +52,8 @@ function makeCtx(initialQueue: CompactionQueuedMessage[] = []) {
 		}),
 	};
 
+	let editorText = "";
+
 	const ctx = {
 		session,
 		compactionQueuedMessages: [...initialQueue],
@@ -58,8 +62,10 @@ function makeCtx(initialQueue: CompactionQueuedMessage[] = []) {
 		pendingMessagesContainer: { clear: () => {}, addChild: () => {}, removeChild: () => {} },
 		editor: {
 			addToHistory: () => {},
-			setText: () => {},
-			getText: () => "",
+			setText: (text: string) => {
+				editorText = text;
+			},
+			getText: () => editorText,
 			imageLinks: undefined as (string | undefined)[] | undefined,
 		},
 		keybindings: { getDisplayString: () => "Alt+Up" },
@@ -125,5 +131,37 @@ describe("compaction queue image forwarding", () => {
 		await new UiHelpers(ctx).flushCompactionQueue({ willRetry: true });
 
 		expect(followUpCalls).toEqual([{ text: "and this one", images: [image] }]);
+	});
+});
+
+describe("compaction queue Alt+Up restore", () => {
+	test("restoreQueuedMessagesToEditor drains a compaction-queued skill", () => {
+		const { ctx } = makeCtx([{ text: "/skill:foo bar", mode: "followUp", images: undefined }]);
+		const restored = new InputController(ctx).restoreQueuedMessagesToEditor();
+		expect(restored).toBe(1);
+		expect(ctx.editor.getText()).toBe("/skill:foo bar");
+		expect(ctx.compactionQueuedMessages).toEqual([]);
+	});
+
+	test("restored compaction images return to the pending-image buffer", () => {
+		const image = img("YmF6");
+		const { ctx } = makeCtx([{ text: "look", mode: "steer", images: [image] }]);
+		const restored = new InputController(ctx).restoreQueuedMessagesToEditor();
+		expect(restored).toBe(1);
+		expect(ctx.pendingImages).toEqual([image]);
+	});
+
+	test("session and compaction queues restore in pending-bar order", () => {
+		const { ctx, session } = makeCtx([
+			{ text: "compaction steer", mode: "steer", images: undefined },
+			{ text: "compaction followup", mode: "followUp", images: undefined },
+		]);
+		session.clearQueue = () => ({
+			steering: [{ text: "session steer" }],
+			followUp: [{ text: "session followup" }],
+		});
+		const restored = new InputController(ctx).restoreQueuedMessagesToEditor();
+		expect(restored).toBe(4);
+		expect(ctx.editor.getText()).toBe("session steer\n\ncompaction steer\n\nsession followup\n\ncompaction followup");
 	});
 });
