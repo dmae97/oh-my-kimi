@@ -90,6 +90,7 @@ export interface InteractiveModeContext {
 	btwContainer: Container;
 	omfgContainer: Container;
 	errorBannerContainer: Container;
+	modelCycleContainer: Container;
 	editor: CustomEditor;
 	editorContainer: Container;
 	hookWidgetContainerAbove: Container;
@@ -197,6 +198,7 @@ export interface InteractiveModeContext {
 	 */
 	resetTranscript(): void;
 	showStatus(message: string, options?: { dim?: boolean }): void;
+	showModelCycleTrack(track: string): void;
 	showError(message: string): void;
 	showPinnedError(message: string): void;
 	clearPinnedError(): void;

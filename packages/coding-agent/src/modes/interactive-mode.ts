@@ -303,6 +303,10 @@ class StatusContainer extends Container implements NativeScrollbackLiveRegion {
 	}
 }
 
+/** How long the ctrl+p model-role cycle chip track lingers above the editor
+ *  before it auto-clears, mirroring the todo HUD's auto-clear timer. */
+const MODEL_CYCLE_TRACK_CLEAR_MS = 4000;
+
 /**
  * Build the anchored subagent HUD block: a bold accent "Subagents" header plus
  * one hooked row per running agent in the same `Id: description` shape the
@@ -361,6 +365,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	btwContainer: Container;
 	omfgContainer: Container;
 	errorBannerContainer: Container;
+	modelCycleContainer: Container;
 	editor: CustomEditor;
 	editorContainer: Container;
 	hookWidgetContainerAbove: Container;
@@ -381,6 +386,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	loopLimit: LoopLimitRuntime | undefined = undefined;
 	#loopAutoSubmitTimer: NodeJS.Timeout | undefined;
 	#todoAutoClearTimer: NodeJS.Timeout | undefined;
+	#modelCycleClearTimer: NodeJS.Timeout | undefined;
 	todoPhases: TodoPhase[] = [];
 	hideThinkingBlock = false;
 	pendingImages: ImageContent[] = [];
@@ -483,6 +489,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		this.statusContainer.clear();
 		this.pendingMessagesContainer.clear();
+		this.#cancelModelCycleClearTimer();
+		this.modelCycleContainer.clear();
 		this.compactionQueuedMessages = [];
 		this.streamingComponent = undefined;
 		this.streamingMessage = undefined;
@@ -545,6 +553,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.btwContainer = new Container();
 		this.omfgContainer = new Container();
 		this.errorBannerContainer = new Container();
+		this.modelCycleContainer = new Container();
 		this.editor = new CustomEditor(getEditorTheme());
 		this.editor.setUseTerminalCursor(this.ui.getShowHardwareCursor());
 		this.editor.setAutocompleteMaxVisible(settings.get("autocompleteMaxVisible"));
@@ -714,6 +723,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.addChild(this.btwContainer);
 		this.ui.addChild(this.omfgContainer);
 		this.ui.addChild(this.errorBannerContainer);
+		this.ui.addChild(this.modelCycleContainer);
 		this.ui.addChild(this.statusLine); // Only renders hook statuses (main status in editor border)
 		this.ui.addChild(this.hookWidgetContainerAbove);
 		this.ui.addChild(this.editorContainer);
@@ -1376,6 +1386,41 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.ui.requestRender();
 		}, delaySeconds * 1000);
 		this.#todoAutoClearTimer.unref?.();
+	}
+
+	/**
+	 * Render the ctrl+p model-role cycle chip track into its own anchored
+	 * container (just above the editor), mirroring the todo HUD: the container is
+	 * cleared and rebuilt in place on every cycle, so rapid presses or concurrent
+	 * chat activity can never stack duplicate tracks into the scrollback.
+	 */
+	showModelCycleTrack(track: string): void {
+		this.#renderModelCycleTrack(track);
+		this.#syncModelCycleClearTimer();
+		this.ui.requestRender();
+	}
+
+	#renderModelCycleTrack(track: string | null): void {
+		this.modelCycleContainer.clear();
+		if (!track) return;
+		this.modelCycleContainer.addChild(new Spacer(1));
+		this.modelCycleContainer.addChild(new Text(track, 1, 0));
+	}
+
+	#cancelModelCycleClearTimer(): void {
+		if (!this.#modelCycleClearTimer) return;
+		clearTimeout(this.#modelCycleClearTimer);
+		this.#modelCycleClearTimer = undefined;
+	}
+
+	#syncModelCycleClearTimer(): void {
+		this.#cancelModelCycleClearTimer();
+		this.#modelCycleClearTimer = setTimeout(() => {
+			this.#modelCycleClearTimer = undefined;
+			this.#renderModelCycleTrack(null);
+			this.ui.requestRender();
+		}, MODEL_CYCLE_TRACK_CLEAR_MS);
+		this.#modelCycleClearTimer.unref?.();
 	}
 
 	#getActivePhase(phases: TodoPhase[]): TodoPhase | undefined {
