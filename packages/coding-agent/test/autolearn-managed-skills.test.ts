@@ -122,6 +122,24 @@ describe("managed-skills primitives", () => {
 			const authoredEvil = path.join(tempHome, ".omp", "agent", "skills", "evil", "SKILL.md");
 			expect(await Bun.file(authoredEvil).exists()).toBe(false);
 		});
+
+		it("refuses to write through a symlinked skill directory", async () => {
+			const managedRoot = getManagedSkillsDir();
+			await fs.mkdir(managedRoot, { recursive: true });
+			// Plant a symlink where the skill dir would live, pointing outside the
+			// isolated managed root; Bun.write would otherwise follow it.
+			const outside = await fs.mkdtemp(path.join(os.tmpdir(), "omp-escape-"));
+			try {
+				await fs.symlink(outside, path.join(managedRoot, "evil"));
+				await expect(
+					writeManagedSkill({ action: "create", name: "evil", description: "d", body: "b" }),
+				).rejects.toThrow(/symlink/);
+				// Nothing was written through the link.
+				expect(await Bun.file(path.join(outside, "SKILL.md")).exists()).toBe(false);
+			} finally {
+				await fs.rm(outside, { recursive: true, force: true });
+			}
+		});
 	});
 
 	describe("deleteManagedSkill", () => {
