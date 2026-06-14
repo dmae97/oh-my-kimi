@@ -22,6 +22,7 @@ const compat: ResolvedOpenAICompat = {
 	reasoningEffortMap: {},
 	supportsUsageInStreaming: true,
 	supportsToolChoice: true,
+	supportsForcedToolChoice: true,
 	disableReasoningOnForcedToolChoice: false,
 	disableReasoningOnToolChoice: false,
 	maxTokensField: "max_completion_tokens",

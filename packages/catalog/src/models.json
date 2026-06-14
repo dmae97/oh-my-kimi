@@ -22904,6 +22904,7 @@
 				"disableReasoningOnForcedToolChoice": true,
 				"disableReasoningOnToolChoice": false,
 				"supportsToolChoice": true,
+				"supportsForcedToolChoice": true,
 				"maxTokensField": "max_completion_tokens",
 				"requiresToolResultName": false,
 				"requiresAssistantAfterToolResult": false,
@@ -25327,6 +25328,7 @@
 				"disableReasoningOnForcedToolChoice": false,
 				"disableReasoningOnToolChoice": false,
 				"supportsToolChoice": true,
+				"supportsForcedToolChoice": true,
 				"maxTokensField": "max_completion_tokens",
 				"requiresToolResultName": false,
 				"requiresAssistantAfterToolResult": false,
@@ -25778,6 +25780,7 @@
 				"disableReasoningOnForcedToolChoice": false,
 				"disableReasoningOnToolChoice": false,
 				"supportsToolChoice": true,
+				"supportsForcedToolChoice": true,
 				"maxTokensField": "max_completion_tokens",
 				"requiresToolResultName": false,
 				"requiresAssistantAfterToolResult": false,
@@ -26058,6 +26061,7 @@
 				"disableReasoningOnForcedToolChoice": false,
 				"disableReasoningOnToolChoice": false,
 				"supportsToolChoice": true,
+				"supportsForcedToolChoice": true,
 				"maxTokensField": "max_completion_tokens",
 				"requiresToolResultName": false,
 				"requiresAssistantAfterToolResult": false,
@@ -51042,6 +51046,9 @@
 			},
 			"contextWindow": 262144,
 			"maxTokens": 262144,
+			"compat": {
+				"supportsForcedToolChoice": false
+			},
 			"thinking": {
 				"mode": "effort",
 				"efforts": [

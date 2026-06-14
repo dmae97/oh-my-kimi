@@ -1233,6 +1233,7 @@ function buildParams(
 		Boolean(options?.reasoning) && !options?.disableReasoning && Boolean(model.reasoning);
 	const forcedToolChoiceSuppressesThinking =
 		compat.disableReasoningOnForcedToolChoice &&
+		compat.supportsForcedToolChoice &&
 		isForcedToolChoice(mapToOpenAICompletionsToolChoice(options?.toolChoice));
 	if (compat.whenThinking && thinkingEnabledForRequest && !forcedToolChoiceSuppressesThinking) {
 		compat = compat.whenThinking; // precomputed at model build — pointer swap, no allocation
@@ -1333,6 +1334,12 @@ function buildParams(
 
 	if (options?.toolChoice && compat.supportsToolChoice) {
 		params.tool_choice = mapToOpenAICompletionsToolChoice(options.toolChoice);
+	}
+	if (isForcedToolChoice(params.tool_choice) && !compat.supportsForcedToolChoice) {
+		// Some thinking-required OpenAI-compatible models reject forced
+		// `tool_choice` while still accepting tools with the default auto
+		// selector. Keep the tool available and let the model choose it.
+		params.tool_choice = "auto";
 	}
 
 	if (params.tool_choice === "none" && (!Array.isArray(params.tools) || params.tools.length === 0)) {

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed OpenAI-compatible providers that reject forced `tool_choice` on thinking-required models by downgrading unsupported forced choices to `auto` while keeping tools available ([#2546](https://github.com/can1357/oh-my-pi/issues/2546)).
+
 ## [15.12.6] - 2026-06-14
 
 ### Changed

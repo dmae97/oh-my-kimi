@@ -19,6 +19,7 @@
 - Changed `handoff` custom messages (`customType: "handoff"`) to render in the transcript as a compaction-style expandable divider in both the main session and Agent Hub views, and expanded handoff details now show the handoff context body without `<handoff-context>` tags
 - Changed the double-tap-← gesture (empty editor, main session) to stay inert when there are no subagents to show, instead of opening an empty Agent Hub roster. The explicit Agent Hub / observe keybindings still open the empty roster. The gating reuses the hub's own row count (after its persisted-subagent scan), so it matches exactly what the hub would display.
 - Changed the `job` tool's `async.pollWaitDuration` setting (relabeled **Max Poll Time**) to add a `smart` value, now the default. A fixed value (`5s`–`5m`) still blocks for exactly that long; `smart` adapts: a blocking poll starts at a 5s floor and climbs a ladder (5s → 10s → 30s → 1m → 5m) with each back-to-back poll, so a tight poll loop backs off and stops spending turns on "still running" frames, then resets to the 5s floor after ~1 minute without polling (i.e. when the agent steps away to do real work). Escalation is tracked per agent (owner-scoped on `AsyncJobManager`).
+- Added the `compat.supportsForcedToolChoice` custom-model flag for OpenAI-compatible models whose endpoints accept tools but reject forced `tool_choice` values ([#2546](https://github.com/can1357/oh-my-pi/issues/2546)).
 
 ### Fixed
 
