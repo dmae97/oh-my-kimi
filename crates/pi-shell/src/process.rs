@@ -95,9 +95,7 @@ mod platform {
 			// by parent pid, the same primitive the macOS path uses. Only taken when no
 			// `children` file was readable, so kernels that support it keep the cheap
 			// per-task fast path.
-			if !children_file_available
-				&& let Ok(proc_entries) = fs::read_dir("/proc")
-			{
+			if !children_file_available && let Ok(proc_entries) = fs::read_dir("/proc") {
 				for entry in proc_entries.flatten() {
 					let name = entry.file_name();
 					let Some(pid_str) = name.to_str() else {
@@ -114,8 +112,8 @@ mod platform {
 
 		/// Validate a candidate child pid — dedup, still running, and currently
 		/// parented to `self` — then push it onto `out`. Shared by the
-		/// `/proc/<pid>/task/<tid>/children` fast path and the `/proc`-scan fallback
-		/// for kernels without `CONFIG_PROC_CHILDREN`.
+		/// `/proc/<pid>/task/<tid>/children` fast path and the `/proc`-scan
+		/// fallback for kernels without `CONFIG_PROC_CHILDREN`.
 		fn push_validated_child(&self, child_pid: i32, seen: &mut HashSet<i32>, out: &mut Vec<Self>) {
 			if child_pid == self.pid || !seen.insert(child_pid) {
 				return;
