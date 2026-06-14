@@ -658,6 +658,19 @@ function resetOutputState(output: AssistantMessage): void {
 	output.stopReason = "stop";
 	output.stopDetails = undefined;
 }
+async function applyCodexPayloadReplacement<T extends Record<string, unknown>>(
+	model: Model<"openai-codex-responses">,
+	options: OpenAICodexResponsesOptions | undefined,
+	payload: T,
+): Promise<T> {
+	const replacementPayload = await options?.onPayload?.(payload, model);
+	return replacementPayload !== undefined ? (replacementPayload as T) : payload;
+}
+
+function stripWebSocketFrameType(payload: Record<string, unknown>): RequestBody {
+	const { type: _type, ...body } = payload;
+	return body as RequestBody;
+}
 
 function removeTransientBlockIndices(output: AssistantMessage): void {
 	for (const block of output.content) {
@@ -713,11 +726,7 @@ async function buildCodexRequestContext(
 	const url = resolveCodexResponsesUrl(baseUrl);
 	const promptCacheKey = resolveCodexPromptCacheKey(options);
 	const transportSessionId = resolveCodexTransportSessionId(options);
-	let transformedBody = await buildTransformedCodexRequestBody(model, context, options, promptCacheKey);
-	const replacementPayload = await options?.onPayload?.(transformedBody, model);
-	if (replacementPayload !== undefined) {
-		transformedBody = replacementPayload as typeof transformedBody;
-	}
+	const transformedBody = await buildTransformedCodexRequestBody(model, context, options, promptCacheKey);
 
 	const requestHeaders = { ...(model.headers ?? {}), ...(options?.headers ?? {}) };
 	const rawRequestDump: RawHttpRequestDump = {
@@ -853,6 +862,8 @@ async function openInitialCodexEventStream(
 		while (true) {
 			try {
 				return await openCodexWebSocketTransport(
+					model,
+					options,
 					requestContext,
 					requestSetup,
 					websocketState,
@@ -885,6 +896,8 @@ async function openInitialCodexEventStream(
 	return openCodexSseTransport(model, requestContext, requestSetup, options, websocketState, transformedBody);
 }
 async function openCodexWebSocketTransport(
+	model: Model<"openai-codex-responses">,
+	options: OpenAICodexResponsesOptions | undefined,
 	requestContext: CodexRequestContext,
 	requestSetup: CodexRequestSetup,
 	websocketState: CodexWebSocketSessionState,
@@ -898,7 +911,7 @@ async function openCodexWebSocketTransport(
 	const chainedBody = buildCodexChainedRequestBody(requestContext.transformedBody, websocketState);
 	// WebSocket frames cannot carry per-request HTTP headers, so the Responses
 	// Lite marker rides in `client_metadata` on every `response.create`.
-	const websocketRequest: Record<string, unknown> = {
+	const websocketRequest = await applyCodexPayloadReplacement(model, options, {
 		type: "response.create",
 		...chainedBody,
 		...(requestContext.responsesLite
@@ -909,7 +922,7 @@ async function openCodexWebSocketTransport(
 					},
 				}
 			: {}),
-	};
+	});
 	const websocketHeaders = createCodexHeaders(
 		requestContext.requestHeaders,
 		requestContext.accountId,
@@ -919,7 +932,8 @@ async function openCodexWebSocketTransport(
 		websocketState,
 		requestContext.responsesLite,
 	);
-	const requestBodyForState = structuredCloneJSON(requestContext.transformedBody);
+	const requestBodyForState = stripWebSocketFrameType(websocketRequest);
+	requestContext.rawRequestDump.body = websocketRequest;
 	logCodexDebug("codex websocket request", {
 		url: toWebSocketUrl(requestContext.url),
 		model: requestContext.transformedBody.model,
@@ -997,8 +1011,9 @@ async function openCodexSseTransport(
 			),
 		);
 	};
-	recordCodexWebSocketRequestStats(state, body);
-	return { eventStream: await open(body), requestBodyForState: structuredCloneJSON(body), transport: "sse" };
+	const wireBody = await applyCodexPayloadReplacement(model, options, body);
+	recordCodexWebSocketRequestStats(state, wireBody);
+	return { eventStream: await open(wireBody), requestBodyForState: structuredCloneJSON(wireBody), transport: "sse" };
 }
 
 async function reopenCodexWebSocketRuntimeStream(
@@ -1008,6 +1023,8 @@ async function reopenCodexWebSocketRuntimeStream(
 ): Promise<void> {
 	try {
 		const next = await openCodexWebSocketTransport(
+			context.model,
+			context.options,
 			context.requestContext,
 			context.requestSetup,
 			state,
