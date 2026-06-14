@@ -998,6 +998,32 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	fastModeScope: {
+		type: "enum",
+		values: ["both", "openai", "claude"] as const,
+		default: "both",
+		ui: {
+			tab: "model",
+			group: "Sampling",
+			label: "Fast Mode Scope",
+			description:
+				'Which providers `/fast on` (and the fast-mode toggle) target. "both" = priority on every supported provider; "openai"/"claude" scope it to one family (mirrors serviceTier openai-only/claude-only).',
+			options: [
+				{ value: "both", label: "Both", description: "Priority on every supported provider" },
+				{
+					value: "openai",
+					label: "OpenAI only",
+					description: "Priority on OpenAI/OpenAI-Codex requests; ignored elsewhere",
+				},
+				{
+					value: "claude",
+					label: "Claude only",
+					description: "Anthropic fast mode on direct Claude requests; ignored elsewhere",
+				},
+			],
+		},
+	},
+
 	// Retries
 	"retry.enabled": { type: "boolean", default: true },
 

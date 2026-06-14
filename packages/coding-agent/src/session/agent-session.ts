@@ -6050,7 +6050,12 @@ export class AgentSession {
 			// Already on under any scope — keep the user's scoped value.
 			return;
 		}
-		this.setServiceTier(enabled ? "priority" : undefined);
+		if (!enabled) {
+			this.setServiceTier(undefined);
+			return;
+		}
+		const scope = this.settings.get("fastModeScope");
+		this.setServiceTier(scope === "openai" ? "openai-only" : scope === "claude" ? "claude-only" : "priority");
 	}
 
 	toggleFastMode(): boolean {
