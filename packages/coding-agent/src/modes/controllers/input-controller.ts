@@ -1,8 +1,10 @@
 import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { type AutocompleteProvider, matchesKey, type SlashCommand } from "@oh-my-pi/pi-tui";
 import { $env, isEnoent, logger, sanitizeText } from "@oh-my-pi/pi-utils";
 import { isSettingsInitialized, settings } from "../../config/settings";
+import { resolveLocalRoot } from "../../internal-urls";
 import { AssistantMessageComponent } from "../../modes/components/assistant-message";
 import { renderSegmentTrack } from "../../modes/components/segment-track";
 import { TinyTitleDownloadProgressComponent } from "../../modes/components/tiny-title-download-progress";
@@ -42,6 +44,28 @@ function hasPasteText(value: unknown): value is PasteTarget {
 	return typeof value === "object" && value !== null && typeof (value as PasteTarget).pasteText === "function";
 }
 
+/** Wrap pasted text in a fenced code block, using a backtick fence longer than any run of
+ *  backticks already in the content so an embedded fence cannot terminate the block early. */
+function wrapPasteInCodeBlock(content: string): string {
+	let longestRun = 0;
+	let run = 0;
+	for (let i = 0; i < content.length; i++) {
+		if (content.charCodeAt(i) === 96 /* backtick */) {
+			run++;
+			if (run > longestRun) longestRun = run;
+		} else {
+			run = 0;
+		}
+	}
+	const fence = "`".repeat(Math.max(3, longestRun + 1));
+	return `${fence}\n${content}\n${fence}`;
+}
+
+/** Wrap pasted text in `<pasted_text>` tags so the model treats it as one quoted block. */
+function wrapPasteInXml(content: string): string {
+	return `<pasted_text>\n${content}\n</pasted_text>`;
+}
+
 const TINY_TITLE_PROGRESS_DONE_TTL_MS = 3_000;
 // A cached model fires its file-load events in a short burst and then goes silent
 // while onnxruntime builds the session; a genuine download keeps streaming progress
@@ -75,6 +99,9 @@ export class InputController {
 	// (>= LEFT_DOUBLE_TAP_MAX_GAP_MS) starts a fresh sequence. See
 	// #detectLeftDoubleTap.
 	#leftTapCount = 0;
+	// Sequential index for `local://attachment-N` references created by the large-paste "attach as
+	// file" action. Seeded from 0 and bumped past any existing attachment files in #attachPasteAsFile.
+	#attachmentCounter = 0;
 
 	#showTinyTitleDownloadProgress(modelKey: string): void {
 		if (!isTinyTitleLocalModelKey(modelKey)) return;
@@ -284,6 +311,7 @@ export class InputController {
 			this.ctx.keybindings.getKeys("app.clipboard.pasteTextRaw"),
 		);
 		this.ctx.editor.onPasteTextRaw = () => void this.handleClipboardTextRawPaste();
+		this.ctx.editor.onLargePaste = (text, lineCount) => this.handleLargePaste(text, lineCount);
 		this.ctx.editor.setActionKeys(
 			"app.clipboard.copyPrompt",
 			this.ctx.keybindings.getKeys("app.clipboard.copyPrompt"),
@@ -1185,6 +1213,97 @@ export class InputController {
 			}
 		} catch {
 			this.ctx.showStatus("Failed to paste raw text from clipboard");
+		}
+	}
+
+	/**
+	 * Editor `onLargePaste` hook: gate a marker-sized paste behind the large-paste menu. Returns
+	 * `true` to intercept (the editor skips its default `[Paste]` marker) once the paste reaches the
+	 * configured `paste.largeMenuThreshold` line count; otherwise `false` for default collapse-to-marker
+	 * behavior. The async menu is fired and forgotten — the editor only needs the synchronous verdict.
+	 */
+	handleLargePaste(text: string, lineCount: number): boolean {
+		const threshold = this.ctx.settings.get("paste.largeMenuThreshold");
+		if (!(threshold > 0) || lineCount < threshold) return false;
+		void this.presentLargePasteMenu(text, lineCount);
+		return true;
+	}
+
+	/**
+	 * Present the large-paste menu and apply the chosen action: wrap in a code block or in XML tags
+	 * (both collapse to a `[Paste]` marker that expands on submit), or save the text to a file and
+	 * reference its path so the agent can `read` it on demand. Cancelling (Esc) falls back to the
+	 * default inline paste marker, so the pasted content is never lost.
+	 */
+	async presentLargePasteMenu(text: string, lineCount: number): Promise<void> {
+		const CODE_BLOCK = "Wrap in a code block";
+		const XML = "Wrap in XML tags";
+		const FILE = "Attach as a file";
+
+		let choice: string | undefined;
+		try {
+			choice = await this.ctx.showHookSelector(
+				`Pasted ${lineCount} lines`,
+				[
+					{ label: CODE_BLOCK, description: "Fence the text in a ``` block, collapsed to a marker" },
+					{ label: XML, description: "Wrap the text in <pasted_text> tags, collapsed to a marker" },
+					{ label: FILE, description: "Save the text to a file and reference its path" },
+				],
+				{ helpText: "Esc to paste inline" },
+			);
+		} catch (error) {
+			logger.warn("large-paste menu failed", { error: error instanceof Error ? error.message : String(error) });
+			choice = undefined;
+		}
+
+		switch (choice) {
+			case CODE_BLOCK:
+				this.ctx.editor.insertPaste(wrapPasteInCodeBlock(text));
+				break;
+			case XML:
+				this.ctx.editor.insertPaste(wrapPasteInXml(text));
+				break;
+			case FILE:
+				await this.#attachPasteAsFile(text, lineCount);
+				break;
+			default:
+				// Esc / cancel: keep the original behavior — collapse to an inline paste marker.
+				this.ctx.editor.insertPaste(text);
+				break;
+		}
+		this.ctx.ui.requestRender();
+	}
+
+	/**
+	 * Save a large paste to the session's `local://` store and insert a clean `local://attachment-N`
+	 * reference into the editor so the agent can `read` it on demand — instead of inlining the text or
+	 * leaking a raw temp path. Falls back to an inline paste marker when the write fails, so the
+	 * content is never lost.
+	 */
+	async #attachPasteAsFile(text: string, lineCount: number): Promise<void> {
+		try {
+			// Mirror the exact mapping the read tool's local:// resolver uses so a later
+			// `read local://attachment-N` lands on the file written here.
+			const localRoot = resolveLocalRoot({
+				getArtifactsDir: () => this.ctx.sessionManager.getArtifactsDir(),
+				getSessionId: () => this.ctx.sessionManager.getSessionId(),
+			});
+			let name: string;
+			let filePath: string;
+			do {
+				this.#attachmentCounter++;
+				name = `attachment-${this.#attachmentCounter}`;
+				filePath = path.join(localRoot, name);
+			} while (await Bun.file(filePath).exists());
+			await Bun.write(filePath, text);
+			this.ctx.editor.insertText(`local://${name} `);
+			this.ctx.showStatus(`Saved ${lineCount} pasted lines to local://${name}`);
+		} catch (error) {
+			logger.warn("failed to save large paste to file", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+			this.ctx.editor.insertPaste(text);
+			this.ctx.showError("Failed to save paste to a file — pasted inline instead");
 		}
 	}
 

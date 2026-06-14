@@ -453,6 +453,13 @@ export class Editor implements Component, Focusable {
 	onSubmit?: (text: string) => void | Promise<void>;
 	onAltEnter?: (text: string) => void;
 	onChange?: (text: string) => void;
+	/** Called for a "marker-sized" paste — the point where the editor would otherwise collapse it
+	 *  into a `[Paste #N]` token (> 10 lines or > 1000 characters). Return `true` to intercept:
+	 *  the editor inserts nothing and records no undo state, leaving insertion to the host (e.g. a
+	 *  "wrap in a code block / XML / attach as file" menu for very large pastes), which re-inserts
+	 *  via {@link insertPaste} or {@link insertText}. Return `false` (or leave unset) for the
+	 *  default collapse-to-marker behavior. `lineCount` is the sanitized paste's line count. */
+	onLargePaste?: (text: string, lineCount: number) => boolean;
 	onAutocompleteCancel?: () => void;
 	disableSubmit: boolean = false;
 
@@ -1598,6 +1605,18 @@ export class Editor implements Component, Focusable {
 		this.#handlePaste(text);
 	}
 
+	/** Insert `content` as a collapsed `[Paste #N]` marker (stored for expansion on submit via
+	 *  {@link getExpandedText}). Hosts that intercept large pastes through {@link onLargePaste} use
+	 *  this to re-insert a (possibly transformed) paste without re-triggering the interception hook. */
+	insertPaste(content: string): void {
+		this.#historyIndex = -1;
+		this.#resetKillSequence();
+		this.#recordUndoState();
+		this.#withUndoSuspended(() => {
+			this.#storePasteMarker(content, content.split("\n").length);
+		});
+	}
+
 	// All the editor methods from before...
 	#insertCharacter(char: string): void {
 		this.#exitHistoryForEditing();
@@ -1695,68 +1714,38 @@ export class Editor implements Component, Focusable {
 	}
 
 	#handlePaste(pastedText: string): void {
+		let filteredText = this.#sanitizePastedText(pastedText);
+
+		// If pasting a file path (starts with /, ~, or .) and the character before
+		// the cursor is a word character, prepend a space for better readability.
+		if (/^[/~.]/.test(filteredText)) {
+			const currentLine = this.#state.lines[this.#state.cursorLine] || "";
+			const charBeforeCursor = this.#state.cursorCol > 0 ? currentLine[this.#state.cursorCol - 1] : "";
+			if (charBeforeCursor && /\w/.test(charBeforeCursor)) {
+				filteredText = ` ${filteredText}`;
+			}
+		}
+
+		const pastedLines = filteredText.split("\n");
+		const totalChars = filteredText.length;
+		// "Marker-sized": large enough to collapse into a `[Paste #N]` token (> 10 lines or
+		// > 1000 characters) instead of flooding the buffer.
+		const isMarkerSized = pastedLines.length > 10 || totalChars > 1000;
+
+		// Let the host intercept marker-sized pastes (e.g. the large-paste menu). When it takes
+		// over, the editor inserts nothing and records no undo state — the host re-inserts via
+		// `insertPaste`/`insertText` once the user chooses.
+		if (isMarkerSized && this.onLargePaste?.(filteredText, pastedLines.length)) {
+			return;
+		}
+
 		this.#historyIndex = -1; // Exit history browsing mode
 		this.#resetKillSequence();
 		this.#recordUndoState();
 
 		this.#withUndoSuspended(() => {
-			// Some terminals (e.g. tmux popups with extended-keys-format=csi-u) re-encode
-			// control bytes inside bracketed paste as CSI-u Ctrl+<letter> sequences
-			// (ESC [ <codepoint> ; 5 u). Decode those back to their literal byte so the
-			// per-char filter below preserves newlines instead of stripping ESC and
-			// leaking the printable tail (e.g. "[106;5u") into the editor.
-			const decodedText = pastedText.replace(/\x1b\[(\d+);5u/g, (match, code) => {
-				const cp = Number(code);
-				if (cp >= 97 && cp <= 122) return String.fromCharCode(cp - 96);
-				if (cp >= 65 && cp <= 90) return String.fromCharCode(cp - 64);
-				return match;
-			});
-
-			// Clean the pasted text. NFC-normalize so macOS Finder drag-drops of
-			// Korean filenames (which arrive as NFD: e.g. `ᄒ`+`ᅪ` instead of `화`)
-			// land in the buffer as the same precomposed syllables a terminal
-			// renders — without this, cursor column accounting drifts by
-			// `(NFD cells − NFC cells)` and the visible glyph desyncs from the
-			// hardware cursor. Matches the `Input` component's prior fix; this
-			// is the same fix on the real OMP prompt component (`Editor`).
-			const cleanText = decodedText.replace(/\r\n?/g, "\n").normalize("NFC");
-
-			// Convert tabs to spaces (4 spaces per tab)
-			const tabExpandedText = cleanText.replace(/\t/g, "    ");
-
-			// Strip control characters except newline (tabs already expanded above,
-			// CRs already normalized). Single regex pass instead of split/filter/join
-			// to avoid allocating a per-code-unit array for large pastes.
-			let filteredText = tabExpandedText.replace(/[\x00-\x09\x0B-\x1F]/g, "");
-
-			// If pasting a file path (starts with /, ~, or .) and the character before
-			// the cursor is a word character, prepend a space for better readability
-			if (/^[/~.]/.test(filteredText)) {
-				const currentLine = this.#state.lines[this.#state.cursorLine] || "";
-				const charBeforeCursor = this.#state.cursorCol > 0 ? currentLine[this.#state.cursorCol - 1] : "";
-				if (charBeforeCursor && /\w/.test(charBeforeCursor)) {
-					filteredText = ` ${filteredText}`;
-				}
-			}
-
-			// Split into lines
-			const pastedLines = filteredText.split("\n");
-
-			// Check if this is a large paste (> 10 lines or > 1000 characters)
-			const totalChars = filteredText.length;
-			if (pastedLines.length > 10 || totalChars > 1000) {
-				// Store the paste and insert a marker
-				this.#pasteCounter++;
-				const pasteId = this.#pasteCounter;
-				this.#pastes.set(pasteId, filteredText);
-
-				// Insert marker like "[Paste #1, +123 lines]" or "[Paste #1, 1234 chars]"
-				const marker =
-					pastedLines.length > 10
-						? `[Paste #${pasteId}, +${pastedLines.length} lines]`
-						: `[Paste #${pasteId}, ${totalChars} chars]`;
-				this.#insertTextAtCursor(marker);
-
+			if (isMarkerSized) {
+				this.#storePasteMarker(filteredText, pastedLines.length);
 				return;
 			}
 
@@ -1773,6 +1762,51 @@ export class Editor implements Component, Focusable {
 			// Multi-line paste - use insertTextAtCursor for proper handling
 			this.#insertTextAtCursor(filteredText);
 		});
+	}
+
+	/** Normalize raw pasted text: decode tmux CSI-u re-encoded control bytes, normalize CRLF and
+	 *  NFC (macOS NFD filename drag-drops), expand tabs, and strip control characters except newline. */
+	#sanitizePastedText(pastedText: string): string {
+		// Some terminals (e.g. tmux popups with extended-keys-format=csi-u) re-encode
+		// control bytes inside bracketed paste as CSI-u Ctrl+<letter> sequences
+		// (ESC [ <codepoint> ; 5 u). Decode those back to their literal byte so the
+		// per-char filter below preserves newlines instead of stripping ESC and
+		// leaking the printable tail (e.g. "[106;5u") into the editor.
+		const decodedText = pastedText.replace(/\x1b\[(\d+);5u/g, (match, code) => {
+			const cp = Number(code);
+			if (cp >= 97 && cp <= 122) return String.fromCharCode(cp - 96);
+			if (cp >= 65 && cp <= 90) return String.fromCharCode(cp - 64);
+			return match;
+		});
+
+		// Clean the pasted text. NFC-normalize so macOS Finder drag-drops of
+		// Korean filenames (which arrive as NFD: e.g. `ᄒ`+`ᅪ` instead of `화`)
+		// land in the buffer as the same precomposed syllables a terminal
+		// renders — without this, cursor column accounting drifts by
+		// `(NFD cells − NFC cells)` and the visible glyph desyncs from the
+		// hardware cursor.
+		const cleanText = decodedText.replace(/\r\n?/g, "\n").normalize("NFC");
+
+		// Convert tabs to spaces (4 spaces per tab).
+		const tabExpandedText = cleanText.replace(/\t/g, "   ");
+
+		// Strip control characters except newline (tabs already expanded above, CRs already
+		// normalized). Single regex pass instead of split/filter/join to avoid allocating a
+		// per-code-unit array for large pastes.
+		return tabExpandedText.replace(/[\x00-\x09\x0B-\x1F]/g, "");
+	}
+
+	/** Store `content` in the paste buffer and insert a collapsed `[Paste #N]` marker that expands
+	 *  back to `content` on submit. `lineCount` is the content's line count. */
+	#storePasteMarker(content: string, lineCount: number): void {
+		this.#pasteCounter++;
+		const pasteId = this.#pasteCounter;
+		this.#pastes.set(pasteId, content);
+
+		// Insert marker like "[Paste #1, +123 lines]" or "[Paste #1, 1234 chars]".
+		const marker =
+			lineCount > 10 ? `[Paste #${pasteId}, +${lineCount} lines]` : `[Paste #${pasteId}, ${content.length} chars]`;
+		this.#insertTextAtCursor(marker);
 	}
 
 	/** Re-evaluate autocomplete triggers for the text ending at the cursor (used after bulk edits). */

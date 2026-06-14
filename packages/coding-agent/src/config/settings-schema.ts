@@ -1209,6 +1209,25 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"paste.largeMenuThreshold": {
+		type: "number",
+		default: 100,
+		ui: {
+			tab: "interaction",
+			group: "Input",
+			label: "Large Paste Menu",
+			description:
+				"When a paste reaches this many lines, offer a menu to wrap it in a code block, wrap it in XML tags, or save it to a file. 0 disables the menu (large pastes still collapse to a [Paste] marker).",
+			options: [
+				{ value: "0", label: "Off" },
+				{ value: "100", label: "100 lines" },
+				{ value: "250", label: "250 lines" },
+				{ value: "500", label: "500 lines" },
+				{ value: "1000", label: "1000 lines" },
+			],
+		},
+	},
+
 	"startup.quiet": {
 		type: "boolean",
 		default: false,

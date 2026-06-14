@@ -2137,6 +2137,66 @@ describe("Editor component", () => {
 			editor.handleInput("\x7f"); // Backspace removes only the closing bracket
 			expect(editor.getText()).toBe("[Paste #1, +12 lines");
 		});
+
+		it("lets onLargePaste intercept a marker-sized paste, suppressing the default marker", () => {
+			const editor = new Editor(defaultEditorTheme);
+			const seen: Array<{ text: string; lineCount: number }> = [];
+			editor.onLargePaste = (text, lineCount) => {
+				seen.push({ text, lineCount });
+				return true;
+			};
+			const pastedText = Array.from({ length: 1200 }, (_, i) => `line ${i + 1}`).join("\n");
+
+			editor.handleInput(`\x1b[200~${pastedText}\x1b[201~`);
+
+			// Hook intercepted: nothing inserted, no paste marker, hook saw the full text + line count.
+			expect(editor.getText()).toBe("");
+			expect(seen).toHaveLength(1);
+			expect(seen[0].text).toBe(pastedText);
+			expect(seen[0].lineCount).toBe(1200);
+		});
+
+		it("falls back to the default marker when onLargePaste declines", () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.onLargePaste = () => false;
+			const pastedText = Array.from({ length: 1200 }, (_, i) => `line ${i + 1}`).join("\n");
+
+			editor.handleInput(`\x1b[200~${pastedText}\x1b[201~`);
+
+			expect(editor.getText()).toMatch(/^\[Paste #\d+, \+1200 lines\]$/);
+			expect(editor.getExpandedText()).toBe(pastedText);
+		});
+
+		it("does not call onLargePaste for a sub-marker paste", () => {
+			const editor = new Editor(defaultEditorTheme);
+			let calls = 0;
+			editor.onLargePaste = () => {
+				calls++;
+				return true;
+			};
+
+			editor.handleInput("\x1b[200~just a short paste\x1b[201~");
+
+			expect(calls).toBe(0);
+			expect(editor.getText()).toBe("just a short paste");
+		});
+
+		it("insertPaste collapses content to a marker that expands on submit", () => {
+			const editor = new Editor(defaultEditorTheme);
+			let submitted = "";
+			editor.onSubmit = text => {
+				submitted = text;
+			};
+			const wrapped = `\`\`\`\n${Array.from({ length: 30 }, (_, i) => `row ${i}`).join("\n")}\n\`\`\``;
+
+			editor.insertPaste(wrapped);
+
+			expect(editor.getText()).toMatch(/^\[Paste #\d+, \+\d+ lines\]$/);
+			expect(editor.getExpandedText()).toBe(wrapped);
+
+			editor.handleInput("\r");
+			expect(submitted).toBe(wrapped);
+		});
 	});
 
 	describe("Korean NFC paste normalization", () => {
