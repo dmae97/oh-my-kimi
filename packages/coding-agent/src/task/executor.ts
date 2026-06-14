@@ -8,7 +8,7 @@ import path from "node:path";
 import type { AgentEvent, AgentIdentity, AgentTelemetryConfig, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { recordHandoff, resolveTelemetry } from "@oh-my-pi/pi-agent-core";
 import type { Usage } from "@oh-my-pi/pi-ai";
-import { logger, prompt, untilAborted } from "@oh-my-pi/pi-utils";
+import { logger, popLoopPhase, prompt, pushLoopPhase, untilAborted } from "@oh-my-pi/pi-utils";
 import type { Rule } from "../capability/rule";
 import { ModelRegistry } from "../config/model-registry";
 import { resolveModelOverrideWithAuthFallback } from "../config/model-resolver";
@@ -1208,6 +1208,9 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 				return;
 			}
 			if (isAgentEvent(event)) {
+				// Breadcrumb the synchronous subagent event handling so the loop
+				// watchdog can attribute any block to this in-process subagent.
+				pushLoopPhase(`subagent:${id}`);
 				try {
 					processEvent(event);
 				} catch (err) {
@@ -1215,6 +1218,8 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 						error: err instanceof Error ? err.message : String(err),
 					});
 					requestAbort("terminate");
+				} finally {
+					popLoopPhase();
 				}
 			}
 		});
@@ -1454,16 +1459,24 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 	const yieldItems = progress.extractedToolData?.yield as YieldItem[] | undefined;
 	const reportFindingDetails = progress.extractedToolData?.report_finding as ReportFindingDetails[] | undefined;
 	const reportFindings: ReviewFinding[] | undefined = reportFindingDetails?.map(toReviewFinding);
-	const finalized = finalizeSubprocessOutput({
-		rawOutput,
-		exitCode,
-		stderr,
-		doneAborted: Boolean(done.aborted),
-		signalAborted: Boolean(signal?.aborted),
-		yieldItems,
-		reportFindings,
-		outputSchema: args.outputSchema,
-	});
+	// Breadcrumb the synchronous yield-payload shaping (O(rawOutput)) so a block
+	// here is attributed to this subagent rather than logged as "unknown".
+	pushLoopPhase(`subagent:${id}`);
+	let finalized: FinalizeSubprocessOutputResult;
+	try {
+		finalized = finalizeSubprocessOutput({
+			rawOutput,
+			exitCode,
+			stderr,
+			doneAborted: Boolean(done.aborted),
+			signalAborted: Boolean(signal?.aborted),
+			yieldItems,
+			reportFindings,
+			outputSchema: args.outputSchema,
+		});
+	} finally {
+		popLoopPhase();
+	}
 	rawOutput = finalized.rawOutput;
 	exitCode = finalized.exitCode;
 	stderr = finalized.stderr;
