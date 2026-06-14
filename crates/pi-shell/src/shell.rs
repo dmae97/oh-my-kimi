@@ -2317,9 +2317,12 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 		use std::io::Read as _;
 
 		// SAFETY: `getsid(0)` only queries the current process session; the return
-		// value is checked.
+		// value is checked. Inside a PID namespace (the containerized CI runner)
+		// the host's session leader can live outside the namespace, so `getsid(0)`
+		// legitimately reports 0 — only -1 is a real failure. The child-session
+		// invariants below (own session, distinct from host) stay meaningful.
 		let host_sid = unsafe { libc::getsid(0) };
-		assert!(host_sid > 0, "getsid(0) failed: {}", std::io::Error::last_os_error());
+		assert!(host_sid >= 0, "getsid(0) failed: {}", std::io::Error::last_os_error());
 
 		// Build the same kind of session pi-natives uses in production.
 		let config = ShellConfig { session_env: None, snapshot_path: None, minimizer: None };
@@ -2438,9 +2441,12 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 	async fn embedded_pipeline_stage_runs_in_its_own_session() {
 		use std::io::Read as _;
 
-		// SAFETY: `getsid(0)` only queries the current process session; checked below.
+		// SAFETY: `getsid(0)` only queries the current process session; checked
+		// below. In a PID namespace (containerized CI) the host's session leader
+		// can live outside the namespace, so `getsid(0)` reports 0, not an error;
+		// only -1 is a real failure.
 		let host_sid = unsafe { libc::getsid(0) };
-		assert!(host_sid > 0, "getsid(0) failed: {}", std::io::Error::last_os_error());
+		assert!(host_sid >= 0, "getsid(0) failed: {}", std::io::Error::last_os_error());
 
 		let config = ShellConfig { session_env: None, snapshot_path: None, minimizer: None };
 		let mut session = create_session(&config).await.expect("create_session");
