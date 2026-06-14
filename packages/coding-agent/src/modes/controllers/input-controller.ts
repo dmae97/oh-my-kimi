@@ -48,6 +48,16 @@ const TINY_TITLE_PROGRESS_DONE_TTL_MS = 3_000;
 // events for seconds. Only reveal the bar once a still-incomplete event arrives after
 // this grace window, so an already-downloaded model never flashes the bar.
 const TINY_TITLE_PROGRESS_REVEAL_DELAY_MS = 1_000;
+// Double-tap ← on an empty editor opens the Agent Hub (and, in a focused
+// subagent view, ←← returns to the main session). The second tap must land
+// inside this window. The lower bound rejects terminal-synthesized arrow-key
+// bursts: "click to move cursor" / pointer features in iTerm2, WezTerm, kitty,
+// and tmux emit several arrow keys in a single stdin read (sub-millisecond
+// apart) on a stray click, which used to pop the hub with no key ever pressed.
+// Three or more rapid taps are likewise treated as a burst, not a gesture. A
+// deliberate human double-tap is always tens of milliseconds apart.
+const LEFT_DOUBLE_TAP_MIN_GAP_MS = 40;
+const LEFT_DOUBLE_TAP_MAX_GAP_MS = 500;
 
 export class InputController {
 	constructor(
@@ -61,6 +71,10 @@ export class InputController {
 
 	#enhancedPaste?: EnhancedPasteController;
 	#focusedLeftTapListenerInstalled = false;
+	// Tap counter for the double-← gesture; reset whenever a quiet gap
+	// (>= LEFT_DOUBLE_TAP_MAX_GAP_MS) starts a fresh sequence. See
+	// #detectLeftDoubleTap.
+	#leftTapCount = 0;
 
 	#showTinyTitleDownloadProgress(modelKey: string): void {
 		if (!isTinyTitleLocalModelKey(modelKey)) return;
@@ -324,12 +338,8 @@ export class InputController {
 				this.#handleFocusedLeftTap();
 				return;
 			}
-			const now = Date.now();
-			if (now - this.ctx.lastLeftTapTime < 500) {
-				this.ctx.lastLeftTapTime = 0;
+			if (this.#detectLeftDoubleTap()) {
 				this.ctx.showAgentHub();
-			} else {
-				this.ctx.lastLeftTapTime = now;
 			}
 		};
 
@@ -348,13 +358,37 @@ export class InputController {
 	}
 
 	#handleFocusedLeftTap(): void {
-		const now = Date.now();
-		if (now - this.ctx.lastLeftTapTime < 500) {
-			this.ctx.lastLeftTapTime = 0;
+		if (this.#detectLeftDoubleTap()) {
 			void this.ctx.unfocusSession();
-		} else {
-			this.ctx.lastLeftTapTime = now;
 		}
+	}
+
+	/**
+	 * Detect a deliberate double-← gesture, rejecting terminal-synthesized arrow
+	 * bursts. Returns true only on the *second* tap of a fresh sequence when it
+	 * lands a human-plausible interval after the first
+	 * (`[LEFT_DOUBLE_TAP_MIN_GAP_MS, LEFT_DOUBLE_TAP_MAX_GAP_MS)`). Taps closer
+	 * than the lower bound, or any third-and-later tap before a quiet gap, are a
+	 * burst and never fire — so a stray click that makes the terminal emit a run
+	 * of ← keys can no longer pop the Agent Hub.
+	 */
+	#detectLeftDoubleTap(): boolean {
+		const now = Date.now();
+		const sinceLast = now - this.ctx.lastLeftTapTime;
+		this.ctx.lastLeftTapTime = now;
+		if (sinceLast >= LEFT_DOUBLE_TAP_MAX_GAP_MS) {
+			// Quiet gap: this tap starts a fresh sequence.
+			this.#leftTapCount = 1;
+			return false;
+		}
+		this.#leftTapCount += 1;
+		if (this.#leftTapCount === 2 && sinceLast >= LEFT_DOUBLE_TAP_MIN_GAP_MS) {
+			// Exactly two taps, the second a human-plausible interval after the first.
+			this.#leftTapCount = 0;
+			this.ctx.lastLeftTapTime = 0;
+			return true;
+		}
+		return false;
 	}
 
 	#setupEnhancedPaste(): void {
