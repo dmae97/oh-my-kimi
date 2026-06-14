@@ -7,7 +7,14 @@
  * here.
  */
 
-import { bareModelId, isFableOrMythos, parseAnthropicModel, parseGlmModel, parseKnownModel, semverGte } from "./classify";
+import {
+	bareModelId,
+	isFableOrMythos,
+	parseAnthropicModel,
+	parseGlmModel,
+	parseKnownModel,
+	semverGte,
+} from "./classify";
 
 /** Kimi family ids in any namespace form (`moonshotai/kimi-*`, `kimi-k2.6`, `vendor/kimi.x`). */
 export function isKimiModelId(modelId: string): boolean {
@@ -113,6 +120,7 @@ export function modelFamilyToken(modelId: string): string {
 	if (isOpenAIGptOssModelId(modelId)) return "gpt-oss";
 	if (isDeepseekModelIdOrName(modelId)) return "deepseek";
 	if (isMimoModelIdOrName(modelId)) return "mimo";
+	if (parseGlmModel(bareModelId(modelId))) return "glm";
 	return "";
 }
 

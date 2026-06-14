@@ -171,6 +171,12 @@ describe("modelFamilyToken", () => {
 		expect(modelFamilyToken("qwen/qwen3-coder")).toBe("qwen");
 	});
 
+	test("classifies GLM across provider mirrors so same-lineage SKUs fold together", () => {
+		expect(modelFamilyToken("glm-5.2")).toBe("glm");
+		expect(modelFamilyToken("zai/glm-5.2")).toBe(modelFamilyToken("zhipu-coding-plan/glm-5.2"));
+		expect(modelFamilyToken("zai/glm-5.2")).toBe("glm");
+	});
+
 	test("returns an empty token for unclassifiable ids so callers fall back to provider", () => {
 		expect(modelFamilyToken("some-unknown-model")).toBe("");
 	});
