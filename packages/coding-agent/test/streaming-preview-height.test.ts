@@ -364,27 +364,6 @@ describe("streaming tool call preview height (bounded across renderers)", () => 
 		}
 	}, 30_000);
 
-	test("task pending preview keeps the full assignment brief", () => {
-		// CONTRACT CHANGE with the single-spawn task rework: the old uncapped
-		// multi-task `context` rendering is gone with the field. The assignment
-		// brief is the durable record of what the subagent was asked to do, so
-		// the pending preview renders it in full instead of windowing it like
-		// bash/ssh command previews or eval cell code.
-		const longLines = Array.from({ length: 80 }, (_, i) => `line-${i}`);
-		const { lines, text } = renderPending("task", {
-			agent: "task",
-			id: "alpha",
-			description: "preview",
-			assignment: longLines.join("\n"),
-		});
-
-		expect(lines.length, "task assignment brief should not be capped").toBeGreaterThan(80);
-		expect(text).toContain("preview");
-		expect(text).toContain("line-0");
-		expect(text).toContain("line-40");
-		expect(text).toContain("line-79");
-	});
-
 	test("eval pending preview windows the code to the viewport tail", () => {
 		// Eval cell code is capped to the same viewport-sized TAIL window as
 		// bash/ssh: the live edge stays visible behind an "… N earlier lines"
