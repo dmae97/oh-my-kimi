@@ -64,6 +64,7 @@ import type {
 } from "../extensibility/extensions";
 import type { CompactOptions } from "../extensibility/extensions/types";
 import { loadSlashCommands } from "../extensibility/slash-commands";
+import { type GuidedGoalMessage, runGuidedGoalTurn } from "../goals/guided-setup";
 import type { Goal, GoalModeState } from "../goals/state";
 import { resolveLocalUrlToPath } from "../internal-urls";
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "../lsp/startup-events";
@@ -2399,6 +2400,70 @@ export class InteractiveMode implements InteractiveModeContext {
 			)?.trim();
 			if (!objective) return;
 			await this.#startGoalFromObjective(objective);
+		} catch (error) {
+			this.showError(error instanceof Error ? error.message : String(error));
+		}
+	}
+	async handleGuidedGoalCommand(rest?: string): Promise<void> {
+		try {
+			if (this.planModeEnabled || this.planModePaused) {
+				this.showWarning("Exit plan mode first.");
+				return;
+			}
+			if (!this.session.settings.get("goal.enabled")) {
+				this.showWarning("Goal mode is disabled. Enable it in settings (goal.enabled).");
+				return;
+			}
+			if (this.goalModeEnabled) {
+				this.showStatus("Goal mode is already active. Use /goal to manage it, or /goal drop to start over.");
+				return;
+			}
+			if (this.#getPausedGoalState()) {
+				this.showWarning("Resume the current goal first, or drop it before setting a new objective.");
+				return;
+			}
+
+			const initial = rest?.trim()
+				? rest.trim()
+				: (await this.showHookEditor("Guided goal", undefined, undefined, { promptStyle: true }))?.trim();
+			if (!initial) return;
+
+			const messages: GuidedGoalMessage[] = [{ role: "user", content: initial }];
+			let latestDraftObjective: string | undefined;
+			for (let turn = 0; turn < 6; turn++) {
+				const result = await runGuidedGoalTurn(this.session, { messages });
+				if (result.objective?.trim()) latestDraftObjective = result.objective.trim();
+				if (result.kind === "question") {
+					messages.push({ role: "assistant", content: result.question });
+					const answer = (
+						await this.showHookEditor(result.question, undefined, undefined, { promptStyle: true })
+					)?.trim();
+					if (!answer) return;
+					messages.push({ role: "user", content: answer });
+					continue;
+				}
+
+				const finalObjective = (
+					await this.showHookEditor("Review guided goal", result.objective, undefined, { promptStyle: true })
+				)?.trim();
+				if (!finalObjective) return;
+				await this.#startGoalFromObjective(finalObjective);
+				return;
+			}
+
+			// Hit the turn cap without an explicit `ready`. Rather than discard the whole interview,
+			// salvage the latest non-empty model objective draft seen on any earlier turn. A final
+			// question turn may omit `objective`; that must not erase a usable draft.
+			if (latestDraftObjective) {
+				const finalObjective = (
+					await this.showHookEditor("Review guided goal", latestDraftObjective, undefined, { promptStyle: true })
+				)?.trim();
+				if (finalObjective) {
+					await this.#startGoalFromObjective(finalObjective);
+					return;
+				}
+			}
+			this.showWarning("Guided goal setup needs more detail. Run /guided-goal again with a narrower objective.");
 		} catch (error) {
 			this.showError(error instanceof Error ? error.message : String(error));
 		}
