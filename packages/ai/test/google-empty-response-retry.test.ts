@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { streamGoogle } from "@oh-my-pi/pi-ai/providers/google";
 import { streamGoogleGeminiCli } from "@oh-my-pi/pi-ai/providers/google-gemini-cli";
+import { streamGoogleVertex } from "@oh-my-pi/pi-ai/providers/google-vertex";
 import type { AssistantMessageEvent, Context, FetchImpl, Model } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 
@@ -45,6 +46,19 @@ const genaiModel: Model<"google-generative-ai"> = buildModel({
 	id: "gemini-3-flash",
 	name: "Gemini 3 Flash",
 	api: "google-generative-ai",
+	provider: "google",
+	baseUrl: "",
+	reasoning: true,
+	input: ["text"],
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	contextWindow: 200_000,
+	maxTokens: 32_000,
+});
+
+const vertexModel: Model<"google-vertex"> = buildModel({
+	id: "gemini-3-flash",
+	name: "Gemini 3 Flash (Vertex)",
+	api: "google-vertex",
 	provider: "google",
 	baseUrl: "",
 	reasoning: true,
@@ -99,6 +113,53 @@ describe("Google empty-response retry (public + Vertex path)", () => {
 		expect(calls).toBe(3); // MAX_EMPTY_STREAM_RETRIES (2) + 1 initial attempt
 		expect(result.stopReason).toBe("error");
 		expect(result.errorMessage).toContain("empty response");
+	});
+
+	it("filters out empty text parts at stream end but preserves terminal thought signatures", async () => {
+		const chunks = [
+			{ candidates: [{ content: { parts: [{ text: "Hello" }] } }] },
+			{
+				candidates: [
+					{ content: { parts: [{ text: "", thoughtSignature: "terminal-sig" }] }, finishReason: "STOP" },
+				],
+			},
+		];
+
+		const fetchMock: FetchImpl = async input => {
+			const url = input instanceof Request ? input.url : input.toString();
+			if (url.includes("oauth2.googleapis.com/token") || url.includes("metadata.google.internal")) {
+				return new Response(JSON.stringify({ access_token: "token", expires_in: 3600 }));
+			}
+			return sse(...chunks);
+		};
+
+		const stream = streamGoogleVertex(vertexModel, context, {
+			project: "project",
+			location: "location",
+			fetch: fetchMock,
+		});
+		const { events } = await drain(stream);
+		const result = await stream.result();
+
+		expect(result.stopReason).toBe("stop");
+		expect(result.content).toHaveLength(1);
+		expect(result.content[0]).toEqual({
+			type: "text",
+			text: "Hello",
+			textSignature: "terminal-sig",
+		});
+
+		const textStartEvents = events.filter(e => e.type === "text_start");
+		expect(textStartEvents).toHaveLength(1);
+		expect(textStartEvents[0].contentIndex).toBe(0);
+
+		const textDeltaEvents = events.filter(e => e.type === "text_delta");
+		expect(textDeltaEvents).toHaveLength(1);
+		expect(textDeltaEvents[0].delta).toBe("Hello");
+
+		const textEndEvents = events.filter(e => e.type === "text_end");
+		expect(textEndEvents).toHaveLength(1);
+		expect(textEndEvents[0].content).toBe("Hello");
 	});
 });
 
