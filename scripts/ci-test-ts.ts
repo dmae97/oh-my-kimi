@@ -311,6 +311,35 @@ async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 	}
 }
 
+// The omp-kata runner pods inject sccache S3 credentials (`AWS_*`) and config
+// (`SCCACHE_*`) pod-wide via `envFrom`, GitHub Actions injects `GITHUB_TOKEN`,
+// and a host may carry provider API keys. Any of these make env-sensitive code
+// non-deterministic in tests — e.g. leaked AWS creds make `amazon-bedrock` look
+// authenticated and win the provider startup fallback over `anthropic`. Run the
+// suites in a hermetic environment with all credential / cloud-config variables
+// stripped so resolution depends only on the test's own fixtures.
+const SCRUBBED_ENV_PREFIXES = ["AWS_", "SCCACHE_", "GOOGLE_CLOUD_"];
+const SCRUBBED_ENV_NAMES = new Set([
+	"RUSTC_WRAPPER",
+	"GITHUB_TOKEN",
+	"GH_TOKEN",
+	"COPILOT_GITHUB_TOKEN",
+	"GOOGLE_APPLICATION_CREDENTIALS",
+	"ANTHROPIC_OAUTH_TOKEN",
+	"XAI_OAUTH_TOKEN",
+]);
+
+function isScrubbedEnvVar(key: string): boolean {
+	if (SCRUBBED_ENV_NAMES.has(key)) {
+		return true;
+	}
+	if (SCRUBBED_ENV_PREFIXES.some(prefix => key.startsWith(prefix))) {
+		return true;
+	}
+	// Any provider credential, e.g. ANTHROPIC_API_KEY / XAI_OAUTH_TOKEN / bedrock bearer.
+	return /_(API_KEY|OAUTH_TOKEN)$/.test(key) || key.includes("BEARER_TOKEN");
+}
+
 async function runTestCommand(testCommand: TestCommand): Promise<void> {
 	const cwd = path.join(repoRoot, testCommand.cwd);
 	const renderedCommand = testCommand.command.map(shellQuote).join(" ");
@@ -321,12 +350,15 @@ async function runTestCommand(testCommand: TestCommand): Promise<void> {
 		return;
 	}
 
+	const env: Record<string, string | undefined> = { ...Bun.env, GITHUB_ACTIONS: "" };
+	for (const key of Object.keys(env)) {
+		if (isScrubbedEnvVar(key)) {
+			delete env[key];
+		}
+	}
 	const proc = Bun.spawn(testCommand.command, {
 		cwd,
-		env: {
-			...Bun.env,
-			GITHUB_ACTIONS: "",
-		},
+		env,
 		stdout: "inherit",
 		stderr: "inherit",
 	});
