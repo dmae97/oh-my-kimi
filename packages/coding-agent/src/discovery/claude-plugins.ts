@@ -124,6 +124,43 @@ async function loadSkills(ctx: LoadContext): Promise<LoadResult<Skill>> {
 	}
 	return { items, warnings };
 }
+async function loadSkillSlashCommands(ctx: LoadContext, root: ClaudePluginRoot): Promise<LoadResult<SlashCommand>> {
+	const { dir: skillsDir, warning } = await resolvePluginDir(root, ["skills"], "skills");
+	const warnings: string[] = warning ? [warning] : [];
+	const skillsResult = await scanSkillsFromDir(ctx, {
+		dir: skillsDir,
+		providerId: PROVIDER_ID,
+		level: root.scope,
+	});
+	warnings.push(...(skillsResult.warnings ?? []));
+
+	const commands = await Promise.all(
+		skillsResult.items.map(async skill => {
+			const content = await readFile(skill.path);
+			if (content === null) {
+				warnings.push(`Failed to read skill slash command: ${skill.path}`);
+				return null;
+			}
+			// Slash command name MUST come from the skill directory basename, not
+			// frontmatter `name`: `expandSlashCommand` splits the command at the first
+			// whitespace, so a display name like "Understand Anything" would never match
+			// `/understand`. The documented layout is `skills/<name>/SKILL.md` → `/<name>`.
+			const command: SlashCommand = {
+				name: path.basename(path.dirname(skill.path)),
+				path: skill.path,
+				content,
+				level: skill.level,
+				_source: skill._source,
+			};
+			return command;
+		}),
+	);
+
+	return {
+		items: commands.filter((command): command is SlashCommand => command !== null),
+		warnings,
+	};
+}
 
 // =============================================================================
 // Slash Commands
@@ -139,7 +176,7 @@ async function loadSlashCommands(ctx: LoadContext): Promise<LoadResult<SlashComm
 	const results = await Promise.all(
 		roots.map(async root => {
 			const { dir: commandsDir, warning } = await resolvePluginDir(root, ["commands", "slash-commands"], "commands");
-			const result = await loadFilesFromDir<SlashCommand>(ctx, commandsDir, PROVIDER_ID, root.scope, {
+			const commandResult = await loadFilesFromDir<SlashCommand>(ctx, commandsDir, PROVIDER_ID, root.scope, {
 				extensions: ["md"],
 				transform: (name, content, filePath, source) => {
 					const cmdName = name.replace(/\.md$/, "");
@@ -152,14 +189,16 @@ async function loadSlashCommands(ctx: LoadContext): Promise<LoadResult<SlashComm
 					};
 				},
 			});
-			return { result, warning };
+			const skillCommandResult = await loadSkillSlashCommands(ctx, root);
+			return { commandResult, skillCommandResult, warning };
 		}),
 	);
 
-	for (const { result, warning } of results) {
+	for (const { commandResult, skillCommandResult, warning } of results) {
 		if (warning) warnings.push(warning);
-		items.push(...result.items);
-		if (result.warnings) warnings.push(...result.warnings);
+		items.push(...commandResult.items, ...skillCommandResult.items);
+		if (commandResult.warnings) warnings.push(...commandResult.warnings);
+		if (skillCommandResult.warnings) warnings.push(...skillCommandResult.warnings);
 	}
 
 	return { items, warnings };
