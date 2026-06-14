@@ -82,11 +82,18 @@ export class AutoLearnController {
 		if (toolCalls < minToolCalls) return;
 		// Never interrupt plan-mode review.
 		if (this.#session.getPlanModeState()?.enabled) return;
+		// Never divert an active goal loop: a passive nudge would ride the goal
+		// continuation, and auto-continue would compete with it. Skip entirely.
+		if (this.#session.getGoalModeState()?.enabled) return;
 
-		// Auto-run a capture turn only when explicitly enabled and not competing
-		// with a goal-mode continuation; otherwise ride the next turn passively.
-		const autoContinue =
-			this.#settings.get("autolearn.autoContinue") === true && !this.#session.getGoalModeState()?.enabled;
+		// Auto-run a capture turn only when explicitly enabled; otherwise the
+		// hidden reminder rides the next real turn passively.
+		const autoContinue = this.#settings.get("autolearn.autoContinue") === true;
+		// Arm suppression synchronously: the synthetic capture turn's agent_end
+		// fires inside sendCustomMessage (before it resolves), so the flag must be
+		// set before then. Disarm when no turn actually started — a deferred/queued
+		// dispatch or a failed send produces no agent_end, and a latched flag would
+		// otherwise swallow the next real stop.
 		if (autoContinue) this.#suppressNext = true;
 
 		this.#session
@@ -99,6 +106,12 @@ export class AutoLearnController {
 				},
 				{ deliverAs: "nextTurn", triggerTurn: autoContinue },
 			)
-			.catch(err => logger.warn("auto-learn nudge delivery failed", { err }));
+			.then(started => {
+				if (!started) this.#suppressNext = false;
+			})
+			.catch(err => {
+				this.#suppressNext = false;
+				logger.warn("auto-learn nudge delivery failed", { err });
+			});
 	}
 }

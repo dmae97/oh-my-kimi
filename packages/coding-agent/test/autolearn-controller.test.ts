@@ -13,14 +13,21 @@ class FakeSession {
 	readonly sent: CapturedNudge[] = [];
 	planEnabled = false;
 	goalEnabled = false;
+	/** Whether a triggerTurn dispatch actually starts a synthetic turn. */
+	turnStarts = true;
+	/** Force the dispatch to reject (models a failed send). */
+	failSend = false;
 
 	subscribe(listener: (event: AgentSessionEvent) => void): () => void {
 		this.listeners.push(listener);
 		return () => {};
 	}
 
-	async sendCustomMessage(message: CapturedNudge["message"], options?: CapturedNudge["options"]): Promise<void> {
+	async sendCustomMessage(message: CapturedNudge["message"], options?: CapturedNudge["options"]): Promise<boolean> {
+		if (this.failSend) throw new Error("send failed");
 		this.sent.push({ message, options });
+		// Mirror AgentSession: a turn starts only when triggerTurn is honored.
+		return options?.triggerTurn === true && this.turnStarts;
 	}
 
 	getPlanModeState(): { enabled: boolean } | undefined {
@@ -127,18 +134,19 @@ describe("AutoLearnController", () => {
 		expect(session.sent).toHaveLength(1);
 	});
 
-	it("downgrades autoContinue to a passive nudge during goal mode", () => {
+	it("does not nudge during goal mode and leaks no suppression latch", () => {
 		const session = new FakeSession();
 		session.goalEnabled = true;
 		install(session, { "autolearn.autoContinue": true });
 		session.toolCalls(5);
 		session.agentEnd();
-		expect(session.sent).toHaveLength(1);
-		expect(session.sent[0]?.options?.triggerTurn).toBe(false);
-		// Passive => no suppression; the next qualifying stop fires again.
+		// Goal mode owns the continuation; auto-learn stays out of the loop.
+		expect(session.sent).toHaveLength(0);
+		// The skipped stop must not arm suppression for the next non-goal stop.
+		session.goalEnabled = false;
 		session.toolCalls(5);
 		session.agentEnd();
-		expect(session.sent).toHaveLength(2);
+		expect(session.sent).toHaveLength(1);
 	});
 
 	it("auto-runs a capture turn and suppresses exactly one follow-up agent_end", () => {
@@ -159,6 +167,36 @@ describe("AutoLearnController", () => {
 		session.toolCalls(5);
 		session.agentEnd();
 		expect(session.sent).toHaveLength(2);
+	});
+
+	it("disarms suppression when the capture turn is deferred (not started)", async () => {
+		const session = new FakeSession();
+		// triggerTurn honored but downgraded to a queue: no synthetic agent_end.
+		session.turnStarts = false;
+		install(session, { "autolearn.autoContinue": true });
+		session.toolCalls(5);
+		session.agentEnd();
+		expect(session.sent).toHaveLength(1);
+		expect(session.sent[0]?.options?.triggerTurn).toBe(true);
+		await Bun.sleep(1); // flush the async disarm
+		// No turn ran, so the next real stop must still nudge.
+		session.toolCalls(5);
+		session.agentEnd();
+		expect(session.sent).toHaveLength(2);
+	});
+
+	it("disarms suppression when the capture-turn dispatch fails", async () => {
+		const session = new FakeSession();
+		session.failSend = true;
+		install(session, { "autolearn.autoContinue": true });
+		session.toolCalls(5);
+		session.agentEnd(); // dispatch rejects: armed, then disarmed in .catch
+		expect(session.sent).toHaveLength(0);
+		await Bun.sleep(1); // flush the async disarm
+		session.failSend = false;
+		session.toolCalls(5);
+		session.agentEnd();
+		expect(session.sent).toHaveLength(1);
 	});
 
 	it("respects a custom minToolCalls threshold", () => {
