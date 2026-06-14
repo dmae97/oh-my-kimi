@@ -24,9 +24,11 @@ import {
 	resolveVariantAlias,
 } from "@oh-my-pi/pi-catalog/variant-collapse";
 
-// Sentinel for local-only OAuth token (LM Studio, vLLM) — declared inline to avoid loading
-// any provider module at startup. Must match `DEFAULT_LOCAL_TOKEN` in oauth/lm-studio.ts.
+// Sentinels for local-only OAuth tokens — declared inline to avoid loading
+// provider modules at startup. Must match packages/ai/src/registry/lm-studio.ts
+// and packages/ai/src/registry/vllm.ts.
 const DEFAULT_LOCAL_TOKEN = "lm-studio-local";
+const DEFAULT_VLLM_LOCAL_TOKEN = "vllm-local";
 
 const SPECIAL_MODEL_MANAGER_PROVIDER_IDS: readonly string[] = [
 	"google-antigravity",
@@ -80,6 +82,10 @@ export const kNoAuth = "N/A";
 
 export function isAuthenticated(apiKey: string | undefined | null): apiKey is string {
 	return Boolean(apiKey) && apiKey !== kNoAuth;
+}
+
+function isDiscoveryBearerApiKey(apiKey: string | undefined | null): apiKey is string {
+	return isAuthenticated(apiKey) && apiKey !== DEFAULT_LOCAL_TOKEN && apiKey !== DEFAULT_VLLM_LOCAL_TOKEN;
 }
 
 /** Provider override config (baseUrl, headers, apiKey, compat, transport) without custom models */
@@ -900,6 +906,18 @@ export class ModelRegistry {
 		});
 	}
 
+	#resolveStartupModelCacheProviderId(providerId: string): string {
+		const descriptor = PROVIDER_DESCRIPTORS.find(candidate => candidate.providerId === providerId);
+		if (!descriptor) {
+			return providerId;
+		}
+		const baseUrl =
+			this.#runtimeProviderOverrides.get(providerId)?.baseUrl ??
+			this.#providerOverrides.get(providerId)?.baseUrl ??
+			this.getProviderBaseUrl(providerId);
+		return descriptor.createModelManagerOptions({ baseUrl, fetch: this.#fetch }).cacheProviderId ?? providerId;
+	}
+
 	#loadCachedStandardProviderModels(): { models: Model<Api>[]; authoritativeFreshProviders: Set<string> } {
 		const configuredDiscoveryProviders = new Set(this.#discoverableProviders.map(provider => provider.provider));
 		const cachedModels: Model<Api>[] = [];
@@ -908,7 +926,8 @@ export class ModelRegistry {
 			if (configuredDiscoveryProviders.has(providerId)) {
 				continue;
 			}
-			const cache = readModelCache<Api>(providerId, 24 * 60 * 60 * 1000, Date.now, this.#cacheDbPath);
+			const cacheProviderId = this.#resolveStartupModelCacheProviderId(providerId);
+			const cache = readModelCache<Api>(cacheProviderId, 24 * 60 * 60 * 1000, Date.now, this.#cacheDbPath);
 			if (!cache) {
 				continue;
 			}
@@ -938,7 +957,12 @@ export class ModelRegistry {
 	#loadCachedDiscoverableModels(): Model<Api>[] {
 		const cachedModels: Model<Api>[] = [];
 		for (const providerConfig of this.#discoverableProviders) {
-			const cache = readModelCache<Api>(providerConfig.provider, 24 * 60 * 60 * 1000, Date.now, this.#cacheDbPath);
+			const cache = readModelCache<Api>(
+				this.#configuredDiscoveryCacheProviderId(providerConfig),
+				24 * 60 * 60 * 1000,
+				Date.now,
+				this.#cacheDbPath,
+			);
 			if (!cache) {
 				this.#providerDiscoveryStates.set(providerConfig.provider, {
 					provider: providerConfig.provider,
@@ -1200,11 +1224,19 @@ export class ModelRegistry {
 		this.#rebuildCanonicalIndex();
 	}
 
+	#configuredDiscoveryCacheProviderId(providerConfig: DiscoveryProviderConfig): string {
+		if (providerConfig.discovery.type === "openai-models-list") {
+			return `${providerConfig.provider}:openai-models-list-context-v2`;
+		}
+		return providerConfig.provider;
+	}
+
 	async #discoverProviderModels(
 		providerConfig: DiscoveryProviderConfig,
 		strategy: ModelRefreshStrategy,
 	): Promise<Model<Api>[]> {
-		const cached = readModelCache<Api>(providerConfig.provider, 24 * 60 * 60 * 1000, Date.now, this.#cacheDbPath);
+		const cacheProviderId = this.#configuredDiscoveryCacheProviderId(providerConfig);
+		const cached = readModelCache<Api>(cacheProviderId, 24 * 60 * 60 * 1000, Date.now, this.#cacheDbPath);
 		const requiresAuth = !this.#keylessProviders.has(providerConfig.provider);
 		if (requiresAuth) {
 			const apiKey = await this.#peekApiKeyForProvider(providerConfig.provider);
@@ -1242,6 +1274,7 @@ export class ModelRegistry {
 			providerId,
 			staticModels: [],
 			cacheDbPath: this.#cacheDbPath,
+			cacheProviderId,
 			cacheTtlMs: 24 * 60 * 60 * 1000,
 			fetchDynamicModels,
 		});
@@ -1283,7 +1316,9 @@ export class ModelRegistry {
 			fetch: this.#fetch,
 			getBearerApiKeyResolver: async provider => {
 				const apiKey = await this.getApiKeyForProvider(provider);
-				if (!apiKey || apiKey === DEFAULT_LOCAL_TOKEN || apiKey === kNoAuth) return undefined;
+				if (!isDiscoveryBearerApiKey(apiKey)) {
+					return undefined;
+				}
 				return this.resolver(provider);
 			},
 		};
@@ -1388,11 +1423,20 @@ export class ModelRegistry {
 		for (let i = 0; i < standardProviderDescriptors.length; i++) {
 			const descriptor = standardProviderDescriptors[i];
 			const apiKey = standardProviderKeys[i];
-			if (isAuthenticated(apiKey) || descriptor.allowUnauthenticated) {
+			const hasExplicitVllmConfig =
+				descriptor.providerId === "vllm" &&
+				(this.#runtimeProviderOverrides.has(descriptor.providerId) ||
+					this.#providerOverrides.has(descriptor.providerId) ||
+					this.#keylessProviders.has(descriptor.providerId));
+			if (isAuthenticated(apiKey) || descriptor.allowUnauthenticated || hasExplicitVllmConfig) {
+				const discoveryBaseUrl =
+					this.#runtimeProviderOverrides.get(descriptor.providerId)?.baseUrl ??
+					this.#providerOverrides.get(descriptor.providerId)?.baseUrl ??
+					this.getProviderBaseUrl(descriptor.providerId);
 				options.push(
 					descriptor.createModelManagerOptions({
-						apiKey: isAuthenticated(apiKey) ? apiKey : undefined,
-						baseUrl: this.getProviderBaseUrl(descriptor.providerId),
+						apiKey: isDiscoveryBearerApiKey(apiKey) ? apiKey : undefined,
+						baseUrl: discoveryBaseUrl,
 						fetch: this.#fetch,
 					}),
 				);

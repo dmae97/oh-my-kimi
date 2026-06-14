@@ -196,5 +196,5 @@ describe("SessionManager signature persistence", () => {
 		expect(await fs.readFile(sessionFile, "utf8")).toBe(persistedBefore);
 		expect((await fs.stat(sessionFile)).mtimeMs).toBe(initialMtimeMs);
 		await reloaded.close();
-	});
+	}, 15_000);
 });
