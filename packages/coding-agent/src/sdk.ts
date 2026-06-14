@@ -2121,7 +2121,16 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			// the now-connected servers' instructions, so they join the prompt for the
 			// rest of the session.
 			const serverInstructions = mcpManager?.getServerInstructions();
-			const autoLearnInstructions = buildAutoLearnInstructions(settings);
+			// Drive guidance off the auto-learn BUILTINS that createTools actually built
+			// (provenance, not just an active name): `builtInToolNames` excludes a
+			// custom/extension tool that merely shares the name, and reflects the
+			// session-start build — so a subagent that filtered them out, a mid-session
+			// enable that never built them, or a same-named custom tool while auto-learn
+			// is off all get no guidance.
+			const autoLearnInstructions = buildAutoLearnInstructions({
+				manageSkill: builtInToolNames.includes("manage_skill"),
+				learn: builtInToolNames.includes("learn"),
+			});
 			const appendParts: string[] = [];
 			if (memoryInstructions) appendParts.push(memoryInstructions);
 			if (autoLearnInstructions) appendParts.push(autoLearnInstructions);
@@ -2189,6 +2198,20 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			!explicitlyRequestedToolNames.includes("yield")
 		) {
 			explicitlyRequestedToolNames.push("yield");
+		}
+		// Auto-learn builtins are force-included into the registry by `createTools`
+		// for enabled top-level sessions (tools/index.ts), but — like `yield` above —
+		// an explicit `toolNames` list would otherwise drop them from the ACTIVE set,
+		// leaving the nudge/guidance pointing at tools the model cannot call. Activate
+		// exactly the builtins createTools built (`builtInToolNames` — provenance, so a
+		// same-named custom/extension tool is never force-activated when auto-learn is
+		// off) to keep guidance, controller, and the active set consistent.
+		if (explicitlyRequestedToolNames) {
+			for (const name of ["manage_skill", "learn"]) {
+				if (builtInToolNames.includes(name) && !explicitlyRequestedToolNames.includes(name)) {
+					explicitlyRequestedToolNames.push(name);
+				}
+			}
 		}
 		const requestedToolNames = explicitlyRequestedToolNames ?? toolNamesFromRegistry;
 		const normalizedRequested = requestedToolNames.filter(name => toolRegistry.has(name));
@@ -2659,20 +2682,19 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}
 
 		// Install the auto-learn post-stop nudge controller synchronously, before
-		// the possibly-slow memory backend starts, once per top-level session. A
-		// fast first turn must not finish before the listener subscribes, or its
-		// tool events are missed (slower backends like Mnemopi/Hindsight widen that
-		// window).
+		// the possibly-slow memory backend starts, once per top-level session, when
+		// the feature is enabled at session start. A fast first turn must not finish
+		// before the listener subscribes, or its tool events are missed.
 		//
-		// Installed regardless of the current `autolearn.enabled` value: the
-		// controller re-checks the live flag at fire time (`#onAgentEnd`), and
-		// `newSession` reuses the session without rerunning startup, so gating the
-		// install on the enable-time flag would mean toggling the setting on
-		// mid-session never activates until the app is recreated. When disabled the
-		// controller only counts tool calls and returns — negligible cost. The
-		// subscription lives for the session's lifetime; the reference is
-		// intentionally discarded (the listener retains it).
-		if (taskDepth === 0) {
+		// Gated on `autolearn.enabled` to match the tools: `createTools` builds the
+		// `learn`/`manage_skill` registry ONCE at session start and no settings
+		// change rebuilds it, so installing the controller while disabled would let a
+		// mid-session enable fire a nudge pointing at tools the session never built.
+		// Activation is therefore a session-start decision for BOTH the controller
+		// and the tools; the fire-time re-check in `#onAgentEnd` still handles a
+		// mid-session DISABLE. The subscription lives for the session's lifetime; the
+		// reference is intentionally discarded (the listener retains it).
+		if (settings.get("autolearn.enabled") && taskDepth === 0) {
 			new AutoLearnController({ session, settings });
 		}
 

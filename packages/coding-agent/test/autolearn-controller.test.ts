@@ -134,24 +134,6 @@ describe("AutoLearnController", () => {
 		expect(session.sent).toHaveLength(1);
 	});
 
-	it("activates when autolearn is enabled mid-session (installed while disabled)", () => {
-		const session = new FakeSession();
-		// The controller install is now unconditional for top-level sessions, so it
-		// can be constructed while the feature is OFF. Toggling it on mid-session
-		// must take effect without recreating the session (the fire-time re-check
-		// handles activation).
-		const settings = Settings.isolated({});
-		settings.set("autolearn.enabled", false);
-		new AutoLearnController({ session: session as unknown as AgentSession, settings });
-		session.toolCalls(5);
-		session.agentEnd();
-		expect(session.sent).toHaveLength(0); // disabled at install: no nudge
-		settings.set("autolearn.enabled", true);
-		session.toolCalls(5);
-		session.agentEnd();
-		expect(session.sent).toHaveLength(1); // enabled mid-session: now fires
-	});
-
 	it("does not nudge during goal mode and leaks no suppression latch", () => {
 		const session = new FakeSession();
 		session.goalEnabled = true;
@@ -227,30 +209,20 @@ describe("AutoLearnController", () => {
 });
 
 describe("buildAutoLearnInstructions", () => {
-	it("returns null when auto-learn is disabled", () => {
-		expect(buildAutoLearnInstructions(Settings.isolated({ "autolearn.enabled": false }))).toBeNull();
+	it("returns null when manage_skill is not in the active tool set", () => {
+		expect(buildAutoLearnInstructions({ manageSkill: false, learn: false })).toBeNull();
+		// learn without manage_skill still yields no guidance (manage_skill gates it).
+		expect(buildAutoLearnInstructions({ manageSkill: false, learn: true })).toBeNull();
 	});
 
-	it("includes the learn addendum when a memory backend is live", () => {
-		const text = buildAutoLearnInstructions(
-			Settings.isolated({ "autolearn.enabled": true, "memory.backend": "mnemopi" }),
-		);
+	it("includes the learn addendum when the learn tool is present", () => {
+		const text = buildAutoLearnInstructions({ manageSkill: true, learn: true });
 		expect(text).toContain("manage_skill");
 		expect(text).toContain("long-term memory");
 	});
 
-	it("includes the learn addendum for the file-based local backend", () => {
-		const text = buildAutoLearnInstructions(
-			Settings.isolated({ "autolearn.enabled": true, "memory.backend": "local" }),
-		);
-		expect(text).toContain("manage_skill");
-		expect(text).toContain("long-term memory");
-	});
-
-	it("omits the learn addendum when no memory backend is configured", () => {
-		const text = buildAutoLearnInstructions(
-			Settings.isolated({ "autolearn.enabled": true, "memory.backend": "off" }),
-		);
+	it("omits the learn addendum when only manage_skill is present", () => {
+		const text = buildAutoLearnInstructions({ manageSkill: true, learn: false });
 		expect(text).toContain("manage_skill");
 		expect(text).not.toContain("long-term memory");
 	});

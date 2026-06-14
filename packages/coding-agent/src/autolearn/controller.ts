@@ -21,16 +21,20 @@ const AUTOLEARN_NUDGE = autolearnNudge.trim();
 const DEFAULT_MIN_TOOL_CALLS = 5;
 
 /**
- * Build the standing auto-learn guidance for the system prompt, or null when
- * the feature is disabled. The `learn` addendum is included only when a memory
- * backend is live (the `learn` tool requires one — `hindsight`, `mnemopi`, or
- * the file-based `local` backend).
+ * Build the standing auto-learn guidance for the system prompt from the tools
+ * actually present in the active set, or null when `manage_skill` is absent.
+ *
+ * Driven by tool presence rather than live settings: the `learn`/`manage_skill`
+ * registry is built ONCE at session start (and only for top-level sessions), so
+ * keying the guidance on `autolearn.enabled` would let a mid-session enable — or
+ * a subagent that filtered the tools out — inject guidance pointing at tools the
+ * session never built. The `learn` addendum is included only when the `learn`
+ * tool is present (it requires a memory backend).
  */
-export function buildAutoLearnInstructions(settings: Settings): string | null {
-	if (!settings.get("autolearn.enabled")) return null;
-	const learnEnabled = ["hindsight", "mnemopi", "local"].includes(settings.get("memory.backend") ?? "");
+export function buildAutoLearnInstructions(available: { manageSkill: boolean; learn: boolean }): string | null {
+	if (!available.manageSkill) return null;
 	const parts = [autolearnGuidance.trim()];
-	if (learnEnabled) parts.push(autolearnGuidanceLearn.trim());
+	if (available.learn) parts.push(autolearnGuidanceLearn.trim());
 	return parts.join("\n\n");
 }
 
