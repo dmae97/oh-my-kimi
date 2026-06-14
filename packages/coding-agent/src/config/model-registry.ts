@@ -102,9 +102,19 @@ interface ProviderOverride {
  *      `token-plan-sgp.xiaomimimo.com` at discovery time)
  *   3. Existing bundled baseUrl (the host baked into `models.json`)
  *
+ * `transport` resolution priority:
+ *   1. `providerOverride.transport` (e.g. `pi-native` for auth-gateway users)
+ *   2. `existing.transport` (carried over from boot-time override application)
+ *   3. `model.transport` (rarely set — discovery defaults omit it)
+ *
  * Without (1), the user's override would lose to discovery; without (2)
  * preferred over (3), the bundled `api.xiaomimimo.com` would shadow the
  * tp- token-plan host and produce 401s on the first stream call.
+ * Without explicit transport propagation, an openrouter (or any) entry
+ * marked `transport: pi-native` in models.yml silently reverts to the
+ * default openai-completions transport after the background catalog
+ * refresh — so the first `/model` switch after boot hits the raw OpenAI
+ * chat-completions URL instead of the gateway's `/v1/pi/stream` (#2555).
  * See `xiaomi-tp-discovery-merge.test.ts` and the `refresh()` baseUrl-override
  * regression in `model-registry.test.ts`.
  */
@@ -118,6 +128,7 @@ export function mergeDiscoveredModel<TApi extends Api>(
 			...model,
 			baseUrl: providerOverride?.baseUrl ?? model.baseUrl ?? existing.baseUrl,
 			headers: existing.headers ? { ...existing.headers, ...model.headers } : model.headers,
+			transport: providerOverride?.transport ?? existing.transport ?? model.transport,
 			compat: model.compatConfig,
 		} as ModelSpec<TApi>);
 	}
