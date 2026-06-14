@@ -8,7 +8,7 @@
 
 ### Fixed
 
-- Fixed `~/.agent[s]/skills` not appearing as `/skill:<name>` commands when every named source toggle (`skills.enableCodexUser`, `skills.enableClaudeUser`, `skills.enableClaudeProject`, `skills.enablePiUser`, `skills.enablePiProject`) was off: `loadSkills` gated the `agents` provider on `anyBuiltInSkillSourceEnabled`, so a user who turned off the Claude/Codex/Pi sources to clean noise also lost their own canonical OMP-native skills. The `agents` provider now reads the dedicated `enableAgentsUser`/`enableAgentsProject` toggles, decoupled from the third-party fall-through ([#2401](https://github.com/can1357/oh-my-pi/issues/2401)).
+- Fixed `~/.agent[s]/skills` not appearing as `/skill:<name>` commands when every named source toggle (`skills.enableCodexUser`, `skills.enableClaudeUser`, `skills.enableClaudeProject`, `skills.enablePiUser`, `skills.enablePiProject`) was off: `loadSkills` gated the `agents` provider on `anyBuiltInSkillSourceEnabled`, so a user who turned off the Claude/Codex/Pi sources to clean noise also lost their own canonical OMP-native skills. The `agents` provider now reads the dedicated `enableAgentsUser`/`enableAgentsProject` toggles, and the unknown-third-party fall-through gate is restricted to the named third-party toggles so keeping the default agents toggles on no longer silently re-enables `opencode`/`github`/`claude-plugins`/`gemini` skill sources ([#2401](https://github.com/can1357/oh-my-pi/issues/2401)).
 
 ## [15.12.3] - 2026-06-12
 
