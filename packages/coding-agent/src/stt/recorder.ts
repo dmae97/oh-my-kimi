@@ -80,7 +80,7 @@ async function startFFmpegRecording(bin: string, outputPath: string): Promise<Re
 			"-f",
 			"avfoundation",
 			"-i",
-			":0",
+			":default",
 			"-ar",
 			"16000",
 			"-ac",
@@ -418,7 +418,7 @@ async function streamingRecorderArgs(recorder: ResolvedRecorder): Promise<string
 			const input = isWindows
 				? ["-f", "dshow", "-i", `audio=${await detectWindowsAudioDevice(bin)}`]
 				: process.platform === "darwin"
-					? ["-f", "avfoundation", "-i", ":0"]
+					? ["-f", "avfoundation", "-i", ":default"]
 					: ["-f", "pulse", "-i", "default"];
 			return [bin, ...input, "-ar", "16000", "-ac", "1", "-f", "s16le", "pipe:1"];
 		}
