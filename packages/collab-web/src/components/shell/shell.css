@@ -4,6 +4,12 @@
 .sh-app {
 	display: grid;
 	grid-template-rows: auto 1fr auto;
+	/* Single column pinned to the container width: an `auto` track sizes to its
+	 * items' min-content, so a long session title (or the fixed header controls)
+	 * would force every row — header, transcript, composer — wider than a narrow
+	 * viewport and clip the right edge. `minmax(0, 1fr)` caps the track so rows
+	 * shrink and ellipsize instead of overflowing. */
+	grid-template-columns: minmax(0, 1fr);
 	height: var(--viewport-height, 100%);
 }
 
