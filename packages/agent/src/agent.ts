@@ -657,8 +657,8 @@ export class Agent {
 	}
 
 	// State mutators
-	setSystemPrompt(v: string[]) {
-		this.#state.systemPrompt = v;
+	setSystemPrompt(v: string[] | string) {
+		this.#state.systemPrompt = typeof v === "string" ? [v] : v;
 	}
 
 	setModel(m: Model) {
