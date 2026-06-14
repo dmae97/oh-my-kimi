@@ -17,8 +17,8 @@
  */
 import { describe, expect, it } from "bun:test";
 import { buildAnthropicClientOptions, streamAnthropic } from "@oh-my-pi/pi-ai/providers/anthropic";
-import type { Context, Model, TJsonSchema, Tool } from "@oh-my-pi/pi-ai/types";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import type { Context, Model, ModelSpec, TJsonSchema, Tool } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 
 const COPILOT_BEARER = JSON.stringify({ token: "ghc_test" });
 
@@ -34,6 +34,19 @@ const TOOLS: Tool[] = [
 	},
 ];
 
+const COPILOT_MODEL_SPEC: ModelSpec<"anthropic-messages"> = {
+	id: "claude-haiku-4.5",
+	name: "Claude Haiku 4.5",
+	api: "anthropic-messages",
+	provider: "github-copilot",
+	baseUrl: "https://api.githubcopilot.com",
+	reasoning: true,
+	input: ["text"],
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	contextWindow: 200_000,
+	maxTokens: 8_192,
+};
+
 const CONTEXT: Context = {
 	systemPrompt: ["Stay concise."],
 	messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
@@ -47,7 +60,7 @@ function aborted(): AbortSignal {
 }
 
 describe("issue #2558 — GitHub Copilot Anthropic transport rejects eager_input_streaming", () => {
-	const model = getBundledModel("github-copilot", "claude-haiku-4.5") as Model<"anthropic-messages">;
+	const model: Model<"anthropic-messages"> = buildModel(COPILOT_MODEL_SPEC);
 
 	it("disables eager tool-input streaming on the github-copilot host", () => {
 		expect(model.provider).toBe("github-copilot");
