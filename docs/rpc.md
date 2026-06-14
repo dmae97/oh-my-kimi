@@ -45,8 +45,9 @@ There is no envelope beyond the object shape itself.
 6. Host URI requests/cancellations (`host_uri_request`, `host_uri_cancel`)
 7. Extension errors (`{ type: "extension_error", extensionPath, event, error }`)
 8. Available-commands updates (`{ type: "available_commands_update", commands }`), emitted at startup and whenever command metadata changes
-9. Subagent frames (`subagent_lifecycle`, `subagent_progress`, `subagent_event`), gated by `set_subagent_subscription`
-10. Builtin slash-command side channels (`command_output`, `session_info_update`, `config_update`)
+9. Prompt lifecycle hints (`{ type: "prompt_result", id?, agentInvoked }`) for scheduled prompts that later resolve without invoking the agent
+10. Subagent frames (`subagent_lifecycle`, `subagent_progress`, `subagent_event`), gated by `set_subagent_subscription`
+11. Builtin slash-command side channels (`command_output`, `session_info_update`, `config_update`)
 
 ### Inbound frame categories (stdin)
 
@@ -67,6 +68,8 @@ Important edge behavior from runtime:
 - Unknown command responses are emitted with `id: undefined` (even if the request had an `id`).
 - Parse/handler exceptions in the input loop emit `command: "parse"` with `id: undefined`.
 - `prompt` and `abort_and_prompt` return immediate success, then may emit a later error response with the **same** id if async prompt scheduling fails.
+- `prompt` success responses may include `data.agentInvoked`. `false` means the prompt completed locally without an agent turn; `true` means the prompt produced agent lifecycle events; omitted means the host must rely on session events for completion.
+- `abort_and_prompt` does not currently emit `data.agentInvoked` or `prompt_result`; hosts should treat it as the legacy abort-then-schedule path and rely on session events or same-id scheduling errors.
 
 ## Command Schema (canonical)
 
@@ -152,6 +155,30 @@ All command results use `RpcResponse`:
 - Failure: `{ id?, type: "response", command: string, success: false, error: string }`
 
 Data payloads are command-specific and defined in `rpc-types.ts`.
+
+### `prompt` payload
+
+`prompt` is acknowledged after the command is accepted, not after a model turn finishes:
+
+```json
+{
+  "id": "req_1",
+  "type": "response",
+  "command": "prompt",
+  "success": true,
+  "data": { "agentInvoked": false }
+}
+```
+
+`data.agentInvoked: false` is a completion signal for local-only prompts, including slash commands that produce output without starting an agent turn. `data.agentInvoked: true` means the prompt produced agent lifecycle events; those events can be emitted before or after the prompt response depending on the command path. Older runtimes may omit `data`; hosts should then rely on `agent_end`, custom message completion, or `prompt_result`.
+
+`prompt_result` is emitted when a prompt was accepted immediately but later resolves as local-only:
+
+```json
+{ "type": "prompt_result", "id": "req_1", "agentInvoked": false }
+```
+
+Local-only slash commands may emit `command_output` frames before completing via `data.agentInvoked: false` or a later `prompt_result`. They do not emit `agent_end`.
 
 ### `get_state` payload
 
@@ -344,7 +371,8 @@ This is the most important operational behavior.
 That means:
 
 - command acceptance != run completion
-- final completion is observed via `agent_end`
+- agent turns complete via `agent_end`
+- local-only prompts complete via `data.agentInvoked: false` on the response or via a later `prompt_result`
 
 ### While streaming
 

@@ -27,6 +27,7 @@
 - Added `skills.enableAgentsUser` and `skills.enableAgentsProject` settings (default on) so the canonical OMP-native `~/.agent[s]/skills` and project-walkup `.agent[s]/skills` are configurable independently from the third-party Claude/Codex/Pi toggles.
 - Added a read-only `ctx.models` facade for extensions: `list()` (authenticated models), `current()` (live session model), `resolve(spec)` (a model string or role alias → `Model`, using the same settings-backed aliases and match preferences as core selection), and `family(model)` (opaque canonical-identity lineage token for cross-family comparisons). Lets extension tools select models the way core does without reaching into the mutable registry ([#2406](https://github.com/can1357/oh-my-pi/issues/2406))
 
+- Added RPC prompt lifecycle hints so hosts can distinguish scheduled agent turns from local-only slash commands via `data.agentInvoked` and `prompt_result`.
 
 ### Changed
 
