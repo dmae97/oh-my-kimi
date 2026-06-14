@@ -103,18 +103,25 @@ runs:
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.10
       - name: Enable sccache for cargo
-        # `CARGO_INCREMENTAL=0` is required: sccache silently skips caching
-        # when incremental is enabled, which would turn the wrapper into a
-        # no-op. rust-cache also sets this today, but pin it here so sccache
-        # stays effective if rust-cache is removed or changes defaults. Also
-        # overrides `profile.dev.incremental = true` for `bun run test:rs`.
+        # `CARGO_INCREMENTAL=0` is required: sccache silently skips caching when
+        # incremental is enabled, turning the wrapper into a no-op. The backend
+        # is conditional: self-hosted omp-kata runners inject a shared S3 (RustFS)
+        # cache via pod env (SCCACHE_BUCKET/ENDPOINT/REGION + AWS creds) that
+        # sccache reads from the inherited environment; GitHub-hosted runners
+        # (macOS, ubuntu-arm) can't reach the private RustFS and keep the GHA
+        # cache backend.
         shell: bash
         run: |
            {
-             echo "SCCACHE_GHA_ENABLED=true"
              echo "RUSTC_WRAPPER=sccache"
              echo "CARGO_INCREMENTAL=0"
            } >> "$GITHUB_ENV"
+           if [ -n "${SCCACHE_BUCKET:-}" ]; then
+             echo "sccache backend: shared S3 ($SCCACHE_BUCKET @ $SCCACHE_ENDPOINT)"
+           else
+             echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+             echo "sccache backend: GitHub Actions cache"
+           fi
       - uses: taiki-e/install-action@v2
         if: inputs.target == ''
         with:
