@@ -34,9 +34,11 @@ function safeSessionId(options: LocalProtocolOptions): string {
 	return safe.length > 0 ? safe : "session";
 }
 
-function shortLocalRoot(candidate: string, options: LocalProtocolOptions): string {
-	const hash = Bun.hash(candidate).toString(36);
-	return path.join(os.tmpdir(), "omp-local", `${safeSessionId(options)}-${hash}`);
+function shortLocalRoot(options: LocalProtocolOptions): string {
+	// Derive the short root from the stable session id, never the artifact path,
+	// so `SessionManager.moveTo()` and the resume-after-move flow keep finding
+	// the same `local://` directory the session wrote pre-move.
+	return path.join(os.tmpdir(), "omp-local", safeSessionId(options));
 }
 
 function getContentType(filePath: string): InternalResource["contentType"] {
@@ -126,7 +128,7 @@ export function resolveLocalRoot(options: LocalProtocolOptions, platform: NodeJS
 	if (artifactsDir) {
 		const candidate = path.resolve(artifactsDir, "local");
 		if (platform === "win32" && candidate.length >= WINDOWS_LOCAL_ROOT_MAX_CHARS) {
-			return shortLocalRoot(candidate, options);
+			return shortLocalRoot(options);
 		}
 		return candidate;
 	}

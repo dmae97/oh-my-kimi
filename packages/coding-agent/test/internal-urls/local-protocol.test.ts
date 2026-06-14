@@ -90,8 +90,9 @@ describe("LocalProtocolHandler", () => {
 		);
 	});
 
-	it("uses a short temp root for long Windows artifact paths", async () => {
+	it("uses a stable short temp root for long Windows artifact paths", async () => {
 		const longArtifactsDir = path.join(os.tmpdir(), "a".repeat(220), "artifacts");
+		const expectedRoot = path.join(os.tmpdir(), "omp-local", "session_long");
 		const options = {
 			getArtifactsDir: () => longArtifactsDir,
 			getSessionId: () => "session:long",
@@ -99,10 +100,17 @@ describe("LocalProtocolHandler", () => {
 		const root = resolveLocalRoot(options, "win32");
 		const resolved = resolveLocalUrlToPath("local://memo.txt", options, "win32");
 
-		expect(root).toContain(path.join("omp-local", "session_long-"));
-		expect(root).not.toContain(longArtifactsDir);
-		expect(root.length).toBeLessThan(path.join(longArtifactsDir, "local").length);
-		expect(resolved).toBe(path.join(root, "memo.txt"));
+		expect(root).toBe(expectedRoot);
+		expect(resolved).toBe(path.join(expectedRoot, "memo.txt"));
+
+		// The short root must survive moves of the artifact directory so
+		// `local://PLAN.md` and handoff files written pre-move stay reachable
+		// after `SessionManager.moveTo()` updates `getArtifactsDir()`.
+		const movedOptions = {
+			getArtifactsDir: () => path.join(os.tmpdir(), "b".repeat(220), "artifacts"),
+			getSessionId: () => "session:long",
+		};
+		expect(resolveLocalRoot(movedOptions, "win32")).toBe(expectedRoot);
 	});
 
 	it("blocks symlink escapes outside local root", async () => {
