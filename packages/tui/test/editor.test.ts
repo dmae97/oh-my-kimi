@@ -2279,4 +2279,60 @@ describe("Editor component", () => {
 			expect(editor.getText()).toBe("");
 		});
 	});
+
+	describe("decorateText around the cursor seam", () => {
+		// Editor.#decorate is the only seam that sees both the user prose AND the
+		// trailing CURSOR_MARKER, so a decorator with a right-boundary lookahead
+		// (like the magic-keyword regex /(?<!\S)ultrathink(?!\S)/g) would reject
+		// matches glued to the marker — ESC is non-whitespace. The editor must
+		// split around the marker so each side decorates as if it were a complete
+		// line. This guards the "ultrathink doesn't glow until you type a trailing
+		// character" regression reported in #2475.
+		const WORD_RE = /(?<!\S)ultrathink(?!\S)/g;
+		const PAINT_PREFIX = "<<";
+		const PAINT_SUFFIX = ">>";
+		const paintKeyword = (text: string): string => text.replace(WORD_RE, m => `${PAINT_PREFIX}${m}${PAINT_SUFFIX}`);
+
+		it("decorates a keyword glued to the trailing cursor marker", () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.decorateText = paintKeyword;
+			editor.focused = true;
+			editor.setText("ultrathink");
+
+			const line = editor.render(40).join("\n");
+			// Without the seam fix, the decorator's right-boundary `(?!\S)` would
+			// trip on ESC (the first byte of CURSOR_MARKER) and the keyword would
+			// survive verbatim. With it, the marker bookends the painted region.
+			expect(line).toContain(`${PAINT_PREFIX}ultrathink${PAINT_SUFFIX}`);
+		});
+
+		it("decorates keywords on both sides of the cursor in terminal-cursor mode", () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.decorateText = paintKeyword;
+			editor.focused = true;
+			editor.setUseTerminalCursor(true);
+			editor.setText("ultrathink ultrathink");
+			// Position the hardware cursor between the two keywords.
+			editor.handleInput("\x01"); // Ctrl+A → start of line
+			editor.handleInput("\x05"); // Ctrl+E → end of line
+			for (let i = 0; i < "ultrathink".length; i++) editor.handleInput("\x1b[D"); // 10× left
+
+			const line = editor.render(60).join("\n");
+			// Both keywords are painted independently — left side ends just before
+			// the marker, right side begins right after it.
+			const occurrences = line.split(`${PAINT_PREFIX}ultrathink${PAINT_SUFFIX}`).length - 1;
+			expect(occurrences).toBe(2);
+			expect(line).toContain(CURSOR_MARKER);
+		});
+
+		it("preserves the marker as-is — never splits or duplicates it", () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.decorateText = paintKeyword;
+			editor.focused = true;
+			editor.setText("ultrathink");
+
+			const line = editor.render(40).join("\n");
+			expect(line.split(CURSOR_MARKER).length - 1).toBe(1);
+		});
+	});
 });

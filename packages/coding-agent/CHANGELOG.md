@@ -47,6 +47,14 @@
 
 - Fixed the editor input box claiming a disproportionate share of small terminals (<=18 rows): the editor max-height floor (6 rows) ignored the available space. The height now yields to terminal size (`EDITOR_MIN_CHROME_ROWS`), reserving rows for the transcript and status line whenever the terminal can host both; on terminals too small for both, the editor collapses to its real bordered minimum instead of overshooting a fictitious cap.
 
+### Fixed
+
+- Fixed `ultrathink` / `orchestrate` / `workflowz` keywords not glowing while typing — the editor appended a CURSOR_MARKER (ESC-prefixed) after each render, so the magic-keyword regex's right-boundary `(?!\S)` tripped on ESC and dropped the gradient until a trailing character was typed. The marker-aware editor decorate (`packages/tui`) plus a phase-aware `highlightMagicKeywords` overload restore the live glow and add a Claude-Code-style shimmer while the prompt is focused, gated on `magicKeywords.enabled` ([#2475](https://github.com/can1357/oh-my-pi/issues/2475)).
+
+### Added
+
+- `highlightMagicKeywords(text, resetTo?, phase?)` now accepts an optional `phase` ∈ [0, 1) that rotates the gradient cyclically; sent bubbles omit it (static palette unchanged). `hasMagicKeyword(text)` exported from `modes/magic-keywords` is the cheap shimmer-gate the editor uses on every render.
+
 ## [15.12.5] - 2026-06-13
 ### Changed
 
