@@ -23,6 +23,27 @@ describe("collectPromotableAddedItemLines", () => {
 
 		expect(lines.get("packages/example/CHANGELOG.md")).toEqual(new Set([12, 33]));
 	});
+
+	it("does not promote items from newly added release sections", () => {
+		const diff = [
+			"diff --git a/packages/example/CHANGELOG.md b/packages/example/CHANGELOG.md",
+			"--- a/packages/example/CHANGELOG.md",
+			"+++ b/packages/example/CHANGELOG.md",
+			"@@ -1,0 +1,8 @@",
+			"+# Changelog",
+			"+",
+			"+## [1.0.0] - 2026-01-01",
+			"+",
+			"+### Fixed",
+			"+",
+			"+- Released fix.",
+			"+- Another released fix.",
+		].join("\n");
+
+		const lines = collectPromotableAddedItemLines(diff);
+
+		expect(lines.get("packages/example/CHANGELOG.md")).toBeUndefined();
+	});
 });
 
 describe("fixChangelogContent", () => {
