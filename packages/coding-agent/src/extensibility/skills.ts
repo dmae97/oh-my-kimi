@@ -139,21 +139,16 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 	if (!enabled) {
 		return { skills: [], warnings: [] };
 	}
-
 	// Fall-through gate for third-party CLI providers (claude-plugins, opencode,
-	// gemini, github, ...) that share user intent with the named source toggles
-	// but don't have a dedicated control of their own. The OMP-native providers
-	// (`agents`, `native`) get explicit toggles above and never fall through:
-	// disabling Claude/Codex must not silently break `.agent[s]/skills`
-	// discovery (issue #2401).
-	const anyBuiltInSkillSourceEnabled =
-		enableCodexUser ||
-		enableClaudeUser ||
-		enableClaudeProject ||
-		enablePiUser ||
-		enablePiProject ||
-		enableAgentsUser ||
-		enableAgentsProject;
+	// gemini, github, ...) that share user intent with the named third-party
+	// source toggles but don't have a dedicated control of their own. Only the
+	// third-party toggles count here: the OMP-native providers (`agents`,
+	// `native`) get explicit branches in `isSourceEnabled` below, so folding
+	// them into the fallback would re-enable unrelated third-party CLIs whenever
+	// the user kept the default `.agent[s]/skills` toggles on while turning off
+	// Codex/Claude/Pi (issue #2401 / PR #2405 review).
+	const anyThirdPartySkillToggleEnabled =
+		enableCodexUser || enableClaudeUser || enableClaudeProject || enablePiUser || enablePiProject;
 
 	function isSourceEnabled(source: SourceMeta): boolean {
 		const { provider, level } = source;
@@ -168,7 +163,7 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 		if (provider === "native" && level === "project") return enablePiProject;
 		if (provider === "agents" && level === "user") return enableAgentsUser;
 		if (provider === "agents" && level === "project") return enableAgentsProject;
-		return anyBuiltInSkillSourceEnabled;
+		return anyThirdPartySkillToggleEnabled;
 	}
 
 	// Use capability API to load all skills
