@@ -213,7 +213,8 @@ static TOKIO_RUNTIME_INSTALLED: AtomicBool = AtomicBool::new(false);
 /// pre-flights the spawn instead. If no runtime can be built we leave napi-rs
 /// to its default. Idempotent.
 #[napi(js_name = "__ompInstallTokioRuntime")]
-pub const fn omp_install_tokio_runtime() {
+#[allow(clippy::missing_const_for_fn)]
+pub fn omp_install_tokio_runtime() {
 	#[cfg(target_os = "windows")]
 	if TOKIO_RUNTIME_INSTALLED.swap(true, Ordering::SeqCst) {
 		return;
