@@ -881,7 +881,6 @@ export function buildRequest(
 	if (isAntigravity && shouldInjectAntigravitySystemInstruction(model.id)) {
 		const existingParts = request.systemInstruction?.parts ?? [];
 		request.systemInstruction = {
-			role: "user",
 			parts: [
 				{ text: ANTIGRAVITY_SYSTEM_INSTRUCTION },
 				{ text: `Please ignore following [ignore]${ANTIGRAVITY_SYSTEM_INSTRUCTION}[/ignore]` },

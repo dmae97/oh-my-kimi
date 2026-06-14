@@ -3,47 +3,54 @@
  */
 import * as path from "node:path";
 
-import { type Api, type AssistantMessage, completeSimple, type Model, type Tool } from "@oh-my-pi/pi-ai";
+import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import { type Api, completeSimple, type Model } from "@oh-my-pi/pi-ai";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
-
 import { resolveRoleSelection } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
-import titleMarkerInstruction from "../prompts/system/title-marker-instruction.md" with { type: "text" };
 import titleSystemPrompt from "../prompts/system/title-system.md" with { type: "text" };
-import titleMarkerSystemPrompt from "../prompts/system/title-system-marker.md" with { type: "text" };
-import { ONLINE_TINY_TITLE_MODEL_KEY } from "../tiny/models";
-import { formatTitleUserMessage, isLowSignalTitleInput, normalizeGeneratedTitle } from "../tiny/text";
-import { tinyTitleClient } from "../tiny/title-client";
+import { toReasoningEffort } from "../thinking";
 
 const TITLE_SYSTEM_PROMPT = prompt.render(titleSystemPrompt);
-const TITLE_MARKER_SYSTEM_PROMPT = prompt.render(titleMarkerSystemPrompt);
-const TITLE_MARKER_INSTRUCTION = prompt.render(titleMarkerInstruction);
 
 const DEFAULT_TERMINAL_TITLE = "π";
 const TERMINAL_TITLE_CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/g;
 
-export const TITLE_LOCAL_FALLBACK_DELAY_MS = 10_000;
-const TITLE_MAX_TOKENS = 30;
-const REASONING_SAFE_MAX_TOKENS = 1024;
-const SET_TITLE_TOOL_NAME = "set_title";
+const MAX_INPUT_CHARS = 3_500;
+const MAX_TITLE_CHARS = 80;
+const SESSION_DISPLAY_ID_LENGTH = 6;
+const MIN_GENERATED_TITLE_WORDS = 2;
+const MAX_GENERATED_TITLE_WORDS = 5;
+export type SessionTitleSource = "auto" | "user";
+// OMP_STATUS_DEV_SESSION_PREFIX_V1
 
-const setTitleTool: Tool = {
-	name: SET_TITLE_TOOL_NAME,
-	description: "Set the generated session title.",
-	parameters: {
-		type: "object",
-		properties: {
-			title: {
-				type: "string",
-				description:
-					'The generated session title, or exactly "none" when the message carries no concrete task yet.',
-			},
-		},
-		required: ["title"],
-		additionalProperties: false,
-	},
-};
+const GENERIC_TITLE_WORDS = new Set([
+	"a",
+	"about",
+	"again",
+	"an",
+	"and",
+	"chat",
+	"conversation",
+	"continue",
+	"for",
+	"help",
+	"it",
+	"later",
+	"more",
+	"new",
+	"next",
+	"now",
+	"on",
+	"please",
+	"session",
+	"task",
+	"the",
+	"this",
+	"to",
+	"we",
+]);
 
 /** Matches the title a tool-choice-less model wraps in `<title>...</title>`. */
 const TITLE_MARKER_RE = /<title>([\s\S]*?)<\/title>/i;
@@ -69,300 +76,145 @@ function modelSupportsForcedToolChoice(model: Model<Api>): boolean {
 	return true;
 }
 
-function getTitleModel(registry: ModelRegistry, settings: Settings, currentModel?: Model<Api>): Model<Api> | undefined {
+export interface GenerateSessionTitleOptions {
+	signal?: AbortSignal;
+}
+
+interface TitleModelSelection {
+	model: Model<Api>;
+	thinkingLevel?: ThinkingLevel;
+	fromRole: boolean;
+}
+
+function getTitleModel(
+	registry: ModelRegistry,
+	settings: Settings,
+	currentModel?: Model<Api>,
+): TitleModelSelection | undefined {
 	const availableModels = registry.getAvailable();
 	if (availableModels.length === 0) return undefined;
 
-	const titleModel = resolveRoleSelection(["commit", "smol"], settings, availableModels, registry)?.model;
-	if (titleModel) return titleModel;
+	const titleModel = resolveRoleSelection(["title", "smol", "commit"], settings, availableModels, registry);
+	if (titleModel) return { ...titleModel, fromRole: true };
 
-	if (currentModel) return currentModel;
+	if (currentModel) return { model: currentModel, fromRole: false };
 
 	return undefined;
 }
 
-export async function raceFirstNonNull<T>(
-	primary: Promise<T | null>,
-	startFallback: () => Promise<T | null>,
-	delayMs: number = TITLE_LOCAL_FALLBACK_DELAY_MS,
-	onPrimaryWinAfterFallback?: () => void,
-): Promise<T | null> {
-	const { promise, resolve } = Promise.withResolvers<T | null>();
-	let resolved = false;
-	let primarySettled = false;
-	let fallbackStarted = false;
-	let fallbackSettled = false;
-
-	const resolveOnce = (value: T | null): void => {
-		if (resolved) return;
-		resolved = true;
-		resolve(value);
-	};
-	const maybeResolveNull = (): void => {
-		if (primarySettled && fallbackStarted && fallbackSettled) resolveOnce(null);
-	};
-	const startFallbackOnce = (): void => {
-		if (fallbackStarted || resolved) return;
-		fallbackStarted = true;
-		let fallback: Promise<T | null>;
-		try {
-			fallback = startFallback();
-		} catch {
-			fallbackSettled = true;
-			maybeResolveNull();
-			return;
-		}
-		void fallback.then(
-			value => {
-				fallbackSettled = true;
-				if (value !== null) resolveOnce(value);
-				else maybeResolveNull();
-			},
-			() => {
-				fallbackSettled = true;
-				maybeResolveNull();
-			},
-		);
-	};
-
-	const timer = setTimeout(startFallbackOnce, delayMs);
-	void primary.then(
-		value => {
-			primarySettled = true;
-			clearTimeout(timer);
-			if (value !== null) {
-				if (fallbackStarted) onPrimaryWinAfterFallback?.();
-				resolveOnce(value);
-				return;
-			}
-			startFallbackOnce();
-			maybeResolveNull();
-		},
-		() => {
-			primarySettled = true;
-			clearTimeout(timer);
-			startFallbackOnce();
-			maybeResolveNull();
-		},
-	);
-
-	try {
-		return await promise;
-	} finally {
-		clearTimeout(timer);
-	}
-}
-
 /**
- * Generate a title for a session based on the first user message.
+ * Generate a short title for a session based on the current user/task context.
  *
- * @param firstMessage The first user message
+ * @param titleContext Latest user prompt and optional plan/activity context
  * @param registry Model registry
- * @param settings Settings used to resolve the smol role
+ * @param settings Settings used to resolve title/smol role models
  * @param sessionId Optional session id for sticky API key selection
- * @param currentModel Current model (used to derive title model)
+ * @param currentModel Current model (used as fallback title model)
  * @param metadataResolver Optional resolver evaluated after credential selection
  *   to produce request metadata (e.g. user_id for session attribution). Using a
  *   resolver instead of a pre-evaluated value ensures the metadata's account_uuid
  *   reflects the credential actually selected for this request.
- * @param customSystemPrompt Optional title-specific system prompt override
+ * @param options Optional abort signal for dynamic title refreshes
  */
 export async function generateSessionTitle(
-	firstMessage: string,
+	titleContext: string,
 	registry: ModelRegistry,
 	settings: Settings,
 	sessionId?: string,
 	currentModel?: Model<Api>,
 	metadataResolver?: (provider: string) => Record<string, unknown> | undefined,
-	customSystemPrompt?: string,
+	options: GenerateSessionTitleOptions = {},
 ): Promise<string | null> {
-	// Defer titling for greetings / acknowledgements / empty input. The default
-	// tiny title model can't reliably decline trivial input, so this happens
-	// deterministically before any model is invoked; the caller retries on the
-	// next user message while the session stays unnamed.
-	if (isLowSignalTitleInput(firstMessage)) {
-		logger.debug("title-generator: skipped low-signal input", { sessionId, reason: "low-signal" });
+	const titleModel = getTitleModel(registry, settings, currentModel);
+	if (!titleModel) {
+		logger.debug("title-generator: no title model found");
 		return null;
 	}
 
-	const titleSystemPrompt = customSystemPrompt?.trim() || undefined;
-	const tinyModel = settings.get("providers.tinyModel");
-	if (tinyModel === ONLINE_TINY_TITLE_MODEL_KEY) {
-		return generateTitleOnline(
-			firstMessage,
-			registry,
-			settings,
-			sessionId,
-			currentModel,
-			metadataResolver,
-			undefined,
-			titleSystemPrompt,
-		);
-	}
+	const truncatedContext =
+		titleContext.length > MAX_INPUT_CHARS ? `${titleContext.slice(0, MAX_INPUT_CHARS)}…` : titleContext;
+	const userMessage = `<title-context>
+${truncatedContext}
+</title-context>`;
 
-	const onlineAbortController = new AbortController();
-	const localTitlePromise = titleSystemPrompt
-		? tinyTitleClient.generate(tinyModel, firstMessage, { systemPrompt: titleSystemPrompt })
-		: tinyTitleClient.generate(tinyModel, firstMessage);
-	const localTitle = localTitlePromise.then(
-		title => title || null,
-		err => {
-			logger.warn("title-generator: local model error", {
-				sessionId,
-				model: tinyModel,
-				error: err instanceof Error ? err.message : String(err),
-			});
-			return null;
-		},
-	);
-	const startOnline = (): Promise<string | null> =>
-		generateTitleOnline(
-			firstMessage,
-			registry,
-			settings,
-			sessionId,
-			currentModel,
-			metadataResolver,
-			onlineAbortController.signal,
-			titleSystemPrompt,
-		);
-
-	return raceFirstNonNull(localTitle, startOnline, TITLE_LOCAL_FALLBACK_DELAY_MS, () => {
-		onlineAbortController.abort();
-	});
-}
-
-export async function generateTitleOnline(
-	firstMessage: string,
-	registry: ModelRegistry,
-	settings: Settings,
-	sessionId?: string,
-	currentModel?: Model<Api>,
-	metadataResolver?: (provider: string) => Record<string, unknown> | undefined,
-	signal?: AbortSignal,
-	customSystemPrompt?: string,
-): Promise<string | null> {
-	const model = getTitleModel(registry, settings, currentModel);
-	if (!model) {
-		logger.warn("title-generator: no title model found", { sessionId, reason: "no-title-model" });
+	const apiKey = await registry.getApiKey(titleModel.model, sessionId);
+	if (!apiKey) {
+		logger.debug("title-generator: no API key for smol model", {
+			provider: titleModel.model.provider,
+			id: titleModel.model.id,
+		});
 		return null;
 	}
+	// Resolve metadata after getApiKey so the session-sticky credential for this
+	// request is already recorded; metadataResolver can then return the correct
+	// account_uuid rather than the snapshot-at-call-site value.
+	const metadata = metadataResolver?.(titleModel.model.provider);
 
-	const titleSystemPrompt = customSystemPrompt?.trim() || undefined;
-	// Some providers can't be forced to call a tool — chat-completions hosts
-	// without `tool_choice` support, Claude Fable/Mythos — so a required
-	// `set_title` call never arrives. For those, ask the model to wrap the title
-	// in `<title>...</title>` markers and parse it from text instead.
-	const useForcedTool = modelSupportsForcedToolChoice(model);
-	const systemPrompt = useForcedTool
-		? [titleSystemPrompt ?? TITLE_SYSTEM_PROMPT]
-		: titleSystemPrompt
-			? [titleSystemPrompt, TITLE_MARKER_INSTRUCTION]
-			: [TITLE_MARKER_SYSTEM_PROMPT];
-	const userMessage = formatTitleUserMessage(firstMessage);
-	const modelName = `${model.provider}/${model.id}`;
-	const modelContext = {
-		sessionId,
-		provider: model.provider,
-		id: model.id,
-		model: modelName,
+	// Prefer configured title/smol/commit role thinking. Only the active-model
+	// fallback disables reasoning, because it may be a high-thinking model chosen
+	// for coding rather than a short utility title task.
+	const request = {
+		model: `${titleModel.model.provider}/${titleModel.model.id}`,
+		systemPrompt: TITLE_SYSTEM_PROMPT,
+		userMessage,
+		maxTokens: 30,
 	};
-	logger.debug("title-generator: start", modelContext);
+	logger.debug("title-generator: request", request);
 
 	try {
-		const apiKey = await registry.getApiKey(model, sessionId);
-		if (!apiKey) {
-			logger.warn("title-generator: no API key", { ...modelContext, reason: "missing-api-key" });
-			return null;
-		}
-		// Resolve metadata after getApiKey so the session-sticky credential for this
-		// request is already recorded; metadataResolver can then return the correct
-		// account_uuid rather than the snapshot-at-call-site value.
-		const metadata = metadataResolver?.(model.provider);
-
-		// Title generation is a 3-7 word task, but some reasoning backends ignore
-		// disableReasoning. Keep the normal cheap budget for non-reasoning models
-		// while reserving enough output room for reasoning models to still emit
-		// the forced tool call after any unavoidable thinking tokens.
-		const maxTokens = model.reasoning ? Math.max(TITLE_MAX_TOKENS, REASONING_SAFE_MAX_TOKENS) : TITLE_MAX_TOKENS;
-		logger.debug("title-generator: request", { ...modelContext, maxTokens });
-
 		const response = await completeSimple(
-			model,
+			titleModel.model,
 			{
-				systemPrompt,
-				messages: [{ role: "user", content: userMessage, timestamp: Date.now() }],
-				tools: useForcedTool ? [setTitleTool] : undefined,
+				systemPrompt: [request.systemPrompt],
+				messages: [{ role: "user", content: request.userMessage, timestamp: Date.now() }],
 			},
 			{
-				apiKey: registry.resolver(model, sessionId),
-				maxTokens,
-				disableReasoning: true,
-				toolChoice: useForcedTool ? { type: "tool", name: SET_TITLE_TOOL_NAME } : undefined,
+				apiKey,
+				maxTokens: 30,
+				...(titleModel.fromRole
+					? { reasoning: toReasoningEffort(titleModel.thinkingLevel) }
+					: { disableReasoning: true }),
 				metadata,
-				signal,
+				signal: options.signal,
 			},
 		);
 
 		if (response.stopReason === "error") {
-			logger.warn("title-generator: response error", {
-				...modelContext,
-				reason: "provider-response-error",
+			logger.debug("title-generator: response error", {
+				model: request.model,
 				stopReason: response.stopReason,
 				errorMessage: response.errorMessage,
 			});
 			return null;
 		}
 
-		const title = normalizeGeneratedTitle(extractGeneratedTitle(response.content));
-
-		if (!title) {
-			logger.debug("title-generator: no title returned", {
-				...modelContext,
-				reason: "model-returned-none",
-				usage: response.usage,
-				stopReason: response.stopReason,
-			});
-			return null;
+		let title = "";
+		for (const content of response.content) {
+			if (content.type === "text") {
+				title += content.text;
+			}
 		}
+		title = title.trim();
 
-		logger.debug("title-generator: success", {
-			...modelContext,
+		logger.debug("title-generator: response", {
+			model: request.model,
 			title,
 			usage: response.usage,
 			stopReason: response.stopReason,
 		});
 
-		return title;
+		if (!title) {
+			return null;
+		}
+
+		return normalizeGeneratedSessionTitle(title);
 	} catch (err) {
-		logger.warn("title-generator: error", {
-			...modelContext,
-			reason: "exception",
+		logger.debug("title-generator: error", {
+			model: request.model,
 			error: err instanceof Error ? err.message : String(err),
 		});
 		return null;
 	}
-}
-
-function extractGeneratedTitle(contentBlocks: AssistantMessage["content"]): string {
-	let textTitle = "";
-	for (const content of contentBlocks) {
-		if (content.type === "toolCall" && content.name === SET_TITLE_TOOL_NAME) {
-			const args = content.arguments as Record<string, unknown>;
-			const title = args.title;
-			return typeof title === "string" ? title.trim() : "";
-		}
-		if (content.type === "text") {
-			textTitle += content.text;
-		}
-	}
-	// Tool-choice-less models are asked to wrap the title in <title>...</title>,
-	// but stay lenient: prefer the marker when the model closed it, otherwise
-	// accept a plain sentence after stripping any stray/unclosed tag fragment
-	// (e.g. output truncated before the closing tag).
-	const marker = TITLE_MARKER_RE.exec(textTitle);
-	if (marker) return marker[1].trim();
-	return textTitle.replace(/<\/?title>/gi, "").trim();
 }
 
 /**
@@ -374,6 +226,68 @@ function sanitizeTerminalTitlePart(value: string | undefined): string | undefine
 	return sanitized || undefined;
 }
 
+function stripTitleWrapper(value: string): string {
+	return value
+		.replace(/^\s*(?:title|session title)\s*:\s*/i, "")
+		.replace(/^\s*[-*•]+\s*/, "")
+		.replace(/^\s*["'“”‘’]+/, "")
+		.replace(/["'“”‘’]+\s*$/, "")
+		.replace(/[.!?]+\s*$/, "")
+		.trim();
+}
+
+export function normalizeGeneratedSessionTitle(value: string | undefined): string | null {
+	const sanitized = sanitizeTerminalTitlePart(value);
+	if (!sanitized) return null;
+
+	const title = stripTitleWrapper(sanitized).replace(/\s+/g, " ").trim();
+	if (!title) return null;
+
+	const words = title.split(/\s+/).filter(Boolean);
+	if (words.length < MIN_GENERATED_TITLE_WORDS) return null;
+	const canonicalWords = words.map(word => word.toLowerCase().replace(/[^a-z0-9]+/g, "")).filter(Boolean);
+	if (canonicalWords.length === 0 || canonicalWords.every(word => GENERIC_TITLE_WORDS.has(word))) return null;
+
+	const capped = words.slice(0, MAX_GENERATED_TITLE_WORDS).join(" ");
+	return capped.length > MAX_TITLE_CHARS ? `${capped.slice(0, MAX_TITLE_CHARS - 1).trimEnd()}…` : capped;
+}
+
+export function formatSessionDisplayId(sessionId: string | undefined | null): string {
+	const sanitized = (sessionId ?? "").replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+	return sanitized.slice(-SESSION_DISPLAY_ID_LENGTH) || "new";
+}
+
+function isDevPiChannel(): boolean {
+	const channel = process.env.PI_CHANNEL?.trim().toLowerCase();
+	const configDir = process.env.PI_CONFIG_DIR?.trim();
+	const agentDir = process.env.PI_CODING_AGENT_DIR ?? "";
+	return channel === "dev" || configDir === ".omp-dev" || /(^|[\\/])\.omp-dev([\\/]|$)/.test(agentDir);
+}
+
+export function formatSessionDisplayPrefix(sessionId: string | undefined | null): string {
+	return `#${isDevPiChannel() ? "dev-" : ""}${formatSessionDisplayId(sessionId)}`;
+}
+
+export function resolveSessionDisplayTitle(
+	sessionName: string | undefined,
+	cwd?: string,
+	titleSource?: SessionTitleSource,
+): string {
+	const sanitizedName = sanitizeTerminalTitlePart(sessionName);
+	const title = titleSource === "user" ? sanitizedName : normalizeGeneratedSessionTitle(sanitizedName);
+	return title ?? getFallbackTerminalTitle(cwd) ?? "conversation";
+}
+
+export function formatSessionDisplayTitle(
+	sessionId: string | undefined | null,
+	sessionName: string | undefined,
+	cwd?: string,
+	titleSource?: SessionTitleSource,
+): string {
+	const title = resolveSessionDisplayTitle(sessionName, cwd, titleSource);
+	return `${formatSessionDisplayPrefix(sessionId)} ${title}`;
+}
+
 function getFallbackTerminalTitle(cwd: string | undefined): string | undefined {
 	if (!cwd) return undefined;
 	const resolvedCwd = path.resolve(cwd);
@@ -382,28 +296,36 @@ function getFallbackTerminalTitle(cwd: string | undefined): string | undefined {
 	return sanitizeTerminalTitlePart(baseName);
 }
 
-export function formatSessionTerminalTitle(sessionName: string | undefined, cwd?: string): string {
-	const label = sanitizeTerminalTitlePart(sessionName) ?? getFallbackTerminalTitle(cwd);
-	return label ? `${DEFAULT_TERMINAL_TITLE}: ${label}` : DEFAULT_TERMINAL_TITLE;
+export function formatSessionTerminalTitle(
+	sessionName: string | undefined,
+	cwd?: string,
+	titleSource?: SessionTitleSource,
+	sessionId?: string,
+): string {
+	const label = formatSessionDisplayTitle(sessionId, sessionName, cwd, titleSource);
+	return `${DEFAULT_TERMINAL_TITLE}: ${label}`;
 }
 
 /**
  * Set the terminal title using OSC 0 (sets both tab and window title). Unsupported terminals ignore it.
  */
 export function setTerminalTitle(title: string): void {
-	if (!process.stdout.isTTY) return;
 	process.stdout.write(`\x1b]0;${sanitizeTerminalTitlePart(title) ?? DEFAULT_TERMINAL_TITLE}\x07`);
 }
 
-export function setSessionTerminalTitle(sessionName: string | undefined, cwd?: string): void {
-	setTerminalTitle(formatSessionTerminalTitle(sessionName, cwd));
+export function setSessionTerminalTitle(
+	sessionName: string | undefined,
+	cwd?: string,
+	titleSource?: SessionTitleSource,
+	sessionId?: string,
+): void {
+	setTerminalTitle(formatSessionTerminalTitle(sessionName, cwd, titleSource, sessionId));
 }
 
 /**
  * Save the current terminal title on terminals that support xterm window ops.
  */
 export function pushTerminalTitle(): void {
-	if (!process.stdout.isTTY) return;
 	process.stdout.write("\x1b[22;2t");
 }
 
@@ -411,6 +333,5 @@ export function pushTerminalTitle(): void {
  * Restore the previously saved terminal title on terminals that support xterm window ops.
  */
 export function popTerminalTitle(): void {
-	if (!process.stdout.isTTY) return;
 	process.stdout.write("\x1b[23;2t");
 }

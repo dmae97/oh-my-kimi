@@ -1710,4 +1710,39 @@ describe("agentLoopContinue with AgentMessage", () => {
 			expect(toolEnd.result.content).toEqual([{ type: "text", text: "Tool failed with no output." }]);
 		}
 	});
+
+	it("should detect repetition loops during assistant stream and abort gracefully", async () => {
+		const context: AgentContext = { systemPrompt: ["You are helpful."], messages: [], tools: [] };
+		const mock = createMockModel({
+			responses: [
+				{
+					content: Array.from({ length: 26 }, () => "🌊 "),
+				},
+			],
+		});
+		// Mutate provider to trigger Gemini repetition loop detection in agent loop
+		mock.model.provider = "google" as any;
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("Hello")], context, config, undefined, mock.stream);
+
+		for await (const event of stream) {
+			events.push(event);
+		}
+
+		const messages = await stream.result();
+		expect(messages.length).toBe(2);
+		expect(messages[1].role).toBe("assistant");
+
+		const assistantMsg = messages[1] as AssistantMessage;
+		expect(assistantMsg.stopReason).toBe("error");
+		expect(assistantMsg.errorMessage).toContain("Repetition loop detected");
+
+		let text = "";
+		for (const block of assistantMsg.content) {
+			if (block.type === "text") text += block.text;
+		}
+		expect(text).toBe("🌊 ");
+	});
 });
