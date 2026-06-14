@@ -7,7 +7,14 @@
  * here.
  */
 
-import { bareModelId, isFableOrMythos, parseAnthropicModel, parseGlmModel, semverGte } from "./classify";
+import {
+	bareModelId,
+	isFableOrMythos,
+	parseAnthropicModel,
+	parseGlmModel,
+	parseKnownModel,
+	semverGte,
+} from "./classify";
 
 /** Kimi family ids in any namespace form (`moonshotai/kimi-*`, `kimi-k2.6`, `vendor/kimi.x`). */
 export function isKimiModelId(modelId: string): boolean {
@@ -92,6 +99,29 @@ export function isReasoningGlmModelId(modelId: string): boolean {
 /** GLM vision SKUs — the `v` that attaches to the version (`glm-4v`, `glm-4.5v`). */
 export function isGlmVisionModelId(modelId: string): boolean {
 	return parseGlmModel(bareModelId(modelId))?.vision === true;
+}
+/**
+ * Coarse vendor-lineage token for "are two models the same family?" checks
+ * (e.g. picking a cross-family reviewer). All Claude point releases share a token,
+ * Claude and GPT differ; namespace prefixes and aggregator mirrors fold onto the
+ * lineage via {@link parseKnownModel}'s `bareModelId` normalization. Opaque and
+ * comparison-only — not a stable key to persist, since the vocabulary tracks new
+ * releases. Returns `""` for ids it cannot classify; callers fall back to the provider.
+ *
+ * Vendor-only by design: a model's kind/variant (opus vs sonnet, codex vs base) is
+ * collapsed onto the single vendor token; use {@link parseKnownModel} for finer breakdowns.
+ */
+export function modelFamilyToken(modelId: string): string {
+	const parsed = parseKnownModel(modelId);
+	if (parsed.family !== "unknown") return parsed.family;
+	if (isKimiModelId(modelId)) return "kimi";
+	if (isQwenModelId(modelId)) return "qwen";
+	if (isMinimaxM2FamilyModelId(modelId)) return "minimax";
+	if (isOpenAIGptOssModelId(modelId)) return "gpt-oss";
+	if (isDeepseekModelIdOrName(modelId)) return "deepseek";
+	if (isMimoModelIdOrName(modelId)) return "mimo";
+	if (parseGlmModel(bareModelId(modelId))) return "glm";
+	return "";
 }
 
 /**
