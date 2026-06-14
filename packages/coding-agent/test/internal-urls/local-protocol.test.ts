@@ -90,6 +90,21 @@ describe("LocalProtocolHandler", () => {
 		);
 	});
 
+	it("uses a short temp root for long Windows artifact paths", async () => {
+		const longArtifactsDir = path.join(os.tmpdir(), "a".repeat(220), "artifacts");
+		const options = {
+			getArtifactsDir: () => longArtifactsDir,
+			getSessionId: () => "session:long",
+		};
+		const root = resolveLocalRoot(options, "win32");
+		const resolved = resolveLocalUrlToPath("local://memo.txt", options, "win32");
+
+		expect(root).toContain(path.join("omp-local", "session_long-"));
+		expect(root).not.toContain(longArtifactsDir);
+		expect(root.length).toBeLessThan(path.join(longArtifactsDir, "local").length);
+		expect(resolved).toBe(path.join(root, "memo.txt"));
+	});
+
 	it("blocks symlink escapes outside local root", async () => {
 		if (process.platform === "win32") return;
 

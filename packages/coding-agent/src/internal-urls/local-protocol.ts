@@ -26,6 +26,18 @@ function toLocalValidationError(error: unknown): Error {
 	const message = error instanceof Error ? error.message : String(error);
 	return new Error(message.replace("skill://", "local://"));
 }
+const WINDOWS_LOCAL_ROOT_MAX_CHARS = 180;
+
+function safeSessionId(options: LocalProtocolOptions): string {
+	const raw = options.getSessionId?.() ?? "session";
+	const safe = raw.replace(/[^a-zA-Z0-9_.-]/g, "_");
+	return safe.length > 0 ? safe : "session";
+}
+
+function shortLocalRoot(candidate: string, options: LocalProtocolOptions): string {
+	const hash = Bun.hash(candidate).toString(36);
+	return path.join(os.tmpdir(), "omp-local", `${safeSessionId(options)}-${hash}`);
+}
 
 function getContentType(filePath: string): InternalResource["contentType"] {
 	const ext = path.extname(filePath).toLowerCase();
@@ -108,20 +120,28 @@ function extractRelativePath(url: InternalUrl): string {
 	return decoded;
 }
 
-export function resolveLocalRoot(options: LocalProtocolOptions): string {
+/** Resolve the session-scoped local:// root, shortening long Windows artifact paths before writes hit MAX_PATH. */
+export function resolveLocalRoot(options: LocalProtocolOptions, platform: NodeJS.Platform = process.platform): string {
 	const artifactsDir = options.getArtifactsDir?.();
 	if (artifactsDir) {
-		return path.resolve(artifactsDir, "local");
+		const candidate = path.resolve(artifactsDir, "local");
+		if (platform === "win32" && candidate.length >= WINDOWS_LOCAL_ROOT_MAX_CHARS) {
+			return shortLocalRoot(candidate, options);
+		}
+		return candidate;
 	}
 
-	const sessionId = options.getSessionId?.() ?? "session";
-	const safeSessionId = sessionId.replace(/[^a-zA-Z0-9_.-]/g, "_");
-	return path.join(os.tmpdir(), "omp-local", safeSessionId);
+	return path.join(os.tmpdir(), "omp-local", safeSessionId(options));
 }
 
-export function resolveLocalUrlToPath(input: string | InternalUrl, options: LocalProtocolOptions): string {
+/** Resolve a local:// URL to an on-disk path under the active session's local root. */
+export function resolveLocalUrlToPath(
+	input: string | InternalUrl,
+	options: LocalProtocolOptions,
+	platform: NodeJS.Platform = process.platform,
+): string {
 	const url = typeof input === "string" ? parseLocalUrl(input) : input;
-	const localRoot = path.resolve(resolveLocalRoot(options));
+	const localRoot = path.resolve(resolveLocalRoot(options, platform));
 	const relativePath = extractRelativePath(url);
 
 	if (!relativePath) {
