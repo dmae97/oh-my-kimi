@@ -10,14 +10,14 @@ export interface ResolveInfo {
 export interface RejectInfo {
 	/** The ToolChoice that was yielded but never (or unsuccessfully) served. */
 	choice: ToolChoice;
-	reason: "aborted" | "error" | "cleared" | "removed";
+	reason: "aborted" | "error" | "cleared" | "removed" | "unavailable" | "not_invoked";
 }
 
 /** "requeue" replays the lost yield next turn; "drop" (or void/undefined) discards it. */
 export type RejectOutcome = "requeue" | "drop";
 
 export interface DirectiveCallbacks {
-	/** Fires when the yield was served (LLM call completed). The directive is consumed. */
+	/** Fires when the yield completed; onInvoked directives require the requested tool to run first. */
 	onResolved?: (info: ResolveInfo) => void;
 	/**
 	 * Fires when the yield is being discarded. Return "requeue" to replay the
@@ -62,6 +62,7 @@ export function* onceGen(choice: ToolChoice): Generator<ToolChoice, void, unknow
 interface InFlight {
 	directive: ToolChoiceDirective;
 	yielded: ToolChoice;
+	invoked: boolean;
 }
 
 // ── Queue ───────────────────────────────────────────────────────────────────
@@ -116,7 +117,7 @@ export class ToolChoiceQueue {
 				this.#queue.shift();
 				continue;
 			}
-			this.#inFlight = { directive: head, yielded: result.value };
+			this.#inFlight = { directive: head, yielded: result.value, invoked: false };
 			return result.value;
 		}
 		return undefined;
@@ -125,14 +126,18 @@ export class ToolChoiceQueue {
 	// ── Lifecycle ─────────────────────────────────────────────────────────
 
 	/**
-	 * The in-flight yield was served — the LLM call completed normally.
-	 * Fires onResolved, then clears in-flight state. The directive's generator
-	 * remains in the queue if it has more values to yield.
+	 * The in-flight yield completed normally. Directives with onInvoked are only
+	 * consumed after their requested tool ran; a normal text turn or a different
+	 * tool call requeues/rejects the directive instead.
 	 */
 	resolve(): void {
 		const inFlight = this.#inFlight;
-		this.#inFlight = undefined;
 		if (!inFlight) return;
+		if (inFlight.directive.callbacks.onInvoked && !inFlight.invoked) {
+			this.reject("not_invoked");
+			return;
+		}
+		this.#inFlight = undefined;
 
 		this.#lastResolvedLabel = inFlight.directive.label;
 		inFlight.directive.callbacks.onResolved?.({ choice: inFlight.yielded });
@@ -155,12 +160,13 @@ export class ToolChoiceQueue {
 
 		if (outcome === "requeue") {
 			// Re-queue only the lost yield, not the rest of the sequence. Carry forward
-			// onInvoked and onRejected so the replayed yield still executes correctly
-			// and can requeue itself again if the next turn also aborts.
+			// callbacks so the replayed yield still executes and finalizes correctly,
+			// and can requeue itself again if the next turn also aborts or skips it.
 			this.#queue.unshift({
 				generator: onceGen(inFlight.yielded),
 				label: `${inFlight.directive.label}-requeued`,
 				callbacks: {
+					onResolved: inFlight.directive.callbacks.onResolved,
 					onInvoked: inFlight.directive.callbacks.onInvoked,
 					onRejected: inFlight.directive.callbacks.onRejected,
 				},
@@ -173,9 +179,15 @@ export class ToolChoiceQueue {
 		return this.#inFlight !== undefined;
 	}
 
-	/** Peek the in-flight directive's onInvoked handler, if any. */
+	/** Return the in-flight directive's onInvoked handler and mark it when called. */
 	peekInFlightInvoker(): ((input: unknown) => Promise<unknown> | unknown) | undefined {
-		return this.#inFlight?.directive.callbacks.onInvoked;
+		const inFlight = this.#inFlight;
+		const onInvoked = inFlight?.directive.callbacks.onInvoked;
+		if (!inFlight || !onInvoked) return undefined;
+		return (input: unknown): Promise<unknown> | unknown => {
+			inFlight.invoked = true;
+			return onInvoked(input);
+		};
 	}
 
 	// ── Cleanup ───────────────────────────────────────────────────────────

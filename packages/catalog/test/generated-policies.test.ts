@@ -109,6 +109,58 @@ describe("generated model policies", () => {
 		});
 	});
 
+	it("pins zai glm-5.2 base id to 1M context", () => {
+		const models = [
+			createSpec({
+				id: "glm-5.2",
+				api: "anthropic-messages",
+				provider: "zai",
+				contextWindow: 200_000,
+				maxTokens: 8192,
+			}),
+		];
+
+		applyGeneratedModelPolicies(models);
+
+		expect(models[0]?.contextWindow).toBe(1_000_000);
+		expect(models[0]?.maxTokens).toBe(131_072);
+	});
+
+	it("pins MiniMax-M3 long-context providers to 1M context", () => {
+		const models = [
+			createSpec({
+				id: "MiniMax-M3",
+				api: "anthropic-messages",
+				provider: "minimax",
+				contextWindow: 512_000,
+				maxTokens: 128_000,
+			}),
+			createSpec({
+				id: "MiniMax-M3",
+				api: "anthropic-messages",
+				provider: "minimax-cn",
+				contextWindow: 512_000,
+				maxTokens: 128_000,
+			}),
+			createSpec({
+				id: "MiniMax-M3",
+				api: "openai-completions",
+				provider: "minimax-code",
+				contextWindow: 512_000,
+				maxTokens: 128_000,
+			}),
+		];
+
+		applyGeneratedModelPolicies(models);
+
+		expect(models[0]?.contextWindow).toBe(1_000_000);
+		expect(models[0]?.maxTokens).toBe(128_000);
+		expect(models[1]?.contextWindow).toBe(1_000_000);
+		expect(models[1]?.maxTokens).toBe(128_000);
+		expect(models[2]?.contextWindow).toBe(512_000);
+		expect(models[2]?.maxTokens).toBe(128_000);
+	});
+
 	it("normalizes Copilot generated fallback limits", () => {
 		const models: ModelSpec<Api>[] = [
 			createSpec({
@@ -144,6 +196,34 @@ describe("generated model policies", () => {
 		expect(models[2]?.maxTokens).toBe(64000);
 	});
 
+	it("marks OpenCode Go MiMo models as not supporting tool_choice", () => {
+		const models: ModelSpec<"openai-completions">[] = [
+			createSpec({
+				id: "mimo-v2.5-pro",
+				api: "openai-completions",
+				provider: "opencode-go",
+			}),
+		];
+
+		applyGeneratedModelPolicies(models);
+
+		expect(models[0]?.compat?.supportsToolChoice).toBe(false);
+	});
+
+	it("marks OpenCode Go Kimi K2.7 Code as not supporting forced tool_choice", () => {
+		const models: ModelSpec<"openai-completions">[] = [
+			createSpec({
+				id: "kimi-k2.7-code",
+				api: "openai-completions",
+				provider: "opencode-go",
+			}),
+		];
+
+		applyGeneratedModelPolicies(models);
+
+		expect(models[0]?.compat?.supportsForcedToolChoice).toBe(false);
+	});
+
 	it("links spark variants and gpt-5.5 to their context promotion targets", () => {
 		const models = [
 			createSpec({ id: "gpt-5.3-codex-spark", api: "openai-codex-responses", provider: "openai-codex" }),
@@ -155,6 +235,38 @@ describe("generated model policies", () => {
 
 		expect(models[0]?.contextPromotionTarget).toBe("openai-codex/gpt-5.5");
 		expect(models[1]?.contextPromotionTarget).toBe("openai-codex/gpt-5.4");
+	});
+
+	it("links every gpt-5.5 flavor to its gpt-5.4 sibling across namespaced and dated provider ids", () => {
+		const models = [
+			// Namespaced provider ids (id carries an `openai/` prefix).
+			createSpec({ id: "openai/gpt-5.5", api: "openai-responses", provider: "openrouter" }),
+			createSpec({ id: "openai/gpt-5.5-pro", api: "openai-responses", provider: "openrouter" }),
+			createSpec({ id: "openai/gpt-5.4", api: "openai-responses", provider: "openrouter" }),
+			createSpec({ id: "openai/gpt-5.4-pro", api: "openai-responses", provider: "openrouter" }),
+			createSpec({ id: "openai/gpt-5.4-mini", api: "openai-responses", provider: "openrouter" }),
+			// Dated snapshot ids on a provider with no plain `gpt-5.4`.
+			createSpec({ id: "gpt-5.5-2026-04-23", api: "openai-responses", provider: "aimlapi" }),
+			createSpec({ id: "gpt-5.4-2026-03-05", api: "openai-responses", provider: "aimlapi" }),
+			// Dotted namespace (amazon-bedrock `openai.gpt-5.x`).
+			createSpec({ id: "openai.gpt-5.5", api: "openai-responses", provider: "amazon-bedrock" }),
+			createSpec({ id: "openai.gpt-5.4", api: "openai-responses", provider: "amazon-bedrock" }),
+		];
+
+		linkOpenAIPromotionTargets(models);
+
+		// Base and pro both promote to the plainest same-provider gpt-5.4 (base wins
+		// over `-pro`/`-mini`), and the namespaced target round-trips through
+		// parseModelString (first-slash split → provider `openrouter`, id `openai/gpt-5.4`).
+		expect(models[0]?.contextPromotionTarget).toBe("openrouter/openai/gpt-5.4");
+		expect(models[1]?.contextPromotionTarget).toBe("openrouter/openai/gpt-5.4");
+		// A gpt-5.4 model itself is never given a promotion target.
+		expect(models[2]?.contextPromotionTarget).toBeUndefined();
+		expect(models[3]?.contextPromotionTarget).toBeUndefined();
+		expect(models[4]?.contextPromotionTarget).toBeUndefined();
+		// Dated and dotted siblings resolve by parsed version, not literal id.
+		expect(models[5]?.contextPromotionTarget).toBe("aimlapi/gpt-5.4-2026-03-05");
+		expect(models[7]?.contextPromotionTarget).toBe("amazon-bedrock/openai.gpt-5.4");
 	});
 
 	it("sets freeform apply_patch metadata for first-party GPT-5 Responses models", () => {

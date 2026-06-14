@@ -1,7 +1,7 @@
 {
 	"type": "module",
 	"name": "@oh-my-pi/pi-coding-agent",
-	"version": "15.12.4",
+	"version": "15.13.0",
 	"description": "Coding agent CLI with read, bash, edit, write tools and session management",
 	"homepage": "https://omp.sh",
 	"author": "Can Boluk",
@@ -35,7 +35,7 @@
 		"check": "biome check . && bun run check:types",
 		"check:types": "tsgo -p tsconfig.json --noEmit",
 		"lint": "biome lint .",
-		"test": "bun test --parallel",
+		"test": "bun test --parallel=2",
 		"fix": "biome check --write --unsafe . && bun run format-prompts && bun run generate-docs-index",
 		"fmt": "biome format --write . && bun run format-prompts",
 		"format-prompts": "bun scripts/format-prompts.ts",
@@ -80,7 +80,8 @@
 		"zod": "catalog:"
 	},
 	"optionalDependencies": {
-		"@huggingface/transformers": "catalog:"
+		"@huggingface/transformers": "catalog:",
+		"sherpa-onnx-node": "1.13.2"
 	},
 	"devDependencies": {
 		"@types/bun": "catalog:"

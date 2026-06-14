@@ -80,8 +80,12 @@ export type RpcSessionChangeResult =
 export type RpcSessionChangeSession = Pick<AgentSession, "newSession" | "switchSession" | "branch">;
 
 export type RpcSkillCommandSession = Pick<AgentSession, "promptCustomMessage" | "skills" | "skillsSettings">;
+export type RpcSkillCommandResult = { agentInvoked: true };
 
-export async function tryRunRpcSkillCommand(session: RpcSkillCommandSession, text: string): Promise<boolean> {
+export async function tryRunRpcSkillCommand(
+	session: RpcSkillCommandSession,
+	text: string,
+): Promise<RpcSkillCommandResult | false> {
 	if (!text.startsWith("/skill:")) return false;
 	if (!session.skillsSettings?.enableSkillCommands) return false;
 	const spaceIndex = text.indexOf(" ");
@@ -98,8 +102,120 @@ export async function tryRunRpcSkillCommand(session: RpcSkillCommandSession, tex
 		details: built.details,
 		attribution: "user",
 	});
-	return true;
+	return { agentInvoked: true };
 }
+
+export function reportLocalOnlyPromptResult(input: {
+	id: string | undefined;
+	prompt: Promise<boolean>;
+	output: (obj: object) => void;
+	onError: (error: Error) => void;
+	hasExtensionAgentMessageTask?: () => boolean;
+	waitForExtensionAgentMessageTasks?: () => Promise<void>;
+}): void {
+	void input.prompt
+		.then(async agentInvoked => {
+			if (agentInvoked) return;
+			await input.waitForExtensionAgentMessageTasks?.();
+			if (!input.hasExtensionAgentMessageTask?.()) {
+				input.output({ type: "prompt_result", id: input.id, agentInvoked: false });
+			}
+		})
+		.catch(error => {
+			input.onError(error instanceof Error ? error : new Error(String(error)));
+		});
+}
+
+type RpcExtensionUserMessageScope = {
+	hasAgentMessageTask: boolean;
+	pendingAgentMessageTasks: Set<Promise<void>>;
+};
+
+/**
+ * Tracks extension-originated messages while an RPC prompt is executing.
+ * A slash command can resolve the outer prompt as local-only while also
+ * scheduling agent work through pi.sendUserMessage() or pi.sendMessage()
+ * with triggerTurn; that prompt must not report agentInvoked:false to the host.
+ */
+export class RpcExtensionUserMessageTracker {
+	#activePromptScopes = new Set<RpcExtensionUserMessageScope>();
+
+	markAgentMessageTask(): void {
+		for (const scope of this.#activePromptScopes) {
+			scope.hasAgentMessageTask = true;
+		}
+	}
+
+	trackAgentMessageTask(task: Promise<unknown>): void {
+		for (const scope of this.#activePromptScopes) {
+			this.#trackAgentMessageTaskForScope(scope, task);
+		}
+	}
+
+	#trackAgentMessageTaskForScope(scope: RpcExtensionUserMessageScope, task: Promise<unknown>): void {
+		const scopedTask = task.then(
+			() => {
+				scope.hasAgentMessageTask = true;
+			},
+			() => {},
+		);
+		scope.pendingAgentMessageTasks.add(scopedTask);
+		void scopedTask.finally(() => {
+			scope.pendingAgentMessageTasks.delete(scopedTask);
+		});
+	}
+
+	async #waitForAgentMessageTasks(scope: RpcExtensionUserMessageScope): Promise<void> {
+		while (scope.pendingAgentMessageTasks.size > 0) {
+			await Promise.allSettled(Array.from(scope.pendingAgentMessageTasks));
+		}
+	}
+
+	watchPrompt<T>(startPrompt: () => Promise<T>): {
+		prompt: Promise<T>;
+		hasAgentMessageTask: () => boolean;
+		waitForAgentMessageTasks: () => Promise<void>;
+	} {
+		const scope: RpcExtensionUserMessageScope = {
+			hasAgentMessageTask: false,
+			pendingAgentMessageTasks: new Set(),
+		};
+		this.#activePromptScopes.add(scope);
+		let prompt: Promise<T>;
+		try {
+			prompt = startPrompt();
+		} catch (error) {
+			this.#activePromptScopes.delete(scope);
+			throw error;
+		}
+		return {
+			prompt: prompt.finally(() => {
+				this.#activePromptScopes.delete(scope);
+			}),
+			hasAgentMessageTask: () => scope.hasAgentMessageTask,
+			waitForAgentMessageTasks: () => this.#waitForAgentMessageTasks(scope),
+		};
+	}
+}
+
+export function watchAndReportLocalOnlyPromptResult(input: {
+	id: string | undefined;
+	startPrompt: () => Promise<boolean>;
+	output: (obj: object) => void;
+	onError: (error: Error) => void;
+	extensionUserMessageTracker: RpcExtensionUserMessageTracker;
+}): void {
+	const trackedPrompt = input.extensionUserMessageTracker.watchPrompt(input.startPrompt);
+	reportLocalOnlyPromptResult({
+		id: input.id,
+		prompt: trackedPrompt.prompt,
+		output: input.output,
+		onError: input.onError,
+		hasExtensionAgentMessageTask: trackedPrompt.hasAgentMessageTask,
+		waitForExtensionAgentMessageTasks: trackedPrompt.waitForAgentMessageTasks,
+	});
+}
+
 export type RpcSubagentResetRegistry = Pick<RpcSubagentRegistry, "clear">;
 
 export async function handleRpcSessionChange(
@@ -276,6 +392,8 @@ export async function runRpcMode(
 	const error = (id: string | undefined, command: string, message: string): RpcResponse => {
 		return { id, type: "response", command, success: false, error: message };
 	};
+
+	const extensionUserMessageTracker = new RpcExtensionUserMessageTracker();
 
 	const pendingExtensionRequests = new Map<string, PendingExtensionRequest>();
 	const hostToolBridge = new RpcHostToolBridge(output);
@@ -533,6 +651,9 @@ export async function runRpcMode(
 		onShutdown: () => {
 			shutdownState.requested = true;
 		},
+		trackAgentInvokingMessage: task => {
+			extensionUserMessageTracker.trackAgentMessageTask(task);
+		},
 		uiContext: rpcUiContext,
 	});
 
@@ -569,8 +690,9 @@ export async function runRpcMode(
 			// =================================================================
 
 			case "prompt": {
-				if (await tryRunRpcSkillCommand(session, command.message)) {
-					return success(id, "prompt");
+				const skillResult = await tryRunRpcSkillCommand(session, command.message);
+				if (skillResult) {
+					return success(id, "prompt", skillResult);
 				}
 				const builtinResult = await executeAcpBuiltinSlashCommand(command.message, {
 					session,
@@ -589,22 +711,32 @@ export async function runRpcMode(
 				});
 				if (builtinResult !== false) {
 					if ("prompt" in builtinResult) {
-						session
-							.prompt(builtinResult.prompt, { images: command.images })
-							.catch(e => output(error(id, "prompt", e.message)));
+						watchAndReportLocalOnlyPromptResult({
+							id,
+							startPrompt: () => session.prompt(builtinResult.prompt, { images: command.images }),
+							output,
+							onError: promptError => output(error(id, "prompt", promptError.message)),
+							extensionUserMessageTracker,
+						});
+						return success(id, "prompt");
 					}
-					return success(id, "prompt");
+					return success(id, "prompt", { agentInvoked: false });
 				}
 
 				// Don't await - events will stream
 				// Extension commands are executed immediately, file prompt templates are expanded
 				// If streaming and streamingBehavior specified, queues via steer/followUp
-				session
-					.prompt(command.message, {
-						images: command.images,
-						streamingBehavior: command.streamingBehavior,
-					})
-					.catch(e => output(error(id, "prompt", e.message)));
+				watchAndReportLocalOnlyPromptResult({
+					id,
+					startPrompt: () =>
+						session.prompt(command.message, {
+							images: command.images,
+							streamingBehavior: command.streamingBehavior,
+						}),
+					output,
+					onError: promptError => output(error(id, "prompt", promptError.message)),
+					extensionUserMessageTracker,
+				});
 				return success(id, "prompt");
 			}
 

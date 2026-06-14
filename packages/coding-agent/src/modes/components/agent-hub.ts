@@ -16,6 +16,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentMessage, AgentTool } from "@oh-my-pi/pi-agent-core";
+import type { Usage } from "@oh-my-pi/pi-ai";
 import { Container, Editor, matchesKey, ScrollView, Text, type TUI } from "@oh-my-pi/pi-tui";
 import { formatAge, formatBytes, formatDuration, formatNumber, getProjectDir, logger } from "@oh-my-pi/pi-utils";
 import { COLLAB_PROMPT_MESSAGE_TYPE, type CollabPromptDetails } from "../../collab/protocol";
@@ -35,8 +36,8 @@ import {
 	type SkillPromptDetails,
 	USER_INTERRUPT_LABEL,
 } from "../../session/messages";
-import type { SessionMessageEntry } from "../../session/session-manager";
-import { parseSessionEntries } from "../../session/session-manager";
+import type { SessionMessageEntry } from "../../session/session-entries";
+import { parseSessionEntries } from "../../session/session-loader";
 import { createIrcMessageCard } from "../../tools/irc";
 import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "../../tools/render-utils";
 import { hasVisibleThinking } from "../../utils/thinking-display";
@@ -47,7 +48,7 @@ import { AssistantMessageComponent } from "./assistant-message";
 import { BashExecutionComponent } from "./bash-execution";
 import { BranchSummaryMessageComponent } from "./branch-summary-message";
 import { CollabPromptMessageComponent } from "./collab-prompt-message";
-import { CompactionSummaryMessageComponent } from "./compaction-summary-message";
+import { CompactionSummaryMessageComponent, createHandoffSummaryMessageComponent } from "./compaction-summary-message";
 import { CustomMessageComponent } from "./custom-message";
 import { DynamicBorder } from "./dynamic-border";
 import { EvalExecutionComponent } from "./eval-execution";
@@ -57,6 +58,7 @@ import { SkillMessageComponent } from "./skill-message";
 import { formatContextUsage } from "./status-line/context-thresholds";
 import { ToolExecutionComponent } from "./tool-execution";
 import { TranscriptBlock, TranscriptContainer } from "./transcript-container";
+import { createUsageRowBlock } from "./usage-row";
 import { UserMessageComponent } from "./user-message";
 
 /** Lines per page for PageUp/PageDown */
@@ -213,6 +215,7 @@ export class AgentHubOverlayComponent extends Container {
 	#chatPendingTools = new Map<string, ToolExecutionComponent | ReadToolGroupComponent>();
 	#chatReadArgs = new Map<string, Record<string, unknown>>();
 	#chatReadGroup: ReadToolGroupComponent | null = null;
+	#pendingUsage: Usage | undefined;
 	#chatWaitingPoll: ToolExecutionComponent | null = null;
 	#chatExpandables: Array<{ setExpanded(expanded: boolean): void }> = [];
 	#chatExpanded = false;
@@ -262,6 +265,15 @@ export class AgentHubOverlayComponent extends Container {
 
 		if (!this.#remote) registerPersistedSubagents(this.#registry, deps.sessionFile);
 		this.#refreshRows();
+	}
+
+	/**
+	 * Whether the table view has no agents to show (every registered agent except
+	 * Main, after the persisted-subagent scan in the constructor). The double-←
+	 * gesture reads this to stay inert when there is nothing to open.
+	 */
+	get isEmpty(): boolean {
+		return this.#rows.length === 0;
 	}
 
 	/** Tear down every subscription and timer. Called by the overlay owner on close. */
@@ -438,6 +450,7 @@ export class AgentHubOverlayComponent extends Container {
 	#renderRow(ref: AgentRef, selected: boolean, width: number): string {
 		const cursor = selected ? theme.fg("accent", theme.nav.cursor) : " ";
 		const parts: string[] = [statusBadge(ref.status), theme.bold(replaceTabs(ref.id))];
+		parts.push(theme.fg("dim", replaceTabs(ref.displayName)));
 		parts.push(theme.fg("dim", ref.parentId ? `${ref.kind} · of ${ref.parentId}` : ref.kind));
 		const observed = this.#observableFor(ref.id);
 		const task = observed?.description ?? observed?.progress?.task;
@@ -850,6 +863,7 @@ export class AgentHubOverlayComponent extends Container {
 		this.#chatPendingTools.clear();
 		this.#chatReadArgs.clear();
 		this.#chatReadGroup = null;
+		this.#pendingUsage = undefined;
 		this.#chatWaitingPoll = null;
 		this.#chatExpandables = [];
 		this.#chatLog.dispose();
@@ -869,6 +883,13 @@ export class AgentHubOverlayComponent extends Container {
 			this.#appendChatMessage(entries[i].message);
 		}
 		this.#chatBuiltCount = entries.length;
+		// Flush the trailing turn's usage row only once its tools are materialized.
+		// A read (or any tool) whose toolResult lands in a later debounced sync stays
+		// pending in #chatReadArgs / #chatPendingTools; flushing now would emit the
+		// row above it. The sync that drains the maps flushes it below the tools.
+		if (this.#chatReadArgs.size === 0 && this.#chatPendingTools.size === 0) {
+			this.#flushPendingUsage();
+		}
 	}
 
 	#trackExpandable(component: { setExpanded(expanded: boolean): void }): void {
@@ -898,7 +919,21 @@ export class AgentHubOverlayComponent extends Container {
 		return this.#chatReadGroup;
 	}
 
+	// The per-turn token-usage row must land below the turn's tool blocks, but
+	// normal `read` calls only materialize their group in #appendToolResult. Defer
+	// the row: stash it on the assistant message and flush once the turn's tools
+	// are placed — before the next non-toolResult message and at the end of each
+	// sync pass — sealing the read run so the row sits under it.
+	#flushPendingUsage(): void {
+		if (!this.#pendingUsage) return;
+		this.#chatReadGroup?.seal();
+		this.#chatReadGroup = null;
+		this.#chatLog.addChild(createUsageRowBlock(this.#pendingUsage));
+		this.#pendingUsage = undefined;
+	}
+
 	#appendChatMessage(message: AgentMessage): void {
+		if (message.role !== "toolResult") this.#flushPendingUsage();
 		switch (message.role) {
 			case "assistant":
 				this.#appendAssistantMessage(message);
@@ -987,7 +1022,6 @@ export class AgentHubOverlayComponent extends Container {
 		const assistantComponent = new AssistantMessageComponent(message, this.#hideThinkingBlock?.() ?? false, () =>
 			this.#requestRender(),
 		);
-		assistantComponent.setUsageInfo(message.usage);
 		this.#chatLog.addChild(assistantComponent);
 
 		const hasVisibleAssistantContent = message.content.some(
@@ -1066,6 +1100,8 @@ export class AgentHubOverlayComponent extends Container {
 				this.#chatPendingTools.set(content.id, component);
 			}
 		}
+
+		this.#pendingUsage = settings.get("display.showTokenUsage") ? message.usage : undefined;
 	}
 
 	#appendToolResult(message: Extract<AgentMessage, { role: "toolResult" }>): void {
@@ -1177,6 +1213,15 @@ export class AgentHubOverlayComponent extends Container {
 				theme,
 			);
 			this.#chatLog.addChild(card);
+			return;
+		}
+		const handoffComponent = createHandoffSummaryMessageComponent(
+			message as CustomMessage<unknown>,
+			this.#chatExpanded,
+		);
+		if (handoffComponent) {
+			this.#trackExpandable(handoffComponent);
+			this.#chatLog.addChild(handoffComponent);
 			return;
 		}
 		const component = new CustomMessageComponent(

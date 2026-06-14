@@ -7,25 +7,28 @@
  * reader. Frames are `frameSize` wide; their height hugs the text rows
  * actually printed, so a partially filled frame never bills blank rows.
  *
- * The frame shape is provider-aware, following the snapcompact SQuAD evals
- * (`packages/snapcompact`, 200k-token monolithic runs):
+ * The frame shape is provider-aware. Original choices came from the SQuAD
+ * prose evals (`packages/snapcompact`, 200k-token monolithic runs); the
+ * spacing choices below come from the tool-result legibility bench
+ * (`research/toolbench.py`, real search/read/find output with structure QA),
+ * which exposed that the prose-tuned dense cells erase the line numbers and
+ * indentation that code/search output depends on:
  *
- * - **Anthropic** (`6x12-dim`): X.org 6x12 glyphs, black ink, stopwords
- *   dimmed gray — recall within noise of the repeated `8x8r-bw` grid at
- *   ~40% lower cost; `8x8r-bw` remains the max-recall choice via the shape
- *   setting. Opus 4.7+/Fable/Mythos ingest high-res natively (2576px edge,
- *   4,784 visual-token cap, no flag needed), so those lines get 1932px
- *   frames: same recall and cost, a third fewer frames. Older Claude lines
- *   downscale past 1568px and keep the standard frame.
- * - **Google** (`doc-8on16-sent-dim` @2048): two word-wrapped newspaper
- *   columns of 8x13 glyphs, sentence-hue ink, dimmed stopwords. Gemini 3.x
- *   bills a fixed `media_resolution` budget per image (default 1,120
- *   tokens) regardless of pixels, so the 2048px frame carries +70% chars at
- *   the same bill (f1 .88 vs .90 at 1568). `ULTRA_HIGH` doubles the budget
- *   and reads 3072px frames, but loses on chars/$ — deliberately unused.
- * - **OpenAI** (`8on16-bw`): 8x13 glyphs on a patch-aligned 16px pitch,
- *   black ink (gpt-5.5 mono F1 .867 vs .602 for the previous `6x6u-sent`).
- *   Patch billing (32px × 1.2, 10k-patch budget at `detail: "original"`) is
+ * - **Anthropic** (`11on16-bw`): 8x13 glyphs on an 11px advance (extra
+ *   letter-spacing), black ink. On the tool-result bench, tracking the
+ *   readable cell beat plain `8on16-bw` (opus-4.8 f1 .806 vs .755) and far
+ *   beat the prior dense `6x12-dim` (.351, which fell below the OCR ~16px/char
+ *   floor and abstained). Opus 4.7+/Fable/Mythos ingest high-res natively
+ *   (2576px edge, 4,784 visual-token cap), so those lines get 1932px frames:
+ *   same bill, fewer frames. Older Claude lines downscale past 1568px.
+ * - **Google** (`8on22-bw` @2048): 8x13 glyphs on a 22px pitch (extra line
+ *   spacing), black ink. Leading lifted gemini-3.5-flash to f1 .934 vs .807
+ *   for `8on16-bw` and .287 for the prior `doc-8on16-sent-dim`. Gemini 3.x
+ *   bills a fixed `media_resolution` budget per image (default 1,120 tokens)
+ *   regardless of pixels, so the 2048px frame carries more chars at the same
+ *   bill.
+ * - **OpenAI** (`8on22-bw`): same leading win (gpt-5.5/gpt-5.4-mini). Patch
+ *   billing (32px × 1.2, 10k-patch budget at `detail: "original"`) is
  *   area-proportional, so resolution cannot improve chars/$ — 1568 stays.
  *   `detail: "high"` would downgrade (2,500-patch cap); `original` is sent.
  * - **Unknown providers** default to the Anthropic shape. Gateways can
@@ -94,9 +97,11 @@ export type ShapeGeometry = Omit<Shape, "frameTokenEstimate" | "imageDetail">;
  * (redundancy coding), `6x6u` unscii Lanczos-squeezed to 6x6 (densest
  * readable cell), `5x8` the X.org legacy font on its 2576px frame, `6x12`
  * and `8x13` the X.org misc fonts, `8on16` 8x13 glyphs on an 8x16 cell pitch
- * (no stretch, extra leading), `doc-` prefixed shapes a two-column
- * word-wrapped newspaper layout. Ink: `sent` cycles six hues at sentence
- * boundaries, `bw` is plain black, `-dim` suffix prints stopwords in gray.
+ * (no stretch, extra leading), `8on22` the same glyphs on a 22px pitch (more
+ * leading), `11on16` the same glyphs on an 11px advance (more tracking),
+ * `doc-` prefixed shapes a two-column word-wrapped newspaper layout. Ink:
+ * `sent` cycles six hues at sentence boundaries, `bw` is plain black, `-dim`
+ * suffix prints stopwords in gray.
  */
 export const SHAPE_VARIANTS = {
 	"8x8r-bw": { font: "8x8", cellWidth: 8, cellHeight: 8, variant: "bw", lineRepeat: 2, frameSize: 1568 },
@@ -120,6 +125,24 @@ export const SHAPE_VARIANTS = {
 	"8on16-bw": {
 		font: "8x13",
 		cellWidth: 8,
+		cellHeight: 16,
+		stretch: false,
+		variant: "bw",
+		lineRepeat: 1,
+		frameSize: 1568,
+	},
+	"8on22-bw": {
+		font: "8x13",
+		cellWidth: 8,
+		cellHeight: 22,
+		stretch: false,
+		variant: "bw",
+		lineRepeat: 1,
+		frameSize: 1568,
+	},
+	"11on16-bw": {
+		font: "8x13",
+		cellWidth: 11,
 		cellHeight: 16,
 		stretch: false,
 		variant: "bw",
@@ -223,20 +246,21 @@ function priceShape(base: ShapeGeometry, family: BillingFamily): Shape {
 
 /** Eval-validated shapes, keyed by the provider family they won on. */
 export const SHAPES = {
-	/** `6x12-dim`: X.org 6x12 glyphs, black ink with stopwords dimmed gray.
-	 *  Production mono eval on claude-fable: f1 .840 vs .877 for the repeated
-	 *  `8x8r-bw` grid (within noise at n=25) at 37% lower cost — 12 frames
-	 *  instead of 21 per 400k chars. Never refused in any run. */
-	anthropic: priceShape(SHAPE_VARIANTS["6x12-dim"], "anthropic"),
-	/** `doc-8on16-sent-dim`: two word-wrapped columns, sentence hues, dimmed
-	 *  stopwords. Production mono eval on gemini-3.5-flash: f1 .900 vs .853
-	 *  for the repeated grid, at lower cost; also the chunked round-2 winner. */
-	google: priceShape(SHAPE_VARIANTS["doc-8on16-sent-dim"], "google"),
-	/** `8on16-bw`: 8x13 X.org glyphs on a 16px pitch, black ink. Mono eval on
-	 *  gpt-5.5 (200k-token single request, n=50): f1 .851 vs .602 for the
-	 *  previous `6x6u-sent` default at near-equal total cost; chunked exp14
-	 *  scored it .906. */
-	openai: priceShape(SHAPE_VARIANTS["8on16-bw"], "openai"),
+	/** `11on16-bw`: 8x13 glyphs on an 11px advance (extra tracking), black ink.
+	 *  Tool-result legibility bench (real search/read/find output, structure QA)
+	 *  on opus-4.8: f1 .806 vs .755 for plain `8on16-bw` and .351 for the prior
+	 *  `6x12-dim` default — letter-spacing the readable cell wins; the dense
+	 *  6x12 was below the OCR ~16px/char floor and abstained. */
+	anthropic: priceShape(SHAPE_VARIANTS["11on16-bw"], "anthropic"),
+	/** `8on22-bw`: 8x13 glyphs on a 22px pitch (extra leading), black ink.
+	 *  Tool-result legibility bench on gemini-3.5-flash: f1 .934 vs .807 for
+	 *  plain `8on16-bw` and .287 for the prior `doc-8on16-sent-dim`; the
+	 *  line-spacing reduces row crowding so line numbers stay legible. */
+	google: priceShape(SHAPE_VARIANTS["8on22-bw"], "google"),
+	/** `8on22-bw`: 8x13 glyphs on a 22px pitch (extra leading), black ink.
+	 *  Same line-spacing win for OpenAI; bench on gpt-5.5/gpt-5.4-mini showed
+	 *  leading lifts recall on the readable cell over plain `8on16-bw`. */
+	openai: priceShape(SHAPE_VARIANTS["8on22-bw"], "openai"),
 	/** Original 5x8 X.org shape (pre-shape-table sessions rendered this). */
 	legacy: priceShape(SHAPE_VARIANTS["5x8-sent"], "anthropic"),
 } satisfies Record<string, Shape>;
@@ -271,9 +295,9 @@ export function isShape(value: unknown): value is Shape {
 /** Eval-winning variant per provider family (billing fallback when the
  *  model id matches no known reader line). */
 const FAMILY_VARIANT: Record<BillingFamily, ShapeVariantName> = {
-	anthropic: "6x12-dim",
-	google: "doc-8on16-sent-dim",
-	openai: "8on16-bw",
+	anthropic: "11on16-bw",
+	google: "8on22-bw",
+	openai: "8on22-bw",
 };
 
 const FAMILY_SHAPE: Record<BillingFamily, Shape> = {
@@ -297,16 +321,16 @@ export interface IdealShape {
 const MODEL_VARIANTS: readonly (readonly [RegExp, IdealShape])[] = [
 	// Opus 4.7+ and Fable/Mythos read high-res natively (2576px edge under a
 	// 4,784 visual-token cap → 1932px square sweet spot): same recall and
-	// cost as 1568, a third fewer frames (12 → 8 per 400k chars).
-	[/claude.*(fable|mythos)/i, { variant: "6x12-dim", frameSize: 1932 }],
-	[/claude-?opus-?4[.-][7-9]/i, { variant: "6x12-dim", frameSize: 1932 }],
+	// cost as 1568, a third fewer frames.
+	[/claude.*(fable|mythos)/i, { variant: "11on16-bw", frameSize: 1932 }],
+	[/claude-?opus-?4[.-][7-9]/i, { variant: "11on16-bw", frameSize: 1932 }],
 	// Older Claude lines downscale past 1568px — keep the safe size.
-	[/claude/i, { variant: "6x12-dim" }],
+	[/claude/i, { variant: "11on16-bw" }],
 	// Gemini 3.x bills a fixed 1,120-token budget per image regardless of
-	// pixels: 2048px packs +70% chars per frame at the same bill.
-	[/gemini/i, { variant: "doc-8on16-sent-dim", frameSize: 2048 }],
+	// pixels: 2048px packs more chars per frame at the same bill.
+	[/gemini/i, { variant: "8on22-bw", frameSize: 2048 }],
 	// gpt-5.5 patch billing is area-proportional; 1568 is already optimal.
-	[/gpt|codex/i, { variant: "8on16-bw" }],
+	[/gpt|codex/i, { variant: "8on22-bw" }],
 	// kimi's image processor downscales past 1792px (64×64 28px patches);
 	// 1568 wins on chars/$ and reads at f1 .973 (≤8 frames per request).
 	[/kimi/i, { variant: "8on16-bw" }],

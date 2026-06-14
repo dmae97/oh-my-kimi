@@ -25,7 +25,7 @@ import {
 } from "@oh-my-pi/pi-wire";
 import type { ContextUsage } from "../extensibility/extensions/types";
 import type { AgentSessionEvent } from "../session/agent-session";
-import type { SessionEntry, SessionHeader } from "../session/session-manager";
+import type { SessionEntry, SessionHeader } from "../session/session-entries";
 
 export type {
 	CollabPromptDetails,

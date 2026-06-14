@@ -34,8 +34,8 @@ import {
 	prompt,
 	Snowflake,
 } from "@oh-my-pi/pi-utils";
-import chalk from "chalk";
 import { type AsyncJob, AsyncJobManager } from "./async";
+import { AutoLearnController, buildAutoLearnInstructions } from "./autolearn/controller";
 import { loadCapability } from "./capability";
 import { type Rule, ruleCapability, setActiveRules } from "./capability/rule";
 import { bucketRules } from "./capability/rule-buckets";
@@ -97,6 +97,7 @@ import {
 	type MCPToolsLoadResult,
 	parseMCPToolName,
 } from "./mcp";
+import { MCP_CONNECTING_EVENT_CHANNEL, type McpConnectingEvent } from "./mcp/startup-events";
 import { createSessionMemoryRuntimeContext, resolveMemoryBackend } from "./memory-backend";
 import type { MnemopiSessionState } from "./mnemopi/state";
 import asyncResultTemplate from "./prompts/tools/async-result.md" with { type: "text" };
@@ -128,8 +129,10 @@ import {
 	LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE,
 	wrapSteeringForModel,
 } from "./session/messages";
-import { getRestorableSessionModels, SessionManager } from "./session/session-manager";
+import { getRestorableSessionModels } from "./session/session-context";
+import { SessionManager } from "./session/session-manager";
 import { SnapcompactInlineTransformer } from "./session/snapcompact-inline";
+import { createSnapcompactSavingsRecorder } from "./session/snapcompact-savings-journal";
 import { closeAllConnections } from "./ssh/connection-manager";
 import { unmountAll } from "./ssh/sshfs-mount";
 import {
@@ -315,10 +318,6 @@ type DeferredMCPActivation = {
 	explicitlyRequestedMCPToolNames: string[];
 	activateAllMCPTools: boolean;
 };
-
-function formatMCPConnectingMessage(serverNames: string[]): string {
-	return `Connecting to MCP servers: ${serverNames.join(", ")}…`;
-}
 
 function createPendingMCPTool(name: string): Tool {
 	const parsed = parseMCPToolName(name);
@@ -1599,7 +1598,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			| undefined;
 		const onMCPConnecting = (serverNames: string[]) => {
 			if (!options.hasUI || serverNames.length === 0) return;
-			process.stderr.write(`${chalk.gray(formatMCPConnectingMessage(serverNames))}\n`);
+			eventBus.emit(MCP_CONNECTING_EVENT_CHANNEL, { serverNames } satisfies McpConnectingEvent);
 		};
 		const mcpDiscoverOptions = {
 			onConnecting: onMCPConnecting,
@@ -1726,7 +1725,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			customTools.push(...(imageGenTools as unknown as CustomTool[]));
 		}
 
-		if (settings.get("tts.enabled")) {
+		if (settings.get("speechgen.enabled")) {
 			customTools.push(ttsTool as unknown as CustomTool);
 		}
 
@@ -1965,6 +1964,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			sessionManager,
 			modelRegistry,
 			() => (hasSession ? createSessionMemoryRuntimeContext(session, agentDir, cwd) : undefined),
+			settings,
 		);
 
 		credentialDisabledTarget = extensionRunner;
@@ -2082,7 +2082,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		});
 
 		const repeatToolDescriptions = settings.get("repeatToolDescriptions");
-		const eagerTasks = settings.get("task.eager");
+		const eagerTasks = settings.get("task.eager") !== "default";
+		const eagerTasksAlways = settings.get("task.eager") === "always";
 		const intentField = $flag("PI_INTENT_TRACING", settings.get("tools.intentTracing")) ? INTENT_FIELD : undefined;
 		const rebuildSystemPrompt = async (
 			toolNames: string[],
@@ -2112,13 +2113,27 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			const memoryBackend = await resolveMemoryBackend(settings);
 			const memoryInstructions = await memoryBackend.buildDeveloperInstructions(agentDir, settings, session);
 
-			// Build combined append prompt: memory instructions + MCP server instructions.
-			// For UI sessions MCP discovery is deferred, so `getServerInstructions()` is
-			// empty until the background connect completes; the rebuild that
-			// `refreshMCPTools` triggers post-discovery then picks up the now-connected
-			// servers' instructions, so they join the prompt for the rest of the session.
+			// Build combined append prompt: memory instructions + auto-learn guidance
+			// + MCP server instructions. For UI sessions MCP discovery is deferred, so
+			// `getServerInstructions()` is empty until the background connect completes;
+			// the rebuild that `refreshMCPTools` triggers post-discovery then picks up
+			// the now-connected servers' instructions, so they join the prompt for the
+			// rest of the session.
 			const serverInstructions = mcpManager?.getServerInstructions();
-			let appendPrompt: string | undefined = memoryInstructions ?? undefined;
+			// Drive guidance off the auto-learn BUILTINS that createTools actually built
+			// (provenance, not just an active name): `builtInToolNames` excludes a
+			// custom/extension tool that merely shares the name, and reflects the
+			// session-start build — so a subagent that filtered them out, a mid-session
+			// enable that never built them, or a same-named custom tool while auto-learn
+			// is off all get no guidance.
+			const autoLearnInstructions = buildAutoLearnInstructions({
+				manageSkill: builtInToolNames.includes("manage_skill"),
+				learn: builtInToolNames.includes("learn"),
+			});
+			const appendParts: string[] = [];
+			if (memoryInstructions) appendParts.push(memoryInstructions);
+			if (autoLearnInstructions) appendParts.push(autoLearnInstructions);
+			let appendPrompt: string | undefined = appendParts.length > 0 ? appendParts.join("\n\n") : undefined;
 			if (serverInstructions && serverInstructions.size > 0) {
 				const parts: string[] = [];
 				if (appendPrompt) parts.push(appendPrompt);
@@ -2149,6 +2164,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				mcpDiscoveryMode: hasDiscoverableTools,
 				mcpDiscoveryServerSummaries: discoverableToolSummary.servers.map(formatDiscoverableToolServerSummary),
 				eagerTasks,
+				eagerTasksAlways,
+				taskBatch: settings.get("task.batch"),
 				secretsEnabled,
 				workspaceTree: workspaceTreePromise,
 				memoryRootEnabled: memoryBackend.id === "local",
@@ -2182,6 +2199,20 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			!explicitlyRequestedToolNames.includes("yield")
 		) {
 			explicitlyRequestedToolNames.push("yield");
+		}
+		// Auto-learn builtins are force-included into the registry by `createTools`
+		// for enabled top-level sessions (tools/index.ts), but — like `yield` above —
+		// an explicit `toolNames` list would otherwise drop them from the ACTIVE set,
+		// leaving the nudge/guidance pointing at tools the model cannot call. Activate
+		// exactly the builtins createTools built (`builtInToolNames` — provenance, so a
+		// same-named custom/extension tool is never force-activated when auto-learn is
+		// off) to keep guidance, controller, and the active set consistent.
+		if (explicitlyRequestedToolNames) {
+			for (const name of ["manage_skill", "learn"]) {
+				if (builtInToolNames.includes(name) && !explicitlyRequestedToolNames.includes(name)) {
+					explicitlyRequestedToolNames.push(name);
+				}
+			}
 		}
 		const requestedToolNames = explicitlyRequestedToolNames ?? toolNamesFromRegistry;
 		const normalizedRequested = requestedToolNames.filter(name => toolRegistry.has(name));
@@ -2247,10 +2278,16 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		if (effectiveDiscoveryMode === "all") {
 			// Tools a forced tool_choice will target must stay active, or the named
 			// choice references a tool absent from the request (provider 400). Eager
-			// todos force a named `todo` choice on the first turn.
+			// todos force a named `todo` choice on the first turn. `task` is also kept
+			// active under discovery-all when `task.eager` is not `default`, so eager delegation is
+			// possible and the Eager Tasks prompt section renders, even though nothing
+			// forces a `task` tool_choice.
 			const forceActive = new Set<string>();
-			if (settings.get("todo.eager") && settings.get("todo.enabled") && toolRegistry.has("todo")) {
+			if (settings.get("todo.eager") !== "default" && settings.get("todo.enabled") && toolRegistry.has("todo")) {
 				forceActive.add("todo");
+			}
+			if (settings.get("task.eager") !== "default" && toolRegistry.has("task")) {
+				forceActive.add("task");
 			}
 			initialToolNames = filterInitialToolsForDiscoveryAll(initialToolNames, {
 				loadModeOf: name => toolRegistry.get(name)?.loadMode,
@@ -2339,11 +2376,16 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		const snapcompactSystemPromptMode = settings.get("snapcompact.systemPrompt");
 		const snapcompactInline =
 			snapcompactSystemPromptMode !== "none" || settings.get("snapcompact.toolResults")
-				? new SnapcompactInlineTransformer({
-						renderSystemPrompt: snapcompactSystemPromptMode,
-						renderToolResults: settings.get("snapcompact.toolResults"),
-						shape: settings.get("snapcompact.shape"),
-					})
+				? new SnapcompactInlineTransformer(
+						{
+							renderSystemPrompt: snapcompactSystemPromptMode,
+							renderToolResults: settings.get("snapcompact.toolResults"),
+							shape: settings.get("snapcompact.shape"),
+						},
+						// Journal the tokens each imaged tool result keeps off the wire
+						// (frames never reach session.jsonl, so this is their only trace).
+						createSnapcompactSavingsRecorder(() => sessionManager.getSessionFile() ?? null),
+					)
 				: undefined;
 		const transformProviderContext =
 			obfuscator || snapcompactInline
@@ -2527,6 +2569,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			ttsrManager,
 			obfuscator,
 			agentId: resolvedAgentId,
+			agentKind,
 			providerSessionId: options.providerSessionId,
 			parentEvalSessionId: options.parentEvalSessionId,
 		});
@@ -2651,7 +2694,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}
 		}
 
-		logger.time("startMemoryStartupTask", async () => {
+		const startMemoryBackend = async () => {
 			const memoryBackend = await resolveMemoryBackend(settings);
 			await memoryBackend.start({
 				session,
@@ -2662,7 +2705,28 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				parentHindsightSessionState: options.parentHindsightSessionState,
 				parentMnemopiSessionState: options.parentMnemopiSessionState,
 			});
-		});
+		};
+
+		// Auto-learn can immediately trigger a synthetic capture turn after the
+		// first real stop. When a memory backend is selected, install that backend's
+		// per-session state first so the capture turn's `learn` tool observes the
+		// same initialized state as normal memory tools. Other sessions keep memory
+		// startup in the background to preserve the existing startup profile.
+		//
+		// Gated on `autolearn.enabled` to match the tools: `createTools` builds the
+		// `learn`/`manage_skill` registry ONCE at session start and no settings
+		// change rebuilds it, so installing the controller while disabled would let a
+		// mid-session enable fire a nudge pointing at tools the session never built.
+		// Activation is therefore a session-start decision for BOTH the controller
+		// and the tools; the fire-time re-check in `#onAgentEnd` still handles a
+		// mid-session DISABLE. The subscription lives for the session's lifetime; the
+		// reference is intentionally discarded (the listener retains it).
+		if (settings.get("autolearn.enabled") && taskDepth === 0) {
+			await logger.time("startMemoryStartupTask", startMemoryBackend);
+			new AutoLearnController({ session, settings });
+		} else {
+			void logger.time("startMemoryStartupTask", startMemoryBackend);
+		}
 
 		// Wire MCP manager callbacks to session for reactive tool updates.
 		// Skip when reusing a parent's manager — the parent owns the callbacks.

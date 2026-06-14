@@ -115,6 +115,15 @@ function formatForLLM(response: SearchResponse): string {
 	return parts.join("\n");
 }
 
+function hasRenderableSearchContent(response: SearchResponse): boolean {
+	if (response.answer?.trim()) return true;
+	if (response.sources.length > 0) return true;
+	if (response.citations?.length) return true;
+	if (response.relatedQuestions?.some(question => question.trim())) return true;
+	if (response.searchQueries?.some(query => query.trim())) return true;
+	return false;
+}
+
 interface ExecuteSearchOptions {
 	authStorage: AuthStorage;
 	sessionId?: string;
@@ -161,6 +170,10 @@ async function executeSearch(
 				authStorage,
 				sessionId,
 			});
+
+			if (!hasRenderableSearchContent(response)) {
+				throw new SearchProviderError(provider.id, `${provider.label} returned no renderable search content.`, 204);
+			}
 
 			const text = formatForLLM(response);
 

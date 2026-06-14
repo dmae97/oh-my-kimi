@@ -79,6 +79,10 @@ export async function postOpenAIStream<TEvent>(init: OpenAIStreamRequestInit): P
 		signal: init.signal,
 		fetch: init.fetch,
 		maxAttempts: init.maxAttempts ?? DEFAULT_MAX_ATTEMPTS,
+		// Bun's native fetch enforces a hard ~300s pre-response timeout (issue #2422).
+		// Cold large-context streams legitimately exceed it; the caller's
+		// `firstEventTimeoutMs`/`AbortSignal` already govern stuck requests.
+		timeout: false,
 	});
 	if (!response.ok) {
 		throw await captureOpenAIHttpError(response);

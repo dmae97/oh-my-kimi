@@ -100,7 +100,7 @@ describe("computeMnemopiBankScope (#2412)", () => {
 });
 
 describe("extendRecallWithLegacyBanks (#2412)", () => {
-	it("adds a sibling bank when working_memory rows tag the active cwd", () => {
+	it("adds a sibling bank only when all working_memory rows tag the active cwd", () => {
 		const activeCwd = "/home/user/projects/myrepo";
 		createBankFixture("legacy-A", [{ session_id: "old", cwd: activeCwd }]);
 		createBankFixture("unrelated-B", [{ session_id: "other", cwd: "/some/other/place" }]);
@@ -108,6 +108,14 @@ describe("extendRecallWithLegacyBanks (#2412)", () => {
 		expect(extended).toContain("active-bank");
 		expect(extended).toContain("legacy-A");
 		expect(extended).not.toContain("unrelated-B");
+	});
+
+	it("skips mixed-cwd legacy banks because recall cannot filter rows by cwd", () => {
+		const activeCwd = "/home/user/projects/safe-child";
+		createBankFixture("mixed-cwd-legacy", [{ cwd: activeCwd }, { cwd: "/home/user/projects/sibling-child" }]);
+		const extended = extendRecallWithLegacyBanks(["active-bank"], mainDbPath, activeCwd);
+		expect(extended).toContain("active-bank");
+		expect(extended).not.toContain("mixed-cwd-legacy");
 	});
 
 	it("ignores banks already in the recall set", () => {

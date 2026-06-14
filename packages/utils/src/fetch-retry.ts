@@ -129,6 +129,14 @@ export interface FetchWithRetryOptions extends RequestInit {
 	 * mock during tests.
 	 */
 	fetch?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+	/**
+	 * Bun extension forwarded verbatim to the underlying `fetch` call. `false`
+	 * disables Bun's native ~300s pre-response timeout (callers that own a
+	 * configurable first-event/idle watchdog or an external `AbortSignal`
+	 * supply this so the runtime ceiling cannot pre-empt them); a positive
+	 * number sets a custom ceiling in ms. Bare browser/Node fetch ignores it.
+	 */
+	timeout?: number | false;
 }
 
 const DEFAULT_MAX_DELAY_MS = 60_000;

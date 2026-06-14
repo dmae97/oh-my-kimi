@@ -1,10 +1,15 @@
 import { maskNonProse } from "./markdown-prose";
 import { theme } from "./theme/theme";
 
-/** A gradient keyword highlighter. `resetTo` is the SGR foreground sequence
- *  re-emitted after each painted keyword so surrounding text keeps its color;
- *  it defaults to a plain foreground reset (editor / default-colored text). */
-export type KeywordHighlighter = (text: string, resetTo?: string) => string;
+/** A gradient keyword highlighter.
+ *
+ * - `resetTo` is the SGR foreground sequence re-emitted after each painted
+ *   keyword so surrounding text keeps its color; it defaults to a plain
+ *   foreground reset (editor / default-colored text).
+ * - `phase` ∈ [0, 1) rotates the gradient stops cyclically; pass `Date.now()`-
+ *   derived values to animate a shimmer. Defaults to `0` (the static
+ *   sent-bubble palette). */
+export type KeywordHighlighter = (text: string, resetTo?: string, phase?: number) => string;
 
 const FG_RESET = "\x1b[39m";
 
@@ -51,14 +56,19 @@ export function createGradientHighlighter(spec: GradientHighlightSpec): KeywordH
 		return next;
 	};
 
-	/** Paint each character of `word` with the next gradient stop, restoring `resetTo` after. */
-	const paint = (word: string, resetTo: string): string => {
+	/** Paint each character of `word` with the next gradient stop, restoring `resetTo` after.
+	 *  `phase` ∈ [0, 1) cyclically rotates the palette index so successive renders
+	 *  with monotonically increasing phase produce a moving shimmer; `0` yields the
+	 *  static palette. */
+	const paint = (word: string, resetTo: string, phase: number): string => {
 		const stopsArr = palette();
+		const m = stopsArr.length;
 		const n = word.length;
 		let out = "";
 		let prev = "";
 		for (let i = 0; i < n; i++) {
-			const color = stopsArr[Math.floor((i / n) * stopsArr.length)] ?? stopsArr[0] ?? "";
+			const t = (i / n + phase) % 1;
+			const color = stopsArr[Math.floor(t * m) % m] ?? stopsArr[0] ?? "";
 			// Coalesce consecutive characters that resolve to the same stop.
 			if (color !== prev) {
 				out += color;
@@ -69,8 +79,10 @@ export function createGradientHighlighter(spec: GradientHighlightSpec): KeywordH
 		return `${out}${resetTo}`;
 	};
 
-	return (text: string, resetTo: string = FG_RESET): string => {
+	return (text: string, resetTo: string = FG_RESET, phase: number = 0): string => {
 		if (!probe.test(text)) return text;
+		// Wrap phase into [0, 1) so negative inputs and values ≥ 1 stay well-defined.
+		const wrappedPhase = ((phase % 1) + 1) % 1;
 		// Match against a code/markup-masked copy so keywords inside code spans,
 		// fenced blocks, or XML sections never paint; indices still address `text`.
 		const masked = maskNonProse(text);
@@ -79,7 +91,7 @@ export function createGradientHighlighter(spec: GradientHighlightSpec): KeywordH
 		for (const m of masked.matchAll(highlight)) {
 			const start = m.index ?? 0;
 			const end = start + m[0].length;
-			out += text.slice(last, start) + paint(text.slice(start, end), resetTo);
+			out += text.slice(last, start) + paint(text.slice(start, end), resetTo, wrappedPhase);
 			last = end;
 		}
 		return out + text.slice(last);

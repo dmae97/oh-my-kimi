@@ -20,11 +20,13 @@ function denseText(words: number): string {
 const DEFAULT_CAPACITY = snapcompact.geometry(snapcompact.resolveShape(undefined)).capacity;
 
 /**
- * Sized to span exactly 2 default-shape frames (~1.2x one frame's capacity),
- * so the ~6,600 estimated image tokens clear the savings gate against the
- * much larger text-token bill.
+ * Sized to span exactly 2 default-shape frames (~1.7x one frame's capacity):
+ * the legibility-tuned cells pack fewer chars/frame, so the swap's ~6,600
+ * estimated image tokens must clear the 0.9 savings gate against a larger
+ * text-token bill. 1.7x sits comfortably above break-even while staying at 2
+ * frames (the budget math below depends on 2 frames per LARGE).
  */
-const LARGE = denseText(Math.ceil((DEFAULT_CAPACITY * 1.2) / 7));
+const LARGE = denseText(Math.ceil((DEFAULT_CAPACITY * 1.7) / 7));
 const SMALL = "12 lines OK";
 
 function toolResult(id: string, text: string): ToolResultMessage {
@@ -113,6 +115,40 @@ describe("SnapcompactInlineTransformer", () => {
 
 		// System prompt untouched when only tool results are enabled.
 		expect(result.systemPrompt).toBe(context.systemPrompt);
+	});
+
+	it("reports per-tool-result savings to the sink for each imaged result only", () => {
+		const received: Array<{ toolCallId: string; savedTokens: number }>[] = [];
+		let model = "";
+		const transformer = new SnapcompactInlineTransformer(
+			{ renderSystemPrompt: "none", renderToolResults: true },
+			(savings, m) => {
+				received.push(savings.map(s => ({ ...s })));
+				model = m.id;
+			},
+		);
+		transformer.transform(makeContext(), makeModel());
+
+		// Only the large historical result (call_1) is imaged; call_2 is small,
+		// call_3 is the most-recent (kept crisp).
+		expect(received).toHaveLength(1);
+		expect(received[0]).toHaveLength(1);
+		expect(received[0][0].toolCallId).toBe("call_1");
+		expect(received[0][0].savedTokens).toBeGreaterThan(0);
+		expect(model).toBe("test-model");
+	});
+
+	it("never calls the savings sink when nothing is imaged", () => {
+		let calls = 0;
+		const transformer = new SnapcompactInlineTransformer(
+			{ renderSystemPrompt: "none", renderToolResults: true },
+			() => {
+				calls++;
+			},
+		);
+		// Text-only model → vision gate short-circuits before any swap.
+		transformer.transform(makeContext(), makeModel({ input: ["text"] }));
+		expect(calls).toBe(0);
 	});
 
 	it("never mutates the input context (persisted history shares these references)", () => {

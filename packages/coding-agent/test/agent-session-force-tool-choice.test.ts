@@ -87,6 +87,18 @@ it("forces specific tool, then transitions to none, then clears", () => {
 	expect(third).toBeUndefined();
 });
 
+it("requeues a forced choice whose tool is filtered out before dequeue", async () => {
+	session.setForcedToolChoice("write");
+
+	await session.setActiveToolsByName(["bash"]);
+	expect(session.nextToolChoice()).toBeUndefined();
+	expect(session.toolChoiceQueue.hasInFlight).toBe(false);
+
+	await session.setActiveToolsByName(["bash", "write"]);
+	expect(session.nextToolChoice()).toEqual({ type: "tool", name: "write" });
+	session.toolChoiceQueue.clear();
+});
+
 it("throws when forcing a non-active tool", () => {
 	expect(() => session.setForcedToolChoice("read")).toThrow('Tool "read" is not currently active.');
 });

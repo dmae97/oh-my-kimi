@@ -15,7 +15,7 @@ import {
 import type { TreeFilterMode } from "../../config/settings-schema";
 import { theme } from "../../modes/theme/theme";
 import { matchesAppInterrupt, matchesSelectDown, matchesSelectUp } from "../../modes/utils/keybinding-matchers";
-import type { SessionTreeNode } from "../../session/session-manager";
+import type { SessionTreeNode } from "../../session/session-entries";
 import { shortenPath } from "../../tools/render-utils";
 import { toPathList } from "../../tools/search";
 import { DynamicBorder } from "./dynamic-border";

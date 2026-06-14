@@ -46,6 +46,7 @@ describe("submitInteractiveInput", () => {
 		const session = {
 			prompt: vi.fn(async () => true),
 			promptCustomMessage: vi.fn(async () => {}),
+			isStreaming: false,
 		};
 		const input = createInput({ text: "resume now", started: true, synthetic: true });
 
@@ -67,6 +68,7 @@ describe("submitInteractiveInput", () => {
 		const session = {
 			prompt: vi.fn(async () => true),
 			promptCustomMessage: vi.fn(async () => {}),
+			isStreaming: false,
 		};
 		const input = createInput();
 
@@ -88,6 +90,7 @@ describe("submitInteractiveInput", () => {
 		const session = {
 			prompt: vi.fn(async () => true),
 			promptCustomMessage: vi.fn(async () => {}),
+			isStreaming: false,
 		};
 		const input = createInput({ text: "continue goal", customType: "goal-continuation" });
 
@@ -100,6 +103,58 @@ describe("submitInteractiveInput", () => {
 			display: false,
 			attribution: "agent",
 		});
+		expect(mode.finishPendingSubmission).toHaveBeenCalledWith(input);
+		expect(mode.showError).not.toHaveBeenCalled();
+	});
+
+	it("queues goal-continuation as followUp when streaming", async () => {
+		const mode = {
+			markPendingSubmissionStarted: vi.fn(() => true),
+			finishPendingSubmission: vi.fn(),
+			showError: vi.fn(),
+			checkShutdownRequested: vi.fn(async () => {}),
+		};
+		const session = {
+			prompt: vi.fn(async () => true),
+			promptCustomMessage: vi.fn(async () => {}),
+			isStreaming: true,
+		};
+		const input = createInput({ text: "continue goal", customType: "goal-continuation" });
+
+		await submitInteractiveInput(mode, session, input);
+
+		expect(session.prompt).not.toHaveBeenCalled();
+		expect(session.promptCustomMessage).toHaveBeenCalledWith(
+			{
+				customType: "goal-continuation",
+				content: "continue goal",
+				display: false,
+				attribution: "agent",
+			},
+			{ streamingBehavior: "followUp" },
+		);
+		expect(mode.finishPendingSubmission).toHaveBeenCalledWith(input);
+		expect(mode.showError).not.toHaveBeenCalled();
+	});
+
+	it("queues a plain submission as followUp when streaming", async () => {
+		const mode = {
+			markPendingSubmissionStarted: vi.fn(() => true),
+			finishPendingSubmission: vi.fn(),
+			showError: vi.fn(),
+			checkShutdownRequested: vi.fn(async () => {}),
+		};
+		const session = {
+			prompt: vi.fn(async () => true),
+			promptCustomMessage: vi.fn(async () => {}),
+			isStreaming: true,
+		};
+		const input = createInput({ text: "loop prompt" });
+
+		await submitInteractiveInput(mode, session, input);
+
+		expect(session.prompt).toHaveBeenCalledWith("loop prompt", { images: undefined, streamingBehavior: "followUp" });
+		expect(session.promptCustomMessage).not.toHaveBeenCalled();
 		expect(mode.finishPendingSubmission).toHaveBeenCalledWith(input);
 		expect(mode.showError).not.toHaveBeenCalled();
 	});

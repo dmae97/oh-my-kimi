@@ -9,7 +9,7 @@ import { describe, expect, it, vi } from "bun:test";
 import type { Args } from "@oh-my-pi/pi-coding-agent/cli/args";
 import type { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createSessionManager, SessionResolutionError } from "@oh-my-pi/pi-coding-agent/main";
-import * as sessionManagerModule from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import * as sessionListingModule from "@oh-my-pi/pi-coding-agent/session/session-listing";
 
 function buildResumeArgs(resume: string): Args {
 	return {
@@ -17,6 +17,7 @@ function buildResumeArgs(resume: string): Args {
 		messages: [],
 		fileArgs: [],
 		unknownFlags: new Map(),
+		unrecognizedFlags: [],
 	};
 }
 
@@ -27,6 +28,7 @@ function buildForkArgs(fork: string, noSession = false): Args {
 		messages: [],
 		fileArgs: [],
 		unknownFlags: new Map(),
+		unrecognizedFlags: [],
 	};
 }
 
@@ -34,7 +36,7 @@ const stubSettings = { get: () => undefined } as unknown as Settings;
 
 describe("createSessionManager — missing session (#2084)", () => {
 	it("rejects --resume with SessionResolutionError carrying a usage hint", async () => {
-		vi.spyOn(sessionManagerModule, "resolveResumableSession").mockResolvedValue(undefined);
+		vi.spyOn(sessionListingModule, "resolveResumableSession").mockResolvedValue(undefined);
 		try {
 			await expect(
 				createSessionManager(
@@ -61,7 +63,7 @@ describe("createSessionManager — missing session (#2084)", () => {
 	});
 
 	it("rejects --fork with SessionResolutionError carrying a usage hint", async () => {
-		vi.spyOn(sessionManagerModule, "resolveResumableSession").mockResolvedValue(undefined);
+		vi.spyOn(sessionListingModule, "resolveResumableSession").mockResolvedValue(undefined);
 		try {
 			await expect(
 				createSessionManager(

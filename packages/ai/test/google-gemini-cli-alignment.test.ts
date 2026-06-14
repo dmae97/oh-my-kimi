@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import * as geminiCliProvider from "@oh-my-pi/pi-ai/providers/google-gemini-cli";
 import {
+	ANTIGRAVITY_NO_PREAMBLE_INSTRUCTION,
 	ANTIGRAVITY_SYSTEM_INSTRUCTION,
 	buildRequest,
 	parseGeminiCliCredentials,
@@ -8,7 +9,7 @@ import {
 	streamGoogleGeminiCli,
 } from "@oh-my-pi/pi-ai/providers/google-gemini-cli";
 import { getOAuthApiKey } from "@oh-my-pi/pi-ai/registry/oauth";
-import type { Context, FetchImpl, Model, TJsonSchema } from "@oh-my-pi/pi-ai/types";
+import type { AssistantMessageEvent, Context, FetchImpl, Model, TJsonSchema } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import type { ModelSpec } from "@oh-my-pi/pi-catalog/types";
 
@@ -222,8 +223,10 @@ describe("Google Gemini CLI alignment", () => {
 			const parts = payload.request.systemInstruction?.parts ?? [];
 			// The antigravity identity header must be injected as the first part.
 			expect(parts[0]?.text).toBe(ANTIGRAVITY_SYSTEM_INSTRUCTION);
+			expect(parts[1]?.text).toBe(`Please ignore following [ignore]${ANTIGRAVITY_SYSTEM_INSTRUCTION}[/ignore]`);
+			expect(parts[2]?.text).toBe(ANTIGRAVITY_NO_PREAMBLE_INSTRUCTION);
 			// The user-supplied system prompt must appear after the injected parts.
-			expect(parts.some(p => p.text === "my instructions")).toBe(true);
+			expect(parts.slice(3).some(p => p.text === "my instructions")).toBe(true);
 		}
 	});
 	it("adds anthropic-beta for Antigravity Claude reasoning models without relying on id suffix", async () => {
@@ -250,6 +253,130 @@ describe("Google Gemini CLI alignment", () => {
 		expect(requestHeaders!.get("anthropic-beta")).toBe("interleaved-thinking-2025-05-14");
 		expect(requestHeaders!.get("X-Goog-Api-Client")).toBeNull();
 		expect(requestHeaders!.get("Client-Metadata")).toBeNull();
+	});
+
+	it("filters out empty text parts at stream end but preserves terminal thought signatures", async () => {
+		const sseChunks = [
+			'data: {"response":{"candidates":[{"content":{"role":"model","parts":[{"text":"Hello"}]}}]}}\n\n',
+			'data: {"response":{"candidates":[{"content":{"role":"model","parts":[{"text":"","thoughtSignature":"terminal-sig"}]},"finishReason":"STOP"}]}}\n\n',
+		];
+
+		const fetchMock: FetchImpl = async () => {
+			const stream = new ReadableStream({
+				async start(controller) {
+					const encoder = new TextEncoder();
+					for (const chunk of sseChunks) {
+						controller.enqueue(encoder.encode(chunk));
+						await Bun.sleep(5);
+					}
+					controller.close();
+				},
+			});
+			return new Response(stream, {
+				status: 200,
+				headers: { "Content-Type": "text/event-stream" },
+			});
+		};
+
+		const model: Model<"google-gemini-cli"> = buildModel({
+			...createModel("google-antigravity"),
+			id: "gemini-3.5-flash",
+			name: "Gemini 3.5 Flash",
+			reasoning: true,
+		} as ModelSpec<"google-gemini-cli">);
+
+		const events: AssistantMessageEvent[] = [];
+		const stream = streamGoogleGeminiCli(model, createContext(), {
+			apiKey: JSON.stringify({ token: "token", projectId: "proj-123" }),
+			fetch: fetchMock,
+		});
+		for await (const event of stream) {
+			events.push(event);
+		}
+		const result = await stream.result();
+
+		expect(result.stopReason).toBe("stop");
+		expect(result.content).toHaveLength(1);
+		expect(result.content[0]).toEqual({
+			type: "text",
+			text: "Hello",
+			textSignature: "terminal-sig",
+		});
+
+		const textStartEvents = events.filter(e => e.type === "text_start");
+		expect(textStartEvents).toHaveLength(1);
+		expect(textStartEvents[0].contentIndex).toBe(0);
+
+		const textDeltaEvents = events.filter(e => e.type === "text_delta");
+		expect(textDeltaEvents).toHaveLength(1);
+		expect(textDeltaEvents[0].delta).toBe("Hello");
+
+		const textEndEvents = events.filter(e => e.type === "text_end");
+		expect(textEndEvents).toHaveLength(1);
+		expect(textEndEvents[0].content).toBe("Hello");
+	});
+
+	it("keeps a text block's own thoughtSignature when a following function call carries its own", async () => {
+		// A functionCall part with `text: undefined` must NOT pollute the preceding text/thinking
+		// block via the terminal-signature branch; its signature belongs on the tool call alone.
+		const sseChunks = [
+			'data: {"response":{"candidates":[{"content":{"role":"model","parts":[{"text":"Hello","thoughtSignature":"text-sig"}]}}]}}\n\n',
+			'data: {"response":{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"get_weather","args":{"city":"SF"}},"thoughtSignature":"toolcall-sig"}]},"finishReason":"STOP"}]}}\n\n',
+		];
+
+		const fetchMock: FetchImpl = async () => {
+			const stream = new ReadableStream({
+				async start(controller) {
+					const encoder = new TextEncoder();
+					for (const chunk of sseChunks) {
+						controller.enqueue(encoder.encode(chunk));
+						await Bun.sleep(5);
+					}
+					controller.close();
+				},
+			});
+			return new Response(stream, {
+				status: 200,
+				headers: { "Content-Type": "text/event-stream" },
+			});
+		};
+
+		const model: Model<"google-gemini-cli"> = buildModel({
+			...createModel("google-antigravity"),
+			id: "gemini-3.5-flash",
+			name: "Gemini 3.5 Flash",
+			reasoning: true,
+		} as ModelSpec<"google-gemini-cli">);
+
+		const events: AssistantMessageEvent[] = [];
+		const stream = streamGoogleGeminiCli(model, createContext(), {
+			apiKey: JSON.stringify({ token: "token", projectId: "proj-123" }),
+			fetch: fetchMock,
+		});
+		for await (const event of stream) {
+			events.push(event);
+		}
+		const result = await stream.result();
+
+		expect(result.stopReason).toBe("toolUse");
+		expect(result.content).toHaveLength(2);
+
+		// The text block keeps its OWN signature — the function call's signature must NOT migrate onto it.
+		expect(result.content[0]).toEqual({
+			type: "text",
+			text: "Hello",
+			textSignature: "text-sig",
+		});
+
+		// The function call's signature is captured on the tool call itself, by the functionCall branch.
+		const toolCall = result.content[1];
+		expect(toolCall.type).toBe("toolCall");
+		if (toolCall.type === "toolCall") {
+			expect(toolCall.name).toBe("get_weather");
+			expect(toolCall.thoughtSignature).toBe("toolcall-sig");
+		}
+
+		expect(events.filter(e => e.type === "toolcall_start")).toHaveLength(1);
 	});
 
 	describe("retry guardrails", () => {

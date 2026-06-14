@@ -187,6 +187,12 @@ export interface OpenAICompat {
 	/** Whether the provider supports the `tool_choice` parameter. Default: true. */
 	supportsToolChoice?: boolean;
 	/**
+	 * Whether forced `tool_choice` values (`"required"` or named tools) are accepted.
+	 * When false, request builders keep tools available but downgrade forced choices
+	 * to provider-default auto selection. Default: true.
+	 */
+	supportsForcedToolChoice?: boolean;
+	/**
 	 * Drop reasoning fields (`reasoning_effort`, OpenRouter `reasoning`) for
 	 * the request when `tool_choice` forces a tool call. Mirrors the Anthropic
 	 * `disableThinkingIfToolChoiceForced` rule for backends like Kimi that

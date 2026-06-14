@@ -76,6 +76,16 @@ export class ImageBudget {
 	#transmitted = new Set<number>();
 	/** Transmit sequences (full base64) to write once, before this frame's placements. */
 	#pendingTransmits: string[] = [];
+	// True while the in-flight pass is a partial/throwaway pass (the
+	// non-multiplexer resize viewport fast path) that walks only the visible
+	// tail, bottom-up. Such a pass cannot derive display order from observe()
+	// call order, so its suppression decisions replay the committed split below.
+	#stablePass = false;
+	// Image ids shown as text in the frame currently on the terminal: the
+	// display-order prefix [0, #onTerminal) of the last full pass, snapshotted by
+	// id so a partial pass reproduces the on-screen live/text split without a
+	// full, correctly-ordered walk.
+	#suppressedIds = new Set<number>();
 
 	constructor(cap: number = DEFAULT_MAX_INLINE_IMAGES, requestRender: () => void = () => {}) {
 		this.#cap = normalizeCap(cap);
@@ -117,18 +127,32 @@ export class ImageBudget {
 		return this.#nextId++;
 	}
 
-	/** Begin a render pass. Called by the renderer before composing the frame. */
-	beginPass(): void {
+	/**
+	 * Begin a render pass. Called by the renderer before composing the frame.
+	 * Pass `stable: true` for a partial/throwaway pass that does not walk the
+	 * whole tree in display order (the resize viewport fast path): {@link observe}
+	 * then replays the last committed per-id decision instead of one derived from
+	 * call order, and the pass must NOT be closed with {@link endPass}.
+	 */
+	beginPass(stable = false): void {
 		this.#passIds.length = 0;
-		this.#applyingReset = this.#cap > 0 && this.#planned > this.#onTerminal;
+		this.#stablePass = stable;
+		this.#applyingReset = !stable && this.#cap > 0 && this.#planned > this.#onTerminal;
 	}
 
 	/**
 	 * Record an image in display order and report whether it must render its text
 	 * fallback this frame. Called by every {@link Image} during render — including
 	 * on a cache hit, so the image keeps its display-order slot.
+	 *
+	 * During a `stable` pass ({@link beginPass}) the call order and visible subset
+	 * are not authoritative, so the decision is the committed on-terminal split
+	 * (`#suppressedIds`) keyed by id — order- and partiality-independent.
 	 */
 	observe(imageId: number): boolean {
+		if (this.#stablePass) {
+			return this.#cap > 0 && this.#suppressedIds.has(imageId);
+		}
 		const index = this.#passIds.length;
 		this.#passIds.push(imageId);
 		return this.#cap > 0 && index < this.#planned;
@@ -155,6 +179,11 @@ export class ImageBudget {
 			reset = true;
 		}
 		this.#reconcile(total);
+		// Snapshot the committed display-order suppression by id: the prefix
+		// [0, #onTerminal) is what the terminal currently shows as text. Partial
+		// passes replay this per id (see #stablePass) instead of re-deriving it
+		// from a reversed, tail-only walk.
+		this.#suppressedIds = new Set(this.#passIds.slice(0, this.#onTerminal));
 		return reset;
 	}
 

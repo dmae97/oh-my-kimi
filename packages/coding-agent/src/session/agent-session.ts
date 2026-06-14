@@ -166,6 +166,7 @@ import type {
 	TurnEndEvent,
 	TurnStartEvent,
 } from "../extensibility/extensions";
+import { createExtensionModelQuery } from "../extensibility/extensions/model-api";
 import type { CompactOptions, ContextUsage } from "../extensibility/extensions/types";
 import { ExtensionToolWrapper } from "../extensibility/extensions/wrapper";
 import type { HookCommandContext } from "../extensibility/hooks/types";
@@ -187,6 +188,7 @@ import { containsWorkflow, WORKFLOW_NOTICE } from "../modes/workflow";
 import { createPlanReadMatcher } from "../plan-mode/plan-protection";
 import type { PlanModeState } from "../plan-mode/state";
 import autoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
+import eagerTaskPrompt from "../prompts/system/eager-task.md" with { type: "text" };
 import eagerTodoPrompt from "../prompts/system/eager-todo.md" with { type: "text" };
 import emptyStopRetryTemplate from "../prompts/system/empty-stop-retry.md" with { type: "text" };
 import ircAutoReplyTemplate from "../prompts/system/irc-autoreply.md" with { type: "text" };
@@ -238,7 +240,7 @@ import { type EditMode, resolveEditMode } from "../utils/edit-mode";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { extractFileMentions, generateFileMentionMessages } from "../utils/file-mentions";
 import { normalizeModelContextImages } from "../utils/image-loading";
-import { buildNamedToolChoice } from "../utils/tool-choice";
+import { buildNamedToolChoice, isToolChoiceActive } from "../utils/tool-choice";
 import type { AuthStorage } from "./auth-storage";
 import type { ClientBridge, ClientBridgePermissionOption, ClientBridgePermissionOutcome } from "./client-bridge";
 import {
@@ -258,15 +260,12 @@ import {
 	SKILL_PROMPT_MESSAGE_TYPE,
 	stripImagesFromMessage,
 } from "./messages";
+import type { SessionContext } from "./session-context";
+import { getLatestCompactionEntry, getRestorableSessionModels } from "./session-context";
 import { formatSessionDumpText } from "./session-dump-format";
-import type {
-	BranchSummaryEntry,
-	CompactionEntry,
-	NewSessionOptions,
-	SessionContext,
-	SessionManager,
-} from "./session-manager";
-import { EPHEMERAL_MODEL_CHANGE_ROLE, getLatestCompactionEntry, getRestorableSessionModels } from "./session-manager";
+import type { BranchSummaryEntry, CompactionEntry, NewSessionOptions } from "./session-entries";
+import { EPHEMERAL_MODEL_CHANGE_ROLE } from "./session-entries";
+import type { SessionManager } from "./session-manager";
 import type { ShakeMode, ShakeResult } from "./shake-types";
 import { ToolChoiceQueue } from "./tool-choice-queue";
 import { YieldQueue } from "./yield-queue";
@@ -441,6 +440,10 @@ export interface AgentSessionConfig {
 	asyncJobManager?: AsyncJobManager;
 	/** Agent identity (registry id like "Main" or "Alice") used for IRC routing. */
 	agentId?: string;
+	/** Whether this session is the top-level agent or a subagent. Drives eager-task
+	 *  prelude gating so a top-level session created with a custom `agentId` still
+	 *  receives the always-mode reminder. Defaults to "main". */
+	agentKind?: "main" | "sub";
 	/**
 	 * Override the provider-facing session ID for all API requests from this session.
 	 * When absent, `sessionManager.getSessionId()` is used. Needed when benchmark or
@@ -931,6 +934,7 @@ export class AgentSession {
 	/** Messages queued to be included with the next user prompt as context ("asides"). */
 	#pendingNextTurnMessages: CustomMessage[] = [];
 	#scheduledHiddenNextTurnGeneration: number | undefined = undefined;
+	#queuedMessageDrainScheduled = false;
 	#planModeState: PlanModeState | undefined;
 	#goalModeState: GoalModeState | undefined;
 	#goalRuntime: GoalRuntime;
@@ -994,6 +998,7 @@ export class AgentSession {
 	#pendingIrcAsides: CustomMessage[] = [];
 	// Agent identity (registry id) used for IRC routing and job ownership.
 	#agentId: string | undefined;
+	#agentKind: "main" | "sub" = "main";
 	#providerSessionId: string | undefined;
 	#freshProviderSessionId: string | undefined;
 	#isDisposed = false;
@@ -1085,6 +1090,7 @@ export class AgentSession {
 
 	#streamingEditFileCache = new Map<string, string>();
 	#promptInFlightCount = 0;
+	#abortInProgress = false;
 	// Wire-level agent_end emission deferred until #promptInFlightCount drops to 0.
 	// Internal extension hooks and post-emit work (auto-retry, auto-compaction, todo
 	// checks in #handleAgentEvent) still fire on the original schedule — only the
@@ -1154,24 +1160,21 @@ export class AgentSession {
 		}
 	}
 
-	/** A steer/follow-up can land after the agent loop's final queue poll but
-	 *  before the prompt unwinds: #promptInFlightCount keeps isStreaming true
-	 *  through post-prompt recovery, so senders (collab guests, skills) still
-	 *  queue via agent.steer()/followUp() instead of starting a fresh prompt.
-	 *  Without a drain those messages strand invisibly until the next manual
-	 *  prompt. Runs when the session settles; the guard makes it a no-op when
-	 *  the queue was consumed normally or a new turn already started. */
+	/** A steer/follow-up can land after the agent loop's final queue poll, or
+	 *  after an abort stops an auto-continued queued turn. In both cases the
+	 *  agent-core queue still owns the message, but no loop is left to poll it.
+	 *  Runs whenever the session settles; the guard makes it a no-op when the
+	 *  queue was consumed normally or a new turn already started. */
 	#drainStrandedQueuedMessages(): void {
-		if (!this.agent.hasQueuedMessages()) return;
-		this.#scheduleAgentContinue({
-			shouldContinue: () => this.#canAutoContinueForFollowUp() && this.agent.hasQueuedMessages(),
-		});
+		if (this.#abortInProgress) return;
+		this.#scheduleQueuedMessageDrain();
 	}
 
 	#resetInFlight(): void {
 		this.#promptInFlightCount = 0;
 		this.#releasePowerAssertion();
 		this.#flushPendingAgentEnd();
+		this.#drainStrandedQueuedMessages();
 	}
 
 	#flushPendingAgentEnd(): void {
@@ -1298,6 +1301,7 @@ export class AgentSession {
 		this.#ttsrManager = config.ttsrManager;
 		this.#obfuscator = config.obfuscator;
 		this.#agentId = config.agentId;
+		this.#agentKind = config.agentKind ?? "main";
 		this.#providerSessionId = config.providerSessionId;
 		this.agent.setAssistantMessageEventInterceptor((message, assistantMessageEvent) => {
 			const event: AgentEvent = {
@@ -1374,7 +1378,12 @@ export class AgentSession {
 
 	/** Advance the tool-choice queue and return the next directive for the upcoming LLM call. */
 	nextToolChoice(): ToolChoice | undefined {
-		return this.#toolChoiceQueue.nextToolChoice();
+		const choice = this.#toolChoiceQueue.nextToolChoice();
+		if (isToolChoiceActive(choice, this.agent.state.tools)) {
+			return choice;
+		}
+		this.#toolChoiceQueue.reject("unavailable");
+		return undefined;
 	}
 
 	/**
@@ -1912,6 +1921,11 @@ export class AgentSession {
 				return;
 			}
 
+			// A deliberate abort should settle the current turn, not trigger queued continuations.
+			if (msg.stopReason === "aborted") {
+				this.#resolveRetry();
+				return;
+			}
 			// Check for retryable errors first (overloaded, rate limit, server errors)
 			if (this.#isRetryableError(msg)) {
 				const didRetry = await this.#handleRetryableError(msg);
@@ -1934,7 +1948,7 @@ export class AgentSession {
 			if (compactionDeferredHandoff) {
 				return;
 			}
-			if (msg.stopReason !== "error" && msg.stopReason !== "aborted") {
+			if (msg.stopReason !== "error") {
 				if (this.#enforceRewindBeforeYield()) {
 					return;
 				}
@@ -2030,13 +2044,13 @@ export class AgentSession {
 		onError?: () => void;
 	}): void {
 		this.#schedulePostPromptTask(
-			async () => {
+			async signal => {
 				// Defense in depth: if compaction/handoff slipped onto the post-prompt queue
 				// alongside us (e.g. via a scheduler we don't own), refuse to start a fresh
 				// streaming turn — agent.continue() here would race the handoff's session
 				// reset. The first-class fix is in #checkCompaction/the agent_end handler,
 				// but this guard catches anything that bypasses that path.
-				if (this.isCompacting || this.isGeneratingHandoff) {
+				if (signal.aborted || this.#isDisposed || this.isCompacting || this.isGeneratingHandoff) {
 					options?.onSkip?.();
 					return;
 				}
@@ -2044,14 +2058,21 @@ export class AgentSession {
 					options?.onSkip?.();
 					return;
 				}
+				this.#beginInFlight();
 				try {
 					await this.#maybeRestoreRetryFallbackPrimary();
+					if (signal.aborted || this.#isDisposed) {
+						options?.onSkip?.();
+						return;
+					}
 					await this.agent.continue();
 				} catch (error) {
 					logger.warn("agent.continue failed after scheduling", {
 						error: error instanceof Error ? error.message : String(error),
 					});
 					options?.onError?.();
+				} finally {
+					this.#endInFlight();
 				}
 			},
 			{
@@ -2107,8 +2128,13 @@ export class AgentSession {
 	 * and fire-and-forget `agent.continue()` may still be streaming after
 	 * the TTSR resume gate resolves.
 	 */
-	async #waitForPostPromptRecovery(): Promise<void> {
+	async #waitForPostPromptRecovery(generation?: number): Promise<void> {
 		while (true) {
+			// An abort bumps #promptGeneration. When this wait runs on behalf of a
+			// specific prompt turn, stop as soon as that turn has been superseded:
+			// its promise must resolve on the abort, not block on a queued
+			// steer/follow-up that the post-abort drain starts as a fresh turn.
+			if (generation !== undefined && this.#promptGeneration !== generation) return;
 			if (this.#retryPromise) {
 				await this.#retryPromise;
 				continue;
@@ -3155,8 +3181,9 @@ export class AgentSession {
 		// session's dispose.
 		this.abortRetry();
 		this.abortCompaction();
+		const postPromptDrain = this.#cancelPostPromptTasks();
 		this.agent.abort();
-		await this.#cancelPostPromptTasks();
+		await postPromptDrain;
 		// Cancel jobs this agent registered so a subagent's teardown doesn't
 		// leak its background bash/task work into the parent's manager. Only
 		// the session that owns the manager goes on to dispose it (which itself
@@ -4603,10 +4630,12 @@ export class AgentSession {
 			return true;
 		}
 
-		// Skip eager todo prelude when the user has already queued a directive
+		// Skip eager preludes when the user has already queued a directive
 		const hasPendingUserDirective = this.#toolChoiceQueue.inspect().includes("user-force");
 		const eagerTodoPrelude =
 			!options?.synthetic && !hasPendingUserDirective ? this.#createEagerTodoPrelude(expandedText) : undefined;
+		const eagerTaskPrelude =
+			!options?.synthetic && !hasPendingUserDirective ? this.#createEagerTaskPrelude(expandedText) : undefined;
 		const normalizedImages = await this.#normalizeImagesForModel(options?.images);
 
 		const userContent: (TextContent | ImageContent)[] = [{ type: "text", text: expandedText }];
@@ -4619,17 +4648,24 @@ export class AgentSession {
 			? { role: "developer" as const, content: userContent, attribution: promptAttribution, timestamp: Date.now() }
 			: { role: "user" as const, content: userContent, attribution: promptAttribution, timestamp: Date.now() };
 
+		const preludeMessages: AgentMessage[] = [];
 		if (eagerTodoPrelude) {
-			this.#toolChoiceQueue.pushOnce(eagerTodoPrelude.toolChoice, {
-				label: "eager-todo",
-			});
+			if (eagerTodoPrelude.toolChoice) {
+				this.#toolChoiceQueue.pushOnce(eagerTodoPrelude.toolChoice, {
+					label: "eager-todo",
+				});
+			}
+			preludeMessages.push(eagerTodoPrelude.message);
+		}
+		if (eagerTaskPrelude) {
+			preludeMessages.push(eagerTaskPrelude);
 		}
 
 		try {
 			await this.#promptWithMessage(message, expandedText, {
 				...options,
 				images: normalizedImages,
-				prependMessages: eagerTodoPrelude ? [eagerTodoPrelude.message] : undefined,
+				prependMessages: preludeMessages.length > 0 ? preludeMessages : undefined,
 				appendMessages: keywordNotices.length > 0 ? keywordNotices : undefined,
 			});
 		} finally {
@@ -4857,7 +4893,7 @@ export class AgentSession {
 			const agentPromptOptions = options?.toolChoice ? { toolChoice: options.toolChoice } : undefined;
 			await this.#promptAgentWithIdleRetry(messages, agentPromptOptions);
 			if (!options?.skipPostPromptRecoveryWait) {
-				await this.#waitForPostPromptRecovery();
+				await this.#waitForPostPromptRecovery(generation);
 			}
 		} finally {
 			this.#endInFlight();
@@ -4907,6 +4943,7 @@ export class AgentSession {
 			sessionManager: this.sessionManager,
 			modelRegistry: this.#modelRegistry,
 			model: this.model ?? undefined,
+			models: createExtensionModelQuery(this.#modelRegistry, this.settings, () => this.model ?? undefined),
 			isIdle: () => !this.isStreaming,
 			abort: () => {
 				void this.abort();
@@ -5054,9 +5091,25 @@ export class AgentSession {
 	}
 
 	#scheduleIdleQueueDrain(): void {
-		if (!this.#canAutoContinueForFollowUp()) return;
+		this.#scheduleQueuedMessageDrain();
+	}
+
+	#scheduleQueuedMessageDrain(): void {
+		if (this.#queuedMessageDrainScheduled || !this.#canAutoContinueForFollowUp() || !this.agent.hasQueuedMessages()) {
+			return;
+		}
+		this.#queuedMessageDrainScheduled = true;
 		this.#scheduleAgentContinue({
-			shouldContinue: () => this.#canAutoContinueForFollowUp() && this.agent.hasQueuedMessages(),
+			shouldContinue: () => {
+				this.#queuedMessageDrainScheduled = false;
+				return this.#canAutoContinueForFollowUp() && this.agent.hasQueuedMessages();
+			},
+			onSkip: () => {
+				this.#queuedMessageDrainScheduled = false;
+			},
+			onError: () => {
+				this.#queuedMessageDrainScheduled = false;
+			},
 		});
 	}
 
@@ -5068,7 +5121,11 @@ export class AgentSession {
 		if (this.isRetrying) return false;
 		const messages = this.agent.state.messages;
 		const last = messages[messages.length - 1];
-		return last?.role === "assistant";
+		// A user interrupt during tool execution can leave the transcript ending
+		// with the emitted tool result, not the aborted assistant message. Continuing
+		// from that state is still resumable: Agent.continue() first polls queued
+		// steering before making the next model call.
+		return last?.role === "assistant" || last?.role === "toolResult";
 	}
 
 	queueDeferredMessage(message: CustomMessage): void {
@@ -5167,11 +5224,17 @@ export class AgentSession {
 	 * - Streaming: queue as steer/follow-up or store for next turn
 	 * - Not streaming + triggerTurn: appends to state/session, starts new turn unless the client cannot own it
 	 * - Not streaming + no trigger: appends to state/session, no turn
+	 *
+	 * @returns true iff this call synchronously started a new turn (awaited
+	 * `agent.prompt`); false when the message was queued/appended without a turn
+	 * — including when `triggerTurn` is downgraded because the client defers
+	 * agent-initiated turns. Callers that must mirror the resulting `agent_end`
+	 * use this to avoid acting on a turn that never ran.
 	 */
 	async sendCustomMessage<T = unknown>(
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution">,
 		options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn"; queueChipText?: string },
-	): Promise<void> {
+	): Promise<boolean> {
 		const details =
 			options?.queueChipText && options.deliverAs !== "nextTurn"
 				? ({
@@ -5195,7 +5258,7 @@ export class AgentSession {
 		if (this.isStreaming) {
 			if (options?.deliverAs === "nextTurn") {
 				this.#queueHiddenNextTurnMessage(normalizedAppMessage, options?.triggerTurn ?? false);
-				return;
+				return false;
 			}
 
 			if (options?.deliverAs === "followUp") {
@@ -5204,17 +5267,17 @@ export class AgentSession {
 				this.agent.steer(normalizedAppMessage);
 			}
 			this.#scheduleIdleQueueDrain();
-			return;
+			return false;
 		}
 
 		if (options?.deliverAs === "nextTurn") {
 			if (options?.triggerTurn) {
 				if (this.#clientBridge?.deferAgentInitiatedTurns && !this.#allowAcpAgentInitiatedTurns) {
 					this.#queueHiddenNextTurnMessage(normalizedAppMessage, false);
-					return;
+					return false;
 				}
 				await this.agent.prompt(normalizedAppMessage);
-				return;
+				return true;
 			}
 			this.agent.appendMessage(normalizedAppMessage);
 			this.sessionManager.appendCustomMessageEntry(
@@ -5224,16 +5287,16 @@ export class AgentSession {
 				message.details,
 				message.attribution ?? "agent",
 			);
-			return;
+			return false;
 		}
 
 		if (options?.triggerTurn) {
 			if (this.#clientBridge?.deferAgentInitiatedTurns && !this.#allowAcpAgentInitiatedTurns) {
 				this.#queueHiddenNextTurnMessage(normalizedAppMessage, false);
-				return;
+				return false;
 			}
 			await this.agent.prompt(normalizedAppMessage);
-			return;
+			return true;
 		}
 
 		this.agent.appendMessage(normalizedAppMessage);
@@ -5244,6 +5307,7 @@ export class AgentSession {
 			message.details,
 			message.attribution ?? "agent",
 		);
+		return false;
 	}
 
 	/**
@@ -5380,28 +5444,37 @@ export class AgentSession {
 	 * abort. Omit it for internal/lifecycle aborts.
 	 */
 	async abort(options?: { goalReason?: "interrupted" | "internal"; reason?: string }): Promise<void> {
-		this.abortRetry();
-		this.#promptGeneration++;
-		this.#scheduledHiddenNextTurnGeneration = undefined;
-		this.abortCompaction();
-		this.abortHandoff();
-		this.abortBash();
-		this.abortEval();
-		const postPromptDrain = this.#cancelPostPromptTasks();
-		this.agent.abort(options?.reason);
-		await postPromptDrain;
-		await this.agent.waitForIdle();
-		await this.#goalRuntime.onTaskAborted({ reason: options?.goalReason ?? "interrupted" });
-		// Clear prompt-in-flight state: waitForIdle resolves when the agent loop's finally
-		// block runs, but nested prompt setup/finalizers may still be unwinding. Without this,
-		// a subsequent prompt() can incorrectly observe the session as busy after an abort.
-		this.#resetInFlight();
-		// Safety net: if the agent loop aborted without producing an assistant
-		// message (e.g. failed before the first stream), the in-flight yield was
-		// never resolved or rejected by the normal message_end path. Reject it now
-		// so any requeue callback still fires and the queue stays consistent.
-		if (this.#toolChoiceQueue.hasInFlight) {
-			this.#toolChoiceQueue.reject("aborted");
+		// Session switch/compact paths disconnect first; explicit aborts should
+		// leave any queued steer/follow-up visible for the user rather than
+		// auto-starting a fresh turn during cleanup.
+		this.#abortInProgress = true;
+		try {
+			this.abortRetry();
+			this.#promptGeneration++;
+			this.#scheduledHiddenNextTurnGeneration = undefined;
+			this.abortCompaction();
+			this.abortHandoff();
+			this.abortBash();
+			this.abortEval();
+			const postPromptDrain = this.#cancelPostPromptTasks();
+			this.agent.abort(options?.reason);
+			await postPromptDrain;
+			await this.agent.waitForIdle();
+			await this.#goalRuntime.onTaskAborted({ reason: options?.goalReason ?? "interrupted" });
+			// Clear prompt-in-flight state: waitForIdle resolves when the agent loop's finally
+			// block runs, but nested prompt setup/finalizers may still be unwinding. Without this,
+			// a subsequent prompt() can incorrectly observe the session as busy after an abort.
+			this.#resetInFlight();
+			// Safety net: if the agent loop aborted without producing an assistant
+			// message (e.g. failed before the first stream), the in-flight yield was
+			// never resolved or rejected by the normal message_end path. Reject it now
+			// so any requeue callback still fires and the queue stays consistent.
+			if (this.#toolChoiceQueue.hasInFlight) {
+				this.#toolChoiceQueue.reject("aborted");
+			}
+		} finally {
+			this.#abortInProgress = false;
+			this.#drainStrandedQueuedMessages();
 		}
 	}
 
@@ -6007,7 +6080,12 @@ export class AgentSession {
 			// Already on under any scope — keep the user's scoped value.
 			return;
 		}
-		this.setServiceTier(enabled ? "priority" : undefined);
+		if (!enabled) {
+			this.setServiceTier(undefined);
+			return;
+		}
+		const scope = this.settings.get("fastModeScope");
+		this.setServiceTier(scope === "openai" ? "openai-only" : scope === "claude" ? "claude-only" : "priority");
 	}
 
 	toggleFastMode(): boolean {
@@ -7025,10 +7103,28 @@ export class AgentSession {
 		});
 	}
 
-	#createEagerTodoPrelude(promptText: string): { message: AgentMessage; toolChoice: ToolChoice } | undefined {
-		const eagerTodosEnabled = this.settings.get("todo.eager");
+	/**
+	 * Render context shared by the eager todo/task preludes. `toolRefs` resolves each
+	 * tool's wire name (matching `buildSystemPrompt`'s `toolRefs`) so the reminder names
+	 * the tool the model actually sees when an extension renames it; `taskBatch` gates
+	 * batch-call guidance that would steer toward a failing call shape when `task.batch`
+	 * is off (the flat single-spawn schema rejects `tasks`/`context`).
+	 */
+	#buildEagerPreludeContext(): { toolRefs: Record<string, string>; taskBatch: boolean } {
+		const wireName = (name: string): string => {
+			const tool = this.#toolRegistry.get(name);
+			return typeof tool?.customWireName === "string" ? tool.customWireName : name;
+		};
+		return {
+			toolRefs: { task: wireName("task"), todo: wireName("todo") },
+			taskBatch: this.settings.get("task.batch"),
+		};
+	}
+
+	#createEagerTodoPrelude(promptText: string): { message: AgentMessage; toolChoice?: ToolChoice } | undefined {
+		const mode = this.settings.get("todo.eager");
 		const todosEnabled = this.settings.get("todo.enabled");
-		if (!eagerTodosEnabled || !todosEnabled) {
+		if (mode === "default" || !todosEnabled) {
 			return undefined;
 		}
 
@@ -7063,27 +7159,53 @@ export class AgentSession {
 			return undefined;
 		}
 
+		const message: AgentMessage = {
+			role: "custom",
+			customType: "eager-todo-prelude",
+			content: prompt.render(eagerTodoPrompt, { ...this.#buildEagerPreludeContext(), forced: mode === "always" }),
+			display: false,
+			attribution: "agent",
+			timestamp: Date.now(),
+		};
+		// `preferred` suggests a todo list (reminder only); `always` also forces the
+		// `todo` tool on the first turn — the previous boolean-on behavior.
+		if (mode === "preferred") {
+			return { message };
+		}
 		const todoToolChoice = buildNamedToolChoice("todo", this.model);
 		if (!todoToolChoice) {
-			logger.warn("Eager todo enforcement skipped because the current model does not support forcing todo", {
-				modelApi: this.model?.api,
-				modelId: this.model?.id,
-			});
-			return undefined;
+			// `always` on a model that can't be forced degrades to reminder-only (no
+			// tool_choice). For `todo.eager: true` users migrated to `always`, such
+			// models now receive the first-turn reminder where they previously got
+			// nothing (see the CHANGELOG entry); `always ⊇ preferred` is preserved.
+			logger.warn(
+				"Eager todo proceeding with the reminder only because the current model does not support a forced todo tool_choice",
+				{ modelApi: this.model?.api, modelId: this.model?.id },
+			);
+			return { message };
 		}
+		return { message, toolChoice: todoToolChoice };
+	}
 
-		const eagerTodoReminder = prompt.render(eagerTodoPrompt);
-
+	#createEagerTaskPrelude(promptText: string): AgentMessage | undefined {
+		if (this.settings.get("task.eager") !== "always") return undefined;
+		// Main agent only: subagents keep `task` active (the parent only filters `todo`),
+		// so a salient delegate-reminder there would amplify nested fan-out. Gate on the
+		// resolved agent kind, not the id, so a top-level session with a custom `agentId`
+		// still gets the reminder.
+		if (this.#agentKind === "sub") return undefined;
+		if (this.#planModeState?.enabled) return undefined;
+		if (this.agent.state.messages.some(m => m.role === "user")) return undefined;
+		const trimmed = promptText.trimEnd();
+		if (trimmed.endsWith("?") || trimmed.endsWith("!")) return undefined;
+		if (!this.getActiveToolNames().includes("task")) return undefined;
 		return {
-			message: {
-				role: "custom",
-				customType: "eager-todo-prelude",
-				content: eagerTodoReminder,
-				display: false,
-				attribution: "agent",
-				timestamp: Date.now(),
-			},
-			toolChoice: todoToolChoice,
+			role: "custom",
+			customType: "eager-task-prelude",
+			content: prompt.render(eagerTaskPrompt, this.#buildEagerPreludeContext()),
+			display: false,
+			attribution: "agent",
+			timestamp: Date.now(),
 		};
 	}
 	/**

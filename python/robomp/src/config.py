@@ -67,6 +67,17 @@ class Settings(BaseSettings):
     task_timeout_seconds: float = Field(2400.0, alias="ROBOMP_TASK_TIMEOUT_SECONDS")
     task_timeout_hard_grace_seconds: float = Field(60.0, alias="ROBOMP_TASK_TIMEOUT_HARD_GRACE_SECONDS")
     request_timeout_seconds: float = Field(120.0, alias="ROBOMP_REQUEST_TIMEOUT_SECONDS")
+
+    # Automatic retry of transiently-failed events. When an event handler
+    # raises (and it isn't an operator cancel or a shutdown interrupt), the
+    # dispatcher re-queues the delivery with escalating backoff instead of
+    # giving up, so ephemeral failures (git fetch timeouts, upstream 5xx/429,
+    # flaky RPC startup) self-heal. After `event_max_retries` retries the row
+    # stays `failed`. `event_retry_delays_seconds` is a comma-separated backoff
+    # schedule: the Nth retry waits the Nth value (last value repeats), jittered.
+    # Set `event_max_retries=0` to restore fail-fast behavior.
+    event_max_retries: int = Field(3, alias="ROBOMP_EVENT_MAX_RETRIES")
+    event_retry_delays_raw: str = Field("30,120,600", alias="ROBOMP_EVENT_RETRY_DELAYS_SECONDS")
     # Premature-end reminder. When a `triage_issue` turn ends without the
     # agent having reached a terminal tool (`gh_open_pr`,
     # `mark_unable_to_reproduce`, `abort_task`) for a `bug`/`documentation`
@@ -296,6 +307,41 @@ class Settings(BaseSettings):
     def pick_model(self) -> str:
         """Random selection from the pool (uniform). One-element pools return that one."""
         return random.choice(self.model_pool)
+
+    @field_validator("event_retry_delays_raw", mode="before")
+    @classmethod
+    def _coerce_retry_delays(cls, v: object) -> str:
+        if v is None:
+            return ""
+        if isinstance(v, (list, tuple)):
+            return ",".join(str(item) for item in v)
+        return str(v)
+
+    @property
+    def event_retry_delays(self) -> tuple[float, ...]:
+        """Parsed backoff schedule in seconds; always non-empty."""
+        vals: list[float] = []
+        for piece in self.event_retry_delays_raw.split(","):
+            piece = piece.strip()
+            if not piece:
+                continue
+            try:
+                seconds = float(piece)
+            except ValueError:
+                continue
+            if seconds >= 0:
+                vals.append(seconds)
+        return tuple(vals) or (30.0,)
+
+    def retry_delay_seconds(self, retry_index: int) -> float:
+        """Backoff before the `retry_index`-th retry (1-based), with jitter.
+
+        Clamps to the last configured delay; applies ±20% jitter so a
+        fleet-wide outage doesn't replay every event in lockstep.
+        """
+        delays = self.event_retry_delays
+        idx = min(max(retry_index, 1), len(delays)) - 1
+        return delays[idx] * (0.8 + random.random() * 0.4)
 
     @property
     def resolved_author_name(self) -> str:

@@ -35,9 +35,11 @@ class ProtocolParsingTests(unittest.TestCase):
                     "contextWindow": 200000,
                     "maxTokens": 8192,
                     "thinking": {
-                        "minLevel": "minimal",
-                        "maxLevel": "high",
                         "mode": "effort",
+                        "efforts": ["minimal", "low", "medium", "high"],
+                        "defaultLevel": "medium",
+                        "effortMap": {"high": "xhigh"},
+                        "supportsDisplay": True,
                     },
                 },
                 "thinkingLevel": "medium",
@@ -85,6 +87,14 @@ class ProtocolParsingTests(unittest.TestCase):
         # Legacy bare-string systemPrompt is accepted and wrapped to a tuple.
         self.assertEqual(state.system_prompt, ("You are useful.",))
         self.assertEqual(state.dump_tools[0].name, "read")
+        assert state.model is not None and state.model.thinking is not None
+        self.assertEqual(
+            state.model.thinking.efforts, ("minimal", "low", "medium", "high")
+        )
+        self.assertEqual(state.model.thinking.mode, "effort")
+        self.assertEqual(state.model.thinking.default_level, "medium")
+        self.assertEqual(state.model.thinking.effort_map, {"high": "xhigh"})
+        self.assertTrue(state.model.thinking.supports_display)
 
     def test_parse_agent_end_notification(self) -> None:
         notification = parse_notification(
@@ -181,6 +191,26 @@ class ProtocolParsingTests(unittest.TestCase):
                     "steeringMode": "one-at-a-time",
                     "followUpMode": "one-at-a-time",
                     "interruptMode": "immediate",
+                }
+            )
+
+    def test_parse_model_info_rejects_unknown_effort(self) -> None:
+        with self.assertRaises(ValueError):
+            parse_session_state(
+                {
+                    "sessionId": "session-123",
+                    "steeringMode": "one-at-a-time",
+                    "followUpMode": "one-at-a-time",
+                    "interruptMode": "immediate",
+                    "model": {
+                        "id": "m",
+                        "name": "M",
+                        "api": "anthropic-messages",
+                        "provider": "anthropic",
+                        "baseUrl": "https://api.anthropic.com",
+                        "reasoning": True,
+                        "thinking": {"mode": "effort", "efforts": ["extreme"]},
+                    },
                 }
             )
 

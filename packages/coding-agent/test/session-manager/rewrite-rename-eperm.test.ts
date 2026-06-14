@@ -1,6 +1,10 @@
-import { describe, expect, it } from "bun:test";
-import { recoverOrphanedBackups, SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { MemorySessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import * as fsp from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { recoverOrphanedBackups } from "@oh-my-pi/pi-coding-agent/session/session-listing";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { FileSessionStorage, MemorySessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
 
 class FsCodeError extends Error {
 	code: string;
@@ -11,11 +15,15 @@ class FsCodeError extends Error {
 	}
 }
 
-class RenameEpermOnceStorage extends MemorySessionStorage {
+// The atomic-write + EPERM `.bak` move-aside/rollback dance lives in
+// FileSessionStorage.writeTextAtomic, so these tests must drive a real
+// file-backed storage (with a temp dir) and override `rename` to simulate the
+// Windows EPERM-on-replace failure.
+class RenameEpermOnceStorage extends FileSessionStorage {
 	failNextSessionReplace = false;
 	backupCleanupPath: string | undefined;
 
-	rename(source: string, target: string): Promise<void> {
+	async rename(source: string, target: string): Promise<void> {
 		if (
 			this.failNextSessionReplace &&
 			source.includes(".tmp") &&
@@ -23,14 +31,12 @@ class RenameEpermOnceStorage extends MemorySessionStorage {
 			this.existsSync(target)
 		) {
 			this.failNextSessionReplace = false;
-			return Promise.reject(
-				new FsCodeError("EPERM", `EPERM: operation not permitted, rename '${source}' -> '${target}'`),
-			);
+			throw new FsCodeError("EPERM", `EPERM: operation not permitted, rename '${source}' -> '${target}'`);
 		}
 		return super.rename(source, target);
 	}
 
-	unlink(target: string): Promise<void> {
+	async unlink(target: string): Promise<void> {
 		if (target.endsWith(".bak")) {
 			this.backupCleanupPath = target;
 		}
@@ -39,9 +45,19 @@ class RenameEpermOnceStorage extends MemorySessionStorage {
 }
 
 describe("SessionManager rewrite EPERM replacement fallback", () => {
+	let sessionDir: string;
+
+	beforeEach(async () => {
+		sessionDir = await fsp.mkdtemp(path.join(os.tmpdir(), "omp-eperm-"));
+	});
+
+	afterEach(async () => {
+		await fsp.rm(sessionDir, { recursive: true, force: true });
+	});
+
 	it("keeps the active session healthy when replacing an existing file hits EPERM", async () => {
 		const storage = new RenameEpermOnceStorage();
-		const session = SessionManager.create("/cwd", "/sessions", storage);
+		const session = SessionManager.create(sessionDir, sessionDir, storage);
 		await session.ensureOnDisk();
 		const sessionFile = session.getSessionFile();
 		if (!sessionFile) throw new Error("Expected session file");
@@ -61,30 +77,40 @@ describe("SessionManager rewrite EPERM replacement fallback", () => {
 });
 
 describe("SessionManager rewrite EPERM rollback failure", () => {
+	let sessionDir: string;
+
+	beforeEach(async () => {
+		sessionDir = await fsp.mkdtemp(path.join(os.tmpdir(), "omp-eperm-"));
+	});
+
+	afterEach(async () => {
+		await fsp.rm(sessionDir, { recursive: true, force: true });
+	});
+
 	it("preserves the original EPERM as the thrown error's cause when rollback also fails", async () => {
-		class DoubleFailStorage extends MemorySessionStorage {
+		class DoubleFailStorage extends FileSessionStorage {
 			failureMode = false;
 			tempRenameAttempts = 0;
 
-			rename(source: string, target: string): Promise<void> {
+			async rename(source: string, target: string): Promise<void> {
 				if (!this.failureMode) return super.rename(source, target);
 				// Every temp -> target rename fails with EPERM (both the upstream attempt in
-				// #replaceSessionFile and the retry inside #replaceSessionFileAfterEperm).
+				// writeTextAtomic and the retry inside #replaceSessionFileAfterEperm).
 				if (source.includes(".tmp") && target.endsWith(".jsonl")) {
 					this.tempRenameAttempts++;
 					const tag = this.tempRenameAttempts === 1 ? "original" : "retry";
-					return Promise.reject(new FsCodeError("EPERM", `EPERM ${tag}: rename '${source}' -> '${target}'`));
+					throw new FsCodeError("EPERM", `EPERM ${tag}: rename '${source}' -> '${target}'`);
 				}
 				// The rollback rename (backup -> target) fails with a distinct code.
 				if (source.endsWith(".bak") && target.endsWith(".jsonl")) {
-					return Promise.reject(new FsCodeError("EIO", `EIO rollback: rename '${source}' -> '${target}'`));
+					throw new FsCodeError("EIO", `EIO rollback: rename '${source}' -> '${target}'`);
 				}
 				return super.rename(source, target);
 			}
 		}
 
 		const storage = new DoubleFailStorage();
-		const session = SessionManager.create("/cwd", "/sessions", storage);
+		const session = SessionManager.create(sessionDir, sessionDir, storage);
 		await session.ensureOnDisk();
 		storage.failureMode = true;
 		const sessionFile = session.getSessionFile();

@@ -8,6 +8,26 @@ import { fileHyperlink } from "../tui/hyperlink";
  *  tail (`, …`) is captured loosely (no `]`/newline) so future label tweaks keep matching. */
 export const PLACEHOLDER_REGEX = /\[(Image|Paste) #([1-9]\d*)(?:,[^\]\n]*)?\]/g;
 
+/** Matches a single `[Image #N]` / `[Image #N, WxH]` marker. Group 1 is the
+ *  1-based index, group 2 the optional metadata tail (leading comma, no `]` or
+ *  newline) so future label tweaks keep matching. Paste markers are excluded
+ *  on purpose: their numbering is owned by the editor's paste store, not by
+ *  the pending-image buffer. */
+const IMAGE_MARKER_REGEX = /\[Image #([1-9]\d*)((?:,[^\]\n]*)?)\]/g;
+
+/** Renumber every `[Image #N]` marker in `text` by `offset` (added to the
+ *  existing index), preserving the optional `, WxH` tail. Paste markers are
+ *  left untouched. Used when restoring queued image-messages back into a draft
+ *  that already holds pending images so the merged text's positional markers
+ *  still line up with `pendingImages`. */
+export function shiftImageMarkers(text: string, offset: number): string {
+	if (offset === 0) return text;
+	return text.replace(
+		IMAGE_MARKER_REGEX,
+		(_match, idx: string, tail: string) => `[Image #${Number(idx) + offset}${tail}]`,
+	);
+}
+
 type ImageBlobWriter = (data: Buffer, options?: { extension?: string }) => Promise<BlobPutResult>;
 type ImageBlobWriterSync = (data: Buffer, options?: { extension?: string }) => BlobPutResult;
 

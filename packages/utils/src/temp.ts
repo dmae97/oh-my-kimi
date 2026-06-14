@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as fsPromises from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 
@@ -13,7 +14,7 @@ export class TempDir {
 	}
 
 	static async create(prefix?: string): Promise<TempDir> {
-		return new TempDir(await fs.promises.mkdtemp(normalizePrefix(prefix)));
+		return new TempDir(await fsPromises.mkdtemp(normalizePrefix(prefix)));
 	}
 
 	#removePromise: Promise<void> | null = null;
@@ -30,13 +31,13 @@ export class TempDir {
 		if (this.#removePromise) {
 			return this.#removePromise;
 		}
-		const removePromise = fs.promises.rm(this.#path, { recursive: true, force: true });
+		const removePromise = removeWithRetries(this.#path);
 		this.#removePromise = removePromise;
 		return removePromise;
 	}
 
 	removeSync(): void {
-		fs.rmSync(this.#path, { recursive: true, force: true });
+		removeSyncWithRetries(this.#path);
 		this.#removePromise = Promise.resolve();
 	}
 
@@ -74,4 +75,56 @@ function normalizePrefix(prefix?: string): string {
 		return path.join(kTempDir, prefix.slice(1));
 	}
 	return prefix;
+}
+
+const kRemoveOptions = { recursive: true, force: true } as const;
+const kRemoveRetries = 4;
+const kRemoveRetryDelayMs = 10;
+const kRetryableRemoveErrorCodes = new Set(["EBUSY", "EPERM", "ENOTEMPTY"]);
+const kSleepBuffer = new Int32Array(new SharedArrayBuffer(4));
+
+async function removeWithRetries(target: string): Promise<void> {
+	for (let attempt = 0; ; attempt++) {
+		try {
+			await fsPromises.rm(target, kRemoveOptions);
+			return;
+		} catch (err) {
+			if (!shouldRetryRemove(err, attempt)) throw err;
+			await Bun.sleep(kRemoveRetryDelayMs);
+		}
+	}
+}
+
+function removeSyncWithRetries(target: string): void {
+	for (let attempt = 0; ; attempt++) {
+		try {
+			fs.rmSync(target, kRemoveOptions);
+			return;
+		} catch (err) {
+			if (!shouldRetryRemove(err, attempt)) throw err;
+			sleepSync(kRemoveRetryDelayMs);
+		}
+	}
+}
+
+function shouldRetryRemove(err: unknown, attempt: number): boolean {
+	return attempt < kRemoveRetries && process.platform === "win32" && isRetryableRemoveError(err);
+}
+
+function isRetryableRemoveError(err: unknown): boolean {
+	return (
+		typeof err === "object" &&
+		err !== null &&
+		"code" in err &&
+		typeof err.code === "string" &&
+		kRetryableRemoveErrorCodes.has(err.code)
+	);
+}
+
+function sleepSync(ms: number): void {
+	if ("sleepSync" in Bun && typeof Bun.sleepSync === "function") {
+		Bun.sleepSync(ms);
+		return;
+	}
+	Atomics.wait(kSleepBuffer, 0, 0, ms);
 }

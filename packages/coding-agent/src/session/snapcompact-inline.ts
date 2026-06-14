@@ -32,6 +32,17 @@ export interface SnapcompactInlineOptions {
 	shape?: snapcompact.ShapeVariantName | "auto";
 }
 
+/**
+ * Reports the per-tool-result tokens kept off the wire when a swap is applied.
+ * `savedTokens` is `textTokens - frames * shape.frameTokenEstimate` for each
+ * imaged tool result (always > 0; the savings gate guarantees it). Wired to the
+ * append-only savings journal; never throws into the request path.
+ */
+export type SnapcompactSavingsSink = (
+	savings: ReadonlyArray<{ toolCallId: string; savedTokens: number }>,
+	model: Model,
+) => void;
+
 // Per-provider image-count budgets live in @oh-my-pi/snapcompact
 // (`providerImageBudget`): snapcompact frames are 1568px (<2000px) so
 // dimension/size limits never bind; only COUNT does. Once the budget is
@@ -398,7 +409,10 @@ export class SnapcompactInlineTransformer {
 	#toolCache = new Map<string, FrameCacheEntry>();
 	#systemCache?: FrameCacheEntry;
 
-	constructor(private readonly options: SnapcompactInlineOptions) {}
+	constructor(
+		private readonly options: SnapcompactInlineOptions,
+		private readonly onToolResultSavings?: SnapcompactSavingsSink,
+	) {}
 
 	transform(context: Context, model: Model): Context {
 		// Vision gate: providers silently DROP images on text-only models —
@@ -464,13 +478,19 @@ export class SnapcompactInlineTransformer {
 		});
 
 		let changed = false;
+		const savings: Array<{ toolCallId: string; savedTokens: number }> = [];
 		for (const swap of plan.toolResults) {
 			const target = targets.get(swap.id);
 			if (!target) continue;
 			const frames = this.#framesFor(this.#toolCache, swap.id, target.text, shape);
 			messages[target.index] = { ...target.message, content: [{ type: "text", text: toolResultNote }, ...frames] };
 			changed = true;
+			savings.push({
+				toolCallId: swap.id,
+				savedTokens: Math.max(0, swap.textTokens - swap.frames * shape.frameTokenEstimate),
+			});
 		}
+		if (savings.length > 0) this.onToolResultSavings?.(savings, model);
 		if (this.options.renderToolResults) {
 			// Drop cache entries for tool calls no longer in the context
 			// (compacted away) so the cache stays bounded by live history.

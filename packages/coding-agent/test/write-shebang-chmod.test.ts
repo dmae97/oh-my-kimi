@@ -57,9 +57,9 @@ describe("write tool shebang chmod", () => {
 		const stat = await fs.stat(filePath);
 		// All three execute bits flipped on (chmod a+x semantics).
 		expect(stat.mode & 0o111).toBe(0o111);
-		// Notice surfaces on details, not in the model-facing text.
+		// Notice remains model-facing so callers see that chmod changed the file mode.
 		expect(details(result).madeExecutable).toBe(true);
-		expect(resultText(result)).not.toContain("executable");
+		expect(resultText(result)).toContain("[Notice: Made executable via chmod +x]");
 	});
 
 	it("does not chmod files without a shebang", async () => {

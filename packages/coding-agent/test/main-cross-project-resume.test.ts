@@ -15,8 +15,11 @@ import * as path from "node:path";
 import type { Args } from "@oh-my-pi/pi-coding-agent/cli/args";
 import type { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createSessionManager } from "@oh-my-pi/pi-coding-agent/main";
-import type { SessionHeader, SessionInfo } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import * as sessionManagerModule from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import type { SessionHeader } from "@oh-my-pi/pi-coding-agent/session/session-entries";
+import type { SessionInfo } from "@oh-my-pi/pi-coding-agent/session/session-listing";
+import * as sessionListingModule from "@oh-my-pi/pi-coding-agent/session/session-listing";
+import { loadEntriesFromFile } from "@oh-my-pi/pi-coding-agent/session/session-loader";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 
 function buildArgs(resume: string, sessionDir?: string): Args {
 	return {
@@ -25,6 +28,7 @@ function buildArgs(resume: string, sessionDir?: string): Args {
 		messages: [],
 		fileArgs: [],
 		unknownFlags: new Map(),
+		unrecognizedFlags: [],
 	};
 }
 
@@ -63,7 +67,7 @@ describe("createSessionManager — cross-project --resume cancellation (#1668)",
 	});
 
 	it("returns undefined when an interactive user declines the fork prompt instead of throwing", async () => {
-		vi.spyOn(sessionManagerModule, "resolveResumableSession").mockResolvedValue(buildGlobalMatch(existingProject));
+		vi.spyOn(sessionListingModule, "resolveResumableSession").mockResolvedValue(buildGlobalMatch(existingProject));
 
 		const result = await createSessionManager(
 			buildArgs("019e84ed"),
@@ -79,7 +83,7 @@ describe("createSessionManager — cross-project --resume cancellation (#1668)",
 		const originalIsTTY = process.stdin.isTTY;
 		Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
 		try {
-			vi.spyOn(sessionManagerModule, "resolveResumableSession").mockResolvedValue(buildGlobalMatch(existingProject));
+			vi.spyOn(sessionListingModule, "resolveResumableSession").mockResolvedValue(buildGlobalMatch(existingProject));
 
 			await expect(createSessionManager(buildArgs("019e84ed"), "/current/project", stubSettings)).rejects.toThrow(
 				`Session "019e84ed" is in another project (${existingProject}); run interactively to fork it into the current project.`,
@@ -105,7 +109,7 @@ describe("createSessionManager — cross-project --resume relocation (moved work
 	});
 
 	it("offers move (not fork) and returns undefined when the user declines", async () => {
-		vi.spyOn(sessionManagerModule, "resolveResumableSession").mockResolvedValue(buildGlobalMatch(missingProject));
+		vi.spyOn(sessionListingModule, "resolveResumableSession").mockResolvedValue(buildGlobalMatch(missingProject));
 		expect(fs.existsSync(missingProject)).toBe(false);
 
 		const forkPrompt = vi.fn(async () => "accepted" as const);
@@ -126,7 +130,7 @@ describe("createSessionManager — cross-project --resume relocation (moved work
 		const originalIsTTY = process.stdin.isTTY;
 		Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
 		try {
-			vi.spyOn(sessionManagerModule, "resolveResumableSession").mockResolvedValue(buildGlobalMatch(missingProject));
+			vi.spyOn(sessionListingModule, "resolveResumableSession").mockResolvedValue(buildGlobalMatch(missingProject));
 
 			await expect(createSessionManager(buildArgs("019e84ed"), "/current/project", stubSettings)).rejects.toThrow(
 				`Session "019e84ed" belongs to a directory that no longer exists (${missingProject}); run interactively to move it into the current project.`,
@@ -141,7 +145,7 @@ describe("createSessionManager — cross-project --resume relocation (moved work
 		const explicitSessionDir = path.join(missingRoot, "sessions");
 		await fsp.mkdir(currentProject, { recursive: true });
 
-		const moved = sessionManagerModule.SessionManager.create(missingProject, explicitSessionDir);
+		const moved = SessionManager.create(missingProject, explicitSessionDir);
 		moved.appendMessage({ role: "user", content: "before local move", timestamp: 1 });
 		await moved.flush();
 		const oldFile = moved.getSessionFile();
@@ -161,7 +165,7 @@ describe("createSessionManager — cross-project --resume relocation (moved work
 		};
 		await moved.close();
 		expect(fs.existsSync(missingProject)).toBe(false);
-		vi.spyOn(sessionManagerModule, "resolveResumableSession").mockResolvedValue({
+		vi.spyOn(sessionListingModule, "resolveResumableSession").mockResolvedValue({
 			scope: "local",
 			session: sessionInfo,
 		});
@@ -180,7 +184,7 @@ describe("createSessionManager — cross-project --resume relocation (moved work
 		try {
 			expect(result.getSessionFile()).toBe(oldFile);
 			expect(result.getCwd()).toBe(path.resolve(currentProject));
-			const entries = await sessionManagerModule.loadEntriesFromFile(oldFile);
+			const entries = await loadEntriesFromFile(oldFile);
 			const header = entries.find(
 				(entry): entry is SessionHeader =>
 					typeof entry === "object" &&

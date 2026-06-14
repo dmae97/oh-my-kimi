@@ -40,20 +40,14 @@ class CloseHoldingStorage implements SessionStorage {
 		const inner = this.#inner.openWriter(path, options);
 		const gates = this.#closeGates;
 		return {
-			writeLine(line) {
-				return inner.writeLine(line);
-			},
-			writeLineSync(line) {
-				inner.writeLineSync(line);
+			append(line) {
+				return inner.append(line);
 			},
 			flush() {
 				return inner.flush();
 			},
-			fsync() {
-				return inner.fsync();
-			},
-			fsyncSync() {
-				inner.fsyncSync();
+			isOpen() {
+				return inner.isOpen();
 			},
 			async close() {
 				const gate = Promise.withResolvers<void>();
@@ -105,6 +99,9 @@ class CloseHoldingStorage implements SessionStorage {
 	}
 	writeText(p: string, content: string): Promise<void> {
 		return this.#inner.writeText(p, content);
+	}
+	writeTextAtomic(p: string, content: string): Promise<void> {
+		return this.#inner.writeTextAtomic(p, content);
 	}
 	rename(p: string, nextPath: string): Promise<void> {
 		return this.#inner.rename(p, nextPath);
@@ -206,6 +203,11 @@ describe("SessionManager close/appendMessage race", () => {
 				timestamp: Date.now(),
 			});
 		}).not.toThrow();
+
+		const sessionFile = sm.getSessionFile();
+		if (!sessionFile) throw new Error("Expected session file");
+		const duringCloseContent = await storage.readText(sessionFile);
+		expect(duringCloseContent).toContain('"content":"during-close"');
 
 		// Drain everything.
 		await settle(closePromise, storage);

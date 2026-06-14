@@ -341,6 +341,38 @@ describe("Agent", () => {
 		]);
 	});
 
+	it("drops queued forced toolChoice when the queued tool is not active", async () => {
+		const toolSchema = z.object({ value: z.string() });
+		type Details = { value: string };
+
+		const betaTool: AgentTool<typeof toolSchema, Details> = {
+			name: "beta",
+			label: "Beta",
+			description: "Beta tool",
+			parameters: toolSchema,
+			async execute(_toolCallId, params) {
+				return { content: [{ type: "text", text: `beta:${params.value}` }], details: { value: params.value } };
+			},
+		};
+
+		const mock = createMockModel({ responses: [{ content: ["done"] }] });
+		const agent = new Agent({
+			initialState: {
+				model: mock.model,
+				tools: [betaTool],
+				messages: [],
+			},
+			streamFn: mock.stream,
+			getToolChoice: () => ({ type: "function", name: "alpha" }),
+		});
+
+		await agent.prompt("refresh tools");
+
+		expect(mock.calls).toHaveLength(1);
+		expect(mock.calls[0]?.context.tools?.map(tool => tool.name)).toEqual(["beta"]);
+		expect(mock.calls[0]?.options?.toolChoice).toBeUndefined();
+	});
+
 	it("re-reads thinking level for each model call within a run", async () => {
 		const toolSchema = z.object({ value: z.string() });
 		type Details = { value: string };

@@ -46,6 +46,8 @@ MODELS = {
     "claude-fable-5": (10.0, 50.0),
     "claude-opus-4-8": (15.0, 75.0),
     "gpt-5.5": (2.0, 16.0),
+    "gpt-5.4-nano": (0.2, 1.25),
+    "gpt-5.4-mini": (0.75, 4.5),
     "google/gemini-3.5-flash": (0.6, 4.0),
     "moonshotai/kimi-k2.6": (0.68, 3.41),
     "z-ai/glm-4.6v": (0.30, 0.90),

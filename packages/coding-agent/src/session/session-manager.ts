@@ -1,319 +1,242 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type {
-	ImageContent,
-	Message,
-	MessageAttribution,
-	ProviderPayload,
-	ServiceTier,
-	TextContent,
-	Usage,
-} from "@oh-my-pi/pi-ai";
-import { getTerminalId } from "@oh-my-pi/pi-tui";
-import {
-	getBlobsDir,
-	getAgentDir as getDefaultAgentDir,
-	getProjectDir,
-	getSessionsDir,
-	getTerminalSessionsDir,
-	hasFsCode,
-	isEnoent,
-	logger,
-	parseJsonlLenient,
-	pathIsWithin,
-	resolveEquivalentPath,
-	Snowflake,
-	toError,
-} from "@oh-my-pi/pi-utils";
-import * as snapcompact from "@oh-my-pi/snapcompact";
+import type { ImageContent, Message, MessageAttribution, ServiceTier, TextContent, Usage } from "@oh-my-pi/pi-ai";
+import { getBlobsDir, getProjectDir, getSessionsDir, isEnoent, logger, toError } from "@oh-my-pi/pi-utils";
 import { ArtifactManager } from "./artifacts";
-import {
-	type BlobPutOptions,
-	type BlobPutResult,
-	BlobStore,
-	externalizeImageData,
-	externalizeImageDataSync,
-	externalizeImageDataUrl,
-	externalizeImageDataUrlSync,
-	isBlobRef,
-	isImageDataUrl,
-	resolveImageData,
-	resolveImageDataUrl,
-} from "./blob-store";
+import { type BlobPutOptions, type BlobPutResult, BlobStore } from "./blob-store";
 import {
 	type BashExecutionMessage,
 	type CustomMessage,
-	createBranchSummaryMessage,
-	createCompactionSummaryMessage,
-	createCustomMessage,
 	type FileMentionMessage,
 	type HookMessage,
 	type PythonExecutionMessage,
 	sanitizeRehydratedOpenAIResponsesAssistantMessage,
 	stripInternalDetailsFields,
 } from "./messages";
-import type { SessionStorage, SessionStorageWriter } from "./session-storage";
-import { FileSessionStorage, MemorySessionStorage } from "./session-storage";
+import { type BuildSessionContextOptions, buildSessionContext, type SessionContext } from "./session-context";
+import {
+	type BranchSummaryEntry,
+	type CompactionEntry,
+	CURRENT_SESSION_VERSION,
+	type CustomEntry,
+	type CustomMessageEntry,
+	type FileEntry,
+	type LabelEntry,
+	type MCPToolSelectionEntry,
+	type ModeChangeEntry,
+	type ModelChangeEntry,
+	type NewSessionOptions,
+	type ServiceTierChangeEntry,
+	type SessionEntry,
+	type SessionHeader,
+	type SessionInitEntry,
+	type SessionMessageEntry,
+	type SessionTreeNode,
+	type ThinkingLevelChangeEntry,
+	type TtsrInjectionEntry,
+	type UsageStatistics,
+} from "./session-entries";
+import { findMostRecentSession, listAllSessions, listSessions, type SessionInfo } from "./session-listing";
+import { loadEntriesFromFile, resolveBlobRefsInEntries } from "./session-loader";
+import { generateId, migrateToCurrentVersion } from "./session-migrations";
+import {
+	computeDefaultSessionDir,
+	readTerminalBreadcrumbEntry,
+	resolveManagedSessionRoot,
+	writeTerminalBreadcrumb,
+} from "./session-paths";
+import { prepareEntryForPersistence } from "./session-persistence";
+import {
+	FileSessionStorage,
+	MemorySessionStorage,
+	type SessionStorage,
+	type SessionStorageWriter,
+} from "./session-storage";
 
-export const CURRENT_SESSION_VERSION = 3;
+const JSONL_SUFFIX_LENGTH = ".jsonl".length;
 
-export interface SessionHeader {
-	type: "session";
-	version?: number; // v1 sessions don't have this
-	id: string;
-	title?: string; // Auto-generated title from first message
-	titleSource?: "auto" | "user";
-	timestamp: string;
-	cwd: string;
-	parentSession?: string;
+function mintSessionId(): string {
+	return Bun.randomUUIDv7();
 }
 
-export interface NewSessionOptions {
-	parentSession?: string;
-	/** Skip flushing the current session and delete it instead of saving. */
-	drop?: boolean;
+function nowIso(): string {
+	return new Date().toISOString();
 }
 
-export interface SessionEntryBase {
-	type: string;
-	id: string;
-	parentId: string | null;
-	timestamp: string;
+function fileSafeTimestamp(iso: string): string {
+	return iso.replace(/[:.]/g, "-");
 }
 
-export interface SessionMessageEntry extends SessionEntryBase {
-	type: "message";
-	message: AgentMessage;
+function artifactsDirectoryFor(sessionFile: string | undefined): string | null {
+	return sessionFile ? sessionFile.slice(0, -JSONL_SUFFIX_LENGTH) : null;
 }
 
-export interface ThinkingLevelChangeEntry extends SessionEntryBase {
-	type: "thinking_level_change";
-	thinkingLevel?: string | null;
+function emptyUsageStatistics(): UsageStatistics {
+	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, premiumRequests: 0, cost: 0 };
 }
 
-export interface ModelChangeEntry extends SessionEntryBase {
-	type: "model_change";
-	/** Model in "provider/modelId" format */
-	model: string;
-	/** Role: "default", "smol", "slow", etc. Undefined treated as "default" */
-	role?: string;
+function taskUsageFrom(details: unknown): Usage | undefined {
+	if (details === null || typeof details !== "object") return undefined;
+	const maybeUsage = (details as Record<string, unknown>).usage;
+	return maybeUsage !== null && typeof maybeUsage === "object" ? (maybeUsage as Usage) : undefined;
 }
 
-export interface ServiceTierChangeEntry extends SessionEntryBase {
-	type: "service_tier_change";
-	serviceTier: ServiceTier | null;
+function entryUsage(entry: SessionEntry): Usage | undefined {
+	if (entry.type !== "message") return undefined;
+	const message = entry.message;
+	if (message.role === "assistant") return message.usage;
+	if (message.role === "toolResult" && message.toolName === "task") return taskUsageFrom(message.details);
+	return undefined;
 }
 
-export interface CompactionEntry<T = unknown> extends SessionEntryBase {
-	type: "compaction";
-	summary: string;
-	shortSummary?: string;
-	firstKeptEntryId: string;
-	tokensBefore: number;
-	/** Extension-specific data (e.g., ArtifactIndex, version markers for structured compaction) */
-	details?: T;
-	/** Hook-provided data to persist across compaction */
-	preserveData?: Record<string, unknown>;
-	/** True if generated by an extension, undefined/false if pi-generated (backward compatible) */
-	fromExtension?: boolean;
+function addUsage(target: UsageStatistics, usage: Usage | undefined): void {
+	if (!usage) return;
+	target.input += usage.input;
+	target.output += usage.output;
+	target.cacheRead += usage.cacheRead;
+	target.cacheWrite += usage.cacheWrite;
+	target.premiumRequests += usage.premiumRequests ?? 0;
+	target.cost += usage.cost.total;
 }
 
-export interface BranchSummaryEntry<T = unknown> extends SessionEntryBase {
-	type: "branch_summary";
-	fromId: string;
-	summary: string;
-	/** Extension-specific data (not sent to LLM) */
-	details?: T;
-	/** True if generated by an extension, false if pi-generated */
-	fromExtension?: boolean;
+function isAssistantEntry(entry: SessionEntry): boolean {
+	return entry.type === "message" && entry.message.role === "assistant";
 }
 
-/**
- * Custom entry for extensions to store extension-specific data in the session.
- * Use customType to identify your extension's entries.
- *
- * Purpose: Persist extension state across session reloads. On reload, extensions can
- * scan entries for their customType and reconstruct internal state.
- *
- * Does NOT participate in LLM context (ignored by buildSessionContext).
- * For injecting content into context, see CustomMessageEntry.
- */
-export interface CustomEntry<T = unknown> extends SessionEntryBase {
-	type: "custom";
-	customType: string;
-	data?: T;
-}
-
-/** Label entry for user-defined bookmarks/markers on entries. */
-export interface LabelEntry extends SessionEntryBase {
-	type: "label";
-	targetId: string;
-	label: string | undefined;
-}
-
-/** TTSR injection entry - tracks which time-traveling rules have been injected this session. */
-export interface TtsrInjectionEntry extends SessionEntryBase {
-	type: "ttsr_injection";
-	/** Names of rules that were injected */
-	injectedRules: string[];
-}
-
-/** Persisted MCP discovery selection state for a session branch. */
-export interface MCPToolSelectionEntry extends SessionEntryBase {
-	type: "mcp_tool_selection";
-	/** MCP tool names selected for visibility in discovery mode. */
-	selectedToolNames: string[];
-}
-
-/** Session init entry - captures initial context for subagent sessions (debugging/replay). */
-export interface SessionInitEntry extends SessionEntryBase {
-	type: "session_init";
-	/** Full system prompt sent to the model */
-	systemPrompt: string;
-	/** Initial task/user message */
-	task: string;
-	/** Tools available to the agent */
-	tools: string[];
-	/** Output schema if structured output was requested */
-	outputSchema?: unknown;
-}
-
-/** Mode change entry - tracks agent mode transitions (e.g. plan mode). */
-export interface ModeChangeEntry extends SessionEntryBase {
-	type: "mode_change";
-	/** Current mode name, or "none" when exiting a mode */
-	mode: string;
-	/** Optional mode-specific data (e.g. plan file path) */
-	data?: Record<string, unknown>;
+function orderedByTimestamp(a: SessionTreeNode, b: SessionTreeNode): number {
+	return new Date(a.entry.timestamp).getTime() - new Date(b.entry.timestamp).getTime();
 }
 
 /**
- * Custom message entry for extensions to inject messages into LLM context.
- * Use customType to identify your extension's entries.
- *
- * Unlike CustomEntry, this DOES participate in LLM context.
- * The content participates in LLM context through convertToLlm().
- * Use details for extension-specific metadata (not sent to LLM).
- *
- * display controls TUI rendering:
- * - false: hidden entirely
- * - true: rendered with distinct styling (different from user messages)
+ * Maintains the derived views over a session's entry list: id lookup, the
+ * parent→children adjacency, the resolved label map, the active leaf, and the
+ * running usage totals. Kept in lockstep with the manager's `#entries` so reads
+ * stay O(1)/O(children) instead of rescanning the whole journal.
  */
-export interface CustomMessageEntry<T = unknown> extends SessionEntryBase {
-	type: "custom_message";
-	customType: string;
-	content: string | (TextContent | ImageContent)[];
-	details?: T;
-	display: boolean;
-	/** Who initiated this message for billing/attribution semantics. */
-	attribution?: MessageAttribution;
-}
+class SessionEntryIndex {
+	#entriesById = new Map<string, SessionEntry>();
+	#children = new Map<string | null, SessionEntry[]>();
+	#labels = new Map<string, string>();
+	#leaf: string | null = null;
+	#usage = emptyUsageStatistics();
 
-/** Session entry - has id/parentId for tree structure (returned by "read" methods in SessionManager) */
-export type SessionEntry =
-	| SessionMessageEntry
-	| ThinkingLevelChangeEntry
-	| ModelChangeEntry
-	| ServiceTierChangeEntry
-	| CompactionEntry
-	| BranchSummaryEntry
-	| CustomEntry
-	| CustomMessageEntry
-	| LabelEntry
-	| TtsrInjectionEntry
-	| MCPToolSelectionEntry
-	| SessionInitEntry
-	| ModeChangeEntry;
-
-/** Raw file entry (includes header) */
-export type FileEntry = SessionHeader | SessionEntry;
-
-/** Tree node for getTree() - defensive copy of session structure */
-export interface SessionTreeNode {
-	entry: SessionEntry;
-	children: SessionTreeNode[];
-	/** Resolved label for this entry, if any */
-	label?: string;
-}
-
-export interface SessionContext {
-	messages: AgentMessage[];
-	thinkingLevel?: string;
-	serviceTier?: ServiceTier;
-	/** Model roles: { default: "provider/modelId", small: "provider/modelId", ... } */
-	models: Record<string, string>;
-	/** Names of TTSR rules that have been injected this session */
-	injectedTtsrRules: string[];
-	/** MCP tool names selected through discovery for this session branch. */
-	selectedMCPToolNames: string[];
-	/** Whether this branch contains an explicit persisted MCP selection entry. */
-	hasPersistedMCPToolSelection: boolean;
-	/** Active mode (e.g. "plan") or "none" if no special mode is active */
-	mode: string;
-	/** Mode-specific data from the last mode_change entry */
-	modeData?: Record<string, unknown>;
-}
-
-export const EPHEMERAL_MODEL_CHANGE_ROLE = "fallback";
-
-/** Lists session model strings to try when restoring, in fallback order. */
-export function getRestorableSessionModels(
-	models: Readonly<Record<string, string>>,
-	lastModelChangeRole: string | undefined,
-): string[] {
-	const defaultModel = models.default;
-	if (
-		!lastModelChangeRole ||
-		lastModelChangeRole === "default" ||
-		lastModelChangeRole === EPHEMERAL_MODEL_CHANGE_ROLE
-	) {
-		return defaultModel ? [defaultModel] : [];
+	clear(): void {
+		this.#entriesById.clear();
+		this.#children.clear();
+		this.#labels.clear();
+		this.#leaf = null;
+		this.#usage = emptyUsageStatistics();
 	}
 
-	const roleModel = models[lastModelChangeRole];
-	if (!roleModel) return defaultModel ? [defaultModel] : [];
-	if (!defaultModel || roleModel === defaultModel) return [roleModel];
-	return [roleModel, defaultModel];
-}
+	rebuild(entries: readonly SessionEntry[]): void {
+		this.clear();
+		for (const entry of entries) this.insert(entry);
+	}
 
-/**
- * Coarse lifecycle status of a session, derived from its last persisted message.
- *
- * - `complete` — the last assistant turn ended with no unanswered tool calls, i.e.
- *   the agent yielded control back to the user.
- * - `interrupted` — work was cut off mid-flight: a trailing assistant turn with
- *   pending tool calls, a trailing tool result the agent never continued from, or
- *   a length-truncated turn.
- * - `aborted` — the last assistant turn was cancelled by the user.
- * - `error` — the last assistant turn ended in an error.
- * - `pending` — a trailing user message with no assistant reply persisted after it.
- * - `unknown` — status could not be determined (empty/header-only session, or the
- *   final message was larger than the tail window that was read).
- */
-export type SessionStatus = "complete" | "interrupted" | "aborted" | "error" | "pending" | "unknown";
+	insert(entry: SessionEntry): void {
+		this.#entriesById.set(entry.id, entry);
+		this.#leaf = entry.id;
 
-export interface SessionInfo {
-	path: string;
-	id: string;
-	/** Working directory where the session was started. Empty string for old sessions. */
-	cwd: string;
-	title?: string;
-	/** Path to the parent session (if this session was forked). */
-	parentSessionPath?: string;
-	created: Date;
-	modified: Date;
-	messageCount: number;
-	/** File size in bytes on disk; used for compact list rendering. */
-	size: number;
-	firstMessage: string;
-	allMessagesText: string;
+		const bucket = this.#children.get(entry.parentId);
+		if (bucket) bucket.push(entry);
+		else this.#children.set(entry.parentId, [entry]);
+
+		if (entry.type === "label") {
+			if (entry.label) this.#labels.set(entry.targetId, entry.label);
+			else this.#labels.delete(entry.targetId);
+		}
+
+		addUsage(this.#usage, entryUsage(entry));
+	}
+
+	has(id: string): boolean {
+		return this.#entriesById.has(id);
+	}
+
+	get(id: string): SessionEntry | undefined {
+		return this.#entriesById.get(id);
+	}
+
 	/**
-	 * Coarse lifecycle status from the session's last persisted message. Optional:
-	 * synthesized {@link SessionInfo}s (cross-project stubs, tests) leave it unset.
+	 * The live id→entry map. Read-only for callers (lookups + `generateId`
+	 * collision checks); never mutate it directly — go through `insert`/`rebuild`.
 	 */
-	status?: SessionStatus;
+	entriesById(): Map<string, SessionEntry> {
+		return this.#entriesById;
+	}
+
+	leafId(): string | null {
+		return this.#leaf;
+	}
+
+	leafEntry(): SessionEntry | undefined {
+		return this.#leaf ? this.#entriesById.get(this.#leaf) : undefined;
+	}
+
+	setLeaf(id: string | null): void {
+		this.#leaf = id;
+	}
+
+	childrenOf(parentId: string): SessionEntry[] {
+		return [...(this.#children.get(parentId) ?? [])];
+	}
+
+	labelFor(id: string): string | undefined {
+		return this.#labels.get(id);
+	}
+
+	labelsInEffect(): IterableIterator<[string, string]> {
+		return this.#labels.entries();
+	}
+
+	usageSnapshot(): UsageStatistics {
+		return { ...this.#usage };
+	}
+
+	pathTo(id: string | null | undefined = this.#leaf): SessionEntry[] {
+		const branch: SessionEntry[] = [];
+		const seen = new Set<string>();
+		let cursor = id ? this.#entriesById.get(id) : undefined;
+
+		while (cursor && !seen.has(cursor.id)) {
+			seen.add(cursor.id);
+			branch.unshift(cursor);
+			cursor = cursor.parentId ? this.#entriesById.get(cursor.parentId) : undefined;
+		}
+
+		return branch;
+	}
+
+	tree(entries: readonly SessionEntry[]): SessionTreeNode[] {
+		const nodes = new Map<string, SessionTreeNode>();
+		const roots: SessionTreeNode[] = [];
+
+		for (const entry of entries) {
+			nodes.set(entry.id, { entry, children: [], label: this.#labels.get(entry.id) });
+		}
+
+		for (const entry of entries) {
+			const node = nodes.get(entry.id)!;
+			const parentId = entry.parentId;
+			if (parentId === null || parentId === entry.id) {
+				roots.push(node);
+				continue;
+			}
+
+			const parent = nodes.get(parentId);
+			if (parent) parent.children.push(node);
+			else roots.push(node);
+		}
+
+		const stack = [...roots];
+		while (stack.length > 0) {
+			const node = stack.pop()!;
+			node.children.sort(orderedByTimestamp);
+			stack.push(...node.children);
+		}
+
+		return roots;
+	}
 }
 
 export type ReadonlySessionManager = Pick<
@@ -341,1646 +264,6 @@ export type ReadonlySessionManager = Pick<
 	| "putBlobSync"
 >;
 
-function createSessionId(): string {
-	return Bun.randomUUIDv7();
-}
-
-/** Generate a unique short ID (8 hex chars, collision-checked) */
-function generateId(byId: { has(id: string): boolean }): string {
-	for (let i = 0; i < 100; i++) {
-		const id = crypto.randomUUID().slice(-8);
-		if (!byId.has(id)) return id;
-	}
-	return Snowflake.next(); // fallback to full snowflake id
-}
-
-/** Migrate v1 → v2: add id/parentId tree structure. Mutates in place. */
-function migrateV1ToV2(entries: FileEntry[]): void {
-	const ids = new Set<string>();
-	let prevId: string | null = null;
-
-	for (const entry of entries) {
-		if (entry.type === "session") {
-			entry.version = 2;
-			continue;
-		}
-
-		entry.id = generateId(ids);
-		entry.parentId = prevId;
-		prevId = entry.id;
-
-		// Convert firstKeptEntryIndex to firstKeptEntryId for compaction
-		if (entry.type === "compaction") {
-			const comp = entry as CompactionEntry & { firstKeptEntryIndex?: number };
-			if (typeof comp.firstKeptEntryIndex === "number") {
-				const targetEntry = entries[comp.firstKeptEntryIndex];
-				if (targetEntry && targetEntry.type !== "session") {
-					comp.firstKeptEntryId = targetEntry.id;
-				}
-				delete comp.firstKeptEntryIndex;
-			}
-		}
-	}
-}
-
-/** Migrate v2 → v3: rename hookMessage role to custom. Mutates in place. */
-function migrateV2ToV3(entries: FileEntry[]): void {
-	for (const entry of entries) {
-		if (entry.type === "session") {
-			entry.version = 3;
-			continue;
-		}
-
-		if (entry.type === "message") {
-			const msg = entry.message as { role?: string };
-			if (msg.role === "hookMessage") {
-				(entry.message as { role: string }).role = "custom";
-			}
-		}
-	}
-}
-
-/**
- * Run all necessary migrations to bring entries to current version.
- * Mutates entries in place. Returns true if any migration was applied.
- */
-function migrateToCurrentVersion(entries: FileEntry[]): boolean {
-	const header = entries.find(e => e.type === "session") as SessionHeader | undefined;
-	const version = header?.version ?? 1;
-
-	if (version >= CURRENT_SESSION_VERSION) return false;
-
-	if (version < 2) migrateV1ToV2(entries);
-	if (version < 3) migrateV2ToV3(entries);
-
-	return true;
-}
-
-/** Exported for testing */
-export function migrateSessionEntries(entries: FileEntry[]): void {
-	migrateToCurrentVersion(entries);
-}
-
-const migratedSessionRoots = new Set<string>();
-
-/**
- * Merge or rename a legacy session directory into its canonical target.
- * Best effort: callers decide whether migration failures should surface.
- */
-function migrateSessionDirPath(oldPath: string, newPath: string): void {
-	const existing = fs.statSync(newPath, { throwIfNoEntry: false });
-	if (existing?.isDirectory()) {
-		for (const file of fs.readdirSync(oldPath)) {
-			const src = path.join(oldPath, file);
-			const dst = path.join(newPath, file);
-			if (!fs.existsSync(dst)) {
-				fs.renameSync(src, dst);
-			}
-		}
-		fs.rmSync(oldPath, { recursive: true, force: true });
-		return;
-	}
-	if (existing) {
-		fs.rmSync(newPath, { recursive: true, force: true });
-	}
-	fs.renameSync(oldPath, newPath);
-}
-
-function encodeLegacyAbsoluteSessionDirName(cwd: string): string {
-	const resolvedCwd = path.resolve(cwd);
-	return `--${resolvedCwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
-}
-
-function encodeRelativeSessionDirName(prefix: string, root: string, cwd: string): string {
-	const relative = path.relative(root, cwd).replace(/[/\\:]/g, "-");
-	return relative ? (prefix.endsWith("-") ? `${prefix}${relative}` : `${prefix}-${relative}`) : prefix;
-}
-
-function getDefaultSessionDirName(cwd: string): { encodedDirName: string; resolvedCwd: string } {
-	const resolvedCwd = path.resolve(cwd);
-	const canonicalCwd = resolveEquivalentPath(resolvedCwd);
-	const home = resolveEquivalentPath(os.homedir());
-	const tempRoot = resolveEquivalentPath(os.tmpdir());
-	const encodedDirName = pathIsWithin(home, canonicalCwd)
-		? encodeRelativeSessionDirName("-", home, canonicalCwd)
-		: pathIsWithin(tempRoot, canonicalCwd)
-			? encodeRelativeSessionDirName("-tmp", tempRoot, canonicalCwd)
-			: encodeLegacyAbsoluteSessionDirName(canonicalCwd);
-	return { encodedDirName, resolvedCwd };
-}
-
-/**
- * Migrate old `--<home-encoded>-*--` session dirs to the new `-*` format.
- * Runs once per sessions root on first access, best-effort.
- */
-function migrateHomeSessionDirs(sessionsRoot: string): void {
-	if (migratedSessionRoots.has(sessionsRoot)) return;
-	migratedSessionRoots.add(sessionsRoot);
-
-	const home = os.homedir();
-	const homeEncoded = home.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-");
-	const oldPrefix = `--${homeEncoded}-`;
-	const oldExact = `--${homeEncoded}--`;
-
-	let entries: string[];
-	try {
-		entries = fs.readdirSync(sessionsRoot);
-	} catch {
-		return;
-	}
-
-	for (const entry of entries) {
-		let remainder: string;
-		if (entry === oldExact) {
-			remainder = "";
-		} else if (entry.startsWith(oldPrefix) && entry.endsWith("--")) {
-			remainder = entry.slice(oldPrefix.length, -2);
-		} else {
-			continue;
-		}
-
-		const newName = remainder ? `-${remainder}` : "-";
-		const oldPath = path.join(sessionsRoot, entry);
-		const newPath = path.join(sessionsRoot, newName);
-
-		try {
-			migrateSessionDirPath(oldPath, newPath);
-		} catch {
-			// Best effort
-		}
-	}
-}
-
-function migrateLegacyAbsoluteSessionDir(cwd: string, sessionDir: string, sessionsRoot: string): void {
-	const legacyDir = path.join(sessionsRoot, encodeLegacyAbsoluteSessionDirName(cwd));
-	if (legacyDir === sessionDir || !fs.existsSync(legacyDir)) return;
-
-	try {
-		migrateSessionDirPath(legacyDir, sessionDir);
-	} catch {
-		// Best effort
-	}
-}
-
-function resolveManagedSessionRoot(sessionDir: string, cwd: string): string | undefined {
-	const currentDirName = path.basename(sessionDir);
-	const { encodedDirName } = getDefaultSessionDirName(cwd);
-	if (currentDirName !== encodedDirName && currentDirName !== encodeLegacyAbsoluteSessionDirName(cwd)) {
-		return undefined;
-	}
-	return path.dirname(sessionDir);
-}
-
-/** Exported for compaction.test.ts */
-export function parseSessionEntries(content: string): FileEntry[] {
-	return parseJsonlLenient<FileEntry>(content);
-}
-
-export function getLatestCompactionEntry(entries: SessionEntry[]): CompactionEntry | null {
-	for (let i = entries.length - 1; i >= 0; i--) {
-		if (entries[i].type === "compaction") {
-			return entries[i] as CompactionEntry;
-		}
-	}
-	return null;
-}
-
-export interface BuildSessionContextOptions {
-	/**
-	 * Build the full-history display transcript instead of the LLM context:
-	 * every path entry in chronological order, with each compaction emitted
-	 * inline as a `compactionSummary` message at the position it fired rather
-	 * than replacing the history before it. Display-only — never send the
-	 * result to a provider.
-	 */
-	transcript?: boolean;
-}
-
-/**
- * Build the session context from entries using tree traversal.
- * If leafId is provided, walks from that entry to root.
- * Handles compaction and branch summaries along the path.
- */
-export function buildSessionContext(
-	entries: SessionEntry[],
-	leafId?: string | null,
-	byId?: Map<string, SessionEntry>,
-	options?: BuildSessionContextOptions,
-): SessionContext {
-	// Build uuid index if not available
-	if (!byId) {
-		byId = new Map<string, SessionEntry>();
-		for (const entry of entries) {
-			byId.set(entry.id, entry);
-		}
-	}
-
-	// Find leaf
-	let leaf: SessionEntry | undefined;
-	if (leafId === null) {
-		// Explicitly null - return no messages (navigated to before first entry)
-		return {
-			messages: [],
-			thinkingLevel: "off",
-			serviceTier: undefined,
-			models: {},
-			injectedTtsrRules: [],
-			selectedMCPToolNames: [],
-			hasPersistedMCPToolSelection: false,
-			mode: "none",
-		};
-	}
-	if (leafId) {
-		leaf = byId.get(leafId);
-	}
-	if (!leaf) {
-		// Fallback to last entry (when leafId is undefined)
-		leaf = entries[entries.length - 1];
-	}
-
-	if (!leaf) {
-		return {
-			messages: [],
-			thinkingLevel: "off",
-			serviceTier: undefined,
-			models: {},
-			injectedTtsrRules: [],
-			selectedMCPToolNames: [],
-			hasPersistedMCPToolSelection: false,
-			mode: "none",
-		};
-	}
-
-	// Walk from leaf to root, collecting path
-	const path: SessionEntry[] = [];
-	let current: SessionEntry | undefined = leaf;
-	while (current) {
-		path.unshift(current);
-		current = current.parentId ? byId.get(current.parentId) : undefined;
-	}
-
-	// Extract settings and find compaction
-	let thinkingLevel: string | undefined = "off";
-	let serviceTier: ServiceTier | undefined;
-	const models: Record<string, string> = {};
-	let compaction: CompactionEntry | null = null;
-	const injectedTtsrRulesSet = new Set<string>();
-	let selectedMCPToolNames: string[] = [];
-	let hasPersistedMCPToolSelection = false;
-	let mode = "none";
-	let modeData: Record<string, unknown> | undefined;
-	// Track whether an explicit `model_change` with role="default" has been
-	// seen on this path. Once a user (or the agent itself) records an
-	// explicit default, later assistant-message inference must NOT overwrite
-	// it: temporary fallbacks (retry fallback, context promotion) and
-	// server-side model downgrades both produce assistant messages tagged
-	// with the wrong model id, which previously clobbered the user's pick on
-	// resume (issue #849).
-	let hasExplicitDefaultModel = false;
-
-	for (const entry of path) {
-		if (entry.type === "thinking_level_change") {
-			thinkingLevel = entry.thinkingLevel ?? "off";
-		} else if (entry.type === "model_change") {
-			// New format: { model: "provider/id", role?: string }
-			if (entry.model) {
-				const role = entry.role ?? "default";
-				models[role] = entry.model;
-				if (role === "default") {
-					hasExplicitDefaultModel = true;
-				}
-			}
-		} else if (entry.type === "service_tier_change") {
-			serviceTier = entry.serviceTier ?? undefined;
-		} else if (entry.type === "message" && entry.message.role === "assistant") {
-			// Legacy fallback: infer default model from assistant messages only
-			// when no explicit `model_change` (role=default) entry has been
-			// recorded yet. Newer sessions always record an explicit default
-			// model_change at the start of the conversation, so this branch is
-			// only used to keep pre-model_change sessions working.
-			if (!hasExplicitDefaultModel) {
-				models.default = `${entry.message.provider}/${entry.message.model}`;
-			}
-		} else if (entry.type === "compaction") {
-			compaction = entry;
-		} else if (entry.type === "ttsr_injection") {
-			// Collect injected TTSR rule names
-			for (const ruleName of entry.injectedRules) {
-				injectedTtsrRulesSet.add(ruleName);
-			}
-		} else if (entry.type === "mcp_tool_selection") {
-			selectedMCPToolNames = [...entry.selectedToolNames];
-			hasPersistedMCPToolSelection = true;
-		} else if (entry.type === "mode_change") {
-			mode = entry.mode;
-			modeData = entry.data;
-		}
-	}
-
-	const injectedTtsrRules = Array.from(injectedTtsrRulesSet);
-
-	// Build messages and collect corresponding entries
-	// When there's a compaction, we need to:
-	// 1. Emit summary first (entry = compaction)
-	// 2. Emit kept messages (from firstKeptEntryId up to compaction)
-	// 3. Emit messages after compaction
-	const messages: AgentMessage[] = [];
-
-	const appendMessage = (entry: SessionEntry) => {
-		if (entry.type === "message") {
-			messages.push(entry.message);
-		} else if (entry.type === "custom_message") {
-			messages.push(
-				createCustomMessage(
-					entry.customType,
-					entry.content,
-					entry.display,
-					entry.details,
-					entry.timestamp,
-					entry.attribution,
-				),
-			);
-		} else if (entry.type === "branch_summary" && entry.summary) {
-			messages.push(createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp));
-		}
-	};
-
-	if (options?.transcript) {
-		// Display transcript: every entry in chronological order. Compactions do
-		// not erase prior history here — each renders inline (as a divider in the
-		// TUI) at the point it fired, with any snapcompact frames re-attached so
-		// the component can report them.
-		for (const entry of path) {
-			if (entry.type === "compaction") {
-				const snapcompactArchive = snapcompact.getPreservedArchive(entry.preserveData);
-				messages.push(
-					createCompactionSummaryMessage(
-						entry.summary,
-						entry.tokensBefore,
-						entry.timestamp,
-						entry.shortSummary,
-						undefined,
-						snapcompactArchive ? snapcompact.images(snapcompactArchive) : undefined,
-					),
-				);
-			} else {
-				appendMessage(entry);
-			}
-		}
-	} else if (compaction) {
-		const providerPayload: ProviderPayload | undefined = (() => {
-			const candidate = compaction.preserveData?.openaiRemoteCompaction;
-			if (!candidate || typeof candidate !== "object") return undefined;
-			const remote = candidate as { provider?: unknown; replacementHistory?: unknown };
-			if (typeof remote.provider !== "string" || remote.provider.length === 0) return undefined;
-			if (!Array.isArray(remote.replacementHistory)) return undefined;
-			return {
-				type: "openaiResponsesHistory",
-				provider: remote.provider,
-				items: remote.replacementHistory as Array<Record<string, unknown>>,
-			};
-		})();
-		const remoteReplacementHistory = providerPayload?.items;
-
-		// Emit summary first; re-attach any archived snapcompact frames so the
-		// model can keep reading the archived history after every context rebuild.
-		const snapcompactArchive = snapcompact.getPreservedArchive(compaction.preserveData);
-		messages.push(
-			createCompactionSummaryMessage(
-				compaction.summary,
-				compaction.tokensBefore,
-				compaction.timestamp,
-				compaction.shortSummary,
-				providerPayload,
-				snapcompactArchive ? snapcompact.images(snapcompactArchive) : undefined,
-			),
-		);
-
-		// Find compaction index in path
-		const compactionIdx = path.findIndex(e => e.type === "compaction" && e.id === compaction.id);
-
-		if (!remoteReplacementHistory) {
-			// Emit kept messages (before compaction, starting from firstKeptEntryId)
-			let foundFirstKept = false;
-			for (let i = 0; i < compactionIdx; i++) {
-				const entry = path[i];
-				if (entry.id === compaction.firstKeptEntryId) {
-					foundFirstKept = true;
-				}
-				if (foundFirstKept) {
-					appendMessage(entry);
-				}
-			}
-		}
-
-		// Emit messages after compaction
-		for (let i = compactionIdx + 1; i < path.length; i++) {
-			const entry = path[i];
-			appendMessage(entry);
-		}
-	} else {
-		// No compaction - emit all messages, handle branch summaries and custom messages
-		for (const entry of path) {
-			appendMessage(entry);
-		}
-	}
-
-	// Strip dangling tool_use blocks — a tool_use with no matching tool_result on the
-	// resolved leaf→root path — from ANY assistant turn, not just the trailing one.
-	// This happens whenever the leaf (or a branch point) lands such that an assistant
-	// turn's tool results are off the selected path: its result children live on a
-	// sibling branch, or it is the leaf itself (results are children below it). Left
-	// in place, `transformMessages` fabricates one synthetic "aborted"/"No result
-	// provided" result per dangling call, which render as phantom failed calls and
-	// re-inject the failed batch into the model's
-	// context — the rewind/restore loop.
-	//
-	// Stripping is necessary but not sufficient: a *modified* assistant turn that still
-	// carries signed `thinking`/`redacted_thinking` is rejected by Anthropic — "thinking
-	// blocks in the latest assistant message cannot be modified", and signed thinking
-	// replayed out of its original turn shape can also fail signature validation (this
-	// bites the handoff/branch-summary request). So when we rewrite a turn we also
-	// neutralize its protected reasoning: drop `redactedThinking` (encrypted, no
-	// plaintext to keep) and clear `thinking` signatures so the provider encoder
-	// downgrades them to plain text (verified accepted by the live API), preserving the
-	// visible reasoning while removing the immutability/invalid-signature hazard. Drop a
-	// turn left with no content. (Live turns never qualify: their results are persisted
-	// on the same path before any context rebuild.)
-	const pairedToolResultIds = new Set<string>();
-	for (const message of messages) {
-		if (message.role === "toolResult") pairedToolResultIds.add(message.toolCallId);
-	}
-	for (let i = messages.length - 1; i >= 0; i--) {
-		const message = messages[i];
-		if (message.role !== "assistant") continue;
-		const hasDangling = message.content.some(
-			block => block.type === "toolCall" && !pairedToolResultIds.has(block.id),
-		);
-		if (!hasDangling) continue;
-		const normalized = message.content
-			.filter(
-				block =>
-					!(block.type === "toolCall" && !pairedToolResultIds.has(block.id)) && block.type !== "redactedThinking",
-			)
-			.map(block =>
-				block.type === "thinking" && block.thinkingSignature ? { ...block, thinkingSignature: undefined } : block,
-			);
-		if (normalized.length === 0) {
-			messages.splice(i, 1);
-		} else {
-			messages[i] = { ...message, content: normalized };
-		}
-	}
-
-	return {
-		messages,
-		thinkingLevel,
-		serviceTier,
-		models,
-		injectedTtsrRules,
-		selectedMCPToolNames,
-		hasPersistedMCPToolSelection,
-		mode,
-		modeData,
-	};
-}
-
-/**
- * Compute the default session directory for a cwd.
- * Classifies cwd by canonical location so symlink/alias paths resolve to the
- * same home-relative or temp-root directory names as their real targets.
- */
-function computeDefaultSessionDir(
-	cwd: string,
-	storage: SessionStorage,
-	sessionsRoot: string = getSessionsDir(),
-): string {
-	const { encodedDirName, resolvedCwd } = getDefaultSessionDirName(cwd);
-	migrateHomeSessionDirs(sessionsRoot);
-	const sessionDir = path.join(sessionsRoot, encodedDirName);
-	migrateLegacyAbsoluteSessionDir(resolvedCwd, sessionDir, sessionsRoot);
-	storage.ensureDirSync(sessionDir);
-	return sessionDir;
-}
-
-// =============================================================================
-// Terminal breadcrumbs: maps terminal (TTY) -> last session file for --continue
-// =============================================================================
-
-/**
- * Write a breadcrumb linking the current terminal to a session file.
- * The breadcrumb contains the cwd and session path so --continue can
- * find "this terminal's last session" even when running concurrent instances.
- */
-function writeTerminalBreadcrumb(cwd: string, sessionFile: string): void {
-	const terminalId = getTerminalId();
-	if (!terminalId) return;
-
-	const breadcrumbDir = getTerminalSessionsDir();
-	const breadcrumbFile = path.join(breadcrumbDir, terminalId);
-	const content = `${cwd}\n${sessionFile}\n`;
-	// Best-effort — don't break session creation if breadcrumb fails
-	Bun.write(breadcrumbFile, content).catch(() => {});
-}
-
-interface TerminalBreadcrumb {
-	cwd: string;
-	sessionFile: string;
-}
-
-/**
- * Read the raw terminal breadcrumb for the current terminal.
- * Returns the recorded cwd + session file (verified to exist) regardless of
- * whether the recorded cwd still matches the current one. Callers decide how
- * to interpret a cwd mismatch (e.g. a moved/renamed worktree).
- */
-async function readTerminalBreadcrumbEntry(): Promise<TerminalBreadcrumb | null> {
-	const terminalId = getTerminalId();
-	if (!terminalId) return null;
-
-	try {
-		const breadcrumbFile = path.join(getTerminalSessionsDir(), terminalId);
-		const content = await Bun.file(breadcrumbFile).text();
-		const lines = content.trim().split("\n");
-		if (lines.length < 2) return null;
-
-		const breadcrumbCwd = lines[0];
-		const sessionFile = lines[1];
-
-		// Verify the session file still exists
-		const stat = fs.statSync(sessionFile, { throwIfNoEntry: false });
-		if (stat?.isFile()) return { cwd: breadcrumbCwd, sessionFile };
-	} catch (err) {
-		if (!isEnoent(err)) logger.debug("Terminal breadcrumb read failed", { err });
-		// Breadcrumb doesn't exist or is corrupt — fall through
-	}
-	return null;
-}
-
-/** Exported for testing */
-export async function loadEntriesFromFile(
-	filePath: string,
-	storage: SessionStorage = new FileSessionStorage(),
-): Promise<FileEntry[]> {
-	let content: string;
-	try {
-		content = await storage.readText(filePath);
-	} catch (err) {
-		if (isEnoent(err)) return [];
-		throw err;
-	}
-	const entries = parseJsonlLenient<FileEntry>(content);
-
-	// Validate session header
-	if (entries.length === 0) return entries;
-	const header = entries[0] as SessionHeader;
-	if (header.type !== "session" || typeof header.id !== "string") {
-		return [];
-	}
-
-	return entries;
-}
-
-/**
- * Resolve blob references in loaded entries, restoring both session image blocks and persisted
- * provider image URLs back to the inline data expected by downstream transports. Mutates entries in place.
- */
-function hasImageUrl(value: unknown): value is { image_url: string } {
-	return typeof value === "object" && value !== null && "image_url" in value && typeof value.image_url === "string";
-}
-
-async function resolvePersistedImageUrlRefs(value: unknown, blobStore: BlobStore): Promise<void> {
-	if (Array.isArray(value)) {
-		await Promise.all(value.map(item => resolvePersistedImageUrlRefs(item, blobStore)));
-		return;
-	}
-
-	if (typeof value !== "object" || value === null) return;
-
-	if (hasImageUrl(value) && isBlobRef(value.image_url)) {
-		value.image_url = await resolveImageDataUrl(blobStore, value.image_url);
-	}
-
-	await Promise.all(Object.values(value).map(item => resolvePersistedImageUrlRefs(item, blobStore)));
-}
-
-async function resolveBlobRefsInEntries(entries: FileEntry[], blobStore: BlobStore): Promise<void> {
-	const promises: Promise<void>[] = [];
-
-	for (const entry of entries) {
-		if (entry.type === "session") continue;
-
-		let contentArray: unknown[] | undefined;
-		if (entry.type === "message" && "content" in entry.message && Array.isArray(entry.message.content)) {
-			contentArray = entry.message.content;
-		} else if (entry.type === "custom_message" && Array.isArray(entry.content)) {
-			contentArray = entry.content;
-		}
-
-		if (contentArray) {
-			for (const block of contentArray) {
-				if (isImageBlock(block) && isBlobRef(block.data)) {
-					promises.push(
-						resolveImageData(blobStore, block.data).then(resolved => {
-							block.data = resolved;
-						}),
-					);
-				}
-			}
-		}
-
-		promises.push(resolvePersistedImageUrlRefs(entry, blobStore));
-	}
-
-	await Promise.all(promises);
-}
-
-/**
- * Read-only message view of a session file: load entries, migrate to the
- * current version, resolve blob refs, and build the context along the
- * persisted leaf path (last entry). Does NOT create a writer or take the
- * session lock — safe to call against a file another session is writing.
- */
-export async function loadSessionMessagesReadOnly(filePath: string): Promise<AgentMessage[]> {
-	const entries = await loadEntriesFromFile(filePath);
-	if (entries.length === 0) return [];
-	migrateToCurrentVersion(entries);
-	await resolveBlobRefsInEntries(entries, new BlobStore(getBlobsDir()));
-	const sessionEntries = entries.filter((e): e is SessionEntry => e.type !== "session");
-	return buildSessionContext(sessionEntries).messages;
-}
-
-/**
- * Lightweight metadata for a session file, used in session picker UI.
- * Uses lazy getters to defer string formatting until actually displayed.
- */
-function sanitizeSessionName(value: string | undefined): string | undefined {
-	if (!value) return undefined;
-	const firstLine = value.split(/\r?\n/)[0] ?? "";
-	const stripped = firstLine.replace(/[\x00-\x1F\x7F]/g, "");
-	const trimmed = stripped.trim();
-	return trimmed.length > 0 ? trimmed : undefined;
-}
-
-class RecentSessionInfo {
-	#fullName: string | undefined;
-	#timeAgo: string | undefined;
-	readonly #headerTimestamp: string | undefined;
-
-	constructor(
-		readonly path: string,
-		readonly mtime: number,
-		header: Record<string, unknown>,
-		firstPrompt?: string,
-	) {
-		// Prefer an explicit title, then the first user prompt. The raw UUID `id` is
-		// intentionally not used as a fallback: showing it as a "name" is unfriendly and
-		// indistinguishable from neighboring sessions in the UI. The friendly fallback is
-		// derived lazily in `fullName` from the session timestamp.
-		const trystr = (v: unknown) => (typeof v === "string" ? v : undefined);
-		this.#fullName = sanitizeSessionName(trystr(header.title)) ?? sanitizeSessionName(firstPrompt);
-		this.#headerTimestamp = trystr(header.timestamp);
-	}
-
-	/** Display name. Falls back to a timestamp-based label, never the raw UUID. */
-	get fullName(): string {
-		if (this.#fullName) return this.#fullName;
-		const ts = this.#headerTimestamp ? Date.parse(this.#headerTimestamp) : Number.NaN;
-		const date = new Date(Number.isFinite(ts) ? ts : this.mtime);
-		const time = date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-		this.#fullName = `Untitled · ${time}`;
-		return this.#fullName;
-	}
-
-	/**
-	 * Display name without an arbitrary length cap. The renderer is responsible for
-	 * width-aware truncation so adjacent fields (e.g. the relative time) stay visible.
-	 */
-	get name(): string {
-		return this.fullName;
-	}
-
-	/** Human-readable relative time (e.g., "2 hours ago") */
-	get timeAgo(): string {
-		if (this.#timeAgo) return this.#timeAgo;
-		this.#timeAgo = formatTimeAgo(new Date(this.mtime));
-		return this.#timeAgo;
-	}
-}
-
-/**
- * Extracts the text content from a user message entry.
- * Returns undefined if the entry is not a user message or has no text.
- */
-function extractFirstUserPrompt(entries: Array<Record<string, unknown>>): string | undefined {
-	for (const entry of entries) {
-		if (entry.type !== "message") continue;
-		const message = entry.message as Record<string, unknown> | undefined;
-		if (message?.role !== "user") continue;
-		const content = message.content;
-		if (typeof content === "string") return content;
-		if (Array.isArray(content)) {
-			for (const block of content) {
-				if (typeof block === "object" && block !== null && "text" in block) {
-					const text = (block as { text: unknown }).text;
-					if (typeof text === "string") return text;
-				}
-			}
-		}
-	}
-	return undefined;
-}
-
-/**
- * Promote orphaned `<basename>.jsonl.<snowflake>.bak` backups created by
- * `#replaceSessionFileAfterEperm` back to their primary path when the primary
- * is missing. This runs once per session-dir scan, before the main `*.jsonl`
- * glob, so a crash between the two renames in the EPERM-rewrite path does not
- * leave the user's last good state stranded outside the loader's view.
- *
- * Exported for testing.
- */
-export async function recoverOrphanedBackups(sessionDir: string, storage: SessionStorage): Promise<void> {
-	let backups: string[];
-	try {
-		backups = storage.listFilesSync(sessionDir, "*.bak");
-	} catch {
-		return;
-	}
-	if (backups.length === 0) return;
-	// For each primary path, pick the newest backup (highest mtime) as the recovery source.
-	const candidates = new Map<string, { backup: string; mtimeMs: number }>();
-	for (const backup of backups) {
-		const name = path.basename(backup);
-		// Expect "<primary>.<snowflake>.bak" where <primary> ends in ".jsonl".
-		if (!name.endsWith(".bak")) continue;
-		const trimmed = name.slice(0, -".bak".length);
-		const dotIdx = trimmed.lastIndexOf(".");
-		if (dotIdx <= 0) continue;
-		const primaryName = trimmed.slice(0, dotIdx);
-		if (!primaryName.endsWith(".jsonl")) continue;
-		const primaryPath = path.join(sessionDir, primaryName);
-		let mtimeMs = 0;
-		try {
-			mtimeMs = storage.statSync(backup).mtimeMs;
-		} catch {
-			continue;
-		}
-		const existing = candidates.get(primaryPath);
-		if (!existing || mtimeMs > existing.mtimeMs) {
-			candidates.set(primaryPath, { backup, mtimeMs });
-		}
-	}
-	for (const [primaryPath, { backup }] of candidates) {
-		if (storage.existsSync(primaryPath)) continue;
-		try {
-			await storage.rename(backup, primaryPath);
-			logger.warn("Recovered orphaned session backup", {
-				sessionFile: primaryPath,
-				backupPath: backup,
-			});
-		} catch (err) {
-			logger.warn("Failed to recover orphaned session backup", {
-				sessionFile: primaryPath,
-				backupPath: backup,
-				error: toError(err).message,
-			});
-		}
-	}
-}
-
-/**
- * Reads all session files from the directory and returns them sorted by mtime (newest first).
- * Uses low-level file I/O to efficiently read only the first 4KB of each file
- * to extract the JSON header and first user message without loading entire session logs into memory.
- */
-async function getSortedSessions(sessionDir: string, storage: SessionStorage): Promise<RecentSessionInfo[]> {
-	await recoverOrphanedBackups(sessionDir, storage);
-	try {
-		const files: string[] = storage.listFilesSync(sessionDir, "*.jsonl");
-		const sessions: RecentSessionInfo[] = [];
-		await Promise.all(
-			files.map(async (path: string) => {
-				try {
-					const [content] = await storage.readTextSlices(path, 4096, 0);
-					const entries = parseJsonlLenient<Record<string, unknown>>(content);
-					if (entries.length === 0) return;
-					const header = entries[0] as Record<string, unknown>;
-					if (header.type !== "session" || typeof header.id !== "string") return;
-					const mtime = storage.statSync(path).mtimeMs;
-					const firstPrompt = header.title ? undefined : extractFirstUserPrompt(entries);
-					sessions.push(new RecentSessionInfo(path, mtime, header, firstPrompt));
-				} catch {}
-			}),
-		);
-		return sessions.sort((a, b) => b.mtime - a.mtime);
-	} catch {
-		return [];
-	}
-}
-
-/** Exported for testing */
-export async function findMostRecentSession(
-	sessionDir: string,
-	storage: SessionStorage = new FileSessionStorage(),
-): Promise<string | null> {
-	const sessions = await getSortedSessions(sessionDir, storage);
-	return sessions[0]?.path || null;
-}
-
-/** Format a time difference as a human-readable string */
-function formatTimeAgo(date: Date): string {
-	const now = Date.now();
-	const diffMs = now - date.getTime();
-	const diffMins = Math.floor(diffMs / 60000);
-	const diffHours = Math.floor(diffMs / 3600000);
-	const diffDays = Math.floor(diffMs / 86400000);
-
-	if (diffMins < 1) return "just now";
-	if (diffMins < 60) return `${diffMins}m ago`;
-	if (diffHours < 24) return `${diffHours}h ago`;
-	if (diffDays < 7) return `${diffDays}d ago`;
-	return date.toLocaleDateString();
-}
-
-const MAX_PERSIST_CHARS = 500_000;
-const TRUNCATION_NOTICE = "\n\n[Session persistence truncated large content]";
-/** Minimum base64 length to externalize to blob store (skip tiny inline images) */
-const BLOB_EXTERNALIZE_THRESHOLD = 1024;
-const TEXT_CONTENT_KEY = "content";
-
-/**
- * Recursively truncate large strings in an object for session persistence.
- * - Truncates any oversized string fields (key-agnostic)
- * - Replaces oversized image blocks with text notices
- * - Updates lineCount when content is truncated
- * - Returns original object if no changes needed (structural sharing)
- */
-function truncateString(value: string, maxLength: number): string {
-	if (value.length <= maxLength) return value;
-	let truncated = value.slice(0, maxLength);
-	if (truncated.length > 0) {
-		const last = truncated.charCodeAt(truncated.length - 1);
-		if (last >= 0xd800 && last <= 0xdbff) {
-			truncated = truncated.slice(0, -1);
-		}
-	}
-	return truncated;
-}
-
-function isImageBlock(value: unknown): value is { type: "image"; data: string; mimeType?: string } {
-	return (
-		typeof value === "object" &&
-		value !== null &&
-		"type" in value &&
-		(value as { type?: string }).type === "image" &&
-		"data" in value &&
-		typeof (value as { data?: string }).data === "string"
-	);
-}
-
-async function truncateForPersistence(obj: FileEntry, blobStore: BlobStore, key?: string): Promise<FileEntry>;
-async function truncateForPersistence(obj: string, blobStore: BlobStore, key?: string): Promise<string>;
-async function truncateForPersistence(obj: unknown[], blobStore: BlobStore, key?: string): Promise<unknown[]>;
-async function truncateForPersistence(obj: object, blobStore: BlobStore, key?: string): Promise<object>;
-async function truncateForPersistence(
-	obj: null | undefined,
-	blobStore: BlobStore,
-	key?: string,
-): Promise<null | undefined>;
-async function truncateForPersistence(obj: unknown, blobStore: BlobStore, key?: string): Promise<unknown> {
-	if (obj === null || obj === undefined) return obj;
-
-	if (typeof obj === "string") {
-		if (key === "image_url" && isImageDataUrl(obj)) {
-			return externalizeImageDataUrl(blobStore, obj);
-		}
-
-		if (obj.length > MAX_PERSIST_CHARS) {
-			// Cryptographic signatures must be preserved exactly or cleared entirely — never truncated.
-			// Truncation would produce an invalid signature that the API rejects.
-			if (key === "thinkingSignature" || key === "thoughtSignature" || key === "textSignature") {
-				return "";
-			}
-
-			const limit = Math.max(0, MAX_PERSIST_CHARS - TRUNCATION_NOTICE.length);
-			return `${truncateString(obj, limit)}${TRUNCATION_NOTICE}`;
-		}
-
-		return obj;
-	}
-
-	if (Array.isArray(obj)) {
-		let changed = false;
-		const result = await Promise.all(
-			obj.map(async item => {
-				// Special handling: compress oversized images while preserving shape
-				if (key === TEXT_CONTENT_KEY && isImageBlock(item)) {
-					if (!isBlobRef(item.data) && item.data.length >= BLOB_EXTERNALIZE_THRESHOLD) {
-						changed = true;
-						const blobRef = await externalizeImageData(blobStore, item.data, item.mimeType);
-						return { ...item, data: blobRef };
-					}
-				}
-
-				const newItem = await truncateForPersistence(item, blobStore, key);
-				if (newItem !== item) changed = true;
-				return newItem;
-			}),
-		);
-		return changed ? result : obj;
-	}
-
-	if (typeof obj === "object") {
-		let changed = false;
-		const entries: Array<readonly [string, unknown]> = await Promise.all(
-			Object.entries(obj).flatMap(([childKey, value]) => {
-				// Strip transient/redundant properties that shouldn't be persisted.
-				// - partialJson: streaming accumulator for tool call JSON parsing
-				// - jsonlEvents: raw subprocess streaming events (already saved to artifact files)
-				if (childKey === "partialJson" || childKey === "jsonlEvents") {
-					changed = true;
-					return [];
-				}
-
-				return [
-					(async () => {
-						const newValue = await truncateForPersistence(value, blobStore, childKey);
-						if (newValue !== value) changed = true;
-						return [childKey, newValue] as const;
-					})(),
-				];
-			}),
-		);
-
-		if (!changed) return obj;
-
-		const contentEntry = entries.find(([childKey]) => childKey === "content");
-		const lineCountEntry = entries.find(([childKey]) => childKey === "lineCount");
-		if (
-			contentEntry &&
-			typeof contentEntry[1] === "string" &&
-			lineCountEntry &&
-			typeof lineCountEntry[1] === "number"
-		) {
-			const content = contentEntry[1];
-			const updatedEntries = entries.map(([childKey, value]) =>
-				childKey === "lineCount" ? ([childKey, content.split("\n").length] as const) : ([childKey, value] as const),
-			);
-			return Object.fromEntries(updatedEntries);
-		}
-		return Object.fromEntries(entries);
-	}
-
-	return obj;
-}
-
-async function prepareEntryForPersistence(entry: FileEntry, blobStore: BlobStore): Promise<FileEntry> {
-	return truncateForPersistence(entry, blobStore);
-}
-
-/**
- * Synchronous variant of {@link truncateForPersistence}.
- *
- * The async version's overhead — `Promise.all` over `Object.entries`/`Array.prototype.map`,
- * one microtask hop per nested node — is pure waste for entries without image blobs
- * (the vast majority). The fast path runs in one synchronous tick so an OOM/SIGKILL
- * landing right after `_persist` returns cannot lose the entry. Image externalization
- * still happens, but via the synchronous blob-store path (`fs.writeFileSync`), so the
- * blob bytes are in the kernel page cache before the JSONL line referencing them is
- * written.
- */
-function truncateForPersistenceSync(obj: unknown, blobStore: BlobStore, key?: string): unknown {
-	if (obj === null || obj === undefined) return obj;
-
-	if (typeof obj === "string") {
-		if (key === "image_url" && isImageDataUrl(obj)) {
-			return externalizeImageDataUrlSync(blobStore, obj);
-		}
-		if (obj.length > MAX_PERSIST_CHARS) {
-			if (key === "thinkingSignature" || key === "thoughtSignature" || key === "textSignature") {
-				return "";
-			}
-			const limit = Math.max(0, MAX_PERSIST_CHARS - TRUNCATION_NOTICE.length);
-			return `${truncateString(obj, limit)}${TRUNCATION_NOTICE}`;
-		}
-		return obj;
-	}
-
-	if (Array.isArray(obj)) {
-		let changed = false;
-		const result: unknown[] = new Array(obj.length);
-		for (let i = 0; i < obj.length; i++) {
-			const item = obj[i];
-			if (
-				key === TEXT_CONTENT_KEY &&
-				isImageBlock(item) &&
-				!isBlobRef(item.data) &&
-				item.data.length >= BLOB_EXTERNALIZE_THRESHOLD
-			) {
-				changed = true;
-				result[i] = { ...item, data: externalizeImageDataSync(blobStore, item.data, item.mimeType) };
-				continue;
-			}
-			const newItem = truncateForPersistenceSync(item, blobStore, key);
-			if (newItem !== item) changed = true;
-			result[i] = newItem;
-		}
-		return changed ? result : obj;
-	}
-
-	if (typeof obj === "object") {
-		let changed = false;
-		const entries: Array<readonly [string, unknown]> = [];
-		for (const [childKey, value] of Object.entries(obj)) {
-			if (childKey === "partialJson" || childKey === "jsonlEvents") {
-				changed = true;
-				continue;
-			}
-			const newValue = truncateForPersistenceSync(value, blobStore, childKey);
-			if (newValue !== value) changed = true;
-			entries.push([childKey, newValue]);
-		}
-		if (!changed) return obj;
-
-		const contentEntry = entries.find(([childKey]) => childKey === "content");
-		const lineCountEntry = entries.find(([childKey]) => childKey === "lineCount");
-		if (
-			contentEntry &&
-			typeof contentEntry[1] === "string" &&
-			lineCountEntry &&
-			typeof lineCountEntry[1] === "number"
-		) {
-			const content = contentEntry[1];
-			const updatedEntries = entries.map(([childKey, value]) =>
-				childKey === "lineCount" ? ([childKey, content.split("\n").length] as const) : ([childKey, value] as const),
-			);
-			return Object.fromEntries(updatedEntries);
-		}
-		return Object.fromEntries(entries);
-	}
-
-	return obj;
-}
-
-function prepareEntryForPersistenceSync(entry: FileEntry, blobStore: BlobStore): FileEntry {
-	return truncateForPersistenceSync(entry, blobStore) as FileEntry;
-}
-
-class NdjsonFileWriter {
-	#writer: SessionStorageWriter;
-	#closed = false;
-	#closing = false;
-	#error: Error | undefined;
-	#pendingWrites: Promise<void> = Promise.resolve();
-	#onError: ((err: Error) => void) | undefined;
-
-	constructor(storage: SessionStorage, path: string, options?: { flags?: "a" | "w"; onError?: (err: Error) => void }) {
-		this.#onError = options?.onError;
-		this.#writer = storage.openWriter(path, {
-			flags: options?.flags ?? "a",
-			onError: (err: Error) => this.#recordError(err),
-		});
-	}
-
-	#recordError(err: unknown): Error {
-		const writeErr = toError(err);
-		if (!this.#error) this.#error = writeErr;
-		this.#onError?.(writeErr);
-		return writeErr;
-	}
-
-	#enqueue(task: () => Promise<void>): Promise<void> {
-		const run = async () => {
-			if (this.#error) throw this.#error;
-			await task();
-		};
-		const next = this.#pendingWrites.then(run);
-		void next.catch((err: unknown) => {
-			if (!this.#error) this.#error = toError(err);
-		});
-		this.#pendingWrites = next;
-		return next;
-	}
-
-	async #writeLine(line: string): Promise<void> {
-		if (this.#error) throw this.#error;
-		try {
-			await this.#writer.writeLine(line);
-		} catch (err) {
-			throw this.#recordError(err);
-		}
-	}
-
-	/** Queue a write. Returns a promise so callers can await if needed. */
-	write(entry: FileEntry): Promise<void> {
-		if (this.#closed || this.#closing) throw new Error("Writer closed");
-		if (this.#error) throw this.#error;
-		const line = `${JSON.stringify(entry)}\n`;
-		return this.#enqueue(() => this.#writeLine(line));
-	}
-
-	/**
-	 * Synchronously serialize and append the entry. Returns once `fs.writeSync` has handed
-	 * the bytes to the kernel page cache — durable across OOM/SIGKILL even before fsync.
-	 *
-	 * Callers MUST NOT mix this with pending async `write()` calls on the same writer:
-	 * the async path is queued through `#pendingWrites`, but this method bypasses the
-	 * queue. Use only when no concurrent async write is in flight (the session-manager
-	 * persist path enforces this via `#flushed`/`#needsFullRewriteOnNextPersist`).
-	 */
-	writeSync(entry: FileEntry): void {
-		if (this.#closed || this.#closing) throw new Error("Writer closed");
-		if (this.#error) throw this.#error;
-		const line = `${JSON.stringify(entry)}\n`;
-		try {
-			this.#writer.writeLineSync(line);
-		} catch (err) {
-			throw this.#recordError(err);
-		}
-	}
-
-	/** Flush all buffered data to disk. Waits for all queued writes. */
-	async flush(): Promise<void> {
-		if (this.#closed) return;
-		if (this.#error) throw this.#error;
-
-		await this.#enqueue(async () => {});
-
-		if (this.#error) throw this.#error;
-
-		try {
-			await this.#writer.flush();
-		} catch (err) {
-			throw this.#recordError(err);
-		}
-	}
-
-	/** Sync data to persistent storage. */
-	async fsync(): Promise<void> {
-		if (this.#closed) return;
-		if (this.#error) throw this.#error;
-		try {
-			await this.#writer.fsync();
-		} catch (err) {
-			throw this.#recordError(err);
-		}
-	}
-
-	/** Synchronously fsync the underlying file descriptor to physical disk. */
-	fsyncSync(): void {
-		if (this.#closed) return;
-		if (this.#error) throw this.#error;
-		try {
-			this.#writer.fsyncSync();
-		} catch (err) {
-			throw this.#recordError(err);
-		}
-	}
-
-	/** Close the writer, flushing all data. */
-	async close(): Promise<void> {
-		if (this.#closed || this.#closing) return;
-		this.#closing = true;
-
-		let closeError: Error | undefined;
-		try {
-			await this.flush();
-		} catch (err) {
-			closeError = toError(err);
-		}
-
-		try {
-			await this.#pendingWrites;
-		} catch (err) {
-			if (!closeError) closeError = toError(err);
-		}
-
-		try {
-			await this.#writer.close();
-		} catch (err) {
-			const endErr = this.#recordError(err);
-			if (!closeError) closeError = endErr;
-		}
-
-		this.#closed = true;
-
-		if (!closeError && this.#error) closeError = this.#error;
-		if (closeError) throw closeError;
-	}
-
-	/** Check if there's a stored error. */
-	getError(): Error | undefined {
-		return this.#error;
-	}
-
-	/** True while the writer accepts new writes (not closing or closed). */
-	isOpen(): boolean {
-		return !this.#closed && !this.#closing;
-	}
-}
-
-/** Get recent sessions for display in welcome screen (which reserves WELCOME_SESSION_SLOTS rows) */
-export async function getRecentSessions(
-	sessionDir: string,
-	limit = 4,
-	storage: SessionStorage = new FileSessionStorage(),
-): Promise<RecentSessionInfo[]> {
-	const sessions = await getSortedSessions(sessionDir, storage);
-	return sessions.slice(0, limit);
-}
-
-/**
- * Manages conversation sessions as append-only trees stored in JSONL files.
- *
- * Each session entry has an id and parentId forming a tree structure. The "leaf"
- * pointer tracks the current position. Appending creates a child of the current leaf.
- * Branching moves the leaf to an earlier entry, allowing new branches without
- * modifying history.
- *
- * Use buildSessionContext() to get the resolved message list for the LLM, which
- * handles compaction summaries and follows the path from root to current leaf.
- */
-export interface UsageStatistics {
-	input: number;
-	output: number;
-	cacheRead: number;
-	cacheWrite: number;
-	premiumRequests: number;
-	cost: number;
-}
-
-function getTaskToolUsage(details: unknown): Usage | undefined {
-	if (!details || typeof details !== "object") return undefined;
-	const record = details as Record<string, unknown>;
-	const usage = record.usage;
-	if (!usage || typeof usage !== "object") return undefined;
-	return usage as Usage;
-}
-
-function extractTextFromContent(content: Message["content"]): string {
-	if (typeof content === "string") return content;
-	return content
-		.filter((block): block is TextContent => block.type === "text")
-		.map(block => block.text)
-		.join(" ");
-}
-
-const SESSION_LIST_PREFIX_BYTES = 4096;
-/**
- * Tail window read to derive {@link SessionStatus}. Large enough to capture a
- * typical final assistant turn (thinking + text); when the final message exceeds
- * it the status falls back to `unknown` rather than misreporting.
- */
-const SESSION_LIST_SUFFIX_BYTES = 32_768;
-const SESSION_LIST_PARALLEL_THRESHOLD = 64;
-const SESSION_LIST_MAX_WORKERS = 16;
-
-/**
- * Derive a {@link SessionStatus} from a tail window of a session file. Entries are
- * newline-terminated on write, so within the window only the first line can be a
- * partial fragment — it simply fails to parse and is skipped. We walk backwards to
- * the last `message` entry and classify by its role / stop reason.
- */
-function deriveSessionStatus(suffix: string): SessionStatus {
-	if (!suffix) return "unknown";
-	const lines = suffix.split("\n");
-	for (let i = lines.length - 1; i >= 0; i--) {
-		const line = lines[i];
-		// Every persisted entry is `JSON.stringify(obj)` → starts with `{`. This
-		// cheaply rejects blank lines and the leading partial fragment without
-		// attempting to parse a multi-KB tail of a truncated line.
-		if (line.charCodeAt(0) !== 123) continue;
-		let entry: { type?: string; message?: TailMessage };
-		try {
-			entry = JSON.parse(line);
-		} catch {
-			continue;
-		}
-		if (entry.type === "message" && entry.message) {
-			return statusFromTailMessage(entry.message);
-		}
-	}
-	return "unknown";
-}
-
-interface TailMessage {
-	role?: string;
-	stopReason?: string;
-	content?: unknown;
-}
-
-function isToolCallBlock(block: unknown): boolean {
-	return typeof block === "object" && block !== null && (block as { type?: unknown }).type === "toolCall";
-}
-
-function statusFromTailMessage(message: TailMessage): SessionStatus {
-	switch (message.role) {
-		case "assistant": {
-			switch (message.stopReason) {
-				case "error":
-					return "error";
-				case "aborted":
-					return "aborted";
-				case "length":
-					return "interrupted";
-			}
-			// A turn that ends without unanswered tool calls means the agent yielded
-			// control back to the user — complete. Trailing tool calls (no tool
-			// results after) mean the loop was cut off before running them.
-			const content = message.content;
-			if (Array.isArray(content) && content.some(isToolCallBlock)) return "interrupted";
-			return "complete";
-		}
-		case "toolResult":
-			// Tools ran but the agent never produced the following assistant turn.
-			return "interrupted";
-		case "user":
-			// User message with no assistant reply persisted after it.
-			return "pending";
-		default:
-			return "unknown";
-	}
-}
-
-function decodeJsonStringFragment(value: string): string {
-	const safeValue = value.endsWith("\\") ? value.slice(0, -1) : value;
-	try {
-		return JSON.parse(`"${safeValue}"`) as string;
-	} catch {
-		return safeValue
-			.replace(/\\n/g, "\n")
-			.replace(/\\r/g, "\r")
-			.replace(/\\t/g, "\t")
-			.replace(/\\"/g, '"')
-			.replace(/\\\\/g, "\\");
-	}
-}
-
-function extractStringProperty(source: string, name: string, startIndex = 0): string | undefined {
-	const propertyIndex = source.indexOf(`"${name}"`, startIndex);
-	if (propertyIndex === -1) return undefined;
-
-	const colonIndex = source.indexOf(":", propertyIndex + name.length + 2);
-	if (colonIndex === -1) return undefined;
-
-	let valueIndex = colonIndex + 1;
-	while (valueIndex < source.length) {
-		const char = source.charCodeAt(valueIndex);
-		if (char !== 32 && char !== 9 && char !== 10 && char !== 13) break;
-		valueIndex++;
-	}
-	if (source.charCodeAt(valueIndex) !== 34) return undefined;
-
-	const valueStart = valueIndex + 1;
-	let escaped = false;
-	for (let i = valueStart; i < source.length; i++) {
-		const char = source.charCodeAt(i);
-		if (escaped) {
-			escaped = false;
-			continue;
-		}
-		if (char === 92) {
-			escaped = true;
-			continue;
-		}
-		if (char === 34) {
-			return decodeJsonStringFragment(source.slice(valueStart, i));
-		}
-	}
-
-	return decodeJsonStringFragment(source.slice(valueStart));
-}
-
-function countMessageMarkers(content: string): number {
-	let count = 0;
-	let index = 0;
-	while (index < content.length) {
-		const typeIndex = content.indexOf('"type"', index);
-		if (typeIndex === -1) break;
-		const colonIndex = content.indexOf(":", typeIndex + 6);
-		if (colonIndex === -1) break;
-		const type = extractStringProperty(content, "type", typeIndex);
-		if (type === "message") count++;
-		index = colonIndex + 1;
-	}
-	return count;
-}
-
-function extractFirstUserMessageFromPrefix(content: string): string | undefined {
-	const roleIndex = content.indexOf('"role"');
-	if (roleIndex === -1) return undefined;
-
-	let index = roleIndex;
-	while (index !== -1) {
-		const role = extractStringProperty(content, "role", index);
-		if (role === "user") {
-			return extractStringProperty(content, "content", index) ?? extractStringProperty(content, "text", index);
-		}
-		index = content.indexOf('"role"', index + 6);
-	}
-
-	return undefined;
-}
-
-interface SessionListHeader {
-	type: "session";
-	id: string;
-	cwd?: string;
-	title?: string;
-	parentSession?: string;
-	timestamp?: string;
-}
-
-function parseSessionListHeader(
-	content: string,
-	entries: Array<Record<string, unknown>>,
-): SessionListHeader | undefined {
-	const parsedHeader = entries[0];
-	if (parsedHeader?.type === "session" && typeof parsedHeader.id === "string") {
-		return {
-			type: "session",
-			id: parsedHeader.id,
-			cwd: typeof parsedHeader.cwd === "string" ? parsedHeader.cwd : undefined,
-			title: typeof parsedHeader.title === "string" ? parsedHeader.title : undefined,
-			parentSession: typeof parsedHeader.parentSession === "string" ? parsedHeader.parentSession : undefined,
-			timestamp: typeof parsedHeader.timestamp === "string" ? parsedHeader.timestamp : undefined,
-		};
-	}
-
-	const firstLineEnd = content.indexOf("\n");
-	const firstLine = firstLineEnd === -1 ? content : content.slice(0, firstLineEnd);
-	if (extractStringProperty(firstLine, "type") !== "session") return undefined;
-
-	const id = extractStringProperty(firstLine, "id");
-	if (!id) return undefined;
-
-	return {
-		type: "session",
-		id,
-		cwd: extractStringProperty(firstLine, "cwd"),
-		title: extractStringProperty(firstLine, "title"),
-		parentSession: extractStringProperty(firstLine, "parentSession"),
-		timestamp: extractStringProperty(firstLine, "timestamp"),
-	};
-}
-
-function getSessionListWorkerCount(fileCount: number): number {
-	if (fileCount <= SESSION_LIST_PARALLEL_THRESHOLD) return 1;
-	return Math.min(
-		SESSION_LIST_MAX_WORKERS,
-		os.availableParallelism(),
-		Math.ceil(fileCount / SESSION_LIST_PARALLEL_THRESHOLD),
-	);
-}
-
-async function collectSessionFromFile(file: string, storage: SessionStorage): Promise<SessionInfo | undefined> {
-	try {
-		const stat = storage.statSync(file);
-		const [content, suffix] = await storage.readTextSlices(
-			file,
-			SESSION_LIST_PREFIX_BYTES,
-			SESSION_LIST_SUFFIX_BYTES,
-		);
-		const { size, mtime } = stat;
-		const entries = parseJsonlLenient<Record<string, unknown>>(content);
-		const header = parseSessionListHeader(content, entries);
-		if (!header) return undefined;
-
-		let parsedMessageCount = 0;
-		let firstMessage = "";
-		const allMessages: string[] = [];
-		let shortSummary: string | undefined;
-
-		for (let i = 1; i < entries.length; i++) {
-			const entry = entries[i] as { type?: string; message?: Message; shortSummary?: string };
-
-			if (entry.type === "compaction" && typeof entry.shortSummary === "string") {
-				shortSummary = entry.shortSummary;
-			}
-
-			if (entry.type === "message" && entry.message) {
-				parsedMessageCount++;
-
-				if (entry.message.role === "user" || entry.message.role === "assistant") {
-					const textContent = extractTextFromContent(entry.message.content);
-
-					if (textContent) {
-						allMessages.push(textContent);
-
-						if (!firstMessage && entry.message.role === "user") {
-							firstMessage = textContent;
-						}
-					}
-				}
-			}
-		}
-
-		firstMessage ||= extractFirstUserMessageFromPrefix(content) ?? "";
-		const messageCount = Math.max(parsedMessageCount, countMessageMarkers(content));
-		return {
-			path: file,
-			id: header.id,
-			cwd: header.cwd ?? "",
-			title: header.title ?? shortSummary,
-			parentSessionPath: header.parentSession,
-			created: new Date(header.timestamp ?? ""),
-			modified: mtime,
-			messageCount,
-			size,
-			firstMessage: firstMessage || "(no messages)",
-			allMessagesText: allMessages.length > 0 ? allMessages.join(" ") : firstMessage,
-			status: deriveSessionStatus(suffix),
-		};
-	} catch {
-		return undefined;
-	}
-}
-
-async function collectSessionsFromFileStride(
-	files: string[],
-	storage: SessionStorage,
-	startIndex: number,
-	stride: number,
-): Promise<SessionInfo[]> {
-	const sessions: SessionInfo[] = [];
-
-	for (let i = startIndex; i < files.length; i += stride) {
-		const session = await collectSessionFromFile(files[i], storage);
-		if (session) sessions.push(session);
-	}
-
-	return sessions;
-}
-
-async function collectSessionsFromFiles(files: string[], storage: SessionStorage): Promise<SessionInfo[]> {
-	const workerCount = getSessionListWorkerCount(files.length);
-	const sessions =
-		workerCount === 1
-			? await collectSessionsFromFileStride(files, storage, 0, 1)
-			: (
-					await Promise.all(
-						Array.from({ length: workerCount }, (_, workerIndex) =>
-							collectSessionsFromFileStride(files, storage, workerIndex, workerCount),
-						),
-					)
-				).flat();
-
-	sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
-	return sessions;
-}
-
-export interface ResolvedSessionMatch {
-	session: SessionInfo;
-	scope: "local" | "global";
-}
-
-function sessionMatchesResumeArg(session: SessionInfo, sessionArg: string): boolean {
-	const normalizedArg = sessionArg.toLowerCase();
-	const normalizedId = session.id.toLowerCase();
-	if (normalizedId.startsWith(normalizedArg)) {
-		return true;
-	}
-
-	const fileName = path.basename(session.path, ".jsonl").toLowerCase();
-	if (fileName.startsWith(normalizedArg)) {
-		return true;
-	}
-
-	const separator = fileName.lastIndexOf("_");
-	if (separator < 0) {
-		return false;
-	}
-
-	const fileSessionId = fileName.slice(separator + 1);
-	return fileSessionId.startsWith(normalizedArg);
-}
-
-export async function resolveResumableSession(
-	sessionArg: string,
-	cwd: string,
-	sessionDir?: string,
-	storage: SessionStorage = new FileSessionStorage(),
-): Promise<ResolvedSessionMatch | undefined> {
-	const localSessionDir = sessionDir ?? SessionManager.getDefaultSessionDir(cwd, undefined, storage);
-	const localSessions = await SessionManager.list(cwd, localSessionDir, storage);
-	const localMatch = localSessions.find(session => sessionMatchesResumeArg(session, sessionArg));
-	if (localMatch) {
-		return { session: localMatch, scope: "local" };
-	}
-
-	if (sessionDir) {
-		return undefined;
-	}
-
-	const globalSessions = await SessionManager.listAll(storage);
-	const globalMatch = globalSessions.find(session => sessionMatchesResumeArg(session, sessionArg));
-	if (!globalMatch) {
-		return undefined;
-	}
-
-	return { session: globalMatch, scope: "global" };
-}
 interface SessionManagerStateSnapshot {
 	cwd: string;
 	sessionDir: string;
@@ -1988,319 +271,597 @@ interface SessionManagerStateSnapshot {
 	sessionName: string | undefined;
 	titleSource: "auto" | "user" | undefined;
 	sessionFile: string | undefined;
-	flushed: boolean;
-	needsFullRewriteOnNextPersist: boolean;
-	fileEntries: FileEntry[];
+	onDisk: boolean;
+	needsRewrite: boolean;
+	header: SessionHeader;
+	entries: SessionEntry[];
 }
 
+interface DiskQueueOptions {
+	ignorePriorError?: boolean;
+	ignoreEpoch?: boolean;
+	epoch?: number;
+}
+
+/**
+ * Stores and navigates an append-only conversation journal.
+ *
+ * A session is a JSONL file: one header line followed by entries. Entries form a
+ * tree by `(id, parentId)`, and the mutable leaf pointer selects which path is
+ * active for future appends and for LLM context construction.
+ *
+ * Durability is software-crash safe but not power-loss safe: appends are handed
+ * to the OS synchronously in-body (so an entry survives an OOM/SIGKILL the
+ * instant `appendMessage` returns) but never `fsync`'d. Full-file rewrites go
+ * through the storage layer's atomic temp-write+rename so a crash mid-rewrite
+ * cannot truncate the prior good file.
+ */
 export class SessionManager {
-	#sessionId: string = "";
+	#cwd: string;
+	#sessionDir: string;
+	readonly #persist: boolean;
+	readonly #storage: SessionStorage;
+	readonly #blobs: BlobStore;
+
+	#sessionId = "";
 	#sessionName: string | undefined;
 	#titleSource: "auto" | "user" | undefined;
 	#sessionFile: string | undefined;
-	#flushed: boolean = false;
-	#needsFullRewriteOnNextPersist: boolean = false;
-	#ensuredOnDisk: boolean = false;
-	#fileEntries: FileEntry[] = [];
-	#byId: Map<string, SessionEntry> = new Map();
-	#labelsById: Map<string, string> = new Map();
-	#leafId: string | null = null;
+	#header!: SessionHeader;
+	#entries: SessionEntry[] = [];
+	#index = new SessionEntryIndex();
+
+	/** File reflects all current entries; appends can go incrementally. */
+	#fileIsCurrent = false;
+	/** In-memory entries diverged from disk (load-migration/sanitize) → next persist must full-rewrite. */
+	#rewriteRequired = false;
+	/** Lazy gate crossed (ensureOnDisk / loaded file): every entry must persist from now on. */
+	#forceFileCreation = false;
+
 	/**
 	 * Collab replication tap: invoked for every appended entry with the
 	 * in-memory (pre-blob-externalization) entry, so inline images survive.
-	 * Failures are swallowed — a broadcast error must never break persistence.
 	 */
 	onEntryAppended?: (entry: SessionEntry) => void;
-	#usageStatistics = {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		premiumRequests: 0,
-		cost: 0,
-	} satisfies UsageStatistics;
-	/** Per-turn output-token budget set by a `+Nk` directive (total null when none this turn). */
-	#turnBudget: { total: number | null; hard: boolean } = { total: null, hard: false };
-	/** Cumulative `output` snapshot captured when the current turn budget window opened. */
-	#turnBaselineOutput = 0;
-	/** Output tokens consumed by eval-spawned subagents in the current turn window. */
+
+	#turnBudgetTotal: number | null = null;
+	#turnBudgetHard = false;
+	#turnOutputBaseline = 0;
 	#turnEvalOutput = 0;
-	#persistWriter: NdjsonFileWriter | undefined;
-	#persistWriterPath: string | undefined;
-	#persistChain: Promise<void> = Promise.resolve();
-	#persistError: Error | undefined;
-	#persistErrorReported = false;
+
+	/** The single open append writer; the manager only ever writes one file at a time. */
+	#writer: SessionStorageWriter | undefined;
+	/** Serializes async disk work (flush/close/atomic rewrite). Appends are synchronous and bypass it. */
+	#diskTail: Promise<void> = Promise.resolve();
+	#diskFailure: Error | undefined;
+	#diskFailureLogged = false;
+	/** Bumped on every sync rewrite / chain reset so stale queued tasks become no-ops. */
+	#diskEpoch = 0;
+
 	#artifactManager: ArtifactManager | null = null;
 	#artifactManagerSessionFile: string | null = null;
-	// When set, take precedence over the lazily-derived per-session manager.
-	// Subagents adopt the parent's manager so artifact IDs are unique across the
-	// whole agent tree and all files land in the parent's artifacts dir.
 	#adoptedArtifactManager: ArtifactManager | null = null;
-	// In-memory artifact fallback for non-persistent sessions (persist=false).
-	// Keyed by sequential numeric ID string; mirrors the file-based ArtifactManager ID scheme.
 	#inMemoryArtifacts: Map<string, string> | null = null;
 	#inMemoryArtifactCounter = 0;
-	readonly #blobStore: BlobStore;
+
 	#suppressBreadcrumb = false;
 	#sessionNameChangedCallbacks = new Set<() => void>();
 
-	private constructor(
-		private cwd: string,
-		private sessionDir: string,
-		private readonly persist: boolean,
-		private readonly storage: SessionStorage,
-	) {
-		this.#blobStore = new BlobStore(getBlobsDir());
-		if (persist && sessionDir) {
-			this.storage.ensureDirSync(sessionDir);
+	private constructor(cwd: string, sessionDir: string, persist: boolean, storage: SessionStorage) {
+		this.#cwd = cwd;
+		this.#sessionDir = sessionDir;
+		this.#persist = persist;
+		this.#storage = storage;
+		this.#blobs = new BlobStore(getBlobsDir());
+
+		if (persist && sessionDir) this.#storage.ensureDirSync(sessionDir);
+	}
+
+	#rememberBreadcrumb(cwd: string, sessionFile: string): void {
+		if (!this.#suppressBreadcrumb) writeTerminalBreadcrumb(cwd, sessionFile);
+	}
+
+	#clearDiskError(): void {
+		this.#diskFailure = undefined;
+		this.#diskFailureLogged = false;
+	}
+
+	#noteDiskFailure(errorLike: unknown): Error {
+		const error = toError(errorLike);
+		if (!this.#diskFailure) this.#diskFailure = error;
+
+		if (!this.#diskFailureLogged) {
+			this.#diskFailureLogged = true;
+			logger.error("Session persistence error.", {
+				sessionFile: this.#sessionFile,
+				error: error.message,
+				stack: error.stack,
+			});
 		}
-		// Note: call _initSession() or _initSessionFile() after construction
+
+		return this.#diskFailure;
 	}
 
-	#maybeWriteBreadcrumb(cwd: string, sessionFile: string): void {
-		if (this.#suppressBreadcrumb) return;
-		writeTerminalBreadcrumb(cwd, sessionFile);
+	#scheduleDiskWork(work: () => Promise<void>, options: DiskQueueOptions = {}): Promise<void> {
+		const epoch = options.epoch ?? this.#diskEpoch;
+		const scheduled = this.#diskTail
+			.catch(() => undefined)
+			.then(async () => {
+				if (!options.ignoreEpoch && epoch !== this.#diskEpoch) return;
+				if (this.#diskFailure && !options.ignorePriorError) throw this.#diskFailure;
+				await work();
+			});
+
+		const reported = scheduled.catch(err => {
+			throw this.#noteDiskFailure(err);
+		});
+		this.#diskTail = reported.catch(() => undefined);
+		return reported;
 	}
 
-	/** Puts a binary blob into the blob store and returns the blob reference */
+	async #drainAndCloseWriter(): Promise<void> {
+		try {
+			await this.#scheduleDiskWork(
+				async () => {
+					await this.#closeWriterHandle();
+				},
+				{ ignorePriorError: true, ignoreEpoch: true },
+			);
+		} finally {
+			this.#writer = undefined;
+			this.#diskTail = Promise.resolve();
+		}
+	}
+
+	#closeWriterEventually(): void {
+		const writer = this.#writer;
+		this.#writer = undefined;
+		if (writer) void writer.close().catch(() => undefined);
+	}
+
+	async #closeWriterHandle(): Promise<void> {
+		const writer = this.#writer;
+		if (!writer) return;
+		this.#writer = undefined;
+		await writer.close();
+	}
+
+	#appendWriter(): SessionStorageWriter {
+		if (!this.#sessionFile) throw new Error("Cannot open a session writer before a session file exists");
+
+		if (this.#writer?.isOpen()) return this.#writer;
+
+		this.#writer = this.#storage.openWriter(this.#sessionFile, {
+			flags: "a",
+			onError: err => this.#noteDiskFailure(err),
+		});
+		return this.#writer;
+	}
+
+	#lineFor(entry: FileEntry): string {
+		return `${JSON.stringify(prepareEntryForPersistence(entry, this.#blobs))}\n`;
+	}
+
+	#fileBody(): string {
+		let body = this.#lineFor(this.#header);
+		for (const entry of this.#entries) body += this.#lineFor(entry);
+		return body;
+	}
+
+	#historyContainsAssistantMessage(): boolean {
+		return this.#entries.some(isAssistantEntry);
+	}
+
+	#shouldHaveSessionFile(): boolean {
+		return this.#forceFileCreation || this.#fileIsCurrent || this.#historyContainsAssistantMessage();
+	}
+
+	/**
+	 * Synchronously rewrite the whole file (header + entries) and keep no open
+	 * writer; the next append re-opens one. `writeTextSync` returns with the
+	 * bytes in the kernel page cache, so the file is software-crash durable.
+	 */
+	#rewriteSynchronously(): void {
+		if (!this.#persist || !this.#sessionFile) return;
+
+		try {
+			const body = this.#fileBody();
+			this.#diskEpoch++;
+			this.#diskTail = Promise.resolve();
+			this.#closeWriterEventually();
+			this.#storage.writeTextSync(this.#sessionFile, body);
+			this.#fileIsCurrent = true;
+			this.#rewriteRequired = false;
+		} catch (err) {
+			this.#noteDiskFailure(err);
+		}
+	}
+
+	/**
+	 * Rewrite the whole file atomically (temp-write + rename, EPERM-safe) on the
+	 * disk chain. The body is serialized inside the task — after the writer is
+	 * closed — so entries appended before the task runs are included.
+	 */
+	async #rewriteAtomically(): Promise<void> {
+		if (!this.#persist || !this.#sessionFile) return;
+
+		const epoch = this.#diskEpoch;
+		await this.#scheduleDiskWork(
+			async () => {
+				await this.#closeWriterHandle();
+				const sessionFile = this.#sessionFile;
+				if (!sessionFile) return;
+				await this.#storage.writeTextAtomic(sessionFile, this.#fileBody());
+				this.#fileIsCurrent = true;
+				this.#rewriteRequired = false;
+			},
+			{ epoch },
+		);
+	}
+
+	#appendToSessionFile(entry: SessionEntry): void {
+		if (!this.#persist || !this.#sessionFile) return;
+		if (this.#diskFailure) throw this.#diskFailure;
+
+		// Lazy gate: a brand-new session is not written until it has an assistant
+		// message (or someone forced creation), so sessions that never produce
+		// output never create a file.
+		if (!this.#shouldHaveSessionFile()) {
+			this.#fileIsCurrent = false;
+			return;
+		}
+
+		// Cold/divergent: not on disk yet, or in-memory entries diverged from the
+		// file → rewrite the whole file synchronously and keep going.
+		if (!this.#fileIsCurrent || this.#rewriteRequired) {
+			this.#rewriteSynchronously();
+			return;
+		}
+
+		// Hot path: append synchronously so the entry is durable the instant this
+		// returns (file/memory writers perform the write in-body). Never routed
+		// through the async disk chain — durability must hold without a flush().
+		// A mid-close writer leaves `#writer` undefined, so `#appendWriter` simply
+		// opens a fresh append handle and the entry still lands.
+		try {
+			void this.#appendWriter()
+				.append(this.#lineFor(entry))
+				.catch(err => this.#noteDiskFailure(err));
+		} catch (err) {
+			this.#noteDiskFailure(err);
+		}
+	}
+
+	#resetToNewSession(options?: NewSessionOptions, forcedSessionFile?: string): string | undefined {
+		this.#diskTail = Promise.resolve();
+		this.#clearDiskError();
+		this.#sessionId = mintSessionId();
+		this.#sessionName = undefined;
+		this.#titleSource = undefined;
+
+		const timestamp = nowIso();
+		this.#header = {
+			type: "session",
+			version: CURRENT_SESSION_VERSION,
+			id: this.#sessionId,
+			timestamp,
+			cwd: this.#cwd,
+			parentSession: options?.parentSession,
+		};
+
+		this.#entries = [];
+		this.#index.clear();
+		this.#fileIsCurrent = false;
+		this.#rewriteRequired = false;
+		this.#forceFileCreation = false;
+		this.#turnBudgetTotal = null;
+		this.#turnBudgetHard = false;
+		this.#turnOutputBaseline = 0;
+		this.#turnEvalOutput = 0;
+		this.#artifactManager = null;
+		this.#artifactManagerSessionFile = null;
+		this.#adoptedArtifactManager = null;
+		this.#inMemoryArtifacts = null;
+		this.#inMemoryArtifactCounter = 0;
+
+		if (this.#persist) {
+			this.#sessionFile =
+				forcedSessionFile ??
+				path.join(this.#sessionDir, `${fileSafeTimestamp(timestamp)}_${this.#sessionId}.jsonl`);
+			this.#rememberBreadcrumb(this.#cwd, this.#sessionFile);
+		} else {
+			this.#sessionFile = undefined;
+		}
+
+		return this.#sessionFile;
+	}
+
+	#applyEntries(header: SessionHeader, entries: SessionEntry[]): void {
+		this.#header = header;
+		this.#entries = entries;
+		this.#sessionId = header.id;
+		this.#sessionName = header.title;
+		this.#titleSource = header.titleSource;
+		this.#index.rebuild(entries);
+	}
+
+	#freshEntryFields(): { id: string; parentId: string | null; timestamp: string } {
+		return {
+			id: generateId(this.#index),
+			parentId: this.#index.leafId(),
+			timestamp: nowIso(),
+		};
+	}
+
+	#recordEntry(entry: SessionEntry): void {
+		this.#entries.push(entry);
+		this.#index.insert(entry);
+		this.#appendToSessionFile(entry);
+
+		const callback = this.onEntryAppended;
+		if (callback) {
+			try {
+				callback(entry);
+			} catch (err) {
+				logger.warn("collab entry hook failed", { error: String(err) });
+			}
+		}
+	}
+
+	#draftPath(): string | null {
+		const artifactsDir = this.getArtifactsDir();
+		return artifactsDir ? path.join(artifactsDir, "draft.txt") : null;
+	}
+
+	#artifactManagerForSession(): ArtifactManager | null {
+		if (this.#adoptedArtifactManager) return this.#adoptedArtifactManager;
+
+		const sessionFile = this.#sessionFile;
+		if (!sessionFile) {
+			this.#artifactManager = null;
+			this.#artifactManagerSessionFile = null;
+			return null;
+		}
+
+		if (this.#artifactManager && this.#artifactManagerSessionFile === sessionFile) return this.#artifactManager;
+
+		this.#artifactManager = new ArtifactManager(sessionFile.slice(0, -JSONL_SUFFIX_LENGTH));
+		this.#artifactManagerSessionFile = sessionFile;
+		return this.#artifactManager;
+	}
+
+	#notifySessionNameListeners(): void {
+		for (const callback of [...this.#sessionNameChangedCallbacks]) {
+			try {
+				callback();
+			} catch (err) {
+				logger.warn("SessionManager: session name change hook failed", { error: String(err) });
+			}
+		}
+	}
+
+	static #cleanTitle(raw: string): string {
+		return raw
+			.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
+			.replace(/ +/g, " ")
+			.trim();
+	}
+
+	/** Puts a binary blob into the blob store and returns the blob reference. */
 	async putBlob(data: Buffer, options?: BlobPutOptions): Promise<BlobPutResult> {
-		return this.#blobStore.put(data, options);
+		return this.#blobs.put(data, options);
 	}
 
 	/** Synchronous variant of {@link putBlob} for rebuild-only render paths. */
 	putBlobSync(data: Buffer, options?: BlobPutOptions): BlobPutResult {
-		return this.#blobStore.putSync(data, options);
+		return this.#blobs.putSync(data, options);
 	}
 
 	captureState(): SessionManagerStateSnapshot {
 		return {
-			cwd: this.cwd,
-			sessionDir: this.sessionDir,
+			cwd: this.#cwd,
+			sessionDir: this.#sessionDir,
 			sessionId: this.#sessionId,
 			sessionName: this.#sessionName,
 			titleSource: this.#titleSource,
 			sessionFile: this.#sessionFile,
-			flushed: this.#flushed,
-			needsFullRewriteOnNextPersist: this.#needsFullRewriteOnNextPersist,
-			// Snapshot entry objects by reference: switch/reload replaces the active entry array,
-			// so rollback does not need structured cloning of extension/custom details.
-			fileEntries: [...this.#fileEntries],
+			onDisk: this.#fileIsCurrent,
+			needsRewrite: this.#rewriteRequired,
+			// Snapshot header + entries by reference: switch/reload replaces the
+			// active header/array wholesale, so rollback needs no deep clone.
+			header: this.#header,
+			entries: [...this.#entries],
 		};
 	}
 
 	restoreState(snapshot: SessionManagerStateSnapshot): void {
-		this.cwd = snapshot.cwd;
-		this.sessionDir = snapshot.sessionDir;
-		this.#sessionId = snapshot.sessionId;
+		this.#closeWriterEventually();
+		this.#diskTail = Promise.resolve();
+		this.#clearDiskError();
+
+		this.#cwd = snapshot.cwd;
+		this.#sessionDir = snapshot.sessionDir;
+		this.#sessionFile = snapshot.sessionFile;
+		this.#fileIsCurrent = snapshot.onDisk;
+		this.#rewriteRequired = snapshot.needsRewrite;
+		this.#forceFileCreation = snapshot.onDisk;
+		this.#applyEntries(snapshot.header, [...snapshot.entries]);
 		this.#sessionName = snapshot.sessionName;
 		this.#titleSource = snapshot.titleSource;
-		this.#sessionFile = snapshot.sessionFile;
-		this.#flushed = snapshot.flushed;
-		this.#needsFullRewriteOnNextPersist = snapshot.needsFullRewriteOnNextPersist;
-		this.#fileEntries = [...snapshot.fileEntries];
-		this.#persistWriter = undefined;
-		this.#persistWriterPath = undefined;
-		this.#persistChain = Promise.resolve();
-		this.#persistError = undefined;
-		this.#persistErrorReported = false;
 		this.#artifactManager = null;
 		this.#artifactManagerSessionFile = null;
 		this.#adoptedArtifactManager = null;
-		this.#buildIndex();
-		if (this.#sessionFile) {
-			this.#maybeWriteBreadcrumb(this.cwd, this.#sessionFile);
-		}
+
+		if (this.#sessionFile) this.#rememberBreadcrumb(this.#cwd, this.#sessionFile);
 	}
 
-	/** Initialize with a specific session file (used by factory methods) */
-	async #initSessionFile(sessionFile: string): Promise<void> {
-		await this.setSessionFile(sessionFile);
-	}
-
-	/** Initialize with a new session (used by factory methods) */
-	#initNewSession(): void {
-		this.#newSessionSync();
-	}
-
-	/** Switch to a different session file (used for resume and branching) */
+	/** Switch to a different session file (resume / branch). */
 	async setSessionFile(sessionFile: string): Promise<void> {
-		await this.#closePersistWriter();
-		this.#persistError = undefined;
-		this.#persistErrorReported = false;
-		this.#sessionFile = path.resolve(sessionFile);
-		this.#maybeWriteBreadcrumb(this.cwd, this.#sessionFile);
-		this.#fileEntries = await loadEntriesFromFile(this.#sessionFile, this.storage);
-		if (this.#fileEntries.length > 0) {
-			const header = this.#fileEntries.find(e => e.type === "session") as SessionHeader | undefined;
-			this.#sessionId = header?.id ?? createSessionId();
-			this.#sessionName = header?.title;
-			this.#titleSource = header?.titleSource;
+		await this.#drainAndCloseWriter();
+		this.#clearDiskError();
 
-			// Adopt the loaded session's own working directory. Sessions are stored in
-			// a directory keyed by their cwd, so resuming a session from another
-			// project (e.g. global review in the picker) must re-point cwd/sessionDir
-			// at that project. Same-cwd resumes and in-place reloads are a no-op; old
-			// sessions with no recorded cwd keep the current cwd.
-			const headerCwd = header?.cwd ? path.resolve(header.cwd) : undefined;
-			if (headerCwd && headerCwd !== this.cwd) {
-				this.cwd = headerCwd;
-				this.sessionDir = path.resolve(this.#sessionFile, "..");
-				this.#maybeWriteBreadcrumb(this.cwd, this.#sessionFile);
-			}
+		const resolvedSessionFile = path.resolve(sessionFile);
+		this.#sessionFile = resolvedSessionFile;
+		this.#rememberBreadcrumb(this.#cwd, resolvedSessionFile);
 
-			this.#needsFullRewriteOnNextPersist = migrateToCurrentVersion(this.#fileEntries);
-
-			await resolveBlobRefsInEntries(this.#fileEntries, this.#blobStore);
-			this.sanitizeLoadedOpenAIResponsesReplayMetadata();
-
-			this.#buildIndex();
-			this.#flushed = true;
-			this.#ensuredOnDisk = true;
-		} else {
-			const explicitPath = this.#sessionFile;
-			this.#newSessionSync();
-			this.#sessionFile = explicitPath; // preserve explicit path from --session flag
-			await this.#rewriteFile();
-			this.#flushed = true;
-			this.#ensuredOnDisk = true;
+		const fileEntries = await loadEntriesFromFile(resolvedSessionFile, this.#storage);
+		if (fileEntries.length === 0) {
+			// Explicit but empty/missing path (e.g. --session flag): start fresh but
+			// keep the requested path and materialize the header immediately.
+			this.#resetToNewSession(undefined, resolvedSessionFile);
+			this.#forceFileCreation = true;
+			await this.#rewriteAtomically();
+			this.#fileIsCurrent = true;
 			return;
 		}
+
+		const migrated = migrateToCurrentVersion(fileEntries);
+		await resolveBlobRefsInEntries(fileEntries, this.#blobs);
+		// loadEntriesFromFile guarantees entries[0] is a valid session header.
+		const header = fileEntries[0] as SessionHeader;
+
+		// Adopt the loaded session's working directory. Sessions live in a dir
+		// keyed by their cwd, so resuming a session from another project must
+		// re-point cwd/sessionDir at that project.
+		const headerCwd = header.cwd ? path.resolve(header.cwd) : undefined;
+		if (headerCwd && headerCwd !== path.resolve(this.#cwd)) {
+			this.#cwd = headerCwd;
+			this.#sessionDir = path.dirname(resolvedSessionFile);
+			this.#rememberBreadcrumb(this.#cwd, resolvedSessionFile);
+		}
+
+		this.#applyEntries(header, fileEntries.slice(1) as SessionEntry[]);
+		this.#fileIsCurrent = true;
+		this.#rewriteRequired = migrated;
+		this.#forceFileCreation = true;
+		this.#artifactManager = null;
+		this.#artifactManagerSessionFile = null;
+
+		if (this.sanitizeLoadedOpenAIResponsesReplayMetadata()) this.#rewriteRequired = true;
 	}
 
-	/** Start a new session. Closes any existing writer first. */
+	/** Start a new session. Drains and closes any existing writer first. */
 	async newSession(options?: NewSessionOptions): Promise<string | undefined> {
-		await this.#closePersistWriter();
-		return this.#newSessionSync(options);
+		await this.#drainAndCloseWriter();
+		return this.#resetToNewSession(options);
 	}
 
-	/** Delete a session file and its artifacts. Drains the persist writer first to avoid EPERM on Windows. ENOENT is treated as success. */
+	/** Delete a session file and its artifact directory. ENOENT is treated as success. */
 	async dropSession(sessionPath: string): Promise<void> {
-		await this.#closePersistWriter();
+		await this.#drainAndCloseWriter();
 		try {
-			await this.storage.deleteSessionWithArtifacts(sessionPath);
+			await this.#storage.deleteSessionWithArtifacts(sessionPath);
 		} catch (err) {
-			if (isEnoent(err)) return;
-			throw err;
+			if (!isEnoent(err)) throw err;
 		}
 	}
 
 	/**
-	 * Fork the current session, creating a new session file with the same entries.
-	 * Returns both the old and new session file paths for artifact copying.
-	 * @returns { oldSessionFile, newSessionFile } or undefined if not persisting
+	 * Fork the current session into a new file with the same entries.
+	 * @returns the old and new session file paths, or undefined when not persisting.
 	 */
 	async fork(): Promise<{ oldSessionFile: string; newSessionFile: string } | undefined> {
-		if (!this.persist || !this.#sessionFile) {
-			return undefined;
-		}
+		if (!this.#persist || !this.#sessionFile) return undefined;
 
 		const oldSessionFile = this.#sessionFile;
-		const oldSessionId = this.#sessionId;
+		const parentSessionId = this.#sessionId;
+		await this.#drainAndCloseWriter();
+		this.#clearDiskError();
 
-		// Close the current writer
-		await this.#closePersistWriter();
-		this.#persistChain = Promise.resolve();
-		this.#persistError = undefined;
-		this.#persistErrorReported = false;
-
-		// Create new session ID and header
-		this.#sessionId = createSessionId();
-		const timestamp = new Date().toISOString();
-		const fileTimestamp = timestamp.replace(/[:.]/g, "-");
-		this.#sessionFile = path.join(this.getSessionDir(), `${fileTimestamp}_${this.#sessionId}.jsonl`);
-
-		// Update the header with new ID but keep all entries
-		const oldHeader = this.#fileEntries.find(e => e.type === "session") as SessionHeader | undefined;
-		const newHeader: SessionHeader = {
+		const timestamp = nowIso();
+		this.#sessionId = mintSessionId();
+		this.#sessionFile = path.join(this.#sessionDir, `${fileSafeTimestamp(timestamp)}_${this.#sessionId}.jsonl`);
+		this.#header = {
 			type: "session",
 			version: CURRENT_SESSION_VERSION,
 			id: this.#sessionId,
-			title: oldHeader?.title ?? this.#sessionName,
-			titleSource: oldHeader?.titleSource ?? this.#titleSource,
+			title: this.#header.title ?? this.#sessionName,
+			titleSource: this.#header.titleSource ?? this.#titleSource,
 			timestamp,
-			cwd: this.cwd,
-			parentSession: oldSessionId,
+			cwd: this.#cwd,
+			parentSession: parentSessionId,
 		};
-		this.#sessionName = newHeader.title;
-		this.#titleSource = newHeader.titleSource;
+		this.#sessionName = this.#header.title;
+		this.#titleSource = this.#header.titleSource;
+		this.#fileIsCurrent = false;
+		this.#rewriteRequired = false;
+		this.#forceFileCreation = true;
+		this.#artifactManager = null;
+		this.#artifactManagerSessionFile = null;
+		this.#rememberBreadcrumb(this.#cwd, this.#sessionFile);
 
-		// Replace the header in fileEntries
-		const entries = this.#fileEntries.filter((e): e is SessionEntry => e.type !== "session");
-		this.#fileEntries = [newHeader, ...entries];
-
-		// Write the new session file
-		this.#flushed = false;
-		await this.#rewriteFile();
-
+		await this.#rewriteAtomically();
 		return { oldSessionFile, newSessionFile: this.#sessionFile };
 	}
 
 	/**
-	 * Move the session to a new working directory.
-	 * Moves session files and artifacts on disk, updates all internal references,
-	 * and rewrites the session header with the new cwd. When provided,
-	 * `targetSessionDir` is used instead of deriving the default directory for
-	 * the new cwd (for `--continue --session-dir` / `--resume --session-dir`).
+	 * Move the session to a new working directory: relocate the session file and
+	 * artifacts on disk, update internal references, and rewrite the header cwd.
 	 */
 	async moveTo(newCwd: string, targetSessionDir?: string): Promise<void> {
 		const resolvedCwd = path.resolve(newCwd);
-		if (resolvedCwd === this.cwd && (!targetSessionDir || path.resolve(targetSessionDir) === this.sessionDir)) return;
+		const resolvedTargetDir = targetSessionDir ? path.resolve(targetSessionDir) : undefined;
+		if (
+			resolvedCwd === path.resolve(this.#cwd) &&
+			(!resolvedTargetDir || resolvedTargetDir === path.resolve(this.#sessionDir))
+		) {
+			return;
+		}
 
-		const managedSessionsRoot = resolveManagedSessionRoot(this.sessionDir, this.cwd);
-		const newSessionDir = targetSessionDir
-			? path.resolve(targetSessionDir)
-			: managedSessionsRoot
-				? computeDefaultSessionDir(resolvedCwd, this.storage, managedSessionsRoot)
-				: computeDefaultSessionDir(resolvedCwd, this.storage);
-		let hadSessionFile = false;
+		const managedRoot = resolveManagedSessionRoot(this.#sessionDir, this.#cwd);
+		const nextSessionDir =
+			resolvedTargetDir ??
+			(managedRoot
+				? computeDefaultSessionDir(resolvedCwd, this.#storage, managedRoot)
+				: computeDefaultSessionDir(resolvedCwd, this.#storage));
 
-		if (this.persist && this.#sessionFile) {
-			this.storage.ensureDirSync(newSessionDir);
-			// Close the persist writer before moving files
-			await this.#closePersistWriter();
-			this.#persistChain = Promise.resolve();
-			this.#persistError = undefined;
-			this.#persistErrorReported = false;
+		let sessionFileExisted = false;
+
+		if (this.#persist && this.#sessionFile) {
+			this.#storage.ensureDirSync(nextSessionDir);
+			await this.#drainAndCloseWriter();
+			this.#clearDiskError();
 
 			const oldSessionFile = this.#sessionFile;
-			const newSessionFile = path.join(newSessionDir, path.basename(oldSessionFile));
-			const oldArtifactDir = oldSessionFile.slice(0, -6); // strip .jsonl
-			const newArtifactDir = newSessionFile.slice(0, -6);
-			const sameSessionFile = path.resolve(oldSessionFile) === path.resolve(newSessionFile);
-			const sameArtifactDir = path.resolve(oldArtifactDir) === path.resolve(newArtifactDir);
-			hadSessionFile = this.storage.existsSync(oldSessionFile);
-			let movedSessionFile = false;
-			let movedArtifactDir = false;
+			const newSessionFile = path.join(nextSessionDir, path.basename(oldSessionFile));
+			const oldArtifactsDir = artifactsDirectoryFor(oldSessionFile)!;
+			const newArtifactsDir = artifactsDirectoryFor(newSessionFile)!;
+			const sessionPathChanged = path.resolve(oldSessionFile) !== path.resolve(newSessionFile);
+			const artifactPathChanged = path.resolve(oldArtifactsDir) !== path.resolve(newArtifactsDir);
+			sessionFileExisted = this.#storage.existsSync(oldSessionFile);
+
+			let sessionMoved = false;
+			let artifactsMoved = false;
 
 			try {
-				// Guard: session file may not exist yet (no assistant messages persisted)
-				if (hadSessionFile && !sameSessionFile) {
+				if (sessionFileExisted && sessionPathChanged) {
 					await fs.promises.rename(oldSessionFile, newSessionFile);
-					movedSessionFile = true;
+					sessionMoved = true;
 				}
 
-				if (!sameArtifactDir) {
+				if (artifactPathChanged) {
 					try {
-						const stat = await fs.promises.stat(oldArtifactDir);
-						if (stat.isDirectory()) {
-							await fs.promises.rename(oldArtifactDir, newArtifactDir);
-							movedArtifactDir = true;
+						const artifactStat = await fs.promises.stat(oldArtifactsDir);
+						if (artifactStat.isDirectory()) {
+							await fs.promises.rename(oldArtifactsDir, newArtifactsDir);
+							artifactsMoved = true;
 						}
 					} catch (err) {
 						if (!isEnoent(err)) throw err;
 					}
 				}
 			} catch (err) {
-				if (movedArtifactDir) {
+				if (artifactsMoved) {
 					try {
-						await fs.promises.rename(newArtifactDir, oldArtifactDir);
+						await fs.promises.rename(newArtifactsDir, oldArtifactsDir);
 					} catch (rollbackErr) {
 						throw new Error(
 							`Failed to move artifacts and rollback: ${rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr)}`,
 						);
 					}
 				}
-				if (movedSessionFile) {
+
+				if (sessionMoved) {
 					try {
 						await fs.promises.rename(newSessionFile, oldSessionFile);
 					} catch (rollbackErr) {
@@ -2309,452 +870,103 @@ export class SessionManager {
 						);
 					}
 				}
+
 				throw err;
 			}
+
 			this.#sessionFile = newSessionFile;
+			this.#artifactManager = null;
+			this.#artifactManagerSessionFile = null;
 		}
 
-		// Update cwd and sessionDir after the move succeeds.
-		this.cwd = resolvedCwd;
-		this.sessionDir = newSessionDir;
+		this.#cwd = resolvedCwd;
+		this.#sessionDir = nextSessionDir;
+		this.#header.cwd = resolvedCwd;
 
-		// Update the session header in fileEntries
-		const header = this.#fileEntries.find(e => e.type === "session") as SessionHeader | undefined;
-		if (header) {
-			header.cwd = resolvedCwd;
+		// Rewrite at the new location when the file already existed (update cwd) or
+		// there is in-memory output worth materializing; otherwise stay lazy.
+		const hasAssistant = this.#historyContainsAssistantMessage();
+		if (this.#persist && this.#sessionFile && (sessionFileExisted || hasAssistant)) {
+			this.#forceFileCreation = true;
+			await this.#rewriteAtomically();
 		}
 
-		// Rewrite the session file at its new location with updated header.
-		// hadSessionFile: file existed before move → must rewrite to update cwd
-		// hasAssistant: assistant messages in memory but file missing → recreate from memory
-		// Neither true → fresh session, never written → preserve lazy-persist
-		const hasAssistant = this.#fileEntries.some(e => e.type === "message" && e.message.role === "assistant");
-		if (this.persist && this.#sessionFile && (hadSessionFile || hasAssistant)) {
-			await this.#rewriteFile();
-		}
-
-		// Update terminal breadcrumb
-		if (this.#sessionFile) {
-			this.#maybeWriteBreadcrumb(resolvedCwd, this.#sessionFile);
-		}
-	}
-
-	/** Sync version for initial creation (no existing writer to close) */
-	#newSessionSync(options?: NewSessionOptions): string | undefined {
-		this.#persistChain = Promise.resolve();
-		this.#persistError = undefined;
-		this.#persistErrorReported = false;
-		this.#sessionId = createSessionId();
-		this.#sessionName = undefined;
-		this.#titleSource = undefined;
-		const timestamp = new Date().toISOString();
-		const header: SessionHeader = {
-			type: "session",
-			version: CURRENT_SESSION_VERSION,
-			id: this.#sessionId,
-			timestamp,
-			cwd: this.cwd,
-			parentSession: options?.parentSession,
-		};
-		this.#fileEntries = [header];
-		this.#byId.clear();
-		this.#labelsById.clear();
-		this.#leafId = null;
-		this.#flushed = false;
-		this.#needsFullRewriteOnNextPersist = false;
-		this.#ensuredOnDisk = false;
-		this.#usageStatistics = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, premiumRequests: 0, cost: 0 };
-		this.#inMemoryArtifacts = null;
-		this.#inMemoryArtifactCounter = 0;
-
-		if (this.persist) {
-			const fileTimestamp = timestamp.replace(/[:.]/g, "-");
-			this.#sessionFile = path.join(this.getSessionDir(), `${fileTimestamp}_${this.#sessionId}.jsonl`);
-			this.#maybeWriteBreadcrumb(this.cwd, this.#sessionFile);
-		}
-		return this.#sessionFile;
-	}
-
-	#buildIndex(): void {
-		this.#byId.clear();
-		this.#labelsById.clear();
-		this.#leafId = null;
-		this.#usageStatistics = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, premiumRequests: 0, cost: 0 };
-		for (const entry of this.#fileEntries) {
-			if (entry.type === "session") continue;
-			this.#byId.set(entry.id, entry);
-			this.#leafId = entry.id;
-			if (entry.type === "label") {
-				if (entry.label) {
-					this.#labelsById.set(entry.targetId, entry.label);
-				} else {
-					this.#labelsById.delete(entry.targetId);
-				}
-			}
-			if (entry.type === "message" && entry.message.role === "assistant") {
-				const usage = entry.message.usage;
-				this.#usageStatistics.input += usage.input;
-				this.#usageStatistics.output += usage.output;
-				this.#usageStatistics.cacheRead += usage.cacheRead;
-				this.#usageStatistics.cacheWrite += usage.cacheWrite;
-				this.#usageStatistics.premiumRequests += usage.premiumRequests ?? 0;
-				this.#usageStatistics.cost += usage.cost.total;
-			}
-
-			if (entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolName === "task") {
-				const usage = getTaskToolUsage(entry.message.details);
-				if (usage) {
-					this.#usageStatistics.input += usage.input;
-					this.#usageStatistics.output += usage.output;
-					this.#usageStatistics.cacheRead += usage.cacheRead;
-					this.#usageStatistics.cacheWrite += usage.cacheWrite;
-					this.#usageStatistics.premiumRequests += usage.premiumRequests ?? 0;
-					this.#usageStatistics.cost += usage.cost.total;
-				}
-			}
-		}
-	}
-
-	#recordPersistError(err: unknown): Error {
-		const normalized = toError(err);
-		if (!this.#persistError) this.#persistError = normalized;
-		if (!this.#persistErrorReported) {
-			this.#persistErrorReported = true;
-			logger.error("Session persistence error.", {
-				sessionFile: this.#sessionFile,
-				error: normalized.message,
-				stack: normalized.stack,
-			});
-		}
-		return normalized;
-	}
-
-	#queuePersistTask(task: () => Promise<void>, options?: { ignoreError?: boolean }): Promise<void> {
-		const next = this.#persistChain.then(async () => {
-			if (this.#persistError && !options?.ignoreError) throw this.#persistError;
-			await task();
-		});
-		this.#persistChain = next.catch(err => {
-			this.#recordPersistError(err);
-		});
-		return next;
-	}
-
-	#ensurePersistWriter(): NdjsonFileWriter | undefined {
-		if (!this.persist || !this.#sessionFile) return undefined;
-		if (this.#persistError) throw this.#persistError;
-		if (this.#persistWriter && this.#persistWriterPath === this.#sessionFile) {
-			if (this.#persistWriter.isOpen()) return this.#persistWriter;
-			// Cached writer for the current file is mid-close (queued
-			// `#closePersistWriterInternal` has flipped `#closing` but not yet
-			// cleared `#persistWriter`). Returning it would make `writeSync`
-			// throw "Writer closed". Defer to the caller — `_persist` routes
-			// the entry through the async rewrite path so it still lands on disk.
-			return undefined;
-		}
-		// Note: caller must await _closePersistWriter() before calling this if switching files
-		this.#persistWriter = new NdjsonFileWriter(this.storage, this.#sessionFile, {
-			onError: err => {
-				this.#recordPersistError(err);
-			},
-		});
-		this.#persistWriterPath = this.#sessionFile;
-		return this.#persistWriter;
-	}
-
-	async #closePersistWriterInternal(): Promise<void> {
-		if (this.#persistWriter) {
-			await this.#persistWriter.close();
-			this.#persistWriter = undefined;
-		}
-		this.#persistWriterPath = undefined;
-	}
-
-	async #closePersistWriter(): Promise<void> {
-		await this.#queuePersistTask(
-			async () => {
-				await this.#closePersistWriterInternal();
-			},
-			{ ignoreError: true },
-		);
-	}
-	// Windows can reject overwrite-style rename with EPERM even after our own writer is closed.
-	// Move the old session file aside first so a failed retry can roll back to the last good file.
-	// The backup uses a plain `<basename>.<snowflake>.bak` name (no leading dot) so that if the
-	// process crashes between the two renames, `recoverOrphanedBackups` can find it via the
-	// shared `*.bak` glob on both real and in-memory storage backends and promote it back to
-	// the primary on the next session-dir scan.
-
-	async #replaceSessionFileAfterEperm(tempPath: string, targetPath: string, renameError: unknown): Promise<void> {
-		const dir = path.resolve(targetPath, "..");
-		const backupPath = path.join(dir, `${path.basename(targetPath)}.${Snowflake.next()}.bak`);
-		try {
-			await this.storage.rename(targetPath, backupPath);
-		} catch (err) {
-			if (isEnoent(err)) {
-				await this.storage.rename(tempPath, targetPath);
-				return;
-			}
-			throw toError(renameError);
-		}
-
-		try {
-			await this.storage.rename(tempPath, targetPath);
-		} catch (err) {
-			const replaceError = toError(err);
-			const originalError = toError(renameError);
-			try {
-				await this.storage.rename(backupPath, targetPath);
-			} catch (rollbackErr) {
-				const rollbackError = toError(rollbackErr);
-				throw new Error(
-					`Failed to replace session file after EPERM (original: ${originalError.message}; retry: ${replaceError.message}); rollback from ${backupPath} also failed: ${rollbackError.message}`,
-					{ cause: originalError },
-				);
-			}
-			throw replaceError;
-		}
-
-		try {
-			await this.storage.unlink(backupPath);
-		} catch (err) {
-			if (!isEnoent(err)) {
-				logger.warn("Failed to remove session rewrite backup", {
-					sessionFile: targetPath,
-					backupPath,
-					error: toError(err).message,
-				});
-			}
-		}
-	}
-
-	async #replaceSessionFile(tempPath: string, targetPath: string): Promise<void> {
-		try {
-			await this.storage.rename(tempPath, targetPath);
-		} catch (err) {
-			if (!hasFsCode(err, "EPERM")) throw toError(err);
-			await this.#replaceSessionFileAfterEperm(tempPath, targetPath, err);
-		}
-	}
-	async #writeEntriesAtomically(entries: FileEntry[]): Promise<void> {
-		if (!this.#sessionFile) return;
-		const dir = path.resolve(this.#sessionFile, "..");
-		const tempPath = path.join(dir, `.${path.basename(this.#sessionFile)}.${Snowflake.next()}.tmp`);
-		const writer = new NdjsonFileWriter(this.storage, tempPath, { flags: "w" });
-		try {
-			for (const entry of entries) {
-				await writer.write(entry);
-			}
-			await writer.flush();
-			await writer.fsync();
-			await writer.close();
-			await this.#replaceSessionFile(tempPath, this.#sessionFile);
-		} catch (err) {
-			try {
-				await writer.close();
-			} catch {
-				// Ignore cleanup errors
-			}
-			try {
-				await this.storage.unlink(tempPath);
-			} catch {
-				// Ignore cleanup errors
-			}
-			throw toError(err);
-		}
-	}
-
-	async #rewriteFile(): Promise<void> {
-		if (!this.persist || !this.#sessionFile) return;
-		await this.#queuePersistTask(async () => {
-			await this.#closePersistWriterInternal();
-			const entries = await Promise.all(
-				this.#fileEntries.map(entry => prepareEntryForPersistence(entry, this.#blobStore)),
-			);
-			await this.#writeEntriesAtomically(entries);
-			this.#needsFullRewriteOnNextPersist = false;
-			this.#flushed = true;
-		});
-	}
-
-	isPersisted(): boolean {
-		return this.persist;
+		if (this.#sessionFile) this.#rememberBreadcrumb(resolvedCwd, this.#sessionFile);
 	}
 
 	/**
-	 * Force-persist all current entries to disk, even when no assistant message exists yet.
-	 * Used by ACP mode where session/new must create a discoverable session immediately.
+	 * Force the session onto disk even with no assistant message yet (ACP
+	 * session/new must create a discoverable file immediately).
 	 */
 	async ensureOnDisk(): Promise<void> {
-		if (!this.persist || !this.#sessionFile) return;
-		if (this.#flushed && !this.#needsFullRewriteOnNextPersist) return;
-		await this.#rewriteFile();
-		this.#ensuredOnDisk = true;
+		if (!this.#persist || !this.#sessionFile) return;
+		this.#forceFileCreation = true;
+		if (this.#fileIsCurrent && !this.#rewriteRequired) return;
+		await this.#rewriteAtomically();
 	}
 
-	/** Flush pending writes to disk. Call before switching sessions or on shutdown. */
+	/** Flush pending writes. Call before switching sessions or on shutdown. */
 	async flush(): Promise<void> {
-		await this.#queuePersistTask(async () => {
-			if (this.#persistWriter) {
-				await this.#persistWriter.flush();
-				await this.#persistWriter.fsync();
-			}
+		if (!this.#persist || !this.#sessionFile) return;
+		await this.#scheduleDiskWork(async () => {
+			if (this.#writer?.isOpen()) await this.#writer.flush();
 		});
-		if (this.#persistError) throw this.#persistError;
+		if (this.#diskFailure) throw this.#diskFailure;
 	}
 
 	/**
-	 * Synchronously flush all in-memory entries to disk and fsync.
-	 * Use when the process may exit before an async flush settles (e.g. Ctrl+C
-	 * in the TUI, where raw mode consumes the keystroke so postmortem's SIGINT
-	 * handler never fires).
-	 *
-	 * Hot path: the persist writer is open and flushed, so a single fsyncSync
-	 * pushes the page-cache data to physical disk.
-	 *
-	 * Cold path: entries are only in memory (session just started, or a rewrite
-	 * is pending). Writes all entries to a temp file, fsyncs, and atomically
-	 * renames over the session file — then re-opens an append writer so the
-	 * hot path resumes on subsequent `_persist` calls.
+	 * Synchronously flush all in-memory entries to disk. Use when the process may
+	 * exit before an async flush settles (Ctrl+C in the TUI). Software-crash
+	 * durable; not atomic and not power-loss safe — a same-process crash never
+	 * lands mid-`writeFileSync`.
 	 */
 	flushSync(): void {
-		if (!this.persist || !this.#sessionFile) return;
-		if (this.#persistError) throw this.#persistError;
-
-		// Hot path: writer is open and all entries have been written via writeSync.
-		// Just fsync the fd — the data is already in the kernel page cache.
-		if (this.#persistWriter?.isOpen() && this.#flushed && !this.#needsFullRewriteOnNextPersist) {
-			this.#persistWriter.fsyncSync();
-			return;
-		}
-
-		// Cold path: write all in-memory entries to a temp file and atomically
-		// replace the session file. This is safe to run even when an async
-		// rewrite is queued on #persistChain: the async task won't progress
-		// while we're on the sync call stack, and the file we produce is a
-		// superset of whatever the async rewrite would write.
-		const dir = path.resolve(this.#sessionFile, "..");
-		const tempPath = path.join(dir, `.${path.basename(this.#sessionFile)}.${Snowflake.next()}.tmp`);
-		const fd = fs.openSync(tempPath, "w");
-		try {
-			for (const entry of this.#fileEntries) {
-				const persisted = prepareEntryForPersistenceSync(entry, this.#blobStore);
-				const line = `${JSON.stringify(persisted)}\n`;
-				fs.writeSync(fd, line);
-			}
-			fs.fsyncSync(fd);
-		} finally {
-			fs.closeSync(fd);
-		}
-
-		// Atomic replace (with EPERM retry for Windows)
-		try {
-			fs.renameSync(tempPath, this.#sessionFile);
-		} catch (err) {
-			if (!hasFsCode(err, "EPERM")) {
-				try {
-					fs.unlinkSync(tempPath);
-				} catch {
-					/* best effort */
-				}
-				throw toError(err);
-			}
-			// Windows: move the old file aside, then rename
-			const backupPath = path.join(dir, `${path.basename(this.#sessionFile)}.${Snowflake.next()}.bak`);
-			try {
-				fs.renameSync(this.#sessionFile, backupPath);
-			} catch (moveAsideErr) {
-				if (isEnoent(moveAsideErr)) {
-					fs.renameSync(tempPath, this.#sessionFile);
-					return;
-				}
-				try {
-					fs.unlinkSync(tempPath);
-				} catch {
-					/* best effort */
-				}
-				throw toError(err);
-			}
-			try {
-				fs.renameSync(tempPath, this.#sessionFile);
-			} catch (replaceErr) {
-				// Roll back
-				try {
-					fs.renameSync(backupPath, this.#sessionFile);
-				} catch {
-					/* best effort */
-				}
-				throw toError(replaceErr);
-			}
-			try {
-				fs.unlinkSync(backupPath);
-			} catch {
-				/* best effort */
-			}
-		}
-
-		// Re-open the persist writer in append mode so the hot path resumes.
-		if (this.#persistWriter) {
-			// The old writer is stale (pointed at the pre-rewrite file or was
-			// mid-close). Close it asynchronously — it's a no-op if already
-			// closed, and we don't want to block on draining its queue.
-			void this.#persistWriter.close().catch(() => {});
-		}
-		this.#persistWriter = new NdjsonFileWriter(this.storage, this.#sessionFile, {
-			onError: err => this.#recordPersistError(err),
-		});
-		this.#persistWriterPath = this.#sessionFile;
-		this.#flushed = true;
-		this.#needsFullRewriteOnNextPersist = false;
+		if (!this.#persist || !this.#sessionFile) return;
+		if (this.#diskFailure) throw this.#diskFailure;
+		this.#rewriteSynchronously();
+		if (this.#diskFailure) throw this.#diskFailure;
 	}
 
-	/** Close the persistent writer after flushing all pending data. */
+	/** Flush, then close the append writer. */
 	async close(): Promise<void> {
-		if (!this.#persistWriter) return;
-		await this.#queuePersistTask(async () => {
-			await this.#closePersistWriterInternal();
-			this.#flushed = true;
+		if (!this.#persist) return;
+		await this.#scheduleDiskWork(async () => {
+			await this.#closeWriterHandle();
+			this.#fileIsCurrent = true;
 		});
-		if (this.#persistError) throw this.#persistError;
+		if (this.#diskFailure) throw this.#diskFailure;
 	}
 
 	getCwd(): string {
-		return this.cwd;
+		return this.#cwd;
 	}
 
-	/** Get usage statistics across all assistant messages in the session. */
 	getUsageStatistics(): UsageStatistics {
-		return this.#usageStatistics;
+		return this.#index.usageSnapshot();
 	}
 
 	/**
 	 * Open a new per-turn budget window: snapshot the cumulative output baseline,
-	 * reset the eval-subagent counter, and set the (optional) ceiling. Called once
-	 * per real user message; `total` is null when no `+Nk` directive was present.
+	 * reset the eval-subagent counter, and set the (optional) ceiling.
 	 */
 	beginTurnBudget(total: number | null, hard: boolean): void {
-		this.#turnBudget = { total, hard };
-		this.#turnBaselineOutput = this.#usageStatistics.output;
+		this.#turnBudgetTotal = total;
+		this.#turnBudgetHard = hard;
+		this.#turnOutputBaseline = this.#index.usageSnapshot().output;
 		this.#turnEvalOutput = 0;
 	}
 
-	/** Record output tokens consumed by an eval-spawned subagent in the current turn. */
 	recordEvalSubagentOutput(output: number): void {
 		if (Number.isFinite(output) && output > 0) this.#turnEvalOutput += output;
 	}
 
-	/**
-	 * Current turn budget for the eval `budget` helper: the ceiling (null = none),
-	 * output tokens spent this turn (main loop + eval-spawned subagents, no
-	 * double-count), and whether the ceiling is hard.
-	 */
 	getTurnBudget(): { total: number | null; spent: number; hard: boolean } {
-		const mainDelta = Math.max(0, this.#usageStatistics.output - this.#turnBaselineOutput);
-		return { total: this.#turnBudget.total, spent: mainDelta + this.#turnEvalOutput, hard: this.#turnBudget.hard };
+		const mainOutput = Math.max(0, this.#index.usageSnapshot().output - this.#turnOutputBaseline);
+		return { total: this.#turnBudgetTotal, spent: mainOutput + this.#turnEvalOutput, hard: this.#turnBudgetHard };
 	}
 
 	getSessionDir(): string {
-		return this.sessionDir;
+		return this.#sessionDir;
 	}
 
 	getSessionId(): string {
@@ -2765,152 +977,78 @@ export class SessionManager {
 		return this.#sessionFile;
 	}
 
-	/**
-	 * Returns the session artifacts directory path (session file path without .jsonl).
-	 * Returns null when the session is not persisted to a file.
-	 * When this session has adopted an external ArtifactManager (subagent case),
-	 * returns that manager's directory so reads/writes land in the shared parent
-	 * dir instead of a private (non-existent) subdir.
-	 */
 	getArtifactsDir(): string | null {
 		if (this.#adoptedArtifactManager) return this.#adoptedArtifactManager.dir;
-		const sessionFile = this.#sessionFile;
-		return sessionFile ? sessionFile.slice(0, -6) : null;
+		return artifactsDirectoryFor(this.#sessionFile);
 	}
 
-	/**
-	 * Adopt an externally-owned ArtifactManager. Used by subagents to share
-	 * the parent session's artifact directory and ID counter.
-	 */
 	adoptArtifactManager(manager: ArtifactManager): void {
 		this.#adoptedArtifactManager = manager;
 	}
 
-	/**
-	 * Returns the ArtifactManager this session writes through. Lazily creates
-	 * one bound to the current session file unless an external manager was
-	 * adopted via `adoptArtifactManager`. Returns null only for non-persistent
-	 * sessions with no adopted manager.
-	 */
 	getArtifactManager(): ArtifactManager | null {
-		return this.#getOrCreateArtifactManager();
+		return this.#artifactManagerForSession();
 	}
 
-	/**
-	 * Returns an artifact manager bound to the current session file.
-	 * Recreates the manager when the active session file changes.
-	 */
-	#getOrCreateArtifactManager(): ArtifactManager | null {
-		if (this.#adoptedArtifactManager) return this.#adoptedArtifactManager;
-		const sessionFile = this.#sessionFile;
-		if (!sessionFile) {
-			this.#artifactManager = null;
-			this.#artifactManagerSessionFile = null;
-			return null;
-		}
-
-		if (this.#artifactManager && this.#artifactManagerSessionFile === sessionFile) {
-			return this.#artifactManager;
-		}
-
-		const manager = new ArtifactManager(sessionFile.slice(0, -6));
-		this.#artifactManager = manager;
-		this.#artifactManagerSessionFile = sessionFile;
-		return manager;
-	}
-
-	/**
-	 * Allocate a new artifact path and ID for the current session.
-	 * Returns an empty object when the session is not persisted.
-	 */
 	async allocateArtifactPath(toolType: string): Promise<{ id?: string; path?: string }> {
-		const manager = this.#getOrCreateArtifactManager();
-		if (!manager) return {};
-		return manager.allocatePath(toolType);
+		return (await this.#artifactManagerForSession()?.allocatePath(toolType)) ?? {};
 	}
 
-	/**
-	 * Save artifact content under the current session and return artifact ID.
-	 * Returns an artifact ID for all sessions (file-backed for persistent, in-memory fallback otherwise).
-	 */
 	async saveArtifact(content: string, toolType: string): Promise<string | undefined> {
-		const manager = this.#getOrCreateArtifactManager();
+		const manager = this.#artifactManagerForSession();
 		if (manager) return manager.save(content, toolType);
-		// Non-persistent session: store in memory so spill truncation can proceed.
-		if (!this.#inMemoryArtifacts) this.#inMemoryArtifacts = new Map();
+
+		// Non-persistent session: keep an in-memory copy so spill truncation works.
+		this.#inMemoryArtifacts ??= new Map();
 		const id = String(this.#inMemoryArtifactCounter++);
 		this.#inMemoryArtifacts.set(id, content);
 		return id;
 	}
 
-	/**
-	 * Resolve an artifact ID to an on-disk path for the current session.
-	 * Returns null when missing or when the session is not persisted.
-	 */
 	async getArtifactPath(id: string): Promise<string | null> {
-		const manager = this.#getOrCreateArtifactManager();
-		if (!manager) return null;
-		return manager.getPath(id);
+		return (await this.#artifactManagerForSession()?.getPath(id)) ?? null;
 	}
 
-	/**
-	 * Path to the unsent-input draft sidecar for the current session. Lives inside
-	 * the artifacts directory so it is removed together with the session on
-	 * `dropSession`. Returns null when the session has no on-disk identity.
-	 */
-	#getDraftPath(): string | null {
-		const dir = this.getArtifactsDir();
-		return dir ? path.join(dir, "draft.txt") : null;
-	}
-
-	/**
-	 * Persist (or clear) the current editor draft so the next resume of this
-	 * session can restore it. Empty text deletes any stale draft. No-op when the
-	 * session is not persisted.
-	 */
 	async saveDraft(text: string): Promise<void> {
-		const draftPath = this.#getDraftPath();
-		if (!draftPath || !this.persist) return;
+		const draftPath = this.#draftPath();
+		if (!draftPath || !this.#persist) return;
+
 		if (text.length === 0) {
 			try {
-				await this.storage.unlink(draftPath);
+				await this.#storage.unlink(draftPath);
 			} catch (err) {
 				if (!isEnoent(err)) throw err;
 			}
 			return;
 		}
-		// Force the session header onto disk so resume can find the file we are
-		// attaching this draft to. Without this, a session whose first message
-		// never produced an assistant reply would persist a draft next to a
-		// session file that does not exist on disk.
+
+		// Force the header onto disk so resume can find the file this draft attaches to.
 		await this.ensureOnDisk();
-		await this.storage.writeText(draftPath, text);
+		await this.#storage.writeText(draftPath, text);
 	}
 
-	/**
-	 * Read and remove the saved draft. Returns the previously-saved text, or
-	 * null when no draft is pending. Single-shot: a successful read removes the
-	 * sidecar so a subsequent resume does not re-restore the same text.
-	 */
 	async consumeDraft(): Promise<string | null> {
-		const draftPath = this.#getDraftPath();
+		const draftPath = this.#draftPath();
 		if (!draftPath) return null;
-		let text: string;
+
+		let draft: string;
 		try {
-			text = await this.storage.readText(draftPath);
+			draft = await this.#storage.readText(draftPath);
 		} catch (err) {
 			if (isEnoent(err)) return null;
 			throw err;
 		}
+
 		try {
-			await this.storage.unlink(draftPath);
+			await this.#storage.unlink(draftPath);
 		} catch (err) {
 			if (!isEnoent(err)) throw err;
 		}
-		return text;
+
+		return draft;
 	}
 
-	/** The source that set the session name: "user" (manual /rename or RPC) or "auto" (generated title). */
+	/** The source that set the session name: "user" (manual/RPC) or "auto" (generated title). */
 	get titleSource(): "auto" | "user" | undefined {
 		return this.#titleSource;
 	}
@@ -2926,174 +1064,51 @@ export class SessionManager {
 		};
 	}
 
-	#fireSessionNameChanged(): void {
-		for (const cb of [...this.#sessionNameChangedCallbacks]) {
-			try {
-				cb();
-			} catch (err) {
-				logger.warn("SessionManager: session name change hook failed", { error: String(err) });
-			}
-		}
-	}
-
-	/** Strip C0/C1 control characters (includes ESC, so removes ANSI sequences) and collapse whitespace. */
-	static #sanitizeName(name: string): string {
-		return name
-			.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
-			.replace(/ +/g, " ")
-			.trim();
-	}
-
 	/**
 	 * Set the session display name.
-	 * @param source - "user" for explicit renames (/rename command, RPC); "auto" for generated titles.
-	 *   Auto-generated titles are silently ignored when the user has already set a name.
+	 * @param source "user" for explicit renames; "auto" for generated titles.
+	 *   Auto titles are ignored once the user has set a name.
 	 */
 	async setSessionName(name: string, source: "auto" | "user" = "auto"): Promise<boolean> {
-		// User-set names take permanent precedence over auto-generated ones.
 		if (this.#titleSource === "user" && source === "auto") return false;
 
-		const sanitized = SessionManager.#sanitizeName(name);
-		if (!sanitized) return false;
+		const title = SessionManager.#cleanTitle(name);
+		if (!title) return false;
 
-		this.#sessionName = sanitized;
+		this.#sessionName = title;
 		this.#titleSource = source;
+		this.#header.title = title;
+		this.#header.titleSource = source;
 
-		// Update the in-memory header (so first flush includes title)
-		const header = this.#fileEntries.find(e => e.type === "session") as SessionHeader | undefined;
-		if (header) {
-			header.title = sanitized;
-			header.titleSource = source;
+		if (this.#persist && this.#sessionFile && this.#storage.existsSync(this.#sessionFile)) {
+			await this.#rewriteAtomically();
 		}
 
-		// Update the session file header with the title (if already flushed)
-		const sessionFile = this.#sessionFile;
-		if (this.persist && sessionFile && this.storage.existsSync(sessionFile)) {
-			await this.#rewriteFile();
-		}
-		this.#fireSessionNameChanged();
+		this.#notifySessionNameListeners();
 		return true;
-	}
-
-	_persist(entry: SessionEntry): void {
-		if (!this.persist || !this.#sessionFile) return;
-		if (this.#persistError) throw this.#persistError;
-
-		// Normally we wait for the first assistant message before persisting to avoid
-		// creating files for sessions that never produce output. Once ensureOnDisk() has
-		// been called, the session is already on disk and every entry must be flushed.
-		if (!this.#ensuredOnDisk) {
-			const hasAssistant = this.#fileEntries.some(e => e.type === "message" && e.message.role === "assistant");
-			if (!hasAssistant) {
-				// Mark as not flushed so when assistant arrives, all entries get written.
-				this.#flushed = false;
-				return;
-			}
-		}
-
-		if (this.#needsFullRewriteOnNextPersist || !this.#flushed) {
-			// Cold path: rewrite the whole file atomically. Async — the writer is
-			// closed/reopened and every entry is re-prepared. Errors flow through
-			// `#persistChain` → `#recordPersistError`; we swallow the rejection
-			// here to avoid an unhandled rejection when the persist dir races with
-			// test-level tempDir cleanup.
-			this.#rewriteFile().catch(() => {});
-			return;
-		}
-
-		// Hot path: synchronously truncate + append. `fs.writeSync` returns once the
-		// bytes are in the kernel page cache, so the entry survives an OOM/SIGKILL
-		// landing immediately after this call. Image externalization (rare) runs via
-		// the synchronous blob-store path so blob bytes are durable before the JSONL
-		// line referencing them is written.
-		try {
-			const writer = this.#ensurePersistWriter();
-			if (!writer) {
-				// `#ensurePersistWriter` returns undefined here only when the cached
-				// writer is mid-close (the `!persist`/`!sessionFile` cases are
-				// rejected above). Route through `#rewriteFile` so the entry — which
-				// is already in `#fileEntries` — persists once the close drains.
-				this.#rewriteFile().catch(() => {});
-				return;
-			}
-			const persistedEntry = prepareEntryForPersistenceSync(entry, this.#blobStore);
-			writer.writeSync(persistedEntry);
-		} catch (err) {
-			this.#recordPersistError(err);
-		}
-	}
-
-	#appendEntry(entry: SessionEntry): void {
-		this.#fileEntries.push(entry);
-		this.#byId.set(entry.id, entry);
-		this.#leafId = entry.id;
-		this._persist(entry);
-		if (entry.type === "message" && entry.message.role === "assistant") {
-			const usage = entry.message.usage;
-			this.#usageStatistics.input += usage.input;
-			this.#usageStatistics.output += usage.output;
-			this.#usageStatistics.cacheRead += usage.cacheRead;
-			this.#usageStatistics.cacheWrite += usage.cacheWrite;
-			this.#usageStatistics.premiumRequests += usage.premiumRequests ?? 0;
-			this.#usageStatistics.cost += usage.cost.total;
-		}
-
-		if (entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolName === "task") {
-			const usage = getTaskToolUsage(entry.message.details);
-			if (usage) {
-				this.#usageStatistics.input += usage.input;
-				this.#usageStatistics.output += usage.output;
-				this.#usageStatistics.cacheRead += usage.cacheRead;
-				this.#usageStatistics.cacheWrite += usage.cacheWrite;
-				this.#usageStatistics.premiumRequests += usage.premiumRequests ?? 0;
-				this.#usageStatistics.cost += usage.cost.total;
-			}
-		}
-		if (this.onEntryAppended) {
-			try {
-				this.onEntryAppended(entry);
-			} catch (err) {
-				logger.warn("collab entry hook failed", { error: String(err) });
-			}
-		}
 	}
 
 	/**
 	 * Append a foreign (host-authored) entry verbatim, preserving its
-	 * `id`/`parentId` — no id minting. Used by collab guests to mirror the
-	 * host session into the local replica file.
+	 * `id`/`parentId`. Used by collab guests to mirror the host session.
 	 */
 	ingestReplicatedEntry(entry: SessionEntry): void {
-		this.#appendEntry(entry);
+		this.#recordEntry(entry);
 	}
 
 	/**
 	 * Snapshot the session for collab replication: the live header plus a deep
-	 * copy of every entry (the host mutates entries in place on
-	 * truncation/rewrite paths, so guests must not share references).
+	 * copy of every entry (the host mutates entries in place on rewrite paths, so
+	 * guests must not share references).
 	 */
 	snapshotForReplication(): { header: SessionHeader; entries: SessionEntry[] } {
-		const live = this.getHeader();
-		const header: SessionHeader = live
-			? structuredClone(live)
-			: {
-					type: "session",
-					version: CURRENT_SESSION_VERSION,
-					id: this.#sessionId,
-					title: this.#sessionName,
-					titleSource: this.#titleSource,
-					timestamp: new Date().toISOString(),
-					cwd: this.cwd,
-				};
-		const entries = structuredClone(this.#fileEntries.filter(e => e.type !== "session")) as SessionEntry[];
-		return { header, entries };
+		return { header: structuredClone(this.#header), entries: structuredClone(this.#entries) as SessionEntry[] };
 	}
 
-	/** Append a message as child of current leaf, then advance leaf. Returns entry id.
-	 * Does not allow writing CompactionSummaryMessage and BranchSummaryMessage directly.
-	 * Reason: we want these to be top-level entries in the session, not message session entries,
-	 * so it is easier to find them.
-	 * These need to be appended via appendCompaction() and appendBranchSummary() methods.
+	/**
+	 * Append a message as a child of the current leaf, then advance the leaf.
+	 * CompactionSummaryMessage / BranchSummaryMessage are rejected here — they are
+	 * top-level entries via appendCompaction()/branchWithSummary().
 	 */
 	appendMessage(
 		message:
@@ -3104,88 +1119,50 @@ export class SessionManager {
 			| PythonExecutionMessage
 			| FileMentionMessage,
 	): string {
-		const entry: SessionMessageEntry = {
-			type: "message",
-			id: generateId(this.#byId),
-			parentId: this.#leafId,
-			timestamp: new Date().toISOString(),
-			message,
-		};
-		this.#appendEntry(entry);
+		const entry: SessionMessageEntry = { type: "message", ...this.#freshEntryFields(), message };
+		this.#recordEntry(entry);
 		return entry.id;
 	}
 
-	/** Append a thinking level change as child of current leaf, then advance leaf. Returns entry id. */
 	appendThinkingLevelChange(thinkingLevel?: string): string {
 		const entry: ThinkingLevelChangeEntry = {
 			type: "thinking_level_change",
-			id: generateId(this.#byId),
-			parentId: this.#leafId,
-			timestamp: new Date().toISOString(),
+			...this.#freshEntryFields(),
 			thinkingLevel: thinkingLevel ?? null,
 		};
-		this.#appendEntry(entry);
+		this.#recordEntry(entry);
 		return entry.id;
 	}
 
 	appendServiceTierChange(serviceTier: ServiceTier | null): string {
-		const entry: ServiceTierChangeEntry = {
-			type: "service_tier_change",
-			id: generateId(this.#byId),
-			parentId: this.#leafId,
-			timestamp: new Date().toISOString(),
-			serviceTier,
-		};
-		this.#appendEntry(entry);
+		const entry: ServiceTierChangeEntry = { type: "service_tier_change", ...this.#freshEntryFields(), serviceTier };
+		this.#recordEntry(entry);
 		return entry.id;
 	}
 
-	/** Append a mode change as child of current leaf, then advance leaf. Returns entry id. */
 	appendModeChange(mode: string, data?: Record<string, unknown>): string {
-		const entry: ModeChangeEntry = {
-			type: "mode_change",
-			id: generateId(this.#byId),
-			parentId: this.#leafId,
-			timestamp: new Date().toISOString(),
-			mode,
-			data,
-		};
-		this.#appendEntry(entry);
+		const entry: ModeChangeEntry = { type: "mode_change", ...this.#freshEntryFields(), mode, data };
+		this.#recordEntry(entry);
 		return entry.id;
 	}
 
 	/**
-	 * Append a model change as child of current leaf, then advance leaf. Returns entry id.
+	 * Append a model change as a child of the current leaf, then advance the leaf.
 	 * @param model Model in "provider/modelId" format
 	 * @param role Optional role (default: "default")
 	 */
 	appendModelChange(model: string, role?: string): string {
-		const entry: ModelChangeEntry = {
-			type: "model_change",
-			id: generateId(this.#byId),
-			parentId: this.#leafId,
-			timestamp: new Date().toISOString(),
-			model,
-			role,
-		};
-		this.#appendEntry(entry);
+		const entry: ModelChangeEntry = { type: "model_change", ...this.#freshEntryFields(), model, role };
+		this.#recordEntry(entry);
 		return entry.id;
 	}
 
-	/** Append session init metadata (for subagent debugging/replay). Returns entry id. */
 	appendSessionInit(init: { systemPrompt: string; task: string; tools: string[]; outputSchema?: unknown }): string {
-		const entry: SessionInitEntry = {
-			type: "session_init",
-			id: generateId(this.#byId),
-			parentId: this.#leafId,
-			timestamp: new Date().toISOString(),
-			...init,
-		};
-		this.#appendEntry(entry);
+		const entry: SessionInitEntry = { type: "session_init", ...this.#freshEntryFields(), ...init };
+		this.#recordEntry(entry);
 		return entry.id;
 	}
 
-	/** Append a compaction summary as child of current leaf, then advance leaf. Returns entry id. */
 	appendCompaction<T = unknown>(
 		summary: string,
 		shortSummary: string | undefined,
@@ -3197,9 +1174,7 @@ export class SessionManager {
 	): string {
 		const entry: CompactionEntry<T> = {
 			type: "compaction",
-			id: generateId(this.#byId),
-			parentId: this.#leafId,
-			timestamp: new Date().toISOString(),
+			...this.#freshEntryFields(),
 			summary,
 			shortSummary,
 			firstKeptEntryId,
@@ -3208,31 +1183,23 @@ export class SessionManager {
 			fromExtension,
 			preserveData,
 		};
-		this.#appendEntry(entry);
+		this.#recordEntry(entry);
 		return entry.id;
 	}
 
-	/** Append a custom entry (for extensions) as child of current leaf, then advance leaf. Returns entry id. */
 	appendCustomEntry(customType: string, data?: unknown): string {
-		const entry: CustomEntry = {
-			type: "custom",
-			customType,
-			data,
-			id: generateId(this.#byId),
-			parentId: this.#leafId,
-			timestamp: new Date().toISOString(),
-		};
-		this.#appendEntry(entry);
+		const entry: CustomEntry = { type: "custom", customType, data, ...this.#freshEntryFields() };
+		this.#recordEntry(entry);
 		return entry.id;
 	}
 
 	/**
-	 * Rewrite the session file after in-place entry updates.
-	 * Use sparingly (e.g., pruning old tool outputs).
+	 * Rewrite the session file after in-place entry updates (e.g. pruning old tool
+	 * outputs). Use sparingly.
 	 */
 	async rewriteEntries(): Promise<void> {
-		if (!this.persist || !this.#sessionFile) return;
-		await this.#rewriteFile();
+		if (!this.#persist || !this.#sessionFile) return;
+		await this.#rewriteAtomically();
 	}
 
 	/**
@@ -3242,7 +1209,6 @@ export class SessionManager {
 	 * @param display Whether to show in TUI (true = styled display, false = hidden)
 	 * @param details Optional extension-specific metadata (not sent to LLM)
 	 * @param attribution Who initiated this message for billing/attribution semantics
-	 * @returns Entry id
 	 */
 	appendCustomMessageEntry<T = unknown>(
 		customType: string,
@@ -3256,402 +1222,244 @@ export class SessionManager {
 			customType,
 			content,
 			display,
-			// Drop AgentSession-internal transient fields (allowlist in
-			// `INTERNAL_DETAILS_FIELDS`) before disk persistence. Single
-			// chokepoint covers every CustomMessage write path.
+			// Drop AgentSession-internal transient fields before disk persistence.
 			details: stripInternalDetailsFields(details),
 			attribution,
-			id: generateId(this.#byId),
-			parentId: this.#leafId,
-			timestamp: new Date().toISOString(),
+			...this.#freshEntryFields(),
 		};
-		this.#appendEntry(entry);
+		this.#recordEntry(entry);
 		return entry.id;
 	}
 
-	// =========================================================================
-	// TTSR (Time Traveling Stream Rules)
-	// =========================================================================
-
 	/**
 	 * Append an MCP tool selection entry recording the discovery-selected MCP tools.
-	 * @param selectedToolNames MCP tool names selected for this branch
-	 * @returns Entry id
 	 */
 	appendMCPToolSelection(selectedToolNames: string[]): string {
 		const entry: MCPToolSelectionEntry = {
 			type: "mcp_tool_selection",
-			id: generateId(this.#byId),
-			parentId: this.#leafId,
-			timestamp: new Date().toISOString(),
+			...this.#freshEntryFields(),
 			selectedToolNames: [...selectedToolNames],
 		};
-		this.#appendEntry(entry);
+		this.#recordEntry(entry);
 		return entry.id;
 	}
 
-	/**
-	 * Append a TTSR injection entry recording which rules were injected.
-	 * @param ruleNames Names of rules that were injected
-	 * @returns Entry id
-	 */
+	/** Append a TTSR injection entry recording which rules were injected. */
 	appendTtsrInjection(ruleNames: string[]): string {
 		const entry: TtsrInjectionEntry = {
 			type: "ttsr_injection",
-			id: generateId(this.#byId),
-			parentId: this.#leafId,
-			timestamp: new Date().toISOString(),
-			injectedRules: ruleNames,
+			...this.#freshEntryFields(),
+			injectedRules: [...ruleNames],
 		};
-		this.#appendEntry(entry);
+		this.#recordEntry(entry);
 		return entry.id;
 	}
 
-	/**
-	 * Get all unique TTSR rule names that have been injected in the current branch.
-	 * Scans from root to current leaf for ttsr_injection entries.
-	 */
+	/** All unique TTSR rule names injected on the current branch (root → leaf). */
 	getInjectedTtsrRules(): string[] {
-		const path = this.getBranch();
-		const ruleNames = new Set<string>();
-		for (const entry of path) {
-			if (entry.type === "ttsr_injection") {
-				for (const name of entry.injectedRules) {
-					ruleNames.add(name);
-				}
-			}
+		const names = new Set<string>();
+		for (const entry of this.getBranch()) {
+			if (entry.type !== "ttsr_injection") continue;
+			for (const name of entry.injectedRules) names.add(name);
 		}
-		return Array.from(ruleNames);
+		return [...names];
 	}
 
-	// =========================================================================
-	// Tree Traversal
-	// =========================================================================
-
 	getLeafId(): string | null {
-		return this.#leafId;
+		return this.#index.leafId();
 	}
 
 	getLeafEntry(): SessionEntry | undefined {
-		return this.#leafId ? this.#byId.get(this.#leafId) : undefined;
+		return this.#index.leafEntry();
 	}
 
 	/**
-	 * Get the most recent model role from the current session path.
-	 * Returns undefined if no model change has been recorded.
+	 * The most recent model role on the current branch, or undefined when no
+	 * model change has been recorded.
 	 */
 	getLastModelChangeRole(): string | undefined {
-		let current = this.getLeafEntry();
-		while (current) {
-			if (current.type === "model_change") {
-				return current.role ?? "default";
-			}
-			current = current.parentId ? this.#byId.get(current.parentId) : undefined;
+		const branch = this.getBranch();
+		for (let index = branch.length - 1; index >= 0; index--) {
+			const entry = branch[index];
+			if (entry.type === "model_change") return entry.role ?? "default";
 		}
 		return undefined;
 	}
 
 	getEntry(id: string): SessionEntry | undefined {
-		return this.#byId.get(id);
+		return this.#index.get(id);
 	}
 
-	/**
-	 * Get all direct children of an entry.
-	 */
+	/** All direct children of an entry. */
 	getChildren(parentId: string): SessionEntry[] {
-		const children: SessionEntry[] = [];
-		for (const entry of this.#byId.values()) {
-			if (entry.parentId === parentId) {
-				children.push(entry);
-			}
-		}
-		return children;
+		return this.#index.childrenOf(parentId);
 	}
 
-	/**
-	 * Get the label for an entry, if any.
-	 */
 	getLabel(id: string): string | undefined {
-		return this.#labelsById.get(id);
+		return this.#index.labelFor(id);
 	}
 
 	/**
-	 * Set or clear a label on an entry.
-	 * Labels are user-defined markers for bookmarking/navigation.
-	 * Pass undefined or empty string to clear the label.
+	 * Set or clear a label on an entry. Pass undefined/empty to clear.
 	 */
 	appendLabelChange(targetId: string, label: string | undefined): string {
-		if (!this.#byId.has(targetId)) {
-			throw new Error(`Entry ${targetId} not found`);
-		}
-		const entry: LabelEntry = {
-			type: "label",
-			id: generateId(this.#byId),
-			parentId: this.#leafId,
-			timestamp: new Date().toISOString(),
-			targetId,
-			label,
-		};
-		this.#appendEntry(entry);
-		if (label) {
-			this.#labelsById.set(targetId, label);
-		} else {
-			this.#labelsById.delete(targetId);
-		}
+		if (!this.#index.has(targetId)) throw new Error(`Entry ${targetId} not found`);
+
+		const entry: LabelEntry = { type: "label", ...this.#freshEntryFields(), targetId, label };
+		this.#recordEntry(entry);
 		return entry.id;
 	}
 
 	/**
-	 * Walk from entry to root, returning all entries in path order.
-	 * Includes all entry types (messages, compaction, model changes, etc.).
-	 * Use buildSessionContext() to get the resolved messages for the LLM.
+	 * Walk from an entry to root, returning entries in path order. Includes all
+	 * entry types; use buildSessionContext() for the resolved LLM messages.
 	 */
 	getBranch(fromId?: string): SessionEntry[] {
-		const path: SessionEntry[] = [];
-		const startId = fromId ?? this.#leafId;
-		let current = startId ? this.#byId.get(startId) : undefined;
-		while (current) {
-			path.unshift(current);
-			current = current.parentId ? this.#byId.get(current.parentId) : undefined;
-		}
-		return path;
+		return this.#index.pathTo(fromId ?? this.#index.leafId());
 	}
 
 	/**
-	 * Build the session context (what gets sent to the LLM), or — with
-	 * `{ transcript: true }` — the full-history display transcript.
-	 * Uses tree traversal from current leaf.
+	 * Build the session context (LLM messages), or — with `{ transcript: true }` —
+	 * the full-history display transcript, from the current leaf path.
 	 */
 	buildSessionContext(options?: BuildSessionContextOptions): SessionContext {
-		return buildSessionContext(this.getEntries(), this.#leafId, this.#byId, options);
+		return buildSessionContext(this.#entries, this.#index.leafId(), this.#index.entriesById(), options);
 	}
 
-	/** Strip stale OpenAI Responses assistant replay metadata from loaded in-memory entries. */
+	/** Strip stale OpenAI Responses assistant replay metadata from loaded entries. */
 	sanitizeLoadedOpenAIResponsesReplayMetadata(): boolean {
-		let didSanitize = false;
-		for (const entry of this.#fileEntries) {
-			if (entry.type !== "message" || entry.message.role !== "assistant") {
-				continue;
-			}
+		let changed = false;
+		for (const entry of this.#entries) {
+			if (entry.type !== "message" || entry.message.role !== "assistant") continue;
 
-			const sanitizedMessage = sanitizeRehydratedOpenAIResponsesAssistantMessage(entry.message);
-			if (sanitizedMessage === entry.message) {
-				continue;
-			}
+			const sanitized = sanitizeRehydratedOpenAIResponsesAssistantMessage(entry.message);
+			if (sanitized === entry.message) continue;
 
-			entry.message = sanitizedMessage;
-			didSanitize = true;
+			entry.message = sanitized;
+			changed = true;
 		}
 
-		return didSanitize;
+		return changed;
 	}
 
-	/**
-	 * Get session header.
-	 */
 	getHeader(): SessionHeader | null {
-		const h = this.#fileEntries.find(e => e.type === "session");
-		return h ? (h as SessionHeader) : null;
+		return this.#header;
 	}
 
-	/**
-	 * Get all session entries (excludes header). Returns a shallow copy.
-	 * The session is append-only: use appendXXX() to add entries, branch() to
-	 * change the leaf pointer. Entries cannot be modified or deleted.
-	 */
+	/** All session entries (excludes header). Returns a shallow copy. */
 	getEntries(): SessionEntry[] {
-		return this.#fileEntries.filter((e): e is SessionEntry => e.type !== "session");
+		return [...this.#entries];
 	}
 
 	/**
-	 * Get the session as a tree structure. Returns a shallow defensive copy of all entries.
-	 * A well-formed session has exactly one root (first entry with parentId === null).
-	 * Orphaned entries (broken parent chain) are also returned as roots.
+	 * The session as a tree. A well-formed session has exactly one root; orphaned
+	 * entries (broken parent chain) are returned as roots too.
 	 */
 	getTree(): SessionTreeNode[] {
-		const entries = this.getEntries();
-		const nodeMap = new Map<string, SessionTreeNode>();
-		const roots: SessionTreeNode[] = [];
-
-		// Create nodes with resolved labels
-		for (const entry of entries) {
-			const label = this.#labelsById.get(entry.id);
-			nodeMap.set(entry.id, { entry, children: [], label });
-		}
-
-		// Build tree
-		for (const entry of entries) {
-			const node = nodeMap.get(entry.id)!;
-			if (entry.parentId === null || entry.parentId === entry.id) {
-				roots.push(node);
-			} else {
-				const parent = nodeMap.get(entry.parentId);
-				if (parent) {
-					parent.children.push(node);
-				} else {
-					// Orphan - treat as root
-					roots.push(node);
-				}
-			}
-		}
-
-		// Sort children by timestamp (oldest first, newest at bottom)
-		// Use iterative approach to avoid stack overflow on deep trees
-		const stack: SessionTreeNode[] = [...roots];
-		while (stack.length > 0) {
-			const node = stack.pop()!;
-			node.children.sort((a, b) => new Date(a.entry.timestamp).getTime() - new Date(b.entry.timestamp).getTime());
-			stack.push(...node.children);
-		}
-
-		return roots;
+		return this.#index.tree(this.#entries);
 	}
 
-	// =========================================================================
-	// Branching
-	// =========================================================================
-
 	/**
-	 * Start a new branch from an earlier entry.
-	 * Moves the leaf pointer to the specified entry. The next appendXXX() call
-	 * will create a child of that entry, forming a new branch. Existing entries
-	 * are not modified or deleted.
+	 * Move the leaf to an earlier entry so the next append forms a new branch.
+	 * Existing entries are never modified or deleted.
 	 */
 	branch(branchFromId: string): void {
-		if (!this.#byId.has(branchFromId)) {
-			throw new Error(`Entry ${branchFromId} not found`);
-		}
-		this.#leafId = branchFromId;
+		if (!this.#index.has(branchFromId)) throw new Error(`Entry ${branchFromId} not found`);
+		this.#index.setLeaf(branchFromId);
 	}
 
-	/**
-	 * Reset the leaf pointer to null (before any entries).
-	 * The next appendXXX() call will create a new root entry (parentId = null).
-	 * Use this when navigating to re-edit the first user message.
-	 */
+	/** Reset the leaf to null so the next append creates a new root entry. */
 	resetLeaf(): void {
-		this.#leafId = null;
+		this.#index.setLeaf(null);
 	}
 
-	/**
-	 * Start a new branch with a summary of the abandoned path.
-	 * Same as branch(), but also appends a branch_summary entry that captures
-	 * context from the abandoned conversation path.
-	 */
+	/** Like branch(), but also records a branch_summary of the abandoned path. */
 	branchWithSummary(branchFromId: string | null, summary: string, details?: unknown, fromExtension?: boolean): string {
-		if (branchFromId !== null && !this.#byId.has(branchFromId)) {
-			throw new Error(`Entry ${branchFromId} not found`);
-		}
-		this.#leafId = branchFromId;
+		if (branchFromId !== null && !this.#index.has(branchFromId)) throw new Error(`Entry ${branchFromId} not found`);
+
+		this.#index.setLeaf(branchFromId);
 		const entry: BranchSummaryEntry = {
 			type: "branch_summary",
-			id: generateId(this.#byId),
+			id: generateId(this.#index),
 			parentId: branchFromId,
-			timestamp: new Date().toISOString(),
+			timestamp: nowIso(),
 			fromId: branchFromId ?? "root",
 			summary,
 			details,
 			fromExtension,
 		};
-		this.#appendEntry(entry);
+		this.#recordEntry(entry);
 		return entry.id;
 	}
 
 	/**
-	 * Create a new session file containing only the path from root to the specified leaf.
-	 * Useful for extracting a single conversation path from a branched session.
-	 * Returns the new session file path, or undefined if not persisting.
+	 * Create a new session file containing only the path from root to `leafId`.
+	 * Returns the new file path, or undefined when not persisting.
 	 */
 	createBranchedSession(leafId: string): string | undefined {
-		const previousSessionFile = this.#sessionFile;
+		const sourceSessionFile = this.#sessionFile;
 		const branchPath = this.getBranch(leafId);
-		if (branchPath.length === 0) {
-			throw new Error(`Entry ${leafId} not found`);
+		if (branchPath.length === 0) throw new Error(`Entry ${leafId} not found`);
+
+		// Drop label entries from the path; recreate them fresh from the resolved map.
+		const entriesToKeep = branchPath.filter(entry => entry.type !== "label");
+		const keptIds = new Set(entriesToKeep.map(entry => entry.id));
+		const labelsToCarry: Array<{ targetId: string; label: string }> = [];
+		for (const [targetId, label] of this.#index.labelsInEffect()) {
+			if (keptIds.has(targetId)) labelsToCarry.push({ targetId, label });
 		}
 
-		// Filter out LabelEntry from path - we'll recreate them from the resolved map
-		const pathWithoutLabels = branchPath.filter(e => e.type !== "label");
-
-		const newSessionId = createSessionId();
-		const timestamp = new Date().toISOString();
-		const fileTimestamp = timestamp.replace(/[:.]/g, "-");
-		const newSessionFile = path.join(this.getSessionDir(), `${fileTimestamp}_${newSessionId}.jsonl`);
-
+		const timestamp = nowIso();
+		const newSessionId = mintSessionId();
+		const newSessionFile = path.join(this.#sessionDir, `${fileSafeTimestamp(timestamp)}_${newSessionId}.jsonl`);
 		const header: SessionHeader = {
 			type: "session",
 			version: CURRENT_SESSION_VERSION,
 			id: newSessionId,
 			timestamp,
-			cwd: this.cwd,
-			parentSession: this.persist ? previousSessionFile : undefined,
+			cwd: this.#cwd,
+			parentSession: this.#persist ? sourceSessionFile : undefined,
 		};
 
-		// Collect labels for entries in the path
-		const pathEntryIds = new Set(pathWithoutLabels.map(e => e.id));
-		const labelsToWrite: Array<{ targetId: string; label: string }> = [];
-		for (const [targetId, label] of this.#labelsById) {
-			if (pathEntryIds.has(targetId)) {
-				labelsToWrite.push({ targetId, label });
-			}
-		}
-
-		if (this.persist) {
-			const lines: string[] = [];
-			lines.push(JSON.stringify(header));
-			for (const entry of pathWithoutLabels) {
-				lines.push(JSON.stringify(entry));
-			}
-			// Write fresh label entries at the end
-			const lastEntryId = pathWithoutLabels[pathWithoutLabels.length - 1]?.id || null;
-			let parentId = lastEntryId;
-			const labelEntries: LabelEntry[] = [];
-			for (const { targetId, label } of labelsToWrite) {
-				const labelEntry: LabelEntry = {
-					type: "label",
-					id: generateId(new Set(pathEntryIds)),
-					parentId,
-					timestamp: new Date().toISOString(),
-					targetId,
-					label,
-				};
-				lines.push(JSON.stringify(labelEntry));
-				pathEntryIds.add(labelEntry.id);
-				labelEntries.push(labelEntry);
-				parentId = labelEntry.id;
-			}
-			this.storage.writeTextSync(newSessionFile, `${lines.join("\n")}\n`);
-			this.#fileEntries = [header, ...pathWithoutLabels, ...labelEntries];
-			this.#sessionId = newSessionId;
-			this.#sessionFile = newSessionFile;
-			this.#flushed = true;
-			this.#buildIndex();
-			return newSessionFile;
-		}
-
-		// In-memory mode: replace current session with the path + labels
-		const labelEntries: LabelEntry[] = [];
-		let parentId = pathWithoutLabels[pathWithoutLabels.length - 1]?.id || null;
-		for (const { targetId, label } of labelsToWrite) {
+		const labels: LabelEntry[] = [];
+		let parentId = entriesToKeep[entriesToKeep.length - 1]?.id ?? null;
+		for (const carried of labelsToCarry) {
 			const labelEntry: LabelEntry = {
 				type: "label",
-				id: generateId(new Set([...pathEntryIds, ...labelEntries.map(e => e.id)])),
+				id: generateId(new Set([...keptIds, ...labels.map(entry => entry.id)])),
 				parentId,
-				timestamp: new Date().toISOString(),
-				targetId,
-				label,
+				timestamp: nowIso(),
+				targetId: carried.targetId,
+				label: carried.label,
 			};
-			labelEntries.push(labelEntry);
+			labels.push(labelEntry);
 			parentId = labelEntry.id;
 		}
-		this.#fileEntries = [header, ...pathWithoutLabels, ...labelEntries];
+
+		this.#header = header;
+		this.#entries = [...entriesToKeep, ...labels];
 		this.#sessionId = newSessionId;
-		this.#buildIndex();
-		return undefined;
+		this.#sessionName = header.title;
+		this.#titleSource = header.titleSource;
+		this.#index.rebuild(this.#entries);
+		this.#artifactManager = null;
+		this.#artifactManagerSessionFile = null;
+		this.#forceFileCreation = this.#persist;
+
+		if (!this.#persist) {
+			this.#sessionFile = undefined;
+			this.#fileIsCurrent = false;
+			this.#rewriteRequired = false;
+			return undefined;
+		}
+
+		this.#sessionFile = newSessionFile;
+		this.#rewriteSynchronously();
+		this.#rememberBreadcrumb(this.#cwd, newSessionFile);
+		return newSessionFile;
 	}
 
-	/**
-	 * Resolve the canonical default session directory for a cwd.
-	 */
+	/** Resolve the canonical default session directory for a cwd. */
 	static getDefaultSessionDir(
 		cwd: string,
 		agentDir?: string,
@@ -3662,19 +1470,19 @@ export class SessionManager {
 
 	/**
 	 * Create a new session.
-	 * @param cwd Working directory (stored in session header)
-	 * @param sessionDir Optional session directory. If omitted, uses default (~/.omp/agent/sessions/<encoded-cwd>/).
+	 * @param cwd Working directory (stored in the session header)
+	 * @param sessionDir Optional session directory; defaults to the cwd-derived dir.
 	 */
 	static create(cwd: string, sessionDir?: string, storage: SessionStorage = new FileSessionStorage()): SessionManager {
 		const dir = sessionDir ?? SessionManager.getDefaultSessionDir(cwd, undefined, storage);
 		const manager = new SessionManager(cwd, dir, true, storage);
-		manager.#initNewSession();
+		manager.#resetToNewSession();
 		return manager;
 	}
 
 	/**
-	 * Fork a session into the current project directory.
-	 * Copies history from another session file while creating a new session file in the current sessionDir.
+	 * Fork a session into the current project directory: copy history from another
+	 * session file while creating a fresh session file in this sessionDir.
 	 */
 	static async forkFrom(
 		sourcePath: string,
@@ -3686,123 +1494,119 @@ export class SessionManager {
 		const dir = sessionDir ?? SessionManager.getDefaultSessionDir(cwd, undefined, storage);
 		const manager = new SessionManager(cwd, dir, true, storage);
 		manager.#suppressBreadcrumb = options?.suppressBreadcrumb === true;
-		const forkEntries = structuredClone(await loadEntriesFromFile(sourcePath, storage)) as FileEntry[];
-		migrateToCurrentVersion(forkEntries);
-		await resolveBlobRefsInEntries(forkEntries, manager.#blobStore);
-		const sourceHeader = forkEntries.find(e => e.type === "session") as SessionHeader | undefined;
-		const historyEntries = forkEntries.filter(entry => entry.type !== "session") as SessionEntry[];
-		manager.#newSessionSync({ parentSession: sourceHeader?.id });
-		const newHeader = manager.#fileEntries[0] as SessionHeader;
-		newHeader.title = sourceHeader?.title;
-		newHeader.titleSource = sourceHeader?.titleSource;
-		manager.#fileEntries = [newHeader, ...historyEntries];
-		manager.#sessionName = newHeader.title;
-		manager.#titleSource = newHeader.titleSource;
+
+		const sourceEntries = structuredClone(await loadEntriesFromFile(sourcePath, storage)) as FileEntry[];
+		migrateToCurrentVersion(sourceEntries);
+		await resolveBlobRefsInEntries(sourceEntries, manager.#blobs);
+
+		const sourceHeader = sourceEntries.find(entry => entry.type === "session") as SessionHeader | undefined;
+		const history = sourceEntries.filter(entry => entry.type !== "session") as SessionEntry[];
+		manager.#resetToNewSession({ parentSession: sourceHeader?.id });
+		manager.#header.title = sourceHeader?.title;
+		manager.#header.titleSource = sourceHeader?.titleSource;
+		manager.#sessionName = manager.#header.title;
+		manager.#titleSource = manager.#header.titleSource;
+		manager.#entries = history;
+		manager.#index.rebuild(history);
 		manager.sanitizeLoadedOpenAIResponsesReplayMetadata();
-		manager.#buildIndex();
-		await manager.#rewriteFile();
+		manager.#forceFileCreation = true;
+		await manager.#rewriteAtomically();
 		return manager;
 	}
 
 	/**
 	 * Open a specific session file.
-	 * @param path Path to session file
-	 * @param sessionDir Optional session directory for /new or /branch. If omitted, derives from file's parent.
+	 * @param sessionDir Optional dir for /new or /branch; defaults to the file's parent.
 	 */
 	static async open(
 		filePath: string,
 		sessionDir?: string,
 		storage: SessionStorage = new FileSessionStorage(),
 	): Promise<SessionManager> {
-		// Extract cwd from session header if possible, otherwise use getProjectDir()
-		const entries = await loadEntriesFromFile(filePath, storage);
-		const header = entries.find(e => e.type === "session") as SessionHeader | undefined;
+		const loaded = await loadEntriesFromFile(filePath, storage);
+		const header = loaded.find(entry => entry.type === "session") as SessionHeader | undefined;
 		const cwd = header?.cwd ?? getProjectDir();
-		// If no sessionDir provided, derive from file's parent directory
-		const dir = sessionDir ?? path.resolve(filePath, "..");
+		const dir = sessionDir ?? path.dirname(path.resolve(filePath));
 		const manager = new SessionManager(cwd, dir, true, storage);
-		await manager.#initSessionFile(filePath);
+		await manager.setSessionFile(filePath);
 		return manager;
 	}
 
-	/**
-	 * Continue the most recent session, or create new if none.
-	 * @param cwd Working directory
-	 * @param sessionDir Optional session directory. If omitted, uses default (~/.omp/agent/sessions/<encoded-cwd>/).
-	 */
+	/** Continue the most recent session, or create a new one if none exists. */
 	static async continueRecent(
 		cwd: string,
 		sessionDir?: string,
 		storage: SessionStorage = new FileSessionStorage(),
 	): Promise<SessionManager> {
 		const dir = sessionDir ?? SessionManager.getDefaultSessionDir(cwd, undefined, storage);
-		// Prefer terminal-scoped breadcrumb (handles concurrent sessions correctly)
-		const breadcrumb = await readTerminalBreadcrumbEntry();
-		const breadcrumbCwd = breadcrumb ? path.resolve(breadcrumb.cwd) : undefined;
 		const resolvedCwd = path.resolve(cwd);
-		let mostRecent: string | null | undefined;
-		if (breadcrumb && breadcrumbCwd !== resolvedCwd) {
-			// The terminal's last session was started in a different cwd. If that cwd no
-			// longer exists (e.g. `git worktree move`/dir rename) and the new location has
-			// no sessions of its own, re-root the session here instead of silently starting
-			// fresh — otherwise the relocated session would be unreachable via --continue.
-			// When an explicit sessionDir is reused across the move, the stale breadcrumb
-			// file itself may be the most recent entry there; don't count it as a
-			// current-directory session. If that shared dir also contains an older session
-			// that already belongs to the current cwd, prefer that local session instead
-			// of re-rooting the stale breadcrumb over it.
-			const resolvedBreadcrumbCwd = path.resolve(breadcrumb.cwd);
-			mostRecent = await findMostRecentSession(dir, storage);
-			const sourceCwdGone = !fs.existsSync(resolvedBreadcrumbCwd);
-			const breadcrumbSessionFile = path.resolve(breadcrumb.sessionFile);
-			const mostRecentIsBreadcrumb =
-				mostRecent !== null && mostRecent !== undefined && path.resolve(mostRecent) === breadcrumbSessionFile;
-			let hasCurrentCwdSession = false;
-			if (sourceCwdGone && mostRecentIsBreadcrumb) {
-				const currentCwdSession = (await SessionManager.list(cwd, dir, storage)).find(
-					session =>
-						path.resolve(session.path) !== breadcrumbSessionFile &&
-						session.cwd &&
-						path.resolve(session.cwd) === resolvedCwd,
-				);
-				if (currentCwdSession) {
-					mostRecent = currentCwdSession.path;
-					hasCurrentCwdSession = true;
+		const breadcrumb = await readTerminalBreadcrumbEntry();
+		let chosenSession: string | null | undefined;
+
+		if (breadcrumb) {
+			const breadcrumbCwd = path.resolve(breadcrumb.cwd);
+			if (breadcrumbCwd === resolvedCwd) {
+				chosenSession = breadcrumb.sessionFile;
+			} else {
+				// The terminal's last session started in a different cwd. If that cwd is
+				// gone (worktree move/rename) and this location has no sessions of its
+				// own, re-root the moved session here instead of starting fresh. When an
+				// explicit sessionDir is reused across the move, the stale breadcrumb file
+				// may be the newest entry there; prefer a genuine current-cwd session.
+				let newestInTargetDir = await findMostRecentSession(dir, storage);
+				const breadcrumbFile = path.resolve(breadcrumb.sessionFile);
+				const breadcrumbCwdMissing = !fs.existsSync(breadcrumbCwd);
+				const newestIsBreadcrumb = newestInTargetDir ? path.resolve(newestInTargetDir) === breadcrumbFile : false;
+				let currentProjectAlreadyHasSession = false;
+
+				if (breadcrumbCwdMissing && newestIsBreadcrumb) {
+					const localSession = (await SessionManager.list(cwd, dir, storage)).find(
+						session =>
+							path.resolve(session.path) !== breadcrumbFile &&
+							session.cwd &&
+							path.resolve(session.cwd) === resolvedCwd,
+					);
+					if (localSession) {
+						newestInTargetDir = localSession.path;
+						currentProjectAlreadyHasSession = true;
+					}
 				}
-			}
-			const relocated = sourceCwdGone && (mostRecent === null || (mostRecentIsBreadcrumb && !hasCurrentCwdSession));
-			if (relocated) {
-				logger.info("Re-rooting moved session", { from: resolvedBreadcrumbCwd, to: resolvedCwd });
-				const manager = await SessionManager.open(breadcrumb.sessionFile, undefined, storage);
-				await manager.moveTo(cwd, sessionDir);
-				return manager;
+
+				const looksLikeMovedProject =
+					breadcrumbCwdMissing &&
+					(newestInTargetDir === null || (newestIsBreadcrumb && !currentProjectAlreadyHasSession));
+				if (looksLikeMovedProject) {
+					logger.info("Re-rooting moved session", { from: breadcrumbCwd, to: resolvedCwd });
+					const manager = await SessionManager.open(breadcrumb.sessionFile, undefined, storage);
+					await manager.moveTo(cwd, sessionDir);
+					return manager;
+				}
+
+				chosenSession = newestInTargetDir;
 			}
 		}
-		const terminalSession = breadcrumb && breadcrumbCwd === resolvedCwd ? breadcrumb.sessionFile : null;
-		if (mostRecent === undefined) mostRecent = terminalSession ?? (await findMostRecentSession(dir, storage));
+
+		if (chosenSession === undefined) chosenSession = await findMostRecentSession(dir, storage);
+
 		const manager = new SessionManager(cwd, dir, true, storage);
-		if (mostRecent) {
-			await manager.#initSessionFile(mostRecent);
-		} else {
-			manager.#initNewSession();
-		}
+		if (chosenSession) await manager.setSessionFile(chosenSession);
+		else manager.#resetToNewSession();
 		return manager;
 	}
 
-	/** Create an in-memory session (no file persistence) */
+	/** Create an in-memory session (no file persistence). */
 	static inMemory(
 		cwd: string = getProjectDir(),
 		storage: SessionStorage = new MemorySessionStorage(),
 	): SessionManager {
 		const manager = new SessionManager(cwd, "", false, storage);
-		manager.#initNewSession();
+		manager.#resetToNewSession();
 		return manager;
 	}
 
 	/**
-	 * List all sessions.
-	 * @param cwd Working directory (used to compute default session directory)
-	 * @param sessionDir Optional session directory. If omitted, uses default (~/.omp/agent/sessions/<encoded-cwd>/).
+	 * List sessions for a project directory.
+	 * @param sessionDir Optional dir; defaults to the cwd-derived dir.
 	 */
 	static async list(
 		cwd: string,
@@ -3810,27 +1614,11 @@ export class SessionManager {
 		storage: SessionStorage = new FileSessionStorage(),
 	): Promise<SessionInfo[]> {
 		const dir = sessionDir ?? SessionManager.getDefaultSessionDir(cwd, undefined, storage);
-		try {
-			await recoverOrphanedBackups(dir, storage);
-			const files = storage.listFilesSync(dir, "*.jsonl");
-			return await collectSessionsFromFiles(files, storage);
-		} catch {
-			return [];
-		}
+		return listSessions(dir, storage);
 	}
 
-	/**
-	 * List all sessions across all project directories.
-	 */
-	static async listAll(storage: SessionStorage = new FileSessionStorage()): Promise<SessionInfo[]> {
-		const sessionsRoot = path.join(getDefaultAgentDir(), "sessions");
-		try {
-			const files = await Array.fromAsync(new Bun.Glob("*/*.jsonl").scan(sessionsRoot), name =>
-				path.join(sessionsRoot, name),
-			);
-			return await collectSessionsFromFiles(files, storage);
-		} catch {
-			return [];
-		}
+	/** List all sessions across all project directories. */
+	static listAll(storage: SessionStorage = new FileSessionStorage()): Promise<SessionInfo[]> {
+		return listAllSessions(storage);
 	}
 }

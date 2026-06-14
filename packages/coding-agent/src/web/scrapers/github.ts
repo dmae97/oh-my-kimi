@@ -7,6 +7,7 @@ interface GitHubUrl {
 		| "blob"
 		| "tree"
 		| "repo"
+		| "commit"
 		| "issue"
 		| "issues"
 		| "pull"
@@ -56,6 +57,11 @@ export function parseGitHubUrl(url: string): GitHubUrl | null {
 				const [ref, ...pathParts] = subParts;
 				return { type: section, owner, repo, ref, path: pathParts.join("/") };
 			}
+			case "commit":
+				if (subParts.length > 0 && subParts[0]) {
+					return { type: "commit", owner, repo, ref: subParts[0] };
+				}
+				return { type: "other", owner, repo };
 			case "issues":
 				if (subParts.length > 0 && /^\d+$/.test(subParts[0])) {
 					return { type: "issue", owner, repo, number: parseInt(subParts[0], 10) };
@@ -226,6 +232,87 @@ async function renderGitHubIssue(
 			for (const comment of comments) {
 				md += `### @${comment.user.login} · ${comment.created_at}\n\n`;
 				md += `${comment.body}\n\n---\n\n`;
+			}
+		}
+	}
+
+	return { content: md, ok: true };
+}
+
+interface GitHubCommitFile {
+	filename: string;
+	status: string;
+	additions: number;
+	deletions: number;
+	changes: number;
+	patch?: string;
+	previous_filename?: string;
+}
+
+/**
+ * Render a GitHub commit (metadata, message, and per-file diff) to markdown.
+ *
+ * The commits API (`/repos/{owner}/{repo}/commits/{ref}`) returns the full
+ * unified diff inline via `files[].patch`, so a single request yields both the
+ * summary and the diff. Binary files have no `patch` and are flagged instead.
+ */
+async function renderGitHubCommit(
+	gh: GitHubUrl,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<{ content: string; ok: boolean }> {
+	const result = await fetchGitHubApi(`/repos/${gh.owner}/${gh.repo}/commits/${gh.ref}`, timeout, signal);
+	if (!result.ok || !result.data) return { content: "", ok: false };
+
+	const commit = result.data as {
+		sha: string;
+		html_url: string;
+		commit: {
+			author?: { name?: string; date?: string } | null;
+			committer?: { name?: string; date?: string } | null;
+			message: string;
+		};
+		author?: { login: string } | null;
+		committer?: { login: string } | null;
+		parents?: Array<{ sha: string }>;
+		stats?: { total?: number; additions?: number; deletions?: number };
+		files?: GitHubCommitFile[];
+	};
+
+	const message = commit.commit.message ?? "";
+	const [subject, ...bodyLines] = message.split("\n");
+	const authorName = commit.author?.login ? `@${commit.author.login}` : (commit.commit.author?.name ?? "unknown");
+	const authoredAt = commit.commit.author?.date ?? "";
+
+	let md = `# ${subject || commit.sha.slice(0, 7)}\n\n`;
+	md += `**${commit.sha.slice(0, 12)}** · authored by ${authorName}`;
+	if (authoredAt) md += ` · ${authoredAt}`;
+	md += `\n`;
+	if (commit.stats) {
+		const { additions = 0, deletions = 0 } = commit.stats;
+		const fileCount = commit.files?.length ?? 0;
+		md += `${fileCount} file${fileCount === 1 ? "" : "s"} changed · +${additions} −${deletions}\n`;
+	}
+	if (commit.parents && commit.parents.length > 0) {
+		md += `Parents: ${commit.parents.map(p => p.sha.slice(0, 12)).join(", ")}\n`;
+	}
+
+	const body = bodyLines.join("\n").trim();
+	if (body) {
+		md += `\n${body}\n`;
+	}
+
+	const files = commit.files ?? [];
+	if (files.length > 0) {
+		md += `\n---\n\n## Files (${files.length})\n\n`;
+		for (const file of files) {
+			const name = file.previous_filename ? `${file.previous_filename} → ${file.filename}` : file.filename;
+			md += `### ${name}\n\n`;
+			md += `${file.status} · +${file.additions} −${file.deletions}\n\n`;
+			if (file.patch) {
+				md += `\`\`\`diff\n${file.patch}\n\`\`\`\n\n`;
+			} else {
+				md += `*No textual diff (binary or too large).*\n\n`;
 			}
 		}
 	}
@@ -643,6 +730,15 @@ export const handleGitHub: SpecialHandler = async (
 			const result = await renderGitHubTree(gh, timeout, signal);
 			if (result.ok) {
 				return buildResult(result.content, { url, method: "github-tree", fetchedAt, notes });
+			}
+			break;
+		}
+
+		case "commit": {
+			notes.push(`Fetched via GitHub API`);
+			const result = await renderGitHubCommit(gh, timeout, signal);
+			if (result.ok) {
+				return buildResult(result.content, { url, method: "github-commit", fetchedAt, notes });
 			}
 			break;
 		}

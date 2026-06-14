@@ -16,12 +16,13 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
-import { createMockModel, type MockModel } from "@oh-my-pi/pi-ai/providers/mock";
+import { createMockModel, type MockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { Snowflake } from "@oh-my-pi/pi-utils";
 
@@ -51,7 +52,7 @@ describe("AgentSession queued steer delivery", () => {
 		fs.rmSync(tempDir, { recursive: true, force: true });
 	});
 
-	async function createSession(responses: { content: string[] }[]): Promise<SteerHarness> {
+	async function createSession(responses: MockResponse[]): Promise<SteerHarness> {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const mock = createMockModel({ responses });
 		const agent = new Agent({
@@ -80,6 +81,25 @@ describe("AgentSession queued steer delivery", () => {
 			},
 			{ streamingBehavior: "steer" },
 		);
+	}
+
+	function nextUserMessage(target: AgentSession, expected: string): Promise<void> {
+		const { promise, resolve } = Promise.withResolvers<void>();
+		const unsubscribe = target.subscribe(event => {
+			if (event.type !== "message_end" || event.message.role !== "user") return;
+			const content = event.message.content;
+			const text =
+				typeof content === "string"
+					? content
+					: content
+							.filter(part => part.type === "text")
+							.map(part => part.text)
+							.join("");
+			if (text !== expected) return;
+			unsubscribe();
+			resolve();
+		});
+		return promise;
 	}
 
 	/** Resolves with the entry text when a collab-prompt entry is persisted. */
@@ -155,5 +175,34 @@ describe("AgentSession queued steer delivery", () => {
 
 		expect(mock.calls.length).toBe(2);
 		expect(session.agent.hasQueuedMessages()).toBe(false);
+	});
+
+	it("drains steering left after aborting an auto-continued queued turn", async () => {
+		const { session, mock } = await createSession([
+			{ content: ["initial response"] },
+			{ content: ["first queued response"], delayMs: 1_000 },
+			{ content: ["second queued response"] },
+		]);
+		await session.prompt("hello");
+		expect(mock.calls.length).toBe(1);
+
+		const firstDelivered = nextUserMessage(session, "first queued");
+		await session.steer("first queued");
+		await firstDelivered;
+		expect(mock.calls.length).toBe(1);
+
+		await session.steer("second queued");
+		expect(session.getQueuedMessages().steering).toContain("second queued");
+
+		await session.abort({ reason: USER_INTERRUPT_LABEL });
+		await session.waitForIdle();
+
+		expect(
+			session.agent.state.messages.some(message => message.role === "assistant" && message.stopReason === "aborted"),
+		).toBe(true);
+
+		expect(mock.calls.length).toBe(3);
+		expect(session.agent.hasQueuedMessages()).toBe(false);
+		expect(session.getQueuedMessages().steering).toEqual([]);
 	});
 });

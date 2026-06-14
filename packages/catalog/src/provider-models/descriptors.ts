@@ -68,11 +68,11 @@ export const CATALOG_PROVIDERS = [
 	},
 	{
 		id: "amazon-bedrock",
-		defaultModel: "us.anthropic.claude-opus-4-6-v1",
+		defaultModel: "us.anthropic.claude-opus-4-8",
 	},
 	{
 		id: "anthropic",
-		defaultModel: "claude-opus-4-6",
+		defaultModel: "claude-opus-4-8",
 		createModelManagerOptions: (config: ModelManagerConfig) => anthropicModelManagerOptions(config),
 	},
 	{
@@ -177,7 +177,7 @@ export const CATALOG_PROVIDERS = [
 	},
 	{
 		id: "litellm",
-		defaultModel: "claude-opus-4-6",
+		defaultModel: "claude-opus-4-8",
 		envVars: ["LITELLM_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => litellmModelManagerOptions(config),
 		catalogDiscovery: { label: "LiteLLM", allowUnauthenticated: true },
@@ -219,7 +219,7 @@ export const CATALOG_PROVIDERS = [
 	},
 	{
 		id: "nanogpt",
-		defaultModel: "openai/gpt-5.4",
+		defaultModel: "openai/gpt-5.5",
 		envVars: ["NANO_GPT_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => nanoGptModelManagerOptions(config),
 		catalogDiscovery: { label: "NanoGPT" },
@@ -247,13 +247,13 @@ export const CATALOG_PROVIDERS = [
 	},
 	{
 		id: "openai",
-		defaultModel: "gpt-5.4",
+		defaultModel: "gpt-5.5",
 		envVars: ["OPENAI_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => openaiModelManagerOptions(config),
 	},
 	{
 		id: "openai-codex",
-		defaultModel: "gpt-5.4",
+		defaultModel: "gpt-5.5",
 		envVars: ["OPENAI_CODEX_OAUTH_TOKEN"],
 		specialModelManager: true,
 	},
@@ -271,7 +271,7 @@ export const CATALOG_PROVIDERS = [
 	},
 	{
 		id: "openrouter",
-		defaultModel: "openai/gpt-5.4",
+		defaultModel: "openai/gpt-5.5",
 		envVars: ["OPENROUTER_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => openrouterModelManagerOptions(config),
 		catalogDiscovery: { label: "OpenRouter", allowUnauthenticated: true },
@@ -403,7 +403,7 @@ export const CATALOG_PROVIDERS = [
 	},
 	{
 		id: "zenmux",
-		defaultModel: "anthropic/claude-opus-4.6",
+		defaultModel: "anthropic/claude-opus-4.8",
 		envVars: ["ZENMUX_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => zenmuxModelManagerOptions(config),
 		catalogDiscovery: { label: "ZenMux" },

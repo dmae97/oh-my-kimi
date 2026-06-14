@@ -6,7 +6,7 @@
  * a general-purpose mock. Each test exercises one contract:
  *
  * - the metadata index keeps `existsSync`/`statSync`/`listFilesSync`
- *   coherent with `writeText`/`writer.writeLineSync`;
+ *   coherent with `writeText`/`writer.append`;
  * - `drain()` waits for fire-and-forget background writes;
  * - `deleteSessionWithArtifacts` removes both the JSONL key and any sidecar
  *   keys under the artifacts prefix;
@@ -221,11 +221,11 @@ describe("RedisSessionStorage", () => {
 		expect(c).toBeGreaterThan(b);
 	});
 
-	it("writer.writeLineSync appends to Redis after drain", async () => {
+	it("writer.append appends to Redis after drain", async () => {
 		const storage = await RedisSessionStorage.create({ client: redis });
 		const writer = storage.openWriter("/sessions/p/session.jsonl");
-		writer.writeLineSync('{"type":"session"}\n');
-		writer.writeLineSync('{"type":"message"}\n');
+		await writer.append('{"type":"session"}\n');
+		await writer.append('{"type":"message"}\n');
 
 		// Reads await queued appends and fetch content from Redis.
 		expect(await storage.readText("/sessions/p/session.jsonl")).toBe('{"type":"session"}\n{"type":"message"}\n');
@@ -244,7 +244,7 @@ describe("RedisSessionStorage", () => {
 		await storage.writeText("/sessions/p/keep.jsonl", "old content\n");
 
 		const writer = storage.openWriter("/sessions/p/keep.jsonl", { flags: "w" });
-		writer.writeLineSync("fresh\n");
+		await writer.append("fresh\n");
 		await writer.close();
 
 		expect(await storage.readText("/sessions/p/keep.jsonl")).toBe("fresh\n");
@@ -255,7 +255,7 @@ describe("RedisSessionStorage", () => {
 		const storage = await RedisSessionStorage.create({ client: redis });
 		const writer = storage.openWriter("/sessions/p/fail.jsonl");
 		redis.failNext("append", new Error("redis exploded"));
-		writer.writeLineSync("doomed\n");
+		void writer.append("doomed\n").catch(() => {});
 
 		await expect(storage.drain()).rejects.toThrow("redis exploded");
 		expect(writer.getError()?.message).toBe("redis exploded");

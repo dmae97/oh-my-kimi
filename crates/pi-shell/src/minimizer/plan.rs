@@ -203,10 +203,14 @@ fn io_redirect_is_safe(io: &IoRedirect) -> bool {
 			IoFileRedirectTarget::Fd(_) => true,
 			IoFileRedirectTarget::ProcessSubstitution(..) => false,
 		},
-		IoRedirect::HereDocument(_, here_doc) => {
-			!word_has_command_substitution(&here_doc.here_end)
-				&& !word_has_command_substitution(&here_doc.doc)
-		},
+		// Here-docs are never safe to segment. The segmented runner rebuilds
+		// each chain segment from the brush AST via `pipeline.to_string()`, and
+		// that Display impl re-emits a quoted/escaped here-doc's *closing*
+		// delimiter with its quotes intact (`<<'EOF'` … `'EOF'` rather than the
+		// required bare `EOF`). The reconstructed close tag never matches, so
+		// the re-run segment fails with "unterminated here document". Leave any
+		// here-doc-bearing command to the unsegmented single path.
+		IoRedirect::HereDocument(..) => false,
 		IoRedirect::HereString(_, word) => !word_has_command_substitution(word),
 		IoRedirect::OutputAndError(word, _) => !word_has_command_substitution(word),
 	}
@@ -416,6 +420,20 @@ mod tests {
 		] {
 			assert_not_chain(command);
 		}
+	}
+
+	#[test]
+	fn heredoc_chains_are_not_segmented() {
+		// Regression: a chain whose segment carries a here-doc must not be
+		// split. The segmented runner rebuilds each segment with the brush AST
+		// Display impl, which re-emits a quoted/escaped here-doc's closing
+		// delimiter with quotes (`'EOF'` rather than `EOF`); re-running that
+		// reconstructed segment fails with "unterminated here document". Both
+		// quoted and unquoted delimiters bail so the whole command runs whole.
+		assert_not_chain("cat <<'EOF'\nbody\nEOF\necho done");
+		assert_not_chain("cat <<\"EOF\"\nbody\nEOF\necho done");
+		assert_not_chain("cat <<EOF\nbody\nEOF\necho done");
+		assert_not_chain("cat <<'EOF' && echo done\nbody\nEOF");
 	}
 
 	#[test]

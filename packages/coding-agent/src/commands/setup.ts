@@ -7,7 +7,7 @@ import { runSetupCommand, type SetupCommandArgs, type SetupComponent } from "../
 import { runRootCommand } from "../main";
 import { initTheme } from "../modes/theme/theme";
 
-const COMPONENTS: SetupComponent[] = ["python", "stt"];
+const COMPONENTS: SetupComponent[] = ["python", "speech"];
 
 export interface OnboardingSetupDependencies {
 	runRoot?: typeof runRootCommand;

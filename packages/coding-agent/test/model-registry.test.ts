@@ -629,6 +629,62 @@ describe("ModelRegistry", () => {
 
 			expect(getModelsForProvider(registry, "anthropic")[0].baseUrl).toBe("https://second-proxy.example.com/v1");
 		});
+
+		test("refresh keeps transport override on built-in provider (#2555 openrouter gateway)", async () => {
+			// Reporter ran `omp` with the auth-gateway broker proxying OpenRouter.
+			// Default model worked; switching via `/model` produced
+			// `404 No route: POST /chat/completions` until restart. Root cause:
+			// background discovery refresh re-fetched the openrouter catalog and
+			// `mergeDiscoveredModel` dropped `transport: pi-native` (raw catalog
+			// rows carry no transport), so the next stream went out as plain
+			// openai-completions to `${baseUrl}/chat/completions` instead of the
+			// gateway's `/v1/pi/stream`.
+			writeRawModelsJson({
+				openrouter: {
+					baseUrl: "http://localhost:4000",
+					apiKey: "gateway-token",
+					transport: "pi-native",
+				},
+			});
+
+			const requestedUrls: string[] = [];
+			const fetchMock: FetchImpl = async input => {
+				const url = input instanceof Request ? input.url : String(input);
+				requestedUrls.push(url);
+				if (url === "http://localhost:4000/models") {
+					return new Response(
+						JSON.stringify({
+							data: [
+								{ id: "openai/gpt-5.4", name: "GPT-5.4", supported_parameters: ["tools"] },
+								{ id: "anthropic/claude-opus-4.6", name: "Claude Opus 4.6", supported_parameters: ["tools"] },
+							],
+						}),
+						{ status: 200, headers: { "Content-Type": "application/json" } },
+					);
+				}
+				throw new Error(`Unexpected URL: ${url}`);
+			};
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+
+			// Pre-refresh: every bundled openrouter model already carries the override.
+			const preRefresh = getModelsForProvider(registry, "openrouter");
+			expect(preRefresh.length).toBeGreaterThan(0);
+			expect(preRefresh.every(m => m.transport === "pi-native")).toBe(true);
+			expect(preRefresh.every(m => m.baseUrl === "http://localhost:4000")).toBe(true);
+
+			await registry.refreshProvider("openrouter", "online");
+			expect(requestedUrls).toContain("http://localhost:4000/models");
+
+			// Post-refresh: every openrouter model — bundled or freshly
+			// discovered — must still route through the pi-native transport.
+			const postRefresh = getModelsForProvider(registry, "openrouter");
+			expect(postRefresh.length).toBeGreaterThan(0);
+			for (const model of postRefresh) {
+				expect(model.transport).toBe("pi-native");
+				expect(model.baseUrl).toBe("http://localhost:4000");
+			}
+		});
 	});
 
 	describe("provider compat overrides", () => {

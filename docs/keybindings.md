@@ -17,7 +17,7 @@ Chord names are case-insensitive and use the same notation shown in the UI, such
 Set an action to an empty array to disable it:
 
 ```yaml
-app.stt.toggle: []
+app.history.search: []
 ```
 
 ## Common action IDs
@@ -40,7 +40,7 @@ app.stt.toggle: []
 | `app.clipboard.copyLine`    | `Alt+Shift+L`                          | Copy the current line                         |
 | `app.clipboard.copyPrompt`  | `Alt+Shift+C`                          | Copy the whole prompt                         |
 | `app.clipboard.pasteImage`  | `Ctrl+V` (`Alt+V` fallback on Windows) | Paste from the clipboard (image preferred, text fallback) |
-| `app.stt.toggle`            | `Alt+H`                                | Toggle speech-to-text recording               |
+| `app.stt.toggle`            | Unbound (hold `Space`)                 | Toggle speech-to-text. By default there is no key chord — hold the space bar to record (push-to-talk) and release to transcribe; bind a chord here for a press-to-toggle alternative |
 
 On Windows Terminal, `Ctrl+V` may be handled by the terminal paste command before `omp` sees it; use the `Alt+V` fallback when clipboard image paste appears to do nothing. When the clipboard holds no image, `app.clipboard.pasteImage` pastes the clipboard text instead, so hosts that deliver only this chord (VS Code's integrated terminal when configured to forward `Ctrl+V`, Windows clipboard history via `Win+V`) work for both payload kinds. Windows Terminal also swallows `Ctrl+Enter`, so the follow-up shortcut also binds `Ctrl+Q` — the same chord GitHub Copilot CLI uses. If your existing `keybindings.yml` already assigns `Ctrl+Q` to another action, that user remap wins and follow-up keeps `Ctrl+Enter` unless you explicitly bind `app.message.followUp`.
 

@@ -381,7 +381,6 @@ const PROFANITY: readonly string[] = [
 	"jerk",
 	"jerks",
 	"jerkface",
-	"git",
 	"gits",
 	"sod",
 	"sodding",

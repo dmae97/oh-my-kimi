@@ -77,6 +77,26 @@ export function App(): ReactNode {
 		if (creds) connect(creds.link, creds.name);
 	}, [connect]);
 
+	// Visual Viewport: adjust app height to fit screen space when mobile keyboard opens.
+	useEffect(() => {
+		const vv = window.visualViewport;
+		if (!vv) return;
+
+		const updateHeight = () => {
+			document.documentElement.style.setProperty("--viewport-height", `${vv.height}px`);
+			window.scrollTo(0, 0);
+		};
+
+		updateHeight();
+		vv.addEventListener("resize", updateHeight);
+		vv.addEventListener("scroll", updateHeight);
+
+		return () => {
+			vv.removeEventListener("resize", updateHeight);
+			vv.removeEventListener("scroll", updateHeight);
+		};
+	}, []);
+
 	// Deep link: a page load with a hash auto-connects.
 	useEffect(() => {
 		const link = hashLink();
@@ -157,27 +177,33 @@ function Session({ client, onLeave, onRejoin }: SessionProps): ReactNode {
 					</div>
 				</section>
 				{railOpen && (
-					<aside className="sh-rail">
-						<AgentsPanel
-							agents={snap.agents}
-							progress={snap.progress}
-							lifecycle={snap.lifecycle}
-							selectedId={selectedId}
-							onSelect={setSelectedId}
-						/>
-					</aside>
+					<>
+						<div className="sh-rail-backdrop" onClick={() => setRailOpen(false)} />
+						<aside className="sh-rail">
+							<AgentsPanel
+								agents={snap.agents}
+								progress={snap.progress}
+								lifecycle={snap.lifecycle}
+								selectedId={selectedId}
+								onSelect={setSelectedId}
+							/>
+						</aside>
+					</>
 				)}
 			</main>
 			<Composer client={client} snapshot={snap} />
 			{drawerAgent && (
-				<AgentDrawer
-					agent={drawerAgent}
-					progress={snap.progress.get(drawerAgent.id)}
-					client={client}
-					readOnly={snap.readOnly}
-					host={toolHost}
-					onClose={() => setSelectedId(null)}
-				/>
+				<>
+					<div className="ag-drawer-backdrop" onClick={() => setSelectedId(null)} />
+					<AgentDrawer
+						agent={drawerAgent}
+						progress={snap.progress.get(drawerAgent.id)}
+						client={client}
+						readOnly={snap.readOnly}
+						host={toolHost}
+						onClose={() => setSelectedId(null)}
+					/>
+				</>
 			)}
 			<Banners phase={snap.phase} endedReason={snap.endedReason} onRejoin={onRejoin} onNewLink={onLeave} />
 			<Toasts notices={snap.notices} />

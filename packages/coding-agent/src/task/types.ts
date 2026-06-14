@@ -74,6 +74,11 @@ export interface SubagentLifecyclePayload {
 	detached?: boolean;
 }
 
+/** Display cap for a normalized one-line label (roster line, registry `displayName`, prompt field). */
+export const ROLE_LABEL_MAX = 80;
+/** Schema bound on the raw `role` input, before it is label-normalized at every use site. */
+export const ROLE_INPUT_MAX = 256;
+
 /**
  * One unit of work. The single-spawn schema is `{ agent, ...taskItemSchema }`;
  * the batch schema (`task.batch`) is `{ agent, context, tasks: taskItemSchema[] }`.
@@ -83,6 +88,13 @@ export interface SubagentLifecyclePayload {
 const taskItemShape = {
 	id: z.string().max(48).optional().describe("stable agent id; default generated"),
 	description: z.string().optional().describe("ui label, not seen by subagent"),
+	role: z
+		.string()
+		.max(ROLE_INPUT_MAX)
+		.optional()
+		.describe(
+			"specialist role/expertise this subagent embodies (e.g. 'Rust async-runtime specialist'); shapes its identity and display name",
+		),
 	assignment: z.string().describe("the work; self-contained instructions"),
 };
 const isolatedShape = {
@@ -104,6 +116,8 @@ export interface TaskItem {
 	id?: string;
 	/** UI label, not seen by the subagent. */
 	description?: string;
+	/** Specialist role/expertise this subagent embodies; shapes its system-prompt identity and display name. */
+	role?: string;
 	/** The work; required by the schema. */
 	assignment?: string;
 	/** Run this spawn in an isolated worktree (batch form; flat form carries it top-level). */
@@ -149,6 +163,8 @@ export interface TaskParams {
 	id?: string;
 	/** UI label (flat form), not seen by the subagent. */
 	description?: string;
+	/** Specialist role/expertise this subagent embodies; shapes its system-prompt identity and display name. */
+	role?: string;
 	/** The work (flat form). */
 	assignment?: string;
 	/** Batch form (`task.batch`): one subagent per item. */
@@ -157,6 +173,43 @@ export interface TaskParams {
 	context?: string;
 	/** Run in an isolated worktree (flat form; per-item in batch form). */
 	isolated?: boolean;
+}
+
+/**
+ * One-line, length-capped label safe for a single roster line, a registry
+ * `displayName`, or a system-prompt field. Collapses every run of whitespace
+ * AND control/format characters — including U+0085 NEL, ESC/ANSI, and the
+ * zero-width separators that `\s` misses — to a single space, then caps length.
+ * So untrusted text (a spawn `role`, a peer activity gist) can neither break the
+ * line, inject prompt structure, nor smuggle terminal escapes. Caps at `max`
+ * characters (clamped to >= 1; default `ROLE_LABEL_MAX`), appending an ellipsis when truncated.
+ */
+export function oneLineLabel(text: string, max = ROLE_LABEL_MAX): string {
+	const oneLine = text.replace(/[\p{Cc}\p{Cf}\s]+/gu, " ").trim();
+	const cap = Math.max(1, max);
+	// Count/cut by code point, not UTF-16 code unit, so truncation can never
+	// split an astral character into a lone surrogate.
+	const chars = [...oneLine];
+	return chars.length > cap ? `${chars.slice(0, cap - 1).join("")}…` : oneLine;
+}
+
+/**
+ * Display name for a spawned subagent: its tailored `role` (label-normalized)
+ * when one is given, else the agent type's name. Empty/whitespace roles fall
+ * back to the agent name.
+ */
+export function resolveSubagentDisplayName(role: string | undefined, agentName: string): string {
+	const trimmed = role?.trim();
+	return trimmed ? oneLineLabel(trimmed) : agentName;
+}
+
+/**
+ * Whether an agent at `taskDepth` may still spawn children — i.e. it currently
+ * holds the `task` tool. Mirrors the task-tool availability gate;
+ * `maxRecursionDepth < 0` disables the cap entirely.
+ */
+export function canSpawnAtDepth(maxRecursionDepth: number, taskDepth: number): boolean {
+	return maxRecursionDepth < 0 || taskDepth < maxRecursionDepth;
 }
 
 /** A code review finding reported by the reviewer agent */

@@ -62,7 +62,7 @@ Read-only snapshot path:
 7. If every watched job is already non-running, `#buildResult(...)` returns immediately without waiting.
 8. Otherwise the tool waits on `Promise.race(...)` across:
    - every watched running job's `job.promise`,
-   - a timeout promise for `async.pollWaitDuration`,
+   - a timeout promise for the poll wait window — `manager.nextPollWaitMs(ownerId)` when `async.pollWaitDuration` is `smart`, otherwise the fixed duration,
    - the tool-call abort signal when present.
 9. Before waiting, it calls `manager.watchJobs(watchedJobIds)`. This suppresses automatic completion delivery for those ids while they are being watched.
 10. If `onUpdate` exists, a 500 ms interval sends progress snapshots from `#snapshotJobs(...)`; one snapshot is emitted immediately before entering the race.
@@ -106,9 +106,10 @@ Lifecycle and exact state names:
   - Cancelling a job does not synchronously await teardown; it flips state, aborts, and returns control to the manager/job promise.
 
 ## Limits & Caps
-- Poll wait duration comes from `async.pollWaitDuration` in `packages/coding-agent/src/config/settings-schema.ts`:
-  - allowed values: `5s`, `10s`, `30s`, `1m`, `5m`
-  - default: `30s`
+- Poll wait duration comes from `async.pollWaitDuration` ("Max Poll Time") in `packages/coding-agent/src/config/settings-schema.ts`:
+  - allowed values: `5s`, `10s`, `30s`, `1m`, `5m`, `smart`
+  - default: `smart`
+  - fixed values block for exactly that long; `smart` uses the adaptive ladder `POLL_WAIT_LADDER_MS = [5s, 10s, 30s, 1m, 5m]` in `packages/coding-agent/src/async/job-manager.ts`, climbing one rung per back-to-back poll and resetting to the 5s floor after `POLL_ESCALATION_RESET_MS = 60_000` ms without polling. Per-owner state is driven by `nextPollWaitMs(...)` / `recordPollWaitEnd(...)`.
 - Progress update cadence while polling: `PROGRESS_INTERVAL_MS = 500` in `packages/coding-agent/src/tools/job.ts`.
 - Async job retention default: `DEFAULT_RETENTION_MS = 5 * 60 * 1000` in `packages/coding-agent/src/async/job-manager.ts`.
 - Manager fallback max-running limit: `DEFAULT_MAX_RUNNING_JOBS = 15` in `packages/coding-agent/src/async/job-manager.ts`.

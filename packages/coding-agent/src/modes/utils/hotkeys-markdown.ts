@@ -49,7 +49,7 @@ export function buildHotkeysMarkdown(bindings: HotkeysMarkdownBindings): string 
 		`| \`${appKey(bindings, "app.thinking.toggle")}\` | Toggle thinking block visibility |`,
 		`| \`${appKey(bindings, "app.editor.external")}\` | Edit message in external editor |`,
 		`| \`${appKey(bindings, "app.clipboard.pasteImage")}\` | Paste image or text from clipboard |`,
-		`| \`${appKey(bindings, "app.stt.toggle")}\` | Toggle speech-to-text recording |`,
+		"| Hold `Space` | Speech-to-text (push-to-talk): hold to record, release to transcribe |",
 		`| \`${appKey(bindings, "app.agents.hub")}\` / \`${appKey(bindings, "app.session.observe")}\` / double-tap \`←\` (empty editor) | Open the agent hub |`,
 		"| `#` | Open prompt actions |",
 		"| `/` | Slash commands |",

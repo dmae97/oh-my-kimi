@@ -237,6 +237,7 @@ Location: `packages/*/CHANGELOG.md` (per package).
 **Rules:**
 - New entries always go under `## [Unreleased]`.
 - Never modify already-released sections (e.g., `## [0.12.2]`) — they are immutable.
+- Don't flag changelog section order or formatting in reviews or PRs — `bun run release` runs `fix-changelogs` which normalizes everything automatically.
 
 **Attribution:**
 - Internal (from issues): `Fixed foo bar ([#123](https://github.com/can1357/oh-my-pi/issues/123))`.

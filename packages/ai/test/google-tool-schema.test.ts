@@ -172,7 +172,7 @@ describe("Cloud Code Assist Claude tool schema conversion", () => {
 		expect(claudeDeclaration.parametersJsonSchema).toBeUndefined();
 		expect(
 			(geminiDeclaration.parametersJsonSchema as { properties?: Record<string, unknown> })?.properties?.lines,
-		).toEqual((parameters as { properties: { lines: unknown } }).properties.lines);
+		).toEqual(normalizeSchemaForGoogle((parameters as { properties: { lines: unknown } }).properties.lines));
 	});
 
 	it("collapses mixed anyOf with shared metadata for edit-style lines fields", () => {
@@ -285,7 +285,7 @@ describe("Cloud Code Assist Claude tool schema conversion", () => {
 		expect(JSON.stringify(claudeDeclaration.parameters)).not.toContain('"anyOf"');
 		expect(
 			(geminiDeclaration.parametersJsonSchema as { properties?: Record<string, unknown> })?.properties?.value,
-		).toEqual((parameters as { properties: { value: unknown } }).properties.value);
+		).toEqual(normalizeSchemaForGoogle((parameters as { properties: { value: unknown } }).properties.value));
 	});
 
 	it("falls back to minimal object schema when non-null unresolved unions remain for CCA Claude", () => {
@@ -343,6 +343,32 @@ describe("Cloud Code Assist Claude tool schema conversion", () => {
 				value: {
 					type: "string",
 					nullable: true,
+				},
+			},
+		});
+	});
+
+	it("normalizes schemas for gemini models using normalizeSchemaForGoogle", () => {
+		const parameters = {
+			type: "object",
+			properties: {
+				value: {
+					type: "string",
+				},
+			},
+			additionalProperties: false,
+		} as unknown as TJsonSchema;
+		const tools: Tool[] = [{ name: "test_tool", description: "Test tool", parameters }];
+		const model = createModel("gemini-3.5-flash");
+
+		const result = convertTools(tools, model);
+		const declaration = result?.[0]?.functionDeclarations[0] as Record<string, unknown>;
+
+		expect(declaration.parametersJsonSchema).toEqual({
+			type: "object",
+			properties: {
+				value: {
+					type: "string",
 				},
 			},
 		});

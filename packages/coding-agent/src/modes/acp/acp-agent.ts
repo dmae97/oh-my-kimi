@@ -63,11 +63,9 @@ import { theme } from "../../modes/theme/theme";
 import { type PlanApprovalDetails, resolveApprovedPlan } from "../../plan-mode/approved-plan";
 import type { AgentSession, AgentSessionEvent } from "../../session/agent-session";
 import { isSilentAbort, SKILL_PROMPT_MESSAGE_TYPE } from "../../session/messages";
-import {
-	SessionManager,
-	type SessionInfo as StoredSessionInfo,
-	type UsageStatistics,
-} from "../../session/session-manager";
+import type { UsageStatistics } from "../../session/session-entries";
+import type { SessionInfo as StoredSessionInfo } from "../../session/session-listing";
+import { SessionManager } from "../../session/session-manager";
 import { executeAcpBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
 import { buildAvailableSlashCommands, toAcpAvailableCommands } from "../../slash-commands/available-commands";
 import { AUTO_THINKING, parseConfiguredThinkingLevel } from "../../thinking";

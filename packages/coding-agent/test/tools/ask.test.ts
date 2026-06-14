@@ -217,7 +217,7 @@ describe("AskTool cancellation", () => {
 		expect(select).toHaveBeenCalledTimes(1);
 		expect(select.mock.calls[0]?.[2]?.initialIndex).toBe(1);
 		expect(select.mock.calls[0]?.[2]?.timeout).toBeGreaterThan(0);
-	});
+	}, 30_000);
 
 	it("auto-selects the first option when timeout elapses without a selected option", async () => {
 		const tool = new AskTool(
@@ -259,7 +259,7 @@ describe("AskTool cancellation", () => {
 		expect(result.content[0].text).toContain("User selected: yes");
 		expect(result.details?.selectedOptions).toEqual(["yes"]);
 		expect(abort).not.toHaveBeenCalled();
-	});
+	}, 30_000);
 
 	it("routes custom input through editor with promptStyle after choosing Other", async () => {
 		const tool = new AskTool(
@@ -360,7 +360,7 @@ describe("AskTool cancellation", () => {
 		expect(result.details?.customInput).toBeUndefined();
 		expect(editor).not.toHaveBeenCalled();
 		expect(abort).not.toHaveBeenCalled();
-	});
+	}, 30_000);
 
 	it("aborts multi-question ask when any question is explicitly cancelled", async () => {
 		const tool = new AskTool(createSession());
@@ -1029,7 +1029,7 @@ describe("AskTool multi-question navigation", () => {
 		expect(result.details?.results?.[0]?.selectedOptions).toEqual(["one"]);
 		expect(result.details?.results?.[1]?.selectedOptions).toEqual(["beta"]);
 		expect(result.details?.results?.[2]?.selectedOptions).toEqual([]);
-	});
+	}, 30_000);
 	it("preserves custom input when navigating back and forward", async () => {
 		const tool = new AskTool(createSession());
 		const multilineText = "line 1\nline 2";

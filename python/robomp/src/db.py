@@ -119,6 +119,11 @@ def _utcnow() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
+def _utc_after(seconds: float) -> str:
+    """UTC timestamp `seconds` in the future, same sortable format as `_utcnow`."""
+    return (datetime.now(UTC) + timedelta(seconds=max(seconds, 0.0))).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
 def iso_seconds_ago(seconds: float) -> str:
     """ISO-UTC timestamp for `seconds` ago, matching the format `_utcnow` writes."""
     return (datetime.now(UTC) - timedelta(seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
@@ -241,6 +246,8 @@ class Database:
         event_cols = {row[1] for row in self._conn.execute("PRAGMA table_info(events)").fetchall()}
         if "model" not in event_cols:
             self._conn.execute("ALTER TABLE events ADD COLUMN model TEXT")
+        if "available_at" not in event_cols:
+            self._conn.execute("ALTER TABLE events ADD COLUMN available_at TEXT")
 
     def close(self) -> None:
         with self._lock:
@@ -298,6 +305,7 @@ class Database:
     def claim_next_event(self) -> EventRow | None:
         """Atomically dequeue one unblocked queued event into running state."""
         with self._txn() as conn:
+            now = _utcnow()
             row = conn.execute(
                 """
                 SELECT queued.delivery_id, queued.event_type, queued.repo, queued.issue_key,
@@ -305,6 +313,7 @@ class Database:
                        queued.last_error
                 FROM events AS queued
                 WHERE queued.state = 'queued'
+                  AND (queued.available_at IS NULL OR queued.available_at <= ?)
                   AND (
                     queued.issue_key IS NULL
                     OR NOT EXISTS (
@@ -316,11 +325,11 @@ class Database:
                   )
                 ORDER BY queued.received_at
                 LIMIT 1
-                """
+                """,
+                (now,),
             ).fetchone()
             if row is None:
                 return None
-            now = _utcnow()
             conn.execute(
                 "UPDATE events SET state='running', attempts=attempts+1, started_at=? WHERE delivery_id=?",
                 (now, row["delivery_id"]),
@@ -360,7 +369,7 @@ class Database:
         """Recover events that were running at shutdown."""
         with self._lock:
             cur = self._conn.execute(
-                "UPDATE events SET state='queued' WHERE state='running'",
+                "UPDATE events SET state='queued', available_at=NULL WHERE state='running'",
             )
             return cur.rowcount
 
@@ -613,7 +622,7 @@ class Database:
         with self._lock:
             if from_states is None:
                 cur = self._conn.execute(
-                    "UPDATE events SET state='queued' WHERE delivery_id=?",
+                    "UPDATE events SET state='queued', available_at=NULL WHERE delivery_id=?",
                     (delivery_id,),
                 )
             elif not from_states:
@@ -621,9 +630,27 @@ class Database:
             else:
                 placeholders = ",".join("?" for _ in from_states)
                 cur = self._conn.execute(
-                    f"UPDATE events SET state='queued' WHERE delivery_id=? AND state IN ({placeholders})",
+                    f"UPDATE events SET state='queued', available_at=NULL WHERE delivery_id=? AND state IN ({placeholders})",
                     (delivery_id, *from_states),
                 )
+            return cur.rowcount > 0
+
+    def schedule_retry(self, delivery_id: str, *, delay_seconds: float, error: str | None = None) -> bool:
+        """Re-queue a delivery for a future retry with backoff.
+
+        Flips state back to 'queued' but stamps `available_at` so
+        `claim_next_event` skips the row until the backoff elapses. `attempts`
+        is left untouched (it was already incremented at claim) so the retry
+        budget keeps counting down; `last_error` retains the failure reason for
+        the dashboard. Only transitions a 'running'/'failed' row; returns
+        whether a row changed.
+        """
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE events SET state='queued', last_error=?, available_at=?, finished_at=NULL "
+                "WHERE delivery_id=? AND state IN ('running','failed')",
+                (error, _utc_after(delay_seconds), delivery_id),
+            )
             return cur.rowcount > 0
 
     # ---- issues ----

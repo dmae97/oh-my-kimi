@@ -9,6 +9,7 @@ real omp subprocess; that's covered by the integration smoke test.
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 
 import pytest
 
@@ -84,18 +85,24 @@ async def test_cancel_fires_hook_armed_by_worker(settings: Settings, db: Databas
             clear_current_event(token)
 
     worker = asyncio.create_task(fake_worker())
-    # Give the worker a tick to register.
-    for _ in range(20):
-        await asyncio.sleep(0)
-        if row.delivery_id in pool._cancel_hooks:  # noqa: SLF001 — test inspecting state
-            break
-    assert row.delivery_id in pool._cancel_hooks  # noqa: SLF001
+    try:
+        # Give the worker a tick to register.
+        for _ in range(20):
+            await asyncio.sleep(0)
+            if row.delivery_id in pool._cancel_hooks:  # noqa: SLF001 — test inspecting state
+                break
+        assert row.delivery_id in pool._cancel_hooks  # noqa: SLF001
 
-    assert await pool.cancel_event(row.delivery_id) is True
-    await asyncio.wait_for(worker, timeout=1.0)
-    assert row.delivery_id in pool._cancelled  # noqa: SLF001
-    # Hook is consumed.
-    assert row.delivery_id not in pool._cancel_hooks  # noqa: SLF001
+        assert await pool.cancel_event(row.delivery_id) is True
+        await asyncio.wait_for(worker, timeout=1.0)
+        assert row.delivery_id in pool._cancelled  # noqa: SLF001
+        # Hook is consumed.
+        assert row.delivery_id not in pool._cancel_hooks  # noqa: SLF001
+    finally:
+        if not worker.done():
+            worker.cancel()
+            with suppress(asyncio.CancelledError):
+                await worker
 
 
 @pytest.mark.asyncio
@@ -161,6 +168,7 @@ async def test_non_cancelled_failure_keeps_real_traceback(
 ) -> None:
     """A garden-variety dispatch failure still records the traceback path."""
     pool = _make_pool(settings, db)
+    monkeypatch.setattr(settings, "event_max_retries", 0)  # assert terminal failure, not retry
     db.record_event(
         delivery_id="d4",
         event_type="issues",
@@ -191,6 +199,7 @@ async def test_run_event_marks_failed_when_not_shutting_down(
 ) -> None:
     """When `_shutting_down` is False, a dispatch failure still marks the row failed."""
     pool = _make_pool(settings, db)
+    monkeypatch.setattr(settings, "event_max_retries", 0)  # assert terminal failure, not retry
     assert pool._shutting_down is False  # noqa: SLF001
     db.record_event(
         delivery_id="d5",

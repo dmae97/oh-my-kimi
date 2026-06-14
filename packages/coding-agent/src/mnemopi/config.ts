@@ -48,6 +48,17 @@ export function loadMnemopiConfig(settings: Settings, agentDir: string): Mnemopi
 	const recallBanks =
 		scoping === "global" ? scope.recallBanks : extendRecallWithLegacyBanks(scope.recallBanks, dbPath, cwd);
 	const llmMode = settings.get("mnemopi.llmMode");
+	const embeddingOverride = settings.get("mnemopi.embeddingModel");
+	const embeddingVariant = settings.get("mnemopi.embeddingVariant");
+	// Map the variant explicitly rather than indexing an object with the raw config
+	// value (which could resolve an inherited property like `__proto__`); any value
+	// other than the multilingual variant falls back to the English default.
+	const variantModel =
+		embeddingVariant === "multilingual" ? "intfloat/multilingual-e5-large" : "BAAI/bge-base-en-v1.5";
+	// Precedence: explicit `mnemopi.embeddingModel` setting > `MNEMOPI_EMBEDDING_MODEL`
+	// env (documented model-level override) > variant-derived default. Without the env
+	// term a variant default would silently shadow a user's configured env model.
+	const embeddingModel = embeddingOverride?.trim() || Bun.env.MNEMOPI_EMBEDDING_MODEL?.trim() || variantModel;
 	return {
 		dbPath,
 		baseBank: scope.baseBank,
@@ -69,7 +80,7 @@ export function loadMnemopiConfig(settings: Settings, agentDir: string): Mnemopi
 		providerOptions: {
 			noEmbeddings: settings.get("mnemopi.noEmbeddings"),
 			debug: settings.get("mnemopi.debug"),
-			embeddingModel: settings.get("mnemopi.embeddingModel"),
+			embeddingModel,
 			embeddingApiUrl: settings.get("mnemopi.embeddingApiUrl"),
 			embeddingApiKey: settings.get("mnemopi.embeddingApiKey"),
 			llm:
@@ -172,10 +183,10 @@ function projectBankSegment(projectRoot: string): string {
 
 /**
  * Discover sibling banks under `<dbDir>/banks/` whose `working_memory` rows
- * already carry the active `cwd` in `metadata_json.$.cwd`, and add them to
- * the recall set. This rescues memories stranded by a previous, less-stable
- * bank derivation (#2412) without changing the write target — only recall is
- * widened.
+ * all carry the active `cwd` in `metadata_json.$.cwd`, and add those safe
+ * single-cwd banks to the recall set. This rescues memories stranded by a
+ * previous, less-stable bank derivation (#2412) without recalling mixed-cwd
+ * legacy banks wholesale under per-project isolation.
  *
  * Robust by design: a missing banks directory, unreadable bank dir, or
  * corrupt SQLite file is silently skipped. Scanning is capped at
@@ -202,19 +213,24 @@ export function extendRecallWithLegacyBanks(
 		if (scanned >= LEGACY_BANK_SCAN_LIMIT) break;
 		scanned++;
 		const candidate = path.join(banksDir, entry.name, "mnemopi.db");
-		if (bankHasCwd(candidate, cwdAbs)) extras.push(entry.name);
+		if (bankOnlyHasCwd(candidate, cwdAbs)) extras.push(entry.name);
 	}
 	return extras.length === 0 ? resolved : [...resolved, ...extras];
 }
 
-function bankHasCwd(dbPath: string, cwd: string): boolean {
+function bankOnlyHasCwd(dbPath: string, cwd: string): boolean {
 	let db: Database | undefined;
 	try {
 		db = new Database(dbPath, { readonly: true });
 		const row = db
-			.query("SELECT 1 FROM working_memory WHERE json_extract(metadata_json, '$.cwd') = ? LIMIT 1")
-			.get(cwd);
-		return row !== null;
+			.prepare<{ matching: number; unsafe: number }, [string, string]>(`
+				SELECT
+					SUM(CASE WHEN json_extract(metadata_json, '$.cwd') = ? THEN 1 ELSE 0 END) AS matching,
+					SUM(CASE WHEN json_extract(metadata_json, '$.cwd') IS NULL OR json_extract(metadata_json, '$.cwd') <> ? THEN 1 ELSE 0 END) AS unsafe
+				FROM working_memory
+			`)
+			.get(cwd, cwd);
+		return (row?.matching ?? 0) > 0 && (row?.unsafe ?? 0) === 0;
 	} catch (error) {
 		logger.debug("Mnemopi: legacy bank probe failed", { dbPath, error: String(error) });
 		return false;

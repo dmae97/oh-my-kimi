@@ -845,13 +845,18 @@ export function mapOpenAIResponsesToolChoiceForTools(
 	model: Model<"openai-responses">,
 ): OpenAIResponsesToolChoice {
 	const mapped = mapToOpenAIResponsesToolChoice(choice);
-	if (!mapped || typeof mapped === "string" || mapped.type !== "function" || !supportsFreeformApplyPatch(model)) {
+	if (!mapped || typeof mapped === "string" || mapped.type !== "function") {
 		return mapped;
 	}
 
-	const customTool = tools.find(
-		tool => tool.customFormat && (tool.name === mapped.name || tool.customWireName === mapped.name),
-	);
+	const directTool = tools.find(tool => tool.name === mapped.name);
+	const customTool = supportsFreeformApplyPatch(model)
+		? tools.find(tool => tool.customFormat && (tool.name === mapped.name || tool.customWireName === mapped.name))
+		: undefined;
+	const offeredTool = customTool ?? directTool;
+	if (!offeredTool) {
+		return undefined;
+	}
 	return customTool ? { type: "custom", name: customTool.customWireName ?? customTool.name } : mapped;
 }
 

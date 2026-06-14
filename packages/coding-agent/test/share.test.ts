@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import type { SessionData } from "../src/export/html";
 import { buildShareSnapshot, normalizeShareServerUrl, SERVER_MAX_SEALED_BYTES, sealToFit } from "../src/export/share";
 import { SecretObfuscator } from "../src/secrets/obfuscator";
-import type { SessionEntry, SessionManager } from "../src/session/session-manager";
+import type { SessionEntry } from "../src/session/session-entries";
+import type { SessionManager } from "../src/session/session-manager";
 
 const IV_LENGTH = 12;
 

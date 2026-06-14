@@ -1,6 +1,11 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import { getProjectDir } from "@oh-my-pi/pi-utils";
+import {
+	isValidManagedSkillName,
+	MANAGED_SKILLS_PROVIDER_ID,
+	sanitizeManagedDescription,
+} from "../autolearn/managed-skills";
 import { skillCapability } from "../capability/skill";
 import type { SourceMeta } from "../capability/types";
 import type { SkillsSettings } from "../config/settings";
@@ -52,6 +57,21 @@ export function setActiveSkills(value: readonly Skill[]): void {
 /** Reset the active skill snapshot. Test-only. */
 export function resetActiveSkillsForTests(): void {
 	activeSkills = [];
+}
+
+/**
+ * Whether `name` is already claimed by an active authored (non-managed) skill.
+ *
+ * Managed (auto-learn) skills resolve dead-last in discovery, so an authored
+ * skill of the same name always wins (see `loadSkills`) and a managed skill
+ * written under an authored name is silently dropped — it never surfaces.
+ * `manage_skill` create consults this to refuse the write up front instead of
+ * reporting a false "Created" for a skill that can never appear.
+ */
+export function isNameClaimedByAuthoredSkill(name: string): boolean {
+	return getActiveSkills().some(
+		skill => skill.name === name && skill._source?.provider !== MANAGED_SKILLS_PROVIDER_ID,
+	);
 }
 
 export interface LoadSkillsFromDirOptions {
@@ -119,24 +139,23 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 	if (!enabled) {
 		return { skills: [], warnings: [] };
 	}
-
 	// Fall-through gate for third-party CLI providers (claude-plugins, opencode,
-	// gemini, github, ...) that share user intent with the named source toggles
-	// but don't have a dedicated control of their own. The OMP-native providers
-	// (`agents`, `native`) get explicit toggles above and never fall through:
-	// disabling Claude/Codex must not silently break `.agent[s]/skills`
-	// discovery (issue #2401).
-	const anyBuiltInSkillSourceEnabled =
-		enableCodexUser ||
-		enableClaudeUser ||
-		enableClaudeProject ||
-		enablePiUser ||
-		enablePiProject ||
-		enableAgentsUser ||
-		enableAgentsProject;
+	// gemini, github, ...) that share user intent with the named third-party
+	// source toggles but don't have a dedicated control of their own. Only the
+	// third-party toggles count here: the OMP-native providers (`agents`,
+	// `native`) get explicit branches in `isSourceEnabled` below, so folding
+	// them into the fallback would re-enable unrelated third-party CLIs whenever
+	// the user kept the default `.agent[s]/skills` toggles on while turning off
+	// Codex/Claude/Pi (issue #2401 / PR #2405 review).
+	const anyThirdPartySkillToggleEnabled =
+		enableCodexUser || enableClaudeUser || enableClaudeProject || enablePiUser || enablePiProject;
 
 	function isSourceEnabled(source: SourceMeta): boolean {
 		const { provider, level } = source;
+		// Managed skills (auto-learn) are OMP-native and discovered unconditionally
+		// — third-party CLI toggles must never silently hide them (cf. #2401). The
+		// master `enabled` flag above still gates them.
+		if (provider === MANAGED_SKILLS_PROVIDER_ID) return true;
 		if (provider === "codex" && level === "user") return enableCodexUser;
 		if (provider === "claude" && level === "user") return enableClaudeUser;
 		if (provider === "claude" && level === "project") return enableClaudeProject;
@@ -144,7 +163,7 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 		if (provider === "native" && level === "project") return enablePiProject;
 		if (provider === "agents" && level === "user") return enableAgentsUser;
 		if (provider === "agents" && level === "project") return enableAgentsProject;
-		return anyBuiltInSkillSourceEnabled;
+		return anyThirdPartySkillToggleEnabled;
 	}
 
 	// Use capability API to load all skills
@@ -192,6 +211,9 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 	// Process skills with resolved paths
 	for (let i = 0; i < filteredSkills.length; i++) {
 		const capSkill = filteredSkills[i];
+		// Managed (auto-learn) skills are resolved dead-last (below) so any
+		// authored skill of the same name — from ANY provider or custom dir — wins.
+		if (capSkill._source.provider === MANAGED_SKILLS_PROVIDER_ID) continue;
 		const resolvedPath = realPaths[i];
 
 		// Skip silently if we've already loaded this exact file (via symlink)
@@ -283,6 +305,65 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 			skillMap.set(skill.name, skill);
 			realPathSet.add(resolvedPath);
 		}
+	}
+
+	// Managed (auto-learn) skills resolve dead-last with first-wins. Source from
+	// result.all (pre-dedup): capability-level dedup runs BEFORE isSourceEnabled,
+	// so a managed skill can be shadowed by a higher-priority authored skill that
+	// is itself disabled here — managed must stay visible regardless of toggles.
+	// Validate the on-disk name (a hand-placed managed file could carry an unsafe
+	// frontmatter name) and re-sanitize the description on read. Descriptions and
+	// names both render unescaped into the system prompt.
+	const managedCandidates = result.all.filter(
+		capSkill =>
+			capSkill._source.provider === MANAGED_SKILLS_PROVIDER_ID &&
+			isValidManagedSkillName(capSkill.name) &&
+			!disabledSkillNames.has(capSkill.name) &&
+			!matchesIgnorePatterns(capSkill.name) &&
+			matchesIncludePatterns(capSkill.name),
+	);
+	// Names claimed by any ENABLED authored skill (from the pre-dedup superset).
+	// Managed defers to these even when capability dedup hid an enabled authored
+	// skill behind a disabled higher-priority one, so managed never masks it.
+	const enabledAuthoredNames = new Set(
+		result.all
+			.filter(
+				capSkill => capSkill._source.provider !== MANAGED_SKILLS_PROVIDER_ID && isSourceEnabled(capSkill._source),
+			)
+			.map(capSkill => capSkill.name),
+	);
+	const managedRealPaths = await Promise.all(
+		managedCandidates.map(async capSkill => {
+			try {
+				return await fs.realpath(capSkill.path);
+			} catch {
+				return capSkill.path;
+			}
+		}),
+	);
+	for (let i = 0; i < managedCandidates.length; i++) {
+		const capSkill = managedCandidates[i];
+		const resolvedPath = managedRealPaths[i];
+		if (realPathSet.has(resolvedPath)) continue;
+		if (enabledAuthoredNames.has(capSkill.name)) continue; // an enabled authored skill owns this name
+		// Already claimed — e.g. by a custom-directory skill. LOAD-BEARING: custom
+		// dirs never enter `result.all`, so they are absent from `enabledAuthoredNames`
+		// above; this map check is the ONLY veto that lets a custom-dir authored skill
+		// win over a same-named managed one. The custom-dir loop (which populates
+		// skillMap, ~30 lines up) MUST run before this block — do not reorder.
+		if (skillMap.has(capSkill.name)) continue;
+		const rawDescription =
+			typeof capSkill.frontmatter?.description === "string" ? capSkill.frontmatter.description : "";
+		skillMap.set(capSkill.name, {
+			name: capSkill.name,
+			description: sanitizeManagedDescription(rawDescription),
+			filePath: capSkill.path,
+			baseDir: capSkill.path.replace(/[\\/]SKILL\.md$/, ""),
+			source: `${capSkill._source.provider}:${capSkill.level}`,
+			hide: capSkill.frontmatter?.hide === true || capSkill.frontmatter?.disableModelInvocation === true,
+			_source: capSkill._source,
+		});
+		realPathSet.add(resolvedPath);
 	}
 
 	const skills = Array.from(skillMap.values());

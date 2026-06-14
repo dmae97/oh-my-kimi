@@ -4,7 +4,13 @@
 .sh-app {
 	display: grid;
 	grid-template-rows: auto 1fr auto;
-	height: 100%;
+	/* Single column pinned to the container width: an `auto` track sizes to its
+	 * items' min-content, so a long session title (or the fixed header controls)
+	 * would force every row — header, transcript, composer — wider than a narrow
+	 * viewport and clip the right edge. `minmax(0, 1fr)` caps the track so rows
+	 * shrink and ellipsize instead of overflowing. */
+	grid-template-columns: minmax(0, 1fr);
+	height: var(--viewport-height, 100%);
 }
 
 .sh-main {
@@ -46,6 +52,10 @@
 	overflow-y: auto;
 	border-left: 1px solid var(--border);
 	background: var(--bg);
+}
+
+.sh-rail-backdrop {
+	display: none;
 }
 
 /* ---- shared controls ---- */
@@ -140,6 +150,7 @@
 	justify-content: space-between;
 	gap: 12px;
 	padding: 8px 12px;
+	padding-top: calc(8px + env(safe-area-inset-top, 0px));
 	border-bottom: 1px solid var(--border);
 	background: var(--bg);
 }
@@ -164,6 +175,7 @@
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
+	min-width: 0;
 }
 
 .sh-cwd {
@@ -172,6 +184,7 @@
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
+	min-width: 0;
 }
 
 .sh-gauge {
@@ -257,6 +270,7 @@
 /* ---- composer ---- */
 .sh-composer {
 	padding: 10px 12px;
+	padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
 	border-top: 1px solid var(--border);
 	background: var(--bg);
 }
@@ -354,7 +368,8 @@
 }
 
 .sh-ended-card {
-	width: 320px;
+	width: 100%;
+	max-width: 320px;
 	padding: 24px;
 	display: flex;
 	flex-direction: column;
@@ -385,12 +400,14 @@
 .sh-toasts {
 	position: fixed;
 	right: 12px;
+	left: 12px;
 	bottom: 12px;
 	z-index: 60;
 	display: flex;
 	flex-direction: column;
 	gap: 8px;
-	width: 320px;
+	max-width: 320px;
+	margin-left: auto;
 }
 
 .sh-toast {
@@ -445,10 +462,14 @@
 	display: grid;
 	place-items: center;
 	background: var(--bg);
+	padding: 16px;
+	padding-top: calc(16px + env(safe-area-inset-top, 0px));
+	padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
 }
 
 .sh-connect-card {
-	width: 360px;
+	width: 100%;
+	max-width: 360px;
 	padding: 28px;
 	display: flex;
 	flex-direction: column;
@@ -518,4 +539,65 @@
 	justify-content: center;
 	padding: 7px 10px;
 	margin-top: 8px;
+}
+
+/* ---- responsive mobile styles ---- */
+@media (max-width: 768px) {
+	.sh-main {
+		position: relative;
+	}
+	.sh-rail {
+		position: absolute;
+		right: 0;
+		top: 0;
+		bottom: 0;
+		z-index: 30;
+		width: 280px;
+		max-width: 85vw;
+		border-left: 1px solid var(--border-strong);
+		box-shadow: -4px 0 16px oklch(0 0 0 / 30%);
+	}
+	.sh-rail-backdrop {
+		display: block;
+		position: absolute;
+		inset: 0;
+		z-index: 25;
+		background: var(--backdrop);
+		animation: sh-fade-in 150ms ease-out;
+	}
+}
+
+@keyframes sh-fade-in {
+	from {
+		opacity: 0;
+	}
+	to {
+		opacity: 1;
+	}
+}
+
+@media (max-width: 640px) {
+	.sh-cwd {
+		display: none;
+	}
+	.sh-chip-meta {
+		display: none;
+	}
+	.sh-gauge-track {
+		display: none;
+	}
+	.sh-btn-label {
+		display: none;
+	}
+	.sh-queued-label {
+		display: none;
+	}
+	.sh-composer-actions .sh-btn {
+		padding: 8px;
+	}
+	.sh-composer-input,
+	.sh-input,
+	.sh-input-mono {
+		font-size: 16px;
+	}
 }

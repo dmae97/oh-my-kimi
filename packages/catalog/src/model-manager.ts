@@ -33,6 +33,8 @@ export interface ModelManagerOptions<TApi extends Api = Api, TModelsDevPayload =
 	staticModels?: readonly ModelSpec<TApi>[];
 	/** Optional override for the cache database path. Default: <agent-dir>/models.db. */
 	cacheDbPath?: string;
+	/** Optional provider id override for cache namespacing. Defaults to providerId. */
+	cacheProviderId?: string;
 	/** Maximum cache age in milliseconds before considered stale. Default: 24h. */
 	cacheTtlMs?: number;
 	/** When true, a successful dynamic fetch is the complete provider catalog and prunes static-only models. */
@@ -107,13 +109,14 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 	options: ModelManagerOptions<TApi, TModelsDevPayload>,
 	strategy: ModelRefreshStrategy = "online-if-uncached",
 ): Promise<ModelResolutionResult<TApi>> {
+	const cacheProviderId = options.cacheProviderId ?? options.providerId;
 	const now = options.now ?? Date.now;
 	const ttlMs = options.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
 	const dbPath = options.cacheDbPath;
 	const staticModels = options.staticModels
 		? passModelList<TApi>(options.staticModels)
 		: (getBundledModels(options.providerId as GeneratedProvider) as Model<TApi>[]);
-	const cache = readModelCache<TApi>(options.providerId, ttlMs, now, dbPath);
+	const cache = readModelCache<TApi>(cacheProviderId, ttlMs, now, dbPath);
 	const dynamicModelsAuthoritative = options.dynamicModelsAuthoritative ?? false;
 	const staticFingerprint = fingerprintStatic(staticModels, dynamicModelsAuthoritative);
 	const cacheFingerprintMatches = cache?.staticFingerprint === staticFingerprint && staticFingerprint.length > 0;
@@ -160,7 +163,7 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 				? retainModelIds(mergedSnapshot, dynamicModels)
 				: mergedSnapshot;
 			writeModelCache(
-				options.providerId,
+				cacheProviderId,
 				now(),
 				collapseBuiltModelVariants(snapshotModels),
 				true,
@@ -170,9 +173,9 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 		} else {
 			// Dynamic fetch failed — update cache with a non-authoritative snapshot so
 			// stale state remains visible while retry backoff still applies.
-			const latestCache = readModelCache<TApi>(options.providerId, ttlMs, now, dbPath);
+			const latestCache = readModelCache<TApi>(cacheProviderId, ttlMs, now, dbPath);
 			writeModelCache(
-				options.providerId,
+				cacheProviderId,
 				now(),
 				collapseBuiltModelVariants(
 					mergeDynamicModels(

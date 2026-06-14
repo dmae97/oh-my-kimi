@@ -100,6 +100,26 @@ describe("executePython lifecycle", () => {
 		expect(kernelNext.execute).toHaveBeenCalledTimes(1);
 	});
 
+	it("restarts after an execution failure when kernel is dead", async () => {
+		const kernel = new FakeKernel(OK_RESULT);
+		kernel.execute.mockImplementation(async () => {
+			kernel.alive = false;
+			throw new Error("kernel crashed");
+		});
+		const kernelNext = new FakeKernel(OK_RESULT);
+		vi.spyOn(pythonKernel, "checkPythonKernelAvailability").mockResolvedValue({ ok: true });
+		const startSpy = vi
+			.spyOn(pythonKernel.PythonKernel, "start")
+			.mockResolvedValueOnce(kernel as unknown as pythonKernel.PythonKernel)
+			.mockResolvedValueOnce(kernelNext as unknown as pythonKernel.PythonKernel);
+
+		await executePython("1 + 1", { kernelMode: "session", sessionId: "crash-session", cwd: getProjectDir() });
+
+		expect(startSpy).toHaveBeenCalledTimes(2);
+		expect(kernel.execute).toHaveBeenCalledTimes(1);
+		expect(kernelNext.execute).toHaveBeenCalledTimes(1);
+	});
+
 	it("restarts dead retained sessions even when shutdown confirmation is missing", async () => {
 		const kernel = new FakeKernel(OK_RESULT);
 		const kernelNext = new FakeKernel(OK_RESULT);

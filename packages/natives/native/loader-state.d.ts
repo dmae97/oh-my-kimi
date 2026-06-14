@@ -55,6 +55,13 @@ export interface ResolveLoaderCandidatesInput {
 
 export function resolveLoaderCandidates(input: ResolveLoaderCandidatesInput): string[];
 
+export interface CleanupStaleNativeVersionsInput {
+	nativesDir: string;
+	currentVersion: string;
+}
+
+export function cleanupStaleNativeVersions(input: CleanupStaleNativeVersionsInput): string[];
+
 export interface ExtractEmbeddedAddonArchiveInput {
 	archivePath: string;
 	files: EmbeddedAddonFile[];

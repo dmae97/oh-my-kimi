@@ -160,6 +160,23 @@
 
 /* ── Drawer ───────────────────────────────────────────────────────── */
 
+.ag-drawer-backdrop {
+	position: fixed;
+	inset: 0;
+	z-index: 35;
+	background: var(--backdrop);
+	animation: ag-fade-in 150ms ease-out;
+}
+
+@keyframes ag-fade-in {
+	from {
+		opacity: 0;
+	}
+	to {
+		opacity: 1;
+	}
+}
+
 .ag-drawer {
 	position: fixed;
 	top: 0;
@@ -384,5 +401,11 @@
 	}
 	.ag-dot--running {
 		animation: none;
+	}
+}
+
+@media (max-width: 640px) {
+	.ag-chat-input {
+		font-size: 16px;
 	}
 }

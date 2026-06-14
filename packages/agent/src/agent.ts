@@ -974,8 +974,13 @@ export class Agent {
 					}
 				: undefined;
 
-		const getToolChoice = () =>
-			this.#getToolChoice?.() ?? refreshToolChoiceForActiveTools(options?.toolChoice, this.#state.tools);
+		const getToolChoice = () => {
+			const queuedToolChoice = this.#getToolChoice?.();
+			if (queuedToolChoice !== undefined) {
+				return refreshToolChoiceForActiveTools(queuedToolChoice, this.#state.tools);
+			}
+			return refreshToolChoiceForActiveTools(options?.toolChoice, this.#state.tools);
+		};
 
 		const config: AgentLoopConfig = {
 			model,

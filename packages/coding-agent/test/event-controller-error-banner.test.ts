@@ -54,7 +54,6 @@ afterEach(() => {
 function createFixture(streamingMessage?: AssistantMessage) {
 	const streamingComponent = {
 		updateContent: vi.fn(),
-		setUsageInfo: vi.fn(),
 		setComplete: vi.fn(),
 		markTranscriptBlockFinalized: vi.fn(),
 		setErrorPinned: vi.fn(),

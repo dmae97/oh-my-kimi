@@ -11,6 +11,7 @@ import type {
 	Model,
 	ModelSpec,
 	OpenAICompat,
+	Tool,
 	ToolResultMessage,
 } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
@@ -134,6 +135,7 @@ describe("openai-completions compatibility", () => {
 			reasoningEffortMap: {},
 			supportsUsageInStreaming: true,
 			supportsToolChoice: true,
+			supportsForcedToolChoice: true,
 			disableReasoningOnForcedToolChoice: false,
 			disableReasoningOnToolChoice: false,
 			maxTokensField: "max_completion_tokens",
@@ -1029,6 +1031,16 @@ describe("kimi model detection via detectCompat", () => {
 			timestamp: Date.now(),
 		};
 
+		const readTool: Tool = {
+			name: "read",
+			description: "Read a file",
+			parameters: {
+				type: "object",
+				properties: { path: { type: "string" } },
+				required: ["path"],
+			},
+		};
+
 		const { promise, resolve } = Promise.withResolvers<unknown>();
 		const fetchMock = createMockFetch(["[DONE]"]);
 		streamOpenAICompletions(
@@ -1046,6 +1058,7 @@ describe("kimi model detection via detectCompat", () => {
 						timestamp: Date.now(),
 					},
 				],
+				tools: [readTool],
 			},
 			{
 				apiKey: "test-key",
@@ -1071,6 +1084,96 @@ describe("kimi model detection via detectCompat", () => {
 		// The forced-tool guard must still strip the request-level thinking
 		// signal so neither end of the wire mentions reasoning.
 		expect(payload.reasoning_effort).toBeUndefined();
+	});
+
+	it("downgrades unsupported forced tool_choice without suppressing thinking", async () => {
+		const model: Model<"openai-completions"> = buildModel({
+			...gpt4oMiniSpec,
+			api: "openai-completions",
+			provider: "opencode-go",
+			baseUrl: "https://opencode.ai/zen/go/v1",
+			id: "kimi-k2.7-code",
+			reasoning: true,
+			compat: { supportsForcedToolChoice: false },
+		} as ModelSpec<"openai-completions">);
+		const priorAssistant: AssistantMessage = {
+			role: "assistant",
+			content: [
+				{
+					type: "thinking",
+					thinking: "Plan first, then call the tool.",
+					thinkingSignature: "reasoning_content",
+				},
+				{
+					type: "toolCall",
+					id: "call_abc123",
+					name: "read",
+					arguments: { path: "README.md" },
+				},
+			],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+			timestamp: Date.now(),
+		};
+		const readTool: Tool = {
+			name: "read",
+			description: "Read a file",
+			parameters: {
+				type: "object",
+				properties: { path: { type: "string" } },
+				required: ["path"],
+			},
+		};
+
+		const { promise, resolve } = Promise.withResolvers<unknown>();
+		const fetchMock = createMockFetch(["[DONE]"]);
+		streamOpenAICompletions(
+			model,
+			{
+				messages: [
+					{ role: "user", content: "Summarize the README", timestamp: Date.now() },
+					priorAssistant,
+					{
+						role: "toolResult",
+						toolCallId: "call_abc123",
+						toolName: "read",
+						content: [{ type: "text", text: "# Hello\n" }],
+						isError: false,
+						timestamp: Date.now(),
+					},
+				],
+				tools: [readTool],
+			},
+			{
+				apiKey: "test-key",
+				fetch: fetchMock,
+				reasoning: "high",
+				toolChoice: { type: "tool", name: "read" },
+				signal: createAbortedSignal(),
+				onPayload: payload => resolve(payload),
+			},
+		);
+
+		const payload = (await promise) as {
+			messages: Array<Record<string, unknown>>;
+			reasoning_effort?: unknown;
+			tool_choice?: unknown;
+		};
+		const assistant = payload.messages.find(m => m.role === "assistant");
+		expect(assistant).toBeDefined();
+		expect(Reflect.get(assistant as object, "reasoning_content")).toBe("Plan first, then call the tool.");
+		expect(payload.reasoning_effort).toBe("high");
+		expect(payload.tool_choice).toBe("auto");
 	});
 
 	// #1484 follow-up: DeepSeek V4 on opencode-go exhibits the same gateway

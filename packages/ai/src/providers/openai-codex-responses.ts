@@ -272,6 +272,7 @@ interface CodexRequestSetup {
 	requestSignal: AbortSignal;
 	wrapCodexSseStream: (source: AsyncGenerator<Record<string, unknown>>) => AsyncGenerator<Record<string, unknown>>;
 	requestAbortController: AbortController;
+	firstEventTimeoutMs: number | undefined;
 	websocketIdleTimeoutMs: number | undefined;
 	websocketFirstEventTimeoutMs: number | undefined;
 }
@@ -554,13 +555,16 @@ export function normalizeCodexToolChoice(
 	if (!choice) return undefined;
 	if (typeof choice === "string") return choice;
 	const allowFreeform = model ? supportsFreeformApplyPatchCodex(model) : false;
-	const mapName = (name: string): Record<string, string> => {
+	const mapName = (name: string): Record<string, string> | undefined => {
+		const directTool = tools.find(tool => tool.name === name);
 		const customTool = allowFreeform
 			? tools.find(tool => tool.customFormat && (tool.name === name || tool.customWireName === name))
 			: undefined;
+		const offeredTool = customTool ?? directTool;
+		if (!offeredTool) return undefined;
 		return customTool
 			? { type: "custom", name: customTool.customWireName ?? customTool.name }
-			: { type: "function", name };
+			: { type: "function", name: offeredTool.name };
 	};
 	if (choice.type === "function") {
 		if ("function" in choice && choice.function?.name) {
@@ -687,6 +691,7 @@ function createRequestSetup(options: OpenAICodexResponsesOptions | undefined): C
 		requestAbortController,
 		requestSignal,
 		wrapCodexSseStream,
+		firstEventTimeoutMs,
 		websocketIdleTimeoutMs,
 		websocketFirstEventTimeoutMs,
 	};
@@ -986,6 +991,7 @@ async function openCodexSseTransport(
 				state,
 				requestContext.responsesLite,
 				requestSetup.requestSignal,
+				requestSetup.firstEventTimeoutMs,
 				event => options?.onSseEvent?.(event, model),
 				options?.fetch,
 			),
@@ -3019,7 +3025,8 @@ async function openCodexSseEventStream(
 	body: RequestBody,
 	state: CodexWebSocketSessionState | undefined,
 	responsesLite: boolean,
-	signal?: AbortSignal,
+	signal: AbortSignal | undefined,
+	firstEventTimeoutMs: number | undefined,
 	onSseEvent?: OpenAICodexResponsesOptions["onSseEvent"],
 	fetchOverride?: FetchImpl,
 ): Promise<AsyncGenerator<Record<string, unknown>>> {
@@ -3031,15 +3038,31 @@ async function openCodexSseEventStream(
 		sentTurnStateHeader: headers.has(X_CODEX_TURN_STATE_HEADER),
 		sentModelsEtagHeader: headers.has(X_MODELS_ETAG_HEADER),
 	});
+	// `wrapCodexSseStream` arms a first-event watchdog only after this fetch
+	// resolves (it wraps the SSE generator). With `timeout: false` disabling
+	// Bun's native 300s ceiling, a stalled pre-response request needs its own
+	// watchdog — combine the caller signal with a fresh
+	// `AbortSignal.timeout(firstEventTimeoutMs)` so headers must arrive
+	// within the configured budget (issue #2422).
+	const preResponseWatchdog =
+		firstEventTimeoutMs !== undefined && firstEventTimeoutMs > 0
+			? AbortSignal.timeout(firstEventTimeoutMs)
+			: undefined;
+	const fetchSignal = preResponseWatchdog
+		? signal
+			? AbortSignal.any([signal, preResponseWatchdog])
+			: preResponseWatchdog
+		: signal;
 	const response = await fetchWithRetry(url, {
 		method: "POST",
 		headers,
 		body: JSON.stringify(body),
-		signal,
+		signal: fetchSignal,
 		maxAttempts: CODEX_MAX_RETRIES + 1,
 		defaultDelayMs: attempt => CODEX_RETRY_DELAY_MS * (attempt + 1),
 		maxDelayMs: CODEX_RATE_LIMIT_BUDGET_MS,
 		fetch: fetchOverride,
+		timeout: false,
 	});
 	logCodexDebug("codex response", {
 		url: response.url,

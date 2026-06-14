@@ -119,6 +119,25 @@ export declare class Shell {
 }
 
 /**
+ * Install the bounded Tokio runtime napi-rs adopts for async exports.
+ *
+ * The JS loader calls this exactly once, synchronously, right *after* `dlopen`
+ * returns and *before* any async native runs — never from `#[module_init]`.
+ * Building a multi-thread runtime eagerly spawns worker threads, and doing
+ * that during module init (while the dynamic-loader lock is held) deadlocks on
+ * some hosts: a fresh worker blocks acquiring the loader lock that the init
+ * thread still owns. napi-rs only materializes its runtime on the first async
+ * call (`RT` is a `LazyLock`) and `create_custom_tokio_runtime` merely records
+ * the runtime in a `OnceLock`, so installing it post-load is still honored.
+ * Without it napi builds its own default (one worker per CPU, spawned eagerly)
+ * which aborts the process (`os error 1455`) on a memory-constrained Windows
+ * host before any JS error can surface; [`create_windows_napi_tokio_runtime`]
+ * pre-flights the spawn instead. If no runtime can be built we leave napi-rs
+ * to its default. Idempotent.
+ */
+export declare function __ompInstallTokioRuntime(): void
+
+/**
  * Version sentinel — exists solely so the JS loader can prove at load time
  * that the `.node` file on disk is from the same package release as the
  * `index.js` ESM wrapper invoking it.
@@ -136,7 +155,7 @@ export declare class Shell {
  * `packages/natives/native/index.js` (which derives the name from
  * `package.json#version`).
  */
-export declare function __piNativesV15_12_4(): void
+export declare function __piNativesV15_13_0(): void
 
 /**
  * Apply conservative pre-execution rewrites to a bash command.

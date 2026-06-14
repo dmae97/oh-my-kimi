@@ -699,6 +699,14 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				if (!firstTokenTime) firstTokenTime = Date.now();
 				appendText(output, stream, text);
 			};
+			// Tracks the last full cumulative reasoning snapshot per signature (the
+			// reasoning field name) so dedup survives block transitions. Required
+			// for MiniMax-M3: once `</think>` and visible text arrive, currentBlock
+			// flips to "text", but later chunks keep carrying the same cumulative
+			// `reasoning_content` snapshot. Without an external tracker the guard
+			// below misses and the snapshot gets re-emitted as a fresh thinking
+			// block after the answer has started.
+			const lastCumulativeReasoningBySignature = new Map<string, string>();
 			const appendThinkingDelta = (
 				thinking: string,
 				signature?: string,
@@ -706,13 +714,13 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 			): void => {
 				if (!thinking) return;
 				let emittedThinking = thinking;
-				if (
-					source === "cumulative" &&
-					currentBlock?.type === "thinking" &&
-					(signature === undefined || currentBlock.thinkingSignature === signature) &&
-					thinking.startsWith(currentBlock.thinking)
-				) {
-					emittedThinking = thinking.slice(currentBlock.thinking.length);
+				if (source === "cumulative") {
+					const key = signature ?? "";
+					const lastSnapshot = lastCumulativeReasoningBySignature.get(key) ?? "";
+					if (thinking.startsWith(lastSnapshot)) {
+						emittedThinking = thinking.slice(lastSnapshot.length);
+					}
+					lastCumulativeReasoningBySignature.set(key, thinking);
 					if (!emittedThinking) return;
 				}
 				if (!firstTokenTime) firstTokenTime = Date.now();
@@ -1217,6 +1225,11 @@ async function createRequestSetup(
 	};
 }
 
+function getForcedCompletionsToolName(toolChoice: OpenAICompletionsParams["tool_choice"]): string | undefined {
+	if (typeof toolChoice !== "object" || toolChoice === null || !("function" in toolChoice)) return undefined;
+	return toolChoice.function.name;
+}
+
 function buildParams(
 	model: Model<"openai-completions">,
 	context: Context,
@@ -1228,6 +1241,7 @@ function buildParams(
 		Boolean(options?.reasoning) && !options?.disableReasoning && Boolean(model.reasoning);
 	const forcedToolChoiceSuppressesThinking =
 		compat.disableReasoningOnForcedToolChoice &&
+		compat.supportsForcedToolChoice &&
 		isForcedToolChoice(mapToOpenAICompletionsToolChoice(options?.toolChoice));
 	if (compat.whenThinking && thinkingEnabledForRequest && !forcedToolChoiceSuppressesThinking) {
 		compat = compat.whenThinking; // precomputed at model build — pointer swap, no allocation
@@ -1329,6 +1343,12 @@ function buildParams(
 	if (options?.toolChoice && compat.supportsToolChoice) {
 		params.tool_choice = mapToOpenAICompletionsToolChoice(options.toolChoice);
 	}
+	if (isForcedToolChoice(params.tool_choice) && !compat.supportsForcedToolChoice) {
+		// Some thinking-required OpenAI-compatible models reject forced
+		// `tool_choice` while still accepting tools with the default auto
+		// selector. Keep the tool available and let the model choose it.
+		params.tool_choice = "auto";
+	}
 
 	if (params.tool_choice === "none" && (!Array.isArray(params.tools) || params.tools.length === 0)) {
 		// `tool_choice: "none"` with no tools to gate is redundant and also
@@ -1339,6 +1359,19 @@ function buildParams(
 		// Side-channel turns hit this: `/btw` and IRC background replies route
 		// through `AgentSession.runEphemeralTurn`, which sets `context.tools = []`
 		// and `toolChoice: "none"` (see packages/coding-agent/src/session/agent-session.ts).
+		delete params.tool_choice;
+	}
+
+	const forcedToolName = getForcedCompletionsToolName(params.tool_choice);
+	if (
+		forcedToolName !== undefined &&
+		(!Array.isArray(params.tools) ||
+			!params.tools.some(tool => tool.type === "function" && tool.function.name === forcedToolName))
+	) {
+		// A forced named tool_choice is only valid when the same request offers
+		// that function in `tools`. Active-tool filtering normally enforces this
+		// before provider dispatch; this guard keeps raw provider callers from
+		// emitting a self-inconsistent OpenAI-compatible payload.
 		delete params.tool_choice;
 	}
 

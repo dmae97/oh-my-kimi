@@ -111,9 +111,7 @@ mod imp {
 		let resolved = if path.is_absolute() {
 			path.to_path_buf()
 		} else {
-			std::env::current_dir()
-				.map(|cwd| cwd.join(path))
-				.unwrap_or_else(|_| path.to_path_buf())
+			std::env::current_dir().map_or_else(|_| path.to_path_buf(), |cwd| cwd.join(path))
 		};
 		let meta = fs::metadata(&resolved).map_err(|err| {
 			IsoError::other(format!("invalid block-clone source {}: {err}", resolved.display()))
@@ -164,6 +162,13 @@ mod imp {
 		}
 		let mut permissions = meta.permissions();
 		if permissions.readonly() {
+			// This backend only removes a temporary Windows block-clone tree; clearing
+			// the readonly file attribute is required so removal can proceed.
+			#[allow(
+				clippy::permissions_set_readonly_false,
+				reason = "Windows block-clone cleanup must clear the readonly file attribute before \
+				          deletion"
+			)]
 			permissions.set_readonly(false);
 			let _ = fs::set_permissions(path, permissions);
 		}

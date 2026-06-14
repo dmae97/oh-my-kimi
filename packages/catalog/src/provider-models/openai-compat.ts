@@ -5,6 +5,7 @@ import {
 } from "../discovery/openai-compatible";
 import { Effort } from "../effort";
 import { toFireworksPublicModelId } from "../fireworks-model-id";
+import { isGlmVisionModelId, isReasoningGlmModelId } from "../identity/family";
 import type { ModelManagerOptions } from "../model-manager";
 import { getBundledModels } from "../models";
 import type { Api, FetchImpl, Model, ModelSpec, Provider, ThinkingConfig } from "../types";
@@ -1030,8 +1031,8 @@ export function zhipuCodingPlanModelManagerOptions(
 						const id = defaults.id;
 						return {
 							...defaults,
-							reasoning: ZHIPU_REASONING_MODELS[id] === true || id.includes("thinking"),
-							input: ZHIPU_VISION_PATTERN.test(id) ? (["text", "image"] as const) : ["text"],
+							reasoning: isReasoningGlmModelId(id) || id.includes("thinking"),
+							input: isGlmVisionModelId(id) ? (["text", "image"] as const) : ["text"],
 							compat: {
 								thinkingFormat: "zai",
 								reasoningContentField: "reasoning_content",
@@ -1044,25 +1045,6 @@ export function zhipuCodingPlanModelManagerOptions(
 		}),
 	};
 }
-
-// Reasoning-capable GLM models on the BigModel coding-plan SKU. Keep this
-// explicit rather than regex-matching `glm-[45]\.\d` so newly-added integers
-// like `glm-5` / `glm-5-turbo` are covered and unrelated future SKUs (e.g.
-// `glm-5-preview`) do not silently flip into thinking mode.
-const ZHIPU_REASONING_MODELS: Readonly<Record<string, true>> = {
-	"glm-4.5": true,
-	"glm-4.5-air": true,
-	"glm-4.6": true,
-	"glm-4.7": true,
-	"glm-5": true,
-	"glm-5-turbo": true,
-	"glm-5.1": true,
-};
-
-// Vision-capable GLM models follow the `glm-<N>[.<N>]v[-<variant>]` shape
-// (e.g. `glm-4v`, `glm-4.5v`, `glm-4v-plus`). The previous `id.includes("v")`
-// check matched anything with a `v` — including the non-vision `glm-5-preview`.
-const ZHIPU_VISION_PATTERN = /^glm-[45](?:\.\d+)?v(?:-|$)/;
 
 // ---------------------------------------------------------------------------
 // 7.5 Fireworks
@@ -2393,6 +2375,8 @@ export function litellmModelManagerOptions(
 // 22. vLLM
 // ---------------------------------------------------------------------------
 
+const VLLM_DISCOVERY_TIMEOUT_MS = 10_000;
+
 export interface VllmModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
@@ -2405,6 +2389,7 @@ export function vllmModelManagerOptions(config?: VllmModelManagerConfig): ModelM
 	const references = createBundledReferenceMap<"openai-completions">("vllm" as Parameters<typeof getBundledModels>[0]);
 	return {
 		providerId: "vllm",
+		cacheProviderId: `vllm:${Bun.hash(baseUrl).toString(36)}`,
 		fetchDynamicModels: () =>
 			fetchOpenAICompatibleModels({
 				api: "openai-completions",
@@ -2419,6 +2404,7 @@ export function vllmModelManagerOptions(config?: VllmModelManagerConfig): ModelM
 					};
 				},
 				fetch: config?.fetch,
+				signal: AbortSignal.timeout(VLLM_DISCOVERY_TIMEOUT_MS),
 			}),
 	};
 }

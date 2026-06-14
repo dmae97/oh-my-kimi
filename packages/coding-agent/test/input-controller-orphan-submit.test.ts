@@ -66,6 +66,7 @@ function createContext() {
 		sessionManager: { getSessionName: () => "named-session" } as InteractiveModeContext["sessionManager"],
 		pendingImages: [] as InteractiveModeContext["pendingImages"],
 		pendingImageLinks: [] as InteractiveModeContext["pendingImageLinks"],
+		compactionQueuedMessages: [] as InteractiveModeContext["compactionQueuedMessages"],
 		fileSlashCommands: new Set<string>(),
 		locallySubmittedUserSignatures: new Set<string>(),
 		isKnownSlashCommand: () => false,

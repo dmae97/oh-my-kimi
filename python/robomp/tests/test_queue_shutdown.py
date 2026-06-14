@@ -160,16 +160,17 @@ async def test_stop_fires_kill_hook_when_drain_exceeds_timeout(settings: Setting
     blocked = asyncio.create_task(_park())
     pool._inflight_tasks[blocked] = "d-blocked"  # noqa: SLF001
 
-    await pool.stop(drain_timeout=0.05, kill_timeout=0.05)
+    try:
+        await pool.stop(drain_timeout=0.05, kill_timeout=0.05)
 
-    assert hook_called.is_set()
-    stored = db.get_event("d-blocked")
-    assert stored is not None
-    assert stored.state == "running"
-
-    blocked.cancel()
-    with suppress(asyncio.CancelledError):
-        await blocked
+        assert hook_called.is_set()
+        stored = db.get_event("d-blocked")
+        assert stored is not None
+        assert stored.state == "running"
+    finally:
+        blocked.cancel()
+        with suppress(asyncio.CancelledError):
+            await blocked
 
 
 @pytest.mark.asyncio
@@ -230,16 +231,22 @@ async def test_stop_cancels_hookless_inflight_task(settings: Settings, db: Datab
 
     task = asyncio.create_task(stuck_pre_hook())
     pool._inflight_tasks[task] = "d-hookless"  # noqa: SLF001
-    await asyncio.wait_for(pre_hook_started.wait(), timeout=1.0)
+    try:
+        await asyncio.wait_for(pre_hook_started.wait(), timeout=1.0)
 
-    await pool.stop(drain_timeout=0.05, kill_timeout=0.2)
+        await pool.stop(drain_timeout=0.05, kill_timeout=0.2)
 
-    # Give the event loop a tick for cancellation to settle, then assert.
-    await asyncio.sleep(0)
-    assert task.done(), "stop() must terminate hookless in-flight tasks"
-    assert task.cancelled(), "hookless task must be cancelled, not left running"
-    assert reached_spawn is False, "task body must not progress past stop()"
-    assert "d-hookless" in pool._shutdown_cancelled  # noqa: SLF001
+        # Give the event loop a tick for cancellation to settle, then assert.
+        await asyncio.sleep(0)
+        assert task.done(), "stop() must terminate hookless in-flight tasks"
+        assert task.cancelled(), "hookless task must be cancelled, not left running"
+        assert reached_spawn is False, "task body must not progress past stop()"
+        assert "d-hookless" in pool._shutdown_cancelled  # noqa: SLF001
+    finally:
+        if not task.done():
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
 
 
 @pytest.mark.asyncio
@@ -256,6 +263,7 @@ async def test_run_event_marks_failed_for_unrelated_failure_during_drain(
     """
     pool = _make_pool(settings, db)
     pool._shutting_down = True  # noqa: SLF001
+    monkeypatch.setattr(settings, "event_max_retries", 0)  # assert terminal failure, not retry
     # Crucially: this delivery is NOT in `_shutdown_cancelled` — stop()
     # never targeted it. Its failure is its own.
 

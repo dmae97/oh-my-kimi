@@ -21,7 +21,7 @@ import {
 } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import { reset as resetCapabilities } from "./capability";
-import type { Args } from "./cli/args";
+import { type Args, reportUnrecognizedFlags } from "./cli/args";
 import { applyExtensionFlags, type ExtensionFlagSink } from "./cli/extension-flags";
 import { processFileArguments } from "./cli/file-processor";
 import { buildInitialMessage } from "./cli/initial-message";
@@ -64,7 +64,8 @@ import {
 } from "./sdk";
 import type { AgentSession } from "./session/agent-session";
 import type { AuthStorage } from "./session/auth-storage";
-import { resolveResumableSession, type SessionInfo, SessionManager } from "./session/session-manager";
+import { resolveResumableSession, type SessionInfo } from "./session/session-listing";
+import { SessionManager } from "./session/session-manager";
 import { executeBuiltinSlashCommand } from "./slash-commands/builtin-registry";
 import { discoverTitleSystemPromptFile, resolvePromptInput } from "./system-prompt";
 import { initTelemetryExport, isTelemetryExportEnabled } from "./telemetry-export";
@@ -264,7 +265,7 @@ export async function submitInteractiveInput(
 		InteractiveMode,
 		"markPendingSubmissionStarted" | "finishPendingSubmission" | "showError" | "checkShutdownRequested"
 	>,
-	session: Pick<AgentSession, "prompt" | "promptCustomMessage">,
+	session: Pick<AgentSession, "prompt" | "promptCustomMessage" | "isStreaming">,
 	input: SubmittedUserInput,
 ): Promise<void> {
 	if (input.cancelled) {
@@ -273,22 +274,32 @@ export async function submitInteractiveInput(
 
 	try {
 		using _keepalive = new EventLoopKeepalive();
+		const streamingBehavior = session.isStreaming ? ("followUp" as const) : undefined;
 		// Continue shortcuts submit an already-started synthetic developer prompt with
 		// no optimistic user message.
 		if (!input.started && !mode.markPendingSubmissionStarted(input)) {
 			return;
 		}
 		if (input.customType) {
-			await session.promptCustomMessage({
+			const message = {
 				customType: input.customType,
 				content: input.text,
 				display: input.display ?? false,
-				attribution: "agent",
-			});
+				attribution: "agent" as const,
+			};
+			await (streamingBehavior
+				? session.promptCustomMessage(message, { streamingBehavior })
+				: session.promptCustomMessage(message));
 		} else if (input.synthetic) {
+			// Synthetic continue shortcuts are hidden developer prompts. The streaming
+			// queue (#queueUserMessage) only carries user-attributed messages, so we do
+			// NOT pass streamingBehavior here: queueing would silently demote the
+			// developer directive to a visible user message. A synthetic submit while
+			// streaming keeps its prior behavior (rejected as busy) rather than changing
+			// its role.
 			await session.prompt(input.text, { synthetic: true, expandPromptTemplates: false });
 		} else {
-			await session.prompt(input.text, { images: input.images });
+			await session.prompt(input.text, { images: input.images, ...(streamingBehavior && { streamingBehavior }) });
 		}
 	} catch (error: unknown) {
 		const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
@@ -1197,6 +1208,15 @@ export async function runRootCommand(
 			},
 		};
 		const initialArgs = applyExtensionFlags(extensionFlagSink, rawArgs) ?? parsedArgs;
+		// Fail fast on stale/typo flags (e.g. `omp --list-models`) now that we
+		// know the real extension flag set. Without this check the unrecognized
+		// token gets silently consumed and any following positional leaks as the
+		// initial prompt — kicking off a real LLM session, MCP connection, and
+		// tool calls (issue #2459). Exit code 2 matches the conventional
+		// "command line usage error" convention.
+		if (reportUnrecognizedFlags(initialArgs)) {
+			process.exit(2);
+		}
 		const processedFiles =
 			initialArgs.fileArgs.length > 0
 				? await logger.time("processFileArguments", () =>

@@ -4,6 +4,7 @@ import {
 	type NativeScrollbackCommittedRows,
 	type NativeScrollbackLiveRegion,
 	type RenderStablePrefix,
+	type ViewportTailProvider,
 } from "@oh-my-pi/pi-tui";
 
 const kSnapshot = Symbol("transcript.liveDiffSnapshot");
@@ -139,6 +140,8 @@ interface BlockSegment {
 }
 
 const EMPTY_SEGMENTS: BlockSegment[] = [];
+/** Shared empty result for an empty viewport-tail render (no allocation). */
+const EMPTY_TAIL: readonly string[] = [];
 
 interface LiveCommitState {
 	appendOnly: boolean;
@@ -415,7 +418,7 @@ function deriveLiveCommitState(
  */
 export class TranscriptContainer
 	extends Container
-	implements NativeScrollbackLiveRegion, NativeScrollbackCommittedRows, RenderStablePrefix
+	implements NativeScrollbackLiveRegion, NativeScrollbackCommittedRows, RenderStablePrefix, ViewportTailProvider
 {
 	// Bumped to retire every block's diff snapshot at once (theme change /
 	// clear); a snapshot is only honored when its stored generation matches.
@@ -432,6 +435,14 @@ export class TranscriptContainer
 	// until it re-earns append-only via VOLATILE_REARM_FRAMES clean frames;
 	// the engine then backfills the stalled gap.
 	#nativeScrollbackCommitSafeEnd: number | undefined;
+	// Local line index up to which the leading run of live blocks is DURABLE: a
+	// commit-stable block's full body is permanent content even while its interior
+	// rows re-lay-out (a streaming markdown table re-aligning columns), so the
+	// engine must append their scroll-off snapshot rather than drop it. Reported
+	// separately from the byte-stable commit-safe end because these rows may still
+	// drift after commit; the engine commits them audit-exempt. Provisional
+	// (commit-unstable) blocks never extend it.
+	#nativeScrollbackSnapshotSafeEnd: number | undefined;
 	// Persistent assembled transcript rows. Rows before the stable floor are
 	// byte-identical to the previous render; rows at/after it were re-pushed.
 	#lines: string[] = [];
@@ -474,6 +485,10 @@ export class TranscriptContainer
 
 	getNativeScrollbackCommitSafeEnd(): number | undefined {
 		return this.#nativeScrollbackCommitSafeEnd;
+	}
+
+	getNativeScrollbackSnapshotSafeEnd(): number | undefined {
+		return this.#nativeScrollbackSnapshotSafeEnd;
 	}
 
 	/**
@@ -520,10 +535,54 @@ export class TranscriptContainer
 		return index === children.length - 1;
 	}
 
+	/**
+	 * Render only the bottom `maxRows` rows of the transcript at `width`, walking
+	 * blocks from the last toward the first and stopping the instant enough rows
+	 * are collected — blocks above the fold are never rendered. The engine's
+	 * resize viewport fast path uses this so a drag (a SIGWINCH burst, each event
+	 * a fresh width that misses every per-width cache) re-lays-out only the
+	 * handful of visible blocks instead of the whole history every event.
+	 *
+	 * State-isolated by contract: touches none of the persistent full-compose
+	 * fields (#lines, #segments, the per-block diff snapshots, the commit/stable
+	 * bookkeeping), so the authoritative full render on settle reconciles exactly
+	 * as if this never ran. Calling each block's render() still warms its own
+	 * per-width cache, which that settle render then reuses for free.
+	 *
+	 * Consecutive visible blocks are joined by exactly one blank separator, the
+	 * same rule render() applies, so the result equals the bottom of a full
+	 * render except for an at-most-one-row separator on the topmost included
+	 * block — a transient discrepancy the settle paint overwrites.
+	 */
+	renderViewportTail(width: number, maxRows: number): readonly string[] {
+		width = Math.max(1, width);
+		if (maxRows <= 0) return EMPTY_TAIL;
+		const collected: (readonly string[])[] = [];
+		let total = 0;
+		for (let i = this.children.length - 1; i >= 0 && total < maxRows; i--) {
+			const contribution = stripPlainBlankEdges(this.children[i]!.render(width));
+			if (contribution.length === 0) continue;
+			// One blank separator sits between this block and the (already
+			// collected) visible block below it.
+			if (collected.length > 0) total += 1;
+			collected.push(contribution);
+			total += contribution.length;
+		}
+		if (collected.length === 0) return EMPTY_TAIL;
+		const rows: string[] = [];
+		for (let k = collected.length - 1; k >= 0; k--) {
+			if (rows.length > 0) rows.push("");
+			const body = collected[k]!;
+			for (let j = 0; j < body.length; j++) rows.push(body[j]!);
+		}
+		return rows.length > maxRows ? rows.slice(rows.length - maxRows) : rows;
+	}
+
 	override render(width: number): readonly string[] {
 		width = Math.max(1, width);
 		this.#nativeScrollbackLiveRegionStart = undefined;
 		this.#nativeScrollbackCommitSafeEnd = undefined;
+		this.#nativeScrollbackSnapshotSafeEnd = undefined;
 
 		const count = this.children.length;
 
@@ -695,6 +754,16 @@ export class TranscriptContainer
 				const safeLength = finalized ? contribution.length : (liveCommitState?.safeLength ?? 0);
 				if (safeLength > 0) {
 					this.#nativeScrollbackCommitSafeEnd = blockStart + safeLength;
+				}
+				// Durable snapshot end: a commit-stable block's whole body is durable
+				// content — its scrolled-off rows are permanent even while interior
+				// rows re-lay-out (a streaming table re-aligning columns), so the
+				// engine must commit their snapshot on scroll-off rather than drop it.
+				// Finalized blocks are wholly durable; provisional (commit-unstable)
+				// blocks offer nothing beyond their byte-stable safe length.
+				const snapshotLength = finalized || isBlockCommitStable(child) ? contribution.length : safeLength;
+				if (snapshotLength > 0) {
+					this.#nativeScrollbackSnapshotSafeEnd = blockStart + snapshotLength;
 				}
 				// A finalized, fully safe block may let the contiguous safe run extend
 				// into blocks rendered below it. A still-live block keeps pushing lower

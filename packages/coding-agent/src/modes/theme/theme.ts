@@ -2098,6 +2098,11 @@ var currentThemeName: string | undefined;
 export function getCurrentThemeName(): string | undefined {
 	return currentThemeName;
 }
+
+/** Returns unstyled `text` before `initTheme()` assigns the global theme; use only for early-render paths. */
+export function fgOrPlain(color: ThemeColor, text: string, styledText: string = text): string {
+	return typeof theme === "undefined" ? text : theme.fg(color, styledText);
+}
 var currentSymbolPresetOverride: SymbolPreset | undefined;
 var currentColorBlindMode: boolean = false;
 var themeWatcher: fs.FSWatcher | undefined;
@@ -2108,6 +2113,7 @@ var autoDarkTheme: string = "dark";
 var autoLightTheme: string = "light";
 var onThemeChangeCallback: (() => void) | undefined;
 var themeLoadRequestId: number = 0;
+let themeEpoch = 0;
 
 function getCurrentThemeOptions(): CreateThemeOptions {
 	return {
@@ -2160,9 +2166,7 @@ export async function setTheme(
 		if (enableWatcher) {
 			await startThemeWatcher();
 		}
-		if (onThemeChangeCallback) {
-			onThemeChangeCallback();
-		}
+		notifyThemeChange();
 		return { success: true };
 	} catch (error) {
 		if (requestId !== themeLoadRequestId) {
@@ -2171,6 +2175,10 @@ export async function setTheme(
 		// Theme is invalid - fall back to dark theme
 		currentThemeName = "dark";
 		theme = await loadTheme("dark", getCurrentThemeOptions());
+		// The active theme just changed to the fallback — bump the epoch so memoized
+		// renderers (e.g. ToolExecutionComponent) re-shape with the fallback colors
+		// instead of holding the failed theme's stale styling.
+		notifyThemeChange();
 		// Don't start watcher for fallback theme
 		return {
 			success: false,
@@ -2187,9 +2195,7 @@ export async function previewTheme(name: string): Promise<{ success: boolean; er
 			return { success: false, error: "Theme preview superseded by a newer request" };
 		}
 		theme = loadedTheme;
-		if (onThemeChangeCallback) {
-			onThemeChangeCallback();
-		}
+		notifyThemeChange();
 		return { success: true };
 	} catch (error) {
 		if (requestId !== themeLoadRequestId) {
@@ -2236,9 +2242,7 @@ export function setThemeInstance(themeInstance: Theme): void {
 	theme = themeInstance;
 	currentThemeName = "<in-memory>";
 	stopThemeWatcher();
-	if (onThemeChangeCallback) {
-		onThemeChangeCallback();
-	}
+	notifyThemeChange();
 }
 
 /**
@@ -2259,7 +2263,7 @@ export async function setSymbolPreset(preset: SymbolPreset): Promise<void> {
 		theme = await loadTheme("dark", getCurrentThemeOptions());
 		if (requestId !== themeLoadRequestId) return;
 	}
-	onThemeChangeCallback?.();
+	notifyThemeChange();
 }
 
 /**
@@ -2288,7 +2292,7 @@ export async function setColorBlindMode(enabled: boolean): Promise<void> {
 		theme = await loadTheme("dark", getCurrentThemeOptions());
 		if (requestId !== themeLoadRequestId) return;
 	}
-	onThemeChangeCallback?.();
+	notifyThemeChange();
 }
 
 /**
@@ -2300,6 +2304,23 @@ export function getColorBlindMode(): boolean {
 
 export function onThemeChange(callback: () => void): void {
 	onThemeChangeCallback = callback;
+}
+
+/**
+ * Monotonic counter bumped on any theme-affecting change that should invalidate
+ * cached renders: theme swaps and reloads (including the invalid-theme dark
+ * fallback), theme previews, symbol-preset changes, and color-blind-mode
+ * changes — everything that routes through {@link notifyThemeChange}. Consumers
+ * key cached renders on it so the next render re-shapes their output.
+ */
+export function getThemeEpoch(): number {
+	return themeEpoch;
+}
+
+/** Bump the theme epoch and notify the registered theme-change listener. */
+function notifyThemeChange(): void {
+	themeEpoch++;
+	onThemeChangeCallback?.();
 }
 
 /**
@@ -2354,9 +2375,7 @@ async function startThemeWatcher(): Promise<void> {
 			loadTheme(watchedThemeName, getCurrentThemeOptions())
 				.then(loadedTheme => {
 					theme = loadedTheme;
-					if (onThemeChangeCallback) {
-						onThemeChangeCallback();
-					}
+					notifyThemeChange();
 				})
 				.catch(() => {
 					// Ignore errors (file might be in invalid state while being edited)
@@ -2396,9 +2415,7 @@ function reevaluateAutoTheme(debugLabel: string): void {
 	loadTheme(resolved, getCurrentThemeOptions())
 		.then(loadedTheme => {
 			theme = loadedTheme;
-			if (onThemeChangeCallback) {
-				onThemeChangeCallback();
-			}
+			notifyThemeChange();
 		})
 		.catch(err => {
 			logger.debug(`Theme switch on ${debugLabel} failed`, { error: String(err) });
@@ -2521,17 +2538,73 @@ function ansi256ToHex(index: number): string {
 }
 
 /**
+ * Classify a parsed theme JSON as light/dark by the perceived luminance of its
+ * status-line background. Mirrors {@link Theme.isLight} so the synchronous
+ * helpers below stay in lockstep with the runtime classifier — see the comment
+ * on `Theme.statusLineLuminance` for why `statusLineBg` is the source of truth
+ * (themes like `porcelain` style a dark chat bubble on an otherwise-light
+ * theme, so `userMessageBg` is unreliable).
+ */
+function isLightThemeJson(themeJson: ThemeJson): boolean {
+	try {
+		const resolved = resolveVarRefs(themeJson.colors.statusLineBg, themeJson.vars ?? {});
+		const luminance = colorLuma(resolved);
+		return luminance !== undefined && luminance > 0.5;
+	} catch {
+		return false;
+	}
+}
+
+function getHtmlDefaultTextForSurface(surface: string | number | undefined): string {
+	const luminance = surface === undefined ? undefined : colorLuma(surface);
+	return luminance !== undefined && luminance > 0.5 ? "#000000" : "#e5e5e7";
+}
+
+function resolveThemeExportColors(themeJson: ThemeJson): {
+	pageBg?: string;
+	cardBg?: string;
+	infoBg?: string;
+} {
+	const exportSection = themeJson.export;
+	if (!exportSection) return {};
+
+	const vars = themeJson.vars ?? {};
+	const resolve = (value: string | number | undefined): string | undefined => {
+		if (value === undefined) return undefined;
+		if (typeof value === "number") return ansi256ToHex(value);
+		if (value === "" || value.startsWith("#")) return value;
+		const varName = value.startsWith("$") ? value.slice(1) : value;
+		if (varName in vars) {
+			const resolved = resolveVarRefs(varName, vars);
+			return typeof resolved === "number" ? ansi256ToHex(resolved) : resolved;
+		}
+		return value;
+	};
+
+	return {
+		pageBg: resolve(exportSection.pageBg),
+		cardBg: resolve(exportSection.cardBg),
+		infoBg: resolve(exportSection.infoBg),
+	};
+}
+
+/**
  * Get resolved theme colors as CSS-compatible hex strings.
  * Used by HTML export to generate CSS custom properties.
  */
 export async function getResolvedThemeColors(themeName?: string): Promise<Record<string, string>> {
 	const name = themeName ?? getDefaultTheme();
-	const isLight = name === "light";
 	const themeJson = await loadThemeJson(name);
+	const exportColors = resolveThemeExportColors(themeJson);
 	const resolved = resolveThemeColors(themeJson.colors, themeJson.vars);
 
-	// Default text color for empty values (terminal uses default fg color)
-	const defaultText = isLight ? "#000000" : "#e5e5e7";
+	// Empty foreground tokens use the terminal default color. In HTML export,
+	// that default must contrast the export surface, not the TUI status line:
+	// custom light themes can still export dark transcript cards when they omit
+	// `export`, because generateThemeVars derives those cards from userMessageBg.
+	const defaultText = getHtmlDefaultTextForSurface(
+		exportColors.cardBg ?? exportColors.pageBg ?? resolved.userMessageBg,
+	);
 
 	const cssColors: Record<string, string> = {};
 	for (const [key, value] of Object.entries(resolved)) {
@@ -2548,8 +2621,9 @@ export async function getResolvedThemeColors(themeName?: string): Promise<Record
 }
 
 /**
- * Check if a theme is a "light" theme by analyzing its background color luminance.
- * Loads theme JSON synchronously (built-in or custom file) and resolves userMessageBg.
+ * Check if a theme is a "light" theme by analyzing its status-line background
+ * luminance. Loads theme JSON synchronously (built-in or custom file on disk)
+ * for callers in synchronous flows (settings migration, setup wizard).
  */
 export function isLightTheme(themeName?: string): boolean {
 	const name = themeName ?? "dark";
@@ -2566,13 +2640,7 @@ export function isLightTheme(themeName?: string): boolean {
 			return false;
 		}
 	}
-	try {
-		const resolved = resolveVarRefs(themeJson.colors.userMessageBg, themeJson.vars ?? {});
-		const luminance = colorLuma(resolved);
-		return luminance !== undefined && luminance > 0.5;
-	} catch {
-		return false;
-	}
+	return isLightThemeJson(themeJson);
 }
 
 /**
@@ -2587,27 +2655,7 @@ export async function getThemeExportColors(themeName?: string): Promise<{
 	const name = themeName ?? getDefaultTheme();
 	try {
 		const themeJson = await loadThemeJson(name);
-		const exportSection = themeJson.export;
-		if (!exportSection) return {};
-
-		const vars = themeJson.vars ?? {};
-		const resolve = (value: string | number | undefined): string | undefined => {
-			if (value === undefined) return undefined;
-			if (typeof value === "number") return ansi256ToHex(value);
-			if (value === "" || value.startsWith("#")) return value;
-			const varName = value.startsWith("$") ? value.slice(1) : value;
-			if (varName in vars) {
-				const resolved = resolveVarRefs(varName, vars);
-				return typeof resolved === "number" ? ansi256ToHex(resolved) : resolved;
-			}
-			return value;
-		};
-
-		return {
-			pageBg: resolve(exportSection.pageBg),
-			cardBg: resolve(exportSection.cardBg),
-			infoBg: resolve(exportSection.infoBg),
-		};
+		return resolveThemeExportColors(themeJson);
 	} catch {
 		return {};
 	}

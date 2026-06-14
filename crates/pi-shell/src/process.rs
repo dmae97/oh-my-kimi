@@ -805,7 +805,7 @@ mod platform {
 			}
 		}
 
-		fn as_raw(&self) -> Handle {
+		const fn as_raw(&self) -> Handle {
 			self.raw as Handle
 		}
 	}
@@ -932,7 +932,7 @@ mod platform {
 			unsafe { TerminateProcess(self.handle.as_raw(), 1) != 0 }
 		}
 
-		pub const fn group_id(&self) -> Option<i32> {
+		pub const fn group_id() -> Option<i32> {
 			None
 		}
 
@@ -1047,7 +1047,7 @@ mod platform {
 	}
 
 	fn read_remote_unicode_string(handle: Handle, value: UnicodeString) -> Option<String> {
-		if value.length == 0 || value.buffer == 0 || value.length % 2 != 0 {
+		if value.length == 0 || value.buffer == 0 || !value.length.is_multiple_of(2) {
 			return None;
 		}
 		let code_units = usize::from(value.length) / size_of::<u16>();
@@ -1135,7 +1135,7 @@ mod platform {
 		OwnedHandle::from_raw(snapshot)
 	}
 
-	fn process_entry() -> PROCESSENTRY32W {
+	const fn process_entry() -> PROCESSENTRY32W {
 		PROCESSENTRY32W {
 			dwSize:              mem::size_of::<PROCESSENTRY32W>() as u32,
 			cntUsage:            0,
@@ -1288,6 +1288,13 @@ impl Process {
 	}
 
 	/// Process group id for this process, when supported by the platform.
+	#[cfg(target_os = "windows")]
+	#[must_use]
+	pub const fn group_id(&self) -> Option<i32> {
+		platform::Process::group_id()
+	}
+
+	#[cfg(not(target_os = "windows"))]
 	#[must_use]
 	pub fn group_id(&self) -> Option<i32> {
 		self.inner.group_id()
@@ -1357,7 +1364,7 @@ impl Process {
 		// If self leads its own process group, also signal the group — this catches
 		// grandchildren reparented to init when their immediate parent died inside
 		// the descendant walk.
-		if let Some(pgid) = self.inner.group_id()
+		if let Some(pgid) = self.group_id()
 			&& pgid == self.inner.pid()
 		{
 			let _ = kill_process_group(pgid, signal);

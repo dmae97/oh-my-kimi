@@ -6,6 +6,7 @@
 import { buildCompat } from "../src/build";
 import {
 	type AnthropicModel,
+	bareModelId,
 	isFableOrMythos,
 	type OpenAIModel,
 	type OpenAIVariant,
@@ -14,6 +15,7 @@ import {
 	semverEqual,
 } from "../src/identity/classify";
 import { buildCanonicalModelIndex, buildCanonicalReferenceData } from "../src/identity/equivalence";
+import { isMimoModelIdOrName } from "../src/identity/family";
 import { getLongestModelLikeIdSegment } from "../src/identity/id";
 import { buildModelReferenceIndex, resolveModelReference } from "../src/identity/reference";
 import { resolveModelThinking } from "../src/model-thinking";
@@ -91,26 +93,46 @@ export function rebakeModelThinking(model: ModelSpec<Api>): void {
 /**
  * Link OpenAI model variants to their context promotion targets.
  *
- * When a model's context is exhausted, the agent can promote to a sibling
- * model with a larger context window on the same provider:
- * - `codex-spark` variants promote to `gpt-5.5`.
- * - `gpt-5.5` (270K input) promotes to `gpt-5.4` (1M input).
+ * When a model's context is exhausted, the agent can promote to a sibling model
+ * on the same provider:
+ * - `codex-spark` variants promote to the full `gpt-5.5`.
+ * - every `gpt-5.5` flavor (base, `-pro`, `-instant`, dated snapshots, and
+ *   namespaced ids like `openai/gpt-5.5`) promotes to its `gpt-5.4` sibling.
+ *
+ * The sibling is resolved by parsed version + matching provider/api, not a
+ * hardcoded bare id, so namespaced (`openrouter/openai/gpt-5.4`), dotted
+ * (`amazon-bedrock` `openai.gpt-5.4`), and dated (`gpt-5.4-2026-03-05`) ids all
+ * link. The runtime still gates on the target actually being larger
+ * (`#resolveContextPromotionTarget`), so an equal/smaller sibling is a harmless
+ * no-op rather than a counterproductive switch.
  */
 export function linkOpenAIPromotionTargets(models: ModelSpec<Api>[]): void {
 	for (const candidate of models) {
 		const parsedCandidate = parseKnownModel(candidate.id);
 		if (parsedCandidate.family !== "openai") continue;
-		let targetId: string | undefined;
+		let targetVersion: string | undefined;
 		if (parsedCandidate.variant === "codex-spark") {
-			targetId = "gpt-5.5";
-		} else if (parsedCandidate.variant === "base" && semverEqual(parsedCandidate.version, "5.5")) {
-			targetId = "gpt-5.4";
+			targetVersion = "5.5";
+		} else if (semverEqual(parsedCandidate.version, "5.5")) {
+			targetVersion = "5.4";
 		} else {
 			continue;
 		}
-		const fallback = models.find(
-			model => model.provider === candidate.provider && model.api === candidate.api && model.id === targetId,
-		);
+		// Prefer the plainest sibling id (shortest bare segment) so the base model
+		// wins over `-pro`/`-mini`/`-nano` siblings that parse to the same version.
+		let fallback: ModelSpec<Api> | undefined;
+		let fallbackBareLength = Number.POSITIVE_INFINITY;
+		for (const model of models) {
+			if (model === candidate) continue;
+			if (model.provider !== candidate.provider || model.api !== candidate.api) continue;
+			const parsed = parseKnownModel(model.id);
+			if (parsed.family !== "openai" || !semverEqual(parsed.version, targetVersion)) continue;
+			const bareLength = bareModelId(model.id).length;
+			if (bareLength < fallbackBareLength) {
+				fallback = model;
+				fallbackBareLength = bareLength;
+			}
+		}
 		if (!fallback) continue;
 		candidate.contextPromotionTarget = `${fallback.provider}/${fallback.id}`;
 	}
@@ -184,6 +206,18 @@ function applyGeneratedModelPolicy(model: ModelSpec<Api>): void {
 		model.maxTokens = copilotLimits.maxTokens;
 	}
 
+	// GLM Coding Plan (zai): GLM-5.2 is the selectable 1M served id; pin it
+	// so endpoint discovery or older bundled fallbacks cannot regress to 200k.
+	if (model.provider === "zai" && model.id === "glm-5.2") {
+		model.contextWindow = 1_000_000;
+		model.maxTokens = 131_072;
+	}
+	// MiniMax-M3: 512K is the standard pricing tier boundary, not the
+	// model ceiling. Pin the long-context providers to the documented 1M tier.
+	if ((model.provider === "minimax" || model.provider === "minimax-cn") && model.id === "MiniMax-M3") {
+		model.contextWindow = 1_000_000;
+	}
+
 	if (
 		model.api === "openai-completions" &&
 		(model.provider === "minimax-code" || model.provider === "minimax-code-cn")
@@ -196,6 +230,18 @@ function applyGeneratedModelPolicy(model: ModelSpec<Api>): void {
 			reasoningContentField: "reasoning_content",
 		};
 		delete model.compat.thinkingFormat;
+	}
+	if (model.api === "openai-completions" && model.provider === "opencode-go" && isMimoModelIdOrName(model.id)) {
+		model.compat = {
+			...(model.compat ?? {}),
+			supportsToolChoice: false,
+		};
+	}
+	if (model.api === "openai-completions" && model.provider === "opencode-go" && model.id === "kimi-k2.7-code") {
+		model.compat = {
+			...(model.compat ?? {}),
+			supportsForcedToolChoice: false,
+		};
 	}
 	if (
 		model.api === "openai-completions" &&

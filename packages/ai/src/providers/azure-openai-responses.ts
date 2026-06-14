@@ -339,7 +339,15 @@ function buildParams(
 	if (context.tools) {
 		params.tools = convertTools(context.tools);
 		if (options?.toolChoice) {
-			params.tool_choice = mapToOpenAIResponsesToolChoice(options.toolChoice);
+			const toolChoice = mapToOpenAIResponsesToolChoice(options.toolChoice);
+			if (
+				toolChoice &&
+				(typeof toolChoice === "string" ||
+					toolChoice.type !== "function" ||
+					context.tools.some(tool => tool.name === toolChoice.name))
+			) {
+				params.tool_choice = toolChoice;
+			}
 		}
 	}
 

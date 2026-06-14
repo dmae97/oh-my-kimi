@@ -68,7 +68,11 @@ export function Composer({ client, snapshot }: ComposerProps): ReactNode {
 					spellCheck={false}
 				/>
 				<div className="sh-composer-actions">
-					{busy && queued > 0 && <span className="sh-queued">queued ×{queued}</span>}
+					{busy && queued > 0 && (
+						<span className="sh-queued">
+							<span className="sh-queued-label">queued </span>×{queued}
+						</span>
+					)}
 					{busy && !readOnly && (
 						<button
 							type="button"
@@ -77,7 +81,7 @@ export function Composer({ client, snapshot }: ComposerProps): ReactNode {
 							disabled={!live}
 							title="stop the current turn"
 						>
-							<Square size={11} /> Stop
+							<Square size={11} /> <span className="sh-btn-label">Stop</span>
 						</button>
 					)}
 					<button
@@ -87,7 +91,7 @@ export function Composer({ client, snapshot }: ComposerProps): ReactNode {
 						disabled={!canSend}
 						title="send (Enter)"
 					>
-						<SendHorizontal size={12} /> Send
+						<SendHorizontal size={12} /> <span className="sh-btn-label">Send</span>
 					</button>
 				</div>
 			</div>

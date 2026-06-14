@@ -170,3 +170,86 @@ describe("Agent hub Enter activation", () => {
 		capturedHub!.dispose();
 	});
 });
+
+describe("Agent hub double-← gating", () => {
+	beforeAll(() => {
+		initTheme();
+	});
+
+	afterEach(() => {
+		resetSettingsForTest();
+	});
+
+	function setup(agents: AgentRegistry) {
+		let shown: AgentHubOverlayComponent | undefined;
+		const ctx = {
+			keybindings: { getKeys: () => [] },
+			ui: {
+				showOverlay: (component: AgentHubOverlayComponent) => {
+					shown = component;
+					return { hide: () => {} };
+				},
+				setFocus: () => {},
+				requestRender: () => {},
+			},
+			editor: {},
+			collabGuest: { agentRegistry: agents, hubRemote: undefined },
+			focusAgentSession: async () => {},
+			session: { getToolByName: () => undefined, extensionRunner: undefined },
+			sessionManager: { getCwd: () => "/tmp", getSessionFile: () => null },
+			hideThinkingBlock: false,
+		};
+		const controller = new SelectorController(ctx as unknown as InteractiveModeContext);
+		return { controller, shown: () => shown };
+	}
+
+	function registerWorker(agents: AgentRegistry) {
+		agents.register({
+			id: AGENT_ID,
+			displayName: AGENT_ID,
+			kind: "sub",
+			parentId: "Main",
+			session: { subscribe: () => () => {} } as unknown as AgentSession,
+			sessionFile: null,
+			status: "running",
+		});
+	}
+
+	it("requireContent keeps the hub closed when only Main is registered", () => {
+		const agents = new AgentRegistry();
+		agents.register({
+			id: "Main",
+			displayName: "Main",
+			kind: "main",
+			session: null,
+			sessionFile: null,
+			status: "running",
+		});
+		const { controller, shown } = setup(agents);
+
+		controller.showAgentHub(new SessionObserverRegistry(), { requireContent: true });
+
+		expect(shown()).toBeUndefined();
+	});
+
+	it("requireContent opens the hub once a subagent exists", () => {
+		const agents = new AgentRegistry();
+		registerWorker(agents);
+		const { controller, shown } = setup(agents);
+
+		controller.showAgentHub(new SessionObserverRegistry(), { requireContent: true });
+
+		expect(shown()).toBeDefined();
+		shown()!.dispose();
+	});
+
+	it("the explicit hub key opens the empty roster even with no subagents", () => {
+		const agents = new AgentRegistry();
+		const { controller, shown } = setup(agents);
+
+		controller.showAgentHub(new SessionObserverRegistry());
+
+		expect(shown()).toBeDefined();
+		shown()!.dispose();
+	});
+});

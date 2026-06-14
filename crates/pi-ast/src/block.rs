@@ -77,8 +77,20 @@ pub fn block_range_at(options: BlockRangeOptions) -> Result<Option<BlockRange>> 
 	};
 	let root = tree.root_node();
 
+	// Query a one-column-wide range over the first content character rather
+	// than a zero-width point. Some grammars (e.g. tree-sitter-swift) insert a
+	// zero-width separator node at the start of a statement that follows a
+	// blank line. An empty point range at that node's start gets absorbed into
+	// the invisible node, which has no children and is not "relevant", so
+	// `named_descendant_for_point_range` bubbles back up to the last visible
+	// ancestor (the enclosing body, or the file root). That made `replace
+	// block` on a line like `var body: some View {` preceded by a blank line
+	// resolve to the whole enclosing type body and then fail. Spanning the
+	// first character skips the zero-width node (its end is < the range end)
+	// and forces the descent into the node that begins on `row`.
 	let point = Point::new(row, col);
-	let Some(leaf) = root.named_descendant_for_point_range(point, point) else {
+	let point_end = Point::new(row, col + 1);
+	let Some(leaf) = root.named_descendant_for_point_range(point, point_end) else {
 		return Ok(None);
 	};
 	// A leaf whose own start row is earlier than `row` means `point` landed on
@@ -370,6 +382,34 @@ mod tests {
 	fn resolves_rust_struct_block() {
 		let code = "struct A;\nstruct B {\n    x: u32,\n}\n";
 		assert_eq!(resolve(code, "r.rs", 2), Some(BlockRange { start_line: 2, end_line: 4 }));
+	}
+
+	#[test]
+	fn resolves_swift_computed_property_after_blank_line() {
+		// Regression: a block whose opening line is preceded by a blank line
+		// (here the SwiftUI `var body: some View {` computed property) used to
+		// resolve to nothing. tree-sitter-swift inserts a zero-width separator
+		// node at the start of a statement that follows a blank line; a
+		// zero-width point query at the first content column gets absorbed into
+		// that invisible node and bubbles back up to the enclosing type body. A
+		// one-column-wide query skips the zero-width node and descends into the
+		// property that actually begins on the line.
+		let code = "struct MenuBarUsage: View {\n    let metric: AccountMetric\n\n    var body: \
+		            some View {\n        VStack {\n            Text(\"Usage\")\n        }\n    \
+		            }\n}\n";
+		assert_eq!(
+			resolve(code, "MenuBarUsage.swift", 4),
+			Some(BlockRange { start_line: 4, end_line: 8 })
+		);
+	}
+
+	#[test]
+	fn resolves_swift_top_level_decl_after_blank_line() {
+		// Same zero-width-separator regression one level up: a top-level
+		// declaration following a blank line. Without the fix the query
+		// resolved to the whole `source_file` root and was rejected.
+		let code = "import Foundation\n\nfunc greet() {\n    print(\"hi\")\n}\n";
+		assert_eq!(resolve(code, "g.swift", 3), Some(BlockRange { start_line: 3, end_line: 5 }));
 	}
 
 	fn boundaries(code: &str, path: &str, ranges: &[(u32, u32)]) -> Option<Vec<u32>> {

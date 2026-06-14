@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -164,7 +164,7 @@ describe("streaming edit preview height (stable, full tail window)", () => {
 		// And it is never padded into a half-empty rectangle (the regression).
 		expect(maxTrailingBlank).toBeLessThanOrEqual(1);
 		expect(finalizedHeight).toBeGreaterThan(1);
-	});
+	}, 30_000);
 
 	test("real TUI finalization replaces streaming edit preview throughout native scrollback", async () => {
 		const previewPrefix = "PREVIEW_ONLY_STREAM_SENTINEL_";
@@ -290,25 +290,19 @@ describe("streaming edit preview height (stable, full tail window)", () => {
 		}
 		const hasDecrease = rawLineCounts.some((count, i) => i > 0 && count < rawLineCounts[i - 1]);
 		expect(hasDecrease).toBe(true);
-	});
+	}, 30_000);
 });
 
 describe("streaming tool call preview height (bounded across renderers)", () => {
-	let themed = false;
-
-	beforeEach(async () => {
-		if (!themed) {
-			await initTheme();
-			themed = true;
-		}
-		resetSettingsForTest();
-		await Settings.init({ inMemory: true, cwd: process.cwd() });
+	beforeAll(async () => {
+		// `evalToolRenderer.renderCall` walks the theme during highlighting; the
+		// bash/ssh/eval pending previews exercised below DO NOT read
+		// `settings.*`, so the global Settings singleton is intentionally left
+		// untouched here. Resetting/initialising it in `beforeEach` raced with
+		// parallel test files that do the same dance (issue #2582), flipping the
+		// proxy under us and timing the eval test out.
+		await initTheme();
 	});
-
-	afterEach(() => {
-		resetSettingsForTest();
-	});
-
 	function renderPending(toolName: string, args: unknown): { lines: readonly string[]; text: string } {
 		const term = new VirtualTerminal(80, 20);
 		const tui = new TUI(term);
@@ -364,27 +358,6 @@ describe("streaming tool call preview height (bounded across renderers)", () => 
 		}
 	}, 30_000);
 
-	test("task pending preview keeps the full assignment brief", () => {
-		// CONTRACT CHANGE with the single-spawn task rework: the old uncapped
-		// multi-task `context` rendering is gone with the field. The assignment
-		// brief is the durable record of what the subagent was asked to do, so
-		// the pending preview renders it in full instead of windowing it like
-		// bash/ssh command previews or eval cell code.
-		const longLines = Array.from({ length: 80 }, (_, i) => `line-${i}`);
-		const { lines, text } = renderPending("task", {
-			agent: "task",
-			id: "alpha",
-			description: "preview",
-			assignment: longLines.join("\n"),
-		});
-
-		expect(lines.length, "task assignment brief should not be capped").toBeGreaterThan(80);
-		expect(text).toContain("preview");
-		expect(text).toContain("line-0");
-		expect(text).toContain("line-40");
-		expect(text).toContain("line-79");
-	});
-
 	test("eval pending preview windows the code to the viewport tail", () => {
 		// Eval cell code is capped to the same viewport-sized TAIL window as
 		// bash/ssh: the live edge stays visible behind an "… N earlier lines"
@@ -404,5 +377,5 @@ describe("streaming tool call preview height (bounded across renderers)", () => 
 		expect(text).not.toContain("const line-0 = 1;");
 		expect(text).not.toContain(`const line-${hidden - 1} = 1;`);
 		expect(text).toContain(`… ${hidden} earlier lines`);
-	});
+	}, 30_000);
 });

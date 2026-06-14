@@ -5,11 +5,12 @@ import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { type ApiKey, completeSimple, Effort, type Model } from "@oh-my-pi/pi-ai";
 import { clampThinkingLevelForModel } from "@oh-my-pi/pi-catalog/model-thinking";
-import { getAgentDbPath, getMemoriesDir, logger, parseJsonlLenient, prompt } from "@oh-my-pi/pi-utils";
+import { getAgentDbPath, getMemoriesDir, isEnoent, logger, parseJsonlLenient, prompt } from "@oh-my-pi/pi-utils";
 
 import type { ModelRegistry } from "../config/model-registry";
 import { getModelMatchPreferences, resolveModelRoleValue } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
+import type { MemoryBackendSaveInput, MemoryBackendSaveResult } from "../memory-backend/types";
 import consolidationTemplate from "../prompts/memories/consolidation.md" with { type: "text" };
 import consolidationSystemTemplate from "../prompts/memories/consolidation_system.md" with { type: "text" };
 import readPathTemplate from "../prompts/memories/read-path.md" with { type: "text" };
@@ -156,22 +157,31 @@ export async function buildMemoryToolDeveloperInstructions(
 	const cfg = loadMemoryConfig(settings);
 	if (!cfg.enabled) return undefined;
 	const memoryRoot = getMemoryRoot(agentDir, settings.getCwd());
-	const summaryPath = path.join(memoryRoot, "memory_summary.md");
 
-	let text: string;
+	let summary = "";
 	try {
-		text = await Bun.file(summaryPath).text();
+		summary = (await Bun.file(path.join(memoryRoot, "memory_summary.md")).text()).trim();
 	} catch {
-		return undefined;
+		// Missing or unreadable summary — injection is best-effort; fall through
+		// so any captured lessons still surface on their own.
 	}
+	const learned = await readLearnedLessons(memoryRoot);
+	if (!summary && !learned) return undefined;
 
-	const summary = text.trim();
-	if (!summary) return undefined;
-	const truncated = truncateByApproxTokens(summary, cfg.summaryInjectionTokenLimit);
-	if (!truncated.trim()) return undefined;
+	const summaryOut = summary ? truncateByApproxTokens(summary, cfg.summaryInjectionTokenLimit).trim() : "";
+	// Lessons share ONE injection budget with the summary so the combined block
+	// stays within `summaryInjectionTokenLimit` (~4 chars/token, matching
+	// truncateByApproxTokens). With no summary, lessons get the whole budget.
+	// Clamp to 0: truncateByApproxTokens appends a marker, so a truncated summary
+	// can exceed `limit * 4` chars and drive the remainder negative — when the
+	// summary already fills the budget, lessons are simply dropped.
+	const learnedBudget = Math.max(0, cfg.summaryInjectionTokenLimit - Math.ceil(summaryOut.length / 4));
+	const learnedOut = learned && learnedBudget > 0 ? truncateByApproxTokens(learned, learnedBudget).trim() : "";
+	if (!summaryOut && !learnedOut) return undefined;
 
 	return prompt.render(readPathTemplate, {
-		memory_summary: truncated,
+		memory_summary: summaryOut,
+		learned: learnedOut,
 	});
 }
 
@@ -982,6 +992,12 @@ function redactSecrets(input: string): string {
 		/(?:sk|pk|rk|tok|key|secret|token|password)[-_A-Za-z0-9]{12,}/g,
 		/[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}/g,
 		/(?:AKIA|ASIA)[A-Z0-9]{16}/g,
+		// Common provider token prefixes (GitHub, npm, Slack, Google).
+		/(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}/g,
+		/github_pat_[A-Za-z0-9_]{20,}/g,
+		/npm_[A-Za-z0-9]{30,}/g,
+		/xox[baprs]-[A-Za-z0-9-]{10,}/g,
+		/AIza[A-Za-z0-9_-]{30,}/g,
 	];
 	for (const pattern of patterns) {
 		out = out.replace(pattern, "[REDACTED]");
@@ -1119,6 +1135,125 @@ function loadMemoryConfig(settings: Settings): MemoryRuntimeConfig {
 
 export function getMemoryRoot(agentDir: string, cwd: string): string {
 	return path.join(getMemoriesDir(agentDir), encodeProjectPath(cwd));
+}
+
+/**
+ * Filename of the captured-lessons file under a project's memory root.
+ *
+ * Written by the `learn` tool via {@link saveLearnedLesson} and read back by
+ * {@link buildMemoryToolDeveloperInstructions}. Deliberately distinct from the
+ * consolidation artifacts (`MEMORY.md`, `memory_summary.md`, `skills/`) so a
+ * consolidation pass never clobbers manually captured lessons.
+ */
+const LEARNED_LESSONS_FILE = "learned.md";
+/** Newest-first cap on retained lessons, bounding file growth by entry count. */
+const MAX_LEARNED_LESSONS = 100;
+/** Per-field char caps so a single huge capture can't bloat learned.md. */
+const MAX_LEARNED_CONTENT_CHARS = 2000;
+const MAX_LEARNED_CONTEXT_CHARS = 400;
+
+/**
+ * Strip prompt-injection vectors from a single line of lesson text: control/
+ * format chars, angle brackets (`</skills>`), backticks, and `~~~` fences, then
+ * collapse whitespace. Applied on BOTH write and read (the block renders
+ * unescaped into the system prompt), mirroring managed-skill descriptions.
+ */
+function neutralizeInjection(text: string): string {
+	return text
+		.replace(/[\p{Cc}\p{Cf}]/gu, " ")
+		.replace(/[<>`]/g, "")
+		.replace(/~{2,}/g, "~")
+		.replace(/\s+/g, " ")
+		.trim();
+}
+
+/** Slice to `maxChars`, dropping a trailing unpaired high surrogate. */
+function boundChars(text: string, maxChars: number): string {
+	if (text.length <= maxChars) return text;
+	const sliced = text.slice(0, maxChars);
+	return /[\uD800-\uDBFF]$/.test(sliced) ? sliced.slice(0, -1) : sliced;
+}
+
+/**
+ * Normalize one lesson field for storage: neutralize injection delimiters
+ * FIRST, then redact secrets (so delimiter stripping can't reassemble a token
+ * the redactor would have caught), then bound the length.
+ */
+function normalizeLearnedText(text: string, maxChars: number): string {
+	return boundChars(redactSecrets(neutralizeInjection(text)).trim(), maxChars);
+}
+
+/** Per-path write chains serializing `learned.md` read-modify-write. */
+const learnedWriteChains = new Map<string, Promise<unknown>>();
+
+/**
+ * Append one lesson to the project's `learned.md` (newest-first, deduped,
+ * capped, secret-redacted, injection-neutralized). The file backs the `learn`
+ * tool when `memory.backend` is `local`.
+ */
+export async function saveLearnedLesson(
+	agentDir: string,
+	cwd: string,
+	input: MemoryBackendSaveInput,
+): Promise<MemoryBackendSaveResult> {
+	const content = normalizeLearnedText(input.content, MAX_LEARNED_CONTENT_CHARS);
+	if (!content) {
+		return { backend: "local", stored: 0, message: "Empty lesson; nothing stored." };
+	}
+	const context = input.context ? normalizeLearnedText(input.context, MAX_LEARNED_CONTEXT_CHARS) : "";
+	const line = context ? `- ${content} _(context: ${context})_` : `- ${content}`;
+	const filePath = path.join(getMemoryRoot(agentDir, cwd), LEARNED_LESSONS_FILE);
+
+	// Serialize the read-modify-write per file: parallel `learn` calls (sibling
+	// subagents, or two shared tool calls in one turn) share the project memory
+	// root, so an unguarded RMW would let the last writer drop the other's lesson.
+	const run = (learnedWriteChains.get(filePath) ?? Promise.resolve()).then(() => appendLearnedLine(filePath, line));
+	const guarded = run.catch(() => {});
+	learnedWriteChains.set(filePath, guarded);
+	try {
+		await run;
+	} finally {
+		// Drop the entry once this write is the chain tail, so the map does not
+		// retain one promise per distinct memory root for the process lifetime.
+		if (learnedWriteChains.get(filePath) === guarded) learnedWriteChains.delete(filePath);
+	}
+	return { backend: "local", stored: 1, message: `Lesson saved to ${LEARNED_LESSONS_FILE}.` };
+}
+
+async function appendLearnedLine(filePath: string, line: string): Promise<void> {
+	let existing = "";
+	try {
+		existing = await Bun.file(filePath).text();
+	} catch (err) {
+		if (!isEnoent(err)) throw err;
+	}
+	const prior = existing
+		.split("\n")
+		.map(l => l.trim())
+		.filter(l => l.startsWith("- ") && l !== line);
+	const lessons = [line, ...prior].slice(0, MAX_LEARNED_LESSONS);
+	await Bun.write(filePath, `${lessons.join("\n")}\n`);
+}
+
+/**
+ * Read `learned.md`, neutralizing each line on read too — a hand-edited or
+ * pre-existing file bypasses write-time normalization and the block renders
+ * unescaped into the system prompt. Returns "" when absent/unreadable.
+ */
+async function readLearnedLessons(memoryRoot: string): Promise<string> {
+	let raw = "";
+	try {
+		raw = (await Bun.file(path.join(memoryRoot, LEARNED_LESSONS_FILE)).text()).trim();
+	} catch {
+		return "";
+	}
+	if (!raw) return "";
+	// Neutralize delimiters THEN redact per line — mirrors the write path so a
+	// hand-edited line cannot reassemble a token after delimiter stripping.
+	return raw
+		.split("\n")
+		.map(line => redactSecrets(neutralizeInjection(line)))
+		.join("\n");
 }
 
 function encodeProjectPath(cwd: string): string {

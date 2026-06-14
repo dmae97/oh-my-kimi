@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
-import { isEnoent, peekFileEnds, toError } from "@oh-my-pi/pi-utils";
+import { hasFsCode, isEnoent, logger, peekFileEnds, Snowflake, toError } from "@oh-my-pi/pi-utils";
 
 const utf8Decoder = new TextDecoder("utf-8");
 
@@ -12,22 +12,17 @@ export interface SessionStorageStat {
 }
 
 export interface SessionStorageWriter {
-	writeLine(line: string): Promise<void>;
 	/**
-	 * Synchronously append a single line. Returns once the bytes are handed to the kernel
-	 * (page cache), so the data survives a non-graceful process death (OOM, SIGKILL, etc.)
-	 * even though it has not yet been fsynced to the underlying disk.
+	 * Append one newline-terminated line. File and memory storage perform the
+	 * write synchronously in-body; indexed backends queue in call order.
 	 *
-	 * `line` MUST already include the trailing newline. Throws synchronously on I/O error.
+	 * `line` MUST include the trailing newline.
 	 */
-	writeLineSync(line: string): void;
+	append(line: string): Promise<void>;
+	/** Resolve once all queued appends complete. No fsync. */
 	flush(): Promise<void>;
-	fsync(): Promise<void>;
-	/**
-	 * Synchronously fsync the underlying file descriptor. Returns once the data
-	 * is on the physical disk. Throws synchronously on I/O error.
-	 */
-	fsyncSync(): void;
+	/** False once close() has begun/finished. */
+	isOpen(): boolean;
 	close(): Promise<void>;
 	getError(): Error | undefined;
 }
@@ -44,6 +39,7 @@ export interface SessionStorage {
 	/** Read the requested UTF-8 byte windows from the head and tail of the file. */
 	readTextSlices(path: string, prefixBytes: number, suffixBytes: number): Promise<[string, string]>;
 	writeText(path: string, content: string): Promise<void>;
+	writeTextAtomic(path: string, content: string): Promise<void>;
 	rename(path: string, nextPath: string): Promise<void>;
 	unlink(path: string): Promise<void>;
 	deleteSessionWithArtifacts(sessionPath: string): Promise<void>;
@@ -86,7 +82,7 @@ class FileSessionStorageWriter implements SessionStorageWriter {
 		return error;
 	}
 
-	writeLineSync(line: string): void {
+	async append(line: string): Promise<void> {
 		if (this.#closed) throw new Error("Writer closed");
 		if (this.#error) throw this.#error;
 		try {
@@ -104,33 +100,12 @@ class FileSessionStorageWriter implements SessionStorageWriter {
 		}
 	}
 
-	async writeLine(line: string): Promise<void> {
-		this.writeLineSync(line);
-	}
-
 	async flush(): Promise<void> {
 		if (this.#error) throw this.#error;
-		// OS buffers are flushed on fsync, nothing to do here
 	}
 
-	async fsync(): Promise<void> {
-		if (this.#closed) throw new Error("Writer closed");
-		if (this.#error) throw this.#error;
-		try {
-			fs.fsyncSync(this.#fd);
-		} catch (err) {
-			throw this.#recordError(err);
-		}
-	}
-
-	fsyncSync(): void {
-		if (this.#closed) throw new Error("Writer closed");
-		if (this.#error) throw this.#error;
-		try {
-			fs.fsyncSync(this.#fd);
-		} catch (err) {
-			throw this.#recordError(err);
-		}
+	isOpen(): boolean {
+		return !this.#closed;
 	}
 
 	async close(): Promise<void> {
@@ -202,6 +177,77 @@ export class FileSessionStorage implements SessionStorage {
 
 	async writeText(path: string, content: string): Promise<void> {
 		await Bun.write(path, content, { createPath: true });
+	}
+
+	async writeTextAtomic(fpath: string, content: string): Promise<void> {
+		const dir = path.resolve(fpath, "..");
+		const tempPath = path.join(dir, `.${path.basename(fpath)}.${Snowflake.next()}.tmp`);
+		await fs.promises.mkdir(dir, { recursive: true });
+		try {
+			await fs.promises.writeFile(tempPath, content);
+			try {
+				await this.rename(tempPath, fpath);
+				return;
+			} catch (err) {
+				if (!hasFsCode(err, "EPERM")) throw toError(err);
+				await this.#replaceSessionFileAfterEperm(tempPath, fpath, err);
+				return;
+			}
+		} catch (err) {
+			try {
+				await this.unlink(tempPath);
+			} catch (cleanupErr) {
+				if (!isEnoent(cleanupErr)) {
+					logger.warn("Failed to remove session rewrite temp file", {
+						sessionFile: fpath,
+						tempPath,
+						error: toError(cleanupErr).message,
+					});
+				}
+			}
+			throw toError(err);
+		}
+	}
+
+	async #replaceSessionFileAfterEperm(tempPath: string, targetPath: string, renameError: unknown): Promise<void> {
+		const dir = path.resolve(targetPath, "..");
+		const backupPath = path.join(dir, `${path.basename(targetPath)}.${Snowflake.next()}.bak`);
+		try {
+			await this.rename(targetPath, backupPath);
+		} catch (moveAsideError) {
+			if (isEnoent(moveAsideError)) {
+				await this.rename(tempPath, targetPath);
+				return;
+			}
+			throw toError(renameError);
+		}
+		try {
+			await this.rename(tempPath, targetPath);
+		} catch (replaceError) {
+			try {
+				await this.rename(backupPath, targetPath);
+			} catch (rollbackErr) {
+				const rollbackError = toError(rollbackErr);
+				throw new Error(
+					`Failed to replace session file after EPERM (original: ${toError(renameError).message}; retry: ${
+						toError(replaceError).message
+					}; rollback: ${rollbackError.message})`,
+					{ cause: toError(renameError) },
+				);
+			}
+			throw toError(replaceError);
+		}
+		try {
+			await this.unlink(backupPath);
+		} catch (err) {
+			if (!isEnoent(err)) {
+				logger.warn("Failed to remove session rewrite backup", {
+					sessionFile: targetPath,
+					backupPath,
+					error: toError(err).message,
+				});
+			}
+		}
 	}
 
 	async rename(path: string, nextPath: string): Promise<void> {
@@ -282,7 +328,7 @@ class MemorySessionStorageWriter implements SessionStorageWriter {
 		return error;
 	}
 
-	writeLineSync(line: string): void {
+	async append(line: string): Promise<void> {
 		if (this.#closed) throw new Error("Writer closed");
 		if (this.#error) throw this.#error;
 		try {
@@ -293,22 +339,12 @@ class MemorySessionStorageWriter implements SessionStorageWriter {
 		}
 	}
 
-	async writeLine(line: string): Promise<void> {
-		this.writeLineSync(line);
-	}
-
 	async flush(): Promise<void> {
 		if (this.#error) throw this.#error;
 	}
 
-	async fsync(): Promise<void> {
-		// No-op for in-memory storage
-		if (this.#error) throw this.#error;
-	}
-
-	fsyncSync(): void {
-		// No-op for in-memory storage
-		if (this.#error) throw this.#error;
+	isOpen(): boolean {
+		return !this.#closed;
 	}
 
 	async close(): Promise<void> {
@@ -523,6 +559,11 @@ export class MemorySessionStorage implements SessionStorage {
 	}
 
 	writeText(path: string, content: string): Promise<void> {
+		this.writeTextSync(path, content);
+		return Promise.resolve();
+	}
+
+	writeTextAtomic(path: string, content: string): Promise<void> {
 		this.writeTextSync(path, content);
 		return Promise.resolve();
 	}

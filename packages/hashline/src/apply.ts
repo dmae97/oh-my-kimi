@@ -318,11 +318,22 @@ function findDuplicatePrefix(group: ReplacementGroup, fileLines: readonly string
 	return 0;
 }
 
+function payloadEndsWithDeletedSuffix(group: ReplacementGroup, fileLines: readonly string[], count: number): boolean {
+	if (group.payload.length < count) return false;
+	const deletedStart = group.endLine - count;
+	const payloadStart = group.payload.length - count;
+	for (let offset = 0; offset < count; offset++) {
+		if (group.payload[payloadStart + offset] !== fileLines[deletedStart + offset]) return false;
+	}
+	return true;
+}
+
 /**
  * Smallest `m` such that the range's last `m` deleted lines are all pure
- * structural closers and sparing them (keeping instead of deleting) zeroes
- * `delta`. The mirror mistake: a range that swallows a closing delimiter the
- * payload never restates.
+ * structural closers, the payload does not already restate those same suffix
+ * lines, and sparing them (keeping instead of deleting) zeroes `delta`. The
+ * mirror mistake: a range that swallows a closing delimiter the payload never
+ * restates.
  */
 function findDroppedSuffixClosers(
 	group: ReplacementGroup,
@@ -333,6 +344,7 @@ function findDroppedSuffixClosers(
 	const maxM = group.deleteIndices.length;
 	for (let m = 1; m <= maxM; m++) {
 		if (!STRUCTURAL_CLOSER_RE.test(fileLines[group.endLine - m] ?? "")) break;
+		if (payloadEndsWithDeletedSuffix(group, fileLines, m)) continue;
 		if (balanceEqual(computeDelimiterBalance(fileLines.slice(group.endLine - m, group.endLine)), wanted)) return m;
 	}
 	return 0;

@@ -2,6 +2,7 @@ import { INTENT_FIELD } from "@oh-my-pi/pi-agent-core";
 import { calculatePromptTokens } from "@oh-my-pi/pi-agent-core/compaction/compaction";
 import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
 import { type Component, Loader, TERMINAL } from "@oh-my-pi/pi-tui";
+import { extractTextContent } from "../../commit/utils";
 import { settings } from "../../config/settings";
 import { getFileSnapshotStore } from "../../edit/file-snapshot-store";
 import { AssistantMessageComponent } from "../../modes/components/assistant-message";
@@ -13,12 +14,14 @@ import {
 import { TodoReminderComponent } from "../../modes/components/todo-reminder";
 import { ToolExecutionComponent } from "../../modes/components/tool-execution";
 import { TtsrNotificationComponent } from "../../modes/components/ttsr-notification";
+import { createUsageRowBlock } from "../../modes/components/usage-row";
 import { getSymbolTheme, theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext, TodoPhase } from "../../modes/types";
 import type { PlanApprovalDetails } from "../../plan-mode/approved-plan";
 import type { AgentSessionEvent } from "../../session/agent-session";
 import { isSilentAbort, readQueueChipText, resolveAbortLabel } from "../../session/messages";
 import type { ResolveToolDetails } from "../../tools/resolve";
+import { vocalizer } from "../../tts/vocalizer";
 import { hasVisibleThinking } from "../../utils/thinking-display";
 import { interruptHint } from "../shared";
 import { StreamingRevealController } from "./streaming-reveal";
@@ -92,8 +95,8 @@ export class EventController {
 		this.#handlers = {
 			agent_start: e => this.#handleAgentStart(e),
 			agent_end: e => this.#handleAgentEnd(e),
-			turn_start: async () => {},
-			turn_end: async () => {},
+			turn_start: async () => this.#handleTurnStart(),
+			turn_end: async e => this.#handleTurnEnd(e),
 			message_start: e => this.#handleMessageStart(e),
 			message_update: e => this.#handleMessageUpdate(e),
 			message_end: e => this.#handleMessageEnd(e),
@@ -430,7 +433,47 @@ export class EventController {
 		}
 	}
 
+	/** A new turn interrupts any speech still queued/playing from the previous one. */
+	#handleTurnStart(): void {
+		vocalizer.clear();
+	}
+
+	/**
+	 * Speak streamed assistant output as a side effect of the turn. The mode
+	 * decides which deltas feed the vocalizer (the vocalizer re-checks enabled):
+	 * assistant|all speak text; all also speaks thinking; yield speaks nothing
+	 * live (the final message is spoken at turn end).
+	 */
+	#vocalizeDelta(event: Extract<AgentSessionEvent, { type: "message_update" }>): void {
+		if (!settings.get("speech.enabled")) return;
+		const mode = settings.get("speech.mode");
+		const delta = event.assistantMessageEvent;
+		if (delta.type === "text_delta" && (mode === "assistant" || mode === "all")) {
+			vocalizer.pushDelta(delta.delta);
+		} else if (delta.type === "thinking_delta" && mode === "all") {
+			vocalizer.pushDelta(delta.delta);
+		}
+	}
+
+	/**
+	 * End-of-turn vocalization: yield mode speaks the final assistant message in
+	 * one shot here (the only mode that is post-hoc); every other mode just makes
+	 * sure the live buffer's trailing partial gets flushed.
+	 */
+	#handleTurnEnd(event: Extract<AgentSessionEvent, { type: "turn_end" }>): void {
+		if (!settings.get("speech.enabled")) return;
+		if (settings.get("speech.mode") !== "yield") {
+			vocalizer.flush();
+			return;
+		}
+		if (event.message.role !== "assistant") return;
+		if (event.message.stopReason === "aborted") return; // interrupted: never speak the aborted partial
+		const text = extractTextContent(event.message);
+		if (text) vocalizer.speak(text);
+	}
+
 	async #handleMessageUpdate(event: Extract<AgentSessionEvent, { type: "message_update" }>): Promise<void> {
+		this.#vocalizeDelta(event);
 		if (this.ctx.streamingComponent && event.message.role === "assistant") {
 			this.ctx.streamingMessage = event.message;
 			this.#streamingReveal.setTarget(this.ctx.streamingMessage);
@@ -454,14 +497,7 @@ export class EventController {
 			// stream (a big write/edit/eval) sits below a still-live block and
 			// can never reach native scrollback: the head of the preview is
 			// neither committed nor on screen and the transcript reads as cut.
-			// Skipped when the per-turn usage row is enabled: that row is only
-			// known at message_end and appends to this block, which would shift
-			// committed tool rows below it every turn (audit recommit →
-			// duplicated preview copies in scrollback).
-			if (
-				this.ctx.streamingMessage.content.some(content => content.type === "toolCall") &&
-				!settings.get("display.showTokenUsage")
-			) {
+			if (this.ctx.streamingMessage.content.some(content => content.type === "toolCall")) {
 				this.ctx.streamingComponent.markTranscriptBlockFinalized();
 			}
 			for (const content of this.ctx.streamingMessage.content) {
@@ -566,6 +602,17 @@ export class EventController {
 
 	async #handleMessageEnd(event: Extract<AgentSessionEvent, { type: "message_end" }>): Promise<void> {
 		if (event.message.role === "user") return;
+		if (event.message.role === "assistant" && settings.get("speech.enabled")) {
+			if (event.message.stopReason === "aborted") {
+				// Esc / Ctrl+C / interrupt: stop speaking now and drop the trailing partial.
+				vocalizer.clear();
+			} else {
+				const mode = settings.get("speech.mode");
+				// Speak the last partial sentence of a completed message; yield mode
+				// instead speaks the whole final message at turn end.
+				if (mode === "assistant" || mode === "all") vocalizer.flush();
+			}
+		}
 		if (this.ctx.streamingComponent && event.message.role === "assistant") {
 			this.ctx.streamingMessage = event.message;
 			this.#streamingReveal.stop();
@@ -614,8 +661,10 @@ export class EventController {
 				this.#resolveDisplaceablePoll();
 			}
 			this.#lastAssistantComponent = this.ctx.streamingComponent;
-			this.#lastAssistantComponent.setUsageInfo(event.message.usage);
 			this.#lastAssistantComponent.markTranscriptBlockFinalized();
+			if (settings.get("display.showTokenUsage")) {
+				this.ctx.chatContainer.addChild(createUsageRowBlock(event.message.usage));
+			}
 			this.ctx.streamingComponent = undefined;
 			this.ctx.streamingMessage = undefined;
 			// Pin a turn-ending provider error (e.g. Anthropic content-filter block)
@@ -844,10 +893,27 @@ export class EventController {
 		this.sendCompletionNotification();
 	}
 
+	/**
+	 * Tear down the live "Working…" loader: stop its animation timer AND clear the
+	 * reference. A transient overlay (auto-compaction / auto-retry) that only ran
+	 * `statusContainer.clear()` detached the loader from the container but left
+	 * `ctx.loadingAnimation` set, so the resumed turn's `agent_start` →
+	 * `ensureLoadingAnimation()` (guarded by `if (!this.loadingAnimation)`) skipped
+	 * re-adding it and the spinner vanished while the agent kept streaming. Nulling
+	 * the reference here lets the next `agent_start` recreate and re-attach it.
+	 */
+	#stopWorkingLoader(): void {
+		if (this.ctx.loadingAnimation) {
+			this.ctx.loadingAnimation.stop();
+			this.ctx.loadingAnimation = undefined;
+		}
+	}
+
 	async #handleAutoCompactionStart(
 		event: Extract<AgentSessionEvent, { type: "auto_compaction_start" }>,
 	): Promise<void> {
 		this.#cancelIdleCompaction();
+		this.#stopWorkingLoader();
 		this.ctx.statusContainer.clear();
 		const reasonText =
 			event.reason === "overflow"
@@ -933,6 +999,7 @@ export class EventController {
 	}
 
 	async #handleAutoRetryStart(event: Extract<AgentSessionEvent, { type: "auto_retry_start" }>): Promise<void> {
+		this.#stopWorkingLoader();
 		this.ctx.statusContainer.clear();
 		const delaySeconds = Math.round(event.delayMs / 1000);
 		this.ctx.retryLoader = new Loader(

@@ -589,7 +589,8 @@ export class StdioTransport implements MCPTransport {
 		}
 
 		if (this.#readLoop) {
-			await this.#readLoop.catch(() => {});
+			// Do not block/await the read loop as it can hang indefinitely in some environments
+			this.#readLoop.catch(() => {});
 			this.#readLoop = null;
 		}
 	}

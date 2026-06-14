@@ -459,14 +459,14 @@ disabledProviders:
 
 String entries apply everywhere. Scoped entries apply when the current working directory is the configured path or one of its subdirectories. Use `path`, `paths`, `pathPrefix`, or `pathPrefixes`; use `models` for `enabledModels`, `providers` for `disabledProviders`, or `values` for either.
 
-## `/model` and `--list-models`
+## `/model` and `omp models`
 
 Both surfaces keep provider-prefixed models visible and selectable.
 
 They now also expose canonical/coalesced models:
 
 - `/model` includes a canonical view alongside provider tabs
-- `--list-models` prints a canonical section plus the concrete provider rows
+- `omp models` prints provider-grouped tables of every concrete model, and `omp models canonical` prints the coalesced canonical view
 
 Selecting a canonical entry stores the canonical selector. Selecting a provider row stores the explicit `provider/modelId`.
 
@@ -635,6 +635,33 @@ For oMLX or another local OpenAI-compatible server with a discoverable `/v1/mode
 providers:
   omlx:
     baseUrl: http://127.0.0.1:11434/v1
+    auth: none
+    api: openai-completions
+    discovery:
+      type: openai-models-list
+```
+
+The built-in vLLM provider can be pointed at a non-default endpoint without declaring a custom discovery type. OMP uses vLLM's `/v1/models` metadata and preserves vLLM's `max_model_len` field as the discovered context window.
+
+```yaml
+providers:
+  vllm:
+    baseUrl: http://192.168.5.3:8085/v1
+    auth: none
+```
+
+For multiple vLLM endpoints, use arbitrary provider IDs with the generic OpenAI-compatible discovery path. Set `auth: none` for local no-auth servers or `apiKey` for authenticated ones. Generic discovery reads `max_model_len` first and then `context_length` as a generic OpenAI-compatible fallback.
+
+```yaml
+providers:
+  vllm-fast:
+    baseUrl: http://host-a:8000/v1
+    auth: none
+    api: openai-completions
+    discovery:
+      type: openai-models-list
+  vllm-long:
+    baseUrl: http://host-b:8000/v1
     auth: none
     api: openai-completions
     discovery:
