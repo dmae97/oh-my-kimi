@@ -276,4 +276,46 @@ describe("non-multiplexer resize viewport fast path", () => {
 			expect(scheduler.pendingRenders).toBe(0);
 		});
 	});
+
+	it("overwrites the viewport in place mid-drag (no ED2) and still rewraps at settle", async () => {
+		await withEnvPatch(NO_MULTIPLEXER_ENV, async () => {
+			const term = new VirtualTerminal(40, 10, 1000);
+			const { tui, scheduler } = makeTui(term);
+			try {
+				tui.start();
+				await scheduler.flushImmediates(term);
+
+				const writes = captureWrites(term);
+
+				// One mid-drag SIGWINCH: the fast path repaints just the viewport.
+				term.resize(60, 10);
+				await scheduler.flushImmediates(term);
+
+				expect(tui.resizeViewportActive).toBe(true);
+				const drag = writes.join("");
+				// In-place overwrite: NO ED2 full-screen clear (and no ED3) — the
+				// screen never blanks mid-drag, so even a terminal that ignores DEC
+				// 2026 synchronized output cannot show a cleared-but-unpainted frame.
+				expect(drag).not.toContain("\x1b[2J");
+				expect(drag).not.toContain("\x1b[3J");
+				// Home anchor + per-row self-clearing rewrites (CSI K), with the new
+				// viewport content in the SAME frame: each row goes old -> new with
+				// no intervening blank.
+				expect(drag).toContain("\x1b[H");
+				expect(drag).toContain("\x1b[K");
+				expect(drag).toContain("b14-y");
+
+				const dragWrites = writes.length;
+
+				// Settle: the authoritative rewrap still fires once and erases native
+				// scrollback (ED3) — the "rewrap on release" guarantee is preserved.
+				await scheduler.flushAll(term);
+				expect(tui.resizeViewportActive).toBe(false);
+				const settle = writes.slice(dragWrites).join("");
+				expect(settle).toContain("\x1b[3J");
+			} finally {
+				tui.stop();
+			}
+		});
+	});
 });

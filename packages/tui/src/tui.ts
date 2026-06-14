@@ -2848,7 +2848,7 @@ export class TUI extends Container {
 		// authoritative accounting, and its beginPass() wipes these frames.
 		this.#imageBudget.beginPass(true);
 		const { window, contentRows } = this.#composeResizeViewport(width, height);
-		this.#emitResizeViewport(window, height, contentRows);
+		this.#emitResizeViewport(window, height, contentRows, width);
 		this.#resizeViewportPaintCount += 1;
 	}
 
@@ -2887,17 +2887,20 @@ export class TUI extends Container {
 	}
 
 	/**
-	 * Emit a throwaway viewport repaint for the resize fast path: erase the
-	 * visible screen (ED2 — never ED3, so native scrollback survives the drag)
-	 * and write the prepared window from home with the cursor held hidden. No
-	 * scrollback push, no committed-prefix write, no `#commit` — none of the
-	 * paint accounting is advanced.
+	 * Emit a throwaway viewport repaint for the resize fast path as an in-place
+	 * per-row overwrite: anchor home (`\x1b[H`) and rewrite each row via
+	 * {@link #lineRewriteSequence} so every row clears its own tail with
+	 * `\x1b[K` — NO ED2, so the viewport never blanks mid-drag even when the
+	 * terminal ignores DEC 2026 synchronized output. Native scrollback is
+	 * untouched here (no ED3, no scrollback push, no committed-prefix write, no
+	 * `#commit`); the authoritative rewrap still happens once at settle via
+	 * `#emitFullPaint`.
 	 */
-	#emitResizeViewport(window: readonly string[], height: number, contentRows: number): void {
-		let buffer = `${this.#paintBeginSequence}\x1b[2J\x1b[H`;
+	#emitResizeViewport(window: readonly string[], height: number, contentRows: number, width: number): void {
+		let buffer = `${this.#paintBeginSequence}\x1b[H`;
 		for (let r = 0; r < height; r++) {
 			if (r > 0) buffer += "\r\n";
-			buffer += this.#terminalLine(window[r] ?? "");
+			buffer += this.#lineRewriteSequence(window[r] ?? "", width);
 		}
 		// Park the hardware cursor at the real content bottom, not the padded
 		// viewport bottom: a subsequent height shrink (the next drag step) would
