@@ -936,7 +936,8 @@ export class ModelSelectorComponent extends Container {
 			// Build role badges. Solid badges are configured; outlined badges are auto-selected defaults.
 			const roleBadgeTokens: string[] = [];
 			for (const role of MODEL_ROLE_IDS) {
-				const { tag, color } = getRoleInfo(role, this.#settings);
+				const { tag, color, hidden } = getRoleInfo(role, this.#settings);
+				if (hidden) continue;
 				const assigned = this.#roles[role];
 				if (!tag || !assigned || !modelsAreEqual(assigned.model, item.model)) continue;
 
