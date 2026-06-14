@@ -1720,6 +1720,8 @@ describe("agentLoopContinue with AgentMessage", () => {
 				},
 			],
 		});
+		// Mutate provider to trigger Gemini repetition loop detection in agent loop
+		mock.model.provider = "google" as any;
 		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
 
 		const events: AgentEvent[] = [];

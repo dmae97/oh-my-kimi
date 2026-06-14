@@ -12,7 +12,6 @@ import {
 	streamSimple,
 	type ToolResultMessage,
 	type TSchema,
-	type UserMessage,
 	validateToolArguments,
 	zodToWireSchema,
 } from "@oh-my-pi/pi-ai";
@@ -710,27 +709,6 @@ async function runLoopBody(
 				}
 				stream.push({ type: "turn_end", message, toolResults });
 
-				// Auto-continue on recoverable cybersecurity policy errors instead of terminating the agent loop.
-				// GPT proxy may return either a `cyber_policy` code or the ChatGPT Trusted Access text.
-				const errorText = message.errorMessage ?? "";
-				const isCyberPolicy =
-					/\bcyber_policy\b/i.test(errorText) ||
-					/flagged for possible cybersecurity/i.test(errorText) ||
-					(/content was flagged/i.test(errorText) && /cybersecurity/i.test(errorText)) ||
-					/Trusted Access for Cyber/i.test(errorText) ||
-					/chatgpt\.com\/cyber/i.test(errorText);
-				if (isCyberPolicy) {
-					const continuationMsg: UserMessage = {
-						role: "user",
-						content: [{ type: "text", text: "Continue." }],
-						synthetic: true,
-						timestamp: Date.now(),
-					};
-					pendingMessages = [continuationMsg];
-					hasMoreToolCalls = false;
-					continue;
-				}
-
 				stream.push(buildAgentEndEvent(newMessages, telemetry, stepCounter.count));
 				stream.end(newMessages);
 				return;
@@ -940,6 +918,10 @@ async function streamAssistantResponse(
 			? AbortSignal.any([signal, harmonyAbortController.signal])
 			: harmonyAbortController.signal
 		: signal;
+	const repetitionAbortController = new AbortController();
+	const finalRequestSignal = requestSignal
+		? AbortSignal.any([requestSignal, repetitionAbortController.signal])
+		: repetitionAbortController.signal;
 	const effectiveTemperature =
 		harmonyRetryAttempt > 0 && config.temperature !== undefined ? config.temperature + 0.05 : config.temperature;
 	const effectiveToolChoice = dynamicToolChoice ?? config.toolChoice;
@@ -1007,7 +989,7 @@ async function streamAssistantResponse(
 				reasoning: effectiveReasoning,
 				disableReasoning: effectiveDisableReasoning,
 				temperature: effectiveTemperature,
-				signal: requestSignal,
+				signal: finalRequestSignal,
 				onResponse: captureOnResponse,
 			});
 
@@ -1037,6 +1019,7 @@ async function streamAssistantResponse(
 			};
 
 			const finishRepetitionStream = async (pattern: string, count: number): Promise<AssistantMessage> => {
+				repetitionAbortController.abort();
 				try {
 					const cleanup = responseIterator.return?.();
 					if (cleanup) void cleanup.catch(() => {});
@@ -1183,20 +1166,26 @@ async function streamAssistantResponse(
 								});
 
 								if (event.type === "text_delta" || event.type === "thinking_delta") {
-									let fullText = "";
-									for (const block of partialMessage.content) {
-										if (block.type === "text") {
-											fullText += block.text;
+									const isGeminiModel =
+										config.model.provider.includes("google") || config.model.provider.includes("gemini");
+									if (isGeminiModel) {
+										let fullText = "";
+										for (const block of partialMessage.content) {
+											if (block.type === "text") {
+												fullText += block.text;
+											} else if (block.type === "thinking") {
+												fullText += block.thinking;
+											}
 										}
-									}
-									const repetition = detectRepetition(fullText);
-									if (repetition) {
-										const [pattern, count] = repetition;
-										logger.warn("Repetition loop detected during assistant stream, aborting.", {
-											pattern,
-											count,
-										});
-										return await finishRepetitionStream(pattern, count);
+										const repetition = detectRepetition(fullText);
+										if (repetition) {
+											const [pattern, count] = repetition;
+											logger.warn("Repetition loop detected during assistant stream, aborting.", {
+												pattern,
+												count,
+											});
+											return await finishRepetitionStream(pattern, count);
+										}
 									}
 								}
 							}
