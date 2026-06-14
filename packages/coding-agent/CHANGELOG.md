@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed npm plugin installs to reject packages whose declared extension entry points cannot load because imports or nested dependencies are unresolved ([#2312](https://github.com/can1357/oh-my-pi/issues/2312)).
+
 ### Breaking Changes
 
 - Replaced the `omp setup stt` command with `omp setup speech`. The old `stt` setup component is gone (no alias); `omp setup speech` now provisions the full speech stack — audio recorder, speech-to-text model, and text-to-speech model.
