@@ -68,6 +68,10 @@
 
 - Fixed `AgentBusyError` ("Agent is already processing. Use steer() or followUp()...") surfacing on mode transitions — as `Failed to finalize approved plan: ...` when a plan was approved while the agent was still streaming the post-`resolve` continuation (or a turn started by the approve-time compaction/clear), and as an error toast when a loop auto-submit or goal continuation fired during a streaming/compaction race. Plan approval now aborts any in-flight turn before dispatching the executor's first prompt, and `submitInteractiveInput` routes streaming-time loop, goal-continuation, and manual submissions through the follow-up queue (`streamingBehavior: "followUp"`) instead of throwing (synthetic continue-shortcuts stay developer-attributed and keep their prior behavior). Extends the manual-`/goal` fix in [#2454](https://github.com/can1357/oh-my-pi/issues/2454) to the continuation and plan-approval paths.
 
+### Fixed
+
+- Fixed `/plan` cycling between `plan` and `plan_paused` with no path back to mode `none`. `handlePlanModeCommand` had branches for entering and pausing but fell through to `#enterPlanMode()` when invoked from the paused state, so once a session entered plan mode the only operator-visible toggle re-entered it. The handler now matches `planModePaused` and fully exits — clearing `planModeHasEntered` and appending a `mode_change` to `"none"` — so `/goal` (and any other mode gated on `planModeEnabled || planModePaused`) can run again after a third `/plan` ([#2510](https://github.com/can1357/oh-my-pi/issues/2510)).
+
 ## [15.12.5] - 2026-06-13
 ### Changed
 
