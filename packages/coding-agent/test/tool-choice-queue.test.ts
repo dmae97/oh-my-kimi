@@ -169,6 +169,42 @@ describe("onInvoked / peekInFlightInvoker", () => {
 		const result = await invoker!({ action: "apply", reason: "ok" });
 		expect(result).toEqual({ echoed: { action: "apply", reason: "ok" } });
 	});
+	it("does not resolve an onInvoked directive until the requested tool runs", () => {
+		const q = new ToolChoiceQueue();
+		const rejected: RejectInfo[] = [];
+		const resolved: ResolveInfo[] = [];
+		q.pushOnce(forced, {
+			label: "pending",
+			onRejected: info => {
+				rejected.push(info);
+				return "requeue";
+			},
+			onResolved: info => resolved.push(info),
+			onInvoked: async input => ({ echoed: input }),
+		});
+		q.nextToolChoice();
+		q.resolve();
+		expect(rejected).toEqual([{ choice: forced, reason: "not_invoked" }]);
+		expect(resolved).toEqual([]);
+		expect(q.nextToolChoice()).toEqual(forced);
+	});
+
+	it("resolves an onInvoked directive after the requested tool runs", async () => {
+		const q = new ToolChoiceQueue();
+		const resolved: ResolveInfo[] = [];
+		q.pushOnce(forced, {
+			label: "pending",
+			onResolved: info => resolved.push(info),
+			onInvoked: async input => ({ echoed: input }),
+		});
+		q.nextToolChoice();
+		const invoker = q.peekInFlightInvoker();
+		expect(invoker).toBeDefined();
+		await invoker!({ action: "apply", reason: "ok" });
+		q.resolve();
+		expect(resolved).toEqual([{ choice: forced }]);
+		expect(q.hasInFlight).toBe(false);
+	});
 
 	it("returns undefined when no directive is in-flight", () => {
 		const q = new ToolChoiceQueue();
