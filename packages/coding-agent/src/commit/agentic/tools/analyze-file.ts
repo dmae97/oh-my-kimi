@@ -38,6 +38,9 @@ function buildToolSession(
 	return {
 		cwd: options.cwd,
 		hasUI: false,
+		// Programmatic fan-out: results feed the commit agent's evidence, not a
+		// model choosing further spawns, so the specialization nudge is noise here.
+		suppressSpawnAdvisory: true,
 		getSessionFile: () => ctx.sessionManager.getSessionFile() ?? null,
 		getSessionSpawns: () => options.spawns,
 		settings: options.settings,

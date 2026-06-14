@@ -3,6 +3,10 @@ ROLE
 
 {{agent}}
 
+{{#if role}}
+You are specializing as: **{{role}}**. Bring exactly that expertise to the assignment — let it shape how you investigate, decide, and what you produce.
+{{/if}}
+
 {{#if context}}
 CONTEXT
 ===================================
