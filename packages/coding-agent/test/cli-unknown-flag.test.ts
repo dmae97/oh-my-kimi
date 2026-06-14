@@ -66,6 +66,25 @@ describe("parseArgs — unrecognized flag tracking (#2459)", () => {
 		expect(ddash.messages).toEqual(["hello"]);
 	});
 
+	it("treats every token after `--` as a positional, even flag-shaped ones (#2461 review)", () => {
+		// `omp -p -- --explain-this` must forward `--explain-this` as the
+		// prompt body. Without after-separator semantics the unknown-flag guard
+		// trips on it and the CLI exits before any session work.
+		const parsed = parseArgs(["-p", "--", "--explain-this", "-x", "plain"]);
+		expect(parsed.print).toBe(true);
+		expect(parsed.unrecognizedFlags).toEqual([]);
+		expect(parsed.messages).toEqual(["--explain-this", "-x", "plain"]);
+	});
+
+	it("does not expand `@foo` after `--` into a fileArg (POSIX positional semantics)", () => {
+		// After `--`, application-level conventions like `@file` no longer
+		// apply — the token is a literal positional. Lets users include `@`
+		// strings (e.g. emails, handles) in prompts without file lookup.
+		const parsed = parseArgs(["--", "@notes.md", "hello"]);
+		expect(parsed.fileArgs).toEqual([]);
+		expect(parsed.messages).toEqual(["@notes.md", "hello"]);
+	});
+
 	it("clears extension-registered flags from unrecognizedFlags on the post-extension reparse", () => {
 		const argv = ["--spawn-peer", "reviewer", "review the diff"];
 
