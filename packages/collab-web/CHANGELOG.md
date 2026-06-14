@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed mobile layout issues where the entire chat flow would overflow horizontally and text was rendered too large on iOS Safari (by setting `text-size-adjust: 100%`)
+- Made transcript rows stack vertically on small screens to optimize reading space, and prevented grid track expansion
+- Hid non-essential metadata (such as the model name, thinking level, and working directory path) and context gauge tracks on mobile headers to prevent overflow
+- Wrapped composer button labels to display icon-only on mobile devices for a more compact and readable layout
+- Made the connect screen, ended session card, and notification toasts fully responsive for smaller device viewports
+
+### Added
+
+- Added `16px` font-size overrides for all text inputs and textareas on mobile viewports to prevent iOS Safari from automatically zooming in the page on focus
+- Added top and bottom safe-area padding (`env(safe-area-inset-*)`) to the header bar, connection card, and composer to prevent them from being covered by notches/home indicators
+- Added translucent click-outside-to-close backdrops for the mobile side rail and agent details drawer to match native mobile chat applications
+- Disabled vertical bounce reload gesture (`overscroll-behavior-y: none`) on the page body to prevent accidental pull-to-refresh page reloads during scrolling
+- Applied global touch responsiveness updates (`touch-action: manipulation` and tap-highlight removals) to links and buttons to improve mobile responsiveness
+
 ## [15.12.4] - 2026-06-13
 ### Fixed
 
