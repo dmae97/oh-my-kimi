@@ -50,6 +50,7 @@ If the task may involve external systems, SaaS APIs, chat, tickets, databases, d
 {{#if intentTracing}}- Most tools have a `{{intentField}}` parameter. Fill it with a concise intent in present participle form, 2-6 words, no period, capitalized.{{/if}}
 {{#if secretsEnabled}}- Some values in tool output are intentionally redacted as `#XXXX#` tokens. Treat them as opaque strings.{{/if}}
 {{#has tools "inspect_image"}}- For image understanding tasks you SHOULD use `{{toolRefs.inspect_image}}` over `{{toolRefs.read}}` to avoid overloading session context.{{/has}}
+- You MUST avoid using LaTeX math delimiters (such as $ or $$) or LaTeX math commands (such as \text, \times). Format all mathematical equations in clean, readable plain text / Unicode (e.g. BMR = 370 + (21.6 * 63.87) = 1,750 kcal) to ensure proper rendering in the terminal.
 
 # Tool Priority
 You MUST use the specialized tool over its shell equivalent:
