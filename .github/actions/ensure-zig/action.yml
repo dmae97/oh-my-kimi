@@ -29,12 +29,11 @@ runs:
                ;;
            esac
 
-           tmpdir="${RUNNER_TEMP:-/tmp}/zig-${ZIG_VERSION}"
-           bindir="${HOME}/.local/bin"
-           rm -rf "$tmpdir"
-           mkdir -p "$tmpdir" "$bindir"
-           curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/${archive}.tar.xz" -o "$tmpdir/zig.tar.xz"
-           tar -xJf "$tmpdir/zig.tar.xz" -C "$tmpdir"
-           install -m755 "$tmpdir/${archive}/zig" "$bindir/zig"
-           echo "$bindir" >> "$GITHUB_PATH"
-           echo "Installed zig $("$bindir/zig" version)"
+           destdir="${HOME}/.local"
+           mkdir -p "$destdir"
+           rm -rf "${destdir:?}/${archive}"
+           curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/${archive}.tar.xz" -o "${destdir}/zig.tar.xz"
+           tar -xJf "${destdir}/zig.tar.xz" -C "$destdir"
+           rm -f "${destdir}/zig.tar.xz"
+           echo "${destdir}/${archive}" >> "$GITHUB_PATH"
+           echo "Installed zig $("${destdir}/${archive}/zig" version)"

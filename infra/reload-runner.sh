@@ -141,7 +141,7 @@ verify_baked_tools() {
     for b in gh fd rg magick bun cargo rustc pkg-config zstd clang lld sccache zig cargo-nextest cargo-zigbuild cargo-xwin; do
       command -v "$b" >/dev/null || { echo "MISSING: $b"; exit 1; }
     done
-    echo "tools OK | bun $(bun --version) | rust $(rustc --version) | sccache $(sccache --version | cut -d\" \" -f2) | zig $(zig version) | gh $(gh --version | head -1 | cut -d\" \" -f3)"
+    echo "tools OK | bun $(bun --version) | rust $(rustc --version) | sccache $(set -- $(sccache --version); echo "$2") | zig $(zig version) | gh $(set -- $(gh --version | head -1); echo "$3")"
   '
 }
 
@@ -173,7 +173,7 @@ build_with_docker() {
     for b in gh fd rg magick bun cargo rustc pkg-config zstd clang lld sccache zig cargo-nextest cargo-zigbuild cargo-xwin; do
       command -v "$b" >/dev/null || { echo "MISSING: $b"; exit 1; }
     done
-    echo "tools OK | bun $(bun --version) | rust $(rustc --version) | sccache $(sccache --version | cut -d\" \" -f2) | zig $(zig version) | gh $(gh --version | head -1 | cut -d\" \" -f3)"
+    echo "tools OK | bun $(bun --version) | rust $(rustc --version) | sccache $(set -- $(sccache --version); echo "$2") | zig $(zig version) | gh $(set -- $(gh --version | head -1); echo "$3")"
   '
 
   echo "==> [3/5] importing into k3s containerd (k8s.io namespace)"

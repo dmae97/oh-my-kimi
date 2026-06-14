@@ -41,7 +41,7 @@ runs:
              IFS=',' read -r -a wanted_components <<< "$COMPONENTS"
              for component in "${wanted_components[@]}"; do
                [ -z "$component" ] && continue
-               if ! rustup component list --toolchain "$TOOLCHAIN" --installed | grep -qx "$component"; then
+               if ! rustup component list --toolchain "$TOOLCHAIN" --installed | grep -qE "^${component}(-|$)"; then
                  missing_components+=("$component")
                fi
              done
