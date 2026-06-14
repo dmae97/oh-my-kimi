@@ -2658,6 +2658,16 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}
 		}
 
+		// Install the auto-learn post-stop nudge controller synchronously, before
+		// the possibly-slow memory backend starts, once, for top-level sessions
+		// only. A fast first turn must not finish before the listener subscribes,
+		// or its tool events are missed (slower backends like Mnemopi/Hindsight
+		// widen that window). The subscription lives for the session's lifetime;
+		// the reference is intentionally discarded (the listener retains it).
+		if (settings.get("autolearn.enabled") && taskDepth === 0) {
+			new AutoLearnController({ session, settings });
+		}
+
 		logger.time("startMemoryStartupTask", async () => {
 			const memoryBackend = await resolveMemoryBackend(settings);
 			await memoryBackend.start({
@@ -2669,13 +2679,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				parentHindsightSessionState: options.parentHindsightSessionState,
 				parentMnemopiSessionState: options.parentMnemopiSessionState,
 			});
-
-			// Install the auto-learn post-stop nudge controller once, for top-level
-			// sessions only. The subscription lives for the session's lifetime; the
-			// reference is intentionally discarded (the listener retains it).
-			if (settings.get("autolearn.enabled") && taskDepth === 0) {
-				new AutoLearnController({ session, settings });
-			}
 		});
 
 		// Wire MCP manager callbacks to session for reactive tool updates.
