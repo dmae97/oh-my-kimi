@@ -21,9 +21,12 @@ function abortedSignal(): AbortSignal {
 	return controller.signal;
 }
 
-async function capturePayload(opts: Parameters<typeof streamOpenAICompletions>[2]): Promise<Record<string, unknown>> {
+async function capturePayload(
+	model: Model<"openai-completions">,
+	opts: Parameters<typeof streamOpenAICompletions>[2],
+): Promise<Record<string, unknown>> {
 	const { promise, resolve } = Promise.withResolvers<unknown>();
-	streamOpenAICompletions(getBundledModel("opencode-go", "deepseek-v4-pro"), context, {
+	streamOpenAICompletions(model, context, {
 		...opts,
 		apiKey: "test-key",
 		signal: abortedSignal(),
@@ -32,14 +35,28 @@ async function capturePayload(opts: Parameters<typeof streamOpenAICompletions>[2
 	return (await promise) as Record<string, unknown>;
 }
 
-describe("issue #945 — OpenCode Go DeepSeek tool_choice is disabled", () => {
+describe("OpenCode Go tool_choice compatibility", () => {
 	it("marks deepseek-v4-pro as not supporting tool_choice via compat override", () => {
 		const model = getBundledModel("opencode-go", "deepseek-v4-pro") as Model<"openai-completions">;
 		expect(model.compat?.supportsToolChoice).toBe(false);
 	});
 
-	it("omits tool_choice from payload but preserves tools and reasoning_effort", async () => {
-		const body = await capturePayload({ reasoning: "high", toolChoice: "auto" });
+	it("marks mimo-v2.5-pro as not supporting tool_choice via compat override", () => {
+		const model = getBundledModel("opencode-go", "mimo-v2.5-pro") as Model<"openai-completions">;
+		expect(model.compat?.supportsToolChoice).toBe(false);
+	});
+
+	it("omits tool_choice from MiMo title-style payloads while preserving tools", async () => {
+		const model = getBundledModel("opencode-go", "mimo-v2.5-pro") as Model<"openai-completions">;
+		const body = await capturePayload(model, { reasoning: "high", toolChoice: { type: "tool", name: "echo" } });
+		expect(body.tools).toBeDefined();
+		expect(body.tool_choice).toBeUndefined();
+		expect(body.reasoning_effort).toBe("high");
+	});
+
+	it("omits tool_choice from DeepSeek payloads but preserves tools and reasoning_effort", async () => {
+		const model = getBundledModel("opencode-go", "deepseek-v4-pro") as Model<"openai-completions">;
+		const body = await capturePayload(model, { reasoning: "high", toolChoice: "auto" });
 		expect(body.tools).toBeDefined();
 		expect(body.tool_choice).toBeUndefined();
 		expect(body.reasoning_effort).toBe("high");
