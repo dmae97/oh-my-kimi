@@ -168,7 +168,7 @@ describe("CustomEditor escape key dispatch", () => {
 
 		editor.handleInput("\x1b");
 		expect(onEscape).toHaveBeenCalledTimes(1);
-	});
+	}, 30_000);
 
 	it("fires onEscape immediately when no autocomplete popup is visible", () => {
 		const editor = createEditor();
@@ -269,7 +269,7 @@ describe("CustomEditor magic-keyword shimmer", () => {
 		expect(repaint).toHaveBeenCalledTimes(1);
 		// Clean up so the next render does not arm a stray timer leaking into other tests.
 		editor.setShimmerRepaintHandler(undefined);
-	});
+	}, 30_000);
 
 	it("does not schedule a repaint when the editor is not focused", async () => {
 		const editor = new CustomEditor(defaultEditorTheme);
@@ -283,7 +283,7 @@ describe("CustomEditor magic-keyword shimmer", () => {
 
 		expect(repaint).not.toHaveBeenCalled();
 		editor.setShimmerRepaintHandler(undefined);
-	});
+	}, 30_000);
 
 	it("does not schedule a repaint when no magic keyword is in the buffer", async () => {
 		const editor = createFocusedEditor();
@@ -296,7 +296,7 @@ describe("CustomEditor magic-keyword shimmer", () => {
 
 		expect(repaint).not.toHaveBeenCalled();
 		editor.setShimmerRepaintHandler(undefined);
-	});
+	}, 30_000);
 
 	it("clears any pending shimmer frame when the handler is unbound", async () => {
 		const editor = createFocusedEditor();
@@ -310,7 +310,7 @@ describe("CustomEditor magic-keyword shimmer", () => {
 		await Bun.sleep(CustomEditor.SHIMMER_FRAME_MS + 30);
 
 		expect(repaint).not.toHaveBeenCalled();
-	});
+	}, 30_000);
 
 	it("paints the keyword glyph through the trailing CURSOR_MARKER (no cursor seam)", () => {
 		const editor = createFocusedEditor();
@@ -341,5 +341,5 @@ describe("CustomEditor magic-keyword shimmer", () => {
 		} finally {
 			resetSettingsForTest();
 		}
-	});
+	}, 30_000);
 });

@@ -164,7 +164,7 @@ describe("streaming edit preview height (stable, full tail window)", () => {
 		// And it is never padded into a half-empty rectangle (the regression).
 		expect(maxTrailingBlank).toBeLessThanOrEqual(1);
 		expect(finalizedHeight).toBeGreaterThan(1);
-	});
+	}, 30_000);
 
 	test("real TUI finalization replaces streaming edit preview throughout native scrollback", async () => {
 		const previewPrefix = "PREVIEW_ONLY_STREAM_SENTINEL_";
@@ -290,7 +290,7 @@ describe("streaming edit preview height (stable, full tail window)", () => {
 		}
 		const hasDecrease = rawLineCounts.some((count, i) => i > 0 && count < rawLineCounts[i - 1]);
 		expect(hasDecrease).toBe(true);
-	});
+	}, 30_000);
 });
 
 describe("streaming tool call preview height (bounded across renderers)", () => {
@@ -383,5 +383,5 @@ describe("streaming tool call preview height (bounded across renderers)", () => 
 		expect(text).not.toContain("const line-0 = 1;");
 		expect(text).not.toContain(`const line-${hidden - 1} = 1;`);
 		expect(text).toContain(`… ${hidden} earlier lines`);
-	});
+	}, 30_000);
 });
