@@ -336,7 +336,12 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 		const resolvedPath = managedRealPaths[i];
 		if (realPathSet.has(resolvedPath)) continue;
 		if (enabledAuthoredNames.has(capSkill.name)) continue; // an enabled authored skill owns this name
-		if (skillMap.has(capSkill.name)) continue; // already claimed (e.g. custom dir)
+		// Already claimed — e.g. by a custom-directory skill. LOAD-BEARING: custom
+		// dirs never enter `result.all`, so they are absent from `enabledAuthoredNames`
+		// above; this map check is the ONLY veto that lets a custom-dir authored skill
+		// win over a same-named managed one. The custom-dir loop (which populates
+		// skillMap, ~30 lines up) MUST run before this block — do not reorder.
+		if (skillMap.has(capSkill.name)) continue;
 		const rawDescription =
 			typeof capSkill.frontmatter?.description === "string" ? capSkill.frontmatter.description : "";
 		skillMap.set(capSkill.name, {
