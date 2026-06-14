@@ -911,6 +911,9 @@ describe("github tool", () => {
 				"rev-parse",
 				"refs/heads/main",
 			]);
+			console.log("DEBUG rejects PR pushes: originMainBefore =", JSON.stringify(originMainBefore));
+			console.log("DEBUG rejects PR pushes: fixture.originBare =", fixture.originBare);
+			console.log("DEBUG rejects PR pushes: fixture.baseDir =", fixture.baseDir);
 			runGit(fixture.repoRoot, ["checkout", "-b", "manual-branch", "origin/main"]);
 			await Bun.write(path.join(fixture.repoRoot, "README.md"), "base\nmanual\n");
 			runGit(fixture.repoRoot, ["add", "README.md"]);

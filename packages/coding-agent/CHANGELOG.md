@@ -1,9 +1,6 @@
 # Changelog
 
 ## [Unreleased]
-### Fixed
-
-- Fixed the deferred MCP discovery banner (`Connecting to MCP servers: …`) overdrawing the chat input bar. `onMCPConnecting` wrote the banner straight to `process.stderr` while the TUI owned the terminal; it now emits on an `mcp:connecting` event channel that `InteractiveMode` renders through `showStatus` (the status container), mirroring the existing LSP-startup pattern so the banner can never paint over the input box border ([#2483](https://github.com/can1357/oh-my-pi/issues/2483))
 
 ### Breaking Changes
 
@@ -42,6 +39,7 @@
 
 ### Fixed
 
+- Fixed the deferred MCP discovery banner (`Connecting to MCP servers: …`) overdrawing the chat input bar. `onMCPConnecting` wrote the banner straight to `process.stderr` while the TUI owned the terminal; it now emits on an `mcp:connecting` event channel that `InteractiveMode` renders through `showStatus` (the status container), mirroring the existing LSP-startup pattern so the banner can never paint over the input box border ([#2483](https://github.com/can1357/oh-my-pi/issues/2483))
 - Fixed `web_search` SearXNG fallback when HTTP 200 responses contain no usable results plus `unresponsive_engines`; SearXNG now raises a transient provider error, and the fallback loop rejects any provider response with no renderable content before formatting an invisible success ([#2571](https://github.com/can1357/oh-my-pi/issues/2571)).
 - Fixed `read` on a GitHub commit URL (`github.com/<owner>/<repo>/commit/<sha>`) returning the raw commit HTML page instead of structured content. `parseGitHubUrl` had no `commit` case, so commit URLs fell through to generic HTML rendering; they now resolve via the commits API and render as markdown (subject, author, stats, parents, full commit message, and a per-file unified diff), matching the existing blob/tree/issue/PR handling.
 - Fixed release runs being silently cancelled by a later `main` push, which left tagged versions (`v15.12.6` in the wild) without a GitHub Release or npm publish. The CI workflow's `concurrency` group was `${{ github.workflow }}-${{ github.ref }}`, and since the release-script commit + `v*` tag are pushed atomically to `refs/heads/main`, the release run shared the `CI-refs/heads/main` group with every subsequent push; `cancel-in-progress: true` then killed it before `release_binary` / `release_github` / `release_npm` could run, and no future run carried the release tag at HEAD. The group now resolves to a per-sha `release-<sha>` slot with `cancel-in-progress: false` whenever the push subject matches `chore: bump version to ` (the release-script convention) or `github.ref` is a `v*` tag (`workflow_dispatch` recovery), so release runs are isolated from PR/main churn ([#2564](https://github.com/can1357/oh-my-pi/issues/2564)).
@@ -78,6 +76,7 @@
 - Fixed `/goal <objective>` and `/goal set <objective>` during streaming so goal context is steered immediately but objective submission waits for the active turn to finish instead of spamming `AgentBusyError`. The interactive goal-continuation timer is now streaming-aware too: if a turn starts inside the 800 ms idle window the timer was scheduled in, it drops the tick instead of submitting a stale `goal-continuation` that would resurface the same `AgentBusyError`; the next `agent_end` reschedules ([#2454](https://github.com/can1357/oh-my-pi/issues/2454)).
 - Fixed `~/.agent[s]/skills` not appearing as `/skill:<name>` commands when every named source toggle (`skills.enableCodexUser`, `skills.enableClaudeUser`, `skills.enableClaudeProject`, `skills.enablePiUser`, `skills.enablePiProject`) was off: `loadSkills` gated the `agents` provider on `anyBuiltInSkillSourceEnabled`, so a user who turned off the Claude/Codex/Pi sources to clean noise also lost their own canonical OMP-native skills. The `agents` provider now reads the dedicated `enableAgentsUser`/`enableAgentsProject` toggles, and the unknown-third-party fall-through gate is restricted to the named third-party toggles so keeping the default agents toggles on no longer silently re-enables `opencode`/`github`/`claude-plugins`/`gemini` skill sources ([#2401](https://github.com/can1357/oh-my-pi/issues/2401)).
 - Fixed Claude Code marketplace plugin skills installed under `skills/<name>/SKILL.md` to also appear as bare slash commands such as `/understand`, matching Claude-native plugin docs. The slash command name is taken from the skill directory basename so display-style frontmatter names like `name: Understand Anything` still resolve to `/understand` ([#2415](https://github.com/can1357/oh-my-pi/issues/2415)).
+- Fixed ACP `/move` builtin test expectations to compare the resolved destination path so the test is portable on Windows and Unix ([#2381](https://github.com/can1357/oh-my-pi/pull/2381) by [@oldschoola](https://github.com/oldschoola)).
 
 ### Removed
 
@@ -253,9 +252,6 @@
 ### Security
 
 - Rejected non-local `ws://` relay URLs and invalid room keys when parsing collab links to prevent insecure or malformed session joins
-### Fixed
-
-- Fixed ACP `/move` builtin test expectations to compare the resolved destination path so the test is portable on Windows and Unix ([#2381](https://github.com/can1357/oh-my-pi/pull/2381) by [@oldschoola](https://github.com/oldschoola)).
 
 ## [15.11.7] - 2026-06-12
 
