@@ -3040,6 +3040,9 @@ async function openCodexSseEventStream(
 		defaultDelayMs: attempt => CODEX_RETRY_DELAY_MS * (attempt + 1),
 		maxDelayMs: CODEX_RATE_LIMIT_BUDGET_MS,
 		fetch: fetchOverride,
+		// Disable Bun's native ~300s pre-response timeout (issue #2422); SSE
+		// wrapping installs its own first-event/idle watchdog once headers arrive.
+		timeout: false,
 	});
 	logCodexDebug("codex response", {
 		url: response.url,

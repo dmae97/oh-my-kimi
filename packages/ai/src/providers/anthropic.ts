@@ -2305,6 +2305,11 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 	const baseUrl = resolveAnthropicBaseUrl(model, apiKey);
 	const foundryCustomHeaders = resolveAnthropicCustomHeaders(model);
 	const tlsFetchOptions = buildClaudeCodeTlsFetchOptions(model, baseUrl);
+	// Disable Bun's native ~300s pre-response fetch timeout (issue #2422).
+	// `AnthropicMessagesClient` already arms its own DEFAULT_TIMEOUT_MS timer
+	// per request, so the native ceiling can only short-circuit slow-prefill
+	// streams before the configured watchdog gets to govern them.
+	const fetchOptions: AnthropicFetchOptions = { ...(tlsFetchOptions ?? {}), timeout: false };
 	const baseFetch = args.fetch ?? fetch;
 	// Only OAuth requests inject the CC billing header; no API-key request can ever
 	// contain it, so there is no need to install the rewriter for those.
@@ -2337,7 +2342,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 			maxRetries: 5,
 			defaultHeaders,
 			fetch: cchFetch,
-			...(tlsFetchOptions ? { fetchOptions: tlsFetchOptions } : {}),
+			fetchOptions,
 		};
 	}
 
@@ -2372,6 +2377,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 			maxRetries: 5,
 			defaultHeaders,
 			fetch: cchFetch,
+			fetchOptions,
 		};
 	}
 
@@ -2388,7 +2394,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 			maxRetries: 5,
 			defaultHeaders,
 			fetch: cchFetch,
-			...(tlsFetchOptions ? { fetchOptions: tlsFetchOptions } : {}),
+			fetchOptions,
 		};
 	}
 	// OpenCode Zen's Anthropic-compatible gateway accepts bearer auth only;
@@ -2402,7 +2408,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 			maxRetries: 5,
 			defaultHeaders,
 			fetch: cchFetch,
-			...(tlsFetchOptions ? { fetchOptions: tlsFetchOptions } : {}),
+			fetchOptions,
 		};
 	}
 
@@ -2421,7 +2427,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		maxRetries: 5,
 		defaultHeaders,
 		fetch: cchFetch,
-		...(tlsFetchOptions ? { fetchOptions: tlsFetchOptions } : {}),
+		fetchOptions,
 	};
 }
 

@@ -537,6 +537,8 @@ export const streamOllama: StreamFunction<"ollama-chat"> = (
 				signal: options.signal,
 				defaultDelayMs: OLLAMA_RETRY_DELAYS_MS,
 				fetch: options.fetch,
+				// Disable Bun's native ~300s pre-response timeout (issue #2422).
+				timeout: false,
 			});
 			if (!response.ok) {
 				capturedErrorResponse = await captureHttpErrorResponse(response);

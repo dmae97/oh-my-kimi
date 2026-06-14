@@ -288,6 +288,8 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 				body,
 				signal: options.signal,
 				fetch: options.fetch,
+				// Disable Bun's native ~300s pre-response timeout (issue #2422).
+				timeout: false,
 			});
 
 			if (!response.ok) {

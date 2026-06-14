@@ -376,6 +376,8 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 					defaultDelayMs: attempt => BASE_DELAY_MS * 2 ** attempt,
 					maxDelayMs: options?.maxRetryDelayMs ?? RATE_LIMIT_BUDGET_MS,
 					fetch: options?.fetch,
+					// Disable Bun's native ~300s pre-response timeout (issue #2422).
+					timeout: false,
 				},
 			);
 			if (!response.ok) {
