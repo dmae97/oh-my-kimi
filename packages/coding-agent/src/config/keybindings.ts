@@ -212,8 +212,8 @@ export const KEYBINDINGS = {
 		description: "Search history",
 	},
 	"app.stt.toggle": {
-		defaultKeys: "alt+h",
-		description: "Toggle speech-to-text",
+		defaultKeys: [],
+		description: "Toggle speech-to-text (default gesture: hold Space)",
 	},
 } as const satisfies KeybindingDefinitions;
 

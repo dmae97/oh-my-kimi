@@ -1600,6 +1600,25 @@ export class Editor implements Component, Focusable {
 		this.#insertTextAtCursor(text);
 	}
 
+	/** Delete up to `count` characters immediately before the cursor on the current line.
+	 *  Used to "track back" the auto-repeat spaces that the space-hold push-to-talk gesture
+	 *  optimistically inserts before it recognizes the hold. Capped at the cursor column so it
+	 *  never crosses a line boundary or under-runs the line. */
+	deleteBeforeCursor(count: number): void {
+		const removable = Math.min(count, this.#state.cursorCol);
+		if (removable <= 0) return;
+		this.#exitHistoryForEditing();
+		this.#recordUndoState();
+		const line = this.#state.lines[this.#state.cursorLine] ?? "";
+		this.#state.lines[this.#state.cursorLine] =
+			line.slice(0, this.#state.cursorCol - removable) + line.slice(this.#state.cursorCol);
+		this.#setCursorCol(this.#state.cursorCol - removable);
+		this.#lastAction = null;
+		if (this.onChange) {
+			this.onChange(this.getText());
+		}
+	}
+
 	/** Apply terminal paste semantics to text from non-bracketed paste transports. */
 	pasteText(text: string): void {
 		this.#handlePaste(text);

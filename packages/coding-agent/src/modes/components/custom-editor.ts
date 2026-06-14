@@ -62,6 +62,14 @@ const BRACKETED_IMAGE_PATH_REGEX = /\.(?:png|jpe?g|gif|webp)$/i;
 const BRACKETED_IMAGE_PATH_BOUNDARY_REGEX = /\.(?:png|jpe?g|gif|webp)(?=$|["']?\s)/gi;
 const SHELL_ESCAPED_PATH_CHAR_REGEX = /\\([\\\s'"()[\]{}&;<>|?*!$`])/g;
 
+/** Plain spaces from one auto-repeat run that trigger the space-hold push-to-talk STT gesture.
+ *  Holding the space bar makes the terminal emit a burst of spaces; once more than this many land
+ *  in the editor we treat it as "space held", track them back out, and start recording. */
+export const SPACE_HOLD_THRESHOLD = 5;
+/** Idle gap (ms) after the last repeated space that counts as the space bar being released, ending
+ *  the push-to-talk recording. Must comfortably exceed the OS key-repeat interval. */
+export const SPACE_HOLD_RELEASE_MS = 250;
+
 function isPastedPathSeparator(char: string | undefined): boolean {
 	return char === undefined || char === " " || char === "\t" || char === "\r" || char === "\n";
 }
@@ -235,9 +243,25 @@ export class CustomEditor extends Editor {
 	/** Called when left-arrow is pressed while the editor is empty (cursor necessarily at start). */
 	onLeftAtStart?: () => void;
 
+	/** Fired when a sustained space-bar hold is recognized — the push-to-talk STT start. The
+	 *  optimistically-typed spaces have already been deleted by the time this runs. */
+	onSpaceHoldStart?: () => void;
+	/** Fired when the held space bar is released (detected as an idle gap with no further repeated
+	 *  spaces) — the push-to-talk STT stop. */
+	onSpaceHoldEnd?: () => void;
+	/** Gate for the space-hold gesture. Returns false to keep the space bar inserting spaces
+	 *  normally; wired to `stt.enabled` so disabling STT restores plain space behavior. */
+	sttHoldEnabled?: () => boolean;
+
 	/** Custom key handlers from extensions and non-built-in app actions. */
 	#customKeyHandlers = new Map<KeyId, () => void>();
 	#customMatchKeys = new Map<string, () => void>();
+	/** Consecutive plain spaces inserted in the current run; any other key resets it. */
+	#spaceRunInserted = 0;
+	/** True while a recognized space-hold push-to-talk recording is in progress. */
+	#spaceHoldActive = false;
+	/** Idle timer that fires `onSpaceHoldEnd` once repeated spaces stop arriving. */
+	#spaceHoldTimer: NodeJS.Timeout | undefined;
 	#actionKeys = new Map<ConfigurableEditorAction, KeyId[]>(
 		Object.entries(DEFAULT_ACTION_KEYS).map(([action, keys]) => [action as ConfigurableEditorAction, [...keys]]),
 	);
@@ -295,6 +319,68 @@ export class CustomEditor extends Editor {
 		this.#rebuildCustomMatchKeys();
 	}
 
+	#spaceHoldGestureEnabled(): boolean {
+		return this.onSpaceHoldStart !== undefined && (this.sttHoldEnabled?.() ?? false) && !this.isShowingAutocomplete();
+	}
+
+	/** Drive the space-hold push-to-talk state machine. Returns true when the gesture consumed the
+	 *  input so it must not reach normal editing. Holding the space bar makes the terminal emit a
+	 *  burst of auto-repeat spaces; once more than {@link SPACE_HOLD_THRESHOLD} of them land we treat
+	 *  it as a hold, delete the spam, and start recording until the repeats stop. */
+	#handleSpaceHold(data: string, canonical: string | undefined): boolean {
+		const isSpace = canonical === "space";
+		if (this.#spaceHoldActive) {
+			if (isSpace) {
+				// Auto-repeat while held: swallow it and keep the release timer alive.
+				this.#armSpaceHoldReleaseTimer();
+				return true;
+			}
+			// Any non-space means the bar was released — stop recording, then let the key through.
+			this.#endSpaceHold();
+			return false;
+		}
+		if (!isSpace) {
+			this.#spaceRunInserted = 0;
+			return false;
+		}
+		if (!this.#spaceHoldGestureEnabled()) return false;
+		// A short tap should still type a normal space, so insert optimistically and count the run.
+		super.handleInput(data);
+		this.#spaceRunInserted++;
+		if (this.#spaceRunInserted > SPACE_HOLD_THRESHOLD) {
+			this.deleteBeforeCursor(this.#spaceRunInserted);
+			this.#spaceRunInserted = 0;
+			this.#beginSpaceHold();
+		}
+		return true;
+	}
+
+	#beginSpaceHold(): void {
+		this.#spaceHoldActive = true;
+		this.#armSpaceHoldReleaseTimer();
+		this.onSpaceHoldStart?.();
+	}
+
+	#armSpaceHoldReleaseTimer(): void {
+		if (this.#spaceHoldTimer) clearTimeout(this.#spaceHoldTimer);
+		this.#spaceHoldTimer = setTimeout(() => {
+			this.#spaceHoldTimer = undefined;
+			this.#endSpaceHold();
+		}, SPACE_HOLD_RELEASE_MS);
+		this.#spaceHoldTimer.unref?.();
+	}
+
+	#endSpaceHold(): void {
+		if (!this.#spaceHoldActive) return;
+		this.#spaceHoldActive = false;
+		this.#spaceRunInserted = 0;
+		if (this.#spaceHoldTimer) {
+			clearTimeout(this.#spaceHoldTimer);
+			this.#spaceHoldTimer = undefined;
+		}
+		this.onSpaceHoldEnd?.();
+	}
+
 	handleInput(data: string): void {
 		const kittyParsed = parseKittySequence(data);
 		if (kittyParsed && (kittyParsed.modifier & 64) !== 0 && this.onCapsLock) {
@@ -323,6 +409,9 @@ export class CustomEditor extends Editor {
 			this.onLeftAtStart();
 			return;
 		}
+
+		// Space-hold push-to-talk: a sustained space bar starts/stops STT instead of typing spaces.
+		if (this.#handleSpaceHold(data, canonical)) return;
 
 		if (canonical !== undefined) {
 			// Intercept configured image paste (async - fires and handles result)
