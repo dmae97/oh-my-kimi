@@ -2538,6 +2538,39 @@ function isLightThemeJson(themeJson: ThemeJson): boolean {
 	}
 }
 
+function getHtmlDefaultTextForSurface(surface: string | number | undefined): string {
+	const luminance = surface === undefined ? undefined : colorLuma(surface);
+	return luminance !== undefined && luminance > 0.5 ? "#000000" : "#e5e5e7";
+}
+
+function resolveThemeExportColors(themeJson: ThemeJson): {
+	pageBg?: string;
+	cardBg?: string;
+	infoBg?: string;
+} {
+	const exportSection = themeJson.export;
+	if (!exportSection) return {};
+
+	const vars = themeJson.vars ?? {};
+	const resolve = (value: string | number | undefined): string | undefined => {
+		if (value === undefined) return undefined;
+		if (typeof value === "number") return ansi256ToHex(value);
+		if (value === "" || value.startsWith("#")) return value;
+		const varName = value.startsWith("$") ? value.slice(1) : value;
+		if (varName in vars) {
+			const resolved = resolveVarRefs(varName, vars);
+			return typeof resolved === "number" ? ansi256ToHex(resolved) : resolved;
+		}
+		return value;
+	};
+
+	return {
+		pageBg: resolve(exportSection.pageBg),
+		cardBg: resolve(exportSection.cardBg),
+		infoBg: resolve(exportSection.infoBg),
+	};
+}
+
 /**
  * Get resolved theme colors as CSS-compatible hex strings.
  * Used by HTML export to generate CSS custom properties.
@@ -2545,14 +2578,16 @@ function isLightThemeJson(themeJson: ThemeJson): boolean {
 export async function getResolvedThemeColors(themeName?: string): Promise<Record<string, string>> {
 	const name = themeName ?? getDefaultTheme();
 	const themeJson = await loadThemeJson(name);
-	const isLight = isLightThemeJson(themeJson);
+	const exportColors = resolveThemeExportColors(themeJson);
 	const resolved = resolveThemeColors(themeJson.colors, themeJson.vars);
 
-	// Default text color for empty values (terminal uses default fg color).
-	// Must follow the actual theme appearance — hardcoding `name === "light"`
-	// makes every custom light theme (sandstone, limestone, porcelain, …) fall
-	// through to the dark-theme grey and renders the HTML export illegible.
-	const defaultText = isLight ? "#000000" : "#e5e5e7";
+	// Empty foreground tokens use the terminal default color. In HTML export,
+	// that default must contrast the export surface, not the TUI status line:
+	// custom light themes can still export dark transcript cards when they omit
+	// `export`, because generateThemeVars derives those cards from userMessageBg.
+	const defaultText = getHtmlDefaultTextForSurface(
+		exportColors.cardBg ?? exportColors.pageBg ?? resolved.userMessageBg,
+	);
 
 	const cssColors: Record<string, string> = {};
 	for (const [key, value] of Object.entries(resolved)) {
@@ -2603,27 +2638,7 @@ export async function getThemeExportColors(themeName?: string): Promise<{
 	const name = themeName ?? getDefaultTheme();
 	try {
 		const themeJson = await loadThemeJson(name);
-		const exportSection = themeJson.export;
-		if (!exportSection) return {};
-
-		const vars = themeJson.vars ?? {};
-		const resolve = (value: string | number | undefined): string | undefined => {
-			if (value === undefined) return undefined;
-			if (typeof value === "number") return ansi256ToHex(value);
-			if (value === "" || value.startsWith("#")) return value;
-			const varName = value.startsWith("$") ? value.slice(1) : value;
-			if (varName in vars) {
-				const resolved = resolveVarRefs(varName, vars);
-				return typeof resolved === "number" ? ansi256ToHex(resolved) : resolved;
-			}
-			return value;
-		};
-
-		return {
-			pageBg: resolve(exportSection.pageBg),
-			cardBg: resolve(exportSection.cardBg),
-			infoBg: resolve(exportSection.infoBg),
-		};
+		return resolveThemeExportColors(themeJson);
 	} catch {
 		return {};
 	}
