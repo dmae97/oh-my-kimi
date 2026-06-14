@@ -36,6 +36,7 @@
 ### Removed
 
 - Removed the Python `openai-whisper` dependency and `pip` install path from speech-to-text — the bundled `transcribe.py` and all Python/whisper probes in `omp setup speech` are gone; the recorder (SoX/FFmpeg/arecord) remains the only external tool.
+- Added an experimental, opt-in **auto-learn** loop (default off, `autolearn.enabled`). When enabled, after the agent stops it is nudged to capture reusable lessons: durable facts go to long-term memory and repeatable procedures become **managed skills** — `SKILL.md` files written to an isolated `~/.omp/agent/managed-skills` directory that is discovered and surfaced like authored skills but never overwrites user-authored skills (authored names always win). Two tools back this: `manage_skill` (create/update/delete managed skills) and `learn` (record a lesson, optionally minting a managed skill in the same call). `learn` works with the `hindsight`, `mnemopi`, or file-based `local` memory backend; under `local`, lessons append to a `learned.md` in the project's memory root (kept separate from the consolidation artifacts so they survive a consolidation pass) and are injected into future sessions. The nudge is passive by default (a hidden reminder rides the next turn); `autolearn.autoContinue` instead auto-runs one capture turn at stop, and `autolearn.minToolCalls` (default 5) gates trivial turns. Plan/goal-mode turns and subagents are never nudged.
 
 ### Fixed
 

@@ -2005,7 +2005,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			}
 
 			const extensionRunner = session.extensionRunner;
-			const pendingExtensionMessages: Promise<void>[] = [];
+			const pendingExtensionMessages: Promise<unknown>[] = [];
 			if (extensionRunner) {
 				extensionRunner.initialize(
 					{
