@@ -9,7 +9,7 @@ importing it into k3s containerd, pointing ARC at it, and verifying it.
 
 Navigation: previous - [02-kata-runtime.md](./02-kata-runtime.md) (Kata +
 containerd + RuntimeClass) | next - [04-arc-and-caching.md](./04-arc-and-caching.md)
-(ARC runners, RustFS cache, egress policy).
+(ARC runners, shared caches, egress policy).
 
 > The image built here is referenced by the ARC runner pod template
 > (`template.spec.containers[0].image` + `imagePullPolicy: IfNotPresent`),
@@ -105,7 +105,7 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o 
  && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list \
  && apt-get update \
  && apt-get install -y \
-      build-essential pkg-config curl ca-certificates git unzip xz-utils zstd gh \
+      build-essential pkg-config curl ca-certificates git unzip xz-utils gh \
       clang lld llvm \
       libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev \
       fd-find ripgrep imagemagick \
@@ -176,11 +176,11 @@ In order:
   tool.
 - `apt-get install` pulls three groups:
   - **build toolchain / utilities:** `build-essential pkg-config curl
-    ca-certificates git unzip xz-utils zstd gh clang lld llvm`.
+    ca-certificates git unzip xz-utils gh clang lld llvm`.
     `build-essential` + `pkg-config` are needed by the native and canvas builds;
-    `zstd` is the codec the bun and sccache cache tarballs use (see
-    [04-arc-and-caching.md](./04-arc-and-caching.md)); `clang lld llvm` are the
-    MSVC-cross prerequisites that used to be apt-installed per job.
+    `gh` is used by release workflows and the coding-agent GitHub tool; `clang
+    lld llvm` are the MSVC-cross prerequisites that used to be apt-installed per
+    job.
   - **canvas / cairo native stack:** `libcairo2-dev libpango1.0-dev libjpeg-dev
     libgif-dev librsvg2-dev` - the `-dev` headers the canvas/rsvg native modules
     compile against.
@@ -252,7 +252,7 @@ DOCKER_BUILDKIT=1 docker build -t "$IMAGE" -t omp-kata-runner:preloaded .
 echo "==> [2/5] verifying baked tools"
 docker run --rm --entrypoint bash "$IMAGE" -lc '
   set -e
-  for b in gh fd rg magick bun cargo rustc pkg-config zstd clang lld sccache zig cargo-nextest cargo-zigbuild cargo-xwin; do
+  for b in gh fd rg magick bun cargo rustc pkg-config clang lld sccache zig cargo-nextest cargo-zigbuild cargo-xwin; do
     command -v "$b" >/dev/null || { echo "MISSING: $b"; exit 1; }
   done
   echo "tools OK | bun $(bun --version) | rust $(rustc --version) | sccache $(sccache --version | awk '\''{print $2}'\'') | zig $(zig version) | gh $(gh --version | head -1 | cut -d\" \" -f3)"
@@ -294,7 +294,7 @@ BuildKit + the docker layer cache make an unchanged rebuild near-instant.
 
 **[2/5] verify baked tools.** Runs the freshly built image with a bash entrypoint
 and asserts every expected binary is on `PATH`
-(`gh fd rg magick bun cargo rustc pkg-config zstd clang lld sccache zig cargo-nextest cargo-zigbuild cargo-xwin`),
+(`gh fd rg magick bun cargo rustc pkg-config clang lld sccache zig cargo-nextest cargo-zigbuild cargo-xwin`),
 failing the whole script if any is missing, then prints the key version tuple
 (bun / rust / sccache / zig / gh). This catches a broken apt set, missing shim,
 or bad toolchain pin **before** anything touches the cluster.
@@ -416,7 +416,7 @@ standalone:
 ```bash
 docker run --rm --entrypoint bash omp-kata-runner:preloaded -lc '
   set -e
-  for b in gh fd rg magick bun cargo rustc pkg-config zstd clang lld sccache zig cargo-nextest cargo-zigbuild cargo-xwin; do
+  for b in gh fd rg magick bun cargo rustc pkg-config clang lld sccache zig cargo-nextest cargo-zigbuild cargo-xwin; do
     command -v "$b" >/dev/null || { echo "MISSING: $b"; exit 1; }
   done
   echo "tools OK | bun $(bun --version) | rust $(rustc --version) | sccache $(set -- $(sccache --version); echo "$2") | zig $(zig version) | gh $(set -- $(gh --version | head -1); echo "$3")"
@@ -462,5 +462,5 @@ afterward as shown.
 ---
 
 Continue to [04-arc-and-caching.md](./04-arc-and-caching.md) for how ARC
-references this image in the runner pod template, wires in the RustFS shared
-cache, and locks down runner egress.
+wires in the shared `sccache`/Bun/Cargo cache storage, and locks down runner
+egress.

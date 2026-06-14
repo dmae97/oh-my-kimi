@@ -44,7 +44,7 @@ jobs:
    # ref (or from a tagged main HEAD) is also treated as a release.
    release_metadata:
       name: Resolve release metadata
-      runs-on: omp-kata
+      runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-22.04' || 'omp-kata' }}
       outputs:
          is-release: ${{ steps.detect.outputs.is-release }}
          release-tag: ${{ steps.detect.outputs.release-tag }}
@@ -96,7 +96,7 @@ jobs:
    # retention window (see build-native action) is the effective TTL.
    native_artifact_lookup:
       name: Look up cached native artifacts
-      runs-on: omp-kata
+      runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-22.04' || 'omp-kata' }}
       outputs:
          source-hash: ${{ steps.compute.outputs.source-hash }}
          linux-x64-run-id: ${{ steps.find.outputs.linux-x64-run-id }}
@@ -187,7 +187,7 @@ jobs:
    # Fast lint, type check, and browser bundle build (no Rust, no native build needed)
    check:
       name: Lint, type check & web build
-      runs-on: omp-kata
+      runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-22.04' || 'omp-kata' }}
       steps:
          - uses: actions/checkout@v4
          - uses: ./.github/actions/bun-install
@@ -203,7 +203,7 @@ jobs:
       name: "Native: Linux x64 (${{ matrix.variant }})"
       needs: [release_metadata, native_artifact_lookup]
       if: ${{ needs.release_metadata.outputs.is-release == 'true' || needs.native_artifact_lookup.outputs.linux-x64-run-id == '' }}
-      runs-on: omp-kata
+      runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-22.04' || 'omp-kata' }}
       strategy:
          fail-fast: false
          matrix:
@@ -212,7 +212,7 @@ jobs:
                - { variant: modern }
       steps:
          - uses: actions/checkout@v4
-         - uses: ./.github/actions/build-native-kata
+         - uses: ./.github/actions/build-native
            with:
               hash: ${{ needs.native_artifact_lookup.outputs.source-hash }}
               platform: linux
@@ -237,7 +237,7 @@ jobs:
       runs-on: ${{ matrix.os }}
       steps:
          - uses: actions/checkout@v4
-         - uses: ./.github/actions/build-native-kata
+         - uses: ./.github/actions/build-native
            with:
               hash: ${{ needs.native_artifact_lookup.outputs.source-hash }}
               platform: ${{ matrix.platform }}
@@ -269,12 +269,13 @@ jobs:
               save_cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
    test_workspace:
       name: Test TS workspace fast
-      runs-on: omp-kata
+      runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-22.04' || 'omp-kata' }}
       needs: [native_linux_x64, native_artifact_lookup]
       if: ${{ !cancelled() && needs.native_linux_x64.result != 'failure' }}
       timeout-minutes: 20
       steps:
          - uses: actions/checkout@v4
+         - uses: ./.github/actions/setup-system-deps
          - uses: ./.github/actions/bun-install
          - name: Resolve Linux x64 native artifact run
            id: source
@@ -298,12 +299,13 @@ jobs:
 
    test_coding_agent_singleton:
       name: Test coding-agent singleton/global-state (TS)
-      runs-on: omp-kata
+      runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-22.04' || 'omp-kata' }}
       needs: [native_linux_x64, native_artifact_lookup]
       if: ${{ !cancelled() && needs.native_linux_x64.result != 'failure' }}
       timeout-minutes: 20
       steps:
          - uses: actions/checkout@v4
+         - uses: ./.github/actions/setup-system-deps
          - uses: ./.github/actions/bun-install
          - name: Resolve Linux x64 native artifact run
            id: source
@@ -329,7 +331,7 @@ jobs:
 
    test_ts_native:
       name: Test TS native/integration packages
-      runs-on: omp-kata
+      runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-22.04' || 'omp-kata' }}
       needs: [native_linux_x64, native_artifact_lookup]
       if: ${{ !cancelled() && needs.native_linux_x64.result != 'failure' }}
       timeout-minutes: 25
@@ -359,7 +361,7 @@ jobs:
 
    test_coding_agent_ui:
       name: Test coding-agent UI/TUI (TS)
-      runs-on: omp-kata
+      runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-22.04' || 'omp-kata' }}
       needs: [native_linux_x64, native_artifact_lookup]
       if: ${{ !cancelled() && needs.native_linux_x64.result != 'failure' }}
       timeout-minutes: 25
@@ -389,12 +391,13 @@ jobs:
 
    test_coding_agent_runtime:
       name: Test coding-agent runtime/session (TS)
-      runs-on: omp-kata
+      runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-22.04' || 'omp-kata' }}
       needs: [native_linux_x64, native_artifact_lookup]
       if: ${{ !cancelled() && needs.native_linux_x64.result != 'failure' }}
       timeout-minutes: 25
       steps:
          - uses: actions/checkout@v4
+         - uses: ./.github/actions/setup-system-deps
          - uses: ./.github/actions/bun-install
          - name: Resolve Linux x64 native artifact run
            id: source
@@ -420,7 +423,7 @@ jobs:
 
    test_coding_agent_native:
       name: Test coding-agent native/unit (TS)
-      runs-on: omp-kata
+      runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-22.04' || 'omp-kata' }}
       needs: [native_linux_x64, native_artifact_lookup]
       if: ${{ !cancelled() && needs.native_linux_x64.result != 'failure' }}
       timeout-minutes: 25
@@ -450,7 +453,7 @@ jobs:
 
    test_smoke:
       name: Test CLI smoke (TS)
-      runs-on: omp-kata
+      runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-22.04' || 'omp-kata' }}
       needs: [native_linux_x64, native_artifact_lookup]
       if: ${{ !cancelled() && needs.native_linux_x64.result != 'failure' }}
       timeout-minutes: 15
@@ -480,7 +483,7 @@ jobs:
 
    install_methods:
       name: Install method smoke tests
-      runs-on: omp-kata
+      runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-22.04' || 'omp-kata' }}
       steps:
          - uses: actions/checkout@v4
          - uses: ./.github/actions/ensure-rust-toolchain

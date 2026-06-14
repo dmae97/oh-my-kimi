@@ -138,7 +138,7 @@ verify_baked_tools() {
   local runner="$1"
   "$runner" --namespace k8s.io run --rm --entrypoint bash "$IMAGE" -lc '
     set -e
-    for b in gh fd rg magick bun cargo rustc pkg-config zstd clang lld sccache zig cargo-nextest cargo-zigbuild cargo-xwin; do
+    for b in gh fd rg magick bun cargo rustc pkg-config clang lld sccache zig cargo-nextest cargo-zigbuild cargo-xwin; do
       command -v "$b" >/dev/null || { echo "MISSING: $b"; exit 1; }
     done
     echo "tools OK | bun $(bun --version) | rust $(rustc --version) | sccache $(set -- $(sccache --version); echo "$2") | zig $(zig version) | gh $(set -- $(gh --version | head -1); echo "$3")"
@@ -170,7 +170,7 @@ build_with_docker() {
   echo "==> [2/5] verifying baked tools"
   docker run --rm --entrypoint bash "$IMAGE" -lc '
     set -e
-    for b in gh fd rg magick bun cargo rustc pkg-config zstd clang lld sccache zig cargo-nextest cargo-zigbuild cargo-xwin; do
+    for b in gh fd rg magick bun cargo rustc pkg-config clang lld sccache zig cargo-nextest cargo-zigbuild cargo-xwin; do
       command -v "$b" >/dev/null || { echo "MISSING: $b"; exit 1; }
     done
     echo "tools OK | bun $(bun --version) | rust $(rustc --version) | sccache $(set -- $(sccache --version); echo "$2") | zig $(zig version) | gh $(set -- $(gh --version | head -1); echo "$3")"

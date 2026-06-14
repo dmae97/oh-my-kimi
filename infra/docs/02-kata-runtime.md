@@ -337,9 +337,9 @@ This is why `disable_block_device_use = true`: the rootfs travels in over the
 shared filesystem, not as a block device. Benefits: no image-to-block
 conversion, near-instant rootfs availability, and host/guest can both see the
 files. `virtio_fs_cache = "auto"` keeps the conservative page-cache behavior, but
-the active worker pool is now `--thread-pool-size=4` rather than `1` so the
-metadata-heavy Bun cache restore / extract path has a few host workers to fan out
-across. `--announce-submounts` keeps nested mounts visible to the guest.
+the active worker pool is now `--thread-pool-size=4` rather than `1` so
+metadata-heavy mounted-cache and dependency-install paths have a few host workers
+to fan out across. `--announce-submounts` keeps nested mounts visible to the guest.
 
 `emptydir_mode = "shared-fs"` extends the same mechanism to Kubernetes
 `emptyDir` volumes — they are shared into the guest over virtio-fs instead of

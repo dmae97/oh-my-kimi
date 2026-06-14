@@ -1,12 +1,13 @@
-# 04 - ARC runners, shared cache, and egress policy
+# 04 - ARC runners, shared caches, and egress policy
 
 This is the last setup step. By now the node runs k3s with the `kata-qemu`
 RuntimeClass ([02-kata-runtime.md](02-kata-runtime.md)) and the preloaded runner
 image has been imported into the cluster containerd ([03-runner-image.md](03-runner-image.md)).
 Here we install **actions-runner-controller (ARC)**, register an ephemeral
 **scale set** whose pods each boot inside their own Kata microVM, stand up the
-in-cluster **RustFS (S3)** shared cache, and lock down runner egress with a
-NetworkPolicy. See [README.md](README.md) for the architecture overview.
+in-cluster **RustFS (S3)** `sccache` backend and the runner cache PVC, and lock
+down runner egress with a NetworkPolicy. See [README.md](README.md) for the
+architecture overview.
 
 Everything below is read against the live cluster; set the kubeconfig once:
 
@@ -95,8 +96,7 @@ helm install arc \
   oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set-controller
 ```
 
-**Scale set** (`omp-kata`), using the values file from step 3:
-
+**Scale set** (`omp-kata`), using the runner cache PVC and values file from step 3:
 ```bash
 helm install omp-kata \
   --namespace arc-runners --create-namespace \
@@ -129,6 +129,30 @@ kubectl -n arc-systems get pods
 
 ## 3. Scale-set values (`arc-omp-values.yaml`)
 
+Create the namespace-local PVC before installing or upgrading the scale set. This
+is the shared mutable filesystem cache for data whose tools already validate
+against the lockfile: Bun's global package store and Cargo's registry cache.
+
+```yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: runner-cache
+  namespace: arc-runners
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 100Gi
+```
+
+Apply it once:
+
+```bash
+kubectl apply -f runner-cache-pvc.yaml
+```
+
 This is the live `arc-omp-values.yaml` verbatim, with only the repo owner/name in
 `githubConfigUrl` redacted:
 
@@ -144,6 +168,25 @@ containerMode:
 template:
   spec:
     runtimeClassName: kata-qemu      # <-- every runner pod boots its own KVM microVM
+    securityContext:
+      # ghcr.io/actions/actions-runner runs jobs as uid/gid 1001 ("runner").
+      # Let kubelet make the PVC writable by that user without changing image-owned
+      # ~/.cargo/bin or ~/.rustup.
+      fsGroup: 1001
+      fsGroupChangePolicy: OnRootMismatch
+    initContainers:
+      - name: prepare-runner-cache
+        image: omp-kata-runner:2026-06-15-002621
+        imagePullPolicy: IfNotPresent
+        command:
+          - bash
+          - -lc
+          - install -d -o 1001 -g 1001 -m 2775 /cache/bun-store /cache/cargo-registry
+        securityContext:
+          runAsUser: 0
+        volumeMounts:
+          - name: runner-cache
+            mountPath: /cache
     containers:
       - name: runner
         # Preloaded image: stock ghcr.io/actions/actions-runner + CI deps baked in
@@ -160,6 +203,15 @@ template:
         envFrom:
           - secretRef:
               name: sccache-s3
+        volumeMounts:
+          # Shared stores only. Keep node_modules, Cargo target/, and Cargo git
+          # checkouts per-job to avoid mutable build-output or checkout poisoning.
+          - name: runner-cache
+            mountPath: /home/runner/.bun/install/cache
+            subPath: bun-store
+          - name: runner-cache
+            mountPath: /home/runner/.cargo/registry
+            subPath: cargo-registry
         resources:
           requests:
             cpu: "2"
@@ -167,6 +219,10 @@ template:
           limits:
             cpu: "8"
             memory: "12Gi"
+    volumes:
+      - name: runner-cache
+        persistentVolumeClaim:
+          claimName: runner-cache
 ```
 
 Field by field:
@@ -194,8 +250,22 @@ Field by field:
   here when you rebuild the image (see [Operate](#7-operate)).
 - **`command: ["/home/runner/run.sh"]`** - the stock actions-runner entrypoint;
   overridden explicitly because the custom image keeps the upstream layout.
-- **`envFrom.secretRef.name: sccache-s3`** - injects the shared-cache S3
-  configuration into every job's environment ([step 5](#5-shared-cache-rustfs-s3)).
+- **`envFrom.secretRef.name: sccache-s3`** - injects only the S3 configuration that
+  `sccache` needs ([step 5](#5-shared-caches-rustfs-s3--runner-pvc)). Bun and
+  Cargo no longer use RustFS.
+- **`securityContext.fsGroup: 1001`** - makes the mounted PVC writable by the
+  image's `runner` user without replacing image-owned `~/.cargo/bin` or `~/.rustup`.
+- **`initContainers.prepare-runner-cache`** - uses the same locally imported image
+  to create the PVC subdirectories as root before the runner starts. This avoids
+  relying on kubelet's subPath auto-create permissions and does not pull another
+  image.
+- **`volumeMounts`** - mounts the shared PVC only at `~/.bun/install/cache` and
+  `~/.cargo/registry`. `node_modules`, Cargo `target/`, and Cargo git checkouts
+  stay inside the throwaway VM filesystem.
+- **`volumes[].persistentVolumeClaim.claimName: runner-cache`** - binds those
+  mounts to the `arc-runners/runner-cache` PVC. `ReadWriteOnce` is enough on this
+  single-node k3s host; use a RWX-capable storage class before spreading runners
+  across nodes.
 - **`resources`** - requests `2` CPU / `4Gi`, limits `8` CPU / `12Gi`. Kata reads
   these and sizes the guest accordingly: the VM now boots at the same
   guaranteed floor (`default_vcpus: 2`, `default_memory: 4096`) and only
@@ -248,12 +318,15 @@ a compromised job is boxed into a throwaway VM with no cluster reach.
 
 ---
 
-## 5. Shared cache (RustFS S3)
+## 5. Shared caches (RustFS S3 + runner PVC)
 
 GitHub's hosted cache backend is only reachable over the node's NAT egress, so on
-a busy matrix (many concurrent jobs) it becomes the bottleneck. Instead an
-**S3-compatible object store, RustFS, runs inside the cluster** and serves the
-cache at LAN speed over `rustfs.sccache.svc.cluster.local:9000`.
+a busy matrix (many concurrent jobs) it becomes the bottleneck. This setup keeps
+the hot paths inside the cluster:
+
+- **RustFS S3** backs `sccache` for Rust compiler outputs.
+- **`runner-cache` PVC** is mounted into every runner for Bun's global package
+  store and Cargo's crates.io registry cache.
 
 ### 5a. Deploy RustFS
 
@@ -379,7 +452,7 @@ pointed at the endpoint with the root creds): `mb s3://sccache`.
 
 ### 5b. The `sccache-s3` secret (injected into every runner)
 
-Every runner pod gets the cache configuration via `envFrom` ([step 3](#3-scale-set-values-arc-omp-valuesyaml)).
+Every runner pod gets the `sccache` S3 configuration via `envFrom` ([step 3](#3-scale-set-values-arc-omp-valuesyaml)).
 The secret lives in `arc-runners` (the runners' namespace) and has six keys:
 
 ```bash
@@ -413,85 +486,95 @@ kubectl -n arc-runners create secret generic sccache-s3 \
 - `SCCACHE_REGION: us-east-1` - arbitrary region label SigV4 requires.
 - `SCCACHE_S3_USE_SSL: false` - the endpoint is plain HTTP on the cluster network.
 
-### 5c. The two consumers
+### 5c. The cache consumers
 
 The presence of `$SCCACHE_BUCKET` in the environment is the repo's single signal
-for "am I on the self-hosted infra?". Both consumers branch on it and fall back
-to GitHub-hosted cache backends off-infra (GitHub-hosted macOS/arm runners never
-get the secret and so cannot reach the private RustFS).
+for "am I on the self-hosted infra?". Cache behavior branches on it and falls
+back to GitHub-hosted cache backends off-infra. Off-infra covers GitHub-hosted
+macOS/arm runners (which never get the secret and cannot reach the private
+RustFS) and **every pull request**: `ci.yml` pins PR jobs to GitHub-hosted
+`ubuntu-22.04`, so omp-kata only runs trusted `push`/main + release builds (see
+[5d](#5d-poisoning-boundary-and-pressure)).
 
-**(a) sccache for Rust** - [`.github/actions/build-native`](../../.github/actions/build-native/action.yml).
-It installs `sccache`, then sets `RUSTC_WRAPPER=sccache` and `CARGO_INCREMENTAL=0`
-(sccache silently no-ops with incremental enabled). The backend is conditional:
+**(a) sccache for Rust compiler outputs** -
+[`.github/actions/build-native`](../../.github/actions/build-native/action.yml).
+One action serves both environments: a "Detect runner environment" step reads
+`$SCCACHE_BUCKET` and branches each toolchain/cache step on it. It sets
+`RUSTC_WRAPPER=sccache` and `CARGO_INCREMENTAL=0` (sccache silently no-ops with
+incremental enabled). The sccache backend is conditional:
 
-- `$SCCACHE_BUCKET` set - sccache reads `SCCACHE_BUCKET/ENDPOINT/REGION` and the
-  AWS creds straight from the inherited pod env and uses the **shared S3 (RustFS)**.
-- otherwise - it exports `SCCACHE_GHA_ENABLED=true` and uses the **GitHub Actions
-  cache**.
+- `$SCCACHE_BUCKET` set (omp-kata) - sccache reads `SCCACHE_BUCKET/ENDPOINT/REGION`
+  and the AWS creds straight from the inherited pod env and uses the **shared S3
+  (RustFS)**; toolchains come from the baked image via the `ensure-*` actions.
+- otherwise (GitHub-hosted) - it installs the toolchains, exports
+  `SCCACHE_GHA_ENABLED=true`, and uses the **GitHub Actions cache**.
 
-`Swatinem/rust-cache` still caches `target/` on top; sccache fills the gaps when
-`target/` is cold.
+`Swatinem/rust-cache` runs only on GitHub-hosted runners (it caches Cargo
+`target/`). On omp-kata the mounted Cargo registry handles crate downloads and
+sccache fills the compile-output gap when `target/` is cold.
 
-**(b) bun dependency cache** - [`.github/actions/bun-install`](../../.github/actions/bun-install/action.yml),
-a composite action wrapping `bun install --frozen-lockfile`. A "Detect cache
-backend" step checks `$SCCACHE_BUCKET` + `$AWS_ACCESS_KEY_ID`:
+**(b) Cargo registry cache** - the scale-set pod template mounts
+`runner-cache:/cargo-registry` at `/home/runner/.cargo/registry`. Cargo uses it
+automatically because the image keeps `CARGO_HOME=/home/runner/.cargo`.
 
-- on-infra - it runs `rustfs-cache.sh restore` before install and `... save` after;
-- off-infra - it uses stock `actions/cache@v4` for the bun store.
+Only the registry cache is shared. Cargo `target/` stays per-job, and
+`/home/runner/.cargo/git` stays per-job too; this repo has no git dependencies,
+and git checkouts are a worse shared mutable-cache boundary than crates.io
+archives with lockfile checksums.
 
-`rustfs-cache.sh` talks to RustFS directly with `curl --aws-sigv4` (S3 SigV4), no
-SDK. It keys two objects per lockfile under the `bun-cache/` prefix of the
-`sccache` bucket, derived from `sha256(bun.lock)`:
+**(c) Bun package store** -
+[`.github/actions/bun-install`](../../.github/actions/bun-install/action.yml)
+wraps `bun install --frozen-lockfile`. On omp-kata, the pod template mounts
+`runner-cache:/bun-store` at Bun's default store path
+(`/home/runner/.bun/install/cache`), so the action only ensures the directory
+exists before running Bun. Off-infra it still uses stock `actions/cache@v4` for
+the same store path.
 
-- `store-<os>-<lockhash>` - the bun global package store (`~/.bun/install/cache`),
-  plus a rolling `store-<os>-latest` alias so a changed lockfile still warm-starts
-  from the previous store and `bun install` fetches only the delta.
-- `nm-<os>-<lockhash>` - the installed `node_modules` trees (repo root, every
-  `packages/*`, and `python/robomp/web`).
+`node_modules` is deliberately not shared. It is lockfile-, platform-, script-,
+and workspace-state-sensitive, and concurrent jobs would write through the same
+tree. The clean VM still runs `bun install --frozen-lockfile`; it just reuses the
+package tarball/extract store.
 
-On **restore**, a `node_modules` hit short-circuits everything - the subsequent
-`bun install --frozen-lockfile` is a no-op, so the store is neither fetched nor
-saved. Archives are multi-threaded **zstd** (`.tzst`, baked into the runner image)
-with a **gzip** (`.tgz`) fallback so the action still works on an older image; the
-suffix records the codec and restore only inflates what the host can decompress.
-On **save**, it writes the store/`node_modules` objects only when this exact
-lockfile has none yet (`s3_exists` check), avoiding redundant uploads.
+### 5d. Poisoning boundary and pressure
 
-### 5d. Retention and PVC pressure
+The shared writable PVC and the sccache S3 bucket are both poisonable by any job
+that runs on `omp-kata`, and a poisoned entry could be consumed by a later
+trusted build (a supply-chain risk). The primary defense is to **keep untrusted
+code off the self-hosted runner entirely**:
 
-The Bun cache intentionally keeps exact lockfile objects once written:
+- `ci.yml` routes every pull-request job to GitHub-hosted `ubuntu-22.04`
+  (`runs-on` resolves to `omp-kata` only for `push`/main, manual dispatch, and
+  release). That expression lives in the base workflow, which GitHub uses
+  verbatim for `pull_request` events, so a fork cannot override it. Fork/PR code
+  therefore never sees the PVC, the `sccache-s3` creds, or RustFS - it runs
+  sandboxed on GitHub-hosted runners with the off-infra cache backends.
+- As defense in depth, set the repo's **Settings -> Actions -> Fork pull request
+  workflows** policy to *Require approval for all outside collaborators* (or all
+  forks). GitHub's public-repo default only gates first-time contributors, which
+  would otherwise let a returning contributor's workflow start without review.
 
-- `store-<os>-<lockhash>` and `nm-<os>-<lockhash>` are immutable warm caches;
-- only `store-<os>-latest` is overwritten.
+omp-kata thus only ever serves trusted `push`/main + release builds. The
+mounted-cache design also narrows the blast radius of those trusted runs:
 
-That means `bun.lock` churn will accumulate old exact objects on the `rustfs-data`
-PVC. The repo ships [`infra/rustfs-cache-maintenance.sh`](../rustfs-cache-maintenance.sh)
-to keep that under control from an ops checkout:
+- no shared `node_modules`;
+- no shared Cargo `target/`;
+- no shared Cargo git checkouts;
+- Bun still installs from `bun.lock`;
+- Cargo registry entries are checked against Cargo's lockfile/source checksums;
+- Rust compiler outputs stay in sccache's content-addressed backend.
 
-```bash
-CI_HOST=<CI_HOST> ./infra/rustfs-cache-maintenance.sh report
-CI_HOST=<CI_HOST> ./infra/rustfs-cache-maintenance.sh prune
-```
+Pressure now has two places to watch:
 
-Its policy is deliberately conservative:
+- `sccache/rustfs-data` for Rust compiler objects;
+- `arc-runners/runner-cache` for Bun store + Cargo registry files.
 
-- always keep every `store-<os>-latest` alias;
-- always keep the newest exact `store-*` object that matches each `latest` alias
-  by ETag;
-- always keep the newest `KEEP_EXACT_PER_OS` exact objects per OS (`3` by default)
-  for both `store-*` and `nm-*`;
-- never delete exact objects newer than `MAX_AGE_DAYS` (`30` by default);
-- once the PVC reaches `PRUNE_TRIGGER_PERCENT` (`80` by default), prune oldest
-  remaining exact objects toward `TARGET_PERCENT` (`70` by default), even if they
-  are newer than the age threshold.
+For the runner PVC, the safe cleanup is simple and coarse: scale `omp-kata` to
+zero, delete either `bun-store/` or `cargo-registry/` from the bound local-path
+volume, then let the next jobs repopulate it. There are no RustFS Bun objects and
+no `node_modules` archives to prune anymore.
 
-The same script is the PVC-pressure alert: after `report` or `prune` it reads
-`df -P /data` from the live RustFS pod and exits `1` at `WARN_PERCENT` (`80`)
-and `2` at `CRITICAL_PERCENT` (`90`). Wire that into cron / systemd / your
-monitoring runner; a failing exit is the signal that the PVC is too full.
-
-This caching is why RustFS sits inside the egress allow-list on `tcp/9000`
-([step 6](#6-runner-egress-lockdown)).
+RustFS remains inside the egress allow-list on `tcp/9000` because sccache still
+uses it ([step 6](#6-runner-egress-lockdown)).
 
 ---
 
@@ -570,7 +653,7 @@ The allow-list, rule by rule:
   service CIDR (`10.43.0.0/16`), so this rule alone gives a job **zero** in-cluster
   reach - rules 1 and 3 punch the only two holes the job legitimately needs.
 - **Rule 3 - RustFS cache.** TCP 9000 to the service CIDR (`10.43.0.0/16`) and the
-  `sccache` namespace - the shared cache from [step 5](#5-shared-cache-rustfs-s3).
+  `sccache` namespace - the sccache backend from [step 5](#5-shared-caches-rustfs-s3--runner-pvc).
 - **Ingress.** `policyTypes` lists `Ingress` but no ingress rule is defined, which
   is a **default-deny**: nothing can open a connection *into* a runner pod.
 
@@ -621,10 +704,12 @@ kubectl -n arc-systems logs deploy/arc-gha-rs-controller -f
 kubectl -n arc-runners logs <runner-pod>
 ```
 
-**Verify the cache is being used.** A warm job logs `bun cache: ... HIT` and
+**Verify the caches are being used.** A warm job logs
+`bun cache backend: mounted PVC (...)` and
 `sccache backend: shared S3 (sccache @ rustfs.sccache.svc.cluster.local:9000)` in
-its step output. To inspect objects directly, point any S3 client at the endpoint
-(with the RustFS root creds) and list `s3://sccache/bun-cache/`.
+its step output. To inspect the mounted cache, scale to zero and check the
+`runner-cache` local-path volume on the host; to inspect sccache objects, point
+an S3 client at RustFS and list `s3://sccache/`.
 
 **Resize a job's VM** - edit the `resources` block in `arc-omp-values.yaml`
 ([step 3](#3-scale-set-values-arc-omp-valuesyaml); requests = guaranteed VM size,

@@ -1,10 +1,10 @@
 name: "bun install (shared cache)"
 description: >
    Ensure bun is on PATH, then run `bun install --frozen-lockfile` with a shared
-   dependency cache. bun setup is skipped when the runner image already ships it
+   package store. bun setup is skipped when the runner image already ships it
    (the preloaded omp-kata image), and only fetched on runners that lack it
-   (e.g. GitHub-hosted). The cache uses the in-cluster RustFS S3 when the sccache
-   credentials are present, and the stock actions/cache backend otherwise.
+   (e.g. GitHub-hosted). Self-hosted omp-kata runners use the mounted Bun store
+   PVC; GitHub-hosted runners use the stock actions/cache backend.
 
 runs:
    using: composite
@@ -24,10 +24,11 @@ runs:
            fi
            # The repo keys "are we on can.internal infra?" off $SCCACHE_BUCKET (see
            # actions/build-native). RUNNER_ENVIRONMENT is empty on ARC pods, so it
-           # is not a usable signal here.
-           if [ -n "${SCCACHE_BUCKET:-}" ] && [ -n "${AWS_ACCESS_KEY_ID:-}" ]; then
-             echo "cache=rustfs" >> "$GITHUB_OUTPUT"
-             echo "bun cache backend: RustFS S3 ($SCCACHE_BUCKET @ $SCCACHE_ENDPOINT)"
+           # is not a usable signal here. On infra, the ARC pod mounts the shared
+           # Bun store at the default cache path; off infra, actions/cache restores it.
+           if [ -n "${SCCACHE_BUCKET:-}" ]; then
+             echo "cache=mounted" >> "$GITHUB_OUTPUT"
+             echo "bun cache backend: mounted PVC (${BUN_INSTALL_CACHE_DIR:-${HOME}/.bun/install/cache})"
            else
              echo "cache=gha" >> "$GITHUB_OUTPUT"
              echo "bun cache backend: GitHub Actions cache"
@@ -48,17 +49,13 @@ runs:
            path: ~/.bun/install/cache
            key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
 
-      # On-infra (omp-kata): RustFS store + node_modules over the LAN.
-      - name: Restore bun caches (RustFS)
-        if: steps.env.outputs.cache == 'rustfs'
+      # On-infra (omp-kata): the pod mounts a shared PVC at bun's store path.
+      - name: Prepare mounted bun store
+        if: steps.env.outputs.cache == 'mounted'
         shell: bash
-        run: bash "$GITHUB_ACTION_PATH/rustfs-cache.sh" restore
+        run: mkdir -p "${BUN_INSTALL_CACHE_DIR:-${HOME}/.bun/install/cache}"
 
       - name: Install dependencies
         shell: bash
         run: bun install --frozen-lockfile
 
-      - name: Save bun caches (RustFS)
-        if: steps.env.outputs.cache == 'rustfs'
-        shell: bash
-        run: bash "$GITHUB_ACTION_PATH/rustfs-cache.sh" save
