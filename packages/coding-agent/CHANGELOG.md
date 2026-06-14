@@ -5,6 +5,7 @@
 ### Fixed
 
 - Fixed session JSONL persistence so the first assistant turn materializes the file synchronously, leaves the append writer open, and writes later entries with a sync append writer even during writer-close races instead of waiting on a queued rewrite.
+- Fixed `restoreQueuedMessagesToEditor` (Alt+Up dequeue and Esc-abort) producing colliding `[Image #N]` markers when the editor draft already held pending image(s): queued text was prepended but queued images were appended, so positional marker → image lookup at submit time resolved to the wrong image. Each queued message's image markers are now renumbered by the running pending-image count before merge so the combined text stays aligned with the merged `pendingImages` order ([#2531](https://github.com/can1357/oh-my-pi/issues/2531)).
 
 ## [15.12.5] - 2026-06-13
 ### Changed

@@ -13,10 +13,16 @@
  *   - On flush, the first queued prompt forwards its images via `session.prompt`.
  *   - On a `willRetry` flush, a queued follow-up forwards its images via
  *     `session.followUp` (the `#deliverQueuedMessage` path).
+ *   - When `restoreQueuedMessagesToEditor` reinjects queued image-messages
+ *     into a draft that already holds pending image(s), the merged text's
+ *     `[Image #N]` markers stay aligned with the merged `pendingImages` order
+ *     (#2531). Bug-by-design before that fix: queued markers (1..K) collided
+ *     with the draft's leading markers and submit picked the wrong images.
  */
 
 import { beforeAll, describe, expect, mock, test } from "bun:test";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
+import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { CompactionQueuedMessage, InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
@@ -125,5 +131,112 @@ describe("compaction queue image forwarding", () => {
 		await new UiHelpers(ctx).flushCompactionQueue({ willRetry: true });
 
 		expect(followUpCalls).toEqual([{ text: "and this one", images: [image] }]);
+	});
+});
+
+/**
+ * Restore path: when the editor draft already holds pending image(s) and a
+ * queued image-message is restored (Alt+Up, Esc-abort, …), the merged text's
+ * `[Image #N]` markers must still map positionally to `pendingImages`. The
+ * old code prepended queued text but appended queued images, so the queued
+ * markers (1..K) collided with the draft markers (1..M) and resolved to the
+ * wrong images at submit time.
+ */
+describe("restoreQueuedMessagesToEditor image marker alignment", () => {
+	function makeRestoreCtx(opts: {
+		draftText?: string;
+		draftImages?: ImageContent[];
+		queued?: { text: string; images?: ImageContent[] }[];
+	}) {
+		let editorText = opts.draftText ?? "";
+		const editor = {
+			setText: (text: string) => {
+				editorText = text;
+			},
+			getText: () => editorText,
+			addToHistory: () => {},
+			imageLinks: undefined as (string | undefined)[] | undefined,
+		};
+		const session = {
+			clearQueue: mock(() => ({ steering: opts.queued ?? [], followUp: [] })),
+			abort: mock(async () => {}),
+		};
+		const ctx = {
+			session,
+			editor,
+			pendingImages: opts.draftImages ? [...opts.draftImages] : ([] as ImageContent[]),
+			pendingImageLinks: opts.draftImages ? opts.draftImages.map(() => undefined) : ([] as (string | undefined)[]),
+			locallySubmittedUserSignatures: new Set<string>(),
+			updatePendingMessagesDisplay: () => {},
+		} as unknown as InteractiveModeContext;
+		return { ctx, editor };
+	}
+
+	test("renumbers queued markers when the draft already holds a pending image", () => {
+		const draftImg = img("ZHJhZnQ=");
+		const queuedImg = img("cXVldWVk");
+		const { ctx, editor } = makeRestoreCtx({
+			draftText: "[Image #1] draft text",
+			draftImages: [draftImg],
+			queued: [{ text: "[Image #1] queued text", images: [queuedImg] }],
+		});
+
+		const restored = new InputController(ctx).restoreQueuedMessagesToEditor();
+
+		// The draft marker stays at #1 (its image kept slot 0); the queued
+		// marker is bumped to #2 because the queued image is appended at slot 1.
+		expect(restored).toBe(1);
+		expect(editor.getText()).toBe("[Image #2] queued text\n\n[Image #1] draft text");
+		expect(ctx.pendingImages).toEqual([draftImg, queuedImg]);
+		// Marker → image positional mapping after restore.
+		expect(ctx.pendingImages[0]).toBe(draftImg); // matches [Image #1]
+		expect(ctx.pendingImages[1]).toBe(queuedImg); // matches [Image #2]
+	});
+
+	test("preserves the WxH metadata tail when renumbering", () => {
+		const draftImg = img("ZHJhZnQ=");
+		const queuedImg = img("cXVldWVk");
+		const { ctx, editor } = makeRestoreCtx({
+			draftText: "[Image #1, 100x100]",
+			draftImages: [draftImg],
+			queued: [{ text: "look [Image #1, 800x600] now", images: [queuedImg] }],
+		});
+
+		new InputController(ctx).restoreQueuedMessagesToEditor();
+
+		expect(editor.getText()).toBe("look [Image #2, 800x600] now\n\n[Image #1, 100x100]");
+	});
+
+	test("accumulates the offset across multiple queued image-messages", () => {
+		const draftImg = img("ZHJhZnQ=");
+		const queued1 = img("cTE=");
+		const queued2a = img("cTJh");
+		const queued2b = img("cTJi");
+		const { ctx, editor } = makeRestoreCtx({
+			draftText: "see [Image #1]",
+			draftImages: [draftImg],
+			queued: [
+				{ text: "first [Image #1]", images: [queued1] },
+				{ text: "second [Image #1] and [Image #2]", images: [queued2a, queued2b] },
+			],
+		});
+
+		new InputController(ctx).restoreQueuedMessagesToEditor();
+
+		// msg1 markers shift by 1 (draft images), msg2 markers shift by 1+1=2.
+		expect(editor.getText()).toBe("first [Image #2]\n\nsecond [Image #3] and [Image #4]\n\nsee [Image #1]");
+		expect(ctx.pendingImages).toEqual([draftImg, queued1, queued2a, queued2b]);
+	});
+
+	test("leaves the queued text untouched when the draft has no pending images", () => {
+		const queuedImg = img("cXVldWVk");
+		const { ctx, editor } = makeRestoreCtx({
+			queued: [{ text: "[Image #1] queued", images: [queuedImg] }],
+		});
+
+		new InputController(ctx).restoreQueuedMessagesToEditor();
+
+		expect(editor.getText()).toBe("[Image #1] queued");
+		expect(ctx.pendingImages).toEqual([queuedImg]);
 	});
 });

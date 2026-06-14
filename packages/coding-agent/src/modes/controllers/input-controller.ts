@@ -7,7 +7,7 @@ import { AssistantMessageComponent } from "../../modes/components/assistant-mess
 import { renderSegmentTrack } from "../../modes/components/segment-track";
 import { TinyTitleDownloadProgressComponent } from "../../modes/components/tiny-title-download-progress";
 import { expandEmoticons } from "../../modes/emoji-autocomplete";
-import { materializeImageReferenceLinks } from "../../modes/image-references";
+import { materializeImageReferenceLinks, shiftImageMarkers } from "../../modes/image-references";
 import { createPromptActionAutocompleteProvider } from "../../modes/prompt-action-autocomplete";
 import type { InteractiveModeContext } from "../../modes/types";
 import manualContinuePrompt from "../../prompts/system/manual-continue.md" with { type: "text" };
@@ -932,14 +932,34 @@ export class InputController {
 			}
 			return 0;
 		}
-		const queuedText = allQueued.map(e => e.text).join("\n\n");
+		// Image markers are positional: `[Image #N]` ↔ `pendingImages[N-1]`. Each
+		// queued message numbered its markers against its own local image list
+		// (1..K). Because we prepend the queued text but append the queued images
+		// to `pendingImages`, any existing draft images (M of them) — plus images
+		// already pulled in by earlier queued messages — shift the slot index that
+		// every marker must point to. Bumping each message's markers by the
+		// running offset keeps the merged text aligned with the merged
+		// `pendingImages` order; draft markers stay valid because draft images
+		// keep their original positions.
+		const queuedImages = allQueued.flatMap(e => e.images ?? []);
+		let queuedText: string;
+		if (queuedImages.length > 0) {
+			const parts: string[] = [];
+			let imageOffset = this.ctx.pendingImages.length;
+			for (const entry of allQueued) {
+				parts.push(shiftImageMarkers(entry.text, imageOffset));
+				if (entry.images && entry.images.length > 0) imageOffset += entry.images.length;
+			}
+			queuedText = parts.join("\n\n");
+		} else {
+			queuedText = allQueued.map(e => e.text).join("\n\n");
+		}
 		const currentText = options?.currentText ?? this.ctx.editor.getText();
 		const combinedText = [queuedText, currentText].filter(t => t.trim()).join("\n\n");
 		this.ctx.editor.setText(combinedText);
 		// Hand queued images back to the pending-image buffer (links are
 		// re-materialized lazily; the restored text already carries the
-		// `[Image #N, WxH]` markers).
-		const queuedImages = allQueued.flatMap(e => e.images ?? []);
+		// renumbered `[Image #N, WxH]` markers).
 		if (queuedImages.length > 0) {
 			this.ctx.pendingImages.push(...queuedImages);
 			this.ctx.pendingImageLinks.push(...queuedImages.map(() => undefined));
