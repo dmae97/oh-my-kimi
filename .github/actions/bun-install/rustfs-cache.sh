@@ -107,7 +107,10 @@ save)
    # node_modules: save the installed trees for this exact lockfile.
    if ! s3_exists "${nm_key}.${ext}"; then
       shopt -s nullglob
-      nm_paths=(node_modules packages/*/node_modules python/robomp/web/node_modules)
+      nm_paths=()
+      for p in node_modules packages/*/node_modules python/robomp/web/node_modules; do
+         [ -d "$p" ] && nm_paths+=("$p")
+      done
       if [ ${#nm_paths[@]} -gt 0 ]; then
          tar "${tar_c[@]}" -cf "${work}/nm.${ext}" "${nm_paths[@]}"
          s3_put "${nm_key}.${ext}" "${work}/nm.${ext}"

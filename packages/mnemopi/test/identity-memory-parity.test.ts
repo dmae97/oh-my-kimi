@@ -1,9 +1,18 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BeamMemory } from "@oh-my-pi/pi-mnemopi/core/beam";
 import { Mnemopi } from "@oh-my-pi/pi-mnemopi/core/memory";
+
+// Real embeddings (fastembed + onnxruntime-node, ~270MB) install on demand via
+// `bun install` on first use. These tests assert identity filtering and FTS
+// recall, not vector search, so disable embeddings; otherwise the on-demand
+// install hangs each test past the 5s timeout (and starves siblings under
+// parallel CI).
+beforeEach(() => {
+	process.env.MNEMOPI_NO_EMBEDDINGS = "1";
+});
 
 const roots: string[] = [];
 
@@ -19,6 +28,7 @@ afterEach(() => {
 		if (root === undefined) break;
 		rmSync(root, { recursive: true, force: true });
 	}
+	delete process.env.MNEMOPI_NO_EMBEDDINGS;
 });
 
 describe("identity memory parity", () => {
