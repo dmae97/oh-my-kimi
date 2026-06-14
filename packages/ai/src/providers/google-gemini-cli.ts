@@ -447,7 +447,7 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 					const candidate = responseData.candidates?.[0];
 					if (candidate?.content?.parts) {
 						for (const part of candidate.content.parts) {
-							if (part.text !== undefined) {
+							if (part.text !== undefined && part.text !== "") {
 								const isThinking = isThinkingPart(part);
 								if (
 									!currentBlock ||
@@ -483,6 +483,18 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 										delta: part.text,
 										partial: output,
 									});
+								}
+							} else if (part.thoughtSignature && currentBlock) {
+								if (currentBlock.type === "thinking") {
+									currentBlock.thinkingSignature = retainThoughtSignature(
+										currentBlock.thinkingSignature,
+										part.thoughtSignature,
+									);
+								} else {
+									currentBlock.textSignature = retainThoughtSignature(
+										currentBlock.textSignature,
+										part.thoughtSignature,
+									);
 								}
 							}
 
