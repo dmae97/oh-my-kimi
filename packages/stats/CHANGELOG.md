@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Dropped `git` from the profanity list so normal repository mentions no longer count as profanity
+
 ## [15.12.4] - 2026-06-13
 
 ### Fixed
