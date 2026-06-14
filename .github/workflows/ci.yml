@@ -40,7 +40,7 @@ jobs:
    # ref (or from a tagged main HEAD) is also treated as a release.
    release_metadata:
       name: Resolve release metadata
-      runs-on: ubuntu-22.04
+      runs-on: omp-kata
       outputs:
          is-release: ${{ steps.detect.outputs.is-release }}
          release-tag: ${{ steps.detect.outputs.release-tag }}
@@ -83,7 +83,7 @@ jobs:
    # native artifacts for this hash. Two independent outputs:
    #   * `linux-x64-run-id` — set when the linux x64 canary
    #     (`pi-natives-linux-x64-modern-h<hash>`) is present on a prior main run,
-   #     so `test`/`native_linux_x64` can reuse it.
+   #     so native-dependent TS test jobs and `native_linux_x64` can reuse it.
    #   * `cross-platform-run-id` — set when ALL cross-platform native artifacts
    #     also have non-expired artifacts on that same prior run, so
    #     `native_cross_platform` can skip the cold rebuild on main pushes after
@@ -92,7 +92,7 @@ jobs:
    # retention window (see build-native action) is the effective TTL.
    native_artifact_lookup:
       name: Look up cached native artifacts
-      runs-on: ubuntu-22.04
+      runs-on: omp-kata
       outputs:
          source-hash: ${{ steps.compute.outputs.source-hash }}
          linux-x64-run-id: ${{ steps.find.outputs.linux-x64-run-id }}
@@ -183,7 +183,7 @@ jobs:
    # Fast lint, type check, and browser bundle build (no Rust, no native build needed)
    check:
       name: Lint, type check & web build
-      runs-on: ubuntu-22.04
+      runs-on: omp-kata
       steps:
          - uses: actions/checkout@v4
          - uses: oven-sh/setup-bun@v2
@@ -207,7 +207,7 @@ jobs:
       name: "Native: Linux x64 (${{ matrix.variant }})"
       needs: [release_metadata, native_artifact_lookup]
       if: ${{ needs.release_metadata.outputs.is-release == 'true' || needs.native_artifact_lookup.outputs.linux-x64-run-id == '' }}
-      runs-on: ubuntu-22.04
+      runs-on: omp-kata
       strategy:
          fail-fast: false
          matrix:
@@ -236,10 +236,10 @@ jobs:
          fail-fast: false
          matrix:
             include:
-               - { os: ubuntu-22.04, platform: linux, arch: arm64, target: aarch64-unknown-linux-gnu }
+               - { os: omp-kata, platform: linux, arch: arm64, target: aarch64-unknown-linux-gnu }
                - { os: macos-15-intel, platform: darwin, arch: x64, variant: baseline }
                - { os: macos-14, platform: darwin, arch: arm64 }
-               - { os: ubuntu-22.04, platform: win32, arch: x64, target: x86_64-pc-windows-msvc, variant: baseline }
+               - { os: omp-kata, platform: win32, arch: x64, target: x86_64-pc-windows-msvc, variant: baseline }
       runs-on: ${{ matrix.os }}
       steps:
          - uses: actions/checkout@v4
@@ -252,12 +252,52 @@ jobs:
               target: ${{ matrix.target }}
               save_cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
-   test:
-      name: Test & smoke (TS)
-      runs-on: ubuntu-22.04
+   test_workspace:
+      name: Test TS workspace fast
+      runs-on: omp-kata
+      timeout-minutes: 20
+      steps:
+         - uses: actions/checkout@v4
+         - uses: oven-sh/setup-bun@v2
+           with:
+              bun-version: "1.3"
+         - name: Cache bun dependencies
+           uses: actions/cache@v4
+           with:
+              path: ~/.bun/install/cache
+              key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+         - run: bun install --frozen-lockfile
+         - name: Test pure workspaces and repo scripts (TS)
+           # Keep this job native-free and parallel: it deliberately excludes
+           # coding-agent plus native/TUI/browser-ish/integration packages.
+           run: bun run ci:test:ts:workspace
+
+   test_coding_agent_fast:
+      name: Test coding-agent fast (TS)
+      runs-on: omp-kata
+      timeout-minutes: 20
+      steps:
+         - uses: actions/checkout@v4
+         - uses: oven-sh/setup-bun@v2
+           with:
+              bun-version: "1.3"
+         - name: Cache bun dependencies
+           uses: actions/cache@v4
+           with:
+              path: ~/.bun/install/cache
+              key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+         - run: bun install --frozen-lockfile
+         - name: Test coding-agent fast unit bucket
+           # The fast bucket is the conservative native-free complement. It has
+           # an explicit worker cap forever; never use package-wide fan-out here.
+           run: bun run ci:test:coding-agent:fast
+
+   test_ts_native:
+      name: Test TS native/integration packages
+      runs-on: omp-kata
       needs: [native_linux_x64, native_artifact_lookup]
       if: ${{ !cancelled() && needs.native_linux_x64.result != 'failure' }}
-      timeout-minutes: 30
+      timeout-minutes: 25
       steps:
          - uses: actions/checkout@v4
          - uses: oven-sh/setup-bun@v2
@@ -292,18 +332,184 @@ jobs:
               merge-multiple: true
               run-id: ${{ steps.source.outputs.artifact-run-id }}
               github-token: ${{ secrets.GITHUB_TOKEN }}
-         - name: Test workspace (TS)
-           # `test:ts` sets GITHUB_ACTIONS=0 inline so `bun test` skips its
-           # per-file `::group::`/`::endgroup::` annotations. Under `--workspaces`
-           # every line is prefixed with `<pkg> test: `, which breaks GHA's
-           # column-0 parsing and would leak those markers as literal log spam.
-           run: bun run test:ts
+         - name: Test native/TUI/browser-ish packages (TS)
+           run: bun run ci:test:ts:native
+
+   test_coding_agent_ui:
+      name: Test coding-agent UI/stateful (TS)
+      runs-on: omp-kata
+      needs: [native_linux_x64, native_artifact_lookup]
+      if: ${{ !cancelled() && needs.native_linux_x64.result != 'failure' }}
+      timeout-minutes: 25
+      steps:
+         - uses: actions/checkout@v4
+         - uses: oven-sh/setup-bun@v2
+           with:
+              bun-version: "1.3"
+         - name: Cache bun dependencies
+           uses: actions/cache@v4
+           with:
+              path: ~/.bun/install/cache
+              key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+         - name: Install system deps
+           run: |
+              sudo apt-get update
+              sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep imagemagick
+              sudo ln -sf "$(command -v fdfind)" /usr/local/bin/fd
+              sudo ln -sf /usr/bin/convert /usr/local/bin/magick
+         - run: bun install --frozen-lockfile
+         - name: Resolve Linux x64 native artifact run
+           id: source
+           shell: bash
+           run: |
+              if [ "${{ needs.native_linux_x64.result }}" = "success" ]; then
+                echo "artifact-run-id=${{ github.run_id }}" >> "$GITHUB_OUTPUT"
+              else
+                echo "artifact-run-id=${{ needs.native_artifact_lookup.outputs.linux-x64-run-id }}" >> "$GITHUB_OUTPUT"
+              fi
+         - name: Download native addons
+           uses: actions/download-artifact@v4
+           with:
+              pattern: pi-natives-linux-x64-*-h${{ needs.native_artifact_lookup.outputs.source-hash }}
+              path: packages/natives/native
+              merge-multiple: true
+              run-id: ${{ steps.source.outputs.artifact-run-id }}
+              github-token: ${{ secrets.GITHUB_TOKEN }}
+         - name: Test coding-agent UI/TUI bucket
+           run: bun run ci:test:coding-agent:ui
+
+   test_coding_agent_runtime:
+      name: Test coding-agent runtime/stateful (TS)
+      runs-on: omp-kata
+      needs: [native_linux_x64, native_artifact_lookup]
+      if: ${{ !cancelled() && needs.native_linux_x64.result != 'failure' }}
+      timeout-minutes: 25
+      steps:
+         - uses: actions/checkout@v4
+         - uses: oven-sh/setup-bun@v2
+           with:
+              bun-version: "1.3"
+         - name: Cache bun dependencies
+           uses: actions/cache@v4
+           with:
+              path: ~/.bun/install/cache
+              key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+         - name: Install system deps
+           run: |
+              sudo apt-get update
+              sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep imagemagick
+              sudo ln -sf "$(command -v fdfind)" /usr/local/bin/fd
+              sudo ln -sf /usr/bin/convert /usr/local/bin/magick
+         - run: bun install --frozen-lockfile
+         - name: Resolve Linux x64 native artifact run
+           id: source
+           shell: bash
+           run: |
+              if [ "${{ needs.native_linux_x64.result }}" = "success" ]; then
+                echo "artifact-run-id=${{ github.run_id }}" >> "$GITHUB_OUTPUT"
+              else
+                echo "artifact-run-id=${{ needs.native_artifact_lookup.outputs.linux-x64-run-id }}" >> "$GITHUB_OUTPUT"
+              fi
+         - name: Download native addons
+           uses: actions/download-artifact@v4
+           with:
+              pattern: pi-natives-linux-x64-*-h${{ needs.native_artifact_lookup.outputs.source-hash }}
+              path: packages/natives/native
+              merge-multiple: true
+              run-id: ${{ steps.source.outputs.artifact-run-id }}
+              github-token: ${{ secrets.GITHUB_TOKEN }}
+         - name: Test coding-agent runtime bucket
+           run: bun run ci:test:coding-agent:runtime
+
+   test_coding_agent_native:
+      name: Test coding-agent native/tooling (TS)
+      runs-on: omp-kata
+      needs: [native_linux_x64, native_artifact_lookup]
+      if: ${{ !cancelled() && needs.native_linux_x64.result != 'failure' }}
+      timeout-minutes: 25
+      steps:
+         - uses: actions/checkout@v4
+         - uses: oven-sh/setup-bun@v2
+           with:
+              bun-version: "1.3"
+         - name: Cache bun dependencies
+           uses: actions/cache@v4
+           with:
+              path: ~/.bun/install/cache
+              key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+         - name: Install system deps
+           run: |
+              sudo apt-get update
+              sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep imagemagick
+              sudo ln -sf "$(command -v fdfind)" /usr/local/bin/fd
+              sudo ln -sf /usr/bin/convert /usr/local/bin/magick
+         - run: bun install --frozen-lockfile
+         - name: Resolve Linux x64 native artifact run
+           id: source
+           shell: bash
+           run: |
+              if [ "${{ needs.native_linux_x64.result }}" = "success" ]; then
+                echo "artifact-run-id=${{ github.run_id }}" >> "$GITHUB_OUTPUT"
+              else
+                echo "artifact-run-id=${{ needs.native_artifact_lookup.outputs.linux-x64-run-id }}" >> "$GITHUB_OUTPUT"
+              fi
+         - name: Download native addons
+           uses: actions/download-artifact@v4
+           with:
+              pattern: pi-natives-linux-x64-*-h${{ needs.native_artifact_lookup.outputs.source-hash }}
+              path: packages/natives/native
+              merge-multiple: true
+              run-id: ${{ steps.source.outputs.artifact-run-id }}
+              github-token: ${{ secrets.GITHUB_TOKEN }}
+         - name: Test coding-agent native/tooling bucket
+           run: bun run ci:test:coding-agent:native
+
+   test_smoke:
+      name: Test CLI smoke (TS)
+      runs-on: omp-kata
+      needs: [native_linux_x64, native_artifact_lookup]
+      if: ${{ !cancelled() && needs.native_linux_x64.result != 'failure' }}
+      timeout-minutes: 15
+      steps:
+         - uses: actions/checkout@v4
+         - uses: oven-sh/setup-bun@v2
+           with:
+              bun-version: "1.3"
+         - name: Cache bun dependencies
+           uses: actions/cache@v4
+           with:
+              path: ~/.bun/install/cache
+              key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+         - name: Install system deps
+           run: |
+              sudo apt-get update
+              sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep imagemagick
+              sudo ln -sf "$(command -v fdfind)" /usr/local/bin/fd
+              sudo ln -sf /usr/bin/convert /usr/local/bin/magick
+         - run: bun install --frozen-lockfile
+         - name: Resolve Linux x64 native artifact run
+           id: source
+           shell: bash
+           run: |
+              if [ "${{ needs.native_linux_x64.result }}" = "success" ]; then
+                echo "artifact-run-id=${{ github.run_id }}" >> "$GITHUB_OUTPUT"
+              else
+                echo "artifact-run-id=${{ needs.native_artifact_lookup.outputs.linux-x64-run-id }}" >> "$GITHUB_OUTPUT"
+              fi
+         - name: Download native addons
+           uses: actions/download-artifact@v4
+           with:
+              pattern: pi-natives-linux-x64-*-h${{ needs.native_artifact_lookup.outputs.source-hash }}
+              path: packages/natives/native
+              merge-multiple: true
+              run-id: ${{ steps.source.outputs.artifact-run-id }}
+              github-token: ${{ secrets.GITHUB_TOKEN }}
          - name: CLI smoke test
            run: bun run ci:test:smoke
 
    install_methods:
       name: Install method smoke tests
-      runs-on: ubuntu-22.04
+      runs-on: omp-kata
       steps:
          - uses: actions/checkout@v4
          - uses: oven-sh/setup-bun@v2
@@ -350,15 +556,21 @@ jobs:
       name: "Release binary: ${{ matrix.target_id }}"
       if: ${{ needs.release_metadata.outputs.is-release == 'true' && !cancelled() &&
          needs.native_linux_x64.result == 'success' && needs.native_cross_platform.result ==
-         'success' && needs.test.result == 'success' && needs.check.result ==
-         'success' && needs.install_methods.result == 'success' }}
-      needs: [release_metadata, check, native_linux_x64, native_cross_platform, test, install_methods, native_artifact_lookup]
+         'success' && needs.test_workspace.result == 'success' &&
+         needs.test_coding_agent_fast.result == 'success' &&
+         needs.test_ts_native.result == 'success' &&
+         needs.test_coding_agent_ui.result == 'success' &&
+         needs.test_coding_agent_runtime.result == 'success' &&
+         needs.test_coding_agent_native.result == 'success' &&
+         needs.test_smoke.result == 'success' && needs.check.result == 'success' &&
+         needs.install_methods.result == 'success' }}
+      needs: [release_metadata, check, native_linux_x64, native_cross_platform, test_workspace, test_coding_agent_fast, test_ts_native, test_coding_agent_ui, test_coding_agent_runtime, test_coding_agent_native, test_smoke, install_methods, native_artifact_lookup]
       strategy:
          fail-fast: false
          matrix:
             include:
                - {
-                    os: ubuntu-22.04,
+                    os: omp-kata,
                     platform: linux,
                     arch: x64,
                     target_id: linux-x64,
@@ -386,7 +598,7 @@ jobs:
                     binary_path: packages/coding-agent/binaries/omp-darwin-arm64,
                  }
                - {
-                    os: ubuntu-22.04,
+                    os: omp-kata,
                     platform: win32,
                     arch: x64,
                     target_id: win32-x64,
@@ -469,7 +681,7 @@ jobs:
       if: ${{ needs.release_metadata.outputs.is-release == 'true' && !cancelled() &&
          needs.release_binary.result == 'success' }}
       needs: [release_metadata, release_binary]
-      runs-on: ubuntu-22.04
+      runs-on: omp-kata
       permissions:
          contents: write
       steps:
@@ -536,7 +748,7 @@ jobs:
          needs.release_github_verify.result == 'success' &&
          !inputs.skip_npm }}
       needs: [release_metadata, release_binary, release_github_verify, native_artifact_lookup]
-      runs-on: ubuntu-22.04
+      runs-on: omp-kata
       # `id-token: write` lets npm mint the GitHub OIDC token it exchanges for a
       # short-lived publish token (trusted publishing + provenance). When a
       # package has no matching trusted publisher configured, npm silently falls
@@ -591,7 +803,7 @@ jobs:
       if: ${{ needs.release_metadata.outputs.is-release == 'true' && !cancelled() &&
          needs.release_github_verify.result == 'success' }}
       needs: [release_metadata, release_github_verify]
-      runs-on: ubuntu-22.04
+      runs-on: omp-kata
       env:
          HAS_TAP_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY != '' }}
       steps:
