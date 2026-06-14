@@ -81,6 +81,8 @@ const CURSOR_END_NO_SYNC = "";
 // coordinates so columns/rows past 223 are reported.
 const MOUSE_TRACKING_ON = "\x1b[?1000h\x1b[?1003h\x1b[?1006h";
 const MOUSE_TRACKING_OFF = "\x1b[?1006l\x1b[?1003l\x1b[?1000l";
+const ALT_SCREEN_ENTER = "\x1b[?1049h";
+const ALT_SCREEN_EXIT = "\x1b[?1049l";
 
 type InputListenerResult = { consume?: boolean; data?: string } | undefined;
 type InputListener = (data: string) => InputListenerResult;
@@ -776,6 +778,11 @@ export class TUI extends Container {
 	// `#fullRedrawCount`: these never enter native scrollback and exist only for
 	// the lifetime of the drag. Exposed for tests/diagnostics.
 	#resizeViewportPaintCount = 0;
+	// During a live resize drag the terminal's normal buffer may reflow full-width
+	// rows before our repaint lands. Borrow the alternate screen for throwaway
+	// resize frames so width changes truncate the transient viewport instead of
+	// pushing wrapped fragments into native scrollback.
+	#resizeAltActive = false;
 	#stopped = false;
 	// Always-on event-loop lag probe. The high default threshold keeps it quiet;
 	// it only logs `ui.loop-blocked` (with the current loop phase) when a frame
@@ -1421,6 +1428,9 @@ export class TUI extends Container {
 	stop(): void {
 		// Leave the alt buffer first so the teardown cursor math below runs against
 		// the restored normal screen (which #previousLines still describes).
+		if (this.#resizeAltActive) {
+			this.terminal.write(this.#leaveResizeAltSequence());
+		}
 		if (this.#altActive) {
 			const kittyPop = this.terminal.kittyEnableSequence ? "\x1b[<u" : "";
 			this.terminal.write(`${MOUSE_TRACKING_OFF}${kittyPop}\x1b[?1049l`);
@@ -2744,7 +2754,7 @@ export class TUI extends Container {
 	): void {
 		this.#fullRedrawCount += 1;
 		const { chunkTo, windowTop } = options;
-		let buffer = this.#paintBeginSequence + purgeSequence;
+		let buffer = this.#paintBeginSequence + this.#leaveResizeAltSequence() + purgeSequence;
 		if (options.clearScrollback) {
 			buffer += "\x1b[2J\x1b[H\x1b[3J";
 		} else {
@@ -2818,15 +2828,10 @@ export class TUI extends Container {
 	#requestResizeViewportPaint(): void {
 		if (this.#stopped) return;
 		this.#resizeViewportPaintPending = true;
-		if (this.#renderRequested) return;
-		this.#renderRequested = true;
-		this.#renderScheduler.scheduleImmediate(() => {
-			if (this.#stopped || !this.#renderRequested) return;
-			this.#renderRequested = false;
-			this.#lastRenderAt = this.#renderScheduler.now();
-			this.#doRender();
-			if (this.#renderRequested) this.#scheduleRender();
-		});
+		this.#renderRequested = false;
+		this.#lastRenderAt = this.#renderScheduler.now();
+		this.#doRender();
+		if (this.#renderRequested) this.#scheduleRender();
 	}
 
 	/**
@@ -2886,27 +2891,43 @@ export class TUI extends Container {
 		return { window: this.#prepareLinesArray(window, width), contentRows: count };
 	}
 
+	/** Enter or leave the alternate screen borrowed for transient resize frames. */
+	#enterResizeAltSequence(): string {
+		if (this.#resizeAltActive || this.#altActive) return "";
+		this.#resizeAltActive = true;
+		setAltScreenActive(true);
+		this.#forgetHardwareCursorState();
+		this.#recordHardwareCursorHidden();
+		return `${ALT_SCREEN_ENTER}${this.terminal.kittyEnableSequence ?? ""}`;
+	}
+
+	#leaveResizeAltSequence(): string {
+		if (!this.#resizeAltActive) return "";
+		const kittyPop = this.terminal.kittyEnableSequence ? "\x1b[<u" : "";
+		this.#resizeAltActive = false;
+		setAltScreenActive(false);
+		this.#forgetHardwareCursorState();
+		return `${kittyPop}${ALT_SCREEN_EXIT}`;
+	}
+
 	/**
-	 * Emit a throwaway viewport repaint for the resize fast path as an in-place
-	 * per-row overwrite: anchor home (`\x1b[H`) and rewrite each row via
-	 * {@link #lineRewriteSequence} so every row clears its own tail with
-	 * `\x1b[K` — NO ED2, so the viewport never blanks mid-drag even when the
-	 * terminal ignores DEC 2026 synchronized output. Native scrollback is
-	 * untouched here (no ED3, no scrollback push, no committed-prefix write, no
-	 * `#commit`); the authoritative rewrap still happens once at settle via
-	 * `#emitFullPaint`.
+	 * Emit a throwaway viewport repaint for the resize fast path as an alternate-
+	 * screen per-row overwrite. The normal buffer may reflow full-width rows on a
+	 * width change before the app can repaint; keeping the drag on the alternate
+	 * screen makes those transient resizes truncate instead of pushing wrapped
+	 * fragments into native scrollback. Normal-screen history is rebuilt once at
+	 * settle via `#emitFullPaint`.
 	 */
 	#emitResizeViewport(window: readonly string[], height: number, contentRows: number, width: number): void {
-		let buffer = `${this.#paintBeginSequence}\x1b[H`;
+		let buffer = this.#paintBeginSequence + this.#enterResizeAltSequence() + "\x1b[H";
 		for (let r = 0; r < height; r++) {
 			if (r > 0) buffer += "\r\n";
 			buffer += this.#lineRewriteSequence(window[r] ?? "", width);
 		}
 		// Park the hardware cursor at the real content bottom, not the padded
-		// viewport bottom: a subsequent height shrink (the next drag step) would
-		// otherwise scroll the live rows below the cursor into native scrollback
-		// and duplicate them — one stray copy per resize event — until the settle
-		// rebuild erases it. Mirrors the authoritative paint's park (#doFullPaint).
+		// viewport bottom: a later height shrink would otherwise scroll the live
+		// rows below the cursor into native scrollback and duplicate them until
+		// the settle rebuild erases it.
 		const parkUp = height - Math.max(1, contentRows);
 		if (parkUp > 0) buffer += `\x1b[${parkUp}A`;
 		buffer += this.#paintEndSequence;
