@@ -59,6 +59,29 @@ describe("resolvePlanPath resolves literally (no plan-mode redirect)", () => {
 			path.join("/tmp/agent-artifacts", "local", "some-plan.md"),
 		);
 	});
+
+	it("unwraps a `[PATH#TAG]` hashline header to the inner filesystem path", () => {
+		const session = makeSession({ artifactsDir: "/tmp/agent-artifacts", planMode });
+		expect(resolvePlanPath(session, "[local://some-plan.md#ABCD]")).toBe(
+			path.join("/tmp/agent-artifacts", "local", "some-plan.md"),
+		);
+		expect(resolvePlanPath(session, "[/tmp/agent-artifacts/local/some-plan.md#ABCD]")).toBe(
+			path.join("/tmp/agent-artifacts", "local", "some-plan.md"),
+		);
+		expect(resolvePlanPath(session, "[local://some-plan.md]")).toBe(
+			path.join("/tmp/agent-artifacts", "local", "some-plan.md"),
+		);
+	});
+
+	it("leaves malformed bracketed paths untouched so downstream errors surface", () => {
+		const session = makeSession({ artifactsDir: "/tmp/agent-artifacts", cwd: "/repo", planMode });
+		// Inner path with a non-tag `#`, selector tail, or empty body falls outside
+		// the strict header shape and is resolved literally — `resolveToCwd` on
+		// `/repo` keeps the bracketed name intact so the eventual write/edit
+		// reports a real "file not found" instead of silently rewriting the target.
+		expect(resolvePlanPath(session, "[/tmp/x#nothex]")).toBe(path.join("/repo", "[/tmp/x#nothex]"));
+		expect(resolvePlanPath(session, "[/tmp/x#ABCD:1-2]")).toBe(path.join("/repo", "[/tmp/x#ABCD:1-2]"));
+	});
 });
 
 describe("enforcePlanModeWrite (working tree read-only, local:// sandbox writable)", () => {
@@ -104,9 +127,39 @@ describe("enforcePlanModeWrite accepts absolute local-sandbox paths", () => {
 		expect(() => enforcePlanModeWrite(session, absolute, { op: "update" })).not.toThrow();
 	});
 
-	it("still rejects an absolute path outside the local sandbox", () => {
+	it("allows bracketed hashline headers for local sandbox paths", async () => {
+		const artifactsDir = await fs.mkdtemp(path.join(os.tmpdir(), "plan-guard-test-"));
+		const session = makeSession({ artifactsDir, planMode });
+		const absolute = resolvePlanPath(session, "local://my-plan.md");
+
+		// Strict hashline shape `[PATH]` or `[PATH#XXXX]` is unwrapped to the
+		// inner path for both the sandbox check and the eventual resolution.
+		expect(() => enforcePlanModeWrite(session, `[${absolute}#ABCD]`, { op: "update" })).not.toThrow();
+		expect(() => enforcePlanModeWrite(session, `[${absolute}]`, { op: "update" })).not.toThrow();
+		expect(() => enforcePlanModeWrite(session, `[local://my-plan.md#ABCD]`, { op: "update" })).not.toThrow();
+	});
+
+	it("rejects malformed bracketed headers instead of silently unwrapping them", () => {
 		const session = makeSession({ artifactsDir: "/tmp/agent-artifacts", cwd: "/repo", planMode });
+
+		// Selector tails (`#TAG:lines`), non-hex tags, and short tags fall outside
+		// the strict header shape; we leave them alone so the downstream resolver
+		// surfaces the real error rather than treating the bracketed blob as a path.
+		expect(() =>
+			enforcePlanModeWrite(session, "[/tmp/agent-artifacts/local/plan.md#ABCD:1-2]", { op: "update" }),
+		).toThrow(/working tree is read-only/);
+		expect(() =>
+			enforcePlanModeWrite(session, "[/tmp/agent-artifacts/local/plan.md#nothex]", { op: "update" }),
+		).toThrow(/working tree is read-only/);
+	});
+
+	it("still rejects absolute paths outside the local sandbox", () => {
+		const session = makeSession({ artifactsDir: "/tmp/agent-artifacts", cwd: "/repo", planMode });
+
 		expect(() => enforcePlanModeWrite(session, "/repo/src/foo.ts", { op: "update" })).toThrow(
+			/working tree is read-only/,
+		);
+		expect(() => enforcePlanModeWrite(session, "[/repo/src/foo.ts#ABCD]", { op: "update" })).toThrow(
 			/working tree is read-only/,
 		);
 	});

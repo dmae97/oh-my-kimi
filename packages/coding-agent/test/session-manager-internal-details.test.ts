@@ -13,7 +13,8 @@
  */
 import { describe, expect, it } from "bun:test";
 import { type SkillPromptDetails, stripInternalDetailsFields } from "@oh-my-pi/pi-coding-agent/session/messages";
-import { type CustomMessageEntry, SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import type { CustomMessageEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 
 const SKILL_TYPE = "skill-prompt";
 

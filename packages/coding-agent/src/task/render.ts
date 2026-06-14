@@ -47,6 +47,12 @@ interface TaskRenderContext {
 }
 type TaskRenderOptions = RenderResultOptions & { renderContext?: TaskRenderContext };
 
+const MAX_NESTED_TASK_RENDER_DEPTH = 8;
+
+function renderNestedCycleLine(theme: Theme): string {
+	return theme.fg("dim", "… nested task progress already shown");
+}
+
 /**
  * Get status icon for agent state.
  * For running status, uses animated spinner if spinnerFrame is provided.
@@ -687,6 +693,8 @@ function renderAgentProgress(
 	theme: Theme,
 	spinnerFrame?: number,
 	frozen = false,
+	seenNestedTasks?: WeakSet<object>,
+	nestedDepth = 0,
 ): string[] {
 	const lines: string[] = [];
 
@@ -859,7 +867,15 @@ function renderAgentProgress(
 	const inflight = progress.inflightTaskDetails;
 	if (completedTaskCalls.length > 0 || inflight) {
 		const snapshots = inflight ? [...completedTaskCalls, inflight] : completedTaskCalls;
-		const nestedLines = renderNestedTaskTree(snapshots, expanded, theme, spinnerFrame, frozen);
+		const nestedLines = renderNestedTaskTree(
+			snapshots,
+			expanded,
+			theme,
+			spinnerFrame,
+			frozen,
+			seenNestedTasks,
+			nestedDepth,
+		);
 		for (const line of nestedLines) {
 			lines.push(`${continuePrefix}${line}`);
 		}
@@ -984,6 +1000,8 @@ function renderAgentResult(
 	continuePrefix: string,
 	expanded: boolean,
 	theme: Theme,
+	seenNestedTasks?: WeakSet<object>,
+	nestedDepth = 0,
 ): string[] {
 	const lines: string[] = [];
 
@@ -1088,11 +1106,24 @@ function renderAgentResult(
 			// Skip review tools - handled above
 			if (toolName === "yield" || toolName === "report_finding") continue;
 
+			const isTaskTool = toolName === "task";
+			if (isTaskTool && (dataArray as unknown[]).length > 0) {
+				for (const line of renderNestedTaskResults(
+					dataArray as TaskToolDetails[],
+					expanded,
+					theme,
+					seenNestedTasks,
+					nestedDepth,
+				)) {
+					deferredToolLines.push(`${continuePrefix}${line}`);
+				}
+				continue;
+			}
+
 			const handler = subprocessToolRegistry.getHandler(toolName);
 			if (handler?.renderFinal && (dataArray as unknown[]).length > 0) {
-				const isTaskTool = toolName === "task";
 				const component = handler.renderFinal(dataArray as unknown[], theme, expanded);
-				const target = isTaskTool ? deferredToolLines : lines;
+				const target = lines;
 				if (!isTaskTool) {
 					hasCustomRendering = true;
 					target.push(`${continuePrefix}${theme.fg("dim", `Tool: ${toolName}`)}`);
@@ -1417,15 +1448,34 @@ function nestedMarkers(isLast: boolean, theme: Theme): { prefix: string; continu
 	};
 }
 
-function renderNestedTaskResults(detailsList: TaskToolDetails[], expanded: boolean, theme: Theme): string[] {
+function renderNestedTaskResults(
+	detailsList: TaskToolDetails[],
+	expanded: boolean,
+	theme: Theme,
+	seen: WeakSet<object> = new WeakSet<object>(),
+	depth = 0,
+): string[] {
 	const lines: string[] = [];
 	for (const details of detailsList) {
-		if (!details.results || details.results.length === 0) continue;
+		if (seen.has(details)) {
+			lines.push(renderNestedCycleLine(theme));
+			continue;
+		}
+		if (depth >= MAX_NESTED_TASK_RENDER_DEPTH) {
+			lines.push(theme.fg("dim", "… nested task depth limit reached"));
+			continue;
+		}
+		seen.add(details);
+		if (!details.results || details.results.length === 0) {
+			seen.delete(details);
+			continue;
+		}
 		const ordered = orderResultsForDisplay(details.results);
 		ordered.forEach((result, index) => {
 			const { prefix, continuePrefix } = nestedMarkers(index === ordered.length - 1, theme);
-			lines.push(...renderAgentResult(result, prefix, continuePrefix, expanded, theme));
+			lines.push(...renderAgentResult(result, prefix, continuePrefix, expanded, theme, seen, depth + 1));
 		});
+		seen.delete(details);
 	}
 	return lines;
 }
@@ -1441,16 +1491,28 @@ function renderNestedTaskTree(
 	theme: Theme,
 	spinnerFrame?: number,
 	frozen = false,
+	seen: WeakSet<object> = new WeakSet<object>(),
+	depth = 0,
 ): string[] {
 	const lines: string[] = [];
 	for (const details of detailsList) {
+		if (seen.has(details)) {
+			lines.push(renderNestedCycleLine(theme));
+			continue;
+		}
+		if (depth >= MAX_NESTED_TASK_RENDER_DEPTH) {
+			lines.push(theme.fg("dim", "… nested task depth limit reached"));
+			continue;
+		}
+		seen.add(details);
 		const hasResults = Boolean(details.results && details.results.length > 0);
 		if (hasResults) {
 			const ordered = orderResultsForDisplay(details.results);
 			ordered.forEach((result, index) => {
 				const { prefix, continuePrefix } = nestedMarkers(index === ordered.length - 1, theme);
-				lines.push(...renderAgentResult(result, prefix, continuePrefix, expanded, theme));
+				lines.push(...renderAgentResult(result, prefix, continuePrefix, expanded, theme, seen, depth + 1));
 			});
+			seen.delete(details);
 			continue;
 		}
 		const inflight = details.progress;
@@ -1458,9 +1520,22 @@ function renderNestedTaskTree(
 			const ordered = orderProgressForDisplay(inflight);
 			ordered.forEach((prog, index) => {
 				const { prefix, continuePrefix } = nestedMarkers(index === ordered.length - 1, theme);
-				lines.push(...renderAgentProgress(prog, prefix, continuePrefix, expanded, theme, spinnerFrame, frozen));
+				lines.push(
+					...renderAgentProgress(
+						prog,
+						prefix,
+						continuePrefix,
+						expanded,
+						theme,
+						spinnerFrame,
+						frozen,
+						seen,
+						depth + 1,
+					),
+				);
 			});
 		}
+		seen.delete(details);
 	}
 	return lines;
 }

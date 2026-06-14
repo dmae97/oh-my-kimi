@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { RenderResultOptions } from "@oh-my-pi/pi-agent-core";
+import type { SettingPath, SettingValue } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { taskToolRenderer } from "@oh-my-pi/pi-coding-agent/task/render";
@@ -97,8 +98,12 @@ describe("task progress rendering", () => {
 
 	it("keeps the agent dot when shimmer is disabled", async () => {
 		const theme = (await getThemeByName("dark"))!;
-		resetSettingsForTest();
-		await Settings.init({ inMemory: true, overrides: { "display.shimmer": "disabled" } });
+		const settings = Settings.instance;
+		const readSetting: Settings["get"] = settings.get.bind(settings);
+		vi.spyOn(settings, "get").mockImplementation(<P extends SettingPath>(path: P): SettingValue<P> => {
+			if (path === "display.shimmer") return "disabled" as SettingValue<P>;
+			return readSetting(path);
+		});
 		const options: RenderResultOptions = { expanded: false, isPartial: true, spinnerFrame: 0 };
 
 		const strippedRow = Bun.stripANSI(

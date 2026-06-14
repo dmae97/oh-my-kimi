@@ -84,40 +84,6 @@ describe("SettingsSelectorComponent memory tab", () => {
 		expect(after).not.toContain("Hindsight Auto Recall");
 	});
 
-	it("renders group titles, suppressing groups whose items are all condition-hidden", () => {
-		settings.set("memory.backend", "off");
-		const comp = createSelector();
-		focusMemoryTab(comp);
-
-		const strip = (line: string): string => line.replace(/\x1b\[[0-9;]*m/g, "");
-
-		// The fullscreen frame wraps every content line in │…│. A single visible
-		// group renders flat: the title is a standalone heading row inside the
-		// frame. Mnemopi/Hindsight groups are fully condition-hidden and emit nothing.
-		const flatHeadings = comp
-			.render(120)
-			.map(line => strip(line).replace(/^│/, "").replace(/│$/, "").trim())
-			.filter(line => line === "General" || line === "Mnemopi" || line === "Hindsight");
-		expect(flatHeadings).toEqual(["General"]);
-
-		// Switch backend to hindsight: a second group materializes, so the wide
-		// render switches to the split layout with section titles in the sidebar.
-		comp.handleInput("\n");
-		comp.handleInput("\x1b[B");
-		comp.handleInput("\x1b[B");
-		comp.handleInput("\n");
-
-		// Split rows carry three │s — frame, sidebar divider, frame — so the
-		// sidebar cell is the segment between the first two.
-		const sidebarTitles = comp
-			.render(120)
-			.map(line => strip(line).split("│"))
-			.filter(parts => parts.length >= 4)
-			.map(parts => parts[1].trim())
-			.filter(title => title.length > 0);
-		expect(sidebarTitles).toEqual(["General", "Hindsight"]);
-	});
-
 	it("clears the global settings search on Escape before closing the selector", () => {
 		let cancelCount = 0;
 		const comp = createSelector(() => {

@@ -70,6 +70,7 @@ class _FakeRpcClient:
             messages: list = []
             events: list = []
             assistant_text: str = "ok"
+            assistant_message: dict | None = None
 
         return _Turn()
 

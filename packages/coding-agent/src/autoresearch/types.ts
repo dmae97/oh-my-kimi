@@ -1,6 +1,6 @@
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "../extensibility/extensions";
-import type { SessionEntry } from "../session/session-manager";
+import type { SessionEntry } from "../session/session-entries";
 import type { TruncationResult } from "../session/streaming-output";
 
 export type MetricDirection = "lower" | "higher";

@@ -425,6 +425,10 @@ export function fixChangelogContent(
 function hunkKey(hunk: HunkRef): string {
 	return `${hunk.path}\0${hunk.index}`;
 }
+function isAddedReleaseHeadingLine(line: string): boolean {
+	return line.startsWith("+## [");
+}
+
 
 function itemKey(pathName: string, text: string): string {
 	return `${pathName}\0${normalizeItemText(text)}`;
@@ -433,11 +437,11 @@ function itemKey(pathName: string, text: string): string {
 export function collectPromotableAddedItemLines(diffText: string): Map<string, Set<number>> {
 	const candidates: AddedItemCandidate[] = [];
 	const removals: RemovedItemOccurrence[] = [];
+	const addedReleaseHeadingHunks = new Set<string>();
 	let currentPath = "";
 	let oldLine = 0;
 	let newLine = 0;
 	let hunkIndex = -1;
-
 	for (const rawLine of diffText.replace(/\r\n/g, "\n").split("\n")) {
 		if (rawLine.startsWith("+++ b/")) {
 			currentPath = rawLine.slice("+++ b/".length);
@@ -464,6 +468,10 @@ export function collectPromotableAddedItemLines(diffText: string): Map<string, S
 		const text = rawLine.slice(1);
 		const hunk = { path: currentPath, index: hunkIndex };
 		if (marker === "+") {
+			const hunkKeyValue = hunkKey(hunk);
+			if (isAddedReleaseHeadingLine(rawLine)) {
+				addedReleaseHeadingHunks.add(hunkKeyValue);
+			}
 			if (isListItemLine(text)) {
 				candidates.push({
 					path: currentPath,
@@ -525,8 +533,8 @@ export function collectPromotableAddedItemLines(diffText: string): Map<string, S
 
 	const linesByPath = new Map<string, Set<number>>();
 	for (const candidate of candidates) {
-		if (candidate.pairedWithRemoval) continue;
 		const key = hunkKey(candidate.hunk);
+		if (candidate.pairedWithRemoval || addedReleaseHeadingHunks.has(key)) continue;
 		const unpairedRemovalCount = unpairedRemovalCountByHunk.get(key) ?? 0;
 		if (unpairedRemovalCount > 0) {
 			unpairedRemovalCountByHunk.set(key, unpairedRemovalCount - 1);

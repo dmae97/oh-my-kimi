@@ -372,7 +372,7 @@ export function convertTools(
 				description: tool.description || "",
 				...(useParameters
 					? { parameters: normalizeSchemaForCCA(toolWireSchema(tool)) }
-					: { parametersJsonSchema: toolWireSchema(tool) }),
+					: { parametersJsonSchema: normalizeSchemaForGoogle(toolWireSchema(tool)) }),
 			})),
 		},
 	];
@@ -609,7 +609,7 @@ export async function consumeGoogleStream<T extends GoogleApiType>(args: {
 		const candidate = chunk.candidates?.[0];
 		if (candidate?.content?.parts) {
 			for (const part of candidate.content.parts) {
-				if (part.text !== undefined) {
+				if (part.text !== undefined && part.text !== "") {
 					if (!firstTokenSeen) {
 						firstTokenSeen = true;
 						onFirstToken?.();
@@ -649,6 +649,18 @@ export async function consumeGoogleStream<T extends GoogleApiType>(args: {
 							delta: part.text,
 							partial: output,
 						});
+					}
+				} else if (part.text === "" && part.thoughtSignature && currentBlock && !part.functionCall) {
+					if (currentBlock.type === "thinking") {
+						currentBlock.thinkingSignature = retainThoughtSignature(
+							currentBlock.thinkingSignature,
+							part.thoughtSignature,
+						);
+					} else if (retainTextSignature) {
+						currentBlock.textSignature = retainThoughtSignature(
+							currentBlock.textSignature,
+							part.thoughtSignature,
+						);
 					}
 				}
 

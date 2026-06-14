@@ -105,18 +105,12 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 	};
 
 	// `--` ends option parsing (POSIX end-of-options). Everything after it is
-	// literal positional text, so `omp -- --profile work` sends the tokens
-	// `--profile` and `work` as the message instead of selecting a profile.
-	let passThrough = false;
-
+	// literal positional text, so flag-shaped messages are not parsed or rejected.
+	let sawSeparator = false;
 	for (let i = 0; i < args.length; i++) {
 		let arg = args[i];
-		if (passThrough) {
+		if (sawSeparator) {
 			result.messages.push(arg);
-			continue;
-		}
-		if (arg === "--") {
-			passThrough = true;
 			continue;
 		}
 		if (arg === PROFILE_BOOTSTRAP_BOUNDARY_ARG) {
@@ -208,10 +202,15 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 			result.autoApprove = true;
 		} else if (arg.startsWith("@")) {
 			result.fileArgs.push(arg.slice(1)); // Remove @ prefix
-		} else if (!arg.startsWith("-") || arg === "-" || arg === "--") {
-			// Plain positional, lone `-` (stdin marker), or POSIX positional
-			// separator `--` — pass through as a message rather than flagging it.
-			if (arg !== "--") result.messages.push(arg);
+		} else if (!arg.startsWith("-") || arg === "-") {
+			// Plain positional or lone `-` (stdin marker) — pass through as a
+			// message rather than flagging it.
+			result.messages.push(arg);
+		} else if (arg === "--") {
+			// POSIX positional separator: drop the token and switch the loop
+			// into "everything from here is a positional" mode. The guard at
+			// the top of the loop body handles the remaining tokens.
+			sawSeparator = true;
 		} else {
 			// Flag-shaped (`-x`, `--name`) but unrecognized at this parse. Record
 			// it so the post-extension reparse can decide whether to surface it

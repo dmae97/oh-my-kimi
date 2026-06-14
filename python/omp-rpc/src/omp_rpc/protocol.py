@@ -11,6 +11,7 @@ JsonValue: TypeAlias = JsonPrimitive | list["JsonValue"] | dict[str, "JsonValue"
 JsonObject: TypeAlias = dict[str, JsonValue]
 
 Attribution: TypeAlias = Literal["user", "agent"]
+Effort: TypeAlias = Literal["minimal", "low", "medium", "high", "xhigh"]
 ThinkingLevel: TypeAlias = Literal["off", "minimal", "low", "medium", "high", "xhigh"]
 StreamingBehavior: TypeAlias = Literal["steer", "followUp"]
 SteeringMode: TypeAlias = Literal["all", "one-at-a-time"]
@@ -48,9 +49,10 @@ INTERACTIVE_EXTENSION_UI_METHODS: Final[frozenset[InteractiveExtensionUiMethod]]
 VALUE_EXTENSION_UI_METHODS: Final[frozenset[ValueExtensionUiMethod]] = frozenset(
     {"select", "input", "editor"}
 )
-_THINKING_LEVEL_VALUES: Final[frozenset[str]] = frozenset(
-    {"off", "minimal", "low", "medium", "high", "xhigh"}
+_EFFORT_VALUES: Final[frozenset[str]] = frozenset(
+    {"minimal", "low", "medium", "high", "xhigh"}
 )
+_THINKING_LEVEL_VALUES: Final[frozenset[str]] = _EFFORT_VALUES | frozenset({"off"})
 _STEERING_MODE_VALUES: Final[frozenset[str]] = frozenset({"all", "one-at-a-time"})
 _INTERRUPT_MODE_VALUES: Final[frozenset[str]] = frozenset({"immediate", "wait"})
 _STOP_REASON_VALUES: Final[frozenset[str]] = frozenset(
@@ -696,9 +698,14 @@ class ModelCost:
 
 @dataclass(slots=True, frozen=True)
 class ThinkingConfig:
-    min_level: ThinkingLevel
-    max_level: ThinkingLevel
     mode: str
+    efforts: tuple[Effort, ...]
+    default_level: Effort | None = None
+    effort_map: dict[str, str] | None = None
+    supports_display: bool | None = None
+    effort_routing: dict[str, str] | None = None
+    suppress_when_off: bool | None = None
+    requires_effort: bool | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -1128,6 +1135,45 @@ def assistant_text_with_thinking(message: AgentMessage) -> str | None:
     return assistant_text(message, include_thinking=True)
 
 
+def _parse_thinking_config(payload: object) -> ThinkingConfig | None:
+    if not isinstance(payload, dict):
+        return None
+    raw_efforts = payload.get("efforts")
+    if not isinstance(raw_efforts, list):
+        raise ValueError("model.thinking.efforts must be a list")
+    efforts: tuple[Effort, ...] = tuple(
+        cast(Effort, _require_literal(item, _EFFORT_VALUES, field="model.thinking.efforts[]"))
+        for item in raw_efforts
+    )
+    return ThinkingConfig(
+        mode=_require_str(cast(JsonObject, payload), "mode"),
+        efforts=efforts,
+        default_level=cast(
+            Effort | None,
+            _optional_literal(
+                payload.get("defaultLevel"),
+                _EFFORT_VALUES,
+                field="model.thinking.defaultLevel",
+            ),
+        ),
+        effort_map=cast(
+            dict[str, str] | None,
+            _optional_json_object(
+                payload.get("effortMap"), field="model.thinking.effortMap"
+            ),
+        ),
+        supports_display=_optional_bool(cast(JsonObject, payload), "supportsDisplay"),
+        effort_routing=cast(
+            dict[str, str] | None,
+            _optional_json_object(
+                payload.get("effortRouting"), field="model.thinking.effortRouting"
+            ),
+        ),
+        suppress_when_off=_optional_bool(cast(JsonObject, payload), "suppressWhenOff"),
+        requires_effort=_optional_bool(cast(JsonObject, payload), "requiresEffort"),
+    )
+
+
 def parse_model_info(payload: JsonObject | None) -> ModelInfo | None:
     if payload is None:
         return None
@@ -1168,29 +1214,7 @@ def parse_model_info(payload: JsonObject | None) -> ModelInfo | None:
             else None
         ),
         priority=int(payload["priority"]) if "priority" in payload else None,
-        thinking=(
-            ThinkingConfig(
-                min_level=cast(
-                    ThinkingLevel,
-                    _require_literal(
-                        thinking_payload.get("minLevel"),
-                        _THINKING_LEVEL_VALUES,
-                        field="model.thinking.minLevel",
-                    ),
-                ),
-                max_level=cast(
-                    ThinkingLevel,
-                    _require_literal(
-                        thinking_payload.get("maxLevel"),
-                        _THINKING_LEVEL_VALUES,
-                        field="model.thinking.maxLevel",
-                    ),
-                ),
-                mode=_require_str(cast(JsonObject, thinking_payload), "mode"),
-            )
-            if isinstance(thinking_payload, dict)
-            else None
-        ),
+        thinking=_parse_thinking_config(thinking_payload),
         compat=_optional_json_object(compat_payload, field="model.compat"),
     )
 

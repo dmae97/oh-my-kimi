@@ -175,6 +175,7 @@ function createContext(): {
 		} as unknown as InteractiveModeContext["keybindings"],
 		pendingImages: [],
 		pendingImageLinks: [],
+		compactionQueuedMessages: [],
 		isBashMode: false,
 		isPythonMode: false,
 		optimisticUserMessageSignature: undefined,
@@ -243,6 +244,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+	vi.restoreAllMocks();
 	resetSettingsForTest();
 });
 
@@ -430,17 +432,22 @@ describe("InputController escape behavior", () => {
 		expect(spies.abort).not.toHaveBeenCalled();
 	});
 
-	it("routes focused left-left through the global input listener like Esc", () => {
+	it("routes a focused double-← through the global input listener like Esc", () => {
+		const now = vi.spyOn(Date, "now");
 		const { ctx, inputListeners } = createContext();
 		Object.defineProperty(ctx, "focusedAgentId", { value: "Worker", configurable: true });
-		ctx.lastLeftTapTime = Date.now();
+		ctx.lastLeftTapTime = 0;
 		const controller = new InputController(ctx);
 
 		controller.setupKeyHandlers();
-		const result = inputListeners[0]("\x1b[D");
+		now.mockReturnValue(2_000);
+		const first = inputListeners[0]("\x1b[D");
+		now.mockReturnValue(2_200); // 200ms later — a deliberate second tap
+		const second = inputListeners[0]("\x1b[D");
 
-		expect(result).toEqual({ consume: true });
-
+		// Both taps are consumed; only the second completes the gesture.
+		expect(first).toEqual({ consume: true });
+		expect(second).toEqual({ consume: true });
 		expect(ctx.unfocusSession).toHaveBeenCalledTimes(1);
 		expect(ctx.focusParentSession).not.toHaveBeenCalled();
 	});
@@ -536,5 +543,62 @@ describe("InputController Ctrl+C behavior", () => {
 		editor.onEscape?.(); // Esc is a different handler
 
 		expect(spies.flushSync).not.toHaveBeenCalled();
+	});
+});
+
+describe("InputController double-tap ← gesture", () => {
+	function setup(focusedAgentId?: string) {
+		const { ctx, editor } = createContext();
+		(ctx as { lastLeftTapTime: number }).lastLeftTapTime = 0;
+		(ctx as { focusedAgentId?: string }).focusedAgentId = focusedAgentId;
+		const controller = new InputController(ctx);
+		controller.setupKeyHandlers();
+		return {
+			ctx,
+			showAgentHub: ctx.showAgentHub as Spy,
+			unfocusSession: ctx.unfocusSession as Spy,
+			tap: () => editor.onLeftAtStart?.(),
+		};
+	}
+
+	it("opens the Agent Hub on a deliberate double-tap", () => {
+		const now = vi.spyOn(Date, "now");
+		const { showAgentHub, tap } = setup();
+		now.mockReturnValue(1_000);
+		tap();
+		now.mockReturnValue(1_200); // 200ms later — a human double-tap
+		tap();
+		expect(showAgentHub).toHaveBeenCalledTimes(1);
+	});
+
+	it("ignores a terminal-synthesized burst of ← arrows arriving together", () => {
+		const now = vi.spyOn(Date, "now");
+		const { showAgentHub, tap } = setup();
+		// A "click to move cursor" burst delivers every arrow in one stdin read,
+		// so all taps share the same millisecond timestamp.
+		now.mockReturnValue(1_000);
+		for (let i = 0; i < 6; i++) tap();
+		expect(showAgentHub).not.toHaveBeenCalled();
+	});
+
+	it("ignores a second tap closer than the human-plausible minimum gap", () => {
+		const now = vi.spyOn(Date, "now");
+		const { showAgentHub, tap } = setup();
+		now.mockReturnValue(1_000);
+		tap();
+		now.mockReturnValue(1_010); // 10ms later — too fast to be deliberate
+		tap();
+		expect(showAgentHub).not.toHaveBeenCalled();
+	});
+
+	it("returns a focused subagent view to the main session on a deliberate double-tap", () => {
+		const now = vi.spyOn(Date, "now");
+		const { showAgentHub, unfocusSession, tap } = setup("Agent1");
+		now.mockReturnValue(1_000);
+		tap();
+		now.mockReturnValue(1_200);
+		tap();
+		expect(unfocusSession).toHaveBeenCalledTimes(1);
+		expect(showAgentHub).not.toHaveBeenCalled();
 	});
 });

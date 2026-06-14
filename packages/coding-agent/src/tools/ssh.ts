@@ -346,7 +346,8 @@ export const sshToolRenderer = {
 		});
 	},
 	mergeCallAndResult: true,
-	// Pending preview caps the command to a viewport-sized tail window that
-	// shifts while args stream; keep it out of native scrollback mid-run.
-	provisionalPendingPreview: true,
+	// Collapsed pending preview caps the command to a viewport-sized tail window
+	// that shifts while args stream. Expanded output is top-anchored enough for
+	// the transcript to commit its settled prefix.
+	provisionalPendingPreview: "collapsed",
 };

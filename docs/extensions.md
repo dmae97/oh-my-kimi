@@ -151,11 +151,29 @@ Handlers and tool `execute` receive `ctx` with:
 - `cwd`
 - `sessionManager` (read-only)
 - `modelRegistry`, `model`
+- `models` (read-only model query — see below)
 - `getContextUsage()`
 - `compact(...)`
 - `isIdle()`, `hasPendingMessages()`, `abort()`
 - `shutdown()`
 - `getSystemPrompt()`
+
+### Model selection (`ctx.models`)
+
+`ctx.models` is a read-only facade for picking and comparing models the same way core does:
+
+- `list()` — authenticated models available this session.
+- `current()` — the live session model (read lazily, so it reflects `/model` switches).
+- `resolve(spec)` — a model string (`provider/id`, bare id) or role alias (`pi/slow`, a configured role) → `Model`, honoring the same settings-backed aliases and match preferences as `--model`. Returns `undefined` when nothing matches.
+- `family(model)` — an opaque lineage token for "same family?" checks (Claude point releases share a token; Claude and GPT differ). Compare it; don't persist it (the vocabulary tracks new releases).
+
+```ts
+// Pick a model from a different family than the current one (e.g. a cross-family reviewer).
+const current = ctx.models.current();
+const contrasting = ctx.models
+  .list()
+  .find(m => current && ctx.models.family(m) !== ctx.models.family(current));
+```
 
 ## 3) Command context (`ExtensionCommandContext`)
 

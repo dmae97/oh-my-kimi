@@ -641,6 +641,33 @@ providers:
       type: openai-models-list
 ```
 
+The built-in vLLM provider can be pointed at a non-default endpoint without declaring a custom discovery type. OMP uses vLLM's `/v1/models` metadata and preserves vLLM's `max_model_len` field as the discovered context window.
+
+```yaml
+providers:
+  vllm:
+    baseUrl: http://192.168.5.3:8085/v1
+    auth: none
+```
+
+For multiple vLLM endpoints, use arbitrary provider IDs with the generic OpenAI-compatible discovery path. Set `auth: none` for local no-auth servers or `apiKey` for authenticated ones. Generic discovery reads `max_model_len` first and then `context_length` as a generic OpenAI-compatible fallback.
+
+```yaml
+providers:
+  vllm-fast:
+    baseUrl: http://host-a:8000/v1
+    auth: none
+    api: openai-completions
+    discovery:
+      type: openai-models-list
+  vllm-long:
+    baseUrl: http://host-b:8000/v1
+    auth: none
+    api: openai-completions
+    discovery:
+      type: openai-models-list
+```
+
 ### Hosted proxy with env-based key
 
 ```yaml

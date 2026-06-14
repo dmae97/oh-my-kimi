@@ -42,8 +42,8 @@ export function HeaderBar({ snapshot, subCount, railOpen, onToggleRail, onLeave 
 						read-only
 					</span>
 				)}
-				{state?.model && <span className="sh-chip">{state.model.name}</span>}
-				{state?.thinkingLevel && <span className="sh-chip">{state.thinkingLevel}</span>}
+				{state?.model && <span className="sh-chip sh-chip-meta">{state.model.name}</span>}
+				{state?.thinkingLevel && <span className="sh-chip sh-chip-meta">{state.thinkingLevel}</span>}
 				{pct != null && (
 					<span
 						className={pct > 80 ? "sh-gauge sh-gauge-warn" : "sh-gauge"}

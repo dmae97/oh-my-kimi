@@ -172,34 +172,49 @@ function resolveManifestEntryFile(joined: string): string | null {
  * Handles both single-string and string[] base entries, plus feature-specific entries.
  */
 function resolvePluginPaths(plugin: InstalledPlugin, key: "tools" | "hooks" | "commands" | "extensions"): string[] {
-	const paths: string[] = [];
+	const resolved: string[] = [];
+	for (const entry of resolvePluginManifestEntries(plugin, key)) {
+		if (entry.resolvedPath) {
+			resolved.push(entry.resolvedPath);
+		}
+	}
+	return resolved;
+}
+
+/**
+ * Declared manifest entries paired with their resolved file path. Returns one
+ * record per declared entry — base entries first, then enabled-feature entries
+ * — so callers (e.g. install-time validation) can detect manifest entries that
+ * point at missing files instead of silently skipping them like
+ * {@link resolvePluginPaths} does.
+ */
+export function resolvePluginManifestEntries(
+	plugin: InstalledPlugin,
+	key: "tools" | "hooks" | "commands" | "extensions",
+): Array<{ entry: string; resolvedPath: string | null }> {
+	const declared: Array<{ entry: string; resolvedPath: string | null }> = [];
 	const manifest = plugin.manifest;
 
-	// Base entry (always included if exists)
+	const resolveEntry = (entry: string): { entry: string; resolvedPath: string | null } => ({
+		entry,
+		resolvedPath: resolveManifestEntryFile(path.join(plugin.path, entry)),
+	});
+
 	const base = manifest[key];
 	if (base) {
 		const entries = Array.isArray(base) ? base : [base];
 		for (const entry of entries) {
-			const resolved = resolveManifestEntryFile(path.join(plugin.path, entry));
-			if (resolved) {
-				paths.push(resolved);
-			}
+			declared.push(resolveEntry(entry));
 		}
 	}
 
-	// Feature-specific entries
 	if (manifest.features && plugin.enabledFeatures) {
 		const enabledSet = new Set(plugin.enabledFeatures);
-
 		for (const [featName, feat] of Object.entries(manifest.features)) {
 			if (!enabledSet.has(featName)) continue;
-
 			if (feat[key]) {
 				for (const entry of feat[key]) {
-					const resolved = resolveManifestEntryFile(path.join(plugin.path, entry));
-					if (resolved) {
-						paths.push(resolved);
-					}
+					declared.push(resolveEntry(entry));
 				}
 			}
 		}
@@ -207,19 +222,15 @@ function resolvePluginPaths(plugin: InstalledPlugin, key: "tools" | "hooks" | "c
 		// null means use defaults - enable features with default: true
 		for (const [_featName, feat] of Object.entries(manifest.features)) {
 			if (!feat.default) continue;
-
 			if (feat[key]) {
 				for (const entry of feat[key]) {
-					const resolved = resolveManifestEntryFile(path.join(plugin.path, entry));
-					if (resolved) {
-						paths.push(resolved);
-					}
+					declared.push(resolveEntry(entry));
 				}
 			}
 		}
 	}
 
-	return paths;
+	return declared;
 }
 
 export function resolvePluginToolPaths(plugin: InstalledPlugin): string[] {

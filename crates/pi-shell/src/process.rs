@@ -65,6 +65,7 @@ mod platform {
 
 			let mut seen: HashSet<i32> = HashSet::new();
 			let mut out = Vec::new();
+			let mut children_file_available = false;
 			for entry in entries.flatten() {
 				let name = entry.file_name();
 				let Some(tid_str) = name.to_str() else {
@@ -77,24 +78,54 @@ mod platform {
 				let Ok(content) = fs::read_to_string(&children_path) else {
 					continue;
 				};
+				// The file is readable -> this kernel has CONFIG_PROC_CHILDREN.
+				children_file_available = true;
 				for part in content.split_whitespace() {
 					let Ok(child_pid) = part.parse::<i32>() else {
 						continue;
 					};
-					if !seen.insert(child_pid) {
-						continue;
-					}
-					let Some(child) = Self::from_pid(child_pid) else {
+					self.push_validated_child(child_pid, &mut seen, &mut out);
+				}
+			}
+
+			// Some Kata / microVM guest kernels are built without CONFIG_PROC_CHILDREN,
+			// so no `.../children` file exists and the walk above finds nothing — which
+			// would silently turn descendant signaling (cancellation cleanup) into a
+			// no-op inside such containers. Fall back to scanning `/proc` and grouping
+			// by parent pid, the same primitive the macOS path uses. Only taken when no
+			// `children` file was readable, so kernels that support it keep the cheap
+			// per-task fast path.
+			if !children_file_available && let Ok(proc_entries) = fs::read_dir("/proc") {
+				for entry in proc_entries.flatten() {
+					let name = entry.file_name();
+					let Some(pid_str) = name.to_str() else {
 						continue;
 					};
-					if child.status() == ProcessStatus::Running
-						&& current_parent_pid(child.pid) == Some(self.pid)
-					{
-						out.push(child);
-					}
+					let Ok(child_pid) = pid_str.parse::<i32>() else {
+						continue;
+					};
+					self.push_validated_child(child_pid, &mut seen, &mut out);
 				}
 			}
 			out
+		}
+
+		/// Validate a candidate child pid — dedup, still running, and currently
+		/// parented to `self` — then push it onto `out`. Shared by the
+		/// `/proc/<pid>/task/<tid>/children` fast path and the `/proc`-scan
+		/// fallback for kernels without `CONFIG_PROC_CHILDREN`.
+		fn push_validated_child(&self, child_pid: i32, seen: &mut HashSet<i32>, out: &mut Vec<Self>) {
+			if child_pid == self.pid || !seen.insert(child_pid) {
+				return;
+			}
+			let Some(child) = Self::from_pid(child_pid) else {
+				return;
+			};
+			if child.status() == ProcessStatus::Running
+				&& current_parent_pid(child.pid) == Some(self.pid)
+			{
+				out.push(child);
+			}
 		}
 
 		pub fn parent_pid(&self) -> Option<i32> {
@@ -805,7 +836,7 @@ mod platform {
 			}
 		}
 
-		fn as_raw(&self) -> Handle {
+		const fn as_raw(&self) -> Handle {
 			self.raw as Handle
 		}
 	}
@@ -932,7 +963,7 @@ mod platform {
 			unsafe { TerminateProcess(self.handle.as_raw(), 1) != 0 }
 		}
 
-		pub const fn group_id(&self) -> Option<i32> {
+		pub const fn group_id() -> Option<i32> {
 			None
 		}
 
@@ -1047,7 +1078,7 @@ mod platform {
 	}
 
 	fn read_remote_unicode_string(handle: Handle, value: UnicodeString) -> Option<String> {
-		if value.length == 0 || value.buffer == 0 || value.length % 2 != 0 {
+		if value.length == 0 || value.buffer == 0 || !value.length.is_multiple_of(2) {
 			return None;
 		}
 		let code_units = usize::from(value.length) / size_of::<u16>();
@@ -1135,7 +1166,7 @@ mod platform {
 		OwnedHandle::from_raw(snapshot)
 	}
 
-	fn process_entry() -> PROCESSENTRY32W {
+	const fn process_entry() -> PROCESSENTRY32W {
 		PROCESSENTRY32W {
 			dwSize:              mem::size_of::<PROCESSENTRY32W>() as u32,
 			cntUsage:            0,
@@ -1288,6 +1319,13 @@ impl Process {
 	}
 
 	/// Process group id for this process, when supported by the platform.
+	#[cfg(target_os = "windows")]
+	#[must_use]
+	pub const fn group_id(&self) -> Option<i32> {
+		platform::Process::group_id()
+	}
+
+	#[cfg(not(target_os = "windows"))]
 	#[must_use]
 	pub fn group_id(&self) -> Option<i32> {
 		self.inner.group_id()
@@ -1357,7 +1395,7 @@ impl Process {
 		// If self leads its own process group, also signal the group — this catches
 		// grandchildren reparented to init when their immediate parent died inside
 		// the descendant walk.
-		if let Some(pgid) = self.inner.group_id()
+		if let Some(pgid) = self.group_id()
 			&& pgid == self.inner.pid()
 		{
 			let _ = kill_process_group(pgid, signal);

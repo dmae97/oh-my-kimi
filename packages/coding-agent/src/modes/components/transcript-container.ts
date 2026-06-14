@@ -435,6 +435,14 @@ export class TranscriptContainer
 	// until it re-earns append-only via VOLATILE_REARM_FRAMES clean frames;
 	// the engine then backfills the stalled gap.
 	#nativeScrollbackCommitSafeEnd: number | undefined;
+	// Local line index up to which the leading run of live blocks is DURABLE: a
+	// commit-stable block's full body is permanent content even while its interior
+	// rows re-lay-out (a streaming markdown table re-aligning columns), so the
+	// engine must append their scroll-off snapshot rather than drop it. Reported
+	// separately from the byte-stable commit-safe end because these rows may still
+	// drift after commit; the engine commits them audit-exempt. Provisional
+	// (commit-unstable) blocks never extend it.
+	#nativeScrollbackSnapshotSafeEnd: number | undefined;
 	// Persistent assembled transcript rows. Rows before the stable floor are
 	// byte-identical to the previous render; rows at/after it were re-pushed.
 	#lines: string[] = [];
@@ -477,6 +485,10 @@ export class TranscriptContainer
 
 	getNativeScrollbackCommitSafeEnd(): number | undefined {
 		return this.#nativeScrollbackCommitSafeEnd;
+	}
+
+	getNativeScrollbackSnapshotSafeEnd(): number | undefined {
+		return this.#nativeScrollbackSnapshotSafeEnd;
 	}
 
 	/**
@@ -570,6 +582,7 @@ export class TranscriptContainer
 		width = Math.max(1, width);
 		this.#nativeScrollbackLiveRegionStart = undefined;
 		this.#nativeScrollbackCommitSafeEnd = undefined;
+		this.#nativeScrollbackSnapshotSafeEnd = undefined;
 
 		const count = this.children.length;
 
@@ -741,6 +754,16 @@ export class TranscriptContainer
 				const safeLength = finalized ? contribution.length : (liveCommitState?.safeLength ?? 0);
 				if (safeLength > 0) {
 					this.#nativeScrollbackCommitSafeEnd = blockStart + safeLength;
+				}
+				// Durable snapshot end: a commit-stable block's whole body is durable
+				// content — its scrolled-off rows are permanent even while interior
+				// rows re-lay-out (a streaming table re-aligning columns), so the
+				// engine must commit their snapshot on scroll-off rather than drop it.
+				// Finalized blocks are wholly durable; provisional (commit-unstable)
+				// blocks offer nothing beyond their byte-stable safe length.
+				const snapshotLength = finalized || isBlockCommitStable(child) ? contribution.length : safeLength;
+				if (snapshotLength > 0) {
+					this.#nativeScrollbackSnapshotSafeEnd = blockStart + snapshotLength;
 				}
 				// A finalized, fully safe block may let the contiguous safe run extend
 				// into blocks rendered below it. A still-live block keeps pushing lower

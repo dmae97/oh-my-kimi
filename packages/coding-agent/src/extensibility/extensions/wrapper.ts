@@ -121,8 +121,36 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		const approvalCheck = requiresApproval(this.tool, params, approvalMode, userPolicies);
 
 		if (approvalCheck.required) {
+			const hasApprovalHandlers =
+				this.runner.hasHandlers("tool_approval_requested") || this.runner.hasHandlers("tool_approval_resolved");
+			const sessionId = context?.sessionManager?.getSessionId() ?? "";
+			if (hasApprovalHandlers) {
+				await this.runner.emit({
+					type: "tool_approval_requested",
+					sessionId,
+					toolName: this.tool.name,
+					toolCallId,
+					...(approvalCheck.reason ? { reason: approvalCheck.reason } : {}),
+					approvalMode,
+				});
+			}
+
+			const resolveApproval = async (approved: boolean, reason?: string) => {
+				if (!hasApprovalHandlers) return;
+				await this.runner.emit({
+					type: "tool_approval_resolved",
+					sessionId,
+					toolName: this.tool.name,
+					toolCallId,
+					approved,
+					...(reason ? { reason } : {}),
+				});
+			};
+
 			// Check if UI is available
 			if (!this.runner.hasUI()) {
+				const reason = "no interactive UI available";
+				await resolveApproval(false, reason);
 				throw new Error(
 					`Tool "${this.tool.name}" requires approval but no interactive UI available.\n` +
 						`Options:\n` +
@@ -133,11 +161,19 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 			}
 
 			const uiContext = this.runner.getUIContext();
-			const choice = await uiContext.select(formatApprovalPrompt(this.tool, params, approvalCheck.reason), [
-				"Approve",
-				"Deny",
-			]);
-			if (choice !== "Approve") {
+			let choice: string | undefined;
+			try {
+				choice = await uiContext.select(formatApprovalPrompt(this.tool, params, approvalCheck.reason), [
+					"Approve",
+					"Deny",
+				]);
+			} catch (err) {
+				await resolveApproval(false, err instanceof Error ? err.message : "approval aborted");
+				throw err;
+			}
+			const approved = choice === "Approve";
+			await resolveApproval(approved, approved ? undefined : "denied by user");
+			if (!approved) {
 				throw new Error(`Tool call denied by user: ${this.tool.name}`);
 			}
 		}

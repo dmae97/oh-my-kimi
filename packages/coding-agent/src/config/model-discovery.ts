@@ -393,12 +393,16 @@ export async function discoverOpenAIModelsList(
 	const response = apiKey
 		? await withAuth(apiKey, key => attempt({ ...baseHeaders, Authorization: `Bearer ${key}` }))
 		: await attempt(baseHeaders);
-	const payload = (await response.json()) as { data?: Array<{ id: string }> };
+	const payload = (await response.json()) as {
+		data?: Array<{ id?: string; max_model_len?: unknown; context_length?: unknown }>;
+	};
 	const models = payload.data ?? [];
 	const discovered: Model<Api>[] = [];
 	for (const item of models) {
 		const id = item.id;
 		if (!id) continue;
+		const contextWindow =
+			toPositiveNumberOrUndefined(item.max_model_len) ?? toPositiveNumberOrUndefined(item.context_length) ?? 128000;
 		discovered.push(
 			buildModel({
 				id,
@@ -409,8 +413,8 @@ export async function discoverOpenAIModelsList(
 				reasoning: false,
 				input: ["text"],
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-				contextWindow: 128000,
-				maxTokens: discoveryDefaultMaxTokens(providerConfig.api),
+				contextWindow,
+				maxTokens: Math.min(contextWindow, discoveryDefaultMaxTokens(providerConfig.api)),
 				headers,
 				compat: {
 					supportsStore: false,
@@ -463,7 +467,7 @@ export async function discoverProxyModels(
 		? await withAuth(apiKey, key => attempt({ ...baseHeaders, Authorization: `Bearer ${key}` }))
 		: await attempt(baseHeaders);
 	const payload = (await response.json()) as {
-		data?: Array<{ id?: string; name?: string; supported_endpoint_types?: string[] }>;
+		data?: Array<{ id?: string; name?: string; supported_endpoint_types?: string[]; context_length?: number }>;
 	};
 	const items = payload.data ?? [];
 	const discovered: Model<Api>[] = [];
@@ -499,7 +503,9 @@ export async function discoverProxyModels(
 				// upstream bundled catalogs, so keep costs local-unknown even when
 				// we successfully recover the upstream model identity.
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-				contextWindow: reference?.contextWindow ?? 128000,
+				// Prefer the context_length the API reports for this model; fall
+				// back to the bundled reference, then a sane default.
+				contextWindow: toPositiveNumberOrUndefined(item.context_length) ?? reference?.contextWindow ?? 128000,
 				maxTokens: reference?.maxTokens ?? discoveryDefaultMaxTokens(api),
 				headers,
 				// OpenAI-compat fields are no-ops on anthropic models; the

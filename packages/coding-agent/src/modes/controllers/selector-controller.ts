@@ -28,7 +28,8 @@ import {
 } from "../../modes/theme/theme";
 import type { InteractiveModeContext } from "../../modes/types";
 import type { ResetCreditRedeemOutcome } from "../../session/auth-storage";
-import { type SessionInfo, SessionManager } from "../../session/session-manager";
+import type { SessionInfo } from "../../session/session-listing";
+import { SessionManager } from "../../session/session-manager";
 import { FileSessionStorage } from "../../session/session-storage";
 import { type LogoutAccount, toLogoutAccounts } from "../../slash-commands/helpers/logout";
 import {
@@ -1202,7 +1203,7 @@ export class SelectorController {
 		});
 	}
 
-	showAgentHub(observers: SessionObserverRegistry): void {
+	showAgentHub(observers: SessionObserverRegistry, options?: { requireContent?: boolean }): void {
 		const hubKeys = [
 			...this.ctx.keybindings.getKeys("app.agents.hub"),
 			...this.ctx.keybindings.getKeys("app.session.observe"),
@@ -1233,6 +1234,15 @@ export class SelectorController {
 			focusAgent: id => this.ctx.focusAgentSession(id),
 			sessionFile: this.ctx.sessionManager.getSessionFile() ?? null,
 		});
+
+		// The double-← gesture passes requireContent so it stays inert when there
+		// are no subagents to show; the explicit hub/observe keys still open the
+		// empty roster. The freshly built hub already ran the persisted-subagent
+		// scan, so its row count is the authoritative "is there anything to show".
+		if (options?.requireContent && hub.isEmpty) {
+			hub.dispose();
+			return;
+		}
 
 		overlayHandle = this.ctx.ui.showOverlay(hub, {
 			anchor: "bottom-center",

@@ -40,6 +40,8 @@ const EXHAUSTIVE_SCROLLBACK = Bun.env.TUI_STRESS_EXHAUSTIVE_SCROLLBACK === "1";
 const SEGMENT_RESET = "\x1b[0m";
 const ESC = "\x1b";
 const BEL = "\x07";
+const ALT_SCREEN_ENTER = "\x1b[?1049h";
+const ALT_SCREEN_EXIT = "\x1b[?1049l";
 const SMILE = String.fromCodePoint(0x1f642);
 type TestPlatform = "darwin" | "linux" | "win32";
 type TerminalMode = "normal" | "unknown" | "intermittentUnknown" | "staleBottom";
@@ -2562,12 +2564,8 @@ class StressDriver {
 	 * else = ordinary update following the engine's append-only law.
 	 */
 	#applyShadowWrite(data: string): void {
-		if (data.includes("\x1b[?1049h")) this.#shadowAltActive = true;
-		if (data.includes("\x1b[?1049l")) {
-			this.#shadowAltActive = false;
-			return;
-		}
-		if (this.#shadowAltActive) return;
+		data = this.#normalScreenShadowWrite(data);
+		if (data.length === 0) return;
 		const frame = this.#shadowFrame;
 		const raw = this.#shadowRawFrame;
 		const height = Math.max(1, this.#shadowFrameHeight);
@@ -2607,6 +2605,27 @@ class StressDriver {
 			this.#shadowRawPrefix.push(raw[i] ?? "");
 		}
 		this.#shadowCommitted = chunkTo;
+	}
+
+	// Resize fast-path frames write to the alternate screen, then the settled
+	// replay often leaves alt and emits ED3 in the same write. Ignore bytes while
+	// alt is active, but keep the normal-screen suffix after `?1049l` so the
+	// shadow ledger observes the authoritative replay.
+	#normalScreenShadowWrite(data: string): string {
+		if (this.#shadowAltActive) {
+			const exitIndex = data.lastIndexOf(ALT_SCREEN_EXIT);
+			if (exitIndex === -1) return "";
+			this.#shadowAltActive = false;
+			return data.slice(exitIndex + ALT_SCREEN_EXIT.length);
+		}
+		const enterIndex = data.indexOf(ALT_SCREEN_ENTER);
+		if (enterIndex === -1) return data;
+		const exitIndex = data.indexOf(ALT_SCREEN_EXIT, enterIndex + ALT_SCREEN_ENTER.length);
+		if (exitIndex === -1) {
+			this.#shadowAltActive = true;
+			return data.slice(0, enterIndex);
+		}
+		return data.slice(0, enterIndex) + data.slice(exitIndex + ALT_SCREEN_EXIT.length);
 	}
 	#scrollbackCapReached(snapshot: Snapshot): boolean {
 		return Math.max(snapshot.height, snapshot.frame.length) > snapshot.height + this.#scenario.scrollback;
@@ -3004,7 +3023,7 @@ function compositeExpectedOverlays(
 		if (!isExpectedOverlayVisible(entry, termWidth, termHeight)) continue;
 		const firstLayout = resolveExpectedOverlayLayout(entry.options, 0, termWidth, termHeight);
 		let overlayLines = entry.component.render(firstLayout.width);
-		if (firstLayout.maxHeight !== undefined && overlayLines.length > firstLayout.maxHeight) {
+		if (overlayLines.length > firstLayout.maxHeight) {
 			overlayLines = overlayLines.slice(0, firstLayout.maxHeight);
 		}
 		const layout = resolveExpectedOverlayLayout(entry.options, overlayLines.length, termWidth, termHeight);
@@ -3039,7 +3058,7 @@ export function resolveExpectedOverlayLayout(
 	overlayHeight: number,
 	termWidth: number,
 	termHeight: number,
-): { width: number; row: number; col: number; maxHeight: number | undefined } {
+): { width: number; row: number; col: number; maxHeight: number } {
 	const opt = options ?? {};
 	const margin =
 		typeof opt.margin === "number"
@@ -3056,11 +3075,9 @@ export function resolveExpectedOverlayLayout(
 		width = Math.max(width, opt.minWidth);
 	}
 	width = Math.max(1, Math.min(width, availWidth));
-	let maxHeight = parseOverlaySizeValue(opt.maxHeight, termHeight);
-	if (maxHeight !== undefined) {
-		maxHeight = Math.max(1, Math.min(maxHeight, availHeight));
-	}
-	const effectiveHeight = maxHeight !== undefined ? Math.min(overlayHeight, maxHeight) : overlayHeight;
+	let maxHeight = parseOverlaySizeValue(opt.maxHeight, termHeight) ?? availHeight;
+	maxHeight = Math.max(1, Math.min(maxHeight, availHeight));
+	const effectiveHeight = Math.min(overlayHeight, maxHeight);
 	let row: number;
 	let col: number;
 	if (opt.row !== undefined) {

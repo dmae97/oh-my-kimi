@@ -7,6 +7,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { scheduler } from "node:timers/promises";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import {
+	ANTIGRAVITY_NO_PREAMBLE_INSTRUCTION,
 	ANTIGRAVITY_SYSTEM_INSTRUCTION,
 	getAntigravityUserAgent,
 	getGeminiCliHeaders,
@@ -27,6 +28,7 @@ import type {
 import { normalizeSystemPrompts } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { appendRawHttpRequestDumpFor400, type RawHttpRequestDump } from "../utils/http-inspector";
+import { getStreamFirstEventTimeoutMs } from "../utils/idle-iterator";
 // Refresh is the sole responsibility of AuthStorage (broker-aware, single-flighted);
 // the stream provider trusts the access token threaded through `options.apiKey`.
 import { normalizeSchemaForCCA } from "../utils/schema";
@@ -101,6 +103,7 @@ const ANTIGRAVITY_SANDBOX_ENDPOINT = "https://daily-cloudcode-pa.sandbox.googlea
 const ANTIGRAVITY_ENDPOINT_FALLBACKS = [ANTIGRAVITY_DAILY_ENDPOINT, ANTIGRAVITY_SANDBOX_ENDPOINT] as const;
 
 export {
+	ANTIGRAVITY_NO_PREAMBLE_INSTRUCTION,
 	ANTIGRAVITY_SYSTEM_INSTRUCTION,
 	getAntigravityUserAgent,
 	getGeminiCliHeaders,
@@ -365,17 +368,34 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 				headers: requestHeaders,
 			};
 
+			// Direct callers that skip `register-builtins` (which installs the
+			// iterator-level watchdog) need a pre-response timer alongside
+			// `timeout: false`; otherwise a stalled Cloud Code Assist proxy
+			// would hang forever. Floor matches the lazy wrapper's 5min default.
+			const firstEventTimeoutMs =
+				options?.streamFirstEventTimeoutMs ?? getStreamFirstEventTimeoutMs(undefined, 300_000);
+			const preResponseWatchdog =
+				firstEventTimeoutMs !== undefined && firstEventTimeoutMs > 0
+					? AbortSignal.timeout(firstEventTimeoutMs)
+					: undefined;
+			const callerSignal = options?.signal;
+			const fetchSignal = preResponseWatchdog
+				? callerSignal
+					? AbortSignal.any([callerSignal, preResponseWatchdog])
+					: preResponseWatchdog
+				: callerSignal;
 			const response = await fetchWithRetry(
 				attempt => `${endpoints[Math.min(attempt, endpoints.length - 1)]}/v1internal:streamGenerateContent?alt=sse`,
 				{
 					method: "POST",
 					headers: requestHeaders,
 					body: requestBodyJson,
-					signal: options?.signal,
+					signal: fetchSignal,
 					maxAttempts: MAX_RETRIES + 1,
 					defaultDelayMs: attempt => BASE_DELAY_MS * 2 ** attempt,
 					maxDelayMs: options?.maxRetryDelayMs ?? RATE_LIMIT_BUDGET_MS,
 					fetch: options?.fetch,
+					timeout: false,
 				},
 			);
 			if (!response.ok) {
@@ -447,7 +467,7 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 					const candidate = responseData.candidates?.[0];
 					if (candidate?.content?.parts) {
 						for (const part of candidate.content.parts) {
-							if (part.text !== undefined) {
+							if (part.text !== undefined && part.text !== "") {
 								const isThinking = isThinkingPart(part);
 								if (
 									!currentBlock ||
@@ -483,6 +503,18 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 										delta: part.text,
 										partial: output,
 									});
+								}
+							} else if (part.text === "" && part.thoughtSignature && currentBlock && !part.functionCall) {
+								if (currentBlock.type === "thinking") {
+									currentBlock.thinkingSignature = retainThoughtSignature(
+										currentBlock.thinkingSignature,
+										part.thoughtSignature,
+									);
+								} else {
+									currentBlock.textSignature = retainThoughtSignature(
+										currentBlock.textSignature,
+										part.thoughtSignature,
+									);
 								}
 							}
 
@@ -849,10 +881,10 @@ export function buildRequest(
 	if (isAntigravity && shouldInjectAntigravitySystemInstruction(model.id)) {
 		const existingParts = request.systemInstruction?.parts ?? [];
 		request.systemInstruction = {
-			role: "user",
 			parts: [
 				{ text: ANTIGRAVITY_SYSTEM_INSTRUCTION },
 				{ text: `Please ignore following [ignore]${ANTIGRAVITY_SYSTEM_INSTRUCTION}[/ignore]` },
+				{ text: ANTIGRAVITY_NO_PREAMBLE_INSTRUCTION },
 				...existingParts,
 			],
 		};

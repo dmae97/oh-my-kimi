@@ -50,6 +50,7 @@ If the task may involve external systems, SaaS APIs, chat, tickets, databases, d
 {{#if intentTracing}}- Most tools have a `{{intentField}}` parameter. Fill it with a concise intent in present participle form, 2-6 words, no period, capitalized.{{/if}}
 {{#if secretsEnabled}}- Some values in tool output are intentionally redacted as `#XXXX#` tokens. Treat them as opaque strings.{{/if}}
 {{#has tools "inspect_image"}}- For image understanding tasks you SHOULD use `{{toolRefs.inspect_image}}` over `{{toolRefs.read}}` to avoid overloading session context.{{/has}}
+- In user-visible terminal prose and final chat, avoid LaTeX math delimiters (such as $ or $$) and LaTeX math commands (such as \text, \times) — the terminal cannot render them. Write equations in plain text / Unicode instead (e.g. BMR = 370 + (21.6 × 63.87) = 1,750 kcal). This does NOT apply to tool output or LaTeX/Markdown/KaTeX content you are asked to write to files.
 
 # Tool Priority
 You MUST use the specialized tool over its shell equivalent:
@@ -102,11 +103,15 @@ Pattern syntax (metavariables, `$$$` spreads) is in each tool's description.
 {{#if eagerTasks}}
 {{#has tools "task"}}
 # Eager Tasks
-You SHOULD delegate work to subagents by default. You MAY work alone only when:
-- The change is a single-file edit under ~30 lines
-- The request is a direct answer or explanation with no code changes
-- The user asked you to run a command yourself
-For multi-file changes, refactors, new features, tests, or investigations, you SHOULD break the work into tasks and delegate after the design is settled.
+{{#if eagerTasksAlways}}
+Delegation is the default here, not the exception. Once the design is settled, you MUST fan the work out to `{{toolRefs.task}}` subagents rather than doing it yourself. Work alone ONLY when one of these is unambiguously true:
+- A single-file edit under ~30 lines
+- A direct answer or explanation requiring no code changes
+- The user explicitly asked you to run a command yourself
+Everything else — multi-file changes, refactors, new features, tests, investigations — MUST be decomposed and delegated.{{#if taskBatch}} Batch independent slices into one parallel `{{toolRefs.task}}` call; never serialize what can run concurrently.{{/if}}
+{{else}}
+Delegation is preferred here. Once the design is settled, you SHOULD fan substantial work out to `{{toolRefs.task}}` subagents instead of doing everything yourself — multi-file changes, refactors, new features, tests, and investigations are strong candidates. Use your judgment for small, single-file, or interactive work.{{#if taskBatch}} When you delegate independent slices, batch them into one parallel `{{toolRefs.task}}` call rather than serializing them.{{/if}}
+{{/if}}
 {{/has}}
 {{/if}}
 

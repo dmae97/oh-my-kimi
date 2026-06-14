@@ -453,6 +453,13 @@ export class Editor implements Component, Focusable {
 	onSubmit?: (text: string) => void | Promise<void>;
 	onAltEnter?: (text: string) => void;
 	onChange?: (text: string) => void;
+	/** Called for a "marker-sized" paste — the point where the editor would otherwise collapse it
+	 *  into a `[Paste #N]` token (> 10 lines or > 1000 characters). Return `true` to intercept:
+	 *  the editor inserts nothing and records no undo state, leaving insertion to the host (e.g. a
+	 *  "wrap in a code block / XML / attach as file" menu for very large pastes), which re-inserts
+	 *  via {@link insertPaste} or {@link insertText}. Return `false` (or leave unset) for the
+	 *  default collapse-to-marker behavior. `lineCount` is the sanitized paste's line count. */
+	onLargePaste?: (text: string, lineCount: number) => boolean;
 	onAutocompleteCancel?: () => void;
 	disableSubmit: boolean = false;
 
@@ -660,10 +667,20 @@ export class Editor implements Component, Focusable {
 	}
 
 	/** Apply the optional input decorator to a plain (ANSI-free) text segment.
-	 *  Decoration only adds zero-width SGR codes, so visible width is unchanged. */
+	 *  Decoration only adds zero-width SGR codes, so visible width is unchanged.
+	 *  Splits around CURSOR_MARKER so each user-text segment is decorated in
+	 *  isolation: the marker begins with ESC, and a keyword regex that pins
+	 *  the right boundary with `(?!\S)` would otherwise reject an otherwise-
+	 *  valid match at the cursor seam (e.g. `ultrathink` immediately followed
+	 *  by the marker stops glowing until a trailing character is typed). */
 	#decorate(text: string): string {
 		const decorate = this.decorateText;
-		return decorate !== undefined && text.length > 0 ? decorate(text) : text;
+		if (decorate === undefined || text.length === 0) return text;
+		const idx = text.indexOf(CURSOR_MARKER);
+		if (idx === -1) return decorate(text);
+		const before = text.slice(0, idx);
+		const after = text.slice(idx + CURSOR_MARKER.length);
+		return (before.length > 0 ? decorate(before) : "") + CURSOR_MARKER + (after.length > 0 ? decorate(after) : "");
 	}
 
 	#getStyledInputCursor(): { text: string; width: number } {
@@ -947,9 +964,9 @@ export class Editor implements Component, Focusable {
 				}
 			}
 
-			// No cursor on this line, or a branch that left the user text intact: decorate the
-			// whole line. CURSOR_MARKER and cursor glyphs begin with ESC, so word boundaries
-			// around a decorated keyword stay intact when matched against the assembled line.
+			// No cursor on this line, or a branch that left the user text intact: decorate
+			// the whole line. `#decorate` splits around CURSOR_MARKER so a keyword glued to
+			// the cursor still satisfies its right-boundary lookahead.
 			if (!decorated) {
 				displayText = this.#decorate(displayText);
 			}
@@ -1583,9 +1600,100 @@ export class Editor implements Component, Focusable {
 		this.#insertTextAtCursor(text);
 	}
 
+	/** Delete up to `count` characters immediately before the cursor on the current line.
+	 *  Used to "track back" the auto-repeat spaces that the space-hold push-to-talk gesture
+	 *  optimistically inserts before it recognizes the hold. Capped at the cursor column so it
+	 *  never crosses a line boundary or under-runs the line. */
+	deleteBeforeCursor(count: number): void {
+		const removable = Math.min(count, this.#state.cursorCol);
+		if (removable <= 0) return;
+		this.#exitHistoryForEditing();
+		this.#recordUndoState();
+		const line = this.#state.lines[this.#state.cursorLine] ?? "";
+		this.#state.lines[this.#state.cursorLine] =
+			line.slice(0, this.#state.cursorCol - removable) + line.slice(this.#state.cursorCol);
+		this.#setCursorCol(this.#state.cursorCol - removable);
+		this.#lastAction = null;
+		if (this.onChange) {
+			this.onChange(this.getText());
+		}
+	}
+
+	/** Code units of the current volatile speech-to-text preview (see {@link setVolatileText}). */
+	#volatileTextLen = 0;
+
+	/** Show or replace a volatile speech-to-text preview at the cursor. The text is
+	 *  inserted with undo suspended so a long live dictation never floods the undo
+	 *  stack; finalize it with {@link commitVolatileText} or drop it with
+	 *  {@link clearVolatileText}. Newlines are allowed. */
+	setVolatileText(text: string): void {
+		this.#exitHistoryForEditing();
+		this.#withUndoSuspended(() => {
+			this.#deleteCharsBeforeCursor(this.#volatileTextLen);
+			if (text) this.#insertTextAtCursor(text);
+		});
+		this.#volatileTextLen = text.length;
+		if (!text && this.onChange) this.onChange(this.getText());
+	}
+
+	/** Remove the current volatile preview without committing it. */
+	clearVolatileText(): void {
+		if (this.#volatileTextLen === 0) return;
+		this.#withUndoSuspended(() => this.#deleteCharsBeforeCursor(this.#volatileTextLen));
+		this.#volatileTextLen = 0;
+		if (this.onChange) this.onChange(this.getText());
+	}
+
+	/** Drop any volatile preview, then insert `text` as a single undoable edit. */
+	commitVolatileText(text: string): void {
+		this.#exitHistoryForEditing();
+		this.#withUndoSuspended(() => this.#deleteCharsBeforeCursor(this.#volatileTextLen));
+		this.#volatileTextLen = 0;
+		if (text) this.#insertTextAtCursor(text);
+		else if (this.onChange) this.onChange(this.getText());
+	}
+
+	/** Delete `count` UTF-16 code units immediately before the cursor, crossing line
+	 *  boundaries (each consumed newline counts as one). Undo is the caller's concern. */
+	#deleteCharsBeforeCursor(count: number): void {
+		let remaining = count;
+		while (remaining > 0) {
+			if (this.#state.cursorCol > 0) {
+				const removable = Math.min(remaining, this.#state.cursorCol);
+				const line = this.#state.lines[this.#state.cursorLine] ?? "";
+				this.#state.lines[this.#state.cursorLine] =
+					line.slice(0, this.#state.cursorCol - removable) + line.slice(this.#state.cursorCol);
+				this.#setCursorCol(this.#state.cursorCol - removable);
+				remaining -= removable;
+			} else if (this.#state.cursorLine > 0) {
+				const prev = this.#state.lines[this.#state.cursorLine - 1] ?? "";
+				const cur = this.#state.lines[this.#state.cursorLine] ?? "";
+				this.#state.lines[this.#state.cursorLine - 1] = prev + cur;
+				this.#state.lines.splice(this.#state.cursorLine, 1);
+				this.#state.cursorLine -= 1;
+				this.#setCursorCol(prev.length);
+				remaining -= 1;
+			} else {
+				break;
+			}
+		}
+	}
+
 	/** Apply terminal paste semantics to text from non-bracketed paste transports. */
 	pasteText(text: string): void {
 		this.#handlePaste(text);
+	}
+
+	/** Insert `content` as a collapsed `[Paste #N]` marker (stored for expansion on submit via
+	 *  {@link getExpandedText}). Hosts that intercept large pastes through {@link onLargePaste} use
+	 *  this to re-insert a (possibly transformed) paste without re-triggering the interception hook. */
+	insertPaste(content: string): void {
+		this.#historyIndex = -1;
+		this.#resetKillSequence();
+		this.#recordUndoState();
+		this.#withUndoSuspended(() => {
+			this.#storePasteMarker(content, content.split("\n").length);
+		});
 	}
 
 	// All the editor methods from before...
@@ -1685,68 +1793,38 @@ export class Editor implements Component, Focusable {
 	}
 
 	#handlePaste(pastedText: string): void {
+		let filteredText = this.#sanitizePastedText(pastedText);
+
+		// If pasting a file path (starts with /, ~, or .) and the character before
+		// the cursor is a word character, prepend a space for better readability.
+		if (/^[/~.]/.test(filteredText)) {
+			const currentLine = this.#state.lines[this.#state.cursorLine] || "";
+			const charBeforeCursor = this.#state.cursorCol > 0 ? currentLine[this.#state.cursorCol - 1] : "";
+			if (charBeforeCursor && /\w/.test(charBeforeCursor)) {
+				filteredText = ` ${filteredText}`;
+			}
+		}
+
+		const pastedLines = filteredText.split("\n");
+		const totalChars = filteredText.length;
+		// "Marker-sized": large enough to collapse into a `[Paste #N]` token (> 10 lines or
+		// > 1000 characters) instead of flooding the buffer.
+		const isMarkerSized = pastedLines.length > 10 || totalChars > 1000;
+
+		// Let the host intercept marker-sized pastes (e.g. the large-paste menu). When it takes
+		// over, the editor inserts nothing and records no undo state — the host re-inserts via
+		// `insertPaste`/`insertText` once the user chooses.
+		if (isMarkerSized && this.onLargePaste?.(filteredText, pastedLines.length)) {
+			return;
+		}
+
 		this.#historyIndex = -1; // Exit history browsing mode
 		this.#resetKillSequence();
 		this.#recordUndoState();
 
 		this.#withUndoSuspended(() => {
-			// Some terminals (e.g. tmux popups with extended-keys-format=csi-u) re-encode
-			// control bytes inside bracketed paste as CSI-u Ctrl+<letter> sequences
-			// (ESC [ <codepoint> ; 5 u). Decode those back to their literal byte so the
-			// per-char filter below preserves newlines instead of stripping ESC and
-			// leaking the printable tail (e.g. "[106;5u") into the editor.
-			const decodedText = pastedText.replace(/\x1b\[(\d+);5u/g, (match, code) => {
-				const cp = Number(code);
-				if (cp >= 97 && cp <= 122) return String.fromCharCode(cp - 96);
-				if (cp >= 65 && cp <= 90) return String.fromCharCode(cp - 64);
-				return match;
-			});
-
-			// Clean the pasted text. NFC-normalize so macOS Finder drag-drops of
-			// Korean filenames (which arrive as NFD: e.g. `ᄒ`+`ᅪ` instead of `화`)
-			// land in the buffer as the same precomposed syllables a terminal
-			// renders — without this, cursor column accounting drifts by
-			// `(NFD cells − NFC cells)` and the visible glyph desyncs from the
-			// hardware cursor. Matches the `Input` component's prior fix; this
-			// is the same fix on the real OMP prompt component (`Editor`).
-			const cleanText = decodedText.replace(/\r\n?/g, "\n").normalize("NFC");
-
-			// Convert tabs to spaces (4 spaces per tab)
-			const tabExpandedText = cleanText.replace(/\t/g, "    ");
-
-			// Strip control characters except newline (tabs already expanded above,
-			// CRs already normalized). Single regex pass instead of split/filter/join
-			// to avoid allocating a per-code-unit array for large pastes.
-			let filteredText = tabExpandedText.replace(/[\x00-\x09\x0B-\x1F]/g, "");
-
-			// If pasting a file path (starts with /, ~, or .) and the character before
-			// the cursor is a word character, prepend a space for better readability
-			if (/^[/~.]/.test(filteredText)) {
-				const currentLine = this.#state.lines[this.#state.cursorLine] || "";
-				const charBeforeCursor = this.#state.cursorCol > 0 ? currentLine[this.#state.cursorCol - 1] : "";
-				if (charBeforeCursor && /\w/.test(charBeforeCursor)) {
-					filteredText = ` ${filteredText}`;
-				}
-			}
-
-			// Split into lines
-			const pastedLines = filteredText.split("\n");
-
-			// Check if this is a large paste (> 10 lines or > 1000 characters)
-			const totalChars = filteredText.length;
-			if (pastedLines.length > 10 || totalChars > 1000) {
-				// Store the paste and insert a marker
-				this.#pasteCounter++;
-				const pasteId = this.#pasteCounter;
-				this.#pastes.set(pasteId, filteredText);
-
-				// Insert marker like "[Paste #1, +123 lines]" or "[Paste #1, 1234 chars]"
-				const marker =
-					pastedLines.length > 10
-						? `[Paste #${pasteId}, +${pastedLines.length} lines]`
-						: `[Paste #${pasteId}, ${totalChars} chars]`;
-				this.#insertTextAtCursor(marker);
-
+			if (isMarkerSized) {
+				this.#storePasteMarker(filteredText, pastedLines.length);
 				return;
 			}
 
@@ -1763,6 +1841,51 @@ export class Editor implements Component, Focusable {
 			// Multi-line paste - use insertTextAtCursor for proper handling
 			this.#insertTextAtCursor(filteredText);
 		});
+	}
+
+	/** Normalize raw pasted text: decode tmux CSI-u re-encoded control bytes, normalize CRLF and
+	 *  NFC (macOS NFD filename drag-drops), expand tabs, and strip control characters except newline. */
+	#sanitizePastedText(pastedText: string): string {
+		// Some terminals (e.g. tmux popups with extended-keys-format=csi-u) re-encode
+		// control bytes inside bracketed paste as CSI-u Ctrl+<letter> sequences
+		// (ESC [ <codepoint> ; 5 u). Decode those back to their literal byte so the
+		// per-char filter below preserves newlines instead of stripping ESC and
+		// leaking the printable tail (e.g. "[106;5u") into the editor.
+		const decodedText = pastedText.replace(/\x1b\[(\d+);5u/g, (match, code) => {
+			const cp = Number(code);
+			if (cp >= 97 && cp <= 122) return String.fromCharCode(cp - 96);
+			if (cp >= 65 && cp <= 90) return String.fromCharCode(cp - 64);
+			return match;
+		});
+
+		// Clean the pasted text. NFC-normalize so macOS Finder drag-drops of
+		// Korean filenames (which arrive as NFD: e.g. `ᄒ`+`ᅪ` instead of `화`)
+		// land in the buffer as the same precomposed syllables a terminal
+		// renders — without this, cursor column accounting drifts by
+		// `(NFD cells − NFC cells)` and the visible glyph desyncs from the
+		// hardware cursor.
+		const cleanText = decodedText.replace(/\r\n?/g, "\n").normalize("NFC");
+
+		// Convert tabs to spaces (4 spaces per tab).
+		const tabExpandedText = cleanText.replace(/\t/g, "   ");
+
+		// Strip control characters except newline (tabs already expanded above, CRs already
+		// normalized). Single regex pass instead of split/filter/join to avoid allocating a
+		// per-code-unit array for large pastes.
+		return tabExpandedText.replace(/[\x00-\x09\x0B-\x1F]/g, "");
+	}
+
+	/** Store `content` in the paste buffer and insert a collapsed `[Paste #N]` marker that expands
+	 *  back to `content` on submit. `lineCount` is the content's line count. */
+	#storePasteMarker(content: string, lineCount: number): void {
+		this.#pasteCounter++;
+		const pasteId = this.#pasteCounter;
+		this.#pastes.set(pasteId, content);
+
+		// Insert marker like "[Paste #1, +123 lines]" or "[Paste #1, 1234 chars]".
+		const marker =
+			lineCount > 10 ? `[Paste #${pasteId}, +${lineCount} lines]` : `[Paste #${pasteId}, ${content.length} chars]`;
+		this.#insertTextAtCursor(marker);
 	}
 
 	/** Re-evaluate autocomplete triggers for the text ending at the cursor (used after bulk edits). */

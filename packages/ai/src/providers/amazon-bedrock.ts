@@ -31,6 +31,7 @@ import type {
 import { normalizeToolCallId, resolveCacheRetention } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { appendRawHttpRequestDumpFor400, type RawHttpRequestDump } from "../utils/http-inspector";
+import { getStreamFirstEventTimeoutMs } from "../utils/idle-iterator";
 import { parseStreamingJson, parseStreamingJsonThrottled } from "../utils/json-parse";
 import { toolWireSchema } from "../utils/schema/wire";
 import { invalidateAwsCredentialCache, resolveAwsCredentials } from "./aws-credentials";
@@ -282,12 +283,29 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 				requestHeaders = { ...baseHeaders, ...signed };
 			}
 
+			// Bun's native fetch ceiling is disabled below (`timeout: false`) so
+			// configurable watchdogs govern slow-prefill streams (issue #2422).
+			// Direct callers that bypass `register-builtins` (which installs the
+			// iterator-level first-event watchdog) still need a pre-response
+			// timer, otherwise a Bedrock/proxy that accepts the POST and never
+			// sends headers would hang forever.
+			const firstEventTimeoutMs = options.streamFirstEventTimeoutMs ?? getStreamFirstEventTimeoutMs();
+			const preResponseWatchdog =
+				firstEventTimeoutMs !== undefined && firstEventTimeoutMs > 0
+					? AbortSignal.timeout(firstEventTimeoutMs)
+					: undefined;
+			const fetchSignal = preResponseWatchdog
+				? options.signal
+					? AbortSignal.any([options.signal, preResponseWatchdog])
+					: preResponseWatchdog
+				: options.signal;
 			const response = await fetchWithRetry(url, {
 				method: "POST",
 				headers: requestHeaders,
 				body,
-				signal: options.signal,
+				signal: fetchSignal,
 				fetch: options.fetch,
+				timeout: false,
 			});
 
 			if (!response.ok) {

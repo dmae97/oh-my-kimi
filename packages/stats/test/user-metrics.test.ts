@@ -46,6 +46,14 @@ describe("computeUserMessageMetrics", () => {
 		expect(m.profanity).toBe(3);
 	});
 
+	it("does not count the version-control tool `git` as profanity", () => {
+		// Regression for #2457: `git` was dropped from the profanity list so
+		// ordinary repository prose no longer scores as profanity. The slang
+		// plural `gits` is intentionally retained.
+		expect(computeUserMessageMetrics("git status shows the rebase failed").profanity).toBe(0);
+		expect(computeUserMessageMetrics("run git commit then git push").profanity).toBe(0);
+	});
+
 	it("folds drama runs / elongated interjections / dot trails into `anguish`", () => {
 		const m = computeUserMessageMetrics("why!!! seriously??? omg!?!?!?");
 		expect(m.anguish).toBeGreaterThanOrEqual(3);

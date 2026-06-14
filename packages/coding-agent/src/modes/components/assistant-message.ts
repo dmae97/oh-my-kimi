@@ -1,7 +1,5 @@
-import type { AssistantMessage, ImageContent, Usage } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
 import { Container, Image, type ImageBudget, ImageProtocol, Markdown, Spacer, TERMINAL, Text } from "@oh-my-pi/pi-tui";
-import { formatNumber } from "@oh-my-pi/pi-utils";
-import { settings } from "../../config/settings";
 import type { AssistantThinkingRenderer } from "../../extensibility/extensions/types";
 import { getMarkdownTheme, theme } from "../../modes/theme/theme";
 import { resolveAbortLabel, shouldRenderAbortReason } from "../../session/messages";
@@ -24,7 +22,6 @@ export class AssistantMessageComponent extends Container {
 	#contentContainer: Container;
 	#lastMessage?: AssistantMessage;
 	#toolImagesByCallId = new Map<string, ImageContent[]>();
-	#usageInfo?: Usage;
 	#convertedKittyImages = new Map<string, ImageContent>();
 	#kittyConversionsInFlight = new Set<string>();
 	#transcriptBlockFinalized: boolean;
@@ -40,11 +37,9 @@ export class AssistantMessageComponent extends Container {
 	/**
 	 * Monotonic content version reported to the transcript container via
 	 * {@link getTranscriptBlockVersion}. Bumped by {@link updateContent} — the
-	 * choke point every mutator funnels through, including the post-finalize
-	 * ones: `setErrorPinned(false)` restoring the inline error at the next
-	 * turn's `agent_start`, late tool-result images, async Kitty conversions,
-	 * and `setUsageInfo`. Without it, the container's committed-scrollback
-	 * bypass would replay this block's pre-mutation bytes forever.
+	 * choke point every mutator funnels through, including post-finalize changes
+	 * such as `setErrorPinned(false)` restoring the inline error at the next
+	 * turn's `agent_start`, late tool-result images, and async Kitty conversions.
 	 */
 	#blockVersion = 0;
 	/** Whether the last updateContent carried an in-flight streaming partial; such
@@ -185,13 +180,6 @@ export class AssistantMessageComponent extends Container {
 		}
 	}
 
-	setUsageInfo(usage: Usage): void {
-		this.#usageInfo = usage;
-		if (this.#lastMessage) {
-			this.updateContent(this.#lastMessage, { transient: this.#lastUpdateTransient });
-		}
-	}
-
 	#renderToolImages(): void {
 		const imageEntries = Array.from(this.#toolImagesByCallId.entries()).flatMap(([toolCallId, images]) =>
 			images.map((image, index) => ({ image, key: `${toolCallId}:${index}` })),
@@ -255,12 +243,6 @@ export class AssistantMessageComponent extends Container {
 				// the key and forces the teardown path instead of mis-indexing children.
 				parts.push(`O:${content.type}`);
 			}
-		}
-		if (settings.get("display.showTokenUsage") && this.#usageInfo) {
-			const u = this.#usageInfo;
-			parts.push(`u:${u.input + u.cacheWrite}:${u.output}:${u.cacheRead}`);
-		} else {
-			parts.push("u:");
 		}
 		return parts.join("|");
 	}
@@ -416,21 +398,6 @@ export class AssistantMessageComponent extends Container {
 		) {
 			this.#appendErrorBlock(message.errorMessage);
 		}
-
-		// Token usage metadata
-		if (settings.get("display.showTokenUsage") && this.#usageInfo) {
-			const usage = this.#usageInfo;
-			const totalInput = usage.input + usage.cacheWrite;
-			const parts: string[] = [];
-			parts.push(`${theme.icon.input} ${formatNumber(totalInput)}`);
-			parts.push(`${theme.icon.output} ${formatNumber(usage.output)}`);
-			if (usage.cacheRead > 0) {
-				parts.push(`cache: ${formatNumber(usage.cacheRead)}`);
-			}
-			this.#contentContainer.addChild(new Spacer(1));
-			this.#contentContainer.addChild(new Text(theme.fg("dim", parts.join("  ")), 1, 0));
-		}
-
 		// Store fast-path state for next call
 		if (shouldCapture) {
 			this.#fastPathItems = captureItems;

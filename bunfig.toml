@@ -17,6 +17,12 @@ saveTextLockfile = true
 # scratch dirs so a root-level `bun test` doesn't walk into them.
 pathIgnorePatterns = [
   "**/node_modules/**",
+  "**/.git/**",
+  "**/target/**",
+  "**/dist/**",
+  "python/**",
+  "docs/**",
+  "runs/**",
   "python/robomp/data/**",
   ".wt/**",
   ".worktrees/**",

@@ -2,14 +2,14 @@ import { describe, expect, test } from "bun:test";
 import { MemorySessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
 
 describe("MemorySessionStorage indexed mirror", () => {
-	test("writeLineSync builds the same content as a single writeTextSync of the join", async () => {
+	test("append builds the same content as a single writeTextSync of the join", async () => {
 		const storage = new MemorySessionStorage();
 		const path = "/virtual/session.jsonl";
 		const writer = storage.openWriter(path, { flags: "w" });
 		try {
 			const N = 1000;
 			for (let i = 0; i < N; i++) {
-				writer.writeLineSync(`{"i":${i}}\n`);
+				await writer.append(`{"i":${i}}\n`);
 			}
 		} finally {
 			await writer.close();
@@ -22,13 +22,13 @@ describe("MemorySessionStorage indexed mirror", () => {
 		expect(actual.length).toBe(expected.length);
 	});
 
-	test("statSync reports UTF-8 byte length, not character count", () => {
+	test("statSync reports UTF-8 byte length, not character count", async () => {
 		const storage = new MemorySessionStorage();
 		const path = "/virtual/unicode.jsonl";
 		const writer = storage.openWriter(path, { flags: "w" });
 		try {
-			writer.writeLineSync("héllo\n"); // é = 2 bytes in UTF-8
-			writer.writeLineSync("日本語\n"); // 3 chars × 3 bytes = 9
+			await writer.append("héllo\n"); // é = 2 bytes in UTF-8
+			await writer.append("日本語\n"); // 3 chars × 3 bytes = 9
 		} finally {
 			void writer.close();
 		}
@@ -42,9 +42,9 @@ describe("MemorySessionStorage indexed mirror", () => {
 		const path = "/virtual/prefix.jsonl";
 		const writer = storage.openWriter(path, { flags: "w" });
 		try {
-			writer.writeLineSync("alpha\n");
-			writer.writeLineSync("bravo\n");
-			writer.writeLineSync("charlie\n");
+			await writer.append("alpha\n");
+			await writer.append("bravo\n");
+			await writer.append("charlie\n");
 		} finally {
 			void writer.close();
 		}
@@ -59,9 +59,9 @@ describe("MemorySessionStorage indexed mirror", () => {
 		const path = "/virtual/suffix.jsonl";
 		const writer = storage.openWriter(path, { flags: "w" });
 		try {
-			writer.writeLineSync("alpha\n");
-			writer.writeLineSync("bravo\n");
-			writer.writeLineSync("charlie\n");
+			await writer.append("alpha\n");
+			await writer.append("bravo\n");
+			await writer.append("charlie\n");
 		} finally {
 			void writer.close();
 		}
@@ -78,9 +78,9 @@ describe("MemorySessionStorage indexed mirror", () => {
 		const path = "/virtual/both.jsonl";
 		const writer = storage.openWriter(path, { flags: "w" });
 		try {
-			writer.writeLineSync("alpha\n");
-			writer.writeLineSync("bravo\n");
-			writer.writeLineSync("charlie\n");
+			await writer.append("alpha\n");
+			await writer.append("bravo\n");
+			await writer.append("charlie\n");
 		} finally {
 			void writer.close();
 		}
@@ -93,8 +93,8 @@ describe("MemorySessionStorage indexed mirror", () => {
 		const path = "/virtual/unicode-slices.jsonl";
 		const writer = storage.openWriter(path, { flags: "w" });
 		try {
-			writer.writeLineSync("é\n");
-			writer.writeLineSync("日本\n");
+			await writer.append("é\n");
+			await writer.append("日本\n");
 		} finally {
 			void writer.close();
 		}
@@ -104,17 +104,17 @@ describe("MemorySessionStorage indexed mirror", () => {
 		expect(await storage.readTextSlices(path, 0, 4)).toEqual(["", "本\n"]);
 	});
 
-	test("subsequent writeLineSync after readText appends after materialized content", async () => {
+	test("subsequent append after readText appends after materialized content", async () => {
 		const storage = new MemorySessionStorage();
 		const path = "/virtual/cont.jsonl";
 		const writer = storage.openWriter(path, { flags: "w" });
 		try {
-			writer.writeLineSync("first\n");
-			writer.writeLineSync("second\n");
+			await writer.append("first\n");
+			await writer.append("second\n");
 			// Materialise once — implementation may collapse previous chunks into one
 			// string, but future appends must still retain content and byte accounting.
 			expect(await storage.readText(path)).toBe("first\nsecond\n");
-			writer.writeLineSync("third\n");
+			await writer.append("third\n");
 			expect(await storage.readText(path)).toBe("first\nsecond\nthird\n");
 			expect(storage.statSync(path).size).toBe(Buffer.byteLength("first\nsecond\nthird\n", "utf-8"));
 		} finally {

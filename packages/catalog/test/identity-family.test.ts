@@ -1,10 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
 	isClaudeModelId,
+	isGlmVisionModelId,
 	isKimiK26ModelId,
 	isKimiModelId,
 	isMinimaxM2FamilyModelId,
 	isOpenAIGptOssModelId,
+	isReasoningGlmModelId,
+	modelFamilyToken,
 	supportsAdaptiveThinkingDisplay,
 } from "@oh-my-pi/pi-catalog/identity";
 
@@ -104,5 +107,77 @@ describe("isOpenAIGptOssModelId", () => {
 		expect(isOpenAIGptOssModelId("gpt-4.1-mini")).toBe(false);
 		expect(isOpenAIGptOssModelId("oss-llm")).toBe(false);
 		expect(isOpenAIGptOssModelId("MiniMax-M2.7")).toBe(false);
+	});
+});
+
+describe("isReasoningGlmModelId", () => {
+	test("matches the glm-4.5+ base / air / turbo reasoning lines", () => {
+		expect(isReasoningGlmModelId("glm-4.5")).toBe(true);
+		expect(isReasoningGlmModelId("glm-4.5-air")).toBe(true);
+		expect(isReasoningGlmModelId("glm-4.6")).toBe(true);
+		expect(isReasoningGlmModelId("glm-4.7")).toBe(true);
+		expect(isReasoningGlmModelId("glm-5")).toBe(true);
+		expect(isReasoningGlmModelId("glm-5-turbo")).toBe(true);
+		expect(isReasoningGlmModelId("glm-5.1")).toBe(true);
+		expect(isReasoningGlmModelId("glm-5.2")).toBe(true);
+		// Family match is future-proof: new integers need no allowlist entry.
+		expect(isReasoningGlmModelId("glm-5.3")).toBe(true);
+		expect(isReasoningGlmModelId("glm-6")).toBe(true);
+		// Namespaced ids are stripped before classification.
+		expect(isReasoningGlmModelId("z-ai/glm-5-turbo")).toBe(true);
+	});
+
+	test("excludes pre-4.5, vision, flash, and preview SKUs", () => {
+		expect(isReasoningGlmModelId("glm-4")).toBe(false);
+		expect(isReasoningGlmModelId("glm-4.4")).toBe(false);
+		expect(isReasoningGlmModelId("glm-5-preview")).toBe(false);
+		expect(isReasoningGlmModelId("glm-4.5-flash")).toBe(false);
+		expect(isReasoningGlmModelId("glm-4.7-flashx")).toBe(false);
+		expect(isReasoningGlmModelId("glm-4.5v")).toBe(false);
+		expect(isReasoningGlmModelId("qwen3.5")).toBe(false);
+	});
+});
+
+describe("isGlmVisionModelId", () => {
+	test("matches the `v` vision shape across versions and variants", () => {
+		expect(isGlmVisionModelId("glm-4v")).toBe(true);
+		expect(isGlmVisionModelId("glm-4.5v")).toBe(true);
+		expect(isGlmVisionModelId("glm-4v-plus")).toBe(true);
+	});
+
+	test("excludes non-vision GLM ids (the old `includes('v')` false positives)", () => {
+		expect(isGlmVisionModelId("glm-5-preview")).toBe(false);
+		expect(isGlmVisionModelId("glm-4.5")).toBe(false);
+		expect(isGlmVisionModelId("glm-5-turbo")).toBe(false);
+	});
+});
+describe("modelFamilyToken", () => {
+	test("groups point releases within a vendor and separates across vendors", () => {
+		expect(modelFamilyToken("claude-opus-4-7")).toBe("anthropic");
+		expect(modelFamilyToken("claude-opus-4-8")).toBe("anthropic");
+		expect(modelFamilyToken("claude-opus-4-7")).toBe(modelFamilyToken("claude-opus-4-8"));
+		expect(modelFamilyToken("gpt-5.4")).toBe("openai");
+		expect(modelFamilyToken("gemini-3-pro")).toBe("gemini");
+		expect(modelFamilyToken("claude-opus-4-8")).not.toBe(modelFamilyToken("gpt-5.4"));
+	});
+
+	test("folds aggregator mirrors and namespace prefixes onto the lineage", () => {
+		expect(modelFamilyToken("anthropic/claude-opus-4.8")).toBe("anthropic");
+		expect(modelFamilyToken("openrouter/anthropic/claude-opus-4-8")).toBe("anthropic");
+	});
+
+	test("classifies non-first-party families", () => {
+		expect(modelFamilyToken("moonshotai/kimi-k2")).toBe("kimi");
+		expect(modelFamilyToken("qwen/qwen3-coder")).toBe("qwen");
+	});
+
+	test("classifies GLM across provider mirrors so same-lineage SKUs fold together", () => {
+		expect(modelFamilyToken("glm-5.2")).toBe("glm");
+		expect(modelFamilyToken("zai/glm-5.2")).toBe(modelFamilyToken("zhipu-coding-plan/glm-5.2"));
+		expect(modelFamilyToken("zai/glm-5.2")).toBe("glm");
+	});
+
+	test("returns an empty token for unclassifiable ids so callers fall back to provider", () => {
+		expect(modelFamilyToken("some-unknown-model")).toBe("");
 	});
 });

@@ -23,6 +23,7 @@ import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { ExtensionUISelectItem } from "../extensibility/extensions";
 import { getMarkdownTheme, type Theme, theme } from "../modes/theme/theme";
 import askDescription from "../prompts/tools/ask.md" with { type: "text" };
+import { vocalizer } from "../tts/vocalizer";
 import { framedBlock, renderStatusLine } from "../tui";
 import type { ToolSession } from ".";
 import { formatErrorMessage, formatMeta, formatTitle } from "./render-utils";
@@ -485,6 +486,13 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 				content: [{ type: "text" as const, text: "Error: questions must not be empty" }],
 				details: {},
 			};
+		}
+
+		// Speak the question(s) aloud before surfacing them. Ask vocalizes in every
+		// mode — it's the assistant addressing the user — gated only by speech.enabled
+		// (the vocalizer re-checks the setting and no-ops when disabled).
+		if (this.session.settings.get("speech.enabled")) {
+			vocalizer.speak(params.questions.map(q => q.question).join("\n"));
 		}
 
 		const askQuestion = async (

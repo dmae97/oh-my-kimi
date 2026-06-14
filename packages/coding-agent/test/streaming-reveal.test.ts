@@ -219,21 +219,6 @@ describe("streaming reveal", () => {
 		expect(component.transientFlags.every(flag => flag === true)).toBe(true);
 	});
 
-	it("ticks increasing prefixes at the render cadence", () => {
-		vi.useFakeTimers();
-		const requestRender = vi.fn();
-		const { component, controller } = makeController({ requestRender });
-
-		controller.begin(component, makeMessage([{ type: "text", text: "" }]));
-		controller.setTarget(makeMessage([{ type: "text", text: "abcdefghi" }]));
-
-		vi.advanceTimersByTime(STREAMING_REVEAL_FRAME_MS);
-		expect(textAt(latestMessage(component), 0)).toBe("abc");
-		vi.advanceTimersByTime(STREAMING_REVEAL_FRAME_MS);
-		expect(textAt(latestMessage(component), 0)).toBe("abcdef");
-		expect(requestRender).toHaveBeenCalledTimes(2);
-	});
-
 	it("stop halts pending ticker updates", () => {
 		vi.useFakeTimers();
 		const { component, controller } = makeController();

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
-import { __computeBunfsPackageRoot } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/legacy-pi-compat";
+import {
+	__computeBundledSelfPackageRoot,
+	__computeBunfsPackageRoot,
+} from "@oh-my-pi/pi-coding-agent/extensibility/plugins/legacy-pi-compat";
 
 // Regression for issue #1514: legacy pi compat shim paths were built from a
 // hardcoded POSIX literal `/$bunfs/root/packages`. On Windows the bunfs root
@@ -35,5 +38,29 @@ describe("legacy pi compat bunfs root computation (issue #1514)", () => {
 	it("uses the current host path implementation for production calls", () => {
 		const metaDir = path.join("/", "anywhere", "root");
 		expect(__computeBunfsPackageRoot(metaDir)).toBe(path.join("/", "anywhere", "root", "packages"));
+	});
+
+	it("derives the npm prebuilt bundle package root from dist import.meta.dir", () => {
+		const computeBundledSelfPackageRoot = __computeBundledSelfPackageRoot;
+
+		const winMetaDir = "C:\\Users\\me\\.bun\\install\\global\\node_modules\\@oh-my-pi\\pi-coding-agent\\dist";
+		expect(computeBundledSelfPackageRoot(winMetaDir, path.win32)).toBe(
+			"C:\\Users\\me\\.bun\\install\\global\\node_modules\\@oh-my-pi\\pi-coding-agent",
+		);
+
+		const posixMetaDir = "/home/me/.bun/install/global/node_modules/@oh-my-pi/pi-coding-agent/dist";
+		expect(computeBundledSelfPackageRoot(posixMetaDir, path.posix)).toBe(
+			"/home/me/.bun/install/global/node_modules/@oh-my-pi/pi-coding-agent",
+		);
+	});
+
+	it("derives the source package root when PI_BUNDLED is used outside dist", () => {
+		const computeBundledSelfPackageRoot = __computeBundledSelfPackageRoot;
+
+		const winMetaDir = "C:\\repo\\packages\\coding-agent\\src\\extensibility\\plugins";
+		expect(computeBundledSelfPackageRoot(winMetaDir, path.win32)).toBe("C:\\repo\\packages\\coding-agent");
+
+		const posixMetaDir = "/repo/packages/coding-agent/src/extensibility/plugins";
+		expect(computeBundledSelfPackageRoot(posixMetaDir, path.posix)).toBe("/repo/packages/coding-agent");
 	});
 });

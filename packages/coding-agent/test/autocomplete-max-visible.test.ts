@@ -6,14 +6,16 @@ import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config
 import { SelectorController } from "@oh-my-pi/pi-coding-agent/modes/controllers/selector-controller";
 import { getProjectAgentDir, Snowflake } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
+import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
 describe("autocompleteMaxVisible setting", () => {
-	let testDir: string;
+	let settingsState: SettingsTestState | undefined;
+	let testDir = "";
 	let agentDir: string;
 	let projectDir: string;
 
 	beforeEach(() => {
-		resetSettingsForTest();
+		settingsState = beginSettingsTest();
 		testDir = path.join(os.tmpdir(), "test-autocomplete-settings", Snowflake.next());
 		agentDir = path.join(testDir, "agent");
 		projectDir = path.join(testDir, "project");
@@ -22,10 +24,12 @@ describe("autocompleteMaxVisible setting", () => {
 	});
 
 	afterEach(() => {
-		resetSettingsForTest();
-		if (fs.existsSync(testDir)) {
-			fs.rmSync(testDir, { recursive: true });
+		restoreSettingsTestState(settingsState);
+		settingsState = undefined;
+		if (testDir && fs.existsSync(testDir)) {
+			fs.rmSync(testDir, { recursive: true, force: true });
 		}
+		testDir = "";
 	});
 
 	it("should persist and read back a configured value", async () => {

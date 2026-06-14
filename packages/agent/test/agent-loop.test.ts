@@ -1710,4 +1710,125 @@ describe("agentLoopContinue with AgentMessage", () => {
 			expect(toolEnd.result.content).toEqual([{ type: "text", text: "Tool failed with no output." }]);
 		}
 	});
+
+	it("should detect repetition loops during assistant stream and abort gracefully", async () => {
+		const context: AgentContext = { systemPrompt: ["You are helpful."], messages: [], tools: [] };
+		const mock = createMockModel({
+			provider: "google-gemini-cli",
+			responses: [
+				{
+					content: Array.from({ length: 80 }, () => "🌊 "),
+				},
+			],
+		});
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
+
+		const stream = agentLoop([createUserMessage("Hello")], context, config, undefined, mock.stream);
+		for await (const _event of stream) {
+			// drain the stream to completion
+		}
+
+		const messages = await stream.result();
+		expect(messages.length).toBe(2);
+		expect(messages[1].role).toBe("assistant");
+
+		const assistantMsg = messages[1] as AssistantMessage;
+		expect(assistantMsg.stopReason).toBe("error");
+		expect(assistantMsg.errorMessage).toContain("Repetition loop detected");
+
+		let text = "";
+		for (const block of assistantMsg.content) {
+			if (block.type === "text") text += block.text;
+		}
+		expect(text).toBe("🌊 ");
+	});
+
+	it("detects and truncates repetition loops inside a thinking stream", async () => {
+		const context: AgentContext = { systemPrompt: ["You are helpful."], messages: [], tools: [] };
+		const mock = createMockModel({
+			provider: "google-gemini-cli",
+			responses: [
+				{
+					content: Array.from({ length: 80 }, (_, index) => ({
+						type: "thinking" as const,
+						thinking: "🌊 ",
+						thinkingSignature: `signature-${index}`,
+						itemId: `rs_${index}`,
+					})),
+				},
+			],
+		});
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
+
+		const stream = agentLoop([createUserMessage("Hello")], context, config, undefined, mock.stream);
+		for await (const _event of stream) {
+			// drain the stream to completion
+		}
+
+		const assistantMsg = (await stream.result())[1] as AssistantMessage;
+		expect(assistantMsg.stopReason).toBe("error");
+		expect(assistantMsg.errorMessage).toContain("Repetition loop detected");
+
+		// A looping thinking stream must be both detected AND collapsed to a single
+		// representative copy — not committed to the transcript in full.
+		let thinking = "";
+		for (const block of assistantMsg.content) {
+			if (block.type === "thinking") thinking += block.thinking;
+		}
+		expect(thinking).toBe("🌊 ");
+		for (const block of assistantMsg.content) {
+			if (block.type === "thinking") {
+				expect(block.thinkingSignature).toBeUndefined();
+				expect(block.itemId).toBeUndefined();
+			}
+		}
+	});
+
+	it("does not flag short requested repetitive text as a loop", async () => {
+		const context: AgentContext = { systemPrompt: ["You are helpful."], messages: [], tools: [] };
+		const repeated = "🌊 ".repeat(26);
+		const mock = createMockModel({
+			provider: "google-gemini-cli",
+			responses: [{ content: [repeated] }],
+		});
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
+
+		const stream = agentLoop([createUserMessage("print 26 wave emoji")], context, config, undefined, mock.stream);
+		for await (const _event of stream) {
+			// drain the stream to completion
+		}
+
+		const assistantMsg = (await stream.result())[1] as AssistantMessage;
+		expect(assistantMsg.stopReason).not.toBe("error");
+		let text = "";
+		for (const block of assistantMsg.content) {
+			if (block.type === "text") text += block.text;
+		}
+		expect(text).toBe(repeated);
+	});
+
+	it("does not flag legitimate repetitive numeric output as a loop", async () => {
+		const context: AgentContext = { systemPrompt: ["You are helpful."], messages: [], tools: [] };
+		// A hexdump of zero-filled memory is highly repetitive but legitimate; the
+		// detector must not classify pure digit/whitespace runs as a loop.
+		const hexdump = "00 ".repeat(80);
+		const mock = createMockModel({
+			provider: "google-gemini-cli",
+			responses: [{ content: [hexdump] }],
+		});
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
+
+		const stream = agentLoop([createUserMessage("dump the zero page")], context, config, undefined, mock.stream);
+		for await (const _event of stream) {
+			// drain the stream to completion
+		}
+
+		const assistantMsg = (await stream.result())[1] as AssistantMessage;
+		expect(assistantMsg.stopReason).not.toBe("error");
+		let text = "";
+		for (const block of assistantMsg.content) {
+			if (block.type === "text") text += block.text;
+		}
+		expect(text).toBe(hexdump);
+	});
 });

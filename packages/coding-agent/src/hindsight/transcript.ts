@@ -8,7 +8,7 @@
  */
 
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import type { SessionEntry } from "../session/session-manager";
+import type { SessionEntry } from "../session/session-entries";
 import type { HindsightMessage } from "./content";
 
 export interface ReadonlySessionManagerLike {

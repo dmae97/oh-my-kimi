@@ -41,23 +41,34 @@ selection, transcript persists after exit). The engine maintains one ledger:
 - **`windowTopRow` (W)** — the frame row mapped to grid row 0. The visible
   window is frame rows `[W, W + height)`, repainted in place with relative
   cursor moves.
-- **commit boundary (B)** — reported by the component tree per frame
-  (`NativeScrollbackLiveRegion`): `B = commitSafeEnd ?? liveRegionStart ??
-  frame.length`. Rows below B may still re-layout and must not enter history.
+- **commit boundary** — reported by the component tree per frame
+  (`NativeScrollbackLiveRegion`) as two nested ends:
+  - **byte-stable end (B)** — `commitSafeEnd ?? liveRegionStart ?? frame.length`.
+    Rows below B are asserted never to re-layout and stay under the
+    committed-prefix audit.
+  - **durable end (D)** — `max(B, snapshotSafeEnd ?? B)`. Rows in `[B, D)` may
+    still drift bytes later (a streaming markdown table re-aligning columns) but
+    are *durable* — their current snapshot is permanent content, so dropping them
+    when they scroll off is forbidden. They commit **audit-exempt**: later drift
+    becomes a frozen stale row in history, never a re-anchor.
 
-Per ordinary frame: `W = max(C, L − height)`, `C' = max(C, min(B, W))`, and the
+Per ordinary frame: `W = max(C, L − height)`, `C' = max(C, min(D, W))`, and the
 only bytes that ever touch history are the **chunk** `frame[C, C')` written at
-the scrollback seam. Scrollback therefore equals `frame[0..C)` — every row
-exactly once, in order, with its content at commit time. There is nothing to
-guess, nothing to defer, and nothing to reconcile: the scroll position is
-irrelevant because ordinary updates never rewrite anything a scrolled reader
-could be looking at.
+the scrollback seam. The engine also tracks **`auditRows` (A ≤ C)** — the
+byte-stable leading prefix `[0, A)`; the committed-prefix audit (§2) samples only
+that prefix, so the durable suffix `[A, C)` drifting never triggers a re-anchor.
+Scrollback therefore equals `frame[0..C)` — every row exactly once, in order,
+with its content at commit time. There is nothing to guess, nothing to defer,
+and nothing to reconcile: the scroll position is irrelevant because ordinary
+updates never rewrite anything a scrolled reader could be looking at.
 
 ### What this costs (the accepted tradeoffs)
 
-- A block that has scrolled past the window top cannot reflow in place. Blocks
-  stay in the live region (below B) until they are final; a late mutation of
-  committed content is ignored (the stale committed copy stays in history).
+- A block that has scrolled past the window top cannot reflow in place. A
+  byte-stable block stays in the live region (below B) until final; a durable
+  block (below D) commits its scroll-off snapshot, so a late layout change of an
+  already-committed row is a frozen stale row in history (duplication never loss),
+  not a dropped row.
 - A component tree that reports **no seam** gets shell semantics: whatever
   scrolls off is final. Shrinking such a frame into its committed prefix
   re-anchors the window and leaves the stale copy in history (§3).
@@ -122,17 +133,25 @@ of history:
 - `getNativeScrollbackLiveRegionStart()` — first row that may still mutate
   (everything below it, including root chrome rendered after it, stays in the
   window).
-- `getNativeScrollbackCommitSafeEnd()` — optional deeper boundary: the
-  append-only prefix of the live region (a streaming assistant message's
-  settled rows). Without it, a single live block taller than the window would
-  hold its head out of history until it finalizes.
+- `getNativeScrollbackCommitSafeEnd()` — optional **byte-stable** deeper boundary
+  (B): the append-only prefix of the live region (a streaming assistant message's
+  settled rows), asserted never to re-layout, so it stays under the audit.
+- `getNativeScrollbackSnapshotSafeEnd()` — optional **durable** deeper boundary
+  (D ≥ B): rows whose current snapshot is permanent but may still drift bytes
+  (a streaming markdown table whose columns keep re-aligning). They commit on
+  scroll-off (never dropped) but **audit-exempt** — drift after commit freezes a
+  stale row in history rather than re-anchoring the audit and spraying duplicate
+  snapshots. Without it, a commit-stable block that perpetually re-lays-out an
+  interior row (a table taller than the window) had no byte-stable prefix past
+  the table head, so its scrolled-off rows were committed nowhere and repainted
+  nowhere — silent content loss as the reply streamed.
 
 `TranscriptContainer` implements this for the coding agent: finalized blocks
 freeze (their render is snapshotted, so their content can never drift after
 the engine may have committed it), still-mutating blocks
 (`isTranscriptBlockFinalized?.() === false`) anchor the live region, and
-`deriveLiveCommitState` derives the commit-safe end of the first live block
-from two independent signals:
+`deriveLiveCommitState` derives the byte-stable commit-safe end of the first
+live block from two independent signals:
 
 - **append-only detection** — a block observed growing without visibly
   rewriting an interior row commits its full body; a rewrite suspends this
@@ -155,6 +174,15 @@ from two independent signals:
   lives (the floor index travels with append-shaped insertions above it);
   one-off re-layouts before any promotion never arm it, and the append-only
   path commits the full block regardless.
+
+The byte-stable end gates audited commits; the **durable snapshot end** is the
+separate floor that guarantees no loss. `TranscriptContainer` reports the whole
+body of a still-live **commit-stable** block (`isTranscriptBlockCommitStable?.()
+!== false`) as the snapshot-safe end, so its scrolled-off rows always reach
+history even while its interior re-lays-out. Provisional blocks
+(`isTranscriptBlockCommitStable?.() === false`: a collapsing tool/edit preview
+whose head is a throwaway tail window) report no snapshot-safe end, so their
+head is correctly dropped rather than stranded as stale history.
 
 Freezing is unconditional — it is the engine's required guarantee, not a
 per-terminal optimization.

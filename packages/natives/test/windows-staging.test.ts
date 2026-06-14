@@ -20,8 +20,15 @@
  * build`) and on non-Windows so the regular path is unchanged.
  */
 import { describe, expect, it } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
-import { getAddonFilenames, resolveLoaderCandidates, shouldStageNodeModulesAddon } from "../native/loader-state.js";
+import {
+	cleanupStaleNativeVersions,
+	getAddonFilenames,
+	resolveLoaderCandidates,
+	shouldStageNodeModulesAddon,
+} from "../native/loader-state.js";
 import packageJson from "../package.json" with { type: "json" };
 
 const winNodeModulesNativeDir = "C:\\Users\\Admin\\node_modules\\@oh-my-pi\\pi-natives\\native";
@@ -125,6 +132,22 @@ describe("windows native addon staging", () => {
 		const nodeModulesBaseline = path.join(posixNodeModulesNativeDir, "pi_natives.linux-x64-baseline.node");
 		expect(candidates).not.toContain(versionedBaseline);
 		expect(candidates).toContain(nodeModulesBaseline);
+	});
+
+	it("removes stale version directories after the current native version loads", async () => {
+		const nativesDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-natives-cache-"));
+		try {
+			await fs.mkdir(path.join(nativesDir, "15.10.11"));
+			await fs.mkdir(path.join(nativesDir, packageJson.version));
+			await Bun.write(path.join(nativesDir, "README.txt"), "not a version directory");
+
+			const removed = cleanupStaleNativeVersions({ nativesDir, currentVersion: packageJson.version });
+
+			expect(removed.map(filePath => path.basename(filePath))).toEqual(["15.10.11"]);
+			expect((await fs.readdir(nativesDir)).sort()).toEqual(["README.txt", packageJson.version].sort());
+		} finally {
+			await fs.rm(nativesDir, { recursive: true, force: true });
+		}
 	});
 });
 

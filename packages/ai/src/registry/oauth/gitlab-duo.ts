@@ -40,9 +40,10 @@ function resolveClientId(): string {
 /**
  * Resolve callback-server options from `GITLAB_REDIRECT_URI`. When set, the
  * exact string is advertised to GitLab (strict matching), random-port fallback
- * is disabled, and the local listener is bound to the URI's loopback host/port
- * so the browser callback lands on us. Non-loopback URIs bind a random local
- * port — only the paste-code path can complete in that case.
+ * is disabled, and HTTP loopback URIs bind the listener to the URI's host/port
+ * so the browser callback lands on us. HTTPS loopback URIs are rejected because
+ * the local callback server is plaintext HTTP. Non-loopback URIs bind a random
+ * local port — only the paste-code path can complete in that case.
  */
 function resolveCallbackOptions(): OAuthCallbackFlowOptions {
 	const raw = process.env.GITLAB_REDIRECT_URI?.trim();
@@ -65,6 +66,10 @@ function resolveCallbackOptions(): OAuthCallbackFlowOptions {
 	}
 
 	const isLoopback = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1" || parsed.hostname === "[::1]";
+	if (isLoopback && parsed.protocol !== "http:") {
+		throw new Error(`GITLAB_REDIRECT_URI loopback callbacks must use http://, got: ${raw}`);
+	}
+
 	const port = parsed.port ? Number.parseInt(parsed.port, 10) : parsed.protocol === "https:" ? 443 : 80;
 
 	return {
