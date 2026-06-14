@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `Test & smoke (TS)` CI timeouts caused by parallel test files racing on the process-global Settings singleton. `CustomEditor` now accepts a `magicKeywordsEnabledOverride` injection point so the shimmer-gate test can assert behaviour without calling `resetSettingsForTest()` / `Settings.init()`; the "streaming tool call preview height" describe drops its gratuitous Settings reset+init (the bash/ssh/eval pending preview renderers never read global settings). Production wiring is unchanged ([#2582](https://github.com/can1357/oh-my-pi/issues/2582))
+
 ## [15.13.0] - 2026-06-14
 
 ### Breaking Changes
