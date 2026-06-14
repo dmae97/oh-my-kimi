@@ -159,6 +159,10 @@
 - Added a model-tier slider to the plan-approval prompt ("Plan mode - next step"). Left/right arrows move it from any list position to pick which configured role model (`cycleOrder`, e.g. `smol › default › slow`) executes the approved plan, with each tier colored by its role and the resolved model name shown beneath the track. The chosen tier is applied before dispatch and carries through the fresh/compacted execution session; the slider is hidden when fewer than two role models resolve.
 - `omp plugin install` now accepts GitHub/GitLab/Bitbucket shorthand (`github:user/repo`, `gitlab:user/repo`, …) and full git URLs (`https://github.com/user/repo`, `git@github.com:user/repo`, …) in addition to npm specs and marketplace refs.
 
+### Changed
+
+- Replaced the `omp bench` default prompt with a concrete query-planning trace that requires deriving selectivities, cardinalities, and I/O/CPU costs from given schema and data. The old prompt was open-ended prose recall, which rewarded not-thinking: adaptive-thinking models (Opus 4.6+/Sonnet 4.6+) minimized reasoning on the trivial task and streamed faster, skewing throughput comparisons. The new task forces multi-step reasoning so adaptive thinking engages and the benchmark measures generation under real cognitive load.
+
 ### Fixed
 
 - Fixed Kokoro TTS setup loading the workspace/global `@huggingface/transformers` runtime before the side-installed Kokoro runtime, which could leave `onnxruntime-node@1.26.0` bound to an older `libonnxruntime.so.1` and fail with `VERS_1.26.0` missing ([#2591](https://github.com/can1357/oh-my-pi/issues/2591)).
