@@ -245,6 +245,31 @@ describe("parseGitHubUrl — Actions", () => {
 	});
 });
 
+describe("parseGitHubUrl — commit", () => {
+	it("classifies a commit URL with a full SHA", () => {
+		const gh = parseGitHubUrl("https://github.com/can1357/oh-my-pi/commit/c1a1cb6149e73b345919dd4cf629b0d9ac74fb57");
+		expect(gh).toEqual({
+			type: "commit",
+			owner: "can1357",
+			repo: "oh-my-pi",
+			ref: "c1a1cb6149e73b345919dd4cf629b0d9ac74fb57",
+		});
+	});
+
+	it("accepts an abbreviated SHA", () => {
+		expect(parseGitHubUrl("https://github.com/can1357/oh-my-pi/commit/c1a1cb6")).toEqual({
+			type: "commit",
+			owner: "can1357",
+			repo: "oh-my-pi",
+			ref: "c1a1cb6",
+		});
+	});
+
+	it("falls back to `other` for a bare /commit segment with no SHA", () => {
+		expect(parseGitHubUrl("https://github.com/can1357/oh-my-pi/commit")?.type).toBe("other");
+	});
+});
+
 describe("stripActionsLogTimestamps", () => {
 	it("removes the per-line ISO timestamp prefix and a leading BOM", () => {
 		const raw =
