@@ -2925,7 +2925,7 @@ export class TUI extends Container {
 	 * settle via `#emitFullPaint`.
 	 */
 	#emitResizeViewport(window: readonly string[], height: number, contentRows: number, width: number): void {
-		let buffer = this.#paintBeginSequence + this.#enterResizeAltSequence() + "\x1b[H";
+		let buffer = `${this.#paintBeginSequence + this.#enterResizeAltSequence()}\x1b[H`;
 		for (let r = 0; r < height; r++) {
 			if (r > 0) buffer += "\r\n";
 			buffer += this.#lineRewriteSequence(window[r] ?? "", width);

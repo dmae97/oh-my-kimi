@@ -217,7 +217,14 @@ describe("Agent hub double-← gating", () => {
 
 	it("requireContent keeps the hub closed when only Main is registered", () => {
 		const agents = new AgentRegistry();
-		agents.register({ id: "Main", displayName: "Main", kind: "main", session: null, sessionFile: null, status: "running" });
+		agents.register({
+			id: "Main",
+			displayName: "Main",
+			kind: "main",
+			session: null,
+			sessionFile: null,
+			status: "running",
+		});
 		const { controller, shown } = setup(agents);
 
 		controller.showAgentHub(new SessionObserverRegistry(), { requireContent: true });

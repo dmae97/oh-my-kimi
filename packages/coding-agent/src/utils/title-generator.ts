@@ -55,12 +55,17 @@ const TITLE_MARKER_RE = /<title>([\s\S]*?)<\/title>/i;
  * emit a structured call, so the caller falls back to marker-wrapped text.
  */
 function modelSupportsForcedToolChoice(model: Model<Api>): boolean {
-	const compat = model.compat;
+	// `compat` is a union across APIs and `supportsToolChoice` lives only on the
+	// OpenAI-completions variant, so read both flags through a structural view.
+	const compat = model.compat as { supportsToolChoice?: boolean; supportsForcedToolChoice?: boolean } | undefined;
 	if (!compat) return true;
-	const forcedToolChoice = Reflect.get(compat, "supportsForcedToolChoice");
-	if (typeof forcedToolChoice === "boolean") return forcedToolChoice;
-	const toolChoice = Reflect.get(compat, "supportsToolChoice");
-	if (typeof toolChoice === "boolean") return toolChoice;
+	// A forced tool call first requires sending `tool_choice` at all. Hosts that
+	// drop the parameter entirely (`supportsToolChoice: false`, e.g. direct
+	// DeepSeek reasoning) can never be forced even when they otherwise accept
+	// forced values, so this veto wins over `supportsForcedToolChoice`.
+	if (compat.supportsToolChoice === false) return false;
+	if (typeof compat.supportsForcedToolChoice === "boolean") return compat.supportsForcedToolChoice;
+	if (typeof compat.supportsToolChoice === "boolean") return compat.supportsToolChoice;
 	return true;
 }
 
