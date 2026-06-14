@@ -77,6 +77,7 @@
 - Fixed `~/.agent[s]/skills` not appearing as `/skill:<name>` commands when every named source toggle (`skills.enableCodexUser`, `skills.enableClaudeUser`, `skills.enableClaudeProject`, `skills.enablePiUser`, `skills.enablePiProject`) was off: `loadSkills` gated the `agents` provider on `anyBuiltInSkillSourceEnabled`, so a user who turned off the Claude/Codex/Pi sources to clean noise also lost their own canonical OMP-native skills. The `agents` provider now reads the dedicated `enableAgentsUser`/`enableAgentsProject` toggles, and the unknown-third-party fall-through gate is restricted to the named third-party toggles so keeping the default agents toggles on no longer silently re-enables `opencode`/`github`/`claude-plugins`/`gemini` skill sources ([#2401](https://github.com/can1357/oh-my-pi/issues/2401)).
 - Fixed Claude Code marketplace plugin skills installed under `skills/<name>/SKILL.md` to also appear as bare slash commands such as `/understand`, matching Claude-native plugin docs. The slash command name is taken from the skill directory basename so display-style frontmatter names like `name: Understand Anything` still resolve to `/understand` ([#2415](https://github.com/can1357/oh-my-pi/issues/2415)).
 - Fixed ACP `/move` builtin test expectations to compare the resolved destination path so the test is portable on Windows and Unix ([#2381](https://github.com/can1357/oh-my-pi/pull/2381) by [@oldschoola](https://github.com/oldschoola)).
+- Fixed vLLM discovery so `providers.vllm.baseUrl` drives the built-in endpoint, additional OpenAI-compatible vLLM provider IDs work through `openai-models-list`, and discovered `max_model_len` or fallback `context_length` values set context windows instead of falling back to 128k.
 
 ### Removed
 
@@ -111,10 +112,6 @@
 ### Removed
 
 - Removed the `re-roots past a cwd-less legacy session in a shared explicit sessionDir` relocation test case and the `stores symlink-equivalent home cwd sessions under home-relative directories` file-operations test case.
-
-### Fixed
-
-- Fixed vLLM discovery so `providers.vllm.baseUrl` drives the built-in endpoint, additional OpenAI-compatible vLLM provider IDs work through `openai-models-list`, and discovered `max_model_len` or fallback `context_length` values set context windows instead of falling back to 128k.
 
 ## [15.12.5] - 2026-06-13
 
