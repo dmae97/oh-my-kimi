@@ -131,6 +131,7 @@ import {
 import { getRestorableSessionModels } from "./session/session-context";
 import { SessionManager } from "./session/session-manager";
 import { SnapcompactInlineTransformer } from "./session/snapcompact-inline";
+import { createSnapcompactSavingsRecorder } from "./session/snapcompact-savings-journal";
 import { closeAllConnections } from "./ssh/connection-manager";
 import { unmountAll } from "./ssh/sshfs-mount";
 import {
@@ -2340,11 +2341,16 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		const snapcompactSystemPromptMode = settings.get("snapcompact.systemPrompt");
 		const snapcompactInline =
 			snapcompactSystemPromptMode !== "none" || settings.get("snapcompact.toolResults")
-				? new SnapcompactInlineTransformer({
-						renderSystemPrompt: snapcompactSystemPromptMode,
-						renderToolResults: settings.get("snapcompact.toolResults"),
-						shape: settings.get("snapcompact.shape"),
-					})
+				? new SnapcompactInlineTransformer(
+						{
+							renderSystemPrompt: snapcompactSystemPromptMode,
+							renderToolResults: settings.get("snapcompact.toolResults"),
+							shape: settings.get("snapcompact.shape"),
+						},
+						// Journal the tokens each imaged tool result keeps off the wire
+						// (frames never reach session.jsonl, so this is their only trace).
+						createSnapcompactSavingsRecorder(() => sessionManager.getSessionFile() ?? null),
+					)
 				: undefined;
 		const transformProviderContext =
 			obfuscator || snapcompactInline

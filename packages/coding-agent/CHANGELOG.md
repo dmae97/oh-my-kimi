@@ -1,9 +1,9 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
+- Added `snapcompact-savings.jsonl` journaling for snapcompact tool-result compaction, recording session, provider, model, tool call, and estimated token savings whenever tool output is rendered as image frames
 - Added `subagent:<id>` loop-phase breadcrumbs around in-process subagent event dispatch and finalization so the TUI event-loop watchdog can attribute a main-thread stall to subagent execution ([#2485](https://github.com/can1357/oh-my-pi/issues/2485))
 - `highlightMagicKeywords(text, resetTo?, phase?)` now accepts an optional `phase` ∈ [0, 1) that rotates the gradient cyclically; sent bubbles omit it (static palette unchanged). `hasMagicKeyword(text)` exported from `modes/magic-keywords` is the cheap shimmer-gate the editor uses on every render.
 - Added a `fastModeScope` setting (`both` | `openai` | `claude`, default `both`) controlling which providers `/fast on` (and the fast-mode toggle) target. `both` keeps the prior unscoped priority behavior; `openai`/`claude` scope fast mode to one family. `/fast status` now reports the active scope.
