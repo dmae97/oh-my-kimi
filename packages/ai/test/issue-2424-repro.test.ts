@@ -123,6 +123,22 @@ describe("gitlab-duo OAuth env overrides (issue #2424)", () => {
 		).rejects.toThrow(/Invalid GITLAB_REDIRECT_URI/);
 	});
 
+	it("rejects HTTPS loopback GITLAB_REDIRECT_URI before opening browser auth", async () => {
+		process.env.GITLAB_REDIRECT_URI = "https://localhost:8443/callback";
+		const onAuth = vi.fn();
+
+		await expect(
+			loginGitLabDuo({
+				onAuth,
+				onManualCodeInput: async () => "x",
+				onPrompt: async () => "",
+				signal: AbortSignal.timeout(1_000),
+			}),
+		).rejects.toThrow(/loopback callbacks must use http:\/\//);
+
+		expect(onAuth).not.toHaveBeenCalled();
+	});
+
 	it("threads GITLAB_CLIENT_ID through the refresh request", async () => {
 		process.env.GITLAB_CLIENT_ID = "rotation-client";
 
