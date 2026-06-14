@@ -483,6 +483,7 @@ function injectIntentIntoSchema(schema: unknown, mode: "require" | "optional" = 
 		properties: {
 			[INTENT_FIELD]: {
 				type: "string",
+				description: "Concise intent in present participle form (2-6 words) strictly on a single line, no newlines",
 			},
 			...properties,
 		},
