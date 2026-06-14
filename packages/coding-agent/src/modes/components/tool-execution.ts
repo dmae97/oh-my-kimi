@@ -17,7 +17,7 @@ import {
 import { getProjectDir, logger, sanitizeText } from "@oh-my-pi/pi-utils";
 import { EDIT_MODE_STRATEGIES, type EditMode, type PerFileDiffPreview } from "../../edit";
 import type { Theme } from "../../modes/theme/theme";
-import { theme } from "../../modes/theme/theme";
+import { getThemeEpoch, theme } from "../../modes/theme/theme";
 import { BASH_DEFAULT_PREVIEW_LINES } from "../../tools/bash";
 import { EVAL_DEFAULT_PREVIEW_LINES } from "../../tools/eval";
 import { isWaitingPollDetails } from "../../tools/job";
@@ -177,6 +177,22 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 	#editAllowFuzzy: boolean | undefined;
 	#snapshots?: SnapshotStore;
 	#isPartial = true;
+	#resultVersion = 0;
+	#lastDisplayKey: string | undefined;
+	// Bumped whenever a render input that #rebuildDisplay consumes but the memo
+	// key cannot cheaply hash changes: streamed call args, the async edit-diff
+	// preview, and Kitty PNG conversions. Folded into the dirty key so those
+	// updates are not swallowed by the memo (see #updateDisplay).
+	#displayInputVersion = 0;
+	// Set once #rebuildDisplay has populated the display. Replaces a
+	// #contentBox.children.length probe so the memo fast-path also covers the
+	// #contentText fallback path (which leaves #contentBox empty).
+	#displayBuilt = false;
+	// Number of Image children the last rebuild emitted. Only when this is > 0 does
+	// the memo key fold in viewport-dependent image sizing (resolveImageOptions),
+	// so a terminal resize re-shapes image-bearing results to rescale them without
+	// forcing the common image-free result to re-shape on every resize tick.
+	#renderedImageCount = 0;
 	#tool?: AgentTool;
 	#ui: TUI;
 	#cwd: string;
@@ -282,6 +298,7 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		// signals "nothing meaningful changed" and the renderer can skip.
 		if (args === this.#args) return;
 		this.#args = args;
+		this.#displayInputVersion++;
 		this.#updateSpinnerAnimation();
 		this.#editDiffInFlight = this.#runPreviewDiff();
 		this.#updateDisplay();
@@ -366,6 +383,7 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 			if (controller.signal.aborted) return;
 			if (previews) {
 				this.#editDiffPreview = isStreaming ? stabilizeStreamingPreviews(previews) : previews;
+				this.#displayInputVersion++;
 				this.#updateDisplay();
 				this.#ui.requestRender();
 			}
@@ -394,6 +412,7 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 			return;
 		}
 		this.#result = result;
+		this.#resultVersion++;
 		this.#isPartial = isPartial;
 		// A `job` poll that found every watched job still running is transient
 		// "still waiting" chrome; keep the block displaceable so the next `job`
@@ -447,6 +466,7 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 				.toBase64()
 				.then(data => {
 					this.#convertedImages.set(index, { data, mimeType: "image/png" });
+					this.#displayInputVersion++;
 					this.#updateDisplay();
 					this.#ui.requestRender();
 				})
@@ -678,6 +698,29 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 	}
 
 	#updateDisplay(): void {
+		// `TERMINAL.imageProtocol` is resolved by an async capability probe during
+		// TUI startup, so a result rendered before it lands must re-shape once it
+		// does (it gates Image children vs text fallback in #rebuildDisplay); keyed
+		// here for the same reason markdown.ts keys its render cache on it.
+		const key = `${this.#resultVersion}|${this.#expanded}|${this.#isPartial}|${this.#spinnerFrame ?? "-"}|${this.#showImages}|${getThemeEpoch()}|${this.#displayInputVersion}|${this.#backgroundTaskFrozen}|${TERMINAL.imageProtocol ?? "-"}|${this.#imageSizeKey()}`;
+		if (key === this.#lastDisplayKey && this.#displayBuilt) return;
+		this.#lastDisplayKey = key;
+
+		this.#rebuildDisplay();
+		this.#displayBuilt = true;
+	}
+
+	// Viewport-/settings-dependent image sizing folded into the memo key only when
+	// the last rebuild actually emitted images, so a terminal resize re-shapes an
+	// image-bearing result (to rescale it) without re-shaping every image-free
+	// result on each resize tick.
+	#imageSizeKey(): string {
+		if (this.#renderedImageCount === 0) return "-";
+		const o = resolveImageOptions();
+		return `${o.maxWidthCells}:${o.maxHeightCells ?? "-"}`;
+	}
+
+	#rebuildDisplay(): void {
 		// Sync shared mutable render state for component closures
 		this.#renderState.expanded = this.#expanded;
 		this.#renderState.isPartial = this.#isPartial;
@@ -921,6 +964,7 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 				}
 			}
 		}
+		this.#renderedImageCount = this.#imageComponents.length;
 	}
 
 	#getCallArgsForRender(): any {

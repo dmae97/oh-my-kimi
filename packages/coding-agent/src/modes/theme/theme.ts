@@ -2108,6 +2108,7 @@ var autoDarkTheme: string = "dark";
 var autoLightTheme: string = "light";
 var onThemeChangeCallback: (() => void) | undefined;
 var themeLoadRequestId: number = 0;
+let themeEpoch = 0;
 
 function getCurrentThemeOptions(): CreateThemeOptions {
 	return {
@@ -2160,9 +2161,7 @@ export async function setTheme(
 		if (enableWatcher) {
 			await startThemeWatcher();
 		}
-		if (onThemeChangeCallback) {
-			onThemeChangeCallback();
-		}
+		notifyThemeChange();
 		return { success: true };
 	} catch (error) {
 		if (requestId !== themeLoadRequestId) {
@@ -2171,6 +2170,10 @@ export async function setTheme(
 		// Theme is invalid - fall back to dark theme
 		currentThemeName = "dark";
 		theme = await loadTheme("dark", getCurrentThemeOptions());
+		// The active theme just changed to the fallback — bump the epoch so memoized
+		// renderers (e.g. ToolExecutionComponent) re-shape with the fallback colors
+		// instead of holding the failed theme's stale styling.
+		notifyThemeChange();
 		// Don't start watcher for fallback theme
 		return {
 			success: false,
@@ -2187,9 +2190,7 @@ export async function previewTheme(name: string): Promise<{ success: boolean; er
 			return { success: false, error: "Theme preview superseded by a newer request" };
 		}
 		theme = loadedTheme;
-		if (onThemeChangeCallback) {
-			onThemeChangeCallback();
-		}
+		notifyThemeChange();
 		return { success: true };
 	} catch (error) {
 		if (requestId !== themeLoadRequestId) {
@@ -2236,9 +2237,7 @@ export function setThemeInstance(themeInstance: Theme): void {
 	theme = themeInstance;
 	currentThemeName = "<in-memory>";
 	stopThemeWatcher();
-	if (onThemeChangeCallback) {
-		onThemeChangeCallback();
-	}
+	notifyThemeChange();
 }
 
 /**
@@ -2259,7 +2258,7 @@ export async function setSymbolPreset(preset: SymbolPreset): Promise<void> {
 		theme = await loadTheme("dark", getCurrentThemeOptions());
 		if (requestId !== themeLoadRequestId) return;
 	}
-	onThemeChangeCallback?.();
+	notifyThemeChange();
 }
 
 /**
@@ -2288,7 +2287,7 @@ export async function setColorBlindMode(enabled: boolean): Promise<void> {
 		theme = await loadTheme("dark", getCurrentThemeOptions());
 		if (requestId !== themeLoadRequestId) return;
 	}
-	onThemeChangeCallback?.();
+	notifyThemeChange();
 }
 
 /**
@@ -2300,6 +2299,23 @@ export function getColorBlindMode(): boolean {
 
 export function onThemeChange(callback: () => void): void {
 	onThemeChangeCallback = callback;
+}
+
+/**
+ * Monotonic counter bumped on any theme-affecting change that should invalidate
+ * cached renders: theme swaps and reloads (including the invalid-theme dark
+ * fallback), theme previews, symbol-preset changes, and color-blind-mode
+ * changes — everything that routes through {@link notifyThemeChange}. Consumers
+ * key cached renders on it so the next render re-shapes their output.
+ */
+export function getThemeEpoch(): number {
+	return themeEpoch;
+}
+
+/** Bump the theme epoch and notify the registered theme-change listener. */
+function notifyThemeChange(): void {
+	themeEpoch++;
+	onThemeChangeCallback?.();
 }
 
 /**
@@ -2354,9 +2370,7 @@ async function startThemeWatcher(): Promise<void> {
 			loadTheme(watchedThemeName, getCurrentThemeOptions())
 				.then(loadedTheme => {
 					theme = loadedTheme;
-					if (onThemeChangeCallback) {
-						onThemeChangeCallback();
-					}
+					notifyThemeChange();
 				})
 				.catch(() => {
 					// Ignore errors (file might be in invalid state while being edited)
@@ -2396,9 +2410,7 @@ function reevaluateAutoTheme(debugLabel: string): void {
 	loadTheme(resolved, getCurrentThemeOptions())
 		.then(loadedTheme => {
 			theme = loadedTheme;
-			if (onThemeChangeCallback) {
-				onThemeChangeCallback();
-			}
+			notifyThemeChange();
 		})
 		.catch(err => {
 			logger.debug(`Theme switch on ${debugLabel} failed`, { error: String(err) });

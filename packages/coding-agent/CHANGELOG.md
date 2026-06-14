@@ -30,6 +30,11 @@
 
 - Removed the `re-roots past a cwd-less legacy session in a shared explicit sessionDir` relocation test case and the `stores symlink-equivalent home cwd sessions under home-relative directories` file-operations test case.
 
+### Fixed
+
+- Fixed the tool-result renderer re-shaping on every `invalidate()` (spinner tick, stream chunk, resize, keystroke), which made large grep/find/read results block the main thread for seconds and made typing sluggish. `ToolExecutionComponent.#updateDisplay()` now memoizes on a dirty key (result version, expand state, partial flag, spinner frame, image visibility, theme epoch, background-task freeze state, the resolved terminal image protocol, and a display-input version that covers streamed call args, the async edit-diff preview, and Kitty image conversions) and a `#displayBuilt` guard that also fast-paths the `#contentText` fallback, so the O(result-size) shaping runs once per change instead of every frame without freezing streamed args, previews, converted images, a backgrounded task settling to its static form, or images that arrive before the async image-protocol probe resolves. Image-bearing results also re-shape on terminal resize (keyed on the resolved image dimensions only when images are present) so inline images rescale, while image-free results never re-shape on resize ([#2484](https://github.com/can1357/oh-my-pi/issues/2484))
+- Fixed `setTheme()` not bumping the theme epoch on its invalid-theme fallback path: a failed theme load swaps the active theme to the dark fallback, so memoized renderers (the tool-result renderer above) must re-shape — previously they kept the failed theme's stale colors until some other state changed ([#2484](https://github.com/can1357/oh-my-pi/issues/2484))
+
 ## [15.12.5] - 2026-06-13
 ### Changed
 
