@@ -177,6 +177,37 @@ export function resolveLoaderCandidates({
 }
 
 // =========================================================================
+
+/**
+ * Remove version-pinned native cache directories older than the loaded package.
+ * Best-effort by design: permission errors and concurrent processes must not
+ * abort startup after the native addon has already loaded successfully.
+ *
+ * @param {{ nativesDir: string; currentVersion: string }} input
+ * @returns {string[]}
+ */
+export function cleanupStaleNativeVersions({ nativesDir, currentVersion }) {
+	const removed = [];
+	let entries;
+	try {
+		entries = fs.readdirSync(nativesDir, { withFileTypes: true });
+	} catch {
+		return removed;
+	}
+
+	for (const entry of entries) {
+		if (!entry.isDirectory() || entry.name === currentVersion) continue;
+		const targetPath = path.join(nativesDir, entry.name);
+		try {
+			fs.rmSync(targetPath, { recursive: true, force: true });
+			removed.push(targetPath);
+		} catch {
+			// Stale caches are opportunistic cleanup only.
+		}
+	}
+	return removed;
+}
+
 // Side-effectful loader. Everything below runs only when `loadNative()` is
 // called from `native/index.js` — tests that only import the pure helpers
 // above pay nothing for variant detection, subprocess spawns, or fs probes.
@@ -504,6 +535,7 @@ function installNativeTokioRuntime(bindings) {
 	}
 }
 
+
 function buildHelpMessage(ctx) {
 	if (ctx.isCompiledBinary) {
 		const expectedPaths = ctx.addonFilenames.map(filename => `  ${path.join(ctx.versionedDir, filename)}`).join("\n");
@@ -537,7 +569,8 @@ function initLoaderContext() {
 	const packageVersion = packageJson.version;
 	const nativeDir = path.join(import.meta.dir, "..", "native");
 	const execDir = path.dirname(process.execPath);
-	const versionedDir = path.join(getNativesDir(), packageVersion);
+	const nativesDir = getNativesDir();
+	const versionedDir = path.join(nativesDir, packageVersion);
 	const userDataDir =
 		process.platform === "win32"
 			? path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"), "omp")
@@ -595,6 +628,7 @@ function initLoaderContext() {
 		candidates,
 		versionSentinelExport,
 		isWorkspaceLoad,
+		nativesDir,
 	};
 }
 
@@ -615,6 +649,7 @@ export function loadNative() {
 			const bindings = require_(candidate);
 			validateLoadedBindings(ctx, bindings, candidate);
 			installNativeTokioRuntime(bindings);
+	        cleanupStaleNativeVersions({ nativesDir: ctx.nativesDir, currentVersion: ctx.packageVersion });
 			startupMarker("native:loadNative:done");
 			return bindings;
 		} catch (err) {
