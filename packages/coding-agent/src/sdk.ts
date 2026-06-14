@@ -2086,6 +2086,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 		const repeatToolDescriptions = settings.get("repeatToolDescriptions");
 		const eagerTasks = settings.get("task.eager") !== "default";
+		const eagerTasksAlways = settings.get("task.eager") === "always";
 		const intentField = $flag("PI_INTENT_TRACING", settings.get("tools.intentTracing")) ? INTENT_FIELD : undefined;
 		const rebuildSystemPrompt = async (
 			toolNames: string[],
@@ -2166,6 +2167,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				mcpDiscoveryMode: hasDiscoverableTools,
 				mcpDiscoveryServerSummaries: discoverableToolSummary.servers.map(formatDiscoverableToolServerSummary),
 				eagerTasks,
+				eagerTasksAlways,
 				taskBatch: settings.get("task.batch"),
 				secretsEnabled,
 				workspaceTree: workspaceTreePromise,
@@ -2570,6 +2572,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			ttsrManager,
 			obfuscator,
 			agentId: resolvedAgentId,
+			agentKind,
 			providerSessionId: options.providerSessionId,
 			parentEvalSessionId: options.parentEvalSessionId,
 		});
@@ -2694,24 +2697,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}
 		}
 
-		// Install the auto-learn post-stop nudge controller synchronously, before
-		// the possibly-slow memory backend starts, once per top-level session, when
-		// the feature is enabled at session start. A fast first turn must not finish
-		// before the listener subscribes, or its tool events are missed.
-		//
-		// Gated on `autolearn.enabled` to match the tools: `createTools` builds the
-		// `learn`/`manage_skill` registry ONCE at session start and no settings
-		// change rebuilds it, so installing the controller while disabled would let a
-		// mid-session enable fire a nudge pointing at tools the session never built.
-		// Activation is therefore a session-start decision for BOTH the controller
-		// and the tools; the fire-time re-check in `#onAgentEnd` still handles a
-		// mid-session DISABLE. The subscription lives for the session's lifetime; the
-		// reference is intentionally discarded (the listener retains it).
-		if (settings.get("autolearn.enabled") && taskDepth === 0) {
-			new AutoLearnController({ session, settings });
-		}
-
-		logger.time("startMemoryStartupTask", async () => {
+		const startMemoryBackend = async () => {
 			const memoryBackend = await resolveMemoryBackend(settings);
 			await memoryBackend.start({
 				session,
@@ -2722,7 +2708,28 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				parentHindsightSessionState: options.parentHindsightSessionState,
 				parentMnemopiSessionState: options.parentMnemopiSessionState,
 			});
-		});
+		};
+
+		// Auto-learn can immediately trigger a synthetic capture turn after the
+		// first real stop. When a memory backend is selected, install that backend's
+		// per-session state first so the capture turn's `learn` tool observes the
+		// same initialized state as normal memory tools. Other sessions keep memory
+		// startup in the background to preserve the existing startup profile.
+		//
+		// Gated on `autolearn.enabled` to match the tools: `createTools` builds the
+		// `learn`/`manage_skill` registry ONCE at session start and no settings
+		// change rebuilds it, so installing the controller while disabled would let a
+		// mid-session enable fire a nudge pointing at tools the session never built.
+		// Activation is therefore a session-start decision for BOTH the controller
+		// and the tools; the fire-time re-check in `#onAgentEnd` still handles a
+		// mid-session DISABLE. The subscription lives for the session's lifetime; the
+		// reference is intentionally discarded (the listener retains it).
+		if (settings.get("autolearn.enabled") && taskDepth === 0) {
+			await logger.time("startMemoryStartupTask", startMemoryBackend);
+			new AutoLearnController({ session, settings });
+		} else {
+			void logger.time("startMemoryStartupTask", startMemoryBackend);
+		}
 
 		// Wire MCP manager callbacks to session for reactive tool updates.
 		// Skip when reusing a parent's manager — the parent owns the callbacks.

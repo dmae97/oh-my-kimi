@@ -60,6 +60,27 @@ describe("createAgentSession auto-learn tool activation", () => {
 		expect(names).toContain("manage_skill");
 	});
 
+	it("initializes the selected memory backend before an auto-learn session can run", async () => {
+		const { session } = await createAgentSession({
+			cwd: registryDir,
+			agentDir: registryDir,
+			modelRegistry,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({
+				"autolearn.enabled": true,
+				"memory.backend": "hindsight",
+				"hindsight.apiUrl": "http://127.0.0.1:1",
+				"hindsight.mentalModelsEnabled": false,
+			}),
+			model: getBundledModel("openai", "gpt-4o-mini"),
+			disableExtensionDiscovery: true,
+			toolNames: ["read"],
+		});
+		sessions.push(session);
+
+		expect(session.getHindsightSessionState()).toBeDefined();
+	});
+
 	it("omits manage_skill from a restricted session when auto-learn is off", async () => {
 		const names = await activeToolNames(Settings.isolated({}));
 		expect(names).toContain("read");

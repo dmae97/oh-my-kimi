@@ -650,7 +650,7 @@ export async function consumeGoogleStream<T extends GoogleApiType>(args: {
 							partial: output,
 						});
 					}
-				} else if (part.thoughtSignature && currentBlock) {
+				} else if (part.text === "" && part.thoughtSignature && currentBlock && !part.functionCall) {
 					if (currentBlock.type === "thinking") {
 						currentBlock.thinkingSignature = retainThoughtSignature(
 							currentBlock.thinkingSignature,

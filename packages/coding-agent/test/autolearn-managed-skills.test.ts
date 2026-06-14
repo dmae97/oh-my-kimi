@@ -208,6 +208,19 @@ describe("managed-skills primitives", () => {
 				await fs.rm(outside, { recursive: true, force: true });
 			}
 		});
+
+		it("refuses to update a SKILL.md that is hard-linked outside managed skills", async () => {
+			await writeManagedSkill({ action: "create", name: "hardlink", description: "d", body: "managed content" });
+			const outside = path.join(tempHome, "authored-hardlink.md");
+			await Bun.write(outside, "user-authored content");
+			await fs.rm(skillFile("hardlink"));
+			await fs.link(outside, skillFile("hardlink"));
+
+			await expect(
+				writeManagedSkill({ action: "update", name: "hardlink", description: "d", body: "updated" }),
+			).rejects.toThrow(/hard links/);
+			expect(await Bun.file(outside).text()).toBe("user-authored content");
+		});
 	});
 
 	describe("deleteManagedSkill", () => {

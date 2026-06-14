@@ -47,6 +47,13 @@ export class AutoLearnController {
 	readonly #session: AgentSession;
 	readonly #settings: Settings;
 	#toolCalls = 0;
+	/**
+	 * Whether the in-flight turn BEGAN while goal mode was active. Captured at
+	 * agent_start because a `goal` tool can complete or drop the goal mid-turn,
+	 * clearing the live flag before agent_end — so the end-of-turn state alone
+	 * would let a goal-continuation turn slip through and get nudged.
+	 */
+	#turnStartedInGoalMode = false;
 	/** Swallow the agent_end produced by an auto-run capture turn so it cannot re-trigger. */
 	#suppressNext = false;
 
@@ -59,6 +66,11 @@ export class AutoLearnController {
 	}
 
 	#onEvent(event: AgentSessionEvent): void {
+		if (event.type === "agent_start") {
+			// Capture goal-mode state at the turn boundary, before any tool runs.
+			this.#turnStartedInGoalMode = this.#session.getGoalModeState()?.enabled === true;
+			return;
+		}
 		if (event.type === "tool_execution_end") {
 			this.#toolCalls++;
 			return;
@@ -74,6 +86,10 @@ export class AutoLearnController {
 		// must not let tool calls accumulate into a later turn.
 		const toolCalls = this.#toolCalls;
 		this.#toolCalls = 0;
+		// Snapshot the turn-start goal flag alongside the counter so a turn that
+		// observed no agent_start can never inherit a stale value.
+		const startedInGoalMode = this.#turnStartedInGoalMode;
+		this.#turnStartedInGoalMode = false;
 
 		if (this.#suppressNext) {
 			this.#suppressNext = false;
@@ -86,9 +102,11 @@ export class AutoLearnController {
 		if (toolCalls < minToolCalls) return;
 		// Never interrupt plan-mode review.
 		if (this.#session.getPlanModeState()?.enabled) return;
-		// Never divert an active goal loop: a passive nudge would ride the goal
-		// continuation, and auto-continue would compete with it. Skip entirely.
-		if (this.#session.getGoalModeState()?.enabled) return;
+		// Never divert a goal loop. Skip when the turn STARTED in goal mode — a
+		// `goal` tool may have completed/dropped the goal before this stop — or is
+		// still in it: a passive nudge would ride the goal continuation, and
+		// auto-continue would compete with it.
+		if (startedInGoalMode || this.#session.getGoalModeState()?.enabled) return;
 
 		// Auto-run a capture turn only when explicitly enabled; otherwise the
 		// hidden reminder rides the next real turn passively.

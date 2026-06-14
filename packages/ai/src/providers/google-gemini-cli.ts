@@ -504,7 +504,7 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 										partial: output,
 									});
 								}
-							} else if (part.thoughtSignature && currentBlock) {
+							} else if (part.text === "" && part.thoughtSignature && currentBlock && !part.functionCall) {
 								if (currentBlock.type === "thinking") {
 									currentBlock.thinkingSignature = retainThoughtSignature(
 										currentBlock.thinkingSignature,

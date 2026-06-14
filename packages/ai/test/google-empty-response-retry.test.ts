@@ -161,6 +161,53 @@ describe("Google empty-response retry (public + Vertex path)", () => {
 		expect(textEndEvents).toHaveLength(1);
 		expect(textEndEvents[0].content).toBe("Hello");
 	});
+
+	it("does not coalesce function-call thought signatures into the preceding Vertex text block", async () => {
+		const chunks = [
+			{ candidates: [{ content: { parts: [{ text: "Hello" }] } }] },
+			{
+				candidates: [
+					{
+						content: {
+							parts: [
+								{
+									functionCall: { name: "lookup", args: { q: "x" }, id: "call_1" },
+									thoughtSignature: "function-call-sig",
+								},
+							],
+						},
+						finishReason: "STOP",
+					},
+				],
+			},
+		];
+
+		const fetchMock: FetchImpl = async input => {
+			const url = input instanceof Request ? input.url : input.toString();
+			if (url.includes("oauth2.googleapis.com/token") || url.includes("metadata.google.internal")) {
+				return new Response(JSON.stringify({ access_token: "token", expires_in: 3600 }));
+			}
+			return sse(...chunks);
+		};
+
+		const stream = streamGoogleVertex(vertexModel, context, {
+			project: "project",
+			location: "location",
+			fetch: fetchMock,
+		});
+		const result = await stream.result();
+
+		expect(result.stopReason).toBe("toolUse");
+		expect(result.content).toHaveLength(2);
+		expect(result.content[0]).toEqual({ type: "text", text: "Hello" });
+		expect(result.content[1]).toMatchObject({
+			type: "toolCall",
+			id: "call_1",
+			name: "lookup",
+			arguments: { q: "x" },
+			thoughtSignature: "function-call-sig",
+		});
+	});
 });
 
 describe("Google empty-response retry (Cloud Code Assist path)", () => {
@@ -186,5 +233,51 @@ describe("Google empty-response retry (Cloud Code Assist path)", () => {
 		expect(result.stopReason).toBe("stop");
 		expect(textOf(result)).toBe("Done.");
 		void events;
+	});
+
+	it("does not coalesce function-call thought signatures into the preceding text block", async () => {
+		const chunks = [
+			{ response: { candidates: [{ content: { parts: [{ text: "Done" }] } }] } },
+			{
+				response: {
+					candidates: [
+						{
+							content: {
+								parts: [
+									{
+										functionCall: { name: "lookup", args: { q: "x" }, id: "call_1" },
+										thoughtSignature: "function-call-sig",
+									},
+								],
+							},
+							finishReason: "STOP",
+						},
+					],
+				},
+			},
+		];
+
+		const fetchMock: FetchImpl = async () => {
+			const response = sse(...chunks);
+			Object.defineProperty(response, "url", { value: "https://example.com/v1internal:streamGenerateContent" });
+			return response;
+		};
+
+		const stream = streamGoogleGeminiCli(cliModel, context, {
+			apiKey: JSON.stringify({ token: "token", projectId: "proj-123" }),
+			fetch: fetchMock,
+		});
+		const result = await stream.result();
+
+		expect(result.stopReason).toBe("toolUse");
+		expect(result.content).toHaveLength(2);
+		expect(result.content[0]).toEqual({ type: "text", text: "Done" });
+		expect(result.content[1]).toMatchObject({
+			type: "toolCall",
+			id: "call_1",
+			name: "lookup",
+			arguments: { q: "x" },
+			thoughtSignature: "function-call-sig",
+		});
 	});
 });

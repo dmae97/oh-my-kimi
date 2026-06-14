@@ -212,6 +212,8 @@ describe("AgentSession eager todo enforcement", () => {
 		});
 		expect(observedCalls[0]?.messageTexts.filter(text => text.includes("list all work trees"))).toHaveLength(1);
 		expect(observedCalls[0]?.messageTexts[0]).not.toContain("list all work trees");
+		// `always` renders the hard, forced reminder.
+		expect(observedCalls[0]?.messageTexts[0]).toContain("You MUST call");
 		expect(session.formatSessionAsText()).not.toContain("<user-request>");
 	});
 
@@ -307,5 +309,9 @@ describe("AgentSession eager todo enforcement", () => {
 		expect(observedCalls[0]?.messageRoles).toEqual(["developer", "user"]);
 		expect(observedCalls[0]?.messageTexts.at(-1)).toBe("list all work trees");
 		expect(observedCalls[0]?.messageTexts[0]).not.toContain("list all work trees");
+		// `preferred` renders the soft nudge, never the hard MUST directive.
+		expect(observedCalls[0]?.messageTexts[0]).toContain("Consider calling");
+		expect(observedCalls[0]?.messageTexts[0]).not.toContain("You MUST call");
+		expect(observedCalls[0]?.messageTexts[0]).not.toContain("Before substantive work, create a phased todo.");
 	});
 });

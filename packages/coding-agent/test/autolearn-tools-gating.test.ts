@@ -4,6 +4,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { getManagedSkillsDir } from "@oh-my-pi/pi-coding-agent/autolearn/managed-skills";
 import { type SettingPath, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { resetActiveSkillsForTests, type Skill, setActiveSkills } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
+import type { HindsightSessionState } from "@oh-my-pi/pi-coding-agent/hindsight/state";
 import type { MnemopiSessionState } from "@oh-my-pi/pi-coding-agent/mnemopi/state";
 import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { LearnTool } from "@oh-my-pi/pi-coding-agent/tools/learn";
@@ -110,6 +112,7 @@ describe("manage_skill execute", () => {
 
 	afterEach(async () => {
 		spyOn(os, "homedir").mockRestore();
+		resetActiveSkillsForTests();
 		await fs.rm(tempHome, { recursive: true, force: true });
 	});
 
@@ -137,6 +140,38 @@ describe("manage_skill execute", () => {
 		expect(schema.safeParse({ action: "update", name: "x", description: "d" }).success).toBe(false);
 		expect(schema.safeParse({ action: "create", name: "x", description: "d", body: "b" }).success).toBe(true);
 		expect(schema.safeParse({ action: "delete", name: "x" }).success).toBe(true);
+	});
+
+	it("refuses to create a managed skill an authored skill of the same name would shadow", async () => {
+		const authored: Skill = {
+			name: "demo",
+			description: "An authored demo skill.",
+			filePath: path.join(tempHome, "authored", "demo", "SKILL.md"),
+			baseDir: path.join(tempHome, "authored", "demo"),
+			source: "native:user",
+			_source: {
+				provider: "native",
+				providerName: "Pi",
+				path: path.join(tempHome, "authored", "demo", "SKILL.md"),
+				level: "user",
+			},
+		};
+		setActiveSkills([authored]);
+
+		const result = await tool().execute("c", {
+			action: "create",
+			name: "demo",
+			description: "When to demo.",
+			body: "# Demo",
+		});
+
+		// Reported as an error, not a false "Created".
+		expect(result.isError).toBe(true);
+		const text = result.content.map(part => (part.type === "text" ? part.text : "")).join("");
+		expect(text).toMatch(/authored skill/i);
+		expect(text).not.toContain("Created");
+		// Nothing was written, so the managed skill can never surface.
+		expect(await Bun.file(path.join(getManagedSkillsDir(), "demo", "SKILL.md")).exists()).toBe(false);
 	});
 });
 
@@ -195,6 +230,52 @@ describe("learn execute", () => {
 		).rejects.toThrow(/Lesson stored, but the managed skill could not be written/);
 		// The memory half still ran.
 		expect(remembered).toHaveLength(1);
+	});
+
+	it("reports Hindsight lessons as queued rather than stored", async () => {
+		const queued: Array<{ memory: string; context?: string }> = [];
+		const session = makeSession(
+			{ "autolearn.enabled": true, "memory.backend": "hindsight" },
+			{
+				getHindsightSessionState: () =>
+					({
+						enqueueRetain: (memory: string, context?: string) => {
+							queued.push({ memory, context });
+						},
+					}) as unknown as HindsightSessionState,
+			},
+		);
+
+		const result = await new LearnTool(session).execute("hindsight-1", {
+			memory: "Queue this lesson.",
+			context: "from review",
+		});
+
+		expect(queued).toEqual([{ memory: "Queue this lesson.", context: "from review" }]);
+		expect(result.content[0]).toEqual({ type: "text", text: "Lesson queued for retention." });
+	});
+
+	it("reports Hindsight skill failures as queued partial outcomes", async () => {
+		const queued: string[] = [];
+		const session = makeSession(
+			{ "autolearn.enabled": true, "memory.backend": "hindsight" },
+			{
+				getHindsightSessionState: () =>
+					({
+						enqueueRetain: (memory: string) => {
+							queued.push(memory);
+						},
+					}) as unknown as HindsightSessionState,
+			},
+		);
+
+		await expect(
+			new LearnTool(session).execute("hindsight-2", {
+				memory: "queued lesson",
+				skill: { action: "create", name: "../evil", description: "d", body: "b" },
+			}),
+		).rejects.toThrow(/Lesson queued for retention, but the managed skill could not be written/);
+		expect(queued).toEqual(["queued lesson"]);
 	});
 
 	it("fails the lesson and skips the skill when mnemopi returns no id", async () => {

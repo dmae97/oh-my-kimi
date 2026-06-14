@@ -7,6 +7,7 @@
  * surfaced like normal skills, but every write here is confined to
  * `getManagedSkillsDir()` — auto-management can never touch authored skills.
  */
+import { constants as fsConstants, type Stats } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -125,6 +126,30 @@ async function assertManagedRootSafe(): Promise<void> {
 	}
 }
 
+const UPDATE_FILE_OPEN_FLAGS = fsConstants.O_WRONLY | fsConstants.O_NOFOLLOW;
+
+function assertManagedSkillFileSafeForUpdate(name: string, fileStat: Stats): void {
+	if (!fileStat.isFile()) {
+		throw new Error(`Managed skill "${name}" SKILL.md is not a regular file; refusing to overwrite it.`);
+	}
+	if (fileStat.nlink > 1) {
+		throw new Error(
+			`Managed skill "${name}" SKILL.md has ${fileStat.nlink} hard links; refusing to overwrite a file that may be user-authored elsewhere.`,
+		);
+	}
+}
+
+async function openManagedSkillFileForUpdate(name: string, file: string) {
+	try {
+		return await fs.open(file, UPDATE_FILE_OPEN_FLAGS);
+	} catch (err) {
+		if ((err as { code?: string }).code === "ELOOP") {
+			throw new Error(`Managed skill "${name}" SKILL.md is a symlink; refusing to overwrite it.`);
+		}
+		throw err;
+	}
+}
+
 /** Create or update a managed `SKILL.md`. Returns the resolved file path. */
 export async function writeManagedSkill(input: WriteManagedSkillInput): Promise<{ path: string }> {
 	const name = sanitizeSkillName(input.name);
@@ -178,7 +203,10 @@ export async function writeManagedSkill(input: WriteManagedSkillInput): Promise<
 			}
 			return { path: file };
 		}
-		// update: the file must already exist and must not be a symlink.
+		// update: the file must already exist, be a plain managed file, and must
+		// not share an inode with a user-authored file via hard link. Open the
+		// checked file handle before truncating so a path swap after lstat cannot
+		// redirect the write into a symlink or newly hard-linked target.
 		const fileStat = await fs.lstat(file).catch(err => {
 			if (isEnoent(err)) return null;
 			throw err;
@@ -189,7 +217,16 @@ export async function writeManagedSkill(input: WriteManagedSkillInput): Promise<
 		if (fileStat.isSymbolicLink()) {
 			throw new Error(`Managed skill "${name}" SKILL.md is a symlink; refusing to overwrite it.`);
 		}
-		await Bun.write(file, content);
+		assertManagedSkillFileSafeForUpdate(name, fileStat);
+		const handle = await openManagedSkillFileForUpdate(name, file);
+		try {
+			const openStat = await handle.stat();
+			assertManagedSkillFileSafeForUpdate(name, openStat);
+			await handle.truncate(0);
+			await handle.writeFile(content);
+		} finally {
+			await handle.close();
+		}
 		return { path: file };
 	});
 }

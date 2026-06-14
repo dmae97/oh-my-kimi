@@ -1,6 +1,7 @@
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { z } from "zod/v4";
-import { writeManagedSkill } from "../autolearn/managed-skills";
+import { sanitizeSkillName, writeManagedSkill } from "../autolearn/managed-skills";
+import { isNameClaimedByAuthoredSkill } from "../extensibility/skills";
 import { localBackend } from "../memory-backend/local-backend";
 import learnDescription from "../prompts/tools/learn.md" with { type: "text" };
 import type { ToolSession } from ".";
@@ -51,8 +52,9 @@ export class LearnTool implements AgentTool<typeof learnSchema> {
 	}
 
 	async execute(_id: string, params: LearnParams): Promise<AgentToolResult> {
-		// 1) Persist the lesson to long-term memory (mirrors MemoryRetainTool).
+		// 1) Persist or queue the lesson to long-term memory (mirrors MemoryRetainTool).
 		const backend = this.session.settings.get("memory.backend");
+		let memoryMessage = "Lesson stored";
 		if (backend === "mnemopi") {
 			const state = this.session.getMnemopiSessionState?.();
 			if (!state) {
@@ -93,26 +95,49 @@ export class LearnTool implements AgentTool<typeof learnSchema> {
 				throw new Error("Hindsight backend is not initialised for this session.");
 			}
 			state.enqueueRetain(params.memory, params.context);
+			memoryMessage = "Lesson queued for retention";
 		}
 
 		// 2) Optionally mint/enhance a managed skill. A failure here is surfaced
-		// as a partial outcome — the lesson is already persisted.
+		// as a partial outcome — the lesson is already stored or queued.
 		if (params.skill) {
+			// A managed skill resolves below any authored skill of the same name, so
+			// minting one under a claimed name writes a file that never surfaces. The
+			// lesson is already stored/queued; refuse the skill rather than report a
+			// false "Created" (mirrors ManageSkillTool).
+			let safeSkillName: string | undefined;
+			try {
+				safeSkillName = sanitizeSkillName(params.skill.name);
+			} catch {
+				safeSkillName = undefined;
+			}
+			if (params.skill.action === "create" && safeSkillName && isNameClaimedByAuthoredSkill(safeSkillName)) {
+				return {
+					content: [
+						{
+							type: "text",
+							text: `${memoryMessage}. Did not create managed skill "${params.skill.name}": an authored skill of that name already exists, and managed skills cannot override authored ones. Choose a different name.`,
+						},
+					],
+					isError: true,
+					details: { skill: null, shadowed: true },
+				};
+			}
 			try {
 				await writeManagedSkill(params.skill);
 			} catch (err) {
 				const reason = err instanceof Error ? err.message : String(err);
-				throw new Error(`Lesson stored, but the managed skill could not be written: ${reason}`);
+				throw new Error(`${memoryMessage}, but the managed skill could not be written: ${reason}`);
 			}
 			const verb = params.skill.action === "create" ? "Created" : "Updated";
 			return {
-				content: [{ type: "text", text: `Lesson stored. ${verb} managed skill "${params.skill.name}".` }],
+				content: [{ type: "text", text: `${memoryMessage}. ${verb} managed skill "${params.skill.name}".` }],
 				details: { skill: params.skill.name },
 			};
 		}
 
 		return {
-			content: [{ type: "text", text: "Lesson stored." }],
+			content: [{ type: "text", text: `${memoryMessage}.` }],
 			details: { skill: null },
 		};
 	}

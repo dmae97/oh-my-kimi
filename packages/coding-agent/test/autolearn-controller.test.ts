@@ -48,6 +48,10 @@ class FakeSession {
 		}
 	}
 
+	agentStart(): void {
+		this.emit({ type: "agent_start" });
+	}
+
 	agentEnd(): void {
 		this.emit({ type: "agent_end", messages: [] });
 	}
@@ -144,6 +148,27 @@ describe("AutoLearnController", () => {
 		expect(session.sent).toHaveLength(0);
 		// The skipped stop must not arm suppression for the next non-goal stop.
 		session.goalEnabled = false;
+		session.toolCalls(5);
+		session.agentEnd();
+		expect(session.sent).toHaveLength(1);
+	});
+
+	it("never nudges a turn that started in goal mode even if the goal ended mid-turn", () => {
+		const session = new FakeSession();
+		session.goalEnabled = true;
+		install(session);
+		// The turn begins as a goal continuation...
+		session.agentStart();
+		session.toolCalls(5);
+		// ...then a `goal` tool completes/drops the goal mid-turn: the live flag is
+		// off by the time the turn stops, but this turn must still never be nudged.
+		session.goalEnabled = false;
+		session.agentEnd();
+		expect(session.sent).toHaveLength(0);
+
+		// The capture is per-turn: a fresh turn that did not start in goal mode
+		// nudges normally, proving the latch resets.
+		session.agentStart();
 		session.toolCalls(5);
 		session.agentEnd();
 		expect(session.sent).toHaveLength(1);

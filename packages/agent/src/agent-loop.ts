@@ -1018,7 +1018,11 @@ async function streamAssistantResponse(
 				return aborted;
 			};
 
-			const finishRepetitionStream = async (pattern: string, count: number): Promise<AssistantMessage> => {
+			const finishRepetitionStream = async (
+				kind: "text" | "thinking",
+				pattern: string,
+				count: number,
+			): Promise<AssistantMessage> => {
 				repetitionAbortController.abort();
 				try {
 					const cleanup = responseIterator.return?.();
@@ -1027,7 +1031,7 @@ async function streamAssistantResponse(
 					// ignore
 				}
 				if (partialMessage) {
-					truncateRepetition(partialMessage, pattern, count);
+					truncateRepetition(partialMessage, kind, pattern);
 					partialMessage.stopReason = "error";
 					partialMessage.errorMessage = `Repetition loop detected: assistant repeated "${pattern.trim()}" ${count} times consecutively.`;
 				}
@@ -1079,6 +1083,14 @@ async function streamAssistantResponse(
 				abortRacePromise = promise;
 				detachAbortListener = () => requestSignal.removeEventListener("abort", onAbort);
 			}
+
+			// Rolling tail of streamed text/thinking used for repetition-loop detection.
+			// Bounded to REPETITION_WINDOW chars and reset when the active block kind
+			// switches (text <-> thinking) so detection stays O(1) per delta and never
+			// miscounts a repeated unit across a thinking/answer boundary.
+			let repetitionTail = "";
+			let repetitionKind: "text" | "thinking" | undefined;
+			const isGeminiModel = config.model.provider.includes("google") || config.model.provider.includes("gemini");
 
 			try {
 				while (true) {
@@ -1165,27 +1177,24 @@ async function streamAssistantResponse(
 									message: snapshotAssistantMessage(partialMessage),
 								});
 
-								if (event.type === "text_delta" || event.type === "thinking_delta") {
-									const isGeminiModel =
-										config.model.provider.includes("google") || config.model.provider.includes("gemini");
-									if (isGeminiModel) {
-										let fullText = "";
-										for (const block of partialMessage.content) {
-											if (block.type === "text") {
-												fullText += block.text;
-											} else if (block.type === "thinking") {
-												fullText += block.thinking;
-											}
-										}
-										const repetition = detectRepetition(fullText);
-										if (repetition) {
-											const [pattern, count] = repetition;
-											logger.warn("Repetition loop detected during assistant stream, aborting.", {
-												pattern,
-												count,
-											});
-											return await finishRepetitionStream(pattern, count);
-										}
+								if (isGeminiModel && (event.type === "text_delta" || event.type === "thinking_delta")) {
+									const kind = event.type === "text_delta" ? "text" : "thinking";
+									if (repetitionKind !== kind) {
+										repetitionKind = kind;
+										repetitionTail = "";
+									}
+									repetitionTail += event.delta;
+									if (repetitionTail.length > REPETITION_WINDOW) {
+										repetitionTail = repetitionTail.slice(-REPETITION_WINDOW);
+									}
+									const repetition = detectRepetition(repetitionTail);
+									if (repetition) {
+										const [pattern, count] = repetition;
+										logger.warn("Repetition loop detected during assistant stream, aborting.", {
+											pattern,
+											count,
+										});
+										return await finishRepetitionStream(kind, pattern, count);
 									}
 								}
 							}
@@ -1795,17 +1804,24 @@ function createSkippedToolResult(): AgentToolResult<any> {
 	};
 }
 
-function detectRepetition(text: string): [pattern: string, count: number] | null {
-	if (text.length < 50) return null;
+const REPETITION_WINDOW = 250;
+const REPETITION_MIN_REPEATED_CHARS = 180;
 
-	const windowSize = Math.min(text.length, 250);
+function detectRepetition(text: string): [pattern: string, count: number] | null {
+	if (text.length < REPETITION_MIN_REPEATED_CHARS) return null;
+
+	const windowSize = Math.min(text.length, REPETITION_WINDOW);
 	const searchSpace = text.slice(-windowSize);
 
 	for (let len = 2; len <= 60; len++) {
 		if (searchSpace.length < len * 4) continue;
 
 		const pattern = searchSpace.slice(-len);
-		if (!/[a-zA-Z0-9\p{Emoji}]/u.test(pattern)) continue;
+		// Only treat a repeated unit as a pathological loop when it carries real
+		// linguistic content (a letter or a pictographic emoji). Runs made purely of
+		// digits, whitespace or punctuation are legitimate in tabular / hex / numeric
+		// output (e.g. "00 00 00", "0, 0, 0", "| -- | -- |") and must not trip.
+		if (!/[\p{L}\p{Extended_Pictographic}]/u.test(pattern)) continue;
 
 		let count = 0;
 		let pos = searchSpace.length;
@@ -1819,26 +1835,65 @@ function detectRepetition(text: string): [pattern: string, count: number] | null
 			}
 		}
 
-		if (count >= 4 && len * count >= 50) {
+		if (count >= 4 && len * count >= REPETITION_MIN_REPEATED_CHARS) {
 			return [pattern, count];
 		}
 	}
 	return null;
 }
 
-function truncateRepetition(message: AssistantMessage, pattern: string, count: number): void {
-	const totalToRemove = pattern.length * (count - 1);
-	let remainingToRemove = totalToRemove;
+function truncateRepetition(message: AssistantMessage, kind: "text" | "thinking", pattern: string): void {
+	// A repetition loop streams into a single growing block (real providers) or a run
+	// of same-kind blocks (some transports), always at the tail of the message. Gather
+	// that trailing contiguous run and collapse its repeated copies down to one, so the
+	// committed transcript keeps a representative sample instead of the full runaway.
+	const matches = (block: AssistantContentBlock): boolean =>
+		kind === "text" ? block.type === "text" : block.type === "thinking";
+	const readBlock = (block: AssistantContentBlock): string =>
+		block.type === "text" ? block.text : block.type === "thinking" ? block.thinking : "";
+	const clearThinkingReplayAnchors = (block: AssistantContentBlock): void => {
+		if (block.type !== "thinking") return;
+		block.thinkingSignature = undefined;
+		block.itemId = undefined;
+	};
+	const writeBlock = (block: AssistantContentBlock, value: string): void => {
+		if (block.type === "text") {
+			block.text = value;
+		} else if (block.type === "thinking") {
+			block.thinking = value;
+			clearThinkingReplayAnchors(block);
+		}
+	};
+
+	const trailing: AssistantContentBlock[] = [];
 	for (let i = message.content.length - 1; i >= 0; i--) {
 		const block = message.content[i];
-		if (block.type === "text") {
-			if (block.text.length >= remainingToRemove) {
-				block.text = block.text.slice(0, block.text.length - remainingToRemove);
-				break;
-			} else {
-				remainingToRemove -= block.text.length;
-				block.text = "";
-			}
+		if (!matches(block)) break;
+		trailing.unshift(block);
+	}
+	if (trailing.length === 0) return;
+	if (kind === "thinking") {
+		for (const block of trailing) clearThinkingReplayAnchors(block);
+	}
+
+	let joined = "";
+	for (const block of trailing) joined += readBlock(block);
+
+	let kept = joined;
+	while (kept.length >= pattern.length * 2 && kept.slice(kept.length - pattern.length * 2) === pattern + pattern) {
+		kept = kept.slice(0, kept.length - pattern.length);
+	}
+
+	let remainingToRemove = joined.length - kept.length;
+	for (let i = trailing.length - 1; i >= 0 && remainingToRemove > 0; i--) {
+		const block = trailing[i];
+		const value = readBlock(block);
+		if (value.length <= remainingToRemove) {
+			remainingToRemove -= value.length;
+			writeBlock(block, "");
+		} else {
+			writeBlock(block, value.slice(0, value.length - remainingToRemove));
+			remainingToRemove = 0;
 		}
 	}
 }

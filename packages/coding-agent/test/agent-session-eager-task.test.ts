@@ -83,6 +83,7 @@ describe("AgentSession eager task prelude", () => {
 		settingsOverride: Record<string, unknown> = {},
 		agentId?: string,
 		taskWireName?: string,
+		agentKind?: "main" | "sub",
 	): Promise<Harness> {
 		const observedCalls: ObservedPromptCall[] = [];
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
@@ -175,6 +176,7 @@ describe("AgentSession eager task prelude", () => {
 			modelRegistry,
 			toolRegistry,
 			agentId,
+			agentKind,
 		});
 
 		const harness = { session, observedCalls, authStorage };
@@ -259,13 +261,23 @@ describe("AgentSession eager task prelude", () => {
 	});
 
 	it("skips eager task prelude for subagent sessions", async () => {
-		const { session, observedCalls } = await createHarness({}, "SubAgent");
+		const { session, observedCalls } = await createHarness({}, "SubAgent", undefined, "sub");
 
 		await session.prompt("refactor the parser across modules");
 
 		expect(observedCalls).toHaveLength(1);
 		expect(observedCalls[0]?.messageRoles).toEqual(["user"]);
 		expect(observedCalls[0]?.messageTexts).toEqual(["refactor the parser across modules"]);
+	});
+
+	it("prepends eager task prelude for a main session with a custom agent id", async () => {
+		const { session, observedCalls } = await createHarness({}, "Alice", undefined, "main");
+
+		await session.prompt("refactor the parser across modules");
+
+		expect(observedCalls).toHaveLength(1);
+		expect(observedCalls[0]?.messageRoles).toEqual(["developer", "user"]);
+		expect(observedCalls[0]?.messageTexts[0]).toContain("delegation is enabled");
 	});
 
 	it("prepends both todo and task preludes when both are eager, keeping the forced todo choice", async () => {

@@ -38,8 +38,10 @@ describe("system prompt mathematical formatting", () => {
 		});
 
 		const promptText = systemPrompt.join("\n\n");
-		expect(promptText).toContain("avoid using LaTeX math delimiters");
+		expect(promptText).toContain("In user-visible terminal prose and final chat");
+		expect(promptText).toContain("avoid LaTeX math delimiters");
 		expect(promptText).toContain("LaTeX math commands");
 		expect(promptText).toContain("plain text / Unicode");
+		expect(promptText).toContain("does NOT apply to tool output");
 	});
 });

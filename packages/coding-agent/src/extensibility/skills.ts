@@ -59,6 +59,21 @@ export function resetActiveSkillsForTests(): void {
 	activeSkills = [];
 }
 
+/**
+ * Whether `name` is already claimed by an active authored (non-managed) skill.
+ *
+ * Managed (auto-learn) skills resolve dead-last in discovery, so an authored
+ * skill of the same name always wins (see `loadSkills`) and a managed skill
+ * written under an authored name is silently dropped — it never surfaces.
+ * `manage_skill` create consults this to refuse the write up front instead of
+ * reporting a false "Created" for a skill that can never appear.
+ */
+export function isNameClaimedByAuthoredSkill(name: string): boolean {
+	return getActiveSkills().some(
+		skill => skill.name === name && skill._source?.provider !== MANAGED_SKILLS_PROVIDER_ID,
+	);
+}
+
 export interface LoadSkillsFromDirOptions {
 	/** Directory to scan for skills */
 	dir: string;
