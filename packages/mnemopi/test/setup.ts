@@ -64,7 +64,6 @@ class FakeLocalLlmBackend implements LlmBackend {
 }
 export const RUN_EMBEDDINGS = Bun.env.EMBEDDINGS === "1";
 
-
 beforeEach(() => {
 	// Real embeddings (fastembed + onnxruntime-node, ~270MB peers) install on
 	// demand via `bun install` on first use. Default the suite to the lightweight

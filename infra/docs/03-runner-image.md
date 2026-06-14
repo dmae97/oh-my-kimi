@@ -26,15 +26,17 @@ All host commands below run on `<CI_HOST>` (the single k3s node) as root.
 The base `ghcr.io/actions/actions-runner:latest` is a clean Ubuntu 24.04 runner.
 On a normal (GitHub-hosted-style) runner, the CI workflow installs its system
 dependencies at the start of every job: the cairo/pango native stack for canvas
-builds, `fd`/`ripgrep`/`imagemagick`, `bun`, and a pinned Rust nightly with the
-cross targets. Inside a Kata microVM that is destroyed after a single job, paying
-that apt/bun/rustup cost on **every** job is pure latency - the microVM starts
-cold each time.
+builds, `fd`/`ripgrep`/`imagemagick`, `bun`, `sccache`, Zig, the cargo-native
+helper CLIs (`cargo-nextest`, `cargo-zigbuild`, `cargo-xwin`), and a pinned Rust
+nightly with the cross targets/components. Inside a Kata microVM that is
+destroyed after a single job, paying that apt/bun/rustup/tool-download cost on
+**every** job is pure latency - the microVM starts cold each time.
 
 The preloaded image moves that work to build time. Every ephemeral runner then
-starts with the toolchain already present: apt deps are not re-fetched, `bun` and
-`cargo`/`rustc` are on `PATH`, and the pinned Rust toolchain is already the
-default so target/component installs in CI become no-ops.
+starts with the toolchain already present: apt deps are not re-fetched, `bun`,
+`cargo`/`rustc`, `sccache`, `zig`, and the cargo helper CLIs are on `PATH`, and
+the pinned Rust toolchain is already the default so target/component installs in
+CI become no-ops.
 
 ### Stay in sync with `setup-system-deps`
 
@@ -79,7 +81,8 @@ reproduced verbatim (it contains no secrets or redactable host identifiers; the
 #     tool and release workflows expect it
 #   - C/build toolchain the native + canvas builds need
 #   - bun (system-wide, on PATH)
-#   - rust nightly toolchain (pinned) + clippy/rustfmt + linux-arm64/windows-msvc targets
+#   - sccache + Zig + cargo-nextest/cargo-zigbuild/cargo-xwin for native builds
+#   - rust nightly (pinned) + clippy/rustfmt/rust-analyzer + linux-arm64/windows-msvc targets
 #
 # Rebuild + reimport (see /root/omp-kata-runner.md) after bumping the ARGs below
 # or the apt set. Keep the apt set in sync with .github/actions/setup-system-deps.
@@ -87,19 +90,23 @@ FROM ghcr.io/actions/actions-runner:latest
 
 ARG RUST_NIGHTLY=nightly-2026-04-29
 ARG BUN_VERSION=1.3.14
+ARG SCCACHE_VERSION=0.15.0
+ARG ZIG_VERSION=0.16.0
 
 USER root
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Mirrors the "Install system deps" block in .github/workflows/ci.yml plus the
-# C/build toolchain (native + canvas builds) and the GitHub CLI. The gh apt repo
-# is added first so `gh` installs in the same apt transaction.
+# native/cross toolchain (clang/lld/llvm), the baked cache/tooling binaries, and
+# the GitHub CLI. The gh apt repo is added first so `gh` installs in the same apt
+# transaction.
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
  && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
  && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list \
  && apt-get update \
  && apt-get install -y \
       build-essential pkg-config curl ca-certificates git unzip xz-utils zstd gh \
+      clang lld llvm \
       libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev \
       fd-find ripgrep imagemagick \
  && ln -sf "$(command -v fdfind)" /usr/local/bin/fd \
@@ -111,17 +118,34 @@ ENV BUN_INSTALL=/usr/local
 RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" \
  && bun --version
 
-# rust toolchain for the runner user; rustup default == pinned nightly so
-# dtolnay/rust-toolchain@nightly and target/component adds are no-ops in CI.
+# Pinned native-build helpers, system-wide.
+RUN curl -fsSL "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VERSION}/sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
+      | tar -xz -C /tmp \
+ && install -m755 "/tmp/sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl/sccache" /usr/local/bin/sccache \
+ && rm -rf "/tmp/sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl"
+RUN curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" -o /tmp/zig.tar.xz \
+ && tar -xJf /tmp/zig.tar.xz -C /opt \
+ && ln -sf "/opt/zig-x86_64-linux-${ZIG_VERSION}/zig" /usr/local/bin/zig \
+ && rm -f /tmp/zig.tar.xz
+
+# rust toolchain + cargo helpers for the runner user; rustup default == pinned
+# nightly so Rust setup becomes a no-op on the preloaded image.
 USER runner
 ENV RUSTUP_HOME=/home/runner/.rustup \
     CARGO_HOME=/home/runner/.cargo \
     PATH=/home/runner/.cargo/bin:/usr/local/bin:${PATH}
 RUN curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs \
       | sh -s -- -y --default-toolchain "${RUST_NIGHTLY}" --profile minimal \
- && rustup component add clippy rustfmt \
+ && rustup component add clippy rustfmt rust-analyzer \
  && rustup target add aarch64-unknown-linux-gnu x86_64-pc-windows-msvc \
- && cargo --version && rustc --version
+ && cargo install --locked cargo-nextest cargo-zigbuild cargo-xwin \
+ && cargo --version \
+ && rustc --version \
+ && sccache --version \
+ && zig version \
+ && cargo nextest --version \
+ && cargo zigbuild --version \
+ && cargo xwin --version
 ```
 
 ### Stage-by-stage annotation
@@ -152,9 +176,11 @@ In order:
   tool.
 - `apt-get install` pulls three groups:
   - **build toolchain / utilities:** `build-essential pkg-config curl
-    ca-certificates git unzip xz-utils zstd gh`. `build-essential` + `pkg-config`
-    are needed by the native and canvas builds; `zstd` is the codec the bun and
-    sccache cache tarballs use (see [04-arc-and-caching.md](./04-arc-and-caching.md)).
+    ca-certificates git unzip xz-utils zstd gh clang lld llvm`.
+    `build-essential` + `pkg-config` are needed by the native and canvas builds;
+    `zstd` is the codec the bun and sccache cache tarballs use (see
+    [04-arc-and-caching.md](./04-arc-and-caching.md)); `clang lld llvm` are the
+    MSVC-cross prerequisites that used to be apt-installed per job.
   - **canvas / cairo native stack:** `libcairo2-dev libpango1.0-dev libjpeg-dev
     libgif-dev librsvg2-dev` - the `-dev` headers the canvas/rsvg native modules
     compile against.
@@ -174,16 +200,25 @@ In order:
 `bun-v${BUN_VERSION}`, and `bun --version` fails the build if the install is
 broken.
 
+**Pinned native-build helpers (two root `RUN`s).** `sccache` is downloaded as a
+version-pinned GitHub release tarball and installed to `/usr/local/bin`; Zig is
+downloaded as the pinned release archive, unpacked under `/opt`, and symlinked
+into `/usr/local/bin/zig`. Baking these two removes the per-job
+`mozilla-actions/sccache-action` and `mlugg/setup-zig` downloads from the
+self-hosted path.
+
 **Rust toolchain (`USER runner` + rustup `RUN`).** The toolchain is installed as
 the **`runner` user** - the UID jobs execute as - so cargo/rustc are owned by and
 visible to the job without sudo. `RUSTUP_HOME`/`CARGO_HOME` are pinned under
 `/home/runner`, and `~/.cargo/bin` is prepended to `PATH`. rustup installs the
 pinned nightly as the **default toolchain** (`--profile minimal`), then adds the
-`clippy` and `rustfmt` components and the `aarch64-unknown-linux-gnu`
-(Linux arm64) and `x86_64-pc-windows-msvc` (Windows cross) targets. Because the
-default toolchain already *is* the pinned nightly with these components/targets,
-the corresponding `rustup` steps in CI become no-ops - the warm-start payoff.
-`cargo --version && rustc --version` is the final build-time sanity check.
+`clippy`, `rustfmt`, and `rust-analyzer` components plus the
+`aarch64-unknown-linux-gnu` (Linux arm64) and `x86_64-pc-windows-msvc` (Windows
+cross) targets. The same layer also `cargo install`s the Rust-native helper CLIs
+`cargo-nextest`, `cargo-zigbuild`, and `cargo-xwin`, so the self-hosted native
+build path no longer fetches those tools job-by-job. Because the default toolchain
+already *is* the pinned nightly with these components/targets, the corresponding
+Rust setup steps in CI become no-ops - the warm-start payoff.
 
 ---
 
@@ -217,10 +252,10 @@ DOCKER_BUILDKIT=1 docker build -t "$IMAGE" -t omp-kata-runner:preloaded .
 echo "==> [2/5] verifying baked tools"
 docker run --rm --entrypoint bash "$IMAGE" -lc '
   set -e
-  for b in gh fd rg magick bun cargo rustc pkg-config zstd; do
+  for b in gh fd rg magick bun cargo rustc pkg-config zstd clang lld sccache zig cargo-nextest cargo-zigbuild cargo-xwin; do
     command -v "$b" >/dev/null || { echo "MISSING: $b"; exit 1; }
   done
-  echo "tools OK | $(bun --version) | $(rustc --version) | gh $(gh --version | head -1 | cut -d" " -f3)"
+  echo "tools OK | bun $(bun --version) | rust $(rustc --version) | sccache $(sccache --version | awk '\''{print $2}'\'') | zig $(zig version) | gh $(gh --version | head -1 | cut -d\" \" -f3)"
 '
 
 echo "==> [3/5] importing into k3s containerd (k8s.io namespace)"
@@ -259,10 +294,10 @@ BuildKit + the docker layer cache make an unchanged rebuild near-instant.
 
 **[2/5] verify baked tools.** Runs the freshly built image with a bash entrypoint
 and asserts every expected binary is on `PATH`
-(`gh fd rg magick bun cargo rustc pkg-config zstd`), failing the whole script if
-any is missing, then prints the bun / rustc / gh versions. This catches a broken
-apt set, missing shim, or bad toolchain pin **before** anything touches the
-cluster.
+(`gh fd rg magick bun cargo rustc pkg-config zstd clang lld sccache zig cargo-nextest cargo-zigbuild cargo-xwin`),
+failing the whole script if any is missing, then prints the key version tuple
+(bun / rust / sccache / zig / gh). This catches a broken apt set, missing shim,
+or bad toolchain pin **before** anything touches the cluster.
 
 **[3/5] import into k3s containerd.**
 `docker save "$IMAGE" | k3s ctr -n k8s.io images import --platform linux/amd64 -`

@@ -1,5 +1,4 @@
 import { describe, expect, it } from "bun:test";
-import { RUN_EMBEDDINGS } from "./setup";
 import {
 	cosineSimilarity,
 	embed,
@@ -8,6 +7,7 @@ import {
 	resetEmbeddingProviderForTests,
 	setEmbeddingProviderForTests,
 } from "@oh-my-pi/pi-mnemopi/core/embeddings";
+import { RUN_EMBEDDINGS } from "./setup";
 
 function withEnvValue<T>(key: string, value: string | undefined, fn: () => T): T {
 	const previous = process.env[key];
