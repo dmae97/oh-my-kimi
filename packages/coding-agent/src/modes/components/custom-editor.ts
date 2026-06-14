@@ -3,7 +3,7 @@ import type { AppKeybinding } from "../../config/keybindings";
 import { isSettingsInitialized, settings } from "../../config/settings";
 import { imageReferenceHyperlink, PLACEHOLDER_REGEX, renderPlaceholders } from "../image-references";
 import { hasMagicKeyword, highlightMagicKeywords } from "../magic-keywords";
-import { theme } from "../theme/theme";
+import { fgOrPlain } from "../theme/theme";
 
 type ConfigurableEditorAction = Extract<
 	AppKeybinding,
@@ -178,9 +178,9 @@ export class CustomEditor extends Editor {
 			renderReference: (value, kind, index) =>
 				kind === "image"
 					? imageReferenceHyperlink(value, index, this.imageLinks, label =>
-							theme.fg("accent", `\x1b[1m\x1b[4m${label}\x1b[24m\x1b[22m`),
+							fgOrPlain("accent", label, `\x1b[1m\x1b[4m${label}\x1b[24m\x1b[22m`),
 						)
-					: theme.fg("accent", `\x1b[1m${value}\x1b[22m`),
+					: fgOrPlain("accent", value, `\x1b[1m${value}\x1b[22m`),
 		});
 	};
 

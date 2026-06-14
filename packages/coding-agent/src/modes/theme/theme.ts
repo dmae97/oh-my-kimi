@@ -2098,6 +2098,11 @@ var currentThemeName: string | undefined;
 export function getCurrentThemeName(): string | undefined {
 	return currentThemeName;
 }
+
+/** Returns unstyled `text` before `initTheme()` assigns the global theme; use only for early-render paths. */
+export function fgOrPlain(color: ThemeColor, text: string, styledText: string = text): string {
+	return typeof theme === "undefined" ? text : theme.fg(color, styledText);
+}
 var currentSymbolPresetOverride: SymbolPreset | undefined;
 var currentColorBlindMode: boolean = false;
 var themeWatcher: fs.FSWatcher | undefined;
