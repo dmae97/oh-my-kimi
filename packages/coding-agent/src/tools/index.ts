@@ -527,9 +527,11 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		}
 		// Auto-learn tools are gated by `autolearn.enabled` but, like the memory
 		// tools above, must also be force-included into an explicit requestedTools
-		// list so a restricted session whose controller/guidance is active still
-		// exposes the tools the nudge points at.
-		if (session.settings.get("autolearn.enabled")) {
+		// list so a restricted top-level session whose controller/guidance is
+		// active still exposes the tools the nudge points at. Gated to top-level
+		// (taskDepth 0): the controller only runs there, so a subagent's explicit
+		// tool whitelist must never be silently widened with write-capable tools.
+		if (session.settings.get("autolearn.enabled") && (session.taskDepth ?? 0) === 0) {
 			if (!requestedTools.includes("manage_skill")) requestedTools.push("manage_skill");
 			if (
 				["hindsight", "mnemopi", "local"].includes(session.settings.get("memory.backend") ?? "") &&
@@ -571,10 +573,11 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		if (name === "retain" || name === "recall" || name === "reflect") {
 			return ["hindsight", "mnemopi"].includes(session.settings.get("memory.backend") ?? "");
 		}
-		if (name === "manage_skill") return session.settings.get("autolearn.enabled");
+		if (name === "manage_skill") return session.settings.get("autolearn.enabled") && (session.taskDepth ?? 0) === 0;
 		if (name === "learn") {
 			return (
 				session.settings.get("autolearn.enabled") &&
+				(session.taskDepth ?? 0) === 0 &&
 				["hindsight", "mnemopi", "local"].includes(session.settings.get("memory.backend") ?? "")
 			);
 		}

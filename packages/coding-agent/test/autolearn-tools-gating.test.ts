@@ -9,8 +9,6 @@ import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { LearnTool } from "@oh-my-pi/pi-coding-agent/tools/learn";
 import { ManageSkillTool } from "@oh-my-pi/pi-coding-agent/tools/manage-skill";
 
-Bun.env.PI_PYTHON_SKIP_CHECK = "1";
-
 function makeSession(
 	settingsOverrides: Partial<Record<SettingPath, unknown>> = {},
 	extra: Partial<ToolSession> = {},
@@ -27,10 +25,6 @@ function makeSession(
 }
 
 describe("autolearn tool gating", () => {
-	afterEach(() => {
-		spyOn(os, "homedir").mockRestore();
-	});
-
 	it("offers neither tool by default (autolearn disabled)", async () => {
 		const names = (await createTools(makeSession())).map(t => t.name);
 		expect(names).not.toContain("learn");
@@ -70,6 +64,25 @@ describe("autolearn tool gating", () => {
 		).map(t => t.name);
 		expect(noBackend).toContain("manage_skill");
 		expect(noBackend).not.toContain("learn");
+	});
+
+	it("excludes the tools from a subagent even with an explicit list", async () => {
+		// taskDepth > 0: the controller never runs here, so a subagent's explicit
+		// whitelist must not be silently widened with write-capable tools.
+		const sub = (
+			await createTools(makeSession({ "autolearn.enabled": true, "memory.backend": "mnemopi" }, { taskDepth: 1 }), [
+				"read",
+			])
+		).map(t => t.name);
+		expect(sub).not.toContain("manage_skill");
+		expect(sub).not.toContain("learn");
+
+		// Nor via discovery (no explicit list) at depth.
+		const subDiscovered = (
+			await createTools(makeSession({ "autolearn.enabled": true, "memory.backend": "mnemopi" }, { taskDepth: 1 }))
+		).map(t => t.name);
+		expect(subDiscovered).not.toContain("manage_skill");
+		expect(subDiscovered).not.toContain("learn");
 	});
 
 	it("offers learn with the file-based local backend", async () => {
