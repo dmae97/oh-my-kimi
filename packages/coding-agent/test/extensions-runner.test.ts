@@ -12,6 +12,7 @@ import {
 	ExtensionRunner,
 	testSetExtensionHandlerTimeoutMs,
 } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
+import { ExtensionToolWrapper } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/wrapper";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { getProjectAgentDir, logger, TempDir } from "@oh-my-pi/pi-utils";
@@ -917,6 +918,284 @@ describe("ExtensionRunner", () => {
 
 			expect(loadError).toBeDefined();
 			expect(loadError?.error).toContain("Extension runtime not initialized");
+		});
+	});
+
+	describe("tool approval lifecycle", () => {
+		const initializeRunner = (
+			runner: ExtensionRunner,
+			select: (title: string, options: string[]) => Promise<string | undefined>,
+		) => {
+			runner.initialize(
+				{
+					sendMessage: () => {},
+					sendUserMessage: () => {},
+					appendEntry: () => {},
+					setLabel: () => {},
+					getActiveTools: () => [],
+					getAllTools: () => [],
+					setActiveTools: async () => {},
+					getCommands: () => [],
+					setModel: async () => false,
+					getThinkingLevel: () => undefined,
+					setThinkingLevel: () => {},
+					getSessionName: () => undefined,
+					setSessionName: async () => {},
+				},
+				{
+					getModel: () => undefined,
+					isIdle: () => true,
+					abort: () => {},
+					hasPendingMessages: () => false,
+					shutdown: () => {},
+					getContextUsage: () => undefined,
+					compact: async () => {},
+					getSystemPrompt: () => [],
+				},
+				undefined,
+				{
+					select,
+					confirm: async () => false,
+					input: async () => undefined,
+					notify: () => {},
+					onTerminalInput: () => () => {},
+					setStatus: () => {},
+					setWorkingMessage: () => {},
+					setWidget: () => {},
+					setFooter: () => {},
+					setHeader: () => {},
+					setTitle: () => {},
+					custom: async <T>() => undefined as T,
+					pasteToEditor: () => {},
+					setEditorText: () => {},
+					getEditorText: () => "",
+					editor: async () => undefined,
+					setEditorComponent: () => {},
+					get theme() {
+						return {} as never;
+					},
+					getAllThemes: async () => [],
+					getTheme: async () => undefined,
+					setTheme: async () => ({ success: false, error: "not implemented" }),
+					getToolsExpanded: () => false,
+					setToolsExpanded: () => {},
+				},
+			);
+		};
+
+		const approvalTool = {
+			name: "dangerous_tool",
+			label: "Dangerous Tool",
+			description: "Test tool",
+			parameters: {} as never,
+			approval: "exec" as const,
+			execute: async () => ({ content: [{ type: "text" as const, text: "ok" }] }),
+		};
+
+		it("emits requested before waiting and resolved after approval", async () => {
+			const events: Array<{ type: string; approved?: boolean }> = [];
+			const extCode = `
+				export default function(pi) {
+					pi.on("tool_approval_requested", async (event) => {
+						globalThis.__approvalEvents.push({ type: event.type });
+					});
+					pi.on("tool_approval_resolved", async (event) => {
+						globalThis.__approvalEvents.push({ type: event.type, approved: event.approved });
+					});
+				}
+			`;
+			fs.writeFileSync(path.join(extensionsDir, "approval-events.ts"), extCode);
+			const globalState = globalThis as typeof globalThis & { __approvalEvents?: typeof events };
+			globalState.__approvalEvents = events;
+
+			const result = await loadTestExtensions();
+			const runner = new ExtensionRunner(
+				result.extensions,
+				result.runtime,
+				tempDir.path(),
+				sessionManager,
+				modelRegistry,
+			);
+			const select = vi.fn(async () => {
+				events.push({ type: "ui_select" });
+				return "Approve";
+			});
+			initializeRunner(runner, select);
+
+			const wrapper = new ExtensionToolWrapper(approvalTool, runner);
+			await (wrapper as ExtensionToolWrapper<any>).execute("call-approval", {}, undefined, undefined, {
+				sessionManager,
+				modelRegistry,
+				model: undefined,
+				isIdle: () => true,
+				hasQueuedMessages: () => false,
+				abort: () => {},
+				settings: { get: (key: string) => (key === "tools.approvalMode" ? "always-ask" : {}) } as never,
+			});
+
+			expect(events).toEqual([
+				{ type: "tool_approval_requested" },
+				{ type: "ui_select" },
+				{ type: "tool_approval_resolved", approved: true },
+			]);
+			expect(select).toHaveBeenCalledWith(expect.stringContaining("Allow tool: dangerous_tool"), [
+				"Approve",
+				"Deny",
+			]);
+			delete globalState.__approvalEvents;
+		});
+
+		it("emits resolved false when approval is denied", async () => {
+			const events: Array<{ type: string; approved?: boolean; reason?: string }> = [];
+			const extCode = `
+				export default function(pi) {
+					pi.on("tool_approval_requested", async (event) => {
+						globalThis.__deniedApprovalEvents.push({ type: event.type, reason: event.reason });
+					});
+					pi.on("tool_approval_resolved", async (event) => {
+						globalThis.__deniedApprovalEvents.push({
+							type: event.type,
+							approved: event.approved,
+							reason: event.reason,
+						});
+					});
+				}
+			`;
+			fs.writeFileSync(path.join(extensionsDir, "denied-approval-events.ts"), extCode);
+			const globalState = globalThis as typeof globalThis & { __deniedApprovalEvents?: typeof events };
+			globalState.__deniedApprovalEvents = events;
+
+			const result = await loadTestExtensions();
+			const runner = new ExtensionRunner(
+				result.extensions,
+				result.runtime,
+				tempDir.path(),
+				sessionManager,
+				modelRegistry,
+			);
+			initializeRunner(runner, async () => "Deny");
+
+			const wrapper = new ExtensionToolWrapper(approvalTool, runner);
+			await expect(
+				(wrapper as ExtensionToolWrapper<any>).execute("call-denied", {}, undefined, undefined, {
+					sessionManager,
+					modelRegistry,
+					model: undefined,
+					isIdle: () => true,
+					hasQueuedMessages: () => false,
+					abort: () => {},
+					settings: { get: (key: string) => (key === "tools.approvalMode" ? "always-ask" : {}) } as never,
+				}),
+			).rejects.toThrow("Tool call denied by user: dangerous_tool");
+
+			expect(events).toEqual([
+				{ type: "tool_approval_requested", reason: undefined },
+				{ type: "tool_approval_resolved", approved: false, reason: "denied by user" },
+			]);
+			delete globalState.__deniedApprovalEvents;
+		});
+		it("emits resolved false when the approval prompt throws", async () => {
+			const events: Array<{ type: string; approved?: boolean; reason?: string }> = [];
+			const extCode = `
+				export default function(pi) {
+					pi.on("tool_approval_requested", async (event) => {
+						globalThis.__thrownApprovalEvents.push({ type: event.type, reason: event.reason });
+					});
+					pi.on("tool_approval_resolved", async (event) => {
+						globalThis.__thrownApprovalEvents.push({
+							type: event.type,
+							approved: event.approved,
+							reason: event.reason,
+						});
+					});
+				}
+			`;
+			fs.writeFileSync(path.join(extensionsDir, "thrown-approval-events.ts"), extCode);
+			const globalState = globalThis as typeof globalThis & { __thrownApprovalEvents?: typeof events };
+			globalState.__thrownApprovalEvents = events;
+
+			const result = await loadTestExtensions();
+			const runner = new ExtensionRunner(
+				result.extensions,
+				result.runtime,
+				tempDir.path(),
+				sessionManager,
+				modelRegistry,
+			);
+			initializeRunner(runner, async () => {
+				throw new Error("dialog aborted");
+			});
+
+			const wrapper = new ExtensionToolWrapper(approvalTool, runner);
+			await expect(
+				(wrapper as ExtensionToolWrapper<any>).execute("call-thrown", {}, undefined, undefined, {
+					sessionManager,
+					modelRegistry,
+					model: undefined,
+					isIdle: () => true,
+					hasQueuedMessages: () => false,
+					abort: () => {},
+					settings: { get: (key: string) => (key === "tools.approvalMode" ? "always-ask" : {}) } as never,
+				}),
+			).rejects.toThrow("dialog aborted");
+
+			expect(events).toEqual([
+				{ type: "tool_approval_requested", reason: undefined },
+				{ type: "tool_approval_resolved", approved: false, reason: "dialog aborted" },
+			]);
+			delete globalState.__thrownApprovalEvents;
+		});
+		it("emits lifecycle events when partial context has no session manager", async () => {
+			const events: Array<{ type: string; approved?: boolean; reason?: string; sessionId?: string }> = [];
+			const extCode = `
+				export default function(pi) {
+					pi.on("tool_approval_requested", async (event) => {
+						globalThis.__partialContextApprovalEvents.push({
+							type: event.type,
+							sessionId: event.sessionId,
+							reason: event.reason,
+						});
+					});
+					pi.on("tool_approval_resolved", async (event) => {
+						globalThis.__partialContextApprovalEvents.push({
+							type: event.type,
+							sessionId: event.sessionId,
+							approved: event.approved,
+							reason: event.reason,
+						});
+					});
+				}
+			`;
+			fs.writeFileSync(path.join(extensionsDir, "partial-context-approval-events.ts"), extCode);
+			const globalState = globalThis as typeof globalThis & { __partialContextApprovalEvents?: typeof events };
+			globalState.__partialContextApprovalEvents = events;
+
+			const result = await loadTestExtensions();
+			const runner = new ExtensionRunner(
+				result.extensions,
+				result.runtime,
+				tempDir.path(),
+				sessionManager,
+				modelRegistry,
+			);
+
+			const wrapper = new ExtensionToolWrapper(approvalTool, runner);
+			await expect(
+				(wrapper as ExtensionToolWrapper<any>).execute("call-partial-context", {}, undefined, undefined, {
+					settings: { get: (key: string) => (key === "tools.approvalMode" ? "always-ask" : {}) },
+				} as never),
+			).rejects.toThrow('Tool "dangerous_tool" requires approval but no interactive UI available.');
+
+			expect(events).toEqual([
+				{ type: "tool_approval_requested", sessionId: "", reason: undefined },
+				{
+					type: "tool_approval_resolved",
+					sessionId: "",
+					approved: false,
+					reason: "no interactive UI available",
+				},
+			]);
+			delete globalState.__partialContextApprovalEvents;
 		});
 	});
 

@@ -56,6 +56,7 @@ import type {
 	SearchToolInput,
 	WriteToolInput,
 } from "../../tools";
+import type { ApprovalMode } from "../../tools/approval";
 import type { EventBus } from "../../utils/event-bus";
 import type {
 	AgentEndEvent,
@@ -636,6 +637,24 @@ export interface InputEvent {
 // Tool Events
 // ============================================================================
 
+export interface ToolApprovalRequestedEvent {
+	type: "tool_approval_requested";
+	sessionId: string;
+	toolCallId: string;
+	toolName: string;
+	reason?: string;
+	approvalMode: ApprovalMode;
+}
+
+export interface ToolApprovalResolvedEvent {
+	type: "tool_approval_resolved";
+	sessionId: string;
+	toolCallId: string;
+	toolName: string;
+	approved: boolean;
+	reason?: string;
+}
+
 interface ToolCallEventBase {
 	type: "tool_call";
 	toolCallId: string;
@@ -803,7 +822,9 @@ export type ExtensionEvent =
 	| UserPythonEvent
 	| InputEvent
 	| ToolCallEvent
-	| ToolResultEvent;
+	| ToolResultEvent
+	| ToolApprovalRequestedEvent
+	| ToolApprovalResolvedEvent;
 
 // ============================================================================
 // Event Results
@@ -974,6 +995,8 @@ export interface ExtensionAPI {
 	on(event: "goal_updated", handler: ExtensionHandler<GoalUpdatedEvent>): void;
 	on(event: "credential_disabled", handler: ExtensionHandler<CredentialDisabledEvent>): void;
 	on(event: "input", handler: ExtensionHandler<InputEvent, InputEventResult>): void;
+	on(event: "tool_approval_requested", handler: ExtensionHandler<ToolApprovalRequestedEvent>): void;
+	on(event: "tool_approval_resolved", handler: ExtensionHandler<ToolApprovalResolvedEvent>): void;
 	on(event: "tool_call", handler: ExtensionHandler<ToolCallEvent, ToolCallEventResult>): void;
 	on(event: "tool_result", handler: ExtensionHandler<ToolResultEvent, ToolResultEventResult>): void;
 	on(event: "user_bash", handler: ExtensionHandler<UserBashEvent, UserBashEventResult>): void;
