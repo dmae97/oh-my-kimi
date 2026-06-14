@@ -1790,6 +1790,18 @@ export const SETTINGS_SCHEMA = {
 					description: "8x13 glyphs on an 8x16 cell (extra leading), black ink.",
 				},
 				{
+					value: "8on22-bw",
+					label: "8x13 on 22px pitch (leading), black",
+					description:
+						"8x13 glyphs on an 8x22 cell — extra line spacing so rows don't crowd. Default for OpenAI/Google.",
+				},
+				{
+					value: "11on16-bw",
+					label: "8x13 on 11px advance (tracking), black",
+					description:
+						"8x13 glyphs on an 11x16 cell — extra letter spacing so characters don't merge. Default for Anthropic.",
+				},
+				{
 					value: "doc-8on16-bw",
 					label: "Doc 8on16, black",
 					description: "Two word-wrapped newspaper columns of 8x13 glyphs on a 16px pitch, black ink.",

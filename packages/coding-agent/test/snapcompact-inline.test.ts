@@ -20,11 +20,13 @@ function denseText(words: number): string {
 const DEFAULT_CAPACITY = snapcompact.geometry(snapcompact.resolveShape(undefined)).capacity;
 
 /**
- * Sized to span exactly 2 default-shape frames (~1.2x one frame's capacity),
- * so the ~6,600 estimated image tokens clear the savings gate against the
- * much larger text-token bill.
+ * Sized to span exactly 2 default-shape frames (~1.7x one frame's capacity):
+ * the legibility-tuned cells pack fewer chars/frame, so the swap's ~6,600
+ * estimated image tokens must clear the 0.9 savings gate against a larger
+ * text-token bill. 1.7x sits comfortably above break-even while staying at 2
+ * frames (the budget math below depends on 2 frames per LARGE).
  */
-const LARGE = denseText(Math.ceil((DEFAULT_CAPACITY * 1.2) / 7));
+const LARGE = denseText(Math.ceil((DEFAULT_CAPACITY * 1.7) / 7));
 const SMALL = "12 lines OK";
 
 function toolResult(id: string, text: string): ToolResultMessage {

@@ -12,6 +12,7 @@
 - Added the `mnemopi.embeddingVariant` setting (`en` | `multilingual`) selecting a stronger SOTA local embedding model — `en` → `BAAI/bge-base-en-v1.5` (768d), `multilingual` → `intfloat/multilingual-e5-large` (1024d). Resolution precedence is `mnemopi.embeddingModel` setting > `MNEMOPI_EMBEDDING_MODEL` env > variant default, so the documented env override is still honored. Changing the active model wipes and rebuilds stored embeddings on the next writable start ([#2476](https://github.com/can1357/oh-my-pi/issues/2476))
 - Added a `/guided-goal` slash command that interviews you to refine an objective before enabling goal mode, then seeds goal mode with the agreed objective. The bounded interview (up to six turns) runs on the plan or slow model and falls back with a hint when the goal is still too vague ([#2502](https://github.com/can1357/oh-my-pi/issues/2502)).
 - Added a large-paste menu: when a paste reaches `paste.largeMenuThreshold` lines (default 100; `0` disables), the editor offers to wrap it in a code block, wrap it in `<pasted_text>` XML tags (both collapse to a `[Paste]` marker that expands on submit), or save it to the session's `local://` store and insert a clean `local://attachment-N` reference the agent can `read` on demand. Esc keeps the previous inline-paste behavior, so the content is never lost.
+- Added `8on22-bw` (leading) and `11on16-bw` (tracking) options to the `snapcompact.shape` setting, the spacing-tuned cells that are now the per-provider defaults (Anthropic → tracking, OpenAI/Google → leading)
 
 ### Changed
 
