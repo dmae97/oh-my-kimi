@@ -58,7 +58,7 @@ export class LearnTool implements AgentTool<typeof learnSchema> {
 			if (!state) {
 				throw new Error("Mnemopi backend is not initialised for this session.");
 			}
-			state.rememberScoped(params.memory, {
+			const id = state.rememberScoped(params.memory, {
 				source: "coding-agent-learn",
 				importance: 0.8,
 				metadata: {
@@ -73,6 +73,12 @@ export class LearnTool implements AgentTool<typeof learnSchema> {
 				veracity: "tool",
 				memoryType: "fact",
 			});
+			// rememberScoped returns undefined when the retain failed (closed DB /
+			// disk error); mirror mnemopiBackend.save and fail loudly rather than
+			// reporting (and minting a skill for) a lesson that was silently dropped.
+			if (!id) {
+				throw new Error("Mnemopi did not store the lesson (no memory id returned).");
+			}
 		} else if (backend === "local") {
 			const result = await localBackend.save?.(
 				{ agentDir: this.session.settings.getAgentDir(), cwd: this.session.settings.getCwd() },

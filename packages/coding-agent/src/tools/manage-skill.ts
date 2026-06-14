@@ -5,15 +5,27 @@ import { deleteManagedSkill, getManagedSkillsDir, writeManagedSkill } from "../a
 import manageSkillDescription from "../prompts/tools/manage-skill.md" with { type: "text" };
 import type { ToolSession } from ".";
 
-const manageSkillSchema = z.object({
-	action: z.enum(["create", "update", "delete"]),
-	name: z.string().describe("kebab-case skill name"),
-	description: z
-		.string()
-		.describe("one-line description of when to use the skill (required for create/update)")
-		.optional(),
-	body: z.string().describe("the SKILL.md body in markdown, no frontmatter (required for create/update)").optional(),
-});
+const manageSkillSchema = z
+	.object({
+		action: z.enum(["create", "update", "delete"]),
+		name: z.string().describe("kebab-case skill name"),
+		description: z
+			.string()
+			.describe("one-line description of when to use the skill (required for create/update)")
+			.optional(),
+		body: z
+			.string()
+			.describe("the SKILL.md body in markdown, no frontmatter (required for create/update)")
+			.optional(),
+	})
+	// Enforce the action/field contract at validation time rather than only in
+	// execute. Kept as a cross-field refine (not a discriminated union) so the
+	// wire schema stays a single root object — strict structured-output mode and
+	// the Anthropic tool-schema builder both require that.
+	.refine(p => p.action === "delete" || (p.description !== undefined && p.body !== undefined), {
+		message: '"create" and "update" require both "description" and "body".',
+		path: ["description"],
+	});
 
 export type ManageSkillParams = z.infer<typeof manageSkillSchema>;
 
@@ -47,6 +59,9 @@ export class ManageSkillTool implements AgentTool<typeof manageSkillSchema> {
 			};
 		}
 
+		// Defensive narrowing: the schema refine already rejects create/update
+		// without both fields, so this is unreachable for valid input — it only
+		// proves the strings are present to `writeManagedSkill`'s typed contract.
 		if (!params.description || !params.body) {
 			throw new Error(`"${params.action}" requires both "description" and "body".`);
 		}

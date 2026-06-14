@@ -130,6 +130,14 @@ describe("manage_skill execute", () => {
 		);
 		await expect(tool().execute("4", { action: "delete", name: "absent" })).rejects.toThrow(/does not exist/);
 	});
+
+	it("schema rejects create/update without description+body but allows delete", () => {
+		const schema = tool().parameters;
+		expect(schema.safeParse({ action: "create", name: "x" }).success).toBe(false);
+		expect(schema.safeParse({ action: "update", name: "x", description: "d" }).success).toBe(false);
+		expect(schema.safeParse({ action: "create", name: "x", description: "d", body: "b" }).success).toBe(true);
+		expect(schema.safeParse({ action: "delete", name: "x" }).success).toBe(true);
+	});
 });
 
 describe("learn execute", () => {
@@ -187,5 +195,25 @@ describe("learn execute", () => {
 		).rejects.toThrow(/Lesson stored, but the managed skill could not be written/);
 		// The memory half still ran.
 		expect(remembered).toHaveLength(1);
+	});
+
+	it("fails the lesson and skips the skill when mnemopi returns no id", async () => {
+		const failingState = {
+			sessionId: "sess-2",
+			session: { sessionManager: { getCwd: () => "/tmp/work" } },
+			rememberScoped: () => undefined,
+		};
+		const session = makeSession(
+			{ "autolearn.enabled": true, "memory.backend": "mnemopi" },
+			{ getMnemopiSessionState: () => failingState as unknown as MnemopiSessionState },
+		);
+		await expect(
+			new LearnTool(session).execute("5", {
+				memory: "lesson",
+				skill: { action: "create", name: "should-not-exist", description: "d", body: "b" },
+			}),
+		).rejects.toThrow(/did not store/i);
+		// A failed lesson must not leave a minted skill behind.
+		expect(await Bun.file(path.join(getManagedSkillsDir(), "should-not-exist", "SKILL.md")).exists()).toBe(false);
 	});
 });
