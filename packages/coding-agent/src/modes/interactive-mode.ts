@@ -844,13 +844,19 @@ export class InteractiveMode implements InteractiveModeContext {
 			description: cmd.description,
 		}));
 		// Surface discovered prompt templates in the picker. AgentSession.prompt() expands
-		// `expandSlashCommand` before `expandPromptTemplate`, so a file-based slash command
-		// of the same name shadows the template at runtime — mirror that here by skipping
-		// templates whose names already appear in builtins/hooks/custom/skill/file commands.
-		const reservedNames = new Set<string>([
-			...this.#pendingSlashCommands.map(cmd => cmd.name),
-			...fileSlashCommands.map(cmd => cmd.name),
-		]);
+		// `expandSlashCommand` before `expandPromptTemplate`, and builtin command
+		// execution resolves aliases before template expansion. Mirror that command
+		// resolution order by skipping templates whose names already appear in any
+		// builtin/hook/custom/skill/file command token.
+		const reservedNames = new Set<string>();
+		for (const command of this.#pendingSlashCommands) {
+			reservedNames.add(command.name);
+			for (const alias of command.aliases ?? []) reservedNames.add(alias);
+		}
+		for (const command of fileSlashCommands) {
+			reservedNames.add(command.name);
+			for (const alias of command.aliases ?? []) reservedNames.add(alias);
+		}
 		const promptTemplateCommands: SlashCommand[] = this.session.promptTemplates
 			.filter(template => !reservedNames.has(template.name))
 			.map(template => ({

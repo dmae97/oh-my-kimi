@@ -161,4 +161,25 @@ describe("InteractiveMode prompt-template autocomplete (#2462)", () => {
 		// shows a single entry rather than two `exit` rows.
 		expect(matches.filter(name => name === "exit")).toHaveLength(1);
 	});
+
+	it("does not duplicate templates whose names collide with builtin slash command aliases", async () => {
+		const created = await createHarness([
+			{
+				name: "models",
+				description: "Custom models template (project)",
+				content: "ignored",
+				source: "(project)",
+			},
+		]);
+		const slot = captureAutocompleteProvider(created.mode);
+
+		await created.mode.refreshSlashCommandState(tempDir.path());
+
+		const provider = slot.current;
+		expect(provider).toBeDefined();
+		const matches = await fetchSlashSuggestions(provider!, "/models");
+		// Builtin `/model` owns the `/models` alias. The colliding template is filtered
+		// out so autocomplete follows the interactive slash-command resolution path.
+		expect(matches.filter(name => name === "models")).toHaveLength(1);
+	});
 });
