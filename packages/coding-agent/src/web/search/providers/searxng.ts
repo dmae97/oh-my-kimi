@@ -281,9 +281,21 @@ export async function searchSearXNG(params: {
 		});
 	}
 
+	const limitedSources = sources.slice(0, numResults);
+	if (limitedSources.length === 0 && response.unresponsive_engines?.length) {
+		const upstreamFailures = response.unresponsive_engines
+			.map(([engine, reason]) => `${engine}: ${reason}`)
+			.join("; ");
+		throw new SearchProviderError(
+			"searxng",
+			`SearXNG returned no usable results; upstream engines failed: ${upstreamFailures}`,
+			503,
+		);
+	}
+
 	return {
 		provider: "searxng",
-		sources: sources.slice(0, numResults),
+		sources: limitedSources,
 		relatedQuestions: response.suggestions?.length ? response.suggestions : undefined,
 	};
 }
