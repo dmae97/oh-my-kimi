@@ -13,6 +13,10 @@
 - Fixed Gemini / Antigravity streams (Google Cloud Code Assist API) creating a trailing empty text block and emitting redundant `text_start`/`text_delta`/`text_end` events at the end of the turn when the final SSE chunk contains an empty text part (`text: ""`). The parser now ignores empty text parts, preserving the active transcript block state and ensuring proper nesting and rendering of subsequent background jobs or new turns.
 - Preserved terminal Google `thoughtSignature`s by still extracting and applying the signature on the active block even when the text part is empty or undefined.
 
+### Fixed
+
+- Stopped Gemini Antigravity sessions (`gemini-3*` / Claude under Cloud Code Assist) from leaking system rule reminders and personality preambles into the final response, by appending an explicit 'do not output rule checks' instruction to the injected system parts.
+
 ## [15.12.6] - 2026-06-14
 
 ### Changed

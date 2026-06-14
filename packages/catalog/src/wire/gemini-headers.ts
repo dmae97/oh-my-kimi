@@ -20,6 +20,8 @@ export const ANTIGRAVITY_SYSTEM_INSTRUCTION =
 	"You are pair programming with a USER to solve their coding task. The task may require creating a new codebase, modifying or debugging an existing codebase, or simply answering a question." +
 	"**Absolute paths only**" +
 	"**Proactiveness**";
+export const ANTIGRAVITY_NO_PREAMBLE_INSTRUCTION =
+	'CRITICAL: NEVER output rule checks, formatting guidelines, constraint checklists (e.g. "No emdashes"), or your thinking/personality preambles in the final response. Output only the final response.';
 /**
  * Antigravity / Cloud Code Assist user agent. Lives in its own file so discovery
  * and usage code can read it without pulling the heavy google-gemini-cli provider
