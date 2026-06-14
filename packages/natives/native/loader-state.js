@@ -485,6 +485,25 @@ function validateLoadedBindings(ctx, bindings, candidate) {
 	);
 }
 
+/**
+ * Install the addon's bounded Tokio runtime now that `dlopen` has returned and
+ * the dynamic-loader lock is released. The Rust `#[module_init]` deliberately
+ * does NOT build the runtime — spawning worker threads under the loader lock
+ * deadlocks on some hosts — so it exposes `__ompInstallTokioRuntime` for the
+ * loader to call once, before any async native runs. Best-effort: older addons
+ * predating this export simply fall back to napi-rs's default runtime.
+ */
+function installNativeTokioRuntime(bindings) {
+	const install = bindings.__ompInstallTokioRuntime;
+	if (typeof install !== "function") return;
+	try {
+		install();
+		startupMarker("native:tokioRuntime:installed");
+	} catch (err) {
+		startupMarker(`native:tokioRuntime:failed:${err instanceof Error ? err.message : String(err)}`);
+	}
+}
+
 function buildHelpMessage(ctx) {
 	if (ctx.isCompiledBinary) {
 		const expectedPaths = ctx.addonFilenames.map(filename => `  ${path.join(ctx.versionedDir, filename)}`).join("\n");
@@ -595,6 +614,7 @@ export function loadNative() {
 			startupMarker(`native:require:${path.basename(candidate)}`);
 			const bindings = require_(candidate);
 			validateLoadedBindings(ctx, bindings, candidate);
+			installNativeTokioRuntime(bindings);
 			startupMarker("native:loadNative:done");
 			return bindings;
 		} catch (err) {

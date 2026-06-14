@@ -164,16 +164,39 @@ fn create_napi_tokio_runtime() -> Option<tokio::runtime::Runtime> {
 pub const fn pi_natives_version_sentinel() {}
 
 /// Native module entry point: install crash diagnostics before any tool can
-/// invoke a panicking or allocating native call, then hand napi-rs a
-/// host-sized Tokio runtime before it registers the module. napi-rs would
-/// otherwise build its own default runtime — one worker per CPU spawned eagerly
-/// at load — which aborts the whole process (`os error 1455`) on a
-/// memory-constrained Windows host before any JS error can surface. See
-/// [`create_napi_tokio_runtime`]. If we can't build any runtime we leave
-/// napi-rs to its default rather than failing here.
+/// invoke a panicking or allocating native call. This runs during `.node`
+/// load, while the dynamic-loader lock is held, so it MUST NOT spawn threads —
+/// the Tokio runtime is installed afterwards by [`omp_install_tokio_runtime`],
+/// which the JS loader calls once `dlopen` has returned.
 #[module_init]
 fn install_native_crash_handler() {
 	crash_handler::install();
+}
+
+/// Guards [`omp_install_tokio_runtime`] so the runtime is built at most once
+/// per process even if the loader invokes it more than once.
+static TOKIO_RUNTIME_INSTALLED: AtomicBool = AtomicBool::new(false);
+
+/// Install the bounded Tokio runtime napi-rs adopts for async exports.
+///
+/// The JS loader calls this exactly once, synchronously, right *after* `dlopen`
+/// returns and *before* any async native runs — never from `#[module_init]`.
+/// Building a multi-thread runtime eagerly spawns worker threads, and doing
+/// that during module init (while the dynamic-loader lock is held) deadlocks on
+/// some hosts: a fresh worker blocks acquiring the loader lock that the init
+/// thread still owns. napi-rs only materializes its runtime on the first async
+/// call (`RT` is a `LazyLock`) and `create_custom_tokio_runtime` merely records
+/// the runtime in a `OnceLock`, so installing it post-load is still honored.
+/// Without it napi builds its own default (one worker per CPU, spawned eagerly)
+/// which aborts the process (`os error 1455`) on a memory-constrained Windows
+/// host before any JS error can surface; [`create_napi_tokio_runtime`]
+/// pre-flights the spawn instead. If no runtime can be built we leave napi-rs
+/// to its default. Idempotent.
+#[napi(js_name = "__ompInstallTokioRuntime")]
+pub fn omp_install_tokio_runtime() {
+	if TOKIO_RUNTIME_INSTALLED.swap(true, Ordering::SeqCst) {
+		return;
+	}
 	if let Some(runtime) = create_napi_tokio_runtime() {
 		create_custom_tokio_runtime(runtime);
 	}
