@@ -160,6 +160,29 @@ describe("task renderer: nested live rendering", () => {
 		expect(text).toContain("Parent>DeltaSub");
 	});
 
+	it("does not recurse forever when a nested task snapshot points at itself", async () => {
+		const inflight: TaskToolDetails = {
+			projectAgentsDir: null,
+			results: [],
+			totalDurationMs: 0,
+			progress: [],
+		};
+		const child = makeRunningSubProgress("Parent.CycleSub", "Cycle child running");
+		child.inflightTaskDetails = inflight;
+		inflight.progress = [child];
+		const parent = makeRunningProgress({
+			id: "Parent",
+			currentTool: "task",
+			currentToolStartMs: Date.now(),
+			inflightTaskDetails: inflight,
+		});
+
+		const text = await render(parent);
+
+		expect(text).toContain("Cycle child running");
+		expect(text).toContain("nested task progress already shown");
+	});
+
 	it("combines completed and in-flight nested snapshots in one tree", async () => {
 		const parent = makeRunningProgress({
 			currentTool: "task",
