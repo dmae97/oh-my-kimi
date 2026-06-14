@@ -424,9 +424,13 @@ mod tests {
 			.parse::<i32>()
 			.expect("child pid parses");
 		// SAFETY: `getsid(0)` only queries the current process session; the
-		// return value is checked below.
+		// return value is checked below. Inside a PID namespace (e.g. the
+		// containerized CI runner) the host's session leader can live outside
+		// the namespace, so `getsid(0)` legitimately reports 0 — only -1 is a
+		// real failure. The meaningful invariant is that the child detached
+		// into its own session (`child_sid == child_pid`, distinct from host).
 		let host_sid = unsafe { libc::getsid(0) };
-		assert!(host_sid > 0, "getsid(0) failed: {}", std::io::Error::last_os_error());
+		assert!(host_sid >= 0, "getsid(0) failed: {}", std::io::Error::last_os_error());
 		// SAFETY: `child_pid` is a live positive PID reported by the child; the
 		// return value is checked below.
 		let child_sid = unsafe { libc::getsid(child_pid) };
