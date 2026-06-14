@@ -170,6 +170,16 @@ function resolverRegistry(): ResolverRegistration[] {
 	holder[REGISTRY] ??= [];
 	return holder[REGISTRY];
 }
+function pathContains(root: string, candidate: string): boolean {
+	const relative = path.relative(root, candidate);
+	return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function parentFilename(parent: unknown): string | null {
+	if (!isRecord(parent)) return null;
+	const filename = parent.filename;
+	return typeof filename === "string" ? filename : null;
+}
 
 export interface RuntimeResolverOptions {
 	/** Absolute path to the runtime cache's `node_modules`. */
@@ -212,7 +222,17 @@ export function installRuntimeModuleResolver({ runtimeNodeModules, stubs = {} }:
 		}
 		const bare = !request.startsWith(".") && !request.startsWith("node:") && !path.isAbsolute(request);
 		if (bare) {
+			const parentFile = parentFilename(parent);
 			for (const registration of resolverRegistry()) {
+				const parentInRuntime = parentFile !== null && pathContains(registration.runtimeNodeModules, parentFile);
+				if (parentInRuntime) {
+					const stub = registration.stubs[request];
+					if (stub) return stub;
+					if (!stockResolved || !pathContains(registration.runtimeNodeModules, stockResolved)) {
+						const fallback = resolveRuntimeModule(registration.runtimeNodeModules, request);
+						if (fallback) return fallback;
+					}
+				}
 				if (stockResolved) {
 					// Correct a stock hit only inside the top-level package the
 					// request names. A hit in a nested node_modules (e.g. tar's
