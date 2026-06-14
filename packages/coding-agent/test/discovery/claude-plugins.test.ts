@@ -389,6 +389,42 @@ describe("listClaudePluginRoots", () => {
 		expect(found?.description).toBe("Build an understanding graph");
 		expect(expandSlashCommand("/understand --language zh", commands)).toContain("Analyze the project.");
 	});
+	test("uses skill directory basename when frontmatter name contains spaces", async () => {
+		const pluginsDir = path.join(tempDir, ".omp", "plugins");
+		const pluginPath = path.join(tempDir, ".omp", "plugins", "cache", "plugins", "display-name-skill");
+		await fs.mkdir(pluginsDir, { recursive: true });
+		await fs.mkdir(path.join(pluginPath, "skills", "understand"), { recursive: true });
+
+		const registry = {
+			version: 2,
+			plugins: {
+				"display-name-skill@display-name-skill": [
+					{
+						scope: "user",
+						installPath: pluginPath,
+						version: "1.0.0",
+						installedAt: "2026-06-12T00:00:00Z",
+						lastUpdated: "2026-06-12T00:00:00Z",
+					},
+				],
+			},
+		};
+
+		await fs.writeFile(path.join(pluginsDir, "installed_plugins.json"), JSON.stringify(registry));
+		await fs.writeFile(
+			path.join(pluginPath, "skills", "understand", "SKILL.md"),
+			"---\nname: Understand Anything\ndescription: Build an understanding graph\n---\nAnalyze the project.\n",
+		);
+
+		const commands = await loadSlashCommands({ cwd: tempDir });
+		// Skill is registered by directory basename so `/understand` resolves,
+		// even though the frontmatter `name` is the multi-word display label.
+		const found = commands.find(command => command.name === "understand");
+		expect(found?.description).toBe("Build an understanding graph");
+		expect(commands.find(command => command.name === "Understand Anything")).toBeUndefined();
+		expect(expandSlashCommand("/understand", commands)).toContain("Analyze the project.");
+	});
+
 
 	test("reads slash commands directory from plugin manifest slash-commands field", async () => {
 		const pluginsDir = path.join(tempDir, ".claude", "plugins");

@@ -141,8 +141,12 @@ async function loadSkillSlashCommands(ctx: LoadContext, root: ClaudePluginRoot):
 				warnings.push(`Failed to read skill slash command: ${skill.path}`);
 				return null;
 			}
+			// Slash command name MUST come from the skill directory basename, not
+			// frontmatter `name`: `expandSlashCommand` splits the command at the first
+			// whitespace, so a display name like "Understand Anything" would never match
+			// `/understand`. The documented layout is `skills/<name>/SKILL.md` → `/<name>`.
 			const command: SlashCommand = {
-				name: skill.name,
+				name: path.basename(path.dirname(skill.path)),
 				path: skill.path,
 				content,
 				level: skill.level,
