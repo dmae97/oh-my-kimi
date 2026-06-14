@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { getFastembedCacheDir } from "@oh-my-pi/pi-utils";
-import "./setup";
+import { RUN_EMBEDDINGS } from "./setup";
 import {
 	available,
 	embed,
@@ -202,7 +202,7 @@ describe("optional embeddings", () => {
 		}
 	});
 
-	it("uses a constructor-scoped embedding provider", async () => {
+	it.skipIf(!RUN_EMBEDDINGS)("uses a constructor-scoped embedding provider", async () => {
 		const memory = new Mnemopi({
 			embeddings: {
 				provider: streamRows(texts => texts.map(text => [text.length, text.charCodeAt(0) || 0])),

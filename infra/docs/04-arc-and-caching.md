@@ -165,7 +165,7 @@ template:
             cpu: "2"
             memory: "4Gi"
           limits:
-            cpu: "6"
+            cpu: "8"
             memory: "12Gi"
 ```
 

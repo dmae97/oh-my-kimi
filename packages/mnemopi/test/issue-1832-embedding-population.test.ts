@@ -16,7 +16,7 @@ import { describe, expect, it } from "bun:test";
 import { randomBytes } from "node:crypto";
 import { rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import "./setup";
+import { RUN_EMBEDDINGS } from "./setup";
 import { cmdRemember } from "@oh-my-pi/pi-mnemopi/cli";
 import { BeamMemory } from "@oh-my-pi/pi-mnemopi/core/beam";
 import { Mnemopi } from "@oh-my-pi/pi-mnemopi/core/memory";
@@ -77,7 +77,7 @@ function readEmbeddings(memory: Mnemopi): EmbeddingRow[] {
 		.all() as EmbeddingRow[];
 }
 
-describe("issue #1832 — embedding write/read coverage", () => {
+describe.skipIf(!RUN_EMBEDDINGS)("issue #1832 — embedding write/read coverage", () => {
 	it("remember() writes a row to memory_embeddings after flushExtractions()", async () => {
 		await withFakeMemory(async (memory, calls) => {
 			const memId = memory.remember("alpha facts about migration", { source: "test", importance: 0.5 });

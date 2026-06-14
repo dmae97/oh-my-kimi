@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import "./setup";
+import { RUN_EMBEDDINGS } from "./setup";
 import {
 	cosineSimilarity,
 	embed,
@@ -121,7 +121,7 @@ describe("multilingual embedding metadata", () => {
 	});
 });
 
-describe("multilingual embedding ordering", () => {
+describe.skipIf(!RUN_EMBEDDINGS)("multilingual embedding ordering", () => {
 	it("preserves semantic ordering with a deterministic fake multilingual provider", async () => {
 		setEmbeddingProviderForTests({
 			async *embed(texts) {
