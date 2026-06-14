@@ -633,9 +633,13 @@ describe("ModelRegistry runtime discovery", () => {
 		};
 		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
 		await registry.refresh();
-		const contextual = registry.getAll().find(m => m.provider === "openai-test" && m.id === "openai-test/contextual-model");
+		const contextual = registry
+			.getAll()
+			.find(m => m.provider === "openai-test" && m.id === "openai-test/contextual-model");
 		expect(contextual?.contextWindow).toBe(16385);
-		const fallback = registry.getAll().find(m => m.provider === "openai-test" && m.id === "openai-test/no-context-model");
+		const fallback = registry
+			.getAll()
+			.find(m => m.provider === "openai-test" && m.id === "openai-test/no-context-model");
 		expect(fallback?.contextWindow).toBe(128000);
 	});
 
@@ -655,6 +659,7 @@ describe("ModelRegistry runtime discovery", () => {
 						data: [
 							{ id: "anthropic-model", supported_endpoint_types: ["anthropic"], context_length: 200000 },
 							{ id: "openai-model", supported_endpoint_types: ["openai"], context_length: 65536 },
+							{ id: "zero-context-model", supported_endpoint_types: ["openai"], context_length: 0 },
 						],
 					}),
 					{ status: 200, headers: { "Content-Type": "application/json" } },
@@ -670,5 +675,10 @@ describe("ModelRegistry runtime discovery", () => {
 		const openai = registry.getAll().find(m => m.provider === "proxy-test" && m.id === "openai-model");
 		expect(openai?.api).toBe("openai-completions");
 		expect(openai?.contextWindow).toBe(65536);
+		// A non-positive upstream context_length must be rejected by the guard and
+		// fall through to the bundled reference (absent here) then the default,
+		// never pinning the model at a broken `0` window.
+		const zeroCtx = registry.getAll().find(m => m.provider === "proxy-test" && m.id === "zero-context-model");
+		expect(zeroCtx?.contextWindow).toBe(128000);
 	});
 });

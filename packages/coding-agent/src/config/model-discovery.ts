@@ -501,10 +501,7 @@ export async function discoverProxyModels(
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 				// Prefer the context_length the API reports for this model; fall
 				// back to the bundled reference, then a sane default.
-				contextWindow: 
-					toPositiveNumberOrUndefined(item.context_length) ??
-					reference?.contextWindow ??
-					128000,
+				contextWindow: toPositiveNumberOrUndefined(item.context_length) ?? reference?.contextWindow ?? 128000,
 				maxTokens: reference?.maxTokens ?? discoveryDefaultMaxTokens(api),
 				headers,
 				// OpenAI-compat fields are no-ops on anthropic models; the
