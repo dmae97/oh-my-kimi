@@ -11,10 +11,12 @@ import { VirtualTerminal } from "../../tui/test/virtual-terminal";
 class MutableLiveBlock implements Component {
 	#lines: string[];
 	#finalized: boolean;
+	#commitStable: boolean | undefined;
 
-	constructor(lines: string[], finalized = false) {
+	constructor(lines: string[], finalized = false, commitStable?: boolean) {
 		this.#lines = [...lines];
 		this.#finalized = finalized;
+		this.#commitStable = commitStable;
 	}
 
 	render(width: number): string[] {
@@ -27,6 +29,13 @@ class MutableLiveBlock implements Component {
 
 	isTranscriptBlockFinalized(): boolean {
 		return this.#finalized;
+	}
+
+	// Defaults to commit-stable (matches a block that omits the method). Pass
+	// false to model a provisional block (a collapsing tool preview) whose live
+	// rows must never reach native scrollback.
+	isTranscriptBlockCommitStable(): boolean {
+		return this.#commitStable ?? true;
 	}
 }
 
@@ -941,13 +950,57 @@ describe("tool live-region scrollback", () => {
 		}
 	});
 
-	it("keeps a re-layouting live block's changed head out of scrollback", async () => {
+	it("commits a re-layouting commit-stable live block's durable head to scrollback (no loss)", async () => {
 		if (process.platform === "win32") return;
 
+		// A commit-stable block (a streaming assistant reply) whose interior rows
+		// re-lay-out as it grows — the markdown-table shape: every previous row
+		// changes when the block swaps to a taller render. Its current snapshot is
+		// durable content, so the rows that scroll above the viewport MUST reach
+		// native scrollback (frozen snapshot) rather than vanish — committed
+		// nowhere, repainted nowhere.
 		const term = new VirtualTerminal(120, 12);
 		const tui = new TUI(term);
 		const chat = new TranscriptContainer();
 		const block = new MutableLiveBlock(markerLines("OLD-", 8));
+
+		try {
+			chat.addChild(block);
+			tui.addChild(chat);
+			tui.start();
+			await term.waitForRender();
+
+			block.setLines(markerLines("NEW-", 40));
+			tui.requestRender();
+			await term.waitForRender();
+
+			const scrollText = stripRows(term.getScrollBuffer());
+			const viewportText = stripRows(term.getViewport());
+
+			// The head scrolled above the viewport but is durable: it lives in
+			// native scrollback, not nowhere.
+			expect(viewportText).not.toContain("NEW-0");
+			expect(scrollText).toContain("NEW-0");
+			expect(scrollText).toContain("NEW-20");
+			expect(viewportText).toContain("NEW-39");
+		} finally {
+			tui.stop();
+			await term.flush();
+		}
+	});
+
+	it("keeps a re-layouting commit-UNSTABLE live block's changed head out of scrollback", async () => {
+		if (process.platform === "win32") return;
+
+		// A provisional block (a collapsing tool/edit preview) reports
+		// isTranscriptBlockCommitStable() === false: its head is a throwaway tail
+		// window that the result render replaces wholesale, so committing it would
+		// strand a stale fragment in history. Its re-laid-out head must stay out of
+		// scrollback (the provisional-defer contract behind #402/#351).
+		const term = new VirtualTerminal(120, 12);
+		const tui = new TUI(term);
+		const chat = new TranscriptContainer();
+		const block = new MutableLiveBlock(markerLines("OLD-", 8), false, false);
 
 		try {
 			chat.addChild(block);
@@ -1223,6 +1276,51 @@ describe("assistant live-region scrollback", () => {
 			expect(scrollText).toContain("PARA-4");
 			// The tail is still on screen.
 			expect(viewportText).toContain("PARA-7");
+		} finally {
+			tui.stop();
+			await term.flush();
+		}
+	});
+
+	it("commits the scrolled-off head of a streamed markdown table whose columns keep re-aligning", async () => {
+		if (process.platform === "win32") return;
+
+		// The reported content-loss shape: a streaming reply with a markdown table
+		// whose column widths grow as rows arrive, so every already-rendered row
+		// re-lays-out each frame (perpetual interior re-layout, never byte-stable
+		// append-only). The block is commit-stable, so its scrolled-off head is
+		// durable and must reach native scrollback rather than vanish.
+		const term = new VirtualTerminal(70, 12);
+		const tui = new TUI(term);
+		const chat = new TranscriptContainer();
+		const component = new AssistantMessageComponent(undefined, false);
+
+		const lines: string[] = ["Here is a summary of the MARK files:", ""];
+		for (let i = 0; i < 6; i++) lines.push(`Paragraph PARA-${i} with some descriptive prose about the topic.`);
+		lines.push("", "| Name | Description |", "|------|-------------|");
+		for (let i = 0; i < 16; i++) {
+			lines.push(`| ITEM-${i} | description number ${i} growing wider and wider ${"x".repeat(i)} |`);
+		}
+
+		try {
+			chat.addChild(component);
+			tui.addChild(chat);
+			tui.start();
+			await term.waitForRender();
+
+			const acc: string[] = [];
+			for (const line of lines) {
+				acc.push(line);
+				component.updateContent(makeAssistantMessage(acc.join("\n")));
+				tui.requestRender();
+				await term.waitForRender();
+			}
+
+			const scrollText = stripRows(term.getScrollBuffer());
+			// No row may vanish: every paragraph and table row reaches the tape,
+			// even the band that scrolled off while the table was re-aligning.
+			for (let i = 0; i < 6; i++) expect(scrollText).toContain(`PARA-${i}`);
+			for (let i = 0; i < 16; i++) expect(scrollText).toContain(`ITEM-${i}`);
 		} finally {
 			tui.stop();
 			await term.flush();
