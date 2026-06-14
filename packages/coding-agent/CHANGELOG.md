@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed `/plan` cycling between `plan` and `plan_paused` with no path back to mode `none`. `handlePlanModeCommand` had branches for entering and pausing but fell through to `#enterPlanMode()` when invoked from the paused state, so once a session entered plan mode the only operator-visible toggle re-entered it. The handler now matches `planModePaused` and fully exits — clearing `planModeHasEntered` and appending a `mode_change` to `"none"` — so `/goal` (and any other mode gated on `planModeEnabled || planModePaused`) can run again after a third `/plan` ([#2510](https://github.com/can1357/oh-my-pi/issues/2510)).
+- Fixed `/plan` cycling between `plan` and `plan_paused` with no path back to mode `none`, while preserving prompted paused-mode requests. The no-arg third toggle now fully exits — clearing `planModeHasEntered` and appending a `mode_change` to `"none"` — and `/plan <prompt>` from `plan_paused` re-enters plan mode and submits the prompt as the first turn ([#2510](https://github.com/can1357/oh-my-pi/issues/2510)).
 
 ## [15.12.5] - 2026-06-13
 ### Changed
