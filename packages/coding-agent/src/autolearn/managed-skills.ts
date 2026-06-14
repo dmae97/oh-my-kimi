@@ -89,10 +89,57 @@ export interface WriteManagedSkillInput {
 	body: string;
 }
 
+/**
+ * Serialize create/update/delete on the same skill name. Both tools are
+ * non-exclusive, so a parallel tool batch in one turn can run two mutations on
+ * the same skill at once (e.g. an update observing the file mid-delete). This
+ * per-name promise chain runs same-skill mutations in submission order while
+ * different names still proceed in parallel. In-process only; cross-process
+ * races are out of scope.
+ */
+const skillMutationChains = new Map<string, Promise<unknown>>();
+function serializeSkillMutation<T>(name: string, op: () => Promise<T>): Promise<T> {
+	const prev = skillMutationChains.get(name) ?? Promise.resolve();
+	const run = prev.then(op, op);
+	const guarded = run.catch(() => {});
+	skillMutationChains.set(name, guarded);
+	void guarded.finally(() => {
+		if (skillMutationChains.get(name) === guarded) skillMutationChains.delete(name);
+	});
+	return run;
+}
+
+/**
+ * Reject when the managed-skills root itself is a symlink. lstat on a child
+ * follows intermediate components, so a symlinked root would let an otherwise
+ * valid name write/delete outside the isolated directory (e.g. onto authored
+ * skills). Checked before composing any child path.
+ */
+async function assertManagedRootSafe(): Promise<void> {
+	const rootStat = await fs.lstat(getManagedSkillsDir()).catch(err => {
+		if (isEnoent(err)) return null;
+		throw err;
+	});
+	if (rootStat?.isSymbolicLink()) {
+		throw new Error("The managed-skills root is a symlink; refusing to operate outside the managed directory.");
+	}
+}
+
 /** Create or update a managed `SKILL.md`. Returns the resolved file path. */
 export async function writeManagedSkill(input: WriteManagedSkillInput): Promise<{ path: string }> {
 	const name = sanitizeSkillName(input.name);
-	const content = `${toSkillFrontmatter(name, input.description)}\n${input.body.trim()}\n`;
+	const description = sanitizeManagedDescription(input.description);
+	const body = input.body.trim();
+	// Reject empty content: an all-whitespace/control description sanitizes to ""
+	// and the `requireDescription` discovery scan then silently drops the skill,
+	// so the tool would report success for a skill that never appears.
+	if (!description) {
+		throw new Error(`Managed skill "${name}" needs a non-empty description.`);
+	}
+	if (!body) {
+		throw new Error(`Managed skill "${name}" needs a non-empty body.`);
+	}
+	const content = `${toSkillFrontmatter(name, description)}\n${body}\n`;
 	// Cap the UTF-8 byte size of the FINAL file (body + description + frontmatter),
 	// not the UTF-16 code-unit length of the body alone.
 	const bytes = Buffer.byteLength(content, "utf8");
@@ -101,60 +148,73 @@ export async function writeManagedSkill(input: WriteManagedSkillInput): Promise<
 			`Managed skill is ${bytes} bytes; the limit is ${MAX_MANAGED_SKILL_BYTES}. Trim the body or description.`,
 		);
 	}
-	const dir = path.join(getManagedSkillsDir(), name);
-	const file = path.join(dir, "SKILL.md");
-	// Reject a symlinked skill directory: an intermediate symlink would let the
-	// write escape the isolated managed root (e.g. clobber a user-authored skill).
-	// lstat does not follow the final component, so a symlinked `dir` is caught here.
-	const dirStat = await fs.lstat(dir).catch(err => {
-		if (isEnoent(err)) return null;
-		throw err;
-	});
-	if (dirStat?.isSymbolicLink()) {
-		throw new Error(
-			`Managed skill "${name}" resolves through a symlink; refusing to write outside the managed directory.`,
-		);
-	}
-	if (input.action === "create") {
-		await fs.mkdir(dir, { recursive: true });
-		// O_CREAT|O_EXCL ("wx"): atomic create that fails if the file already
-		// exists — closing the check-then-write race two concurrent creates would
-		// otherwise lose — and refuses to follow a symlinked SKILL.md (EEXIST).
-		try {
-			await fs.writeFile(file, content, { flag: "wx" });
-		} catch (err) {
-			if ((err as { code?: string }).code === "EEXIST") {
-				throw new Error(`Managed skill "${name}" already exists. Use action "update" to change it.`);
-			}
+	return serializeSkillMutation(name, async () => {
+		await assertManagedRootSafe();
+		const dir = path.join(getManagedSkillsDir(), name);
+		const file = path.join(dir, "SKILL.md");
+		// Reject a symlinked skill directory: an intermediate symlink would let the
+		// write escape the isolated managed root. lstat does not follow the final
+		// component, so a symlinked `dir` is caught here.
+		const dirStat = await fs.lstat(dir).catch(err => {
+			if (isEnoent(err)) return null;
 			throw err;
+		});
+		if (dirStat?.isSymbolicLink()) {
+			throw new Error(
+				`Managed skill "${name}" resolves through a symlink; refusing to write outside the managed directory.`,
+			);
 		}
+		if (input.action === "create") {
+			await fs.mkdir(dir, { recursive: true });
+			// O_CREAT|O_EXCL ("wx"): atomic create that fails if the file already
+			// exists (closing the check-then-write race) and refuses a symlinked SKILL.md.
+			try {
+				await fs.writeFile(file, content, { flag: "wx" });
+			} catch (err) {
+				if ((err as { code?: string }).code === "EEXIST") {
+					throw new Error(`Managed skill "${name}" already exists. Use action "update" to change it.`);
+				}
+				throw err;
+			}
+			return { path: file };
+		}
+		// update: the file must already exist and must not be a symlink.
+		const fileStat = await fs.lstat(file).catch(err => {
+			if (isEnoent(err)) return null;
+			throw err;
+		});
+		if (fileStat === null) {
+			throw new Error(`Managed skill "${name}" does not exist. Use action "create" to add it.`);
+		}
+		if (fileStat.isSymbolicLink()) {
+			throw new Error(`Managed skill "${name}" SKILL.md is a symlink; refusing to overwrite it.`);
+		}
+		await Bun.write(file, content);
 		return { path: file };
-	}
-	// update: the file must already exist and must not be a symlink.
-	const fileStat = await fs.lstat(file).catch(err => {
-		if (isEnoent(err)) return null;
-		throw err;
 	});
-	if (fileStat === null) {
-		throw new Error(`Managed skill "${name}" does not exist. Use action "create" to add it.`);
-	}
-	if (fileStat.isSymbolicLink()) {
-		throw new Error(`Managed skill "${name}" SKILL.md is a symlink; refusing to overwrite it.`);
-	}
-	await Bun.write(file, content);
-	return { path: file };
 }
 
 /** Delete a managed skill directory. Throws when it does not exist. */
 export async function deleteManagedSkill(name: string): Promise<void> {
 	const safe = sanitizeSkillName(name);
-	const dir = path.join(getManagedSkillsDir(), safe);
-	try {
-		await fs.rm(dir, { recursive: true });
-	} catch (err) {
-		if (isEnoent(err)) {
-			throw new Error(`Managed skill "${safe}" does not exist.`);
+	await serializeSkillMutation(safe, async () => {
+		await assertManagedRootSafe();
+		const dir = path.join(getManagedSkillsDir(), safe);
+		// Refuse to follow a symlinked skill directory (rm would delete the target).
+		const dirStat = await fs.lstat(dir).catch(err => {
+			if (isEnoent(err)) return null;
+			throw err;
+		});
+		if (dirStat?.isSymbolicLink()) {
+			throw new Error(`Managed skill "${safe}" is a symlink; refusing to delete outside the managed directory.`);
 		}
-		throw err;
-	}
+		try {
+			await fs.rm(dir, { recursive: true });
+		} catch (err) {
+			if (isEnoent(err)) {
+				throw new Error(`Managed skill "${safe}" does not exist.`);
+			}
+			throw err;
+		}
+	});
 }
