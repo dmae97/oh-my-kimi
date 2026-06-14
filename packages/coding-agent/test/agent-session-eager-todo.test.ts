@@ -14,8 +14,8 @@ import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { TodoTool } from "@oh-my-pi/pi-coding-agent/tools";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { z } from "zod/v4";
-import { createAssistantMessage } from "./helpers/agent-session-setup";
 import eagerTodoPrompt from "../src/prompts/system/eager-todo.md" with { type: "text" };
+import { createAssistantMessage } from "./helpers/agent-session-setup";
 
 type ObservedPromptCall = {
 	toolChoice: string | undefined;
