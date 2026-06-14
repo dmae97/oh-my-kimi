@@ -131,7 +131,7 @@ export declare class Shell {
  * the runtime in a `OnceLock`, so installing it post-load is still honored.
  * Without it napi builds its own default (one worker per CPU, spawned eagerly)
  * which aborts the process (`os error 1455`) on a memory-constrained Windows
- * host before any JS error can surface; [`create_napi_tokio_runtime`]
+ * host before any JS error can surface; [`create_windows_napi_tokio_runtime`]
  * pre-flights the spawn instead. If no runtime can be built we leave napi-rs
  * to its default. Idempotent.
  */

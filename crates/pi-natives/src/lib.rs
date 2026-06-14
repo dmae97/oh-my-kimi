@@ -53,48 +53,58 @@ pub mod tokens;
 pub(crate) mod utils;
 pub mod workspace;
 
+#[cfg(target_os = "windows")]
 use std::sync::{
 	Arc,
 	atomic::{AtomicBool, Ordering},
 };
 
+#[cfg(target_os = "windows")]
 use napi::bindgen_prelude::create_custom_tokio_runtime;
 use napi_derive::{module_init, napi};
 
-/// Upper bound on Tokio *scheduler* workers. These only drive async I/O
+/// Upper bound on Windows Tokio *scheduler* workers. These only drive async I/O
 /// futures (shell/process/PTY/ISO) and light glue tasks; all CPU-heavy and
 /// blocking native work runs elsewhere — libuv tasks (`task::blocking`), Rayon,
 /// or Tokio's separate blocking pool via `spawn_blocking` — so a handful of
 /// async workers is plenty regardless of core count.
+#[cfg(target_os = "windows")]
 const NAPI_TOKIO_MAX_WORKER_THREADS: usize = 4;
 /// Cap on Tokio's lazily-grown blocking pool (used by `spawn_blocking` offloads
 /// such as `iso_start`/`iso_stop`/`pty.start`/`walk_diff`). Threads here are
 /// created on demand, not at load, so this only bounds peak fan-out.
+#[cfg(target_os = "windows")]
 const NAPI_TOKIO_MAX_BLOCKING_THREADS: usize = 8;
 
-/// Worker count we'd *like*, before checking what the OS will actually grant:
-/// the Tokio default (one per core) clamped to
+/// Windows worker count we'd *like*, before checking what the OS will actually
+/// grant: the Tokio default (one per core) clamped to
 /// [`NAPI_TOKIO_MAX_WORKER_THREADS`].
+#[cfg(target_os = "windows")]
 fn desired_worker_threads() -> usize {
 	std::thread::available_parallelism()
 		.map_or(1, |threads| threads.get())
 		.clamp(1, NAPI_TOKIO_MAX_WORKER_THREADS)
 }
 
-/// Probe how many worker threads the OS will let us hold alive
+/// Probe how many worker threads Windows will let us hold alive
 /// *simultaneously*, up to `target`. Returns the count actually spawned (0 when
 /// not even one extra thread is possible).
 ///
 /// `Builder::build()` for a multi-thread runtime spawns every worker eagerly
-/// and **panics** (not `Err`) when the OS refuses one — on a memory-constrained
-/// Windows host (tiny pagefile / commit limit, `os error 1455`) that aborts the
-/// whole process at addon load before any JS error can surface. The release
-/// profile is `panic = "abort"`, so the panic can't even be caught. We instead
-/// pre-flight with `std::thread::Builder::spawn`, which returns an
+/// and **panics** (not `Err`) when Windows refuses one — on a
+/// memory-constrained host (tiny pagefile / commit limit, `os error 1455`) that
+/// aborts the whole process at addon load before any JS error can surface. The
+/// release profile is `panic = "abort"`, so the panic can't even be caught. We
+/// instead pre-flight with `std::thread::Builder::spawn`, which returns an
 /// `io::Result`, holding each probe thread alive (so their stacks are committed
 /// concurrently, matching how real workers coexist) until we know the safe
 /// count. Probe threads use the std default stack, exactly like Tokio's workers
 /// (it leaves `thread_stack_size` unset), so the probe is representative.
+///
+/// Keep this Windows-only. On Linux, spawning probe threads from `module_init`
+/// can deadlock while Bun is loading the `.node`; napi-rs's default runtime
+/// loads cleanly there and avoids any custom loader-time thread probe.
+#[cfg(target_os = "windows")]
 fn probe_spawnable_workers(target: usize) -> usize {
 	let keep_running = Arc::new(AtomicBool::new(true));
 	let mut handles = Vec::with_capacity(target);
@@ -118,13 +128,15 @@ fn probe_spawnable_workers(target: usize) -> usize {
 	spawned
 }
 
-/// Build the Tokio runtime napi-rs hands async exports, sized to what the host
-/// can actually spawn. Never panics: backs off from [`desired_worker_threads`]
-/// to whatever the probe allows, and falls back to a current-thread runtime
-/// (which spawns no workers at build time, so it can't abort under commit-limit
-/// pressure) when not even one worker is available. Returns `None` only if even
-/// that fails, in which case we leave napi-rs to construct its own default.
-fn create_napi_tokio_runtime() -> Option<tokio::runtime::Runtime> {
+/// Build the custom Tokio runtime napi-rs uses on Windows, sized to what the
+/// host can actually spawn. Never panics: backs off from
+/// [`desired_worker_threads`] to whatever the probe allows, and falls back to a
+/// current-thread runtime (which spawns no workers at build time, so it can't
+/// abort under commit-limit pressure) when not even one worker is available.
+/// Returns `None` only if even that fails, in which case we leave napi-rs to
+/// construct its own default.
+#[cfg(target_os = "windows")]
+fn create_windows_napi_tokio_runtime() -> Option<tokio::runtime::Runtime> {
 	let workers = probe_spawnable_workers(desired_worker_threads());
 	let multi_thread = (workers > 0)
 		.then(|| {
@@ -166,8 +178,15 @@ pub const fn pi_natives_version_sentinel() {}
 /// Native module entry point: install crash diagnostics before any tool can
 /// invoke a panicking or allocating native call. This runs during `.node`
 /// load, while the dynamic-loader lock is held, so it MUST NOT spawn threads —
-/// the Tokio runtime is installed afterwards by [`omp_install_tokio_runtime`],
-/// which the JS loader calls once `dlopen` has returned.
+/// the Tokio runtime is installed afterwards on Windows by
+/// [`omp_install_tokio_runtime`], which the JS loader calls once `dlopen` has
+/// returned.
+///
+/// On Windows, the custom Tokio runtime is host-sized to prevent aborts under
+/// memory limits (see [`create_windows_napi_tokio_runtime`]). Non-Windows
+/// builds intentionally use napi-rs's default path. Linux source builds can
+/// deadlock if this module initializer or post-load setup performs its own
+/// thread probe, so we keep the probe and custom runtime Windows-only.
 #[module_init]
 fn install_native_crash_handler() {
 	crash_handler::install();
@@ -175,6 +194,7 @@ fn install_native_crash_handler() {
 
 /// Guards [`omp_install_tokio_runtime`] so the runtime is built at most once
 /// per process even if the loader invokes it more than once.
+#[cfg(target_os = "windows")]
 static TOKIO_RUNTIME_INSTALLED: AtomicBool = AtomicBool::new(false);
 
 /// Install the bounded Tokio runtime napi-rs adopts for async exports.
@@ -189,15 +209,17 @@ static TOKIO_RUNTIME_INSTALLED: AtomicBool = AtomicBool::new(false);
 /// the runtime in a `OnceLock`, so installing it post-load is still honored.
 /// Without it napi builds its own default (one worker per CPU, spawned eagerly)
 /// which aborts the process (`os error 1455`) on a memory-constrained Windows
-/// host before any JS error can surface; [`create_napi_tokio_runtime`]
+/// host before any JS error can surface; [`create_windows_napi_tokio_runtime`]
 /// pre-flights the spawn instead. If no runtime can be built we leave napi-rs
 /// to its default. Idempotent.
 #[napi(js_name = "__ompInstallTokioRuntime")]
-pub fn omp_install_tokio_runtime() {
+pub const fn omp_install_tokio_runtime() {
+	#[cfg(target_os = "windows")]
 	if TOKIO_RUNTIME_INSTALLED.swap(true, Ordering::SeqCst) {
 		return;
 	}
-	if let Some(runtime) = create_napi_tokio_runtime() {
+	#[cfg(target_os = "windows")]
+	if let Some(runtime) = create_windows_napi_tokio_runtime() {
 		create_custom_tokio_runtime(runtime);
 	}
 }
