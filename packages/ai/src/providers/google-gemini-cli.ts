@@ -27,6 +27,7 @@ import type {
 import { normalizeSystemPrompts } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { appendRawHttpRequestDumpFor400, type RawHttpRequestDump } from "../utils/http-inspector";
+import { getStreamFirstEventTimeoutMs } from "../utils/idle-iterator";
 // Refresh is the sole responsibility of AuthStorage (broker-aware, single-flighted);
 // the stream provider trusts the access token threaded through `options.apiKey`.
 import { normalizeSchemaForCCA } from "../utils/schema";
@@ -365,18 +366,33 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 				headers: requestHeaders,
 			};
 
+			// Direct callers that skip `register-builtins` (which installs the
+			// iterator-level watchdog) need a pre-response timer alongside
+			// `timeout: false`; otherwise a stalled Cloud Code Assist proxy
+			// would hang forever. Floor matches the lazy wrapper's 5min default.
+			const firstEventTimeoutMs =
+				options?.streamFirstEventTimeoutMs ?? getStreamFirstEventTimeoutMs(undefined, 300_000);
+			const preResponseWatchdog =
+				firstEventTimeoutMs !== undefined && firstEventTimeoutMs > 0
+					? AbortSignal.timeout(firstEventTimeoutMs)
+					: undefined;
+			const callerSignal = options?.signal;
+			const fetchSignal = preResponseWatchdog
+				? callerSignal
+					? AbortSignal.any([callerSignal, preResponseWatchdog])
+					: preResponseWatchdog
+				: callerSignal;
 			const response = await fetchWithRetry(
 				attempt => `${endpoints[Math.min(attempt, endpoints.length - 1)]}/v1internal:streamGenerateContent?alt=sse`,
 				{
 					method: "POST",
 					headers: requestHeaders,
 					body: requestBodyJson,
-					signal: options?.signal,
+					signal: fetchSignal,
 					maxAttempts: MAX_RETRIES + 1,
 					defaultDelayMs: attempt => BASE_DELAY_MS * 2 ** attempt,
 					maxDelayMs: options?.maxRetryDelayMs ?? RATE_LIMIT_BUDGET_MS,
 					fetch: options?.fetch,
-					// Disable Bun's native ~300s pre-response timeout (issue #2422).
 					timeout: false,
 				},
 			);
