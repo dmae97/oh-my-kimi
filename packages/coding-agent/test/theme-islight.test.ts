@@ -1,5 +1,11 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { generateThemeVars } from "@oh-my-pi/pi-coding-agent/export/html";
+import { defaultThemes } from "@oh-my-pi/pi-coding-agent/modes/theme/defaults";
 import { getResolvedThemeColors, getThemeByName, isLightTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { getAgentDir, getCustomThemesDir, setAgentDir } from "@oh-my-pi/pi-utils";
 
 describe("Theme.isLight", () => {
 	it("classifies built-in themes by their status-line surface", async () => {
@@ -23,9 +29,9 @@ describe("Theme.isLight", () => {
 
 describe("isLightTheme (standalone)", () => {
 	// Regression for #2516: the standalone helper used to classify on
-	// userMessageBg, mismatching Theme.isLight (statusLineBg) and the HTML
-	// export's defaultText. porcelain is the canonical mismatch (dark bubble,
-	// light status line); sandstone/limestone exercise the custom-light path.
+	// userMessageBg, mismatching Theme.isLight (statusLineBg). porcelain is the
+	// canonical mismatch (dark bubble, light status line); sandstone/limestone
+	// exercise the custom-light path.
 	it.each([
 		["sandstone", true],
 		["limestone", true],
@@ -54,5 +60,40 @@ describe("getResolvedThemeColors HTML export defaults", () => {
 		const colors = await getResolvedThemeColors("dark");
 		expect(colors.text).toBe("#e5e5e7");
 		expect(colors.userMessageText).toBe("#e5e5e7");
+	});
+	let tempAgentDir: string | undefined;
+	let originalAgentDir = "";
+	let originalAgentDirEnv: string | undefined;
+
+	afterEach(async () => {
+		if (tempAgentDir === undefined) return;
+		setAgentDir(originalAgentDir);
+		if (originalAgentDirEnv === undefined) {
+			delete process.env.PI_CODING_AGENT_DIR;
+		} else {
+			process.env.PI_CODING_AGENT_DIR = originalAgentDirEnv;
+		}
+		await fs.rm(tempAgentDir, { recursive: true, force: true });
+		tempAgentDir = undefined;
+	});
+
+	it("uses light text when a light-status custom theme derives dark export surfaces from userMessageBg", async () => {
+		originalAgentDir = getAgentDir();
+		originalAgentDirEnv = process.env.PI_CODING_AGENT_DIR;
+		tempAgentDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-theme-export-"));
+		setAgentDir(tempAgentDir);
+
+		const { export: _ignoredExport, ...themeWithoutExport } = defaultThemes.porcelain;
+		const customThemeName = "light-status-dark-export-derived";
+		await Bun.write(
+			path.join(getCustomThemesDir(), `${customThemeName}.json`),
+			JSON.stringify({ ...themeWithoutExport, name: customThemeName }),
+		);
+
+		const vars = await generateThemeVars(customThemeName);
+		expect(vars).toContain("--body-bg: rgb(56, 78, 112);");
+		expect(vars).toContain("--container-bg: rgb(68, 95, 136);");
+		expect(vars).toContain("--text: #e5e5e7;");
+		expect(vars).toContain("--userMessageText: #e5e5e7;");
 	});
 });

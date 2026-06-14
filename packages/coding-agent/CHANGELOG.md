@@ -102,6 +102,7 @@
 
 - Removed the `re-roots past a cwd-less legacy session in a shared explicit sessionDir` relocation test case and the `stores symlink-equivalent home cwd sessions under home-relative directories` file-operations test case.
 - Fixed `/plan` cycling between `plan` and `plan_paused` with no path back to mode `none`, while preserving prompted paused-mode requests. The no-arg third toggle now fully exits — clearing `planModeHasEntered` and appending a `mode_change` to `"none"` — and `/plan <prompt>` from `plan_paused` re-enters plan mode and submits the prompt as the first turn ([#2510](https://github.com/can1357/oh-my-pi/issues/2510)).
+- Fixed HTML session export rendering empty text tokens (`text`, `userMessageText`, `customMessageText`, `toolTitle`) as the dark-theme grey `#e5e5e7` on every theme not literally named `light`, making transcripts illegible on custom light themes like `sandstone`, `limestone`, and `porcelain`. `isLightTheme` now classifies against the resolved `statusLineBg` luminance (the same surface `Theme.isLight` uses), while HTML `defaultText` contrasts the actual export surface (`export.cardBg` / `export.pageBg` / derived `userMessageBg`) so light-status themes with dark export cards keep light transcript text ([#2516](https://github.com/can1357/oh-my-pi/issues/2516)).
 
 ## [15.12.5] - 2026-06-13
 ### Changed
