@@ -334,6 +334,28 @@ describe("processResponsesStream: lost output_item.added recovery", () => {
 		).rejects.toThrow("incomplete: content_filter");
 	});
 
+	test("handles nested error object in error events", async () => {
+		const output = makeOutput();
+		const stream = { push: () => {}, end: () => {} } as never;
+
+		await expect(
+			processResponsesStream(
+				makeStream([
+					{
+						type: "error",
+						error: {
+							code: "context_length_exceeded",
+							message: "Your input exceeds the context window limit",
+						},
+					},
+				]),
+				output,
+				stream,
+				makeModel(),
+			),
+		).rejects.toThrow("Error Code context_length_exceeded: Your input exceeds the context window limit");
+	});
+
 	test("preserves premiumRequests across usage population", async () => {
 		const output = makeOutput();
 		output.usage.premiumRequests = 3;
