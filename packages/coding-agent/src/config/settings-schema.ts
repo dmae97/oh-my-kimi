@@ -3150,19 +3150,21 @@ export const SETTINGS_SCHEMA = {
 
 	"async.pollWaitDuration": {
 		type: "enum",
-		values: ["5s", "10s", "30s", "1m", "5m"] as const,
-		default: "30s",
+		values: ["5s", "10s", "30s", "1m", "5m", "smart"] as const,
+		default: "smart",
 		ui: {
 			tab: "tools",
 			group: "Execution",
-			label: "Poll Wait Duration",
-			description: "How long the poll tool waits for background job updates before returning the current state",
+			label: "Max Poll Time",
+			description:
+				"How long the poll tool waits for background job updates before returning the current state. A fixed value waits that exact duration every time. `smart` adapts: it starts at 5s and lengthens with each back-to-back poll (up to 5m), then resets to 5s after about a minute without polling.",
 			options: [
 				{ value: "5s", label: "5 seconds" },
 				{ value: "10s", label: "10 seconds" },
-				{ value: "30s", label: "30 seconds", description: "Default" },
+				{ value: "30s", label: "30 seconds" },
 				{ value: "1m", label: "1 minute" },
 				{ value: "5m", label: "5 minutes" },
+				{ value: "smart", label: "Smart", description: "Default — adaptive 5s→5m, resets when you stop polling" },
 			],
 		},
 	},

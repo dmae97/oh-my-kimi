@@ -184,9 +184,16 @@ export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
 			return this.#buildResult(manager, [...cancelledJobs, ...jobsToWatch], cancelOutcomes);
 		}
 
-		// Wait until at least one running job finishes, the wait duration elapses, or the call is aborted.
+		// Wait until at least one running job finishes, the wait window elapses,
+		// or the call is aborted. With `async.pollWaitDuration` set to `smart`,
+		// the window adapts: it starts at the ladder floor and climbs as the agent
+		// polls in a tight loop, then resets to the floor once the agent steps
+		// away from polling (see AsyncJobManager.nextPollWaitMs). Any fixed value
+		// waits that exact duration every time.
 		const racePromises: Promise<unknown>[] = runningJobs.map(j => j.promise);
-		const waitMs = parseWaitDurationMs(this.session.settings.get("async.pollWaitDuration"));
+		const pollSetting = this.session.settings.get("async.pollWaitDuration");
+		const smartPoll = pollSetting === "smart";
+		const waitMs = smartPoll ? manager.nextPollWaitMs(ownerId) : parseWaitDurationMs(pollSetting);
 		const { promise: timeoutPromise, resolve: timeoutResolve } = Promise.withResolvers<void>();
 		const timeoutHandle = setTimeout(() => timeoutResolve(), waitMs);
 		racePromises.push(timeoutPromise);
@@ -232,6 +239,11 @@ export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
 			manager.unwatchJobs(watchedJobIds);
 			clearTimeout(timeoutHandle);
 			if (progressTimer) clearInterval(progressTimer);
+			if (smartPoll) {
+				// Reset the idle-gap clock: escalate if the agent polls again soon,
+				// drop back to the floor once it goes quiet for a while.
+				manager.recordPollWaitEnd(ownerId);
+			}
 		}
 
 		return this.#buildResult(manager, allTrackedJobs, cancelOutcomes);
