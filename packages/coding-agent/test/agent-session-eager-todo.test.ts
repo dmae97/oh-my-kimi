@@ -91,12 +91,7 @@ describe("AgentSession eager todo enforcement", () => {
 	let authStorage: AuthStorage | undefined;
 	const observedCalls: ObservedPromptCall[] = [];
 
-	beforeEach(async () => {
-		tempDir = TempDir.createSync("@pi-agent-session-eager-todo-");
-		streamCallCount = 0;
-		scriptedResponses = [];
-		observedCalls.length = 0;
-
+	async function createSession(settingsOverride: Record<string, unknown> = {}): Promise<void> {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!model) throw new Error("Expected claude-sonnet-4-5 model to exist");
 
@@ -106,8 +101,9 @@ describe("AgentSession eager todo enforcement", () => {
 		const settings = Settings.isolated({
 			"compaction.enabled": false,
 			"todo.enabled": true,
-			"todo.eager": true,
+			"todo.eager": "always",
 			"todo.reminders": false,
+			...settingsOverride,
 		});
 		const sessionManager = SessionManager.inMemory(tempDir.path());
 
@@ -175,6 +171,14 @@ describe("AgentSession eager todo enforcement", () => {
 			modelRegistry,
 			toolRegistry,
 		});
+	}
+
+	beforeEach(async () => {
+		tempDir = TempDir.createSync("@pi-agent-session-eager-todo-");
+		streamCallCount = 0;
+		scriptedResponses = [];
+		observedCalls.length = 0;
+		await createSession();
 	});
 
 	afterEach(async () => {
@@ -289,5 +293,19 @@ describe("AgentSession eager todo enforcement", () => {
 			lastMessageRole: "user",
 			lastMessageText: "actually skip that, just fix the typo",
 		});
+	});
+
+	it("prepends the eager todo reminder without forcing the todo tool when todo.eager is preferred", async () => {
+		await session.dispose();
+		authStorage?.close();
+		await createSession({ "todo.eager": "preferred" });
+
+		await session.prompt("list all work trees");
+
+		expect(observedCalls).toHaveLength(1);
+		expect(observedCalls[0]?.toolChoice).toBeUndefined();
+		expect(observedCalls[0]?.messageRoles).toEqual(["developer", "user"]);
+		expect(observedCalls[0]?.messageTexts.at(-1)).toBe("list all work trees");
+		expect(observedCalls[0]?.messageTexts[0]).not.toContain("list all work trees");
 	});
 });

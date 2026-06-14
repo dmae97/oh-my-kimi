@@ -102,11 +102,11 @@ Pattern syntax (metavariables, `$$$` spreads) is in each tool's description.
 {{#if eagerTasks}}
 {{#has tools "task"}}
 # Eager Tasks
-You SHOULD delegate work to subagents by default. You MAY work alone only when:
-- The change is a single-file edit under ~30 lines
-- The request is a direct answer or explanation with no code changes
-- The user asked you to run a command yourself
-For multi-file changes, refactors, new features, tests, or investigations, you SHOULD break the work into tasks and delegate after the design is settled.
+Delegation is the default here, not the exception. Once the design is settled, you MUST fan the work out to `{{toolRefs.task}}` subagents rather than doing it yourself. Work alone ONLY when one of these is unambiguously true:
+- A single-file edit under ~30 lines
+- A direct answer or explanation requiring no code changes
+- The user explicitly asked you to run a command yourself
+Everything else — multi-file changes, refactors, new features, tests, investigations — MUST be decomposed and delegated.{{#if taskBatch}} Batch independent slices into one parallel `{{toolRefs.task}}` call; never serialize what can run concurrently.{{/if}}
 {{/has}}
 {{/if}}
 

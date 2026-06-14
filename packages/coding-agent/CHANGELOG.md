@@ -67,6 +67,10 @@
 
 - Fixed Windows plan-mode task fan-out crashing the TUI when nested async task progress formed a cycle; task rendering now cuts recursive snapshots and long Windows `local://` roots are shortened under temp storage ([#2551](https://github.com/can1357/oh-my-pi/issues/2551)).
 
+### Changed
+
+- `task.eager` ("Prefer Task Delegation") and `todo.eager` ("Create Todos Automatically") are now three-level enums (`default` / `preferred` / `always`) instead of booleans. For `todo.eager`, `preferred` suggests a todo list on the first message while `always` forces it (the previous "on" behavior); for `task.eager`, `preferred` adds delegation guidance to the system prompt while `always` also injects a first-turn delegation reminder. Existing boolean configs migrate automatically (`true → always`, `false → default`). On models that cannot be forced to call `todo`, `todo.eager: "always"` now emits the first-turn reminder without forcing the call (previously such models received nothing) ([#2539](https://github.com/can1357/oh-my-pi/issues/2539)).
+
 ## [15.12.6] - 2026-06-14
 ### Breaking Changes
 
