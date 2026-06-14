@@ -1,5 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { type PlaceholderKind, renderPlaceholders, shiftImageMarkers } from "@oh-my-pi/pi-coding-agent/modes/image-references";
+import {
+	type PlaceholderKind,
+	renderPlaceholders,
+	shiftImageMarkers,
+} from "@oh-my-pi/pi-coding-agent/modes/image-references";
 
 function capture(text: string): {
 	out: string;
@@ -51,7 +55,9 @@ describe("shiftImageMarkers", () => {
 	});
 
 	it("renumbers every Image marker by the offset and preserves the WxH tail", () => {
-		expect(shiftImageMarkers("see [Image #1, 800x600] then [Image #2]", 3)).toBe("see [Image #4, 800x600] then [Image #5]");
+		expect(shiftImageMarkers("see [Image #1, 800x600] then [Image #2]", 3)).toBe(
+			"see [Image #4, 800x600] then [Image #5]",
+		);
 	});
 
 	it("never touches Paste markers", () => {

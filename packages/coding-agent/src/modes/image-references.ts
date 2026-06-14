@@ -22,7 +22,10 @@ const IMAGE_MARKER_REGEX = /\[Image #([1-9]\d*)((?:,[^\]\n]*)?)\]/g;
  *  still line up with `pendingImages`. */
 export function shiftImageMarkers(text: string, offset: number): string {
 	if (offset === 0) return text;
-	return text.replace(IMAGE_MARKER_REGEX, (_match, idx: string, tail: string) => `[Image #${Number(idx) + offset}${tail}]`);
+	return text.replace(
+		IMAGE_MARKER_REGEX,
+		(_match, idx: string, tail: string) => `[Image #${Number(idx) + offset}${tail}]`,
+	);
 }
 
 type ImageBlobWriter = (data: Buffer, options?: { extension?: string }) => Promise<BlobPutResult>;
