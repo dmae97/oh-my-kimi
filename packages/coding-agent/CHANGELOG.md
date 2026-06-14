@@ -58,6 +58,10 @@
 
 - Fixed the compaction flow (`/compact` and plan-mode "Approve and compact context") leaving UI artifacts. `executeCompaction` added a `Spacer(1)` to the transcript that the sibling handoff path never adds and that leaked as an orphan blank line whenever compaction was cancelled or failed; that spacer is removed. On success the compaction loader is now stopped and the status container cleared *before* the transcript is rebuilt, so the live loader row no longer flickers over the reconciled transcript near the status seam (the idempotent `finally` still covers the cancel/fail paths) ([#2486](https://github.com/can1357/oh-my-pi/issues/2486))
 
+### Fixed
+
+- Fixed plan approval's "Approve and compact context" running the compaction summarizer on the pre-plan model instead of the plan model, cold-missing the plan model's prompt cache. Compaction now runs on the plan model (warm cache); the switch to the execution/pre-plan model happens only after a successful compaction and before any input queued during compaction is dispatched, so the queued turn runs on the post-compaction model. A cancelled compaction now also restores the pre-plan model (it previously stranded the session on the plan model), while a failed compaction stays on the plan model with its context intact.
+
 ## [15.12.5] - 2026-06-13
 ### Changed
 

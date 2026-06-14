@@ -1770,7 +1770,40 @@ export class InteractiveMode implements InteractiveModeContext {
 		});
 	}
 
-	async #exitPlanMode(options?: { silent?: boolean; paused?: boolean }): Promise<void> {
+	async #restorePlanPreviousModel(prev: { model: Model; thinkingLevel?: ThinkingLevel }): Promise<void> {
+		if (modelsAreEqual(this.session.model, prev.model)) {
+			// Same model — only thinking level may differ. Avoid setModelTemporary()
+			// which would reset provider-side sessions and break continuity.
+			this.session.setThinkingLevel(prev.thinkingLevel);
+		} else if (this.session.isStreaming) {
+			this.#pendingModelSwitch = { model: prev.model, thinkingLevel: prev.thinkingLevel };
+		} else {
+			await this.session.setModelTemporary(prev.model, prev.thinkingLevel);
+		}
+	}
+
+	/**
+	 * Idempotent post-compaction model transition for the plan-approval compact
+	 * path. The deferred pre-plan state is consumed on first application, so a
+	 * second call (the before-flush hook vs. the short-circuit fallback) is a
+	 * no-op. "failed" intentionally stays on the plan model — the context is
+	 * intact and we dispatch best-effort.
+	 */
+	async #applyDeferredPlanModelTransition(
+		outcome: CompactionOutcome | undefined,
+		executionModel: ResolvedRoleModel | undefined,
+	): Promise<void> {
+		const deferredPrev = this.#planModePreviousModelState;
+		if (deferredPrev === undefined || outcome === "failed") return;
+		this.#planModePreviousModelState = undefined;
+		if (executionModel) {
+			await this.#applyPlanExecutionModel(executionModel);
+		} else {
+			await this.#restorePlanPreviousModel(deferredPrev);
+		}
+	}
+
+	async #exitPlanMode(options?: { silent?: boolean; paused?: boolean; deferModelRestore?: boolean }): Promise<void> {
 		if (!this.planModeEnabled) {
 			return;
 		}
@@ -1780,23 +1813,18 @@ export class InteractiveMode implements InteractiveModeContext {
 			await this.session.setActiveToolsByName(previousTools);
 		}
 		if (this.#planModePreviousModelState) {
-			const prev = this.#planModePreviousModelState;
-			if (modelsAreEqual(this.session.model, prev.model)) {
-				// Same model — only thinking level may differ. Avoid setModelTemporary()
-				// which would reset provider-side sessions (openai-responses/Codex) and
-				// break conversation continuity.
-				this.session.setThinkingLevel(prev.thinkingLevel);
-			} else if (this.session.isStreaming) {
-				this.#pendingModelSwitch = { model: prev.model, thinkingLevel: prev.thinkingLevel };
-			} else {
-				await this.session.setModelTemporary(prev.model, prev.thinkingLevel);
+			if (!options?.deferModelRestore) {
+				await this.#restorePlanPreviousModel(this.#planModePreviousModelState);
 			}
 			// If #applyPlanModeModel queued a deferred switch to the plan-role model
 			// (because the session was streaming on entry), drop it now: we are
 			// leaving plan mode, so flushing it on the next agent_end would land the
 			// session on the plan-role model after the user has exited plan mode
-			// (issue #816). Only clear when the pending target matches the plan-role
-			// model — leave any unrelated user-queued switch intact.
+			// (issue #816). This runs even when deferModelRestore is set
+			// (compact-approval path): otherwise the stale plan switch survives and
+			// flushPendingModelSwitch() later clobbers the restored/execution model.
+			// Only clear when the pending target matches the plan-role model — leave
+			// any unrelated user-queued switch intact.
 			const pending = this.#pendingModelSwitch;
 			if (pending) {
 				const planResolution = this.session.resolveRoleModelWithThinking("plan");
@@ -1811,7 +1839,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.planModePaused = options?.paused ?? false;
 		this.planModePlanFilePath = undefined;
 		this.#planModePreviousTools = undefined;
-		this.#planModePreviousModelState = undefined;
+		if (!options?.deferModelRestore) this.#planModePreviousModelState = undefined;
 		this.#updatePlanModeStatus();
 		const paused = options?.paused ?? false;
 		this.sessionManager.appendModeChange(paused ? "plan_paused" : "none");
@@ -2151,7 +2179,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		let compactOutcome: CompactionOutcome | undefined;
 		try {
-			await this.#exitPlanMode({ silent: true, paused: false });
+			await this.#exitPlanMode({
+				silent: true,
+				paused: false,
+				deferModelRestore: options.compactBeforeExecute === true,
+			});
 
 			if (!options.preserveContext) {
 				await this.handleClearCommand();
@@ -2180,7 +2212,9 @@ export class InteractiveMode implements InteractiveModeContext {
 				// the try/finally is idempotent and kept for the !compactBeforeExecute
 				// branch.
 				this.session.setPlanReferencePath(options.planFilePath);
-				compactOutcome = await this.handleCompactCommand(compactionPrompt);
+				compactOutcome = await this.handleCompactCommand(compactionPrompt, outcome =>
+					this.#applyDeferredPlanModelTransition(outcome, options.executionModel),
+				);
 			}
 		} finally {
 			// Unconditional clear. Idempotent: a no-op when the flag was never set
@@ -2197,21 +2231,32 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		this.session.setPlanReferencePath(options.planFilePath);
 
+		// Resolve the deferred plan-approval model transition. On the compact path
+		// the before-flush hook passed to handleCompactCommand already ran this (so
+		// any input queued during compaction executed on the post-compaction
+		// model); the re-run here is idempotent and covers the short-circuit where
+		// compaction never executed. It runs for "cancelled" too — the operator
+		// aborted only the compaction, not the approval — so the next turn no longer
+		// lands on the plan model. "failed" stays on the plan model (context
+		// intact) and dispatches best-effort.
+		if (options.compactBeforeExecute) {
+			await this.#applyDeferredPlanModelTransition(compactOutcome, options.executionModel);
+		} else {
+			await this.#applyPlanExecutionModel(options.executionModel);
+		}
+
 		if (compactOutcome === "cancelled") {
 			// Explicit abort: honor it. `executeCompaction` already surfaced
-			// `showError("Compaction cancelled")` to the operator; we add the
-			// deferred-dispatch warning and exit. `markPlanReferenceSent` is
-			// intentionally skipped here: `#planReferenceSent` stays false, so
-			// `AgentSession.#buildPlanReferenceMessage` will inject the plan
-			// reference on the operator's next `prompt()` call. If we marked it
-			// sent here, the executor's first turn would have no plan context.
+			// `showError("Compaction cancelled")`; we add the deferred-dispatch
+			// warning and exit without dispatching the synthetic plan-approved
+			// prompt. `markPlanReferenceSent` stays unset so
+			// `AgentSession.#buildPlanReferenceMessage` injects the plan reference
+			// on the operator's next `prompt()` call.
 			this.showWarning(
 				"Plan approved, but compaction was cancelled — execution not dispatched. Submit a turn to continue.",
 			);
 			return;
 		}
-
-		await this.#applyPlanExecutionModel(options.executionModel);
 
 		// Approved plans land in a fresh (or compacted) session whose first user-visible
 		// turn is the synthetic plan-approved prompt — that path bypasses the
@@ -2619,11 +2664,13 @@ export class InteractiveMode implements InteractiveModeContext {
 					return;
 				}
 				// Capture the operator's tier choice and hand it to #approvePlan, which
-				// applies it AFTER #exitPlanMode. #exitPlanMode restores
+				// applies it AFTER #exitPlanMode. #exitPlanMode normally restores
 				// #planModePreviousModelState (the model from before plan mode), so
 				// applying the slider choice any earlier would be silently reverted —
 				// the bug that made "continue with slow" keep executing on the default
-				// model. Deferred application also survives newSession()/compaction.
+				// model. For compact-context approval, the plan model is kept through
+				// compaction, then a successful compaction transitions to the slider model
+				// (or restores the pre-plan model when no slider choice was made).
 				// `cycle.currentIndex` is exactly that restored model, so any chosen tier
 				// differing from it needs an explicit executionModel — this also covers
 				// leaving the slider on its `default` anchor while planning ran elsewhere.
@@ -3314,8 +3361,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		await controller.handle(text);
 	}
 
-	handleCompactCommand(customInstructions?: string): Promise<CompactionOutcome> {
-		return this.#commandController.handleCompactCommand(customInstructions);
+	handleCompactCommand(
+		customInstructions?: string,
+		beforeFlush?: (outcome: CompactionOutcome) => void | Promise<void>,
+	): Promise<CompactionOutcome> {
+		return this.#commandController.handleCompactCommand(customInstructions, beforeFlush);
 	}
 
 	handleHandoffCommand(customInstructions?: string): Promise<void> {
