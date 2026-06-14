@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import { $ } from "bun";
 import { getEditorTheme, initTheme } from "../theme/theme";
 import { CustomEditor, SPACE_HOLD_RELEASE_MS, SPACE_HOLD_THRESHOLD } from "./custom-editor";
 
@@ -14,6 +15,32 @@ function makeEditor() {
 function holdSpace(editor: CustomEditor, count: number): void {
 	for (let i = 0; i < count; i++) editor.handleInput(" ");
 }
+
+async function decorateInFreshProcess(text: string): Promise<string> {
+	const customEditorUrl = new URL("./custom-editor.ts", import.meta.url).href;
+	const script = `
+import { CustomEditor } from ${JSON.stringify(customEditorUrl)};
+const editor = new CustomEditor({});
+process.stdout.write(editor.decorateText(${JSON.stringify(text)}));
+`;
+	const child = await $`bun -e ${script}`.quiet().nothrow();
+	const stdout = child.stdout.toString();
+	const stderr = child.stderr.toString();
+	if (child.exitCode !== 0) throw new Error(stderr || stdout || `decorate subprocess exited with ${child.exitCode}`);
+	return stdout;
+}
+
+describe("CustomEditor placeholder decoration", () => {
+	it("renders paste placeholders before theme initialization", async () => {
+		const output = await decorateInFreshProcess("[Paste #1, +30 lines]");
+		expect(output).toBe("[Paste #1, +30 lines]");
+	});
+
+	it("renders image placeholders before theme initialization", async () => {
+		const output = await decorateInFreshProcess("[Image #1]");
+		expect(output).toBe("[Image #1]");
+	});
+});
 
 describe("CustomEditor space-hold push-to-talk", () => {
 	beforeAll(async () => {

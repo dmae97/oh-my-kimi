@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed paste and image placeholders crashing when the editor renders before theme initialization.
+
 ## [15.13.0] - 2026-06-14
 
 ### Breaking Changes
