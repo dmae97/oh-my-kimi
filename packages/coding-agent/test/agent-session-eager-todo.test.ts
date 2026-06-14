@@ -15,6 +15,7 @@ import { TodoTool } from "@oh-my-pi/pi-coding-agent/tools";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { z } from "zod/v4";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
+import eagerTodoPrompt from "../src/prompts/system/eager-todo.md" with { type: "text" };
 
 type ObservedPromptCall = {
 	toolChoice: string | undefined;
@@ -183,6 +184,14 @@ describe("AgentSession eager todo enforcement", () => {
 		authStorage?.close();
 		authStorage = undefined;
 		tempDir.removeSync();
+	});
+
+	it("keeps eager init instructions aligned with the todo schema", () => {
+		expect(eagerTodoPrompt).toContain("single `init` op");
+		expect(eagerTodoPrompt).toContain("phase names and task-label strings");
+		expect(eagerTodoPrompt).not.toContain("`details`");
+		expect(eagerTodoPrompt).not.toContain("in_progress");
+		expect(eagerTodoPrompt).not.toContain("pending");
 	});
 
 	it("prepends a hidden eager todo reminder without repeating the prompt text", async () => {

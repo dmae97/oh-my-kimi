@@ -41,6 +41,8 @@
 - Fixed the `Working…` loader vanishing for the rest of a turn after an auto-compaction (context-overflow recovery) or auto-retry. Those overlays took over the shared status container with a bare `statusContainer.clear()`, which detached the working loader but left `loadingAnimation` set; the resumed turn's `agent_start` → `ensureLoadingAnimation()` is guarded by `if (!this.loadingAnimation)`, so it skipped re-attaching the loader and the spinner stayed gone while the agent kept streaming. The overlay handlers now fully tear the working loader down (stop + dereference) via `#stopWorkingLoader()`, so the next `agent_start` recreates and re-attaches it.
 
 - Fixed JS eval helper optional arguments rejecting Python-style positional calls. `read(path, offset, limit)` now works alongside `read(path, { offset, limit })`, `null`/`undefined` skip optional positional slots, and non-local URI reads such as `artifact://...` delegate through the read tool so line slicing works on spilled artifacts.
+- Fixed eager todo initialization prompting GPT-5.5 to emit unsupported task metadata fields, which could leave fresh sessions stuck on the forced first `todo` call ([#2561](https://github.com/can1357/oh-my-pi/issues/2561)).
+
 ## [15.12.6] - 2026-06-14
 ### Breaking Changes
 
