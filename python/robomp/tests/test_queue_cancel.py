@@ -9,6 +9,7 @@ real omp subprocess; that's covered by the integration smoke test.
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 
 import pytest
 
@@ -84,18 +85,24 @@ async def test_cancel_fires_hook_armed_by_worker(settings: Settings, db: Databas
             clear_current_event(token)
 
     worker = asyncio.create_task(fake_worker())
-    # Give the worker a tick to register.
-    for _ in range(20):
-        await asyncio.sleep(0)
-        if row.delivery_id in pool._cancel_hooks:  # noqa: SLF001 — test inspecting state
-            break
-    assert row.delivery_id in pool._cancel_hooks  # noqa: SLF001
+    try:
+        # Give the worker a tick to register.
+        for _ in range(20):
+            await asyncio.sleep(0)
+            if row.delivery_id in pool._cancel_hooks:  # noqa: SLF001 — test inspecting state
+                break
+        assert row.delivery_id in pool._cancel_hooks  # noqa: SLF001
 
-    assert await pool.cancel_event(row.delivery_id) is True
-    await asyncio.wait_for(worker, timeout=1.0)
-    assert row.delivery_id in pool._cancelled  # noqa: SLF001
-    # Hook is consumed.
-    assert row.delivery_id not in pool._cancel_hooks  # noqa: SLF001
+        assert await pool.cancel_event(row.delivery_id) is True
+        await asyncio.wait_for(worker, timeout=1.0)
+        assert row.delivery_id in pool._cancelled  # noqa: SLF001
+        # Hook is consumed.
+        assert row.delivery_id not in pool._cancel_hooks  # noqa: SLF001
+    finally:
+        if not worker.done():
+            worker.cancel()
+            with suppress(asyncio.CancelledError):
+                await worker
 
 
 @pytest.mark.asyncio
