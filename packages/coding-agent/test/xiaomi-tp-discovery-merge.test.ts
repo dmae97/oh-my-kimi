@@ -74,6 +74,37 @@ describe("mergeDiscoveredModel", () => {
 		expect(merged.baseUrl).toBe("https://my-proxy.example.com/v1");
 	});
 
+	test("preserves provider override transport on rediscovery (#2555 openrouter gateway regression)", () => {
+		// Bundled openrouter entry carries transport=pi-native after
+		// applying providerOverride at boot (#loadBuiltInModels). Discovery
+		// refetched the same model from /v1/models — provider catalogs
+		// never set transport in defaults, so the discovered model has no
+		// transport hint of its own.
+		const existing: Model<"openai-completions"> = {
+			...bundled("http://localhost:4000"),
+			transport: "pi-native",
+			headers: { Authorization: "Bearer gateway-token" },
+		};
+		const discovered = bundled("http://localhost:4000");
+		const merged = mergeDiscoveredModel(discovered, existing, {
+			baseUrl: "http://localhost:4000",
+			transport: "pi-native",
+			headers: { Authorization: "Bearer gateway-token" },
+		});
+		expect(merged.transport).toBe("pi-native");
+		expect(merged.baseUrl).toBe("http://localhost:4000");
+		expect(merged.headers).toEqual({ Authorization: "Bearer gateway-token" });
+	});
+
+	test("provider override path (no bundled entry): transport flows through", () => {
+		const discovered = bundled("http://localhost:4000");
+		const merged = mergeDiscoveredModel(discovered, undefined, {
+			baseUrl: "http://localhost:4000",
+			transport: "pi-native",
+		});
+		expect(merged.transport).toBe("pi-native");
+	});
+
 	test("returns model untouched when no existing entry and no override", () => {
 		const discovered = bundled(TOKEN_PLAN);
 		const merged = mergeDiscoveredModel(discovered, undefined);
