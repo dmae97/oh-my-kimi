@@ -425,7 +425,6 @@ describe("listClaudePluginRoots", () => {
 		expect(expandSlashCommand("/understand", commands)).toContain("Analyze the project.");
 	});
 
-
 	test("reads slash commands directory from plugin manifest slash-commands field", async () => {
 		const pluginsDir = path.join(tempDir, ".claude", "plugins");
 		const pluginPath = path.join(tempDir, "plugins", "manifest-commands");
