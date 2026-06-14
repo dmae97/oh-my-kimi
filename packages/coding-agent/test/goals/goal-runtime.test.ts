@@ -118,6 +118,7 @@ describe("goal runtime", () => {
 
 		harness.runtime.onTurnStart("turn-1", createUsage());
 		harness.advance(2_500);
+		harness.setUsage(createUsage({ input: 1 }));
 		await harness.runtime.flushUsage("suppressed");
 		expect(harness.getState()?.goal.timeUsedSeconds).toBe(2);
 		expect(harness.runtime.snapshot.wallClock.lastAccountedAt).toBe(2_000);
@@ -130,10 +131,26 @@ describe("goal runtime", () => {
 		expect(harness.persists).toHaveLength(1);
 
 		harness.advance(700);
+		harness.setUsage(createUsage({ input: 2 }));
 		await harness.runtime.flushUsage("suppressed");
 		expect(harness.getState()?.goal.timeUsedSeconds).toBe(3);
 		expect(harness.runtime.snapshot.wallClock.lastAccountedAt).toBe(3_000);
 		expect(harness.persists).toHaveLength(2);
+	});
+
+	it("does not persist snapshots on wall-clock-only flushes", async () => {
+		const harness = createHarness({
+			state: { enabled: true, mode: "active", goal: createGoal() },
+		});
+
+		harness.runtime.onTurnStart("turn-1", createUsage());
+		harness.advance(2_500);
+		// Flush wall-clock time without any token usage changes.
+		await harness.runtime.flushUsage("suppressed");
+		// The in-memory state should still be updated.
+		expect(harness.getState()?.goal.timeUsedSeconds).toBe(2);
+		// But it should not write/persist to the session log.
+		expect(harness.persists).toHaveLength(0);
 	});
 
 	it("steers only once until a budget mutation resets the cycle", async () => {
