@@ -2659,12 +2659,20 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}
 
 		// Install the auto-learn post-stop nudge controller synchronously, before
-		// the possibly-slow memory backend starts, once, for top-level sessions
-		// only. A fast first turn must not finish before the listener subscribes,
-		// or its tool events are missed (slower backends like Mnemopi/Hindsight
-		// widen that window). The subscription lives for the session's lifetime;
-		// the reference is intentionally discarded (the listener retains it).
-		if (settings.get("autolearn.enabled") && taskDepth === 0) {
+		// the possibly-slow memory backend starts, once per top-level session. A
+		// fast first turn must not finish before the listener subscribes, or its
+		// tool events are missed (slower backends like Mnemopi/Hindsight widen that
+		// window).
+		//
+		// Installed regardless of the current `autolearn.enabled` value: the
+		// controller re-checks the live flag at fire time (`#onAgentEnd`), and
+		// `newSession` reuses the session without rerunning startup, so gating the
+		// install on the enable-time flag would mean toggling the setting on
+		// mid-session never activates until the app is recreated. When disabled the
+		// controller only counts tool calls and returns — negligible cost. The
+		// subscription lives for the session's lifetime; the reference is
+		// intentionally discarded (the listener retains it).
+		if (taskDepth === 0) {
 			new AutoLearnController({ session, settings });
 		}
 

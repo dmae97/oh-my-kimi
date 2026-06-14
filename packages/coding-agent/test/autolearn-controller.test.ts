@@ -134,6 +134,24 @@ describe("AutoLearnController", () => {
 		expect(session.sent).toHaveLength(1);
 	});
 
+	it("activates when autolearn is enabled mid-session (installed while disabled)", () => {
+		const session = new FakeSession();
+		// The controller install is now unconditional for top-level sessions, so it
+		// can be constructed while the feature is OFF. Toggling it on mid-session
+		// must take effect without recreating the session (the fire-time re-check
+		// handles activation).
+		const settings = Settings.isolated({});
+		settings.set("autolearn.enabled", false);
+		new AutoLearnController({ session: session as unknown as AgentSession, settings });
+		session.toolCalls(5);
+		session.agentEnd();
+		expect(session.sent).toHaveLength(0); // disabled at install: no nudge
+		settings.set("autolearn.enabled", true);
+		session.toolCalls(5);
+		session.agentEnd();
+		expect(session.sent).toHaveLength(1); // enabled mid-session: now fires
+	});
+
 	it("does not nudge during goal mode and leaks no suppression latch", () => {
 		const session = new FakeSession();
 		session.goalEnabled = true;
