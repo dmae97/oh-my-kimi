@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it, vi } from "bun:test";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
 	CustomEditor,
 	extractBracketedImagePastePath,
@@ -324,7 +325,6 @@ describe("CustomEditor magic-keyword shimmer", () => {
 	});
 
 	it("respects the magicKeywords.enabled setting (no shimmer when disabled)", async () => {
-		const { Settings, resetSettingsForTest } = await import("@oh-my-pi/pi-coding-agent/config/settings");
 		resetSettingsForTest();
 		await Settings.init({ inMemory: true, overrides: { "magicKeywords.enabled": false } });
 		try {
