@@ -53,8 +53,10 @@ pub mod tokens;
 pub(crate) mod utils;
 pub mod workspace;
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{
+	Arc,
+	atomic::{AtomicBool, Ordering},
+};
 
 use napi::bindgen_prelude::create_custom_tokio_runtime;
 use napi_derive::{module_init, napi};
@@ -71,27 +73,28 @@ const NAPI_TOKIO_MAX_WORKER_THREADS: usize = 4;
 const NAPI_TOKIO_MAX_BLOCKING_THREADS: usize = 8;
 
 /// Worker count we'd *like*, before checking what the OS will actually grant:
-/// the Tokio default (one per core) clamped to [`NAPI_TOKIO_MAX_WORKER_THREADS`].
+/// the Tokio default (one per core) clamped to
+/// [`NAPI_TOKIO_MAX_WORKER_THREADS`].
 fn desired_worker_threads() -> usize {
 	std::thread::available_parallelism()
 		.map_or(1, |threads| threads.get())
 		.clamp(1, NAPI_TOKIO_MAX_WORKER_THREADS)
 }
 
-/// Probe how many worker threads the OS will let us hold alive *simultaneously*,
-/// up to `target`. Returns the count actually spawned (0 when not even one
-/// extra thread is possible).
+/// Probe how many worker threads the OS will let us hold alive
+/// *simultaneously*, up to `target`. Returns the count actually spawned (0 when
+/// not even one extra thread is possible).
 ///
-/// `Builder::build()` for a multi-thread runtime spawns every worker eagerly and
-/// **panics** (not `Err`) when the OS refuses one — on a memory-constrained
+/// `Builder::build()` for a multi-thread runtime spawns every worker eagerly
+/// and **panics** (not `Err`) when the OS refuses one — on a memory-constrained
 /// Windows host (tiny pagefile / commit limit, `os error 1455`) that aborts the
 /// whole process at addon load before any JS error can surface. The release
 /// profile is `panic = "abort"`, so the panic can't even be caught. We instead
-/// pre-flight with `std::thread::Builder::spawn`, which returns an `io::Result`,
-/// holding each probe thread alive (so their stacks are committed concurrently,
-/// matching how real workers coexist) until we know the safe count. Probe
-/// threads use the std default stack, exactly like Tokio's workers (it leaves
-/// `thread_stack_size` unset), so the probe is representative.
+/// pre-flight with `std::thread::Builder::spawn`, which returns an
+/// `io::Result`, holding each probe thread alive (so their stacks are committed
+/// concurrently, matching how real workers coexist) until we know the safe
+/// count. Probe threads use the std default stack, exactly like Tokio's workers
+/// (it leaves `thread_stack_size` unset), so the probe is representative.
 fn probe_spawnable_workers(target: usize) -> usize {
 	let keep_running = Arc::new(AtomicBool::new(true));
 	let mut handles = Vec::with_capacity(target);
