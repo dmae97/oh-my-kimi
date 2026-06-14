@@ -26,8 +26,8 @@ interface GhaCtx {
 }
 
 // Single-purpose, hand-rolled evaluator for the operators / functions the
-// workflow's `concurrency` block uses: `startsWith`, `format`, `!`, `&&`, `||`,
-// parens, single-quoted strings, dotted property access. Matches GitHub's
+// workflow's `concurrency` block uses: `startsWith`, `format`, `!`, `==`,
+// `&&`, `||`, parens, single-quoted strings, dotted property access. Matches
 // short-circuit semantics: `&&`/`||` return the underlying value (not a coerced
 // bool), missing identifiers resolve to `null`, and `startsWith(null, …)` is
 // false because the searchString coerces to `""`.
@@ -73,22 +73,39 @@ class GhaEval {
 		let left = this.#and();
 		while (this.#consume("||")) {
 			const right = this.#and();
-			// Truthy left wins; only null/false/""/0 fall through.
-			if (left !== null && left !== false && left !== "" && left !== 0) continue;
+			// Truthy left wins; only null/false/"" fall through.
+			if (left !== null && left !== false && left !== "") continue;
 			left = right;
 		}
 		return left;
 	}
 
 	#and(): Value {
-		let left = this.#unary();
+		let left = this.#eq();
 		while (this.#consume("&&")) {
-			const right = this.#unary();
+			const right = this.#eq();
 			// Falsy left short-circuits and is returned verbatim.
-			if (left === null || left === false || left === "" || left === 0) continue;
+			if (left === null || left === false || left === "") continue;
 			left = right;
 		}
 		return left;
+	}
+
+	#eq(): Value {
+		let left = this.#unary();
+		while (true) {
+			if (this.#consume("==")) {
+				const right = this.#unary();
+				left = left === right;
+				continue;
+			}
+			if (this.#consume("!=")) {
+				const right = this.#unary();
+				left = left !== right;
+				continue;
+			}
+			return left;
+		}
 	}
 
 	#unary(): Value {
@@ -96,7 +113,7 @@ class GhaEval {
 		if (this.src[this.#pos] === "!") {
 			this.#pos++;
 			const v = this.#unary();
-			return v === null || v === false || v === "" || v === 0;
+			return v === null || v === false || v === "";
 		}
 		return this.#primary();
 	}
@@ -267,6 +284,16 @@ describe("ci.yml concurrency", () => {
 			event: {},
 		});
 		expect(GhaEval.template(groupTemplate, ctx)).toBe("CI-release-abc123");
+		expect(GhaEval.template(cancelTemplate, ctx)).toBe("false");
+	});
+
+	it("workflow_dispatch from tagged main HEAD is isolated before release_metadata can inspect tags", () => {
+		const ctx = baseCtx({
+			event_name: "workflow_dispatch",
+			sha: "taggedmain123",
+			event: {},
+		});
+		expect(GhaEval.template(groupTemplate, ctx)).toBe("CI-release-taggedmain123");
 		expect(GhaEval.template(cancelTemplate, ctx)).toBe("false");
 	});
 
