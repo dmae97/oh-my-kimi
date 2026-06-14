@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed MiniMax-M3 catalog context for `minimax` and `minimax-cn` to report the documented 1M long-context tier instead of the upstream 512K pricing boundary ([#2576](https://github.com/can1357/oh-my-pi/issues/2576)).
+
 ## [15.13.0] - 2026-06-14
 
 ### Added

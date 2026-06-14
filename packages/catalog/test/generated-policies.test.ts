@@ -126,6 +126,41 @@ describe("generated model policies", () => {
 		expect(models[0]?.maxTokens).toBe(131_072);
 	});
 
+	it("pins MiniMax-M3 long-context providers to 1M context", () => {
+		const models = [
+			createSpec({
+				id: "MiniMax-M3",
+				api: "anthropic-messages",
+				provider: "minimax",
+				contextWindow: 512_000,
+				maxTokens: 128_000,
+			}),
+			createSpec({
+				id: "MiniMax-M3",
+				api: "anthropic-messages",
+				provider: "minimax-cn",
+				contextWindow: 512_000,
+				maxTokens: 128_000,
+			}),
+			createSpec({
+				id: "MiniMax-M3",
+				api: "openai-completions",
+				provider: "minimax-code",
+				contextWindow: 512_000,
+				maxTokens: 128_000,
+			}),
+		];
+
+		applyGeneratedModelPolicies(models);
+
+		expect(models[0]?.contextWindow).toBe(1_000_000);
+		expect(models[0]?.maxTokens).toBe(128_000);
+		expect(models[1]?.contextWindow).toBe(1_000_000);
+		expect(models[1]?.maxTokens).toBe(128_000);
+		expect(models[2]?.contextWindow).toBe(512_000);
+		expect(models[2]?.maxTokens).toBe(128_000);
+	});
+
 	it("normalizes Copilot generated fallback limits", () => {
 		const models: ModelSpec<Api>[] = [
 			createSpec({

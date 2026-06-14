@@ -212,6 +212,11 @@ function applyGeneratedModelPolicy(model: ModelSpec<Api>): void {
 		model.contextWindow = 1_000_000;
 		model.maxTokens = 131_072;
 	}
+	// MiniMax-M3: 512K is the standard pricing tier boundary, not the
+	// model ceiling. Pin the long-context providers to the documented 1M tier.
+	if ((model.provider === "minimax" || model.provider === "minimax-cn") && model.id === "MiniMax-M3") {
+		model.contextWindow = 1_000_000;
+	}
 
 	if (
 		model.api === "openai-completions" &&
