@@ -188,13 +188,18 @@ async function loadPackageName(pkgDir: string): Promise<string> {
 
 /**
  * Resolve the highest published, non-prerelease, non-draft semver tag strictly
- * below `targetVersion`. Falls back to `null` on error or no candidate, which
- * downgrades the script to legacy single-version extraction.
+ * below `targetVersion` via `gh release list`.
  *
- * `OMP_RELEASE_NOTES_FLOOR` env override:
- *   - unset → query `gh` (CI default)
- *   - `vX.Y.Z` → use as-is (manual rerun: "I know the floor")
- *   - empty string → force single-version mode (legacy escape hatch)
+ * Failure semantics:
+ *   - `OMP_RELEASE_NOTES_FLOOR` set → honored verbatim (`""` forces null).
+ *   - `gh` succeeded, no candidate < target → `null` (legitimate first-ever
+ *     publish; legacy single-version output is correct).
+ *   - `gh` itself failed (missing binary, missing `GH_TOKEN` in Actions,
+ *     network/auth error) → throws. Letting this degrade to single-version
+ *     output silently re-strands silent-tag entries (#2596 review); the CI
+ *     step must die loudly so the release is rebuilt with the token wired.
+ *     Local runs without `gh` should set `OMP_RELEASE_NOTES_FLOOR=` to opt
+ *     into legacy mode explicitly.
  */
 async function resolvePublishedFloorTag(targetVersion: string): Promise<string | null> {
 	const override = process.env.OMP_RELEASE_NOTES_FLOOR;
@@ -207,21 +212,22 @@ async function resolvePublishedFloorTag(targetVersion: string): Promise<string |
 			.quiet()
 			.nothrow();
 	if (res.exitCode !== 0) {
-		console.warn(
-			`Warning: gh release list failed (exit ${res.exitCode}); falling back to single-version notes. stderr: ${res.stderr.toString().trim()}`,
+		const stderr = res.stderr.toString().trim();
+		throw new Error(
+			`gh release list exited ${res.exitCode}.\nstderr: ${stderr || "(empty)"}\n` +
+				`Hint: in GitHub Actions, pass GH_TOKEN: \${{ secrets.GITHUB_TOKEN }} to this step. ` +
+				`Locally without gh, set OMP_RELEASE_NOTES_FLOOR= to fall back to single-version notes.`,
 		);
-		return null;
 	}
 	let raw: unknown;
 	try {
 		raw = JSON.parse(res.stdout.toString());
 	} catch (err) {
-		console.warn(
-			`Warning: failed to parse gh release list output: ${(err as Error).message}; falling back to single-version notes.`,
-		);
-		return null;
+		throw new Error(`gh release list returned non-JSON output: ${(err as Error).message}`);
 	}
-	if (!Array.isArray(raw)) return null;
+	if (!Array.isArray(raw)) {
+		throw new Error(`gh release list returned a non-array payload: ${typeof raw}`);
+	}
 	const candidates = (raw as Array<{ tagName?: unknown; isDraft?: unknown; isPrerelease?: unknown }>)
 		.filter(t => t.isDraft !== true && t.isPrerelease !== true)
 		.map(t => (typeof t.tagName === "string" ? t.tagName : ""))
