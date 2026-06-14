@@ -109,7 +109,7 @@ export const TAB_GROUPS: Record<SettingTab, readonly string[]> = {
 		"Power (macOS)",
 	],
 	context: ["General", "Compaction", "Rules (TTSR)", "Experimental"],
-	memory: ["General", "Mnemopi", "Hindsight"],
+	memory: ["General", "Auto-Learn", "Mnemopi", "Hindsight"],
 	files: ["Editing", "Reading", "Read Summaries", "LSP"],
 	shell: ["Bash", "Eval & Python"],
 	tools: [
@@ -1866,6 +1866,35 @@ export const SETTINGS_SCHEMA = {
 			],
 		},
 	},
+
+	// Auto-Learn (experimental): post-stop nudge to capture lessons to memory
+	// and mint/enhance isolated managed skills under ~/.omp/agent/managed-skills.
+	// Master flag is default-off → zero footprint; sub-flags gate behaviour.
+	"autolearn.enabled": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "memory",
+			group: "Auto-Learn",
+			label: "Auto-Learn (experimental)",
+			description:
+				"After the agent stops, nudge it to capture lessons to memory and create/enhance isolated managed skills",
+		},
+	},
+	"autolearn.autoContinue": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "memory",
+			group: "Auto-Learn",
+			label: "Auto-run capture at stop",
+			description:
+				"When on, auto-run one capture turn at stop (uses extra tokens). Off = passive reminder on your next turn.",
+			condition: "autolearnActive",
+		},
+	},
+	// Config-file-only knob (numbers without `options` are hidden from the UI).
+	"autolearn.minToolCalls": { type: "number", default: 5 },
 
 	// Mnemopi local SQLite memory backend.
 	"mnemopi.dbPath": {

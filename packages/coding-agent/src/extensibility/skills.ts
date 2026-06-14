@@ -1,6 +1,11 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import { getProjectDir } from "@oh-my-pi/pi-utils";
+import {
+	isValidManagedSkillName,
+	MANAGED_SKILLS_PROVIDER_ID,
+	sanitizeManagedDescription,
+} from "../autolearn/managed-skills";
 import { skillCapability } from "../capability/skill";
 import type { SourceMeta } from "../capability/types";
 import type { SkillsSettings } from "../config/settings";
@@ -137,6 +142,10 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 
 	function isSourceEnabled(source: SourceMeta): boolean {
 		const { provider, level } = source;
+		// Managed skills (auto-learn) are OMP-native and discovered unconditionally
+		// — third-party CLI toggles must never silently hide them (cf. #2401). The
+		// master `enabled` flag above still gates them.
+		if (provider === MANAGED_SKILLS_PROVIDER_ID) return true;
 		if (provider === "codex" && level === "user") return enableCodexUser;
 		if (provider === "claude" && level === "user") return enableClaudeUser;
 		if (provider === "claude" && level === "project") return enableClaudeProject;
@@ -192,6 +201,9 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 	// Process skills with resolved paths
 	for (let i = 0; i < filteredSkills.length; i++) {
 		const capSkill = filteredSkills[i];
+		// Managed (auto-learn) skills are resolved dead-last (below) so any
+		// authored skill of the same name — from ANY provider or custom dir — wins.
+		if (capSkill._source.provider === MANAGED_SKILLS_PROVIDER_ID) continue;
 		const resolvedPath = realPaths[i];
 
 		// Skip silently if we've already loaded this exact file (via symlink)
@@ -283,6 +295,60 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 			skillMap.set(skill.name, skill);
 			realPathSet.add(resolvedPath);
 		}
+	}
+
+	// Managed (auto-learn) skills resolve dead-last with first-wins. Source from
+	// result.all (pre-dedup): capability-level dedup runs BEFORE isSourceEnabled,
+	// so a managed skill can be shadowed by a higher-priority authored skill that
+	// is itself disabled here — managed must stay visible regardless of toggles.
+	// Validate the on-disk name (a hand-placed managed file could carry an unsafe
+	// frontmatter name) and re-sanitize the description on read. Descriptions and
+	// names both render unescaped into the system prompt.
+	const managedCandidates = result.all.filter(
+		capSkill =>
+			capSkill._source.provider === MANAGED_SKILLS_PROVIDER_ID &&
+			isValidManagedSkillName(capSkill.name) &&
+			!disabledSkillNames.has(capSkill.name) &&
+			!matchesIgnorePatterns(capSkill.name) &&
+			matchesIncludePatterns(capSkill.name),
+	);
+	// Names claimed by any ENABLED authored skill (from the pre-dedup superset).
+	// Managed defers to these even when capability dedup hid an enabled authored
+	// skill behind a disabled higher-priority one, so managed never masks it.
+	const enabledAuthoredNames = new Set(
+		result.all
+			.filter(
+				capSkill => capSkill._source.provider !== MANAGED_SKILLS_PROVIDER_ID && isSourceEnabled(capSkill._source),
+			)
+			.map(capSkill => capSkill.name),
+	);
+	const managedRealPaths = await Promise.all(
+		managedCandidates.map(async capSkill => {
+			try {
+				return await fs.realpath(capSkill.path);
+			} catch {
+				return capSkill.path;
+			}
+		}),
+	);
+	for (let i = 0; i < managedCandidates.length; i++) {
+		const capSkill = managedCandidates[i];
+		const resolvedPath = managedRealPaths[i];
+		if (realPathSet.has(resolvedPath)) continue;
+		if (enabledAuthoredNames.has(capSkill.name)) continue; // an enabled authored skill owns this name
+		if (skillMap.has(capSkill.name)) continue; // already claimed (e.g. custom dir)
+		const rawDescription =
+			typeof capSkill.frontmatter?.description === "string" ? capSkill.frontmatter.description : "";
+		skillMap.set(capSkill.name, {
+			name: capSkill.name,
+			description: sanitizeManagedDescription(rawDescription),
+			filePath: capSkill.path,
+			baseDir: capSkill.path.replace(/[\\/]SKILL\.md$/, ""),
+			source: `${capSkill._source.provider}:${capSkill.level}`,
+			hide: capSkill.frontmatter?.hide === true || capSkill.frontmatter?.disableModelInvocation === true,
+			_source: capSkill._source,
+		});
+		realPathSet.add(resolvedPath);
 	}
 
 	const skills = Array.from(skillMap.values());

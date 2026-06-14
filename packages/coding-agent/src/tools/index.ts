@@ -46,6 +46,8 @@ import { GithubTool } from "./gh";
 import { InspectImageTool } from "./inspect-image";
 import { IrcTool, isIrcEnabled } from "./irc";
 import { JobTool } from "./job";
+import { LearnTool } from "./learn";
+import { ManageSkillTool } from "./manage-skill";
 import { MemoryEditTool } from "./memory-edit";
 import { MemoryRecallTool } from "./memory-recall";
 import { MemoryReflectTool } from "./memory-reflect";
@@ -84,6 +86,8 @@ export * from "./image-gen";
 export * from "./inspect-image";
 export * from "./irc";
 export * from "./job";
+export * from "./learn";
+export * from "./manage-skill";
 export * from "./memory-edit";
 export * from "./memory-recall";
 export * from "./memory-reflect";
@@ -439,6 +443,8 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	retain: MemoryRetainTool.createIf,
 	recall: MemoryRecallTool.createIf,
 	reflect: MemoryReflectTool.createIf,
+	learn: LearnTool.createIf,
+	manage_skill: ManageSkillTool.createIf,
 };
 
 export const HIDDEN_TOOLS: Record<string, ToolFactory> = {
@@ -519,6 +525,19 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 				if (!requestedTools.includes(name)) requestedTools.push(name);
 			}
 		}
+		// Auto-learn tools are gated by `autolearn.enabled` but, like the memory
+		// tools above, must also be force-included into an explicit requestedTools
+		// list so a restricted session whose controller/guidance is active still
+		// exposes the tools the nudge points at.
+		if (session.settings.get("autolearn.enabled")) {
+			if (!requestedTools.includes("manage_skill")) requestedTools.push("manage_skill");
+			if (
+				["hindsight", "mnemopi"].includes(session.settings.get("memory.backend") ?? "") &&
+				!requestedTools.includes("learn")
+			) {
+				requestedTools.push("learn");
+			}
+		}
 	}
 	// Resolve effective tool discovery mode.
 	// tools.discoveryMode controls the new modes; mcp.discoveryMode remains a back-compat alias for "mcp-only".
@@ -551,6 +570,13 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		if (name === "irc") return isIrcEnabled(session.settings, session.taskDepth ?? 0);
 		if (name === "retain" || name === "recall" || name === "reflect") {
 			return ["hindsight", "mnemopi"].includes(session.settings.get("memory.backend") ?? "");
+		}
+		if (name === "manage_skill") return session.settings.get("autolearn.enabled");
+		if (name === "learn") {
+			return (
+				session.settings.get("autolearn.enabled") &&
+				["hindsight", "mnemopi"].includes(session.settings.get("memory.backend") ?? "")
+			);
 		}
 		if (name === "task") {
 			return canSpawnAtDepth(session.settings.get("task.maxRecursionDepth") ?? 2, session.taskDepth ?? 0);
