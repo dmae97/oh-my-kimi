@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.12.6] - 2026-06-14
 ### Breaking Changes
 
 - Removed the `writeLine` and `writeLineSync` methods from the public `SessionStorageWriter` contract, requiring custom `SessionStorage` backends to switch to the `append` API

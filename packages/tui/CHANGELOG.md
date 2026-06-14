@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.12.6] - 2026-06-14
+
 ### Fixed
 
 - Fixed live transcript rows duplicating into native scrollback during a non-multiplexer resize drag: the viewport fast-path repaint now parks the hardware cursor at the real content bottom (mirroring the authoritative paint) instead of the padded viewport bottom, so a subsequent height shrink no longer scrolls live rows into history before the settle replay
