@@ -1293,6 +1293,7 @@ impl Process {
 	pub const fn group_id(&self) -> Option<i32> {
 		platform::Process::group_id()
 	}
+
 	#[cfg(not(target_os = "windows"))]
 	#[must_use]
 	pub fn group_id(&self) -> Option<i32> {
