@@ -448,7 +448,7 @@ jobs:
            run: bun run ci:test:coding-agent:runtime
 
    test_coding_agent_native:
-      name: Test coding-agent native/tooling (TS)
+      name: Test coding-agent native/unit (TS)
       runs-on: omp-kata
       needs: [native_linux_x64, native_artifact_lookup]
       if: ${{ !cancelled() && needs.native_linux_x64.result != 'failure' }}
@@ -482,7 +482,7 @@ jobs:
               merge-multiple: true
               run-id: ${{ steps.source.outputs.artifact-run-id }}
               github-token: ${{ secrets.GITHUB_TOKEN }}
-         - name: Test coding-agent native/tooling bucket
+         - name: Test coding-agent native/unit bucket
            run: bun run ci:test:coding-agent:native
 
    test_smoke:
@@ -568,7 +568,6 @@ jobs:
       if: ${{ needs.release_metadata.outputs.is-release == 'true' && !cancelled() &&
          needs.native_linux_x64.result == 'success' && needs.native_cross_platform.result ==
          'success' && needs.test_workspace.result == 'success' &&
-         needs.test_coding_agent_fast.result == 'success' &&
          needs.test_coding_agent_singleton.result == 'success' &&
          needs.test_ts_native.result == 'success' &&
          needs.test_coding_agent_ui.result == 'success' &&
@@ -576,7 +575,7 @@ jobs:
          needs.test_coding_agent_native.result == 'success' &&
          needs.test_smoke.result == 'success' && needs.check.result == 'success' &&
          needs.install_methods.result == 'success' }}
-      needs: [release_metadata, check, native_linux_x64, native_cross_platform, test_workspace, test_coding_agent_fast, test_coding_agent_singleton, test_ts_native, test_coding_agent_ui, test_coding_agent_runtime, test_coding_agent_native, test_smoke, install_methods, native_artifact_lookup]
+      needs: [release_metadata, check, native_linux_x64, native_cross_platform, test_workspace, test_coding_agent_singleton, test_ts_native, test_coding_agent_ui, test_coding_agent_runtime, test_coding_agent_native, test_smoke, install_methods, native_artifact_lookup]
       strategy:
          fail-fast: false
          matrix:
