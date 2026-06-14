@@ -91,6 +91,7 @@
 ### Removed
 
 - Removed the `re-roots past a cwd-less legacy session in a shared explicit sessionDir` relocation test case and the `stores symlink-equivalent home cwd sessions under home-relative directories` file-operations test case.
+- Fixed `/plan` cycling between `plan` and `plan_paused` with no path back to mode `none`, while preserving prompted paused-mode requests. The no-arg third toggle now fully exits — clearing `planModeHasEntered` and appending a `mode_change` to `"none"` — and `/plan <prompt>` from `plan_paused` re-enters plan mode and submits the prompt as the first turn ([#2510](https://github.com/can1357/oh-my-pi/issues/2510)).
 
 ## [15.12.5] - 2026-06-13
 ### Changed

@@ -2356,12 +2356,12 @@ export class InteractiveMode implements InteractiveModeContext {
 			await this.#exitPlanMode({ paused: true });
 			return;
 		}
-		if (this.planModePaused) {
-			// Third toggle: paused → off. Tools, model, and plan state were already
-			// restored by the prior #exitPlanMode({ paused: true }); only the
+		if (this.planModePaused && !initialPrompt) {
+			// No-arg third toggle: paused → off. Tools, model, and plan state were
+			// already restored by the prior #exitPlanMode({ paused: true }); only the
 			// paused flag, the reentry marker, and the session mode entry remain.
-			// Without this branch the handler fell through to #enterPlanMode and
-			// the session was stuck cycling plan ↔ plan_paused (issue #2510).
+			// Prompted /plan invocations fall through to #enterPlanMode below so the
+			// supplied prompt is still submitted as the first plan-mode turn.
 			this.planModePaused = false;
 			this.#planModeHasEntered = false;
 			this.#updatePlanModeStatus();
