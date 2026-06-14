@@ -12,7 +12,7 @@ import { ReadToolGroupComponent } from "@oh-my-pi/pi-coding-agent/modes/componen
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
-import type { SessionContext } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import type { SessionContext } from "@oh-my-pi/pi-coding-agent/session/session-context";
 import { Container } from "@oh-my-pi/pi-tui";
 import { formatNumber } from "@oh-my-pi/pi-utils";
 

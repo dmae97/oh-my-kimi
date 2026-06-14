@@ -203,6 +203,7 @@ describe("restoreQueuedMessagesToEditor image marker alignment", () => {
 			editor,
 			pendingImages: opts.draftImages ? [...opts.draftImages] : ([] as ImageContent[]),
 			pendingImageLinks: opts.draftImages ? opts.draftImages.map(() => undefined) : ([] as (string | undefined)[]),
+			compactionQueuedMessages: [],
 			locallySubmittedUserSignatures: new Set<string>(),
 			updatePendingMessagesDisplay: () => {},
 		} as unknown as InteractiveModeContext;
