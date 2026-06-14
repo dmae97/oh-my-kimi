@@ -2211,6 +2211,32 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 		assert_eq!(minimized.output_bytes, 9);
 	}
 
+	/// Regression: a quoted here-doc followed by another command must execute
+	/// instead of failing with "unterminated here document". The minimizer's
+	/// segmented runner used to rebuild each segment via the brush AST Display
+	/// impl, which re-emitted the `<<'PY'` close tag as the quoted `'PY'` — an
+	/// invalid delimiter that left the body unterminated. Here-doc-bearing
+	/// commands now bail out of segmentation and run whole via the single path.
+	#[cfg(unix)]
+	#[tokio::test(flavor = "multi_thread")]
+	async fn quoted_heredoc_in_chain_runs_via_single_path() {
+		let root = unique_temp_dir("heredoc-chain");
+		let minimizer = printf_minimizer(&root.join("minimizer.toml"), None);
+		let (result, output) = run_command_capture(
+			"/bin/cat <<'PY'\nhello $USER\nPY\nprintf 'after\\n'",
+			None,
+			Some(minimizer),
+			CancelToken::default(),
+		)
+		.await;
+		let _ = std::fs::remove_dir_all(&root);
+		assert_eq!(result.exit_code, Some(0));
+		// Quoted delimiter keeps the body literal ($USER unexpanded) and the
+		// trailing command still runs in order.
+		assert_eq!(output, "hello $USER\nafter\n");
+		assert!(!output.contains("unterminated"));
+	}
+
 	#[cfg(unix)]
 	#[tokio::test(flavor = "multi_thread")]
 	async fn segmented_chain_exceeding_aggregate_capture_cap_stays_raw() {
