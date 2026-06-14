@@ -1728,7 +1728,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			customTools.push(...(imageGenTools as unknown as CustomTool[]));
 		}
 
-		if (settings.get("tts.enabled")) {
+		if (settings.get("speechgen.enabled")) {
 			customTools.push(ttsTool as unknown as CustomTool);
 		}
 

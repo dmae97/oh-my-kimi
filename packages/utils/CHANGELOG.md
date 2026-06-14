@@ -1,9 +1,9 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
+- Added support for a runtime `overrides` map in `RuntimeInstallSpec`, which is now written into generated runtime `package.json` manifests to force dependency pins (including transitive ones) across the runtime tree
 - Added a lightweight loop-phase breadcrumb stack (`pushLoopPhase`/`popLoopPhase`/`currentLoopPhase`, plus `takeRecentLoopPhase` which returns the live phase or the most recently popped one and clears it) so the TUI event-loop watchdog can attribute a main-thread block to the phase that caused it — including a synchronous phase already popped before the watchdog's delayed tick runs ([#2485](https://github.com/can1357/oh-my-pi/issues/2485))
 
 ## [15.12.4] - 2026-06-13

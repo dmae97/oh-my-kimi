@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { resolveRuntimeModule, splitBareSpecifier } from "../src/runtime-install";
+import { resolveRuntimeModule, splitBareSpecifier, writeRuntimeManifest } from "../src/runtime-install";
 
 // Contract under test: runtime-installed packages (fastembed, Transformers.js
 // graphs) load inside compiled binaries through resolveRuntimeModule, which
@@ -133,5 +133,32 @@ describe("resolveRuntimeModule", () => {
 			bare: { manifest: {}, files: ["index.js"] },
 		});
 		expect(resolveRuntimeModule(nodeModules, "bare")).toBe(path.join(nodeModules, "bare", "index.js"));
+	});
+});
+
+describe("writeRuntimeManifest", () => {
+	async function readManifest(install: Parameters<typeof writeRuntimeManifest>[1]) {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-runtime-manifest-"));
+		tempDirs.push(dir);
+		await writeRuntimeManifest(dir, install);
+		return JSON.parse(await fs.readFile(path.join(dir, "package.json"), "utf8")) as Record<string, unknown>;
+	}
+
+	test("emits overrides so a transitive pin is forced across the runtime tree", async () => {
+		const manifest = await readManifest({
+			dependencies: { "kokoro-js": "1.2.1" },
+			overrides: { "onnxruntime-node": "1.26.0" },
+			trustedDependencies: ["onnxruntime-node"],
+		});
+		expect(manifest.dependencies).toEqual({ "kokoro-js": "1.2.1" });
+		expect(manifest.overrides).toEqual({ "onnxruntime-node": "1.26.0" });
+		expect(manifest.trustedDependencies).toEqual(["onnxruntime-node"]);
+	});
+
+	test("omits overrides when none are provided or the map is empty", async () => {
+		const without = await readManifest({ dependencies: { "kokoro-js": "1.2.1" } });
+		expect("overrides" in without).toBe(false);
+		const empty = await readManifest({ dependencies: { "kokoro-js": "1.2.1" }, overrides: {} });
+		expect("overrides" in empty).toBe(false);
 	});
 });

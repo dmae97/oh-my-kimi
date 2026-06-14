@@ -1,6 +1,10 @@
-import { $which, logger } from "@oh-my-pi/pi-utils";
-import { $ } from "bun";
-import { resolvePython } from "./transcriber";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import { getTinyModelsCacheDir } from "@oh-my-pi/pi-utils";
+import { sttClient } from "./asr-client";
+import type { SttProgressStatus } from "./asr-protocol";
+import { resolveSttModelSpec } from "./models";
+import { ensureRecorder } from "./recorder";
 
 export interface DownloadProgress {
 	stage: string;
@@ -9,63 +13,119 @@ export interface DownloadProgress {
 
 export interface EnsureOptions {
 	modelName?: string;
+	signal?: AbortSignal;
 	onProgress?: (progress: DownloadProgress) => void;
 }
 
-// ── Recording tool ─────────────────────────────────────────────────
+// ── ONNX Whisper model ─────────────────────────────────────────────
 
-async function ensureRecordingTool(options?: EnsureOptions): Promise<void> {
-	if ($which("sox")) return;
-	if ($which("ffmpeg")) return;
-	if (process.platform === "linux" && $which("arecord")) return;
-
-	// Windows: PowerShell mciSendString is always available as fallback
-	if (process.platform === "win32") {
-		// Try to get ffmpeg for better quality, but don't block on failure
-		options?.onProgress?.({ stage: "Trying to install FFmpeg via winget..." });
-		const result = await $`winget install --id Gyan.FFmpeg -e --accept-source-agreements --accept-package-agreements`
-			.quiet()
-			.nothrow();
-		if (result.exitCode === 0) {
-			logger.debug("FFmpeg installed via winget");
-		}
-		return;
-	}
-
-	throw new Error(
-		"No audio recording tool found. Install SoX: sudo apt install sox, or FFmpeg: sudo apt install ffmpeg",
-	);
+/**
+ * Real-progress event for a speech-model download, surfaced to UI callers.
+ * `percent` is an integer 0–100 aggregated across all model files (encoder +
+ * decoder shards), so it advances monotonically toward completion.
+ */
+export interface SttDownloadProgress {
+	status: SttProgressStatus;
+	/** Integer 0–100 aggregated across files. */
+	percent: number;
+	/** Bytes downloaded so far across all files. */
+	loaded: number;
+	/** Total bytes across all files seen so far. */
+	total: number;
+	/** The file currently downloading, when known. */
+	file?: string;
+	repo: string;
+	label: string;
 }
 
-// ── Python whisper ─────────────────────────────────────────────────
-
-async function ensurePythonWhisper(options?: EnsureOptions): Promise<void> {
-	const pythonCmd = resolvePython();
-	if (!pythonCmd) {
-		throw new Error("Python not found. Install Python 3.8+ from https://python.org");
+/**
+ * Whether the selected model is already present in the local cache. For
+ * transformers.js Whisper tiers a complete download leaves `config.json` plus
+ * the `onnx/` weight files (a bare `config.json` from an interrupted fetch reads
+ * as not-cached); for sherpa-onnx tiers every model file (encoder/decoder/joiner
+ * + tokens) must be present (`.part` sidecars from an interrupted fetch are
+ * ignored).
+ */
+export async function isSttModelCached(key: string): Promise<boolean> {
+	const spec = resolveSttModelSpec(key);
+	const repoDir = path.join(getTinyModelsCacheDir(), spec.repo);
+	if (spec.engine === "sherpa") {
+		try {
+			const root = new Set(await fs.readdir(repoDir));
+			for (const role in spec.files) {
+				if (!root.has(spec.files[role as keyof typeof spec.files])) return false;
+			}
+			return true;
+		} catch {
+			return false;
+		}
 	}
+	try {
+		const root = await fs.readdir(repoDir);
+		if (!root.includes("config.json")) return false;
+		const onnxFiles = await fs.readdir(path.join(repoDir, "onnx")).catch(() => [] as string[]);
+		return onnxFiles.some(file => file.endsWith(".onnx"));
+	} catch {
+		return false;
+	}
+}
 
-	// Check if whisper module is already importable
-	const check = Bun.spawnSync([pythonCmd, "-c", "import whisper"], {
-		stdout: "pipe",
-		stderr: "pipe",
+/**
+ * Download (or warm from cache) the selected ONNX Whisper model via the speech
+ * worker, resolving once the model is fully present and loaded. Streams real
+ * Hub progress with an aggregated integer percent. Rejects if the worker cannot
+ * obtain the model. Safe to call non-interactively.
+ */
+export async function downloadSttModel(
+	key: string,
+	onProgress?: (progress: SttDownloadProgress) => void,
+	options?: { signal?: AbortSignal },
+): Promise<void> {
+	const spec = resolveSttModelSpec(key);
+	const files = new Map<string, { loaded: number; total: number }>();
+	const ok = await sttClient.downloadModel(spec.key, {
+		signal: options?.signal,
+		onProgress: event => {
+			if ((event.status === "progress" || event.status === "progress_total") && event.file) {
+				if (typeof event.loaded === "number" && typeof event.total === "number" && event.total > 0) {
+					files.set(event.file, { loaded: event.loaded, total: event.total });
+				}
+			}
+			let loaded = 0;
+			let total = 0;
+			for (const file of files.values()) {
+				loaded += file.loaded;
+				total += file.total;
+			}
+			const settled = event.status === "ready" || event.status === "done";
+			const percent = total > 0 ? Math.min(100, Math.round((loaded / total) * 100)) : settled ? 100 : 0;
+			onProgress?.({
+				status: event.status,
+				percent,
+				loaded,
+				total,
+				file: event.file,
+				repo: spec.repo,
+				label: spec.label,
+			});
+		},
 	});
-	if (check.exitCode === 0) return;
-
-	options?.onProgress?.({ stage: "Installing openai-whisper (this may take a few minutes)..." });
-	logger.debug("Installing openai-whisper via pip");
-
-	const install = await $`${pythonCmd} -m pip install -q openai-whisper`.quiet().nothrow();
-	if (install.exitCode !== 0) {
-		const stderr = install.stderr.toString().trim();
-		throw new Error(`Failed to install openai-whisper: ${stderr.split("\n").pop()}`);
-	}
-	logger.debug("openai-whisper installed successfully");
+	if (!ok) throw new Error(`Failed to download speech model (${spec.repo}). Check your network connection.`);
 }
 
 // ── Public API ─────────────────────────────────────────────────────
 
 export async function ensureSTTDependencies(options?: EnsureOptions): Promise<void> {
-	await ensureRecordingTool(options);
-	await ensurePythonWhisper(options);
+	await ensureRecorder(progress => options?.onProgress?.(progress), options?.signal);
+	await downloadSttModel(
+		resolveSttModelSpec(options?.modelName).key,
+		progress => {
+			const stage =
+				progress.status === "ready" || progress.status === "done"
+					? `Speech model ${progress.label} ready`
+					: `Downloading speech model ${progress.label}`;
+			options?.onProgress?.({ stage, percent: progress.percent });
+		},
+		{ signal: options?.signal },
+	);
 }

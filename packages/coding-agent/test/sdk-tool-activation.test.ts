@@ -197,7 +197,7 @@ describe("createAgentSession defaultInactive tool activation", () => {
 
 		const { session } = await createAgentSession({
 			...baseOptions(tempDir),
-			settings: Settings.isolated({ "tts.enabled": true }),
+			settings: Settings.isolated({ "speechgen.enabled": true }),
 		});
 
 		try {

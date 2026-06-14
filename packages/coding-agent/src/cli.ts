@@ -56,6 +56,8 @@ async function showHelp(config: CliConfig): Promise<void> {
 async function runSmokeTest(): Promise<void> {
 	const { smokeTestSyncWorker, startServer } = await import("@oh-my-pi/omp-stats");
 	const { smokeTestTinyTitleWorker } = await import("./tiny/title-client");
+	const { smokeTestSttWorker } = await import("./stt/asr-client");
+	const { smokeTestTtsWorker } = await import("./tts/tts-client");
 	await smokeTestSyncWorker();
 
 	const statsServer = await startServer(0);
@@ -71,6 +73,8 @@ async function runSmokeTest(): Promise<void> {
 	}
 
 	await smokeTestTinyTitleWorker();
+	await smokeTestSttWorker();
+	await smokeTestTtsWorker();
 	process.stdout.write("smoke-test: ok\n");
 }
 
@@ -78,6 +82,8 @@ const TINY_WORKER_ARGS = new Set(["--tiny-worker", "__tiny_worker"]);
 const STATS_SYNC_WORKER_ARG = "__omp_stats_sync_worker";
 const TAB_WORKER_ARG = "__omp_tab_worker";
 const JS_EVAL_WORKER_ARG = "__omp_js_eval_worker";
+const STT_WORKER_ARG = "__omp_stt_worker";
+const TTS_WORKER_ARG = "__omp_tts_worker";
 
 async function runWorkerEntrypoint(arg: string | undefined): Promise<boolean> {
 	if (arg === STATS_SYNC_WORKER_ARG) {
@@ -110,21 +116,34 @@ async function runWorkerEntrypoint(arg: string | undefined): Promise<boolean> {
 		await import("./eval/js/worker-entry");
 		return true;
 	}
+	if (arg === STT_WORKER_ARG) {
+		const { startSttWorker } = await import("./stt/asr-worker");
+		await runIpcSubprocessWorker(startSttWorker);
+		return true;
+	}
+	if (arg === TTS_WORKER_ARG) {
+		const { startTtsWorker } = await import("./tts/tts-worker");
+		await runIpcSubprocessWorker(startTtsWorker);
+		return true;
+	}
 	return false;
 }
 
 /**
- * Hidden subcommand that boots the tiny-model worker inside this process
- * over the parent's IPC channel. The agent's main process spawns the same
- * binary with this flag so `onnxruntime-node` (loaded transitively by
- * `@huggingface/transformers`) lives in a child address space. The parent
- * `SIGKILL`s the child on shutdown so the NAPI finalizer never runs in
- * either process — that finalizer segfaults Bun on Windows (issue #1606).
+ * Boot a subprocess-isolated transformers.js worker over the parent's IPC
+ * channel and block until the parent disconnects. The tiny-model, STT, and TTS
+ * workers each run `onnxruntime-node` (loaded transitively by
+ * `@huggingface/transformers`) in a child address space because its NAPI
+ * finalizer segfaults Bun on shutdown (issue #1606); the parent `SIGKILL`s the
+ * child so that finalizer never runs in either process. This wires `process`
+ * IPC to the worker's typed transport, keeps the event loop alive while the
+ * worker is idle, and hard-kills the process on parent `disconnect`.
  */
-async function runTinyWorker(): Promise<void> {
-	const { startTinyTitleWorker } = await import("./tiny/worker");
+async function runIpcSubprocessWorker<In, Out>(
+	start: (transport: { send(message: Out): void; onMessage(handler: (message: In) => void): () => void }) => void,
+): Promise<void> {
 	const { promise: shuttingDown, resolve: shutdown } = Promise.withResolvers<void>();
-	const send = (message: unknown): void => {
+	const send = (message: Out): void => {
 		// `process.send` only exists when spawned with an IPC channel; the
 		// parent always spawns us that way. If it's missing, the parent
 		// vanished and there's no one to talk to.
@@ -139,10 +158,10 @@ async function runTinyWorker(): Promise<void> {
 			shutdown();
 		}
 	};
-	startTinyTitleWorker({
+	start({
 		send,
 		onMessage(handler) {
-			const wrap = (data: unknown): void => handler(data as never);
+			const wrap = (data: unknown): void => handler(data as In);
 			process.on("message", wrap);
 			return () => {
 				process.off("message", wrap);
@@ -151,8 +170,8 @@ async function runTinyWorker(): Promise<void> {
 	});
 	const keepalive = setInterval(() => {}, 2 ** 30);
 	// Parent went away (crashed, SIGKILL, etc.) — commit suicide so we don't
-	// linger as an orphan. SIGKILL via `process.kill` keeps us symmetrical
-	// with the parent's hard-kill on shutdown: skip every JS/native finalizer.
+	// linger as an orphan. SIGKILL via `process.kill` keeps us symmetrical with
+	// the parent's hard-kill on shutdown: skip every JS/native finalizer.
 	process.on("disconnect", () => shutdown());
 	try {
 		await shuttingDown;
@@ -160,6 +179,19 @@ async function runTinyWorker(): Promise<void> {
 		clearInterval(keepalive);
 	}
 	process.kill(process.pid, "SIGKILL");
+}
+
+/**
+ * Hidden subcommand that boots the tiny-model worker inside this process over
+ * the parent's IPC channel. The agent's main process spawns the same binary
+ * with this flag so `onnxruntime-node` (loaded transitively by
+ * `@huggingface/transformers`) lives in a child address space. The parent
+ * `SIGKILL`s the child on shutdown so the NAPI finalizer never runs in either
+ * process — that finalizer segfaults Bun on Windows (issue #1606).
+ */
+async function runTinyWorker(): Promise<void> {
+	const { startTinyTitleWorker } = await import("./tiny/worker");
+	await runIpcSubprocessWorker(startTinyTitleWorker);
 }
 
 /** Run the CLI with the given argv (no `process.argv` prefix). */

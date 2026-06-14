@@ -97,6 +97,7 @@ import { setAutoQaConsentHandler } from "../tools/report-tool-issue";
 import { type ResolveToolDetails, runResolveInvocation } from "../tools/resolve";
 import { formatPhaseDisplayName, selectStickyTodoWindow, todoMatchesAnyDescription } from "../tools/todo";
 import { ToolError } from "../tools/tool-errors";
+import { vocalizer } from "../tts/vocalizer";
 import type { EventBus } from "../utils/event-bus";
 import { getEditorCommand, openInEditor } from "../utils/external-editor";
 import { getSessionAccentAnsi, getSessionAccentHex } from "../utils/session-color";
@@ -3395,7 +3396,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		await this.#sttController.toggle(this.editor, {
 			showWarning: (msg: string) => this.showWarning(msg),
 			showStatus: (msg: string) => this.showStatus(msg),
+			requestRender: () => this.ui.requestRender(),
 			onStateChange: (state: SttState) => {
+				// Duck assistant speech while the user is talking (push-to-talk); restore after.
+				if (state === "recording") vocalizer.duck();
+				else vocalizer.unduck();
 				if (state === "recording") {
 					this.#voicePreviousShowHardwareCursor = this.ui.getShowHardwareCursor();
 					this.#voicePreviousUseTerminalCursor = this.editor.getUseTerminalCursor();

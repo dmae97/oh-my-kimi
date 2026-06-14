@@ -1,9 +1,9 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
+- Added volatile speech-to-text preview support to `Editor` with `setVolatileText(text)`, `clearVolatileText()`, and `commitVolatileText(text)` so hosts can replace, discard, or commit live dictated text at the cursor without appending
 - Added an always-on `LoopWatchdog` armed in `TUI.start()`/`TUI.stop()` that logs `ui.loop-blocked` (rising-edge deduped, with `blockedMs` and the phase active during the elapsed interval) when a self-scheduled probe tick runs late, plus a `ui.select-filter` breadcrumb around the `SelectList` fuzzy filter. The phase is read via `takeRecentLoopPhase`, so a synchronous block whose breadcrumb was pushed and popped before the delayed tick runs is still attributed to its phase instead of "unknown". `stop()` cancels the armed timer (via `clearTimeout` on the default handle) so repeated start/stop cycles leave no pending probe, with the generation guard as a fallback ([#2485](https://github.com/can1357/oh-my-pi/issues/2485))
 - Added `ctrl+j` as a second default binding for the `tui.input.newLine` action alongside `shift+enter`, so terminals that cannot emit `shift+enter` still have a newline key. On terminals with Kitty-protocol / `modifyOtherKeys` disambiguation `ctrl+j` inserts a newline while `Enter` still submits; on legacy terminals where `ctrl+j` and `Enter` are both byte-identical `LF` it submits (documented limitation). User keybinding overrides still take precedence ([#2473](https://github.com/can1357/oh-my-pi/issues/2473))
 - Added an `Editor.onLargePaste(text, lineCount)` hook, fired for a "marker-sized" paste (the point where the editor would otherwise collapse it into a `[Paste #N]` token). Returning `true` lets the host intercept the paste — e.g. to offer wrap-in-code-block / wrap-in-XML / attach-as-file choices — and suppresses the default marker (no undo state is recorded). Added `Editor.insertPaste(content)` so the host can re-insert a (possibly transformed) collapsed paste marker without re-triggering the hook.

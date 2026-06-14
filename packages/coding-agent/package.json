@@ -80,7 +80,8 @@
 		"zod": "catalog:"
 	},
 	"optionalDependencies": {
-		"@huggingface/transformers": "catalog:"
+		"@huggingface/transformers": "catalog:",
+		"sherpa-onnx-node": "1.13.2"
 	},
 	"devDependencies": {
 		"@types/bun": "catalog:"

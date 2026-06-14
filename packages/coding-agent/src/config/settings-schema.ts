@@ -2,6 +2,7 @@ import { THINKING_EFFORTS } from "@oh-my-pi/pi-ai";
 import { DEFAULT_SHARE_URL } from "@oh-my-pi/pi-wire";
 import { SHAPE_VARIANT_NAMES } from "@oh-my-pi/snapcompact";
 import { DEFAULT_RELAY_URL } from "../collab/protocol";
+import { DEFAULT_STT_MODEL_KEY, STT_MODEL_OPTIONS, STT_MODEL_VALUES } from "../stt/models";
 import { AUTO_THINKING, getConfiguredThinkingLevelMetadata, getThinkingLevelMetadata } from "../thinking";
 import {
 	TINY_MODEL_DEVICE_DEFAULT,
@@ -24,6 +25,14 @@ import {
 	TINY_TITLE_MODEL_OPTIONS,
 	TINY_TITLE_MODEL_VALUES,
 } from "../tiny/models";
+import {
+	DEFAULT_TTS_LOCAL_MODEL_KEY,
+	DEFAULT_TTS_VOICE,
+	TTS_LOCAL_MODEL_OPTIONS,
+	TTS_LOCAL_MODEL_VALUES,
+	TTS_LOCAL_VOICE_OPTIONS,
+	TTS_LOCAL_VOICE_VALUES,
+} from "../tts/models";
 import { EDIT_MODES } from "../utils/edit-mode";
 import { SEARCH_PROVIDER_OPTIONS, SEARCH_PROVIDER_PREFERENCES } from "../web/search/types";
 
@@ -1441,24 +1450,15 @@ export const SETTINGS_SCHEMA = {
 
 	"stt.modelName": {
 		type: "enum",
-		values: ["tiny", "tiny.en", "base", "base.en", "small", "small.en", "medium", "medium.en", "large"] as const,
-		default: "base.en",
+		values: STT_MODEL_VALUES,
+		default: DEFAULT_STT_MODEL_KEY,
 		ui: {
 			tab: "interaction",
 			group: "Speech",
 			label: "Speech Model",
-			description: "Whisper model size (larger = more accurate but slower)",
-			options: [
-				{ value: "tiny", label: "tiny", description: "Multilingual; fastest, lowest accuracy" },
-				{ value: "tiny.en", label: "tiny.en", description: "English-only; fastest" },
-				{ value: "base", label: "base", description: "Multilingual; small and fast" },
-				{ value: "base.en", label: "base.en", description: "English-only; default" },
-				{ value: "small", label: "small", description: "Multilingual; balanced" },
-				{ value: "small.en", label: "small.en", description: "English-only; balanced" },
-				{ value: "medium", label: "medium", description: "Multilingual; accurate but slower" },
-				{ value: "medium.en", label: "medium.en", description: "English-only; accurate but slower" },
-				{ value: "large", label: "large", description: "Multilingual; most accurate" },
-			],
+			description:
+				"Local on-device speech model. Parakeet TDT v3 (sherpa-onnx) is the SoTA default; Whisper base/small/large-v3-turbo tiers (transformers.js) trade size for multilingual coverage. Downloaded on first use.",
+			options: STT_MODEL_OPTIONS,
 		},
 	},
 
@@ -2971,14 +2971,14 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	"tts.enabled": {
+	"speechgen.enabled": {
 		type: "boolean",
 		default: false,
 		ui: {
 			tab: "tools",
 			group: "Available Tools",
-			label: "Text-to-Speech",
-			description: "Enable the tts tool for xAI Grok Voice speech synthesis",
+			label: "Speech Generation",
+			description: "Enable the tts tool for on-device (Kokoro) or xAI Grok Voice speech-file synthesis",
 		},
 	},
 
@@ -3739,6 +3739,93 @@ export const SETTINGS_SCHEMA = {
 			],
 		},
 	},
+	"providers.tts": {
+		type: "enum",
+		values: ["auto", "local", "xai"] as const,
+		default: "auto",
+		ui: {
+			tab: "providers",
+			group: "Services",
+			label: "Text-to-Speech Provider",
+			description: "Backend for the tts tool: local on-device neural TTS (Kokoro-82M) or xAI Grok Voice",
+			options: [
+				{
+					value: "auto",
+					label: "Auto",
+					description: "Prefer local on-device TTS; route .mp3 output to xAI when credentials exist",
+				},
+				{ value: "local", label: "Local", description: "On-device neural TTS (Kokoro-82M); output is WAV/PCM16" },
+				{
+					value: "xai",
+					label: "xAI Grok Voice",
+					description: "Requires xAI Grok OAuth or XAI_API_KEY; MP3 or WAV",
+				},
+			],
+		},
+	},
+	"tts.localModel": {
+		type: "enum",
+		values: TTS_LOCAL_MODEL_VALUES,
+		default: DEFAULT_TTS_LOCAL_MODEL_KEY,
+		ui: {
+			tab: "providers",
+			group: "Services",
+			label: "Local TTS Model",
+			description: "On-device neural TTS model (Kokoro-82M) used by the local TTS backend",
+			options: TTS_LOCAL_MODEL_OPTIONS,
+		},
+	},
+	"tts.localVoice": {
+		type: "enum",
+		values: TTS_LOCAL_VOICE_VALUES,
+		default: DEFAULT_TTS_VOICE,
+		ui: {
+			tab: "providers",
+			group: "Services",
+			label: "Local TTS Voice",
+			description: "Kokoro voice used by the local TTS backend (American/British, female/male)",
+			options: TTS_LOCAL_VOICE_OPTIONS,
+		},
+	},
+	"speech.enabled": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "providers",
+			group: "Services",
+			label: "Speech Vocalization",
+			description: "Speak the assistant's output aloud through the speakers as it streams",
+		},
+	},
+	"speech.mode": {
+		type: "enum",
+		values: ["all", "assistant", "yield"] as const,
+		default: "assistant",
+		ui: {
+			tab: "providers",
+			group: "Services",
+			label: "Speech Vocalization Mode",
+			description:
+				"What to speak: all = assistant messages + thinking; assistant = messages only; yield = only the final message at turn end",
+			options: [
+				{ value: "all", label: "All (messages + thinking)" },
+				{ value: "assistant", label: "Assistant messages" },
+				{ value: "yield", label: "Final message only" },
+			],
+		},
+	},
+	"speech.voice": {
+		type: "enum",
+		values: TTS_LOCAL_VOICE_VALUES,
+		default: DEFAULT_TTS_VOICE,
+		ui: {
+			tab: "providers",
+			group: "Services",
+			label: "Speech Vocalization Voice",
+			description: "Kokoro voice used when speaking the assistant's output aloud",
+			options: TTS_LOCAL_VOICE_OPTIONS,
+		},
+	},
 	"providers.tinyModel": {
 		type: "enum",
 		values: TINY_TITLE_MODEL_VALUES,
@@ -4296,8 +4383,7 @@ export interface SttSettings {
 	enabled: boolean;
 	language: string | undefined;
 	modelName: string;
-	whisperPath: string | undefined;
-	modelPath: string | undefined;
+	streaming: boolean;
 }
 
 export interface BashInterceptorRule {

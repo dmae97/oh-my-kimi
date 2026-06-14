@@ -2395,4 +2395,56 @@ describe("Editor component", () => {
 			expect(line.split(CURSOR_MARKER).length - 1).toBe(1);
 		});
 	});
+
+	describe("volatile speech-to-text preview", () => {
+		it("replaces the volatile preview in place rather than appending", () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.setVolatileText("hel");
+			expect(editor.getText()).toBe("hel");
+			editor.setVolatileText("hello wor");
+			expect(editor.getText()).toBe("hello wor");
+			editor.setVolatileText("hello world");
+			expect(editor.getText()).toBe("hello world");
+		});
+
+		it("commits the preview as permanent text and previews the next phrase after it", () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.setVolatileText("hello wor");
+			editor.commitVolatileText("hello world");
+			expect(editor.getText()).toBe("hello world");
+			editor.setVolatileText(" goodby");
+			expect(editor.getText()).toBe("hello world goodby");
+			editor.commitVolatileText(" goodbye");
+			expect(editor.getText()).toBe("hello world goodbye");
+		});
+
+		it("clears the preview without committing it", () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.insertText("note: ");
+			editor.setVolatileText("scratch that");
+			expect(editor.getText()).toBe("note: scratch that");
+			editor.clearVolatileText();
+			expect(editor.getText()).toBe("note: ");
+		});
+
+		it("keeps preview churn out of the undo history (one undo drops a committed phrase)", () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.insertText("pre ");
+			editor.setVolatileText("u");
+			editor.setVolatileText("um");
+			editor.setVolatileText("um hel");
+			editor.commitVolatileText("hello");
+			expect(editor.getText()).toBe("pre hello");
+			editor.handleInput("\x1b[45;5u"); // undo → removes the committed phrase, not preview fragments
+			expect(editor.getText()).toBe("pre ");
+		});
+
+		it("replaces a multi-line preview across line boundaries", () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.setVolatileText("line one\nline two");
+			expect(editor.getText()).toBe("line one\nline two");
+			editor.setVolatileText("single line");
+			expect(editor.getText()).toBe("single line");
+		});
+	});
 });

@@ -2,7 +2,9 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { $which, logger, Snowflake } from "@oh-my-pi/pi-utils";
-import { $ } from "bun";
+import { $, type Subprocess } from "bun";
+import { ensureTool, getToolPath } from "../utils/tools-manager";
+import { decodePcmS16LE } from "./wav";
 
 export interface RecordingHandle {
 	stop(): Promise<void>;
@@ -14,18 +16,13 @@ const isWindows = process.platform === "win32";
  * Returns available recording tools in priority order.
  */
 export function detectRecordingTools(): string[] {
-	const tools: string[] = [];
-	if ($which("sox")) tools.push("sox");
-	if ($which("ffmpeg")) tools.push("ffmpeg");
-	if (!isWindows && $which("arecord")) tools.push("arecord");
-	if (isWindows) tools.push("powershell");
-	return tools;
+	return [...new Set(detectRecorders().map(recorder => recorder.tool))];
 }
 
 // ── ffmpeg dshow device detection ──────────────────────────────────
 
-async function detectWindowsAudioDevice(): Promise<string> {
-	const result = await $`ffmpeg -f dshow -list_devices true -i dummy`.quiet().nothrow();
+async function detectWindowsAudioDevice(bin: string): Promise<string> {
+	const result = await $`${bin} -f dshow -list_devices true -i dummy`.quiet().nothrow();
 	const output = result.stderr.toString();
 	const audioDevices: string[] = [];
 	const re = /"([^"]+)"\s*\(audio\)/gi;
@@ -41,11 +38,11 @@ async function detectWindowsAudioDevice(): Promise<string> {
 
 // ── Recording implementations ──────────────────────────────────────
 
-async function startSoxRecording(outputPath: string): Promise<RecordingHandle> {
+async function startSoxRecording(bin: string, outputPath: string): Promise<RecordingHandle> {
 	// On Windows, "-d" (default device) often fails. Use "-t waveaudio 0" for the first input.
 	const inputArgs = isWindows ? ["-t", "waveaudio", "0"] : ["-d"];
 
-	const proc = Bun.spawn(["sox", ...inputArgs, "-r", "16000", "-c", "1", "-b", "16", "-t", "wav", outputPath], {
+	const proc = Bun.spawn([bin, ...inputArgs, "-r", "16000", "-c", "1", "-b", "16", "-t", "wav", outputPath], {
 		stdout: "pipe",
 		stderr: "ignore",
 	});
@@ -58,12 +55,12 @@ async function startSoxRecording(outputPath: string): Promise<RecordingHandle> {
 	};
 }
 
-async function startFFmpegRecording(outputPath: string): Promise<RecordingHandle> {
+async function startFFmpegRecording(bin: string, outputPath: string): Promise<RecordingHandle> {
 	let args: string[];
 	if (isWindows) {
-		const device = await detectWindowsAudioDevice();
+		const device = await detectWindowsAudioDevice(bin);
 		args = [
-			"ffmpeg",
+			bin,
 			"-f",
 			"dshow",
 			"-i",
@@ -79,7 +76,7 @@ async function startFFmpegRecording(outputPath: string): Promise<RecordingHandle
 		];
 	} else if (process.platform === "darwin") {
 		args = [
-			"ffmpeg",
+			bin,
 			"-f",
 			"avfoundation",
 			"-i",
@@ -94,21 +91,7 @@ async function startFFmpegRecording(outputPath: string): Promise<RecordingHandle
 			outputPath,
 		];
 	} else {
-		args = [
-			"ffmpeg",
-			"-f",
-			"pulse",
-			"-i",
-			"default",
-			"-ar",
-			"16000",
-			"-ac",
-			"1",
-			"-sample_fmt",
-			"s16",
-			"-y",
-			outputPath,
-		];
+		args = [bin, "-f", "pulse", "-i", "default", "-ar", "16000", "-ac", "1", "-sample_fmt", "s16", "-y", outputPath];
 	}
 
 	const proc = Bun.spawn(args, {
@@ -133,8 +116,8 @@ async function startFFmpegRecording(outputPath: string): Promise<RecordingHandle
 	};
 }
 
-async function startArecordRecording(outputPath: string): Promise<RecordingHandle> {
-	const proc = Bun.spawn(["arecord", "-f", "S16_LE", "-r", "16000", "-c", "1", outputPath], {
+async function startArecordRecording(bin: string, outputPath: string): Promise<RecordingHandle> {
+	const proc = Bun.spawn([bin, "-f", "S16_LE", "-r", "16000", "-c", "1", outputPath], {
 		stdout: "pipe",
 		stderr: "ignore",
 	});
@@ -277,7 +260,9 @@ async function startPowerShellRecording(outputPath: string): Promise<RecordingHa
 
 // ── Health check ───────────────────────────────────────────────────
 
-async function verifyProcessAlive(proc: ReturnType<typeof Bun.spawn>, tool: string): Promise<void> {
+type RecorderProcess = Subprocess<"ignore" | "pipe", "pipe", "ignore">;
+
+async function verifyProcessAlive(proc: RecorderProcess, tool: string): Promise<void> {
 	await Bun.sleep(300);
 
 	const exited = await Promise.race([proc.exited.then(code => code), Bun.sleep(0).then(() => "running" as const)]);
@@ -293,38 +278,101 @@ async function verifyProcessAlive(proc: ReturnType<typeof Bun.spawn>, tool: stri
 
 // ── Public API ─────────────────────────────────────────────────────
 
-export async function startRecording(outputPath: string): Promise<RecordingHandle> {
-	const tools = detectRecordingTools();
-	if (tools.length === 0) {
-		throw new Error(
-			isWindows
-				? "No audio recording tool found. Install FFmpeg or SoX and add to PATH."
-				: "No audio recording tool found. Install SoX: sudo apt install sox, or FFmpeg: sudo apt install ffmpeg",
-		);
+export interface ResolvedRecorder {
+	tool: "sox" | "ffmpeg" | "arecord" | "powershell";
+	bin: string;
+}
+
+/**
+ * Resolve a usable recorder without triggering any download. Priority:
+ * sox (PATH) → ffmpeg (PATH or previously-downloaded static binary) →
+ * arecord (PATH, non-Windows) → PowerShell mci fallback (Windows) → none.
+ */
+function detectRecorders(): ResolvedRecorder[] {
+	const recorders: ResolvedRecorder[] = [];
+	const sox = $which("sox");
+	if (sox) recorders.push({ tool: "sox", bin: sox });
+
+	const pathFfmpeg = $which("ffmpeg");
+	if (pathFfmpeg) recorders.push({ tool: "ffmpeg", bin: pathFfmpeg });
+	const bundledFfmpeg = getToolPath("ffmpeg");
+	if (bundledFfmpeg && bundledFfmpeg !== pathFfmpeg) recorders.push({ tool: "ffmpeg", bin: bundledFfmpeg });
+
+	if (!isWindows) {
+		const arecord = $which("arecord");
+		if (arecord) recorders.push({ tool: "arecord", bin: arecord });
 	}
 
-	const errors: string[] = [];
-	for (const tool of tools) {
-		logger.debug("Trying audio recording", { tool, outputPath });
+	if (isWindows) recorders.push({ tool: "powershell", bin: "powershell" });
+	return recorders;
+}
+
+export function detectRecorder(): ResolvedRecorder | null {
+	return detectRecorders()[0] ?? null;
+}
+
+/**
+ * Ensure a recorder is available, downloading the static ffmpeg binary when
+ * nothing is already present. Returns the resolved recorder.
+ */
+export async function ensureRecorder(
+	onProgress?: (p: { stage: string; percent?: number }) => void,
+	signal?: AbortSignal,
+): Promise<ResolvedRecorder> {
+	const existing = detectRecorder();
+	if (existing) return existing;
+
+	const bin = await ensureTool("ffmpeg", { signal, notify: m => onProgress?.({ stage: m }) });
+	if (bin) return { tool: "ffmpeg", bin };
+
+	if (isWindows) return { tool: "powershell", bin: "powershell" };
+
+	throw new Error(
+		"No audio recorder available and automatic ffmpeg download failed. " +
+			"Install SoX or FFmpeg manually and add it to PATH.",
+	);
+}
+
+function recorderFailure(recorder: ResolvedRecorder, error: unknown): string {
+	const message = error instanceof Error ? error.message : String(error);
+	return `${recorder.tool} (${recorder.bin}): ${message}`;
+}
+
+async function startRecordingWithRecorder(recorder: ResolvedRecorder, outputPath: string): Promise<RecordingHandle> {
+	logger.debug("Starting audio recording", { tool: recorder.tool, bin: recorder.bin, outputPath });
+	switch (recorder.tool) {
+		case "sox":
+			return startSoxRecording(recorder.bin, outputPath);
+		case "ffmpeg":
+			return startFFmpegRecording(recorder.bin, outputPath);
+		case "arecord":
+			return startArecordRecording(recorder.bin, outputPath);
+		case "powershell":
+			return startPowerShellRecording(outputPath);
+	}
+}
+
+export async function startRecording(outputPath: string): Promise<RecordingHandle> {
+	const recorders = detectRecorders();
+	if (recorders.length === 0) {
+		throw new Error("No audio recorder available — run `omp setup speech`");
+	}
+
+	const failures: string[] = [];
+	for (const recorder of recorders) {
 		try {
-			switch (tool) {
-				case "sox":
-					return await startSoxRecording(outputPath);
-				case "ffmpeg":
-					return await startFFmpegRecording(outputPath);
-				case "arecord":
-					return await startArecordRecording(outputPath);
-				case "powershell":
-					return await startPowerShellRecording(outputPath);
-			}
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err);
-			logger.debug(`Recording tool ${tool} failed, trying next`, { error: msg });
-			errors.push(`${tool}: ${msg}`);
+			return await startRecordingWithRecorder(recorder, outputPath);
+		} catch (error) {
+			const failure = recorderFailure(recorder, error);
+			failures.push(failure);
+			logger.warn("STT recorder failed to start; trying fallback", {
+				recorder: recorder.tool,
+				bin: recorder.bin,
+				error: failure,
+			});
 		}
 	}
-
-	throw new Error(`All recording tools failed:\n${errors.join("\n")}`);
+	throw new Error(`No audio recorder could start — run \`omp setup speech\`.\n${failures.join("\n")}`);
 }
 
 /**
@@ -348,4 +396,143 @@ export async function verifyRecordingFile(filePath: string): Promise<number> {
 				"Check that a microphone is connected.",
 		);
 	}
+}
+
+// ── Streaming (live) capture ───────────────────────────────────────
+
+export interface StreamingRecordingHandle {
+	stop(): Promise<void>;
+}
+
+/** Build the argv for a recorder that emits raw 16 kHz mono s16le PCM to stdout. */
+async function streamingRecorderArgs(recorder: ResolvedRecorder): Promise<string[]> {
+	const { tool, bin } = recorder;
+	switch (tool) {
+		case "sox": {
+			const input = isWindows ? ["-t", "waveaudio", "0"] : ["-d"];
+			return [bin, ...input, "-r", "16000", "-c", "1", "-b", "16", "-e", "signed-integer", "-t", "raw", "-"];
+		}
+		case "arecord":
+			return [bin, "-f", "S16_LE", "-r", "16000", "-c", "1", "-t", "raw", "-"];
+		case "ffmpeg": {
+			const input = isWindows
+				? ["-f", "dshow", "-i", `audio=${await detectWindowsAudioDevice(bin)}`]
+				: process.platform === "darwin"
+					? ["-f", "avfoundation", "-i", ":0"]
+					: ["-f", "pulse", "-i", "default"];
+			return [bin, ...input, "-ar", "16000", "-ac", "1", "-f", "s16le", "pipe:1"];
+		}
+		case "powershell":
+			throw new Error("PowerShell recorder cannot stream PCM to a pipe");
+	}
+}
+
+/**
+ * Start a recorder that streams raw 16 kHz mono s16le PCM to stdout, decoding it
+ * to float frames delivered through `onAudio` as they arrive. Returns `null`
+ * when the only available recorder (Windows PowerShell mci) records to a file
+ * and cannot pipe — the caller then falls back to file-based batch capture.
+ */
+async function startStreamingRecordingWithRecorder(
+	recorder: ResolvedRecorder,
+	onAudio: (samples: Float32Array) => void,
+): Promise<StreamingRecordingHandle> {
+	const args = await streamingRecorderArgs(recorder);
+	logger.debug("Starting streaming audio recording", { tool: recorder.tool, bin: recorder.bin });
+	const proc = Bun.spawn(args, { stdin: "pipe", stdout: "pipe", stderr: "ignore" });
+
+	// Read s16le bytes off stdout, carrying any trailing odd byte across chunk
+	// boundaries so a sample is never split. Runs until the process closes stdout.
+	const reader = (proc.stdout as ReadableStream<Uint8Array>).getReader();
+	let leftover: Uint8Array | null = null;
+	const pump = async (): Promise<void> => {
+		try {
+			for (;;) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				if (!value || value.length === 0) continue;
+				let bytes = value;
+				if (leftover) {
+					const merged = new Uint8Array(leftover.length + value.length);
+					merged.set(leftover, 0);
+					merged.set(value, leftover.length);
+					bytes = merged;
+					leftover = null;
+				}
+				const usable = bytes.length - (bytes.length % 2);
+				if (usable < bytes.length) leftover = bytes.slice(usable);
+				if (usable > 0) onAudio(decodePcmS16LE(bytes.subarray(0, usable)));
+			}
+		} catch (error) {
+			logger.debug("stt: streaming recorder read ended", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+	};
+	void pump();
+
+	try {
+		await verifyProcessAlive(proc, recorder.tool);
+	} catch (error) {
+		try {
+			proc.kill("SIGKILL");
+		} catch {
+			// Already gone.
+		}
+		throw error;
+	}
+
+	let stopped = false;
+	return {
+		async stop() {
+			if (stopped) return;
+			stopped = true;
+			if (recorder.tool === "ffmpeg") {
+				try {
+					proc.stdin.write("q");
+					proc.stdin.end();
+				} catch {
+					// stdin may already be closed.
+				}
+				const killTimer = setTimeout(() => proc.kill(), 3000);
+				await proc.exited;
+				clearTimeout(killTimer);
+			} else {
+				proc.kill("SIGTERM");
+				await proc.exited;
+			}
+			try {
+				await reader.cancel();
+			} catch {
+				// Reader already released when stdout closed.
+			}
+		},
+	};
+}
+
+export async function startStreamingRecording(
+	onAudio: (samples: Float32Array) => void,
+): Promise<StreamingRecordingHandle | null> {
+	const recorders = detectRecorders();
+	if (recorders.length === 0) {
+		throw new Error("No audio recorder available — run `omp setup speech`");
+	}
+	const streamingRecorders = recorders.filter(recorder => recorder.tool !== "powershell");
+	if (streamingRecorders.length === 0) return null;
+
+	const failures: string[] = [];
+	for (const recorder of streamingRecorders) {
+		try {
+			return await startStreamingRecordingWithRecorder(recorder, onAudio);
+		} catch (error) {
+			const failure = recorderFailure(recorder, error);
+			failures.push(failure);
+			logger.warn("STT streaming recorder failed to start; trying fallback", {
+				recorder: recorder.tool,
+				bin: recorder.bin,
+				error: failure,
+			});
+		}
+	}
+	throw new Error(`No streaming audio recorder could start.\n${failures.join("\n")}`);
 }

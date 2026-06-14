@@ -1619,6 +1619,66 @@ export class Editor implements Component, Focusable {
 		}
 	}
 
+	/** Code units of the current volatile speech-to-text preview (see {@link setVolatileText}). */
+	#volatileTextLen = 0;
+
+	/** Show or replace a volatile speech-to-text preview at the cursor. The text is
+	 *  inserted with undo suspended so a long live dictation never floods the undo
+	 *  stack; finalize it with {@link commitVolatileText} or drop it with
+	 *  {@link clearVolatileText}. Newlines are allowed. */
+	setVolatileText(text: string): void {
+		this.#exitHistoryForEditing();
+		this.#withUndoSuspended(() => {
+			this.#deleteCharsBeforeCursor(this.#volatileTextLen);
+			if (text) this.#insertTextAtCursor(text);
+		});
+		this.#volatileTextLen = text.length;
+		if (!text && this.onChange) this.onChange(this.getText());
+	}
+
+	/** Remove the current volatile preview without committing it. */
+	clearVolatileText(): void {
+		if (this.#volatileTextLen === 0) return;
+		this.#withUndoSuspended(() => this.#deleteCharsBeforeCursor(this.#volatileTextLen));
+		this.#volatileTextLen = 0;
+		if (this.onChange) this.onChange(this.getText());
+	}
+
+	/** Drop any volatile preview, then insert `text` as a single undoable edit. */
+	commitVolatileText(text: string): void {
+		this.#exitHistoryForEditing();
+		this.#withUndoSuspended(() => this.#deleteCharsBeforeCursor(this.#volatileTextLen));
+		this.#volatileTextLen = 0;
+		if (text) this.#insertTextAtCursor(text);
+		else if (this.onChange) this.onChange(this.getText());
+	}
+
+	/** Delete `count` UTF-16 code units immediately before the cursor, crossing line
+	 *  boundaries (each consumed newline counts as one). Undo is the caller's concern. */
+	#deleteCharsBeforeCursor(count: number): void {
+		let remaining = count;
+		while (remaining > 0) {
+			if (this.#state.cursorCol > 0) {
+				const removable = Math.min(remaining, this.#state.cursorCol);
+				const line = this.#state.lines[this.#state.cursorLine] ?? "";
+				this.#state.lines[this.#state.cursorLine] =
+					line.slice(0, this.#state.cursorCol - removable) + line.slice(this.#state.cursorCol);
+				this.#setCursorCol(this.#state.cursorCol - removable);
+				remaining -= removable;
+			} else if (this.#state.cursorLine > 0) {
+				const prev = this.#state.lines[this.#state.cursorLine - 1] ?? "";
+				const cur = this.#state.lines[this.#state.cursorLine] ?? "";
+				this.#state.lines[this.#state.cursorLine - 1] = prev + cur;
+				this.#state.lines.splice(this.#state.cursorLine, 1);
+				this.#state.cursorLine -= 1;
+				this.#setCursorCol(prev.length);
+				remaining -= 1;
+			} else {
+				break;
+			}
+		}
+	}
+
 	/** Apply terminal paste semantics to text from non-bracketed paste transports. */
 	pasteText(text: string): void {
 		this.#handlePaste(text);
