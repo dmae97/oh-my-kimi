@@ -104,6 +104,13 @@ const CONDITIONS: Record<string, () => boolean> = {
 			return false;
 		}
 	},
+	planModeEnabled: () => {
+		try {
+			return Settings.instance.get("plan.enabled");
+		} catch {
+			return false;
+		}
+	},
 };
 
 // ═══════════════════════════════════════════════════════════════════════════

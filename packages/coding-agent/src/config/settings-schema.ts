@@ -3454,6 +3454,17 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"plan.defaultOnStartup": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "tasks",
+			label: "Start in Plan Mode",
+			description: "Automatically enter plan mode at the start of every new session",
+			condition: "planModeEnabled",
+		},
+	},
+
 	"goal.enabled": {
 		type: "boolean",
 		default: true,
