@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed auto-retry regenerating a large `write` call after the provider stream timed out mid-tool-call ([#2683](https://github.com/can1357/oh-my-pi/issues/2683)).
+
 ## [15.13.3] - 2026-06-15
 
 ### Added
