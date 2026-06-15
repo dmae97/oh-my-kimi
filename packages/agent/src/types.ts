@@ -217,7 +217,7 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * - `false`: let the request finish and silently discard everything past the
 	 *   fabrication boundary (keeps the connection alive but pays for the tokens
 	 *   the model spends on the discarded tail).
-	 * Only meaningful when {@link dialect} (or `PI_OWNED_TOOLS`) selects an
+	 * Only meaningful when {@link dialect} (or `PI_DIALECT`) selects an
 	 * owned dialect; native tool calling never fabricates results in text.
 	 */
 	abortOnFabricatedToolResult?: boolean;

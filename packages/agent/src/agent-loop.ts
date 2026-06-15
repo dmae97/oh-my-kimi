@@ -925,7 +925,7 @@ async function streamAssistantResponse(
 	const llmMessages = await config.convertToLlm(messages);
 	const normalizedMessages = normalizeMessagesForProvider(llmMessages, config.model);
 
-	const ownedDialect: Dialect | undefined = config.dialect ?? resolveOwnedDialectFromEnv(Bun.env.PI_OWNED_TOOLS);
+	const ownedDialect: Dialect | undefined = config.dialect ?? resolveOwnedDialectFromEnv(Bun.env.PI_DIALECT);
 	const exampleDialect = ownedDialect ?? preferredDialect(config.model.id);
 	// Build LLM context — append-only mode caches system prompt + tools
 	// AND keeps an append-only message log so prior-turn bytes are stable.
@@ -948,8 +948,8 @@ async function streamAssistantResponse(
 	}
 
 	// Owned tool calling: take tool calls away from the provider and run them
-	// through the selected in-band prompt dialect. `PI_OWNED_TOOLS=1` still
-	// force-enables GLM; `PI_OWNED_TOOLS=<dialect>` force-enables that dialect.
+	// through the selected in-band prompt dialect. `PI_DIALECT=1` still
+	// force-enables GLM; `PI_DIALECT=<dialect>` force-enables that dialect.
 	let promptToolWireTools: Context["tools"];
 	if (ownedDialect && llmContext.tools && llmContext.tools.length > 0) {
 		promptToolWireTools = llmContext.tools;
