@@ -680,20 +680,15 @@ async function fetchUmansModelsInfo(options: {
 		requestHeaders["x-api-key"] = options.apiKey;
 	}
 	const fetchImpl = options.fetch ?? fetch;
-	let response: Response;
+	let payload: unknown;
 	try {
-		response = await fetchImpl(`${discoveryBaseUrl}${UMANS_MODELS_INFO_PATH}`, {
+		const response = await fetchImpl(`${discoveryBaseUrl}${UMANS_MODELS_INFO_PATH}`, {
 			method: "GET",
 			headers: requestHeaders,
 		});
-	} catch {
-		return null;
-	}
-	if (!response.ok) {
-		return null;
-	}
-	let payload: unknown;
-	try {
+		if (!response.ok) {
+			return null;
+		}
 		payload = await response.json();
 	} catch {
 		return null;
