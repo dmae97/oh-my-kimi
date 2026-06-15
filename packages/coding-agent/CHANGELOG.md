@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed OpenRouter `@upstream` routing selectors whose upstream slug also appears in the model id, so `openrouter/...@deepseek:high` keeps `openRouterRouting.only` instead of being consumed by provider-scoped fuzzy matching ([#2708](https://github.com/can1357/oh-my-pi/issues/2708)).
+
 ## [16.0.1] - 2026-06-15
 
 ### Breaking Changes

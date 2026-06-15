@@ -94,6 +94,18 @@ const mockOpenRouterModels: Model<Api>[] = [
 		contextWindow: 128000,
 		maxTokens: 8192,
 	}),
+	buildModel({
+		id: "deepseek/deepseek-v4-pro",
+		name: "DeepSeek V4 Pro",
+		api: "openai-completions",
+		provider: "openrouter",
+		baseUrl: "https://openrouter.ai/api/v1",
+		reasoning: true,
+		input: ["text"],
+		cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1 },
+		contextWindow: 128000,
+		maxTokens: 8192,
+	}),
 ];
 
 const mockProviderOverlapModels: Model<"anthropic-messages">[] = [
@@ -957,6 +969,14 @@ describe("provider routing selector (@upstream)", () => {
 		expect(result.model?.id).toBe("z-ai/glm-4.7");
 		expect(result.thinkingLevel).toBe(Effort.High);
 		expect(openRouterOnly(result.model)).toEqual(["cerebras"]);
+	});
+
+	test("preserves @upstream when the slug also matches model tokens", () => {
+		const result = parseModelPattern("openrouter/deepseek/deepseek-v4-pro@deepseek:high", allModels);
+		expect(result.model?.id).toBe("deepseek/deepseek-v4-pro");
+		expect(result.thinkingLevel).toBe(Effort.High);
+		expect(result.upstream).toBe("deepseek");
+		expect(openRouterOnly(result.model)).toEqual(["deepseek"]);
 	});
 
 	test("routes Vercel AI Gateway models via vercelGatewayRouting", () => {

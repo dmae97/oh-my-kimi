@@ -481,6 +481,10 @@ function matchModel(
 			// The prefix is not a known provider in this candidate set, so treat the
 			// slash as part of the raw model ID and continue with generic matching.
 		} else {
+			// Let the routing fallback apply `@upstream` before fuzzy matching can consume the slug.
+			if (splitUpstreamRouting(modelId)) {
+				return undefined;
+			}
 			const scored = providerModels
 				.map(model => ({ model, match: fuzzyMatch(modelId, model.id) }))
 				.filter(entry => entry.match.matches);
