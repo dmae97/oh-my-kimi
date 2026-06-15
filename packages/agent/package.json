@@ -1,7 +1,7 @@
 {
 	"type": "module",
 	"name": "@oh-my-pi/pi-agent-core",
-	"version": "15.13.1",
+	"version": "15.13.2",
 	"description": "General-purpose agent with transport abstraction, state management, and attachment support",
 	"homepage": "https://omp.sh",
 	"author": "Can Boluk",

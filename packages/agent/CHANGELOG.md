@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.13.2] - 2026-06-15
+
 ### Breaking Changes
 
 - Removed `harmony-leak` exports from the `@oh-my-pi/pi-agent-core` package entrypoint

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.13.2] - 2026-06-15
+
 ### Breaking Changes
 
 - Renamed all hashline DSL operators to concise abbreviated keywords:

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.13.2] - 2026-06-15
+
 ### Added
 
 - Added the `ToolCallSyntax` union and `FALLBACK_TOOL_SYNTAX` constant to `@oh-my-pi/pi-catalog/identity` (re-exported from `@oh-my-pi/pi-ai/grammar`).
