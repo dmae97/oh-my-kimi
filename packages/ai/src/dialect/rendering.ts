@@ -157,9 +157,29 @@ export function messageContentText(
 	return text;
 }
 
+function isAsciiWhitespace(code: number): boolean {
+	return code === 9 || code === 10 || code === 11 || code === 12 || code === 13 || code === 32;
+}
+
+function unwrapDelimitedThinking(open: string, close: string, text: string): string {
+	let start = 0;
+	let end = text.length;
+	let changed = false;
+	while (true) {
+		while (start < end && isAsciiWhitespace(text.charCodeAt(start))) start++;
+		while (end > start && isAsciiWhitespace(text.charCodeAt(end - 1))) end--;
+		if (end - start < open.length + close.length) break;
+		if (!text.startsWith(open, start) || !text.startsWith(close, end - close.length)) break;
+		start += open.length;
+		end -= close.length;
+		changed = true;
+	}
+	return changed ? text.slice(start, end) : text;
+}
+
 export function renderDelimitedThinking(open: string, close: string, text: string): string {
 	if (!text) return "";
-	return `${open}\n${text}\n${close}`;
+	return `${open}\n${unwrapDelimitedThinking(open, close, text)}\n${close}`;
 }
 
 export function chatMlTurn(role: "assistant" | "system" | "tool" | "user", body: string): string {

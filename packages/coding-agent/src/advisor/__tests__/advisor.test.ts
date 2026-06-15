@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { createAdvisorMessageCard } from "../../modes/components/advisor-message";
 import { getThemeByName } from "../../modes/theme/theme";
+import { formatSessionDumpText } from "../../session/session-dump-format";
 import { formatSessionHistoryMarkdown } from "../../session/session-history-format";
 import { YieldQueue } from "../../session/yield-queue";
 import {
@@ -581,6 +582,28 @@ describe("advisor", () => {
 			const card = createAdvisorMessageCard({ notes: [{ note, severity: "concern" }] }, () => false, uiTheme);
 			const text = strip(card.render(30));
 			expect(text).toContain("truncated.");
+		});
+	});
+	describe("formatSessionDumpText raw thinking", () => {
+		it("does not nest literal thinking envelopes", () => {
+			const md = formatSessionDumpText({
+				messages: [
+					{
+						role: "assistant",
+						content: [
+							{
+								type: "thinking",
+								thinking: "<thinking>\nCheck logs before accepting container health.\n</thinking>",
+							},
+						],
+						timestamp: Date.now(),
+					} as AgentMessage,
+				],
+				thinkingLevel: "high",
+			});
+
+			expect(md).toContain("Assistant: <thinking>\nCheck logs before accepting container health.\n</thinking>");
+			expect(md).not.toContain("<thinking>\n<thinking>");
 		});
 	});
 });
