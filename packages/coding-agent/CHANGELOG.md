@@ -54,6 +54,10 @@
 - Fixed auto-retry regenerating a large `write` call after the provider stream timed out mid-tool-call ([#2683](https://github.com/can1357/oh-my-pi/issues/2683)).
 - Fixed soft-expired `issue://` and `pr://` reads to refresh live before returning stale state, with an explicit stale warning when the live refresh fails ([#2684](https://github.com/can1357/oh-my-pi/issues/2684)).
 
+### Changed
+
+- Changed the `eval` `agent()` helper to accept `return_handle` (Python) / `returnHandle` (JS): instead of bare text it returns a DAG node dict `{ text, output, handle, id, agent }` whose `handle` is the spawned agent's recoverable `agent://<id>` URI, so a downstream `pipeline`/`parallel` stage can wire a large transcript by reference instead of re-inlining it. The default path is unchanged (bare text, or the parsed object under `schema`).
+
 ## [15.13.3] - 2026-06-15
 
 ### Added

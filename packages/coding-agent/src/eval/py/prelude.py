@@ -519,7 +519,7 @@ if "__omp_prelude_loaded__" not in globals():
         text = res.get("text") if isinstance(res, dict) else res
         return json.loads(text) if schema is not None else text
 
-    def agent(prompt, *, agent_type="task", model=None, label=None, schema=None):
+    def agent(prompt, *, agent_type="task", model=None, label=None, schema=None, return_handle=False):
         """Run a subagent and return its final output.
 
         `agent_type` selects the subagent definition (default "task"). Pass
@@ -527,6 +527,15 @@ if "__omp_prelude_loaded__" not in globals():
         id, and `schema` to request structured JSON output; when `schema` is
         supplied the parsed object is returned. Share background by writing a
         local:// file and referencing it in the prompt.
+
+        Set `return_handle=True` to receive a DAG node dict instead of bare
+        text: ``{"text", "output", "handle", "id", "agent"}`` where ``handle``
+        is the spawned agent's recoverable ``agent://<id>`` URI. A downstream
+        ``pipeline``/``parallel`` stage embeds that ``handle`` (or ``output``)
+        in its prompt so a large transcript flows through the graph by
+        reference, never re-inlined. When ``schema`` is also set the parsed
+        object lands under ``"data"``. If the bridge returns no recoverable id
+        the node still resolves with ``handle=None`` — the helper never throws.
         """
         args = {"prompt": prompt}
         if agent_type is not None:
@@ -539,7 +548,22 @@ if "__omp_prelude_loaded__" not in globals():
             args["schema"] = schema
         res = _bridge_call("__agent__", args)
         text = res.get("text") if isinstance(res, dict) else res
-        return json.loads(text) if schema is not None else text
+        parsed = json.loads(text) if schema is not None else text
+        if not return_handle:
+            return parsed
+        details = res.get("details") if isinstance(res, dict) else None
+        if not isinstance(details, dict) or details.get("id") is None:
+            return {"text": text, "output": text, "handle": None, "id": None, "agent": None}
+        node = {
+            "text": text,
+            "output": text,
+            "handle": f"agent://{details['id']}",
+            "id": details["id"],
+            "agent": details.get("agent"),
+        }
+        if schema is not None:
+            node["data"] = parsed
+        return node
 
     def _concurrency_limit():
         """Worker-pool ceiling from the host ``task.maxConcurrency`` setting.
