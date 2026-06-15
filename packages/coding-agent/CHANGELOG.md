@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Enriched the bundled `designer`, `reviewer`, and `task` agent prompts: `designer` gains a token-first four-phase design-system workflow (analyze → build-if-missing → compose-with-tokens → verify), `reviewer` gains an evidence standard (a finding is not real until you can name the triggering input; passing tests are not proof of correctness), and `task` gains an evidence-bound completion requirement.
+
 ## [15.13.3] - 2026-06-15
 
 ### Added
