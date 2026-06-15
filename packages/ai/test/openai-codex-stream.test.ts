@@ -380,6 +380,300 @@ describe("openai-codex streaming", () => {
 		expect("lastParseLen" in toolCall).toBe(false);
 	});
 
+	it("routes interleaved function-call argument deltas to the matching open item", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+		const token = createCodexTestToken();
+		const context = createCodexTestContext();
+		// Two function calls are opened concurrently and the server interleaves
+		// `function_call_arguments.delta` events by `item_id`. With the old
+		// singleton current-block, every delta went to whichever item was added
+		// most recently; the `task` call ended up with `arguments = {}` and the
+		// sibling received the `task` payload (issue #2619). Each call must
+		// retain its own arguments and emit `toolcall_*` events against its own
+		// content index.
+		const taskArgs = '{"ops":[{"op":"start","task":"X"}]}';
+		const otherArgs = '{"input":"hello"}';
+		const events: Array<Record<string, unknown>> = [
+			{
+				type: "response.output_item.added",
+				output_index: 0,
+				item: { type: "function_call", id: "fc_task", call_id: "call_task", name: "task", arguments: "" },
+			},
+			{
+				type: "response.output_item.added",
+				output_index: 1,
+				item: { type: "function_call", id: "fc_other", call_id: "call_other", name: "other", arguments: "" },
+			},
+			{
+				type: "response.function_call_arguments.delta",
+				item_id: "fc_task",
+				output_index: 0,
+				delta: taskArgs.slice(0, 12),
+			},
+			{
+				type: "response.function_call_arguments.delta",
+				item_id: "fc_other",
+				output_index: 1,
+				delta: otherArgs.slice(0, 10),
+			},
+			{
+				type: "response.function_call_arguments.delta",
+				item_id: "fc_task",
+				output_index: 0,
+				delta: taskArgs.slice(12),
+			},
+			{
+				type: "response.function_call_arguments.delta",
+				item_id: "fc_other",
+				output_index: 1,
+				delta: otherArgs.slice(10),
+			},
+			// Stale delta for fc_task arriving after fc_other finishes must be dropped,
+			// not appended to fc_other.
+			{
+				type: "response.output_item.done",
+				output_index: 1,
+				item: { type: "function_call", id: "fc_other", call_id: "call_other", name: "other", arguments: otherArgs },
+			},
+			{
+				type: "response.function_call_arguments.delta",
+				item_id: "fc_other",
+				output_index: 1,
+				delta: "STALE",
+			},
+			{
+				type: "response.output_item.done",
+				output_index: 0,
+				item: { type: "function_call", id: "fc_task", call_id: "call_task", name: "task", arguments: taskArgs },
+			},
+			{
+				type: "response.completed",
+				response: {
+					id: "resp_1",
+					status: "completed",
+					usage: {
+						input_tokens: 5,
+						output_tokens: 3,
+						total_tokens: 8,
+						input_tokens_details: { cached_tokens: 0 },
+					},
+				},
+			},
+		];
+		const sse = `${events.map(e => `data: ${JSON.stringify(e)}`).join("\n\n")}\n\n`;
+		const fetchMock: FetchImpl = (async () =>
+			new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })) as FetchImpl;
+
+		const toolcallEnds: Array<{ contentIndex: number; name: string; argumentsJson: string }> = [];
+		const model = { ...createCodexTestModel("https://chatgpt.com/backend-api"), preferWebsockets: false };
+		const aem = streamOpenAICodexResponses(model, context, { apiKey: token, fetch: fetchMock });
+		(async () => {
+			for await (const event of aem) {
+				if (event.type !== "toolcall_end") continue;
+				toolcallEnds.push({
+					contentIndex: event.contentIndex,
+					name: event.toolCall.name,
+					argumentsJson: JSON.stringify(event.toolCall.arguments),
+				});
+			}
+		})();
+		const result = await aem.result();
+
+		const calls = result.content.filter(c => c.type === "toolCall");
+		expect(calls).toHaveLength(2);
+		const byName = new Map(calls.map(c => [c.name, c] as const));
+		expect(byName.get("task")?.arguments).toEqual({ ops: [{ op: "start", task: "X" }] });
+		expect(byName.get("other")?.arguments).toEqual({ input: "hello" });
+		// `task` is the FIRST opened block (index 0); a stale delta after fc_other
+		// closed must NOT have appended "STALE" anywhere.
+		expect(JSON.stringify(result.content)).not.toContain("STALE");
+		// Stream events must address each tool call by its own content index.
+		expect(toolcallEnds.find(e => e.name === "task")?.contentIndex).toBe(0);
+		expect(toolcallEnds.find(e => e.name === "other")?.contentIndex).toBe(1);
+	});
+
+	it("uses output_index to finalize idless function and custom tool calls", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+		const token = createCodexTestToken();
+		const context = createCodexTestContext();
+		const taskArgs = '{"tasks":[{"assignment":"fix it"}]}';
+		const patchInput = "*** Begin Patch\n*** End Patch";
+		const events: Array<Record<string, unknown>> = [
+			{
+				type: "response.output_item.added",
+				output_index: 0,
+				item: { type: "function_call", call_id: "call_task_no_id", name: "task", arguments: "" },
+			},
+			{
+				type: "response.output_item.added",
+				output_index: 1,
+				item: { type: "custom_tool_call", call_id: "call_patch_no_id", name: "apply_patch", input: "" },
+			},
+			{
+				type: "response.output_item.done",
+				output_index: 1,
+				item: { type: "custom_tool_call", call_id: "call_patch_no_id", name: "apply_patch", input: patchInput },
+			},
+			{
+				type: "response.output_item.done",
+				output_index: 0,
+				item: { type: "function_call", call_id: "call_task_no_id", name: "task", arguments: taskArgs },
+			},
+			{
+				type: "response.completed",
+				response: {
+					id: "resp_1",
+					status: "completed",
+					usage: {
+						input_tokens: 5,
+						output_tokens: 3,
+						total_tokens: 8,
+						input_tokens_details: { cached_tokens: 0 },
+					},
+				},
+			},
+		];
+		const sse = `${events.map(e => `data: ${JSON.stringify(e)}`).join("\n\n")}\n\n`;
+		const fetchMock: FetchImpl = (async () =>
+			new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })) as FetchImpl;
+		const toolcallEnds: Array<{ contentIndex: number; name: string }> = [];
+		const model = { ...createCodexTestModel("https://chatgpt.com/backend-api"), preferWebsockets: false };
+		const aem = streamOpenAICodexResponses(model, context, { apiKey: token, fetch: fetchMock });
+		(async () => {
+			for await (const event of aem) {
+				if (event.type !== "toolcall_end") continue;
+				toolcallEnds.push({ contentIndex: event.contentIndex, name: event.toolCall.name });
+			}
+		})();
+
+		const result = await aem.result();
+
+		const calls = result.content.filter(c => c.type === "toolCall");
+		const byName = new Map(calls.map(c => [c.name, c] as const));
+		expect(byName.get("task")?.arguments).toEqual({ tasks: [{ assignment: "fix it" }] });
+		expect(byName.get("apply_patch")?.arguments).toEqual({ input: patchInput });
+		expect(toolcallEnds.find(e => e.name === "task")?.contentIndex).toBe(0);
+		expect(toolcallEnds.find(e => e.name === "apply_patch")?.contentIndex).toBe(1);
+	});
+
+	it("routes fully keyless deltas/done to the latest open item via currentEntry", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+		const token = createCodexTestToken();
+		const context = createCodexTestContext();
+		// Pathological legacy/proxy stream: `output_item.added` carries no `id`
+		// AND no `output_index`, so neither keyed map ever receives the item.
+		// `function_call_arguments.delta` / `output_item.done` likewise lack
+		// both keys. The runtime must still route them via `currentEntry`
+		// (the latest live `output_item.added`) instead of dropping.
+		const taskArgs = '{"tasks":[{"assignment":"keyless"}]}';
+		const events: Array<Record<string, unknown>> = [
+			{
+				type: "response.output_item.added",
+				item: { type: "function_call", call_id: "call_keyless", name: "task", arguments: "" },
+			},
+			{ type: "response.function_call_arguments.delta", delta: taskArgs.slice(0, 12) },
+			{ type: "response.function_call_arguments.delta", delta: taskArgs.slice(12) },
+			{
+				type: "response.output_item.done",
+				item: { type: "function_call", call_id: "call_keyless", name: "task", arguments: taskArgs },
+			},
+			{
+				type: "response.completed",
+				response: {
+					id: "resp_keyless",
+					status: "completed",
+					usage: {
+						input_tokens: 1,
+						output_tokens: 1,
+						total_tokens: 2,
+						input_tokens_details: { cached_tokens: 0 },
+					},
+				},
+			},
+		];
+		const sse = `${events.map(e => `data: ${JSON.stringify(e)}`).join("\n\n")}\n\n`;
+		const fetchMock: FetchImpl = (async () =>
+			new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })) as FetchImpl;
+		const model = { ...createCodexTestModel("https://chatgpt.com/backend-api"), preferWebsockets: false };
+		const result = await streamOpenAICodexResponses(model, context, {
+			apiKey: token,
+			fetch: fetchMock as FetchImpl,
+		}).result();
+		const call = result.content.find(c => c.type === "toolCall");
+		expect(call?.name).toBe("task");
+		expect(call?.arguments).toEqual({ tasks: [{ assignment: "keyless" }] });
+	});
+
+	it("prefers a later id-only current item over an older output_index entry on unkeyed events", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+		const token = createCodexTestToken();
+		const context = createCodexTestContext();
+		// Mixed key shapes: the first call is output_index-keyed only, the
+		// second is id-only and is now the latest open item. An unkeyed delta
+		// must address the second call (currentEntry), not whatever the
+		// keyed-map iteration happens to surface first.
+		const idOnlyArgs = '{"input":"id-only-current"}';
+		const events: Array<Record<string, unknown>> = [
+			{
+				type: "response.output_item.added",
+				output_index: 0,
+				item: { type: "function_call", call_id: "call_old", name: "older", arguments: "" },
+			},
+			{
+				type: "response.output_item.added",
+				item: { type: "function_call", id: "fc_id_only", call_id: "call_new", name: "newer", arguments: "" },
+			},
+			// Keyless delta + done for the newer call — must route to fc_id_only.
+			{ type: "response.function_call_arguments.delta", delta: idOnlyArgs },
+			{
+				type: "response.output_item.done",
+				item: {
+					type: "function_call",
+					id: "fc_id_only",
+					call_id: "call_new",
+					name: "newer",
+					arguments: idOnlyArgs,
+				},
+			},
+			// Close the older one explicitly with its key so the test verifies isolation.
+			{
+				type: "response.output_item.done",
+				output_index: 0,
+				item: { type: "function_call", call_id: "call_old", name: "older", arguments: "{}" },
+			},
+			{
+				type: "response.completed",
+				response: {
+					id: "resp_mixed",
+					status: "completed",
+					usage: {
+						input_tokens: 1,
+						output_tokens: 1,
+						total_tokens: 2,
+						input_tokens_details: { cached_tokens: 0 },
+					},
+				},
+			},
+		];
+		const sse = `${events.map(e => `data: ${JSON.stringify(e)}`).join("\n\n")}\n\n`;
+		const fetchMock: FetchImpl = (async () =>
+			new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })) as FetchImpl;
+		const model = { ...createCodexTestModel("https://chatgpt.com/backend-api"), preferWebsockets: false };
+		const result = await streamOpenAICodexResponses(model, context, {
+			apiKey: token,
+			fetch: fetchMock as FetchImpl,
+		}).result();
+
+		const calls = result.content.filter(c => c.type === "toolCall");
+		const byName = new Map(calls.map(c => [c.name, c] as const));
+		expect(byName.get("newer")?.arguments).toEqual({ input: "id-only-current" });
+		expect(byName.get("older")?.arguments).toEqual({});
+	});
+
 	it("waits for caller abort when SSE streams only no-progress status events", async () => {
 		const tempDir = TempDir.createSync("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
