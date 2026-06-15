@@ -86,6 +86,7 @@ export class DeepSeekInbandScanner implements InbandScanner {
 	#dsmlParamName = "";
 	#dsmlParamIsString = true;
 	#rawBlock = "";
+	#stripLeadingWhitespace = false;
 
 	constructor(options: InbandScannerOptions = {}) {
 		this.#parseThinking = options.parseThinking ?? true;
@@ -146,6 +147,18 @@ export class DeepSeekInbandScanner implements InbandScanner {
 
 	#consumeOutside(final: boolean, events: InbandScanEvent[]): void {
 		while (this.#buffer.length > 0) {
+			if (this.#stripLeadingWhitespace) {
+				// A chat-template control token (e.g. `<｜Assistant｜>`) was just dropped;
+				// swallow the template whitespace that trails it so it never leaks into
+				// visible text. Whitespace can't begin another token, so eager trim is safe.
+				const trimmed = this.#buffer.replace(/^\s+/u, "");
+				if (trimmed.length === 0) {
+					this.#buffer = "";
+					return;
+				}
+				this.#buffer = trimmed;
+				this.#stripLeadingWhitespace = false;
+			}
 			const match = findEarliestToken(this.#buffer, OUTSIDE_TOKENS);
 			if (!match) {
 				const hold = final ? 0 : partialSuffixOverlapAny(this.#buffer, OUTSIDE_TOKENS);
@@ -190,6 +203,7 @@ export class DeepSeekInbandScanner implements InbandScanner {
 			const control = this.#matchingControlToken();
 			if (control) {
 				this.#buffer = this.#buffer.slice(control.length);
+				this.#stripLeadingWhitespace = true;
 				continue;
 			}
 			this.#buffer = this.#buffer.slice(match.token.length);
