@@ -1631,8 +1631,34 @@ export class AgentSession {
 	// Track last assistant message for auto-compaction check
 	#lastAssistantMessage: AssistantMessage | undefined = undefined;
 
-	/** Internal handler for agent events - shared by subscribe and reconnect */
+	/** Internal handler for agent events - shared by subscribe and reconnect.
+	 *
+	 * `agent_end` handling schedules deferred post-prompt recovery work
+	 * (compaction/handoff, context-promotion continuations). It is invoked
+	 * fire-and-forget by the agent's synchronous `#emit`, and only reaches
+	 * `#checkCompaction` after several internal awaits. `prompt()` runs
+	 * `#waitForPostPromptRecovery()` the instant `agent.prompt()` resolves — which
+	 * can land BEFORE the handler registers its tasks, so the wait would observe an
+	 * empty task set and return early, letting a deferred handoff/promotion race
+	 * prompt completion. Tracking the `agent_end` handler as a post-prompt task
+	 * that is registered SYNCHRONOUSLY (before the first await) closes that window:
+	 * `#postPromptTasksPromise` is set the moment `#emit` invokes this handler, so
+	 * the recovery wait always sees the in-flight handler and blocks until it — and
+	 * everything it schedules — settles. */
 	#handleAgentEvent = async (event: AgentEvent): Promise<void> => {
+		if (event.type !== "agent_end") {
+			return this.#processAgentEvent(event);
+		}
+		const { promise, resolve } = Promise.withResolvers<void>();
+		this.#trackPostPromptTask(promise);
+		try {
+			await this.#processAgentEvent(event);
+		} finally {
+			resolve();
+		}
+	};
+
+	#processAgentEvent = async (event: AgentEvent): Promise<void> => {
 		// Plan-mode → compaction transition: stamp `SILENT_ABORT_MARKER` on the
 		// persisted message BEFORE the obfuscator's display-side copy below.
 		// Invariant (must hold across refactors): this branch precedes the
