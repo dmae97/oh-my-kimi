@@ -52,6 +52,10 @@
 
 - Auto-enable OSC 8 hyperlinks inside tmux when tmux self-reports >= 3.4 via `TERM_PROGRAM_VERSION`; tmux 3.4 stores OSC 8 as a cell attribute and forwards it to outer terminals whose `terminal-features` include `hyperlinks`. Older tmux, GNU screen, and tmux without a reported version still default off. Resolution is factored into `hyperlinksUserOverride()` and `shouldEnableHyperlinksByDefault()` mirroring the sync-output helpers ([#2403](https://github.com/can1357/oh-my-pi/issues/2403)).
 
+### Added
+
+- Added Zellij and WezTerm pane environment fallbacks for terminal-specific session continuation when no TTY path is available.
+
 ## [15.11.8] - 2026-06-12
 
 ### Changed

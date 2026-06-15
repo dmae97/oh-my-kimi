@@ -51,14 +51,28 @@ export function getTerminalId(): string | null {
 
 	// Fallback to terminal-specific env vars
 	// Prefer inner multiplexers over host terminal emulators when stdin has no TTY path.
+	const zellijPane = process.env.ZELLIJ_PANE_ID;
+	if (zellijPane) {
+		// Session names are user-chosen (`zellij -s …`) and the id is used as a
+		// breadcrumb filename — normalize path separators like the TTY branch does.
+		const zellijSession = process.env.ZELLIJ_SESSION_NAME?.replace(/[\\/]/g, "-");
+		return zellijSession ? `zellij-${zellijSession}-${zellijPane}` : `zellij-${zellijPane}`;
+	}
+
 	const tmuxPane = process.env.TMUX_PANE;
 	if (tmuxPane) return `tmux-${tmuxPane}`;
 
 	const cmuxSurface = process.env.CMUX_SURFACE_ID;
 	if (cmuxSurface) return `cmux-${cmuxSurface}`;
 
+	// Kitty before WezTerm/others, matching terminal-capabilities.ts detection
+	// order. Inherited env makes either order wrong for some nesting; staying
+	// consistent with the capability detector keeps the two answers aligned.
 	const kittyId = process.env.KITTY_WINDOW_ID;
 	if (kittyId) return `kitty-${kittyId}`;
+
+	const weztermPane = process.env.WEZTERM_PANE;
+	if (weztermPane) return `wezterm-${weztermPane}`;
 
 	const terminalSessionId = process.env.TERM_SESSION_ID; // macOS Terminal.app
 	if (terminalSessionId) return `apple-${terminalSessionId}`;
