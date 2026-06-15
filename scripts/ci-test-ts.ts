@@ -278,7 +278,7 @@ async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 	switch (mode) {
 		case "workspace":
 			return [
-				...fastWorkspacePackages.map(pkg => workspaceTestCommand(pkg, 4)),
+				...fastWorkspacePackages.map(pkg => workspaceTestCommand(pkg, 8)),
 				{
 					label: "scripts",
 					cwd: ".",

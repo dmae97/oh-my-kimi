@@ -217,7 +217,7 @@ template:
             cpu: "2"
             memory: "4Gi"
           limits:
-            cpu: "8"
+            cpu: "16"
             memory: "12Gi"
     volumes:
       - name: runner-cache
@@ -266,7 +266,7 @@ Field by field:
   mounts to the `arc-runners/runner-cache` PVC. `ReadWriteOnce` is enough on this
   single-node k3s host; use a RWX-capable storage class before spreading runners
   across nodes.
-- **`resources`** - requests `2` CPU / `4Gi`, limits `8` CPU / `12Gi`. Kata reads
+- **`resources`** - requests `2` CPU / `4Gi`, limits `16` CPU / `12Gi`. Kata reads
   these and sizes the guest accordingly: the VM now boots at the same
   guaranteed floor (`default_vcpus: 2`, `default_memory: 4096`) and only
   hotplugs beyond that toward the limits, with `default_maxvcpus: 0` allowing up
