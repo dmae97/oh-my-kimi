@@ -380,6 +380,114 @@ describe("openai-codex streaming", () => {
 		expect("lastParseLen" in toolCall).toBe(false);
 	});
 
+	it("routes interleaved function-call argument deltas to the matching open item", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+		const token = createCodexTestToken();
+		const context = createCodexTestContext();
+		// Two function calls are opened concurrently and the server interleaves
+		// `function_call_arguments.delta` events by `item_id`. With the old
+		// singleton current-block, every delta went to whichever item was added
+		// most recently; the `task` call ended up with `arguments = {}` and the
+		// sibling received the `task` payload (issue #2619). Each call must
+		// retain its own arguments and emit `toolcall_*` events against its own
+		// content index.
+		const taskArgs = '{"ops":[{"op":"start","task":"X"}]}';
+		const otherArgs = '{"input":"hello"}';
+		const events: Array<Record<string, unknown>> = [
+			{
+				type: "response.output_item.added",
+				output_index: 0,
+				item: { type: "function_call", id: "fc_task", call_id: "call_task", name: "task", arguments: "" },
+			},
+			{
+				type: "response.output_item.added",
+				output_index: 1,
+				item: { type: "function_call", id: "fc_other", call_id: "call_other", name: "other", arguments: "" },
+			},
+			{
+				type: "response.function_call_arguments.delta",
+				item_id: "fc_task",
+				output_index: 0,
+				delta: taskArgs.slice(0, 12),
+			},
+			{
+				type: "response.function_call_arguments.delta",
+				item_id: "fc_other",
+				output_index: 1,
+				delta: otherArgs.slice(0, 10),
+			},
+			{
+				type: "response.function_call_arguments.delta",
+				item_id: "fc_task",
+				output_index: 0,
+				delta: taskArgs.slice(12),
+			},
+			{
+				type: "response.function_call_arguments.delta",
+				item_id: "fc_other",
+				output_index: 1,
+				delta: otherArgs.slice(10),
+			},
+			// Stale delta for fc_task arriving after fc_other finishes must be dropped,
+			// not appended to fc_other.
+			{
+				type: "response.output_item.done",
+				output_index: 1,
+				item: { type: "function_call", id: "fc_other", call_id: "call_other", name: "other", arguments: otherArgs },
+			},
+			{
+				type: "response.function_call_arguments.delta",
+				item_id: "fc_other",
+				output_index: 1,
+				delta: "STALE",
+			},
+			{
+				type: "response.output_item.done",
+				output_index: 0,
+				item: { type: "function_call", id: "fc_task", call_id: "call_task", name: "task", arguments: taskArgs },
+			},
+			{
+				type: "response.completed",
+				response: {
+					id: "resp_1",
+					status: "completed",
+					usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8, input_tokens_details: { cached_tokens: 0 } },
+				},
+			},
+		];
+		const sse = `${events.map(e => `data: ${JSON.stringify(e)}`).join("\n\n")}\n\n`;
+		const fetchMock: FetchImpl = (async () =>
+			new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })) as FetchImpl;
+
+		const toolcallEnds: Array<{ contentIndex: number; name: string; argumentsJson: string }> = [];
+		const model = { ...createCodexTestModel("https://chatgpt.com/backend-api"), preferWebsockets: false };
+		const aem = streamOpenAICodexResponses(model, context, { apiKey: token, fetch: fetchMock });
+		(async () => {
+			for await (const event of aem) {
+				if (event.type !== "toolcall_end") continue;
+				toolcallEnds.push({
+					contentIndex: event.contentIndex,
+					name: event.toolCall.name,
+					argumentsJson: JSON.stringify(event.toolCall.arguments),
+				});
+			}
+		})();
+		const result = await aem.result();
+
+		const calls = result.content.filter(c => c.type === "toolCall");
+		expect(calls).toHaveLength(2);
+		const byName = new Map(calls.map(c => [c.name, c] as const));
+		expect(byName.get("task")?.arguments).toEqual({ ops: [{ op: "start", task: "X" }] });
+		expect(byName.get("other")?.arguments).toEqual({ input: "hello" });
+		// `task` is the FIRST opened block (index 0); a stale delta after fc_other
+		// closed must NOT have appended "STALE" anywhere.
+		expect(JSON.stringify(result.content)).not.toContain("STALE");
+		// Stream events must address each tool call by its own content index.
+		expect(toolcallEnds.find(e => e.name === "task")?.contentIndex).toBe(0);
+		expect(toolcallEnds.find(e => e.name === "other")?.contentIndex).toBe(1);
+	});
+
 	it("waits for caller abort when SSE streams only no-progress status events", async () => {
 		const tempDir = TempDir.createSync("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
