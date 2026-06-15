@@ -387,7 +387,9 @@ describe("listClaudePluginRoots", () => {
 		const skills = await loadCapability<Skill>("skills", { cwd: tempDir });
 
 		expect(commands.find(command => command.name === "understand")).toBeUndefined();
-		expect(skills.all.find(skill => skill.name === "understand")?.frontmatter?.description).toBe("Build an understanding graph");
+		expect(skills.all.find(skill => skill.name === "understand")?.frontmatter?.description).toBe(
+			"Build an understanding graph",
+		);
 	});
 
 	test("reads slash commands directory from plugin manifest slash-commands field", async () => {
