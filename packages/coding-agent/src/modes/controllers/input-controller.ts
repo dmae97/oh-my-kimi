@@ -785,24 +785,35 @@ export class InputController {
 	}
 
 	handleCtrlC(): void {
-		const now = Date.now();
-		if (now - this.ctx.lastSigintTime < 500) {
-			void this.ctx.shutdown();
-		} else {
-			this.ctx.clearEditor();
-			this.ctx.lastSigintTime = now;
-		}
 		// Sync-flush the session JSONL so in-flight writes survive a hard exit.
 		// The TUI consumes Ctrl+C as a key event in raw mode, so postmortem's
-		// process-level SIGINT handler never fires. The second press still
-		// funnels through shutdown() which awaits its own async flush — the
-		// sync flush here is a superset that also covers the first-press case.
+		// process-level SIGINT handler never fires. shutdown() awaits its own
+		// async flush — this sync pass is a superset that also covers the
+		// first-press case and the hard-abort path below.
 		try {
 			this.ctx.sessionManager.flushSync();
 		} catch (err) {
 			logger.warn("session-manager sync flush on Ctrl+C failed", {
 				error: err instanceof Error ? err.message : String(err),
 			});
+		}
+
+		// Hard-abort: a Ctrl+C arriving while shutdown() is already running
+		// means the user has waited long enough for whatever teardown step is
+		// stuck (typically an extension's session_shutdown handler hanging on
+		// IPC). The 2s session_shutdown cap (see runner.ts) already bounds the
+		// common case; this is the defense-in-depth ladder for everything
+		// else. See issue #2600.
+		if (this.ctx.isShuttingDown) {
+			process.exit(130); // 128 + SIGINT
+		}
+
+		const now = Date.now();
+		if (now - this.ctx.lastSigintTime < 500) {
+			void this.ctx.shutdown();
+		} else {
+			this.ctx.clearEditor();
+			this.ctx.lastSigintTime = now;
 		}
 	}
 
