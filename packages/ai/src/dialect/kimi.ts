@@ -9,6 +9,7 @@ import type {
 	DialectToolResult,
 	InbandScanEvent,
 	InbandScanner,
+	InbandScannerOptions,
 } from "./types";
 
 export const KIMI_SECTION_BEGIN = "<|tool_calls_section_begin|>";
@@ -18,8 +19,18 @@ export const KIMI_CALL_END = "<|tool_call_end|>";
 export const KIMI_ARG_BEGIN = "<|tool_call_argument_begin|>";
 
 const TOKENS = [KIMI_SECTION_BEGIN, KIMI_SECTION_END, KIMI_CALL_BEGIN, KIMI_CALL_END, KIMI_ARG_BEGIN] as const;
+const THINK_OPEN = "<think>";
+const THINK_CLOSE = "</think>";
+const TOKENS_THINK = [
+	KIMI_SECTION_BEGIN,
+	KIMI_SECTION_END,
+	KIMI_CALL_BEGIN,
+	KIMI_CALL_END,
+	KIMI_ARG_BEGIN,
+	THINK_OPEN,
+] as const;
 
-type State = "outside" | "section" | "header" | "args";
+type State = "outside" | "section" | "header" | "args" | "thinking";
 
 export class KimiInbandScanner implements InbandScanner {
 	#buffer = "";
@@ -27,6 +38,12 @@ export class KimiInbandScanner implements InbandScanner {
 	#id = "";
 	#name = "";
 	#rawBlock = "";
+	#thinking = "";
+	readonly #parseThinking: boolean;
+
+	constructor(options: InbandScannerOptions = {}) {
+		this.#parseThinking = options.parseThinking !== false;
+	}
 
 	feed(text: string): InbandScanEvent[] {
 		if (text.length === 0) return [];
@@ -43,6 +60,11 @@ export class KimiInbandScanner implements InbandScanner {
 		while (this.#buffer.length > 0) {
 			if (this.#state === "outside") {
 				if (!this.#consumeOutside(final, events)) break;
+				continue;
+			}
+
+			if (this.#state === "thinking") {
+				if (!this.#consumeThinking(final, events)) break;
 				continue;
 			}
 
@@ -63,22 +85,63 @@ export class KimiInbandScanner implements InbandScanner {
 
 	#consumeOutside(final: boolean, events: InbandScanEvent[]): boolean {
 		const tokenStart = this.#nextTokenIndex();
-		if (tokenStart === -1) {
-			const hold = final ? 0 : partialSuffixOverlapAny(this.#buffer, TOKENS);
+		const thinkStart = this.#parseThinking ? this.#buffer.indexOf(THINK_OPEN) : -1;
+		let start = tokenStart;
+		if (thinkStart !== -1 && (start === -1 || thinkStart < start)) start = thinkStart;
+		if (start === -1) {
+			const tags = this.#parseThinking ? TOKENS_THINK : TOKENS;
+			const hold = final ? 0 : partialSuffixOverlapAny(this.#buffer, tags);
 			const emitEnd = this.#buffer.length - hold;
 			if (emitEnd > 0) events.push({ type: "text", text: this.#buffer.slice(0, emitEnd) });
 			this.#buffer = this.#buffer.slice(emitEnd);
 			return false;
 		}
 
-		if (tokenStart > 0) events.push({ type: "text", text: this.#buffer.slice(0, tokenStart) });
-		this.#buffer = this.#buffer.slice(tokenStart);
+		if (start > 0) events.push({ type: "text", text: this.#buffer.slice(0, start) });
+		this.#buffer = this.#buffer.slice(start);
+		if (this.#parseThinking && this.#buffer.startsWith(THINK_OPEN)) {
+			this.#buffer = this.#buffer.slice(THINK_OPEN.length);
+			this.#thinking = "";
+			events.push({ type: "thinkingStart" });
+			this.#state = "thinking";
+			return true;
+		}
 		const token = this.#tokenAtStart();
 		if (!token) return false;
 		this.#buffer = this.#buffer.slice(token.length);
 		if (token === KIMI_SECTION_BEGIN) this.#state = "section";
 		else events.push({ type: "text", text: token });
 		return true;
+	}
+
+	#consumeThinking(final: boolean, events: InbandScanEvent[]): boolean {
+		const close = this.#buffer.indexOf(THINK_CLOSE);
+		if (close === -1) {
+			const hold = final ? 0 : partialSuffixOverlapAny(this.#buffer, [THINK_CLOSE]);
+			this.#emitThinking(this.#buffer.slice(0, this.#buffer.length - hold), events);
+			this.#buffer = this.#buffer.slice(this.#buffer.length - hold);
+			if (final) {
+				this.#endThinking(events);
+				this.#state = "outside";
+			}
+			return false;
+		}
+		this.#emitThinking(this.#buffer.slice(0, close), events);
+		this.#buffer = this.#buffer.slice(close + THINK_CLOSE.length);
+		this.#endThinking(events);
+		this.#state = "outside";
+		return true;
+	}
+
+	#emitThinking(delta: string, events: InbandScanEvent[]): void {
+		if (delta.length === 0) return;
+		this.#thinking += delta;
+		events.push({ type: "thinkingDelta", delta });
+	}
+
+	#endThinking(events: InbandScanEvent[]): void {
+		events.push({ type: "thinkingEnd", thinking: this.#thinking });
+		this.#thinking = "";
 	}
 
 	#consumeSection(final: boolean): boolean {
@@ -220,7 +283,8 @@ function renderToolResults(results: readonly DialectToolResult[], _options?: Dia
 }
 
 function renderThinking(text: string): string {
-	return text;
+	if (!text) return "";
+	return `${THINK_OPEN}\n${text}\n${THINK_CLOSE}`;
 }
 
 function renderTranscript(messages: readonly Message[], _options?: DialectRenderOptions): string {
@@ -232,7 +296,7 @@ function renderTranscript(messages: readonly Message[], _options?: DialectRender
 			out += kimiTurn(
 				"assistant",
 				"assistant",
-				`${parts.thinking}${parts.text}${renderAssistantToolCalls(parts.toolCalls)}`,
+				`${renderThinking(parts.thinking)}${parts.text}${renderAssistantToolCalls(parts.toolCalls)}`,
 			);
 			i++;
 			continue;
@@ -263,7 +327,7 @@ function kimiTurn(role: "assistant" | "system" | "user", name: string, body: str
 const definition: DialectDefinition = {
 	dialect: "kimi",
 	prompt: dialectPrompt,
-	createScanner: () => new KimiInbandScanner(),
+	createScanner: options => new KimiInbandScanner(options),
 	renderToolCall,
 	renderAssistantToolCalls,
 	renderToolResults,

@@ -1,5 +1,5 @@
 import type { Message, ToolCall } from "../types";
-import { mintToolCallId, partialSuffixOverlapAny } from "./coercion";
+import { mintToolCallId, partialSuffixOverlap, partialSuffixOverlapAny } from "./coercion";
 import dialectPrompt from "./gemini.md" with { type: "text" };
 import { assistantTranscriptParts, collectToolResultRun, joinUserBodies, messageContentText } from "./rendering";
 import type {
@@ -8,14 +8,17 @@ import type {
 	DialectToolResult,
 	InbandScanEvent,
 	InbandScanner,
+	InbandScannerOptions,
 } from "./types";
 
 const CODE_OPEN = "```tool_code";
 const OUTPUT_OPEN = "```tool_outputs";
 const FENCE = "```";
 const OPEN_TAGS = [CODE_OPEN] as const;
+const THINK_OPEN = "```thinking\n";
+const OPEN_TAGS_THINK = [CODE_OPEN, THINK_OPEN] as const;
 
-type State = "outside" | "tool";
+type State = "outside" | "tool" | "thinking";
 
 interface ParsedCall {
 	name: string;
@@ -33,6 +36,12 @@ interface ParsedCall {
 export class GeminiInbandScanner implements InbandScanner {
 	#buffer = "";
 	#state: State = "outside";
+	#thinking = "";
+	readonly #parseThinking: boolean;
+
+	constructor(options: InbandScannerOptions = {}) {
+		this.#parseThinking = options.parseThinking !== false;
+	}
 
 	feed(text: string): InbandScanEvent[] {
 		if (text.length === 0) return [];
@@ -52,6 +61,11 @@ export class GeminiInbandScanner implements InbandScanner {
 				if (this.#state === "outside") break;
 				continue;
 			}
+			if (this.#state === "thinking") {
+				this.#consumeThinking(final, events);
+				if (this.#state === "thinking") break;
+				continue;
+			}
 			this.#consumeTool(final, events);
 			if (this.#state === "tool") break;
 		}
@@ -59,17 +73,58 @@ export class GeminiInbandScanner implements InbandScanner {
 	}
 
 	#consumeOutside(final: boolean, events: InbandScanEvent[]): void {
-		const open = this.#buffer.indexOf(CODE_OPEN);
-		if (open === -1) {
-			const hold = final ? 0 : partialSuffixOverlapAny(this.#buffer, OPEN_TAGS);
+		const code = this.#buffer.indexOf(CODE_OPEN);
+		const think = this.#parseThinking ? this.#buffer.indexOf(THINK_OPEN) : -1;
+		let start = code;
+		let isThink = false;
+		if (think !== -1 && (start === -1 || think < start)) {
+			start = think;
+			isThink = true;
+		}
+		if (start === -1) {
+			const tags = this.#parseThinking ? OPEN_TAGS_THINK : OPEN_TAGS;
+			const hold = final ? 0 : partialSuffixOverlapAny(this.#buffer, tags);
 			const emit = this.#buffer.slice(0, this.#buffer.length - hold);
 			if (emit.length > 0) events.push({ type: "text", text: emit });
 			this.#buffer = this.#buffer.slice(this.#buffer.length - hold);
 			return;
 		}
-		if (open > 0) events.push({ type: "text", text: this.#buffer.slice(0, open) });
-		this.#buffer = this.#buffer.slice(open + CODE_OPEN.length);
+		if (start > 0) events.push({ type: "text", text: this.#buffer.slice(0, start) });
+		if (isThink) {
+			this.#buffer = this.#buffer.slice(start + THINK_OPEN.length);
+			this.#thinking = "";
+			events.push({ type: "thinkingStart" });
+			this.#state = "thinking";
+			return;
+		}
+		this.#buffer = this.#buffer.slice(start + CODE_OPEN.length);
 		this.#state = "tool";
+	}
+
+	#consumeThinking(final: boolean, events: InbandScanEvent[]): void {
+		const close = this.#buffer.indexOf(FENCE);
+		if (close === -1) {
+			const hold = final ? 0 : partialSuffixOverlap(this.#buffer, FENCE);
+			this.#emitThinking(this.#buffer.slice(0, this.#buffer.length - hold), events);
+			this.#buffer = this.#buffer.slice(this.#buffer.length - hold);
+			if (final) this.#endThinking(events);
+			return;
+		}
+		this.#emitThinking(this.#buffer.slice(0, close), events);
+		this.#buffer = this.#buffer.slice(close + FENCE.length);
+		this.#endThinking(events);
+		this.#state = "outside";
+	}
+
+	#emitThinking(delta: string, events: InbandScanEvent[]): void {
+		if (delta.length === 0) return;
+		this.#thinking += delta;
+		events.push({ type: "thinkingDelta", delta });
+	}
+
+	#endThinking(events: InbandScanEvent[]): void {
+		events.push({ type: "thinkingEnd", thinking: this.#thinking });
+		this.#thinking = "";
 	}
 
 	#consumeTool(final: boolean, events: InbandScanEvent[]): void {
@@ -458,7 +513,8 @@ function renderToolResults(results: readonly DialectToolResult[]): string {
 }
 
 function renderThinking(text: string): string {
-	return text;
+	if (!text) return "";
+	return `${THINK_OPEN}${text}\n${FENCE}`;
 }
 
 function renderTranscript(messages: readonly Message[], options: DialectRenderOptions = {}): string {
@@ -484,10 +540,8 @@ function renderTranscript(messages: readonly Message[], options: DialectRenderOp
 		}
 		if (message.role === "assistant") {
 			const parts = assistantTranscriptParts(message);
-			out += geminiTurn(
-				"model",
-				`${parts.thinking}${parts.text}${renderAssistantToolCalls(parts.toolCalls, options)}`,
-			);
+			const thinking = parts.thinking ? `${renderThinking(parts.thinking)}\n` : "";
+			out += geminiTurn("model", `${thinking}${parts.text}${renderAssistantToolCalls(parts.toolCalls, options)}`);
 			i++;
 			continue;
 		}
@@ -529,7 +583,7 @@ function pyString(value: string): string {
 const definition: DialectDefinition = {
 	dialect: "gemini",
 	prompt: dialectPrompt,
-	createScanner: () => new GeminiInbandScanner(),
+	createScanner: options => new GeminiInbandScanner(options),
 	renderToolCall,
 	renderAssistantToolCalls,
 	renderToolResults,

@@ -17,6 +17,8 @@ Verified against: the official Gemma 3 function-calling guide (`ai.google.dev/ge
 
 There is **no** per-call id on the wire and **no** in-band reasoning marker — Gemini reasoning travels out of band as API "thought signatures", never as `<think>`-style text.
 
+> **OMP dialect note:** because this convention carries no native in-band reasoning marker, the OMP `gemini` dialect layers a sibling fenced ` ```thinking ` block (closed by a bare ` ``` `, exactly like ` ```tool_code `) so prompt-driven Gemini / Gemma-3 deployments can express reasoning in-band. This is an OMP convention, not part of Google's format.
+
 ## Roles / turn structure
 
 The Pythonic payload is independent of the envelope, and the envelope differs by deployment:

@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Breaking Changes
 
 - Renamed the public dialect entrypoint from `@oh-my-pi/pi-ai/grammar` to `@oh-my-pi/pi-ai/dialect`.
@@ -21,6 +22,7 @@
 - Added `wrapInbandToolStream` function to process streaming responses with in-band tool call parsing
 - Added `ThinkingInbandScanner` for parsing thinking/reasoning blocks across dialects
 - Added `OwnedStream` class for managing dialect-aware streaming with tool call events
+- Added in-band thinking channels to every dialect that was missing one: `gemini` (a ```` ```thinking ```` fence mirroring ```` ```tool_code ````), `gemma` (its native `<|channel>thought…<channel|>` reasoning channel), `kimi` (`<think>…</think>`), and `pi` (`<thinking>…</thinking>`). Each scanner now parses reasoning into thinking events instead of leaking chain-of-thought into the visible reply, and every dialect's `renderThinking` is a real channel that round-trips back through its scanner (no passthrough renderers).
 
 ### Changed
 
@@ -32,6 +34,11 @@
 - Removed `src/grammar/factory.ts` (replaced by `src/dialect/factory.ts`)
 - Removed `src/grammar/rendering.ts` (functionality moved to `src/dialect/rendering.ts`)
 - Removed `src/grammar/xml.ts` (replaced by `src/dialect/xml.ts`)
+
+### Fixed
+
+- Fixed Gemini, Gemma, Kimi, and Pi in-band scanners to respect `parseThinking: false`, leaving private reasoning markers in visible text when parsing is disabled
+- Fixed thinking-channel parsing for streaming Gemini, Gemma, Kimi, and Pi outputs so split or partial `<thinking>` blocks no longer leak into visible replies
 
 ## [15.13.3] - 2026-06-15
 

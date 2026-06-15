@@ -36,6 +36,14 @@ verbatim tool result
 </tool_response>
 ```
 
+Private reasoning goes in a `<thinking>…</thinking>` block before your calls:
+
+```text
+<thinking>
+brief reasoning
+</thinking>
+```
+
 ## Rules
 
 - `NAME` must match a listed function; never wrap calls in JSON or fences.
@@ -44,6 +52,6 @@ verbatim tool result
 - An object opens a child block whose scalar subfields may also be attributes; an array repeats its element once per item.
 - The inline body fills the first unset string-typed parameter and may contain any raw text except `</call:NAME>`.
 - Emit parallel calls as consecutive blocks. NEVER invent call ids; results are positional.
-- This format defines no thinking channel; never emit `<think>`.
+- Private reasoning goes in a `<thinking>…</thinking>` block before your calls; NEVER put calls inside it.
 - Read each `<tool_response>` in call order. NEVER emit `<tool_response>` yourself.
 - After emitting your tool calls, YOU MUST EMIT THE STOP SEQUENCE AND HALT.

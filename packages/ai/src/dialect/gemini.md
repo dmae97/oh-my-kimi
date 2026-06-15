@@ -26,10 +26,18 @@ verbatim tool result
 ```
 ````
 
+Put any private reasoning in a fenced ` ```thinking ` block before the ` ```tool_code ` block:
+
+````text
+```thinking
+brief reasoning
+```
+````
+
 ## Rules
 
 - The function name MUST match a listed function; arguments are keyword form (`name=value`).
 - Multiple calls = a single `[...]` list (or one `default_api...` call per line) inside one ` ```tool_code ` block.
-- Put any reasoning as plain text before the ` ```tool_code ` block, never inside it.
+- Put private reasoning in a ` ```thinking ` block before the ` ```tool_code ` block, never inside ` ```tool_code `.
 - Read each ` ```tool_outputs ` block in call order. NEVER write a ` ```tool_outputs ` block yourself.
 - After emitting the ` ```tool_code ` block, YOU MUST STOP AND HALT.

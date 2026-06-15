@@ -15,10 +15,14 @@ Gemma 4 wraps each structural element in a paired token. Note the **asymmetric p
 | `<|tool>` | `<tool|>` | A tool **declaration** block (in the system turn) |
 | `<|tool_call>` | `<tool_call|>` | One tool **call** emitted by the model |
 | `<|tool_response>` | `<tool_response|>` | One tool **result** fed back to the model |
+| `<|think|>` | — | Thinking-mode enable flag, injected in the system turn |
+| `<|channel>` | `<channel|>` | Reasoning channel; `<|channel>thought` opens the model's chain-of-thought (closed by `<channel|>`) before the visible reply |
 | `<|"|>` | `<|"|>` | String-literal delimiter (same token on both ends) |
 | `<eos>` | — | End of sequence |
 
 Because the string delimiter is a token (`<|"|>`), values may contain raw ASCII quotes and commas without escaping — only a literal `<|"|>` token sequence cannot appear inside a string.
+
+Thinking variants emit reasoning in a dedicated channel — `<|channel>thought\n…\n<channel|>` at the start of the model turn, before the reply (`enable_thinking` injects a `<|think|>` flag into the system turn). Prior-turn thoughts are stripped from history except on a tool-calling turn, where they are preserved between the call and its response.
 
 ## Roles / turn structure
 

@@ -1,5 +1,5 @@
 import type { Message, ToolCall } from "../types";
-import { mintToolCallId, partialSuffixOverlapAny } from "./coercion";
+import { mintToolCallId, partialSuffixOverlap, partialSuffixOverlapAny } from "./coercion";
 import dialectPrompt from "./gemma.md" with { type: "text" };
 import { assistantTranscriptParts, collectToolResultRun, messageContentText } from "./rendering";
 import type {
@@ -8,6 +8,7 @@ import type {
 	DialectToolResult,
 	InbandScanEvent,
 	InbandScanner,
+	InbandScannerOptions,
 } from "./types";
 
 const CALL_OPEN = "<|tool_call>";
@@ -16,9 +17,12 @@ const STRING = '<|"|>';
 const RESPONSE_OPEN = "<|tool_response>";
 const RESPONSE_CLOSE = "<tool_response|>";
 const OPEN_TAGS = [CALL_OPEN] as const;
+const THOUGHT_OPEN = "<|channel>thought\n";
+const THOUGHT_CLOSE = "<channel|>";
+const OPEN_TAGS_THINK = [CALL_OPEN, THOUGHT_OPEN] as const;
 const CALL_HEAD = /^call:\s*([A-Za-z_]\w*)\s*\{/;
 
-type State = "outside" | "tool";
+type State = "outside" | "tool" | "thinking";
 
 interface ParsedCall {
 	name: string;
@@ -34,6 +38,12 @@ interface ParsedCall {
 export class GemmaInbandScanner implements InbandScanner {
 	#buffer = "";
 	#state: State = "outside";
+	#thinking = "";
+	readonly #parseThinking: boolean;
+
+	constructor(options: InbandScannerOptions = {}) {
+		this.#parseThinking = options.parseThinking !== false;
+	}
 
 	feed(text: string): InbandScanEvent[] {
 		if (text.length === 0) return [];
@@ -53,6 +63,11 @@ export class GemmaInbandScanner implements InbandScanner {
 				if (this.#state === "outside") break;
 				continue;
 			}
+			if (this.#state === "thinking") {
+				this.#consumeThinking(final, events);
+				if (this.#state === "thinking") break;
+				continue;
+			}
 			this.#consumeTool(final, events);
 			if (this.#state === "tool") break;
 		}
@@ -60,17 +75,58 @@ export class GemmaInbandScanner implements InbandScanner {
 	}
 
 	#consumeOutside(final: boolean, events: InbandScanEvent[]): void {
-		const open = this.#buffer.indexOf(CALL_OPEN);
-		if (open === -1) {
-			const hold = final ? 0 : partialSuffixOverlapAny(this.#buffer, OPEN_TAGS);
+		const call = this.#buffer.indexOf(CALL_OPEN);
+		const thought = this.#parseThinking ? this.#buffer.indexOf(THOUGHT_OPEN) : -1;
+		let start = call;
+		let isThought = false;
+		if (thought !== -1 && (start === -1 || thought < start)) {
+			start = thought;
+			isThought = true;
+		}
+		if (start === -1) {
+			const tags = this.#parseThinking ? OPEN_TAGS_THINK : OPEN_TAGS;
+			const hold = final ? 0 : partialSuffixOverlapAny(this.#buffer, tags);
 			const emit = this.#buffer.slice(0, this.#buffer.length - hold);
 			if (emit.length > 0) events.push({ type: "text", text: emit });
 			this.#buffer = this.#buffer.slice(this.#buffer.length - hold);
 			return;
 		}
-		if (open > 0) events.push({ type: "text", text: this.#buffer.slice(0, open) });
-		this.#buffer = this.#buffer.slice(open + CALL_OPEN.length);
+		if (start > 0) events.push({ type: "text", text: this.#buffer.slice(0, start) });
+		if (isThought) {
+			this.#buffer = this.#buffer.slice(start + THOUGHT_OPEN.length);
+			this.#thinking = "";
+			events.push({ type: "thinkingStart" });
+			this.#state = "thinking";
+			return;
+		}
+		this.#buffer = this.#buffer.slice(start + CALL_OPEN.length);
 		this.#state = "tool";
+	}
+
+	#consumeThinking(final: boolean, events: InbandScanEvent[]): void {
+		const close = this.#buffer.indexOf(THOUGHT_CLOSE);
+		if (close === -1) {
+			const hold = final ? 0 : partialSuffixOverlap(this.#buffer, THOUGHT_CLOSE);
+			this.#emitThinking(this.#buffer.slice(0, this.#buffer.length - hold), events);
+			this.#buffer = this.#buffer.slice(this.#buffer.length - hold);
+			if (final) this.#endThinking(events);
+			return;
+		}
+		this.#emitThinking(this.#buffer.slice(0, close), events);
+		this.#buffer = this.#buffer.slice(close + THOUGHT_CLOSE.length);
+		this.#endThinking(events);
+		this.#state = "outside";
+	}
+
+	#emitThinking(delta: string, events: InbandScanEvent[]): void {
+		if (delta.length === 0) return;
+		this.#thinking += delta;
+		events.push({ type: "thinkingDelta", delta });
+	}
+
+	#endThinking(events: InbandScanEvent[]): void {
+		events.push({ type: "thinkingEnd", thinking: this.#thinking });
+		this.#thinking = "";
 	}
 
 	#consumeTool(final: boolean, events: InbandScanEvent[]): void {
@@ -255,7 +311,8 @@ function renderToolResults(results: readonly DialectToolResult[], _options: Dial
 }
 
 function renderThinking(text: string): string {
-	return text;
+	if (!text) return "";
+	return `${THOUGHT_OPEN}${text}${THOUGHT_CLOSE}`;
 }
 
 function renderTranscript(messages: readonly Message[], options: DialectRenderOptions = {}): string {
@@ -265,7 +322,7 @@ function renderTranscript(messages: readonly Message[], options: DialectRenderOp
 		const message = messages[i]!;
 		if (message.role === "assistant") {
 			const parts = assistantTranscriptParts(message);
-			let body = `${parts.thinking}${parts.text}${renderAssistantToolCalls(parts.toolCalls, options)}`;
+			let body = `${renderThinking(parts.thinking)}${parts.text}${renderAssistantToolCalls(parts.toolCalls, options)}`;
 			let next = i + 1;
 			if (next < messages.length && messages[next]!.role === "toolResult") {
 				const run = collectToolResultRun(messages, next);
@@ -317,7 +374,7 @@ function gemmaTurn(role: "model" | "system" | "user", body: string): string {
 const definition: DialectDefinition = {
 	dialect: "gemma",
 	prompt: dialectPrompt,
-	createScanner: () => new GemmaInbandScanner(),
+	createScanner: options => new GemmaInbandScanner(options),
 	renderToolCall,
 	renderAssistantToolCalls,
 	renderToolResults,

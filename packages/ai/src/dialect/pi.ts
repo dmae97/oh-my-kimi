@@ -24,11 +24,15 @@ import type {
 } from "./types";
 
 const CALL_PREFIX = "<call:";
+const THINK_OPEN = "<thinking>";
+const THINK_CLOSE = "</thinking>";
+const CALL_TAGS = [CALL_PREFIX] as const;
+const OUTSIDE_TAGS = [CALL_PREFIX, THINK_OPEN] as const;
 const NAME_START = /[A-Za-z_]/;
 const NAME_CHAR = /[A-Za-z0-9_-]/;
 const EMPTY_STRING_ARGS: ReadonlySet<string> = new Set<string>();
 
-type ScannerState = "outside" | "body";
+type ScannerState = "outside" | "body" | "thinking";
 type BodyMode = "undecided" | "inline" | "members";
 
 type RawAttribute = { name: string; value: string | true };
@@ -65,11 +69,14 @@ export class PiNativeInbandScanner implements InbandScanner {
 	#rawBlock = "";
 	readonly #argShapes: Map<string, ToolArgShape>;
 	readonly #stringArgs: (toolName: string) => ReadonlySet<string>;
+	#thinking = "";
+	readonly #parseThinking: boolean;
 
 	constructor(options: InbandScannerOptions = {}) {
 		this.#argShapes = buildArgShapes(options.tools);
 		this.#stringArgs =
 			options.stringArgs ?? (toolName => this.#argShapes.get(toolName)?.stringArgs ?? EMPTY_STRING_ARGS);
+		this.#parseThinking = options.parseThinking !== false;
 	}
 
 	feed(text: string): InbandScanEvent[] {
@@ -87,6 +94,11 @@ export class PiNativeInbandScanner implements InbandScanner {
 		while (this.#buffer.length > 0) {
 			if (this.#state === "outside") {
 				if (!this.#consumeOutside(events, final)) break;
+				continue;
+			}
+
+			if (this.#state === "thinking") {
+				if (!this.#consumeThinking(events, final)) break;
 				continue;
 			}
 
@@ -112,18 +124,34 @@ export class PiNativeInbandScanner implements InbandScanner {
 	}
 
 	#consumeOutside(events: InbandScanEvent[], final: boolean): boolean {
-		const open = this.#buffer.indexOf(CALL_PREFIX);
-		if (open === -1) {
-			const hold = final ? 0 : partialSuffixOverlapAny(this.#buffer, [CALL_PREFIX]);
+		const call = this.#buffer.indexOf(CALL_PREFIX);
+		const think = this.#parseThinking ? this.#buffer.indexOf(THINK_OPEN) : -1;
+		let start = call;
+		let isThink = false;
+		if (think !== -1 && (start === -1 || think < start)) {
+			start = think;
+			isThink = true;
+		}
+		if (start === -1) {
+			const tags = this.#parseThinking ? OUTSIDE_TAGS : CALL_TAGS;
+			const hold = final ? 0 : partialSuffixOverlapAny(this.#buffer, tags);
 			const emit = this.#buffer.slice(0, this.#buffer.length - hold);
 			if (emit.length > 0) events.push({ type: "text", text: emit });
 			this.#buffer = this.#buffer.slice(this.#buffer.length - hold);
 			return false;
 		}
 
-		if (open > 0) {
-			events.push({ type: "text", text: this.#buffer.slice(0, open) });
-			this.#buffer = this.#buffer.slice(open);
+		if (start > 0) {
+			events.push({ type: "text", text: this.#buffer.slice(0, start) });
+			this.#buffer = this.#buffer.slice(start);
+		}
+
+		if (isThink) {
+			this.#buffer = this.#buffer.slice(THINK_OPEN.length);
+			this.#thinking = "";
+			events.push({ type: "thinkingStart" });
+			this.#state = "thinking";
+			return true;
 		}
 
 		const tagEnd = findTagEnd(this.#buffer, 0);
@@ -156,6 +184,36 @@ export class PiNativeInbandScanner implements InbandScanner {
 		this.#state = "body";
 		this.#bodyMode = "undecided";
 		return true;
+	}
+
+	#consumeThinking(events: InbandScanEvent[], final: boolean): boolean {
+		const close = this.#buffer.indexOf(THINK_CLOSE);
+		if (close === -1) {
+			const hold = final ? 0 : partialSuffixOverlapAny(this.#buffer, [THINK_CLOSE]);
+			this.#emitThinking(this.#buffer.slice(0, this.#buffer.length - hold), events);
+			this.#buffer = this.#buffer.slice(this.#buffer.length - hold);
+			if (final) {
+				this.#endThinking(events);
+				this.#state = "outside";
+			}
+			return false;
+		}
+		this.#emitThinking(this.#buffer.slice(0, close), events);
+		this.#buffer = this.#buffer.slice(close + THINK_CLOSE.length);
+		this.#endThinking(events);
+		this.#state = "outside";
+		return true;
+	}
+
+	#emitThinking(delta: string, events: InbandScanEvent[]): void {
+		if (delta.length === 0) return;
+		this.#thinking += delta;
+		events.push({ type: "thinkingDelta", delta });
+	}
+
+	#endThinking(events: InbandScanEvent[]): void {
+		events.push({ type: "thinkingEnd", thinking: this.#thinking });
+		this.#thinking = "";
 	}
 
 	#beginCall(tag: OpenTag, events: InbandScanEvent[]): void {
