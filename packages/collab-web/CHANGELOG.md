@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.13.1] - 2026-06-15
+
 ### Added
 
 - Added `16px` font-size overrides for all text inputs and textareas on mobile viewports to prevent iOS Safari from automatically zooming in the page on focus

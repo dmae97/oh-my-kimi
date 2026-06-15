@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.13.1] - 2026-06-15
+
 ### Added
 
 - Added two spacing-tuned frame variants to `SHAPE_VARIANTS`: `8on22-bw` (8x13 glyphs on a 22px pitch — extra line spacing) and `11on16-bw` (8x13 glyphs on an 11px advance — extra letter spacing). Both pin the indexed `stretch: false` path, so the native renderer draws natural-size glyphs on the padded cell box (the Rust path already advances by `cellWidth` and the new variants validate horizontal padding)
@@ -10,8 +12,6 @@
 ### Changed
 
 - **Changed the per-provider default shapes to the spacing-tuned cells.** The previous shapes were tuned on the SQuAD *prose* eval, where dense cells won; a new tool-result legibility benchmark (`research/toolbench.py` — real `search`/`read`/`find` output with structure-sensitive QA) showed the prose-era density erases the line numbers and indentation that code/search output depends on. Anthropic moves from `6x12-dim` to `11on16-bw` (opus-4.8 f1 .806 vs .755 for plain `8on16-bw` and .351 for `6x12-dim`, which fell below the OCR ~16px/char floor and abstained); OpenAI and Google move to `8on22-bw` (gemini-3.5-flash f1 .934 vs .807 for `8on16-bw` and .287 for `doc-8on16-sent-dim`; same leading win on gpt-5.5/gpt-5.4-mini). Kimi and GLM keep their measured `8on16-bw`. The bigger cells pack fewer chars per frame, so inline frame-swapping now breaks even at a larger tool-result size
-
-## [15.13.0] - 2026-06-14
 
 ## [15.12.1] - 2026-06-12
 

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.13.1] - 2026-06-15
+
 ### Added
 
 - Added repetition-loop detection to the streaming agent loop for Gemini-family providers. A runaway run of a repeated text or thinking unit is detected mid-stream from a bounded rolling tail (O(1) per delta), the provider request is aborted, the repeated tail is collapsed to a single representative copy, and the turn ends gracefully with an `error` stop reason. Legitimate all-numeric/whitespace/punctuation runs (hexdumps, zero-fills, numeric tables) are not misclassified as loops ([#2549](https://github.com/can1357/oh-my-pi/pull/2549) by [@usr-bin-roygbiv](https://github.com/usr-bin-roygbiv)).
@@ -11,8 +13,6 @@
 - Fixed repetition loop handling to collapse repeated `thinking` blocks to a single representative copy when a loop is detected
 - Fixed repetition-loop detection to ignore repeats that contain only digits, whitespace, or punctuation so legitimate numeric outputs no longer stop with a repetition-loop error
 - Fixed false-positive repetition-loop checks across `text` and `thinking` stream boundaries by tracking loop detection per block type
-
-## [15.13.0] - 2026-06-14
 
 ## [15.12.6] - 2026-06-14
 

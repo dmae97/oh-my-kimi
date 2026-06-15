@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [15.13.1] - 2026-06-15
+
 ### Breaking Changes
 
 - Rejected edits anchored to lines not displayed in the tagged read/search output, requiring unseen ranges to be re-read before reapplying
@@ -16,8 +18,6 @@
 - Normalized cwd-relative hashline paths to forward-slash form on Windows.
 - Parser now treats a leading `\` on inline payload bodies as the payload delimiter, matching standalone payload rows.
 - Restored the warning emitted when escaped indented payload rows (`\\    TEXT`) are accepted as payload delimiters.
-
-## [15.13.0] - 2026-06-14
 
 ## [15.12.5] - 2026-06-13
 
