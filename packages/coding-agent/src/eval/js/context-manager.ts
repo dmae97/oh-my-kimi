@@ -27,6 +27,7 @@ interface WorkerHandle {
 	mode: "worker" | "inline";
 	send(msg: WorkerInbound): void;
 	onMessage(handler: (msg: WorkerOutbound) => void): () => void;
+	onError(handler: (error: Error) => void): () => void;
 	close(): Promise<boolean>;
 	terminate(): Promise<void>;
 }
@@ -186,47 +187,92 @@ async function acquireSession(sessionKey: string, snapshot: SessionSnapshot, tim
 	if (starting) return await starting;
 
 	const startup = (async (): Promise<JsSession> => {
-		const worker = await spawnJsWorker();
+		// The message listener must be attached synchronously after `new Worker`:
+		// Bun drops messages posted before a listener exists, and WorkerCore emits
+		// `ready` from its constructor on load. `spawnJsWorker` + `initWorker` run with
+		// no intervening await, so `ready` can never race the attach.
+		const worker = spawnJsWorker();
 		const session: JsSession = {
 			sessionKey,
 			worker,
 			state: "alive",
 			pending: new Map(),
 		};
-		const { promise: readyPromise, resolve: resolveReady, reject: rejectReady } = Promise.withResolvers<void>();
-		let resolved = false;
-		const unsubscribe = worker.onMessage(msg => {
-			if (!resolved && msg.type === "ready") {
-				resolved = true;
-				resolveReady();
-				return;
-			}
-			if (!resolved && msg.type === "init-failed") {
-				resolved = true;
-				rejectReady(errorFromPayload(msg.error));
-				return;
-			}
-			handleSessionMessage(session, msg);
-		});
+		// Init headroom is the fixed infrastructure floor; the caller's per-cell timeout
+		// dominates when larger so users can grant more by raising `timeout` on a cell.
+		const readyTimeoutMs = Math.max(WORKER_INIT_TIMEOUT_MS, timeoutMs ?? 0);
 		try {
-			// Init headroom is the fixed infrastructure floor; the caller's per-cell timeout
-			// dominates when larger so users can grant more by raising `timeout` on a cell.
-			const readyTimeoutMs = Math.max(WORKER_INIT_TIMEOUT_MS, timeoutMs ?? 0);
-			await raceWithTimeout(readyPromise, readyTimeoutMs, "Timed out initializing JS eval worker");
-			worker.send({ type: "init", snapshot });
-			sessions.set(sessionKey, session);
-			return session;
+			await initWorker(session, snapshot, readyTimeoutMs);
 		} catch (error) {
-			unsubscribe();
+			// Worker-thread crash/load failures surface asynchronously via the worker
+			// `error` event — after `spawnJsWorker`'s synchronous try/catch already
+			// returned — so the only signal is the rejected handshake. Retry on the
+			// inline worker so a broken module graph fails fast instead of stalling
+			// every cell on the init timeout and then dying with exitCode 1.
 			await worker.terminate().catch(() => undefined);
-			throw error;
+			if (worker.mode === "inline") throw error;
+			logger.warn("JS eval worker init failed; retrying with inline worker (no sync-loop guard)", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+			const inline = spawnInlineWorker();
+			session.worker = inline;
+			session.state = "alive";
+			try {
+				await initWorker(session, snapshot, readyTimeoutMs);
+			} catch (inlineError) {
+				await inline.terminate().catch(() => undefined);
+				throw inlineError;
+			}
 		}
+		sessions.set(sessionKey, session);
+		return session;
 	})();
 	startingSessions.set(sessionKey, startup);
 	try {
 		return await startup;
 	} finally {
 		if (startingSessions.get(sessionKey) === startup) startingSessions.delete(sessionKey);
+	}
+}
+
+async function initWorker(session: JsSession, snapshot: SessionSnapshot, timeoutMs: number): Promise<void> {
+	const worker = session.worker;
+	const { promise: readyPromise, resolve: resolveReady, reject: rejectReady } = Promise.withResolvers<void>();
+	let resolved = false;
+	const unsubscribeMessage = worker.onMessage(msg => {
+		if (!resolved && msg.type === "ready") {
+			resolved = true;
+			resolveReady();
+			return;
+		}
+		if (!resolved && msg.type === "init-failed") {
+			resolved = true;
+			rejectReady(errorFromPayload(msg.error));
+			return;
+		}
+		handleSessionMessage(session, msg);
+	});
+	const unsubscribeError = worker.onError(error => {
+		if (!resolved) {
+			resolved = true;
+			rejectReady(error);
+			return;
+		}
+		// Worker died after a successful handshake: tear the session down so the
+		// in-flight run (and the next acquire) fail fast instead of hanging on a
+		// worker that will never reply.
+		void killSessionFor(session, error, { force: true });
+	});
+	try {
+		await raceWithTimeout(readyPromise, timeoutMs, "Timed out initializing JS eval worker");
+		worker.send({ type: "init", snapshot });
+	} catch (error) {
+		// Handshake failed (timeout, init-failed, or worker error): drop both listeners
+		// so the abandoned worker can't keep routing messages into a session the caller
+		// is about to discard or retry on the inline fallback.
+		unsubscribeMessage();
+		unsubscribeError();
+		throw error;
 	}
 }
 
@@ -379,7 +425,7 @@ async function raceWithTimeout<T>(promise: Promise<T>, timeoutMs: number, reason
 	}
 }
 
-async function spawnJsWorker(): Promise<WorkerHandle> {
+function spawnJsWorker(): WorkerHandle {
 	try {
 		const hostEntry = workerHostEntry();
 		const worker = hostEntry
@@ -404,6 +450,17 @@ function wrapBunWorker(worker: Worker): WorkerHandle {
 			const wrap = (event: MessageEvent): void => handler(event.data as WorkerOutbound);
 			worker.addEventListener("message", wrap);
 			return () => worker.removeEventListener("message", wrap);
+		},
+		onError(handler) {
+			const onError = (event: ErrorEvent): void => handler(errorFromWorkerEvent(event));
+			const onMessageError = (event: MessageEvent): void =>
+				handler(new ToolError(`JS eval worker message error: ${String(event.data)}`));
+			worker.addEventListener("error", onError);
+			worker.addEventListener("messageerror", onMessageError);
+			return () => {
+				worker.removeEventListener("error", onError);
+				worker.removeEventListener("messageerror", onMessageError);
+			};
 		},
 		async close() {
 			const { promise: closed, resolve } = Promise.withResolvers<boolean>();
@@ -443,6 +500,12 @@ function wrapBunWorker(worker: Worker): WorkerHandle {
 	};
 }
 
+function errorFromWorkerEvent(event: ErrorEvent): Error {
+	if (event.error instanceof Error) return event.error;
+	if (event.message) return new Error(event.message);
+	return new Error("Unknown JS eval worker error");
+}
+
 /**
  * Inline fallback for environments where Bun cannot spawn the worker entry
  * (e.g. some test runners). Preserves behavior but cannot interrupt synchronous
@@ -473,6 +536,7 @@ function spawnInlineWorker(): WorkerHandle {
 			hostListeners.add(handler);
 			return () => hostListeners.delete(handler);
 		},
+		onError: () => () => {},
 		async close() {
 			const { promise: closed, resolve } = Promise.withResolvers<boolean>();
 			let settled = false;
