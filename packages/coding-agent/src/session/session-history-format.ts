@@ -24,6 +24,8 @@ export interface HistoryFormatOptions {
 	title?: string;
 	/** Render assistant thinking blocks (default: elided). */
 	includeThinking?: boolean;
+	/** Render tool intent comment before tool call lines. */
+	includeToolIntent?: boolean;
 }
 
 /** Max length of the primary-arg summary inside `→ tool(...)` lines. */
@@ -102,17 +104,30 @@ function toolCallLine(
 	name: string,
 	args: Record<string, unknown> | undefined,
 	result: ToolResultMessage | undefined,
+	includeToolIntent?: boolean,
 ): string {
 	const head = `→ ${name}(${primaryArg(args)})`;
-	if (!result) return `${head} ⇒ pending`;
-	const text = contentToText(result.content);
-	const lines = lineCount(text);
-	const count = `${lines} ${lines === 1 ? "line" : "lines"}`;
-	if (result.isError) {
-		const firstLine = oneLine(text.split("\n", 1)[0] ?? "");
-		return firstLine ? `${head} ⇒ error · ${count} — ${firstLine}` : `${head} ⇒ error · ${count}`;
+	let base: string;
+	if (!result) {
+		base = `${head} ⇒ pending`;
+	} else {
+		const text = contentToText(result.content);
+		const lines = lineCount(text);
+		const count = `${lines} ${lines === 1 ? "line" : "lines"}`;
+		if (result.isError) {
+			const firstLine = oneLine(text.split("\n", 1)[0] ?? "");
+			base = firstLine ? `${head} ⇒ error · ${count} — ${firstLine}` : `${head} ⇒ error · ${count}`;
+		} else {
+			base = `${head} ⇒ ok · ${count}`;
+		}
 	}
-	return `${head} ⇒ ok · ${count}`;
+
+	const intent = includeToolIntent ? args?.[INTENT_FIELD] : undefined;
+	if (typeof intent === "string" && intent.trim()) {
+		const formattedIntent = oneLine(intent, 80);
+		return `# ${formattedIntent}\n${base}`;
+	}
+	return base;
 }
 
 /** One line for a user-initiated `!`/`$` execution. */
@@ -195,7 +210,7 @@ export function formatSessionHistoryMarkdown(messages: unknown[], opts?: History
 					} else if (block.type === "toolCall") {
 						const result = resultsByCallId.get(block.id);
 						if (result) consumed.add(block.id);
-						body.push(toolCallLine(block.name, block.arguments, result));
+						body.push(toolCallLine(block.name, block.arguments, result, opts?.includeToolIntent));
 					} else if (opts?.includeThinking && block.type === "thinking" && block.thinking.trim()) {
 						body.push(`_thinking:_ ${block.thinking}`);
 					}
@@ -208,7 +223,7 @@ export function formatSessionHistoryMarkdown(messages: unknown[], opts?: History
 			case "toolResult": {
 				// Normally consumed by its toolCall; orphans (e.g. truncated history) get their own line.
 				if (consumed.has(msg.toolCallId)) break;
-				lines.push(toolCallLine(msg.toolName, undefined, msg), "");
+				lines.push(toolCallLine(msg.toolName, undefined, msg, opts?.includeToolIntent), "");
 				break;
 			}
 			case "bashExecution": {

@@ -157,7 +157,7 @@ export class AdvisorRuntime {
 			.filter(m => !(m.role === "custom" && (m as { customType?: string }).customType === "advisor"));
 		this.#lastCount = all.length;
 		if (delta.length === 0) return null;
-		const md = formatSessionHistoryMarkdown(delta, { includeThinking: true });
+		const md = formatSessionHistoryMarkdown(delta, { includeThinking: true, includeToolIntent: true });
 		return md.trim() ? md : null;
 	}
 
