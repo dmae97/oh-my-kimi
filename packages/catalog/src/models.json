@@ -78345,25 +78345,6 @@
 				]
 			}
 		},
-		"mimo-v2.5-asr": {
-			"id": "mimo-v2.5-asr",
-			"name": "mimo-v2.5-asr",
-			"api": "openai-completions",
-			"provider": "xiaomi",
-			"baseUrl": "https://api.xiaomimimo.com/v1",
-			"reasoning": false,
-			"input": [
-				"text"
-			],
-			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": null,
-			"maxTokens": null
-		},
 		"mimo-v2.5-pro": {
 			"id": "mimo-v2.5-pro",
 			"name": "MiMo-V2.5-Pro",
