@@ -51,6 +51,55 @@ function publishDiagnostics(client: LspClient, uri: string, diagnostics: Diagnos
 	client.diagnosticsVersion += 1;
 }
 
+/**
+ * Deterministic virtual clock that drives the production diagnostics poll/settle
+ * loop and the inline-vs-deferred race without any real wall-clock waiting.
+ *
+ * The writethrough's only time sources are `Bun.sleep` (100ms poll interval,
+ * 500ms inline budget) and `Date.now()` (poll-loop deadline + settle window).
+ * {@link installVirtualTime} routes both through this clock: each `Bun.sleep(ms)`
+ * advances virtual time by `ms` (firing any publish callbacks that come due) and
+ * resolves on the microtask queue, so the loop spins to completion instantly and
+ * `Date.now()` math stays consistent with the same advancing time. Server
+ * publishes are scheduled on the clock via {@link VirtualClock.in}, so the loop's
+ * own advancing drives exactly when fresh/stale diagnostics become visible.
+ */
+class VirtualClock {
+	now: number;
+	private seq = 0;
+	private events: Array<{ at: number; seq: number; fn: () => void }> = [];
+	constructor(base: number) {
+		this.now = base;
+	}
+	/** Schedule `fn` to fire `delay` ms from the current virtual time. */
+	in(delay: number, fn: () => void): void {
+		this.events.push({ at: this.now + delay, seq: this.seq++, fn });
+	}
+	/** Advance virtual time by `ms`, firing every due callback in scheduled order. */
+	advance(ms: number): void {
+		const target = this.now + ms;
+		this.events.sort((a, b) => a.at - b.at || a.seq - b.seq);
+		while (this.events.length > 0 && this.events[0]!.at <= target) {
+			const ev = this.events.shift()!;
+			this.now = Math.max(this.now, ev.at);
+			ev.fn();
+		}
+		this.now = target;
+	}
+}
+
+/**
+ * Replace real time with `clock` for the duration of a test. Restored by
+ * `vi.restoreAllMocks()` in afterEach, keeping the file full-suite-safe.
+ */
+function installVirtualTime(clock: VirtualClock): void {
+	vi.spyOn(Date, "now").mockImplementation(() => clock.now);
+	vi.spyOn(Bun, "sleep").mockImplementation(((ms: number) => {
+		clock.advance(ms);
+		return Promise.resolve();
+	}) as typeof Bun.sleep);
+}
+
 describe("LSP diagnostics freshness", () => {
 	let tempDir: TempDir;
 
@@ -68,6 +117,8 @@ describe("LSP diagnostics freshness", () => {
 		const uri = fileToUri(filePath);
 		const client = createClient(tempDir.path(), TEST_SERVER);
 		client.openFiles.set(uri, { version: 1, languageId: "typescript" });
+		const clock = new VirtualClock(Date.now());
+		installVirtualTime(clock);
 
 		vi.spyOn(lspConfig, "loadConfig").mockReturnValue({ servers: {}, idleTimeoutMs: undefined });
 		vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([["test-lsp", TEST_SERVER]]);
@@ -84,12 +135,12 @@ describe("LSP diagnostics freshness", () => {
 		});
 		vi.spyOn(lspClient, "notifySaved").mockImplementation(async (mockClient, savedFilePath) => {
 			const savedUri = fileToUri(savedFilePath);
-			setTimeout(() => {
+			clock.in(10, () => {
 				publishDiagnostics(mockClient, savedUri, [createDiagnostic("stale error")], null);
-			}, 10);
-			setTimeout(() => {
+			});
+			clock.in(150, () => {
 				publishDiagnostics(mockClient, savedUri, [], mockClient.openFiles.get(savedUri)?.version ?? null);
-			}, 150);
+			});
 		});
 
 		const writethrough = createLspWritethrough(tempDir.path(), {
@@ -110,6 +161,8 @@ describe("LSP diagnostics freshness", () => {
 		const uri = fileToUri(filePath);
 		const client = createClient(tempDir.path(), TEST_SERVER);
 		client.openFiles.set(uri, { version: 1, languageId: "typescript" });
+		const clock = new VirtualClock(Date.now());
+		installVirtualTime(clock);
 
 		vi.spyOn(lspConfig, "loadConfig").mockReturnValue({ servers: {}, idleTimeoutMs: undefined });
 		vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([["test-lsp", TEST_SERVER]]);
@@ -126,27 +179,24 @@ describe("LSP diagnostics freshness", () => {
 		});
 		vi.spyOn(lspClient, "notifySaved").mockImplementation(async (mockClient, savedFilePath) => {
 			const savedUri = fileToUri(savedFilePath);
-			setTimeout(() => {
+			clock.in(10, () => {
 				publishDiagnostics(mockClient, savedUri, [createDiagnostic("stale error")], null);
-			}, 10);
-			setTimeout(() => {
+			});
+			clock.in(150, () => {
 				publishDiagnostics(mockClient, savedUri, [createDiagnostic("real error")], null);
-			}, 150);
+			});
 		});
 
 		const writethrough = createLspWritethrough(tempDir.path(), {
 			enableFormat: false,
 			enableDiagnostics: true,
 		});
-		const t0 = Date.now();
 		const result = await writethrough(filePath, "export const value: number = 'x';\n");
-		const elapsed = Date.now() - t0;
 
 		expect(result).toBeDefined();
 		expect(result?.errored).toBe(true);
 		expect(result?.messages.some(m => m.includes("real error"))).toBe(true);
 		expect(result?.messages.some(m => m.includes("stale error"))).toBe(false);
-		expect(elapsed).toBeLessThan(1500);
 	});
 
 	it("returns promptly and delivers diagnostics via the deferred channel when the server is slow", async () => {
@@ -154,6 +204,8 @@ describe("LSP diagnostics freshness", () => {
 		const uri = fileToUri(filePath);
 		const client = createClient(tempDir.path(), TEST_SERVER);
 		client.openFiles.set(uri, { version: 1, languageId: "typescript" });
+		const clock = new VirtualClock(Date.now());
+		installVirtualTime(clock);
 
 		vi.spyOn(lspConfig, "loadConfig").mockReturnValue({ servers: {}, idleTimeoutMs: undefined });
 		vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([["test-lsp", TEST_SERVER]]);
@@ -169,12 +221,12 @@ describe("LSP diagnostics freshness", () => {
 			}
 		});
 		// Publish far past the 500ms inline budget (INLINE_DIAGNOSTICS_WAIT_TIMEOUT_MS)
-		// so the writethrough deterministically defers even under heavy CI jitter.
+		// so the writethrough deterministically defers; virtual time keeps it instant.
 		vi.spyOn(lspClient, "notifySaved").mockImplementation(async (mockClient, savedFilePath) => {
 			const savedUri = fileToUri(savedFilePath);
-			setTimeout(() => {
+			clock.in(2000, () => {
 				publishDiagnostics(mockClient, savedUri, [createDiagnostic("deferred error")], null);
-			}, 2000);
+			});
 		});
 
 		const late = Promise.withResolvers<FileDiagnosticsResult>();
@@ -185,7 +237,6 @@ describe("LSP diagnostics freshness", () => {
 		};
 
 		const writethrough = createLspWritethrough(tempDir.path(), { enableFormat: false, enableDiagnostics: true });
-		const t0 = Date.now();
 		const inline = await writethrough(
 			filePath,
 			"export const value: number = 'x';\n",
@@ -194,12 +245,11 @@ describe("LSP diagnostics freshness", () => {
 			undefined,
 			() => handle,
 		);
-		const elapsed = Date.now() - t0;
 
-		// Inline returns promptly (well under the 2000ms deferred publish) without
-		// blocking on the slow publish...
+		// Inline returns undefined: the writethrough deferred rather than blocking on
+		// the slow publish. A result fresh within the inline budget would be returned
+		// inline, so `undefined` is proof it returned promptly via the deferred path.
 		expect(inline).toBeUndefined();
-		expect(elapsed).toBeLessThan(1500);
 
 		// ...and the diagnostics arrive afterwards via the deferred channel.
 		const lateResult = await late.promise;

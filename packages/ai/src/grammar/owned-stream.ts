@@ -20,6 +20,8 @@ const RESPONSE_OPEN_TOKENS: Record<ToolCallSyntax, readonly string[]> = {
 	harmony: ["<|start|>functions."],
 	pi: ["<tool_response>"],
 	qwen3: ["<tool_response>"],
+	gemini: ["```tool_outputs"],
+	gemma: ["<|tool_response>"],
 };
 
 function firstTokenIndex(text: string, tokens: readonly string[]): number {
@@ -84,6 +86,24 @@ export function wrapInbandToolStream(
 							return;
 						}
 						break;
+					case "toolcall_start": {
+						// Provider emitted a native structured tool call (e.g. Gemini via
+						// OpenRouter still returns `functionCall` parts even when owned mode
+						// sends no `tools`). Forward the native lifecycle live so the UI
+						// streams it; otherwise the turn loses its only actionable content
+						// and the loop retries forever on a reasoning-only message. The
+						// projector ignores nameless "ghost" parts and de-conflicts with the
+						// in-band channel.
+						const src = event.partial.content[event.contentIndex];
+						projector?.nativeToolStart(event.contentIndex, src?.type === "toolCall" ? src.name : "");
+						break;
+					}
+					case "toolcall_delta":
+						projector?.nativeToolDelta(event.contentIndex, event.delta);
+						break;
+					case "toolcall_end":
+						projector?.nativeToolEnd(event.contentIndex, event.toolCall);
+						break;
 					case "done":
 						projector ??= new InbandStreamProjector(out, tools, syntax, event.message, true);
 						projector.finish(event.message, true);
@@ -113,6 +133,13 @@ class InbandStreamProjector {
 	#fedLen = 0;
 	#stopped = false;
 	#responsePending = "";
+	// Provider-native tool calls forwarded live (e.g. Gemini still returns
+	// `functionCall` parts under owned mode), keyed by the inner stream's
+	// `contentIndex`. `#toolChannel` records which channel produced the turn's
+	// first real call so the other is dropped — no double-dispatch, and no
+	// guessing from emptiness. Nameless "ghost" parts never lock a channel.
+	#nativeBlocks = new Map<number, { index: number; block: ToolCall }>();
+	#toolChannel: "native" | "inband" | undefined;
 
 	constructor(
 		out: AssistantMessageEventStream,
@@ -138,6 +165,62 @@ class InbandStreamProjector {
 		this.#closeText();
 		this.#closeThinking();
 		this.#partial.content.push(block);
+	}
+
+	// Forward a native tool call's lifecycle live. `name` comes from the inner
+	// stream's partial (set at start for well-behaved providers). Empty `name`
+	// means a not-yet-identified or "ghost" call — skip until `nativeToolEnd`
+	// can confirm. Once the in-band channel owns the turn, native calls are
+	// dropped to avoid double-dispatch.
+	nativeToolStart(srcIndex: number, name: string): void {
+		if (this.#stopped || !name || this.#toolChannel === "inband") return;
+		this.#toolChannel = "native";
+		this.#closeText();
+		this.#closeThinking();
+		const block: ToolCall = { type: "toolCall", id: "", name, arguments: {} };
+		this.#partial.content.push(block);
+		const index = this.#partial.content.length - 1;
+		this.#nativeBlocks.set(srcIndex, { index, block });
+		if (this.#emitEvents) this.#out.push({ type: "toolcall_start", contentIndex: index, partial: this.#partial });
+	}
+
+	nativeToolDelta(srcIndex: number, delta: string): void {
+		if (this.#stopped) return;
+		const entry = this.#nativeBlocks.get(srcIndex);
+		if (!entry) return;
+		if (this.#emitEvents)
+			this.#out.push({ type: "toolcall_delta", contentIndex: entry.index, delta, partial: this.#partial });
+	}
+
+	nativeToolEnd(srcIndex: number, toolCall: ToolCall): void {
+		if (this.#stopped) return;
+		const entry = this.#nativeBlocks.get(srcIndex);
+		if (entry) {
+			Object.assign(entry.block, toolCall);
+			if (this.#emitEvents)
+				this.#out.push({
+					type: "toolcall_end",
+					contentIndex: entry.index,
+					toolCall: entry.block,
+					partial: this.#partial,
+				});
+			this.#nativeBlocks.delete(srcIndex);
+			return;
+		}
+		// Never streamed (name was empty at start). Salvage a real call whose name
+		// only arrived now; drop nameless ghosts and anything the in-band channel
+		// already claimed.
+		if (!toolCall.name || this.#toolChannel === "inband") return;
+		this.#toolChannel = "native";
+		this.#closeText();
+		this.#closeThinking();
+		const block: ToolCall = { ...toolCall };
+		this.#partial.content.push(block);
+		const index = this.#partial.content.length - 1;
+		if (this.#emitEvents) {
+			this.#out.push({ type: "toolcall_start", contentIndex: index, partial: this.#partial });
+			this.#out.push({ type: "toolcall_end", contentIndex: index, toolCall: block, partial: this.#partial });
+		}
 	}
 
 	text(delta: string): boolean {
@@ -281,6 +364,9 @@ class InbandStreamProjector {
 	}
 
 	#beginTool(event: Extract<InbandScanEvent, { type: "toolStart" }>): void {
+		// Native owns the turn → drop the in-band call to avoid double-dispatch.
+		if (this.#toolChannel === "native") return;
+		this.#toolChannel = "inband";
 		this.#closeText();
 		this.#closeThinking();
 		if (this.#toolBlocks.has(event.id)) return;

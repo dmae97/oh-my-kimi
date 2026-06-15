@@ -81,6 +81,16 @@ function createPrunedNotice(tokens: number): string {
 	return `[Output truncated - ${tokens} tokens]`;
 }
 
+/**
+ * Generic age-based pruning floor. Below this, blanking a result to
+ * `[Output truncated - N tokens]` recovers nothing — the placeholder itself
+ * costs ~8 tokens, so a sub-floor result grows the context (and churns the
+ * prompt cache) instead of shrinking it. Superseded/useless results keep their
+ * own rules: useless already drops no-savings candidates, superseded prunes for
+ * correctness regardless of size.
+ */
+const MIN_PRUNE_TOKENS = 50;
+
 function getToolResultMessage(entry: SessionEntry): ToolResultMessage | undefined {
 	if (entry.type !== "message") return undefined;
 	const message = entry.message as AgentMessage;
@@ -271,7 +281,8 @@ export function pruneToolOutputs(entries: SessionEntry[], config: PruneConfig = 
 		// any age).
 		const superseded = supersededMessages?.has(message) ?? false;
 		const useless = uselessMessages?.has(message) ?? false;
-		if (!superseded && !useless && (accumulatedTokens < config.protectTokens || isProtected)) {
+		const tooSmall = tokens < MIN_PRUNE_TOKENS;
+		if (!superseded && !useless && (accumulatedTokens < config.protectTokens || isProtected || tooSmall)) {
 			accumulatedTokens += tokens;
 			continue;
 		}

@@ -4,8 +4,9 @@
 import type { AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { INTENT_FIELD } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, Model, ToolExample, TSchema } from "@oh-my-pi/pi-ai";
-import { renderToolInventory } from "@oh-my-pi/pi-ai/grammar";
-import { getVisibleThinkingText } from "../utils/thinking-display";
+import { getInbandGrammar, renderToolInventory } from "@oh-my-pi/pi-ai/grammar";
+import { preferredToolSyntax } from "@oh-my-pi/pi-catalog/identity";
+import { canonicalizeMessage } from "../utils/thinking-display";
 import {
 	type BashExecutionMessage,
 	type BranchSummaryMessage,
@@ -34,22 +35,12 @@ export interface FormatSessionDumpTextOptions {
 	tools?: readonly SessionDumpToolInfo[];
 }
 
-/** Serialize an object as XML parameter elements, one per key. */
-function formatArgsAsXml(args: Record<string, unknown>, indent = "\t"): string {
-	const parts: string[] = [];
-	for (const [key, value] of Object.entries(args)) {
-		if (key === INTENT_FIELD) continue;
-		const text = typeof value === "string" ? value : JSON.stringify(value);
-		parts.push(`${indent}<parameter name="${key}">${text}</parameter>`);
-	}
-	return parts.join("\n");
-}
-
 /**
  * Format messages and session metadata as markdown/plain text (same as AgentSession.formatSessionAsText / /dump).
  */
 export function formatSessionDumpText(options: FormatSessionDumpTextOptions): string {
 	const lines: string[] = [];
+	const grammar = getInbandGrammar(preferredToolSyntax(options.model?.id ?? ""));
 
 	const systemPrompt = options.systemPrompt?.filter(prompt => prompt.length > 0) ?? [];
 	if (systemPrompt.length > 0) {
@@ -106,17 +97,15 @@ export function formatSessionDumpText(options: FormatSessionDumpTextOptions): st
 				if (c.type === "text") {
 					lines.push(c.text);
 				} else if (c.type === "thinking") {
-					const thinking = getVisibleThinkingText(c);
+					const thinking = canonicalizeMessage(c.thinking);
 					if (thinking.length === 0) continue;
 					lines.push("<thinking>");
 					lines.push(thinking);
 					lines.push("</thinking>\n");
 				} else if (c.type === "toolCall") {
-					lines.push(`<invoke name="${c.name}">`);
-					if (c.arguments && typeof c.arguments === "object") {
-						lines.push(formatArgsAsXml(c.arguments as Record<string, unknown>));
-					}
-					lines.push("<" + "/invoke>\n");
+					const args = { ...(c.arguments as Record<string, unknown>) };
+					delete args[INTENT_FIELD];
+					lines.push(grammar.renderToolCall({ ...c, arguments: args }));
 				}
 			}
 			lines.push("");

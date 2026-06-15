@@ -74,6 +74,14 @@ const ABORTED: unique symbol = Symbol("agent-loop-aborted");
  */
 const MAX_PAUSED_TURN_CONTINUATIONS = 8;
 
+/**
+ * Cadence (ms) for polling queued steering while an `interruptible` tool is in
+ * flight, so a steer cuts the wait short instead of sitting idle until the
+ * tool's own window elapses. A cheap synchronous queue check; latency-bounded
+ * at one tick.
+ */
+const STEERING_INTERRUPT_POLL_MS = 250;
+
 class HarmonyLeakInterruption extends Error {
 	constructor(
 		readonly detection: HarmonyDetection,
@@ -98,6 +106,8 @@ function resolveOwnedToolSyntaxFromEnv(value: string | undefined): ToolCallSynta
 		case "harmony":
 		case "pi":
 		case "qwen3":
+		case "gemini":
+		case "gemma":
 			return value;
 		default:
 			return undefined;
@@ -1795,7 +1805,24 @@ async function executeToolCalls(
 		}
 	}
 
-	await Promise.allSettled(tasks);
+	// While an interruptible tool is in flight (e.g. a `job` poll blocking on
+	// background work), a queued steer would otherwise wait out the tool's own
+	// window. Poll the steering queue and let checkSteering() abort the shared
+	// tool signal so the wait returns early; the boundary dequeue below then
+	// injects it. Gated on immediate-interrupt mode + an interruptible tool;
+	// checkSteering is idempotent (no-op once triggered).
+	const watchSteeringWhileRunning =
+		shouldInterruptImmediately &&
+		(hasSteeringMessages !== undefined || getSteeringMessages !== undefined) &&
+		records.some(r => r.tool?.interruptible === true);
+	const steeringWatchTimer = watchSteeringWhileRunning
+		? setInterval(() => void checkSteering(), STEERING_INTERRUPT_POLL_MS)
+		: undefined;
+	try {
+		await Promise.allSettled(tasks);
+	} finally {
+		if (steeringWatchTimer !== undefined) clearInterval(steeringWatchTimer);
+	}
 	// Yield after batch tool execution to let GC and I/O catch up,
 	// especially when tool results are large (e.g. bash output).
 	await yieldIfDue();

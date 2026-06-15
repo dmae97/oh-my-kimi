@@ -43,8 +43,8 @@ describe("SWAP.BLK parsing", () => {
 		expect(edit.payloads).toEqual(["A", "B"]);
 	});
 
-	it("still parses a literal `SWAP N..M:` range (distinct from `SWAP.BLK`)", () => {
-		const { edits } = parsePatch("SWAP 2..3:\n+A");
+	it("still parses a literal `SWAP N.=M:` range (distinct from `SWAP.BLK`)", () => {
+		const { edits } = parsePatch("SWAP 2.=3:\n+A");
 		expect(edits.some(edit => edit.kind === "block")).toBe(false);
 		expect(edits.some(edit => edit.kind === "delete")).toBe(true);
 	});
@@ -55,17 +55,17 @@ describe("SWAP.BLK parsing", () => {
 });
 
 describe("resolveBlockEdits", () => {
-	it("expands a block edit exactly like the equivalent `SWAP start..end:`", () => {
+	it("expands a block edit exactly like the equivalent `SWAP start.=end:`", () => {
 		const blockEdits = parsePatch("SWAP.BLK 2:\n+A\n+B").edits;
 		const resolved = resolveBlockEdits(blockEdits, "ignored", PATH, stubResolver);
-		const replaceEdits = parsePatch("SWAP 2..3:\n+A\n+B").edits;
+		const replaceEdits = parsePatch("SWAP 2.=3:\n+A\n+B").edits;
 
 		expect(resolved.some(edit => edit.kind === "block")).toBe(false);
 		expect(normalizeEdits(resolved)).toEqual(normalizeEdits(replaceEdits));
 	});
 
 	it("returns the input untouched when there are no block edits (fast path)", () => {
-		const edits = parsePatch("SWAP 1..1:\n+X").edits;
+		const edits = parsePatch("SWAP 1.=1:\n+X").edits;
 		expect(resolveBlockEdits(edits, "ignored", PATH, stubResolver)).toBe(edits);
 	});
 
@@ -171,7 +171,7 @@ describe("PatchSection.applyTo / applyPartialTo with block edits", () => {
 
 	it("applyTo resolves a block edit and matches the equivalent `replace`", () => {
 		const blockSection = Patch.parseSingle(`[${PATH}#1A2B]\nSWAP.BLK 2:\n+  if (y || z) {\n+  }`);
-		const replaceSection = Patch.parseSingle(`[${PATH}#1A2B]\nSWAP 2..3:\n+  if (y || z) {\n+  }`);
+		const replaceSection = Patch.parseSingle(`[${PATH}#1A2B]\nSWAP 2.=3:\n+  if (y || z) {\n+  }`);
 
 		const blockResult = blockSection.applyTo(text, stubResolver);
 		const replaceResult = replaceSection.applyTo(text);

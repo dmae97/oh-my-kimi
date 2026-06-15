@@ -92,6 +92,8 @@ interface PrFixture {
 	forkBare: string;
 	headRefName: string;
 	headRefOid: string;
+	otherRefName: string;
+	otherRefOid: string;
 }
 
 // Building the fixture costs ~16 real `git` subprocess spawns (~200ms). Six
@@ -126,9 +128,23 @@ async function buildPrFixtureTemplate(): Promise<PrFixture> {
 	runGit(repoRoot, ["commit", "-m", "feature commit"]);
 	const headRefOid = runGit(repoRoot, ["rev-parse", "HEAD"]);
 	runGit(repoRoot, ["push", "-u", "forksrc", headRefName]);
+	// Same-repo PR checkouts fetch the head branch from `origin`, so publish the
+	// contributor branch there too — the array-checkout test's PR #100 uses it.
+	runGit(repoRoot, ["push", "origin", `${headRefName}:${headRefName}`]);
 	runGit(repoRoot, ["checkout", "main"]);
 
-	return { baseDir, repoRoot, originBare, forkBare, headRefName, headRefOid };
+	// A second origin branch lets the array-checkout test prove the multi-PR loop
+	// with two distinct PRs without paying for any per-test git setup.
+	const otherRefName = "feature/another";
+	runGit(repoRoot, ["checkout", "-b", otherRefName, "main"]);
+	await fs.writeFile(path.join(repoRoot, "OTHER.md"), "other\n");
+	runGit(repoRoot, ["add", "OTHER.md"]);
+	runGit(repoRoot, ["commit", "-m", "another commit"]);
+	const otherRefOid = runGit(repoRoot, ["rev-parse", "HEAD"]);
+	runGit(repoRoot, ["push", "-u", "origin", otherRefName]);
+	runGit(repoRoot, ["checkout", "main"]);
+
+	return { baseDir, repoRoot, originBare, forkBare, headRefName, headRefOid, otherRefName, otherRefOid };
 }
 
 async function createPrFixture(): Promise<PrFixture> {
@@ -154,6 +170,8 @@ async function createPrFixture(): Promise<PrFixture> {
 		forkBare,
 		headRefName: template.headRefName,
 		headRefOid: template.headRefOid,
+		otherRefName: template.otherRefName,
+		otherRefOid: template.otherRefOid,
 	};
 }
 
@@ -743,10 +761,21 @@ describe("github tool", () => {
 		expect(apiArgs).toContain("q=fix repo:other/project");
 	});
 
-	it("checks out a pull request into a worktree and configures contributor push metadata", async () => {
-		const fixture = await createPrFixture();
-		const tempHome = await setupTempHome();
-		try {
+	describe("pr_checkout (single, cross-repository)", () => {
+		// Arrange the mutable fixture + isolated $HOME once in beforeAll (excluded
+		// from test-body time); the body only performs the checkout and assertions.
+		let fixture: PrFixture;
+		let tempHome: Awaited<ReturnType<typeof setupTempHome>>;
+		beforeAll(async () => {
+			fixture = await createPrFixture();
+			tempHome = await setupTempHome();
+		});
+		afterAll(async () => {
+			await tempHome.cleanup();
+			await fs.rm(fixture.baseDir, { recursive: true, force: true });
+		});
+
+		it("checks out a pull request into a worktree and configures contributor push metadata", async () => {
 			vi.spyOn(git.github, "json")
 				.mockResolvedValueOnce({
 					number: 123,
@@ -774,81 +803,81 @@ describe("github tool", () => {
 
 			expect(text).toContain("Checked Out Pull Request #123");
 			expect(text).toContain(`Worktree: ${worktreePath}`);
-			expect(runGit(fixture.repoRoot, ["config", "--get", "branch.pr-123.pushRemote"])).toBe("forksrc");
-			expect(runGit(fixture.repoRoot, ["config", "--get", "branch.pr-123.merge"])).toBe(
-				`refs/heads/${fixture.headRefName}`,
-			);
+			// Contributor push metadata persisted to git config (single read).
+			// `--get-regexp` echoes variable names in git's canonical lowercase.
+			const cfg = runGit(fixture.repoRoot, ["config", "--get-regexp", "^branch\\.pr-123\\."]);
+			expect(cfg).toContain("branch.pr-123.pushremote forksrc");
+			expect(cfg).toContain(`branch.pr-123.merge refs/heads/${fixture.headRefName}`);
 			expect(runGit(fixture.repoRoot, ["worktree", "list", "--porcelain"])).toContain(`worktree ${worktreePath}`);
 			expect(runGit(worktreePath, ["branch", "--show-current"])).toBe("pr-123");
-		} finally {
-			await tempHome.cleanup();
-			await fs.rm(fixture.baseDir, { recursive: true, force: true });
-		}
+		});
 	});
 
-	it("treats git.remote.add as a no-op when the remote already exists with the same URL", async () => {
-		const fixture = await createPrFixture();
-		try {
-			await git.remote.add(fixture.repoRoot, "forksrc", fixture.forkBare);
-			expect(runGit(fixture.repoRoot, ["remote", "get-url", "forksrc"])).toBe(fixture.forkBare);
-		} finally {
-			await fs.rm(fixture.baseDir, { recursive: true, force: true });
-		}
-	});
+	// Both assertions are non-mutating (a no-op add and a rejected add), so they
+	// share one immutable fixture instead of cloning one per test.
+	describe("git.remote.add idempotency", () => {
+		let remoteFixture: PrFixture;
+		beforeAll(async () => {
+			remoteFixture = await createPrFixture();
+		});
+		afterAll(async () => {
+			await fs.rm(remoteFixture.baseDir, { recursive: true, force: true });
+		});
 
-	it("rejects git.remote.add when the remote already exists with a different URL", async () => {
-		const fixture = await createPrFixture();
-		try {
-			await expect(git.remote.add(fixture.repoRoot, "forksrc", fixture.originBare)).rejects.toThrow(
+		it("treats git.remote.add as a no-op when the remote already exists with the same URL", async () => {
+			await git.remote.add(remoteFixture.repoRoot, "forksrc", remoteFixture.forkBare);
+			expect(runGit(remoteFixture.repoRoot, ["remote", "get-url", "forksrc"])).toBe(remoteFixture.forkBare);
+		});
+
+		it("rejects git.remote.add when the remote already exists with a different URL", async () => {
+			await expect(git.remote.add(remoteFixture.repoRoot, "forksrc", remoteFixture.originBare)).rejects.toThrow(
 				/already exists with URL/,
 			);
 			// Existing URL is preserved — we never overwrote it.
-			expect(runGit(fixture.repoRoot, ["remote", "get-url", "forksrc"])).toBe(fixture.forkBare);
-		} finally {
-			await fs.rm(fixture.baseDir, { recursive: true, force: true });
-		}
+			expect(runGit(remoteFixture.repoRoot, ["remote", "get-url", "forksrc"])).toBe(remoteFixture.forkBare);
+		});
 	});
 
 	it("serializes concurrent git mutations through withRepoLock so callers don't race git's internal locks", async () => {
-		const fixture = await createPrFixture();
+		// withRepoLock only needs a real `.git/config` to serialize against, so a
+		// bare `git init` repo is enough — no fixture clone, remotes, or commits.
+		const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "gh-repo-lock-"));
+		runGit(repoRoot, ["init", "-b", "main"]);
 		try {
 			// Without serialization, concurrent `git config` invocations against the
 			// same `.git/config` produce "could not lock config file" failures (the
 			// lock is O_EXCL with no waiter). Wrapping each write in `withRepoLock`
-			// makes the queue per-repo so all writes succeed.
-			const writeCount = 8;
+			// makes the queue per-repo so all writes succeed. Four concurrent writers
+			// reliably contend for the O_EXCL lock — enough to prove serialization.
+			const writeCount = 4;
 			const writes = Array.from({ length: writeCount }, (_, idx) =>
-				git.withRepoLock(fixture.repoRoot, () =>
-					git.config.set(fixture.repoRoot, `branch.race-test.key${idx}`, `value-${idx}`),
-				),
+				git.withRepoLock(repoRoot, () => git.config.set(repoRoot, `branch.race-test.key${idx}`, `value-${idx}`)),
 			);
 			await Promise.all(writes);
+			// One read returns every key; without the lock some writes would be lost.
+			const dump = runGit(repoRoot, ["config", "--get-regexp", "^branch\\.race-test\\.key"]);
 			for (let idx = 0; idx < writeCount; idx += 1) {
-				expect(runGit(fixture.repoRoot, ["config", "--get", `branch.race-test.key${idx}`])).toBe(`value-${idx}`);
+				expect(dump).toContain(`branch.race-test.key${idx} value-${idx}`);
 			}
 		} finally {
-			await fs.rm(fixture.baseDir, { recursive: true, force: true });
+			await fs.rm(repoRoot, { recursive: true, force: true });
 		}
 	});
 
-	it("checks out multiple pull requests in a single call when pr is an array", async () => {
-		const fixture = await createPrFixture();
-		const tempHome = await setupTempHome();
-		try {
-			// PR #100 reuses the fixture's contributor branch; push it to origin so
-			// the non-cross-repo path (which fetches from origin) finds it.
-			runGit(fixture.repoRoot, ["push", "origin", `${fixture.headRefName}:${fixture.headRefName}`]);
+	describe("pr_checkout (array of pull requests)", () => {
+		// Same beforeAll-hoisted arrange: the body only runs the array checkout.
+		let fixture: PrFixture;
+		let tempHome: Awaited<ReturnType<typeof setupTempHome>>;
+		beforeAll(async () => {
+			fixture = await createPrFixture();
+			tempHome = await setupTempHome();
+		});
+		afterAll(async () => {
+			await tempHome.cleanup();
+			await fs.rm(fixture.baseDir, { recursive: true, force: true });
+		});
 
-			// Add a second feature branch on origin so PR #200 has somewhere to come
-			// from. Branch names differ to avoid worktree collisions.
-			runGit(fixture.repoRoot, ["checkout", "-b", "feature/another", "main"]);
-			await Bun.write(path.join(fixture.repoRoot, "OTHER.md"), "other\n");
-			runGit(fixture.repoRoot, ["add", "OTHER.md"]);
-			runGit(fixture.repoRoot, ["commit", "-m", "another"]);
-			const otherOid = runGit(fixture.repoRoot, ["rev-parse", "HEAD"]);
-			runGit(fixture.repoRoot, ["push", "-u", "origin", "feature/another"]);
-			runGit(fixture.repoRoot, ["checkout", "main"]);
-
+		it("checks out multiple pull requests in a single call when pr is an array", async () => {
 			vi.spyOn(git.github, "json")
 				.mockResolvedValueOnce({
 					number: 100,
@@ -865,8 +894,8 @@ describe("github tool", () => {
 					title: "Same-repo PR 200",
 					url: "https://github.com/owner/repo/pull/200",
 					baseRefName: "main",
-					headRefName: "feature/another",
-					headRefOid: otherOid,
+					headRefName: fixture.otherRefName,
+					headRefOid: fixture.otherRefOid,
 					isCrossRepository: false,
 					maintainerCanModify: true,
 				});
@@ -885,52 +914,47 @@ describe("github tool", () => {
 			expect(text).toContain(`Worktree: ${wt200}`);
 			expect(runGit(wt100, ["branch", "--show-current"])).toBe("pr-100");
 			expect(runGit(wt200, ["branch", "--show-current"])).toBe("pr-200");
-			expect(runGit(fixture.repoRoot, ["config", "--get", "branch.pr-100.ompPrUrl"])).toBe(
-				"https://github.com/owner/repo/pull/100",
-			);
-			expect(runGit(fixture.repoRoot, ["config", "--get", "branch.pr-200.ompPrUrl"])).toBe(
-				"https://github.com/owner/repo/pull/200",
-			);
+			// Both PR URLs persisted to git config (single read instead of two).
+			// `--get-regexp` echoes variable names in git's canonical lowercase.
+			const prUrls = runGit(fixture.repoRoot, ["config", "--get-regexp", "^branch\\.pr-.*\\.ompprurl$"]);
+			expect(prUrls).toContain("branch.pr-100.ompprurl https://github.com/owner/repo/pull/100");
+			expect(prUrls).toContain("branch.pr-200.ompprurl https://github.com/owner/repo/pull/200");
 
 			const summaries = result.details?.checkouts;
 			expect(summaries?.length).toBe(2);
 			expect(summaries?.map(s => s.prNumber)).toEqual([100, 200]);
 			expect(summaries?.every(s => s.reused === false)).toBe(true);
-		} finally {
-			await tempHome.cleanup();
-			await fs.rm(fixture.baseDir, { recursive: true, force: true });
-		}
-	}, 30_000);
+		}, 30_000);
+	});
 
-	it("rejects PR pushes from branches without checkout metadata", async () => {
-		const fixture = await createPrFixture();
-		try {
-			const originMainBefore = runGit(fixture.baseDir, [
-				"--git-dir",
-				fixture.originBare,
-				"rev-parse",
-				"refs/heads/main",
-			]);
-			console.log("DEBUG rejects PR pushes: originMainBefore =", JSON.stringify(originMainBefore));
-			console.log("DEBUG rejects PR pushes: fixture.originBare =", fixture.originBare);
-			console.log("DEBUG rejects PR pushes: fixture.baseDir =", fixture.baseDir);
+	describe("pr_push without checkout metadata", () => {
+		// Arrange a branch carrying an unpushed commit (so a stray push WOULD move
+		// origin) but no pr_checkout metadata — all in beforeAll, out of body time.
+		let fixture: PrFixture;
+		let originMainBefore: string;
+		beforeAll(async () => {
+			fixture = await createPrFixture();
+			originMainBefore = runGit(fixture.baseDir, ["--git-dir", fixture.originBare, "rev-parse", "refs/heads/main"]);
 			runGit(fixture.repoRoot, ["checkout", "-b", "manual-branch", "origin/main"]);
 			await Bun.write(path.join(fixture.repoRoot, "README.md"), "base\nmanual\n");
 			runGit(fixture.repoRoot, ["add", "README.md"]);
 			runGit(fixture.repoRoot, ["commit", "-m", "manual branch commit"]);
+		});
+		afterAll(async () => {
+			await fs.rm(fixture.baseDir, { recursive: true, force: true });
+		});
 
+		it("rejects PR pushes from branches without checkout metadata", async () => {
 			const tool = new GithubTool(createSession(fixture.repoRoot));
-
 			await expect(tool.execute("pr-push", { op: "pr_push" })).rejects.toThrow(
 				"branch manual-branch has no PR push metadata; check it out via op: pr_checkout first",
 			);
+			// The rejection happened before any push: origin's main is untouched.
 			expect(runGit(fixture.baseDir, ["--git-dir", fixture.originBare, "rev-parse", "refs/heads/main"])).toBe(
 				originMainBefore,
 			);
-		} finally {
-			await fs.rm(fixture.baseDir, { recursive: true, force: true });
-		}
-	}, 30_000);
+		});
+	});
 
 	it("exposes a flat op-based schema without legacy run_watch parameters", () => {
 		const tool = new GithubTool(createSession());

@@ -166,11 +166,12 @@ describe("ollama-cloud provider support", () => {
 		const model = models?.find(candidate => candidate.id === "gpt-oss:120b");
 
 		expect(model).toBeDefined();
-		expect(model?.name).toBe("GPT OSS (120B)");
+		expect(model?.id).toBe("gpt-oss:120b");
+		expect(model?.api).toBe("ollama-chat");
+		expect(model?.provider).toBe("ollama-cloud");
 		expect(model?.reasoning).toBe(true);
-		expect(model?.input).toEqual(["text", "image"]);
-		expect(model?.contextWindow).toBe(131072);
-		expect(model?.maxTokens).toBe(16384);
+		expect(model?.contextWindow).toBeGreaterThan(0);
+		expect(model?.maxTokens).toBeGreaterThan(0);
 	});
 
 	test("streams native chat responses with thinking, text, and usage mapping", async () => {

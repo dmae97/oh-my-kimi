@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [15.13.3] - 2026-06-15
+
+### Fixed
+
+- Wrapped composer button labels to display icon-only on mobile devices for a more compact and readable layout
+- Made the connect screen, ended session card, and notification toasts fully responsive for smaller device viewports
+- Fixed mobile layout issues where the entire chat flow would overflow horizontally and text was rendered too large on iOS Safari (by setting `text-size-adjust: 100%`)
+- Made transcript rows stack vertically on small screens to optimize reading space, and prevented grid track expansion
+- Hid non-essential metadata (such as the model name, thinking level, and working directory path) and context gauge tracks on mobile headers to prevent overflow
+
 ## [15.13.1] - 2026-06-15
 
 ### Added

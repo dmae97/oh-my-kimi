@@ -5,6 +5,26 @@
 ### Added
 
 - Added Umans AI Coding Plan API-key login support and `UMANS_AI_CODING_PLAN_API_KEY` environment fallback.
+## [15.13.3] - 2026-06-15
+
+### Added
+
+- Added the `gemini` in-band tool-call syntax with Python-style ```tool_code``` blocks and `default_api` invocations
+- Added the `gemma` token-delimited in-band tool-call syntax using `<|tool_call>` and `<|tool_response>` blocks
+- Added `gemini` and `gemma` to owned stream tool-result token detection so their tool responses are recognized
+- Fixed truncated Gemini and Gemma tool blocks from being emitted as plain text during streaming
+- Added the Azure OpenAI provider definition (`azure`) to the registry; `AZURE_OPENAI_API_KEY` resolves as its env-var API key via the catalog provider table.
+
+### Changed
+
+- Gemini tool-call examples now render without the `default_api.` namespace prefix, keeping `<example>` blocks concise. The live wire format still uses `default_api.` per the Gemini grammar.
+
+### Fixed
+
+- Fixed duplicate tool call projections by deduplicating provider-native `toolCall` events against in-band `tool_code` calls and keeping only the first real channel
+- Dropped nameless native `toolCall` events so they no longer appear as surfaced tool calls in owned-mode streams
+- Fixed truncated Gemini and Gemma tool blocks from being emitted as plain text during streaming
+- Fixed Gemini/Gemma in-band tool-call parsing around Python comments, raw/unicode string literals, and Gemma close-token text inside string values.
 
 ## [15.13.2] - 2026-06-15
 

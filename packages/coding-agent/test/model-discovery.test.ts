@@ -478,7 +478,14 @@ describe("ModelRegistry runtime discovery", () => {
 		}
 
 		authStorage.setRuntimeApiKey("custom-local", "");
-		const cachedRegistry = new ModelRegistry(authStorage, modelsJsonPath);
+		// Empty credentials must short-circuit discovery to "unauthenticated" *before*
+		// any transport call; this guard fetch keeps the path provably network-free
+		// (no real socket, no connect timeout) and makes a future regression that
+		// reached the wire fail fast and loud instead of silently hanging.
+		const noNetwork: FetchImpl = input => {
+			throw new Error(`Unexpected network call during unauthenticated discovery: ${String(input)}`);
+		};
+		const cachedRegistry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: noNetwork });
 		await cachedRegistry.refreshProvider("custom-local");
 
 		expect(getModelsForProvider(cachedRegistry, "custom-local").some(model => model.id === "local-coder")).toBe(true);

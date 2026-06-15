@@ -5,7 +5,8 @@
  * never passed `session.promptTemplates` into the autocomplete provider.
  */
 
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import * as os from "node:os";
 import * as path from "node:path";
 import { Agent, type AgentTool } from "@oh-my-pi/pi-agent-core";
 import { type Api, Effort, type Model } from "@oh-my-pi/pi-ai";
@@ -36,35 +37,57 @@ function makeTool(name: string): AgentTool {
 describe("InteractiveMode prompt-template autocomplete (#2462)", () => {
 	let tempDir: TempDir;
 	let authStorage: AuthStorage;
+	let registry: ModelRegistry;
+	let model: Model<Api>;
+	let tools: AgentTool[];
+	let originalHome: string | undefined;
 	let mode: InteractiveMode | undefined;
 	let session: AgentSession | undefined;
 
-	beforeAll(() => {
+	beforeAll(async () => {
 		initTheme();
-	});
-
-	beforeEach(async () => {
-		Bun.gc(true);
 		resetSettingsForTest();
+		// One empty temp dir doubles as the project cwd and the (isolated) home
+		// directory. Pointing $HOME here keeps `refreshSlashCommandState`'s capability
+		// scan off the real home dir — that scan was the per-test latency and a source
+		// of nondeterminism (it picked up whatever slash commands / plugins happened to
+		// live in the developer's or CI's home).
 		tempDir = TempDir.createSync("@pi-prompt-template-autocomplete-");
+		originalHome = process.env.HOME;
+		process.env.HOME = tempDir.path();
 		await Settings.init({ inMemory: true, cwd: tempDir.path() });
 		Settings.instance.set("startup.quiet", true);
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		// ModelRegistry (bundled-model load) and the resolved model are immutable across
+		// these tests, so build them once rather than per test.
+		registry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+		model = modelOrThrow(registry, "claude-sonnet-4-5");
+		tools = [makeTool("read")];
+	});
+
+	beforeEach(() => {
+		// Re-assert the home seam each test (afterEach's restoreAllMocks clears it).
+		// os.homedir() is what the capability loader reads to locate user-level slash
+		// commands; aiming it at the empty temp home makes discovery fast and
+		// deterministic regardless of the real home's contents.
+		vi.spyOn(os, "homedir").mockReturnValue(tempDir.path());
 	});
 
 	afterEach(async () => {
 		vi.restoreAllMocks();
 		mode?.stop();
 		await session?.dispose();
-		authStorage?.close();
-		tempDir?.removeSync();
 		mode = undefined;
 		session = undefined;
-		authStorage = undefined as unknown as AuthStorage;
-		tempDir = undefined as unknown as TempDir;
+	});
+
+	afterAll(() => {
+		authStorage?.close();
+		if (originalHome === undefined) delete process.env.HOME;
+		else process.env.HOME = originalHome;
+		tempDir?.removeSync();
 		resetSettingsForTest();
-		Bun.gc(true);
 	});
 
 	function modelOrThrow(registry: ModelRegistry, id: string): Model<Api> {
@@ -73,12 +96,10 @@ describe("InteractiveMode prompt-template autocomplete (#2462)", () => {
 		return model;
 	}
 
-	async function createHarness(
-		templates: PromptTemplate[],
-	): Promise<{ mode: InteractiveMode; session: AgentSession }> {
-		const registry = new ModelRegistry(authStorage, path.join(tempDir.path(), `models-${Bun.nanoseconds()}.yml`));
-		const model = modelOrThrow(registry, "claude-sonnet-4-5");
-		const tools = [makeTool("read")];
+	function createHarness(templates: PromptTemplate[]): { mode: InteractiveMode; session: AgentSession } {
+		// SessionManager and AgentSession can't be shared: AgentSession.dispose() closes
+		// its SessionManager, so each test gets a fresh pair. They're cheap (in-memory)
+		// next to the hoisted ModelRegistry/AuthStorage/temp-dir setup.
 		const manager = SessionManager.create(tempDir.path(), path.join(tempDir.path(), `active-${Bun.nanoseconds()}`));
 		const created = new AgentSession({
 			agent: new Agent({
@@ -117,7 +138,7 @@ describe("InteractiveMode prompt-template autocomplete (#2462)", () => {
 	}
 
 	it("includes discovered prompt templates in slash-command autocomplete", async () => {
-		const created = await createHarness([
+		const created = createHarness([
 			{
 				name: "review",
 				description: "Review code for bugs (project)",
@@ -142,7 +163,7 @@ describe("InteractiveMode prompt-template autocomplete (#2462)", () => {
 	});
 
 	it("does not duplicate templates whose names collide with builtin slash commands", async () => {
-		const created = await createHarness([
+		const created = createHarness([
 			{
 				name: "exit",
 				description: "Custom exit template (project)",
@@ -163,7 +184,7 @@ describe("InteractiveMode prompt-template autocomplete (#2462)", () => {
 	});
 
 	it("does not duplicate templates whose names collide with builtin slash command aliases", async () => {
-		const created = await createHarness([
+		const created = createHarness([
 			{
 				name: "models",
 				description: "Custom models template (project)",

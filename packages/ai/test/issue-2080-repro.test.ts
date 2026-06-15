@@ -80,7 +80,7 @@ describe("issue #2080 - MiniMax multi-chunk object tool arguments", () => {
 		const fetchMock = createMockFetch([
 			toolCallChunk(model, {
 				name: "edit",
-				arguments: { input: "[foo.ts#A1B2]\nreplace 91..91:\n+    " },
+				arguments: { input: "[foo.ts#A1B2]\nSWAP 91.=91:\n+    " },
 			}),
 			toolCallChunk(model, {
 				arguments: { input: 'const out = await executeTool("nuke", { path: "x" }, ctx);' },
@@ -100,7 +100,7 @@ describe("issue #2080 - MiniMax multi-chunk object tool arguments", () => {
 				id: "call-minimax-1",
 				name: "edit",
 				arguments: {
-					input: '[foo.ts#A1B2]\nreplace 91..91:\n+    const out = await executeTool("nuke", { path: "x" }, ctx);',
+					input: '[foo.ts#A1B2]\nSWAP 91.=91:\n+    const out = await executeTool("nuke", { path: "x" }, ctx);',
 				},
 			},
 		]);
@@ -115,10 +115,10 @@ describe("issue #2080 - MiniMax multi-chunk object tool arguments", () => {
 		const fetchMock = createMockFetch([
 			toolCallChunk(model, {
 				name: "edit",
-				arguments: { input: "[foo.ts#A1B2]\nreplace 91..91:" },
+				arguments: { input: "[foo.ts#A1B2]\nSWAP 91.=91:" },
 			}),
 			toolCallChunk(model, {
-				arguments: { input: "[foo.ts#A1B2]\nreplace 91..91:\n+new" },
+				arguments: { input: "[foo.ts#A1B2]\nSWAP 91.=91:\n+new" },
 			}),
 			stopChunk(model),
 			"[DONE]",
@@ -134,7 +134,7 @@ describe("issue #2080 - MiniMax multi-chunk object tool arguments", () => {
 				type: "toolCall",
 				id: "call-minimax-1",
 				name: "edit",
-				arguments: { input: "[foo.ts#A1B2]\nreplace 91..91:\n+new" },
+				arguments: { input: "[foo.ts#A1B2]\nSWAP 91.=91:\n+new" },
 			},
 		]);
 	});
@@ -142,7 +142,7 @@ describe("issue #2080 - MiniMax multi-chunk object tool arguments", () => {
 	it("preserves keys that only appear in earlier chunks instead of dropping them with later chunks", async () => {
 		const model = getBundledModel<"openai-completions">("minimax-code-cn", "MiniMax-M3");
 		const fetchMock = createMockFetch([
-			toolCallChunk(model, { name: "edit", arguments: { input: "[foo.ts#A1B2]\ndelete 5" } }),
+			toolCallChunk(model, { name: "edit", arguments: { input: "[foo.ts#A1B2]\nDEL 5" } }),
 			toolCallChunk(model, { arguments: { dryRun: true } }),
 			stopChunk(model),
 			"[DONE]",
@@ -158,7 +158,7 @@ describe("issue #2080 - MiniMax multi-chunk object tool arguments", () => {
 				type: "toolCall",
 				id: "call-minimax-1",
 				name: "edit",
-				arguments: { input: "[foo.ts#A1B2]\ndelete 5", dryRun: true },
+				arguments: { input: "[foo.ts#A1B2]\nDEL 5", dryRun: true },
 			},
 		]);
 	});
@@ -175,7 +175,7 @@ describe("issue #2080 - MiniMax multi-chunk object tool arguments", () => {
 		const fetchMock = createMockFetch([
 			toolCallChunk(model, {
 				name: "edit",
-				arguments: { input: "[foo.ts#A1B2]\nreplace 91..91:\n+    " },
+				arguments: { input: "[foo.ts#A1B2]\nSWAP 91.=91:\n+    " },
 			}),
 			toolCallChunk(model, {
 				arguments: { input: 'const out = await executeTool("nuke", { path: "x" }, ctx);' },
@@ -193,7 +193,7 @@ describe("issue #2080 - MiniMax multi-chunk object tool arguments", () => {
 		}
 
 		const expected = {
-			input: '[foo.ts#A1B2]\nreplace 91..91:\n+    const out = await executeTool("nuke", { path: "x" }, ctx);',
+			input: '[foo.ts#A1B2]\nSWAP 91.=91:\n+    const out = await executeTool("nuke", { path: "x" }, ctx);',
 		};
 		// Source-side merged result (what `block.arguments` is set to in `finishToolCallBlock`).
 		expect(toolCallEndArgs).toEqual(expected);
@@ -208,7 +208,7 @@ describe("issue #2080 - MiniMax multi-chunk object tool arguments", () => {
 		// the proxy still concatenates ("" then the final delta) and parses to the same args.
 		const model = getBundledModel<"openai-completions">("minimax-code-cn", "MiniMax-M3");
 		const fetchMock = createMockFetch([
-			toolCallChunk(model, { name: "edit", arguments: { input: "[foo.ts#A1B2]\ndelete 5" } }),
+			toolCallChunk(model, { name: "edit", arguments: { input: "[foo.ts#A1B2]\nDEL 5" } }),
 			stopChunk(model),
 			"[DONE]",
 		]);
@@ -218,6 +218,6 @@ describe("issue #2080 - MiniMax multi-chunk object tool arguments", () => {
 		for await (const event of s) {
 			if (event.type === "toolcall_delta") accumulated += event.delta;
 		}
-		expect(JSON.parse(accumulated)).toEqual({ input: "[foo.ts#A1B2]\ndelete 5" });
+		expect(JSON.parse(accumulated)).toEqual({ input: "[foo.ts#A1B2]\nDEL 5" });
 	});
 });

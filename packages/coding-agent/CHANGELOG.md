@@ -5,6 +5,27 @@
 ### Added
 
 - Added `UMANS_AI_CODING_PLAN_API_KEY` to the CLI environment help.
+## [15.13.3] - 2026-06-15
+
+### Added
+
+- Unexpected stop detection: optional tiny/smol classifier that continues the turn when the assistant says it will act but emits no tool calls.
+- Settings `features.unexpectedStopDetection` and `providers.unexpectedStopModel`.
+
+### Changed
+
+- Changed the `job` poll to return early when a steering message is queued, draining the steer immediately instead of waiting out the poll window.
+- Capped unexpected-stop auto-continuation to three retry attempts before giving up on repeated stops
+- Updated the `edit` tool's hashline prompt, grammar, and docs to recommend the `.=` inclusive range separator (`SWAP 1.=3:`); the legacy `..` form still parses.
+- Normalized all internal worker argv selectors under the `__omp_worker_` prefix, skipping the async worker dispatch check during normal CLI startup.
+
+### Fixed
+
+- Filtered out whitespace-only and dot-only (`.` or `…`) assistant blocks so they are treated as empty and no longer appear as visible content in message rendering, streaming reveal counts, or session export output
+- Filtered placeholder-only thinking content from ACP notifications and message visibility checks so dot-only `reasoning_content` no longer triggers turn completion or read/run updates
+- Fixed ModelRegistry tests making outbound network calls by automatically stubbing fetch during test execution.
+- Fixed `eval` JS cells (and browser-tab worker startup) always stalling for the full init timeout — typically the cell's whole 30s budget — before silently falling back to the slower inline worker. The self-dispatching CLI host imports the worker module dynamically from its argv dispatch, so the worker's own `parentPort.on("message")` attached only after Bun flushed the messages the parent posted before spawn; the synchronously-posted `init` handshake was dropped and never answered with `ready`. The host now installs a buffering `parentPort` inbox synchronously in the entry's sync prefix (before importing the worker module) and the worker binds it on load, replaying the buffered handshake. `omp --smoke-test` now also spawns the JS eval worker through the host entry and asserts it handshakes on a real worker thread.
+- Fixed pre-prompt context-full compaction on OpenAI Responses sessions to use provider-anchored context usage when available, so large encrypted reasoning signatures no longer trigger automatic maintenance while the visible context percentage remains below threshold ([#2628](https://github.com/can1357/oh-my-pi/issues/2628)).
 
 ## [15.13.2] - 2026-06-15
 

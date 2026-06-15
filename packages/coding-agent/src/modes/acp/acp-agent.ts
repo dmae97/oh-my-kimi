@@ -72,7 +72,7 @@ import { AUTO_THINKING, parseConfiguredThinkingLevel } from "../../thinking";
 import { normalizeLocalScheme } from "../../tools/path-utils";
 import { runResolveInvocation } from "../../tools/resolve";
 import { ToolError } from "../../tools/tool-errors";
-import { getVisibleThinkingText } from "../../utils/thinking-display";
+import { canonicalizeMessage } from "../../utils/thinking-display";
 import { createAcpClientBridge } from "./acp-client-bridge";
 import {
 	buildToolCallStartUpdate,
@@ -1907,7 +1907,7 @@ export class AcpAgent implements Agent {
 					continue;
 				}
 				if (item.type === "thinking" && "thinking" in item && typeof item.thinking === "string") {
-					const thinking = getVisibleThinkingText(item);
+					const thinking = canonicalizeMessage(item.thinking);
 					if (thinking.length === 0) continue;
 					notifications.push({
 						sessionId,

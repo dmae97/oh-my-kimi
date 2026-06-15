@@ -212,3 +212,102 @@ function escapeXmlAttr(value: string): string {
 function escapeXmlText(value: string): string {
 	return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
+
+// --- Gemini: Pythonic `tool_code` / `default_api` convention ---
+
+const GEMINI_CODE_OPEN = "```tool_code";
+const GEMINI_OUTPUT_OPEN = "```tool_outputs";
+const GEMINI_FENCE = "```";
+
+export function renderGeminiInvocation(call: ToolCall, options: GrammarRenderOptions = {}): string {
+	const kwargs = Object.entries(call.arguments)
+		.map(([key, value]) => `${key}=${pyValue(value)}`)
+		.join(", ");
+	return options.example ? `${call.name}(${kwargs})` : `default_api.${call.name}(${kwargs})`;
+}
+
+export function renderGeminiToolCalls(calls: readonly ToolCall[], options: GrammarRenderOptions = {}): string {
+	// One call renders bare; parallel calls render as a Python list `[a, b]`.
+	const body =
+		calls.length === 1
+			? renderGeminiInvocation(calls[0]!, options)
+			: `[${calls.map(call => renderGeminiInvocation(call, options)).join(", ")}]`;
+	// Examples show the bare call; the live wire form fences it as `tool_code`.
+	return options.example ? body : `${GEMINI_CODE_OPEN}\n${body}\n${GEMINI_FENCE}`;
+}
+
+export function renderGeminiToolResults(results: readonly GrammarToolResult[]): string {
+	return results.map(result => `${GEMINI_OUTPUT_OPEN}\n${result.text}\n${GEMINI_FENCE}`).join("\n");
+}
+
+function pyValue(value: unknown): string {
+	if (value === null || value === undefined) return "None";
+	if (typeof value === "boolean") return value ? "True" : "False";
+	if (typeof value === "number") return Number.isFinite(value) ? String(value) : pyString(String(value));
+	if (typeof value === "string") return pyString(value);
+	if (Array.isArray(value)) return `[${value.map(pyValue).join(", ")}]`;
+	if (typeof value === "object") {
+		const entries = Object.entries(value as Record<string, unknown>);
+		return `{${entries.map(([key, val]) => `${pyString(key)}: ${pyValue(val)}`).join(", ")}}`;
+	}
+	return pyString(String(value));
+}
+
+function pyString(value: string): string {
+	const escaped = value
+		.replaceAll("\\", "\\\\")
+		.replaceAll('"', '\\"')
+		.replaceAll("\n", "\\n")
+		.replaceAll("\r", "\\r")
+		.replaceAll("\t", "\\t");
+	return `"${escaped}"`;
+}
+
+// --- Gemma 4: token-delimited `call:NAME{…}` convention ---
+
+const GEMMA_CALL_OPEN = "<|tool_call>";
+const GEMMA_CALL_CLOSE = "<tool_call|>";
+const GEMMA_RESPONSE_OPEN = "<|tool_response>";
+const GEMMA_RESPONSE_CLOSE = "<tool_response|>";
+const GEMMA_STRING = '<|"|>';
+
+export function renderGemmaInvocation(call: ToolCall, _options: GrammarRenderOptions = {}): string {
+	const args = Object.entries(call.arguments)
+		.map(([key, value]) => `${key}:${gemmaValue(value)}`)
+		.join(",");
+	return `${GEMMA_CALL_OPEN}call:${call.name}{${args}}${GEMMA_CALL_CLOSE}`;
+}
+
+export function renderGemmaToolCalls(calls: readonly ToolCall[], options: GrammarRenderOptions = {}): string {
+	return calls.map(call => renderGemmaInvocation(call, options)).join("");
+}
+
+export function renderGemmaToolResults(results: readonly GrammarToolResult[]): string {
+	return results
+		.map(
+			result =>
+				`${GEMMA_RESPONSE_OPEN}response:${result.name}{output:${gemmaValue(parseMaybeJson(result.text))}}${GEMMA_RESPONSE_CLOSE}`,
+		)
+		.join("");
+}
+
+function gemmaValue(value: unknown): string {
+	if (value === null || value === undefined) return "null";
+	if (typeof value === "boolean") return value ? "true" : "false";
+	if (typeof value === "number") return String(value);
+	if (typeof value === "string") return `${GEMMA_STRING}${value}${GEMMA_STRING}`;
+	if (Array.isArray(value)) return `[${value.map(gemmaValue).join(",")}]`;
+	if (typeof value === "object") {
+		const entries = Object.entries(value as Record<string, unknown>);
+		return `{${entries.map(([key, val]) => `${key}:${gemmaValue(val)}`).join(",")}}`;
+	}
+	return `${GEMMA_STRING}${String(value)}${GEMMA_STRING}`;
+}
+
+function parseMaybeJson(text: string): unknown {
+	try {
+		return JSON.parse(text) as unknown;
+	} catch {
+		return text;
+	}
+}

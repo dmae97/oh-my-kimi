@@ -247,7 +247,7 @@ describe("Recovery", () => {
 			path: filePath,
 			currentText,
 			tag: v0Tag,
-			edits: parsePatch(`SWAP 10..10:\n${repl("L10-EDITED")}`).edits,
+			edits: parsePatch(`SWAP 10.=10:\n${repl("L10-EDITED")}`).edits,
 		});
 
 		expect(recovered).not.toBeNull();
@@ -286,25 +286,25 @@ describe("hashline abort sentinel", () => {
 describe("hashline parser — delete and blank payload semantics", () => {
 	it("applies inline delete and empty replace operations", () => {
 		expect(applyDiff("line1\nline2\nline3\n", splitHashlineInput("[a.ts]\nDEL 2\n").diff)).toBe("line1\nline3\n");
-		expect(applyDiff("line1\nline2\nline3\nline4\n", splitHashlineInput("[a.ts]\nDEL 2..3\n").diff)).toBe(
+		expect(applyDiff("line1\nline2\nline3\nline4\n", splitHashlineInput("[a.ts]\nDEL 2.=3\n").diff)).toBe(
 			"line1\nline4\n",
 		);
-		expect(applyDiff("line1\nline2\nline3\n", splitHashlineInput("[a.ts]\nSWAP 2..2:\n").diff)).toBe(
+		expect(applyDiff("line1\nline2\nline3\n", splitHashlineInput("[a.ts]\nSWAP 2.=2:\n").diff)).toBe(
 			"line1\nline3\n",
 		);
 	});
 
 	it("treats old inline replacement syntax as orphan body", () => {
-		const { diff } = splitHashlineInput("[a.ts]\n2..2=replacement\n");
+		const { diff } = splitHashlineInput("[a.ts]\n2.=2=replacement\n");
 		expect(() => parsePatch(diff)).toThrow(/payload line has no preceding hunk header/);
 	});
 
 	it("preserves explicit blank replacement rows", () => {
 		const text = "a\nb\nc\nd\ne\n";
-		const ops = `[a.ts]\nSWAP 2..2:\n${repl("")}\n${repl("")}\nSWAP 4..4:\n${repl("D")}\n`;
+		const ops = `[a.ts]\nSWAP 2.=2:\n${repl("")}\n${repl("")}\nSWAP 4.=4:\n${repl("D")}\n`;
 		expect(applyDiff(text, splitHashlineInput(ops).diff)).toBe("a\n\n\nc\nD\ne\n");
 
-		const embedded = `[a.ts]\nSWAP 2..2:\n${repl("first")}\n${repl("")}\n${repl("second")}\n`;
+		const embedded = `[a.ts]\nSWAP 2.=2:\n${repl("first")}\n${repl("")}\n${repl("second")}\n`;
 		expect(applyDiff("a\nb\nc\n", splitHashlineInput(embedded).diff)).toBe("a\nfirst\n\nsecond\nc\n");
 	});
 });

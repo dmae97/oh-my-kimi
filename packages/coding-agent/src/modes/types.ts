@@ -54,6 +54,11 @@ export type SubmittedUserInput = {
 	 *  turn. Used by the `c`/`.` continue shortcut. */
 	synthetic?: boolean;
 	display?: boolean;
+	/** Queue intent if the session is (or becomes) busy when this submission is
+	 *  dispatched: "steer" (interrupt the active turn) or "followUp" (process after
+	 *  it). Normal user Enter carries "steer" to match the streaming-branch Enter;
+	 *  background/continuation submits omit it and default to "followUp". */
+	streamingBehavior?: "steer" | "followUp";
 	cancelled: boolean;
 	started: boolean;
 };
@@ -222,6 +227,7 @@ export interface InteractiveModeContext {
 		imageLinks?: (string | undefined)[];
 		customType?: string;
 		display?: boolean;
+		streamingBehavior?: "steer" | "followUp";
 	}): SubmittedUserInput;
 	cancelPendingSubmission(): boolean;
 	markPendingSubmissionStarted(input: SubmittedUserInput): boolean;

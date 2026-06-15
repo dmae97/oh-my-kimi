@@ -9,7 +9,7 @@ import type {
 import type { AgentSessionEvent } from "../../session/agent-session";
 import { resolveToCwd } from "../../tools/path-utils";
 import type { TodoStatus } from "../../tools/todo";
-import { hasVisibleThinking } from "../../utils/thinking-display";
+import { canonicalizeMessage } from "../../utils/thinking-display";
 
 interface MessageProgress {
 	textEmitted: boolean;
@@ -259,7 +259,7 @@ function mapAssistantMessageUpdate(
 			break;
 		case "thinking_delta": {
 			const block = event.assistantMessageEvent.partial?.content?.[event.assistantMessageEvent.contentIndex];
-			if (block?.type === "thinking" && !hasVisibleThinking(block)) return [];
+			if (block?.type === "thinking" && !canonicalizeMessage(block.thinking)) return [];
 			sessionUpdate = "agent_thought_chunk";
 			text = event.assistantMessageEvent.delta;
 			if (text.length > 0 && progress) {

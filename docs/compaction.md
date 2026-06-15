@@ -151,6 +151,7 @@ Default prune policy:
 
 - Protect newest `40_000` tool-output tokens.
 - Require at least `20_000` total estimated savings.
+- Never blank a result below `50` tokens (`MIN_PRUNE_TOKENS`): the `[Output truncated - N tokens]` placeholder costs ~8 tokens, so pruning a sub-floor result would grow the context and churn the prompt cache for nothing. (Superseded and useless results keep their own rules — the useless collector already drops no-savings candidates; superseded reads prune for correctness regardless of size.)
 - Never prune `skill` tool results, `read` results of `skill://` paths, or reads of the active plan reference file (added via `AgentSession`'s plan protection).
 
 Pruned tool results are replaced with:

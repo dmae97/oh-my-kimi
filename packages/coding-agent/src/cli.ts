@@ -14,6 +14,7 @@ try {
  * CLI entry point — registers all commands explicitly and delegates to the
  * lightweight CLI runner from pi-utils.
  */
+import { parentPort } from "node:worker_threads";
 import type { CliConfig } from "@oh-my-pi/pi-utils/cli";
 import {
 	APP_NAME,
@@ -23,7 +24,7 @@ import {
 	setProfile,
 	VERSION,
 } from "@oh-my-pi/pi-utils/dirs";
-import { declareWorkerHostEntry } from "@oh-my-pi/pi-utils/worker-host";
+import { declareWorkerHostEntry, installWorkerInbox } from "@oh-my-pi/pi-utils/worker-host";
 import { installProfileAlias, resolveProfileAliasCommandFromProcess } from "./cli/profile-alias";
 import { extractProfileFlags } from "./cli/profile-bootstrap";
 
@@ -67,6 +68,7 @@ async function runSmokeTest(): Promise<void> {
 	const { smokeTestTinyTitleWorker } = await import("./tiny/title-client");
 	const { smokeTestSttWorker } = await import("./stt/asr-client");
 	const { smokeTestTtsWorker } = await import("./tts/tts-client");
+	const { smokeTestJsEvalWorker } = await import("./eval/js/context-manager");
 	await smokeTestSyncWorker();
 
 	const statsServer = await startServer(0);
@@ -83,18 +85,23 @@ async function runSmokeTest(): Promise<void> {
 
 	await smokeTestTinyTitleWorker();
 	await smokeTestSttWorker();
+	await smokeTestJsEvalWorker();
 	await smokeTestTtsWorker();
 	process.stdout.write("smoke-test: ok\n");
 }
 
-const TINY_WORKER_ARGS = new Set(["--tiny-worker", "__tiny_worker"]);
-const STATS_SYNC_WORKER_ARG = "__omp_stats_sync_worker";
-const TAB_WORKER_ARG = "__omp_tab_worker";
-const JS_EVAL_WORKER_ARG = "__omp_js_eval_worker";
-const STT_WORKER_ARG = "__omp_stt_worker";
-const TTS_WORKER_ARG = "__omp_tts_worker";
+const TINY_WORKER_ARG = "__omp_worker_tiny_inference";
+const STATS_SYNC_WORKER_ARG = "__omp_worker_stats_sync";
+const TAB_WORKER_ARG = "__omp_worker_tab";
+const JS_EVAL_WORKER_ARG = "__omp_worker_js_eval";
+const STT_WORKER_ARG = "__omp_worker_stt";
+const TTS_WORKER_ARG = "__omp_worker_tts";
 
 async function runWorkerEntrypoint(arg: string | undefined): Promise<boolean> {
+	if (arg === TINY_WORKER_ARG) {
+		await runTinyWorker();
+		return true;
+	}
 	if (arg === STATS_SYNC_WORKER_ARG) {
 		// The sync worker handles messages via `self.onmessage`, assigned during
 		// this *async* dynamic import. Bun flushes the worker's initial message
@@ -117,11 +124,20 @@ async function runWorkerEntrypoint(arg: string | undefined): Promise<boolean> {
 		}
 		return true;
 	}
+	// Bun flushes messages the parent posted before spawn once this entry's
+	// top-level evaluation completes, delivering them only to listeners present
+	// at that moment. These worker modules are imported dynamically below, so
+	// their own `parentPort.on("message")` lands after the flush and the parent's
+	// synchronous `init` is dropped. Install a buffering inbox synchronously here
+	// (still inside the entry's sync prefix) so the handshake survives; the worker
+	// module binds the real handler once loaded.
 	if (arg === TAB_WORKER_ARG) {
+		if (parentPort) installWorkerInbox(parentPort);
 		await import("./tools/browser/tab-worker-entry");
 		return true;
 	}
 	if (arg === JS_EVAL_WORKER_ARG) {
+		if (parentPort) installWorkerInbox(parentPort);
 		await import("./eval/js/worker-entry");
 		return true;
 	}
@@ -251,11 +267,8 @@ export async function runCli(argv: string[]): Promise<void> {
 	// synchronous prefix of `runWorkerEntrypoint`, and Bun flushes the
 	// worker's parked initial messages as soon as the entry module's
 	// top-level evaluation finishes.
-	if (TINY_WORKER_ARGS.has(resolvedArgv[0] ?? "")) {
-		await runTinyWorker();
-		return;
-	}
-	if (await runWorkerEntrypoint(resolvedArgv[0])) {
+	if (resolvedArgv[0]?.startsWith("__omp_worker_")) {
+		await runWorkerEntrypoint(resolvedArgv[0]);
 		return;
 	}
 

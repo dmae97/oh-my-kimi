@@ -121,8 +121,12 @@ export function ollamaCloudModelManagerOptions(
 						metadata = undefined;
 					}
 					const capabilities = metadata?.capabilities;
-					const contextWindow =
-						getContextWindow(metadata?.model_info) ?? providerReference?.contextWindow ?? 128000;
+					const discoveredContextWindow = getContextWindow(metadata?.model_info);
+					// `/api/show` is the only trustworthy Ollama-owned source for size caps.
+					// When it is unavailable (or returns only coarse capabilities), do NOT
+					// inherit giant budgets from bundled fallback metadata sourced from a
+					// different catalog; keep the historical safe fallback instead.
+					const contextWindow = discoveredContextWindow ?? 128000;
 					const reasoning = capabilities ? capabilities.includes("thinking") : (reference?.reasoning ?? false);
 					const thinking = capabilities ? getThinkingConfig(capabilities) : reference?.thinking;
 					const input = capabilities
@@ -142,7 +146,10 @@ export function ollamaCloudModelManagerOptions(
 						input,
 						cost: reference?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 						contextWindow,
-						maxTokens: providerReference?.maxTokens ?? Math.min(contextWindow, 8192),
+						maxTokens:
+							discoveredContextWindow !== null && discoveredContextWindow !== undefined
+								? (providerReference?.maxTokens ?? Math.min(contextWindow, 8192))
+								: Math.min(contextWindow, 8192),
 					};
 				}),
 			);

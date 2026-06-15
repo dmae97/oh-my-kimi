@@ -121,6 +121,34 @@ function makeEvalSession(
 	return { session, sessionFile, sessionId: `${prefix}:${crypto.randomUUID()}` };
 }
 
+/**
+ * Spy `runSubprocess` so a `parallel()` fan-out overlaps deterministically: every
+ * bridge call parks until the pool saturates at `limit` concurrent calls in flight,
+ * then all proceed. Proves the pool reaches its ceiling without a wall-clock sleep —
+ * the pool itself caps how many run at once, so an unbounded pool would drive
+ * `maxInFlight` past `limit` and fail the bound.
+ */
+function spyConcurrencyBarrier(limit: number): { maxInFlight: () => number } {
+	let inFlight = 0;
+	let max = 0;
+	let saturate: (() => void) | undefined;
+	const saturated = new Promise<void>(resolve => {
+		saturate = resolve;
+	});
+	vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => {
+		inFlight++;
+		max = Math.max(max, inFlight);
+		if (inFlight >= limit) saturate?.();
+		try {
+			await saturated;
+			return singleResult(options, { output: options.assignment ?? "" });
+		} finally {
+			inFlight--;
+		}
+	});
+	return { maxInFlight: () => max };
+}
+
 describe("runEvalAgent", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
@@ -298,8 +326,17 @@ describe("runEvalAgent", () => {
 });
 
 describe("agent() through eval runtimes", () => {
+	// One shared JS worker backs every agent() JavaScript test below. Spawning a
+	// worker (thread + module-graph import) is fixed infrastructure cost, not
+	// behavior under test; reusing it keeps the suite fast. Each run still threads
+	// its own ToolSession (settings/mock are read live through the bridge per call)
+	// and top-level `const`/`let` are demoted to `var`, so reuse never leaks state
+	// these tests observe. Torn down in afterAll via disposeAllVmContexts().
+	const sharedJsSessionId = "agent-bridge-shared-js";
+
 	afterEach(() => {
 		vi.restoreAllMocks();
+		vi.useRealTimers();
 	});
 
 	afterAll(async () => {
@@ -309,7 +346,7 @@ describe("agent() through eval runtimes", () => {
 
 	it("exposes agent() in JavaScript and parses structured output", async () => {
 		using tempDir = TempDir.createSync("@omp-eval-agent-js-");
-		const { session, sessionFile, sessionId } = makeEvalSession(tempDir, "js-agent");
+		const { session, sessionFile } = makeEvalSession(tempDir, "js-agent");
 		mockAgents();
 		vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options =>
 			singleResult(options, {
@@ -319,7 +356,7 @@ describe("agent() through eval runtimes", () => {
 
 		const result = await executeJs(
 			'const text = await agent("hi"); const data = await agent("json", { schema: { type: "object" } }); return JSON.stringify([text, data]);',
-			{ cwd: tempDir.path(), sessionId, session, sessionFile },
+			{ cwd: tempDir.path(), sessionId: sharedJsSessionId, session, sessionFile },
 		);
 
 		expect(result.exitCode).toBe(0);
@@ -334,35 +371,24 @@ describe("agent() through eval runtimes", () => {
 			"task.enableLsp": true,
 			"task.maxConcurrency": 2,
 		});
-		const { session, sessionFile, sessionId } = makeEvalSession(tempDir, "js-agent-parallel", settings);
+		const { session, sessionFile } = makeEvalSession(tempDir, "js-agent-parallel", settings);
 		mockAgents();
-		let inFlight = 0;
-		let maxInFlight = 0;
-		vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => {
-			inFlight++;
-			maxInFlight = Math.max(maxInFlight, inFlight);
-			try {
-				await Bun.sleep(options.assignment === "a" ? 30 : 10);
-				return singleResult(options, { output: options.assignment ?? "" });
-			} finally {
-				inFlight--;
-			}
-		});
+		const barrier = spyConcurrencyBarrier(2);
 
 		const result = await executeJs(
 			'const values = await parallel(["a", "b", "c", "d"].map(name => () => agent(name))); return JSON.stringify(values);',
-			{ cwd: tempDir.path(), sessionId, session, sessionFile },
+			{ cwd: tempDir.path(), sessionId: sharedJsSessionId, session, sessionFile },
 		);
 
 		expect(result.exitCode).toBe(0);
 		expect(JSON.parse(result.output.trim())).toEqual(["a", "b", "c", "d"]);
-		expect(maxInFlight).toBeGreaterThan(1);
-		expect(maxInFlight).toBeLessThanOrEqual(2);
+		expect(barrier.maxInFlight()).toBeGreaterThan(1);
+		expect(barrier.maxInFlight()).toBeLessThanOrEqual(2);
 	});
 
 	it("propagates JavaScript parallel() rejections", async () => {
 		using tempDir = TempDir.createSync("@omp-eval-agent-js-reject-");
-		const { session, sessionFile, sessionId } = makeEvalSession(tempDir, "js-agent-reject");
+		const { session, sessionFile } = makeEvalSession(tempDir, "js-agent-reject");
 		mockAgents();
 		vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => {
 			if (options.assignment === "bad") {
@@ -373,7 +399,7 @@ describe("agent() through eval runtimes", () => {
 
 		const result = await executeJs('await parallel([() => agent("ok"), () => agent("bad")]);', {
 			cwd: tempDir.path(),
-			sessionId,
+			sessionId: sharedJsSessionId,
 			session,
 			sessionFile,
 		});
@@ -416,18 +442,7 @@ describe("agent() through eval runtimes", () => {
 		});
 		const { session, sessionFile, sessionId } = makeEvalSession(tempDir, "py-agent-parallel", settings);
 		mockAgents();
-		let inFlight = 0;
-		let maxInFlight = 0;
-		vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => {
-			inFlight++;
-			maxInFlight = Math.max(maxInFlight, inFlight);
-			try {
-				await Bun.sleep(options.assignment === "a" ? 30 : 10);
-				return singleResult(options, { output: options.assignment ?? "" });
-			} finally {
-				inFlight--;
-			}
-		});
+		const barrier = spyConcurrencyBarrier(2);
 
 		const result = await executePython(
 			'import json\nprint(json.dumps(parallel([lambda n=n: agent(n) for n in ["a", "b", "c", "d"]])))',
@@ -440,8 +455,8 @@ describe("agent() through eval runtimes", () => {
 
 		expect(result.exitCode).toBe(0);
 		expect(JSON.parse(result.output.trim())).toEqual(["a", "b", "c", "d"]);
-		expect(maxInFlight).toBeGreaterThan(1);
-		expect(maxInFlight).toBeLessThanOrEqual(2);
+		expect(barrier.maxInFlight()).toBeGreaterThan(1);
+		expect(barrier.maxInFlight()).toBeLessThanOrEqual(2);
 	});
 
 	it("interrupting a Python parallel() fan-out settles the kernel cleanly and preserves session state", async () => {
@@ -526,7 +541,7 @@ describe("agent() through eval runtimes", () => {
 
 	it("streams enriched agent progress through onStatus before the cell finishes", async () => {
 		using tempDir = TempDir.createSync("@omp-eval-agent-progress-");
-		const { session, sessionFile, sessionId } = makeEvalSession(tempDir, "js-agent-progress");
+		const { session, sessionFile } = makeEvalSession(tempDir, "js-agent-progress");
 		mockAgents();
 
 		const makeProgress = (options: ExecutorOptions, overrides: Partial<AgentProgress>): AgentProgress => ({
@@ -580,7 +595,7 @@ describe("agent() through eval runtimes", () => {
 		const events: Array<{ op: string; [key: string]: unknown }> = [];
 		const result = await executeJs('await agent("investigate", { label: "Scout" });', {
 			cwd: tempDir.path(),
-			sessionId,
+			sessionId: sharedJsSessionId,
 			session,
 			sessionFile,
 			onStatus: event => events.push(event),
@@ -622,16 +637,28 @@ describe("agent() through eval runtimes", () => {
 		mockAgents();
 
 		// runSubprocess runs far past the eval timeout budget and emits NO progress
-		// of its own. The bridge pause must make that delegated time invisible to
-		// the watchdog.
+		// of its own; the bridge pause must make that delegated time invisible to
+		// the watchdog. Fake timers replace the real wait: the subprocess parks on
+		// `released` so the test can advance the clock past the budget while the
+		// bridge call is provably in flight, then release it deterministically.
+		let release: (() => void) | undefined;
+		const released = new Promise<void>(resolve => {
+			release = resolve;
+		});
+		let markInFlight: (() => void) | undefined;
+		const inFlight = new Promise<void>(resolve => {
+			markInFlight = resolve;
+		});
 		vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => {
-			await Bun.sleep(40);
+			markInFlight?.();
+			await released;
 			return singleResult(options, { output: "done" });
 		});
 
 		const ops: string[] = [];
+		vi.useFakeTimers();
 		using idle = new IdleTimeout(20);
-		const result = await runEvalAgent(
+		const resultPromise = runEvalAgent(
 			{ prompt: "investigate" },
 			{
 				session,
@@ -644,11 +671,22 @@ describe("agent() through eval runtimes", () => {
 			},
 		);
 
+		// The bridge paused the watchdog; the subprocess is now blocked in flight.
+		await inFlight;
+		// Burn far more than the 20ms budget while paused: the watchdog stays armed-off.
+		vi.advanceTimersByTime(1_000);
+		expect(idle.signal.aborted).toBe(false);
+
+		release?.();
+		const result = await resultPromise;
+
 		expect(result.text).toBe("done");
 		expect(ops).toEqual([EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP]);
 		expect(idle.signal.aborted).toBe(false);
 
-		await Bun.sleep(60);
+		// RESUME re-armed a fresh window; once the runtime stays idle past it the
+		// watchdog finally fires.
+		vi.advanceTimersByTime(idle.idleMs + 5);
 		expect(idle.signal.aborted).toBe(true);
 	});
 
@@ -657,9 +695,20 @@ describe("agent() through eval runtimes", () => {
 		const { session } = makeEvalSession(tempDir, "js-agent-progress-timeout-pause");
 		mockAgents();
 
-		// Stream frequent progress snapshots (op:"agent") for well past the budget.
+		// Stream frequent progress snapshots (op:"agent") well past the budget.
 		// They render as status, but timeout accounting is controlled only by the
-		// bridge pause/resume events.
+		// bridge pause/resume events — so even a flood of snapshots must not re-arm
+		// the watchdog. Fake timers make "past the budget" deterministic: the
+		// subprocess emits its snapshots, parks on `released`, and the test advances
+		// the clock far past the window before releasing it.
+		let release: (() => void) | undefined;
+		const released = new Promise<void>(resolve => {
+			release = resolve;
+		});
+		let markInFlight: (() => void) | undefined;
+		const inFlight = new Promise<void>(resolve => {
+			markInFlight = resolve;
+		});
 		vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => {
 			for (let i = 0; i < 20; i++) {
 				options.onProgress?.({
@@ -679,15 +728,16 @@ describe("agent() through eval runtimes", () => {
 					cost: 0,
 					durationMs: i * 10,
 				});
-				await Bun.sleep(40);
 			}
+			markInFlight?.();
+			await released;
 			return singleResult(options, { output: "done" });
 		});
 
 		const ops: string[] = [];
-		// Timing invariant (keep, do not re-tighten): total mock work (20*40ms = 800ms) > idle window (250ms) > scheduling jitter (~tens of ms).
+		vi.useFakeTimers();
 		using idle = new IdleTimeout(250);
-		const result = await runEvalAgent(
+		const resultPromise = runEvalAgent(
 			{ prompt: "investigate" },
 			{
 				session,
@@ -699,6 +749,16 @@ describe("agent() through eval runtimes", () => {
 				},
 			},
 		);
+
+		// All snapshots have streamed and the subprocess is blocked in flight.
+		await inFlight;
+		// Far exceed the 250ms budget while paused: the snapshots already delivered
+		// must not have re-armed the watchdog.
+		vi.advanceTimersByTime(10_000);
+		expect(idle.signal.aborted).toBe(false);
+
+		release?.();
+		const result = await resultPromise;
 
 		expect(result.text).toBe("done");
 		expect(ops[0]).toBe(EVAL_TIMEOUT_PAUSE_OP);

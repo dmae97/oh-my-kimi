@@ -18,7 +18,7 @@ describe("serializeConversation", () => {
 
 		const result = serializeConversation(messages);
 
-		expect(result).toContain("[Tool result]:");
+		expect(result).toContain("[Tool Result]:");
 		expect(result).toContain("[... 3000 more characters truncated]");
 		expect(result).toContain("x".repeat(2000));
 		expect(result).not.toContain("x".repeat(3000));
@@ -39,7 +39,7 @@ describe("serializeConversation", () => {
 
 		const result = serializeConversation(messages);
 
-		expect(result).toBe(`[Tool result]: ${shortContent}`);
+		expect(result).toBe(`[Tool Result]: ${shortContent}`);
 		expect(result).not.toContain("truncated");
 	});
 

@@ -9,7 +9,7 @@ function apply(text: string, diff: string): { text: string; warnings: string[] }
 describe("boundary-balance repair", () => {
 	// The canonical incident: a range-replace whose payload restates the
 	// fragment + paren close that still live just below the range, doubling
-	// `</>` and `);`. `replace 11..31:` covers `const …` through the second `/>`.
+	// `</>` and `);`. `replace 11.=31:` covers `const …` through the second `/>`.
 	it("drops a duplicated multi-line closing block (the Root.tsx incident)", () => {
 		const file = [
 			'import type React from "react";',
@@ -35,7 +35,7 @@ describe("boundary-balance repair", () => {
 		// Range 7..16 = `const …` through the first `/>`; payload restates the
 		// `</>` + `);` that survive at lines 17-18.
 		const diff = [
-			"SWAP 7..16:",
+			"SWAP 7.=16:",
 			"+\treturn (",
 			"+\t\t<>",
 			"+\t\t\t<Composition",
@@ -60,9 +60,9 @@ describe("boundary-balance repair", () => {
 	// the payload restates the `});` that survives just below it.
 	it("drops a single duplicated structural closer (`});`)", () => {
 		const file = ["it('a', () => {", "\tsetup();", "\trun();", "});", "after();"].join("\n");
-		// `replace 2..3:` replaces the two body lines but the payload also restates the
+		// `replace 2.=3:` replaces the two body lines but the payload also restates the
 		// `});` at line 4, which survives — a duplicate close.
-		const diff = ["SWAP 2..3:", "+\tsetup2();", "+\trun2();", "+});"].join("\n");
+		const diff = ["SWAP 2.=3:", "+\tsetup2();", "+\trun2();", "+});"].join("\n");
 		const { text, warnings } = apply(file, diff);
 		expect(text).toBe(["it('a', () => {", "\tsetup2();", "\trun2();", "});", "after();"].join("\n"));
 		expect(warnings.some(w => /delimiter-balance/.test(w))).toBe(true);
@@ -83,10 +83,10 @@ describe("boundary-balance repair", () => {
 			"\t}",
 			"}",
 		].join("\n");
-		// `replace 4..6:` covers the params + return-type line, but the payload also
+		// `replace 4.=6:` covers the params + return-type line, but the payload also
 		// restates the `planRender(` at line 3, which survives — a duplicate open.
 		const diff = [
-			"SWAP 4..6:",
+			"SWAP 4.=6:",
 			"+\tplanRender(",
 			"+\t\ta: string[],",
 			"+\t\tb: boolean,",
@@ -117,7 +117,7 @@ describe("boundary-balance repair", () => {
 		const file = ["if (a) {", "\tfoo();", "}", "bar();"].join("\n");
 		// Payload duplicates `if (a) {` but is net +2 braces; dropping the one
 		// opener cannot zero the delta, so nothing is repaired.
-		const diff = ["SWAP 2..2:", "+if (a) {", "+\tif (b) {", "+\t\tfoo();"].join("\n");
+		const diff = ["SWAP 2.=2:", "+if (a) {", "+\tif (b) {", "+\t\tfoo();"].join("\n");
 		const { text, warnings } = apply(file, diff);
 		expect(text).toBe(["if (a) {", "if (a) {", "\tif (b) {", "\t\tfoo();", "}", "bar();"].join("\n"));
 		expect(warnings).toHaveLength(0);
@@ -126,9 +126,9 @@ describe("boundary-balance repair", () => {
 	// Genuine missing-closer: payload omits the trailing `});`.
 	it("spares the deleted closing line when the payload omits it", () => {
 		const file = ["const handlers = {", "\ta() {", "\t\treturn 1;", "\t},", "};"].join("\n");
-		// `replace 5..5:` is the final `};`. Model inserts a new method but forgets to
+		// `replace 5.=5:` is the final `};`. Model inserts a new method but forgets to
 		// restate `};`; sparing it keeps the object literal balanced.
-		const diff = ["SWAP 5..5:", "+\tb() {", "+\t\treturn 2;", "+\t},"].join("\n");
+		const diff = ["SWAP 5.=5:", "+\tb() {", "+\t\treturn 2;", "+\t},"].join("\n");
 		const { text, warnings } = apply(file, diff);
 		expect(text).toBe(
 			["const handlers = {", "\ta() {", "\t\treturn 1;", "\t},", "\tb() {", "\t\treturn 2;", "\t},", "};"].join(
@@ -143,7 +143,7 @@ describe("boundary-balance repair", () => {
 	// keeping the deleted suffix would duplicate the closer outside the payload.
 	it("does not spare a deleted closing line that the payload already restates", () => {
 		const file = ["class Foo {", "\tok();", "\t}", "}"].join("\n");
-		const diff = ["SWAP 1..4:", "+class Foo {", "+\tok();", "+}"].join("\n");
+		const diff = ["SWAP 1.=4:", "+class Foo {", "+\tok();", "+}"].join("\n");
 		const { text, warnings } = apply(file, diff);
 
 		expect(text).toBe(["class Foo {", "\tok();", "}"].join("\n"));
@@ -159,7 +159,7 @@ describe("boundary-balance repair", () => {
 			"\tprint_status()",
 		].join("\n");
 		const diff = [
-			"SWAP 2..3:",
+			"SWAP 2.=3:",
 			"+func _cmd_travel_homeworld():",
 			"+\tvar destination = find_homeworld()",
 			"+\ttravel_to(destination)",
@@ -183,7 +183,7 @@ describe("boundary-balance repair", () => {
 
 	it("preserves payloads where multi-line boundary echoes cover every line", () => {
 		const file = ["A", "B", "old", "C", "D"].join("\n");
-		const diff = ["SWAP 3..3:", "+A", "+B", "+C", "+D"].join("\n");
+		const diff = ["SWAP 3.=3:", "+A", "+B", "+C", "+D"].join("\n");
 
 		const { text, warnings } = apply(file, diff);
 
@@ -193,7 +193,7 @@ describe("boundary-balance repair", () => {
 
 	it("preserves payloads made only of lines matching both replacement neighbors", () => {
 		const file = ["a", "old", "c"].join("\n");
-		const diff = ["SWAP 2..2:", "+a", "+c"].join("\n");
+		const diff = ["SWAP 2.=2:", "+a", "+c"].join("\n");
 
 		const { text, warnings } = apply(file, diff);
 
@@ -209,7 +209,7 @@ describe("boundary-balance repair", () => {
 		// Payload deliberately opens with the same bare `}` that sits above the
 		// range and closes with the same `}` that sits below it; the payload is
 		// internally balanced (delta 0) while the dropped edges sum to -2 braces.
-		const diff = ["SWAP 2..2:", "+}", "+if (a) {", "+if (b) {", "+x();", "+}"].join("\n");
+		const diff = ["SWAP 2.=2:", "+}", "+if (a) {", "+if (b) {", "+x();", "+}"].join("\n");
 
 		const { text, warnings } = apply(file, diff);
 
@@ -221,7 +221,7 @@ describe("boundary-balance repair", () => {
 	// (opener + closer) that duplicate the surviving neighbors are dropped.
 	it("still drops a balance-neutral wrapper echo", () => {
 		const file = ["function f() {", "old();", "}"].join("\n");
-		const diff = ["SWAP 2..2:", "+function f() {", "+fresh();", "+}"].join("\n");
+		const diff = ["SWAP 2.=2:", "+function f() {", "+fresh();", "+}"].join("\n");
 
 		const { text, warnings } = apply(file, diff);
 
@@ -235,7 +235,7 @@ describe("boundary-balance repair", () => {
 		const file = ["foo();", "bar();", "bar();", "baz();"].join("\n");
 		// Replace line 2 with two balanced statements; the tail `bar();` equals
 		// the surviving line 3 but the payload is balanced — must NOT be dropped.
-		const diff = ["SWAP 2..2:", "+qux();", "+bar();"].join("\n");
+		const diff = ["SWAP 2.=2:", "+qux();", "+bar();"].join("\n");
 		const { text, warnings } = apply(file, diff);
 		expect(text).toBe(["foo();", "qux();", "bar();", "bar();", "baz();"].join("\n"));
 		expect(warnings).toHaveLength(0);
@@ -245,7 +245,7 @@ describe("boundary-balance repair", () => {
 	// could discard intended content, and it does not break syntax.
 	it("does not drop a balance-neutral duplicated statement", () => {
 		const file = ["a = 1;", "b = 2;", "c = 3;"].join("\n");
-		const diff = ["SWAP 1..1:", "+a = 1;", "+b = 2;"].join("\n");
+		const diff = ["SWAP 1.=1:", "+a = 1;", "+b = 2;"].join("\n");
 		const { text, warnings } = apply(file, diff);
 		expect(text).toBe(["a = 1;", "b = 2;", "b = 2;", "c = 3;"].join("\n"));
 		expect(warnings).toHaveLength(0);
@@ -254,18 +254,18 @@ describe("boundary-balance repair", () => {
 	// Brackets inside strings must not trigger a spurious balance mismatch.
 	it("ignores brackets inside string literals", () => {
 		const file = ['const a = "}";', 'const b = "x";', 'const c = "y";'].join("\n");
-		const diff = ["SWAP 2..2:", '+const b = "}}}";'].join("\n");
+		const diff = ["SWAP 2.=2:", '+const b = "}}}";'].join("\n");
 		const { text, warnings } = apply(file, diff);
 		expect(text).toBe(['const a = "}";', 'const b = "}}}";', 'const c = "y";'].join("\n"));
 		expect(warnings).toHaveLength(0);
 	});
 
 	// A MULTI-line construct rewrite whose payload restates the keeper that
-	// survives just below the range — the att#1 `replace 639..644` shape where
+	// survives just below the range — the att#1 `replace 639.=644` shape where
 	// the range was one line short of the `const changedFiles` it retyped.
 	it("drops a one-sided trailing keeper echo in a multi-line rewrite", () => {
 		const file = ["function f() {", "  a();", "  b();", "  const out = [];", "  return out;", "}"].join("\n");
-		const diff = ["SWAP 2..3:", "+  a2();", "+  b2();", "+  const out = [];"].join("\n");
+		const diff = ["SWAP 2.=3:", "+  a2();", "+  b2();", "+  const out = [];"].join("\n");
 		const { text, warnings } = apply(file, diff);
 		expect(text).toBe(["function f() {", "  a2();", "  b2();", "  const out = [];", "  return out;", "}"].join("\n"));
 		expect(warnings.some(warning => /boundary echo/.test(warning))).toBe(true);
@@ -275,7 +275,7 @@ describe("boundary-balance repair", () => {
 	// the multi-line range (range one line low instead of one short).
 	it("drops a one-sided leading keeper echo in a multi-line rewrite", () => {
 		const file = ["setup();", "a();", "b();", "c();"].join("\n");
-		const diff = ["SWAP 3..4:", "+a();", "+B();", "+C();"].join("\n");
+		const diff = ["SWAP 3.=4:", "+a();", "+B();", "+C();"].join("\n");
 		const { text, warnings } = apply(file, diff);
 		expect(text).toBe(["setup();", "a();", "B();", "C();"].join("\n"));
 		expect(warnings.some(warning => /boundary echo/.test(warning))).toBe(true);
@@ -315,9 +315,9 @@ describe("boundary-balance repair through stale-snapshot recovery", () => {
 		const store = new InMemorySnapshotStore();
 		const fileHash = store.record(PATH, snapshotText);
 
-		// `replace 4..5:` replaces the body lines but the payload also restates the `});`
+		// `replace 4.=5:` replaces the body lines but the payload also restates the `});`
 		// that survives at line 6 — the duplicate-closer mistake.
-		const { edits } = parsePatch(["SWAP 4..5:", "+\tsetup2();", "+\trun2();", "+});"].join("\n"));
+		const { edits } = parsePatch(["SWAP 4.=5:", "+\tsetup2();", "+\trun2();", "+});"].join("\n"));
 		const recovered = new Recovery(store).tryRecover({ path: PATH, currentText, fileHash, edits });
 
 		expect(recovered).not.toBeNull();

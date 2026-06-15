@@ -175,7 +175,7 @@ describe("read tool column truncation vs hashline snapshot", () => {
 			tmpDir,
 			filePath,
 			header,
-			patchBody: "SWAP 3..3:\n+epilogue\n",
+			patchBody: "SWAP 3.=3:\n+epilogue\n",
 		});
 
 		const after = await fs.readFile(filePath, "utf8");

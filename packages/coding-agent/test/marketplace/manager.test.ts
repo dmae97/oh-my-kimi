@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -8,8 +8,39 @@ import {
 	readInstalledPluginsRegistry,
 } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace";
 
-// Fixture: the valid-marketplace directory used across all tests.
-const FIXTURE_DIR = path.join(import.meta.dir, "fixtures", "valid-marketplace");
+// Minimal marketplace fixture, built once into a temp dir (see beforeAll). It carries only
+// what these tests assert — one plugin entry plus a plugin.json for the version-fallback path —
+// so each install's recursive cache copy stays a single file rather than the full shared fixture.
+let FIXTURE_DIR: string;
+
+function buildMinimalFixture(): string {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "omp-mgr-fixture-"));
+	const pluginDir = path.join(root, "plugins", "hello-plugin");
+	fs.mkdirSync(path.join(pluginDir, ".claude-plugin"), { recursive: true });
+	fs.mkdirSync(path.join(root, ".claude-plugin"), { recursive: true });
+	fs.writeFileSync(
+		path.join(root, ".claude-plugin", "marketplace.json"),
+		JSON.stringify({
+			name: "test-marketplace",
+			owner: { name: "Test Author", email: "test@example.com" },
+			metadata: { description: "A test marketplace for unit tests", version: "1.0.0" },
+			plugins: [
+				{
+					name: "hello-plugin",
+					source: "./plugins/hello-plugin",
+					description: "A test plugin that greets",
+					version: "1.0.0",
+				},
+			],
+		}),
+	);
+	// Consulted only when the catalog version is stripped (the version-fallback test).
+	fs.writeFileSync(
+		path.join(pluginDir, ".claude-plugin", "plugin.json"),
+		JSON.stringify({ name: "hello-plugin", version: "1.0.0" }),
+	);
+	return root;
+}
 
 // ── Test helper ───────────────────────────────────────────────────────────────
 
@@ -51,6 +82,14 @@ function createTestContext(): TestContext {
 
 describe("MarketplaceManager", () => {
 	let ctx: TestContext;
+
+	beforeAll(() => {
+		FIXTURE_DIR = buildMinimalFixture();
+	});
+
+	afterAll(() => {
+		fs.rmSync(FIXTURE_DIR, { recursive: true, force: true });
+	});
 
 	beforeEach(() => {
 		ctx = createTestContext();
@@ -101,9 +140,6 @@ describe("MarketplaceManager", () => {
 
 	it("updateMarketplace re-fetches and updates updatedAt", async () => {
 		const added = await ctx.manager.addMarketplace(FIXTURE_DIR);
-
-		// Small sleep so clock advances
-		await Bun.sleep(5);
 
 		const updated = await ctx.manager.updateMarketplace("test-marketplace");
 		expect(updated.name).toBe("test-marketplace");
@@ -193,7 +229,7 @@ describe("MarketplaceManager", () => {
 		});
 	});
 
-	it("installPlugin with scope:project → stores project scope", async () => {
+	it("installPlugin with scope:project → persisted in project registry, isolated from user", async () => {
 		await ctx.manager.addMarketplace(FIXTURE_DIR);
 		const instEntry = await ctx.manager.installPlugin("hello-plugin", "test-marketplace", {
 			scope: "project",
@@ -202,9 +238,11 @@ describe("MarketplaceManager", () => {
 		expect(instEntry.version).toBe("1.0.0");
 		expect(fs.existsSync(instEntry.installPath)).toBe(true);
 
-		// Verify scope was persisted to the registry, not just returned in-memory.
-		const installed = await ctx.manager.listInstalledPlugins();
-		expect(installed[0].entries[0].scope).toBe("project");
+		// Persisted to the project registry with project scope — and absent from the user registry.
+		const projectReg = await readInstalledPluginsRegistry(path.join(ctx.tmpDir, "project_installed_plugins.json"));
+		expect(projectReg.plugins["hello-plugin@test-marketplace"]?.[0].scope).toBe("project");
+		const userReg = await readInstalledPluginsRegistry(path.join(ctx.tmpDir, "installed_plugins.json"));
+		expect(userReg.plugins["hello-plugin@test-marketplace"]).toBeUndefined();
 	});
 
 	it("installPlugin already installed → throws without force", async () => {
@@ -305,19 +343,6 @@ describe("MarketplaceManager", () => {
 	});
 	// ── Scope feature ────────────────────────────────────────────────────────
 
-	it("installPlugin scope:project → writes to project registry, not user registry", async () => {
-		await ctx.manager.addMarketplace(FIXTURE_DIR);
-		await ctx.manager.installPlugin("hello-plugin", "test-marketplace", { scope: "project" });
-
-		const projectReg = await readInstalledPluginsRegistry(path.join(ctx.tmpDir, "project_installed_plugins.json"));
-		expect(projectReg.plugins["hello-plugin@test-marketplace"]).toBeDefined();
-		expect(projectReg.plugins["hello-plugin@test-marketplace"]![0].scope).toBe("project");
-
-		// User registry must NOT contain this plugin.
-		const userReg = await readInstalledPluginsRegistry(path.join(ctx.tmpDir, "installed_plugins.json"));
-		expect(userReg.plugins["hello-plugin@test-marketplace"]).toBeUndefined();
-	});
-
 	it("installPlugin scope:project when no projectInstalledRegistryPath → throws", async () => {
 		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "omp-mgr-noproj-"));
 		try {
@@ -336,12 +361,20 @@ describe("MarketplaceManager", () => {
 		}
 	});
 
-	it("uninstallPlugin with plugin in both scopes, no scope arg → throws disambiguation error", async () => {
+	it("plugin in both scopes, no scope arg → uninstall/setPluginEnabled/upgrade all throw disambiguation", async () => {
 		await ctx.manager.addMarketplace(FIXTURE_DIR);
 		await ctx.manager.installPlugin("hello-plugin", "test-marketplace", { scope: "user" });
 		await ctx.manager.installPlugin("hello-plugin", "test-marketplace", { scope: "project" });
 
+		// Each mutating op refuses an ambiguous (both-scope) target before touching any state,
+		// so the three assertions share one setup without interfering.
 		await expect(ctx.manager.uninstallPlugin("hello-plugin@test-marketplace")).rejects.toThrow(
+			/both user and project scope/,
+		);
+		await expect(ctx.manager.setPluginEnabled("hello-plugin@test-marketplace", false)).rejects.toThrow(
+			/both user and project scope/,
+		);
+		await expect(ctx.manager.upgradePlugin("hello-plugin@test-marketplace")).rejects.toThrow(
 			/both user and project scope/,
 		);
 	});
@@ -373,26 +406,6 @@ describe("MarketplaceManager", () => {
 
 		// Cache must still exist — project scope still references it.
 		expect(fs.existsSync(userEntry.installPath)).toBe(true);
-	});
-
-	it("setPluginEnabled with plugin in both scopes, no scope arg → throws disambiguation error", async () => {
-		await ctx.manager.addMarketplace(FIXTURE_DIR);
-		await ctx.manager.installPlugin("hello-plugin", "test-marketplace", { scope: "user" });
-		await ctx.manager.installPlugin("hello-plugin", "test-marketplace", { scope: "project" });
-
-		await expect(ctx.manager.setPluginEnabled("hello-plugin@test-marketplace", false)).rejects.toThrow(
-			/both user and project scope/,
-		);
-	});
-
-	it("upgradePlugin with plugin in both scopes, no scope arg → throws disambiguation error", async () => {
-		await ctx.manager.addMarketplace(FIXTURE_DIR);
-		await ctx.manager.installPlugin("hello-plugin", "test-marketplace", { scope: "user" });
-		await ctx.manager.installPlugin("hello-plugin", "test-marketplace", { scope: "project" });
-
-		await expect(ctx.manager.upgradePlugin("hello-plugin@test-marketplace")).rejects.toThrow(
-			/both user and project scope/,
-		);
 	});
 
 	it("listInstalledPlugins marks user entry as shadowed when project entry exists for same ID", async () => {

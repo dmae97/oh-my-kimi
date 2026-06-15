@@ -141,7 +141,7 @@ describe("SWAP.BLK — native tree-sitter resolution end-to-end", () => {
 		});
 	});
 
-	it("rejects a lone closing delimiter (no block begins there) and steers to `SWAP N..M:`", async () => {
+	it("rejects a lone closing delimiter (no block begins there) and steers to `SWAP N.=M:`", async () => {
 		await withTempDir(async tempDir => {
 			const session = makeSession(tempDir);
 			const { filePath, header } = await seedFile(tempDir, session, "x.ts", TS_SOURCE);
@@ -150,7 +150,7 @@ describe("SWAP.BLK — native tree-sitter resolution end-to-end", () => {
 
 			// Steers to the concrete form and previews the file around the anchor (`*`-marked).
 			await expect(executeHashlineSingle(executeOptions(tempDir, input, session))).rejects.toThrow(
-				/could not resolve a syntactic block beginning on line 3.*SWAP 3\.\.M:.*^ 1:function x\(\) \{$.*^\*3: {2}\}$/ms,
+				/could not resolve a syntactic block beginning on line 3.*SWAP 3\.=M:.*^ 1:function x\(\) \{$.*^\*3: {2}\}$/ms,
 			);
 			// Disk untouched — refusal never leaves a partial write.
 			expect(await Bun.file(filePath).text()).toBe(TS_SOURCE);

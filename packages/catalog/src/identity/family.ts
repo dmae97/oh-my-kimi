@@ -41,6 +41,11 @@ export function isQwenModelId(modelId: string): boolean {
 	return modelId.toLowerCase().includes("qwen");
 }
 
+/** Gemma open-weights family (`gemma-3-27b-it`, `google/gemma-4-E2B-it`, `gemma2-9b`). */
+export function isGemmaModelId(modelId: string): boolean {
+	return /(^|\/)gemma[-.]?\d/i.test(modelId);
+}
+
 /** DeepSeek family by id or display name (proxies often rename the id but keep the name). */
 export function isDeepseekModelIdOrName(value: string): boolean {
 	return value.toLowerCase().includes("deepseek");
@@ -127,6 +132,7 @@ export function modelFamilyToken(modelId: string): string {
 	if (isOpenAIGptOssModelId(modelId)) return "gpt-oss";
 	if (isDeepseekModelIdOrName(modelId)) return "deepseek";
 	if (isMimoModelIdOrName(modelId)) return "mimo";
+	if (isGemmaModelId(modelId)) return "gemma";
 	if (parseGlmModel(bareModelId(modelId))) return "glm";
 	return "";
 }

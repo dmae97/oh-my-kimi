@@ -57,4 +57,20 @@ runs:
 
       - name: Install dependencies
         shell: bash
-        run: bun install --frozen-lockfile
+        run: |
+           # The shared bun store (mounted PVC on omp-kata, actions/cache
+           # elsewhere) can hand a job a corrupt or partially written tarball
+           # when parallel jobs touch the same cache entry, so `bun install`
+           # aborts with `Fail extracting tarball for "<pkg>"`. That blob is
+           # content-hash-named, not derivable from the package name, so we
+           # can't evict just the bad entry — instead retry the install against
+           # a fresh job-local cache dir, forcing a clean re-download without
+           # mutating the shared store other concurrent jobs rely on. The warm
+           # shared cache stays the fast path; the cold retry only runs on the
+           # rare corruption (also covers a transient network blip on attempt 1).
+           if bun install --frozen-lockfile; then
+             exit 0
+           fi
+           echo "::warning title=bun install retry::shared bun store install failed; retrying with a clean job-local cache"
+           retry_cache="$(mktemp -d "${RUNNER_TEMP:-/tmp}/bun-cache-retry.XXXXXX")"
+           bun install --frozen-lockfile --cache-dir="$retry_cache"

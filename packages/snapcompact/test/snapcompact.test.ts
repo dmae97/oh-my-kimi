@@ -459,7 +459,7 @@ describe("serializeConversation", () => {
 		const text = `HEAD-${"x".repeat(5000)}-TAIL`;
 		const out = snapcompact.serializeConversation([createToolResultMessage(text)]);
 		// Default cap 2000 at 0.6 head ratio: 1200 head + 800 tail survive.
-		expect(out).toContain("[Tool result]: ");
+		expect(out).toContain("[Tool Result]: ");
 		expect(out).toContain("HEAD-");
 		expect(out).toContain("[... 3010 chars elided ...]");
 		expect(out.endsWith(`-TAIL${snapcompact.DIM_OFF}`)).toBe(true);
@@ -506,14 +506,14 @@ describe("serializeConversation", () => {
 			createUserMessage(`hello ${snapcompact.DIM_ON}world`),
 			createToolResultMessage("ok"),
 		]);
-		expect(out).toContain(`[Tool result]: ${snapcompact.DIM_ON}ok${snapcompact.DIM_OFF}`);
+		expect(out).toContain(`[Tool Result]: ${snapcompact.DIM_ON}ok${snapcompact.DIM_OFF}`);
 		// A stray toggle in user content cannot forge a dim span.
 		expect(out).toContain("[User]: hello world");
 	});
 
 	it("omits dim toggles when dimToolResults is false", () => {
 		const out = snapcompact.serializeConversation([createToolResultMessage("ok")], { dimToolResults: false });
-		expect(out).toBe("[Tool result]: ok");
+		expect(out).toBe("[Tool Result]: ok");
 	});
 
 	it("skips tool call/result pairs flagged useless", () => {

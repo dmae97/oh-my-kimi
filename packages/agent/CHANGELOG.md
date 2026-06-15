@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [15.13.3] - 2026-06-15
+
+### Added
+
+- Added the `interruptible` tool field: when set, the agent loop may abort the tool mid-execution to deliver a queued steering message (honored only in `immediate` interrupt mode).
+- Added support for `gemini` and `gemma` as valid owned tool syntax values in environment configuration
+
+### Fixed
+
+- Fixed `pruneToolOutputs` blanking tiny tool results during overflow pruning: results below `50` tokens (`MIN_PRUNE_TOKENS`) are no longer replaced with the `[Output truncated - N tokens]` placeholder, which cost more tokens than the result itself and churned the prompt cache for zero savings.
+
 ## [15.13.2] - 2026-06-15
 
 ### Breaking Changes

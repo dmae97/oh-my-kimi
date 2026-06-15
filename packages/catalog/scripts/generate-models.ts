@@ -290,6 +290,23 @@ function dropUnusableZaiContextTierIds(models: readonly ModelSpec[]): ModelSpec[
 	return models.filter(model => !(model.provider === "zai" && model.id.endsWith("[1m]")));
 }
 
+/**
+ * Fireworks discovery and prior snapshots can surface internal control-plane
+ * resource ids (`accounts/fireworks/{models,routers}/...`) alongside the public
+ * request ids (`kimi-k2.7-code`, `deepseek-v4-flash`, ...). The wire ids are an
+ * implementation detail the request path reconstructs from the public id, so
+ * drop them from the bundle outright.
+ */
+function dropFireworksWireIds(models: readonly ModelSpec[]): ModelSpec[] {
+	return models.filter(
+		model =>
+			!(
+				(model.provider === "fireworks" || model.provider === "firepass") &&
+				model.id.startsWith("accounts/fireworks/")
+			),
+	);
+}
+
 const ANTIGRAVITY_ENDPOINT = "https://daily-cloudcode-pa.sandbox.googleapis.com";
 
 async function getOAuthAccessFromStorage(provider: OAuthProvider): Promise<OAuthAccess | null> {
@@ -477,6 +494,7 @@ async function generateModels() {
 	allModels = applyCodexPricingFallback(allModels);
 	allModels = applyFireworksKimiMaxTokensCap(allModels);
 	allModels = applyFireworksDeepSeekReasoningShape(allModels);
+	allModels = dropFireworksWireIds(allModels);
 	allModels = dropUnusableZaiContextTierIds(allModels);
 	// Normalize display names: gateway author prefixes ("OpenAI: …"), alias
 	// markers ("(latest)"), provider attribution ("(Antigravity)"), and

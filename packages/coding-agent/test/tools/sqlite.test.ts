@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -40,8 +40,14 @@ function createSession(cwd: string, overrides: Partial<SessionLike> = {}): Sessi
 	} as SessionLike;
 }
 
-function createFixtureDatabase(dbPath: string): void {
-	const db = new Database(dbPath);
+/**
+ * Builds the fixture database once in memory and serializes it to bytes. Tests
+ * stamp these bytes onto disk with a single `writeFile` (one fsync) instead of
+ * re-running the table creation and ~13 autocommit inserts (≈14 fsyncs) per
+ * test — the original per-test on-disk build dominated the suite's wall time.
+ */
+function buildFixtureBytes(): Uint8Array {
+	const db = new Database(":memory:");
 	try {
 		db.run(`
 			CREATE TABLE users (
@@ -70,52 +76,30 @@ function createFixtureDatabase(dbPath: string): void {
 			);
 		`);
 
-		db.prepare("INSERT INTO users (name, email, status, created) VALUES (?, ?, ?, ?)").run(
-			"Alice",
-			"alice@example.com",
-			"active",
-			1,
-		);
-		db.prepare("INSERT INTO users (name, email, status, created) VALUES (?, ?, ?, ?)").run(
-			"Bob",
-			"bob@example.com",
-			"inactive",
-			2,
-		);
-		db.prepare("INSERT INTO users (name, email, status, created) VALUES (?, ?, ?, ?)").run(
-			"Carol",
-			"carol@example.com",
-			"active",
-			3,
-		);
-		db.prepare("INSERT INTO users (name, email, status, created) VALUES (?, ?, ?, ?)").run(
-			"Dave",
-			"dave@example.com",
-			"inactive",
-			4,
-		);
-		db.prepare("INSERT INTO users (name, email, status, created) VALUES (?, ?, ?, ?)").run(
-			"Eve",
-			"eve@example.com",
-			"active",
-			5,
-		);
-		db.prepare("INSERT INTO users (name, email, status, created) VALUES (?, ?, ?, ?)").run(
-			"Frank",
-			"frank@example.com",
-			"active",
-			6,
-		);
+		const insertUser = db.prepare("INSERT INTO users (name, email, status, created) VALUES (?, ?, ?, ?)");
+		const insertSlug = db.prepare("INSERT INTO slugs (slug, title) VALUES (?, ?)");
+		const insertNote = db.prepare("INSERT INTO notes (body) VALUES (?)");
+		const seed = db.transaction(() => {
+			insertUser.run("Alice", "alice@example.com", "active", 1);
+			insertUser.run("Bob", "bob@example.com", "inactive", 2);
+			insertUser.run("Carol", "carol@example.com", "active", 3);
+			insertUser.run("Dave", "dave@example.com", "inactive", 4);
+			insertUser.run("Eve", "eve@example.com", "active", 5);
+			insertUser.run("Frank", "frank@example.com", "active", 6);
 
-		db.prepare("INSERT INTO slugs (slug, title) VALUES (?, ?)").run("welcome", "Welcome");
-		db.prepare("INSERT INTO slugs (slug, title) VALUES (?, ?)").run("about", "About");
+			insertSlug.run("welcome", "Welcome");
+			insertSlug.run("about", "About");
 
-		db.prepare("INSERT INTO notes (body) VALUES (?)").run("First note");
-		db.prepare("INSERT INTO notes (body) VALUES (?)").run("Second note");
-		db.prepare("INSERT INTO notes (body) VALUES (?)").run("Third; note");
+			insertNote.run("First note");
+			insertNote.run("Second note");
+			insertNote.run("Third; note");
 
-		db.prepare("INSERT INTO composite (team_id, user_id, value) VALUES (?, ?, ?)").run(1, 2, "pair");
-		db.prepare("INSERT INTO wide_rows (id, payload) VALUES (?, ?)").run(1, "x".repeat(320));
+			db.prepare("INSERT INTO composite (team_id, user_id, value) VALUES (?, ?, ?)").run(1, 2, "pair");
+			db.prepare("INSERT INTO wide_rows (id, payload) VALUES (?, ?)").run(1, "x".repeat(320));
+		});
+		seed();
+
+		return db.serialize();
 	} finally {
 		db.close();
 	}
@@ -156,11 +140,21 @@ describe("SQLite tool support", () => {
 	let sqlitePath: string;
 	let sqliteDbPath: string;
 	let invalidDbPath: string;
+	let fixtureBytes: Uint8Array;
 	let readTool: ReadTool;
 	let writeTool: WriteTool;
 	let originalEditVariant: string | undefined;
 
-	beforeEach(async () => {
+	// The shared fixture is only ever read by most tests; the few tests that
+	// mutate a database stamp their own fresh copy via `stampFreshDb`, so the
+	// shared file stays pristine and can be created exactly once.
+	async function stampFreshDb(name: string): Promise<string> {
+		const dbPath = path.join(tmpDir, name);
+		await fs.writeFile(dbPath, fixtureBytes);
+		return dbPath;
+	}
+
+	beforeAll(async () => {
 		tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "sqlite-tool-test-"));
 		sqlitePath = path.join(tmpDir, "app.sqlite");
 		sqliteDbPath = path.join(tmpDir, "app.db");
@@ -168,16 +162,17 @@ describe("SQLite tool support", () => {
 		originalEditVariant = Bun.env.PI_EDIT_VARIANT;
 		Bun.env.PI_EDIT_VARIANT = "replace";
 
-		createFixtureDatabase(sqlitePath);
-		await fs.copyFile(sqlitePath, sqliteDbPath);
-		await Bun.write(invalidDbPath, "not sqlite\nstill text\n");
+		fixtureBytes = buildFixtureBytes();
+		await fs.writeFile(sqlitePath, fixtureBytes);
+		await fs.writeFile(sqliteDbPath, fixtureBytes);
+		await fs.writeFile(invalidDbPath, "not sqlite\nstill text\n");
 
 		const session = createSession(tmpDir);
 		readTool = new ReadTool(session);
 		writeTool = new WriteTool(session);
 	});
 
-	afterEach(async () => {
+	afterAll(async () => {
 		if (originalEditVariant === undefined) {
 			delete Bun.env.PI_EDIT_VARIANT;
 		} else {
@@ -330,7 +325,10 @@ describe("SQLite tool support", () => {
 	});
 
 	it("caps raw ?q= queries at the row limit and surfaces a LIMIT hint", async () => {
-		const db = new Database(sqlitePath);
+		// Dedicated database: this is the only test that needs >1000 rows, and it
+		// must not pollute the shared fixture. A single transaction = one commit.
+		const capDbPath = path.join(tmpDir, "rawcap.sqlite");
+		const db = new Database(capDbPath);
 		try {
 			db.run("CREATE TABLE big (id INTEGER PRIMARY KEY, value TEXT NOT NULL)");
 			const insert = db.prepare("INSERT INTO big (value) VALUES (?)");
@@ -344,7 +342,7 @@ describe("SQLite tool support", () => {
 			db.close();
 		}
 
-		const result = await readTool.execute("sqlite-raw-row-cap", { path: `${sqlitePath}?q=SELECT * FROM big` });
+		const result = await readTool.execute("sqlite-raw-row-cap", { path: `${capDbPath}?q=SELECT * FROM big` });
 		const text = getText(result);
 
 		expect(text).toContain("val_1000_end");
@@ -373,34 +371,37 @@ describe("SQLite tool support", () => {
 	});
 
 	it("inserts rows through the write tool with JSON5 content", async () => {
+		const dbPath = await stampFreshDb("write-insert.sqlite");
 		await writeTool.execute("sqlite-write-insert", {
-			path: `${sqlitePath}:users`,
+			path: `${dbPath}:users`,
 			content: "{ name: 'Grace', email: 'grace@example.com', status: 'active', created: 7 }",
 		});
 
-		expect(readUserByEmail(sqlitePath, "grace@example.com")).toEqual({
+		expect(readUserByEmail(dbPath, "grace@example.com")).toEqual({
 			name: "Grace",
 			email: "grace@example.com",
 		});
 	});
 
 	it("updates rows through the write tool by primary key", async () => {
+		const dbPath = await stampFreshDb("write-update.sqlite");
 		await writeTool.execute("sqlite-write-update", {
-			path: `${sqlitePath}:users:2`,
+			path: `${dbPath}:users:2`,
 			content: "{ email: 'bob+new@example.com' }",
 		});
 
-		expect(readUserEmail(sqlitePath, 2)).toBe("bob+new@example.com");
+		expect(readUserEmail(dbPath, 2)).toBe("bob+new@example.com");
 	});
 
 	it("deletes rows through the write tool with empty content", async () => {
+		const dbPath = await stampFreshDb("write-delete.sqlite");
 		await writeTool.execute("sqlite-write-delete", {
-			path: `${sqlitePath}:users:2`,
+			path: `${dbPath}:users:2`,
 			content: "   ",
 		});
 
-		expect(readUserCount(sqlitePath)).toBe(5);
-		expect(readUserEmail(sqlitePath, 2)).toBeNull();
+		expect(readUserCount(dbPath)).toBe(5);
+		expect(readUserEmail(dbPath, 2)).toBeNull();
 	});
 
 	it("enforces plan mode for SQLite writes", async () => {
@@ -449,79 +450,54 @@ describe("SQLite tool support", () => {
 });
 
 describe("SQLite table listing row counts", () => {
-	let tmpDir: string;
-	let dbPath: string;
+	// These tests exercise `listTables`/`renderTableList` directly against a
+	// `Database` handle, so an in-memory database preserves the row-count
+	// contract with zero disk I/O. `base` is never analyzed (exact / lower-bound
+	// behavior); `analyzed` carries planner estimates.
+	let base: Database;
+	let analyzed: Database;
 
-	beforeEach(async () => {
-		tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "sqlite-count-test-"));
-		dbPath = path.join(tmpDir, "counts.db");
-	});
-
-	afterEach(async () => {
-		await fs.rm(tmpDir, { recursive: true, force: true });
-	});
-
-	function seed(rowsPerTable: { big: number; small: number }): void {
-		const db = new Database(dbPath);
-		try {
-			db.run("CREATE TABLE big (id INTEGER PRIMARY KEY, v TEXT NOT NULL)");
-			db.run("CREATE TABLE small (id INTEGER PRIMARY KEY)");
-			const bigStmt = db.prepare("INSERT INTO big (v) VALUES (?)");
-			for (let i = 0; i < rowsPerTable.big; i++) bigStmt.run("x");
-			const smallStmt = db.prepare("INSERT INTO small DEFAULT VALUES");
-			for (let i = 0; i < rowsPerTable.small; i++) smallStmt.run();
-		} finally {
-			db.close();
-		}
+	function buildCountsDb(analyze: boolean): Database {
+		const db = new Database(":memory:");
+		db.run("CREATE TABLE big (id INTEGER PRIMARY KEY, v TEXT NOT NULL)");
+		db.run("CREATE TABLE small (id INTEGER PRIMARY KEY)");
+		const bigStmt = db.prepare("INSERT INTO big (v) VALUES (?)");
+		for (let i = 0; i < 10; i++) bigStmt.run("x");
+		const smallStmt = db.prepare("INSERT INTO small DEFAULT VALUES");
+		for (let i = 0; i < 2; i++) smallStmt.run();
+		if (analyze) db.run("ANALYZE");
+		return db;
 	}
 
-	function analyze(): void {
-		const db = new Database(dbPath);
-		try {
-			db.run("ANALYZE");
-		} finally {
-			db.close();
-		}
-	}
+	beforeAll(() => {
+		base = buildCountsDb(false);
+		analyzed = buildCountsDb(true);
+	});
+
+	afterAll(() => {
+		base.close();
+		analyzed.close();
+	});
 
 	it("counts small tables exactly", () => {
-		seed({ big: 10, small: 2 });
-		const db = new Database(dbPath, { readonly: true });
-		try {
-			const rendered = renderTableList(listTables(db, { probeCap: 100 }));
-			expect(rendered).toContain("big (10 rows)");
-			expect(rendered).toContain("small (2 rows)");
-		} finally {
-			db.close();
-		}
+		const rendered = renderTableList(listTables(base, { probeCap: 100 }));
+		expect(rendered).toContain("big (10 rows)");
+		expect(rendered).toContain("small (2 rows)");
 	});
 
 	it("reports the planner estimate for tables larger than the probe cap", () => {
-		seed({ big: 10, small: 2 });
-		analyze();
-		const db = new Database(dbPath, { readonly: true });
-		try {
-			// probeCap=5: big (estimate 10) exceeds it and is reported as an estimate
-			// without scanning; small (estimate 2) is counted exactly.
-			const rendered = renderTableList(listTables(db, { probeCap: 5 }));
-			expect(rendered).toContain("big (~10 rows)");
-			expect(rendered).toContain("small (2 rows)");
-		} finally {
-			db.close();
-		}
+		// probeCap=5: big (estimate 10) exceeds it and is reported as an estimate
+		// without scanning; small (estimate 2) is counted exactly.
+		const rendered = renderTableList(listTables(analyzed, { probeCap: 5 }));
+		expect(rendered).toContain("big (~10 rows)");
+		expect(rendered).toContain("small (2 rows)");
 	});
 
 	it("reports a lower bound when an unanalyzed table exceeds the probe cap", () => {
-		seed({ big: 10, small: 2 });
-		const db = new Database(dbPath, { readonly: true });
-		try {
-			// No ANALYZE, so no estimate exists; the bounded probe stops at the cap
-			// and reports a lower bound instead of scanning the whole table.
-			const rendered = renderTableList(listTables(db, { probeCap: 3 }));
-			expect(rendered).toContain("big (3+ rows)");
-			expect(rendered).toContain("small (2 rows)");
-		} finally {
-			db.close();
-		}
+		// No ANALYZE, so no estimate exists; the bounded probe stops at the cap
+		// and reports a lower bound instead of scanning the whole table.
+		const rendered = renderTableList(listTables(base, { probeCap: 3 }));
+		expect(rendered).toContain("big (3+ rows)");
+		expect(rendered).toContain("small (2 rows)");
 	});
 });

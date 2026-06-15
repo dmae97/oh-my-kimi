@@ -232,7 +232,7 @@ interface ReplacementGroup {
  * Detect a replacement group starting at `start`: a run of `before_anchor`
  * replacement inserts sharing one source op line, immediately followed by the
  * contiguous range deletes for that same op. Mirrors how the parser lowers an
- * `replace N..M:` hunk with a body.
+ * `replace N.=M:` hunk with a body.
  */
 function findReplacementGroup(edits: readonly AppliedEdit[], start: number): ReplacementGroup | undefined {
 	const first = edits[start];
@@ -453,7 +453,7 @@ function describeBoundaryRepair(group: ReplacementGroup, action: string): string
  * by {@link findDuplicateSuffix}/{@link findDuplicatePrefix}.
  *
  * Scoped to multi-line ranges (a construct rewrite) on purpose: a single-line
- * `replace N..N` expanding into several lines is an *expansion* where every
+ * `replace N.=N` expanding into several lines is an *expansion* where every
  * payload line is intentional new content, so a payload line that happens to
  * equal a neighbor stays — only a genuine block rewrite retypes a boundary
  * keeper by mistake. The dropped lines must be delimiter-neutral so removing the

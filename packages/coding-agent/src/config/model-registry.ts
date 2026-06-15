@@ -59,7 +59,7 @@ import {
 	resolveCanonicalVariant,
 	resolveModelReference,
 } from "@oh-my-pi/pi-catalog/identity";
-import { isRecord, logger } from "@oh-my-pi/pi-utils";
+import { isBunTestRuntime, isRecord, logger } from "@oh-my-pi/pi-utils";
 import { parseModelString, resolveProviderModelReference } from "../config/model-resolver";
 import type { AuthStorage, OAuthCredential } from "../session/auth-storage";
 import { type ApiKeyResolverModel, type ApiKeyResolverOptions, createApiKeyResolver } from "./api-key-resolver";
@@ -690,7 +690,11 @@ export class ModelRegistry {
 		modelsPath?: string,
 		options?: { fetch?: FetchImpl },
 	) {
-		this.#fetch = options?.fetch ?? fetch;
+		this.#fetch =
+			options?.fetch ??
+			(isBunTestRuntime()
+				? () => Promise.reject(new Error("network disabled in model-registry runtime test"))
+				: fetch);
 		this.#modelsConfigFile = ModelsConfigFile.relocate(modelsPath);
 		this.#cacheDbPath = modelsPath ? path.join(path.dirname(modelsPath), "models.db") : undefined;
 		// Set up fallback resolver for custom provider API keys
