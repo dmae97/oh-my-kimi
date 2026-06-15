@@ -5,6 +5,7 @@
 ### Added
 
 - Added Umans AI Coding Plan API-key login support and `UMANS_AI_CODING_PLAN_API_KEY` environment fallback.
+
 ## [15.13.3] - 2026-06-15
 
 ### Added
