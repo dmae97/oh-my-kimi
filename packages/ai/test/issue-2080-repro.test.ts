@@ -162,6 +162,58 @@ describe("issue #2080 - MiniMax multi-chunk object tool arguments", () => {
 			},
 		]);
 	});
+	it("deep-merges object and array fragments for large task arguments", async () => {
+		const model = getBundledModel<"openai-completions">("minimax-code-cn", "MiniMax-M3");
+		const fetchMock = createMockFetch([
+			toolCallChunk(model, {
+				name: "task",
+				arguments: {
+					tasks: [{ id: "A", assignment: "first" }],
+					options: { env: { first: true } },
+				},
+			}),
+			toolCallChunk(model, {
+				arguments: {
+					tasks: [
+						{ id: "A", assignment: "first" },
+						{ id: "B", assignment: "second" },
+					],
+					options: { env: { second: true }, constructor: { polluted: true } },
+				},
+			}),
+			toolCallChunk(model, {
+				arguments: {
+					tasks: [{ id: "C", assignment: "third" }],
+					options: { flags: ["fast"], prototype: { polluted: true } },
+					["__proto__"]: { polluted: true },
+				},
+			}),
+			stopChunk(model),
+			"[DONE]",
+		]);
+
+		const result = await streamOpenAICompletions(model, baseContext(), {
+			apiKey: "test-key",
+			fetch: fetchMock,
+		}).result();
+
+		expect(result.content).toEqual([
+			{
+				type: "toolCall",
+				id: "call-minimax-1",
+				name: "task",
+				arguments: {
+					tasks: [
+						{ id: "A", assignment: "first" },
+						{ id: "B", assignment: "second" },
+						{ id: "C", assignment: "third" },
+					],
+					options: { env: { first: true, second: true }, flags: ["fast"] },
+				},
+			},
+		]);
+		expect(Reflect.get(Object.prototype, "polluted")).toBeUndefined();
+	});
 
 	it("emits a concat-safe `toolcall_delta` sequence — accumulated deltas parse to the merged args", async () => {
 		// Codex review on PR #2082 caught that emitting `JSON.stringify(rawArgs)` per chunk
