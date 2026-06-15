@@ -1,8 +1,16 @@
+import type { Message, ToolCall } from "../types";
 import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse";
 import { asRecord, mintToolCallId, partialSuffixOverlapAny } from "./coercion";
-import grammarPrompt from "./hermes.md" with { type: "text" };
-import { renderHermesInvocation, renderHermesToolCalls, renderToolResponseResults } from "./rendering";
-import type { Grammar, InbandScanEvent, InbandScanner, InbandScannerOptions } from "./types";
+import dialectPrompt from "./hermes.md" with { type: "text" };
+import { renderChatMlTranscript, renderDelimitedThinking, renderToolResponseResults, stringifyJson } from "./rendering";
+import type {
+	DialectDefinition,
+	DialectRenderOptions,
+	DialectToolResult,
+	InbandScanEvent,
+	InbandScanner,
+	InbandScannerOptions,
+} from "./types";
 
 const TOOL_OPEN = "<tool_call>";
 const TOOL_CLOSE = "</tool_call>";
@@ -159,13 +167,40 @@ export class HermesInbandScanner implements InbandScanner {
 	}
 }
 
-const grammar: Grammar = {
-	syntax: "hermes",
-	prompt: grammarPrompt,
+function renderToolCall(call: ToolCall, _options: DialectRenderOptions = {}): string {
+	return `<tool_call>\n${stringifyJson({ name: call.name, arguments: call.arguments })}\n</tool_call>`;
+}
+
+function renderAssistantToolCalls(calls: readonly ToolCall[], options: DialectRenderOptions = {}): string {
+	return calls.map(call => renderToolCall(call, options)).join("\n");
+}
+
+function renderToolResults(results: readonly DialectToolResult[], _options: DialectRenderOptions = {}): string {
+	return renderToolResponseResults(results);
+}
+
+function renderThinking(text: string): string {
+	return renderDelimitedThinking(THINK_OPEN, THINK_CLOSE, text);
+}
+
+function renderTranscript(messages: readonly Message[], options: DialectRenderOptions = {}): string {
+	return renderChatMlTranscript(messages, options, {
+		toolResultRole: "tool",
+		renderThinking,
+		renderCalls: renderAssistantToolCalls,
+		renderResultsBody: renderToolResults,
+	});
+}
+
+const definition: DialectDefinition = {
+	dialect: "hermes",
+	prompt: dialectPrompt,
 	createScanner: options => new HermesInbandScanner(options),
-	renderToolCall: renderHermesInvocation,
-	renderAssistantToolCalls: renderHermesToolCalls,
-	renderToolResults: renderToolResponseResults,
+	renderToolCall,
+	renderAssistantToolCalls,
+	renderToolResults,
+	renderThinking,
+	renderTranscript,
 };
 
-export default grammar;
+export default definition;

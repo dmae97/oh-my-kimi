@@ -9,4 +9,4 @@ Available functions are listed inside `<tools></tools>` as one JSON object per l
 {{TOOLS}}
 </tools>
 
-{{GRAMMAR}}
+{{DIALECT}}

@@ -95,9 +95,9 @@
 			"types": "./src/utils/harmony-leak.ts",
 			"import": "./src/utils/harmony-leak.ts"
 		},
-		"./grammar": {
-			"types": "./src/grammar/index.ts",
-			"import": "./src/grammar/index.ts"
+		"./dialect": {
+			"types": "./src/dialect/index.ts",
+			"import": "./src/dialect/index.ts"
 		},
 		"./utils/*": {
 			"types": "./src/utils/*.ts",

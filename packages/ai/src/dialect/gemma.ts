@@ -1,11 +1,20 @@
+import type { Message, ToolCall } from "../types";
 import { mintToolCallId, partialSuffixOverlapAny } from "./coercion";
-import grammarPrompt from "./gemma.md" with { type: "text" };
-import { renderGemmaInvocation, renderGemmaToolCalls, renderGemmaToolResults } from "./rendering";
-import type { Grammar, InbandScanEvent, InbandScanner } from "./types";
+import dialectPrompt from "./gemma.md" with { type: "text" };
+import { assistantTranscriptParts, collectToolResultRun, messageContentText } from "./rendering";
+import type {
+	DialectDefinition,
+	DialectRenderOptions,
+	DialectToolResult,
+	InbandScanEvent,
+	InbandScanner,
+} from "./types";
 
 const CALL_OPEN = "<|tool_call>";
 const CALL_CLOSE = "<tool_call|>";
 const STRING = '<|"|>';
+const RESPONSE_OPEN = "<|tool_response>";
+const RESPONSE_CLOSE = "<tool_response|>";
 const OPEN_TAGS = [CALL_OPEN] as const;
 const CALL_HEAD = /^call:\s*([A-Za-z_]\w*)\s*\{/;
 
@@ -225,13 +234,95 @@ function topLevelIndexOf(text: string, ch: string): number {
 	return -1;
 }
 
-const grammar: Grammar = {
-	syntax: "gemma",
-	prompt: grammarPrompt,
+function renderToolCall(call: ToolCall, _options: DialectRenderOptions = {}): string {
+	const args = Object.entries(call.arguments)
+		.map(([key, value]) => `${key}:${gemmaValue(value)}`)
+		.join(",");
+	return `${CALL_OPEN}call:${call.name}{${args}}${CALL_CLOSE}`;
+}
+
+function renderAssistantToolCalls(calls: readonly ToolCall[], options: DialectRenderOptions = {}): string {
+	return calls.map(call => renderToolCall(call, options)).join("");
+}
+
+function renderToolResults(results: readonly DialectToolResult[], _options: DialectRenderOptions = {}): string {
+	return results
+		.map(
+			result =>
+				`${RESPONSE_OPEN}response:${result.name}{output:${gemmaValue(parseMaybeJson(result.text))}}${RESPONSE_CLOSE}`,
+		)
+		.join("");
+}
+
+function renderThinking(text: string): string {
+	return text;
+}
+
+function renderTranscript(messages: readonly Message[], options: DialectRenderOptions = {}): string {
+	if (messages.length === 0) return "";
+	let out = "<bos>";
+	for (let i = 0; i < messages.length; ) {
+		const message = messages[i]!;
+		if (message.role === "assistant") {
+			const parts = assistantTranscriptParts(message);
+			let body = `${parts.thinking}${parts.text}${renderAssistantToolCalls(parts.toolCalls, options)}`;
+			let next = i + 1;
+			if (next < messages.length && messages[next]!.role === "toolResult") {
+				const run = collectToolResultRun(messages, next);
+				body += renderToolResults(run.results);
+				next = run.next;
+			}
+			out += gemmaTurn("model", body);
+			i = next;
+			continue;
+		}
+		if (message.role === "toolResult") {
+			const run = collectToolResultRun(messages, i);
+			out += gemmaTurn("model", renderToolResults(run.results));
+			i = run.next;
+			continue;
+		}
+		const role = message.role === "developer" ? "system" : message.role;
+		out += gemmaTurn(role, messageContentText(message.content));
+		i++;
+	}
+	return out;
+}
+
+function gemmaValue(value: unknown): string {
+	if (value === null || value === undefined) return "null";
+	if (typeof value === "boolean") return value ? "true" : "false";
+	if (typeof value === "number") return String(value);
+	if (typeof value === "string") return `${STRING}${value}${STRING}`;
+	if (Array.isArray(value)) return `[${value.map(gemmaValue).join(",")}]`;
+	if (typeof value === "object") {
+		const entries = Object.entries(value as Record<string, unknown>);
+		return `{${entries.map(([key, val]) => `${key}:${gemmaValue(val)}`).join(",")}}`;
+	}
+	return `${STRING}${String(value)}${STRING}`;
+}
+
+function parseMaybeJson(text: string): unknown {
+	try {
+		return JSON.parse(text) as unknown;
+	} catch {
+		return text;
+	}
+}
+
+function gemmaTurn(role: "model" | "system" | "user", body: string): string {
+	return `<|turn>${role}\n${body}<turn|>`;
+}
+
+const definition: DialectDefinition = {
+	dialect: "gemma",
+	prompt: dialectPrompt,
 	createScanner: () => new GemmaInbandScanner(),
-	renderToolCall: renderGemmaInvocation,
-	renderAssistantToolCalls: renderGemmaToolCalls,
-	renderToolResults: renderGemmaToolResults,
+	renderToolCall,
+	renderAssistantToolCalls,
+	renderToolResults,
+	renderThinking,
+	renderTranscript,
 };
 
-export default grammar;
+export default definition;

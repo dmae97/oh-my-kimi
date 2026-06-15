@@ -3,15 +3,15 @@
  *
  * Hosted models sometimes leak raw template markup into visible `content` instead
  * of returning structured events. Tool-call healing delegates to the same
- * grammar scanners used by owned in-band tool calling; this file keeps the
+ * dialect scanners used by owned in-band tool calling; this file keeps the
  * provider-facing compatibility wrapper and model/provider gating.
  */
 
 import { isDeepseekModelIdOrName } from "@oh-my-pi/pi-catalog/identity";
 
-import { createInbandScanner } from "../grammar/factory";
-import { ThinkingInbandScanner } from "../grammar/thinking";
-import type { InbandScanEvent, InbandScanner } from "../grammar/types";
+import { createInbandScanner } from "../dialect/factory";
+import { ThinkingInbandScanner } from "../dialect/thinking";
+import type { InbandScanEvent, InbandScanner } from "../dialect/types";
 
 const KIMI_SECTION_END = "<|tool_calls_section_end|>";
 const DSML_TOOL_CALLS_CLOSE_FULLWIDTH = "</｜DSML｜tool_calls>";

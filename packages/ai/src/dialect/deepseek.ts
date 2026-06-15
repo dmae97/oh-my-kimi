@@ -1,14 +1,28 @@
+import type { Message, ToolCall } from "../types";
 import { parseJsonWithRepair } from "../utils/json-parse";
 import { asRecord, mintToolCallId, partialSuffixOverlapAny } from "./coercion";
-import grammarPrompt from "./deepseek.md" with { type: "text" };
-import { renderDeepSeekInvocation, renderDeepSeekToolCalls, renderDeepSeekToolResults } from "./rendering";
-import type { Grammar, InbandScanEvent, InbandScanner, InbandScannerOptions } from "./types";
+import dialectPrompt from "./deepseek.md" with { type: "text" };
+import { assistantTranscriptParts, collectToolResultRun, messageContentText, stringifyJson } from "./rendering";
+import type {
+	DialectDefinition,
+	DialectRenderOptions,
+	DialectToolResult,
+	InbandScanEvent,
+	InbandScanner,
+	InbandScannerOptions,
+} from "./types";
 
 export const DEEPSEEK_TOOL_CALLS_BEGIN = "<｜tool▁calls▁begin｜>";
 export const DEEPSEEK_TOOL_CALLS_END = "<｜tool▁calls▁end｜>";
 export const DEEPSEEK_TOOL_CALL_BEGIN = "<｜tool▁call▁begin｜>";
 export const DEEPSEEK_TOOL_CALL_END = "<｜tool▁call▁end｜>";
 export const DEEPSEEK_TOOL_SEPARATOR = "<｜tool▁sep｜>";
+const DEEPSEEK_TOOL_OUTPUT_BEGIN = "<｜tool▁output▁begin｜>";
+const DEEPSEEK_TOOL_OUTPUT_END = "<｜tool▁output▁end｜>";
+const DEEPSEEK_BOS = "<｜begin▁of▁sentence｜>";
+const DEEPSEEK_USER = "<｜User｜>";
+const DEEPSEEK_ASSISTANT = "<｜Assistant｜>";
+const DEEPSEEK_EOS = "<｜end▁of▁sentence｜>";
 
 const THINK_OPEN = "<think>";
 const THINK_CLOSE = "</think>";
@@ -22,11 +36,11 @@ const DSML_TOOL_CALLS_OPEN_ASCII = "<|DSML|tool_calls>";
 const DSML_TOOL_CALLS_CLOSE_ASCII = "</|DSML|tool_calls>";
 
 const CONTROL_TOKENS = [
-	"<｜begin▁of▁sentence｜>",
-	"<｜end▁of▁sentence｜>",
+	DEEPSEEK_BOS,
+	DEEPSEEK_EOS,
 	"<｜▁pad▁｜>",
-	"<｜User｜>",
-	"<｜Assistant｜>",
+	DEEPSEEK_USER,
+	DEEPSEEK_ASSISTANT,
 	"<|EOT|>",
 	"<｜search▁begin｜>",
 	"<｜search▁end｜>",
@@ -35,8 +49,8 @@ const CONTROL_TOKENS = [
 	"<｜fim▁end｜>",
 	"<｜tool▁outputs▁begin｜>",
 	"<｜tool▁outputs▁end｜>",
-	"<｜tool▁output▁begin｜>",
-	"<｜tool▁output▁end｜>",
+	DEEPSEEK_TOOL_OUTPUT_BEGIN,
+	DEEPSEEK_TOOL_OUTPUT_END,
 ] as const;
 
 const OUTSIDE_TOKENS = [
@@ -523,13 +537,58 @@ function coerceDsmlValue(raw: string, isString: boolean): unknown {
 	}
 }
 
-const grammar: Grammar = {
-	syntax: "deepseek",
-	prompt: grammarPrompt,
+function renderToolCall(call: ToolCall, _options: DialectRenderOptions = {}): string {
+	return `${DEEPSEEK_TOOL_CALL_BEGIN}${call.name}${DEEPSEEK_TOOL_SEPARATOR}${stringifyJson(call.arguments)}${DEEPSEEK_TOOL_CALL_END}`;
+}
+
+function renderAssistantToolCalls(calls: readonly ToolCall[], options: DialectRenderOptions = {}): string {
+	if (calls.length === 0) return "";
+	const body = calls.map(call => renderToolCall(call, options)).join("");
+	return `${DEEPSEEK_TOOL_CALLS_BEGIN}${body}${DEEPSEEK_TOOL_CALLS_END}`;
+}
+
+function renderToolResults(results: readonly DialectToolResult[], _options: DialectRenderOptions = {}): string {
+	return results.map(result => `${DEEPSEEK_TOOL_OUTPUT_BEGIN}${result.text}${DEEPSEEK_TOOL_OUTPUT_END}`).join("\n");
+}
+
+function renderThinking(text: string): string {
+	if (!text) return "";
+	return `${THINK_OPEN}\n${text}\n${THINK_CLOSE}`;
+}
+
+function renderTranscript(messages: readonly Message[], options: DialectRenderOptions = {}): string {
+	if (messages.length === 0) return "";
+	let out = DEEPSEEK_BOS;
+	for (let i = 0; i < messages.length; ) {
+		const message = messages[i]!;
+		if (message.role === "assistant") {
+			const parts = assistantTranscriptParts(message);
+			out += `${DEEPSEEK_ASSISTANT}${renderThinking(parts.thinking)}${parts.text}${renderAssistantToolCalls(parts.toolCalls, options)}${DEEPSEEK_EOS}`;
+			i++;
+			continue;
+		}
+		if (message.role === "toolResult") {
+			const run = collectToolResultRun(messages, i);
+			out += renderToolResults(run.results, options);
+			i = run.next;
+			continue;
+		}
+		if (message.role === "developer") out += messageContentText(message.content);
+		else out += `${DEEPSEEK_USER}${messageContentText(message.content)}`;
+		i++;
+	}
+	return out;
+}
+
+const definition: DialectDefinition = {
+	dialect: "deepseek",
+	prompt: dialectPrompt,
 	createScanner: options => new DeepSeekInbandScanner(options),
-	renderToolCall: renderDeepSeekInvocation,
-	renderAssistantToolCalls: renderDeepSeekToolCalls,
-	renderToolResults: renderDeepSeekToolResults,
+	renderToolCall,
+	renderAssistantToolCalls,
+	renderToolResults,
+	renderThinking,
+	renderTranscript,
 };
 
-export default grammar;
+export default definition;

@@ -1,6 +1,37 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Renamed the public dialect entrypoint from `@oh-my-pi/pi-ai/grammar` to `@oh-my-pi/pi-ai/dialect`.
+- Renamed grammar dialect identifiers from `ToolCallSyntax` to `Dialect`, renamed the `Grammar` interface to `DialectDefinition`, and renamed `Grammar.syntax` to `DialectDefinition.dialect`.
+- Added `DialectDefinition.renderThinking` and `DialectDefinition.renderTranscript` so dialect implementations serialize complete native chat transcripts, not just tool call/result blocks.
+
+### Added
+
+- Added `renderTranscript` method to dialect definitions for serializing complete native chat transcripts
+- Added `renderThinking` method to dialect definitions for rendering thinking/reasoning blocks
+- Added support for 11 dialect implementations: Anthropic, DeepSeek, Gemini, Gemma, GLM, Harmony, Hermes, Kimi, Pi-native, Qwen3, and XML
+- Added `createInbandScanner` factory function to instantiate dialect-specific scanners
+- Added `getDialectDefinition` function to retrieve dialect implementations by name
+- Added `renderToolCatalog` and `renderInbandToolPrompt` functions for tool catalog rendering
+- Added `renderToolInventory` function to generate human-readable per-tool documentation with examples
+- Added `renderToolExamples` function to render tool usage examples in the model's native dialect
+- Added `encodeInbandToolHistory` function to encode tool call history in dialect-specific format
+- Added `wrapInbandToolStream` function to process streaming responses with in-band tool call parsing
+- Added `ThinkingInbandScanner` for parsing thinking/reasoning blocks across dialects
+- Added `OwnedStream` class for managing dialect-aware streaming with tool call events
+
+### Changed
+
+- Moved public dialect entrypoint from `@oh-my-pi/pi-ai/grammar` to `@oh-my-pi/pi-ai/dialect` in package exports
+- Updated internal imports in `stream-markup-healing.ts` to use new dialect module path
+
+### Removed
+
+- Removed `src/grammar/factory.ts` (replaced by `src/dialect/factory.ts`)
+- Removed `src/grammar/rendering.ts` (functionality moved to `src/dialect/rendering.ts`)
+- Removed `src/grammar/xml.ts` (replaced by `src/dialect/xml.ts`)
 
 ## [15.13.3] - 2026-06-15
 

@@ -1,6 +1,10 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Renamed the catalog-owned tool syntax API from `ToolCallSyntax`/`FALLBACK_TOOL_SYNTAX`/`preferredToolSyntax` to `Dialect`/`FALLBACK_DIALECT`/`preferredDialect`.
+
 
 ## [15.13.3] - 2026-06-15
 

@@ -8,9 +8,9 @@ import type {
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { buildStringArgsResolver } from "./coercion";
 import { createInbandScanner } from "./factory";
-import type { InbandScanEvent, InbandScanner, InbandTool, ToolCallSyntax } from "./types";
+import type { Dialect, InbandScanEvent, InbandScanner, InbandTool } from "./types";
 
-const RESPONSE_OPEN_TOKENS: Record<ToolCallSyntax, readonly string[]> = {
+const RESPONSE_OPEN_TOKENS: Record<Dialect, readonly string[]> = {
 	glm: ["<tool_response>"],
 	hermes: ["<tool_response>"],
 	kimi: ["<|im_system|>"],
@@ -38,10 +38,10 @@ type OpenThinking = { index: number; text: string } | undefined;
 
 export function parseInbandToolMessage(
 	message: AssistantMessage,
-	syntax: ToolCallSyntax,
+	dialect: Dialect,
 	tools: readonly InbandTool[],
 ): AssistantMessage {
-	const projector = new InbandStreamProjector(new AssistantMessageEventStream(), tools, syntax, message, false);
+	const projector = new InbandStreamProjector(new AssistantMessageEventStream(), tools, dialect, message, false);
 	for (const block of message.content) {
 		if (block.type === "text") projector.text(block.text);
 		else projector.keep(block);
@@ -52,7 +52,7 @@ export function parseInbandToolMessage(
 export function wrapInbandToolStream(
 	inner: AssistantMessageEventStreamType,
 	tools: readonly InbandTool[],
-	syntax: ToolCallSyntax,
+	dialect: Dialect,
 	onAbort?: () => void,
 	abortOnFabrication = true,
 ): AssistantMessageEventStreamType {
@@ -63,7 +63,7 @@ export function wrapInbandToolStream(
 			for await (const event of inner) {
 				switch (event.type) {
 					case "start":
-						projector = new InbandStreamProjector(out, tools, syntax, event.partial, true);
+						projector = new InbandStreamProjector(out, tools, dialect, event.partial, true);
 						break;
 					case "thinking_start":
 						projector?.thinkingStart();
@@ -105,7 +105,7 @@ export function wrapInbandToolStream(
 						projector?.nativeToolEnd(event.contentIndex, event.toolCall);
 						break;
 					case "done":
-						projector ??= new InbandStreamProjector(out, tools, syntax, event.message, true);
+						projector ??= new InbandStreamProjector(out, tools, dialect, event.message, true);
 						projector.finish(event.message, true);
 						return;
 					case "error":
@@ -144,18 +144,18 @@ class InbandStreamProjector {
 	constructor(
 		out: AssistantMessageEventStream,
 		tools: readonly InbandTool[],
-		syntax: ToolCallSyntax,
+		dialect: Dialect,
 		seed: AssistantMessage,
 		emitEvents: boolean,
 	) {
 		this.#out = out;
 		this.#emitEvents = emitEvents;
-		this.#scanner = createInbandScanner(syntax, {
+		this.#scanner = createInbandScanner(dialect, {
 			tools,
 			stringArgs: buildStringArgsResolver(tools),
 			parseThinking: true,
 		});
-		this.#responseOpenTokens = RESPONSE_OPEN_TOKENS[syntax];
+		this.#responseOpenTokens = RESPONSE_OPEN_TOKENS[dialect];
 		this.#responseOverlapLength = Math.max(0, ...this.#responseOpenTokens.map(token => token.length - 1));
 		this.#partial = { ...seed, content: [] };
 		if (emitEvents) this.#out.push({ type: "start", partial: this.#partial });

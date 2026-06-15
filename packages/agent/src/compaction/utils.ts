@@ -3,7 +3,7 @@
  */
 
 import type { Message, ToolCall } from "@oh-my-pi/pi-ai";
-import { type Grammar, type GrammarToolResult, getInbandGrammar, type ToolCallSyntax } from "@oh-my-pi/pi-ai/grammar";
+import { type Dialect, getDialectDefinition } from "@oh-my-pi/pi-ai/dialect";
 import { formatGroupedPaths, prompt } from "@oh-my-pi/pi-utils";
 import type { AgentMessage } from "../types";
 import fileOperationsTemplate from "./prompts/file-operations.md" with { type: "text" };
@@ -189,10 +189,7 @@ function truncateForSummary(text: string, maxChars: number): string {
  * This prevents the model from treating it as a conversation to continue.
  * Call convertToLlm() first to handle custom message types.
  */
-export function serializeConversation(messages: Message[], syntax?: ToolCallSyntax): string {
-	const grammar = syntax ? getInbandGrammar(syntax) : undefined;
-	const parts: string[] = [];
-
+export function serializeConversation(messages: Message[], dialect?: Dialect): string {
 	// Tool results flagged contextually useless (and their paired calls) are
 	// dropped from the serialized text: the source region is discarded after
 	// summarization anyway, so excluding them costs nothing and keeps garbage
@@ -203,7 +200,33 @@ export function serializeConversation(messages: Message[], syntax?: ToolCallSynt
 			uselessCallIds.add(msg.toolCallId);
 		}
 	}
+	if (dialect) {
+		const processed: Message[] = [];
+		for (const msg of messages) {
+			if (msg.role === "assistant") {
+				const content = msg.content.filter(block => block.type !== "toolCall" || !uselessCallIds.has(block.id));
+				if (content.length > 0) processed.push(content.length === msg.content.length ? msg : { ...msg, content });
+				continue;
+			}
+			if (msg.role === "toolResult") {
+				if (uselessCallIds.has(msg.toolCallId)) continue;
+				const text = msg.content
+					.filter((c): c is { type: "text"; text: string } => c.type === "text")
+					.map(c => c.text)
+					.join("");
+				if (!text) continue;
+				processed.push({
+					...msg,
+					content: [{ type: "text", text: truncateForSummary(text, TOOL_RESULT_MAX_CHARS) }],
+				});
+				continue;
+			}
+			processed.push(msg);
+		}
+		return getDialectDefinition(dialect).renderTranscript(processed);
+	}
 
+	const parts: string[] = [];
 	for (const msg of messages) {
 		if (msg.role === "user") {
 			const content =
@@ -237,7 +260,7 @@ export function serializeConversation(messages: Message[], syntax?: ToolCallSynt
 				parts.push(`[Assistant]: ${textParts.join("\n")}`);
 			}
 			if (toolCalls.length > 0) {
-				parts.push(`[Tool Call]: ${renderToolCalls(toolCalls, grammar)}`);
+				parts.push(`[Tool Call]: ${renderToolCalls(toolCalls)}`);
 			}
 		} else if (msg.role === "toolResult") {
 			if (uselessCallIds.has(msg.toolCallId)) continue;
@@ -247,9 +270,7 @@ export function serializeConversation(messages: Message[], syntax?: ToolCallSynt
 				.join("");
 			if (content) {
 				const text = truncateForSummary(content, TOOL_RESULT_MAX_CHARS);
-				parts.push(
-					`[Tool Result]: ${renderToolResult(msg.toolCallId, msg.toolName, msg.isError === true, text, grammar)}`,
-				);
+				parts.push(`[Tool Result]: ${text}`);
 			}
 		}
 	}
@@ -258,11 +279,10 @@ export function serializeConversation(messages: Message[], syntax?: ToolCallSynt
 }
 
 /**
- * Render an assistant turn's tool calls. With a grammar, emit the model's
- * native invocation block; otherwise fall back to a compact `name(args)` list.
+ * Render an assistant turn's tool calls as a compact `name(args)` list for the
+ * legacy serializer.
  */
-function renderToolCalls(calls: ToolCall[], grammar: Grammar | undefined): string {
-	if (grammar) return grammar.renderAssistantToolCalls(calls);
+function renderToolCalls(calls: ToolCall[]): string {
 	return calls
 		.map(call => {
 			const argsStr = Object.entries(call.arguments as Record<string, unknown>)
@@ -271,22 +291,6 @@ function renderToolCalls(calls: ToolCall[], grammar: Grammar | undefined): strin
 			return `${call.name}(${argsStr})`;
 		})
 		.join("; ");
-}
-
-/**
- * Render a single tool result. With a grammar, emit the model's native
- * tool-result envelope; otherwise return the (already truncated) text verbatim.
- */
-function renderToolResult(
-	id: string,
-	name: string,
-	isError: boolean,
-	text: string,
-	grammar: Grammar | undefined,
-): string {
-	if (!grammar) return text;
-	const result: GrammarToolResult = { id, name, index: 0, text, isError };
-	return grammar.renderToolResults([result]);
 }
 
 // ============================================================================

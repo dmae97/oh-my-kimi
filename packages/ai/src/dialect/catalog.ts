@@ -1,10 +1,10 @@
 import { toolWireSchema } from "../utils/schema";
-import { getInbandGrammar } from "./factory";
+import { getDialectDefinition } from "./factory";
 import promptTemplate from "./prompt-template.md" with { type: "text" };
-import type { InbandTool, ToolCallSyntax } from "./types";
+import type { Dialect, InbandTool } from "./types";
 
 const TOOLS_TOKEN = "{{TOOLS}}";
-const GRAMMAR_TOKEN = "{{GRAMMAR}}";
+const DIALECT_PROMPT_TOKEN = "{{DIALECT}}";
 
 export function renderToolCatalog(tools: readonly InbandTool[]): string {
 	return tools
@@ -21,7 +21,9 @@ export function renderToolCatalog(tools: readonly InbandTool[]): string {
 		.join("\n");
 }
 
-export function renderInbandToolPrompt(tools: readonly InbandTool[], syntax: ToolCallSyntax): string {
-	const prompt = getInbandGrammar(syntax).prompt.trim();
-	return promptTemplate.replace(TOOLS_TOKEN, () => renderToolCatalog(tools)).replace(GRAMMAR_TOKEN, () => prompt);
+export function renderInbandToolPrompt(tools: readonly InbandTool[], dialect: Dialect): string {
+	const prompt = getDialectDefinition(dialect).prompt.trim();
+	return promptTemplate
+		.replace(TOOLS_TOKEN, () => renderToolCatalog(tools))
+		.replace(DIALECT_PROMPT_TOKEN, () => prompt);
 }

@@ -17,7 +17,7 @@ import type {
 	ToolResultMessage,
 	TSchema,
 } from "@oh-my-pi/pi-ai";
-import type { ToolCallSyntax } from "@oh-my-pi/pi-ai/grammar";
+import type { Dialect } from "@oh-my-pi/pi-ai/dialect";
 import type { HarmonyAuditEvent } from "@oh-my-pi/pi-ai/utils/harmony-leak";
 import type { AppendOnlyContextManager } from "./append-only-context";
 import type { AgentRunCoverage, AgentRunSummary } from "./run-collector";
@@ -201,14 +201,14 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 */
 	intentTracing?: boolean;
 	/**
-	 * Owned tool calling syntax.
+	 * Owned tool calling dialect.
 	 *
-	 * Undefined keeps provider-native tool calling. A syntax value sends no
-	 * native `tools`, forces `toolChoice` off, appends that syntax's tool catalog
+	 * Undefined keeps provider-native tool calling. A dialect value sends no
+	 * native `tools`, forces `toolChoice` off, appends that dialect's tool catalog
 	 * instructions, re-encodes prior tool calls/results as text, and parses the
 	 * model's text output back into canonical `toolCall` blocks.
 	 */
-	toolCallSyntax?: ToolCallSyntax;
+	dialect?: Dialect;
 	/**
 	 * When owned (in-band) tool calling is active and the model starts
 	 * fabricating a tool result inside its own turn, control how the loop reacts:
@@ -217,8 +217,8 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * - `false`: let the request finish and silently discard everything past the
 	 *   fabrication boundary (keeps the connection alive but pays for the tokens
 	 *   the model spends on the discarded tail).
-	 * Only meaningful when {@link toolCallSyntax} (or `PI_OWNED_TOOLS`) selects an
-	 * owned syntax; native tool calling never fabricates results in text.
+	 * Only meaningful when {@link dialect} (or `PI_OWNED_TOOLS`) selects an
+	 * owned dialect; native tool calling never fabricates results in text.
 	 */
 	abortOnFabricatedToolResult?: boolean;
 	/**

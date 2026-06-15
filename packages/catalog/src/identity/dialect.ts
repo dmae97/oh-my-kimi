@@ -1,6 +1,6 @@
 import { modelFamilyToken } from "./family";
 
-export type ToolCallSyntax =
+export type Dialect =
 	| "glm"
 	| "hermes"
 	| "kimi"
@@ -13,9 +13,9 @@ export type ToolCallSyntax =
 	| "gemini"
 	| "gemma";
 
-export const FALLBACK_TOOL_SYNTAX: ToolCallSyntax = "xml";
+export const FALLBACK_DIALECT: Dialect = "xml";
 
-export function preferredToolSyntax(modelId: string): ToolCallSyntax {
+export function preferredDialect(modelId: string): Dialect {
 	switch (modelFamilyToken(modelId)) {
 		case "anthropic":
 			return "anthropic";
@@ -35,6 +35,6 @@ export function preferredToolSyntax(modelId: string): ToolCallSyntax {
 		case "gpt-oss":
 			return "harmony";
 		default:
-			return FALLBACK_TOOL_SYNTAX;
+			return FALLBACK_DIALECT;
 	}
 }

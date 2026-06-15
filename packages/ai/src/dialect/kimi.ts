@@ -1,8 +1,15 @@
+import type { Message, ToolCall } from "../types";
 import { parseJsonWithRepair } from "../utils/json-parse";
 import { asRecord, normalizeKimiFunctionName, partialSuffixOverlapAny } from "./coercion";
-import grammarPrompt from "./kimi.md" with { type: "text" };
-import { renderKimiInvocation, renderKimiToolCalls, renderKimiToolResults } from "./rendering";
-import type { Grammar, InbandScanEvent, InbandScanner } from "./types";
+import dialectPrompt from "./kimi.md" with { type: "text" };
+import { assistantTranscriptParts, collectToolResultRun, messageContentText, stringifyJson } from "./rendering";
+import type {
+	DialectDefinition,
+	DialectRenderOptions,
+	DialectToolResult,
+	InbandScanEvent,
+	InbandScanner,
+} from "./types";
 
 export const KIMI_SECTION_BEGIN = "<|tool_calls_section_begin|>";
 export const KIMI_SECTION_END = "<|tool_calls_section_end|>";
@@ -186,13 +193,82 @@ function isWhitespace(cp: number): boolean {
 	return cp === 0x20 || cp === 0x09 || cp === 0x0a || cp === 0x0d || cp === 0x0b || cp === 0x0c;
 }
 
-const grammar: Grammar = {
-	syntax: "kimi",
-	prompt: grammarPrompt,
+function renderToolCall(call: ToolCall, _options?: DialectRenderOptions): string {
+	return kimiInvocation(call, 0);
+}
+
+function kimiInvocation(call: ToolCall, index: number): string {
+	return `${KIMI_CALL_BEGIN}${kimiCallId(call.name, call.id, index)}${KIMI_ARG_BEGIN}${stringifyJson(call.arguments)}${KIMI_CALL_END}`;
+}
+
+function renderAssistantToolCalls(calls: readonly ToolCall[], _options?: DialectRenderOptions): string {
+	if (calls.length === 0) return "";
+	const body = calls.map((call, index) => kimiInvocation(call, index)).join("");
+	return `${KIMI_SECTION_BEGIN}${body}${KIMI_SECTION_END}`;
+}
+
+function renderToolResults(results: readonly DialectToolResult[], _options?: DialectRenderOptions): string {
+	return results
+		.map(result =>
+			kimiTurn(
+				"system",
+				result.name,
+				`## Return of ${kimiCallId(result.name, result.id, result.index)}\n${result.text}`,
+			),
+		)
+		.join("");
+}
+
+function renderThinking(text: string): string {
+	return text;
+}
+
+function renderTranscript(messages: readonly Message[], _options?: DialectRenderOptions): string {
+	let out = "";
+	for (let i = 0; i < messages.length; ) {
+		const message = messages[i]!;
+		if (message.role === "assistant") {
+			const parts = assistantTranscriptParts(message);
+			out += kimiTurn(
+				"assistant",
+				"assistant",
+				`${parts.thinking}${parts.text}${renderAssistantToolCalls(parts.toolCalls)}`,
+			);
+			i++;
+			continue;
+		}
+		if (message.role === "toolResult") {
+			const run = collectToolResultRun(messages, i);
+			out += renderToolResults(run.results);
+			i = run.next;
+			continue;
+		}
+		const name = message.role === "developer" ? "system" : message.role;
+		const role = message.role === "developer" ? "system" : message.role;
+		out += kimiTurn(role, name, messageContentText(message.content));
+		i++;
+	}
+	return out;
+}
+
+function kimiCallId(name: string, id: string, index: number): string {
+	const trimmed = id.trim();
+	return trimmed.startsWith("functions.") ? trimmed : `functions.${name}:${index}`;
+}
+
+function kimiTurn(role: "assistant" | "system" | "user", name: string, body: string): string {
+	return `<|im_${role}|>${name}<|im_middle|>${body}<|im_end|>`;
+}
+
+const definition: DialectDefinition = {
+	dialect: "kimi",
+	prompt: dialectPrompt,
 	createScanner: () => new KimiInbandScanner(),
-	renderToolCall: renderKimiInvocation,
-	renderAssistantToolCalls: renderKimiToolCalls,
-	renderToolResults: renderKimiToolResults,
+	renderToolCall,
+	renderAssistantToolCalls,
+	renderToolResults,
+	renderThinking,
+	renderTranscript,
 };
 
-export default grammar;
+export default definition;

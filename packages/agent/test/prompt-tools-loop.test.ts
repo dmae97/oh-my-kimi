@@ -51,7 +51,7 @@ describe("agentLoop with owned in-band tool calls", () => {
 		});
 
 		const context: AgentContext = { systemPrompt: ["BASE PROMPT"], messages: [], tools: [echoTool] };
-		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter, toolCallSyntax: "glm" };
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter, dialect: "glm" };
 
 		const messages = await agentLoop([createUserMessage("say hi")], context, config, undefined, mock.stream).result();
 
@@ -102,7 +102,7 @@ describe("agentLoop with owned in-band tool calls", () => {
 		expect(wireText(internalResult!)).toBe("echoed:hello world");
 	});
 
-	it("executes Hermes/Qwen JSON tool calls when that syntax is selected", async () => {
+	it("executes Hermes/Qwen JSON tool calls when that dialect is selected", async () => {
 		const echoArgs: Array<{ msg: string }> = [];
 		const toolSchema = z.object({ msg: z.string().describe("message to echo") });
 		const echoTool: AgentTool<typeof toolSchema, { msg: string }> = {
@@ -131,7 +131,7 @@ describe("agentLoop with owned in-band tool calls", () => {
 		});
 
 		const context: AgentContext = { systemPrompt: ["BASE PROMPT"], messages: [], tools: [echoTool] };
-		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter, toolCallSyntax: "hermes" };
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter, dialect: "hermes" };
 
 		await agentLoop([createUserMessage("say hi")], context, config, undefined, mock.stream).result();
 

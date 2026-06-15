@@ -1,11 +1,15 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Breaking Changes
 
 - Renamed the SDK tool format type and resolver from `ToolCallFormat`/`resolveToolCallSyntax` to `DialectFormat`/`resolveDialect`, and the agent option from `toolCallSyntax` to `dialect`.
 - Changed `/dump` transcript output to render messages with the selected model's native dialect turn and thinking envelopes instead of markdown role headings.
 
+### Changed
+
+- Session dump output now renders message history using the model's native dialect turn envelope instead of markdown role headings
 
 ## [15.13.3] - 2026-06-15
 

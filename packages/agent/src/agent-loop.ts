@@ -16,12 +16,12 @@ import {
 	zodToWireSchema,
 } from "@oh-my-pi/pi-ai";
 import {
+	type Dialect,
 	encodeInbandToolHistory,
 	renderInbandToolPrompt,
 	renderToolExamples,
-	type ToolCallSyntax,
 	wrapInbandToolStream,
-} from "@oh-my-pi/pi-ai/grammar";
+} from "@oh-my-pi/pi-ai/dialect";
 import {
 	createHarmonyAuditEvent,
 	detectHarmonyLeakInAssistantMessage,
@@ -32,7 +32,7 @@ import {
 	recoverHarmonyToolCall,
 	signalListLabel,
 } from "@oh-my-pi/pi-ai/utils/harmony-leak";
-import { preferredToolSyntax } from "@oh-my-pi/pi-catalog/identity";
+import { preferredDialect } from "@oh-my-pi/pi-catalog/identity";
 import { logger, sanitizeText } from "@oh-my-pi/pi-utils";
 import { type AgentRunCoverage, type AgentRunSummary, ToolCallBlockedError } from "./run-collector";
 import {
@@ -92,7 +92,7 @@ class HarmonyLeakInterruption extends Error {
 		this.name = "HarmonyLeakInterruption";
 	}
 }
-function resolveOwnedToolSyntaxFromEnv(value: string | undefined): ToolCallSyntax | undefined {
+function resolveOwnedDialectFromEnv(value: string | undefined): Dialect | undefined {
 	switch (value) {
 		case "1":
 		case "true":
@@ -531,7 +531,7 @@ function injectIntentIntoSchema(schema: unknown, mode: "require" | "optional" = 
 export function normalizeTools(
 	tools: AgentContext["tools"],
 	injectIntent: boolean,
-	exampleSyntax?: ToolCallSyntax,
+	exampleDialect?: Dialect,
 ): Context["tools"] {
 	injectIntent = injectIntent && Bun.env.PI_NO_INTENT !== "1";
 	return tools?.map(t => {
@@ -547,8 +547,8 @@ export function normalizeTools(
 		}
 		const description = t.description ?? "";
 		const injectExampleIntent = injectIntent && intentMode !== "omit";
-		const examplesBlock = exampleSyntax
-			? renderToolExamples({ ...t, parameters }, exampleSyntax, injectExampleIntent ? INTENT_FIELD : undefined)
+		const examplesBlock = exampleDialect
+			? renderToolExamples({ ...t, parameters }, exampleDialect, injectExampleIntent ? INTENT_FIELD : undefined)
 			: "";
 		const finalDescription = examplesBlock ? `${description}\n\n${examplesBlock}` : description;
 		return { ...t, parameters, description: finalDescription };
@@ -925,6 +925,8 @@ async function streamAssistantResponse(
 	const llmMessages = await config.convertToLlm(messages);
 	const normalizedMessages = normalizeMessagesForProvider(llmMessages, config.model);
 
+	const ownedDialect: Dialect | undefined = config.dialect ?? resolveOwnedDialectFromEnv(Bun.env.PI_OWNED_TOOLS);
+	const exampleDialect = ownedDialect ?? preferredDialect(config.model.id);
 	// Build LLM context — append-only mode caches system prompt + tools
 	// AND keeps an append-only message log so prior-turn bytes are stable.
 	let llmContext: Context;
@@ -932,13 +934,13 @@ async function streamAssistantResponse(
 		config.appendOnlyContext.syncMessages(normalizedMessages);
 		llmContext = config.appendOnlyContext.build(context, {
 			intentTracing: !!config.intentTracing,
-			exampleSyntax: preferredToolSyntax(config.model.id),
+			exampleDialect,
 		});
 	} else {
 		llmContext = {
 			systemPrompt: context.systemPrompt,
 			messages: normalizedMessages,
-			tools: normalizeTools(context.tools, !!config.intentTracing, preferredToolSyntax(config.model.id)),
+			tools: normalizeTools(context.tools, !!config.intentTracing, exampleDialect),
 		};
 	}
 	if (config.transformProviderContext) {
@@ -946,17 +948,15 @@ async function streamAssistantResponse(
 	}
 
 	// Owned tool calling: take tool calls away from the provider and run them
-	// through the selected in-band prompt syntax. `PI_OWNED_TOOLS=1` still
-	// force-enables GLM; `PI_OWNED_TOOLS=<syntax>` force-enables that syntax.
-	const ownedSyntax: ToolCallSyntax | undefined =
-		config.toolCallSyntax ?? resolveOwnedToolSyntaxFromEnv(Bun.env.PI_OWNED_TOOLS);
+	// through the selected in-band prompt dialect. `PI_OWNED_TOOLS=1` still
+	// force-enables GLM; `PI_OWNED_TOOLS=<dialect>` force-enables that dialect.
 	let promptToolWireTools: Context["tools"];
-	if (ownedSyntax && llmContext.tools && llmContext.tools.length > 0) {
+	if (ownedDialect && llmContext.tools && llmContext.tools.length > 0) {
 		promptToolWireTools = llmContext.tools;
 		llmContext = {
 			...llmContext,
-			systemPrompt: [...(llmContext.systemPrompt ?? []), renderInbandToolPrompt(promptToolWireTools, ownedSyntax)],
-			messages: encodeInbandToolHistory(llmContext.messages, ownedSyntax, promptToolWireTools),
+			systemPrompt: [...(llmContext.systemPrompt ?? []), renderInbandToolPrompt(promptToolWireTools, ownedDialect)],
+			messages: encodeInbandToolHistory(llmContext.messages, ownedDialect, promptToolWireTools),
 			tools: undefined,
 		};
 	}
@@ -990,7 +990,7 @@ async function streamAssistantResponse(
 	// the hallucinated turn. Merged into the provider signal ONLY (not
 	// `requestSignal`), so it cancels the request without tripping the loop's
 	// external-abort handling (`abortRacePromise` / `requestSignal.aborted`).
-	const promptToolAbortController = ownedSyntax ? new AbortController() : undefined;
+	const promptToolAbortController = ownedDialect ? new AbortController() : undefined;
 	const providerAbortSignals: AbortSignal[] = [];
 	if (requestSignal) providerAbortSignals.push(requestSignal);
 	providerAbortSignals.push(repetitionAbortController.signal);
@@ -1000,7 +1000,7 @@ async function streamAssistantResponse(
 	const effectiveTemperature =
 		harmonyRetryAttempt > 0 && config.temperature !== undefined ? config.temperature + 0.05 : config.temperature;
 	// Owned tool calling sends no native tools, so any tool_choice would error.
-	const effectiveToolChoice = ownedSyntax ? undefined : (dynamicToolChoice ?? config.toolChoice);
+	const effectiveToolChoice = ownedDialect ? undefined : (dynamicToolChoice ?? config.toolChoice);
 	const effectiveReasoning = dynamicReasoning ?? config.reasoning;
 	const effectiveDisableReasoning = dynamicDisableReasoning ?? config.disableReasoning;
 
@@ -1068,7 +1068,7 @@ async function streamAssistantResponse(
 				signal: finalRequestSignal,
 				onResponse: captureOnResponse,
 			});
-			if (promptToolWireTools && ownedSyntax) {
+			if (promptToolWireTools && ownedDialect) {
 				// Re-materialize in-band tool-call text as native toolCall content blocks
 				// so the rest of the loop executes them unchanged. When the model starts
 				// fabricating tool results, the abort callback cancels the provider — unless
@@ -1077,7 +1077,7 @@ async function streamAssistantResponse(
 				response = wrapInbandToolStream(
 					response,
 					promptToolWireTools,
-					ownedSyntax,
+					ownedDialect,
 					() => promptToolAbortController?.abort(),
 					config.abortOnFabricatedToolResult ?? true,
 				);

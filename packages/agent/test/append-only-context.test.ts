@@ -642,19 +642,19 @@ describe("tool examples injection through build()", () => {
 		properties: { paths: { type: "array", items: { type: "string" } } },
 	};
 
-	it("injects examples when exampleSyntax is provided", () => {
+	it("injects examples when exampleDialect is provided", () => {
 		const mgr = new AppendOnlyContextManager();
 		const tool = makeTool("find", "Find files.", findParams, findExamples);
 		const ctx = makeContext({ tools: [tool] });
 
-		const result = mgr.build(ctx, { intentTracing: false, exampleSyntax: "anthropic" });
+		const result = mgr.build(ctx, { intentTracing: false, exampleDialect: "anthropic" });
 		const desc = result.tools?.[0]?.description ?? "";
 		expect(desc).toContain("<examples>");
 		expect(desc).toContain("# Find files");
 		expect(desc).toContain('<invoke name="find">');
 	});
 
-	it("omits examples when exampleSyntax is undefined", () => {
+	it("omits examples when exampleDialect is undefined", () => {
 		const mgr = new AppendOnlyContextManager();
 		const tool = makeTool("find", "Find files.", findParams, findExamples);
 		const ctx = makeContext({ tools: [tool] });
@@ -669,13 +669,13 @@ describe("tool examples injection through build()", () => {
 		const tool = makeTool("find", "Find files.", findParams, findExamples);
 		const ctx = makeContext({ tools: [tool] });
 
-		const result = mgr.build(ctx, { intentTracing: true, exampleSyntax: "anthropic" });
+		const result = mgr.build(ctx, { intentTracing: true, exampleDialect: "anthropic" });
 		const desc = result.tools?.[0]?.description ?? "";
 		expect(desc).toContain('<parameter name="_i"');
 		expect(desc).toContain("…");
 	});
 
-	it("exampleSyntax flip invalidates the fingerprint cache", () => {
+	it("exampleDialect flip invalidates the fingerprint cache", () => {
 		const mgr = new AppendOnlyContextManager();
 		const tool = makeTool("find", "Find files.", undefined, findExamples);
 		const ctx = makeContext({ tools: [tool] });
@@ -683,7 +683,7 @@ describe("tool examples injection through build()", () => {
 		mgr.build(ctx, { intentTracing: false });
 		const fpNoExamples = mgr.prefix.fingerprint;
 
-		mgr.build(ctx, { intentTracing: false, exampleSyntax: "anthropic" });
+		mgr.build(ctx, { intentTracing: false, exampleDialect: "anthropic" });
 		const fpWithExamples = mgr.prefix.fingerprint;
 
 		expect(fpNoExamples).not.toBe(fpWithExamples);

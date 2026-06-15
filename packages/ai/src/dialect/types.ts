@@ -1,7 +1,7 @@
-import type { ToolCallSyntax } from "@oh-my-pi/pi-catalog/identity";
-import type { Context, ToolCall } from "../types";
+import type { Dialect as CatalogDialect } from "@oh-my-pi/pi-catalog/identity";
+import type { Context, Message, ToolCall } from "../types";
 
-export type { ToolCallSyntax };
+export type { Dialect } from "@oh-my-pi/pi-catalog/identity";
 
 export type InbandScanEvent =
 	| { type: "text"; text: string }
@@ -17,7 +17,7 @@ export interface InbandScanner {
 	flush(): InbandScanEvent[];
 }
 
-export interface GrammarToolResult {
+export interface DialectToolResult {
 	readonly id: string;
 	readonly name: string;
 	readonly index: number;
@@ -25,30 +25,32 @@ export interface GrammarToolResult {
 	readonly isError: boolean;
 }
 
-export interface GrammarRenderOptions {
+export interface DialectRenderOptions {
 	readonly tools?: readonly InbandTool[];
 	readonly example?: boolean;
 }
 
-export interface Grammar {
-	readonly syntax: ToolCallSyntax;
+export interface DialectDefinition {
+	readonly dialect: CatalogDialect;
 	readonly prompt: string;
 	createScanner(options?: InbandScannerOptions): InbandScanner;
 	/** Render a single tool-call invocation — the inner element only, WITHOUT any parallel-call block envelope (e.g. anthropic's `<function_calls>` / kimi's section wrapper). */
-	renderToolCall(call: ToolCall, options?: GrammarRenderOptions): string;
-	/** Render a batch of (parallel) tool calls as one complete block, including whatever envelope the syntax wraps multiple calls in. */
-	renderAssistantToolCalls(calls: readonly ToolCall[], options?: GrammarRenderOptions): string;
-	renderToolResults(results: readonly GrammarToolResult[], options?: GrammarRenderOptions): string;
+	renderToolCall(call: ToolCall, options?: DialectRenderOptions): string;
+	/** Render a batch of (parallel) tool calls as one complete block, including whatever envelope the dialect wraps multiple calls in. */
+	renderAssistantToolCalls(calls: readonly ToolCall[], options?: DialectRenderOptions): string;
+	renderToolResults(results: readonly DialectToolResult[], options?: DialectRenderOptions): string;
+	renderThinking(text: string): string;
+	renderTranscript(messages: readonly Message[], options?: DialectRenderOptions): string;
 }
 
 export interface InbandScannerOptions {
-	/** string-typed arg names for a tool → read verbatim. Ignored by JSON-carrying syntaxes. */
+	/** string-typed arg names for a tool → read verbatim. Ignored by JSON-carrying dialects. */
 	stringArgs?: (toolName: string) => ReadonlySet<string>;
-	/** Full tool schemas for schema-driven syntaxes such as GLM XML and pi-native. */
+	/** Full tool schemas for schema-driven dialects such as GLM XML and pi-native. */
 	tools?: readonly InbandTool[];
 	/** XML only: parse pipe-wrapped DeepSeek DSML tags vs plain Anthropic invoke/parameter tags. */
 	xmlTagset?: "anthropic" | "dsml";
-	/** Emit thinking markers as thinking events instead of visible text when the syntax defines them. */
+	/** Emit thinking markers as thinking events instead of visible text when the dialect defines them. */
 	parseThinking?: boolean;
 }
 

@@ -1,6 +1,16 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Renamed owned tool-calling options from `toolCallSyntax`/`exampleSyntax` to `dialect`/`exampleDialect`.
+- Changed compaction conversation serialization to use the target model's native dialect turn, thinking, tool-call, and tool-result envelopes when a dialect is selected.
+
+### Changed
+
+- Renamed `toolCallSyntax` option to `dialect` in AgentOptions and AgentLoopConfig
+- Updated conversation serialization to use dialect's native transcript rendering when a dialect is selected
+- Changed internal references from `ToolCallSyntax` type to `Dialect` type across agent loop and compaction modules
 
 ## [15.13.3] - 2026-06-15
 

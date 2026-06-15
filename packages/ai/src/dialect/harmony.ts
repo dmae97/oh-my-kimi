@@ -1,8 +1,21 @@
+import type { Message, ToolCall } from "../types";
 import { parseJsonWithRepair } from "../utils/json-parse";
 import { asRecord, mintToolCallId, partialSuffixOverlapAny } from "./coercion";
-import grammarPrompt from "./harmony.md" with { type: "text" };
-import { renderHarmonyInvocation, renderHarmonyToolCalls, renderHarmonyToolResults } from "./rendering";
-import type { Grammar, InbandScanEvent, InbandScanner } from "./types";
+import dialectPrompt from "./harmony.md" with { type: "text" };
+import {
+	assistantTranscriptParts,
+	collectToolResultRun,
+	harmonyRecipient,
+	messageContentText,
+	stringifyJson,
+} from "./rendering";
+import type {
+	DialectDefinition,
+	DialectRenderOptions,
+	DialectToolResult,
+	InbandScanEvent,
+	InbandScanner,
+} from "./types";
 
 const START = "<|start|>";
 const END = "<|end|>";
@@ -260,13 +273,74 @@ function parseRecipient(header: string): string {
 	return match?.[1] ?? "";
 }
 
-const grammar: Grammar = {
-	syntax: "harmony",
-	prompt: grammarPrompt,
+function renderToolCall(call: ToolCall, options: DialectRenderOptions = {}): string {
+	if (options.example) return stringifyJson(call.arguments);
+	return `${START}assistant${CHANNEL}commentary to=${harmonyRecipient(call.name)}${MESSAGE}${stringifyJson(call.arguments)}${CALL}`;
+}
+
+function renderAssistantToolCalls(calls: readonly ToolCall[], options: DialectRenderOptions = {}): string {
+	let out = "";
+	for (const call of calls) out += renderToolCall(call, options);
+	return out;
+}
+
+function renderToolResults(results: readonly DialectToolResult[]): string {
+	let out = "";
+	for (const result of results) {
+		out += `${START}${harmonyRecipient(result.name)} to=assistant${CHANNEL}commentary${MESSAGE}${result.text}${END}`;
+	}
+	return out;
+}
+
+function renderThinking(text: string): string {
+	if (!text) return "";
+	return `${START}assistant${CHANNEL}analysis${MESSAGE}${text}${END}`;
+}
+
+function renderTranscript(messages: readonly Message[], options: DialectRenderOptions = {}): string {
+	let out = "";
+	for (let i = 0; i < messages.length; ) {
+		const message = messages[i]!;
+		if (message.role === "assistant") {
+			const parts = assistantTranscriptParts(message);
+			let emitted = false;
+			if (parts.thinking) {
+				out += renderThinking(parts.thinking);
+				emitted = true;
+			}
+			if (parts.text) {
+				out += `${START}assistant${CHANNEL}final${MESSAGE}${parts.text}${END}`;
+				emitted = true;
+			}
+			if (parts.toolCalls.length > 0) {
+				out += renderAssistantToolCalls(parts.toolCalls, options);
+				emitted = true;
+			}
+			if (!emitted) out += `${START}assistant${CHANNEL}final${MESSAGE}${END}`;
+			i++;
+			continue;
+		}
+		if (message.role === "toolResult") {
+			const run = collectToolResultRun(messages, i);
+			out += renderToolResults(run.results);
+			i = run.next;
+			continue;
+		}
+		out += `${START}${message.role}${MESSAGE}${messageContentText(message.content)}${END}`;
+		i++;
+	}
+	return out;
+}
+
+const definition: DialectDefinition = {
+	dialect: "harmony",
+	prompt: dialectPrompt,
 	createScanner: () => new HarmonyInbandScanner(),
-	renderToolCall: renderHarmonyInvocation,
-	renderAssistantToolCalls: renderHarmonyToolCalls,
-	renderToolResults: renderHarmonyToolResults,
+	renderToolCall,
+	renderAssistantToolCalls,
+	renderToolResults,
+	renderThinking,
+	renderTranscript,
 };
 
-export default grammar;
+export default definition;

@@ -47,7 +47,7 @@ describe("serializeConversation — useless pairs", () => {
 			toolResultMessage("c-drop", "No matches found", { useless: true }),
 		]);
 
-		expect(out).toContain('pattern="alpha"');
+		expect(out).toContain('search(pattern="alpha")');
 		expect(out).toContain("alpha match found in src/alpha.ts");
 		expect(out).not.toContain("zzz_nothing");
 		expect(out).not.toContain("No matches found");
@@ -59,7 +59,40 @@ describe("serializeConversation — useless pairs", () => {
 			toolResultMessage("c-err", "grep crashed", { useless: true, isError: true }),
 		]);
 
-		expect(out).toContain('pattern="beta"');
+		expect(out).toContain('search(pattern="beta")');
 		expect(out).toContain("[Tool Result]: grep crashed");
+	});
+
+	test("renders native dialect transcripts when a dialect is provided", () => {
+		const out = serializeConversation(
+			[
+				assistantMessage([
+					{ type: "text", text: "Searching." },
+					{ type: "toolCall", id: "c-native", name: "search", arguments: { pattern: "gamma" } },
+				]),
+				toolResultMessage("c-native", "gamma match found"),
+			],
+			"anthropic",
+		);
+
+		expect(out).toContain("\n\nAssistant:");
+		expect(out).toContain("<function_calls>");
+		expect(out).toContain("<function_results>");
+		expect(out).not.toContain("[Tool Call]:");
+		expect(out).not.toContain("[Assistant tool calls]:");
+	});
+
+	test("native dialect serialization drops empty assistants left by useless calls", () => {
+		const out = serializeConversation(
+			[
+				assistantMessage([
+					{ type: "toolCall", id: "c-drop", name: "search", arguments: { pattern: "zzz_nothing" } },
+				]),
+				toolResultMessage("c-drop", "No matches found", { useless: true }),
+			],
+			"harmony",
+		);
+
+		expect(out).toBe("");
 	});
 });

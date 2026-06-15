@@ -1,3 +1,4 @@
+import type { Message, ToolCall } from "../types";
 import type { ToolArgShape } from "./coercion";
 import {
 	buildArgShapes,
@@ -11,9 +12,16 @@ import {
 	mintToolCallId,
 	partialSuffixOverlapAny,
 } from "./coercion";
-import grammarPrompt from "./pi.md" with { type: "text" };
-import { renderPiNativeInvocation, renderPiNativeToolCalls, renderToolResponseResults } from "./rendering";
-import type { Grammar, InbandScanEvent, InbandScanner, InbandScannerOptions } from "./types";
+import dialectPrompt from "./pi.md" with { type: "text" };
+import { renderChatMlTranscript, renderToolResponseResults, stringifyJson } from "./rendering";
+import type {
+	DialectDefinition,
+	DialectRenderOptions,
+	DialectToolResult,
+	InbandScanEvent,
+	InbandScanner,
+	InbandScannerOptions,
+} from "./types";
 
 const CALL_PREFIX = "<call:";
 const NAME_START = /[A-Za-z_]/;
@@ -573,13 +581,73 @@ function isNameChar(ch: string | undefined): boolean {
 	return ch !== undefined && NAME_CHAR.test(ch);
 }
 
-const grammar: Grammar = {
-	syntax: "pi",
-	prompt: grammarPrompt,
+function renderToolCall(call: ToolCall, options: DialectRenderOptions = {}): string {
+	return renderInvocation(call, buildArgShapes(options.tools).get(call.name));
+}
+
+function renderInvocation(call: ToolCall, shape: ToolArgShape | undefined): string {
+	let body = `<call:${call.name}>`;
+	for (const key in call.arguments) {
+		body += `\n${renderElement(key, call.arguments[key], shape?.properties[key])}`;
+	}
+	return `${body}\n</call:${call.name}>`;
+}
+
+function renderAssistantToolCalls(calls: readonly ToolCall[], options: DialectRenderOptions = {}): string {
+	const shapes = buildArgShapes(options.tools);
+	return calls.map(call => renderInvocation(call, shapes.get(call.name))).join("\n");
+}
+
+function renderToolResults(results: readonly DialectToolResult[], _options?: DialectRenderOptions): string {
+	return renderToolResponseResults(results);
+}
+
+function renderThinking(text: string): string {
+	if (!text) return "";
+	return `<thinking>\n${text}\n</thinking>`;
+}
+
+function renderTranscript(messages: readonly Message[], options: DialectRenderOptions = {}): string {
+	return renderChatMlTranscript(messages, options, {
+		toolResultRole: "tool",
+		renderThinking,
+		renderCalls: renderAssistantToolCalls,
+		renderResultsBody: renderToolResults,
+	});
+}
+
+function renderElement(key: string, value: unknown, schema: unknown): string {
+	if (Array.isArray(value)) {
+		const itemSchema = getArrayItemSchema(schema);
+		return value.map(item => renderElement(key, item, itemSchema)).join("\n");
+	}
+	if (value && typeof value === "object") {
+		const record = value as Record<string, unknown>;
+		const properties = getObjectProperties(schema);
+		let body = `<${key}>`;
+		for (const childKey in record) {
+			body += `\n${renderElement(childKey, record[childKey], properties[childKey])}`;
+		}
+		return `${body}\n</${key}>`;
+	}
+	return `<${key}>${renderScalar(value, schema)}</${key}>`;
+}
+
+function renderScalar(value: unknown, schema: unknown): string {
+	if (typeof value === "string") return value;
+	if (isStringOnlySchema(schema) && value === null) return "";
+	return stringifyJson(value);
+}
+
+const definition: DialectDefinition = {
+	dialect: "pi",
+	prompt: dialectPrompt,
 	createScanner: options => new PiNativeInbandScanner(options),
-	renderToolCall: renderPiNativeInvocation,
-	renderAssistantToolCalls: renderPiNativeToolCalls,
-	renderToolResults: renderToolResponseResults,
+	renderToolCall,
+	renderAssistantToolCalls,
+	renderToolResults,
+	renderThinking,
+	renderTranscript,
 };
 
-export default grammar;
+export default definition;

@@ -1,14 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import type { ToolCall } from "@oh-my-pi/pi-ai";
-import {
-	createInbandScanner,
-	getInbandGrammar,
-	type InbandScanEvent,
-	type ToolCallSyntax,
-} from "@oh-my-pi/pi-ai/grammar";
+import { createInbandScanner, type Dialect, getDialectDefinition, type InbandScanEvent } from "@oh-my-pi/pi-ai/dialect";
 
-function scan(syntax: ToolCallSyntax, text: string, charByChar = false): InbandScanEvent[] {
-	const scanner = createInbandScanner(syntax);
+function scan(dialect: Dialect, text: string, charByChar = false): InbandScanEvent[] {
+	const scanner = createInbandScanner(dialect);
 	const events: InbandScanEvent[] = [];
 	if (charByChar) for (const ch of text) events.push(...scanner.feed(ch));
 	else events.push(...scanner.feed(text));
@@ -17,11 +12,11 @@ function scan(syntax: ToolCallSyntax, text: string, charByChar = false): InbandS
 }
 
 function parsedCalls(
-	syntax: ToolCallSyntax,
+	dialect: Dialect,
 	text: string,
 	charByChar = false,
 ): { name: string; arguments: Record<string, unknown> }[] {
-	return scan(syntax, text, charByChar)
+	return scan(dialect, text, charByChar)
 		.filter((event): event is Extract<InbandScanEvent, { type: "toolEnd" }> => event.type === "toolEnd")
 		.map(event => ({ name: event.name, arguments: event.arguments }));
 }
@@ -40,7 +35,7 @@ const call = (name: string, args: Record<string, unknown>): ToolCall => ({
 	arguments: args,
 });
 
-describe("gemini grammar (Pythonic tool_code)", () => {
+describe("gemini dialect (Pythonic tool_code)", () => {
 	it("parses the print(default_api...) form", () => {
 		const calls = parsedCalls("gemini", "```tool_code\nprint(default_api.read(path='a.ts', count=2))\n```");
 		expect(calls).toEqual([{ name: "read", arguments: { path: "a.ts", count: 2 } }]);
@@ -112,8 +107,8 @@ describe("gemini grammar (Pythonic tool_code)", () => {
 	});
 
 	it("renders parallel calls as a list and round-trips through the scanner", () => {
-		const grammar = getInbandGrammar("gemini");
-		const rendered = grammar.renderAssistantToolCalls([
+		const definition = getDialectDefinition("gemini");
+		const rendered = definition.renderAssistantToolCalls([
 			call("read", { path: "a" }),
 			call("write", { path: "b", content: "c" }),
 		]);
@@ -127,21 +122,21 @@ describe("gemini grammar (Pythonic tool_code)", () => {
 	});
 
 	it("renders examples without a fence or print wrapper", () => {
-		const grammar = getInbandGrammar("gemini");
-		expect(grammar.renderToolCall(call("read", { path: "a.ts" }), { example: true })).toBe('read(path="a.ts")');
-		expect(grammar.renderAssistantToolCalls([call("read", { path: "a.ts" })], { example: true })).toBe(
+		const definition = getDialectDefinition("gemini");
+		expect(definition.renderToolCall(call("read", { path: "a.ts" }), { example: true })).toBe('read(path="a.ts")');
+		expect(definition.renderAssistantToolCalls([call("read", { path: "a.ts" })], { example: true })).toBe(
 			'read(path="a.ts")',
 		);
 	});
 
 	it("escapes special characters on render and decodes them on parse", () => {
-		const grammar = getInbandGrammar("gemini");
-		const rendered = grammar.renderAssistantToolCalls([call("write", { content: 'a "b"\n\tc\\d' })]);
+		const definition = getDialectDefinition("gemini");
+		const rendered = definition.renderAssistantToolCalls([call("write", { content: 'a "b"\n\tc\\d' })]);
 		expect(parsedCalls("gemini", rendered)).toEqual([{ name: "write", arguments: { content: 'a "b"\n\tc\\d' } }]);
 	});
 });
 
-describe("gemma grammar (token-delimited call:NAME{…})", () => {
+describe("gemma dialect (token-delimited call:NAME{…})", () => {
 	it("parses a single call with string and scalar args", () => {
 		const calls = parsedCalls("gemma", '<|tool_call>call:read{path:<|"|>a.ts<|"|>,count:2}<tool_call|>');
 		expect(calls).toEqual([{ name: "read", arguments: { path: "a.ts", count: 2 } }]);
@@ -187,8 +182,8 @@ describe("gemma grammar (token-delimited call:NAME{…})", () => {
 	});
 
 	it("renders calls that round-trip through the scanner", () => {
-		const grammar = getInbandGrammar("gemma");
-		const rendered = grammar.renderAssistantToolCalls([
+		const definition = getDialectDefinition("gemma");
+		const rendered = definition.renderAssistantToolCalls([
 			call("read", { path: "a" }),
 			call("write", { path: "b", content: "c" }),
 		]);

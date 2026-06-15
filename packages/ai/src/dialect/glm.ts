@@ -1,13 +1,29 @@
+import type { Message, ToolCall } from "../types";
 import {
+	buildArgShapes,
 	buildStringArgsResolver,
 	decodeValue,
 	mintToolCallId,
 	partialSuffixOverlap,
 	partialSuffixOverlapAny,
+	type ToolArgShape,
 } from "./coercion";
-import grammarPrompt from "./glm.md" with { type: "text" };
-import { renderGlmInvocation, renderGlmToolCalls, renderGlmToolResults } from "./rendering";
-import type { Grammar, InbandScanEvent, InbandScanner, InbandScannerOptions } from "./types";
+import dialectPrompt from "./glm.md" with { type: "text" };
+import {
+	assistantTranscriptParts,
+	collectToolResultRun,
+	messageContentText,
+	renderToolResponseResults,
+	stringifyJson,
+} from "./rendering";
+import type {
+	DialectDefinition,
+	DialectRenderOptions,
+	DialectToolResult,
+	InbandScanEvent,
+	InbandScanner,
+	InbandScannerOptions,
+} from "./types";
 
 const TOOL_OPEN = "<tool_call>";
 const TOOL_CLOSE = "</tool_call>";
@@ -372,13 +388,68 @@ function minFound(...values: readonly number[]): number {
 	return best;
 }
 
-const grammar: Grammar = {
-	syntax: "glm",
-	prompt: grammarPrompt,
+function renderToolCall(call: ToolCall, options: DialectRenderOptions = {}): string {
+	return glmInvocation(call, buildArgShapes(options.tools).get(call.name));
+}
+
+function glmInvocation(call: ToolCall, shape: ToolArgShape | undefined): string {
+	let body = `${TOOL_OPEN}${call.name}`;
+	for (const key in call.arguments) {
+		const value = call.arguments[key];
+		const rendered = shape?.stringArgs.has(key) && typeof value === "string" ? value : stringifyJson(value);
+		body += `\n${ARG_KEY_OPEN}${key}${ARG_KEY_CLOSE}\n${ARG_VALUE_OPEN}${rendered}${ARG_VALUE_CLOSE}`;
+	}
+	return `${body}\n${TOOL_CLOSE}`;
+}
+
+function renderAssistantToolCalls(calls: readonly ToolCall[], options: DialectRenderOptions = {}): string {
+	const shapes = buildArgShapes(options.tools);
+	return calls.map(call => glmInvocation(call, shapes.get(call.name))).join("\n");
+}
+
+function renderToolResults(results: readonly DialectToolResult[]): string {
+	return `<observation>\n${renderToolResponseResults(results)}\n</observation>`;
+}
+
+function renderThinking(text: string): string {
+	if (!text) return "";
+	return `${THINK_OPEN}\n${text}\n${THINK_CLOSE}`;
+}
+
+function renderTranscript(messages: readonly Message[], options: DialectRenderOptions = {}): string {
+	if (messages.length === 0) return "";
+	let out = "[gMASK]<sop>";
+	for (let i = 0; i < messages.length; ) {
+		const message = messages[i]!;
+		if (message.role === "assistant") {
+			const parts = assistantTranscriptParts(message);
+			const thinking = parts.thinking ? `\n${renderThinking(parts.thinking)}` : "";
+			out += `<|assistant|>\n${thinking}${parts.text}${renderAssistantToolCalls(parts.toolCalls, options)}`;
+			i++;
+			continue;
+		}
+		if (message.role === "toolResult") {
+			const run = collectToolResultRun(messages, i);
+			out += `<|observation|>\n${renderToolResponseResults(run.results)}`;
+			i = run.next;
+			continue;
+		}
+		const role = message.role === "developer" ? "system" : message.role;
+		out += `<|${role}|>\n${messageContentText(message.content)}`;
+		i++;
+	}
+	return out;
+}
+
+const definition: DialectDefinition = {
+	dialect: "glm",
+	prompt: dialectPrompt,
 	createScanner: options => new GLMInbandScanner(options),
-	renderToolCall: renderGlmInvocation,
-	renderAssistantToolCalls: renderGlmToolCalls,
-	renderToolResults: renderGlmToolResults,
+	renderToolCall,
+	renderAssistantToolCalls,
+	renderToolResults,
+	renderThinking,
+	renderTranscript,
 };
 
-export default grammar;
+export default definition;

@@ -1,9 +1,17 @@
+import type { Message, ToolCall } from "../types";
 import { mintToolCallId, partialSuffixOverlapAny } from "./coercion";
-import grammarPrompt from "./gemini.md" with { type: "text" };
-import { renderGeminiInvocation, renderGeminiToolCalls, renderGeminiToolResults } from "./rendering";
-import type { Grammar, InbandScanEvent, InbandScanner } from "./types";
+import dialectPrompt from "./gemini.md" with { type: "text" };
+import { assistantTranscriptParts, collectToolResultRun, joinUserBodies, messageContentText } from "./rendering";
+import type {
+	DialectDefinition,
+	DialectRenderOptions,
+	DialectToolResult,
+	InbandScanEvent,
+	InbandScanner,
+} from "./types";
 
 const CODE_OPEN = "```tool_code";
+const OUTPUT_OPEN = "```tool_outputs";
 const FENCE = "```";
 const OPEN_TAGS = [CODE_OPEN] as const;
 
@@ -428,13 +436,105 @@ function topLevelIndexOf(text: string, ch: string): number {
 	return -1;
 }
 
-const grammar: Grammar = {
-	syntax: "gemini",
-	prompt: grammarPrompt,
+function renderToolCall(call: ToolCall, options: DialectRenderOptions = {}): string {
+	const kwargs = Object.entries(call.arguments)
+		.map(([key, value]) => `${key}=${pyValue(value)}`)
+		.join(", ");
+	return options.example ? `${call.name}(${kwargs})` : `default_api.${call.name}(${kwargs})`;
+}
+
+function renderAssistantToolCalls(calls: readonly ToolCall[], options: DialectRenderOptions = {}): string {
+	// One call renders bare; parallel calls render as a Python list `[a, b]`.
+	const body =
+		calls.length === 1
+			? renderToolCall(calls[0]!, options)
+			: `[${calls.map(call => renderToolCall(call, options)).join(", ")}]`;
+	// Examples show the bare call; the live wire form fences it as `tool_code`.
+	return options.example ? body : `${CODE_OPEN}\n${body}\n${FENCE}`;
+}
+
+function renderToolResults(results: readonly DialectToolResult[]): string {
+	return results.map(result => `${OUTPUT_OPEN}\n${result.text}\n${FENCE}`).join("\n");
+}
+
+function renderThinking(text: string): string {
+	return text;
+}
+
+function renderTranscript(messages: readonly Message[], options: DialectRenderOptions = {}): string {
+	if (messages.length === 0) return "";
+	let out = "<bos>";
+	let pendingUserPreamble = "";
+	for (let i = 0; i < messages.length; ) {
+		const message = messages[i]!;
+		if (message.role === "developer") {
+			pendingUserPreamble = joinUserBodies(pendingUserPreamble, messageContentText(message.content));
+			i++;
+			continue;
+		}
+		if (message.role === "user") {
+			out += geminiTurn("user", joinUserBodies(pendingUserPreamble, messageContentText(message.content)));
+			pendingUserPreamble = "";
+			i++;
+			continue;
+		}
+		if (pendingUserPreamble) {
+			out += geminiTurn("user", pendingUserPreamble);
+			pendingUserPreamble = "";
+		}
+		if (message.role === "assistant") {
+			const parts = assistantTranscriptParts(message);
+			out += geminiTurn(
+				"model",
+				`${parts.thinking}${parts.text}${renderAssistantToolCalls(parts.toolCalls, options)}`,
+			);
+			i++;
+			continue;
+		}
+		const run = collectToolResultRun(messages, i);
+		out += geminiTurn("user", renderToolResults(run.results));
+		i = run.next;
+	}
+	if (pendingUserPreamble) out += geminiTurn("user", pendingUserPreamble);
+	return out;
+}
+
+function geminiTurn(role: "model" | "user", body: string): string {
+	return `<start_of_turn>${role}\n${body}<end_of_turn>\n`;
+}
+
+function pyValue(value: unknown): string {
+	if (value === null || value === undefined) return "None";
+	if (typeof value === "boolean") return value ? "True" : "False";
+	if (typeof value === "number") return Number.isFinite(value) ? String(value) : pyString(String(value));
+	if (typeof value === "string") return pyString(value);
+	if (Array.isArray(value)) return `[${value.map(pyValue).join(", ")}]`;
+	if (typeof value === "object") {
+		const entries = Object.entries(value as Record<string, unknown>);
+		return `{${entries.map(([key, val]) => `${pyString(key)}: ${pyValue(val)}`).join(", ")}}`;
+	}
+	return pyString(String(value));
+}
+
+function pyString(value: string): string {
+	const escaped = value
+		.replaceAll("\\", "\\\\")
+		.replaceAll('"', '\\"')
+		.replaceAll("\n", "\\n")
+		.replaceAll("\r", "\\r")
+		.replaceAll("\t", "\\t");
+	return `"${escaped}"`;
+}
+
+const definition: DialectDefinition = {
+	dialect: "gemini",
+	prompt: dialectPrompt,
 	createScanner: () => new GeminiInbandScanner(),
-	renderToolCall: renderGeminiInvocation,
-	renderAssistantToolCalls: renderGeminiToolCalls,
-	renderToolResults: renderGeminiToolResults,
+	renderToolCall,
+	renderAssistantToolCalls,
+	renderToolResults,
+	renderThinking,
+	renderTranscript,
 };
 
-export default grammar;
+export default definition;

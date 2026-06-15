@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { z } from "zod/v4";
-import { renderToolInventory } from "../src/grammar/inventory";
-import type { InbandTool } from "../src/grammar/types";
+import { renderToolInventory } from "../src/dialect/inventory";
+import type { InbandTool } from "../src/dialect/types";
 
 const searchTool: InbandTool = {
 	name: "web_search",

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { wrapInbandToolStream } from "../src/grammar/owned-stream";
+import { wrapInbandToolStream } from "../src/dialect/owned-stream";
 import type { AssistantMessage, AssistantMessageEvent, ThinkingContent, ToolCall, Usage } from "../src/types";
 import { AssistantMessageEventStream } from "../src/utils/event-stream";
 

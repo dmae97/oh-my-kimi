@@ -1,8 +1,22 @@
+import type { Message, ToolCall } from "../types";
 import { parseJsonWithRepair } from "../utils/json-parse";
-import grammarPrompt from "./anthropic.md" with { type: "text" };
-import { buildStringArgsResolver, mintToolCallId } from "./coercion";
-import { renderAnthropicInvocation, renderAnthropicToolCalls, renderAnthropicToolResults } from "./rendering";
-import type { Grammar, InbandScanEvent, InbandScanner, InbandScannerOptions } from "./types";
+import dialectPrompt from "./anthropic.md" with { type: "text" };
+import { buildArgShapes, buildStringArgsResolver, mintToolCallId, type ToolArgShape } from "./coercion";
+import {
+	escapeXmlAttr,
+	escapeXmlText,
+	renderDelimitedThinking,
+	renderLegacyTextTranscript,
+	stringifyJson,
+} from "./rendering";
+import type {
+	DialectDefinition,
+	DialectRenderOptions,
+	DialectToolResult,
+	InbandScanEvent,
+	InbandScanner,
+	InbandScannerOptions,
+} from "./types";
 
 const MAX_PARTIAL_TAG_LENGTH = 256;
 const MAX_PARAMETER_VALUE_LENGTH = 1_000_000;
@@ -509,13 +523,63 @@ function couldBeTagPrefix(buffer: string, prefixes: readonly string[]): boolean 
 	return false;
 }
 
-const grammar: Grammar = {
-	syntax: "anthropic",
-	prompt: grammarPrompt,
+function renderToolCall(call: ToolCall, options: DialectRenderOptions = {}): string {
+	return renderInvoke(call, buildArgShapes(options.tools).get(call.name));
+}
+
+function renderAssistantToolCalls(calls: readonly ToolCall[], options: DialectRenderOptions = {}): string {
+	if (calls.length === 0) return "";
+	return `<function_calls>\n${renderInvokes(calls, options.tools ?? [])}\n</function_calls>`;
+}
+
+function renderToolResults(results: readonly DialectToolResult[]): string {
+	const body = results
+		.map(result => {
+			const tag = result.isError ? "error" : "result";
+			const streamTag = result.isError ? "stderr" : "stdout";
+			return `<${tag}>\n<tool_name>${escapeXmlText(result.name)}</tool_name>\n<${streamTag}>${result.text}</${streamTag}>\n</${tag}>`;
+		})
+		.join("\n");
+	return `<function_results>\n${body}\n</function_results>`;
+}
+
+function renderThinking(text: string): string {
+	return renderDelimitedThinking("<thinking>", "</thinking>", text);
+}
+
+function renderTranscript(messages: readonly Message[], options: DialectRenderOptions = {}): string {
+	return renderLegacyTextTranscript(messages, options, {
+		renderThinking,
+		renderCalls: renderAssistantToolCalls,
+		renderResults: renderToolResults,
+	});
+}
+
+function renderInvoke(call: ToolCall, shape: ToolArgShape | undefined): string {
+	let body = `<invoke name="${escapeXmlAttr(call.name)}">`;
+	for (const key in call.arguments) {
+		const value = call.arguments[key];
+		const isString = shape?.stringArgs.has(key) === true;
+		const rendered = isString && typeof value === "string" ? value : stringifyJson(value);
+		body += `<parameter name="${escapeXmlAttr(key)}">${rendered}</parameter>`;
+	}
+	return `${body}</invoke>`;
+}
+
+function renderInvokes(calls: readonly ToolCall[], tools: NonNullable<DialectRenderOptions["tools"]>): string {
+	const shapes = buildArgShapes(tools);
+	return calls.map(call => renderInvoke(call, shapes.get(call.name))).join("\n");
+}
+
+const definition: DialectDefinition = {
+	dialect: "anthropic",
+	prompt: dialectPrompt,
 	createScanner: options => new AnthropicInbandScanner(options),
-	renderToolCall: renderAnthropicInvocation,
-	renderAssistantToolCalls: renderAnthropicToolCalls,
-	renderToolResults: renderAnthropicToolResults,
+	renderToolCall,
+	renderAssistantToolCalls,
+	renderToolResults,
+	renderThinking,
+	renderTranscript,
 };
 
-export default grammar;
+export default definition;
