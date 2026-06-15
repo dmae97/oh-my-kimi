@@ -9,6 +9,7 @@ Allowed `op` values are only `init`, `start`, `done`, `drop`, `rm`, `append`, an
 |`op`|Required fields|Effect|
 |---|---|---|
 |`init`|`list: [{phase, items: string[]}]`|Initialize the full list (replaces any existing list)|
+|`init`|`items: string[]`|Flattened single-phase init|
 |`start`|`task`|Mark in progress|
 |`done`|`task` or `phase`|Mark completed|
 |`drop`|`task` or `phase`|Mark abandoned|

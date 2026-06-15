@@ -269,6 +269,44 @@ describe("TodoTool ops operations", () => {
 	});
 });
 
+describe("TodoTool lenient init shapes", () => {
+	it("accepts a flattened init with bare items and no phase", async () => {
+		const tool = new TodoTool(createSession());
+		const result = await tool.execute("call-1", {
+			ops: [{ op: "init", items: ["First", "Second"] }],
+		});
+
+		expect(result.isError).toBeUndefined();
+		expect(result.details?.phases.map(phase => phase.name)).toEqual(["Tasks"]);
+		const tasks = result.details?.phases[0]?.tasks ?? [];
+		expect(tasks.map(task => ({ content: task.content, status: task.status }))).toEqual([
+			{ content: "First", status: "in_progress" },
+			{ content: "Second", status: "pending" },
+		]);
+	});
+
+	it("honors a bare phase on a flattened init", async () => {
+		const tool = new TodoTool(createSession());
+		const result = await tool.execute("call-1", {
+			ops: [{ op: "init", phase: "Cleanup", items: ["Remove dead code"] }],
+		});
+
+		expect(result.isError).toBeUndefined();
+		expect(result.details?.phases.map(phase => phase.name)).toEqual(["Cleanup"]);
+		expect(result.details?.phases[0]?.tasks.map(task => task.content)).toEqual(["Remove dead code"]);
+	});
+
+	it("still errors when init has neither list nor items", async () => {
+		const tool = new TodoTool(createSession());
+		const result = await tool.execute("call-1", { ops: [{ op: "init" }] });
+
+		expect(result.isError).toBe(true);
+		const summary = result.content.find(part => part.type === "text");
+		if (summary?.type !== "text") throw new Error("Expected text summary");
+		expect(summary.text).toContain("Missing list for init operation");
+	});
+});
+
 describe("selectStickyTodoWindow", () => {
 	const makeTasks = (statuses: TodoStatus[]): TodoItem[] =>
 		statuses.map((status, i) => ({ content: `task-${i + 1}`, status }));
