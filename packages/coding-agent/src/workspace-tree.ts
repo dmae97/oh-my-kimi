@@ -75,6 +75,9 @@ export async function buildDirectoryTree(cwd: string, options: BuildDirectoryTre
 		rootLimit,
 		lineCap: options.lineCap === undefined ? null : options.lineCap,
 		nativeTruncated,
+		// Tool output (read tool directory listing), not a cached prefix —
+		// the human-friendly relative "ago" is appropriate here.
+		ageMode: "relative",
 	});
 }
 
@@ -99,6 +102,10 @@ export async function buildWorkspaceTree(cwd: string, options: BuildWorkspaceTre
 			rootLimit: WORKSPACE_DEFAULTS.perDirLimit,
 			lineCap: WORKSPACE_DEFAULTS.lineCap,
 			nativeTruncated: result.truncated,
+			// This tree is embedded in the cached system prompt. Render absolute
+			// mtimes so the block is byte-identical across sessions and does not
+			// bust the prompt cache (a relative "Nm ago" drifts every build).
+			ageMode: "absolute",
 		});
 		return { ...tree, agentsMdFiles: result.agentsMdFiles };
 	} catch {
@@ -132,6 +139,13 @@ interface AssembleOptions {
 	rootLimit: number | null;
 	lineCap: number | null;
 	nativeTruncated: boolean;
+	/**
+	 * How per-entry modification times are rendered.
+	 * - "relative": render-time "Nm ago" (fine for tool output).
+	 * - "absolute": deterministic UTC timestamp (prompt-cache-stable; used for
+	 *   the system-prompt workspace tree). See {@link makeAgeFormatter}.
+	 */
+	ageMode: "relative" | "absolute";
 }
 
 function assembleTree(rootPath: string, entries: readonly GlobMatch[], opts: AssembleOptions): DirectoryTree {
@@ -187,7 +201,7 @@ function assembleTree(rootPath: string, entries: readonly GlobMatch[], opts: Ass
 	}
 
 	const rawLines: RenderedLine[] = [];
-	renderNode(root, Date.now(), rawLines);
+	renderNode(root, makeAgeFormatter(opts.ageMode), rawLines);
 	const { lines, elidedCount } = applyLineCap(rawLines, opts.lineCap);
 
 	return {
@@ -202,7 +216,33 @@ function byRecency(a: Node, b: Node): number {
 	return b.mtimeMs - a.mtimeMs || a.name.localeCompare(b.name);
 }
 
-function renderNode(node: Node, nowMs: number, out: RenderedLine[]): void {
+/**
+ * Build the per-node age formatter for a single render pass.
+ *
+ * - "relative": a render-time "Nm ago" string (computed once from `Date.now()`).
+ *   Used for tool output that is not part of any cached prefix.
+ * - "absolute": a deterministic UTC `YYYY-MM-DD HH:MM` derived purely from the
+ *   file's mtime. Used for the system-prompt workspace tree so the rendered
+ *   block stays byte-identical across sessions. A relative age is recomputed on
+ *   every build, so two sessions seconds apart differ ("9m ago" → "10m ago");
+ *   because KV cache is contextual, that early change invalidates the cache for
+ *   everything after the tree — including the multi-thousand-token tool block —
+ *   forcing a full prompt re-prefill on every new session. An absolute mtime
+ *   only changes when the file itself changes, which is the correct trigger.
+ */
+function makeAgeFormatter(mode: "relative" | "absolute"): (mtimeMs: number) => string {
+	if (mode === "absolute") return formatMtimeStable;
+	const nowMs = Date.now();
+	return (mtimeMs: number) => formatAge(Math.max(0, Math.floor((nowMs - mtimeMs) / 1000)));
+}
+
+/** Deterministic, render-time-independent timestamp: UTC `YYYY-MM-DD HH:MM`. */
+function formatMtimeStable(mtimeMs: number): string {
+	if (!mtimeMs) return "";
+	return new Date(mtimeMs).toISOString().slice(0, 16).replace("T", " ");
+}
+
+function renderNode(node: Node, formatNodeAge: (mtimeMs: number) => string, out: RenderedLine[]): void {
 	if (node.depth === 0) {
 		out.push({ label: node.name, depth: 0, isRoot: true });
 	} else {
@@ -213,26 +253,26 @@ function renderNode(node: Node, nowMs: number, out: RenderedLine[]): void {
 			depth: node.depth,
 			isRoot: false,
 			size: node.isDir ? undefined : formatBytes(node.size),
-			age: formatAge(Math.max(0, Math.floor((nowMs - node.mtimeMs) / 1000))),
+			age: formatNodeAge(node.mtimeMs),
 		});
 	}
 
 	if (node.droppedCount === 0) {
-		for (const child of node.children) renderNode(child, nowMs, out);
+		for (const child of node.children) renderNode(child, formatNodeAge, out);
 		return;
 	}
 
 	// Layout: recent children, then "… N more" marker, then the oldest child.
 	const recent = node.children.slice(0, -1);
 	const oldest = node.children.at(-1);
-	for (const child of recent) renderNode(child, nowMs, out);
+	for (const child of recent) renderNode(child, formatNodeAge, out);
 	const childDepth = node.depth + 1;
 	out.push({
 		label: `${"  ".repeat(childDepth)}- … ${node.droppedCount} more`,
 		depth: childDepth,
 		isRoot: false,
 	});
-	if (oldest) renderNode(oldest, nowMs, out);
+	if (oldest) renderNode(oldest, formatNodeAge, out);
 }
 
 /**
