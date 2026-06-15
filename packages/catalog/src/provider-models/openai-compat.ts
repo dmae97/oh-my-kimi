@@ -569,6 +569,120 @@ function createSimpleAnthropicProviderOptions(
 }
 
 // ---------------------------------------------------------------------------
+// Umans AI Coding Plan
+// ---------------------------------------------------------------------------
+
+const UMANS_BASE_URL = "https://api.code.umans.ai";
+const UMANS_MODELS_INFO_PATH = "/models/info";
+
+export interface UmansModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+	fetch?: FetchImpl;
+}
+
+interface UmansModelInfo {
+	name?: unknown;
+	display_name?: unknown;
+	capabilities?: unknown;
+}
+
+function normalizeUmansBaseUrl(baseUrl: string | undefined): string {
+	const normalized = normalizeAnthropicBaseUrl(baseUrl, UMANS_BASE_URL);
+	return normalized.endsWith("/v1") ? normalized.slice(0, -3) : normalized;
+}
+
+function umansSupportsVision(value: unknown): boolean {
+	return value === true || (typeof value === "string" && value.length > 0);
+}
+
+function umansReasoningSupported(value: unknown): boolean {
+	if (isRecord(value)) {
+		return value.supported === true;
+	}
+	return value === true;
+}
+
+function mapUmansModelInfo(
+	modelId: string,
+	raw: UmansModelInfo,
+	baseUrl: string,
+	reference: ModelSpec<"anthropic-messages"> | undefined,
+): ModelSpec<"anthropic-messages"> | null {
+	if (!modelId) return null;
+	const capabilities = isRecord(raw.capabilities) ? raw.capabilities : {};
+	const supportsTools = capabilities.supports_tools;
+	return {
+		...reference,
+		id: modelId,
+		name: toModelName(raw.display_name, toModelName(raw.name, modelId)),
+		api: "anthropic-messages",
+		provider: "umans",
+		baseUrl,
+		reasoning: umansReasoningSupported(capabilities.reasoning),
+		input: umansSupportsVision(capabilities.supports_vision) ? ["text", "image"] : ["text"],
+		...(supportsTools === false ? { supportsTools: false } : {}),
+		cost: reference?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: toPositiveNumber(capabilities.context_window, reference?.contextWindow ?? null),
+		maxTokens: toPositiveNumber(capabilities.max_completion_tokens, reference?.maxTokens ?? null),
+	};
+}
+
+async function fetchUmansModelsInfo(options: {
+	baseUrl: string;
+	apiKey?: string;
+	fetch?: FetchImpl;
+	references: Map<string, ModelSpec<"anthropic-messages">>;
+}): Promise<ModelSpec<"anthropic-messages">[] | null> {
+	const discoveryBaseUrl = toAnthropicDiscoveryBaseUrl(options.baseUrl);
+	const requestHeaders: Record<string, string> = { Accept: "application/json" };
+	if (options.apiKey) {
+		requestHeaders["x-api-key"] = options.apiKey;
+	}
+	const fetchImpl = options.fetch ?? fetch;
+	let response: Response;
+	try {
+		response = await fetchImpl(`${discoveryBaseUrl}${UMANS_MODELS_INFO_PATH}`, {
+			method: "GET",
+			headers: requestHeaders,
+		});
+	} catch {
+		return null;
+	}
+	if (!response.ok) {
+		return null;
+	}
+	let payload: unknown;
+	try {
+		payload = await response.json();
+	} catch {
+		return null;
+	}
+	if (!isRecord(payload)) {
+		return null;
+	}
+	const models: ModelSpec<"anthropic-messages">[] = [];
+	for (const [modelId, value] of Object.entries(payload)) {
+		if (!isRecord(value)) continue;
+		const mapped = mapUmansModelInfo(modelId, value, options.baseUrl, options.references.get(modelId));
+		if (mapped) {
+			models.push(mapped);
+		}
+	}
+	return models.sort((left, right) => left.id.localeCompare(right.id));
+}
+
+export function umansModelManagerOptions(config?: UmansModelManagerConfig): ModelManagerOptions<"anthropic-messages"> {
+	const apiKey = config?.apiKey;
+	const baseUrl = normalizeUmansBaseUrl(config?.baseUrl);
+	const references = createBundledReferenceMap<"anthropic-messages">("umans");
+	return {
+		providerId: "umans",
+		dynamicModelsAuthoritative: true,
+		fetchDynamicModels: () => fetchUmansModelsInfo({ baseUrl, apiKey, fetch: config?.fetch, references }),
+	};
+}
+// ---------------------------------------------------------------------------
 // 1. OpenAI
 // ---------------------------------------------------------------------------
 
@@ -3245,6 +3359,8 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_CORE: readonly ModelsDevProviderDescriptor
 const MODELS_DEV_PROVIDER_DESCRIPTORS_CODING_PLANS: readonly ModelsDevProviderDescriptor[] = [
 	// --- zAI ---
 	anthropicMessagesDescriptor("zai-coding-plan", "zai", "https://api.z.ai/api/anthropic"),
+	// --- Umans AI Coding Plan ---
+	anthropicMessagesDescriptor("umans-ai-coding-plan", "umans", UMANS_BASE_URL),
 	// --- Xiaomi ---
 	openAiCompletionsDescriptor("xiaomi", "xiaomi", "https://api.xiaomimimo.com/v1", {
 		defaultContextWindow: 262144,

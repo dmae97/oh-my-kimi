@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `UMANS_AI_CODING_PLAN_API_KEY` to the CLI environment help.
+
 ## [15.13.2] - 2026-06-15
 
 ### Added

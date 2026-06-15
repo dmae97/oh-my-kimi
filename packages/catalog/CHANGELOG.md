@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added the Umans AI Coding Plan provider catalog with Anthropic-compatible model metadata and dynamic discovery.
+
 ## [15.13.2] - 2026-06-15
 
 ### Added
