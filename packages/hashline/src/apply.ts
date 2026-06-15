@@ -134,7 +134,6 @@ export const STRUCTURAL_CLOSER_RE = /^\s*[)\]}]+[;,]?\s*$/;
 const JSX_CLOSER_RE = /^\s*(?:<\/>|<\/[A-Za-z][\w.:-]*>|\/>)\s*[;,]?\s*$/;
 const JSX_NAMED_CLOSER_RE = /^\s*<\/([A-Za-z][\w.:-]*)>\s*[;,]?\s*$/;
 const JSX_FRAGMENT_CLOSER_RE = /^\s*<\/>\s*[;,]?\s*$/;
-const JSX_TAG_RE = /<>|<\/>|<\/?([A-Za-z][\w.:-]*)\b[\s\S]*?>/g;
 
 function isStructuralCloserLine(text: string): boolean {
 	return STRUCTURAL_CLOSER_RE.test(text) || JSX_CLOSER_RE.test(text);
@@ -146,27 +145,79 @@ function jsxCloserName(text: string): string | undefined {
 	return match?.[1];
 }
 
-function isSelfClosingJsxTag(text: string): boolean {
-	return /\/>\s*$/.test(text);
+interface JsxPayloadTag {
+	readonly name: string;
+	readonly closing: boolean;
+	readonly selfClosing: boolean;
+}
+
+function isJsxTagStart(text: string, index: number): boolean {
+	const next = text[index + 1];
+	return next === ">" || next === "/" || (next >= "A" && next <= "Z") || (next >= "a" && next <= "z");
+}
+
+function findJsxTagEnd(text: string, start: number): number {
+	let quote: string | undefined;
+	let braces = 0;
+	for (let i = start + 1; i < text.length; i++) {
+		const ch = text[i];
+		if (quote) {
+			if (ch === "\\" && i + 1 < text.length) {
+				i++;
+			} else if (ch === quote) {
+				quote = undefined;
+			}
+			continue;
+		}
+		if (ch === '"' || ch === "'" || ch === "`") {
+			quote = ch;
+		} else if (ch === "{") {
+			braces++;
+		} else if (ch === "}" && braces > 0) {
+			braces--;
+		} else if (ch === ">" && braces === 0) {
+			return i;
+		}
+	}
+	return -1;
+}
+
+function parseJsxPayloadTag(raw: string): JsxPayloadTag | undefined {
+	if (raw === "<>") return { name: "", closing: false, selfClosing: false };
+	if (raw === "</>") return { name: "", closing: true, selfClosing: false };
+	const closing = raw.startsWith("</");
+	const nameStart = closing ? 2 : 1;
+	let nameEnd = nameStart;
+	while (nameEnd < raw.length && /[\w.:-]/.test(raw[nameEnd])) nameEnd++;
+	if (nameEnd === nameStart) return undefined;
+	return {
+		name: raw.slice(nameStart, nameEnd),
+		closing,
+		selfClosing: !closing && /\/>\s*$/.test(raw),
+	};
+}
+
+function readJsxPayloadTags(text: string): JsxPayloadTag[] {
+	const tags: JsxPayloadTag[] = [];
+	for (let start = text.indexOf("<"); start >= 0; start = text.indexOf("<", start + 1)) {
+		if (!isJsxTagStart(text, start)) continue;
+		const end = findJsxTagEnd(text, start);
+		if (end < 0) break;
+		const tag = parseJsxPayloadTag(text.slice(start, end + 1));
+		if (tag) tags.push(tag);
+		start = end;
+	}
+	return tags;
 }
 
 function payloadHasJsxOpenerForEcho(payloadPrefix: readonly string[], echoLines: readonly string[]): boolean {
 	const openTags: string[] = [];
-	const payloadText = payloadPrefix.join("\n");
-	JSX_TAG_RE.lastIndex = 0;
-	let match = JSX_TAG_RE.exec(payloadText);
-	while (match !== null) {
-		const raw = match[0];
-		if (raw === "<>") {
-			openTags.push("");
-		} else if (raw === "</>") {
-			if (openTags[openTags.length - 1] === "") openTags.pop();
-		} else if (raw.startsWith("</")) {
-			if (openTags[openTags.length - 1] === match[1]) openTags.pop();
-		} else if (!isSelfClosingJsxTag(raw)) {
-			openTags.push(match[1]);
+	for (const tag of readJsxPayloadTags(payloadPrefix.join("\n"))) {
+		if (tag.closing) {
+			if (openTags[openTags.length - 1] === tag.name) openTags.pop();
+		} else if (!tag.selfClosing) {
+			openTags.push(tag.name);
 		}
-		match = JSX_TAG_RE.exec(payloadText);
 	}
 	for (const line of echoLines) {
 		const name = jsxCloserName(line);

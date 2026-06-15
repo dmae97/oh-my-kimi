@@ -281,6 +281,16 @@ describe("boundary-balance repair", () => {
 		expect(warnings.some(warning => /boundary echo/.test(warning))).toBe(true);
 	});
 
+	it("drops a JSX closer echo after a self-closing tag with a greater-than prop expression", () => {
+		const file = ["const view = (", "<Foo>", "old text", "</Foo>", ");"].join("\n");
+		const diff = ["SWAP 3.=3:", "+<Foo value={a > b} />", "+</Foo>"].join("\n");
+		const { text, warnings } = apply(file, diff);
+
+		expect(text).toBe(["const view = (", "<Foo>", "<Foo value={a > b} />", "</Foo>", ");"].join("\n"));
+		expect(text.split("\n").filter(line => line === "</Foo>")).toHaveLength(1);
+		expect(warnings.some(warning => /boundary echo/.test(warning))).toBe(true);
+	});
+
 	it("preserves a nested JSX closer that matches the surviving parent closer", () => {
 		const file = ["const view = (", '<section className="outer">', "old text", "</section>", ");"].join("\n");
 		const diff = ["SWAP 3.=3:", "+<section>", "+new text", "+</section>"].join("\n");
