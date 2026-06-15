@@ -6789,7 +6789,7 @@ export class AgentSession {
 			return this.#estimatePendingPromptTokens(messages);
 		}
 
-		let tokens = currentUsage.tokens;
+		let tokens = currentUsage.tokens + computeNonMessageTokens(this);
 		for (const message of messages) {
 			tokens += estimateTokens(message);
 		}
