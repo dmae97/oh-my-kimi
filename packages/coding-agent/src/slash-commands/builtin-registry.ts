@@ -435,7 +435,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			const { verb, rest } = parseSubcommand(command.args);
 			if (!verb || verb === "toggle") {
 				const active = runtime.session.toggleAdvisorEnabled();
-				const configured = runtime.session.settings.get("advisor.enabled") as boolean;
+				const configured = runtime.session.isAdvisorEnabled();
 				if (active) {
 					await runtime.output("Advisor enabled.");
 				} else if (configured) {
@@ -473,7 +473,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			const { verb, rest } = parseSubcommand(command.args);
 			if (!verb || verb === "toggle") {
 				const active = runtime.ctx.session.toggleAdvisorEnabled();
-				const configured = runtime.ctx.session.settings.get("advisor.enabled") as boolean;
+				const configured = runtime.ctx.session.isAdvisorEnabled();
 				if (active) {
 					runtime.ctx.showStatus("Advisor enabled.");
 				} else if (configured) {
@@ -481,6 +481,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 				} else {
 					runtime.ctx.showStatus("Advisor disabled.");
 				}
+				refreshStatusLine(runtime.ctx);
 				runtime.ctx.editor.setText("");
 				return;
 			}
@@ -489,12 +490,14 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 				runtime.ctx.showStatus(
 					active ? "Advisor enabled." : "Advisor setting enabled, but no model is assigned to the 'advisor' role.",
 				);
+				refreshStatusLine(runtime.ctx);
 				runtime.ctx.editor.setText("");
 				return;
 			}
 			if (verb === "off") {
 				runtime.ctx.session.setAdvisorEnabled(false);
 				runtime.ctx.showStatus("Advisor disabled.");
+				refreshStatusLine(runtime.ctx);
 				runtime.ctx.editor.setText("");
 				return;
 			}

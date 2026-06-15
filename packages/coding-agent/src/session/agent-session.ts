@@ -1008,6 +1008,7 @@ export class AgentSession {
 	#goalModeState: GoalModeState | undefined;
 	#goalRuntime: GoalRuntime;
 	#advisorRuntime?: AdvisorRuntime;
+	#advisorEnabled = false;
 	/** The advisor's own agent, retained so `/dump advisor` can serialize its transcript. Undefined when no advisor is active. */
 	#advisorAgent?: Agent;
 	#advisorReadOnlyTools?: AgentTool[];
@@ -1492,7 +1493,8 @@ export class AgentSession {
 			},
 		});
 
-		if (this.settings.get("advisor.enabled")) this.#buildAdvisorRuntime();
+		this.#advisorEnabled = this.settings.get("advisor.enabled") as boolean;
+		if (this.#advisorEnabled) this.#buildAdvisorRuntime();
 
 		// Always subscribe to agent events for internal handling
 		// (session persistence, hooks, auto-compaction, retry logic)
@@ -1506,7 +1508,7 @@ export class AgentSession {
 	#buildAdvisorRuntime(seedToCurrent = false): boolean {
 		if (this.#isDisposed) return false;
 		if (this.#advisorRuntime) return true;
-		if (!this.settings.get("advisor.enabled")) return false;
+		if (!this.#advisorEnabled) return false;
 		if (this.#agentKind !== "main" && !this.settings.get("advisor.subagents")) return false;
 
 		const advisorSel = resolveRoleSelection(
@@ -11293,18 +11295,16 @@ export class AgentSession {
 	}
 
 	/**
-	 * Enable or disable the advisor for this session. The setting is persisted,
+	 * Enable or disable the advisor for this session. The setting is overridden for the session,
 	 * and the runtime is started or stopped to match.
 	 *
 	 * @returns true when the advisor is actively running after the call.
 	 */
 	setAdvisorEnabled(enabled: boolean): boolean {
+		this.#advisorEnabled = enabled;
 		if (enabled) {
-			this.settings.clearOverride("advisor.enabled");
-			this.settings.set("advisor.enabled", true);
 			return this.#buildAdvisorRuntime(true);
 		}
-		this.settings.set("advisor.enabled", false);
 		this.#stopAdvisorRuntime();
 		return false;
 	}
@@ -11315,7 +11315,14 @@ export class AgentSession {
 	 * @returns true when the advisor is actively running after the call.
 	 */
 	toggleAdvisorEnabled(): boolean {
-		return this.setAdvisorEnabled(!this.settings.get("advisor.enabled"));
+		return this.setAdvisorEnabled(!this.#advisorEnabled);
+	}
+
+	/**
+	 * Whether the advisor setting is enabled for this session.
+	 */
+	isAdvisorEnabled(): boolean {
+		return this.#advisorEnabled;
 	}
 
 	/**
@@ -11332,7 +11339,7 @@ export class AgentSession {
 	 * Return structured advisor stats for the status command and TUI panel.
 	 */
 	getAdvisorStats(): AdvisorStats {
-		const configured = this.settings.get("advisor.enabled") as boolean;
+		const configured = this.#advisorEnabled;
 		const advisor = this.#advisorAgent;
 		if (!advisor) {
 			return {

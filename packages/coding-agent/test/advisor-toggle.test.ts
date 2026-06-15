@@ -67,7 +67,7 @@ describe("AgentSession advisor toggle", () => {
 
 	it("starts with advisor disabled", () => {
 		expect(session.isAdvisorActive()).toBe(false);
-		expect(session.settings.get("advisor.enabled")).toBe(false);
+		expect(session.isAdvisorEnabled()).toBe(false);
 		expect(session.formatAdvisorStatus()).toBe("Advisor is disabled.");
 	});
 
@@ -76,19 +76,28 @@ describe("AgentSession advisor toggle", () => {
 		const active = session.toggleAdvisorEnabled();
 		expect(active).toBe(true);
 		expect(session.isAdvisorActive()).toBe(true);
-		expect(session.settings.get("advisor.enabled")).toBe(true);
+		expect(session.isAdvisorEnabled()).toBe(true);
 		expect(session.formatAdvisorStatus()).toContain("Advisor is enabled (anthropic/claude-sonnet-4-5)");
 	});
 
-	it("explicit enable clears protocol default-off override", () => {
+	it("explicit enable overrides default-off setting for the session only", () => {
 		session.settings.setModelRole("advisor", "anthropic/claude-sonnet-4-5");
 		session.settings.override("advisor.enabled", false);
+		const customSession = new AgentSession({
+			agent: session.agent,
+			sessionManager,
+			settings: session.settings,
+			modelRegistry,
+			advisorReadOnlyTools: [],
+		});
+		expect(customSession.isAdvisorEnabled()).toBe(false);
 
-		const active = session.setAdvisorEnabled(true);
+		const active = customSession.setAdvisorEnabled(true);
 
 		expect(active).toBe(true);
-		expect(session.isAdvisorActive()).toBe(true);
-		expect(session.settings.get("advisor.enabled")).toBe(true);
+		expect(customSession.isAdvisorActive()).toBe(true);
+		expect(customSession.isAdvisorEnabled()).toBe(true);
+		expect(customSession.settings.get("advisor.enabled")).toBe(false);
 	});
 
 	it("toggle disables the advisor and runtime", () => {
@@ -97,16 +106,60 @@ describe("AgentSession advisor toggle", () => {
 		const active = session.toggleAdvisorEnabled();
 		expect(active).toBe(false);
 		expect(session.isAdvisorActive()).toBe(false);
-		expect(session.settings.get("advisor.enabled")).toBe(false);
+		expect(session.isAdvisorEnabled()).toBe(false);
 	});
 
 	it("setAdvisorEnabled reports inactive when no advisor model is assigned", () => {
 		const active = session.setAdvisorEnabled(true);
 		expect(active).toBe(false);
 		expect(session.isAdvisorActive()).toBe(false);
-		expect(session.settings.get("advisor.enabled")).toBe(true);
+		expect(session.isAdvisorEnabled()).toBe(true);
 		expect(session.formatAdvisorStatus()).toBe(
 			"Advisor setting is enabled, but no model is assigned to the 'advisor' role.",
 		);
+	});
+
+	it("keeps sessions isolated when sharing a Settings instance", async () => {
+		const sharedSettings = Settings.isolated({ "compaction.enabled": false });
+		sharedSettings.setModelRole("advisor", "anthropic/claude-sonnet-4-5");
+		expect(sharedSettings.get("advisor.enabled")).toBe(false);
+
+		const sessionA = new AgentSession({
+			agent: session.agent,
+			sessionManager,
+			settings: sharedSettings,
+			modelRegistry,
+			advisorReadOnlyTools: [],
+		});
+		const sessionB = new AgentSession({
+			agent: session.agent,
+			sessionManager,
+			settings: sharedSettings,
+			modelRegistry,
+			advisorReadOnlyTools: [],
+		});
+
+		expect(sessionA.isAdvisorEnabled()).toBe(false);
+		expect(sessionB.isAdvisorEnabled()).toBe(false);
+
+		const activeA = sessionA.setAdvisorEnabled(true);
+		expect(activeA).toBe(true);
+		expect(sessionA.isAdvisorEnabled()).toBe(true);
+		expect(sessionA.isAdvisorActive()).toBe(true);
+
+		expect(sessionB.isAdvisorEnabled()).toBe(false);
+		expect(sessionB.isAdvisorActive()).toBe(false);
+		expect(sessionB.formatAdvisorStatus()).toBe("Advisor is disabled.");
+
+		const activeB = sessionB.toggleAdvisorEnabled();
+		expect(activeB).toBe(true);
+		expect(sessionB.isAdvisorEnabled()).toBe(true);
+
+		sessionA.setAdvisorEnabled(false);
+		expect(sessionA.isAdvisorEnabled()).toBe(false);
+		expect(sessionA.isAdvisorActive()).toBe(false);
+
+		expect(sessionB.isAdvisorEnabled()).toBe(true);
+		expect(sessionB.isAdvisorActive()).toBe(true);
 	});
 });
