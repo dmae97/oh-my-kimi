@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Claude marketplace plugin skills appearing as bare slash commands while keeping real plugin `commands/` entries available ([#2645](https://github.com/can1357/oh-my-pi/issues/2645)).
+
 ## [15.13.3] - 2026-06-15
 
 ### Added
