@@ -11,12 +11,17 @@ describe("buildNonInteractiveEnv", () => {
 		expect(env.LC_ALL).toBe("C.UTF-8");
 	});
 
-	it("preserves inherited and per-command Windows encoding overrides", () => {
-		const env = buildNonInteractiveEnv(
-			{ PYTHONUTF8: "0", LC_ALL: "en_US.UTF-8" },
-			{ pythonioencoding: "cp1252", LANG: "de_DE.UTF-8" },
-			"win32",
-		);
+	it("preserves inherited Windows encoding groups as user-owned", () => {
+		const env = buildNonInteractiveEnv(undefined, { PYTHONUTF8: "0", LANG: "de_DE.UTF-8" }, "win32");
+
+		expect(env.PYTHONIOENCODING).toBeUndefined();
+		expect(env.PYTHONUTF8).toBeUndefined();
+		expect(env.LANG).toBeUndefined();
+		expect(env.LC_ALL).toBeUndefined();
+	});
+
+	it("preserves per-command Windows encoding groups as user-owned", () => {
+		const env = buildNonInteractiveEnv({ PYTHONUTF8: "0", LC_ALL: "en_US.UTF-8" }, {}, "win32");
 
 		expect(env.PYTHONIOENCODING).toBeUndefined();
 		expect(env.PYTHONUTF8).toBe("0");

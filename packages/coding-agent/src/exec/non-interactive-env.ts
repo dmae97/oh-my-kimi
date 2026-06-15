@@ -47,12 +47,16 @@ export const NON_INTERACTIVE_ENV: Readonly<Record<string, string>> = {
 	CLOUDSDK_CORE_DISABLE_PROMPTS: "1",
 };
 
-const WINDOWS_UTF8_ENV_DEFAULTS: Readonly<Record<string, string>> = {
-	PYTHONIOENCODING: "utf-8",
-	PYTHONUTF8: "1",
-	LANG: "C.UTF-8",
-	LC_ALL: "C.UTF-8",
-};
+const WINDOWS_UTF8_ENV_DEFAULT_GROUPS: ReadonlyArray<ReadonlyArray<readonly [key: string, value: string]>> = [
+	[
+		["PYTHONIOENCODING", "utf-8"],
+		["PYTHONUTF8", "1"],
+	],
+	[
+		["LANG", "C.UTF-8"],
+		["LC_ALL", "C.UTF-8"],
+	],
+];
 
 function hasEnvValue(
 	env: Record<string, string | undefined> | undefined,
@@ -70,6 +74,17 @@ function hasEnvValue(
 	return false;
 }
 
+function hasEnvGroupValue(
+	env: Record<string, string | undefined> | undefined,
+	group: ReadonlyArray<readonly [key: string, value: string]>,
+	platform: NodeJS.Platform,
+): boolean {
+	for (const [key] of group) {
+		if (hasEnvValue(env, key, platform)) return true;
+	}
+	return false;
+}
+
 /** Builds the per-command environment for non-interactive child processes. */
 export function buildNonInteractiveEnv(
 	overrides?: Record<string, string>,
@@ -81,8 +96,11 @@ export function buildNonInteractiveEnv(
 	}
 
 	const env: Record<string, string> = { ...NON_INTERACTIVE_ENV };
-	for (const [key, value] of Object.entries(WINDOWS_UTF8_ENV_DEFAULTS)) {
-		if (!hasEnvValue(baseEnv, key, platform) && !hasEnvValue(overrides, key, platform)) {
+	for (const group of WINDOWS_UTF8_ENV_DEFAULT_GROUPS) {
+		if (hasEnvGroupValue(baseEnv, group, platform) || hasEnvGroupValue(overrides, group, platform)) {
+			continue;
+		}
+		for (const [key, value] of group) {
 			env[key] = value;
 		}
 	}
