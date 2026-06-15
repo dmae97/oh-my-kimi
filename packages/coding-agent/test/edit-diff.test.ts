@@ -236,12 +236,12 @@ describe("computeHashlineDiff", () => {
 		const line = "unchanged content";
 		await Bun.write(sourcePath, `${line}\n`);
 
-		// `replace 1..1:` with the same line in the body is a true no-op: the edit
+		// `SWAP 1..1:` with the same line in the body is a true no-op: the edit
 		// fires through computeHashlineDiff but produces identical content.
 		const text = `${line}\n`;
 		const snapshotStore = new InMemorySnapshotStore();
 		const tag = snapshotStore.record(sourcePath, text);
-		const input = `${formatHashlineHeader(sourcePath, tag)}\nreplace 1..1:\n+${line}\n`;
+		const input = `${formatHashlineHeader(sourcePath, tag)}\nSWAP 1..1:\n+${line}\n`;
 		const result = await computeHashlineDiff({ input }, tempDir, snapshotStore);
 		expect("error" in result).toBe(true);
 		if ("error" in result) {
@@ -257,7 +257,7 @@ describe("computeHashlineDiff", () => {
 		const snapshotStore = new InMemorySnapshotStore();
 		const tag = snapshotStore.record(sourcePath, text);
 		const result = await computeHashlineDiff(
-			{ input: `${formatHashlineHeader(sourcePath, tag)}\ninsert tail:\n+second` },
+			{ input: `${formatHashlineHeader(sourcePath, tag)}\nINS.TAIL:\n+second` },
 			tempDir,
 			snapshotStore,
 		);
@@ -271,12 +271,12 @@ describe("computeHashlineDiff", () => {
 		const relativePath = "source.txt";
 		await Bun.write(path.join(tempDir, relativePath), "first\n");
 
-		// A tagless `insert tail:` carries no anchored edit, yet the apply path
+		// A tagless `INS.TAIL:` carries no anchored edit, yet the apply path
 		// (Patcher.prepare) rejects it for the missing mandatory tag. The
 		// preview/diff path MUST emit the SAME rejection so a successful preview
 		// never precedes a failing apply.
 		const result = await computeHashlineDiff(
-			{ input: `[${relativePath}]\ninsert tail:\n+second` },
+			{ input: `[${relativePath}]\nINS.TAIL:\n+second` },
 			tempDir,
 			new InMemorySnapshotStore(),
 		);
@@ -287,7 +287,7 @@ describe("computeHashlineDiff", () => {
 	});
 	test("returns a handled error when the source path is a local URL", async () => {
 		const result = await computeHashlineDiff(
-			{ input: "[local://PLAN.md]\ninsert tail:\n+x" },
+			{ input: "[local://PLAN.md]\nINS.TAIL:\n+x" },
 			tempDir,
 			new InMemorySnapshotStore(),
 		);

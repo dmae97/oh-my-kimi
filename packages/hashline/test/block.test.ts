@@ -31,9 +31,9 @@ function normalizeEdits(edits: readonly Edit[]): unknown[] {
 	});
 }
 
-describe("XCHG.BLK parsing", () => {
-	it("parses `XCHG.BLK N:` into a single deferred block edit", () => {
-		const { edits } = parsePatch("XCHG.BLK 2:\n+A\n+B");
+describe("SWAP.BLK parsing", () => {
+	it("parses `SWAP.BLK N:` into a single deferred block edit", () => {
+		const { edits } = parsePatch("SWAP.BLK 2:\n+A\n+B");
 
 		expect(edits).toHaveLength(1);
 		const edit = edits[0];
@@ -43,52 +43,52 @@ describe("XCHG.BLK parsing", () => {
 		expect(edit.payloads).toEqual(["A", "B"]);
 	});
 
-	it("still parses a literal `XCHG N..M:` range (distinct from `XCHG.BLK`)", () => {
-		const { edits } = parsePatch("XCHG 2..3:\n+A");
+	it("still parses a literal `SWAP N..M:` range (distinct from `SWAP.BLK`)", () => {
+		const { edits } = parsePatch("SWAP 2..3:\n+A");
 		expect(edits.some(edit => edit.kind === "block")).toBe(false);
 		expect(edits.some(edit => edit.kind === "delete")).toBe(true);
 	});
 
-	it("rejects a `XCHG.BLK N:` hunk with no body row", () => {
-		expect(() => parsePatch("XCHG.BLK 2:")).toThrow("`XCHG.BLK N:` needs at least one");
+	it("rejects a `SWAP.BLK N:` hunk with no body row", () => {
+		expect(() => parsePatch("SWAP.BLK 2:")).toThrow("`SWAP.BLK N:` needs at least one");
 	});
 });
 
 describe("resolveBlockEdits", () => {
-	it("expands a block edit exactly like the equivalent `XCHG start..end:`", () => {
-		const blockEdits = parsePatch("XCHG.BLK 2:\n+A\n+B").edits;
+	it("expands a block edit exactly like the equivalent `SWAP start..end:`", () => {
+		const blockEdits = parsePatch("SWAP.BLK 2:\n+A\n+B").edits;
 		const resolved = resolveBlockEdits(blockEdits, "ignored", PATH, stubResolver);
-		const replaceEdits = parsePatch("XCHG 2..3:\n+A\n+B").edits;
+		const replaceEdits = parsePatch("SWAP 2..3:\n+A\n+B").edits;
 
 		expect(resolved.some(edit => edit.kind === "block")).toBe(false);
 		expect(normalizeEdits(resolved)).toEqual(normalizeEdits(replaceEdits));
 	});
 
 	it("returns the input untouched when there are no block edits (fast path)", () => {
-		const edits = parsePatch("XCHG 1..1:\n+X").edits;
+		const edits = parsePatch("SWAP 1..1:\n+X").edits;
 		expect(resolveBlockEdits(edits, "ignored", PATH, stubResolver)).toBe(edits);
 	});
 
 	it("throws (default) when no resolver is wired", () => {
-		const edits = parsePatch("XCHG.BLK 2:\n+X").edits;
+		const edits = parsePatch("SWAP.BLK 2:\n+X").edits;
 		expect(() => resolveBlockEdits(edits, "ignored", PATH, undefined)).toThrow("not available here");
 	});
 
 	it("drops an unresolvable block edit in `drop` mode", () => {
-		const edits = parsePatch("XCHG.BLK 2:\n+X").edits;
+		const edits = parsePatch("SWAP.BLK 2:\n+X").edits;
 		const resolved = resolveBlockEdits(edits, "ignored", PATH, () => null, { onUnresolved: "drop" });
 		expect(resolved).toHaveLength(0);
 	});
 
 	it("throws a block-unresolved error in `throw` mode when the resolver returns null", () => {
-		const edits = parsePatch("XCHG.BLK 7:\n+X").edits;
+		const edits = parsePatch("SWAP.BLK 7:\n+X").edits;
 		expect(() => resolveBlockEdits(edits, "ignored", PATH, () => null)).toThrow(
 			"could not resolve a syntactic block beginning on line 7",
 		);
 	});
 
 	it("includes a nearby-context preview in the block-unresolved error", () => {
-		const edits = parsePatch("XCHG.BLK 3:\n+X").edits;
+		const edits = parsePatch("SWAP.BLK 3:\n+X").edits;
 		const text = "alpha\nbravo\ncharlie\ndelta\necho\nfoxtrot";
 		let error: Error | undefined;
 		try {
@@ -105,7 +105,7 @@ describe("resolveBlockEdits", () => {
 	});
 
 	it("omits the context preview when the anchor line is out of range", () => {
-		const edits = parsePatch("XCHG.BLK 9:\n+X").edits;
+		const edits = parsePatch("SWAP.BLK 9:\n+X").edits;
 		let error: Error | undefined;
 		try {
 			resolveBlockEdits(edits, "only\ntwo", PATH, () => null);
@@ -119,7 +119,7 @@ describe("resolveBlockEdits", () => {
 	it("fires onResolved with the resolved span for replace and delete blocks", () => {
 		const seen: BlockResolution[] = [];
 		// stubResolver maps line N → span [N, N+1].
-		resolveBlockEdits(parsePatch("XCHG.BLK 2:\n+A\n+B").edits, "ignored", PATH, stubResolver, {
+		resolveBlockEdits(parsePatch("SWAP.BLK 2:\n+A\n+B").edits, "ignored", PATH, stubResolver, {
 			onResolved: resolution => seen.push(resolution),
 		});
 		resolveBlockEdits(parsePatch("DEL.BLK 5").edits, "ignored", PATH, stubResolver, {
@@ -134,7 +134,7 @@ describe("resolveBlockEdits", () => {
 
 	it("does not fire onResolved for a dropped unresolvable block", () => {
 		const seen: BlockResolution[] = [];
-		resolveBlockEdits(parsePatch("XCHG.BLK 2:\n+X").edits, "ignored", PATH, () => null, {
+		resolveBlockEdits(parsePatch("SWAP.BLK 2:\n+X").edits, "ignored", PATH, () => null, {
 			onUnresolved: "drop",
 			onResolved: resolution => seen.push(resolution),
 		});
@@ -147,8 +147,8 @@ describe("resolveBlockEdits", () => {
 	// plain form rather than silently landing a body in the wrong scope.
 	const singleLineResolver: BlockResolver = ({ line }): BlockSpan => ({ start: line, end: line });
 
-	it("rejects a `XCHG.BLK` that resolves to a single line", () => {
-		const edits = parsePatch("XCHG.BLK 2:\n+X").edits;
+	it("rejects a `SWAP.BLK` that resolves to a single line", () => {
+		const edits = parsePatch("SWAP.BLK 2:\n+X").edits;
 		expect(() => resolveBlockEdits(edits, "a\nb\nc", PATH, singleLineResolver)).toThrow(
 			/resolved a single-line block/,
 		);
@@ -160,7 +160,7 @@ describe("resolveBlockEdits", () => {
 	});
 
 	it("drops a single-line block resolution on the lenient preview path", () => {
-		const edits = parsePatch("XCHG.BLK 2:\n+X").edits;
+		const edits = parsePatch("SWAP.BLK 2:\n+X").edits;
 		const resolved = resolveBlockEdits(edits, "a\nb\nc", PATH, singleLineResolver, { onUnresolved: "drop" });
 		expect(resolved).toHaveLength(0);
 	});
@@ -170,8 +170,8 @@ describe("PatchSection.applyTo / applyPartialTo with block edits", () => {
 	const text = "function x() {\n  if (y) {\n  }\n}\n";
 
 	it("applyTo resolves a block edit and matches the equivalent `replace`", () => {
-		const blockSection = Patch.parseSingle(`[${PATH}#1A2B]\nXCHG.BLK 2:\n+  if (y || z) {\n+  }`);
-		const replaceSection = Patch.parseSingle(`[${PATH}#1A2B]\nXCHG 2..3:\n+  if (y || z) {\n+  }`);
+		const blockSection = Patch.parseSingle(`[${PATH}#1A2B]\nSWAP.BLK 2:\n+  if (y || z) {\n+  }`);
+		const replaceSection = Patch.parseSingle(`[${PATH}#1A2B]\nSWAP 2..3:\n+  if (y || z) {\n+  }`);
 
 		const blockResult = blockSection.applyTo(text, stubResolver);
 		const replaceResult = replaceSection.applyTo(text);
@@ -181,12 +181,12 @@ describe("PatchSection.applyTo / applyPartialTo with block edits", () => {
 	});
 
 	it("applyTo throws when a block edit has no resolver", () => {
-		const section = Patch.parseSingle(`[${PATH}#1A2B]\nXCHG.BLK 2:\n+X`);
+		const section = Patch.parseSingle(`[${PATH}#1A2B]\nSWAP.BLK 2:\n+X`);
 		expect(() => section.applyTo(text)).toThrow("no block resolver configured");
 	});
 
 	it("applyPartialTo drops an unresolvable block edit instead of throwing", () => {
-		const section = Patch.parseSingle(`[${PATH}#1A2B]\nXCHG.BLK 2:\n+X`);
+		const section = Patch.parseSingle(`[${PATH}#1A2B]\nSWAP.BLK 2:\n+X`);
 		// No resolver → drop. The lone block edit vanishes, so the text is unchanged.
 		const result = section.applyPartialTo(text);
 		expect(result.text).toBe(text);
@@ -202,7 +202,7 @@ describe("Patcher with a block resolver", () => {
 		const tag = snapshots.record(PATH, text);
 		const patcher = new Patcher({ fs, snapshots, blockResolver: stubResolver });
 
-		const result = await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nXCHG.BLK 2:\n+  if (y || z) {\n+  }`));
+		const result = await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nSWAP.BLK 2:\n+  if (y || z) {\n+  }`));
 
 		expect(result.sections[0]?.op).toBe("update");
 		expect(fs.get(PATH)).toBe("function x() {\n  if (y || z) {\n  }\n}\n");
@@ -214,7 +214,7 @@ describe("Patcher with a block resolver", () => {
 		const tag = snapshots.record(PATH, text);
 		const patcher = new Patcher({ fs, snapshots, blockResolver: stubResolver });
 
-		const result = await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nXCHG.BLK 2:\n+  if (y || z) {\n+  }`));
+		const result = await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nSWAP.BLK 2:\n+  if (y || z) {\n+  }`));
 
 		expect(result.sections[0]?.blockResolutions).toEqual([{ anchorLine: 2, start: 2, end: 3, op: "replace" }]);
 	});
@@ -230,7 +230,7 @@ describe("Patcher with a block resolver", () => {
 
 		// `block 2` resolves against the SNAPSHOT → span [2,3] → replace
 		// "line1","line2"; recovery 3-way-merges the change onto the live file.
-		const result = await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nXCHG.BLK 2:\n+NEW`));
+		const result = await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nSWAP.BLK 2:\n+NEW`));
 
 		expect(result.sections[0]?.op).toBe("update");
 		expect(fs.get(PATH)).toBe("line0\nNEW\nline3\nline4\nline5\n");
@@ -248,7 +248,7 @@ describe("Patcher with a block resolver", () => {
 		const bogus = live === "FFFF" ? "0000" : "FFFF";
 		const patcher = new Patcher({ fs, snapshots, blockResolver: stubResolver });
 
-		await expect(patcher.apply(Patch.parse(`[${PATH}#${bogus}]\nXCHG.BLK 2:\n+NEW`))).rejects.toBeInstanceOf(
+		await expect(patcher.apply(Patch.parse(`[${PATH}#${bogus}]\nSWAP.BLK 2:\n+NEW`))).rejects.toBeInstanceOf(
 			MismatchError,
 		);
 		expect(fs.get(PATH)).toBe(liveText);
@@ -260,7 +260,7 @@ describe("Patcher with a block resolver", () => {
 		const tag = snapshots.record(PATH, text);
 		const patcher = new Patcher({ fs, snapshots, blockResolver: () => null });
 
-		await expect(patcher.apply(Patch.parse(`[${PATH}#${tag}]\nXCHG.BLK 2:\n+X`))).rejects.toThrow(
+		await expect(patcher.apply(Patch.parse(`[${PATH}#${tag}]\nSWAP.BLK 2:\n+X`))).rejects.toThrow(
 			"could not resolve a syntactic block",
 		);
 		expect(fs.get(PATH)).toBe(text);

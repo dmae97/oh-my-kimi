@@ -8,7 +8,7 @@ function applyPatch(text: string, diff: string): string {
 describe("hashline format v4", () => {
 	it("replaces a concrete range with literal body rows in textual order", () => {
 		const text = "a\nb\nc";
-		const diff = ["XCHG 2..2:", "+before", "+after"].join("\n");
+		const diff = ["SWAP 2..2:", "+before", "+after"].join("\n");
 
 		expect(applyPatch(text, diff)).toBe("a\nbefore\nafter\nc");
 	});
@@ -37,7 +37,7 @@ describe("hashline format v4", () => {
 
 	it("treats an empty replace hunk as a delete and still rejects empty inserts", () => {
 		const text = "a\nb\nc";
-		expect(applyPatch(text, "XCHG 2..2:")).toBe("a\nc");
+		expect(applyPatch(text, "SWAP 2..2:")).toBe("a\nc");
 		expect(() => parsePatch("INS.HEAD:")).toThrow(/needs at least one/);
 	});
 
@@ -47,8 +47,8 @@ describe("hashline format v4", () => {
 
 	it("auto-pipes bare body rows as literal text", () => {
 		const text = "a\nb\nc";
-		expect(applyPatch(text, "XCHG 2..2:\nraw")).toBe("a\nraw\nc");
-		const { warnings } = parsePatch("XCHG 2..2:\nraw");
+		expect(applyPatch(text, "SWAP 2..2:\nraw")).toBe("a\nraw\nc");
+		const { warnings } = parsePatch("SWAP 2..2:\nraw");
 		expect(warnings.some(w => /Auto-prefixed bare body row/.test(w))).toBe(true);
 	});
 
@@ -56,7 +56,7 @@ describe("hashline format v4", () => {
 		const text = "a\nb\nc";
 		// Without this fix, "3:text" becomes literal "3:text" in the file.
 		// With the fix, the "3:" prefix is stripped, yielding just "text".
-		const { edits, warnings } = parsePatch("XCHG 2..2:\n3:replaced");
+		const { edits, warnings } = parsePatch("SWAP 2..2:\n3:replaced");
 		expect(applyEdits(text, edits).text).toBe("a\nreplaced\nc");
 		expect(warnings.some(w => /Auto-prefixed bare body row/.test(w))).toBe(true);
 	});
@@ -78,7 +78,7 @@ describe("hashline format v4", () => {
 	});
 
 	it("treats a replace range ending at the trailing sentinel as ending at the last real line", () => {
-		const edits = parsePatch("XCHG 2..3:\n+B").edits;
+		const edits = parsePatch("SWAP 2..3:\n+B").edits;
 		expect(applyEdits("a\nb\n", edits).text).toBe("a\nB\n");
 	});
 
@@ -94,12 +94,12 @@ describe("hashline format v4", () => {
 	});
 
 	it("does not flush a trailing streaming pending empty replace hunk", () => {
-		const result = parsePatchStreaming("XCHG 5..5:\n");
+		const result = parsePatchStreaming("SWAP 5..5:\n");
 		expect(result.edits).toEqual([]);
 	});
 
 	it("flushes a streaming empty replace hunk when another hunk starts", () => {
-		const result = parsePatchStreaming("XCHG 2..2:\nINS.TAIL:\n");
+		const result = parsePatchStreaming("SWAP 2..2:\nINS.TAIL:\n");
 		expect(result.edits).toEqual([{ kind: "delete", anchor: { line: 2 }, lineNum: 1, index: 0 }]);
 	});
 });

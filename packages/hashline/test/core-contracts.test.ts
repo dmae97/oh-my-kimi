@@ -21,7 +21,7 @@ function tag(line: number): string {
 }
 
 function sameLineRange(anchor: string): string {
-	return `XCHG ${anchor}..${anchor}:`;
+	return `SWAP ${anchor}..${anchor}:`;
 }
 
 function applyDiff(content: string, diff: string): string {
@@ -123,14 +123,14 @@ describe("hashline parser — range-anchor contracts", () => {
 	});
 
 	it("strips copied read-output prefixes only inside pasted bare body rows", () => {
-		const diff = `XCHG ${tag(2)}..${tag(4)}:\n${repl("line one")}\n${tag(3)}:line two`;
+		const diff = `SWAP ${tag(2)}..${tag(4)}:\n${repl("line one")}\n${tag(3)}:line two`;
 		const { edits, warnings } = parsePatch(diff);
 		expect(applyEdits("aaa\nbbb\nccc\nddd\neee", edits).text).toBe("aaa\nline one\nline two\neee");
 		expect(warnings.some(w => /Auto-prefixed bare body row/.test(w))).toBe(true);
 	});
 
 	it("rejects overlapping replacement ranges", () => {
-		const diff = `XCHG ${tag(2)}..${tag(4)}:\n${repl("NEW1")}\nXCHG ${tag(3)}..${tag(5)}:\n${repl("NEW2")}`;
+		const diff = `SWAP ${tag(2)}..${tag(4)}:\n${repl("NEW1")}\nSWAP ${tag(3)}..${tag(5)}:\n${repl("NEW2")}`;
 		expect(() => parsePatch(diff).edits).toThrow(/anchor line 3 is already targeted by another hunk on line 1/);
 	});
 
@@ -247,7 +247,7 @@ describe("Recovery", () => {
 			path: filePath,
 			currentText,
 			tag: v0Tag,
-			edits: parsePatch(`XCHG 10..10:\n${repl("L10-EDITED")}`).edits,
+			edits: parsePatch(`SWAP 10..10:\n${repl("L10-EDITED")}`).edits,
 		});
 
 		expect(recovered).not.toBeNull();
@@ -289,7 +289,7 @@ describe("hashline parser — delete and blank payload semantics", () => {
 		expect(applyDiff("line1\nline2\nline3\nline4\n", splitHashlineInput("[a.ts]\nDEL 2..3\n").diff)).toBe(
 			"line1\nline4\n",
 		);
-		expect(applyDiff("line1\nline2\nline3\n", splitHashlineInput("[a.ts]\nXCHG 2..2:\n").diff)).toBe(
+		expect(applyDiff("line1\nline2\nline3\n", splitHashlineInput("[a.ts]\nSWAP 2..2:\n").diff)).toBe(
 			"line1\nline3\n",
 		);
 	});
@@ -301,10 +301,10 @@ describe("hashline parser — delete and blank payload semantics", () => {
 
 	it("preserves explicit blank replacement rows", () => {
 		const text = "a\nb\nc\nd\ne\n";
-		const ops = `[a.ts]\nXCHG 2..2:\n${repl("")}\n${repl("")}\nXCHG 4..4:\n${repl("D")}\n`;
+		const ops = `[a.ts]\nSWAP 2..2:\n${repl("")}\n${repl("")}\nSWAP 4..4:\n${repl("D")}\n`;
 		expect(applyDiff(text, splitHashlineInput(ops).diff)).toBe("a\n\n\nc\nD\ne\n");
 
-		const embedded = `[a.ts]\nXCHG 2..2:\n${repl("first")}\n${repl("")}\n${repl("second")}\n`;
+		const embedded = `[a.ts]\nSWAP 2..2:\n${repl("first")}\n${repl("")}\n${repl("second")}\n`;
 		expect(applyDiff("a\nb\nc\n", splitHashlineInput(embedded).diff)).toBe("a\nfirst\n\nsecond\nc\n");
 	});
 });

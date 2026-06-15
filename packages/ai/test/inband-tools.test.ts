@@ -167,7 +167,7 @@ describe("in-band tool grammars", () => {
 			assistant([
 				{
 					type: "text",
-					text: '<invoke name="read"><parameter name="path">rubygems.ts:85-93</parameter></invoke>\n<function_results>\n<result>\n<tool_name>read</tool_name>\n<stdout>[rubygems.ts#A1B2]</stdout>\n</result>\n</function_results>\n<invoke name="edit"><parameter name="input">[rubygems.ts#A1B2]\nXCHG 89..89:\n+ fake</parameter></invoke>',
+					text: '<invoke name="read"><parameter name="path">rubygems.ts:85-93</parameter></invoke>\n<function_results>\n<result>\n<tool_name>read</tool_name>\n<stdout>[rubygems.ts#A1B2]</stdout>\n</result>\n</function_results>\n<invoke name="edit"><parameter name="input">[rubygems.ts#A1B2]\nSWAP 89..89:\n+ fake</parameter></invoke>',
 				},
 			]),
 			"anthropic",

@@ -82,7 +82,7 @@ describe("write tool hashline header", () => {
 
 		// Apply a hashline patch immediately, using only the tag the write tool
 		// returned — no intervening `read`.
-		const patchInput = `${headerLine}\nreplace 1..1:\n+export const enabled = true;\n`;
+		const patchInput = `${headerLine}\nSWAP 1..1:\n+export const enabled = true;\n`;
 		const patch = Patch.parse(patchInput, { cwd: tmpDir });
 		expect(patch.sections).toHaveLength(1);
 

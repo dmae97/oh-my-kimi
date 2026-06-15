@@ -66,7 +66,7 @@ describe("hashline streaming preview (multi-section)", () => {
 	const ctx = (cwd: string) => ({ cwd, signal: new AbortController().signal, snapshots });
 
 	test("keeps section A's preview when section B's header just arrived", async () => {
-		const input = [headerA, "insert head:", "+// new", headerB].join("\n");
+		const input = [headerA, "INS.HEAD:", "+// new", headerB].join("\n");
 		const previews = await strategy.computeDiffPreview({ input } as never, ctx(tmpDir) as never);
 		expect(previews).not.toBeNull();
 		expect(previews).toHaveLength(1);
@@ -77,7 +77,7 @@ describe("hashline streaming preview (multi-section)", () => {
 
 	test("ignores parse errors from the trailing in-progress section", async () => {
 		// `7:bad` has invalid payload — the trailing section is still being typed.
-		const input = [headerA, "insert head:", "+// new", headerB, "7:bad"].join("\n");
+		const input = [headerA, "INS.HEAD:", "+// new", headerB, "7:bad"].join("\n");
 		const previews = await strategy.computeDiffPreview({ input } as never, ctx(tmpDir) as never);
 		expect(previews).not.toBeNull();
 		expect(previews).toHaveLength(1);
@@ -86,7 +86,7 @@ describe("hashline streaming preview (multi-section)", () => {
 	});
 
 	test("renders both sections once each has at least one valid op", async () => {
-		const input = [headerA, "insert head:", "+// new a", headerB, "insert head:", "+// new b"].join("\n");
+		const input = [headerA, "INS.HEAD:", "+// new a", headerB, "INS.HEAD:", "+// new b"].join("\n");
 		const previews = await strategy.computeDiffPreview({ input } as never, ctx(tmpDir) as never);
 		expect(previews).toHaveLength(2);
 		expect(previews?.map(p => p.path).sort()).toEqual(["a.ts", "b.ts"]);
@@ -128,7 +128,7 @@ describe("hashline streaming preview (single-op trailing payload)", () => {
 		// The `+` payload has no trailing newline — the common single-op case
 		// the trailing-line trim used to erase, collapsing the preview to a
 		// "No changes" error that rendered as a blank box for the whole stream.
-		const input = `${header}\nreplace 2..2:\n+const b = 22`;
+		const input = `${header}\nSWAP 2..2:\n+const b = 22`;
 		const previews = await strategy.computeDiffPreview({ input } as never, ctx(tmpDir) as never);
 		expect(previews).toHaveLength(1);
 		expect(previews?.[0]?.error).toBeUndefined();
@@ -136,7 +136,7 @@ describe("hashline streaming preview (single-op trailing payload)", () => {
 	});
 
 	test("does not surface stale hash errors while streaming", async () => {
-		const input = "[a.ts#FFFF]\nreplace 2..2:\n+const b = 22";
+		const input = "[a.ts#FFFF]\nSWAP 2..2:\n+const b = 22";
 		const previews = await strategy.computeDiffPreview({ input } as never, ctx(tmpDir) as never);
 		expect(previews).toHaveLength(1);
 		expect(previews?.[0]?.error).toBeUndefined();
@@ -145,7 +145,7 @@ describe("hashline streaming preview (single-op trailing payload)", () => {
 
 	test("final preview accepts a live content hash even when the snapshot store has no history", async () => {
 		const liveHeader = formatHashlineHeader("a.ts", computeFileHash(text));
-		const input = `${liveHeader}\nreplace 2..2:\n+const b = 22\n`;
+		const input = `${liveHeader}\nSWAP 2..2:\n+const b = 22\n`;
 		const previews = await strategy.computeDiffPreview(
 			{ input } as never,
 			{
@@ -162,7 +162,7 @@ describe("hashline streaming preview (single-op trailing payload)", () => {
 
 	test("final preview recovers a stale tag from snapshot history", async () => {
 		await Bun.write(file, `// external\n${text}`);
-		const input = `${header}\nreplace 2..2:\n+const b = 22\n`;
+		const input = `${header}\nSWAP 2..2:\n+const b = 22\n`;
 		const previews = await strategy.computeDiffPreview({ input } as never, ctx(tmpDir, false) as never);
 		expect(previews).toHaveLength(1);
 		expect(previews?.[0]?.error).toBeUndefined();
@@ -170,7 +170,7 @@ describe("hashline streaming preview (single-op trailing payload)", () => {
 	});
 
 	test("surfaces stale hash errors once streaming is complete", async () => {
-		const input = "[a.ts#FFFF]\nreplace 2..2:\n+const b = 22\n";
+		const input = "[a.ts#FFFF]\nSWAP 2..2:\n+const b = 22\n";
 		const previews = await strategy.computeDiffPreview({ input } as never, ctx(tmpDir, false) as never);
 		expect(previews).toHaveLength(1);
 		expect(previews?.[0]?.error).toContain("not from this session");
@@ -180,7 +180,7 @@ describe("hashline streaming preview (single-op trailing payload)", () => {
 		// Op header typed, payload still empty: applyPartialTo drops the
 		// payload-less op so nothing changes yet. The preview must report null
 		// (preserving any prior frame), never a 'No changes' error that wipes it.
-		const input = `${header}\nreplace 2..2:\n`;
+		const input = `${header}\nSWAP 2..2:\n`;
 		const previews = await strategy.computeDiffPreview({ input } as never, ctx(tmpDir) as never);
 		expect(previews).toBeNull();
 	});
@@ -217,7 +217,7 @@ describe("hashline streaming preview (monotonic growth)", () => {
 	const ctx = (cwd: string) => ({ cwd, signal: new AbortController().signal, snapshots, isStreaming: true });
 	// Replace the 20-line body (lines 2..21) with the first `n` payload rows.
 	const buildInput = (n: number) =>
-		`${header}\nreplace 2..21:\n${payload
+		`${header}\nSWAP 2..21:\n${payload
 			.slice(0, n)
 			.map(l => `+${l}`)
 			.join("\n")}`;
@@ -304,12 +304,12 @@ describe("apply_patch streaming preview (trailing partial line)", () => {
 
 describe("matcherDigest", () => {
 	test("hashline: digests stripped `+` body rows only, never headers or op lines", () => {
-		const input = ["[a.ts#AB12]", "replace 1..2:", "+const x = 1;", "+const y = 2;", "delete 5", ""].join("\n");
+		const input = ["[a.ts#AB12]", "SWAP 1..2:", "+const x = 1;", "+const y = 2;", "DEL 5", ""].join("\n");
 		expect(EDIT_MODE_STRATEGIES.hashline.matcherDigest({ input })).toBe("const x = 1;\nconst y = 2;");
 	});
 
 	test("hashline: grammar-only payload digests to empty, missing input to undefined", () => {
-		expect(EDIT_MODE_STRATEGIES.hashline.matcherDigest({ input: "[a.ts#AB12]\ndelete 3\n" })).toBe("");
+		expect(EDIT_MODE_STRATEGIES.hashline.matcherDigest({ input: "[a.ts#AB12]\nDEL 3\n" })).toBe("");
 		expect(EDIT_MODE_STRATEGIES.hashline.matcherDigest({})).toBeUndefined();
 	});
 

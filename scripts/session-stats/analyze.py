@@ -375,7 +375,7 @@ _ANCHOR_BARE = re.compile(r"^[a-zA-Z]?[0-9]+[a-z]{2}$")
 
 
 _HASHLINE_OP = re.compile(
-    r"^(XCHG\.BLK|XCHG|DEL\.BLK|DEL|INS\.PRE|INS\.POST|INS\.HEAD|INS\.TAIL|"
+    r"^(SWAP\.BLK|SWAP|XCHG\.BLK|XCHG|DEL\.BLK|DEL|INS\.PRE|INS\.POST|INS\.HEAD|INS\.TAIL|"
     r"replace_block|replace block|replace|delete_block|delete block|delete|"
     r"insert_after_block|insert after block|insert before|insert after|insert head|insert tail)\b",
     re.I,
@@ -383,9 +383,11 @@ _HASHLINE_OP = re.compile(
 
 
 _HASHLINE_OP_ALIASES = {
-    "replace block": "XCHG.BLK",
-    "replace_block": "XCHG.BLK",
-    "replace": "XCHG",
+    "replace block": "SWAP.BLK",
+    "replace_block": "SWAP.BLK",
+    "replace": "SWAP",
+    "xchg.blk": "SWAP.BLK",
+    "xchg": "SWAP",
     "delete block": "DEL.BLK",
     "delete_block": "DEL.BLK",
     "delete": "DEL",

@@ -14,7 +14,7 @@ export const HL_FILE_SUFFIX = "]";
 export const HL_PAYLOAD_REPLACE = "+";
 
 /** Hunk-header keyword for concrete line replacement. */
-export const HL_REPLACE_KEYWORD = "XCHG";
+export const HL_REPLACE_KEYWORD = "SWAP";
 /** Hunk-header keyword for concrete line deletion. */
 export const HL_DELETE_KEYWORD = "DEL";
 /** Hunk-header keyword for insertion operations. */
@@ -27,8 +27,8 @@ export const HL_INSERT_AFTER = "POST";
 export const HL_INSERT_HEAD = "HEAD";
 /** Insert position keyword for inserting at the end of the file. */
 export const HL_INSERT_TAIL = "TAIL";
-/** Hunk-header keyword: `XCHG.BLK N:` resolves N to a tree-sitter block range and replaces its span. */
-export const HL_REPLACE_BLOCK_KEYWORD = "XCHG.BLK";
+/** Hunk-header keyword: `SWAP.BLK N:` resolves N to a tree-sitter block range and replaces its span. */
+export const HL_REPLACE_BLOCK_KEYWORD = "SWAP.BLK";
 /** Hunk-header keyword: `DEL.BLK N` resolves N to a tree-sitter block range and deletes its span. */
 export const HL_DELETE_BLOCK_KEYWORD = "DEL.BLK";
 /** Hunk-header keyword: `INS.BLK.POST N:` inserts after the last line of the tree-sitter block at N. */

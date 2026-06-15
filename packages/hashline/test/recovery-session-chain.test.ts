@@ -33,7 +33,7 @@ describe("Recovery — session-chain replay anchor-content gate", () => {
 		// rewrote. Replaying onto current would overwrite "L5-CHANGED" with
 		// payload the model authored against the stale "L5". That is
 		// corruption, not recovery.
-		const { edits } = parsePatch("XCHG 5..5:\n|L5-MODEL");
+		const { edits } = parsePatch("SWAP 5..5:\n|L5-MODEL");
 
 		const recovered = new Recovery(store).tryRecover({
 			path: PATH,
@@ -51,7 +51,7 @@ describe("Recovery — session-chain replay anchor-content gate", () => {
 		// merge fails (patch context includes the rewritten line 5), but the
 		// replay fallback is safe because the model's anchor still names the
 		// same logical content.
-		const { edits } = parsePatch("XCHG 3..3:\n|L3-MODEL");
+		const { edits } = parsePatch("SWAP 3..3:\n|L3-MODEL");
 
 		const recovered = new Recovery(store).tryRecover({
 			path: PATH,
