@@ -282,6 +282,13 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 		context: BeforeToolCallContext,
 		signal?: AbortSignal,
 	) => Promise<BeforeToolCallResult | undefined> | BeforeToolCallResult | undefined;
+	/**
+	 * Called after a turn ends and before the loop polls steering/asides for the
+	 * next iteration. Use this for awaited per-turn bookkeeping that must be
+	 * visible before the next model request (e.g. synchronizing an advisor's
+	 * backlog so advice produced during the wait is injected as an aside).
+	 */
+	onTurnEnd?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<void> | void;
 
 	/**
 	 * Called after a tool finishes executing, before `tool_execution_end` and the

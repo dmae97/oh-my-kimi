@@ -28,31 +28,97 @@ export interface AdvisorRuntimeHost {
 	maintainContext?(incomingTokens: number): Promise<boolean>;
 }
 
+interface PendingDelta {
+	text: string;
+	turns: number;
+}
+
+interface CatchupWaiter {
+	threshold: number;
+	resolve: () => void;
+	finish: () => void;
+	timer?: NodeJS.Timeout;
+}
+
 export class AdvisorRuntime {
 	#lastCount = 0;
-	#pending: string[] = [];
+	#pending: PendingDelta[] = [];
 	#busy = false;
-	#disposed = false;
+	#backlog = 0;
+	#consecutiveFailures = 0;
+	#latestMessages?: AgentMessage[];
+	#waiters: CatchupWaiter[] = [];
+	disposed = false;
 
 	constructor(
 		private readonly agent: AdvisorAgent,
 		private readonly host: AdvisorRuntimeHost,
+		private readonly retryDelayMs = 1000,
 	) {}
 
-	onTurnEnd(): void {
-		if (this.#disposed) return;
-		const render = this.#renderDelta();
+	get backlog(): number {
+		return this.#backlog;
+	}
+
+	onTurnEnd(messages?: AgentMessage[]): void {
+		if (this.disposed) return;
+		const all = messages ?? this.host.snapshotMessages();
+		this.#latestMessages = all;
+		const render = this.#renderDelta(all);
 		if (render) {
-			this.#pending.push(render);
+			this.#pending.push({ text: render, turns: 1 });
+			this.#backlog++;
+			this.#notifyWaiters();
 			void this.#drain();
 		}
 	}
 
+	waitForCatchup(maxMs: number, threshold: number, signal?: AbortSignal): Promise<void> {
+		if (this.disposed || signal?.aborted || this.#backlog < threshold) return Promise.resolve();
+		const { promise, resolve } = Promise.withResolvers<void>();
+		let waiter!: CatchupWaiter;
+		const finish = (): void => {
+			const idx = this.#waiters.indexOf(waiter);
+			if (idx >= 0) this.#waiters.splice(idx, 1);
+			clearTimeout(waiter.timer);
+			signal?.removeEventListener("abort", finish);
+			resolve();
+		};
+		waiter = { threshold, resolve, finish, timer: setTimeout(finish, maxMs) };
+		this.#waiters.push(waiter);
+		signal?.addEventListener("abort", finish, { once: true });
+		if (signal?.aborted) {
+			finish();
+		}
+		return promise;
+	}
+
 	dispose(): void {
-		this.#disposed = true;
+		this.disposed = true;
 		this.#pending = [];
+		this.#backlog = 0;
+		this.#consecutiveFailures = 0;
+		this.#wakeAllWaiters();
 		try {
 			this.agent.abort("advisor disposed");
+		} catch {}
+	}
+
+	#resetAdvisorContext(clearBacklog: boolean, wakeWaiters: boolean): void {
+		this.#lastCount = 0;
+		this.#pending = [];
+		this.#consecutiveFailures = 0;
+		if (clearBacklog) {
+			this.#backlog = 0;
+		}
+		if (wakeWaiters) {
+			this.#wakeAllWaiters();
+		}
+		try {
+			this.agent.reset();
+		} catch {}
+		try {
+			this.agent.abort("advisor reset");
 		} catch {}
 	}
 
@@ -64,14 +130,7 @@ export class AdvisorRuntime {
 	 * leaving it blind to everything before the rewrite.
 	 */
 	reset(): void {
-		this.#lastCount = 0;
-		this.#pending = [];
-		try {
-			this.agent.reset();
-		} catch {}
-		try {
-			this.agent.abort("advisor reset");
-		} catch {}
+		this.#resetAdvisorContext(true, true);
 	}
 
 	/**
@@ -82,10 +141,13 @@ export class AdvisorRuntime {
 	seedTo(count: number): void {
 		this.#lastCount = count;
 		this.#pending = [];
+		this.#backlog = 0;
+		this.#consecutiveFailures = 0;
+		this.#wakeAllWaiters();
 	}
 
-	#renderDelta(): string | null {
-		const all = this.host.snapshotMessages();
+	#renderDelta(messages?: AgentMessage[]): string | null {
+		const all = messages ?? this.#latestMessages ?? this.host.snapshotMessages();
 		if (all.length < this.#lastCount) {
 			this.#lastCount = all.length;
 			return null;
@@ -99,15 +161,32 @@ export class AdvisorRuntime {
 		return md.trim() ? md : null;
 	}
 
+	#notifyWaiters(): void {
+		for (let i = this.#waiters.length - 1; i >= 0; i--) {
+			const w = this.#waiters[i];
+			if (this.#backlog < w.threshold) {
+				w.finish();
+			}
+		}
+	}
+
+	#wakeAllWaiters(): void {
+		for (const w of [...this.#waiters]) {
+			w.finish();
+		}
+	}
+
 	async #drain(): Promise<void> {
 		if (this.#busy) return;
 		this.#busy = true;
 		try {
-			while (!this.#disposed && this.#pending.length) {
-				const pendingBatch = this.#pending.splice(0).join("\n\n---\n\n");
+			while (!this.disposed && this.#pending.length) {
+				const popped = this.#pending.splice(0);
+				const candidateBatch = popped.map(b => b.text).join("\n\n---\n\n");
+				const turnsCovered = popped.reduce((sum, b) => sum + b.turns, 0);
 				const incomingTokens = estimateTokens({
 					role: "user",
-					content: pendingBatch,
+					content: candidateBatch,
 					timestamp: Date.now(),
 				});
 
@@ -120,19 +199,46 @@ export class AdvisorRuntime {
 					}
 				}
 
-				let batch: string | null = pendingBatch;
+				let batch: string | null;
+				let finalTurns: number;
 				if (shouldReprime) {
-					// Promotion could not fit the advisor's context — re-prime: drop the
-					// accumulated review history and replay the current (primary-bounded)
-					// transcript so the next turn resumes from a fresh, in-window context.
-					this.reset();
-					batch = this.#renderDelta();
+					// Promotion could not fit the advisor's context — re-prime.
+					const newTurns = this.#pending.reduce((sum, b) => sum + b.turns, 0);
+					this.#resetAdvisorContext(false, false);
+					batch = this.#renderDelta(this.#latestMessages);
+					finalTurns = turnsCovered + newTurns;
+				} else {
+					batch = candidateBatch;
+					finalTurns = turnsCovered;
 				}
-				if (this.#disposed || batch === null) continue;
+
+				if (this.disposed || batch === null) {
+					this.#backlog = Math.max(0, this.#backlog - finalTurns);
+					this.#notifyWaiters();
+					continue;
+				}
+
+				let success = false;
 				try {
 					await this.agent.prompt(batch);
+					success = true;
+					this.#consecutiveFailures = 0;
 				} catch (err) {
 					logger.debug("advisor turn failed", { err: String(err) });
+					this.#consecutiveFailures++;
+					if (this.#consecutiveFailures >= 3) {
+						logger.warn("advisor failed consecutively 3 times; dropping backlog to prevent stall");
+						this.#consecutiveFailures = 0;
+						success = true;
+					} else {
+						this.#pending.unshift({ text: batch, turns: finalTurns });
+						await Bun.sleep(this.retryDelayMs);
+					}
+				}
+
+				if (success) {
+					this.#backlog = Math.max(0, this.#backlog - finalTurns);
+					this.#notifyWaiters();
 				}
 			}
 		} finally {

@@ -371,6 +371,25 @@ function buildAgentEndEvent(
 	}
 	return { type: "agent_end", messages, telemetry: snapshot.summary, coverage: snapshot.coverage };
 }
+/**
+ * Push a `turn_end` event and run the awaited per-turn hook when the run is
+ * still healthy. The hook is skipped for externally aborted or errored turns so
+ * a user interrupt does not hang on a background backlog wait.
+ */
+async function emitTurnEnd(
+	stream: EventStream<AgentEvent, AgentMessage[]>,
+	currentContext: AgentContext,
+	message: AgentMessage,
+	toolResults: ToolResultMessage[],
+	config: AgentLoopConfig,
+	signal?: AbortSignal,
+): Promise<void> {
+	stream.push({ type: "turn_end", message, toolResults });
+	const isAbortedOrError =
+		message.role === "assistant" && (message.stopReason === "aborted" || message.stopReason === "error");
+	if (signal?.aborted || isAbortedOrError) return;
+	await config.onTurnEnd?.(currentContext.messages, signal);
+}
 
 /**
  * Detailed-result handle returned by {@link agentLoopDetailed}. Adds the
@@ -754,7 +773,7 @@ async function runLoopBody(
 						status: message.stopReason === "aborted" ? "aborted" : "error",
 					});
 				}
-				stream.push({ type: "turn_end", message, toolResults });
+				await emitTurnEnd(stream, currentContext, message, toolResults, config, signal);
 
 				stream.push(buildAgentEndEvent(newMessages, telemetry, stepCounter.count));
 				stream.end(newMessages);
@@ -839,7 +858,7 @@ async function runLoopBody(
 				hasMoreToolCalls = true;
 			}
 
-			stream.push({ type: "turn_end", message, toolResults });
+			await emitTurnEnd(stream, currentContext, message, toolResults, config, signal);
 
 			// On external abort (user interrupt), leave the steering queue intact: the
 			// session aborts then continues, delivering the queue into a fresh run.

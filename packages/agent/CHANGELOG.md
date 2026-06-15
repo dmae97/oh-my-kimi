@@ -1,11 +1,16 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Breaking Changes
 
 - Renamed owned tool-calling options from `toolCallSyntax`/`exampleSyntax` to `dialect`/`exampleDialect`.
 - Changed compaction conversation serialization to use the target model's native dialect turn, thinking, tool-call, and tool-result envelopes when a dialect is selected.
 - Renamed the owned dialect environment variable from `PI_OWNED_TOOLS` to `PI_DIALECT`.
+
+### Added
+
+- Added `onTurnEnd` hook support (`setOnTurnEnd`/`onTurnEnd`) to run awaited per-turn bookkeeping with current messages before the next model request and skip callback execution for aborted or error turns
 
 ### Changed
 

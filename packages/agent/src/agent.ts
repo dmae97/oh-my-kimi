@@ -335,6 +335,7 @@ export class Agent {
 	#onAssistantMessageEvent?: (message: AssistantMessage, event: AssistantMessageEvent) => void;
 	#onHarmonyLeak?: (event: HarmonyAuditEvent) => void | Promise<void>;
 	#onBeforeYield?: () => Promise<void> | void;
+	#onTurnEnd?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<void> | void;
 	#asideMessageProvider?: () => AsideMessage[] | Promise<AsideMessage[]>;
 	#telemetry?: AgentLoopConfig["telemetry"];
 	#appendOnlyContext?: AppendOnlyContextManager;
@@ -638,6 +639,9 @@ export class Agent {
 
 	setOnBeforeYield(fn: (() => Promise<void> | void) | undefined): void {
 		this.#onBeforeYield = fn;
+	}
+	setOnTurnEnd(fn: ((messages: AgentMessage[], signal?: AbortSignal) => Promise<void> | void) | undefined): void {
+		this.#onTurnEnd = fn;
 	}
 
 	/**
@@ -1044,6 +1048,7 @@ export class Agent {
 			afterToolCall: this.afterToolCall ? (ctx, signal) => this.afterToolCall?.(ctx, signal) : undefined,
 			onAssistantMessageEvent: this.#onAssistantMessageEvent,
 			onHarmonyLeak: this.#onHarmonyLeak,
+			onTurnEnd: (messages, signal) => this.#onTurnEnd?.(messages, signal),
 			getToolChoice,
 			getReasoning: () => this.#state.thinkingLevel,
 			getDisableReasoning: () => this.#state.disableReasoning,

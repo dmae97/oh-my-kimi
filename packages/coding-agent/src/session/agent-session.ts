@@ -1321,6 +1321,17 @@ export class AgentSession {
 				};
 		this.agent.setProviderResponseInterceptor(this.#onResponse);
 		this.agent.setRawSseEventInterceptor(this.#onSseEvent);
+		this.agent.setOnTurnEnd(async (messages, signal) => {
+			if (signal?.aborted) return;
+			if (this.#advisorRuntime && !this.#advisorRuntime.disposed) {
+				this.#advisorRuntime.onTurnEnd(messages);
+				const syncBacklog = this.settings.get("advisor.syncBacklog");
+				if (syncBacklog !== "off") {
+					const threshold = parseInt(syncBacklog, 10);
+					await this.#advisorRuntime.waitForCatchup(30000, threshold, signal);
+				}
+			}
+		});
 		this.yieldQueue = new YieldQueue({
 			isStreaming: () => this.isStreaming,
 			injectIdle: async messages => {
@@ -2054,8 +2065,6 @@ export class AgentSession {
 		}
 
 		await this.#emitSessionEvent(displayEvent);
-
-		if (event.type === "turn_end") this.#advisorRuntime?.onTurnEnd();
 
 		if (event.type === "turn_start") {
 			this.#resetStreamingEditState();

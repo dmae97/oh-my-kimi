@@ -1,7 +1,6 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Breaking Changes
 
 - Renamed the SDK tool format type and resolver from `ToolCallFormat`/`resolveToolCallSyntax` to `DialectFormat`/`resolveDialect`, and the agent option from `toolCallSyntax` to `dialect`.
@@ -9,6 +8,8 @@
 
 ### Added
 
+- Added `advisor.syncBacklog` setting (`off`, `1`, `3`, `5`) to pause turn completion until advisor review backlog drops below the threshold, with a maximum 30-second wait
+- Added advisor backlog synchronization at turn end when enabled so the main session stays aligned with the advisor's pending review turns
 - Added automatic discovery of WATCHDOG.md files from user and project locations so advisor guidance from local watchdog instructions is appended to its system prompt
 - Added `/advisor on`, `/advisor off`, `/advisor status`, and `/advisor dump [raw]` slash-command subcommands to manage the advisor at runtime
 - Added `advisor.enabled` and `advisor.subagents` settings to enable the advisor and extend it to spawned task/eval subagents
@@ -27,6 +28,8 @@
 
 ### Fixed
 
+- Fixed advisor backlog tracking so failed advice prompts do not stall catch-up indefinitely by dropping pending backlog after repeated consecutive failures
+- Fixed backlog accounting to decrement only after successful advisor prompts so sync waits correctly reflect advisor progress
 - Fixed advisor context batching to still send pending review updates when context maintenance fails instead of dropping the batch
 - Fixed explicit advisor enablement to clear protocol-default overrides so enabling the advisor applies immediately
 - Fixed advisor message card notes getting truncated to two lines when the card is collapsed.

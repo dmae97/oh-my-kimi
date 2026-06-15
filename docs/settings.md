@@ -283,6 +283,7 @@ modelRoles:
   slow: anthropic/claude-opus-4-5:high
   vision: gemini/gemini-3-pro-preview
   plan: anthropic/claude-opus-4-5
+  advisor: anthropic/claude-sonnet-4-5:medium
 
 cycleOrder:
   - smol
@@ -299,7 +300,7 @@ enabledModels:
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
-| `modelRoles` | record | `{}` | Map of role name -> model id. Built-in roles: `default`, `smol`, `slow`, `vision`, `plan`, `designer`, `commit`, `title`, `task`. Per-role env/flags: `--model`/`--smol`/`--slow`/`--plan`. |
+| `modelRoles` | record | `{}` | Map of role name -> model id. Built-in roles: `default`, `smol`, `slow`, `vision`, `plan`, `designer`, `commit`, `title`, `task`, `advisor`. Per-role env/flags exist only for `--model`/`--smol`/`--slow`/`--plan`; configure the advisor with `modelRoles.advisor`. |
 | `modelTags` | record | `{}` | Custom role/tag metadata; can introduce additional roles. |
 | `modelProviderOrder` | array | `[]` | Preferred provider order when a model id is ambiguous. |
 | `cycleOrder` | array | `["smol","default","slow"]` | Roles cycled by the model switcher. |
@@ -308,6 +309,18 @@ enabledModels:
 | `includeModelInPrompt` | boolean | `true` | Include the active model name in the system prompt. |
 
 See [Models](./models.md) for the `models.yml` schema and custom-provider definitions.
+
+### Advisor
+
+The advisor is a second model that reviews each completed turn and can inject advice into the primary session. Assign a model with `modelRoles.advisor`, then enable it with `advisor.enabled` or `/advisor on`. There is no `--advisor` flag.
+
+See [Advisor and WATCHDOG.md](./advisor-watchdog.md) for runtime behavior, `WATCHDOG.md` discovery, and bounded catch-up semantics.
+
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `advisor.enabled` | boolean | `false` | Enable the advisor runtime when `modelRoles.advisor` resolves to an available model. |
+| `advisor.subagents` | boolean | `false` | Also enable advisor runtimes for spawned task/eval subagents. |
+| `advisor.syncBacklog` | enum | `off` | Bounded advisor catch-up delay: `off`, `1`, `3`, or `5`. The primary waits up to 30 seconds only while advisor backlog is at or above the threshold. |
 
 ### Thinking
 

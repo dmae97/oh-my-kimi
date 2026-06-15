@@ -402,6 +402,18 @@ export const SETTINGS_SCHEMA = {
 			description: "Also enable the advisor on spawned task/eval subagents.",
 		},
 	},
+	"advisor.syncBacklog": {
+		type: "enum",
+		values: ["off", "1", "3", "5"] as const,
+		default: "off",
+		ui: {
+			tab: "model",
+			group: "Advisor",
+			label: "Advisor Sync Backlog",
+			description:
+				"Pause the main agent for up to 30 seconds if the advisor falls behind by this many turns. Off disables catch-up delays.",
+		},
+	},
 	shellPath: { type: "string", default: undefined },
 
 	extensions: { type: "array", default: EMPTY_STRING_ARRAY },
