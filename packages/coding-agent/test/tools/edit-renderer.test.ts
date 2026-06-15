@@ -281,9 +281,10 @@ describe("editToolRenderer", () => {
 			const component = new ToolExecutionComponent("edit", { input }, { snapshots }, hashlineTool, uiStub, tmpDir);
 
 			component.setArgsComplete();
-			await Bun.sleep(50);
 
-			const rendered = Bun.stripANSI(component.render(160).join("\n"));
+			// The preview diff computes asynchronously after args complete; poll
+			// instead of a fixed sleep so the slower CI VM has time to finish it.
+			const rendered = await waitForRenderedText(component, 160, "export const b = 22;");
 			expect(rendered).toContain("export const b = 22;");
 			expect(rendered).not.toContain("No changes would be made");
 		} finally {

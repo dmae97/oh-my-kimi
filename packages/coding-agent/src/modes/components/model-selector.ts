@@ -936,7 +936,8 @@ export class ModelSelectorComponent extends Container {
 			// Build role badges. Solid badges are configured; outlined badges are auto-selected defaults.
 			const roleBadgeTokens: string[] = [];
 			for (const role of MODEL_ROLE_IDS) {
-				const { tag, color } = getRoleInfo(role, this.#settings);
+				const { tag, color, hidden } = getRoleInfo(role, this.#settings);
+				if (hidden) continue;
 				const assigned = this.#roles[role];
 				if (!tag || !assigned || !modelsAreEqual(assigned.model, item.model)) continue;
 
@@ -1053,6 +1054,10 @@ export class ModelSelectorComponent extends Container {
 		this.#menuStep = "role";
 		this.#menuSelectedRole = null;
 		this.#menuSelectedIndex = 0;
+		// Collapse the model list while the action/thinking menu is open so the
+		// menu owns the full viewport instead of stacking below a now-irrelevant
+		// (and often off-screen) list.
+		this.#listContainer.clear();
 		this.#updateMenu();
 	}
 
@@ -1061,6 +1066,8 @@ export class ModelSelectorComponent extends Container {
 		this.#menuStep = "role";
 		this.#menuSelectedRole = null;
 		this.#menuContainer.clear();
+		// Restore the model list that #openMenu collapsed.
+		this.#updateList();
 	}
 
 	#updateMenu(): void {
@@ -1088,11 +1095,21 @@ export class ModelSelectorComponent extends Container {
 				? `  Thinking for: ${selectedRoleName} (${selectedItem.id})`
 				: `  Action for: ${selectedItem.id}`;
 		const hintText = showingThinking ? "  Enter: confirm  Esc: back" : "  Enter: continue  Esc: cancel";
-		const menuWidth = Math.max(
+		// Window the option list so a long action/thinking menu scrolls inside the
+		// viewport instead of running off the bottom of the screen.
+		const maxVisible = this.#getMenuVisibleCount(optionLines.length);
+		const needsScroll = optionLines.length > maxVisible;
+		const startIndex = needsScroll
+			? Math.max(0, Math.min(this.#menuSelectedIndex - Math.floor(maxVisible / 2), optionLines.length - maxVisible))
+			: 0;
+		const endIndex = needsScroll ? startIndex + maxVisible : optionLines.length;
+		const contentWidth = Math.max(
 			visibleWidth(headerText),
 			visibleWidth(hintText),
 			...optionLines.map(line => visibleWidth(line)),
 		);
+		// Reserve one column for the scrollbar when the list overflows.
+		const menuWidth = contentWidth + (needsScroll ? 1 : 0);
 
 		this.#menuContainer.addChild(new Spacer(1));
 		this.#menuContainer.addChild(new Text(theme.fg("border", theme.boxSharp.horizontal.repeat(menuWidth)), 0, 0));
@@ -1109,17 +1126,44 @@ export class ModelSelectorComponent extends Container {
 		}
 		this.#menuContainer.addChild(new Spacer(1));
 
-		for (let i = 0; i < optionLines.length; i++) {
+		const visibleRows: string[] = [];
+		for (let i = startIndex; i < endIndex; i++) {
 			const lineText = optionLines[i];
-			if (!lineText) continue;
+			if (lineText === undefined) continue;
 			const isSelected = i === this.#menuSelectedIndex;
-			const line = isSelected ? theme.fg("accent", lineText) : theme.fg("muted", lineText);
-			this.#menuContainer.addChild(new Text(line, 0, 0));
+			visibleRows.push(isSelected ? theme.fg("accent", lineText) : theme.fg("muted", lineText));
+		}
+		if (needsScroll) {
+			const sv = new ScrollView(visibleRows, {
+				height: visibleRows.length,
+				scrollbar: "auto",
+				totalRows: optionLines.length,
+				theme: { track: t => theme.fg("muted", t), thumb: t => theme.fg("accent", t) },
+			});
+			sv.setScrollOffset(startIndex);
+			for (const row of sv.render(menuWidth)) {
+				this.#menuContainer.addChild(new Text(row, 0, 0));
+			}
+		} else {
+			for (const row of visibleRows) {
+				this.#menuContainer.addChild(new Text(row, 0, 0));
+			}
 		}
 
 		this.#menuContainer.addChild(new Spacer(1));
 		this.#menuContainer.addChild(new Text(theme.fg("dim", hintText), 0, 0));
 		this.#menuContainer.addChild(new Text(theme.fg("border", theme.boxSharp.horizontal.repeat(menuWidth)), 0, 0));
+	}
+
+	#getMenuVisibleCount(optionCount: number): number {
+		// Rows the selector chrome and the menu's own header/hint/borders/spacers
+		// consume, leaving the remainder of the viewport for the scrollable option
+		// window. Without a known terminal height (e.g. tests) show every option.
+		const MENU_CHROME_ROWS = 19;
+		const MIN_VISIBLE_OPTIONS = 4;
+		const terminalRows = this.#tui.terminal?.rows ?? 0;
+		if (!Number.isFinite(terminalRows) || terminalRows <= 0) return optionCount;
+		return Math.max(MIN_VISIBLE_OPTIONS, Math.min(optionCount, terminalRows - MENU_CHROME_ROWS));
 	}
 
 	handleInput(keyData: string): void {

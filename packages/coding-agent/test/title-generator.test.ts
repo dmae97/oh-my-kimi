@@ -291,7 +291,7 @@ describe("title generator", () => {
 			createSettings(model),
 		);
 
-		expect(title).toBe("Add OAuth authentication");
+		expect(title).toBe("Add OAuth Authentication");
 		const request = completeSimpleMock.mock.calls[0]?.[1] as { systemPrompt?: string[]; tools?: unknown };
 		const options = completeSimpleMock.mock.calls[0]?.[2] as { toolChoice?: unknown };
 		expect(request?.tools).toBeUndefined();
@@ -312,7 +312,7 @@ describe("title generator", () => {
 			createSettings(model),
 		);
 
-		expect(title).toBe("Investigate the resolver");
+		expect(title).toBe("Investigate The Resolver");
 		expect((completeSimpleMock.mock.calls[0]?.[1] as { tools?: unknown }).tools).toBeUndefined();
 		expect((completeSimpleMock.mock.calls[0]?.[2] as { toolChoice?: unknown }).toolChoice).toBeUndefined();
 	});
@@ -330,7 +330,7 @@ describe("title generator", () => {
 			createSettings(model),
 		);
 
-		expect(title).toBe("Fix login button on mobile");
+		expect(title).toBe("Fix Login Button On Mobile");
 	});
 
 	it("strips an unclosed <title> tag from a truncated response", async () => {
@@ -346,7 +346,7 @@ describe("title generator", () => {
 			createSettings(model),
 		);
 
-		expect(title).toBe("Refactor API client error handling");
+		expect(title).toBe("Refactor API Client Error Handling");
 	});
 
 	it("appends the marker instruction after a custom prompt in marker mode", async () => {
@@ -367,10 +367,93 @@ describe("title generator", () => {
 			customPrompt,
 		);
 
-		expect(title).toBe("fix:resolver");
+		expect(title).toBe("Fix:Resolver");
 		const request = completeSimpleMock.mock.calls[0]?.[1] as { systemPrompt?: string[] };
 		expect(request?.systemPrompt).toHaveLength(2);
 		expect(request?.systemPrompt?.[0]).toBe(customPrompt);
 		expect(request?.systemPrompt?.[1]).toContain("<title>");
+	});
+
+	it("resolves the model roles in precedence order: title -> commit -> smol", async () => {
+		const titleModel = getModelOrThrow("claude-haiku-4-5");
+		const commitModel = getModelOrThrow("claude-sonnet-4-5");
+		const smolModel = getModelOrThrow("claude-opus-4-8");
+
+		const mockComplete = vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "stop",
+			content: [{ type: "text", text: "<title>Test Title</title>" }],
+		} as never);
+
+		// Case 1: All three roles configured. 'title' should be used.
+		let currentSettings = {
+			get(path: string) {
+				if (path === "providers.tinyModel") return "online";
+				return undefined;
+			},
+			getModelRole(role: string) {
+				if (role === "title") return `${titleModel.provider}/${titleModel.id}`;
+				if (role === "commit") return `${commitModel.provider}/${commitModel.id}`;
+				if (role === "smol") return `${smolModel.provider}/${smolModel.id}`;
+				return undefined;
+			},
+			getStorage() {
+				return undefined;
+			},
+		} as never;
+
+		const registry = {
+			getAvailable: () => [titleModel, commitModel, smolModel],
+			getApiKey: async () => "test-key",
+			getApiKeyForProvider: async () => "test-key",
+			authStorage: { rotateSessionCredential: async () => false },
+			resolver: () => async () => "test-key",
+		} as never;
+
+		await generateSessionTitle("Some message", registry, currentSettings);
+		expect(mockComplete).toHaveBeenCalled();
+		expect(mockComplete.mock.calls[0]?.[0]).toBe(titleModel);
+
+		mockComplete.mockClear();
+
+		// Case 2: 'title' role not configured, 'commit' and 'smol' configured. 'commit' should be used.
+		currentSettings = {
+			get(path: string) {
+				if (path === "providers.tinyModel") return "online";
+				return undefined;
+			},
+			getModelRole(role: string) {
+				if (role === "commit") return `${commitModel.provider}/${commitModel.id}`;
+				if (role === "smol") return `${smolModel.provider}/${smolModel.id}`;
+				return undefined;
+			},
+			getStorage() {
+				return undefined;
+			},
+		} as never;
+
+		await generateSessionTitle("Some message", registry, currentSettings);
+		expect(mockComplete).toHaveBeenCalled();
+		expect(mockComplete.mock.calls[0]?.[0]).toBe(commitModel);
+
+		mockComplete.mockClear();
+
+		// Case 3: Only 'smol' role configured. 'smol' should be used.
+		currentSettings = {
+			get(path: string) {
+				if (path === "providers.tinyModel") return "online";
+				return undefined;
+			},
+			getModelRole(role: string) {
+				if (role === "smol") return `${smolModel.provider}/${smolModel.id}`;
+				return undefined;
+			},
+			getStorage() {
+				return undefined;
+			},
+		} as never;
+
+		await generateSessionTitle("Some message", registry, currentSettings);
+		expect(mockComplete).toHaveBeenCalled();
+		expect(mockComplete.mock.calls[0]?.[0]).toBe(smolModel);
 	});
 });

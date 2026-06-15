@@ -1237,4 +1237,63 @@ describe("AgentSession retry fallback", () => {
 		await modelRegistry.refresh("offline");
 		expect(modelRegistry.isSelectorSuppressed("openai/gpt-4o")).toBe(false);
 	});
+
+	it("auto-retries Gemini MALFORMED_FUNCTION_CALL transient errors", async () => {
+		const model = getBundledModel("google", "gemini-1.5-flash");
+		if (!model) {
+			throw new Error("Expected bundled Google test model to exist");
+		}
+
+		const malformedError = "Generation failed with finish reason: MALFORMED_FUNCTION_CALL";
+		const requestedModels: string[] = [];
+
+		const mock = createMockModel({
+			responses: [{ throw: malformedError }, { content: ["Recovered after Gemini malformed function call"] }],
+		});
+		const agent = new Agent({
+			getApiKey: provider => `${provider}-test-key`,
+			initialState: {
+				model,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+			streamFn: (requestedModel, context, options) => {
+				requestedModels.push(`${requestedModel.provider}/${requestedModel.id}`);
+				return mock.stream(requestedModel, context, options);
+			},
+		});
+
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 5,
+			"retry.maxRetries": 1,
+		});
+		settings.setModelRole("default", `${model.provider}/${model.id}`);
+
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+		const { retryStartEvents, retryEndEvents } = trackRetryEvents(session);
+
+		await session.prompt("recover from Gemini malformed error");
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(2);
+		expect(retryStartEvents).toHaveLength(1);
+		expect(retryEndEvents).toHaveLength(1);
+		expect(session.agent.state.messages).toHaveLength(2);
+		const assistantMsg = session.agent.state.messages[1];
+		if (assistantMsg.role !== "assistant") {
+			throw new Error(`Expected assistant message, got ${assistantMsg.role}`);
+		}
+		const contentBlock = assistantMsg.content[0];
+		if (contentBlock.type !== "text") {
+			throw new Error(`Expected text content block, got ${contentBlock.type}`);
+		}
+		expect(contentBlock.text).toBe("Recovered after Gemini malformed function call");
+	});
 });

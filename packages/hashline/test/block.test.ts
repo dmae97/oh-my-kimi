@@ -140,6 +140,30 @@ describe("resolveBlockEdits", () => {
 		});
 		expect(seen).toHaveLength(0);
 	});
+
+	// A single-line resolution means the anchor was a bare statement, not a
+	// multi-line construct opener (the att#1 `insert after block 678` shape,
+	// where line 678 was `options.mode = "check";`). Reject and point at the
+	// plain form rather than silently landing a body in the wrong scope.
+	const singleLineResolver: BlockResolver = ({ line }): BlockSpan => ({ start: line, end: line });
+
+	it("rejects a `replace block` that resolves to a single line", () => {
+		const edits = parsePatch("replace block 2:\n+X").edits;
+		expect(() => resolveBlockEdits(edits, "a\nb\nc", PATH, singleLineResolver)).toThrow(
+			/resolved a single-line block/,
+		);
+	});
+
+	it("rejects an `insert after block` that resolves to a single line", () => {
+		const edits = parsePatch("insert after block 2:\n+X").edits;
+		expect(() => resolveBlockEdits(edits, "a\nb\nc", PATH, singleLineResolver)).toThrow(/single-line block/);
+	});
+
+	it("drops a single-line block resolution on the lenient preview path", () => {
+		const edits = parsePatch("replace block 2:\n+X").edits;
+		const resolved = resolveBlockEdits(edits, "a\nb\nc", PATH, singleLineResolver, { onUnresolved: "drop" });
+		expect(resolved).toHaveLength(0);
+	});
 });
 
 describe("PatchSection.applyTo / applyPartialTo with block edits", () => {

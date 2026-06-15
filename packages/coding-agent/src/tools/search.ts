@@ -8,7 +8,7 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import { z } from "zod/v4";
-import { recordFileSnapshot } from "../edit/file-snapshot-store";
+import { recordFileSnapshot, recordSeenLinesFromBody } from "../edit/file-snapshot-store";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { LocalProtocolOptions } from "../internal-urls/local-protocol";
 import { InternalUrlRouter } from "../internal-urls/router";
@@ -1196,6 +1196,10 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 							}
 						}
 						fileMatchCounts.set(relativePath, (fileMatchCounts.get(relativePath) ?? 0) + 1);
+					}
+					if (hashContext?.tag) {
+						const absoluteFilePath = path.resolve(this.session.cwd, relativePath);
+						recordSeenLinesFromBody(this.session, absoluteFilePath, hashContext.tag, modelOut.join("\n"));
 					}
 					return { model: modelOut, display: displayOut };
 				};

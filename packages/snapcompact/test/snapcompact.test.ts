@@ -789,6 +789,8 @@ describe("archive helpers", () => {
 		expect(snapcompact.providerFrameBudget("anthropic")).toBe(snapcompact.MAX_FRAMES);
 		expect(snapcompact.providerFrameBudget("openrouter")).toBeLessThanOrEqual(8);
 		expect(snapcompact.providerFrameBudget("some-new-router")).toBe(snapcompact.DEFAULT_PROVIDER_IMAGE_BUDGET);
+		expect(snapcompact.providerImageBudget("openai-codex")).toBe(200);
+		expect(snapcompact.providerFrameBudget("openai-codex")).toBe(snapcompact.MAX_FRAMES);
 	});
 });
 

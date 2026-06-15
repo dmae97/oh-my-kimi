@@ -7,13 +7,13 @@ type Mode =
 	| "all"
 	| "workspace"
 	| "native"
-	| "coding-agent-fast"
+	| "coding-agent-singleton"
 	| "coding-agent-ui"
 	| "coding-agent-runtime"
 	| "coding-agent-native"
 	| "coding-agent-heavy";
 
-type CodingAgentBucket = "fast" | "ui" | "runtime" | "native";
+type CodingAgentBucket = "singleton" | "ui" | "runtime" | "native";
 
 interface TestCommand {
 	label: string;
@@ -32,16 +32,26 @@ const validModes = new Set<Mode>([
 	"all",
 	"workspace",
 	"native",
-	"coding-agent-fast",
+	"coding-agent-singleton",
 	"coding-agent-ui",
 	"coding-agent-runtime",
 	"coding-agent-native",
 	"coding-agent-heavy",
 ]);
 
-// Pure workspace tests are intentionally separate from native/TUI/integration
-// tests so this job can run while the Linux native addon job builds or resolves
-// a reusable artifact.
+const codingAgentBucketPlans: Record<CodingAgentBucket, { label: string; parallel: number }> = {
+	singleton: { label: "singleton/global-state bucket", parallel: 1 },
+	ui: { label: "UI/TUI bucket", parallel: 1 },
+	runtime: { label: "runtime/session bucket", parallel: 1 },
+	native: { label: "native/tooling/browser/unit bucket", parallel: 1 },
+};
+
+// Smaller workspace packages stay separate from native/TUI/integration suites so
+// their short TS suites can run together. CI still downloads the Linux x64 native
+// addon before this bucket: shared utility barrels may load native-backed modules.
+// mnemopi is intentionally excluded — its embedding suites depend on a ~270MB
+// fastembed model absent from CI runners, so they flake/time out under the parallel
+// bucket; run `bun --cwd=packages/mnemopi test` locally instead.
 const fastWorkspacePackages = [
 	"packages/hashline",
 	"packages/wire",
@@ -50,12 +60,11 @@ const fastWorkspacePackages = [
 	"packages/ai",
 	"packages/snapcompact",
 	"packages/agent",
-	"packages/mnemopi",
 ];
 
-// These suites either cover the native package, TUI/browser-ish behavior, local
-// servers, or coding-agent-adjacent benchmark paths. Keep them low-concurrency
-// and in jobs that have downloaded the Linux x64 native addon artifacts.
+// These suites cover the native package, TUI/browser-ish behavior, local servers,
+// or coding-agent-adjacent benchmark paths. Keep them low-concurrency and in jobs
+// that have downloaded the Linux x64 native addon artifacts.
 const nativeAndIntegrationPackages = [
 	"packages/natives",
 	"packages/tui",
@@ -75,6 +84,11 @@ const codingAgentNativePathPatterns = [
 	/^test\/tools\.test\.ts$/,
 ];
 
+const codingAgentSingletonPathPatterns = [
+	/^test\/(settings|config|fast-mode-scope|autocomplete-max-visible)[^/]*\.test\.ts$/,
+	/^test\/[^/]*(singleton|global-state|fake-timer)[^/]*\.test\.ts$/,
+];
+
 const codingAgentUiPathPatterns = [
 	/^test\/modes\//,
 	/^test\/(interactive-mode|main-interactive|input-controller|streaming|status-line|keybindings|editor|hook|theme|setup-wizard|job-renderer|tool-args-reveal|tool-execution)[^/]*\.test\.ts$/,
@@ -90,7 +104,7 @@ const codingAgentRuntimePathPatterns = [
 	/^test\/(extensions?|plugin|autolearn|skills|marketplace|oauth)[^/]*\.test\.ts$/,
 	/^test\/[^/]*oauth[^/]*\.test\.ts$/,
 	/^test\/(extensibility|discovery|tool-discovery|goals|marketplace)\//,
-	/^test\/(model|model-|model-registry|model-resolver|compaction|settings|config|fast-mode-scope)[^/]*\.test\.ts$/,
+	/^test\/(model|model-|model-registry|model-resolver|compaction)[^/]*\.test\.ts$/,
 ];
 
 const codingAgentNativeContentMarkers = [
@@ -111,6 +125,25 @@ const codingAgentNativeContentMarkers = [
 	"WebSocket",
 ];
 
+const codingAgentSingletonContentMarkers = [
+	"Settings.init(",
+	"Settings.instance",
+	"resetSettingsForTest",
+	"setAgentDir(",
+	"setDefaultTabWidth(",
+	"vi.useFakeTimers(",
+	"vi.useRealTimers(",
+	"vi.stubEnv(",
+	"vi.unstubAllEnvs(",
+];
+
+const codingAgentSingletonContentPatterns = [
+	/(^|[^\w$.])(process\.env|Bun\.env)\.[A-Za-z0-9_]+\s*=/,
+	/(^|[^\w$.])(process\.env|Bun\.env)\[[^\]]+\]\s*=/,
+	/delete\s+(process\.env|Bun\.env)(\.[A-Za-z0-9_]+|\[[^\]]+\])/,
+	/Object\.assign\((process\.env|Bun\.env),/,
+];
+
 const codingAgentUiContentMarkers = [
 	"@oh-my-pi/pi-tui",
 	"InteractiveMode",
@@ -125,13 +158,6 @@ const codingAgentRuntimeContentMarkers = [
 	"AgentSession",
 	"SessionManager",
 	"AuthStorage",
-	"Settings.init",
-	"Settings.instance",
-	"resetSettingsForTest",
-	"setAgentDir",
-	"process.env",
-	"Bun.env",
-	"vi.useFakeTimers",
 	"Bun.sleep",
 	"setTimeout(",
 ];
@@ -178,12 +204,30 @@ function matchesAnyPath(testFile: string, patterns: RegExp[]): boolean {
 	return patterns.some(pattern => pattern.test(testFile));
 }
 
+function matchesAnyContentPattern(content: string, patterns: RegExp[]): boolean {
+	return patterns.some(pattern => pattern.test(content));
+}
+// Native/tooling tests are classified first because they need the lowest
+// concurrency; all coding-agent buckets run with the native addon available in CI.
 function classifyCodingAgentTest(testFile: string, content: string): CodingAgentBucket {
-	if (matchesAnyPath(testFile, codingAgentNativePathPatterns) || hasAnyMarker(content, codingAgentNativeContentMarkers)) {
+	if (
+		matchesAnyPath(testFile, codingAgentNativePathPatterns) ||
+		hasAnyMarker(content, codingAgentNativeContentMarkers)
+	) {
 		return "native";
 	}
-	if (matchesAnyPath(testFile, codingAgentUiPathPatterns) || hasAnyMarker(content, codingAgentUiContentMarkers)) {
+	if (
+		matchesAnyPath(testFile, codingAgentUiPathPatterns) ||
+		hasAnyMarker(content, codingAgentUiContentMarkers)
+	) {
 		return "ui";
+	}
+	if (
+		matchesAnyPath(testFile, codingAgentSingletonPathPatterns) ||
+		hasAnyMarker(content, codingAgentSingletonContentMarkers) ||
+		matchesAnyContentPattern(content, codingAgentSingletonContentPatterns)
+	) {
+		return "singleton";
 	}
 	if (
 		matchesAnyPath(testFile, codingAgentRuntimePathPatterns) ||
@@ -191,7 +235,7 @@ function classifyCodingAgentTest(testFile: string, content: string): CodingAgent
 	) {
 		return "runtime";
 	}
-	return "fast";
+	return "native";
 }
 
 async function getCodingAgentTestPartition(): Promise<CodingAgentTestPartition> {
@@ -202,7 +246,7 @@ async function getCodingAgentTestPartition(): Promise<CodingAgentTestPartition> 
 			...(await collectTestsUnder(path.join(codingAgentDir, "src"), codingAgentDir)),
 		].sort();
 		const partition: CodingAgentTestPartition = {
-			fast: [],
+			singleton: [],
 			ui: [],
 			runtime: [],
 			native: [],
@@ -224,11 +268,11 @@ async function codingAgentTestCommand(bucket: CodingAgentBucket): Promise<TestCo
 	if (testFiles.length === 0) {
 		throw new Error(`No coding-agent ${bucket} tests matched`);
 	}
-	const parallel = bucket === "fast" ? 2 : 1;
+	const plan = codingAgentBucketPlans[bucket];
 	return {
-		label: `packages/coding-agent (${bucket}; ${testFiles.length} files)`,
+		label: `packages/coding-agent (${plan.label}; ${testFiles.length} files; parallel=${plan.parallel})`,
 		cwd: "packages/coding-agent",
-		command: ["bun", "--smol", "test", `--parallel=${parallel}`, "--only-failures", ...testFiles],
+		command: ["bun", "--smol", "test", `--parallel=${plan.parallel}`, "--only-failures", ...testFiles],
 	};
 }
 
@@ -236,7 +280,7 @@ async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 	switch (mode) {
 		case "workspace":
 			return [
-				...fastWorkspacePackages.map(pkg => workspaceTestCommand(pkg, 4)),
+				...fastWorkspacePackages.map(pkg => workspaceTestCommand(pkg, 8)),
 				{
 					label: "scripts",
 					cwd: ".",
@@ -245,8 +289,8 @@ async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 			];
 		case "native":
 			return nativeAndIntegrationPackages.map(pkg => workspaceTestCommand(pkg, 1, true));
-		case "coding-agent-fast":
-			return [await codingAgentTestCommand("fast")];
+		case "coding-agent-singleton":
+			return [await codingAgentTestCommand("singleton")];
 		case "coding-agent-ui":
 			return [await codingAgentTestCommand("ui")];
 		case "coding-agent-runtime":
@@ -255,6 +299,7 @@ async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 			return [await codingAgentTestCommand("native")];
 		case "coding-agent-heavy":
 			return [
+				await codingAgentTestCommand("singleton"),
 				await codingAgentTestCommand("ui"),
 				await codingAgentTestCommand("runtime"),
 				await codingAgentTestCommand("native"),
@@ -263,10 +308,38 @@ async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 			return [
 				...(await commandsForMode("workspace")),
 				...(await commandsForMode("native")),
-				...(await commandsForMode("coding-agent-fast")),
 				...(await commandsForMode("coding-agent-heavy")),
 			];
 	}
+}
+
+// The omp-kata runner pods inject sccache S3 credentials (`AWS_*`) and config
+// (`SCCACHE_*`) pod-wide via `envFrom`, GitHub Actions injects `GITHUB_TOKEN`,
+// and a host may carry provider API keys. Any of these make env-sensitive code
+// non-deterministic in tests — e.g. leaked AWS creds make `amazon-bedrock` look
+// authenticated and win the provider startup fallback over `anthropic`. Run the
+// suites in a hermetic environment with all credential / cloud-config variables
+// stripped so resolution depends only on the test's own fixtures.
+const SCRUBBED_ENV_PREFIXES = ["AWS_", "SCCACHE_", "GOOGLE_CLOUD_"];
+const SCRUBBED_ENV_NAMES = new Set([
+	"RUSTC_WRAPPER",
+	"GITHUB_TOKEN",
+	"GH_TOKEN",
+	"COPILOT_GITHUB_TOKEN",
+	"GOOGLE_APPLICATION_CREDENTIALS",
+	"ANTHROPIC_OAUTH_TOKEN",
+	"XAI_OAUTH_TOKEN",
+]);
+
+function isScrubbedEnvVar(key: string): boolean {
+	if (SCRUBBED_ENV_NAMES.has(key)) {
+		return true;
+	}
+	if (SCRUBBED_ENV_PREFIXES.some(prefix => key.startsWith(prefix))) {
+		return true;
+	}
+	// Any provider credential, e.g. ANTHROPIC_API_KEY / XAI_OAUTH_TOKEN / bedrock bearer.
+	return /_(API_KEY|OAUTH_TOKEN)$/.test(key) || key.includes("BEARER_TOKEN");
 }
 
 async function runTestCommand(testCommand: TestCommand): Promise<void> {
@@ -279,12 +352,15 @@ async function runTestCommand(testCommand: TestCommand): Promise<void> {
 		return;
 	}
 
+	const env: Record<string, string | undefined> = { ...Bun.env, GITHUB_ACTIONS: "" };
+	for (const key of Object.keys(env)) {
+		if (isScrubbedEnvVar(key)) {
+			delete env[key];
+		}
+	}
 	const proc = Bun.spawn(testCommand.command, {
 		cwd,
-		env: {
-			...Bun.env,
-			GITHUB_ACTIONS: "",
-		},
+		env,
 		stdout: "inherit",
 		stderr: "inherit",
 	});

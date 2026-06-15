@@ -2,29 +2,35 @@
 
 ## [Unreleased]
 
+## [15.13.1] - 2026-06-15
+
+### Fixed
+
+- Dropped `git` from the profanity list so normal repository mentions no longer count as profanity
+
+## [15.12.4] - 2026-06-13
+
+### Fixed
+
+- Fixed the stats dashboard's SQLite init never setting `PRAGMA busy_timeout`, so a concurrent `omp` startup hitting WAL recovery could crash `initDb()` with `SQLITE_BUSY` instead of waiting through it. The busy handler is now installed before `PRAGMA journal_mode=WAL` ([#2421](https://github.com/can1357/oh-my-pi/issues/2421)).
+
+## [15.11.0] - 2026-06-10
+
 ### Added
 
 - Added support for prebuilt npm bundle mode via `PI_BUNDLED`, allowing the stats server to use an embedded dashboard bundle in packaged CLI distributions
+
+### Fixed
+
+- Fixed handling of legacy `embedded-client.generated.txt` placeholder content so it is treated as missing archive instead of being decoded into invalid bytes
+- Fixed ENOENT handling while scanning dashboard source/build directories so missing `client/` or `dist/client` trees no longer crash startup
+
+## [15.10.11] - 2026-06-10
 
 ### Changed
 
 - Bundled-model lookups (`getBundledModel`, `GeneratedProvider`) now import from the new `@oh-my-pi/pi-catalog` package instead of the `@oh-my-pi/pi-ai` barrel, which no longer re-exports catalog values
 - The session-sync worker re-enters the host CLI entry (`workerHostEntry()` + `__omp_stats_sync_worker` argv selector) when running inside omp — source, npm bundle, or compiled binary — and keeps loading its own `sync-worker.ts` module directly for standalone `omp-stats`, bun test, and SDK hosts
-
-### Fixed
-
-- Dropped `git` from the profanity list so normal repository mentions no longer count as profanity
-- Fixed the stats dashboard's SQLite init never setting `PRAGMA busy_timeout`, so a concurrent `omp` startup hitting WAL recovery could crash `initDb()` with `SQLITE_BUSY` instead of waiting through it. The busy handler is now installed before `PRAGMA journal_mode=WAL` ([#2421](https://github.com/can1357/oh-my-pi/issues/2421)).
-- Fixed handling of legacy `embedded-client.generated.txt` placeholder content so it is treated as missing archive instead of being decoded into invalid bytes
-- Fixed ENOENT handling while scanning dashboard source/build directories so missing `client/` or `dist/client` trees no longer crash startup
-
-## [15.13.0] - 2026-06-14
-
-## [15.12.4] - 2026-06-13
-
-## [15.11.0] - 2026-06-10
-
-## [15.10.11] - 2026-06-10
 
 ## [15.1.6] - 2026-05-19
 

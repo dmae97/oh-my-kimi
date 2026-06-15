@@ -1,10 +1,12 @@
 import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { prompt, Snowflake } from "@oh-my-pi/pi-utils";
 import backgroundTanDispatchPrompt from "../../prompts/system/background-tan-dispatch.md" with { type: "text" };
 import { AgentRegistry, MAIN_AGENT_ID } from "../../registry/agent-registry";
 import * as sdk from "../../sdk";
 import type { AgentSession } from "../../session/agent-session";
+import { BACKGROUND_TAN_DISPATCH_MESSAGE_TYPE } from "../../session/messages";
 import { SessionManager } from "../../session/session-manager";
 import { createMCPProxyTools, createSubagentSettings } from "../../task/executor";
 import type { InteractiveModeContext } from "../types";
@@ -44,10 +46,6 @@ export class TanCommandController {
 		}
 
 		const session = this.ctx.session;
-		if (session.isStreaming) {
-			this.ctx.showWarning("Wait for the current response to finish or abort it before using /tan.");
-			return;
-		}
 
 		const model = session.model;
 		if (!model) {
@@ -84,19 +82,18 @@ export class TanCommandController {
 		const enableLsp = this.ctx.settings.get("task.enableLsp") !== false;
 		const agentRegistry = AgentRegistry.global();
 		const cloneId = `Tan-${Snowflake.next()}`;
+		const cloneFile = path.join(sessionDir, `${cloneId}.jsonl`);
 		const label = `/tan ${previewWork(trimmedWork)}`;
 
 		await this.ctx.sessionManager.ensureOnDisk();
 		await this.ctx.sessionManager.flush();
 
-		let cloneFile = "";
 		let jobId = "";
 		try {
 			const cloneManager = await SessionManager.forkFrom(parentFile, cwd, sessionDir, undefined, {
 				suppressBreadcrumb: true,
+				sessionFile: cloneFile,
 			});
-			cloneFile = cloneManager.getSessionFile() ?? "";
-			if (!cloneFile) throw new Error("Forked session did not create a session file.");
 
 			jobId = manager.register(
 				"task",
@@ -145,7 +142,21 @@ export class TanCommandController {
 							signal.removeEventListener("abort", abortClone);
 						}
 					} finally {
-						await clone?.dispose();
+						// Keep the finished tan in the Agent Hub instead of unregistering it:
+						// flip the ref to parked BEFORE dispose so the sdk dispose wrapper
+						// skips its unregister, then null the disposed session so the hub
+						// treats it as a transcript-only parked agent. An aborted tan is
+						// terminal — let dispose unregister it.
+						if (clone) {
+							if (signal.aborted) {
+								agentRegistry.setStatus(cloneId, "aborted");
+								await clone.dispose();
+							} else {
+								agentRegistry.setStatus(cloneId, "parked");
+								await clone.dispose();
+								agentRegistry.detachSession(cloneId);
+							}
+						}
 					}
 				},
 				{ ownerId },
@@ -157,17 +168,22 @@ export class TanCommandController {
 		}
 
 		const content = prompt.render(backgroundTanDispatchPrompt, { jobId, work: trimmedWork });
+		// /tan is meant to run alongside an active session. While the parent turn is
+		// still streaming, queue the dispatch breadcrumb for the next turn rather than
+		// steering the in-flight response; when idle this same call appends + persists
+		// the entry immediately (identical to omitting deliverAs).
+		const wasStreaming = session.isStreaming;
 		await session.sendCustomMessage(
 			{
-				customType: "background-tan-dispatch",
+				customType: BACKGROUND_TAN_DISPATCH_MESSAGE_TYPE,
 				content,
 				display: true,
 				attribution: "user",
 				details: { jobId, work: trimmedWork, sessionFile: cloneFile },
 			},
-			{ triggerTurn: false },
+			{ triggerTurn: false, deliverAs: "nextTurn" },
 		);
-		this.ctx.rebuildChatFromMessages();
+		if (!wasStreaming) this.ctx.rebuildChatFromMessages();
 		this.ctx.showStatus(`Dispatched background tan ${jobId}`);
 	}
 }

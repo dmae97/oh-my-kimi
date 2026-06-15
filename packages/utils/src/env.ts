@@ -1,7 +1,9 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { getAgentDir, getConfigRootDir } from "./dirs";
+import { getAgentDir, getConfigRootDir, refreshDirsFromEnv } from "./dirs";
+
+export * from "./worker-host";
 
 const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -117,6 +119,13 @@ for (const file of [projectEnv, agentEnv, piEnv, homeEnv]) {
 	}
 }
 
+// Directory-affecting keys (XDG_*_HOME, and in default mode PI_CODING_AGENT_DIR)
+// may have just arrived from the profile/agent `.env` applied above. The dirs
+// resolver cached its paths at module load — before this file ran — so rebuild
+// it now from the updated env. `getAgentDir()` already located the `.env` from
+// the profile name + home, so this re-reads only the directory vars.
+refreshDirsFromEnv();
+
 /**
  * Intentional re-export of Bun.env.
  *
@@ -170,26 +179,6 @@ export function isCompiledBinary(): boolean {
 	if (process.env.PI_COMPILED || Bun.env.PI_COMPILED) return true;
 	const url = import.meta.url;
 	return url.includes("$bunfs") || url.includes("~BUN") || url.includes("%7EBUN");
-}
-
-/**
- * Main-module path declared by self-dispatching CLI entrypoints — entries
- * whose top-level argv handling routes hidden `__omp_*` worker selectors.
- * Worker spawn sites re-enter this module via `new Worker(entry, { argv })`,
- * so every distribution (source, npm bundle, compiled binary) needs exactly
- * one JavaScript entrypoint. Never set under `bun test`, SDK embedding, or
- * standalone package bins — those hosts load worker modules directly.
- */
-let workerHostMain: string | null = null;
-
-/** Called by CLI entrypoints whose main module dispatches worker argv selectors. */
-export function declareWorkerHostEntry(): void {
-	workerHostMain = Bun.main;
-}
-
-/** Main-module path of the self-dispatching CLI host, or null outside it. */
-export function workerHostEntry(): string | null {
-	return workerHostMain;
 }
 
 const TRUTHY: Dict<boolean> = {

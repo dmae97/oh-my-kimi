@@ -34,7 +34,7 @@ Native `extension-module` discovery comes from:
 - User directory: `~/.omp/agent/extensions`
 - Native legacy/settings JSON entries: `<cwd>/.omp/settings.json#extensions` and `~/.omp/agent/settings.json#extensions`
 
-Path roots come from the native provider (`SOURCE_PATHS.native`). Project lookup is cwd-only for these native roots; it does not walk ancestors.
+The project root is the native provider's `.omp` directory (`SOURCE_PATHS.native.projectDir`), cwd-only; it does not walk ancestors. The user root is the active profile's agent directory via `getAgentDir()`, so under `omp --profile <name>` it becomes `~/.omp/profiles/<name>/agent/extensions` (and it honors `PI_CODING_AGENT_DIR`). See [Profiles](./config-usage.md#profiles).
 
 Notes:
 

@@ -15,8 +15,17 @@ try {
  * lightweight CLI runner from pi-utils.
  */
 import type { CliConfig } from "@oh-my-pi/pi-utils/cli";
-import { APP_NAME, MIN_BUN_VERSION, VERSION } from "@oh-my-pi/pi-utils/dirs";
-import { declareWorkerHostEntry } from "@oh-my-pi/pi-utils/env";
+import {
+	APP_NAME,
+	getActiveProfile,
+	MIN_BUN_VERSION,
+	resolveProfileEnv,
+	setProfile,
+	VERSION,
+} from "@oh-my-pi/pi-utils/dirs";
+import { declareWorkerHostEntry } from "@oh-my-pi/pi-utils/worker-host";
+import { installProfileAlias, resolveProfileAliasCommandFromProcess } from "./cli/profile-alias";
+import { extractProfileFlags } from "./cli/profile-bootstrap";
 
 if (Bun.semver.order(Bun.version, MIN_BUN_VERSION) < 0) {
 	process.stderr.write(
@@ -27,11 +36,11 @@ if (Bun.semver.order(Bun.version, MIN_BUN_VERSION) < 0) {
 
 process.title = APP_NAME;
 
-// Declare this module as the worker-host entry: Worker threads and worker
-// subprocesses re-enter `Bun.main` with a hidden argv selector instead of
-// loading separate worker entrypoints (single-entry contract across source,
-// npm bundle, and compiled binary).
-declareWorkerHostEntry();
+// Worker-host entry declaration (Worker threads and worker subprocesses
+// re-enter `Bun.main` with a hidden argv selector instead of loading separate
+// worker entrypoints) happens inside `runCli` after profile bootstrap:
+// `@oh-my-pi/pi-utils/env` eagerly loads `.env` from the agent directory at
+// import time, so it must not be imported before `setProfile` runs.
 
 async function showHelp(config: CliConfig): Promise<void> {
 	const { renderRootHelp } = await import("@oh-my-pi/pi-utils/cli");
@@ -196,15 +205,67 @@ async function runTinyWorker(): Promise<void> {
 
 /** Run the CLI with the given argv (no `process.argv` prefix). */
 export async function runCli(argv: string[]): Promise<void> {
-	if (argv[0] === "--smoke-test") {
-		await runSmokeTest();
+	let resolvedArgv = argv;
+	try {
+		const extracted = extractProfileFlags(resolvedArgv);
+		resolvedArgv = extracted.argv;
+		if (extracted.profile !== undefined) {
+			setProfile(extracted.profile);
+		} else {
+			// No explicit --profile: activate any OMP_PROFILE/PI_PROFILE inherited
+			// from the environment. Module-load resolution deliberately swallows an
+			// invalid value to avoid an uncaught throw before this try/catch is in
+			// scope (see `readProfileFromEnvSafe` in dirs.ts), and callers may set
+			// OMP_PROFILE after importing this module (profile aliases/tests). Surfacing
+			// validation here turns `OMP_PROFILE=.. omp --version` into a clean error;
+			// calling setProfile keeps every later path helper on the env-selected
+			// profile instead of the default agent directory.
+			setProfile(resolveProfileEnv(process.env.OMP_PROFILE, process.env.PI_PROFILE));
+		}
+		if (extracted.aliasName !== undefined) {
+			const profile = extracted.profile ?? getActiveProfile();
+			if (!profile) {
+				throw new Error("--alias requires --profile <name> or OMP_PROFILE");
+			}
+			const result = await installProfileAlias({
+				profile,
+				aliasName: extracted.aliasName,
+				command: resolveProfileAliasCommandFromProcess(),
+			});
+			process.stdout.write(
+				`Created ${result.aliasName} for profile ${result.profile} in ${result.configPath}\n` +
+					`Restart your shell or run: ${result.reloadedWith}\n` +
+					`Then use: ${result.aliasName} update, ${result.aliasName} --version, or ${result.aliasName}\n`,
+			);
+			return;
+		}
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		process.stderr.write(`Error: ${message}\n`);
+		process.exitCode = 1;
 		return;
 	}
-	if (TINY_WORKER_ARGS.has(argv[0] ?? "")) {
+
+	// Worker-thread entry dispatch must run before the first `await`: the
+	// stats sync worker's buffering onmessage handler is installed in the
+	// synchronous prefix of `runWorkerEntrypoint`, and Bun flushes the
+	// worker's parked initial messages as soon as the entry module's
+	// top-level evaluation finishes.
+	if (TINY_WORKER_ARGS.has(resolvedArgv[0] ?? "")) {
 		await runTinyWorker();
 		return;
 	}
-	if (await runWorkerEntrypoint(argv[0])) {
+	if (await runWorkerEntrypoint(resolvedArgv[0])) {
+		return;
+	}
+
+	// Declare this module as the worker-host entry now that the active profile
+	// is resolved. The worker-host module is side-effect-free; importing
+	// `@oh-my-pi/pi-utils/env` here would snapshot the wrong agent `.env`.
+	declareWorkerHostEntry();
+
+	if (resolvedArgv[0] === "--smoke-test") {
+		await runSmokeTest();
 		return;
 	}
 	const [{ run }, { commands, resolveCliArgv }] = await Promise.all([
@@ -213,7 +274,7 @@ export async function runCli(argv: string[]): Promise<void> {
 	]);
 	// --help and --version are handled by run() directly, don't rewrite those.
 	// Everything else that isn't a known subcommand routes to "launch".
-	const resolved = resolveCliArgv(argv);
+	const resolved = resolveCliArgv(resolvedArgv);
 	if ("error" in resolved) {
 		process.stderr.write(`error: ${resolved.error}\n`);
 		process.exitCode = 1;
@@ -226,7 +287,13 @@ export async function runCli(argv: string[]): Promise<void> {
 // lowering) builds to fail, and the entrypoint needs nothing after this.
 // The catch mirrors what an unhandled TLA rejection produced: error dump to
 // stderr, exit code 1. Success paths resolve without touching the exit code.
-runCli(process.argv.slice(2)).catch((err: unknown) => {
-	process.stderr.write(`${Bun.inspect(err, { colors: process.stderr.isTTY === true })}\n`);
-	process.exit(1);
-});
+// Guarded so importing `runCli` (profile CLI tests, SDK embedding) does not
+// launch the agent as a side effect. Worker threads re-enter this module as
+// their entry with `import.meta.main === false`, so the worker-host dispatch
+// is admitted via `!Bun.isMainThread`.
+if (import.meta.main || !Bun.isMainThread) {
+	runCli(process.argv.slice(2)).catch((err: unknown) => {
+		process.stderr.write(`${Bun.inspect(err, { colors: process.stderr.isTTY === true })}\n`);
+		process.exit(1);
+	});
+}

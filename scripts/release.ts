@@ -205,7 +205,7 @@ async function cmdRelease(version: string): Promise<void> {
 	}
 	console.log("  Working directory clean");
 
-	const latestTag = (await git(["describe", "--tags", "--abbrev=0"]).text()).trim();
+	const latestTag = (await git(["describe", "--tags", "--abbrev=0", "--match", "v*"]).text()).trim();
 	if (compareVersions(version, latestTag) <= 0) {
 		console.error(`Error: Version ${version} must be greater than latest tag ${latestTag}`);
 		process.exit(1);
@@ -306,7 +306,10 @@ async function cmdRelease(version: string): Promise<void> {
 
 	// 5. Update changelogs
 	console.log("Updating CHANGELOGs...");
-	const fixResult = await runChangelogFixer({ since: latestTag });
+	// Omit `since` so the fixer resolves its own baseline: the `clog` tag (last
+	// authoritative rewrite) when newer than `latestTag`, else `latestTag`. This
+	// keeps a release run from re-promoting bullets a prior `--recover` restored.
+	const fixResult = await runChangelogFixer({});
 	for (const fixed of fixResult.changedFiles) {
 		console.log(
 			`  Fixed ${fixed.path}: ${fixed.promotedItems} promoted, ` +

@@ -4,8 +4,8 @@
  * from both `~/.omp/agent/RULES.md` (user) and the nearest `.omp/RULES.md`
  * (project, walked up from cwd to repoRoot).
  *
- * Calls the native provider's `load` directly to bypass `loadCapability`'s
- * hardcoded `os.homedir()` so the user scope can be staged inside a tempdir.
+ * Calls the native provider's `load` directly with the agent dir pointed at a
+ * tempdir (via setAgentDir) so the user scope can be staged in isolation.
  */
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import * as fs from "node:fs";
@@ -17,10 +17,14 @@ import { type Rule, ruleCapability } from "@oh-my-pi/pi-coding-agent/capability/
 import type { LoadContext } from "@oh-my-pi/pi-coding-agent/capability/types";
 // Register all discovery providers as a side effect.
 import "@oh-my-pi/pi-coding-agent/discovery";
+import { getConfigRootDir, setAgentDir } from "@oh-my-pi/pi-utils";
 
 let tempDir: string;
 let home: string;
 let project: string;
+
+const originalAgentDirEnv = process.env.PI_CODING_AGENT_DIR;
+const fallbackAgentDir = path.join(getConfigRootDir(), "agent");
 
 function writeFile(filePath: string, content: string): void {
 	fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -44,10 +48,17 @@ beforeEach(() => {
 	fs.mkdirSync(home, { recursive: true });
 	fs.mkdirSync(project, { recursive: true });
 	fs.mkdirSync(path.join(project, ".git"), { recursive: true });
+	setAgentDir(path.join(home, ".omp", "agent"));
 });
 
 afterEach(() => {
 	clearCache();
+	if (originalAgentDirEnv) {
+		setAgentDir(originalAgentDirEnv);
+	} else {
+		setAgentDir(fallbackAgentDir);
+		delete process.env.PI_CODING_AGENT_DIR;
+	}
 	fs.rmSync(tempDir, { recursive: true, force: true });
 });
 

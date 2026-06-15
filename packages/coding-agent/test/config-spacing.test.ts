@@ -2,23 +2,28 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { getDefaultTabWidth, getIndentation, Snowflake, setDefaultTabWidth } from "@oh-my-pi/pi-utils";
+import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
 describe("indentation resolver", () => {
+	let settingsState: SettingsTestState | undefined;
 	let tempDir = "";
 
 	beforeEach(async () => {
-		resetSettingsForTest();
+		settingsState = beginSettingsTest();
 		setDefaultTabWidth(3);
 		tempDir = path.join(os.tmpdir(), "pi-spacing", Snowflake.next());
 		await fs.mkdir(tempDir, { recursive: true });
 	});
 
 	afterEach(async () => {
-		resetSettingsForTest();
-		setDefaultTabWidth(3);
-		await fs.rm(tempDir, { recursive: true, force: true });
+		restoreSettingsTestState(settingsState);
+		settingsState = undefined;
+		if (tempDir) {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+		tempDir = "";
 	});
 
 	it("applies current display tab width during initial settings load", async () => {

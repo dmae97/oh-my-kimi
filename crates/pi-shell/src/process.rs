@@ -65,6 +65,7 @@ mod platform {
 
 			let mut seen: HashSet<i32> = HashSet::new();
 			let mut out = Vec::new();
+			let mut children_file_available = false;
 			for entry in entries.flatten() {
 				let name = entry.file_name();
 				let Some(tid_str) = name.to_str() else {
@@ -77,24 +78,54 @@ mod platform {
 				let Ok(content) = fs::read_to_string(&children_path) else {
 					continue;
 				};
+				// The file is readable -> this kernel has CONFIG_PROC_CHILDREN.
+				children_file_available = true;
 				for part in content.split_whitespace() {
 					let Ok(child_pid) = part.parse::<i32>() else {
 						continue;
 					};
-					if !seen.insert(child_pid) {
-						continue;
-					}
-					let Some(child) = Self::from_pid(child_pid) else {
+					self.push_validated_child(child_pid, &mut seen, &mut out);
+				}
+			}
+
+			// Some Kata / microVM guest kernels are built without CONFIG_PROC_CHILDREN,
+			// so no `.../children` file exists and the walk above finds nothing — which
+			// would silently turn descendant signaling (cancellation cleanup) into a
+			// no-op inside such containers. Fall back to scanning `/proc` and grouping
+			// by parent pid, the same primitive the macOS path uses. Only taken when no
+			// `children` file was readable, so kernels that support it keep the cheap
+			// per-task fast path.
+			if !children_file_available && let Ok(proc_entries) = fs::read_dir("/proc") {
+				for entry in proc_entries.flatten() {
+					let name = entry.file_name();
+					let Some(pid_str) = name.to_str() else {
 						continue;
 					};
-					if child.status() == ProcessStatus::Running
-						&& current_parent_pid(child.pid) == Some(self.pid)
-					{
-						out.push(child);
-					}
+					let Ok(child_pid) = pid_str.parse::<i32>() else {
+						continue;
+					};
+					self.push_validated_child(child_pid, &mut seen, &mut out);
 				}
 			}
 			out
+		}
+
+		/// Validate a candidate child pid — dedup, still running, and currently
+		/// parented to `self` — then push it onto `out`. Shared by the
+		/// `/proc/<pid>/task/<tid>/children` fast path and the `/proc`-scan
+		/// fallback for kernels without `CONFIG_PROC_CHILDREN`.
+		fn push_validated_child(&self, child_pid: i32, seen: &mut HashSet<i32>, out: &mut Vec<Self>) {
+			if child_pid == self.pid || !seen.insert(child_pid) {
+				return;
+			}
+			let Some(child) = Self::from_pid(child_pid) else {
+				return;
+			};
+			if child.status() == ProcessStatus::Running
+				&& current_parent_pid(child.pid) == Some(self.pid)
+			{
+				out.push(child);
+			}
 		}
 
 		pub fn parent_pid(&self) -> Option<i32> {

@@ -8,6 +8,7 @@ import {
 	getConfigRootDir,
 	getInstallId,
 	setAgentDir,
+	setProfile,
 } from "@oh-my-pi/pi-utils/dirs";
 import { Snowflake } from "@oh-my-pi/pi-utils/snowflake";
 
@@ -74,5 +75,25 @@ describe("getInstallId", () => {
 
 		const onDisk = (await fs.readFile(path.join(getConfigRootDir(), "install-id"), "utf8")).trim();
 		expect(onDisk).toBe(id);
+	});
+
+	it("anchors the install id to the base config root regardless of active profile", async () => {
+		// Default mode creates the id under the base config root.
+		const baseId = getInstallId();
+		const baseFile = path.join(getConfigRootDir(), "install-id");
+		expect((await fs.readFile(baseFile, "utf8")).trim()).toBe(baseId);
+
+		// Activating a profile must not relocate the id or mint a new one: install
+		// identity is per-install, and the global cache must stay correct.
+		__resetInstallIdCacheForTests();
+		setProfile("work");
+		try {
+			const profileRoot = getConfigRootDir();
+			expect(profileRoot).not.toBe(path.dirname(baseFile));
+			expect(getInstallId()).toBe(baseId);
+			expect(await Bun.file(path.join(profileRoot, "install-id")).exists()).toBe(false);
+		} finally {
+			setProfile(undefined);
+		}
 	});
 });

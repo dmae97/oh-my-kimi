@@ -64,6 +64,52 @@ async function cleanupStaleTemps(dir: string): Promise<void> {
 	}
 }
 
+async function resolveCargoTargetDir(): Promise<string | null> {
+	// Mirror napi's resolution order (CARGO_BUILD_TARGET_DIR, else `cargo
+	// metadata`'s target_directory, which already honors CARGO_TARGET_DIR and
+	// config files) so a symlink we create lands exactly where napi looks.
+	const explicit = process.env.CARGO_BUILD_TARGET_DIR;
+	if (explicit) return path.resolve(explicit);
+	const meta = await $`cargo metadata --no-deps --format-version 1`.cwd(rustDir).quiet().nothrow();
+	if (meta.exitCode !== 0) return null;
+	try {
+		const parsed = JSON.parse(meta.stdout.toString("utf-8")) as { target_directory?: string };
+		return parsed.target_directory ?? null;
+	} catch {
+		return null;
+	}
+}
+
+async function ensureZigbuildTargetDirLink(suffixedTriple: string, bareTriple: string): Promise<void> {
+	// napi 3.7.0 reads the cdylib from `<targetDir>/<--target>/<profile>/`, using
+	// the full `--target` string verbatim. cargo-zigbuild strips the `.<glibc>`
+	// floor suffix before invoking cargo, so the cdylib actually lands under the
+	// bare-triple directory. Point the suffixed directory napi expects at the
+	// bare one or postBuild aborts with "Failed to copy artifact". No-op for
+	// targets without a floor suffix (arch-only cross builds, MSVC).
+	if (suffixedTriple === bareTriple) return;
+	const targetDir = await resolveCargoTargetDir();
+	if (!targetDir) {
+		console.warn(`Could not resolve cargo target dir; skipping zigbuild target-dir link for ${suffixedTriple}.`);
+		return;
+	}
+	const linkPath = path.join(targetDir, suffixedTriple);
+	await fs.mkdir(targetDir, { recursive: true });
+	let exists = false;
+	let isSymlink = false;
+	try {
+		const stats = await fs.lstat(linkPath);
+		exists = true;
+		isSymlink = stats.isSymbolicLink();
+	} catch {
+		exists = false;
+	}
+	// Never clobber a real build directory; only replace a stale symlink.
+	if (exists && !isSymlink) return;
+	if (exists) await fs.unlink(linkPath);
+	await fs.symlink(bareTriple, linkPath);
+}
+
 async function installBinary(src: string, dest: string): Promise<void> {
 	const tempPath = `${dest}.tmp.${process.pid}`;
 
@@ -302,15 +348,24 @@ if (crossTarget) {
 	// Route through `cargo-zigbuild` (non-MSVC targets) or `cargo-xwin`
 	// (MSVC targets). The napi CLI picks the right backend from the target.
 	napiArgs.push("--cross-compile");
+	// cargo-zigbuild encodes the glibc floor as a `.<major>.<minor>` suffix on
+	// the triple (e.g. `x86_64-unknown-linux-gnu.2.17`) but strips it before
+	// invoking cargo, so cargo's TARGET — and the artifact dir — use the bare
+	// triple.
+	const bareTriple = crossTarget.replace(/\.\d+(?:\.\d+)*$/, "");
 	// `zig cc` enables `NDEBUG` at `-O3`, which trips tree-sitter-just's
 	// scanner.c (`#error "expected assertions to be enabled"`). cc-rs reads
-	// CFLAGS_<target> with dashes replaced by underscores; preserve any
-	// caller-supplied flags and append `-UNDEBUG` for zig-driven builds.
+	// `CFLAGS_<target>` (dashes → underscores) keyed off cargo's bare TARGET, so
+	// the override must use the bare triple or it is silently dropped.
 	if (!crossTarget.endsWith("-msvc")) {
-		const envKey = `CFLAGS_${crossTarget.replace(/-/g, "_")}`;
+		const envKey = `CFLAGS_${bareTriple.replace(/-/g, "_")}`;
 		const existing = process.env[envKey] ?? "";
 		process.env[envKey] = existing ? `${existing} -UNDEBUG` : "-UNDEBUG";
 	}
+	// napi 3.7.0 resolves the built artifact from the FULL `--target` directory,
+	// but cargo-zigbuild writes under the bare triple; bridge the two so napi's
+	// postBuild copyArtifact succeeds for glibc-pinned targets.
+	await ensureZigbuildTargetDirLink(crossTarget, bareTriple);
 }
 
 const canonicalAddonFilename = `pi_natives.${targetPlatform}-${targetArch}${variantSuffix}.node`;
@@ -333,10 +388,32 @@ if (!napiBin) {
 	throw new Error("Could not locate @napi-rs/cli `napi` binary in node_modules/.bin");
 }
 
+async function runNapiBuildWithSccacheFallback() {
+	let buildResult = await $`${napiBin} ${napiArgs}`.nothrow();
+	let stderr = buildResult.stderr?.toString("utf-8") ?? "";
+	if (
+		buildResult.exitCode !== 0 &&
+		process.env.RUSTC_WRAPPER === "sccache" &&
+		stderr.includes("sccache: error") &&
+		stderr.includes("cache storage failed")
+	) {
+		const retryEnv = { ...process.env };
+		delete retryEnv.RUSTC_WRAPPER;
+		delete retryEnv.SCCACHE_BUCKET;
+		delete retryEnv.SCCACHE_ENDPOINT;
+		delete retryEnv.SCCACHE_REGION;
+		delete retryEnv.AWS_ACCESS_KEY_ID;
+		delete retryEnv.AWS_SECRET_ACCESS_KEY;
+		console.log("sccache storage unavailable; retrying native build without RUSTC_WRAPPER");
+		buildResult = await $`${napiBin} ${napiArgs}`.env(retryEnv).nothrow();
+		stderr = buildResult.stderr?.toString("utf-8") ?? "";
+	}
+	return { buildResult, stderr };
+}
+
 try {
-	const buildResult = await $`${napiBin} ${napiArgs}`.nothrow();
+	const { buildResult, stderr } = await runNapiBuildWithSccacheFallback();
 	if (buildResult.exitCode !== 0) {
-		const stderr = buildResult.stderr?.toString("utf-8") ?? "";
 		throw new Error(`napi build failed${stderr ? `:\n${stderr}` : ""}`);
 	}
 

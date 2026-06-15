@@ -11,17 +11,22 @@ import {
 	writeManagedSkill,
 } from "@oh-my-pi/pi-coding-agent/autolearn/managed-skills";
 import { parseFrontmatter } from "@oh-my-pi/pi-utils";
+import { getAgentDir, setAgentDir } from "@oh-my-pi/pi-utils/dirs";
 
 describe("managed-skills primitives", () => {
 	let tempHome: string;
 
+	let originalAgentDir: string;
 	beforeEach(async () => {
+		originalAgentDir = getAgentDir();
 		tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "omp-managed-skills-"));
 		spyOn(os, "homedir").mockReturnValue(tempHome);
+		setAgentDir(path.join(tempHome, ".omp", "agent"));
 	});
 
 	afterEach(async () => {
 		spyOn(os, "homedir").mockRestore();
+		setAgentDir(originalAgentDir);
 		await fs.rm(tempHome, { recursive: true, force: true });
 	});
 

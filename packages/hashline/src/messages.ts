@@ -179,3 +179,64 @@ export const HEADTAIL_DRIFT_WARNING =
 export function missingSnapshotTagMessage(sectionPath: string): string {
 	return `Missing hashline snapshot tag for ${sectionPath}; use \`${HL_FILE_PREFIX}${sectionPath}${HL_FILE_HASH_SEP}tag${HL_FILE_SUFFIX}\` from your latest read/search output. To create a new file, use the write tool.`;
 }
+
+/** Compress a line list into a sorted `1-4, 7, 10-12` range string. */
+function formatLineRanges(lines: readonly number[]): string {
+	const sorted = [...new Set(lines)].sort((a, b) => a - b);
+	if (sorted.length === 0) return "";
+	const parts: string[] = [];
+	let start = sorted[0];
+	let prev = sorted[0];
+	for (let i = 1; i <= sorted.length; i++) {
+		const current = sorted[i];
+		if (current === prev + 1) {
+			prev = current;
+			continue;
+		}
+		parts.push(start === prev ? `${start}` : `${start}-${prev}`);
+		start = current;
+		prev = current;
+	}
+	return parts.join(", ");
+}
+
+/**
+ * An anchored edit referenced lines the read that minted the cited tag never
+ * displayed (a partial range, or a structural summary that collapsed bodies).
+ * Editing lines you have not read is the off-by-memory failure that mangles
+ * files; reject and make the model re-read those exact lines first.
+ */
+export function unseenLinesMessage(sectionPath: string, unseenLines: readonly number[], tag: string): string {
+	return (
+		`This edit targets line(s) ${formatLineRanges(unseenLines)} of ${sectionPath} that were not shown in the ` +
+		`read/search output for ${HL_FILE_PREFIX}${sectionPath}${HL_FILE_HASH_SEP}${tag}${HL_FILE_SUFFIX} — a partial ` +
+		`range, a search hit, or a structural summary that collapsed bodies was displayed, not those exact lines. ` +
+		`Re-read those lines, then re-issue the edit against the fresh tag. NEVER author hunks against line numbers ` +
+		`you have not seen in the current snapshot.`
+	);
+}
+
+/** Op kind of a deferred block edit, for {@link blockSingleLineMessage}. */
+export type BlockOp = "replace" | "delete" | "insert_after";
+
+/**
+ * A `replace block`/`delete block`/`insert after block` anchor resolved to a
+ * single line — almost always a bare statement the model mis-anchored, not a
+ * multi-line construct. The plain op is unambiguous for one line; the block
+ * form only earns its keep when it spares counting a closing line you cannot
+ * see. Reject and point at both fixes.
+ */
+export function blockSingleLineMessage(line: number, op: BlockOp): string {
+	const blockForm = op === "insert_after" ? "insert after block" : op === "delete" ? "delete block" : "replace block";
+	const plainForm =
+		op === "insert_after"
+			? `insert after ${line}:`
+			: op === "delete"
+				? `delete ${line}`
+				: `replace ${line}..${line}:`;
+	return (
+		`\`${blockForm} ${line}\` resolved a single-line block — line ${line} is a bare statement, not the opening line ` +
+		`of a multi-line construct. For that one line use \`${plainForm}\`; to act on an enclosing construct, anchor ${blockForm} ` +
+		`on the line that OPENS it (e.g. its \`function\`/\`if\`/\`case\` header), never a statement inside it.`
+	);
+}

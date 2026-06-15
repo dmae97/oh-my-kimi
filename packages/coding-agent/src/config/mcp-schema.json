@@ -89,6 +89,10 @@
         },
         "callbackPath": {
           "type": "string"
+        },
+        "prompt": {
+          "type": "string",
+          "description": "OAuth `prompt` parameter sent during authorization (default: \"consent\" so the provider always shows its account/consent screen; set to \"\" to omit)."
         }
       },
       "description": "Explicit OAuth client settings for servers that need them during /mcp reauth or initial connect."

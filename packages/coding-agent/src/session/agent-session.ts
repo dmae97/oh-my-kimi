@@ -965,6 +965,13 @@ export class AgentSession {
 	#activeRetryFallback: ActiveRetryFallbackState | undefined = undefined;
 	// Todo completion reminder state
 	#todoReminderCount = 0;
+	/**
+	 * Set true after a todo reminder is appended; cleared when the agent makes any tool-level
+	 * progress (toolResult) or a new user prompt arrives. Suppresses follow-up reminders within
+	 * the same agent self-continuation chain so a text-only acknowledgement ("paused at your
+	 * instruction") does not drive 1/3 → 2/3 → 3/3 without user input.
+	 */
+	#todoReminderAwaitingProgress = false;
 	#todoPhases: TodoPhase[] = [];
 	#toolChoiceQueue = new ToolChoiceQueue();
 
@@ -1828,6 +1835,10 @@ export class AgentSession {
 					isError?: boolean;
 					content?: Array<TextContent | ImageContent>;
 				};
+				// A tool actually ran. Clear the post-reminder suppression: the agent did
+				// productive work in response to the prior nudge, so the next text-only stop
+				// is allowed to escalate to the next reminder if todos remain incomplete.
+				this.#todoReminderAwaitingProgress = false;
 				// Invalidate streaming edit cache when edit tool completes to prevent stale data
 				if (toolName === "edit" && details?.path) {
 					this.#invalidateFileCacheForPath(details.path);
@@ -4750,6 +4761,7 @@ export class AgentSession {
 
 			// Reset todo reminder count on new user prompt
 			this.#todoReminderCount = 0;
+			this.#todoReminderAwaitingProgress = false;
 			this.#emptyStopRetryCount = 0;
 
 			await this.#maybeRestoreRetryFallbackPrimary();
@@ -5545,6 +5557,7 @@ export class AgentSession {
 		);
 
 		this.#todoReminderCount = 0;
+		this.#todoReminderAwaitingProgress = false;
 		this.#planReferenceSent = false;
 		this.#planReferencePath = "local://PLAN.md";
 		this.#reconnectToAgent();
@@ -6680,6 +6693,7 @@ export class AgentSession {
 			this.#pendingNextTurnMessages = [];
 			this.#scheduledHiddenNextTurnGeneration = undefined;
 			this.#todoReminderCount = 0;
+			this.#todoReminderAwaitingProgress = false;
 
 			// Inject the handoff document as a custom message
 			const handoffContent = createHandoffContext(handoffText);
@@ -7219,10 +7233,22 @@ export class AgentSession {
 			return;
 		}
 
+		// Suppress within a self-continuation chain: if the agent's last turn was driven by a
+		// prior reminder (and the agent took no tool-level action since), do not re-ping.
+		// The agent has already acknowledged; further escalation just wastes context and
+		// pressures the agent into busy-work or destructive ops (issue #2590).
+		if (this.#todoReminderAwaitingProgress) {
+			logger.debug("Todo completion: prior reminder still awaiting agent action; staying silent", {
+				attempt: this.#todoReminderCount,
+			});
+			return;
+		}
+
 		const remindersEnabled = this.settings.get("todo.reminders");
 		const todosEnabled = this.settings.get("todo.enabled");
 		if (!remindersEnabled || !todosEnabled) {
 			this.#todoReminderCount = 0;
+			this.#todoReminderAwaitingProgress = false;
 			return;
 		}
 
@@ -7235,6 +7261,7 @@ export class AgentSession {
 		const phases = this.getTodoPhases();
 		if (phases.length === 0) {
 			this.#todoReminderCount = 0;
+			this.#todoReminderAwaitingProgress = false;
 			return;
 		}
 
@@ -7252,6 +7279,7 @@ export class AgentSession {
 		const incomplete = incompleteByPhase.flatMap(phase => phase.tasks);
 		if (incomplete.length === 0) {
 			this.#todoReminderCount = 0;
+			this.#todoReminderAwaitingProgress = false;
 			return;
 		}
 
@@ -7280,6 +7308,7 @@ export class AgentSession {
 			maxAttempts: remindersMax,
 		});
 
+		this.#todoReminderAwaitingProgress = true;
 		// Inject reminder and continue the conversation
 		this.agent.appendMessage({
 			role: "developer",
@@ -8466,7 +8495,7 @@ export class AgentSession {
 		// src/http/h2_client/dispatch.zig)
 		return (
 			isUnexpectedSocketCloseMessage(errorMessage) ||
-			/overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|retry your request|network.?error|connection.?error|connection.?refused|other side closed|fetch failed|upstream.?connect|upstream.?request.?failed|reset before headers|socket hang up|timed? out|timeout|terminated|retry delay|stream stall|no error details in response|HTTP2(?:StreamReset|RefusedStream|EnhanceYourCalm)/i.test(
+			/overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|retry your request|network.?error|connection.?error|connection.?refused|other side closed|fetch failed|upstream.?connect|upstream.?request.?failed|reset before headers|socket hang up|timed? out|timeout|terminated|retry delay|stream stall|no error details in response|HTTP2(?:StreamReset|RefusedStream|EnhanceYourCalm)|malformed.?function.?call/i.test(
 				errorMessage,
 			)
 		);

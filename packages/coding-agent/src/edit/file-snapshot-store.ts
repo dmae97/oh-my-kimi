@@ -89,3 +89,46 @@ export async function recordFileSnapshot(
 		return undefined;
 	}
 }
+
+/**
+ * Leading line-number prefix the hashline/summary/grep formatters stamp on
+ * every displayed body line: `NN:` or a collapsed summary `NN-MM:` from `read`,
+ * optionally preceded by a grep `*` (match) / space (context) marker from
+ * `search`/`ast-grep`. Anchored at line start, so source content after the
+ * colon never matches.
+ */
+const HASHLINE_LINE_PREFIX = /^[ *]?(\d+)(?:-(\d+))?:/;
+
+/**
+ * The 1-indexed file lines a hashline-formatted body actually displayed.
+ * Single `NN:` rows contribute that line; a collapsed summary `NN-MM:` row
+ * (a `{ .. }` brace pair) contributes only its boundary lines `NN` and `MM` —
+ * the elided interior was never shown, so editing inside it must be rejected.
+ */
+export function parseSeenLinesFromHashlineBody(body: string): number[] {
+	const seen: number[] = [];
+	for (const row of body.split("\n")) {
+		const match = HASHLINE_LINE_PREFIX.exec(row);
+		if (!match) continue;
+		seen.push(Number(match[1]));
+		if (match[2] !== undefined) seen.push(Number(match[2]));
+	}
+	return seen;
+}
+
+/**
+ * Attach the lines a read displayed to the snapshot it minted, so the patcher
+ * can reject edits anchored on lines the model never saw. Best-effort: a no-op
+ * when the body has no numbered rows or the snapshot already aged out. `tag`
+ * must be the tag returned when this exact content was recorded.
+ */
+export function recordSeenLinesFromBody(
+	session: FileSnapshotStoreOwner,
+	absolutePath: string,
+	tag: string,
+	body: string,
+): void {
+	const seen = parseSeenLinesFromHashlineBody(body);
+	if (seen.length === 0) return;
+	getFileSnapshotStore(session).recordSeenLines(canonicalSnapshotKey(absolutePath), tag, seen);
+}

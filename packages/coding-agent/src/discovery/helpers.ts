@@ -5,6 +5,7 @@ import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { FileType, glob } from "@oh-my-pi/pi-natives";
 import {
 	CONFIG_DIR_NAME,
+	getAgentDir,
 	getConfigDirName,
 	getPluginsDir,
 	getProjectDir,
@@ -86,6 +87,11 @@ export type SourceId = keyof typeof SOURCE_PATHS;
  * Get user-level path for a source.
  */
 export function getUserPath(ctx: LoadContext, source: SourceId, subpath: string): string | null {
+	// Native user config is profile-scoped via getAgentDir() (the active profile's
+	// agent dir), matching builtin.ts and getMCPConfigPath("user"). External tools
+	// (~/.claude, ~/.gemini, …) are intentionally not profile-scoped, so they keep
+	// resolving against ctx.home below.
+	if (source === "native") return path.join(getAgentDir(), subpath);
 	const paths = SOURCE_PATHS[source];
 	if (!paths.userAgent) return null;
 	return path.join(ctx.home, paths.userAgent, subpath);
@@ -568,6 +574,25 @@ export async function discoverExtensionModulePaths(_ctx: LoadContext, dir: strin
 	]);
 	const indexFiles = [...globIndexFiles, ...linkedFiles.indexFiles];
 	const packageJsonFiles = [...globPackageJsonFiles, ...linkedFiles.packageJsonFiles];
+
+	// The native glob walker runs with follow_links=false, so a symlinked extension
+	// directory is yielded as a Symlink entry but never descended into: its inner
+	// index.{ts,js}/package.json are invisible to the `*/...` patterns above.
+	// Detect top-level symlinked directories and synthesize the equivalent subdir
+	// matches so the resolution below treats them like real directories. Symlinked
+	// *files* already match, because the native file-type filter resolves a
+	// symlink's target type for File filters.
+	const topLevelEntries = await readDirEntries(dir);
+	for (const entry of topLevelEntries) {
+		if (!entry.isSymbolicLink()) continue;
+		// readDirEntries follows the symlink: a link to a file/dangling link yields [].
+		const subEntries = await readDirEntries(path.join(dir, entry.name));
+		const hasEntry = (name: string): boolean =>
+			subEntries.some(e => e.name === name && (e.isFile() || e.isSymbolicLink()));
+		if (hasEntry("package.json")) packageJsonFiles.push({ path: `${entry.name}/package.json` });
+		if (hasEntry("index.ts")) indexFiles.push({ path: `${entry.name}/index.ts` });
+		else if (hasEntry("index.js")) indexFiles.push({ path: `${entry.name}/index.js` });
+	}
 
 	// Process direct files
 	for (const match of directFiles) {

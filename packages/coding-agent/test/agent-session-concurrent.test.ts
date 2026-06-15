@@ -153,6 +153,7 @@ describe("AgentSession concurrent prompt guard", () => {
 		expect(session.queuedMessageCount).toBe(1);
 
 		// Cleanup
+		session.agent.clearAllQueues();
 		await session.abort();
 		await firstPrompt.catch(() => {});
 	});
@@ -169,6 +170,7 @@ describe("AgentSession concurrent prompt guard", () => {
 		expect(session.queuedMessageCount).toBe(1);
 
 		// Cleanup
+		session.agent.clearAllQueues();
 		await session.abort();
 		await firstPrompt.catch(() => {});
 	});

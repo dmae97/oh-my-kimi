@@ -1,7 +1,7 @@
 {
 	"type": "module",
 	"name": "@oh-my-pi/pi-wire",
-	"version": "15.13.0",
+	"version": "15.13.1",
 	"description": "Shared wire protocol types for Oh My Pi packages",
 	"homepage": "https://omp.sh",
 	"author": "Can Boluk",

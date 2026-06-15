@@ -161,5 +161,9 @@ export function normalizeGeneratedTitle(value: string | null | undefined): strin
 		.replace(/[.!?]$/, "")
 		.trim();
 	if (!title || title.toLowerCase() === NO_TITLE_SENTINEL) return null;
-	return title;
+	return titleCase(title);
+}
+
+function titleCase(value: string): string {
+	return value.replace(/\b\p{Ll}/gu, c => c.toUpperCase());
 }

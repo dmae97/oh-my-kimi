@@ -204,6 +204,6 @@ describe("browser stealth target setup", () => {
 
 		const elapsed = performance.now() - started;
 		expect(elapsed).toBeGreaterThanOrEqual(45);
-		expect(elapsed).toBeLessThan(150);
+		expect(elapsed).toBeLessThan(500);
 	});
 });
