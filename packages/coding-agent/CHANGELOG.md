@@ -11,6 +11,10 @@
 
 - Session dump output now renders message history using the model's native dialect turn envelope instead of markdown role headings
 
+### Fixed
+
+- Fixed `startup.quiet` leaving MCP and LSP startup status events visible during launch ([#2639](https://github.com/can1357/oh-my-pi/issues/2639)).
+
 ## [15.13.3] - 2026-06-15
 
 ### Added
