@@ -542,6 +542,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (eventBus) {
 			this.#eventBusUnsubscribers.push(
 				eventBus.on(LSP_STARTUP_EVENT_CHANNEL, data => {
+					if (this.settings.get("startup.quiet")) return;
 					this.#handleLspStartupEvent(data as LspStartupEvent);
 				}),
 			);
@@ -551,6 +552,7 @@ export class InteractiveMode implements InteractiveModeContext {
 						logger.warn("Ignoring malformed mcp:connecting event", { data });
 						return;
 					}
+					if (this.settings.get("startup.quiet")) return;
 					this.showStatus(formatMCPConnectingMessage(data.serverNames));
 				}),
 			);

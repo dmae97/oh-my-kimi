@@ -103,6 +103,17 @@ describe("InteractiveMode MCP connecting banner", () => {
 		expect(showStatusSpy).toHaveBeenCalledWith(formatMCPConnectingMessage(serverNames));
 	});
 
+	it("does not render the mcp:connecting status when startup.quiet is enabled", () => {
+		session.settings.set("startup.quiet", true);
+		const showStatusSpy = vi.spyOn(mode, "showStatus").mockImplementation(() => {});
+
+		eventBus.emit(MCP_CONNECTING_EVENT_CHANNEL, {
+			serverNames: ["sequential", "critic"],
+		} satisfies McpConnectingEvent);
+
+		expect(showStatusSpy).not.toHaveBeenCalled();
+	});
+
 	it("rejects a malformed mcp:connecting payload via the guard instead of letting it throw", () => {
 		const showStatusSpy = vi.spyOn(mode, "showStatus").mockImplementation(() => {});
 		const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
