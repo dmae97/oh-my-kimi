@@ -2335,9 +2335,10 @@ function buildRootPromptMessagesJson(
 		} else if (msg.role === "toolResult") {
 			const text = toolResultToText(msg);
 			if (!text) continue;
+			const prefix = msg.isError ? "[Tool Error]" : "[Tool Result]";
 			pushJson({
 				role: "user",
-				content: [{ type: "text", text: `[Tool Result]\n${text}` }],
+				content: [{ type: "text", text: `${prefix}\n${text}` }],
 			});
 		}
 	}
@@ -2415,10 +2416,11 @@ function buildConversationTurns(
 				// Include tool results as assistant text for context
 				const text = toolResultToText(stepMsg);
 				if (text) {
+					const prefix = stepMsg.isError ? "[Tool Error]" : "[Tool Result]";
 					const step = create(ConversationStepSchema, {
 						message: {
 							case: "assistantMessage",
-							value: create(AssistantMessageSchema, { text: `[Tool Result]\n${text}` }),
+							value: create(AssistantMessageSchema, { text: `${prefix}\n${text}` }),
 						},
 					});
 					stepBlobIds.push(storeCursorBlob(blobStore, toBinary(ConversationStepSchema, step)));
