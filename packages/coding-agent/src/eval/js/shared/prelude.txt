@@ -117,10 +117,19 @@ if (!globalThis.__omp_js_prelude_loaded__) {
 	};
 
 	const agent = async (prompt, opts, ...rest) => {
-		const o = optionsArg("agent", opts, rest, ["agentType", "model", "label", "schema"], "{ agentType, model, label, schema }");
-		const res = await globalThis.__omp_call_tool__("__agent__", { prompt, ...o });
+		const o = optionsArg("agent", opts, rest, ["agentType", "model", "label", "schema"], "{ agentType, model, label, schema, returnHandle }");
+		const { returnHandle, ...callArgs } = o;
+		const res = await globalThis.__omp_call_tool__("__agent__", { prompt, ...callArgs });
 		const text = res && typeof res === "object" ? res.text : res;
-		return hasOwn(o, "schema") ? JSON.parse(text) : text;
+		const parsed = hasOwn(callArgs, "schema") ? JSON.parse(text) : text;
+		if (!returnHandle) return parsed;
+		const details = res && typeof res === "object" ? res.details : undefined;
+		if (!details || typeof details !== "object" || details.id == null) {
+			return { text, output: text, handle: null, id: null, agent: null };
+		}
+		const node = { text, output: text, handle: `agent://${details.id}`, id: details.id, agent: details.agent ?? null };
+		if (hasOwn(callArgs, "schema")) node.data = parsed;
+		return node;
 	};
 
 	// Pool ceiling mirrors the task tool's `task.maxConcurrency` setting so an
