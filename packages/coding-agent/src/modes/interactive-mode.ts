@@ -1123,6 +1123,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		imageLinks?: (string | undefined)[];
 		customType?: string;
 		display?: boolean;
+		streamingBehavior?: "steer" | "followUp";
 	}): SubmittedUserInput {
 		const submission: SubmittedUserInput = {
 			text: input.text,
@@ -1130,6 +1131,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			imageLinks: input.imageLinks,
 			customType: input.customType,
 			display: input.display,
+			streamingBehavior: input.streamingBehavior,
 			cancelled: false,
 			started: false,
 		};

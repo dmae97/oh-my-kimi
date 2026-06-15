@@ -689,11 +689,17 @@ export class InputController {
 				this.ctx.pendingImages = [];
 				this.ctx.pendingImageLinks = [];
 
-				// Render user message immediately, then let session events catch up
+				// Render user message immediately, then let session events catch up.
+				// Tag the submission as "steer": this is a normal Enter the controller
+				// believed was idle, but a background turn can start in the gap before
+				// `submitInteractiveInput` dispatches it. Steering matches the
+				// streaming-branch Enter (above) and keeps the message from throwing
+				// AgentBusyError on that race.
 				const submission = this.ctx.startPendingSubmission({
 					text,
 					images,
 					imageLinks: inputImageLinks,
+					streamingBehavior: "steer",
 				});
 
 				this.ctx.onInputCallback(submission);
