@@ -69,7 +69,7 @@ function normalizeTinyTitleGenerateOptions(
  * Hidden subcommand on the main CLI that boots the tiny-model worker in the
  * spawned subprocess. Kept in sync with the dispatch in `cli.ts`.
  */
-export const TINY_WORKER_ARG = "--tiny-worker";
+export const TINY_WORKER_ARG = "__omp_worker_tiny_inference";
 
 function readTinyModelSetting(path: "providers.tinyModelDevice" | "providers.tinyModelDtype"): string | undefined {
 	try {

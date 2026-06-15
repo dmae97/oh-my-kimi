@@ -141,6 +141,27 @@ export async function disposeAllVmContexts(): Promise<void> {
 	await Promise.all(all.map(session => killSession(session, new ToolError("JS context disposed"), { force: false })));
 }
 
+/**
+ * Smoke probe: spawn the JS eval worker through the worker-host entry and prove
+ * it answers the `init` handshake on a real worker thread (not the inline
+ * fallback). Catches the silent worker-load and init-message-drop regressions
+ * that otherwise strand every cell on the init timeout in a distribution build —
+ * the failure mode that motivated `installWorkerInbox`. Wired into
+ * `omp --smoke-test` so binary / source / tarball installs all exercise it.
+ */
+export async function smokeTestJsEvalWorker(): Promise<void> {
+	const worker = spawnJsWorker();
+	const session: JsSession = { sessionKey: "smoke", worker, state: "alive", pending: new Map() };
+	try {
+		await initWorker(session, { cwd: process.cwd(), sessionId: "smoke" }, WORKER_INIT_TIMEOUT_MS);
+		if (worker.mode !== "worker") {
+			throw new Error("JS eval worker smoke fell back to the inline worker (real worker failed to start)");
+		}
+	} finally {
+		await worker.terminate().catch(() => undefined);
+	}
+}
+
 async function runOnce(
 	session: JsSession,
 	options: {
@@ -447,7 +468,7 @@ function spawnJsWorker(): WorkerHandle {
 	try {
 		const hostEntry = workerHostEntry();
 		const worker = hostEntry
-			? new Worker(hostEntry, { type: "module", argv: ["__omp_js_eval_worker"] })
+			? new Worker(hostEntry, { type: "module", argv: ["__omp_worker_js_eval"] })
 			: new Worker(new URL("./worker-entry.ts", import.meta.url).href, { type: "module" });
 		return wrapBunWorker(worker);
 	} catch (err) {

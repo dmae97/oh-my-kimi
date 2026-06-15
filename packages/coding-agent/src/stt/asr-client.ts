@@ -72,7 +72,7 @@ const SMOKE_TEST_TIMEOUT_MS = 30_000;
  * Hidden subcommand on the main CLI that boots the speech-recognition worker in
  * the spawned subprocess. Kept in sync with the dispatch in `cli.ts`.
  */
-export const STT_WORKER_ARG = "__omp_stt_worker";
+export const STT_WORKER_ARG = "__omp_worker_stt";
 
 function readTinyModelSetting(key: "providers.tinyModelDevice" | "providers.tinyModelDtype"): string | undefined {
 	try {
