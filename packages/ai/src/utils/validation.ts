@@ -796,6 +796,146 @@ function normalizeOptionalNullsForSchema(
 }
 
 // ============================================================================
+// String-encoded array coercion for union(string, array) schemas.
+// ============================================================================
+
+/**
+ * Detects whether a schema node accepts BOTH the `string` and `array` JSON
+ * Schema types. Recognizes:
+ *   - `{ "type": ["string", "array"] }` (multi-type),
+ *   - `{ "anyOf": [...] }` / `{ "oneOf": [...] }` with at least one string
+ *     branch and one array branch.
+ */
+function schemaAcceptsStringAndArray(schema: Record<string, unknown>): boolean {
+	if (Array.isArray(schema.type) && schema.type.includes("string") && schema.type.includes("array")) {
+		return true;
+	}
+
+	for (const key of ["anyOf", "oneOf"] as const) {
+		const branches = schema[key];
+		if (!Array.isArray(branches)) continue;
+		let hasString = false;
+		let hasArray = false;
+		for (const branch of branches) {
+			if (!branch || typeof branch !== "object") continue;
+			const branchType = (branch as Record<string, unknown>).type;
+			if (branchType === "string" || (Array.isArray(branchType) && branchType.includes("string"))) {
+				hasString = true;
+			}
+			if (branchType === "array" || (Array.isArray(branchType) && branchType.includes("array"))) {
+				hasArray = true;
+			}
+			if (hasString && hasArray) return true;
+		}
+	}
+	return false;
+}
+
+function schemaNodeAcceptsArray(schema: unknown): schema is Record<string, unknown> {
+	if (!schema || typeof schema !== "object") return false;
+	const schemaObject = schema as Record<string, unknown>;
+	const schemaType = schemaObject.type;
+	return schemaType === "array" || (Array.isArray(schemaType) && schemaType.includes("array"));
+}
+
+function parsedArrayMatchesArrayBranch(schema: Record<string, unknown>, value: unknown[]): boolean {
+	if (schemaNodeAcceptsArray(schema)) {
+		return isJsonSchemaValueValid(schema, value);
+	}
+
+	for (const key of ["anyOf", "oneOf"] as const) {
+		const branches = schema[key];
+		if (!Array.isArray(branches)) continue;
+		const branchList: unknown[] = branches;
+		for (const branch of branchList) {
+			if (!schemaNodeAcceptsArray(branch)) continue;
+			if (isJsonSchemaValueValid(branch, value)) return true;
+		}
+	}
+	return false;
+}
+
+/**
+ * Pre-validation normalization: when a schema field accepts BOTH `string` and
+ * `array`, providers that double-serialize tool arguments (e.g. Z.AI / GLM)
+ * deliver array values as JSON-encoded strings like `'["a","b"]'`. Zod's
+ * `union([string, array])` happily accepts that string against the string
+ * branch, so the type-error driven coercion in {@link coerceArgsFromIssues}
+ * never fires, and downstream tools treat the literal `["a","b"]` as a path
+ * (silently producing zero matches or glob parse errors).
+ *
+ * Walk the schema; when both shapes are accepted AND the incoming value is a
+ * JSON-array-shaped string, substitute the parsed array only if it validates
+ * against the schema's array branch. Conservative: array-shaped strings like
+ * `"[1]"` stay on the string branch when the array branch is `string[]`.
+ *
+ * See https://github.com/can1357/oh-my-pi/issues/1788.
+ */
+function normalizeStringEncodedArrayUnions(schema: unknown, value: unknown): { value: unknown; changed: boolean } {
+	if (value === null || value === undefined) return { value, changed: false };
+	if (schema === null || typeof schema !== "object") return { value, changed: false };
+
+	const schemaObject = schema as Record<string, unknown>;
+
+	// Leaf case: this schema node accepts both string and array.
+	if (typeof value === "string" && schemaAcceptsStringAndArray(schemaObject)) {
+		const trimmed = value.trim();
+		if (!trimmed.startsWith("[")) return { value, changed: false };
+		try {
+			const parsed = JSON.parse(trimmed) as unknown;
+			if (Array.isArray(parsed) && parsedArrayMatchesArrayBranch(schemaObject, parsed)) {
+				return { value: parsed, changed: true };
+			}
+		} catch {
+			// Not valid JSON — leave the string alone for the validator to handle.
+		}
+		return { value, changed: false };
+	}
+
+	// Recurse into array items.
+	if (Array.isArray(value)) {
+		const itemSchema = schemaObject.items;
+		if (!itemSchema || typeof itemSchema !== "object" || Array.isArray(itemSchema)) {
+			return { value, changed: false };
+		}
+		let changed = false;
+		let nextValue = value;
+		for (let i = 0; i < value.length; i += 1) {
+			const normalized = normalizeStringEncodedArrayUnions(itemSchema, value[i]);
+			if (!normalized.changed) continue;
+			if (!changed) {
+				nextValue = [...value];
+				changed = true;
+			}
+			nextValue[i] = normalized.value;
+		}
+		return { value: changed ? nextValue : value, changed };
+	}
+
+	// Recurse into object properties.
+	if (schemaObject.type !== "object") return { value, changed: false };
+	if (typeof value !== "object" || value === null) return { value, changed: false };
+	const properties = schemaObject.properties;
+	if (!properties || typeof properties !== "object") return { value, changed: false };
+
+	const propsObject = properties as Record<string, unknown>;
+	const valueObject = value as Record<string, unknown>;
+	let changed = false;
+	let nextValue = valueObject;
+	for (const [key, propertySchema] of Object.entries(propsObject)) {
+		if (!(key in nextValue)) continue;
+		const normalized = normalizeStringEncodedArrayUnions(propertySchema, nextValue[key]);
+		if (!normalized.changed) continue;
+		if (!changed) {
+			nextValue = { ...nextValue };
+			changed = true;
+		}
+		nextValue[key] = normalized.value;
+	}
+	return { value: changed ? nextValue : valueObject, changed };
+}
+
+// ============================================================================
 // Zod issue → coercion bridge
 // ============================================================================
 
@@ -1095,6 +1235,16 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): ToolCall[
 		changed = true;
 	}
 
+	// Then re-shape JSON-stringified arrays whose schema accepts both string
+	// and array (e.g. `paths: string | string[]`). Without this, zod accepts
+	// the literal `'["a","b"]'` as a string and downstream tools treat it as
+	// a single path with embedded glob brackets — silent zero results.
+	const stringEncodedArrayNorm = normalizeStringEncodedArrayUnions(json, normalizedArgs);
+	if (stringEncodedArrayNorm.changed) {
+		normalizedArgs = stringEncodedArrayNorm.value;
+		changed = true;
+	}
+
 	let result = validateContext(ctx, normalizedArgs);
 	if (result.success) return result.value as ToolCall["arguments"];
 
@@ -1108,6 +1258,15 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): ToolCall[
 		const nullNormalization = normalizeOptionalNullsForSchema(json, normalizedArgs);
 		if (nullNormalization.changed) {
 			normalizedArgs = nullNormalization.value;
+		}
+
+		// Re-run the union-string coercion because `coerceArgsFromIssues` may
+		// have just unwrapped a JSON-stringified object at the root or inside a
+		// nested field — exposing `string | string[]` descendants the initial
+		// pre-validation pass could not reach.
+		const stringEncodedArrayNormPass = normalizeStringEncodedArrayUnions(json, normalizedArgs);
+		if (stringEncodedArrayNormPass.changed) {
+			normalizedArgs = stringEncodedArrayNormPass.value;
 		}
 
 		result = validateContext(ctx, normalizedArgs);

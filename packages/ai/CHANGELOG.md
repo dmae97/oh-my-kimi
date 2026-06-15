@@ -656,6 +656,10 @@
 - Fixed Cloud Code Assist (Gemini / Antigravity) rejecting tool schemas with `Invalid JSON payload received. Unknown name "propertyNames"` (HTTP 400) when a tool exposed a property literally named `properties` (e.g. the Resend MCP `create_contact` tool). The schema normalizer's `insideProperties` flag was re-asserted when descending into such a property's value schema, so Google-unsupported keywords (`propertyNames`, `additionalProperties`, …) nested inside it were never stripped. The flag is now only set when entering a real `properties` map from a schema node, not from within another `properties` map.
 - Fixed local/self-hosted providers leaking machine-specific endpoints into the bundled `models.json`. A `generate-models` run on a machine with a LiteLLM proxy baked 1202 `litellm` models pinned to `http://localhost:4000/v1` into the committed catalog. `litellm` (and `lm-studio`) now join `ollama`/`vllm` in the generator's discovery-only exclusion set, so local providers are never fetched during generation nor written to `models.json` — they are discovered dynamically at runtime instead. LiteLLM model discovery now enriches metadata against models.dev (the same reference source the other gateway providers use) rather than a bundled reference map. Added a regression test pinning the invariant (no local provider blocks, no loopback/private-network `baseUrl`s in the bundled catalog).
 
+### Fixed
+
+- Fixed `validateToolArguments` silently accepting JSON-encoded array strings (e.g. `'["a","b"]'`) against `union(string, array<string>)` schemas — providers that double-serialize tool-call arguments (Z.AI / GLM) caused tools like `search` to receive the literal `["a","b"]` as a single path, producing zero matches (single element) or glob parse errors (multi-element). A new pre-validation pass parses JSON-array-shaped strings when the schema explicitly accepts both shapes. ([#1788](https://github.com/can1357/oh-my-pi/issues/1788))
+
 ## [15.8.2] - 2026-06-03
 
 ### Fixed
