@@ -30,6 +30,10 @@
 - Fixed `eval` JS cells (and browser-tab worker startup) always stalling for the full init timeout — typically the cell's whole 30s budget — before silently falling back to the slower inline worker. The self-dispatching CLI host imports the worker module dynamically from its argv dispatch, so the worker's own `parentPort.on("message")` attached only after Bun flushed the messages the parent posted before spawn; the synchronously-posted `init` handshake was dropped and never answered with `ready`. The host now installs a buffering `parentPort` inbox synchronously in the entry's sync prefix (before importing the worker module) and the worker binds it on load, replaying the buffered handshake. `omp --smoke-test` now also spawns the JS eval worker through the host entry and asserts it handshakes on a real worker thread.
 - Fixed pre-prompt context-full compaction on OpenAI Responses sessions to use provider-anchored context usage when available, so large encrypted reasoning signatures no longer trigger automatic maintenance while the visible context percentage remains below threshold ([#2628](https://github.com/can1357/oh-my-pi/issues/2628)).
 
+### Fixed
+
+- Fixed Windows bash path handling so MSYS/Git-Bash drive aliases like `/d/project` and WSL-style `/mnt/d/project` normalize to native drive paths consistently across the bash tool cwd validation and brush filesystem builtins ([#2634](https://github.com/can1357/oh-my-pi/issues/2634)).
+
 ## [15.13.2] - 2026-06-15
 
 ### Added

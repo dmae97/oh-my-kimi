@@ -164,7 +164,8 @@ impl<SE: crate::extensions::ShellExtensions> crate::Shell<SE> {
 	///
 	/// * `path` - The path to get the absolute form of.
 	pub fn absolute_path(&self, path: impl AsRef<Path>) -> PathBuf {
-		let path = path.as_ref();
+		let normalized_path = crate::sys::fs::normalize_shell_path(path.as_ref());
+		let path = normalized_path.as_ref();
 		if path.as_os_str().is_empty() || path.is_absolute() {
 			path.to_owned()
 		} else {
