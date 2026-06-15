@@ -2161,6 +2161,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				}
 				appendPrompt = parts.join("\n\n");
 			}
+			// Owned/in-band tool syntax (non-native) repeats the catalog as `# Tool:`
+			// sections; native tool calling lets the compact name list suffice.
+			const nativeTools =
+				resolveToolCallSyntax(settings.get("tools.format"), agent?.state.model ?? model) === undefined;
 			const defaultPrompt = await buildSystemPromptInternal({
 				cwd,
 				skills,
@@ -2172,6 +2176,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				skillsSettings: settings.getGroup("skills"),
 				appendSystemPrompt: appendPrompt,
 				repeatToolDescriptions,
+				nativeTools,
 				intentField,
 				mcpDiscoveryMode: hasDiscoverableTools,
 				mcpDiscoveryServerSummaries: discoverableToolSummary.servers.map(formatDiscoverableToolServerSummary),

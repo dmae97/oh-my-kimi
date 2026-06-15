@@ -138,7 +138,7 @@ Here are the functions available in JSONSchema format:
 {{ TOOL CONFIGURATION }}
 ```
 
-`{{ TOOL DEFINITIONS IN JSON SCHEMA }}` is your `tools` array serialized to JSON Schema. `{{ FORMATTING INSTRUCTIONS }}` is the (unpublished) block teaching the model the `<function_calls>`/`<invoke name>`/`<parameter name>` syntax shown under [Tool-call format → underlying XML](#underlying-xml-modern-attribute-form). The note "parsed with regular expressions" is why output need not be well-formed XML.
+`{{ TOOL DEFINITIONS IN JSON SCHEMA }}` is your `tools` array serialized to JSON Schema. `{{ FORMATTING INSTRUCTIONS }}` is the (unpublished) block teaching the model the XML syntax with `antml:` namespace prefixes (shown under [Tool-call format → underlying XML](#underlying-xml-modern-attribute-form-with-antml-namespace)). The note "parsed with regular expressions" is why output need not be well-formed XML.
 
 ---
 
@@ -175,7 +175,7 @@ Key facts for a parser:
 - A leading `text` block is optional and informational; do not rely on its wording.
 - Match calls to results by `id` → `tool_use_id`.
 
-### Underlying XML (modern attribute form)
+### Underlying XML (modern attribute form with antml: namespace)
 
 Before the API converts it, the model literally emits an XML block. The current (Claude 3+) form is attribute-based:
 
@@ -188,7 +188,7 @@ Before the API converts it, the model literally emits an XML block. The current 
 </function_calls>
 ```
 
-`[Partially verified]` Anthropic does not publish the literal `{{ FORMATTING INSTRUCTIONS }}`, so the exact tag spelling for current models is reconstructed from the trained format (and matches the task's reference anchor) rather than an official verbatim doc. In production, current Claude models prefix these tags with an `antml:` XML namespace (e.g. `<function_calls>`, `<invoke name="…">`, `<parameter name="…">`); the namespace is widely observed but **not** documented officially — treat it as `[unverified]`. The API strips all of this and exposes only the JSON `tool_use` block; integrators should target the JSON, not the XML.
+Current Claude models prefix these tags with an `antml:` XML namespace prefix (e.g. `antml:function_calls`, `antml:invoke name="…"`, `antml:parameter name="…"`). The API strips all of this and exposes only the JSON `tool_use` block; integrators should target the JSON, not the XML.
 
 ---
 

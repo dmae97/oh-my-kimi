@@ -3,8 +3,8 @@
  */
 import type { AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { INTENT_FIELD } from "@oh-my-pi/pi-agent-core";
-import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai";
-import { isZodSchema, zodToWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
+import type { AssistantMessage, Model, ToolExample, TSchema } from "@oh-my-pi/pi-ai";
+import { renderToolInventory } from "@oh-my-pi/pi-ai/grammar";
 import { getVisibleThinkingText } from "../utils/thinking-display";
 import {
 	type BashExecutionMessage,
@@ -23,6 +23,7 @@ export interface SessionDumpToolInfo {
 	name: string;
 	description: string;
 	parameters: unknown;
+	examples?: readonly ToolExample[];
 }
 
 export interface FormatSessionDumpTextOptions {
@@ -31,28 +32,6 @@ export interface FormatSessionDumpTextOptions {
 	model?: Model | null;
 	thinkingLevel?: ThinkingLevel | string | null;
 	tools?: readonly SessionDumpToolInfo[];
-}
-
-function stripTypeBoxFields(obj: unknown): unknown {
-	if (Array.isArray(obj)) {
-		return obj.map(stripTypeBoxFields);
-	}
-	if (obj && typeof obj === "object") {
-		const result: Record<string, unknown> = {};
-		for (const [k, v] of Object.entries(obj)) {
-			if (!k.startsWith("TypeBox.")) {
-				result[k] = stripTypeBoxFields(v);
-			}
-		}
-		return result;
-	}
-	return obj;
-}
-
-/** Resolve tool parameters to a plain JSON Schema object for dump output. */
-function toolParametersToJsonSchema(parameters: unknown): unknown {
-	if (isZodSchema(parameters)) return zodToWireSchema(parameters);
-	return stripTypeBoxFields(parameters);
 }
 
 /** Serialize an object as XML parameter elements, one per key. */
@@ -94,13 +73,13 @@ export function formatSessionDumpText(options: FormatSessionDumpTextOptions): st
 	const tools = options.tools ?? [];
 	if (tools.length > 0) {
 		lines.push("## Available Tools\n");
-		for (const tool of tools) {
-			lines.push(`<tool name="${tool.name}">`);
-			lines.push(tool.description);
-			const parametersClean = toolParametersToJsonSchema(tool.parameters);
-			lines.push(`\nParameters:\n${formatArgsAsXml(parametersClean as Record<string, unknown>)}`);
-			lines.push("<" + "/tool>\n");
-		}
+		const inventoryTools = tools.map(tool => ({
+			name: tool.name,
+			description: tool.description,
+			parameters: tool.parameters as TSchema,
+			examples: tool.examples,
+		}));
+		lines.push(renderToolInventory(inventoryTools, options.model?.id ?? ""));
 		lines.push("\n");
 	}
 

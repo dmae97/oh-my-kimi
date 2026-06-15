@@ -6,7 +6,7 @@
  * in-process and sharing auth/model infrastructure across tasks.
  */
 import type { AgentEvent, AgentMessage, ResolvedThinkingLevel, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { Model } from "@oh-my-pi/pi-ai";
+import type { Model, ToolExample } from "@oh-my-pi/pi-ai";
 import type { AgentSession, AgentSessionEvent, AuthStorage, SessionStats } from "@oh-my-pi/pi-coding-agent";
 import {
 	type CreateAgentSessionResult,
@@ -169,7 +169,7 @@ export class InProcessClient {
 		systemPrompt?: string[];
 		model?: Model;
 		thinkingLevel?: ThinkingLevel | undefined;
-		dumpTools?: Array<{ name: string; description: string; parameters: unknown }>;
+		dumpTools?: Array<{ name: string; description: string; parameters: unknown; examples?: readonly ToolExample[] }>;
 	}> {
 		const session = this.#session!;
 		return {
@@ -181,6 +181,7 @@ export class InProcessClient {
 				name: tool.name,
 				description: tool.description,
 				parameters: tool.parameters,
+				examples: tool.examples,
 			})),
 		};
 	}

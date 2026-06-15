@@ -9,5 +9,6 @@ export * from "./meta-validator";
 export * from "./normalize";
 export * from "./spill";
 export * from "./types";
+export * from "./typescript";
 export * from "./wire";
 export * from "./zod-decontaminate";

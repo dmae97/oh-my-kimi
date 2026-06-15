@@ -24,27 +24,6 @@ Use tools whenever they materially improve correctness, completeness, or groundi
 - SHOULD parallelize calls when possible.
 {{#has tools "task"}}- User says `parallel`/`parallelize` → MUST use `{{toolRefs.task}}` subagents; parallel tool calls alone do not satisfy.{{/has}}
 
-{{#if toolInfo.length}}
-# Inventory
-{{#if mcpDiscoveryMode}}
-<discovery-notice>
-{{#if hasMCPDiscoveryServers}}Discoverable MCP servers in this session: {{#list mcpDiscoveryServerSummaries join=", "}}{{this}}{{/list}}.{{/if}}
-If the task may involve external systems, SaaS APIs, chat, tickets, databases, deployments, or other non-local integrations, you SHOULD call `{{toolRefs.search_tool_bm25}}` before concluding no such tool exists.
-</discovery-notice>
-{{/if}}
-{{#if repeatToolDescriptions}}
-{{#each toolInfo}}
-<tool name={{name}}>
-{{description}}
-</tool>
-{{/each}}
-{{else}}
-{{#each toolInfo}}
-- {{#if label}}{{label}}: `{{name}}`{{else}}`{{name}}`{{/if}}
-{{/each}}
-{{/if}}
-{{/if}}
-
 # I/O
 - For tools taking `path` or path-like fields, prefer relative paths.
 {{#if intentTracing}}- Most tools have a `{{intentField}}` parameter. Fill it with a concise intent in present participle form, 2-6 words, no period, capitalized.{{/if}}
@@ -113,6 +92,23 @@ Everything else — multi-file changes, refactors, new features, tests, investig
 Delegation is preferred here. Once the design is settled, you SHOULD fan substantial work out to `{{toolRefs.task}}` subagents instead of doing everything yourself — multi-file changes, refactors, new features, tests, and investigations are strong candidates. Use your judgment for small, single-file, or interactive work.{{#if taskBatch}} When you delegate independent slices, batch them into one parallel `{{toolRefs.task}}` call rather than serializing them.{{/if}}
 {{/if}}
 {{/has}}
+{{/if}}
+
+{{#if toolInfo.length}}
+# Inventory
+{{#if mcpDiscoveryMode}}
+<discovery-notice>
+{{#if hasMCPDiscoveryServers}}Discoverable MCP servers in this session: {{#list mcpDiscoveryServerSummaries join=", "}}{{this}}{{/list}}.{{/if}}
+If the task may involve external systems, SaaS APIs, chat, tickets, databases, deployments, or other non-local integrations, you SHOULD call `{{toolRefs.search_tool_bm25}}` before concluding no such tool exists.
+</discovery-notice>
+{{/if}}
+{{#if toolListMode}}
+{{#each toolInfo}}
+- {{#if label}}{{label}}: `{{name}}`{{else}}`{{name}}`{{/if}}
+{{/each}}
+{{else}}
+{{toolInventory}}
+{{/if}}
 {{/if}}
 
 ENV

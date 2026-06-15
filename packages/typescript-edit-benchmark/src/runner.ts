@@ -9,7 +9,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { formatHashlineHeader, InMemorySnapshotStore } from "@oh-my-pi/hashline";
 import type { AgentMessage, ResolvedThinkingLevel, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { Model } from "@oh-my-pi/pi-ai";
+import type { Model, ToolExample } from "@oh-my-pi/pi-ai";
 import { formatSessionDumpText, RpcClient } from "@oh-my-pi/pi-coding-agent";
 import { prompt } from "@oh-my-pi/pi-utils";
 import { diffLines } from "diff";
@@ -37,7 +37,7 @@ type ConversationDumpSessionState = {
 	systemPrompt?: string[];
 	model?: Model;
 	thinkingLevel?: ThinkingLevel | undefined;
-	dumpTools?: Array<{ name: string; description: string; parameters: unknown }>;
+	dumpTools?: Array<{ name: string; description: string; parameters: unknown; examples?: readonly ToolExample[] }>;
 };
 
 /** Common interface for both RPC and in-process clients */
@@ -103,7 +103,7 @@ type ConversationDumpSnapshot = {
 	systemPrompt?: string[];
 	model?: Model;
 	thinkingLevel?: ThinkingLevel | undefined;
-	dumpTools?: Array<{ name: string; description: string; parameters: unknown }>;
+	dumpTools?: Array<{ name: string; description: string; parameters: unknown; examples?: readonly ToolExample[] }>;
 };
 
 function sanitizeDumpPathSegment(value: string): string {

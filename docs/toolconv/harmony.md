@@ -110,21 +110,21 @@ format?: "celsius" | "fahrenheit", // default: celsius
 
 ## Tool-call format
 
-A function call is an **assistant** message on the **commentary** channel, addressed to the tool via recipient `to=functions.<name>`, with content-type `<|constrain|>json` and the JSON arguments as the body, terminated by the `<|call|>` stop token.
+A function call is an **assistant** message on the **commentary** channel, addressed to the tool via recipient `to=functions.<name>`, with the JSON arguments as the body, terminated by the `<|call|>` stop token.
 
-The recipient may appear in the *role section* or the *channel section* of the header — both are valid Harmony and the parser accepts either. The model commonly emits it in the channel section:
+The recipient may appear in the *role section* or the *channel section* of the header — both are valid Harmony and the parser accepts either. The model commonly emits it in the channel section. The pi renderer omits the optional content-type marker:
 
 ```text
-<|start|>assistant<|channel|>commentary to=functions.get_current_weather <|constrain|>json<|message|>{"location":"San Francisco, CA"}<|call|>
+<|start|>assistant<|channel|>commentary to=functions.get_current_weather<|message|>{"location":"San Francisco, CA"}<|call|>
 ```
 
-The `openai-harmony` renderer, when re-serializing a stored call, places the recipient in the role section instead (note the `<|constrain|>` is preceded by a space in both forms):
+Some Harmony serializers include an explicit JSON content type and place the recipient in the role section instead:
 
 ```text
 <|start|>assistant to=functions.get_current_weather<|channel|>commentary <|constrain|>json<|message|>{"location":"San Francisco, CA"}<|call|>
 ```
 
-The arguments body is a raw JSON object. The `<|constrain|>json` content-type signals JSON (and is the hook for constrained/grammar-based decoding); the `<|constrain|>` token is optional, and the content-type may also be a bare word such as `code` (seen with built-in tools). Built-in tools differ only in channel and recipient: they typically render on `analysis`, with recipient `browser.search` / `browser.open` / `browser.find` or always `python`.
+The arguments body is a raw JSON object. The optional `<|constrain|>json` content-type signals JSON (and is the hook for constrained/grammar-based decoding); the content-type may also be a bare word such as `code` (seen with built-in tools). Built-in tools differ only in channel and recipient: they typically render on `analysis`, with recipient `browser.search` / `browser.open` / `browser.find` or always `python`.
 
 ## Multiple / parallel tool calls
 
@@ -136,7 +136,7 @@ Harmony has no special "parallel" wrapper. Multiple calls are just multiple cons
 2. Generate a JavaScript for the Node.js server
 3. Start the server
 ---
-Will start executing the plan step by step<|end|><|start|>assistant<|channel|>commentary to=functions.generate_file<|constrain|>json<|message|>{"template": "basic_html", "path": "index.html"}<|call|>
+Will start executing the plan step by step<|end|><|start|>assistant<|channel|>commentary to=functions.generate_file<|message|>{"template": "basic_html", "path": "index.html"}<|call|>
 ```
 
 ## Tool-result format
@@ -178,7 +178,7 @@ location: string,
 format?: "celsius" | "fahrenheit", // default: celsius
 }) => any;
 
-} // namespace functions<|end|><|start|>user<|message|>What is the weather like in SF?<|end|><|start|>assistant<|channel|>analysis<|message|>User wants the weather in San Francisco. Use get_current_weather.<|end|><|start|>assistant<|channel|>commentary to=functions.get_current_weather <|constrain|>json<|message|>{"location":"San Francisco, CA"}<|call|><|start|>functions.get_current_weather to=assistant<|channel|>commentary<|message|>{"sunny": true, "temperature": 20}<|end|><|start|>assistant<|channel|>final<|message|>It's sunny and about 20°C in San Francisco right now.<|return|>
+} // namespace functions<|end|><|start|>user<|message|>What is the weather like in SF?<|end|><|start|>assistant<|channel|>analysis<|message|>User wants the weather in San Francisco. Use get_current_weather.<|end|><|start|>assistant<|channel|>commentary to=functions.get_current_weather<|message|>{"location":"San Francisco, CA"}<|call|><|start|>functions.get_current_weather to=assistant<|channel|>commentary<|message|>{"sunny": true, "temperature": 20}<|end|><|start|>assistant<|channel|>final<|message|>It's sunny and about 20°C in San Francisco right now.<|return|>
 ```
 
 Turn boundaries:
@@ -203,12 +203,12 @@ When a server (vLLM/SGLang/Ollama) bridges Harmony to Chat Completions JSON:
 ## Parsing notes & gotchas
 
 - **Two stop tokens.** Always stop on both `<|return|>` and `<|call|>`. Stopping only on `<|return|>` will run past tool calls; stopping only on `<|end|>` is wrong for assistant generation.
-- **Recipient position varies.** `to=functions.<name>` may be in the role section (`<|start|>assistant to=...<|channel|>commentary`) or the channel section (`<|channel|>commentary to=... `). A parser must accept both. A space precedes `<|constrain|>` in both renderings.
+- **Recipient position varies.** `to=functions.<name>` may be in the role section (`<|start|>assistant to=...<|channel|>commentary`) or the channel section (`<|channel|>commentary to=...`). A parser must accept both.
 - **Channel is mandatory** on assistant messages; the system message even reminds the model ("Channel must be included for every message."). Missing-channel output is malformed.
 - **Tool author, not `tool`.** The tool-result message's role is the tool's *name* (`functions.get_current_weather`), not the literal string `tool`. Splitting `functions.x` into namespace + function is the parser's job.
 - **CoT dropping is conditional.** Drop `analysis` only when the previous assistant turn ended on `final`. Dropping the `analysis` that immediately precedes a `<|call|>` breaks multi-step tool reasoning.
 - **`arguments` is a string.** Do not double-encode. The body after `<|message|>` is already serialized JSON; pass it through as the `arguments` string.
-- **Content-type variants.** `<|constrain|>json` is typical, but the content-type can be a bare token (`json`, `code`); treat `<|constrain|>` as optional metadata, not a guarantee of valid JSON. Enforce JSON validity with constrained decoding / your own grammar — the prompt format alone does not guarantee schema adherence (same caveat applies to structured-output `# Response Formats`).
+- **Content-type variants.** `<|constrain|>json` is optional. If present, it is metadata, not a guarantee of valid JSON. Enforce JSON validity with constrained decoding / your own grammar — the prompt format alone does not guarantee schema adherence (same caveat applies to structured-output `# Response Formats`).
 - **Streaming.** Use a stateful parser (the library ships `StreamableParser`) so partial UTF-8 and the header/channel/recipient/content-type fields are reconstructed incrementally; a naive substring scan mishandles multi-byte splits and the optional header fields. `parse_messages_from_completion_tokens` takes `strict=True|False` — `strict=False` tolerates some malformed headers. Do not pass the trailing stop token into the parser.
 - **Encoding.** Use `o200k_harmony` (the `o200k_base` ranks plus the Harmony specials above). Treat the `<|...|>` tokens as atomic special tokens during both encode and decode; encoding them as ordinary text yields different ranks and corrupts the stream.
 

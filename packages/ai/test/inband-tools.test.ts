@@ -143,8 +143,8 @@ describe("in-band tool grammars", () => {
 		);
 		expectRawBlock(
 			"harmony",
-			'<|start|>assistant<|channel|>commentary to=functions.read <|constrain|>json<|message|>{"path":"src/a.ts"}<|call|>',
-			'<|start|>assistant<|channel|>commentary to=functions.read <|constrain|>json<|message|>{"path":"src/a.ts"}<|call|>',
+			'<|start|>assistant<|channel|>commentary to=functions.read<|message|>{"path":"src/a.ts"}<|call|>',
+			'<|start|>assistant<|channel|>commentary to=functions.read<|message|>{"path":"src/a.ts"}<|call|>',
 		);
 		expectRawBlock(
 			"pi",
@@ -154,8 +154,7 @@ describe("in-band tool grammars", () => {
 	});
 
 	it("projects raw tool blocks onto parsed ToolCall content", () => {
-		const raw =
-			'<|start|>assistant<|channel|>commentary to=functions.read <|constrain|>json<|message|>{"path":"src/a.ts"}<|call|>';
+		const raw = '<|start|>assistant<|channel|>commentary to=functions.read<|message|>{"path":"src/a.ts"}<|call|>';
 		const parsed = parseInbandToolMessage(assistant([{ type: "text", text: raw }]), "harmony", TOOLS);
 		const call = parsed.content.find((block): block is ToolCall => block.type === "toolCall");
 

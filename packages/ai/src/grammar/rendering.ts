@@ -85,7 +85,7 @@ export function renderDeepSeekToolResults(results: readonly GrammarToolResult[])
 }
 
 export function renderHarmonyInvocation(call: ToolCall): string {
-	return `<|start|>assistant<|channel|>commentary to=${harmonyRecipient(call.name)} <|constrain|>json<|message|>${stringifyJson(call.arguments)}<|call|>`;
+	return `<|start|>assistant<|channel|>commentary to=${harmonyRecipient(call.name)}<|message|>${stringifyJson(call.arguments)}<|call|>`;
 }
 
 export function renderHarmonyToolCalls(calls: readonly ToolCall[]): string {

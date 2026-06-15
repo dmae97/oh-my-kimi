@@ -3,7 +3,7 @@
 Each function call is one assistant message on the `commentary` channel addressed to the function, emitted as text:
 
 ```text
-<|start|>assistant<|channel|>commentary to=functions.function_name <|constrain|>json<|message|>{"arg":"value"}<|call|>
+<|start|>assistant<|channel|>commentary to=functions.function_name<|message|>{"arg":"value"}<|call|>
 ```
 
 Put private reasoning in an `analysis` message:
