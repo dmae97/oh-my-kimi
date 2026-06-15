@@ -35,7 +35,7 @@
 		"check": "biome check . && bun run check:types",
 		"check:types": "tsgo -p tsconfig.json --noEmit",
 		"lint": "biome lint .",
-		"test": "bun test --parallel=2",
+		"test": "bun test --parallel",
 		"fix": "biome check --write --unsafe . && bun run format-prompts && bun run generate-docs-index",
 		"fmt": "biome format --write . && bun run format-prompts",
 		"format-prompts": "bun scripts/format-prompts.ts",
