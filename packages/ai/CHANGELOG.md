@@ -1,7 +1,6 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
 - Added the `gemini` in-band tool-call syntax with Python-style ```tool_code``` blocks and `default_api` invocations
@@ -16,6 +15,8 @@
 
 ### Fixed
 
+- Fixed duplicate tool call projections by deduplicating provider-native `toolCall` events against in-band `tool_code` calls and keeping only the first real channel
+- Dropped nameless native `toolCall` events so they no longer appear as surfaced tool calls in owned-mode streams
 - Fixed truncated Gemini and Gemma tool blocks from being emitted as plain text during streaming
 - Fixed Gemini/Gemma in-band tool-call parsing around Python comments, raw/unicode string literals, and Gemma close-token text inside string values.
 
