@@ -167,7 +167,7 @@ The Extensions dashboard also loads `slash-commands` capability and displays act
 
 1. **Extension commands** (`#tryExecuteExtensionCommand`)  
    If `/name` matches extension-registered command, handler executes immediately and prompt returns.
-2. **TypeScript custom commands and MCP prompt commands** (`#tryExecuteCustomCommand`)  
+2. **TypeScript custom commands and MCP prompt commands** (`#tryExecuteCustomCommand`)
    Boundary only: if matched, it executes and may return:
    - `string` -> replace prompt text with that string
    - `void/undefined` -> treated as handled; no LLM prompt

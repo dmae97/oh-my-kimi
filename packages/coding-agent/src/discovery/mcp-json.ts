@@ -46,6 +46,7 @@ interface MCPConfigFile {
 				redirectUri?: string;
 				callbackPort?: number;
 				callbackPath?: string;
+				prompt?: string;
 			};
 		}
 	>;

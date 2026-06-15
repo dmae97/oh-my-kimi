@@ -69,6 +69,68 @@ describe("mcp oauth flow", () => {
 		expect(authUrl.searchParams.get("state")).toBe("test-state");
 	});
 
+	it("defaults prompt=consent so reauth can switch accounts despite an active browser session", async () => {
+		const flow = new MCPOAuthFlow(
+			{
+				authorizationUrl: "https://provider.example/authorize",
+				tokenUrl: "https://provider.example/token",
+				clientId: "client-id",
+			},
+			{},
+		);
+
+		const { url } = await flow.generateAuthUrl("test-state", "http://127.0.0.1:53180/callback");
+
+		expect(new URL(url).searchParams.get("prompt")).toBe("consent");
+	});
+
+	it("passes an explicit prompt value through to the authorization request", async () => {
+		const flow = new MCPOAuthFlow(
+			{
+				authorizationUrl: "https://provider.example/authorize",
+				tokenUrl: "https://provider.example/token",
+				clientId: "client-id",
+				prompt: "select_account",
+			},
+			{},
+		);
+
+		const { url } = await flow.generateAuthUrl("s", "http://127.0.0.1:53181/callback");
+
+		expect(new URL(url).searchParams.get("prompt")).toBe("select_account");
+	});
+
+	it("omits the prompt parameter entirely when configured as the empty string", async () => {
+		const flow = new MCPOAuthFlow(
+			{
+				authorizationUrl: "https://provider.example/authorize",
+				tokenUrl: "https://provider.example/token",
+				clientId: "client-id",
+				prompt: "",
+			},
+			{},
+		);
+
+		const { url } = await flow.generateAuthUrl("s", "http://127.0.0.1:53182/callback");
+
+		expect(new URL(url).searchParams.has("prompt")).toBe(false);
+	});
+
+	it("keeps a prompt value already embedded in the authorization URL", async () => {
+		const flow = new MCPOAuthFlow(
+			{
+				authorizationUrl: "https://provider.example/authorize?prompt=none",
+				tokenUrl: "https://provider.example/token",
+				clientId: "client-id",
+			},
+			{},
+		);
+
+		const { url } = await flow.generateAuthUrl("test-state", "http://127.0.0.1:53183/callback");
+
+		expect(new URL(url).searchParams.get("prompt")).toBe("none");
+	});
+
 	it("uses configured callbackPath for the local redirect URI", async () => {
 		let observedRedirectUri = "";
 		let tokenRequestBody = "";

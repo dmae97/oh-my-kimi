@@ -54,6 +54,18 @@ describe("extension flags vs initial message", () => {
 		expect(parsed.print).toBeUndefined();
 		expect(parsed.messages).toEqual(["hello"]);
 	});
+	it("keeps standalone -- as end-of-options after a string extension flag", () => {
+		const parsed = parseArgs(["--spawn-peer", "--", "--model", "opus", "hello"], extFlags);
+		expect(parsed.unknownFlags.has("spawn-peer")).toBe(false);
+		expect(parsed.model).toBeUndefined();
+		expect(parsed.messages).toEqual(["--model", "opus", "hello"]);
+	});
+	it("consumes literal -- string values only in equals form", () => {
+		const parsed = parseArgs(["--spawn-peer=--", "--model", "opus", "hello"], extFlags);
+		expect(parsed.unknownFlags.get("spawn-peer")).toBe("--");
+		expect(parsed.model).toBe("opus");
+		expect(parsed.messages).toEqual(["hello"]);
+	});
 	it("treats an @-prefixed string value as the flag's value, not a file arg (P1#1)", () => {
 		const parsed = parseArgs(["--spawn-peer", "@notes.md", "hello"], extFlags);
 		expect(parsed.unknownFlags.get("spawn-peer")).toBe("@notes.md");

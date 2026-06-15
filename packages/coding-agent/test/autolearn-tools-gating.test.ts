@@ -10,6 +10,7 @@ import type { MnemopiSessionState } from "@oh-my-pi/pi-coding-agent/mnemopi/stat
 import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { LearnTool } from "@oh-my-pi/pi-coding-agent/tools/learn";
 import { ManageSkillTool } from "@oh-my-pi/pi-coding-agent/tools/manage-skill";
+import { getAgentDir, setAgentDir } from "@oh-my-pi/pi-utils/dirs";
 
 function makeSession(
 	settingsOverrides: Partial<Record<SettingPath, unknown>> = {},
@@ -104,14 +105,18 @@ describe("autolearn tool gating", () => {
 
 describe("manage_skill execute", () => {
 	let tempHome: string;
+	let originalAgentDir: string;
 
 	beforeEach(async () => {
+		originalAgentDir = getAgentDir();
 		tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "omp-manage-skill-"));
 		spyOn(os, "homedir").mockReturnValue(tempHome);
+		setAgentDir(path.join(tempHome, ".omp", "agent"));
 	});
 
 	afterEach(async () => {
 		spyOn(os, "homedir").mockRestore();
+		setAgentDir(originalAgentDir);
 		resetActiveSkillsForTests();
 		await fs.rm(tempHome, { recursive: true, force: true });
 	});
@@ -178,6 +183,7 @@ describe("manage_skill execute", () => {
 describe("learn execute", () => {
 	let tempHome: string;
 	let remembered: string[];
+	let originalAgentDir: string;
 
 	function learnSession(): ToolSession {
 		const fakeState = {
@@ -195,13 +201,16 @@ describe("learn execute", () => {
 	}
 
 	beforeEach(async () => {
+		originalAgentDir = getAgentDir();
 		tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "omp-learn-"));
 		spyOn(os, "homedir").mockReturnValue(tempHome);
+		setAgentDir(path.join(tempHome, ".omp", "agent"));
 		remembered = [];
 	});
 
 	afterEach(async () => {
 		spyOn(os, "homedir").mockRestore();
+		setAgentDir(originalAgentDir);
 		await fs.rm(tempHome, { recursive: true, force: true });
 	});
 

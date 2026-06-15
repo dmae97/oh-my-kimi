@@ -4,6 +4,7 @@ import * as path from "node:path";
 import type { LoadContext } from "@oh-my-pi/pi-coding-agent/capability/types";
 import { getConfigDirs } from "@oh-my-pi/pi-coding-agent/config";
 import { getUserPath } from "@oh-my-pi/pi-coding-agent/discovery/helpers";
+import { getAgentDir } from "@oh-my-pi/pi-utils";
 
 describe("PI_CONFIG_DIR", () => {
 	const original = process.env.PI_CONFIG_DIR;
@@ -15,16 +16,18 @@ describe("PI_CONFIG_DIR", () => {
 		}
 	});
 
-	test("getUserPath uses PI_CONFIG_DIR for native userAgent", () => {
-		process.env.PI_CONFIG_DIR = ".config/omp";
+	test("getUserPath resolves the native user scope via getAgentDir (profile-aware)", () => {
 		const ctx: LoadContext = {
 			cwd: "/work/project",
 			home: "/home/tester",
 			repoRoot: null,
 		};
-
-		const result = getUserPath(ctx, "native", "commands");
-		expect(result).toBe(path.join(ctx.home, ".config/omp/agent", "commands"));
+		// Native user config follows the active profile through getAgentDir(), not
+		// ctx.home, so it stays in sync with builtin.ts and getMCPConfigPath("user").
+		// The old behavior joined ctx.home + ".omp/agent" and leaked the default
+		// profile's config into every profile.
+		expect(getUserPath(ctx, "native", "commands")).toBe(path.join(getAgentDir(), "commands"));
+		expect(getUserPath(ctx, "native", "commands")).not.toContain(ctx.home);
 	});
 
 	test("getConfigDirs respects PI_CONFIG_DIR for user base", () => {

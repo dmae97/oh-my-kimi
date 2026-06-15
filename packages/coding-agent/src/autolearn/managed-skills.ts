@@ -9,11 +9,9 @@
  */
 import { constants as fsConstants, type Stats } from "node:fs";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
-import { isEnoent } from "@oh-my-pi/pi-utils";
+import { getAgentDir, isEnoent } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
-import { SOURCE_PATHS } from "../discovery/helpers";
 
 /** Provider id stamped on discovered managed skills (distinguishes them from authored). */
 export const MANAGED_SKILLS_PROVIDER_ID = "omp-managed";
@@ -24,8 +22,8 @@ export const MAX_MANAGED_SKILL_BYTES = 64_000;
 const SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
 /** Resolve the isolated managed-skills directory (`~/.omp/agent/managed-skills`). */
-export function getManagedSkillsDir(home: string = os.homedir()): string {
-	return path.join(home, SOURCE_PATHS.native.userAgent, "managed-skills");
+export function getManagedSkillsDir(agentDir: string = getAgentDir()): string {
+	return path.join(agentDir, "managed-skills");
 }
 
 /**

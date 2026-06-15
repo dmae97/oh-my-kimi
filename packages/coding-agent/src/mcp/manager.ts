@@ -27,7 +27,12 @@ import {
 	unsubscribeFromResources,
 } from "./client";
 import { loadAllMCPConfigs, validateServerConfig } from "./config";
-import { refreshMCPOAuthToken } from "./oauth-flow";
+import {
+	lookupMcpOAuthCredential,
+	type MCPOAuthCredentialLookup,
+	selectMcpOAuthRefreshMaterial,
+} from "./oauth-credentials";
+import { type MCPStoredOAuthCredential, refreshMCPOAuthToken } from "./oauth-flow";
 import type { MCPToolDetails } from "./tool-bridge";
 import { DeferredMCPTool, MCPTool } from "./tool-bridge";
 import type { MCPToolCache } from "./tool-cache";
@@ -400,9 +405,15 @@ export class MCPManager {
 					}
 
 					// Wire auth refresh for HTTP transports so 401s trigger token refresh.
-					if (connection.transport instanceof HttpTransport && config.auth?.type === "oauth") {
+					// Gate on a resolvable managed credential, not on the auth block:
+					// definition-only configs (url-keyed fallback) get Bearer injection
+					// too and need the same mid-session refresh hook.
+					if (
+						connection.transport instanceof HttpTransport &&
+						lookupMcpOAuthCredential(this.#authStorage, config)
+					) {
 						connection.transport.onAuthError = async () => {
-							const refreshed = await this.#resolveAuthConfig(config, true);
+							const refreshed = await this.#resolveAuthConfig(config, { forceRefresh: true });
 							if (refreshed.type === "http" || refreshed.type === "sse") {
 								return refreshed.headers ?? null;
 							}
@@ -673,9 +684,11 @@ export class MCPManager {
 
 	/**
 	 * Resolve auth and shell-command substitutions in config before connecting.
+	 * Pass `oauth: false` to skip OAuth credential injection (used by reauth's
+	 * unauthenticated probe, which must observe the server's bare 401).
 	 */
-	async prepareConfig(config: MCPServerConfig): Promise<MCPServerConfig> {
-		return this.#resolveAuthConfig(config);
+	async prepareConfig(config: MCPServerConfig, options?: { oauth?: boolean }): Promise<MCPServerConfig> {
+		return this.#resolveAuthConfig(config, options);
 	}
 
 	/**
@@ -925,9 +938,10 @@ export class MCPManager {
 		this.#connections.set(name, connection);
 
 		// Wire auth refresh for HTTP transports, and reconnect for any transport.
-		if (connection.transport instanceof HttpTransport && config.auth?.type === "oauth") {
+		// Same gate as connectServers: any resolvable managed credential.
+		if (connection.transport instanceof HttpTransport && lookupMcpOAuthCredential(this.#authStorage, config)) {
 			connection.transport.onAuthError = async () => {
-				const refreshed = await this.#resolveAuthConfig(config, true);
+				const refreshed = await this.#resolveAuthConfig(config, { forceRefresh: true });
 				if (refreshed.type === "http" || refreshed.type === "sse") {
 					return refreshed.headers ?? null;
 				}
@@ -1169,78 +1183,101 @@ export class MCPManager {
 
 	/**
 	 * Resolve OAuth credentials and shell commands in config.
+	 * `oauth: false` skips credential injection (reauth's unauthenticated probe);
+	 * `forceRefresh` bypasses the expiry buffer (401/403 auth-error hook).
 	 */
-	async #resolveAuthConfig(config: MCPServerConfig, forceRefresh = false): Promise<MCPServerConfig> {
+	async #resolveAuthConfig(
+		config: MCPServerConfig,
+		opts?: { forceRefresh?: boolean; oauth?: boolean },
+	): Promise<MCPServerConfig> {
 		let resolved: MCPServerConfig = { ...config };
 
 		const auth = config.auth;
-		if (auth?.type === "oauth" && auth.credentialId && this.#authStorage) {
-			const credentialId = auth.credentialId;
+		const lookup: MCPOAuthCredentialLookup | undefined =
+			opts?.oauth !== false ? lookupMcpOAuthCredential(this.#authStorage, config) : undefined;
+		if (lookup && this.#authStorage) {
+			const { credentialId } = lookup;
 			try {
-				let credential = this.#authStorage.get(credentialId);
-				if (credential?.type === "oauth") {
-					// Proactive refresh: 5-minute buffer before expiry
-					// Force refresh: on 401/403 auth errors (revoked tokens, clock skew, missing expires)
-					const REFRESH_BUFFER_MS = 5 * 60_000;
-					const shouldRefresh =
-						forceRefresh || (credential.expires && Date.now() >= credential.expires - REFRESH_BUFFER_MS);
-					if (shouldRefresh && credential.refresh && auth.tokenUrl) {
-						const resource =
-							auth.resource ?? (config.type === "http" || config.type === "sse" ? config.url : undefined);
-						try {
-							const refreshed = await refreshMCPOAuthToken(
-								auth.tokenUrl,
-								credential.refresh,
-								auth.clientId,
-								auth.clientSecret,
-								resource,
-							);
-							const refreshedCredential = { type: "oauth" as const, ...refreshed };
-							await this.#authStorage.set(credentialId, refreshedCredential);
-							credential = refreshedCredential;
-						} catch (refreshError) {
-							const errorMsg = refreshError instanceof Error ? refreshError.message : String(refreshError);
-							if (isDefinitiveOAuthFailure(errorMsg)) {
-								// `invalid_grant` / `invalid_token` / 401 from the token endpoint means
-								// the server has retired this credential — keeping the stale access
-								// token would just re-fail with 401 on every MCP request and leave a
-								// poisoned row in agent.db that survives restarts. Drop it now so the
-								// next connect attempt surfaces a clean "needs reauth" failure and
-								// the user can recover with `/mcp reauth <server>` (or `/mcp unauth`
-								// to forget the server entirely).
-								logger.warn("MCP OAuth refresh failed definitively; cleared credential", {
-									credentialId,
-									error: errorMsg,
-								});
-								await this.#authStorage.remove(credentialId);
-								credential = undefined;
-							} else {
-								logger.warn("MCP OAuth refresh failed, using existing token", {
-									credentialId,
-									error: refreshError,
-								});
-							}
+				let credential: MCPStoredOAuthCredential | undefined = lookup.credential;
+				// Refresh material comes from ONE source: the credential's embedded
+				// fields (written atomically with the tokens they minted — tokenUrl
+				// always present) or, for legacy rows that predate embedding, the
+				// config auth block. Never mix the two: a shared file's auth block
+				// can belong to another profile, whose client the grant is NOT
+				// bound to.
+				const material = selectMcpOAuthRefreshMaterial(credential, auth);
+				const tokenUrl = material?.tokenUrl;
+				const clientId = material?.clientId;
+				const clientSecret = material?.clientSecret;
+				const resource =
+					material?.resource ?? (config.type === "http" || config.type === "sse" ? config.url : undefined);
+				// Proactive refresh: 5-minute buffer before expiry
+				// Force refresh: on 401/403 auth errors (revoked tokens, clock skew, missing expires)
+				const REFRESH_BUFFER_MS = 5 * 60_000;
+				const shouldRefresh =
+					opts?.forceRefresh || (credential.expires && Date.now() >= credential.expires - REFRESH_BUFFER_MS);
+				if (shouldRefresh && credential.refresh && tokenUrl) {
+					try {
+						const refreshed = await refreshMCPOAuthToken(
+							tokenUrl,
+							credential.refresh,
+							clientId,
+							clientSecret,
+							resource,
+						);
+						// Spread the old credential first so embedded refresh material survives rotation.
+						const refreshedCredential: MCPStoredOAuthCredential = {
+							...credential,
+							...refreshed,
+							tokenUrl,
+							clientId,
+							clientSecret,
+							resource,
+						};
+						await this.#authStorage.set(credentialId, refreshedCredential);
+						credential = refreshedCredential;
+					} catch (refreshError) {
+						const errorMsg = refreshError instanceof Error ? refreshError.message : String(refreshError);
+						if (isDefinitiveOAuthFailure(errorMsg)) {
+							// `invalid_grant` / `invalid_token` / 401 from the token endpoint means
+							// the server has retired this credential — keeping the stale access
+							// token would just re-fail with 401 on every MCP request and leave a
+							// poisoned row in agent.db that survives restarts. Drop it now so the
+							// next connect attempt surfaces a clean "needs reauth" failure and
+							// the user can recover with `/mcp reauth <server>` (or `/mcp unauth`
+							// to forget the server entirely).
+							logger.warn("MCP OAuth refresh failed definitively; cleared credential", {
+								credentialId,
+								error: errorMsg,
+							});
+							await this.#authStorage.remove(credentialId);
+							credential = undefined;
+						} else {
+							logger.warn("MCP OAuth refresh failed, using existing token", {
+								credentialId,
+								error: refreshError,
+							});
 						}
 					}
+				}
 
-					if (credential?.type === "oauth") {
-						if (resolved.type === "http" || resolved.type === "sse") {
-							resolved = {
-								...resolved,
-								headers: {
-									...resolved.headers,
-									Authorization: `Bearer ${credential.access}`,
-								},
-							};
-						} else {
-							resolved = {
-								...resolved,
-								env: {
-									...resolved.env,
-									OAUTH_ACCESS_TOKEN: credential.access,
-								},
-							};
-						}
+				if (credential) {
+					if (resolved.type === "http" || resolved.type === "sse") {
+						resolved = {
+							...resolved,
+							headers: {
+								...resolved.headers,
+								Authorization: `Bearer ${credential.access}`,
+							},
+						};
+					} else {
+						resolved = {
+							...resolved,
+							env: {
+								...resolved.env,
+								OAUTH_ACCESS_TOKEN: credential.access,
+							},
+						};
 					}
 				}
 			} catch (error) {
