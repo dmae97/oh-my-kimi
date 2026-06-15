@@ -5,6 +5,8 @@ import * as path from "node:path";
 
 const CHANGELOG_GLOB = "packages/*/CHANGELOG.md";
 const ORDERED_SECTION_TITLES = ["Breaking Changes", "Added", "Changed", "Fixed", "Removed"] as const;
+const CHANGELOG_BASELINE_REF = "refs/clog";
+const CHANGELOG_BASELINE_NAME = "clog";
 
 interface NumberedLine {
 	text: string;
@@ -86,6 +88,7 @@ interface CliOptions {
 	repoRoot?: string;
 	since?: string;
 	recover: boolean;
+	pin: boolean;
 	help: boolean;
 }
 
@@ -723,14 +726,58 @@ async function resolveRepoRoot(repoRoot: string | undefined): Promise<string> {
 }
 
 async function latestTag(repoRoot: string): Promise<string> {
-	return (await git(["describe", "--tags", "--abbrev=0"], repoRoot)).trim();
+	return ((await gitMaybe(["describe", "--tags", "--abbrev=0", "--match", "v*"], repoRoot)) ?? "").trim();
 }
 
-async function allTags(repoRoot: string): Promise<string[]> {
-	return (await git(["tag", "--sort=v:refname"], repoRoot))
+async function changelogBaselineCommit(repoRoot: string): Promise<string | undefined> {
+	return (await gitMaybe(["rev-parse", "--verify", "--quiet", CHANGELOG_BASELINE_REF], repoRoot))?.trim() || undefined;
+}
+
+/**
+ * The diff/scan floor for both operations. Prefer the `clog` baseline (the last
+ * authoritative changelog rewrite) over the latest version tag whenever the
+ * baseline is newer — i.e. a `--recover` landed after the last release. Once the
+ * next release tags a commit that descends from the baseline, the version tag
+ * wins again, so the pin self-expires without manual cleanup.
+ *
+ * The baseline lives in a custom ref outside `refs/tags/`, not a tag: this repo
+ * runs background `git maintenance` with `fetch.pruneTags=true`, which deletes
+ * any local tag not on the remote — a lightweight `clog` tag would vanish. A
+ * non-tag ref is never touched by tag pruning and stays invisible to
+ * `git describe --tags`.
+ */
+async function resolveSince(repoRoot: string, since: string | undefined): Promise<string> {
+	if (since) return since;
+	const versionTag = await latestTag(repoRoot);
+	const baseline = await changelogBaselineCommit(repoRoot);
+	if (!baseline) return versionTag;
+	if (!versionTag) return CHANGELOG_BASELINE_REF;
+	const versionTagIsNewer =
+		(await gitMaybe(["merge-base", "--is-ancestor", baseline, versionTag], repoRoot)) !== undefined;
+	return versionTagIsNewer ? versionTag : CHANGELOG_BASELINE_REF;
+}
+
+/**
+ * Tags whose released bullets `--recover` treats as authoritative. Bounded to
+ * the commits at or after the `clog` baseline so a recovery never resurrects a
+ * bullet that was intentionally dropped before the last authoritative rewrite;
+ * without a baseline it falls back to every tag (legacy behavior).
+ */
+async function recoveryTags(repoRoot: string): Promise<string[]> {
+	const baseline = await changelogBaselineCommit(repoRoot);
+	const listArgs = baseline
+		? ["tag", "--contains", baseline, "--sort=v:refname"]
+		: ["tag", "--sort=v:refname"];
+	return (await git(listArgs, repoRoot))
 		.split("\n")
 		.map(tag => tag.trim())
 		.filter(tag => tag.length > 0);
+}
+
+async function pinChangelogBaseline(repoRoot: string): Promise<string> {
+	const head = (await git(["rev-parse", "HEAD"], repoRoot)).trim();
+	await git(["update-ref", CHANGELOG_BASELINE_REF, head], repoRoot);
+	return head;
 }
 
 async function gitMaybe(args: readonly string[], cwd: string): Promise<string | undefined> {
@@ -746,7 +793,7 @@ async function collectHistoricalReleaseRecovery(
 	repoRoot: string,
 	paths: readonly string[],
 ): Promise<Map<string, HistoricalReleaseRecovery>> {
-	const tags = await allTags(repoRoot);
+	const tags = await recoveryTags(repoRoot);
 	const recoveryByPath = new Map<string, HistoricalReleaseRecovery>();
 
 	for (const tag of tags) {
@@ -797,7 +844,7 @@ async function changelogDiff(repoRoot: string, since: string, paths: readonly st
 
 export async function runChangelogFixer(options: RunChangelogFixerOptions = {}): Promise<RunChangelogFixerResult> {
 	const repoRoot = await resolveRepoRoot(options.repoRoot);
-	const since = options.since ?? (await latestTag(repoRoot));
+	const since = await resolveSince(repoRoot, options.since);
 	const paths = await changelogPaths(repoRoot);
 	const addedItemLines = options.recover
 		? new Map<string, Set<number>>()
@@ -838,8 +885,17 @@ export async function runChangelogFixer(options: RunChangelogFixerOptions = {}):
 	return { since, changedFiles };
 }
 
+async function dirtyChangelogs(repoRoot: string): Promise<string[]> {
+	const paths = await changelogPaths(repoRoot);
+	if (paths.length === 0) return [];
+	return (await git(["status", "--porcelain", "--", ...paths], repoRoot))
+		.split("\n")
+		.map(line => line.trim())
+		.filter(line => line.length > 0);
+}
+
 function parseCliArgs(args: readonly string[]): CliOptions {
-	const options: CliOptions = { mode: "write", recover: false, help: false };
+	const options: CliOptions = { mode: "write", recover: false, pin: false, help: false };
 	for (let index = 0; index < args.length; index++) {
 		const arg = args[index];
 		switch (arg) {
@@ -851,6 +907,9 @@ function parseCliArgs(args: readonly string[]): CliOptions {
 				break;
 			case "--recover":
 				options.recover = true;
+				break;
+			case "--pin":
+				options.pin = true;
 				break;
 			case "--since": {
 				const value = args[index + 1];
@@ -879,23 +938,30 @@ function parseCliArgs(args: readonly string[]): CliOptions {
 
 function usage(): string {
 	return [
-		"Usage: bun scripts/fix-changelogs.ts [--dry-run|--check] [--since <tag>] [--recover]",
+		"Usage: bun scripts/fix-changelogs.ts [--dry-run|--check] [--since <tag>] [--recover] [--pin]",
 		"",
-		"Moves changelog items added since the latest tag from released sections into [Unreleased],",
+		"Moves changelog items added since the baseline from released sections into [Unreleased],",
 		"drops [Unreleased] items that already appear verbatim in a released section, removes",
 		"blank separators between adjacent bullet items, then removes duplicate or empty",
 		"### category headings.",
 		"",
-		"With --recover, the fixer also scans every tagged changelog snapshot in version order",
+		`The baseline defaults to the '${CHANGELOG_BASELINE_NAME}' ref (the last authoritative rewrite)`,
+		"when it is newer than the latest version tag, otherwise the latest version tag — so a",
+		"--recover is not undone by a later plain run.",
+		"",
+		"With --recover, the fixer scans every tagged changelog snapshot from the baseline forward",
 		"and treats every historically released bullet as authoritative, so stale [Unreleased]",
 		"items copied forward by past bad releases are pruned even if the current file no longer",
-		"contains a matching released copy.",
+		"contains a matching released copy. After committing a recovery, run --pin to mark it.",
+		"",
+		`With --pin, move the '${CHANGELOG_BASELINE_NAME}' baseline ref to HEAD and exit without fixing.`,
 		"",
 		"Options:",
 		"  --dry-run          Print what would change without writing files.",
 		"  --check            Exit 1 if any changelog would change.",
-		"  --since <tag>      Compare changelog additions against this tag/commit instead of latest tag.",
-		"  --recover          Rebuild against the union of historically released bullets from all tags.",
+		"  --since <tag>      Compare changelog additions against this tag/commit instead of the baseline.",
+		"  --recover          Rebuild against historically released bullets from the baseline forward.",
+		`  --pin              Move the '${CHANGELOG_BASELINE_NAME}' baseline ref to HEAD, then exit.`,
 		"  --repo-root <dir>  Run against an explicit repository root.",
 	].join("\n");
 }
@@ -927,6 +993,22 @@ async function main(): Promise<void> {
 			return;
 		}
 
+		if (cliOptions.pin) {
+			const repoRoot = await resolveRepoRoot(cliOptions.repoRoot);
+			const dirty = await dirtyChangelogs(repoRoot);
+			if (dirty.length > 0) {
+				console.warn(
+					`Warning: ${dirty.length} changelog file(s) have uncommitted changes; the pinned commit ` +
+						"will not include them. Commit first, then re-run --pin.",
+				);
+			}
+			const head = await pinChangelogBaseline(repoRoot);
+			console.log(
+				`Pinned changelog baseline '${CHANGELOG_BASELINE_NAME}' (${CHANGELOG_BASELINE_REF}) to ${head.slice(0, 12)}.`,
+			);
+			return;
+		}
+
 		const result = await runChangelogFixer({
 			repoRoot: cliOptions.repoRoot,
 			since: cliOptions.since,
@@ -934,6 +1016,12 @@ async function main(): Promise<void> {
 			recover: cliOptions.recover,
 		});
 		printSummary(result, cliOptions.mode);
+		if (cliOptions.recover && cliOptions.mode === "write" && result.changedFiles.length > 0) {
+			console.log(
+				`\nAuthoritative rewrite written. Commit the changelog changes, then run ` +
+					`'bun scripts/fix-changelogs.ts --pin' to move the '${CHANGELOG_BASELINE_NAME}' baseline ref.`,
+			);
+		}
 		if (cliOptions.mode === "check" && result.changedFiles.length > 0) {
 			process.exit(1);
 		}

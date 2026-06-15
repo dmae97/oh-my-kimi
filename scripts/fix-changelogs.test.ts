@@ -1,5 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { collectPromotableAddedItemLines, fixChangelogContent } from "./fix-changelogs";
+import { $ } from "bun";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { collectPromotableAddedItemLines, fixChangelogContent, runChangelogFixer } from "./fix-changelogs";
 
 describe("collectPromotableAddedItemLines", () => {
 	it("keeps new changelog item additions while ignoring moves and edits", () => {
@@ -244,5 +248,78 @@ describe("fixChangelogContent", () => {
 
 		expect(result.droppedReleasedDuplicates).toBe(0);
 		expect(result.content).toBe(content);
+	});
+});
+
+const RELEASED_ONLY = `# Changelog
+
+## [Unreleased]
+
+## [1.0.0] - 2025-01-01
+
+### Fixed
+
+- Old released bullet.
+`;
+
+const RELEASED_PLUS_RECOVERED = `# Changelog
+
+## [Unreleased]
+
+## [1.0.0] - 2025-01-01
+
+### Fixed
+
+- Old released bullet.
+- Recovered bullet.
+`;
+
+describe("runChangelogFixer baseline pin", () => {
+	it("uses the clog baseline ref as the diff floor so a recovered released bullet is not re-promoted", async () => {
+		const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "clog-fix-"));
+		const git = (...args: string[]) =>
+			$`git ${args}`
+				.cwd(repoRoot)
+				.quiet()
+				.env({
+					...process.env,
+					GIT_CONFIG_GLOBAL: "/dev/null",
+					GIT_CONFIG_SYSTEM: "/dev/null",
+					GIT_AUTHOR_NAME: "t",
+					GIT_AUTHOR_EMAIL: "t@t",
+					GIT_COMMITTER_NAME: "t",
+					GIT_COMMITTER_EMAIL: "t@t",
+				});
+		try {
+			const changelogPath = path.join(repoRoot, "packages/foo/CHANGELOG.md");
+			await git("init", "-b", "main");
+			await Bun.write(changelogPath, RELEASED_ONLY);
+			await git("add", "-A");
+			await git("commit", "-m", "release 1.0.0");
+			await git("tag", "v1.0.0");
+
+			// Simulate a `--recover` restoring a historically released bullet that the
+			// v1.0.0 snapshot no longer carries.
+			await Bun.write(changelogPath, RELEASED_PLUS_RECOVERED);
+			await git("add", "-A");
+			await git("commit", "-m", "recover dropped bullet");
+
+			// No baseline tag: the floor is the latest version tag, which predates the
+			// recovery, so the restored released bullet reads as added-in-a-released
+			// section and is wrongly promoted back into [Unreleased].
+			const withoutPin = await runChangelogFixer({ repoRoot, write: false });
+			expect(withoutPin.since).toBe("v1.0.0");
+			const promoted = withoutPin.changedFiles.find(file => file.path === "packages/foo/CHANGELOG.md");
+			expect(promoted?.promotedItems).toBe(1);
+
+			// Pin `clog` (a custom ref, not a tag — see resolveSince) to the recovery
+			// commit: the plain run now diffs against it and leaves the bullet untouched.
+			await git("update-ref", "refs/clog", "HEAD");
+			const withPin = await runChangelogFixer({ repoRoot, write: false });
+			expect(withPin.since).toBe("refs/clog");
+			expect(withPin.changedFiles).toHaveLength(0);
+		} finally {
+			await fs.rm(repoRoot, { recursive: true, force: true });
+		}
 	});
 });
