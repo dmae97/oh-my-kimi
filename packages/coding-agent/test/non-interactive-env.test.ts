@@ -29,6 +29,13 @@ describe("buildNonInteractiveEnv", () => {
 		expect(env.LC_ALL).toBe("en_US.UTF-8");
 	});
 
+	it("preserves inherited Windows LC category locales as user-owned", () => {
+		const env = buildNonInteractiveEnv(undefined, { LC_CTYPE: "en_US.UTF-8" }, "win32");
+
+		expect(env.LANG).toBeUndefined();
+		expect(env.LC_ALL).toBeUndefined();
+	});
+
 	it("does not force UTF-8 encoding defaults on non-Windows platforms", () => {
 		const env = buildNonInteractiveEnv(undefined, {}, "linux");
 

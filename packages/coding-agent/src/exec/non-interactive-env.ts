@@ -74,11 +74,22 @@ function hasEnvValue(
 	return false;
 }
 
+function hasLocaleEnvValue(env: Record<string, string | undefined> | undefined, platform: NodeJS.Platform): boolean {
+	if (!env) return false;
+	for (const [key, value] of Object.entries(env)) {
+		if (value === undefined) continue;
+		const normalizedKey = platform === "win32" ? key.toUpperCase() : key;
+		if (normalizedKey === "LANG" || normalizedKey.startsWith("LC_")) return true;
+	}
+	return false;
+}
+
 function hasEnvGroupValue(
 	env: Record<string, string | undefined> | undefined,
 	group: ReadonlyArray<readonly [key: string, value: string]>,
 	platform: NodeJS.Platform,
 ): boolean {
+	if (group.some(([key]) => key === "LC_ALL") && hasLocaleEnvValue(env, platform)) return true;
 	for (const [key] of group) {
 		if (hasEnvValue(env, key, platform)) return true;
 	}
