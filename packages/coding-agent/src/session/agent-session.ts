@@ -32,6 +32,7 @@ import {
 	type AsideMessage,
 	type CompactionSummaryMessage,
 	resolveTelemetry,
+	STREAM_INTERRUPTED_AFTER_CONTENT_STOP_DETAIL,
 	ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
 
@@ -9058,10 +9059,21 @@ export class AgentSession {
 		if (isContextOverflow(message, contextWindow)) return false;
 
 		if (this.#isClassifierRefusal(message)) return true;
+		if (this.#streamInterruptedAfterObservableOutput(message)) return false;
 		if (this.#isStaleOpenAIResponsesReplayError(message)) return true;
 
 		const err = message.errorMessage;
 		return this.#isTransientErrorMessage(err) || isUsageLimitError(err);
+	}
+	#streamInterruptedAfterObservableOutput(message: AssistantMessage): boolean {
+		if (message.stopDetails?.type === STREAM_INTERRUPTED_AFTER_CONTENT_STOP_DETAIL) return true;
+		for (const block of message.content) {
+			if (block.type === "toolCall") return true;
+			if (block.type === "text" && block.text.length > 0) return true;
+			if (block.type === "thinking" && block.thinking.length > 0) return true;
+			if (block.type === "redactedThinking" && block.data.length > 0) return true;
+		}
+		return false;
 	}
 
 	#isStaleOpenAIResponsesReplayError(message: AssistantMessage): boolean {

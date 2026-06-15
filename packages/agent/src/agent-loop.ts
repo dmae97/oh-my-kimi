@@ -63,6 +63,9 @@ import type {
 } from "./types";
 import { yieldIfDue } from "./utils/yield";
 
+/** Stop-details marker for a provider error after assistant content/tool args already streamed. */
+export const STREAM_INTERRUPTED_AFTER_CONTENT_STOP_DETAIL = "stream_interrupted_after_content";
+
 /** Sentinel returned by the abort race in `streamAssistantResponse`. */
 const ABORTED: unique symbol = Symbol("agent-loop-aborted");
 
@@ -1355,14 +1358,26 @@ function retainCompletedToolCalls(
 	completedToolCallIds: ReadonlySet<string>,
 ): AssistantMessage {
 	if (message.stopReason !== "error" && message.stopReason !== "aborted") return message;
-	let changed = false;
+	let droppedIncompleteToolCall = false;
 	const content = message.content.filter(block => {
 		if (block.type !== "toolCall") return true;
 		const keep = completedToolCallIds.has(block.id);
-		if (!keep) changed = true;
+		if (!keep) droppedIncompleteToolCall = true;
 		return keep;
 	});
-	return changed ? { ...message, content } : message;
+	if (!droppedIncompleteToolCall) return message;
+	return {
+		...message,
+		content,
+		stopDetails:
+			message.stopDetails?.type === STREAM_INTERRUPTED_AFTER_CONTENT_STOP_DETAIL
+				? message.stopDetails
+				: {
+						type: STREAM_INTERRUPTED_AFTER_CONTENT_STOP_DETAIL,
+						category: message.stopDetails?.type ?? null,
+						explanation: message.stopDetails?.explanation ?? null,
+					},
+	};
 }
 
 function emitDiscardedHarmonyPartial(
