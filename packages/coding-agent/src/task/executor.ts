@@ -1829,9 +1829,10 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				? resolvedThinkingLevel
 				: (thinkingLevel ?? resolvedThinkingLevel);
 
+			const effectiveCwd = worktree ?? cwd;
 			const sessionManager = sessionFile
-				? await awaitAbortable(SessionManager.open(sessionFile))
-				: SessionManager.inMemory(worktree ?? cwd);
+				? await awaitAbortable(SessionManager.open(sessionFile, undefined, undefined, { initialCwd: effectiveCwd }))
+				: SessionManager.inMemory(effectiveCwd);
 			if (options.parentArtifactManager) {
 				sessionManager.adoptArtifactManager(options.parentArtifactManager);
 			}
