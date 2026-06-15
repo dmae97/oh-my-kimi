@@ -25,7 +25,7 @@ describe("Patcher snapshot tag integrity", () => {
 		const tag = snapshots.record(PATH, "before\n");
 		const patcher = new Patcher({ fs, snapshots });
 
-		const result = await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nSWAP 1..1:\n+after`));
+		const result = await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nSWAP 1.=1:\n+after`));
 
 		expect(result.sections[0]?.op).toBe("update");
 		expect(result.sections[0]?.fileHash).toMatch(/^[0-9A-F]{4}$/);
@@ -45,14 +45,14 @@ describe("Patcher snapshot tag integrity", () => {
 		expect(snapshots.byHash(PATH, tag)).toBeNull();
 		const patcher = new Patcher({ fs, snapshots });
 
-		const result = await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nSWAP 3..3:\n+L3`));
+		const result = await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nSWAP 3.=3:\n+L3`));
 
 		expect(result.sections[0]?.op).toBe("update");
 		expect(fs.get(PATH)).toBe("l1\nl2\nL3\nl4\nl5\n");
 	});
 
 	it("normalizes lowercase section tags while parsing", () => {
-		const section = Patch.parseSingle(`[${PATH}#1a2b]\nSWAP 1..1:\n+after`);
+		const section = Patch.parseSingle(`[${PATH}#1a2b]\nSWAP 1.=1:\n+after`);
 
 		expect(section.fileHash).toBe("1A2B");
 	});
@@ -65,7 +65,7 @@ describe("Patcher snapshot tag integrity", () => {
 		const patcher = new Patcher({ fs, snapshots });
 
 		try {
-			await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nSWAP 1..1:\n+after`));
+			await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nSWAP 1.=1:\n+after`));
 			throw new Error("expected MismatchError");
 		} catch (error) {
 			expect(error).toBeInstanceOf(MismatchError);
@@ -89,7 +89,7 @@ describe("Patcher snapshot tag integrity", () => {
 		const bogus = live === "FFFF" ? "0000" : "FFFF";
 
 		try {
-			await patcher.apply(Patch.parse(`[${PATH}#${bogus}]\nSWAP 1..1:\n+after`));
+			await patcher.apply(Patch.parse(`[${PATH}#${bogus}]\nSWAP 1.=1:\n+after`));
 			throw new Error("expected MismatchError");
 		} catch (error) {
 			expect(error).toBeInstanceOf(MismatchError);
@@ -120,7 +120,7 @@ describe("Patcher mandatory snapshot tag policy", () => {
 		const snapshots = new InMemorySnapshotStore();
 		const patcher = new Patcher({ fs, snapshots });
 
-		await expect(patcher.apply(Patch.parse(`[${PATH}]\nSWAP 1..1:\n+X`))).rejects.toThrow(
+		await expect(patcher.apply(Patch.parse(`[${PATH}]\nSWAP 1.=1:\n+X`))).rejects.toThrow(
 			/Missing hashline snapshot tag/,
 		);
 	});
@@ -176,7 +176,7 @@ describe("Patcher seen-line provenance", () => {
 		const tag = snapshots.record(PATH, CONTENT, [1, 2]);
 		const patcher = new Patcher({ fs, snapshots });
 
-		await expect(patcher.apply(Patch.parse(`[${PATH}#${tag}]\nSWAP 4..4:\n+L4`))).rejects.toThrow(
+		await expect(patcher.apply(Patch.parse(`[${PATH}#${tag}]\nSWAP 4.=4:\n+L4`))).rejects.toThrow(
 			/were not shown in the read\/search output/,
 		);
 		expect(fs.get(PATH)).toBe(CONTENT);
@@ -188,7 +188,7 @@ describe("Patcher seen-line provenance", () => {
 		const tag = snapshots.record(PATH, CONTENT, [1, 2]);
 		const patcher = new Patcher({ fs, snapshots });
 
-		const result = await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nSWAP 2..2:\n+L2`));
+		const result = await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nSWAP 2.=2:\n+L2`));
 
 		expect(result.sections[0]?.op).toBe("update");
 		expect(fs.get(PATH)).toBe("l1\nL2\nl3\nl4\nl5\n");
@@ -202,7 +202,7 @@ describe("Patcher seen-line provenance", () => {
 		snapshots.record(PATH, CONTENT, [4, 5]);
 		const patcher = new Patcher({ fs, snapshots });
 
-		const result = await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nSWAP 4..4:\n+L4`));
+		const result = await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nSWAP 4.=4:\n+L4`));
 
 		expect(result.sections[0]?.op).toBe("update");
 		expect(fs.get(PATH)).toBe("l1\nl2\nl3\nL4\nl5\n");
@@ -214,7 +214,7 @@ describe("Patcher seen-line provenance", () => {
 		const tag = snapshots.record(PATH, CONTENT);
 		const patcher = new Patcher({ fs, snapshots });
 
-		const result = await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nSWAP 4..4:\n+L4`));
+		const result = await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nSWAP 4.=4:\n+L4`));
 
 		expect(result.sections[0]?.op).toBe("update");
 	});

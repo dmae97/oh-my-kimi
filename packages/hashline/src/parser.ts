@@ -3,7 +3,7 @@
  * flat list of {@link Edit}s. Sits between the {@link Tokenizer} and the
  * applier.
  */
-import { HL_PAYLOAD_REPLACE } from "./format";
+import { HL_PAYLOAD_REPLACE, HL_RANGE_SEP } from "./format";
 import {
 	BARE_BODY_AUTO_PIPED_WARNING,
 	DELETE_BLOCK_TAKES_NO_BODY,
@@ -18,7 +18,9 @@ import type { Anchor, Cursor, Edit } from "./types";
 
 function validateRangeOrder(range: ParsedRange, lineNum: number): void {
 	if (range.end.line < range.start.line) {
-		throw new Error(`line ${lineNum}: range ${range.start.line}..${range.end.line} ends before it starts.`);
+		throw new Error(
+			`line ${lineNum}: range ${range.start.line}${HL_RANGE_SEP}${range.end.line} ends before it starts.`,
+		);
 	}
 }
 
@@ -52,33 +54,33 @@ function detectApplyPatchContamination(text: string, _hasPending: boolean): stri
 		return (
 			`apply_patch sentinel ${JSON.stringify(preview)} is not valid in hashline. ` +
 			"File sections start with `[path#HASH]` (no `Update File:` / `Add File:` keyword). " +
-			"Use `SWAP N..M:`, `DEL N..M`, or `INS.PRE|POST|HEAD|TAIL:` ops."
+			`Use \`SWAP N${HL_RANGE_SEP}M:\`, \`DEL N${HL_RANGE_SEP}M\`, or \`INS.PRE|POST|HEAD|TAIL:\` ops.`
 		);
 	}
 	if (/^@@\s+[-+]?\d+,\d+\s+[-+]?\d+,\d+\s+@@/.test(trimmed)) {
 		return (
 			"unified-diff hunk header (`@@ -N,M +N,M @@`) is not valid in hashline. " +
-			"Use `SWAP N..M:`, `DEL N..M`, or `INS.PRE|POST|HEAD|TAIL:` ops."
+			`Use \`SWAP N${HL_RANGE_SEP}M:\`, \`DEL N${HL_RANGE_SEP}M\`, or \`INS.PRE|POST|HEAD|TAIL:\` ops.`
 		);
 	}
 	if (trimmed.startsWith("@@")) {
 		const preview = trimmed.length > 48 ? `${trimmed.slice(0, 48)}…` : trimmed;
 		return (
 			`\`@@\`-bracketed hunk header ${JSON.stringify(preview)} is not valid in hashline. ` +
-			"Drop the `@@ ... @@` brackets and write a verb header such as `SWAP N..M:`."
+			`Drop the \`@@ ... @@\` brackets and write a verb header such as \`SWAP N${HL_RANGE_SEP}M:\`.`
 		);
 	}
-	if (/^DEL\s+[1-9]\d*(?:\s*(?:\.\.|-|…|\s)\s*[1-9]\d*)?\s*:/.test(trimmed)) {
-		return "`DEL N..M` has no colon and no body. Remove the colon and body rows.";
+	if (/^DEL\s+[1-9]\d*(?:\s*(?:\.\.|\.=|-|…|\s)\s*[1-9]\d*)?\s*:/.test(trimmed)) {
+		return `\`DEL N${HL_RANGE_SEP}M\` has no colon and no body. Remove the colon and body rows.`;
 	}
 	if (/^[1-9]\d*\s*$/.test(trimmed)) {
-		return `hunk headers need a verb. Use \`SWAP ${trimmed}..${trimmed}:\` to replace, or \`DEL ${trimmed}\` to delete.`;
+		return `hunk headers need a verb. Use \`SWAP ${trimmed}${HL_RANGE_SEP}${trimmed}:\` to replace, or \`DEL ${trimmed}\` to delete.`;
 	}
-	const bareRange = /^([1-9]\d*)\s*[-. …]+\s*([1-9]\d*)\s*:?$/.exec(trimmed);
+	const bareRange = /^([1-9]\d*)\s*[-. …=]+\s*([1-9]\d*)\s*:?$/.exec(trimmed);
 	if (bareRange !== null) {
 		return (
 			`bare range hunk header ${JSON.stringify(trimmed)} is not valid. ` +
-			`Hunk headers need a verb: write \`SWAP ${bareRange[1]}..${bareRange[2]}:\` or \`DEL ${bareRange[1]}..${bareRange[2]}\`.`
+			`Hunk headers need a verb: write \`SWAP ${bareRange[1]}${HL_RANGE_SEP}${bareRange[2]}:\` or \`DEL ${bareRange[1]}${HL_RANGE_SEP}${bareRange[2]}\`.`
 		);
 	}
 	return null;
@@ -253,7 +255,7 @@ export class Executor {
 		if (text.trim().length === 0) return;
 		throw new Error(
 			`line ${lineNum}: payload line has no preceding hunk header. ` +
-				`Use \`SWAP N..M:\`, \`DEL N..M\`, or \`INS.PRE|POST|HEAD|TAIL:\` above the body. Got ${JSON.stringify(text)}.`,
+				`Use \`SWAP N${HL_RANGE_SEP}M:\`, \`DEL N${HL_RANGE_SEP}M\`, or \`INS.PRE|POST|HEAD|TAIL:\` above the body. Got ${JSON.stringify(text)}.`,
 		);
 	}
 

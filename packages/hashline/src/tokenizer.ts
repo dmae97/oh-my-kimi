@@ -4,7 +4,7 @@
  * Format shape:
  * ```
  * [path/to/file.ts#1A2B]
- * replace 5..7:
+ * replace 5.=7:
  * +literal new line
  * ```
  */
@@ -40,6 +40,7 @@ const CHAR_SPACE = 32;
 const CHAR_DOT = 46;
 const CHAR_HYPHEN = 45;
 const CHAR_ELLIPSIS = 0x2026;
+const CHAR_EQUALS = 61;
 
 const CHAR_UPPER_A = 65;
 const CHAR_UPPER_F = 70;
@@ -167,7 +168,11 @@ function scanRangeSeparator(line: string, index: number, end: number): number | 
 			consumedSeparator = true;
 			continue;
 		}
-		if (code === CHAR_DOT && cursor + 1 < end && line.charCodeAt(cursor + 1) === CHAR_DOT) {
+		if (
+			code === CHAR_DOT &&
+			cursor + 1 < end &&
+			(line.charCodeAt(cursor + 1) === CHAR_DOT || line.charCodeAt(cursor + 1) === CHAR_EQUALS)
+		) {
 			cursor += 2;
 			consumedSeparator = true;
 			continue;
@@ -277,7 +282,7 @@ function scanHunkAnchor(line: string, start: number, end: number): TargetScan | 
 		};
 	}
 	// `delete_block N` — resolve N to a tree-sitter block range at apply time
-	// and delete its whole span. Like `delete N..M`, it takes no body and no
+	// and delete its whole span. Like `delete N.=M`, it takes no body and no
 	// trailing colon.
 	const deleteBlockEnd = scanKeyword(line, cursor, end, HL_DELETE_BLOCK_KEYWORD);
 	if (deleteBlockEnd !== null) {

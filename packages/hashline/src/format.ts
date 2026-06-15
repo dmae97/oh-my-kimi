@@ -38,8 +38,8 @@ export const HL_HEADER_COLON = ":";
 /** Separator between a hashline file path and its opaque snapshot tag. */
 export const HL_FILE_HASH_SEP = "#";
 
-/** Separator between two line numbers in a range, e.g. `5..10`. */
-export const HL_RANGE_SEP = "..";
+/** Separator between two line numbers in a range, e.g. `5.=10`. */
+export const HL_RANGE_SEP = ".=";
 
 /** Separator between a line number and displayed line content in hashline mode. */
 export const HL_LINE_BODY_SEP = ":";

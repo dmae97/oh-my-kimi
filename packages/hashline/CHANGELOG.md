@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Changed the recommended hashline range separator from `..` to `.=` (e.g. `SWAP 1.=3:`, `DEL 4.=5`) so the inclusive `<=`-style end is self-evident. `HL_RANGE_SEP` is now `.=`; the prompt, grammar, error messages, and emitted headers all use it. The lenient parser still accepts the legacy `..` (and `-`/`…`/space) forms.
+
 ## [15.13.2] - 2026-06-15
 
 ### Breaking Changes

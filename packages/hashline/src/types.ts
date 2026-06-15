@@ -47,7 +47,7 @@ export type Edit =
 			 * time — it is computed by {@link resolveBlockEdits} once file text +
 			 * path (→ language) are available, then expanded into concrete edits:
 			 * a non-empty `payloads` without `mode` (from `replace_block`) becomes
-			 * the same `replacement` inserts + deletes that `replace start..end:`
+			 * the same `replacement` inserts + deletes that `replace start.=end:`
 			 * produces; an empty `payloads` (from `delete_block`) becomes a pure
 			 * range deletion; `mode: "insert_after"` becomes plain `after_anchor`
 			 * inserts at the block's last line. `applyEdits` never sees this
@@ -78,7 +78,7 @@ export interface ApplyResult {
 	blockResolutions?: BlockResolution[];
 }
 
-/** A parsed `[A..B]` line range. */
+/** A parsed `[A.=B]` line range. */
 export interface ParsedRange {
 	start: Anchor;
 	end: Anchor;
@@ -134,7 +134,7 @@ export interface BlockSpan {
 /**
  * One `replace_block N:` / `delete_block N` / `insert_after_block N:` anchor
  * resolved to its concrete line span. Surfaced on {@link ApplyResult} so the
- * host can echo "block N → lines start..end" and let the model catch a wrong
+ * host can echo "block N → lines start.=end" and let the model catch a wrong
  * opener — e.g. a decorator or doc-comment that sits in a separate node
  * outside the resolved block.
  */

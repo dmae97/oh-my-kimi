@@ -236,12 +236,12 @@ describe("computeHashlineDiff", () => {
 		const line = "unchanged content";
 		await Bun.write(sourcePath, `${line}\n`);
 
-		// `SWAP 1..1:` with the same line in the body is a true no-op: the edit
+		// `SWAP 1.=1:` with the same line in the body is a true no-op: the edit
 		// fires through computeHashlineDiff but produces identical content.
 		const text = `${line}\n`;
 		const snapshotStore = new InMemorySnapshotStore();
 		const tag = snapshotStore.record(sourcePath, text);
-		const input = `${formatHashlineHeader(sourcePath, tag)}\nSWAP 1..1:\n+${line}\n`;
+		const input = `${formatHashlineHeader(sourcePath, tag)}\nSWAP 1.=1:\n+${line}\n`;
 		const result = await computeHashlineDiff({ input }, tempDir, snapshotStore);
 		expect("error" in result).toBe(true);
 		if ("error" in result) {

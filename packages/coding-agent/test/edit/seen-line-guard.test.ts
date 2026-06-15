@@ -93,7 +93,7 @@ describe("read → edit seen-line guard", () => {
 		const tag = tagFromOutput(resultText(read));
 
 		await expect(
-			executeHashlineSingle(execOptions(`[notes.txt#${tag}]\nSWAP 12..12:\n+EDITED`, session)),
+			executeHashlineSingle(execOptions(`[notes.txt#${tag}]\nSWAP 12.=12:\n+EDITED`, session)),
 		).rejects.toThrow(/were not shown in the read\/search output/);
 		// The reject left the file untouched.
 		expect(await Bun.file(file).text()).toBe(CONTENT);
@@ -107,7 +107,7 @@ describe("read → edit seen-line guard", () => {
 		const read = await new ReadTool(session).execute("r1", { path: `${file}:1-3` });
 		const tag = tagFromOutput(resultText(read));
 
-		await executeHashlineSingle(execOptions(`[notes.txt#${tag}]\nSWAP 2..2:\n+EDITED`, session));
+		await executeHashlineSingle(execOptions(`[notes.txt#${tag}]\nSWAP 2.=2:\n+EDITED`, session));
 		expect(await Bun.file(file).text()).toContain("EDITED");
 	});
 });
@@ -154,7 +154,7 @@ describe("search → edit seen-line guard", () => {
 		expect(seen?.has(8)).toBe(false);
 
 		// The matched line is in the seen set, so editing it applies.
-		await executeHashlineSingle(execOptions(`[code.txt#${tag}]\nSWAP 4..4:\n+NEEDLE edited`, session));
+		await executeHashlineSingle(execOptions(`[code.txt#${tag}]\nSWAP 4.=4:\n+NEEDLE edited`, session));
 		expect(await Bun.file(file).text()).toContain("NEEDLE edited");
 	});
 
@@ -167,7 +167,7 @@ describe("search → edit seen-line guard", () => {
 		const search = await new SearchTool(session).execute("s1", { pattern: "NEEDLE", paths: [file] });
 		const tag = tagFromOutput(resultText(search));
 
-		await expect(executeHashlineSingle(execOptions(`[code.txt#${tag}]\nSWAP 8..8:\n+X`, session))).rejects.toThrow(
+		await expect(executeHashlineSingle(execOptions(`[code.txt#${tag}]\nSWAP 8.=8:\n+X`, session))).rejects.toThrow(
 			/were not shown in the read\/search output/,
 		);
 		expect(await Bun.file(file).text()).toBe(`${lines.join("\n")}\n`);

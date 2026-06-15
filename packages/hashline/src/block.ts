@@ -7,7 +7,7 @@
  * runs at every apply/preview boundary that has text: it calls the injected
  * {@link BlockResolver} to resolve each block's `[start, end]` span, then emits
  * the exact same edits the concrete form produces in the parser: `replace
- * start..end:` inserts + deletes for a replace, a pure range delete for a
+ * start.=end:` inserts + deletes for a replace, a pure range delete for a
  * delete, and plain `after_anchor` inserts at `end` for an insert-after. After
  * it runs, no `block` edits remain, so {@link applyEdits} (and recovery) only
  * ever see resolved edits.
@@ -145,7 +145,7 @@ export function resolveBlockEdits(
 			}
 			continue;
 		}
-		// Mirror the parser's `replace start..end:` expansion exactly: one
+		// Mirror the parser's `replace start.=end:` expansion exactly: one
 		// `before_anchor` replacement insert per payload row at `span.start`,
 		// then one delete per line across `[span.start, span.end]`. An empty
 		// `payloads` (from `delete_block N`) emits no inserts — a pure deletion.

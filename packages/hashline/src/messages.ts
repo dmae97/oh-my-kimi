@@ -1,6 +1,6 @@
 /** Centralized error/warning text for the hashline parser, applier, and patcher. */
 
-import { formatNumberedLine, HL_FILE_HASH_SEP, HL_FILE_PREFIX, HL_FILE_SUFFIX } from "./format";
+import { formatNumberedLine, HL_FILE_HASH_SEP, HL_FILE_PREFIX, HL_FILE_SUFFIX, HL_RANGE_SEP } from "./format";
 
 /** Lines of context shown either side of a hash mismatch. */
 export const MISMATCH_CONTEXT = 2;
@@ -43,11 +43,10 @@ export const END_PATCH_MARKER = "*** End Patch";
 export const ABORT_MARKER = "*** Abort";
 
 /** Two consecutive hunks targeted the exact same concrete range. */
-export const REPLACE_PAIR_COALESCED_WARNING =
-	"Two hunks targeted the same range; kept only the second. One `SWAP N..M:` hunk per range — the body is the final content, never old+new.";
+export const REPLACE_PAIR_COALESCED_WARNING = `Two hunks targeted the same range; kept only the second. One \`SWAP N${HL_RANGE_SEP}M:\` hunk per range — the body is the final content, never old+new.`;
 
 /** Bare bodyless hunk followed by an overlapping concrete hunk. */
-("Dropped a bare hunk overlapped by the concrete hunk after it. One `SWAP N..M:` hunk per range — the body is the final content, never old+new.");
+`Dropped a bare hunk overlapped by the concrete hunk after it. One \`SWAP N${HL_RANGE_SEP}M:\` hunk per range — the body is the final content, never old+new.`;
 
 /** Bare body rows auto-converted to literal `+` rows. */
 export const BARE_BODY_AUTO_PIPED_WARNING =
@@ -58,7 +57,7 @@ export const MINUS_ROW_REJECTED =
 	"`-` rows are not valid; the range already names the lines being changed. For a literal `-` line, write `+-…`.";
 
 /** Replace hunk with no body. */
-export const EMPTY_REPLACE = "`SWAP N..M:` needs at least one `+TEXT` body row. To delete lines, use `DEL N..M`.";
+export const EMPTY_REPLACE = `\`SWAP N${HL_RANGE_SEP}M:\` needs at least one \`+TEXT\` body row. To delete lines, use \`DEL N${HL_RANGE_SEP}M\`.`;
 
 /** `replace_block N:` hunk with no body. */
 export const EMPTY_BLOCK = "`SWAP.BLK N:` needs at least one `+TEXT` body row. To delete a block, use `DEL.BLK N`.";
@@ -77,7 +76,7 @@ export function blockUnresolvedMessage(
 	fileLines?: readonly string[],
 ): string {
 	const phrase = op === "delete" ? `DEL.BLK ${line}` : `SWAP.BLK ${line}:`;
-	const fallback = op === "delete" ? `DEL ${line}..M` : `SWAP ${line}..M:`;
+	const fallback = op === "delete" ? `DEL ${line}${HL_RANGE_SEP}M` : `SWAP ${line}${HL_RANGE_SEP}M:`;
 	let message =
 		`\`${phrase}\` could not resolve a syntactic block beginning on line ${line} ` +
 		`(unsupported language, blank/closer line, or parse error). Use \`${fallback}\` with explicit lines.`;
@@ -118,7 +117,7 @@ export const UNRESOLVED_BLOCK_INTERNAL =
 	"internal error: unresolved `SWAP.BLK` edit reached the applier (resolveBlockEdits was not run).";
 
 /** Delete hunk received a body row. */
-export const DELETE_TAKES_NO_BODY = "`DEL N..M` does not take body rows. Remove the body, or use `SWAP N..M:`.";
+export const DELETE_TAKES_NO_BODY = `\`DEL N${HL_RANGE_SEP}M\` does not take body rows. Remove the body, or use \`SWAP N${HL_RANGE_SEP}M:\`.`;
 
 /** `delete_block N` hunk received a body row. */
 export const DELETE_BLOCK_TAKES_NO_BODY = "`DEL.BLK N` does not take body rows. Remove the body, or use `SWAP.BLK N:`.";
@@ -226,7 +225,11 @@ export type BlockOp = "replace" | "delete" | "insert_after";
 export function blockSingleLineMessage(line: number, op: BlockOp): string {
 	const blockForm = op === "insert_after" ? "INS.BLK.POST" : op === "delete" ? "DEL.BLK" : "SWAP.BLK";
 	const plainForm =
-		op === "insert_after" ? `INS.POST ${line}:` : op === "delete" ? `DEL ${line}` : `SWAP ${line}..${line}:`;
+		op === "insert_after"
+			? `INS.POST ${line}:`
+			: op === "delete"
+				? `DEL ${line}`
+				: `SWAP ${line}${HL_RANGE_SEP}${line}:`;
 	return (
 		`\`${blockForm} ${line}\` resolved a single-line block — line ${line} is a bare statement, not the opening line ` +
 		`of a multi-line construct. For that one line use \`${plainForm}\`; to act on an enclosing construct, anchor ${blockForm} ` +

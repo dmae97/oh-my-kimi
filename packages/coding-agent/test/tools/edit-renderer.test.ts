@@ -277,7 +277,7 @@ describe("editToolRenderer", () => {
 			// The trailing payload line carries no newline — the common shape for a
 			// single-line edit. The streaming pass trims that in-flight line, so the
 			// preview only becomes computable once args are marked complete.
-			const input = `[memory.ts#${tag}]\nSWAP 2..2:\n+export const b = 22;`;
+			const input = `[memory.ts#${tag}]\nSWAP 2.=2:\n+export const b = 22;`;
 			const component = new ToolExecutionComponent("edit", { input }, { snapshots }, hashlineTool, uiStub, tmpDir);
 
 			component.setArgsComplete();
@@ -304,7 +304,7 @@ describe("editToolRenderer", () => {
 
 			const snapshots = new InMemorySnapshotStore();
 			const tag = snapshots.record(filePath, content);
-			const input = `[memory.ts#${tag}]\nSWAP 2..2:\n+export const b = 22;\n`;
+			const input = `[memory.ts#${tag}]\nSWAP 2.=2:\n+export const b = 22;\n`;
 			const component = new ToolExecutionComponent(
 				"edit",
 				{ __partialJson: input },

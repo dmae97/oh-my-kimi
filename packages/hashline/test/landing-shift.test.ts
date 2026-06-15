@@ -207,7 +207,7 @@ describe("insert-after-block inward landing shift", () => {
 	it("refuses to cross a closer targeted by another hunk", () => {
 		const resolver: BlockResolver = (): BlockSpan => ({ start: 1, end: 5 });
 		const text = ["foo(() => {", "    bar(() => {", "        x();", "    });", "});", ""].join("\n");
-		const section = Patch.parseSingle("[x.ts#1A2B]\nSWAP 4..4:\n+    }); // bar\nINS.BLK.POST 1:\n+        y();");
+		const section = Patch.parseSingle("[x.ts#1A2B]\nSWAP 4.=4:\n+    }); // bar\nINS.BLK.POST 1:\n+        y();");
 
 		const result = section.applyTo(text, resolver);
 

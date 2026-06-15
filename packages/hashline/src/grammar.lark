@@ -21,7 +21,7 @@ insert_block_anchor: "INS.BLK.POST " LID ":"
 insert_pos: "PRE " LID | "POST " LID | "HEAD" | "TAIL"
 emit_op: "+" /(.*)/ LF
 
-header_range: LID ".." LID
+header_range: LID ".=" LID
 LID: /[1-9]\d*/
 
 %import common.LF
