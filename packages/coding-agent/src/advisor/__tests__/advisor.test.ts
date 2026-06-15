@@ -183,6 +183,83 @@ describe("advisor", () => {
 			expect(promptInputs[1]).toContain("second");
 		});
 
+		it("budgets only the batch sent after async context maintenance", async () => {
+			const promptInputs: string[] = [];
+			const { promise: firstMaintainStarted, resolve: startFirstMaintain } = Promise.withResolvers<void>();
+			const { promise: finishFirstMaintain, resolve: releaseFirstMaintain } = Promise.withResolvers<boolean>();
+			const { promise: firstPromptStarted, resolve: startFirstPrompt } = Promise.withResolvers<void>();
+			const { promise: secondPromptStarted, resolve: startSecondPrompt } = Promise.withResolvers<void>();
+			const { promise: finishFirstPrompt, resolve: releaseFirstPrompt } = Promise.withResolvers<void>();
+			let maintainCalls = 0;
+			let promptCalls = 0;
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptInputs.push(input);
+					promptCalls++;
+					if (promptCalls === 1) {
+						startFirstPrompt();
+						await finishFirstPrompt;
+					} else if (promptCalls === 2) {
+						startSecondPrompt();
+					}
+				},
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [] },
+			};
+			const messages: AgentMessage[] = [{ role: "user", content: "first", timestamp: 1 } as AgentMessage];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+				maintainContext: async () => {
+					maintainCalls++;
+					if (maintainCalls === 1) {
+						startFirstMaintain();
+						return await finishFirstMaintain;
+					}
+					return false;
+				},
+			};
+			const runtime = new AdvisorRuntime(agent, host);
+
+			runtime.onTurnEnd();
+			await firstMaintainStarted;
+			messages.push({ role: "user", content: "second", timestamp: 2 } as AgentMessage);
+			runtime.onTurnEnd();
+
+			releaseFirstMaintain(false);
+			await firstPromptStarted;
+			expect(promptInputs).toHaveLength(1);
+			expect(promptInputs[0]).toContain("first");
+			expect(promptInputs[0]).not.toContain("second");
+
+			releaseFirstPrompt();
+			await secondPromptStarted;
+			expect(promptInputs).toHaveLength(2);
+			expect(promptInputs[1]).toContain("second");
+		});
+
+		it("sends the batch when context maintenance fails", async () => {
+			const promptInputs: string[] = [];
+			const agent = makeAgent(promptInputs);
+			const messages: AgentMessage[] = [{ role: "user", content: "first", timestamp: 1 } as AgentMessage];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+				maintainContext: async () => {
+					throw new Error("maintenance failed");
+				},
+			};
+			const runtime = new AdvisorRuntime(agent, host);
+
+			runtime.onTurnEnd();
+			await Promise.resolve();
+			await Promise.resolve();
+
+			expect(promptInputs).toHaveLength(1);
+			expect(promptInputs[0]).toContain("first");
+		});
+
 		it("excludes advisor custom messages from the rendered delta", () => {
 			const promptInputs: string[] = [];
 			const agent = makeAgent(promptInputs);

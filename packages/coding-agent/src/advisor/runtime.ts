@@ -104,22 +104,29 @@ export class AdvisorRuntime {
 		this.#busy = true;
 		try {
 			while (!this.#disposed && this.#pending.length) {
-				const candidateBatch = this.#pending.join("\n\n---\n\n");
+				const pendingBatch = this.#pending.splice(0).join("\n\n---\n\n");
 				const incomingTokens = estimateTokens({
 					role: "user",
-					content: candidateBatch,
+					content: pendingBatch,
 					timestamp: Date.now(),
 				});
 
-				let batch: string | null;
-				if (this.host.maintainContext && (await this.host.maintainContext(incomingTokens))) {
+				let shouldReprime = false;
+				if (this.host.maintainContext) {
+					try {
+						shouldReprime = await this.host.maintainContext(incomingTokens);
+					} catch (err) {
+						logger.debug("advisor context maintenance failed", { err: String(err) });
+					}
+				}
+
+				let batch: string | null = pendingBatch;
+				if (shouldReprime) {
 					// Promotion could not fit the advisor's context — re-prime: drop the
 					// accumulated review history and replay the current (primary-bounded)
 					// transcript so the next turn resumes from a fresh, in-window context.
 					this.reset();
 					batch = this.#renderDelta();
-				} else {
-					batch = this.#pending.splice(0).join("\n\n---\n\n");
 				}
 				if (this.#disposed || batch === null) continue;
 				try {

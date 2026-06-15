@@ -480,6 +480,8 @@ export interface AgentSessionConfig {
 	 * caches. Undefined when the advisor is disabled.
 	 */
 	advisorReadOnlyTools?: AgentTool[];
+	/** Preloaded watchdog prompt content for the advisor. */
+	advisorWatchdogPrompt?: string;
 }
 
 /** Options for AgentSession.prompt() */
@@ -993,6 +995,7 @@ export class AgentSession {
 	/** The advisor's own agent, retained so `/dump advisor` can serialize its transcript. Undefined when no advisor is active. */
 	#advisorAgent?: Agent;
 	#advisorReadOnlyTools?: AgentTool[];
+	#advisorWatchdogPrompt?: string;
 	#advisorYieldQueueUnsubscribe?: () => void;
 	#goalTurnCounter = 0;
 	#planReferenceSent = false;
@@ -1285,6 +1288,7 @@ export class AgentSession {
 		this.#skillsSettings = config.skillsSettings;
 		this.#modelRegistry = config.modelRegistry;
 		this.#advisorReadOnlyTools = config.advisorReadOnlyTools;
+		this.#advisorWatchdogPrompt = config.advisorWatchdogPrompt;
 		this.#validateRetryFallbackChains();
 		this.#toolRegistry = config.toolRegistry ?? new Map();
 		this.#requestedToolNames = config.requestedToolNames;
@@ -1484,9 +1488,13 @@ export class AgentSession {
 
 		const appendOnlyContext = new AppendOnlyContextManager();
 		const advisorThinkingLevel = advisorSel.thinkingLevel ?? ThinkingLevel.Medium;
+		const systemPrompt = [advisorSystemPrompt];
+		if (this.#advisorWatchdogPrompt) {
+			systemPrompt.push(this.#advisorWatchdogPrompt);
+		}
 		const advisorAgent = new Agent({
 			initialState: {
-				systemPrompt: [advisorSystemPrompt],
+				systemPrompt,
 				model: advisorSel.model,
 				thinkingLevel: toReasoningEffort(advisorThinkingLevel),
 				tools: [adviseTool, ...advisorReadOnlyTools],
@@ -1660,89 +1668,58 @@ export class AgentSession {
 			return true;
 		}
 
-		let action: "context-full" | "snapcompact" =
-			compactionSettings.strategy === "snapcompact" && advisorModel.input.includes("image")
-				? "snapcompact"
-				: "context-full";
+		const advisorCompactionThinkingLevel: ThinkingLevel | undefined = advisor.state.disableReasoning
+			? ThinkingLevel.Off
+			: advisor.state.thinkingLevel;
 
-		let summary: string;
-		let shortSummary: string | undefined;
-		let firstKeptEntryId: string;
-		let tokensBefore: number;
+		// Advisor state is in-memory-only, so snapcompact's frame archive has no
+		// stable SessionEntry preserveData slot to carry across future advisor
+		// maintenance runs. Use an LLM summary even when the primary session is
+		// configured for snapcompact.
+		const availableModels = this.#modelRegistry.getAvailable();
+		const candidates = this.#resolveCompactionModelCandidates(advisorModel, availableModels);
+		if (candidates.length === 0) {
+			// No compaction candidates, fallback to re-prime
+			return true;
+		}
 
-		// Try snapcompact first if vision model
-		let snapcompactResult: snapcompact.CompactionResult | undefined;
-		if (action === "snapcompact") {
+		let compactResult: CompactionResult | undefined;
+		let lastError: unknown;
+
+		for (const candidate of candidates) {
+			const apiKey = await this.#modelRegistry.getApiKey(
+				candidate,
+				this.sessionId ? `${this.sessionId}-advisor` : undefined,
+			);
+			if (!apiKey) continue;
+
 			try {
-				snapcompactResult = await snapcompact.compact(preparation, {
-					convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
-					model: advisorModel,
-					maxFrames: snapcompact.providerFrameBudget(advisorModel.provider),
-				});
-				const budget = contextWindow - effectiveReserveTokens(contextWindow, compactionSettings);
-				const projected = this.#projectSnapcompactContextTokens(preparation, snapcompactResult);
-				if (projected > budget) {
-					action = "context-full";
-					snapcompactResult = undefined;
-				}
-			} catch (err) {
-				logger.warn("Advisor snapcompact failed, falling back to LLM summary", { error: String(err) });
-				action = "context-full";
-			}
-		}
-
-		if (snapcompactResult) {
-			summary = snapcompactResult.summary;
-			shortSummary = snapcompactResult.shortSummary;
-			firstKeptEntryId = snapcompactResult.firstKeptEntryId;
-			tokensBefore = snapcompactResult.tokensBefore;
-		} else {
-			// Run LLM-summary compaction
-			const availableModels = this.#modelRegistry.getAvailable();
-			const candidates = this.#resolveCompactionModelCandidates(advisorModel, availableModels);
-			if (candidates.length === 0) {
-				// No compaction candidates, fallback to re-prime
-				return true;
-			}
-
-			let compactResult: CompactionResult | undefined;
-			let lastError: unknown;
-
-			for (const candidate of candidates) {
-				const apiKey = await this.#modelRegistry.getApiKey(
+				compactResult = await compact(
+					preparation,
 					candidate,
-					this.sessionId ? `${this.sessionId}-advisor` : undefined,
+					this.#modelRegistry.resolver(candidate, this.sessionId ? `${this.sessionId}-advisor` : undefined),
+					undefined,
+					undefined,
+					{
+						thinkingLevel: advisorCompactionThinkingLevel,
+						convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
+					},
 				);
-				if (!apiKey) continue;
-
-				try {
-					compactResult = await compact(
-						preparation,
-						candidate,
-						this.#modelRegistry.resolver(candidate, this.sessionId ? `${this.sessionId}-advisor` : undefined),
-						undefined,
-						undefined,
-						{
-							thinkingLevel: toReasoningEffort(advisor.state.thinkingLevel),
-							convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
-						},
-					);
-					break;
-				} catch (error) {
-					lastError = error;
-				}
+				break;
+			} catch (error) {
+				lastError = error;
 			}
-
-			if (!compactResult) {
-				logger.warn("Advisor compaction failed, falling back to re-prime", { error: String(lastError) });
-				return true;
-			}
-
-			summary = compactResult.summary;
-			shortSummary = compactResult.shortSummary;
-			firstKeptEntryId = compactResult.firstKeptEntryId;
-			tokensBefore = compactResult.tokensBefore;
 		}
+
+		if (!compactResult) {
+			logger.warn("Advisor compaction failed, falling back to re-prime", { error: String(lastError) });
+			return true;
+		}
+
+		const summary = compactResult.summary;
+		const shortSummary = compactResult.shortSummary;
+		const firstKeptEntryId = compactResult.firstKeptEntryId;
+		const tokensBefore = compactResult.tokensBefore;
 
 		// Rebuild messages with the compaction summary
 		const summaryMessage = {
@@ -11214,6 +11191,7 @@ export class AgentSession {
 	 */
 	setAdvisorEnabled(enabled: boolean): boolean {
 		if (enabled) {
+			this.settings.clearOverride("advisor.enabled");
 			this.settings.set("advisor.enabled", true);
 			return this.#buildAdvisorRuntime(true);
 		}

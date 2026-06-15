@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Breaking Changes
 
 - Renamed the SDK tool format type and resolver from `ToolCallFormat`/`resolveToolCallSyntax` to `DialectFormat`/`resolveDialect`, and the agent option from `toolCallSyntax` to `dialect`.
@@ -8,6 +9,7 @@
 
 ### Added
 
+- Added automatic discovery of WATCHDOG.md files from user and project locations so advisor guidance from local watchdog instructions is appended to its system prompt
 - Added `/advisor on`, `/advisor off`, `/advisor status`, and `/advisor dump [raw]` slash-command subcommands to manage the advisor at runtime
 - Added `advisor.enabled` and `advisor.subagents` settings to enable the advisor and extend it to spawned task/eval subagents
 - Added advisor status badge (`++` in success color) to the status line when an advisor is active
@@ -17,14 +19,18 @@
 
 ### Changed
 
+- Changed advisor prompting guidance to emit at most one `advise` per update and to prefer silence when the agent is on track
 - Changed `/dump` default output to compact markdown format; use `/dump raw` for the legacy uncompact format
 - Changed `/dump` and `/advisor dump` to default to compact transcript output and accept an optional `raw` flag for the legacy uncompact format
 - Session dump output now renders message history using the model's native dialect turn envelope instead of markdown role headings
+- Changed RPC, RPC-UI, and ACP hosts to default the advisor settings off instead of inheriting a user's interactive-session advisor preference.
 
 ### Fixed
-- Fixed advisor message card notes getting truncated to two lines when the card is collapsed.
 
-- Fixed advisor context handling to automatically maintain its token budget by promoting the advisor model or compacting/restarting advisor context when needed, preventing advice from degrading on long sessions
+- Fixed advisor context batching to still send pending review updates when context maintenance fails instead of dropping the batch
+- Fixed explicit advisor enablement to clear protocol-default overrides so enabling the advisor applies immediately
+- Fixed advisor message card notes getting truncated to two lines when the card is collapsed.
+- Fixed advisor context handling to maintain its token budget by promoting or compacting/restarting advisor context while preserving advisor reasoning-off settings.
 - Fixed `startup.quiet` leaving MCP and LSP startup status events visible during launch ([#2639](https://github.com/can1357/oh-my-pi/issues/2639)).
 - Registered the `Advisor` group in the `model` settings tab so advisor settings render correctly in the settings panel.
 

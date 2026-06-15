@@ -80,6 +80,17 @@ describe("AgentSession advisor toggle", () => {
 		expect(session.formatAdvisorStatus()).toContain("Advisor is enabled (anthropic/claude-sonnet-4-5)");
 	});
 
+	it("explicit enable clears protocol default-off override", () => {
+		session.settings.setModelRole("advisor", "anthropic/claude-sonnet-4-5");
+		session.settings.override("advisor.enabled", false);
+
+		const active = session.setAdvisorEnabled(true);
+
+		expect(active).toBe(true);
+		expect(session.isAdvisorActive()).toBe(true);
+		expect(session.settings.get("advisor.enabled")).toBe(true);
+	});
+
 	it("toggle disables the advisor and runtime", () => {
 		session.settings.setModelRole("advisor", "anthropic/claude-sonnet-4-5");
 		session.toggleAdvisorEnabled();

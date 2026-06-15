@@ -241,6 +241,82 @@ describe("ACP lazy startup", () => {
 			bashAutoBackgroundThresholdMs: 1234,
 		});
 	});
+
+	it("default-disables advisor for protocol hosts", async () => {
+		const { runRootCommand } = await import("@oh-my-pi/pi-coding-agent/main");
+
+		type ObservedAdvisorSettings = {
+			enabled: boolean;
+			subagents: boolean;
+		};
+
+		const runProtocolStartup = async (mode: "rpc" | "rpc-ui" | "acp"): Promise<ObservedAdvisorSettings> => {
+			using tempDir = TempDir.createSync("@omp-protocol-advisor-settings-");
+			const cwd = tempDir.path();
+			const authStorage = await AuthStorage.create(path.join(cwd, "auth.db"));
+			const settings = Settings.isolated({
+				"advisor.enabled": true,
+				"advisor.subagents": true,
+			});
+			let observed: ObservedAdvisorSettings | undefined;
+			const stopMessage = "stop test protocol mode";
+
+			try {
+				await runRootCommand(
+					{
+						mode,
+						messages: [],
+						fileArgs: [],
+						unknownFlags: new Map(),
+						unrecognizedFlags: [],
+						noSkills: true,
+						noRules: true,
+						noTools: true,
+						noLsp: true,
+						noExtensions: true,
+						sessionDir: cwd,
+					},
+					[],
+					{
+						discoverAuthStorage: async () => authStorage,
+						settings,
+						createAgentSession: async () => {
+							observed = {
+								enabled: settings.get("advisor.enabled"),
+								subagents: settings.get("advisor.subagents"),
+							};
+							throw new Error(stopMessage);
+						},
+						runAcpMode: async () => {
+							observed = {
+								enabled: settings.get("advisor.enabled"),
+								subagents: settings.get("advisor.subagents"),
+							};
+							throw new Error(stopMessage);
+						},
+					},
+				);
+			} catch (error) {
+				if (!(error instanceof Error) || error.message !== stopMessage) {
+					throw error;
+				}
+			} finally {
+				authStorage.close();
+			}
+
+			if (!observed) {
+				throw new Error("Expected protocol mode to start");
+			}
+			return observed;
+		};
+
+		for (const mode of ["rpc", "rpc-ui", "acp"] as const) {
+			await expect(runProtocolStartup(mode)).resolves.toEqual({
+				enabled: false,
+				subagents: false,
+			});
+		}
+	});
 	it("answers initialize before creating the first AgentSession", async () => {
 		const clientToAgent = new TransformStream();
 		const agentToClient = new TransformStream();
