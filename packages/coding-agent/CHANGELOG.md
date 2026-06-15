@@ -1,6 +1,11 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Renamed the SDK tool format type and resolver from `ToolCallFormat`/`resolveToolCallSyntax` to `DialectFormat`/`resolveDialect`, and the agent option from `toolCallSyntax` to `dialect`.
+- Changed `/dump` transcript output to render messages with the selected model's native dialect turn and thinking envelopes instead of markdown role headings.
+
 
 ## [15.13.3] - 2026-06-15
 
@@ -8,6 +13,7 @@
 
 - Unexpected stop detection: optional tiny/smol classifier that continues the turn when the assistant says it will act but emits no tool calls.
 - Settings `features.unexpectedStopDetection` and `providers.unexpectedStopModel`.
+- Animated "thinking" pulse (`·‥…‥`) shown in place of a hidden thinking block while the model is actively reasoning, so streaming progress is visible even with `hideThinkingBlock` enabled.
 
 ### Changed
 
