@@ -159,6 +159,9 @@ export interface InteractiveModeContext {
 	lastEscapeTime: number;
 	lastLeftTapTime: number;
 	shutdownRequested: boolean;
+	/** True once `shutdown()` has started. Read-only from the context;
+	 *  controllers use this to skip work that races with teardown. */
+	readonly isShuttingDown: boolean;
 	hookSelector: HookSelectorComponent | undefined;
 	hookInput: HookInputComponent | undefined;
 	hookEditor: HookEditorComponent | undefined;
