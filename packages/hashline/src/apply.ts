@@ -134,7 +134,7 @@ export const STRUCTURAL_CLOSER_RE = /^\s*[)\]}]+[;,]?\s*$/;
 const JSX_CLOSER_RE = /^\s*(?:<\/>|<\/[A-Za-z][\w.:-]*>|\/>)\s*[;,]?\s*$/;
 const JSX_NAMED_CLOSER_RE = /^\s*<\/([A-Za-z][\w.:-]*)>\s*[;,]?\s*$/;
 const JSX_FRAGMENT_CLOSER_RE = /^\s*<\/>\s*[;,]?\s*$/;
-const JSX_TAG_RE = /<>|<\/>|<\/?([A-Za-z][\w.:-]*)\b[^>]*>/g;
+const JSX_TAG_RE = /<>|<\/>|<\/?([A-Za-z][\w.:-]*)\b[\s\S]*?>/g;
 
 function isStructuralCloserLine(text: string): boolean {
 	return STRUCTURAL_CLOSER_RE.test(text) || JSX_CLOSER_RE.test(text);
@@ -146,24 +146,27 @@ function jsxCloserName(text: string): string | undefined {
 	return match?.[1];
 }
 
+function isSelfClosingJsxTag(text: string): boolean {
+	return /\/>\s*$/.test(text);
+}
+
 function payloadHasJsxOpenerForEcho(payloadPrefix: readonly string[], echoLines: readonly string[]): boolean {
 	const openTags: string[] = [];
-	for (const line of payloadPrefix) {
-		JSX_TAG_RE.lastIndex = 0;
-		let match = JSX_TAG_RE.exec(line);
-		while (match !== null) {
-			const raw = match[0];
-			if (raw === "<>") {
-				openTags.push("");
-			} else if (raw === "</>") {
-				if (openTags[openTags.length - 1] === "") openTags.pop();
-			} else if (raw.startsWith("</")) {
-				if (openTags[openTags.length - 1] === match[1]) openTags.pop();
-			} else if (!raw.endsWith("/>")) {
-				openTags.push(match[1]);
-			}
-			match = JSX_TAG_RE.exec(line);
+	const payloadText = payloadPrefix.join("\n");
+	JSX_TAG_RE.lastIndex = 0;
+	let match = JSX_TAG_RE.exec(payloadText);
+	while (match !== null) {
+		const raw = match[0];
+		if (raw === "<>") {
+			openTags.push("");
+		} else if (raw === "</>") {
+			if (openTags[openTags.length - 1] === "") openTags.pop();
+		} else if (raw.startsWith("</")) {
+			if (openTags[openTags.length - 1] === match[1]) openTags.pop();
+		} else if (!isSelfClosingJsxTag(raw)) {
+			openTags.push(match[1]);
 		}
+		match = JSX_TAG_RE.exec(payloadText);
 	}
 	for (const line of echoLines) {
 		const name = jsxCloserName(line);
