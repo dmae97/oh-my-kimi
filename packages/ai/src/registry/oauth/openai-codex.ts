@@ -1,6 +1,8 @@
 /**
  * OpenAI Codex (ChatGPT OAuth) flow — browser and device-code flows.
  */
+
+import { OPENAI_HEADER_VALUES } from "@oh-my-pi/pi-catalog/wire/codex";
 import { OAuthCallbackFlow, type OAuthCallbackFlowOptions } from "./callback-server";
 import { generatePKCE } from "./pkce";
 import type { OAuthController, OAuthCredentials } from "./types";
@@ -60,6 +62,29 @@ interface PKCE {
 	verifier: string;
 	challenge: string;
 }
+/** Builds the Codex browser OAuth URL used by browser login; exported for auth regression tests. */
+export function createOpenAICodexAuthorizationUrl(args: {
+	state: string;
+	redirectUri: string;
+	challenge: string;
+	originator?: string;
+}): string {
+	const originator = args.originator?.trim() || OPENAI_HEADER_VALUES.ORIGINATOR_CODEX;
+	const searchParams = new URLSearchParams({
+		response_type: "code",
+		client_id: CLIENT_ID,
+		redirect_uri: args.redirectUri,
+		scope: SCOPE,
+		code_challenge: args.challenge,
+		code_challenge_method: "S256",
+		state: args.state,
+		id_token_add_organizations: "true",
+		codex_cli_simplified_flow: "true",
+		originator,
+	});
+
+	return `${AUTHORIZE_URL}?${searchParams.toString()}`;
+}
 
 class OpenAICodexOAuthFlow extends OAuthCallbackFlow {
 	constructor(
@@ -79,20 +104,12 @@ class OpenAICodexOAuthFlow extends OAuthCallbackFlow {
 	}
 
 	async generateAuthUrl(state: string, redirectUri: string): Promise<{ url: string; instructions?: string }> {
-		const searchParams = new URLSearchParams({
-			response_type: "code",
-			client_id: CLIENT_ID,
-			redirect_uri: redirectUri,
-			scope: SCOPE,
-			code_challenge: this.pkce.challenge,
-			code_challenge_method: "S256",
+		const url = createOpenAICodexAuthorizationUrl({
 			state,
-			id_token_add_organizations: "true",
-			codex_cli_simplified_flow: "true",
+			redirectUri,
+			challenge: this.pkce.challenge,
 			originator: this.originator,
 		});
-
-		const url = `${AUTHORIZE_URL}?${searchParams.toString()}`;
 		return { url, instructions: "A browser window should open. Complete login to finish." };
 	}
 
@@ -153,13 +170,13 @@ async function exchangeCodeForToken(code: string, verifier: string, redirectUri:
  * Login with OpenAI Codex OAuth
  */
 export type OpenAICodexLoginOptions = OAuthController & {
-	/** Optional originator value for OpenAI Codex OAuth. Default: "opencode". */
+	/** Optional originator value for OpenAI Codex OAuth. Default matches OMP Codex request headers. */
 	originator?: string;
 };
 
 export async function loginOpenAICodex(options: OpenAICodexLoginOptions): Promise<OAuthCredentials> {
 	const pkce = await generatePKCE();
-	const originator = options.originator?.trim() || "opencode";
+	const originator = options.originator?.trim() || OPENAI_HEADER_VALUES.ORIGINATOR_CODEX;
 	const flow = new OpenAICodexOAuthFlow(options, pkce, originator);
 
 	return flow.login();
