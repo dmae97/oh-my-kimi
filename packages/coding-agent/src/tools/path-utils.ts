@@ -561,8 +561,8 @@ export async function splitDelimitedPathEntry(
 	}
 
 	return (
-		(await tryDelimitedPathSplit(normalizedEntry, cwd, splitter, "comma", false)) ??
 		(await tryDelimitedPathSplit(normalizedEntry, cwd, splitter, "semicolon", false)) ??
+		(await tryDelimitedPathSplit(normalizedEntry, cwd, splitter, "comma", false)) ??
 		(await tryDelimitedPathSplit(normalizedEntry, cwd, splitter, "whitespace", true)) ??
 		(await tryDelimitedPathSplit(normalizedEntry, cwd, splitter, "mixed", true))
 	);
