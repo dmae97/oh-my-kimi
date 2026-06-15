@@ -1,8 +1,8 @@
 /**
  * Large-paste menu: when a paste reaches the configured `paste.largeMenuThreshold` line count,
  * the editor's `onLargePaste` hook routes through `InputController.handleLargePaste`, which offers
- * to wrap the text in a code block, wrap it in XML tags, or save it to a `local://` file. Below the
- * threshold (or when disabled) the editor keeps its default collapse-to-`[Paste]`-marker behavior.
+ * to attach the text as an `<attachment>` block, save it to a `local://` file, or paste it inline.
+ * Below the threshold (or when disabled) the editor keeps its default collapse-to-`[Paste]`-marker behavior.
  */
 
 import { afterEach, describe, expect, it, vi } from "bun:test";
@@ -66,29 +66,33 @@ describe("InputController.handleLargePaste gate", () => {
 });
 
 describe("InputController.presentLargePasteMenu actions", () => {
-	it("wraps the paste in a fenced code block collapsed to a marker", async () => {
-		const { controller, spies } = createContext({ choice: "Wrap in a code block" });
-
-		await controller.presentLargePasteMenu("hello\nworld", 2);
-
-		expect(spies.insertPaste).toHaveBeenCalledTimes(1);
-		expect(spies.insertPaste.mock.calls[0][0]).toBe("```\nhello\nworld\n```");
-	});
-
-	it("widens the fence so an embedded code fence cannot terminate the block early", async () => {
-		const { controller, spies } = createContext({ choice: "Wrap in a code block" });
-
-		await controller.presentLargePasteMenu("```\ncode\n```", 3);
-
-		expect(spies.insertPaste.mock.calls[0][0]).toBe("````\n```\ncode\n```\n````");
-	});
-
-	it("wraps the paste in XML tags collapsed to a marker", async () => {
-		const { controller, spies } = createContext({ choice: "Wrap in XML tags" });
+	it("offers the requested actions in order", async () => {
+		const { controller, spies } = createContext({ choice: undefined });
 
 		await controller.presentLargePasteMenu("payload", 1);
 
-		expect(spies.insertPaste).toHaveBeenCalledWith("<pasted_text>\npayload\n</pasted_text>");
+		const options = spies.showHookSelector.mock.calls[0][1] as Array<{ label: string }>;
+		expect(options.map((option) => option.label)).toEqual([
+			"Attach as a wrapped block",
+			"Attach as local file",
+			"Paste inline",
+		]);
+	});
+
+	it("wraps the paste in attachment XML collapsed to a marker", async () => {
+		const { controller, spies } = createContext({ choice: "Attach as a wrapped block" });
+
+		await controller.presentLargePasteMenu("payload", 1);
+
+		expect(spies.insertPaste).toHaveBeenCalledWith("<attachment>\npayload\n</attachment>");
+	});
+
+	it("pastes inline when explicitly selected", async () => {
+		const { controller, spies } = createContext({ choice: "Paste inline" });
+
+		await controller.presentLargePasteMenu("payload", 1);
+
+		expect(spies.insertPaste).toHaveBeenCalledWith("payload");
 	});
 
 	it("pastes inline when the menu is cancelled, so the content is not lost", async () => {
@@ -118,7 +122,7 @@ describe("InputController.presentLargePasteMenu file attachment", () => {
 
 	it("saves the paste to local:// and inserts a clean local://attachment reference", async () => {
 		dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-paste-test-"));
-		const { controller, spies } = createContext({ choice: "Attach as a file", artifactsDir: dir });
+		const { controller, spies } = createContext({ choice: "Attach as local file", artifactsDir: dir });
 
 		await controller.presentLargePasteMenu("line one\nline two", 2);
 
@@ -132,7 +136,7 @@ describe("InputController.presentLargePasteMenu file attachment", () => {
 	it("does not overwrite an existing attachment file", async () => {
 		dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-paste-test-"));
 		await Bun.write(path.join(dir, "local", "attachment-1"), "previous");
-		const { controller, spies } = createContext({ choice: "Attach as a file", artifactsDir: dir });
+		const { controller, spies } = createContext({ choice: "Attach as local file", artifactsDir: dir });
 
 		await controller.presentLargePasteMenu("fresh", 1);
 

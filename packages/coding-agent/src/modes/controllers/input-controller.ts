@@ -44,26 +44,9 @@ function hasPasteText(value: unknown): value is PasteTarget {
 	return typeof value === "object" && value !== null && typeof (value as PasteTarget).pasteText === "function";
 }
 
-/** Wrap pasted text in a fenced code block, using a backtick fence longer than any run of
- *  backticks already in the content so an embedded fence cannot terminate the block early. */
-function wrapPasteInCodeBlock(content: string): string {
-	let longestRun = 0;
-	let run = 0;
-	for (let i = 0; i < content.length; i++) {
-		if (content.charCodeAt(i) === 96 /* backtick */) {
-			run++;
-			if (run > longestRun) longestRun = run;
-		} else {
-			run = 0;
-		}
-	}
-	const fence = "`".repeat(Math.max(3, longestRun + 1));
-	return `${fence}\n${content}\n${fence}`;
-}
-
-/** Wrap pasted text in `<pasted_text>` tags so the model treats it as one quoted block. */
-function wrapPasteInXml(content: string): string {
-	return `<pasted_text>\n${content}\n</pasted_text>`;
+/** Wrap pasted text in `<attachment>` tags so the model treats it as one quoted block. */
+function wrapPasteInAttachmentBlock(content: string): string {
+	return `<attachment>\n${content}\n</attachment>`;
 }
 
 const TINY_TITLE_PROGRESS_DONE_TTL_MS = 3_000;
@@ -99,8 +82,8 @@ export class InputController {
 	// (>= LEFT_DOUBLE_TAP_MAX_GAP_MS) starts a fresh sequence. See
 	// #detectLeftDoubleTap.
 	#leftTapCount = 0;
-	// Sequential index for `local://attachment-N` references created by the large-paste "attach as
-	// file" action. Seeded from 0 and bumped past any existing attachment files in #attachPasteAsFile.
+	// Sequential index for `local://attachment-N` references created by the large-paste local-file
+	// action. Seeded from 0 and bumped past any existing attachment files in #attachPasteAsFile.
 	#attachmentCounter = 0;
 
 	#showTinyTitleDownloadProgress(modelKey: string): void {
@@ -1282,24 +1265,24 @@ export class InputController {
 	}
 
 	/**
-	 * Present the large-paste menu and apply the chosen action: wrap in a code block or in XML tags
-	 * (both collapse to a `[Paste]` marker that expands on submit), or save the text to a file and
-	 * reference its path so the agent can `read` it on demand. Cancelling (Esc) falls back to the
-	 * default inline paste marker, so the pasted content is never lost.
+	 * Present the large-paste menu and apply the chosen action: wrap in `<attachment>` tags (collapsed
+	 * to a `[Paste]` marker that expands on submit), save the text to a file and reference its path so
+	 * the agent can `read` it on demand, or paste inline. Cancelling (Esc) falls back to the default
+	 * inline paste marker, so the pasted content is never lost.
 	 */
 	async presentLargePasteMenu(text: string, lineCount: number): Promise<void> {
-		const CODE_BLOCK = "Wrap in a code block";
-		const XML = "Wrap in XML tags";
-		const FILE = "Attach as a file";
+		const WRAPPED_BLOCK = "Attach as a wrapped block";
+		const LOCAL_FILE = "Attach as local file";
+		const INLINE = "Paste inline";
 
 		let choice: string | undefined;
 		try {
 			choice = await this.ctx.showHookSelector(
 				`Pasted ${lineCount} lines`,
 				[
-					{ label: CODE_BLOCK, description: "Fence the text in a ``` block, collapsed to a marker" },
-					{ label: XML, description: "Wrap the text in <pasted_text> tags, collapsed to a marker" },
-					{ label: FILE, description: "Save the text to a file and reference its path" },
+					{ label: WRAPPED_BLOCK, description: "Wrap the text in <attachment> tags, collapsed to a marker" },
+					{ label: LOCAL_FILE, description: "Save the text to a local://attachment file" },
+					{ label: INLINE, description: "Collapse the text to an inline paste marker" },
 				],
 				{ helpText: "Esc to paste inline" },
 			);
@@ -1309,14 +1292,14 @@ export class InputController {
 		}
 
 		switch (choice) {
-			case CODE_BLOCK:
-				this.ctx.editor.insertPaste(wrapPasteInCodeBlock(text));
+			case WRAPPED_BLOCK:
+				this.ctx.editor.insertPaste(wrapPasteInAttachmentBlock(text));
 				break;
-			case XML:
-				this.ctx.editor.insertPaste(wrapPasteInXml(text));
-				break;
-			case FILE:
+			case LOCAL_FILE:
 				await this.#attachPasteAsFile(text, lineCount);
+				break;
+			case INLINE:
+				this.ctx.editor.insertPaste(text);
 				break;
 			default:
 				// Esc / cancel: keep the original behavior — collapse to an inline paste marker.
