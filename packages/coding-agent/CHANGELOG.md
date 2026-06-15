@@ -1,6 +1,14 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Unexpected stop detection: optional tiny/smol classifier that continues the turn when the assistant says it will act but emits no tool calls.
+- Settings `features.unexpectedStopDetection` and `providers.unexpectedStopModel`.
+
+### Changed
+
+- Capped unexpected-stop auto-continuation to three retry attempts before giving up on repeated stops
 
 ## [15.13.2] - 2026-06-15
 

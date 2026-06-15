@@ -202,6 +202,7 @@ import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool
 };
 import ttsrInterruptTemplate from "../prompts/system/ttsr-interrupt.md" with { type: "text" };
 import ttsrToolReminderTemplate from "../prompts/system/ttsr-tool-reminder.md" with { type: "text" };
+import unexpectedStopRetryTemplate from "../prompts/system/unexpected-stop-retry.md" with { type: "text" };
 import {
 	deobfuscateSessionContext,
 	obfuscateProviderContext,
@@ -270,6 +271,7 @@ import { EPHEMERAL_MODEL_CHANGE_ROLE } from "./session-entries";
 import type { SessionManager } from "./session-manager";
 import type { ShakeMode, ShakeResult } from "./shake-types";
 import { ToolChoiceQueue } from "./tool-choice-queue";
+import { classifyUnexpectedStop, isUnexpectedStopCandidate } from "./unexpected-stop-classifier";
 import { YieldQueue } from "./yield-queue";
 
 /** Session-specific events that extend the core AgentEvent */
@@ -308,14 +310,16 @@ export type AgentSessionEvent =
 			resolved?: Effort;
 	  }
 	| { type: "goal_updated"; goal: Goal | null; state?: GoalModeState };
-
 /** Listener function for agent session events */
 export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
+
+const UNEXPECTED_STOP_MAX_RETRIES = 3;
+const UNEXPECTED_STOP_TIMEOUT_MS = 4000;
+const EMPTY_STOP_MAX_RETRIES = 3;
+const RETRY_BACKOFF_MAX_DELAY_MS = 8_000;
 export type CommandMetadataChangedListener = () => void | Promise<void>;
 export type AsyncJobSnapshotItem = Pick<AsyncJob, "id" | "type" | "status" | "label" | "startTime">;
 
-const EMPTY_STOP_MAX_RETRIES = 3;
-const RETRY_BACKOFF_MAX_DELAY_MS = 8_000;
 const RETRY_BACKOFF_JITTER_RATIO = 0.25;
 /**
  * Hysteresis band for the post-shake "did we actually create headroom?" check.
@@ -1106,15 +1110,14 @@ export class AgentSession {
 	// `#emit(event)` that reaches external subscribers (rpc-mode stdout, ACP bridge,
 	// Cursor exec, TUI listeners) is held back. Without this, a client that resumes
 	// on `agent_end` can fire its next `prompt` before #promptWithMessage's finally
-	// has decremented #promptInFlightCount, hitting AgentBusyError. Flushed from
-	// both #endInFlight (normal) and #resetInFlight (abort).
+	#emptyStopRetryCount = 0;
+	#unexpectedStopRetryCount = 0;
+	#promptGeneration = 0;
 	#pendingAgentEndEmit: AgentSessionEvent | undefined;
 	#obfuscator: SecretObfuscator | undefined;
 	#checkpointState: CheckpointState | undefined = undefined;
 	#pendingRewindReport: string | undefined = undefined;
 	#lastSuccessfulYieldToolCallId: string | undefined = undefined;
-	#emptyStopRetryCount = 0;
-	#promptGeneration = 0;
 	#providerSessionState = new Map<string, ProviderSessionState>();
 	#hindsightSessionState: HindsightSessionState | undefined = undefined;
 	readonly rawSseDebugBuffer: RawSseDebugBuffer;
@@ -1931,6 +1934,9 @@ export class AgentSession {
 			this.#lastSuccessfulYieldToolCallId = undefined;
 
 			if (await this.#handleEmptyAssistantStop(msg)) {
+				return;
+			}
+			if (await this.#handleUnexpectedAssistantStop(msg)) {
 				return;
 			}
 
@@ -4765,6 +4771,7 @@ export class AgentSession {
 			this.#todoReminderCount = 0;
 			this.#todoReminderAwaitingProgress = false;
 			this.#emptyStopRetryCount = 0;
+			this.#unexpectedStopRetryCount = 0;
 
 			await this.#maybeRestoreRetryFallbackPrimary();
 
@@ -7025,6 +7032,71 @@ export class AgentSession {
 		return prompt.render(emptyStopRetryTemplate, {
 			retryCount: this.#emptyStopRetryCount,
 			maxRetries: EMPTY_STOP_MAX_RETRIES,
+		});
+	}
+	async #handleUnexpectedAssistantStop(assistantMessage: AssistantMessage): Promise<boolean> {
+		if (!this.settings.get("features.unexpectedStopDetection")) {
+			return false;
+		}
+		if (!isUnexpectedStopCandidate(assistantMessage)) {
+			this.#unexpectedStopRetryCount = 0;
+			return false;
+		}
+
+		const text = assistantMessage.content
+			.filter((content): content is TextContent => content.type === "text")
+			.map(content => content.text)
+			.join("\n");
+		if (!/\S/.test(text)) {
+			this.#unexpectedStopRetryCount = 0;
+			return false;
+		}
+
+		const controller = new AbortController();
+		const timeout = setTimeout(() => controller.abort(), UNEXPECTED_STOP_TIMEOUT_MS);
+		let classification: boolean | undefined;
+		try {
+			classification = await classifyUnexpectedStop(text, {
+				settings: this.settings,
+				registry: this.#modelRegistry,
+				sessionId: this.sessionId,
+				metadataResolver: (provider: string) => this.agent.metadataForProvider(provider),
+				signal: controller.signal,
+			});
+		} finally {
+			clearTimeout(timeout);
+		}
+
+		if (classification !== true) {
+			this.#unexpectedStopRetryCount = 0;
+			return false;
+		}
+
+		this.#unexpectedStopRetryCount++;
+		if (this.#unexpectedStopRetryCount > UNEXPECTED_STOP_MAX_RETRIES) {
+			logger.warn("Assistant returned unexpected stop after retry cap", {
+				attempts: this.#unexpectedStopRetryCount - 1,
+				model: assistantMessage.model,
+				provider: assistantMessage.provider,
+			});
+			this.#unexpectedStopRetryCount = 0;
+			return false;
+		}
+
+		this.agent.appendMessage({
+			role: "developer",
+			content: [{ type: "text", text: this.#unexpectedStopRetryReminder() }],
+			attribution: "agent",
+			timestamp: Date.now(),
+		});
+		this.#scheduleAgentContinue({ generation: this.#promptGeneration });
+		return true;
+	}
+
+	#unexpectedStopRetryReminder(): string {
+		return prompt.render(unexpectedStopRetryTemplate, {
+			retryCount: this.#unexpectedStopRetryCount,
+			maxRetries: UNEXPECTED_STOP_MAX_RETRIES,
 		});
 	}
 
