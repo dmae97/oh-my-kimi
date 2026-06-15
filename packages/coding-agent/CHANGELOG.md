@@ -7,8 +7,19 @@
 - Renamed the SDK tool format type and resolver from `ToolCallFormat`/`resolveToolCallSyntax` to `DialectFormat`/`resolveDialect`, and the agent option from `toolCallSyntax` to `dialect`.
 - Changed `/dump` transcript output to render messages with the selected model's native dialect turn and thinking envelopes instead of markdown role headings.
 
+### Added
+
+- Added `/advisor on`, `/advisor off`, `/advisor status`, and `/advisor dump [raw]` slash-command subcommands to manage the advisor at runtime
+- Added `advisor.enabled` and `advisor.subagents` settings to enable the advisor and extend it to spawned task/eval subagents
+- Added advisor status badge (`++` in success color) to the status line when an advisor is active
+- Added `/dump [raw]` flag to toggle between compact and legacy uncompact transcript output formats
+- Added `/advisor on`, `/advisor off`, and `/advisor status` slash-command subcommands to enable or disable the advisor at runtime and view advisor status metrics
+- Added a passive advisor: assign a second model to the `advisor` role and enable `advisor.enabled` to have it silently review each primary turn and inject severity-tagged advice notes via the `advise` tool. A `nit` rides the non-interrupting aside queue (batched into one card at the next step boundary), while a `concern` or `blocker` interrupts the running agent through the steering channel — aborting in-flight tools, or resuming the agent when it has already yielded — so high-severity advice is acted on immediately. Advice renders in the primary transcript as a distinct `Advisor` card, and the advisor gets hard-isolated read-only `read`/`search`/`find` access — bound to its own `ToolSession` so its reads never touch the primary's snapshot/seen-lines caches — to investigate the workspace before weighing in. The status line shows a `++` badge (in the success color, kept distinct from the model name) after the model name while an advisor is active, and `/advisor dump` copies the advisor's own transcript to the clipboard. Advisors are created only for the top-level session by default; enable `advisor.subagents` to extend them to spawned task/eval subagents.
+
 ### Changed
 
+- Changed `/dump` default output to compact markdown format; use `/dump raw` for the legacy uncompact format
+- Changed `/dump` and `/advisor dump` to default to compact transcript output and accept an optional `raw` flag for the legacy uncompact format
 - Session dump output now renders message history using the model's native dialect turn envelope instead of markdown role headings
 
 ### Fixed

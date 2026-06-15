@@ -270,13 +270,15 @@ export interface InteractiveModeContext {
 	handleShareCommand(): Promise<void>;
 	handleTodoCommand(args: string): Promise<void>;
 	handleSessionCommand(): Promise<void>;
+	handleAdvisorStatusCommand(): Promise<void>;
 	handleJobsCommand(): Promise<void>;
 	handleUsageCommand(reports?: UsageReport[] | null): Promise<void>;
 	handleChangelogCommand(showFull?: boolean): Promise<void>;
 	handleHotkeysCommand(): void;
 	handleToolsCommand(): void;
 	handleContextCommand(): void;
-	handleDumpCommand(): void;
+	handleDumpCommand(isRaw?: boolean): void;
+	handleAdvisorDumpCommand(isRaw?: boolean): void;
 	handleDebugTranscriptCommand(): Promise<void>;
 	handleClearCommand(): Promise<void>;
 	handleFreshCommand(): Promise<void>;

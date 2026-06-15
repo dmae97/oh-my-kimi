@@ -3335,8 +3335,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#commandController.handleExportCommand(text);
 	}
 
-	handleDumpCommand() {
-		return this.#commandController.handleDumpCommand();
+	handleDumpCommand(isRaw?: boolean) {
+		return this.#commandController.handleDumpCommand(isRaw);
+	}
+
+	handleAdvisorDumpCommand(isRaw?: boolean) {
+		return this.#commandController.handleAdvisorDumpCommand(isRaw);
 	}
 
 	handleDebugTranscriptCommand(): Promise<void> {
@@ -3353,6 +3357,10 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	handleSessionCommand(): Promise<void> {
 		return this.#commandController.handleSessionCommand();
+	}
+
+	handleAdvisorStatusCommand(): Promise<void> {
+		return this.#commandController.handleAdvisorStatusCommand();
 	}
 
 	handleJobsCommand(): Promise<void> {

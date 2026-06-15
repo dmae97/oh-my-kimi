@@ -86,32 +86,45 @@ const modelSegment: StatusLineSegment = {
 			modelName = modelName.slice(7);
 		}
 
-		let content = withIcon(theme.icon.model, modelName);
-
+		// Fast-mode icon and thinking-level suffix trail the model name and are
+		// colored together with it as `statusLineModel`. The advisor "++" badge
+		// sits between the name and that tail in `accent`, so it reads as a
+		// distinct marker. theme.fg resets only the fg, so the spans are
+		// concatenated (not nested) to keep each color intact.
+		let tail = "";
 		if (ctx.session.isFastModeActive() && theme.icon.fast) {
-			content += ` ${theme.icon.fast}`;
+			tail += ` ${theme.icon.fast}`;
 		}
 
-		// Add thinking level with dot separator
 		if (opts.showThinkingLevel !== false && state.model?.thinking) {
 			if (ctx.session.isAutoThinking) {
 				// Pending (no turn classified yet / classifying) shows a symbol-theme
 				// question-box marker; once resolved it shows `<level>`.
 				const resolved = ctx.session.autoResolvedThinkingLevel();
 				const resolvedText = resolved ? (theme.thinking[resolved as keyof typeof theme.thinking] ?? resolved) : "";
-				content += `${theme.sep.dot}${resolved ? resolvedText : `${theme.thinking.autoPending} auto`}`;
+				tail += `${theme.sep.dot}${resolved ? resolvedText : `${theme.thinking.autoPending} auto`}`;
 			} else {
 				const level = state.thinkingLevel ?? ThinkingLevel.Off;
 				if (level !== ThinkingLevel.Off) {
 					const thinkingText = theme.thinking[level as keyof typeof theme.thinking];
 					if (thinkingText) {
-						content += `${theme.sep.dot}${thinkingText}`;
+						tail += `${theme.sep.dot}${thinkingText}`;
 					}
 				}
 			}
 		}
 
-		return { content: theme.fg("statusLineModel", content), visible: true };
+		// `statusLineModel` is aliased to `accent` in many themes, so the badge
+		// uses `success` to stay visibly distinct from the model name color.
+		let content = theme.fg("statusLineModel", withIcon(theme.icon.model, modelName));
+		if (ctx.session.isAdvisorActive()) {
+			content += theme.fg("success", "++");
+		}
+		if (tail) {
+			content += theme.fg("statusLineModel", tail);
+		}
+
+		return { content, visible: true };
 	},
 };
 

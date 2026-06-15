@@ -19,6 +19,7 @@ import type { AgentMessage, AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { Usage } from "@oh-my-pi/pi-ai";
 import { Container, Editor, matchesKey, ScrollView, Text, type TUI } from "@oh-my-pi/pi-tui";
 import { formatAge, formatBytes, formatDuration, formatNumber, getProjectDir, logger } from "@oh-my-pi/pi-utils";
+import type { AdvisorMessageDetails } from "../../advisor";
 import { COLLAB_PROMPT_MESSAGE_TYPE, type CollabPromptDetails } from "../../collab/protocol";
 import type { KeyId } from "../../config/keybindings";
 import { settings } from "../../config/settings";
@@ -45,6 +46,7 @@ import { canonicalizeMessage } from "../../utils/thinking-display";
 import type { ObservableSession, SessionObserverRegistry } from "../session-observer-registry";
 import { getEditorTheme, theme } from "../theme/theme";
 import { matchesSelectDown, matchesSelectUp } from "../utils/keybinding-matchers";
+import { createAdvisorMessageCard } from "./advisor-message";
 import { AssistantMessageComponent } from "./assistant-message";
 import { createBackgroundTanDispatchBlock } from "./background-tan-message";
 import { BashExecutionComponent } from "./bash-execution";
@@ -1239,6 +1241,11 @@ export class AgentHubOverlayComponent extends Container {
 				theme,
 			);
 			this.#chatLog.addChild(card);
+			return;
+		}
+		if (message.customType === "advisor") {
+			const details = (message as CustomMessage<AdvisorMessageDetails>).details;
+			this.#chatLog.addChild(createAdvisorMessageCard(details, () => this.#chatExpanded, theme));
 			return;
 		}
 		if (message.customType === BACKGROUND_TAN_DISPATCH_MESSAGE_TYPE) {

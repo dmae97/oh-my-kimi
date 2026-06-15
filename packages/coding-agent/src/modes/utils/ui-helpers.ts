@@ -1,9 +1,11 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent, Message, Usage } from "@oh-my-pi/pi-ai";
 import { type Component, Spacer, Text, TruncatedText } from "@oh-my-pi/pi-tui";
+import type { AdvisorMessageDetails } from "../../advisor";
 import { COLLAB_PROMPT_MESSAGE_TYPE, type CollabPromptDetails } from "../../collab/protocol";
 import { settings } from "../../config/settings";
 import { getFileSnapshotStore } from "../../edit/file-snapshot-store";
+import { createAdvisorMessageCard } from "../../modes/components/advisor-message";
 import { AssistantMessageComponent } from "../../modes/components/assistant-message";
 import { createBackgroundTanDispatchBlock } from "../../modes/components/background-tan-message";
 import { BashExecutionComponent } from "../../modes/components/bash-execution";
@@ -239,6 +241,13 @@ export class UiHelpers {
 						);
 						this.ctx.chatContainer.addChild(card);
 						return [card];
+					}
+					if (message.customType === "advisor") {
+						const details = (message as CustomMessage<AdvisorMessageDetails>).details;
+						this.ctx.chatContainer.addChild(
+							createAdvisorMessageCard(details, () => this.ctx.toolOutputExpanded, theme),
+						);
+						break;
 					}
 					if (message.customType === BACKGROUND_TAN_DISPATCH_MESSAGE_TYPE) {
 						this.ctx.chatContainer.addChild(createBackgroundTanDispatchBlock(message as CustomMessage<unknown>));

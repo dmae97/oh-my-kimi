@@ -381,6 +381,27 @@ export const SETTINGS_SCHEMA = {
 			description: "Keep the display from idle-sleeping while a session is open (caffeinate -d)",
 		},
 	},
+	"advisor.enabled": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "model",
+			group: "Advisor",
+			label: "Enable Advisor",
+			description:
+				"Pair a second model (assigned to the 'advisor' role) that passively reviews each turn and injects notes.",
+		},
+	},
+	"advisor.subagents": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "model",
+			group: "Advisor",
+			label: "Advisor for Subagents",
+			description: "Also enable the advisor on spawned task/eval subagents.",
+		},
+	},
 	shellPath: { type: "string", default: undefined },
 
 	extensions: { type: "array", default: EMPTY_STRING_ARRAY },

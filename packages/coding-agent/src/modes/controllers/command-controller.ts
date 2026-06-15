@@ -84,9 +84,9 @@ export class CommandController {
 		}
 	}
 
-	handleDumpCommand() {
+	handleDumpCommand(isRaw = false) {
 		try {
-			const formatted = this.ctx.session.formatSessionAsText();
+			const formatted = this.ctx.session.formatSessionAsText({ compact: !isRaw });
 			if (!formatted) {
 				this.ctx.showError("No messages to dump yet.");
 				return;
@@ -95,6 +95,26 @@ export class CommandController {
 			this.ctx.showStatus("Session copied to clipboard");
 		} catch (error: unknown) {
 			this.ctx.showError(`Failed to copy session: ${error instanceof Error ? error.message : "Unknown error"}`);
+		}
+	}
+
+	handleAdvisorDumpCommand(isRaw = false) {
+		try {
+			const advisorHistory = this.ctx.session.formatAdvisorHistoryAsText({ compact: !isRaw });
+			if (advisorHistory === null) {
+				this.ctx.showError("Advisor is not active for this session.");
+				return;
+			}
+			if (!advisorHistory) {
+				this.ctx.showError("Advisor has no history yet.");
+				return;
+			}
+			copyToClipboard(advisorHistory);
+			this.ctx.showStatus("Advisor history copied to clipboard");
+		} catch (error: unknown) {
+			this.ctx.showError(
+				`Failed to copy advisor history: ${error instanceof Error ? error.message : "Unknown error"}`,
+			);
 		}
 	}
 
@@ -302,6 +322,53 @@ export class CommandController {
 			}
 		}
 
+		this.ctx.present([new Spacer(1), new Text(info, 1, 0)]);
+	}
+
+	async handleAdvisorStatusCommand(): Promise<void> {
+		const stats = this.ctx.session.getAdvisorStats();
+		if (!stats.active) {
+			this.ctx.present([
+				new Spacer(1),
+				new Text(
+					stats.configured
+						? "Advisor setting is enabled, but no model is assigned to the 'advisor' role."
+						: "Advisor is disabled.",
+					1,
+					0,
+				),
+			]);
+			return;
+		}
+		const model = stats.model!;
+		let info = `${theme.bold("Advisor Status")}\n\n`;
+		info += `${theme.bold("Provider")}\n`;
+		info += `${theme.fg("dim", "Model:")} ${model.provider}/${model.id}\n`;
+		info += `\n${theme.bold("Messages")}\n`;
+		info += `${theme.fg("dim", "User:")} ${stats.messages.user.toLocaleString()}\n`;
+		info += `${theme.fg("dim", "Assistant:")} ${stats.messages.assistant.toLocaleString()}\n`;
+		info += `${theme.fg("dim", "Total:")} ${stats.messages.total.toLocaleString()}\n`;
+		info += `\n${theme.bold("Context")}\n`;
+		if (stats.contextWindow > 0) {
+			const percent = Math.round((stats.contextTokens / stats.contextWindow) * 100);
+			info += `${theme.fg("dim", "Tokens:")} ${stats.contextTokens.toLocaleString()} / ${stats.contextWindow.toLocaleString()} (${percent}%)\n`;
+		} else {
+			info += `${theme.fg("dim", "Tokens:")} ${stats.contextTokens.toLocaleString()}\n`;
+		}
+		info += `\n${theme.bold("Spend")}\n`;
+		info += `${theme.fg("dim", "Input:")} ${stats.tokens.input.toLocaleString()}\n`;
+		info += `${theme.fg("dim", "Output:")} ${stats.tokens.output.toLocaleString()}\n`;
+		if (stats.tokens.cacheRead > 0) {
+			info += `${theme.fg("dim", "Cache Read:")} ${stats.tokens.cacheRead.toLocaleString()}\n`;
+		}
+		if (stats.tokens.cacheWrite > 0) {
+			info += `${theme.fg("dim", "Cache Write:")} ${stats.tokens.cacheWrite.toLocaleString()}\n`;
+		}
+		info += `${theme.fg("dim", "Total:")} ${stats.tokens.total.toLocaleString()}\n`;
+		if (stats.cost > 0) {
+			info += `\n${theme.bold("Cost")}\n`;
+			info += `${theme.fg("dim", "Total:")} $${stats.cost.toFixed(4)}\n`;
+		}
 		this.ctx.present([new Spacer(1), new Text(info, 1, 0)]);
 	}
 

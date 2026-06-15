@@ -35,6 +35,7 @@ import {
 	prompt,
 	Snowflake,
 } from "@oh-my-pi/pi-utils";
+import { ADVISOR_READONLY_TOOL_NAMES } from "./advisor";
 import { type AsyncJob, AsyncJobManager } from "./async";
 import { AutoLearnController, buildAutoLearnInstructions } from "./autolearn/controller";
 import { loadCapability } from "./capability";
@@ -2537,6 +2538,35 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}
 		}
 
+		// Hard-isolated read-only toolset for the advisor (built unconditionally so
+		// it can be toggled at runtime). Fresh ReadTool/SearchTool/FindTool bound to a
+		// DISTINCT ToolSession so the advisor's investigative reads never touch the
+		// primary's snapshot, seen-lines, conflict, or summary caches (all keyed on
+		// session identity). `cwd` stays dynamic; edit/yield capabilities are off.
+		const advisorToolSession: ToolSession = {
+			...toolSession,
+			get cwd() {
+				return sessionManager.getCwd();
+			},
+			hasEditTool: false,
+			requireYieldTool: false,
+			conflictHistory: undefined,
+			fileSnapshotStore: undefined,
+			getSessionId: () => {
+				const id = sessionManager.getSessionId?.();
+				return id ? `${id}-advisor` : null;
+			},
+			getAgentId: () => "advisor",
+		};
+		const built = await Promise.all(
+			[...ADVISOR_READONLY_TOOL_NAMES].map(name =>
+				BUILTIN_TOOLS[name as keyof typeof BUILTIN_TOOLS](advisorToolSession),
+			),
+		);
+		const advisorReadOnlyTools: Tool[] = built
+			.filter((tool): tool is Tool => tool != null)
+			.map(wrapToolWithMetaNotice);
+
 		session = new AgentSession({
 			agent,
 			thinkingLevel: autoThinking ? AUTO_THINKING : effectiveThinkingLevel,
@@ -2592,6 +2622,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			agentKind,
 			providerSessionId: options.providerSessionId,
 			parentEvalSessionId: options.parentEvalSessionId,
+			advisorReadOnlyTools,
 		});
 		hasSession = true;
 		if (asyncJobManager) {
