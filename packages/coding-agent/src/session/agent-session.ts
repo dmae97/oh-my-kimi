@@ -46,7 +46,9 @@ import {
 	collectEntriesForBranchSummary,
 	collectShakeRegions,
 	compact,
+	createCompactionSummaryMessage,
 	DEFAULT_SHAKE_CONFIG,
+	effectiveReserveTokens,
 	estimateTokens,
 	generateBranchSummary,
 	generateHandoff,
@@ -6423,6 +6425,37 @@ export class AgentSession {
 			let tokensBefore: number;
 			let details: unknown;
 
+			// Snapcompact runs locally first; if its frame archive plus the kept
+			// history still overflows the model window, fall back to an LLM summary
+			// (far cheaper than ~FRAME_TOKEN_ESTIMATE per frame).
+			let snapcompactResult: snapcompact.CompactionResult | undefined;
+			if (snapcompactReady) {
+				snapcompactResult = await snapcompact.compact(preparation, {
+					convertToLlm,
+					model: this.model,
+					shape: snapcompact.resolveShape(this.model, this.settings.get("snapcompact.shape")),
+					// Providers with hard image caps (OpenRouter: 8) silently drop
+					// frames past the cap — keep the archive within budget.
+					maxFrames: snapcompact.providerFrameBudget(this.model?.provider),
+				});
+				const ctxWindow = this.model?.contextWindow ?? 0;
+				const budget =
+					ctxWindow > 0
+						? ctxWindow - effectiveReserveTokens(ctxWindow, compactionSettings)
+						: Number.POSITIVE_INFINITY;
+				if (this.#projectSnapcompactContextTokens(preparation, snapcompactResult) > budget) {
+					logger.warn("Snapcompact still overflows the window; falling back to an LLM summary", {
+						model: this.model?.id,
+					});
+					this.emitNotice(
+						"warning",
+						"snapcompact could not bring the context under the limit — using an LLM summary instead",
+						"compaction",
+					);
+					snapcompactResult = undefined;
+				}
+			}
+
 			if (compactionPrep.kind === "fromHook") {
 				summary = compactionPrep.summary;
 				shortSummary = compactionPrep.shortSummary;
@@ -6430,15 +6463,7 @@ export class AgentSession {
 				tokensBefore = compactionPrep.tokensBefore;
 				details = compactionPrep.details;
 				preserveData = compactionPrep.preserveData;
-			} else if (snapcompactReady) {
-				const snapcompactResult = await snapcompact.compact(preparation, {
-					convertToLlm,
-					model: this.model,
-					shape: snapcompact.resolveShape(this.model, this.settings.get("snapcompact.shape")),
-					// Providers with hard image caps (OpenRouter: 8) silently drop
-					// frames past the cap — keep the archive within budget.
-					maxFrames: snapcompact.providerFrameBudget(this.model.provider),
-				});
+			} else if (snapcompactResult) {
 				summary = snapcompactResult.summary;
 				shortSummary = snapcompactResult.shortSummary;
 				firstKeptEntryId = snapcompactResult.firstKeptEntryId;
@@ -6754,6 +6779,19 @@ export class AgentSession {
 		const compactionSettings = this.settings.getGroup("compaction");
 		const contextTokens = this.#estimatePendingPromptTokens(messages);
 		if (!shouldCompact(contextTokens, contextWindow, compactionSettings)) return;
+
+		// Auto-promote first: switching to a larger-context model avoids compacting
+		// the history at all. The post-turn threshold path already promotes before
+		// compacting; without this, the pre-prompt path would pre-empt promotion and
+		// compact (snapcompact/summary) a session that should have just been promoted.
+		if (await this.#promoteContextModel()) {
+			logger.debug("Pre-prompt context promotion avoided compaction", {
+				contextTokens,
+				contextWindow,
+				model: `${model.provider}/${model.id}`,
+			});
+			return;
+		}
 
 		logger.debug("Pre-prompt context maintenance triggered by pending prompt size", {
 			contextTokens,
@@ -7324,12 +7362,28 @@ export class AgentSession {
 	 * Returns true if promotion succeeded (caller should retry without compacting).
 	 */
 	async #tryContextPromotion(assistantMessage: AssistantMessage): Promise<boolean> {
+		const currentModel = this.model;
+		if (!currentModel) return false;
+		// The overflow/length error may have come from a model the user already
+		// switched away from; only promote when the failing turn was this model.
+		if (assistantMessage.provider !== currentModel.provider || assistantMessage.model !== currentModel.id)
+			return false;
+		return this.#promoteContextModel();
+	}
+
+	/**
+	 * Switch to a larger-context sibling when context promotion is enabled and a
+	 * target with a strictly larger window (and a usable key) exists. Returns true
+	 * when the model was switched, so the caller can retry without compacting.
+	 * Message-independent core shared by the post-turn overflow path
+	 * ({@link #tryContextPromotion}) and the pre-prompt threshold path
+	 * ({@link #runPrePromptCompactionIfNeeded}).
+	 */
+	async #promoteContextModel(): Promise<boolean> {
 		const promotionSettings = this.settings.getGroup("contextPromotion");
 		if (!promotionSettings.enabled) return false;
 		const currentModel = this.model;
 		if (!currentModel) return false;
-		if (assistantMessage.provider !== currentModel.provider || assistantMessage.model !== currentModel.id)
-			return false;
 		const contextWindow = currentModel.contextWindow ?? 0;
 		if (contextWindow <= 0) return false;
 		const targetModel = await this.#resolveContextPromotionTarget(currentModel, contextWindow);
@@ -7807,6 +7861,32 @@ export class AgentSession {
 	}
 
 	/**
+	 * Project the post-compaction context size of a snapcompact result: kept
+	 * recent messages + the summary message with its re-attached frames + the
+	 * fixed non-message overhead (system prompt + tools). Mirrors how the
+	 * compacted context is rebuilt, so the estimate matches the wire shape, and
+	 * lets the caller decide whether snapcompact brought the context under the
+	 * window or should fall back to an LLM summary.
+	 */
+	#projectSnapcompactContextTokens(preparation: CompactionPreparation, result: snapcompact.CompactionResult): number {
+		const archive = snapcompact.getPreservedArchive(result.preserveData);
+		const frames = archive ? snapcompact.images(archive) : undefined;
+		const summaryMessage = createCompactionSummaryMessage(
+			result.summary,
+			result.tokensBefore,
+			new Date().toISOString(),
+			result.shortSummary,
+			undefined,
+			frames,
+		);
+		let tokens = computeNonMessageTokens(this) + estimateTokens(summaryMessage);
+		for (const message of preparation.recentMessages) {
+			tokens += estimateTokens(message);
+		}
+		return tokens;
+	}
+
+	/**
 	 * Internal: Run auto-compaction with events.
 	 *
 	 * @param allowDefer If true (default), threshold-driven handoff strategy is allowed to
@@ -8018,6 +8098,39 @@ export class AgentSession {
 			let tokensBefore: number;
 			let details: unknown;
 
+			// Snapcompact runs locally first; if its frame archive plus the kept
+			// history still overflows the model window (frames are capped by the
+			// image budget and cost ~FRAME_TOKEN_ESTIMATE each), an LLM summary is
+			// far cheaper — downgrade to context-full and take the summarizer path.
+			let snapcompactResult: snapcompact.CompactionResult | undefined;
+			if (action === "snapcompact" && compactionPrep.kind !== "fromHook") {
+				snapcompactResult = await snapcompact.compact(preparation, {
+					convertToLlm,
+					model: this.model,
+					maxFrames: snapcompact.providerFrameBudget(this.model?.provider),
+				});
+				const ctxWindow = this.model?.contextWindow ?? 0;
+				const budget =
+					ctxWindow > 0
+						? ctxWindow - effectiveReserveTokens(ctxWindow, compactionSettings)
+						: Number.POSITIVE_INFINITY;
+				const projected = this.#projectSnapcompactContextTokens(preparation, snapcompactResult);
+				if (projected > budget) {
+					logger.warn("Snapcompact still overflows the window; falling back to an LLM summary", {
+						model: this.model?.id,
+						projected,
+						budget,
+					});
+					this.emitNotice(
+						"warning",
+						"snapcompact could not bring the context under the limit — using an LLM summary instead",
+						"compaction",
+					);
+					action = "context-full";
+					snapcompactResult = undefined;
+				}
+			}
+
 			if (compactionPrep.kind === "fromHook") {
 				summary = compactionPrep.summary;
 				shortSummary = compactionPrep.shortSummary;
@@ -8025,14 +8138,7 @@ export class AgentSession {
 				tokensBefore = compactionPrep.tokensBefore;
 				details = compactionPrep.details;
 				preserveData = compactionPrep.preserveData;
-			} else if (action === "snapcompact") {
-				// Local, deterministic: render discarded history onto PNG frames.
-				// No model candidates, no API key, no retry loop.
-				const snapcompactResult = await snapcompact.compact(preparation, {
-					convertToLlm,
-					model: this.model,
-					maxFrames: snapcompact.providerFrameBudget(this.model?.provider),
-				});
+			} else if (snapcompactResult) {
 				summary = snapcompactResult.summary;
 				shortSummary = snapcompactResult.shortSummary;
 				firstKeptEntryId = snapcompactResult.firstKeptEntryId;
