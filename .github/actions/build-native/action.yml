@@ -53,18 +53,19 @@ runs:
            echo "$toolchain_bin" >> "$GITHUB_PATH"
            echo "Prepended $toolchain_bin to PATH"
       # `Swatinem/rust-cache` keys target/ off its restore-time environment, so
-      # set RUSTFLAGS before restoring it. If x64 target-cpu is only selected
-      # inside ci-build-native.ts/build-native.ts, cargo invalidates the restored
-      # target/ but rust-cache sees an exact key and refuses to save the rebuilt
-      # artifacts, causing macOS x64 baseline to rebuild forever.
+      # set RUSTFLAGS before deciding whether to restore it. If x64 target-cpu is
+      # only selected inside ci-build-native.ts/build-native.ts, cargo invalidates
+      # the restored target/ but rust-cache sees an exact key and refuses to save
+      # the rebuilt artifacts, causing macOS x64 baseline to rebuild forever.
       #
       # Include the native source hash in the shared key as well: rust-cache's
       # lockfile scan misses the workspace root Cargo.toml version that Cargo
       # fingerprints for workspace crates. Without it, release version bumps can
       # get an exact hit for artifacts Cargo must rebuild.
       #
-      # sccache is still layered on top of rust-cache: target/ wins when warm,
-      # sccache fills the gaps when target/ is cold.
+      # On GitHub-hosted runners, rust-cache can still warm target/. On omp-kata,
+      # the shared RustFS-backed sccache is the primary reuse layer and avoids a
+      # second GitHub-cache restore for Cargo dirs/target.
       - name: Configure native Rust flags
         if: inputs.target == ''
         shell: bash
@@ -94,7 +95,19 @@ runs:
 
            echo "RUSTFLAGS=$rustflags" >> "$GITHUB_ENV"
            echo "Configured RUSTFLAGS=$rustflags"
+      - name: Decide Rust artifact cache
+        id: rust_artifact_cache
+        shell: bash
+        run: |
+           if [ -n "${SCCACHE_BUCKET:-}" ]; then
+             echo "use_rust_cache=false" >> "$GITHUB_OUTPUT"
+             echo "Rust target cache: skipped on shared-sccache runners"
+           else
+             echo "use_rust_cache=true" >> "$GITHUB_OUTPUT"
+             echo "Rust target cache: GitHub Actions"
+           fi
       - uses: Swatinem/rust-cache@v2
+        if: steps.rust_artifact_cache.outputs.use_rust_cache == 'true'
         with:
            shared-key: native-${{ inputs.platform }}-${{ inputs.arch }}-${{ inputs.variant || 'default' }}-h${{ inputs.hash }}
            cache-on-failure: true
@@ -126,14 +139,7 @@ runs:
         if: inputs.target == ''
         with:
            tool: nextest
-      - uses: oven-sh/setup-bun@v2
-        with:
-           bun-version: "1.3"
-        env:
-           SCCACHE_BUCKET: ""
-           AWS_ACCESS_KEY_ID: ""
-      - shell: bash
-        run: bun install --frozen-lockfile
+      - uses: ./.github/actions/bun-install
       # Cross-compile toolchain selection: non-MSVC targets (e.g.
       # `aarch64-unknown-linux-gnu`) build with `cargo-zigbuild`; MSVC targets
       # (e.g. `x86_64-pc-windows-msvc`) build with `cargo-xwin`. The napi CLI's

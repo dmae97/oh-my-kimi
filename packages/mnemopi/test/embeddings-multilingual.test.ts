@@ -1,5 +1,4 @@
 import { describe, expect, it } from "bun:test";
-import "./setup";
 import {
 	cosineSimilarity,
 	embed,
@@ -8,6 +7,7 @@ import {
 	resetEmbeddingProviderForTests,
 	setEmbeddingProviderForTests,
 } from "@oh-my-pi/pi-mnemopi/core/embeddings";
+import { RUN_EMBEDDINGS } from "./setup";
 
 function withEnvValue<T>(key: string, value: string | undefined, fn: () => T): T {
 	const previous = process.env[key];
@@ -121,7 +121,7 @@ describe("multilingual embedding metadata", () => {
 	});
 });
 
-describe("multilingual embedding ordering", () => {
+describe.skipIf(!RUN_EMBEDDINGS)("multilingual embedding ordering", () => {
 	it("preserves semantic ordering with a deterministic fake multilingual provider", async () => {
 		setEmbeddingProviderForTests({
 			async *embed(texts) {

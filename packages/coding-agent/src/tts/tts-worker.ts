@@ -76,8 +76,13 @@ interface TransformersEnv {
 		cacheDir?: string;
 		allowLocalModels?: boolean;
 		logLevel?: unknown;
+		backends?: {
+			onnx?: {
+				logLevel?: unknown;
+			};
+		};
 	};
-	LogLevel: {
+	LogLevel?: {
 		ERROR: unknown;
 	};
 }
@@ -146,7 +151,8 @@ function toKokoroDevice(device: TinyModelDevice): KokoroDevice {
 function configureTransformers(transformers: TransformersEnv): void {
 	transformers.env.cacheDir = getTinyModelsCacheDir();
 	transformers.env.allowLocalModels = false;
-	transformers.env.logLevel = transformers.LogLevel.ERROR;
+	transformers.env.logLevel = transformers.LogLevel?.ERROR ?? "error";
+	if (transformers.env.backends?.onnx) transformers.env.backends.onnx.logLevel = "error";
 }
 
 /**
@@ -182,9 +188,11 @@ async function loadKokoroRuntime(
 		installRuntimeModuleResolver({ runtimeNodeModules: nodeModules, stubs: { sharp: sharpStub } });
 		const kokoroEntry = resolveRuntimeModule(nodeModules, KOKORO_PACKAGE);
 		if (!kokoroEntry) throw new Error(`Unable to resolve ${KOKORO_PACKAGE} in runtime at ${nodeModules}`);
-		const entryRequire = createRequire(kokoroEntry);
-		configureTransformers(entryRequire(TRANSFORMERS_PACKAGE) as TransformersEnv);
-		return entryRequire(kokoroEntry) as KokoroRuntime;
+		const transformersEntry = resolveRuntimeModule(nodeModules, TRANSFORMERS_PACKAGE);
+		if (!transformersEntry) throw new Error(`Unable to resolve ${TRANSFORMERS_PACKAGE} in runtime at ${nodeModules}`);
+		const runtimeRequire = createRequire(kokoroEntry);
+		configureTransformers(runtimeRequire(transformersEntry) as TransformersEnv);
+		return runtimeRequire(kokoroEntry) as KokoroRuntime;
 	})().catch(error => {
 		kokoroRuntime = null;
 		throw error;

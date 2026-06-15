@@ -417,7 +417,7 @@ Resolution precedence for exact selectors:
 
 Supported model roles:
 
-- `default`, `smol`, `slow`, `vision`, `plan`, `designer`, `commit`, `task`
+- `default`, `smol`, `slow`, `vision`, `plan`, `designer`, `commit`, `title`, `task`
 
 Role aliases like `pi/smol` expand through `settings.modelRoles`. Each role value can also append a thinking selector such as `:minimal`, `:low`, `:medium`, or `:high`.
 

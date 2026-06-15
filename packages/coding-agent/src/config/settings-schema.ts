@@ -258,6 +258,8 @@ type SettingDef =
 export interface ModelTagDef {
 	name: string;
 	color?: string;
+	/** If true, the role is functional but not shown in the model selector UI. */
+	hidden?: boolean;
 }
 
 export interface ModelTagsSettings {

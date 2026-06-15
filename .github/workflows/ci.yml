@@ -190,18 +190,7 @@ jobs:
       runs-on: omp-kata
       steps:
          - uses: actions/checkout@v4
-         - uses: oven-sh/setup-bun@v2
-           with:
-              bun-version: "1.3"
-           env:
-              SCCACHE_BUCKET: ""
-              AWS_ACCESS_KEY_ID: ""
-         - name: Cache bun dependencies
-           uses: actions/cache@v4
-           with:
-              path: ~/.bun/install/cache
-              key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
-         - run: bun install --frozen-lockfile
+         - uses: ./.github/actions/bun-install
          - name: Type check workspace
            run: bun run ci:check:full
          - name: Build collab web
@@ -223,7 +212,7 @@ jobs:
                - { variant: modern }
       steps:
          - uses: actions/checkout@v4
-         - uses: ./.github/actions/build-native
+         - uses: ./.github/actions/build-native-kata
            with:
               hash: ${{ needs.native_artifact_lookup.outputs.source-hash }}
               platform: linux
@@ -235,7 +224,7 @@ jobs:
    # Pre-warm the cross-platform native build cache on `main`, in addition to
    # building the artifacts that ship in releases. Skipped on main when
    # native_artifact_lookup already found a recent run with all artifacts intact.
-   native_cross_platform:
+   native_cross_platform_kata:
       name: "Native: ${{ matrix.platform }} ${{ matrix.arch }}"
       needs: [release_metadata, native_artifact_lookup]
       if: ${{ needs.release_metadata.outputs.is-release == 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.native_artifact_lookup.outputs.cross-platform-run-id == '') }}
@@ -244,9 +233,29 @@ jobs:
          matrix:
             include:
                - { os: omp-kata, platform: linux, arch: arm64, target: aarch64-unknown-linux-gnu }
+               - { os: omp-kata, platform: win32, arch: x64, target: x86_64-pc-windows-msvc, variant: baseline }
+      runs-on: ${{ matrix.os }}
+      steps:
+         - uses: actions/checkout@v4
+         - uses: ./.github/actions/build-native-kata
+           with:
+              hash: ${{ needs.native_artifact_lookup.outputs.source-hash }}
+              platform: ${{ matrix.platform }}
+              arch: ${{ matrix.arch }}
+              variant: ${{ matrix.variant }}
+              target: ${{ matrix.target }}
+              save_cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
+   native_cross_platform_macos:
+      name: "Native: ${{ matrix.platform }} ${{ matrix.arch }}"
+      needs: [release_metadata, native_artifact_lookup]
+      if: ${{ needs.release_metadata.outputs.is-release == 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.native_artifact_lookup.outputs.cross-platform-run-id == '') }}
+      strategy:
+         fail-fast: false
+         matrix:
+            include:
                - { os: macos-15-intel, platform: darwin, arch: x64, variant: baseline }
                - { os: macos-14, platform: darwin, arch: arm64 }
-               - { os: omp-kata, platform: win32, arch: x64, target: x86_64-pc-windows-msvc, variant: baseline }
       runs-on: ${{ matrix.os }}
       steps:
          - uses: actions/checkout@v4
@@ -258,7 +267,6 @@ jobs:
               variant: ${{ matrix.variant }}
               target: ${{ matrix.target }}
               save_cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-
    test_workspace:
       name: Test TS workspace fast
       runs-on: omp-kata
@@ -267,18 +275,7 @@ jobs:
       timeout-minutes: 20
       steps:
          - uses: actions/checkout@v4
-         - uses: oven-sh/setup-bun@v2
-           with:
-              bun-version: "1.3"
-           env:
-              SCCACHE_BUCKET: ""
-              AWS_ACCESS_KEY_ID: ""
-         - name: Cache bun dependencies
-           uses: actions/cache@v4
-           with:
-              path: ~/.bun/install/cache
-              key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
-         - run: bun install --frozen-lockfile
+         - uses: ./.github/actions/bun-install
          - name: Resolve Linux x64 native artifact run
            id: source
            shell: bash
@@ -307,18 +304,7 @@ jobs:
       timeout-minutes: 20
       steps:
          - uses: actions/checkout@v4
-         - uses: oven-sh/setup-bun@v2
-           with:
-              bun-version: "1.3"
-           env:
-              SCCACHE_BUCKET: ""
-              AWS_ACCESS_KEY_ID: ""
-         - name: Cache bun dependencies
-           uses: actions/cache@v4
-           with:
-              path: ~/.bun/install/cache
-              key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
-         - run: bun install --frozen-lockfile
+         - uses: ./.github/actions/bun-install
          - name: Resolve Linux x64 native artifact run
            id: source
            shell: bash
@@ -349,19 +335,9 @@ jobs:
       timeout-minutes: 25
       steps:
          - uses: actions/checkout@v4
-         - uses: oven-sh/setup-bun@v2
-           with:
-              bun-version: "1.3"
-           env:
-              SCCACHE_BUCKET: ""
-              AWS_ACCESS_KEY_ID: ""
-         - name: Cache bun dependencies
-           uses: actions/cache@v4
-           with:
-              path: ~/.bun/install/cache
-              key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+
          - uses: ./.github/actions/setup-system-deps
-         - run: bun install --frozen-lockfile
+         - uses: ./.github/actions/bun-install
          - name: Resolve Linux x64 native artifact run
            id: source
            shell: bash
@@ -390,19 +366,9 @@ jobs:
       timeout-minutes: 25
       steps:
          - uses: actions/checkout@v4
-         - uses: oven-sh/setup-bun@v2
-           with:
-              bun-version: "1.3"
-           env:
-              SCCACHE_BUCKET: ""
-              AWS_ACCESS_KEY_ID: ""
-         - name: Cache bun dependencies
-           uses: actions/cache@v4
-           with:
-              path: ~/.bun/install/cache
-              key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+
          - uses: ./.github/actions/setup-system-deps
-         - run: bun install --frozen-lockfile
+         - uses: ./.github/actions/bun-install
          - name: Resolve Linux x64 native artifact run
            id: source
            shell: bash
@@ -431,18 +397,7 @@ jobs:
       timeout-minutes: 25
       steps:
          - uses: actions/checkout@v4
-         - uses: oven-sh/setup-bun@v2
-           with:
-              bun-version: "1.3"
-           env:
-              SCCACHE_BUCKET: ""
-              AWS_ACCESS_KEY_ID: ""
-         - name: Cache bun dependencies
-           uses: actions/cache@v4
-           with:
-              path: ~/.bun/install/cache
-              key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
-         - run: bun install --frozen-lockfile
+         - uses: ./.github/actions/bun-install
          - name: Resolve Linux x64 native artifact run
            id: source
            shell: bash
@@ -473,19 +428,9 @@ jobs:
       timeout-minutes: 25
       steps:
          - uses: actions/checkout@v4
-         - uses: oven-sh/setup-bun@v2
-           with:
-              bun-version: "1.3"
-           env:
-              SCCACHE_BUCKET: ""
-              AWS_ACCESS_KEY_ID: ""
-         - name: Cache bun dependencies
-           uses: actions/cache@v4
-           with:
-              path: ~/.bun/install/cache
-              key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+
          - uses: ./.github/actions/setup-system-deps
-         - run: bun install --frozen-lockfile
+         - uses: ./.github/actions/bun-install
          - name: Resolve Linux x64 native artifact run
            id: source
            shell: bash
@@ -514,19 +459,9 @@ jobs:
       timeout-minutes: 15
       steps:
          - uses: actions/checkout@v4
-         - uses: oven-sh/setup-bun@v2
-           with:
-              bun-version: "1.3"
-           env:
-              SCCACHE_BUCKET: ""
-              AWS_ACCESS_KEY_ID: ""
-         - name: Cache bun dependencies
-           uses: actions/cache@v4
-           with:
-              path: ~/.bun/install/cache
-              key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+
          - uses: ./.github/actions/setup-system-deps
-         - run: bun install --frozen-lockfile
+         - uses: ./.github/actions/bun-install
          - name: Resolve Linux x64 native artifact run
            id: source
            shell: bash
@@ -552,26 +487,12 @@ jobs:
       runs-on: omp-kata
       steps:
          - uses: actions/checkout@v4
-         - uses: oven-sh/setup-bun@v2
-           with:
-              bun-version: "1.3"
-           env:
-              SCCACHE_BUCKET: ""
-              AWS_ACCESS_KEY_ID: ""
-         - uses: dtolnay/rust-toolchain@nightly
+         - uses: ./.github/actions/ensure-rust-toolchain
            with:
               toolchain: nightly-2026-04-29
-         - uses: Swatinem/rust-cache@v2
+         - uses: ./.github/actions/ensure-sccache
            with:
-              shared-key: install-methods-linux-x64
-              cache-on-failure: true
-              save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-              cache-workspace-crates: true
-         # Layer sccache on top of rust-cache for the same reason as the
-         # build-native action: release version bumps bust the target/ cache,
-         # but sccache hits at the rustc-unit level survive.
-         - name: Setup sccache
-           uses: mozilla-actions/sccache-action@v0.0.10
+              version: "0.15.0"
          - name: Enable sccache for cargo
            # Conditional backend: self-hosted omp-kata injects a shared S3
            # (RustFS) sccache via pod env; GitHub-hosted runners keep the GHA
@@ -588,21 +509,17 @@ jobs:
                 echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
                 echo "sccache backend: GitHub Actions cache"
               fi
-         - name: Cache bun dependencies
-           uses: actions/cache@v4
-           with:
-              path: ~/.bun/install/cache
-              key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
          - uses: ./.github/actions/setup-system-deps
-         - run: bun install --frozen-lockfile
+         - uses: ./.github/actions/bun-install
          - name: Install method smoke tests
            run: bun run ci:test:install-methods
 
    release_binary:
       name: "Release binary: ${{ matrix.target_id }}"
       if: ${{ needs.release_metadata.outputs.is-release == 'true' && !cancelled() &&
-         needs.native_linux_x64.result == 'success' && needs.native_cross_platform.result ==
-         'success' && needs.test_workspace.result == 'success' &&
+         needs.native_linux_x64.result == 'success' && needs.native_cross_platform_kata.result ==
+         'success' && needs.native_cross_platform_macos.result == 'success' &&
+         needs.test_workspace.result == 'success' &&
          needs.test_coding_agent_singleton.result == 'success' &&
          needs.test_ts_native.result == 'success' &&
          needs.test_coding_agent_ui.result == 'success' &&
@@ -610,7 +527,7 @@ jobs:
          needs.test_coding_agent_native.result == 'success' &&
          needs.test_smoke.result == 'success' && needs.check.result == 'success' &&
          needs.install_methods.result == 'success' }}
-      needs: [release_metadata, check, native_linux_x64, native_cross_platform, test_workspace, test_coding_agent_singleton, test_ts_native, test_coding_agent_ui, test_coding_agent_runtime, test_coding_agent_native, test_smoke, install_methods, native_artifact_lookup]
+      needs: [release_metadata, check, native_linux_x64, native_cross_platform_kata, native_cross_platform_macos, test_workspace, test_coding_agent_singleton, test_ts_native, test_coding_agent_ui, test_coding_agent_runtime, test_coding_agent_native, test_smoke, install_methods, native_artifact_lookup]
       strategy:
          fail-fast: false
          matrix:
