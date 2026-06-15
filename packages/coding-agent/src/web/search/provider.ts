@@ -127,6 +127,18 @@ export function setPreferredSearchProvider(provider: SearchProviderId | "auto"):
 	preferredProvId = provider;
 }
 
+/** Providers excluded from web search resolution via settings. */
+let excludedProvIds = new Set<SearchProviderId>();
+
+/** Set providers that web search should never use, including fallbacks. */
+export function setExcludedSearchProviders(providers: readonly SearchProviderId[]): void {
+	excludedProvIds = new Set(providers);
+}
+
+function isSearchProviderExcluded(id: SearchProviderId): boolean {
+	return excludedProvIds.has(id);
+}
+
 /**
  * Determine which providers are configured and currently available.
  * Each candidate is loaded (and its `isAvailable()` called) only as the chain
@@ -138,7 +150,7 @@ export async function resolveProviderChain(
 ): Promise<SearchProvider[]> {
 	const providers: SearchProvider[] = [];
 
-	if (preferredProvider !== "auto") {
+	if (preferredProvider !== "auto" && !isSearchProviderExcluded(preferredProvider)) {
 		const provider = await getSearchProvider(preferredProvider);
 		if (await provider.isExplicitlyAvailable(authStorage)) {
 			providers.push(provider);
@@ -146,7 +158,7 @@ export async function resolveProviderChain(
 	}
 
 	for (const id of SEARCH_PROVIDER_ORDER) {
-		if (id === preferredProvider) continue;
+		if (id === preferredProvider || isSearchProviderExcluded(id)) continue;
 		const provider = await getSearchProvider(id);
 		if (await provider.isAvailable(authStorage)) {
 			providers.push(provider);

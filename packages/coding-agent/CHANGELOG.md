@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+
+### Added
+
+- Added web search provider exclusions so `web_search` can skip configured providers without disabling them for model use ([#2608](https://github.com/can1357/oh-my-pi/issues/2608)).
+
 ## [15.13.1] - 2026-06-15
 
 ### Added
