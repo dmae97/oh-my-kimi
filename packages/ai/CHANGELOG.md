@@ -1,9 +1,19 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
+- Added the `gemini` in-band tool-call syntax with Python-style ```tool_code``` blocks and `default_api` invocations
+- Added the `gemma` token-delimited in-band tool-call syntax using `<|tool_call>` and `<|tool_response>` blocks
+- Added `gemini` and `gemma` to owned stream tool-result token detection so their tool responses are recognized
+- Fixed truncated Gemini and Gemma tool blocks from being emitted as plain text during streaming
 - Added the Azure OpenAI provider definition (`azure`) to the registry; `AZURE_OPENAI_API_KEY` resolves as its env-var API key via the catalog provider table.
+
+### Fixed
+
+- Fixed truncated Gemini and Gemma tool blocks from being emitted as plain text during streaming
+- Fixed Gemini/Gemma in-band tool-call parsing around Python comments, raw/unicode string literals, and Gemma close-token text inside string values.
 
 ## [15.13.2] - 2026-06-15
 

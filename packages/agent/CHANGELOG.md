@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added support for `gemini` and `gemma` as valid owned tool syntax values in environment configuration
 
 ## [15.13.2] - 2026-06-15
 

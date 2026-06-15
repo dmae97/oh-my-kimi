@@ -98,6 +98,8 @@ function resolveOwnedToolSyntaxFromEnv(value: string | undefined): ToolCallSynta
 		case "harmony":
 		case "pi":
 		case "qwen3":
+		case "gemini":
+		case "gemma":
 			return value;
 		default:
 			return undefined;

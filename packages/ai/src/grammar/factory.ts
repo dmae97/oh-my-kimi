@@ -1,5 +1,7 @@
 import anthropicGrammar from "./anthropic";
 import deepseekGrammar from "./deepseek";
+import geminiGrammar from "./gemini";
+import gemmaGrammar from "./gemma";
 import glmGrammar from "./glm";
 import harmonyGrammar from "./harmony";
 import hermesGrammar from "./hermes";
@@ -19,6 +21,8 @@ const GRAMMARS: Record<ToolCallSyntax, Grammar> = {
 	harmony: harmonyGrammar,
 	pi: piGrammar,
 	qwen3: qwen3Grammar,
+	gemini: geminiGrammar,
+	gemma: gemmaGrammar,
 };
 
 export function getInbandGrammar(syntax: ToolCallSyntax): Grammar {

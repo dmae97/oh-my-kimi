@@ -20,6 +20,8 @@ const RESPONSE_OPEN_TOKENS: Record<ToolCallSyntax, readonly string[]> = {
 	harmony: ["<|start|>functions."],
 	pi: ["<tool_response>"],
 	qwen3: ["<tool_response>"],
+	gemini: ["```tool_outputs"],
+	gemma: ["<|tool_response>"],
 };
 
 function firstTokenIndex(text: string, tokens: readonly string[]): number {

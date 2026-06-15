@@ -196,7 +196,6 @@ export class AgentHubOverlayComponent extends Container {
 	/** Captured row order from the first refresh; keeps the hub stable while open. */
 	#rowOrder: Map<string, number> | undefined;
 
-
 	// Chat state
 	#chatAgentId: string | undefined;
 	#editor: Editor;

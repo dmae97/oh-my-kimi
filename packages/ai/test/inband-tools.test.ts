@@ -42,6 +42,8 @@ const SYNTAXES: readonly ToolCallSyntax[] = [
 	"harmony",
 	"pi",
 	"qwen3",
+	"gemini",
+	"gemma",
 ];
 
 function usage(): Usage {
@@ -205,6 +207,10 @@ describe("in-band tool grammars", () => {
 			"<tool_response>\nFILE\n</tool_response>",
 		);
 		expect(getInbandGrammar("pi").renderToolResults([resultBlock])).toBe("<tool_response>\nFILE\n</tool_response>");
+		expect(getInbandGrammar("gemini").renderToolResults([resultBlock])).toBe("```tool_outputs\nFILE\n```");
+		expect(getInbandGrammar("gemma").renderToolResults([resultBlock])).toBe(
+			'<|tool_response>response:read{output:<|"|>FILE<|"|>}<tool_response|>',
+		);
 	});
 
 	it("encodes assistant calls and tool results through the selected grammar", () => {
