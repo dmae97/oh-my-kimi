@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.0.0] - 2026-06-15
+
 ### Breaking Changes
 
 - Renamed the public dialect entrypoint from `@oh-my-pi/pi-ai/grammar` to `@oh-my-pi/pi-ai/dialect`.
@@ -30,17 +32,17 @@
 - Updated internal imports in `stream-markup-healing.ts` to use new dialect module path
 - Changed `renderToolInventory` to demote a tool description's own markdown headers by one level when it contains a top-level `# ` header, so they nest under the wrapping `# Tool: <name>` heading instead of reading as sibling sections. Descriptions that already start at `##` and headers inside fenced code blocks are left untouched.
 
-### Removed
-
-- Removed `src/grammar/factory.ts` (replaced by `src/dialect/factory.ts`)
-- Removed `src/grammar/rendering.ts` (functionality moved to `src/dialect/rendering.ts`)
-- Removed `src/grammar/xml.ts` (replaced by `src/dialect/xml.ts`)
-
 ### Fixed
 
 - Fixed Gemini, Gemma, Kimi, and Pi in-band scanners to respect `parseThinking: false`, leaving private reasoning markers in visible text when parsing is disabled
 - Fixed thinking-channel parsing for streaming Gemini, Gemma, Kimi, and Pi outputs so split or partial `<thinking>` blocks no longer leak into visible replies
 - Fixed in-band thinking finalization and Kimi stream-healing interactions so leaked `<think>` blocks are preserved when structured tool calls are present, not duplicated when explicit reasoning is present, and closed on stream flush.
+
+### Removed
+
+- Removed `src/grammar/factory.ts` (replaced by `src/dialect/factory.ts`)
+- Removed `src/grammar/rendering.ts` (functionality moved to `src/dialect/rendering.ts`)
+- Removed `src/grammar/xml.ts` (replaced by `src/dialect/xml.ts`)
 
 ## [15.13.3] - 2026-06-15
 
