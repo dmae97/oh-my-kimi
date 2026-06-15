@@ -11,10 +11,10 @@ describe("AIML API built-in provider (issue #2105)", () => {
 		const descriptor = PROVIDER_DESCRIPTORS.find(item => item.providerId === "aimlapi");
 
 		expect(descriptor).toBeDefined();
-		expect(descriptor?.defaultModel).toBe("gpt-4o");
+		expect(descriptor?.defaultModel).toBe("gpt-5.5-2026-04-23");
 		expect(descriptor?.catalogDiscovery?.label).toBe("AIML API");
 		expect(descriptor?.catalogDiscovery?.envVars).toContain("AIMLAPI_API_KEY");
-		expect(DEFAULT_MODEL_PER_PROVIDER.aimlapi).toBe("gpt-4o");
+		expect(DEFAULT_MODEL_PER_PROVIDER.aimlapi).toBe("gpt-5.5-2026-04-23");
 	});
 
 	test("uses the OpenAI-compatible completions transport and AIML API base URL", async () => {

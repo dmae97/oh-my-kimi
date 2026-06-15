@@ -34,7 +34,7 @@ describe("azure catalog provider", () => {
 		// Mirrors Bedrock: bundled models + env auth, no model-manager factory, so
 		// it must NOT appear in the runtime discovery descriptor list.
 		expect(PROVIDER_DESCRIPTORS.some(d => d.providerId === "azure")).toBe(false);
-		expect(DEFAULT_MODEL_PER_PROVIDER.azure).toBe("gpt-4o");
+		expect(DEFAULT_MODEL_PER_PROVIDER.azure).toBe("gpt-5.5");
 	});
 
 	test("models.dev descriptor keeps only OpenAI-family Responses models, baseUrl resolved at runtime", () => {

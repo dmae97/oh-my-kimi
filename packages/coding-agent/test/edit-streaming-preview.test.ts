@@ -304,7 +304,7 @@ describe("apply_patch streaming preview (trailing partial line)", () => {
 
 describe("matcherDigest", () => {
 	test("hashline: digests stripped `+` body rows only, never headers or op lines", () => {
-		const input = ["[a.ts#AB12]", "SWAP 1..2:", "+const x = 1;", "+const y = 2;", "DEL 5", ""].join("\n");
+		const input = ["[a.ts#AB12]", "SWAP 1.=2:", "+const x = 1;", "+const y = 2;", "DEL 5", ""].join("\n");
 		expect(EDIT_MODE_STRATEGIES.hashline.matcherDigest({ input })).toBe("const x = 1;\nconst y = 2;");
 	});
 

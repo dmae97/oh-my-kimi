@@ -3207,7 +3207,7 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_CORE: readonly ModelsDevProviderDescriptor
 	// --- Cerebras ---
 	openAiCompletionsDescriptor("cerebras", "cerebras", "https://api.cerebras.ai/v1"),
 	// --- Together ---
-	openAiCompletionsDescriptor("together", "together", "https://api.together.xyz/v1"),
+	openAiCompletionsDescriptor("togetherai", "together", "https://api.together.xyz/v1"),
 	// --- NVIDIA ---
 	openAiCompletionsDescriptor("nvidia", "nvidia", "https://integrate.api.nvidia.com/v1", {
 		defaultContextWindow: 131072,
@@ -3287,7 +3287,7 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_CODING_PLANS: readonly ModelsDevProviderDe
 	),
 	// --- Zhipu Coding Plan ---
 	openAiCompletionsDescriptor(
-		"zhipu-coding-plan",
+		"zhipuai-coding-plan",
 		"zhipu-coding-plan",
 		"https://open.bigmodel.cn/api/coding/paas/v4",
 		{
@@ -3382,6 +3382,36 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_SPECIALIZED: readonly ModelsDevProviderDes
 	// --- MiniMax (Anthropic) ---
 	anthropicMessagesDescriptor("minimax", "minimax", "https://api.minimax.io/anthropic"),
 	anthropicMessagesDescriptor("minimax-cn", "minimax-cn", "https://api.minimaxi.com/anthropic"),
+	// --- Hugging Face ---
+	openAiCompletionsDescriptor("huggingface", "huggingface", "https://router.huggingface.co/v1"),
+	// --- Kilo Gateway ---
+	openAiCompletionsDescriptor("kilo", "kilo", "https://api.kilo.ai/api/gateway"),
+	// --- Moonshot AI ---
+	openAiCompletionsDescriptor("moonshotai", "moonshot", "https://api.moonshot.ai/v1"),
+	// --- NanoGPT ---
+	openAiCompletionsDescriptor("nano-gpt", "nanogpt", "https://nano-gpt.com/api/v1"),
+	// --- Synthetic ---
+	openAiCompletionsDescriptor("synthetic", "synthetic", "https://api.synthetic.new/openai/v1"),
+	// --- Venice AI ---
+	openAiCompletionsDescriptor("venice", "venice", "https://api.venice.ai/api/v1"),
+	// --- Ollama Cloud ---
+	simpleModelsDevDescriptor("ollama-cloud", "ollama-cloud", "ollama-chat", "https://ollama.com"),
+	// --- Xiaomi Token Plan ---
+	openAiCompletionsDescriptor(
+		"xiaomi-token-plan-ams",
+		"xiaomi-token-plan-ams",
+		"https://token-plan-ams.xiaomimimo.com/v1",
+	),
+	openAiCompletionsDescriptor(
+		"xiaomi-token-plan-cn",
+		"xiaomi-token-plan-cn",
+		"https://token-plan-cn.xiaomimimo.com/v1",
+	),
+	openAiCompletionsDescriptor(
+		"xiaomi-token-plan-sgp",
+		"xiaomi-token-plan-sgp",
+		"https://token-plan-sgp.xiaomimimo.com/v1",
+	),
 	// --- Qwen Portal ---
 	openAiCompletionsDescriptor("qwen-portal", "qwen-portal", "https://portal.qwen.ai/v1", {
 		defaultContextWindow: 128000,
