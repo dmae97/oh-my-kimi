@@ -22,6 +22,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { getGithubCacheDbPath, logger } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../config/settings";
+import { ToolAbortError } from "./tool-errors";
 
 // ────────────────────────────────────────────────────────────────────────────
 // Storage layer
@@ -619,6 +620,7 @@ export async function getOrFetchView<T>(options: CacheLookupOptions<T>): Promise
 				storeResult(authKey, options.repo, options.kind, options.number, options.includeComments, fresh, fetchedAt);
 				return { ...fresh, status: "refreshed", fetchedAt };
 			} catch (err) {
+				if (err instanceof ToolAbortError) throw err;
 				logger.debug("github cache: synchronous refresh failed; returning stale view", {
 					err: String(err),
 					repo: options.repo,

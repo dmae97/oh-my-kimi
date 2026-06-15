@@ -19,6 +19,7 @@ import {
 	putCached,
 	resetForTests as resetCacheForTests,
 } from "@oh-my-pi/pi-coding-agent/tools/github-cache";
+import { ToolAbortError, throwIfAborted } from "@oh-my-pi/pi-coding-agent/tools/tool-errors";
 import * as git from "@oh-my-pi/pi-coding-agent/utils/git";
 
 const TEST_REPO = "owner/example";
@@ -370,6 +371,43 @@ describe("getOrFetchView (TTL semantics)", () => {
 
 		expect(result.status).toBe("stale");
 		expect(result.rendered).toBe("old");
+		expect(fetchFresh).toHaveBeenCalledTimes(1);
+	});
+	it("propagates aborts during a soft-expired synchronous refresh", async () => {
+		const settings = Settings.isolated({
+			"github.cache.softTtlSec": 60,
+			"github.cache.hardTtlSec": 86400,
+		});
+		const controller = new AbortController();
+		controller.abort();
+		const fetchFresh = vi.fn(async () => {
+			throwIfAborted(controller.signal);
+			return {
+				rendered: "never",
+				sourceUrl: undefined,
+				payload: { number: 53 },
+			};
+		});
+		putCached({
+			repo: TEST_REPO,
+			kind: "issue",
+			number: 53,
+			includeComments: true,
+			payload: { number: 53 },
+			rendered: "stale-after-abort",
+			fetchedAt: Date.now() - 5 * 60_000,
+		});
+
+		await expect(
+			getOrFetchView({
+				repo: TEST_REPO,
+				kind: "issue",
+				number: 53,
+				includeComments: true,
+				fetchFresh,
+				settings,
+			}),
+		).rejects.toThrow(ToolAbortError);
 		expect(fetchFresh).toHaveBeenCalledTimes(1);
 	});
 
