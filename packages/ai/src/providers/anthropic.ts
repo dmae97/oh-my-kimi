@@ -1467,10 +1467,12 @@ const THINKING_ENVELOPE_CLOSE = "</thinking>";
 
 function unwrapAnthropicThinkingEnvelope(text: string): string | undefined {
 	let current = text.trim();
+	let stripped = false;
 	while (current.startsWith(THINKING_ENVELOPE_OPEN) && current.endsWith(THINKING_ENVELOPE_CLOSE)) {
 		current = current.slice(THINKING_ENVELOPE_OPEN.length, current.length - THINKING_ENVELOPE_CLOSE.length).trim();
+		stripped = true;
 	}
-	return current === text ? undefined : current;
+	return stripped ? current : undefined;
 }
 
 function createEmptyUsage(premiumRequests?: number): Usage {

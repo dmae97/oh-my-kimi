@@ -349,6 +349,42 @@ describe("anthropic stream envelope handling", () => {
 			{ type: "text", text: "Check logs before accepting container health." },
 		]);
 	});
+	it("preserves signed thinking bytes when no literal thinking envelope is present", async () => {
+		const signedThinking = "\nCheck logs before accepting container health.\n";
+		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation(
+			() => createMockRequest(createThinkingSuccessEvents(signedThinking)) as never,
+		);
+
+		const stream = streamAnthropic(model, context, { apiKey: "sk-ant-test" });
+		for await (const _ of stream) {
+			// drain stream
+		}
+		const result = await stream.result();
+
+		expect(result.stopReason).toBe("stop");
+		expect(result.content).toHaveLength(1);
+		const block = result.content[0];
+		expect(block?.type).toBe("thinking");
+		if (block?.type !== "thinking") {
+			throw new Error("Expected signed thinking content");
+		}
+		expect(block.thinking).toBe(signedThinking);
+		expect(block.thinkingSignature).toBe("sig_thinking");
+
+		const replayParams = convertAnthropicMessages(
+			[
+				{ role: "user", content: "Say hi", timestamp: 1 },
+				result,
+				{ role: "user", content: "follow up", timestamp: 2 },
+			],
+			model,
+			false,
+		);
+		const replayAssistant = replayParams.find(param => param.role === "assistant");
+		expect(replayAssistant?.content).toEqual([
+			{ type: "thinking", thinking: signedThinking, signature: "sig_thinking" },
+		]);
+	});
 
 	it("drops replayed closed blocks after a duplicate message_start instead of duplicating content", async () => {
 		const events: MockAnthropicEvent[] = [
