@@ -73,6 +73,7 @@ export interface RunChangelogFixerOptions {
 	repoRoot?: string;
 	since?: string;
 	write?: boolean;
+	recover?: boolean;
 }
 
 export interface RunChangelogFixerResult {
@@ -84,8 +85,15 @@ interface CliOptions {
 	mode: "write" | "dry-run" | "check";
 	repoRoot?: string;
 	since?: string;
+	recover: boolean;
 	help: boolean;
 }
+
+interface HistoricalReleaseRecovery {
+	itemKeys: Set<string>;
+	sectionsByTitle: Map<string, ReleaseSection>;
+}
+
 
 function isReleaseHeading(line: string): boolean {
 	return /^## \[[^\]]+\]/.test(line);
@@ -297,10 +305,14 @@ function collectReleasedItemKeys(document: ChangelogDocument): Set<string> {
  * the Unreleased duplicate is removed. Runs before promotion (while parse line
  * numbers are still real) and only ever mutates the Unreleased section.
  */
-function dropUnreleasedDuplicatesOfReleased(document: ChangelogDocument): number {
+function dropUnreleasedDuplicatesOfReleased(
+	document: ChangelogDocument,
+	historicalReleasedItemKeys: ReadonlySet<string> = new Set<string>(),
+): number {
 	const unreleased = document.sections.find(section => section.title === "Unreleased");
 	if (!unreleased) return 0;
 	const releasedKeys = collectReleasedItemKeys(document);
+	for (const key of historicalReleasedItemKeys) releasedKeys.add(key);
 	if (releasedKeys.size === 0) return 0;
 
 	let dropped = 0;
@@ -342,6 +354,27 @@ function titleOrder(title: string): number {
 	return index === -1 ? ORDERED_SECTION_TITLES.length : index;
 }
 
+function compactAdjacentListSpacing(lines: readonly string[]): string[] {
+	const trimmedLines = trimBlankLines(lines);
+	if (trimmedLines.length === 0) return [];
+
+	const parsedItems = parseItems(syntheticLines(trimmedLines));
+	if (parsedItems.length === 0) return [...trimmedLines];
+
+	const flattenedItems = parsedItems.flatMap(item => item.lines);
+	const nonBlankOriginal = trimmedLines.filter(line => line.trim() !== "");
+	const nonBlankFlattened = flattenedItems.filter(line => line.trim() !== "");
+	if (
+		nonBlankOriginal.length !== nonBlankFlattened.length ||
+		!nonBlankOriginal.every((line, index) => line === nonBlankFlattened[index])
+	) {
+		return [...trimmedLines];
+	}
+
+	return flattenedItems;
+}
+
+
 function normalizeSection(section: ReleaseSection): FixCounters {
 	const counters: FixCounters = {
 		promotedItems: 0,
@@ -353,7 +386,8 @@ function normalizeSection(section: ReleaseSection): FixCounters {
 	const normalizedSubsections: Subsection[] = [];
 
 	for (const subsection of section.subsections) {
-		const trimmedLines = trimBlankLines(numberedText(subsection.lines));
+		const trimmedLines = compactAdjacentListSpacing(trimBlankLines(numberedText(subsection.lines)));
+
 		if (trimmedLines.length === 0) {
 			counters.removedEmptyHeadings++;
 			continue;
@@ -382,6 +416,89 @@ function normalizeSection(section: ReleaseSection): FixCounters {
 	section.subsections = normalizedSubsections;
 	return counters;
 }
+
+function cloneReleaseSection(section: ReleaseSection): ReleaseSection {
+	return {
+		heading: section.heading,
+		title: section.title,
+		leadingLines: syntheticLines(trimBlankLines(numberedText(section.leadingLines))),
+		subsections: section.subsections.map(subsection => ({
+			title: subsection.title,
+			lines: syntheticLines(trimBlankLines(numberedText(subsection.lines))),
+		})),
+	};
+}
+
+function sectionHasContent(section: ReleaseSection): boolean {
+	if (trimBlankLines(numberedText(section.leadingLines)).length > 0) return true;
+	return section.subsections.some(subsection => trimBlankLines(numberedText(subsection.lines)).length > 0);
+}
+
+function compareVersionTitlesDesc(left: string, right: string): number {
+	const leftParts = left.split(".").map(part => Number.parseInt(part, 10));
+	const rightParts = right.split(".").map(part => Number.parseInt(part, 10));
+	const limit = Math.max(leftParts.length, rightParts.length);
+	for (let index = 0; index < limit; index++) {
+		const difference = (rightParts[index] ?? 0) - (leftParts[index] ?? 0);
+		if (difference !== 0) return difference;
+	}
+	return 0;
+}
+
+function sortReleaseSections(document: ChangelogDocument): void {
+	const unreleasedSections = document.sections.filter(section => section.title === "Unreleased");
+	const releasedSections = document.sections
+		.filter(section => section.title !== "Unreleased")
+		.sort((left, right) => compareVersionTitlesDesc(left.title, right.title));
+	document.sections = [...unreleasedSections, ...releasedSections];
+}
+
+
+function rebuildReleasedSectionsFromHistory(
+	content: string,
+	historicalSectionsByTitle: ReadonlyMap<string, ReleaseSection>,
+): string {
+	if (historicalSectionsByTitle.size === 0) return content;
+
+	const document = parseChangelog(content);
+	const unreleasedSections: ReleaseSection[] = [];
+	const releasedSections: ReleaseSection[] = [];
+	const seenTitles = new Set<string>();
+	for (const section of document.sections) {
+		if (section.title === "Unreleased") {
+			unreleasedSections.push(section);
+			continue;
+		}
+		if (seenTitles.has(section.title)) continue;
+		seenTitles.add(section.title);
+
+		const historical = historicalSectionsByTitle.get(section.title);
+		if (historical) {
+			releasedSections.push({
+				heading: section.heading,
+				title: section.title,
+				leadingLines: syntheticLines(trimBlankLines(numberedText(historical.leadingLines))),
+				subsections: historical.subsections.map(subsection => ({
+					title: subsection.title,
+					lines: syntheticLines(trimBlankLines(numberedText(subsection.lines))),
+				})),
+			});
+			continue;
+		}
+
+		releasedSections.push(section);
+	}
+
+	for (const [title, section] of historicalSectionsByTitle) {
+		if (seenTitles.has(title)) continue;
+		releasedSections.push(cloneReleaseSection(section));
+	}
+
+	document.sections = [...unreleasedSections, ...releasedSections];
+	sortReleaseSections(document);
+	return renderChangelog(document);
+}
+
 
 function renderChangelog(document: ChangelogDocument): string {
 	const output: string[] = [];
@@ -415,12 +532,13 @@ function renderChangelog(document: ChangelogDocument): string {
 export function fixChangelogContent(
 	content: string,
 	promotableAddedItemStartLines: ReadonlySet<number>,
+	historicalReleasedItemKeys: ReadonlySet<string> = new Set<string>(),
 ): FixChangelogContentResult {
 	const document = parseChangelog(content);
 	let unreleased = document.sections.find(section => section.title === "Unreleased");
 	let promotedItems = 0;
 
-	const droppedReleasedDuplicates = dropUnreleasedDuplicatesOfReleased(document);
+	const droppedReleasedDuplicates = dropUnreleasedDuplicatesOfReleased(document, historicalReleasedItemKeys);
 
 	for (const section of document.sections) {
 		if (section.title === "Unreleased") continue;
@@ -451,23 +569,10 @@ export function fixChangelogContent(
 		removedEmptyHeadings += counters.removedEmptyHeadings;
 	}
 
-	if (
-		promotedItems === 0 &&
-		mergedDuplicateHeadings === 0 &&
-		removedEmptyHeadings === 0 &&
-		droppedReleasedDuplicates === 0
-	) {
-		return {
-			content,
-			promotedItems,
-			mergedDuplicateHeadings,
-			removedEmptyHeadings,
-			droppedReleasedDuplicates,
-		};
-	}
-
+	sortReleaseSections(document);
+	const renderedContent = renderChangelog(document);
 	return {
-		content: renderChangelog(document),
+		content: renderedContent,
 		promotedItems,
 		mergedDuplicateHeadings,
 		removedEmptyHeadings,
@@ -621,6 +726,60 @@ async function latestTag(repoRoot: string): Promise<string> {
 	return (await git(["describe", "--tags", "--abbrev=0"], repoRoot)).trim();
 }
 
+async function allTags(repoRoot: string): Promise<string[]> {
+	return (await git(["tag", "--sort=v:refname"], repoRoot))
+		.split("\n")
+		.map(tag => tag.trim())
+		.filter(tag => tag.length > 0);
+}
+
+async function gitMaybe(args: readonly string[], cwd: string): Promise<string | undefined> {
+	const result = await $`git -c core.fsmonitor=false -c core.untrackedCache=false -c fetch.pruneTags=false ${args}`
+		.cwd(cwd)
+		.quiet()
+		.nothrow();
+	if (result.exitCode !== 0) return undefined;
+	return result.text();
+}
+
+async function collectHistoricalReleaseRecovery(
+	repoRoot: string,
+	paths: readonly string[],
+): Promise<Map<string, HistoricalReleaseRecovery>> {
+	const tags = await allTags(repoRoot);
+	const recoveryByPath = new Map<string, HistoricalReleaseRecovery>();
+
+	for (const tag of tags) {
+		for (const changelogPath of paths) {
+			const content = await gitMaybe(["show", `${tag}:${changelogPath}`], repoRoot);
+			if (content === undefined) continue;
+
+			const document = parseChangelog(content);
+			let recovery = recoveryByPath.get(changelogPath);
+			for (const section of document.sections) {
+				if (section.title === "Unreleased" || !sectionHasContent(section)) continue;
+				if (!recovery) {
+					recovery = { itemKeys: new Set<string>(), sectionsByTitle: new Map<string, ReleaseSection>() };
+					recoveryByPath.set(changelogPath, recovery);
+				}
+				if (!recovery.sectionsByTitle.has(section.title)) {
+					recovery.sectionsByTitle.set(section.title, cloneReleaseSection(section));
+				}
+				if (recovery.sectionsByTitle.get(section.title) !== undefined) {
+					for (const subsection of section.subsections) {
+						for (const item of parseItems(subsection.lines)) {
+							recovery.itemKeys.add(itemTextKey(item.lines));
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return recoveryByPath;
+}
+ 
+
 async function changelogPaths(repoRoot: string): Promise<string[]> {
 	const glob = new Glob(CHANGELOG_GLOB);
 	const paths: string[] = [];
@@ -640,14 +799,27 @@ export async function runChangelogFixer(options: RunChangelogFixerOptions = {}):
 	const repoRoot = await resolveRepoRoot(options.repoRoot);
 	const since = options.since ?? (await latestTag(repoRoot));
 	const paths = await changelogPaths(repoRoot);
-	const diff = await changelogDiff(repoRoot, since, paths);
-	const addedItemLines = collectPromotableAddedItemLines(diff);
+	const addedItemLines = options.recover
+		? new Map<string, Set<number>>()
+		: collectPromotableAddedItemLines(await changelogDiff(repoRoot, since, paths));
+	const historicalRecoveryByPath = options.recover
+		? await collectHistoricalReleaseRecovery(repoRoot, paths)
+		: new Map<string, HistoricalReleaseRecovery>();
 	const changedFiles: ChangedChangelogSummary[] = [];
 
 	for (const changelogPath of paths) {
 		const absolutePath = path.join(repoRoot, changelogPath);
 		const currentContent = await Bun.file(absolutePath).text();
-		const result = fixChangelogContent(currentContent, addedItemLines.get(changelogPath) ?? new Set<number>());
+		const historicalRecovery = historicalRecoveryByPath.get(changelogPath);
+		const recoveredContent =
+			historicalRecovery === undefined
+				? currentContent
+				: rebuildReleasedSectionsFromHistory(currentContent, historicalRecovery.sectionsByTitle);
+		const result = fixChangelogContent(
+			recoveredContent,
+			addedItemLines.get(changelogPath) ?? new Set<number>(),
+			historicalRecovery?.itemKeys ?? new Set<string>(),
+		);
 		if (result.content === currentContent) continue;
 
 		changedFiles.push({
@@ -667,7 +839,7 @@ export async function runChangelogFixer(options: RunChangelogFixerOptions = {}):
 }
 
 function parseCliArgs(args: readonly string[]): CliOptions {
-	const options: CliOptions = { mode: "write", help: false };
+	const options: CliOptions = { mode: "write", recover: false, help: false };
 	for (let index = 0; index < args.length; index++) {
 		const arg = args[index];
 		switch (arg) {
@@ -676,6 +848,9 @@ function parseCliArgs(args: readonly string[]): CliOptions {
 				break;
 			case "--check":
 				options.mode = "check";
+				break;
+			case "--recover":
+				options.recover = true;
 				break;
 			case "--since": {
 				const value = args[index + 1];
@@ -704,16 +879,23 @@ function parseCliArgs(args: readonly string[]): CliOptions {
 
 function usage(): string {
 	return [
-		"Usage: bun scripts/fix-changelogs.ts [--dry-run|--check] [--since <tag>]",
+		"Usage: bun scripts/fix-changelogs.ts [--dry-run|--check] [--since <tag>] [--recover]",
 		"",
 		"Moves changelog items added since the latest tag from released sections into [Unreleased],",
-		"drops [Unreleased] items that already appear verbatim in a released section, then removes",
-		"duplicate or empty ### category headings.",
+		"drops [Unreleased] items that already appear verbatim in a released section, removes",
+		"blank separators between adjacent bullet items, then removes duplicate or empty",
+		"### category headings.",
+		"",
+		"With --recover, the fixer also scans every tagged changelog snapshot in version order",
+		"and treats every historically released bullet as authoritative, so stale [Unreleased]",
+		"items copied forward by past bad releases are pruned even if the current file no longer",
+		"contains a matching released copy.",
 		"",
 		"Options:",
 		"  --dry-run          Print what would change without writing files.",
 		"  --check            Exit 1 if any changelog would change.",
 		"  --since <tag>      Compare changelog additions against this tag/commit instead of latest tag.",
+		"  --recover          Rebuild against the union of historically released bullets from all tags.",
 		"  --repo-root <dir>  Run against an explicit repository root.",
 	].join("\n");
 }
@@ -749,6 +931,7 @@ async function main(): Promise<void> {
 			repoRoot: cliOptions.repoRoot,
 			since: cliOptions.since,
 			write: cliOptions.mode === "write",
+			recover: cliOptions.recover,
 		});
 		printSummary(result, cliOptions.mode);
 		if (cliOptions.mode === "check" && result.changedFiles.length > 0) {

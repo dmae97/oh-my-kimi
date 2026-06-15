@@ -149,6 +149,79 @@ describe("fixChangelogContent", () => {
 		);
 	});
 
+	it("can recover Unreleased by dropping bullets known to be historically released", () => {
+		const content = [
+			"# Changelog",
+			"",
+			"## [Unreleased]",
+			"",
+			"### Fixed",
+			"",
+			"- Historical fix still stranded in Unreleased.",
+			"- Brand-new fix.",
+			"",
+			"## [1.1.0] - 2026-02-01",
+			"",
+		].join("\n");
+
+		const result = fixChangelogContent(
+			content,
+			new Set(),
+			new Set(["- Historical fix still stranded in Unreleased."]),
+		);
+
+		expect(result.droppedReleasedDuplicates).toBe(1);
+		expect(result.content).toBe(
+			[
+				"# Changelog",
+				"",
+				"## [Unreleased]",
+				"",
+				"### Fixed",
+				"",
+				"- Brand-new fix.",
+				"",
+				"## [1.1.0] - 2026-02-01",
+				"",
+			].join("\n"),
+		);
+	});
+
+	it("compacts blank separators between adjacent bullet items", () => {
+		const content = [
+			"# Changelog",
+			"",
+			"## [Unreleased]",
+			"",
+			"### Fixed",
+			"",
+			"- First fix.",
+			"",
+			"- Second fix.",
+			"",
+			"## [1.1.0] - 2026-02-01",
+			"",
+		].join("\n");
+
+		const result = fixChangelogContent(content, new Set());
+
+		expect(result.content).toBe(
+			[
+				"# Changelog",
+				"",
+				"## [Unreleased]",
+				"",
+				"### Fixed",
+				"",
+				"- First fix.",
+				"- Second fix.",
+				"",
+				"## [1.1.0] - 2026-02-01",
+				"",
+			].join("\n"),
+		);
+	});
+
 	it("leaves a clean changelog untouched", () => {
 		const content = [
 			"# Changelog",
