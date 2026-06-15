@@ -3,7 +3,7 @@
  */
 
 import type { Message, ToolCall } from "@oh-my-pi/pi-ai";
-import { type Grammar, getInbandGrammar, type GrammarToolResult, type ToolCallSyntax } from "@oh-my-pi/pi-ai/grammar";
+import { type Grammar, type GrammarToolResult, getInbandGrammar, type ToolCallSyntax } from "@oh-my-pi/pi-ai/grammar";
 import { formatGroupedPaths, prompt } from "@oh-my-pi/pi-utils";
 import type { AgentMessage } from "../types";
 import fileOperationsTemplate from "./prompts/file-operations.md" with { type: "text" };
@@ -247,7 +247,9 @@ export function serializeConversation(messages: Message[], syntax?: ToolCallSynt
 				.join("");
 			if (content) {
 				const text = truncateForSummary(content, TOOL_RESULT_MAX_CHARS);
-				parts.push(`[Tool Result]: ${renderToolResult(msg.toolCallId, msg.toolName, msg.isError === true, text, grammar)}`);
+				parts.push(
+					`[Tool Result]: ${renderToolResult(msg.toolCallId, msg.toolName, msg.isError === true, text, grammar)}`,
+				);
 			}
 		}
 	}

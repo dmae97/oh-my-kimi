@@ -6,7 +6,7 @@ import { INTENT_FIELD } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, Model, ToolExample, TSchema } from "@oh-my-pi/pi-ai";
 import { getInbandGrammar, renderToolInventory } from "@oh-my-pi/pi-ai/grammar";
 import { preferredToolSyntax } from "@oh-my-pi/pi-catalog/identity";
-import { getVisibleThinkingText } from "../utils/thinking-display";
+import { canonicalizeMessage } from "../utils/thinking-display";
 import {
 	type BashExecutionMessage,
 	type BranchSummaryMessage,
@@ -97,7 +97,7 @@ export function formatSessionDumpText(options: FormatSessionDumpTextOptions): st
 				if (c.type === "text") {
 					lines.push(c.text);
 				} else if (c.type === "thinking") {
-					const thinking = getVisibleThinkingText(c);
+					const thinking = canonicalizeMessage(c.thinking);
 					if (thinking.length === 0) continue;
 					lines.push("<thinking>");
 					lines.push(thinking);

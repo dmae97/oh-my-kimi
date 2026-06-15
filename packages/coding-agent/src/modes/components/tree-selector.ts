@@ -18,6 +18,7 @@ import { matchesAppInterrupt, matchesSelectDown, matchesSelectUp } from "../../m
 import type { SessionTreeNode } from "../../session/session-entries";
 import { shortenPath } from "../../tools/render-utils";
 import { toPathList } from "../../tools/search";
+import { canonicalizeMessage } from "../../utils/thinking-display";
 import { DynamicBorder } from "./dynamic-border";
 
 /** Gutter info: position (displayIndent where connector was) and whether to show │ */
@@ -702,12 +703,12 @@ class TreeList implements Component {
 	}
 
 	#hasTextContent(content: unknown): boolean {
-		if (typeof content === "string") return content.trim().length > 0;
+		if (typeof content === "string") return Boolean(canonicalizeMessage(content));
 		if (Array.isArray(content)) {
 			for (const c of content) {
 				if (typeof c === "object" && c !== null && "type" in c && c.type === "text") {
 					const text = (c as { text?: string }).text;
-					if (text && text.trim().length > 0) return true;
+					if (text && canonicalizeMessage(text)) return true;
 				}
 			}
 		}
