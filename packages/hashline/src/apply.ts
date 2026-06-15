@@ -132,9 +132,44 @@ export const STRUCTURAL_CLOSER_RE = /^\s*[)\]}]+[;,]?\s*$/;
 
 /** A JSX/XML closing boundary that carries structure but no bracket tokens. */
 const JSX_CLOSER_RE = /^\s*(?:<\/>|<\/[A-Za-z][\w.:-]*>|\/>)\s*[;,]?\s*$/;
+const JSX_NAMED_CLOSER_RE = /^\s*<\/([A-Za-z][\w.:-]*)>\s*[;,]?\s*$/;
+const JSX_FRAGMENT_CLOSER_RE = /^\s*<\/>\s*[;,]?\s*$/;
+const JSX_TAG_RE = /<>|<\/>|<\/?([A-Za-z][\w.:-]*)\b[^>]*>/g;
 
 function isStructuralCloserLine(text: string): boolean {
 	return STRUCTURAL_CLOSER_RE.test(text) || JSX_CLOSER_RE.test(text);
+}
+
+function jsxCloserName(text: string): string | undefined {
+	if (JSX_FRAGMENT_CLOSER_RE.test(text)) return "";
+	const match = JSX_NAMED_CLOSER_RE.exec(text);
+	return match?.[1];
+}
+
+function payloadHasJsxOpenerForEcho(payloadPrefix: readonly string[], echoLines: readonly string[]): boolean {
+	const openTags: string[] = [];
+	for (const line of payloadPrefix) {
+		JSX_TAG_RE.lastIndex = 0;
+		let match = JSX_TAG_RE.exec(line);
+		while (match !== null) {
+			const raw = match[0];
+			if (raw === "<>") {
+				openTags.push("");
+			} else if (raw === "</>") {
+				if (openTags[openTags.length - 1] === "") openTags.pop();
+			} else if (raw.startsWith("</")) {
+				if (openTags[openTags.length - 1] === match[1]) openTags.pop();
+			} else if (!raw.endsWith("/>")) {
+				openTags.push(match[1]);
+			}
+			match = JSX_TAG_RE.exec(line);
+		}
+	}
+	for (const line of echoLines) {
+		const name = jsxCloserName(line);
+		if (name !== undefined && openTags.includes(name)) return true;
+	}
+	return false;
 }
 
 interface DelimiterBalance {
@@ -480,8 +515,10 @@ function findOneSidedBoundaryEcho(
 	const echoLines =
 		side === "leading" ? group.payload.slice(0, count) : group.payload.slice(group.payload.length - count);
 	if (!balanceIsZero(computeDelimiterBalance(echoLines))) return undefined;
-	if (group.deleteIndices.length <= 1 && (side !== "trailing" || !echoLines.every(isStructuralCloserLine))) {
-		return undefined;
+	if (group.deleteIndices.length <= 1) {
+		if (side !== "trailing" || !echoLines.every(isStructuralCloserLine)) return undefined;
+		const payloadPrefix = group.payload.slice(0, group.payload.length - count);
+		if (payloadHasJsxOpenerForEcho(payloadPrefix, echoLines)) return undefined;
 	}
 	return { side, count };
 }
