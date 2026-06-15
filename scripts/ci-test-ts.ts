@@ -175,7 +175,7 @@ function workspaceTestCommand(pkg: string, parallel: number, smol = false): Test
 	return {
 		label: pkg,
 		cwd: pkg,
-		command: ["bun", ...(smol ? ["--smol"] : []), "test", `--parallel=${parallel}`, "--only-failures"],
+		command: ["bun", ...(smol ? ["--smol"] : []), "test", `--parallel=${parallel}`],
 	};
 }
 
@@ -288,7 +288,7 @@ async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 				},
 			];
 		case "native":
-			return nativeAndIntegrationPackages.map(pkg => workspaceTestCommand(pkg, 1, true));
+			return nativeAndIntegrationPackages.map(pkg => workspaceTestCommand(pkg, 4, true));
 		case "coding-agent-singleton":
 			return [await codingAgentTestCommand("singleton")];
 		case "coding-agent-ui":
