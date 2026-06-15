@@ -1286,7 +1286,14 @@ describe("AgentSession retry fallback", () => {
 		expect(retryStartEvents).toHaveLength(1);
 		expect(retryEndEvents).toHaveLength(1);
 		expect(session.agent.state.messages).toHaveLength(2);
-		expect(session.agent.state.messages[1].role).toBe("assistant");
-		expect(session.agent.state.messages[1].content[0].text).toBe("Recovered after Gemini malformed function call");
+		const assistantMsg = session.agent.state.messages[1];
+		if (assistantMsg.role !== "assistant") {
+			throw new Error(`Expected assistant message, got ${assistantMsg.role}`);
+		}
+		const contentBlock = assistantMsg.content[0];
+		if (contentBlock.type !== "text") {
+			throw new Error(`Expected text content block, got ${contentBlock.type}`);
+		}
+		expect(contentBlock.text).toBe("Recovered after Gemini malformed function call");
 	});
 });
