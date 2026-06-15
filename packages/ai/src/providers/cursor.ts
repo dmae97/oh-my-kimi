@@ -612,9 +612,9 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 	return stream;
 };
 
-type ToolCallState = ToolCall & { index: number; partialJson?: string; kind: "mcp" | "todo" };
+export type ToolCallState = ToolCall & { index: number; partialJson?: string; kind: "mcp" | "todo" };
 
-interface BlockState {
+export interface BlockState {
 	currentTextBlock: (TextContent & { index: number }) | null;
 	currentThinkingBlock: (ThinkingContent & { index: number }) | null;
 	currentToolCall: ToolCallState | null;
@@ -625,7 +625,7 @@ interface BlockState {
 	setFirstTokenTime: () => void;
 }
 
-interface UsageState {
+export interface UsageState {
 	sawTokenDelta: boolean;
 }
 
@@ -1940,7 +1940,40 @@ function buildMcpErrorResult(error: string) {
 	});
 }
 
-function processInteractionUpdate(
+/**
+ * Merge the decoded completion-frame `McpArgs` map into the args assembled
+ * from streamed `args_text_delta` snapshots.
+ *
+ * The completion frame is authoritative for the scalars it carries — but it
+ * can omit oversized parameters entirely and can downgrade a structured value
+ * to its raw string fallback when `decodeMcpArgValue` cannot parse it as
+ * JSON. Overwriting the streamed args wholesale therefore loses data (e.g.
+ * the task tool's `tasks` array on multi-subagent dispatches, issue #2615).
+ *
+ * Rules per key:
+ * - completion key absent  → keep the streamed value.
+ * - completion is a string while the streamed value is structured (object or
+ *   array) → keep the streamed value (the completion frame downgraded it).
+ * - otherwise               → completion wins.
+ */
+export function mergeCursorMcpToolCallArgs(
+	streamed: Record<string, unknown> | undefined,
+	completion: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+	const merged: Record<string, unknown> = { ...(streamed ?? {}) };
+	if (!completion) return merged;
+	for (const [key, completionValue] of Object.entries(completion)) {
+		const streamedValue = merged[key];
+		if (typeof completionValue === "string" && streamedValue !== null && typeof streamedValue === "object") {
+			continue;
+		}
+		merged[key] = completionValue;
+	}
+	return merged;
+}
+
+/** Exported for tests: drives one Cursor interaction update through the streaming state machine. */
+export function processInteractionUpdate(
 	update: any,
 	output: AssistantMessage,
 	stream: AssistantMessageEventStream,
@@ -2034,20 +2067,30 @@ function processInteractionUpdate(
 		}
 	} else if (updateCase === "toolCallDelta" || updateCase === "partialToolCall") {
 		if (state.currentToolCall?.kind === "mcp") {
-			const delta = update.message.value.argsTextDelta || "";
-			state.currentToolCall.partialJson = `${state.currentToolCall.partialJson ?? ""}${delta}`;
-			state.currentToolCall.arguments = parseStreamingJson(state.currentToolCall.partialJson ?? "");
+			// Cursor's `args_text_delta` is "aggregated args text so far" per agent.proto: each
+			// delta is a cumulative snapshot of the JSON-text args. Strip the prefix we already
+			// have to recover the new suffix; fall back to treating the value as an incremental
+			// fragment when it doesn't extend the buffer.
+			const snapshot: string = update.message.value.argsTextDelta || "";
+			const current = state.currentToolCall.partialJson ?? "";
+			const chunk = snapshot.startsWith(current) ? snapshot.slice(current.length) : snapshot;
+			if (chunk.length === 0) {
+				return;
+			}
+			state.currentToolCall.partialJson = current + chunk;
+			state.currentToolCall.arguments = parseStreamingJson(state.currentToolCall.partialJson);
 			const idx = output.content.indexOf(state.currentToolCall);
-			stream.push({ type: "toolcall_delta", contentIndex: idx, delta, partial: output });
+			stream.push({ type: "toolcall_delta", contentIndex: idx, delta: chunk, partial: output });
 		}
 	} else if (updateCase === "toolCallCompleted") {
 		if (state.currentToolCall) {
 			const toolCall = update.message.value.toolCall;
 			if (state.currentToolCall.kind === "mcp") {
 				const decodedArgs = decodeMcpArgsMap(toolCall?.mcpToolCall?.args?.args);
-				if (decodedArgs) {
-					state.currentToolCall.arguments = decodedArgs;
-				}
+				state.currentToolCall.arguments = mergeCursorMcpToolCallArgs(
+					state.currentToolCall.arguments as Record<string, unknown> | undefined,
+					decodedArgs,
+				);
 			} else if (state.currentToolCall.kind === "todo" && toolCall) {
 				const todoArgs = buildTodoArgs(toolCall);
 				if (todoArgs) {
