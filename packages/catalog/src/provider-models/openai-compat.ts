@@ -690,8 +690,8 @@ async function fetchUmansModelsInfo(options: {
 			return null;
 		}
 		payload = await response.json();
-	} catch {
-		return null;
+	} catch (error) {
+		throw new Error("Failed to fetch Umans models info", { cause: error });
 	}
 	if (!isRecord(payload)) {
 		return null;

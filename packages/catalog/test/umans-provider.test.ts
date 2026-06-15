@@ -82,6 +82,17 @@ describe("umans provider catalog", () => {
 		});
 	});
 
+	it("surfaces Umans discovery fetch failures", async () => {
+		const fetchDynamicModels = umansModelManagerOptions({
+			fetch: async () => {
+				throw new Error("boom");
+			},
+		}).fetchDynamicModels;
+		if (!fetchDynamicModels) throw new Error("Umans dynamic discovery is not configured");
+
+		await expect(fetchDynamicModels()).rejects.toThrow("Failed to fetch Umans models info");
+	});
+
 	it("maps the models.dev Umans provider to the Anthropic endpoint", () => {
 		const models = mapModelsDevToModels(
 			{
