@@ -501,7 +501,7 @@ export async function processResponsesStream<TApi extends Api>(
 	const openItemsInOrder: StreamingItem[] = [];
 
 	const prefixedFunctionCallItemKey = (callId: string | undefined): string | undefined =>
-		callId && !callId.startsWith("fc_") ? `fc_${callId}` : undefined;
+		callId ? `fc_${callId}` : undefined;
 
 	const registerOpenItem = (
 		outputIndex: number | undefined,

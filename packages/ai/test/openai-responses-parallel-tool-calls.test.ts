@@ -338,7 +338,8 @@ describe("processResponsesStream: parallel function_call items", () => {
 	});
 	test("routes Ollama Responses deltas whose item_id prefixes the call_id", async () => {
 		// Ollama's OpenAI-compatible Responses stream can add parallel calls with
-		// only `call_id`, then send argument deltas with `item_id = fc_<call_id>`.
+		// only `call_id`, then send argument deltas with `item_id = fc_<call_id>`
+		// even when `call_id` already starts with `fc_`.
 		// If the parser only indexes the bare call_id, every delta falls back to the
 		// most recently added call and earlier ast_grep calls execute with `{}`.
 		const output = makeOutput();
@@ -357,14 +358,14 @@ describe("processResponsesStream: parallel function_call items", () => {
 				},
 				{
 					type: "response.output_item.added",
-					item: { type: "function_call", call_id: "call_b", name: "ast_grep", arguments: "" },
+					item: { type: "function_call", call_id: "fc_b", name: "ast_grep", arguments: "" },
 				},
 				{
 					type: "response.output_item.added",
 					item: { type: "function_call", call_id: "call_c", name: "ast_grep", arguments: "" },
 				},
 				{ type: "response.function_call_arguments.delta", item_id: "fc_call_a", delta: argsA },
-				{ type: "response.function_call_arguments.delta", item_id: "fc_call_b", delta: argsB },
+				{ type: "response.function_call_arguments.delta", item_id: "fc_fc_b", delta: argsB },
 				{ type: "response.function_call_arguments.delta", item_id: "fc_call_c", delta: argsC },
 				{
 					type: "response.output_item.done",
@@ -372,7 +373,7 @@ describe("processResponsesStream: parallel function_call items", () => {
 				},
 				{
 					type: "response.output_item.done",
-					item: { type: "function_call", call_id: "call_b", name: "ast_grep", arguments: "" },
+					item: { type: "function_call", call_id: "fc_b", name: "ast_grep", arguments: "" },
 				},
 				{
 					type: "response.output_item.done",
@@ -403,7 +404,7 @@ describe("processResponsesStream: parallel function_call items", () => {
 			pat: "console.log($$$)",
 			paths: ["src/**/*.ts"],
 		});
-		expect(byCallId.get("call_b")?.toolCall.arguments).toEqual({
+		expect(byCallId.get("fc_b")?.toolCall.arguments).toEqual({
 			pat: "logger.$_($$$ARGS)",
 			paths: ["src/**/*.ts"],
 		});
@@ -412,7 +413,7 @@ describe("processResponsesStream: parallel function_call items", () => {
 			paths: ["src/worker.ts"],
 		});
 		expect(byCallId.get("call_a")?.contentIndex).toBe(0);
-		expect(byCallId.get("call_b")?.contentIndex).toBe(1);
+		expect(byCallId.get("fc_b")?.contentIndex).toBe(1);
 		expect(byCallId.get("call_c")?.contentIndex).toBe(2);
 	});
 });
