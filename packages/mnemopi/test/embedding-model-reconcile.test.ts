@@ -8,9 +8,9 @@
 
 import { Database } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
+import "./setup";
 import { initBeam } from "@oh-my-pi/pi-mnemopi/core/beam";
 import { Mnemopi } from "@oh-my-pi/pi-mnemopi/core/memory";
-import { RUN_EMBEDDINGS } from "./setup";
 
 const OLD_MODEL = "BAAI/bge-small-en-v1.5";
 const NEW_MODEL = "intfloat/multilingual-e5-large";
@@ -47,7 +47,7 @@ function countEmbeddings(memory: Mnemopi): number {
 	return (memory.conn.query("SELECT COUNT(*) AS n FROM memory_embeddings").get() as { n: number }).n;
 }
 
-describe.skipIf(!RUN_EMBEDDINGS)("reconcileEmbeddingModel on store open", () => {
+describe("reconcileEmbeddingModel on store open", () => {
 	it("wipes stale embeddings + binary vectors and re-embeds when the model changed", async () => {
 		const { db, ids } = seedDb(OLD_MODEL);
 		const memory = new Mnemopi({ db, embeddings: { model: NEW_MODEL, provider: fakeEmbed() } });

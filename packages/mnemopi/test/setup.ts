@@ -62,18 +62,8 @@ class FakeLocalLlmBackend implements LlmBackend {
 		return { choices: [{ message: { content: this.response } }] };
 	}
 }
-export const RUN_EMBEDDINGS = Bun.env.EMBEDDINGS === "1";
 
 beforeEach(() => {
-	// Real embeddings (fastembed + onnxruntime-node, ~270MB peers) install on
-	// demand via `bun install` on first use. Default the suite to the lightweight
-	// FTS-only mode; embedding-specific tests opt back in explicitly with withEnv()
-	// or a fake provider.
-	if (!RUN_EMBEDDINGS) {
-		process.env.MNEMOPI_NO_EMBEDDINGS = "1";
-	} else {
-		delete process.env.MNEMOPI_NO_EMBEDDINGS;
-	}
 	resetModuleStateForTests();
 	disableLocalLlmForTests();
 });
@@ -81,5 +71,4 @@ beforeEach(() => {
 afterEach(() => {
 	resetModuleStateForTests();
 	disableLocalLlmForTests();
-	delete process.env.MNEMOPI_NO_EMBEDDINGS;
 });
