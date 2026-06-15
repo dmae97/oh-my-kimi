@@ -15,6 +15,10 @@ interface BundledModel {
 	input: string[];
 	contextWindow: number | null;
 	maxTokens: number | null;
+	thinking?: {
+		defaultLevel?: string;
+		requiresEffort?: boolean;
+	};
 }
 
 describe("umans provider catalog", () => {
@@ -31,7 +35,17 @@ describe("umans provider catalog", () => {
 							max_completion_tokens: 262_144,
 							supports_vision: true,
 							supports_tools: true,
-							reasoning: { supported: true },
+							reasoning: { supported: true, can_disable: true, default_level: "medium" },
+						},
+					},
+					"umans-kimi-k2.7": {
+						display_name: "Umans Kimi K2.7 Code",
+						capabilities: {
+							context_window: 262_144,
+							max_completion_tokens: 262_144,
+							supports_vision: true,
+							supports_tools: true,
+							reasoning: { supported: true, can_disable: false, default_level: "medium" },
 						},
 					},
 				}),
@@ -47,7 +61,7 @@ describe("umans provider catalog", () => {
 
 		expect(requestedUrls).toEqual(["https://api.code.umans.ai/v1/models/info"]);
 		expect(models).not.toBeNull();
-		const model = models?.[0];
+		const model = models?.find(item => item.id === "umans-coder");
 		expect(model).toMatchObject({
 			id: "umans-coder",
 			name: "Umans Coder",
@@ -58,6 +72,13 @@ describe("umans provider catalog", () => {
 			input: ["text", "image"],
 			contextWindow: 262_144,
 			maxTokens: 262_144,
+			thinking: { defaultLevel: "medium" },
+		});
+		const mandatoryReasoningModel = models?.find(item => item.id === "umans-kimi-k2.7");
+		expect(mandatoryReasoningModel).toMatchObject({
+			id: "umans-kimi-k2.7",
+			reasoning: true,
+			thinking: { defaultLevel: "medium", requiresEffort: true },
 		});
 	});
 
@@ -106,6 +127,16 @@ describe("umans provider catalog", () => {
 			input: ["text", "image"],
 			contextWindow: 262_144,
 			maxTokens: 262_144,
+		});
+	});
+
+	it("bundles Umans mandatory reasoning metadata", () => {
+		const providers = modelsJson as Record<string, Record<string, BundledModel>>;
+		const model = providers.umans?.["umans-kimi-k2.7"];
+
+		expect(model).toBeDefined();
+		expect(model.thinking).toMatchObject({
+			requiresEffort: true,
 		});
 	});
 });

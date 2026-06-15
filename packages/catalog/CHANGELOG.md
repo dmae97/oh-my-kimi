@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added the Umans AI Coding Plan provider catalog with Anthropic-compatible model metadata and dynamic discovery.
+- Added the Umans AI Coding Plan provider catalog with Anthropic-compatible model metadata and dynamic discovery ([#2636](https://github.com/can1357/oh-my-pi/pull/2636) by [@oldschoola](https://github.com/oldschoola)).
 
 ## [15.13.3] - 2026-06-15
 

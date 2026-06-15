@@ -574,6 +574,14 @@ function createSimpleAnthropicProviderOptions(
 
 const UMANS_BASE_URL = "https://api.code.umans.ai";
 const UMANS_MODELS_INFO_PATH = "/models/info";
+const UMANS_REASONING_EFFORT_BY_LEVEL: Record<string, Effort> = {
+	minimal: Effort.Minimal,
+	low: Effort.Low,
+	medium: Effort.Medium,
+	high: Effort.High,
+	xhigh: Effort.XHigh,
+};
+const UMANS_DEFAULT_REASONING_EFFORTS = [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh] as const;
 
 export interface UmansModelManagerConfig {
 	apiKey?: string;
@@ -597,10 +605,40 @@ function umansSupportsVision(value: unknown): boolean {
 }
 
 function umansReasoningSupported(value: unknown): boolean {
-	if (isRecord(value)) {
-		return value.supported === true;
+	return isRecord(value) ? value.supported === true : value === true;
+}
+
+function mapUmansReasoningEfforts(value: unknown): readonly Effort[] {
+	if (!isRecord(value) || !Array.isArray(value.levels)) {
+		return UMANS_DEFAULT_REASONING_EFFORTS;
 	}
-	return value === true;
+	const efforts: Effort[] = [];
+	for (const level of value.levels) {
+		if (typeof level !== "string") continue;
+		const effort = UMANS_REASONING_EFFORT_BY_LEVEL[level];
+		if (effort !== undefined && !efforts.includes(effort)) {
+			efforts.push(effort);
+		}
+	}
+	return efforts.length > 0 ? efforts : UMANS_DEFAULT_REASONING_EFFORTS;
+}
+
+function mapUmansThinkingConfig(value: unknown): ThinkingConfig | undefined {
+	if (!umansReasoningSupported(value)) return undefined;
+	const efforts = mapUmansReasoningEfforts(value);
+	const thinking: ThinkingConfig = { mode: "budget", efforts };
+	if (isRecord(value)) {
+		if (value.can_disable === false) {
+			thinking.requiresEffort = true;
+		}
+		if (typeof value.default_level === "string") {
+			const defaultLevel = UMANS_REASONING_EFFORT_BY_LEVEL[value.default_level];
+			if (defaultLevel !== undefined && efforts.includes(defaultLevel)) {
+				thinking.defaultLevel = defaultLevel;
+			}
+		}
+	}
+	return thinking;
 }
 
 function mapUmansModelInfo(
@@ -612,6 +650,7 @@ function mapUmansModelInfo(
 	if (!modelId) return null;
 	const capabilities = isRecord(raw.capabilities) ? raw.capabilities : {};
 	const supportsTools = capabilities.supports_tools;
+	const thinking = mapUmansThinkingConfig(capabilities.reasoning);
 	return {
 		...reference,
 		id: modelId,
@@ -619,7 +658,8 @@ function mapUmansModelInfo(
 		api: "anthropic-messages",
 		provider: "umans",
 		baseUrl,
-		reasoning: umansReasoningSupported(capabilities.reasoning),
+		reasoning: thinking !== undefined,
+		...(thinking ? { thinking } : {}),
 		input: umansSupportsVision(capabilities.supports_vision) ? ["text", "image"] : ["text"],
 		...(supportsTools === false ? { supportsTools: false } : {}),
 		cost: reference?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },

@@ -69035,7 +69035,8 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"umans-qwen3.6-35b-a3b": {

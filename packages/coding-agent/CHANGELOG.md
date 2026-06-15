@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added `UMANS_AI_CODING_PLAN_API_KEY` to the CLI environment help.
+- Added `UMANS_AI_CODING_PLAN_API_KEY` to the CLI environment help ([#2636](https://github.com/can1357/oh-my-pi/pull/2636) by [@oldschoola](https://github.com/oldschoola)).
 
 ## [15.13.3] - 2026-06-15
 
