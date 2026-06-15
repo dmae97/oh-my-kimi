@@ -107,6 +107,7 @@ import {
 	isEnoent,
 	isUnexpectedSocketCloseMessage,
 	logger,
+	postmortem,
 	prompt,
 	relativePathWithinRoot,
 	Snowflake,
@@ -250,6 +251,13 @@ import {
 	shouldEvaluateCodexAutoRedeem,
 	shouldPromptCodexAutoRedeem,
 } from "./codex-auto-reset";
+import {
+	collectPendingToolCalls,
+	SESSION_EXIT_CUSTOM_TYPE,
+	type SessionExitData,
+	TOOL_EXECUTION_START_CUSTOM_TYPE,
+	type ToolExecutionStartData,
+} from "./exit-diagnostics";
 import {
 	type BashExecutionMessage,
 	type CustomMessage,
@@ -925,6 +933,8 @@ export class AgentSession {
 
 	// Event subscription state
 	#unsubscribeAgent?: () => void;
+	#cancelExitRecorder?: () => void;
+	#exitRecorded = false;
 	#unsubscribeAppendOnly?: () => void;
 	/** Last (enable, providerId) tuple resolved by `#syncAppendOnlyContext` — used to skip no-op invalidations. */
 	#lastAppendOnlyResolution?: { enable: boolean; providerId: string | undefined };
@@ -1355,6 +1365,9 @@ export class AgentSession {
 				);
 			},
 		});
+		this.#cancelExitRecorder = postmortem.register(`agent-session:${this.sessionManager.getSessionId()}`, reason => {
+			this.#recordSessionExit(reason);
+		});
 
 		// Always subscribe to agent events for internal handling
 		// (session persistence, hooks, auto-compaction, retry logic)
@@ -1574,6 +1587,55 @@ export class AgentSession {
 		this.#emit({ type: "notice", level, message, source });
 	}
 
+	#recordToolExecutionStart(event: Extract<AgentEvent, { type: "tool_execution_start" }>): void {
+		const data: ToolExecutionStartData = {
+			toolCallId: event.toolCallId,
+			toolName: event.toolName,
+			args: event.args,
+			startedAt: new Date().toISOString(),
+		};
+		if (event.intent) data.intent = event.intent;
+		this.sessionManager.appendCustomEntry(TOOL_EXECUTION_START_CUSTOM_TYPE, data);
+	}
+
+	#recordSessionExit(reason: postmortem.Reason | "dispose"): void {
+		if (this.#exitRecorded) return;
+		this.#exitRecorded = true;
+		const pendingToolCalls = collectPendingToolCalls(this.sessionManager.getBranch());
+		const kind: SessionExitData["kind"] =
+			reason === "dispose" || reason === postmortem.Reason.MANUAL
+				? "normal"
+				: reason === postmortem.Reason.UNCAUGHT_EXCEPTION || reason === postmortem.Reason.UNHANDLED_REJECTION
+					? "fatal"
+					: reason === postmortem.Reason.EXIT
+						? "process_exit"
+						: "signal";
+		const data: SessionExitData = {
+			reason,
+			kind,
+			recordedAt: new Date().toISOString(),
+		};
+		if (pendingToolCalls.length > 0) data.pendingToolCalls = pendingToolCalls;
+		try {
+			this.sessionManager.appendCustomEntry(SESSION_EXIT_CUSTOM_TYPE, data);
+			this.sessionManager.flushSync();
+			logger.warn("Session exit recorded", {
+				sessionId: this.sessionManager.getSessionId(),
+				sessionFile: this.sessionManager.getSessionFile(),
+				reason,
+				kind,
+				pendingToolCalls: pendingToolCalls.length,
+			});
+		} catch (error) {
+			logger.error("Failed to record session exit", {
+				sessionId: this.sessionManager.getSessionId(),
+				sessionFile: this.sessionManager.getSessionFile(),
+				reason,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+	}
+
 	#queuedExtensionEvents: Promise<void> = Promise.resolve();
 
 	#queueExtensionEvent(event: AgentSessionEvent): Promise<void> {
@@ -1657,6 +1719,10 @@ export class AgentSession {
 				cacheRead: usage.cacheRead,
 				cacheWrite: usage.cacheWrite,
 			});
+		}
+
+		if (event.type === "tool_execution_start") {
+			this.#recordToolExecutionStart(event);
 		}
 
 		await this.#emitSessionEvent(displayEvent);
@@ -3160,6 +3226,9 @@ export class AgentSession {
 	 */
 	async dispose(): Promise<void> {
 		this.beginDispose();
+		this.#recordSessionExit("dispose");
+		this.#cancelExitRecorder?.();
+		this.#cancelExitRecorder = undefined;
 		try {
 			if (this.#extensionRunner?.hasHandlers("session_shutdown")) {
 				await this.#extensionRunner.emit({ type: "session_shutdown" });

@@ -165,6 +165,7 @@
 
 ### Fixed
 
+- Fixed session resumes after a silent exit by recording pre-tool start markers, shutdown diagnostics, and warnings for pending tool calls ([#2606](https://github.com/can1357/oh-my-pi/issues/2606)).
 - Fixed Kokoro TTS setup loading the workspace/global `@huggingface/transformers` runtime before the side-installed Kokoro runtime, which could leave `onnxruntime-node@1.26.0` bound to an older `libonnxruntime.so.1` and fail with `VERS_1.26.0` missing ([#2591](https://github.com/can1357/oh-my-pi/issues/2591)).
 - Fixed `scripts/ci-release-notes.ts` stranding curated changelog entries from intervening *silent* tags (a `vX.Y.Z` tag pushed without a GitHub Release, e.g. the `v15.12.5`/`v15.12.6` casualties of the pre-#2564 release-cancellation bug). The generator now walks `(latest-published-release, target]` — resolved via `gh release list` from the `release_github` CI job — and merges every in-range `## [X.Y.Z]` section per package, grouped by `### <category>` with bullet-level dedupe so post-release changelog flattening cannot duplicate entries. Falls back to the legacy single-version extraction when no prior published release resolves, and `OMP_RELEASE_NOTES_FLOOR=v15.12.4` overrides the lookup for manual rebuilds ([#2596](https://github.com/can1357/oh-my-pi/issues/2596)).
 - Fixed `Test & smoke (TS)` CI timeouts caused by parallel test files racing on the process-global Settings singleton. `CustomEditor` now accepts a `magicKeywordsEnabledOverride` injection point so the shimmer-gate test can assert behaviour without calling `resetSettingsForTest()` / `Settings.init()`; the "streaming tool call preview height" describe drops its gratuitous Settings reset+init. Production wiring is unchanged ([#2582](https://github.com/can1357/oh-my-pi/issues/2582))
@@ -173,6 +174,7 @@
 - Fixed selector-style UI components to honor `tui.select.up` and `tui.select.down` keybindings instead of hard-coding raw Up/Down arrow bytes ([#1535](https://github.com/can1357/oh-my-pi/issues/1535)).
 - Fixed a collapsed, still-streaming tool preview (an `eval`/`bash`/`ssh` box with output streaming in) reading as "weirdly truncated" — top border and head rows missing — once its box outgrew the viewport, snapping back to whole only while expanded with `ctrl+o` and breaking again when collapsed. A streaming preview was classified commit-unstable whenever collapsed, so the transcript offered none of its rows to native scrollback; once the box outgrew the window its head fell into the gap between the commit boundary and the window top, committed nowhere and repainted nowhere. The `provisionalPendingPreview` flag now applies only to the pending call preview (before any result) — once a streaming result exists the result renderer is the live, top-anchored shape and the block is commit-stable in both collapsed and expanded states, so its durable head always reaches scrollback.
 - Fixed a crash in subagent task execution and extensions when a string (instead of a string array) was returned or set for the system prompt. Gracefully wrap string values in arrays.
+
 
 ## [15.13.0] - 2026-06-14
 
