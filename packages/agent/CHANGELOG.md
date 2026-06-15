@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.13.3] - 2026-06-15
+
 ### Added
 
 - Added the `interruptible` tool field: when set, the agent loop may abort the tool mid-execution to deliver a queued steering message (honored only in `immediate` interrupt mode).

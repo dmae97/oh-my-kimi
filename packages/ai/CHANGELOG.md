@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.13.3] - 2026-06-15
+
 ### Added
 
 - Added the `gemini` in-band tool-call syntax with Python-style ```tool_code``` blocks and `default_api` invocations

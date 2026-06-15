@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.13.3] - 2026-06-15
+
 ### Changed
 
 - Renamed `__omp_stats_sync_worker` to `__omp_worker_stats_sync`.
