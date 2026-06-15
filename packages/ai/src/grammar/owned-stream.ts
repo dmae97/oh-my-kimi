@@ -86,6 +86,21 @@ export function wrapInbandToolStream(
 							return;
 						}
 						break;
+					case "toolcall_start":
+						// Provider emitted a native structured tool call (e.g. Gemini via
+						// OpenRouter still returns `functionCall` parts even when owned mode
+						// sends no `tools`). The in-band scanner only reconstructs calls from
+						// `tool_code`/text, so pass native calls straight through — otherwise
+						// the turn loses its only actionable content and the loop retries
+						// forever on a reasoning-only message.
+						projector?.nativeToolStart(event.contentIndex);
+						break;
+					case "toolcall_delta":
+						projector?.nativeToolDelta(event.contentIndex, event.delta);
+						break;
+					case "toolcall_end":
+						projector?.nativeToolEnd(event.contentIndex, event.toolCall);
+						break;
 					case "done":
 						projector ??= new InbandStreamProjector(out, tools, syntax, event.message, true);
 						projector.finish(event.message, true);
@@ -115,6 +130,10 @@ class InbandStreamProjector {
 	#fedLen = 0;
 	#stopped = false;
 	#responsePending = "";
+	// Native tool calls forwarded from the inner provider stream, keyed by the
+	// inner stream's `contentIndex` (distinct from the in-band `#toolBlocks`,
+	// which key on the scanner's synthetic ids).
+	#nativeTools = new Map<number, { index: number; block: ToolCall }>();
 
 	constructor(
 		out: AssistantMessageEventStream,
@@ -140,6 +159,46 @@ class InbandStreamProjector {
 		this.#closeText();
 		this.#closeThinking();
 		this.#partial.content.push(block);
+	}
+
+	nativeToolStart(srcIndex: number): void {
+		if (this.#stopped || this.#nativeTools.has(srcIndex)) return;
+		this.#closeText();
+		this.#closeThinking();
+		const block: ToolCall = { type: "toolCall", id: "", name: "", arguments: {} };
+		this.#partial.content.push(block);
+		const index = this.#partial.content.length - 1;
+		this.#nativeTools.set(srcIndex, { index, block });
+		if (this.#emitEvents) this.#out.push({ type: "toolcall_start", contentIndex: index, partial: this.#partial });
+	}
+
+	nativeToolDelta(srcIndex: number, delta: string): void {
+		if (this.#stopped) return;
+		const entry = this.#nativeTools.get(srcIndex);
+		if (!entry) return;
+		if (this.#emitEvents)
+			this.#out.push({ type: "toolcall_delta", contentIndex: entry.index, delta, partial: this.#partial });
+	}
+
+	nativeToolEnd(srcIndex: number, toolCall: ToolCall): void {
+		if (this.#stopped) return;
+		let entry = this.#nativeTools.get(srcIndex);
+		if (!entry) {
+			this.nativeToolStart(srcIndex);
+			entry = this.#nativeTools.get(srcIndex);
+		}
+		if (!entry) return;
+		// Copy the finalized call onto the projected block in place so the
+		// already-emitted `toolcall_start` keeps its content index.
+		Object.assign(entry.block, toolCall);
+		if (this.#emitEvents)
+			this.#out.push({
+				type: "toolcall_end",
+				contentIndex: entry.index,
+				toolCall: entry.block,
+				partial: this.#partial,
+			});
+		this.#nativeTools.delete(srcIndex);
 	}
 
 	text(delta: string): boolean {

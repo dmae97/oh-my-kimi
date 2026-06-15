@@ -219,11 +219,11 @@ const GEMINI_CODE_OPEN = "```tool_code";
 const GEMINI_OUTPUT_OPEN = "```tool_outputs";
 const GEMINI_FENCE = "```";
 
-export function renderGeminiInvocation(call: ToolCall, _options: GrammarRenderOptions = {}): string {
+export function renderGeminiInvocation(call: ToolCall, options: GrammarRenderOptions = {}): string {
 	const kwargs = Object.entries(call.arguments)
 		.map(([key, value]) => `${key}=${pyValue(value)}`)
 		.join(", ");
-	return `default_api.${call.name}(${kwargs})`;
+	return options.example ? `${call.name}(${kwargs})` : `default_api.${call.name}(${kwargs})`;
 }
 
 export function renderGeminiToolCalls(calls: readonly ToolCall[], options: GrammarRenderOptions = {}): string {

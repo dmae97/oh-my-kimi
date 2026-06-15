@@ -10,6 +10,10 @@
 - Fixed truncated Gemini and Gemma tool blocks from being emitted as plain text during streaming
 - Added the Azure OpenAI provider definition (`azure`) to the registry; `AZURE_OPENAI_API_KEY` resolves as its env-var API key via the catalog provider table.
 
+### Changed
+
+- Gemini tool-call examples now render without the `default_api.` namespace prefix, keeping `<example>` blocks concise. The live wire format still uses `default_api.` per the Gemini grammar.
+
 ### Fixed
 
 - Fixed truncated Gemini and Gemma tool blocks from being emitted as plain text during streaming

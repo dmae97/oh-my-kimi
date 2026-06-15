@@ -129,10 +129,10 @@ describe("gemini grammar (Pythonic tool_code)", () => {
 	it("renders examples without a fence or print wrapper", () => {
 		const grammar = getInbandGrammar("gemini");
 		expect(grammar.renderToolCall(call("read", { path: "a.ts" }), { example: true })).toBe(
-			'default_api.read(path="a.ts")',
+			'read(path="a.ts")',
 		);
 		expect(grammar.renderAssistantToolCalls([call("read", { path: "a.ts" })], { example: true })).toBe(
-			'default_api.read(path="a.ts")',
+			'read(path="a.ts")',
 		);
 	});
 
