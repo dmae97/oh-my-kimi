@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Auto-repaired one-sided multi-line boundary echoes by dropping delimiter-neutral duplicated boundary lines and emitted a boundary-echo warning
+- Parser now treats a leading `\` on inline payload bodies as the payload delimiter, matching standalone payload rows.
+- Restored the warning emitted when escaped indented payload rows (`\\    TEXT`) are accepted as payload delimiters.
+
 ## [15.13.3] - 2026-06-15
 
 ### Changed
@@ -19,12 +25,6 @@
   - `replace_block` -> `SWAP.BLK`
   - `delete_block` -> `DEL.BLK`
   - `insert_after_block` -> `INS.BLK.POST`
-
-### Fixed
-
-- Auto-repaired one-sided multi-line boundary echoes by dropping delimiter-neutral duplicated boundary lines and emitted a boundary-echo warning
-- Parser now treats a leading `\` on inline payload bodies as the payload delimiter, matching standalone payload rows.
-- Restored the warning emitted when escaped indented payload rows (`\\    TEXT`) are accepted as payload delimiters.
 
 ### Fixed
 
