@@ -173,8 +173,8 @@ describe("AssistantMessageComponent streaming thinking pulse", () => {
 		return lines;
 	}
 
-	// First frame of the breathing ·‥…‥ pulse; deterministic right after updateContent.
-	const PULSE = "·";
+	// First frame of the breathing ▁▃▄▃ pulse; deterministic right after updateContent.
+	const PULSE = "▁";
 
 	it("shows the pulse in place of hidden reasoning while thinking streams", () => {
 		const lines = liveLines(streaming([{ type: "thinking", thinking: "private reasoning" }]));

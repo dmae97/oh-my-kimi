@@ -1,7 +1,6 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Breaking Changes
 
 - Renamed the SDK tool format type and resolver from `ToolCallFormat`/`resolveToolCallSyntax` to `DialectFormat`/`resolveDialect`, and the agent option from `toolCallSyntax` to `dialect`.
@@ -24,7 +23,9 @@
 
 ### Fixed
 
+- Fixed advisor context handling to automatically maintain its token budget by promoting the advisor model or compacting/restarting advisor context when needed, preventing advice from degrading on long sessions
 - Fixed `startup.quiet` leaving MCP and LSP startup status events visible during launch ([#2639](https://github.com/can1357/oh-my-pi/issues/2639)).
+- Registered the `Advisor` group in the `model` settings tab so advisor settings render correctly in the settings panel.
 
 ## [15.13.3] - 2026-06-15
 

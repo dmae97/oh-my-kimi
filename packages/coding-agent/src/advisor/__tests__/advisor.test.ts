@@ -246,6 +246,40 @@ describe("advisor", () => {
 			expect(promptInputs).toHaveLength(2);
 			expect(promptInputs[1]).toContain("summary-bbb");
 		});
+
+		it("triggers a re-prime and full replay when maintainContext returns true", async () => {
+			const promptInputs: string[] = [];
+			const agent = makeAgent(promptInputs);
+			const messages: AgentMessage[] = [{ role: "user", content: "aaa", timestamp: 1 } as AgentMessage];
+			let shouldRePrime = false;
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+				maintainContext: async tokens => {
+					expect(tokens).toBeGreaterThan(0);
+					return shouldRePrime;
+				},
+			};
+			const runtime = new AdvisorRuntime(agent, host);
+
+			// First turn: normal incremental prompt
+			runtime.onTurnEnd();
+			await Promise.resolve();
+			expect(promptInputs).toHaveLength(1);
+			expect(promptInputs[0]).toContain("aaa");
+
+			// Second turn: maintainContext resolves true, triggering a re-prime
+			shouldRePrime = true;
+			messages.push({ role: "user", content: "bbb", timestamp: 2 } as AgentMessage);
+			runtime.onTurnEnd();
+			await Promise.resolve();
+			await Promise.resolve();
+
+			// The reset cleared history and prompted a full replay (so the batch contains both aaa and bbb)
+			expect(promptInputs).toHaveLength(2);
+			expect(promptInputs[1]).toContain("aaa");
+			expect(promptInputs[1]).toContain("bbb");
+		});
 	});
 
 	describe("read-only tool allowlist", () => {

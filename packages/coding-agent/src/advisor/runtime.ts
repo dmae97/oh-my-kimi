@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import { estimateTokens } from "@oh-my-pi/pi-agent-core/compaction";
 import { logger } from "@oh-my-pi/pi-utils";
 import { formatSessionHistoryMarkdown } from "../session/session-history-format";
 
@@ -15,6 +16,16 @@ export interface AdvisorRuntimeHost {
 	snapshotMessages(): AgentMessage[];
 	/** Surface one advice note to the primary (enqueues into the session YieldQueue). */
 	enqueueAdvice(note: string, severity?: "nit" | "concern" | "blocker"): void;
+	/**
+	 * Pre-prompt context maintenance for the advisor's own append-only context.
+	 * Promotes the advisor model to a larger sibling when its context nears the
+	 * window (mirroring the primary's promote-first policy) and resolves `true`
+	 * when the advisor should re-prime — reset and replay the current
+	 * primary-bounded transcript — because promotion did not free enough room.
+	 * Optional: hosts that omit it get no maintenance (context only shrinks when
+	 * the primary's next compaction triggers {@link AdvisorRuntime.reset}).
+	 */
+	maintainContext?(incomingTokens: number): Promise<boolean>;
 }
 
 export class AdvisorRuntime {
@@ -93,7 +104,24 @@ export class AdvisorRuntime {
 		this.#busy = true;
 		try {
 			while (!this.#disposed && this.#pending.length) {
-				const batch = this.#pending.splice(0).join("\n\n---\n\n");
+				const candidateBatch = this.#pending.join("\n\n---\n\n");
+				const incomingTokens = estimateTokens({
+					role: "user",
+					content: candidateBatch,
+					timestamp: Date.now(),
+				});
+
+				let batch: string | null;
+				if (this.host.maintainContext && (await this.host.maintainContext(incomingTokens))) {
+					// Promotion could not fit the advisor's context — re-prime: drop the
+					// accumulated review history and replay the current (primary-bounded)
+					// transcript so the next turn resumes from a fresh, in-window context.
+					this.reset();
+					batch = this.#renderDelta();
+				} else {
+					batch = this.#pending.splice(0).join("\n\n---\n\n");
+				}
+				if (this.#disposed || batch === null) continue;
 				try {
 					await this.agent.prompt(batch);
 				} catch (err) {

@@ -30,6 +30,7 @@ import {
 	type AgentTool,
 	AppendOnlyContextManager,
 	type AsideMessage,
+	type CompactionSummaryMessage,
 	resolveTelemetry,
 	ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
@@ -54,6 +55,8 @@ import {
 	generateHandoff,
 	prepareCompaction,
 	resolveThresholdTokens,
+	type SessionEntry,
+	type SessionMessageEntry,
 	type ShakeConfig,
 	type ShakeRegion,
 	type SummaryOptions,
@@ -1516,6 +1519,7 @@ export class AgentSession {
 		this.#advisorRuntime = new AdvisorRuntime(advisorAgentFacade, {
 			snapshotMessages: () => this.agent.state.messages,
 			enqueueAdvice,
+			maintainContext: incomingTokens => this.#maintainAdvisorContext(incomingTokens),
 		});
 		if (seedToCurrent) {
 			this.#advisorRuntime.seedTo(this.agent.state.messages.length);
@@ -1551,6 +1555,203 @@ export class AgentSession {
 		}
 		this.#advisorYieldQueueUnsubscribe?.();
 		this.#advisorYieldQueueUnsubscribe = undefined;
+	}
+
+	async #promoteAdvisorContextModel(currentModel: Model): Promise<boolean> {
+		const promotionSettings = this.settings.getGroup("contextPromotion");
+		if (!promotionSettings.enabled) return false;
+		const contextWindow = currentModel.contextWindow ?? 0;
+		if (contextWindow <= 0) return false;
+		const targetModel = await this.#resolveContextPromotionTarget(currentModel, contextWindow);
+		if (!targetModel) return false;
+
+		const advisorSel = resolveRoleSelection(
+			["advisor"],
+			this.settings,
+			this.#modelRegistry.getAvailable(),
+			this.#modelRegistry,
+		);
+		const advisorThinkingLevel = advisorSel?.thinkingLevel ?? ThinkingLevel.Medium;
+
+		try {
+			this.#advisorAgent?.setModel(targetModel);
+			this.#advisorAgent?.setThinkingLevel(toReasoningEffort(advisorThinkingLevel));
+			this.#advisorAgent?.setDisableReasoning(shouldDisableReasoning(advisorThinkingLevel));
+			this.#advisorAgent?.appendOnlyContext?.invalidateForModelChange();
+			logger.debug("Advisor context promotion switched model on overflow", {
+				from: `${currentModel.provider}/${currentModel.id}`,
+				to: `${targetModel.provider}/${targetModel.id}`,
+			});
+			return true;
+		} catch (error) {
+			logger.warn("Advisor context promotion failed", {
+				from: `${currentModel.provider}/${currentModel.id}`,
+				to: `${targetModel.provider}/${targetModel.id}`,
+				error: String(error),
+			});
+			return false;
+		}
+	}
+
+	async #maintainAdvisorContext(incomingTokens: number): Promise<boolean> {
+		const advisor = this.#advisorAgent;
+		if (!advisor) return false;
+
+		const compactionSettings = this.settings.getGroup("compaction");
+		if (compactionSettings.strategy === "off") return false;
+		if (!compactionSettings.enabled) return false;
+
+		const advisorModel = advisor.state.model;
+		const contextWindow = advisorModel.contextWindow ?? 0;
+		if (contextWindow <= 0) return false;
+
+		const messages = advisor.state.messages;
+		let contextTokens = incomingTokens;
+		for (const message of messages) {
+			contextTokens += estimateTokens(message);
+		}
+
+		if (!shouldCompact(contextTokens, contextWindow, compactionSettings)) {
+			return false;
+		}
+
+		// 1. Try promotion first
+		if (await this.#promoteAdvisorContextModel(advisorModel)) {
+			// Promotion succeeded, check if new model has enough space
+			const newModel = advisor.state.model;
+			const newWindow = newModel.contextWindow ?? 0;
+			if (newWindow > 0) {
+				const stillNeedsCompaction = shouldCompact(contextTokens, newWindow, compactionSettings);
+				if (!stillNeedsCompaction) return false;
+			}
+		}
+
+		// 2. Run compaction on advisor messages
+		const pathEntries: SessionEntry[] = messages.map((message, i) => {
+			const id = `msg-${i}`;
+			const parentId = i > 0 ? `msg-${i - 1}` : null;
+			const timestamp = String(message.timestamp || Date.now());
+
+			if (message.role === "compactionSummary") {
+				return {
+					type: "compaction",
+					id,
+					parentId,
+					timestamp,
+					summary: message.summary,
+					shortSummary: message.shortSummary,
+					firstKeptEntryId: (message as any).firstKeptEntryId || `msg-${i + 1}`,
+					tokensBefore: message.tokensBefore,
+				} satisfies CompactionEntry;
+			}
+
+			return {
+				type: "message",
+				id,
+				parentId,
+				timestamp,
+				message,
+			} satisfies SessionMessageEntry;
+		});
+
+		const preparation = prepareCompaction(pathEntries, compactionSettings);
+		if (!preparation) {
+			// Cannot prepare compaction, fallback to re-prime
+			return true;
+		}
+
+		let action: "context-full" | "snapcompact" =
+			compactionSettings.strategy === "snapcompact" && advisorModel.input.includes("image")
+				? "snapcompact"
+				: "context-full";
+
+		let summary: string;
+		let shortSummary: string | undefined;
+		let firstKeptEntryId: string;
+		let tokensBefore: number;
+
+		// Try snapcompact first if vision model
+		let snapcompactResult: snapcompact.CompactionResult | undefined;
+		if (action === "snapcompact") {
+			try {
+				snapcompactResult = await snapcompact.compact(preparation, {
+					convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
+					model: advisorModel,
+					maxFrames: snapcompact.providerFrameBudget(advisorModel.provider),
+				});
+				const budget = contextWindow - effectiveReserveTokens(contextWindow, compactionSettings);
+				const projected = this.#projectSnapcompactContextTokens(preparation, snapcompactResult);
+				if (projected > budget) {
+					action = "context-full";
+					snapcompactResult = undefined;
+				}
+			} catch (err) {
+				logger.warn("Advisor snapcompact failed, falling back to LLM summary", { error: String(err) });
+				action = "context-full";
+			}
+		}
+
+		if (snapcompactResult) {
+			summary = snapcompactResult.summary;
+			shortSummary = snapcompactResult.shortSummary;
+			firstKeptEntryId = snapcompactResult.firstKeptEntryId;
+			tokensBefore = snapcompactResult.tokensBefore;
+		} else {
+			// Run LLM-summary compaction
+			const availableModels = this.#modelRegistry.getAvailable();
+			const candidates = this.#resolveCompactionModelCandidates(advisorModel, availableModels);
+			if (candidates.length === 0) {
+				// No compaction candidates, fallback to re-prime
+				return true;
+			}
+
+			let compactResult: CompactionResult | undefined;
+			let lastError: unknown;
+
+			for (const candidate of candidates) {
+				const apiKey = await this.#modelRegistry.getApiKey(
+					candidate,
+					this.sessionId ? `${this.sessionId}-advisor` : undefined,
+				);
+				if (!apiKey) continue;
+
+				try {
+					compactResult = await compact(
+						preparation,
+						candidate,
+						this.#modelRegistry.resolver(candidate, this.sessionId ? `${this.sessionId}-advisor` : undefined),
+						undefined,
+						undefined,
+						{
+							thinkingLevel: toReasoningEffort(advisor.state.thinkingLevel),
+							convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
+						},
+					);
+					break;
+				} catch (error) {
+					lastError = error;
+				}
+			}
+
+			if (!compactResult) {
+				logger.warn("Advisor compaction failed, falling back to re-prime", { error: String(lastError) });
+				return true;
+			}
+
+			summary = compactResult.summary;
+			shortSummary = compactResult.shortSummary;
+			firstKeptEntryId = compactResult.firstKeptEntryId;
+			tokensBefore = compactResult.tokensBefore;
+		}
+
+		// Rebuild messages with the compaction summary
+		const summaryMessage = {
+			...createCompactionSummaryMessage(summary, tokensBefore, new Date().toISOString(), shortSummary),
+			firstKeptEntryId,
+		} as CompactionSummaryMessage & { firstKeptEntryId?: string };
+
+		advisor.replaceMessages([summaryMessage, ...preparation.recentMessages]);
+		return false;
 	}
 
 	/** Model registry for API key resolution and model discovery */
@@ -8025,6 +8226,10 @@ export class AgentSession {
 	}
 
 	#getCompactionModelCandidates(availableModels: Model[]): Model[] {
+		return this.#resolveCompactionModelCandidates(this.model, availableModels);
+	}
+
+	#resolveCompactionModelCandidates(preferredModel: Model | null | undefined, availableModels: Model[]): Model[] {
 		const candidates: Model[] = [];
 		const seen = new Set<string>();
 
@@ -8036,15 +8241,9 @@ export class AgentSession {
 			candidates.push(model);
 		};
 
-		const currentModel = this.model;
-		// Prefer the active session's model: it's what the user is actively using,
-		// and routing compaction to a different provider (e.g. an OpenAI default
-		// model while the chat is on Anthropic) changes provider-specific behavior
-		// like remote compaction endpoints. Role-based candidates only kick in
-		// as auth fallbacks when the current model has no usable credentials.
-		addCandidate(currentModel);
+		addCandidate(preferredModel ?? undefined);
 		for (const role of MODEL_ROLE_IDS) {
-			addCandidate(this.#resolveRoleModelFull(role, availableModels, currentModel).model);
+			addCandidate(this.#resolveRoleModelFull(role, availableModels, preferredModel ?? undefined).model);
 		}
 
 		const sortedByContext = [...availableModels].sort((a, b) => (b.contextWindow ?? 0) - (a.contextWindow ?? 0));
