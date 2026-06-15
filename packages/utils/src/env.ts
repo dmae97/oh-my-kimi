@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { getAgentDir, getConfigRootDir } from "./dirs";
+import { getAgentDir, getConfigRootDir, refreshDirsFromEnv } from "./dirs";
 
 export * from "./worker-host";
 
@@ -118,6 +118,13 @@ for (const file of [projectEnv, agentEnv, piEnv, homeEnv]) {
 		}
 	}
 }
+
+// Directory-affecting keys (XDG_*_HOME, and in default mode PI_CODING_AGENT_DIR)
+// may have just arrived from the profile/agent `.env` applied above. The dirs
+// resolver cached its paths at module load — before this file ran — so rebuild
+// it now from the updated env. `getAgentDir()` already located the `.env` from
+// the profile name + home, so this re-reads only the directory vars.
+refreshDirsFromEnv();
 
 /**
  * Intentional re-export of Bun.env.

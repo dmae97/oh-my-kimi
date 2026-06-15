@@ -414,4 +414,74 @@ describe("dirs module import behavior", () => {
 			await fs.rm(path.join(os.homedir(), probeConfigDir), { recursive: true, force: true });
 		}
 	});
+
+	it("honors XDG dir keys from a profile .env applied after the resolver froze", async () => {
+		if (process.platform === "win32") return;
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-utils-profile-env-xdg-"));
+		const homeDir = path.join(root, "home");
+		const xdgStateRoot = path.join(root, "xdg-state");
+		const profileConfigDir = `.omp-env-xdg-${Snowflake.next()}`;
+		try {
+			const envUrl = url.pathToFileURL(path.join(import.meta.dir, "..", "src", "env.ts")).href;
+			const dirsUrl = url.pathToFileURL(path.join(import.meta.dir, "..", "src", "dirs.ts")).href;
+			const agentDir = path.join(homeDir, profileConfigDir, "profiles", "work", "agent");
+			await fs.mkdir(agentDir, { recursive: true });
+			// The profile's agent .env sets a directory-affecting key. env.ts parses
+			// and applies it to the environment *after* dirs.ts froze the resolver at
+			// import time — the exact ordering refreshDirsFromEnv() guards.
+			await Bun.write(path.join(agentDir, ".env"), `XDG_STATE_HOME=${xdgStateRoot}\n`);
+			// Named profiles only adopt XDG when their own XDG path already exists.
+			const xdgProfileRoot = path.join(xdgStateRoot, "omp", "profiles", "work");
+			await fs.mkdir(xdgProfileRoot, { recursive: true });
+
+			const probePath = path.join(root, "probe.ts");
+			await Bun.write(
+				probePath,
+				[
+					`import ${JSON.stringify(envUrl)};`,
+					`import { getActiveProfile, getAgentDir, getPythonGatewayDir } from ${JSON.stringify(dirsUrl)};`,
+					"process.stdout.write(JSON.stringify({",
+					"	activeProfile: getActiveProfile() ?? null,",
+					"	agentDir: getAgentDir(),",
+					"	pythonGateway: getPythonGatewayDir(),",
+					"}));",
+				].join("\n"),
+			);
+
+			const childEnv: Record<string, string | undefined> = {
+				...process.env,
+				HOME: homeDir,
+				PI_CONFIG_DIR: profileConfigDir,
+				OMP_PROFILE: "work",
+				PI_PROFILE: "work",
+			};
+			delete childEnv.PI_CODING_AGENT_DIR;
+			delete childEnv.XDG_DATA_HOME;
+			delete childEnv.XDG_STATE_HOME;
+			delete childEnv.XDG_CACHE_HOME;
+			const proc = Bun.spawn([process.execPath, probePath], {
+				cwd: root,
+				stdout: "pipe",
+				stderr: "pipe",
+				env: childEnv,
+			});
+			const [stdout, stderr, exitCode] = await Promise.all([
+				readStream(proc.stdout as ReadableStream<Uint8Array>),
+				readStream(proc.stderr as ReadableStream<Uint8Array>),
+				proc.exited,
+			]);
+
+			expect(exitCode, stderr).toBe(0);
+			// Before the fix the frozen resolver ignored the late XDG_STATE_HOME and
+			// python-gateway resolved under the home-based agent dir. After the fix
+			// it lands under the profile-specific XDG state root.
+			expect(JSON.parse(stdout)).toEqual({
+				activeProfile: "work",
+				agentDir: path.join(homeDir, profileConfigDir, "profiles", "work", "agent"),
+				pythonGateway: path.join(xdgProfileRoot, "python-gateway"),
+			});
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
 });

@@ -1,6 +1,12 @@
+import { getActiveProfile } from "@oh-my-pi/pi-utils/dirs";
 import { expandEnvVarsDeep } from "../discovery/helpers";
 import type { AuthStorage } from "../session/auth-storage";
-import { isManagedMCPOAuthCredentialId, type MCPStoredOAuthCredential, mcpOAuthCredentialId } from "./oauth-flow";
+import {
+	isManagedMCPOAuthCredentialId,
+	type MCPStoredOAuthCredential,
+	mcpOAuthCredentialId,
+	mcpOAuthCredentialProfile,
+} from "./oauth-flow";
 import type { MCPAuthConfig, MCPServerConfig } from "./types";
 
 export interface MCPOAuthCredentialLookup {
@@ -79,6 +85,8 @@ export async function removeManagedMcpOAuthCredential(
 	credentialId: string | undefined,
 ): Promise<boolean> {
 	if (!isManagedMCPOAuthCredentialId(credentialId)) return false;
+	const scopedProfile = mcpOAuthCredentialProfile(credentialId);
+	if (scopedProfile !== undefined && scopedProfile !== (getActiveProfile() ?? "default")) return false;
 	if (authStorage.get(credentialId)?.type !== "oauth") return false;
 	await authStorage.remove(credentialId);
 	return true;

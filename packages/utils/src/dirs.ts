@@ -324,12 +324,22 @@ function resolvePreProfileAgentDir(
 }
 
 let activeProfile = readProfileFromEnvSafe();
-const moduleLoadProfileAgentDirSource = activeProfile ?? readPiProfileFromEnvSafe();
-const moduleLoadAgentDirOverride = activeProfile
-	? undefined
-	: resolvePreProfileAgentDir(undefined, process.env.PI_CODING_AGENT_DIR, moduleLoadProfileAgentDirSource);
+
+/**
+ * Resolve the agent-dir override for the current `activeProfile` from the live
+ * environment. A named profile derives its own agent dir (no override); default
+ * mode honors a non-profile `PI_CODING_AGENT_DIR` (see
+ * {@link resolvePreProfileAgentDir}). Shared by the module-load resolver and
+ * {@link refreshDirsFromEnv} so both apply identical logic.
+ */
+function resolveActiveAgentDirOverride(): string | undefined {
+	return activeProfile
+		? undefined
+		: resolvePreProfileAgentDir(undefined, process.env.PI_CODING_AGENT_DIR, readPiProfileFromEnvSafe());
+}
+
 let dirs = new DirResolver({
-	agentDirOverride: moduleLoadAgentDirOverride,
+	agentDirOverride: resolveActiveAgentDirOverride(),
 	profile: activeProfile,
 });
 /**
@@ -346,13 +356,30 @@ let dirs = new DirResolver({
 let preProfileAgentDirEnv: string | undefined = resolvePreProfileAgentDir(
 	activeProfile,
 	process.env.PI_CODING_AGENT_DIR,
-	moduleLoadProfileAgentDirSource,
+	activeProfile ?? readPiProfileFromEnvSafe(),
 );
 // Anchor home for the resolver. Captured at module load to stay stable across
 // test mocks of `os.homedir()`. `getPluginsDir(home)` compares against this so
 // production callers (`home === RESOLVER_HOME`) hit the XDG-aware resolver while
 // tests passing a temp HOME short-circuit to a deterministic path.
 const RESOLVER_HOME = os.homedir();
+
+/**
+ * Rebuild the dirs resolver from the current environment, reusing the profile
+ * resolved at module load. Directory-affecting keys (XDG_*_HOME and, in default
+ * mode, `PI_CODING_AGENT_DIR`) loaded from a profile/agent `.env` only reach
+ * `process.env` *after* this module froze the resolver at import time, so
+ * `env.ts` calls this once after applying its `.env` files. The agent `.env`
+ * location derives from the profile name + home before this runs, so the
+ * rebuild re-reads only the directory vars, never the profile selection. The
+ * `preProfileAgentDirEnv` snapshot is intentionally left untouched.
+ */
+export function refreshDirsFromEnv(): void {
+	dirs = new DirResolver({
+		agentDirOverride: resolveActiveAgentDirOverride(),
+		profile: activeProfile,
+	});
+}
 
 // =============================================================================
 // Root directories

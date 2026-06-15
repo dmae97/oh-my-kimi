@@ -38,6 +38,7 @@ interface FixCounters {
 	promotedItems: number;
 	mergedDuplicateHeadings: number;
 	removedEmptyHeadings: number;
+	droppedReleasedDuplicates: number;
 }
 
 export interface FixChangelogContentResult extends FixCounters {
@@ -262,13 +263,55 @@ function lineRangeSet(items: readonly ParsedItem[]): Set<number> {
 	return lines;
 }
 
+function itemTextKey(itemLines: readonly string[]): string {
+	return trimBlankLines(itemLines).join("\n");
+}
+
 function subsectionHasItem(subsection: Subsection, itemLines: readonly string[]): boolean {
-	const wanted = trimBlankLines(itemLines).join("\n");
+	const wanted = itemTextKey(itemLines);
 	if (!wanted) return true;
 	for (const item of parseItems(subsection.lines)) {
-		if (item.lines.join("\n") === wanted) return true;
+		if (itemTextKey(item.lines) === wanted) return true;
 	}
 	return false;
+}
+
+function collectReleasedItemKeys(document: ChangelogDocument): Set<string> {
+	const keys = new Set<string>();
+	for (const section of document.sections) {
+		if (section.title === "Unreleased") continue;
+		for (const subsection of section.subsections) {
+			for (const item of parseItems(subsection.lines)) {
+				const key = itemTextKey(item.lines);
+				if (key) keys.add(key);
+			}
+		}
+	}
+	return keys;
+}
+
+/**
+ * Drop items from [Unreleased] that already appear verbatim in a released
+ * section — the residue of a release that copied [Unreleased] into the new
+ * version section without clearing it. The released copy is authoritative, so
+ * the Unreleased duplicate is removed. Runs before promotion (while parse line
+ * numbers are still real) and only ever mutates the Unreleased section.
+ */
+function dropUnreleasedDuplicatesOfReleased(document: ChangelogDocument): number {
+	const unreleased = document.sections.find(section => section.title === "Unreleased");
+	if (!unreleased) return 0;
+	const releasedKeys = collectReleasedItemKeys(document);
+	if (releasedKeys.size === 0) return 0;
+
+	let dropped = 0;
+	for (const subsection of unreleased.subsections) {
+		const duplicates = parseItems(subsection.lines).filter(item => releasedKeys.has(itemTextKey(item.lines)));
+		if (duplicates.length === 0) continue;
+		const linesToRemove = lineRangeSet(duplicates);
+		subsection.lines = subsection.lines.filter(line => !linesToRemove.has(line.lineNumber));
+		dropped += duplicates.length;
+	}
+	return dropped;
 }
 
 function getOrCreateUnreleasedSection(document: ChangelogDocument): ReleaseSection {
@@ -304,6 +347,7 @@ function normalizeSection(section: ReleaseSection): FixCounters {
 		promotedItems: 0,
 		mergedDuplicateHeadings: 0,
 		removedEmptyHeadings: 0,
+		droppedReleasedDuplicates: 0,
 	};
 	const subsectionByTitle = new Map<string, Subsection>();
 	const normalizedSubsections: Subsection[] = [];
@@ -376,6 +420,8 @@ export function fixChangelogContent(
 	let unreleased = document.sections.find(section => section.title === "Unreleased");
 	let promotedItems = 0;
 
+	const droppedReleasedDuplicates = dropUnreleasedDuplicatesOfReleased(document);
+
 	for (const section of document.sections) {
 		if (section.title === "Unreleased") continue;
 
@@ -405,12 +451,18 @@ export function fixChangelogContent(
 		removedEmptyHeadings += counters.removedEmptyHeadings;
 	}
 
-	if (promotedItems === 0 && mergedDuplicateHeadings === 0 && removedEmptyHeadings === 0) {
+	if (
+		promotedItems === 0 &&
+		mergedDuplicateHeadings === 0 &&
+		removedEmptyHeadings === 0 &&
+		droppedReleasedDuplicates === 0
+	) {
 		return {
 			content,
 			promotedItems,
 			mergedDuplicateHeadings,
 			removedEmptyHeadings,
+			droppedReleasedDuplicates,
 		};
 	}
 
@@ -419,6 +471,7 @@ export function fixChangelogContent(
 		promotedItems,
 		mergedDuplicateHeadings,
 		removedEmptyHeadings,
+		droppedReleasedDuplicates,
 	};
 }
 
@@ -601,6 +654,7 @@ export async function runChangelogFixer(options: RunChangelogFixerOptions = {}):
 			path: changelogPath,
 			promotedItems: result.promotedItems,
 			mergedDuplicateHeadings: result.mergedDuplicateHeadings,
+			droppedReleasedDuplicates: result.droppedReleasedDuplicates,
 			removedEmptyHeadings: result.removedEmptyHeadings,
 		});
 
@@ -653,7 +707,8 @@ function usage(): string {
 		"Usage: bun scripts/fix-changelogs.ts [--dry-run|--check] [--since <tag>]",
 		"",
 		"Moves changelog items added since the latest tag from released sections into [Unreleased],",
-		"then removes duplicate or empty ### category headings.",
+		"drops [Unreleased] items that already appear verbatim in a released section, then removes",
+		"duplicate or empty ### category headings.",
 		"",
 		"Options:",
 		"  --dry-run          Print what would change without writing files.",
@@ -675,6 +730,7 @@ function printSummary(result: RunChangelogFixerResult, mode: CliOptions["mode"])
 		const parts = [
 			`${file.promotedItems} promoted item(s)`,
 			`${file.mergedDuplicateHeadings} merged duplicate heading(s)`,
+			`${file.droppedReleasedDuplicates} dropped released duplicate(s)`,
 			`${file.removedEmptyHeadings} removed empty heading(s)`,
 		];
 		console.log(`  ${file.path}: ${parts.join(", ")}`);

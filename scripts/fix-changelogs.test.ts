@@ -105,4 +105,71 @@ describe("fixChangelogContent", () => {
 			"",
 		].join("\n"));
 	});
+
+	it("drops Unreleased items that already appear verbatim in a released section", () => {
+		const content = [
+			"# Changelog",
+			"",
+			"## [Unreleased]",
+			"",
+			"### Added",
+			"",
+			"- Brand-new unreleased feature.",
+			"- Added fullscreen settings mouse-event handling.",
+			"",
+			"## [1.1.0] - 2026-02-01",
+			"",
+			"### Added",
+			"",
+			"- Added fullscreen settings mouse-event handling.",
+			"",
+		].join("\n");
+
+		const result = fixChangelogContent(content, new Set());
+
+		expect(result.droppedReleasedDuplicates).toBe(1);
+		expect(result.promotedItems).toBe(0);
+		expect(result.content).toBe(
+			[
+				"# Changelog",
+				"",
+				"## [Unreleased]",
+				"",
+				"### Added",
+				"",
+				"- Brand-new unreleased feature.",
+				"",
+				"## [1.1.0] - 2026-02-01",
+				"",
+				"### Added",
+				"",
+				"- Added fullscreen settings mouse-event handling.",
+				"",
+			].join("\n"),
+		);
+	});
+
+	it("leaves a clean changelog untouched", () => {
+		const content = [
+			"# Changelog",
+			"",
+			"## [Unreleased]",
+			"",
+			"### Added",
+			"",
+			"- Only an unreleased feature.",
+			"",
+			"## [1.1.0] - 2026-02-01",
+			"",
+			"### Added",
+			"",
+			"- A released feature.",
+			"",
+		].join("\n");
+
+		const result = fixChangelogContent(content, new Set());
+
+		expect(result.droppedReleasedDuplicates).toBe(0);
+		expect(result.content).toBe(content);
+	});
 });

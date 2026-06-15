@@ -6,9 +6,11 @@
  * in `./types.ts` 1:1; the types remain the source of truth for static typing,
  * and `z.infer<typeof Schema>` is asserted-compatible with them where possible.
  *
- * Schemas use `.strict()` on objects with a closed set of fields so unknown
- * keys are rejected — the previous implementation used a hand-rolled
- * `hasOnlyFields` allowlist for the same effect.
+ * Envelope and fixed-shape schemas use `.strict()` so unknown keys are
+ * rejected — the previous implementation used a hand-rolled `hasOnlyFields`
+ * allowlist for the same effect. The OAuth credential schema is the deliberate
+ * exception (`.loose()`): it preserves provider-specific extension fields so
+ * they round-trip through the broker instead of being dropped (see below).
  */
 import { z } from "zod/v4";
 import { REMOTE_REFRESH_SENTINEL } from "../auth-storage";
@@ -38,7 +40,15 @@ export const oauthCredentialSchema = z
 		email: z.string().optional(),
 		accountId: z.string().optional(),
 	})
-	.strict();
+	// `.loose()`, not `.strict()`: OAuth credentials carry an open set of
+	// provider-specific extension fields beyond the base shape above — e.g. an
+	// MCP server's tokenUrl/clientId/clientSecret/resource embedded so token
+	// refresh works without an `auth` block in config. The storage layer
+	// (`serializeCredential`/`deserializeCredential`/`exportSnapshot`) already
+	// preserves unknown OAuth fields generically; the wire schema must match or
+	// the broker set->get round-trip silently strips them and the credential
+	// can no longer refresh after reload. Envelope schemas stay `.strict()`.
+	.loose();
 
 /** OAuth credential as it appears in broker snapshots — refresh replaced with sentinel. */
 export const remoteOauthCredentialSchema = oauthCredentialSchema.extend({

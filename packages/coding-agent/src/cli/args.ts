@@ -151,7 +151,13 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 				}
 			}
 		} else if (STRING_VALUE_FLAGS.has(arg)) {
-			if (i + 1 < args.length) {
+			// Built-in string flags consume the next token even when it is flag-looking
+			// (`--system-prompt --profile foo` ⇒ the prompt is the literal "--profile").
+			// The one token they must never absorb is the profile bootstrap's internal
+			// boundary sentinel: an extension-shadowable built-in like `--plan` (parsed
+			// here only when its boolean extension is NOT loaded) would otherwise swallow
+			// the marker as its value and drop the user's trailing message.
+			if (i + 1 < args.length && args[i + 1] !== PROFILE_BOOTSTRAP_BOUNDARY_ARG) {
 				STRING_SETTERS[arg](result, args[++i], PARSE_DEPS);
 			}
 		} else if (OPTIONAL_VALUE_FLAGS.has(arg)) {

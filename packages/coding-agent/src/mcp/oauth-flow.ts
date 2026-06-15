@@ -15,6 +15,9 @@ import type { OAuthCredential } from "../session/auth-storage";
 /** Credential-id prefix for OMP-managed MCP OAuth credentials keyed by profile and server URL. */
 const MCP_OAUTH_URL_CREDENTIAL_PREFIX = "mcp_oauth:";
 
+/** Credential-id prefix for profile-scoped MCP OAuth credentials (`mcp_oauth:profile:<profile>:<serverUrl>`). */
+const MCP_OAUTH_PROFILE_CREDENTIAL_PREFIX = `${MCP_OAUTH_URL_CREDENTIAL_PREFIX}profile:`;
+
 /**
  * Deterministic credential id for an MCP server URL scoped to an OMP profile.
  *
@@ -26,7 +29,7 @@ const MCP_OAUTH_URL_CREDENTIAL_PREFIX = "mcp_oauth:";
  * as `?project_ref=`.
  */
 export function mcpOAuthCredentialId(serverUrl: string, profile: string | undefined = getActiveProfile()): string {
-	return `${MCP_OAUTH_URL_CREDENTIAL_PREFIX}profile:${profile ?? "default"}:${serverUrl}`;
+	return `${MCP_OAUTH_PROFILE_CREDENTIAL_PREFIX}${profile ?? "default"}:${serverUrl}`;
 }
 
 /** Whether a credential id was minted by OMP's MCP OAuth flows (either era). */
@@ -35,6 +38,19 @@ export function isManagedMCPOAuthCredentialId(credentialId: string | undefined):
 		!!credentialId &&
 		(credentialId.startsWith("mcp_oauth_") || credentialId.startsWith(MCP_OAUTH_URL_CREDENTIAL_PREFIX))
 	);
+}
+
+/**
+ * Profile segment of a profile-scoped `mcp_oauth:profile:<profile>:<serverUrl>`
+ * credential id, or `undefined` for legacy non-profile-scoped managed ids
+ * (`mcp_oauth:<url>`, `mcp_oauth_<rand>`). The server URL itself contains `:`
+ * and `/`, so only the segment between the prefix and the FIRST subsequent `:`
+ * is the profile; everything after it is the URL.
+ */
+export function mcpOAuthCredentialProfile(credentialId: string): string | undefined {
+	if (!credentialId.startsWith(MCP_OAUTH_PROFILE_CREDENTIAL_PREFIX)) return undefined;
+	const separator = credentialId.indexOf(":", MCP_OAUTH_PROFILE_CREDENTIAL_PREFIX.length);
+	return separator === -1 ? undefined : credentialId.slice(MCP_OAUTH_PROFILE_CREDENTIAL_PREFIX.length, separator);
 }
 
 /**

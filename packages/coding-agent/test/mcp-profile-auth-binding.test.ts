@@ -12,6 +12,7 @@ import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import { AuthStorage, SqliteAuthCredentialStore } from "@oh-my-pi/pi-ai";
 import { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
+import { removeManagedMcpOAuthCredential } from "@oh-my-pi/pi-coding-agent/mcp/oauth-credentials";
 import * as oauthFlow from "@oh-my-pi/pi-coding-agent/mcp/oauth-flow";
 import { mcpOAuthCredentialId } from "@oh-my-pi/pi-coding-agent/mcp/oauth-flow";
 import type { MCPServerConfig } from "@oh-my-pi/pi-coding-agent/mcp/types";
@@ -312,5 +313,37 @@ describe("per-profile MCP OAuth binding", () => {
 			SERVER_URL,
 		);
 		expect(authorizationHeader(prepared)).toBe("Bearer fresh-token");
+	});
+
+	test("removal skips another profile's credential row in shared auth storage", async () => {
+		// A shared/committed mcp.json can pin an explicit credentialId scoped to a
+		// foreign profile. Under broker-backed storage that row belongs to another
+		// profile, so `/mcp unauth` must refuse to delete it — mirroring the read
+		// path's refusal to *use* a foreign profile's explicit id.
+		const SERVER = "https://x/";
+		const workKey = mcpOAuthCredentialId(SERVER, "work");
+		const personalKey = mcpOAuthCredentialId(SERVER, "personal");
+		const legacyKey = `mcp_oauth:${SERVER}`;
+		const oauth = { type: "oauth", access: "t", refresh: "r", expires: Date.now() + 3_600_000 } as const;
+		await authStorage.set(workKey, oauth);
+		await authStorage.set(personalKey, oauth);
+		await authStorage.set(legacyKey, oauth);
+
+		setProfile("work");
+		const removeSpy = vi.spyOn(authStorage, "remove");
+
+		// Foreign profile's row is protected: returns false, never calls remove, row survives.
+		expect(await removeManagedMcpOAuthCredential(authStorage, personalKey)).toBe(false);
+		expect(removeSpy).not.toHaveBeenCalled();
+		expect(authStorage.get(personalKey)?.type).toBe("oauth");
+
+		// Active-profile and legacy url-keyed rows remain removable.
+		expect(await removeManagedMcpOAuthCredential(authStorage, workKey)).toBe(true);
+		expect(await removeManagedMcpOAuthCredential(authStorage, legacyKey)).toBe(true);
+		expect(removeSpy).toHaveBeenCalledWith(workKey);
+		expect(removeSpy).toHaveBeenCalledWith(legacyKey);
+		expect(authStorage.get(workKey)).toBeUndefined();
+		expect(authStorage.get(legacyKey)).toBeUndefined();
+		expect(authStorage.get(personalKey)?.type).toBe("oauth");
 	});
 });

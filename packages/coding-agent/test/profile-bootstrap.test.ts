@@ -50,6 +50,19 @@ describe("extractProfileFlags", () => {
 		expect(parsed.messages).toEqual(["follow up"]);
 	});
 
+	it("keeps the built-in --plan from swallowing the profile boundary when its extension is absent", () => {
+		// Same argv as above, but the plan-mode extension is NOT loaded, so `--plan`
+		// is the built-in string flag (planning model). It must not consume the
+		// bootstrap's internal boundary sentinel as its value — otherwise plan would
+		// become "--omp-profile-boundary" and the user's message would be dropped.
+		const extracted = extractProfileFlags(["--plan", "--profile", "work", "follow up"]);
+		expect(extracted.argv).toEqual(["--plan", PROFILE_BOOTSTRAP_BOUNDARY_ARG, "follow up"]);
+
+		const parsed = parseArgs(extracted.argv);
+		expect(parsed.plan).toBeUndefined();
+		expect(parsed.messages).toEqual(["follow up"]);
+	});
+
 	it("still extracts --profile after an unrelated string-valued flag", () => {
 		// Mirror image: when the user does mean to activate a profile *after*
 		// a string-valued flag, we must skip past the flag's value but still
