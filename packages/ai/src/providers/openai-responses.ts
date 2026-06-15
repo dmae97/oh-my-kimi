@@ -34,7 +34,13 @@ import {
 import { postOpenAIStream } from "../utils/openai-http";
 import { notifyProviderResponse } from "../utils/provider-response";
 import { callWithCopilotModelRetry } from "../utils/retry";
-import { adaptSchemaForStrict, NO_STRICT, sanitizeSchemaForOpenAIResponses, toolWireSchema } from "../utils/schema";
+import {
+	adaptSchemaForStrict,
+	findStrictToolSchemaViolation,
+	NO_STRICT,
+	sanitizeSchemaForOpenAIResponses,
+	toolWireSchema,
+} from "../utils/schema";
 import { mapToOpenAIResponsesToolChoice, type OpenAIResponsesToolChoice } from "../utils/tool-choice";
 import {
 	buildCopilotDynamicHeaders,
@@ -661,7 +667,8 @@ function getOpenAIResponsesRoutingSessionId(
 	return normalizeOpenAIResponsesPromptCacheKey(options?.sessionId);
 }
 
-function buildParams(
+/** @internal Exported for tests. */
+export function buildParams(
 	model: Model<"openai-responses">,
 	context: Context,
 	options: OpenAIResponsesOptions | undefined,
@@ -714,7 +721,21 @@ function buildParams(
 	if (context.tools) {
 		params.tools = convertTools(context.tools, model.compat.supportsStrictMode, model);
 		if (options?.toolChoice) {
-			params.tool_choice = mapOpenAIResponsesToolChoiceForTools(options.toolChoice, context.tools, model);
+			// Map tool_choice against the tools that survived quarantine, not the
+			// original list: a forced choice for a dropped tool — or "required" when
+			// every tool was dropped — would otherwise send a tool_choice with no
+			// matching tool, which the provider rejects just like the bad schema did (#2652).
+			const emittedNames = new Set(
+				params.tools.map(t => (t as { name?: string }).name).filter((n): n is string => n !== undefined),
+			);
+			const survivingTools =
+				params.tools.length === context.tools.length
+					? context.tools
+					: context.tools.filter(t => emittedNames.has(t.customWireName ?? t.name));
+			const toolChoice = mapOpenAIResponsesToolChoiceForTools(options.toolChoice, survivingTools, model);
+			if (toolChoice !== undefined && params.tools.length > 0) {
+				params.tool_choice = toolChoice;
+			}
 		}
 		// The apply_patch spec §1 marks only `apply_patch` itself as
 		// `supports_parallel_tool_calls = false`. OpenAI's Responses API
@@ -861,11 +882,20 @@ export function mapOpenAIResponsesToolChoiceForTools(
 }
 
 /** @internal Exported for tests. */
-export function convertTools(tools: Tool[], strictMode: boolean, model: Model<"openai-responses">): OpenAITool[] {
+export function convertTools(
+	tools: Tool[],
+	strictMode: boolean,
+	model: Model<"openai-responses">,
+	onQuarantine: (toolName: string, schemaPath: string) => void = (toolName, schemaPath) =>
+		logger.warn(
+			`Tool "${toolName}" omitted from the openai-responses request: its parameter schema is invalid for this provider at ${schemaPath} (an enum/const value cannot match its declared type). Other tools are unaffected.`,
+		),
+): OpenAITool[] {
 	const allowFreeform = supportsFreeformApplyPatch(model);
-	return tools.map(tool => {
+	const out: OpenAITool[] = [];
+	for (const tool of tools) {
 		if (allowFreeform && tool.customFormat) {
-			return {
+			out.push({
 				type: "custom",
 				// Tool advertises its wire-level name (e.g. `apply_patch`) — the
 				// agent-loop dispatcher will match incoming calls by either the
@@ -877,18 +907,29 @@ export function convertTools(tools: Tool[], strictMode: boolean, model: Model<"o
 					syntax: tool.customFormat.syntax,
 					definition: compactGrammarDefinition(tool.customFormat.syntax, tool.customFormat.definition),
 				},
-			} as unknown as OpenAITool;
+			} as unknown as OpenAITool);
+			continue;
 		}
 		const strict = !NO_STRICT && strictMode && tool.strict !== false;
 		const baseParameters = toolWireSchema(tool);
 		const responseParameters = sanitizeSchemaForOpenAIResponses(baseParameters);
 		const { schema: parameters, strict: effectiveStrict } = adaptSchemaForStrict(responseParameters, strict);
-		return {
+		// Quarantine a tool whose emitted schema carries a provider-rejecting
+		// enum/const-vs-type contradiction: dropping just that tool keeps the rest
+		// of the request valid instead of letting one bad MCP schema 400 the whole
+		// turn (#2652). Other tools and built-ins are unaffected.
+		const violation = findStrictToolSchemaViolation(parameters);
+		if (violation) {
+			onQuarantine(tool.name, violation);
+			continue;
+		}
+		out.push({
 			type: "function",
 			name: tool.name,
 			description: tool.description || "",
 			parameters,
 			...(effectiveStrict && { strict: true }),
-		} as OpenAITool;
-	});
+		} as OpenAITool);
+	}
+	return out;
 }
