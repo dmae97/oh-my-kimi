@@ -1462,6 +1462,19 @@ export function isProviderRetryableError(error: unknown, provider?: string): boo
 	return isRetryableError(error);
 }
 
+const THINKING_ENVELOPE_OPEN = "<thinking>";
+const THINKING_ENVELOPE_CLOSE = "</thinking>";
+
+function unwrapAnthropicThinkingEnvelope(text: string): string {
+	let current = text.trim();
+	let changed = false;
+	while (current.startsWith(THINKING_ENVELOPE_OPEN) && current.endsWith(THINKING_ENVELOPE_CLOSE)) {
+		current = current.slice(THINKING_ENVELOPE_OPEN.length, current.length - THINKING_ENVELOPE_CLOSE.length).trim();
+		changed = true;
+	}
+	return changed ? current : text;
+}
+
 function createEmptyUsage(premiumRequests?: number): Usage {
 	return {
 		input: 0,
@@ -1668,6 +1681,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 				if (block.type === "text") {
 					stream.push({ type: "text_end", contentIndex, content: block.text, partial: output });
 				} else if (block.type === "thinking") {
+					block.thinking = unwrapAnthropicThinkingEnvelope(block.thinking);
 					stream.push({ type: "thinking_end", contentIndex, content: block.thinking, partial: output });
 				} else if (block.type === "toolCall") {
 					const finalJson =
