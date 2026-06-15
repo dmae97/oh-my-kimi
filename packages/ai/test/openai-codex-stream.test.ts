@@ -493,6 +493,71 @@ describe("openai-codex streaming", () => {
 		expect(toolcallEnds.find(e => e.name === "other")?.contentIndex).toBe(1);
 	});
 
+	it("uses output_index to finalize idless function and custom tool calls", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+		const token = createCodexTestToken();
+		const context = createCodexTestContext();
+		const taskArgs = '{"tasks":[{"assignment":"fix it"}]}';
+		const patchInput = "*** Begin Patch\n*** End Patch";
+		const events: Array<Record<string, unknown>> = [
+			{
+				type: "response.output_item.added",
+				output_index: 0,
+				item: { type: "function_call", call_id: "call_task_no_id", name: "task", arguments: "" },
+			},
+			{
+				type: "response.output_item.added",
+				output_index: 1,
+				item: { type: "custom_tool_call", call_id: "call_patch_no_id", name: "apply_patch", input: "" },
+			},
+			{
+				type: "response.output_item.done",
+				output_index: 1,
+				item: { type: "custom_tool_call", call_id: "call_patch_no_id", name: "apply_patch", input: patchInput },
+			},
+			{
+				type: "response.output_item.done",
+				output_index: 0,
+				item: { type: "function_call", call_id: "call_task_no_id", name: "task", arguments: taskArgs },
+			},
+			{
+				type: "response.completed",
+				response: {
+					id: "resp_1",
+					status: "completed",
+					usage: {
+						input_tokens: 5,
+						output_tokens: 3,
+						total_tokens: 8,
+						input_tokens_details: { cached_tokens: 0 },
+					},
+				},
+			},
+		];
+		const sse = `${events.map(e => `data: ${JSON.stringify(e)}`).join("\n\n")}\n\n`;
+		const fetchMock: FetchImpl = (async () =>
+			new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })) as FetchImpl;
+		const toolcallEnds: Array<{ contentIndex: number; name: string }> = [];
+		const model = { ...createCodexTestModel("https://chatgpt.com/backend-api"), preferWebsockets: false };
+		const aem = streamOpenAICodexResponses(model, context, { apiKey: token, fetch: fetchMock });
+		(async () => {
+			for await (const event of aem) {
+				if (event.type !== "toolcall_end") continue;
+				toolcallEnds.push({ contentIndex: event.contentIndex, name: event.toolCall.name });
+			}
+		})();
+
+		const result = await aem.result();
+
+		const calls = result.content.filter(c => c.type === "toolCall");
+		const byName = new Map(calls.map(c => [c.name, c] as const));
+		expect(byName.get("task")?.arguments).toEqual({ tasks: [{ assignment: "fix it" }] });
+		expect(byName.get("apply_patch")?.arguments).toEqual({ input: patchInput });
+		expect(toolcallEnds.find(e => e.name === "task")?.contentIndex).toBe(0);
+		expect(toolcallEnds.find(e => e.name === "apply_patch")?.contentIndex).toBe(1);
+	});
+
 	it("waits for caller abort when SSE streams only no-progress status events", async () => {
 		const tempDir = TempDir.createSync("@pi-codex-stream-");
 		setAgentDir(tempDir.path());

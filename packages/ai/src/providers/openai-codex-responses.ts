@@ -282,6 +282,8 @@ interface CodexOpenItem {
 	block: CodexOutputBlock | null;
 	/** Index of {@link block} in `output.content`; `-1` when no block was created for this item. */
 	contentIndex: number;
+	itemId?: string;
+	outputIndex?: number;
 }
 
 interface CodexStreamRuntime {
@@ -290,14 +292,17 @@ interface CodexStreamRuntime {
 	transport: CodexTransport;
 	websocketState?: CodexWebSocketSessionState;
 	/**
-	 * Items open on the wire — every `response.output_item.added` registers
-	 * here; `output_item.done` removes. Keyed by `item.id` so interleaved
-	 * `function_call_arguments.delta` (and sibling) events route to the matching
-	 * block instead of the most recently added one. A delta whose `item_id` is
-	 * not present is dropped rather than appended to a sibling.
+	 * Items open on the wire keyed by `item.id`. `response.output_item.added`
+	 * registers here; `output_item.done` removes. A keyed event whose `item_id`
+	 * is not present is dropped rather than appended to a sibling.
 	 */
 	openItems: Map<string, CodexOpenItem>;
-	/** Most recently added open item; fallback for events that omit `item_id`. */
+	/**
+	 * Items open on the wire keyed by `output_index` for streams whose function
+	 * call items omit `id`; these still carry `output_index` on deltas/done.
+	 */
+	openItemsByOutputIndex: Map<number, CodexOpenItem>;
+	/** Most recently added open item; fallback for events that omit all keys. */
 	currentItem: CodexEventItem | null;
 	currentBlock: CodexOutputBlock | null;
 	nativeOutputItems: Array<Record<string, unknown>>;
@@ -1078,6 +1083,7 @@ function createCodexStreamRuntime(initial: {
 		transport: initial.transport,
 		websocketState: initial.websocketState,
 		openItems: new Map(),
+		openItemsByOutputIndex: new Map(),
 		currentItem: null,
 		currentBlock: null,
 		nativeOutputItems: [],
@@ -1090,6 +1096,7 @@ function createCodexStreamRuntime(initial: {
 	};
 }
 
+
 /**
  * Wipe per-attempt accumulator state before a recovery path replays the turn.
  * Keeps {@link CodexStreamRuntime.openItems} and the legacy singleton-current
@@ -1098,31 +1105,35 @@ function createCodexStreamRuntime(initial: {
  */
 function resetCodexStreamAccumulators(runtime: CodexStreamRuntime): void {
 	runtime.openItems.clear();
+	runtime.openItemsByOutputIndex.clear();
 	runtime.currentItem = null;
 	runtime.currentBlock = null;
 	runtime.nativeOutputItems.length = 0;
 }
 
 /**
- * Look up the open item a Codex stream event targets by `item_id`. When the
- * key is present but unknown the event is dropped (its item is already
- * closed); routing to a sibling is the bug we're fixing. When `item_id` is
- * absent we fall back to the most recently added open item to preserve the
- * prior singleton semantics for legacy/proxy streams that omit the key.
+ * Look up the open item a Codex stream event targets. `item_id` wins because it
+ * uniquely identifies a response item; `output_index` covers idless function
+ * call items. A keyed event whose target is already closed is dropped instead
+ * of being routed to a sibling. Only streams that omit both keys fall back to
+ * the most recently added item, preserving legacy/proxy singleton semantics.
  */
 function openItemForEvent(runtime: CodexStreamRuntime, rawEvent: Record<string, unknown>): CodexOpenItem | null {
 	const itemId = typeof rawEvent.item_id === "string" ? rawEvent.item_id : "";
 	if (itemId) return runtime.openItems.get(itemId) ?? null;
+	const outputIndex = readOptionalInteger(rawEvent.output_index);
+	if (outputIndex !== undefined) return runtime.openItemsByOutputIndex.get(outputIndex) ?? null;
 	let last: CodexOpenItem | null = null;
+	for (const entry of runtime.openItemsByOutputIndex.values()) last = entry;
+	if (last) return last;
 	for (const entry of runtime.openItems.values()) last = entry;
 	return last;
 }
 
-function closeCodexOpenItem(runtime: CodexStreamRuntime, itemId: string | undefined): void {
-	if (!itemId) return;
-	const entry = runtime.openItems.get(itemId);
+function closeCodexOpenItem(runtime: CodexStreamRuntime, entry: CodexOpenItem | null | undefined): void {
 	if (!entry) return;
-	runtime.openItems.delete(itemId);
+	if (entry.itemId) runtime.openItems.delete(entry.itemId);
+	if (entry.outputIndex !== undefined) runtime.openItemsByOutputIndex.delete(entry.outputIndex);
 	if (runtime.currentItem === entry.item) {
 		runtime.currentItem = null;
 		runtime.currentBlock = null;
@@ -1255,14 +1266,15 @@ function handleCodexStreamEvent(
 			output.content.push(runtime.currentBlock);
 			contentIndex = output.content.length - 1;
 		}
-		// Track the open item so interleaved arg deltas route by id rather than
-		// appending to whichever item was added most recently. Items without an
-		// id are uncommon but still flow through the legacy singleton-current
-		// path via openItemForEvent's fallback.
-		const itemId = typeof (item as { id?: string }).id === "string" ? (item as { id: string }).id : "";
-		if (itemId) {
-			runtime.openItems.set(itemId, { item, block: runtime.currentBlock, contentIndex });
-		}
+		// Track every open item by every stable key the wire gives us. `item.id`
+		// is best; `output_index` preserves idless function/custom tool calls and
+		// keeps their final args authoritative when only `output_item.done`
+		// carries the full payload.
+		const itemId = typeof (item as { id?: string }).id === "string" ? (item as { id: string }).id : undefined;
+		const outputIndex = readOptionalInteger(rawEvent.output_index);
+		const entry: CodexOpenItem = { item, block: runtime.currentBlock, contentIndex, itemId, outputIndex };
+		if (itemId) runtime.openItems.set(itemId, entry);
+		if (outputIndex !== undefined) runtime.openItemsByOutputIndex.set(outputIndex, entry);
 		if (!runtime.currentBlock) return firstTokenTime;
 		stream.push({
 			type: getOutputBlockStartEventType(runtime.currentBlock),
@@ -1562,9 +1574,11 @@ function handleOutputItemDone(
 
 	// Match the finalization to the OPEN ITEM that started this block, not the
 	// singleton current — interleaved items can finish out of order, so the
-	// most-recently-added block may belong to a sibling (#2619).
+	// most-recently-added block may belong to a sibling (#2619). Some Codex
+	// function/custom tool items omit `id`; in that case `output_index` still
+	// routes `output_item.done` to the block that received `output_item.added`.
 	const itemId = typeof (item as { id?: string }).id === "string" ? (item as { id: string }).id : "";
-	const entry = itemId ? runtime.openItems.get(itemId) : null;
+	const entry = (itemId ? runtime.openItems.get(itemId) : null) ?? openItemForEvent(runtime, rawEvent);
 	const block = entry?.block ?? null;
 	const contentIndex = entry?.contentIndex ?? output.content.length - 1;
 
@@ -1577,7 +1591,7 @@ function handleOutputItemDone(
 			content: block.thinking,
 			partial: output,
 		});
-		closeCodexOpenItem(runtime, itemId);
+		closeCodexOpenItem(runtime, entry);
 		return;
 	}
 
@@ -1593,7 +1607,7 @@ function handleOutputItemDone(
 			content: block.text,
 			partial: output,
 		});
-		closeCodexOpenItem(runtime, itemId);
+		closeCodexOpenItem(runtime, entry);
 		return;
 	}
 
@@ -1613,7 +1627,7 @@ function handleOutputItemDone(
 		}
 		// Detach so a late/duplicate arguments.delta cannot append to the
 		// finished block or trip the whitespace-loop guard against it.
-		closeCodexOpenItem(runtime, itemId);
+		closeCodexOpenItem(runtime, entry);
 		runtime.canSafelyReplayWebsocketOverSse = false;
 		stream.push({ type: "toolcall_end", contentIndex, toolCall, partial: output });
 		return;
@@ -1634,7 +1648,7 @@ function handleOutputItemDone(
 			block.arguments = { input: rawInput };
 			delete (block as { partialJson?: string }).partialJson;
 		}
-		closeCodexOpenItem(runtime, itemId);
+		closeCodexOpenItem(runtime, entry);
 		runtime.canSafelyReplayWebsocketOverSse = false;
 		stream.push({ type: "toolcall_end", contentIndex, toolCall, partial: output });
 		return;
@@ -1769,10 +1783,19 @@ function dropTrailingDegenerateToolCall(output: AssistantMessage, runtime: Codex
 	if (block && block.type === "toolCall" && output.content[output.content.length - 1] === block) {
 		output.content.pop();
 	}
-	const itemId = runtime.currentItem && (runtime.currentItem as { id?: string }).id;
-	if (itemId) runtime.openItems.delete(itemId);
-	runtime.currentItem = null;
-	runtime.currentBlock = null;
+	let entry =
+		runtime.currentItem && (runtime.currentItem as { id?: string }).id
+			? runtime.openItems.get((runtime.currentItem as { id: string }).id)
+			: undefined;
+	if (!entry) {
+		for (const open of runtime.openItemsByOutputIndex.values()) {
+			if (open.item === runtime.currentItem || open.block === block) {
+				entry = open;
+				break;
+			}
+		}
+	}
+	closeCodexOpenItem(runtime, entry);
 }
 
 /**
