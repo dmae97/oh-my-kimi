@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Breaking Changes
 
 - Rejected edits anchored to lines not displayed in the tagged read/search output, requiring unseen ranges to be re-read before reapplying
