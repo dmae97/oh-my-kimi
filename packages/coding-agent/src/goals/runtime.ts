@@ -356,7 +356,10 @@ export class GoalRuntime {
 			this.#wallClock.lastAccountedAt += wallSeconds * 1000;
 		}
 
-		await this.#commitState(state, { persist: "goal" });
+		// Persisting wall-clock-only accounting on every tool event bloats /goal sessions with full
+		// objective snapshots. Keep the in-memory/UI state fresh, but persist only token/budget changes.
+		const shouldPersistUsage = tokenDelta > 0 || flippedToBudgetLimited;
+		await this.#commitState(state, { persist: shouldPersistUsage ? "goal" : undefined });
 
 		if (state.goal.status !== "budget-limited") {
 			this.#budgetReportedFor = undefined;
