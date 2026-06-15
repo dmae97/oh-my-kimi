@@ -51,11 +51,23 @@ function makeHub(agents: AgentRegistry) {
 	});
 }
 
+function renderedAgentIds(hub: AgentHubOverlayComponent): string[] {
+	return hub
+		.render(120)
+		.map(line => Bun.stripANSI(line))
+		.map(line => line.split(" · "))
+		.filter(
+			parts =>
+				parts.length >= 4 && ["running", "idle", "parked", "aborted"].some(status => parts[0].endsWith(status)),
+		)
+		.map(parts => parts[1]!);
+}
+
 describe("Agent hub row ordering", () => {
 	let geometry: GeometryStub | undefined;
 
-	beforeAll(() => {
-		initTheme();
+	beforeAll(async () => {
+		await initTheme();
 	});
 
 	afterEach(() => {
@@ -87,11 +99,7 @@ describe("Agent hub row ordering", () => {
 		agents.register({ id: "C", displayName: "Gamma", kind: "sub", session: sessionC });
 
 		const hub = makeHub(agents);
-		const initial = Bun.stripANSI(hub.render(120).join("\n"));
-		const initialOrder = ["C", "B", "A"].map(id => initial.indexOf(id)).filter(i => i !== -1);
-		expect(initialOrder).toEqual([...initialOrder].sort((a, b) => a - b));
-		expect(initial.indexOf("C")).toBeLessThan(initial.indexOf("B"));
-		expect(initial.indexOf("B")).toBeLessThan(initial.indexOf("A"));
+		expect(renderedAgentIds(hub)).toEqual(["C", "B", "A"]);
 
 		// Bump A's lastActivity far ahead of the others. The hub is already open,
 		// so the captured order must not change.
@@ -103,10 +111,7 @@ describe("Agent hub row ordering", () => {
 		const sessionD = {} as AgentSession;
 		agents.register({ id: "D", displayName: "Delta", kind: "sub", session: sessionD });
 
-		const refreshed = Bun.stripANSI(hub.render(120).join("\n"));
-		expect(refreshed.indexOf("C")).toBeLessThan(refreshed.indexOf("B"));
-		expect(refreshed.indexOf("B")).toBeLessThan(refreshed.indexOf("A"));
-		expect(refreshed.indexOf("A")).toBeLessThan(refreshed.indexOf("D"));
+		expect(renderedAgentIds(hub)).toEqual(["C", "B", "A", "D"]);
 
 		hub.dispose();
 	});
