@@ -19,7 +19,7 @@ export function renderToolExamples(tool: InbandTool, syntax: ToolCallSyntax, int
 			name: tool.name,
 			arguments: finalArgs,
 		};
-		return `<example>\n${grammar.renderToolCall(call, { tools: [tool] }).trim()}\n</example>`;
+		return `<example>\n${grammar.renderToolCall(call, { tools: [tool], example: true }).trim()}\n</example>`;
 	};
 	const parts = examples.map(ex => {
 		const head = ex.caption ? `# ${ex.caption}\n` : "";

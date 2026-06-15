@@ -27,6 +27,7 @@ export interface GrammarToolResult {
 
 export interface GrammarRenderOptions {
 	readonly tools?: readonly InbandTool[];
+	readonly example?: boolean;
 }
 
 export interface Grammar {

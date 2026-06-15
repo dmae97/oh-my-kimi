@@ -39,15 +39,15 @@ export function renderGlmToolResults(results: readonly GrammarToolResult[]): str
 	return `<observation>\n${renderToolResponseResults(results)}\n</observation>`;
 }
 
-export function renderHermesInvocation(call: ToolCall): string {
+export function renderHermesInvocation(call: ToolCall, _options: GrammarRenderOptions = {}): string {
 	return `<tool_call>\n${stringifyJson({ name: call.name, arguments: call.arguments })}\n</tool_call>`;
 }
 
-export function renderHermesToolCalls(calls: readonly ToolCall[]): string {
-	return calls.map(renderHermesInvocation).join("\n");
+export function renderHermesToolCalls(calls: readonly ToolCall[], options: GrammarRenderOptions = {}): string {
+	return calls.map(call => renderHermesInvocation(call, options)).join("\n");
 }
 
-export function renderKimiInvocation(call: ToolCall): string {
+export function renderKimiInvocation(call: ToolCall, _options: GrammarRenderOptions = {}): string {
 	return kimiInvocation(call, 0);
 }
 
@@ -70,13 +70,13 @@ export function renderKimiToolResults(results: readonly GrammarToolResult[]): st
 		.join("");
 }
 
-export function renderDeepSeekInvocation(call: ToolCall): string {
+export function renderDeepSeekInvocation(call: ToolCall, _options: GrammarRenderOptions = {}): string {
 	return `${DEEPSEEK_TOOL_CALL_BEGIN}${call.name}${DEEPSEEK_TOOL_SEPARATOR}${stringifyJson(call.arguments)}${DEEPSEEK_TOOL_CALL_END}`;
 }
 
-export function renderDeepSeekToolCalls(calls: readonly ToolCall[]): string {
+export function renderDeepSeekToolCalls(calls: readonly ToolCall[], options: GrammarRenderOptions = {}): string {
 	if (calls.length === 0) return "";
-	const body = calls.map(renderDeepSeekInvocation).join("");
+	const body = calls.map(call => renderDeepSeekInvocation(call, options)).join("");
 	return `${DEEPSEEK_TOOL_CALLS_BEGIN}${body}${DEEPSEEK_TOOL_CALLS_END}`;
 }
 
@@ -84,12 +84,15 @@ export function renderDeepSeekToolResults(results: readonly GrammarToolResult[])
 	return results.map(result => `${DEEPSEEK_TOOL_OUTPUT_BEGIN}${result.text}${DEEPSEEK_TOOL_OUTPUT_END}`).join("\n");
 }
 
-export function renderHarmonyInvocation(call: ToolCall): string {
+export function renderHarmonyInvocation(call: ToolCall, options: GrammarRenderOptions = {}): string {
+	if (options.example) {
+		return stringifyJson(call.arguments);
+	}
 	return `<|start|>assistant<|channel|>commentary to=${harmonyRecipient(call.name)}<|message|>${stringifyJson(call.arguments)}<|call|>`;
 }
 
-export function renderHarmonyToolCalls(calls: readonly ToolCall[]): string {
-	return calls.map(renderHarmonyInvocation).join("");
+export function renderHarmonyToolCalls(calls: readonly ToolCall[], options: GrammarRenderOptions = {}): string {
+	return calls.map(call => renderHarmonyInvocation(call, options)).join("");
 }
 
 export function renderHarmonyToolResults(results: readonly GrammarToolResult[]): string {
@@ -155,9 +158,8 @@ function renderXmlInvoke(call: ToolCall, shape: ToolArgShape | undefined): strin
 	for (const key in call.arguments) {
 		const value = call.arguments[key];
 		const isString = shape?.stringArgs.has(key) === true;
-		const stringAttr = isString ? ' string="true"' : ' string="false"';
 		const rendered = isString && typeof value === "string" ? value : stringifyJson(value);
-		body += `<parameter name="${escapeXmlAttr(key)}"${stringAttr}>${rendered}</parameter>`;
+		body += `<parameter name="${escapeXmlAttr(key)}">${rendered}</parameter>`;
 	}
 	return `${body}</invoke>`;
 }

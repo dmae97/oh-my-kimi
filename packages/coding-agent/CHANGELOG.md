@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
 - Added tool examples data to exported RPC session tool metadata, so tool dumps and other clients can receive model-call examples

@@ -80,6 +80,36 @@ describe("renderToolExamples", () => {
 		expect(rendered).toContain('"paths"');
 	});
 
+	it("renders harmony call example as bare JSON without the message envelope", () => {
+		const tool: InbandTool = {
+			name: "irc",
+			description: "IRC.",
+			parameters: {
+				type: "object",
+				properties: {
+					op: { type: "string" },
+					to: { type: "string" },
+					message: { type: "string" },
+				},
+				required: ["op"],
+			},
+			examples: [
+				{
+					caption: "Broadcast",
+					call: { op: "send", to: "all", message: "hi" },
+				},
+			],
+		};
+
+		const rendered = renderToolExamples(tool, "harmony");
+		expect(rendered).toContain('{"op":"send","to":"all","message":"hi"}');
+		// The verbose harmony envelope must be stripped inside <example> blocks.
+		expect(rendered).not.toContain("<|start|>");
+		expect(rendered).not.toContain("<|channel|>");
+		expect(rendered).not.toContain("<|message|>");
+		expect(rendered).not.toContain("<|call|>");
+	});
+
 	it("returns empty string for empty examples", () => {
 		const tool: InbandTool = {
 			name: "find",
