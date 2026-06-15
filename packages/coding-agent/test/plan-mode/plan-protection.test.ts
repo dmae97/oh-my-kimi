@@ -123,7 +123,7 @@ describe("plan-read protection in compaction", () => {
 
 	it("prunes regular reads but keeps the plan read intact", () => {
 		const planResult = readResult("plan-read", "plan body that must remain intact");
-		const fileResult = readResult("file-read", "file body that can be pruned");
+		const fileResult = readResult("file-read", "file body that can be pruned ".repeat(20));
 		const entries = [
 			readCall("plan-read", "local://wp-migration.md"),
 			planResult,

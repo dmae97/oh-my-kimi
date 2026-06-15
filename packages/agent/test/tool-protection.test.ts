@@ -53,7 +53,7 @@ function readResult(toolCallId: string, text: string): SessionMessageEntry {
 describe("conditional tool-result protection", () => {
 	it("prunes regular read results but keeps skill:// reads", () => {
 		const skillResult = readResult("skill-read", "skill read output that must remain intact");
-		const fileResult = readResult("file-read", "file read output that can be pruned");
+		const fileResult = readResult("file-read", "file read output that can be pruned ".repeat(20));
 		const entries = [
 			assistantReadCall("skill-read", "skill://session-memory"),
 			skillResult,
