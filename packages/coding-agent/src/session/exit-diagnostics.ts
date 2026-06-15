@@ -70,10 +70,6 @@ function readToolExecutionStart(entry: SessionEntry): ToolExecutionStartData | u
 
 function appendAssistantToolCalls(pending: Map<string, PendingToolCallRecord>, message: AgentMessage): void {
 	if (message.role !== "assistant") return;
-	if (message.stopReason !== "toolUse") {
-		pending.clear();
-		return;
-	}
 	const content = Array.isArray(message.content) ? message.content : [];
 	const toolCalls: PendingToolCallRecord[] = [];
 	for (let index = 0; index < content.length; index++) {

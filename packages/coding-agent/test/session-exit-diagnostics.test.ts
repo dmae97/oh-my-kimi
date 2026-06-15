@@ -130,6 +130,20 @@ describe("session exit diagnostics", () => {
 		});
 	});
 
+	it("treats assistant tool calls as pending even when stopReason is not toolUse", () => {
+		const sessionManager = SessionManager.inMemory();
+		sessionManager.appendMessage({ ...pendingAssistant, stopReason: "stop" });
+
+		expect(collectPendingToolCalls(sessionManager.getBranch())).toMatchObject([
+			{
+				toolCallId: "toolu_repro",
+				toolName: "bash",
+				args: { command: "bun run check:ts" },
+			},
+		]);
+		expect(describePendingToolCalls(sessionManager.getBranch())).toContain("bun run check:ts");
+	});
+
 	it("clears the pending warning once the matching tool result is recorded", () => {
 		const sessionManager = SessionManager.inMemory();
 		sessionManager.appendMessage(pendingAssistant);
