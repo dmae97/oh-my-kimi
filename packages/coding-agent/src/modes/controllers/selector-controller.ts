@@ -40,7 +40,9 @@ import {
 import { AUTO_THINKING, type ConfiguredThinkingLevel } from "../../thinking";
 import {
 	isImageProviderPreference,
+	isSearchProviderId,
 	isSearchProviderPreference,
+	setExcludedSearchProviders,
 	setPreferredImageProvider,
 	setPreferredSearchProvider,
 } from "../../tools";
@@ -417,6 +419,11 @@ export class SelectorController {
 			case "providers.webSearch":
 				if (typeof value === "string" && isSearchProviderPreference(value)) {
 					setPreferredSearchProvider(value);
+				}
+				break;
+			case "providers.webSearchExclude":
+				if (Array.isArray(value)) {
+					setExcludedSearchProviders(value.filter(isSearchProviderId));
 				}
 				break;
 			case "providers.image":
