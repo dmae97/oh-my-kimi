@@ -26,6 +26,14 @@ inputs:
       description: Optional rustc target triple for cross-compilation
       required: false
       default: ""
+   glibc:
+      description: >
+         Optional glibc floor (e.g. "2.17") for linux-gnu builds. Routes the build
+         through cargo-zigbuild against that floor without affecting the rustup
+         target or the host-arch native test steps. Combine with `target` to pin a
+         cross-arch linux build, or set alone for a host-arch (x64) linux build.
+      required: false
+      default: ""
    rust_checks:
       description: Run clippy/rustfmt checks (only one matrix entry should set this)
       required: false
@@ -55,6 +63,43 @@ runs:
              echo "runner: GitHub-hosted (install tools + Swatinem cache + GHA sccache)"
            fi
 
+      - name: Resolve build targets
+        id: resolve
+        shell: bash
+        env:
+           TARGET: ${{ inputs.target }}
+           GLIBC: ${{ inputs.glibc }}
+           ARCH: ${{ inputs.arch }}
+        run: |
+           set -euo pipefail
+           # `cross_target` is what the napi build feeds cargo: cargo-zigbuild reads
+           # the glibc floor as a `.<major>.<minor>` triple suffix. `bare_target` is
+           # what rustup needs — never glibc-suffixed (rustup rejects the suffix)
+           # and empty for host-arch builds whose target is already installed.
+           base="$TARGET"
+           if [ -z "$base" ]; then
+             case "$ARCH" in
+               x64) base="x86_64-unknown-linux-gnu" ;;
+               arm64) base="aarch64-unknown-linux-gnu" ;;
+             esac
+           fi
+           cross_target=""
+           if [ -n "$GLIBC" ]; then
+             if [ -z "$base" ]; then
+               echo "::error::glibc floor '$GLIBC' set but no linux-gnu base triple for arch '$ARCH'"
+               exit 1
+             fi
+             cross_target="${base}.${GLIBC}"
+           elif [ -n "$TARGET" ]; then
+             cross_target="$TARGET"
+           fi
+           bare_target="${TARGET%%.*}"
+           {
+             echo "cross_target=$cross_target"
+             echo "bare_target=$bare_target"
+           } >> "$GITHUB_OUTPUT"
+           echo "Resolved cross_target='$cross_target' bare_target='$bare_target'"
+
       # --- Rust toolchain -----------------------------------------------------
       - name: Ensure baked Rust toolchain (omp-kata)
         if: steps.detect.outputs.on_infra == 'true'
@@ -62,14 +107,14 @@ runs:
         with:
            toolchain: nightly-2026-04-29
            components: ${{ inputs.rust_checks == 'true' && 'clippy,rustfmt' || '' }}
-           target: ${{ inputs.target }}
+           target: ${{ steps.resolve.outputs.bare_target }}
       - name: Install Rust toolchain (GitHub-hosted)
         if: steps.detect.outputs.on_infra == 'false'
         uses: dtolnay/rust-toolchain@nightly
         with:
            toolchain: nightly-2026-04-29
            components: ${{ inputs.rust_checks == 'true' && 'clippy, rustfmt' || '' }}
-           targets: ${{ inputs.target }}
+           targets: ${{ steps.resolve.outputs.bare_target }}
       - name: Install Linux build prerequisites (GitHub-hosted)
         if: steps.detect.outputs.on_infra == 'false' && runner.os == 'Linux'
         shell: bash
@@ -188,51 +233,51 @@ runs:
       # Cross builds only run on push/main + release (omp-kata), so the
       # GitHub-hosted cross branches exist for portability and never fire here.
       - name: Ensure baked zig (omp-kata, non-MSVC cross)
-        if: steps.detect.outputs.on_infra == 'true' && inputs.target != '' && !endsWith(inputs.target, '-msvc')
+        if: steps.detect.outputs.on_infra == 'true' && steps.resolve.outputs.cross_target != '' && !endsWith(steps.resolve.outputs.cross_target, '-msvc')
         uses: ./.github/actions/ensure-zig
         with:
            version: "0.16.0"
       - name: Setup zig (GitHub-hosted, non-MSVC cross)
-        if: steps.detect.outputs.on_infra == 'false' && inputs.target != '' && !endsWith(inputs.target, '-msvc')
+        if: steps.detect.outputs.on_infra == 'false' && steps.resolve.outputs.cross_target != '' && !endsWith(steps.resolve.outputs.cross_target, '-msvc')
         uses: mlugg/setup-zig@v2
         with:
            version: 0.16.0
       - name: Ensure baked cargo-zigbuild (omp-kata, non-MSVC cross)
-        if: steps.detect.outputs.on_infra == 'true' && inputs.target != '' && !endsWith(inputs.target, '-msvc')
+        if: steps.detect.outputs.on_infra == 'true' && steps.resolve.outputs.cross_target != '' && !endsWith(steps.resolve.outputs.cross_target, '-msvc')
         uses: ./.github/actions/ensure-cargo-tool
         with:
            binary: cargo-zigbuild
            crate: cargo-zigbuild
       - name: Install cargo-zigbuild (GitHub-hosted, non-MSVC cross)
-        if: steps.detect.outputs.on_infra == 'false' && inputs.target != '' && !endsWith(inputs.target, '-msvc')
+        if: steps.detect.outputs.on_infra == 'false' && steps.resolve.outputs.cross_target != '' && !endsWith(steps.resolve.outputs.cross_target, '-msvc')
         uses: taiki-e/install-action@v2
         with:
            tool: cargo-zigbuild
       - name: Install LLVM tooling (GitHub-hosted, MSVC cross)
-        if: steps.detect.outputs.on_infra == 'false' && endsWith(inputs.target, '-msvc')
+        if: steps.detect.outputs.on_infra == 'false' && endsWith(steps.resolve.outputs.cross_target, '-msvc')
         shell: bash
         run: |
            sudo apt-get update
            sudo apt-get install -y clang lld llvm
       - name: Ensure baked cargo-xwin (omp-kata, MSVC cross)
-        if: steps.detect.outputs.on_infra == 'true' && endsWith(inputs.target, '-msvc')
+        if: steps.detect.outputs.on_infra == 'true' && endsWith(steps.resolve.outputs.cross_target, '-msvc')
         uses: ./.github/actions/ensure-cargo-tool
         with:
            binary: cargo-xwin
            crate: cargo-xwin
       - name: Install cargo-xwin (GitHub-hosted, MSVC cross)
-        if: steps.detect.outputs.on_infra == 'false' && endsWith(inputs.target, '-msvc')
+        if: steps.detect.outputs.on_infra == 'false' && endsWith(steps.resolve.outputs.cross_target, '-msvc')
         uses: taiki-e/install-action@v2
         with:
            tool: cargo-xwin
       - name: Cache cargo-xwin Windows SDK
-        if: endsWith(inputs.target, '-msvc')
+        if: endsWith(steps.resolve.outputs.cross_target, '-msvc')
         uses: actions/cache@v4
         with:
            path: ~/.cache/cargo-xwin
            key: cargo-xwin-${{ runner.os }}-v1
       - name: Accept xwin license
-        if: endsWith(inputs.target, '-msvc')
+        if: endsWith(steps.resolve.outputs.cross_target, '-msvc')
         shell: bash
         run: echo "XWIN_ACCEPT_LICENSE=1" >> "$GITHUB_ENV"
 
@@ -252,7 +297,7 @@ runs:
       - name: Build native addon(s)
         shell: bash
         env:
-           CROSS_TARGET: ${{ inputs.target }}
+           CROSS_TARGET: ${{ steps.resolve.outputs.cross_target }}
            TARGET_PLATFORM: ${{ inputs.platform }}
            TARGET_ARCH: ${{ inputs.arch }}
            TARGET_VARIANTS: ${{ inputs.variant }}

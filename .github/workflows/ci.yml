@@ -26,6 +26,12 @@ concurrency:
 
 env:
    FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+   # glibc floor for shipped linux native addons. The omp-kata runner image is
+   # Ubuntu 24.04 (glibc 2.39); a plain native build links 2.39 symbol versions
+   # and fails to dlopen on older distros. Building the linux-gnu addons through
+   # cargo-zigbuild against this floor keeps them portable. Bump to raise the
+   # minimum supported glibc.
+   GLIBC_FLOOR: "2.17"
 
 permissions:
    contents: read
@@ -218,6 +224,7 @@ jobs:
               platform: linux
               arch: x64
               variant: ${{ matrix.variant }}
+              glibc: ${{ env.GLIBC_FLOOR }}
               rust_checks: ${{ matrix.rust_checks && 'true' || 'false' }}
               save_cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
@@ -244,6 +251,7 @@ jobs:
               arch: ${{ matrix.arch }}
               variant: ${{ matrix.variant }}
               target: ${{ matrix.target }}
+              glibc: ${{ matrix.platform == 'linux' && env.GLIBC_FLOOR || '' }}
               save_cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
    native_cross_platform_macos:
