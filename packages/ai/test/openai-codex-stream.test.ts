@@ -631,7 +631,13 @@ describe("openai-codex streaming", () => {
 			{ type: "response.function_call_arguments.delta", delta: idOnlyArgs },
 			{
 				type: "response.output_item.done",
-				item: { type: "function_call", id: "fc_id_only", call_id: "call_new", name: "newer", arguments: idOnlyArgs },
+				item: {
+					type: "function_call",
+					id: "fc_id_only",
+					call_id: "call_new",
+					name: "newer",
+					arguments: idOnlyArgs,
+				},
 			},
 			// Close the older one explicitly with its key so the test verifies isolation.
 			{

@@ -10,6 +10,24 @@
 - **Types:** See type renames above
 - **SDK:** See SDK migration above
 - **Key detection functions removed from `@mariozechner/pi-tui`**: All `isXxx()` key detection functions (`isEnter()`, `isEscape()`, `isCtrlC()`, etc.) have been removed. Use `matchesKey(data, keyId)` instead (e.g., `matchesKey(data, "enter")`, `matchesKey(data, "ctrl+c")`). This affects hooks and custom tools that use `ctx.ui.custom()` with keyboard input handling. ([#405](https://github.com/badlogic/pi-mono/pull/405))
+- **Queue API replaced with steer/followUp**: The `queueMessage()` method has been split into two methods with different delivery semantics ([#403](https://github.com/badlogic/pi-mono/issues/403)):
+  - `steer(text)`: Interrupts the agent mid-run (Enter while streaming). Delivered after current tool execution.
+  - `followUp(text)`: Waits until the agent finishes (Alt+Enter while streaming). Delivered only when agent stops.
+- **Settings renamed**: `queueMode` setting renamed to `steeringMode`. Added new `followUpMode` setting. Old settings.json files are migrated automatically.
+- **AgentSession methods renamed**:
+  - `queueMessage()` → `steer()` and `followUp()`
+  - `queueMode` getter → `steeringMode` and `followUpMode` getters
+  - `setQueueMode()` → `setSteeringMode()` and `setFollowUpMode()`
+  - `queuedMessageCount` → `pendingMessageCount`
+  - `getQueuedMessages()` → `getSteeringMessages()` and `getFollowUpMessages()`
+  - `clearQueue()` now returns `{ steering: string[], followUp: string[] }`
+  - `hasQueuedMessages()` → `hasPendingMessages()`
+- **Hook API signature changed**: `pi.sendMessage()` second parameter changed from `triggerTurn?: boolean` to `options?: { triggerTurn?, deliverAs? }`. Use `deliverAs: "followUp"` for follow-up delivery. Affects both hooks and internal `sendHookMessage()` method.
+- **RPC API changes**:
+  - `queue_message` command → `steer` and `follow_up` commands
+  - `set_queue_mode` command → `set_steering_mode` and `set_follow_up_mode` commands
+  - `RpcSessionState.queueMode` → `steeringMode` and `followUpMode`
+- **Settings UI**: "Queue mode" setting split into "Steering mode" and "Follow-up mode"
 
 ### Added
 
@@ -68,6 +86,7 @@
 - SDK: `additionalExtensionPaths` replaces both `additionalHookPaths` and `additionalCustomToolPaths`
 - Removed image placeholders after copy & paste, replaced with inserting image file paths directly. ([#442](https://github.com/badlogic/pi-mono/pull/442) by [@mitsuhiko](https://github.com/mitsuhiko))
 - Expanded keybinding documentation to list all 32 supported symbol keys with notes on ctrl+symbol behavior ([#450](https://github.com/badlogic/pi-mono/pull/450) by [@kaofelix](https://github.com/kaofelix))
+- Improved welcome screen responsiveness to dynamically show or hide the right column based on available terminal width
 
 ### Fixed
 
@@ -133,6 +152,52 @@
 ### Session Migration
 
 - Message role `"hookMessage"` → `"custom"`
+
+### Extensions Migration
+
+- `pi.registerTool()` - Register tools the LLM can call
+- `pi.registerCommand()` - Register commands like `/mycommand`
+- `pi.registerShortcut()` - Register keyboard shortcuts (shown in `/hotkeys`)
+- `pi.registerFlag()` - Register CLI flags (shown in `--help`)
+- `pi.registerMessageRenderer()` - Custom TUI rendering for message types
+- `pi.on()` - Subscribe to lifecycle events (tool_call, session_start, etc.)
+- `pi.sendMessage()` - Inject messages into the conversation
+- `pi.appendEntry()` - Persist custom data in session (survives restart/branch)
+- `pi.exec()` - Run shell commands
+- `pi.getActiveTools()` / `pi.setActiveTools()` - Dynamic tool enable/disable
+- `pi.getAllTools()` - List all available tools
+- `pi.events` - Event bus for cross-extension communication
+- `ctx.ui.confirm()` / `select()` / `input()` - User prompts
+- `ctx.ui.notify()` - Toast notifications
+- `ctx.ui.setStatus()` - Persistent status in footer (multiple extensions can set their own)
+- `ctx.ui.setWidget()` - Widget display above editor
+- `ctx.ui.setTitle()` - Set terminal window title
+- `ctx.ui.custom()` - Full TUI component with keyboard handling
+- `ctx.ui.editor()` - Multi-line text editor with external editor support
+- `ctx.sessionManager` - Read session entries, get branch history
+
+**Settings changes:**
+```json
+// Before
+{
+  "hooks": ["./my-hook.ts"],
+  "customTools": ["./my-tool.ts"]
+}
+
+// After
+{
+  "extensions": ["./my-extension.ts"]
+}
+```
+
+**CLI changes:**
+```bash
+# Before
+pi --hook ./safety.ts --tool ./todo.ts
+
+# After
+pi --extension ./safety.ts -e ./todo.ts
+```
 
 ## [15.13.1] - 2026-06-15
 
@@ -5974,10 +6039,6 @@
 
 - Added runtime tests covering extension provider registration and deferred model pattern resolution behavior.
 
-### Changed
-
-- Improved welcome screen responsiveness to dynamically show or hide the right column based on available terminal width
-
 ### Fixed
 
 - Fixed welcome screen layout to gracefully handle small terminal widths and prevent rendering errors on narrow displays
@@ -10141,50 +10202,6 @@ export default function (pi: ExtensionAPI) {
 
 **Custom tools now have full context access.** Tools registered via `pi.registerTool()` now receive the same `ctx` object that event handlers receive. Previously, custom tools had limited context. Now all extension code shares the same capabilities:
 
-- `pi.registerTool()` - Register tools the LLM can call
-- `pi.registerCommand()` - Register commands like `/mycommand`
-- `pi.registerShortcut()` - Register keyboard shortcuts (shown in `/hotkeys`)
-- `pi.registerFlag()` - Register CLI flags (shown in `--help`)
-- `pi.registerMessageRenderer()` - Custom TUI rendering for message types
-- `pi.on()` - Subscribe to lifecycle events (tool_call, session_start, etc.)
-- `pi.sendMessage()` - Inject messages into the conversation
-- `pi.appendEntry()` - Persist custom data in session (survives restart/branch)
-- `pi.exec()` - Run shell commands
-- `pi.getActiveTools()` / `pi.setActiveTools()` - Dynamic tool enable/disable
-- `pi.getAllTools()` - List all available tools
-- `pi.events` - Event bus for cross-extension communication
-- `ctx.ui.confirm()` / `select()` / `input()` - User prompts
-- `ctx.ui.notify()` - Toast notifications
-- `ctx.ui.setStatus()` - Persistent status in footer (multiple extensions can set their own)
-- `ctx.ui.setWidget()` - Widget display above editor
-- `ctx.ui.setTitle()` - Set terminal window title
-- `ctx.ui.custom()` - Full TUI component with keyboard handling
-- `ctx.ui.editor()` - Multi-line text editor with external editor support
-- `ctx.sessionManager` - Read session entries, get branch history
-
-**Settings changes:**
-```json
-// Before
-{
-  "hooks": ["./my-hook.ts"],
-  "customTools": ["./my-tool.ts"]
-}
-
-// After
-{
-  "extensions": ["./my-extension.ts"]
-}
-```
-
-**CLI changes:**
-```bash
-# Before
-pi --hook ./safety.ts --tool ./todo.ts
-
-# After
-pi --extension ./safety.ts -e ./todo.ts
-```
-
 ### Prompt Templates Migration
 
 "Slash commands" (markdown files defining reusable prompts invoked via `/name`) are renamed to "prompt templates" to avoid confusion with extension-registered commands.
@@ -10220,27 +10237,6 @@ pi --extension ./safety.ts -e ./todo.ts
 ## [0.32.1] - 2026-01-03
 
 ## [0.32.0] - 2026-01-03
-
-### Breaking Changes
-
-- **Queue API replaced with steer/followUp**: The `queueMessage()` method has been split into two methods with different delivery semantics ([#403](https://github.com/badlogic/pi-mono/issues/403)):
-  - `steer(text)`: Interrupts the agent mid-run (Enter while streaming). Delivered after current tool execution.
-  - `followUp(text)`: Waits until the agent finishes (Alt+Enter while streaming). Delivered only when agent stops.
-- **Settings renamed**: `queueMode` setting renamed to `steeringMode`. Added new `followUpMode` setting. Old settings.json files are migrated automatically.
-- **AgentSession methods renamed**:
-  - `queueMessage()` → `steer()` and `followUp()`
-  - `queueMode` getter → `steeringMode` and `followUpMode` getters
-  - `setQueueMode()` → `setSteeringMode()` and `setFollowUpMode()`
-  - `queuedMessageCount` → `pendingMessageCount`
-  - `getQueuedMessages()` → `getSteeringMessages()` and `getFollowUpMessages()`
-  - `clearQueue()` now returns `{ steering: string[], followUp: string[] }`
-  - `hasQueuedMessages()` → `hasPendingMessages()`
-- **Hook API signature changed**: `pi.sendMessage()` second parameter changed from `triggerTurn?: boolean` to `options?: { triggerTurn?, deliverAs? }`. Use `deliverAs: "followUp"` for follow-up delivery. Affects both hooks and internal `sendHookMessage()` method.
-- **RPC API changes**:
-  - `queue_message` command → `steer` and `follow_up` commands
-  - `set_queue_mode` command → `set_steering_mode` and `set_follow_up_mode` commands
-  - `RpcSessionState.queueMode` → `steeringMode` and `followUpMode`
-- **Settings UI**: "Queue mode" setting split into "Steering mode" and "Follow-up mode"
 
 ## [0.31.1] - 2026-01-02
 
