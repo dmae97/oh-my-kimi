@@ -3459,6 +3459,7 @@ export const SETTINGS_SCHEMA = {
 		default: false,
 		ui: {
 			tab: "tasks",
+			group: "Modes",
 			label: "Start in Plan Mode",
 			description: "Automatically enter plan mode at the start of every new session",
 			condition: "planModeEnabled",
