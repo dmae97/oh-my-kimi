@@ -6,7 +6,7 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import { z } from "zod/v4";
-import { recordFileSnapshot } from "../edit/file-snapshot-store";
+import { recordFileSnapshot, recordSeenLinesFromBody } from "../edit/file-snapshot-store";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import astGrepDescription from "../prompts/tools/ast-grep.md" with { type: "text" };
@@ -269,6 +269,10 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 						displayOut.push(`  meta: ${serializedMeta}`);
 					}
 					fileMatchCounts.set(relativePath, (fileMatchCounts.get(relativePath) ?? 0) + 1);
+				}
+				if (hashContext?.tag) {
+					const absoluteFilePath = path.resolve(this.session.cwd, relativePath);
+					recordSeenLinesFromBody(this.session, absoluteFilePath, hashContext.tag, modelOut.join("\n"));
 				}
 				return { model: modelOut, display: displayOut };
 			};

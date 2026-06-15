@@ -259,6 +259,27 @@ describe("boundary-balance repair", () => {
 		expect(text).toBe(['const a = "}";', 'const b = "}}}";', 'const c = "y";'].join("\n"));
 		expect(warnings).toHaveLength(0);
 	});
+
+	// A MULTI-line construct rewrite whose payload restates the keeper that
+	// survives just below the range — the att#1 `replace 639..644` shape where
+	// the range was one line short of the `const changedFiles` it retyped.
+	it("drops a one-sided trailing keeper echo in a multi-line rewrite", () => {
+		const file = ["function f() {", "  a();", "  b();", "  const out = [];", "  return out;", "}"].join("\n");
+		const diff = ["replace 2..3:", "+  a2();", "+  b2();", "+  const out = [];"].join("\n");
+		const { text, warnings } = apply(file, diff);
+		expect(text).toBe(["function f() {", "  a2();", "  b2();", "  const out = [];", "  return out;", "}"].join("\n"));
+		expect(warnings.some(warning => /boundary echo/.test(warning))).toBe(true);
+	});
+
+	// Mirror direction: the payload restates the keeper that survives just above
+	// the multi-line range (range one line low instead of one short).
+	it("drops a one-sided leading keeper echo in a multi-line rewrite", () => {
+		const file = ["setup();", "a();", "b();", "c();"].join("\n");
+		const diff = ["replace 3..4:", "+a();", "+B();", "+C();"].join("\n");
+		const { text, warnings } = apply(file, diff);
+		expect(text).toBe(["setup();", "a();", "B();", "C();"].join("\n"));
+		expect(warnings.some(warning => /boundary echo/.test(warning))).toBe(true);
+	});
 });
 
 describe("boundary-balance repair through stale-snapshot recovery", () => {

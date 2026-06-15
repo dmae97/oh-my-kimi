@@ -15,6 +15,7 @@
 import { STRUCTURAL_CLOSER_RE } from "./apply";
 import {
 	BLOCK_RESOLVER_UNAVAILABLE,
+	blockSingleLineMessage,
 	blockUnresolvedMessage,
 	insertAfterBlockCloserLoweredWarning,
 	insertAfterBlockUnresolvedLoweredWarning,
@@ -109,6 +110,15 @@ export function resolveBlockEdits(
 					resolver ? blockUnresolvedMessage(edit.anchor.line, op, text.split("\n")) : BLOCK_RESOLVER_UNAVAILABLE
 				}`,
 			);
+		}
+		if (span.start === span.end) {
+			// A single-line block resolution means line N is a bare statement, not
+			// the opening line of a multi-line construct — the common mis-anchor
+			// that lands a body in the wrong scope (e.g. between a `case` body line
+			// and its `break;`). The plain op is exact for one line, so reject and
+			// point at it; drop instead on the lenient preview path.
+			if (onUnresolved === "drop") continue;
+			throw new Error(`line ${edit.lineNum}: ${blockSingleLineMessage(edit.anchor.line, op)}`);
 		}
 		options.onResolved?.({
 			anchorLine: edit.anchor.line,

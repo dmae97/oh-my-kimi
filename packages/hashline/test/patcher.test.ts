@@ -165,3 +165,57 @@ describe("Patcher mandatory snapshot tag policy", () => {
 		expect(section?.warnings ?? []).not.toContain(HEADTAIL_DRIFT_WARNING);
 	});
 });
+
+describe("Patcher seen-line provenance", () => {
+	const CONTENT = "l1\nl2\nl3\nl4\nl5\n";
+
+	it("rejects an edit anchored on a line the read never displayed", async () => {
+		const fs = new InMemoryFilesystem([[PATH, CONTENT]]);
+		const snapshots = new InMemorySnapshotStore();
+		// A partial read displayed only lines 1-2 under this tag.
+		const tag = snapshots.record(PATH, CONTENT, [1, 2]);
+		const patcher = new Patcher({ fs, snapshots });
+
+		await expect(patcher.apply(Patch.parse(`[${PATH}#${tag}]\nreplace 4..4:\n+L4`))).rejects.toThrow(
+			/were not shown in the read\/search output/,
+		);
+		expect(fs.get(PATH)).toBe(CONTENT);
+	});
+
+	it("applies an edit anchored on a displayed line", async () => {
+		const fs = new InMemoryFilesystem([[PATH, CONTENT]]);
+		const snapshots = new InMemorySnapshotStore();
+		const tag = snapshots.record(PATH, CONTENT, [1, 2]);
+		const patcher = new Patcher({ fs, snapshots });
+
+		const result = await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nreplace 2..2:\n+L2`));
+
+		expect(result.sections[0]?.op).toBe("update");
+		expect(fs.get(PATH)).toBe("l1\nL2\nl3\nl4\nl5\n");
+	});
+
+	it("widens coverage when more of the same content is re-read (read fusion)", async () => {
+		const fs = new InMemoryFilesystem([[PATH, CONTENT]]);
+		const snapshots = new InMemorySnapshotStore();
+		const tag = snapshots.record(PATH, CONTENT, [1, 2]);
+		// Second read of identical content displays lines 4-5: union into the tag.
+		snapshots.record(PATH, CONTENT, [4, 5]);
+		const patcher = new Patcher({ fs, snapshots });
+
+		const result = await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nreplace 4..4:\n+L4`));
+
+		expect(result.sections[0]?.op).toBe("update");
+		expect(fs.get(PATH)).toBe("l1\nl2\nl3\nL4\nl5\n");
+	});
+
+	it("skips the check when no seen lines were recorded (absent → allow)", async () => {
+		const fs = new InMemoryFilesystem([[PATH, CONTENT]]);
+		const snapshots = new InMemorySnapshotStore();
+		const tag = snapshots.record(PATH, CONTENT);
+		const patcher = new Patcher({ fs, snapshots });
+
+		const result = await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nreplace 4..4:\n+L4`));
+
+		expect(result.sections[0]?.op).toBe("update");
+	});
+});

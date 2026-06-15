@@ -444,6 +444,50 @@ function describeBoundaryRepair(group: ReplacementGroup, action: string): string
 }
 
 /**
+ * A single-sided boundary echo in an otherwise delimiter-balanced *multi-line*
+ * replacement: the payload's leading XOR trailing edge exactly restates the
+ * surviving line(s) just outside the range — the off-by-one "range one line
+ * short of the keeper I retyped" mistake (e.g. att: payload ends with
+ * `const x = [];` and line B+1 is the same `const x = [];`). Two-sided echoes
+ * are handled by {@link findBoundaryEcho}; delimiter-imbalanced one-sided echoes
+ * by {@link findDuplicateSuffix}/{@link findDuplicatePrefix}.
+ *
+ * Scoped to multi-line ranges (a construct rewrite) on purpose: a single-line
+ * `replace N..N` expanding into several lines is an *expansion* where every
+ * payload line is intentional new content, so a payload line that happens to
+ * equal a neighbor stays — only a genuine block rewrite retypes a boundary
+ * keeper by mistake. The dropped lines must be delimiter-neutral so removing the
+ * duplicate keeps the already-balanced result balanced, and must not consume the
+ * whole payload.
+ */
+function findOneSidedBoundaryEcho(
+	group: ReplacementGroup,
+	fileLines: readonly string[],
+): { side: "leading" | "trailing"; count: number } | undefined {
+	if (group.deleteIndices.length <= 1) return undefined;
+	const leading = countDuplicateLeadingBoundaryLines(group, fileLines);
+	const trailing = countDuplicateTrailingBoundaryLines(group, fileLines);
+	if (leading > 0 === trailing > 0) return undefined;
+	const side = leading > 0 ? "leading" : "trailing";
+	const count = leading > 0 ? leading : trailing;
+	if (count >= group.payload.length) return undefined;
+	const echoLines =
+		side === "leading" ? group.payload.slice(0, count) : group.payload.slice(group.payload.length - count);
+	if (!balanceIsZero(computeDelimiterBalance(echoLines))) return undefined;
+	return { side, count };
+}
+
+function describeOneSidedEchoRepair(group: ReplacementGroup, side: "leading" | "trailing", count: number): string {
+	const where = side === "leading" ? "above" : "below";
+	return (
+		`Auto-repaired a replacement boundary echo at line ${group.startLine}: ` +
+		`dropped ${count} ${side} payload line(s) identical to the surviving line(s) just ${where} the range. ` +
+		`The range was one line short of the content you retyped — issue the payload as the final content for the ` +
+		`selected range only, and widen the range to consume any keeper you restate.`
+	);
+}
+
+/**
  * Normalize replacement groups so common off-by-one boundaries do not duplicate
  * unchanged surrounding lines or structural closers. Returns the repaired edit
  * list plus one warning per repaired group.
@@ -481,6 +525,16 @@ function repairReplacementBoundaries(
 			computeDelimiterBalance(fileLines.slice(group.startLine - 1, group.endLine)),
 		);
 		if (balanceIsZero(delta)) {
+			const oneSided = findOneSidedBoundaryEcho(group, fileLines);
+			if (oneSided) {
+				warnings.push(describeOneSidedEchoRepair(group, oneSided.side, oneSided.count));
+				const trimmed =
+					oneSided.side === "leading"
+						? inserts.slice(oneSided.count)
+						: inserts.slice(0, inserts.length - oneSided.count);
+				out.push(...trimmed, ...deletes);
+				continue;
+			}
 			out.push(...inserts, ...deletes);
 			continue;
 		}

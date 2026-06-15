@@ -28,7 +28,7 @@ import { computeFileHash, formatHashlineHeader } from "./format";
 import type { Filesystem, WriteResult } from "./fs";
 import { isNotFound } from "./fs";
 import type { Patch, PatchSection } from "./input";
-import { HEADTAIL_DRIFT_WARNING, missingSnapshotTagMessage } from "./messages";
+import { HEADTAIL_DRIFT_WARNING, missingSnapshotTagMessage, unseenLinesMessage } from "./messages";
 import { MismatchError } from "./mismatch";
 import { detectLineEnding, type LineEnding, normalizeToLF, restoreLineEndings, stripBom } from "./normalize";
 import { Recovery, type RecoveryResult } from "./recovery";
@@ -341,6 +341,22 @@ export class Patcher {
 	#recordFullSnapshot(canonicalPath: string, normalized: string): string {
 		return this.snapshots.record(canonicalPath, normalized);
 	}
+
+	/**
+	 * Reject an anchored edit that references a line the read which minted
+	 * `expected` never displayed. The snapshot's `seenLines` is the set of
+	 * 1-indexed lines a producer (read/search) actually showed under that tag;
+	 * absent or empty means no provenance was recorded, so the edit applies as
+	 * before. Only runs on the no-drift path, where anchor line numbers index
+	 * the tagged content 1:1.
+	 */
+	#assertSeenLines(section: PatchSection, canonicalPath: string, expected: string): void {
+		const seen = this.snapshots.byHash(canonicalPath, expected)?.seenLines;
+		if (!seen || seen.size === 0) return;
+		const unseen = section.collectAnchorLines().filter(line => !seen.has(line));
+		if (unseen.length === 0) return;
+		throw new Error(unseenLinesMessage(section.path, unseen, expected));
+	}
 	#mismatchError(
 		section: PatchSection,
 		canonicalPath: string,
@@ -404,6 +420,10 @@ export class Patcher {
 		// the caller read, so echo them back. (A drifted file falls through to
 		// recovery below, where line numbers shift, so resolutions are dropped.)
 		if (expected === undefined || liveMatches) {
+			// The line numbers in `edits` index the exact content the tag names.
+			// Reject any anchor the read never displayed: editing lines the model
+			// has not seen is the off-by-memory mistake that mangles files.
+			if (expected !== undefined) this.#assertSeenLines(section, canonicalPath, expected);
 			const result = applyEdits(normalized, resolved);
 			return withResolveWarnings(blockResolutions.length > 0 ? { ...result, blockResolutions } : result);
 		}

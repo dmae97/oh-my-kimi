@@ -14,6 +14,7 @@ import {
 	canonicalSnapshotKey,
 	getFileSnapshotStore,
 	recordFileSnapshot,
+	recordSeenLinesFromBody,
 	SNAPSHOT_MAX_BYTES,
 } from "../edit/file-snapshot-store";
 import { normalizeToLF } from "../edit/normalize";
@@ -1356,6 +1357,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		if (shouldAddHashLines && outputText) {
 			const tag = await recordFileSnapshot(this.session, absolutePath);
 			if (tag) {
+				recordSeenLinesFromBody(this.session, absolutePath, tag, outputText);
 				outputText = `${formatHashlineHeader(formatPathRelativeToCwd(absolutePath, this.session.cwd), tag)}\n${outputText}`;
 			}
 		}
@@ -2059,6 +2061,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 						: undefined;
 					const bodyText = footer ? `${renderedSummary.text}\n\n${footer}` : renderedSummary.text;
 					const modelText = prependHashlineHeader(bodyText, summaryHashContext);
+					if (summaryHashContext?.tag) {
+						recordSeenLinesFromBody(this.session, absolutePath, summaryHashContext.tag, renderedSummary.text);
+					}
 					details = {
 						displayContent: { text: renderedSummary.displayText, startLine: 1 },
 						summary: {
@@ -2352,6 +2357,10 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 						outputText = formatBracketAwareText() ?? formatText(truncation.content, startLineDisplay);
 						details = {};
 						sourcePath = absolutePath;
+					}
+
+					if (hashContext?.tag) {
+						recordSeenLinesFromBody(this.session, absolutePath, hashContext.tag, outputText);
 					}
 
 					if (capturedDisplayContent) {

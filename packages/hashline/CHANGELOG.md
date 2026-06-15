@@ -1,10 +1,20 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Rejected edits anchored to lines not displayed in the tagged read/search output, requiring unseen ranges to be re-read before reapplying
+
+### Changed
+
+- Rejected `replace block`, `delete block`, and `insert after block` operations that resolve to a single line and instructed users to use the plain single-line form or anchor the true construct opener
 
 ### Fixed
 
+- Auto-repaired one-sided multi-line boundary echoes by dropping delimiter-neutral duplicated boundary lines and emitted a boundary-echo warning
 - Normalized cwd-relative hashline paths to forward-slash form on Windows.
+- Parser now treats a leading `\` on inline payload bodies as the payload delimiter, matching standalone payload rows.
+- Restored the warning emitted when escaped indented payload rows (`\\    TEXT`) are accepted as payload delimiters.
 
 ## [15.13.0] - 2026-06-14
 
@@ -217,8 +227,6 @@
 ### Fixed
 
 - Parser now skips markdown-style `# ...` lines when they directly precede a hashline operation, making model-generated explanatory rows in prompt examples non-blocking.
-- Parser now treats a leading `\` on inline payload bodies as the payload delimiter, matching standalone payload rows.
-- Restored the warning emitted when escaped indented payload rows (`\\    TEXT`) are accepted as payload delimiters.
 
 ### Removed
 

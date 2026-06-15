@@ -36,6 +36,15 @@ export interface Snapshot {
 	readonly hash: string;
 	/** Timestamp (ms since epoch) the version was recorded. */
 	recordedAt: number;
+	/**
+	 * 1-indexed file lines a producer (read/search) actually *displayed* under
+	 * this tag. A partial read (range, or a structural summary that collapsed
+	 * bodies) leaves this sparse; a whole-file read fills every line. Multiple
+	 * reads of the same content union into one set. `undefined` means "no
+	 * provenance recorded" — the patcher then skips the seen-line check and
+	 * applies as before. Mutated in place as more of the same content is read.
+	 */
+	seenLines?: Set<number>;
 }
 
 /**
@@ -50,8 +59,20 @@ export abstract class SnapshotStore {
 	/** Recorded version for `path` whose tag equals `hash`, or `null`. */
 	abstract byHash(path: string, hash: string): Snapshot | null;
 
-	/** Record the full normalized text of `path` and return its content tag. */
-	abstract record(path: string, fullText: string): string;
+	/**
+	 * Record the full normalized text of `path` and return its content tag.
+	 * `seenLines` (optional) are the 1-indexed lines the producer displayed;
+	 * they merge into {@link Snapshot.seenLines} across reads of identical text.
+	 */
+	abstract record(path: string, fullText: string, seenLines?: Iterable<number>): string;
+
+	/**
+	 * Merge `lines` into the {@link Snapshot.seenLines} of the version whose tag
+	 * equals `hash`. No-op when no such version is retained (the content aged
+	 * out or was overwritten). Lets producers attach displayed lines after the
+	 * tag was already minted (the body is formatted after the hash is computed).
+	 */
+	abstract recordSeenLines(path: string, hash: string, lines: Iterable<number>): void;
 
 	/** Drop the version history for a single path. */
 	abstract invalidate(path: string): void;
@@ -64,6 +85,13 @@ const DEFAULT_MAX_PATHS = 30;
 const DEFAULT_MAX_VERSIONS_PER_PATH = 4;
 /** Global ceiling on retained snapshot text across all paths (UTF-16 code units). */
 const DEFAULT_MAX_TOTAL_BYTES = 64 * 1024 * 1024;
+
+/** Union `lines` into `snapshot.seenLines`, lazily creating the set. */
+function mergeSeenLines(snapshot: Snapshot, lines: Iterable<number> | undefined): void {
+	if (lines === undefined) return;
+	if (snapshot.seenLines === undefined) snapshot.seenLines = new Set<number>();
+	for (const line of lines) snapshot.seenLines.add(line);
+}
 
 export interface InMemorySnapshotStoreOptions {
 	/** Maximum number of distinct paths tracked at once (default 30). LRU eviction. */
@@ -114,15 +142,17 @@ export class InMemorySnapshotStore extends SnapshotStore {
 		return history?.find(version => version.hash === hash) ?? null;
 	}
 
-	record(path: string, fullText: string): string {
+	record(path: string, fullText: string, seenLines?: Iterable<number>): string {
 		const hash = computeFileHash(fullText);
 		// `get` refreshes LRU recency for `path`.
 		const history = this.#versions.get(path) ?? [];
 		const existing = history.find(version => version.hash === hash);
 		if (existing) {
 			// Same content state observed again: refresh recency and promote to
-			// head (it is the current file content), then reuse the tag.
+			// head (it is the current file content), then reuse the tag. Union any
+			// newly-displayed lines so re-reading more of the file widens coverage.
 			existing.recordedAt = Date.now();
+			mergeSeenLines(existing, seenLines);
 			if (history[0] !== existing) {
 				this.#versions.set(path, [existing, ...history.filter(version => version !== existing)]);
 			}
@@ -130,8 +160,14 @@ export class InMemorySnapshotStore extends SnapshotStore {
 		}
 
 		const snapshot: Snapshot = { path, text: fullText, hash, recordedAt: Date.now() };
+		mergeSeenLines(snapshot, seenLines);
 		this.#versions.set(path, [snapshot, ...history].slice(0, this.#maxVersionsPerPath));
 		return hash;
+	}
+
+	recordSeenLines(path: string, hash: string, lines: Iterable<number>): void {
+		const version = this.#versions.get(path)?.find(snapshot => snapshot.hash === hash);
+		if (version) mergeSeenLines(version, lines);
 	}
 
 	invalidate(path: string): void {

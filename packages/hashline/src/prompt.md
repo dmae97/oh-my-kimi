@@ -27,8 +27,8 @@ There is NO other body row kind. NEVER write `-old` or a bare/context line. To k
 - Line numbers and the `[PATH#TAG]` header come from your latest `read`/`search` (`LINE:TEXT` rows).
 - Numbers refer to the ORIGINAL file; they do not shift as hunks apply.
 - They die with the call: every applied edit mints a fresh `#TAG` and renumbers — anchor the next edit on the edit response or a fresh `read`.
-- Touch only lines you literally saw as `LINE:TEXT`; the tag certifies the snapshot, not your knowledge of it.
-- Elided regions (`…`) are UNSEEN — never place or span a hunk across one; `read` it first.
+- Touch only lines your latest `read`/`search` literally displayed as `LINE:TEXT`; the tag certifies the snapshot, not your memory of it. A hunk anchored on a line you never displayed is REJECTED — re-`read` those exact lines first. (Seeing a line ≠ it holding the code you mean: confirm the numbers map to the construct you intend, especially far from your last-read window.)
+- Elided regions are UNSEEN: `…`/`..` markers and a collapsed `N-M:` summary row (only boundary lines N and M were shown) hide their interior. NEVER place or span a hunk inside one — `read` the range first.
 - Never start or end a range mid-expression or mid-block.
 - Indent body rows exactly for the depth they should live at.
 - On a stale-tag rejection or any surprising result: STOP and re-`read` before further edits.
@@ -36,9 +36,9 @@ There is NO other body row kind. NEVER write `-old` or a bare/context line. To k
 - Ranges cover ONLY lines whose content changes. Never widen over unchanged lines — a stale wide range shreds everything it spans.
 - Whole construct → `replace block N` (tree-sitter resolves the end); lines inside it → `replace N..M`.
 - `replace block N` resolves EXACTLY the node at N. Leading decorators/attributes/doc-comments are separate nodes: point N at the FIRST decorator to sweep both; standalone line-comments are never swept — use `replace N..M`.
-- `insert after block N`: N is the opener, never the closer or last visible line; saw the closer? Use plain `insert after M:`.
+- Block ops (`replace block`/`delete block`/`insert after block`) anchor the OPENING line of a MULTI-LINE construct — never its closer, its last line, or a bare statement inside it. Anchoring a single statement resolves to ONE line and is REJECTED: use the plain op (`replace N..N` / `delete N` / `insert after N`) for one line, or point N at the real opener. Saw the closer? Use plain `insert after M:`.
 - Non-adjacent changes = separate hunks; untouched lines stay out of every range.
-- Pure additions use `insert`, never a widened `replace` — retyped keepers are exactly what gets dropped.
+- Pure additions use `insert`, never a widened `replace` — retyped keepers are exactly what gets dropped. A multi-line `replace` whose body restates the line just outside the range is auto-dropped as an off-by-one keeper (with a warning), but issue the payload as the final content for the range only and never lean on the repair.
 - NEVER format/restyle code with this tool; run the project formatter instead.
 </rules>
 
