@@ -186,6 +186,105 @@ function serializeToolArguments(value: unknown): string {
 	return "{}";
 }
 
+function isUnsafeToolArgumentKey(key: string): boolean {
+	return key === "__proto__" || key === "constructor" || key === "prototype";
+}
+
+function isStreamingArgumentObject(value: unknown): value is Record<string, unknown> {
+	return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function cloneStreamingArgumentValue(value: unknown): unknown {
+	if (Array.isArray(value)) {
+		return value.map(cloneStreamingArgumentValue);
+	}
+	if (isStreamingArgumentObject(value)) {
+		return mergeStreamingArgumentObjects(undefined, value);
+	}
+	return value;
+}
+
+function streamingArgumentValuesEqual(left: unknown, right: unknown): boolean {
+	if (left === right) return true;
+	if (Array.isArray(left) && Array.isArray(right)) {
+		if (left.length !== right.length) return false;
+		for (let i = 0; i < left.length; i++) {
+			if (!streamingArgumentValuesEqual(left[i], right[i])) return false;
+		}
+		return true;
+	}
+	if (isStreamingArgumentObject(left) && isStreamingArgumentObject(right)) {
+		let leftKeys = 0;
+		for (const key in left) {
+			if (!Object.hasOwn(left, key) || isUnsafeToolArgumentKey(key)) continue;
+			leftKeys++;
+			if (!Object.hasOwn(right, key) || !streamingArgumentValuesEqual(left[key], right[key])) return false;
+		}
+		let rightKeys = 0;
+		for (const key in right) {
+			if (!Object.hasOwn(right, key) || isUnsafeToolArgumentKey(key)) continue;
+			rightKeys++;
+		}
+		return leftKeys === rightKeys;
+	}
+	return false;
+}
+
+function streamingArgumentArrayStartsWith(value: unknown[], prefix: unknown[]): boolean {
+	if (prefix.length > value.length) return false;
+	for (let i = 0; i < prefix.length; i++) {
+		if (!streamingArgumentValuesEqual(value[i], prefix[i])) return false;
+	}
+	return true;
+}
+
+function mergeStreamingArgumentArrays(prev: unknown[], fragment: unknown[]): unknown[] {
+	if (streamingArgumentArrayStartsWith(fragment, prev)) {
+		return fragment.map(cloneStreamingArgumentValue);
+	}
+	if (streamingArgumentArrayStartsWith(prev, fragment)) {
+		return prev.map(cloneStreamingArgumentValue);
+	}
+	const merged = prev.map(cloneStreamingArgumentValue);
+	for (const value of fragment) {
+		merged.push(cloneStreamingArgumentValue(value));
+	}
+	return merged;
+}
+
+function mergeStreamingArgumentValues(prev: unknown, fragment: unknown): unknown {
+	if (typeof prev === "string" && typeof fragment === "string") {
+		return fragment.startsWith(prev) ? fragment : prev + fragment;
+	}
+	if (Array.isArray(prev) && Array.isArray(fragment)) {
+		return mergeStreamingArgumentArrays(prev, fragment);
+	}
+	if (isStreamingArgumentObject(prev) && isStreamingArgumentObject(fragment)) {
+		return mergeStreamingArgumentObjects(prev, fragment);
+	}
+	return cloneStreamingArgumentValue(fragment);
+}
+
+function mergeStreamingArgumentObjects(
+	prev: Record<string, unknown> | undefined,
+	fragment: Record<string, unknown>,
+): Record<string, unknown> {
+	const merged: Record<string, unknown> = {};
+	if (prev) {
+		for (const key in prev) {
+			if (!Object.hasOwn(prev, key) || isUnsafeToolArgumentKey(key)) continue;
+			merged[key] = cloneStreamingArgumentValue(prev[key]);
+		}
+	}
+	for (const key in fragment) {
+		if (!Object.hasOwn(fragment, key) || isUnsafeToolArgumentKey(key)) continue;
+		merged[key] = Object.hasOwn(merged, key)
+			? mergeStreamingArgumentValues(merged[key], fragment[key])
+			: cloneStreamingArgumentValue(fragment[key]);
+	}
+	return merged;
+}
+
 /**
  * Check if conversation messages contain tool calls or tool results.
  * This is needed because Anthropic (via proxy) requires the tools param
@@ -981,31 +1080,17 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 								// OpenAI JSON-string contract. Most chunks carry the complete object in one delta,
 								// but cannot rely on that: replacing per-chunk drops earlier keys (and earlier
 								// string content for the same key) when the host fragments the args across deltas.
-								// Shallow-merge into the accumulated object; for shared string keys, detect
-								// cumulative-vs-delta semantics with `startsWith` so we neither duplicate cumulative
-								// payloads nor lose delta fragments. Degenerates to the previous "last wins"
-								// behaviour for the common single-chunk shape (no prior value to merge with).
+								// Deep-merge into the accumulated object. Strings and arrays detect
+								// cumulative-vs-delta semantics by prefix, nested objects merge by key, and
+								// prototype-polluting keys are ignored before storing or comparing values.
 								//
 								// `delta` stays empty here: emitting `JSON.stringify(rawArgs)` per chunk feeds
 								// downstream concat-based accumulators (proxy.ts, openai-chat-server,
 								// openai-responses-server, anthropic-messages-server) an invalid sequence like
 								// `{"input":"a"}{"input":"b"}`. The merged object is flushed as a single
 								// concat-safe delta in `finishToolCallBlock` before `toolcall_end` instead.
-								const prev =
-									block.partialArgs &&
-									typeof block.partialArgs === "object" &&
-									!Array.isArray(block.partialArgs)
-										? (block.partialArgs as Record<string, unknown>)
-										: undefined;
-								const merged: Record<string, unknown> = prev ? { ...prev } : {};
-								for (const [key, value] of Object.entries(rawArgs)) {
-									const prevValue = merged[key];
-									if (typeof prevValue === "string" && typeof value === "string") {
-										merged[key] = value.startsWith(prevValue) ? value : prevValue + value;
-									} else {
-										merged[key] = value;
-									}
-								}
+								const prev = isStreamingArgumentObject(block.partialArgs) ? block.partialArgs : undefined;
+								const merged = mergeStreamingArgumentObjects(prev, rawArgs);
 								block.partialArgs = merged;
 								block.arguments = merged;
 							}

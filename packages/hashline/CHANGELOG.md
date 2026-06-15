@@ -20,6 +20,12 @@
   - `delete_block` -> `DEL.BLK`
   - `insert_after_block` -> `INS.BLK.POST`
 
+### Fixed
+
+- Auto-repaired one-sided multi-line boundary echoes by dropping delimiter-neutral duplicated boundary lines and emitted a boundary-echo warning
+- Parser now treats a leading `\` on inline payload bodies as the payload delimiter, matching standalone payload rows.
+- Restored the warning emitted when escaped indented payload rows (`\\    TEXT`) are accepted as payload delimiters.
+
 ## [15.13.1] - 2026-06-15
 
 ### Breaking Changes
@@ -32,10 +38,7 @@
 
 ### Fixed
 
-- Auto-repaired one-sided multi-line boundary echoes by dropping delimiter-neutral duplicated boundary lines and emitted a boundary-echo warning
 - Normalized cwd-relative hashline paths to forward-slash form on Windows.
-- Parser now treats a leading `\` on inline payload bodies as the payload delimiter, matching standalone payload rows.
-- Restored the warning emitted when escaped indented payload rows (`\\    TEXT`) are accepted as payload delimiters.
 
 ## [15.12.5] - 2026-06-13
 
