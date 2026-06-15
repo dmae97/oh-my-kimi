@@ -294,6 +294,10 @@
 
 - Fixed `web_search` using stale or missing provider exclusions after `/move` or resuming a session from another project. Provider preferences (`providers.webSearchExclude`, `providers.webSearch`, `providers.image`) are now reapplied when project settings reload on cwd change ([#2611](https://github.com/can1357/oh-my-pi/pull/2611)).
 
+### Fixed
+
+- Fixed isolated task subagents with persisted transcripts resolving file tools against the parent repository instead of the isolated worktree, which made `rcopy` patch capture report no changes after tool-based edits.
+
 ## [15.13.1] - 2026-06-15
 
 ### Added

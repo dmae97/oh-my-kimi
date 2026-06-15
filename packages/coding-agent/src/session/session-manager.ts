@@ -1522,15 +1522,17 @@ export class SessionManager {
 	/**
 	 * Open a specific session file.
 	 * @param sessionDir Optional dir for /new or /branch; defaults to the file's parent.
+	 * @param options.initialCwd Cwd to use when the file is empty or missing.
 	 */
 	static async open(
 		filePath: string,
 		sessionDir?: string,
 		storage: SessionStorage = new FileSessionStorage(),
+		options?: { initialCwd?: string },
 	): Promise<SessionManager> {
 		const loaded = await loadEntriesFromFile(filePath, storage);
 		const header = loaded.find(entry => entry.type === "session") as SessionHeader | undefined;
-		const cwd = header?.cwd ?? getProjectDir();
+		const cwd = header?.cwd ?? options?.initialCwd ?? getProjectDir();
 		const dir = sessionDir ?? path.dirname(path.resolve(filePath));
 		const manager = new SessionManager(cwd, dir, true, storage);
 		await manager.setSessionFile(filePath);
