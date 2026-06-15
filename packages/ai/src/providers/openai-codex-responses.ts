@@ -1096,7 +1096,6 @@ function createCodexStreamRuntime(initial: {
 	};
 }
 
-
 /**
  * Wipe per-attempt accumulator state before a recovery path replays the turn.
  * Keeps {@link CodexStreamRuntime.openItems} and the legacy singleton-current
