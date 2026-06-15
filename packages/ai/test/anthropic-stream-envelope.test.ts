@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { scheduler } from "node:timers/promises";
-import { streamAnthropic } from "@oh-my-pi/pi-ai/providers/anthropic";
+import { convertAnthropicMessages, streamAnthropic } from "@oh-my-pi/pi-ai/providers/anthropic";
 import { AnthropicMessages } from "@oh-my-pi/pi-ai/providers/anthropic-client";
 import type { AssistantMessageEvent, Context, Model, ModelSpec, ProviderSessionState } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
@@ -326,12 +326,27 @@ describe("anthropic stream envelope handling", () => {
 		expect(countEvents(events, "thinking_start")).toBe(1);
 		expect(countEvents(events, "thinking_end")).toBe(1);
 		expect(result.stopReason).toBe("stop");
-		expect(result.content).toEqual([
-			{
-				type: "thinking",
-				thinking: "Check logs before accepting container health.",
-				thinkingSignature: "sig_thinking",
-			},
+		expect(result.content).toHaveLength(1);
+		const block = result.content[0];
+		expect(block?.type).toBe("thinking");
+		if (block?.type !== "thinking") {
+			throw new Error("Expected thinking content after wrapped thinking stream");
+		}
+		expect(block.thinking).toBe("Check logs before accepting container health.");
+		expect(block.thinkingSignature).toBeUndefined();
+
+		const replayParams = convertAnthropicMessages(
+			[
+				{ role: "user", content: "Say hi", timestamp: 1 },
+				result,
+				{ role: "user", content: "follow up", timestamp: 2 },
+			],
+			model,
+			false,
+		);
+		const replayAssistant = replayParams.find(param => param.role === "assistant");
+		expect(replayAssistant?.content).toEqual([
+			{ type: "text", text: "Check logs before accepting container health." },
 		]);
 	});
 
