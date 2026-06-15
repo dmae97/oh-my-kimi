@@ -150,6 +150,23 @@
 - Registered the `Advisor` group in the `model` settings tab so advisor settings render correctly in the settings panel.
 - Fixed Windows bash path handling so MSYS/Git-Bash drive aliases like `/d/project` and WSL-style `/mnt/d/project` normalize to native drive paths consistently across the bash tool cwd validation and brush filesystem builtins ([#2634](https://github.com/can1357/oh-my-pi/issues/2634)).
 
+### Added
+
+- Added `UMANS_AI_CODING_PLAN_API_KEY` to the CLI environment help ([#2636](https://github.com/can1357/oh-my-pi/pull/2636) by [@oldschoola](https://github.com/oldschoola)).
+
+### Fixed
+
+- Fixed auto-retry regenerating a large `write` call after the provider stream timed out mid-tool-call ([#2683](https://github.com/can1357/oh-my-pi/issues/2683)).
+- Fixed soft-expired `issue://` and `pr://` reads to refresh live before returning stale state, with an explicit stale warning when the live refresh fails ([#2684](https://github.com/can1357/oh-my-pi/issues/2684)).
+
+### Changed
+
+- Changed the `eval` `agent()` helper to accept `return_handle` (Python) / `returnHandle` (JS): instead of bare text it returns a DAG node dict `{ text, output, handle, id, agent }` whose `handle` is the spawned agent's recoverable `agent://<id>` URI, so a downstream `pipeline`/`parallel` stage can wire a large transcript by reference instead of re-inlining it. The default path is unchanged (bare text, or the parsed object under `schema`).
+
+### Fixed
+
+- Fixed Claude marketplace plugin skills appearing as bare slash commands while keeping real plugin `commands/` entries available ([#2645](https://github.com/can1357/oh-my-pi/issues/2645)).
+
 ## [15.13.3] - 2026-06-15
 
 ### Added
