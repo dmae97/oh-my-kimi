@@ -46,3 +46,45 @@ export const NON_INTERACTIVE_ENV: Readonly<Record<string, string>> = {
 	COMPOSER_NO_INTERACTION: "1",
 	CLOUDSDK_CORE_DISABLE_PROMPTS: "1",
 };
+
+const WINDOWS_UTF8_ENV_DEFAULTS: Readonly<Record<string, string>> = {
+	PYTHONIOENCODING: "utf-8",
+	PYTHONUTF8: "1",
+	LANG: "C.UTF-8",
+	LC_ALL: "C.UTF-8",
+};
+
+function hasEnvValue(
+	env: Record<string, string | undefined> | undefined,
+	key: string,
+	platform: NodeJS.Platform,
+): boolean {
+	if (!env) return false;
+	if (platform !== "win32") return env[key] !== undefined;
+
+	for (const [existingKey, value] of Object.entries(env)) {
+		if (value !== undefined && existingKey.toLowerCase() === key.toLowerCase()) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/** Builds the per-command environment for non-interactive child processes. */
+export function buildNonInteractiveEnv(
+	overrides?: Record<string, string>,
+	baseEnv: Record<string, string | undefined> = Bun.env,
+	platform: NodeJS.Platform = process.platform,
+): Record<string, string> {
+	if (platform !== "win32") {
+		return overrides ? { ...NON_INTERACTIVE_ENV, ...overrides } : NON_INTERACTIVE_ENV;
+	}
+
+	const env: Record<string, string> = { ...NON_INTERACTIVE_ENV };
+	for (const [key, value] of Object.entries(WINDOWS_UTF8_ENV_DEFAULTS)) {
+		if (!hasEnvValue(baseEnv, key, platform) && !hasEnvValue(overrides, key, platform)) {
+			env[key] = value;
+		}
+	}
+	return overrides ? { ...env, ...overrides } : env;
+}

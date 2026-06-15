@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Windows bash-tool child processes defaulting interpreter pipe I/O to the ANSI codepage by adding UTF-8 encoding defaults when the inherited environment is unset ([#2701](https://github.com/can1357/oh-my-pi/issues/2701)).
+
 ## [16.0.1] - 2026-06-15
 
 ### Breaking Changes
