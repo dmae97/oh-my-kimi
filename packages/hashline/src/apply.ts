@@ -130,6 +130,13 @@ function bucketAnchorEditsByLine(edits: IndexedEdit[]): Map<number, IndexedEdit[
 /** A line that is nothing but closing delimiters: `}`, `)`, `];`, `})`, `},`. */
 export const STRUCTURAL_CLOSER_RE = /^\s*[)\]}]+[;,]?\s*$/;
 
+/** A JSX/XML closing boundary that carries structure but no bracket tokens. */
+const JSX_CLOSER_RE = /^\s*(?:<\/>|<\/[A-Za-z][\w.:-]*>|\/>)\s*[;,]?\s*$/;
+
+function isStructuralCloserLine(text: string): boolean {
+	return STRUCTURAL_CLOSER_RE.test(text) || JSX_CLOSER_RE.test(text);
+}
+
 interface DelimiterBalance {
 	paren: number;
 	bracket: number;
@@ -452,19 +459,18 @@ function describeBoundaryRepair(group: ReplacementGroup, action: string): string
  * are handled by {@link findBoundaryEcho}; delimiter-imbalanced one-sided echoes
  * by {@link findDuplicateSuffix}/{@link findDuplicatePrefix}.
  *
- * Scoped to multi-line ranges (a construct rewrite) on purpose: a single-line
- * `replace N.=N` expanding into several lines is an *expansion* where every
- * payload line is intentional new content, so a payload line that happens to
- * equal a neighbor stays — only a genuine block rewrite retypes a boundary
- * keeper by mistake. The dropped lines must be delimiter-neutral so removing the
- * duplicate keeps the already-balanced result balanced, and must not consume the
- * whole payload.
+ * Scoped broadly for multi-line ranges (a construct rewrite) because retouched
+ * neutral keepers are usually boundary mistakes there. Single-line expansions
+ * are riskier — ordinary duplicated statements may be intentional — so they are
+ * only repaired when the duplicated edge is a structural closer line that
+ * carries no delimiter-balance signal itself, such as a JSX `</section>` close.
+ * The dropped lines must keep the already-balanced result balanced, and must
+ * not consume the whole payload.
  */
 function findOneSidedBoundaryEcho(
 	group: ReplacementGroup,
 	fileLines: readonly string[],
 ): { side: "leading" | "trailing"; count: number } | undefined {
-	if (group.deleteIndices.length <= 1) return undefined;
 	const leading = countDuplicateLeadingBoundaryLines(group, fileLines);
 	const trailing = countDuplicateTrailingBoundaryLines(group, fileLines);
 	if (leading > 0 === trailing > 0) return undefined;
@@ -474,6 +480,9 @@ function findOneSidedBoundaryEcho(
 	const echoLines =
 		side === "leading" ? group.payload.slice(0, count) : group.payload.slice(group.payload.length - count);
 	if (!balanceIsZero(computeDelimiterBalance(echoLines))) return undefined;
+	if (group.deleteIndices.length <= 1 && (side !== "trailing" || !echoLines.every(isStructuralCloserLine))) {
+		return undefined;
+	}
 	return { side, count };
 }
 

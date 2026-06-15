@@ -271,6 +271,16 @@ describe("boundary-balance repair", () => {
 		expect(warnings.some(warning => /boundary echo/.test(warning))).toBe(true);
 	});
 
+	it("drops a one-sided JSX closer echo in a single-line expansion", () => {
+		const file = ["const view = (", "  <section>", "    <Old />", "  </section>", ");"].join("\n");
+		const diff = ["SWAP 3.=3:", "+    <New />", "+  </section>"].join("\n");
+		const { text, warnings } = apply(file, diff);
+
+		expect(text).toBe(["const view = (", "  <section>", "    <New />", "  </section>", ");"].join("\n"));
+		expect(text.split("\n").filter(line => line === "  </section>")).toHaveLength(1);
+		expect(warnings.some(warning => /boundary echo/.test(warning))).toBe(true);
+	});
+
 	// Mirror direction: the payload restates the keeper that survives just above
 	// the multi-line range (range one line low instead of one short).
 	it("drops a one-sided leading keeper echo in a multi-line rewrite", () => {

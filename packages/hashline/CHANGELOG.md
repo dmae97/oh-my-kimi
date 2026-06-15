@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Auto-repaired duplicated JSX/XML closing boundary lines at the end of single-line replacement expansions. ([#2705](https://github.com/can1357/oh-my-pi/issues/2705))
+
 ## [16.0.1] - 2026-06-15
 
 ### Fixed
