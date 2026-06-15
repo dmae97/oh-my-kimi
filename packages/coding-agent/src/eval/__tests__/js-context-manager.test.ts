@@ -15,6 +15,7 @@ interface FakeWorkerStats {
 interface FakeWorkerBehavior {
 	exitOnClose: boolean;
 	settleRuns: boolean;
+	errorOnStart?: boolean;
 }
 
 function makeSession(cwd: string): ToolSession {
@@ -70,6 +71,7 @@ async function waitForRealWorkerExitAfterClose(cwd: string): Promise<void> {
 	worker.addEventListener("close", () => workerClosed.resolve());
 
 	try {
+		worker.postMessage({ type: "init", snapshot });
 		await withTimeout(ready.promise, 1_000, "worker ready");
 		worker.postMessage({
 			type: "run",
@@ -91,6 +93,7 @@ function installFakeWorker(stats: FakeWorkerStats, behavior: FakeWorkerBehavior)
 	class FakeWorker {
 		#messageListeners = new Set<(event: MessageEvent) => void>();
 		#closeListeners = new Set<(event: Event) => void>();
+		#errorListeners = new Set<(event: Event) => void>();
 		#readyQueued = false;
 		#exited = false;
 
@@ -115,17 +118,28 @@ function installFakeWorker(stats: FakeWorkerStats, behavior: FakeWorkerBehavior)
 				this.#closeListeners.add(listener as (event: Event) => void);
 				return;
 			}
+			if (type === "error") {
+				this.#errorListeners.add(listener as (event: Event) => void);
+				return;
+			}
 			if (type !== "message") return;
 			this.#messageListeners.add(listener as (event: MessageEvent) => void);
 			if (!this.#readyQueued) {
 				this.#readyQueued = true;
-				queueMicrotask(() => this.#emitMessage({ type: "ready" }));
+				queueMicrotask(() => {
+					if (behavior.errorOnStart) this.#emitError();
+					else this.#emitMessage({ type: "ready" });
+				});
 			}
 		}
 
 		removeEventListener(type: string, listener: (event: MessageEvent | Event) => void): void {
 			if (type === "close") {
 				this.#closeListeners.delete(listener as (event: Event) => void);
+				return;
+			}
+			if (type === "error") {
+				this.#errorListeners.delete(listener as (event: Event) => void);
 				return;
 			}
 			if (type !== "message") return;
@@ -147,6 +161,14 @@ function installFakeWorker(stats: FakeWorkerStats, behavior: FakeWorkerBehavior)
 			this.#exited = true;
 			const event = new Event("close");
 			for (const listener of this.#closeListeners) listener(event);
+		}
+
+		#emitError(): void {
+			const event = new ErrorEvent("error", {
+				message: "fake worker failed to start",
+				error: new Error("fake worker failed to start"),
+			});
+			for (const listener of this.#errorListeners) listener(event);
 		}
 	}
 
@@ -236,6 +258,24 @@ describe("JavaScript eval worker lifecycle", () => {
 		const result = await resultPromise;
 		expect(result.cancelled).toBe(true);
 		expect(stats.closeRequests).toBe(0);
+		expect(stats.terminateCalls).toBe(1);
+	});
+
+	it("falls back to the inline worker when the spawned worker errors during startup", async () => {
+		using tempDir = TempDir.createSync("@omp-js-worker-error-");
+		const stats: FakeWorkerStats = { closeRequests: 0, terminateCalls: 0 };
+		installFakeWorker(stats, { exitOnClose: true, settleRuns: true, errorOnStart: true });
+
+		const session = makeSession(tempDir.path());
+		const sessionId = `js-worker-error:${crypto.randomUUID()}`;
+
+		// The spawned worker emits an `error` event instead of `ready`. Without fail-fast
+		// error handling the handshake would stall until WORKER_INIT_TIMEOUT_MS (15s); with
+		// it, the handshake rejects at once and the inline worker runs the cell.
+		const result = await executeJs("return String(6 * 7);", { cwd: tempDir.path(), sessionId, session });
+		expect(result.exitCode).toBe(0);
+		expect(result.output.trim()).toBe("42");
+		// The errored primary worker is torn down before the inline retry takes over.
 		expect(stats.terminateCalls).toBe(1);
 	});
 });

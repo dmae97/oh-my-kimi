@@ -264,8 +264,10 @@ async function initWorker(session: JsSession, snapshot: SessionSnapshot, timeout
 		void killSessionFor(session, error, { force: true });
 	});
 	try {
-		await raceWithTimeout(readyPromise, timeoutMs, "Timed out initializing JS eval worker");
+		// Attach listeners and send init before awaiting ready. The worker now
+		// emits ready only in response to init, so this ordering is race-free.
 		worker.send({ type: "init", snapshot });
+		await raceWithTimeout(readyPromise, timeoutMs, "Timed out initializing JS eval worker");
 	} catch (error) {
 		// Handshake failed (timeout, init-failed, or worker error): drop both listeners
 		// so the abandoned worker can't keep routing messages into a session the caller
