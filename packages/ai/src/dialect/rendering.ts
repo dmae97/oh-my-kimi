@@ -161,20 +161,55 @@ function isAsciiWhitespace(code: number): boolean {
 	return code === 9 || code === 10 || code === 11 || code === 12 || code === 13 || code === 32;
 }
 
-function unwrapDelimitedThinking(open: string, close: string, text: string): string {
-	let start = 0;
-	let end = text.length;
-	let changed = false;
-	while (true) {
-		while (start < end && isAsciiWhitespace(text.charCodeAt(start))) start++;
-		while (end > start && isAsciiWhitespace(text.charCodeAt(end - 1))) end--;
-		if (end - start < open.length + close.length) break;
-		if (!text.startsWith(open, start) || !text.startsWith(close, end - close.length)) break;
-		start += open.length;
-		end -= close.length;
-		changed = true;
+function trimAsciiStart(text: string, start: number, end: number): number {
+	let cursor = start;
+	while (cursor < end && isAsciiWhitespace(text.charCodeAt(cursor))) cursor++;
+	return cursor;
+}
+
+function trimAsciiEnd(text: string, start: number, end: number): number {
+	let cursor = end;
+	while (cursor > start && isAsciiWhitespace(text.charCodeAt(cursor - 1))) cursor--;
+	return cursor;
+}
+
+function findDelimitedThinkingClose(open: string, close: string, text: string, start: number, end: number): number {
+	let depth = 1;
+	let cursor = start;
+	while (cursor < end) {
+		const nextClose = text.indexOf(close, cursor);
+		if (nextClose < 0 || nextClose >= end) return -1;
+		const nextOpen = text.indexOf(open, cursor);
+		if (nextOpen >= 0 && nextOpen < nextClose) {
+			depth++;
+			cursor = nextOpen + open.length;
+			continue;
+		}
+		depth--;
+		if (depth === 0) return nextClose;
+		cursor = nextClose + close.length;
 	}
-	return changed ? text.slice(start, end) : text;
+	return -1;
+}
+
+function unwrapDelimitedThinking(open: string, close: string, text: string): string {
+	const end = trimAsciiEnd(text, 0, text.length);
+	let cursor = trimAsciiStart(text, 0, end);
+	if (cursor >= end || !text.startsWith(open, cursor)) return text;
+
+	const segments: string[] = [];
+	while (cursor < end) {
+		if (!text.startsWith(open, cursor)) return text;
+		const innerStart = cursor + open.length;
+		const innerEnd = findDelimitedThinkingClose(open, close, text, innerStart, end);
+		if (innerEnd < 0) return text;
+
+		const trimmedInnerEnd = trimAsciiEnd(text, innerStart, innerEnd);
+		const trimmedInnerStart = trimAsciiStart(text, innerStart, trimmedInnerEnd);
+		segments.push(unwrapDelimitedThinking(open, close, text.slice(trimmedInnerStart, trimmedInnerEnd)));
+		cursor = trimAsciiStart(text, innerEnd + close.length, end);
+	}
+	return segments.join("\n");
 }
 
 export function renderDelimitedThinking(open: string, close: string, text: string): string {

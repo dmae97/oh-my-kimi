@@ -605,5 +605,26 @@ describe("advisor", () => {
 			expect(md).toContain("Assistant: <thinking>\nCheck logs before accepting container health.\n</thinking>");
 			expect(md).not.toContain("<thinking>\n<thinking>");
 		});
+
+		it("unwraps sibling literal thinking envelopes independently", () => {
+			const md = formatSessionDumpText({
+				messages: [
+					{
+						role: "assistant",
+						content: [
+							{ type: "thinking", thinking: "<thinking>\nfirst\n</thinking>" },
+							{ type: "toolCall", id: "tc-1", name: "read", arguments: { path: "file.ts" } },
+							{ type: "thinking", thinking: "<thinking>\nsecond\n</thinking>" },
+						],
+						timestamp: Date.now(),
+					} as AgentMessage,
+				],
+				tools: [{ name: "read", description: "Read a file", parameters: { type: "object" } }],
+				thinkingLevel: "high",
+			});
+
+			expect(md).toContain("Assistant: <thinking>\nfirst\nsecond\n</thinking>");
+			expect(md).not.toContain("first\n</thinking>\n<thinking>\nsecond");
+		});
 	});
 });
