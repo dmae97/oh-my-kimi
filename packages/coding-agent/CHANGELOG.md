@@ -26,6 +26,7 @@
 - Fixed advisor context handling to automatically maintain its token budget by promoting the advisor model or compacting/restarting advisor context when needed, preventing advice from degrading on long sessions
 - Fixed `startup.quiet` leaving MCP and LSP startup status events visible during launch ([#2639](https://github.com/can1357/oh-my-pi/issues/2639)).
 - Registered the `Advisor` group in the `model` settings tab so advisor settings render correctly in the settings panel.
+- Fixed soft-expired `issue://` and `pr://` reads to refresh live before returning stale state, with an explicit stale warning when the live refresh fails ([#2684](https://github.com/can1357/oh-my-pi/issues/2684)).
 
 ## [15.13.3] - 2026-06-15
 
