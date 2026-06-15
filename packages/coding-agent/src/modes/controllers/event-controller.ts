@@ -22,7 +22,7 @@ import type { AgentSessionEvent } from "../../session/agent-session";
 import { isSilentAbort, readQueueChipText, resolveAbortLabel } from "../../session/messages";
 import type { ResolveToolDetails } from "../../tools/resolve";
 import { vocalizer } from "../../tts/vocalizer";
-import { hasVisibleThinking } from "../../utils/thinking-display";
+import { canonicalizeMessage } from "../../utils/thinking-display";
 import { interruptHint } from "../shared";
 import { StreamingRevealController } from "./streaming-reveal";
 import { ToolArgsRevealController } from "./tool-args-reveal";
@@ -480,8 +480,8 @@ export class EventController {
 
 			const visibleBlockCount = this.ctx.streamingMessage.content.filter(
 				content =>
-					(content.type === "text" && content.text.trim().length > 0) ||
-					(content.type === "thinking" && hasVisibleThinking(content)),
+					(content.type === "text" && canonicalizeMessage(content.text)) ||
+					(content.type === "thinking" && canonicalizeMessage(content.thinking)),
 			).length;
 			if (visibleBlockCount > this.#lastVisibleBlockCount) {
 				this.#resetReadGroup();

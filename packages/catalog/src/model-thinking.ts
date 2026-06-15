@@ -219,7 +219,7 @@ export function deriveThinking<TApi extends Api>(spec: ModelSpec<TApi>, compat: 
  * through other request fields.
  */
 function omitsWireReasoningEffort(api: Api, compat: CompatOf<Api>): boolean {
-	if (api !== "openai-responses" && api !== "openai-codex-responses") {
+	if (api !== "openai-responses" && api !== "openai-codex-responses" && api !== "azure-openai-responses") {
 		return false;
 	}
 	return (compat as ResolvedOpenAIResponsesCompat | undefined)?.supportsReasoningEffort === false;
@@ -426,7 +426,11 @@ function inferFallbackEfforts<TApi extends Api>(spec: ModelSpec<TApi>, compat: C
 		return DEFAULT_REASONING_EFFORTS;
 	}
 	// OpenAI Responses APIs encode discrete effort levels, including xhigh.
-	if (spec.api === "openai-responses" || spec.api === "openai-codex-responses") {
+	if (
+		spec.api === "openai-responses" ||
+		spec.api === "openai-codex-responses" ||
+		spec.api === "azure-openai-responses"
+	) {
 		return DEFAULT_REASONING_EFFORTS_WITH_XHIGH;
 	}
 	return DEFAULT_REASONING_EFFORTS;

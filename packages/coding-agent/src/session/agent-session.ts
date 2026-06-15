@@ -46,7 +46,9 @@ import {
 	collectEntriesForBranchSummary,
 	collectShakeRegions,
 	compact,
+	createCompactionSummaryMessage,
 	DEFAULT_SHAKE_CONFIG,
+	effectiveReserveTokens,
 	estimateTokens,
 	generateBranchSummary,
 	generateHandoff,
@@ -200,6 +202,7 @@ import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool
 };
 import ttsrInterruptTemplate from "../prompts/system/ttsr-interrupt.md" with { type: "text" };
 import ttsrToolReminderTemplate from "../prompts/system/ttsr-tool-reminder.md" with { type: "text" };
+import unexpectedStopRetryTemplate from "../prompts/system/unexpected-stop-retry.md" with { type: "text" };
 import {
 	deobfuscateSessionContext,
 	obfuscateProviderContext,
@@ -268,6 +271,7 @@ import { EPHEMERAL_MODEL_CHANGE_ROLE } from "./session-entries";
 import type { SessionManager } from "./session-manager";
 import type { ShakeMode, ShakeResult } from "./shake-types";
 import { ToolChoiceQueue } from "./tool-choice-queue";
+import { classifyUnexpectedStop, isUnexpectedStopCandidate } from "./unexpected-stop-classifier";
 import { YieldQueue } from "./yield-queue";
 
 /** Session-specific events that extend the core AgentEvent */
@@ -306,14 +310,16 @@ export type AgentSessionEvent =
 			resolved?: Effort;
 	  }
 	| { type: "goal_updated"; goal: Goal | null; state?: GoalModeState };
-
 /** Listener function for agent session events */
 export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
+
+const UNEXPECTED_STOP_MAX_RETRIES = 3;
+const UNEXPECTED_STOP_TIMEOUT_MS = 4000;
+const EMPTY_STOP_MAX_RETRIES = 3;
+const RETRY_BACKOFF_MAX_DELAY_MS = 8_000;
 export type CommandMetadataChangedListener = () => void | Promise<void>;
 export type AsyncJobSnapshotItem = Pick<AsyncJob, "id" | "type" | "status" | "label" | "startTime">;
 
-const EMPTY_STOP_MAX_RETRIES = 3;
-const RETRY_BACKOFF_MAX_DELAY_MS = 8_000;
 const RETRY_BACKOFF_JITTER_RATIO = 0.25;
 /**
  * Hysteresis band for the post-shake "did we actually create headroom?" check.
@@ -1104,15 +1110,23 @@ export class AgentSession {
 	// `#emit(event)` that reaches external subscribers (rpc-mode stdout, ACP bridge,
 	// Cursor exec, TUI listeners) is held back. Without this, a client that resumes
 	// on `agent_end` can fire its next `prompt` before #promptWithMessage's finally
-	// has decremented #promptInFlightCount, hitting AgentBusyError. Flushed from
-	// both #endInFlight (normal) and #resetInFlight (abort).
+	#emptyStopRetryCount = 0;
+	#unexpectedStopRetryCount = 0;
+	#promptGeneration = 0;
 	#pendingAgentEndEmit: AgentSessionEvent | undefined;
+	#pendingProviderRequestNonMessageTokens: number | undefined = undefined;
+	#lastProviderUsageNonMessage:
+		| {
+				provider: AssistantMessage["provider"];
+				model: AssistantMessage["model"];
+				timestamp: AssistantMessage["timestamp"];
+				tokens: number;
+		  }
+		| undefined;
 	#obfuscator: SecretObfuscator | undefined;
 	#checkpointState: CheckpointState | undefined = undefined;
 	#pendingRewindReport: string | undefined = undefined;
 	#lastSuccessfulYieldToolCallId: string | undefined = undefined;
-	#emptyStopRetryCount = 0;
-	#promptGeneration = 0;
 	#providerSessionState = new Map<string, ProviderSessionState>();
 	#hindsightSessionState: HindsightSessionState | undefined = undefined;
 	readonly rawSseDebugBuffer: RawSseDebugBuffer;
@@ -1617,8 +1631,34 @@ export class AgentSession {
 	// Track last assistant message for auto-compaction check
 	#lastAssistantMessage: AssistantMessage | undefined = undefined;
 
-	/** Internal handler for agent events - shared by subscribe and reconnect */
+	/** Internal handler for agent events - shared by subscribe and reconnect.
+	 *
+	 * `agent_end` handling schedules deferred post-prompt recovery work
+	 * (compaction/handoff, context-promotion continuations). It is invoked
+	 * fire-and-forget by the agent's synchronous `#emit`, and only reaches
+	 * `#checkCompaction` after several internal awaits. `prompt()` runs
+	 * `#waitForPostPromptRecovery()` the instant `agent.prompt()` resolves — which
+	 * can land BEFORE the handler registers its tasks, so the wait would observe an
+	 * empty task set and return early, letting a deferred handoff/promotion race
+	 * prompt completion. Tracking the `agent_end` handler as a post-prompt task
+	 * that is registered SYNCHRONOUSLY (before the first await) closes that window:
+	 * `#postPromptTasksPromise` is set the moment `#emit` invokes this handler, so
+	 * the recovery wait always sees the in-flight handler and blocks until it — and
+	 * everything it schedules — settles. */
 	#handleAgentEvent = async (event: AgentEvent): Promise<void> => {
+		if (event.type !== "agent_end") {
+			return this.#processAgentEvent(event);
+		}
+		const { promise, resolve } = Promise.withResolvers<void>();
+		this.#trackPostPromptTask(promise);
+		try {
+			await this.#processAgentEvent(event);
+		} finally {
+			resolve();
+		}
+	};
+
+	#processAgentEvent = async (event: AgentEvent): Promise<void> => {
 		// Plan-mode → compaction transition: stamp `SILENT_ABORT_MARKER` on the
 		// persisted message BEFORE the obfuscator's display-side copy below.
 		// Invariant (must hold across refactors): this branch precedes the
@@ -1785,6 +1825,14 @@ export class AgentSession {
 			if (event.message.role === "assistant") {
 				this.#lastAssistantMessage = event.message;
 				const assistantMsg = event.message as AssistantMessage;
+				if (assistantMsg.stopReason !== "aborted" && assistantMsg.stopReason !== "error" && assistantMsg.usage) {
+					this.#lastProviderUsageNonMessage = {
+						provider: assistantMsg.provider,
+						model: assistantMsg.model,
+						timestamp: assistantMsg.timestamp,
+						tokens: this.#pendingProviderRequestNonMessageTokens ?? computeNonMessageTokens(this),
+					};
+				}
 				const currentGrantsAnthropicPriority =
 					this.serviceTier === "priority" || this.serviceTier === "claude-only";
 				if (assistantMsg.disabledFeatures?.includes("priority") && currentGrantsAnthropicPriority) {
@@ -1929,6 +1977,9 @@ export class AgentSession {
 			this.#lastSuccessfulYieldToolCallId = undefined;
 
 			if (await this.#handleEmptyAssistantStop(msg)) {
+				return;
+			}
+			if (await this.#handleUnexpectedAssistantStop(msg)) {
 				return;
 			}
 
@@ -4763,6 +4814,7 @@ export class AgentSession {
 			this.#todoReminderCount = 0;
 			this.#todoReminderAwaitingProgress = false;
 			this.#emptyStopRetryCount = 0;
+			this.#unexpectedStopRetryCount = 0;
 
 			await this.#maybeRestoreRetryFallbackPrimary();
 
@@ -4903,7 +4955,12 @@ export class AgentSession {
 			}
 
 			const agentPromptOptions = options?.toolChoice ? { toolChoice: options.toolChoice } : undefined;
-			await this.#promptAgentWithIdleRetry(messages, agentPromptOptions);
+			this.#pendingProviderRequestNonMessageTokens = computeNonMessageTokens(this);
+			try {
+				await this.#promptAgentWithIdleRetry(messages, agentPromptOptions);
+			} finally {
+				this.#pendingProviderRequestNonMessageTokens = undefined;
+			}
 			if (!options?.skipPostPromptRecoveryWait) {
 				await this.#waitForPostPromptRecovery(generation);
 			}
@@ -6423,6 +6480,37 @@ export class AgentSession {
 			let tokensBefore: number;
 			let details: unknown;
 
+			// Snapcompact runs locally first; if its frame archive plus the kept
+			// history still overflows the model window, fall back to an LLM summary
+			// (far cheaper than ~FRAME_TOKEN_ESTIMATE per frame).
+			let snapcompactResult: snapcompact.CompactionResult | undefined;
+			if (snapcompactReady) {
+				snapcompactResult = await snapcompact.compact(preparation, {
+					convertToLlm,
+					model: this.model,
+					shape: snapcompact.resolveShape(this.model, this.settings.get("snapcompact.shape")),
+					// Providers with hard image caps (OpenRouter: 8) silently drop
+					// frames past the cap — keep the archive within budget.
+					maxFrames: snapcompact.providerFrameBudget(this.model?.provider),
+				});
+				const ctxWindow = this.model?.contextWindow ?? 0;
+				const budget =
+					ctxWindow > 0
+						? ctxWindow - effectiveReserveTokens(ctxWindow, compactionSettings)
+						: Number.POSITIVE_INFINITY;
+				if (this.#projectSnapcompactContextTokens(preparation, snapcompactResult) > budget) {
+					logger.warn("Snapcompact still overflows the window; falling back to an LLM summary", {
+						model: this.model?.id,
+					});
+					this.emitNotice(
+						"warning",
+						"snapcompact could not bring the context under the limit — using an LLM summary instead",
+						"compaction",
+					);
+					snapcompactResult = undefined;
+				}
+			}
+
 			if (compactionPrep.kind === "fromHook") {
 				summary = compactionPrep.summary;
 				shortSummary = compactionPrep.shortSummary;
@@ -6430,15 +6518,7 @@ export class AgentSession {
 				tokensBefore = compactionPrep.tokensBefore;
 				details = compactionPrep.details;
 				preserveData = compactionPrep.preserveData;
-			} else if (snapcompactReady) {
-				const snapcompactResult = await snapcompact.compact(preparation, {
-					convertToLlm,
-					model: this.model,
-					shape: snapcompact.resolveShape(this.model, this.settings.get("snapcompact.shape")),
-					// Providers with hard image caps (OpenRouter: 8) silently drop
-					// frames past the cap — keep the archive within budget.
-					maxFrames: snapcompact.providerFrameBudget(this.model.provider),
-				});
+			} else if (snapcompactResult) {
 				summary = snapcompactResult.summary;
 				shortSummary = snapcompactResult.shortSummary;
 				firstKeptEntryId = snapcompactResult.firstKeptEntryId;
@@ -6746,14 +6826,48 @@ export class AgentSession {
 		return tokens;
 	}
 
+	#estimatePrePromptContextTokens(messages: AgentMessage[], contextWindow: number): number {
+		const currentUsage = this.getContextUsage({ contextWindow });
+		if (typeof currentUsage?.tokens !== "number" || !Number.isFinite(currentUsage.tokens)) {
+			return this.#estimatePendingPromptTokens(messages);
+		}
+
+		const currentEstimate = this.#estimateContextTokens();
+		if (!currentEstimate.providerAnchored) {
+			return this.#estimatePendingPromptTokens(messages);
+		}
+
+		let tokens = currentUsage.tokens;
+		if (currentEstimate.providerNonMessageTokens !== undefined) {
+			tokens += Math.max(0, computeNonMessageTokens(this) - currentEstimate.providerNonMessageTokens);
+		}
+		for (const message of messages) {
+			tokens += estimateTokens(message);
+		}
+		return tokens;
+	}
+
 	async #runPrePromptCompactionIfNeeded(messages: AgentMessage[]): Promise<void> {
 		const model = this.model;
 		if (!model) return;
 		const contextWindow = model.contextWindow ?? 0;
 		if (contextWindow <= 0) return;
 		const compactionSettings = this.settings.getGroup("compaction");
-		const contextTokens = this.#estimatePendingPromptTokens(messages);
+		const contextTokens = this.#estimatePrePromptContextTokens(messages, contextWindow);
 		if (!shouldCompact(contextTokens, contextWindow, compactionSettings)) return;
+
+		// Auto-promote first: switching to a larger-context model avoids compacting
+		// the history at all. The post-turn threshold path already promotes before
+		// compacting; without this, the pre-prompt path would pre-empt promotion and
+		// compact (snapcompact/summary) a session that should have just been promoted.
+		if (await this.#promoteContextModel()) {
+			logger.debug("Pre-prompt context promotion avoided compaction", {
+				contextTokens,
+				contextWindow,
+				model: `${model.provider}/${model.id}`,
+			});
+			return;
+		}
 
 		logger.debug("Pre-prompt context maintenance triggered by pending prompt size", {
 			contextTokens,
@@ -6987,6 +7101,71 @@ export class AgentSession {
 		return prompt.render(emptyStopRetryTemplate, {
 			retryCount: this.#emptyStopRetryCount,
 			maxRetries: EMPTY_STOP_MAX_RETRIES,
+		});
+	}
+	async #handleUnexpectedAssistantStop(assistantMessage: AssistantMessage): Promise<boolean> {
+		if (!this.settings.get("features.unexpectedStopDetection")) {
+			return false;
+		}
+		if (!isUnexpectedStopCandidate(assistantMessage)) {
+			this.#unexpectedStopRetryCount = 0;
+			return false;
+		}
+
+		const text = assistantMessage.content
+			.filter((content): content is TextContent => content.type === "text")
+			.map(content => content.text)
+			.join("\n");
+		if (!/\S/.test(text)) {
+			this.#unexpectedStopRetryCount = 0;
+			return false;
+		}
+
+		const controller = new AbortController();
+		const timeout = setTimeout(() => controller.abort(), UNEXPECTED_STOP_TIMEOUT_MS);
+		let classification: boolean | undefined;
+		try {
+			classification = await classifyUnexpectedStop(text, {
+				settings: this.settings,
+				registry: this.#modelRegistry,
+				sessionId: this.sessionId,
+				metadataResolver: (provider: string) => this.agent.metadataForProvider(provider),
+				signal: controller.signal,
+			});
+		} finally {
+			clearTimeout(timeout);
+		}
+
+		if (classification !== true) {
+			this.#unexpectedStopRetryCount = 0;
+			return false;
+		}
+
+		this.#unexpectedStopRetryCount++;
+		if (this.#unexpectedStopRetryCount > UNEXPECTED_STOP_MAX_RETRIES) {
+			logger.warn("Assistant returned unexpected stop after retry cap", {
+				attempts: this.#unexpectedStopRetryCount - 1,
+				model: assistantMessage.model,
+				provider: assistantMessage.provider,
+			});
+			this.#unexpectedStopRetryCount = 0;
+			return false;
+		}
+
+		this.agent.appendMessage({
+			role: "developer",
+			content: [{ type: "text", text: this.#unexpectedStopRetryReminder() }],
+			attribution: "agent",
+			timestamp: Date.now(),
+		});
+		this.#scheduleAgentContinue({ generation: this.#promptGeneration });
+		return true;
+	}
+
+	#unexpectedStopRetryReminder(): string {
+		return prompt.render(unexpectedStopRetryTemplate, {
+			retryCount: this.#unexpectedStopRetryCount,
+			maxRetries: UNEXPECTED_STOP_MAX_RETRIES,
 		});
 	}
 
@@ -7324,12 +7503,28 @@ export class AgentSession {
 	 * Returns true if promotion succeeded (caller should retry without compacting).
 	 */
 	async #tryContextPromotion(assistantMessage: AssistantMessage): Promise<boolean> {
+		const currentModel = this.model;
+		if (!currentModel) return false;
+		// The overflow/length error may have come from a model the user already
+		// switched away from; only promote when the failing turn was this model.
+		if (assistantMessage.provider !== currentModel.provider || assistantMessage.model !== currentModel.id)
+			return false;
+		return this.#promoteContextModel();
+	}
+
+	/**
+	 * Switch to a larger-context sibling when context promotion is enabled and a
+	 * target with a strictly larger window (and a usable key) exists. Returns true
+	 * when the model was switched, so the caller can retry without compacting.
+	 * Message-independent core shared by the post-turn overflow path
+	 * ({@link #tryContextPromotion}) and the pre-prompt threshold path
+	 * ({@link #runPrePromptCompactionIfNeeded}).
+	 */
+	async #promoteContextModel(): Promise<boolean> {
 		const promotionSettings = this.settings.getGroup("contextPromotion");
 		if (!promotionSettings.enabled) return false;
 		const currentModel = this.model;
 		if (!currentModel) return false;
-		if (assistantMessage.provider !== currentModel.provider || assistantMessage.model !== currentModel.id)
-			return false;
 		const contextWindow = currentModel.contextWindow ?? 0;
 		if (contextWindow <= 0) return false;
 		const targetModel = await this.#resolveContextPromotionTarget(currentModel, contextWindow);
@@ -7807,6 +8002,32 @@ export class AgentSession {
 	}
 
 	/**
+	 * Project the post-compaction context size of a snapcompact result: kept
+	 * recent messages + the summary message with its re-attached frames + the
+	 * fixed non-message overhead (system prompt + tools). Mirrors how the
+	 * compacted context is rebuilt, so the estimate matches the wire shape, and
+	 * lets the caller decide whether snapcompact brought the context under the
+	 * window or should fall back to an LLM summary.
+	 */
+	#projectSnapcompactContextTokens(preparation: CompactionPreparation, result: snapcompact.CompactionResult): number {
+		const archive = snapcompact.getPreservedArchive(result.preserveData);
+		const frames = archive ? snapcompact.images(archive) : undefined;
+		const summaryMessage = createCompactionSummaryMessage(
+			result.summary,
+			result.tokensBefore,
+			new Date().toISOString(),
+			result.shortSummary,
+			undefined,
+			frames,
+		);
+		let tokens = computeNonMessageTokens(this) + estimateTokens(summaryMessage);
+		for (const message of preparation.recentMessages) {
+			tokens += estimateTokens(message);
+		}
+		return tokens;
+	}
+
+	/**
 	 * Internal: Run auto-compaction with events.
 	 *
 	 * @param allowDefer If true (default), threshold-driven handoff strategy is allowed to
@@ -8018,6 +8239,39 @@ export class AgentSession {
 			let tokensBefore: number;
 			let details: unknown;
 
+			// Snapcompact runs locally first; if its frame archive plus the kept
+			// history still overflows the model window (frames are capped by the
+			// image budget and cost ~FRAME_TOKEN_ESTIMATE each), an LLM summary is
+			// far cheaper — downgrade to context-full and take the summarizer path.
+			let snapcompactResult: snapcompact.CompactionResult | undefined;
+			if (action === "snapcompact" && compactionPrep.kind !== "fromHook") {
+				snapcompactResult = await snapcompact.compact(preparation, {
+					convertToLlm,
+					model: this.model,
+					maxFrames: snapcompact.providerFrameBudget(this.model?.provider),
+				});
+				const ctxWindow = this.model?.contextWindow ?? 0;
+				const budget =
+					ctxWindow > 0
+						? ctxWindow - effectiveReserveTokens(ctxWindow, compactionSettings)
+						: Number.POSITIVE_INFINITY;
+				const projected = this.#projectSnapcompactContextTokens(preparation, snapcompactResult);
+				if (projected > budget) {
+					logger.warn("Snapcompact still overflows the window; falling back to an LLM summary", {
+						model: this.model?.id,
+						projected,
+						budget,
+					});
+					this.emitNotice(
+						"warning",
+						"snapcompact could not bring the context under the limit — using an LLM summary instead",
+						"compaction",
+					);
+					action = "context-full";
+					snapcompactResult = undefined;
+				}
+			}
+
 			if (compactionPrep.kind === "fromHook") {
 				summary = compactionPrep.summary;
 				shortSummary = compactionPrep.shortSummary;
@@ -8025,14 +8279,7 @@ export class AgentSession {
 				tokensBefore = compactionPrep.tokensBefore;
 				details = compactionPrep.details;
 				preserveData = compactionPrep.preserveData;
-			} else if (action === "snapcompact") {
-				// Local, deterministic: render discarded history onto PNG frames.
-				// No model candidates, no API key, no retry loop.
-				const snapcompactResult = await snapcompact.compact(preparation, {
-					convertToLlm,
-					model: this.model,
-					maxFrames: snapcompact.providerFrameBudget(this.model?.provider),
-				});
+			} else if (snapcompactResult) {
 				summary = snapcompactResult.summary;
 				shortSummary = snapcompactResult.shortSummary;
 				firstKeptEntryId = snapcompactResult.firstKeptEntryId;
@@ -10422,6 +10669,8 @@ export class AgentSession {
 	 */
 	#estimateContextTokens(): {
 		tokens: number;
+		providerAnchored: boolean;
+		providerNonMessageTokens?: number;
 	} {
 		const messages = this.messages;
 
@@ -10448,10 +10697,19 @@ export class AgentSession {
 			}
 			return {
 				tokens: estimated,
+				providerAnchored: false,
 			};
 		}
 
 		const usageTokens = calculatePromptTokens(lastUsage);
+		const providerNonMessage =
+			this.#lastProviderUsageNonMessage &&
+			messages[lastUsageIndex]?.role === "assistant" &&
+			this.#lastProviderUsageNonMessage.provider === (messages[lastUsageIndex] as AssistantMessage).provider &&
+			this.#lastProviderUsageNonMessage.model === (messages[lastUsageIndex] as AssistantMessage).model &&
+			this.#lastProviderUsageNonMessage.timestamp === (messages[lastUsageIndex] as AssistantMessage).timestamp
+				? this.#lastProviderUsageNonMessage.tokens
+				: undefined;
 		let trailingTokens = 0;
 		for (let i = lastUsageIndex + 1; i < messages.length; i++) {
 			trailingTokens += estimateTokens(messages[i]);
@@ -10459,6 +10717,8 @@ export class AgentSession {
 
 		return {
 			tokens: usageTokens + trailingTokens,
+			providerAnchored: true,
+			providerNonMessageTokens: providerNonMessage,
 		};
 	}
 

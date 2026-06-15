@@ -1,4 +1,5 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import type { ToolExample } from "@oh-my-pi/pi-ai";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { prompt } from "@oh-my-pi/pi-utils";
@@ -270,8 +271,20 @@ function getTaskTargets(phases: TodoPhase[], entry: TodoOpEntryValue, errors: st
 	return phases.flatMap(phase => phase.tasks);
 }
 
+/** Phase name for `init` given a flat `items` list with no explicit `phase`. */
+const DEFAULT_INIT_PHASE = "Tasks";
+
 function initPhases(entry: TodoOpEntryValue, errors: string[]): TodoPhase[] {
-	if (!entry.list) {
+	// Models routinely flatten the single-phase init into `{op:"init", items:[...]}`
+	// (optionally with a bare `phase`) instead of the canonical
+	// `list: [{phase, items}]`. Accept that shape by synthesizing a one-phase list
+	// so a common, recoverable mistake isn't a hard error.
+	const list =
+		entry.list ??
+		(entry.items && entry.items.length > 0
+			? [{ phase: entry.phase ?? DEFAULT_INIT_PHASE, items: entry.items }]
+			: undefined);
+	if (!list) {
 		errors.push("Missing list for init operation");
 		return [];
 	}
@@ -279,7 +292,7 @@ function initPhases(entry: TodoOpEntryValue, errors: string[]): TodoPhase[] {
 	// (every targeting op resolves the first match), so reject them up front.
 	const seenPhases = new Set<string>();
 	const seenTasks = new Set<string>();
-	for (const listEntry of entry.list) {
+	for (const listEntry of list) {
 		if (seenPhases.has(listEntry.phase)) {
 			errors.push(`Duplicate phase "${listEntry.phase}" in init list`);
 		}
@@ -291,7 +304,7 @@ function initPhases(entry: TodoOpEntryValue, errors: string[]): TodoPhase[] {
 			seenTasks.add(content);
 		}
 	}
-	return entry.list.map(listEntry => ({
+	return list.map(listEntry => ({
 		name: listEntry.phase,
 		tasks: listEntry.items.map<TodoItem>(content => ({ content, status: "pending" })),
 	}));
@@ -551,6 +564,71 @@ export class TodoTool implements AgentTool<typeof todoSchema, TodoToolDetails> {
 	readonly parameters = todoSchema;
 	readonly concurrency = "exclusive";
 	readonly strict = true;
+
+	readonly examples: readonly ToolExample<z.input<typeof todoSchema>>[] = [
+		{
+			caption: "Initial setup (multi-phase)",
+			call: {
+				ops: [
+					{
+						op: "init",
+						list: [
+							{ phase: "Foundation", items: ["Scaffold crate", "Wire workspace"] },
+							{ phase: "Auth", items: ["Port credential store", "Wire OAuth providers"] },
+							{ phase: "Verification", items: ["Run cargo test"] },
+						],
+					},
+				],
+			},
+		},
+		{
+			caption: "View current state (read-only)",
+			call: {
+				ops: [{ op: "view" }],
+			},
+		},
+		{
+			caption: "Initial setup (single phase)",
+			call: {
+				ops: [
+					{
+						op: "init",
+						list: [{ phase: "Implementation", items: ["Apply fix", "Run tests"] }],
+					},
+				],
+			},
+		},
+		{
+			caption: "Complete one task",
+			call: {
+				ops: [{ op: "done", task: "Wire workspace" }],
+			},
+		},
+		{
+			caption: "Complete a whole phase",
+			call: {
+				ops: [{ op: "done", phase: "Auth" }],
+			},
+		},
+		{
+			caption: "Remove all tasks",
+			call: {
+				ops: [{ op: "rm" }],
+			},
+		},
+		{
+			caption: "Drop one task",
+			call: {
+				ops: [{ op: "drop", task: "Run cargo test" }],
+			},
+		},
+		{
+			caption: "Append tasks to a phase",
+			call: {
+				ops: [{ op: "append", phase: "Auth", items: ["Handle retries", "Run tests"] }],
+			},
+		},
+	];
 	readonly loadMode = "discoverable";
 	constructor(private readonly session: ToolSession) {
 		this.description = prompt.render(todoDescription);
@@ -839,6 +917,7 @@ export const todoToolRenderer = {
 						expanded,
 						maxCollapsed: PREVIEW_LIMITS.COLLAPSED_ITEMS,
 						itemType: "todo",
+						truncateFrom: "start",
 						renderItem: todo => formatTodoLine(todo, uiTheme, "", completionKeys, spinnerFrame),
 					},
 					uiTheme,

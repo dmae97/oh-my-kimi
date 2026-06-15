@@ -58,12 +58,3 @@ budget → per-turn token budget
     {{#if py}}`budget.total` (ceiling or None), `budget.spent()`, `budget.remaining()` (math.inf when no ceiling), `budget.hard` (bool).{{/if}}{{#if js}}`await budget.total()` (ceiling or null), `await budget.spent()`, `await budget.remaining()` (Infinity when no ceiling), `await budget.hard()`.{{/if}} Ceiling comes from a `+Nk` directive (advisory) or `+Nk!`/Goal Mode (hard — `agent()` refuses to spawn past it); otherwise None/null, spend still tracked across the turn.
 ```
 </prelude>
-
-<example>
-{
-  "cells": [
-    { "language": "py", "title": "imports", "timeout": 10, "code": "import json\nfrom pathlib import Path" },
-    { "language": "py", "title": "load config", "code": "data = json.loads(read('package.json'))\ndisplay(data)" }
-  ]
-}
-</example>

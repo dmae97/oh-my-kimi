@@ -16,6 +16,7 @@ import {
 	type SimpleStreamOptions,
 	streamSimple,
 } from "@oh-my-pi/pi-ai";
+import type { ToolCallSyntax } from "@oh-my-pi/pi-ai/grammar";
 import {
 	getOpenAICodexTransportDetails,
 	prewarmOpenAICodexResponses,
@@ -548,6 +549,17 @@ export interface CreateAgentSessionResult {
 	lspServers?: LspStartupServerInfo[];
 	/** Shared event bus for tool/extension communication */
 	eventBus: EventBus;
+}
+
+export type ToolCallFormat = "auto" | "native" | ToolCallSyntax;
+
+export function resolveToolCallSyntax(
+	format: ToolCallFormat,
+	model: Pick<Model, "supportsTools"> | undefined,
+): ToolCallSyntax | undefined {
+	if (format === "native") return undefined;
+	if (format === "auto") return model?.supportsTools === false ? "glm" : undefined;
+	return format;
 }
 
 // Re-exports
@@ -2149,6 +2161,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				}
 				appendPrompt = parts.join("\n\n");
 			}
+			// Owned/in-band tool syntax (non-native) repeats the catalog as `# Tool:`
+			// sections; native tool calling lets the compact name list suffice.
+			const nativeTools =
+				resolveToolCallSyntax(settings.get("tools.format"), agent?.state.model ?? model) === undefined;
 			const defaultPrompt = await buildSystemPromptInternal({
 				cwd,
 				skills,
@@ -2160,6 +2176,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				skillsSettings: settings.getGroup("skills"),
 				appendSystemPrompt: appendPrompt,
 				repeatToolDescriptions,
+				nativeTools,
 				intentField,
 				mcpDiscoveryMode: hasDiscoverableTools,
 				mcpDiscoveryServerSummaries: discoverableToolSummary.servers.map(formatDiscoverableToolServerSummary),
@@ -2489,6 +2506,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				return result;
 			},
 			intentTracing: !!intentField,
+			toolCallSyntax: resolveToolCallSyntax(settings.get("tools.format"), model),
+			abortOnFabricatedToolResult: settings.get("tools.abortOnFabricatedResult"),
 			getToolChoice: () => session?.nextToolChoice(),
 			telemetry: options.telemetry,
 			appendOnlyContext: model

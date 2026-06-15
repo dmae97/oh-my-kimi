@@ -70,8 +70,7 @@ export interface LspServerInfo {
 export class WelcomeComponent implements Component {
 	#animStart: number | null = null;
 	#animTimer: ReturnType<typeof setInterval> | null = null;
-	/** Tip chosen once per instance so re-renders (intro, LSP updates) don't shuffle it. */
-	readonly #tip: string | undefined = TIPS.length > 0 ? TIPS[Math.floor(Math.random() * TIPS.length)] : undefined;
+	#selectedTip: string | undefined;
 	// Render cache: the welcome box is the first transcript-area component, so
 	// returning a stable array reference keeps the whole frame prefix stable.
 	// Bypassed while the intro animation runs (every frame differs).
@@ -85,6 +84,16 @@ export class WelcomeComponent implements Component {
 		private recentSessions: RecentSession[] = [],
 		private lspServers: LspServerInfo[] = [],
 	) {}
+	get tip(): string | undefined {
+		if (this.#selectedTip === undefined) {
+			if (theme.getSymbolPreset() === "unicode" && Math.random() < 0.1) {
+				this.#selectedTip = "Please use nerdfont 😭.";
+			} else {
+				this.#selectedTip = TIPS.length > 0 ? TIPS[Math.floor(Math.random() * TIPS.length)] : "";
+			}
+		}
+		return this.#selectedTip || undefined;
+	}
 
 	invalidate(): void {
 		this.#cachedWidth = -1;
@@ -316,8 +325,9 @@ export class WelcomeComponent implements Component {
 	 * when no tip is available or the box is too narrow to be useful.
 	 */
 	#renderTip(boxWidth: number): string[] {
-		if (!this.#tip) return [];
-		return renderWelcomeTip(this.#tip, boxWidth);
+		const tip = this.tip;
+		if (!tip) return [];
+		return renderWelcomeTip(tip, boxWidth);
 	}
 
 	/** Center text within a given width */

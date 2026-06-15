@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Agent, AgentBusyError } from "@oh-my-pi/pi-agent-core";
@@ -61,22 +61,38 @@ function compactNumber(value: number): string {
 }
 
 describe("InteractiveMode plan review rendering", () => {
+	// Per-test, mutated by tests (planMode flags, spies, model roles, dispose/recreate).
 	let tempDir: TempDir;
-	let authStorage: AuthStorage;
 	let session: AgentSession;
 	let mode: InteractiveMode;
+	// Shared across the whole describe: AuthStorage (a SQLite db) and ModelRegistry
+	// are the expensive pieces (~14ms/test combined) and tests only ever read from
+	// them — `find()` is a pure lookup over a model list frozen at construction, and
+	// the lone `setRuntimeApiKey` re-call is idempotent. Hoisting them out of
+	// `beforeEach` is the dominant body-time win.
+	let sharedTempDir: TempDir;
+	let authStorage: AuthStorage;
+	let modelRegistry: ModelRegistry;
 
-	beforeAll(() => {
+	beforeAll(async () => {
 		initTheme();
+		resetSettingsForTest();
+		sharedTempDir = TempDir.createSync("@pi-plan-review-shared-");
+		await Settings.init({ inMemory: true, cwd: sharedTempDir.path() });
+		authStorage = await AuthStorage.create(path.join(sharedTempDir.path(), "testauth.db"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		modelRegistry = new ModelRegistry(authStorage);
+	});
+
+	afterAll(() => {
+		authStorage?.close();
+		sharedTempDir?.removeSync();
 	});
 
 	beforeEach(async () => {
 		resetSettingsForTest();
 		tempDir = TempDir.createSync("@pi-plan-review-");
 		await Settings.init({ inMemory: true, cwd: tempDir.path() });
-		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
-		const modelRegistry = new ModelRegistry(authStorage);
 		const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
 		if (!model) {
 			throw new Error("Expected claude-sonnet-4-5 to exist in registry");
@@ -102,15 +118,12 @@ describe("InteractiveMode plan review rendering", () => {
 		vi.restoreAllMocks();
 		const currentMode = mode;
 		const currentSession = session;
-		const currentAuthStorage = authStorage;
 		const currentTempDir = tempDir;
 		mode = undefined as unknown as InteractiveMode;
 		session = undefined as unknown as AgentSession;
-		authStorage = undefined as unknown as AuthStorage;
 		tempDir = undefined as unknown as TempDir;
 		currentMode?.stop();
 		await currentSession?.dispose();
-		currentAuthStorage?.close();
 		currentTempDir?.removeSync();
 		setKeybindings(KeybindingsManager.inMemory());
 		resetSettingsForTest();
@@ -264,6 +277,9 @@ describe("InteractiveMode plan review rendering", () => {
 			return { hide: vi.fn() } as never;
 		});
 		let feedback = "";
+		// Resolve the instant the real $EDITOR subprocess commits its output back
+		// through onFeedbackChange — a deterministic signal, not a polled timer.
+		const { promise: editorApplied, resolve: markEditorApplied } = Promise.withResolvers<void>();
 
 		try {
 			Bun.env.EDITOR = editorPath;
@@ -272,7 +288,12 @@ describe("InteractiveMode plan review rendering", () => {
 				"# Plan\n\nIntro\n\n## Rollout\n\nSteps\n\n## Verify\n\nChecks\n",
 				"Plan mode - next step",
 				["Approve and execute", "Refine plan"],
-				{ onFeedbackChange: value => (feedback = value) },
+				{
+					onFeedbackChange: value => {
+						feedback = value;
+						if (value.includes("- include smoke test")) markEditorApplied();
+					},
+				},
 			);
 
 			expect(capturedOverlay).toBeDefined();
@@ -282,9 +303,8 @@ describe("InteractiveMode plan review rendering", () => {
 			overlay.handleInput("a");
 			for (const ch of "draft") overlay.handleInput(ch);
 			overlay.handleInput("\x05"); // ctrl+e
-			for (let i = 0; i < 50 && !feedback.includes("- include smoke test"); i++) {
-				await Bun.sleep(10);
-			}
+			// The subprocess is real; block on its commit signal instead of polling.
+			await editorApplied;
 			expect(feedback).toContain("## Rollout\n```md\n- add rollback command\n- include smoke test\n```");
 
 			overlay.handleInput("\x1b[B"); // Rollout -> Verify
@@ -407,7 +427,6 @@ describe("InteractiveMode plan review rendering", () => {
 		mode.stop();
 		await session.dispose();
 
-		const modelRegistry = new ModelRegistry(authStorage);
 		const executionModel = modelRegistry.find("anthropic", "claude-sonnet-4-5");
 		const planModel = modelRegistry.find("anthropic", "claude-opus-4-6");
 		if (!executionModel?.contextWindow || !planModel?.contextWindow) {
@@ -1160,21 +1179,16 @@ describe("InteractiveMode plan review rendering", () => {
 		});
 	}
 
-	it("B1: Approve and compact context + ok outcome → flag cleared by finally", async () => {
-		await approveWithCompact("ok");
-		expect(session.isPlanCompactAbortPending).toBe(false);
-	});
-
-	it("B2: Approve and compact context + cancelled outcome → flag cleared by finally even without aborted message_end", async () => {
-		await approveWithCompact("cancelled");
-		// The leak-guard contract: no aborted message_end consumed the flag,
-		// but `finally` still cleared it so the next real abort cannot be
-		// silenced.
-		expect(session.isPlanCompactAbortPending).toBe(false);
-	});
-
-	it("B3: Approve and compact context + failed outcome → flag cleared by finally", async () => {
-		await approveWithCompact("failed");
+	// B1-B3: every terminal compaction outcome must leave the flag cleared by
+	// `#approvePlan`'s `finally`. No aborted message_end is required to consume it,
+	// so a stranded flag could otherwise silence the next unrelated abort. One
+	// parametrized case per outcome keeps ok/cancelled/failed each covered.
+	it.each([
+		"ok",
+		"cancelled",
+		"failed",
+	] as const)("B1-B3: Approve and compact context + %s outcome → flag cleared by finally", async outcome => {
+		await approveWithCompact(outcome);
 		expect(session.isPlanCompactAbortPending).toBe(false);
 	});
 

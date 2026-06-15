@@ -2,6 +2,53 @@
 
 ## [Unreleased]
 
+## [15.13.3] - 2026-06-15
+
+### Added
+
+- Unexpected stop detection: optional tiny/smol classifier that continues the turn when the assistant says it will act but emits no tool calls.
+- Settings `features.unexpectedStopDetection` and `providers.unexpectedStopModel`.
+
+### Changed
+
+- Changed the `job` poll to return early when a steering message is queued, draining the steer immediately instead of waiting out the poll window.
+- Capped unexpected-stop auto-continuation to three retry attempts before giving up on repeated stops
+- Updated the `edit` tool's hashline prompt, grammar, and docs to recommend the `.=` inclusive range separator (`SWAP 1.=3:`); the legacy `..` form still parses.
+- Normalized all internal worker argv selectors under the `__omp_worker_` prefix, skipping the async worker dispatch check during normal CLI startup.
+
+### Fixed
+
+- Filtered out whitespace-only and dot-only (`.` or `…`) assistant blocks so they are treated as empty and no longer appear as visible content in message rendering, streaming reveal counts, or session export output
+- Filtered placeholder-only thinking content from ACP notifications and message visibility checks so dot-only `reasoning_content` no longer triggers turn completion or read/run updates
+- Fixed ModelRegistry tests making outbound network calls by automatically stubbing fetch during test execution.
+- Fixed `eval` JS cells (and browser-tab worker startup) always stalling for the full init timeout — typically the cell's whole 30s budget — before silently falling back to the slower inline worker. The self-dispatching CLI host imports the worker module dynamically from its argv dispatch, so the worker's own `parentPort.on("message")` attached only after Bun flushed the messages the parent posted before spawn; the synchronously-posted `init` handshake was dropped and never answered with `ready`. The host now installs a buffering `parentPort` inbox synchronously in the entry's sync prefix (before importing the worker module) and the worker binds it on load, replaying the buffered handshake. `omp --smoke-test` now also spawns the JS eval worker through the host entry and asserts it handshakes on a real worker thread.
+- Fixed pre-prompt context-full compaction on OpenAI Responses sessions to use provider-anchored context usage when available, so large encrypted reasoning signatures no longer trigger automatic maintenance while the visible context percentage remains below threshold ([#2628](https://github.com/can1357/oh-my-pi/issues/2628)).
+
+## [15.13.2] - 2026-06-15
+
+### Added
+
+- Added tool examples data to exported RPC session tool metadata, so tool dumps and other clients can receive model-call examples
+- Added `supportsTools` to model definitions and overrides so custom model configs can declare whether a model supports native tool calls
+- Added `tools.format` for choosing native tool calling or a specific owned in-band format (`glm`, `hermes`, `kimi`, `xml`), with `auto` falling back to GLM only for models marked as not supporting native tools.
+- Added a conditional easter-egg tip recommending nerd fonts when using the unicode symbol preset.
+- Added the `tools.abortOnFabricatedResult` setting (default on): with in-band tool calls, stop the model the moment it starts hallucinating a tool result mid-turn, or disable it to let the model finish and discard the fabricated continuation instead.
+
+### Changed
+
+- Changed `/dump` tool catalog output to render tools through the shared inventory renderer with readable TypeScript-style signatures and native-syntax `<examples>` blocks
+- Changed todo tool result rendering so that collapsed phases truncate from the beginning, showing the latest/active tasks and displaying the "more todos" summary at the top.
+- Expanded `tools.format` to support additional in-band tool-call syntaxes, including `anthropic`, `deepseek`, `harmony`, `pi`, and `qwen3`
+- Changed the 13 tools that documented hand-written `<examples>` blocks (`eval`, `browser`, `todo`, `irc`, `ssh`, `ast_edit`, `ast_grep`, `debug`, `find`, `inspect_image`, `ask`, plus the `patch`/`apply_patch` edit modes) to define examples as typed `examples` data on the tool (`ToolExample<z.input<typeof schema>>`); the AI layer now renders them in the model's native tool-call syntax and the markdown `<examples>` blocks were removed.
+- Changed the experimental owned tool-calling prompt from a GLM-only toggle to syntax-specific grammar prompts and result formats. `PI_OWNED_TOOLS=1` still forces GLM; `PI_OWNED_TOOLS=<syntax>` forces that syntax.
+- Changed the large-paste menu to offer attachment XML blocks (`<attachment>`), local-file attachments, or inline paste as explicit actions.
+- Changed the system-prompt tool inventory: moved the `# Inventory` block to the bottom of the TOOLS section, and it now renders a compact tool-name list only when native tool calling is active and tool descriptions are not repeated; otherwise it emits full `# Tool: <name>` sections.
+
+### Fixed
+
+- Fixed Auto-Promote Context being pre-empted by compaction: the pre-prompt context check ran compaction directly, so snapcompact (or any strategy) fired before promotion ever got a chance. It now tries promotion to a larger-context model first — mirroring the post-turn threshold path — and only compacts when no larger-context target is available. Snapcompact (auto and manual) also falls back to a context-full LLM summary when its frame archive plus kept history would still overflow the model's usable window, instead of leaving the session over the limit.
+- Fixed `eval` JS cells intermittently failing after ~15s with exit code 1 under load (e.g. `bun test --parallel`, where each file runs in a worker subprocess and the eval worker is nested). The host swallowed asynchronous worker spawn/load/crash failures — `new Worker` reports module-load errors via an async `error` event, not a synchronous throw, so the spawn `try/catch` (and its inline-worker fallback) never fired, and no `error`/`messageerror` listener was wired — leaving a dead worker indistinguishable from a slow one and blocking the full worker-init timeout. The init handshake now rejects immediately on a worker `error`/`messageerror` event and falls back to the inline worker, and the `ready` listener is attached synchronously after `new Worker` (Bun does not buffer messages posted before a listener exists) so a fast worker's `ready` can no longer be dropped.
+
 ## [15.13.1] - 2026-06-15
 
 ### Added

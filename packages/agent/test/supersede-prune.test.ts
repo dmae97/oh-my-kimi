@@ -503,3 +503,22 @@ describe("pruneToolOutputs — useless results", () => {
 		expect(resultText(result1)).toBe(NO_MATCH_TEXT);
 	});
 });
+
+describe("pruneToolOutputs — small-result floor", () => {
+	test("sub-floor results are left intact while a large neighbor is pruned", () => {
+		// "ok" is ~1 token: blanking it to `[Output truncated - 1 tokens]` would
+		// grow the context, so the floor must keep it. The large neighbor still prunes.
+		const [tinyCall, tinyResult] = readPair("src/tiny.ts", "ok", T0);
+		const [bigCall, bigResult] = readPair("src/big.ts", FILE_CONTENT, T0 + 1_000);
+		const entries: SessionEntry[] = [tinyCall, tinyResult, bigCall, bigResult];
+
+		// Protect window empty and zero savings threshold: only size keeps the tiny one.
+		const result = pruneToolOutputs(entries, { protectTokens: 0, minimumSavings: 0, protectedTools: [] });
+
+		expect(result.prunedCount).toBe(1);
+		expect(resultText(tinyResult)).toBe("ok");
+		expect(resultMessage(tinyResult).prunedAt).toBeUndefined();
+		expect(resultText(bigResult)).toMatch(/^\[Output truncated - \d+ tokens\]$/);
+		expect(resultMessage(bigResult).prunedAt).toBeDefined();
+	});
+});

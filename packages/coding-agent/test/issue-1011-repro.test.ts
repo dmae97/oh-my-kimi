@@ -27,7 +27,7 @@ describe("issue #1011 — tab worker must re-enter the CLI entrypoint", () => {
 	const packageDir = path.resolve(import.meta.dir, "..");
 	const supervisorPath = path.join(packageDir, "src/tools/browser/tab-supervisor.ts");
 	const buildBinaryPath = path.join(packageDir, "scripts/build-binary.ts");
-	const workerArg = "__omp_tab_worker";
+	const workerArg = "__omp_worker_tab";
 
 	it("tab-supervisor re-enters the worker-host entry with the argv selector", async () => {
 		const source = await Bun.file(supervisorPath).text();

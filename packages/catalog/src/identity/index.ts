@@ -7,3 +7,4 @@ export * from "./markers";
 export * from "./priority";
 export * from "./reference";
 export * from "./selection";
+export * from "./tool-syntax";

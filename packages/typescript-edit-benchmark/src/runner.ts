@@ -9,7 +9,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { formatHashlineHeader, InMemorySnapshotStore } from "@oh-my-pi/hashline";
 import type { AgentMessage, ResolvedThinkingLevel, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { Model } from "@oh-my-pi/pi-ai";
+import type { Model, ToolExample } from "@oh-my-pi/pi-ai";
 import { formatSessionDumpText, RpcClient } from "@oh-my-pi/pi-coding-agent";
 import { prompt } from "@oh-my-pi/pi-utils";
 import { diffLines } from "diff";
@@ -37,7 +37,7 @@ type ConversationDumpSessionState = {
 	systemPrompt?: string[];
 	model?: Model;
 	thinkingLevel?: ThinkingLevel | undefined;
-	dumpTools?: Array<{ name: string; description: string; parameters: unknown }>;
+	dumpTools?: Array<{ name: string; description: string; parameters: unknown; examples?: readonly ToolExample[] }>;
 };
 
 /** Common interface for both RPC and in-process clients */
@@ -103,7 +103,7 @@ type ConversationDumpSnapshot = {
 	systemPrompt?: string[];
 	model?: Model;
 	thinkingLevel?: ThinkingLevel | undefined;
-	dumpTools?: Array<{ name: string; description: string; parameters: unknown }>;
+	dumpTools?: Array<{ name: string; description: string; parameters: unknown; examples?: readonly ToolExample[] }>;
 };
 
 function sanitizeDumpPathSegment(value: string): string {
@@ -780,10 +780,16 @@ export interface ToolCallStats {
 	totalInputChars: number;
 }
 
+interface PendingEditCall {
+	args: unknown;
+	rawBlock?: string;
+}
+
 export interface EditFailure {
 	toolCallId: string;
 	args: unknown;
 	error: string;
+	rawBlock?: string;
 	category?: EditFailureCategory;
 }
 
@@ -1196,9 +1202,16 @@ async function runSingleTask(
 					});
 					break;
 				}
-				const pendingEdits = new Map<string, unknown>();
-
+				const pendingEdits = new Map<string, PendingEditCall>();
+				const rawToolBlocks = new Map<string, string>();
 				for (const event of events) {
+					if (event.type === "message_end") {
+						for (const raw of extractAssistantToolRawBlocks(event)) {
+							rawToolBlocks.set(raw.id, raw.rawBlock);
+							const pending = pendingEdits.get(raw.id);
+							if (pending) pending.rawBlock = raw.rawBlock;
+						}
+					}
 					if (event.type === "tool_execution_start") {
 						const e = event as { toolName?: string; toolCallId?: string; args?: unknown };
 						const toolName = e.toolName;
@@ -1206,7 +1219,8 @@ async function runSingleTask(
 							toolStats.read++;
 						} else if (isEditTool(toolName)) {
 							toolStats.edit++;
-							if (e.toolCallId) pendingEdits.set(e.toolCallId, e.args);
+							if (e.toolCallId)
+								pendingEdits.set(e.toolCallId, { args: e.args, rawBlock: rawToolBlocks.get(e.toolCallId) });
 						} else if (toolName === "write") {
 							toolStats.write++;
 						}
@@ -1218,7 +1232,8 @@ async function runSingleTask(
 					} else if (event.type === "tool_execution_end") {
 						const e = event as { toolName?: string; toolCallId?: string; isError?: boolean; result?: unknown };
 						if (isEditTool(e.toolName) && e.toolCallId && pendingEdits.has(e.toolCallId)) {
-							const args = pendingEdits.get(e.toolCallId) ?? null;
+							const pendingEdit = pendingEdits.get(e.toolCallId) ?? { args: null };
+							const args = pendingEdit.args;
 							pendingEdits.delete(e.toolCallId);
 							if (config.editVariant === "hashline" && args) {
 								const counts = countHashlineEditSubtypes(args);
@@ -1238,6 +1253,7 @@ async function runSingleTask(
 									toolCallId: e.toolCallId,
 									args,
 									error,
+									rawBlock: pendingEdit.rawBlock,
 									category: categorizeEditFailure(error, args),
 								});
 							} else {
@@ -1408,6 +1424,27 @@ function extractToolErrorMessage(result: unknown): string {
 	} catch {
 		return "Unknown error";
 	}
+}
+
+function extractAssistantToolRawBlocks(event: {
+	type: string;
+	[key: string]: unknown;
+}): Array<{ id: string; rawBlock: string }> {
+	const message = event.message;
+	if (message === null || typeof message !== "object") return [];
+	const role = (message as { role?: unknown }).role;
+	if (role !== "assistant") return [];
+	const content = (message as { content?: unknown }).content;
+	if (!Array.isArray(content)) return [];
+	const rawBlocks: Array<{ id: string; rawBlock: string }> = [];
+	for (const block of content) {
+		if (block === null || typeof block !== "object") continue;
+		const typedBlock = block as { type?: unknown; id?: unknown; rawBlock?: unknown };
+		if (typedBlock.type !== "toolCall") continue;
+		if (typeof typedBlock.id !== "string" || typeof typedBlock.rawBlock !== "string") continue;
+		rawBlocks.push({ id: typedBlock.id, rawBlock: typedBlock.rawBlock });
+	}
+	return rawBlocks;
 }
 
 function shuffle<T>(items: T[]): T[] {

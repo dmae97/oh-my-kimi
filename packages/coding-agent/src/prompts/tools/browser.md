@@ -37,27 +37,6 @@ Drives real Chromium tab; full puppeteer access via JS execution.
 - `code` runs with full Node access. Treat as your code, not sandboxed code.
 </critical>
 
-<examples>
-# Open a tab and read structured page data
-`{"action":"open","name":"docs","url":"https://example.com"}`
-`{"action":"run","name":"docs","code":"const obs = await tab.observe(); display(obs); return obs.elements.length;"}`
-
-# Click an observed element by id
-`{"action":"run","name":"docs","code":"const obs = await tab.observe(); const link = obs.elements.find(e => e.role === 'link' && e.name === 'Sign in'); assert(link, 'Sign in link missing'); await (await tab.id(link.id)).click();"}`
-
-# Fill and submit a form via selectors
-`{"action":"run","name":"docs","code":"await tab.fill('input[name=email]', 'me@example.com'); await tab.click('text/Continue');"}`
-
-# Screenshot to look at the page — no save path
-`{"action":"run","name":"docs","code":"await tab.screenshot();"}`
-
-# Attach to an existing Electron app
-`{"action":"open","name":"cursor","app":{"path":"/Applications/Cursor.app/Contents/MacOS/Cursor"}}`
-
-# Close every tab and kill spawned-app processes
-`{"action":"close","all":true,"kill":true}`
-</examples>
-
 <output>
 Per call: `display(value)` outputs (text/images), then the JSON-stringified return value of `code`. `run` always produces at least a status line.
 </output>

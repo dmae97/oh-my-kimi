@@ -8,7 +8,7 @@
  * in the parent's address space and crashed the CLI on exit.
  *
  * The fix relocates the worker to a child process: `title-client.ts` spawns
- * `process.execPath … --tiny-worker`, `cli.ts` dispatches that flag into
+ * `process.execPath … __omp_tiny_inference`, `cli.ts` dispatches that flag into
  * `runTinyWorker`, and the parent `SIGKILL`s the child on dispose so the
  * native finalizer never runs in either address space. These tests pin the
  * three pieces of that contract so a future refactor cannot quietly land

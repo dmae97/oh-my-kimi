@@ -53,7 +53,7 @@ import { cursorModelManagerOptions, zaiModelManagerOptions } from "./special";
 export const CATALOG_PROVIDERS = [
 	{
 		id: "aimlapi",
-		defaultModel: "gpt-4o",
+		defaultModel: "gpt-5.5-2026-04-23",
 		envVars: ["AIMLAPI_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => aimlApiModelManagerOptions(config),
 		dynamicModelsAuthoritative: true,
@@ -61,7 +61,7 @@ export const CATALOG_PROVIDERS = [
 	},
 	{
 		id: "alibaba-coding-plan",
-		defaultModel: "qwen3.5-plus",
+		defaultModel: "qwen3.7-plus",
 		envVars: ["ALIBABA_CODING_PLAN_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => alibabaCodingPlanModelManagerOptions(config),
 		catalogDiscovery: { label: "Alibaba Coding Plan" },
@@ -76,22 +76,27 @@ export const CATALOG_PROVIDERS = [
 		createModelManagerOptions: (config: ModelManagerConfig) => anthropicModelManagerOptions(config),
 	},
 	{
+		id: "azure",
+		defaultModel: "gpt-5.5",
+		envVars: ["AZURE_OPENAI_API_KEY"],
+	},
+	{
 		id: "cerebras",
-		defaultModel: "zai-glm-4.6",
+		defaultModel: "zai-glm-4.7",
 		envVars: ["CEREBRAS_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => cerebrasModelManagerOptions(config),
 		catalogDiscovery: { label: "Cerebras" },
 	},
 	{
 		id: "cloudflare-ai-gateway",
-		defaultModel: "claude-sonnet-4-5",
+		defaultModel: "anthropic/claude-opus-4-8",
 		envVars: ["CLOUDFLARE_AI_GATEWAY_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => cloudflareAiGatewayModelManagerOptions(config),
 		catalogDiscovery: { label: "Cloudflare AI Gateway" },
 	},
 	{
 		id: "cursor",
-		defaultModel: "claude-sonnet-4-6",
+		defaultModel: "claude-4.6-opus-high",
 		envVars: ["CURSOR_ACCESS_TOKEN"],
 		createModelManagerOptions: (config: ModelManagerConfig) => cursorModelManagerOptions(config),
 		catalogDiscovery: { label: "Cursor", envVars: ["CURSOR_API_KEY"], oauthProvider: "cursor" },
@@ -111,25 +116,25 @@ export const CATALOG_PROVIDERS = [
 	},
 	{
 		id: "fireworks",
-		defaultModel: "kimi-k2.6",
+		defaultModel: "kimi-k2.7-code",
 		envVars: ["FIREWORKS_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => fireworksModelManagerOptions(config),
 		catalogDiscovery: { label: "Fireworks" },
 	},
 	{
 		id: "github-copilot",
-		defaultModel: "gpt-4o",
+		defaultModel: "gpt-5.5",
 		envVars: ["COPILOT_GITHUB_TOKEN"],
 		createModelManagerOptions: (config: ModelManagerConfig) => githubCopilotModelManagerOptions(config),
 	},
 	{
 		id: "gitlab-duo",
-		defaultModel: "duo-chat-sonnet-4-5",
+		defaultModel: "duo-chat-opus-4-6",
 		envVars: ["GITLAB_TOKEN"],
 	},
 	{
 		id: "google",
-		defaultModel: "gemini-2.5-pro",
+		defaultModel: "gemini-3.1-pro-preview",
 		envVars: ["GEMINI_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => googleModelManagerOptions(config),
 	},
@@ -140,12 +145,12 @@ export const CATALOG_PROVIDERS = [
 	},
 	{
 		id: "google-gemini-cli",
-		defaultModel: "gemini-2.5-pro",
+		defaultModel: "gemini-3.1-pro-preview",
 		specialModelManager: true,
 	},
 	{
 		id: "google-vertex",
-		defaultModel: "gemini-3-pro-preview",
+		defaultModel: "gemini-3.1-pro-preview",
 		createModelManagerOptions: (config: ModelManagerConfig) => googleVertexModelManagerOptions(config),
 		allowUnauthenticated: true,
 	},
@@ -164,14 +169,14 @@ export const CATALOG_PROVIDERS = [
 	},
 	{
 		id: "kilo",
-		defaultModel: "anthropic/claude-sonnet-4.5",
+		defaultModel: "anthropic/claude-opus-4.8",
 		envVars: ["KILO_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => kiloModelManagerOptions(config),
 		catalogDiscovery: { label: "Kilo Gateway", allowUnauthenticated: true },
 	},
 	{
 		id: "kimi-code",
-		defaultModel: "kimi-k2.5",
+		defaultModel: "kimi-for-coding",
 		createModelManagerOptions: (config: ModelManagerConfig) => kimiCodeModelManagerOptions(config),
 		catalogDiscovery: { label: "Kimi Code", envVars: ["KIMI_API_KEY"] },
 	},
@@ -212,7 +217,7 @@ export const CATALOG_PROVIDERS = [
 	},
 	{
 		id: "moonshot",
-		defaultModel: "kimi-k2.5",
+		defaultModel: "kimi-k2.7-code",
 		envVars: ["MOONSHOT_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => moonshotModelManagerOptions(config),
 		catalogDiscovery: { label: "Moonshot" },
@@ -259,13 +264,13 @@ export const CATALOG_PROVIDERS = [
 	},
 	{
 		id: "opencode-go",
-		defaultModel: "kimi-k2.5",
+		defaultModel: "kimi-k2.7-code",
 		envVars: ["OPENCODE_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => opencodeGoModelManagerOptions(config),
 	},
 	{
 		id: "opencode-zen",
-		defaultModel: "claude-sonnet-4-6",
+		defaultModel: "claude-opus-4-8",
 		envVars: ["OPENCODE_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => opencodeZenModelManagerOptions(config),
 	},
@@ -303,7 +308,7 @@ export const CATALOG_PROVIDERS = [
 	},
 	{
 		id: "together",
-		defaultModel: "moonshotai/Kimi-K2.5",
+		defaultModel: "moonshotai/Kimi-K2.7-Code",
 		envVars: ["TOGETHER_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => togetherModelManagerOptions(config),
 		catalogDiscovery: { label: "Together" },
@@ -317,7 +322,7 @@ export const CATALOG_PROVIDERS = [
 	},
 	{
 		id: "vercel-ai-gateway",
-		defaultModel: "anthropic/claude-sonnet-4-6",
+		defaultModel: "anthropic/claude-opus-4.8",
 		envVars: ["AI_GATEWAY_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => vercelAiGatewayModelManagerOptions(config),
 		catalogDiscovery: {
@@ -396,7 +401,7 @@ export const CATALOG_PROVIDERS = [
 	},
 	{
 		id: "zai",
-		defaultModel: "glm-5.1",
+		defaultModel: "glm-5.2",
 		envVars: ["ZAI_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => zaiModelManagerOptions(config),
 		catalogDiscovery: { label: "zAI" },
@@ -410,7 +415,7 @@ export const CATALOG_PROVIDERS = [
 	},
 	{
 		id: "zhipu-coding-plan",
-		defaultModel: "glm-5.1",
+		defaultModel: "glm-5.2",
 		envVars: ["ZHIPU_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => zhipuCodingPlanModelManagerOptions(config),
 		catalogDiscovery: { label: "Zhipu Coding Plan" },

@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [15.13.3] - 2026-06-15
+
+### Added
+
+- Added `installWorkerInbox(port)` / `consumeWorkerInbox()` to `@oh-my-pi/pi-utils/worker-host`. A self-dispatching CLI host that imports a Bun worker module dynamically attaches the worker's real `message` listener after Bun flushes the messages the parent posted before spawn, dropping a synchronously-posted `init`. The host installs this buffering inbox synchronously in the entry's sync prefix so a listener exists at flush time; the worker module consumes it and binds the real handler, replaying anything buffered.
+
 ## [15.13.1] - 2026-06-15
 
 ### Added

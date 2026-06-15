@@ -43,13 +43,13 @@ export class WorkerCore {
 	constructor(transport: Transport) {
 		this.#transport = transport;
 		this.#unsubscribe = transport.onMessage(msg => this.#handle(msg));
-		transport.send({ type: "ready" });
 	}
 
 	#handle(msg: WorkerInbound): void {
 		switch (msg.type) {
 			case "init":
 				this.#ensureRuntime(msg.snapshot);
+				this.#transport.send({ type: "ready" });
 				return;
 			case "run":
 				void this.#runOne(msg.runId, msg.code, msg.filename, msg.snapshot);

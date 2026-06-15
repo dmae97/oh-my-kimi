@@ -1,13 +1,13 @@
 /**
- * Expand deferred block edits (`replace block N:` / `delete block N` /
- * `insert after block N:`) into concrete inserts + deletes.
+ * Expand deferred block edits (`replace_block N:` / `delete_block N` /
+ * `insert_after_block N:`) into concrete inserts + deletes.
  *
  * The hashline parser cannot expand a block edit on its own — the line span is
  * unknown until file text + path (→ language) are available. This transform
  * runs at every apply/preview boundary that has text: it calls the injected
  * {@link BlockResolver} to resolve each block's `[start, end]` span, then emits
  * the exact same edits the concrete form produces in the parser: `replace
- * start..end:` inserts + deletes for a replace, a pure range delete for a
+ * start.=end:` inserts + deletes for a replace, a pure range delete for a
  * delete, and plain `after_anchor` inserts at `end` for an insert-after. After
  * it runs, no `block` edits remain, so {@link applyEdits} (and recovery) only
  * ever see resolved edits.
@@ -29,7 +29,7 @@ export interface ResolveBlockEditsOptions {
 	 * `blockUnresolvedMessage` error — used by the authoritative apply + final
 	 * preview paths. `"drop"` silently skips the edit — used by the streaming
 	 * preview, where a half-written file or transient parse error must not
-	 * throw. Unresolvable `insert after block N:` edits never reach this: they
+	 * throw. Unresolvable `insert_after_block N:` edits never reach this: they
 	 * are lowered to plain `insert after N:` with a warning.
 	 */
 	onUnresolved?: "throw" | "drop";
@@ -42,7 +42,7 @@ export interface ResolveBlockEditsOptions {
 	onResolved?: (resolution: BlockResolution) => void;
 	/**
 	 * Invoked once per diagnostic produced while resolving — currently the
-	 * `insert after block N:` lowerings (closer anchor or unresolvable block).
+	 * `insert_after_block N:` lowerings (closer anchor or unresolvable block).
 	 * Hosts should surface these on the apply result's `warnings`.
 	 */
 	onWarning?: (message: string) => void;
@@ -82,7 +82,7 @@ export function resolveBlockEdits(
 		const op = edit.mode === "insert_after" ? "insert_after" : edit.payloads.length === 0 ? "delete" : "replace";
 		const span = resolver ? resolver({ path, text, line: edit.anchor.line }) : null;
 		if (span === null) {
-			// `insert after block N:` never fails the patch — lower it to plain
+			// `insert_after_block N:` never fails the patch — lower it to plain
 			// `insert after N:` with a warning instead. Two flavors:
 			// - anchored on a pure closing-delimiter line: no block begins
 			//   there, but line N IS the end of one, and "after the end of the
@@ -145,10 +145,10 @@ export function resolveBlockEdits(
 			}
 			continue;
 		}
-		// Mirror the parser's `replace start..end:` expansion exactly: one
+		// Mirror the parser's `replace start.=end:` expansion exactly: one
 		// `before_anchor` replacement insert per payload row at `span.start`,
 		// then one delete per line across `[span.start, span.end]`. An empty
-		// `payloads` (from `delete block N`) emits no inserts — a pure deletion.
+		// `payloads` (from `delete_block N`) emits no inserts — a pure deletion.
 		for (const payload of edit.payloads) {
 			const cursor: Cursor = { kind: "before_anchor", anchor: { line: span.start } };
 			resolved.push({

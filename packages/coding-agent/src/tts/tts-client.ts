@@ -142,7 +142,7 @@ const SMOKE_TEST_TIMEOUT_MS = 30_000;
  * Hidden subcommand on the main CLI that boots the TTS worker in the spawned
  * subprocess. Kept in sync with the dispatch in `cli.ts` (Main-owned).
  */
-export const TTS_WORKER_ARG = "__omp_tts_worker";
+export const TTS_WORKER_ARG = "__omp_worker_tts";
 
 function readTinyModelSetting(path: "providers.tinyModelDevice" | "providers.tinyModelDtype"): string | undefined {
 	try {

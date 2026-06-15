@@ -796,6 +796,7 @@ export async function runRpcMode(
 						name: tool.name,
 						description: tool.description,
 						parameters: isZodSchema(tool.parameters) ? zodToWireSchema(tool.parameters) : tool.parameters,
+						examples: tool.examples,
 					})),
 					contextUsage: session.getContextUsage(),
 				};

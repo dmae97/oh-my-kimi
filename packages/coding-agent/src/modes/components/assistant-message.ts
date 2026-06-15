@@ -4,7 +4,7 @@ import type { AssistantThinkingRenderer } from "../../extensibility/extensions/t
 import { getMarkdownTheme, theme } from "../../modes/theme/theme";
 import { resolveAbortLabel, shouldRenderAbortReason } from "../../session/messages";
 import { getPreviewLines, resolveImageOptions, TRUNCATE_LENGTHS } from "../../tools/render-utils";
-import { getVisibleThinkingText, hasVisibleThinking } from "../../utils/thinking-display";
+import { canonicalizeMessage } from "../../utils/thinking-display";
 
 /**
  * Max lines of a turn-ending provider error rendered inline in the transcript.
@@ -232,9 +232,10 @@ export class AssistantMessageComponent extends Container {
 		const parts: string[] = [`htb:${this.hideThinkingBlock ? 1 : 0}`];
 		for (const content of message.content) {
 			if (content.type === "text") {
-				parts.push(content.text.trim() ? "T1" : "T0");
+				parts.push(canonicalizeMessage(content.text) ? "T1" : "T0");
 			} else if (content.type === "thinking") {
-				if (!hasVisibleThinking(content)) parts.push("K0");
+				const canon = canonicalizeMessage(content.thinking);
+				if (!canon) parts.push("K0");
 				else if (this.hideThinkingBlock) parts.push("KH");
 				else parts.push("KV");
 			} else {
@@ -267,7 +268,8 @@ export class AssistantMessageComponent extends Container {
 			for (const item of this.#fastPathItems) {
 				if (item.blockType === "thinking") {
 					const content = message.content[item.contentIndex];
-					if (content?.type === "thinking" && getVisibleThinkingText(content) !== item.lastText) return false;
+					if (content?.type === "thinking" && canonicalizeMessage(content.thinking) !== item.lastText)
+						return false;
 				}
 			}
 		}
@@ -291,13 +293,17 @@ export class AssistantMessageComponent extends Container {
 		for (const item of this.#fastPathItems) {
 			item.md.transientRenderCache = transient;
 			const content = message.content[item.contentIndex];
+			if (!content) {
+				this.#fastPathKey = undefined;
+				this.#fastPathItems = undefined;
+				return false;
+			}
 			let newText: string;
-			if (item.blockType === "text" && content?.type === "text") {
+			if (item.blockType === "text" && content.type === "text") {
 				newText = content.text.trim();
-			} else if (item.blockType === "thinking" && content?.type === "thinking") {
-				newText = getVisibleThinkingText(content);
+			} else if (item.blockType === "thinking" && content.type === "thinking") {
+				newText = canonicalizeMessage(content.thinking);
 			} else {
-				// Block at this index is gone or changed type (index shift) — fail closed.
 				this.#fastPathKey = undefined;
 				this.#fastPathItems = undefined;
 				return false;
@@ -329,24 +335,23 @@ export class AssistantMessageComponent extends Container {
 
 		const hasVisibleContent = message.content.some(
 			c =>
-				(c.type === "text" && c.text.trim()) ||
-				(!this.hideThinkingBlock && c.type === "thinking" && hasVisibleThinking(c)),
+				(c.type === "text" && canonicalizeMessage(c.text)) ||
+				(!this.hideThinkingBlock && c.type === "thinking" && canonicalizeMessage(c.thinking)),
 		);
 
 		// Render content in order
 		let thinkingIndex = 0;
 		for (let i = 0; i < message.content.length; i++) {
 			const content = message.content[i];
-			if (content.type === "text" && content.text.trim()) {
-				// Assistant text messages with no background - trim the text
+			if (content.type === "text" && canonicalizeMessage(content.text)) {
 				// Set paddingY=0 to avoid extra spacing before tool executions
 				const trimmed = content.text.trim();
 				const md = new Markdown(trimmed, 1, 0, getMarkdownTheme());
 				md.transientRenderCache = this.#lastUpdateTransient;
 				this.#contentContainer.addChild(md);
 				captureItems?.push({ md, contentIndex: i, blockType: "text", lastText: trimmed });
-			} else if (content.type === "thinking" && hasVisibleThinking(content)) {
-				const thinkingText = getVisibleThinkingText(content);
+			} else if (content.type === "thinking" && canonicalizeMessage(content.thinking)) {
+				const thinkingText = canonicalizeMessage(content.thinking);
 				if (this.hideThinkingBlock) {
 					thinkingIndex += 1;
 					continue;
@@ -355,7 +360,11 @@ export class AssistantMessageComponent extends Container {
 				// This avoids a superfluous blank line before separately-rendered tool execution blocks.
 				const hasVisibleContentAfter = message.content
 					.slice(i + 1)
-					.some(c => (c.type === "text" && c.text.trim()) || (c.type === "thinking" && hasVisibleThinking(c)));
+					.some(
+						c =>
+							(c.type === "text" && canonicalizeMessage(c.text)) ||
+							(c.type === "thinking" && canonicalizeMessage(c.thinking)),
+					);
 
 				// Thinking traces in thinkingText color, italic
 				const md = new Markdown(thinkingText, 1, 0, getMarkdownTheme(), {

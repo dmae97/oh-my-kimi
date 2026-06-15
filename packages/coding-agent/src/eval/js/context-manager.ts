@@ -27,6 +27,7 @@ interface WorkerHandle {
 	mode: "worker" | "inline";
 	send(msg: WorkerInbound): void;
 	onMessage(handler: (msg: WorkerOutbound) => void): () => void;
+	onError(handler: (error: Error) => void): () => void;
 	close(): Promise<boolean>;
 	terminate(): Promise<void>;
 }
@@ -59,6 +60,22 @@ const resettingSessions = new Map<string, Promise<void>>();
 // SIGILL/SIGSEGV. Callers that pass a larger per-cell budget still dominate.
 const WORKER_INIT_TIMEOUT_MS = 15_000;
 const WORKER_CLOSE_TIMEOUT_MS = 1_000;
+// Active graceful-close grace period before a worker that ack'd `close` but never
+// emitted its `close` event is force-terminated. Defaults to the production floor;
+// tests override it (and restore it) to exercise the close-timeout -> terminate
+// path without a real wall-clock wait.
+let workerCloseTimeoutMs: number = WORKER_CLOSE_TIMEOUT_MS;
+
+/**
+ * Test-only seam: override the graceful-close grace period (ms). Returns the
+ * previous value so callers can restore it. Production always uses
+ * {@link WORKER_CLOSE_TIMEOUT_MS}; never call this outside tests.
+ */
+export function setWorkerCloseTimeoutMsForTests(ms: number): number {
+	const previous = workerCloseTimeoutMs;
+	workerCloseTimeoutMs = ms;
+	return previous;
+}
 
 export async function executeInVmContext(options: {
 	sessionKey: string;
@@ -124,6 +141,27 @@ export async function disposeAllVmContexts(): Promise<void> {
 	await Promise.all(all.map(session => killSession(session, new ToolError("JS context disposed"), { force: false })));
 }
 
+/**
+ * Smoke probe: spawn the JS eval worker through the worker-host entry and prove
+ * it answers the `init` handshake on a real worker thread (not the inline
+ * fallback). Catches the silent worker-load and init-message-drop regressions
+ * that otherwise strand every cell on the init timeout in a distribution build —
+ * the failure mode that motivated `installWorkerInbox`. Wired into
+ * `omp --smoke-test` so binary / source / tarball installs all exercise it.
+ */
+export async function smokeTestJsEvalWorker(): Promise<void> {
+	const worker = spawnJsWorker();
+	const session: JsSession = { sessionKey: "smoke", worker, state: "alive", pending: new Map() };
+	try {
+		await initWorker(session, { cwd: process.cwd(), sessionId: "smoke" }, WORKER_INIT_TIMEOUT_MS);
+		if (worker.mode !== "worker") {
+			throw new Error("JS eval worker smoke fell back to the inline worker (real worker failed to start)");
+		}
+	} finally {
+		await worker.terminate().catch(() => undefined);
+	}
+}
+
 async function runOnce(
 	session: JsSession,
 	options: {
@@ -186,47 +224,94 @@ async function acquireSession(sessionKey: string, snapshot: SessionSnapshot, tim
 	if (starting) return await starting;
 
 	const startup = (async (): Promise<JsSession> => {
-		const worker = await spawnJsWorker();
+		// The message listener must be attached synchronously after `new Worker`:
+		// Bun drops messages posted before a listener exists, and WorkerCore emits
+		// `ready` from its constructor on load. `spawnJsWorker` + `initWorker` run with
+		// no intervening await, so `ready` can never race the attach.
+		const worker = spawnJsWorker();
 		const session: JsSession = {
 			sessionKey,
 			worker,
 			state: "alive",
 			pending: new Map(),
 		};
-		const { promise: readyPromise, resolve: resolveReady, reject: rejectReady } = Promise.withResolvers<void>();
-		let resolved = false;
-		const unsubscribe = worker.onMessage(msg => {
-			if (!resolved && msg.type === "ready") {
-				resolved = true;
-				resolveReady();
-				return;
-			}
-			if (!resolved && msg.type === "init-failed") {
-				resolved = true;
-				rejectReady(errorFromPayload(msg.error));
-				return;
-			}
-			handleSessionMessage(session, msg);
-		});
+		// Init headroom is the fixed infrastructure floor; the caller's per-cell timeout
+		// dominates when larger so users can grant more by raising `timeout` on a cell.
+		const readyTimeoutMs = Math.max(WORKER_INIT_TIMEOUT_MS, timeoutMs ?? 0);
 		try {
-			// Init headroom is the fixed infrastructure floor; the caller's per-cell timeout
-			// dominates when larger so users can grant more by raising `timeout` on a cell.
-			const readyTimeoutMs = Math.max(WORKER_INIT_TIMEOUT_MS, timeoutMs ?? 0);
-			await raceWithTimeout(readyPromise, readyTimeoutMs, "Timed out initializing JS eval worker");
-			worker.send({ type: "init", snapshot });
-			sessions.set(sessionKey, session);
-			return session;
+			await initWorker(session, snapshot, readyTimeoutMs);
 		} catch (error) {
-			unsubscribe();
+			// Worker-thread crash/load failures surface asynchronously via the worker
+			// `error` event — after `spawnJsWorker`'s synchronous try/catch already
+			// returned — so the only signal is the rejected handshake. Retry on the
+			// inline worker so a broken module graph fails fast instead of stalling
+			// every cell on the init timeout and then dying with exitCode 1.
 			await worker.terminate().catch(() => undefined);
-			throw error;
+			if (worker.mode === "inline") throw error;
+			logger.warn("JS eval worker init failed; retrying with inline worker (no sync-loop guard)", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+			const inline = spawnInlineWorker();
+			session.worker = inline;
+			session.state = "alive";
+			try {
+				await initWorker(session, snapshot, readyTimeoutMs);
+			} catch (inlineError) {
+				await inline.terminate().catch(() => undefined);
+				throw inlineError;
+			}
 		}
+		sessions.set(sessionKey, session);
+		return session;
 	})();
 	startingSessions.set(sessionKey, startup);
 	try {
 		return await startup;
 	} finally {
 		if (startingSessions.get(sessionKey) === startup) startingSessions.delete(sessionKey);
+	}
+}
+
+async function initWorker(session: JsSession, snapshot: SessionSnapshot, timeoutMs: number): Promise<void> {
+	const worker = session.worker;
+	const { promise: readyPromise, resolve: resolveReady, reject: rejectReady } = Promise.withResolvers<void>();
+	let resolved = false;
+	const unsubscribeMessage = worker.onMessage(msg => {
+		if (!resolved && msg.type === "ready") {
+			resolved = true;
+			resolveReady();
+			return;
+		}
+		if (!resolved && msg.type === "init-failed") {
+			resolved = true;
+			rejectReady(errorFromPayload(msg.error));
+			return;
+		}
+		handleSessionMessage(session, msg);
+	});
+	const unsubscribeError = worker.onError(error => {
+		if (!resolved) {
+			resolved = true;
+			rejectReady(error);
+			return;
+		}
+		// Worker died after a successful handshake: tear the session down so the
+		// in-flight run (and the next acquire) fail fast instead of hanging on a
+		// worker that will never reply.
+		void killSessionFor(session, error, { force: true });
+	});
+	try {
+		// Attach listeners and send init before awaiting ready. The worker now
+		// emits ready only in response to init, so this ordering is race-free.
+		worker.send({ type: "init", snapshot });
+		await raceWithTimeout(readyPromise, timeoutMs, "Timed out initializing JS eval worker");
+	} catch (error) {
+		// Handshake failed (timeout, init-failed, or worker error): drop both listeners
+		// so the abandoned worker can't keep routing messages into a session the caller
+		// is about to discard or retry on the inline fallback.
+		unsubscribeMessage();
+		unsubscribeError();
+		throw error;
 	}
 }
 
@@ -379,11 +464,11 @@ async function raceWithTimeout<T>(promise: Promise<T>, timeoutMs: number, reason
 	}
 }
 
-async function spawnJsWorker(): Promise<WorkerHandle> {
+function spawnJsWorker(): WorkerHandle {
 	try {
 		const hostEntry = workerHostEntry();
 		const worker = hostEntry
-			? new Worker(hostEntry, { type: "module", argv: ["__omp_js_eval_worker"] })
+			? new Worker(hostEntry, { type: "module", argv: ["__omp_worker_js_eval"] })
 			: new Worker(new URL("./worker-entry.ts", import.meta.url).href, { type: "module" });
 		return wrapBunWorker(worker);
 	} catch (err) {
@@ -404,6 +489,17 @@ function wrapBunWorker(worker: Worker): WorkerHandle {
 			const wrap = (event: MessageEvent): void => handler(event.data as WorkerOutbound);
 			worker.addEventListener("message", wrap);
 			return () => worker.removeEventListener("message", wrap);
+		},
+		onError(handler) {
+			const onError = (event: ErrorEvent): void => handler(errorFromWorkerEvent(event));
+			const onMessageError = (event: MessageEvent): void =>
+				handler(new ToolError(`JS eval worker message error: ${String(event.data)}`));
+			worker.addEventListener("error", onError);
+			worker.addEventListener("messageerror", onMessageError);
+			return () => {
+				worker.removeEventListener("error", onError);
+				worker.removeEventListener("messageerror", onMessageError);
+			};
 		},
 		async close() {
 			const { promise: closed, resolve } = Promise.withResolvers<boolean>();
@@ -433,7 +529,7 @@ function wrapBunWorker(worker: Worker): WorkerHandle {
 				finishIfClosed();
 			});
 			worker.addEventListener("close", onClose);
-			timeout = setTimeout(() => finish(false), WORKER_CLOSE_TIMEOUT_MS);
+			timeout = setTimeout(() => finish(false), workerCloseTimeoutMs);
 			worker.postMessage({ type: "close" } satisfies WorkerInbound);
 			return await closed;
 		},
@@ -441,6 +537,12 @@ function wrapBunWorker(worker: Worker): WorkerHandle {
 			worker.terminate();
 		},
 	};
+}
+
+function errorFromWorkerEvent(event: ErrorEvent): Error {
+	if (event.error instanceof Error) return event.error;
+	if (event.message) return new Error(event.message);
+	return new Error("Unknown JS eval worker error");
 }
 
 /**
@@ -473,6 +575,7 @@ function spawnInlineWorker(): WorkerHandle {
 			hostListeners.add(handler);
 			return () => hostListeners.delete(handler);
 		},
+		onError: () => () => {},
 		async close() {
 			const { promise: closed, resolve } = Promise.withResolvers<boolean>();
 			let settled = false;
@@ -491,7 +594,7 @@ function spawnInlineWorker(): WorkerHandle {
 				if (msg.type === "closed") finish(true);
 			});
 			this.send({ type: "close" });
-			timeout = setTimeout(() => finish(false), WORKER_CLOSE_TIMEOUT_MS);
+			timeout = setTimeout(() => finish(false), workerCloseTimeoutMs);
 			return await closed;
 		},
 		async terminate() {

@@ -273,7 +273,7 @@ export class PatchSection {
 	get hasAnchorScopedEdit(): boolean {
 		return this.edits.some(edit => {
 			if (edit.kind === "delete") return true;
-			// A `replace block N:` edit is anchored to concrete content on line N.
+			// A `replace_block N:` edit is anchored to concrete content on line N.
 			if (edit.kind === "block") return true;
 			return edit.cursor.kind === "before_anchor" || edit.cursor.kind === "after_anchor";
 		});
@@ -305,7 +305,7 @@ export class PatchSection {
 	 * method directly when you've already validated the file content and
 	 * just want the result.
 	 *
-	 * `blockResolver` resolves any `replace block N:` edits against `text`; an
+	 * `blockResolver` resolves any `replace_block N:` edits against `text`; an
 	 * unresolvable block throws (this is the final, authoritative preview path).
 	 */
 	applyTo(text: string, blockResolver?: BlockResolver): ApplyResult {
@@ -331,7 +331,7 @@ export class PatchSection {
 	 * empty-payload edit. Intended for incremental diff previews; the writer
 	 * path should always use {@link applyTo}.
 	 *
-	 * `blockResolver` resolves any `replace block N:` edits against `text`; an
+	 * `blockResolver` resolves any `replace_block N:` edits against `text`; an
 	 * unresolvable block is silently dropped so a half-written file does not
 	 * throw mid-stream.
 	 */

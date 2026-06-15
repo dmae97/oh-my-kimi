@@ -17,6 +17,7 @@ export interface ProviderValidationModel {
 	id: string;
 	api?: Api;
 	contextWindow?: number;
+	supportsTools?: boolean;
 	maxTokens?: number;
 }
 

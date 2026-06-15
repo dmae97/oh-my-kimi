@@ -639,6 +639,11 @@ class LiveProgress {
 				const metaParts = [op, target].filter((v): v is string => Boolean(v));
 				const meta = metaParts.length > 0 ? paint(ANSI.dim, metaParts.join(" ")) : "";
 				console.log(`  ${tag}${meta ? ` ${meta}` : ""} ${clipped}`);
+				if (failure.rawBlock) {
+					const rawLine = failure.rawBlock.replace(/\s+/g, " ").trim();
+					const clippedRaw = rawLine.length > 240 ? `${rawLine.slice(0, 237)}...` : rawLine;
+					console.log(`    ${paint(ANSI.dim, "raw")} ${clippedRaw}`);
+				}
 			}
 		}
 

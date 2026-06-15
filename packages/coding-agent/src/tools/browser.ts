@@ -1,4 +1,5 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import type { ToolExample } from "@oh-my-pi/pi-ai";
 import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import { z } from "zod/v4";
 import browserDescription from "../prompts/tools/browser.md" with { type: "text" };
@@ -117,6 +118,57 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 	readonly summary = "Control a headless browser to navigate and interact with web pages";
 	readonly parameters = browserSchema;
 	readonly strict = true;
+
+	readonly examples: readonly ToolExample<z.input<typeof browserSchema>>[] = [
+		{
+			caption: "Open a tab",
+			call: { action: "open", name: "docs", url: "https://example.com" },
+		},
+		{
+			caption: "Read structured page data in the opened tab",
+			call: {
+				action: "run",
+				name: "docs",
+				code: "const obs = await tab.observe(); display(obs); return obs.elements.length;",
+			},
+		},
+		{
+			caption: "Click an observed element by id",
+			call: {
+				action: "run",
+				name: "docs",
+				code: "const obs = await tab.observe(); const link = obs.elements.find(e => e.role === 'link' && e.name === 'Sign in'); assert(link, 'Sign in link missing'); await (await tab.id(link.id)).click();",
+			},
+		},
+		{
+			caption: "Fill and submit a form via selectors",
+			call: {
+				action: "run",
+				name: "docs",
+				code: "await tab.fill('input[name=email]', 'me@example.com'); await tab.click('text/Continue');",
+			},
+		},
+		{
+			caption: "Screenshot to look at the page — no save path",
+			call: {
+				action: "run",
+				name: "docs",
+				code: "await tab.screenshot();",
+			},
+		},
+		{
+			caption: "Attach to an existing Electron app",
+			call: {
+				action: "open",
+				name: "cursor",
+				app: { path: "/Applications/Cursor.app/Contents/MacOS/Cursor" },
+			},
+		},
+		{
+			caption: "Close every tab and kill spawned-app processes",
+			call: { action: "close", all: true, kill: true },
+		},
+	];
 
 	constructor(private readonly session: ToolSession) {}
 	#description?: string;

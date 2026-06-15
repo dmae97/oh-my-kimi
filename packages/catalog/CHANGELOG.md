@@ -2,6 +2,47 @@
 
 ## [Unreleased]
 
+## [15.13.3] - 2026-06-15
+
+### Added
+
+- Added Azure OpenAI as a catalog provider (`azure`, default model `gpt-5.5`, env var `AZURE_OPENAI_API_KEY`), bundling the OpenAI-family models Azure serves over the Responses API (GPT-4/4.1/4o, GPT-5 family, o-series, Codex). Like Amazon Bedrock it is catalog-only — models ship in the bundle and become selectable once the env key is set, with the deployment base URL resolved at runtime from `AZURE_OPENAI_BASE_URL`/`AZURE_OPENAI_RESOURCE_NAME`.
+- Added models.dev-backed bundled catalogs for providers that previously shipped no offline models: Hugging Face, Kilo, Moonshot, NanoGPT, Synthetic, Venice, Ollama Cloud, and the Xiaomi Token Plan regions (ams/cn/sgp). They still discover live when credentialed; the bundle is now a non-empty baseline.
+
+### Changed
+
+- Updated stale provider default models to their latest bundled versions: OpenAI-family providers (`azure`, `github-copilot`, `aimlapi`) → GPT-5.5; Gemini providers (`google`, `google-gemini-cli`, `google-vertex`) → `gemini-3.1-pro-preview`; GLM providers (`zai`, `zhipu-coding-plan`) → `glm-5.2`, `cerebras` → `zai-glm-4.7`; Kimi providers (`fireworks`, `opencode-go`, `moonshot`) → `kimi-k2.7-code`, `kimi-code` → `kimi-for-coding`, `together` → `moonshotai/Kimi-K2.7-Code`; `alibaba-coding-plan` → `qwen3.7-plus`; and Claude-Sonnet defaults (`cloudflare-ai-gateway`, `cursor`, `gitlab-duo`, `kilo`, `opencode-zen`, `vercel-ai-gateway`) → Claude Opus 4.x.
+- Restricted models.dev Azure discovery to OpenAI-family IDs (`gpt-`, `o1`, `o3`, `o4`, `codex`, `chatgpt`), excluding Foundry-hosted third parties (Claude/DeepSeek/Llama/Mistral/Phi) that Azure serves through non-Responses APIs.
+- Detected the Azure OpenAI Responses compat surface (developer role, strict tool mode, strict tool-result pairing) by provider id as well as base URL, so bundled `azure` models whose deployment host is only known at runtime still get the right wire behavior.
+- Renamed the `Qwen3-ASR-Flash` model label to `Qwen3 ASR Flash`
+
+### Fixed
+
+- Fixed tool syntax selection for Gemini-family and Gemma model IDs by routing them to dedicated `gemini` and `gemma` formats instead of generic XML
+- Fixed `zhipu-coding-plan` and `together` shipping no bundled models: their descriptors referenced non-existent models.dev keys (`zhipu-coding-plan`, `together`); pointed them at the real keys (`zhipuai-coding-plan`, `togetherai`) so they bundle their GLM and full catalogs respectively.
+- Folded the `azure-openai-responses` API into the OpenAI Responses thinking-inference branches so Azure reasoning models (o-series, GPT-5, Codex) resolve the discrete effort vocabulary (including `xhigh`) and effort-control mode instead of falling through to generic defaults.
+- Fixed `ollama-cloud` discovery inheriting an unsafe cross-provider `contextWindow`/`maxTokens` when `/api/show` returns no size metadata; it now falls back to the safe 128K context / 8K output caps.
+- Dropped internal Fireworks control-plane resource ids (`accounts/fireworks/{models,routers}/…`) from the bundle; only the public request ids ship.
+
+## [15.13.2] - 2026-06-15
+
+### Added
+
+- Added the `ToolCallSyntax` union and `FALLBACK_TOOL_SYNTAX` constant to `@oh-my-pi/pi-catalog/identity` (re-exported from `@oh-my-pi/pi-ai/grammar`).
+- Added `preferredToolSyntax(modelId)` to `@oh-my-pi/pi-catalog/identity`, resolving a model's native tool-call syntax affinity from its family token (Claude→`anthropic`, GLM→`glm`, Kimi→`kimi`, Qwen→`qwen3`, DeepSeek→`deepseek`, OpenAI/gpt-oss→`harmony`, else the `xml` fallback).
+- Added `flux-1-schnell-fp8` to the Fireworks serverless model catalog
+- Added `gpt-oss-20b` to the Fireworks model catalog
+- Added `qwen3-embedding-8b` to the Fireworks model catalog
+- Added `qwen3-reranker-8b` to the Fireworks model catalog
+- Added `Gemma 4 E2B IT` and `Gemma 4 E4B IT` to the Google model catalog
+- Added `qwen/qwen3-asr-flash` to the Zenmux model catalog
+- Added sparse `supportsTools` model metadata so providers can mark models that require in-band tool-call formatting.
+
+### Changed
+
+- Kept non-tool-capable Fireworks serverless models in discovery results and marked them with `supportsTools: false` for fallback-aware handling
+- Extended `modelFamilyToken(modelId)` to classify Claude/OpenAI ids the structured parser misses (older dated forms such as `claude-3-5-sonnet-20241022` and `gpt-4o`), returning `anthropic`/`openai` instead of an empty token.
+
 ## [15.13.1] - 2026-06-15
 
 ### Added

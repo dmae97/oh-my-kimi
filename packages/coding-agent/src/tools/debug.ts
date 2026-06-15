@@ -7,6 +7,7 @@ import type {
 	RenderResultOptions,
 	ToolApprovalDecision,
 } from "@oh-my-pi/pi-agent-core";
+import type { ToolExample } from "@oh-my-pi/pi-ai";
 import { type Component, Text } from "@oh-my-pi/pi-tui";
 import { isEnoent, prompt } from "@oh-my-pi/pi-utils";
 import { z } from "zod/v4";
@@ -659,6 +660,22 @@ export class DebugTool implements AgentTool<typeof debugSchema, DebugToolDetails
 	readonly description: string;
 	readonly parameters = debugSchema;
 	readonly strict = true;
+
+	readonly examples: readonly ToolExample<z.input<typeof debugSchema>>[] = [
+		{
+			caption: "Launch and inspect hang",
+			note: '1. debug(action: "launch", program: "./my_app")\n2. debug(action: "set_breakpoint", file: "src/main.c", line: 42)\n3. debug(action: "continue")\n4. If the program appears hung: debug(action: "pause")\n5. Inspect state with `threads`, `stack_trace`, `scopes`, and `variables`',
+		},
+		{
+			caption: "Launch a Python script with debugpy",
+			call: { action: "launch", adapter: "debugpy", program: "scripts/job.py", args: ["--flag"] },
+		},
+		{
+			caption: "Raw debugger command through repl",
+			call: { action: "evaluate", expression: "info registers", context: "repl" },
+		},
+	];
+
 	readonly concurrency = "exclusive";
 	readonly loadMode = "discoverable";
 

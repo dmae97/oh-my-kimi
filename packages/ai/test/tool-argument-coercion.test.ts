@@ -42,6 +42,163 @@ describe("Tool argument coercion", () => {
 		expect(typeof result.label).toBe("string");
 	});
 
+	it("stringifies object values when schema expects string", () => {
+		const tool: Tool = {
+			name: "object-string",
+			description: "",
+			parameters: z.object({ payload: z.string() }),
+		};
+
+		const result = validateToolArguments(tool, {
+			type: "toolCall",
+			id: "call-object-string",
+			name: "object-string",
+			arguments: { payload: { a: 1, nested: ["x"] } },
+		}) as { payload: string };
+
+		expect(result.payload).toBe('{"a":1,"nested":["x"]}');
+	});
+
+	it("stringifies array values when schema expects string", () => {
+		const tool: Tool = {
+			name: "array-string",
+			description: "",
+			parameters: z.object({ payload: z.string() }),
+		};
+
+		const result = validateToolArguments(tool, {
+			type: "toolCall",
+			id: "call-array-string",
+			name: "array-string",
+			arguments: { payload: ["a", 2, true] },
+		}) as { payload: string };
+
+		expect(result.payload).toBe('["a",2,true]');
+	});
+
+	it("coerces numeric 0 and 1 to booleans", () => {
+		const tool: Tool = {
+			name: "numeric-booleans",
+			description: "",
+			parameters: z.object({ enabled: z.boolean(), disabled: z.boolean() }),
+		};
+
+		const result = validateToolArguments(tool, {
+			type: "toolCall",
+			id: "call-numeric-booleans",
+			name: "numeric-booleans",
+			arguments: { enabled: 1, disabled: 0 },
+		}) as { enabled: boolean; disabled: boolean };
+
+		expect(result).toEqual({ enabled: true, disabled: false });
+	});
+
+	it("coerces booleans to numeric 0 and 1", () => {
+		const tool: Tool = {
+			name: "boolean-numbers",
+			description: "",
+			parameters: z.object({ enabled: z.number(), disabled: z.number().int() }),
+		};
+
+		const result = validateToolArguments(tool, {
+			type: "toolCall",
+			id: "call-boolean-numbers",
+			name: "boolean-numbers",
+			arguments: { enabled: true, disabled: false },
+		}) as { enabled: number; disabled: number };
+
+		expect(result).toEqual({ enabled: 1, disabled: 0 });
+	});
+
+	it("rejects numeric boolean values other than 0 or 1", () => {
+		const tool: Tool = {
+			name: "invalid-numeric-boolean",
+			description: "",
+			parameters: z.object({ enabled: z.boolean() }),
+		};
+
+		expect(() =>
+			validateToolArguments(tool, {
+				type: "toolCall",
+				id: "call-invalid-numeric-boolean",
+				name: "invalid-numeric-boolean",
+				arguments: { enabled: 2 },
+			}),
+		).toThrow('Validation failed for tool "invalid-numeric-boolean"');
+	});
+
+	it("keeps raw in-band blocks out of validation errors", () => {
+		const tool: Tool = {
+			name: "raw-debug",
+			description: "",
+			parameters: z.object({ input: z.string() }),
+		};
+		const rawBlock = '<|start|>assistant<|channel|>commentary to=functions.edit <|message|>{"input":"x"}}<|call|>';
+
+		expect(() =>
+			validateToolArguments(tool, {
+				type: "toolCall",
+				id: "call-raw-debug",
+				name: "raw-debug",
+				arguments: {},
+				rawBlock,
+			}),
+		).toThrow('Validation failed for tool "raw-debug"');
+		expect(() =>
+			validateToolArguments(tool, {
+				type: "toolCall",
+				id: "call-raw-debug",
+				name: "raw-debug",
+				arguments: {},
+				rawBlock,
+			}),
+		).not.toThrow(rawBlock);
+	});
+
+	it("coerces common string boolean forms", () => {
+		const tool: Tool = {
+			name: "string-booleans",
+			description: "",
+			parameters: z.object({
+				t: z.boolean(),
+				f: z.boolean(),
+				one: z.boolean(),
+				zero: z.boolean(),
+				yes: z.boolean(),
+				no: z.boolean(),
+				on: z.boolean(),
+				off: z.boolean(),
+			}),
+		};
+
+		const result = validateToolArguments(tool, {
+			type: "toolCall",
+			id: "call-string-booleans",
+			name: "string-booleans",
+			arguments: {
+				t: "TRUE",
+				f: "false",
+				one: "1",
+				zero: "0",
+				yes: "yes",
+				no: "NO",
+				on: "on",
+				off: "OFF",
+			},
+		}) as Record<string, boolean>;
+
+		expect(result).toEqual({
+			t: true,
+			f: false,
+			one: true,
+			zero: false,
+			yes: true,
+			no: false,
+			on: true,
+			off: false,
+		});
+	});
+
 	it("parses JSON arrays in string values when schema expects array", () => {
 		const tool: Tool = {
 			name: "t3",

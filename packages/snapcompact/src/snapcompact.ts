@@ -726,13 +726,13 @@ export function serializeConversation(messages: Message[], options?: SerializeOp
 			}
 
 			if (thinkingParts.length > 0) {
-				parts.push(`[Assistant thinking]: ${thinkingParts.join("\n")}`);
+				parts.push(`[Think]: ${thinkingParts.join("\n")}`);
 			}
 			if (textParts.length > 0) {
 				parts.push(`[Assistant]: ${textParts.join("\n")}`);
 			}
 			if (toolCalls.length > 0) {
-				parts.push(`[Assistant tool calls]: ${toolCalls.join("; ")}`);
+				parts.push(`[Tool Call]: ${toolCalls.join("; ")}`);
 			}
 		} else if (msg.role === "toolResult") {
 			if (uselessCallIds.has(msg.toolCallId)) continue;
@@ -743,7 +743,7 @@ export function serializeConversation(messages: Message[], options?: SerializeOp
 			if (content) {
 				// Args above are JSON-escaped, so only raw result text can carry toggles.
 				const body = truncateForSummary(stripDimMarkers(content), toolResultMaxChars, headRatio);
-				parts.push(dimToolResults ? `[Tool result]: ${DIM_ON}${body}${DIM_OFF}` : `[Tool result]: ${body}`);
+				parts.push(dimToolResults ? `[Tool Result]: ${DIM_ON}${body}${DIM_OFF}` : `[Tool Result]: ${body}`);
 			}
 		}
 	}

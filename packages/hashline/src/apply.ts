@@ -232,7 +232,7 @@ interface ReplacementGroup {
  * Detect a replacement group starting at `start`: a run of `before_anchor`
  * replacement inserts sharing one source op line, immediately followed by the
  * contiguous range deletes for that same op. Mirrors how the parser lowers an
- * `replace N..M:` hunk with a body.
+ * `replace N.=M:` hunk with a body.
  */
 function findReplacementGroup(edits: readonly AppliedEdit[], start: number): ReplacementGroup | undefined {
 	const first = edits[start];
@@ -453,7 +453,7 @@ function describeBoundaryRepair(group: ReplacementGroup, action: string): string
  * by {@link findDuplicateSuffix}/{@link findDuplicatePrefix}.
  *
  * Scoped to multi-line ranges (a construct rewrite) on purpose: a single-line
- * `replace N..N` expanding into several lines is an *expansion* where every
+ * `replace N.=N` expanding into several lines is an *expansion* where every
  * payload line is intentional new content, so a payload line that happens to
  * equal a neighbor stays — only a genuine block rewrite retypes a boundary
  * keeper by mistake. The dropped lines must be delimiter-neutral so removing the
@@ -592,7 +592,7 @@ function repairReplacementBoundaries(
 // content lines are never crossed) places the body at the depth its
 // indentation names.
 //
-// Inward (block-lowered inserts only): `insert after block N:` anchors on the
+// Inward (block-lowered inserts only): `insert_after_block N:` anchors on the
 // resolved block's closing line, but a body indented deeper than that closer
 // claims a depth inside the block — the common misreading of the op as
 // "append at the end of block N's body". Sliding the landing point backward
@@ -630,7 +630,7 @@ interface AfterInsertGroup {
 	anchor: number;
 	/** Indices into the edit list, in patch order. */
 	members: number[];
-	/** First line of the resolved block when lowered from `insert after block N:`. */
+	/** First line of the resolved block when lowered from `insert_after_block N:`. */
 	blockStart?: number;
 }
 
@@ -730,7 +730,7 @@ function resolveInwardLanding(
 /**
  * Slide mis-anchored after-insert hunks to the depth their body indentation
  * claims: outward past the structural closer lines that follow the anchor
- * when the body is shallower, or — for `insert after block N:` lowerings —
+ * when the body is shallower, or — for `insert_after_block N:` lowerings —
  * inward across the block's trailing closers when the body is deeper than
  * the block's closing line. Returns the corrected edit list plus one warning
  * per shifted hunk.

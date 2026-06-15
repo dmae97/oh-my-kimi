@@ -3,9 +3,10 @@
  */
 import type { AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { INTENT_FIELD } from "@oh-my-pi/pi-agent-core";
-import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai";
-import { isZodSchema, zodToWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
-import { getVisibleThinkingText } from "../utils/thinking-display";
+import type { AssistantMessage, Model, ToolExample, TSchema } from "@oh-my-pi/pi-ai";
+import { getInbandGrammar, renderToolInventory } from "@oh-my-pi/pi-ai/grammar";
+import { preferredToolSyntax } from "@oh-my-pi/pi-catalog/identity";
+import { canonicalizeMessage } from "../utils/thinking-display";
 import {
 	type BashExecutionMessage,
 	type BranchSummaryMessage,
@@ -23,6 +24,7 @@ export interface SessionDumpToolInfo {
 	name: string;
 	description: string;
 	parameters: unknown;
+	examples?: readonly ToolExample[];
 }
 
 export interface FormatSessionDumpTextOptions {
@@ -33,44 +35,12 @@ export interface FormatSessionDumpTextOptions {
 	tools?: readonly SessionDumpToolInfo[];
 }
 
-function stripTypeBoxFields(obj: unknown): unknown {
-	if (Array.isArray(obj)) {
-		return obj.map(stripTypeBoxFields);
-	}
-	if (obj && typeof obj === "object") {
-		const result: Record<string, unknown> = {};
-		for (const [k, v] of Object.entries(obj)) {
-			if (!k.startsWith("TypeBox.")) {
-				result[k] = stripTypeBoxFields(v);
-			}
-		}
-		return result;
-	}
-	return obj;
-}
-
-/** Resolve tool parameters to a plain JSON Schema object for dump output. */
-function toolParametersToJsonSchema(parameters: unknown): unknown {
-	if (isZodSchema(parameters)) return zodToWireSchema(parameters);
-	return stripTypeBoxFields(parameters);
-}
-
-/** Serialize an object as XML parameter elements, one per key. */
-function formatArgsAsXml(args: Record<string, unknown>, indent = "\t"): string {
-	const parts: string[] = [];
-	for (const [key, value] of Object.entries(args)) {
-		if (key === INTENT_FIELD) continue;
-		const text = typeof value === "string" ? value : JSON.stringify(value);
-		parts.push(`${indent}<parameter name="${key}">${text}</parameter>`);
-	}
-	return parts.join("\n");
-}
-
 /**
  * Format messages and session metadata as markdown/plain text (same as AgentSession.formatSessionAsText / /dump).
  */
 export function formatSessionDumpText(options: FormatSessionDumpTextOptions): string {
 	const lines: string[] = [];
+	const grammar = getInbandGrammar(preferredToolSyntax(options.model?.id ?? ""));
 
 	const systemPrompt = options.systemPrompt?.filter(prompt => prompt.length > 0) ?? [];
 	if (systemPrompt.length > 0) {
@@ -94,13 +64,13 @@ export function formatSessionDumpText(options: FormatSessionDumpTextOptions): st
 	const tools = options.tools ?? [];
 	if (tools.length > 0) {
 		lines.push("## Available Tools\n");
-		for (const tool of tools) {
-			lines.push(`<tool name="${tool.name}">`);
-			lines.push(tool.description);
-			const parametersClean = toolParametersToJsonSchema(tool.parameters);
-			lines.push(`\nParameters:\n${formatArgsAsXml(parametersClean as Record<string, unknown>)}`);
-			lines.push("<" + "/tool>\n");
-		}
+		const inventoryTools = tools.map(tool => ({
+			name: tool.name,
+			description: tool.description,
+			parameters: tool.parameters as TSchema,
+			examples: tool.examples,
+		}));
+		lines.push(renderToolInventory(inventoryTools, options.model?.id ?? ""));
 		lines.push("\n");
 	}
 
@@ -127,17 +97,15 @@ export function formatSessionDumpText(options: FormatSessionDumpTextOptions): st
 				if (c.type === "text") {
 					lines.push(c.text);
 				} else if (c.type === "thinking") {
-					const thinking = getVisibleThinkingText(c);
+					const thinking = canonicalizeMessage(c.thinking);
 					if (thinking.length === 0) continue;
 					lines.push("<thinking>");
 					lines.push(thinking);
 					lines.push("</thinking>\n");
 				} else if (c.type === "toolCall") {
-					lines.push(`<invoke name="${c.name}">`);
-					if (c.arguments && typeof c.arguments === "object") {
-						lines.push(formatArgsAsXml(c.arguments as Record<string, unknown>));
-					}
-					lines.push("<" + "/invoke>\n");
+					const args = { ...(c.arguments as Record<string, unknown>) };
+					delete args[INTENT_FIELD];
+					lines.push(grammar.renderToolCall({ ...c, arguments: args }));
 				}
 			}
 			lines.push("");

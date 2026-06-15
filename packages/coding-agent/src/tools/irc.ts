@@ -10,6 +10,7 @@
  */
 
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import type { ToolExample } from "@oh-my-pi/pi-ai";
 import { type Component, Text } from "@oh-my-pi/pi-tui";
 import { formatAge, formatDuration, prompt } from "@oh-my-pi/pi-utils";
 import { z } from "zod/v4";
@@ -96,6 +97,46 @@ export class IrcTool implements AgentTool<typeof ircSchema, IrcDetails> {
 	readonly description: string;
 	readonly parameters = ircSchema;
 	readonly strict = true;
+
+	readonly examples: readonly ToolExample<z.input<typeof ircSchema>>[] = [
+		{
+			caption: "List peers",
+			call: { op: "list" },
+		},
+		{
+			caption: "Fire-and-forget DM — same send wakes idle/parked peers",
+			call: {
+				op: "send",
+				to: "AuthLoader",
+				message: "Still touching src/server/auth.ts? I need to add a 401 path.",
+			},
+		},
+		{
+			caption: "Round-trip when you cannot proceed without the answer",
+			call: {
+				op: "send",
+				to: "Main",
+				message: "JWT or session cookies for the auth flow?",
+				await: true,
+			},
+		},
+		{
+			caption: "Block until a specific peer answers",
+			call: { op: "wait", from: "AuthLoader", timeoutMs: 60000 },
+		},
+		{
+			caption: "Drain pending messages",
+			call: { op: "inbox" },
+		},
+		{
+			caption: "Broadcast to live peers (no replies expected)",
+			call: {
+				op: "send",
+				to: "all",
+				message: "About to refactor src/server/middleware/*. Anyone already in there?",
+			},
+		},
+	];
 	readonly loadMode = "discoverable";
 	constructor(private readonly session: ToolSession) {
 		this.description = prompt.render(ircDescription);

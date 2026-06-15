@@ -15,6 +15,7 @@
  */
 
 import type { Context, Message, Tool } from "@oh-my-pi/pi-ai";
+import type { ToolCallSyntax } from "@oh-my-pi/pi-ai/grammar";
 import { normalizeTools } from "./agent-loop";
 import type { AgentContext } from "./types";
 
@@ -33,6 +34,7 @@ export interface StablePrefixSnapshot {
 export interface BuildOptions {
 	/** Inject the `_i` intent field into tool schemas (must match agent-loop's normalizeTools). */
 	intentTracing: boolean;
+	exampleSyntax?: ToolCallSyntax;
 }
 
 /**
@@ -268,7 +270,7 @@ export class AppendOnlyContextManager {
 
 function takeSnapshot(context: AgentContext, options: BuildOptions): StablePrefixSnapshot {
 	const systemPrompt = [...context.systemPrompt];
-	const tools = normalizeTools(context.tools, options.intentTracing) ?? [];
+	const tools = normalizeTools(context.tools, options.intentTracing, options.exampleSyntax) ?? [];
 	return {
 		systemPrompt,
 		tools,
@@ -288,6 +290,7 @@ function computeFingerprint(systemPrompt: string[], tools: Tool[], options: Buil
 			cw: t.customWireName,
 		})),
 		i: options.intentTracing,
+		ex: options.exampleSyntax,
 	});
 	let hash = 0;
 	for (let i = 0; i < payload.length; i++) {

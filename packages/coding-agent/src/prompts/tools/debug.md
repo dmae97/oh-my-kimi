@@ -19,16 +19,3 @@ Use for launching or attaching debuggers, setting breakpoints, stepping through 
 - `program` must be an executable file or debug target, not a directory or interpreter name that resolves to a workspace directory.
 - Python debugging requires `debugpy`; install with `pip install debugpy` if the adapter is unavailable.
 </caution>
-
-<examples>
-# Launch and inspect hang
-1. `debug(action: "launch", program: "./my_app")`
-2. `debug(action: "set_breakpoint", file: "src/main.c", line: 42)`
-3. `debug(action: "continue")`
-4. If the program appears hung: `debug(action: "pause")`
-5. Inspect state with `threads`, `stack_trace`, `scopes`, and `variables`
-# Launch a Python script with debugpy
-`debug(action: "launch", adapter: "debugpy", program: "scripts/job.py", args: ["--flag"])`
-# Raw debugger command through repl
-`debug(action: "evaluate", expression: "info registers", context: "repl")`
-</examples>

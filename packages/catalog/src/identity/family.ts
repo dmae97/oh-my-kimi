@@ -41,6 +41,11 @@ export function isQwenModelId(modelId: string): boolean {
 	return modelId.toLowerCase().includes("qwen");
 }
 
+/** Gemma open-weights family (`gemma-3-27b-it`, `google/gemma-4-E2B-it`, `gemma2-9b`). */
+export function isGemmaModelId(modelId: string): boolean {
+	return /(^|\/)gemma[-.]?\d/i.test(modelId);
+}
+
 /** DeepSeek family by id or display name (proxies often rename the id but keep the name). */
 export function isDeepseekModelIdOrName(value: string): boolean {
 	return value.toLowerCase().includes("deepseek");
@@ -76,6 +81,11 @@ export function isMinimaxM2FamilyModelId(modelId: string): boolean {
  */
 export function isOpenAIGptOssModelId(modelId: string): boolean {
 	return /(^|\/)gpt-oss[-:]/i.test(modelId);
+}
+
+/** OpenAI model ids (gpt-*, o1-*, o3-*, o4-*, or prefixed with openai/). */
+export function isOpenAIModelId(modelId: string): boolean {
+	return /(^|\/)(gpt|o1|o3|o4)[-.]/i.test(modelId) || modelId.toLowerCase().includes("openai/");
 }
 
 /**
@@ -114,12 +124,15 @@ export function isGlmVisionModelId(modelId: string): boolean {
 export function modelFamilyToken(modelId: string): string {
 	const parsed = parseKnownModel(modelId);
 	if (parsed.family !== "unknown") return parsed.family;
+	if (isClaudeModelId(modelId) || isAnthropicNamespacedModelId(modelId)) return "anthropic";
+	if (isOpenAIModelId(modelId)) return "openai";
 	if (isKimiModelId(modelId)) return "kimi";
 	if (isQwenModelId(modelId)) return "qwen";
 	if (isMinimaxM2FamilyModelId(modelId)) return "minimax";
 	if (isOpenAIGptOssModelId(modelId)) return "gpt-oss";
 	if (isDeepseekModelIdOrName(modelId)) return "deepseek";
 	if (isMimoModelIdOrName(modelId)) return "mimo";
+	if (isGemmaModelId(modelId)) return "gemma";
 	if (parseGlmModel(bareModelId(modelId))) return "glm";
 	return "";
 }

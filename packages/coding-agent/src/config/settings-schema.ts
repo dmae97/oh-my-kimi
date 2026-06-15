@@ -116,6 +116,7 @@ export const TAB_GROUPS: Record<SettingTab, readonly string[]> = {
 		"Magic Keywords",
 		"Startup & Updates",
 		"Power (macOS)",
+		"Agent",
 	],
 	context: ["General", "Compaction", "Rules (TTSR)", "Experimental"],
 	memory: ["General", "Auto-Learn", "Mnemopi", "Hindsight"],
@@ -1719,6 +1720,48 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"tools.format": {
+		type: "enum",
+		values: [
+			"auto",
+			"native",
+			"glm",
+			"hermes",
+			"kimi",
+			"xml",
+			"anthropic",
+			"deepseek",
+			"harmony",
+			"pi",
+			"qwen3",
+		] as const,
+		default: "auto",
+		ui: {
+			tab: "context",
+			group: "Experimental",
+			label: "Tool Call Format",
+			description:
+				"Controls how tools are exposed to the model. Auto uses native tool calls unless the selected model is marked as not supporting tools, then falls back to GLM-style in-band tool calls. Native forces provider-native tools; the other values force the named in-band syntax. Applies on session start.",
+			options: [
+				{
+					value: "auto",
+					label: "Auto",
+					description: "Use native tool calls unless the model is known not to support them.",
+				},
+				{ value: "native", label: "Native", description: "Use provider-native tool calls." },
+				{ value: "glm", label: "GLM", description: "Use GLM-style in-band tool calls." },
+				{ value: "hermes", label: "Hermes", description: "Use Hermes-style in-band tool calls." },
+				{ value: "kimi", label: "Kimi", description: "Use Kimi-style in-band tool calls." },
+				{ value: "xml", label: "XML", description: "Use generic XML in-band tool calls." },
+				{ value: "anthropic", label: "Anthropic", description: "Use Anthropic-style in-band tool calls." },
+				{ value: "deepseek", label: "DeepSeek", description: "Use DeepSeek-style in-band tool calls." },
+				{ value: "harmony", label: "Harmony", description: "Use Harmony-style in-band tool calls." },
+				{ value: "pi", label: "Pi", description: "Use Pi-style in-band tool calls." },
+				{ value: "qwen3", label: "Qwen3", description: "Use Qwen3-style in-band tool calls." },
+			],
+		},
+	},
+
 	"snapcompact.shape": {
 		type: "enum",
 		values: ["auto", ...SHAPE_VARIANT_NAMES] as const,
@@ -3183,6 +3226,17 @@ export const SETTINGS_SCHEMA = {
 			description: "Ask the agent to describe the intent of each tool call before executing it",
 		},
 	},
+	"tools.abortOnFabricatedResult": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "tools",
+			group: "Execution",
+			label: "Abort On Fabricated Tool Result",
+			description:
+				"With in-band tool calls, stop the model immediately when it starts hallucinating a tool result mid-turn. Disable to let the model finish generating and discard the fabricated continuation instead.",
+		},
+	},
 
 	"tools.maxTimeout": {
 		type: "number",
@@ -3938,6 +3992,30 @@ export const SETTINGS_SCHEMA = {
 				"Difficulty classifier for the `auto` thinking level: online smol by default, or a local on-device model",
 			condition: "autoThinkingActive",
 			options: AUTO_THINKING_MODEL_OPTIONS,
+		},
+	},
+	"features.unexpectedStopDetection": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "interaction",
+			group: "Agent",
+			label: "Detect unexpected stops",
+			description:
+				"Use a small model to detect when the assistant says it will continue but stops without tool calls; automatically prompt it to continue.",
+		},
+	},
+	"providers.unexpectedStopModel": {
+		type: "enum",
+		values: TINY_MEMORY_MODEL_VALUES,
+		default: ONLINE_MEMORY_MODEL_KEY,
+		ui: {
+			tab: "providers",
+			group: "Tiny Model",
+			label: "Unexpected Stop Model",
+			description: "Classifier for unexpected-stop detection: online smol by default, or a local on-device model.",
+			condition: "unexpectedStopDetection",
+			options: TINY_MEMORY_MODEL_OPTIONS,
 		},
 	},
 
