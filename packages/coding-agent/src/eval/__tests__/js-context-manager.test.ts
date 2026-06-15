@@ -1,8 +1,8 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { Settings } from "../../config/settings";
 import type { ToolSession } from "../../tools";
-import { disposeAllVmContexts } from "../js/context-manager";
+import { disposeAllVmContexts, setWorkerCloseTimeoutMsForTests } from "../js/context-manager";
 import { executeJs } from "../js/executor";
 
 const originalWorker = globalThis.Worker;
@@ -180,8 +180,18 @@ function installFakeWorker(stats: FakeWorkerStats, behavior: FakeWorkerBehavior)
 }
 
 describe("JavaScript eval worker lifecycle", () => {
+	let restoreCloseTimeoutMs = 0;
+	beforeEach(() => {
+		// Shrink the graceful-close grace period so the "close acked but the worker
+		// never exits -> force terminate" contract is proven without a real 1s wait.
+		restoreCloseTimeoutMs = setWorkerCloseTimeoutMsForTests(1);
+	});
+
 	afterEach(async () => {
+		// Dispose while the shrunk timeout is still active so a hung worker's afterEach
+		// close also force-terminates instantly, then restore the production default.
 		await disposeAllVmContexts();
+		setWorkerCloseTimeoutMsForTests(restoreCloseTimeoutMs);
 		Object.defineProperty(globalThis, "Worker", {
 			configurable: true,
 			writable: true,

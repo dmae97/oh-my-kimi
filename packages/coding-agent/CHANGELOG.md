@@ -11,6 +11,10 @@
 - Capped unexpected-stop auto-continuation to three retry attempts before giving up on repeated stops
 - Updated the `edit` tool's hashline prompt, grammar, and docs to recommend the `.=` inclusive range separator (`SWAP 1.=3:`); the legacy `..` form still parses.
 
+### Fixed
+
+- Fixed ModelRegistry tests making outbound network calls by automatically stubbing fetch during test execution.
+
 ## [15.13.2] - 2026-06-15
 
 ### Added

@@ -113,7 +113,12 @@ async function toolNamesFor(harness: GoalHarness): Promise<string[]> {
 }
 
 async function waitForMicrotasks(): Promise<void> {
-	await Bun.sleep(0);
+	// Pure microtask flush — deterministic and fake-timer-safe (no macrotask /
+	// real-clock dependency). Lets queued `.then` callbacks settle so a fired
+	// continuation tick would be observed before we assert it was dropped.
+	await Promise.resolve();
+	await Promise.resolve();
+	await Promise.resolve();
 }
 
 async function armInputWaiter(mode: InteractiveMode): Promise<{
@@ -150,6 +155,7 @@ describe("InteractiveMode goal mode integration", () => {
 	});
 
 	afterEach(async () => {
+		vi.useRealTimers();
 		vi.restoreAllMocks();
 		await harness.cleanup();
 	});
@@ -232,15 +238,19 @@ describe("InteractiveMode goal mode integration", () => {
 		// taking the streaming branch, or any extension that triggers a turn).
 		// Without the streaming-aware guard the timer fires onInputCallback
 		// with a `goal-continuation` and submitInteractiveInput resurfaces
-		// AgentBusyError via promptCustomMessage.
+		// AgentBusyError via promptCustomMessage. Driven with fake timers so the
+		// 800ms window is exercised deterministically without a real wall-clock wait.
 		await harness.mode.handleGoalModeCommand("Ship the release");
+
+		vi.useFakeTimers();
 		const waiter = await armInputWaiter(harness.mode);
 
 		let streaming = true;
 		Object.defineProperty(harness.session, "isStreaming", { configurable: true, get: () => streaming });
 
-		// Let the 800ms timer fire while streaming is true.
-		await Bun.sleep(900);
+		// Fire the armed 800ms continuation timer while streaming is true.
+		vi.advanceTimersByTime(800);
+		await waitForMicrotasks();
 
 		expect(waiter.getResolvedText()).toBeUndefined();
 

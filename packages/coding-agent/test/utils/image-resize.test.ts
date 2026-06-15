@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { resizeImage } from "@oh-my-pi/pi-coding-agent/utils/image-resize";
 
 // 1x1 red PNG (69 bytes) — used as a Bun.Image seed to synthesize larger fixtures
@@ -21,25 +21,42 @@ async function makeRedWebP(width: number, height: number): Promise<string> {
 	return Buffer.from(upscaled).toBase64();
 }
 
+// Fixtures are synthesized once and shared read-only — `resizeImage` never mutates
+// its input, so a single decodable source per shape serves every test. Real image
+// encode/decode is the only cost here, so each source is the smallest solid-red
+// image that still crosses the threshold under test:
+//   - oversizedPng: a thin strip whose long edge exceeds the 1568 default cap, so
+//     re-encodes touch ~1568×98 px instead of 1568×1568. A uniform red keeps format
+//     selection deterministic (WebP is always smallest; PNG always beats JPEG), so
+//     the strip exercises the same format/budget logic as a large square.
+//   - smallPng / smallWebp: 200×200, comfortably inside every default cap (fast path).
+let oversizedPng: string;
+let smallPng: string;
+let smallWebp: string;
+
+beforeAll(async () => {
+	[oversizedPng, smallPng, smallWebp] = await Promise.all([
+		makeRedPng(1600, 100),
+		makeRedPng(200, 200),
+		makeRedWebP(200, 200),
+	]);
+});
+
 describe("resizeImage defaults", () => {
 	it("downscales inputs larger than 1568px on the long edge", async () => {
-		// 2000x1500 — exceeds the default 1568 cap on width
-		const data = await makeRedPng(2000, 1500);
-
-		const result = await resizeImage({ type: "image", data, mimeType: "image/png" });
+		// 1600px wide — exceeds the default 1568 cap on the long edge.
+		const result = await resizeImage({ type: "image", data: oversizedPng, mimeType: "image/png" });
 
 		expect(result.wasResized).toBe(true);
 		expect(result.width).toBeLessThanOrEqual(1568);
 		expect(result.height).toBeLessThanOrEqual(1568);
-		// Aspect ratio preserved (with rounding tolerance)
-		expect(Math.abs(result.width / result.height - 2000 / 1500)).toBeLessThan(0.01);
+		// Aspect ratio of the 1600x100 source preserved (with rounding tolerance).
+		expect(Math.abs(result.width / result.height - 1600 / 100)).toBeLessThan(0.01);
 	});
 
 	it("preserves inputs already within budget and dimensions (fast path)", async () => {
-		// 200x200 red square encodes to ~few hundred bytes — well below budget/4
-		const data = await makeRedPng(200, 200);
-
-		const result = await resizeImage({ type: "image", data, mimeType: "image/png" });
+		// 200x200 red square encodes to ~few hundred bytes — well below budget/4.
+		const result = await resizeImage({ type: "image", data: smallPng, mimeType: "image/png" });
 
 		expect(result.wasResized).toBe(false);
 		expect(result.width).toBe(200);
@@ -48,11 +65,9 @@ describe("resizeImage defaults", () => {
 	});
 
 	it("respects custom maxWidth/maxHeight overrides (browser-tool case)", async () => {
-		// 1600x1200 — exceeds the 1024 cap from the browser screenshot override
-		const data = await makeRedPng(1600, 1200);
-
+		// 1600px wide — exceeds the 1024 cap from the browser screenshot override.
 		const result = await resizeImage(
-			{ type: "image", data, mimeType: "image/png" },
+			{ type: "image", data: oversizedPng, mimeType: "image/png" },
 			{ maxWidth: 1024, maxHeight: 1024, maxBytes: 150 * 1024, jpegQuality: 70 },
 		);
 
@@ -63,12 +78,11 @@ describe("resizeImage defaults", () => {
 	});
 
 	it("respects custom maxBytes override even when dimensions already fit", async () => {
-		// 800x600 within both default and override dimensions, but a tight 4KB
-		// budget forces re-encoding/dimension reduction.
-		const data = await makeRedPng(800, 600);
-		const originalBytes = Buffer.from(data, "base64").length;
+		// 200x200 sits within every dimension cap, but a byte budget below the
+		// source size (after the /4 fast-path headroom) forces a re-encode.
+		const originalBytes = Buffer.from(smallPng, "base64").length;
 
-		const result = await resizeImage({ type: "image", data, mimeType: "image/png" }, { maxBytes: 4 * 1024 });
+		const result = await resizeImage({ type: "image", data: smallPng, mimeType: "image/png" }, { maxBytes: 1024 });
 
 		// Either the result fits the budget, or the algorithm exhausted its
 		// fallbacks and shipped its smallest variant — but in both cases the
@@ -77,24 +91,23 @@ describe("resizeImage defaults", () => {
 	});
 
 	it("uses lossy WebP or JPEG (not PNG) for oversized inputs", async () => {
-		// 2000x2000 red PNG — exceeds dimension cap, triggers encodeSmallest.
+		// Oversized red strip exceeds the dimension cap, triggering encodeSmallest.
 		// Lossy formats (JPEG/WebP) should win over PNG for a solid-color image
-		// at this dimension because they compress more aggressively.
-		const data = await makeRedPng(2000, 2000);
-
-		const result = await resizeImage({ type: "image", data, mimeType: "image/png" });
+		// because they compress more aggressively.
+		const result = await resizeImage({ type: "image", data: oversizedPng, mimeType: "image/png" });
 
 		expect(result.wasResized).toBe(true);
 		// The result should be a lossy format (JPEG or WebP), not PNG,
-		// because lossy encoding at <=1568px for a solid square is trivially small.
+		// because lossy encoding for a solid strip is trivially small.
 		expect(["image/jpeg", "image/webp"]).toContain(result.mimeType);
 		expect(result.buffer.length).toBeLessThanOrEqual(500 * 1024);
 	});
 
 	it("excludes WebP when excludeWebP option is true", async () => {
-		const data = await makeRedPng(2000, 2000);
-
-		const result = await resizeImage({ type: "image", data, mimeType: "image/png" }, { excludeWebP: true });
+		const result = await resizeImage(
+			{ type: "image", data: oversizedPng, mimeType: "image/png" },
+			{ excludeWebP: true },
+		);
 
 		expect(result.wasResized).toBe(true);
 		expect(["image/png", "image/jpeg"]).toContain(result.mimeType);
@@ -105,9 +118,10 @@ describe("resizeImage defaults", () => {
 		// 200x200 WebP — well below 1568px and ~tiny bytes, so it would hit the
 		// fast path and pass through as image/webp. excludeWebP MUST force a
 		// re-encode to a non-WebP format.
-		const data = await makeRedWebP(200, 200);
-
-		const result = await resizeImage({ type: "image", data, mimeType: "image/webp" }, { excludeWebP: true });
+		const result = await resizeImage(
+			{ type: "image", data: smallWebp, mimeType: "image/webp" },
+			{ excludeWebP: true },
+		);
 
 		expect(result.mimeType).not.toBe("image/webp");
 		expect(["image/png", "image/jpeg"]).toContain(result.mimeType);
@@ -127,23 +141,20 @@ describe("resizeImage env wiring", () => {
 	});
 
 	it("treats OMP_NO_WEBP=1 set at call time as exclusion (not baked at module load)", async () => {
-		const data = await makeRedWebP(200, 200);
 		Bun.env.OMP_NO_WEBP = "1";
 
-		const result = await resizeImage({ type: "image", data, mimeType: "image/webp" });
+		const result = await resizeImage({ type: "image", data: smallWebp, mimeType: "image/webp" });
 
 		expect(result.mimeType).not.toBe("image/webp");
 	});
 
 	it("treats OMP_NO_WEBP='' / '0' as NOT excluded", async () => {
-		const data = await makeRedWebP(200, 200);
-
 		Bun.env.OMP_NO_WEBP = "";
-		const empty = await resizeImage({ type: "image", data, mimeType: "image/webp" });
+		const empty = await resizeImage({ type: "image", data: smallWebp, mimeType: "image/webp" });
 		expect(empty.mimeType).toBe("image/webp");
 
 		Bun.env.OMP_NO_WEBP = "0";
-		const zero = await resizeImage({ type: "image", data, mimeType: "image/webp" });
+		const zero = await resizeImage({ type: "image", data: smallWebp, mimeType: "image/webp" });
 		expect(zero.mimeType).toBe("image/webp");
 	});
 });

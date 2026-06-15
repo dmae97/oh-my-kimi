@@ -1,11 +1,14 @@
 /**
  * End-to-end contract: a host started with both link variants marks view-link
  * guests read-only in `welcome` and refuses their mutating frames, while
- * full-link guests keep prompt/abort/agent-cmd capability. Runs over a real
- * websocket relay (in-test stand-in speaking the documented relay contract)
- * with real sealing — only the TUI context is stubbed.
+ * full-link guests keep prompt/abort/agent-cmd capability. Runs over an
+ * in-process relay + fake WebSocket transport (no real sockets, no handshake
+ * or polling latency) that speaks the documented relay forwarding contract,
+ * with real AES-GCM sealing — only the TUI context and the network transport
+ * are stubbed. One host/relay boots once and is reused; guest frames ride the
+ * in-memory transport, so the suite stays fast and time-independent.
  */
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { importRoomKey } from "@oh-my-pi/pi-coding-agent/collab/crypto";
 import { CollabHost } from "@oh-my-pi/pi-coding-agent/collab/host";
 import {
@@ -18,61 +21,114 @@ import {
 import { CollabSocket } from "@oh-my-pi/pi-coding-agent/collab/relay-client";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 
-interface RelayData {
-	role: "host" | "guest";
-	peerId: number;
+// ── In-memory transport ────────────────────────────────────────────────────
+// FakeWebSocket + InMemoryRelay replace the real Bun.serve relay and loopback
+// WebSocket. They mirror the production relay's forwarding contract exactly
+// (4-byte peerId envelope routing, peer-joined/peer-left control frames) but
+// deliver every frame on a microtask with zero network or timer latency. Real
+// CollabSocket / CollabHost run unchanged on top, so sealing, enveloping, the
+// hello→welcome handshake, and read-only enforcement are all exercised.
+
+/** Active relay the fake transport routes through; set for the lifetime of this file. */
+let activeRelay: InMemoryRelay | null = null;
+
+class FakeWebSocket {
+	static readonly CONNECTING = 0;
+	static readonly OPEN = 1;
+	static readonly CLOSING = 2;
+	static readonly CLOSED = 3;
+
+	binaryType = "blob";
+	readyState: number = FakeWebSocket.CONNECTING;
+	readonly role: "host" | "guest";
+	peerId = 0;
+	onopen: (() => void) | null = null;
+	onmessage: ((event: { data: unknown }) => void) | null = null;
+	onerror: (() => void) | null = null;
+	onclose: ((event: { code: number; reason: string }) => void) | null = null;
+	readonly #relay: InMemoryRelay;
+
+	constructor(url: string) {
+		const relay = activeRelay;
+		if (!relay) throw new Error("FakeWebSocket: no active in-memory relay");
+		this.#relay = relay;
+		this.role = new URL(url).searchParams.get("role") === "host" ? "host" : "guest";
+		queueMicrotask(() => {
+			if (this.readyState !== FakeWebSocket.CONNECTING) return;
+			this.readyState = FakeWebSocket.OPEN;
+			relay.connect(this);
+			this.onopen?.();
+		});
+	}
+
+	send(data: Uint8Array): void {
+		if (this.readyState !== FakeWebSocket.OPEN) return;
+		// Snapshot: the relay rewrites the peerId in place, and the sender may
+		// reuse the buffer once send() returns.
+		const bytes = new Uint8Array(data);
+		queueMicrotask(() => this.#relay.forward(this, bytes));
+	}
+
+	close(_code?: number): void {
+		if (this.readyState === FakeWebSocket.CLOSED) return;
+		this.readyState = FakeWebSocket.CLOSED;
+		this.#relay.disconnect(this);
+		queueMicrotask(() => this.onclose?.({ code: 1000, reason: "closed" }));
+	}
+
+	/** Relay → this socket: a binary frame, delivered as ArrayBuffer (binaryType "arraybuffer"). */
+	deliver(bytes: Uint8Array): void {
+		if (this.readyState !== FakeWebSocket.OPEN) return;
+		const copy = new Uint8Array(bytes);
+		queueMicrotask(() => this.onmessage?.({ data: copy.buffer }));
+	}
+
+	/** Relay → this socket: a JSON control message. */
+	deliverControl(json: string): void {
+		if (this.readyState !== FakeWebSocket.OPEN) return;
+		queueMicrotask(() => this.onmessage?.({ data: json }));
+	}
 }
 
-type RelaySocket = Bun.ServerWebSocket<RelayData>;
+/** Single-room in-memory relay mirroring the production forwarding contract. */
+class InMemoryRelay {
+	#host: FakeWebSocket | null = null;
+	readonly #guests = new Map<number, FakeWebSocket>();
+	#nextPeerId = 1;
 
-/** Single-room test relay mirroring the production forwarding contract. */
-function startTestRelay(): { url: string; stop(): void } {
-	let host: RelaySocket | null = null;
-	const guests = new Map<number, RelaySocket>();
-	let nextPeerId = 1;
-	const server = Bun.serve({
-		port: 0,
-		fetch(req, srv): Response | undefined {
-			const role = new URL(req.url).searchParams.get("role") === "host" ? "host" : "guest";
-			const data: RelayData = { role, peerId: 0 };
-			if (srv.upgrade(req, { data })) return undefined;
-			return new Response("upgrade failed", { status: 400 });
-		},
-		websocket: {
-			open(ws: RelaySocket): void {
-				if (ws.data.role === "host") {
-					host = ws;
-					return;
-				}
-				ws.data.peerId = nextPeerId++;
-				guests.set(ws.data.peerId, ws);
-				host?.send(JSON.stringify({ t: "peer-joined", peer: ws.data.peerId }));
-			},
-			message(ws: RelaySocket, message: string | Buffer): void {
-				if (typeof message === "string") return;
-				const bytes = new Uint8Array(message);
-				if (ws.data.role === "host") {
-					const envelope = unpackEnvelope(bytes);
-					if (!envelope) return;
-					if (envelope.peerId === 0) {
-						for (const guest of guests.values()) guest.send(bytes);
-					} else {
-						guests.get(envelope.peerId)?.send(bytes);
-					}
-					return;
-				}
-				rewriteEnvelopePeer(bytes, ws.data.peerId);
-				host?.send(bytes);
-			},
-			close(ws: RelaySocket): void {
-				if (ws.data.role === "guest") {
-					guests.delete(ws.data.peerId);
-					host?.send(JSON.stringify({ t: "peer-left", peer: ws.data.peerId }));
-				}
-			},
-		},
-	});
-	return { url: `ws://localhost:${server.port}`, stop: () => server.stop(true) };
+	connect(ws: FakeWebSocket): void {
+		if (ws.role === "host") {
+			this.#host = ws;
+			return;
+		}
+		ws.peerId = this.#nextPeerId++;
+		this.#guests.set(ws.peerId, ws);
+		this.#host?.deliverControl(JSON.stringify({ t: "peer-joined", peer: ws.peerId }));
+	}
+
+	forward(from: FakeWebSocket, bytes: Uint8Array): void {
+		if (from.role === "host") {
+			const envelope = unpackEnvelope(bytes);
+			if (!envelope) return;
+			if (envelope.peerId === 0) {
+				for (const guest of this.#guests.values()) guest.deliver(bytes);
+			} else {
+				this.#guests.get(envelope.peerId)?.deliver(bytes);
+			}
+			return;
+		}
+		rewriteEnvelopePeer(bytes, from.peerId);
+		this.#host?.deliver(bytes);
+	}
+
+	disconnect(ws: FakeWebSocket): void {
+		if (ws.role === "host") {
+			if (this.#host === ws) this.#host = null;
+			return;
+		}
+		this.#guests.delete(ws.peerId);
+		this.#host?.deliverControl(JSON.stringify({ t: "peer-left", peer: ws.peerId }));
+	}
 }
 
 interface HostHarness {
@@ -142,7 +198,7 @@ interface TestGuest {
 }
 
 /** Frames the host broadcasts on its own schedule (debounced state/agents, entry/event/bus taps). */
-const BROADCAST_FRAME_TYPES = new Set<CollabFrame["t"]>(["state", "agents", "entry", "event", "bus"]);
+const BROADCAST_FRAME_TYPES: Record<string, true> = { state: true, agents: true, entry: true, event: true, bus: true };
 
 /**
  * Raw guest speaking the wire protocol directly. `writeToken` overrides the link's token (e.g. forged).
@@ -160,7 +216,7 @@ async function joinAsGuest(link: string, name: string, writeTokenOverride?: stri
 	const queue: CollabFrame[] = [];
 	const waiters: ((frame: CollabFrame) => void)[] = [];
 	socket.onFrame = frame => {
-		if (BROADCAST_FRAME_TYPES.has(frame.t)) return;
+		if (BROADCAST_FRAME_TYPES[frame.t]) return;
 		const waiter = waiters.shift();
 		if (waiter) waiter(frame);
 		else queue.push(frame);
@@ -177,29 +233,46 @@ async function joinAsGuest(link: string, name: string, writeTokenOverride?: stri
 	return { socket, nextFrame };
 }
 
-const cleanups: (() => void | Promise<void>)[] = [];
+// ── Shared host/relay, booted once ──────────────────────────────────────────
+// Booting the relay + host and connecting the host socket is the only heavy
+// step; it is identical across all three tests (none mutate host config), so it
+// runs once. Per-test guest state is reset in afterEach.
 
-afterEach(async () => {
-	for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
+const RealWebSocket = globalThis.WebSocket;
+const guestCleanups: (() => void)[] = [];
+let harness: HostHarness;
+let host: CollabHost;
+
+beforeAll(async () => {
+	globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+	activeRelay = new InMemoryRelay();
+	harness = makeHostContext();
+	host = new CollabHost(harness.ctx);
+	// Port is irrelevant: the fake transport routes by the `role` query param.
+	await host.start("ws://localhost:8787");
 });
 
-async function setup(): Promise<HostHarness & { host: CollabHost }> {
-	const relay = startTestRelay();
-	cleanups.push(relay.stop);
-	const harness = makeHostContext();
-	const host = new CollabHost(harness.ctx);
-	await host.start(relay.url);
-	cleanups.push(() => host.stop("test done"));
-	return { ...harness, host };
-}
+afterEach(() => {
+	for (const cleanup of guestCleanups.splice(0).reverse()) cleanup();
+	harness.prompts.length = 0;
+	harness.aborts.count = 0;
+});
+
+afterAll(async () => {
+	// Restore the real transport first so the global is clean even if stop() throws;
+	// the host's socket holds its own FakeWebSocket/relay refs, so teardown still works.
+	globalThis.WebSocket = RealWebSocket;
+	activeRelay = null;
+	await host.stop("test done");
+});
 
 describe("collab read-only links", () => {
 	it("welcomes view-link guests read-only and refuses their mutating frames", async () => {
-		const { host, prompts, aborts } = await setup();
+		const { prompts, aborts } = harness;
 		expect(host.viewLink).not.toBe(host.link);
 
 		const guest = await joinAsGuest(host.viewLink, "viewer");
-		cleanups.push(() => guest.socket.close());
+		guestCleanups.push(() => guest.socket.close());
 		const welcome = await guest.nextFrame();
 		if (welcome.t !== "welcome") throw new Error(`expected welcome, got ${welcome.t}`);
 		expect(welcome.readOnly).toBe(true);
@@ -223,10 +296,10 @@ describe("collab read-only links", () => {
 	});
 
 	it("keeps full write capability for guests holding the write token", async () => {
-		const { host, prompts, nextPrompt } = await setup();
+		const { prompts, nextPrompt } = harness;
 
 		const guest = await joinAsGuest(host.link, "writer");
-		cleanups.push(() => guest.socket.close());
+		guestCleanups.push(() => guest.socket.close());
 		const welcome = await guest.nextFrame();
 		if (welcome.t !== "welcome") throw new Error(`expected welcome, got ${welcome.t}`);
 		expect(welcome.readOnly).toBeUndefined();
@@ -239,12 +312,12 @@ describe("collab read-only links", () => {
 	});
 
 	it("treats a forged write token as read-only", async () => {
-		const { host, prompts } = await setup();
+		const { prompts } = harness;
 
 		// A viewer knows the room key but not the token; garbage must not escalate.
 		const forged = Buffer.alloc(16, 0xab).toString("base64url");
 		const guest = await joinAsGuest(host.viewLink, "forger", forged);
-		cleanups.push(() => guest.socket.close());
+		guestCleanups.push(() => guest.socket.close());
 
 		const welcome = await guest.nextFrame();
 		if (welcome.t !== "welcome") throw new Error(`expected welcome, got ${welcome.t}`);

@@ -40,6 +40,149 @@ import * as piUtils from "@oh-my-pi/pi-utils";
 import { sanitizeText, TempDir } from "@oh-my-pi/pi-utils";
 import DEFAULTS from "../../src/lsp/defaults.json" with { type: "json" };
 
+interface RpcMessage {
+	jsonrpc?: string;
+	id?: number | string;
+	method?: string;
+	params?: unknown;
+	result?: unknown;
+	error?: { code: number; message?: string };
+}
+
+interface FakeLspServer {
+	/** Parsed JSON-RPC messages the client wrote to the server, in arrival order. */
+	readonly received: RpcMessage[];
+	/** Server -> client: frame and enqueue a JSON-RPC message onto stdout. */
+	send(message: RpcMessage): void;
+	/** Resolve the process `exited` promise and close stdout. */
+	exit(code?: number): void;
+	/** Whether the client invoked `proc.kill()` (production's hard-kill fallback). */
+	readonly killed: boolean;
+	/** Resolve once a received message matches `predicate` (already-seen or future). */
+	waitFor(predicate: (message: RpcMessage) => boolean, timeoutMs?: number): Promise<RpcMessage>;
+}
+
+type FakeLspHandler = (message: RpcMessage, server: FakeLspServer) => void | Promise<void>;
+
+// In-memory LSP transport fake. Replaces the real subprocess (`ptree.spawn`)
+// with an in-process JSON-RPC peer so the initialize / shutdown / exit and
+// workspace-folder handshakes resolve deterministically -- no subprocess spawn,
+// no real-clock latency. Installed by spying on the shared `ptree` namespace
+// object (NOT `mock.module`, which would leak across files); the suite's
+// `afterEach` `vi.restoreAllMocks()` removes it.
+function installFakeLsp(handler: FakeLspHandler): FakeLspServer {
+	const encoder = new TextEncoder();
+	const received: RpcMessage[] = [];
+	const waiters: Array<{
+		predicate: (message: RpcMessage) => boolean;
+		resolve: (message: RpcMessage) => void;
+		timer: ReturnType<typeof setTimeout>;
+	}> = [];
+	let exitCode: number | null = null;
+	let killed = false;
+	let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
+	const { promise: exited, resolve: resolveExited } = Promise.withResolvers<number>();
+
+	const frame = (message: RpcMessage): Uint8Array => {
+		const content = JSON.stringify(message);
+		return encoder.encode(`Content-Length: ${Buffer.byteLength(content, "utf-8")}\r\n\r\n${content}`);
+	};
+
+	const stdout = new ReadableStream<Uint8Array>({
+		start(c) {
+			controller = c;
+		},
+	});
+
+	const server: FakeLspServer = {
+		received,
+		send(message) {
+			if (controller && exitCode === null) controller.enqueue(frame(message));
+		},
+		exit(code = 0) {
+			if (exitCode !== null) return;
+			exitCode = code;
+			controller?.close();
+			resolveExited(code);
+		},
+		get killed() {
+			return killed;
+		},
+		waitFor(predicate, timeoutMs = 1_000) {
+			const existing = received.find(predicate);
+			if (existing) return Promise.resolve(existing);
+			return new Promise<RpcMessage>((resolve, reject) => {
+				const timer = setTimeout(() => {
+					const index = waiters.findIndex(entry => entry.timer === timer);
+					if (index >= 0) waiters.splice(index, 1);
+					reject(new Error("FakeLspServer.waitFor: timed out"));
+				}, timeoutMs);
+				waiters.push({ predicate, resolve, timer });
+			});
+		},
+	};
+
+	// Frame + dispatch the client -> server byte stream. The chain serialises
+	// handler runs so message ordering mirrors the wire.
+	let pendingBytes = Buffer.alloc(0);
+	let chain: Promise<void> = Promise.resolve();
+	const feed = (raw: string | Uint8Array): void => {
+		const chunk = typeof raw === "string" ? Buffer.from(raw, "utf-8") : Buffer.from(raw);
+		pendingBytes = pendingBytes.length === 0 ? chunk : Buffer.concat([pendingBytes, chunk]);
+		chain = chain.then(async () => {
+			while (true) {
+				const headerEnd = pendingBytes.indexOf("\r\n\r\n");
+				if (headerEnd === -1) break;
+				const match = /Content-Length: (\d+)/i.exec(pendingBytes.toString("utf-8", 0, headerEnd));
+				if (!match) {
+					pendingBytes = pendingBytes.subarray(headerEnd + 4);
+					continue;
+				}
+				const start = headerEnd + 4;
+				const end = start + Number(match[1]);
+				if (pendingBytes.length < end) break;
+				const message = JSON.parse(pendingBytes.toString("utf-8", start, end)) as RpcMessage;
+				pendingBytes = pendingBytes.subarray(end);
+				received.push(message);
+				for (let i = waiters.length - 1; i >= 0; i--) {
+					if (waiters[i].predicate(message)) {
+						clearTimeout(waiters[i].timer);
+						waiters[i].resolve(message);
+						waiters.splice(i, 1);
+					}
+				}
+				await handler(message, server);
+			}
+		});
+	};
+
+	const proc = {
+		get exited() {
+			return exited;
+		},
+		get exitCode() {
+			return exitCode;
+		},
+		stdin: {
+			write(chunk: string | Uint8Array) {
+				feed(chunk);
+				return typeof chunk === "string" ? Buffer.byteLength(chunk, "utf-8") : chunk.byteLength;
+			},
+			flush: async () => 0,
+			end: async () => 0,
+		},
+		stdout,
+		peekStderr: () => "",
+		kill() {
+			killed = true;
+			server.exit(0);
+		},
+	} as unknown as LspClient["proc"];
+
+	vi.spyOn(piUtils.ptree, "spawn").mockReturnValue(proc);
+	return server;
+}
+
 describe("lsp regressions", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
@@ -57,90 +200,38 @@ describe("lsp regressions", () => {
 		expect(clampTimeout("lsp", 1000)).toBe(60);
 	});
 
-	async function markerExists(filePath: string): Promise<boolean> {
-		try {
-			await Bun.file(filePath).bytes();
-			return true;
-		} catch (error) {
-			if (piUtils.isEnoent(error)) return false;
-			throw error;
-		}
-	}
-
 	it("sends the LSP exit notification after shutdown completes", async () => {
 		const tempDir = TempDir.createSync("@omp-lsp-shutdown-");
 		try {
-			const markerDir = tempDir.path();
-			const serverPath = path.join(markerDir, "server.ts");
-			await Bun.write(
-				serverPath,
-				`
-const markerDir = process.argv[2];
-const decoder = new TextDecoder();
-let buffer = "";
+			const server = installFakeLsp((message, srv) => {
+				if (message.method === "initialize") {
+					srv.send({ jsonrpc: "2.0", id: message.id, result: { capabilities: {} } });
+				} else if (message.method === "shutdown") {
+					srv.send({ jsonrpc: "2.0", id: message.id, result: null });
+				} else if (message.method === "exit") {
+					srv.exit(0);
+				}
+			});
 
-async function mark(name) {
-	await Bun.write(\`\${markerDir}/\${name}\`, "1\\n");
-}
-
-function send(message) {
-	const content = JSON.stringify(message);
-	process.stdout.write(\`Content-Length: \${Buffer.byteLength(content, "utf8")}\\r\\n\\r\\n\${content}\`);
-}
-
-process.on("SIGTERM", () => {
-	void mark("sigterm").finally(() => process.abort());
-});
-
-for await (const chunk of Bun.stdin.stream()) {
-	buffer += decoder.decode(chunk, { stream: true });
-	while (true) {
-		const headerEnd = buffer.indexOf("\\r\\n\\r\\n");
-		if (headerEnd === -1) break;
-
-		const header = buffer.slice(0, headerEnd);
-		const match = /Content-Length: (\\d+)/i.exec(header);
-		if (!match) process.exit(2);
-
-		const contentLength = Number(match[1]);
-		const contentStart = headerEnd + 4;
-		const contentEnd = contentStart + contentLength;
-		if (buffer.length < contentEnd) break;
-
-		const message = JSON.parse(buffer.slice(contentStart, contentEnd));
-		buffer = buffer.slice(contentEnd);
-
-		if (message.method === "initialize") {
-			await mark("initialize");
-			send({ jsonrpc: "2.0", id: message.id, result: { capabilities: {} } });
-		} else if (message.method === "shutdown") {
-			await mark("shutdown");
-			send({ jsonrpc: "2.0", id: message.id, result: null });
-		} else if (message.method === "exit") {
-			await mark("exit");
-			process.exit(0);
-		}
-	}
-}
-
-await mark("stdin-closed");
-process.abort();
-`,
-			);
-
-			const server: ServerConfig = {
-				command: process.execPath,
-				args: [serverPath, markerDir],
+			const config: ServerConfig = {
+				command: "fake-lsp",
 				fileTypes: ["ts"],
 				rootMarkers: [],
 			};
 
-			await lspClient.getOrCreateClient(server, tempDir.path(), 1_000);
+			await lspClient.getOrCreateClient(config, tempDir.path(), 1_000);
 			await lspClient.shutdownAll();
 
-			expect(await markerExists(path.join(markerDir, "shutdown"))).toBe(true);
-			expect(await markerExists(path.join(markerDir, "exit"))).toBe(true);
-			expect(await markerExists(path.join(markerDir, "sigterm"))).toBe(false);
+			// Graceful handshake: the client sends `shutdown`, waits for its reply,
+			// then sends the `exit` notification -- and never resorts to the hard
+			// `proc.kill()` (production's SIGTERM fallback) because the server exits
+			// cleanly on `exit`.
+			const methods = server.received.map(message => message.method);
+			const shutdownIndex = methods.indexOf("shutdown");
+			const exitIndex = methods.indexOf("exit");
+			expect(shutdownIndex).toBeGreaterThanOrEqual(0);
+			expect(exitIndex).toBeGreaterThan(shutdownIndex);
+			expect(server.killed).toBe(false);
 		} finally {
 			await lspClient.shutdownAll();
 			tempDir.removeSync();
@@ -150,60 +241,26 @@ process.abort();
 	it("advertises workspace folder support during LSP initialization", async () => {
 		const tempDir = TempDir.createSync("@omp-lsp-workspace-folders-");
 		try {
-			const initPath = path.join(tempDir.path(), "initialize.json");
-			const serverPath = path.join(tempDir.path(), "server.ts");
-			await Bun.write(
-				serverPath,
-				`
-const initPath = process.argv[2];
-const decoder = new TextDecoder();
-let buffer = "";
+			const server = installFakeLsp((message, srv) => {
+				if (message.method === "initialize") {
+					srv.send({ jsonrpc: "2.0", id: message.id, result: { capabilities: {} } });
+				} else if (message.method === "shutdown") {
+					srv.send({ jsonrpc: "2.0", id: message.id, result: null });
+				} else if (message.method === "exit") {
+					srv.exit(0);
+				}
+			});
 
-function send(message) {
-	const content = JSON.stringify(message);
-	process.stdout.write(\`Content-Length: \${Buffer.byteLength(content, "utf8")}\\r\\n\\r\\n\${content}\`);
-}
-
-for await (const chunk of Bun.stdin.stream()) {
-	buffer += decoder.decode(chunk, { stream: true });
-	while (true) {
-		const headerEnd = buffer.indexOf("\\r\\n\\r\\n");
-		if (headerEnd === -1) break;
-
-		const header = buffer.slice(0, headerEnd);
-		const match = /Content-Length: (\\d+)/i.exec(header);
-		if (!match) process.exit(2);
-
-		const contentLength = Number(match[1]);
-		const contentStart = headerEnd + 4;
-		const contentEnd = contentStart + contentLength;
-		if (buffer.length < contentEnd) break;
-
-		const message = JSON.parse(buffer.slice(contentStart, contentEnd));
-		buffer = buffer.slice(contentEnd);
-
-		if (message.method === "initialize") {
-			await Bun.write(initPath, JSON.stringify(message.params));
-			send({ jsonrpc: "2.0", id: message.id, result: { capabilities: {} } });
-		} else if (message.method === "shutdown") {
-			send({ jsonrpc: "2.0", id: message.id, result: null });
-		} else if (message.method === "exit") {
-			process.exit(0);
-		}
-	}
-}
-`,
-			);
-
-			const server: ServerConfig = {
-				command: process.execPath,
-				args: [serverPath, initPath],
+			const config: ServerConfig = {
+				command: "fake-lsp",
 				fileTypes: ["rs"],
 				rootMarkers: [],
 			};
 
-			await lspClient.getOrCreateClient(server, tempDir.path(), 1_000);
-			const params = (await Bun.file(initPath).json()) as {
+			await lspClient.getOrCreateClient(config, tempDir.path(), 1_000);
+
+			const init = server.received.find(message => message.method === "initialize");
+			const params = init?.params as {
 				capabilities?: { workspace?: { workspaceFolders?: unknown } };
 				workspaceFolders?: unknown;
 			};
@@ -221,69 +278,26 @@ for await (const chunk of Bun.stdin.stream()) {
 	it("answers workspace/workspaceFolders requests with the current folder set", async () => {
 		const tempDir = TempDir.createSync("@omp-lsp-workspace-folders-request-");
 		try {
-			const responsePath = path.join(tempDir.path(), "folders-response.json");
-			const serverPath = path.join(tempDir.path(), "server.ts");
-			await Bun.write(
-				serverPath,
-				`
-const responsePath = process.argv[2];
-const decoder = new TextDecoder();
-let buffer = "";
+			const server = installFakeLsp((message, srv) => {
+				if (message.method === "initialize") {
+					srv.send({ jsonrpc: "2.0", id: message.id, result: { capabilities: {} } });
+					// Server-initiated request: the client must answer with the folder set.
+					srv.send({ jsonrpc: "2.0", id: 9001, method: "workspace/workspaceFolders" });
+				} else if (message.method === "shutdown") {
+					srv.send({ jsonrpc: "2.0", id: message.id, result: null });
+				} else if (message.method === "exit") {
+					srv.exit(0);
+				}
+			});
 
-function send(message) {
-	const content = JSON.stringify(message);
-	process.stdout.write(\`Content-Length: \${Buffer.byteLength(content, "utf8")}\\r\\n\\r\\n\${content}\`);
-}
-
-for await (const chunk of Bun.stdin.stream()) {
-	buffer += decoder.decode(chunk, { stream: true });
-	while (true) {
-		const headerEnd = buffer.indexOf("\\r\\n\\r\\n");
-		if (headerEnd === -1) break;
-
-		const header = buffer.slice(0, headerEnd);
-		const match = /Content-Length: (\\d+)/i.exec(header);
-		if (!match) process.exit(2);
-
-		const contentLength = Number(match[1]);
-		const contentStart = headerEnd + 4;
-		const contentEnd = contentStart + contentLength;
-		if (buffer.length < contentEnd) break;
-
-		const message = JSON.parse(buffer.slice(contentStart, contentEnd));
-		buffer = buffer.slice(contentEnd);
-
-		if (message.method === "initialize") {
-			send({ jsonrpc: "2.0", id: message.id, result: { capabilities: {} } });
-			send({ jsonrpc: "2.0", id: 9001, method: "workspace/workspaceFolders" });
-		} else if (message.id === 9001) {
-			await Bun.write(responsePath, JSON.stringify(message));
-		} else if (message.method === "shutdown") {
-			send({ jsonrpc: "2.0", id: message.id, result: null });
-		} else if (message.method === "exit") {
-			process.exit(0);
-		}
-	}
-}
-`,
-			);
-
-			const server: ServerConfig = {
-				command: process.execPath,
-				args: [serverPath, responsePath],
+			const config: ServerConfig = {
+				command: "fake-lsp",
 				fileTypes: ["rs"],
 				rootMarkers: [],
 			};
 
-			await lspClient.getOrCreateClient(server, tempDir.path(), 1_000);
-			const deadline = Date.now() + 1_000;
-			while (!fs.existsSync(responsePath) && Date.now() < deadline) {
-				await Bun.sleep(20);
-			}
-			const response = (await Bun.file(responsePath).json()) as {
-				error?: { code: number };
-				result?: unknown;
-			};
+			await lspClient.getOrCreateClient(config, tempDir.path(), 1_000);
+			const response = await server.waitFor(message => message.id === 9001 && message.method === undefined);
 
 			expect(response.error).toBeUndefined();
 			expect(response.result).toEqual([{ uri: fileToUri(tempDir.path()), name: path.basename(tempDir.path()) }]);
@@ -297,88 +311,67 @@ for await (const chunk of Bun.stdin.stream()) {
 		const tempDir = TempDir.createSync("@omp-lsp-rust-workspace-");
 		try {
 			const sourcePath = path.join(tempDir.path(), "src", "main.rs");
-			const serverPath = path.join(tempDir.path(), "server.ts");
-			const eventLogPath = path.join(tempDir.path(), "events.log");
-			const statusCountPath = path.join(tempDir.path(), "status-count.txt");
 			await Bun.write(path.join(tempDir.path(), "Cargo.toml"), '[package]\nname = "fixture"\nversion = "0.0.0"\n');
 			await Bun.write(sourcePath, "fn greet() {}\nfn main() { greet(); }\n");
-			await Bun.write(
-				serverPath,
-				`
-const eventLogPath = process.argv[2];
-const statusCountPath = process.argv[3];
-const definitionUri = process.argv[4];
-const decoder = new TextDecoder();
-let buffer = "";
-let statusRequests = 0;
-let eventLog = "";
 
-function send(message) {
-	const content = JSON.stringify(message);
-	process.stdout.write(\`Content-Length: \${Buffer.byteLength(content, "utf8")}\\r\\n\\r\\n\${content}\`);
-}
-
-for await (const chunk of Bun.stdin.stream()) {
-	buffer += decoder.decode(chunk, { stream: true });
-	while (true) {
-		const headerEnd = buffer.indexOf("\\r\\n\\r\\n");
-		if (headerEnd === -1) break;
-
-		const header = buffer.slice(0, headerEnd);
-		const match = /Content-Length: (\\d+)/i.exec(header);
-		if (!match) process.exit(2);
-
-		const contentLength = Number(match[1]);
-		const contentStart = headerEnd + 4;
-		const contentEnd = contentStart + contentLength;
-		if (buffer.length < contentEnd) break;
-
-		const message = JSON.parse(buffer.slice(contentStart, contentEnd));
-		buffer = buffer.slice(contentEnd);
-
-		if (message.method === "initialize") {
-			send({ jsonrpc: "2.0", id: message.id, result: { capabilities: { definitionProvider: true } } });
-			send({ jsonrpc: "2.0", method: "$/progress", params: { token: "workspace", value: { kind: "begin" } } });
-			send({ jsonrpc: "2.0", method: "$/progress", params: { token: "workspace", value: { kind: "end" } } });
-		} else if (message.method === "rust-analyzer/analyzerStatus") {
-			statusRequests++;
-			eventLog += "status\\n";
-			await Bun.write(eventLogPath, eventLog);
-			await Bun.write(statusCountPath, String(statusRequests));
-			if (statusRequests === 1) {
-				continue;
-			}
-			const result = statusRequests < 3 ? "No workspaces" : "Workspaces:\\nLoaded 1 package across 1 workspace.";
-			send({ jsonrpc: "2.0", id: message.id, result });
-		} else if (message.method === "textDocument/didOpen") {
-			eventLog += "open\\n";
-			await Bun.write(eventLogPath, eventLog);
-		} else if (message.method === "textDocument/definition") {
-			send({
-				jsonrpc: "2.0",
-				id: message.id,
-				result: [{ uri: definitionUri, range: { start: { line: 0, character: 3 }, end: { line: 0, character: 8 } } }],
+			const events: string[] = [];
+			let statusRequests = 0;
+			installFakeLsp((message, srv) => {
+				if (message.method === "initialize") {
+					srv.send({ jsonrpc: "2.0", id: message.id, result: { capabilities: { definitionProvider: true } } });
+					srv.send({
+						jsonrpc: "2.0",
+						method: "$/progress",
+						params: { token: "workspace", value: { kind: "begin" } },
+					});
+					srv.send({
+						jsonrpc: "2.0",
+						method: "$/progress",
+						params: { token: "workspace", value: { kind: "end" } },
+					});
+				} else if (message.method === "rust-analyzer/analyzerStatus") {
+					statusRequests++;
+					events.push("status");
+					// The first status request is intentionally dropped so the client
+					// must treat the request timeout as a retry signal
+					// (deadline-as-signal), then keep polling through "No workspaces"
+					// until the workspace reports ready.
+					if (statusRequests === 1) return;
+					const ready = statusRequests >= 3;
+					srv.send({
+						jsonrpc: "2.0",
+						id: message.id,
+						result: ready ? "Workspaces:\nLoaded 1 package across 1 workspace." : "No workspaces",
+					});
+				} else if (message.method === "textDocument/didOpen") {
+					events.push("open");
+				} else if (message.method === "textDocument/definition") {
+					srv.send({
+						jsonrpc: "2.0",
+						id: message.id,
+						result: [
+							{
+								uri: fileToUri(sourcePath),
+								range: { start: { line: 0, character: 3 }, end: { line: 0, character: 8 } },
+							},
+						],
+					});
+				} else if (message.method === "shutdown") {
+					srv.send({ jsonrpc: "2.0", id: message.id, result: null });
+				} else if (message.method === "exit") {
+					srv.exit(0);
+				}
 			});
-		} else if (message.method === "shutdown") {
-			send({ jsonrpc: "2.0", id: message.id, result: null });
-		} else if (message.method === "exit") {
-			process.exit(0);
-		}
-	}
-}
-`,
-			);
 
 			const server: ServerConfig = {
 				command: "rust-analyzer",
 				resolvedCommand: process.execPath,
-				args: [serverPath, eventLogPath, statusCountPath, fileToUri(sourcePath)],
 				fileTypes: ["rs"],
 				rootMarkers: [],
-				// Shrink the workspace-ready polling window so the test exercises the
-				// timeout→retry→ready sequence without waiting out the 2s production settle.
-				// The status-request timeout stays generous to avoid racing the subprocess.
-				workspaceReadyTimings: { timeoutMs: 5_000, pollMs: 10, settleMs: 20, statusRequestTimeoutMs: 150 },
+				// Drive the timeout -> retry -> ready loop without real-clock latency.
+				// The first status request still times out (proving deadline-as-signal),
+				// just on a tiny budget instead of the 2s production settle window.
+				workspaceReadyTimings: { timeoutMs: 5_000, pollMs: 1, settleMs: 2, statusRequestTimeoutMs: 20 },
 			};
 
 			vi.spyOn(lspConfig, "loadConfig").mockReturnValue({
@@ -400,11 +393,9 @@ for await (const chunk of Bun.stdin.stream()) {
 				.map(block => block.text)
 				.join("\n");
 
-			const eventLog = (await Bun.file(eventLogPath).text()).trim().split("\n");
 			expect(output).toContain("Found 1 definition(s)");
-			expect(eventLog[0]).toBe("open");
-			expect(eventLog.filter(line => line === "status").length).toBeGreaterThanOrEqual(3);
-			expect(Number(await Bun.file(statusCountPath).text())).toBeGreaterThanOrEqual(3);
+			expect(events[0]).toBe("open");
+			expect(events.filter(line => line === "status").length).toBeGreaterThanOrEqual(3);
 		} finally {
 			vi.restoreAllMocks();
 			await lspClient.shutdownAll();
@@ -416,70 +407,38 @@ for await (const chunk of Bun.stdin.stream()) {
 		const tempDir = TempDir.createSync("@omp-lsp-rust-standalone-");
 		try {
 			const sourcePath = path.join(tempDir.path(), "foo.rs");
-			const serverPath = path.join(tempDir.path(), "server.ts");
-			const eventLogPath = path.join(tempDir.path(), "events.log");
 			await Bun.write(sourcePath, 'fn greet() -> &\'static str { "hi" }\n');
-			await Bun.write(
-				serverPath,
-				`
-const eventLogPath = process.argv[2];
-const definitionUri = process.argv[3];
-const decoder = new TextDecoder();
-let buffer = "";
-let eventLog = "";
 
-function send(message) {
-	const content = JSON.stringify(message);
-	process.stdout.write(\`Content-Length: \${Buffer.byteLength(content, "utf8")}\\r\\n\\r\\n\${content}\`);
-}
-
-for await (const chunk of Bun.stdin.stream()) {
-	buffer += decoder.decode(chunk, { stream: true });
-	while (true) {
-		const headerEnd = buffer.indexOf("\\r\\n\\r\\n");
-		if (headerEnd === -1) break;
-
-		const header = buffer.slice(0, headerEnd);
-		const match = /Content-Length: (\\d+)/i.exec(header);
-		if (!match) process.exit(2);
-
-		const contentLength = Number(match[1]);
-		const contentStart = headerEnd + 4;
-		const contentEnd = contentStart + contentLength;
-		if (buffer.length < contentEnd) break;
-
-		const message = JSON.parse(buffer.slice(contentStart, contentEnd));
-		buffer = buffer.slice(contentEnd);
-
-		if (message.method === "initialize") {
-			send({ jsonrpc: "2.0", id: message.id, result: { capabilities: { definitionProvider: true } } });
-		} else if (message.method === "rust-analyzer/analyzerStatus") {
-			eventLog += "status\\n";
-			await Bun.write(eventLogPath, eventLog);
-			send({ jsonrpc: "2.0", id: message.id, result: "No workspaces" });
-		} else if (message.method === "textDocument/didOpen") {
-			eventLog += "open\\n";
-			await Bun.write(eventLogPath, eventLog);
-		} else if (message.method === "textDocument/definition") {
-			send({
-				jsonrpc: "2.0",
-				id: message.id,
-				result: [{ uri: definitionUri, range: { start: { line: 0, character: 3 }, end: { line: 0, character: 8 } } }],
+			const events: string[] = [];
+			installFakeLsp((message, srv) => {
+				if (message.method === "initialize") {
+					srv.send({ jsonrpc: "2.0", id: message.id, result: { capabilities: { definitionProvider: true } } });
+				} else if (message.method === "rust-analyzer/analyzerStatus") {
+					events.push("status");
+					srv.send({ jsonrpc: "2.0", id: message.id, result: "No workspaces" });
+				} else if (message.method === "textDocument/didOpen") {
+					events.push("open");
+				} else if (message.method === "textDocument/definition") {
+					srv.send({
+						jsonrpc: "2.0",
+						id: message.id,
+						result: [
+							{
+								uri: fileToUri(sourcePath),
+								range: { start: { line: 0, character: 3 }, end: { line: 0, character: 8 } },
+							},
+						],
+					});
+				} else if (message.method === "shutdown") {
+					srv.send({ jsonrpc: "2.0", id: message.id, result: null });
+				} else if (message.method === "exit") {
+					srv.exit(0);
+				}
 			});
-		} else if (message.method === "shutdown") {
-			send({ jsonrpc: "2.0", id: message.id, result: null });
-		} else if (message.method === "exit") {
-			process.exit(0);
-		}
-	}
-}
-`,
-			);
 
 			const server: ServerConfig = {
 				command: "rust-analyzer",
 				resolvedCommand: process.execPath,
-				args: [serverPath, eventLogPath, fileToUri(sourcePath)],
 				fileTypes: ["rs"],
 				rootMarkers: [],
 			};
@@ -491,7 +450,6 @@ for await (const chunk of Bun.stdin.stream()) {
 			vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([["rust-analyzer", server]]);
 
 			const tool = new LspTool({ cwd: tempDir.path() } as ToolSession);
-			const started = Date.now();
 			const result = await tool.execute("rust-standalone-test", {
 				action: "definition",
 				file: sourcePath,
@@ -499,17 +457,19 @@ for await (const chunk of Bun.stdin.stream()) {
 				symbol: "greet",
 				timeout: 10,
 			});
-			const elapsed = Date.now() - started;
 			const output = result.content
 				.filter(block => block.type === "text")
 				.map(block => block.text)
 				.join("\n");
-			const eventLog = (await Bun.file(eventLogPath).text()).trim().split("\n");
 
+			// Standalone .rs (no Cargo workspace ancestor): the file is opened but the
+			// analyzerStatus readiness poll is skipped entirely. The direct
+			// `not.toContain("status")` assertion is the skip contract; the original
+			// `elapsed < 2000ms` wall-clock proxy is dropped -- it is vacuous once the
+			// transport is in-memory.
 			expect(output).toContain("Found 1 definition(s)");
-			expect(eventLog).toContain("open");
-			expect(eventLog).not.toContain("status");
-			expect(elapsed).toBeLessThan(2_000);
+			expect(events).toContain("open");
+			expect(events).not.toContain("status");
 		} finally {
 			vi.restoreAllMocks();
 			await lspClient.shutdownAll();

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -11,8 +11,6 @@ import {
 	parseIsolationMode,
 } from "@oh-my-pi/pi-coding-agent/task/worktree";
 import * as natives from "@oh-my-pi/pi-natives";
-
-const tempDirs: string[] = [];
 
 async function runGit(repo: string, args: string[]): Promise<string> {
 	const proc = Bun.spawn(["git", ...args], {
@@ -31,27 +29,6 @@ async function runGit(repo: string, args: string[]): Promise<string> {
 	}
 	return stdout.trim();
 }
-
-async function createGitRepo(): Promise<{ baseBranch: string; repo: string }> {
-	const repo = await fs.mkdtemp(path.join(os.tmpdir(), "omp-worktree-"));
-	tempDirs.push(repo);
-	await runGit(repo, ["init"]);
-	await runGit(repo, ["config", "user.email", "test@example.com"]);
-	await runGit(repo, ["config", "user.name", "Test User"]);
-	await fs.writeFile(path.join(repo, "merged.txt"), "base version\n");
-	await fs.writeFile(path.join(repo, "staged.txt"), "base staged\n");
-	await runGit(repo, ["add", "."]);
-	await runGit(repo, ["commit", "-m", "initial"]);
-	return {
-		baseBranch: await runGit(repo, ["branch", "--show-current"]),
-		repo,
-	};
-}
-
-afterEach(async () => {
-	vi.restoreAllMocks();
-	await Promise.all(tempDirs.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
-});
 
 describe("worktree isolation helpers", () => {
 	it("returns platform-specific null path for git --no-index diffs", () => {
@@ -75,85 +52,149 @@ describe("worktree isolation helpers", () => {
 		expect(parseIsolationMode("worktree")).toBe(natives.IsoBackendKind.Rcopy);
 	});
 
-	it("retries isoResolve candidates when a backend is path-unavailable", async () => {
-		const { repo } = await createGitRepo();
-		const unavailable = new Error("ISO_UNAVAILABLE: btrfs source is not a subvolume");
-		const isoResolve = vi.spyOn(natives, "isoResolve").mockReturnValue({
-			kind: natives.IsoBackendKind.Btrfs,
-			candidates: [natives.IsoBackendKind.Btrfs, natives.IsoBackendKind.Rcopy],
-			fellBack: false,
-			reason: undefined,
+	// Real git worktree/stash/merge I/O is the contract under test and cannot be
+	// faked. One initialized fixture repo is built once in `beforeAll` (whose time
+	// is excluded from per-test body time) and shared: the costly `git init`,
+	// initial commit, and the immutable mergeable task branch are all set up there.
+	// Tests that rewind the fixture do so with a cheap `reset --hard`; the read-only
+	// and first-mutator tests run straight off the pristine fixture.
+	describe("git-backed worktree helpers", () => {
+		const BASE_BRANCH = "main";
+		const TASK_BRANCH = "task/merge-staged";
+		let repo: string;
+		let initialSha: string;
+
+		beforeAll(async () => {
+			repo = await fs.mkdtemp(path.join(os.tmpdir(), "omp-worktree-"));
+			await runGit(repo, ["init", "-q", "-b", BASE_BRANCH]);
+			await runGit(repo, ["config", "user.email", "test@example.com"]);
+			await runGit(repo, ["config", "user.name", "Test User"]);
+			await Promise.all([
+				fs.writeFile(path.join(repo, "merged.txt"), "base version\n"),
+				fs.writeFile(path.join(repo, "staged.txt"), "base staged\n"),
+			]);
+			await runGit(repo, ["add", "."]);
+			await runGit(repo, ["commit", "-q", "-m", "initial"]);
+			initialSha = await runGit(repo, ["rev-parse", "HEAD"]);
+
+			// Immutable fixture branch with a single mergeable commit. mergeTaskBranches
+			// cherry-picks (reads) it without mutating it, so it survives `reset --hard`
+			// and never needs rebuilding per test.
+			await runGit(repo, ["checkout", "-q", "-b", TASK_BRANCH]);
+			await fs.writeFile(path.join(repo, "merged.txt"), "task branch change\n");
+			await runGit(repo, ["commit", "-q", "-am", "task-change"]);
+			await runGit(repo, ["checkout", "-q", BASE_BRANCH]);
 		});
-		const isoStart = vi
-			.spyOn(natives, "isoStart")
-			.mockRejectedValueOnce(unavailable)
-			.mockResolvedValueOnce(undefined);
-		vi.spyOn(natives, "isoIsUnavailableError").mockImplementation(message => message.startsWith("ISO_UNAVAILABLE:"));
 
-		const handle = await ensureIsolation(repo, "retry-path-unavailable");
+		afterAll(async () => {
+			await fs.rm(repo, { recursive: true, force: true });
+		});
 
-		expect(isoResolve).toHaveBeenCalledWith(null);
-		expect(isoStart.mock.calls.map(call => call[0])).toEqual([
-			natives.IsoBackendKind.Btrfs,
-			natives.IsoBackendKind.Rcopy,
-		]);
-		expect(handle.backend).toBe(natives.IsoBackendKind.Rcopy);
-		expect(handle.fellBack).toBe(true);
-		expect(handle.fallbackReason).toBe(unavailable.message);
-	});
+		afterEach(() => {
+			vi.restoreAllMocks();
+		});
 
-	it("does not pop an unrelated pre-existing stash when the working tree is clean", async () => {
-		const { repo } = await createGitRepo();
-		await fs.writeFile(path.join(repo, "preexisting.txt"), "user stash\n");
-		await runGit(repo, ["stash", "push", "--include-untracked", "-m", "preexisting-user-stash"]);
-		const before = await runGit(repo, ["stash", "list"]);
+		it("retries isoResolve candidates when a backend is path-unavailable", async () => {
+			const unavailable = new Error("ISO_UNAVAILABLE: btrfs source is not a subvolume");
+			const isoResolve = vi.spyOn(natives, "isoResolve").mockReturnValue({
+				kind: natives.IsoBackendKind.Btrfs,
+				candidates: [natives.IsoBackendKind.Btrfs, natives.IsoBackendKind.Rcopy],
+				fellBack: false,
+				reason: undefined,
+			});
+			const isoStart = vi
+				.spyOn(natives, "isoStart")
+				.mockRejectedValueOnce(unavailable)
+				.mockResolvedValueOnce(undefined);
+			vi.spyOn(natives, "isoIsUnavailableError").mockImplementation(message =>
+				message.startsWith("ISO_UNAVAILABLE:"),
+			);
 
-		const result = await mergeTaskBranches(repo, []);
+			const handle = await ensureIsolation(repo, "retry-path-unavailable");
 
-		expect(result).toEqual({ failed: [], merged: [] });
-		expect(await runGit(repo, ["stash", "list"])).toBe(before);
-		expect(await runGit(repo, ["status", "--porcelain=v1"])).toBe("");
-	});
+			expect(isoResolve).toHaveBeenCalledWith(null);
+			expect(isoStart.mock.calls.map(call => call[0])).toEqual([
+				natives.IsoBackendKind.Btrfs,
+				natives.IsoBackendKind.Rcopy,
+			]);
+			expect(handle.backend).toBe(natives.IsoBackendKind.Rcopy);
+			expect(handle.fellBack).toBe(true);
+			expect(handle.fallbackReason).toBe(unavailable.message);
+		});
 
-	it("restores staged changes with index preservation after merging task branches", async () => {
-		const { baseBranch, repo } = await createGitRepo();
-		const taskBranch = "task/merge-staged";
-		await runGit(repo, ["checkout", "-b", taskBranch]);
-		await fs.writeFile(path.join(repo, "merged.txt"), "task branch change\n");
-		await runGit(repo, ["add", "merged.txt"]);
-		await runGit(repo, ["commit", "-m", "task-change"]);
-		await runGit(repo, ["checkout", baseBranch]);
-		await fs.writeFile(path.join(repo, "staged.txt"), "local staged change\n");
-		await runGit(repo, ["add", "staged.txt"]);
-		expect(await runGit(repo, ["status", "--porcelain=v1"])).toBe("M  staged.txt");
+		// First mutator: runs on the pristine fixture, so no reset is needed. Leaves
+		// behind a stash that the next test's reset clears.
+		it("does not pop an unrelated pre-existing stash when the working tree is clean", async () => {
+			// A tracked-file edit makes the cheapest possible "unrelated" stash; the
+			// kind of stash is irrelevant — mergeTaskBranches must not pop one it did
+			// not create. Stashing restores the working tree to clean.
+			await fs.writeFile(path.join(repo, "merged.txt"), "unrelated user change\n");
+			await runGit(repo, ["stash", "push", "-m", "preexisting-user-stash"]);
 
-		const result = await mergeTaskBranches(repo, [{ branchName: taskBranch, taskId: "task-1" }]);
+			const result = await mergeTaskBranches(repo, []);
 
-		expect(result).toEqual({ failed: [], merged: [taskBranch] });
-		expect(await fs.readFile(path.join(repo, "merged.txt"), "utf8")).toBe("task branch change\n");
-		expect(await runGit(repo, ["status", "--porcelain=v1"])).toBe("M  staged.txt");
-		expect(await runGit(repo, ["diff", "--cached", "--", "staged.txt"])).toContain("+local staged change");
-		expect(await runGit(repo, ["stash", "list"])).toBe("");
-	});
+			const [stashList, status] = await Promise.all([
+				runGit(repo, ["stash", "list"]),
+				runGit(repo, ["status", "--porcelain=v1"]),
+			]);
+			expect(result).toEqual({ failed: [], merged: [] });
+			const stashEntries = stashList.split("\n").filter(Boolean);
+			expect(stashEntries).toHaveLength(1);
+			expect(stashEntries[0]).toContain("preexisting-user-stash");
+			expect(status).toBe("");
+		});
 
-	it("subtracts baseline dirty state even when the task commits it", async () => {
-		const { repo } = await createGitRepo();
-		await fs.writeFile(path.join(repo, "merged.txt"), "baseline dirty change\n");
-		await fs.writeFile(path.join(repo, "preexisting.txt"), "baseline untracked\n");
-		const baseline = await captureBaseline(repo);
+		// These rewind the fixture so each starts from the pristine post-`initial`
+		// state: `reset --hard` restores HEAD + index + tracked files and the parallel
+		// `stash clear` drops any leftover stash. No `git clean` is needed — none of
+		// these tests leave untracked files behind (the baseline test commits its own).
+		// The fixture branch is untouched by `reset --hard`.
+		describe("after rewinding the shared fixture", () => {
+			beforeEach(async () => {
+				await Promise.all([runGit(repo, ["reset", "-q", "--hard", initialSha]), runGit(repo, ["stash", "clear"])]);
+			});
 
-		await runGit(repo, ["add", "-A"]);
-		await runGit(repo, ["commit", "-m", "baseline committed inside isolation"]);
-		await fs.writeFile(path.join(repo, "task.txt"), "task output\n");
-		await runGit(repo, ["add", "task.txt"]);
-		await runGit(repo, ["commit", "-m", "task output"]);
+			it("restores staged changes with index preservation after merging task branches", async () => {
+				await fs.writeFile(path.join(repo, "staged.txt"), "local staged change\n");
+				await runGit(repo, ["add", "staged.txt"]);
 
-		const delta = await captureDeltaPatch(repo, baseline);
+				const result = await mergeTaskBranches(repo, [{ branchName: TASK_BRANCH, taskId: "task-1" }]);
 
-		expect(delta.nestedPatches).toEqual([]);
-		expect(delta.rootPatch).toContain("task.txt");
-		expect(delta.rootPatch).toContain("+task output");
-		expect(delta.rootPatch).not.toContain("baseline dirty change");
-		expect(delta.rootPatch).not.toContain("preexisting.txt");
+				const [mergedContent, status, cached, stashList] = await Promise.all([
+					fs.readFile(path.join(repo, "merged.txt"), "utf8"),
+					runGit(repo, ["status", "--porcelain=v1"]),
+					runGit(repo, ["diff", "--cached", "--", "staged.txt"]),
+					runGit(repo, ["stash", "list"]),
+				]);
+				expect(result).toEqual({ failed: [], merged: [TASK_BRANCH] });
+				expect(mergedContent).toBe("task branch change\n");
+				expect(status).toBe("M  staged.txt");
+				expect(cached).toContain("+local staged change");
+				expect(stashList).toBe("");
+			});
+
+			it("subtracts baseline dirty state even when the task commits it", async () => {
+				await Promise.all([
+					fs.writeFile(path.join(repo, "merged.txt"), "baseline dirty change\n"),
+					fs.writeFile(path.join(repo, "preexisting.txt"), "baseline untracked\n"),
+				]);
+				const baseline = await captureBaseline(repo);
+
+				// The task produces new output and commits everything — baseline dirt
+				// included. The delta must still subtract the baseline (both the tracked
+				// edit and the untracked file) and surface only the task's own addition.
+				await fs.writeFile(path.join(repo, "task.txt"), "task output\n");
+				await runGit(repo, ["add", "-A"]);
+				await runGit(repo, ["commit", "-q", "-m", "committed inside isolation"]);
+
+				const delta = await captureDeltaPatch(repo, baseline);
+
+				expect(delta.nestedPatches).toEqual([]);
+				expect(delta.rootPatch).toContain("task.txt");
+				expect(delta.rootPatch).toContain("+task output");
+				expect(delta.rootPatch).not.toContain("baseline dirty change");
+				expect(delta.rootPatch).not.toContain("preexisting.txt");
+			});
+		});
 	});
 });
