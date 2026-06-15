@@ -1,8 +1,9 @@
 //! Filesystem utilities
 
-use std::{borrow::Cow, path::Path};
-#[cfg(any(windows, test))]
-use std::path::PathBuf;
+use std::{
+	borrow::Cow,
+	path::{Path, PathBuf},
+};
 
 /// Normalizes shell-facing path aliases before std::fs sees them.
 pub fn normalize_shell_path(path: &Path) -> Cow<'_, Path> {
@@ -14,6 +15,65 @@ pub fn normalize_shell_path(path: &Path) -> Cow<'_, Path> {
 	{
 		Cow::Borrowed(path)
 	}
+}
+
+/// Returns a Windows drive root for a shell pattern that starts with an MSYS/WSL drive alias.
+pub fn pattern_drive_alias_root(
+	starts_with_forward_slash: bool,
+	first: &str,
+	second: Option<&str>,
+	third: Option<&str>,
+) -> Option<(PathBuf, usize)> {
+	#[cfg(windows)]
+	{
+		pattern_drive_alias_root_impl(starts_with_forward_slash, first, second, third)
+	}
+	#[cfg(not(windows))]
+	{
+		let _ = (starts_with_forward_slash, first, second, third);
+		None
+	}
+}
+
+#[cfg(any(windows, test))]
+fn pattern_drive_alias_root_impl(
+	starts_with_forward_slash: bool,
+	first: &str,
+	second: Option<&str>,
+	third: Option<&str>,
+) -> Option<(PathBuf, usize)> {
+	if !starts_with_forward_slash || !first.is_empty() {
+		return None;
+	}
+
+	if let Some(drive) = second
+		&& is_ascii_drive_component(drive)
+	{
+		return Some((drive_root_path(drive.as_bytes()[0]), 2));
+	}
+
+	if let (Some(mount), Some(drive)) = (second, third)
+		&& mount.eq_ignore_ascii_case("mnt")
+		&& is_ascii_drive_component(drive)
+	{
+		return Some((drive_root_path(drive.as_bytes()[0]), 3));
+	}
+
+	None
+}
+
+#[cfg(any(windows, test))]
+fn drive_root_path(drive: u8) -> PathBuf {
+	let mut root = String::with_capacity(3);
+	root.push(char::from(drive).to_ascii_uppercase());
+	root.push(':');
+	root.push('/');
+	PathBuf::from(root)
+}
+
+#[cfg(any(windows, test))]
+fn is_ascii_drive_component(value: &str) -> bool {
+	value.len() == 1 && value.as_bytes()[0].is_ascii_alphabetic()
 }
 
 #[cfg(any(windows, test))]
@@ -89,6 +149,28 @@ mod tests {
 			translate_unix_drive_path(Path::new("/MNT/c")).as_deref(),
 			Some(Path::new("C:\\")),
 		);
+	}
+
+	#[test]
+	fn pattern_drive_alias_roots_report_consumed_components() {
+		assert_eq!(
+			pattern_drive_alias_root_impl(true, "", Some("d"), Some("project")),
+			Some((PathBuf::from("D:/"), 2)),
+		);
+		assert_eq!(
+			pattern_drive_alias_root_impl(true, "", Some("mnt"), Some("d")),
+			Some((PathBuf::from("D:/"), 3)),
+		);
+	}
+
+	#[test]
+	fn pattern_drive_alias_roots_require_forward_slash_prefix() {
+		assert_eq!(pattern_drive_alias_root_impl(false, "", Some("d"), Some("logs")), None);
+		assert_eq!(
+			pattern_drive_alias_root_impl(false, "", Some("mnt"), Some("d")),
+			None,
+		);
+		assert_eq!(pattern_drive_alias_root_impl(true, "", Some("mnt"), Some("data")), None);
 	}
 
 	#[test]
