@@ -842,6 +842,149 @@ describe("agentLoop with AgentMessage", () => {
 		expect(sawInterruptInContext).toBe(true);
 	});
 
+	it("drains queued steering by aborting an interruptible tool mid-wait", async () => {
+		const toolSchema = z.object({});
+		let steerReady = false;
+		let drained = false;
+		let observedAbort = false;
+		let resolvedByTimeout = false;
+
+		const tool: AgentTool<typeof toolSchema, Record<string, never>> = {
+			name: "wait",
+			label: "Wait",
+			description: "Blocks until aborted (mimics a job poll)",
+			parameters: toolSchema,
+			interruptible: true,
+			async execute(_toolCallId, _params, signal) {
+				steerReady = true;
+				const { promise, resolve } = Promise.withResolvers<void>();
+				if (signal?.aborted) {
+					resolve();
+				} else {
+					const timer = setTimeout(() => {
+						resolvedByTimeout = true;
+						resolve();
+					}, 2000);
+					signal?.addEventListener(
+						"abort",
+						() => {
+							clearTimeout(timer);
+							resolve();
+						},
+						{ once: true },
+					);
+				}
+				await promise;
+				observedAbort = signal?.aborted === true;
+				return { content: [{ type: "text", text: "waited" }], details: {} };
+			},
+		};
+
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [tool] };
+		const mock = createMockModel({
+			responses: [
+				{ content: [{ type: "toolCall", id: "tool-1", name: "wait", arguments: {} }] },
+				{ content: ["done"] },
+			],
+		});
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			interruptMode: "immediate",
+			hasSteeringMessages: () => steerReady && !drained,
+			getSteeringMessages: async () => {
+				if (steerReady && !drained) {
+					drained = true;
+					return [createUserMessage("interrupt")];
+				}
+				return [];
+			},
+		};
+
+		const events: AgentEvent[] = [];
+		for await (const event of agentLoop([createUserMessage("start")], context, config, undefined, mock.stream)) {
+			events.push(event);
+		}
+
+		expect(observedAbort).toBe(true);
+		expect(resolvedByTimeout).toBe(false);
+		expect(drained).toBe(true);
+		expect(
+			events.some(e => e.type === "message_start" && e.message.role === "user" && e.message.content === "interrupt"),
+		).toBe(true);
+	});
+
+	it("does not abort a non-interruptible tool mid-wait; steering still drains at the boundary", async () => {
+		const toolSchema = z.object({});
+		let steerReady = false;
+		let drained = false;
+		let observedAbort = false;
+		let resolvedByTimeout = false;
+
+		const tool: AgentTool<typeof toolSchema, Record<string, never>> = {
+			name: "wait",
+			label: "Wait",
+			description: "Blocks on its own window (no interruptible flag)",
+			parameters: toolSchema,
+			async execute(_toolCallId, _params, signal) {
+				steerReady = true;
+				const { promise, resolve } = Promise.withResolvers<void>();
+				if (signal?.aborted) {
+					resolve();
+				} else {
+					const timer = setTimeout(() => {
+						resolvedByTimeout = true;
+						resolve();
+					}, 300);
+					signal?.addEventListener(
+						"abort",
+						() => {
+							clearTimeout(timer);
+							resolve();
+						},
+						{ once: true },
+					);
+				}
+				await promise;
+				observedAbort = signal?.aborted === true;
+				return { content: [{ type: "text", text: "waited" }], details: {} };
+			},
+		};
+
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [tool] };
+		const mock = createMockModel({
+			responses: [
+				{ content: [{ type: "toolCall", id: "tool-1", name: "wait", arguments: {} }] },
+				{ content: ["done"] },
+			],
+		});
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			interruptMode: "immediate",
+			hasSteeringMessages: () => steerReady && !drained,
+			getSteeringMessages: async () => {
+				if (steerReady && !drained) {
+					drained = true;
+					return [createUserMessage("interrupt")];
+				}
+				return [];
+			},
+		};
+
+		const events: AgentEvent[] = [];
+		for await (const event of agentLoop([createUserMessage("start")], context, config, undefined, mock.stream)) {
+			events.push(event);
+		}
+
+		expect(observedAbort).toBe(false);
+		expect(resolvedByTimeout).toBe(true);
+		expect(drained).toBe(true);
+		expect(
+			events.some(e => e.type === "message_start" && e.message.role === "user" && e.message.content === "interrupt"),
+		).toBe(true);
+	});
+
 	it("leaves steering queued when the run is aborted while interrupted tools settle", async () => {
 		// Regression: the mid-batch steering poll used to DEQUEUE the message into
 		// a loop-local variable. An external abort while the in-flight tools were

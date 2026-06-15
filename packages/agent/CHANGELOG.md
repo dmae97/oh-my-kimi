@@ -3,6 +3,7 @@
 ## [Unreleased]
 ### Added
 
+- Added the `interruptible` tool field: when set, the agent loop may abort the tool mid-execution to deliver a queued steering message (honored only in `immediate` interrupt mode).
 - Added support for `gemini` and `gemma` as valid owned tool syntax values in environment configuration
 
 ## [15.13.2] - 2026-06-15

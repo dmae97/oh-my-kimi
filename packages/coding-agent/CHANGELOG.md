@@ -8,6 +8,7 @@
 
 ### Changed
 
+- Changed the `job` poll to return early when a steering message is queued, draining the steer immediately instead of waiting out the poll window.
 - Capped unexpected-stop auto-continuation to three retry attempts before giving up on repeated stops
 - Updated the `edit` tool's hashline prompt, grammar, and docs to recommend the `.=` inclusive range separator (`SWAP 1.=3:`); the legacy `..` form still parses.
 

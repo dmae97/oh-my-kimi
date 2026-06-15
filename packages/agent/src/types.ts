@@ -504,6 +504,15 @@ export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any
 	/** If true, argument validation errors are non-fatal: raw args are passed to execute() instead of returning an error to the LLM. */
 	lenientArgValidation?: boolean;
 	/**
+	 * If true, the agent loop may abort this tool mid-execution to deliver a
+	 * queued steering message (instead of waiting for the tool to finish on its
+	 * own). Set only on tools that purely *wait* and observe their abort signal
+	 * cleanly (e.g. the `job` poll), so the abort surfaces the tool's current
+	 * snapshot rather than corrupting a side effect. Honored only when
+	 * `interruptMode` is "immediate".
+	 */
+	interruptible?: boolean;
+	/**
 	 * Controls how the INTENT_FIELD (`_i`) is handled for this tool.
 	 * - `"require"` (default): `_i` is injected and required in the parameter schema.
 	 * - `"optional"`: `_i` is injected as an optional/nullable field.

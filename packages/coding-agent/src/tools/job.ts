@@ -87,6 +87,7 @@ export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
 	readonly description: string;
 	readonly parameters = jobSchema;
 	readonly strict = true;
+	readonly interruptible = true;
 	readonly loadMode = "discoverable";
 	constructor(private readonly session: ToolSession) {
 		this.description = prompt.render(jobDescription);
