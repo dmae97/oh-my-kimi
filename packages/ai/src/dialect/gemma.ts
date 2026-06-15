@@ -71,6 +71,7 @@ export class GemmaInbandScanner implements InbandScanner {
 			this.#consumeTool(final, events);
 			if (this.#state === "tool") break;
 		}
+		if (final && this.#state === "thinking") this.#endThinking(events);
 		return events;
 	}
 
@@ -127,6 +128,7 @@ export class GemmaInbandScanner implements InbandScanner {
 	#endThinking(events: InbandScanEvent[]): void {
 		events.push({ type: "thinkingEnd", thinking: this.#thinking });
 		this.#thinking = "";
+		this.#state = "outside";
 	}
 
 	#consumeTool(final: boolean, events: InbandScanEvent[]): void {

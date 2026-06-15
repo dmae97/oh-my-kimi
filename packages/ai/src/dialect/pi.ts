@@ -120,6 +120,7 @@ export class PiNativeInbandScanner implements InbandScanner {
 
 			if (!this.#consumeMembers(events, final)) break;
 		}
+		if (final && this.#state === "thinking") this.#endThinking(events);
 		return events;
 	}
 
@@ -214,6 +215,7 @@ export class PiNativeInbandScanner implements InbandScanner {
 	#endThinking(events: InbandScanEvent[]): void {
 		events.push({ type: "thinkingEnd", thinking: this.#thinking });
 		this.#thinking = "";
+		this.#state = "outside";
 	}
 
 	#beginCall(tag: OpenTag, events: InbandScanEvent[]): void {

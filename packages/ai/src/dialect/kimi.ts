@@ -80,6 +80,7 @@ export class KimiInbandScanner implements InbandScanner {
 
 			if (!this.#consumeArgs(final, events)) break;
 		}
+		if (final && this.#state === "thinking") this.#endThinking(events);
 		return events;
 	}
 
@@ -142,6 +143,7 @@ export class KimiInbandScanner implements InbandScanner {
 	#endThinking(events: InbandScanEvent[]): void {
 		events.push({ type: "thinkingEnd", thinking: this.#thinking });
 		this.#thinking = "";
+		this.#state = "outside";
 	}
 
 	#consumeSection(final: boolean): boolean {

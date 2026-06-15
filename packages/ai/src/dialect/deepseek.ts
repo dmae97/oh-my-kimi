@@ -155,6 +155,7 @@ export class DeepSeekInbandScanner implements InbandScanner {
 			}
 			if (!this.#consumeDsmlParam(final)) break;
 		}
+		if (final && this.#state === "thinking") this.#endThinking(events);
 		if (final && this.#buffer.length === 0 && this.#rawBlock.length > 0) this.#rawBlock = "";
 		return events;
 	}

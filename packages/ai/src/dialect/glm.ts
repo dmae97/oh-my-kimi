@@ -134,6 +134,7 @@ export class GLMInbandScanner implements InbandScanner {
 
 			if (!this.#consumeValue(final, events)) break;
 		}
+		if (final && this.#state === "thinking") this.#endThinking(events);
 		return events;
 	}
 

@@ -44,6 +44,10 @@ function thinkingBoundaries(events: readonly InbandScanEvent[]): number {
 	return events.filter(e => e.type === "thinkingStart").length;
 }
 
+function thinkingEndCount(events: readonly InbandScanEvent[]): number {
+	return events.filter(e => e.type === "thinkingEnd").length;
+}
+
 describe("gemma thought channel (<|channel>thought…<channel|>)", () => {
 	const reply = "The answer is 4.";
 
@@ -208,6 +212,27 @@ describe("every dialect round-trips thinking (no missing thinking element)", () 
 			const events = scan(dialect, rendered, { options: { parseThinking: true } });
 			expect(thinkingText(events)).toContain(secret);
 			expect(visibleText(events)).not.toContain(secret);
+		});
+	}
+});
+
+describe("unterminated thinking at stream end", () => {
+	const cases: Array<{ dialect: Dialect; input: string }> = [
+		{ dialect: "deepseek", input: "<think>partial" },
+		{ dialect: "gemini", input: "```thinking\npartial" },
+		{ dialect: "gemma", input: "<|channel>thought\npartial" },
+		{ dialect: "glm", input: "<think>partial" },
+		{ dialect: "kimi", input: "<think>partial" },
+		{ dialect: "pi", input: "<thinking>partial" },
+		{ dialect: "qwen3", input: "<think>partial" },
+	];
+
+	for (const { dialect, input } of cases) {
+		it(`${dialect}: closes the thinking block on flush`, () => {
+			const events = scan(dialect, input);
+			expect(thinkingText(events)).toBe("partial");
+			expect(thinkingBoundaries(events)).toBe(1);
+			expect(thinkingEndCount(events)).toBe(1);
 		});
 	}
 });

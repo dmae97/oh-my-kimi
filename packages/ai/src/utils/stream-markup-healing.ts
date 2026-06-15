@@ -88,16 +88,23 @@ export class StreamMarkupHealing {
 	}
 
 	/**
-	 * Like {@link feed}, but discards completed calls. Used when the upstream
-	 * chunk also carries structured `tool_calls`, keeping that structured payload
-	 * as the single source of truth.
+	 * Feed a chunk and return cleaned events, excluding synthesized tool calls.
+	 * Used when the upstream chunk also carries structured `tool_calls`, keeping
+	 * that structured payload as the single source of truth while preserving
+	 * adjacent text and thinking events.
 	 */
-	consumeWithoutCalls(text: string): string {
-		let clean = "";
-		for (const event of this.feedEvents(text)) {
-			if (event.type === "text") clean += event.text;
+	feedEventsWithoutCalls(text: string): StreamMarkupHealingEvent[] {
+		const events = this.feedEvents(text);
+		let out: StreamMarkupHealingEvent[] | undefined;
+		for (let i = 0; i < events.length; i++) {
+			const event = events[i]!;
+			if (event.type === "toolCall") {
+				out ??= events.slice(0, i);
+			} else if (out) {
+				out.push(event);
+			}
 		}
-		return clean;
+		return out ?? events;
 	}
 
 	/** Drain accumulated tool calls from calls to {@link feed}. */

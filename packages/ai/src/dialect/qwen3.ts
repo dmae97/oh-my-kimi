@@ -65,6 +65,7 @@ export class Qwen3InbandScanner implements InbandScanner {
 			this.#consumeTool(final, events);
 			if (this.#state === "tool") break;
 		}
+		if (final && this.#state === "thinking") this.#endThinking(events);
 		return events;
 	}
 
