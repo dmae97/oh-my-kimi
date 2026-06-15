@@ -300,6 +300,6 @@ export function getSearchTools(): CustomTool<any, any>[] {
 	return [webSearchCustomTool];
 }
 
-export { getSearchProvider, setPreferredSearchProvider } from "./provider";
+export { getSearchProvider, setExcludedSearchProviders, setPreferredSearchProvider } from "./provider";
 export type { SearchProviderId as SearchProvider, SearchResponse } from "./types";
-export { isSearchProviderPreference } from "./types";
+export { isSearchProviderId, isSearchProviderPreference } from "./types";

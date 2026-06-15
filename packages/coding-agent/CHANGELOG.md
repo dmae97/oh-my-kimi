@@ -277,6 +277,15 @@
 - External editor (Ctrl-G) now shows full pasted content instead of `[paste #N ...]` placeholders ([#444](https://github.com/badlogic/pi-mono/pull/444) by [@aliou](https://github.com/aliou))
 - Subagent example README referenced incorrect filename `subagent.ts` instead of `index.ts` ([#427](https://github.com/badlogic/pi-mono/pull/427) by [@Whamp](https://github.com/Whamp))
 
+
+### Added
+
+- Added web search provider exclusions so `web_search` can skip configured providers without disabling them for model use ([#2608](https://github.com/can1357/oh-my-pi/issues/2608)).
+
+### Fixed
+
+- Fixed `web_search` using stale or missing provider exclusions after `/move` or resuming a session from another project. Provider preferences (`providers.webSearchExclude`, `providers.webSearch`, `providers.image`) are now reapplied when project settings reload on cwd change ([#2611](https://github.com/can1357/oh-my-pi/pull/2611)).
+
 ## [15.13.1] - 2026-06-15
 
 ### Added
