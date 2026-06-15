@@ -18,5 +18,7 @@ describe("Windows drive alias paths", () => {
 		expect(normalizeWindowsDriveAliasPath("/dev/null", "win32")).toBe("/dev/null");
 		expect(normalizeWindowsDriveAliasPath("/mnt/data", "win32")).toBe("/mnt/data");
 		expect(normalizeWindowsDriveAliasPath("/d/project", "linux")).toBe("/d/project");
+		expect(normalizeWindowsDriveAliasPath("\\d\\logs", "win32")).toBe("\\d\\logs");
+		expect(normalizeWindowsDriveAliasPath("\\mnt\\d\\logs", "win32")).toBe("\\mnt\\d\\logs");
 	});
 });

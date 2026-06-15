@@ -151,8 +151,8 @@ function isAsciiDriveLetter(value: string): boolean {
 }
 
 function windowsDriveAliasPath(filePath: string): string | undefined {
-	const normalizedSeparators = filePath.replace(/\\/g, "/");
-	const parts = normalizedSeparators.split("/");
+	if (!filePath.startsWith("/")) return undefined;
+	const parts = filePath.split("/");
 	if (parts[0] !== "") return undefined;
 
 	let drive: string | undefined;

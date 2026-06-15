@@ -35,20 +35,20 @@ fn translate_unix_drive_path(path: &Path) -> Option<PathBuf> {
 #[cfg(any(windows, test))]
 fn drive_alias_parts(bytes: &[u8]) -> Option<(u8, &[u8])> {
 	if bytes.len() >= 2
-		&& is_path_separator(bytes[0])
+		&& bytes[0] == b'/'
 		&& bytes[1].is_ascii_alphabetic()
-		&& bytes.get(2).is_none_or(|byte| is_path_separator(*byte))
+		&& bytes.get(2).is_none_or(|byte| *byte == b'/')
 	{
 		let tail = if bytes.len() > 2 { &bytes[3..] } else { &[] };
 		return Some((bytes[1], tail));
 	}
 
 	if bytes.len() >= 6
-		&& is_path_separator(bytes[0])
+		&& bytes[0] == b'/'
 		&& bytes[1..4].eq_ignore_ascii_case(b"mnt")
-		&& is_path_separator(bytes[4])
+		&& bytes[4] == b'/'
 		&& bytes[5].is_ascii_alphabetic()
-		&& bytes.get(6).is_none_or(|byte| is_path_separator(*byte))
+		&& bytes.get(6).is_none_or(|byte| *byte == b'/')
 	{
 		let tail = if bytes.len() > 6 { &bytes[7..] } else { &[] };
 		return Some((bytes[5], tail));
@@ -97,6 +97,8 @@ mod tests {
 		assert_eq!(translate_unix_drive_path(Path::new("/dev/null")).as_deref(), None);
 		assert_eq!(translate_unix_drive_path(Path::new("/mnt/data")).as_deref(), None);
 		assert_eq!(translate_unix_drive_path(Path::new("relative/path")).as_deref(), None);
+		assert_eq!(translate_unix_drive_path(Path::new("\\d\\logs")).as_deref(), None);
+		assert_eq!(translate_unix_drive_path(Path::new("\\mnt\\d\\logs")).as_deref(), None);
 	}
 }
 
