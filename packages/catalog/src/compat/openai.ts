@@ -301,29 +301,28 @@ interface OpenAIResponsesSpecLike {
  * Build the resolved Responses-API compat record. The Responses flavor
  * deliberately differs from chat-completions: GitHub Copilot's responses
  * endpoint accepts the `developer` role, while strict tool mode is scoped to
- * first-party OpenAI/Azure/Copilot providers. Developer-role and prompt-cache
- * detection are URL-only on purpose — the historical call sites never
- * consulted the provider id for them. The GPT-5 juice-zero hack keys on the
- * model name, matching the historical request-time check.
+ * first-party OpenAI/Azure/Copilot providers. Azure is detected by provider id
+ * as well as URL — bundled `azure` models carry no baseUrl (the deployment host
+ * is per-resource, resolved at runtime) — while OpenAI/Copilot developer-role
+ * and prompt-cache detection stay URL-keyed, as the historical call sites were.
+ * The GPT-5 juice-zero hack keys on the model name, matching the historical
+ * request-time check.
  */
 export function buildOpenAIResponsesCompat(spec: OpenAIResponsesSpecLike): ResolvedOpenAIResponsesCompat {
 	const baseUrl = spec.baseUrl ?? "";
+	const isAzure = modelMatchesHost({ provider: spec.provider, baseUrl }, "azureOpenAI");
 	const compat: ResolvedOpenAIResponsesCompat = {
-		supportsDeveloperRole:
-			hostMatchesUrl(baseUrl, "openai") ||
-			hostMatchesUrl(baseUrl, "azureOpenAI") ||
-			hostMatchesUrl(baseUrl, "githubCopilot"),
+		supportsDeveloperRole: isAzure || hostMatchesUrl(baseUrl, "openai") || hostMatchesUrl(baseUrl, "githubCopilot"),
 		supportsStrictMode:
 			spec.provider === "openai" ||
-			spec.provider === "azure" ||
+			isAzure ||
 			spec.provider === "github-copilot" ||
-			hostMatchesUrl(baseUrl, "openai") ||
-			hostMatchesUrl(baseUrl, "azureOpenAI"),
+			hostMatchesUrl(baseUrl, "openai"),
 		supportsReasoningEffort: true,
 		supportsLongPromptCacheRetention: hostMatchesUrl(baseUrl, "openai"),
 		// Azure OpenAI and GitHub Copilot Responses paths require tool results
 		// to strictly match prior tool calls when building Responses inputs.
-		strictResponsesPairing: hostMatchesUrl(baseUrl, "azureOpenAI") || spec.provider === "github-copilot",
+		strictResponsesPairing: isAzure || spec.provider === "github-copilot",
 		requiresJuiceZeroHack: spec.name.toLowerCase().startsWith("gpt-5"),
 		reasoningEffortMap: {},
 	};

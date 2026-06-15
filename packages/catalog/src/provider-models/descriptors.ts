@@ -53,7 +53,7 @@ import { cursorModelManagerOptions, zaiModelManagerOptions } from "./special";
 export const CATALOG_PROVIDERS = [
 	{
 		id: "aimlapi",
-		defaultModel: "gpt-4o",
+		defaultModel: "gpt-5.5-2026-04-23",
 		envVars: ["AIMLAPI_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => aimlApiModelManagerOptions(config),
 		dynamicModelsAuthoritative: true,
@@ -74,6 +74,11 @@ export const CATALOG_PROVIDERS = [
 		id: "anthropic",
 		defaultModel: "claude-opus-4-8",
 		createModelManagerOptions: (config: ModelManagerConfig) => anthropicModelManagerOptions(config),
+	},
+	{
+		id: "azure",
+		defaultModel: "gpt-5.5",
+		envVars: ["AZURE_OPENAI_API_KEY"],
 	},
 	{
 		id: "cerebras",
@@ -118,7 +123,7 @@ export const CATALOG_PROVIDERS = [
 	},
 	{
 		id: "github-copilot",
-		defaultModel: "gpt-4o",
+		defaultModel: "gpt-5.5",
 		envVars: ["COPILOT_GITHUB_TOKEN"],
 		createModelManagerOptions: (config: ModelManagerConfig) => githubCopilotModelManagerOptions(config),
 	},

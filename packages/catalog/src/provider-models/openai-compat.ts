@@ -3314,6 +3314,18 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_GOOGLE_VERTEX: readonly ModelsDevProviderD
 ];
 
 const MODELS_DEV_PROVIDER_DESCRIPTORS_SPECIALIZED: readonly ModelsDevProviderDescriptor[] = [
+	// --- Azure OpenAI ---
+	// OpenAI-family models hosted on Azure, served via the Responses API. baseUrl
+	// is empty: the deployment host is per-resource and resolved at runtime from
+	// AZURE_OPENAI_BASE_URL / AZURE_OPENAI_RESOURCE_NAME (see resolveAzureConfig).
+	simpleModelsDevDescriptor("azure", "azure", "azure-openai-responses", "", {
+		filterModel: (modelId, m) => {
+			if (m.tool_call !== true) return false;
+			// OpenAI-family only (not Foundry/DeepSeek/Claude/Llama/Mistral/Phi, which
+			// Azure serves via non-Responses APIs under a per-model provider override).
+			return /^(gpt-|o1|o3|o4|codex|chatgpt)/.test(modelId);
+		},
+	}),
 	// --- Cloudflare AI Gateway ---
 	anthropicMessagesDescriptor(
 		"cloudflare-ai-gateway",
