@@ -1,5 +1,5 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import type { ImageContent } from "@oh-my-pi/pi-ai";
+import type { ImageContent, ToolExample } from "@oh-my-pi/pi-ai";
 import { prompt } from "@oh-my-pi/pi-utils";
 import { z } from "zod/v4";
 import { jsBackend, pythonBackend } from "../eval";
@@ -183,6 +183,25 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 		const spawnsAllowed = sessionSpawns !== "" && sessionSpawns !== null;
 		return getEvalToolDescription({ py: backends.python, js: backends.js, spawns: spawnsAllowed });
 	}
+	readonly examples: readonly ToolExample<z.input<typeof evalSchema>>[] = [
+		{
+			call: {
+				cells: [
+					{
+						language: "py",
+						title: "imports",
+						timeout: 10,
+						code: "import json\nfrom pathlib import Path",
+					},
+					{
+						language: "py",
+						title: "load config",
+						code: "data = json.loads(read('package.json'))\ndisplay(data)",
+					},
+				],
+			},
+		},
+	];
 	readonly parameters = evalSchema;
 	readonly concurrency = "exclusive";
 	readonly strict = true;

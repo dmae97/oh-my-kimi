@@ -16,6 +16,7 @@
  */
 
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import type { ToolExample } from "@oh-my-pi/pi-ai";
 import { type Component, Markdown, type MarkdownTheme, renderInlineMarkdown, TERMINAL, Text } from "@oh-my-pi/pi-tui";
 import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import { z } from "zod/v4";
@@ -422,6 +423,46 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 	readonly description: string;
 	readonly parameters = askSchema;
 	readonly strict = true;
+
+	readonly examples: readonly ToolExample<z.input<typeof askSchema>>[] = [
+		{
+			caption: "Single question",
+			call: {
+				questions: [
+					{
+						id: "auth_method",
+						question: "Which authentication method should this API use?",
+						options: [
+							{ label: "JWT", description: "Bearer tokens for stateless API clients." },
+							{ label: "OAuth2", description: "Delegated authorization with external identity providers." },
+							{
+								label: "Session cookies",
+								description: "Browser-first authentication backed by server-side sessions.",
+							},
+						],
+						recommended: 0,
+					},
+				],
+			},
+		},
+		{
+			caption: "Multiple questions",
+			call: {
+				questions: [
+					{
+						id: "storage_type",
+						question: "Which storage backend?",
+						options: [{ label: "SQLite" }, { label: "PostgreSQL" }],
+					},
+					{
+						id: "auth_method",
+						question: "Which auth method?",
+						options: [{ label: "JWT" }, { label: "Session cookies" }],
+					},
+				],
+			},
+		},
+	];
 	// Run alone in its tool batch. The interactive selector/editor is a single
 	// shared UI surface (`ExtensionUiController.showHookSelector` has no queue and
 	// overwrites `ctx.hookSelector` on each call), so two concurrent `ask` calls

@@ -1,7 +1,7 @@
 import { parseJsonWithRepair } from "../utils/json-parse";
 import { asRecord, normalizeKimiFunctionName, partialSuffixOverlapAny } from "./coercion";
 import grammarPrompt from "./kimi.md" with { type: "text" };
-import { renderKimiToolCalls, renderKimiToolResults } from "./rendering";
+import { renderKimiInvocation, renderKimiToolCalls, renderKimiToolResults } from "./rendering";
 import type { Grammar, InbandScanEvent, InbandScanner } from "./types";
 
 export const KIMI_SECTION_BEGIN = "<|tool_calls_section_begin|>";
@@ -190,6 +190,7 @@ const grammar: Grammar = {
 	syntax: "kimi",
 	prompt: grammarPrompt,
 	createScanner: () => new KimiInbandScanner(),
+	renderToolCall: renderKimiInvocation,
 	renderAssistantToolCalls: renderKimiToolCalls,
 	renderToolResults: renderKimiToolResults,
 };

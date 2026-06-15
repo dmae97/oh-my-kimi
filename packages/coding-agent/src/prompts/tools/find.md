@@ -14,19 +14,6 @@ Finds files and directories using fast pattern matching that works with any code
 Matching file and directory paths sorted by modification time (most recent first), grouped by directory to reduce token usage. Each group starts with `# <dir>/` followed by basenames (one per line); directory entries get a trailing `/`. Root-level entries have no header. Truncated at 200 entries or 50KB.
 </output>
 
-<examples>
-# Find files
-`{"paths": ["src/**/*.ts"]}`
-# Multiple targets — separate array elements
-`{"paths": ["src/**/*.ts", "test/**/*.ts"]}`
-# Find gitignored files like .env
-`{"paths": [".env*"], "gitignore": false}`
-# Find directories matching a name (returns both files and dirs; directories are suffixed with `/`)
-`{"paths": ["**/tests"]}`
-# Long-running search on a slow volume
-`{"paths": ["/Volumes/Storage/**/*.py"], "timeout": 30}`
-</examples>
-
 <avoid>
 For open-ended searches requiring multiple rounds of globbing and searching, you MUST use Task tool instead.
 </avoid>

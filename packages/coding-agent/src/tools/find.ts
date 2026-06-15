@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import type { ToolExample } from "@oh-my-pi/pi-ai";
 import * as natives from "@oh-my-pi/pi-natives";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
@@ -106,6 +107,29 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 	readonly label = "Find";
 	readonly description: string;
 	readonly parameters = findSchema;
+
+	readonly examples: readonly ToolExample<z.input<typeof findSchema>>[] = [
+		{
+			caption: "Find files",
+			call: { paths: ["src/**/*.ts"] },
+		},
+		{
+			caption: "Multiple targets — separate array elements",
+			call: { paths: ["src/**/*.ts", "test/**/*.ts"] },
+		},
+		{
+			caption: "Find gitignored files like .env",
+			call: { paths: [".env*"], gitignore: false },
+		},
+		{
+			caption: "Find directories matching a name (returns both files and dirs; directories are suffixed with `/`)",
+			call: { paths: ["**/tests"] },
+		},
+		{
+			caption: "Long-running search on a slow volume",
+			call: { paths: ["/Volumes/Storage/**/*.py"], timeout: 30 },
+		},
+	];
 	readonly strict = true;
 
 	readonly #customOps?: FindOperations;

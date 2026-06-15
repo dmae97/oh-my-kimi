@@ -224,4 +224,68 @@ describe("renderTreeList maxCollapsedLines", () => {
 		expect(collapsed).toHaveLength(3);
 		expect(collapsed[2]).toContain("2 more items");
 	});
+
+	it("truncates from the start when maxCollapsed limits items", () => {
+		const items = [["a"], ["b"], ["c"], ["d"], ["e"]];
+		const collapsed = renderTreeList(
+			{
+				items,
+				expanded: false,
+				maxCollapsed: 3,
+				itemType: "todo",
+				truncateFrom: "start",
+				renderItem: group => group,
+			},
+			stubTheme,
+		);
+
+		// With 5 items and maxCollapsed: 3, we show:
+		// 1. Summary line: ├ … 2 more todos
+		// 2. Item 'c' (index 2): ├ c
+		// 3. Item 'd' (index 3): ├ d
+		// 4. Item 'e' (index 4): └ e
+		expect(collapsed).toHaveLength(4);
+		expect(collapsed[0]).toContain("2 more todos");
+		expect(collapsed[0]).toContain("├");
+		expect(collapsed[1]).toBe("├ c");
+		expect(collapsed[2]).toBe("├ d");
+		expect(collapsed[3]).toBe("└ e");
+	});
+
+	it("truncates from the start when maxCollapsedLines limits items", () => {
+		const items = [
+			["a", "a2"],
+			["b", "b2"],
+			["c", "c2"],
+			["d", "d2"],
+		];
+		const collapsed = renderTreeList(
+			{
+				items,
+				expanded: false,
+				maxCollapsedLines: 5,
+				itemType: "todo",
+				truncateFrom: "start",
+				renderItem: group => group,
+			},
+			stubTheme,
+		);
+
+		// items are each 2 lines. Total budget is 5.
+		// Moving backwards:
+		// - item 3 ('d', 'd2'): fits. lines used: 2. summary lines needed (remainingBefore > 0): 1. total = 3.
+		// - item 2 ('c', 'c2'): fits. lines used: 4. summary lines needed: 1. total = 5.
+		// - item 1 ('b', 'b2'): does not fit (would be 6 + 1 = 7 > 5).
+		// So we show:
+		// 1. Summary line: ├ … 2 more todos
+		// 2. Item 'c' (2 lines: ├ c, │  c2)
+		// 3. Item 'd' (2 lines: └ d,    d2)
+		expectWithinBudget(collapsed, 5);
+		expect(collapsed).toHaveLength(5);
+		expect(collapsed[0]).toContain("2 more todos");
+		expect(collapsed[1]).toBe("├ c");
+		expect(collapsed[2]).toBe("│  c2");
+		expect(collapsed[3]).toBe("└ d");
+		expect(collapsed[4]).toBe("   d2");
+	});
 });

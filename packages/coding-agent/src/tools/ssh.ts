@@ -1,4 +1,5 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import type { ToolExample } from "@oh-my-pi/pi-ai";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { prompt } from "@oh-my-pi/pi-utils";
 import { z } from "zod/v4";
@@ -134,6 +135,21 @@ export class SshTool implements AgentTool<typeof sshSchema, SSHToolDetails> {
 	readonly parameters = sshSchema;
 	readonly concurrency = "exclusive";
 	readonly strict = true;
+
+	readonly examples: readonly ToolExample<z.input<typeof sshSchema>>[] = [
+		{
+			caption: "List files: Linux (on server1 (10.0.0.1) | linux/bash)",
+			call: { host: "server1", command: "ls -la /home/user" },
+		},
+		{
+			caption: "Show running processes: Windows cmd (on winbox (192.168.1.5) | windows/cmd)",
+			call: { host: "winbox", command: "tasklist /v" },
+		},
+		{
+			caption: "Get system info: macOS (on macbook (10.0.0.20) | macos/zsh)",
+			call: { host: "macbook", command: "uname -a && sw_vers" },
+		},
+	];
 
 	readonly #allowedHosts: Set<string>;
 

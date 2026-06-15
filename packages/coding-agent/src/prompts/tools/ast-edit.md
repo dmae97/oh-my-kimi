@@ -18,21 +18,6 @@ Performs structural AST-aware rewrites via native ast-grep.
 - Parse issues when files cannot be processed
 </output>
 
-<examples>
-# Rename a call site across TypeScript files
-`{"ops":[{"pat":"oldApi($$$ARGS)","out":"newApi($$$ARGS)"}],"paths":["src/**/*.ts"]}`
-# Delete matching calls
-`{"ops":[{"pat":"console.log($$$ARGS)","out":""}],"paths":["src/**/*.ts"]}`
-# Rewrite import source path
-`{"ops":[{"pat":"import { $$$IMPORTS } from \"old-package\"","out":"import { $$$IMPORTS } from \"new-package\""}],"paths":["src/**/*.ts"]}`
-# Modernize to optional chaining (same metavariable enforces identity)
-`{"ops":[{"pat":"$A && $A()","out":"$A?.()"}],"paths":["src/**/*.ts"]}`
-# Swap two arguments using captures
-`{"ops":[{"pat":"assertEqual($A, $B)","out":"assertEqual($B, $A)"}],"paths":["tests/**/*.ts"]}`
-# Python — convert print calls to logging
-`{"ops":[{"pat":"print($$$ARGS)","out":"logger.info($$$ARGS)"}],"paths":["src/**/*.py"]}`
-</examples>
-
 <critical>
 - Parse issues mean the rewrite is malformed or mis-scoped — fix the pattern before assuming a clean no-op
 - For one-off local text edits, you SHOULD prefer the Edit tool

@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
 - Added `supportsTools` to model definitions and overrides so custom model configs can declare whether a model supports native tool calls
@@ -8,9 +9,10 @@
 - Added a conditional easter-egg tip recommending nerd fonts when using the unicode symbol preset.
 
 ### Changed
-- Changed todo tool result rendering so that collapsed phases truncate from the beginning, showing the latest/active tasks and displaying the "more todos" summary at the top.
 
+- Changed todo tool result rendering so that collapsed phases truncate from the beginning, showing the latest/active tasks and displaying the "more todos" summary at the top.
 - Expanded `tools.format` to support additional in-band tool-call syntaxes, including `anthropic`, `deepseek`, `harmony`, `pi`, and `qwen3`
+- Changed the 13 tools that documented hand-written `<examples>` blocks (`eval`, `browser`, `todo`, `irc`, `ssh`, `ast_edit`, `ast_grep`, `debug`, `find`, `inspect_image`, `ask`, plus the `patch`/`apply_patch` edit modes) to define examples as typed `examples` data on the tool (`ToolExample<z.input<typeof schema>>`); the AI layer now renders them in the model's native tool-call syntax and the markdown `<examples>` blocks were removed.
 - Changed the experimental owned tool-calling prompt from a GLM-only toggle to syntax-specific grammar prompts and result formats. `PI_OWNED_TOOLS=1` still forces GLM; `PI_OWNED_TOOLS=<syntax>` forces that syntax.
 - Changed the large-paste menu to offer attachment XML blocks (`<attachment>`), local-file attachments, or inline paste as explicit actions.
 

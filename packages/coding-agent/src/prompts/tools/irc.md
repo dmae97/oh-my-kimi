@@ -40,18 +40,3 @@ Applies to sending and replying.
 - `inbox`: pending messages, oldest first.
 - `list`: peers with status, unread count, parent, last activity.
 </output>
-
-<examples>
-# List peers
-`{"op": "list"}`
-# Fire-and-forget DM — same send wakes idle/parked peers
-`{"op": "send", "to": "AuthLoader", "message": "Still touching src/server/auth.ts? I need to add a 401 path."}`
-# Round-trip when you cannot proceed without the answer
-`{"op": "send", "to": "Main", "message": "JWT or session cookies for the auth flow?", "await": true}`
-# Block until a specific peer answers
-`{"op": "wait", "from": "AuthLoader", "timeoutMs": 60000}`
-# Drain pending messages
-`{"op": "inbox"}`
-# Broadcast to live peers (no replies expected)
-`{"op": "send", "to": "all", "message": "About to refactor src/server/middleware/*. Anyone already in there?"}`
-</examples>

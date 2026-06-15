@@ -1,6 +1,7 @@
+import type { ToolCallSyntax } from "@oh-my-pi/pi-catalog/identity";
 import type { Context, ToolCall } from "../types";
 
-export type ToolCallSyntax = "glm" | "hermes" | "kimi" | "xml" | "anthropic" | "deepseek" | "harmony" | "pi" | "qwen3";
+export type { ToolCallSyntax };
 
 export type InbandScanEvent =
 	| { type: "text"; text: string }
@@ -32,6 +33,9 @@ export interface Grammar {
 	readonly syntax: ToolCallSyntax;
 	readonly prompt: string;
 	createScanner(options?: InbandScannerOptions): InbandScanner;
+	/** Render a single tool-call invocation — the inner element only, WITHOUT any parallel-call block envelope (e.g. anthropic's `<function_calls>` / kimi's section wrapper). */
+	renderToolCall(call: ToolCall, options?: GrammarRenderOptions): string;
+	/** Render a batch of (parallel) tool calls as one complete block, including whatever envelope the syntax wraps multiple calls in. */
 	renderAssistantToolCalls(calls: readonly ToolCall[], options?: GrammarRenderOptions): string;
 	renderToolResults(results: readonly GrammarToolResult[], options?: GrammarRenderOptions): string;
 }

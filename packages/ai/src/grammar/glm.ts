@@ -6,7 +6,7 @@ import {
 	partialSuffixOverlapAny,
 } from "./coercion";
 import grammarPrompt from "./glm.md" with { type: "text" };
-import { renderGlmToolCalls, renderGlmToolResults } from "./rendering";
+import { renderGlmInvocation, renderGlmToolCalls, renderGlmToolResults } from "./rendering";
 import type { Grammar, InbandScanEvent, InbandScanner, InbandScannerOptions } from "./types";
 
 const TOOL_OPEN = "<tool_call>";
@@ -376,6 +376,7 @@ const grammar: Grammar = {
 	syntax: "glm",
 	prompt: grammarPrompt,
 	createScanner: options => new GLMInbandScanner(options),
+	renderToolCall: renderGlmInvocation,
 	renderAssistantToolCalls: renderGlmToolCalls,
 	renderToolResults: renderGlmToolResults,
 };

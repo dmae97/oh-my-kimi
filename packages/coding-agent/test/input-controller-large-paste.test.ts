@@ -72,7 +72,7 @@ describe("InputController.presentLargePasteMenu actions", () => {
 		await controller.presentLargePasteMenu("payload", 1);
 
 		const options = spies.showHookSelector.mock.calls[0][1] as Array<{ label: string }>;
-		expect(options.map((option) => option.label)).toEqual([
+		expect(options.map(option => option.label)).toEqual([
 			"Attach as a wrapped block",
 			"Attach as local file",
 			"Paste inline",

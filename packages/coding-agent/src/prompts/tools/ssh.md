@@ -20,12 +20,3 @@ Runs commands on remote hosts.
 <critical>
 You MUST verify the shell type from "Available hosts" and use matching commands.
 </critical>
-
-<examples>
-# List files: Linux
-Host: server1 (10.0.0.1) | linux/bash. Command: `ls -la /home/user`
-# Show running processes: Windows cmd
-Host: winbox (192.168.1.5) | windows/cmd. Command: `tasklist /v`
-# Get system info: macOS
-Host: macbook (10.0.0.20) | macos/zsh. Command: `uname -a && sw_vers`
-</examples>

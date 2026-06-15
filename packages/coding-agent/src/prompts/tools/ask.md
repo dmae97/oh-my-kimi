@@ -20,11 +20,3 @@ Asks user when you need clarification or input during task execution.
 - **If multiple choices are acceptable**, pick the most conservative/standard option and proceed; state the choice.
 - **Do NOT include "Other" option** — UI automatically adds "Other (type your own)" to every question.
 </critical>
-
-<examples>
-# Single question
-questions: [{"id": "auth_method", "question": "Which authentication method should this API use?", "options": [{"label": "JWT", "description": "Bearer tokens for stateless API clients."}, {"label": "OAuth2", "description": "Delegated authorization with external identity providers."}, {"label": "Session cookies", "description": "Browser-first authentication backed by server-side sessions."}], "recommended": 0}]
-
-# Multiple questions
-questions: [{"id": "storage_type", "question": "Which storage backend?", "options": [{"label": "SQLite"}, {"label": "PostgreSQL"}]}, {"id": "auth_method", "question": "Which auth method?", "options": [{"label": "JWT"}, {"label": "Session cookies"}]}]
-</examples>

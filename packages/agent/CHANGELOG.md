@@ -10,6 +10,7 @@
 
 - Added support for selecting owned in-band tool-call syntax via `PI_OWNED_TOOLS=<syntax>` (for example `hermes` or `qwen3`) while preserving legacy `PI_OWNED_TOOLS=1/true` as GLM mode
 - Added owned in-band tool calling for multiple syntaxes (`glm`, `hermes`, `kimi`, `xml`, `anthropic`, `deepseek`, `harmony`, `pi-native`, `qwen3`). Owned mode sends no native provider tools, appends a syntax-specific prompt/catalog, re-encodes prior tool calls/results as grammar-owned text, and parses streamed model output back into canonical tool calls.
+- Added tool-example folding to `normalizeTools`: when given a model's affinity syntax (resolved via `preferredToolSyntax`), it renders each tool's `examples` into an `<examples>` block in that native syntax and appends it to the wire description. Wired through both context paths (fresh build and append-only `takeSnapshot`/`build` via a new `exampleSyntax` build option), with the `_i` intent-field placeholder added to examples when intent tracing injects it.
 
 ### Changed
 
@@ -17,6 +18,7 @@
 
 ### Fixed
 
+- Fixed append-only context cache fingerprinting to account for `exampleSyntax`, so switching tool-call syntax rebuilds cached prompts with the correct injected tool examples
 - Fixed owned in-band tool-calling requests to omit `toolChoice` after stripping native tools, preventing invalid tool-choice requests
 - Fixed owned tool calling letting the model fabricate tool results by treating grammar-owned tool-result markers in assistant text as a hard turn boundary: calls before the fabrication are kept, fabricated results and dependent calls are dropped, and the real result is fed back on the next turn.
 

@@ -1,4 +1,5 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import type { ToolExample } from "@oh-my-pi/pi-ai";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { prompt } from "@oh-my-pi/pi-utils";
@@ -551,6 +552,71 @@ export class TodoTool implements AgentTool<typeof todoSchema, TodoToolDetails> {
 	readonly parameters = todoSchema;
 	readonly concurrency = "exclusive";
 	readonly strict = true;
+
+	readonly examples: readonly ToolExample<z.input<typeof todoSchema>>[] = [
+		{
+			caption: "Initial setup (multi-phase)",
+			call: {
+				ops: [
+					{
+						op: "init",
+						list: [
+							{ phase: "Foundation", items: ["Scaffold crate", "Wire workspace"] },
+							{ phase: "Auth", items: ["Port credential store", "Wire OAuth providers"] },
+							{ phase: "Verification", items: ["Run cargo test"] },
+						],
+					},
+				],
+			},
+		},
+		{
+			caption: "View current state (read-only)",
+			call: {
+				ops: [{ op: "view" }],
+			},
+		},
+		{
+			caption: "Initial setup (single phase)",
+			call: {
+				ops: [
+					{
+						op: "init",
+						list: [{ phase: "Implementation", items: ["Apply fix", "Run tests"] }],
+					},
+				],
+			},
+		},
+		{
+			caption: "Complete one task",
+			call: {
+				ops: [{ op: "done", task: "Wire workspace" }],
+			},
+		},
+		{
+			caption: "Complete a whole phase",
+			call: {
+				ops: [{ op: "done", phase: "Auth" }],
+			},
+		},
+		{
+			caption: "Remove all tasks",
+			call: {
+				ops: [{ op: "rm" }],
+			},
+		},
+		{
+			caption: "Drop one task",
+			call: {
+				ops: [{ op: "drop", task: "Run cargo test" }],
+			},
+		},
+		{
+			caption: "Append tasks to a phase",
+			call: {
+				ops: [{ op: "append", phase: "Auth", items: ["Handle retries", "Run tests"] }],
+			},
+		},
+	];
 	readonly loadMode = "discoverable";
 	constructor(private readonly session: ToolSession) {
 		this.description = prompt.render(todoDescription);

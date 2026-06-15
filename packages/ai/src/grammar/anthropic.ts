@@ -1,7 +1,7 @@
 import { parseJsonWithRepair } from "../utils/json-parse";
 import grammarPrompt from "./anthropic.md" with { type: "text" };
 import { buildStringArgsResolver, mintToolCallId } from "./coercion";
-import { renderAnthropicToolCalls, renderAnthropicToolResults } from "./rendering";
+import { renderAnthropicInvocation, renderAnthropicToolCalls, renderAnthropicToolResults } from "./rendering";
 import type { Grammar, InbandScanEvent, InbandScanner, InbandScannerOptions } from "./types";
 
 const MAX_PARTIAL_TAG_LENGTH = 256;
@@ -513,6 +513,7 @@ const grammar: Grammar = {
 	syntax: "anthropic",
 	prompt: grammarPrompt,
 	createScanner: options => new AnthropicInbandScanner(options),
+	renderToolCall: renderAnthropicInvocation,
 	renderAssistantToolCalls: renderAnthropicToolCalls,
 	renderToolResults: renderAnthropicToolResults,
 };

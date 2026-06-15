@@ -1,7 +1,7 @@
 import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse";
 import { asRecord, mintToolCallId, partialSuffixOverlapAny } from "./coercion";
 import grammarPrompt from "./hermes.md" with { type: "text" };
-import { renderHermesToolCalls, renderToolResponseResults } from "./rendering";
+import { renderHermesInvocation, renderHermesToolCalls, renderToolResponseResults } from "./rendering";
 import type { Grammar, InbandScanEvent, InbandScanner, InbandScannerOptions } from "./types";
 
 const TOOL_OPEN = "<tool_call>";
@@ -163,6 +163,7 @@ const grammar: Grammar = {
 	syntax: "hermes",
 	prompt: grammarPrompt,
 	createScanner: options => new HermesInbandScanner(options),
+	renderToolCall: renderHermesInvocation,
 	renderAssistantToolCalls: renderHermesToolCalls,
 	renderToolResults: renderToolResponseResults,
 };

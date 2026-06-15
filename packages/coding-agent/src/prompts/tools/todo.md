@@ -33,25 +33,6 @@ Allowed `op` values are only `init`, `start`, `done`, `drop`, `rm`, `append`, an
 - User provides a set of tasks to complete
 - New instructions arrive mid-task — capture before proceeding
 
-<examples>
-# Initial setup (multi-phase)
-`{"ops":[{"op":"init","list":[{"phase":"Foundation","items":["Scaffold crate","Wire workspace"]},{"phase":"Auth","items":["Port credential store","Wire OAuth providers"]},{"phase":"Verification","items":["Run cargo test"]}]}]}`
-# View current state (read-only)
-`{"ops":[{"op":"view"}]}`
-# Initial setup (single phase)
-`{"ops":[{"op":"init","list":[{"phase":"Implementation","items":["Apply fix","Run tests"]}]}]}`
-# Complete one task
-`{"ops":[{"op":"done","task":"Wire workspace"}]}`
-# Complete a whole phase
-`{"ops":[{"op":"done","phase":"Auth"}]}`
-# Remove all tasks
-`{"ops":[{"op":"rm"}]}`
-# Drop one task
-`{"ops":[{"op":"drop","task":"Run cargo test"}]}`
-# Append tasks to a phase
-`{"ops":[{"op":"append","phase":"Auth","items":["Handle retries","Run tests"]}]}`
-</examples>
-
 <critical>
 When the user hands you a multi-step plan — a phased todo, a numbered or bulleted checklist, or "N bugs/items/tasks" to work through:
 - You MUST `init` the list with EVERY item as its own task before doing the work.

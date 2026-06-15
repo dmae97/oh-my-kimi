@@ -1,5 +1,11 @@
 import type { ToolCall } from "../types";
-import { buildArgShapes, getArrayItemSchema, getObjectProperties, isStringOnlySchema } from "./coercion";
+import {
+	buildArgShapes,
+	getArrayItemSchema,
+	getObjectProperties,
+	isStringOnlySchema,
+	type ToolArgShape,
+} from "./coercion";
 import type { GrammarRenderOptions, GrammarToolResult, InbandTool } from "./types";
 
 const DEEPSEEK_TOOL_CALLS_BEGIN = "<｜tool▁calls▁begin｜>";
@@ -10,40 +16,48 @@ const DEEPSEEK_TOOL_SEPARATOR = "<｜tool▁sep｜>";
 const DEEPSEEK_TOOL_OUTPUT_BEGIN = "<｜tool▁output▁begin｜>";
 const DEEPSEEK_TOOL_OUTPUT_END = "<｜tool▁output▁end｜>";
 
+export function renderGlmInvocation(call: ToolCall, options: GrammarRenderOptions = {}): string {
+	return glmInvocation(call, buildArgShapes(options.tools).get(call.name));
+}
+
+function glmInvocation(call: ToolCall, shape: ToolArgShape | undefined): string {
+	let body = `<tool_call>${call.name}`;
+	for (const key in call.arguments) {
+		const value = call.arguments[key];
+		const rendered = shape?.stringArgs.has(key) && typeof value === "string" ? value : stringifyJson(value);
+		body += `\n<arg_key>${key}</arg_key>\n<arg_value>${rendered}</arg_value>`;
+	}
+	return `${body}\n</tool_call>`;
+}
+
 export function renderGlmToolCalls(calls: readonly ToolCall[], options: GrammarRenderOptions = {}): string {
 	const shapes = buildArgShapes(options.tools);
-	return calls
-		.map(call => {
-			const shape = shapes.get(call.name);
-			let body = `<tool_call>${call.name}`;
-			for (const key in call.arguments) {
-				const value = call.arguments[key];
-				const rendered = shape?.stringArgs.has(key) && typeof value === "string" ? value : stringifyJson(value);
-				body += `\n<arg_key>${key}</arg_key>\n<arg_value>${rendered}</arg_value>`;
-			}
-			return `${body}\n</tool_call>`;
-		})
-		.join("\n");
+	return calls.map(call => glmInvocation(call, shapes.get(call.name))).join("\n");
 }
 
 export function renderGlmToolResults(results: readonly GrammarToolResult[]): string {
 	return `<observation>\n${renderToolResponseResults(results)}\n</observation>`;
 }
 
+export function renderHermesInvocation(call: ToolCall): string {
+	return `<tool_call>\n${stringifyJson({ name: call.name, arguments: call.arguments })}\n</tool_call>`;
+}
+
 export function renderHermesToolCalls(calls: readonly ToolCall[]): string {
-	return calls
-		.map(call => `<tool_call>\n${stringifyJson({ name: call.name, arguments: call.arguments })}\n</tool_call>`)
-		.join("\n");
+	return calls.map(renderHermesInvocation).join("\n");
+}
+
+export function renderKimiInvocation(call: ToolCall): string {
+	return kimiInvocation(call, 0);
+}
+
+function kimiInvocation(call: ToolCall, index: number): string {
+	return `<|tool_call_begin|>${kimiCallId(call.name, call.id, index)}<|tool_call_argument_begin|>${stringifyJson(call.arguments)}<|tool_call_end|>`;
 }
 
 export function renderKimiToolCalls(calls: readonly ToolCall[]): string {
 	if (calls.length === 0) return "";
-	const body = calls
-		.map(
-			(call, index) =>
-				`<|tool_call_begin|>${kimiCallId(call.name, call.id, index)}<|tool_call_argument_begin|>${stringifyJson(call.arguments)}<|tool_call_end|>`,
-		)
-		.join("");
+	const body = calls.map((call, index) => kimiInvocation(call, index)).join("");
 	return `<|tool_calls_section_begin|>${body}<|tool_calls_section_end|>`;
 }
 
@@ -56,14 +70,13 @@ export function renderKimiToolResults(results: readonly GrammarToolResult[]): st
 		.join("");
 }
 
+export function renderDeepSeekInvocation(call: ToolCall): string {
+	return `${DEEPSEEK_TOOL_CALL_BEGIN}${call.name}${DEEPSEEK_TOOL_SEPARATOR}${stringifyJson(call.arguments)}${DEEPSEEK_TOOL_CALL_END}`;
+}
+
 export function renderDeepSeekToolCalls(calls: readonly ToolCall[]): string {
 	if (calls.length === 0) return "";
-	const body = calls
-		.map(
-			call =>
-				`${DEEPSEEK_TOOL_CALL_BEGIN}${call.name}${DEEPSEEK_TOOL_SEPARATOR}${stringifyJson(call.arguments)}${DEEPSEEK_TOOL_CALL_END}`,
-		)
-		.join("");
+	const body = calls.map(renderDeepSeekInvocation).join("");
 	return `${DEEPSEEK_TOOL_CALLS_BEGIN}${body}${DEEPSEEK_TOOL_CALLS_END}`;
 }
 
@@ -71,13 +84,12 @@ export function renderDeepSeekToolResults(results: readonly GrammarToolResult[])
 	return results.map(result => `${DEEPSEEK_TOOL_OUTPUT_BEGIN}${result.text}${DEEPSEEK_TOOL_OUTPUT_END}`).join("\n");
 }
 
+export function renderHarmonyInvocation(call: ToolCall): string {
+	return `<|start|>assistant<|channel|>commentary to=${harmonyRecipient(call.name)} <|constrain|>json<|message|>${stringifyJson(call.arguments)}<|call|>`;
+}
+
 export function renderHarmonyToolCalls(calls: readonly ToolCall[]): string {
-	return calls
-		.map(
-			call =>
-				`<|start|>assistant<|channel|>commentary to=${harmonyRecipient(call.name)} <|constrain|>json<|message|>${stringifyJson(call.arguments)}<|call|>`,
-		)
-		.join("");
+	return calls.map(renderHarmonyInvocation).join("");
 }
 
 export function renderHarmonyToolResults(results: readonly GrammarToolResult[]): string {
@@ -87,6 +99,10 @@ export function renderHarmonyToolResults(results: readonly GrammarToolResult[]):
 				`<|start|>${harmonyRecipient(result.name)} to=assistant<|channel|>commentary<|message|>${result.text}<|end|>`,
 		)
 		.join("");
+}
+
+export function renderAnthropicInvocation(call: ToolCall, options: GrammarRenderOptions = {}): string {
+	return renderXmlInvoke(call, buildArgShapes(options.tools).get(call.name));
 }
 
 export function renderAnthropicToolCalls(calls: readonly ToolCall[], options: GrammarRenderOptions = {}): string {
@@ -105,44 +121,50 @@ export function renderAnthropicToolResults(results: readonly GrammarToolResult[]
 	return `<function_results>\n${body}\n</function_results>`;
 }
 
+export function renderXmlInvocation(call: ToolCall, options: GrammarRenderOptions = {}): string {
+	return renderXmlInvoke(call, buildArgShapes(options.tools).get(call.name));
+}
+
 export function renderXmlToolCalls(calls: readonly ToolCall[], options: GrammarRenderOptions = {}): string {
 	return renderXmlInvokes(calls, options.tools ?? []);
 }
 
+export function renderPiNativeInvocation(call: ToolCall, options: GrammarRenderOptions = {}): string {
+	return piInvocation(call, buildArgShapes(options.tools).get(call.name));
+}
+
+function piInvocation(call: ToolCall, shape: ToolArgShape | undefined): string {
+	let body = `<call:${call.name}>`;
+	for (const key in call.arguments) {
+		body += `\n${renderPiNativeElement(key, call.arguments[key], shape?.properties[key])}`;
+	}
+	return `${body}\n</call:${call.name}>`;
+}
+
 export function renderPiNativeToolCalls(calls: readonly ToolCall[], options: GrammarRenderOptions = {}): string {
 	const shapes = buildArgShapes(options.tools);
-	return calls
-		.map(call => {
-			const shape = shapes.get(call.name);
-			let body = `<call:${call.name}>`;
-			for (const key in call.arguments) {
-				body += `\n${renderPiNativeElement(key, call.arguments[key], shape?.properties[key])}`;
-			}
-			return `${body}\n</call:${call.name}>`;
-		})
-		.join("\n");
+	return calls.map(call => piInvocation(call, shapes.get(call.name))).join("\n");
 }
 
 export function renderToolResponseResults(results: readonly GrammarToolResult[]): string {
 	return results.map(result => `<tool_response>\n${result.text}\n</tool_response>`).join("\n");
 }
 
+function renderXmlInvoke(call: ToolCall, shape: ToolArgShape | undefined): string {
+	let body = `<invoke name="${escapeXmlAttr(call.name)}">`;
+	for (const key in call.arguments) {
+		const value = call.arguments[key];
+		const isString = shape?.stringArgs.has(key) === true;
+		const stringAttr = isString ? ' string="true"' : ' string="false"';
+		const rendered = isString && typeof value === "string" ? value : stringifyJson(value);
+		body += `<parameter name="${escapeXmlAttr(key)}"${stringAttr}>${rendered}</parameter>`;
+	}
+	return `${body}</invoke>`;
+}
+
 function renderXmlInvokes(calls: readonly ToolCall[], tools: readonly InbandTool[]): string {
 	const shapes = buildArgShapes(tools);
-	return calls
-		.map(call => {
-			const shape = shapes.get(call.name);
-			let body = `<invoke name="${escapeXmlAttr(call.name)}">`;
-			for (const key in call.arguments) {
-				const value = call.arguments[key];
-				const isString = shape?.stringArgs.has(key) === true;
-				const stringAttr = isString ? ' string="true"' : ' string="false"';
-				const rendered = isString && typeof value === "string" ? value : stringifyJson(value);
-				body += `<parameter name="${escapeXmlAttr(key)}"${stringAttr}>${rendered}</parameter>`;
-			}
-			return `${body}</invoke>`;
-		})
-		.join("\n");
+	return calls.map(call => renderXmlInvoke(call, shapes.get(call.name))).join("\n");
 }
 
 function renderPiNativeElement(key: string, value: unknown, schema: unknown): string {

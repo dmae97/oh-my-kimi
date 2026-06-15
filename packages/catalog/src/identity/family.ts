@@ -78,6 +78,11 @@ export function isOpenAIGptOssModelId(modelId: string): boolean {
 	return /(^|\/)gpt-oss[-:]/i.test(modelId);
 }
 
+/** OpenAI model ids (gpt-*, o1-*, o3-*, o4-*, or prefixed with openai/). */
+export function isOpenAIModelId(modelId: string): boolean {
+	return /(^|\/)(gpt|o1|o3|o4)[-.]/i.test(modelId) || modelId.toLowerCase().includes("openai/");
+}
+
 /**
  * Reasoning-capable GLM coding SKUs: glm-4.5 and up on the base / `-air` /
  * `-turbo` lines. Excludes the vision (`…v`) shape, the non-reasoning
@@ -114,6 +119,8 @@ export function isGlmVisionModelId(modelId: string): boolean {
 export function modelFamilyToken(modelId: string): string {
 	const parsed = parseKnownModel(modelId);
 	if (parsed.family !== "unknown") return parsed.family;
+	if (isClaudeModelId(modelId) || isAnthropicNamespacedModelId(modelId)) return "anthropic";
+	if (isOpenAIModelId(modelId)) return "openai";
 	if (isKimiModelId(modelId)) return "kimi";
 	if (isQwenModelId(modelId)) return "qwen";
 	if (isMinimaxM2FamilyModelId(modelId)) return "minimax";

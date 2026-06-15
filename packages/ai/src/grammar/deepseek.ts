@@ -1,7 +1,7 @@
 import { parseJsonWithRepair } from "../utils/json-parse";
 import { asRecord, mintToolCallId, partialSuffixOverlapAny } from "./coercion";
 import grammarPrompt from "./deepseek.md" with { type: "text" };
-import { renderDeepSeekToolCalls, renderDeepSeekToolResults } from "./rendering";
+import { renderDeepSeekInvocation, renderDeepSeekToolCalls, renderDeepSeekToolResults } from "./rendering";
 import type { Grammar, InbandScanEvent, InbandScanner, InbandScannerOptions } from "./types";
 
 export const DEEPSEEK_TOOL_CALLS_BEGIN = "<｜tool▁calls▁begin｜>";
@@ -527,6 +527,7 @@ const grammar: Grammar = {
 	syntax: "deepseek",
 	prompt: grammarPrompt,
 	createScanner: options => new DeepSeekInbandScanner(options),
+	renderToolCall: renderDeepSeekInvocation,
 	renderAssistantToolCalls: renderDeepSeekToolCalls,
 	renderToolResults: renderDeepSeekToolResults,
 };

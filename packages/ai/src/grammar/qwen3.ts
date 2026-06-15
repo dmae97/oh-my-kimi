@@ -1,7 +1,7 @@
 import { parseJsonWithRepair } from "../utils/json-parse";
 import { asRecord, mintToolCallId, partialSuffixOverlapAny } from "./coercion";
 import grammarPrompt from "./qwen3.md" with { type: "text" };
-import { renderHermesToolCalls, renderToolResponseResults } from "./rendering";
+import { renderHermesInvocation, renderHermesToolCalls, renderToolResponseResults } from "./rendering";
 import type { Grammar, InbandScanEvent, InbandScanner, InbandScannerOptions } from "./types";
 
 const TOOL_OPEN = "<tool_call>";
@@ -195,6 +195,7 @@ const grammar: Grammar = {
 	syntax: "qwen3",
 	prompt: grammarPrompt,
 	createScanner: options => new Qwen3InbandScanner(options),
+	renderToolCall: renderHermesInvocation,
 	renderAssistantToolCalls: renderHermesToolCalls,
 	renderToolResults: renderToolResponseResults,
 };

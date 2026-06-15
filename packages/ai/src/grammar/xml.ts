@@ -1,6 +1,6 @@
 import { AnthropicInbandScanner } from "./anthropic";
 import { DeepSeekInbandScanner } from "./deepseek";
-import { renderToolResponseResults, renderXmlToolCalls } from "./rendering";
+import { renderToolResponseResults, renderXmlInvocation, renderXmlToolCalls } from "./rendering";
 import type { Grammar, InbandScanEvent, InbandScanner, InbandScannerOptions } from "./types";
 import grammarPrompt from "./xml.md" with { type: "text" };
 
@@ -25,6 +25,7 @@ const grammar: Grammar = {
 	syntax: "xml",
 	prompt: grammarPrompt,
 	createScanner: options => new XmlInbandScanner(options),
+	renderToolCall: renderXmlInvocation,
 	renderAssistantToolCalls: renderXmlToolCalls,
 	renderToolResults: renderToolResponseResults,
 };

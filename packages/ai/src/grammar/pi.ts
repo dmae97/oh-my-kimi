@@ -12,7 +12,7 @@ import {
 	partialSuffixOverlapAny,
 } from "./coercion";
 import grammarPrompt from "./pi.md" with { type: "text" };
-import { renderPiNativeToolCalls, renderToolResponseResults } from "./rendering";
+import { renderPiNativeInvocation, renderPiNativeToolCalls, renderToolResponseResults } from "./rendering";
 import type { Grammar, InbandScanEvent, InbandScanner, InbandScannerOptions } from "./types";
 
 const CALL_PREFIX = "<call:";
@@ -577,6 +577,7 @@ const grammar: Grammar = {
 	syntax: "pi",
 	prompt: grammarPrompt,
 	createScanner: options => new PiNativeInbandScanner(options),
+	renderToolCall: renderPiNativeInvocation,
 	renderAssistantToolCalls: renderPiNativeToolCalls,
 	renderToolResults: renderToolResponseResults,
 };

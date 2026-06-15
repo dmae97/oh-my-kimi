@@ -1,7 +1,7 @@
 import { parseJsonWithRepair } from "../utils/json-parse";
 import { asRecord, mintToolCallId, partialSuffixOverlapAny } from "./coercion";
 import grammarPrompt from "./harmony.md" with { type: "text" };
-import { renderHarmonyToolCalls, renderHarmonyToolResults } from "./rendering";
+import { renderHarmonyInvocation, renderHarmonyToolCalls, renderHarmonyToolResults } from "./rendering";
 import type { Grammar, InbandScanEvent, InbandScanner } from "./types";
 
 const START = "<|start|>";
@@ -264,6 +264,7 @@ const grammar: Grammar = {
 	syntax: "harmony",
 	prompt: grammarPrompt,
 	createScanner: () => new HarmonyInbandScanner(),
+	renderToolCall: renderHarmonyInvocation,
 	renderAssistantToolCalls: renderHarmonyToolCalls,
 	renderToolResults: renderHarmonyToolResults,
 };

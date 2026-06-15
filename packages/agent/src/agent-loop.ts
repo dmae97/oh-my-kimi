@@ -18,6 +18,7 @@ import {
 import {
 	encodeInbandToolHistory,
 	renderInbandToolPrompt,
+	renderToolExamples,
 	type ToolCallSyntax,
 	wrapInbandToolStream,
 } from "@oh-my-pi/pi-ai/grammar";
@@ -31,6 +32,7 @@ import {
 	recoverHarmonyToolCall,
 	signalListLabel,
 } from "@oh-my-pi/pi-ai/utils/harmony-leak";
+import { preferredToolSyntax } from "@oh-my-pi/pi-catalog/identity";
 import { logger, sanitizeText } from "@oh-my-pi/pi-utils";
 import { type AgentRunCoverage, type AgentRunSummary, ToolCallBlockedError } from "./run-collector";
 import {
@@ -516,7 +518,11 @@ function injectIntentIntoSchema(schema: unknown, mode: "require" | "optional" = 
 	};
 }
 
-export function normalizeTools(tools: AgentContext["tools"], injectIntent: boolean): Context["tools"] {
+export function normalizeTools(
+	tools: AgentContext["tools"],
+	injectIntent: boolean,
+	exampleSyntax?: ToolCallSyntax,
+): Context["tools"] {
 	injectIntent = injectIntent && Bun.env.PI_NO_INTENT !== "1";
 	return tools?.map(t => {
 		const intentMode = resolveIntentMode(t.intent);
@@ -530,7 +536,12 @@ export function normalizeTools(tools: AgentContext["tools"], injectIntent: boole
 			}
 		}
 		const description = t.description ?? "";
-		return { ...t, parameters, description };
+		const injectExampleIntent = injectIntent && intentMode !== "omit";
+		const examplesBlock = exampleSyntax
+			? renderToolExamples({ ...t, parameters }, exampleSyntax, injectExampleIntent ? INTENT_FIELD : undefined)
+			: "";
+		const finalDescription = examplesBlock ? `${description}\n\n${examplesBlock}` : description;
+		return { ...t, parameters, description: finalDescription };
 	});
 }
 
@@ -909,12 +920,15 @@ async function streamAssistantResponse(
 	let llmContext: Context;
 	if (config.appendOnlyContext) {
 		config.appendOnlyContext.syncMessages(normalizedMessages);
-		llmContext = config.appendOnlyContext.build(context, { intentTracing: !!config.intentTracing });
+		llmContext = config.appendOnlyContext.build(context, {
+			intentTracing: !!config.intentTracing,
+			exampleSyntax: preferredToolSyntax(config.model.id),
+		});
 	} else {
 		llmContext = {
 			systemPrompt: context.systemPrompt,
 			messages: normalizedMessages,
-			tools: normalizeTools(context.tools, !!config.intentTracing),
+			tools: normalizeTools(context.tools, !!config.intentTracing, preferredToolSyntax(config.model.id)),
 		};
 	}
 	if (config.transformProviderContext) {

@@ -1,8 +1,11 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
+- Added the `ToolCallSyntax` union and `FALLBACK_TOOL_SYNTAX` constant to `@oh-my-pi/pi-catalog/identity` (re-exported from `@oh-my-pi/pi-ai/grammar`).
+- Added `preferredToolSyntax(modelId)` to `@oh-my-pi/pi-catalog/identity`, resolving a model's native tool-call syntax affinity from its family token (Claude→`anthropic`, GLM→`glm`, Kimi→`kimi`, Qwen→`qwen3`, DeepSeek→`deepseek`, OpenAI/gpt-oss→`harmony`, else the `xml` fallback).
 - Added `flux-1-schnell-fp8` to the Fireworks serverless model catalog
 - Added `gpt-oss-20b` to the Fireworks model catalog
 - Added `qwen3-embedding-8b` to the Fireworks model catalog
@@ -14,6 +17,7 @@
 ### Changed
 
 - Kept non-tool-capable Fireworks serverless models in discovery results and marked them with `supportsTools: false` for fallback-aware handling
+- Extended `modelFamilyToken(modelId)` to classify Claude/OpenAI ids the structured parser misses (older dated forms such as `claude-3-5-sonnet-20241022` and `gpt-4o`), returning `anthropic`/`openai` instead of an empty token.
 
 ## [15.13.1] - 2026-06-15
 
