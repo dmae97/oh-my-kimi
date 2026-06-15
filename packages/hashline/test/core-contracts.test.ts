@@ -21,7 +21,7 @@ function tag(line: number): string {
 }
 
 function sameLineRange(anchor: string): string {
-	return `replace ${anchor}..${anchor}:`;
+	return `XCHG ${anchor}..${anchor}:`;
 }
 
 function applyDiff(content: string, diff: string): string {
@@ -87,7 +87,7 @@ describe("hashline parser — range-anchor contracts", () => {
 	const content = "aaa\nbbb\nccc";
 
 	it("keeps parsed sections reusable across target snapshots", () => {
-		const section = Patch.parseSingle(["[a.ts]", `insert after ${tag(2)}:`, repl("tail")].join("\n"));
+		const section = Patch.parseSingle(["[a.ts]", `INS.POST ${tag(2)}:`, repl("tail")].join("\n"));
 
 		expect(section.applyTo("aaa\nbbb").text).toBe("aaa\nbbb\ntail");
 		expect(section.applyTo("aaa\nbbb\nccc").text).toBe("aaa\nbbb\ntail\nccc");
@@ -95,42 +95,42 @@ describe("hashline parser — range-anchor contracts", () => {
 
 	it("applies replace/delete/insert operations against concrete anchors", () => {
 		const diff = [
-			`insert before ${tag(2)}:`,
+			`INS.PRE ${tag(2)}:`,
 			repl("before b"),
-			`insert after ${tag(2)}:`,
+			`INS.POST ${tag(2)}:`,
 			repl("after b"),
-			"insert head:",
+			"INS.HEAD:",
 			repl("top"),
-			"insert tail:",
+			"INS.TAIL:",
 			repl("tail"),
 		].join("\n");
 		expect(applyDiff(content, diff)).toBe("top\naaa\nbefore b\nbbb\nafter b\nccc\ntail");
-		expect(applyDiff(content, `delete ${tag(2)}`)).toBe("aaa\nccc");
-		expect(applyDiff(content, `delete ${tag(2)}..${tag(3)}`)).toBe("aaa");
+		expect(applyDiff(content, `DEL ${tag(2)}`)).toBe("aaa\nccc");
+		expect(applyDiff(content, `DEL ${tag(2)}..${tag(3)}`)).toBe("aaa");
 		expect(applyDiff(content, `${sameLineRange(tag(2))}\n${repl("BBB")}`)).toBe("aaa\nBBB\nccc");
 	});
 
 	it("inserts after the final line without falling off the file", () => {
-		expect(applyDiff(content, `insert after ${tag(3)}:\n${repl("tail")}`)).toBe("aaa\nbbb\nccc\ntail");
+		expect(applyDiff(content, `INS.POST ${tag(3)}:\n${repl("tail")}`)).toBe("aaa\nbbb\nccc\ntail");
 	});
 
 	it("preserves whitespace-bearing and sigil-leading payload exactly", () => {
 		const payload = "\tconst streamKeepaliveMs = opts.streamKeepaliveMs;";
-		expect(applyDiff(content, `insert after ${tag(2)}:\n${repl(payload)}`)).toBe(`aaa\nbbb\n${payload}\nccc`);
+		expect(applyDiff(content, `INS.POST ${tag(2)}:\n${repl(payload)}`)).toBe(`aaa\nbbb\n${payload}\nccc`);
 		expect(
 			applyDiff(content, `${sameLineRange(tag(2))}\n${repl("|literal")}\n${repl("^literal")}\n${repl("↓literal")}`),
 		).toBe("aaa\n|literal\n^literal\n↓literal\nccc");
 	});
 
 	it("strips copied read-output prefixes only inside pasted bare body rows", () => {
-		const diff = `replace ${tag(2)}..${tag(4)}:\n${repl("line one")}\n${tag(3)}:line two`;
+		const diff = `XCHG ${tag(2)}..${tag(4)}:\n${repl("line one")}\n${tag(3)}:line two`;
 		const { edits, warnings } = parsePatch(diff);
 		expect(applyEdits("aaa\nbbb\nccc\nddd\neee", edits).text).toBe("aaa\nline one\nline two\neee");
 		expect(warnings.some(w => /Auto-prefixed bare body row/.test(w))).toBe(true);
 	});
 
 	it("rejects overlapping replacement ranges", () => {
-		const diff = `replace ${tag(2)}..${tag(4)}:\n${repl("NEW1")}\nreplace ${tag(3)}..${tag(5)}:\n${repl("NEW2")}`;
+		const diff = `XCHG ${tag(2)}..${tag(4)}:\n${repl("NEW1")}\nXCHG ${tag(3)}..${tag(5)}:\n${repl("NEW2")}`;
 		expect(() => parsePatch(diff).edits).toThrow(/anchor line 3 is already targeted by another hunk on line 1/);
 	});
 
@@ -151,34 +151,34 @@ describe("hashline input splitter", () => {
 	});
 
 	it("normalizes leading blanks, cwd-relative paths, and explicit fallback paths", () => {
-		expect(splitHashlineInput(`\n[foo.ts]\ninsert head:\n${repl("x")}`)).toEqual({
+		expect(splitHashlineInput(`\n[foo.ts]\nINS.HEAD:\n${repl("x")}`)).toEqual({
 			path: "foo.ts",
-			diff: `insert head:\n${repl("x")}`,
+			diff: `INS.HEAD:\n${repl("x")}`,
 		});
 
 		const cwd = process.cwd();
 		const absolute = `${cwd}/src/foo.ts`;
-		expect(splitHashlineInput(`[${absolute}]\ninsert head:\n${repl("x")}`, { cwd }).path).toBe("src/foo.ts");
-		expect(splitHashlineInput(`insert head:\n${repl("x")}`, { path: "a.ts" })).toEqual({
+		expect(splitHashlineInput(`[${absolute}]\nINS.HEAD:\n${repl("x")}`, { cwd }).path).toBe("src/foo.ts");
+		expect(splitHashlineInput(`INS.HEAD:\n${repl("x")}`, { path: "a.ts" })).toEqual({
 			path: "a.ts",
-			diff: `insert head:\n${repl("x")}`,
+			diff: `INS.HEAD:\n${repl("x")}`,
 		});
 		expect(() => splitHashlineInput("plain text", { path: "a.ts" })).toThrow(/must begin with/);
 	});
 
 	it("splits multiple sections and drops a trailing header without operations", () => {
-		const input = ["[a.ts]", "insert head:", repl("a"), "[b.ts]", "insert tail:", repl("b")].join("\n");
+		const input = ["[a.ts]", "INS.HEAD:", repl("a"), "[b.ts]", "INS.TAIL:", repl("b")].join("\n");
 		expect(splitHashlineInputs(input)).toEqual([
-			{ path: "a.ts", diff: `insert head:\n${repl("a")}` },
-			{ path: "b.ts", diff: `insert tail:\n${repl("b")}` },
+			{ path: "a.ts", diff: `INS.HEAD:\n${repl("a")}` },
+			{ path: "b.ts", diff: `INS.TAIL:\n${repl("b")}` },
 		]);
-		expect(splitHashlineInputs(["[a.ts]", "insert head:", repl("a"), "[b.ts]"].join("\n"))).toEqual([
-			{ path: "a.ts", diff: `insert head:\n${repl("a")}` },
+		expect(splitHashlineInputs(["[a.ts]", "INS.HEAD:", repl("a"), "[b.ts]"].join("\n"))).toEqual([
+			{ path: "a.ts", diff: `INS.HEAD:\n${repl("a")}` },
 		]);
 	});
 
 	it("rejects unified-diff hunk headers on the first line", () => {
-		const input = ["@@ -1,3 +1,3 @@", "insert head:", repl("x")].join("\n");
+		const input = ["@@ -1,3 +1,3 @@", "INS.HEAD:", repl("x")].join("\n");
 		expect(() => splitHashlineInputs(input)).toThrow(/unified-diff hunk header/);
 	});
 });
@@ -247,7 +247,7 @@ describe("Recovery", () => {
 			path: filePath,
 			currentText,
 			tag: v0Tag,
-			edits: parsePatch(`replace 10..10:\n${repl("L10-EDITED")}`).edits,
+			edits: parsePatch(`XCHG 10..10:\n${repl("L10-EDITED")}`).edits,
 		});
 
 		expect(recovered).not.toBeNull();
@@ -259,9 +259,7 @@ describe("hashline abort sentinel", () => {
 	const sentinel = "*** Abort";
 
 	it("terminates parsing without surfacing a warning", () => {
-		const diff = [`insert after ${tag(1)}:`, repl("HELLO"), sentinel, `insert after ${tag(99)}:`, repl("never")].join(
-			"\n",
-		);
+		const diff = [`INS.POST ${tag(1)}:`, repl("HELLO"), sentinel, `INS.POST ${tag(99)}:`, repl("never")].join("\n");
 		const { edits, warnings } = parsePatch(diff);
 		expect(edits).toHaveLength(1);
 		expect(edits[0]).toMatchObject({ kind: "insert", text: "HELLO" });
@@ -271,11 +269,11 @@ describe("hashline abort sentinel", () => {
 	it("stops the input splitter before later sections", () => {
 		const input = [
 			"[a.ts]",
-			`insert after ${tag(1)}:`,
+			`INS.POST ${tag(1)}:`,
 			repl("a-payload"),
 			sentinel,
 			"[b.ts]",
-			`insert after ${tag(1)}:`,
+			`INS.POST ${tag(1)}:`,
 			repl("never"),
 		].join("\n");
 		const sections = splitHashlineInputs(input);
@@ -287,11 +285,11 @@ describe("hashline abort sentinel", () => {
 
 describe("hashline parser — delete and blank payload semantics", () => {
 	it("applies inline delete and empty replace operations", () => {
-		expect(applyDiff("line1\nline2\nline3\n", splitHashlineInput("[a.ts]\ndelete 2\n").diff)).toBe("line1\nline3\n");
-		expect(applyDiff("line1\nline2\nline3\nline4\n", splitHashlineInput("[a.ts]\ndelete 2..3\n").diff)).toBe(
+		expect(applyDiff("line1\nline2\nline3\n", splitHashlineInput("[a.ts]\nDEL 2\n").diff)).toBe("line1\nline3\n");
+		expect(applyDiff("line1\nline2\nline3\nline4\n", splitHashlineInput("[a.ts]\nDEL 2..3\n").diff)).toBe(
 			"line1\nline4\n",
 		);
-		expect(applyDiff("line1\nline2\nline3\n", splitHashlineInput("[a.ts]\nreplace 2..2:\n").diff)).toBe(
+		expect(applyDiff("line1\nline2\nline3\n", splitHashlineInput("[a.ts]\nXCHG 2..2:\n").diff)).toBe(
 			"line1\nline3\n",
 		);
 	});
@@ -303,10 +301,10 @@ describe("hashline parser — delete and blank payload semantics", () => {
 
 	it("preserves explicit blank replacement rows", () => {
 		const text = "a\nb\nc\nd\ne\n";
-		const ops = `[a.ts]\nreplace 2..2:\n${repl("")}\n${repl("")}\nreplace 4..4:\n${repl("D")}\n`;
+		const ops = `[a.ts]\nXCHG 2..2:\n${repl("")}\n${repl("")}\nXCHG 4..4:\n${repl("D")}\n`;
 		expect(applyDiff(text, splitHashlineInput(ops).diff)).toBe("a\n\n\nc\nD\ne\n");
 
-		const embedded = `[a.ts]\nreplace 2..2:\n${repl("first")}\n${repl("")}\n${repl("second")}\n`;
+		const embedded = `[a.ts]\nXCHG 2..2:\n${repl("first")}\n${repl("")}\n${repl("second")}\n`;
 		expect(applyDiff("a\nb\nc\n", splitHashlineInput(embedded).diff)).toBe("a\nfirst\n\nsecond\nc\n");
 	});
 });

@@ -10,7 +10,7 @@
  */
 import {
 	describeAnchorExamples,
-	HL_BLOCK_KEYWORD,
+	HL_DELETE_BLOCK_KEYWORD,
 	HL_DELETE_KEYWORD,
 	HL_FILE_HASH_LENGTH,
 	HL_FILE_HASH_SEP,
@@ -18,11 +18,13 @@ import {
 	HL_FILE_SUFFIX,
 	HL_HEADER_COLON,
 	HL_INSERT_AFTER,
+	HL_INSERT_AFTER_BLOCK_KEYWORD,
 	HL_INSERT_BEFORE,
 	HL_INSERT_HEAD,
 	HL_INSERT_KEYWORD,
 	HL_INSERT_TAIL,
 	HL_PAYLOAD_REPLACE,
+	HL_REPLACE_BLOCK_KEYWORD,
 	HL_REPLACE_KEYWORD,
 } from "./format";
 import { ABORT_MARKER, BEGIN_PATCH_MARKER, END_PATCH_MARKER } from "./messages";
@@ -218,7 +220,7 @@ function scanKeyword(line: string, index: number, end: number, keyword: string):
 	const next = index + keyword.length;
 	if (next < end) {
 		const code = line.charCodeAt(next);
-		if (!isWhitespaceCode(code) && code !== CHAR_COLON) return null;
+		if (!isWhitespaceCode(code) && code !== CHAR_COLON && code !== CHAR_DOT) return null;
 	}
 	return next;
 }
@@ -229,7 +231,8 @@ function consumeOptionalColon(line: string, index: number, end: number): number 
 }
 
 function scanInsertTarget(line: string, index: number, end: number): TargetScan | null {
-	const cursor = skipWhitespace(line, index, end);
+	if (index >= end || line.charCodeAt(index) !== CHAR_DOT) return null;
+	const cursor = skipWhitespace(line, index + 1, end);
 	const beforeEnd = scanKeyword(line, cursor, end, HL_INSERT_BEFORE);
 	if (beforeEnd !== null) {
 		const anchor = scanLineNumber(line, skipWhitespace(line, beforeEnd, end), end);
@@ -239,16 +242,6 @@ function scanInsertTarget(line: string, index: number, end: number): TargetScan 
 	}
 	const afterEnd = scanKeyword(line, cursor, end, HL_INSERT_AFTER);
 	if (afterEnd !== null) {
-		// `insert after block N:` — resolve N to a tree-sitter block range at
-		// apply time and insert after its last line. Try the `block` sub-keyword
-		// before falling back to a literal `insert after N:` anchor.
-		const blockEnd = scanKeyword(line, skipWhitespace(line, afterEnd, end), end, HL_BLOCK_KEYWORD);
-		if (blockEnd !== null) {
-			const anchor = scanLineNumber(line, skipWhitespace(line, blockEnd, end), end);
-			if (anchor === null) return null;
-			const nextIndex = consumeOptionalColon(line, anchor.nextIndex, end);
-			return { target: { kind: "insert_after_block", anchor: { line: anchor.line } }, nextIndex };
-		}
 		const anchor = scanLineNumber(line, skipWhitespace(line, afterEnd, end), end);
 		if (anchor === null) return null;
 		const nextIndex = consumeOptionalColon(line, anchor.nextIndex, end);
@@ -263,20 +256,19 @@ function scanInsertTarget(line: string, index: number, end: number): TargetScan 
 
 function scanHunkAnchor(line: string, start: number, end: number): TargetScan | null {
 	const cursor = skipWhitespace(line, start, end);
+
+	// `replace_block N:` — resolve N to a tree-sitter block range at apply time.
+	const replaceBlockEnd = scanKeyword(line, cursor, end, HL_REPLACE_BLOCK_KEYWORD);
+	if (replaceBlockEnd !== null) {
+		const anchor = scanLineNumber(line, skipWhitespace(line, replaceBlockEnd, end), end);
+		if (anchor === null) return null;
+		return {
+			target: { kind: "block", anchor: { line: anchor.line } },
+			nextIndex: consumeOptionalColon(line, anchor.nextIndex, end),
+		};
+	}
 	const replaceEnd = scanKeyword(line, cursor, end, HL_REPLACE_KEYWORD);
 	if (replaceEnd !== null) {
-		// `replace block N:` — resolve N to a tree-sitter block range at apply
-		// time. Try the `block` sub-keyword before falling back to a literal
-		// `replace N..M:` range.
-		const blockEnd = scanKeyword(line, skipWhitespace(line, replaceEnd, end), end, HL_BLOCK_KEYWORD);
-		if (blockEnd !== null) {
-			const anchor = scanLineNumber(line, skipWhitespace(line, blockEnd, end), end);
-			if (anchor === null) return null;
-			return {
-				target: { kind: "block", anchor: { line: anchor.line } },
-				nextIndex: consumeOptionalColon(line, anchor.nextIndex, end),
-			};
-		}
 		const range = scanHeaderRange(line, replaceEnd, end, true);
 		if (range === null) return null;
 		return {
@@ -284,24 +276,35 @@ function scanHunkAnchor(line: string, start: number, end: number): TargetScan | 
 			nextIndex: consumeOptionalColon(line, range.nextIndex, end),
 		};
 	}
+	// `delete_block N` — resolve N to a tree-sitter block range at apply time
+	// and delete its whole span. Like `delete N..M`, it takes no body and no
+	// trailing colon.
+	const deleteBlockEnd = scanKeyword(line, cursor, end, HL_DELETE_BLOCK_KEYWORD);
+	if (deleteBlockEnd !== null) {
+		const anchor = scanLineNumber(line, skipWhitespace(line, deleteBlockEnd, end), end);
+		if (anchor === null) return null;
+		const next = skipWhitespace(line, anchor.nextIndex, end);
+		if (next < end && line.charCodeAt(next) === CHAR_COLON) return null;
+		return { target: { kind: "delete_block", anchor: { line: anchor.line } }, nextIndex: next };
+	}
 	const deleteEnd = scanKeyword(line, cursor, end, HL_DELETE_KEYWORD);
 	if (deleteEnd !== null) {
-		// `delete block N` — resolve N to a tree-sitter block range at apply
-		// time and delete its whole span. Like `delete N..M`, it takes no body
-		// and no trailing colon.
-		const blockEnd = scanKeyword(line, skipWhitespace(line, deleteEnd, end), end, HL_BLOCK_KEYWORD);
-		if (blockEnd !== null) {
-			const anchor = scanLineNumber(line, skipWhitespace(line, blockEnd, end), end);
-			if (anchor === null) return null;
-			const next = skipWhitespace(line, anchor.nextIndex, end);
-			if (next < end && line.charCodeAt(next) === CHAR_COLON) return null;
-			return { target: { kind: "delete_block", anchor: { line: anchor.line } }, nextIndex: next };
-		}
 		const range = scanHeaderRange(line, deleteEnd, end, true);
 		if (range === null) return null;
 		const next = skipWhitespace(line, range.nextIndex, end);
 		if (next < end && line.charCodeAt(next) === CHAR_COLON) return null;
 		return { target: { kind: "delete", range: range.range }, nextIndex: next };
+	}
+	// `insert_after_block N:` — insert after the last line of the tree-sitter
+	// block at N.
+	const insertAfterBlockEnd = scanKeyword(line, cursor, end, HL_INSERT_AFTER_BLOCK_KEYWORD);
+	if (insertAfterBlockEnd !== null) {
+		const anchor = scanLineNumber(line, skipWhitespace(line, insertAfterBlockEnd, end), end);
+		if (anchor === null) return null;
+		return {
+			target: { kind: "insert_after_block", anchor: { line: anchor.line } },
+			nextIndex: consumeOptionalColon(line, anchor.nextIndex, end),
+		};
 	}
 	const insertEnd = scanKeyword(line, cursor, end, HL_INSERT_KEYWORD);
 	if (insertEnd !== null) return scanInsertTarget(line, insertEnd, end);

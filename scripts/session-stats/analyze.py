@@ -375,10 +375,27 @@ _ANCHOR_BARE = re.compile(r"^[a-zA-Z]?[0-9]+[a-z]{2}$")
 
 
 _HASHLINE_OP = re.compile(
-    r"^(replace block|replace|delete block|delete|"
-    r"insert before|insert after|insert head|insert tail)\b",
+    r"^(XCHG\.BLK|XCHG|DEL\.BLK|DEL|INS\.PRE|INS\.POST|INS\.HEAD|INS\.TAIL|"
+    r"replace_block|replace block|replace|delete_block|delete block|delete|"
+    r"insert_after_block|insert after block|insert before|insert after|insert head|insert tail)\b",
     re.I,
 )
+
+
+_HASHLINE_OP_ALIASES = {
+    "replace block": "XCHG.BLK",
+    "replace_block": "XCHG.BLK",
+    "replace": "XCHG",
+    "delete block": "DEL.BLK",
+    "delete_block": "DEL.BLK",
+    "delete": "DEL",
+    "insert before": "INS.PRE",
+    "insert after": "INS.POST",
+    "insert head": "INS.HEAD",
+    "insert tail": "INS.TAIL",
+    "insert after block": "INS.BLK.POST",
+    "insert_after_block": "INS.BLK.POST",
+}
 
 
 def _hashline_ops(inp: str) -> list[str]:
@@ -389,7 +406,8 @@ def _hashline_ops(inp: str) -> list[str]:
             continue
         m = _HASHLINE_OP.match(line.lstrip())
         if m:
-            ops.append(m.group(1).lower())
+            op = m.group(1).lower()
+            ops.append(_HASHLINE_OP_ALIASES.get(op, op))
     return ops
 
 

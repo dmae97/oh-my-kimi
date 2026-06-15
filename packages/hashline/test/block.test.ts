@@ -31,9 +31,9 @@ function normalizeEdits(edits: readonly Edit[]): unknown[] {
 	});
 }
 
-describe("replace block parsing", () => {
-	it("parses `replace block N:` into a single deferred block edit", () => {
-		const { edits } = parsePatch("replace block 2:\n+A\n+B");
+describe("XCHG.BLK parsing", () => {
+	it("parses `XCHG.BLK N:` into a single deferred block edit", () => {
+		const { edits } = parsePatch("XCHG.BLK 2:\n+A\n+B");
 
 		expect(edits).toHaveLength(1);
 		const edit = edits[0];
@@ -43,52 +43,52 @@ describe("replace block parsing", () => {
 		expect(edit.payloads).toEqual(["A", "B"]);
 	});
 
-	it("still parses a literal `replace N..M:` range (block sub-keyword is optional)", () => {
-		const { edits } = parsePatch("replace 2..3:\n+A");
+	it("still parses a literal `XCHG N..M:` range (distinct from `XCHG.BLK`)", () => {
+		const { edits } = parsePatch("XCHG 2..3:\n+A");
 		expect(edits.some(edit => edit.kind === "block")).toBe(false);
 		expect(edits.some(edit => edit.kind === "delete")).toBe(true);
 	});
 
-	it("rejects a `replace block N:` hunk with no body row", () => {
-		expect(() => parsePatch("replace block 2:")).toThrow("`replace block N:` needs at least one");
+	it("rejects a `XCHG.BLK N:` hunk with no body row", () => {
+		expect(() => parsePatch("XCHG.BLK 2:")).toThrow("`XCHG.BLK N:` needs at least one");
 	});
 });
 
 describe("resolveBlockEdits", () => {
-	it("expands a block edit exactly like the equivalent `replace start..end:`", () => {
-		const blockEdits = parsePatch("replace block 2:\n+A\n+B").edits;
+	it("expands a block edit exactly like the equivalent `XCHG start..end:`", () => {
+		const blockEdits = parsePatch("XCHG.BLK 2:\n+A\n+B").edits;
 		const resolved = resolveBlockEdits(blockEdits, "ignored", PATH, stubResolver);
-		const replaceEdits = parsePatch("replace 2..3:\n+A\n+B").edits;
+		const replaceEdits = parsePatch("XCHG 2..3:\n+A\n+B").edits;
 
 		expect(resolved.some(edit => edit.kind === "block")).toBe(false);
 		expect(normalizeEdits(resolved)).toEqual(normalizeEdits(replaceEdits));
 	});
 
 	it("returns the input untouched when there are no block edits (fast path)", () => {
-		const edits = parsePatch("replace 1..1:\n+X").edits;
+		const edits = parsePatch("XCHG 1..1:\n+X").edits;
 		expect(resolveBlockEdits(edits, "ignored", PATH, stubResolver)).toBe(edits);
 	});
 
 	it("throws (default) when no resolver is wired", () => {
-		const edits = parsePatch("replace block 2:\n+X").edits;
+		const edits = parsePatch("XCHG.BLK 2:\n+X").edits;
 		expect(() => resolveBlockEdits(edits, "ignored", PATH, undefined)).toThrow("not available here");
 	});
 
 	it("drops an unresolvable block edit in `drop` mode", () => {
-		const edits = parsePatch("replace block 2:\n+X").edits;
+		const edits = parsePatch("XCHG.BLK 2:\n+X").edits;
 		const resolved = resolveBlockEdits(edits, "ignored", PATH, () => null, { onUnresolved: "drop" });
 		expect(resolved).toHaveLength(0);
 	});
 
 	it("throws a block-unresolved error in `throw` mode when the resolver returns null", () => {
-		const edits = parsePatch("replace block 7:\n+X").edits;
+		const edits = parsePatch("XCHG.BLK 7:\n+X").edits;
 		expect(() => resolveBlockEdits(edits, "ignored", PATH, () => null)).toThrow(
 			"could not resolve a syntactic block beginning on line 7",
 		);
 	});
 
 	it("includes a nearby-context preview in the block-unresolved error", () => {
-		const edits = parsePatch("replace block 3:\n+X").edits;
+		const edits = parsePatch("XCHG.BLK 3:\n+X").edits;
 		const text = "alpha\nbravo\ncharlie\ndelta\necho\nfoxtrot";
 		let error: Error | undefined;
 		try {
@@ -105,7 +105,7 @@ describe("resolveBlockEdits", () => {
 	});
 
 	it("omits the context preview when the anchor line is out of range", () => {
-		const edits = parsePatch("replace block 9:\n+X").edits;
+		const edits = parsePatch("XCHG.BLK 9:\n+X").edits;
 		let error: Error | undefined;
 		try {
 			resolveBlockEdits(edits, "only\ntwo", PATH, () => null);
@@ -119,10 +119,10 @@ describe("resolveBlockEdits", () => {
 	it("fires onResolved with the resolved span for replace and delete blocks", () => {
 		const seen: BlockResolution[] = [];
 		// stubResolver maps line N → span [N, N+1].
-		resolveBlockEdits(parsePatch("replace block 2:\n+A\n+B").edits, "ignored", PATH, stubResolver, {
+		resolveBlockEdits(parsePatch("XCHG.BLK 2:\n+A\n+B").edits, "ignored", PATH, stubResolver, {
 			onResolved: resolution => seen.push(resolution),
 		});
-		resolveBlockEdits(parsePatch("delete block 5").edits, "ignored", PATH, stubResolver, {
+		resolveBlockEdits(parsePatch("DEL.BLK 5").edits, "ignored", PATH, stubResolver, {
 			onResolved: resolution => seen.push(resolution),
 		});
 
@@ -134,7 +134,7 @@ describe("resolveBlockEdits", () => {
 
 	it("does not fire onResolved for a dropped unresolvable block", () => {
 		const seen: BlockResolution[] = [];
-		resolveBlockEdits(parsePatch("replace block 2:\n+X").edits, "ignored", PATH, () => null, {
+		resolveBlockEdits(parsePatch("XCHG.BLK 2:\n+X").edits, "ignored", PATH, () => null, {
 			onUnresolved: "drop",
 			onResolved: resolution => seen.push(resolution),
 		});
@@ -142,25 +142,25 @@ describe("resolveBlockEdits", () => {
 	});
 
 	// A single-line resolution means the anchor was a bare statement, not a
-	// multi-line construct opener (the att#1 `insert after block 678` shape,
+	// multi-line construct opener (the att#1 `insert_after_block 678` shape,
 	// where line 678 was `options.mode = "check";`). Reject and point at the
 	// plain form rather than silently landing a body in the wrong scope.
 	const singleLineResolver: BlockResolver = ({ line }): BlockSpan => ({ start: line, end: line });
 
-	it("rejects a `replace block` that resolves to a single line", () => {
-		const edits = parsePatch("replace block 2:\n+X").edits;
+	it("rejects a `XCHG.BLK` that resolves to a single line", () => {
+		const edits = parsePatch("XCHG.BLK 2:\n+X").edits;
 		expect(() => resolveBlockEdits(edits, "a\nb\nc", PATH, singleLineResolver)).toThrow(
 			/resolved a single-line block/,
 		);
 	});
 
-	it("rejects an `insert after block` that resolves to a single line", () => {
-		const edits = parsePatch("insert after block 2:\n+X").edits;
+	it("rejects an `INS.BLK.POST` that resolves to a single line", () => {
+		const edits = parsePatch("INS.BLK.POST 2:\n+X").edits;
 		expect(() => resolveBlockEdits(edits, "a\nb\nc", PATH, singleLineResolver)).toThrow(/single-line block/);
 	});
 
 	it("drops a single-line block resolution on the lenient preview path", () => {
-		const edits = parsePatch("replace block 2:\n+X").edits;
+		const edits = parsePatch("XCHG.BLK 2:\n+X").edits;
 		const resolved = resolveBlockEdits(edits, "a\nb\nc", PATH, singleLineResolver, { onUnresolved: "drop" });
 		expect(resolved).toHaveLength(0);
 	});
@@ -170,8 +170,8 @@ describe("PatchSection.applyTo / applyPartialTo with block edits", () => {
 	const text = "function x() {\n  if (y) {\n  }\n}\n";
 
 	it("applyTo resolves a block edit and matches the equivalent `replace`", () => {
-		const blockSection = Patch.parseSingle(`[${PATH}#1A2B]\nreplace block 2:\n+  if (y || z) {\n+  }`);
-		const replaceSection = Patch.parseSingle(`[${PATH}#1A2B]\nreplace 2..3:\n+  if (y || z) {\n+  }`);
+		const blockSection = Patch.parseSingle(`[${PATH}#1A2B]\nXCHG.BLK 2:\n+  if (y || z) {\n+  }`);
+		const replaceSection = Patch.parseSingle(`[${PATH}#1A2B]\nXCHG 2..3:\n+  if (y || z) {\n+  }`);
 
 		const blockResult = blockSection.applyTo(text, stubResolver);
 		const replaceResult = replaceSection.applyTo(text);
@@ -181,12 +181,12 @@ describe("PatchSection.applyTo / applyPartialTo with block edits", () => {
 	});
 
 	it("applyTo throws when a block edit has no resolver", () => {
-		const section = Patch.parseSingle(`[${PATH}#1A2B]\nreplace block 2:\n+X`);
+		const section = Patch.parseSingle(`[${PATH}#1A2B]\nXCHG.BLK 2:\n+X`);
 		expect(() => section.applyTo(text)).toThrow("no block resolver configured");
 	});
 
 	it("applyPartialTo drops an unresolvable block edit instead of throwing", () => {
-		const section = Patch.parseSingle(`[${PATH}#1A2B]\nreplace block 2:\n+X`);
+		const section = Patch.parseSingle(`[${PATH}#1A2B]\nXCHG.BLK 2:\n+X`);
 		// No resolver → drop. The lone block edit vanishes, so the text is unchanged.
 		const result = section.applyPartialTo(text);
 		expect(result.text).toBe(text);
@@ -202,7 +202,7 @@ describe("Patcher with a block resolver", () => {
 		const tag = snapshots.record(PATH, text);
 		const patcher = new Patcher({ fs, snapshots, blockResolver: stubResolver });
 
-		const result = await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nreplace block 2:\n+  if (y || z) {\n+  }`));
+		const result = await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nXCHG.BLK 2:\n+  if (y || z) {\n+  }`));
 
 		expect(result.sections[0]?.op).toBe("update");
 		expect(fs.get(PATH)).toBe("function x() {\n  if (y || z) {\n  }\n}\n");
@@ -214,7 +214,7 @@ describe("Patcher with a block resolver", () => {
 		const tag = snapshots.record(PATH, text);
 		const patcher = new Patcher({ fs, snapshots, blockResolver: stubResolver });
 
-		const result = await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nreplace block 2:\n+  if (y || z) {\n+  }`));
+		const result = await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nXCHG.BLK 2:\n+  if (y || z) {\n+  }`));
 
 		expect(result.sections[0]?.blockResolutions).toEqual([{ anchorLine: 2, start: 2, end: 3, op: "replace" }]);
 	});
@@ -230,7 +230,7 @@ describe("Patcher with a block resolver", () => {
 
 		// `block 2` resolves against the SNAPSHOT → span [2,3] → replace
 		// "line1","line2"; recovery 3-way-merges the change onto the live file.
-		const result = await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nreplace block 2:\n+NEW`));
+		const result = await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nXCHG.BLK 2:\n+NEW`));
 
 		expect(result.sections[0]?.op).toBe("update");
 		expect(fs.get(PATH)).toBe("line0\nNEW\nline3\nline4\nline5\n");
@@ -248,7 +248,7 @@ describe("Patcher with a block resolver", () => {
 		const bogus = live === "FFFF" ? "0000" : "FFFF";
 		const patcher = new Patcher({ fs, snapshots, blockResolver: stubResolver });
 
-		await expect(patcher.apply(Patch.parse(`[${PATH}#${bogus}]\nreplace block 2:\n+NEW`))).rejects.toBeInstanceOf(
+		await expect(patcher.apply(Patch.parse(`[${PATH}#${bogus}]\nXCHG.BLK 2:\n+NEW`))).rejects.toBeInstanceOf(
 			MismatchError,
 		);
 		expect(fs.get(PATH)).toBe(liveText);
@@ -260,18 +260,18 @@ describe("Patcher with a block resolver", () => {
 		const tag = snapshots.record(PATH, text);
 		const patcher = new Patcher({ fs, snapshots, blockResolver: () => null });
 
-		await expect(patcher.apply(Patch.parse(`[${PATH}#${tag}]\nreplace block 2:\n+X`))).rejects.toThrow(
+		await expect(patcher.apply(Patch.parse(`[${PATH}#${tag}]\nXCHG.BLK 2:\n+X`))).rejects.toThrow(
 			"could not resolve a syntactic block",
 		);
 		expect(fs.get(PATH)).toBe(text);
 	});
 });
 
-describe("delete block", () => {
+describe("DEL.BLK", () => {
 	const text = "function x() {\n  if (y) {\n  }\n}\n";
 
-	it("parses `delete block N` into a block edit with no payloads", () => {
-		const { edits } = parsePatch("delete block 2");
+	it("parses `DEL.BLK N` into a block edit with no payloads", () => {
+		const { edits } = parsePatch("DEL.BLK 2");
 
 		expect(edits).toHaveLength(1);
 		const edit = edits[0];
@@ -281,12 +281,12 @@ describe("delete block", () => {
 		expect(edit.payloads).toEqual([]);
 	});
 
-	it("rejects body rows under `delete block N`", () => {
-		expect(() => parsePatch("delete block 2\n+X")).toThrow("`delete block N` does not take body rows");
+	it("rejects body rows under `DEL.BLK N`", () => {
+		expect(() => parsePatch("DEL.BLK 2\n+X")).toThrow("`DEL.BLK N` does not take body rows");
 	});
 
 	it("resolveBlockEdits expands a delete-block edit into pure deletes", () => {
-		const edits = parsePatch("delete block 2").edits;
+		const edits = parsePatch("DEL.BLK 2").edits;
 		const resolved = resolveBlockEdits(edits, "ignored", PATH, stubResolver);
 
 		expect(resolved.every(edit => edit.kind === "delete")).toBe(true);
@@ -294,13 +294,13 @@ describe("delete block", () => {
 	});
 
 	it("applyTo deletes the resolved block span", () => {
-		const section = Patch.parseSingle(`[${PATH}#1A2B]\ndelete block 2`);
+		const section = Patch.parseSingle(`[${PATH}#1A2B]\nDEL.BLK 2`);
 		// stub span [2,3] → drop "  if (y) {" and "  }".
 		expect(section.applyTo(text, stubResolver).text).toBe("function x() {\n}\n");
 	});
 
 	it("applyPartialTo drops an unresolvable delete-block edit instead of throwing", () => {
-		const section = Patch.parseSingle(`[${PATH}#1A2B]\ndelete block 2`);
+		const section = Patch.parseSingle(`[${PATH}#1A2B]\nDEL.BLK 2`);
 		expect(section.applyPartialTo(text).text).toBe(text);
 	});
 
@@ -310,18 +310,18 @@ describe("delete block", () => {
 		const tag = snapshots.record(PATH, text);
 		const patcher = new Patcher({ fs, snapshots, blockResolver: stubResolver });
 
-		const result = await patcher.apply(Patch.parse(`[${PATH}#${tag}]\ndelete block 2`));
+		const result = await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nDEL.BLK 2`));
 
 		expect(result.sections[0]?.op).toBe("update");
 		expect(fs.get(PATH)).toBe("function x() {\n}\n");
 	});
 });
 
-describe("insert after block", () => {
+describe("INS.BLK.POST", () => {
 	const text = "function x() {\n  if (y) {\n  }\n}\n";
 
-	it("parses `insert after block N:` into a deferred block edit with insert mode", () => {
-		const { edits } = parsePatch("insert after block 2:\n+A\n+B");
+	it("parses `INS.BLK.POST N:` into a deferred block edit with insert mode", () => {
+		const { edits } = parsePatch("INS.BLK.POST 2:\n+A\n+B");
 
 		expect(edits).toHaveLength(1);
 		const edit = edits[0];
@@ -332,20 +332,20 @@ describe("insert after block", () => {
 		expect(edit.mode).toBe("insert_after");
 	});
 
-	it("still parses a literal `insert after N:` anchor (block sub-keyword is optional)", () => {
-		const { edits } = parsePatch("insert after 2:\n+A");
+	it("still parses a literal `INS.POST N:` anchor (distinct from `INS.BLK.POST`)", () => {
+		const { edits } = parsePatch("INS.POST 2:\n+A");
 		expect(edits.some(edit => edit.kind === "block")).toBe(false);
 	});
 
-	it("rejects an `insert after block N:` hunk with no body row", () => {
-		expect(() => parsePatch("insert after block 2:")).toThrow("`insert` needs at least one");
+	it("rejects an `INS.BLK.POST N:` hunk with no body row", () => {
+		expect(() => parsePatch("INS.BLK.POST 2:")).toThrow("`INS` needs at least one");
 	});
 
 	it("resolveBlockEdits expands to the equivalent `insert after end:` lowering", () => {
-		const blockEdits = parsePatch("insert after block 2:\n+A\n+B").edits;
+		const blockEdits = parsePatch("INS.BLK.POST 2:\n+A\n+B").edits;
 		// stub span [2,3] → after_anchor inserts at line 3.
 		const resolved = resolveBlockEdits(blockEdits, "ignored", PATH, stubResolver);
-		const insertEdits = parsePatch("insert after 3:\n+A\n+B").edits;
+		const insertEdits = parsePatch("INS.POST 3:\n+A\n+B").edits;
 
 		expect(resolved.some(edit => edit.kind === "block")).toBe(false);
 		expect(normalizeEdits(resolved)).toEqual(normalizeEdits(insertEdits));
@@ -353,57 +353,57 @@ describe("insert after block", () => {
 
 	it("fires onResolved with op insert_after", () => {
 		const seen: BlockResolution[] = [];
-		resolveBlockEdits(parsePatch("insert after block 2:\n+A").edits, "ignored", PATH, stubResolver, {
+		resolveBlockEdits(parsePatch("INS.BLK.POST 2:\n+A").edits, "ignored", PATH, stubResolver, {
 			onResolved: resolution => seen.push(resolution),
 		});
 		expect(seen).toEqual([{ anchorLine: 2, start: 2, end: 3, op: "insert_after" }]);
 	});
 
-	it("lowers an unresolvable anchor to plain `insert after N:` with a warning", () => {
-		const edits = parsePatch("insert after block 7:\n+X").edits;
+	it("lowers an unresolvable anchor to plain `INS.POST N:` with a warning", () => {
+		const edits = parsePatch("INS.BLK.POST 7:\n+X").edits;
 		const warnings: string[] = [];
 
 		const resolved = resolveBlockEdits(edits, "ignored", PATH, () => null, {
 			onWarning: warning => warnings.push(warning),
 		});
 
-		expect(normalizeEdits(resolved)).toEqual(normalizeEdits(parsePatch("insert after 7:\n+X").edits));
+		expect(normalizeEdits(resolved)).toEqual(normalizeEdits(parsePatch("INS.POST 7:\n+X").edits));
 		expect(warnings).toHaveLength(1);
-		expect(warnings[0]).toContain("applied as plain `insert after 7:`");
+		expect(warnings[0]).toContain("applied as plain `INS.POST 7:`");
 	});
 
-	it("lowers `insert after block` even when no resolver is wired", () => {
-		const edits = parsePatch("insert after block 2:\n+X").edits;
+	it("lowers `INS.BLK.POST` even when no resolver is wired", () => {
+		const edits = parsePatch("INS.BLK.POST 2:\n+X").edits;
 		const warnings: string[] = [];
 
 		const resolved = resolveBlockEdits(edits, "ignored", PATH, undefined, {
 			onWarning: warning => warnings.push(warning),
 		});
 
-		expect(normalizeEdits(resolved)).toEqual(normalizeEdits(parsePatch("insert after 2:\n+X").edits));
+		expect(normalizeEdits(resolved)).toEqual(normalizeEdits(parsePatch("INS.POST 2:\n+X").edits));
 		expect(warnings).toHaveLength(1);
 	});
 
-	it("lowers a closing-delimiter anchor to plain `insert after N:` with a warning", () => {
-		const section = Patch.parseSingle(`[${PATH}#1A2B]\ninsert after block 3:\n+  done();`);
+	it("lowers a closing-delimiter anchor to plain `INS.POST N:` with a warning", () => {
+		const section = Patch.parseSingle(`[${PATH}#1A2B]\nINS.BLK.POST 3:\n+  done();`);
 		const resolver: BlockResolver = ({ line }) => (line === 2 ? { start: 2, end: 3 } : null);
 
 		const result = section.applyTo(text, resolver);
 
 		// line 3 is `  }` — no block begins there, but it ends one; the body
-		// lands after it, exactly where `insert after block` would have put it.
+		// lands after it, exactly where `insert_after_block` would have put it.
 		expect(result.text).toBe("function x() {\n  if (y) {\n  }\n  done();\n}\n");
-		expect(result.warnings?.some(w => /applied as plain `insert after 3:`/.test(w))).toBe(true);
+		expect(result.warnings?.some(w => /applied as plain `INS.POST 3:`/.test(w))).toBe(true);
 	});
 
-	it("lowers an unresolvable blank-line anchor to plain `insert after N:` instead of failing", () => {
-		const blankAnchored = Patch.parseSingle(`[notes.md#1A2B]\ninsert after block 2:\n+- new entry`);
+	it("lowers an unresolvable blank-line anchor to plain `INS.POST N:` instead of failing", () => {
+		const blankAnchored = Patch.parseSingle(`[notes.md#1A2B]\nINS.BLK.POST 2:\n+- new entry`);
 
 		const result = blankAnchored.applyTo("### Changed\n\n- old entry\n", () => null);
 
 		expect(result.text).toBe("### Changed\n\n- new entry\n- old entry\n");
 		expect(
-			result.warnings?.some(w => /could not resolve a syntactic block.*applied as plain `insert after 2:`/.test(w)),
+			result.warnings?.some(w => /could not resolve a syntactic block.*applied as plain `INS.POST 2:`/.test(w)),
 		).toBe(true);
 	});
 
@@ -414,14 +414,14 @@ describe("insert after block", () => {
 		const resolver: BlockResolver = ({ line }) => (line === 2 ? { start: 2, end: 3 } : null);
 		const patcher = new Patcher({ fs, snapshots, blockResolver: resolver });
 
-		const result = await patcher.apply(Patch.parse(`[${PATH}#${tag}]\ninsert after block 3:\n+  done();`));
+		const result = await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nINS.BLK.POST 3:\n+  done();`));
 
 		expect(fs.get(PATH)).toBe("function x() {\n  if (y) {\n  }\n  done();\n}\n");
-		expect(result.sections[0]?.warnings.some(w => /applied as plain `insert after 3:`/.test(w))).toBe(true);
+		expect(result.sections[0]?.warnings.some(w => /applied as plain `INS.POST 3:`/.test(w))).toBe(true);
 	});
 
 	it("applyTo inserts the body after the resolved block's last line", () => {
-		const section = Patch.parseSingle(`[${PATH}#1A2B]\ninsert after block 2:\n+  done();`);
+		const section = Patch.parseSingle(`[${PATH}#1A2B]\nINS.BLK.POST 2:\n+  done();`);
 		// stub span [2,3] → body lands after "  }" (line 3), before the final "}".
 		expect(section.applyTo(text, stubResolver).text).toBe("function x() {\n  if (y) {\n  }\n  done();\n}\n");
 	});
@@ -432,7 +432,7 @@ describe("insert after block", () => {
 		const tag = snapshots.record(PATH, text);
 		const patcher = new Patcher({ fs, snapshots, blockResolver: stubResolver });
 
-		const result = await patcher.apply(Patch.parse(`[${PATH}#${tag}]\ninsert after block 2:\n+  done();`));
+		const result = await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nINS.BLK.POST 2:\n+  done();`));
 
 		expect(result.sections[0]?.op).toBe("update");
 		expect(fs.get(PATH)).toBe("function x() {\n  if (y) {\n  }\n  done();\n}\n");

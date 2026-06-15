@@ -26,7 +26,7 @@ await fs.writeText("hello.ts", before);
 const tag = snapshots.record("hello.ts", before);
 const patcher = new Patcher({ fs, snapshots });
 const patch = Patch.parse(String.raw`[hello.ts#${tag}]
-replace 1..1:
+XCHG 1..1:
 +const greeting = "hello";`);
 const result = await patcher.apply(patch);
 
@@ -47,11 +47,11 @@ still matches the recorded content hash, and refusing or attempting
 session-aware recovery on mismatch.
 
 Inside a section:
-- `replace A..B:` — replace lines A..B with following `+TEXT` body rows.
-- `replace block A:` — replace the syntactic block beginning on line A.
-- `delete A..B` / `delete block A` — delete concrete lines or a resolved block.
-- `insert before A:` / `insert after A:` / `insert head:` / `insert tail:` — insert following body rows.
-- `insert after block A:` — insert following body rows after the resolved block's last line.
+- `XCHG A..B:` — replace lines A..B with following `+TEXT` body rows.
+- `XCHG.BLK A:` — replace the syntactic block beginning on line A.
+- `DEL A..B` / `DEL.BLK A` — delete concrete lines or a resolved block.
+- `INS.PRE A:` / `INS.POST A:` / `INS.HEAD:` / `INS.TAIL:` — insert following body rows.
+- `INS.BLK.POST A:` — insert following body rows after the resolved block's last line.
 - `+TEXT` — literal body row (use `+` alone for a blank line).
 
 ## Abstractions

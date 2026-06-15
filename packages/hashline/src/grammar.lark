@@ -12,13 +12,13 @@ replace_hunk: replace_anchor LF emit_op*
 replace_block_hunk: replace_block_anchor LF emit_op+
 insert_hunk: insert_anchor LF emit_op+
 insert_block_hunk: insert_block_anchor LF emit_op+
-delete_hunk: "delete " header_range LF
-delete_block_hunk: "delete block " LID LF
-replace_anchor: "replace " header_range ":"
-replace_block_anchor: "replace block " LID ":"
-insert_anchor:  "insert " insert_pos ":"
-insert_block_anchor: "insert after block " LID ":"
-insert_pos: "before " LID | "after " LID | "head" | "tail"
+delete_hunk: "DEL " header_range LF
+delete_block_hunk: "DEL.BLK " LID LF
+replace_anchor: "XCHG " header_range ":"
+replace_block_anchor: "XCHG.BLK " LID ":"
+insert_anchor:  "INS." insert_pos ":"
+insert_block_anchor: "INS.BLK.POST " LID ":"
+insert_pos: "PRE " LID | "POST " LID | "HEAD" | "TAIL"
 emit_op: "+" /(.*)/ LF
 
 header_range: LID ".." LID

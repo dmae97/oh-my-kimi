@@ -98,12 +98,7 @@ interface RenderedSection {
 }
 
 function formatBlockResolution(resolution: BlockResolution): string {
-	const op =
-		resolution.op === "delete"
-			? "delete block"
-			: resolution.op === "insert_after"
-				? "insert after block"
-				: "replace block";
+	const op = resolution.op === "delete" ? "DEL.BLK" : resolution.op === "insert_after" ? "INS.BLK.POST" : "XCHG.BLK";
 	const lines = resolution.end - resolution.start + 1;
 	const span =
 		resolution.start === resolution.end ? `line ${resolution.start}` : `lines ${resolution.start}-${resolution.end}`;

@@ -14,22 +14,25 @@ export const HL_FILE_SUFFIX = "]";
 export const HL_PAYLOAD_REPLACE = "+";
 
 /** Hunk-header keyword for concrete line replacement. */
-export const HL_REPLACE_KEYWORD = "replace";
-/** Hunk-header sub-keyword: `replace block N:` resolves N to a tree-sitter block range. */
-export const HL_BLOCK_KEYWORD = "block";
+export const HL_REPLACE_KEYWORD = "XCHG";
 /** Hunk-header keyword for concrete line deletion. */
-export const HL_DELETE_KEYWORD = "delete";
+export const HL_DELETE_KEYWORD = "DEL";
 /** Hunk-header keyword for insertion operations. */
-export const HL_INSERT_KEYWORD = "insert";
+export const HL_INSERT_KEYWORD = "INS";
 /** Insert position keyword for inserting before a concrete line. */
-export const HL_INSERT_BEFORE = "before";
+export const HL_INSERT_BEFORE = "PRE";
 /** Insert position keyword for inserting after a concrete line. */
-export const HL_INSERT_AFTER = "after";
+export const HL_INSERT_AFTER = "POST";
 /** Insert position keyword for inserting at the start of the file. */
-export const HL_INSERT_HEAD = "head";
+export const HL_INSERT_HEAD = "HEAD";
 /** Insert position keyword for inserting at the end of the file. */
-export const HL_INSERT_TAIL = "tail";
-/** Hunk-header terminator for body-bearing operations. */
+export const HL_INSERT_TAIL = "TAIL";
+/** Hunk-header keyword: `XCHG.BLK N:` resolves N to a tree-sitter block range and replaces its span. */
+export const HL_REPLACE_BLOCK_KEYWORD = "XCHG.BLK";
+/** Hunk-header keyword: `DEL.BLK N` resolves N to a tree-sitter block range and deletes its span. */
+export const HL_DELETE_BLOCK_KEYWORD = "DEL.BLK";
+/** Hunk-header keyword: `INS.BLK.POST N:` inserts after the last line of the tree-sitter block at N. */
+export const HL_INSERT_AFTER_BLOCK_KEYWORD = "INS.BLK.POST";
 export const HL_HEADER_COLON = ":";
 
 /** Separator between a hashline file path and its opaque snapshot tag. */
@@ -65,13 +68,13 @@ export function formatDeleteHeader(start: number, end = start): string {
 export function formatInsertHeader(cursor: Cursor): string {
 	switch (cursor.kind) {
 		case "before_anchor":
-			return `${HL_INSERT_KEYWORD} ${HL_INSERT_BEFORE} ${cursor.anchor.line}${HL_HEADER_COLON}`;
+			return `${HL_INSERT_KEYWORD}.${HL_INSERT_BEFORE} ${cursor.anchor.line}${HL_HEADER_COLON}`;
 		case "after_anchor":
-			return `${HL_INSERT_KEYWORD} ${HL_INSERT_AFTER} ${cursor.anchor.line}${HL_HEADER_COLON}`;
+			return `${HL_INSERT_KEYWORD}.${HL_INSERT_AFTER} ${cursor.anchor.line}${HL_HEADER_COLON}`;
 		case "bof":
-			return `${HL_INSERT_KEYWORD} ${HL_INSERT_HEAD}${HL_HEADER_COLON}`;
+			return `${HL_INSERT_KEYWORD}.${HL_INSERT_HEAD}${HL_HEADER_COLON}`;
 		case "eof":
-			return `${HL_INSERT_KEYWORD} ${HL_INSERT_TAIL}${HL_HEADER_COLON}`;
+			return `${HL_INSERT_KEYWORD}.${HL_INSERT_TAIL}${HL_HEADER_COLON}`;
 	}
 }
 

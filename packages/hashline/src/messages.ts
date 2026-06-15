@@ -44,11 +44,10 @@ export const ABORT_MARKER = "*** Abort";
 
 /** Two consecutive hunks targeted the exact same concrete range. */
 export const REPLACE_PAIR_COALESCED_WARNING =
-	"Two hunks targeted the same range; kept only the second. One `replace N..M:` hunk per range — the body is the final content, never old+new.";
+	"Two hunks targeted the same range; kept only the second. One `XCHG N..M:` hunk per range — the body is the final content, never old+new.";
 
 /** Bare bodyless hunk followed by an overlapping concrete hunk. */
-export const REPLACE_PAIR_COALESCED_OVERLAP_WARNING =
-	"Dropped a bare hunk overlapped by the concrete hunk after it. One `replace N..M:` hunk per range — the body is the final content, never old+new.";
+("Dropped a bare hunk overlapped by the concrete hunk after it. One `XCHG N..M:` hunk per range — the body is the final content, never old+new.");
 
 /** Bare body rows auto-converted to literal `+` rows. */
 export const BARE_BODY_AUTO_PIPED_WARNING =
@@ -59,17 +58,16 @@ export const MINUS_ROW_REJECTED =
 	"`-` rows are not valid; the range already names the lines being changed. For a literal `-` line, write `+-…`.";
 
 /** Replace hunk with no body. */
-export const EMPTY_REPLACE = "`replace N..M:` needs at least one `+TEXT` body row. To delete lines, use `delete N..M`.";
+export const EMPTY_REPLACE = "`XCHG N..M:` needs at least one `+TEXT` body row. To delete lines, use `DEL N..M`.";
 
-/** `replace block N:` hunk with no body. */
-export const EMPTY_BLOCK =
-	"`replace block N:` needs at least one `+TEXT` body row. To delete a block, use `delete block N`.";
+/** `replace_block N:` hunk with no body. */
+export const EMPTY_BLOCK = "`XCHG.BLK N:` needs at least one `+TEXT` body row. To delete a block, use `DEL.BLK N`.";
 
 /**
  * Block-anchored replace/delete could not resolve to a syntactic block
  * (unsupported language, blank/out-of-range line, no node beginning on N, or
  * parse error). Appends a {@link formatAnchoredContext} preview when
- * `fileLines` is given. `insert after block N:` never reaches this — it is
+ * `fileLines` is given. `insert_after_block N:` never reaches this — it is
  * lowered to plain `insert after N:` instead (see
  * {@link insertAfterBlockUnresolvedLoweredWarning}).
  */
@@ -78,8 +76,8 @@ export function blockUnresolvedMessage(
 	op: "replace" | "delete" = "replace",
 	fileLines?: readonly string[],
 ): string {
-	const phrase = op === "delete" ? `delete block ${line}` : `replace block ${line}:`;
-	const fallback = op === "delete" ? `delete ${line}..M` : `replace ${line}..M:`;
+	const phrase = op === "delete" ? `DEL.BLK ${line}` : `XCHG.BLK ${line}:`;
+	const fallback = op === "delete" ? `DEL ${line}..M` : `XCHG ${line}..M:`;
 	let message =
 		`\`${phrase}\` could not resolve a syntactic block beginning on line ${line} ` +
 		`(unsupported language, blank/closer line, or parse error). Use \`${fallback}\` with explicit lines.`;
@@ -92,42 +90,41 @@ export function blockUnresolvedMessage(
 
 /** Block-anchored edit reached a path with no {@link BlockResolver} wired in — a host-configuration bug. */
 export const BLOCK_RESOLVER_UNAVAILABLE =
-	"`replace block`/`delete block`/`insert after block` are not available here (no block resolver configured). Use a concrete line range.";
+	"`XCHG.BLK`/`DEL.BLK`/`INS.BLK.POST` are not available here (no block resolver configured). Use a concrete line range.";
 
 /**
- * `insert after block N:` anchored on a closing-delimiter line, lowered to
+ * `insert_after_block N:` anchored on a closing-delimiter line, lowered to
  * plain `insert after N:` — the closer ends a block, and inserting after it
  * is exactly what the plain form does.
  */
 export function insertAfterBlockCloserLoweredWarning(line: number): string {
-	return `\`insert after block ${line}:\` anchors on a closing delimiter, so it was applied as plain \`insert after ${line}:\`. Anchor on the line that OPENS the construct.`;
+	return `\`INS.BLK.POST ${line}:\` anchors on a closing delimiter, so it was applied as plain \`INS.POST ${line}:\`. Anchor on the line that OPENS the construct.`;
 }
 
 /**
- * `insert after block N:` anchor unresolvable (unsupported language, blank
+ * `insert_after_block N:` anchor unresolvable (unsupported language, blank
  * line, parse error, or no resolver), lowered to plain `insert after N:` —
  * applying with a warning beats failing the patch.
  */
 export function insertAfterBlockUnresolvedLoweredWarning(line: number): string {
-	return `\`insert after block ${line}:\` could not resolve a syntactic block on line ${line}, so it was applied as plain \`insert after ${line}:\`. Verify the landing line; anchor on a line that OPENS a construct.`;
+	return `\`INS.BLK.POST ${line}:\` could not resolve a syntactic block on line ${line}, so it was applied as plain \`INS.POST ${line}:\`. Verify the landing line; anchor on a line that OPENS a construct.`;
 }
 
 /**
- * Internal invariant: `applyEdits` received an unresolved `replace block N:`
+ * Internal invariant: `applyEdits` received an unresolved `replace_block N:`
  * edit; `resolveBlockEdits` must run first. Wiring bug, not authored input.
  */
 export const UNRESOLVED_BLOCK_INTERNAL =
-	"internal error: unresolved `replace block` edit reached the applier (resolveBlockEdits was not run).";
+	"internal error: unresolved `XCHG.BLK` edit reached the applier (resolveBlockEdits was not run).";
 
 /** Delete hunk received a body row. */
-export const DELETE_TAKES_NO_BODY = "`delete N..M` does not take body rows. Remove the body, or use `replace N..M:`.";
+export const DELETE_TAKES_NO_BODY = "`DEL N..M` does not take body rows. Remove the body, or use `XCHG N..M:`.";
 
-/** `delete block N` hunk received a body row. */
-export const DELETE_BLOCK_TAKES_NO_BODY =
-	"`delete block N` does not take body rows. Remove the body, or use `replace block N:`.";
+/** `delete_block N` hunk received a body row. */
+export const DELETE_BLOCK_TAKES_NO_BODY = "`DEL.BLK N` does not take body rows. Remove the body, or use `XCHG.BLK N:`.";
 
 /** Insert hunk with no body. */
-export const EMPTY_INSERT = "`insert` needs at least one `+TEXT` body row.";
+export const EMPTY_INSERT = "`INS` needs at least one `+TEXT` body row.";
 
 /**
  * `insert after` body indented shallower than the anchor: the landing slid
@@ -135,16 +132,16 @@ export const EMPTY_INSERT = "`insert` needs at least one `+TEXT` body row.";
  * I read instead of after the block" mistake.
  */
 export function afterInsertLandingShiftWarning(anchorLine: number, landingLine: number, crossed: number): string {
-	return `insert after ${anchorLine}: body indented shallower than the anchor, so the landing moved past ${crossed} closing line${crossed === 1 ? "" : "s"} to after line ${landingLine}. For the deeper position inside the block, re-issue with the body indented to match.`;
+	return `INS.POST ${anchorLine}: body indented shallower than the anchor, so the landing moved past ${crossed} closing line${crossed === 1 ? "" : "s"} to after line ${landingLine}. For the deeper position inside the block, re-issue with the body indented to match.`;
 }
 
 /**
- * `insert after block N:` body indented deeper than the block's closer: the
+ * `insert_after_block N:` body indented deeper than the block's closer: the
  * landing was pulled inside the block — a deeper body almost always means
  * "append inside the block's body".
  */
 export function blockInsertLandingShiftWarning(blockStart: number, closerLine: number, landingLine: number): string {
-	return `insert after block ${blockStart}: body indented deeper than closing line ${closerLine}, so it was placed inside the block, after line ${landingLine}. \`insert after block\` lands AFTER the block at sibling depth — if inside was intended, use plain \`insert after ${closerLine}:\`.`;
+	return `INS.BLK.POST ${blockStart}: body indented deeper than closing line ${closerLine}, so it was placed inside the block, after line ${landingLine}. \`INS.BLK.POST\` lands AFTER the block at sibling depth — if inside was intended, use plain \`INS.POST ${closerLine}:\`.`;
 }
 
 /** `Recovery`: an external write matched a cached snapshot. */
@@ -170,7 +167,7 @@ export const RECOVERY_SESSION_REPLAY_WARNING =
  * onto live content and warn instead of hard-failing.
  */
 export const HEADTAIL_DRIFT_WARNING =
-	"Applied the `insert head:`/`insert tail:` edit despite a stale snapshot tag (file changed since your read) — head/tail position is content-independent. Re-read if the drift was unexpected.";
+	"Applied the `INS.HEAD:`/`INS.TAIL:` edit despite a stale snapshot tag (file changed since your read) — head/tail position is content-independent. Re-read if the drift was unexpected.";
 
 /**
  * Section omitted the mandatory snapshot tag. Shared by the apply
@@ -220,20 +217,16 @@ export function unseenLinesMessage(sectionPath: string, unseenLines: readonly nu
 export type BlockOp = "replace" | "delete" | "insert_after";
 
 /**
- * A `replace block`/`delete block`/`insert after block` anchor resolved to a
+ * A `replace_block`/`delete_block`/`insert_after_block` anchor resolved to a
  * single line — almost always a bare statement the model mis-anchored, not a
  * multi-line construct. The plain op is unambiguous for one line; the block
  * form only earns its keep when it spares counting a closing line you cannot
  * see. Reject and point at both fixes.
  */
 export function blockSingleLineMessage(line: number, op: BlockOp): string {
-	const blockForm = op === "insert_after" ? "insert after block" : op === "delete" ? "delete block" : "replace block";
+	const blockForm = op === "insert_after" ? "INS.BLK.POST" : op === "delete" ? "DEL.BLK" : "XCHG.BLK";
 	const plainForm =
-		op === "insert_after"
-			? `insert after ${line}:`
-			: op === "delete"
-				? `delete ${line}`
-				: `replace ${line}..${line}:`;
+		op === "insert_after" ? `INS.POST ${line}:` : op === "delete" ? `DEL ${line}` : `XCHG ${line}..${line}:`;
 	return (
 		`\`${blockForm} ${line}\` resolved a single-line block — line ${line} is a bare statement, not the opening line ` +
 		`of a multi-line construct. For that one line use \`${plainForm}\`; to act on an enclosing construct, anchor ${blockForm} ` +

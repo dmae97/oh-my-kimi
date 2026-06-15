@@ -52,33 +52,33 @@ function detectApplyPatchContamination(text: string, _hasPending: boolean): stri
 		return (
 			`apply_patch sentinel ${JSON.stringify(preview)} is not valid in hashline. ` +
 			"File sections start with `[path#HASH]` (no `Update File:` / `Add File:` keyword). " +
-			"Use `replace N..M:`, `delete N..M`, or `insert before|after|head|tail:` ops."
+			"Use `XCHG N..M:`, `DEL N..M`, or `INS.PRE|POST|HEAD|TAIL:` ops."
 		);
 	}
 	if (/^@@\s+[-+]?\d+,\d+\s+[-+]?\d+,\d+\s+@@/.test(trimmed)) {
 		return (
 			"unified-diff hunk header (`@@ -N,M +N,M @@`) is not valid in hashline. " +
-			"Use `replace N..M:`, `delete N..M`, or `insert before|after|head|tail:` ops."
+			"Use `XCHG N..M:`, `DEL N..M`, or `INS.PRE|POST|HEAD|TAIL:` ops."
 		);
 	}
 	if (trimmed.startsWith("@@")) {
 		const preview = trimmed.length > 48 ? `${trimmed.slice(0, 48)}…` : trimmed;
 		return (
 			`\`@@\`-bracketed hunk header ${JSON.stringify(preview)} is not valid in hashline. ` +
-			"Drop the `@@ ... @@` brackets and write a verb header such as `replace N..M:`."
+			"Drop the `@@ ... @@` brackets and write a verb header such as `XCHG N..M:`."
 		);
 	}
-	if (/^delete\s+[1-9]\d*(?:\s*(?:\.\.|-|…|\s)\s*[1-9]\d*)?\s*:/.test(trimmed)) {
-		return "`delete N..M` has no colon and no body. Remove the colon and body rows.";
+	if (/^DEL\s+[1-9]\d*(?:\s*(?:\.\.|-|…|\s)\s*[1-9]\d*)?\s*:/.test(trimmed)) {
+		return "`DEL N..M` has no colon and no body. Remove the colon and body rows.";
 	}
 	if (/^[1-9]\d*\s*$/.test(trimmed)) {
-		return `hunk headers need a verb. Use \`replace ${trimmed}..${trimmed}:\` to replace, or \`delete ${trimmed}\` to delete.`;
+		return `hunk headers need a verb. Use \`XCHG ${trimmed}..${trimmed}:\` to replace, or \`DEL ${trimmed}\` to delete.`;
 	}
 	const bareRange = /^([1-9]\d*)\s*[-. …]+\s*([1-9]\d*)\s*:?$/.exec(trimmed);
 	if (bareRange !== null) {
 		return (
 			`bare range hunk header ${JSON.stringify(trimmed)} is not valid. ` +
-			`Hunk headers need a verb: write \`replace ${bareRange[1]}..${bareRange[2]}:\` or \`delete ${bareRange[1]}..${bareRange[2]}\`.`
+			`Hunk headers need a verb: write \`XCHG ${bareRange[1]}..${bareRange[2]}:\` or \`DEL ${bareRange[1]}..${bareRange[2]}\`.`
 		);
 	}
 	return null;
@@ -253,7 +253,7 @@ export class Executor {
 		if (text.trim().length === 0) return;
 		throw new Error(
 			`line ${lineNum}: payload line has no preceding hunk header. ` +
-				`Use \`replace N..M:\`, \`delete N..M\`, or \`insert before|after|head|tail:\` above the body. Got ${JSON.stringify(text)}.`,
+				`Use \`XCHG N..M:\`, \`DEL N..M\`, or \`INS.PRE|POST|HEAD|TAIL:\` above the body. Got ${JSON.stringify(text)}.`,
 		);
 	}
 

@@ -1,5 +1,5 @@
 /**
- * Tree-sitter-backed {@link BlockResolver} for the hashline `replace block N:`
+ * Tree-sitter-backed {@link BlockResolver} for the hashline block replace
  * operator. Bridges the pure hashline seam to the native `blockRangeAt`
  * primitive in `@oh-my-pi/pi-natives`, which infers the language from the file
  * path and returns the 1-indexed line span of the syntactic block beginning on

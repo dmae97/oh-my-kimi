@@ -41,8 +41,8 @@ export interface PatcherOptions {
 	/** Snapshot store that minted and resolves hashline section tags. Required. */
 	snapshots: SnapshotStore;
 	/**
-	 * Resolves `replace block N:` anchors to concrete line spans via tree-sitter.
-	 * Optional: when omitted, any `replace block N:` edit throws on apply (the
+	 * Resolves `replace_block N:` anchors to concrete line spans via tree-sitter.
+	 * Optional: when omitted, any `replace_block N:` edit throws on apply (the
 	 * host did not wire a resolver). Plain line-range ops never need it.
 	 */
 	blockResolver?: BlockResolver;
@@ -73,7 +73,7 @@ export interface PatchSectionResult {
 	/** Warnings collected by the parser, applier, and (optionally) recovery. */
 	warnings: string[];
 	/**
-	 * Resolved spans for any `replace block`/`delete block` ops, present when the
+	 * Resolved spans for any `replace_block`/`delete_block` ops, present when the
 	 * apply matched the tagged content. Undefined for patches with no block ops
 	 * (and for resolutions routed through drift recovery, where numbers shift).
 	 */
@@ -112,7 +112,7 @@ export class PreparedSection {
 function hasAnchorScopedEdit(edits: readonly Edit[]): boolean {
 	return edits.some(edit => {
 		if (edit.kind === "delete") return true;
-		// A `replace block N:` edit anchors to concrete content on line N.
+		// A `replace_block N:` edit anchors to concrete content on line N.
 		if (edit.kind === "block") return true;
 		return edit.cursor.kind === "before_anchor" || edit.cursor.kind === "after_anchor";
 	});
@@ -386,7 +386,7 @@ export class Patcher {
 		const expected = exists ? section.fileHash : undefined;
 		const liveMatches = expected !== undefined && computeFileHash(normalized) === expected;
 
-		// Resolve `replace block N:` edits to concrete ranges before recovery
+		// Resolve `replace_block N:` edits to concrete ranges before recovery
 		// runs. Block anchors are expressed against the snapshot the section tag
 		// names, so resolve against that exact text:
 		//   - live content matches the tag (or there is no tag) → resolve against

@@ -70,7 +70,7 @@ All three accept `-n N` / `--folder SUBSTR` to scope the query, plus
 (per-call `timestamp`, so it slices long sessions precisely). The `edits`
 audit reads each call's `is_error` flag as the authoritative success/failure
 signal and decodes hashline op kinds (`replace`, `insert after`, `delete`,
-`replace block`, …) into the verb distribution.
+`replace_block`, …) into the verb distribution.
 
 ## Usage audit (`audit.ts`)
 

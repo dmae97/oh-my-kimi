@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Renamed all hashline DSL operators to concise abbreviated keywords:
+  - `replace` -> `XCHG`
+  - `delete` -> `DEL`
+  - `insert before`/`after`/`head`/`tail` -> `INS.PRE`/`POST`/`HEAD`/`TAIL`
+  - `replace_block` -> `XCHG.BLK`
+  - `delete_block` -> `DEL.BLK`
+  - `insert_after_block` -> `INS.BLK.POST`
+
 ## [15.13.1] - 2026-06-15
 
 ### Breaking Changes
