@@ -135,5 +135,5 @@ Correctness ignores non-blocking issues (style, docs, nits).
 </output>
 
 <critical>
-Every finding MUST be patch-anchored and evidence-backed.
+Every finding MUST be patch-anchored and evidence-backed. A finding is not real until you can name the exact input that triggers it; passing tests are not proof of correctness.
 </critical>
