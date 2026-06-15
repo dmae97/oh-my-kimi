@@ -18,10 +18,10 @@ const MAX_TRANSCRIPT_ERROR_LINES = 8;
 /**
  * Frames for the streaming "thinking" pulse rendered in place of a hidden
  * thinking block while the model is still producing it. A single fixed-width
- * glyph that breathes ·‥…‥ so the indicator animates without shifting the line.
+ * glyph that rises ▁▃▄▃ so the indicator animates without shifting the line.
  * Advanced every {@link THINKING_DOTS_FRAME_MS}.
  */
-const THINKING_DOTS_FRAMES = ["·", "‥", "…", "‥"] as const;
+const THINKING_DOTS_FRAMES = ["▁", "▃", "▄", "▃"] as const;
 const THINKING_DOTS_FRAME_MS = 320;
 
 /**
