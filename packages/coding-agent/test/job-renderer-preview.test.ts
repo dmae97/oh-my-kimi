@@ -110,4 +110,127 @@ describe("job renderer task-result preview", () => {
 		expect(header).toBeDefined();
 		expect(header!.match(/SpawnProbe/g)).toHaveLength(1);
 	});
+
+	describe("collapse and filter when turned into a result", () => {
+		const jobsData = [
+			{
+				id: "Job1",
+				type: "task" as const,
+				status: "running" as const,
+				label: "Job1 running",
+				durationMs: 1200,
+			},
+			{
+				id: "Job2",
+				type: "task" as const,
+				status: "completed" as const,
+				label: "Job2 completed",
+				durationMs: 3400,
+				resultText: "Job2 result",
+			},
+			{
+				id: "Job3",
+				type: "task" as const,
+				status: "running" as const,
+				label: "Job3 running",
+				durationMs: 500,
+			},
+		];
+
+		it("shows all jobs when isPartial is true", () => {
+			const result = {
+				content: [{ type: "text" as const, text: "" }],
+				details: { jobs: jobsData },
+			};
+			const component = jobToolRenderer.renderResult(
+				result,
+				{ expanded: true, isPartial: true } as Parameters<typeof jobToolRenderer.renderResult>[1],
+				theme,
+				{ poll: [] },
+			);
+			const output = Bun.stripANSI((component.render(120) as readonly string[]).join("\n"));
+			expect(output).toContain("Job1 running");
+			expect(output).toContain("Job2 completed");
+			expect(output).toContain("Job3 running");
+			expect(output).toContain("waiting on 2 of 3 jobs");
+		});
+
+		it("shows only finished jobs when isPartial is false and it is a poll call", () => {
+			const result = {
+				content: [{ type: "text" as const, text: "" }],
+				details: { jobs: jobsData },
+			};
+			const component = jobToolRenderer.renderResult(
+				result,
+				{ expanded: true, isPartial: false } as Parameters<typeof jobToolRenderer.renderResult>[1],
+				theme,
+				{ poll: [] },
+			);
+			const output = Bun.stripANSI((component.render(120) as readonly string[]).join("\n"));
+			expect(output).not.toContain("Job1 running");
+			expect(output).toContain("Job2 completed");
+			expect(output).not.toContain("Job3 running");
+			expect(output).toContain("1 job settled");
+		});
+
+		it("shows nothing when isPartial is false and all jobs are running and it is a poll call", () => {
+			const runningJobsOnly = [
+				{
+					id: "Job1",
+					type: "task" as const,
+					status: "running" as const,
+					label: "Job1 running",
+					durationMs: 1200,
+				},
+			];
+			const result = {
+				content: [{ type: "text" as const, text: "" }],
+				details: { jobs: runningJobsOnly },
+			};
+			const component = jobToolRenderer.renderResult(
+				result,
+				{ expanded: true, isPartial: false } as Parameters<typeof jobToolRenderer.renderResult>[1],
+				theme,
+				{ poll: [] },
+			);
+			const lines = component.render(120) as readonly string[];
+			expect(lines).toHaveLength(0);
+		});
+
+		it("does not collapse running jobs when isPartial is false and list is true", () => {
+			const result = {
+				content: [{ type: "text" as const, text: "" }],
+				details: { jobs: jobsData },
+			};
+			const component = jobToolRenderer.renderResult(
+				result,
+				{ expanded: true, isPartial: false } as Parameters<typeof jobToolRenderer.renderResult>[1],
+				theme,
+				{ list: true },
+			);
+			const output = Bun.stripANSI((component.render(120) as readonly string[]).join("\n"));
+			expect(output).toContain("Job1 running");
+			expect(output).toContain("Job2 completed");
+			expect(output).toContain("Job3 running");
+			expect(output).toContain("waiting on 2 of 3 jobs");
+		});
+
+		it("does not collapse running jobs when isPartial is false and cancel-only is true", () => {
+			const result = {
+				content: [{ type: "text" as const, text: "" }],
+				details: { jobs: jobsData },
+			};
+			const component = jobToolRenderer.renderResult(
+				result,
+				{ expanded: true, isPartial: false } as Parameters<typeof jobToolRenderer.renderResult>[1],
+				theme,
+				{ cancel: ["Job1"] },
+			);
+			const output = Bun.stripANSI((component.render(120) as readonly string[]).join("\n"));
+			expect(output).toContain("Job1 running");
+			expect(output).toContain("Job2 completed");
+			expect(output).toContain("Job3 running");
+			expect(output).toContain("waiting on 2 of 3 jobs");
+		});
+	});
 });
