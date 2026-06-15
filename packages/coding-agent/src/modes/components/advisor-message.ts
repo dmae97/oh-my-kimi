@@ -73,7 +73,7 @@ export function createAdvisorMessageCard(
 				const w2 = Math.max(10, Math.min(NOTE_LINE_WIDTH, width) - quoteWidth);
 
 				const paragraphs = entry.note.split("\n").filter(p => p.trim());
-				let bodyLines: string[] = [];
+				const bodyLines: string[] = [];
 				for (let i = 0; i < paragraphs.length; i++) {
 					const p = paragraphs[i];
 					if (i === 0) {
@@ -81,10 +81,6 @@ export function createAdvisorMessageCard(
 					} else {
 						bodyLines.push(...wrapTextWithAnsi(p, w2));
 					}
-				}
-
-				if (!expanded && bodyLines.length > 2) {
-					bodyLines = [bodyLines[0], truncateToWidth(bodyLines.slice(1).join(" "), w2, Ellipsis.Unicode)];
 				}
 
 				bodyLines.forEach((line, index) => {

@@ -22,6 +22,7 @@
 - Session dump output now renders message history using the model's native dialect turn envelope instead of markdown role headings
 
 ### Fixed
+- Fixed advisor message card notes getting truncated to two lines when the card is collapsed.
 
 - Fixed advisor context handling to automatically maintain its token budget by promoting the advisor model or compacting/restarting advisor context when needed, preventing advice from degrading on long sessions
 - Fixed `startup.quiet` leaving MCP and LSP startup status events visible during launch ([#2639](https://github.com/can1357/oh-my-pi/issues/2639)).

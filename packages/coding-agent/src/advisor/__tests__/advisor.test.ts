@@ -332,5 +332,15 @@ describe("advisor", () => {
 			const text = strip(card.render(30));
 			expect(text).toContain("truncated.");
 		});
+
+		it("wraps long notes even when the message card is collapsed", async () => {
+			const uiTheme = await getThemeByName("dark");
+			if (!uiTheme) throw new Error("theme unavailable");
+			const note =
+				"This is a very long advisor note that will definitely exceed the restricted width constraint of thirty characters and should therefore wrap across multiple lines rather than getting truncated.";
+			const card = createAdvisorMessageCard({ notes: [{ note, severity: "concern" }] }, () => false, uiTheme);
+			const text = strip(card.render(30));
+			expect(text).toContain("truncated.");
+		});
 	});
 });
