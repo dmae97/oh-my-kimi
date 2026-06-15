@@ -38,10 +38,10 @@ const ZOOM_SCALE = 4;
 const MAX_IMAGE_COLS = 28;
 const MAX_IMAGE_ROWS = 14;
 
-/** Sample transcript with `[Tool result]:` bodies wrapped in dim-ink toggles. */
+/** Sample transcript with `[Tool Result]:` bodies wrapped in dim-ink toggles. */
 const PREVIEW_TEXT = sampleDoc
 	.trim()
-	.replace(/\[Tool result\]: ([^[]*)/g, (_match, body: string) => `[Tool result]: ${DIM_ON}${body}${DIM_OFF}`);
+	.replace(/\[Tool Result\]: ([^[]*)/g, (_match, body: string) => `[Tool Result]: ${DIM_ON}${body}${DIM_OFF}`);
 
 type PreviewEntry =
 	| { state: "rendering" }

@@ -60,6 +60,6 @@ describe("serializeConversation — useless pairs", () => {
 		]);
 
 		expect(out).toContain('pattern="beta"');
-		expect(out).toContain("[Tool result]: grep crashed");
+		expect(out).toContain("[Tool Result]: grep crashed");
 	});
 });

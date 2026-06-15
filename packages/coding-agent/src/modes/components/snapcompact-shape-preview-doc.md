@@ -1,8 +1,8 @@
 [User]: Fix the settings overlay crash. Wheeling past the last row throws.
 
-[Assistant tool calls]: read(path="src/select-list.ts:140-180")
+[Tool Call]: read(path="src/select-list.ts:140-180")
 
-[Tool result]: 162: const index = Math.floor(line / rowHeight); index is never checked against bounds.
+[Tool Result]: 162: const index = Math.floor(line / rowHeight); index is never checked against bounds.
 
 [Assistant]: Found it. The hit test indexes past the filtered list; clamping to the last row fixes the crash.
 

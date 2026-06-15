@@ -6,6 +6,7 @@
  */
 
 import type { ApiKey, Model } from "@oh-my-pi/pi-ai";
+import { preferredToolSyntax } from "@oh-my-pi/pi-catalog/identity";
 import { prompt } from "@oh-my-pi/pi-utils";
 import { type AgentTelemetry, instrumentedCompleteSimple } from "../telemetry";
 import type { AgentMessage } from "../types";
@@ -290,7 +291,7 @@ export async function generateBranchSummary(
 	// Transform to LLM-compatible messages, then serialize to text
 	// Serialization prevents the model from treating it as a conversation to continue
 	const llmMessages = (options.convertToLlm ?? defaultConvertToLlm)(messages);
-	const conversationText = serializeConversation(llmMessages);
+	const conversationText = serializeConversation(llmMessages, preferredToolSyntax(model.id));
 
 	// Build prompt
 	const instructions = customInstructions || BRANCH_SUMMARY_PROMPT;
