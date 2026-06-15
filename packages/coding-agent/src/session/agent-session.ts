@@ -6838,8 +6838,11 @@ export class AgentSession {
 		}
 
 		let tokens = currentUsage.tokens;
-		if (currentEstimate.providerNonMessageTokens !== undefined) {
-			tokens += Math.max(0, computeNonMessageTokens(this) - currentEstimate.providerNonMessageTokens);
+		const previousNonMessageTokens = currentEstimate.providerNonMessageTokens;
+		if (previousNonMessageTokens !== undefined) {
+			const currentNonMessageTokens = computeNonMessageTokens(this);
+			const nonMessageTokenGrowth = Math.max(0, currentNonMessageTokens - previousNonMessageTokens);
+			tokens += nonMessageTokenGrowth;
 		}
 		for (const message of messages) {
 			tokens += estimateTokens(message);
