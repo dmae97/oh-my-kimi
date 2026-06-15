@@ -53,6 +53,11 @@ export type SubmittedUserInput = {
 	 *  as a hidden agent-authored `developer` message rather than a visible user
 	 *  turn. Used by the `c`/`.` continue shortcut. */
 	synthetic?: boolean;
+	/** Marks this submission as a deliberate user resume (set by the `.`/`c`
+	 *  continue shortcut, which is also `synthetic`). Forwarded to
+	 *  `session.prompt({ userInitiated })` so it clears advisor auto-resume
+	 *  suppression even though it is synthetic. */
+	userInitiated?: boolean;
 	display?: boolean;
 	/** Queue intent if the session is (or becomes) busy when this submission is
 	 *  dispatched: "steer" (interrupt the active turn) or "followUp" (process after

@@ -61,7 +61,7 @@ budget → per-turn token budget
 {{#if spawns}}
 <dag>
 Build a dependency graph by piping handles through the stage helpers — ephemeral, in-session, acyclic waves:
-- **Name nodes.** Capture each `agent(..., {{#if py}}return_handle=True{{/if}}{{#if js}}{ returnHandle: true }{{/if}})` result; it carries `handle` (`agent://<id>`) + `output`.
+- **Name nodes.** Capture each `agent(…, {{#if py}}return_handle=True{{/if}}{{#if js}}{ returnHandle: true }{{/if}})` result; it carries `handle` (`agent://<id>`) + `output`.
 - **Wire edges by reference.** Embed an upstream node's `handle` or `output` in the dependent stage's prompt so a large transcript flows by reference, never re-inlined. For bulk artifacts, `write("local://<name>.md", …)` and pass the URI.
 - **`pipeline(items, *stages)` = staged waves** with a barrier between stages (every item clears stage N before any enters stage N+1) — the linear spine of a DAG. **`parallel(thunks)` = one wave** of independent nodes.
 - **Isolate failure.** A raising node re-raises the lowest-index error and aborts its wave; wrap each risky node in try/except so a failed node degrades only its dependent subtree while independent branches still finish.

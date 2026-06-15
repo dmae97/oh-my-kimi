@@ -91,6 +91,8 @@ Interrupting advice is sent through the steering channel and can abort in-flight
 Advisor (a senior reviewer watching your work — weigh it, don't blindly obey):
 ```
 
+When you deliberately interrupt the agent (Esc, or a cancel from collab, ACP, RPC, the SDK, or an extension), the advisor stops auto-resuming it. An interrupting `concern`/`blocker` raised while the run is stopped is recorded as a visible advisor card instead of restarting the turn, and a concern already in flight when you interrupt is preserved the same way rather than driving a surprise resume. The advice re-enters context the next time you resume — a new message, the `.`/`c` continue shortcut, or a steer/follow-up. A normal yield is unaffected: the advisor can still steer and resume a run the agent ended on its own.
+
 ## Bounded catch-up with `advisor.syncBacklog`
 
 `advisor.syncBacklog` is not lockstep turn execution. It is a bounded catch-up delay for the primary agent when the advisor falls behind.

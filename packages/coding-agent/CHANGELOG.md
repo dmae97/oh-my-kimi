@@ -82,6 +82,7 @@
 
 ### Fixed
 
+- Fixed the advisor auto-resuming a run after the user deliberately interrupts it (Esc, or a cancel from collab/ACP/RPC/SDK/extension). A user interrupt now suppresses advisor `concern`/`blocker` auto-resume until the user next resumes (a typed message, `.`/`c` continue, or a steer/follow-up); the concern is still recorded as a visible, persisted advisor card — including one already steered into the run or arriving mid-abort — so it re-enters context on resume instead of being discarded. Natural yields are unchanged: the advisor can still steer and resume a stalled run.
 - Fixed `plan.defaultOnStartup` setting schema configuration missing the required `ui.group` property.
 - Fixed auto-retry regenerating a large `write` call after the provider stream timed out mid-tool-call ([#2683](https://github.com/can1357/oh-my-pi/issues/2683)).
 - Fixed soft-expired `issue://` and `pr://` reads to refresh live before returning stale state, with an explicit stale warning when the live refresh fails ([#2684](https://github.com/can1357/oh-my-pi/issues/2684)).

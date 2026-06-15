@@ -129,6 +129,7 @@ import {
 	type CustomMessage,
 	convertToLlm,
 	LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE,
+	USER_INTERRUPT_LABEL,
 	wrapSteeringForModel,
 } from "./session/messages";
 import { getRestorableSessionModels } from "./session/session-context";
@@ -2004,7 +2005,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			isIdle: () => !session.isStreaming,
 			hasQueuedMessages: () => session.queuedMessageCount > 0,
 			abort: () => {
-				session.abort();
+				session.abort({ reason: USER_INTERRUPT_LABEL });
 			},
 			settings,
 			autoApprove: options.autoApprove ?? false,

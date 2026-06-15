@@ -483,6 +483,7 @@ export class InputController {
 						cancelled: false,
 						started: true,
 						synthetic: true,
+						userInitiated: true,
 					});
 				}
 				return;

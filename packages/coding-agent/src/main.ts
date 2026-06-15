@@ -311,7 +311,11 @@ export async function submitInteractiveInput(
 			// developer directive to a visible user message. A synthetic submit while
 			// streaming keeps its prior behavior (rejected as busy) rather than changing
 			// its role.
-			await session.prompt(input.text, { synthetic: true, expandPromptTemplates: false });
+			await session.prompt(input.text, {
+				synthetic: true,
+				expandPromptTemplates: false,
+				userInitiated: input.userInitiated,
+			});
 		} else {
 			await session.prompt(input.text, { images: input.images, streamingBehavior });
 		}
