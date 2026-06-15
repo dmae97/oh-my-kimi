@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.0.1] - 2026-06-15
+
 ### Breaking Changes
 
 - **Settings:** `hooks` and `customTools` arrays replaced with single `extensions` array
@@ -106,7 +108,6 @@
 - Shift+Space, Shift+Backspace, and Shift+Delete now work correctly in Kitty-protocol terminals (Kitty, WezTerm, etc.) instead of being silently ignored ([#411](https://github.com/badlogic/pi-mono/pull/411) by [@nathyong](https://github.com/nathyong))
 - `AgentSession.prompt()` now throws if called while the agent is already streaming, preventing race conditions. Use `steer()` or `followUp()` to queue messages during streaming.
 - Ctrl+C now works like Escape in selector components, so mashing Ctrl+C will eventually close the program ([#400](https://github.com/badlogic/pi-mono/pull/400) by [@mitsuhiko](https://github.com/mitsuhiko))
-- Fixed potential text decoding issues in bash executor by using streaming TextDecoder instead of Buffer.toString()
 - External editor (Ctrl-G) now shows full pasted content instead of `[paste #N ...]` placeholders ([#444](https://github.com/badlogic/pi-mono/pull/444) by [@aliou](https://github.com/aliou))
 - Subagent example README referenced incorrect filename `subagent.ts` instead of `index.ts` ([#427](https://github.com/badlogic/pi-mono/pull/427) by [@Whamp](https://github.com/Whamp))
 
@@ -10317,14 +10318,6 @@ pi --extension ./safety.ts -e ./todo.ts
 ### Changed
 
 - Expanded keybinding documentation to list all 32 supported symbol keys with notes on ctrl+symbol behavior ([#450](https://github.com/badlogic/pi-mono/pull/450) by [@kaofelix](https://github.com/kaofelix))
-
-## [0.34.0] - 2026-01-04
-
-## [0.33.0] - 2026-01-04
-
-## [0.32.3] - 2026-01-03
-
-## [0.32.2] - 2026-01-03
 
 ## [0.32.1] - 2026-01-03
 

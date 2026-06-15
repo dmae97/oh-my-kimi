@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.0.1] - 2026-06-15
+
 ### Added
 
 - Added Zellij and WezTerm pane environment fallbacks for terminal-specific session continuation when no TTY path is available.

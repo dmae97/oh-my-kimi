@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.0.1] - 2026-06-15
+
 ### Fixed
 
 - Auto-repaired one-sided multi-line boundary echoes by dropping delimiter-neutral duplicated boundary lines and emitted a boundary-echo warning

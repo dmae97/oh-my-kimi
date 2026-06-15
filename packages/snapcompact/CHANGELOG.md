@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.0.1] - 2026-06-15
+
 ### Added
 
 - Added `openai-codex` to first-party provider image budgets so ChatGPT Plus/Pro Codex sessions use the same 200-image request cap as OpenAI API sessions instead of the unknown-provider floor.

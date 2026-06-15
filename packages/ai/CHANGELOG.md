@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.0.1] - 2026-06-15
+
 ### Added
 
 - Added Umans AI Coding Plan API-key login support and `UMANS_AI_CODING_PLAN_API_KEY` environment fallback ([#2636](https://github.com/can1357/oh-my-pi/pull/2636) by [@oldschoola](https://github.com/oldschoola)).
