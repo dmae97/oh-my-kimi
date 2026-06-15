@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { gunzipSync } from "node:zlib";
-import { getAgentDir, isEnoent, logger, ptree, tryParseJson } from "@oh-my-pi/pi-utils";
+import { getDocsRsCacheDir, isEnoent, logger, ptree, tryParseJson } from "@oh-my-pi/pi-utils";
 import { ToolAbortError } from "../../tools/tool-errors";
 import type { RenderResult, SpecialHandler } from "./types";
 import { buildResult, MAX_BYTES } from "./types";
@@ -276,7 +276,6 @@ function findItemInModule(mod_: RustdocItem, name: string, index: Record<string,
 	return null;
 }
 
-const DOCS_RS_CACHE_ROOT = "webcache";
 const DOCS_RS_CACHE_FILENAME = "rustdoc.json";
 
 function sanitizeCacheSegment(value: string): string {
@@ -291,7 +290,7 @@ function getDocsRsCacheVersionSegment(version: string, now = new Date()): string
 function getDocsRsCachePath(target: DocsRsTarget, now = new Date()): string {
 	const crate = sanitizeCacheSegment(target.crateName);
 	const version = getDocsRsCacheVersionSegment(target.version, now);
-	return path.join(getAgentDir(), DOCS_RS_CACHE_ROOT, `docsrs_${crate}_${version}`, DOCS_RS_CACHE_FILENAME);
+	return path.join(getDocsRsCacheDir(), `docsrs_${crate}_${version}`, DOCS_RS_CACHE_FILENAME);
 }
 
 async function readCachedRustdocCrate(

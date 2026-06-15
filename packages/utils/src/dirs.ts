@@ -556,6 +556,15 @@ export function getPuppeteerDir(): string {
 	return dirs.rootSubdir("puppeteer", "cache");
 }
 
+/** Get DOCS_RS cache directory () */
+export function getDocsRsCacheDir(): string {
+	return dirs.rootSubdir("webcache", "cache");
+}
+
+/**Get AutoQa db directory */
+export function getAutoQaDbDir(): string {
+	return dirs.rootSubdir("autoqa.db", "data");
+}
 /**
  * Stable 7-character hex digest of an absolute filesystem path.
  *
