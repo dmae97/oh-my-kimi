@@ -569,6 +569,155 @@ function createSimpleAnthropicProviderOptions(
 }
 
 // ---------------------------------------------------------------------------
+// Umans AI Coding Plan
+// ---------------------------------------------------------------------------
+
+const UMANS_BASE_URL = "https://api.code.umans.ai";
+const UMANS_MODELS_INFO_PATH = "/models/info";
+const UMANS_REASONING_EFFORT_BY_LEVEL: Record<string, Effort> = {
+	minimal: Effort.Minimal,
+	low: Effort.Low,
+	medium: Effort.Medium,
+	high: Effort.High,
+	xhigh: Effort.XHigh,
+};
+const UMANS_DEFAULT_REASONING_EFFORTS = [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh] as const;
+
+export interface UmansModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+	fetch?: FetchImpl;
+}
+
+interface UmansModelInfo {
+	name?: unknown;
+	display_name?: unknown;
+	capabilities?: unknown;
+}
+
+function normalizeUmansBaseUrl(baseUrl: string | undefined): string {
+	const normalized = normalizeAnthropicBaseUrl(baseUrl, UMANS_BASE_URL);
+	return normalized.endsWith("/v1") ? normalized.slice(0, -3) : normalized;
+}
+
+function umansSupportsVision(value: unknown): boolean {
+	return value === true || (typeof value === "string" && value.length > 0);
+}
+
+function umansReasoningSupported(value: unknown): boolean {
+	return isRecord(value) ? value.supported === true : value === true;
+}
+
+function mapUmansReasoningEfforts(value: unknown): readonly Effort[] {
+	if (!isRecord(value) || !Array.isArray(value.levels)) {
+		return UMANS_DEFAULT_REASONING_EFFORTS;
+	}
+	const efforts: Effort[] = [];
+	for (const level of value.levels) {
+		if (typeof level !== "string") continue;
+		const effort = UMANS_REASONING_EFFORT_BY_LEVEL[level];
+		if (effort !== undefined && !efforts.includes(effort)) {
+			efforts.push(effort);
+		}
+	}
+	return efforts.length > 0 ? efforts : UMANS_DEFAULT_REASONING_EFFORTS;
+}
+
+function mapUmansThinkingConfig(value: unknown): ThinkingConfig | undefined {
+	if (!umansReasoningSupported(value)) return undefined;
+	const efforts = mapUmansReasoningEfforts(value);
+	const thinking: ThinkingConfig = { mode: "budget", efforts };
+	if (isRecord(value)) {
+		if (value.can_disable === false) {
+			thinking.requiresEffort = true;
+		}
+		if (typeof value.default_level === "string") {
+			const defaultLevel = UMANS_REASONING_EFFORT_BY_LEVEL[value.default_level];
+			if (defaultLevel !== undefined && efforts.includes(defaultLevel)) {
+				thinking.defaultLevel = defaultLevel;
+			}
+		}
+	}
+	return thinking;
+}
+
+function mapUmansModelInfo(
+	modelId: string,
+	raw: UmansModelInfo,
+	baseUrl: string,
+	reference: ModelSpec<"anthropic-messages"> | undefined,
+): ModelSpec<"anthropic-messages"> | null {
+	if (!modelId) return null;
+	const capabilities = isRecord(raw.capabilities) ? raw.capabilities : {};
+	const supportsTools = capabilities.supports_tools;
+	const thinking = mapUmansThinkingConfig(capabilities.reasoning);
+	return {
+		...reference,
+		id: modelId,
+		name: toModelName(raw.display_name, toModelName(raw.name, modelId)),
+		api: "anthropic-messages",
+		provider: "umans",
+		baseUrl,
+		reasoning: thinking !== undefined,
+		...(thinking ? { thinking } : {}),
+		input: umansSupportsVision(capabilities.supports_vision) ? ["text", "image"] : ["text"],
+		...(supportsTools === false ? { supportsTools: false } : {}),
+		cost: reference?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: toPositiveNumber(capabilities.context_window, reference?.contextWindow ?? null),
+		maxTokens: toPositiveNumber(capabilities.max_completion_tokens, reference?.maxTokens ?? null),
+	};
+}
+
+async function fetchUmansModelsInfo(options: {
+	baseUrl: string;
+	apiKey?: string;
+	fetch?: FetchImpl;
+	references: Map<string, ModelSpec<"anthropic-messages">>;
+}): Promise<ModelSpec<"anthropic-messages">[] | null> {
+	const discoveryBaseUrl = toAnthropicDiscoveryBaseUrl(options.baseUrl);
+	const requestHeaders: Record<string, string> = { Accept: "application/json" };
+	if (options.apiKey) {
+		requestHeaders["x-api-key"] = options.apiKey;
+	}
+	const fetchImpl = options.fetch ?? fetch;
+	let payload: unknown;
+	try {
+		const response = await fetchImpl(`${discoveryBaseUrl}${UMANS_MODELS_INFO_PATH}`, {
+			method: "GET",
+			headers: requestHeaders,
+		});
+		if (!response.ok) {
+			return null;
+		}
+		payload = await response.json();
+	} catch (error) {
+		throw new Error("Failed to fetch Umans models info", { cause: error });
+	}
+	if (!isRecord(payload)) {
+		return null;
+	}
+	const models: ModelSpec<"anthropic-messages">[] = [];
+	for (const [modelId, value] of Object.entries(payload)) {
+		if (!isRecord(value)) continue;
+		const mapped = mapUmansModelInfo(modelId, value, options.baseUrl, options.references.get(modelId));
+		if (mapped) {
+			models.push(mapped);
+		}
+	}
+	return models.sort((left, right) => left.id.localeCompare(right.id));
+}
+
+export function umansModelManagerOptions(config?: UmansModelManagerConfig): ModelManagerOptions<"anthropic-messages"> {
+	const apiKey = config?.apiKey;
+	const baseUrl = normalizeUmansBaseUrl(config?.baseUrl);
+	const references = createBundledReferenceMap<"anthropic-messages">("umans");
+	return {
+		providerId: "umans",
+		dynamicModelsAuthoritative: true,
+		fetchDynamicModels: () => fetchUmansModelsInfo({ baseUrl, apiKey, fetch: config?.fetch, references }),
+	};
+}
+// ---------------------------------------------------------------------------
 // 1. OpenAI
 // ---------------------------------------------------------------------------
 
@@ -2307,7 +2456,7 @@ export function xiaomiModelManagerOptions(
 			provider: providerId,
 			baseUrl: url,
 			apiKey,
-			filterModel: (_entry, model) => !model.id.includes("-tts"),
+			filterModel: (_entry, model) => !model.id.includes("-tts") && !model.id.includes("-asr"),
 			mapModel: (entry, defaults) => {
 				const reference = references.get(defaults.id);
 				const model = mapWithBundledReference(entry, defaults, reference);
@@ -3245,6 +3394,8 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_CORE: readonly ModelsDevProviderDescriptor
 const MODELS_DEV_PROVIDER_DESCRIPTORS_CODING_PLANS: readonly ModelsDevProviderDescriptor[] = [
 	// --- zAI ---
 	anthropicMessagesDescriptor("zai-coding-plan", "zai", "https://api.z.ai/api/anthropic"),
+	// --- Umans AI Coding Plan ---
+	anthropicMessagesDescriptor("umans-ai-coding-plan", "umans", UMANS_BASE_URL),
 	// --- Xiaomi ---
 	openAiCompletionsDescriptor("xiaomi", "xiaomi", "https://api.xiaomimimo.com/v1", {
 		defaultContextWindow: 262144,

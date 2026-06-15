@@ -68887,6 +68887,189 @@
 			}
 		}
 	},
+	"umans": {
+		"umans-coder": {
+			"id": "umans-coder",
+			"name": "Umans Coder",
+			"api": "anthropic-messages",
+			"provider": "umans",
+			"baseUrl": "https://api.code.umans.ai",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 262144,
+			"maxTokens": 262144,
+			"thinking": {
+				"mode": "budget",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				]
+			}
+		},
+		"umans-flash": {
+			"id": "umans-flash",
+			"name": "Umans Flash",
+			"api": "anthropic-messages",
+			"provider": "umans",
+			"baseUrl": "https://api.code.umans.ai",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 262144,
+			"maxTokens": 262144,
+			"thinking": {
+				"mode": "budget",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				]
+			}
+		},
+		"umans-glm-5.1": {
+			"id": "umans-glm-5.1",
+			"name": "GLM 5.1",
+			"api": "anthropic-messages",
+			"provider": "umans",
+			"baseUrl": "https://api.code.umans.ai",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 204800,
+			"maxTokens": 131072,
+			"thinking": {
+				"mode": "budget",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				]
+			}
+		},
+		"umans-kimi-k2.6": {
+			"id": "umans-kimi-k2.6",
+			"name": "Kimi K2.6",
+			"api": "anthropic-messages",
+			"provider": "umans",
+			"baseUrl": "https://api.code.umans.ai",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 262144,
+			"maxTokens": 262144,
+			"thinking": {
+				"mode": "budget",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				]
+			}
+		},
+		"umans-kimi-k2.7": {
+			"id": "umans-kimi-k2.7",
+			"name": "Kimi K2.7 Code",
+			"api": "anthropic-messages",
+			"provider": "umans",
+			"baseUrl": "https://api.code.umans.ai",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 262144,
+			"maxTokens": 262144,
+			"thinking": {
+				"mode": "budget",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				],
+				"requiresEffort": true
+			}
+		},
+		"umans-qwen3.6-35b-a3b": {
+			"id": "umans-qwen3.6-35b-a3b",
+			"name": "Qwen3.6 35B A3B",
+			"api": "anthropic-messages",
+			"provider": "umans",
+			"baseUrl": "https://api.code.umans.ai",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 262144,
+			"maxTokens": 262144,
+			"thinking": {
+				"mode": "budget",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				]
+			}
+		}
+	},
 	"venice": {
 		"aion-labs-aion-2-0": {
 			"id": "aion-labs-aion-2-0",

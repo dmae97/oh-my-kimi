@@ -452,6 +452,23 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(headers["X-Api-Key"]).toBeUndefined();
 	});
 
+	it("keeps Umans Anthropic-compatible requests on X-Api-Key auth", () => {
+		const options = buildAnthropicClientOptions({
+			model: buildModel({
+				...ANTHROPIC_MODEL_SPEC,
+				id: "umans-coder",
+				name: "Umans Coder",
+				provider: "umans",
+				baseUrl: "https://api.code.umans.ai",
+			}),
+			apiKey: "sk-umans-test",
+			stream: true,
+		});
+
+		expect(options.apiKey).toBe("sk-umans-test");
+		expect(options.defaultHeaders.Authorization).toBeUndefined();
+	});
+
 	it("forwards only prefix-matching Claude Code User-Agent values", () => {
 		const forwardedHeaders = buildAnthropicHeaders({
 			apiKey: "sk-ant-oat-test",

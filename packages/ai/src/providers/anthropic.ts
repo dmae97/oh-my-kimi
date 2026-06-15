@@ -2382,10 +2382,9 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		};
 	}
 
-	// OpenCode Go's Anthropic-compatible gateway validates API-key auth through
-	// `X-Api-Key`; bearer-only requests reach the endpoint but return
-	// `Missing API key` before token validation.
-	if (model.provider === "opencode-go") {
+	// OpenCode Go and Umans validate Anthropic-compatible API-key auth through
+	// `X-Api-Key`; bearer-only requests reach the endpoint but fail auth.
+	if (model.provider === "opencode-go" || model.provider === "umans") {
 		delete defaultHeaders.Authorization;
 		return {
 			isOAuthToken: false,

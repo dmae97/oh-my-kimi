@@ -82,9 +82,11 @@ export function applyGeneratedModelPolicies(models: ModelSpec<Api>[]): void {
  */
 export function rebakeModelThinking(model: ModelSpec<Api>): void {
 	if (isVariantCollapsedSpec(model)) return;
+	const requiresProviderAuthoredEffort =
+		model.provider === "umans" && (model.thinking?.requiresEffort === true || model.id === "umans-kimi-k2.7");
 	const thinking = resolveModelThinking({ ...model, thinking: undefined }, buildCompat(model));
 	if (thinking) {
-		model.thinking = thinking;
+		model.thinking = requiresProviderAuthoredEffort ? { ...thinking, requiresEffort: true } : thinking;
 	} else {
 		delete model.thinking;
 	}

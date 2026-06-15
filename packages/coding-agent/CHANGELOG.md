@@ -42,6 +42,10 @@
 - Registered the `Advisor` group in the `model` settings tab so advisor settings render correctly in the settings panel.
 - Fixed Windows bash path handling so MSYS/Git-Bash drive aliases like `/d/project` and WSL-style `/mnt/d/project` normalize to native drive paths consistently across the bash tool cwd validation and brush filesystem builtins ([#2634](https://github.com/can1357/oh-my-pi/issues/2634)).
 
+### Added
+
+- Added `UMANS_AI_CODING_PLAN_API_KEY` to the CLI environment help ([#2636](https://github.com/can1357/oh-my-pi/pull/2636) by [@oldschoola](https://github.com/oldschoola)).
+
 ## [15.13.3] - 2026-06-15
 
 ### Added

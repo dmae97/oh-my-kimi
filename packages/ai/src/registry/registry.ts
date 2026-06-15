@@ -46,6 +46,7 @@ import { syntheticProvider } from "./synthetic";
 import { tavilyProvider } from "./tavily";
 import { togetherProvider } from "./together";
 import type { ProviderDefinition } from "./types";
+import { umansProvider } from "./umans";
 import { veniceProvider } from "./venice";
 import { vercelAiGatewayProvider } from "./vercel-ai-gateway";
 import { vllmProvider } from "./vllm";
@@ -85,6 +86,7 @@ const ALL = [
 	alibabaCodingPlanProvider,
 	aimlApiProvider,
 	zhipuCodingPlanProvider,
+	umansProvider,
 	qwenPortalProvider,
 	minimaxCodeProvider,
 	minimaxCodeCnProvider,
