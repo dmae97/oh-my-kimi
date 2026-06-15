@@ -943,6 +943,7 @@
 
 ### Fixed
 
+- Fixed plugin config writes against older `omp-plugins.lock.json` files that did not have a top-level `settings` object, which crashed `omp plugin config set` before persisting the option ([#2236](https://github.com/can1357/oh-my-pi/issues/2236)).
 - Fixed `ask` question/result renders so option and answer rows are no longer duplicated when the component is re-rendered
 - Fixed streaming `write`/`diff` previews to keep line-number gutter widths stable while content grows, preventing already-rendered preview rows from being reflowed mid-stream
 - Fixed the welcome screen showing "No LSP servers" when `lsp.lazy` is enabled: recognized servers are now still discovered at startup and listed with a dim "available" dot (no warmup), and `/status` reports them as `available` instead of omitting the section

@@ -9,6 +9,7 @@ import * as path from "node:path";
 import { getPluginsLockfile, getPluginsNodeModules, getPluginsPackageJson, isEnoent } from "@oh-my-pi/pi-utils";
 import { getConfigDirPaths } from "../../config";
 import { installLegacyPiSpecifierShim } from "./legacy-pi-compat";
+import { normalizePluginRuntimeConfig } from "./runtime-config";
 import type { InstalledPlugin, PluginManifest, PluginRuntimeConfig, ProjectPluginOverrides } from "./types";
 
 installLegacyPiSpecifierShim();
@@ -28,9 +29,9 @@ installLegacyPiSpecifierShim();
 async function loadRuntimeConfig(home?: string): Promise<PluginRuntimeConfig> {
 	const lockPath = getPluginsLockfile(home);
 	try {
-		return await Bun.file(lockPath).json();
+		return normalizePluginRuntimeConfig(await Bun.file(lockPath).json());
 	} catch (err) {
-		if (isEnoent(err)) return { plugins: {}, settings: {} };
+		if (isEnoent(err)) return normalizePluginRuntimeConfig({});
 		throw err;
 	}
 }

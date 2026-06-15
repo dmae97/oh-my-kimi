@@ -15,6 +15,7 @@ import { type GitSource, parseGitUrl } from "./git-url";
 import { installLegacyPiSpecifierShim, loadLegacyPiModule } from "./legacy-pi-compat";
 import { resolvePluginManifestEntries } from "./loader";
 import { extractPackageName, parsePluginSpec } from "./parser";
+import { normalizePluginRuntimeConfig } from "./runtime-config";
 import type {
 	DoctorCheck,
 	DoctorOptions,
@@ -124,11 +125,11 @@ export class PluginManager {
 	async #loadRuntimeConfig(): Promise<PluginRuntimeConfig> {
 		const lockPath = getPluginsLockfile();
 		try {
-			return await Bun.file(lockPath).json();
+			return normalizePluginRuntimeConfig(await Bun.file(lockPath).json());
 		} catch (err) {
-			if (isEnoent(err)) return { plugins: {}, settings: {} };
+			if (isEnoent(err)) return normalizePluginRuntimeConfig({});
 			logger.warn("Failed to load plugin runtime config", { path: lockPath, error: String(err) });
-			return { plugins: {}, settings: {} };
+			return normalizePluginRuntimeConfig({});
 		}
 	}
 
