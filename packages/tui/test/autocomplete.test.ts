@@ -61,6 +61,50 @@ describe("CombinedAutocompleteProvider", () => {
 		});
 	});
 
+	describe("applyCompletion", () => {
+		it("replaces the live slash command prefix when rendered suggestions are stale", () => {
+			const provider = new CombinedAutocompleteProvider([], "/tmp");
+			const result = provider.applyCompletion(
+				["/ski"],
+				0,
+				4,
+				{ value: "skills:fix-bug", label: "/skills:fix-bug" },
+				"/s",
+			);
+
+			expect(result.lines[0]).toBe("/skills:fix-bug ");
+			expect(result.cursorCol).toBe("/skills:fix-bug ".length);
+		});
+
+		it("preserves earlier slash command arguments when completing a path inside the last argument", () => {
+			const provider = new CombinedAutocompleteProvider([], "/tmp");
+			const result = provider.applyCompletion(
+				["/swarm run pac"],
+				0,
+				14,
+				{ value: "package.json", label: "package.json" },
+				"pac",
+			);
+
+			expect(result.lines[0]).toBe("/swarm run package.json");
+			expect(result.cursorCol).toBe("/swarm run package.json".length);
+		});
+
+		it("replaces only the last path token when completing a multi-token slash command argument", () => {
+			const provider = new CombinedAutocompleteProvider([], "/tmp");
+			const result = provider.applyCompletion(
+				["/model claude"],
+				0,
+				13,
+				{ value: "claude-sonnet", label: "claude-sonnet" },
+				"claude",
+			);
+
+			expect(result.lines[0]).toBe("/model claude-sonnet");
+			expect(result.cursorCol).toBe("/model claude-sonnet".length);
+		});
+	});
+
 	describe("hidden paths", () => {
 		let baseDir: string;
 
