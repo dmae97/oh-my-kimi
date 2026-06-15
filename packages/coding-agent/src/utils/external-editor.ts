@@ -7,9 +7,22 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { $env, Snowflake } from "@oh-my-pi/pi-utils";
 
-/** Returns the user's preferred editor command, or undefined if not configured. */
+/**
+ * Returns the user's preferred editor command, or a platform default.
+ *
+ * Resolution order:
+ *   1. `$VISUAL`
+ *   2. `$EDITOR`
+ *   3. `notepad` on Windows (always present in `%SystemRoot%\System32`)
+ *
+ * POSIX returns `undefined` when neither variable is set so the caller can
+ * surface a warning that nudges the user to configure one.
+ */
 export function getEditorCommand(): string | undefined {
-	return $env.VISUAL || $env.EDITOR || undefined;
+	const configured = $env.VISUAL?.trim() || $env.EDITOR?.trim();
+	if (configured) return configured;
+	if (process.platform === "win32") return "notepad";
+	return undefined;
 }
 
 export interface OpenInEditorOptions {
