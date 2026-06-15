@@ -347,49 +347,52 @@ describe("AgentSession handoff", () => {
 		expect(events.filter(event => event.type === "auto_compaction_start")).toHaveLength(0);
 		expect(mock.calls).toHaveLength(1);
 	});
-	it("counts current non-message tokens in provider-anchored pre-prompt checks", async () => {
+	it("counts current non-message token growth in provider-anchored pre-prompt checks", async () => {
 		await session.dispose();
 		authStorage.setRuntimeApiKey("openai", "test-key");
 		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 		events = [];
 
+		const extensionsResult = await loadExtensions([], tempDir.path());
+		const extensionRunner = new ExtensionRunner(
+			extensionsResult.extensions,
+			extensionsResult.runtime,
+			tempDir.path(),
+			sessionManager,
+			modelRegistry,
+		);
+		const emitBeforeAgentStart = vi
+			.spyOn(extensionRunner, "emitBeforeAgentStart")
+			.mockResolvedValueOnce(undefined)
+			.mockResolvedValueOnce({ systemPrompt: ["expanded system prompt ".repeat(30_000)] });
+		vi.spyOn(extensionRunner, "emit").mockResolvedValue(undefined);
+
 		const mock = createMockModel({
 			id: "gpt-5.5",
 			provider: "openai",
 			contextWindow: 10_000,
+			responses: [
+				{
+					content: ["seed response"],
+					stopReason: "stop",
+					usage: {
+						input: 1_000,
+						output: 10,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 1_010,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+				},
+			],
 		});
-		const seedUser: AgentMessage = {
-			role: "user",
-			content: [{ type: "text", text: "seed" }],
-			timestamp: Date.now() - 2,
-		};
-		const seedAssistant: AssistantMessage = {
-			role: "assistant",
-			content: [{ type: "text", text: "seed response" }],
-			api: mock.api,
-			provider: "openai",
-			model: mock.id,
-			stopReason: "stop",
-			usage: {
-				input: 1_000,
-				output: 10,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 1_010,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
-			timestamp: Date.now() - 1,
-		};
-		sessionManager.appendMessage(seedUser);
-		sessionManager.appendMessage(seedAssistant);
-
 		const agent = new Agent({
 			getApiKey: () => "test-key",
 			initialState: {
 				model: mock,
-				systemPrompt: ["expanded system prompt ".repeat(30_000)],
+				systemPrompt: ["Test"],
 				tools: [],
-				messages: [seedUser, seedAssistant],
+				messages: [],
 			},
 			streamFn: mock.stream,
 		});
@@ -405,11 +408,14 @@ describe("AgentSession handoff", () => {
 				"contextPromotion.enabled": false,
 			}),
 			modelRegistry,
+			extensionRunner,
 		});
 		session.subscribe(event => {
 			events.push(event);
 		});
 
+		await session.prompt("seed prompt");
+		expect(mock.calls).toHaveLength(1);
 		expect(session.getContextUsage({ contextWindow: 10_000 })).toMatchObject({
 			tokens: 1_000,
 			contextWindow: 10_000,
@@ -434,9 +440,81 @@ describe("AgentSession handoff", () => {
 				events.some(event => event.type === "auto_compaction_end" && event.aborted === false),
 		);
 
+		expect(emitBeforeAgentStart).toHaveBeenCalledTimes(2);
 		expect(compactSpy).toHaveBeenCalledTimes(1);
 		expect(promptSpy).toHaveBeenCalledTimes(1);
 		expect(events).toContainEqual({ type: "auto_compaction_start", reason: "threshold", action: "context-full" });
+	});
+
+	it("does not double-count unchanged non-message tokens in provider-anchored pre-prompt checks", async () => {
+		await session.dispose();
+		authStorage.setRuntimeApiKey("openai", "test-key");
+		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
+		events = [];
+
+		const mock = createMockModel({
+			id: "gpt-5.5",
+			provider: "openai",
+			contextWindow: 10_000,
+			responses: [
+				{
+					content: ["seed response"],
+					stopReason: "stop",
+					usage: {
+						input: 8_500,
+						output: 10,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 8_510,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+				},
+				{ content: ["ok"], stopReason: "stop" },
+			],
+		});
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: {
+				model: mock,
+				systemPrompt: ["expanded system prompt ".repeat(30_000)],
+				tools: [],
+				messages: [],
+			},
+			streamFn: mock.stream,
+		});
+		session = new AgentSession({
+			agent,
+			sessionManager,
+			settings: Settings.isolated({
+				"compaction.enabled": false,
+				"compaction.autoContinue": false,
+				"compaction.strategy": "context-full",
+				"compaction.thresholdTokens": 9_500,
+				"contextPromotion.enabled": false,
+			}),
+			modelRegistry,
+		});
+		session.subscribe(event => {
+			events.push(event);
+		});
+
+		await session.prompt("seed prompt");
+		expect(mock.calls).toHaveLength(1);
+		session.settings.set("compaction.enabled", true);
+		const compactSpy = vi.spyOn(compactionModule, "compact").mockImplementation(async preparation => ({
+			summary: "pre-prompt compacted",
+			shortSummary: undefined,
+			firstKeptEntryId: preparation.firstKeptEntryId,
+			tokensBefore: preparation.tokensBefore,
+			details: {},
+		}));
+
+		await session.prompt("small pending prompt");
+		await drainMaintenance();
+
+		expect(compactSpy).not.toHaveBeenCalled();
+		expect(events.filter(event => event.type === "auto_compaction_start")).toHaveLength(0);
+		expect(mock.calls).toHaveLength(2);
 	});
 	it("does not run auto maintenance after final yield", async () => {
 		session.settings.set("compaction.strategy", "handoff");

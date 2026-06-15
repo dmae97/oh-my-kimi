@@ -1114,6 +1114,15 @@ export class AgentSession {
 	#unexpectedStopRetryCount = 0;
 	#promptGeneration = 0;
 	#pendingAgentEndEmit: AgentSessionEvent | undefined;
+	#pendingProviderRequestNonMessageTokens: number | undefined = undefined;
+	#lastProviderUsageNonMessage:
+		| {
+				provider: AssistantMessage["provider"];
+				model: AssistantMessage["model"];
+				timestamp: AssistantMessage["timestamp"];
+				tokens: number;
+		  }
+		| undefined;
 	#obfuscator: SecretObfuscator | undefined;
 	#checkpointState: CheckpointState | undefined = undefined;
 	#pendingRewindReport: string | undefined = undefined;
@@ -1790,6 +1799,14 @@ export class AgentSession {
 			if (event.message.role === "assistant") {
 				this.#lastAssistantMessage = event.message;
 				const assistantMsg = event.message as AssistantMessage;
+				if (assistantMsg.stopReason !== "aborted" && assistantMsg.stopReason !== "error" && assistantMsg.usage) {
+					this.#lastProviderUsageNonMessage = {
+						provider: assistantMsg.provider,
+						model: assistantMsg.model,
+						timestamp: assistantMsg.timestamp,
+						tokens: this.#pendingProviderRequestNonMessageTokens ?? computeNonMessageTokens(this),
+					};
+				}
 				const currentGrantsAnthropicPriority =
 					this.serviceTier === "priority" || this.serviceTier === "claude-only";
 				if (assistantMsg.disabledFeatures?.includes("priority") && currentGrantsAnthropicPriority) {
@@ -4912,7 +4929,12 @@ export class AgentSession {
 			}
 
 			const agentPromptOptions = options?.toolChoice ? { toolChoice: options.toolChoice } : undefined;
-			await this.#promptAgentWithIdleRetry(messages, agentPromptOptions);
+			this.#pendingProviderRequestNonMessageTokens = computeNonMessageTokens(this);
+			try {
+				await this.#promptAgentWithIdleRetry(messages, agentPromptOptions);
+			} finally {
+				this.#pendingProviderRequestNonMessageTokens = undefined;
+			}
 			if (!options?.skipPostPromptRecoveryWait) {
 				await this.#waitForPostPromptRecovery(generation);
 			}
@@ -6789,7 +6811,10 @@ export class AgentSession {
 			return this.#estimatePendingPromptTokens(messages);
 		}
 
-		let tokens = currentUsage.tokens + computeNonMessageTokens(this);
+		let tokens = currentUsage.tokens;
+		if (currentEstimate.providerNonMessageTokens !== undefined) {
+			tokens += Math.max(0, computeNonMessageTokens(this) - currentEstimate.providerNonMessageTokens);
+		}
 		for (const message of messages) {
 			tokens += estimateTokens(message);
 		}
@@ -10619,6 +10644,7 @@ export class AgentSession {
 	#estimateContextTokens(): {
 		tokens: number;
 		providerAnchored: boolean;
+		providerNonMessageTokens?: number;
 	} {
 		const messages = this.messages;
 
@@ -10650,6 +10676,14 @@ export class AgentSession {
 		}
 
 		const usageTokens = calculatePromptTokens(lastUsage);
+		const providerNonMessage =
+			this.#lastProviderUsageNonMessage &&
+			messages[lastUsageIndex]?.role === "assistant" &&
+			this.#lastProviderUsageNonMessage.provider === (messages[lastUsageIndex] as AssistantMessage).provider &&
+			this.#lastProviderUsageNonMessage.model === (messages[lastUsageIndex] as AssistantMessage).model &&
+			this.#lastProviderUsageNonMessage.timestamp === (messages[lastUsageIndex] as AssistantMessage).timestamp
+				? this.#lastProviderUsageNonMessage.tokens
+				: undefined;
 		let trailingTokens = 0;
 		for (let i = lastUsageIndex + 1; i < messages.length; i++) {
 			trailingTokens += estimateTokens(messages[i]);
@@ -10658,6 +10692,7 @@ export class AgentSession {
 		return {
 			tokens: usageTokens + trailingTokens,
 			providerAnchored: true,
+			providerNonMessageTokens: providerNonMessage,
 		};
 	}
 
