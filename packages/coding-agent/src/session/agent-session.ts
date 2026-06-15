@@ -8689,9 +8689,9 @@ export class AgentSession {
 		// Context overflow is handled by compaction, not retry
 		const contextWindow = this.model?.contextWindow ?? 0;
 		if (isContextOverflow(message, contextWindow)) return false;
-		if (this.#streamInterruptedAfterObservableOutput(message)) return false;
 
 		if (this.#isClassifierRefusal(message)) return true;
+		if (this.#streamInterruptedAfterObservableOutput(message)) return false;
 		if (this.#isStaleOpenAIResponsesReplayError(message)) return true;
 
 		const err = message.errorMessage;
