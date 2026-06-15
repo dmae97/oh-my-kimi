@@ -333,10 +333,32 @@ if (!napiBin) {
 	throw new Error("Could not locate @napi-rs/cli `napi` binary in node_modules/.bin");
 }
 
+async function runNapiBuildWithSccacheFallback() {
+	let buildResult = await $`${napiBin} ${napiArgs}`.nothrow();
+	let stderr = buildResult.stderr?.toString("utf-8") ?? "";
+	if (
+		buildResult.exitCode !== 0 &&
+		process.env.RUSTC_WRAPPER === "sccache" &&
+		stderr.includes("sccache: error") &&
+		stderr.includes("cache storage failed")
+	) {
+		const retryEnv = { ...process.env };
+		delete retryEnv.RUSTC_WRAPPER;
+		delete retryEnv.SCCACHE_BUCKET;
+		delete retryEnv.SCCACHE_ENDPOINT;
+		delete retryEnv.SCCACHE_REGION;
+		delete retryEnv.AWS_ACCESS_KEY_ID;
+		delete retryEnv.AWS_SECRET_ACCESS_KEY;
+		console.log("sccache storage unavailable; retrying native build without RUSTC_WRAPPER");
+		buildResult = await $`${napiBin} ${napiArgs}`.env(retryEnv).nothrow();
+		stderr = buildResult.stderr?.toString("utf-8") ?? "";
+	}
+	return { buildResult, stderr };
+}
+
 try {
-	const buildResult = await $`${napiBin} ${napiArgs}`.nothrow();
+	const { buildResult, stderr } = await runNapiBuildWithSccacheFallback();
 	if (buildResult.exitCode !== 0) {
-		const stderr = buildResult.stderr?.toString("utf-8") ?? "";
 		throw new Error(`napi build failed${stderr ? `:\n${stderr}` : ""}`);
 	}
 
