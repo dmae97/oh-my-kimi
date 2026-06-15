@@ -5,6 +5,7 @@ import { COLLAB_PROMPT_MESSAGE_TYPE, type CollabPromptDetails } from "../../coll
 import { settings } from "../../config/settings";
 import { getFileSnapshotStore } from "../../edit/file-snapshot-store";
 import { AssistantMessageComponent } from "../../modes/components/assistant-message";
+import { createBackgroundTanDispatchBlock } from "../../modes/components/background-tan-message";
 import { BashExecutionComponent } from "../../modes/components/bash-execution";
 import { BranchSummaryMessageComponent } from "../../modes/components/branch-summary-message";
 import { CollabPromptMessageComponent } from "../../modes/components/collab-prompt-message";
@@ -33,6 +34,7 @@ import { materializeImageReferenceLinksSync } from "../../modes/image-references
 import { theme } from "../../modes/theme/theme";
 import type { CompactionQueuedMessage, InteractiveModeContext } from "../../modes/types";
 import {
+	BACKGROUND_TAN_DISPATCH_MESSAGE_TYPE,
 	type CustomMessage,
 	isSilentAbort,
 	LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE,
@@ -237,6 +239,10 @@ export class UiHelpers {
 						);
 						this.ctx.chatContainer.addChild(card);
 						return [card];
+					}
+					if (message.customType === BACKGROUND_TAN_DISPATCH_MESSAGE_TYPE) {
+						this.ctx.chatContainer.addChild(createBackgroundTanDispatchBlock(message as CustomMessage<unknown>));
+						break;
 					}
 					const handoffComponent = createHandoffSummaryMessageComponent(
 						message as CustomMessage<unknown>,

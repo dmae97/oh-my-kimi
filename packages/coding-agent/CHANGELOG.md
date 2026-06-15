@@ -13,6 +13,9 @@
 
 ### Fixed
 
+- Fixed `/tan` refusing to launch while the main response was still streaming. The command exists to fork tangential work *alongside* an active session, so it now dispatches mid-stream and queues its handoff breadcrumb for the next turn instead of steering the in-flight one.
+- Fixed `/tan` background agents never staying in the Agent Hub. The forked clone now uses an `<agentId>.jsonl` session file (so the persisted-subagent scan keys it by the same id the live ref uses) and is parked rather than unregistered on completion, so it stays listed and its transcript stays readable.
+- Fixed the `/tan` dispatch breadcrumb rendering its full raw `<system-notice>` block in the transcript. It now shows a single compact line (`Tangent dispatched [task] <jobId> — <work>`), styled as a sibling of the "Background job completed" line.
 - Fixed profile bootstrap parsing so built-in string flags like `--plan` no longer consume the profile-boundary marker and drop the trailing user message
 - Fixed a bug where goal mode was incorrectly deactivated/set to 'none' on every wall-clock-only update (when tokenDelta <= 0) during tool execution flushes, preventing OMP from writing a mode change to 'none' in the session history database while keeping in-memory/UI state fresh.
 - Fixed a bug where Gemini MALFORMED_FUNCTION_CALL tool-generation errors (which are transient) surfaced as terminal error blocks. Added "malformed function call" to the transient transport error classifier so the session automatically retries the turn.

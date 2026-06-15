@@ -5,7 +5,7 @@ import type { AsyncJobRegisterOptions } from "@oh-my-pi/pi-coding-agent/async/jo
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { TanCommandController } from "@oh-my-pi/pi-coding-agent/modes/controllers/tan-command-controller";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
-import { MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
+import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { CreateAgentSessionResult } from "@oh-my-pi/pi-coding-agent/sdk";
 import * as sdkModule from "@oh-my-pi/pi-coding-agent/sdk";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -128,15 +128,23 @@ describe("TanCommandController", () => {
 		expect(harness.ctx.showStatus).toHaveBeenCalledWith("Usage: /tan <work>");
 	});
 
-	it("rejects while the parent session is streaming", async () => {
+	it("dispatches without disturbing an in-flight turn while streaming", async () => {
 		const harness = createContext({ isStreaming: true });
 		const forkSpy = vi.spyOn(SessionManager, "forkFrom").mockResolvedValue(harness.cloneManager);
 		const controller = new TanCommandController(harness.ctx);
 
 		await controller.start("check something");
 
-		expect(forkSpy).not.toHaveBeenCalled();
-		expect(harness.ctx.showWarning).toHaveBeenCalled();
+		expect(forkSpy).toHaveBeenCalled();
+		expect(harness.ctx.showWarning).not.toHaveBeenCalled();
+		// The breadcrumb is queued for the next turn, not steered into the live one,
+		// and the live chat is left to the streaming renderer (no synchronous rebuild).
+		expect(harness.ctx.session.sendCustomMessage).toHaveBeenCalledWith(
+			expect.objectContaining({ customType: "background-tan-dispatch" }),
+			{ triggerTurn: false, deliverAs: "nextTurn" },
+		);
+		expect(harness.ctx.rebuildChatFromMessages).not.toHaveBeenCalled();
+		expect(harness.ctx.showStatus).toHaveBeenCalledWith("Dispatched background tan job-123");
 	});
 
 	it("forks with breadcrumb suppression, registers under Main, and dispatches after receiving the job id", async () => {
@@ -151,7 +159,7 @@ describe("TanCommandController", () => {
 			harness.tempDir.path(),
 			harness.parentFile.slice(0, -6),
 			undefined,
-			{ suppressBreadcrumb: true },
+			{ suppressBreadcrumb: true, sessionFile: expect.stringMatching(/Tan-.+\.jsonl$/) },
 		);
 		expect(harness.register).toHaveBeenCalledWith("task", "/tan write the release note", expect.any(Function), {
 			ownerId: MAIN_AGENT_ID,
@@ -161,9 +169,13 @@ describe("TanCommandController", () => {
 		expect(harness.ctx.session.sendCustomMessage).toHaveBeenCalledWith(
 			expect.objectContaining({
 				customType: "background-tan-dispatch",
-				details: { jobId: "job-123", work: "write the release note", sessionFile: harness.cloneFile },
+				details: {
+					jobId: "job-123",
+					work: "write the release note",
+					sessionFile: expect.stringMatching(/Tan-.+\.jsonl$/),
+				},
 			}),
-			{ triggerTurn: false },
+			{ triggerTurn: false, deliverAs: "nextTurn" },
 		);
 		expect(harness.ctx.rebuildChatFromMessages).toHaveBeenCalled();
 		expect(harness.ctx.showStatus).toHaveBeenCalledWith("Dispatched background tan job-123");
@@ -215,5 +227,42 @@ describe("TanCommandController", () => {
 				agentDisplayName: "tan",
 			}),
 		);
+	});
+
+	it("parks the finished tan in the registry so it stays visible in the Agent Hub", async () => {
+		const harness = createContext();
+		vi.spyOn(SessionManager, "forkFrom").mockResolvedValue(harness.cloneManager);
+		const clone = {
+			prompt: vi.fn(async () => {}),
+			waitForIdle: vi.fn(async () => {}),
+			getLastAssistantMessage: vi.fn(() => assistantText("done")),
+			abort: vi.fn(),
+			dispose: vi.fn(async () => {}),
+		};
+		vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue({
+			session: clone,
+		} as unknown as CreateAgentSessionResult);
+		const registry = AgentRegistry.global();
+		const setStatus = vi.spyOn(registry, "setStatus");
+		const detachSession = vi.spyOn(registry, "detachSession");
+		const unregister = vi.spyOn(registry, "unregister");
+		const controller = new TanCommandController(harness.ctx);
+
+		await controller.start("park me");
+		const run = harness.capturedRun;
+		if (!run) throw new Error("run function was not captured");
+		const result = await run({
+			jobId: "job-123",
+			signal: new AbortController().signal,
+			reportProgress: async () => {},
+		});
+
+		expect(result).toBe("done");
+		// Parked (not unregistered) before dispose, then the disposed session is nulled
+		// out — the hub keeps the ref and reads its transcript from the session file.
+		expect(setStatus).toHaveBeenCalledWith(expect.stringMatching(/^Tan-/), "parked");
+		expect(detachSession).toHaveBeenCalledWith(expect.stringMatching(/^Tan-/));
+		expect(clone.dispose).toHaveBeenCalled();
+		expect(unregister).not.toHaveBeenCalled();
 	});
 });

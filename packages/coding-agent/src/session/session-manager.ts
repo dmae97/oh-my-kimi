@@ -1483,13 +1483,18 @@ export class SessionManager {
 	/**
 	 * Fork a session into the current project directory: copy history from another
 	 * session file while creating a fresh session file in this sessionDir.
+	 *
+	 * `options.sessionFile` pins the new session's file path (default: an
+	 * auto-named `<timestamp>_<id>.jsonl` in `sessionDir`). Callers that register
+	 * the fork as a named agent (e.g. `/tan`) pass `<agentId>.jsonl` so the
+	 * persisted-subagent scan keys the agent by the same id the live ref uses.
 	 */
 	static async forkFrom(
 		sourcePath: string,
 		cwd: string,
 		sessionDir?: string,
 		storage: SessionStorage = new FileSessionStorage(),
-		options?: { suppressBreadcrumb?: boolean },
+		options?: { suppressBreadcrumb?: boolean; sessionFile?: string },
 	): Promise<SessionManager> {
 		const dir = sessionDir ?? SessionManager.getDefaultSessionDir(cwd, undefined, storage);
 		const manager = new SessionManager(cwd, dir, true, storage);
@@ -1501,7 +1506,7 @@ export class SessionManager {
 
 		const sourceHeader = sourceEntries.find(entry => entry.type === "session") as SessionHeader | undefined;
 		const history = sourceEntries.filter(entry => entry.type !== "session") as SessionEntry[];
-		manager.#resetToNewSession({ parentSession: sourceHeader?.id });
+		manager.#resetToNewSession({ parentSession: sourceHeader?.id }, options?.sessionFile);
 		manager.#header.title = sourceHeader?.title;
 		manager.#header.titleSource = sourceHeader?.titleSource;
 		manager.#sessionName = manager.#header.title;

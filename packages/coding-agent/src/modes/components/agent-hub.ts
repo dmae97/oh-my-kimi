@@ -28,6 +28,7 @@ import { AgentLifecycleManager } from "../../registry/agent-lifecycle";
 import { type AgentRef, AgentRegistry, type AgentStatus, MAIN_AGENT_ID } from "../../registry/agent-registry";
 import type { AgentSession } from "../../session/agent-session";
 import {
+	BACKGROUND_TAN_DISPATCH_MESSAGE_TYPE,
 	type CustomMessage,
 	isSilentAbort,
 	LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE,
@@ -45,6 +46,7 @@ import type { ObservableSession, SessionObserverRegistry } from "../session-obse
 import { getEditorTheme, theme } from "../theme/theme";
 import { matchesSelectDown, matchesSelectUp } from "../utils/keybinding-matchers";
 import { AssistantMessageComponent } from "./assistant-message";
+import { createBackgroundTanDispatchBlock } from "./background-tan-message";
 import { BashExecutionComponent } from "./bash-execution";
 import { BranchSummaryMessageComponent } from "./branch-summary-message";
 import { CollabPromptMessageComponent } from "./collab-prompt-message";
@@ -1213,6 +1215,10 @@ export class AgentHubOverlayComponent extends Container {
 				theme,
 			);
 			this.#chatLog.addChild(card);
+			return;
+		}
+		if (message.customType === BACKGROUND_TAN_DISPATCH_MESSAGE_TYPE) {
+			this.#chatLog.addChild(createBackgroundTanDispatchBlock(message as CustomMessage<unknown>));
 			return;
 		}
 		const handoffComponent = createHandoffSummaryMessageComponent(
