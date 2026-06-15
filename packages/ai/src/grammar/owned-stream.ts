@@ -52,6 +52,7 @@ export function wrapInbandToolStream(
 	tools: readonly InbandTool[],
 	syntax: ToolCallSyntax,
 	onAbort?: () => void,
+	abortOnFabrication = true,
 ): AssistantMessageEventStreamType {
 	const out = new AssistantMessageEventStream();
 	void (async () => {
@@ -72,7 +73,12 @@ export function wrapInbandToolStream(
 						projector?.thinkingEnd();
 						break;
 					case "text_delta":
-						if (projector?.text(event.delta)) {
+						// `text()` returns true once the model starts fabricating its own
+						// tool result. In abort mode we cut the turn immediately so the
+						// provider stops spending tokens on the hallucinated continuation; in
+						// discard mode we keep draining the stream — the projector is now
+						// stopped, so `finish` (on `done`) drops everything past the boundary.
+						if (projector?.text(event.delta) && abortOnFabrication) {
 							projector.finish(event.partial, true);
 							onAbort?.();
 							return;
@@ -158,6 +164,7 @@ class InbandStreamProjector {
 	}
 
 	thinkingStart(): void {
+		if (this.#stopped) return;
 		this.#closeText();
 		if (this.#thinking) return;
 		const block: ThinkingContent = { type: "thinking", thinking: "" };
@@ -168,6 +175,7 @@ class InbandStreamProjector {
 	}
 
 	thinkingDelta(delta: string): void {
+		if (this.#stopped) return;
 		if (!this.#thinking) this.thinkingStart();
 		const thinking = this.#thinking;
 		if (!thinking) return;

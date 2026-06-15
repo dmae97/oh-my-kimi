@@ -3225,6 +3225,17 @@ export const SETTINGS_SCHEMA = {
 			description: "Ask the agent to describe the intent of each tool call before executing it",
 		},
 	},
+	"tools.abortOnFabricatedResult": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "tools",
+			group: "Execution",
+			label: "Abort On Fabricated Tool Result",
+			description:
+				"With in-band tool calls, stop the model immediately when it starts hallucinating a tool result mid-turn. Disable to let the model finish generating and discard the fabricated continuation instead.",
+		},
+	},
 
 	"tools.maxTimeout": {
 		type: "number",

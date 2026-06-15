@@ -2502,6 +2502,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			},
 			intentTracing: !!intentField,
 			toolCallSyntax: resolveToolCallSyntax(settings.get("tools.format"), model),
+			abortOnFabricatedToolResult: settings.get("tools.abortOnFabricatedResult"),
 			getToolChoice: () => session?.nextToolChoice(),
 			telemetry: options.telemetry,
 			appendOnlyContext: model

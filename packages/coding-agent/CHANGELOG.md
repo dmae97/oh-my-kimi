@@ -7,6 +7,7 @@
 - Added `supportsTools` to model definitions and overrides so custom model configs can declare whether a model supports native tool calls
 - Added `tools.format` for choosing native tool calling or a specific owned in-band format (`glm`, `hermes`, `kimi`, `xml`), with `auto` falling back to GLM only for models marked as not supporting native tools.
 - Added a conditional easter-egg tip recommending nerd fonts when using the unicode symbol preset.
+- Added the `tools.abortOnFabricatedResult` setting (default on): with in-band tool calls, stop the model the moment it starts hallucinating a tool result mid-turn, or disable it to let the model finish and discard the fabricated continuation instead.
 
 ### Changed
 

@@ -1060,10 +1060,16 @@ async function streamAssistantResponse(
 			});
 			if (promptToolWireTools && ownedSyntax) {
 				// Re-materialize in-band tool-call text as native toolCall content blocks
-				// so the rest of the loop executes them unchanged. The abort callback
-				// cancels the provider when the model starts fabricating tool results.
-				response = wrapInbandToolStream(response, promptToolWireTools, ownedSyntax, () =>
-					promptToolAbortController?.abort(),
+				// so the rest of the loop executes them unchanged. When the model starts
+				// fabricating tool results, the abort callback cancels the provider — unless
+				// `abortOnFabricatedToolResult` is false, in which case the stream drains and
+				// the fabricated continuation is discarded without aborting.
+				response = wrapInbandToolStream(
+					response,
+					promptToolWireTools,
+					ownedSyntax,
+					() => promptToolAbortController?.abort(),
+					config.abortOnFabricatedToolResult ?? true,
 				);
 			}
 

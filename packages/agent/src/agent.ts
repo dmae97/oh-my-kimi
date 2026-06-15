@@ -223,6 +223,13 @@ export interface AgentOptions {
 	intentTracing?: boolean;
 	/** Owned tool-calling syntax. Undefined keeps provider-native tool calling. */
 	toolCallSyntax?: ToolCallSyntax;
+	/**
+	 * When owned tool calling is active and the model fabricates a tool result
+	 * mid-turn: `true` (default) aborts the provider request immediately; `false`
+	 * drains the request and discards the fabricated continuation. Forwarded to
+	 * the loop's {@link AgentLoopConfig.abortOnFabricatedToolResult}.
+	 */
+	abortOnFabricatedToolResult?: boolean;
 	/** Dynamic tool choice override, resolved per LLM call. */
 	getToolChoice?: () => ToolChoice | undefined;
 
@@ -320,6 +327,7 @@ export class Agent {
 	#transformToolCallArguments?: (args: Record<string, unknown>, toolName: string) => Record<string, unknown>;
 	#intentTracing: boolean;
 	#toolCallSyntax?: ToolCallSyntax;
+	#abortOnFabricatedToolResult?: boolean;
 	#getToolChoice?: () => ToolChoice | undefined;
 	#onPayload?: SimpleStreamOptions["onPayload"];
 	#onResponse?: SimpleStreamOptions["onResponse"];
@@ -383,6 +391,7 @@ export class Agent {
 		this.#transformToolCallArguments = opts.transformToolCallArguments;
 		this.#intentTracing = opts.intentTracing === true;
 		this.#toolCallSyntax = opts.toolCallSyntax;
+		this.#abortOnFabricatedToolResult = opts.abortOnFabricatedToolResult;
 		this.#getToolChoice = opts.getToolChoice;
 		this.#onAssistantMessageEvent = opts.onAssistantMessageEvent;
 		this.#onHarmonyLeak = opts.onHarmonyLeak;
@@ -1029,6 +1038,7 @@ export class Agent {
 			transformToolCallArguments: this.#transformToolCallArguments,
 			intentTracing: this.#intentTracing,
 			toolCallSyntax: this.#toolCallSyntax,
+			abortOnFabricatedToolResult: this.#abortOnFabricatedToolResult,
 			appendOnlyContext: this.#appendOnlyContext,
 			beforeToolCall: this.beforeToolCall ? (ctx, signal) => this.beforeToolCall?.(ctx, signal) : undefined,
 			afterToolCall: this.afterToolCall ? (ctx, signal) => this.afterToolCall?.(ctx, signal) : undefined,

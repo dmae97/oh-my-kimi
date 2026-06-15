@@ -210,6 +210,18 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 */
 	toolCallSyntax?: ToolCallSyntax;
 	/**
+	 * When owned (in-band) tool calling is active and the model starts
+	 * fabricating a tool result inside its own turn, control how the loop reacts:
+	 * - `true` (default): abort the provider request immediately so it stops
+	 *   generating the hallucinated continuation (cheaper, lower latency).
+	 * - `false`: let the request finish and silently discard everything past the
+	 *   fabrication boundary (keeps the connection alive but pays for the tokens
+	 *   the model spends on the discarded tail).
+	 * Only meaningful when {@link toolCallSyntax} (or `PI_OWNED_TOOLS`) selects an
+	 * owned syntax; native tool calling never fabricates results in text.
+	 */
+	abortOnFabricatedToolResult?: boolean;
+	/**
 	 * Append-only context mode — stabilizes system prompt + tool spec bytes
 	 * across turns so provider prefix caches hit at maximum rate.
 	 *

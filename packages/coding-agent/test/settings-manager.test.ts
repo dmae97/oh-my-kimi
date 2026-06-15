@@ -78,7 +78,7 @@ describe("Settings", () => {
 				"anthropic",
 				"deepseek",
 				"harmony",
-				"pi-native",
+				"pi",
 				"qwen3",
 			]);
 		});
