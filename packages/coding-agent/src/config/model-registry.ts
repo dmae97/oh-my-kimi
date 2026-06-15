@@ -130,11 +130,13 @@ export function mergeDiscoveredModel<TApi extends Api>(
 	providerOverride?: Pick<ProviderOverride, "baseUrl" | "headers" | "transport">,
 ): Model<TApi> {
 	if (existing) {
+		const supportsTools = model.supportsTools ?? existing.supportsTools;
 		return buildModel({
 			...model,
 			baseUrl: providerOverride?.baseUrl ?? model.baseUrl ?? existing.baseUrl,
 			headers: existing.headers ? { ...existing.headers, ...model.headers } : model.headers,
 			transport: providerOverride?.transport ?? existing.transport ?? model.transport,
+			...(supportsTools !== undefined ? { supportsTools } : {}),
 			compat: model.compatConfig,
 		} as ModelSpec<TApi>);
 	}
@@ -370,6 +372,7 @@ interface ModelPatch {
 	reasoning?: boolean;
 	thinking?: ThinkingConfig;
 	input?: ("text" | "image")[];
+	supportsTools?: boolean;
 	cost?: Partial<Model<Api>["cost"]>;
 	contextWindow?: number;
 	maxTokens?: number;
@@ -395,6 +398,7 @@ function applyModelPatch(base: Model<Api>, patch: ModelPatch, transport: ModelTr
 	if (patch.reasoning !== undefined) result.reasoning = patch.reasoning;
 	if (patch.thinking !== undefined) result.thinking = patch.thinking;
 	if (patch.input !== undefined) result.input = patch.input;
+	if (patch.supportsTools !== undefined) result.supportsTools = patch.supportsTools;
 	if (patch.contextWindow !== undefined) result.contextWindow = patch.contextWindow;
 	if (patch.maxTokens !== undefined) result.maxTokens = patch.maxTokens;
 	if (patch.omitMaxOutputTokens !== undefined) result.omitMaxOutputTokens = patch.omitMaxOutputTokens;
@@ -506,6 +510,7 @@ function buildCustomModelOverlay(
 		reasoning: modelDef.reasoning,
 		thinking: modelDef.thinking,
 		input: modelDef.input,
+		supportsTools: modelDef.supportsTools,
 		cost: modelDef.cost,
 		contextWindow: modelDef.contextWindow,
 		maxTokens: modelDef.maxTokens,
@@ -535,6 +540,7 @@ function finalizeCustomModel(model: CustomModelOverlay, options: CustomModelBuil
 		reference?.cost ??
 		(options.useDefaults ? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } : undefined);
 	const input = resolvedModel.input ?? reference?.input ?? (options.useDefaults ? ["text"] : undefined);
+	const supportsTools = resolvedModel.supportsTools ?? reference?.supportsTools;
 	return buildModel({
 		id: resolvedModel.id,
 		name: resolvedModel.name ?? (options.useDefaults ? resolvedModel.id : undefined),
@@ -544,6 +550,7 @@ function finalizeCustomModel(model: CustomModelOverlay, options: CustomModelBuil
 		reasoning: resolvedModel.reasoning ?? reference?.reasoning ?? (options.useDefaults ? false : undefined),
 		thinking: resolvedModel.thinking ?? reference?.thinking,
 		input: input as ("text" | "image")[],
+		...(supportsTools !== undefined ? { supportsTools } : {}),
 		cost,
 		contextWindow: resolvedModel.contextWindow ?? reference?.contextWindow ?? (options.useDefaults ? 128000 : null),
 		maxTokens: resolvedModel.maxTokens ?? reference?.maxTokens ?? (options.useDefaults ? 16384 : null),
@@ -878,10 +885,12 @@ export class ModelRegistry {
 	#mergeResolvedModels(baseModels: Model<Api>[], replacementModels: Model<Api>[]): Model<Api>[] {
 		return mergeByModelKey(baseModels, replacementModels, (existing, replacementModel) => {
 			if (!existing) return replacementModel;
+			const supportsTools = replacementModel.supportsTools ?? existing.supportsTools;
 			return {
 				...replacementModel,
 				contextWindow: replacementModel.contextWindow ?? existing.contextWindow,
 				maxTokens: replacementModel.maxTokens ?? existing.maxTokens,
+				...(supportsTools !== undefined ? { supportsTools } : {}),
 			};
 		});
 	}
@@ -2205,6 +2214,7 @@ export interface ProviderConfigInput {
 		reasoning: boolean;
 		thinking?: ThinkingConfig;
 		input: ("text" | "image")[];
+		supportsTools?: boolean;
 		cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
 		contextWindow: number;
 		maxTokens: number;

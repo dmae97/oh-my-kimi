@@ -13692,6 +13692,39 @@
 				"requiresAssistantContentForToolCalls": true
 			}
 		},
+		"flux-1-schnell-fp8": {
+			"id": "flux-1-schnell-fp8",
+			"name": "FLUX.1 [schnell] FP8",
+			"api": "openai-completions",
+			"provider": "fireworks",
+			"baseUrl": "https://api.fireworks.ai/inference/v1",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": null,
+			"maxTokens": null,
+			"supportsTools": false,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				],
+				"effortMap": {
+					"minimal": "none"
+				}
+			}
+		},
 		"glm-5": {
 			"id": "glm-5",
 			"name": "GLM-5",
@@ -13782,6 +13815,26 @@
 					"high"
 				]
 			}
+		},
+		"gpt-oss-20b": {
+			"id": "gpt-oss-20b",
+			"name": "OpenAI gpt-oss-20b",
+			"api": "openai-completions",
+			"provider": "fireworks",
+			"baseUrl": "https://api.fireworks.ai/inference/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 131072,
+			"maxTokens": 65536,
+			"supportsTools": false
 		},
 		"kimi-k2.5": {
 			"id": "kimi-k2.5",
@@ -13997,6 +14050,70 @@
 					"medium",
 					"high",
 					"xhigh"
+				],
+				"effortMap": {
+					"minimal": "none"
+				}
+			}
+		},
+		"qwen3-embedding-8b": {
+			"id": "qwen3-embedding-8b",
+			"name": "Qwen3 Embedding 8B",
+			"api": "openai-completions",
+			"provider": "fireworks",
+			"baseUrl": "https://api.fireworks.ai/inference/v1",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 40960,
+			"maxTokens": null,
+			"supportsTools": false,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high"
+				],
+				"effortMap": {
+					"minimal": "none"
+				}
+			}
+		},
+		"qwen3-reranker-8b": {
+			"id": "qwen3-reranker-8b",
+			"name": "Qwen3 Reranker 8B",
+			"api": "openai-completions",
+			"provider": "fireworks",
+			"baseUrl": "https://api.fireworks.ai/inference/v1",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 40960,
+			"maxTokens": null,
+			"supportsTools": false,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high"
 				],
 				"effortMap": {
 					"minimal": "none"
@@ -16500,6 +16617,64 @@
 			},
 			"contextWindow": 262144,
 			"maxTokens": 32768,
+			"thinking": {
+				"mode": "budget",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high"
+				]
+			}
+		},
+		"gemma-4-E2B-it": {
+			"id": "gemma-4-E2B-it",
+			"name": "Gemma 4 E2B IT",
+			"api": "google-generative-ai",
+			"provider": "google",
+			"baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 131072,
+			"maxTokens": 8192,
+			"thinking": {
+				"mode": "budget",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high"
+				]
+			}
+		},
+		"gemma-4-E4B-it": {
+			"id": "gemma-4-E4B-it",
+			"name": "Gemma 4 E4B IT",
+			"api": "google-generative-ai",
+			"provider": "google",
+			"baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 131072,
+			"maxTokens": 8192,
 			"thinking": {
 				"mode": "budget",
 				"efforts": [
@@ -75417,6 +75592,34 @@
 					"high"
 				],
 				"requiresEffort": true
+			}
+		},
+		"qwen/qwen3-asr-flash": {
+			"id": "qwen/qwen3-asr-flash",
+			"name": "Qwen3-ASR-Flash",
+			"api": "openai-completions",
+			"provider": "zenmux",
+			"baseUrl": "https://zenmux.ai/api/v1",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1000000,
+			"maxTokens": null,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high"
+				]
 			}
 		},
 		"qwen/qwen3-coder": {

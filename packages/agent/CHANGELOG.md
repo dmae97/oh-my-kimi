@@ -1,6 +1,24 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Removed `harmony-leak` exports from the `@oh-my-pi/pi-agent-core` package entrypoint
+- Replaced the experimental `promptToolCalls` agent/loop option with `toolCallSyntax`, selecting an explicit in-band tool-call grammar instead of a boolean GLM-only mode.
+
+### Added
+
+- Added support for selecting owned in-band tool-call syntax via `PI_OWNED_TOOLS=<syntax>` (for example `hermes` or `qwen3`) while preserving legacy `PI_OWNED_TOOLS=1/true` as GLM mode
+- Added owned in-band tool calling for multiple syntaxes (`glm`, `hermes`, `kimi`, `xml`, `anthropic`, `deepseek`, `harmony`, `pi-native`, `qwen3`). Owned mode sends no native provider tools, appends a syntax-specific prompt/catalog, re-encodes prior tool calls/results as grammar-owned text, and parses streamed model output back into canonical tool calls.
+
+### Changed
+
+- Added owned in-band syntax support to `Agent` loop configuration resolution by selecting syntax from `toolCallSyntax` or `PI_OWNED_TOOLS` when present
+
+### Fixed
+
+- Fixed owned in-band tool-calling requests to omit `toolChoice` after stripping native tools, preventing invalid tool-choice requests
+- Fixed owned tool calling letting the model fabricate tool results by treating grammar-owned tool-result markers in assistant text as a hard turn boundary: calls before the fabrication are kept, fabricated results and dependent calls are dropped, and the real result is fed back on the next turn.
 
 ## [15.13.1] - 2026-06-15
 

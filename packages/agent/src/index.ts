@@ -6,7 +6,6 @@ export * from "./agent-loop";
 export * from "./append-only-context";
 // Compaction
 export * from "./compaction";
-export * from "./harmony-leak";
 // Proxy utilities
 export * from "./proxy";
 // Run-level telemetry collector + aggregators

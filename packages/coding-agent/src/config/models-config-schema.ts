@@ -133,6 +133,7 @@ const ModelDefinitionSchema = z.object({
 	reasoning: z.boolean().optional(),
 	thinking: ModelThinkingSchema.optional(),
 	input: z.array(z.enum(["text", "image"])).optional(),
+	supportsTools: z.boolean().optional(),
 	cost: z
 		.object({
 			input: z.number(),
@@ -155,6 +156,7 @@ export const ModelOverrideSchema = z.object({
 	reasoning: z.boolean().optional(),
 	thinking: ModelThinkingSchema.optional(),
 	input: z.array(z.enum(["text", "image"])).optional(),
+	supportsTools: z.boolean().optional(),
 	cost: z
 		.object({
 			input: z.number().optional(),

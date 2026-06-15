@@ -17,8 +17,9 @@ import type {
 	ToolResultMessage,
 	TSchema,
 } from "@oh-my-pi/pi-ai";
+import type { ToolCallSyntax } from "@oh-my-pi/pi-ai/grammar";
+import type { HarmonyAuditEvent } from "@oh-my-pi/pi-ai/utils/harmony-leak";
 import type { AppendOnlyContextManager } from "./append-only-context";
-import type { HarmonyAuditEvent } from "./harmony-leak";
 import type { AgentRunCoverage, AgentRunSummary } from "./run-collector";
 import type { AgentTelemetryConfig } from "./telemetry";
 
@@ -199,6 +200,15 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * then strips from arguments before executing tools.
 	 */
 	intentTracing?: boolean;
+	/**
+	 * Owned tool calling syntax.
+	 *
+	 * Undefined keeps provider-native tool calling. A syntax value sends no
+	 * native `tools`, forces `toolChoice` off, appends that syntax's tool catalog
+	 * instructions, re-encodes prior tool calls/results as text, and parses the
+	 * model's text output back into canonical `toolCall` blocks.
+	 */
+	toolCallSyntax?: ToolCallSyntax;
 	/**
 	 * Append-only context mode — stabilizes system prompt + tool spec bytes
 	 * across turns so provider prefix caches hit at maximum rate.

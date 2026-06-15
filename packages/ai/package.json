@@ -91,6 +91,14 @@
 			"types": "./src/usage/*.ts",
 			"import": "./src/usage/*.ts"
 		},
+		"./utils/harmony-leak": {
+			"types": "./src/utils/harmony-leak.ts",
+			"import": "./src/utils/harmony-leak.ts"
+		},
+		"./grammar": {
+			"types": "./src/grammar/index.ts",
+			"import": "./src/grammar/index.ts"
+		},
 		"./utils/*": {
 			"types": "./src/utils/*.ts",
 			"import": "./src/utils/*.ts"

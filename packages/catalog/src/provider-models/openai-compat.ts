@@ -1160,6 +1160,7 @@ function mapFireworksControlPlaneModel(
 ): ModelSpec<"openai-completions"> {
 	const name = toModelName(record.displayName, reference?.name ?? publicModelId);
 	const supportsImage = toBoolean(record.supportsImageInput) === true;
+	const supportsTools = toBoolean(record.supportsTools);
 	const contextWindow = toPositiveNumber(record.contextLength, reference?.contextWindow ?? null);
 	// The control plane reports no max-output budget; default the Kimi family to
 	// its published cap, everyone else to the discovery fallback, then clamp.
@@ -1192,6 +1193,7 @@ function mapFireworksControlPlaneModel(
 		input: supportsImage ? ["text", "image"] : (reference?.input ?? ["text"]),
 		contextWindow,
 		maxTokens,
+		...(supportsTools === false ? { supportsTools: false } : {}),
 	};
 	return stripFireworksDeepSeekThinkingToggle(model, publicModelId);
 }
@@ -1240,7 +1242,6 @@ async function fetchFireworksServerlessModels(options: {
 			if (!isRecord(entry)) continue;
 			const record = entry as FireworksControlPlaneModel;
 			if (toBoolean(record.supportsServerless) !== true) continue;
-			if (toBoolean(record.supportsTools) !== true) continue;
 			if (typeof record.state === "string" && record.state !== "READY") continue;
 			const wireName = typeof record.name === "string" ? record.name : "";
 			if (!wireName) continue;
@@ -1396,6 +1397,7 @@ function mapWaferModel(
 	const capabilities = wafer?.capabilities ?? {};
 	const reasoning = capabilities.reasoning === true;
 	const vision = capabilities.vision === true;
+	const supportsTools = toBoolean(capabilities.tools) === false ? false : undefined;
 	const contextWindow = toPositiveNumber(
 		wafer?.context_length,
 		toPositiveNumber((entry as { max_model_len?: unknown }).max_model_len, defaults.contextWindow),
@@ -1434,6 +1436,7 @@ function mapWaferModel(
 		cost,
 		contextWindow,
 		maxTokens,
+		...(supportsTools === false ? { supportsTools } : {}),
 	};
 	if (reasoning) {
 		// Wafer's `wafer.provider` envelope tells us which upstream backend serves
@@ -2928,6 +2931,7 @@ export function mapModelsDevToModels(
 				},
 				contextWindow: toPositiveNumber(m.limit?.context, desc.defaultContextWindow ?? null),
 				maxTokens: toPositiveNumber(m.limit?.output, desc.defaultMaxTokens ?? null),
+				...(m.tool_call === false ? { supportsTools: false } : {}),
 				...(desc.compat && { compat: desc.compat }),
 				...(desc.headers && { headers: { ...desc.headers } }),
 			};

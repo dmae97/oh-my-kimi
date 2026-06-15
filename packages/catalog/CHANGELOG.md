@@ -1,6 +1,19 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added `flux-1-schnell-fp8` to the Fireworks serverless model catalog
+- Added `gpt-oss-20b` to the Fireworks model catalog
+- Added `qwen3-embedding-8b` to the Fireworks model catalog
+- Added `qwen3-reranker-8b` to the Fireworks model catalog
+- Added `Gemma 4 E2B IT` and `Gemma 4 E4B IT` to the Google model catalog
+- Added `qwen/qwen3-asr-flash` to the Zenmux model catalog
+- Added sparse `supportsTools` model metadata so providers can mark models that require in-band tool-call formatting.
+
+### Changed
+
+- Kept non-tool-capable Fireworks serverless models in discovery results and marked them with `supportsTools: false` for fallback-aware handling
 
 ## [15.13.1] - 2026-06-15
 

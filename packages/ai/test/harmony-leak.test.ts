@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import type { AssistantMessage, Model, ToolCall, Usage } from "@oh-my-pi/pi-ai";
 import {
 	createHarmonyAuditEvent,
 	detectHarmonyLeak,
@@ -7,11 +8,9 @@ import {
 	isHarmonyLeakMitigationTarget,
 	recoverHarmonyToolCall,
 	signalListLabel,
-} from "@oh-my-pi/pi-agent-core/harmony-leak";
-import type { AssistantMessage, Model, ToolCall } from "@oh-my-pi/pi-ai";
+} from "@oh-my-pi/pi-ai/utils/harmony-leak";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import corpus from "./fixtures/harmony-leak-corpus.json" with { type: "json" };
-import { createAssistantMessage } from "./helpers";
 
 interface CorpusPositive {
 	id: string;
@@ -29,6 +28,33 @@ const negatives = corpus.negatives as CorpusNegative[];
 
 const codexModel: Model = getBundledModel("openai-codex", "gpt-5.4");
 const anthropicModel: Model = getBundledModel("anthropic", "claude-sonnet-4-5");
+
+function createAssistantMessage(
+	content: AssistantMessage["content"],
+	stopReason: AssistantMessage["stopReason"] = "stop",
+): AssistantMessage {
+	return {
+		role: "assistant",
+		content,
+		api: "mock",
+		provider: "mock",
+		model: "mock-model",
+		usage: createUsage(),
+		stopReason,
+		timestamp: Date.now(),
+	};
+}
+
+function createUsage(): Usage {
+	return {
+		input: 0,
+		output: 0,
+		cacheRead: 0,
+		cacheWrite: 0,
+		totalTokens: 0,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+	};
+}
 
 function makeToolCallMessage(toolName: string, input: string | null, argJson: string | null): AssistantMessage {
 	const callArgs: Record<string, unknown> =

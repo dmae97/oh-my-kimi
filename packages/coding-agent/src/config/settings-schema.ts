@@ -1719,6 +1719,48 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"tools.format": {
+		type: "enum",
+		values: [
+			"auto",
+			"native",
+			"glm",
+			"hermes",
+			"kimi",
+			"xml",
+			"anthropic",
+			"deepseek",
+			"harmony",
+			"pi",
+			"qwen3",
+		] as const,
+		default: "auto",
+		ui: {
+			tab: "context",
+			group: "Experimental",
+			label: "Tool Call Format",
+			description:
+				"Controls how tools are exposed to the model. Auto uses native tool calls unless the selected model is marked as not supporting tools, then falls back to GLM-style in-band tool calls. Native forces provider-native tools; the other values force the named in-band syntax. Applies on session start.",
+			options: [
+				{
+					value: "auto",
+					label: "Auto",
+					description: "Use native tool calls unless the model is known not to support them.",
+				},
+				{ value: "native", label: "Native", description: "Use provider-native tool calls." },
+				{ value: "glm", label: "GLM", description: "Use GLM-style in-band tool calls." },
+				{ value: "hermes", label: "Hermes", description: "Use Hermes-style in-band tool calls." },
+				{ value: "kimi", label: "Kimi", description: "Use Kimi-style in-band tool calls." },
+				{ value: "xml", label: "XML", description: "Use generic XML in-band tool calls." },
+				{ value: "anthropic", label: "Anthropic", description: "Use Anthropic-style in-band tool calls." },
+				{ value: "deepseek", label: "DeepSeek", description: "Use DeepSeek-style in-band tool calls." },
+				{ value: "harmony", label: "Harmony", description: "Use Harmony-style in-band tool calls." },
+				{ value: "pi", label: "Pi", description: "Use Pi-style in-band tool calls." },
+				{ value: "qwen3", label: "Qwen3", description: "Use Qwen3-style in-band tool calls." },
+			],
+		},
+	},
+
 	"snapcompact.shape": {
 		type: "enum",
 		values: ["auto", ...SHAPE_VARIANT_NAMES] as const,

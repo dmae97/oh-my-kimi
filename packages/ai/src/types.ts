@@ -427,6 +427,11 @@ export interface ToolCall {
 	thoughtSignature?: string; // Google-specific: opaque signature for reusing thought context
 	intent?: string; // Harness-level intent metadata extracted from traced tool arguments
 	/**
+	 * Verbatim in-band syntax block that produced this synthetic `ptc_*` call.
+	 * Present only for owned prompt/tool-call formats; provider-native calls omit it.
+	 */
+	rawBlock?: string;
+	/**
 	 * Original wire-level name when the tool was invoked via OpenAI's custom-tool
 	 * mechanism (e.g., `apply_patch`). Set by `openai-responses` on receive so
 	 * the history-replay path can re-emit the call as `custom_tool_call` with

@@ -1,10 +1,16 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
+- Added `supportsTools` to model definitions and overrides so custom model configs can declare whether a model supports native tool calls
+- Added `tools.format` for choosing native tool calling or a specific owned in-band format (`glm`, `hermes`, `kimi`, `xml`), with `auto` falling back to GLM only for models marked as not supporting native tools.
 - Added a conditional easter-egg tip recommending nerd fonts when using the unicode symbol preset.
+
+### Changed
+
+- Expanded `tools.format` to support additional in-band tool-call syntaxes, including `anthropic`, `deepseek`, `harmony`, `pi`, and `qwen3`
+- Changed the experimental owned tool-calling prompt from a GLM-only toggle to syntax-specific grammar prompts and result formats. `PI_OWNED_TOOLS=1` still forces GLM; `PI_OWNED_TOOLS=<syntax>` forces that syntax.
 
 ### Fixed
 

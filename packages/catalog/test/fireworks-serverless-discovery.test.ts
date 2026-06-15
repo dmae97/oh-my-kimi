@@ -30,7 +30,7 @@ const PAGE_1 = [
 		supportsServerless: true,
 		state: "READY",
 	},
-	// Image model: serverless but not tool-capable — must be filtered out.
+	// Serverless but not tool-capable — still listed, but marked for owned-tool fallback.
 	{
 		name: "accounts/fireworks/models/flux-1-schnell-fp8",
 		displayName: "FLUX.1 [schnell]",
@@ -139,10 +139,11 @@ describe("Fireworks control-plane serverless discovery", () => {
 		expect(kimi.reasoning).toBe(true);
 	});
 
-	it("filters non-serverless, non-tool, and not-ready records", async () => {
+	it("keeps non-tool serverless records flagged and filters unavailable records", async () => {
 		const { models } = await discover();
 		const ids = models.map(m => m.id);
-		expect(ids).not.toContain("flux-1-schnell-fp8"); // tools: false
+		const flux = models.find(m => m.id === "flux-1-schnell-fp8");
+		expect(flux?.supportsTools).toBe(false);
 		expect(ids).not.toContain("kimi-k2-instruct-0905"); // serverless: false
 		expect(ids).not.toContain("some-pending-model"); // state: DEPLOYING
 	});

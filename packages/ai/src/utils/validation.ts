@@ -11,9 +11,9 @@
  *   2. Normalizes LLM quirks (null / "null" → omit-or-default substitution)
  *      against the JSON Schema before validation.
  *   3. Validates with the Zod or JSON-Schema validator.
- *   4. On failure, walks the resulting issues and coerces JSON-stringified
- *      values (`"[1,2]"` → `[1,2]`), drops unrecognized keys, and retries up
- *      to `MAX_COERCION_PASSES` times.
+ *   4. On failure, walks the resulting issues and coerces common LLM type
+ *      drift (JSON-stringified values, boolean/number/string scalar drift),
+ *      drops unrecognized keys, and retries up to `MAX_COERCION_PASSES` times.
  *   5. Throws a formatted error if reconciliation fails; otherwise returns
  *      the parsed arguments with original unknown root fields preserved (so
  *      hallucinated top-level keys still surface to the caller).
@@ -38,20 +38,20 @@ import { isZodSchema, zodToWireSchema } from "./schema/wire";
 // Type Coercion Utilities
 // ============================================================================
 //
-// LLMs sometimes produce tool arguments where a value that should be a number,
-// boolean, array, or object is instead passed as a JSON-encoded string. For
-// example, an array parameter might arrive as `"[1, 2, 3]"` instead of `[1, 2, 3]`.
+// LLMs sometimes produce tool arguments where a value has the right meaning but
+// the wrong JSON type. For example, an array parameter might arrive as
+// `"[1, 2, 3]"`, a boolean as `"yes"` or `1`, or a string field as a structured
+// object that should be embedded verbatim.
 //
 // Rather than rejecting these outright, we attempt automatic coercion:
 //   1. Validate against the tool's schema (Zod, derived from TypeBox when the
 //      tool was authored with TypeBox).
-//   2. For each type error where the actual value is a string, we check if
-//      parsing it as JSON yields a value matching the expected type.
-//   3. If so, we replace the string with the parsed value and re-validate.
+//   2. For each type error, perform only the schema-directed rewrite that
+//      matches the expected type.
+//   3. Re-validate the full argument object after each coercion pass.
 //
-// This is intentionally conservative: we only parse strings that look like
-// valid JSON literals (objects, arrays, booleans, null, numbers) and only
-// accept the result if it matches the schema's expected type.
+// This is intentionally conservative: each rewrite is small and validation
+// remains the source of truth for whether the result is accepted.
 // ============================================================================
 
 /** Regex matching valid JSON number literals (integers, decimals, scientific notation) */
@@ -107,6 +107,85 @@ function tryParseNumberString(value: string, expectedTypes: string[]): { value: 
 	}
 
 	return { value: parsed, changed: true };
+}
+
+function tryCoerceBoolean(value: unknown, expectedTypes: string[]): { value: unknown; changed: boolean } {
+	if (!expectedTypes.includes("boolean")) {
+		return { value, changed: false };
+	}
+
+	if (typeof value === "number") {
+		if (value === 0) return { value: false, changed: true };
+		if (value === 1) return { value: true, changed: true };
+		return { value, changed: false };
+	}
+
+	if (typeof value !== "string") {
+		return { value, changed: false };
+	}
+
+	switch (value.trim().toLowerCase()) {
+		case "true":
+		case "1":
+		case "yes":
+		case "on":
+			return { value: true, changed: true };
+		case "false":
+		case "0":
+		case "no":
+		case "off":
+			return { value: false, changed: true };
+		default:
+			return { value, changed: false };
+	}
+}
+
+function tryCoerceBooleanToNumber(value: unknown, expectedTypes: string[]): { value: unknown; changed: boolean } {
+	if (!expectedTypes.includes("number") && !expectedTypes.includes("integer")) {
+		return { value, changed: false };
+	}
+	if (typeof value !== "boolean") {
+		return { value, changed: false };
+	}
+	return { value: value ? 1 : 0, changed: true };
+}
+
+function tryCoerceString(value: unknown, expectedTypes: string[]): { value: unknown; changed: boolean } {
+	if (!expectedTypes.includes("string") || typeof value === "string" || value === null || value === undefined) {
+		return { value, changed: false };
+	}
+
+	if (Array.isArray(value) || typeof value === "object") {
+		try {
+			const stringified = JSON.stringify(value);
+			if (stringified === undefined) return { value, changed: false };
+			return { value: stringified, changed: true };
+		} catch {
+			return { value, changed: false };
+		}
+	}
+
+	if (typeof value === "function") {
+		return { value, changed: false };
+	}
+
+	return { value: String(value), changed: true };
+}
+
+function tryCoerceForExpectedTypes(value: unknown, expectedTypes: string[]): { value: unknown; changed: boolean } {
+	if (typeof value === "string") {
+		const parsed = tryParseJsonForTypes(value, expectedTypes);
+		if (parsed.changed) return parsed;
+		return tryCoerceBoolean(value, expectedTypes);
+	}
+
+	const booleanCoercion = tryCoerceBoolean(value, expectedTypes);
+	if (booleanCoercion.changed) return booleanCoercion;
+
+	const numericCoercion = tryCoerceBooleanToNumber(value, expectedTypes);
+	if (numericCoercion.changed) return numericCoercion;
+
+	return tryCoerceString(value, expectedTypes);
 }
 
 function tryParseLeadingJsonContainer(value: string): unknown | undefined {
@@ -806,10 +885,11 @@ function flattenIssues(issues: ReadonlyArray<ZodIssue>): FlatIssue[] {
  * Repair issues raised by the validator before we surface them to the caller.
  *
  * Two kinds of repair are applied:
- *  - **type**: when a value is a JSON-encoded string and the schema wants
- *    something else, parse it and substitute the parsed value. When a
- *    non-union schema wants an array but receives a singleton value, wrap that
- *    value in a one-element array.
+ *  - **type**: when a value has a common LLM-produced shape mismatch, rewrite
+ *    it only in the direction requested by the schema: parse JSON strings,
+ *    accept boolean spellings, stringify non-null values for string fields,
+ *    map booleans to numeric 0/1, and wrap singleton array values for non-union
+ *    array expectations.
  *  - **unrecognized**: when a strict object received an extra key (Zod's
  *    `unrecognized_keys` or JSON Schema's `additionalProperties: false`),
  *    drop that key so re-validation succeeds. This effectively coerces every
@@ -818,9 +898,8 @@ function flattenIssues(issues: ReadonlyArray<ZodIssue>): FlatIssue[] {
  *
  * The function is safe and conservative:
  *   - Only processes "type" and "unrecognized" issues
- *   - Only attempts JSON coercion on string values
+ *   - Only attempts schema-directed coercions for the expected type
  *   - Only wraps singleton array values for non-union type expectations
- *   - Only accepts parsed results that match the expected type
  *   - Clones the args object before mutation (copy-on-write)
  */
 function coerceArgsFromIssues(args: unknown, issues: FlatIssue[]): { value: unknown; changed: boolean } {
@@ -845,10 +924,7 @@ function coerceArgsFromIssues(args: unknown, issues: FlatIssue[]): { value: unkn
 		if (issue.expectedTypes.length === 0) continue;
 
 		const currentValue = getValueAtPointer(nextArgs, issue.instancePath);
-		const result =
-			typeof currentValue === "string"
-				? tryParseJsonForTypes(currentValue, issue.expectedTypes)
-				: { value: currentValue, changed: false };
+		const result = tryCoerceForExpectedTypes(currentValue, issue.expectedTypes);
 		const coercedValue = result.changed
 			? result.value
 			: issue.expectedTypes.includes("array") &&

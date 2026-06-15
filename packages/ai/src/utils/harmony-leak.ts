@@ -7,7 +7,7 @@
  * hashline DSL form. Other tools and surfaces fall through to
  * abort-and-retry handled by the agent loop.
  */
-import type { AssistantMessage, Model, ToolCall } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, Model, ToolCall } from "../types";
 
 // Single source of truth for the marker pattern. `M` in the errata.
 // Use a fresh non-global instance for `.test()` to avoid lastIndex pitfalls.
