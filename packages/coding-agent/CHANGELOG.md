@@ -49,6 +49,7 @@
 ### Fixed
 
 - Fixed auto-retry regenerating a large `write` call after the provider stream timed out mid-tool-call ([#2683](https://github.com/can1357/oh-my-pi/issues/2683)).
+- Fixed soft-expired `issue://` and `pr://` reads to refresh live before returning stale state, with an explicit stale warning when the live refresh fails ([#2684](https://github.com/can1357/oh-my-pi/issues/2684)).
 
 ## [15.13.3] - 2026-06-15
 
