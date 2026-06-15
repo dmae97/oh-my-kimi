@@ -129,6 +129,9 @@ runs:
       - uses: oven-sh/setup-bun@v2
         with:
            bun-version: "1.3"
+        env:
+           SCCACHE_BUCKET: ""
+           AWS_ACCESS_KEY_ID: ""
       - shell: bash
         run: bun install --frozen-lockfile
       # Cross-compile toolchain selection: non-MSVC targets (e.g.
