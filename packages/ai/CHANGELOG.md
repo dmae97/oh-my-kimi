@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Cursor provider (`cursor-agent` API) streaming dropping large MCP tool-call arguments — most visibly the built-in `task` tool's `tasks` array on multi-subagent dispatches, which failed downstream schema validation with `tasks: Invalid input: expected array, received undefined`. Two upstream behaviors were fighting the stream handler in `packages/ai/src/providers/cursor.ts`: (1) `args_text_delta` carries the *cumulative* args text so far per `agent.proto`, but the handler concatenated each snapshot onto the buffer, garbling the JSON; (2) `tool_call_completed` carries an `McpArgs` map that omits oversized parameters entirely and downgrades unparsable values to their raw string fallback, but the handler unconditionally overwrote the streamed args with that map. The handler now strips the already-buffered prefix from each `args_text_delta` snapshot (falling back to append when the snapshot doesn't extend the buffer) and merges the decoded `McpArgs` map into the streamed args — preserving streamed keys the completion frame omits and the structured value when the completion frame downgrades to a string. ([#2615](https://github.com/can1357/oh-my-pi/issues/2615))
+
 ## [15.13.1] - 2026-06-15
 
 ### Fixed
