@@ -20,9 +20,54 @@ export function renderToolInventory(tools: readonly InbandTool[], model: string)
 		.map(tool => {
 			const params = jsonSchemaToTypeScript(toolWireSchema(tool));
 			const examples = renderToolExamples(tool, dialect);
-			const parts = [`# Tool: ${tool.name}`, tool.description ?? "", "", `Parameters: ${params}`];
+			const description = demoteDescriptionHeaders(tool.description ?? "");
+			const parts = [`# Tool: ${tool.name}`, description, "", `Parameters: ${params}`];
 			if (examples) parts.push("", examples);
 			return parts.join("\n");
 		})
 		.join("\n\n");
+}
+
+const FENCE = /^ {0,3}(`{3,}|~{3,})/;
+const ATX = /^ {0,3}#{1,6}( |\t|$)/;
+const TOP_LEVEL = /^ {0,3}#( |\t|$)/;
+
+/**
+ * Each description is rendered under a `# Tool: <name>` heading. When the
+ * description carries its own top-level (`# `) markdown headers they sit at the
+ * same level as that wrapper, so the section structure flattens and the
+ * description's headers read like sibling tools. Demote every ATX header in the
+ * description by one level so the whole block nests under `# Tool: <name>`.
+ *
+ * Only triggered when a level-1 header is actually present — descriptions that
+ * already start at `##` are left untouched. Headers inside fenced code blocks
+ * are never rewritten.
+ */
+function demoteDescriptionHeaders(description: string): string {
+	const lines = description.split("\n");
+
+	let fence: string | undefined;
+	let collides = false;
+	for (const line of lines) {
+		const marker = FENCE.exec(line)?.[1][0];
+		if (marker) {
+			fence = fence === undefined ? marker : fence === marker ? undefined : fence;
+		} else if (fence === undefined && TOP_LEVEL.test(line)) {
+			collides = true;
+			break;
+		}
+	}
+	if (!collides) return description;
+
+	fence = undefined;
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i];
+		const marker = FENCE.exec(line)?.[1][0];
+		if (marker) {
+			fence = fence === undefined ? marker : fence === marker ? undefined : fence;
+		} else if (fence === undefined && ATX.test(line)) {
+			lines[i] = line.replace(/^( {0,3})#/, "$1##");
+		}
+	}
+	return lines.join("\n");
 }
