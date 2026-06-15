@@ -44,6 +44,9 @@
 - Removed `src/grammar/rendering.ts` (functionality moved to `src/dialect/rendering.ts`)
 - Removed `src/grammar/xml.ts` (replaced by `src/dialect/xml.ts`)
 
+### Fixed
+
+- Fixed OpenAI Responses, Azure OpenAI Responses, and Codex Responses providers ignoring async `onPayload` replacement bodies. Provider payload hooks can now transform the actual request body sent upstream, matching the Anthropic/Gemini replacement contract.
 ## [15.13.3] - 2026-06-15
 
 ### Added

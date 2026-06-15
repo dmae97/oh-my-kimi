@@ -95,6 +95,45 @@ describe("azure openai responses streaming", () => {
 		]);
 	});
 
+	it("sends an async onPayload replacement body", async () => {
+		let capturedBody: Record<string, unknown> | undefined;
+		const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+			capturedBody = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
+			return createSseResponse([
+				{
+					type: "response.completed",
+					response: {
+						status: "completed",
+						usage: {
+							input_tokens: 1,
+							output_tokens: 1,
+							total_tokens: 2,
+							input_tokens_details: { cached_tokens: 0 },
+						},
+					},
+				},
+			]);
+		});
+
+		const result = await streamAzureOpenAIResponses(
+			azureModel,
+			{ messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }] },
+			{
+				apiKey: "test-key",
+				fetch: fetchMock as unknown as typeof fetch,
+				azureBaseUrl: azureModel.baseUrl,
+				azureApiVersion: "v1",
+				onPayload: async payload => ({
+					...(payload as Record<string, unknown>),
+					input: [{ role: "user", content: [{ type: "input_text", text: "replacement" }] }],
+				}),
+			},
+		).result();
+
+		expect(result.stopReason).toBe("stop");
+		expect(capturedBody?.input).toEqual([{ role: "user", content: [{ type: "input_text", text: "replacement" }] }]);
+	});
+
 	it("uses developer role for Azure Responses reasoning model system prompts", async () => {
 		const reasoningModel: Model<"azure-openai-responses"> = buildModel({
 			...azureModel,

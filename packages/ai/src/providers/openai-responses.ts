@@ -398,7 +398,9 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 			} = createRequestSetup(model, context, apiKey, options?.headers, options?.initiatorOverride, routingSessionId);
 			const premiumRequestsTotal = copilotPremiumRequests;
 			const providerSessionState = getOpenAIResponsesProviderSessionState(model, options?.providerSessionState);
-			const { params, trailingScaffoldingItems } = buildParams(model, context, options, providerSessionState);
+			const builtParams = buildParams(model, context, options, providerSessionState);
+			const params = builtParams.params;
+			const { trailingScaffoldingItems } = builtParams;
 			if (isOpenAIResponsesStatefulEnabled(options, baseUrl) && routingSessionId && providerSessionState) {
 				chainState = getOpenAIResponsesChainState(providerSessionState, model, routingSessionId);
 				if (!chainState.disabled) {
@@ -406,7 +408,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 					params.store = true;
 				}
 			}
-			const chained: OpenAIResponsesChainedParams =
+			let chained: OpenAIResponsesChainedParams =
 				chainState && !chainState.disabled
 					? buildOpenAIResponsesChainedParams(params, trailingScaffoldingItems, chainState)
 					: { params };
@@ -416,8 +418,14 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 				options?.streamFirstEventTimeoutMs ?? getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs);
 			const requestTimeoutMs =
 				firstEventTimeoutMs !== undefined && firstEventTimeoutMs > 0 ? firstEventTimeoutMs : undefined;
-			options?.onPayload?.(params);
 			const requestUrl = `${(baseUrl ?? "https://api.openai.com/v1").replace(/\/+$/, "")}/responses`;
+			const applyPayloadReplacement = async (requestParams: OpenAIResponsesSamplingParams) => {
+				const replacementPayload = await options?.onPayload?.(requestParams, model);
+				return replacementPayload !== undefined
+					? (replacementPayload as OpenAIResponsesSamplingParams)
+					: requestParams;
+			};
+			chained = { ...chained, params: await applyPayloadReplacement(chained.params) };
 			rawRequestDump = {
 				provider: model.provider,
 				api: output.api,
@@ -492,8 +500,9 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 					registerOpenAIResponsesChainStaleFailure(chainState, error);
 				}
 				sentPreviousResponseId = undefined;
-				rawRequestDump.body = params;
-				openaiStream = await openResponsesStream(params);
+				const retryParams = await applyPayloadReplacement(params);
+				rawRequestDump.body = retryParams;
+				openaiStream = await openResponsesStream(retryParams);
 			}
 			if (premiumRequestsTotal !== undefined) output.usage.premiumRequests = premiumRequestsTotal;
 			stream.push({ type: "start", partial: output });
