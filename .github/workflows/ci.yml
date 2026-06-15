@@ -501,9 +501,29 @@ jobs:
          - uses: ./.github/actions/ensure-rust-toolchain
            with:
               toolchain: nightly-2026-04-29
-         - uses: ./.github/actions/ensure-sccache
+         - name: Detect runner environment
+           id: detect
+           shell: bash
+           run: |
+              # $SCCACHE_BUCKET is injected only on self-hosted omp-kata pods; its
+              # presence selects baked sccache + shared S3. GitHub-hosted runners
+              # (PRs) need sccache-action to export the GHA cache URL/token into the
+              # step env — a bare binary install leaves SCCACHE_GHA_ENABLED set with
+              # no cache URL, so sccache server startup fails ("cache url for ghac
+              # not found"). Mirrors the build-native action's sccache wiring.
+              if [ -n "${SCCACHE_BUCKET:-}" ]; then
+                echo "on_infra=true" >> "$GITHUB_OUTPUT"
+              else
+                echo "on_infra=false" >> "$GITHUB_OUTPUT"
+              fi
+         - name: Ensure baked sccache (omp-kata)
+           if: steps.detect.outputs.on_infra == 'true'
+           uses: ./.github/actions/ensure-sccache
            with:
               version: "0.15.0"
+         - name: Setup sccache (GitHub-hosted)
+           if: steps.detect.outputs.on_infra == 'false'
+           uses: mozilla-actions/sccache-action@v0.0.10
          - name: Enable sccache for cargo
            # Conditional backend: self-hosted omp-kata injects a shared S3
            # (RustFS) sccache via pod env; GitHub-hosted runners keep the GHA
