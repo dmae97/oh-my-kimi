@@ -452,7 +452,12 @@ describe("openai-codex streaming", () => {
 				response: {
 					id: "resp_1",
 					status: "completed",
-					usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8, input_tokens_details: { cached_tokens: 0 } },
+					usage: {
+						input_tokens: 5,
+						output_tokens: 3,
+						total_tokens: 8,
+						input_tokens_details: { cached_tokens: 0 },
+					},
 				},
 			},
 		];

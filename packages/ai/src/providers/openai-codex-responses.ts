@@ -1507,7 +1507,7 @@ function handleToolCallArgumentsDelta(
 
 function handleToolCallArgumentsDone(runtime: CodexStreamRuntime, rawEvent: Record<string, unknown>): void {
 	const entry = openItemForEvent(runtime, rawEvent);
-	if (!entry || entry.item.type !== "function_call" || entry.block?.type !== "toolCall") return;
+	if (entry?.item.type !== "function_call" || entry.block?.type !== "toolCall") return;
 	const args = (rawEvent as { arguments?: string }).arguments;
 	if (typeof args === "string") {
 		const block = entry.block;
@@ -1540,7 +1540,7 @@ function handleCustomToolCallInputDelta(
 
 function handleCustomToolCallInputDone(runtime: CodexStreamRuntime, rawEvent: Record<string, unknown>): void {
 	const entry = openItemForEvent(runtime, rawEvent);
-	if (!entry || entry.item.type !== "custom_tool_call" || entry.block?.type !== "toolCall") return;
+	if (entry?.item.type !== "custom_tool_call" || entry.block?.type !== "toolCall") return;
 	const input = (rawEvent as { input?: string }).input;
 	if (typeof input === "string") {
 		entry.block.partialJson = input;
