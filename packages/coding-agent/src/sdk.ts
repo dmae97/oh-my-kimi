@@ -21,7 +21,6 @@ import {
 	getOpenAICodexTransportDetails,
 	prewarmOpenAICodexResponses,
 } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
-import { DEFAULT_MODEL_PER_PROVIDER } from "@oh-my-pi/pi-catalog/provider-models";
 import type { Component } from "@oh-my-pi/pi-tui";
 import {
 	$env,
@@ -49,6 +48,7 @@ import {
 	getModelMatchPreferences,
 	parseModelPattern,
 	parseModelString,
+	pickDefaultAvailableModel,
 	resolveAllowedModels,
 	resolveModelRoleValue,
 } from "./config/model-resolver";
@@ -1936,29 +1936,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			// Re-resolve the allowed set: extension factories above may have
 			// registered providers/models that weren't visible at startup.
 			const fallbackCandidates = await resolveAllowedModels(modelRegistry, settings, modelMatchPreferences);
-			// Prefer each provider's configured default model
-			// (DEFAULT_MODEL_PER_PROVIDER) over raw catalog order. Without this the
-			// first-run fallback picks whatever model sorts first in models.json for
-			// the winning provider (e.g. anthropic's claude-3-5-sonnet-20240620)
-			// instead of the intended provider default (claude-sonnet-4-6). Mirrors
-			// findInitialModel's precedence.
-			for (const [provider, defaultId] of Object.entries(DEFAULT_MODEL_PER_PROVIDER)) {
-				const preferred = fallbackCandidates.find(
-					candidate => candidate.provider === provider && candidate.id === defaultId,
-				);
-				if (preferred && hasModelAuth(preferred)) {
-					model = preferred;
-					break;
-				}
-			}
-			// Otherwise, first available model with a valid API key.
-			if (!model) {
-				for (const candidate of fallbackCandidates) {
-					if (hasModelAuth(candidate)) {
-						model = candidate;
-						break;
-					}
-				}
+			const defaultModel = pickDefaultAvailableModel(fallbackCandidates.filter(hasModelAuth));
+			if (defaultModel) {
+				model = defaultModel;
 			}
 			if (model) {
 				if (modelFallbackMessage) {

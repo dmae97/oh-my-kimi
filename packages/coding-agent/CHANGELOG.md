@@ -63,6 +63,7 @@
 - Fixed `omp plugin list --json` omitting locally linked plugins that exist only in `omp-plugins.lock.json` and `node_modules` symlinks. ([#2742](https://github.com/can1357/oh-my-pi/issues/2742))
 - Fixed task subagents to install their configured ordered model candidates as child-session retry fallback chains, so retryable provider failures can advance to the next subagent model instead of failing the worker ([#2750](https://github.com/can1357/oh-my-pi/issues/2750)).
 - Fixed empty reasonless aborted assistant turns to auto-retry without switching model fallback, so transient provider-side aborts after tool results do not end headless sessions ([#2685](https://github.com/can1357/oh-my-pi/issues/2685)).
+- Fixed startup model fallback choosing the plain OpenAI `gpt-5.5` provider before the Codex OAuth provider when both shared the same default model id, which could surface a misleading OpenAI 401 despite valid Codex credentials ([#2807](https://github.com/can1357/oh-my-pi/issues/2807)).
 
 ## [16.0.1] - 2026-06-15
 
