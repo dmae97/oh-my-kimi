@@ -133,12 +133,14 @@ describe("Input component", () => {
 		setKittyProtocolActive(false);
 	});
 
-	it("inserts NumLock keypad digits from Kitty CSI-u input", () => {
+	it("inserts keypad digits from Kitty CSI-u input with or without NumLock modifier", () => {
 		setKittyProtocolActive(true);
 		const input = setupAtEnd("a");
 
+		input.handleInput("\x1b[57407u");
 		input.handleInput("\x1b[57407;129u");
-		expect(input.getValue()).toBe("a8");
+		input.handleInput("\x1b[57404u");
+		expect(input.getValue()).toBe("a885");
 
 		setKittyProtocolActive(false);
 	});

@@ -409,7 +409,7 @@ function decodeKittyPrintable(data: string): string | undefined {
 			.split(":")
 			.filter(Boolean)
 			.map(value => Number.parseInt(value, 10))
-			.filter(value => Number.isFinite(value) && value >= 32);
+			.filter(value => Number.isFinite(value) && value >= 32 && value !== 127);
 		if (codepoints.length > 0) {
 			try {
 				return String.fromCodePoint(...codepoints);
@@ -421,7 +421,7 @@ function decodeKittyPrintable(data: string): string | undefined {
 	const keypadOperatorText = KITTY_KEYPAD_OPERATOR_TEXT[codepoint];
 	if (keypadOperatorText) return keypadOperatorText;
 
-	if (effectiveMod === 0 && modifier & KITTY_MOD_NUM_LOCK) {
+	if (effectiveMod === 0) {
 		const numpadText = KITTY_NUMPAD_TEXT[codepoint];
 		if (numpadText) return numpadText;
 	}
@@ -435,7 +435,7 @@ function decodeKittyPrintable(data: string): string | undefined {
 		return undefined;
 	}
 
-	if (!Number.isFinite(effectiveCodepoint) || effectiveCodepoint < 32) return undefined;
+	if (!Number.isFinite(effectiveCodepoint) || effectiveCodepoint < 32 || effectiveCodepoint === 127) return undefined;
 
 	try {
 		return String.fromCodePoint(effectiveCodepoint);
@@ -504,6 +504,12 @@ export function decodePrintableKey(data: string): string | undefined {
 	return decodeKittyPrintable(data) ?? decodeModifyOtherKeysPrintable(data);
 }
 
+function matchesPrintableKey(data: string, keyId: KeyId): boolean | undefined {
+	const printable = decodePrintableKey(data);
+	if (printable === undefined) return undefined;
+	return printable === keyId;
+}
+
 /**
  * Match input data against a key identifier string.
  *
@@ -521,7 +527,7 @@ export function decodePrintableKey(data: string): string | undefined {
  * @param keyId - Key identifier (e.g., "ctrl+c", "escape", Key.ctrl("c"))
  */
 export function matchesKey(data: string, keyId: KeyId): boolean {
-	return matchesKeyNative(data, keyId, kittyProtocolActive);
+	return matchesPrintableKey(data, keyId) ?? matchesKeyNative(data, keyId, kittyProtocolActive);
 }
 
 /**
@@ -533,5 +539,5 @@ export function matchesKey(data: string, keyId: KeyId): boolean {
  * @param data - Raw input data from terminal
  */
 export function parseKey(data: string): string | undefined {
-	return parseKeyNative(data, kittyProtocolActive) ?? undefined;
+	return decodePrintableKey(data) ?? parseKeyNative(data, kittyProtocolActive) ?? undefined;
 }

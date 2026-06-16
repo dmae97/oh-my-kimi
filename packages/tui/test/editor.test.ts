@@ -419,13 +419,14 @@ describe("Editor component", () => {
 			expect(text).toBe("Hello äöü 😀");
 		});
 
-		it("inserts NumLock keypad digits instead of treating them as navigation", () => {
+		it("inserts keypad digits instead of treating them as navigation", () => {
 			const editor = new Editor(defaultEditorTheme);
 
 			editor.handleInput("a");
+			editor.handleInput("\x1b[57400u");
 			editor.handleInput("\x1b[57400;129u");
 
-			expect(editor.getText()).toBe("a1");
+			expect(editor.getText()).toBe("a11");
 		});
 
 		it("inserts a newline for Ctrl+Enter variants with NumLock or keypad Enter metadata", () => {
