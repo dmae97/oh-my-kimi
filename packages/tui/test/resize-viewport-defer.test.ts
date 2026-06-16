@@ -17,7 +17,16 @@ import { VirtualTerminal } from "./virtual-terminal";
 // the off-screen history — and replays the rewrapped transcript once, after the
 // drag settles.
 
-const NO_MULTIPLEXER_ENV: Record<string, string | undefined> = { TMUX: undefined, STY: undefined, ZELLIJ: undefined };
+const NO_MULTIPLEXER_ENV: Record<string, string | undefined> = {
+	TMUX: undefined,
+	STY: undefined,
+	ZELLIJ: undefined,
+	// Pin terminal identity so the alt-screen fast-path assertions below are
+	// deterministic even when the suite runs inside Warp (which otherwise takes
+	// the in-place path — see the Warp describe block at the bottom).
+	TERM_PROGRAM: undefined,
+	PI_TUI_RESIZE_IN_PLACE: undefined,
+};
 const ALT_SCREEN_ENTER = "\x1b[?1049h";
 const ALT_SCREEN_EXIT = "\x1b[?1049l";
 
@@ -358,6 +367,106 @@ describe("non-multiplexer resize viewport fast path", () => {
 				expect(tui.resizeViewportActive).toBe(false);
 				const settle = writes.slice(dragWrites).join("");
 				expect(settle).toContain("\x1b[3J");
+			} finally {
+				tui.stop();
+			}
+		});
+	});
+});
+
+describe("resize repaints in place on terminals that re-report size on alt-screen toggle (Warp)", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	const WARP_ENV: Record<string, string | undefined> = { ...NO_MULTIPLEXER_ENV, TERM_PROGRAM: "WarpTerminal" };
+
+	function makeTui(term: VirtualTerminal): { tui: TUI; blocks: CountingBlock[]; scheduler: DeferScheduler } {
+		const blocks = Array.from({ length: 15 }, (_v, i) => new CountingBlock([`b${i}-x`, `b${i}-y`]));
+		const scheduler = new DeferScheduler();
+		const tui = new TUI(term, undefined, { renderScheduler: scheduler });
+		tui.addChild(new TailTranscript(blocks));
+		return { tui, blocks, scheduler };
+	}
+
+	// Warp reports a height one row different for the alternate screen buffer, so
+	// the alt-screen-borrowing fast path would toggle the buffer, receive a fresh
+	// SIGWINCH for free, and re-enter the fast path forever — a self-sustaining
+	// ED3 repaint storm with completely stable geometry. The in-place path never
+	// touches the alt buffer, so even a resize burst yields zero fast-path paints
+	// and zero scrollback erases, leaving no alt<->normal toggle to feed back on.
+	it("never borrows the alternate screen or emits ED3 across a resize burst", async () => {
+		await withEnvPatch(WARP_ENV, async () => {
+			const term = new VirtualTerminal(40, 10, 1000);
+			const { tui, scheduler } = makeTui(term);
+			try {
+				tui.start();
+				await scheduler.flushImmediates(term);
+
+				const writes = captureWrites(term);
+
+				term.resize(60, 10);
+				await scheduler.flushImmediates(term);
+				term.resize(75, 10);
+				await scheduler.flushImmediates(term);
+				term.resize(80, 10);
+				await scheduler.flushImmediates(term);
+
+				// The fast path is never entered: no viewport-only paints, no alt buffer.
+				expect(tui.resizeViewportActive).toBe(false);
+				expect(tui.resizeViewportPaints).toBe(0);
+				expect(writes.join("")).not.toContain(ALT_SCREEN_ENTER);
+
+				// Settle the debounced in-place repaint: still no scrollback erase,
+				// so there is no alt<->normal toggle for Warp to re-trigger on.
+				await scheduler.flushAll(term);
+				expect(eraseScrollbackCount(writes)).toBe(0);
+				expect(writes.join("")).not.toContain(ALT_SCREEN_ENTER);
+				expect(visible(term).at(-1)).toBe("b14-y");
+			} finally {
+				tui.stop();
+			}
+		});
+	});
+
+	it("PI_TUI_RESIZE_IN_PLACE=0 opts Warp back into the alt-screen fast path", async () => {
+		await withEnvPatch({ ...WARP_ENV, PI_TUI_RESIZE_IN_PLACE: "0" }, async () => {
+			const term = new VirtualTerminal(40, 10, 1000);
+			const { tui, scheduler } = makeTui(term);
+			try {
+				tui.start();
+				await scheduler.flushImmediates(term);
+
+				const writes = captureWrites(term);
+				term.resize(60, 10);
+				await scheduler.flushImmediates(term);
+
+				expect(tui.resizeViewportActive).toBe(true);
+				expect(writes.join("")).toContain(ALT_SCREEN_ENTER);
+			} finally {
+				tui.stop();
+			}
+		});
+	});
+
+	it("PI_TUI_RESIZE_IN_PLACE=1 forces the in-place path on an ordinary terminal", async () => {
+		await withEnvPatch({ ...NO_MULTIPLEXER_ENV, PI_TUI_RESIZE_IN_PLACE: "1" }, async () => {
+			const term = new VirtualTerminal(40, 10, 1000);
+			const { tui, scheduler } = makeTui(term);
+			try {
+				tui.start();
+				await scheduler.flushImmediates(term);
+
+				const writes = captureWrites(term);
+				term.resize(60, 10);
+				await scheduler.flushImmediates(term);
+
+				expect(tui.resizeViewportActive).toBe(false);
+				expect(tui.resizeViewportPaints).toBe(0);
+				expect(writes.join("")).not.toContain(ALT_SCREEN_ENTER);
+
+				await scheduler.flushAll(term);
+				expect(eraseScrollbackCount(writes)).toBe(0);
 			} finally {
 				tui.stop();
 			}
