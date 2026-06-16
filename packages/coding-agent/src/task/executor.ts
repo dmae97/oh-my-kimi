@@ -12,7 +12,8 @@ import { logger, popLoopPhase, prompt, pushLoopPhase, untilAborted } from "@oh-m
 import type { Rule } from "../capability/rule";
 import { ModelRegistry } from "../config/model-registry";
 import {
-	formatModelString,
+	formatModelSelectorValue,
+	formatModelStringWithRouting,
 	resolveModelOverride,
 	resolveModelOverrideWithAuthFallback,
 } from "../config/model-resolver";
@@ -131,11 +132,6 @@ interface SubagentRetryFallbackCandidate {
 	selector: string;
 }
 
-function formatSubagentRetryFallbackSelector(model: Model<Api>, thinkingLevel: ThinkingLevel | undefined): string {
-	const selector = formatModelString(model);
-	return thinkingLevel ? `${selector}:${thinkingLevel}` : selector;
-}
-
 function resolveSubagentRetryFallbackCandidates(
 	modelPatterns: string[],
 	modelRegistry: ModelRegistry,
@@ -146,10 +142,9 @@ function resolveSubagentRetryFallbackCandidates(
 	for (const pattern of modelPatterns) {
 		const resolved = resolveModelOverride([pattern], modelRegistry, settings);
 		if (!resolved.model) continue;
-		const selector = formatSubagentRetryFallbackSelector(
-			resolved.model,
-			resolved.explicitThinkingLevel ? resolved.thinkingLevel : undefined,
-		);
+		const selector = resolved.explicitThinkingLevel
+			? formatModelSelectorValue(formatModelStringWithRouting(resolved.model), resolved.thinkingLevel)
+			: formatModelStringWithRouting(resolved.model);
 		if (seen.has(selector)) continue;
 		seen.add(selector);
 		candidates.push({ model: resolved.model, selector });
@@ -1923,8 +1918,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			}
 			if (model) {
 				progress.resolvedModel = explicitThinkingLevel
-					? `${model.provider}/${model.id}:${resolvedThinkingLevel}`
-					: `${model.provider}/${model.id}`;
+					? formatModelSelectorValue(formatModelStringWithRouting(model), resolvedThinkingLevel)
+					: formatModelStringWithRouting(model);
 			}
 			const effectiveThinkingLevel = explicitThinkingLevel
 				? resolvedThinkingLevel

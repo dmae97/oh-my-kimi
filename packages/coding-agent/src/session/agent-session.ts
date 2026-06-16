@@ -139,11 +139,14 @@ import {
 	filterAvailableModelsByEnabledPatterns,
 	formatModelSelectorValue,
 	formatModelString,
+	formatModelStringWithRouting,
 	getModelMatchPreferences,
 	parseModelString,
 	type ResolvedModelRoleValue,
+	resolveModelOverride,
 	resolveModelRoleValue,
 	resolveRoleSelection,
+	splitUpstreamRouting,
 } from "../config/model-resolver";
 import { MODEL_ROLE_IDS } from "../config/model-roles";
 import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-templates";
@@ -615,6 +618,7 @@ interface RetryFallbackSelector {
 	raw: string;
 	provider: string;
 	id: string;
+	upstream: string | undefined;
 	thinkingLevel: ThinkingLevel | undefined;
 }
 
@@ -629,19 +633,20 @@ interface ActiveRetryFallbackState {
 function parseRetryFallbackSelector(selector: string): RetryFallbackSelector | undefined {
 	const trimmed = selector.trim();
 	if (!trimmed) return undefined;
-	const parsed = parseModelString(trimmed);
+	const routing = splitUpstreamRouting(trimmed);
+	const parsed = parseModelString(routing?.base ?? trimmed);
 	if (!parsed) return undefined;
 	return {
 		raw: trimmed,
 		provider: parsed.provider,
 		id: parsed.id,
+		upstream: routing?.upstream,
 		thinkingLevel: parsed.thinkingLevel,
 	};
 }
 
 function formatRetryFallbackSelector(model: Model, thinkingLevel: ThinkingLevel | undefined): string {
-	const selector = formatModelString(model);
-	return thinkingLevel ? `${selector}:${thinkingLevel}` : selector;
+	return formatModelSelectorValue(formatModelStringWithRouting(model), thinkingLevel);
 }
 
 function formatRetryFallbackBaseSelector(selector: RetryFallbackSelector): string {
@@ -9338,7 +9343,8 @@ export class AgentSession {
 		currentSelector: string,
 		options?: { pinFallback?: boolean },
 	): Promise<void> {
-		const candidate = this.#modelRegistry.find(selector.provider, selector.id);
+		const resolved = resolveModelOverride([selector.raw], this.#modelRegistry, this.settings);
+		const candidate = resolved.model ?? this.#modelRegistry.find(selector.provider, selector.id);
 		if (!candidate) {
 			throw new Error(`Retry fallback model not found: ${selector.raw}`);
 		}

@@ -13,7 +13,7 @@ function model(provider: string, id: string): Model<Api> {
 		id,
 		name: id,
 		api: "openai-completions",
-		baseUrl: `https://${provider}.example.test`,
+		baseUrl: provider === "openrouter" ? "https://openrouter.ai/api/v1" : `https://${provider}.example.test`,
 		reasoning: false,
 		input: ["text"],
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -118,5 +118,34 @@ describe("issue #2750: subagent runtime model fallback", () => {
 		expect(inheritedFallbackChain).toEqual(["global/inherited-model"]);
 		expect(result.modelOverride).toEqual(["primary/bad-runtime-model", "fallback/working-model"]);
 		expect(result.resolvedModel).toBe("fallback/working-model");
+	});
+
+	it("preserves upstream routing selectors in the child retry fallback chain", async () => {
+		const routedModel = model("openrouter", "z-ai/glm-4.7");
+		let childFallbackChains: Record<string, string[]> | undefined;
+		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
+			if (!options) throw new Error("Expected createAgentSession options");
+			childFallbackChains = options.settings?.get("retry.fallbackChains") as Record<string, string[]> | undefined;
+			return { session: createYieldingSession(), extensionsResult: {}, setToolUIContext: () => {} } as never;
+		});
+
+		const agent: AgentDefinition = { name: "task", description: "test", systemPrompt: "test", source: "bundled" };
+		await runSubprocess({
+			cwd: "/tmp",
+			agent,
+			task: "work",
+			index: 0,
+			id: "issue-2750-routed",
+			modelOverride: ["openrouter/z-ai/glm-4.7@cerebras", "openrouter/z-ai/glm-4.7@fireworks"],
+			settings: Settings.isolated(),
+			modelRegistry: {
+				refresh: async () => {},
+				getAvailable: () => [routedModel],
+				getApiKey: async () => "test-key",
+			} as never,
+			enableLsp: false,
+		});
+
+		expect(childFallbackChains?.["subagent:issue-2750-routed"]).toEqual(["openrouter/z-ai/glm-4.7@fireworks"]);
 	});
 });

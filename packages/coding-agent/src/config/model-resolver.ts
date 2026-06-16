@@ -92,6 +92,33 @@ export function formatModelString(model: Model<Api>): string {
 	return `${model.provider}/${model.id}`;
 }
 
+function getSingleRoutingOnly(routing: unknown): string | undefined {
+	if (!routing || typeof routing !== "object" || !("only" in routing) || !Array.isArray(routing.only)) {
+		return undefined;
+	}
+	if (routing.only.length !== 1) return undefined;
+	const upstream = routing.only[0];
+	return typeof upstream === "string" && upstream ? upstream : undefined;
+}
+
+function getSingleUpstreamRoute(model: Model<Api>): string | undefined {
+	const compat = model.compat;
+	if (!compat || typeof compat !== "object") return undefined;
+	if (modelMatchesHost(model, "vercelAIGateway") && "vercelGatewayRouting" in compat) {
+		return getSingleRoutingOnly(compat.vercelGatewayRouting);
+	}
+	if (modelMatchesHost(model, "openrouter") && "openRouterRouting" in compat) {
+		return getSingleRoutingOnly(compat.openRouterRouting);
+	}
+	return undefined;
+}
+
+export function formatModelStringWithRouting(model: Model<Api>): string {
+	const selector = formatModelString(model);
+	const upstream = getSingleUpstreamRoute(model);
+	return upstream ? `${selector}@${upstream}` : selector;
+}
+
 export function formatModelSelectorValue(selector: string, thinkingLevel: ThinkingLevel | undefined): string {
 	return thinkingLevel && thinkingLevel !== ThinkingLevel.Inherit ? `${selector}:${thinkingLevel}` : selector;
 }
@@ -161,7 +188,7 @@ const UPSTREAM_ROUTING_SLUG = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i;
  * `@` or the suffix is not a bare provider slug, so model ids that legitimately
  * contain `@` (`claude-opus-4-8@default`, `workers-ai/@cf/...`) are never split.
  */
-function splitUpstreamRouting(pattern: string): { base: string; upstream: string } | undefined {
+export function splitUpstreamRouting(pattern: string): { base: string; upstream: string } | undefined {
 	const at = pattern.lastIndexOf("@");
 	if (at <= 0) return undefined;
 	const rest = pattern.slice(at + 1);
