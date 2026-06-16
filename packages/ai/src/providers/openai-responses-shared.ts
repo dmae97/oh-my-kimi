@@ -497,6 +497,7 @@ export async function processResponsesStream<TApi extends Api>(
 	// most recently added parallel call.
 	const openItemsByOutputIndex = new Map<number, StreamingItem>();
 	const openItemsByItemId = new Map<string, StreamingItem>();
+	const openItemsByPrefixedCallId = new Map<string, StreamingItem>();
 	let lastOpenItem: StreamingItem | null = null;
 	const openItemsInOrder: StreamingItem[] = [];
 
@@ -518,7 +519,7 @@ export async function processResponsesStream<TApi extends Api>(
 			prefixedAlternateItemKey !== itemId &&
 			prefixedAlternateItemKey !== alternateItemKey
 		) {
-			openItemsByItemId.set(prefixedAlternateItemKey, entry);
+			openItemsByPrefixedCallId.set(prefixedAlternateItemKey, entry);
 		}
 		openItemsInOrder.push(entry);
 		lastOpenItem = entry;
@@ -537,11 +538,29 @@ export async function processResponsesStream<TApi extends Api>(
 	};
 	const hasOpenItemKey = (event: { output_index?: number; item_id?: string }): boolean =>
 		typeof event.output_index === "number" || event.item_id !== undefined;
+	const lookupOpenToolCallAlias = (
+		event: { output_index?: number; item_id?: string },
+		type: "function_call" | "custom_tool_call",
+	): StreamingItem | undefined => {
+		if (typeof event.output_index === "number") return lookupOpenItem(event);
+		if (event.item_id) {
+			// Prefixed call-id aliases share the same wire namespace as real call ids.
+			// Argument/input events can use the prefixed form, while final
+			// output_item.done events below use exact call ids; keep aliases in a
+			// separate map so a real `call_id: "fc_x"` cannot overwrite the alias
+			// for `call_id: "x"`.
+			const alias = openItemsByPrefixedCallId.get(event.item_id);
+			if (alias?.item.type === type) return alias;
+			const exact = openItemsByItemId.get(event.item_id);
+			if (exact) return exact;
+		}
+		return lookupOpenItem(event);
+	};
 	const lookupOpenFunctionCallItem = (event: {
 		output_index?: number;
 		item_id?: string;
 	}): StreamingItem | undefined => {
-		if (hasOpenItemKey(event)) return lookupOpenItem(event);
+		if (hasOpenItemKey(event)) return lookupOpenToolCallAlias(event, "function_call");
 		for (const candidate of openItemsInOrder) {
 			if (
 				candidate.item.type === "function_call" &&
@@ -566,9 +585,10 @@ export async function processResponsesStream<TApi extends Api>(
 		if (
 			prefixedAlternateItemKey &&
 			prefixedAlternateItemKey !== itemId &&
-			prefixedAlternateItemKey !== alternateItemKey
+			prefixedAlternateItemKey !== alternateItemKey &&
+			openItemsByPrefixedCallId.get(prefixedAlternateItemKey) === entry
 		) {
-			openItemsByItemId.delete(prefixedAlternateItemKey);
+			openItemsByPrefixedCallId.delete(prefixedAlternateItemKey);
 		}
 		if (entry) {
 			const index = openItemsInOrder.indexOf(entry);
@@ -769,7 +789,7 @@ export async function processResponsesStream<TApi extends Api>(
 				delete (block as { lastParseLen?: number }).lastParseLen;
 			}
 		} else if (event.type === "response.custom_tool_call_input.delta") {
-			const entry = lookupOpenItem(event);
+			const entry = lookupOpenToolCallAlias(event, "custom_tool_call");
 			if (entry?.item.type === "custom_tool_call" && entry.block.type === "toolCall") {
 				const block = entry.block;
 				block.partialJson += event.delta;
@@ -782,7 +802,7 @@ export async function processResponsesStream<TApi extends Api>(
 				});
 			}
 		} else if (event.type === "response.custom_tool_call_input.done") {
-			const entry = lookupOpenItem(event);
+			const entry = lookupOpenToolCallAlias(event, "custom_tool_call");
 			if (entry?.item.type === "custom_tool_call" && entry.block.type === "toolCall") {
 				entry.block.partialJson = event.input;
 				entry.block.arguments = { input: event.input };

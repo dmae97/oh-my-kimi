@@ -354,26 +354,26 @@ describe("processResponsesStream: parallel function_call items", () => {
 			makeStream([
 				{
 					type: "response.output_item.added",
-					item: { type: "function_call", call_id: "call_a", name: "ast_grep", arguments: "" },
+					item: { type: "function_call", call_id: "x", name: "ast_grep", arguments: "" },
 				},
 				{
 					type: "response.output_item.added",
-					item: { type: "function_call", call_id: "fc_b", name: "ast_grep", arguments: "" },
+					item: { type: "function_call", call_id: "fc_x", name: "ast_grep", arguments: "" },
 				},
 				{
 					type: "response.output_item.added",
 					item: { type: "function_call", call_id: "call_c", name: "ast_grep", arguments: "" },
 				},
-				{ type: "response.function_call_arguments.delta", item_id: "fc_call_a", delta: argsA },
-				{ type: "response.function_call_arguments.delta", item_id: "fc_fc_b", delta: argsB },
+				{ type: "response.function_call_arguments.delta", item_id: "fc_x", delta: argsA },
+				{ type: "response.function_call_arguments.delta", item_id: "fc_fc_x", delta: argsB },
 				{ type: "response.function_call_arguments.delta", item_id: "fc_call_c", delta: argsC },
 				{
 					type: "response.output_item.done",
-					item: { type: "function_call", call_id: "call_a", name: "ast_grep", arguments: "" },
+					item: { type: "function_call", call_id: "x", name: "ast_grep", arguments: "" },
 				},
 				{
 					type: "response.output_item.done",
-					item: { type: "function_call", call_id: "fc_b", name: "ast_grep", arguments: "" },
+					item: { type: "function_call", call_id: "fc_x", name: "ast_grep", arguments: "" },
 				},
 				{
 					type: "response.output_item.done",
@@ -400,11 +400,11 @@ describe("processResponsesStream: parallel function_call items", () => {
 		}>;
 		expect(ends).toHaveLength(3);
 		const byCallId = new Map(ends.map(e => [e.toolCall.id.split("|")[0], e]));
-		expect(byCallId.get("call_a")?.toolCall.arguments).toEqual({
+		expect(byCallId.get("x")?.toolCall.arguments).toEqual({
 			pat: "console.log($$$)",
 			paths: ["src/**/*.ts"],
 		});
-		expect(byCallId.get("fc_b")?.toolCall.arguments).toEqual({
+		expect(byCallId.get("fc_x")?.toolCall.arguments).toEqual({
 			pat: "logger.$_($$$ARGS)",
 			paths: ["src/**/*.ts"],
 		});
@@ -412,8 +412,8 @@ describe("processResponsesStream: parallel function_call items", () => {
 			pat: "processItems",
 			paths: ["src/worker.ts"],
 		});
-		expect(byCallId.get("call_a")?.contentIndex).toBe(0);
-		expect(byCallId.get("fc_b")?.contentIndex).toBe(1);
+		expect(byCallId.get("x")?.contentIndex).toBe(0);
+		expect(byCallId.get("fc_x")?.contentIndex).toBe(1);
 		expect(byCallId.get("call_c")?.contentIndex).toBe(2);
 	});
 });
