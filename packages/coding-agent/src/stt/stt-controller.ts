@@ -4,10 +4,11 @@ import * as path from "node:path";
 import { logger, Snowflake } from "@oh-my-pi/pi-utils";
 import { settings } from "../config/settings";
 import { type SttStreamHandle, sttClient } from "./asr-client";
-import { ensureSTTDependencies } from "./downloader";
+import { downloadSttModel, isSttModelCached } from "./downloader";
 import { resolveSttModelSpec } from "./models";
 import {
 	detectRecorder,
+	ensureRecorder,
 	type RecordingHandle,
 	type StreamingRecordingHandle,
 	startRecording,
@@ -36,7 +37,7 @@ interface Editor {
 
 export class STTController {
 	#state: SttState = "idle";
-	#depsResolved = false;
+	#resolvedModelKey: string | null = null;
 	#toggling = false;
 	#stopAfterStart = false;
 	#disposed = false;
@@ -92,15 +93,39 @@ export class STTController {
 	}
 
 	async #ensureDeps(options: ToggleOptions): Promise<boolean> {
-		if (this.#depsResolved) return true;
+		const modelKey = resolveSttModelSpec(settings.get("stt.modelName") as string | undefined).key;
+		// Keyed on the model rather than a one-shot flag: switching stt.modelName
+		// mid-session must re-run preflight so an uncached new tier downloads here
+		// (with progress) instead of blocking silently at stop.
+		if (this.#resolvedModelKey === modelKey) return true;
 		try {
-			options.showStatus("Checking STT dependencies...");
-			await ensureSTTDependencies({
-				modelName: settings.get("stt.modelName") as string | undefined,
-				onProgress: p => options.showStatus(p.stage + (p.percent != null ? ` (${p.percent}%)` : "")),
-			});
-			options.showStatus("");
-			this.#depsResolved = true;
+			// Only clear the status line if we actually wrote to it: the cached
+			// fast path (recorder on PATH, model present) emits nothing, so an
+			// unconditional clear would be a stray write.
+			let wroteStatus = false;
+			const status = (msg: string): void => {
+				wroteStatus = true;
+				options.showStatus(msg);
+			};
+			// A recorder is required to capture audio; startRecording /
+			// startStreamingRecording only *detect* a recorder and throw when none
+			// exists, so provision one here. Instant when sox/ffmpeg/arecord is on
+			// PATH — only a first-run static-ffmpeg download actually blocks.
+			await ensureRecorder(p => status(p.stage + (p.percent != null ? ` (${p.percent}%)` : "")));
+			// Loading the multi-hundred-MB speech model into the worker is what made
+			// the old "Checking STT dependencies…" step slow. Don't pay it before
+			// recording: when the weights are already cached, start now and warm the
+			// model in the background — the stream/transcribe paths load it on demand
+			// (memoized in the worker) and it is hot by the time recording stops.
+			// Only a genuine first-use download blocks, with explicit progress, so we
+			// never record silently against missing weights.
+			if (await isSttModelCached(modelKey)) {
+				this.#warmModel(modelKey);
+			} else {
+				await downloadSttModel(modelKey, p => status(`Downloading speech model ${p.label} (${p.percent}%)`));
+			}
+			if (wroteStatus) options.showStatus("");
+			this.#resolvedModelKey = modelKey;
 			return true;
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : "Failed to setup STT dependencies";
@@ -108,6 +133,22 @@ export class STTController {
 			logger.error("STT dependency setup failed", { error: msg });
 			return false;
 		}
+	}
+
+	/** Warm the speech model in the worker without blocking recording. The worker
+	 *  memoizes the load, so the stream/transcribe path reuses it and the model is
+	 *  hot by the time recording stops. Only called when the weights are already
+	 *  cached, so no network fetch happens. On load failure (corrupt cache, OOM,
+	 *  runtime install) invalidate the resolved key so the next toggle re-runs
+	 *  preflight and retries instead of skipping it forever. */
+	#warmModel(modelKey: string): void {
+		void downloadSttModel(modelKey).catch(err => {
+			// Guard against a concurrent model switch clobbering a newer resolution.
+			if (!this.#disposed && this.#resolvedModelKey === modelKey) this.#resolvedModelKey = null;
+			logger.debug("stt: background model warmup failed", {
+				error: err instanceof Error ? err.message : String(err),
+			});
+		});
 	}
 
 	async #start(editor: Editor, options: ToggleOptions): Promise<void> {
@@ -334,6 +375,6 @@ export class STTController {
 			this.#tempFile = null;
 		}
 		this.#state = "idle";
-		this.#depsResolved = false;
+		this.#resolvedModelKey = null;
 	}
 }
