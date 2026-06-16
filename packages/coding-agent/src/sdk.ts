@@ -148,6 +148,7 @@ import { AgentOutputManager } from "./task/output-manager";
 import {
 	AUTO_THINKING,
 	type ConfiguredThinkingLevel,
+	parseConfiguredThinkingLevel,
 	parseThinkingLevel,
 	resolveProvisionalAutoLevel,
 	resolveThinkingLevelForModel,
@@ -1299,7 +1300,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			level = selectedModel.thinking.defaultLevel;
 		}
 		if (level === undefined) {
-			level = settings.get("defaultThinkingLevel");
+			level = parseConfiguredThinkingLevel(settings.get("defaultThinkingLevel"));
 		}
 		return level;
 	};

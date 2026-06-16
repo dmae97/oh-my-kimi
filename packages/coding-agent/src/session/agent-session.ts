@@ -230,6 +230,7 @@ import {
 	AUTO_THINKING,
 	type ConfiguredThinkingLevel,
 	clampAutoThinkingEffort,
+	parseConfiguredThinkingLevel,
 	resolveProvisionalAutoLevel,
 	resolveThinkingLevelForModel,
 	shouldDisableReasoning,
@@ -10455,7 +10456,7 @@ export class AgentSession {
 			const hasServiceTierEntry = this.sessionManager
 				.getBranch()
 				.some(entry => entry.type === "service_tier_change");
-			const defaultThinkingLevel = this.settings.get("defaultThinkingLevel");
+			const defaultThinkingLevel = parseConfiguredThinkingLevel(this.settings.get("defaultThinkingLevel"));
 			const configuredServiceTier = this.settings.get("serviceTier");
 			// Session log entries store only concrete levels. When `auto` has resolved
 			// for a turn, the persisted context may already carry that concrete level
