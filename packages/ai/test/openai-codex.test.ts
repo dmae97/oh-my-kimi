@@ -51,6 +51,7 @@ describe("openai-codex tool schemas", () => {
 					properties: {
 						fileKey: { type: "string", pattern: "^(?!undefined$|null$)" },
 					},
+					propertyNames: { pattern: "^(?!undefined$|null$)" },
 				},
 			},
 		];
@@ -66,6 +67,7 @@ describe("openai-codex tool schemas", () => {
 				properties: {
 					fileKey: { type: "string" },
 				},
+				propertyNames: true,
 			},
 		});
 	});

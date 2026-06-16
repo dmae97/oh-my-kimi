@@ -953,7 +953,7 @@ function hasOpenAIUnsupportedRegexLookaround(pattern: string): boolean {
 	return false;
 }
 
-function normalizeOpenAIResponsesSchemaNode(value: unknown, cache: WeakMap<JsonObject, JsonObject>): unknown {
+function normalizeOpenAIResponsesSchemaNode(value: unknown, cache: WeakMap<JsonObject, unknown>): unknown {
 	if (!isJsonObject(value)) return value;
 
 	// `{}` (empty JSON Schema) ≡ `true` (JSON Schema draft 2020-12 §4.3.1).
@@ -1034,7 +1034,7 @@ function normalizeOpenAIResponsesSchemaNode(value: unknown, cache: WeakMap<JsonO
 	// the seeded partial and set `changed = true` for that node, so a node
 	// that finishes with `changed === false` is provably non-cyclic and
 	// referentially equal to its input.
-	const result = changed ? output : value;
+	const result = changed ? (isJsonObjectEmpty(output) ? true : output) : value;
 	cache.set(value, result);
 	return result;
 }
@@ -1048,7 +1048,7 @@ function declaresObjectType(type: unknown): boolean {
 	return false;
 }
 
-function normalizeOpenAIResponsesSchemaArray(value: unknown[], cache: WeakMap<JsonObject, JsonObject>): unknown[] {
+function normalizeOpenAIResponsesSchemaArray(value: unknown[], cache: WeakMap<JsonObject, unknown>): unknown[] {
 	let changed = false;
 	const output = value.map(item => {
 		const next = normalizeOpenAIResponsesSchemaNode(item, cache);
@@ -1060,7 +1060,7 @@ function normalizeOpenAIResponsesSchemaArray(value: unknown[], cache: WeakMap<Js
 
 function normalizeOpenAIResponsesSchemaMap(
 	schemaMap: JsonObject,
-	cache: WeakMap<JsonObject, JsonObject>,
+	cache: WeakMap<JsonObject, unknown>,
 	stripUnsupportedRegexKeys: boolean,
 ): JsonObject {
 	let changed = false;

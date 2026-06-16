@@ -527,6 +527,7 @@ describe("sanitizeSchemaForOpenAIResponses", () => {
 				ending: { type: "string", pattern: "(?<=/)node$" },
 				slug: { type: "string", pattern: "^[a-z0-9_-]+$" },
 				literal: { type: "string", pattern: "\\(?!literal" },
+				patternOnly: { pattern: "^(?!bad$)" },
 				"^(?!property-name)": { type: "string" },
 			},
 			patternProperties: {
@@ -535,6 +536,7 @@ describe("sanitizeSchemaForOpenAIResponses", () => {
 				"^x-": { type: "object" },
 				"\\(?!literal": { type: "string" },
 			},
+			propertyNames: { pattern: "^(?!invalid$)" },
 		};
 
 		expect(sanitizeSchemaForOpenAIResponses(schema)).toEqual({
@@ -544,12 +546,14 @@ describe("sanitizeSchemaForOpenAIResponses", () => {
 				ending: { type: "string" },
 				slug: { type: "string", pattern: "^[a-z0-9_-]+$" },
 				literal: { type: "string", pattern: "\\(?!literal" },
+				patternOnly: true,
 				"^(?!property-name)": { type: "string" },
 			},
 			patternProperties: {
 				"^x-": { type: "object", properties: {} },
 				"\\(?!literal": { type: "string" },
 			},
+			propertyNames: true,
 		});
 	});
 
