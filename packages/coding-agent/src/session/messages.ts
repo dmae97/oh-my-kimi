@@ -94,7 +94,7 @@ export function shouldRenderAbortReason(errorMessage: string | undefined): boole
 
 /** Sentinel `errorMessage` the agent stamps on any abort that carried no custom
  *  reason (bare `abort()`). Renderers treat it as "no specific reason given". */
-const GENERIC_ABORT_SENTINEL = "Request was aborted";
+export const GENERIC_ABORT_SENTINEL = "Request was aborted";
 
 /** Resolve the operator-facing label for an aborted assistant turn. A custom
  *  abort reason threaded onto `errorMessage` is returned verbatim; aborts with
