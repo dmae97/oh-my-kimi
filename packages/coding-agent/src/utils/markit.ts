@@ -1,4 +1,4 @@
-import { untilAborted } from "@oh-my-pi/pi-utils";
+import { logger, untilAborted } from "@oh-my-pi/pi-utils";
 import type { Markit, StreamInfo } from "markit-ai";
 import { ToolAbortError } from "../tools/tool-errors";
 
@@ -7,6 +7,29 @@ export interface MarkitConversionResult {
 	ok: boolean;
 	error?: string;
 }
+
+interface MuPdfWasmModuleConfig {
+	print?: (...values: unknown[]) => void;
+	printErr?: (...values: unknown[]) => void;
+}
+
+declare global {
+	var $libmupdf_wasm_Module: MuPdfWasmModuleConfig | undefined;
+}
+
+function logMuPdfWasmOutput(stream: "stdout" | "stderr", values: unknown[]): void {
+	const message = values.length === 1 && typeof values[0] === "string" ? values[0] : values.map(String).join(" ");
+	logger.debug("mupdf wasm output", { stream, message });
+}
+
+function installMuPdfWasmLogger(): void {
+	const moduleConfig = globalThis.$libmupdf_wasm_Module ?? {};
+	moduleConfig.print = (...values) => logMuPdfWasmOutput("stdout", values);
+	moduleConfig.printErr = (...values) => logMuPdfWasmOutput("stderr", values);
+	globalThis.$libmupdf_wasm_Module = moduleConfig;
+}
+
+installMuPdfWasmLogger();
 
 let markit: () => Markit | Promise<Markit> = async () => {
 	const promise = import("markit-ai").then(({ Markit }) => {
