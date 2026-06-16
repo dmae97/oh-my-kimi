@@ -165,6 +165,24 @@ describe("github discovery — Copilot user-global surface", () => {
 		expect(resource.content.trim()).toBe("C# body");
 	});
 
+	test("splits comma-separated applyTo globs and treats **/* as always-apply (#2731)", async () => {
+		write(
+			path.join(cwd, ".github", "instructions", "ts.instructions.md"),
+			"---\napplyTo: '**/*.ts,**/*.tsx'\n---\nTS body\n",
+		);
+		write(path.join(cwd, ".github", "instructions", "all.instructions.md"), "---\napplyTo: '**/*'\n---\nAll body\n");
+
+		const result = await loadCapability<Rule>("rules", { cwd, providers: ["github"] });
+
+		const ts = result.items.find(rule => rule.name === "ts");
+		expect(ts?.alwaysApply).toBe(false);
+		expect(ts?.globs).toEqual(["**/*.ts", "**/*.tsx"]);
+
+		const all = result.items.find(rule => rule.name === "all");
+		expect(all?.alwaysApply).toBe(true);
+		expect(all?.globs).toBeUndefined();
+	});
+
 	test("disabled github provider suppresses copilot instructions and instruction-file rules (#2731)", async () => {
 		write(path.join(cwd, ".github", "copilot-instructions.md"), "project guidance");
 		write(

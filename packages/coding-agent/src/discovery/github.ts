@@ -216,22 +216,16 @@ function transformInstructionRule(
 }
 
 function normalizeApplyToGlobs(value: unknown): string[] | undefined {
-	if (typeof value === "string") {
-		const glob = value.trim();
-		return glob ? [glob] : undefined;
-	}
-	if (!Array.isArray(value)) {
-		return undefined;
-	}
-	const globs = value
-		.filter((item): item is string => typeof item === "string")
-		.map(item => item.trim())
-		.filter(Boolean);
+	// GitHub documents applyTo as a single comma-separated string (e.g.
+	// "**/*.ts,**/*.tsx"); also tolerate a YAML array of such strings.
+	const raw = Array.isArray(value) ? value : [value];
+	const globs = raw.flatMap(item => (typeof item === "string" ? parseCSV(item) : []));
 	return globs.length > 0 ? globs : undefined;
 }
 
 function isAlwaysApplyGlob(glob: string): boolean {
-	return glob === "*" || glob === "**";
+	// GitHub treats "*", "**", and "**/*" as matching every file.
+	return glob === "*" || glob === "**" || glob === "**/*";
 }
 
 function describeInstructionRule(globs: string[] | undefined): string {
