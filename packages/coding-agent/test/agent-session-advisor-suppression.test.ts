@@ -199,6 +199,53 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		expect(mock.calls.length).toBe(2);
 	});
 
+	it("reclaims a stranded advisor steer on settle while suppressed, instead of auto-resuming the stopped run", async () => {
+		// Residual edge exposed once interrupting advice is steered (not parked) into a
+		// resumed streaming run: a concern can land in the steer queue past the loop's
+		// final boundary poll and strand. The steer queue otherwise bypasses the
+		// suppression latch in #canAutoContinueForFollowUp, so the idle settle would
+		// auto-resume the run the user stopped. The settle drain must instead reclaim the
+		// stranded advisor steer as visible advice. (A non-user abort is used purely as a
+		// deterministic settle trigger — it neither extracts advisor cards nor clears the
+		// latch — standing in for the natural #endInFlight settle after the resumed turn.)
+		const { session, sessionManager, mock, streamStarted } = await createParkedSession([
+			{ content: ["must not auto-resume"] },
+		]);
+		const persisted = capturePersistedAdvice(sessionManager);
+
+		const running = session.prompt("do the thing");
+		await streamStarted;
+
+		// User interrupt latches suppression.
+		await session.abort({ reason: USER_INTERRUPT_LABEL });
+		await session.waitForIdle();
+		await running.catch(() => {});
+		expect(mock.calls.length).toBe(1);
+
+		// A concern strands in the steer queue (steered past the resumed turn's last poll).
+		session.agent.steer({
+			role: "custom",
+			customType: ADVISOR_TYPE,
+			content: "stranded tail concern",
+			display: true,
+			attribution: "agent",
+			details: { notes: [{ note: "stranded tail concern", severity: "concern" }] },
+			timestamp: Date.now(),
+		} as AgentMessage);
+		expect(session.agent.peekSteeringQueue().some(isAdvisorCard)).toBe(true);
+
+		// Settle while suppression is still in effect.
+		await session.abort();
+		await session.waitForIdle();
+
+		// Reclaimed as visible/persisted advice; the steer queue is emptied and NO
+		// advisor-only auto-resume turn ran (model still called exactly once).
+		expect(session.agent.peekSteeringQueue()).toEqual([]);
+		expect(session.agent.state.messages.filter(isAdvisorCard)).toHaveLength(1);
+		expect(persisted).toEqual(["stranded tail concern"]);
+		expect(mock.calls.length).toBe(1);
+	});
+
 	it("resumes a queued user steer stranded behind a preserved advisor card", async () => {
 		// Reported bug: typing a message during a run (queued as a steer) then pressing
 		// enter again (empty-submit interrupt) recorded the advisor card but stranded the

@@ -1298,6 +1298,18 @@ export class AgentSession {
 	 *  queue was consumed normally or a new turn already started. */
 	#drainStrandedQueuedMessages(): void {
 		if (this.#abortInProgress) return;
+		// A concern steered into a resumed streaming run after a user interrupt can
+		// strand at the turn tail (steered past the loop's final boundary poll). While
+		// that interrupt's suppression is still in effect, reclaim such advisor steers
+		// as visible advice once idle — mirroring abort's #extractQueuedAdvisorCards —
+		// so they neither auto-resume the run the user stopped (a non-empty steer queue
+		// otherwise bypasses the latch in #canAutoContinueForFollowUp) nor linger to
+		// flush at the next prompt. Real user steers/follow-ups are left untouched.
+		if (this.#advisorAutoResumeSuppressed && !this.isStreaming) {
+			for (const card of this.#extractQueuedAdvisorCards()) {
+				this.#preserveAdvisorCard(card);
+			}
+		}
 		this.#scheduleQueuedMessageDrain();
 		this.#resumeStrandedIrcAsides();
 	}
@@ -1370,14 +1382,14 @@ export class AgentSession {
 	}
 
 	/** Record a suppressed advisor concern as visible, persisted advice without
-	 *  triggering a turn. When the agent is idle (the normal post-interrupt case),
-	 *  emit message_start/message_end like #flushPendingIrcAsides so
-	 *  #handleAgentEvent renders it live (TUI/ACP) and persists it as a
-	 *  CustomMessageEntry. While a turn is still tearing down (mid-abort), park it
-	 *  hidden so abort's settle step replays it once idle — never appended into a
-	 *  live streamMessage. */
+	 *  triggering a turn. When the agent is idle (the normal post-interrupt case,
+	 *  including the post-prompt unwind window where the core loop has ended), emit
+	 *  message_start/message_end like #flushPendingIrcAsides so #handleAgentEvent
+	 *  renders it live (TUI/ACP) and persists it as a CustomMessageEntry. Only while
+	 *  an abort is still tearing a live turn down do we park it hidden, so abort's
+	 *  settle step replays it once idle — never appended into a live streamMessage. */
 	#preserveAdvisorCard(card: CustomMessage): void {
-		if (this.isStreaming) {
+		if (this.#abortInProgress && this.isStreaming) {
 			this.#pendingNextTurnMessages.push(card);
 			return;
 		}
