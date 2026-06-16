@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -10,20 +10,36 @@ const currentPiExtensionsPath = Bun.resolveSync("@oh-my-pi/pi-coding-agent/exten
 
 describe("plugin extension discovery", () => {
 	let projectDir: TempDir;
-	let tempXdgDataHome = "";
-	let originalXdgDataHome: string | undefined;
+	let tempHome = "";
 	const originalAgentDir = getAgentDir();
+	const xdgVars = ["XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"] as const;
+	const originalXdg = new Map<string, string | undefined>();
 
 	beforeEach(() => {
 		projectDir = TempDir.createSync("@pi-plugin-ext-");
-		originalXdgDataHome = process.env.XDG_DATA_HOME;
-		tempXdgDataHome = fs.mkdtempSync(path.join(os.tmpdir(), "pi-plugin-data-"));
-		fs.mkdirSync(path.join(tempXdgDataHome, "omp"), { recursive: true });
-		process.env.XDG_DATA_HOME = tempXdgDataHome;
-		// Rebuild path caches after changing XDG env so plugin discovery resolves into the temp root.
-		setAgentDir(originalAgentDir);
+		// Redirect the whole config root to an isolated temp home so plugin discovery
+		// resolves into `<tempHome>/.omp/plugins` on every platform. Two things are needed:
+		//  - mock os.homedir() so configRoot = `<tempHome>/.omp` (the previous
+		//    XDG_DATA_HOME redirect was a no-op on Windows, where these tests then wrote
+		//    into and rm'd the developer's real `~/.omp/plugins`);
+		//  - clear the XDG_* vars, because on Linux/macOS the resolver prefers
+		//    `$XDG_DATA_HOME/omp` over the home config root when that dir exists, so an
+		//    XDG-migrated environment would otherwise still resolve the real plugins dir.
+		tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "pi-plugin-home-"));
+		for (const key of xdgVars) {
+			originalXdg.set(key, process.env[key]);
+			delete process.env[key];
+		}
+		spyOn(os, "homedir").mockReturnValue(tempHome);
+		setAgentDir(path.join(tempHome, ".omp", "agent"));
 
 		const pluginsDir = getPluginsDir();
+		// Safety gate: never write fixtures outside the temp home. This is the exact
+		// failure mode being fixed — a resolver/mock regression that resolves to the real
+		// ~/.omp must fail loudly here instead of clobbering the developer's plugins.
+		if (!pluginsDir.startsWith(tempHome + path.sep)) {
+			throw new Error(`plugin isolation failed: getPluginsDir() resolved outside the temp home: ${pluginsDir}`);
+		}
 		const pluginDir = path.join(pluginsDir, "node_modules", "@demo", "plugin");
 		fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
 		fs.writeFileSync(
@@ -58,13 +74,14 @@ describe("plugin extension discovery", () => {
 
 	afterEach(() => {
 		projectDir.removeSync();
-		fs.rmSync(tempXdgDataHome, { recursive: true, force: true });
-		if (originalXdgDataHome === undefined) {
-			delete process.env.XDG_DATA_HOME;
-		} else {
-			process.env.XDG_DATA_HOME = originalXdgDataHome;
+		spyOn(os, "homedir").mockRestore();
+		for (const [key, value] of originalXdg) {
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
 		}
+		originalXdg.clear();
 		setAgentDir(originalAgentDir);
+		fs.rmSync(tempHome, { recursive: true, force: true });
 	});
 
 	it("loads installed plugin extensions declared in package.json", async () => {
