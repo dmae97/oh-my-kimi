@@ -490,21 +490,28 @@ export class PluginManager {
 	 */
 	async list(): Promise<InstalledPlugin[]> {
 		const pkgJsonPath = getPluginsPackageJson();
-		let pkg: { dependencies?: Record<string, string> };
+		let deps: Record<string, string> = {};
 		try {
-			pkg = await Bun.file(pkgJsonPath).json();
+			const pkg: { dependencies?: Record<string, string> } = await Bun.file(pkgJsonPath).json();
+			deps = pkg.dependencies ?? {};
 		} catch (err) {
-			if (isEnoent(err)) return [];
-			throw err;
+			if (!isEnoent(err)) throw err;
 		}
 
-		const deps = pkg.dependencies || {};
 		const projectOverrides = await this.#loadProjectOverrides();
 		const config = await this.#ensureConfigLoaded();
 		const plugins: InstalledPlugin[] = [];
+		const installedNames = new Set<string>();
+		for (const name of Object.keys(deps)) {
+			installedNames.add(name);
+		}
+		for (const name of Object.keys(config.plugins)) {
+			installedNames.add(name);
+		}
 
-		for (const [name] of Object.entries(deps)) {
-			const pluginPkgPath = path.join(getPluginsNodeModules(), name, "package.json");
+		for (const name of installedNames) {
+			const pluginPath = path.join(getPluginsNodeModules(), name);
+			const pluginPkgPath = path.join(pluginPath, "package.json");
 			let pluginPkg: { version: string; omp?: PluginManifest; pi?: PluginManifest };
 			try {
 				pluginPkg = await Bun.file(pluginPkgPath).json();
@@ -521,14 +528,13 @@ export class PluginManager {
 				enabled: true,
 			};
 
-			// Apply project overrides
 			const isDisabledInProject = projectOverrides.disabled?.includes(name) ?? false;
 			const projectFeatures = projectOverrides.features?.[name];
 
 			plugins.push({
 				name,
 				version: pluginPkg.version,
-				path: path.join(getPluginsNodeModules(), name),
+				path: pluginPath,
 				manifest,
 				enabledFeatures: projectFeatures ?? runtimeState.enabledFeatures,
 				enabled: runtimeState.enabled && !isDisabledInProject,

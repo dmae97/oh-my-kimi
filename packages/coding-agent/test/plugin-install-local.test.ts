@@ -138,4 +138,28 @@ describe("runPluginCommand({ action: 'install', args: [<local>] })", () => {
 			enabled: true,
 		});
 	});
+	test("list --json includes linked local plugin without package dependencies", async () => {
+		const localPlugin = path.join(tmpRoot, "kimi-datasource");
+		await fs.mkdir(localPlugin, { recursive: true });
+		await Bun.write(
+			path.join(localPlugin, "package.json"),
+			JSON.stringify({
+				name: "kimi-datasource",
+				version: "1.0.0",
+				omp: { extensions: ["./src/extension.ts"] },
+			}),
+		);
+		const output: string[] = [];
+		spyOn(console, "log").mockImplementation(message => {
+			output.push(String(message));
+		});
+		spyOn(MarketplaceManager.prototype, "listInstalledPlugins").mockResolvedValue([]);
+
+		await runPluginCommand({ action: "link", args: [localPlugin], flags: { json: true } });
+		output.length = 0;
+		await runPluginCommand({ action: "list", args: [], flags: { json: true } });
+
+		const listed = JSON.parse(output.join("\n")) as { npm: InstalledPlugin[] };
+		expect(listed.npm.map(plugin => plugin.name)).toContain("kimi-datasource");
+	});
 });
