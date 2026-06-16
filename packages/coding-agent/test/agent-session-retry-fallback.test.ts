@@ -1072,6 +1072,81 @@ describe("AgentSession retry fallback", () => {
 		expect(lastAssistant.errorMessage).toBe("Request was aborted.");
 	});
 
+	it("matches plain fallback roles for compat-routed primary models", async () => {
+		const fallbackModel = getBundledModel("openai", "gpt-4o-mini");
+		if (!fallbackModel) {
+			throw new Error("Expected bundled OpenAI test model to exist");
+		}
+		const routedPrimary = buildModel({
+			id: "z-ai/glm-4.7",
+			name: "GLM 4.7",
+			api: "openai-completions",
+			provider: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128000,
+			maxTokens: 8192,
+			compat: { openRouterRouting: { only: ["cerebras"] } },
+		});
+
+		const requestedModels: string[] = [];
+		const mock = createMockModel();
+		let primaryAttempts = 0;
+		const agent = new Agent({
+			getApiKey: provider => `${provider}-test-key`,
+			initialState: {
+				model: routedPrimary,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+			streamFn: (requestedModel, context, options) => {
+				const route =
+					requestedModel.provider === "openrouter" &&
+					requestedModel.compat &&
+					"openRouterRouting" in requestedModel.compat
+						? requestedModel.compat.openRouterRouting?.only?.[0]
+						: undefined;
+				const requested = `${requestedModel.provider}/${requestedModel.id}${route ? `@${route}` : ""}`;
+				requestedModels.push(requested);
+				if (requestedModel.provider === "openrouter" && primaryAttempts === 0) {
+					primaryAttempts += 1;
+					mock.push({ throw: "rate limit exceeded retry-after-ms=200" });
+				} else {
+					mock.push({ content: [`ok:${requested}`] });
+				}
+				return mock.stream(requestedModel, context, options);
+			},
+		});
+
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 5,
+			"retry.fallbackChains": {
+				default: [`${fallbackModel.provider}/${fallbackModel.id}`],
+			},
+		});
+		settings.setModelRole("default", "openrouter/z-ai/glm-4.7");
+
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+
+		await session.prompt("Compat-routed primary should still match plain role");
+		await session.waitForIdle();
+		expect(requestedModels).toEqual([
+			"openrouter/z-ai/glm-4.7@cerebras",
+			`${fallbackModel.provider}/${fallbackModel.id}`,
+		]);
+		expect(session.model?.provider).toBe(fallbackModel.provider);
+		expect(session.model?.id).toBe(fallbackModel.id);
+	});
+
 	it("keeps exact @-suffixed model IDs in fallback selectors", async () => {
 		const primaryModel = getBundledModel("openai", "gpt-4o-mini");
 		const fallbackModel = getBundledModel("google-vertex", "claude-opus-4-8@default");
