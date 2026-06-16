@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.0.3] - 2026-06-16
+
 ### Added
 
 - Added support for LaTeX color commands (`\textcolor`, `\colorbox`, and `\fcolorbox`) in user-visible terminal prose and final chat to colorize output

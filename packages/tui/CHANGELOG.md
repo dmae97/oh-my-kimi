@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.0.3] - 2026-06-16
+
 ### Added
 
 - Added `\tfrac` support to stacked display-math rendering so it now displays as a vertical fraction in `latexToBlock` output

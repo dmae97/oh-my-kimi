@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.0.3] - 2026-06-16
+
 ### Added
 
 - Added `escapeXmlText` utility to escape XML-significant characters `&`, `<`, and `>` in element body text

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.0.3] - 2026-06-16
+
 ### Added
 
 - Exported `renderDelimitedThinking` from the `@oh-my-pi/pi-ai/dialect` barrel so consumers can reuse the dialect's `<thinking>` envelope unwrap-and-rewrap logic (the only `./dialect/rendering` primitive re-exported; the rest stay dialect-internal).
