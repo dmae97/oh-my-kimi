@@ -35,6 +35,10 @@
 - Fixed every subagent registering itself as its own parent in the agent registry (`parentId === id`), so the Agent Hub rendered each agent as `sub · of <itself>` and the ←← parent-navigation gesture looped on the same agent. The SDK was reusing `parentTaskPrefix` — the agent's own artifact/output-id prefix — as the registry parent link; spawns now pass a separate `parentAgentId` (the spawning agent's id: `Main` for top-level `task` spawns, the parent subagent for nested spawns and eval `agent()`, the focused agent for `/tan`) and the registry records that as the parent.
 - Fixed messaging a `parked` subagent that was restored from disk (Agent Hub scan, or a resumed/restarted session) failing with `cannot be revived (no reviver registered)` even though its transcript was intact. Such refs carry a session file but no in-memory reviver — the executor's live reviver closure dies with the spawning turn/process — so IRC sends and Agent Hub focus refused them. `AgentLifecycleManager.ensureLive` now cold-revives them through a persisted-subagent reviver factory (installed by the top-level interactive/RPC session) that rebuilds the subagent from its JSONL the way `--resume` rebuilds a session: it reopens the file and replays it through `createAgentSession`, but sources the runtime contract from a now-readable `session_init` record (`SessionManager.peekSessionInit`) so tools, system prompt, output schema, and kind are restored rather than resurrected as a default top-level session. `session_init` now also persists the effective `spawns` allowlist and read-summarization flag so a cold revive keeps the original capability surface (old files without them deny re-spawning rather than defaulting to wildcard). Isolated runs and pre-`session_init` files whose recorded workspace no longer exists stay transcript-only (`history://`).
 
+### Fixed
+
+- Fixed empty CLI sessions being retained after opening `omp` and exiting without a prompt ([#2800](https://github.com/can1357/oh-my-pi/issues/2800)).
+
 ## [16.0.2] - 2026-06-16
 
 ### Added
