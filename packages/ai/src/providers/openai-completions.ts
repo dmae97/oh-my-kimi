@@ -1162,6 +1162,10 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				output.stopReason = "toolUse";
 			}
 
+			if (model.provider === "ollama" && output.stopReason === "length" && !hasVisibleCompletionContent(output)) {
+				output.stopReason = "error";
+				output.errorMessage = EMPTY_OLLAMA_LENGTH_COMPLETION_MESSAGE;
+			}
 			const firstEventTimeoutError = abortTracker.getLocalAbortReason();
 			if (firstEventTimeoutError) {
 				throw firstEventTimeoutError;
@@ -2195,6 +2199,19 @@ function shouldRetryWithoutStrictTools(
 		messageParts,
 	);
 }
+
+const NON_WHITESPACE_RE = /\S/;
+
+function hasVisibleCompletionContent(message: AssistantMessage): boolean {
+	for (const block of message.content) {
+		if (block.type === "toolCall") return true;
+		if (block.type === "text" && NON_WHITESPACE_RE.test(block.text)) return true;
+	}
+	return false;
+}
+
+const EMPTY_OLLAMA_LENGTH_COMPLETION_MESSAGE =
+	"Model returned no content: prompt filled the context window; raise Ollama num_ctx or shorten the prompt.";
 
 function mapStopReason(reason: ChatCompletionChunk.Choice["finish_reason"] | string): {
 	stopReason: StopReason;
