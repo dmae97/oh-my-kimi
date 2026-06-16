@@ -937,6 +937,7 @@ export function sanitizeSchemaForOpenAIResponses(schema: JsonObject): JsonObject
  */
 export const normalizeSchemaForOpenAIResponses: (schema: JsonObject) => JsonObject = sanitizeSchemaForOpenAIResponses;
 const OPENAI_UNSUPPORTED_REGEX_LOOKAROUNDS = new Set(["=", "!", "<=", "<!"]);
+const OPENAI_RESPONSES_PATTERN_PROPERTIES_FALLBACK = ".*";
 
 function hasOpenAIUnsupportedRegexLookaround(pattern: string): boolean {
 	let groupStart = pattern.indexOf("(?");
@@ -1067,16 +1068,30 @@ function normalizeOpenAIResponsesSchemaMap(
 	const output: JsonObject = {};
 	for (const key in schemaMap) {
 		if (!Object.hasOwn(schemaMap, key)) continue;
-		if (stripUnsupportedRegexKeys && hasOpenAIUnsupportedRegexLookaround(key)) {
-			changed = true;
-			continue;
-		}
 		const child = schemaMap[key];
 		const next = normalizeOpenAIResponsesSchemaNode(child, cache);
 		if (next !== child) changed = true;
+		if (stripUnsupportedRegexKeys && hasOpenAIUnsupportedRegexLookaround(key)) {
+			changed = true;
+			appendOpenAIResponsesFallbackPatternProperty(output, next);
+			continue;
+		}
 		output[key] = next;
 	}
 	return changed ? output : schemaMap;
+}
+
+function appendOpenAIResponsesFallbackPatternProperty(output: JsonObject, schema: unknown): void {
+	const existing = output[OPENAI_RESPONSES_PATTERN_PROPERTIES_FALLBACK];
+	if (existing === undefined) {
+		output[OPENAI_RESPONSES_PATTERN_PROPERTIES_FALLBACK] = schema;
+		return;
+	}
+	if (isJsonObject(existing) && Array.isArray(existing.anyOf) && Object.keys(existing).length === 1) {
+		existing.anyOf = [...existing.anyOf, schema];
+		return;
+	}
+	output[OPENAI_RESPONSES_PATTERN_PROPERTIES_FALLBACK] = { anyOf: [existing, schema] };
 }
 
 // ---------------------------------------------------------------------------

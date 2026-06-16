@@ -550,6 +550,7 @@ describe("sanitizeSchemaForOpenAIResponses", () => {
 				"^(?!property-name)": { type: "string" },
 			},
 			patternProperties: {
+				".*": { anyOf: [{ type: "string" }, { type: "string" }] },
 				"^x-": { type: "object", properties: {} },
 				"\\(?!literal": { type: "string" },
 			},

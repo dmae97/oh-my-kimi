@@ -82,6 +82,7 @@ describe("openai-codex tool schemas", () => {
 						"^(?!secret_)": { type: "string" },
 						"^public_": { type: "string" },
 					},
+					additionalProperties: false,
 				},
 			},
 		];
@@ -95,8 +96,10 @@ describe("openai-codex tool schemas", () => {
 			parameters: {
 				type: "object",
 				patternProperties: {
+					".*": { type: "string" },
 					"^public_": { type: "string" },
 				},
+				additionalProperties: false,
 				properties: {},
 			},
 		});
