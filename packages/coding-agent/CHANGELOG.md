@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.0.2] - 2026-06-16
+
 ### Added
 
 - Added the `UMANS_WEBSEARCH_PROVIDER` environment variable to CLI help for Umans gateway web search backend selection.

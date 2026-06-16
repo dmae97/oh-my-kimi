@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.0.2] - 2026-06-16
+
 ### Added
 
 - Added `UMANS_WEBSEARCH_PROVIDER=native|exa` support for routing Umans gateway-owned web search requests.

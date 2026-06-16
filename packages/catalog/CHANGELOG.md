@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.0.2] - 2026-06-16
+
 ### Fixed
 
 - Fixed Kimi output caps for Umans AI Coding Plan and Venice so discovery metadata cannot use context-sized token ceilings as request caps.

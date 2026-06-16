@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.0.2] - 2026-06-16
+
 ### Fixed
 
 - Fixed VS Code integrated terminal keypad digit CSI-u input being handled as navigation instead of text.
