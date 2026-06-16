@@ -7,6 +7,7 @@ import {
 	setOsc99Supported,
 	TERMINAL,
 } from "@oh-my-pi/pi-tui/terminal-capabilities";
+import { setTerminalHeadless } from "@oh-my-pi/pi-utils";
 
 const stdinIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 const stdoutIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
@@ -54,13 +55,19 @@ function setupProcessTerminal() {
 	return { terminal, writes, received };
 }
 
+// setupProcessTerminal() drives the real ProcessTerminal start()/probe path, so
+// these cases opt out of the test-default headless suppression.
+let previousHeadless = false;
+
 describe("terminal notifications", () => {
 	beforeEach(() => {
 		setOsc99Supported(false);
+		previousHeadless = setTerminalHeadless(false);
 	});
 
 	afterEach(() => {
 		vi.restoreAllMocks();
+		setTerminalHeadless(previousHeadless);
 		setOsc99Supported(false);
 		mutableTerminal.notifyProtocol = originalNotifyProtocol;
 		restoreEnv("PI_TUI_OSC99_PROBE", originalOsc99Probe);

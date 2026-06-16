@@ -7,6 +7,7 @@ import {
 	getTerminalInfo,
 	setCellDimensions,
 } from "@oh-my-pi/pi-tui/terminal-capabilities";
+import { setTerminalHeadless } from "@oh-my-pi/pi-utils";
 
 const stdinIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 const stdoutIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
@@ -16,6 +17,10 @@ const stdoutRowsDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "ro
 const stdinSetRawModeDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "setRawMode");
 const originalWslDistroName = Bun.env.WSL_DISTRO_NAME;
 const originalWslInterop = Bun.env.WSL_INTEROP;
+
+// These suites drive the real ProcessTerminal start()/probe pipeline, so they
+// opt out of the test-default headless suppression and restore it per case.
+let previousHeadless = false;
 
 function restoreProperty(target: object, key: string, descriptor: PropertyDescriptor | undefined): void {
 	if (descriptor) {
@@ -38,11 +43,13 @@ describe("ProcessTerminal OSC 11 appearance detection", () => {
 		Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
 		Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
 		Object.defineProperty(process.stdin, "setRawMode", { value: vi.fn(), configurable: true });
+		previousHeadless = setTerminalHeadless(false);
 	});
 
 	afterEach(() => {
 		vi.useRealTimers();
 		vi.restoreAllMocks();
+		setTerminalHeadless(previousHeadless);
 		restoreProperty(process.stdin, "isTTY", stdinIsTtyDescriptor);
 		restoreProperty(process.stdout, "isTTY", stdoutIsTtyDescriptor);
 		restoreProperty(process.stdin, "setRawMode", stdinSetRawModeDescriptor);
@@ -449,11 +456,13 @@ describe("ProcessTerminal DECRQM + in-band resize (DEC 2026/2048)", () => {
 		Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
 		Object.defineProperty(process.stdin, "setRawMode", { value: vi.fn(), configurable: true });
 		originalCellDims = { ...getCellDimensions() };
+		previousHeadless = setTerminalHeadless(false);
 	});
 
 	afterEach(() => {
 		vi.useRealTimers();
 		vi.restoreAllMocks();
+		setTerminalHeadless(previousHeadless);
 		restoreProperty(process.stdin, "isTTY", stdinIsTtyDescriptor);
 		restoreProperty(process.stdout, "isTTY", stdoutIsTtyDescriptor);
 		restoreProperty(process.stdin, "setRawMode", stdinSetRawModeDescriptor);

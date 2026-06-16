@@ -1,5 +1,5 @@
 import { encodeSixel } from "@oh-my-pi/pi-natives";
-import { $env, isBunTestRuntime } from "@oh-my-pi/pi-utils";
+import { $env, isBunTestRuntime, isTerminalHeadless } from "@oh-my-pi/pi-utils";
 import {
 	detectKittyUnicodePlaceholdersSupport,
 	getKittyGraphics,
@@ -97,7 +97,7 @@ export class TerminalInfo {
 	}
 
 	sendNotification(message: string | TerminalNotification): void {
-		if (isNotificationSuppressed()) return;
+		if (isNotificationSuppressed() || isTerminalHeadless()) return;
 		process.stdout.write(this.formatNotification(message));
 	}
 }

@@ -1,6 +1,6 @@
 import { dlopen, FFIType, ptr } from "bun:ffi";
 import * as fs from "node:fs";
-import { $env, isBunTestRuntime, logger } from "@oh-my-pi/pi-utils";
+import { $env, isBunTestRuntime, isTerminalHeadless, logger } from "@oh-my-pi/pi-utils";
 import { setKittyProtocolActive } from "./keys";
 import { StdinBuffer } from "./stdin-buffer";
 import { NotifyProtocol, setCellDimensions, setOsc99Supported, TERMINAL } from "./terminal-capabilities";
@@ -249,7 +249,7 @@ export function emergencyTerminalRestore(): void {
 				altScreenActive = false;
 			}
 			terminal.showCursor();
-		} else if (terminalEverStarted) {
+		} else if (terminalEverStarted && !isTerminalHeadless()) {
 			// Blind restore only if we know a terminal was started but lost track of it
 			// This avoids writing escape sequences for non-TUI commands (grep, commit, etc.)
 			process.stdout.write(
@@ -404,6 +404,10 @@ export class ProcessTerminal implements Terminal {
 	#stdinBuffer?: StdinBuffer;
 	#stdinDataHandler?: (data: string) => void;
 	#dead = false;
+	// Captured at construction and re-read at start(): when true, every real
+	// terminal side effect (writes, probes, raw mode, SIGWINCH, timers) is
+	// suppressed. Defaults on under `bun test` — see isTerminalHeadless().
+	#headless = isTerminalHeadless();
 	#writeLogPath = $env.PI_TUI_WRITE_LOG || "";
 	#stdoutErrorCleanup?: () => void;
 	#stdoutErrorHandler = (err: Error) => {
@@ -458,6 +462,13 @@ export class ProcessTerminal implements Terminal {
 	start(onInput: (data: string) => void, onResize: () => void): void {
 		this.#inputHandler = onInput;
 		this.#resizeHandler = onResize;
+
+		// Headless (tests): suppress every real-terminal side effect. Skip raw
+		// mode, stdin listeners, capability probes, SIGWINCH, and emergency-restore
+		// ownership; #safeWrite is also a no-op, so frame paints and teardown
+		// escapes never reach the developer's terminal during `bun test`.
+		this.#headless = isTerminalHeadless();
+		if (this.#headless) return;
 
 		// Register for emergency cleanup
 		activeTerminal = this;
@@ -1134,6 +1145,7 @@ export class ProcessTerminal implements Terminal {
 	}
 
 	async drainInput(maxMs = 1000, idleMs = 50): Promise<void> {
+		if (this.#headless) return;
 		if (this.#kittyProtocolActive) {
 			// Disable Kitty keyboard protocol first so any late key releases
 			// do not generate new Kitty escape sequences.
@@ -1176,6 +1188,7 @@ export class ProcessTerminal implements Terminal {
 	}
 
 	stop(): void {
+		if (this.#headless) return;
 		// Unregister from emergency cleanup
 		if (activeTerminal === this) {
 			activeTerminal = null;
@@ -1303,6 +1316,7 @@ export class ProcessTerminal implements Terminal {
 	}
 
 	#safeWrite(data: string): void {
+		if (this.#headless) return;
 		if (this.#dead) return;
 		// Skip control sequences when stdout isn't a TTY (piped output, tests, log
 		// files). They serve no purpose there and would surface as visible noise.
@@ -1385,6 +1399,7 @@ export class ProcessTerminal implements Terminal {
 	}
 
 	setProgress(active: boolean): void {
+		if (this.#headless) return;
 		if (active) {
 			this.#safeWrite(TERMINAL_PROGRESS_ACTIVE_SEQUENCE);
 			if (!this.#progressTimer) {
