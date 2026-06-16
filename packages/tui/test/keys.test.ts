@@ -68,6 +68,15 @@ describe("matchesKey", () => {
 		setKittyProtocolActive(false);
 	});
 
+	it("defers CSI-u/modifyOtherKeys named keys to native normalization", () => {
+		// Regression: the keypad text fast path must not short-circuit canonical
+		// named keys that decode to a printable codepoint (space, shifted letters).
+		setKittyProtocolActive(true);
+		expect(matchesKey("\x1b[32u", "space")).toBe(true);
+		expect(matchesKey("\x1b[97:65;2u", "shift+a")).toBe(true);
+		setKittyProtocolActive(false);
+	});
+
 	it("matches keypad operators as their printable symbols", () => {
 		setKittyProtocolActive(true);
 		expect(matchesKey("\x1b[57410u", "/")).toBe(true);
@@ -136,6 +145,16 @@ describe("parseKey", () => {
 		setKittyProtocolActive(false);
 	});
 
+	it("normalizes CSI-u/modifyOtherKeys named keys instead of returning raw printables", () => {
+		// Regression: space/backspace encoded via CSI-u or modifyOtherKeys must
+		// resolve to their canonical identifiers, not literal " "/DEL bytes.
+		setKittyProtocolActive(true);
+		expect(parseKey("\x1b[32u")).toBe("space");
+		expect(parseKey("\x1b[27;1;32~")).toBe("space");
+		expect(parseKey("\x1b[27;1;127~")).toBe("backspace");
+		setKittyProtocolActive(false);
+	});
+
 	it("parses keypad operators as printable keys", () => {
 		setKittyProtocolActive(true);
 		expect(parseKey("\x1b[57410u")).toBe("/");
@@ -172,6 +191,10 @@ describe("extractPrintableText", () => {
 
 	it("does not treat modified NumLock keypad navigation keys as text", () => {
 		expect(extractPrintableText("\x1b[57400;133u")).toBeUndefined();
+	});
+
+	it("does not extract DEL from modifyOtherKeys sequences as text", () => {
+		expect(extractPrintableText("\x1b[27;1;127~")).toBeUndefined();
 	});
 
 	it("ignores unsupported modifiers on Kitty CSI-u text", () => {
