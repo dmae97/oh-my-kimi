@@ -4605,7 +4605,9 @@ export class AgentSession {
 	getImageAttachments(): { label: string; uri: string; image: ImageContent }[] {
 		for (let i = this.agent.state.messages.length - 1; i >= 0; i--) {
 			const message = this.agent.state.messages[i];
-			if (!message || !("content" in message) || !Array.isArray(message.content)) continue;
+			if (!message || (message.role !== "user" && message.role !== "developer") || !Array.isArray(message.content)) {
+				continue;
+			}
 			const images = message.content.filter((part): part is ImageContent => part.type === "image");
 			if (images.length === 0) continue;
 			return images.map((image, index) => ({
