@@ -125,18 +125,21 @@ describe("Agent hub Enter activation", () => {
 
 		const editor = {};
 		let capturedHub: AgentHubOverlayComponent | undefined;
-		let hideCalls = 0;
+		let editorRestoredCount = 0;
 		const focusedIds: string[] = [];
 		const focusResolved = Promise.withResolvers<void>();
 		const editorFocused = Promise.withResolvers<void>();
 		const focusTargets: unknown[] = [];
+		const editorContainer = {
+			clear: () => {},
+			addChild: (child: unknown) => {
+				if (child === editor) editorRestoredCount++;
+				else capturedHub = child as AgentHubOverlayComponent;
+			},
+		};
 		const ctx = {
 			keybindings: { getKeys: () => [] },
 			ui: {
-				showOverlay: (component: AgentHubOverlayComponent) => {
-					capturedHub = component;
-					return { hide: () => hideCalls++ };
-				},
 				setFocus: (target: unknown) => {
 					focusTargets.push(target);
 					if (target === editor) editorFocused.resolve();
@@ -144,6 +147,7 @@ describe("Agent hub Enter activation", () => {
 				requestRender: () => {},
 			},
 			editor,
+			editorContainer,
 			collabGuest: { agentRegistry: agents, hubRemote: undefined },
 			focusAgentSession: async (id: string) => {
 				focusedIds.push(id);
@@ -165,7 +169,7 @@ describe("Agent hub Enter activation", () => {
 		await editorFocused.promise;
 
 		expect(focusedIds).toEqual([AGENT_ID]);
-		expect(hideCalls).toBe(1);
+		expect(editorRestoredCount).toBe(1);
 		expect(focusTargets.at(-1)).toBe(editor);
 		capturedHub!.dispose();
 	});
@@ -182,17 +186,20 @@ describe("Agent hub double-← gating", () => {
 
 	function setup(agents: AgentRegistry) {
 		let shown: AgentHubOverlayComponent | undefined;
+		const editor = {};
 		const ctx = {
 			keybindings: { getKeys: () => [] },
 			ui: {
-				showOverlay: (component: AgentHubOverlayComponent) => {
-					shown = component;
-					return { hide: () => {} };
-				},
 				setFocus: () => {},
 				requestRender: () => {},
 			},
-			editor: {},
+			editor,
+			editorContainer: {
+				clear: () => {},
+				addChild: (child: unknown) => {
+					if (child !== editor) shown = child as AgentHubOverlayComponent;
+				},
+			},
 			collabGuest: { agentRegistry: agents, hubRemote: undefined },
 			focusAgentSession: async () => {},
 			session: { getToolByName: () => undefined, extensionRunner: undefined },
