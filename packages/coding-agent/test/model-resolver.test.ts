@@ -96,6 +96,37 @@ const mockOpenRouterModels: Model<Api>[] = [
 	}),
 ];
 
+const mockMaxSuffixModels: Model<Api>[] = [
+	buildModel({
+		id: "coding-router",
+		name: "NanoGPT Coding Router",
+		api: "openai-completions",
+		provider: "nanogpt",
+		baseUrl: "https://nano-gpt.com/api/v1",
+		reasoning: true,
+		thinking: {
+			mode: "effort",
+			efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+		},
+		input: ["text"],
+		cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 128000,
+		maxTokens: 8192,
+	}),
+	buildModel({
+		id: "coding-router:max",
+		name: "NanoGPT Coding Router Max",
+		api: "openai-completions",
+		provider: "nanogpt",
+		baseUrl: "https://nano-gpt.com/api/v1",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 128000,
+		maxTokens: 8192,
+	}),
+];
+
 const mockProviderOverlapModels: Model<"anthropic-messages">[] = [
 	buildModel({
 		id: "kimi-k2.5",
@@ -287,6 +318,21 @@ describe("parseModelPattern", () => {
 				expect(result.thinkingLevel).toBe(level);
 				expect(result.warning).toBeUndefined();
 			}
+		});
+		test("max aliases the highest thinking level after the literal pattern misses", () => {
+			const result = parseModelPattern("gpt-5.3-codex:max", allModels);
+			expect(result.model?.id).toBe("gpt-5.3-codex");
+			expect(result.thinkingLevel).toBe(Effort.XHigh);
+			expect(result.explicitThinkingLevel).toBe(true);
+			expect(result.warning).toBeUndefined();
+		});
+
+		test("literal model ids ending in max win over the thinking alias", () => {
+			const result = parseModelPattern("nanogpt/coding-router:max", mockMaxSuffixModels);
+			expect(result.model?.id).toBe("coding-router:max");
+			expect(result.thinkingLevel).toBeUndefined();
+			expect(result.explicitThinkingLevel).toBe(false);
+			expect(result.warning).toBeUndefined();
 		});
 	});
 
@@ -856,6 +902,19 @@ describe("resolveModelScope", () => {
 			"github-copilot/anthropic/claude-sonnet-4.5",
 		]);
 	});
+	test("preserves literal :max in scoped-model globs", async () => {
+		const registry = {
+			getAvailable: () => mockMaxSuffixModels,
+			getCanonicalVariants: (_id: string, _opts?: unknown): CanonicalModelVariant[] => [],
+		};
+
+		const scoped = await resolveModelScope(["nanogpt/*:max"], registry);
+
+		expect(scoped).toHaveLength(1);
+		expect(scoped[0].model.id).toBe("coding-router:max");
+		expect(scoped[0].thinkingLevel).toBeUndefined();
+		expect(scoped[0].explicitThinkingLevel).toBe(false);
+	});
 });
 
 describe("parseModelString", () => {
@@ -1084,6 +1143,11 @@ describe("filterAvailableModelsByEnabledPatterns", () => {
 		const result = filterAvailableModelsByEnabledPatterns(models, ["anthropic/*"], registry);
 		expect(result).toHaveLength(1);
 		expect(result[0].provider).toBe("anthropic");
+	});
+	test("preserves literal :max in enabledModels globs", () => {
+		const result = filterAvailableModelsByEnabledPatterns(mockMaxSuffixModels, ["nanogpt/*:max"], registry);
+		expect(result).toHaveLength(1);
+		expect(result[0].id).toBe("coding-router:max");
 	});
 
 	test("evaluates glob patterns against bare model id", () => {

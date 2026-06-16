@@ -53,7 +53,6 @@ const THINKING_LEVEL_BY_SELECTOR: Readonly<Record<string, ThinkingLevel>> = {
 	[ThinkingLevel.Medium]: ThinkingLevel.Medium,
 	[ThinkingLevel.High]: ThinkingLevel.High,
 	[ThinkingLevel.XHigh]: ThinkingLevel.XHigh,
-	max: ThinkingLevel.XHigh,
 };
 
 /**
@@ -141,6 +140,7 @@ const AUTO_THINKING_METADATA: ConfiguredThinkingLevelMetadata = {
  */
 export function parseConfiguredThinkingLevel(value: string | null | undefined): ConfiguredThinkingLevel | undefined {
 	if (value === AUTO_THINKING) return AUTO_THINKING;
+	if (value === "max") return ThinkingLevel.XHigh;
 	return parseThinkingLevel(value);
 }
 

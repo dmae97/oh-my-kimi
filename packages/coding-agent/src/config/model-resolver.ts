@@ -53,6 +53,16 @@ export interface ScopedModel {
 	explicitThinkingLevel: boolean;
 }
 
+interface ThinkingSuffixOptions {
+	allowMaxAlias?: boolean;
+}
+
+function parseThinkingSuffix(value: string, options?: ThinkingSuffixOptions): ThinkingLevel | undefined {
+	const level = parseThinkingLevel(value);
+	if (level !== undefined) return level;
+	return options?.allowMaxAlias === true && value === "max" ? ThinkingLevel.XHigh : undefined;
+}
+
 /**
  * Split a trailing `:<level>` thinking selector off a model pattern.
  *
@@ -62,10 +72,14 @@ export interface ScopedModel {
  * role-alias callers pass `PREFIX_MODEL_ROLE.length` so the base is at least
  * as long as the `pi/` prefix.
  */
-function splitThinkingSuffix(pattern: string, minColonIndex = -1): { base: string; level?: ThinkingLevel } {
+function splitThinkingSuffix(
+	pattern: string,
+	minColonIndex = -1,
+	options?: ThinkingSuffixOptions,
+): { base: string; level?: ThinkingLevel } {
 	const colonIdx = pattern.lastIndexOf(":");
 	if (colonIdx <= minColonIndex) return { base: pattern };
-	const level = parseThinkingLevel(pattern.slice(colonIdx + 1));
+	const level = parseThinkingSuffix(pattern.slice(colonIdx + 1), options);
 	return level ? { base: pattern.slice(0, colonIdx), level } : { base: pattern };
 }
 
@@ -574,8 +588,10 @@ function parseModelPatternWithContext(
 		return { model: exactMatch, thinkingLevel: undefined, warning: undefined, explicitThinkingLevel: false };
 	}
 
-	// No match - try stripping a valid thinking suffix and recursing
-	const { base, level } = splitThinkingSuffix(pattern);
+	// No match - try stripping a valid thinking suffix and recursing.
+	// `max` is accepted only after the full pattern failed, so literal model IDs
+	// ending in `:max` keep winning over the alias.
+	const { base, level } = splitThinkingSuffix(pattern, -1, { allowMaxAlias: true });
 	if (level) {
 		const result = parseModelPatternWithContext(base, availableModels, context, options);
 		if (result.model) {
