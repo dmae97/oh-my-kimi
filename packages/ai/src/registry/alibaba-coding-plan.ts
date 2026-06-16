@@ -15,12 +15,7 @@ export async function loginAlibabaCodingPlan(options: OAuthController): Promise<
 
 	// Ask which endpoint to use
 	const endpointChoice = await options.onPrompt({
-		message: `Select Alibaba Coding Plan endpoint:
-1. International (coding-intl.dashscope.aliyuncs.com) [default]
-2. China mainland (coding.dashscope.aliyuncs.com)
-3. Custom URL
-
-Enter 1, 2, or 3`,
+		message: "Select Alibaba Coding Plan endpoint: 1=International (default), 2=China, 3=Custom — enter 1, 2, or 3",
 		placeholder: "1",
 	});
 
@@ -86,7 +81,7 @@ Enter 1, 2, or 3`,
 	return {
 		access: trimmed,
 		refresh: trimmed,
-		expires: 0,
+		expires: Number.MAX_SAFE_INTEGER,
 		enterpriseUrl: baseUrl,
 	};
 }

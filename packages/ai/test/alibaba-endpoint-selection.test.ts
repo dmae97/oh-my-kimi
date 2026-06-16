@@ -6,7 +6,7 @@ import { getOAuthApiKey } from "../src/registry/oauth/index";
 import type { Mock } from "bun:test";
 
 describe("alibaba-coding-plan endpoint selection", () => {
-	let validateSpy: Mock<Parameters<typeof apiKeyValidation.validateOpenAICompatibleApiKey>, ReturnType<typeof apiKeyValidation.validateOpenAICompatibleApiKey>>;
+	let validateSpy: Mock<typeof apiKeyValidation.validateOpenAICompatibleApiKey>;
 
 	beforeEach(() => {
 		validateSpy = spyOn(apiKeyValidation, "validateOpenAICompatibleApiKey").mockResolvedValue(undefined);
