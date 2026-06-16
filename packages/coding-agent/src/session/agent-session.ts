@@ -146,7 +146,6 @@ import {
 	resolveModelOverride,
 	resolveModelRoleValue,
 	resolveRoleSelection,
-	splitUpstreamRouting,
 } from "../config/model-resolver";
 import { MODEL_ROLE_IDS } from "../config/model-roles";
 import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-templates";
@@ -618,7 +617,6 @@ interface RetryFallbackSelector {
 	raw: string;
 	provider: string;
 	id: string;
-	upstream: string | undefined;
 	thinkingLevel: ThinkingLevel | undefined;
 }
 
@@ -633,14 +631,12 @@ interface ActiveRetryFallbackState {
 function parseRetryFallbackSelector(selector: string): RetryFallbackSelector | undefined {
 	const trimmed = selector.trim();
 	if (!trimmed) return undefined;
-	const routing = splitUpstreamRouting(trimmed);
-	const parsed = parseModelString(routing?.base ?? trimmed);
+	const parsed = parseModelString(trimmed);
 	if (!parsed) return undefined;
 	return {
 		raw: trimmed,
 		provider: parsed.provider,
 		id: parsed.id,
-		upstream: routing?.upstream,
 		thinkingLevel: parsed.thinkingLevel,
 	};
 }
@@ -9388,7 +9384,8 @@ export class AgentSession {
 
 		for (const selector of this.#findRetryFallbackCandidates(role, currentSelector)) {
 			if (this.#isRetryFallbackSelectorSuppressed(selector)) continue;
-			const candidate = this.#modelRegistry.find(selector.provider, selector.id);
+			const resolved = resolveModelOverride([selector.raw], this.#modelRegistry, this.settings);
+			const candidate = resolved.model ?? this.#modelRegistry.find(selector.provider, selector.id);
 			if (!candidate) continue;
 			const apiKey = await this.#modelRegistry.getApiKey(candidate, this.sessionId);
 			if (!apiKey) continue;
