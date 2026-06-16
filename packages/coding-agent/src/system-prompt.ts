@@ -615,7 +615,13 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		resolvedCustomPrompt,
 		resolvedAppendPrompt,
 	]);
-	const promptSources = [effectiveSystemPromptCustomization, resolvedCustomPrompt, resolvedAppendPrompt];
+	const contextPromptSources = contextFiles.map(file => file.content);
+	const promptSources = [
+		effectiveSystemPromptCustomization,
+		resolvedCustomPrompt,
+		resolvedAppendPrompt,
+		...contextPromptSources,
+	];
 	const injectedAlwaysApplyRules = dedupeAlwaysApplyRules(alwaysApplyRules, promptSources);
 
 	const environment = await logger.time("getEnvironmentInfo", getEnvironmentInfo);

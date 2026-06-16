@@ -14,6 +14,10 @@
 
 - Fixed `/exit` and `/quit` waiting one shutdown timeout per hanging extension by running `session_shutdown` handlers within a shared shutdown window ([#2736](https://github.com/can1357/oh-my-pi/issues/2736)).
 
+### Fixed
+
+- Fixed GitHub Copilot `.github/instructions/*.instructions.md` discovery by loading those files as rules that honor `applyTo` scoping, including always-apply `**` files and `rule://<name>` access for glob-scoped entries ([#2731](https://github.com/can1357/oh-my-pi/issues/2731)).
+
 ## [16.0.1] - 2026-06-15
 
 ### Breaking Changes
