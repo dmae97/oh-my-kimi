@@ -9185,10 +9185,12 @@ export class AgentSession {
 	 * Retry an empty, reason-less provider abort: a turn that ended `aborted`
 	 * with no content and the generic sentinel (bare `abort()`), but only while
 	 * the session is neither aborting nor tearing down. A user/lifecycle abort
-	 * (`#abortInProgress`) or a dispose-driven abort (`#isDisposed`) is deliberate
-	 * and MUST settle the turn instead: routing it through retry would orphan
-	 * `#retryPromise` on a continuation that the disposed/aborting guard skips,
-	 * hanging the in-flight `prompt()` in `#waitForPostPromptRecovery`.
+	 * (`#abortInProgress`), a dispose-driven abort (`#isDisposed`), or a
+	 * session-induced streaming-edit guard abort (`#streamingEditAbortTriggered` —
+	 * auto-generated-file guard or failed-patch preview) is deliberate and MUST
+	 * settle the turn instead: routing it through retry would orphan
+	 * `#retryPromise` on a continuation the guard skips (hanging the in-flight
+	 * `prompt()`) or silently undo the guard's intended abort.
 	 */
 	#isRetryableReasonlessAbort(message: AssistantMessage): boolean {
 		return (
@@ -9196,7 +9198,8 @@ export class AgentSession {
 			message.content.length === 0 &&
 			message.errorMessage === GENERIC_ABORT_SENTINEL &&
 			!this.#abortInProgress &&
-			!this.#isDisposed
+			!this.#isDisposed &&
+			!this.#streamingEditAbortTriggered
 		);
 	}
 
