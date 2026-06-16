@@ -170,5 +170,4 @@ describe("AgentSession steer idle drain", () => {
 		await session.waitForIdle();
 		await running.catch(() => {});
 	});
-
 });

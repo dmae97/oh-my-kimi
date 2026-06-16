@@ -466,28 +466,10 @@ function findExactCanonicalModelMatch(
 	});
 }
 
-function resolveCodexPreferredCanonicalMatch(
-	model: Model<Api>,
-	availableModels: Model<Api>[],
-	modelRegistry: CanonicalModelRegistry | undefined,
-): Model<Api> | undefined {
-	if (model.provider !== "openai") return undefined;
-	const canonicalId = modelRegistry?.getCanonicalId?.(model);
-	if (!canonicalId || canonicalId !== model.id) return undefined;
-	const preferred = modelRegistry?.resolveCanonicalModel?.(canonicalId, {
-		availableOnly: false,
-		candidates: availableModels,
-	});
-	if (!preferred || modelsAreEqual(preferred, model)) return undefined;
-	if (preferred.provider !== "openai-codex" || preferred.id !== model.id) return undefined;
-	return preferred;
-}
-
 /**
  * The single model-matching engine. Tries, in order:
  * 1. exact `provider/id` reference (variant-alias and OpenRouter routed/date
- *    fallbacks included; stale `openai/<canonical>` defaults may still coalesce
- *    to Codex when the canonical resolver prefers the OAuth transport),
+ *    fallbacks included),
  * 2. exact canonical id (coalesces provider variants),
  * 3. exact bare id (preference-ranked),
  * 4. retired effort-tier variant alias (collapsed catalog entries),
@@ -503,11 +485,8 @@ function matchModel(
 ): Model<Api> | undefined {
 	const exactRefMatch = findExactModelReferenceMatch(modelPattern, availableModels);
 	if (exactRefMatch) {
-		return (
-			resolveCodexPreferredCanonicalMatch(exactRefMatch, availableModels, options?.modelRegistry) ?? exactRefMatch
-		);
+		return exactRefMatch;
 	}
-
 	// Exact canonical ids coalesce provider variants before bare-id matching.
 	const exactCanonicalMatch = findExactCanonicalModelMatch(modelPattern, availableModels, options?.modelRegistry);
 	if (exactCanonicalMatch) {

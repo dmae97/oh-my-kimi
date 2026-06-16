@@ -329,8 +329,19 @@ describe("pickDefaultAvailableModel", () => {
 });
 
 describe("resolveModelRoleValue", () => {
-	test("reroutes stale OpenAI GPT defaults through Codex canonical selection", () => {
+	test("does not reroute explicit OpenAI GPT defaults through Codex canonical selection", () => {
 		const result = resolveModelRoleValue("openai/gpt-5.5:xhigh", openaiGpt55Models, {
+			modelRegistry: codexCanonicalRegistry,
+		});
+
+		expect(result.model?.provider).toBe("openai");
+		expect(result.model?.id).toBe("gpt-5.5");
+		expect(result.thinkingLevel).toBe(Effort.XHigh);
+		expect(result.explicitThinkingLevel).toBe(true);
+	});
+
+	test("reroutes bare GPT default through Codex canonical selection", () => {
+		const result = resolveModelRoleValue("gpt-5.5:xhigh", openaiGpt55Models, {
 			modelRegistry: codexCanonicalRegistry,
 		});
 
@@ -960,6 +971,16 @@ describe("resolveModelScope", () => {
 			"github-copilot/anthropic/claude-sonnet-4.5",
 		]);
 	});
+
+	test("does not coalesce explicit provider/id patterns to Codex (regression for enabledModels)", async () => {
+		const scoped = await resolveModelScope(["openai/gpt-5.5"], {
+			getAvailable: () => openaiGpt55Models,
+			getCanonicalVariants: () => [],
+		});
+		expect(scoped).toHaveLength(1);
+		expect(scoped[0].model.provider).toBe("openai");
+		expect(scoped[0].model.id).toBe("gpt-5.5");
+	});
 });
 
 describe("parseModelString", () => {
@@ -1243,6 +1264,13 @@ describe("filterAvailableModelsByEnabledPatterns", () => {
 			registry,
 		);
 		expect(result).toHaveLength(2);
+	});
+
+	test("does not coalesce explicit provider/id patterns to Codex (regression for enabledModels)", () => {
+		const result = filterAvailableModelsByEnabledPatterns(openaiGpt55Models, ["openai/gpt-5.5"], registry);
+		expect(result).toHaveLength(1);
+		expect(result[0].provider).toBe("openai");
+		expect(result[0].id).toBe("gpt-5.5");
 	});
 });
 
