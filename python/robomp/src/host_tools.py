@@ -143,6 +143,10 @@ def _issue_needs_info(bindings: ToolBindings) -> bool:
     return row is not None and row.state == "needs_info"
 
 
+def _optional_label_error(exc: Exception) -> str:
+    return f"{type(exc).__name__}: {exc}"
+
+
 def _remove_needs_info_label(bindings: ToolBindings) -> bool:
     try:
         _run_coro(
@@ -153,6 +157,12 @@ def _remove_needs_info_label(bindings: ToolBindings) -> bool:
         if exc.status == 404:
             return True
         log.warning("needs-info label cleanup failed", extra={"issue": bindings.issue_key, "err": str(exc)})
+        return False
+    except Exception as exc:  # noqa: BLE001 - best-effort optional label cleanup
+        log.warning(
+            "needs-info label cleanup failed",
+            extra={"issue": bindings.issue_key, "err": _optional_label_error(exc)},
+        )
         return False
     return True
 
@@ -934,6 +944,10 @@ def _build_mark_unable(bindings: ToolBindings) -> HostTool[Any, Any]:
             # info-request comment, so label setup must not block resumption.
             log.warning("needs-info label failed", extra={"issue": bindings.issue_key, "err": str(exc)})
             result["label_error"] = f"{exc.status} {exc.message}"
+        except Exception as exc:  # noqa: BLE001 - best-effort optional label setup
+            error = _optional_label_error(exc)
+            log.warning("needs-info label failed", extra={"issue": bindings.issue_key, "err": error})
+            result["label_error"] = error
         bindings.db.set_issue_state(bindings.issue_key, "needs_info")
         _audit(bindings, "mark_unable_to_reproduce", args, result=result)
         return f"posted needs-info comment id={comment.id}"
