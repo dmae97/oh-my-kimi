@@ -1171,6 +1171,11 @@ export class TUI extends Container {
 	}
 
 	setFocus(component: Component | null): void {
+		const topVisibleOverlay = this.#getTopmostVisibleOverlay();
+		if (topVisibleOverlay && component !== topVisibleOverlay.component) {
+			component = topVisibleOverlay.component;
+		}
+
 		const previousFocusedComponent = this.#focusedComponent;
 		// Clear focused flag on old component
 		if (isFocusable(previousFocusedComponent)) {

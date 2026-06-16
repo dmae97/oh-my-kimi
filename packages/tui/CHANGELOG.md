@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed fullscreen overlays losing keyboard focus to hidden prompt surfaces, which could make settings unresponsive while a background approval request was pending ([#2789](https://github.com/can1357/oh-my-pi/issues/2789)).
+
 ## [16.0.2] - 2026-06-16
 
 ### Fixed
