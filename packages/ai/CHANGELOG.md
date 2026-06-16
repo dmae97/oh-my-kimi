@@ -9,6 +9,7 @@
 ### Fixed
 
 - Fixed OpenAI Responses/Codex tool schema normalization stripping provider-rejected regex lookaround patterns from MCP tool parameter schemas. ([#2784](https://github.com/can1357/oh-my-pi/issues/2784))
+- Fixed OpenAI Responses parallel tool-call routing so late keyed argument deltas for a closed call are dropped instead of being appended to another open call.
 
 ## [16.0.2] - 2026-06-16
 

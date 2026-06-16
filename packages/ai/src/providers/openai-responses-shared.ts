@@ -525,6 +525,7 @@ export async function processResponsesStream<TApi extends Api>(
 		lastOpenItem = entry;
 	};
 	const lookupOpenItem = (event: { output_index?: number; item_id?: string }): StreamingItem | undefined => {
+		const hasKey = typeof event.output_index === "number" || event.item_id !== undefined;
 		if (typeof event.output_index === "number") {
 			const found = openItemsByOutputIndex.get(event.output_index);
 			if (found) return found;
@@ -533,8 +534,10 @@ export async function processResponsesStream<TApi extends Api>(
 			const found = openItemsByItemId.get(event.item_id);
 			if (found) return found;
 		}
-		// Fallback for tests / mock providers that omit identifiers on stream events.
-		return lastOpenItem ?? undefined;
+		// Keyed events whose item already closed are stale; drop them instead of
+		// routing to a sibling. Only fully identifierless mock/proxy events use the
+		// legacy singleton fallback.
+		return hasKey ? undefined : (lastOpenItem ?? undefined);
 	};
 	const hasOpenItemKey = (event: { output_index?: number; item_id?: string }): boolean =>
 		typeof event.output_index === "number" || event.item_id !== undefined;
