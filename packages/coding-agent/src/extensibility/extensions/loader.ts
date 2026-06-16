@@ -493,11 +493,12 @@ async function discoverExtensionsInDir(dir: string): Promise<string[]> {
 export async function discoverExtensionPaths(
 	configuredPaths: string[],
 	cwd: string,
-	disabledExtensionIds: string[] = [],
+	disabledExtensionIds?: string[],
 ): Promise<string[]> {
 	const allPaths: string[] = [];
 	const seen = new Set<string>();
-	const disabled = new Set(disabledExtensionIds);
+	const disabled = new Set(disabledExtensionIds ?? []);
+	const loadOptions = disabledExtensionIds ? { cwd, disabledExtensions: disabledExtensionIds } : { cwd };
 
 	const isDisabledName = (name: string): boolean => disabled.has(`extension-module:${name}`);
 
@@ -517,22 +518,22 @@ export async function discoverExtensionPaths(
 	};
 
 	// 1. Discover extension modules via capability API (native .omp/.pi only)
-	const discovered = await loadCapability<ExtensionModule>(extensionModuleCapability.id, {
-		cwd,
-		disabledExtensions: disabledExtensionIds,
-	});
+	const discovered = await loadCapability<ExtensionModule>(extensionModuleCapability.id, loadOptions);
 	for (const ext of discovered.items) {
 		if (ext._source.provider !== "native") continue;
 		addPath(ext.path);
 	}
 
 	// 2. Discover JS/TS hook factories from hookCapability and bind them through
-	// the extension runner, which owns the current runtime event bus.
-	const hooks = await loadCapability<Hook>(hookCapability.id, {
-		cwd,
-		disabledExtensions: disabledExtensionIds,
-	});
-	addPaths(hooks.items.map(hook => hook.path).filter(hookPath => isExtensionFile(path.basename(hookPath))));
+	// the extension runner, which owns the current runtime event bus. Hook
+	// capability loading already applies hook-specific disabled ids; do not also
+	// filter them through extension-module names.
+	const hooks = await loadCapability<Hook>(hookCapability.id, loadOptions);
+	for (const hookPath of hooks.items
+		.map(hook => hook.path)
+		.filter(hookPath => isExtensionFile(path.basename(hookPath)))) {
+		addPath(hookPath);
+	}
 
 	// 3. Discover extension entry points from installed plugins
 	addPaths(await getAllPluginExtensionPaths(cwd));
@@ -577,7 +578,7 @@ export async function discoverAndLoadExtensions(
 	configuredPaths: string[],
 	cwd: string,
 	eventBus?: EventBus,
-	disabledExtensionIds: string[] = [],
+	disabledExtensionIds?: string[],
 ): Promise<LoadExtensionsResult> {
 	const paths = await discoverExtensionPaths(configuredPaths, cwd, disabledExtensionIds);
 	return loadExtensions(paths, cwd, eventBus);
