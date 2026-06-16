@@ -286,34 +286,42 @@ describe("AgentSession derived queued custom display", () => {
 
 		expect(session.getQueuedMessages().steering).toEqual([]);
 		expect(session.queuedMessageCount).toBe(0);
-		// A hidden agent-authored steer must not leak into the editor, and clearQueue
-		// must drop it so abort()'s stranded-message drain can't auto-resume the run
-		// the user just interrupted (the drain gate is agent.hasQueuedMessages()).
+		// Plain Alt+Up dequeue restores nothing AND preserves the hidden steer for the
+		// continuing stream — it isn't the user's draft.
 		expect(session.clearQueue().steering).toEqual([]);
+		expect(session.agent.hasQueuedMessages()).toBe(true);
+		// Esc+abort drops it so abort()'s stranded-message drain can't auto-resume the
+		// run the user just interrupted (the drain gate is agent.hasQueuedMessages()).
+		expect(session.clearQueue({ forInterrupt: true }).steering).toEqual([]);
 		expect(session.agent.hasQueuedMessages()).toBe(false);
 	});
 
-	it("never restores a visible agent-authored custom steer, and drops it on clearQueue", async () => {
+	it("never restores a visible agent-authored custom steer; preserves on dequeue, drops on interrupt", async () => {
 		fixture = await createRealSession();
 		const { session } = fixture;
-		// An IRC aside / extension notice: visible, but agent-authored — editing it
+		// An IRC aside / extension/hook notice: visible, but agent-authored — editing it
 		// makes no sense, so it must not ride the Esc/Alt+Up editor-restore path.
-		session.agent.steer({
-			role: "custom",
-			customType: "irc",
-			content: "peer pinged you",
-			display: true,
-			attribution: "agent",
-			details: {},
-			timestamp: Date.now(),
-		});
+		const steer = () =>
+			session.agent.steer({
+				role: "custom",
+				customType: "irc",
+				content: "peer pinged you",
+				display: true,
+				attribution: "agent",
+				details: {},
+				timestamp: Date.now(),
+			});
+		steer();
 
 		expect(session.getQueuedMessages().steering).toEqual([]);
 		// popLast leaves the agent steer untouched (not user-restorable)...
 		expect(session.popLastQueuedMessage()).toBeUndefined();
 		expect(session.agent.peekSteeringQueue()).toHaveLength(1);
-		// ...and clearQueue restores nothing while dropping it (no auto-resume leftover).
+		// ...plain dequeue restores nothing but PRESERVES the extension steer (not lost)...
 		expect(session.clearQueue().steering).toEqual([]);
+		expect(session.agent.peekSteeringQueue()).toHaveLength(1);
+		// ...and only Esc+abort drops it (no auto-resume leftover).
+		expect(session.clearQueue({ forInterrupt: true }).steering).toEqual([]);
 		expect(session.agent.hasQueuedMessages()).toBe(false);
 	});
 

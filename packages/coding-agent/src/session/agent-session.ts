@@ -5885,21 +5885,24 @@ export class AgentSession {
 		});
 	}
 
-	/** Clear queued messages and return them (text plus any attached images). */
-	clearQueue(): { steering: RestoredQueuedMessage[]; followUp: RestoredQueuedMessage[] } {
+	/** Clear queued messages and return the user-restorable ones (text plus any attached images).
+	 *  Only user-authored messages (plain user turns, `attribution:"user"` custom like `/skill`) are
+	 *  returned for editor restore. Other queued messages stay in the agent-core queues so a continuing
+	 *  stream still delivers them — EXCEPT on `forInterrupt` (Esc+abort), where only advisor cards are
+	 *  kept (abort()'s #extractQueuedAdvisorCards preserves them as visible advice) and every other
+	 *  non-user steer (hidden goal/plan/budget, IRC/extension asides) is dropped, so abort()'s
+	 *  #drainStrandedQueuedMessages can't auto-resume the run the user just interrupted (the drain only
+	 *  fires while agent.hasQueuedMessages()). Plain Alt+Up dequeue preserves those non-user steers. */
+	clearQueue(options?: { forInterrupt?: boolean }): {
+		steering: RestoredQueuedMessage[];
+		followUp: RestoredQueuedMessage[];
+	} {
 		const steeringAll = this.agent.peekSteeringQueue();
 		const followUpAll = this.agent.peekFollowUpQueue();
 		const steering = steeringAll.filter(isUserQueuedMessage).map(toRestoredQueuedMessage);
 		const followUp = followUpAll.filter(isUserQueuedMessage).map(toRestoredQueuedMessage);
-		// User-authored messages go back to the editor. Advisor concern/blocker cards
-		// are kept queued: a resumed stream still delivers them, and on Esc abort()'s
-		// #extractQueuedAdvisorCards extracts + preserves them as visible advice
-		// (with auto-resume suppressed). Every other non-user queued message — hidden
-		// goal/plan/budget steers, IRC/extension asides — is dropped, matching the
-		// original full clear: keeping them would both leak into the editor and let
-		// abort()'s #drainStrandedQueuedMessages silently auto-resume the run the user
-		// just interrupted (the drain only fires while agent.hasQueuedMessages()).
-		this.agent.replaceQueues(steeringAll.filter(isAdvisorCard), followUpAll.filter(isAdvisorCard));
+		const keep: (m: AgentMessage) => boolean = options?.forInterrupt ? isAdvisorCard : m => !isUserQueuedMessage(m);
+		this.agent.replaceQueues(steeringAll.filter(keep), followUpAll.filter(keep));
 		return { steering, followUp };
 	}
 

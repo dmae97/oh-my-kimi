@@ -998,7 +998,9 @@ export class InputController {
 
 	restoreQueuedMessagesToEditor(options?: { abort?: boolean; currentText?: string }): number {
 		this.ctx.locallySubmittedUserSignatures.clear();
-		const { steering, followUp } = this.ctx.session.clearQueue();
+		// On Esc (abort) drop non-user internal steers so the post-abort drain can't
+		// auto-resume; plain Alt+Up dequeue preserves them for the continuing stream.
+		const { steering, followUp } = this.ctx.session.clearQueue({ forInterrupt: options?.abort });
 		// Messages typed while compacting live in `compactionQueuedMessages`, not the
 		// agent queue `clearQueue()` drains — but the pending bar shows the same
 		// "Alt+Up to edit" hint for them (ui-helpers `updatePendingMessagesDisplay`).
