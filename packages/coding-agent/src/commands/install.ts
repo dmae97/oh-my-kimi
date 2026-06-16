@@ -28,13 +28,13 @@ import { initTheme } from "../modes/theme/theme";
  * Heuristic used to decide whether `omp install <target>` should `link` a
  * local directory or `install` a remote spec. Exported for tests.
  */
-export function looksLikeLocalPath(target: string): boolean {
+export function looksLikeLocalPath(target: string, cwd?: string): boolean {
 	if (target.startsWith(".") || target.startsWith("/") || target.startsWith("~")) return true;
 	// Windows drive prefix (e.g. `C:\foo`).
 	if (/^[a-zA-Z]:[\\/]/.test(target)) return true;
-	// Bare names that happen to exist as a local directory.
+	// Bare names that happen to exist as a local directory (relative to `cwd`).
 	try {
-		return existsSync(path.resolve(target));
+		return existsSync(cwd ? path.resolve(cwd, target) : path.resolve(target));
 	} catch {
 		return false;
 	}
