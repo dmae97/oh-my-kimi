@@ -126,7 +126,7 @@ import {
 	AdvisorRuntime,
 	type AdvisorSeverity,
 	formatAdvisorBatchContent,
-	isInterruptingSeverity,
+	resolveAdvisorDeliveryChannel,
 } from "../advisor";
 import { type AsyncJob, type AsyncJobDeliveryState, AsyncJobManager } from "../async";
 import { classifyDifficulty } from "../auto-thinking/classifier";
@@ -1617,33 +1617,48 @@ export class AgentSession {
 		// channel (aborting in-flight tools at the next steering boundary); when the
 		// loop has already yielded, triggerTurn resumes it so the advice is acted on
 		// immediately rather than waiting for the next user prompt. After a deliberate
-		// user interrupt that auto-resume is suppressed: the concern is recorded as
-		// visible advice and re-enters context only when the user resumes. A plain nit
-		// rides the non-interrupting YieldQueue aside.
+		// user interrupt the auto-resume is suppressed — but only while the agent is
+		// idle or still tearing the interrupted turn down: a concern is then recorded
+		// as a visible card and re-enters context when the user resumes. Once a turn
+		// is streaming again (a resume the user already drove) it is steered in live,
+		// since steering an active run auto-resumes nothing; parking it there would
+		// strand the advice and dump the backlog as one burst at the next prompt. A
+		// plain nit always rides the non-interrupting YieldQueue aside.
 		const enqueueAdvice = (note: string, severity?: AdvisorSeverity) => {
-			if (isInterruptingSeverity(severity)) {
-				const notes: AdvisorNote[] = [{ note, severity }];
-				const content = formatAdvisorBatchContent(notes);
-				const details = { notes } satisfies AdvisorMessageDetails;
-				if (this.#advisorAutoResumeSuppressed) {
-					this.#preserveAdvisorCard({
-						role: "custom",
-						customType: "advisor",
-						content,
-						display: true,
-						attribution: "agent",
-						details,
-						timestamp: Date.now(),
-					});
-					return;
-				}
-				void this.sendCustomMessage(
-					{ customType: "advisor", content, display: true, attribution: "agent", details },
-					{ deliverAs: "steer", triggerTurn: true },
-				).catch(err => logger.debug("advisor delivery failed", { err: String(err) }));
+			const channel = resolveAdvisorDeliveryChannel({
+				severity,
+				autoResumeSuppressed: this.#advisorAutoResumeSuppressed,
+				// Key on the live agent-core loop, not session `isStreaming` (which also
+				// counts `#promptInFlightCount` during post-turn unwind). Only a running
+				// loop will consume a steer at its next boundary; steering into the unwind
+				// window would strand the card and let #drainStrandedQueuedMessages
+				// auto-resume it despite the user's interrupt.
+				streaming: this.agent.state.isStreaming,
+				aborting: this.#abortInProgress,
+			});
+			if (channel === "aside") {
+				this.yieldQueue.enqueue("advisor", { note, severity });
 				return;
 			}
-			this.yieldQueue.enqueue("advisor", { note, severity });
+			const notes: AdvisorNote[] = [{ note, severity }];
+			const content = formatAdvisorBatchContent(notes);
+			const details = { notes } satisfies AdvisorMessageDetails;
+			if (channel === "preserve") {
+				this.#preserveAdvisorCard({
+					role: "custom",
+					customType: "advisor",
+					content,
+					display: true,
+					attribution: "agent",
+					details,
+					timestamp: Date.now(),
+				});
+				return;
+			}
+			void this.sendCustomMessage(
+				{ customType: "advisor", content, display: true, attribution: "agent", details },
+				{ deliverAs: "steer", triggerTurn: true },
+			).catch(err => logger.debug("advisor delivery failed", { err: String(err) }));
 		};
 
 		const adviseTool = new AdviseTool(enqueueAdvice);

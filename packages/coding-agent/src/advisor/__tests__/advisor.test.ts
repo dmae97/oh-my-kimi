@@ -13,6 +13,7 @@ import {
 	type AdvisorRuntimeHost,
 	formatAdvisorBatchContent,
 	isInterruptingSeverity,
+	resolveAdvisorDeliveryChannel,
 } from "..";
 
 describe("advisor", () => {
@@ -637,6 +638,93 @@ describe("advisor", () => {
 			const card = createAdvisorMessageCard({ notes: [{ note, severity: "concern" }] }, () => false, uiTheme);
 			const text = strip(card.render(30));
 			expect(text).toContain("truncated.");
+		});
+	});
+
+	// Regression: the advisor must not withhold interrupting advice from a turn
+	// that is actively streaming again after a user interrupt. The latch only
+	// guards auto-resume of a stopped/idle run; parking a note mid-stream stranded
+	// it (the agent never heard it) and dumped the backlog as one burst at the next
+	// user prompt. See the 7-concern same-instant burst in session 019ed1dd.
+	//
+	// `streaming` here means the live agent-CORE loop (agent.state.isStreaming) —
+	// NOT session `isStreaming`, which also counts `#promptInFlightCount` during
+	// post-turn unwind. Only a running core loop consumes a steer; in the unwind
+	// window (`streaming: false`) a suppressed note must `preserve`, never `steer`,
+	// or it strands and #drainStrandedQueuedMessages auto-resumes it. Do not swap
+	// the call site back to session `isStreaming`.
+	describe("resolveAdvisorDeliveryChannel", () => {
+		it("routes a non-interrupting nit to the aside queue regardless of state", () => {
+			expect(
+				resolveAdvisorDeliveryChannel({
+					severity: "nit",
+					autoResumeSuppressed: true,
+					streaming: true,
+					aborting: true,
+				}),
+			).toBe("aside");
+			expect(
+				resolveAdvisorDeliveryChannel({
+					severity: undefined,
+					autoResumeSuppressed: false,
+					streaming: false,
+					aborting: false,
+				}),
+			).toBe("aside");
+		});
+
+		it("steers concern/blocker when no user interrupt is in effect", () => {
+			for (const severity of ["concern", "blocker"] as const) {
+				for (const streaming of [true, false]) {
+					expect(
+						resolveAdvisorDeliveryChannel({
+							severity,
+							autoResumeSuppressed: false,
+							streaming,
+							aborting: false,
+						}),
+					).toBe("steer");
+				}
+			}
+		});
+
+		it("preserves an interrupting note while suppressed AND idle (no auto-resume of a stopped run)", () => {
+			for (const severity of ["concern", "blocker"] as const) {
+				expect(
+					resolveAdvisorDeliveryChannel({
+						severity,
+						autoResumeSuppressed: true,
+						streaming: false,
+						aborting: false,
+					}),
+				).toBe("preserve");
+			}
+		});
+
+		it("preserves an interrupting note while suppressed AND aborting, even though the turn still reports streaming", () => {
+			// Mid-abort teardown: steering would land after #extractQueuedAdvisorCards
+			// and could auto-resume on the stranded steer. Keep parking it.
+			expect(
+				resolveAdvisorDeliveryChannel({
+					severity: "blocker",
+					autoResumeSuppressed: true,
+					streaming: true,
+					aborting: true,
+				}),
+			).toBe("preserve");
+		});
+
+		it("steers an interrupting note while suppressed once a turn is streaming again and not aborting (the fix)", () => {
+			for (const severity of ["concern", "blocker"] as const) {
+				expect(
+					resolveAdvisorDeliveryChannel({
+						severity,
+						autoResumeSuppressed: true,
+						streaming: true,
+						aborting: false,
+					}),
+				).toBe("steer");
+			}
 		});
 	});
 });

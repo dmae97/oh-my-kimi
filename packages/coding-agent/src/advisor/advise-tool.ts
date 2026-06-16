@@ -66,6 +66,36 @@ export function isInterruptingSeverity(severity: AdvisorSeverity | undefined): b
 	return severity === "concern" || severity === "blocker";
 }
 
+/** How an advisor note is routed to the primary. */
+export type AdvisorDeliveryChannel = "aside" | "steer" | "preserve";
+
+/**
+ * Decide how one advisor note reaches the primary agent.
+ *
+ * - A non-interrupting `nit` always rides the non-interrupting aside queue.
+ * - An interrupting `concern`/`blocker` is normally steered into the agent: into
+ *   the live turn while one is streaming, or (when idle) a triggered turn so the
+ *   advice is acted on immediately.
+ * - After a deliberate user interrupt (`autoResumeSuppressed`) the advisor must
+ *   not auto-resume the stopped run. While the agent is idle — or still tearing
+ *   the interrupted turn down (`aborting`) — the note is preserved as a visible
+ *   card instead of restarting the run. But once a turn is actively streaming
+ *   again (a resume the user already drove), steering the note in does NOT
+ *   auto-resume anything, so it is delivered live. Parking it during an active
+ *   run instead strands it (it never reaches the running agent) and the withheld
+ *   notes dump as one burst at the next user prompt — the bug this guards.
+ */
+export function resolveAdvisorDeliveryChannel(opts: {
+	severity: AdvisorSeverity | undefined;
+	autoResumeSuppressed: boolean;
+	streaming: boolean;
+	aborting: boolean;
+}): AdvisorDeliveryChannel {
+	if (!isInterruptingSeverity(opts.severity)) return "aside";
+	if (opts.autoResumeSuppressed && (opts.aborting || !opts.streaming)) return "preserve";
+	return "steer";
+}
+
 /**
  * Side-effect-free investigation tools handed to the advisor agent so it can
  * inspect the workspace before weighing in. Names match the primary session's
