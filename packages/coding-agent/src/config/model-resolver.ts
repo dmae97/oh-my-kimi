@@ -56,6 +56,10 @@ export interface ScopedModel {
 interface ThinkingSuffixOptions {
 	allowMaxAlias?: boolean;
 }
+
+interface ModelStringParseOptions extends ThinkingSuffixOptions {
+	isLiteralModelId?: (provider: string, id: string) => boolean;
+}
 const MAX_THINKING_SUFFIX_OPTIONS: ThinkingSuffixOptions = { allowMaxAlias: true };
 
 function parseThinkingSuffix(value: string, options?: ThinkingSuffixOptions): ThinkingLevel | undefined {
@@ -138,14 +142,24 @@ function resolveGlobScopePattern(
  */
 export function parseModelString(
 	modelStr: string,
+	options?: ModelStringParseOptions,
 ): { provider: string; id: string; thinkingLevel?: ThinkingLevel } | undefined {
 	const slashIdx = modelStr.indexOf("/");
 	if (slashIdx <= 0) return undefined;
 	const id = modelStr.slice(slashIdx + 1);
 	const provider = modelStr.slice(0, slashIdx);
-	// Strip valid thinking level suffix (e.g., "claude-sonnet-4-6:high" -> id "claude-sonnet-4-6", thinkingLevel "high")
-	const { base, level } = splitThinkingSuffix(id);
-	return level ? { provider, id: base, thinkingLevel: level } : { provider, id };
+	// Strip strict thinking level suffixes first (e.g. "claude-sonnet-4-6:high" -> id "claude-sonnet-4-6", thinkingLevel "high").
+	const strict = splitThinkingSuffix(id);
+	if (strict.level) return { provider, id: strict.base, thinkingLevel: strict.level };
+	// `max` is a provider-facing alias for xhigh, but real model IDs can end in
+	// `:max`. Context-aware callers pass a literal lookup so those models win.
+	const maxAlias = splitThinkingSuffix(id, -1, options);
+	if (maxAlias.level) {
+		return options?.isLiteralModelId?.(provider, id) === true
+			? { provider, id }
+			: { provider, id: maxAlias.base, thinkingLevel: maxAlias.level };
+	}
+	return { provider, id };
 }
 
 /**
@@ -948,10 +962,15 @@ export function resolveModelFromString(
 	matchPreferences?: ModelMatchPreferences,
 	modelRegistry?: CanonicalModelRegistry,
 ): Model<Api> | undefined {
-	const parsed = parseModelString(value);
+	const exact = available.find(model => `${model.provider}/${model.id}` === value);
+	if (exact) return exact;
+	const parsed = parseModelString(value, {
+		...MAX_THINKING_SUFFIX_OPTIONS,
+		isLiteralModelId: (provider, id) => available.some(model => model.provider === provider && model.id === id),
+	});
 	if (parsed) {
-		const exact = available.find(model => model.provider === parsed.provider && model.id === parsed.id);
-		if (exact) return exact;
+		const parsedExact = available.find(model => model.provider === parsed.provider && model.id === parsed.id);
+		if (parsedExact) return parsedExact;
 	}
 	return parseModelPattern(value, available, matchPreferences, { modelRegistry }).model;
 }

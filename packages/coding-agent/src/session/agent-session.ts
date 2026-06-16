@@ -627,10 +627,16 @@ interface ActiveRetryFallbackState {
 	pinned: boolean;
 }
 
-function parseRetryFallbackSelector(selector: string): RetryFallbackSelector | undefined {
+function parseRetryFallbackSelector(
+	selector: string,
+	modelLookup?: { find(provider: string, id: string): Model | undefined },
+): RetryFallbackSelector | undefined {
 	const trimmed = selector.trim();
 	if (!trimmed) return undefined;
-	const parsed = parseModelString(trimmed);
+	const parsed = parseModelString(trimmed, {
+		allowMaxAlias: true,
+		isLiteralModelId: (provider, id) => modelLookup?.find(provider, id) !== undefined,
+	});
 	if (!parsed) return undefined;
 	return {
 		raw: trimmed,
@@ -8272,7 +8278,11 @@ export class AgentSession {
 		const configuredTarget = currentModel.contextPromotionTarget?.trim();
 		if (!configuredTarget) return undefined;
 
-		const parsed = parseModelString(configuredTarget);
+		const parsed = parseModelString(configuredTarget, {
+			allowMaxAlias: true,
+			isLiteralModelId: (provider, id) =>
+				availableModels.some(model => model.provider === provider && model.id === id),
+		});
 		if (parsed) {
 			const explicitModel = availableModels.find(m => m.provider === parsed.provider && m.id === parsed.id);
 			if (explicitModel) return explicitModel;
@@ -9249,7 +9259,7 @@ export class AgentSession {
 					this.configWarnings.push(msg);
 					continue;
 				}
-				const parsed = parseRetryFallbackSelector(selectorStr);
+				const parsed = parseRetryFallbackSelector(selectorStr, this.#modelRegistry);
 				if (!parsed) {
 					const msg = `Invalid fallback selector format in role '${role}': ${selectorStr}`;
 					logger.warn(msg);
@@ -9272,7 +9282,7 @@ export class AgentSession {
 
 	#getRetryFallbackPrimarySelector(role: string): RetryFallbackSelector | undefined {
 		const configuredSelector = this.settings.getModelRole(role);
-		return configuredSelector ? parseRetryFallbackSelector(configuredSelector) : undefined;
+		return configuredSelector ? parseRetryFallbackSelector(configuredSelector, this.#modelRegistry) : undefined;
 	}
 
 	#clearActiveRetryFallback(): void {
@@ -9293,7 +9303,7 @@ export class AgentSession {
 	}
 
 	#resolveRetryFallbackRole(currentSelector: string): string | undefined {
-		const parsedCurrent = parseRetryFallbackSelector(currentSelector);
+		const parsedCurrent = parseRetryFallbackSelector(currentSelector, this.#modelRegistry);
 		if (!parsedCurrent) return undefined;
 		const currentBaseSelector = formatRetryFallbackBaseSelector(parsedCurrent);
 		for (const role of Object.keys(this.#getRetryFallbackChains())) {
@@ -9311,7 +9321,7 @@ export class AgentSession {
 		const chain = [primarySelector];
 		const seen = new Set<string>([primarySelector.raw]);
 		for (const selector of this.#getRetryFallbackChains()[role] ?? []) {
-			const parsed = parseRetryFallbackSelector(selector);
+			const parsed = parseRetryFallbackSelector(selector, this.#modelRegistry);
 			if (!parsed || seen.has(parsed.raw)) continue;
 			seen.add(parsed.raw);
 			chain.push(parsed);
@@ -9322,7 +9332,7 @@ export class AgentSession {
 	#findRetryFallbackCandidates(role: string, currentSelector: string): RetryFallbackSelector[] {
 		const chain = this.#getRetryFallbackEffectiveChain(role);
 		if (chain.length <= 1) return [];
-		const parsedCurrent = parseRetryFallbackSelector(currentSelector);
+		const parsedCurrent = parseRetryFallbackSelector(currentSelector, this.#modelRegistry);
 		const currentBaseSelector = parsedCurrent ? formatRetryFallbackBaseSelector(parsedCurrent) : undefined;
 		const exactIndex = chain.findIndex(selector => selector.raw === currentSelector);
 		if (exactIndex >= 0) return chain.slice(exactIndex + 1);
@@ -9404,7 +9414,7 @@ export class AgentSession {
 			originalThinkingLevel,
 			lastAppliedFallbackThinkingLevel,
 		} = this.#activeRetryFallback;
-		const originalSelector = parseRetryFallbackSelector(originalSelectorRaw);
+		const originalSelector = parseRetryFallbackSelector(originalSelectorRaw, this.#modelRegistry);
 		if (!originalSelector) {
 			this.#clearActiveRetryFallback();
 			return;

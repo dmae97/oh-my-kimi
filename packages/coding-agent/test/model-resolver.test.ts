@@ -1006,6 +1006,19 @@ describe("parseModelString", () => {
 			});
 		});
 
+		test("extracts max when explicitly enabled for provider id selectors", () => {
+			const result = parseModelString("deepseek/deepseek-v4-pro:max", { allowMaxAlias: true });
+			expect(result).toEqual({ provider: "deepseek", id: "deepseek-v4-pro", thinkingLevel: Effort.XHigh });
+		});
+
+		test("preserves literal max model ids when the caller can prove they exist", () => {
+			const result = parseModelString("nanogpt/coding-router:max", {
+				allowMaxAlias: true,
+				isLiteralModelId: (provider, id) => provider === "nanogpt" && id === "coding-router:max",
+			});
+			expect(result).toEqual({ provider: "nanogpt", id: "coding-router:max" });
+		});
+
 		test("does not extract thinking level from model ID with invalid suffix", () => {
 			const result = parseModelString("openrouter/openai/gpt-4o:extended");
 			// :extended is not a valid thinking level, so it stays as part of the ID
@@ -1017,6 +1030,20 @@ describe("parseModelString", () => {
 			// Empty string is not a valid thinking level, so colon stays as part of ID
 			expect(result).toEqual({ provider: "anthropic", id: "claude-sonnet-4-5:" });
 		});
+	});
+});
+
+describe("resolveModelFromString", () => {
+	test("applies max as a provider model selector alias after literal lookup misses", () => {
+		const result = resolveModelFromString("nanogpt/coding-router:max", [mockMaxSuffixModels[0]]);
+		expect(result?.provider).toBe("nanogpt");
+		expect(result?.id).toBe("coding-router");
+	});
+
+	test("preserves literal max provider model ids before alias parsing", () => {
+		const result = resolveModelFromString("nanogpt/coding-router:max", mockMaxSuffixModels);
+		expect(result?.provider).toBe("nanogpt");
+		expect(result?.id).toBe("coding-router:max");
 	});
 });
 

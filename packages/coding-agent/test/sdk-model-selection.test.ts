@@ -297,7 +297,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		}
 	});
 
-	test("restores role model from extension provider after startup resume", async () => {
+	test("restores role model max selector from extension provider after startup resume", async () => {
 		const defaultModel = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!defaultModel) {
 			throw new Error("Expected bundled anthropic default model");
@@ -326,7 +326,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 					id: "smol-model",
 					parentId: "default-model",
 					timestamp,
-					model: "runtime-provider/runtime-model",
+					model: "runtime-provider/runtime-reasoning-model:max",
 					role: "smol",
 				},
 			]
@@ -355,7 +355,8 @@ describe("createAgentSession deferred model pattern resolution", () => {
 
 		try {
 			expect(session.model?.provider).toBe("runtime-provider");
-			expect(session.model?.id).toBe("runtime-model");
+			expect(session.model?.id).toBe("runtime-reasoning-model");
+			expect(session.thinkingLevel).toBe(Effort.XHigh);
 		} finally {
 			await session.dispose();
 			authStorage.close();
