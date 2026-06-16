@@ -16,21 +16,17 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";
 
 const enc = new TextEncoder();
 
-let previousCwd: string;
 let previousDebugFlag: string | undefined;
 let tempDir: string | undefined;
 
 beforeEach(async () => {
-	previousCwd = process.cwd();
 	previousDebugFlag = Bun.env.PI_REQ_DEBUG;
 	tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-req-debug-"));
-	process.chdir(tempDir);
 });
 
 afterEach(async () => {
 	clearCustomApis();
 	clearNextRequestDebugPath();
-	process.chdir(previousCwd);
 	if (previousDebugFlag === undefined) delete Bun.env.PI_REQ_DEBUG;
 	else Bun.env.PI_REQ_DEBUG = previousDebugFlag;
 	if (tempDir) await fs.rm(tempDir, { recursive: true, force: true });
@@ -51,15 +47,6 @@ function chunkedResponse(chunks: Uint8Array[]): Response {
 		}),
 		{ status: 201, statusText: "Created", headers: { "x-request-id": "resp-1", "content-type": "text/plain" } },
 	);
-}
-
-async function debugFiles(): Promise<{ requestPath: string; responsePath: string }> {
-	const files = await fs.readdir(tempDir!);
-	const requestPath = files.find(file => /^rr-session-\d+\.json$/.test(file));
-	expect(requestPath).toBeDefined();
-	const responsePath = requestPath!.replace(/\.json$/, ".res.log");
-	expect(files.includes(responsePath)).toBe(true);
-	return { requestPath: path.join(tempDir!, requestPath!), responsePath: path.join(tempDir!, responsePath) };
 }
 
 function splitResponseLog(bytes: Uint8Array): { headers: string; body: Uint8Array } {
@@ -131,7 +118,8 @@ describe("PI_REQ_DEBUG request/response recording", () => {
 	});
 
 	it("records request JSON before fetch and raw response bytes after headers", async () => {
-		Bun.env.PI_REQ_DEBUG = "1";
+		const requestPath = path.join(tempDir!, "v1-messages.json");
+		setNextRequestDebugPath(requestPath);
 		const responseBody = new Uint8Array([0x66, 0x69, 0x72, 0x73, 0x74, 0x00, 0xff, 0x0a]);
 		const fetchImpl: FetchImpl = async () => chunkedResponse([responseBody.subarray(0, 5), responseBody.subarray(5)]);
 		const wrapped = wrapFetchForRequestDebug(fetchImpl);
@@ -143,7 +131,7 @@ describe("PI_REQ_DEBUG request/response recording", () => {
 		});
 		expect(new Uint8Array(await response.arrayBuffer())).toEqual(responseBody);
 
-		const { requestPath, responsePath } = await debugFiles();
+		const responsePath = `${requestPath}.res.log`;
 		const request = JSON.parse(await fs.readFile(requestPath, "utf8")) as Record<string, unknown>;
 		expect(request).toMatchObject({
 			protocol: "http",
@@ -161,7 +149,8 @@ describe("PI_REQ_DEBUG request/response recording", () => {
 	});
 
 	it("keeps the partial response log when the response body is cancelled", async () => {
-		Bun.env.PI_REQ_DEBUG = "1";
+		const requestPath = path.join(tempDir!, "partial.json");
+		setNextRequestDebugPath(requestPath);
 		const firstChunk = enc.encode("partial");
 		let sent = false;
 		const fetchImpl: FetchImpl = async () =>
@@ -182,14 +171,15 @@ describe("PI_REQ_DEBUG request/response recording", () => {
 		expect(firstRead.value).toEqual(firstChunk);
 		await reader.cancel("turn aborted");
 
-		const { responsePath } = await debugFiles();
+		const responsePath = `${requestPath}.res.log`;
 		const log = splitResponseLog(await fs.readFile(responsePath));
 		expect(log.headers).toContain("HTTP 201 Created");
 		expect(log.body).toEqual(firstChunk);
 	});
 
 	it("wraps provider fetch options with request debug recording", async () => {
-		Bun.env.PI_REQ_DEBUG = "1";
+		const requestPath = path.join(tempDir!, "provider.json");
+		setNextRequestDebugPath(requestPath);
 		const fetchMock: FetchImpl = async () => new Response("ok", { headers: { "x-debug": "yes" } });
 		registerCustomApi("req-debug-test", (_model, _context, options) => {
 			const events = new AssistantMessageEventStream();
@@ -243,7 +233,7 @@ describe("PI_REQ_DEBUG request/response recording", () => {
 		);
 		await events.result();
 
-		const { requestPath, responsePath } = await debugFiles();
+		const responsePath = `${requestPath}.res.log`;
 		const request = JSON.parse(await fs.readFile(requestPath, "utf8")) as Record<string, unknown>;
 		expect(request.url).toBe("https://provider.test/custom");
 		expect(request.body).toEqual({ ok: true });

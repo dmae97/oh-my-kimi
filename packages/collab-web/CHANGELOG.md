@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Removed
 
 - Removed rendering support for the `render_mermaid` tool from the web tool registry
