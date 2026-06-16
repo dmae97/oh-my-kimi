@@ -542,7 +542,14 @@ export async function processResponsesStream<TApi extends Api>(
 		event: { output_index?: number; item_id?: string },
 		type: "function_call" | "custom_tool_call",
 	): StreamingItem | undefined => {
-		if (typeof event.output_index === "number") return lookupOpenItem(event);
+		if (typeof event.output_index === "number") {
+			const byOutputIndex = openItemsByOutputIndex.get(event.output_index);
+			if (byOutputIndex) return byOutputIndex;
+			// A lossy host (llama.cpp/Ollama, issue #2015) can omit `output_index` on
+			// `output_item.added` while still stamping the spec-required field on the
+			// delta. The index was never registered, so fall through to the prefixed
+			// alias / exact item-id maps instead of dropping to `lastOpenItem`.
+		}
 		if (event.item_id) {
 			// Prefixed call-id aliases share the same wire namespace as real call ids.
 			// Argument/input events can use the prefixed form, while final
