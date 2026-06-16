@@ -462,7 +462,7 @@ export class SessionManager {
 	 * bytes in the kernel page cache, so the file is software-crash durable.
 	 */
 	#rewriteSynchronously(): void {
-		if (!this.#persist || !this.#sessionFile) return;
+		if (!this.#persist || !this.#sessionFile || !this.#shouldHaveSessionFile()) return;
 
 		try {
 			const body = this.#fileBody();
@@ -483,7 +483,7 @@ export class SessionManager {
 	 * closed — so entries appended before the task runs are included.
 	 */
 	async #rewriteAtomically(): Promise<void> {
-		if (!this.#persist || !this.#sessionFile) return;
+		if (!this.#persist || !this.#sessionFile || !this.#shouldHaveSessionFile()) return;
 
 		const epoch = this.#diskEpoch;
 		await this.#scheduleDiskWork(
@@ -931,8 +931,10 @@ export class SessionManager {
 	async close(): Promise<void> {
 		if (!this.#persist) return;
 		await this.#scheduleDiskWork(async () => {
+			const hadWriter = this.#writer !== undefined;
 			await this.#closeWriterHandle();
-			this.#fileIsCurrent = true;
+			if (hadWriter || (this.#sessionFile && this.#storage.existsSync(this.#sessionFile)))
+				this.#fileIsCurrent = true;
 		});
 		if (this.#diskFailure) throw this.#diskFailure;
 	}
