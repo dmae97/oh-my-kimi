@@ -2008,7 +2008,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				return { definition, extensionPath: "<sdk>" };
 			}) ?? []),
 		];
-		const wrappedExtensionTools: Tool[] = wrapRegisteredTools(allCustomTools, extensionRunner);
+		// `wrapToolWithMetaNotice` runs the centralized large-output → artifact spill.
+		// Built-in tools get it in `createTools`; extension, SDK-custom, image-gen,
+		// TTS, and startup (non-deferred) MCP tools all funnel through here, so apply
+		// it once at this adapter boundary (idempotent — a no-op if already wrapped).
+		const wrappedExtensionTools: Tool[] = wrapRegisteredTools(allCustomTools, extensionRunner).map(
+			wrapToolWithMetaNotice,
+		);
 
 		// All built-in tools are active (conditional tools like git/ask return null from factory if disabled)
 		const toolRegistry = new Map<string, Tool>();
