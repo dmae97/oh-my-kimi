@@ -1,12 +1,26 @@
 import { describe, expect, it } from "bun:test";
+import { createOpenAICodexAuthorizationUrl } from "@oh-my-pi/pi-ai/oauth/openai-codex";
 import { type RequestBody, transformRequestBody } from "@oh-my-pi/pi-ai/providers/openai-codex/request-transformer";
 import { CodexApiError, parseCodexError } from "@oh-my-pi/pi-ai/providers/openai-codex/response-handler";
 import { convertOpenAICodexResponsesTools } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import type { Tool } from "@oh-my-pi/pi-ai/types";
+import { OPENAI_HEADER_VALUES } from "@oh-my-pi/pi-catalog/wire/codex";
 import { createCodexModel } from "./helpers";
 
 const DEFAULT_PROMPT_PREFIX =
 	"You are an expert coding assistant. You help users with coding tasks by reading files, executing commands";
+
+describe("openai-codex oauth", () => {
+	it("uses the same default originator for browser login and API requests", () => {
+		const authUrl = createOpenAICodexAuthorizationUrl({
+			state: "state",
+			redirectUri: "http://localhost:1455/auth/callback",
+			challenge: "challenge",
+		});
+
+		expect(new URL(authUrl).searchParams.get("originator")).toBe(OPENAI_HEADER_VALUES.ORIGINATOR_CODEX);
+	});
+});
 
 describe("openai-codex tool schemas", () => {
 	it("adds empty properties to no-argument object parameter schemas", () => {
