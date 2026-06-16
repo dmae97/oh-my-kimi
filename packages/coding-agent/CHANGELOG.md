@@ -44,6 +44,10 @@
 
 - Removed the built-in `render_mermaid` tool and its `renderMermaid.enabled` setting, so it can no longer be invoked directly
 
+### Fixed
+
+- Fixed local auto-thinking classification for reasoning-capable tiny models by giving them the same safe answer budget as online reasoning classifiers, with a larger local floor for non-reasoning tiny models ([#2808](https://github.com/can1357/oh-my-pi/issues/2808)).
+
 ## [16.0.2] - 2026-06-16
 
 ### Added
