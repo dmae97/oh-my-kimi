@@ -338,6 +338,8 @@ def round_trip_app(proxy_settings: Settings):
             return httpx.Response(201, json={})
         if path == "/repos/octo/widget/issues/1/labels":
             return httpx.Response(200, json=[{"name": "triage"}])
+        if path == "/repos/octo/widget/issues/1/labels/needs-info" and req.method == "DELETE":
+            return httpx.Response(200, json={})
         if path == "/repos/octo/widget/issues/1/assignees":
             return httpx.Response(201, json={})
         return httpx.Response(404, json={"message": f"unrouted {req.method} {path}"})
@@ -405,6 +407,7 @@ async def test_round_trip_all_endpoints(round_trip_app) -> None:
     assert await client.request_reviewers(repo="octo/widget", pr_number=4, reviewers=["alice"]) is None
 
     labels = await client.add_issue_labels("octo/widget", 1, ["triage"])
+    assert await client.remove_issue_label("octo/widget", 1, "needs-info") is None
     assert labels == ("triage",)
 
     assert await client.add_assignees("octo/widget", 1, ["alice"]) is None

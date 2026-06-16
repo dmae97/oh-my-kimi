@@ -2248,12 +2248,17 @@ async def test_handle_comment_resumes_needs_info_reply(
     monkeypatch.setattr(tasks, "_resolve_repo_and_issue", _resolve)
 
     post_comment_calls: list = []
+    removed_labels: list[tuple[str, int, str]] = []
 
     async def _capture_post(self, *args, **kwargs):
         post_comment_calls.append((args, kwargs))
         return None
 
+    async def _capture_remove_label(self, repo: str, number: int, label: str) -> None:
+        removed_labels.append((repo, number, label))
+
     monkeypatch.setattr(GitHubClient, "post_comment", _capture_post)
+    monkeypatch.setattr(GitHubClient, "remove_issue_label", _capture_remove_label)
 
     payload = {
         "action": "created",
@@ -2280,9 +2285,10 @@ async def test_handle_comment_resumes_needs_info_reply(
     assert call["task_kind"] == "handle_comment"
     assert call["comment"].body == "I am on Bun 1.3.14 and here is the trace"
     assert sandbox.ensure_calls[0]["existing_branch"] == "farm/old/branch"
+    assert removed_labels == [("octo/widget", 88, "needs-info")]
     assert post_comment_calls == [], "needs-info replies must not get the finalized-issue notice"
     row = db.get_issue("octo/widget#88")
-    assert row is not None and row.state == "needs_info"
+    assert row is not None and row.state == "reproducing"
     close_database()
 
 
