@@ -483,7 +483,7 @@ export class SessionManager {
 	 * closed — so entries appended before the task runs are included.
 	 */
 	async #rewriteAtomically(): Promise<void> {
-		if (!this.#persist || !this.#sessionFile || !this.#shouldHaveSessionFile()) return;
+		if (!this.#persist || !this.#sessionFile) return;
 
 		const epoch = this.#diskEpoch;
 		await this.#scheduleDiskWork(
