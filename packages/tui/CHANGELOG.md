@@ -14,6 +14,10 @@
 - Fixed inline math span detection so escaped dollars and currency-like patterns (such as `$5` and `$10`) are not converted as math
 - Fixed Mermaid diagram rendering in Markdown code blocks to clip each ASCII line to content width before wrapping, preventing preformatted diagram rows from fragmenting
 
+### Fixed
+
+- Fixed fullscreen overlays losing keyboard focus to hidden prompt surfaces, which could make settings unresponsive while a background approval request was pending ([#2789](https://github.com/can1357/oh-my-pi/issues/2789)).
+
 ## [16.0.2] - 2026-06-16
 
 ### Fixed
