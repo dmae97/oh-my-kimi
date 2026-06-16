@@ -1020,6 +1020,10 @@ describe("parseModelString", () => {
 			expect(result).toEqual({ provider: "nanogpt", id: "coding-router:max" });
 		});
 
+		test("does not strip inherited object keys as thinking suffixes", () => {
+			const result = parseModelString("anthropic/claude-sonnet-4-5:constructor");
+			expect(result).toEqual({ provider: "anthropic", id: "claude-sonnet-4-5:constructor" });
+		});
 		test("does not extract thinking level from model ID with invalid suffix", () => {
 			const result = parseModelString("openrouter/openai/gpt-4o:extended");
 			// :extended is not a valid thinking level, so it stays as part of the ID

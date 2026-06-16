@@ -55,18 +55,22 @@ const THINKING_LEVEL_BY_SELECTOR: Readonly<Record<string, ThinkingLevel>> = {
 	[ThinkingLevel.XHigh]: ThinkingLevel.XHigh,
 };
 
+function getOwnSelector<T>(selectors: Readonly<Record<string, T>>, value: string | null | undefined): T | undefined {
+	return value === undefined || value === null || !Object.hasOwn(selectors, value) ? undefined : selectors[value];
+}
+
 /**
  * Parses a provider-facing effort value.
  */
 export function parseEffort(value: string | null | undefined): Effort | undefined {
-	return value === undefined || value === null ? undefined : EFFORT_BY_SELECTOR[value];
+	return getOwnSelector(EFFORT_BY_SELECTOR, value);
 }
 
 /**
  * Parses an agent-local thinking selector.
  */
 export function parseThinkingLevel(value: string | null | undefined): ThinkingLevel | undefined {
-	return value === undefined || value === null ? undefined : THINKING_LEVEL_BY_SELECTOR[value];
+	return getOwnSelector(THINKING_LEVEL_BY_SELECTOR, value);
 }
 
 /**

@@ -48,4 +48,12 @@ describe("auto thinking classifier helpers", () => {
 		expect(parseThinkingLevel("max")).toBeUndefined();
 		expect(parseConfiguredThinkingLevel("max")).toBe(ThinkingLevel.XHigh);
 	});
+
+	it("rejects inherited object keys as thinking selectors", () => {
+		for (const selector of ["toString", "constructor", "__proto__"]) {
+			expect(parseEffort(selector)).toBeUndefined();
+			expect(parseThinkingLevel(selector)).toBeUndefined();
+			expect(parseConfiguredThinkingLevel(selector)).toBeUndefined();
+		}
+	});
 });
