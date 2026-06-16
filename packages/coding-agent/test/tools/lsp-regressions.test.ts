@@ -39,6 +39,7 @@ import { clampTimeout } from "@oh-my-pi/pi-coding-agent/tools/tool-timeouts";
 import * as piUtils from "@oh-my-pi/pi-utils";
 import { sanitizeText, TempDir } from "@oh-my-pi/pi-utils";
 import DEFAULTS from "../../src/lsp/defaults.json" with { type: "json" };
+import { getLanguageFromPath } from "../../src/utils/lang-from-path";
 
 interface RpcMessage {
 	jsonrpc?: string;
@@ -851,6 +852,10 @@ describe("lsp regressions", () => {
 		} finally {
 			tempDir.removeSync();
 		}
+	});
+	it("detects extensionless .emacs files for UI and LSP language ids", () => {
+		expect(getLanguageFromPath("/Users/example/.emacs")).toBe("emacs-lisp");
+		expect(detectLanguageId("/Users/example/.emacs")).toBe("emacs-lisp");
 	});
 
 	it("loads config-only marketplace LSP servers from Claude plugin cache", async () => {

@@ -124,6 +124,19 @@ describe("SWAP.BLK — native tree-sitter resolution end-to-end", () => {
 			expect(text).toContain("INS.BLK.POST 1 → resolved lines 1-3 (3 lines); body lands after line 3");
 		});
 	});
+	it("inserts after an extensionless .emacs top-level form", async () => {
+		await withTempDir(async tempDir => {
+			const session = makeSession(tempDir);
+			const { filePath, header } = await seedFile(tempDir, session, ".emacs", ELISP_SOURCE);
+			const input = `${header}\nINS.BLK.POST 1:\n+\n+(message "loaded")`;
+
+			await executeHashlineSingle(executeOptions(tempDir, input, session));
+
+			expect(await Bun.file(filePath).text()).toBe(
+				["(ert-deftest ogent-zen-test ()", '  "Doc."', "  (should t))", "", '(message "loaded")', ""].join("\n"),
+			);
+		});
+	});
 
 	it("reports the diff for a resolved block edit", async () => {
 		await withTempDir(async tempDir => {

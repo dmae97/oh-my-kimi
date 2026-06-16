@@ -125,15 +125,17 @@ describe("pi-natives", () => {
 		});
 
 		it("summarizes Emacs Lisp function bodies through native inference", () => {
-			const result = summarizeCode({
-				path: "fixture.el",
-				code: '(defun greet (name)\n  "Doc."\n  (let ((message (format "Hello %s" name)))\n    (message "%s" message)\n    message)\n)\n',
-			});
+			for (const path of ["fixture.el", ".emacs"]) {
+				const result = summarizeCode({
+					path,
+					code: '(defun greet (name)\n  "Doc."\n  (let ((message (format "Hello %s" name)))\n    (message "%s" message)\n    message)\n)\n',
+				});
 
-			expect(result.parsed).toBe(true);
-			expect(result.elided).toBe(true);
-			expect(result.language).toBe("emacs-lisp");
-			expect(result.segments.map(segment => segment.kind)).toEqual(["kept", "elided", "kept"]);
+				expect(result.parsed).toBe(true);
+				expect(result.elided).toBe(true);
+				expect(result.language).toBe("emacs-lisp");
+				expect(result.segments.map(segment => segment.kind)).toEqual(["kept", "elided", "kept"]);
+			}
 		});
 
 		it("summarizes multiline literals and block comments", () => {

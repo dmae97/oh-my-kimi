@@ -631,6 +631,9 @@ fn from_extension(path: &Path) -> Option<SupportLang> {
 	{
 		return Some(SupportLang::Dockerfile);
 	}
+	if name == ".emacs" {
+		return Some(SupportLang::EmacsLisp);
+	}
 
 	// Extensionless shell rc/profile files. `Path::extension` returns `None`
 	// for both bare (`zshrc`) and dotfile (`.zshrc`) forms, so they would

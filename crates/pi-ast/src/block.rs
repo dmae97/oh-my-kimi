@@ -417,6 +417,11 @@ mod tests {
 		let code = "(defun greet (name)\n  \"Doc.\"\n  (message \"Hello %s\" name))\n";
 		assert_eq!(resolve(code, "init.el", 1), Some(BlockRange { start_line: 1, end_line: 3 }));
 	}
+	#[test]
+	fn resolves_emacs_lisp_dot_emacs_block() {
+		let code = "(defun greet (name)\n  \"Doc.\"\n  (message \"Hello %s\" name))\n";
+		assert_eq!(resolve(code, ".emacs", 1), Some(BlockRange { start_line: 1, end_line: 3 }));
+	}
 
 	#[test]
 	fn resolves_emacs_lisp_macro_style_list_block() {

@@ -210,6 +210,7 @@ export function getLanguageFromPath(filePath: string): string | undefined {
 	if (baseName === "dockerfile" || baseName.startsWith("dockerfile.") || baseName === "containerfile") {
 		return "dockerfile";
 	}
+	if (baseName === ".emacs") return "emacs-lisp";
 	if (baseName === "justfile") return "just";
 	if (baseName === "cmakelists.txt") return "cmake";
 
@@ -223,6 +224,9 @@ export function detectLanguageId(filePath: string): string {
 	const baseName = path.basename(filePath).toLowerCase();
 	if (baseName === "dockerfile" || baseName.startsWith("dockerfile.") || baseName === "containerfile") {
 		return "dockerfile";
+	}
+	if (baseName === ".emacs") {
+		return "emacs-lisp";
 	}
 	if (baseName === "makefile" || baseName === "gnumakefile") {
 		return "makefile";
