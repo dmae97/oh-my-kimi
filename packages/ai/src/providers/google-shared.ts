@@ -793,9 +793,12 @@ export function buildGoogleGenerateContentParams<T extends "google-generative-ai
 	if (context.tools && context.tools.length > 0 && options.toolChoice) {
 		const choice = options.toolChoice;
 		if (typeof choice === "string") {
-			config.toolConfig = {
-				functionCallingConfig: { mode: mapToolChoice(choice) },
-			};
+			const mode = mapToolChoice(choice);
+			if (mode !== "AUTO") {
+				config.toolConfig = {
+					functionCallingConfig: { mode },
+				};
+			}
 		} else {
 			// Named-tool routing — `mode: "ANY"` plus an explicit allow-list. The
 			// caller is responsible for ensuring the names exist in `context.tools`.
