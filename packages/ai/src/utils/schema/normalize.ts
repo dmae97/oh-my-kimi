@@ -936,6 +936,22 @@ export function sanitizeSchemaForOpenAIResponses(schema: JsonObject): JsonObject
  * `normalizeSchemaFor*` dispatcher naming used elsewhere in this module.
  */
 export const normalizeSchemaForOpenAIResponses: (schema: JsonObject) => JsonObject = sanitizeSchemaForOpenAIResponses;
+const OPENAI_UNSUPPORTED_REGEX_LOOKAROUNDS = new Set(["=", "!", "<=", "<!"]);
+
+function hasOpenAIUnsupportedRegexLookaround(pattern: string): boolean {
+	let groupStart = pattern.indexOf("(?");
+	while (groupStart !== -1) {
+		let escapes = 0;
+		for (let i = groupStart - 1; i >= 0 && pattern[i] === "\\"; i--) escapes++;
+		if (escapes % 2 === 0) {
+			const operator =
+				pattern[groupStart + 2] === "<" ? pattern.slice(groupStart + 2, groupStart + 4) : pattern[groupStart + 2];
+			if (OPENAI_UNSUPPORTED_REGEX_LOOKAROUNDS.has(operator)) return true;
+		}
+		groupStart = pattern.indexOf("(?", groupStart + 2);
+	}
+	return false;
+}
 
 function normalizeOpenAIResponsesSchemaNode(value: unknown, cache: WeakMap<JsonObject, JsonObject>): unknown {
 	if (!isJsonObject(value)) return value;
@@ -970,6 +986,14 @@ function normalizeOpenAIResponsesSchemaNode(value: unknown, cache: WeakMap<JsonO
 		// still preserved verbatim so callers can see the original payload
 		// instead of having it silently disappear.
 		if (key === "oneOf" && Array.isArray(value.oneOf)) {
+			changed = true;
+			continue;
+		}
+		if (
+			key === "pattern" &&
+			typeof value.pattern === "string" &&
+			hasOpenAIUnsupportedRegexLookaround(value.pattern)
+		) {
 			changed = true;
 			continue;
 		}
