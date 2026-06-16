@@ -639,6 +639,20 @@ interface StepCounter {
 	count: number;
 }
 
+function isDeadlineExceeded(deadline: number | undefined): boolean {
+	return deadline !== undefined && Date.now() >= deadline;
+}
+
+function endAgentStream(
+	stream: EventStream<AgentEvent, AgentMessage[]>,
+	newMessages: AgentMessage[],
+	telemetry: AgentTelemetry | undefined,
+	stepCount: number,
+): void {
+	stream.push(buildAgentEndEvent(newMessages, telemetry, stepCount));
+	stream.end(newMessages);
+}
+
 /**
  * Resolve aside entries at the moment the loop is about to inject them. Each entry
  * is either a ready {@link AgentMessage} or a sync thunk evaluated here so the
@@ -668,6 +682,10 @@ async function runLoopBody(
 	streamFn?: StreamFn,
 ): Promise<void> {
 	let firstTurn = true;
+	if (isDeadlineExceeded(config.deadline)) {
+		endAgentStream(stream, newMessages, telemetry, stepCounter.count);
+		return;
+	}
 	// Check for steering messages at start (user may have typed while waiting).
 	// Skip when the run is already externally aborted — dequeuing would strand
 	// the messages in a run that is about to die.
@@ -682,6 +700,10 @@ async function runLoopBody(
 
 		// Inner loop: process tool calls and steering messages
 		while (hasMoreToolCalls || pendingMessages.length > 0) {
+			if (isDeadlineExceeded(config.deadline)) {
+				endAgentStream(stream, newMessages, telemetry, stepCounter.count);
+				return;
+			}
 			// Yield at the top of each iteration to prevent busy-wait when
 			// the agent loop is executing tool calls back-to-back.
 			await yieldIfDue();
@@ -885,6 +907,11 @@ async function runLoopBody(
 			}
 		}
 
+		if (isDeadlineExceeded(config.deadline)) {
+			endAgentStream(stream, newMessages, telemetry, stepCounter.count);
+			return;
+		}
+
 		// Agent would stop here. Drain non-interrupting asides + follow-up messages.
 		await config.onBeforeYield?.();
 		// Skip queue drains when externally aborted (same stranding hazard as above).
@@ -904,8 +931,7 @@ async function runLoopBody(
 		break;
 	}
 
-	stream.push(buildAgentEndEvent(newMessages, telemetry, stepCounter.count));
-	stream.end(newMessages);
+	endAgentStream(stream, newMessages, telemetry, stepCounter.count);
 }
 
 async function emitHarmonyAudit(

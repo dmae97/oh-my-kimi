@@ -55,6 +55,31 @@ describe("agentLoop with AgentMessage", () => {
 		expect(eventTypes).toContain("agent_end");
 	});
 
+	it("ends gracefully without a provider call after the deadline", async () => {
+		const context: AgentContext = {
+			systemPrompt: ["You are helpful."],
+			messages: [],
+			tools: [],
+		};
+		const prompt = createUserMessage("Hello");
+		const mock = createMockModel({ responses: [{ content: ["Too late"] }] });
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			deadline: Date.now() - 1,
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([prompt], context, config, undefined, mock.stream);
+		for await (const event of stream) {
+			events.push(event);
+		}
+
+		expect(await stream.result()).toEqual([prompt]);
+		expect(mock.calls).toHaveLength(0);
+		expect(events.map(event => event.type)).toContain("agent_end");
+	});
+
 	it("returns detailed telemetry when awaiting detailed() directly", async () => {
 		const context: AgentContext = {
 			systemPrompt: ["You are helpful."],

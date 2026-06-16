@@ -131,6 +131,8 @@ export interface AgentOptions {
 	 * Custom stream function (for proxy backends, etc.). Default uses streamSimple.
 	 */
 	streamFn?: StreamFn;
+	/** Absolute wall-clock deadline in Unix epoch milliseconds. */
+	deadline?: number;
 
 	/**
 	 * Optional session identifier forwarded to LLM providers.
@@ -303,6 +305,7 @@ export class Agent {
 	#followUpMode: "all" | "one-at-a-time";
 	#interruptMode: "immediate" | "wait";
 	#sessionId?: string;
+	#deadline?: number;
 	#promptCacheKey?: string;
 	#metadata?: Record<string, unknown>;
 	#metadataResolver?: (provider: string) => Record<string, unknown> | undefined;
@@ -368,6 +371,7 @@ export class Agent {
 		this.#interruptMode = opts.interruptMode || "immediate";
 		this.streamFn = opts.streamFn || streamSimple;
 		this.#sessionId = opts.sessionId;
+		this.#deadline = opts.deadline;
 		this.#promptCacheKey = opts.promptCacheKey;
 		this.#providerSessionState = opts.providerSessionState;
 		this.#thinkingBudgets = opts.thinkingBudgets;
@@ -1014,6 +1018,7 @@ export class Agent {
 			hideThinkingSummary: this.#hideThinkingSummary,
 			interruptMode: this.#interruptMode,
 			sessionId: this.#sessionId,
+			deadline: this.#deadline,
 			promptCacheKey: this.#promptCacheKey,
 			metadata: this.#metadataResolver ? undefined : this.#metadata,
 			metadataResolver: this.#metadataResolver,
