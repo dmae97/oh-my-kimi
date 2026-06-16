@@ -32,9 +32,22 @@ describe("Markdown math rendering", () => {
 		expect(lines.join("").replace(/[\s[\]]/g, "")).toBe("abcd");
 	});
 
-	it("renders a \\[…\\] display block (quadratic formula)", () => {
-		const [line] = renderLines("\\[\nx = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}\n\\]");
-		expect(line).toBe("x = (-b ± √(b² - 4ac))/(2a)");
+	it("stacks a \\[…\\] display fraction (quadratic formula)", () => {
+		const lines = renderLines("\\[\nx = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}\n\\]");
+		const barRow = lines.findIndex(line => line.includes("─"));
+		expect(barRow).toBeGreaterThan(0);
+		expect(lines[barRow]).toContain("x =");
+		expect(lines[barRow - 1]).toContain("-b ± √(b² - 4ac)");
+		expect(lines[barRow + 1]).toContain("2a");
+	});
+
+	it("stacks a single-line $$…$$ display fraction in a reply paragraph", () => {
+		// Models commonly emit display math on one line; it must still stack.
+		const lines = renderLines("Here:\n\n$$\\frac{a+b}{c}$$\n\nDone.");
+		const barRow = lines.findIndex(line => line.includes("─"));
+		expect(barRow).toBeGreaterThan(0);
+		expect(lines[barRow - 1]).toContain("a+b");
+		expect(lines[barRow + 1]).toContain("c");
 	});
 
 	it("keeps display math inside a list item multi-line", () => {
@@ -70,5 +83,23 @@ describe("Markdown math rendering", () => {
 		// A bare $$…$$ becomes a top-level `math` token; it must not leak raw LaTeX.
 		const out = stripVTControlCharacters(renderInlineMarkdown("$$E = mc^2$$", defaultMarkdownTheme));
 		expect(out).toBe("E = mc²");
+	});
+
+	it("stacks a display $$…$$ fraction across multiple lines", () => {
+		const lines = renderLines("$$\n\\frac{a+b}{c}\n$$");
+		// numerator / bar / denominator
+		const barRow = lines.findIndex(line => line.includes("─"));
+		expect(barRow).toBeGreaterThan(0);
+		expect(lines[barRow - 1]).toContain("a+b");
+		expect(lines[barRow + 1]).toContain("c");
+	});
+
+	it("stacks fractions inside a bare \\begin{equation} block (mathEnvBlockExtension)", () => {
+		const lines = renderLines("\\begin{equation}\nx = \\frac{a+b}{c}\n\\end{equation}");
+		const barRow = lines.findIndex(line => line.includes("─"));
+		expect(barRow).toBeGreaterThanOrEqual(0);
+		expect(lines[barRow]).toContain("x =");
+		expect(lines[barRow - 1]).toContain("a+b");
+		expect(lines[barRow + 1]).toContain("c");
 	});
 });

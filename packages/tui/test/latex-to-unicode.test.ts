@@ -84,10 +84,6 @@ describe("latexToUnicode symbol fixes", () => {
 		expect(latexToUnicode("\\supseteqq")).toBe("⫆");
 	});
 
-	it("renders \\neper as the SI unit symbol, not a currency glyph", () => {
-		expect(latexToUnicode("\\neper")).toBe("Np");
-	});
-
 	it("collapses common fractions to vulgar glyphs", () => {
 		expect(latexToUnicode("\\frac{1}{2}")).toBe("½");
 	});

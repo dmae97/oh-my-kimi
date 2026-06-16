@@ -1,5 +1,6 @@
 import { LRUCache } from "lru-cache/raw";
 import { Marked, type Token, Tokenizer, type TokenizerAndRendererExtension, type Tokens } from "marked";
+import { latexToBlock } from "../latex-block";
 import { inlineMathSpanEnd, isBareMathEnvironment, latexToUnicode } from "../latex-to-unicode";
 import type { SymbolTheme } from "../symbols";
 import { TERMINAL } from "../terminal-capabilities";
@@ -151,7 +152,7 @@ function bareMathEnvBlock(src: string): readonly [number, number] | null {
 	return [start, blockEnd];
 }
 const mathEnvBlockExtension: TokenizerAndRendererExtension = {
-	name: "math",
+	name: "mathEnvBlock",
 	level: "block",
 	start(src) {
 		const r = bareMathEnvBlock(src);
@@ -319,6 +320,27 @@ function isMathToken(token: Token): token is Token & { text: string; display: bo
 /** Convert a `math` token's LaTeX to single-line Unicode for inline rendering. */
 function renderMathToken(text: string): string {
 	return latexToUnicode(text).replace(MATH_NEWLINES, " ");
+}
+
+/**
+ * When a paragraph's only meaningful content is a single display math token
+ * (`$$…$$` / `\[…\]`), return it so the paragraph can be stacked multi-line
+ * instead of flattened inline. Models routinely write display math on one line,
+ * which marked captures as an inline `display:true` math token inside a
+ * paragraph; without this it would flatten through `renderMathToken`.
+ */
+function soleDisplayMath(tokens?: Token[]): (Token & { text: string }) | null {
+	if (!tokens) return null;
+	let math: (Token & { text: string; display: boolean }) | null = null;
+	for (const token of tokens) {
+		if (isMathToken(token) && token.display) {
+			if (math) return null;
+			math = token;
+		} else if (!(token.type === "text" && typeof token.text === "string" && token.text.trim() === "")) {
+			return null;
+		}
+	}
+	return math;
 }
 
 function plainInlineTokens(tokens: Token[]): string {
@@ -797,13 +819,10 @@ export class Markdown implements Component {
 	#renderToken(token: Token, width: number, nextTokenType?: string, styleContext?: InlineStyleContext): string[] {
 		const lines: string[] = [];
 
-		// Display math block (own-line `$$…$$` / `\[…\]`): convert and keep row
-		// breaks (`\\` → newline) so matrices/aligned blocks span multiple lines.
+		// Display math block (own-line `$$…$$` / `\[…\]`): stack `\frac` vertically
+		// and keep `\\` row breaks, so fractions and matrices span multiple lines.
 		if (isMathToken(token)) {
-			const converted = latexToUnicode(token.text)
-				.replace(/\n{2,}/g, "\n")
-				.trim();
-			for (const mathLine of converted.split("\n")) lines.push(this.#applyDefaultStyle(mathLine));
+			for (const mathLine of latexToBlock(token.text)) lines.push(this.#applyDefaultStyle(mathLine));
 			if (nextTokenType && nextTokenType !== "space") lines.push("");
 			return lines;
 		}
@@ -842,6 +861,12 @@ export class Markdown implements Component {
 			}
 
 			case "paragraph": {
+				const displayMath = soleDisplayMath(token.tokens);
+				if (displayMath) {
+					for (const mathLine of latexToBlock(displayMath.text)) lines.push(this.#applyDefaultStyle(mathLine));
+					if (nextTokenType && nextTokenType !== "list" && nextTokenType !== "space") lines.push("");
+					break;
+				}
 				const paragraphText = this.#renderInlineTokens(token.tokens || [], styleContext);
 				lines.push(paragraphText);
 				// Don't add spacing if next token is space or list
@@ -1155,16 +1180,29 @@ export class Markdown implements Component {
 					lines.push({ text: nestedLine, nested: true });
 				}
 			} else if (token.type === "text") {
-				// Text content (may have inline tokens)
-				const text =
-					token.tokens && token.tokens.length > 0
-						? this.#renderInlineTokens(token.tokens, styleContext)
-						: token.text || "";
-				lines.push({ text, nested: false });
+				// Text content (may have inline tokens, or a sole display-math token)
+				const displayMath = soleDisplayMath(token.tokens);
+				if (displayMath) {
+					const apply = styleContext?.applyText ?? ((t: string) => this.#applyDefaultStyle(t));
+					for (const mathLine of latexToBlock(displayMath.text))
+						lines.push({ text: apply(mathLine), nested: false });
+				} else {
+					const text =
+						token.tokens && token.tokens.length > 0
+							? this.#renderInlineTokens(token.tokens, styleContext)
+							: token.text || "";
+					lines.push({ text, nested: false });
+				}
 			} else if (token.type === "paragraph") {
 				// Paragraph in list item
-				const text = this.#renderInlineTokens(token.tokens || [], styleContext);
-				lines.push({ text, nested: false });
+				const apply = styleContext?.applyText ?? ((t: string) => this.#applyDefaultStyle(t));
+				const displayMath = soleDisplayMath(token.tokens);
+				if (displayMath) {
+					for (const mathLine of latexToBlock(displayMath.text))
+						lines.push({ text: apply(mathLine), nested: false });
+				} else {
+					lines.push({ text: this.#renderInlineTokens(token.tokens || [], styleContext), nested: false });
+				}
 			} else if (token.type === "code") {
 				// Code block in list item
 				const codeIndent = padding(this.#codeBlockIndent);
@@ -1182,12 +1220,9 @@ export class Markdown implements Component {
 				}
 				lines.push({ text: this.#theme.codeBlockBorder("```"), nested: false });
 			} else if (isMathToken(token)) {
-				// Display math block inside a list item: keep `\\` row breaks multi-line.
-				const converted = latexToUnicode(token.text)
-					.replace(/\n{2,}/g, "\n")
-					.trim();
+				// Display math block inside a list item: stack fractions / matrix rows.
 				const apply = styleContext?.applyText ?? ((t: string) => this.#applyDefaultStyle(t));
-				for (const mathLine of converted.split("\n")) lines.push({ text: apply(mathLine), nested: false });
+				for (const mathLine of latexToBlock(token.text)) lines.push({ text: apply(mathLine), nested: false });
 			} else {
 				// Other token types - try to render as inline
 				const text = this.#renderInlineTokens([token], styleContext);

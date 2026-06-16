@@ -1487,4 +1487,29 @@ describe("Math rendering", () => {
 		const out = plain(md);
 		expect(out).toContain("begin{cases}");
 	});
+
+	it("converts inline $…$ and \\(…\\) spans without breaking surrounding prose", () => {
+		const md = new Markdown("Energy $E = mc^2$ and \\(a + b\\) end.", 0, 0, defaultMarkdownTheme);
+		const out = plain(md);
+		expect(out).toContain("Energy");
+		expect(out).toContain("mc²");
+		expect(out).toContain("a + b");
+		expect(out).toContain("end.");
+		expect(out).not.toContain("$");
+	});
+
+	it("folds a plain `f(x) =` prefix line into the bare cases block (no blank-line split)", () => {
+		const md = new Markdown(
+			"f(x) =\n\\begin{cases}\n1 & x > 0 \\\\\n0 & x < 0\n\\end{cases}",
+			0,
+			0,
+			defaultMarkdownTheme,
+		);
+		const lines = md.render(80).map(line => stripVTControlCharacters(line));
+		const fxIdx = lines.findIndex(line => line.includes("f(x)"));
+		expect(fxIdx).toBeGreaterThanOrEqual(0);
+		expect(lines.join("\n")).not.toContain("begin{cases}");
+		// The cases body follows immediately: folding the lhs in avoids a blank-line paragraph split.
+		expect(lines[fxIdx + 1]).toContain("x > 0");
+	});
 });
