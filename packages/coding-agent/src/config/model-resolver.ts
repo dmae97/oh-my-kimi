@@ -924,9 +924,19 @@ export function resolveModelRoleValue(
 	return { model: undefined, thinkingLevel: undefined, explicitThinkingLevel: false, warning };
 }
 
+interface ExplicitThinkingSelectorOptions {
+	isLiteralModelId?: (provider: string, id: string) => boolean;
+}
+
+function isLiteralModelSelector(value: string, options?: ExplicitThinkingSelectorOptions): boolean {
+	const parsed = parseModelString(value);
+	return parsed !== undefined && options?.isLiteralModelId?.(parsed.provider, parsed.id) === true;
+}
+
 export function extractExplicitThinkingSelector(
 	value: string | undefined,
 	settings?: Settings,
+	options?: ExplicitThinkingSelectorOptions,
 ): ThinkingLevel | undefined {
 	if (!value) return undefined;
 	const normalized = value.trim();
@@ -936,13 +946,13 @@ export function extractExplicitThinkingSelector(
 	let current = normalized;
 	while (!visited.has(current)) {
 		visited.add(current);
-		const thinkingSelector = splitThinkingSuffix(
-			current,
-			PREFIX_MODEL_ROLE.length,
-			MAX_THINKING_SUFFIX_OPTIONS,
-		).level;
-		if (thinkingSelector) {
-			return thinkingSelector;
+		const strictSelector = splitThinkingSuffix(current, PREFIX_MODEL_ROLE.length).level;
+		if (strictSelector) {
+			return strictSelector;
+		}
+		const maxSelector = splitThinkingSuffix(current, PREFIX_MODEL_ROLE.length, MAX_THINKING_SUFFIX_OPTIONS).level;
+		if (maxSelector && (current.startsWith(PREFIX_MODEL_ROLE) || !isLiteralModelSelector(current, options))) {
+			return maxSelector;
 		}
 		const expanded = expandRoleAlias(current, settings).trim();
 		if (!expanded || expanded === current) break;

@@ -8271,7 +8271,9 @@ export class AgentSession {
 		const existingRoleValue = this.settings.getModelRole(role);
 		if (!existingRoleValue) return modelKey;
 
-		const thinkingLevel = extractExplicitThinkingSelector(existingRoleValue, this.settings);
+		const thinkingLevel = extractExplicitThinkingSelector(existingRoleValue, this.settings, {
+			isLiteralModelId: (provider, id) => this.#modelRegistry.find(provider, id) !== undefined,
+		});
 		return formatModelSelectorValue(modelKey, thinkingLevel);
 	}
 	#resolveContextPromotionConfiguredTarget(currentModel: Model, availableModels: Model[]): Model | undefined {

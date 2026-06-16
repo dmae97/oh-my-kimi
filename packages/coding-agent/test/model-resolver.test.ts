@@ -4,6 +4,7 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import type { CanonicalModelVariant } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import {
 	expandRoleAlias,
+	extractExplicitThinkingSelector,
 	filterAvailableModelsByEnabledPatterns,
 	parseModelPattern,
 	parseModelString,
@@ -1060,6 +1061,31 @@ describe("expandRoleAlias", () => {
 		settings.setModelRole("default", "anthropic/claude-sonnet-4-5");
 
 		expect(expandRoleAlias("pi/vision", settings)).toBe("pi/vision");
+	});
+});
+
+describe("extractExplicitThinkingSelector", () => {
+	test("does not carry max from literal role model ids", () => {
+		const result = extractExplicitThinkingSelector("nanogpt/coding-router:max", undefined, {
+			isLiteralModelId: (provider, id) => provider === "nanogpt" && id === "coding-router:max",
+		});
+		expect(result).toBeUndefined();
+	});
+
+	test("treats max as an explicit selector when the model id is not literal", () => {
+		const result = extractExplicitThinkingSelector("nanogpt/coding-router:max", undefined, {
+			isLiteralModelId: () => false,
+		});
+		expect(result).toBe(Effort.XHigh);
+	});
+
+	test("treats max on pi role aliases as an explicit selector before expansion", () => {
+		const settings = Settings.isolated();
+		settings.setModelRole("smol", "nanogpt/coding-router:max");
+		const result = extractExplicitThinkingSelector("pi/smol:max", settings, {
+			isLiteralModelId: (provider, id) => provider === "nanogpt" && id === "coding-router:max",
+		});
+		expect(result).toBe(Effort.XHigh);
 	});
 });
 
