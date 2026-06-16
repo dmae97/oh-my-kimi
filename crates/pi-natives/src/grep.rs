@@ -14,7 +14,7 @@ use std::{
 	path::{Path, PathBuf},
 	sync::{
 		Arc, Mutex,
-		atomic::{AtomicBool, AtomicU64, Ordering},
+		atomic::{AtomicU64, Ordering},
 	},
 };
 
@@ -1209,22 +1209,30 @@ mod tests {
 	}
 
 	#[cfg(unix)]
+	fn content_search_params(
+		max_count: u64,
+		max_count_per_file: Option<u64>,
+	) -> super::SearchParams {
+		super::SearchParams {
+			context_before: 0,
+			context_after: 0,
+			max_columns: None,
+			mode: super::OutputMode::Content,
+			max_count: Some(max_count),
+			max_count_per_file,
+			offset: 0,
+			multiline: false,
+		}
+	}
+
+	#[cfg(unix)]
 	#[test]
 	fn streaming_grep_stops_after_first_page_content_budget() {
 		let root = TempDirGuard::new();
 		write_file(&root.path().join("a.txt"), "needle a1\nneedle a2\n");
 		write_file(&root.path().join("z.txt"), "needle z\n");
 		let matcher = super::build_matcher("needle", false, false).expect("build test matcher");
-		let params = super::SearchParams {
-			context_before:     0,
-			context_after:      0,
-			max_columns:        None,
-			mode:               super::OutputMode::Content,
-			max_count:          Some(1),
-			max_count_per_file: None,
-			offset:             0,
-			multiline:          false,
-		};
+		let params = content_search_params(1, None);
 
 		let (results, skipped_oversized, stopped_after_budget) = super::run_streaming_grep(
 			root.path(),
@@ -1236,7 +1244,7 @@ mod tests {
 			false,
 			true,
 			&task::CancelToken::default(),
-			1,
+			4,
 		)
 		.expect("streaming grep should succeed");
 
@@ -1244,6 +1252,43 @@ mod tests {
 		assert_eq!(skipped_oversized, 0);
 		assert_eq!(results.len(), 1);
 		assert_eq!(results[0].matches.len(), 1);
+		assert_eq!(results[0].relative_path, "a.txt");
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn streaming_grep_budget_counts_returned_matches_under_per_file_cap() {
+		let root = TempDirGuard::new();
+		write_file(&root.path().join("a.txt"), "needle a1\nneedle a2\n");
+		write_file(&root.path().join("b.txt"), "needle b1\nneedle b2\n");
+		write_file(&root.path().join("c.txt"), "needle c1\nneedle c2\n");
+		let matcher = super::build_matcher("needle", false, false).expect("build test matcher");
+		let params = content_search_params(3, Some(1));
+
+		let (results, skipped_oversized, stopped_after_budget) = super::run_streaming_grep(
+			root.path(),
+			&matcher,
+			None,
+			None,
+			params,
+			true,
+			false,
+			true,
+			&task::CancelToken::default(),
+			4,
+		)
+		.expect("streaming grep should succeed");
+
+		assert!(stopped_after_budget);
+		assert_eq!(skipped_oversized, 0);
+		assert_eq!(results.len(), 3);
+		assert_eq!(
+			results
+				.iter()
+				.map(|result| result.matches.len())
+				.sum::<usize>(),
+			3
+		);
 	}
 }
 
@@ -1342,21 +1387,18 @@ fn run_parallel_search(
 }
 
 struct StreamingGrepVisitor<'a> {
-	root:                 &'a Path,
-	matcher:              &'a grep_regex::RegexMatcher,
-	glob_set:             Option<&'a GlobSet>,
-	type_filter:          Option<&'a TypeFilter>,
-	params:               SearchParams,
-	searcher:             Searcher,
-	results:              Vec<FileSearchResult>,
-	shared_results:       Arc<Mutex<Vec<Vec<FileSearchResult>>>>,
-	error:                Arc<Mutex<Option<String>>>,
-	skipped_oversized:    Arc<AtomicU64>,
-	stop_after_matches:   Option<u64>,
-	shared_match_count:   Arc<AtomicU64>,
-	stopped_after_budget: Arc<AtomicBool>,
-	ct:                   &'a task::CancelToken,
-	visited:              usize,
+	root:              &'a Path,
+	matcher:           &'a grep_regex::RegexMatcher,
+	glob_set:          Option<&'a GlobSet>,
+	type_filter:       Option<&'a TypeFilter>,
+	params:            SearchParams,
+	searcher:          Searcher,
+	results:           Vec<FileSearchResult>,
+	shared_results:    Arc<Mutex<Vec<Vec<FileSearchResult>>>>,
+	error:             Arc<Mutex<Option<String>>>,
+	skipped_oversized: Arc<AtomicU64>,
+	ct:                &'a task::CancelToken,
+	visited:           usize,
 }
 
 impl Drop for StreamingGrepVisitor<'_> {
@@ -1375,12 +1417,6 @@ impl Drop for StreamingGrepVisitor<'_> {
 
 impl ParallelVisitor for StreamingGrepVisitor<'_> {
 	fn visit(&mut self, entry: std::result::Result<ignore::DirEntry, ignore::Error>) -> WalkState {
-		if let Some(stop_after) = self.stop_after_matches
-			&& self.shared_match_count.load(Ordering::Relaxed) >= stop_after
-		{
-			self.stopped_after_budget.store(true, Ordering::Relaxed);
-			return WalkState::Quit;
-		}
 		if self.visited == 0 || self.visited >= 128 {
 			self.visited = 0;
 			if let Err(err) = self.ct.heartbeat() {
@@ -1449,56 +1485,116 @@ impl ParallelVisitor for StreamingGrepVisitor<'_> {
 			match_count:   matched_count,
 			limit_reached: search.limit_reached,
 		});
-		if matched_count > 0
-			&& let Some(stop_after) = self.stop_after_matches
-		{
-			let previous = self
-				.shared_match_count
-				.fetch_add(matched_count, Ordering::Relaxed);
-			if previous.saturating_add(matched_count) >= stop_after {
-				self.stopped_after_budget.store(true, Ordering::Relaxed);
-				return WalkState::Quit;
-			}
-		}
 		WalkState::Continue
 	}
 }
 
 struct StreamingGrepVisitorBuilder<'a> {
-	root:                 &'a Path,
-	matcher:              &'a grep_regex::RegexMatcher,
-	glob_set:             Option<&'a GlobSet>,
-	type_filter:          Option<&'a TypeFilter>,
-	params:               SearchParams,
-	shared_results:       Arc<Mutex<Vec<Vec<FileSearchResult>>>>,
-	error:                Arc<Mutex<Option<String>>>,
-	skipped_oversized:    Arc<AtomicU64>,
-	stop_after_matches:   Option<u64>,
-	shared_match_count:   Arc<AtomicU64>,
-	stopped_after_budget: Arc<AtomicBool>,
-	ct:                   &'a task::CancelToken,
+	root:              &'a Path,
+	matcher:           &'a grep_regex::RegexMatcher,
+	glob_set:          Option<&'a GlobSet>,
+	type_filter:       Option<&'a TypeFilter>,
+	params:            SearchParams,
+	shared_results:    Arc<Mutex<Vec<Vec<FileSearchResult>>>>,
+	error:             Arc<Mutex<Option<String>>>,
+	skipped_oversized: Arc<AtomicU64>,
+	ct:                &'a task::CancelToken,
 }
 
 impl<'a> ParallelVisitorBuilder<'a> for StreamingGrepVisitorBuilder<'a> {
 	fn build(&mut self) -> Box<dyn ParallelVisitor + 'a> {
 		Box::new(StreamingGrepVisitor {
-			root:                 self.root,
-			matcher:              self.matcher,
-			glob_set:             self.glob_set,
-			type_filter:          self.type_filter,
-			params:               self.params,
-			searcher:             build_searcher_for_params(self.params),
-			results:              Vec::new(),
-			shared_results:       Arc::clone(&self.shared_results),
-			error:                Arc::clone(&self.error),
-			skipped_oversized:    Arc::clone(&self.skipped_oversized),
-			stop_after_matches:   self.stop_after_matches,
-			shared_match_count:   Arc::clone(&self.shared_match_count),
-			stopped_after_budget: Arc::clone(&self.stopped_after_budget),
-			ct:                   self.ct,
-			visited:              0,
+			root:              self.root,
+			matcher:           self.matcher,
+			glob_set:          self.glob_set,
+			type_filter:       self.type_filter,
+			params:            self.params,
+			searcher:          build_searcher_for_params(self.params),
+			results:           Vec::new(),
+			shared_results:    Arc::clone(&self.shared_results),
+			error:             Arc::clone(&self.error),
+			skipped_oversized: Arc::clone(&self.skipped_oversized),
+			ct:                self.ct,
+			visited:           0,
 		})
 	}
+}
+
+fn run_ordered_streaming_grep(
+	builder: ignore::WalkBuilder,
+	search_path: &Path,
+	matcher: &grep_regex::RegexMatcher,
+	glob_set: Option<&GlobSet>,
+	type_filter: Option<&TypeFilter>,
+	params: SearchParams,
+	stop_after_matches: u64,
+	ct: &task::CancelToken,
+) -> Result<(Vec<FileSearchResult>, u64, bool)> {
+	let mut results = Vec::new();
+	let mut skipped_oversized = 0u64;
+	let mut emitted = 0u64;
+	let mut visited = 0usize;
+	let mut searcher = build_searcher_for_params(params);
+
+	ct.heartbeat()?;
+	for entry in builder.build() {
+		if visited == 0 || visited >= 128 {
+			visited = 0;
+			ct.heartbeat()?;
+		}
+		visited += 1;
+
+		let Ok(entry) = entry else {
+			continue;
+		};
+		if !entry
+			.file_type()
+			.is_some_and(|file_type| file_type.is_file())
+		{
+			continue;
+		}
+
+		let relative = fs_cache::normalize_relative_path(search_path, entry.path());
+		if relative.is_empty() {
+			continue;
+		}
+		if let Some(glob_set) = glob_set
+			&& !glob_set.is_match(Path::new(relative.as_ref()))
+		{
+			continue;
+		}
+		if let Some(filter) = type_filter
+			&& !matches_type_filter(entry.path(), filter)
+		{
+			continue;
+		}
+
+		let bytes = match read_file_bytes(entry.path()) {
+			Ok(ReadFile::Bytes(bytes)) => bytes,
+			Ok(ReadFile::Oversized) => {
+				skipped_oversized = skipped_oversized.saturating_add(1);
+				continue;
+			},
+			Ok(ReadFile::Skipped) | Err(_) => continue,
+		};
+		let Ok(search) = run_search_slice(&mut searcher, matcher, bytes.as_slice(), params) else {
+			continue;
+		};
+		let emitted_in_file = search.collected;
+		results.push(FileSearchResult {
+			relative_path: relative.into_owned(),
+			matches:       search.matches,
+			match_count:   search.match_count,
+			limit_reached: search.limit_reached,
+		});
+
+		emitted = emitted.saturating_add(emitted_in_file);
+		if emitted >= stop_after_matches {
+			return Ok((results, skipped_oversized, true));
+		}
+	}
+
+	Ok((results, skipped_oversized, false))
 }
 
 fn run_streaming_grep(
@@ -1515,16 +1611,28 @@ fn run_streaming_grep(
 ) -> Result<(Vec<FileSearchResult>, u64, bool)> {
 	let mut builder =
 		fs_cache::build_walker(search_path, include_hidden, use_gitignore, skip_node_modules, false);
+	let file_params = per_file_params(params);
+	// First-page content searches may stop early only on the ordered walker;
+	// the parallel visitor can otherwise race later paths ahead of earlier ones.
+	if let Some(stop_after_matches) = streaming_stop_after(params) {
+		return run_ordered_streaming_grep(
+			builder,
+			search_path,
+			matcher,
+			glob_set,
+			type_filter,
+			file_params,
+			stop_after_matches,
+			ct,
+		);
+	}
+
 	if workers > 0 {
 		builder.threads(workers);
 	}
-	let file_params = per_file_params(params);
 	let shared_results = Arc::new(Mutex::new(Vec::new()));
 	let error = Arc::new(Mutex::new(None));
 	let skipped_oversized = Arc::new(AtomicU64::new(0));
-	let stop_after_matches = streaming_stop_after(params);
-	let shared_match_count = Arc::new(AtomicU64::new(0));
-	let stopped_after_budget = Arc::new(AtomicBool::new(false));
 	let mut visitor_builder = StreamingGrepVisitorBuilder {
 		root: search_path,
 		matcher,
@@ -1534,9 +1642,6 @@ fn run_streaming_grep(
 		shared_results: Arc::clone(&shared_results),
 		error: Arc::clone(&error),
 		skipped_oversized: Arc::clone(&skipped_oversized),
-		stop_after_matches,
-		shared_match_count,
-		stopped_after_budget: Arc::clone(&stopped_after_budget),
 		ct,
 	};
 	ct.heartbeat()?;
@@ -1554,11 +1659,7 @@ fn run_streaming_grep(
 		.flatten()
 		.collect();
 	results.sort_unstable_by(|a, b| a.relative_path.cmp(&b.relative_path));
-	Ok((
-		results,
-		skipped_oversized.load(Ordering::Relaxed),
-		stopped_after_budget.load(Ordering::Relaxed),
-	))
+	Ok((results, skipped_oversized.load(Ordering::Relaxed), false))
 }
 
 fn push_count_match(matches: &mut Vec<GrepMatch>, path: String, match_count: u64) {
