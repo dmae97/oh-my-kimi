@@ -758,18 +758,6 @@ function isUmansGatewayWebSearchEnabled(
 	return isUmansAnthropicModel(model) && getUmansWebSearchProvider(headers) !== undefined;
 }
 
-function shouldEscapeAnthropicBuiltinToolName(
-	name: string,
-	escapeBuiltinToolNames: boolean,
-	useUmansGatewayWebSearch: boolean,
-): boolean {
-	return (
-		escapeBuiltinToolNames &&
-		ANTHROPIC_BUILTIN_TOOL_NAMES.has(name.toLowerCase()) &&
-		!shouldUseUmansGatewayWebSearch(name, useUmansGatewayWebSearch)
-	);
-}
-
 function encodeAnthropicToolName(
 	name: string,
 	isOAuthToken: boolean,
@@ -777,17 +765,13 @@ function encodeAnthropicToolName(
 	useUmansGatewayWebSearch = false,
 ): string {
 	if (shouldUseUmansGatewayWebSearch(name, useUmansGatewayWebSearch)) return name;
-	if (shouldEscapeAnthropicBuiltinToolName(name, escapeBuiltinToolNames, useUmansGatewayWebSearch)) {
-		return `${claudeToolPrefix}${name}`;
-	}
+	if (escapeBuiltinToolNames) return `${claudeToolPrefix}${name}`;
 	return isOAuthToken ? applyClaudeToolPrefix(name) : name;
 }
 
 function decodeAnthropicToolName(name: string, isOAuthToken: boolean, escapeBuiltinToolNames: boolean): string {
-	if (isOAuthToken) return stripClaudeToolPrefix(name);
-	if (!escapeBuiltinToolNames) return name;
-	const stripped = stripClaudeToolPrefix(name);
-	return ANTHROPIC_BUILTIN_TOOL_NAMES.has(stripped.toLowerCase()) ? stripped : name;
+	if (isOAuthToken || escapeBuiltinToolNames) return stripClaudeToolPrefix(name);
+	return name;
 }
 
 const ANTHROPIC_MANY_IMAGE_THRESHOLD = 20;

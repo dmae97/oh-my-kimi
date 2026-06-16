@@ -383,6 +383,66 @@ describe("anthropic stream envelope handling", () => {
 		]);
 	});
 
+	it("decodes escaped literal-prefixed Umans tool names", async () => {
+		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation(
+			() =>
+				createMockRequest([
+					{
+						type: "message_start",
+						message: {
+							id: "msg_literal_tool",
+							usage: {
+								input_tokens: 12,
+								output_tokens: 0,
+								cache_read_input_tokens: 0,
+								cache_creation_input_tokens: 0,
+							},
+						},
+					},
+					{
+						type: "content_block_start",
+						index: 0,
+						content_block: { type: "tool_use", id: "tool_1", name: "__web_search", input: {} },
+					},
+					{
+						type: "content_block_delta",
+						index: 0,
+						delta: { type: "input_json_delta", partial_json: '{"query":"literal"}' },
+					},
+					{ type: "content_block_stop", index: 0 },
+					{
+						type: "message_delta",
+						delta: { stop_reason: "tool_use" },
+						usage: {
+							input_tokens: 12,
+							output_tokens: 4,
+							cache_read_input_tokens: 0,
+							cache_creation_input_tokens: 0,
+						},
+					},
+					{ type: "message_stop" },
+				]) as never,
+		);
+
+		const stream = streamAnthropic(umansModel, context, { apiKey: "sk-ant-test" });
+		const events: AssistantMessageEvent[] = [];
+		for await (const event of stream) {
+			events.push(event);
+		}
+		const result = await stream.result();
+
+		expect(countEvents(events, "toolcall_start")).toBe(1);
+		expect(result.stopReason).toBe("toolUse");
+		expect(result.content).toEqual([
+			{
+				type: "toolCall",
+				id: "tool_1",
+				name: "_web_search",
+				arguments: { query: "literal" },
+			},
+		]);
+	});
+
 	it("ignores Umans gateway web search server blocks and keeps final text", async () => {
 		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation(
 			() =>

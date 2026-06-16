@@ -823,7 +823,7 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(payload.metadata?.user_id).not.toBe("invalid-user-id");
 		expectClaudeMetadataUserId(payload.metadata?.user_id);
 	});
-	it("escapes Anthropic built-in tool names for compatible gateways", async () => {
+	it("escapes Umans client tool names for unambiguous round-trips", async () => {
 		const tools: Tool[] = [
 			{
 				name: "web_search",
@@ -843,6 +843,15 @@ describe("Anthropic request fingerprint alignment", () => {
 					required: ["path"],
 				},
 			},
+			{
+				name: "_web_search",
+				description: "literal prefixed search",
+				parameters: {
+					type: "object",
+					properties: { query: { type: "string" } },
+					required: ["query"],
+				},
+			},
 		];
 
 		const payload = (await captureAnthropicPayload(
@@ -858,7 +867,7 @@ describe("Anthropic request fingerprint alignment", () => {
 			tool_choice?: { type?: string; name?: string };
 		};
 
-		expect(payload.tools?.map(tool => tool.name)).toEqual(["_web_search", "read"]);
+		expect(payload.tools?.map(tool => tool.name)).toEqual(["_web_search", "_read", "__web_search"]);
 		expect(payload.tool_choice).toEqual({ type: "tool", name: "_web_search" });
 	});
 
@@ -901,7 +910,7 @@ describe("Anthropic request fingerprint alignment", () => {
 			tool_choice?: { type?: string; name?: string };
 		};
 
-		expect(payload.tools?.map(tool => tool.name)).toEqual(["web_search", "read"]);
+		expect(payload.tools?.map(tool => tool.name)).toEqual(["web_search", "_read"]);
 		expect(payload.tool_choice).toEqual({ type: "tool", name: "web_search" });
 	});
 
