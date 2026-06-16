@@ -955,6 +955,19 @@ function isAdvisorCard(message: AgentMessage): message is CustomMessage {
 	return message.role === "custom" && message.customType === "advisor";
 }
 
+/**
+ * A queued message the user can restore to the editor / pull back as a draft.
+ * Only genuinely user-authored messages qualify: plain user turns, or custom
+ * messages explicitly attributed to the user (e.g. `/skill` invocations).
+ * Agent-authored queued cards — advisor concern/blocker notes, IRC asides,
+ * extension notices, hidden goal/plan/budget steers — ride the same
+ * steer/follow-up queues but must never be dumped into the editor on Esc/Alt+Up.
+ */
+function isUserQueuedMessage(message: AgentMessage): boolean {
+	if (message.role === "user") return true;
+	return message.role === "custom" && message.attribution === "user" && message.display !== false;
+}
+
 function queueChipText(message: AgentMessage): string {
 	if (message.role === "custom") {
 		return readQueueChipText(message.details) ?? queuedTextContent(message) ?? "";
@@ -5874,13 +5887,25 @@ export class AgentSession {
 
 	/** Clear queued messages and return them (text plus any attached images). */
 	clearQueue(): { steering: RestoredQueuedMessage[]; followUp: RestoredQueuedMessage[] } {
-		const steering = this.agent.peekSteeringQueue().map(toRestoredQueuedMessage);
-		const followUp = this.agent.peekFollowUpQueue().map(toRestoredQueuedMessage);
-		this.agent.clearAllQueues();
+		const steeringAll = this.agent.peekSteeringQueue();
+		const followUpAll = this.agent.peekFollowUpQueue();
+		const steering = steeringAll.filter(isUserQueuedMessage).map(toRestoredQueuedMessage);
+		const followUp = followUpAll.filter(isUserQueuedMessage).map(toRestoredQueuedMessage);
+		// User-authored messages go back to the editor. Advisor concern/blocker cards
+		// are kept queued: a resumed stream still delivers them, and on Esc abort()'s
+		// #extractQueuedAdvisorCards extracts + preserves them as visible advice
+		// (with auto-resume suppressed). Every other non-user queued message — hidden
+		// goal/plan/budget steers, IRC/extension asides — is dropped, matching the
+		// original full clear: keeping them would both leak into the editor and let
+		// abort()'s #drainStrandedQueuedMessages silently auto-resume the run the user
+		// just interrupted (the drain only fires while agent.hasQueuedMessages()).
+		this.agent.replaceQueues(steeringAll.filter(isAdvisorCard), followUpAll.filter(isAdvisorCard));
 		return { steering, followUp };
 	}
 
-	/** Number of pending displayable messages (includes steering, follow-up, and next-turn messages) */
+	/** Number of pending displayable messages (includes steering, follow-up, and next-turn messages).
+	 *  Reflects actual queued work (advisor cards included) — feeds hasPendingMessages()/RPC and the
+	 *  empty-submit abort gate. The user-restorable subset is surfaced by getQueuedMessages()/clearQueue(). */
 	get queuedMessageCount(): number {
 		return (
 			this.agent.peekSteeringQueue().filter(isDisplayableQueuedMessage).length +
@@ -5891,18 +5916,40 @@ export class AgentSession {
 
 	getQueuedMessages(): { steering: readonly string[]; followUp: readonly string[] } {
 		return {
-			steering: this.agent.peekSteeringQueue().filter(isDisplayableQueuedMessage).map(queueChipText),
-			followUp: this.agent.peekFollowUpQueue().filter(isDisplayableQueuedMessage).map(queueChipText),
+			steering: this.agent.peekSteeringQueue().filter(isUserQueuedMessage).map(queueChipText),
+			followUp: this.agent.peekFollowUpQueue().filter(isUserQueuedMessage).map(queueChipText),
 		};
 	}
 
 	/**
 	 * Pop the last queued message (steering first, then follow-up).
 	 * Used by dequeue keybinding to restore messages to editor one at a time.
+	 * Steps over agent-authored queued messages (advisor cards, hidden/internal steers).
 	 */
 	popLastQueuedMessage(): RestoredQueuedMessage | undefined {
-		const message = this.agent.popLastSteer() ?? this.agent.popLastFollowUp();
-		return message ? toRestoredQueuedMessage(message) : undefined;
+		const steering = this.agent.peekSteeringQueue();
+		const followUp = this.agent.peekFollowUpQueue();
+		const lastUserIndex = (queue: readonly AgentMessage[]): number => {
+			for (let i = queue.length - 1; i >= 0; i--) {
+				if (isUserQueuedMessage(queue[i])) return i;
+			}
+			return -1;
+		};
+		const fromSteer = lastUserIndex(steering);
+		if (fromSteer >= 0) {
+			const nextSteer = steering.slice();
+			const [removed] = nextSteer.splice(fromSteer, 1);
+			this.agent.replaceQueues(nextSteer, followUp.slice());
+			return toRestoredQueuedMessage(removed);
+		}
+		const fromFollowUp = lastUserIndex(followUp);
+		if (fromFollowUp >= 0) {
+			const nextFollowUp = followUp.slice();
+			const [removed] = nextFollowUp.splice(fromFollowUp, 1);
+			this.agent.replaceQueues(steering.slice(), nextFollowUp);
+			return toRestoredQueuedMessage(removed);
+		}
+		return undefined;
 	}
 
 	get skillsSettings(): SkillsSettings | undefined {
