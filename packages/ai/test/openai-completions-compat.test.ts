@@ -595,6 +595,50 @@ describe("openai-completions compatibility", () => {
 		expect(result.stopReason).toBe("stop");
 		expect(result.content[0]).toMatchObject({ type: "text", text: "done" });
 	});
+	it("surfaces empty Ollama length completions as context-window errors", async () => {
+		const model: Model<"openai-completions"> = buildModel({
+			...gpt4oMiniSpec,
+			api: "openai-completions",
+			provider: "ollama" as Model["provider"],
+			id: "local-12b",
+			baseUrl: "http://ollama.invalid/v1",
+		} as ModelSpec<"openai-completions">);
+		const fetchMock = createMockFetch([
+			{
+				id: "chatcmpl-empty-length",
+				object: "chat.completion.chunk",
+				created: 0,
+				model: model.id,
+				choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: "length" }],
+				usage: {
+					prompt_tokens: 8191,
+					completion_tokens: 1,
+					total_tokens: 8192,
+				},
+			},
+			"[DONE]",
+		]);
+
+		const stream = streamOpenAICompletions(model, baseContext(), {
+			apiKey: "test-key",
+			fetch: fetchMock,
+		});
+		const resultPromise = stream.result();
+		const eventTypes: string[] = [];
+		for await (const event of stream) {
+			eventTypes.push(event.type);
+		}
+		const result = await resultPromise;
+
+		expect(result.stopReason).toBe("error");
+		expect(eventTypes).toContain("error");
+		expect(result.errorMessage).toBe(
+			"Model returned no content: prompt filled the context window; raise Ollama num_ctx or shorten the prompt.",
+		);
+		expect(result.content).toEqual([]);
+		expect(result.usage.input).toBe(8191);
+		expect(result.usage.output).toBe(1);
+	});
 
 	it("injects compat.extraBody into OpenAI payload", async () => {
 		const model: Model<"openai-completions"> = buildModel({
