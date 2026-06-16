@@ -1020,6 +1020,28 @@ describe("provider routing selector (@upstream)", () => {
 		expect(openRouterOnly(result.model)).toBeUndefined();
 	});
 
+	test("keeps fuzzy matching a non-aggregator provider id that ends in @ (Vertex)", () => {
+		const vertexModel: Model<"anthropic-messages"> = buildModel({
+			id: "claude-opus-4-8@default",
+			name: "Claude Opus 4.8",
+			api: "anthropic-messages",
+			provider: "google-vertex",
+			baseUrl: "https://us-aiplatform.googleapis.com",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
+			contextWindow: 200000,
+			maxTokens: 32000,
+		});
+		// `opus@default` is a fuzzy provider-qualified pattern: the `@upstream` bypass must not
+		// swallow it, because google-vertex is not an aggregator and the routing fallback would
+		// never resolve it, leaving the selector unmatched.
+		const result = parseModelPattern("google-vertex/opus@default", [vertexModel]);
+		expect(result.model?.id).toBe("claude-opus-4-8@default");
+		expect(result.upstream).toBeUndefined();
+		expect(openRouterOnly(result.model)).toBeUndefined();
+	});
+
 	test("ignores @slug on a non-aggregator model (no silent routing)", () => {
 		const result = parseModelPattern("gpt-4o@cerebras", allModels);
 		expect(result.model).toBeUndefined();

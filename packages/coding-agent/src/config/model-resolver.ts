@@ -481,8 +481,11 @@ function matchModel(
 			// The prefix is not a known provider in this candidate set, so treat the
 			// slash as part of the raw model ID and continue with generic matching.
 		} else {
-			// Let the routing fallback apply `@upstream` before fuzzy matching can consume the slug.
-			if (splitUpstreamRouting(modelId)) {
+			// Let the routing fallback apply `@upstream` before fuzzy matching can consume the
+			// slug — but only for aggregator providers (OpenRouter / Vercel Gateway). Other
+			// providers have ids that legitimately end in `@` (Vertex `claude-opus-4-8@default`),
+			// and the fallback never routes them, so they must keep fuzzy matching.
+			if (splitUpstreamRouting(modelId) && providerModels.some(supportsUpstreamRouting)) {
 				return undefined;
 			}
 			const scored = providerModels
