@@ -205,6 +205,17 @@ export class PluginManager {
 		}
 	}
 
+	#collectInstalledNames(deps: Record<string, string>, config: PluginRuntimeConfig): Set<string> {
+		const installedNames = new Set<string>();
+		for (const name of Object.keys(deps)) {
+			installedNames.add(name);
+		}
+		for (const name of Object.keys(config.plugins)) {
+			installedNames.add(name);
+		}
+		return installedNames;
+	}
+
 	async #snapshotInstalledPackage(actualName: string | undefined): Promise<PluginPackageSnapshot | null> {
 		if (!actualName) {
 			return null;
@@ -501,13 +512,7 @@ export class PluginManager {
 		const projectOverrides = await this.#loadProjectOverrides();
 		const config = await this.#ensureConfigLoaded();
 		const plugins: InstalledPlugin[] = [];
-		const installedNames = new Set<string>();
-		for (const name of Object.keys(deps)) {
-			installedNames.add(name);
-		}
-		for (const name of Object.keys(config.plugins)) {
-			installedNames.add(name);
-		}
+		const installedNames = this.#collectInstalledNames(deps, config);
 
 		for (const name of installedNames) {
 			const pluginPath = path.join(getPluginsNodeModules(), name);
@@ -750,15 +755,14 @@ export class PluginManager {
 			message: hasNodeModules ? "Found" : "Missing (run npm install in plugins dir)",
 		});
 
-		if (!hasPkgJson) {
-			return checks;
-		}
 		const deps = pkg.dependencies || {};
 		const config = await this.#ensureConfigLoaded();
+		const installedNames = this.#collectInstalledNames(deps, config);
 
-		for (const [name] of Object.entries(deps)) {
+		for (const name of installedNames) {
 			const pluginPath = path.join(nodeModulesPath, name);
 			const pluginPkgPath = path.join(pluginPath, "package.json");
+			const fromDependencies = name in deps;
 
 			let pluginPkg: { version: string; description?: string; omp?: PluginManifest; pi?: PluginManifest };
 			try {
@@ -766,13 +770,23 @@ export class PluginManager {
 			} catch (err) {
 				if (isEnoent(err)) {
 					if (!fs.existsSync(pluginPath)) {
-						const fixed = options.fix ? await this.#fixMissingPlugin() : false;
-						checks.push({
-							name: `plugin:${name}`,
-							status: "error",
-							message: "Missing from node_modules",
-							fixed,
-						});
+						if (fromDependencies) {
+							const fixed = options.fix ? await this.#fixMissingPlugin() : false;
+							checks.push({
+								name: `plugin:${name}`,
+								status: "error",
+								message: "Missing from node_modules",
+								fixed,
+							});
+						} else {
+							const fixed = options.fix ? await this.#removeOrphanedConfig(name) : false;
+							checks.push({
+								name: `orphan:${name}`,
+								status: "warning",
+								message: "Plugin in config but not installed",
+								fixed,
+							});
+						}
 					} else {
 						checks.push({
 							name: `plugin:${name}`,
@@ -847,19 +861,6 @@ export class PluginManager {
 						});
 					}
 				}
-			}
-		}
-
-		// Check for orphaned runtime config entries
-		for (const name of Object.keys(config.plugins)) {
-			if (!(name in deps)) {
-				const fixed = options.fix ? await this.#removeOrphanedConfig(name) : false;
-				checks.push({
-					name: `orphan:${name}`,
-					status: "warning",
-					message: "Plugin in config but not installed",
-					fixed,
-				});
 			}
 		}
 
