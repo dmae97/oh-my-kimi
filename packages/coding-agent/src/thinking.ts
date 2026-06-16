@@ -32,26 +32,42 @@ const THINKING_LEVEL_METADATA: Record<ThinkingLevel, ThinkingLevelMetadata> = {
 	[ThinkingLevel.High]: { value: ThinkingLevel.High, label: "high", description: "Deep reasoning (~16k tokens)" },
 	[ThinkingLevel.XHigh]: {
 		value: ThinkingLevel.XHigh,
-		label: "xhigh",
+		label: "max",
 		description: "Maximum reasoning (~32k tokens)",
 	},
 };
 
-const THINKING_LEVELS = new Set<string>([ThinkingLevel.Inherit, ThinkingLevel.Off, ...THINKING_EFFORTS]);
-const EFFORT_LEVELS = new Set<string>(THINKING_EFFORTS);
+const EFFORT_BY_SELECTOR: Readonly<Record<string, Effort>> = {
+	[Effort.Minimal]: Effort.Minimal,
+	[Effort.Low]: Effort.Low,
+	[Effort.Medium]: Effort.Medium,
+	[Effort.High]: Effort.High,
+	[Effort.XHigh]: Effort.XHigh,
+	max: Effort.XHigh,
+};
+const THINKING_LEVEL_BY_SELECTOR: Readonly<Record<string, ThinkingLevel>> = {
+	[ThinkingLevel.Inherit]: ThinkingLevel.Inherit,
+	[ThinkingLevel.Off]: ThinkingLevel.Off,
+	[ThinkingLevel.Minimal]: ThinkingLevel.Minimal,
+	[ThinkingLevel.Low]: ThinkingLevel.Low,
+	[ThinkingLevel.Medium]: ThinkingLevel.Medium,
+	[ThinkingLevel.High]: ThinkingLevel.High,
+	[ThinkingLevel.XHigh]: ThinkingLevel.XHigh,
+	max: ThinkingLevel.XHigh,
+};
 
 /**
  * Parses a provider-facing effort value.
  */
 export function parseEffort(value: string | null | undefined): Effort | undefined {
-	return value !== undefined && value !== null && EFFORT_LEVELS.has(value) ? (value as Effort) : undefined;
+	return value === undefined || value === null ? undefined : EFFORT_BY_SELECTOR[value];
 }
 
 /**
  * Parses an agent-local thinking selector.
  */
 export function parseThinkingLevel(value: string | null | undefined): ThinkingLevel | undefined {
-	return value !== undefined && value !== null && THINKING_LEVELS.has(value) ? (value as ThinkingLevel) : undefined;
+	return value === undefined || value === null ? undefined : THINKING_LEVEL_BY_SELECTOR[value];
 }
 
 /**

@@ -3,10 +3,12 @@ import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { Effort } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { parseDifficultyBucket, parseDifficultyLevel } from "@oh-my-pi/pi-coding-agent/auto-thinking/classifier";
+import { parseModelString } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import {
 	AUTO_THINKING,
 	clampAutoThinkingEffort,
 	parseConfiguredThinkingLevel,
+	parseEffort,
 	parseThinkingLevel,
 } from "@oh-my-pi/pi-coding-agent/thinking";
 
@@ -40,5 +42,16 @@ describe("auto thinking classifier helpers", () => {
 
 		expect(clampAutoThinkingEffort(model, Effort.XHigh)).toBe(Effort.High);
 		expect(clampAutoThinkingEffort(model, Effort.Minimal)).toBe(Effort.Low);
+	});
+
+	it("accepts max as the top thinking selector alias", () => {
+		expect(parseEffort("max")).toBe(Effort.XHigh);
+		expect(parseThinkingLevel("max")).toBe(ThinkingLevel.XHigh);
+		expect(parseConfiguredThinkingLevel("max")).toBe(ThinkingLevel.XHigh);
+		expect(parseModelString("deepseek/deepseek-v4-pro:max")).toEqual({
+			provider: "deepseek",
+			id: "deepseek-v4-pro",
+			thinkingLevel: ThinkingLevel.XHigh,
+		});
 	});
 });
