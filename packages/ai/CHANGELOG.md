@@ -8,7 +8,7 @@
 
 ### Fixed
 
-- Fixed Anthropic-compatible Umans requests escaping client tool names so Kimi answers normally instead of returning raw gateway search results.
+- Fixed Anthropic-compatible Umans requests escaping client tool names and forwarding gateway web search headers so Kimi answers normally instead of returning raw gateway search results.
 
 ## [16.0.1] - 2026-06-15
 

@@ -751,13 +751,6 @@ function shouldUseUmansGatewayWebSearch(name: string, enabled: boolean): boolean
 	return enabled && name.toLowerCase() === UMANS_WEBSEARCH_TOOL_NAME;
 }
 
-function isUmansGatewayWebSearchEnabled(
-	model: Model<"anthropic-messages">,
-	headers: Record<string, string> | undefined,
-): boolean {
-	return isUmansAnthropicModel(model) && getUmansWebSearchProvider(headers) !== undefined;
-}
-
 function encodeAnthropicToolName(
 	name: string,
 	isOAuthToken: boolean,
@@ -1631,6 +1624,8 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 			let disableStrictTools =
 				(providerSessionState?.strictToolsDisabled ?? false) || (model.compat?.disableStrictTools ?? false);
 			let dropFastMode = providerSessionState?.fastModeDisabled ?? false;
+			const mergedCallerHeaders = mergeHeaders(model.headers, options?.headers);
+			const umansGatewayWebSearchHeader = getUmansWebSearchHeader(model, mergedCallerHeaders);
 
 			let client: AnthropicMessagesClientLike;
 			let isOAuthToken: boolean;
@@ -1692,7 +1687,14 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 			}
 			const preparedContext = await prepareAnthropicManyImageContext(context, model.input.includes("image"));
 			const prepareParams = async (): Promise<MessageCreateParamsStreaming> => {
-				let nextParams = buildParams(model, preparedContext, isOAuthToken, options, disableStrictTools);
+				let nextParams = buildParams(
+					model,
+					preparedContext,
+					isOAuthToken,
+					options,
+					disableStrictTools,
+					umansGatewayWebSearchHeader !== undefined,
+				);
 				if (disableStrictTools) {
 					dropAnthropicStrictTools(nextParams);
 				}
@@ -1770,7 +1772,11 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 				// to zero even when no watchdog timeout is configured (the helper only
 				// pins it alongside a timeout; a client retry budget of 5 would otherwise
 				// multiply with PROVIDER_MAX_RETRIES into up to 66 wire attempts).
-				const requestOptions = { ...createSdkStreamRequestOptions(requestSignal, requestTimeoutMs), maxRetries: 0 };
+				const requestOptions = {
+					...createSdkStreamRequestOptions(requestSignal, requestTimeoutMs),
+					maxRetries: 0,
+					...(umansGatewayWebSearchHeader ? { headers: umansGatewayWebSearchHeader } : {}),
+				};
 				const anthropicRequest: unknown =
 					isOAuthToken && client.beta
 						? client.beta.messages.create({ ...params, stream: true }, requestOptions)
@@ -2805,6 +2811,7 @@ function buildParams(
 	isOAuthToken: boolean,
 	options?: AnthropicOptions,
 	disableStrictTools = false,
+	useUmansGatewayWebSearch = false,
 ): MessageCreateParamsStreaming {
 	const { cacheControl } = getCacheControl(model, options?.cacheRetention, isOAuthToken);
 
@@ -2819,10 +2826,6 @@ function buildParams(
 	});
 
 	// Pre-compute tools.
-	const useUmansGatewayWebSearch = isUmansGatewayWebSearchEnabled(
-		model,
-		mergeHeaders(model.headers, options?.headers),
-	);
 	let tools: AnthropicWireTool[] | undefined;
 	if (context.tools) {
 		tools = convertTools(

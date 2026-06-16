@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { scheduler } from "node:timers/promises";
 import { convertAnthropicMessages, streamAnthropic } from "@oh-my-pi/pi-ai/providers/anthropic";
-import { AnthropicMessages } from "@oh-my-pi/pi-ai/providers/anthropic-client";
+import {
+	AnthropicMessages,
+	type AnthropicMessagesClientLike,
+	type AnthropicRequestOptions,
+} from "@oh-my-pi/pi-ai/providers/anthropic-client";
 import type { AssistantMessageEvent, Context, Model, ModelSpec, ProviderSessionState } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 
@@ -501,6 +505,48 @@ describe("anthropic stream envelope handling", () => {
 		expect(countEvents(events, "toolcall_start")).toBe(0);
 		expect(result.stopReason).toBe("stop");
 		expect(result.content).toEqual([{ type: "text", text: "59" }]);
+	});
+
+	it("passes Umans gateway web search headers to custom clients", async () => {
+		type CapturedPayload = { tools?: Array<{ name?: string }> };
+		let capturedParams: CapturedPayload | undefined;
+		let capturedOptions: AnthropicRequestOptions | undefined;
+		const client: AnthropicMessagesClientLike = {
+			messages: {
+				create(params, options) {
+					capturedParams = params as CapturedPayload;
+					capturedOptions = options;
+					return createMockRequest(createTextSuccessEvents("59"));
+				},
+			},
+		};
+
+		const stream = streamAnthropic(
+			umansModel,
+			{
+				...context,
+				tools: [
+					{
+						name: "web_search",
+						description: "Search the web",
+						parameters: queryObjectSchema,
+					},
+				],
+			},
+			{
+				client,
+				headers: { "X-Umans-Websearch-Provider": "exa" },
+			},
+		);
+		const events: AssistantMessageEvent[] = [];
+		for await (const event of stream) {
+			events.push(event);
+		}
+		const result = await stream.result();
+
+		expect(result.content).toEqual([{ type: "text", text: "59" }]);
+		expect(capturedParams?.tools?.map(tool => tool.name)).toEqual(["web_search"]);
+		expect(capturedOptions?.headers).toEqual({ "X-Umans-Websearch-Provider": "exa" });
 	});
 	it("unwraps thinking blocks that Anthropic streams with literal thinking tags", async () => {
 		const wrappedThinking =
