@@ -547,17 +547,14 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		name: "dump",
 		description: "Copy session transcript to clipboard",
 		acpDescription: "Return full transcript as plain text",
-		inlineHint: "[raw]",
 		allowArgs: true,
-		handle: async (command, runtime) => {
-			const isRaw = command.args.trim().toLowerCase() === "raw";
-			const text = runtime.session.formatSessionAsText({ compact: !isRaw });
+		handle: async (_command, runtime) => {
+			const text = runtime.session.formatSessionAsText();
 			await runtime.output(text || "No messages to dump yet.");
 			return commandConsumed();
 		},
-		handleTui: (command, runtime) => {
-			const isRaw = command.args.trim().toLowerCase() === "raw";
-			runtime.ctx.handleDumpCommand(isRaw);
+		handleTui: (_command, runtime) => {
+			runtime.ctx.handleDumpCommand();
 			runtime.ctx.editor.setText("");
 		},
 	},

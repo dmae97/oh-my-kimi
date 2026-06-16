@@ -3382,8 +3382,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#commandController.handleExportCommand(text);
 	}
 
-	handleDumpCommand(isRaw?: boolean) {
-		return this.#commandController.handleDumpCommand(isRaw);
+	handleDumpCommand() {
+		return this.#commandController.handleDumpCommand();
 	}
 
 	handleAdvisorDumpCommand(isRaw?: boolean) {
