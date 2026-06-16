@@ -41,6 +41,66 @@ describe("openai-codex tool schemas", () => {
 			parameters: { type: "object", properties: {} },
 		});
 	});
+	it("strips MCP regex lookaround patterns from function parameters", () => {
+		const tools: Tool[] = [
+			{
+				name: "get_design_context",
+				description: "Get Figma design context",
+				parameters: {
+					type: "object",
+					properties: {
+						fileKey: { type: "string", pattern: "^(?!undefined$|null$)" },
+					},
+					propertyNames: { pattern: "^(?!undefined$|null$)" },
+				},
+			},
+		];
+
+		const converted = convertOpenAICodexResponsesTools(tools, createCodexModel("gpt-5.5"));
+
+		expect(converted[0]).toEqual({
+			type: "function",
+			name: "get_design_context",
+			description: "Get Figma design context",
+			parameters: {
+				type: "object",
+				properties: {
+					fileKey: { type: "string" },
+				},
+				propertyNames: true,
+			},
+		});
+	});
+	it("strips MCP regex lookaround patternProperties from function parameters", () => {
+		const tools: Tool[] = [
+			{
+				name: "read_dynamic_values",
+				description: "Read dynamic values",
+				parameters: {
+					type: "object",
+					patternProperties: {
+						"^(?!secret_)": { type: "string" },
+						"^public_": { type: "string" },
+					},
+				},
+			},
+		];
+
+		const converted = convertOpenAICodexResponsesTools(tools, createCodexModel("gpt-5.5"));
+
+		expect(converted[0]).toEqual({
+			type: "function",
+			name: "read_dynamic_values",
+			description: "Read dynamic values",
+			parameters: {
+				type: "object",
+				patternProperties: {
+					"^public_": { type: "string" },
+				},
+				properties: {},
+			},
+		});
+	});
 });
 
 describe("openai-codex request transformer", () => {

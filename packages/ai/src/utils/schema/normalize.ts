@@ -936,8 +936,24 @@ export function sanitizeSchemaForOpenAIResponses(schema: JsonObject): JsonObject
  * `normalizeSchemaFor*` dispatcher naming used elsewhere in this module.
  */
 export const normalizeSchemaForOpenAIResponses: (schema: JsonObject) => JsonObject = sanitizeSchemaForOpenAIResponses;
+const OPENAI_UNSUPPORTED_REGEX_LOOKAROUNDS = new Set(["=", "!", "<=", "<!"]);
 
-function normalizeOpenAIResponsesSchemaNode(value: unknown, cache: WeakMap<JsonObject, JsonObject>): unknown {
+function hasOpenAIUnsupportedRegexLookaround(pattern: string): boolean {
+	let groupStart = pattern.indexOf("(?");
+	while (groupStart !== -1) {
+		let escapes = 0;
+		for (let i = groupStart - 1; i >= 0 && pattern[i] === "\\"; i--) escapes++;
+		if (escapes % 2 === 0) {
+			const operator =
+				pattern[groupStart + 2] === "<" ? pattern.slice(groupStart + 2, groupStart + 4) : pattern[groupStart + 2];
+			if (OPENAI_UNSUPPORTED_REGEX_LOOKAROUNDS.has(operator)) return true;
+		}
+		groupStart = pattern.indexOf("(?", groupStart + 2);
+	}
+	return false;
+}
+
+function normalizeOpenAIResponsesSchemaNode(value: unknown, cache: WeakMap<JsonObject, unknown>): unknown {
 	if (!isJsonObject(value)) return value;
 
 	// `{}` (empty JSON Schema) ≡ `true` (JSON Schema draft 2020-12 §4.3.1).
@@ -973,11 +989,21 @@ function normalizeOpenAIResponsesSchemaNode(value: unknown, cache: WeakMap<JsonO
 			changed = true;
 			continue;
 		}
+		if (
+			key === "pattern" &&
+			typeof value.pattern === "string" &&
+			hasOpenAIUnsupportedRegexLookaround(value.pattern)
+		) {
+			changed = true;
+			continue;
+		}
 
 		const child = value[key];
 		let next: unknown = child;
-		if (OPENAI_RESPONSES_SCHEMA_MAP_KEYS.has(key) && isJsonObject(child)) {
-			next = normalizeOpenAIResponsesSchemaMap(child, cache);
+		if (key === "patternProperties" && isJsonObject(child)) {
+			next = normalizeOpenAIResponsesSchemaMap(child, cache, true);
+		} else if (OPENAI_RESPONSES_SCHEMA_MAP_KEYS.has(key) && isJsonObject(child)) {
+			next = normalizeOpenAIResponsesSchemaMap(child, cache, false);
 		} else if (OPENAI_RESPONSES_SCHEMA_ARRAY_KEYS.has(key) && Array.isArray(child)) {
 			next = normalizeOpenAIResponsesSchemaArray(child, cache);
 		} else if (OPENAI_RESPONSES_SCHEMA_VALUE_KEYS.has(key) && isJsonObject(child)) {
@@ -1008,7 +1034,7 @@ function normalizeOpenAIResponsesSchemaNode(value: unknown, cache: WeakMap<JsonO
 	// the seeded partial and set `changed = true` for that node, so a node
 	// that finishes with `changed === false` is provably non-cyclic and
 	// referentially equal to its input.
-	const result = changed ? output : value;
+	const result = changed ? (isJsonObjectEmpty(output) ? true : output) : value;
 	cache.set(value, result);
 	return result;
 }
@@ -1022,7 +1048,7 @@ function declaresObjectType(type: unknown): boolean {
 	return false;
 }
 
-function normalizeOpenAIResponsesSchemaArray(value: unknown[], cache: WeakMap<JsonObject, JsonObject>): unknown[] {
+function normalizeOpenAIResponsesSchemaArray(value: unknown[], cache: WeakMap<JsonObject, unknown>): unknown[] {
 	let changed = false;
 	const output = value.map(item => {
 		const next = normalizeOpenAIResponsesSchemaNode(item, cache);
@@ -1032,11 +1058,19 @@ function normalizeOpenAIResponsesSchemaArray(value: unknown[], cache: WeakMap<Js
 	return changed ? output : value;
 }
 
-function normalizeOpenAIResponsesSchemaMap(schemaMap: JsonObject, cache: WeakMap<JsonObject, JsonObject>): JsonObject {
+function normalizeOpenAIResponsesSchemaMap(
+	schemaMap: JsonObject,
+	cache: WeakMap<JsonObject, unknown>,
+	stripUnsupportedRegexKeys: boolean,
+): JsonObject {
 	let changed = false;
 	const output: JsonObject = {};
 	for (const key in schemaMap) {
 		if (!Object.hasOwn(schemaMap, key)) continue;
+		if (stripUnsupportedRegexKeys && hasOpenAIUnsupportedRegexLookaround(key)) {
+			changed = true;
+			continue;
+		}
 		const child = schemaMap[key];
 		const next = normalizeOpenAIResponsesSchemaNode(child, cache);
 		if (next !== child) changed = true;
