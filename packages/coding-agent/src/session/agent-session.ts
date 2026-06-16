@@ -968,6 +968,31 @@ function isUserQueuedMessage(message: AgentMessage): boolean {
 	return message.role === "custom" && message.attribution === "user" && message.display !== false;
 }
 
+/** Custom-message types of the hidden magic-keyword notices that `#createMagicKeywordNotices`
+ *  enqueues alongside a user prompt. Keep in sync with that method. */
+const MAGIC_KEYWORD_NOTICE_TYPES: ReadonlySet<string> = new Set([
+	"ultrathink-notice",
+	"orchestrate-notice",
+	"workflow-notice",
+]);
+
+/**
+ * A hidden, user-attributed companion of a queued user prompt: the magic-keyword
+ * notices (`ultrathink`/`orchestrate`/`workflow`) enqueued alongside the user
+ * message. They are `attribution: "user"` but `display: false`, so they are not
+ * editor-restorable; when the user pulls their prompt back out of the queue these
+ * must leave with it rather than linger as stale, companion-less steering. Scoped to
+ * the known notice types so an unrelated hidden user custom is never silently dropped.
+ */
+function isHiddenUserCompanion(message: AgentMessage): boolean {
+	return (
+		message.role === "custom" &&
+		message.attribution === "user" &&
+		message.display === false &&
+		MAGIC_KEYWORD_NOTICE_TYPES.has(message.customType)
+	);
+}
+
 function queueChipText(message: AgentMessage): string {
 	if (message.role === "custom") {
 		return readQueueChipText(message.details) ?? queuedTextContent(message) ?? "";
@@ -1274,6 +1299,57 @@ export class AgentSession {
 	#drainStrandedQueuedMessages(): void {
 		if (this.#abortInProgress) return;
 		this.#scheduleQueuedMessageDrain();
+		this.#resumeStrandedIrcAsides();
+	}
+
+	/** IRC asides that arrive after the loop's final aside poll — or while an abort skipped that
+	 *  poll — land in #pendingIrcAsides with no loop left to drain them; the queued-message drain's
+	 *  gate (agent.hasQueuedMessages()) does not count them. Once idle, wake a turn so the agent
+	 *  responds to the peer. Skip only when a queued steer/follow-up will itself drive a resume turn
+	 *  whose aside poll already consumes these (no double-wake). */
+	#resumeStrandedIrcAsides(): void {
+		if (this.#isDisposed || this.isStreaming) return;
+		if (this.#pendingIrcAsides.length === 0) return;
+		if (this.#canAutoContinueForFollowUp() && this.agent.hasQueuedMessages()) return;
+		const records = this.#pendingIrcAsides;
+		this.#pendingIrcAsides = [];
+		this.#wakeForIrc(records);
+	}
+
+	/** Fire-and-forget wake turn for incoming IRC — idle delivery and stranded-aside resume both
+	 *  route here. Wrapped in #beginInFlight/#endInFlight so the turn is tracked and its settle
+	 *  re-drains anything that stranded during it. A user interrupt may have intentionally left a
+	 *  follow-up queued behind an invalid tail (seam #5); the wake turn's loop would otherwise drain
+	 *  it, so park the follow-up queue across the wake and restore it after. It stays queued post-wake
+	 *  because #canAutoContinueForFollowUp suppresses follow-up auto-resume while a user interrupt is
+	 *  in effect, even though the wake left a provider-valid tail. */
+	#wakeForIrc(records: CustomMessage[]): void {
+		// Park only a *blocked* follow-up (one a user interrupt is intentionally holding); an
+		// already-resumable follow-up can ride the wake turn normally without reordering.
+		const parkedFollowUps =
+			this.agent.peekSteeringQueue().length === 0 &&
+			this.agent.peekFollowUpQueue().length > 0 &&
+			!this.#canAutoContinueForFollowUp()
+				? [...this.agent.peekFollowUpQueue()]
+				: [];
+		if (parkedFollowUps.length > 0) {
+			this.agent.replaceQueues([...this.agent.peekSteeringQueue()], []);
+		}
+		this.#beginInFlight();
+		void this.agent
+			.prompt(records)
+			.catch(error => {
+				logger.warn("IRC wake turn failed", { error: String(error) });
+			})
+			.finally(() => {
+				if (parkedFollowUps.length > 0) {
+					this.agent.replaceQueues(
+						[...this.agent.peekSteeringQueue()],
+						[...parkedFollowUps, ...this.agent.peekFollowUpQueue()],
+					);
+				}
+				this.#endInFlight();
+			});
 	}
 
 	/** Remove advisor concern/blocker cards from the agent-core steer/follow-up
@@ -3657,7 +3733,7 @@ export class AgentSession {
 	 */
 	beginDispose(): void {
 		this.#isDisposed = true;
-		this.#pendingIrcAsides = [];
+		this.#flushPendingIrcAsides();
 		this.yieldQueue.clear();
 		this.agent.setAsideMessageProvider(undefined);
 		this.#stopAdvisorRuntime();
@@ -5135,14 +5211,15 @@ export class AgentSession {
 			if (!options?.streamingBehavior) {
 				throw new AgentBusyError();
 			}
+			// Steer/follow-up the keyword notices BEFORE the queued user message so the
+			// model reads the steering notice ahead of the prompt it modifies.
+			for (const notice of keywordNotices) {
+				await this.sendCustomMessage(notice, { deliverAs: options.streamingBehavior });
+			}
 			if (options.streamingBehavior === "followUp") {
 				await this.#queueUserMessage(expandedText, options?.images, "followUp");
 			} else {
 				await this.#queueUserMessage(expandedText, options?.images, "steer");
-			}
-			// Steer/follow-up the keyword notices alongside the queued user message.
-			for (const notice of keywordNotices) {
-				await this.sendCustomMessage(notice, { deliverAs: options.streamingBehavior });
 			}
 			return true;
 		}
@@ -5182,8 +5259,10 @@ export class AgentSession {
 			await this.#promptWithMessage(message, expandedText, {
 				...options,
 				images: normalizedImages,
-				prependMessages: preludeMessages.length > 0 ? preludeMessages : undefined,
-				appendMessages: keywordNotices.length > 0 ? keywordNotices : undefined,
+				prependMessages:
+					preludeMessages.length > 0 || keywordNotices.length > 0
+						? [...preludeMessages, ...keywordNotices]
+						: undefined,
 			});
 		} finally {
 			// Clean up residual eager-todo directive if the prompt never consumed it
@@ -5222,13 +5301,13 @@ export class AgentSession {
 			if (!options?.streamingBehavior) {
 				throw new AgentBusyError();
 			}
+			for (const notice of keywordNotices) {
+				await this.sendCustomMessage(notice, { deliverAs: options.streamingBehavior });
+			}
 			await this.sendCustomMessage(message, {
 				deliverAs: options.streamingBehavior,
 				queueChipText: options.queueChipText,
 			});
-			for (const notice of keywordNotices) {
-				await this.sendCustomMessage(notice, { deliverAs: options.streamingBehavior });
-			}
 			return;
 		}
 
@@ -5244,7 +5323,7 @@ export class AgentSession {
 
 		await this.#promptWithMessage(customMessage, textContent, {
 			...options,
-			appendMessages: keywordNotices.length > 0 ? keywordNotices : undefined,
+			prependMessages: keywordNotices.length > 0 ? keywordNotices : undefined,
 		});
 	}
 
@@ -5253,7 +5332,6 @@ export class AgentSession {
 		expandedText: string,
 		options?: Pick<PromptOptions, "toolChoice" | "images" | "skipCompactionCheck"> & {
 			prependMessages?: AgentMessage[];
-			appendMessages?: AgentMessage[];
 			skipPostPromptRecoveryWait?: boolean;
 		},
 	): Promise<void> {
@@ -5319,12 +5397,6 @@ export class AgentSession {
 			}
 
 			messages.push(message);
-
-			// Inject the ultrathink notice (and any other per-turn appends) right after the
-			// user message so the model reads it as part of the same turn.
-			if (options?.appendMessages) {
-				messages.push(...options.appendMessages);
-			}
 
 			// Early bail-out: if a newer abort/prompt cycle started during setup,
 			// return before mutating shared state (nextTurn messages, system prompt).
@@ -5647,12 +5719,24 @@ export class AgentSession {
 	#canAutoContinueForFollowUp(): boolean {
 		if (this.isStreaming) return false;
 		if (this.isRetrying) return false;
+		// A queued steer resumes from ANY tail: Agent.continue() runs #runLoop(undefined),
+		// whose initial steering poll injects the steer before the first provider call, so the
+		// request tail becomes the steer (valid) regardless of any injected custom / bashExecution
+		// / pythonExecution record a user interrupt left as the literal transcript tail. This is
+		// why a queued user steer stranded behind a preserved advisor card (or a flushed IRC aside
+		// / eval execution record) still resumes — no tail-role enumeration needed.
+		if (this.agent.peekSteeringQueue().length > 0) return true;
+		// Follow-up-only auto-resume stays suppressed while a deliberate user interrupt is in effect
+		// (#advisorAutoResumeSuppressed, cleared on the next user prompt): the user stopped, so their
+		// queued follow-up waits for an explicit resume — even if an interleaving IRC wake turn has
+		// since left a provider-valid tail.
+		if (this.#advisorAutoResumeSuppressed) return false;
+		// Follow-up-only resume has no steer to inject, so Agent.continue() continues from the
+		// existing context tail — which must itself be a valid provider tail. An injected
+		// non-conversational tail (advisor card → `developer`, bash/python execution) would make
+		// the first model call invalid, so leave the follow-up queued for the next explicit resume.
 		const messages = this.agent.state.messages;
 		const last = messages[messages.length - 1];
-		// A user interrupt during tool execution can leave the transcript ending
-		// with the emitted tool result, not the aborted assistant message. Continuing
-		// from that state is still resumable: Agent.continue() first polls queued
-		// steering before making the next model call.
 		return last?.role === "assistant" || last?.role === "toolResult";
 	}
 
@@ -5901,7 +5985,9 @@ export class AgentSession {
 		const followUpAll = this.agent.peekFollowUpQueue();
 		const steering = steeringAll.filter(isUserQueuedMessage).map(toRestoredQueuedMessage);
 		const followUp = followUpAll.filter(isUserQueuedMessage).map(toRestoredQueuedMessage);
-		const keep: (m: AgentMessage) => boolean = options?.forInterrupt ? isAdvisorCard : m => !isUserQueuedMessage(m);
+		const keep: (m: AgentMessage) => boolean = options?.forInterrupt
+			? isAdvisorCard
+			: m => !isUserQueuedMessage(m) && !isHiddenUserCompanion(m);
 		this.agent.replaceQueues(steeringAll.filter(keep), followUpAll.filter(keep));
 		return { steering, followUp };
 	}
@@ -5938,18 +6024,26 @@ export class AgentSession {
 			}
 			return -1;
 		};
+		// Notices queue immediately before their user message, so dropping the popped
+		// prompt means also dropping the contiguous hidden-user companions right before
+		// it — companions of other queued prompts stay put.
+		const removeWithCompanions = (queue: readonly AgentMessage[], userIndex: number): AgentMessage[] => {
+			let start = userIndex;
+			while (start > 0 && isHiddenUserCompanion(queue[start - 1])) start--;
+			const next = queue.slice();
+			next.splice(start, userIndex - start + 1);
+			return next;
+		};
 		const fromSteer = lastUserIndex(steering);
 		if (fromSteer >= 0) {
-			const nextSteer = steering.slice();
-			const [removed] = nextSteer.splice(fromSteer, 1);
-			this.agent.replaceQueues(nextSteer, followUp.slice());
+			const removed = steering[fromSteer];
+			this.agent.replaceQueues(removeWithCompanions(steering, fromSteer), followUp.slice());
 			return toRestoredQueuedMessage(removed);
 		}
 		const fromFollowUp = lastUserIndex(followUp);
 		if (fromFollowUp >= 0) {
-			const nextFollowUp = followUp.slice();
-			const [removed] = nextFollowUp.splice(fromFollowUp, 1);
-			this.agent.replaceQueues(steering.slice(), nextFollowUp);
+			const removed = followUp[fromFollowUp];
+			this.agent.replaceQueues(steering.slice(), removeWithCompanions(followUp, fromFollowUp));
 			return toRestoredQueuedMessage(removed);
 		}
 		return undefined;
@@ -10242,11 +10336,8 @@ export class AgentSession {
 			if (autoReply) void this.#runIrcAutoReply(msg);
 			return "injected";
 		}
-		// Idle: same wake primitive the yield queue uses for async-result
-		// delivery — prompt the agent directly so a real turn runs.
-		this.agent.prompt(record).catch(error => {
-			logger.warn("IRC wake turn failed", { from: msg.from, to: msg.to, error: String(error) });
-		});
+		// Idle: wake a real turn so the recipient responds (shared with the stranded-aside resume).
+		this.#wakeForIrc([record]);
 		return "woken";
 	}
 

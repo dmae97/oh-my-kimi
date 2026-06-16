@@ -205,4 +205,95 @@ describe("AgentSession queued steer delivery", () => {
 		expect(session.agent.hasQueuedMessages()).toBe(false);
 		expect(session.getQueuedMessages().steering).toEqual([]);
 	});
+
+	it("dequeuing an ultrathink prompt mid-stream restores the text and drops its companion notice", async () => {
+		const { session } = await createSession([{ content: ["host answer"] }]);
+		let queuedShape: string[] | undefined;
+		let clearedSteering: unknown;
+		let hasQueuedAfterClear: boolean | undefined;
+		let injected = false;
+		session.agent.setOnBeforeYield(async () => {
+			if (injected) return;
+			injected = true;
+			// Real path: a magic-keyword prompt steered mid-stream enqueues the hidden
+			// notice immediately before the user message.
+			await session.prompt("ultrathink fix it", { streamingBehavior: "steer" });
+			queuedShape = session.agent.peekSteeringQueue().map(m => (m.role === "custom" ? m.customType : m.role));
+			// Alt+Up restore mid-flight: only the user's text returns; the companion
+			// notice must not be left orphaned in the queue.
+			const cleared = session.clearQueue();
+			clearedSteering = cleared.steering;
+			hasQueuedAfterClear = session.agent.hasQueuedMessages();
+		});
+
+		await session.prompt("hello");
+
+		expect(queuedShape).toEqual(["ultrathink-notice", "user"]);
+		expect(clearedSteering).toEqual([{ text: "ultrathink fix it", images: undefined }]);
+		expect(hasQueuedAfterClear).toBe(false);
+	});
+
+	it("a fresh user prompt delivers queued steer and follow-up work", async () => {
+		const { session } = await createSession([{ content: ["one"] }, { content: ["two"] }, { content: ["three"] }]);
+		// Queue real pending work before the user's next send.
+		session.agent.steer({
+			role: "user",
+			content: [{ type: "text", text: "queued steer" }],
+			steering: true,
+			attribution: "user",
+			timestamp: Date.now(),
+		});
+		session.agent.followUp({
+			role: "user",
+			content: [{ type: "text", text: "queued follow-up" }],
+			attribution: "user",
+			timestamp: Date.now(),
+		});
+		expect(session.agent.hasQueuedMessages()).toBe(true);
+
+		await session.prompt("hello");
+		await session.waitForIdle();
+
+		// Sending a fresh prompt is the opportunity to drain everything: the steer folds
+		// into the new turn and the follow-up runs as its continuation — nothing stranded.
+		const userTexts = session.agent.state.messages
+			.filter(message => message.role === "user")
+			.map(message =>
+				typeof message.content === "string"
+					? message.content
+					: message.content
+							.filter(part => part.type === "text")
+							.map(part => part.text)
+							.join(""),
+			);
+		expect(userTexts).toContain("hello");
+		expect(userTexts).toContain("queued steer");
+		expect(userTexts).toContain("queued follow-up");
+		expect(session.agent.hasQueuedMessages()).toBe(false);
+	});
+
+	it("resumes a queued steer left behind a non-advisor custom transcript tail", async () => {
+		const { session } = await createSession([{ content: ["first answer"] }, { content: ["resumed"] }]);
+		await session.prompt("first");
+		// A non-advisor custom (e.g. a flushed irc:incoming aside) is the literal transcript tail.
+		// A queued steer must resume regardless of tail role — Agent.continue injects it via the
+		// initial steering poll — so the old advisor-only look-back can no longer strand it.
+		const aside = {
+			role: "custom" as const,
+			customType: "irc:incoming",
+			content: "peer pinged you",
+			display: true,
+			attribution: "agent" as const,
+			timestamp: Date.now(),
+		};
+		session.agent.emitExternalEvent({ type: "message_start", message: aside });
+		session.agent.emitExternalEvent({ type: "message_end", message: aside });
+
+		const delivered = nextUserMessage(session, "resume me");
+		await session.steer("resume me");
+		await delivered;
+		await session.waitForIdle();
+
+		expect(session.agent.peekSteeringQueue()).toEqual([]);
+	});
 });

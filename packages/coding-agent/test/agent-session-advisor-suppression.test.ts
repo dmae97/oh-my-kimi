@@ -4,13 +4,18 @@
  * so they re-enter context when the user resumes. Internal (non-user) aborts keep
  * the prior behavior — advisor advice stays in the auto-continue path.
  *
- * Three seams:
+ * Five seams:
  *  1. A concern already steered into the agent queue when the user hits Esc is
  *     pulled out of the post-abort auto-continue path and re-recorded as advice.
  *  2. A concern parked hidden (#pendingNextTurnMessages) by the suppressed
  *     delivery while the turn is still tearing down is reclaimed once idle.
  *  3. A non-user abort does NOT suppress: a steered advisor card still drives the
  *     auto-continue, so the gate is keyed to the user interrupt, not any abort.
+ *  4. A user message queued (as a steer) before the interrupt is delivered on
+ *     resume even though the preserved advisor card is the trailing message.
+ *  5. The same queued as a follow-up: continuing from the preserved advisor card
+ *     (which converts to `developer`) would send an invalid provider tail, so the
+ *     follow-up stays queued for the next explicit resume rather than auto-running.
  */
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
@@ -21,6 +26,7 @@ import { createMockModel, type MockModel, type MockResponse } from "@oh-my-pi/pi
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { IrcMessage } from "@oh-my-pi/pi-coding-agent/irc/bus";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
@@ -102,6 +108,20 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		return message.role === "custom" && (message as { customType?: string }).customType === ADVISOR_TYPE;
 	}
 
+	function userMessageText(messages: AgentMessage[]): string[] {
+		const out: string[] = [];
+		for (const message of messages) {
+			if (message.role !== "user") continue;
+			const content = message.content;
+			if (typeof content === "string") {
+				out.push(content);
+			} else {
+				for (const part of content) if (part.type === "text") out.push(part.text);
+			}
+		}
+		return out;
+	}
+
 	function capturePersistedAdvice(sessionManager: SessionManager): string[] {
 		const persisted: string[] = [];
 		sessionManager.onEntryAppended = entry => {
@@ -176,6 +196,121 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		await running.catch(() => {});
 
 		expect(session.agent.peekSteeringQueue()).toEqual([]);
+		expect(mock.calls.length).toBe(2);
+	});
+
+	it("resumes a queued user steer stranded behind a preserved advisor card", async () => {
+		// Reported bug: typing a message during a run (queued as a steer) then pressing
+		// enter again (empty-submit interrupt) recorded the advisor card but stranded the
+		// user message — nothing resumed the run. The preserved advisor card is the
+		// trailing `custom` message, which #canAutoContinueForFollowUp must look past.
+		const { session, sessionManager, mock, streamStarted } = await createParkedSession([
+			{ content: ["resumed on the steer"] },
+		]);
+		const persisted = capturePersistedAdvice(sessionManager);
+
+		const running = session.prompt("do the thing");
+		await streamStarted;
+
+		await session.sendCustomMessage(advisorCard("breaks the build"), { deliverAs: "steer", triggerTurn: true });
+		await session.prompt("also rename the helper", { streamingBehavior: "steer" });
+
+		await session.abort({ reason: USER_INTERRUPT_LABEL });
+		await session.waitForIdle();
+		await running.catch(() => {});
+
+		// Advisor card preserved as a visible/persisted card AND the user steer delivered
+		// in exactly one resume turn (no spurious extra call).
+		expect(session.agent.state.messages.filter(isAdvisorCard)).toHaveLength(1);
+		expect(persisted).toEqual(["breaks the build"]);
+		expect(session.agent.peekSteeringQueue()).toEqual([]);
+		expect(mock.calls.length).toBe(2);
+		expect(userMessageText(session.agent.state.messages)).toContain("also rename the helper");
+	});
+
+	it("leaves a queued user follow-up queued behind a preserved advisor card", async () => {
+		// Same stranding, but the user message was queued as a follow-up (Ctrl+Enter).
+		// Only steering resumes safely behind a preserved advisor card: agentLoopContinue
+		// injects steering before the next model call, keeping the request tail valid. A
+		// follow-up would instead resume by continuing from the advisor card (which converts
+		// to `developer`) as the tail — a provider-invalid request — so it is NOT auto-run.
+		// It stays queued for the next explicit user resume.
+		const { session, sessionManager, mock, streamStarted } = await createParkedSession([
+			{ content: ["must not run"] },
+		]);
+		const persisted = capturePersistedAdvice(sessionManager);
+
+		const running = session.prompt("do the thing");
+		await streamStarted;
+
+		await session.sendCustomMessage(advisorCard("missing a guard"), { deliverAs: "steer", triggerTurn: true });
+		await session.prompt("then add the test", { streamingBehavior: "followUp" });
+
+		await session.abort({ reason: USER_INTERRUPT_LABEL });
+		await session.waitForIdle();
+		await running.catch(() => {});
+
+		// Advisor preserved as a visible/persisted card; the follow-up stays queued and
+		// drives no resume (only the original, aborted turn ever called the model).
+		expect(session.agent.state.messages.filter(isAdvisorCard)).toHaveLength(1);
+		expect(persisted).toEqual(["missing a guard"]);
+		expect(userMessageText([...session.agent.peekFollowUpQueue()])).toContain("then add the test");
+		expect(userMessageText(session.agent.state.messages)).not.toContain("then add the test");
+		expect(mock.calls.length).toBe(1);
+	});
+
+	it("wakes a turn for an IRC aside stranded across a user interrupt", async () => {
+		const { session, mock, streamStarted } = await createParkedSession([{ content: ["replying to peer"] }]);
+		const running = session.prompt("do the thing");
+		await streamStarted;
+		// IRC arrives mid-turn → queued as a non-interrupting aside.
+		await session.deliverIrcMessage({ id: "m1", from: "peer", to: "me", body: "ping", ts: Date.now() } as IrcMessage);
+		// The user interrupt skips the loop's final aside poll, stranding the aside with no loop to
+		// drain it. The settle drain must wake a turn so the peer still gets a response.
+		await session.abort({ reason: USER_INTERRUPT_LABEL });
+		await session.waitForIdle();
+		await running.catch(() => {});
+
+		const sawIrc = session.agent.state.messages.some(
+			m => m.role === "custom" && (m as { customType?: string }).customType === "irc:incoming",
+		);
+		expect(sawIrc).toBe(true);
+		expect(mock.calls.length).toBe(2);
+	});
+
+	it("flushes an accepted IRC aside on dispose instead of dropping it", async () => {
+		const { session, streamStarted } = await createParkedSession();
+		const running = session.prompt("do the thing");
+		await streamStarted;
+		await session.deliverIrcMessage({ id: "m1", from: "peer", to: "me", body: "ping", ts: Date.now() } as IrcMessage);
+		// Dispose mid-flight persists the accepted aside to the transcript rather than dropping it.
+		session.beginDispose();
+		const sawIrc = session.agent.state.messages.some(
+			m => m.role === "custom" && (m as { customType?: string }).customType === "irc:incoming",
+		);
+		expect(sawIrc).toBe(true);
+		running.catch(() => {});
+	});
+
+	it("responds to a stranded IRC aside while keeping a blocked follow-up queued", async () => {
+		const { session, mock, streamStarted } = await createParkedSession([{ content: ["replying to peer"] }]);
+		const running = session.prompt("do the thing");
+		await streamStarted;
+		// The user queues a follow-up (Ctrl+Enter) and an IRC ping lands as an aside...
+		await session.prompt("then add the test", { streamingBehavior: "followUp" });
+		await session.deliverIrcMessage({ id: "m2", from: "peer", to: "me", body: "ping", ts: Date.now() } as IrcMessage);
+		// ...then the user interrupts. The IRC must still get a response, but the user's queued
+		// follow-up must NOT auto-run (seam #5) even though the IRC wake turn leaves a valid tail.
+		await session.abort({ reason: USER_INTERRUPT_LABEL });
+		await session.waitForIdle();
+		await running.catch(() => {});
+
+		const sawIrc = session.agent.state.messages.some(
+			m => m.role === "custom" && (m as { customType?: string }).customType === "irc:incoming",
+		);
+		expect(sawIrc).toBe(true);
+		expect(userMessageText([...session.agent.peekFollowUpQueue()])).toContain("then add the test");
+		expect(userMessageText(session.agent.state.messages)).not.toContain("then add the test");
 		expect(mock.calls.length).toBe(2);
 	});
 });

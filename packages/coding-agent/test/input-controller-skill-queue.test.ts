@@ -249,6 +249,30 @@ function queueAdvisorSteer(session: AgentSession, note = "consider X"): void {
 	});
 }
 
+/** Mirror a hidden magic-keyword companion notice (`display:false`, `attribution:"user"`). */
+function queueMagicCompanion(session: AgentSession, customType = "ultrathink-notice"): void {
+	session.agent.steer({
+		role: "custom",
+		customType,
+		content: "hidden notice",
+		display: false,
+		attribution: "user",
+		details: {},
+		timestamp: Date.now(),
+	});
+}
+
+/** Mirror a steered user prompt (`AgentSession.#queueUserMessage(..., "steer")`). */
+function queueUserSteer(session: AgentSession, text: string): void {
+	session.agent.steer({
+		role: "user",
+		content: [{ type: "text", text }],
+		steering: true,
+		attribution: "user",
+		timestamp: Date.now(),
+	});
+}
+
 describe("AgentSession derived queued custom display", () => {
 	let fixture: SessionFixture | undefined;
 
@@ -378,6 +402,39 @@ describe("AgentSession derived queued custom display", () => {
 		const remaining = session.agent.peekSteeringQueue();
 		expect(remaining).toHaveLength(1);
 		expect(remaining[0]).toMatchObject({ customType: "advisor" });
+	});
+
+	it("clearQueue drops a queued magic-keyword companion with its dequeued user prompt", async () => {
+		fixture = await createRealSession();
+		const { session } = fixture;
+		// Queue order mirrors prompt("ultrathink do X", { streamingBehavior: "steer" }):
+		// the hidden companion notice queues right before the user message.
+		queueMagicCompanion(session, "ultrathink-notice");
+		queueUserSteer(session, "ultrathink do X");
+
+		// The companion is display:false, so only the user prompt is displayable work.
+		expect(session.queuedMessageCount).toBe(1);
+
+		// Alt+Up bulk restore returns the user's text and leaves no orphaned companion.
+		const cleared = session.clearQueue();
+		expect(cleared.steering).toEqual([{ text: "ultrathink do X", images: undefined }]);
+		expect(session.agent.hasQueuedMessages()).toBe(false);
+	});
+
+	it("popLastQueuedMessage drops only the popped prompt's preceding companion", async () => {
+		fixture = await createRealSession();
+		const { session } = fixture;
+		// [ultrathink-notice, "first", orchestrate-notice, "second"].
+		queueMagicCompanion(session, "ultrathink-notice");
+		queueUserSteer(session, "first");
+		queueMagicCompanion(session, "orchestrate-notice");
+		queueUserSteer(session, "second");
+
+		expect(session.popLastQueuedMessage()?.text).toBe("second");
+		// Only the popped prompt's companion (orchestrate-notice) leaves; the earlier
+		// prompt and its own companion stay intact.
+		const remaining = session.agent.peekSteeringQueue();
+		expect(remaining.map(m => (m.role === "custom" ? m.customType : m.role))).toEqual(["ultrathink-notice", "user"]);
 	});
 });
 
