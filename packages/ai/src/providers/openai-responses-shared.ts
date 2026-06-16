@@ -490,26 +490,37 @@ export async function processResponsesStream<TApi extends Api>(
 	// function_call deltas interleaved, and a singleton `current` reference would
 	// fold them into the wrong block and drop arguments on every call but the last.
 	//
-	// llama.cpp's `to_json_oaicompat_resp` (issue #2015) compounds this: `output_item.added`
-	// for function_call/custom_tool_call carries `item.call_id` but no `item.id` and no
-	// `output_index`, while the matching `function_call_arguments.delta` carries
-	// `item_id = "fc_<call_id>"`. Registering function-call items by `call_id` as a
-	// secondary key lets the delta lookup find the right block on hosts that emit one
-	// identifier but not the other.
+	// OpenAI-compatible hosts can compound this by omitting `item.id` and
+	// `output_index` on `output_item.added` while routing later argument deltas to
+	// either the bare `call_id` or a synthesized `fc_<call_id>` item id. Register
+	// both keys so each delta reaches its own block instead of falling back to the
+	// most recently added parallel call.
 	const openItemsByOutputIndex = new Map<number, StreamingItem>();
 	const openItemsByItemId = new Map<string, StreamingItem>();
+	const openItemsByPrefixedCallId = new Map<string, StreamingItem>();
 	let lastOpenItem: StreamingItem | null = null;
 	const openItemsInOrder: StreamingItem[] = [];
+
+	const prefixedFunctionCallItemKey = (callId: string | undefined): string | undefined =>
+		callId ? `fc_${callId}` : undefined;
 
 	const registerOpenItem = (
 		outputIndex: number | undefined,
 		itemId: string | undefined,
 		entry: StreamingItem,
 		alternateItemKey?: string,
+		prefixedAlternateItemKey?: string,
 	): void => {
 		if (typeof outputIndex === "number") openItemsByOutputIndex.set(outputIndex, entry);
 		if (itemId) openItemsByItemId.set(itemId, entry);
 		if (alternateItemKey && alternateItemKey !== itemId) openItemsByItemId.set(alternateItemKey, entry);
+		if (
+			prefixedAlternateItemKey &&
+			prefixedAlternateItemKey !== itemId &&
+			prefixedAlternateItemKey !== alternateItemKey
+		) {
+			openItemsByPrefixedCallId.set(prefixedAlternateItemKey, entry);
+		}
 		openItemsInOrder.push(entry);
 		lastOpenItem = entry;
 	};
@@ -527,11 +538,36 @@ export async function processResponsesStream<TApi extends Api>(
 	};
 	const hasOpenItemKey = (event: { output_index?: number; item_id?: string }): boolean =>
 		typeof event.output_index === "number" || event.item_id !== undefined;
+	const lookupOpenToolCallAlias = (
+		event: { output_index?: number; item_id?: string },
+		type: "function_call" | "custom_tool_call",
+	): StreamingItem | undefined => {
+		if (typeof event.output_index === "number") {
+			const byOutputIndex = openItemsByOutputIndex.get(event.output_index);
+			if (byOutputIndex) return byOutputIndex;
+			// A lossy host (llama.cpp/Ollama, issue #2015) can omit `output_index` on
+			// `output_item.added` while still stamping the spec-required field on the
+			// delta. The index was never registered, so fall through to the prefixed
+			// alias / exact item-id maps instead of dropping to `lastOpenItem`.
+		}
+		if (event.item_id) {
+			// Prefixed call-id aliases share the same wire namespace as real call ids.
+			// Argument/input events can use the prefixed form, while final
+			// output_item.done events below use exact call ids; keep aliases in a
+			// separate map so a real `call_id: "fc_x"` cannot overwrite the alias
+			// for `call_id: "x"`.
+			const alias = openItemsByPrefixedCallId.get(event.item_id);
+			if (alias?.item.type === type) return alias;
+			const exact = openItemsByItemId.get(event.item_id);
+			if (exact) return exact;
+		}
+		return lookupOpenItem(event);
+	};
 	const lookupOpenFunctionCallItem = (event: {
 		output_index?: number;
 		item_id?: string;
 	}): StreamingItem | undefined => {
-		if (hasOpenItemKey(event)) return lookupOpenItem(event);
+		if (hasOpenItemKey(event)) return lookupOpenToolCallAlias(event, "function_call");
 		for (const candidate of openItemsInOrder) {
 			if (
 				candidate.item.type === "function_call" &&
@@ -548,10 +584,19 @@ export async function processResponsesStream<TApi extends Api>(
 		itemId: string | undefined,
 		entry: StreamingItem | undefined,
 		alternateItemKey?: string,
+		prefixedAlternateItemKey?: string,
 	): void => {
 		if (typeof outputIndex === "number") openItemsByOutputIndex.delete(outputIndex);
 		if (itemId) openItemsByItemId.delete(itemId);
 		if (alternateItemKey && alternateItemKey !== itemId) openItemsByItemId.delete(alternateItemKey);
+		if (
+			prefixedAlternateItemKey &&
+			prefixedAlternateItemKey !== itemId &&
+			prefixedAlternateItemKey !== alternateItemKey &&
+			openItemsByPrefixedCallId.get(prefixedAlternateItemKey) === entry
+		) {
+			openItemsByPrefixedCallId.delete(prefixedAlternateItemKey);
+		}
 		if (entry) {
 			const index = openItemsInOrder.indexOf(entry);
 			if (index >= 0) openItemsInOrder.splice(index, 1);
@@ -591,7 +636,13 @@ export async function processResponsesStream<TApi extends Api>(
 					partialJson: item.arguments || "",
 				};
 				output.content.push(block);
-				registerOpenItem(event.output_index, item.id, { item, block }, item.call_id);
+				registerOpenItem(
+					event.output_index,
+					item.id,
+					{ item, block },
+					item.call_id,
+					prefixedFunctionCallItemKey(item.call_id),
+				);
 				stream.push({ type: "toolcall_start", contentIndex: contentIndexOf(block), partial: output });
 			} else if (item.type === "custom_tool_call") {
 				const block: StreamingToolCallBlock = {
@@ -609,7 +660,13 @@ export async function processResponsesStream<TApi extends Api>(
 					partialJson: item.input ?? "",
 				};
 				output.content.push(block);
-				registerOpenItem(event.output_index, item.id, { item, block }, item.call_id);
+				registerOpenItem(
+					event.output_index,
+					item.id,
+					{ item, block },
+					item.call_id,
+					prefixedFunctionCallItemKey(item.call_id),
+				);
 				stream.push({ type: "toolcall_start", contentIndex: contentIndexOf(block), partial: output });
 			}
 		} else if (event.type === "response.reasoning_summary_part.added") {
@@ -739,7 +796,7 @@ export async function processResponsesStream<TApi extends Api>(
 				delete (block as { lastParseLen?: number }).lastParseLen;
 			}
 		} else if (event.type === "response.custom_tool_call_input.delta") {
-			const entry = lookupOpenItem(event);
+			const entry = lookupOpenToolCallAlias(event, "custom_tool_call");
 			if (entry?.item.type === "custom_tool_call" && entry.block.type === "toolCall") {
 				const block = entry.block;
 				block.partialJson += event.delta;
@@ -752,7 +809,7 @@ export async function processResponsesStream<TApi extends Api>(
 				});
 			}
 		} else if (event.type === "response.custom_tool_call_input.done") {
-			const entry = lookupOpenItem(event);
+			const entry = lookupOpenToolCallAlias(event, "custom_tool_call");
 			if (entry?.item.type === "custom_tool_call" && entry.block.type === "toolCall") {
 				entry.block.partialJson = event.input;
 				entry.block.arguments = { input: event.input };
@@ -842,7 +899,7 @@ export async function processResponsesStream<TApi extends Api>(
 					output.content.push(toolCall);
 					contentIndex = output.content.length - 1;
 				}
-				closeOpenItem(event.output_index, item.id, entry, item.call_id);
+				closeOpenItem(event.output_index, item.id, entry, item.call_id, prefixedFunctionCallItemKey(item.call_id));
 				stream.push({ type: "toolcall_end", contentIndex, toolCall, partial: output });
 			} else if (item.type === "custom_tool_call") {
 				const block = entry?.block.type === "toolCall" ? entry.block : undefined;
@@ -866,7 +923,7 @@ export async function processResponsesStream<TApi extends Api>(
 					output.content.push(toolCall);
 					contentIndex = output.content.length - 1;
 				}
-				closeOpenItem(event.output_index, item.id, entry, item.call_id);
+				closeOpenItem(event.output_index, item.id, entry, item.call_id, prefixedFunctionCallItemKey(item.call_id));
 				stream.push({ type: "toolcall_end", contentIndex, toolCall, partial: output });
 			}
 		} else if (event.type === "response.completed" || event.type === "response.incomplete") {
