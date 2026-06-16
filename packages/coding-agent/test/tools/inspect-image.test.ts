@@ -2,10 +2,13 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { completeSimple, ImageContent, Model } from "@oh-my-pi/pi-ai";
+import { AuthStorage, type completeSimple, type ImageContent, type Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { getThemeByName } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { InspectImageTool } from "@oh-my-pi/pi-coding-agent/tools/inspect-image";
 import { inspectImageToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/inspect-image-renderer";
@@ -225,6 +228,51 @@ describe("InspectImageTool", () => {
 			/Available image attachments: Image #1 -> attachment:\/\/1/,
 		);
 		expect(stub.calls).toHaveLength(0);
+	});
+
+	it("wires createAgentSession tool sessions to live image attachments", async () => {
+		const image: ImageContent = { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" };
+		const authStorage = await AuthStorage.create(path.join(testDir, "auth.db"));
+		const modelRegistry = new ModelRegistry(authStorage);
+		const settings = Settings.isolated({ "compaction.enabled": false, "inspect_image.enabled": true });
+		settings.setModelRole("vision", `${visionModel.provider}/${visionModel.id}`);
+
+		try {
+			const { session } = await createAgentSession({
+				cwd: testDir,
+				agentDir: testDir,
+				sessionManager: SessionManager.inMemory(testDir),
+				settings,
+				model: visionModel,
+				modelRegistry,
+				disableExtensionDiscovery: true,
+				skills: [],
+				contextFiles: [],
+				promptTemplates: [],
+				slashCommands: [],
+				enableMCP: false,
+				enableLsp: false,
+				toolNames: ["inspect_image"],
+			});
+			try {
+				session.agent.appendMessage({
+					role: "user",
+					content: [{ type: "text", text: "inspect this" }, image],
+					timestamp: Date.now(),
+				});
+
+				const tool = session.getToolByName("inspect_image");
+				expect(tool).toBeDefined();
+				const wiredToolSession = (tool as unknown as { session?: ToolSession }).session;
+				expect(wiredToolSession?.getImageAttachments?.()).toEqual([
+					{ label: "Image #1", uri: "attachment://1", image },
+				]);
+			} finally {
+				await session.dispose();
+			}
+		} finally {
+			authStorage.close();
+		}
 	});
 
 	it("sends question text unchanged", async () => {
