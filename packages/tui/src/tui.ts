@@ -171,6 +171,12 @@ export interface Component {
 	dispose?(): void;
 }
 
+/** Lets an overlay root delegate keyboard focus to components it owns. */
+export interface OverlayFocusOwner {
+	/** Returns true when `component` is a focus target inside this overlay. */
+	ownsOverlayFocusTarget(component: Component): boolean;
+}
+
 /**
  * Component seam for append-only native-scrollback commits. A component that
  * renders a finalized prefix followed by a live/mutating suffix reports the
@@ -219,6 +225,13 @@ export interface NativeScrollbackCommittedRows {
 
 function setNativeScrollbackCommittedRows(component: Component, rows: number): void {
 	(component as Component & Partial<NativeScrollbackCommittedRows>).setNativeScrollbackCommittedRows?.(rows);
+}
+
+function isOverlayFocusTarget(owner: Component, component: Component | null): boolean {
+	if (component === owner) return true;
+	if (!component) return false;
+	const candidate = owner as Component & Partial<OverlayFocusOwner>;
+	return candidate.ownsOverlayFocusTarget?.(component) === true;
 }
 
 function getNativeScrollbackLiveRegionStart(component: Component): number | undefined {
@@ -1172,8 +1185,11 @@ export class TUI extends Container {
 
 	setFocus(component: Component | null): void {
 		const topVisibleOverlay = this.#getTopmostVisibleOverlay();
-		if (topVisibleOverlay && component !== topVisibleOverlay.component) {
-			component = topVisibleOverlay.component;
+		if (topVisibleOverlay && !isOverlayFocusTarget(topVisibleOverlay.component, component)) {
+			const currentFocus = this.#focusedComponent;
+			component = isOverlayFocusTarget(topVisibleOverlay.component, currentFocus)
+				? currentFocus
+				: topVisibleOverlay.component;
 		}
 
 		const previousFocusedComponent = this.#focusedComponent;
@@ -1218,8 +1234,8 @@ export class TUI extends Container {
 				const index = this.overlayStack.indexOf(entry);
 				if (index !== -1) {
 					this.overlayStack.splice(index, 1);
-					// Restore focus if this overlay had focus
-					if (this.#focusedComponent === component) {
+					// Restore focus if this overlay or one of its owned targets had focus
+					if (isOverlayFocusTarget(component, this.#focusedComponent)) {
 						const topVisible = this.#getTopmostVisibleOverlay();
 						this.setFocus(topVisible?.component ?? entry.preFocus);
 					}
@@ -1235,8 +1251,8 @@ export class TUI extends Container {
 				entry.hidden = hidden;
 				// Update focus when hiding/showing
 				if (hidden) {
-					// If this overlay had focus, move focus to next visible or preFocus
-					if (this.#focusedComponent === component) {
+					// If this overlay or one of its owned targets had focus, move focus to next visible or preFocus
+					if (isOverlayFocusTarget(component, this.#focusedComponent)) {
 						const topVisible = this.#getTopmostVisibleOverlay();
 						this.setFocus(topVisible?.component ?? entry.preFocus);
 					}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { type Component, type Focusable, TUI } from "@oh-my-pi/pi-tui";
+import { type Component, type Focusable, type OverlayFocusOwner, TUI } from "@oh-my-pi/pi-tui";
 import type { Terminal, TerminalAppearance } from "@oh-my-pi/pi-tui/terminal";
 
 class MinimalTerminal implements Terminal {
@@ -84,6 +84,15 @@ class FocusRecorder implements Component, Focusable {
 	}
 }
 
+class OwningOverlay extends FocusRecorder implements OverlayFocusOwner {
+	focusTarget: Component | undefined;
+
+	ownsOverlayFocusTarget(component: Component): boolean {
+		if (component !== this.focusTarget) return false;
+		return true;
+	}
+}
+
 describe("TUI overlay focus", () => {
 	it("keeps keyboard focus on the visible overlay when a hidden surface requests focus", () => {
 		const terminal = new MinimalTerminal();
@@ -104,6 +113,40 @@ describe("TUI overlay focus", () => {
 
 			expect(tui.getFocused()).toBe(settingsOverlay);
 			expect(settingsOverlay.inputs).toEqual(["x"]);
+			expect(approvalPrompt.inputs).toEqual([]);
+		} finally {
+			tui.stop();
+		}
+	});
+
+	it("allows a visible overlay to delegate focus to an owned prompt", () => {
+		const terminal = new MinimalTerminal();
+		const tui = new TUI(terminal);
+		const editor = new FocusRecorder("editor");
+		const wizardOverlay = new OwningOverlay("wizard");
+		const authorizationCodeInput = new FocusRecorder("code");
+		const approvalPrompt = new FocusRecorder("approval");
+
+		tui.addChild(editor);
+		tui.setFocus(editor);
+
+		try {
+			tui.start();
+			tui.showOverlay(wizardOverlay, { fullscreen: true });
+
+			wizardOverlay.focusTarget = authorizationCodeInput;
+			tui.setFocus(authorizationCodeInput);
+			terminal.sendInput("code");
+
+			expect(tui.getFocused()).toBe(authorizationCodeInput);
+			expect(authorizationCodeInput.inputs).toEqual(["code"]);
+			expect(wizardOverlay.inputs).toEqual([]);
+
+			tui.setFocus(approvalPrompt);
+			terminal.sendInput("still-code");
+
+			expect(tui.getFocused()).toBe(authorizationCodeInput);
+			expect(authorizationCodeInput.inputs).toEqual(["code", "still-code"]);
 			expect(approvalPrompt.inputs).toEqual([]);
 		} finally {
 			tui.stop();
