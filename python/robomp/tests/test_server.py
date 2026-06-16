@@ -2211,6 +2211,81 @@ async def test_handle_comment_finalized_without_directive_still_replies(
     close_database()
 
 
+async def test_handle_comment_resumes_needs_info_reply(
+    settings: Settings, tmp_path: Path, stub_run_task, monkeypatch
+) -> None:
+    """Reporter details after a needs-info request resume the existing session."""
+    from robomp import tasks
+    from robomp.github_client import GitHubClient, IssueInfo, RepoInfo
+
+    sandbox = _RecordingSandbox(tmp_path)
+    db = get_database(settings.sqlite_path)
+    db.upsert_issue(
+        key="octo/widget#88",
+        repo="octo/widget",
+        number=88,
+        state="needs_info",
+        branch="farm/old/branch",
+    )
+
+    repo = RepoInfo(
+        full_name="octo/widget", default_branch="main", clone_url="https://github.com/octo/widget.git", private=False
+    )
+    issue = IssueInfo(
+        repo="octo/widget",
+        number=88,
+        title="boom",
+        body="details",
+        state="open",
+        author="alice",
+        labels=("needs-info",),
+        is_pull_request=False,
+    )
+
+    async def _resolve(_gh, _payload):
+        return repo, issue
+
+    monkeypatch.setattr(tasks, "_resolve_repo_and_issue", _resolve)
+
+    post_comment_calls: list = []
+
+    async def _capture_post(self, *args, **kwargs):
+        post_comment_calls.append((args, kwargs))
+        return None
+
+    monkeypatch.setattr(GitHubClient, "post_comment", _capture_post)
+
+    payload = {
+        "action": "created",
+        "issue": {"number": 88, "user": {"login": "alice"}, "title": "boom"},
+        "comment": {
+            "user": {"login": "alice"},
+            "body": "I am on Bun 1.3.14 and here is the trace",
+            "id": 4,
+            "created_at": "2026-05-14T23:00:00Z",
+        },
+        "repository": {"full_name": "octo/widget"},
+    }
+    await tasks.handle_comment(
+        settings=settings,
+        db=db,
+        github=GitHubClient("t"),
+        git_transport=LocalGitTransport(token=None),
+        sandbox=sandbox,
+        payload=payload,
+        delivery_id="test-delivery-needs-info",
+    )
+    assert len(stub_run_task) == 1
+    call = stub_run_task[0]
+    assert call["task_kind"] == "handle_comment"
+    assert call["comment"].body == "I am on Bun 1.3.14 and here is the trace"
+    assert sandbox.ensure_calls[0]["existing_branch"] == "farm/old/branch"
+    assert post_comment_calls == [], "needs-info replies must not get the finalized-issue notice"
+    row = db.get_issue("octo/widget#88")
+    assert row is not None and row.state == "needs_info"
+    close_database()
+
+
 async def test_directive_handler_attaches_thread_from_github(
     settings: Settings, tmp_path: Path, stub_run_task, monkeypatch
 ) -> None:

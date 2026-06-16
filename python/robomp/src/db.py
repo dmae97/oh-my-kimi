@@ -23,6 +23,7 @@ IssueState = Literal[
     "opened",
     "merged",
     "closed",
+    "needs_info",
     "abandoned",
 ]
 

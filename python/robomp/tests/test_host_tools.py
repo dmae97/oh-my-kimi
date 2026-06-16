@@ -419,12 +419,15 @@ def test_repro_record_rejects_bad_args(db: Database, tmp_path: Path) -> None:
         _stop_loop(loop, t)
 
 
-def test_mark_unable_posts_comment_and_abandons(db: Database, tmp_path: Path) -> None:
+def test_mark_unable_posts_comment_marks_needs_info_and_labels_issue(db: Database, tmp_path: Path) -> None:
     captured: dict[str, Any] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
-        captured["body"] = json.loads(request.content)
-        return httpx.Response(201, json={"id": 77, "user": {"login": "robomp-bot"}, "body": "x", "created_at": "t"})
+        if request.url.path.endswith("/labels"):
+            captured["labels"] = json.loads(request.content)
+            return httpx.Response(200, json=[{"name": "bug"}, {"name": "needs-info"}])
+        captured["comment"] = json.loads(request.content)
+        return httpx.Response(201, json={"id": 321, "user": {"login": "robomp-bot"}, "body": "x", "created_at": "t"})
 
     bindings, loop, t = _bindings(db, tmp_path, httpx.MockTransport(handler))
     try:
@@ -432,10 +435,29 @@ def test_mark_unable_posts_comment_and_abandons(db: Database, tmp_path: Path) ->
         result = tool.execute({"diagnosis": "needed exact version", "info_needed": "post bun --version"}, _ctx())
     finally:
         _stop_loop(loop, t)
-    assert "abandonment" in result
-    assert "Could not reproduce" in captured["body"]["body"]
+
+    assert "needs-info comment" in result
+    assert captured["labels"] == {"labels": ["needs-info"]}
+    assert "resume from this context" in captured["comment"]["body"]
     issue = db.get_issue(bindings.issue_key)
-    assert issue and issue.state == "abandoned"
+    assert issue and issue.state == "needs_info"
+
+
+def test_mark_unable_keeps_needs_info_when_label_is_missing(db: Database, tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/labels"):
+            return httpx.Response(422, json={"message": "Label does not exist"})
+        return httpx.Response(201, json={"id": 321, "user": {"login": "robomp-bot"}, "body": "x", "created_at": "t"})
+
+    bindings, loop, t = _bindings(db, tmp_path, httpx.MockTransport(handler))
+    try:
+        tool = next(x for x in build(bindings) if x.name == "mark_unable_to_reproduce")
+        tool.execute({"diagnosis": "needed exact version", "info_needed": "post bun --version"}, _ctx())
+    finally:
+        _stop_loop(loop, t)
+
+    issue = db.get_issue(bindings.issue_key)
+    assert issue and issue.state == "needs_info"
 
 
 def test_abort_task_signals_controller_and_abandons_without_comment(db: Database, tmp_path: Path) -> None:

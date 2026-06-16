@@ -405,17 +405,15 @@ def _run_pre_publish_bun_check(
         _raise_command(msg)
 
 
-_AUTOCLOSE_INELIGIBLE_STATES: frozenset[str] = frozenset({"closed", "merged", "abandoned"})
+_AUTOCLOSE_INELIGIBLE_STATES: frozenset[str] = frozenset({"closed", "merged", "needs_info", "abandoned"})
+_NEEDS_INFO_LABEL = "needs-info"
 
 
 def _should_schedule_autoclose(bindings: ToolBindings, target_number: int) -> float | None:
     """Return the configured close window (hours) when this comment should
-    schedule an auto-close; ``None`` otherwise.
-
-    Conditions: feature enabled in `Settings`, the comment lands on the
-    originating issue (not a different number, not a PR thread), the issue is
-    classified as `question`, and the issue is not already in a terminal
-    state (closed/merged/abandoned).
+    schedule the question auto-close job: feature enabled, same issue,
+    classified as `question`, and the issue is not already in a terminal or
+    waiting-for-reporter state.
     """
     settings = bindings.settings
     if settings is None or not settings.question_autoclose_enabled:
@@ -888,9 +886,22 @@ def _build_mark_unable(bindings: ToolBindings) -> HostTool[Any, Any]:
         except GitHubError as exc:
             _audit(bindings, "mark_unable_to_reproduce", args, error=str(exc))
             _raise_command(f"GitHub rejected comment: {exc.status} {exc.message}")
-        bindings.db.set_issue_state(bindings.issue_key, "abandoned")
-        _audit(bindings, "mark_unable_to_reproduce", args, result={"comment_id": comment.id})
-        return f"posted abandonment comment id={comment.id}"
+        result: dict[str, Any] = {"comment_id": comment.id, "state": "needs_info"}
+        try:
+            labels = _run_coro(
+                bindings.loop,
+                bindings.github.add_issue_labels(bindings.repo.full_name, bindings.issue.number, [_NEEDS_INFO_LABEL]),
+            )
+            result["labels"] = list(labels)
+        except GitHubError as exc:
+            # Some repos have not created the optional status label yet. The
+            # durable behavior is the non-terminal sqlite state plus the visible
+            # info-request comment, so label setup must not block resumption.
+            log.warning("needs-info label failed", extra={"issue": bindings.issue_key, "err": str(exc)})
+            result["label_error"] = f"{exc.status} {exc.message}"
+        bindings.db.set_issue_state(bindings.issue_key, "needs_info")
+        _audit(bindings, "mark_unable_to_reproduce", args, result=result)
+        return f"posted needs-info comment id={comment.id}"
 
     return host_tool(
         name="mark_unable_to_reproduce",
