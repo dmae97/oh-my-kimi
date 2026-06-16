@@ -1178,7 +1178,14 @@ export class SessionManager {
 		return entry.id;
 	}
 
-	appendSessionInit(init: { systemPrompt: string; task: string; tools: string[]; outputSchema?: unknown }): string {
+	appendSessionInit(init: {
+		systemPrompt: string;
+		task: string;
+		tools: string[];
+		outputSchema?: unknown;
+		spawns?: string;
+		readSummarize?: boolean;
+	}): string {
 		const entry: SessionInitEntry = { type: "session_init", ...this.#freshEntryFields(), ...init };
 		this.#recordEntry(entry);
 		return entry.id;
@@ -1559,6 +1566,62 @@ export class SessionManager {
 		manager.#suppressBreadcrumb = options?.suppressBreadcrumb === true;
 		await manager.setSessionFile(filePath);
 		return manager;
+	}
+
+	/**
+	 * Lock-free peek for cold subagent revival: returns the recorded working
+	 * directory (session header) and the latest `session_init` contract (system
+	 * prompt / tools / output schema) WITHOUT taking the single-writer lock that
+	 * {@link open} acquires — the caller re-opens for the actual revive. Returns
+	 * null when the file can't be read; `init` is null for files written before
+	 * `session_init` was recorded (no faithful contract to rebuild from).
+	 */
+	static async peekSessionInit(
+		filePath: string,
+		storage: SessionStorage = new FileSessionStorage(),
+	): Promise<{
+		cwd: string;
+		init: {
+			systemPrompt: string;
+			task: string;
+			tools: string[];
+			outputSchema?: unknown;
+			spawns?: string;
+			readSummarize?: boolean;
+		} | null;
+	} | null> {
+		let loaded: FileEntry[];
+		try {
+			loaded = await loadEntriesFromFile(filePath, storage);
+		} catch {
+			return null;
+		}
+		// A missing/empty file has no usable session — nothing to revive from.
+		if (loaded.length === 0) return null;
+		const header = loaded.find(entry => entry.type === "session") as SessionHeader | undefined;
+		let init: {
+			systemPrompt: string;
+			task: string;
+			tools: string[];
+			outputSchema?: unknown;
+			spawns?: string;
+			readSummarize?: boolean;
+		} | null = null;
+		for (let index = loaded.length - 1; index >= 0; index--) {
+			const entry = loaded[index];
+			if (entry.type === "session_init") {
+				init = {
+					systemPrompt: entry.systemPrompt,
+					task: entry.task,
+					tools: entry.tools,
+					outputSchema: entry.outputSchema,
+					readSummarize: entry.readSummarize,
+					spawns: entry.spawns,
+				};
+				break;
+			}
+		}
+		return { cwd: header?.cwd ?? getProjectDir(), init };
 	}
 
 	/** Continue the most recent session, or create a new one if none exists. */

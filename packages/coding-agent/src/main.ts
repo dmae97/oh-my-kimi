@@ -55,6 +55,7 @@ import type { PrintModeOptions } from "./modes/print-mode";
 import { CURRENT_SETUP_VERSION } from "./modes/setup-version";
 import { initTheme, stopThemeWatcher } from "./modes/theme/theme";
 import type { SubmittedUserInput } from "./modes/types";
+import { AgentLifecycleManager } from "./registry/agent-lifecycle";
 import {
 	type CreateAgentSessionOptions,
 	type CreateAgentSessionResult,
@@ -68,6 +69,7 @@ import { resolveResumableSession, type SessionInfo } from "./session/session-lis
 import { SessionManager } from "./session/session-manager";
 import { executeBuiltinSlashCommand } from "./slash-commands/builtin-registry";
 import { discoverTitleSystemPromptFile, resolvePromptInput } from "./system-prompt";
+import { createPersistedSubagentReviverFactory } from "./task/persisted-revive";
 import { initTelemetryExport, isTelemetryExportEnabled } from "./telemetry-export";
 import { AUTO_THINKING } from "./thinking";
 import type { LspStartupServerInfo } from "./tools";
@@ -1262,6 +1264,24 @@ export async function runRootCommand(
 			eventBus,
 			preloadedExtensions: extensionsResult,
 		});
+
+		// Cold-revive support: a `parked` subagent ref restored from disk (Agent Hub
+		// scan, collab mirror, resumed process) has a sessionFile but no in-memory
+		// reviver, so `ensureLive` (IRC sends, hub focus) would refuse it. Install a
+		// factory — bound to THIS top-level session — that rebuilds the subagent from
+		// its persisted JSONL (see persisted-revive.ts). Scoped to the non-ACP
+		// bootstrap: ACP keeps several concurrent top-level sessions and a single
+		// process-global factory must not be clobbered by the most recent one.
+		AgentLifecycleManager.global().setPersistedSubagentReviverFactory(
+			createPersistedSubagentReviverFactory({
+				session,
+				authStorage,
+				modelRegistry,
+				settings: settingsInstance,
+				enableLsp: sessionOptions.enableLsp ?? true,
+			}),
+			Math.trunc(Number(settingsInstance.get("task.agentIdleTtlMs") ?? 420_000) || 0),
+		);
 		if (parsedArgs.apiKey && !sessionOptions.model && session.model) {
 			authStorage.setRuntimeApiKey(session.model.provider, parsedArgs.apiKey);
 		}

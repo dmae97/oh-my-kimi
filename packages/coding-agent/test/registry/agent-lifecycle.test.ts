@@ -156,6 +156,81 @@ describe("AgentLifecycleManager", () => {
 		await expect(lifecycle.ensureLive("5-Sub")).rejects.toThrow(/cannot be revived.*no reviver registered/);
 	});
 
+	it("ensureLive cold-revives a parked ref via the persisted factory and rejoins the lifecycle", async () => {
+		vi.useFakeTimers();
+		const revived = makeSessionStub();
+		// Restored from disk (hub scan / resume): parked with a sessionFile but NEVER adopted.
+		registry.register({
+			id: "6-Sub",
+			displayName: "task",
+			kind: "sub",
+			session: null,
+			sessionFile: "/tmp/6-Sub.jsonl",
+			status: "parked",
+		});
+		let factoryCalls = 0;
+		lifecycle.setPersistedSubagentReviverFactory(async () => {
+			factoryCalls++;
+			return async () => revived.session;
+		}, TTL);
+
+		const session = await lifecycle.ensureLive("6-Sub");
+
+		expect(factoryCalls).toBe(1);
+		expect(session).toBe(revived.session);
+		expect(registry.get("6-Sub")?.status).toBe("idle");
+		expect(registry.get("6-Sub")?.session).toBe(revived.session);
+
+		// Adopted on demand with the configured TTL: it re-parks like any idle subagent.
+		vi.advanceTimersByTime(TTL);
+		await flushAsync();
+		expect(registry.get("6-Sub")?.status).toBe("parked");
+		expect(revived.disposeCalls()).toBe(1);
+	});
+
+	it("a persisted factory that declines leaves the parked ref transcript-only", async () => {
+		registry.register({
+			id: "7-Sub",
+			displayName: "task",
+			kind: "sub",
+			session: null,
+			sessionFile: "/tmp/7-Sub.jsonl",
+			status: "parked",
+		});
+		lifecycle.setPersistedSubagentReviverFactory(async () => undefined, TTL);
+
+		await expect(lifecycle.ensureLive("7-Sub")).rejects.toThrow(/cannot be revived.*no reviver registered/);
+	});
+
+	it("a failed cold revive is not sticky: the next ensureLive re-runs the factory", async () => {
+		const revived = makeSessionStub();
+		registry.register({
+			id: "8-Sub",
+			displayName: "task",
+			kind: "sub",
+			session: null,
+			sessionFile: "/tmp/8-Sub.jsonl",
+			status: "parked",
+		});
+		let factoryCalls = 0;
+		lifecycle.setPersistedSubagentReviverFactory(async () => {
+			factoryCalls++;
+			const failFirst = factoryCalls === 1;
+			return async () => {
+				if (failFirst) throw new Error("stale context");
+				return revived.session;
+			};
+		}, TTL);
+
+		await expect(lifecycle.ensureLive("8-Sub")).rejects.toThrow(/stale context/);
+		expect(registry.get("8-Sub")?.status).toBe("parked");
+
+		const session = await lifecycle.ensureLive("8-Sub");
+		expect(factoryCalls).toBe(2);
+		expect(session).toBe(revived.session);
+		expect(registry.get("8-Sub")?.status).toBe("idle");
+	});
+
 	it("release disposes a live adopted agent, unregisters it, and leaves no pending park", async () => {
 		vi.useFakeTimers();
 		const stub = makeSessionStub();

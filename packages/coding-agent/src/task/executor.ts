@@ -2098,6 +2098,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				systemPrompt: session.agent.state.systemPrompt.join("\n\n"),
 				task,
 				tools: session.getActiveToolNames(),
+				spawns: spawnsEnv,
+				readSummarize: agent.readSummarize,
 				outputSchema,
 			});
 
