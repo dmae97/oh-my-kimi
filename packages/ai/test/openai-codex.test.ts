@@ -69,6 +69,36 @@ describe("openai-codex tool schemas", () => {
 			},
 		});
 	});
+	it("strips MCP regex lookaround patternProperties from function parameters", () => {
+		const tools: Tool[] = [
+			{
+				name: "read_dynamic_values",
+				description: "Read dynamic values",
+				parameters: {
+					type: "object",
+					patternProperties: {
+						"^(?!secret_)": { type: "string" },
+						"^public_": { type: "string" },
+					},
+				},
+			},
+		];
+
+		const converted = convertOpenAICodexResponsesTools(tools, createCodexModel("gpt-5.5"));
+
+		expect(converted[0]).toEqual({
+			type: "function",
+			name: "read_dynamic_values",
+			description: "Read dynamic values",
+			parameters: {
+				type: "object",
+				patternProperties: {
+					"^public_": { type: "string" },
+				},
+				properties: {},
+			},
+		});
+	});
 });
 
 describe("openai-codex request transformer", () => {

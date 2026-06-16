@@ -1000,8 +1000,10 @@ function normalizeOpenAIResponsesSchemaNode(value: unknown, cache: WeakMap<JsonO
 
 		const child = value[key];
 		let next: unknown = child;
-		if (OPENAI_RESPONSES_SCHEMA_MAP_KEYS.has(key) && isJsonObject(child)) {
-			next = normalizeOpenAIResponsesSchemaMap(child, cache);
+		if (key === "patternProperties" && isJsonObject(child)) {
+			next = normalizeOpenAIResponsesSchemaMap(child, cache, true);
+		} else if (OPENAI_RESPONSES_SCHEMA_MAP_KEYS.has(key) && isJsonObject(child)) {
+			next = normalizeOpenAIResponsesSchemaMap(child, cache, false);
 		} else if (OPENAI_RESPONSES_SCHEMA_ARRAY_KEYS.has(key) && Array.isArray(child)) {
 			next = normalizeOpenAIResponsesSchemaArray(child, cache);
 		} else if (OPENAI_RESPONSES_SCHEMA_VALUE_KEYS.has(key) && isJsonObject(child)) {
@@ -1056,11 +1058,19 @@ function normalizeOpenAIResponsesSchemaArray(value: unknown[], cache: WeakMap<Js
 	return changed ? output : value;
 }
 
-function normalizeOpenAIResponsesSchemaMap(schemaMap: JsonObject, cache: WeakMap<JsonObject, JsonObject>): JsonObject {
+function normalizeOpenAIResponsesSchemaMap(
+	schemaMap: JsonObject,
+	cache: WeakMap<JsonObject, JsonObject>,
+	stripUnsupportedRegexKeys: boolean,
+): JsonObject {
 	let changed = false;
 	const output: JsonObject = {};
 	for (const key in schemaMap) {
 		if (!Object.hasOwn(schemaMap, key)) continue;
+		if (stripUnsupportedRegexKeys && hasOpenAIUnsupportedRegexLookaround(key)) {
+			changed = true;
+			continue;
+		}
 		const child = schemaMap[key];
 		const next = normalizeOpenAIResponsesSchemaNode(child, cache);
 		if (next !== child) changed = true;

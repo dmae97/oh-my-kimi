@@ -527,6 +527,13 @@ describe("sanitizeSchemaForOpenAIResponses", () => {
 				ending: { type: "string", pattern: "(?<=/)node$" },
 				slug: { type: "string", pattern: "^[a-z0-9_-]+$" },
 				literal: { type: "string", pattern: "\\(?!literal" },
+				"^(?!property-name)": { type: "string" },
+			},
+			patternProperties: {
+				"^(?!secret_)": { type: "string" },
+				"(?<=/)node$": { type: "string" },
+				"^x-": { type: "object" },
+				"\\(?!literal": { type: "string" },
 			},
 		};
 
@@ -537,6 +544,11 @@ describe("sanitizeSchemaForOpenAIResponses", () => {
 				ending: { type: "string" },
 				slug: { type: "string", pattern: "^[a-z0-9_-]+$" },
 				literal: { type: "string", pattern: "\\(?!literal" },
+				"^(?!property-name)": { type: "string" },
+			},
+			patternProperties: {
+				"^x-": { type: "object", properties: {} },
+				"\\(?!literal": { type: "string" },
 			},
 		});
 	});
