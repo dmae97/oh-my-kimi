@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import {
 	type Component,
 	type NativeScrollbackCommittedRows,
@@ -123,6 +123,25 @@ function rows(prefix: string, count: number): string[] {
 }
 
 describe("streaming scrollback defer", () => {
+	let savedTerminalEnv: Record<string, string | undefined> = {};
+	beforeEach(() => {
+		// A resize on Warp takes the in-place path (no ED3), so neutralize the
+		// ambient terminal identity to keep the direct-terminal scrollback
+		// assertions below deterministic on any dev machine.
+		for (const key of ["TERM_PROGRAM", "PI_TUI_RESIZE_IN_PLACE"]) {
+			savedTerminalEnv[key] = Bun.env[key];
+			delete Bun.env[key];
+		}
+	});
+	afterEach(() => {
+		for (const key in savedTerminalEnv) {
+			const value = savedTerminalEnv[key];
+			if (value === undefined) delete Bun.env[key];
+			else Bun.env[key] = value;
+		}
+		savedTerminalEnv = {};
+	});
+
 	it("keeps mutable live-region head rows out of native scrollback", async () => {
 		if (process.platform === "win32") return;
 		const term = new VirtualTerminal(20, 4);

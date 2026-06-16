@@ -106,6 +106,10 @@ const NO_MULTIPLEXER_ENV: Record<string, string | undefined> = {
 	STY: undefined,
 	ZELLIJ: undefined,
 	TERM: "xterm-256color",
+	// Resize classification also keys off TERM_PROGRAM (Warp takes the in-place
+	// path), so neutralize it to keep this direct-terminal case deterministic.
+	TERM_PROGRAM: undefined,
+	PI_TUI_RESIZE_IN_PLACE: undefined,
 };
 
 describe("issue #2088: tmux pane-resize race produces viewport flash", () => {
