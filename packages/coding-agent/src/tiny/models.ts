@@ -10,6 +10,8 @@ export interface TinyTitleLocalModelSpec {
 	label: string;
 	description: string;
 	contextNote: string;
+	/** Model family emits hidden reasoning unless the chat template disables it. */
+	reasoning?: boolean;
 }
 
 export const TINY_TITLE_LOCAL_MODELS = [
@@ -28,6 +30,7 @@ export const TINY_TITLE_LOCAL_MODELS = [
 		label: "Qwen3 0.6B",
 		description: "Most robust local option; slower first load, about 500 MB cached.",
 		contextNote: "Use when title quality matters more than local startup cost.",
+		reasoning: true,
 	},
 	{
 		key: "gemma-270m",
@@ -122,6 +125,7 @@ export const TINY_MEMORY_LOCAL_MODELS = [
 		description:
 			"Recommended; most disciplined extraction (ignores chit-chat), good consolidation, about 1.1 GB cached.",
 		contextNote: "Best single-model pick for memory from the local experiment.",
+		reasoning: true,
 	},
 	{
 		key: "gemma-3-1b",
@@ -194,6 +198,12 @@ export function getTinyMemoryModelSpec(key: TinyMemoryLocalModelKey): (typeof TI
 	const spec = TINY_MEMORY_LOCAL_MODELS.find(model => model.key === key);
 	if (!spec) throw new Error(`Unknown tiny memory model: ${key}`);
 	return spec;
+}
+
+/** Return whether a memory local model may emit reasoning tokens before answers. */
+export function isTinyMemoryReasoningModelKey(key: TinyMemoryLocalModelKey): boolean {
+	const spec = getTinyMemoryModelSpec(key);
+	return "reasoning" in spec && spec.reasoning === true;
 }
 
 /** Any local model key (title or memory), used by the shared inference worker. */
