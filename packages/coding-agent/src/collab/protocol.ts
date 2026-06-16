@@ -116,6 +116,10 @@ const BARE_LINK_RE = /^([A-Za-z0-9_-]{10,64})[#.]([A-Za-z0-9_-]+)$/;
 const B64URL_RE = /^[A-Za-z0-9_-]+$/;
 const LOCAL_HOSTNAMES: Record<string, true> = { localhost: true, "127.0.0.1": true, "::1": true, "[::1]": true };
 
+function isLocalHostname(hostname: string): boolean {
+	return LOCAL_HOSTNAMES[hostname] === true;
+}
+
 export function generateRoomId(): string {
 	const bytes = new Uint8Array(ROOM_ID_BYTES);
 	crypto.getRandomValues(bytes);
@@ -143,7 +147,7 @@ function normalizeRelayOrigin(relayUrl: string): { origin: string } | { error: s
 		default:
 			return { error: `Unsupported relay URL scheme: ${url.protocol}` };
 	}
-	if (scheme === "ws:" && !LOCAL_HOSTNAMES[url.hostname]) {
+	if (scheme === "ws:" && !isLocalHostname(url.hostname)) {
 		return { error: "relay link must be wss:// (plain ws:// is only allowed for localhost)" };
 	}
 	const port = url.port ? `:${url.port}` : "";
@@ -178,24 +182,48 @@ export function formatCollabLink(relayUrl: string, roomId: string, key: Uint8Arr
 	return `${compact}/r/${roomId}.${keyText}`;
 }
 
+function normalizeCollabWebBaseUrl(relayUrl: string, webUrl?: string): string {
+	const explicitWebUrl = webUrl?.trim();
+	if (!explicitWebUrl) {
+		const normalized = normalizeRelayOrigin(relayUrl);
+		if ("error" in normalized) throw new Error(normalized.error);
+		return normalized.origin.startsWith("wss://")
+			? `https://${normalized.origin.slice("wss://".length)}`
+			: `http://${normalized.origin.slice("ws://".length)}`;
+	}
+
+	let url: URL;
+	try {
+		url = new URL(explicitWebUrl);
+	} catch {
+		throw new Error("collab.webUrl must start with http:// or https://");
+	}
+	if (url.protocol !== "http:" && url.protocol !== "https:") {
+		throw new Error("collab.webUrl must start with http:// or https://");
+	}
+	if (url.protocol === "http:" && !isLocalHostname(url.hostname)) {
+		throw new Error("collab.webUrl must use https:// unless it targets localhost");
+	}
+	if (url.search || url.hash) {
+		throw new Error("collab.webUrl must not include a query string or fragment");
+	}
+	const path = url.pathname.replace(/\/+$/, "");
+	return `${url.origin}${path}`;
+}
+
 /**
- * Render the browser deep link: `http(s)://<relay-host>/#<collab-link>`. The
- * relay serves the web client at `/`, and the whole collab link (including the
- * room key) rides in the fragment, so it never appears in any HTTP request.
- * Terminals auto-link the https form, making it click-to-join.
+ * Render the browser deep link. The browser UI may be hosted separately from
+ * the relay; the fragment always carries the relay-specific collab link, so
+ * room secrets stay out of HTTP path and query bytes.
  */
 export function formatCollabWebLink(
 	relayUrl: string,
 	roomId: string,
 	key: Uint8Array,
 	writeToken?: Uint8Array,
+	webUrl?: string,
 ): string {
-	const normalized = normalizeRelayOrigin(relayUrl);
-	if ("error" in normalized) throw new Error(normalized.error);
-	const httpOrigin = normalized.origin.startsWith("wss://")
-		? `https://${normalized.origin.slice("wss://".length)}`
-		: `http://${normalized.origin.slice("ws://".length)}`;
-	return `${httpOrigin}/#${formatCollabLink(relayUrl, roomId, key, writeToken)}`;
+	return `${normalizeCollabWebBaseUrl(relayUrl, webUrl)}/#${formatCollabLink(relayUrl, roomId, key, writeToken)}`;
 }
 
 export function parseCollabLink(link: string): ParsedCollabLink | { error: string } {
@@ -213,15 +241,20 @@ export function parseCollabLink(link: string): ParsedCollabLink | { error: strin
 	} catch {
 		return { error: `Invalid collab link: ${link}` };
 	}
+	if ((url.protocol === "http:" || url.protocol === "https:") && url.hash) {
+		const inner = url.hash.startsWith("#") ? url.hash.slice(1) : url.hash;
+		const parsed = parseCollabLink(inner);
+		if (!("error" in parsed)) return parsed;
+	}
 	const normalized = normalizeRelayOrigin(url.origin);
 	if ("error" in normalized) return normalized;
 	const match = ROOM_PATH_RE.exec(url.pathname);
 	if (!match) {
-		// Web deep link: `http(s)://<relay>/#<collab-link>` — the fragment holds
-		// the whole link, so recurse on it. The recursion terminates because
-		// the inner text is a strict suffix of the input.
+		// Non-http(s) deep links may also carry a complete collab link in the
+		// fragment. http(s) links are handled once above so invalid fragments
+		// fall through to direct relay validation instead of double-recursing.
 		const inner = url.hash.startsWith("#") ? url.hash.slice(1) : url.hash;
-		if (inner) return parseCollabLink(inner);
+		if (inner && url.protocol !== "http:" && url.protocol !== "https:") return parseCollabLink(inner);
 		return { error: "Collab link must contain a /r/<roomId> path" };
 	}
 	const roomId = match[1]!;

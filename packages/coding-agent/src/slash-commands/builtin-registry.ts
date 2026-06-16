@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { setNextRequestDebugPath } from "@oh-my-pi/pi-ai/utils/request-debug";
-import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
+import { type AutocompleteItem, Spacer } from "@oh-my-pi/pi-tui";
 import { APP_NAME, setProjectDir } from "@oh-my-pi/pi-utils";
 import { COLLAB_GUEST_ALLOWED_COMMANDS, CollabGuestLink } from "../collab/guest";
 import { CollabHost } from "../collab/host";
@@ -30,6 +30,7 @@ import type { AgentSession, FreshSessionResult } from "../session/agent-session"
 import { formatShakeSummary, type ShakeMode } from "../session/shake-types";
 import { urlHyperlinkAlways } from "../tui";
 import { getChangelogPath, parseChangelog } from "../utils/changelog";
+import { CollabQrCodeComponent, renderCollabQrCode } from "./helpers/collab-qrcode";
 import { buildContextReportText } from "./helpers/context-report";
 import { formatDuration } from "./helpers/format";
 import { createMarketplaceManager } from "./helpers/marketplace-manager";
@@ -97,6 +98,26 @@ function collabLinkHint(host: CollabHost, heading: string, view = false): string
 				: "Anyone with the link can read the session and prompt the agent. Read-only link: /collab view",
 		),
 	].join("\n");
+}
+
+async function showCollabQrCode(ctx: InteractiveModeContext, webLink: string): Promise<void> {
+	try {
+		const qrText = await renderCollabQrCode(webLink);
+		ctx.present([new Spacer(1), new CollabQrCodeComponent(webLink, qrText)]);
+	} catch (err) {
+		ctx.showError(`Failed to render collab QR code: ${errorMessage(err)}`);
+	}
+}
+
+async function showCollabLink(
+	ctx: InteractiveModeContext,
+	host: CollabHost,
+	heading: string,
+	view = false,
+	options?: { forceQr?: boolean },
+): Promise<void> {
+	ctx.showStatus(collabLinkHint(host, heading, view), { dim: false });
+	if (options?.forceQr) await showCollabQrCode(ctx, view ? host.webViewLink : host.webLink);
 }
 
 function formatFreshSessionResult(result: FreshSessionResult): string {
@@ -578,19 +599,21 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "collab",
 		description: "Share this session live via a relay",
-		inlineHint: "[start|view|stop|status] [relayUrl]",
+		inlineHint: "[start|view|stop|status|qrcode|qrcode-view] [relayUrl]",
 		subcommands: [
 			{ name: "view", description: "Share a read-only link (guests can watch, not prompt)" },
 			{ name: "status", description: "Show link + participants" },
 			{ name: "stop", description: "Stop sharing" },
+			{ name: "qrcode", description: "Print a QR code for a full-control browser link" },
+			{ name: "qrcode-view", description: "Print a QR code for a read-only browser link" },
 		],
 		allowArgs: true,
 		handleTui: async (command, runtime) => {
 			const ctx = runtime.ctx;
 			ctx.editor.setText("");
 			const args = command.args.trim();
-			const [first = ""] = args.split(/\s+/, 1);
-			if (first === "stop") {
+			const { verb, rest } = parseSubcommand(args);
+			if (verb === "stop") {
 				if (!ctx.collabHost) {
 					ctx.showStatus("Not hosting a collab session");
 					return;
@@ -599,7 +622,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 				ctx.showStatus("Collab stopped");
 				return;
 			}
-			if (first === "status") {
+			if (verb === "status") {
 				if (ctx.collabHost) {
 					const names = ctx.collabHost.participants.map(p =>
 						p.role === "host" ? `${p.name} (host)` : p.readOnly ? `${p.name} (view-only)` : p.name,
@@ -620,15 +643,27 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 				ctx.showError("Already in a collab session as a guest (/leave first)");
 				return;
 			}
-			const view = first === "view";
+			const knownStartVerb =
+				verb === "start" || verb === "view" || verb === "qrcode" || verb === "qrcode-view" || verb === "qr-view";
+			const view = verb === "view" || verb === "qrcode-view" || verb === "qr-view";
+			const forceQr = verb === "qrcode" || verb === "qrcode-view" || verb === "qr-view";
 			if (ctx.collabHost) {
-				ctx.showStatus(
-					collabLinkHint(ctx.collabHost, view ? "Read-only collab link" : "Collab session active", view),
-					{ dim: false },
+				await showCollabLink(
+					ctx,
+					ctx.collabHost,
+					forceQr
+						? view
+							? "Read-only collab QR code"
+							: "Collab QR code"
+						: view
+							? "Read-only collab link"
+							: "Collab session active",
+					view,
+					{ forceQr },
 				);
 				return;
 			}
-			const explicitUrl = first === "start" || view ? args.slice(first.length).trim() : args;
+			const explicitUrl = knownStartVerb ? rest : args;
 			const relayInput = explicitUrl || ctx.settings.get("collab.relayUrl") || "";
 			if (!relayInput) {
 				ctx.showError(
@@ -638,15 +673,16 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			}
 			// Scheme-less relay args default to wss (ws:// must be spelled out for localhost).
 			const relayUrl = relayInput.includes("://") ? relayInput : `wss://${relayInput}`;
+			const webUrl = ctx.settings.get("collab.webUrl") || "";
 			const host = new CollabHost(ctx);
 			try {
-				await host.start(relayUrl);
+				await host.start(relayUrl, webUrl);
 			} catch (err) {
 				ctx.showError(`Failed to start collab session: ${errorMessage(err)}`);
 				return;
 			}
 			ctx.collabHost = host;
-			ctx.showStatus(collabLinkHint(host, "Collab session started!", view), { dim: false });
+			await showCollabLink(ctx, host, "Collab session started!", view, { forceQr });
 		},
 	},
 	{

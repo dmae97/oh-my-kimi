@@ -1519,6 +1519,18 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"collab.webUrl": {
+		type: "string",
+		default: "",
+		ui: {
+			tab: "interaction",
+			group: "Collab",
+			label: "Web UI URL",
+			description:
+				"Browser UI used by /collab links; empty derives from collab.relayUrl; explicit http:// is localhost-only",
+		},
+	},
+
 	"collab.displayName": {
 		type: "string",
 		default: "",
