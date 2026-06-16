@@ -124,4 +124,28 @@ describe("SYSTEM.md prompt assembly", () => {
 		expect(promptText).toContain("Root context instructions");
 		expect(promptText).toContain("Near context instructions");
 	});
+
+	it("drops always-apply rule content already present through expanded context imports", async () => {
+		const projectDir = path.join(tempDir, "project");
+		const instructionPath = path.join(projectDir, ".github", "instructions", "shared.instructions.md");
+		const sharedContent = "Shared imported guidance";
+		fs.mkdirSync(path.dirname(instructionPath), { recursive: true });
+		fs.writeFileSync(path.join(projectDir, "AGENTS.md"), "Use @.github/instructions/shared.instructions.md\n");
+		fs.writeFileSync(instructionPath, `---\napplyTo: '**'\n---\n\n${sharedContent}\n`);
+
+		const contextFiles = await loadProjectContextFiles({ cwd: projectDir });
+		const { systemPrompt } = await buildSystemPrompt({
+			cwd: projectDir,
+			customPrompt: "Base prompt",
+			contextFiles,
+			skills: [],
+			rules: [],
+			alwaysApplyRules: [{ name: "shared", path: instructionPath, content: sharedContent }],
+			toolNames: [],
+		});
+
+		const promptText = systemPrompt.join("\n\n");
+		const matches = promptText.match(new RegExp(escapeRegExp(sharedContent), "g")) ?? [];
+		expect(matches).toHaveLength(1);
+	});
 });
