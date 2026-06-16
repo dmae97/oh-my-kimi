@@ -1,11 +1,13 @@
+import { TERMINAL } from "./terminal-capabilities";
+
 // LaTeX → Unicode/ANSI converter.
 //
 // Terminals cannot lay out real math, but a surprising amount of LaTeX maps
 // cleanly onto Unicode: superscripts/subscripts (x² xᵢ), Greek (α β), big
 // operators (∫ ∑ ∏), relations/arrows (≤ ≠ → ⇒), fonts via the Mathematical
 // Alphanumeric Symbols block (ℝ 𝐱 𝔄 𝒞), accents via combining marks (x̂ x̄ x⃗),
-// fractions (½, (a+b)/c) and radicals (√, ∛). This module turns a LaTeX math
-// fragment into the best-effort Unicode rendering of it.
+// fractions (½, (a+b)/c), radicals (√, ∛), and ANSI foreground/background colors
+// (`\textcolor`, `\color`, `\colorbox`, `\fcolorbox`). This module turns a LaTeX math
 //
 // `latexToUnicode(src)` converts a *bare* math fragment (no `$`/`\(` delimiters).
 // `renderMathInText(text)` scans prose for `$$…$$`, `$…$`, `\(…\)`, `\[…\]`
@@ -884,6 +886,270 @@ function unescapeText(s: string): string {
 	return s.replace(/\\([&%$#_{}\s])/g, "$1").replace(/~/g, " ");
 }
 
+const ANSI_FG_RESET = "\x1b[39m";
+const ANSI_BG_RESET = "\x1b[49m";
+
+type AnsiColorFormat = "ansi-16m" | "ansi-256";
+
+interface AnsiColor {
+	foreground: string;
+	background: string;
+}
+
+interface Rgb {
+	r: number;
+	g: number;
+	b: number;
+}
+
+const LATEX_NAMED_COLORS: Record<string, string> = {
+	black: "#000000",
+	blue: "#0000ff",
+	brown: "#a52a2a",
+	cyan: "#00ffff",
+	darkgray: "#404040",
+	darkgrey: "#404040",
+	gray: "#808080",
+	green: "#00ff00",
+	grey: "#808080",
+	lightgray: "#c0c0c0",
+	lightgrey: "#c0c0c0",
+	lime: "#00ff00",
+	magenta: "#ff00ff",
+	olive: "#808000",
+	orange: "#ffa500",
+	pink: "#ffc0cb",
+	purple: "#800080",
+	red: "#ff0000",
+	teal: "#008080",
+	violet: "#ee82ee",
+	white: "#ffffff",
+	yellow: "#ffff00",
+};
+
+function colorFormat(): AnsiColorFormat {
+	return TERMINAL.trueColor ? "ansi-16m" : "ansi-256";
+}
+
+function clamp01(n: number): number {
+	if (n <= 0) return 0;
+	if (n >= 1) return 1;
+	return n;
+}
+
+function clampByte(n: number): number {
+	if (n <= 0) return 0;
+	if (n >= 255) return 255;
+	return Math.round(n);
+}
+
+function cssRgb(rgb: Rgb): string {
+	return `rgb(${clampByte(rgb.r)}, ${clampByte(rgb.g)}, ${clampByte(rgb.b)})`;
+}
+
+function parseNumber(raw: string): number | null {
+	const trimmed = raw.trim();
+	if (trimmed === "") return null;
+	const value = Number(trimmed.endsWith("%") ? Number(trimmed.slice(0, -1)) / 100 : trimmed);
+	return Number.isFinite(value) ? value : null;
+}
+
+function parseColorComponents(spec: string, expected: number): number[] | null {
+	const parts = spec
+		.split(/[,\s]+/u)
+		.map(part => part.trim())
+		.filter(Boolean);
+	if (parts.length !== expected) return null;
+	const values: number[] = [];
+	for (const part of parts) {
+		const value = parseNumber(part);
+		if (value === null) return null;
+		values.push(value);
+	}
+	return values;
+}
+
+function rgbFromUnit(values: readonly number[]): string | null {
+	if (values.length !== 3) return null;
+	return cssRgb({
+		r: clamp01(values[0] ?? 0) * 255,
+		g: clamp01(values[1] ?? 0) * 255,
+		b: clamp01(values[2] ?? 0) * 255,
+	});
+}
+
+function rgbFromByte(values: readonly number[]): string | null {
+	if (values.length !== 3) return null;
+	return cssRgb({ r: values[0] ?? 0, g: values[1] ?? 0, b: values[2] ?? 0 });
+}
+
+function rgbFromCmyk(values: readonly number[]): string | null {
+	if (values.length !== 4) return null;
+	const c = clamp01(values[0] ?? 0);
+	const m = clamp01(values[1] ?? 0);
+	const y = clamp01(values[2] ?? 0);
+	const k = clamp01(values[3] ?? 0);
+	return cssRgb({ r: 255 * (1 - c) * (1 - k), g: 255 * (1 - m) * (1 - k), b: 255 * (1 - y) * (1 - k) });
+}
+
+function rgbFromHsv(values: readonly number[], hueScale: number): string | null {
+	if (values.length !== 3) return null;
+	const h = (((values[0] ?? 0) * hueScale) % 360) / 60;
+	const s = clamp01(values[1] ?? 0);
+	const v = clamp01(values[2] ?? 0);
+	const c = v * s;
+	const x = c * (1 - Math.abs((h % 2) - 1));
+	const m = v - c;
+	let r = 0;
+	let g = 0;
+	let b = 0;
+	if (h < 1) {
+		r = c;
+		g = x;
+	} else if (h < 2) {
+		r = x;
+		g = c;
+	} else if (h < 3) {
+		g = c;
+		b = x;
+	} else if (h < 4) {
+		g = x;
+		b = c;
+	} else if (h < 5) {
+		r = x;
+		b = c;
+	} else {
+		r = c;
+		b = x;
+	}
+	return cssRgb({ r: (r + m) * 255, g: (g + m) * 255, b: (b + m) * 255 });
+}
+
+function rgbFromWave(spec: string): string | null {
+	const wavelength = parseNumber(spec);
+	if (wavelength === null || wavelength < 380 || wavelength > 780) return null;
+	let r = 0;
+	let g = 0;
+	let b = 0;
+	if (wavelength < 440) {
+		r = -(wavelength - 440) / 60;
+		b = 1;
+	} else if (wavelength < 490) {
+		g = (wavelength - 440) / 50;
+		b = 1;
+	} else if (wavelength < 510) {
+		g = 1;
+		b = -(wavelength - 510) / 20;
+	} else if (wavelength < 580) {
+		r = (wavelength - 510) / 70;
+		g = 1;
+	} else if (wavelength < 645) {
+		r = 1;
+		g = -(wavelength - 645) / 65;
+	} else {
+		r = 1;
+	}
+	const factor =
+		wavelength < 420
+			? 0.3 + (0.7 * (wavelength - 380)) / 40
+			: wavelength > 700
+				? 0.3 + (0.7 * (780 - wavelength)) / 80
+				: 1;
+	return cssRgb({ r: r * factor * 255, g: g * factor * 255, b: b * factor * 255 });
+}
+
+function normalizeCssColor(spec: string, allowMix: boolean): string | null {
+	const trimmed = spec.trim();
+	if (trimmed === "") return null;
+	if (allowMix && trimmed.includes("!")) {
+		const mixed = resolveMixedColor(trimmed);
+		if (mixed !== null) return mixed;
+	}
+	const named = LATEX_NAMED_COLORS[trimmed] ?? LATEX_NAMED_COLORS[trimmed.toLowerCase()];
+	if (named !== undefined) return named;
+	if (Bun.color(trimmed, "css") !== null) return trimmed;
+	const lower = trimmed.toLowerCase();
+	return lower !== trimmed && Bun.color(lower, "css") !== null ? lower : null;
+}
+
+function resolveModeledColor(model: string, spec: string): string | null {
+	const trimmedModel = model.trim();
+	if (trimmedModel === "" || trimmedModel === "named") return normalizeCssColor(spec, true);
+	if (trimmedModel === "HTML" || trimmedModel === "Html" || trimmedModel === "html") {
+		const hex = spec.trim().replace(/^#/u, "");
+		return /^[0-9A-Fa-f]{3,8}$/u.test(hex) ? `#${hex}` : null;
+	}
+	if (trimmedModel === "wave") return rgbFromWave(spec);
+	const lower = trimmedModel.toLowerCase();
+	if (trimmedModel === "RGB") return rgbFromByte(parseColorComponents(spec, 3) ?? []);
+	if (lower === "rgb") return rgbFromUnit(parseColorComponents(spec, 3) ?? []);
+	if (lower === "cmyk") return rgbFromCmyk(parseColorComponents(spec, 4) ?? []);
+	if (lower === "gray" || lower === "grey") {
+		const value = parseColorComponents(spec, 1)?.[0];
+		if (value === undefined) return null;
+		const unit = trimmedModel === "Gray" || trimmedModel === "Grey" ? value / 15 : value;
+		const byte = clamp01(unit) * 255;
+		return cssRgb({ r: byte, g: byte, b: byte });
+	}
+	if (lower === "hsb" || lower === "hsv") {
+		const values = parseColorComponents(spec, 3);
+		if (values === null) return null;
+		return rgbFromHsv(values, trimmedModel === "Hsb" || trimmedModel === "HSV" ? 1 : 360);
+	}
+	return normalizeCssColor(spec, true);
+}
+
+function resolveLatexColor(model: string | null, spec: string): string | null {
+	const unescaped = unescapeText(spec).trim();
+	if (unescaped === "") return null;
+	return model === null ? normalizeCssColor(unescaped, true) : resolveModeledColor(model, unescaped);
+}
+
+function resolveMixedColor(spec: string): string | null {
+	const parts = spec.split("!");
+	if (parts.length < 2) return null;
+	const first = normalizeCssColor(parts[0] ?? "", false);
+	if (first === null) return null;
+	let current = Bun.color(first, "{rgb}");
+	if (current === null) return null;
+	for (let i = 1; i < parts.length; i += 2) {
+		const percent = parseNumber(parts[i] ?? "");
+		if (percent === null) return null;
+		const nextSpec = parts[i + 1] ?? "white";
+		const nextColor = normalizeCssColor(nextSpec, false);
+		if (nextColor === null) return null;
+		const next = Bun.color(nextColor, "{rgb}");
+		if (next === null) return null;
+		const t = clamp01(percent / 100);
+		current = {
+			r: current.r * t + next.r * (1 - t),
+			g: current.g * t + next.g * (1 - t),
+			b: current.b * t + next.b * (1 - t),
+		};
+	}
+	return cssRgb(current);
+}
+
+function ansiColor(model: string | null, spec: string): AnsiColor | null {
+	const css = resolveLatexColor(model, spec);
+	if (css === null) return null;
+	const foreground = Bun.color(css, colorFormat());
+	if (foreground === null || !foreground.startsWith("\x1b[38;")) return null;
+	return { foreground, background: foreground.replace("\x1b[38;", "\x1b[48;") };
+}
+
+function restoreAnsi(
+	text: string,
+	fromForeground: string | null,
+	toForeground: string | null,
+	fromBackground: string | null,
+	toBackground: string | null,
+): string {
+	if (fromForeground !== toForeground && fromForeground !== null) text += toForeground ?? ANSI_FG_RESET;
+	if (fromBackground !== toBackground && fromBackground !== null) text += toBackground ?? ANSI_BG_RESET;
+	return text;
+}
+
 function toSuperscript(text: string, group: boolean): string {
 	if (text === "") return "";
 	const mapped = mapAll(text, SUPERSCRIPT);
@@ -933,9 +1199,15 @@ const EXTENSIBLE_ARROWS: Record<string, string> = {
 class LatexParser {
 	#s: string;
 	#i = 0;
+	#foreground: string | null = null;
+	#background: string | null = null;
 
 	constructor(src: string) {
 		this.#s = src;
+	}
+
+	render(): string {
+		return restoreAnsi(this.parse(null, false), this.#foreground, null, this.#background, null);
 	}
 
 	/** Parse a run until end-of-input, or until `}` when `stopAtBrace`. */
@@ -958,12 +1230,8 @@ class LatexParser {
 		switch (c) {
 			case "\\":
 				return this.#command(style);
-			case "{": {
-				this.#i++;
-				const inner = this.parse(style, true);
-				if (this.#s[this.#i] === "}") this.#i++;
-				return inner;
-			}
+			case "{":
+				return this.#group(style);
 			case "^":
 				this.#i++;
 				return this.#script(style, true);
@@ -1135,12 +1403,20 @@ class LatexParser {
 			this.#rawArgument();
 			return this.#argument(style).text;
 		}
-		if (name === "textcolor") {
-			this.#rawArgument();
-			return this.#argument(style).text;
+		if (name === "textcolor") return this.#scopedForeground(this.#readAnsiColor(), style);
+		if (name === "colorbox") return this.#scopedBackground(this.#readAnsiColor(), style);
+		if (name === "fcolorbox") return this.#fcolorbox(style);
+		if (name === "color") return this.#setForeground();
+		if (name === "normalcolor") {
+			const previous = this.#foreground;
+			this.#foreground = null;
+			return previous === null ? "" : ANSI_FG_RESET;
 		}
-		if (name === "color") {
-			this.#rawArgument();
+		if (name === "phantom" || name === "hphantom") {
+			return " ".repeat(codePointLength(this.#argument(style).text));
+		}
+		if (name === "vphantom") {
+			this.#argument(style);
 			return "";
 		}
 
@@ -1177,6 +1453,61 @@ class LatexParser {
 
 		// Unknown command: surface the bare name rather than dropping it silently.
 		return name;
+	}
+
+	#group(style: FontStyle | null): string {
+		this.#i++;
+		const outerForeground = this.#foreground;
+		const outerBackground = this.#background;
+		const inner = this.parse(style, true);
+		const innerForeground = this.#foreground;
+		const innerBackground = this.#background;
+		if (this.#s[this.#i] === "}") this.#i++;
+		this.#foreground = outerForeground;
+		this.#background = outerBackground;
+		return restoreAnsi(inner, innerForeground, outerForeground, innerBackground, outerBackground);
+	}
+
+	#readAnsiColor(): AnsiColor | null {
+		const model = this.#optionalRawArgument();
+		return ansiColor(model, this.#rawArgument());
+	}
+
+	#setForeground(): string {
+		const color = this.#readAnsiColor();
+		if (color === null) return "";
+		this.#foreground = color.foreground;
+		return color.foreground;
+	}
+
+	#scopedForeground(color: AnsiColor | null, style: FontStyle | null): string {
+		const outerForeground = this.#foreground;
+		if (color === null) return this.#argument(style).text;
+		this.#foreground = color.foreground;
+		const arg = this.#argument(style).text;
+		const innerForeground = this.#foreground;
+		this.#foreground = outerForeground;
+		return color.foreground + restoreAnsi(arg, innerForeground, outerForeground, this.#background, this.#background);
+	}
+
+	#scopedBackground(color: AnsiColor | null, style: FontStyle | null): string {
+		const outerBackground = this.#background;
+		if (color === null) return this.#argument(style).text;
+		this.#background = color.background;
+		const arg = this.#argument(style).text;
+		const innerBackground = this.#background;
+		this.#background = outerBackground;
+		return color.background + restoreAnsi(arg, this.#foreground, this.#foreground, innerBackground, outerBackground);
+	}
+
+	#fcolorbox(style: FontStyle | null): string {
+		const frameModel = this.#optionalRawArgument();
+		const frame = ansiColor(frameModel, this.#rawArgument());
+		const backgroundModel = this.#optionalRawArgument() ?? frameModel;
+		const background = ansiColor(backgroundModel, this.#rawArgument());
+		const body = this.#scopedBackground(background, style);
+		if (frame === null) return `[${body}]`;
+		return `${frame.foreground}[${this.#foreground ?? ANSI_FG_RESET}${body}${frame.foreground}]${this.#foreground ?? ANSI_FG_RESET}`;
 	}
 
 	/** Read one argument: a `{…}` group, a single command, or a single char. */
@@ -1364,14 +1695,9 @@ class LatexParser {
 	#sqrt(style: FontStyle | null): string {
 		while (this.#s[this.#i] === " ") this.#i++;
 		let radical = "√";
-		if (this.#s[this.#i] === "[") {
-			const close = this.#s.indexOf("]", this.#i + 1);
-			if (close !== -1) {
-				const index = latexToUnicode(this.#s.slice(this.#i + 1, close));
-				this.#i = close + 1;
-				radical =
-					index === "2" ? "√" : index === "3" ? "∛" : index === "4" ? "∜" : `${toSuperscript(index, false)}√`;
-			}
+		const index = this.#optionalArgument(style)?.text;
+		if (index !== undefined) {
+			radical = index === "2" ? "√" : index === "3" ? "∛" : index === "4" ? "∜" : `${toSuperscript(index, true)}√`;
 		}
 		const radicand = this.#argument(style).text;
 		return radical + (codePointLength(radicand) > 1 ? `(${radicand})` : radicand);
@@ -1383,7 +1709,11 @@ class LatexParser {
 			this.#optionalRawArgument();
 			if (this.#s[this.#i] === "{") this.#rawArgument(); // column spec
 		} else if (
-			env === "alignedat" || env === "alignedat*" || env === "alignat" || env === "alignat*" || env === "gatheredat"
+			env === "alignedat" ||
+			env === "alignedat*" ||
+			env === "alignat" ||
+			env === "alignat*" ||
+			env === "gatheredat"
 		) {
 			this.#optionalRawArgument();
 			if (this.#s[this.#i] === "{") this.#rawArgument(); // column count
@@ -1398,6 +1728,16 @@ class LatexParser {
 			body += this.#node(style);
 		}
 		body = body.trim();
+		if (
+			env === "cases" ||
+			env === "cases*" ||
+			env === "dcases" ||
+			env === "dcases*" ||
+			env === "rcases" ||
+			env === "drcases"
+		) {
+			body = body.replace(/[ \t]*\n+[ \t]*/g, "; ").replace(/ {3,}/g, "  ");
+		}
 		const delims = ENV_DELIMS[env];
 		return delims ? delims[0] + body + delims[1] : body;
 	}
@@ -1421,10 +1761,120 @@ class LatexParser {
  */
 export function latexToUnicode(src: string): string {
 	if (typeof src !== "string" || src.length === 0) return src;
-	return new LatexParser(src).parse(null, false);
+	return new LatexParser(src).render();
 }
 
 const NEWLINES = /\n+/g;
+const BARE_MATH_LINE_COMMAND =
+	/\\(?:operatorname|frac|dfrac|tfrac|cfrac|genfrac|sqrt|sum|prod|coprod|int|iint|iiint|lim|alpha|beta|gamma|delta|epsilon|varepsilon|theta|lambda|mu|sigma|phi|varphi|pi|omega|infty|partial|nabla|forall|exists|mathbb|mathcal|mathscr|mathbf|mathrm|left|right|begin|phantom|hphantom|vphantom|cdots|ldots|dots|to|rightarrow|leftarrow|leq|geq|neq|times|cdot|overline|underline|vec|hat|bar|textcolor|color|normalcolor|colorbox|fcolorbox)\b/;
+
+// Display-math environments eligible for delimiter-less ("bare") rendering in
+// prose. Deliberately excludes text-mode table/list/float environments
+// (`tabular`, `itemize`, `verbatim`, `document`, …) so ordinary LaTeX quoted in
+// prose or fenced code stays verbatim instead of being mangled. Shared by the
+// bare-math text scanner here and the markdown bare-env block tokenizer.
+const BARE_MATH_ENVIRONMENTS = new Set([
+	"matrix",
+	"smallmatrix",
+	"pmatrix",
+	"bmatrix",
+	"Bmatrix",
+	"vmatrix",
+	"Vmatrix",
+	"cases",
+	"dcases",
+	"rcases",
+	"drcases",
+	"aligned",
+	"alignedat",
+	"align",
+	"alignat",
+	"split",
+	"gathered",
+	"gatheredat",
+	"gather",
+	"multline",
+	"equation",
+	"eqnarray",
+	"array",
+	"subarray",
+]);
+
+/**
+ * True when `env` is a math environment safe to auto-render without `$`/`\[`
+ * delimiters. The trailing `*` of starred variants (`align*`, `equation*`) is
+ * ignored; text-mode environments (`tabular`, `itemize`, …) return false.
+ */
+export function isBareMathEnvironment(env: string): boolean {
+	return BARE_MATH_ENVIRONMENTS.has(env.endsWith("*") ? env.slice(0, -1) : env);
+}
+
+// Convert delimiter-less math in prose: whole `\begin{env}…\end{env}` math
+// blocks (optionally pulling in a preceding `lhs =` line) plus standalone
+// math-shaped lines. A non-math environment is emitted verbatim — wrappers *and*
+// body — so a quoted `\begin{verbatim}…\frac…\end{verbatim}` is never touched.
+function renderBareMathInText(text: string): string {
+	let out = "";
+	let i = 0;
+	for (;;) {
+		const begin = text.indexOf("\\begin{", i);
+		if (begin === -1) return out + renderBareMathLines(text.slice(i));
+		const envStart = begin + "\\begin{".length;
+		const envEnd = text.indexOf("}", envStart);
+		if (envEnd === -1) return out + renderBareMathLines(text.slice(i));
+		const env = text.slice(envStart, envEnd);
+		const closeToken = `\\end{${env}}`;
+		const close = text.indexOf(closeToken, envEnd + 1);
+		if (close === -1) {
+			// Unterminated `\begin`: convert lines up to it, then rescan past it.
+			out += renderBareMathLines(text.slice(i, envEnd + 1));
+			i = envEnd + 1;
+			continue;
+		}
+		const blockEnd = close + closeToken.length;
+		if (!isBareMathEnvironment(env)) {
+			// Non-math env: convert preceding lines, emit the whole block verbatim.
+			out += renderBareMathLines(text.slice(i, begin)) + text.slice(begin, blockEnd);
+			i = blockEnd;
+			continue;
+		}
+		const lineStart = text.lastIndexOf("\n", begin - 1) + 1;
+		const prefix = text.slice(lineStart, begin);
+		let start = prefix.includes("\\") || prefix.includes("=") ? lineStart : begin;
+		if (start === begin && prefix.trim() === "" && lineStart > 0) {
+			const previousLineEnd = lineStart - 1;
+			const previousLineStart = text.lastIndexOf("\n", previousLineEnd - 1) + 1;
+			const previousLine = text.slice(previousLineStart, previousLineEnd);
+			if (/[=([{]\s*$/.test(previousLine)) start = previousLineStart;
+		}
+		out += renderBareMathLines(text.slice(i, start));
+		out += latexToUnicode(text.slice(start, blockEnd)).replace(NEWLINES, " ");
+		i = blockEnd;
+	}
+}
+
+function renderBareMathLines(text: string): string {
+	let out = "";
+	let lineStart = 0;
+	for (let i = 0; i <= text.length; i++) {
+		if (i !== text.length && text[i] !== "\n") continue;
+		const line = text.slice(lineStart, i);
+		out += shouldRenderBareMathLine(line) ? latexToUnicode(line).replace(NEWLINES, " ") : line;
+		if (i !== text.length) out += "\n";
+		lineStart = i + 1;
+	}
+	return out;
+}
+
+function shouldRenderBareMathLine(line: string): boolean {
+	const trimmed = line.trim();
+	if (trimmed === "" || !trimmed.includes("\\")) return false;
+	// A lone `\begin{X}`/`\end{X}` line for a non-math environment never converts.
+	const env = /\\(?:begin|end)\{([^}]*)\}/.exec(trimmed);
+	if (env && !isBareMathEnvironment(env[1])) return false;
+	if (!BARE_MATH_LINE_COMMAND.test(trimmed)) return false;
+	return trimmed.startsWith("\\") || /[=<>^_{}&]/.test(trimmed);
+}
 
 /**
  * Scan prose for math spans — `$$…$$`, `\[…\]` (display) and `$…$`, `\(…\)`
@@ -1439,7 +1889,15 @@ const NEWLINES = /\n+/g;
  */
 export function renderMathInText(text: string): string {
 	if (typeof text !== "string" || text.length === 0) return text;
-	if (!text.includes("$") && !text.includes("\\(") && !text.includes("\\[")) return text;
+	if (
+		!text.includes("$") &&
+		!text.includes("\\(") &&
+		!text.includes("\\[") &&
+		!text.includes("\\begin") &&
+		!BARE_MATH_LINE_COMMAND.test(text)
+	) {
+		return text;
+	}
 
 	const conv = (inner: string): string => latexToUnicode(inner).replace(NEWLINES, " ");
 	let out = "";
@@ -1503,7 +1961,7 @@ export function renderMathInText(text: string): string {
 		out += c;
 		i++;
 	}
-	return out;
+	return renderBareMathInText(out);
 }
 
 /**

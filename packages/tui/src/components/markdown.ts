@@ -1,6 +1,6 @@
 import { LRUCache } from "lru-cache/raw";
 import { Marked, type Token, Tokenizer, type TokenizerAndRendererExtension, type Tokens } from "marked";
-import { inlineMathSpanEnd, latexToUnicode } from "../latex-to-unicode";
+import { inlineMathSpanEnd, isBareMathEnvironment, latexToUnicode } from "../latex-to-unicode";
 import type { SymbolTheme } from "../symbols";
 import { TERMINAL } from "../terminal-capabilities";
 import type { Component } from "../tui";
@@ -94,7 +94,82 @@ const mathExtension: TokenizerAndRendererExtension = {
 		return (token as { text?: string }).text ?? "";
 	},
 };
-markdownParser.use({ extensions: [mathExtension] });
+
+// Display math blocks: opening `$$` / `\[` and closing `$$` / `\]` each alone on
+// their own line (≤3 leading spaces). Matched at the block level — before
+// paragraph/list parsing — so a multi-line equation (e.g. a matrix with `\\`
+// row breaks) renders across several lines instead of being collapsed onto one,
+// and blank lines inside the block don't split it. The own-line requirement
+// keeps inline `$$…$$` inside prose for the inline tokenizer above.
+const MATH_BLOCK_DOLLAR = /^ {0,3}\$\$[ \t]*\n([\s\S]+?)\n {0,3}\$\$[ \t]*(?:\n|$)/;
+const MATH_BLOCK_BRACKET = /^ {0,3}\\\[[ \t]*\n([\s\S]+?)\n {0,3}\\\][ \t]*(?:\n|$)/;
+const MATH_BLOCK_START = /(?:^|\n) {0,3}(?:\$\$|\\\[)[ \t]*\n/;
+const mathBlockExtension: TokenizerAndRendererExtension = {
+	name: "mathBlock",
+	level: "block",
+	start(src) {
+		const m = MATH_BLOCK_START.exec(src);
+		return m ? m.index : undefined;
+	},
+	tokenizer(src) {
+		const m = MATH_BLOCK_DOLLAR.exec(src) ?? MATH_BLOCK_BRACKET.exec(src);
+		if (!m || m[1].trim().length === 0) return undefined;
+		return { type: "math", raw: m[0], text: m[1], display: true };
+	},
+	renderer(token) {
+		return (token as { text?: string }).text ?? "";
+	},
+};
+
+// Bare (delimiter-less) display-math environments: `\begin{<mathenv>}…\end{…}`
+// written without `$$`/`\[` fences (common in raw model output). Captured at the
+// block level as a whole unit — including any immediately preceding `lhs =`
+// line — so marked never splits it on inline `\\` row breaks. Restricted to math
+// environments (isBareMathEnvironment), and the `≤3 leading spaces` + "block
+// starts at offset 0" guards keep fenced/indented `\begin{cases}` code blocks
+// for marked's own code rules.
+const BARE_ENV_BEGIN = /(?:^|\n)[ \t]{0,3}\\begin\{([A-Za-z]+\*?)\}/;
+function bareMathEnvBlock(src: string): readonly [number, number] | null {
+	const bm = BARE_ENV_BEGIN.exec(src);
+	if (!bm || !isBareMathEnvironment(bm[1])) return null;
+	const beginLineStart = bm.index === 0 ? 0 : bm.index + 1; // skip the matched leading `\n`
+	const endToken = `\\end{${bm[1]}}`;
+	const endAt = src.indexOf(endToken, bm.index);
+	if (endAt === -1) return null;
+	// The `\end` must close before any blank line (i.e. within the same block).
+	if (/\n[ \t]*\n/.test(src.slice(beginLineStart, endAt))) return null;
+	let blockEnd = endAt + endToken.length;
+	while (src[blockEnd] === " " || src[blockEnd] === "\t") blockEnd++;
+	if (src[blockEnd] === "\n") blockEnd++;
+	// Pull in one immediately-preceding `lhs =`/open-delimiter line (e.g. `f(x) =`).
+	let start = beginLineStart;
+	if (start > 0 && src[start - 1] === "\n") {
+		const prevStart = src.lastIndexOf("\n", start - 2) + 1;
+		const prevLine = src.slice(prevStart, start - 1);
+		if (/[=([{]\s*$/.test(prevLine)) start = prevStart;
+	}
+	return [start, blockEnd];
+}
+const mathEnvBlockExtension: TokenizerAndRendererExtension = {
+	name: "math",
+	level: "block",
+	start(src) {
+		const r = bareMathEnvBlock(src);
+		return r ? r[0] : undefined;
+	},
+	tokenizer(src) {
+		const r = bareMathEnvBlock(src);
+		if (r?.[0] !== 0) return undefined; // only consume when the block starts at offset 0
+		const raw = src.slice(0, r[1]);
+		const text = raw.replace(/\n[ \t]*$/, "");
+		if (text.trim().length === 0) return undefined;
+		return { type: "math", raw, text, display: true };
+	},
+	renderer(token) {
+		return (token as { text?: string }).text ?? "";
+	},
+};
+markdownParser.use({ extensions: [mathBlockExtension, mathEnvBlockExtension, mathExtension] });
 
 // ---------------------------------------------------------------------------
 // Module-level LRU render cache
@@ -722,6 +797,17 @@ export class Markdown implements Component {
 	#renderToken(token: Token, width: number, nextTokenType?: string, styleContext?: InlineStyleContext): string[] {
 		const lines: string[] = [];
 
+		// Display math block (own-line `$$…$$` / `\[…\]`): convert and keep row
+		// breaks (`\\` → newline) so matrices/aligned blocks span multiple lines.
+		if (isMathToken(token)) {
+			const converted = latexToUnicode(token.text)
+				.replace(/\n{2,}/g, "\n")
+				.trim();
+			for (const mathLine of converted.split("\n")) lines.push(this.#applyDefaultStyle(mathLine));
+			if (nextTokenType && nextTokenType !== "space") lines.push("");
+			return lines;
+		}
+
 		switch (token.type) {
 			case "heading": {
 				const headingLevel = token.depth;
@@ -1095,6 +1181,13 @@ export class Markdown implements Component {
 					}
 				}
 				lines.push({ text: this.#theme.codeBlockBorder("```"), nested: false });
+			} else if (isMathToken(token)) {
+				// Display math block inside a list item: keep `\\` row breaks multi-line.
+				const converted = latexToUnicode(token.text)
+					.replace(/\n{2,}/g, "\n")
+					.trim();
+				const apply = styleContext?.applyText ?? ((t: string) => this.#applyDefaultStyle(t));
+				for (const mathLine of converted.split("\n")) lines.push({ text: apply(mathLine), nested: false });
 			} else {
 				// Other token types - try to render as inline
 				const text = this.#renderInlineTokens([token], styleContext);
@@ -1326,6 +1419,10 @@ export function renderInlineMarkdown(text: string, mdTheme: MarkdownTheme, baseC
 	const applyText = baseColor ?? ((t: string) => t);
 	let result = "";
 	for (const token of tokens) {
+		if (isMathToken(token)) {
+			result += applyText(renderMathToken(token.text));
+			continue;
+		}
 		if (token.type === "paragraph" && token.tokens) {
 			result += renderInlineTokens(token.tokens, mdTheme, applyText);
 		} else if (token.type === "list") {

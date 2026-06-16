@@ -1436,3 +1436,55 @@ describe("Markdown.render reference stability", () => {
 		expect(wide.every(line => visibleWidth(line) <= 60)).toBe(true);
 	});
 });
+
+describe("Math rendering", () => {
+	const plain = (c: Markdown): string =>
+		c
+			.render(80)
+			.map(line => stripVTControlCharacters(line))
+			.join("\n");
+
+	it("converts a bare \\begin{cases} block (no $$ delimiters) to Unicode", () => {
+		const md = new Markdown(
+			"\\operatorname{sgn}(x) =\n\\begin{cases}\n-1 & x < 0 \\\\\n1 & x > 0\n\\end{cases}",
+			0,
+			0,
+			defaultMarkdownTheme,
+		);
+		const out = plain(md);
+		expect(out).toContain("sgn(x)");
+		expect(out).toContain("x < 0");
+		expect(out).not.toContain("begin{cases}");
+	});
+
+	it("converts a $$-delimited matrix block to multi-line Unicode", () => {
+		const md = new Markdown("$$\n\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}\n$$", 0, 0, defaultMarkdownTheme);
+		const out = plain(md);
+		expect(out).toContain("(a");
+		expect(out).toContain("d)");
+		expect(out).not.toContain("pmatrix");
+	});
+
+	it("leaves a bare \\begin{itemize} block verbatim (non-math environment)", () => {
+		const md = new Markdown(
+			"\\begin{itemize}\n\\item first\n\\item second\n\\end{itemize}",
+			0,
+			0,
+			defaultMarkdownTheme,
+		);
+		const out = plain(md);
+		expect(out).toContain("begin{itemize}");
+		expect(out).toContain("item first");
+	});
+
+	it("keeps a fenced tex block with \\begin{cases} as code, not math", () => {
+		const md = new Markdown(
+			"```tex\n\\begin{cases}\na & x > 0 \\\\\nb & x < 0\n\\end{cases}\n```",
+			0,
+			0,
+			defaultMarkdownTheme,
+		);
+		const out = plain(md);
+		expect(out).toContain("begin{cases}");
+	});
+});
