@@ -60,19 +60,27 @@ describe("issue #2600 - session_shutdown handler timeout", () => {
 		testSetSessionShutdownHandlerTimeoutMs(SESSION_SHUTDOWN_HANDLER_TIMEOUT_MS);
 	});
 
-	async function buildRunnerWithHangingShutdown(): Promise<{
+	async function buildRunnerWithHangingShutdown(count = 1): Promise<{
 		runner: ExtensionRunner;
 		hangExtensionPath: string;
+		hangExtensionPaths: string[];
 		cleanup: () => void;
 	}> {
+		if (count < 1) throw new Error("count must be positive");
 		const tempDir = TempDir.createSync("@pi-issue-2600-test-");
 		const extensionsDir = path.join(getProjectAgentDir(tempDir.path()), "extensions");
 		fs.mkdirSync(extensionsDir, { recursive: true });
-		const hangExtensionPath = path.join(tempDir.path(), "hang-session-shutdown.ts");
-		fs.writeFileSync(hangExtensionPath, HANG_EXTENSION_SRC);
+		const hangExtensionPaths: string[] = [];
+		for (let i = 0; i < count; i++) {
+			const hangExtensionPath = path.join(tempDir.path(), `hang-session-shutdown-${i}.ts`);
+			fs.writeFileSync(hangExtensionPath, HANG_EXTENSION_SRC);
+			hangExtensionPaths.push(hangExtensionPath);
+		}
+		const hangExtensionPath = hangExtensionPaths[0];
+		if (!hangExtensionPath) throw new Error("missing hanging extension");
 
 		const sessionManager = SessionManager.inMemory();
-		const result = await discoverAndLoadExtensions([extensionsDir, hangExtensionPath], tempDir.path());
+		const result = await discoverAndLoadExtensions([extensionsDir, ...hangExtensionPaths], tempDir.path());
 		const runner = new ExtensionRunner(
 			result.extensions,
 			result.runtime,
@@ -83,9 +91,36 @@ describe("issue #2600 - session_shutdown handler timeout", () => {
 		return {
 			runner,
 			hangExtensionPath,
+			hangExtensionPaths,
 			cleanup: () => tempDir.removeSync(),
 		};
 	}
+
+	it("runs multiple session_shutdown handlers within one cap", async () => {
+		const { runner, hangExtensionPaths, cleanup } = await buildRunnerWithHangingShutdown(4);
+		const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+		try {
+			testSetSessionShutdownHandlerTimeoutMs(100);
+
+			const startedAt = performance.now();
+			await runner.emit({ type: "session_shutdown" });
+			const elapsedMs = performance.now() - startedAt;
+
+			// Multiple hung shutdown handlers must share the cap. Sequential
+			// dispatch would consume roughly count × cap and keep `/exit` slow.
+			expect(elapsedMs).toBeLessThan(350);
+			for (const hangExtensionPath of hangExtensionPaths) {
+				expect(warnSpy).toHaveBeenCalledWith("Extension handler timed out", {
+					extensionPath: hangExtensionPath,
+					event: "session_shutdown",
+					timeoutMs: 100,
+				});
+			}
+		} finally {
+			warnSpy.mockRestore();
+			cleanup();
+		}
+	});
 
 	it("defaults the session_shutdown cap to ≤ 5s, never the generic 30s budget", () => {
 		expect(SESSION_SHUTDOWN_HANDLER_TIMEOUT_MS).toBeLessThanOrEqual(5_000);
