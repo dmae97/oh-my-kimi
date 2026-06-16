@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `UMANS_WEBSEARCH_PROVIDER=native|exa` support for routing Umans gateway-owned web search requests.
+
+### Fixed
+
+- Fixed Anthropic-compatible Umans requests escaping client `web_search` tools so Kimi answers normally instead of returning raw gateway search results.
+
 ## [16.0.1] - 2026-06-15
 
 ### Added

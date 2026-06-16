@@ -19,6 +19,9 @@ interface BundledModel {
 		defaultLevel?: string;
 		requiresEffort?: boolean;
 	};
+	compat?: {
+		escapeBuiltinToolNames?: boolean;
+	};
 }
 
 describe("umans provider catalog", () => {
@@ -75,6 +78,7 @@ describe("umans provider catalog", () => {
 			contextWindow: 262_144,
 			maxTokens: 32_768,
 			thinking: { defaultLevel: "medium" },
+			compat: { escapeBuiltinToolNames: true },
 		});
 		const mandatoryReasoningModel = models?.find(item => item.id === "umans-kimi-k2.7");
 		expect(mandatoryReasoningModel).toMatchObject({
@@ -82,6 +86,7 @@ describe("umans provider catalog", () => {
 			reasoning: true,
 			maxTokens: 32_768,
 			thinking: { defaultLevel: "medium", requiresEffort: true },
+			compat: { escapeBuiltinToolNames: true },
 		});
 	});
 
@@ -141,6 +146,7 @@ describe("umans provider catalog", () => {
 			input: ["text", "image"],
 			contextWindow: 262_144,
 			maxTokens: 32_768,
+			compat: { escapeBuiltinToolNames: true },
 		});
 	});
 
@@ -150,6 +156,7 @@ describe("umans provider catalog", () => {
 
 		expect(model).toBeDefined();
 		expect(model.maxTokens).toBe(32_768);
+		expect(model.compat?.escapeBuiltinToolNames).toBe(true);
 		expect(model.thinking).toMatchObject({
 			requiresEffort: true,
 		});

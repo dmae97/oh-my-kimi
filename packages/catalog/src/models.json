@@ -65932,13 +65932,13 @@
 				"text"
 			],
 			"cost": {
-				"input": 0.063,
-				"output": 0.21,
-				"cacheRead": 0.020999999999999998,
+				"input": 0.06599999999999999,
+				"output": 0.26,
+				"cacheRead": 0.029,
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 64000,
+			"maxTokens": 262144,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -68916,6 +68916,9 @@
 					"high",
 					"xhigh"
 				]
+			},
+			"compat": {
+				"escapeBuiltinToolNames": true
 			}
 		},
 		"umans-flash": {
@@ -68946,6 +68949,9 @@
 					"high",
 					"xhigh"
 				]
+			},
+			"compat": {
+				"escapeBuiltinToolNames": true
 			}
 		},
 		"umans-glm-5.1": {
@@ -68976,6 +68982,9 @@
 					"high",
 					"xhigh"
 				]
+			},
+			"compat": {
+				"escapeBuiltinToolNames": true
 			}
 		},
 		"umans-kimi-k2.6": {
@@ -69006,6 +69015,9 @@
 					"high",
 					"xhigh"
 				]
+			},
+			"compat": {
+				"escapeBuiltinToolNames": true
 			}
 		},
 		"umans-kimi-k2.7": {
@@ -69037,6 +69049,9 @@
 					"xhigh"
 				],
 				"requiresEffort": true
+			},
+			"compat": {
+				"escapeBuiltinToolNames": true
 			}
 		},
 		"umans-qwen3.6-35b-a3b": {
@@ -69067,6 +69082,9 @@
 					"high",
 					"xhigh"
 				]
+			},
+			"compat": {
+				"escapeBuiltinToolNames": true
 			}
 		}
 	},
@@ -72310,7 +72328,8 @@
 				"supportsForcedToolChoice": true,
 				"supportsSamplingParams": true,
 				"requiresToolResultId": false,
-				"replayUnsignedThinking": false
+				"replayUnsignedThinking": false,
+				"escapeBuiltinToolNames": false
 			}
 		},
 		"alibaba/qwen3-max-preview": {

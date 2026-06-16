@@ -658,6 +658,7 @@ function mapUmansModelInfo(
 		api: "anthropic-messages",
 		provider: "umans",
 		baseUrl,
+		compat: { ...reference?.compat, escapeBuiltinToolNames: true },
 		reasoning: thinking !== undefined,
 		...(thinking ? { thinking } : {}),
 		input: umansSupportsVision(capabilities.supports_vision) ? ["text", "image"] : ["text"],
