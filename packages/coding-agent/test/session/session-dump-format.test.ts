@@ -101,7 +101,12 @@ describe("formatSessionDumpText markdown-headings transcript", () => {
 					role: "assistant",
 					content: [
 						{ type: "text", text: "Reading." },
-						{ type: "toolCall", id: "c1", name: "read", arguments: { _i: "Reading the file", path: "src/foo.ts" } },
+						{
+							type: "toolCall",
+							id: "c1",
+							name: "read",
+							arguments: { _i: "Reading the file", path: "src/foo.ts" },
+						},
 					],
 					api: "mock",
 					provider: "mock",

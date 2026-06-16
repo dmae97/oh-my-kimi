@@ -1,12 +1,17 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
+- Added LaTeX-to-Unicode rendering for markdown math spans, converting `$$...$$`, `$...$`, `\(...\)`, and `\[...\]` into readable Unicode in Markdown output
+- Exported LaTeX conversion helpers from the package entrypoint so consumers can call `latexToUnicode`, `renderMathInText`, and `inlineMathSpanEnd` directly
+- Expanded LaTeX-to-Unicode conversion coverage for additional math fonts, delimiters, extensible arrows, layout environments, cancel/brace annotations, references, and AMS symbols
 - Added an optional `maxWidth` parameter to `MarkdownTheme.resolveMermaidAscii` to allow diagram resolvers to fit ASCII output to the available content width
 
 ### Fixed
 
+- Fixed inline math span detection so escaped dollars and currency-like patterns (such as `$5` and `$10`) are not converted as math
 - Fixed Mermaid diagram rendering in Markdown code blocks to clip each ASCII line to content width before wrapping, preventing preformatted diagram rows from fragmenting
 
 ## [16.0.2] - 2026-06-16

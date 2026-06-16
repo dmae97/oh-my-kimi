@@ -1,11 +1,12 @@
 import { LRUCache } from "lru-cache/raw";
-import { Marked, marked, type Token, Tokenizer, type Tokens } from "marked";
+import { Marked, type Token, Tokenizer, type TokenizerAndRendererExtension, type Tokens } from "marked";
+import { inlineMathSpanEnd, latexToUnicode } from "../latex-to-unicode";
 import type { SymbolTheme } from "../symbols";
 import { TERMINAL } from "../terminal-capabilities";
 import type { Component } from "../tui";
 import {
-	Ellipsis,
 	applyBackgroundToLine,
+	Ellipsis,
 	encodeTextSized,
 	getSegmenter,
 	padding,
@@ -49,6 +50,51 @@ const markdownParser = new Marked();
 markdownParser.setOptions({
 	tokenizer: new StrictStrikethroughTokenizer(),
 });
+
+// Math spans (`$$…$$`, `\[…\]`, `$…$`, `\(…\)`) are tokenized as a dedicated
+// `math` inline token before markdown's escape/emphasis/link rules run, so
+// backslash commands (`\frac`, `\alpha`) and intraword underscores (`x_i`)
+// survive intact instead of being mangled or split. The `$…$` form uses
+// pandoc's anti-currency heuristic (`inlineMathSpanEnd`) so "$5 and $10" is
+// never math. Inline extensions run before marked's escape tokenizer, so
+// `\(…\)` becomes math while a genuinely escaped `\$` is left to `escape` and
+// renders as a literal dollar.
+const mathExtension: TokenizerAndRendererExtension = {
+	name: "math",
+	level: "inline",
+	start(src) {
+		const m = /\$|\\\(|\\\[/.exec(src);
+		return m ? m.index : undefined;
+	},
+	tokenizer(src) {
+		if (src.startsWith("$$")) {
+			const end = src.indexOf("$$", 2);
+			if (end !== -1 && src.slice(2, end).trim().length > 0) {
+				return { type: "math", raw: src.slice(0, end + 2), text: src.slice(2, end), display: true };
+			}
+			return undefined;
+		}
+		if (src.startsWith("\\[")) {
+			const end = src.indexOf("\\]", 2);
+			if (end !== -1) return { type: "math", raw: src.slice(0, end + 2), text: src.slice(2, end), display: true };
+			return undefined;
+		}
+		if (src.startsWith("\\(")) {
+			const end = src.indexOf("\\)", 2);
+			if (end !== -1) return { type: "math", raw: src.slice(0, end + 2), text: src.slice(2, end), display: false };
+			return undefined;
+		}
+		if (src.charCodeAt(0) === 0x24 /* $ */) {
+			const end = inlineMathSpanEnd(src, 0);
+			if (end !== -1) return { type: "math", raw: src.slice(0, end + 1), text: src.slice(1, end), display: false };
+		}
+		return undefined;
+	},
+	renderer(token) {
+		return (token as { text?: string }).text ?? "";
+	},
+};
+markdownParser.use({ extensions: [mathExtension] });
 
 // ---------------------------------------------------------------------------
 // Module-level LRU render cache
@@ -188,9 +234,25 @@ function encodeTextSizedHeading(text: string, scale: 1 | 2 | 3): string {
 	return out;
 }
 
+const MATH_NEWLINES = /\n+/g;
+
+/** True for the custom inline `math` token produced by the math extension. */
+function isMathToken(token: Token): token is Token & { text: string; display: boolean } {
+	return (token as { type: string }).type === "math";
+}
+
+/** Convert a `math` token's LaTeX to single-line Unicode for inline rendering. */
+function renderMathToken(text: string): string {
+	return latexToUnicode(text).replace(MATH_NEWLINES, " ");
+}
+
 function plainInlineTokens(tokens: Token[]): string {
 	let result = "";
 	for (const token of tokens) {
+		if (isMathToken(token)) {
+			result += renderMathToken(token.text);
+			continue;
+		}
 		switch (token.type) {
 			case "text":
 				result += token.tokens && token.tokens.length > 0 ? plainInlineTokens(token.tokens) : token.text;
@@ -846,6 +908,10 @@ export class Markdown implements Component {
 		const swatchGlyph = this.#theme.symbols.colorSwatch || DEFAULT_COLOR_SWATCH_GLYPH;
 
 		for (const token of tokens) {
+			if (isMathToken(token)) {
+				result += applyTextWithNewlines(renderMathToken(token.text));
+				continue;
+			}
 			switch (token.type) {
 				case "text":
 					// Text tokens in list items can have nested tokens for inline formatting
@@ -1256,7 +1322,7 @@ export class Markdown implements Component {
 export function renderInlineMarkdown(text: string, mdTheme: MarkdownTheme, baseColor?: (t: string) => string): string {
 	// Guard against undefined/null during streaming — partial JSON can leave fields unpopulated.
 	if (typeof text !== "string") return (baseColor ?? (t => t))(text != null ? String(text) : "");
-	const tokens = marked.lexer(text);
+	const tokens = markdownParser.lexer(text);
 	const applyText = baseColor ?? ((t: string) => t);
 	let result = "";
 	for (const token of tokens) {
@@ -1281,6 +1347,10 @@ function renderInlineTokens(tokens: Token[], mdTheme: MarkdownTheme, applyText: 
 	let result = "";
 	const styleReset = applyText("");
 	for (const token of tokens) {
+		if (isMathToken(token)) {
+			result += applyText(renderMathToken(token.text));
+			continue;
+		}
 		switch (token.type) {
 			case "text":
 				if (token.tokens && token.tokens.length > 0) {

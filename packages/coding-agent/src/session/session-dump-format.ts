@@ -14,8 +14,8 @@ import { YAML } from "bun";
 import { canonicalizeMessage } from "../utils/thinking-display";
 import {
 	type BashExecutionMessage,
-	bashExecutionToText,
 	type BranchSummaryMessage,
+	bashExecutionToText,
 	type CompactionSummaryMessage,
 	type CustomMessage,
 	type FileMentionMessage,
