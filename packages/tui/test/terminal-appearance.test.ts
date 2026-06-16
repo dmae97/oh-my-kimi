@@ -389,9 +389,12 @@ describe("ProcessTerminal OSC 11 appearance detection", () => {
 		expect(writes.some(w => w.includes("\x1b[>31u"))).toBe(false);
 		expect(writes).toContain("\x1b[?u\x1b[c");
 
-		// Five DA1 sentinels are in flight at startup: keyboard probe, OSC 11, and
-		// the DECRQM probes for DEC 2026, 2048, and 2031 (each rides the shared
-		// FIFO). Consume them in send-order and verify none leaks to the input handler.
+		// Seven DA1 sentinels are in flight at startup: keyboard probe, OSC 11, and
+		// the DECRQM probes for DEC 2026, 2048, 2031, 1010, and 1011 (each rides the
+		// shared FIFO). Consume them in send-order and verify none leaks to the input
+		// handler.
+		process.stdin.emit("data", "\x1b[?1;2c");
+		process.stdin.emit("data", "\x1b[?1;2c");
 		process.stdin.emit("data", "\x1b[?1;2c");
 		process.stdin.emit("data", "\x1b[?1;2c");
 		process.stdin.emit("data", "\x1b[?1;2c");
@@ -399,8 +402,7 @@ describe("ProcessTerminal OSC 11 appearance detection", () => {
 		process.stdin.emit("data", "\x1b[?1;2c");
 		expect(received).toEqual([]);
 
-		// A sixth stray DA1 has no owner and must reach the input handler — it is
-		// no longer ours to swallow.
+		// An eighth stray DA1 has no owner and must reach the input handler — it is
 		process.stdin.emit("data", "\x1b[?1;2c");
 		expect(received).toEqual(["\x1b[?1;2c"]);
 
@@ -486,11 +488,13 @@ describe("ProcessTerminal DECRQM + in-band resize (DEC 2026/2048)", () => {
 		return { terminal, writes, received, reports, resizeCount: () => resizeCount };
 	}
 
-	it("queries DECRQM for DEC 2026, 2048, and 2031 at startup", () => {
+	it("queries DECRQM for DEC 2026, 2048, 2031, and xterm scroll-to-bottom modes at startup", () => {
 		const { terminal, writes } = setup();
 		expect(writes.some(w => w.includes("\x1b[?2026$p"))).toBe(true);
 		expect(writes.some(w => w.includes("\x1b[?2048$p"))).toBe(true);
 		expect(writes.some(w => w.includes("\x1b[?2031$p"))).toBe(true);
+		expect(writes.some(w => w.includes("\x1b[?1010$p"))).toBe(true);
+		expect(writes.some(w => w.includes("\x1b[?1011$p"))).toBe(true);
 		terminal.stop();
 	});
 
@@ -531,6 +535,36 @@ describe("ProcessTerminal DECRQM + in-band resize (DEC 2026/2048)", () => {
 		expect(writes).toContain("\x1b[?2048h");
 		terminal.stop();
 		expect(writes).toContain("\x1b[?2048l");
+	});
+
+	it("disables xterm scroll-to-bottom modes while active and restores them on stop", () => {
+		const { terminal, writes, reports } = setup();
+		process.stdin.emit("data", "\x1b[?1010;1$y");
+		process.stdin.emit("data", "\x1b[?1011;3$y");
+		expect(reports).toContainEqual({ mode: 1010, supported: true });
+		expect(reports).toContainEqual({ mode: 1011, supported: true });
+		expect(writes).toContain("\x1b[?1010l");
+		expect(writes).toContain("\x1b[?1011l");
+
+		terminal.stop();
+
+		expect(writes).toContain("\x1b[?1010h");
+		expect(writes).toContain("\x1b[?1011h");
+	});
+
+	it("leaves already-reset xterm scroll-to-bottom modes unchanged", () => {
+		const { terminal, writes, reports } = setup();
+		process.stdin.emit("data", "\x1b[?1010;2$y");
+		process.stdin.emit("data", "\x1b[?1011;4$y");
+		expect(reports).toContainEqual({ mode: 1010, supported: true });
+		expect(reports).toContainEqual({ mode: 1011, supported: false });
+		expect(writes).not.toContain("\x1b[?1010l");
+		expect(writes).not.toContain("\x1b[?1011l");
+
+		terminal.stop();
+
+		expect(writes).not.toContain("\x1b[?1010h");
+		expect(writes).not.toContain("\x1b[?1011h");
 	});
 
 	it("does not enable DEC 2048 when reported unsupported", () => {

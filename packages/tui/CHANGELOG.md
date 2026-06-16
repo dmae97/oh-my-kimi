@@ -6,6 +6,10 @@
 
 - Fixed VS Code integrated terminal keypad digit CSI-u input being handled as navigation instead of text.
 
+### Fixed
+
+- Fixed xterm-compatible terminals scrolling the native viewport to the bottom on prompt-editor keypresses by disabling `?1010`/`?1011` while the TUI owns the TTY and restoring the prior set modes on exit ([#2732](https://github.com/can1357/oh-my-pi/issues/2732)).
+
 ## [16.0.1] - 2026-06-15
 
 ### Added
