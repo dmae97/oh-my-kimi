@@ -591,6 +591,27 @@ describe("extensions discovery", () => {
 		expect(result.extensions[0].handlers.has("agent_end")).toBe(true);
 	});
 
+	it("loads hookCapability JS factories as extension handlers", async () => {
+		const hookDir = path.join(getProjectAgentDir(tempDir.path()), "hooks", "pre");
+		fs.mkdirSync(hookDir, { recursive: true });
+		const hookPath = path.join(hookDir, "guard-test.ts");
+		fs.writeFileSync(
+			hookPath,
+			`
+				export default function(pi) {
+					pi.on("tool_call", async () => ({ block: true, reason: "blocked by hook" }));
+				}
+			`,
+		);
+
+		const result = await discoverForTest();
+		const loadedHook = result.extensions.find(extension => extension.path === hookPath);
+
+		expect(result.errors).toHaveLength(0);
+		expect(loadedHook).toBeDefined();
+		expect(loadedHook?.handlers.has("tool_call")).toBe(true);
+	});
+
 	it("loads extension with shortcuts", async () => {
 		const extCode = `
 			export default function(pi) {
