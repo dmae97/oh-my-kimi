@@ -1281,6 +1281,19 @@ async function createRequestSetup(
 		copilotPremiumRequests = copilot.premiumRequests;
 		baseUrl = resolveGitHubCopilotBaseUrl(model.baseUrl, rawApiKey) ?? model.baseUrl;
 	}
+	if (model.provider === "alibaba-coding-plan") {
+		try {
+			const parsed = JSON.parse(rawApiKey);
+			if (typeof parsed?.token === "string") {
+				apiKey = parsed.token;
+			}
+			if (typeof parsed?.enterpriseUrl === "string") {
+				baseUrl = parsed.enterpriseUrl;
+			}
+		} catch {
+			// Not JSON — use raw apiKey and catalog baseUrl
+		}
+	}
 	// Azure OpenAI requires /deployments/{id}/chat/completions?api-version=YYYY-MM-DD.
 	// The generic openai-completions path adds neither, producing silent 404s.
 	let azureDefaultQuery: Record<string, string> | undefined;
