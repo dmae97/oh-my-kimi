@@ -502,6 +502,19 @@ describe("resolveModelRoleValue", () => {
 		expect(result.explicitThinkingLevel).toBe(true);
 	});
 
+	test("resolves pi/<role>:max by expanding role alias before parsing thinking", () => {
+		const settings = {
+			getModelRole: (role: string) => (role === "smol" ? "openai-codex/gpt-5.3-codex" : undefined),
+		} as NonNullable<Parameters<typeof resolveModelRoleValue>[2]>["settings"];
+
+		const result = resolveModelRoleValue("pi/smol:max", allModels, { settings });
+
+		expect(result.model?.provider).toBe("openai-codex");
+		expect(result.model?.id).toBe("gpt-5.3-codex");
+		expect(result.thinkingLevel).toBe(Effort.XHigh);
+		expect(result.explicitThinkingLevel).toBe(true);
+	});
+
 	test("resolves pi/default through configured default role alias", () => {
 		const settings = {
 			getModelRole: (role: string) => (role === "default" ? "openrouter/qwen/qwen3-coder:exacto" : undefined),
@@ -902,6 +915,36 @@ describe("resolveModelScope", () => {
 			"github-copilot/anthropic/claude-sonnet-4.5",
 		]);
 	});
+
+	test("expands exact canonical ids with max thinking aliases", async () => {
+		const scoped = await resolveModelScope(["claude-sonnet-4-5:max"], {
+			getAvailable: () => canonicalVariantModels,
+			getCanonicalVariants: (canonicalId: string, options?: { candidates?: Model<"anthropic-messages">[] }) =>
+				canonicalRegistry.getCanonicalVariants!(canonicalId, options),
+		} as unknown as Parameters<typeof resolveModelScope>[1]);
+
+		expect(scoped).toHaveLength(2);
+		expect(scoped.map(entry => `${entry.model.provider}/${entry.model.id}`).sort()).toEqual([
+			"anthropic/claude-sonnet-4-5",
+			"github-copilot/anthropic/claude-sonnet-4.5",
+		]);
+		expect(scoped.map(entry => entry.thinkingLevel)).toEqual([Effort.High, Effort.High]);
+		expect(scoped.every(entry => entry.explicitThinkingLevel)).toBe(true);
+	});
+
+	test("applies max thinking aliases to glob scopes when no literal max ids match", async () => {
+		const registry = {
+			getAvailable: () => mockCodexOverlapModels,
+			getCanonicalVariants: (_id: string, _opts?: unknown): CanonicalModelVariant[] => [],
+		};
+
+		const scoped = await resolveModelScope(["openai-codex/*:max"], registry);
+
+		expect(scoped).toHaveLength(2);
+		expect(scoped.map(entry => entry.thinkingLevel)).toEqual([Effort.XHigh, Effort.XHigh]);
+		expect(scoped.every(entry => entry.explicitThinkingLevel)).toBe(true);
+	});
+
 	test("preserves literal :max in scoped-model globs", async () => {
 		const registry = {
 			getAvailable: () => mockMaxSuffixModels,
@@ -1112,6 +1155,22 @@ describe("filterAvailableModelsByEnabledPatterns", () => {
 		const result = filterAvailableModelsByEnabledPatterns(models, ["claude-sonnet-4-5"], canonicalRegistry);
 		expect(result).toHaveLength(1);
 		expect(result[0].id).toBe("claude-sonnet-4-5");
+	});
+
+	test("expands canonical enabledModels entries with max thinking aliases", () => {
+		const registry = {
+			getCanonicalVariants: (canonicalId: string, options?: { candidates?: Model<"anthropic-messages">[] }) =>
+				canonicalRegistry.getCanonicalVariants!(canonicalId, options),
+		};
+		const result = filterAvailableModelsByEnabledPatterns(
+			canonicalVariantModels,
+			["claude-sonnet-4-5:max"],
+			registry,
+		);
+		expect(result.map(model => `${model.provider}/${model.id}`).sort()).toEqual([
+			"anthropic/claude-sonnet-4-5",
+			"github-copilot/anthropic/claude-sonnet-4.5",
+		]);
 	});
 
 	test("strips :thinkingLevel suffix before matching", () => {

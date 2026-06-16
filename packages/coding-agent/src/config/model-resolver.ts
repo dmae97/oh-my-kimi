@@ -56,6 +56,7 @@ export interface ScopedModel {
 interface ThinkingSuffixOptions {
 	allowMaxAlias?: boolean;
 }
+const MAX_THINKING_SUFFIX_OPTIONS: ThinkingSuffixOptions = { allowMaxAlias: true };
 
 function parseThinkingSuffix(value: string, options?: ThinkingSuffixOptions): ThinkingLevel | undefined {
 	const level = parseThinkingLevel(value);
@@ -81,6 +82,54 @@ function splitThinkingSuffix(
 	if (colonIdx <= minColonIndex) return { base: pattern };
 	const level = parseThinkingSuffix(pattern.slice(colonIdx + 1), options);
 	return level ? { base: pattern.slice(0, colonIdx), level } : { base: pattern };
+}
+
+function hasExactModelPattern(pattern: string, availableModels: readonly Model<Api>[]): boolean {
+	const normalized = pattern.toLowerCase();
+	return availableModels.some(
+		model => model.id.toLowerCase() === normalized || `${model.provider}/${model.id}`.toLowerCase() === normalized,
+	);
+}
+
+function matchingGlobModels(pattern: string, availableModels: readonly Model<Api>[]): Model<Api>[] {
+	const glob = new Bun.Glob(pattern.toLowerCase());
+	return availableModels.filter(model => {
+		const fullId = `${model.provider}/${model.id}`;
+		return glob.match(fullId.toLowerCase()) || glob.match(model.id.toLowerCase());
+	});
+}
+
+function resolveGlobScopePattern(
+	pattern: string,
+	availableModels: readonly Model<Api>[],
+): { models: Model<Api>[]; thinkingLevel?: ThinkingLevel; explicitThinkingLevel: boolean } {
+	const strictSuffix = splitThinkingSuffix(pattern);
+	if (strictSuffix.level !== undefined) {
+		return {
+			models: matchingGlobModels(strictSuffix.base, availableModels),
+			thinkingLevel: strictSuffix.level,
+			explicitThinkingLevel: true,
+		};
+	}
+
+	const maxSuffix = splitThinkingSuffix(pattern, -1, MAX_THINKING_SUFFIX_OPTIONS);
+	if (maxSuffix.level !== undefined) {
+		const literalMatches = matchingGlobModels(pattern, availableModels);
+		if (literalMatches.length > 0) {
+			return { models: literalMatches, thinkingLevel: undefined, explicitThinkingLevel: false };
+		}
+		return {
+			models: matchingGlobModels(maxSuffix.base, availableModels),
+			thinkingLevel: maxSuffix.level,
+			explicitThinkingLevel: true,
+		};
+	}
+
+	return {
+		models: matchingGlobModels(pattern, availableModels),
+		thinkingLevel: undefined,
+		explicitThinkingLevel: false,
+	};
 }
 
 /**
@@ -591,7 +640,7 @@ function parseModelPatternWithContext(
 	// No match - try stripping a valid thinking suffix and recursing.
 	// `max` is accepted only after the full pattern failed, so literal model IDs
 	// ending in `:max` keep winning over the alias.
-	const { base, level } = splitThinkingSuffix(pattern, -1, { allowMaxAlias: true });
+	const { base, level } = splitThinkingSuffix(pattern, -1, MAX_THINKING_SUFFIX_OPTIONS);
 	if (level) {
 		const result = parseModelPatternWithContext(base, availableModels, context, options);
 		if (result.model) {
@@ -695,7 +744,11 @@ function resolveDefaultInheritedPatterns(
 
 	const resolved: string[] = [];
 	for (const pattern of normalizeModelPatternList(configuredDefault)) {
-		const { base: aliasCandidate, level: thinkingLevel } = splitThinkingSuffix(pattern, PREFIX_MODEL_ROLE.length);
+		const { base: aliasCandidate, level: thinkingLevel } = splitThinkingSuffix(
+			pattern,
+			PREFIX_MODEL_ROLE.length,
+			MAX_THINKING_SUFFIX_OPTIONS,
+		);
 		const aliasRole = getModelRoleAlias(aliasCandidate);
 		if (aliasRole === role) {
 			// Self-alias (e.g. modelRoles.default = "pi/smol") would loop back to the
@@ -730,7 +783,11 @@ function resolveConfiguredRolePattern(
 	const normalized = value.trim();
 	if (!normalized) return undefined;
 
-	const { base: aliasCandidate, level: thinkingLevel } = splitThinkingSuffix(normalized, PREFIX_MODEL_ROLE.length);
+	const { base: aliasCandidate, level: thinkingLevel } = splitThinkingSuffix(
+		normalized,
+		PREFIX_MODEL_ROLE.length,
+		MAX_THINKING_SUFFIX_OPTIONS,
+	);
 	const role = getModelRoleAlias(aliasCandidate);
 	if (!role) return [normalized];
 	if (visited.has(role)) return undefined;
@@ -865,7 +922,11 @@ export function extractExplicitThinkingSelector(
 	let current = normalized;
 	while (!visited.has(current)) {
 		visited.add(current);
-		const thinkingSelector = splitThinkingSuffix(current, PREFIX_MODEL_ROLE.length).level;
+		const thinkingSelector = splitThinkingSuffix(
+			current,
+			PREFIX_MODEL_ROLE.length,
+			MAX_THINKING_SUFFIX_OPTIONS,
+		).level;
 		if (thinkingSelector) {
 			return thinkingSelector;
 		}
@@ -1030,7 +1091,10 @@ function resolveExactCanonicalScopePattern(
 	modelRegistry: Pick<ModelRegistry, "getCanonicalVariants">,
 	availableModels: Model<Api>[],
 ): { models: Model<Api>[]; thinkingLevel?: ThinkingLevel; explicitThinkingLevel: boolean } | undefined {
-	const { base: canonicalId, level: thinkingLevel } = splitThinkingSuffix(pattern);
+	if (pattern.endsWith(":max") && hasExactModelPattern(pattern, availableModels)) {
+		return undefined;
+	}
+	const { base: canonicalId, level: thinkingLevel } = splitThinkingSuffix(pattern, -1, MAX_THINKING_SUFFIX_OPTIONS);
 	const explicitThinkingLevel = thinkingLevel !== undefined;
 
 	const variants = modelRegistry
@@ -1076,17 +1140,13 @@ export async function resolveModelScope(
 	for (const pattern of patterns) {
 		// Check if pattern contains glob characters
 		if (pattern.includes("*") || pattern.includes("?") || pattern.includes("[")) {
-			// Extract optional thinking level suffix (e.g., "provider/*:high")
-			const { base: globPattern, level: thinkingLevel } = splitThinkingSuffix(pattern);
-			const explicitThinkingLevel = thinkingLevel !== undefined;
-
-			// Match against "provider/modelId" format OR just model ID
-			// This allows "*sonnet*" to match without requiring "anthropic/*sonnet*"
-			const matchingModels = availableModels.filter(m => {
-				const fullId = `${m.provider}/${m.id}`;
-				const glob = new Bun.Glob(globPattern.toLowerCase());
-				return glob.match(fullId.toLowerCase()) || glob.match(m.id.toLowerCase());
-			});
+			// Extract optional thinking level suffix (e.g., "provider/*:high") only
+			// after literal `:max` globs had a chance to match real model IDs.
+			const {
+				models: matchingModels,
+				thinkingLevel,
+				explicitThinkingLevel,
+			} = resolveGlobScopePattern(pattern, availableModels);
 
 			if (matchingModels.length === 0) {
 				logger.warn(`No models match pattern "${pattern}"`);
@@ -1191,13 +1251,8 @@ export function filterAvailableModelsByEnabledPatterns(
 
 	for (const pattern of patterns) {
 		if (pattern.includes("*") || pattern.includes("?") || pattern.includes("[")) {
-			const { base: globPattern } = splitThinkingSuffix(pattern);
-			const glob = new Bun.Glob(globPattern.toLowerCase());
-			for (const model of available) {
-				const fullId = `${model.provider}/${model.id}`.toLowerCase();
-				if (glob.match(fullId) || glob.match(model.id.toLowerCase())) {
-					addAllowed(model);
-				}
+			for (const model of resolveGlobScopePattern(pattern, available).models) {
+				addAllowed(model);
 			}
 			continue;
 		}
