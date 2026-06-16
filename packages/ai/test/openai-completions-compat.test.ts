@@ -639,6 +639,40 @@ describe("openai-completions compatibility", () => {
 		expect(result.usage.input).toBe(8191);
 		expect(result.usage.output).toBe(1);
 	});
+	it("preserves empty non-Ollama length completions for recovery", async () => {
+		const model: Model<"openai-completions"> = buildModel({
+			...gpt4oMiniSpec,
+			api: "openai-completions",
+			provider: "custom" as Model["provider"],
+			baseUrl: "https://gateway.example/v1",
+		} as ModelSpec<"openai-completions">);
+		const fetchMock = createMockFetch([
+			{
+				id: "chatcmpl-empty-length",
+				object: "chat.completion.chunk",
+				created: 0,
+				model: model.id,
+				choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: "length" }],
+			},
+			"[DONE]",
+		]);
+
+		const stream = streamOpenAICompletions(model, baseContext(), {
+			apiKey: "test-key",
+			fetch: fetchMock,
+		});
+		const resultPromise = stream.result();
+		const eventTypes: string[] = [];
+		for await (const event of stream) {
+			eventTypes.push(event.type);
+		}
+		const result = await resultPromise;
+
+		expect(result.stopReason).toBe("length");
+		expect(eventTypes).toContain("done");
+		expect(result.errorMessage).toBeUndefined();
+		expect(result.content).toEqual([]);
+	});
 
 	it("injects compat.extraBody into OpenAI payload", async () => {
 		const model: Model<"openai-completions"> = buildModel({
