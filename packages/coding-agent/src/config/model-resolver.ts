@@ -39,25 +39,31 @@ function isKnownProvider(provider: string): provider is KnownProvider {
 }
 
 /**
- * Pick the best available provider-default model before falling back to raw model order.
+ * Pick the first provider-default model in availability order.
  *
- * Provider-default matches are ranked by canonical provider priority so native/OAuth
- * providers win over API-compatible mirrors that expose the same default model id.
+ * If multiple providers expose that same default id, rank only that shared-id
+ * group by canonical provider priority so native/OAuth transports beat mirrors
+ * without changing unrelated provider fallback precedence.
  */
 export function pickDefaultAvailableModel(availableModels: Model<Api>[]): Model<Api> | undefined {
-	const providerPriority = buildModelProviderPriorityRank();
-	const defaultMatches = availableModels.filter(
+	const firstDefault = availableModels.find(
 		model => isKnownProvider(model.provider) && DEFAULT_MODEL_PER_PROVIDER[model.provider] === model.id,
 	);
-	if (defaultMatches.length > 0) {
-		return [...defaultMatches].sort((a, b) => {
-			const aRank = providerPriority.get(a.provider.toLowerCase()) ?? Number.POSITIVE_INFINITY;
-			const bRank = providerPriority.get(b.provider.toLowerCase()) ?? Number.POSITIVE_INFINITY;
-			if (aRank !== bRank) return aRank - bRank;
-			return availableModels.indexOf(a) - availableModels.indexOf(b);
-		})[0];
-	}
-	return availableModels[0];
+	if (!firstDefault) return availableModels[0];
+
+	const providerPriority = buildModelProviderPriorityRank();
+	const sharedDefaultMatches = availableModels.filter(
+		model =>
+			model.id === firstDefault.id &&
+			isKnownProvider(model.provider) &&
+			DEFAULT_MODEL_PER_PROVIDER[model.provider] === model.id,
+	);
+	return [...sharedDefaultMatches].sort((a, b) => {
+		const aRank = providerPriority.get(a.provider.toLowerCase()) ?? Number.POSITIVE_INFINITY;
+		const bRank = providerPriority.get(b.provider.toLowerCase()) ?? Number.POSITIVE_INFINITY;
+		if (aRank !== bRank) return aRank - bRank;
+		return availableModels.indexOf(a) - availableModels.indexOf(b);
+	})[0];
 }
 
 export interface ScopedModel {

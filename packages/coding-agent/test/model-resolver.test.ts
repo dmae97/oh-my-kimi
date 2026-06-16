@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { type Api, Effort, type Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { DEFAULT_MODEL_PER_PROVIDER } from "@oh-my-pi/pi-catalog/provider-models";
 import type { CanonicalModelVariant } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import {
 	type CanonicalModelRegistry,
@@ -300,6 +301,30 @@ describe("pickDefaultAvailableModel", () => {
 
 		expect(result?.provider).toBe("openai-codex");
 		expect(result?.id).toBe("gpt-5.5");
+	});
+
+	test("keeps earlier unrelated provider defaults ahead of shared Codex defaults", () => {
+		const anthropicDefault = buildModel({
+			id: DEFAULT_MODEL_PER_PROVIDER.anthropic,
+			name: "Anthropic Default",
+			api: "anthropic-messages",
+			provider: "anthropic",
+			baseUrl: "https://api.anthropic.com",
+			reasoning: true,
+			thinking: {
+				mode: "budget",
+				efforts: [Effort.Low, Effort.Medium, Effort.High],
+			},
+			input: ["text"],
+			cost: { input: 1, output: 4, cacheRead: 0.1, cacheWrite: 1 },
+			contextWindow: 200000,
+			maxTokens: 8192,
+		});
+
+		const result = pickDefaultAvailableModel([anthropicDefault, ...openaiGpt55Models]);
+
+		expect(result?.provider).toBe("anthropic");
+		expect(result?.id).toBe(DEFAULT_MODEL_PER_PROVIDER.anthropic);
 	});
 });
 
