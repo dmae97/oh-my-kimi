@@ -185,10 +185,16 @@ function installSubagentRetryFallbackChain(args: {
 	}
 	modelRoles[role] = candidates[selectedIndex].selector;
 	settings.override("modelRoles", modelRoles);
-	settings.override("retry.fallbackChains", {
-		...settings.get("retry.fallbackChains"),
+	const fallbackChains: Record<string, string[]> = {
 		[role]: fallbackSelectors,
-	});
+	};
+	const existingFallbackChains = settings.get("retry.fallbackChains");
+	for (const existingRole in existingFallbackChains) {
+		if (existingRole !== role) {
+			fallbackChains[existingRole] = existingFallbackChains[existingRole];
+		}
+	}
+	settings.override("retry.fallbackChains", fallbackChains);
 	return role;
 }
 

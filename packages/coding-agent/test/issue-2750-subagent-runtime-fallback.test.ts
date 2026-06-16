@@ -76,6 +76,12 @@ describe("issue #2750: subagent runtime model fallback", () => {
 		});
 
 		const agent: AgentDefinition = { name: "task", description: "test", systemPrompt: "test", source: "bundled" };
+		const settings = Settings.isolated({
+			"retry.fallbackChains": {
+				default: ["global/inherited-model"],
+			},
+		});
+		settings.setModelRole("default", "primary/bad-runtime-model");
 		const result = await runSubprocess({
 			cwd: "/tmp",
 			agent,
@@ -83,7 +89,7 @@ describe("issue #2750: subagent runtime model fallback", () => {
 			index: 0,
 			id: "issue-2750",
 			modelOverride: ["primary/bad-runtime-model", "fallback/working-model"],
-			settings: Settings.isolated(),
+			settings,
 			modelRegistry: {
 				refresh: async () => {},
 				getAvailable: () => [primary, fallback],
@@ -92,14 +98,24 @@ describe("issue #2750: subagent runtime model fallback", () => {
 			enableLsp: false,
 		});
 
-		let fallbackChain: string[] | undefined;
+		let firstFallbackRole: string | undefined;
+		let subagentFallbackChain: string[] | undefined;
+		let inheritedFallbackChain: string[] | undefined;
 		for (const role in childFallbackChains) {
 			const chain = childFallbackChains[role];
-			if (chain?.includes("fallback/working-model")) {
-				fallbackChain = chain;
+			if (!firstFallbackRole) {
+				firstFallbackRole = role;
+			}
+			if (role === "subagent:issue-2750") {
+				subagentFallbackChain = chain;
+			}
+			if (role === "default") {
+				inheritedFallbackChain = chain;
 			}
 		}
-		expect(fallbackChain).toEqual(["fallback/working-model"]);
+		expect(firstFallbackRole).toBe("subagent:issue-2750");
+		expect(subagentFallbackChain).toEqual(["fallback/working-model"]);
+		expect(inheritedFallbackChain).toEqual(["global/inherited-model"]);
 		expect(result.modelOverride).toEqual(["primary/bad-runtime-model", "fallback/working-model"]);
 		expect(result.resolvedModel).toBe("fallback/working-model");
 	});
