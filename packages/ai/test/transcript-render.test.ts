@@ -93,4 +93,50 @@ describe("dialect transcript rendering", () => {
 
 		expect(new Set(outputs).size).toBe(outputs.length);
 	});
+
+	it("does not double-wrap thinking blocks already stored with literal envelopes", () => {
+		const wrapped: Message[] = [
+			{
+				role: "assistant",
+				content: [{ type: "thinking", thinking: "<thinking>\nCheck logs first.\n</thinking>" }],
+				api: "mock",
+				provider: "mock",
+				model: "mock",
+				usage: usage(),
+				stopReason: "stop",
+				timestamp: 1,
+			},
+		];
+
+		// Anthropic dialect must unwrap the literal envelope instead of nesting a second one.
+		const anthropic = getDialectDefinition("anthropic").renderTranscript(wrapped);
+		expect(anthropic).toContain("Assistant: <thinking>\nCheck logs first.\n</thinking>");
+		expect(anthropic).not.toContain("<thinking>\n<thinking>");
+
+		// A <thinking> envelope must not be confused with the qwen3 <think> delimiter (prefix safety).
+		const qwen3 = getDialectDefinition("qwen3").renderTranscript(wrapped);
+		expect(qwen3).toContain("<think>\n<thinking>\nCheck logs first.\n</thinking>\n</think>");
+	});
+
+	it("unwraps sibling literal thinking envelopes independently", () => {
+		const siblings: Message[] = [
+			{
+				role: "assistant",
+				content: [
+					{ type: "thinking", thinking: "<thinking>\nfirst\n</thinking>\n<thinking>\nsecond\n</thinking>" },
+				],
+				api: "mock",
+				provider: "mock",
+				model: "mock",
+				usage: usage(),
+				stopReason: "stop",
+				timestamp: 1,
+			},
+		];
+
+		// Each literal envelope is unwrapped on its own; no malformed close/open boundary leaks through.
+		const out = getDialectDefinition("anthropic").renderTranscript(siblings);
+		expect(out).toContain("Assistant: <thinking>\nfirst\nsecond\n</thinking>");
+		expect(out).not.toContain("first\n</thinking>\n<thinking>\nsecond");
+	});
 });
