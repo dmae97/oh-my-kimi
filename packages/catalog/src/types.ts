@@ -311,6 +311,13 @@ export interface AnthropicCompat {
 	 * Default: auto-detected from provider/baseUrl and `model.reasoning`.
 	 */
 	replayUnsignedThinking?: boolean;
+	/**
+	 * Prefix Anthropic built-in tool names (`web_search`, `code_execution`, ...)
+	 * when they are ordinary client tools. Some Anthropic-compatible gateways
+	 * intercept those exact names as server tools and return raw search/result
+	 * blocks instead of normal `tool_use` calls.
+	 */
+	escapeBuiltinToolNames?: boolean;
 }
 
 /**

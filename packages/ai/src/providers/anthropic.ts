@@ -704,6 +704,8 @@ export function resolveAnthropicMetadataUserId(
 	return generateClaudeJsonUserId(sessionId, accountId);
 }
 const ANTHROPIC_BUILTIN_TOOL_NAMES = new Set(["web_search", "code_execution", "text_editor", "computer"]);
+const UMANS_WEBSEARCH_PROVIDER_HEADER = "X-Umans-Websearch-Provider";
+const UMANS_WEBSEARCH_TOOL_NAME = "web_search";
 export const applyClaudeToolPrefix = (name: string): string => {
 	if (!claudeToolPrefix) return name;
 	if (ANTHROPIC_BUILTIN_TOOL_NAMES.has(name.toLowerCase())) return name;
@@ -720,6 +722,50 @@ export const stripClaudeToolPrefix = (name: string): string => {
 	if (!name.toLowerCase().startsWith(claudeToolPrefix.toLowerCase())) return name;
 	return name.slice(claudeToolPrefix.length);
 };
+
+function normalizeUmansWebSearchProvider(value: string | undefined): "native" | "exa" | undefined {
+	const normalized = value?.trim().toLowerCase();
+	return normalized === "native" || normalized === "exa" ? normalized : undefined;
+}
+
+function getUmansWebSearchProvider(headers: Record<string, string> | undefined): "native" | "exa" | undefined {
+	const explicit = getHeaderCaseInsensitive(headers, UMANS_WEBSEARCH_PROVIDER_HEADER);
+	if (explicit !== undefined) return normalizeUmansWebSearchProvider(explicit);
+	return normalizeUmansWebSearchProvider($env.UMANS_WEBSEARCH_PROVIDER);
+}
+
+function isUmansAnthropicModel(model: Model<"anthropic-messages">): boolean {
+	return model.provider === "umans" || model.baseUrl.toLowerCase().includes("api.code.umans.ai");
+}
+
+function getUmansWebSearchHeader(
+	model: Model<"anthropic-messages">,
+	headers: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+	if (!isUmansAnthropicModel(model)) return undefined;
+	const provider = getUmansWebSearchProvider(headers);
+	return provider ? { [UMANS_WEBSEARCH_PROVIDER_HEADER]: provider } : undefined;
+}
+
+function shouldUseUmansGatewayWebSearch(name: string, enabled: boolean): boolean {
+	return enabled && name.toLowerCase() === UMANS_WEBSEARCH_TOOL_NAME;
+}
+
+function encodeAnthropicToolName(
+	name: string,
+	isOAuthToken: boolean,
+	escapeBuiltinToolNames: boolean,
+	useUmansGatewayWebSearch = false,
+): string {
+	if (shouldUseUmansGatewayWebSearch(name, useUmansGatewayWebSearch)) return name;
+	if (escapeBuiltinToolNames) return `${claudeToolPrefix}${name}`;
+	return isOAuthToken ? applyClaudeToolPrefix(name) : name;
+}
+
+function decodeAnthropicToolName(name: string, isOAuthToken: boolean, escapeBuiltinToolNames: boolean): string {
+	if (isOAuthToken || escapeBuiltinToolNames) return stripClaudeToolPrefix(name);
+	return name;
+}
 
 const ANTHROPIC_MANY_IMAGE_THRESHOLD = 20;
 const ANTHROPIC_MANY_IMAGE_MAX_DIMENSION = 2000;
@@ -1578,6 +1624,8 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 			let disableStrictTools =
 				(providerSessionState?.strictToolsDisabled ?? false) || (model.compat?.disableStrictTools ?? false);
 			let dropFastMode = providerSessionState?.fastModeDisabled ?? false;
+			const mergedCallerHeaders = mergeHeaders(model.headers, options?.headers);
+			const umansGatewayWebSearchHeader = getUmansWebSearchHeader(model, mergedCallerHeaders);
 
 			let client: AnthropicMessagesClientLike;
 			let isOAuthToken: boolean;
@@ -1639,7 +1687,14 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 			}
 			const preparedContext = await prepareAnthropicManyImageContext(context, model.input.includes("image"));
 			const prepareParams = async (): Promise<MessageCreateParamsStreaming> => {
-				let nextParams = buildParams(model, preparedContext, isOAuthToken, options, disableStrictTools);
+				let nextParams = buildParams(
+					model,
+					preparedContext,
+					isOAuthToken,
+					options,
+					disableStrictTools,
+					umansGatewayWebSearchHeader !== undefined,
+				);
 				if (disableStrictTools) {
 					dropAnthropicStrictTools(nextParams);
 				}
@@ -1717,7 +1772,11 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 				// to zero even when no watchdog timeout is configured (the helper only
 				// pins it alongside a timeout; a client retry budget of 5 would otherwise
 				// multiply with PROVIDER_MAX_RETRIES into up to 66 wire attempts).
-				const requestOptions = { ...createSdkStreamRequestOptions(requestSignal, requestTimeoutMs), maxRetries: 0 };
+				const requestOptions = {
+					...createSdkStreamRequestOptions(requestSignal, requestTimeoutMs),
+					maxRetries: 0,
+					...(umansGatewayWebSearchHeader ? { headers: umansGatewayWebSearchHeader } : {}),
+				};
 				const anthropicRequest: unknown =
 					isOAuthToken && client.beta
 						? client.beta.messages.create({ ...params, stream: true }, requestOptions)
@@ -1900,9 +1959,11 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 								const block: Block = {
 									type: "toolCall",
 									id: event.content_block.id,
-									name: isOAuthToken
-										? stripClaudeToolPrefix(event.content_block.name)
-										: event.content_block.name,
+									name: decodeAnthropicToolName(
+										event.content_block.name,
+										isOAuthToken,
+										model.compat.escapeBuiltinToolNames,
+									),
 									arguments: event.content_block.input ?? {},
 									partialJson: "",
 									index: event.index,
@@ -2377,7 +2438,13 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		isOAuth: oauthToken,
 		extraBetas: betaFeatures,
 		stream,
-		modelHeaders: mergeHeaders(model.headers, foundryCustomHeaders, headers, dynamicHeaders),
+		modelHeaders: mergeHeaders(
+			model.headers,
+			foundryCustomHeaders,
+			getUmansWebSearchHeader(model, mergeHeaders(model.headers, headers)),
+			headers,
+			dynamicHeaders,
+		),
 		isCloudflareAiGateway: model.provider === "cloudflare-ai-gateway",
 		claudeCodeSessionId,
 		claudeCodeBetas: oauthToken
@@ -2744,6 +2811,7 @@ function buildParams(
 	isOAuthToken: boolean,
 	options?: AnthropicOptions,
 	disableStrictTools = false,
+	useUmansGatewayWebSearch = false,
 ): MessageCreateParamsStreaming {
 	const { cacheControl } = getCacheControl(model, options?.cacheRetention, isOAuthToken);
 
@@ -2765,6 +2833,8 @@ function buildParams(
 			isOAuthToken,
 			disableStrictTools || model.provider === "github-copilot",
 			model.compat.supportsEagerToolInputStreaming,
+			model.compat.escapeBuiltinToolNames,
+			useUmansGatewayWebSearch,
 		);
 	} else if (isOAuthToken) {
 		tools = [];
@@ -2890,10 +2960,16 @@ function buildParams(
 	if (options?.toolChoice) {
 		if (typeof options.toolChoice === "string") {
 			params.tool_choice = { type: options.toolChoice };
-		} else if (isOAuthToken && options.toolChoice.name) {
-			params.tool_choice = { ...options.toolChoice, name: applyClaudeToolPrefix(options.toolChoice.name) };
-		} else {
-			params.tool_choice = options.toolChoice;
+		} else if (options.toolChoice.name) {
+			params.tool_choice = {
+				...options.toolChoice,
+				name: encodeAnthropicToolName(
+					options.toolChoice.name,
+					isOAuthToken,
+					model.compat.escapeBuiltinToolNames,
+					useUmansGatewayWebSearch,
+				),
+			};
 		}
 		// Claude Fable/Mythos 5 reject forced tool use outright ("tool_choice forces
 		// tool use is not compatible with this model"). Downgrade any/tool → auto so the
@@ -3098,7 +3174,7 @@ export function convertAnthropicMessages(
 					blocks.push({
 						type: "tool_use",
 						id: block.id,
-						name: isOAuthToken ? applyClaudeToolPrefix(block.name) : block.name,
+						name: encodeAnthropicToolName(block.name, isOAuthToken, model.compat.escapeBuiltinToolNames),
 						// Always sanitize: the model itself can emit lone-surrogate escapes
 						// in tool-argument JSON (streamed out fine, rejected with a 400 on
 						// replay by Anthropic's strict UTF-8 validation). toWellFormedDeep
@@ -3684,6 +3760,8 @@ function convertTools(
 	isOAuthToken: boolean,
 	disableStrictTools = false,
 	supportsEagerToolInputStreaming = true,
+	escapeBuiltinToolNames = false,
+	useUmansGatewayWebSearch = false,
 ): AnthropicWireTool[] {
 	if (!tools) return [];
 	const schemaPlans = buildAnthropicToolSchemaPlans(tools, disableStrictTools);
@@ -3691,7 +3769,7 @@ function convertTools(
 	return tools.map((tool, index) => {
 		const plan = schemaPlans[index];
 		const baseTool = {
-			name: isOAuthToken ? applyClaudeToolPrefix(tool.name) : tool.name,
+			name: encodeAnthropicToolName(tool.name, isOAuthToken, escapeBuiltinToolNames, useUmansGatewayWebSearch),
 			description: tool.description || "",
 			input_schema: plan.inputSchema,
 		};

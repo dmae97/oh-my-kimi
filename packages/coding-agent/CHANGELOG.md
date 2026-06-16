@@ -26,6 +26,10 @@
 
 - Fixed `/advisor dump raw` so Opus 4.5 thinking content that already includes literal `<thinking>` tags is not rendered with nested thinking tags ([#2700](https://github.com/can1357/oh-my-pi/issues/2700)).
 
+### Added
+
+- Added the `UMANS_WEBSEARCH_PROVIDER` environment variable to CLI help for Umans gateway web search backend selection.
+
 ## [16.0.1] - 2026-06-15
 
 ### Breaking Changes

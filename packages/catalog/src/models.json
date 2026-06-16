@@ -60012,8 +60012,8 @@
 				"text"
 			],
 			"cost": {
-				"input": 0.09,
-				"output": 0.18,
+				"input": 0.098,
+				"output": 0.196,
 				"cacheRead": 0.02,
 				"cacheWrite": 0
 			},
@@ -65288,7 +65288,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 262144,
+			"maxTokens": 81920,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -65311,12 +65311,12 @@
 				"image"
 			],
 			"cost": {
-				"input": 0.39,
-				"output": 2.34,
+				"input": 0.385,
+				"output": 2.4499999999999997,
 				"cacheRead": 0.195,
 				"cacheWrite": 0
 			},
-			"contextWindow": 262144,
+			"contextWindow": 256000,
 			"maxTokens": 65536,
 			"thinking": {
 				"mode": "effort",
@@ -65932,13 +65932,13 @@
 				"text"
 			],
 			"cost": {
-				"input": 0.063,
-				"output": 0.21,
-				"cacheRead": 0.020999999999999998,
+				"input": 0.06599999999999999,
+				"output": 0.26,
+				"cacheRead": 0.029,
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 64000,
+			"maxTokens": 262144,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -68906,7 +68906,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 262144,
+			"maxTokens": 32768,
 			"thinking": {
 				"mode": "budget",
 				"efforts": [
@@ -68916,6 +68916,9 @@
 					"high",
 					"xhigh"
 				]
+			},
+			"compat": {
+				"escapeBuiltinToolNames": true
 			}
 		},
 		"umans-flash": {
@@ -68936,7 +68939,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 262144,
+			"maxTokens": 32768,
 			"thinking": {
 				"mode": "budget",
 				"efforts": [
@@ -68946,11 +68949,14 @@
 					"high",
 					"xhigh"
 				]
+			},
+			"compat": {
+				"escapeBuiltinToolNames": true
 			}
 		},
 		"umans-glm-5.1": {
 			"id": "umans-glm-5.1",
-			"name": "GLM 5.1",
+			"name": "Umans GLM 5.1",
 			"api": "anthropic-messages",
 			"provider": "umans",
 			"baseUrl": "https://api.code.umans.ai",
@@ -68965,7 +68971,7 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": 204800,
+			"contextWindow": 202752,
 			"maxTokens": 131072,
 			"thinking": {
 				"mode": "budget",
@@ -68976,11 +68982,14 @@
 					"high",
 					"xhigh"
 				]
+			},
+			"compat": {
+				"escapeBuiltinToolNames": true
 			}
 		},
 		"umans-kimi-k2.6": {
 			"id": "umans-kimi-k2.6",
-			"name": "Kimi K2.6",
+			"name": "Umans Kimi K2.6",
 			"api": "anthropic-messages",
 			"provider": "umans",
 			"baseUrl": "https://api.code.umans.ai",
@@ -68996,7 +69005,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 262144,
+			"maxTokens": 32768,
 			"thinking": {
 				"mode": "budget",
 				"efforts": [
@@ -69006,11 +69015,14 @@
 					"high",
 					"xhigh"
 				]
+			},
+			"compat": {
+				"escapeBuiltinToolNames": true
 			}
 		},
 		"umans-kimi-k2.7": {
 			"id": "umans-kimi-k2.7",
-			"name": "Kimi K2.7 Code",
+			"name": "Umans Kimi K2.7 Code",
 			"api": "anthropic-messages",
 			"provider": "umans",
 			"baseUrl": "https://api.code.umans.ai",
@@ -69026,7 +69038,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 262144,
+			"maxTokens": 32768,
 			"thinking": {
 				"mode": "budget",
 				"efforts": [
@@ -69037,11 +69049,14 @@
 					"xhigh"
 				],
 				"requiresEffort": true
+			},
+			"compat": {
+				"escapeBuiltinToolNames": true
 			}
 		},
 		"umans-qwen3.6-35b-a3b": {
 			"id": "umans-qwen3.6-35b-a3b",
-			"name": "Qwen3.6 35B A3B",
+			"name": "Umans Qwen3.6 35B A3B",
 			"api": "anthropic-messages",
 			"provider": "umans",
 			"baseUrl": "https://api.code.umans.ai",
@@ -69057,7 +69072,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 262144,
+			"maxTokens": 32768,
 			"thinking": {
 				"mode": "budget",
 				"efforts": [
@@ -69067,6 +69082,9 @@
 					"high",
 					"xhigh"
 				]
+			},
+			"compat": {
+				"escapeBuiltinToolNames": true
 			}
 		}
 	},
@@ -70537,6 +70555,28 @@
 					"high",
 					"xhigh"
 				]
+			}
+		},
+		"kimi-k2-7-code": {
+			"id": "kimi-k2-7-code",
+			"name": "kimi-k2-7-code",
+			"api": "openai-completions",
+			"provider": "venice",
+			"baseUrl": "https://api.venice.ai/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 256000,
+			"maxTokens": 32768,
+			"compat": {
+				"supportsUsageInStreaming": false
 			}
 		},
 		"kimi-k2-thinking": {
@@ -72288,7 +72328,8 @@
 				"supportsForcedToolChoice": true,
 				"supportsSamplingParams": true,
 				"requiresToolResultId": false,
-				"replayUnsignedThinking": false
+				"replayUnsignedThinking": false,
+				"escapeBuiltinToolNames": false
 			}
 		},
 		"alibaba/qwen3-max-preview": {

@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Kimi output caps for Umans AI Coding Plan and Venice so discovery metadata cannot use context-sized token ceilings as request caps.
+- Marked Umans Anthropic-compatible models as client-tool escaped so cached and bundled metadata do not expose `web_search` as a provider server tool.
+
 ## [16.0.1] - 2026-06-15
 
 ### Added

@@ -58,6 +58,15 @@ const CLOUDFLARE_ANTHROPIC_MODEL: Model<"anthropic-messages"> = buildModel({
 	baseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway/anthropic",
 });
 
+const UMANS_ANTHROPIC_MODEL: Model<"anthropic-messages"> = buildModel({
+	...ANTHROPIC_MODEL_SPEC,
+	id: "umans-kimi-k2.7",
+	name: "Umans Kimi K2.7 Code",
+	provider: "umans",
+	baseUrl: "https://api.code.umans.ai",
+	maxTokens: 32_768,
+});
+
 function createAbortedSignal(): AbortSignal {
 	const controller = new AbortController();
 	controller.abort();
@@ -76,6 +85,7 @@ type CaptureAnthropicOptions = {
 	toolChoice?: "auto" | "any" | "none" | { type: "tool"; name: string };
 	thinkingDisplay?: "summarized" | "omitted";
 	sessionId?: string;
+	headers?: Record<string, string>;
 };
 
 function captureAnthropicPayload(
@@ -98,6 +108,7 @@ function captureAnthropicPayload(
 		toolChoice: options?.toolChoice,
 		thinkingDisplay: options?.thinkingDisplay,
 		sessionId: options?.sessionId,
+		headers: options?.headers,
 		onPayload: payload => resolve(payload),
 	});
 	return promise;
@@ -469,6 +480,19 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(options.defaultHeaders.Authorization).toBeUndefined();
 	});
 
+	it("adds Umans gateway web search header from env", async () => {
+		await withEnv({ UMANS_WEBSEARCH_PROVIDER: "exa" }, () => {
+			const options = buildAnthropicClientOptions({
+				model: UMANS_ANTHROPIC_MODEL,
+				apiKey: "sk-umans-test",
+				stream: true,
+				hasTools: true,
+			});
+
+			expect(options.defaultHeaders["X-Umans-Websearch-Provider"]).toBe("exa");
+		});
+	});
+
 	it("forwards only prefix-matching Claude Code User-Agent values", () => {
 		const forwardedHeaders = buildAnthropicHeaders({
 			apiKey: "sk-ant-oat-test",
@@ -799,6 +823,97 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(payload.metadata?.user_id).not.toBe("invalid-user-id");
 		expectClaudeMetadataUserId(payload.metadata?.user_id);
 	});
+	it("escapes Umans client tool names for unambiguous round-trips", async () => {
+		const tools: Tool[] = [
+			{
+				name: "web_search",
+				description: "search the web",
+				parameters: {
+					type: "object",
+					properties: { query: { type: "string" } },
+					required: ["query"],
+				},
+			},
+			{
+				name: "read",
+				description: "read a file",
+				parameters: {
+					type: "object",
+					properties: { path: { type: "string" } },
+					required: ["path"],
+				},
+			},
+			{
+				name: "_web_search",
+				description: "literal prefixed search",
+				parameters: {
+					type: "object",
+					properties: { query: { type: "string" } },
+					required: ["query"],
+				},
+			},
+		];
+
+		const payload = (await captureAnthropicPayload(
+			UMANS_ANTHROPIC_MODEL,
+			{
+				systemPrompt: ["Stay concise."],
+				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+				tools,
+			},
+			{ isOAuth: false, toolChoice: { type: "tool", name: "web_search" } },
+		)) as {
+			tools?: Array<{ name?: string }>;
+			tool_choice?: { type?: string; name?: string };
+		};
+
+		expect(payload.tools?.map(tool => tool.name)).toEqual(["_web_search", "_read", "__web_search"]);
+		expect(payload.tool_choice).toEqual({ type: "tool", name: "_web_search" });
+	});
+
+	it("leaves Umans web_search unescaped when gateway web search is selected", async () => {
+		const tools: Tool[] = [
+			{
+				name: "web_search",
+				description: "search the web",
+				parameters: {
+					type: "object",
+					properties: { query: { type: "string" } },
+					required: ["query"],
+				},
+			},
+			{
+				name: "read",
+				description: "read a file",
+				parameters: {
+					type: "object",
+					properties: { path: { type: "string" } },
+					required: ["path"],
+				},
+			},
+		];
+
+		const payload = (await captureAnthropicPayload(
+			UMANS_ANTHROPIC_MODEL,
+			{
+				systemPrompt: ["Stay concise."],
+				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+				tools,
+			},
+			{
+				isOAuth: false,
+				headers: { "X-Umans-Websearch-Provider": "native" },
+				toolChoice: { type: "tool", name: "web_search" },
+			},
+		)) as {
+			tools?: Array<{ name?: string }>;
+			tool_choice?: { type?: string; name?: string };
+		};
+
+		expect(payload.tools?.map(tool => tool.name)).toEqual(["web_search", "_read"]);
+		expect(payload.tool_choice).toEqual({ type: "tool", name: "web_search" });
+	});
+
 	it("adds additionalProperties false to Anthropic tool object schemas", async () => {
 		const originalNestedSchema = {
 			type: "object",

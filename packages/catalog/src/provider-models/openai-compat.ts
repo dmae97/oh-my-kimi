@@ -658,13 +658,17 @@ function mapUmansModelInfo(
 		api: "anthropic-messages",
 		provider: "umans",
 		baseUrl,
+		compat: { ...reference?.compat, escapeBuiltinToolNames: true },
 		reasoning: thinking !== undefined,
 		...(thinking ? { thinking } : {}),
 		input: umansSupportsVision(capabilities.supports_vision) ? ["text", "image"] : ["text"],
 		...(supportsTools === false ? { supportsTools: false } : {}),
 		cost: reference?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: toPositiveNumber(capabilities.context_window, reference?.contextWindow ?? null),
-		maxTokens: toPositiveNumber(capabilities.max_completion_tokens, reference?.maxTokens ?? null),
+		maxTokens: toPositiveNumber(
+			capabilities.recommended_max_tokens,
+			toPositiveNumber(capabilities.max_completion_tokens, reference?.maxTokens ?? null),
+		),
 	};
 }
 
@@ -1230,6 +1234,23 @@ export function clampFireworksKimiMaxTokens(modelId: string, candidate: number |
 export function clampFireworksKimiMaxTokens(modelId: string, candidate: number | null): number | null {
 	if (candidate === null) return null;
 	return isFireworksKimiK2ModelId(modelId) ? Math.min(candidate, FIREWORKS_KIMI_MAX_TOKENS) : candidate;
+}
+
+/**
+ * Kimi K2.7 Code's documented recommended output budget. Some provider
+ * discovery rows report the context-sized `max_completion_tokens` instead.
+ */
+export const KIMI_K27_CODE_RECOMMENDED_MAX_TOKENS = 32_768;
+
+export function isKimiK27CodeModelId(modelId: string): boolean {
+	return /(?:^|\/)kimi[-._]?k2(?:[._-]?|p)7[-._]?code$/i.test(modelId);
+}
+
+export function clampKimiK27CodeMaxTokens(modelId: string, candidate: number): number;
+export function clampKimiK27CodeMaxTokens(modelId: string, candidate: number | null): number | null;
+export function clampKimiK27CodeMaxTokens(modelId: string, candidate: number | null): number | null {
+	if (candidate === null) return null;
+	return isKimiK27CodeModelId(modelId) ? Math.min(candidate, KIMI_K27_CODE_RECOMMENDED_MAX_TOKENS) : candidate;
 }
 
 /**
@@ -2276,6 +2297,7 @@ export function veniceModelManagerOptions(
 					const model = mapWithBundledReference(entry, defaults, reference);
 					return {
 						...model,
+						maxTokens: clampKimiK27CodeMaxTokens(defaults.id, model.maxTokens),
 						compat: { ...model.compat, supportsUsageInStreaming: false },
 					};
 				},
@@ -3544,7 +3566,12 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_SPECIALIZED: readonly ModelsDevProviderDes
 	// --- Synthetic ---
 	openAiCompletionsDescriptor("synthetic", "synthetic", "https://api.synthetic.new/openai/v1"),
 	// --- Venice AI ---
-	openAiCompletionsDescriptor("venice", "venice", "https://api.venice.ai/api/v1"),
+	openAiCompletionsDescriptor("venice", "venice", "https://api.venice.ai/api/v1", {
+		transformModel: model => {
+			const maxTokens = clampKimiK27CodeMaxTokens(model.id, model.maxTokens);
+			return maxTokens === model.maxTokens ? model : { ...model, maxTokens };
+		},
+	}),
 	// --- Ollama Cloud ---
 	simpleModelsDevDescriptor("ollama-cloud", "ollama-cloud", "ollama-chat", "https://ollama.com"),
 	// --- Xiaomi Token Plan ---
