@@ -23,7 +23,7 @@ from omp_rpc import HostTool, HostToolContext, RpcCommandError, host_tool
 
 from robomp import persona
 from robomp.config import Settings
-from robomp.db import Database, issue_key
+from robomp.db import Database, IssueState, issue_key
 from robomp.git_ops import GitCommandError, HeadDriftError
 from robomp.github_backend import GitHubBackend
 from robomp.github_client import GitHubError, IssueInfo, PullRequestFileInfo, RepoInfo
@@ -49,6 +49,7 @@ _REPO_COMMAND_SCRUBBED_ENV_KEYS: tuple[str, ...] = (
     "ROBOMP_REPLAY_TOKEN",
     "ROBOMP_GH_PROXY_HMAC_KEY",
 )
+_NEEDS_INFO_LABEL = "needs-info"
 _AGENT_HOME = Path("/srv/agent-home")
 _PRE_PR_FIX_TIMEOUT_SECONDS = 600.0
 _PRE_PR_CHECK_TIMEOUT_SECONDS = 600.0
@@ -135,6 +136,33 @@ def _run_coro(loop: asyncio.AbstractEventLoop, coro: Any) -> Any:
     """Block the agent thread until an async call completes on the worker loop."""
     future = asyncio.run_coroutine_threadsafe(coro, loop)
     return future.result()
+
+
+def _issue_needs_info(bindings: ToolBindings) -> bool:
+    row = bindings.db.get_issue(bindings.issue_key)
+    return row is not None and row.state == "needs_info"
+
+
+def _remove_needs_info_label(bindings: ToolBindings) -> bool:
+    try:
+        _run_coro(
+            bindings.loop,
+            bindings.github.remove_issue_label(bindings.repo.full_name, bindings.issue.number, _NEEDS_INFO_LABEL),
+        )
+    except GitHubError as exc:
+        if exc.status == 404:
+            return True
+        log.warning("needs-info label cleanup failed", extra={"issue": bindings.issue_key, "err": str(exc)})
+        return False
+    return True
+
+
+def _advance_needs_info(bindings: ToolBindings, state: IssueState) -> bool:
+    if not _issue_needs_info(bindings):
+        return False
+    label_cleared = _remove_needs_info_label(bindings)
+    bindings.db.set_issue_state(bindings.issue_key, state)
+    return label_cleared
 
 
 def _audit(
@@ -406,7 +434,6 @@ def _run_pre_publish_bun_check(
 
 
 _AUTOCLOSE_INELIGIBLE_STATES: frozenset[str] = frozenset({"closed", "merged", "needs_info", "abandoned"})
-_NEEDS_INFO_LABEL = "needs-info"
 
 
 def _should_schedule_autoclose(bindings: ToolBindings, target_number: int) -> float | None:
@@ -695,6 +722,7 @@ def _build_open_pr(bindings: ToolBindings) -> HostTool[Any, Any]:
         # Make sure the branch is pushed (idempotent) using the same preflight as gh_push_branch.
         _guarded_push_branch(bindings, args, "gh_open_pr", bindings.workspace.branch)
         base = args.get("base") or bindings.repo.default_branch
+        was_needs_info = _issue_needs_info(bindings)
         try:
             pr = _run_coro(
                 bindings.loop,
@@ -712,6 +740,7 @@ def _build_open_pr(bindings: ToolBindings) -> HostTool[Any, Any]:
             _raise_command(f"GitHub rejected PR: {exc.status} {exc.message}")
         bindings.db.set_issue_pr(bindings.issue_key, pr.number)
         bindings.db.set_issue_state(bindings.issue_key, "opened")
+        needs_info_label_cleared = _remove_needs_info_label(bindings) if was_needs_info else False
         artifact = bindings.workspace.artifacts_dir / "pr.json"
         artifact.write_text(
             json.dumps(
@@ -726,7 +755,10 @@ def _build_open_pr(bindings: ToolBindings) -> HostTool[Any, Any]:
             ),
             encoding="utf-8",
         )
-        _audit(bindings, "gh_open_pr", args, result={"pr_number": pr.number, "url": pr.html_url})
+        result: dict[str, Any] = {"pr_number": pr.number, "url": pr.html_url}
+        if needs_info_label_cleared:
+            result["cleared_needs_info"] = True
+        _audit(bindings, "gh_open_pr", args, result=result)
         return f"opened #{pr.number}: {pr.html_url}"
 
     return host_tool(
@@ -840,7 +872,10 @@ def _build_repro_record(bindings: ToolBindings) -> HostTool[Any, Any]:
         if _slot_permissions_active(bindings.slot_uid):
             assert bindings.slot_uid is not None
             os.chown(target, bindings.slot_uid, bindings.slot_uid)
-        _audit(bindings, "repro_record", args, result={"path": str(target.relative_to(bindings.workspace.root))})
+        result: dict[str, Any] = {"path": str(target.relative_to(bindings.workspace.root))}
+        if _advance_needs_info(bindings, "reproducing"):
+            result["cleared_needs_info"] = True
+        _audit(bindings, "repro_record", args, result=result)
         return "recorded"
 
     return host_tool(

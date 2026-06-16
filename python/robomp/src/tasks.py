@@ -22,7 +22,6 @@ from robomp.sandbox import GitTransport, SandboxManager
 from robomp.worker import DirectiveInfo, TaskInputs, ThreadMessage, run_task
 
 log = logging.getLogger(__name__)
-_NEEDS_INFO_LABEL = "needs-info"
 
 
 def _comment_from_payload(payload: Mapping[str, Any]) -> CommentInfo:
@@ -499,13 +498,6 @@ async def handle_comment(
         author_email=settings.git_author_email,
         slot_uid=slot_uid,
     )
-    if existing.state == "needs_info":
-        try:
-            await github.remove_issue_label(repo.full_name, issue.number, _NEEDS_INFO_LABEL)
-        except GitHubError as exc:
-            if exc.status != 404:
-                log.warning("needs-info label cleanup failed", extra={"key": key, "err": str(exc)})
-        db.set_issue_state(key, "reproducing")
     inputs = TaskInputs(
         settings=settings,
         db=db,

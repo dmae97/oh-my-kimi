@@ -382,10 +382,69 @@ def test_repro_record_writes_transcript(db: Database, tmp_path: Path) -> None:
         _stop_loop(loop, t)
 
 
+def test_repro_record_clears_needs_info_after_actionable_reply(db: Database, tmp_path: Path) -> None:
+    removed: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        removed.append((request.method, request.url.path))
+        return httpx.Response(204)
+
+    bindings, loop, t = _bindings(db, tmp_path, httpx.MockTransport(handler))
+    db.set_issue_state(bindings.issue_key, "needs_info")
+    try:
+        tool = next(x for x in build(bindings) if x.name == "repro_record")
+        result = tool.execute(
+            {
+                "title": "panic on empty input",
+                "command": "bun test foo.test.ts",
+                "output": "Error: boom",
+                "exit_code": 1,
+            },
+            _ctx(),
+        )
+    finally:
+        _stop_loop(loop, t)
+
+    assert result == "recorded"
+    assert removed == [("DELETE", "/repos/octo/widget/issues/42/labels/needs-info")]
+    issue = db.get_issue(bindings.issue_key)
+    assert issue and issue.state == "reproducing"
+
+
+def test_repro_record_advances_needs_info_when_label_is_missing(db: Database, tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "DELETE"
+        assert request.url.path == "/repos/octo/widget/issues/42/labels/needs-info"
+        return httpx.Response(404, json={"message": "Label does not exist"})
+
+    bindings, loop, t = _bindings(db, tmp_path, httpx.MockTransport(handler))
+    db.set_issue_state(bindings.issue_key, "needs_info")
+    try:
+        tool = next(x for x in build(bindings) if x.name == "repro_record")
+        tool.execute(
+            {
+                "title": "panic on empty input",
+                "command": "bun test foo.test.ts",
+                "output": "Error: boom",
+                "exit_code": 1,
+            },
+            _ctx(),
+        )
+    finally:
+        _stop_loop(loop, t)
+
+    issue = db.get_issue(bindings.issue_key)
+    assert issue and issue.state == "reproducing"
+
+
 def test_repro_record_chowns_to_slot_when_root(db: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     chowns: list[tuple[Path, int, int]] = []
     monkeypatch.setattr(host_tools, "_slot_permissions_active", lambda slot_uid: slot_uid is not None)
-    monkeypatch.setattr("robomp.host_tools.os.chown", lambda path, uid, gid: chowns.append((Path(path), uid, gid)))
+    monkeypatch.setattr(
+        "robomp.host_tools.os.chown",
+        lambda path, uid, gid: chowns.append((Path(path), uid, gid)),
+        raising=False,
+    )
 
     bindings, loop, t = _bindings(db, tmp_path, httpx.MockTransport(lambda r: httpx.Response(500)), slot_uid=2001)
     try:

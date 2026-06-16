@@ -2211,10 +2211,10 @@ async def test_handle_comment_finalized_without_directive_still_replies(
     close_database()
 
 
-async def test_handle_comment_resumes_needs_info_reply(
+async def test_handle_comment_resumes_needs_info_without_preemptive_cleanup(
     settings: Settings, tmp_path: Path, stub_run_task, monkeypatch
 ) -> None:
-    """Reporter details after a needs-info request resume the existing session."""
+    """A needs-info reply resumes first; host tools clear state only after actionable work."""
     from robomp import tasks
     from robomp.github_client import GitHubClient, IssueInfo, RepoInfo
 
@@ -2285,10 +2285,10 @@ async def test_handle_comment_resumes_needs_info_reply(
     assert call["task_kind"] == "handle_comment"
     assert call["comment"].body == "I am on Bun 1.3.14 and here is the trace"
     assert sandbox.ensure_calls[0]["existing_branch"] == "farm/old/branch"
-    assert removed_labels == [("octo/widget", 88, "needs-info")]
+    assert removed_labels == []
     assert post_comment_calls == [], "needs-info replies must not get the finalized-issue notice"
     row = db.get_issue("octo/widget#88")
-    assert row is not None and row.state == "reproducing"
+    assert row is not None and row.state == "needs_info"
     close_database()
 
 
