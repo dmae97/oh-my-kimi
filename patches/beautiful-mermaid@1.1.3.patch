@@ -1,5 +1,24 @@
+diff --git a/dist/index.d.ts b/dist/index.d.ts
+index 6239e30019b1bc36d0722921db4ecc84f9b277a6..8ef7097c0a90912fa301efe44d49dc02c70263df 100644
+--- a/dist/index.d.ts
++++ b/dist/index.d.ts
+@@ -224,6 +224,14 @@ interface AsciiRenderOptions {
+     paddingY?: number;
+     /** Padding inside node boxes. Default: 1 */
+     boxBorderPadding?: number;
++    /**
++     * Force the layout direction, overriding the direction parsed from the
++     * diagram source. Applies to the flowchart + state-diagram grid pipeline
++     * (sequence/class/ER/xychart renderers ignore it). Useful for re-fitting a
++     * wide `LR` graph into a narrow viewport by laying it out top-down.
++     * Default: undefined (use the source's own direction).
++     */
++    direction?: Direction;
+     /**
+      * Color mode for output.
+      * - 'none': No colors (plain text)
 diff --git a/dist/index.js b/dist/index.js
-index e7e087b..1351413 100644
+index e7e087bcb6f29d0d8f36cd558e0183bc0f162fcb..ef3a86433637287555d889f292ec3ddae63f4fa9 100644
 --- a/dist/index.js
 +++ b/dist/index.js
 @@ -219,6 +219,45 @@ var EMOJI_REGEX = /\p{Emoji_Presentation}|\p{Extended_Pictographic}/u;
@@ -681,8 +700,18 @@ index e7e087b..1351413 100644
        rowRoles.push(roles[col][row]);
        rowHex.push(hexCanvas[col][row]);
      }
+@@ -5865,6 +5956,9 @@ function renderMermaidASCII(text, options = {}) {
+     case "flowchart":
+     default: {
+       const parsed = parseMermaid(text);
++      if (options.direction) {
++        parsed.direction = options.direction;
++      }
+       if (parsed.direction === "LR" || parsed.direction === "RL") {
+         config.graphDirection = "LR";
+       } else {
 diff --git a/src/ascii/canvas.ts b/src/ascii/canvas.ts
-index e9949fe..22a0031 100644
+index e9949feb129161f010483e74ab9c91d918fdab6c..22a003199fe8f07f4697ebf1891051bd03d69beb 100644
 --- a/src/ascii/canvas.ts
 +++ b/src/ascii/canvas.ts
 @@ -8,6 +8,7 @@
@@ -819,7 +848,7 @@ index e9949fe..22a0031 100644
    }
  }
 diff --git a/src/ascii/class-diagram.ts b/src/ascii/class-diagram.ts
-index 95e2c76..cdf20cd 100644
+index 95e2c76a43a4a23f6cf1e7299c753aefed01c197..cdf20cdf012dba6c6aa8645e853e02be2d5e6ef0 100644
 --- a/src/ascii/class-diagram.ts
 +++ b/src/ascii/class-diagram.ts
 @@ -16,6 +16,7 @@ import type { Canvas, AsciiConfig, RoleCanvas, CharRole, AsciiTheme, ColorMode }
@@ -876,7 +905,7 @@ index 95e2c76..cdf20cd 100644
          }
        }
 diff --git a/src/ascii/draw.ts b/src/ascii/draw.ts
-index f8020f5..e1e205d 100644
+index f8020f594fc9e27cc27eeecad17e2688c3900159..e1e205def44dc1d860b22ca2e872192c4561a958 100644
 --- a/src/ascii/draw.ts
 +++ b/src/ascii/draw.ts
 @@ -21,6 +21,7 @@ import { gridToDrawingCoord, lineToDrawing } from './grid.ts'
@@ -958,7 +987,7 @@ index f8020f5..e1e205d 100644
    }
  
 diff --git a/src/ascii/edge-routing.ts b/src/ascii/edge-routing.ts
-index e9a9dd4..e69234e 100644
+index e9a9dd4383973053561f5a05bc71949971c4e13e..e69234e4e5c4f7f83a23eccdba3e63b2e1e44a21 100644
 --- a/src/ascii/edge-routing.ts
 +++ b/src/ascii/edge-routing.ts
 @@ -13,6 +13,7 @@ import {
@@ -979,7 +1008,7 @@ index e9a9dd4..e69234e 100644
    const isVerticalFlow = graph.config.graphDirection === 'TD'
  
 diff --git a/src/ascii/er-diagram.ts b/src/ascii/er-diagram.ts
-index 7ff86b7..66410d2 100644
+index 7ff86b78082c9486f12ac8a70b130bd4b33ee128..66410d25ceaa8d66660c0ddfd48ca8b60c1fa27c 100644
 --- a/src/ascii/er-diagram.ts
 +++ b/src/ascii/er-diagram.ts
 @@ -15,6 +15,7 @@ import type { Canvas, AsciiConfig, RoleCanvas, CharRole, AsciiTheme, ColorMode }
@@ -1048,8 +1077,49 @@ index 7ff86b7..66410d2 100644
                }
              }
            }
+diff --git a/src/ascii/index.ts b/src/ascii/index.ts
+index 69161a9d592769abec4466421fe8ce038306d182..8eeca584904f92b8ebc484dccf03501aed51ddf4 100644
+--- a/src/ascii/index.ts
++++ b/src/ascii/index.ts
+@@ -27,6 +27,7 @@ import { renderErAscii } from './er-diagram.ts'
+ import { renderXYChartAscii } from './xychart.ts'
+ import { detectColorMode, DEFAULT_ASCII_THEME, diagramColorsToAsciiTheme } from './ansi.ts'
+ import type { AsciiConfig, AsciiTheme, ColorMode } from './types.ts'
++import type { Direction } from '../types.ts'
+ 
+ // Re-export types for external use
+ export type { AsciiTheme, ColorMode }
+@@ -41,6 +42,14 @@ export interface AsciiRenderOptions {
+   paddingY?: number
+   /** Padding inside node boxes. Default: 1 */
+   boxBorderPadding?: number
++  /**
++   * Force the layout direction, overriding the direction parsed from the
++   * diagram source. Applies to the flowchart + state-diagram grid pipeline
++   * (sequence/class/ER/xychart renderers ignore it). Useful for re-fitting a
++   * wide `LR` graph into a narrow viewport by laying it out top-down.
++   * Default: undefined (use the source's own direction).
++   */
++  direction?: Direction
+   /**
+    * Color mode for output.
+    * - 'none': No colors (plain text)
+@@ -138,6 +147,13 @@ export function renderMermaidASCII(
+       // Flowchart + state diagram pipeline (original)
+       const parsed = parseMermaid(text)
+ 
++      // Honor an explicit direction override. Applied before normalization so
++      // the LR/TD split and the BT vertical-flip below behave exactly as if the
++      // source had authored this direction.
++      if (options.direction) {
++        parsed.direction = options.direction
++      }
++
+       // Normalize direction for grid layout.
+       // BT is laid out as TD then flipped vertically after drawing.
+       // RL is treated as LR (full RL support not yet implemented).
 diff --git a/src/ascii/multiline-utils.ts b/src/ascii/multiline-utils.ts
-index 347d260..7519789 100644
+index 347d260f5bc50388087ffa45e196892b73a04d77..7519789014c7ebfde5d92e02a16f8331cfb43610 100644
 --- a/src/ascii/multiline-utils.ts
 +++ b/src/ascii/multiline-utils.ts
 @@ -8,6 +8,7 @@
@@ -1079,7 +1149,7 @@ index 347d260..7519789 100644
      drawText(canvas, { x: startX, y: startY + i }, line, true)
    }
 diff --git a/src/ascii/sequence.ts b/src/ascii/sequence.ts
-index 5ff5eaa..93b3eea 100644
+index 5ff5eaa1edc2a54828564ceb303271e436fb0642..93b3eea409b9479ad63204476f00e7675b0334fe 100644
 --- a/src/ascii/sequence.ts
 +++ b/src/ascii/sequence.ts
 @@ -14,6 +14,7 @@ import type { SequenceDiagram, Block } from '../sequence/types.ts'
@@ -1215,7 +1285,7 @@ index 5ff5eaa..93b3eea 100644
      // Bottom border
      const by = np.y + np.height - 1
 diff --git a/src/ascii/shapes/rectangle.ts b/src/ascii/shapes/rectangle.ts
-index 5d35dc3..ae2f3d8 100644
+index 5d35dc314ebe35e907691d92940947c8b1bffd0c..ae2f3d8e77be49ad413c6f6fa5262b24f26df99a 100644
 --- a/src/ascii/shapes/rectangle.ts
 +++ b/src/ascii/shapes/rectangle.ts
 @@ -13,6 +13,7 @@ import { splitLines } from '../multiline-utils.ts'
@@ -1253,7 +1323,7 @@ index 5d35dc3..ae2f3d8 100644
      }
    }
 diff --git a/src/ascii/shapes/special.ts b/src/ascii/shapes/special.ts
-index e7ce95d..6a8a5f1 100644
+index e7ce95d83d1c83dcaaea862f5c26316f6beaad56..6a8a5f1b2977a2d6fc98ef9078375cdeeff27696 100644
 --- a/src/ascii/shapes/special.ts
 +++ b/src/ascii/shapes/special.ts
 @@ -13,6 +13,7 @@ import type { ShapeRenderer, ShapeDimensions, ShapeRenderOptions } from './types
@@ -1317,7 +1387,7 @@ index e7ce95d..6a8a5f1 100644
        }
      }
 diff --git a/src/ascii/shapes/stadium.ts b/src/ascii/shapes/stadium.ts
-index b400cad..c6c7af5 100644
+index b400cad6ba588fa166e260c1bdfcf616645af094..c6c7af5209499b34a3df748138d09fd0bddf38de 100644
 --- a/src/ascii/shapes/stadium.ts
 +++ b/src/ascii/shapes/stadium.ts
 @@ -11,6 +11,7 @@ import { mkCanvas } from '../canvas.ts'
@@ -1355,7 +1425,7 @@ index b400cad..c6c7af5 100644
        }
      }
 diff --git a/src/ascii/xychart.ts b/src/ascii/xychart.ts
-index 0dafc16..30713e6 100644
+index 0dafc16d6a565396ac61460bdd50a07c48492430..30713e6917ee29f4decc7ae1e30846bc23c5a14e 100644
 --- a/src/ascii/xychart.ts
 +++ b/src/ascii/xychart.ts
 @@ -16,6 +16,7 @@ import type { XYChart } from '../xychart/types.ts'
@@ -1503,7 +1573,7 @@ index 0dafc16..30713e6 100644
        rowHex.push(hexCanvas[col]![row]!)
      }
 diff --git a/src/text-metrics.ts b/src/text-metrics.ts
-index 07766ab..bcac021 100644
+index 07766ab65303221352620180c63aa592b5842a10..bcac021da55fb83781d8fd920b40a04ee6ff22cc 100644
 --- a/src/text-metrics.ts
 +++ b/src/text-metrics.ts
 @@ -110,6 +110,103 @@ function isEmoji(char: string): boolean {

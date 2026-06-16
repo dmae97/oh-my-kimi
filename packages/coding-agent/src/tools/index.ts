@@ -55,7 +55,6 @@ import { MemoryReflectTool } from "./memory-reflect";
 import { MemoryRetainTool } from "./memory-retain";
 import { wrapToolWithMetaNotice } from "./output-meta";
 import { ReadTool } from "./read";
-import { RenderMermaidTool } from "./render-mermaid";
 import { createReportToolIssueTool, isAutoQaEnabled } from "./report-tool-issue";
 import { ResolveTool } from "./resolve";
 import { reportFindingTool } from "./review";
@@ -94,7 +93,6 @@ export * from "./memory-recall";
 export * from "./memory-reflect";
 export * from "./memory-retain";
 export * from "./read";
-export * from "./render-mermaid";
 export * from "./report-tool-issue";
 export * from "./resolve";
 export * from "./review";
@@ -420,7 +418,6 @@ export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	edit: s => new EditTool(s),
 	ast_grep: s => new AstGrepTool(s),
 	ast_edit: s => new AstEditTool(s),
-	render_mermaid: s => new RenderMermaidTool(s),
 	ask: AskTool.createIf,
 	debug: DebugTool.createIf,
 	eval: s => new EvalTool(s),
@@ -563,7 +560,6 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		if (name === "github") return session.settings.get("github.enabled");
 		if (name === "ast_grep") return session.settings.get("astGrep.enabled");
 		if (name === "ast_edit") return session.settings.get("astEdit.enabled");
-		if (name === "render_mermaid") return session.settings.get("renderMermaid.enabled");
 		if (name === "inspect_image") return session.settings.get("inspect_image.enabled");
 		if (name === "web_search") return session.settings.get("web_search.enabled");
 		// search_tool_bm25 is allowed when either legacy mcp.discoveryMode or new tools.discoveryMode is active.

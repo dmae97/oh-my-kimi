@@ -2761,6 +2761,18 @@ export function getMarkdownTheme(): MarkdownTheme {
 	if (cachedMarkdownTheme !== undefined && cachedMarkdownThemeRef === theme) {
 		return cachedMarkdownTheme;
 	}
+	// Mermaid ASCII diagrams render with the active palette so they read as
+	// content rather than raw monochrome. Roles mirror the SVG renderer's
+	// mapping; `text`/`muted`/`border`/`borderMuted`/`accent` exist in every theme.
+	const mermaidColorMode = theme.getColorMode() === "truecolor" ? "truecolor" : "ansi256";
+	const mermaidTheme = {
+		fg: theme.getColorHex("text"),
+		border: theme.getColorHex("border"),
+		line: theme.getColorHex("muted"),
+		arrow: theme.getColorHex("accent"),
+		corner: theme.getColorHex("muted"),
+		junction: theme.getColorHex("borderMuted"),
+	};
 	const markdownTheme: MarkdownTheme = {
 		heading: (text: string) => theme.fg("mdHeading", text),
 		link: (text: string) => theme.fg("mdLink", text),
@@ -2777,7 +2789,8 @@ export function getMarkdownTheme(): MarkdownTheme {
 		underline: (text: string) => theme.underline(text),
 		strikethrough: (text: string) => chalk.strikethrough(text),
 		symbols: getSymbolTheme(),
-		resolveMermaidAscii,
+		resolveMermaidAscii: (source, maxWidth) =>
+			resolveMermaidAscii(source, { maxWidth, theme: mermaidTheme, colorMode: mermaidColorMode }),
 		highlightCode: (code: string, lang?: string): string[] => {
 			const validLang = lang && nativeSupportsLanguage(lang) ? lang : undefined;
 			const highlighted = highlightCached(code, validLang, theme);

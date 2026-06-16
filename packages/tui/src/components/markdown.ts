@@ -4,11 +4,13 @@ import type { SymbolTheme } from "../symbols";
 import { TERMINAL } from "../terminal-capabilities";
 import type { Component } from "../tui";
 import {
+	Ellipsis,
 	applyBackgroundToLine,
 	encodeTextSized,
 	getSegmenter,
 	padding,
 	replaceTabs,
+	truncateToWidth,
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "../utils";
@@ -131,7 +133,7 @@ export interface MarkdownTheme {
 	 * Resolve a mermaid ASCII rendering by fenced block source text.
 	 * Return null to fall back to fenced code rendering.
 	 */
-	resolveMermaidAscii?: (source: string) => string | null;
+	resolveMermaidAscii?: (source: string, maxWidth?: number) => string | null;
 	symbols: SymbolTheme;
 }
 
@@ -702,13 +704,18 @@ export class Markdown implements Component {
 			}
 
 			case "code": {
-				// Handle mermaid diagrams with ASCII rendering when available
+				// Mermaid diagrams render as ASCII art when the theme supplies a
+				// resolver. The art is preformatted, so clip each row to the content
+				// width: the later wrap pass would otherwise fragment the box-drawing
+				// canvas. truncateToWidth is ANSI- and wide-char-aware, and the
+				// resolver already re-fits over-wide horizontal graphs top-down.
 				if (token.lang === "mermaid" && this.#theme.resolveMermaidAscii) {
-					const ascii = this.#theme.resolveMermaidAscii(token.text);
-
+					const ascii = this.#theme.resolveMermaidAscii(token.text, width);
 					if (ascii) {
-						for (const asciiLine of Bun.stripANSI(ascii).split("\n")) {
-							lines.push(asciiLine);
+						for (const asciiLine of ascii.split("\n")) {
+							lines.push(
+								visibleWidth(asciiLine) > width ? truncateToWidth(asciiLine, width, Ellipsis.Omit) : asciiLine,
+							);
 						}
 						if (nextTokenType && nextTokenType !== "space") {
 							lines.push("");

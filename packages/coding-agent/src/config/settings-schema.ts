@@ -3070,17 +3070,6 @@ export const SETTINGS_SCHEMA = {
 
 	// Optional tools
 
-	"renderMermaid.enabled": {
-		type: "boolean",
-		default: false,
-		ui: {
-			tab: "tools",
-			group: "Available Tools",
-			label: "Render Mermaid",
-			description: "Enable the render_mermaid tool for Mermaid-to-ASCII rendering",
-		},
-	},
-
 	"debug.enabled": {
 		type: "boolean",
 		default: true,

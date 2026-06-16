@@ -4,7 +4,6 @@ export const BUILTIN_TOOL_NAMES = [
 	"edit",
 	"ast_grep",
 	"ast_edit",
-	"render_mermaid",
 	"ask",
 	"debug",
 	"eval",

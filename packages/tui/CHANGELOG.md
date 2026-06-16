@@ -1,6 +1,13 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added an optional `maxWidth` parameter to `MarkdownTheme.resolveMermaidAscii` to allow diagram resolvers to fit ASCII output to the available content width
+
+### Fixed
+
+- Fixed Mermaid diagram rendering in Markdown code blocks to clip each ASCII line to content width before wrapping, preventing preformatted diagram rows from fragmenting
 
 ## [16.0.2] - 2026-06-16
 

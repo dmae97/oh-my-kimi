@@ -153,6 +153,7 @@ import { runProviderSetupWizard } from "./setup-wizard/lazy";
 import { interruptHint } from "./shared";
 import { type ShimmerPalette, shimmerEnabled, shimmerSegments, shimmerText } from "./theme/shimmer";
 import type { Theme } from "./theme/theme";
+import { clearMermaidCache } from "./theme/mermaid-cache";
 import {
 	getEditorTheme,
 	getMarkdownTheme,
@@ -854,6 +855,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		onThemeChange(() => {
 			this.#clearWorkingMessageAccentCache();
 			clearRenderCache();
+			clearMermaidCache();
 			this.ui.invalidate();
 			this.updateEditorBorderColor();
 			this.ui.requestRender();
