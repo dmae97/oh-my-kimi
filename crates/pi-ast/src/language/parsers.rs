@@ -38,6 +38,9 @@ pub fn language_dockerfile() -> TSLanguage {
 pub fn language_elixir() -> TSLanguage {
 	tree_sitter_elixir::LANGUAGE.into()
 }
+pub fn language_elisp() -> TSLanguage {
+	tree_sitter_elisp::LANGUAGE.into()
+}
 pub fn language_erlang() -> TSLanguage {
 	tree_sitter_erlang::LANGUAGE.into()
 }

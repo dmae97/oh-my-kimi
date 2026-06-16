@@ -166,6 +166,7 @@ impl_lang!(Diff, language_diff);
 impl_lang!(Xml, language_xml);
 impl_lang!(Regex, language_regex);
 impl_lang!(Dart, language_dart);
+impl_lang!(EmacsLisp, language_elisp);
 
 // ── Html (custom implementation with injection support) ──────────────────
 
@@ -278,6 +279,7 @@ pub enum SupportLang {
 	Css,
 	Diff,
 	Dockerfile,
+	EmacsLisp,
 	Elixir,
 	Erlang,
 	Go,
@@ -335,11 +337,11 @@ impl SupportLang {
 	pub const fn all_langs() -> &'static [Self] {
 		use SupportLang::*;
 		&[
-			Astro, Bash, C, Cmake, Cpp, CSharp, Dart, Clojure, Css, Diff, Dockerfile, Elixir, Erlang,
-			Go, Graphql, Haskell, Hcl, Html, Ini, Java, JavaScript, Json, Just, Julia, Kotlin, Lua,
-			Make, Markdown, Nix, ObjC, Ocaml, Odin, Perl, Php, Powershell, Proto, Python, R, Regex,
-			Ruby, Rust, Scala, Solidity, Sql, Starlark, Svelte, Swift, Toml, Tlaplus, Tsx, TypeScript,
-			Verilog, Vue, Xml, Yaml, Zig,
+			Astro, Bash, C, Cmake, Cpp, CSharp, Dart, Clojure, Css, Diff, Dockerfile, EmacsLisp,
+			Elixir, Erlang, Go, Graphql, Haskell, Hcl, Html, Ini, Java, JavaScript, Json, Just, Julia,
+			Kotlin, Lua, Make, Markdown, Nix, ObjC, Ocaml, Odin, Perl, Php, Powershell, Proto, Python,
+			R, Regex, Ruby, Rust, Scala, Solidity, Sql, Starlark, Svelte, Swift, Toml, Tlaplus, Tsx,
+			TypeScript, Verilog, Vue, Xml, Yaml, Zig,
 		]
 	}
 
@@ -358,6 +360,7 @@ impl SupportLang {
 			Self::Css => "css",
 			Self::Diff => "diff",
 			Self::Dockerfile => "dockerfile",
+			Self::EmacsLisp => "emacs-lisp",
 			Self::Elixir => "elixir",
 			Self::Erlang => "erlang",
 			Self::Go => "go",
@@ -443,6 +446,7 @@ macro_rules! execute_lang_method {
 			S::Css => Css.$method($($pname,)*),
 			S::Diff => Diff.$method($($pname,)*),
 			S::Dockerfile => Dockerfile.$method($($pname,)*),
+			S::EmacsLisp => EmacsLisp.$method($($pname,)*),
 			S::Elixir => Elixir.$method($($pname,)*),
 			S::Erlang => Erlang.$method($($pname,)*),
 			S::Go => Go.$method($($pname,)*),
@@ -557,6 +561,7 @@ const fn extensions(lang: SupportLang) -> &'static [&'static str] {
 		Css => &["css", "scss"],
 		Diff => &["diff", "patch"],
 		Dockerfile => &["dockerfile"],
+		EmacsLisp => &["el"],
 		Elixir => &["ex", "exs"],
 		Erlang => &["erl", "hrl"],
 		Go => &["go"],
@@ -626,6 +631,9 @@ fn from_extension(path: &Path) -> Option<SupportLang> {
 	{
 		return Some(SupportLang::Dockerfile);
 	}
+	if name == ".emacs" {
+		return Some(SupportLang::EmacsLisp);
+	}
 
 	// Extensionless shell rc/profile files. `Path::extension` returns `None`
 	// for both bare (`zshrc`) and dotfile (`.zshrc`) forms, so they would
@@ -693,6 +701,10 @@ static LANG_ALIASES: phf::Map<&'static str, SupportLang> = phf_map! {
 "docker"         => SupportLang::Dockerfile,
 "dockerfile"     => SupportLang::Dockerfile,
 "containerfile"  => SupportLang::Dockerfile,
+"emacs-lisp"     => SupportLang::EmacsLisp,
+"emacslisp"      => SupportLang::EmacsLisp,
+"elisp"          => SupportLang::EmacsLisp,
+"el"             => SupportLang::EmacsLisp,
 "elixir"         => SupportLang::Elixir,
 "ex"             => SupportLang::Elixir,
 "exs"            => SupportLang::Elixir,

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added Emacs Lisp (`.el`, `.emacs`, `emacs-lisp`/`elisp`) support to native tree-sitter language inference, enabling astGrep/astEdit, summarizeCode, and blockRangeAt on Emacs Lisp source.
+
 ## [16.0.1] - 2026-06-15
 
 ### Fixed

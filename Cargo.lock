@@ -2350,6 +2350,7 @@ dependencies = [
  "tree-sitter-dart",
  "tree-sitter-diff",
  "tree-sitter-dockerfile-updated",
+ "tree-sitter-elisp",
  "tree-sitter-elixir",
  "tree-sitter-erlang",
  "tree-sitter-go",
@@ -3526,6 +3527,16 @@ checksum = "5e61eb704364be179ab9be89e2891c8e77c0041eca5891a5c04164a21f6df7a0"
 dependencies = [
  "cc",
  "tree-sitter",
+]
+
+[[package]]
+name = "tree-sitter-elisp"
+version = "1.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e2e9a6ab3cebf24ca41cdc1f985549b9b33f7ef25c19ac7d18e53a4ee24da09"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
 ]
 
 [[package]]
