@@ -9143,19 +9143,29 @@ export class AgentSession {
 	// =========================================================================
 
 	/**
-	 * Check if an error is retryable (transient errors or usage limits).
-	 * Context overflow is NOT retryable (handled by compaction instead).
-	 * Usage-limit errors are retryable because the retry handler performs credential switching.
+	 * Retry an empty, reason-less provider abort: a turn that ended `aborted`
+	 * with no content and the generic sentinel (bare `abort()`), but only while
+	 * the session is neither aborting nor tearing down. A user/lifecycle abort
+	 * (`#abortInProgress`) or a dispose-driven abort (`#isDisposed`) is deliberate
+	 * and MUST settle the turn instead: routing it through retry would orphan
+	 * `#retryPromise` on a continuation that the disposed/aborting guard skips,
+	 * hanging the in-flight `prompt()` in `#waitForPostPromptRecovery`.
 	 */
 	#isRetryableReasonlessAbort(message: AssistantMessage): boolean {
 		return (
 			message.stopReason === "aborted" &&
 			message.content.length === 0 &&
 			message.errorMessage === GENERIC_ABORT_SENTINEL &&
-			!this.#abortInProgress
+			!this.#abortInProgress &&
+			!this.#isDisposed
 		);
 	}
 
+	/**
+	 * Check if an error is retryable (transient errors or usage limits).
+	 * Context overflow is NOT retryable (handled by compaction instead).
+	 * Usage-limit errors are retryable because the retry handler performs credential switching.
+	 */
 	#isRetryableError(message: AssistantMessage): boolean {
 		if (message.stopReason !== "error" || !message.errorMessage) return false;
 
