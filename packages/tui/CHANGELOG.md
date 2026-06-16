@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+
+### Fixed
+
+- Fixed animated working-message loader frames repainting at 30fps on terminals without synchronized-output support, which could cause visible flicker during normal prompt rendering ([#2771](https://github.com/can1357/oh-my-pi/issues/2771)).
+
 ## [16.0.1] - 2026-06-15
 
 ### Added
