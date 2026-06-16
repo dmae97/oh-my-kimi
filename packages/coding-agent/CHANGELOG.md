@@ -21,6 +21,7 @@
 
 ### Fixed
 
+- Fixed same-process `JsRuntime` cleanup so disposing an older inline/direct runtime no longer deletes a newer runtime's JS helper globals; inactive cmux/direct runtimes now re-activate their globals before sequential use while overlapping cross-runtime runs fail explicitly.
 - Fixed magic-keyword steering notices (`ultrathink-notice`, `orchestrate-notice`, `workflow-notice`) to be prepended before the related user message so they influence that same turn
 - Fixed dequeuing or popping queued user messages to remove their preceding hidden magic-keyword notice companions, preventing orphaned queued notices
 - Fixed queued user steers to auto-resume after interrupts even when the transcript tail is a preserved advisor card or other non-conversational custom message
