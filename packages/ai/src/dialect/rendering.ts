@@ -157,9 +157,64 @@ export function messageContentText(
 	return text;
 }
 
+function isAsciiWhitespace(code: number): boolean {
+	return code === 9 || code === 10 || code === 11 || code === 12 || code === 13 || code === 32;
+}
+
+function trimAsciiStart(text: string, start: number, end: number): number {
+	let cursor = start;
+	while (cursor < end && isAsciiWhitespace(text.charCodeAt(cursor))) cursor++;
+	return cursor;
+}
+
+function trimAsciiEnd(text: string, start: number, end: number): number {
+	let cursor = end;
+	while (cursor > start && isAsciiWhitespace(text.charCodeAt(cursor - 1))) cursor--;
+	return cursor;
+}
+
+function findDelimitedThinkingClose(open: string, close: string, text: string, start: number, end: number): number {
+	let depth = 1;
+	let cursor = start;
+	while (cursor < end) {
+		const nextClose = text.indexOf(close, cursor);
+		if (nextClose < 0 || nextClose >= end) return -1;
+		const nextOpen = text.indexOf(open, cursor);
+		if (nextOpen >= 0 && nextOpen < nextClose) {
+			depth++;
+			cursor = nextOpen + open.length;
+			continue;
+		}
+		depth--;
+		if (depth === 0) return nextClose;
+		cursor = nextClose + close.length;
+	}
+	return -1;
+}
+
+function unwrapDelimitedThinking(open: string, close: string, text: string): string {
+	const end = trimAsciiEnd(text, 0, text.length);
+	let cursor = trimAsciiStart(text, 0, end);
+	if (cursor >= end || !text.startsWith(open, cursor)) return text;
+
+	const segments: string[] = [];
+	while (cursor < end) {
+		if (!text.startsWith(open, cursor)) return text;
+		const innerStart = cursor + open.length;
+		const innerEnd = findDelimitedThinkingClose(open, close, text, innerStart, end);
+		if (innerEnd < 0) return text;
+
+		const trimmedInnerEnd = trimAsciiEnd(text, innerStart, innerEnd);
+		const trimmedInnerStart = trimAsciiStart(text, innerStart, trimmedInnerEnd);
+		segments.push(unwrapDelimitedThinking(open, close, text.slice(trimmedInnerStart, trimmedInnerEnd)));
+		cursor = trimAsciiStart(text, innerEnd + close.length, end);
+	}
+	return segments.join("\n");
+}
+
 export function renderDelimitedThinking(open: string, close: string, text: string): string {
 	if (!text) return "";
-	return `${open}\n${text}\n${close}`;
+	return `${open}\n${unwrapDelimitedThinking(open, close, text)}\n${close}`;
 }
 
 export function chatMlTurn(role: "assistant" | "system" | "tool" | "user", body: string): string {
