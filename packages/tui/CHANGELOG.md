@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed CMUX sessions being treated as direct terminals during resize/reset because they do not set `TMUX`/`STY`/`ZELLIJ` and may run with `TERM=dumb`; the renderer now treats CMUX workspace/surface env markers as multiplexer signals and preserves pane scrollback instead of emitting ED3 (`CSI 3 J`).
+
 ## [16.0.1] - 2026-06-15
 
 ### Added
