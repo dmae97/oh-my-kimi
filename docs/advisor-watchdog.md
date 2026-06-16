@@ -85,10 +85,12 @@ The `advise` tool accepts one note and an optional severity:
 | `concern` | Interrupting steering message. | Material risk, likely wrong direction, missing constraint, hallucinated API. |
 | `blocker` | Interrupting steering message. | Continuing would clearly waste work or produce broken output. |
 
-Interrupting advice is sent through the steering channel and can abort in-flight tools at the next steering boundary. Non-interrupting notes are batched into one custom `advisor` transcript card with this prefix:
+Interrupting advice is sent through the steering channel and can abort in-flight tools at the next steering boundary. Each note (interrupting or batched) is rendered into the primary transcript as an `<advisory>` element — severity rides a `severity` attribute, and a `guidance` attribute carries the "weigh, don't blindly obey" framing (the primary agent's system prompt never mentions advisories, so the tag is its only cue). Note bodies are XML-escaped so advice containing `<`, `>`, or `&` can't break the wrapper:
 
 ```text
-Advisor (a senior reviewer watching your work — weigh it, don't blindly obey):
+<advisory severity="concern" guidance="weigh, don't blindly obey">
+note text
+</advisory>
 ```
 
 When you deliberately interrupt the agent (Esc, or a cancel from collab, ACP, RPC, the SDK, or an extension), the advisor stops auto-resuming it. An interrupting `concern`/`blocker` raised while the run is stopped is recorded as a visible advisor card instead of restarting the turn, and a concern already in flight when you interrupt is preserved the same way rather than driving a surprise resume. The advice re-enters context the next time you resume — a new message, the `.`/`c` continue shortcut, or a steer/follow-up. A normal yield is unaffected: the advisor can still steer and resume a run the agent ended on its own.

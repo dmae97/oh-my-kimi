@@ -9,6 +9,7 @@ import {
 	ADVISOR_READONLY_TOOL_NAMES,
 	AdviseTool,
 	type AdvisorAgent,
+	type AdvisorNote,
 	AdvisorRuntime,
 	type AdvisorRuntimeHost,
 	formatAdvisorBatchContent,
@@ -52,7 +53,7 @@ describe("advisor", () => {
 				},
 				scheduleIdleFlush: () => {},
 			});
-			yq.register<{ note: string; severity?: "nit" | "concern" | "blocker" }>("advisor", {
+			yq.register<AdvisorNote>("advisor", {
 				build: entries =>
 					entries.length === 0
 						? null
@@ -62,9 +63,7 @@ describe("advisor", () => {
 								display: true,
 								attribution: "agent",
 								timestamp: Date.now(),
-								content:
-									"Advisor (a senior reviewer watching your work — weigh it, don't blindly obey):\n" +
-									entries.map(e => `- ${e.severity ? `[${e.severity}] ` : ""}${e.note}`).join("\n"),
+								content: formatAdvisorBatchContent(entries),
 							} as AgentMessage),
 			});
 
@@ -77,8 +76,9 @@ describe("advisor", () => {
 			expect(msg.role).toBe("custom");
 			expect(msg.customType).toBe("advisor");
 			expect(msg.display).toBe(true);
-			expect(msg.content).toContain("[blocker] second note");
-			expect(msg.content).toContain("- first note");
+			expect(msg.content).toContain("second note");
+			expect(msg.content).toContain('severity="blocker"');
+			expect(msg.content).toContain("first note");
 		});
 
 		it("skipIdleFlush prevents idle scheduling", () => {
@@ -124,15 +124,21 @@ describe("advisor", () => {
 			expect(isInterruptingSeverity(undefined)).toBe(false);
 		});
 
-		it("formats a batch with the advisor prefix and severity-tagged bullets", () => {
+		it("wraps each note in an advisory tag with severity as an attribute and escapes the body", () => {
 			const content = formatAdvisorBatchContent([
 				{ note: "first note" },
-				{ note: "second note", severity: "blocker" },
+				{ note: "second <note> & more", severity: "blocker" },
 			]);
-			const lines = content.split("\n");
-			expect(lines[0]).toContain("senior reviewer");
-			expect(lines[1]).toBe("- first note");
-			expect(lines[2]).toBe("- [blocker] second note");
+			// No-severity note: bare advisory tag (no severity attribute).
+			expect(content).toMatch(/<advisory guidance="[^"]*">\nfirst note\n<\/advisory>/);
+			// Severity rides an attribute, not an inline `[blocker]` tag or a bullet.
+			expect(content).toMatch(/<advisory severity="blocker" guidance="[^"]*">/);
+			expect(content).not.toContain("[blocker]");
+			expect(content).not.toContain("- first note");
+			// XML-significant characters in the body are escaped so they can't break the tag.
+			expect(content).toContain("second &lt;note&gt; &amp; more");
+			// Exactly one severity attribute (only the blocker note carries one).
+			expect(content.split('severity="').length - 1).toBe(1);
 		});
 	});
 
@@ -277,6 +283,56 @@ describe("advisor", () => {
 			expect(promptInputs).toHaveLength(1);
 			expect(promptInputs[0]).toContain("hello");
 			expect(promptInputs[0]).not.toContain("note");
+		});
+
+		it("renders the watched delta with a heading, watched-role labels, and no inner ## headings", () => {
+			const promptInputs: string[] = [];
+			const agent = makeAgent(promptInputs);
+			const messages: AgentMessage[] = [
+				{ role: "user", content: "do the thing", timestamp: 1 } as AgentMessage,
+				{
+					role: "assistant",
+					content: [{ type: "toolCall", id: "a", name: "read", arguments: { path: "x.ts" } }],
+					timestamp: 2,
+				} as unknown as AgentMessage,
+				{
+					role: "toolResult",
+					toolCallId: "a",
+					toolName: "read",
+					content: [{ type: "text", text: "ok" }],
+					isError: false,
+					timestamp: 3,
+				} as AgentMessage,
+				{
+					role: "assistant",
+					content: [{ type: "toolCall", id: "b", name: "search", arguments: { pattern: "y" } }],
+					timestamp: 4,
+				} as unknown as AgentMessage,
+				{
+					role: "toolResult",
+					toolCallId: "b",
+					toolName: "search",
+					content: [{ type: "text", text: "ok" }],
+					isError: false,
+					timestamp: 5,
+				} as AgentMessage,
+			];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+			};
+			const runtime = new AdvisorRuntime(agent, host);
+			runtime.onTurnEnd();
+			expect(promptInputs).toHaveLength(1);
+			const prompt = promptInputs[0];
+			expect(prompt).toContain("### Session update");
+			expect(prompt).toContain("**user**:");
+			expect(prompt).toContain("**agent**:");
+			// Inner role headings would collide with the advisor's own turns in the dump.
+			expect(prompt).not.toContain("## assistant");
+			expect(prompt).not.toContain("## user");
+			// Consecutive assistant tool-call messages collapse under a single label.
+			expect(prompt.split("**agent**:").length - 1).toBe(1);
 		});
 
 		it("handles compaction shrink without prompting", () => {

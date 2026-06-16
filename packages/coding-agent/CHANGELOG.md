@@ -1,8 +1,13 @@
 # Changelog
 
 ## [Unreleased]
-### Fixed
+### Changed
 
+- Made the watched-session transcript sent to the advisor (and shown by `/advisor dump`) clearer: each turn now opens with a `### Session update` heading; watched-agent roles render as inline `**agent**:` / `**user**:` labels instead of level-2 headings that collided with the advisor's own turns; consecutive same-role messages collapse under one label (the watched agent emits one assistant message per tool call); and batched updates are joined by a blank line rather than a `---` rule.
+- Changed the compact transcript tool-intent prefix (`history://`, `/dump`, `/advisor dump`) from `# ` to `// ` so intent lines read as comments instead of rendering as Markdown H1 headings.
+- Changed the advisor advice injected into the primary transcript from a `Advisor (...): - [severity] note` prose block to one `<advisory severity="…" guidance="weigh, don't blindly obey">…</advisory>` element per note, with XML-escaped bodies. (Relocated the shared `escapeXmlText` helper to `@oh-my-pi/pi-utils`.)
+
+### Fixed
 - Fixed magic-keyword steering notices (`ultrathink-notice`, `orchestrate-notice`, `workflow-notice`) to be prepended before the related user message so they influence that same turn
 - Fixed dequeuing or popping queued user messages to remove their preceding hidden magic-keyword notice companions, preventing orphaned queued notices
 - Fixed queued user steers to auto-resume after interrupts even when the transcript tail is a preserved advisor card or other non-conversational custom message

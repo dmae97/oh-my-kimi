@@ -310,6 +310,56 @@ describe("buildBenchmarkResult", () => {
 		expect(summary.p1TokensPerTask).toEqual({ input: 104, output: 10, total: 114 });
 		expect(summary.p99TokensPerTask).toEqual({ input: 496, output: 50, total: 546 });
 	});
+
+	it("separates token stats for successfully one-shot tasks vs overall", () => {
+		// Task 1: Succeeded on run 0 (one-shot success). Tokens: 100
+		// Task 2: Failed on run 0 (150 tokens), succeeded on run 1 (best run, 50 tokens).
+		// Task 3: Failed on run 0 (200 tokens).
+		const tasks = [createTask("t1"), createTask("t2"), createTask("t3")];
+		const resultsByTask = new Map([
+			["t1", [createRun(0, true, { tokens: { input: 80, output: 20, total: 100 } })]],
+			[
+				"t2",
+				[
+					createRun(0, false, { tokens: { input: 120, output: 30, total: 150 } }),
+					createRun(1, true, { tokens: { input: 40, output: 10, total: 50 } }),
+				],
+			],
+			["t3", [createRun(0, false, { tokens: { input: 160, output: 40, total: 200 } })]],
+		]);
+
+		const result = buildBenchmarkResult({
+			tasks,
+			config: {
+				provider: "anthropic",
+				model: "claude",
+				runsPerTask: 2,
+				timeout: 1000,
+				taskConcurrency: 1,
+			},
+			resultsByTask,
+			startTime: "2026-04-28T00:00:00.000Z",
+			endTime: "2026-04-28T00:00:01.000Z",
+		});
+
+		const { summary } = result;
+		// Overall uses best runs:
+		// t1 best run: run 0 (100 tokens, success)
+		// t2 best run: run 1 (50 tokens, success)
+		// t3 best run: run 0 (200 tokens, fail)
+		// Total overall tokens: 100 + 50 + 200 = 350
+		expect(summary.totalTokens.total).toBe(350);
+		expect(summary.avgTokensPerTask.total).toBe(Math.round(350 / 3)); // 117
+
+		// Successfully one-shot tasks (run 0 succeeded):
+		// t1 succeeded on run 0 (100 tokens)
+		// t2 failed on run 0
+		// t3 failed on run 0
+		// Only t1 counts.
+		expect(summary.successfulOneShotTasks).toBe(1);
+		expect(summary.totalOneShotSuccessTokens.total).toBe(100);
+		expect(summary.avgOneShotSuccessTokensPerTask.total).toBe(100);
+	});
 });
 
 describe("writeConversationDump", () => {

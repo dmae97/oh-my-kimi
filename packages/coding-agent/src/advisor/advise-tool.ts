@@ -1,4 +1,5 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import { escapeXmlText } from "@oh-my-pi/pi-utils";
 import { z } from "zod/v4";
 import adviseDescription from "../prompts/advisor/advise-tool.md" with { type: "text" };
 
@@ -33,15 +34,26 @@ export interface AdvisorMessageDetails {
 }
 
 /**
- * Prose framing prepended to every batched advisor message. Kept here so the
- * non-interrupting YieldQueue dispatcher and the interrupting steer path build
- * byte-identical content.
+ * Behavioral framing for the watched agent — advice, not orders. Carried as a
+ * tag attribute (rather than a prose header) so the rendered agent-facing output
+ * stays a clean `<advisory>` block. The primary agent's system prompt never
+ * mentions advisories, so this is its only cue for how to treat them.
  */
-const ADVISOR_BATCH_PREFIX = "Advisor (a senior reviewer watching your work — weigh it, don't blindly obey):";
+const ADVISOR_GUIDANCE = "weigh, don't blindly obey";
 
-/** Render one advisor card body from a batch of notes (prefix + one bullet per note). */
+/**
+ * Render a batch of advisor notes as the agent-facing message body: one
+ * `<advisory>` element per note, severity as an attribute. Shared by the
+ * non-interrupting YieldQueue dispatcher and the interrupting steer path so both
+ * build byte-identical content.
+ */
 export function formatAdvisorBatchContent(notes: readonly AdvisorNote[]): string {
-	return `${ADVISOR_BATCH_PREFIX}\n${notes.map(n => `- ${n.severity ? `[${n.severity}] ` : ""}${n.note}`).join("\n")}`;
+	return notes
+		.map(n => {
+			const severity = n.severity ? ` severity="${n.severity}"` : "";
+			return `<advisory${severity} guidance="${ADVISOR_GUIDANCE}">\n${escapeXmlText(n.note)}\n</advisory>`;
+		})
+		.join("\n");
 }
 
 /**
