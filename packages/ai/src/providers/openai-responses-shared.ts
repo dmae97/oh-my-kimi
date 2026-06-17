@@ -1240,13 +1240,13 @@ export function buildResponsesDeltaInput<TItem>(
 	if (!Array.isArray(previous.input) || !Array.isArray(current.input)) return null;
 	const previousWithoutInput = { ...previous, input: undefined, client_metadata: undefined };
 	const currentWithoutInput = { ...current, input: undefined, client_metadata: undefined };
-	if (JSON.stringify(previousWithoutInput) !== JSON.stringify(currentWithoutInput)) {
+	if (!Bun.deepEquals(previousWithoutInput, currentWithoutInput)) {
 		return null;
 	}
 	const baseline = [...previous.input, ...(previousResponseItems ?? [])];
 	if (current.input.length <= baseline.length) return null;
 	for (let index = 0; index < baseline.length; index += 1) {
-		if (JSON.stringify(baseline[index]) !== JSON.stringify(current.input[index])) {
+		if (!Bun.deepEquals(baseline[index], current.input[index])) {
 			return null;
 		}
 	}

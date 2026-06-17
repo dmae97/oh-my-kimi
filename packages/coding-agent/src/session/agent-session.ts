@@ -8709,9 +8709,13 @@ export class AgentSession {
 	}
 
 	#didSessionMessagesChange(previousMessages: AgentMessage[], nextMessages: AgentMessage[]): boolean {
-		return (
-			JSON.stringify(previousMessages.map(message => this.#normalizeSessionMessageForProviderReplay(message))) !==
-			JSON.stringify(nextMessages.map(message => this.#normalizeSessionMessageForProviderReplay(message)))
+		if (previousMessages.length !== nextMessages.length) return true;
+		return previousMessages.some(
+			(message, i) =>
+				!Bun.deepEquals(
+					this.#normalizeSessionMessageForProviderReplay(message),
+					this.#normalizeSessionMessageForProviderReplay(nextMessages[i]),
+				),
 		);
 	}
 

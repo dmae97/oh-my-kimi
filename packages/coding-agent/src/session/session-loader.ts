@@ -56,9 +56,7 @@ async function resolvePersistedBlobRefs(value: unknown, blobStore: BlobStore, ke
 	}
 
 	if (Array.isArray(value)) {
-		await Promise.all(
-			value.map(item => resolvePersistedBlobRefs(item, blobStore, key)),
-		);
+		await Promise.all(value.map(item => resolvePersistedBlobRefs(item, blobStore, key)));
 		return;
 	}
 
