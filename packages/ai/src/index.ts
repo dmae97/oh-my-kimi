@@ -41,4 +41,5 @@ export * from "./utils/event-stream";
 export * from "./utils/overflow";
 export * from "./utils/retry";
 export * from "./utils/schema";
+export * from "./utils/thinking-loop";
 export * from "./utils/validation";

@@ -35,7 +35,7 @@ import {
 	signalListLabel,
 } from "@oh-my-pi/pi-ai/utils/harmony-leak";
 import { preferredDialect } from "@oh-my-pi/pi-catalog/identity";
-import { logger, sanitizeText } from "@oh-my-pi/pi-utils";
+import { sanitizeText } from "@oh-my-pi/pi-utils";
 import { type AgentRunCoverage, type AgentRunSummary, ToolCallBlockedError } from "./run-collector";
 import {
 	type AgentTelemetry,
@@ -1054,7 +1054,6 @@ async function streamAssistantResponse(
 			? AbortSignal.any([signal, harmonyAbortController.signal])
 			: harmonyAbortController.signal
 		: signal;
-	const repetitionAbortController = new AbortController();
 	// Owned tool calling: aborted by the stream wrapper when the model starts
 	// fabricating a `<tool_response>`, so the provider stops generating the rest of
 	// the hallucinated turn. Merged into the provider signal ONLY (not
@@ -1063,10 +1062,13 @@ async function streamAssistantResponse(
 	const promptToolAbortController = ownedDialect ? new AbortController() : undefined;
 	const providerAbortSignals: AbortSignal[] = [];
 	if (requestSignal) providerAbortSignals.push(requestSignal);
-	providerAbortSignals.push(repetitionAbortController.signal);
 	if (promptToolAbortController) providerAbortSignals.push(promptToolAbortController.signal);
 	const finalRequestSignal =
-		providerAbortSignals.length === 1 ? providerAbortSignals[0]! : AbortSignal.any(providerAbortSignals);
+		providerAbortSignals.length === 0
+			? undefined
+			: providerAbortSignals.length === 1
+				? providerAbortSignals[0]!
+				: AbortSignal.any(providerAbortSignals);
 	const requestApiKey = (config.getApiKey ? await config.getApiKey(config.model) : undefined) ?? config.apiKey;
 	const resolvedApiKey = await resolveApiKeyOnce(requestApiKey, finalRequestSignal);
 	const apiKey = isApiKeyResolver(requestApiKey) ? seedApiKeyResolver(resolvedApiKey, requestApiKey) : requestApiKey;
@@ -1173,56 +1175,6 @@ async function streamAssistantResponse(
 				return aborted;
 			};
 
-			const finishRepetitionStream = async (
-				kind: "text" | "thinking",
-				pattern: string,
-				count: number,
-			): Promise<AssistantMessage> => {
-				repetitionAbortController.abort();
-				try {
-					const cleanup = responseIterator.return?.();
-					if (cleanup) void cleanup.catch(() => {});
-				} catch {
-					// ignore
-				}
-				if (partialMessage) {
-					truncateRepetition(partialMessage, kind, pattern);
-					partialMessage.stopReason = "error";
-					partialMessage.errorMessage = `Repetition loop detected: assistant repeated "${pattern.trim()}" ${count} times consecutively.`;
-				}
-				const finalMsg = snapshotAssistantMessage(
-					partialMessage ?? {
-						role: "assistant",
-						content: [],
-						api: config.model.api,
-						provider: config.model.provider,
-						model: config.model.id,
-						usage: {
-							input: 0,
-							output: 0,
-							cacheRead: 0,
-							cacheWrite: 0,
-							totalTokens: 0,
-							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-						},
-						stopReason: "error",
-						errorMessage: `Repetition loop detected.`,
-						timestamp: Date.now(),
-					},
-				);
-				if (addedPartial) {
-					context.messages[context.messages.length - 1] = finalMsg;
-				} else {
-					context.messages.push(finalMsg);
-				}
-				if (!addedPartial) {
-					stream.push({ type: "message_start", message: snapshotAssistantMessage(finalMsg) });
-				}
-				stream.push({ type: "message_end", message: snapshotAssistantMessage(finalMsg) });
-				await finishChat(finalMsg);
-				return finalMsg;
-			};
-
 			// Set up a single abort race: register the abort listener once for the whole
 			// stream and reuse the same race promise for every iterator.next() instead of
 			// allocating Promise.withResolvers and add/removeEventListener per event.
@@ -1238,14 +1190,6 @@ async function streamAssistantResponse(
 				abortRacePromise = promise;
 				detachAbortListener = () => requestSignal.removeEventListener("abort", onAbort);
 			}
-
-			// Rolling tail of streamed text/thinking used for repetition-loop detection.
-			// Bounded to REPETITION_WINDOW chars and reset when the active block kind
-			// switches (text <-> thinking) so detection stays O(1) per delta and never
-			// miscounts a repeated unit across a thinking/answer boundary.
-			let repetitionTail = "";
-			let repetitionKind: "text" | "thinking" | undefined;
-			const isGeminiModel = config.model.provider.includes("google") || config.model.provider.includes("gemini");
 
 			try {
 				while (true) {
@@ -1331,27 +1275,6 @@ async function streamAssistantResponse(
 									assistantMessageEvent: snapshotAssistantMessageEvent(event),
 									message: snapshotAssistantMessage(partialMessage),
 								});
-
-								if (isGeminiModel && (event.type === "text_delta" || event.type === "thinking_delta")) {
-									const kind = event.type === "text_delta" ? "text" : "thinking";
-									if (repetitionKind !== kind) {
-										repetitionKind = kind;
-										repetitionTail = "";
-									}
-									repetitionTail += event.delta;
-									if (repetitionTail.length > REPETITION_WINDOW) {
-										repetitionTail = repetitionTail.slice(-REPETITION_WINDOW);
-									}
-									const repetition = detectRepetition(repetitionTail);
-									if (repetition) {
-										const [pattern, count] = repetition;
-										logger.warn("Repetition loop detected during assistant stream, aborting.", {
-											pattern,
-											count,
-										});
-										return await finishRepetitionStream(kind, pattern, count);
-									}
-								}
 							}
 							break;
 					}
@@ -1986,98 +1909,4 @@ function createSkippedToolResult(): AgentToolResult<any> {
 		content: [{ type: "text", text: "Skipped due to queued user message." }],
 		details: {},
 	};
-}
-
-const REPETITION_WINDOW = 250;
-const REPETITION_MIN_REPEATED_CHARS = 180;
-
-function detectRepetition(text: string): [pattern: string, count: number] | null {
-	if (text.length < REPETITION_MIN_REPEATED_CHARS) return null;
-
-	const windowSize = Math.min(text.length, REPETITION_WINDOW);
-	const searchSpace = text.slice(-windowSize);
-
-	for (let len = 2; len <= 60; len++) {
-		if (searchSpace.length < len * 4) continue;
-
-		const pattern = searchSpace.slice(-len);
-		// Only treat a repeated unit as a pathological loop when it carries real
-		// linguistic content (a letter or a pictographic emoji). Runs made purely of
-		// digits, whitespace or punctuation are legitimate in tabular / hex / numeric
-		// output (e.g. "00 00 00", "0, 0, 0", "| -- | -- |") and must not trip.
-		if (!/[\p{L}\p{Extended_Pictographic}]/u.test(pattern)) continue;
-
-		let count = 0;
-		let pos = searchSpace.length;
-		while (pos >= len) {
-			const chunk = searchSpace.slice(pos - len, pos);
-			if (chunk === pattern) {
-				count++;
-				pos -= len;
-			} else {
-				break;
-			}
-		}
-
-		if (count >= 4 && len * count >= REPETITION_MIN_REPEATED_CHARS) {
-			return [pattern, count];
-		}
-	}
-	return null;
-}
-
-function truncateRepetition(message: AssistantMessage, kind: "text" | "thinking", pattern: string): void {
-	// A repetition loop streams into a single growing block (real providers) or a run
-	// of same-kind blocks (some transports), always at the tail of the message. Gather
-	// that trailing contiguous run and collapse its repeated copies down to one, so the
-	// committed transcript keeps a representative sample instead of the full runaway.
-	const matches = (block: AssistantContentBlock): boolean =>
-		kind === "text" ? block.type === "text" : block.type === "thinking";
-	const readBlock = (block: AssistantContentBlock): string =>
-		block.type === "text" ? block.text : block.type === "thinking" ? block.thinking : "";
-	const clearThinkingReplayAnchors = (block: AssistantContentBlock): void => {
-		if (block.type !== "thinking") return;
-		block.thinkingSignature = undefined;
-		block.itemId = undefined;
-	};
-	const writeBlock = (block: AssistantContentBlock, value: string): void => {
-		if (block.type === "text") {
-			block.text = value;
-		} else if (block.type === "thinking") {
-			block.thinking = value;
-			clearThinkingReplayAnchors(block);
-		}
-	};
-
-	const trailing: AssistantContentBlock[] = [];
-	for (let i = message.content.length - 1; i >= 0; i--) {
-		const block = message.content[i];
-		if (!matches(block)) break;
-		trailing.unshift(block);
-	}
-	if (trailing.length === 0) return;
-	if (kind === "thinking") {
-		for (const block of trailing) clearThinkingReplayAnchors(block);
-	}
-
-	let joined = "";
-	for (const block of trailing) joined += readBlock(block);
-
-	let kept = joined;
-	while (kept.length >= pattern.length * 2 && kept.slice(kept.length - pattern.length * 2) === pattern + pattern) {
-		kept = kept.slice(0, kept.length - pattern.length);
-	}
-
-	let remainingToRemove = joined.length - kept.length;
-	for (let i = trailing.length - 1; i >= 0 && remainingToRemove > 0; i--) {
-		const block = trailing[i];
-		const value = readBlock(block);
-		if (value.length <= remainingToRemove) {
-			remainingToRemove -= value.length;
-			writeBlock(block, "");
-		} else {
-			writeBlock(block, value.slice(0, value.length - remainingToRemove));
-			remainingToRemove = 0;
-		}
-	}
 }

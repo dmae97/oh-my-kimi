@@ -14,6 +14,10 @@
 
 - Added agent-loop deadline support for graceful wall-clock session stops.
 
+### Changed
+
+- Changed Gemini repetition-loop detection to live in the pi-ai stream layer instead of the agent loop. The agent no longer runs its own Gemini-gated verbatim repetition check (`detectRepetition`/`truncateRepetition`); loops now surface as a retryable transient stream error that the standard auto-retry path discards and re-samples, rather than a committed contentful error message.
+
 ## [16.0.1] - 2026-06-15
 
 ### Fixed

@@ -170,6 +170,13 @@ export interface OpenAICompat {
 	reasoningEffortMap?: Partial<Record<Effort, string>>;
 	/** Whether the provider supports `stream_options: { include_usage: true }` for token usage in streaming responses. Default: true. */
 	supportsUsageInStreaming?: boolean;
+	/**
+	 * Enable the Gemini thinking-loop guard (pi-ai stream layer) for this model.
+	 * Defaults to true when the model id classifies as the gemini family. Set
+	 * explicitly to cover an opaque OpenAI-compat proxy alias (e.g. `my-model`)
+	 * that routes to Gemini, or to false to opt a gemini-family id out.
+	 */
+	enableGeminiThinkingLoopGuard?: boolean;
 	/** Which field to use for max tokens. Default: auto-detected from URL. */
 	maxTokensField?: "max_completion_tokens" | "max_tokens";
 	/** Whether tool results require the `name` field. Default: auto-detected from URL. */
@@ -373,6 +380,7 @@ export type ResolvedOpenAICompat = Required<
 		| "thinkingKeep"
 		| "strictResponsesPairing"
 		| "requiresJuiceZeroHack"
+		| "enableGeminiThinkingLoopGuard"
 		| "whenThinking"
 	>
 > & {
@@ -387,6 +395,8 @@ export type ResolvedOpenAICompat = Required<
 	isOpenRouterHost: boolean;
 	/** The model sits behind Vercel AI Gateway. */
 	isVercelGatewayHost: boolean;
+	/** See {@link OpenAICompat.enableGeminiThinkingLoopGuard}. Set by the builder from the family classifier. */
+	enableGeminiThinkingLoopGuard?: boolean;
 	/** Complete alternate view for thinking-engaged requests; swap pointers, never spread. */
 	whenThinking?: ResolvedOpenAICompat;
 };
@@ -400,6 +410,8 @@ export interface ResolvedOpenAIResponsesCompat {
 	strictResponsesPairing: boolean;
 	requiresJuiceZeroHack: boolean;
 	reasoningEffortMap: Partial<Record<Effort, string>>;
+	/** See {@link OpenAICompat.enableGeminiThinkingLoopGuard}. */
+	enableGeminiThinkingLoopGuard?: boolean;
 }
 
 /** Fully-resolved anthropic-messages compat view (same contract as `ResolvedOpenAICompat`). */
