@@ -3265,8 +3265,9 @@ export function convertAnthropicMessages(
 /**
  * JSON Schema whitelist for Anthropic tool `input_schema` nodes.
  *
- * Mirrors the Anthropic Python SDK's `lib/_parse/_transform.py::transform_schema`:
- * we keep only structural/metadata keywords Anthropic's validator honors, and demote
+ * Tracks the Anthropic Python SDK's `lib/_parse/_transform.py::transform_schema`,
+ * with live Messages API guardrails for keywords the SDK preserves but the API rejects.
+ * We keep only structural/metadata keywords Anthropic's validator honors, and demote
  * anything else into the node's `description` as `\n\n{key: value, ...}` so the model
  * still sees the constraint as a natural-language hint.
  *
@@ -3281,7 +3282,6 @@ const ANTHROPIC_TOOL_SCHEMA_UNIVERSAL_KEEP = new Set([
 	"definitions",
 	"type",
 	"anyOf",
-	"oneOf",
 	"allOf",
 	"enum",
 	"const",
@@ -3377,13 +3377,16 @@ function anthropicPerTypeKeep(scalarType: string | undefined): Set<string> | und
  * Applies the full whitelist semantics from the Anthropic Python SDK's
  * `lib/_parse/_transform.py::transform_schema`:
  *
- * 1. Universal keys (`$ref`, `$defs`, `type`, `anyOf`/`oneOf`/`allOf`, `enum`, `const`,
- *    `description`, `title`, `default`, `nullable`) are preserved on every node.
+ * 1. Universal keys (`$ref`, `$defs`, `type`, `anyOf`, `allOf`, `enum`, `const`,
+ *    `description`, `title`, `default`, `nullable`) are preserved on every node, with
+ *    one position-dependent exception: the combinator keys. Root `anyOf`/`allOf` are
+ *    spilled (recent Anthropic Messages validators reject combinators at the tool
+ *    `input_schema` root) but kept when nested; `oneOf` is spilled at every position
+ *    (it is not in the documented supported subset).
  * 2. Per-type keys are kept additively (object → `properties`/`required`/`additionalProperties`,
  *    array → `items`/`prefixItems` plus `minItems` only when 0 or 1, string → `format`
  *    only when in the supported value set).
  * 3. Everything else is demoted into the node's `description` as `\n\n{key: value, ...}`
- *    so the model still sees the constraint as a natural-language hint.
  *
  * Object nodes default to `additionalProperties: false`, but explicit open-map
  * declarations (`additionalProperties: true` or a schema literal — Zod's
@@ -3394,6 +3397,7 @@ function anthropicPerTypeKeep(scalarType: string | undefined): Set<string> | und
 function normalizeAnthropicToolSchemaNode(
 	schema: unknown,
 	cache: WeakMap<Record<string, unknown>, Record<string, unknown>>,
+	isRoot = false,
 ): unknown {
 	if (Array.isArray(schema)) return schema.map(entry => normalizeAnthropicToolSchemaNode(entry, cache));
 	if (!isRecord(schema)) return schema;
@@ -3411,7 +3415,8 @@ function normalizeAnthropicToolSchemaNode(
 	for (const key in schema) {
 		if (!Object.hasOwn(schema, key)) continue;
 		const value = schema[key];
-		if (ANTHROPIC_TOOL_SCHEMA_UNIVERSAL_KEEP.has(key) || perTypeKeep?.has(key)) {
+		const isRootCombinator = isRoot && COMBINATOR_KEYS.includes(key as (typeof COMBINATOR_KEYS)[number]);
+		if (!isRootCombinator && (ANTHROPIC_TOOL_SCHEMA_UNIVERSAL_KEEP.has(key) || perTypeKeep?.has(key))) {
 			result[key] = value;
 		} else {
 			spill.push([key, value]);
@@ -3486,7 +3491,7 @@ function normalizeAnthropicToolSchemaNode(
 }
 
 export function normalizeAnthropicToolSchema(schema: unknown): unknown {
-	return normalizeAnthropicToolSchemaNode(schema, new WeakMap());
+	return normalizeAnthropicToolSchemaNode(schema, new WeakMap(), true);
 }
 
 type AnthropicToolSchemaPlan = {
