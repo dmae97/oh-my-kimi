@@ -1,9 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
-import type { OAuthController, OAuthCredentials } from "../src/registry/oauth/types";
-import * as apiKeyValidation from "../src/registry/api-key-validation";
-import { loginAlibabaCodingPlan, alibabaCodingPlanProvider } from "../src/registry/alibaba-coding-plan";
-import { getOAuthApiKey } from "../src/registry/oauth/index";
 import type { Mock } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import { loginAlibabaCodingPlan } from "../src/registry/alibaba-coding-plan";
+import * as apiKeyValidation from "../src/registry/api-key-validation";
+import { getOAuthApiKey } from "../src/registry/oauth/index";
+import type { OAuthController } from "../src/registry/oauth/types";
 
 describe("alibaba-coding-plan endpoint selection", () => {
 	let validateSpy: Mock<typeof apiKeyValidation.validateOpenAICompatibleApiKey>;
@@ -19,9 +19,11 @@ describe("alibaba-coding-plan endpoint selection", () => {
 	it("option 1 uses international endpoint and auth URL", async () => {
 		let capturedAuth: { url: string; instructions?: string } | undefined;
 		const options: OAuthController = {
-			onAuth: (info) => { capturedAuth = info; },
+			onAuth: info => {
+				capturedAuth = info;
+			},
 			onProgress: () => {},
-			onPrompt: async (prompt) => {
+			onPrompt: async prompt => {
 				if (prompt.message.includes("Select Alibaba")) return "1";
 				if (prompt.message.includes("Paste your")) return "sk-test-key";
 				return "";
@@ -48,9 +50,11 @@ describe("alibaba-coding-plan endpoint selection", () => {
 	it("option 2 uses China endpoint and auth URL", async () => {
 		let capturedAuth: { url: string; instructions?: string } | undefined;
 		const options: OAuthController = {
-			onAuth: (info) => { capturedAuth = info; },
+			onAuth: info => {
+				capturedAuth = info;
+			},
 			onProgress: () => {},
-			onPrompt: async (prompt) => {
+			onPrompt: async prompt => {
 				if (prompt.message.includes("Select Alibaba")) return "2";
 				if (prompt.message.includes("Paste your")) return "sk-cn-key";
 				return "";
@@ -77,9 +81,11 @@ describe("alibaba-coding-plan endpoint selection", () => {
 	it("option 3 prompts for custom URL and uses it", async () => {
 		let capturedAuth: { url: string; instructions?: string } | undefined;
 		const options: OAuthController = {
-			onAuth: (info) => { capturedAuth = info; },
+			onAuth: info => {
+				capturedAuth = info;
+			},
 			onProgress: () => {},
-			onPrompt: async (prompt) => {
+			onPrompt: async prompt => {
 				if (prompt.message.includes("Select Alibaba")) return "3";
 				if (prompt.message.includes("custom base URL")) return "https://my-proxy.com/v1";
 				if (prompt.message.includes("Paste your")) return "sk-custom-key";
@@ -107,7 +113,7 @@ describe("alibaba-coding-plan endpoint selection", () => {
 		const options: OAuthController = {
 			onAuth: () => {},
 			onProgress: () => {},
-			onPrompt: async (prompt) => {
+			onPrompt: async prompt => {
 				if (prompt.message.includes("Select Alibaba")) return "";
 				if (prompt.message.includes("Paste your")) return "sk-test-key";
 				return "";
@@ -123,7 +129,7 @@ describe("alibaba-coding-plan endpoint selection", () => {
 		const options: OAuthController = {
 			onAuth: () => {},
 			onProgress: () => {},
-			onPrompt: async (prompt) => {
+			onPrompt: async prompt => {
 				if (prompt.message.includes("Select Alibaba")) return "3";
 				if (prompt.message.includes("custom base URL")) return "https://my-proxy.com/v1///";
 				if (prompt.message.includes("Paste your")) return "sk-test-key";
@@ -140,32 +146,28 @@ describe("alibaba-coding-plan endpoint selection", () => {
 		const options: OAuthController = {
 			onAuth: () => {},
 			onProgress: () => {},
-			onPrompt: async (prompt) => {
+			onPrompt: async prompt => {
 				if (prompt.message.includes("Select Alibaba")) return "3";
 				if (prompt.message.includes("custom base URL")) return "";
 				return "";
 			},
 		};
 
-		await expect(loginAlibabaCodingPlan(options)).rejects.toThrow(
-			"Custom URL is required for option 3"
-		);
+		await expect(loginAlibabaCodingPlan(options)).rejects.toThrow("Custom URL is required for option 3");
 	});
 
 	it("throws error when API key is empty", async () => {
 		const options: OAuthController = {
 			onAuth: () => {},
 			onProgress: () => {},
-			onPrompt: async (prompt) => {
+			onPrompt: async prompt => {
 				if (prompt.message.includes("Select Alibaba")) return "1";
 				if (prompt.message.includes("Paste your")) return "";
 				return "";
 			},
 		};
 
-		await expect(loginAlibabaCodingPlan(options)).rejects.toThrow(
-			"API key is required"
-		);
+		await expect(loginAlibabaCodingPlan(options)).rejects.toThrow("API key is required");
 	});
 
 	it("checks abort signal after endpoint selection", async () => {
@@ -173,7 +175,7 @@ describe("alibaba-coding-plan endpoint selection", () => {
 		const options: OAuthController = {
 			onAuth: () => {},
 			onProgress: () => {},
-			onPrompt: async (prompt) => {
+			onPrompt: async prompt => {
 				if (prompt.message.includes("Select Alibaba")) {
 					controller.abort();
 					return "";
@@ -183,9 +185,7 @@ describe("alibaba-coding-plan endpoint selection", () => {
 			signal: controller.signal,
 		};
 
-		await expect(loginAlibabaCodingPlan(options)).rejects.toThrow(
-			"Login cancelled"
-		);
+		await expect(loginAlibabaCodingPlan(options)).rejects.toThrow("Login cancelled");
 	});
 });
 
