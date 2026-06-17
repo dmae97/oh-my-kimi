@@ -666,6 +666,38 @@ function isSgrParamByte(c: number): boolean {
 	return (c >= 0x30 && c <= 0x39) || c === CC_SEMI || c === CC_COLON;
 }
 
+// True when a parameter list ends mid extended-color spec in the ambiguous
+// semicolon form: `38/48/58;2` with fewer than three channel values, or
+// `38/48/58;5` with no palette index. Concatenating another list after such a
+// run would let the next code be absorbed as the missing channel/index (e.g.
+// `38;2;255;0` + `31` → `38;2;255;0;31`, where `31` becomes blue instead of a
+// standalone fg-red), changing the rendered color. The self-delimiting colon
+// form (`38:2::r:g:b`) is unambiguous — its tokens never equal a bare `38`, so
+// the scan treats it as a complete unit and merging stays safe.
+function endsWithIncompleteExtendedColor(params: string): boolean {
+	const t = params.split(";");
+	let i = 0;
+	while (i < t.length) {
+		const tok = t[i];
+		if (tok === "38" || tok === "48" || tok === "58") {
+			const mode = t[i + 1];
+			if (mode === undefined) return true; // introducer with no mode
+			if (mode === "2") {
+				if (i + 4 >= t.length) return true; // missing r/g/b
+				i += 5;
+				continue;
+			}
+			if (mode === "5") {
+				if (i + 2 >= t.length) return true; // missing index
+				i += 3;
+				continue;
+			}
+		}
+		i += 1;
+	}
+	return false;
+}
+
 /**
  * Merge runs of byte-adjacent SGR sequences (`CSI [0-9;:]* m`) into one. Only
  * CSI-SGR sequences are touched; text, cursor moves, OSC, hyperlinks and image
@@ -703,16 +735,19 @@ export function coalesceAdjacentSgr(line: string): string {
 		}
 		if (params.length > 1) {
 			out += line.slice(copiedUpto, i);
-			// Emit the merged run, but cap each emitted CSI at MERGE_TOKEN_CAP
-			// parameter tokens. SGR params apply left-to-right regardless of how
-			// they are grouped across adjacent CSIs, so splitting a long run into
-			// several capped sequences stays behavior-preserving — while a single
-			// unbounded merge would overflow a terminal's CSI parameter buffer
-			// (xterm.js caps at 32 and silently truncates the rest, corrupting
-			// the colors). Empty params (`CSI m`) mean a full reset; normalize to
-			// `0` so the merged list stays unambiguous.
+			// Emit the merged run, but flush the current group before appending a
+			// list when (a) the previous list ended mid extended-color, so the
+			// next code cannot be absorbed as its missing channel/index, or (b)
+			// the token count would exceed MERGE_TOKEN_CAP. SGR params apply
+			// left-to-right regardless of how they are grouped across adjacent
+			// CSIs, so a capped/guarded split stays behavior-preserving — while a
+			// single unbounded merge would overflow a terminal's CSI parameter
+			// buffer (xterm.js caps at 32 and silently truncates the rest,
+			// corrupting colors). Empty params (`CSI m`) mean a full reset;
+			// normalize to `0` so the merged list stays unambiguous.
 			let group = "";
 			let groupTokens = 0;
+			let groupOpenSafe = true;
 			for (let q = 0; q < params.length; q++) {
 				const norm = params[q]!.length === 0 ? "0" : params[q]!;
 				let tk = 1;
@@ -720,13 +755,14 @@ export function coalesceAdjacentSgr(line: string): string {
 					const cc = norm.charCodeAt(z);
 					if (cc === CC_SEMI || cc === CC_COLON) tk++;
 				}
-				if (groupTokens > 0 && groupTokens + tk > MERGE_TOKEN_CAP) {
+				if (groupTokens > 0 && (!groupOpenSafe || groupTokens + tk > MERGE_TOKEN_CAP)) {
 					out += `\x1b[${group}m`;
 					group = "";
 					groupTokens = 0;
 				}
 				group += group.length === 0 ? norm : `;${norm}`;
 				groupTokens += tk;
+				groupOpenSafe = !endsWithIncompleteExtendedColor(norm);
 			}
 			if (group.length > 0) out += `\x1b[${group}m`;
 			copiedUpto = k;

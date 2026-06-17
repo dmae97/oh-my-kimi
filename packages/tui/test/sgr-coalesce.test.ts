@@ -74,4 +74,36 @@ describe("coalesceAdjacentSgr", () => {
 		expect(b.getViewportRowForegroundColumns(0)).toEqual(a.getViewportRowForegroundColumns(0));
 		expect(b.getViewportRowBackgroundColumns(0)).toEqual(a.getViewportRowBackgroundColumns(0));
 	});
+
+	it("does not merge across an incomplete truecolor introducer (missing channel)", () => {
+		// `38;2;255;0` is missing its blue channel. Concatenating the next list
+		// would let `31` be consumed as that channel (`38;2;255;0;31`) instead of
+		// staying a standalone fg-red, changing the rendered color.
+		const input = "\x1b[38;2;255;0m\x1b[31mX";
+		expect(coalesceAdjacentSgr(input)).toBe(input);
+	});
+
+	it("does not merge across an incomplete indexed-color introducer (missing index)", () => {
+		// `38;5` (256-color) is missing its palette index; `31` must not be absorbed.
+		const input = "\x1b[38;5m\x1b[31mX";
+		expect(coalesceAdjacentSgr(input)).toBe(input);
+	});
+
+	it("still merges a complete extended color followed by another code", () => {
+		// `38;2;255;0;0` consumes exactly r,g,b; a trailing `31` then starts fresh,
+		// so concatenation stays behavior-preserving and the merge win is kept.
+		const input = "\x1b[38;2;255;0;0m\x1b[31mX";
+		expect(coalesceAdjacentSgr(input)).toBe("\x1b[38;2;255;0;0;31mX");
+	});
+
+	it("renders malformed extended-color runs identically (no channel absorption)", () => {
+		const input = "\x1b[38;2;255;0m\x1b[31mX";
+		const out = coalesceAdjacentSgr(input);
+		const a = new VirtualTerminal(80, 4);
+		const b = new VirtualTerminal(80, 4);
+		a.write(input);
+		b.write(out);
+		expect(b.getViewport()).toEqual(a.getViewport());
+		expect(b.getViewportRowForegroundColumns(0)).toEqual(a.getViewportRowForegroundColumns(0));
+	});
 });
