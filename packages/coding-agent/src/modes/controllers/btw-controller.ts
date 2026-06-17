@@ -28,7 +28,7 @@ function assistantMessageWithReplyText(assistantMessage: AssistantMessage, reply
 		replacedText = true;
 	}
 	if (!replacedText) content.push({ type: "text", text: replyText });
-	return { ...assistantMessage, content };
+	return { ...assistantMessage, content, providerPayload: undefined };
 }
 
 export class BtwController {

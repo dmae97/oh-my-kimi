@@ -288,6 +288,42 @@ describe("BtwController", () => {
 		});
 	});
 
+	it("branches the sanitized reply text without native replay payload metadata", async () => {
+		const providerPayload = {
+			type: "openaiResponsesHistory" as const,
+			provider: "openai-codex",
+			dt: true,
+			items: [{ type: "reasoning", encrypted_content: "raw-ephemeral-output" }],
+		};
+		const assistantMessage: AssistantMessage = {
+			...createAssistantMessage("raw ephemeral output"),
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			model: "gpt-5-codex",
+			content: [
+				{ type: "thinking", thinking: "reasoning", thinkingSignature: "native-signature", itemId: "rs_1" },
+				{ type: "text", text: "raw ephemeral output" },
+			],
+			providerPayload,
+		};
+		const runEphemeralTurn = vi.fn(async () => ({ replyText: "sanitized", assistantMessage }));
+		const ctx = makeCtx(makeFakeSession(runEphemeralTurn));
+		const controller = new BtwController(ctx);
+
+		await controller.start("Question?");
+		await drainBtwRequest();
+
+		expect(await controller.handleBranch()).toBe(true);
+		expect(ctx.handleBtwBranch).toHaveBeenCalledWith("Question?", {
+			...assistantMessage,
+			content: [
+				{ type: "thinking", thinking: "reasoning" },
+				{ type: "text", text: "sanitized" },
+			],
+			providerPayload: undefined,
+		});
+	});
+
 	it("ignores duplicate branch requests while branch promotion is in flight", async () => {
 		const assistantMessage = createAssistantMessage("Answer");
 		const runEphemeralTurn = vi.fn(async () => ({ replyText: "Answer", assistantMessage }));
