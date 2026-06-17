@@ -1271,14 +1271,6 @@ export class AgentSession {
 		| undefined = undefined;
 	#sessionStopContinuationCount = 0;
 	#sessionStopHookActive = false;
-	#pendingProviderRequestNonMessageTokens: number | undefined = undefined;
-	#lastProviderUsageNonMessage:
-		| {
-				promptTokens: number;
-				nonMessageTokens: number;
-				cutoffCount: number;
-		  }
-		| undefined = undefined;
 	// Bumped whenever the pending in-flight snapshot is set/cleared. The
 	// status-line context memo includes this so clearing the snapshot on
 	// turn-end/abort invalidates the cache even though the message list is
