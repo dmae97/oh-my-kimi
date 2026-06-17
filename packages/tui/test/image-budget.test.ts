@@ -532,7 +532,7 @@ describe("kitty transmit / placement encoding", () => {
 
 	it("encodeKittyPlacement displays a transmitted image by id with a stable placement id", () => {
 		const seq = encodeKittyPlacement({ imageId: 9, placementId: 9, columns: 3, rows: 2 });
-		expect(seq).toBe("\x1b_Ga=p,q=2,i=9,p=9,c=3,r=2\x1b\\");
+		expect(seq).toBe("\x1b_Ga=p,q=2,C=1,i=9,p=9,c=3,r=2\x1b\\");
 		expect(seq).not.toContain(BASE64_ONE_PIXEL_PNG);
 	});
 });

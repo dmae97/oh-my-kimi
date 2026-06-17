@@ -20,7 +20,7 @@ const SQUARE_DIMENSIONS = { widthPx: 100, heightPx: 100 };
 const BASE64_ONE_PIXEL_PNG =
 	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGNgAAAAAgABSK+kcQAAAABJRU5ErkJggg==";
 
-function parseKittyParam(sequence: string, key: "c" | "r"): number | null {
+function parseKittyParam(sequence: string, key: "c" | "r" | "C"): number | null {
 	const match = sequence.match(new RegExp(`${key}=(\\d+)`));
 	if (!match) return null;
 	return Number.parseInt(match[1], 10);
@@ -57,6 +57,17 @@ describe("terminal image rendering", () => {
 		expect(result?.rows).toBe(2);
 		expect(parseKittyParam(result?.sequence ?? "", "c")).toBe(2);
 		expect(parseKittyParam(result?.sequence ?? "", "r")).toBe(2);
+	});
+
+	it("anchors Kitty display commands before renderer-managed cursor movement", () => {
+		terminal.imageProtocol = ImageProtocol.Kitty;
+		const result = renderImage(BASE64_DUMMY, SQUARE_DIMENSIONS, {
+			maxWidthCells: 10,
+			maxHeightCells: 2,
+		});
+
+		expect(result).not.toBeNull();
+		expect(parseKittyParam(result?.sequence ?? "", "C")).toBe(1);
 	});
 
 	it("uses intrinsic image size when no bounds are provided", () => {
@@ -121,8 +132,10 @@ describe("terminal image rendering", () => {
 		expect(lines[0]).toBe("\x1b[0m");
 		expect(lines).toHaveLength(2);
 		expect(lines[1]).toContain("\x1b[1A");
+		expect(lines[1]).toContain("C=1");
 		expect(lines[1]).toContain("c=2");
 		expect(lines[1]).toContain("r=2");
+		expect(lines[1]?.endsWith("\x1b[1B")).toBe(true);
 	});
 });
 
