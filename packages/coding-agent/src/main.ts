@@ -124,11 +124,9 @@ async function checkForNewVersion(currentVersion: string): Promise<string | unde
 	}
 }
 
+// Todo settings are caller-controlled in protocol modes. Do not host-default them:
+// embedders need project-level opt-outs for reminder/prelude prompt injection.
 const HOST_DEFAULTED_SETTING_PATHS: SettingPath[] = [
-	"todo.enabled",
-	"todo.reminders",
-	"todo.reminders.max",
-	"todo.eager",
 	"task.isolation.mode",
 	"task.isolation.merge",
 	"task.isolation.commits",
