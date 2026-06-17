@@ -182,6 +182,22 @@ describe("in-band tool dialects", () => {
 		expect(calls[0]?.arguments).not.toHaveProperty('parameter name="count"');
 	});
 
+	it("buffers unprefixed MiniMax wrappers across streaming tag splits", () => {
+		const raw =
+			'<tool_call>\n<invoke name="read">\n<parameter name="path" string="true">src/a.ts</parameter>\n<parameter name="count" string="false">2</parameter>\n</invoke>\n</tool_call>';
+		const events = feedText("minimax", raw);
+		const calls = toolEnds(events);
+		const visibleText = events
+			.filter((event): event is Extract<InbandScanEvent, { type: "text" }> => event.type === "text")
+			.map(event => event.text)
+			.join("");
+
+		expect(calls).toHaveLength(1);
+		expect(calls[0]?.name).toBe("read");
+		expect(calls[0]?.arguments).toEqual({ path: "src/a.ts", count: 2 });
+		expect(visibleText).toBe("");
+	});
+
 	it("stops before hallucinated Anthropic function results", () => {
 		const parsed = parseInbandToolMessage(
 			assistant([

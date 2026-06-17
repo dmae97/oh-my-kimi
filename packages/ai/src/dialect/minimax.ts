@@ -19,6 +19,8 @@ const MINIMAX_WRAPPER_TAGS: Readonly<Record<string, true>> = { tool_call: true }
 const MINIMAX_BASE_TAG_PREFIXES = [
 	"<minimax:tool_call",
 	"</minimax:tool_call",
+	"<tool_call",
+	"</tool_call",
 	"<invoke",
 	"</invoke",
 	"<parameter",
