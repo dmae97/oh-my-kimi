@@ -17,9 +17,7 @@ export function applyToolProxy<TTool extends object>(tool: TTool, wrapper: objec
 					// Bind real methods so `this` is preserved through the wrapper, but leave
 					// callable values that aren't plain functions untouched — notably an ArkType
 					// `Type` (the `parameters` schema) is callable yet lacks `Function.prototype.bind`.
-					return typeof value === "function" && typeof value.bind === "function"
-						? value.bind(tool)
-						: value;
+					return typeof value === "function" && typeof value.bind === "function" ? value.bind(tool) : value;
 				},
 				enumerable: true,
 				configurable: true,

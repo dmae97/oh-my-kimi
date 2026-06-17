@@ -18,13 +18,13 @@ export interface CheckpointState {
 }
 
 const checkpointSchema = type({
-	goal: "string",
+	goal: type("string").describe("investigation goal"),
 });
 
 type CheckpointParams = typeof checkpointSchema.infer;
 
 const rewindSchema = type({
-	report: "string",
+	report: type("string").describe("investigation findings"),
 });
 
 type RewindParams = typeof rewindSchema.infer;

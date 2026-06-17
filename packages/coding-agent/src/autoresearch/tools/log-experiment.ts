@@ -37,17 +37,19 @@ import type {
 const EXPERIMENT_TOOL_NAMES = ["init_experiment", "run_experiment", "log_experiment", "update_notes"];
 
 const logExperimentSchema = type({
-	metric: "number",
-	status: "'keep'|'discard'|'crash'|'checks_failed'",
-	description: "string",
-	"metrics?": { "[string]": "number" },
-	"asi?": { "[string]": "unknown" },
-	"commit?": "string",
-	"justification?": "string",
+	metric: type("number").describe("primary metric value"),
+	status: type("'keep'|'discard'|'crash'|'checks_failed'").describe("run outcome"),
+	description: type("string").describe("short run description"),
+	"metrics?": type({ "[string]": "number" }).describe("secondary metrics"),
+	"asi?": type({ "[string]": "unknown" }).describe("free-form structured metadata"),
+	"commit?": type("string").describe("override recorded commit hash"),
+	"justification?": type("string").describe("required when keeping a scope-deviating run"),
 	"flag_runs?": type({
-		run_id: "number.integer",
-		reason: "string",
-	}).array(),
+		run_id: type("number.integer").describe("run id to flag"),
+		reason: type("string").describe("why this run is suspect"),
+	})
+		.array()
+		.describe("flag earlier runs as suspect"),
 });
 
 export function createLogExperimentTool(

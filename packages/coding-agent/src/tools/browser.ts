@@ -24,28 +24,30 @@ export type { Observation, ObservationEntry } from "./browser/tab-protocol";
 const DEFAULT_TAB_NAME = "main";
 
 const appSchema = type({
-	"path?": "string",
-	"cdp_url?": "string",
-	"args?": "string[]",
-	"target?": "string",
+	"path?": type("string").describe("binary path to spawn"),
+	"cdp_url?": type("string").describe("existing cdp endpoint"),
+	"args?": type("string[]").describe("extra cli args"),
+	"target?": type("string").describe("substring to pick a window"),
 });
 
 const browserSchema = type({
-	action: "'open' | 'close' | 'run'",
-	"name?": "string",
-	"url?": "string",
+	action: type("'open' | 'close' | 'run'").describe("operation"),
+	"name?": type("string").describe("tab id (default 'main')"),
+	"url?": type("string").describe("url to open"),
 	"app?": appSchema,
 	"viewport?": {
 		width: "number",
 		height: "number",
 		"scale?": "number",
 	},
-	"wait_until?": "'load' | 'domcontentloaded' | 'networkidle0' | 'networkidle2'",
-	"dialogs?": "'accept' | 'dismiss'",
-	"code?": "string",
-	"timeout?": "number",
-	"all?": "boolean",
-	"kill?": "boolean",
+	"wait_until?": type("'load' | 'domcontentloaded' | 'networkidle0' | 'networkidle2'").describe(
+		"navigation wait condition",
+	),
+	"dialogs?": type("'accept' | 'dismiss'").describe("auto-handle dialogs"),
+	"code?": type("string").describe("js body to run in tab"),
+	"timeout?": type("number").describe("timeout in seconds (default 30, max 300)"),
+	"all?": type("boolean").describe("close every tab"),
+	"kill?": type("boolean").describe("also kill spawned-app browsers"),
 });
 
 /** Input schema for the browser tool. */

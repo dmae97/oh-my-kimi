@@ -28,8 +28,8 @@ const MATCH_LABEL_LEN = 72;
 const MATCH_DESCRIPTION_LEN = 96;
 
 const searchToolBm25Schema = type({
-	query: "string",
-	limit: "number>0?",
+	query: type("string").describe("tool search query"),
+	"limit?": type("number>0").describe("max matches"),
 });
 
 type SearchToolBm25Params = typeof searchToolBm25Schema.infer;

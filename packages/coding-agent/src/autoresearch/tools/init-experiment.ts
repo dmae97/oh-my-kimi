@@ -17,17 +17,17 @@ export const DEFAULT_HARNESS_COMMAND = `bash ${HARNESS_FILENAME}`;
 const HARNESS_COMMIT_TITLE = "autoresearch: harness setup";
 
 const initExperimentSchema = type({
-	name: "string",
-	"goal?": "string",
-	primary_metric: "string",
-	"metric_unit?": "string",
-	"direction?": "'lower' | 'higher'",
-	"secondary_metrics?": "string[]",
-	"scope_paths?": "string[]",
-	"off_limits?": "string[]",
-	"constraints?": "string[]",
-	"max_iterations?": "number",
-	"new_segment?": "boolean",
+	name: type("string").describe("experiment name"),
+	"goal?": type("string").describe("session goal"),
+	primary_metric: type("string").describe("primary metric name"),
+	"metric_unit?": type("string").describe("metric unit (e.g. ms, µs, mb)"),
+	"direction?": type("'lower' | 'higher'").describe("better direction (default lower)"),
+	"secondary_metrics?": type("string[]").describe("secondary metric names"),
+	"scope_paths?": type("string[]").describe("expected-to-modify paths"),
+	"off_limits?": type("string[]").describe("off-limits paths"),
+	"constraints?": type("string[]").describe("free-form constraints"),
+	"max_iterations?": type("number").describe("soft iteration cap per segment"),
+	"new_segment?": type("boolean").describe("bump to a new segment in existing session"),
 });
 
 interface InitExperimentDetails {

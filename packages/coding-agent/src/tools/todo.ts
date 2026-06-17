@@ -47,20 +47,20 @@ export interface TodoToolDetails {
 const TodoOp = type('"init" | "start" | "done" | "rm" | "drop" | "append" | "view"');
 
 const InitListEntry = type({
-	phase: "string",
-	items: type("string[]").atLeastLength(1),
+	phase: type("string").describe("phase name"),
+	items: type("string").describe("task content").array().atLeastLength(1).describe("tasks for this phase"),
 });
 
 const TodoOpEntry = type({
 	op: TodoOp,
-	"list?": InitListEntry.array(),
-	"task?": "string",
-	"phase?": "string",
-	"items?": type("string[]").atLeastLength(1),
+	"list?": InitListEntry.array().describe("phased task list (init)"),
+	"task?": type("string").describe("task content"),
+	"phase?": type("string").describe("phase name"),
+	"items?": type("string").describe("task content").array().atLeastLength(1).describe("tasks to append"),
 });
 
 const todoSchema = type({
-	ops: TodoOpEntry.array().atLeastLength(1),
+	ops: TodoOpEntry.array().atLeastLength(1).describe("ordered todo operations"),
 });
 
 type TodoParams = TodoSchema;

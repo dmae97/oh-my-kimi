@@ -19,8 +19,8 @@ import type { ToolSession } from "./index";
 import { ToolError } from "./tool-errors";
 
 const inspectImageSchema = type({
-	path: "string",
-	question: "string",
+	path: type("string").describe("image path"),
+	question: type("string").describe("question about image"),
 });
 
 export type InspectImageParams = typeof inspectImageSchema.infer;

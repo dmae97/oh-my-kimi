@@ -13,9 +13,11 @@ import type { ToolSession } from ".";
 
 const manageSkillSchema = type({
 	action: "'create' | 'update' | 'delete'",
-	name: "string",
-	description: "string?",
-	body: "string?",
+	name: type("string").describe("kebab-case skill name"),
+	"description?": type("string").describe(
+		"one-line description of when to use the skill (required for create/update)",
+	),
+	"body?": type("string").describe("the SKILL.md body in markdown, no frontmatter (required for create/update)"),
 }).narrow(
 	(p, ctx) =>
 		p.action === "delete" ||

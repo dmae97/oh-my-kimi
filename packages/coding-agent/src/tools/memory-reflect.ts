@@ -6,8 +6,8 @@ import reflectDescription from "../prompts/tools/reflect.md" with { type: "text"
 import type { ToolSession } from ".";
 
 const memoryReflectSchema = type({
-	query: "string",
-	"context?": "string",
+	query: type("string").describe("question to answer"),
+	"context?": type("string").describe("optional context"),
 });
 
 export type MemoryReflectParams = typeof memoryReflectSchema.infer;

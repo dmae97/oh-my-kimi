@@ -36,13 +36,17 @@ import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 
 const astEditOpSchema = type({
-	pat: "string",
-	out: "string",
+	pat: type("string").describe("ast pattern"),
+	out: type("string").describe("replacement template"),
 });
 
 const astEditSchema = type({
-	ops: astEditOpSchema.array().atLeastLength(1),
-	paths: type("string[]").atLeastLength(1),
+	ops: astEditOpSchema.array().atLeastLength(1).describe("rewrite ops"),
+	paths: type("string")
+		.describe("file, directory, glob, or internal URL to rewrite")
+		.array()
+		.atLeastLength(1)
+		.describe("files, directories, globs, or internal URLs to rewrite"),
 });
 
 interface AstEditCallOptions {

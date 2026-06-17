@@ -35,20 +35,20 @@ import { ToolAbortError } from "./tool-errors";
 // =============================================================================
 
 const OptionItem = arkType({
-	label: "string",
-	"description?": "string",
+	label: arkType("string").describe("display label"),
+	"description?": arkType("string").describe("optional explanatory text displayed below the label"),
 });
 
 const QuestionItem = arkType({
-	id: "string",
-	question: "string",
-	options: OptionItem.array(),
-	"multi?": "boolean",
-	"recommended?": "number",
+	id: arkType("string").describe("question id"),
+	question: arkType("string").describe("question text"),
+	options: OptionItem.array().describe("available options"),
+	"multi?": arkType("boolean").describe("allow multiple selections"),
+	"recommended?": arkType("number").describe("recommended option index"),
 });
 
 const askSchema = arkType({
-	questions: QuestionItem.array().atLeastLength(1),
+	questions: QuestionItem.array().atLeastLength(1).describe("questions to ask"),
 });
 
 export type AskToolInput = typeof askSchema.infer;

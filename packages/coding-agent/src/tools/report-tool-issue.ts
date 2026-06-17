@@ -33,8 +33,10 @@ function buildReportToolIssueParams(activeBuiltinNames: readonly string[]) {
 	// fallback used by call sites that don't know the active set yet).
 	const toolSchema = activeBuiltinNames.length > 0 ? type.enumerated(...activeBuiltinNames) : type("string");
 	return type({
-		tool: toolSchema,
-		report: "string",
+		tool: toolSchema.describe("tool name"),
+		report: type("string").describe(
+			"unexpected behavior; generic, NEVER PII (paths, file contents, identifiers, prompt text)",
+		),
 	});
 }
 

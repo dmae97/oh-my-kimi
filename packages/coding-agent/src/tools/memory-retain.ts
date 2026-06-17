@@ -5,11 +5,12 @@ import type { ToolSession } from ".";
 
 const memoryRetainSchema = type({
 	items: type({
-		content: "string",
-		"context?": "string",
+		content: type("string").describe("information to remember"),
+		"context?": type("string").describe("source context"),
 	})
 		.array()
-		.atLeastLength(1),
+		.atLeastLength(1)
+		.describe("memories to retain"),
 });
 
 export type MemoryRetainParams = typeof memoryRetainSchema.infer;

@@ -13,8 +13,8 @@ import { ToolError } from "./tool-errors";
 
 const resolveSchema = type({
 	action: "'apply' | 'discard'",
-	reason: "string",
-	extra: "(Record<string, unknown>)?",
+	reason: type("string").describe("reason for action"),
+	"extra?": type("Record<string, unknown>").describe("free-form metadata"),
 });
 
 type ResolveParams = typeof resolveSchema.infer;

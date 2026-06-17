@@ -50,14 +50,14 @@ export function isIrcEnabled(settings: Settings, taskDepth: number): boolean {
 }
 
 const ircSchema = type({
-	op: "'send' | 'wait' | 'inbox' | 'list'",
-	"to?": "string",
-	"message?": "string",
-	"replyTo?": "string",
-	"await?": "boolean",
-	"from?": "string",
-	"timeoutMs?": "number",
-	"peek?": "boolean",
+	op: type("'send' | 'wait' | 'inbox' | 'list'").describe("irc operation"),
+	"to?": type("string").describe('send: recipient agent id or "all"'),
+	"message?": type("string").describe("send: message body"),
+	"replyTo?": type("string").describe("send: message id being answered"),
+	"await?": type("boolean").describe('send: wait for the recipient\'s reply (invalid with to:"all")'),
+	"from?": type("string").describe("wait: only accept a message from this agent id"),
+	"timeoutMs?": type("number").describe("wait: timeout in milliseconds (0 waits indefinitely)"),
+	"peek?": type("boolean").describe("inbox: list messages without consuming them"),
 });
 
 type IrcParams = typeof ircSchema.infer;

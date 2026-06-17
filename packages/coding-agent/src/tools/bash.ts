@@ -101,11 +101,11 @@ async function saveBashOriginalArtifact(session: ToolSession, originalText: stri
 }
 
 const bashSchemaBase = type({
-	command: "string",
-	"env?": { "[string]": "string" },
-	"timeout?": "number",
-	"cwd?": "string",
-	"pty?": "boolean",
+	command: type("string").describe("command to execute"),
+	"env?": type({ "[string]": "string" }).describe("extra env vars"),
+	"timeout?": type("number").describe("timeout in seconds"),
+	"cwd?": type("string").describe("working directory"),
+	"pty?": type("boolean").describe("run in pty mode"),
 });
 
 const bashSchemaWithAsync = type({
@@ -114,7 +114,7 @@ const bashSchemaWithAsync = type({
 	"timeout?": "number",
 	"cwd?": "string",
 	"pty?": "boolean",
-	"async?": "boolean",
+	"async?": type("boolean").describe("run in background"),
 });
 
 type BashToolSchema = typeof bashSchemaBase | typeof bashSchemaWithAsync;

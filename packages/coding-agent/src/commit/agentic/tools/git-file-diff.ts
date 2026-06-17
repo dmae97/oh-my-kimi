@@ -132,7 +132,7 @@ function processDiffs(files: string[], diffs: Map<string, string>): { result: st
 }
 
 const gitFileDiffSchema = type({
-	files: type("string[]").atLeastLength(1).atMostLength(10).describe("files to diff"),
+	files: type("string").describe("file to diff").array().atLeastLength(1).atMostLength(10),
 	"staged?": type("boolean").describe("use staged changes (default true)"),
 });
 

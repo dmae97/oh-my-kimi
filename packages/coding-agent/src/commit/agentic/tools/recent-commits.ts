@@ -3,7 +3,7 @@ import type { CustomTool } from "../../../extensibility/custom-tools/types";
 import * as git from "../../../utils/git";
 
 const recentCommitsSchema = type({
-	"count?": "1 <= number <= 50",
+	"count?": type("1 <= number <= 50").describe("commit count"),
 });
 
 interface RecentCommitStats {

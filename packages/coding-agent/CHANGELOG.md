@@ -4,6 +4,9 @@
 
 ### Added
 
+- Added explicit ArkType schema descriptions to parameters across all agent tools to improve model tool-calling instructions and parameter guidance
+- Added support for inline evaluation macros (`@[[py.name]]` and `@[[js.name]]`) that dynamically splice values or function results from live kernel namespaces into assistant messages and tool arguments
+- Added documentation detailing inline macro syntax, argument parsing, and placement rules to the eval instruction prompts
 - Added evaluation macro syntactic parsing, evaluation, and expander integration tests (`macro-syntax`, `macro-evaluator`, and `macro-expand`)
 - Added support for OpenRouter fallback in Perplexity web search when direct Perplexity API keys fail or are unavailable
 - Added support for streaming the Perplexity Responses API (`/v1/responses`) via the `PI_PERPLEXITY_RESPONSES=1` environment variable

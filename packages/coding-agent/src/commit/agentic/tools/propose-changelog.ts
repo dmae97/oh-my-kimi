@@ -20,7 +20,7 @@ const changelogEntriesSchema = type({
 const changelogEntrySchema = type({
 	path: "string",
 	entries: changelogEntriesSchema,
-	"deletions?": changelogEntriesSchema,
+	"deletions?": changelogEntriesSchema.describe("entries to remove"),
 });
 
 const proposeChangelogSchema = type({

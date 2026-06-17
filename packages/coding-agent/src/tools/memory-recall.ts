@@ -6,7 +6,7 @@ import recallDescription from "../prompts/tools/recall.md" with { type: "text" }
 import type { ToolSession } from ".";
 
 const memoryRecallSchema = type({
-	query: "string",
+	query: type("string").describe("natural language search query"),
 });
 
 export type MemoryRecallParams = typeof memoryRecallSchema.infer;

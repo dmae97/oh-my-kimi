@@ -24,9 +24,9 @@ import {
 import { ToolError } from "./tool-errors";
 
 const jobSchema = type({
-	"poll?": "string[]",
-	"cancel?": "string[]",
-	"list?": "boolean",
+	"poll?": type("string[]").describe("job ids to wait for; omit to wait on all running jobs"),
+	"cancel?": type("string[]").describe("job ids to cancel"),
+	"list?": type("boolean").describe("snapshot all jobs"),
 });
 
 type JobParams = typeof jobSchema.infer;

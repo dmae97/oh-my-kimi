@@ -4,11 +4,11 @@ import memoryEditDescription from "../prompts/tools/memory-edit.md" with { type:
 import type { ToolSession } from ".";
 
 const memoryEditSchema = type({
-	op: "'update' | 'forget' | 'invalidate'",
-	id: "string",
-	content: "string?",
-	importance: "number?",
-	replacement_id: "string?",
+	op: type("'update' | 'forget' | 'invalidate'").describe("memory edit operation"),
+	id: type("string").describe("memory id from recall output"),
+	"content?": type("string").describe("replacement content for update"),
+	"importance?": type("number").describe("replacement importance for update, clamped to [0, 1]"),
+	"replacement_id?": type("string").describe("replacement memory id for invalidate"),
 });
 
 export type MemoryEditParams = typeof memoryEditSchema.infer;

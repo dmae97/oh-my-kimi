@@ -28,16 +28,21 @@ export { EVAL_DEFAULT_PREVIEW_LINES, evalToolRenderer } from "./eval-render";
  * across cells and across tool calls.
  */
 const evalCellSchema = type({
-	language: "'py' | 'js'",
-	code: "string",
-	"title?": "string",
-	"timeout?": "number",
-	"reset?": "boolean",
+	language: type("'py' | 'js'").describe('runtime: "py" for the IPython kernel, "js" for the persistent JS VM'),
+	code: type("string").describe("cell body, verbatim. Use top-level await freely."),
+	"title?": type("string").describe('short label shown in transcript (e.g. "imports", "load config")'),
+	"timeout?": type("number").describe("per-cell timeout in seconds (1-3600, default 30)"),
+	"reset?": type("boolean").describe(
+		"wipe this cell's language kernel before running. Other languages are untouched.",
+	),
 });
 export type EvalCellInput = typeof evalCellSchema.infer;
 
 export const evalSchema = type({
-	cells: evalCellSchema.array().atLeastLength(1),
+	cells: evalCellSchema
+		.array()
+		.atLeastLength(1)
+		.describe("cells executed in order. State persists within each language across cells and tool calls."),
 });
 export type EvalToolParams = typeof evalSchema.infer;
 

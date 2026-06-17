@@ -53,13 +53,13 @@ function getPriorityDisplay(
 // report_finding schema
 // report_finding schema
 const ReportFindingParams = type({
-	title: "string",
-	body: "string",
-	priority: "'P0' | 'P1' | 'P2' | 'P3'",
-	confidence: "number >= 0 & number <= 1",
-	file_path: "string",
-	line_start: "number",
-	line_end: "number",
+	title: type("string").describe("prefixed imperative title"),
+	body: type("string").describe("problem explanation"),
+	priority: type("'P0' | 'P1' | 'P2' | 'P3'").describe("priority 0-3"),
+	confidence: type("number >= 0 & number <= 1").describe("confidence score"),
+	file_path: type("string").describe("file path"),
+	line_start: type("number").describe("start line"),
+	line_end: type("number").describe("end line"),
 });
 
 interface ReportFindingDetails {

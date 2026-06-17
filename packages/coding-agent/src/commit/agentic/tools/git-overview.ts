@@ -43,8 +43,8 @@ function filterExcludedFiles(files: string[]): { filtered: string[]; excluded: s
 }
 
 const gitOverviewSchema = type({
-	"staged?": "boolean",
-	"include_untracked?": "boolean",
+	"staged?": type("boolean").describe("use staged changes (default true)"),
+	"include_untracked?": type("boolean").describe("include untracked when unstaged"),
 });
 
 export function createGitOverviewTool(cwd: string, state: CommitAgentState): CustomTool<typeof gitOverviewSchema> {

@@ -72,8 +72,8 @@ async function loadFflate(): Promise<typeof import("fflate")> {
 }
 
 const writeSchema = type({
-	path: "string",
-	content: "string",
+	path: type("string").describe("file path"),
+	content: type("string").describe("file content"),
 });
 
 export type WriteToolInput = typeof writeSchema.infer;

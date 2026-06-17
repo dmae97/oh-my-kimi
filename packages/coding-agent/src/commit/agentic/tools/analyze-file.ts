@@ -13,8 +13,8 @@ import type { ToolSession } from "../../../tools";
 import { getFilePriority } from "./git-file-diff";
 
 const analyzeFileSchema = type({
-	files: "string[] >= 1",
-	goal: "string | undefined",
+	files: type("string").describe("file path").array().atLeastLength(1),
+	"goal?": type("string").describe("analysis focus"),
 });
 
 const analyzeFileOutputSchema = {

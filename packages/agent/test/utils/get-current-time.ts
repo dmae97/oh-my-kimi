@@ -28,7 +28,7 @@ export async function getCurrentTime(timezone?: string): Promise<GetCurrentTimeR
 }
 
 const getCurrentTimeSchema = type({
-	timezone: type("string | undefined").describe("Optional timezone (e.g., 'America/New_York', 'Europe/London')"),
+	"timezone?": type("string").describe("Optional timezone (e.g., 'America/New_York', 'Europe/London')"),
 });
 
 type GetCurrentTimeParams = typeof getCurrentTimeSchema.infer;

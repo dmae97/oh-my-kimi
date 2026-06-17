@@ -60,27 +60,27 @@ const IMAGE_PROVIDER_PREFERENCES = new Set<string>(["auto", "antigravity", "gemi
 
 const responseModalitySchema = type('"IMAGE" | "TEXT"');
 
-const aspectRatioSchema = type.enumerated(...XAI_IMAGE_ASPECT_RATIOS);
-const imageSizeSchema = type('"1024x1024" | "1536x1024" | "1024x1536"');
+const aspectRatioSchema = type.enumerated(...XAI_IMAGE_ASPECT_RATIOS).describe("aspect ratio");
+const imageSizeSchema = type('"1024x1024" | "1536x1024" | "1024x1536"').describe("image size");
 
 const inputImageSchema = type({
-	"path?": "string",
-	"data?": "string",
-	"mime_type?": "string",
+	"path?": type("string").describe("input image path"),
+	"data?": type("string").describe("base64 image data"),
+	"mime_type?": type("string").describe("mime type"),
 });
 
 export const imageGenSchema = type({
-	subject: "string",
-	"action?": "string",
-	"scene?": "string",
-	"composition?": "string",
-	"lighting?": "string",
-	"style?": "string",
-	"text?": "string",
-	"changes?": "string[]",
+	subject: type("string").describe("main subject"),
+	"action?": type("string").describe("what subject is doing"),
+	"scene?": type("string").describe("location or environment"),
+	"composition?": type("string").describe("camera angle and framing"),
+	"lighting?": type("string").describe("lighting setup"),
+	"style?": type("string").describe("artistic style"),
+	"text?": type("string").describe("text to render"),
+	"changes?": type("string[]").describe("edits to make"),
 	"aspect_ratio?": aspectRatioSchema,
 	"image_size?": imageSizeSchema,
-	"input?": inputImageSchema.array(),
+	"input?": inputImageSchema.array().describe("input images"),
 });
 export type ImageGenParams = typeof imageGenSchema.infer;
 export type GeminiResponseModality = typeof responseModalitySchema.infer;

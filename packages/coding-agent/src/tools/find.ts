@@ -37,11 +37,15 @@ import { ToolAbortError, ToolError, throwIfAborted } from "./tool-errors";
 import { toolResult } from "./tool-result";
 
 const findSchema = type({
-	paths: "string[] >= 1",
-	"hidden?": "boolean",
-	"gitignore?": "boolean",
-	"limit?": "number",
-	"timeout?": "number",
+	paths: type("string")
+		.describe("glob including search path")
+		.array()
+		.atLeastLength(1)
+		.describe("globs including search paths"),
+	"hidden?": type("boolean").describe("include hidden files"),
+	"gitignore?": type("boolean").describe("respect gitignore"),
+	"limit?": type("number").describe("max results (clamped to 1-200)"),
+	"timeout?": type("number").describe("timeout in seconds (0.5–60)"),
 }).narrow((o, ctx) => {
 	if (o.timeout !== undefined && (o.timeout < 0.5 || o.timeout > 60)) {
 		return ctx.mustBe("a timeout between 0.5 and 60 seconds");

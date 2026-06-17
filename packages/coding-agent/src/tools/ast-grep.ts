@@ -35,9 +35,13 @@ import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 
 const astGrepSchema = type({
-	pat: "string",
-	paths: type("string[]").atLeastLength(1),
-	"skip?": "number",
+	pat: type("string").describe("ast pattern"),
+	paths: type("string")
+		.describe("file, directory, glob, or internal URL to search")
+		.array()
+		.atLeastLength(1)
+		.describe("files, directories, globs, or internal URLs to search"),
+	"skip?": type("number").describe("matches to skip"),
 });
 
 async function runMultiTargetAstGrep(

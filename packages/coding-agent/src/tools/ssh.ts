@@ -24,10 +24,10 @@ import { toolResult } from "./tool-result";
 import { clampTimeout } from "./tool-timeouts";
 
 const sshSchema = type({
-	host: "string",
-	command: "string",
-	"cwd?": "string",
-	"timeout?": "number",
+	host: type("string").describe("ssh host"),
+	command: type("string").describe("remote command"),
+	"cwd?": type("string").describe("remote working directory"),
+	"timeout?": type("number").describe("timeout in seconds"),
 });
 
 export interface SSHToolDetails {

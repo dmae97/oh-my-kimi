@@ -80,17 +80,17 @@ export const ROLE_LABEL_MAX = 80;
 export const ROLE_INPUT_MAX = 256;
 
 export const taskItemSchema = type({
-	id: "string | undefined",
-	description: "string | undefined",
-	role: "string | undefined",
+	"id?": "string",
+	"description?": "string",
+	"role?": "string",
 	assignment: "string",
 });
 const taskItemSchemaIsolated = type({
-	id: "string | undefined",
-	description: "string | undefined",
-	role: "string | undefined",
+	"id?": "string",
+	"description?": "string",
+	"role?": "string",
 	assignment: "string",
-	isolated: "boolean | undefined",
+	"isolated?": "boolean",
 });
 
 /** Single task item. Fields are optional defensively: args stream in token by token. */
@@ -109,17 +109,17 @@ export interface TaskItem {
 
 export const taskSchema = type({
 	agent: "string",
-	id: "string | undefined",
-	description: "string | undefined",
-	role: "string | undefined",
+	"id?": "string",
+	"description?": "string",
+	"role?": "string",
 	assignment: "string",
-	isolated: "boolean | undefined",
+	"isolated?": "boolean",
 });
 const taskSchemaNoIsolation = type({
 	agent: "string",
-	id: "string | undefined",
-	description: "string | undefined",
-	role: "string | undefined",
+	"id?": "string",
+	"description?": "string",
+	"role?": "string",
 	assignment: "string",
 });
 const taskSchemaBatch = type({

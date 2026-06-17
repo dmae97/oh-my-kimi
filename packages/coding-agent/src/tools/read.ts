@@ -663,7 +663,9 @@ function prependSuffixResolutionNotice(text: string, suffixResolution?: { from: 
 }
 
 const readSchema = type({
-	path: "string",
+	path: type("string").describe(
+		'Local path, internal URI (e.g. "omp://", "issue://123", "pr://123"), or URL; append :<sel> for line ranges or raw mode (e.g. "src/foo.ts:50-100")',
+	),
 });
 
 export type ReadToolInput = typeof readSchema.infer;
