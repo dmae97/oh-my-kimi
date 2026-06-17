@@ -12,6 +12,7 @@ import {
 	isAnthropicNamespacedModelId,
 	isClaudeModelId,
 	isDeepseekModelIdOrName,
+	isGlm52ReasoningEffortModelId,
 	isKimiK26ModelId,
 	isKimiModelId,
 	isMimoModelIdOrName,
@@ -82,6 +83,7 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 	const isCerebras = modelMatchesHost(hostModel, "cerebras");
 	const isZai = modelMatchesHost(hostModel, "zai");
 	const isZhipu = modelMatchesHost(hostModel, "zhipu");
+	const supportsZaiReasoningEffort = (isZai || isZhipu) && isGlm52ReasoningEffortModelId(spec.id);
 	const isKilo = modelMatchesHost(hostModel, "kilo");
 	const isKimiModel = isKimiModelId(spec.id);
 	const isMoonshotNative = modelMatchesHost(hostModel, "moonshotNative");
@@ -136,6 +138,8 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 	const useMaxTokens =
 		isMistral ||
 		isMoonshotNative ||
+		isZai ||
+		isZhipu ||
 		hostMatchesUrl(baseUrl, "chutes") ||
 		hostMatchesUrl(baseUrl, "fireworks") ||
 		isDirectDeepseekApi;
@@ -202,7 +206,7 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 		// OpenAI's reasoning-API surface.
 		supportsDeveloperRole: isOpenAIHost || isAzureHost,
 		supportsMultipleSystemMessages: supportsMultipleSystemMessagesDefault,
-		supportsReasoningEffort: !isGrok && !isZai && !isZhipu && !isXiaomiMimo,
+		supportsReasoningEffort: !isGrok && !isXiaomiMimo && (!(isZai || isZhipu) || supportsZaiReasoningEffort),
 		// GitHub Copilot's chat-completions endpoint rejects reasoning params wholesale.
 		supportsReasoningParams: provider !== "github-copilot",
 		reasoningEffortMap: {},
