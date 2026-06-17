@@ -5,6 +5,7 @@ import {
 	isKimiK26ModelId,
 	isKimiModelId,
 	isMinimaxM2FamilyModelId,
+	isMinimaxM3FamilyModelId,
 	isOpenAIGptOssModelId,
 	isReasoningGlmModelId,
 	modelFamilyToken,
@@ -90,6 +91,21 @@ describe("isMinimaxM2FamilyModelId", () => {
 		// Lone "m2" string with no MiniMax context does not match.
 		expect(isMinimaxM2FamilyModelId("kimi-m2")).toBe(false);
 		expect(isMinimaxM2FamilyModelId("gpt-oss-120b")).toBe(false);
+	});
+});
+
+describe("isMinimaxM3FamilyModelId", () => {
+	test("matches MiniMax M3 ids without broadening the M2 effort predicate", () => {
+		expect(isMinimaxM3FamilyModelId("MiniMax-M3")).toBe(true);
+		expect(isMinimaxM3FamilyModelId("minimax-m3")).toBe(true);
+		expect(isMinimaxM3FamilyModelId("minimax/minimax-m3")).toBe(true);
+		expect(isMinimaxM3FamilyModelId("minimax-m3-free")).toBe(true);
+		expect(isMinimaxM3FamilyModelId("minimax/m3")).toBe(true);
+
+		expect(isMinimaxM3FamilyModelId("MiniMax-M2.7")).toBe(false);
+		expect(isMinimaxM3FamilyModelId("MiniMax-Text-01")).toBe(false);
+		expect(isMinimaxM3FamilyModelId("minimax-music")).toBe(false);
+		expect(isMinimaxM3FamilyModelId("kimi-m3")).toBe(false);
 	});
 });
 
