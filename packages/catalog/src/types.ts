@@ -54,6 +54,14 @@ export interface ThinkingConfig {
 	 */
 	effortRouting?: Readonly<Partial<Record<Effort | "off", string>>>;
 	/**
+	 * Per-effort thinking budget in tokens, baked at build time for collapsed
+	 * variants whose upstream expects an explicit `thinkingBudget` instead of a
+	 * value derived from the generic ladder (Antigravity Cloud Code Assist
+	 * gemini-3.x). Request mapping prefers caller `thinkingBudgets`, then this
+	 * map, then the provider default ladder. Only meaningful for `mode: "budget"`.
+	 */
+	effortBudgets?: Readonly<Partial<Record<Effort, number>>>;
+	/**
 	 * When true, a thinking-off request MUST explicitly suppress thinking on
 	 * the wire (google-level: `thinkingLevel: "MINIMAL"` + `includeThoughts:
 	 * false`; budget: `thinkingBudget: 0`) instead of omitting thinkingConfig —

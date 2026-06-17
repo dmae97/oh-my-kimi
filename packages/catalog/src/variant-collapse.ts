@@ -107,6 +107,23 @@ const GEMINI_3_FLASH_FAMILY_EFFORTS: readonly Effort[] = [Effort.Minimal, Effort
 const GEMINI_3_PRO_FAMILY_EFFORTS: readonly Effort[] = [Effort.Low, Effort.High];
 
 /**
+ * Antigravity Cloud Code Assist sends an explicit `thinkingBudget` per tier
+ * (verified against captured `daily-cloudcode-pa` requests). Flash uses round
+ * budgets; Pro offsets every budget by +1. Minimal mirrors Low (the Antigravity
+ * UI exposes Low/Medium/High only) so the effort stays selectable.
+ */
+const GEMINI_3_FLASH_FAMILY_BUDGETS: Readonly<Partial<Record<Effort, number>>> = {
+	[Effort.Minimal]: 1000,
+	[Effort.Low]: 1000,
+	[Effort.Medium]: 4000,
+	[Effort.High]: 10000,
+};
+const GEMINI_3_PRO_FAMILY_BUDGETS: Readonly<Partial<Record<Effort, number>>> = {
+	[Effort.Low]: 1001,
+	[Effort.High]: 10001,
+};
+
+/**
  * Shared by `google-antigravity` and `google-gemini-cli` — both serve the
  * Antigravity discovery list (`fetchAntigravityDiscoveryModels`).
  */
@@ -118,12 +135,16 @@ export const ANTIGRAVITY_VARIANT_COLLAPSE_TABLE: VariantCollapseTable = {
 			members: ["gemini-3.5-flash-extra-low", "gemini-3.5-flash-low", "gemini-3-flash-agent"],
 			routing: {
 				off: "gemini-3.5-flash-extra-low",
-				[Effort.Minimal]: "gemini-3-flash-agent",
+				[Effort.Minimal]: "gemini-3.5-flash-extra-low",
 				[Effort.Low]: "gemini-3.5-flash-extra-low",
-				[Effort.Medium]: "gemini-3.5-flash-extra-low",
-				[Effort.High]: "gemini-3.5-flash-low",
+				[Effort.Medium]: "gemini-3.5-flash-low",
+				[Effort.High]: "gemini-3-flash-agent",
 			},
-			thinking: { mode: "google-level", efforts: GEMINI_3_FLASH_FAMILY_EFFORTS },
+			thinking: {
+				mode: "budget",
+				efforts: GEMINI_3_FLASH_FAMILY_EFFORTS,
+				effortBudgets: GEMINI_3_FLASH_FAMILY_BUDGETS,
+			},
 			suppressWhenOff: true,
 			// Retired bare id; the alias only fires when no live model holds it
 			// (exact match wins in every resolver).
@@ -145,7 +166,7 @@ export const ANTIGRAVITY_VARIANT_COLLAPSE_TABLE: VariantCollapseTable = {
 				[Effort.Low]: "gemini-3.1-pro-low",
 				[Effort.High]: "gemini-pro-agent",
 			},
-			thinking: { mode: "google-level", efforts: GEMINI_3_PRO_FAMILY_EFFORTS },
+			thinking: { mode: "budget", efforts: GEMINI_3_PRO_FAMILY_EFFORTS, effortBudgets: GEMINI_3_PRO_FAMILY_BUDGETS },
 			suppressWhenOff: true,
 		},
 		{
@@ -158,6 +179,8 @@ export const ANTIGRAVITY_VARIANT_COLLAPSE_TABLE: VariantCollapseTable = {
 				[Effort.Low]: "gemini-3-pro-low",
 				[Effort.High]: "gemini-3-pro-high",
 			},
+			// Legacy ids are stale-cache only and unverified against the budget-mode
+			// CCA contract; keep them on the inferred level transport.
 			thinking: { mode: "google-level", efforts: GEMINI_3_PRO_FAMILY_EFFORTS },
 			suppressWhenOff: true,
 		},
