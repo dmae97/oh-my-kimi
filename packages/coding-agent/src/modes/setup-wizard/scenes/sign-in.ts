@@ -3,12 +3,17 @@ import { PASTE_CODE_LOGIN_PROVIDERS } from "@oh-my-pi/pi-ai";
 import type { OAuthProvider } from "@oh-my-pi/pi-ai/oauth/types";
 import { Input, matchesKey, type SgrMouseEvent, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
 import { getAgentDbPath } from "@oh-my-pi/pi-utils";
+import { copyToClipboard } from "../../../utils/clipboard";
 import { OAuthSelectorComponent } from "../../components/oauth-selector";
 import { theme } from "../../theme/theme";
 import type { SetupSceneHost, SetupTab } from "./types";
 
 function loginUrlLink(url: string): string {
 	return `\x1b]8;;${url}\x07Open login URL\x1b]8;;\x07`;
+}
+
+function loginCopyHint(): string {
+	return theme.fg("dim", "(clipboard copy attempted; Alt+C retries)");
 }
 
 interface PromptState {
@@ -62,6 +67,10 @@ export class SignInTab implements SetupTab {
 
 	handleInput(data: string): void {
 		if (this.#loggingInProvider) {
+			if (this.#authUrl && (matchesKey(data, "alt+c") || (data === "c" && !this.#prompt))) {
+				void this.#copyAuthUrl();
+				return;
+			}
 			if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
 				this.#loginAbort?.abort();
 			}
@@ -88,7 +97,10 @@ export class SignInTab implements SetupTab {
 
 		const urlLines = this.#authUrl ? wrapTextWithAnsi(theme.fg("dim", this.#authUrl), width) : [];
 		if (this.#authUrl) {
-			lines.push(theme.fg("accent", `Browser login: ${loginUrlLink(this.#authUrl)}`), ...urlLines.slice(0, 2));
+			lines.push(
+				theme.fg("accent", `Browser login: ${loginUrlLink(this.#authUrl)} ${loginCopyHint()}`),
+				...urlLines.slice(0, 2),
+			);
 		}
 		if (this.#prompt) {
 			lines.push(theme.fg("warning", this.#prompt.message));
@@ -140,6 +152,7 @@ export class SignInTab implements SetupTab {
 					if (useManualInput) {
 						this.#statusLines.push(theme.fg("dim", "Paste the returned code or redirect URL when prompted."));
 					}
+					void this.#copyAuthUrl();
 					this.host.ctx.openInBrowser(info.url);
 					this.host.requestRender();
 				},
@@ -182,6 +195,17 @@ export class SignInTab implements SetupTab {
 			this.host.restoreFocus();
 			this.host.requestRender();
 		}
+	}
+
+	async #copyAuthUrl(): Promise<void> {
+		const url = this.#authUrl;
+		if (!url) return;
+		try {
+			await copyToClipboard(url);
+		} catch {
+			// Clipboard integration is best-effort; the full URL remains rendered below.
+		}
+		this.host.requestRender();
 	}
 
 	#showPrompt(prompt: { message: string; placeholder?: string }): Promise<string> {
