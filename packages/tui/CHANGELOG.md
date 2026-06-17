@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.0.5] - 2026-06-17
+
 ### Added
 
 - Added tight layout support (`setTuiTight`/`getPaddingX`) to dynamically remove 1-character horizontal padding from Text, Markdown, Box, and TruncatedText components.

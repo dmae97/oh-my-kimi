@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.0.5] - 2026-06-17
+
 ### Added
 
 - Added `enableGeminiThinkingLoopGuard` to OpenAI compatibility options to allow explicit opt-in or opt-out of the Gemini thinking-loop guard for OpenAI-compatible model aliases

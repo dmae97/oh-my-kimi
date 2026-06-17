@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.0.5] - 2026-06-17
+
 ### Added
 
 - Added `antigravityEndpointMode` stream option with `auto`, `production`, and `sandbox` values to control Antigravity endpoint routing

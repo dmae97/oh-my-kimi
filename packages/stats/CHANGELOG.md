@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.0.5] - 2026-06-17
+
 ### Added
 
 - New Projects view summarizing usage, cost, and reliability per project folder (backed by the existing `/api/stats/folders` endpoint).
