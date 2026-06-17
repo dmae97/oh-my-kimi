@@ -17,4 +17,17 @@ describe("CustomEditor keybindings", () => {
 
 		expect(onRetry).toHaveBeenCalledTimes(1);
 	});
+
+	it("lets custom handlers keep precedence over the default retry chord", () => {
+		const editor = new CustomEditor(getEditorTheme());
+		const onRetry = vi.fn();
+		const customHandler = vi.fn();
+
+		editor.onRetry = onRetry;
+		editor.setCustomKeyHandler("alt+r", customHandler);
+		editor.handleInput("\x1br");
+
+		expect(customHandler).toHaveBeenCalledTimes(1);
+		expect(onRetry).not.toHaveBeenCalled();
+	});
 });

@@ -586,8 +586,15 @@ export class CustomEditor extends Editor {
 				return;
 			}
 
-			// Intercept configured retry shortcut
+			// Intercept configured retry shortcut. Later user/custom handlers keep
+			// precedence so adding the default Alt+R binding does not steal existing
+			// shortcuts such as app.plan.toggle or extension commands.
 			if (this.#matchesAction(canonical, "app.retry") && this.onRetry) {
+				const customHandler = this.#customMatchKeys.get(canonical);
+				if (customHandler) {
+					customHandler();
+					return;
+				}
 				this.onRetry();
 				return;
 			}
