@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import { formatHashlineHeader, formatNumberedLine, formatNumberedLines } from "@oh-my-pi/hashline";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
@@ -661,6 +662,32 @@ function prependSuffixResolutionNotice(text: string, suffixResolution?: { from: 
 	const notice = `[Path '${suffixResolution.from}' not found; resolved to '${suffixResolution.to}' via suffix match]`;
 	return text ? `${notice}\n${text}` : notice;
 }
+const PDF_IMAGE_PLACEHOLDER_RE = /<!--\s*image:\s*([^\s<>]+)(.*?)-->/g;
+const PDF_IMAGE_MEMBER_RE = /^(.*\.pdf):(.*)$/i;
+const PDF_IMAGE_MEMBER_EXTENSION_RE = /\.png$/i;
+
+function pdfImageMemberPath(pdfPath: string, imageId: string): string {
+	const member = PDF_IMAGE_MEMBER_EXTENSION_RE.test(imageId) ? imageId : `${imageId}.png`;
+	return `${pdfPath}:${member}`;
+}
+
+function rewritePdfImagePlaceholders(markdown: string, pdfPath: string): string {
+	return markdown.replace(PDF_IMAGE_PLACEHOLDER_RE, (_match: string, imageId: string, metadataText: string) => {
+		const metadata = metadataText.trim();
+		const suffix = metadata.length > 0 ? ` (${metadata})` : "";
+		return `Image ${imageId}${suffix}: read \`${pdfImageMemberPath(pdfPath, imageId)}\``;
+	});
+}
+
+function splitPdfImageMemberReadPath(readPath: string): { pdfPath: string; member: string } | null {
+	const match = PDF_IMAGE_MEMBER_RE.exec(readPath);
+	if (!match) return null;
+	const pdfPath = match[1];
+	const member = match[2];
+	if (pdfPath === undefined || member === undefined) return null;
+	if (member.length !== 0 && !PDF_IMAGE_MEMBER_EXTENSION_RE.test(member)) return null;
+	return { pdfPath, member };
+}
 
 const readSchema = type({
 	path: type("string").describe(
@@ -977,6 +1004,113 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		}
 
 		return null;
+	}
+
+	#pdfImageCacheDir(absolutePdfPath: string): string {
+		const artifactsDir = this.session.getArtifactsDir?.();
+		let root = artifactsDir ?? undefined;
+		if (root === undefined) {
+			const sessionFile = this.session.getSessionFile();
+			root = sessionFile?.endsWith(".jsonl")
+				? sessionFile.slice(0, -6)
+				: path.join(os.tmpdir(), "omp-read-pdf-images");
+		}
+		const basename = path.basename(absolutePdfPath).replace(/[^A-Za-z0-9._-]/g, "_");
+		return path.join(root, "read-pdf-images", `${basename}-${Bun.hash(absolutePdfPath).toString(36)}`);
+	}
+
+	async #listPdfImageMembers(imageDir: string): Promise<string[]> {
+		try {
+			const entries = await fs.readdir(imageDir, { withFileTypes: true });
+			const members: string[] = [];
+			for (const entry of entries) {
+				if (entry.isFile() && PDF_IMAGE_MEMBER_EXTENSION_RE.test(entry.name)) members.push(entry.name);
+			}
+			return members.sort();
+		} catch (error) {
+			if (isNotFoundError(error)) return [];
+			throw error;
+		}
+	}
+
+	async #ensurePdfImageCache(absolutePdfPath: string, signal?: AbortSignal): Promise<string> {
+		const imageDir = this.#pdfImageCacheDir(absolutePdfPath);
+		const markerPath = path.join(imageDir, ".extracted");
+		try {
+			await fs.stat(markerPath);
+			return imageDir;
+		} catch (error) {
+			if (!isNotFoundError(error)) throw error;
+		}
+
+		await fs.rm(imageDir, { recursive: true, force: true });
+		await fs.mkdir(imageDir, { recursive: true });
+		const result = await convertFileWithMarkit(absolutePdfPath, signal, { imageDir });
+		if (!result.ok) {
+			await fs.rm(imageDir, { recursive: true, force: true });
+			throw new ToolError(`Cannot extract images from PDF: ${result.error ?? "conversion failed"}`);
+		}
+		await Bun.write(markerPath, "ok");
+		return imageDir;
+	}
+
+	async #readPdfImageMember(
+		absolutePdfPath: string,
+		pdfDisplayPath: string,
+		member: string,
+		suffixResolution: { from: string; to: string } | undefined,
+		signal?: AbortSignal,
+	): Promise<AgentToolResult<ReadToolDetails>> {
+		const imageDir = await this.#ensurePdfImageCache(absolutePdfPath, signal);
+		const members = await this.#listPdfImageMembers(imageDir);
+		if (member.length === 0) {
+			const text =
+				members.length === 0
+					? "No extractable PDF image members found."
+					: `Extractable PDF image members:\n${members
+							.map(imageMember => `- read \`${pdfDisplayPath}:${imageMember}\``)
+							.join("\n")}`;
+			return toolResult<ReadToolDetails>({ resolvedPath: absolutePdfPath, suffixResolution })
+				.text(prependSuffixResolutionNotice(text, suffixResolution))
+				.sourcePath(absolutePdfPath)
+				.done();
+		}
+
+		if (!members.includes(member)) {
+			const available = members.length === 0 ? "(none)" : members.join(", ");
+			throw new ToolError(`PDF image member '${member}' not found. Available members: ${available}`);
+		}
+
+		const imagePath = path.join(imageDir, member);
+		const imageStat = await Bun.file(imagePath).stat();
+		if (imageStat.size > MAX_IMAGE_SIZE) {
+			const sizeStr = formatBytes(imageStat.size);
+			const maxStr = formatBytes(MAX_IMAGE_SIZE);
+			throw new ToolError(`Image file too large: ${sizeStr} exceeds ${maxStr} limit.`);
+		}
+		const metadata = await readImageMetadata(imagePath);
+		const mimeType = metadata?.mimeType;
+		if (!mimeType) throw new ToolError(`PDF image member '${member}' is not a supported image.`);
+		const imageInput = await loadImageInput({
+			path: `${pdfDisplayPath}:${member}`,
+			cwd: this.session.cwd,
+			autoResize: this.#autoResizeImages,
+			maxBytes: MAX_IMAGE_SIZE,
+			resolvedPath: imagePath,
+			detectedMimeType: mimeType,
+			excludeWebP: webpExclusionForModel(this.session.getActiveModel?.()),
+		});
+		if (!imageInput) {
+			throw new ToolError(`Read image file [${mimeType}] failed: unsupported image format.`);
+		}
+		const textNote = prependSuffixResolutionNotice(imageInput.textNote, suffixResolution);
+		return toolResult<ReadToolDetails>({ resolvedPath: absolutePdfPath, suffixResolution })
+			.content([
+				{ type: "text", text: textNote },
+				{ type: "image", data: imageInput.data, mimeType: imageInput.mimeType },
+			])
+			.sourcePath(imageInput.resolvedPath)
+			.done();
 	}
 
 	#buildInMemoryTextResult(
@@ -1901,6 +2035,30 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			return this.#readSqlite(sqlitePath, signal);
 		}
 
+		const pdfImageMemberPath = splitPdfImageMemberReadPath(readPath);
+		if (pdfImageMemberPath) {
+			let absolutePdfPath = resolveReadPath(pdfImageMemberPath.pdfPath, this.session.cwd);
+			let suffixResolution: { from: string; to: string } | undefined;
+			try {
+				const stat = await Bun.file(absolutePdfPath).stat();
+				if (stat.isDirectory())
+					throw new ToolError(`Path '${pdfImageMemberPath.pdfPath}' is a directory, not a PDF file`);
+			} catch (error) {
+				if (!isNotFoundError(error) || isRemoteMountPath(absolutePdfPath)) throw error;
+				const suffixMatch = await this.#findSuffixMatchCached(suffixCache, pdfImageMemberPath.pdfPath, signal);
+				if (!suffixMatch) throw new ToolError(`Path '${pdfImageMemberPath.pdfPath}' not found`);
+				absolutePdfPath = suffixMatch.absolutePath;
+				suffixResolution = { from: pdfImageMemberPath.pdfPath, to: suffixMatch.displayPath };
+			}
+			return this.#readPdfImageMember(
+				absolutePdfPath,
+				pdfImageMemberPath.pdfPath,
+				pdfImageMemberPath.member,
+				suffixResolution,
+				signal,
+			);
+		}
+
 		const localTarget = splitPathAndSel(readPath);
 		const localReadPath = localTarget.path;
 		const parsed = parseSel(localTarget.sel);
@@ -2052,20 +2210,22 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			// Convert document via markit.
 			const result = await convertFileWithMarkit(absolutePath, signal);
 			if (result.ok) {
+				const renderedContent =
+					ext === ".pdf" ? rewritePdfImagePlaceholders(result.content, localReadPath) : result.content;
 				// Route the converted markdown through the in-memory text builder
 				// so line-range selectors (`file.pdf:50-100`, `:5-16,40-80`) and
 				// raw mode apply against the converted output. Without this,
 				// `file.pdf:50-100` silently returned the head of the document
 				// because only `truncateHead` was being applied.
 				if (isMultiRange(parsed) && parsed.kind === "lines") {
-					return this.#buildInMemoryMultiRangeResult(result.content, parsed.ranges, {
+					return this.#buildInMemoryMultiRangeResult(renderedContent, parsed.ranges, {
 						details: { resolvedPath: absolutePath },
 						sourcePath: absolutePath,
 						entityLabel: "document",
 					});
 				}
 				const { offset, limit } = selToOffsetLimit(parsed);
-				return this.#buildInMemoryTextResult(result.content, offset, limit, {
+				return this.#buildInMemoryTextResult(renderedContent, offset, limit, {
 					details: { resolvedPath: absolutePath },
 					sourcePath: absolutePath,
 					entityLabel: "document",
