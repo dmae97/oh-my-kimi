@@ -538,7 +538,7 @@ describe("antigravity discovery collapsing", () => {
 	it("uses the primary daily endpoint by default", async () => {
 		const requestedUrls: string[] = [];
 		const defaultFetcher = Object.assign(
-			(input: RequestInfo | URL, _init?: RequestInit) => {
+			(input: string | URL | Request, _init?: RequestInit) => {
 				requestedUrls.push(String(input));
 				return Promise.resolve(new Response(JSON.stringify(payload), { status: 200 }));
 			},
