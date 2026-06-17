@@ -500,6 +500,26 @@ describe("model thinking runtime helpers", () => {
 		expect(requireSupportedEffort(model, Effort.XHigh)).toBe(Effort.XHigh);
 	});
 
+	it("maps Ollama Cloud GLM-5.2 xhigh to max and hides unsupported lower efforts", () => {
+		const model = createModel({
+			id: "glm-5.2",
+			api: "ollama-chat",
+			provider: "ollama-cloud",
+			baseUrl: "https://ollama.com",
+		});
+
+		expect(model.thinking).toEqual({
+			mode: "effort",
+			efforts: [Effort.High, Effort.XHigh],
+			effortMap: {
+				xhigh: "max",
+			},
+		});
+		expect(requireSupportedEffort(model, Effort.High)).toBe(Effort.High);
+		expect(requireSupportedEffort(model, Effort.XHigh)).toBe(Effort.XHigh);
+		expect(() => requireSupportedEffort(model, Effort.Medium)).toThrow(/Supported efforts: high, xhigh/);
+	});
+
 	it("derives binary-thinking fallback from resolved compat when catalog compat is partial", () => {
 		const model = createModel({
 			id: "qwen/qwen3-32b",

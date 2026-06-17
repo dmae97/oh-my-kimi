@@ -57,6 +57,7 @@ const GEMINI_3_FLASH_EFFORTS: readonly Effort[] = [Effort.Minimal, Effort.Low, E
 const GPT_5_2_PLUS_EFFORTS: readonly Effort[] = [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh];
 const GPT_5_1_CODEX_MINI_EFFORTS: readonly Effort[] = [Effort.Medium, Effort.High];
 const LOW_MEDIUM_HIGH_REASONING_EFFORTS: readonly Effort[] = [Effort.Low, Effort.Medium, Effort.High];
+const GLM_52_HIGH_MAX_REASONING_EFFORTS: readonly Effort[] = [Effort.High, Effort.XHigh];
 
 type EffortMap = Partial<Record<Effort, string>>;
 
@@ -82,6 +83,9 @@ const ZAI_GLM_52_REASONING_EFFORT_MAP: Readonly<EffortMap> = {
 	[Effort.Low]: "high",
 	[Effort.Medium]: "high",
 	[Effort.High]: "high",
+	[Effort.XHigh]: "max",
+};
+const OLLAMA_CLOUD_GLM_52_REASONING_EFFORT_MAP: Readonly<EffortMap> = {
 	[Effort.XHigh]: "max",
 };
 
@@ -270,6 +274,9 @@ function getModelDefinedEfforts<TApi extends Api>(spec: ModelSpec<TApi>): readon
 	if (spec.api === "openai-completions" && isZaiGlm52ReasoningEffortModel(spec)) {
 		return DEFAULT_REASONING_EFFORTS_WITH_XHIGH;
 	}
+	if (isOllamaCloudGlm52ReasoningEffortModel(spec)) {
+		return GLM_52_HIGH_MAX_REASONING_EFFORTS;
+	}
 	return spec.api === "openai-completions" && (isMinimaxM2FamilyModelId(spec.id) || isOpenAIGptOssModelId(spec.id))
 		? LOW_MEDIUM_HIGH_REASONING_EFFORTS
 		: undefined;
@@ -278,6 +285,10 @@ function getModelDefinedEfforts<TApi extends Api>(spec: ModelSpec<TApi>): readon
 function isZaiGlm52ReasoningEffortModel<TApi extends Api>(spec: ModelSpec<TApi>): boolean {
 	if (!isGlm52ReasoningEffortModelId(spec.id)) return false;
 	return modelMatchesHost(spec, "zai") || modelMatchesHost(spec, "zhipu");
+}
+
+function isOllamaCloudGlm52ReasoningEffortModel<TApi extends Api>(spec: ModelSpec<TApi>): boolean {
+	return spec.api === "ollama-chat" && spec.provider === "ollama-cloud" && isGlm52ReasoningEffortModelId(spec.id);
 }
 
 function readCompatEffortMap(compat: CompatOf<Api>): EffortMap | undefined {
@@ -297,6 +308,9 @@ function inferDetectedEffortMap<TApi extends Api>(
 		return anthropicModelHasRealXHighEffort(spec, parsedModel)
 			? ANTHROPIC_ADAPTIVE_EFFORT_MAP_5_TIER
 			: ANTHROPIC_ADAPTIVE_EFFORT_MAP_4_TIER;
+	}
+	if (isOllamaCloudGlm52ReasoningEffortModel(spec)) {
+		return OLLAMA_CLOUD_GLM_52_REASONING_EFFORT_MAP;
 	}
 	if (spec.api !== "openai-completions") {
 		return undefined;
