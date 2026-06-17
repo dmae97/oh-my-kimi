@@ -53,6 +53,7 @@ export interface BeamConfig {
 	importanceWeight: number;
 	useCloud: boolean;
 	localLlmEnabled: boolean;
+	maxEpisodeChars: number;
 }
 
 export interface BeamMemoryOptions {

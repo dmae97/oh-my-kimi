@@ -54,6 +54,7 @@ function makeState(sessionId = "session-a", events: BeamEvent[] = []): BeamMemor
 			importanceWeight: 0.2,
 			useCloud: false,
 			localLlmEnabled: false,
+			maxEpisodeChars: 100_000,
 		},
 	};
 	states.push(state);
