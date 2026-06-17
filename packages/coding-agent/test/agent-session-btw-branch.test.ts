@@ -203,6 +203,40 @@ describe("AgentSession.branchFromBtw", () => {
 		);
 	});
 
+	it("refuses to branch /btw while user bash work is still running", async () => {
+		const activeSession = await createSession();
+		activeSession.sessionManager.appendMessage({ role: "user", content: "seed", timestamp: Date.now() });
+		await activeSession.sessionManager.flush();
+
+		const bashPromise = activeSession.executeBash('bun -e "await Bun.sleep(60_000)"', () => undefined, {
+			useUserShell: false,
+		});
+		while (!activeSession.isBashRunning) await Bun.sleep(1);
+
+		await expect(activeSession.branchFromBtw("question", createBtwAssistant())).rejects.toThrow(
+			"Cannot branch /btw while shell or Python work is still running",
+		);
+
+		activeSession.abortBash();
+		await bashPromise.catch(() => undefined);
+	});
+
+	it("refuses to branch /btw while user Python work is still running", async () => {
+		const activeSession = await createSession();
+		activeSession.sessionManager.appendMessage({ role: "user", content: "seed", timestamp: Date.now() });
+		await activeSession.sessionManager.flush();
+		const abortController = new AbortController();
+		const execution = new Promise<void>(() => {});
+		activeSession.trackEvalExecution(execution, abortController).catch(() => undefined);
+		expect(activeSession.isEvalRunning).toBe(true);
+
+		await expect(activeSession.branchFromBtw("question", createBtwAssistant())).rejects.toThrow(
+			"Cannot branch /btw while shell or Python work is still running",
+		);
+
+		abortController.abort();
+	});
+
 	it("throws for in-memory sessions", async () => {
 		const activeSession = await createSession({ persisted: false });
 		activeSession.sessionManager.appendMessage({ role: "user", content: "seed", timestamp: Date.now() });

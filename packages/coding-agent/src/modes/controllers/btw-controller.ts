@@ -8,6 +8,7 @@ interface BtwRequest {
 	component: BtwPanelComponent;
 	abortController: AbortController;
 	question: string;
+	leafId: string | null;
 }
 
 function assistantMessageWithReplyText(assistantMessage: AssistantMessage, replyText: string): AssistantMessage {
@@ -36,6 +37,7 @@ export class BtwController {
 	#lastQuestion: string | undefined;
 	#lastReplyText: string | undefined;
 	#lastAssistantMessage: AssistantMessage | undefined;
+	#lastLeafId: string | null | undefined;
 	#branchInFlight = false;
 
 	constructor(private readonly ctx: InteractiveModeContext) {}
@@ -50,7 +52,8 @@ export class BtwController {
 			this.#activeRequest?.component.isBranchable() === true &&
 			this.#lastQuestion !== undefined &&
 			this.#lastReplyText !== undefined &&
-			this.#lastAssistantMessage !== undefined
+			this.#lastAssistantMessage !== undefined &&
+			this.#lastLeafId === this.ctx.sessionManager.getLeafId()
 		);
 	}
 
@@ -94,6 +97,7 @@ export class BtwController {
 			component: new BtwPanelComponent({ question: trimmedQuestion, tui: this.ctx.ui }),
 			abortController: new AbortController(),
 			question: trimmedQuestion,
+			leafId: this.ctx.sessionManager.getLeafId(),
 		};
 		this.ctx.btwContainer.clear();
 		this.ctx.btwContainer.addChild(request.component);
@@ -126,6 +130,7 @@ export class BtwController {
 				this.#lastQuestion = request.question;
 				this.#lastReplyText = replyText;
 				this.#lastAssistantMessage = assistantMessageWithReplyText(assistantMessage, replyText);
+				this.#lastLeafId = request.leafId;
 			} else {
 				this.#clearBranchState();
 			}
@@ -158,6 +163,7 @@ export class BtwController {
 		this.#lastQuestion = undefined;
 		this.#lastReplyText = undefined;
 		this.#lastAssistantMessage = undefined;
+		this.#lastLeafId = undefined;
 	}
 
 	#isActiveRequest(request: BtwRequest): boolean {

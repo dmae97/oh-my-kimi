@@ -49,14 +49,19 @@ function makeFakeSession(
 }
 
 function makeCtx(session: InteractiveModeContext["session"], btwContainer = new Container()): InteractiveModeContext {
+	let leafId: string | null = "leaf-1";
 	return {
 		ui: { requestRender: vi.fn(), requestComponentRender: vi.fn() } as unknown as TUI,
 		btwContainer,
 		session,
+		sessionManager: { getLeafId: () => leafId } as unknown as InteractiveModeContext["sessionManager"],
 		showStatus: vi.fn(),
 		showError: vi.fn(),
 		handleBtwBranch: vi.fn(async () => {}),
-	} as unknown as InteractiveModeContext;
+		setTestLeafId(nextLeafId: string | null) {
+			leafId = nextLeafId;
+		},
+	} as unknown as InteractiveModeContext & { setTestLeafId(nextLeafId: string | null): void };
 }
 
 beforeAll(async () => {
@@ -348,6 +353,25 @@ describe("BtwController", () => {
 
 		releaseBranch.resolve();
 		expect(await firstBranch).toBe(true);
+	});
+
+	it("does not branch a completed answer after the session leaf changes", async () => {
+		const assistantMessage = createAssistantMessage("Answer");
+		const runEphemeralTurn = vi.fn(async () => ({ replyText: "Answer", assistantMessage }));
+		const ctx = makeCtx(makeFakeSession(runEphemeralTurn)) as InteractiveModeContext & {
+			setTestLeafId(nextLeafId: string | null): void;
+		};
+		const controller = new BtwController(ctx);
+
+		await controller.start("Question?");
+		await drainBtwRequest();
+		expect(controller.canBranch()).toBe(true);
+
+		ctx.setTestLeafId("leaf-2");
+
+		expect(controller.canBranch()).toBe(false);
+		expect(await controller.handleBranch()).toBe(false);
+		expect(ctx.handleBtwBranch).not.toHaveBeenCalled();
 	});
 
 	it("clears stored branch state on escape and dispose", async () => {
