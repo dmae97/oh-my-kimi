@@ -226,7 +226,7 @@ describe("AgentSession.branchFromBtw", () => {
 		activeSession.sessionManager.appendMessage({ role: "user", content: "seed", timestamp: Date.now() });
 		await activeSession.sessionManager.flush();
 		const abortController = new AbortController();
-		const execution = new Promise<void>(() => {});
+		const execution = Promise.withResolvers<void>().promise;
 		activeSession.trackEvalExecution(execution, abortController).catch(() => undefined);
 		expect(activeSession.isEvalRunning).toBe(true);
 

@@ -53,6 +53,7 @@ export class BtwController {
 			this.#lastQuestion !== undefined &&
 			this.#lastReplyText !== undefined &&
 			this.#lastAssistantMessage !== undefined &&
+			this.#lastLeafId !== null &&
 			this.#lastLeafId === this.ctx.sessionManager.getLeafId()
 		);
 	}

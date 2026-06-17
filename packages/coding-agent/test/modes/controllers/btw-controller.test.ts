@@ -112,10 +112,8 @@ describe("BtwController", () => {
 
 	it("replaces a previous request by aborting it before issuing the next runEphemeralTurn", async () => {
 		const signals: AbortSignal[] = [];
-		let firstRelease!: () => void;
-		const firstPromise = new Promise<RunEphemeralTurnResult>(resolve => {
-			firstRelease = () => resolve({ replyText: "first", assistantMessage: createAssistantMessage("first") });
-		});
+		const first = Promise.withResolvers<RunEphemeralTurnResult>();
+		const firstPromise = first.promise;
 		const runEphemeralTurn = vi
 			.fn<(args: RunEphemeralTurnArgs) => Promise<RunEphemeralTurnResult>>()
 			.mockImplementationOnce(async args => {
@@ -141,11 +139,11 @@ describe("BtwController", () => {
 		expect(signals[1]?.aborted).toBe(false);
 		expect(btwContainer.children).toHaveLength(1);
 		// Allow the orphaned first request to finish to keep the test clean.
-		firstRelease();
+		first.resolve({ replyText: "first", assistantMessage: createAssistantMessage("first") });
 	});
 
 	it("clears the panel when the active request is dismissed via Escape", async () => {
-		const runEphemeralTurn = vi.fn(async () => new Promise<RunEphemeralTurnResult>(() => {}));
+		const runEphemeralTurn = vi.fn(async () => Promise.withResolvers<RunEphemeralTurnResult>().promise);
 		const btwContainer = new Container();
 		const ctx = makeCtx(makeFakeSession(runEphemeralTurn), btwContainer);
 		const controller = new BtwController(ctx);
@@ -185,11 +183,26 @@ describe("BtwController", () => {
 	});
 
 	it("does not allow branch while /btw is still running", async () => {
-		const runEphemeralTurn = vi.fn(async () => new Promise<RunEphemeralTurnResult>(() => {}));
+		const runEphemeralTurn = vi.fn(async () => Promise.withResolvers<RunEphemeralTurnResult>().promise);
 		const ctx = makeCtx(makeFakeSession(runEphemeralTurn));
 		const controller = new BtwController(ctx);
 
 		await controller.start("Question?");
+
+		expect(controller.canBranch()).toBe(false);
+	});
+
+	it("does not allow branch when the completed answer has no originating leaf", async () => {
+		const assistantMessage = createAssistantMessage("Answer");
+		const runEphemeralTurn = vi.fn(async () => ({ replyText: "Answer", assistantMessage }));
+		const ctx = makeCtx(makeFakeSession(runEphemeralTurn)) as InteractiveModeContext & {
+			setTestLeafId(nextLeafId: string | null): void;
+		};
+		ctx.setTestLeafId(null);
+		const controller = new BtwController(ctx);
+
+		await controller.start("Question?");
+		await drainBtwRequest();
 
 		expect(controller.canBranch()).toBe(false);
 	});
@@ -221,7 +234,7 @@ describe("BtwController", () => {
 	});
 
 	it("does not allow branch after aborted or errored requests", async () => {
-		const abortedRun = vi.fn(async () => new Promise<RunEphemeralTurnResult>(() => {}));
+		const abortedRun = vi.fn(async () => Promise.withResolvers<RunEphemeralTurnResult>().promise);
 		const abortedController = new BtwController(makeCtx(makeFakeSession(abortedRun)));
 		await abortedController.start("Question?");
 		expect(abortedController.handleEscape()).toBe(true);
