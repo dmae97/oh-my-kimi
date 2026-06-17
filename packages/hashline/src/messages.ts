@@ -203,12 +203,14 @@ function formatLineRanges(lines: readonly number[]): string {
  * files; reject and make the model re-read those exact lines first.
  */
 export function unseenLinesMessage(sectionPath: string, unseenLines: readonly number[], tag: string): string {
+	const ranges = formatLineRanges(unseenLines);
+	const selector = ranges.replace(/, /g, ",");
 	return (
-		`This edit targets line(s) ${formatLineRanges(unseenLines)} of ${sectionPath} that were not shown in the ` +
-		`read/search output for ${HL_FILE_PREFIX}${sectionPath}${HL_FILE_HASH_SEP}${tag}${HL_FILE_SUFFIX} — a partial ` +
-		`range, a search hit, or a structural summary that collapsed bodies was displayed, not those exact lines. ` +
-		`Re-read those lines, then re-issue the edit against the fresh tag. NEVER author hunks against line numbers ` +
-		`you have not seen in the current snapshot.`
+		`This edit anchors to lines ${ranges} of ${sectionPath} that ` +
+		`${HL_FILE_PREFIX}${sectionPath}${HL_FILE_HASH_SEP}${tag}${HL_FILE_SUFFIX} never displayed (it showed a ` +
+		`partial range, a search hit, or a folded summary). Re-read them in full first with a ranged read like ` +
+		`\`${sectionPath}:${selector}\` — it skips summarization and mints a fresh tag (a plain re-read just re-folds ` +
+		`them) — then re-issue the edit.`
 	);
 }
 

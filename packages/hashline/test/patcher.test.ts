@@ -177,7 +177,7 @@ describe("Patcher seen-line provenance", () => {
 		const patcher = new Patcher({ fs, snapshots });
 
 		await expect(patcher.apply(Patch.parse(`[${PATH}#${tag}]\nSWAP 4.=4:\n+L4`))).rejects.toThrow(
-			/were not shown in the read\/search output/,
+			/never displayed \(it showed/,
 		);
 		expect(fs.get(PATH)).toBe(CONTENT);
 	});
