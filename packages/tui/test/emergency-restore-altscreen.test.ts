@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { emergencyTerminalRestore, ProcessTerminal, setAltScreenActive } from "@oh-my-pi/pi-tui/terminal";
+import { setTerminalHeadless } from "@oh-my-pi/pi-utils";
 
 // Regression coverage for the Windows shell-handoff corruption on exit:
 // `emergencyTerminalRestore()` used to write DECRST 1049 ("leave alternate
@@ -16,6 +17,11 @@ import { emergencyTerminalRestore, ProcessTerminal, setAltScreenActive } from "@
 const stdinIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 const stdoutIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
 const stdinSetRawModeDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "setRawMode");
+// This suite asserts the real emergencyTerminalRestore() write path, so it opts
+// out of the test-default headless suppression. Restored in afterEach (not the
+// helper) so the blind restore branch — gated on !isTerminalHeadless() — still
+// runs while the test drives emergencyTerminalRestore() after terminal.stop().
+let previousHeadless = false;
 
 function restoreProperty(target: object, key: string, descriptor: PropertyDescriptor | undefined): void {
 	if (descriptor) {
@@ -48,8 +54,13 @@ function startCapturedTerminal() {
 }
 
 describe("emergencyTerminalRestore alt-screen gating", () => {
+	beforeEach(() => {
+		previousHeadless = setTerminalHeadless(false);
+	});
+
 	afterEach(() => {
 		setAltScreenActive(false);
+		setTerminalHeadless(previousHeadless);
 		vi.restoreAllMocks();
 		restoreProperty(process.stdin, "isTTY", stdinIsTtyDescriptor);
 		restoreProperty(process.stdout, "isTTY", stdoutIsTtyDescriptor);

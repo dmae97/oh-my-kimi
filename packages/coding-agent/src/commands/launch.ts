@@ -106,6 +106,9 @@ export default class Index extends Command {
 		"hide-thinking": Flags.boolean({
 			description: "Hide thinking blocks in TUI output (display only, does not disable model thinking)",
 		}),
+		advisor: Flags.boolean({
+			description: "Enable the advisor runtime (passively reviews each turn and injects notes)",
+		}),
 		hook: Flags.string({
 			description: "Load a hook/extension file (can be used multiple times)",
 			multiple: true,

@@ -109,8 +109,8 @@ async function runWorkerEntrypoint(arg: string | undefined): Promise<boolean> {
 		// this dispatch completes — so anything the parent posted right after
 		// spawning (the smoke ping, the first parse request) would be dropped.
 		// Park early events and replay them once the module's handler is live.
-		// (The tab/eval workers are immune: `parentPort.on("message")` queues
-		// until a listener attaches.)
+		// Worker-thread entries using `parentPort` need the same sync-prefix
+		// buffering; the tab/eval cases install that inbox below before import.
 		const scope = globalThis as unknown as { onmessage: ((event: MessageEvent) => void) | null };
 		const pending: MessageEvent[] = [];
 		const buffer = (event: MessageEvent): void => {

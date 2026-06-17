@@ -283,6 +283,45 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		}
 	});
 
+	test("prefers Codex OAuth over plain OpenAI for the shared startup default", async () => {
+		const openaiDefault = getBundledModel("openai", "gpt-5.5");
+		const codexDefault = getBundledModel("openai-codex", "gpt-5.5");
+		if (!openaiDefault || !codexDefault) {
+			throw new Error("Expected bundled OpenAI and Codex GPT-5.5 defaults");
+		}
+
+		const authStorage = await AuthStorage.create(path.join(tempDir, "codex-fallback-auth.db"));
+		authStoragesToClose.push(authStorage);
+		authStorage.setRuntimeApiKey("openai", "sk-or-v1-invalid-openai-key");
+		authStorage.setRuntimeApiKey("openai-codex", "codex-oauth-token");
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+
+		const { session } = await createAgentSession({
+			cwd: tempDir,
+			agentDir: tempDir,
+			authStorage,
+			modelRegistry,
+			settings: Settings.isolated({ enabledModels: ["openai/gpt-5.5", "openai-codex/gpt-5.5"] }),
+			sessionManager: SessionManager.inMemory(),
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+			skipPythonPreflight: true,
+		});
+
+		try {
+			expect(session.model?.provider).toBe("openai-codex");
+			expect(session.model?.id).toBe(codexDefault.id);
+			expect(session.model?.id).toBe(openaiDefault.id);
+		} finally {
+			await session.dispose();
+		}
+	});
+
 	test("restores role model from extension provider after startup resume", async () => {
 		const defaultModel = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!defaultModel) {

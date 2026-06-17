@@ -317,6 +317,81 @@ describe("ACP lazy startup", () => {
 			});
 		}
 	});
+
+	it("honors explicit todo settings for protocol hosts", async () => {
+		const { runRootCommand } = await import("@oh-my-pi/pi-coding-agent/main");
+
+		type ObservedTodoSettings = {
+			enabled: boolean;
+			reminders: boolean;
+			eager: "default" | "preferred" | "always";
+		};
+
+		const runProtocolStartup = async (mode: "rpc" | "rpc-ui" | "acp"): Promise<ObservedTodoSettings> => {
+			using tempDir = TempDir.createSync("@omp-protocol-todo-settings-");
+			const cwd = tempDir.path();
+			const authStorage = await AuthStorage.create(path.join(cwd, "auth.db"));
+			const settings = Settings.isolated({
+				"todo.enabled": false,
+				"todo.reminders": false,
+				"todo.eager": "always",
+			});
+			let observed: ObservedTodoSettings | undefined;
+			const stopMessage = "stop test protocol todo settings";
+			const observe = () => {
+				observed = {
+					enabled: settings.get("todo.enabled"),
+					reminders: settings.get("todo.reminders"),
+					eager: settings.get("todo.eager"),
+				};
+				throw new Error(stopMessage);
+			};
+
+			try {
+				await runRootCommand(
+					{
+						mode,
+						messages: [],
+						fileArgs: [],
+						unknownFlags: new Map(),
+						unrecognizedFlags: [],
+						noSkills: true,
+						noRules: true,
+						noTools: true,
+						noLsp: true,
+						noExtensions: true,
+						sessionDir: cwd,
+					},
+					[],
+					{
+						discoverAuthStorage: async () => authStorage,
+						settings,
+						createAgentSession: async () => observe(),
+						runAcpMode: async () => observe(),
+					},
+				);
+			} catch (error) {
+				if (!(error instanceof Error) || error.message !== stopMessage) {
+					throw error;
+				}
+			} finally {
+				authStorage.close();
+			}
+
+			if (!observed) {
+				throw new Error("Expected protocol mode to start");
+			}
+			return observed;
+		};
+
+		for (const mode of ["rpc", "rpc-ui", "acp"] as const) {
+			await expect(runProtocolStartup(mode)).resolves.toEqual({
+				enabled: false,
+				reminders: false,
+				eager: "always",
+			});
+		}
+	});
 	it("answers initialize before creating the first AgentSession", async () => {
 		const clientToAgent = new TransformStream();
 		const agentToClient = new TransformStream();

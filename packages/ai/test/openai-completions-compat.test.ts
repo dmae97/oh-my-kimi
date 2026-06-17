@@ -78,6 +78,26 @@ function baseContext(): Context {
 	};
 }
 
+function zaiGlm52Model(): Model<"openai-completions"> {
+	return buildModel({
+		id: "glm-5.2",
+		name: "GLM-5.2",
+		api: "openai-completions",
+		provider: "zhipu-coding-plan",
+		baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+		reasoning: true,
+		compat: {
+			thinkingFormat: "zai",
+			reasoningContentField: "reasoning_content",
+			supportsDeveloperRole: false,
+		},
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 1_000_000,
+		maxTokens: 131_072,
+	} satisfies ModelSpec<"openai-completions">);
+}
+
 async function captureOpenAICompletionsPayload(
 	model: Model<"openai-completions">,
 	context: Context = baseContext(),
@@ -563,6 +583,56 @@ describe("openai-completions compatibility", () => {
 		const payload = await promise;
 		const chatTemplateArgs = getNestedObject(payload, "chat_template_kwargs");
 		expect(getNestedBoolean(chatTemplateArgs, "enable_thinking")).toBe(true);
+	});
+
+	it("maps GLM-5.2 xhigh to Z.AI max and enables tool streaming", async () => {
+		const model = zaiGlm52Model();
+		const readTool: Tool = {
+			name: "read",
+			description: "Read a file",
+			parameters: {
+				type: "object",
+				properties: { path: { type: "string" } },
+				required: ["path"],
+			},
+		};
+
+		const { promise, resolve } = Promise.withResolvers<unknown>();
+		streamOpenAICompletions(
+			model,
+			{ ...baseContext(), tools: [readTool] },
+			{
+				apiKey: "test-key",
+				reasoning: "xhigh",
+				signal: createAbortedSignal(),
+				onPayload: payload => resolve(payload),
+				maxTokens: 65_536,
+			},
+		);
+		const payload = await promise;
+		const thinking = getNestedObject(payload, "thinking");
+
+		expect(Reflect.get(thinking ?? {}, "type")).toBe("enabled");
+		expect(Reflect.get(toObject(payload) ?? {}, "reasoning_effort")).toBe("max");
+		expect(Reflect.get(toObject(payload) ?? {}, "tool_stream")).toBe(true);
+		expect(Reflect.get(toObject(payload) ?? {}, "max_tokens")).toBe(65_536);
+	});
+
+	it("maps GLM-5.2 minimal reasoning to disabled Z.AI thinking", async () => {
+		const model = zaiGlm52Model();
+
+		const { promise, resolve } = Promise.withResolvers<unknown>();
+		streamOpenAICompletions(model, baseContext(), {
+			apiKey: "test-key",
+			reasoning: "minimal",
+			signal: createAbortedSignal(),
+			onPayload: payload => resolve(payload),
+		});
+		const payload = await promise;
+		const thinking = getNestedObject(payload, "thinking");
+
+		expect(Reflect.get(thinking ?? {}, "type")).toBe("disabled");
+		expect(Reflect.get(toObject(payload) ?? {}, "reasoning_effort")).toBeUndefined();
 	});
 
 	it("treats finish_reason end as stop", async () => {

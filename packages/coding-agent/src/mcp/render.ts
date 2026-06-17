@@ -18,6 +18,7 @@ import {
 	JSON_TREE_SCALAR_LEN_EXPANDED,
 	renderJsonTreeLines,
 } from "../tools/json-tree";
+import { formatStyledTruncationWarning, stripOutputNotice } from "../tools/output-meta";
 import { formatExpandHint, truncateToWidth } from "../tools/render-utils";
 import { renderStatusLine } from "../tui";
 import type { MCPToolDetails } from "./tool-bridge";
@@ -78,7 +79,14 @@ export function renderMCPResult(
 
 	// Output section
 	const textContent = result.content?.find(c => c.type === "text")?.text ?? "";
-	const trimmedOutput = textContent.trimEnd();
+	// Strip the LLM-facing spill notice before parsing/rendering: a spilled
+	// result appends `[Showing… artifact://N]` to the body, which would break
+	// JSON detection and bury the recovery link. Surface it as a styled warning
+	// instead, mirroring the built-in read/bash/ssh/browser renderers.
+	const trimmedOutput = stripOutputNotice(textContent, result.details?.meta).trimEnd();
+	const truncationWarning = result.details?.meta?.truncation
+		? formatStyledTruncationWarning(result.details.meta, theme)
+		: null;
 
 	if (!trimmedOutput) {
 		lines.push(theme.fg("dim", "(no output)"));
@@ -104,6 +112,7 @@ export function renderMCPResult(
 				} else if (tree.truncated) {
 					lines.push(theme.fg("dim", "…"));
 				}
+				if (truncationWarning) lines.push(truncationWarning);
 				return new Text(lines.join("\n"), 0, 0);
 			}
 		} catch {
@@ -128,5 +137,6 @@ export function renderMCPResult(
 		lines.push(formatExpandHint(theme, expanded, true));
 	}
 
+	if (truncationWarning) lines.push(truncationWarning);
 	return new Text(lines.join("\n"), 0, 0);
 }

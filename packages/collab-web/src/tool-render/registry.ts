@@ -25,7 +25,6 @@ import { recallRenderer } from "./tools/memory-recall";
 import { reflectRenderer } from "./tools/memory-reflect";
 import { retainRenderer } from "./tools/memory-retain";
 import { readRenderer } from "./tools/read";
-import { renderMermaidRenderer } from "./tools/render-mermaid";
 import { reportFindingRenderer } from "./tools/report-finding";
 import { reportToolIssueRenderer } from "./tools/report-tool-issue";
 import { resolveRenderer } from "./tools/resolve";
@@ -69,7 +68,6 @@ const RENDERERS: Record<string, ToolRenderer> = {
 	reflect: reflectRenderer,
 	retain: retainRenderer,
 	read: readRenderer,
-	render_mermaid: renderMermaidRenderer,
 	report_finding: reportFindingRenderer,
 	report_tool_issue: reportToolIssueRenderer,
 	resolve: resolveRenderer,

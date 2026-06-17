@@ -46,7 +46,7 @@ import "../tools/review";
 import type { AsyncJobManager } from "../async";
 import type { LocalProtocolOptions } from "../internal-urls";
 import { loadOverallPlanReference } from "../plan-mode/plan-handoff";
-import { AgentRegistry } from "../registry/agent-registry";
+import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import { generateCommitMessage } from "../utils/commit-message-generator";
 import * as git from "../utils/git";
 import { type DiscoveryResult, discoverAgents, getAgent } from "./discovery";
@@ -156,7 +156,6 @@ export const READ_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
 	"reflect",
 	"retain",
 	"memory_edit",
-	"render_mermaid",
 	"inspect_image",
 	"checkpoint",
 	"rewind",
@@ -1301,6 +1300,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				parentMnemopiSessionState: this.session.getMnemopiSessionState?.(),
 				parentTelemetry: this.session.getTelemetry?.(),
 				parentEvalSessionId,
+				parentAgentId: this.session.getAgentId?.() ?? MAIN_AGENT_ID,
 			};
 
 			const runTask = async (): Promise<SingleResult> => {

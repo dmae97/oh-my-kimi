@@ -39,7 +39,7 @@ Shared AST pattern grammar and language catalog: see [`ast_grep`](./ast-grep.md#
 - If no rewrites match, text is `No replacements made` plus formatted parse issues when present.
 - `details` includes aggregate preview metadata:
   - `totalReplacements`, `filesTouched`, `filesSearched`, `applied`, `limitReached`
-  - optional `parseErrors`, `scopePath`, `files`, `fileReplacements`, `displayContent`, `meta`
+  - optional `parseErrors`, `parseErrorsTotal`, `scopePath`, `files`, `fileReplacements`, `displayContent`, `searchPath`, `cwd`, `meta`
 - The tool always previews first (`applied: false` in the direct result). Actual file writes happen only later through `resolve(action: "apply", ...)`.
 - When preview produced replacements, `ast_edit` also queues a pending `resolve` action. Successful apply returns a separate `resolve` result, not another `ast_edit` result.
 
@@ -51,7 +51,7 @@ Shared AST pattern grammar and language catalog: see [`ast_grep`](./ast-grep.md#
    - ops are converted to a `Record<pattern, replacement>`.
 2. The wrapper reads `PI_MAX_AST_FILES` via `$envpos(..., 1000)` and uses that as the native `maxFiles` cap for both preview and apply.
 3. Path normalization, internal URL handling, missing-path partitioning, and multi-path resolution follow the same `path-utils.ts` flow as `ast_grep`.
-4. The wrapper stats the resolved base path to decide whether to render grouped directory output.
+4. The scope's `isDirectory` flag (set by a stat in `resolveToolSearchScope`) decides whether to render grouped directory output.
 5. `runAstEditOnce(...)` always runs native `astEdit(...)` with `dryRun: true` and `failOnParseError: false` on the first pass.
 6. Native `ast_edit` in `crates/pi-natives/src/ast.rs`:
    - normalizes the rewrite map and sorts rules by pattern string,
@@ -60,7 +60,7 @@ Shared AST pattern grammar and language catalog: see [`ast_grep`](./ast-grep.md#
    - infers a single language for the whole call unless `lang` was supplied,
    - compiles every rewrite pattern for that language,
    - parses each file, skips files with syntax-error trees, collects `replace_by(...)` edits for every match, enforces replacement and file caps, and returns textual before/after slices plus source ranges.
-7. The TS wrapper deduplicates parse errors, groups changes by file, and renders preview diff lines.
+7. The TS wrapper deduplicates and caps parse errors, groups changes by file, and renders preview diff lines.
 8. If preview found replacements and `applied` is false, `queueResolveHandler(...)` registers a forced `resolve` action and injects a `resolve-reminder` steering message.
 9. On `resolve(action: "apply")`, the queued callback reruns the same rewrite set with `dryRun: false`, recomputes counts, and returns an error result if the live result no longer matches the preview (`stalePreview`). The current implementation compares replacement totals and per-file counts after the rerun; if the new run has already written different counts, the result is marked error.
 10. On a non-stale apply, the callback returns `Applied N replacements in M files.` (in hashline mode followed by fresh `[path#tag]` snapshot headers re-recorded from the post-apply content); on discard, `resolve` returns a discard message without mutating files.
@@ -92,7 +92,7 @@ Shared AST pattern grammar and language catalog: see [`ast_grep`](./ast-grep.md#
 - File cap exposed by the wrapper: `PI_MAX_AST_FILES`, default `1000`, in `packages/coding-agent/src/tools/ast-edit.ts`.
 - Native `maxFiles` and `maxReplacements` are both clamped to at least `1` when provided in `crates/pi-natives/src/ast.rs`.
 - The wrapper never sets `maxReplacements`; native behavior therefore defaults to effectively unbounded replacements for a run.
-- Parse issues are rendered with at most `PARSE_ERRORS_LIMIT = 20` lines in `packages/coding-agent/src/tools/render-utils.ts`; `details.parseErrors` is deduplicated but not capped.
+- Parse issues are deduplicated and capped at `PARSE_ERRORS_LIMIT = 20` entries via `capParseErrors(...)` in `packages/coding-agent/src/tools/render-utils.ts`; `details.parseErrors` carries the capped list and `details.parseErrorsTotal` the pre-cap deduplicated count.
 - Directory scans use `include_hidden: true`, `use_gitignore: true`, and skip `node_modules` unless the glob text explicitly mentions `node_modules` in `crates/pi-natives/src/ast.rs`.
 - No separate glob-expansion count cap exists. Candidate count is whatever the resolved path/glob expands to after gitignore filtering, then native `maxFiles` stops mutations after the configured number of touched files.
 - Preview text truncates each rendered `before` and `after` first line to 120 characters in `packages/coding-agent/src/tools/ast-edit.ts`.

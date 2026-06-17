@@ -47,7 +47,7 @@ Multiple pending previews therefore follow the active tool-choice queue ordering
 - `sourceToolName` (`ast_edit`)
 - `apply(reason: string, extra?: Record<string, unknown>)` callback that reruns AST edit with `dryRun: false`
 
-`resolve(action="apply", reason="...")` passes `reason` into this callback. `ast_edit` currently ignores `extra`.
+`resolve(action="apply", reason="...")` passes both `reason` and `extra` into this callback, but `ast_edit`'s apply ignores both — its parameter is `_reason`, and the rerun is independent of `reason`/`extra`.
 
 ## Custom tools: `pushPendingAction`
 

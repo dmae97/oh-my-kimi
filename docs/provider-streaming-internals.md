@@ -131,15 +131,15 @@ If provider stream throws or signals failure, each provider wrapper catches and 
 
 - `stopReason = "aborted"` when abort signal is set
 - otherwise `stopReason = "error"`
-- `errorMessage = formatErrorMessageWithRetryAfter(error)`
+- `errorMessage = finalizeErrorMessage(error, rawRequestDump)` (`packages/ai/src/utils/http-inspector.ts`), which wraps `formatErrorMessageWithRetryAfter()` and appends any captured HTTP-error body / raw-request dump (the `cursor` wrapper calls `formatErrorMessageWithRetryAfter()` directly)
 
 ## Malformed chunk / SSE parse failure behavior
 
-The OpenAI Completions/Responses paths delegate chunk/SSE framing to the `openai` SDK stream. Anthropic uses the in-repo `AnthropicMessagesClient` (`packages/ai/src/providers/anthropic-client.ts`); the Google paths and the Codex SSE fallback read SSE via `readSseJson()` directly, and websocket Codex frames are normalized through the same event handler.
+The OpenAI Completions/Responses paths use the in-repo HTTP+SSE transport `postOpenAIStream()` (`packages/ai/src/utils/openai-http.ts`), which decodes frames with `readSseJson()` and replaced the `openai` SDK client. Anthropic uses the in-repo `AnthropicMessagesClient` (`packages/ai/src/providers/anthropic-client.ts`); the Google paths and the Codex SSE fallback read SSE via `readSseJson()` directly, and websocket Codex frames are normalized through the same event handler.
 
 Observed behavior in current implementation:
 
-- malformed SDK stream parsing surfaces as an exception or stream `error` event
+- malformed SSE framing or chunk JSON surfaces as an exception or stream `error` event
 - malformed Codex SSE JSON/framing throws from the local SSE reader
 - provider wrapper converts failures into unified terminal `error` events
 - no provider-specific resume/retry inside the stream function itself, except Codex websocket-to-SSE transport fallback before replay-unsafe output is emitted

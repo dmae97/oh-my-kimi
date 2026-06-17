@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [16.0.3] - 2026-06-16
+
+### Added
+
+- Added `escapeXmlText` utility to escape XML-significant characters `&`, `<`, and `>` in element body text
+- Added `isTerminalHeadless()` / `setTerminalHeadless()` to centrally suppress real-terminal side effects (stdout escape/frame writes, stdin raw mode, CSI/OSC capability probes, SIGWINCH, window-title changes, emergency restore) under the test runtime. Defaults on when `bun test` sets `NODE_ENV=test`; terminal-contract tests opt out via `setTerminalHeadless(false)`
+
 ## [15.13.3] - 2026-06-15
 
 ### Added

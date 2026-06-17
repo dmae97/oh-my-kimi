@@ -17,11 +17,18 @@ Does not cover `/tree` UI rendering behavior beyond semantics that affect sessio
 
 ## Implementation Files
 
-- [`src/session/session-manager.ts`](../packages/coding-agent/src/session/session-manager.ts)
-- [`src/session/messages.ts`](../packages/coding-agent/src/session/messages.ts)
-- [`src/session/session-storage.ts`](../packages/coding-agent/src/session/session-storage.ts)
-- [`src/session/history-storage.ts`](../packages/coding-agent/src/session/history-storage.ts)
-- [`src/session/blob-store.ts`](../packages/coding-agent/src/session/blob-store.ts)
+- [`src/session/session-manager.ts`](../packages/coding-agent/src/session/session-manager.ts) — orchestration: tree/leaf, appends, persistence, blobs, lifecycle factories
+- [`src/session/session-entries.ts`](../packages/coding-agent/src/session/session-entries.ts) — entry/header types, `SessionEntry` union, `CURRENT_SESSION_VERSION`
+- [`src/session/session-migrations.ts`](../packages/coding-agent/src/session/session-migrations.ts) — version migrations
+- [`src/session/session-loader.ts`](../packages/coding-agent/src/session/session-loader.ts) — file load + blob-ref resolution
+- [`src/session/session-context.ts`](../packages/coding-agent/src/session/session-context.ts) — `buildSessionContext`
+- [`src/session/session-persistence.ts`](../packages/coding-agent/src/session/session-persistence.ts) — truncation + image blob externalization
+- [`src/session/session-paths.ts`](../packages/coding-agent/src/session/session-paths.ts) — on-disk layout, dir encoding, terminal breadcrumbs
+- [`src/session/session-listing.ts`](../packages/coding-agent/src/session/session-listing.ts) — discovery (list/recent/resolve)
+- [`src/session/session-storage.ts`](../packages/coding-agent/src/session/session-storage.ts) — storage abstractions
+- [`src/session/messages.ts`](../packages/coding-agent/src/session/messages.ts) — custom-message transformers
+- [`src/session/blob-store.ts`](../packages/coding-agent/src/session/blob-store.ts) — content-addressed blob store
+- [`src/session/history-storage.ts`](../packages/coding-agent/src/session/history-storage.ts) — prompt history (separate subsystem)
 
 ## On-Disk Layout
 
@@ -306,7 +313,9 @@ Extension-provided message that does participate in LLM context. `content` can b
   "systemPrompt": "...",
   "task": "...",
   "tools": ["read", "edit"],
-  "outputSchema": { "type": "object" }
+  "outputSchema": { "type": "object" },
+  "spawns": "*",
+  "readSummarize": false
 }
 ```
 
@@ -346,8 +355,8 @@ Applied when header `version < 3`:
 ### Migration Trigger and Persistence
 
 - Migrations run during session load (`setSessionFile`).
-- If any migration ran, the entire file is rewritten to disk immediately.
-- Migration mutates in-memory entries first, then persists rewritten JSONL.
+- If any migration ran, the session is flagged for a full rewrite (`#rewriteRequired`) rather than rewritten immediately.
+- Migration mutates in-memory entries first; the flagged rewrite persists the updated JSONL on the next write (a synchronous full rewrite on the next append).
 
 ## Load and Compatibility Behavior
 
@@ -413,7 +422,7 @@ Algorithm:
 
 ### Write pipeline
 
-Writes are serialized through an internal promise chain (`#persistChain`) and `NdjsonFileWriter`.
+Appends are written synchronously in-body through a `SessionStorageWriter` (from `storage.openWriter`), so an entry is durable the instant the append returns. Async disk work (flush, close, atomic rewrite) is serialized through an internal promise chain (`#diskTail`); appends bypass it.
 
 - `append*` updates in-memory state immediately.
 - Persistence is deferred until at least one assistant message exists.
@@ -425,13 +434,13 @@ Rationale in code: avoid persisting sessions that never produced an assistant re
 
 ### Durability operations
 
-- `flush()` flushes writer and calls `fsync()`.
-- Atomic full rewrites (`#rewriteFile`) write to temp file, flush+fsync, close, then rename over target.
-- Used for migrations, `setSessionName`, `rewriteEntries` (tool-output pruning/supersede passes), and move/fork operations.
+- `flush()` drains the async disk chain and the open writer's queued appends (no `fsync`); `flushSync()` performs a synchronous full rewrite for exit paths that cannot await.
+- Atomic full rewrites (`#rewriteAtomically`) delegate to `storage.writeTextAtomic`: temp-write then rename over the target (with an EPERM-safe move-aside fallback).
+- Used for `setSessionName`, `rewriteEntries` (tool-output pruning/supersede passes), and move/fork operations. Load-time migrations and other in-memory divergence (`#rewriteRequired`) instead trigger a synchronous full rewrite (`#rewriteSynchronously`) on the next persist.
 
 ### Error behavior
 
-- Persistence errors are latched (`#persistError`) and rethrown on subsequent operations.
+- Persistence errors are latched (`#diskFailure`) and rethrown on subsequent operations.
 - First error is logged once with session file context.
 - Writer close is best-effort but propagates the first meaningful error.
 
@@ -454,26 +463,26 @@ On load, blob refs are resolved back to base64 for message/custom_message image 
 `SessionStorage` interface provides all filesystem operations used by `SessionManager`:
 
 - sync: `ensureDirSync`, `existsSync`, `writeTextSync`, `statSync`, `listFilesSync`
-- async: `exists`, `readText`, `readTextSlices`, `writeText`, `rename`, `unlink`, `deleteSessionWithArtifacts`, `openWriter`
+- async: `exists`, `readText`, `readTextSlices`, `writeText`, `writeTextAtomic`, `rename`, `unlink`, `deleteSessionWithArtifacts`, `openWriter`
 
 Implementations:
 
 - `FileSessionStorage`: real filesystem (Bun + node fs)
 - `MemorySessionStorage`: map-backed in-memory implementation for tests/non-persistent sessions
 
-`SessionStorageWriter` exposes `writeLine`, `writeLineSync`, `flush`, `fsync`, `close`, `getError`.
+`SessionStorageWriter` exposes `append`, `flush`, `isOpen`, `close`, `getError`.
 
 ## Session Discovery Utilities
 
-Defined in `session-manager.ts`:
+Discovery helpers live in `session-listing.ts`; `SessionManager` re-exposes the project-scoped lists as thin static wrappers:
 
-- `getRecentSessions(sessionDir, limit)` -> lightweight metadata for UI/session picker, capped by `limit`
+- `getRecentSessions(sessionDir, limit?)` -> lightweight metadata for UI/session picker, capped by `limit` (default 4)
 - `findMostRecentSession(sessionDir)` -> newest by mtime
-- `list(cwd, sessionDir?)` -> sessions in one project scope
-- `listAll()` -> sessions across all project scopes under `~/.omp/agent/sessions`
+- `listSessions(sessionDir, storage)` (a.k.a. `SessionManager.list(cwd, sessionDir?)`) -> sessions in one project scope
+- `listAllSessions(storage)` (a.k.a. `SessionManager.listAll()`) -> sessions across all project scopes under `~/.omp/agent/sessions`
 - `resolveResumableSession(sessionArg, cwd, sessionDir?)` -> local then global resume/fork target lookup
 
-Metadata extraction for `getRecentSessions` reads a prefix via `readTextSlices(..., 4096, 0)`. `list`/`listAll` read a 4KB prefix plus a bounded 32 KiB tail through one `readTextSlices(...)` call per file, using the prefix for metadata and the tail for lifecycle status. Resume matching is case-insensitive and accepts session id prefixes, full filename prefixes, or the id suffix after the timestamp in `<timestamp>_<sessionId>.jsonl`.
+Metadata extraction for `getRecentSessions` reads a prefix via `readTextSlices(..., 4096, 0)`. `listSessions`/`listAllSessions` read a 4KB prefix plus a bounded 32 KiB tail through one `readTextSlices(...)` call per file, using the prefix for metadata and the tail for lifecycle status. Resume matching is case-insensitive and accepts session id prefixes, full filename prefixes, or the id suffix after the timestamp in `<timestamp>_<sessionId>.jsonl`.
 
 ## Related but Distinct: Prompt History Storage
 

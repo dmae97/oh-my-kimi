@@ -92,6 +92,14 @@ describe("formatSessionHistoryMarkdown", () => {
 		expect(output.startsWith("# Spawnling (idle)\n")).toBe(true);
 	});
 
+	it("renders watched roles using bold text rather than level-2 headers when watchedRoles is true", () => {
+		const output = formatSessionHistoryMarkdown(buildMessages(), { watchedRoles: true });
+		expect(output).toContain("**user**:");
+		expect(output).toContain("**agent**:");
+		expect(output).not.toContain("## user");
+		expect(output).not.toContain("## assistant");
+	});
+
 	it("renders an orphan toolResult (truncated history) as its own line", () => {
 		const output = formatSessionHistoryMarkdown([
 			{
@@ -145,14 +153,14 @@ describe("formatSessionHistoryMarkdown", () => {
 		];
 
 		const outputWithIntent = formatSessionHistoryMarkdown(messages, { includeToolIntent: true });
-		expect(outputWithIntent).toContain("# reading config file\n→ read(src/config.ts) ⇒ ok · 1 line");
+		expect(outputWithIntent).toContain("// reading config file\n→ read(src/config.ts) ⇒ ok · 1 line");
 		// The long intent should be flattened to one line and truncated to 80 characters (including ellipsis).
 		expect(outputWithIntent).toContain(
-			"# reading config file with a very very long and descriptive intent that will exce…\n→ read(src/config.ts) ⇒ ok · 1 line",
+			"// reading config file with a very very long and descriptive intent that will exce…\n→ read(src/config.ts) ⇒ ok · 1 line",
 		);
 
 		const outputWithoutIntent = formatSessionHistoryMarkdown(messages);
-		expect(outputWithoutIntent).not.toContain("# reading config file");
+		expect(outputWithoutIntent).not.toContain("// reading config file");
 		expect(outputWithoutIntent).toContain("→ read(src/config.ts) ⇒ ok · 1 line");
 	});
 });

@@ -151,6 +151,7 @@ import type { ObservableSession } from "./session-observer-registry";
 import { SessionObserverRegistry } from "./session-observer-registry";
 import { runProviderSetupWizard } from "./setup-wizard/lazy";
 import { interruptHint } from "./shared";
+import { clearMermaidCache } from "./theme/mermaid-cache";
 import { type ShimmerPalette, shimmerEnabled, shimmerSegments, shimmerText } from "./theme/shimmer";
 import type { Theme } from "./theme/theme";
 import {
@@ -854,6 +855,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		onThemeChange(() => {
 			this.#clearWorkingMessageAccentCache();
 			clearRenderCache();
+			clearMermaidCache();
 			this.ui.invalidate();
 			this.updateEditorBorderColor();
 			this.ui.requestRender();
@@ -3382,8 +3384,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#commandController.handleExportCommand(text);
 	}
 
-	handleDumpCommand(isRaw?: boolean) {
-		return this.#commandController.handleDumpCommand(isRaw);
+	handleDumpCommand() {
+		return this.#commandController.handleDumpCommand();
 	}
 
 	handleAdvisorDumpCommand(isRaw?: boolean) {

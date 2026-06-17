@@ -52,6 +52,7 @@ describe("runEvalAgent", () => {
 			getSessionFile: () => null,
 			mcpManager,
 			localProtocolOptions,
+			getAgentId: () => "BridgeParent",
 		} as unknown as ToolSession;
 
 		await runEvalAgent({ prompt: "do work", agentType: "task" }, { session });
@@ -60,5 +61,6 @@ describe("runEvalAgent", () => {
 		const options = runSubprocessSpy.mock.calls[0]?.[0];
 		expect(options?.mcpManager).toBe(mcpManager);
 		expect(options?.localProtocolOptions).toBe(localProtocolOptions);
+		expect(options?.parentAgentId).toBe("BridgeParent");
 	});
 });

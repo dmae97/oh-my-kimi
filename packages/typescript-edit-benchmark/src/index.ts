@@ -518,10 +518,16 @@ async function main(): Promise<void> {
 		`  Task success rate (best of ${config.runsPerTask}): ${(result.summary.taskSuccessRate * 100).toFixed(1)}% (${result.summary.successfulTasks}/${result.summary.totalTasks})`,
 	);
 	console.log(
-		`  Total tokens (best): ${result.summary.totalTokens.input} in / ${result.summary.totalTokens.output} out`,
+		`  Total tokens (best, overall): ${result.summary.totalTokens.input} in / ${result.summary.totalTokens.output} out`,
 	);
 	console.log(
-		`  Tokens/task (best total): mean=${result.summary.avgTokensPerTask.total} median=${result.summary.medianTokensPerTask.total} p1=${result.summary.p1TokensPerTask.total} p99=${result.summary.p99TokensPerTask.total}`,
+		`  Tokens/task (best, overall): mean=${result.summary.avgTokensPerTask.total} median=${result.summary.medianTokensPerTask.total} p1=${result.summary.p1TokensPerTask.total} p99=${result.summary.p99TokensPerTask.total}`,
+	);
+	console.log(
+		`  Total tokens (one-shot successes): ${result.summary.totalOneShotSuccessTokens.input} in / ${result.summary.totalOneShotSuccessTokens.output} out`,
+	);
+	console.log(
+		`  Tokens/task (one-shot successes): mean=${result.summary.avgOneShotSuccessTokensPerTask.total} median=${result.summary.medianOneShotSuccessTokensPerTask.total} p1=${result.summary.p1OneShotSuccessTokensPerTask.total} p99=${result.summary.p99OneShotSuccessTokensPerTask.total}`,
 	);
 	if (result.summary.ghostRuns > 0) {
 		console.log(`  Ghost runs (0/0/0): ${result.summary.ghostRuns}`);
@@ -563,6 +569,7 @@ class LiveProgress {
 	#inputTokens: number[] = [];
 	#outputTokens: number[] = [];
 	#totalTokens: number[] = [];
+	#oneShotSuccessTokens: number[] = [];
 	#lastLineLength = 0;
 
 	constructor(totalRuns: number, runsPerTask: number) {
@@ -585,6 +592,9 @@ class LiveProgress {
 		if (event.result) {
 			if (event.result.success) {
 				this.#success += 1;
+			}
+			if (event.result.success && event.runIndex === 0) {
+				this.#oneShotSuccessTokens.push(event.result.tokens.total);
 			}
 			this.#totalInput += event.result.tokens.input;
 			this.#totalOutput += event.result.tokens.output;
@@ -689,6 +699,7 @@ class LiveProgress {
 		console.log(`  Tokens/task in:   ${fmtTokens(this.#inputTokens)}`);
 		console.log(`  Tokens/task out:  ${fmtTokens(this.#outputTokens)}`);
 		console.log(`  Tokens/task tot:  ${fmtTokens(this.#totalTokens)}`);
+		console.log(`  Tokens/task (one-shot successes): ${fmtTokens(this.#oneShotSuccessTokens)}`);
 		console.log(`  Avg time/task:    ${Math.round(this.#totalDuration / denom)}ms`);
 	}
 

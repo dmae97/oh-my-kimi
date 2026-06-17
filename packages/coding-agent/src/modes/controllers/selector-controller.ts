@@ -1216,11 +1216,20 @@ export class SelectorController {
 			...this.ctx.keybindings.getKeys("app.session.observe"),
 		];
 		let hub: AgentHubOverlayComponent | undefined;
-		let overlayHandle: OverlayHandle | undefined;
 
+		// Render the hub inline in the editor slot — the same anchored region
+		// every other selector (model, session, tree, the `ask` tool) uses —
+		// rather than a floating overlay. A non-fullscreen overlay composited over
+		// a live transcript strands a stale copy in native scrollback every time a
+		// running subagent's progress grows the frame and scrolls the window; the
+		// hub is opened mid-run, so those copies stacked into a wall of duplicate
+		// "Agent Hub" frames bleeding the task tree behind them. As an editor-slot
+		// component it rides the normal append-only commit path: the transcript
+		// commits above it exactly once and the hub repaints in place.
 		const done = () => {
 			hub?.dispose();
-			overlayHandle?.hide();
+			this.ctx.editorContainer.clear();
+			this.ctx.editorContainer.addChild(this.ctx.editor);
 			this.ctx.ui.setFocus(this.ctx.editor);
 			this.ctx.ui.requestRender();
 		};
@@ -1251,12 +1260,8 @@ export class SelectorController {
 			return;
 		}
 
-		overlayHandle = this.ctx.ui.showOverlay(hub, {
-			anchor: "bottom-center",
-			width: "100%",
-			maxHeight: "100%",
-			margin: 0,
-		});
+		this.ctx.editorContainer.clear();
+		this.ctx.editorContainer.addChild(hub);
 		this.ctx.ui.setFocus(hub);
 		this.ctx.ui.requestRender();
 	}

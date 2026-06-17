@@ -34,17 +34,36 @@ import { isAuthenticated, kNoAuth, type ModelRegistry } from "./model-registry";
 import { MODEL_ROLE_IDS, type ModelRole } from "./model-roles";
 import type { Settings } from "./settings";
 
+function isKnownProvider(provider: string): provider is KnownProvider {
+	return provider in DEFAULT_MODEL_PER_PROVIDER;
+}
+
 /**
- * Pick the first available model matching a known provider's default id
- * (catalog table order), falling back to the first available model.
+ * Pick the first provider-default model in availability order.
+ *
+ * If multiple providers expose that same default id, rank only that shared-id
+ * group by canonical provider priority so native/OAuth transports beat mirrors
+ * without changing unrelated provider fallback precedence.
  */
-function pickDefaultAvailableModel(availableModels: Model<Api>[]): Model<Api> | undefined {
-	for (const provider of Object.keys(DEFAULT_MODEL_PER_PROVIDER) as KnownProvider[]) {
-		const defaultId = DEFAULT_MODEL_PER_PROVIDER[provider];
-		const match = availableModels.find(m => m.provider === provider && m.id === defaultId);
-		if (match) return match;
-	}
-	return availableModels[0];
+export function pickDefaultAvailableModel(availableModels: Model<Api>[]): Model<Api> | undefined {
+	const firstDefault = availableModels.find(
+		model => isKnownProvider(model.provider) && DEFAULT_MODEL_PER_PROVIDER[model.provider] === model.id,
+	);
+	if (!firstDefault) return availableModels[0];
+
+	const providerPriority = buildModelProviderPriorityRank();
+	const sharedDefaultMatches = availableModels.filter(
+		model =>
+			model.id === firstDefault.id &&
+			isKnownProvider(model.provider) &&
+			DEFAULT_MODEL_PER_PROVIDER[model.provider] === model.id,
+	);
+	return [...sharedDefaultMatches].sort((a, b) => {
+		const aRank = providerPriority.get(a.provider.toLowerCase()) ?? Number.POSITIVE_INFINITY;
+		const bRank = providerPriority.get(b.provider.toLowerCase()) ?? Number.POSITIVE_INFINITY;
+		if (aRank !== bRank) return aRank - bRank;
+		return availableModels.indexOf(a) - availableModels.indexOf(b);
+	})[0];
 }
 
 export interface ScopedModel {
@@ -464,12 +483,10 @@ function matchModel(
 	context: ModelPreferenceContext,
 	options?: { modelRegistry?: CanonicalModelRegistry },
 ): Model<Api> | undefined {
-	// Explicit provider/model selectors always bypass canonical coalescing.
 	const exactRefMatch = findExactModelReferenceMatch(modelPattern, availableModels);
 	if (exactRefMatch) {
 		return exactRefMatch;
 	}
-
 	// Exact canonical ids coalesce provider variants before bare-id matching.
 	const exactCanonicalMatch = findExactCanonicalModelMatch(modelPattern, availableModels, options?.modelRegistry);
 	if (exactCanonicalMatch) {

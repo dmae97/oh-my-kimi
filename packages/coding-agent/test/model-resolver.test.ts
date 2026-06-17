@@ -1,12 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import { type Api, Effort, type Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { DEFAULT_MODEL_PER_PROVIDER } from "@oh-my-pi/pi-catalog/provider-models";
 import type { CanonicalModelVariant } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import {
+	type CanonicalModelRegistry,
 	expandRoleAlias,
 	filterAvailableModelsByEnabledPatterns,
 	parseModelPattern,
 	parseModelString,
+	pickDefaultAvailableModel,
 	resolveAgentModelPatterns,
 	resolveCliModel,
 	resolveModelFromString,
@@ -170,6 +173,49 @@ const mockCodexOverlapModels: Model<"anthropic-messages">[] = [
 	}),
 ];
 
+const openaiGpt55Models: Model<Api>[] = [
+	buildModel({
+		id: "gpt-5.5",
+		name: "GPT-5.5",
+		api: "openai-responses",
+		provider: "openai",
+		baseUrl: "https://api.openai.com",
+		reasoning: true,
+		thinking: {
+			mode: "effort",
+			efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+		},
+		input: ["text"],
+		cost: { input: 1, output: 4, cacheRead: 0.1, cacheWrite: 1 },
+		contextWindow: 400000,
+		maxTokens: 128000,
+	}),
+	buildModel({
+		id: "gpt-5.5",
+		name: "GPT-5.5 Codex",
+		api: "openai-codex-responses",
+		provider: "openai-codex",
+		baseUrl: "https://chatgpt.com/backend-api/codex/responses",
+		reasoning: true,
+		thinking: {
+			mode: "effort",
+			efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+		},
+		input: ["text"],
+		cost: { input: 1, output: 4, cacheRead: 0.1, cacheWrite: 1 },
+		contextWindow: 400000,
+		maxTokens: 128000,
+	}),
+];
+
+const codexCanonicalRegistry: CanonicalModelRegistry = {
+	resolveCanonicalModel: (canonicalId: string, options?: { candidates?: Model<Api>[] }) => {
+		if (canonicalId !== "gpt-5.5") return undefined;
+		return options?.candidates?.find(model => model.provider === "openai-codex" && model.id === canonicalId);
+	},
+	getCanonicalId: (model: Model<Api>) => (model.id === "gpt-5.5" ? "gpt-5.5" : undefined),
+};
+
 function createOpusModel(provider: string, id: string, name: string): Model<"anthropic-messages"> {
 	return buildModel({
 		id,
@@ -248,6 +294,63 @@ const canonicalRegistry = {
 } as unknown as Parameters<typeof resolveCliModel>[0]["modelRegistry"];
 
 const allModels = [...mockModels, ...mockOpenRouterModels, ...mockProviderOverlapModels, ...mockCodexOverlapModels];
+
+describe("pickDefaultAvailableModel", () => {
+	test("prefers Codex OAuth over plain OpenAI for the shared GPT default", () => {
+		const result = pickDefaultAvailableModel(openaiGpt55Models);
+
+		expect(result?.provider).toBe("openai-codex");
+		expect(result?.id).toBe("gpt-5.5");
+	});
+
+	test("keeps earlier unrelated provider defaults ahead of shared Codex defaults", () => {
+		const anthropicDefault = buildModel({
+			id: DEFAULT_MODEL_PER_PROVIDER.anthropic,
+			name: "Anthropic Default",
+			api: "anthropic-messages",
+			provider: "anthropic",
+			baseUrl: "https://api.anthropic.com",
+			reasoning: true,
+			thinking: {
+				mode: "budget",
+				efforts: [Effort.Low, Effort.Medium, Effort.High],
+			},
+			input: ["text"],
+			cost: { input: 1, output: 4, cacheRead: 0.1, cacheWrite: 1 },
+			contextWindow: 200000,
+			maxTokens: 8192,
+		});
+
+		const result = pickDefaultAvailableModel([anthropicDefault, ...openaiGpt55Models]);
+
+		expect(result?.provider).toBe("anthropic");
+		expect(result?.id).toBe(DEFAULT_MODEL_PER_PROVIDER.anthropic);
+	});
+});
+
+describe("resolveModelRoleValue", () => {
+	test("does not reroute explicit OpenAI GPT defaults through Codex canonical selection", () => {
+		const result = resolveModelRoleValue("openai/gpt-5.5:xhigh", openaiGpt55Models, {
+			modelRegistry: codexCanonicalRegistry,
+		});
+
+		expect(result.model?.provider).toBe("openai");
+		expect(result.model?.id).toBe("gpt-5.5");
+		expect(result.thinkingLevel).toBe(Effort.XHigh);
+		expect(result.explicitThinkingLevel).toBe(true);
+	});
+
+	test("reroutes bare GPT default through Codex canonical selection", () => {
+		const result = resolveModelRoleValue("gpt-5.5:xhigh", openaiGpt55Models, {
+			modelRegistry: codexCanonicalRegistry,
+		});
+
+		expect(result.model?.provider).toBe("openai-codex");
+		expect(result.model?.id).toBe("gpt-5.5");
+		expect(result.thinkingLevel).toBe(Effort.XHigh);
+		expect(result.explicitThinkingLevel).toBe(true);
+	});
+});
 
 describe("parseModelPattern", () => {
 	describe("simple patterns without colons", () => {
@@ -868,6 +971,16 @@ describe("resolveModelScope", () => {
 			"github-copilot/anthropic/claude-sonnet-4.5",
 		]);
 	});
+
+	test("does not coalesce explicit provider/id patterns to Codex (regression for enabledModels)", async () => {
+		const scoped = await resolveModelScope(["openai/gpt-5.5"], {
+			getAvailable: () => openaiGpt55Models,
+			getCanonicalVariants: () => [],
+		});
+		expect(scoped).toHaveLength(1);
+		expect(scoped[0].model.provider).toBe("openai");
+		expect(scoped[0].model.id).toBe("gpt-5.5");
+	});
 });
 
 describe("parseModelString", () => {
@@ -1151,6 +1264,13 @@ describe("filterAvailableModelsByEnabledPatterns", () => {
 			registry,
 		);
 		expect(result).toHaveLength(2);
+	});
+
+	test("does not coalesce explicit provider/id patterns to Codex (regression for enabledModels)", () => {
+		const result = filterAvailableModelsByEnabledPatterns(openaiGpt55Models, ["openai/gpt-5.5"], registry);
+		expect(result).toHaveLength(1);
+		expect(result[0].provider).toBe("openai");
+		expect(result[0].id).toBe("gpt-5.5");
 	});
 });
 

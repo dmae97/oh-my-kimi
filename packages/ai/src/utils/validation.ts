@@ -411,6 +411,47 @@ function tryHealMalformedJson(value: string): unknown | undefined {
 	return undefined;
 }
 
+const MAX_NESTED_JSON_STRING_PARSE_DEPTH = 3;
+
+function acceptParsedJsonForTypes(
+	parsed: unknown,
+	source: string,
+	expectedTypes: string[],
+	depth: number,
+): { value: unknown; changed: boolean } {
+	if (parsed === null && source.trim() === "null") {
+		return { value: null, changed: true };
+	}
+	if (matchesExpectedType(parsed, expectedTypes)) {
+		return { value: parsed, changed: true };
+	}
+	if (typeof parsed === "string" && !expectedTypes.includes("string") && depth < MAX_NESTED_JSON_STRING_PARSE_DEPTH) {
+		return tryParseJsonForTypes(parsed, expectedTypes, depth + 1);
+	}
+	return { value: source, changed: false };
+}
+
+function looksLikeJsonContainerString(value: unknown): boolean {
+	if (typeof value !== "string") return false;
+	const trimmed = value.trimStart();
+	if (trimmed.startsWith("{")) {
+		const body = trimmed.slice(1);
+		return body.trimStart().startsWith('"') || body.includes(":") || body.trimStart().startsWith("}");
+	}
+	if (!trimmed.startsWith("[")) return false;
+	const firstItem = trimmed.slice(1).trimStart();
+	return (
+		firstItem.startsWith("{") ||
+		firstItem.startsWith("[") ||
+		firstItem.startsWith('"') ||
+		firstItem.startsWith("]") ||
+		firstItem.startsWith("true") ||
+		firstItem.startsWith("false") ||
+		firstItem.startsWith("null") ||
+		/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?(?:\s*(?:,|\]|$))/.test(firstItem)
+	);
+}
+
 /**
  * Attempts to parse a string as JSON if it looks like a JSON literal and
  * the parsed result matches one of the expected types.
@@ -424,7 +465,7 @@ function tryHealMalformedJson(value: string): unknown | undefined {
  * matches an expected type. This prevents false positives like parsing
  * the string `"123"` when the schema actually wants a string.
  */
-function tryParseJsonForTypes(value: string, expectedTypes: string[]): { value: unknown; changed: boolean } {
+function tryParseJsonForTypes(value: string, expectedTypes: string[], depth = 0): { value: unknown; changed: boolean } {
 	const trimmed = value.trim();
 	if (!trimmed) return { value, changed: false };
 
@@ -434,28 +475,20 @@ function tryParseJsonForTypes(value: string, expectedTypes: string[]): { value: 
 	}
 
 	// Quick syntactic checks to avoid unnecessary parse attempts
-	const looksJsonObject = trimmed.startsWith("{");
-	const looksJsonArray = trimmed.startsWith("[");
+	const looksJsonObject = trimmed.startsWith("{") && looksLikeJsonContainerString(trimmed);
+	const looksJsonArray = trimmed.startsWith("[") && looksLikeJsonContainerString(trimmed);
+	const looksJsonString = trimmed.startsWith('"') && !expectedTypes.includes("string");
 	const looksJsonLiteral =
 		trimmed === "true" || trimmed === "false" || trimmed === "null" || JSON_NUMBER_PATTERN.test(trimmed);
 
-	if (!looksJsonObject && !looksJsonArray && !looksJsonLiteral) {
+	if (!looksJsonObject && !looksJsonArray && !looksJsonString && !looksJsonLiteral) {
 		return { value, changed: false };
 	}
 
 	try {
 		const parsed = JSON.parse(trimmed) as unknown;
-		// If the string was "null", we parsed it to actual null.
-		// Accept this even if null isn't in expectedTypes — the LLM meant "no value".
-		// normalizeOptionalNullsForSchema will strip it from optional fields, and
-		// the validator will correctly error on required fields.
-		if (parsed === null && trimmed === "null") {
-			return { value: null, changed: true };
-		}
-		// For non-null values, only accept if the parsed type matches what the schema expects
-		if (matchesExpectedType(parsed, expectedTypes)) {
-			return { value: parsed, changed: true };
-		}
+		const accepted = acceptParsedJsonForTypes(parsed, trimmed, expectedTypes, depth);
+		if (accepted.changed) return accepted;
 	} catch {
 		if (looksJsonObject || looksJsonArray) {
 			// Try escaping raw control chars inside string literals (LLMs sometimes
@@ -464,20 +497,21 @@ function tryParseJsonForTypes(value: string, expectedTypes: string[]): { value: 
 			if (escapedControls !== trimmed) {
 				try {
 					const parsed = JSON.parse(escapedControls) as unknown;
-					if (matchesExpectedType(parsed, expectedTypes)) {
-						return { value: parsed, changed: true };
-					}
+					const accepted = acceptParsedJsonForTypes(parsed, escapedControls, expectedTypes, depth);
+					if (accepted.changed) return accepted;
 				} catch {}
 			}
 			// Try extracting a valid JSON prefix (handles trailing junk after balanced container)
 			const leading = tryParseLeadingJsonContainer(trimmed);
-			if (leading !== undefined && matchesExpectedType(leading, expectedTypes)) {
-				return { value: leading, changed: true };
+			if (leading !== undefined) {
+				const accepted = acceptParsedJsonForTypes(leading, trimmed, expectedTypes, depth);
+				if (accepted.changed) return accepted;
 			}
 			// Try healing single-character bracket errors near the end of the string
 			const healed = tryHealMalformedJson(trimmed);
-			if (healed !== undefined && matchesExpectedType(healed, expectedTypes)) {
-				return { value: healed, changed: true };
+			if (healed !== undefined) {
+				const accepted = acceptParsedJsonForTypes(healed, trimmed, expectedTypes, depth);
+				if (accepted.changed) return accepted;
 			}
 		}
 		return { value, changed: false };
@@ -1065,14 +1099,22 @@ function coerceArgsFromIssues(args: unknown, issues: FlatIssue[]): { value: unkn
 
 		const currentValue = getValueAtPointer(nextArgs, issue.instancePath);
 		const result = tryCoerceForExpectedTypes(currentValue, issue.expectedTypes);
-		const coercedValue = result.changed
-			? result.value
-			: issue.expectedTypes.includes("array") &&
-					!issue.unionBranch &&
-					currentValue !== undefined &&
-					!Array.isArray(currentValue)
-				? [currentValue]
-				: undefined;
+		let coercedValue = result.changed ? result.value : undefined;
+		if (
+			coercedValue === undefined &&
+			issue.expectedTypes.includes("array") &&
+			!issue.unionBranch &&
+			currentValue !== undefined &&
+			!Array.isArray(currentValue)
+		) {
+			const objectCoercion =
+				typeof currentValue === "string"
+					? tryParseJsonForTypes(currentValue, ["object"])
+					: { value: currentValue, changed: false };
+			if (objectCoercion.changed || !looksLikeJsonContainerString(currentValue)) {
+				coercedValue = [objectCoercion.changed ? objectCoercion.value : currentValue];
+			}
+		}
 		if (coercedValue === undefined) continue;
 
 		if (!owned) {

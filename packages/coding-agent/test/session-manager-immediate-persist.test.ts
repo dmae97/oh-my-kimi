@@ -87,4 +87,41 @@ describe("SessionManager immediate JSONL persistence", () => {
 		expect(messageRole(entries[3] ?? {})).toBe("user");
 		expect(messageContent(entries[3] ?? {})).toBe("written immediately");
 	});
+
+	it("keeps pre-assistant sessions out of history during shutdown", async () => {
+		const cwd = makeTempDir("@pi-empty-session-cwd-");
+		const sessionDir = path.join(cwd, "sessions");
+		const manager = SessionManager.create(cwd, sessionDir);
+		const sessionFile = manager.getSessionFile();
+		if (!sessionFile) throw new Error("Expected a persisted session file path");
+
+		manager.flushSync();
+		await manager.close();
+
+		expect(fs.existsSync(sessionFile)).toBe(false);
+		expect(await SessionManager.list(cwd, sessionDir)).toHaveLength(0);
+
+		manager.appendMessage({ role: "user", content: "queued before assistant", timestamp: Date.now() });
+		manager.flushSync();
+
+		expect(fs.existsSync(sessionFile)).toBe(false);
+		expect(await SessionManager.list(cwd, sessionDir)).toHaveLength(0);
+	});
+
+	it("lets explicit rewrites materialize pre-assistant entries", async () => {
+		const cwd = makeTempDir("@pi-explicit-rewrite-cwd-");
+		const sessionDir = path.join(cwd, "sessions");
+		const manager = SessionManager.create(cwd, sessionDir);
+		const sessionFile = manager.getSessionFile();
+		if (!sessionFile) throw new Error("Expected a persisted session file path");
+
+		manager.appendMessage({ role: "user", content: "persist me", timestamp: Date.now() });
+		await manager.rewriteEntries();
+
+		expect(fs.existsSync(sessionFile)).toBe(true);
+		const entries = readJsonl(sessionFile);
+		expect(entries).toHaveLength(2);
+		expect(messageRole(entries[1] ?? {})).toBe("user");
+		expect(messageContent(entries[1] ?? {})).toBe("persist me");
+	});
 });

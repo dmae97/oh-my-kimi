@@ -89,15 +89,25 @@ describe("formatSessionDumpText tool parameters", () => {
 		expect(out).toContain("<examples>");
 		expect(out).toContain('<invoke name="find">');
 	});
+});
 
-	it("renders message history with the model dialect turn envelope", () => {
+describe("formatSessionDumpText markdown-headings transcript", () => {
+	it("renders the main /dump transcript with legacy markdown role headings, not native envelopes", () => {
 		const out = formatSessionDumpText({
 			model: HARMONY_MODEL,
 			messages: [
 				{ role: "user", content: "Hello", timestamp: 1 },
 				{
 					role: "assistant",
-					content: [{ type: "text", text: "Hi." }],
+					content: [
+						{ type: "text", text: "Reading." },
+						{
+							type: "toolCall",
+							id: "c1",
+							name: "read",
+							arguments: { _i: "Reading the file", path: "src/foo.ts" },
+						},
+					],
 					api: "mock",
 					provider: "mock",
 					model: "mock",
@@ -105,12 +115,78 @@ describe("formatSessionDumpText tool parameters", () => {
 					stopReason: "stop",
 					timestamp: 2,
 				},
+				{
+					role: "toolResult",
+					toolCallId: "c1",
+					toolName: "read",
+					content: [{ type: "text", text: "file body" }],
+					isError: false,
+					timestamp: 3,
+				},
 			],
 		});
 
-		expect(out).toContain("## Transcript");
-		expect(out).toContain("<|start|>user<|message|>Hello<|end|>");
-		expect(out).toContain("<|start|>assistant<|channel|>final<|message|>Hi.<|end|>");
-		expect(out).not.toContain("## Assistant");
+		// Legacy per-message markdown headings (the pre-16.x /dump shape the user wants back).
+		expect(out).toContain("## User");
+		expect(out).toContain("## Assistant");
+		expect(out).toContain("### Tool Result: read");
+		expect(out).toContain("### Tool Call: read");
+		expect(out).toContain("path: src/foo.ts");
+		// The `_i` intent renders as a `//` comment under the heading, never inside the YAML args.
+		expect(out).toContain("// Reading the file");
+		expect(out).not.toContain("_i:");
+		// Tool calls render as a readable heading + YAML, never the <invoke>/<parameter> XML.
+		expect(out).not.toContain("<invoke ");
+		expect(out).not.toContain("<parameter ");
+		expect(out).toContain("file body");
+		// The 16.x native-dialect transcript wrapper and envelopes must be gone.
+		expect(out).not.toContain("## Transcript");
+		expect(out).not.toContain("<|start|>");
+	});
+
+	it("does not nest a thinking block that already carries a literal <thinking> envelope (#2700)", () => {
+		const out = formatSessionDumpText({
+			messages: [
+				{
+					role: "assistant",
+					content: [{ type: "thinking", thinking: "<thinking>\nCheck the logs.\n</thinking>" }],
+					api: "mock",
+					provider: "mock",
+					model: "mock",
+					usage: ZERO_USAGE,
+					stopReason: "stop",
+					timestamp: 1,
+				},
+			],
+		});
+
+		expect(out).toContain("<thinking>\nCheck the logs.\n</thinking>");
+		expect(out).not.toContain("<thinking>\n<thinking>");
+	});
+
+	it("renders sibling thinking blocks split by a tool call without nesting envelopes", () => {
+		const out = formatSessionDumpText({
+			messages: [
+				{
+					role: "assistant",
+					content: [
+						{ type: "thinking", thinking: "<thinking>\nfirst\n</thinking>" },
+						{ type: "toolCall", id: "c1", name: "read", arguments: { path: "f.ts" } },
+						{ type: "thinking", thinking: "<thinking>\nsecond\n</thinking>" },
+					],
+					api: "mock",
+					provider: "mock",
+					model: "mock",
+					usage: ZERO_USAGE,
+					stopReason: "stop",
+					timestamp: 1,
+				},
+			],
+		});
+
+		// Each block is unwrapped then re-wrapped independently — never nested.
+		expect(out).toContain("<thinking>\nfirst\n</thinking>");
+		expect(out).toContain("<thinking>\nsecond\n</thinking>");
+		expect(out).not.toContain("<thinking>\n<thinking>");
 	});
 });

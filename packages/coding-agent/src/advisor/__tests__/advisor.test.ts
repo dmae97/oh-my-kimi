@@ -2,17 +2,18 @@ import { describe, expect, it, vi } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { createAdvisorMessageCard } from "../../modes/components/advisor-message";
 import { getThemeByName } from "../../modes/theme/theme";
-import { formatSessionDumpText } from "../../session/session-dump-format";
 import { formatSessionHistoryMarkdown } from "../../session/session-history-format";
 import { YieldQueue } from "../../session/yield-queue";
 import {
 	ADVISOR_READONLY_TOOL_NAMES,
 	AdviseTool,
 	type AdvisorAgent,
+	type AdvisorNote,
 	AdvisorRuntime,
 	type AdvisorRuntimeHost,
 	formatAdvisorBatchContent,
 	isInterruptingSeverity,
+	resolveAdvisorDeliveryChannel,
 } from "..";
 
 describe("advisor", () => {
@@ -52,7 +53,7 @@ describe("advisor", () => {
 				},
 				scheduleIdleFlush: () => {},
 			});
-			yq.register<{ note: string; severity?: "nit" | "concern" | "blocker" }>("advisor", {
+			yq.register<AdvisorNote>("advisor", {
 				build: entries =>
 					entries.length === 0
 						? null
@@ -62,9 +63,7 @@ describe("advisor", () => {
 								display: true,
 								attribution: "agent",
 								timestamp: Date.now(),
-								content:
-									"Advisor (a senior reviewer watching your work — weigh it, don't blindly obey):\n" +
-									entries.map(e => `- ${e.severity ? `[${e.severity}] ` : ""}${e.note}`).join("\n"),
+								content: formatAdvisorBatchContent(entries),
 							} as AgentMessage),
 			});
 
@@ -77,8 +76,9 @@ describe("advisor", () => {
 			expect(msg.role).toBe("custom");
 			expect(msg.customType).toBe("advisor");
 			expect(msg.display).toBe(true);
-			expect(msg.content).toContain("[blocker] second note");
-			expect(msg.content).toContain("- first note");
+			expect(msg.content).toContain("second note");
+			expect(msg.content).toContain('severity="blocker"');
+			expect(msg.content).toContain("first note");
 		});
 
 		it("skipIdleFlush prevents idle scheduling", () => {
@@ -124,15 +124,21 @@ describe("advisor", () => {
 			expect(isInterruptingSeverity(undefined)).toBe(false);
 		});
 
-		it("formats a batch with the advisor prefix and severity-tagged bullets", () => {
+		it("wraps each note in an advisory tag with severity as an attribute and escapes the body", () => {
 			const content = formatAdvisorBatchContent([
 				{ note: "first note" },
-				{ note: "second note", severity: "blocker" },
+				{ note: "second <note> & more", severity: "blocker" },
 			]);
-			const lines = content.split("\n");
-			expect(lines[0]).toContain("senior reviewer");
-			expect(lines[1]).toBe("- first note");
-			expect(lines[2]).toBe("- [blocker] second note");
+			// No-severity note: bare advisory tag (no severity attribute).
+			expect(content).toMatch(/<advisory guidance="[^"]*">\nfirst note\n<\/advisory>/);
+			// Severity rides an attribute, not an inline `[blocker]` tag or a bullet.
+			expect(content).toMatch(/<advisory severity="blocker" guidance="[^"]*">/);
+			expect(content).not.toContain("[blocker]");
+			expect(content).not.toContain("- first note");
+			// XML-significant characters in the body are escaped so they can't break the tag.
+			expect(content).toContain("second &lt;note&gt; &amp; more");
+			// Exactly one severity attribute (only the blocker note carries one).
+			expect(content.split('severity="').length - 1).toBe(1);
 		});
 	});
 
@@ -277,6 +283,56 @@ describe("advisor", () => {
 			expect(promptInputs).toHaveLength(1);
 			expect(promptInputs[0]).toContain("hello");
 			expect(promptInputs[0]).not.toContain("note");
+		});
+
+		it("renders the watched delta with a heading, watched-role labels, and no inner ## headings", () => {
+			const promptInputs: string[] = [];
+			const agent = makeAgent(promptInputs);
+			const messages: AgentMessage[] = [
+				{ role: "user", content: "do the thing", timestamp: 1 } as AgentMessage,
+				{
+					role: "assistant",
+					content: [{ type: "toolCall", id: "a", name: "read", arguments: { path: "x.ts" } }],
+					timestamp: 2,
+				} as unknown as AgentMessage,
+				{
+					role: "toolResult",
+					toolCallId: "a",
+					toolName: "read",
+					content: [{ type: "text", text: "ok" }],
+					isError: false,
+					timestamp: 3,
+				} as AgentMessage,
+				{
+					role: "assistant",
+					content: [{ type: "toolCall", id: "b", name: "search", arguments: { pattern: "y" } }],
+					timestamp: 4,
+				} as unknown as AgentMessage,
+				{
+					role: "toolResult",
+					toolCallId: "b",
+					toolName: "search",
+					content: [{ type: "text", text: "ok" }],
+					isError: false,
+					timestamp: 5,
+				} as AgentMessage,
+			];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+			};
+			const runtime = new AdvisorRuntime(agent, host);
+			runtime.onTurnEnd();
+			expect(promptInputs).toHaveLength(1);
+			const prompt = promptInputs[0];
+			expect(prompt).toContain("### Session update");
+			expect(prompt).toContain("**user**:");
+			expect(prompt).toContain("**agent**:");
+			// Inner role headings would collide with the advisor's own turns in the dump.
+			expect(prompt).not.toContain("## assistant");
+			expect(prompt).not.toContain("## user");
+			// Consecutive assistant tool-call messages collapse under a single label.
+			expect(prompt.split("**agent**:").length - 1).toBe(1);
 		});
 
 		it("handles compaction shrink without prompting", () => {
@@ -584,47 +640,91 @@ describe("advisor", () => {
 			expect(text).toContain("truncated.");
 		});
 	});
-	describe("formatSessionDumpText raw thinking", () => {
-		it("does not nest literal thinking envelopes", () => {
-			const md = formatSessionDumpText({
-				messages: [
-					{
-						role: "assistant",
-						content: [
-							{
-								type: "thinking",
-								thinking: "<thinking>\nCheck logs before accepting container health.\n</thinking>",
-							},
-						],
-						timestamp: Date.now(),
-					} as AgentMessage,
-				],
-				thinkingLevel: "high",
-			});
 
-			expect(md).toContain("Assistant: <thinking>\nCheck logs before accepting container health.\n</thinking>");
-			expect(md).not.toContain("<thinking>\n<thinking>");
+	// Regression: the advisor must not withhold interrupting advice from a turn
+	// that is actively streaming again after a user interrupt. The latch only
+	// guards auto-resume of a stopped/idle run; parking a note mid-stream stranded
+	// it (the agent never heard it) and dumped the backlog as one burst at the next
+	// user prompt. See the 7-concern same-instant burst in session 019ed1dd.
+	//
+	// `streaming` here means the live agent-CORE loop (agent.state.isStreaming) —
+	// NOT session `isStreaming`, which also counts `#promptInFlightCount` during
+	// post-turn unwind. Only a running core loop consumes a steer; in the unwind
+	// window (`streaming: false`) a suppressed note must `preserve`, never `steer`,
+	// or it strands and #drainStrandedQueuedMessages auto-resumes it. Do not swap
+	// the call site back to session `isStreaming`.
+	describe("resolveAdvisorDeliveryChannel", () => {
+		it("routes a non-interrupting nit to the aside queue regardless of state", () => {
+			expect(
+				resolveAdvisorDeliveryChannel({
+					severity: "nit",
+					autoResumeSuppressed: true,
+					streaming: true,
+					aborting: true,
+				}),
+			).toBe("aside");
+			expect(
+				resolveAdvisorDeliveryChannel({
+					severity: undefined,
+					autoResumeSuppressed: false,
+					streaming: false,
+					aborting: false,
+				}),
+			).toBe("aside");
 		});
 
-		it("unwraps sibling literal thinking envelopes independently", () => {
-			const md = formatSessionDumpText({
-				messages: [
-					{
-						role: "assistant",
-						content: [
-							{ type: "thinking", thinking: "<thinking>\nfirst\n</thinking>" },
-							{ type: "toolCall", id: "tc-1", name: "read", arguments: { path: "file.ts" } },
-							{ type: "thinking", thinking: "<thinking>\nsecond\n</thinking>" },
-						],
-						timestamp: Date.now(),
-					} as AgentMessage,
-				],
-				tools: [{ name: "read", description: "Read a file", parameters: { type: "object" } }],
-				thinkingLevel: "high",
-			});
+		it("steers concern/blocker when no user interrupt is in effect", () => {
+			for (const severity of ["concern", "blocker"] as const) {
+				for (const streaming of [true, false]) {
+					expect(
+						resolveAdvisorDeliveryChannel({
+							severity,
+							autoResumeSuppressed: false,
+							streaming,
+							aborting: false,
+						}),
+					).toBe("steer");
+				}
+			}
+		});
 
-			expect(md).toContain("Assistant: <thinking>\nfirst\nsecond\n</thinking>");
-			expect(md).not.toContain("first\n</thinking>\n<thinking>\nsecond");
+		it("preserves an interrupting note while suppressed AND idle (no auto-resume of a stopped run)", () => {
+			for (const severity of ["concern", "blocker"] as const) {
+				expect(
+					resolveAdvisorDeliveryChannel({
+						severity,
+						autoResumeSuppressed: true,
+						streaming: false,
+						aborting: false,
+					}),
+				).toBe("preserve");
+			}
+		});
+
+		it("preserves an interrupting note while suppressed AND aborting, even though the turn still reports streaming", () => {
+			// Mid-abort teardown: steering would land after #extractQueuedAdvisorCards
+			// and could auto-resume on the stranded steer. Keep parking it.
+			expect(
+				resolveAdvisorDeliveryChannel({
+					severity: "blocker",
+					autoResumeSuppressed: true,
+					streaming: true,
+					aborting: true,
+				}),
+			).toBe("preserve");
+		});
+
+		it("steers an interrupting note while suppressed once a turn is streaming again and not aborting (the fix)", () => {
+			for (const severity of ["concern", "blocker"] as const) {
+				expect(
+					resolveAdvisorDeliveryChannel({
+						severity,
+						autoResumeSuppressed: true,
+						streaming: true,
+						aborting: false,
+					}),
+				).toBe("steer");
+			}
 		});
 	});
 });

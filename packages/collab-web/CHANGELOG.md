@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [16.0.3] - 2026-06-16
+
+### Removed
+
+- Removed rendering support for the `render_mermaid` tool from the web tool registry
+
 ## [15.13.3] - 2026-06-15
 
 ### Fixed

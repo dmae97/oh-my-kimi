@@ -20,8 +20,8 @@ All exports live under `@oh-my-pi/pi-ai/utils/schema`:
 - `normalizeSchemaForMCP(value)` — MCP inputSchemas before they enter the
   custom-tool registry. `tool-bridge.ts` runs every MCP `inputSchema` through
   this dispatcher.
-- `normalizeSchemaForOpenAIResponses(schema)` (alias
-  `sanitizeSchemaForOpenAIResponses`) — rewrites `oneOf` → `anyOf` for the
+- `sanitizeSchemaForOpenAIResponses(schema)` (alias
+  `normalizeSchemaForOpenAIResponses`) — rewrites `oneOf` → `anyOf` for the
   Responses family.
 - `sanitizeSchemaForStrictMode(schema)` and
   `enforceStrictSchema(schema)` / `tryEnforceStrictSchema(schema)` — the
@@ -77,7 +77,8 @@ pinned by the dispatcher. Each node:
    marker on Google, plain `type: "T"` on CCA).
 5. Collapses object-only / same-type combiners, optionally lossy-collapses
    mixed-type combiners (CCA only), and runs the residual-combiner fixpoint.
-6. Validates against AJV 2020 when `validateAndFallback` is set (CCA path)
+6. Validates with the in-house structural validator (`isValidJsonSchema`
+   from `meta-validator.ts`) when `validateAndFallback` is set (CCA path)
    and emits the per-tool fallback `{ "type": "object", "properties": {} }`
    on residual incompatibility — `type` array, `type: "null"`, `nullable`
    key, or any remaining `anyOf`/`oneOf`/`allOf`.
@@ -139,7 +140,7 @@ so callers MUST emit `strict: true` only when enforcement actually succeeded.
 `resolveProviderModels` in `packages/catalog/src/model-manager.ts` and
 `readModelCache`/`writeModelCache` in `packages/catalog/src/model-cache.ts`
 cooperate via a `static_fingerprint` column on the `model_cache` SQLite
-table (current cache schema version 5).
+table (current cache schema version 6).
 
 - `fingerprintStatic(staticModels)` hashes the static catalog slice
   (`Bun.hash(JSON.stringify(models))` in base36) and memoizes the result

@@ -65,7 +65,7 @@ Memory extraction and consolidation behavior is driven by static prompt files in
 | `stage_one_input.md`     | User-turn template wrapping session content  | `{{thread_id}}`, `{{response_items_json}}`  |
 | `consolidation_system.md`| System prompt for cross-session consolidation | —                                          |
 | `consolidation.md`       | User-turn prompt for cross-session consolidation | `{{raw_memories}}`, `{{rollout_summaries}}` |
-| `read-path.md`           | Memory guidance injected into live sessions  | `{{memory_summary}}`                        |
+| `read-path.md`           | Memory guidance injected into live sessions  | `{{memory_summary}}`, `{{learned}}`         |
 
 ### Model selection
 

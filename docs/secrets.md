@@ -98,7 +98,7 @@ Regex entries always scan globally (the `g` flag is enforced automatically). The
 
 ## Interaction with env var detection
 
-Environment variables are collected first, then file-defined entries are appended. File entries can cover secrets that don't live in env vars (config files, hardcoded values, etc.). If the same plain value appears in both env and file entries, the env entry's obfuscate-mode mapping is used first.
+Environment variables are collected first, then file-defined entries are appended. File entries can cover secrets that don't live in env vars (config files, hardcoded values, etc.). Env and file entries are not deduplicated against each other, so a plain value present in both is registered twice; both placeholders restore to the same secret, so deobfuscation is unaffected.
 
 ## Key files
 

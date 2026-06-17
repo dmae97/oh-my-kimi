@@ -157,8 +157,13 @@ export class AdvisorRuntime {
 			.filter(m => !(m.role === "custom" && (m as { customType?: string }).customType === "advisor"));
 		this.#lastCount = all.length;
 		if (delta.length === 0) return null;
-		const md = formatSessionHistoryMarkdown(delta, { includeThinking: true, includeToolIntent: true });
-		return md.trim() ? md : null;
+		const md = formatSessionHistoryMarkdown(delta, {
+			includeThinking: true,
+			includeToolIntent: true,
+			watchedRoles: true,
+		});
+		if (!md.trim()) return null;
+		return `### Session update\n\n${md}`;
 	}
 
 	#notifyWaiters(): void {
@@ -182,7 +187,9 @@ export class AdvisorRuntime {
 		try {
 			while (!this.disposed && this.#pending.length) {
 				const popped = this.#pending.splice(0);
-				const candidateBatch = popped.map(b => b.text).join("\n\n---\n\n");
+				// Each delta already opens with a `### Session update` heading, so
+				// join with a blank line rather than a `---` rule.
+				const candidateBatch = popped.map(b => b.text).join("\n\n");
 				const turnsCovered = popped.reduce((sum, b) => sum + b.turns, 0);
 				const incomingTokens = estimateTokens({
 					role: "user",

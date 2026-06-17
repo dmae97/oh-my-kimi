@@ -875,6 +875,18 @@ export interface BenchmarkSummary {
 	flakyTasks: number;
 	/** Tasks where every executed non-ghost run succeeded. */
 	consistentlyPassingTasks: number;
+	/** Tasks whose first run succeeded. */
+	successfulOneShotTasks: number;
+	/** Tokens summed over the first run of each successfully one-shot task. */
+	totalOneShotSuccessTokens: TokenStats;
+	/** Average tokens per successfully one-shot task. */
+	avgOneShotSuccessTokensPerTask: TokenStats;
+	/** Median tokens across successfully one-shot tasks. */
+	medianOneShotSuccessTokensPerTask: TokenStats;
+	/** 1st-percentile tokens across successfully one-shot tasks. */
+	p1OneShotSuccessTokensPerTask: TokenStats;
+	/** 99th-percentile tokens across successfully one-shot tasks. */
+	p99OneShotSuccessTokensPerTask: TokenStats;
 	/** Tokens summed over the best run of each task. */
 	totalTokens: TokenStats;
 	/** Average tokens per task (sum of best runs / number of tasks). */
@@ -1943,8 +1955,31 @@ export function buildBenchmarkResult(params: {
 			? bestWithMutationIntent.filter(r => r.mutationIntentMatched).length / bestWithMutationIntent.length
 			: undefined;
 
+	const oneShotSuccessRuns = taskResults
+		.map(t => t.runs.find(r => r.runIndex === 0))
+		.filter((r): r is TaskRunResult => Boolean(r?.success));
+	const successfulOneShotTasks = oneShotSuccessRuns.length;
+	const oneShotDenom = successfulOneShotTasks || 1;
+
+	const totalOneShotSuccessTokens: TokenStats = {
+		input: oneShotSuccessRuns.reduce((sum, r) => sum + r.tokens.input, 0),
+		output: oneShotSuccessRuns.reduce((sum, r) => sum + r.tokens.output, 0),
+		total: oneShotSuccessRuns.reduce((sum, r) => sum + r.tokens.total, 0),
+	};
+	const oneShotTokenDistribution = summarizeTokenDistribution(oneShotSuccessRuns);
+
 	const taskDenom = tasksWithBestRun || 1;
 	const summary: BenchmarkSummary = {
+		successfulOneShotTasks,
+		totalOneShotSuccessTokens,
+		avgOneShotSuccessTokensPerTask: {
+			input: Math.round(totalOneShotSuccessTokens.input / oneShotDenom),
+			output: Math.round(totalOneShotSuccessTokens.output / oneShotDenom),
+			total: Math.round(totalOneShotSuccessTokens.total / oneShotDenom),
+		},
+		medianOneShotSuccessTokensPerTask: oneShotTokenDistribution.median,
+		p1OneShotSuccessTokensPerTask: oneShotTokenDistribution.p1,
+		p99OneShotSuccessTokensPerTask: oneShotTokenDistribution.p99,
 		totalTasks,
 		totalRuns,
 		successfulRuns,

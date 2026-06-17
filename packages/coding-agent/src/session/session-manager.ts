@@ -71,6 +71,27 @@ function artifactsDirectoryFor(sessionFile: string | undefined): string | null {
 	return sessionFile ? sessionFile.slice(0, -JSONL_SUFFIX_LENGTH) : null;
 }
 
+/**
+ * Resolve a breadcrumb's recorded session file to its interactive root. Subagent
+ * (and other artifact) sessions live inside a parent session's artifacts dir —
+ * `<parent>.jsonl` strips its suffix to `<parent>/`, and a child writes
+ * `<parent>/<agentId>.jsonl`. A breadcrumb that points at such a child — a
+ * pre-fix poisoned crumb left by a subagent that opened in the parent's TTY, or
+ * any nested artifact — must resolve back up to the top-level session so
+ * `--continue` resumes the real conversation instead of a subagent transcript.
+ */
+function resolveBreadcrumbToInteractiveRoot(sessionFile: string): string {
+	let current = path.resolve(sessionFile);
+	// Walk up while the containing dir is itself a session's artifacts dir
+	// (`<dir>.jsonl` exists). Capped to defend against pathological layouts.
+	for (let depth = 0; depth < 8; depth++) {
+		const parentSessionFile = `${path.dirname(current)}.jsonl`;
+		if (!fs.existsSync(parentSessionFile)) return current;
+		current = parentSessionFile;
+	}
+	return current;
+}
+
 function emptyUsageStatistics(): UsageStatistics {
 	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, premiumRequests: 0, cost: 0 };
 }
@@ -462,7 +483,7 @@ export class SessionManager {
 	 * bytes in the kernel page cache, so the file is software-crash durable.
 	 */
 	#rewriteSynchronously(): void {
-		if (!this.#persist || !this.#sessionFile) return;
+		if (!this.#persist || !this.#sessionFile || !this.#shouldHaveSessionFile()) return;
 
 		try {
 			const body = this.#fileBody();
@@ -931,8 +952,10 @@ export class SessionManager {
 	async close(): Promise<void> {
 		if (!this.#persist) return;
 		await this.#scheduleDiskWork(async () => {
+			const hadWriter = this.#writer !== undefined;
 			await this.#closeWriterHandle();
-			this.#fileIsCurrent = true;
+			if (hadWriter || (this.#sessionFile && this.#storage.existsSync(this.#sessionFile)))
+				this.#fileIsCurrent = true;
 		});
 		if (this.#diskFailure) throw this.#diskFailure;
 	}
@@ -1157,7 +1180,14 @@ export class SessionManager {
 		return entry.id;
 	}
 
-	appendSessionInit(init: { systemPrompt: string; task: string; tools: string[]; outputSchema?: unknown }): string {
+	appendSessionInit(init: {
+		systemPrompt: string;
+		task: string;
+		tools: string[];
+		outputSchema?: unknown;
+		spawns?: string;
+		readSummarize?: boolean;
+	}): string {
 		const entry: SessionInitEntry = { type: "session_init", ...this.#freshEntryFields(), ...init };
 		this.#recordEntry(entry);
 		return entry.id;
@@ -1528,15 +1558,72 @@ export class SessionManager {
 		filePath: string,
 		sessionDir?: string,
 		storage: SessionStorage = new FileSessionStorage(),
-		options?: { initialCwd?: string },
+		options?: { initialCwd?: string; suppressBreadcrumb?: boolean },
 	): Promise<SessionManager> {
 		const loaded = await loadEntriesFromFile(filePath, storage);
 		const header = loaded.find(entry => entry.type === "session") as SessionHeader | undefined;
 		const cwd = header?.cwd ?? options?.initialCwd ?? getProjectDir();
 		const dir = sessionDir ?? path.dirname(path.resolve(filePath));
 		const manager = new SessionManager(cwd, dir, true, storage);
+		manager.#suppressBreadcrumb = options?.suppressBreadcrumb === true;
 		await manager.setSessionFile(filePath);
 		return manager;
+	}
+
+	/**
+	 * Lock-free peek for cold subagent revival: returns the recorded working
+	 * directory (session header) and the latest `session_init` contract (system
+	 * prompt / tools / output schema) WITHOUT taking the single-writer lock that
+	 * {@link open} acquires — the caller re-opens for the actual revive. Returns
+	 * null when the file can't be read; `init` is null for files written before
+	 * `session_init` was recorded (no faithful contract to rebuild from).
+	 */
+	static async peekSessionInit(
+		filePath: string,
+		storage: SessionStorage = new FileSessionStorage(),
+	): Promise<{
+		cwd: string;
+		init: {
+			systemPrompt: string;
+			task: string;
+			tools: string[];
+			outputSchema?: unknown;
+			spawns?: string;
+			readSummarize?: boolean;
+		} | null;
+	} | null> {
+		let loaded: FileEntry[];
+		try {
+			loaded = await loadEntriesFromFile(filePath, storage);
+		} catch {
+			return null;
+		}
+		// A missing/empty file has no usable session — nothing to revive from.
+		if (loaded.length === 0) return null;
+		const header = loaded.find(entry => entry.type === "session") as SessionHeader | undefined;
+		let init: {
+			systemPrompt: string;
+			task: string;
+			tools: string[];
+			outputSchema?: unknown;
+			spawns?: string;
+			readSummarize?: boolean;
+		} | null = null;
+		for (let index = loaded.length - 1; index >= 0; index--) {
+			const entry = loaded[index];
+			if (entry.type === "session_init") {
+				init = {
+					systemPrompt: entry.systemPrompt,
+					task: entry.task,
+					tools: entry.tools,
+					outputSchema: entry.outputSchema,
+					readSummarize: entry.readSummarize,
+					spawns: entry.spawns,
+				};
+				break;
+			}
+		}
+		return { cwd: header?.cwd ?? getProjectDir(), init };
 	}
 
 	/** Continue the most recent session, or create a new one if none exists. */
@@ -1551,6 +1638,9 @@ export class SessionManager {
 		let chosenSession: string | null | undefined;
 
 		if (breadcrumb) {
+			// Recover stale crumbs: a subagent open (pre-fix) may have pointed this
+			// terminal's breadcrumb at an artifact child; resume the parent instead.
+			breadcrumb.sessionFile = resolveBreadcrumbToInteractiveRoot(breadcrumb.sessionFile);
 			const breadcrumbCwd = path.resolve(breadcrumb.cwd);
 			if (breadcrumbCwd === resolvedCwd) {
 				chosenSession = breadcrumb.sessionFile;

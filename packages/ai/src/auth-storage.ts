@@ -1786,7 +1786,10 @@ export class AuthStorage {
 			return;
 		}
 		const newCredential: OAuthCredential = { type: "oauth", ...result };
-		await this.#upsertOAuthCredential(def.storeCredentialsAs ?? provider, newCredential);
+		// Use set() instead of #upsertOAuthCredential to replace ALL existing credentials
+		// (including legacy api_key rows from older versions) with the new OAuth credential.
+		// This ensures getApiKey() doesn't match an old api_key row before the new OAuth row.
+		await this.set(def.storeCredentialsAs ?? provider, newCredential);
 	}
 
 	/**

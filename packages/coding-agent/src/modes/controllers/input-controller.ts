@@ -708,21 +708,25 @@ export class InputController {
 				// No input waiter: the main loop is between turns (post-turn
 				// epilogue, retry backoff, or a scheduled continue) with the agent
 				// momentarily idle. The editor already cleared itself on Enter, so
-				// falling through here would silently swallow the message. Queue it
-				// as a steer instead: the idle drain in #queueSteer delivers it
-				// immediately when the session is resumable, and a retry/continue
-				// run picks it up at loop start otherwise.
+				// falling through here would silently swallow the message. Submit a
+				// real prompt directly; if a background turn starts in the gap,
+				// `streamingBehavior: "steer"` preserves the typed-message queueing
+				// semantics instead of throwing AgentBusyError.
 				this.ctx.editor.imageLinks = undefined;
 				const images = inputImages && inputImages.length > 0 ? [...inputImages] : undefined;
 				this.ctx.pendingImages = [];
 				this.ctx.pendingImageLinks = [];
 				try {
-					await this.ctx.withLocalSubmission(text, () => this.ctx.session.steer(text, images), {
-						imageCount: images?.length ?? 0,
-					});
+					await this.ctx.withLocalSubmission(
+						text,
+						() => this.ctx.session.prompt(text, { streamingBehavior: "steer", images }),
+						{
+							imageCount: images?.length ?? 0,
+						},
+					);
 				} catch (error) {
 					// Don't lose the message: hand the text and images back to the
-					// editor so the user can retry (e.g. steer() rejecting an
+					// editor so the user can retry (e.g. prompt dispatch rejecting an
 					// extension command).
 					this.ctx.editor.setText(text);
 					if (images && images.length > 0) {
@@ -994,7 +998,9 @@ export class InputController {
 
 	restoreQueuedMessagesToEditor(options?: { abort?: boolean; currentText?: string }): number {
 		this.ctx.locallySubmittedUserSignatures.clear();
-		const { steering, followUp } = this.ctx.session.clearQueue();
+		// On Esc (abort) drop non-user internal steers so the post-abort drain can't
+		// auto-resume; plain Alt+Up dequeue preserves them for the continuing stream.
+		const { steering, followUp } = this.ctx.session.clearQueue({ forInterrupt: options?.abort });
 		// Messages typed while compacting live in `compactionQueuedMessages`, not the
 		// agent queue `clearQueue()` drains — but the pending bar shows the same
 		// "Alt+Up to edit" hint for them (ui-helpers `updatePendingMessagesDisplay`).

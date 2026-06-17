@@ -143,7 +143,7 @@ execute(toolCallId, params, onUpdate, ctx, signal);
 - `params` is statically typed from your Zod/TypeBox schema via `Static<TParams>`.
 - Runtime argument validation happens before execution in the agent loop.
 - `onUpdate` emits partial results for UI streaming.
-- `ctx` includes `sessionManager`, `modelRegistry`, current `model`, `isIdle()`, `hasQueuedMessages()`, `abort()`, and optional `settings` / `autoApprove`.
+- `ctx` includes `sessionManager`, `modelRegistry`, current `model`, `isIdle()`, `hasQueuedMessages()`, `abort()`, and optional `settings`, `fetch`, and `autoApprove`.
 - `signal` carries cancellation.
 
 `CustomToolAdapter` bridges this to the agent tool interface and forwards calls in the correct argument order.

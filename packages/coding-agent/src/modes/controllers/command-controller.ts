@@ -84,9 +84,9 @@ export class CommandController {
 		}
 	}
 
-	handleDumpCommand(isRaw = false) {
+	handleDumpCommand() {
 		try {
-			const formatted = this.ctx.session.formatSessionAsText({ compact: !isRaw });
+			const formatted = this.ctx.session.formatSessionAsText();
 			if (!formatted) {
 				this.ctx.showError("No messages to dump yet.");
 				return;

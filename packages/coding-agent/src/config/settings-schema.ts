@@ -2658,7 +2658,7 @@ export const SETTINGS_SCHEMA = {
 			group: "Read Summaries",
 			label: "Read Summary Unfold Ceiling",
 			description:
-				"Hard ceiling on summary size while BFS-unfolding. An unfold that would exceed this is reverted and unfolding stops.",
+				"Hard ceiling on summary size while BFS-unfolding. An unfold whose revealed lines would exceed this is skipped (that span stays folded) and unfolding continues with the remaining spans.",
 		},
 	},
 
@@ -3069,17 +3069,6 @@ export const SETTINGS_SCHEMA = {
 	},
 
 	// Optional tools
-
-	"renderMermaid.enabled": {
-		type: "boolean",
-		default: false,
-		ui: {
-			tab: "tools",
-			group: "Available Tools",
-			label: "Render Mermaid",
-			description: "Enable the render_mermaid tool for Mermaid-to-ASCII rendering",
-		},
-	},
 
 	"debug.enabled": {
 		type: "boolean",

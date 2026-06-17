@@ -21,7 +21,6 @@ import {
 	getOpenAICodexTransportDetails,
 	prewarmOpenAICodexResponses,
 } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
-import { DEFAULT_MODEL_PER_PROVIDER } from "@oh-my-pi/pi-catalog/provider-models";
 import type { Component } from "@oh-my-pi/pi-tui";
 import {
 	$env,
@@ -49,6 +48,7 @@ import {
 	getModelMatchPreferences,
 	parseModelPattern,
 	parseModelString,
+	pickDefaultAvailableModel,
 	resolveAllowedModels,
 	resolveModelRoleValue,
 } from "./config/model-resolver";
@@ -507,6 +507,14 @@ export interface CreateAgentSessionOptions {
 	agentRegistry?: AgentRegistry;
 	/** Parent task ID prefix for nested artifact naming (e.g., "Extensions") */
 	parentTaskPrefix?: string;
+	/**
+	 * Registry id of the spawning agent, recorded as this subagent's parent in
+	 * the agent registry. Distinct from `parentTaskPrefix`, which is this agent's
+	 * own artifact/output-id prefix (the executor passes the child's own id
+	 * there, so it must never double as the parent link). Undefined for the
+	 * top-level "Main" session, which has no parent.
+	 */
+	parentAgentId?: string;
 	/** Inherited eval executor session id for subagents sharing parent eval state. */
 	parentEvalSessionId?: string;
 
@@ -1928,29 +1936,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			// Re-resolve the allowed set: extension factories above may have
 			// registered providers/models that weren't visible at startup.
 			const fallbackCandidates = await resolveAllowedModels(modelRegistry, settings, modelMatchPreferences);
-			// Prefer each provider's configured default model
-			// (DEFAULT_MODEL_PER_PROVIDER) over raw catalog order. Without this the
-			// first-run fallback picks whatever model sorts first in models.json for
-			// the winning provider (e.g. anthropic's claude-3-5-sonnet-20240620)
-			// instead of the intended provider default (claude-sonnet-4-6). Mirrors
-			// findInitialModel's precedence.
-			for (const [provider, defaultId] of Object.entries(DEFAULT_MODEL_PER_PROVIDER)) {
-				const preferred = fallbackCandidates.find(
-					candidate => candidate.provider === provider && candidate.id === defaultId,
-				);
-				if (preferred && hasModelAuth(preferred)) {
-					model = preferred;
-					break;
-				}
-			}
-			// Otherwise, first available model with a valid API key.
-			if (!model) {
-				for (const candidate of fallbackCandidates) {
-					if (hasModelAuth(candidate)) {
-						model = candidate;
-						break;
-					}
-				}
+			const defaultModel = pickDefaultAvailableModel(fallbackCandidates.filter(hasModelAuth));
+			if (defaultModel) {
+				model = defaultModel;
 			}
 			if (model) {
 				if (modelFallbackMessage) {
@@ -2020,7 +2008,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				return { definition, extensionPath: "<sdk>" };
 			}) ?? []),
 		];
-		const wrappedExtensionTools: Tool[] = wrapRegisteredTools(allCustomTools, extensionRunner);
+		// `wrapToolWithMetaNotice` runs the centralized large-output → artifact spill.
+		// Built-in tools get it in `createTools`; extension, SDK-custom, image-gen,
+		// TTS, and startup (non-deferred) MCP tools all funnel through here, so apply
+		// it once at this adapter boundary (idempotent — a no-op if already wrapped).
+		const wrappedExtensionTools: Tool[] = wrapRegisteredTools(allCustomTools, extensionRunner).map(
+			wrapToolWithMetaNotice,
+		);
 
 		// All built-in tools are active (conditional tools like git/ask return null from factory if disabled)
 		const toolRegistry = new Map<string, Tool>();
@@ -2338,7 +2332,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			id: resolvedAgentId,
 			displayName: resolvedAgentDisplayName,
 			kind: agentKind,
-			parentId: options.parentTaskPrefix,
+			parentId: options.parentAgentId,
 			session: null,
 			sessionFile: sessionManager.getSessionFile() ?? null,
 			status: "running",
