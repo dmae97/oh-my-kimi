@@ -1,7 +1,14 @@
 import type { AuthStorage } from "@oh-my-pi/pi-ai";
 import { PASTE_CODE_LOGIN_PROVIDERS } from "@oh-my-pi/pi-ai";
 import type { OAuthProvider } from "@oh-my-pi/pi-ai/oauth/types";
-import { Input, matchesKey, type SgrMouseEvent, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
+import {
+	type Component,
+	type Focusable,
+	Input,
+	matchesKey,
+	type SgrMouseEvent,
+	wrapTextWithAnsi,
+} from "@oh-my-pi/pi-tui";
 import { getAgentDbPath } from "@oh-my-pi/pi-utils";
 import { copyToClipboard } from "../../../utils/clipboard";
 import { OAuthSelectorComponent } from "../../components/oauth-selector";
@@ -16,10 +23,48 @@ function loginCopyHint(): string {
 	return theme.fg("dim", "(clipboard copy attempted; Alt+C retries)");
 }
 
+class CopyablePromptInput implements Component, Focusable {
+	#input: Input;
+	#onCopy: () => void;
+
+	constructor(input: Input, onCopy: () => void) {
+		this.#input = input;
+		this.#onCopy = onCopy;
+	}
+
+	get focused(): boolean {
+		return this.#input.focused;
+	}
+
+	set focused(value: boolean) {
+		this.#input.focused = value;
+	}
+
+	setUseTerminalCursor(useTerminalCursor: boolean): void {
+		this.#input.setUseTerminalCursor(useTerminalCursor);
+	}
+
+	render(width: number): readonly string[] {
+		return this.#input.render(width);
+	}
+
+	handleInput(data: string): void {
+		if (matchesKey(data, "alt+c")) {
+			this.#onCopy();
+			return;
+		}
+		this.#input.handleInput(data);
+	}
+
+	invalidate(): void {
+		this.#input.invalidate();
+	}
+}
+
 interface PromptState {
 	message: string;
 	placeholder?: string;
-	input: Input;
+	input: CopyablePromptInput;
 }
 
 /**
@@ -211,9 +256,12 @@ export class SignInTab implements SetupTab {
 	#showPrompt(prompt: { message: string; placeholder?: string }): Promise<string> {
 		this.#resolvePrompt("");
 		const input = new Input();
+		const focusInput = new CopyablePromptInput(input, () => {
+			void this.#copyAuthUrl();
+		});
 		const pending = Promise.withResolvers<string>();
 		this.#promptResolve = pending.resolve;
-		this.#prompt = { message: prompt.message, placeholder: prompt.placeholder, input };
+		this.#prompt = { message: prompt.message, placeholder: prompt.placeholder, input: focusInput };
 		input.onSubmit = value => {
 			this.#resolvePrompt(value);
 		};
@@ -221,7 +269,7 @@ export class SignInTab implements SetupTab {
 			this.#loginAbort?.abort();
 			this.#resolvePrompt("");
 		};
-		this.host.setFocus(input);
+		this.host.setFocus(focusInput);
 		this.host.requestRender();
 		return pending.promise;
 	}

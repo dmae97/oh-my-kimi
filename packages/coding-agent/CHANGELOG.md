@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed provider setup sign-in URLs to attempt clipboard/OSC 52 copy and expose an Alt+C retry shortcut, so authentication is not blocked when TUI selection is unavailable ([#2908](https://github.com/can1357/oh-my-pi/issues/2908)).
+
 ## [16.0.5] - 2026-06-17
 
 ### Added
@@ -23,7 +27,6 @@
 
 ### Fixed
 
-- Fixed provider setup sign-in URLs to attempt clipboard/OSC 52 copy and expose an Alt+C retry shortcut, so authentication is not blocked when TUI selection is unavailable ([#2908](https://github.com/can1357/oh-my-pi/issues/2908)).
 - Fixed Matplotlib figure display to emit PNG output immediately when `display(fig)` is called, even if the figure is closed before the end-of-cell flush
 - Fixed persisted tool-result image payloads in `details.images` to externalize and resolve through the session blob store, so generated-image details survive resume without stale blob refs or truncation
 - Fixed duplicate Matplotlib image output by skipping the automatic end-of-request figure flush for figures that were already displayed through `display(fig)`

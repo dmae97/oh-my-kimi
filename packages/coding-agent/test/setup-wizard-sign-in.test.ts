@@ -5,6 +5,7 @@ import { SignInTab } from "@oh-my-pi/pi-coding-agent/modes/setup-wizard/scenes/s
 import type { SetupSceneHost } from "@oh-my-pi/pi-coding-agent/modes/setup-wizard/scenes/types";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import * as clipboard from "@oh-my-pi/pi-coding-agent/utils/clipboard";
+import type { Component } from "@oh-my-pi/pi-tui";
 
 beforeAll(async () => {
 	await initTheme();
@@ -19,6 +20,7 @@ describe("SignInTab", () => {
 		const url = `https://example.com/oauth/authorize?client_id=omp&redirect_uri=http%3A%2F%2Flocalhost%3A45454%2Fcallback&state=${"a".repeat(96)}`;
 		const loginGate = Promise.withResolvers<void>();
 		const copySpy = vi.spyOn(clipboard, "copyToClipboard").mockResolvedValue(undefined);
+		let focusTarget: Component | undefined;
 		const openedUrls: string[] = [];
 
 		const authStorage = {
@@ -47,7 +49,9 @@ describe("SignInTab", () => {
 			},
 			requestRender(): void {},
 			finish(): void {},
-			setFocus(): void {},
+			setFocus(component: Component | null): void {
+				focusTarget = component ?? undefined;
+			},
 			restoreFocus(): void {},
 		} as unknown as SetupSceneHost;
 
@@ -64,7 +68,10 @@ describe("SignInTab", () => {
 			expect(compact).not.toContain("…");
 			expect(rendered.join("\n")).toContain(`\x1b]8;;${url}\x07Open login URL\x1b]8;;\x07`);
 			expect(openedUrls).toEqual([url]);
-			expect(copySpy).toHaveBeenCalledWith(url);
+			expect(focusTarget).toBeDefined();
+			focusTarget?.handleInput?.("\x1bc");
+			expect(copySpy).toHaveBeenCalledTimes(2);
+			expect(copySpy).toHaveBeenLastCalledWith(url);
 
 			// On a ~24-row terminal the wizard body ends up ~8 rows; the OSC8
 			// link, a plain URL row, and the focused input must survive that clip.
