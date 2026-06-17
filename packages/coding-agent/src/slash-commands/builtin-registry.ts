@@ -308,7 +308,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "model",
 		aliases: ["models"],
-		description: "Select model (opens selector UI)",
+		description: "Switch model for this session",
 		acpDescription: "Show current model selection",
 		handle: async (command, runtime) => {
 			if (command.args) {
@@ -341,7 +341,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			return commandConsumed();
 		},
 		handleTui: (_command, runtime) => {
-			runtime.ctx.showModelSelector();
+			runtime.ctx.showModelSelector({ temporaryOnly: true });
 			runtime.ctx.editor.setText("");
 		},
 	},
