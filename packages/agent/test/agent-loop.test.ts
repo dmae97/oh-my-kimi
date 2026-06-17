@@ -55,6 +55,31 @@ describe("agentLoop with AgentMessage", () => {
 		expect(eventTypes).toContain("agent_end");
 	});
 
+	it("ends gracefully without a provider call after the deadline", async () => {
+		const context: AgentContext = {
+			systemPrompt: ["You are helpful."],
+			messages: [],
+			tools: [],
+		};
+		const prompt = createUserMessage("Hello");
+		const mock = createMockModel({ responses: [{ content: ["Too late"] }] });
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			deadline: Date.now() - 1,
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([prompt], context, config, undefined, mock.stream);
+		for await (const event of stream) {
+			events.push(event);
+		}
+
+		expect(await stream.result()).toEqual([prompt]);
+		expect(mock.calls).toHaveLength(0);
+		expect(events.map(event => event.type)).toContain("agent_end");
+	});
+
 	it("returns detailed telemetry when awaiting detailed() directly", async () => {
 		const context: AgentContext = {
 			systemPrompt: ["You are helpful."],
@@ -1973,5 +1998,124 @@ describe("agentLoopContinue with AgentMessage", () => {
 			if (block.type === "text") text += block.text;
 		}
 		expect(text).toBe(hexdump);
+	});
+	it("aborts pending tool calls instead of running them when the deadline is crossed during the request", async () => {
+		const context: AgentContext = {
+			systemPrompt: ["You are helpful."],
+			messages: [],
+			tools: [],
+		};
+
+		const mock = createMockModel();
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			deadline: Date.now() + 10_000,
+		};
+
+		// The provider returns a runnable tool call, but the wall clock crosses the
+		// deadline while the request is in flight (simulated by moving the deadline
+		// into the past mid-call). The loop must NOT execute the tool — it pairs each
+		// call with an aborted placeholder so the tool_use/tool_result contract stays
+		// valid for any later replay.
+		const toolCall = { type: "toolCall" as const, id: "tc-late-1", name: "some-tool", arguments: {} };
+		const streamFn = () => {
+			config.deadline = Date.now() - 1;
+			const stream = new AssistantMessageEventStream();
+			const partial = createAssistantMessage([toolCall], "toolUse");
+			stream.push({ type: "start", partial });
+			stream.push({ type: "toolcall_start", contentIndex: 0, partial });
+			stream.push({ type: "toolcall_delta", contentIndex: 0, delta: "{}", partial });
+			stream.push({ type: "toolcall_end", contentIndex: 0, toolCall, partial });
+			stream.push({ type: "done", reason: "toolUse", message: partial });
+			return stream;
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("Run helper")], context, config, undefined, streamFn);
+		for await (const event of stream) {
+			events.push(event);
+		}
+
+		const messages = await stream.result();
+		expect(messages.map(m => m.role)).toEqual(["user", "assistant", "toolResult"]);
+		const toolResult = messages[2] as ToolResultMessage;
+		expect(toolResult.toolCallId).toBe("tc-late-1");
+		expect(toolResult.isError).toBe(true);
+		const text = toolResult.content
+			.filter((c): c is { type: "text"; text: string } => c.type === "text")
+			.map(c => c.text)
+			.join("\n");
+		expect(text).toContain("Deadline exceeded");
+		expect(events.map(event => event.type)).toContain("agent_end");
+	});
+
+	it("does not dequeue follow-up messages when the deadline is crossed during onBeforeYield", async () => {
+		const context: AgentContext = {
+			systemPrompt: ["You are helpful."],
+			messages: [],
+			tools: [],
+		};
+		const mock = createMockModel({ responses: [{ content: ["Hi"] }] });
+		const queuedFollowUps = [createUserMessage("follow-up")];
+		let followUpPolls = 0;
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			deadline: Date.now() + 10_000,
+			onBeforeYield: () => {
+				// The wall clock crosses the deadline while this hook runs.
+				config.deadline = Date.now() - 1;
+			},
+			getFollowUpMessages: async () => {
+				followUpPolls++;
+				return queuedFollowUps.splice(0);
+			},
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("start")], context, config, undefined, mock.stream);
+		for await (const event of stream) {
+			events.push(event);
+		}
+
+		// The post-onBeforeYield deadline guard must exit before the queue drain, so
+		// the follow-up is never dequeued (and therefore never silently dropped).
+		expect(followUpPolls).toBe(0);
+		expect(queuedFollowUps).toHaveLength(1);
+		expect(events.map(event => event.type)).toContain("agent_end");
+	});
+
+	it("aborts the in-flight provider request when the deadline timer fires", async () => {
+		const context: AgentContext = {
+			systemPrompt: ["You are helpful."],
+			messages: [],
+			tools: [],
+		};
+		const config: AgentLoopConfig = {
+			model: createMockModel().model,
+			convertToLlm: identityConverter,
+			deadline: Date.now() + 50,
+		};
+
+		// A stalled provider that never emits; it only observes the abort signal the
+		// loop hands it. The merged deadline signal must fire and cancel the request,
+		// surfacing the deadline reason on the synthesized aborted message.
+		let providerSignalAborted = false;
+		const stream = agentLoop([createUserMessage("Wait")], context, config, undefined, (_model, _context, options) => {
+			options?.signal?.addEventListener("abort", () => {
+				providerSignalAborted = true;
+			});
+			return new AssistantMessageEventStream();
+		});
+
+		const messages = await stream.result();
+
+		expect(providerSignalAborted).toBe(true);
+		const finalMessage = messages[messages.length - 1];
+		expect(finalMessage.role).toBe("assistant");
+		if (finalMessage.role !== "assistant") throw new Error("Expected assistant message");
+		expect(finalMessage.stopReason).toBe("aborted");
+		expect(finalMessage.errorMessage).toBe("Deadline exceeded");
 	});
 });

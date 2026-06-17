@@ -136,6 +136,9 @@ export default class Index extends Command {
 		"no-title": Flags.boolean({
 			description: "Disable title auto-generation",
 		}),
+		"max-time": Flags.string({
+			description: "Stop the session after this many seconds",
+		}),
 		// `--auto-approve` / `--yolo`: declared here so oclif's auto-generated `--help` lists it.
 		// Runtime parsing happens in `cli/args.ts parseArgs` (line 176 in that file) — `runRootCommand`
 		// consumes the manual-parser output, not these oclif flag values. If you rename or remove

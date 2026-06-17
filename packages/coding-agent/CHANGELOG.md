@@ -89,6 +89,10 @@
 
 - Removed the built-in `render_mermaid` tool and its `renderMermaid.enabled` setting, so it can no longer be invoked directly
 
+### Added
+
+- Added `--max-time <seconds>` so CLI sessions can stop after a wall-clock deadline.
+
 ## [16.0.2] - 2026-06-16
 
 ### Added

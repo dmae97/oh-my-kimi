@@ -55,6 +55,9 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 */
 	sessionId?: string;
 
+	/** Absolute wall-clock deadline in Unix epoch milliseconds. */
+	deadline?: number;
+
 	/**
 	 * Optional resolver called per LLM request to produce request metadata.
 	 * When set, the agent loop evaluates it **after** `getApiKey` resolves the

@@ -28,6 +28,7 @@ export interface Args {
 	smol?: string;
 	slow?: string;
 	plan?: string;
+	maxTime?: number;
 	apiKey?: string;
 	systemPrompt?: string;
 	appendSystemPrompt?: string;
