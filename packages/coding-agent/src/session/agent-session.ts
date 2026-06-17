@@ -11171,8 +11171,14 @@ export class AgentSession {
 			throw new Error("Cannot branch /btw: current session has no leaf");
 		}
 
-		if (this.isBashRunning || this.isEvalRunning) {
-			throw new Error("Cannot branch /btw while shell or Python work is still running");
+		if (
+			this.isBashRunning ||
+			this.isEvalRunning ||
+			this.isCompacting ||
+			this.isGeneratingHandoff ||
+			this.isRetrying
+		) {
+			throw new Error("Cannot branch /btw while session maintenance or user work is still running");
 		}
 
 		if (this.#extensionRunner?.hasHandlers("session_before_branch")) {

@@ -214,7 +214,7 @@ describe("AgentSession.branchFromBtw", () => {
 		while (!activeSession.isBashRunning) await Bun.sleep(1);
 
 		await expect(activeSession.branchFromBtw("question", createBtwAssistant())).rejects.toThrow(
-			"Cannot branch /btw while shell or Python work is still running",
+			"Cannot branch /btw while session maintenance or user work is still running",
 		);
 
 		activeSession.abortBash();
@@ -231,10 +231,25 @@ describe("AgentSession.branchFromBtw", () => {
 		expect(activeSession.isEvalRunning).toBe(true);
 
 		await expect(activeSession.branchFromBtw("question", createBtwAssistant())).rejects.toThrow(
-			"Cannot branch /btw while shell or Python work is still running",
+			"Cannot branch /btw while session maintenance or user work is still running",
 		);
 
 		abortController.abort();
+	});
+
+	it("refuses to branch /btw while context maintenance is running", async () => {
+		const activeSession = await createSession();
+		activeSession.sessionManager.appendMessage({ role: "user", content: "seed", timestamp: Date.now() });
+		await activeSession.sessionManager.flush();
+		const sessionWithMaintenance = activeSession as AgentSession & { _maintenanceForTest?: boolean };
+		Object.defineProperty(sessionWithMaintenance, "isCompacting", {
+			get: () => sessionWithMaintenance._maintenanceForTest === true,
+		});
+		sessionWithMaintenance._maintenanceForTest = true;
+
+		await expect(activeSession.branchFromBtw("question", createBtwAssistant())).rejects.toThrow(
+			"Cannot branch /btw while session maintenance or user work is still running",
+		);
 	});
 
 	it("throws for in-memory sessions", async () => {
