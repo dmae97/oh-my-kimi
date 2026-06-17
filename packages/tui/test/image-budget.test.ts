@@ -130,6 +130,12 @@ describe("ImageBudget", () => {
 		expect(budget.acquireId()).not.toBe(budget.acquireId());
 	});
 
+	it("initializes separate budgets with different starting IDs", () => {
+		const budget1 = new ImageBudget();
+		const budget2 = new ImageBudget();
+		expect(budget1.acquireId()).not.toBe(budget2.acquireId());
+	});
+
 	it("setCap(0) clears a previously applied demotion threshold", () => {
 		const budget = new ImageBudget(2, () => {});
 		pass(budget, 3);
@@ -266,13 +272,13 @@ describe("Image budget integration", () => {
 		const last = lines.at(-1) ?? "";
 		expect(lines).toHaveLength(4);
 		expect(lines.slice(0, -1)).toEqual(["\x1b[0m", "\x1b[0m", "\x1b[0m"]);
-		expect(last.startsWith("\x1b[3A")).toBe(true);
+		expect(last.startsWith("\x1b7\x1b[3A")).toBe(true);
+		expect(last.endsWith("\x1b8")).toBe(true);
 		expect(last).toContain("\x1b_Ga=p");
 		expect(last).toContain("C=1");
 		expect(last).toContain(`i=${id}`);
 		expect(last).toContain("c=4");
 		expect(last).toContain("r=4");
-		expect(last.endsWith("\x1b[3B")).toBe(true);
 	});
 
 	it("does not move the cursor around single-row direct Kitty placements", () => {
@@ -371,7 +377,7 @@ describe("Image budget + Unicode placeholders", () => {
 		expect(lines.every(l => l.includes(KITTY_PLACEHOLDER))).toBe(true);
 		expect(lines.join("")).not.toContain("\x1b[1A");
 		// The image id is encoded in the cell foreground color (low 24 bits).
-		expect(lines[0]).toContain(`38;2;0;0;${id}`);
+		expect(lines[0]).toContain(`38;2;${(id >> 16) & 0xff};${(id >> 8) & 0xff};${id & 0xff}m`);
 		// Render lines never carry the base64 — data goes via the one-time transmit.
 		expect(lines.join("")).not.toContain(BASE64_ONE_PIXEL_PNG);
 		const transmits = [...budget.takeTransmits()];
@@ -406,6 +412,7 @@ describe("Image budget + Unicode placeholders", () => {
 
 describe("TUI inline-image budget", () => {
 	const originalProtocol = TERMINAL.imageProtocol;
+	const originalTerminalId = terminal.id;
 	let originalCellDims: CellDimensions;
 	let monotonicNow = 0;
 
@@ -413,6 +420,10 @@ describe("TUI inline-image budget", () => {
 		originalCellDims = { ...getCellDimensions() };
 		setCellDimensions({ widthPx: 10, heightPx: 10 });
 		terminal.imageProtocol = ImageProtocol.Kitty;
+		// Pin a non-Ghostty id by default so the Ghostty one-shot image re-submit
+		// (which re-sends `a=t` data) never fires in the generic budget tests; the
+		// dedicated Ghostty tests opt in by setting `terminal.id = "ghostty"`.
+		terminal.id = "xterm";
 		monotonicNow = 0;
 		// Advance one full 30fps frame (>1000/30ms) per tick so the render
 		// throttle computes a zero delay and every requestRender flushes inline.
@@ -426,6 +437,7 @@ describe("TUI inline-image budget", () => {
 		vi.restoreAllMocks();
 		setCellDimensions(originalCellDims);
 		terminal.imageProtocol = originalProtocol;
+		terminal.id = originalTerminalId;
 	});
 
 	async function settle(term: VirtualTerminal): Promise<void> {
@@ -475,10 +487,9 @@ describe("TUI inline-image budget", () => {
 			await settle(term);
 
 			const output = writes.join("");
-			expect(output).toContain("\x1b[3A");
+			expect(output).toContain("\x1b7\x1b[3A");
 			expect(output).toContain("C=1");
-			expect(output).toContain("\x1b[3B");
-
+			expect(output).toContain("\x1b8");
 			const viewport = term.getViewport().map(line => line.trimEnd());
 			expect(viewport.slice(0, 5)).toEqual(["", "", "", "", "after-image"]);
 			expect(viewport.slice(0, 4).some(line => line.includes("after-image"))).toBe(false);

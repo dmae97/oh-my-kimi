@@ -2655,14 +2655,11 @@ export class TUI extends Container {
 		this.#logRedraw(intent, frameLength, height);
 
 		// Load newly-displayed image data once, before this frame's placements
-		// (and any emitter) reference it. `a=t` produces no display, so writing
-		// it ahead of the synchronized paint is artifact-free.
-		const imageTransmits = this.#imageBudget.takeTransmits();
-		if (imageTransmits.length > 0) {
-			let transmitBuffer = "";
-			for (const seq of imageTransmits) transmitBuffer += seq;
-			this.terminal.write(transmitBuffer);
-		}
+		// reference it. For full paints, the emitter may need to place the
+		// transmit after a destructive clear (ED2/ED3) but before row replay, so
+		// build the buffer here and let the emitter decide where it lands.
+		let imageTransmitBuffer = "";
+		for (const seq of this.#imageBudget.takeTransmits()) imageTransmitBuffer += seq;
 		// Purge graphics for images the budget demoted to text. Kitty keeps
 		// images in a store that text clears don't touch; demoted rows still
 		// visible re-render as text and the window diff repaints them.
@@ -2677,7 +2674,7 @@ export class TUI extends Container {
 
 		// 6. Emit.
 		if (intent.kind === "fullPaint") {
-			this.#emitFullPaint(frame, window, width, height, cursorPos, purgeSequence, {
+			this.#emitFullPaint(frame, window, width, height, cursorPos, purgeSequence, imageTransmitBuffer, {
 				clearScrollback: intent.clearScrollback,
 				chunkTo,
 				windowTop,
@@ -2688,6 +2685,9 @@ export class TUI extends Container {
 			this.#hasEverRendered = true;
 			if (!firstPaint && frameLength > height) this.#armPostFullPaintSettle();
 			return;
+		}
+		if (imageTransmitBuffer.length > 0) {
+			this.terminal.write(imageTransmitBuffer);
 		}
 		this.#emitUpdate(frame, window, width, height, cursorPos, purgeSequence, {
 			chunkTo,
@@ -3043,6 +3043,7 @@ export class TUI extends Container {
 		height: number,
 		cursorPos: { row: number; col: number } | null,
 		purgeSequence: string,
+		imageTransmitBuffer: string,
 		options: { clearScrollback: boolean; chunkTo: number; windowTop: number },
 	): void {
 		this.#fullRedrawCount += 1;
@@ -3059,6 +3060,7 @@ export class TUI extends Container {
 			if (TERMINAL.supportsScreenToScrollback) buffer += "\x1b[22J";
 			buffer += "\x1b[2J\x1b[H";
 		}
+		if (imageTransmitBuffer.length > 0) buffer += imageTransmitBuffer;
 		// DECCARA fills optimize only the rows that stay visible; history-bound
 		// rows are written as full styled strings (their background must
 		// survive in scrollback, which DECCARA cannot reach).

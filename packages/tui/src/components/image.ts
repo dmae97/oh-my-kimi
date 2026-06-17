@@ -38,6 +38,11 @@ const RESERVED_IMAGE_ROW = "\x1b[0m";
 /** Default count of inline images kept as live graphics before older ones fall back to text. */
 export const DEFAULT_MAX_INLINE_IMAGES = 8;
 
+let nextImageBudgetSeed = Math.floor(Math.random() * 0xffffff);
+function nextImageIdSeed(): number {
+	nextImageBudgetSeed = (nextImageBudgetSeed + 0x10000) & 0xffffff;
+	return nextImageBudgetSeed || 1;
+}
 /**
  * Bounds how many inline images render as live terminal graphics at once.
  *
@@ -58,7 +63,7 @@ export const DEFAULT_MAX_INLINE_IMAGES = 8;
 export class ImageBudget {
 	#cap: number;
 	#requestRender: () => void;
-	#nextId = 1;
+	#nextId = nextImageIdSeed();
 	#keyToId = new Map<string, number>();
 	/** Display-order image ids observed during the in-flight pass. */
 	#passIds: number[] = [];
@@ -124,11 +129,14 @@ export class ImageBudget {
 		if (key) {
 			const existing = this.#keyToId.get(key);
 			if (existing !== undefined) return existing;
-			const id = this.#nextId++;
+			const id = this.#nextId;
+			this.#nextId = (this.#nextId + 1) & 0xffffff || 1;
 			this.#keyToId.set(key, id);
 			return id;
 		}
-		return this.#nextId++;
+		const id = this.#nextId;
+		this.#nextId = (this.#nextId + 1) & 0xffffff || 1;
+		return id;
 	}
 
 	/**
@@ -250,6 +258,20 @@ export class ImageBudget {
 		const sequences = this.#pendingTransmits;
 		this.#pendingTransmits = [];
 		return sequences;
+	}
+
+	/**
+	 * Drop transmit tracking so every still-live image re-enqueues its data
+	 * (`a=t`) on the next render. Recovers when the terminal dropped the original
+	 * transmit — e.g. Ghostty discarding graphics sent during its post-startup
+	 * window — where a placement-only replay can never bind a Unicode placeholder.
+	 * Pair with a component invalidate + forced repaint so the data and placement
+	 * re-emit together; keeps no base64 in budget state (the transmit-once design).
+	 */
+	forgetTransmitted(): void {
+		if (this.#transmitted.size === 0 && this.#pendingTransmits.length === 0) return;
+		this.#transmitted.clear();
+		this.#pendingTransmits = [];
 	}
 
 	#reconcile(total: number): void {

@@ -195,12 +195,12 @@ describe("terminal image rendering", () => {
 
 		expect(lines).toHaveLength(3);
 		expect(lines.slice(0, -1)).toEqual(["\x1b[0m", "\x1b[0m"]);
-		expect(imageLine.startsWith("\x1b[2A")).toBe(true);
+		expect(imageLine.startsWith("\x1b7\x1b[2A")).toBe(true);
 		expect(imageLine).toContain("\x1b_Ga=T");
 		expect(imageLine).toContain("C=1");
 		expect(imageLine).toContain("c=3");
 		expect(imageLine).toContain("r=3");
-		expect(imageLine.endsWith("\x1b[2B")).toBe(true);
+		expect(imageLine.endsWith("\x1b8")).toBe(true);
 	});
 
 	it("does not emit cursor movement around single-row direct Kitty output", () => {
