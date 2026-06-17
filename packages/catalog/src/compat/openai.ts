@@ -459,6 +459,12 @@ export function buildOpenAIResponsesCompat(spec: OpenAIResponsesSpecLike): Resol
 		// Azure OpenAI and GitHub Copilot Responses paths require tool results
 		// to strictly match prior tool calls when building Responses inputs.
 		strictResponsesPairing: isAzure || spec.provider === "github-copilot",
+		// GitHub Copilot's Responses endpoint rejects the `detail: "original"`
+		// image hint with a 400; every other host preserves native-resolution
+		// frames (snapcompact relies on `original`). Detect Copilot by provider id
+		// or base-URL host (mirroring the Anthropic compat builder) so a model
+		// pointed at the Copilot host under a different provider id still clamps.
+		supportsImageDetailOriginal: !modelMatchesHost({ provider: spec.provider, baseUrl }, "githubCopilot"),
 		requiresJuiceZeroHack: spec.name.toLowerCase().startsWith("gpt-5"),
 		reasoningEffortMap: {},
 		supportsReasoningParams: true,
@@ -514,6 +520,7 @@ function pickResponsesOnly(compat: ResolvedOpenAIResponsesCompat): ResponsesOnly
 	return {
 		supportsLongPromptCacheRetention: compat.supportsLongPromptCacheRetention,
 		strictResponsesPairing: compat.strictResponsesPairing,
+		supportsImageDetailOriginal: compat.supportsImageDetailOriginal,
 		requiresJuiceZeroHack: compat.requiresJuiceZeroHack,
 		supportsObfuscationOptOut: compat.supportsObfuscationOptOut,
 	} satisfies ResponsesOnlyCompat;

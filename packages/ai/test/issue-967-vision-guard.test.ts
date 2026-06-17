@@ -171,6 +171,7 @@ describe("issue #967 vision guard", () => {
 				{ type: "image", mimeType: "image/png", data: "ZmFrZQ==" },
 			],
 			false,
+			model.compat.supportsImageDetailOriginal,
 		);
 		expect(countTaggedValues(userContent, "input_image")).toBe(0);
 		expect(userContent).toEqual([
@@ -187,6 +188,7 @@ describe("issue #967 vision guard", () => {
 			]),
 			model,
 			true,
+			model.compat.supportsImageDetailOriginal,
 			new Set(["call_1"]),
 		);
 		expect(countTaggedValues(payload, "input_image")).toBe(0);
