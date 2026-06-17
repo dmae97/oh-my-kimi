@@ -144,6 +144,25 @@ describe("AgentSession.branchFromBtw", () => {
 		});
 	});
 
+	it("syncs promoted /btw messages into live context even when hooks skip conversation restore", async () => {
+		const extensionRunner = {
+			hasHandlers: vi.fn((eventType: string) => eventType === "session_before_branch"),
+			emit: vi.fn(async () => ({ skipConversationRestore: true })),
+		} as unknown as ExtensionRunner;
+		const activeSession = await createSession({ extensionRunner });
+		activeSession.sessionManager.appendMessage({ role: "user", content: "seed", timestamp: Date.now() });
+		activeSession.agent.replaceMessages(activeSession.sessionManager.buildSessionContext().messages);
+		await activeSession.sessionManager.flush();
+		const assistantMessage = createBtwAssistant();
+
+		const result = await activeSession.branchFromBtw("question", assistantMessage);
+
+		expect(result.cancelled).toBe(false);
+		const messages = activeSession.messages;
+		expect(messages.at(-2)).toMatchObject({ role: "user", content: [{ type: "text", text: "question" }] });
+		expect(messages.at(-1)).toEqual(assistantMessage);
+	});
+
 	it("aborts an in-flight main stream before switching to the /btw branch", async () => {
 		const providerStarted = Promise.withResolvers<void>();
 		const activeSession = await createSession({
@@ -158,6 +177,8 @@ describe("AgentSession.branchFromBtw", () => {
 		const promptPromise = activeSession.prompt("main prompt");
 		await providerStarted.promise;
 		expect(activeSession.isStreaming).toBe(true);
+		await activeSession.followUp("queued follow-up should not move");
+		expect(activeSession.queuedMessageCount).toBe(1);
 
 		const assistantMessage = createBtwAssistant();
 		const result = await activeSession.branchFromBtw("question", assistantMessage);
@@ -171,6 +192,13 @@ describe("AgentSession.branchFromBtw", () => {
 			expect.objectContaining({
 				role: "assistant",
 				content: [{ type: "text", text: "main response should not move" }],
+			}),
+		);
+		expect(activeSession.queuedMessageCount).toBe(0);
+		expect(messages).not.toContainEqual(
+			expect.objectContaining({
+				role: "user",
+				content: [{ type: "text", text: "queued follow-up should not move" }],
 			}),
 		);
 	});

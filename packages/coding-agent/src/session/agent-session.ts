@@ -11171,7 +11171,6 @@ export class AgentSession {
 			throw new Error("Cannot branch /btw: current session has no leaf");
 		}
 
-		let skipConversationRestore = false;
 		if (this.#extensionRunner?.hasHandlers("session_before_branch")) {
 			const result = (await this.#extensionRunner.emit({
 				type: "session_before_branch",
@@ -11181,13 +11180,14 @@ export class AgentSession {
 			if (result?.cancel) {
 				return { cancelled: true, sessionFile: previousSessionFile };
 			}
-			skipConversationRestore = result?.skipConversationRestore ?? false;
 		}
 
 		this.#pendingNextTurnMessages = [];
 		this.#scheduledHiddenNextTurnGeneration = undefined;
+		this.agent.replaceQueues([], []);
 		if (this.isStreaming) {
 			await this.abort({ goalReason: "internal", reason: "branching /btw" });
+			this.agent.replaceQueues([], []);
 		}
 		await this.sessionManager.flush();
 		this.#cancelOwnAsyncJobs();
@@ -11217,11 +11217,9 @@ export class AgentSession {
 			});
 		}
 
-		if (!skipConversationRestore) {
-			this.agent.replaceMessages(sessionContext.messages);
-			this.#advisorRuntime?.reset();
-			this.#closeCodexProviderSessionsForHistoryRewrite();
-		}
+		this.agent.replaceMessages(sessionContext.messages);
+		this.#advisorRuntime?.reset();
+		this.#closeCodexProviderSessionsForHistoryRewrite();
 
 		return { cancelled: false, sessionFile: this.sessionFile };
 	}

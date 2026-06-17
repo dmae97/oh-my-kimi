@@ -10,6 +10,22 @@ interface BtwRequest {
 	question: string;
 }
 
+function assistantMessageWithReplyText(assistantMessage: AssistantMessage, replyText: string): AssistantMessage {
+	const content: AssistantMessage["content"] = [];
+	let replacedText = false;
+	for (const part of assistantMessage.content) {
+		if (part.type !== "text") {
+			content.push(part);
+			continue;
+		}
+		if (replacedText) continue;
+		content.push({ type: "text", text: replyText });
+		replacedText = true;
+	}
+	if (!replacedText) content.push({ type: "text", text: replyText });
+	return { ...assistantMessage, content };
+}
+
 export class BtwController {
 	#activeRequest: BtwRequest | undefined;
 	#lastQuestion: string | undefined;
@@ -104,7 +120,7 @@ export class BtwController {
 			if (request.component.isBranchable()) {
 				this.#lastQuestion = request.question;
 				this.#lastReplyText = replyText;
-				this.#lastAssistantMessage = assistantMessage;
+				this.#lastAssistantMessage = assistantMessageWithReplyText(assistantMessage, replyText);
 			} else {
 				this.#clearBranchState();
 			}

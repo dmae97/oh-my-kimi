@@ -256,6 +256,32 @@ describe("BtwController", () => {
 		expect(ctx.handleBtwBranch).toHaveBeenCalledWith("Question?", assistantMessage);
 	});
 
+	it("branches the sanitized reply text while preserving non-text assistant content", async () => {
+		const assistantMessage: AssistantMessage = {
+			...createAssistantMessage("raw repeated repeated repeated"),
+			content: [
+				{ type: "thinking", thinking: "Keep this reasoning." },
+				{ type: "text", text: "raw repeated repeated repeated" },
+				{ type: "text", text: "raw duplicate tail" },
+			],
+		};
+		const runEphemeralTurn = vi.fn(async () => ({ replyText: "sanitized", assistantMessage }));
+		const ctx = makeCtx(makeFakeSession(runEphemeralTurn));
+		const controller = new BtwController(ctx);
+
+		await controller.start("Question?");
+		await drainBtwRequest();
+
+		expect(await controller.handleBranch()).toBe(true);
+		expect(ctx.handleBtwBranch).toHaveBeenCalledWith("Question?", {
+			...assistantMessage,
+			content: [
+				{ type: "thinking", thinking: "Keep this reasoning." },
+				{ type: "text", text: "sanitized" },
+			],
+		});
+	});
+
 	it("ignores duplicate branch requests while branch promotion is in flight", async () => {
 		const assistantMessage = createAssistantMessage("Answer");
 		const runEphemeralTurn = vi.fn(async () => ({ replyText: "Answer", assistantMessage }));
