@@ -1041,6 +1041,10 @@ export async function runRootCommand(
 	if (parsedArgs.hideThinking) {
 		settingsInstance.override("hideThinkingBlock", true);
 	}
+	// Apply --advisor CLI flag (ephemeral, not persisted)
+	if (parsedArgs.advisor) {
+		settingsInstance.override("advisor.enabled", true);
+	}
 
 	await logger.time(
 		"initTheme:final",

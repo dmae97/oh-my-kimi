@@ -33,6 +33,7 @@ export interface Args {
 	appendSystemPrompt?: string;
 	thinking?: Effort;
 	hideThinking?: boolean;
+	advisor?: boolean;
 	continue?: boolean;
 	resume?: string | true;
 	help?: boolean;
@@ -194,6 +195,8 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 			result.noPty = true;
 		} else if (arg === "--hide-thinking") {
 			result.hideThinking = true;
+		} else if (arg === "--advisor") {
+			result.advisor = true;
 		} else if (arg === "--print" || arg === "-p") {
 			result.print = true;
 		} else if (arg === "--no-extensions") {
