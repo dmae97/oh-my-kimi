@@ -44,6 +44,8 @@ interface PendingRun {
 
 interface JsSession {
 	sessionKey: string;
+	sessionId: string;
+	cwd: string;
 	worker: WorkerHandle;
 	state: "alive" | "dead";
 	pending: Map<string, PendingRun>;
@@ -151,7 +153,14 @@ export async function disposeAllVmContexts(): Promise<void> {
  */
 export async function smokeTestJsEvalWorker(): Promise<void> {
 	const worker = spawnJsWorker();
-	const session: JsSession = { sessionKey: "smoke", worker, state: "alive", pending: new Map() };
+	const session: JsSession = {
+		sessionKey: "smoke",
+		sessionId: "smoke",
+		cwd: process.cwd(),
+		worker,
+		state: "alive",
+		pending: new Map(),
+	};
 	try {
 		await initWorker(session, { cwd: process.cwd(), sessionId: "smoke" }, WORKER_INIT_TIMEOUT_MS);
 		if (worker.mode !== "worker") {
@@ -219,7 +228,11 @@ async function runOnce(
 
 async function acquireSession(sessionKey: string, snapshot: SessionSnapshot, timeoutMs?: number): Promise<JsSession> {
 	const existing = sessions.get(sessionKey);
-	if (existing && existing.state === "alive") return existing;
+	if (existing && existing.state === "alive") {
+		existing.sessionId = snapshot.sessionId;
+		existing.cwd = snapshot.cwd;
+		return existing;
+	}
 	const starting = startingSessions.get(sessionKey);
 	if (starting) return await starting;
 
@@ -231,6 +244,8 @@ async function acquireSession(sessionKey: string, snapshot: SessionSnapshot, tim
 		const worker = spawnJsWorker();
 		const session: JsSession = {
 			sessionKey,
+			sessionId: snapshot.sessionId,
+			cwd: snapshot.cwd,
 			worker,
 			state: "alive",
 			pending: new Map(),
