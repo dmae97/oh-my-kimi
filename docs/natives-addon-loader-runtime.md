@@ -20,7 +20,7 @@ The loader is intentionally narrow:
 - On Windows `node_modules` installs, stage addon files into the versioned cache to avoid locked-DLL update failures.
 - Attempt candidates in deterministic order and return the first addon that `require(...)` loads and validates.
 
-For install and compiled-binary paths, the loader verifies a release sentinel export named from `package.json#version` (for example `__piNativesV15_7_2`). Workspace-dev loads skip this validation so a local checkout can rebuild after a pull. The loader does not validate the full export surface; stale same-version or incomplete binaries still surface as missing members or native errors at use sites.
+For install and compiled-binary paths, the loader verifies a release sentinel export named from `package.json#version` (for example `__piNativesV16_0_3`). Workspace-dev loads skip this validation so a local checkout can rebuild after a pull. The loader does not validate the full export surface; stale same-version or incomplete binaries still surface as missing members or native errors at use sites.
 
 ## Runtime inputs and derived state
 

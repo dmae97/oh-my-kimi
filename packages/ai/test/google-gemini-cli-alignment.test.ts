@@ -171,6 +171,37 @@ describe("Google Gemini CLI alignment", () => {
 		expect(payload.userAgent).toBe("antigravity");
 		expect(payload.requestId).toMatch(/^agent-/);
 	});
+	it("omits AUTO toolConfig for Google Gemini CLI tool calls", () => {
+		for (const provider of ["google-gemini-cli", "google-antigravity"] as const) {
+			const model = createModel(provider);
+			const context: Context = {
+				messages: [{ role: "user", content: "inspect repo", timestamp: Date.now() }],
+				tools: [
+					{
+						name: "read_file",
+						description: "Read a file",
+						parameters: {
+							type: "object",
+							properties: { path: { type: "string" } },
+							required: ["path"],
+						} as TJsonSchema,
+					},
+				],
+			};
+			const payload = buildRequest(
+				model,
+				context,
+				"proj-123",
+				{ toolChoice: "auto" },
+				provider === "google-antigravity",
+			) as {
+				request: { tools?: unknown; toolConfig?: unknown };
+			};
+
+			expect(payload.request.tools).toBeDefined();
+			expect(payload.request.toolConfig).toBeUndefined();
+		}
+	});
 
 	it("strips patternProperties when antigravity rewrites tools to legacy parameters", () => {
 		const model = createModel("google-antigravity");

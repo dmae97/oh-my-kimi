@@ -105,6 +105,17 @@ export function isReasoningGlmModelId(modelId: string): boolean {
 	}
 	return semverGte(glm.version, "4.5");
 }
+/** GLM-5.2+ coding SKUs accept `reasoning_effort` in addition to binary thinking. */
+export function isGlm52ReasoningEffortModelId(modelId: string): boolean {
+	const glm = parseGlmModel(bareModelId(modelId));
+	if (!glm || glm.vision) {
+		return false;
+	}
+	if (glm.variant !== "base" && glm.variant !== "air" && glm.variant !== "turbo") {
+		return false;
+	}
+	return semverGte(glm.version, "5.2");
+}
 
 /** GLM vision SKUs — the `v` that attaches to the version (`glm-4v`, `glm-4.5v`). */
 export function isGlmVisionModelId(modelId: string): boolean {

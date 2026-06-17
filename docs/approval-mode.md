@@ -8,7 +8,7 @@ Tool approval has two independent inputs:
    - `exec`: executes code, shells out, drives a browser, spawns agents, or performs similarly broad actions.
 2. **User policy** — `tools.approval.<toolName>: allow | deny | prompt` overrides the mode for that tool unless a non-yolo safety override forces a prompt.
 
-Tools without an `approval` declaration are treated as `exec`. This is the safe default for MCP and unknown custom tools.
+Tools without an `approval` declaration are treated as `exec`. This is the safe default for unknown custom tools. MCP server tools declare `write`.
 
 ## Modes
 

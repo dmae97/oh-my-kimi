@@ -8,7 +8,7 @@
 - Key collaborators:
   - `packages/coding-agent/src/session/agent-session.ts` — validates pending rewind state, applies the actual rewind, and injects the retained report.
   - `packages/coding-agent/src/session/session-manager.ts` — branches the persisted session tree and appends persisted summary/report entries.
-  - `packages/coding-agent/src/session/messages.ts` — converts persisted `branch_summary` entries into LLM-visible branch-summary messages on rebuilt context.
+  - `packages/coding-agent/src/session/session-context.ts` — `buildSessionContext()` converts persisted `branch_summary` entries into LLM-visible `branchSummary` messages on rebuilt context.
   - `packages/coding-agent/src/tools/index.ts` — registers the tool and shares the `checkpoint.enabled` gate.
 
 ## Inputs
@@ -35,9 +35,9 @@ The returned tool result is not the final rewind. `AgentSession` waits until `tu
 3. It rejects calls with no active checkpoint using `ToolError("No active checkpoint.")`.
 4. It trims `params.report`; if empty, it throws `ToolError("Report cannot be empty.")`.
 5. It returns a `toolResult()` with `details.report` and `details.rewound = true`.
-6. On `tool_execution_end`, `AgentSession` extracts the report from `details.report` or the first text content block and stores it in `#pendingRewindReport`.
+6. On the rewind tool result's `message_end`, `AgentSession` extracts the report from `details.report` or the first text content block and stores it in `#pendingRewindReport`.
 7. On `turn_end`, if `#pendingRewindReport` is set, `AgentSession.#applyRewind()` runs.
-8. `#applyRewind()` computes `safeCount = clamp(checkpointMessageCount, 0, agent.state.messages.length)` and calls `agent.replaceMessages(agent.state.messages.slice(0, safeCount))`.
+8. `#applyRewind()` computes `safeCount = clamp(checkpointMessageCount, 0, agent.state.messages.length)`, calls `agent.replaceMessages(agent.state.messages.slice(0, safeCount))`, then resets the advisor runtime via `#advisorRuntime?.reset()`.
 9. It then calls `sessionManager.branchWithSummary(checkpointEntryId, report, { startedAt })`. That moves the persisted session leaf back to the checkpoint entry and appends a new `branch_summary` entry whose `summary` is the rewind report.
 10. If `checkpointEntryId` no longer resolves, it logs a warning and falls back to `branchWithSummary(null, report, { startedAt })`, branching from root instead.
 11. `#applyRewind()` appends a hidden in-memory custom message `{ customType: "rewind-report", content: report, display: false }` and persists the same payload through `sessionManager.appendCustomMessageEntry("rewind-report", ...)` with `details = { startedAt, rewoundAt }`.
@@ -59,7 +59,7 @@ The returned tool result is not the final rewind. `AgentSession` waits until `tu
   - Session files are named `<ISO-timestamp-with-:-and-.-replaced>_<uuidv7>.jsonl` in the session directory; default directory selection is documented in `SessionManager.create()` as `~/.omp/agent/sessions/<encoded-cwd>/` when no override is passed.
 - User-visible prompts / interactive UI
   - The tool result itself is visible.
-  - The persisted `branch_summary` becomes an LLM-visible `branchSummary` message when context is rebuilt from `SessionManager.buildSessionContext()`; `messages.ts` renders it as a user-role text message using `packages/agent/src/compaction/prompts/branch-summary-context.md`.
+  - The persisted `branch_summary` becomes an LLM-visible `branchSummary` message when context is rebuilt from `SessionManager.buildSessionContext()` (via `createBranchSummaryMessage()` in `session-context.ts`); `packages/agent/src/compaction/messages.ts` renders it as a user-role text message using `packages/agent/src/compaction/prompts/branch-summary-context.md`.
   - The persisted `rewind-report` custom message also participates in rebuilt LLM context because `custom_message` entries are converted through `createCustomMessage()`.
 - Background work / cancellation
   - Rewind application is deferred to `turn_end`. There is no separate job object or cancel handle.
@@ -70,7 +70,7 @@ The returned tool result is not the final rewind. `AgentSession` waits until `tu
 - Requires exactly one active checkpoint; there is no path to name or choose among multiple checkpoints.
 - Report text must be non-empty after `trim()`.
 - Rewind restores only the message prefix recorded by `checkpointMessageCount`; there is no file restore, artifact restore, blob restore, or process restore path.
-- Persisted report/summary content is still subject to the global session persistence cap `MAX_PERSIST_CHARS = 500_000` in `packages/coding-agent/src/session/session-manager.ts`.
+- Persisted report/summary content is still subject to the global session persistence cap `MAX_PERSIST_CHARS = 500_000` in `packages/coding-agent/src/session/session-persistence.ts`.
 
 ## Errors
 - `ToolError("Checkpoint not available in subagents.")` — thrown for subagent sessions.

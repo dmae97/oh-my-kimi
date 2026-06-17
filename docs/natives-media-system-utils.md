@@ -25,7 +25,7 @@ There is no native `PhotonImage` class, `image.rs`, or ProjFS overlay helper mod
 | `copyToClipboard(text)`               | `copy_to_clipboard`            | `clipboard.rs`  |
 | `readImageFromClipboard()`            | `read_image_from_clipboard`    | `clipboard.rs`  |
 | `countTokens(input, encoding?)`       | `count_tokens`                 | `tokens.rs`     |
-| `detectMacOSAppearance()`             | `detect_mac_os_appearance`     | `appearance.rs` |
+| `detectMacOSAppearance()`             | `detect_macos_appearance`      | `appearance.rs` |
 | `MacAppearanceObserver.start(cb)`     | `MacAppearanceObserver::start` | `appearance.rs` |
 | `MacOSPowerAssertion.start(options?)` | `MacOSPowerAssertion::start`   | `power.rs`      |
 | `getWorkProfile(lastSeconds)`         | `get_work_profile`             | `prof.rs`       |

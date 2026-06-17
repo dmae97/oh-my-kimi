@@ -123,7 +123,7 @@ In spawn execution (`TaskTool.#executeSync` → `#runSpawn`):
 
 ## Structured-output guardrails and schema precedence
 
-Runtime output schema precedence in `TaskTool.execute`:
+Runtime output schema precedence in `TaskTool.#runSpawn`:
 
 1. agent frontmatter `output`
 2. parent session `outputSchema`

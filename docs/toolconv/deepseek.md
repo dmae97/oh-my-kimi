@@ -341,6 +341,33 @@ The `deepseek_r1` **reasoning** parser (`--reasoning-parser deepseek_r1`) applie
 series **and** to DeepSeek-V3.1; it extracts the `<think>…</think>` span into the response's
 `reasoning` field. It is independent of the tool-call parser.
 
+## DSML envelope (newer DeepSeek models)
+
+Newer DeepSeek models (for example `deepseek-v4-pro`) emit tool calls in a second, XML-style
+envelope — **DSML** — instead of the `<｜tool▁calls▁begin｜>` special-token run. The tag names
+reuse the same fullwidth pipe (`｜`, U+FF5C), but the body is an Anthropic-style `invoke` /
+`parameter` block rather than a `name<｜tool▁sep｜>{json}` pair:
+
+```text
+<｜DSML｜tool_calls>
+<｜DSML｜invoke name="get_weather">
+<｜DSML｜parameter name="location" string="true">San Francisco, CA</｜DSML｜parameter>
+</｜DSML｜invoke>
+</｜DSML｜tool_calls>
+```
+
+- One `<｜DSML｜tool_calls>…</｜DSML｜tool_calls>` wrapper holds one or more
+  `<｜DSML｜invoke name="…">…</｜DSML｜invoke>` calls; whitespace between tags is insignificant.
+- Each argument is a `<｜DSML｜parameter name="…" string="…">value</｜DSML｜parameter>`. `string`
+  defaults to `"true"` (value kept as a raw string); `string="false"` parses the value as JSON,
+  so `…string="false">15</…>` decodes to the number `15`.
+- An ASCII-pipe variant (`<|DSML|tool_calls>`, `<|DSML|invoke …>`, `<|DSML|parameter …>`) occurs
+  on the wire alongside the fullwidth form.
+- Several OpenAI-compatible hosts (DeepSeek's own API, NanoGPT, NVIDIA, Ollama / Ollama Cloud,
+  Fireworks, OpenRouter, OpenCode) leak this envelope into visible `content` instead of returning
+  structured `tool_calls`; a parser must heal it back into tool calls and strip the markers from
+  user-visible text.
+
 ## Sources
 
 - DeepSeek-V3.1 model card (Chat Template / ToolCall sections): <https://huggingface.co/deepseek-ai/DeepSeek-V3.1>

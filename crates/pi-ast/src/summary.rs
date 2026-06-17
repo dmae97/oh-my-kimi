@@ -108,10 +108,13 @@ impl ElidableForest {
 /// BFS unfold. Start with every root span folded (matches the legacy
 /// outermost-only behavior) and progressively replace folded spans with
 /// their elidable children, breadth-first, until the visible line count
-/// reaches `unfold_until`. A candidate unfold that would push the visible
-/// count past `unfold_limit` is rejected and aborts the loop ("revert the
-/// last unfold because it overflew"). `unfold_until == 0` short-circuits
-/// to the legacy behavior.
+/// reaches `unfold_until`. A candidate unfold whose revealed lines would
+/// push the visible count past `unfold_limit` is skipped — that span stays
+/// folded and its subtree is not explored — while the BFS keeps unfolding
+/// the remaining queued siblings. A single oversized, un-unfoldable leaf
+/// (e.g. a `<style>` raw-text block) therefore no longer aborts the whole
+/// pass and starve its siblings. `unfold_until == 0` short-circuits to the
+/// legacy behavior.
 fn select_folded_spans(
 	forest: &ElidableForest,
 	total_lines: u32,
@@ -145,7 +148,7 @@ fn select_folded_spans(
 		let revealed = node.span.lines().saturating_sub(child_line_total);
 		let new_visible = visible.saturating_add(revealed);
 		if new_visible > unfold_limit {
-			break;
+			continue;
 		}
 		folded.remove(&idx);
 		for &c in &node.children {
@@ -1310,5 +1313,56 @@ mod tests {
 				.count(),
 			1
 		);
+	}
+
+	#[test]
+	fn bfs_unfold_skips_unfoldable_leaf_and_continues_to_siblings() {
+		// Repro for the "useless HTML summary" report: a big <style> raw-text
+		// block (no elidable children) sits before a structured <body>. The
+		// style block's only unfold candidate is its entire 120-line body,
+		// which overflows unfold_limit. The BFS must SKIP it (leave it folded)
+		// and keep unfolding the sibling <body>/<div> subtree, instead of
+		// aborting the whole pass and collapsing the body into one dead `...`.
+		let css = (0..120)
+			.map(|i| format!("\t.rule{i} {{ color: #{i:06x}; }}"))
+			.collect::<Vec<_>>()
+			.join("\n");
+		let sections = (0..6)
+			.map(|i| {
+				format!(
+					"<section class=\"sec{i}\">\n<h2>Heading {i}</h2>\n<p>para a {i}</p>\n<p>para b \
+					 {i}</p>\n<p>para c {i}</p>\n</section>"
+				)
+			})
+			.collect::<Vec<_>>()
+			.join("\n");
+		let code = format!(
+			"<!doctype html>\n<html \
+			 lang=\"en\">\n<head>\n<title>T</title>\n<style>\n{css}\n</style>\n</head>\n<body>\n<div \
+			 class=\"page\">\n{sections}\n</div>\n</body>\n</html>\n"
+		);
+
+		let result = summarize_with_unfold(&code, "page.html", 50, 100);
+		assert!(result.parsed);
+		assert!(result.elided);
+		let kept_text = result
+			.segments
+			.iter()
+			.filter(|s| s.kind == "kept")
+			.filter_map(|s| s.text.as_deref())
+			.collect::<Vec<_>>()
+			.join("\n");
+		// The body div was unfolded: its child <section> structure is visible.
+		assert!(
+			kept_text.contains("<section class=\"sec0\">"),
+			"body div should unfold to show sections"
+		);
+		assert!(
+			kept_text.contains("<section class=\"sec5\">"),
+			"all sibling sections should surface"
+		);
+		// The <style> raw text stays folded as one elided span — no CSS interior leaks
+		// into kept content.
+		assert!(!kept_text.contains(".rule0 {"), "oversized style body must stay folded");
 	}
 }

@@ -44,7 +44,7 @@ TUI rendering adds presentation-only truncation from `packages/coding-agent/src/
 4. The chosen model must advertise `input.includes("image")`; otherwise execution fails before reading the file.
 5. `loadImageInput(...)` in `packages/coding-agent/src/utils/image-loading.ts` resolves the path with `resolveReadPath(...)`, detects MIME type with `readImageMetadata(...)`, and rejects files larger than `MAX_IMAGE_INPUT_BYTES` (`20 * 1024 * 1024`, 20 MiB) using `ImageInputTooLargeError`.
 6. `readImageMetadata(...)` in `packages/utils/src/mime.ts` inspects file headers only. Supported detected MIME types are `image/png`, `image/jpeg`, `image/gif`, and `image/webp`.
-7. If `images.autoResize` is true, `loadImageInput(...)` calls `resizeImage(...)`. Resize failures are swallowed there and the original bytes are kept.
+7. `loadImageInput(...)` is called with `excludeWebP: webpExclusionForModel(model)` (`true` only for models that cannot decode WebP, e.g. the Ollama family). It calls `resizeImage(...)` when `images.autoResize` is true, or when `excludeWebP` is set and the detected type is `image/webp` — re-encoding away from WebP even with auto-resize off. The `excludeWebP` flag is forwarded into `resizeImage(...)`. Resize failures are swallowed there and the original bytes are kept.
 8. If MIME detection returned no supported image type, `execute(...)` throws `ToolError("inspect_image only supports PNG, JPEG, GIF, and WEBP files detected by file content.")`.
 9. The tool calls `instrumentedCompleteSimple(...)` with one user message containing two content parts in order:
    - `{ type: "image", data: imageInput.data, mimeType: imageInput.mimeType }`

@@ -140,10 +140,10 @@ reproduction (§7.3), independent of the prompt's natural language.
 
 The `edit` tool exists in two variants in the corpus:
 
-| Variant                              | Calls | Recovery                                                                                                                                             |
-| ------------------------------------ | ----: | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Patch-DSL (`§PATH`/anchor/`«»≔` ops) |    27 | **Recoverable** by op-truncation (§3.3)                                                                                                              |
-| JSON-schema (`{path,edits:[…]}`)     |    11 | **Not recoverable** — contamination is escaped _inside_ JSON strings, parser accepts it cleanly, content would be written verbatim into source files |
+| Variant                                            | Calls | Recovery                                                                                                                                             |
+| -------------------------------------------------- | ----: | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Patch-DSL (`[PATH#TAG]`/anchor/`SWAP DEL INS` ops) |    27 | **Recoverable** by op-truncation (§3.3)                                                                                                              |
+| JSON-schema (`{path,edits:[…]}`)                   |    11 | **Not recoverable** — contamination is escaped _inside_ JSON strings, parser accepts it cleanly, content would be written verbatim into source files |
 
 For Patch-DSL leaks specifically:
 

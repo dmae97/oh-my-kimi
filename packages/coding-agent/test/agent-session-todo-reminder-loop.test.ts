@@ -153,11 +153,22 @@ describe("AgentSession todo reminder self-continuation suppression", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("baseline: a single text-only stop fires reminder 1/3", async () => {
+	it("baseline: a single text-only stop fires reminder 1/3 and records it in the transcript", async () => {
 		vi.spyOn(session.agent, "continue").mockResolvedValue();
 		emitTextOnlyStop();
 		await withTimeout(firstReminderPromise, 1000, "todo_reminder never fired");
 		expect(reminderAttempts).toEqual([1]);
+
+		const reminderEntry = sessionManager.getBranch().find(entry => {
+			if (entry.type !== "message" || entry.message.role !== "developer") return false;
+			const { content } = entry.message;
+			if (!Array.isArray(content)) return false;
+			return content.some(
+				(item): item is TextContent =>
+					item.type === "text" && item.text.includes("You stopped with 2 incomplete todo item(s):"),
+			);
+		});
+		expect(reminderEntry?.type).toBe("message");
 	});
 
 	it("fires exactly one reminder per user pause when the agent only acknowledges", async () => {
