@@ -1,8 +1,14 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
+- Added `omp ttsr` top-level CLI command to inspect and test Time-Traveling Stream Rules
+- Added `omp ttsr list` to enumerate all project/user-loaded TTSR rules with their conditions, scope, and source metadata
+- Added `omp ttsr test` to run snippets through the real TTSR matching pipeline with inline text, `--file <path>`, or stdin via `--file -`
+- Added `--json` output to `omp ttsr test` and `omp ttsr list` for machine-readable reporting
+- Added `--rule`, `--source`, `--tool`, `--path`, and `--verbose` options to `omp ttsr test` to control matching context and inspection details
 - Added support for reading embedded PDF images via `read <pdf>:<image>.png` and listing available image members with `read <pdf>:`
 
 ### Changed
