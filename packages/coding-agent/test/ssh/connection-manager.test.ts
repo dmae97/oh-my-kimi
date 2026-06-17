@@ -71,6 +71,45 @@ describe("buildRemoteCommand", () => {
 		});
 	});
 
+	it("still rejects missing identity files on Windows args", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-ssh-key-"));
+		const keyPath = path.join(dir, "missing_id_ed25519");
+		try {
+			await expect(
+				connectionManager.buildRemoteCommand(
+					{
+						name: "host",
+						host: "192.168.3.146",
+						keyPath,
+					},
+					"ls -la",
+					{ platform: "win32" },
+				),
+			).rejects.toThrow("SSH key not found");
+		} finally {
+			await fs.rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("still rejects directory identity paths on Windows args", async () => {
+		const keyPath = await fs.mkdtemp(path.join(os.tmpdir(), "omp-ssh-key-"));
+		try {
+			await expect(
+				connectionManager.buildRemoteCommand(
+					{
+						name: "host",
+						host: "192.168.3.146",
+						keyPath,
+					},
+					"ls -la",
+					{ platform: "win32" },
+				),
+			).rejects.toThrow("SSH key is not a file");
+		} finally {
+			await fs.rm(keyPath, { recursive: true, force: true });
+		}
+	});
+
 	it("rejects group/world-readable identity files on Unix-like platforms", async () => {
 		await withLooseKey(async keyPath => {
 			await expect(

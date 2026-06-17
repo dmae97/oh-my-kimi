@@ -66,7 +66,7 @@ async function deleteHostInfoFromDisk(hostName: string): Promise<void> {
 }
 
 async function validateKeyPermissions(keyPath?: string, platform: SshPlatform = process.platform): Promise<void> {
-	if (!keyPath || platform === "win32") return;
+	if (!keyPath) return;
 	let stats: fs.Stats;
 	try {
 		stats = await fs.promises.stat(keyPath);
@@ -79,6 +79,7 @@ async function validateKeyPermissions(keyPath?: string, platform: SshPlatform = 
 	if (!stats.isFile()) {
 		throw new Error(`SSH key is not a file: ${keyPath}`);
 	}
+	if (platform === "win32") return;
 	const mode = stats.mode & 0o777;
 	if ((mode & 0o077) !== 0) {
 		throw new Error(`SSH key permissions must be 600 or stricter: ${keyPath}`);
