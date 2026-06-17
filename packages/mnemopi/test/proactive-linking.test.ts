@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import "./setup";
+import { configureRecallFeatures } from "@oh-my-pi/pi-mnemopi/config";
 import { BeamMemory } from "@oh-my-pi/pi-mnemopi/core/beam";
 import type { EpisodicGraph, RelatedMemory } from "@oh-my-pi/pi-mnemopi/core/episodic-graph";
 
@@ -8,6 +9,7 @@ const previousProactive = process.env.MNEMOPI_PROACTIVE_LINKING;
 afterEach(() => {
 	if (previousProactive === undefined) delete process.env.MNEMOPI_PROACTIVE_LINKING;
 	else process.env.MNEMOPI_PROACTIVE_LINKING = previousProactive;
+	configureRecallFeatures({ proactiveLinking: false });
 });
 
 function linkedIds(edges: readonly RelatedMemory[]): Set<string> {
@@ -34,6 +36,26 @@ describe("proactive memory linking", () => {
 			expect(linkedIds(edges).has(first)).toBe(true);
 			expect(edges.some(edge => edge.memoryId === first && edge.edgeType === "related_to")).toBe(true);
 			expect(linkedIds(edges).has(second)).toBe(false);
+		} finally {
+			beam.close();
+		}
+	});
+
+	it("honors host configuration when the environment variable is unset", () => {
+		delete process.env.MNEMOPI_PROACTIVE_LINKING;
+		configureRecallFeatures({ proactiveLinking: true });
+		const beam = new BeamMemory({ sessionId: "proactive-host-config", dbPath: ":memory:" });
+		try {
+			const first = beam.remember("Alice set up the CI/CD pipeline for backend deployment", {
+				importance: 0.8,
+			});
+			const second = beam.remember("Alice configured the deployment pipeline for continuous integration", {
+				importance: 0.8,
+			});
+
+			const edges = graphOf(beam).findRelatedMemories(second, 1);
+			expect(linkedIds(edges).has(first)).toBe(true);
+			expect(edges.some(edge => edge.memoryId === first && edge.edgeType === "related_to")).toBe(true);
 		} finally {
 			beam.close();
 		}

@@ -1,5 +1,6 @@
 import type { Database, SQLQueryBindings } from "bun:sqlite";
 import { logger } from "@oh-my-pi/pi-utils";
+import { proactiveLinkingEnabled } from "../../config";
 import { transaction } from "../../db";
 import { toUtcIso } from "../../util/datetime";
 import { generateId } from "../../util/ids";
@@ -193,7 +194,7 @@ function proactiveLinkIfEnabled(
 	content: string,
 	extractEntities: boolean,
 ): void {
-	if (process.env.MNEMOPI_PROACTIVE_LINKING !== "1") return;
+	if (!proactiveLinkingEnabled()) return;
 	try {
 		const graph =
 			beam.episodicGraph instanceof EpisodicGraph

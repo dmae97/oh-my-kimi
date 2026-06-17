@@ -2219,6 +2219,18 @@ export const SETTINGS_SCHEMA = {
 			condition: "mnemopiActive",
 		},
 	},
+	"mnemopi.proactiveLinking": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "memory",
+			group: "Mnemopi",
+			label: "Mnemopi Proactive Linking",
+			description:
+				"Ingest new memories into the episodic graph as they are stored, linking them to related entities and memories",
+			condition: "mnemopiActive",
+		},
+	},
 	"mnemopi.noEmbeddings": {
 		type: "boolean",
 		default: false,
