@@ -6,6 +6,7 @@
  * arbitrary logic with full access to the hook context.
  */
 import type * as arktype from "arktype";
+import type * as zod from "zod/v4";
 import type { ExecOptions, ExecResult, HookCommandContext } from "../../extensibility/hooks/types";
 import type * as PiCodingAgent from "../../index";
 import type * as TypeBox from "../typebox";
@@ -26,6 +27,8 @@ export interface CustomCommandAPI {
 	typebox: typeof TypeBox;
 	/** Injected arktype module for validation in custom commands. */
 	arktype: typeof arktype;
+	/** Injected zod/v4 module for canonical command validation. */
+	zod: typeof zod;
 	/** Injected pi-coding-agent exports */
 	pi: typeof PiCodingAgent;
 }

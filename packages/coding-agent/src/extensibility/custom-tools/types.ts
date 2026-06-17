@@ -16,6 +16,7 @@ import type { FetchImpl, Model, Static, TSchema } from "@oh-my-pi/pi-ai";
 import type { Component } from "@oh-my-pi/pi-tui";
 import type { logger as PiLogger } from "@oh-my-pi/pi-utils";
 import type { type as ArkType } from "arktype";
+import type * as zod from "zod/v4";
 import type { Rule } from "../../capability/rule";
 import type { ModelRegistry } from "../../config/model-registry";
 import type { Settings } from "../../config/settings";
@@ -65,6 +66,8 @@ export interface CustomToolAPI {
 	typebox: typeof TypeBox;
 	/** Injected arktype module for arktype-authored custom tools. */
 	arktype: typeof ArkType;
+	/** Injected zod/v4 module for canonical parameter schemas. */
+	zod: typeof zod;
 	/** Injected pi-coding-agent exports */
 	pi: typeof PiCodingAgent;
 	/** Push a preview action that can later be resolved with the hidden resolve tool */

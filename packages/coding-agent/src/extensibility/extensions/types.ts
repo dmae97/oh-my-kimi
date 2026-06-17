@@ -33,6 +33,7 @@ import type { OAuthCredentials, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/oaut
 import type { AutocompleteItem, Component, EditorTheme, KeyId, TUI } from "@oh-my-pi/pi-tui";
 import type { logger as PiLogger } from "@oh-my-pi/pi-utils";
 import type { Type as arktype } from "arktype";
+import type * as zod from "zod/v4";
 import type { KeybindingsManager } from "../../config/keybindings";
 import type { ModelRegistry } from "../../config/model-registry";
 import type { EditToolDetails } from "../../edit";
@@ -950,6 +951,8 @@ export interface ExtensionAPI {
 
 	/** Injected arktype module for arktype-authored extension tools (canonical going forward). */
 	arktype: typeof arktype;
+	/** Injected zod/v4 module for canonical extension tool parameter schemas. */
+	zod: typeof zod;
 
 	/** Injected pi-coding-agent exports for accessing SDK utilities */
 	pi: typeof PiCodingAgent;

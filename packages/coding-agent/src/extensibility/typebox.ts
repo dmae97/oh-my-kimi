@@ -1,25 +1,20 @@
 /**
- * Minimal `@sinclair/typebox` runtime compatibility shim, backed by arktype.
+ * Minimal `@sinclair/typebox` runtime compatibility shim.
  *
  * Historically the coding agent injected the real `@sinclair/typebox` (~5MB
  * dependency) into extensions, hooks, custom tools, and custom commands so
  * they could author parameter schemas as `Type.Object({ name: Type.String() })`.
- * Originally everything ran through Zod (`wire.ts`, `validation.ts`);
- * this module now replaces that with arktype for better composability.
  *
- * This module provides a tiny façade whose `Type` builders return arktype schemas.
- * arktype schemas are natively integrated and converted to JSON Schema on-demand
- * for compatibility with downstream pipeline components:
+ * This module provides the subset those integrations depend on:
  *
- *   - Each builder function creates an arktype schema via `type()` or utility functions.
- *   - arktype validators are wrapped with metadata for JSON Schema emission.
- *   - `arkTypeToWireSchema()` emits the same draft 2020-12 JSON Schema providers expect
- *     from TypeBox-authored tools (defaulted fields treated as optional, etc.).
+ *   - TypeBox-style `Type.*` builders.
+ *   - Runtime validation through `schema.safeParse(input)` and `schema.__validator(input)`.
+ *   - Enumerable JSON Schema keywords so `{ ...schema }`, `JSON.stringify(schema)`,
+ *     and `toolWireSchema({ parameters: schema })` all see the same schema.
  *
- * The surface intentionally covers only the common TypeBox builders. Plugins
- * that reached for niche TypeBox-only APIs (`TypeCompiler`, the global
- * `TypeRegistry`, custom `Symbol(TypeBox.Kind)` introspection) must vendor
- * `@sinclair/typebox` directly in their own package.
+ * Internal validator fields and methods are intentionally non-enumerable. The
+ * object should look like JSON Schema at every serialization/wire boundary and
+ * like a small validator at runtime.
  */
 
 import { areJsonValuesEqual } from "@oh-my-pi/pi-ai/utils/schema";
@@ -27,7 +22,6 @@ import { areJsonValuesEqual } from "@oh-my-pi/pi-ai/utils/schema";
 // ---------------------------------------------------------------------------
 // Type aliases — exported so `import type { Static, TSchema } from "..."`
 // patterns keep compiling at the call site.
-// arktype schemas with metadata wrapper for JSON Schema support.
 // ---------------------------------------------------------------------------
 
 export type TSchema = ArkSchema;
@@ -49,45 +43,133 @@ export type TEnum<_T extends readonly (string | number)[] = readonly (string | n
 export type TRecord<_K extends ArkSchema, _V extends ArkSchema> = ArkSchema;
 
 // ---------------------------------------------------------------------------
-// ArkSchema wrapper — arktype schema with metadata
+// ArkSchema wrapper — JSON Schema object with hidden validator metadata
 // ---------------------------------------------------------------------------
 
+const VALIDATION_FAILURE = Symbol("pi.typebox.validationFailure");
+
+interface ValidationFailure {
+	message: string;
+	readonly [VALIDATION_FAILURE]: true;
+}
+
+interface SafeParseSuccess {
+	success: true;
+	data: unknown;
+}
+
+interface SafeParseFailure {
+	success: false;
+	error: ValidationFailure;
+}
+
+interface SchemaInternals {
+	optional?: boolean;
+	metadata?: Record<string, unknown>;
+	properties?: Record<string, ArkSchema>;
+	additionalProperties?: boolean | ArkSchema;
+	inner?: ArkSchema;
+}
+
 /**
- * Wraps an arktype validator with optional metadata for JSON Schema generation.
- * Validators return either the validated data or an error object with a `message` property.
+ * JSON-Schema-shaped object with non-enumerable runtime helpers.
+ * Validators return the validated data or a marked `{ message }` failure.
  */
 interface ArkSchema {
 	__validator: (data: unknown) => unknown;
 	__metadata?: Record<string, unknown>;
+	__optional?: true;
+	__properties?: Record<string, ArkSchema>;
+	__additionalProperties?: boolean | ArkSchema;
 	__infer?: unknown;
+	__inner?: ArkSchema;
+	safeParse(input: unknown): SafeParseSuccess | SafeParseFailure;
+	toJSON(): Record<string, unknown>;
+	[key: string]: unknown;
 }
 
-/**
- * Create an ArkSchema wrapper from an arktype validator function.
- */
-function createArkSchema(validator: (data: unknown) => unknown, metadata?: Record<string, unknown>): ArkSchema {
-	const schema: ArkSchema = {
-		__validator: validator,
-		__metadata: metadata,
-	};
+function defineHidden(target: object, key: PropertyKey, value: unknown): void {
+	Object.defineProperty(target, key, {
+		value,
+		writable: true,
+		configurable: true,
+	});
+}
+
+function validationFailure(message: string): ValidationFailure {
+	const failure = { message } as ValidationFailure;
+	defineHidden(failure, VALIDATION_FAILURE, true);
+	return failure;
+}
+
+function isValidationFailure(value: unknown): value is ValidationFailure {
+	if (value === null || typeof value !== "object") return false;
+	const candidate = value as { readonly [VALIDATION_FAILURE]?: unknown };
+	return candidate[VALIDATION_FAILURE] === true;
+}
+
+function schemaJsonValue(value: unknown): unknown {
+	if (Array.isArray(value)) return value.map(schemaJsonValue);
+	if (value === null || typeof value !== "object") return value;
+	const result: Record<string, unknown> = {};
+	for (const key in value) {
+		result[key] = schemaJsonValue((value as Record<string, unknown>)[key]);
+	}
+	return result;
+}
+
+function jsonSchemaOf(schema: ArkSchema): Record<string, unknown> {
+	const result: Record<string, unknown> = {};
+	for (const key in schema) result[key] = schemaJsonValue(schema[key]);
+	return result;
+}
+
+function createArkSchema(
+	validator: (data: unknown) => unknown,
+	jsonSchema: Record<string, unknown> = {},
+	internals: SchemaInternals = {},
+): ArkSchema {
+	const schema = { ...jsonSchema } as ArkSchema;
+	const metadata = internals.metadata ?? {};
+	defineHidden(schema, "__validator", validator);
+	defineHidden(schema, "__metadata", metadata);
+	if (internals.optional) defineHidden(schema, "__optional", true);
+	if (internals.properties) defineHidden(schema, "__properties", internals.properties);
+	if (internals.additionalProperties !== undefined) {
+		defineHidden(schema, "__additionalProperties", internals.additionalProperties);
+	}
+	if (internals.inner) defineHidden(schema, "__inner", internals.inner);
+	defineHidden(schema, "safeParse", (input: unknown): SafeParseSuccess | SafeParseFailure => {
+		const result = validator(input);
+		if (isValidationFailure(result)) return { success: false, error: result };
+		return { success: true, data: result };
+	});
+	defineHidden(schema, "toJSON", () => jsonSchemaOf(schema));
 	return schema;
 }
 
-/**
- * Extract the validator function from an ArkSchema.
- */
-function getValidator(schema: ArkSchema): (data: unknown) => unknown {
-	return schema.__validator;
+function cloneSchemaWith(
+	schema: ArkSchema,
+	jsonSchema: Record<string, unknown>,
+	internals?: SchemaInternals,
+): ArkSchema {
+	return createArkSchema(schema.__validator, jsonSchema, {
+		metadata: internals?.metadata ?? schema.__metadata,
+		optional: internals?.optional ?? schema.__optional === true,
+		properties: internals?.properties ?? schema.__properties,
+		additionalProperties: internals?.additionalProperties ?? schema.__additionalProperties,
+		inner: internals?.inner ?? schema.__inner,
+	});
 }
 
-/**
- * Merge metadata into an ArkSchema, returning a new schema.
- */
 function withMetadata(schema: ArkSchema, newMeta: Record<string, unknown>): ArkSchema {
-	return createArkSchema(getValidator(schema), {
-		...schema.__metadata,
-		...newMeta,
-	});
+	return cloneSchemaWith(
+		schema,
+		{ ...jsonSchemaOf(schema), ...newMeta },
+		{
+			metadata: { ...(schema.__metadata ?? {}), ...newMeta },
+		},
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -137,143 +219,81 @@ interface ObjectOpts extends Meta {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Apply metadata options to a schema, including description, default, and extras.
- */
 function applyMeta(schema: ArkSchema, opts: Meta | undefined): ArkSchema {
 	if (!opts) return schema;
-
-	const metadata: Record<string, unknown> = { ...schema.__metadata };
-
-	if (typeof opts.description === "string") {
-		metadata.description = opts.description;
-	}
-	if ("default" in opts) {
-		metadata.default = opts.default;
-	}
-
-	// Collect remaining metadata (excluding handled keys)
+	const metadata: Record<string, unknown> = {};
 	for (const key in opts) {
-		if (key === "description" || key === "default" || key === "additionalProperties") continue;
+		if (key === "additionalProperties") continue;
 		metadata[key] = opts[key];
 	}
-
 	return withMetadata(schema, metadata);
 }
 
-/**
- * Create a validator that applies string constraints (minLength, maxLength, pattern).
- */
 function createStringValidator(
 	baseValidator: (data: unknown) => unknown,
 	opts?: StringOpts,
 ): (data: unknown) => unknown {
 	return (data: unknown) => {
 		const result = baseValidator(data);
-		if (result && typeof result === "object" && "message" in result) {
-			return result;
-		}
-
-		if (typeof result !== "string") {
-			return { message: "Expected string" };
-		}
-
+		if (isValidationFailure(result)) return result;
+		if (typeof result !== "string") return validationFailure("Expected string");
 		if (opts?.minLength !== undefined && result.length < opts.minLength) {
-			return { message: `String must have at least ${opts.minLength} characters` };
+			return validationFailure(`String must have at least ${opts.minLength} characters`);
 		}
-
 		if (opts?.maxLength !== undefined && result.length > opts.maxLength) {
-			return { message: `String must have at most ${opts.maxLength} characters` };
+			return validationFailure(`String must have at most ${opts.maxLength} characters`);
 		}
-
 		if (opts?.pattern !== undefined) {
 			const regex = new RegExp(opts.pattern);
-			if (!regex.test(result)) {
-				return { message: `String must match pattern ${opts.pattern}` };
-			}
+			if (!regex.test(result)) return validationFailure(`String must match pattern ${opts.pattern}`);
 		}
-
 		return result;
 	};
 }
 
-/**
- * Create a validator for a format-specific string (email, url, uuid, date, etc).
- */
 function createFormatStringValidator(format: string): (data: unknown) => unknown {
-	// Use simple built-in checks for common formats
 	return (data: unknown) => {
-		if (typeof data !== "string") {
-			return { message: "Expected string" };
-		}
-
+		if (typeof data !== "string") return validationFailure("Expected string");
 		switch (format) {
 			case "email": {
-				// Basic email validation
 				const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-				if (!emailRegex.test(data)) {
-					return { message: "Invalid email format" };
-				}
-				return data;
+				return emailRegex.test(data) ? data : validationFailure("Invalid email format");
 			}
 			case "url":
-			case "uri": {
+			case "uri":
 				try {
 					new URL(data);
 					return data;
 				} catch {
-					return { message: "Invalid URL format" };
+					return validationFailure("Invalid URL format");
 				}
-			}
 			case "uuid": {
 				const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-				if (!uuidRegex.test(data)) {
-					return { message: "Invalid UUID format" };
-				}
-				return data;
+				return uuidRegex.test(data) ? data : validationFailure("Invalid UUID format");
 			}
 			case "date": {
 				const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
-				if (!dateRegex.test(data)) {
-					return { message: "Invalid date format (YYYY-MM-DD)" };
-				}
+				if (!dateRegex.test(data)) return validationFailure("Invalid date format (YYYY-MM-DD)");
 				const date = new Date(data);
-				if (Number.isNaN(date.getTime())) {
-					return { message: "Invalid date" };
-				}
-				return data;
+				return Number.isNaN(date.getTime()) ? validationFailure("Invalid date") : data;
 			}
 			case "date-time": {
 				const dateTime = new Date(data);
-				if (Number.isNaN(dateTime.getTime())) {
-					return { message: "Invalid date-time format" };
-				}
-				return data;
+				return Number.isNaN(dateTime.getTime()) ? validationFailure("Invalid date-time format") : data;
 			}
 			case "time": {
 				const timeRegex = /^\d{2}:\d{2}:\d{2}(.\d{3})?([+-]\d{2}:\d{2}|Z)?$/;
-				if (!timeRegex.test(data)) {
-					return { message: "Invalid time format" };
-				}
-				return data;
+				return timeRegex.test(data) ? data : validationFailure("Invalid time format");
 			}
 			case "ipv4": {
 				const ipv4Regex = /^(\d{1,3}\.){3}\d{1,3}$/;
-				if (!ipv4Regex.test(data)) {
-					return { message: "Invalid IPv4 format" };
-				}
+				if (!ipv4Regex.test(data)) return validationFailure("Invalid IPv4 format");
 				const parts = data.split(".").map(Number);
-				if (parts.some(part => part > 255)) {
-					return { message: "Invalid IPv4 address" };
-				}
-				return data;
+				return parts.some(part => part > 255) ? validationFailure("Invalid IPv4 address") : data;
 			}
 			case "ipv6": {
 				const ipv6Regex = /^([\da-f]{1,4}:){7}[\da-f]{1,4}$/i;
-				if (!ipv6Regex.test(data)) {
-					return { message: "Invalid IPv6 format" };
-				}
-				return data;
+				return ipv6Regex.test(data) ? data : validationFailure("Invalid IPv6 format");
 			}
 			default:
 				return data;
@@ -281,273 +301,182 @@ function createFormatStringValidator(format: string): (data: unknown) => unknown
 	};
 }
 
-/**
- * Create a validator for numbers with constraints.
- */
-function createNumberValidator(isInteger: boolean = false): (data: unknown) => unknown {
+function createNumberValidator(isInteger = false): (data: unknown) => unknown {
 	return (data: unknown) => {
 		if (typeof data !== "number" || Number.isNaN(data)) {
-			return { message: `Expected ${isInteger ? "integer" : "number"}` };
+			return validationFailure(`Expected ${isInteger ? "integer" : "number"}`);
 		}
-
-		if (isInteger && !Number.isInteger(data)) {
-			return { message: "Expected integer" };
-		}
-
+		if (isInteger && !Number.isInteger(data)) return validationFailure("Expected integer");
 		return data;
 	};
 }
 
-/**
- * Apply number constraints (min, max, multipleOf, etc).
- */
 function createConstrainedNumberValidator(
 	baseValidator: (data: unknown) => unknown,
 	opts?: NumberOpts,
 ): (data: unknown) => unknown {
 	return (data: unknown) => {
 		const result = baseValidator(data);
-		if (result && typeof result === "object" && "message" in result) {
-			return result;
-		}
-
-		if (typeof result !== "number") {
-			return { message: "Expected number" };
-		}
-
+		if (isValidationFailure(result)) return result;
+		if (typeof result !== "number") return validationFailure("Expected number");
 		if (opts?.minimum !== undefined && result < opts.minimum) {
-			return { message: `Number must be at least ${opts.minimum}` };
+			return validationFailure(`Number must be at least ${opts.minimum}`);
 		}
-
 		if (opts?.maximum !== undefined && result > opts.maximum) {
-			return { message: `Number must be at most ${opts.maximum}` };
+			return validationFailure(`Number must be at most ${opts.maximum}`);
 		}
-
 		if (opts?.exclusiveMinimum !== undefined && result <= opts.exclusiveMinimum) {
-			return { message: `Number must be greater than ${opts.exclusiveMinimum}` };
+			return validationFailure(`Number must be greater than ${opts.exclusiveMinimum}`);
 		}
-
 		if (opts?.exclusiveMaximum !== undefined && result >= opts.exclusiveMaximum) {
-			return { message: `Number must be less than ${opts.exclusiveMaximum}` };
+			return validationFailure(`Number must be less than ${opts.exclusiveMaximum}`);
 		}
-
 		if (opts?.multipleOf !== undefined && result % opts.multipleOf !== 0) {
-			return { message: `Number must be a multiple of ${opts.multipleOf}` };
+			return validationFailure(`Number must be a multiple of ${opts.multipleOf}`);
 		}
-
 		return result;
 	};
 }
 
-/**
- * Create a validator for arrays with constraints.
- */
 function createArrayValidator(itemValidator: ArkSchema, opts?: ArrayOpts): (data: unknown) => unknown {
 	return (data: unknown) => {
-		if (!Array.isArray(data)) {
-			return { message: "Expected array" };
-		}
-
+		if (!Array.isArray(data)) return validationFailure("Expected array");
 		if (opts?.minItems !== undefined && data.length < opts.minItems) {
-			return { message: `Array must have at least ${opts.minItems} items` };
+			return validationFailure(`Array must have at least ${opts.minItems} items`);
 		}
-
 		if (opts?.maxItems !== undefined && data.length > opts.maxItems) {
-			return { message: `Array must have at most ${opts.maxItems} items` };
+			return validationFailure(`Array must have at most ${opts.maxItems} items`);
 		}
-
 		if (opts?.uniqueItems === true) {
 			for (let i = 0; i < data.length; i++) {
 				for (let j = i + 1; j < data.length; j++) {
-					if (areJsonValuesEqual(data[i], data[j])) {
-						return { message: "Array items must be unique" };
-					}
+					if (areJsonValuesEqual(data[i], data[j])) return validationFailure("Array items must be unique");
 				}
 			}
 		}
-
-		// Validate each item
-		const itemValidator_fn = getValidator(itemValidator);
+		const itemValidatorFn = itemValidator.__validator;
 		for (let i = 0; i < data.length; i++) {
-			const itemResult = itemValidator_fn(data[i]);
-			if (itemResult && typeof itemResult === "object" && "message" in itemResult) {
-				return { message: `Item at index ${i}: ${(itemResult as { message?: string }).message || "Invalid"}` };
+			const itemResult = itemValidatorFn(data[i]);
+			if (isValidationFailure(itemResult)) {
+				return validationFailure(`Item at index ${i}: ${itemResult.message || "Invalid"}`);
 			}
 		}
-
 		return data;
 	};
 }
 
-/**
- * Create a validator for tuples.
- */
 function createTupleValidator(itemSchemas: ArkSchema[]): (data: unknown) => unknown {
 	return (data: unknown) => {
-		if (!Array.isArray(data)) {
-			return { message: "Expected array" };
-		}
-
+		if (!Array.isArray(data)) return validationFailure("Expected array");
 		if (data.length !== itemSchemas.length) {
-			return { message: `Expected tuple of length ${itemSchemas.length}, got ${data.length}` };
+			return validationFailure(`Expected tuple of length ${itemSchemas.length}, got ${data.length}`);
 		}
-
 		for (let i = 0; i < itemSchemas.length; i++) {
-			const itemValidator = getValidator(itemSchemas[i]);
+			const itemValidator = itemSchemas[i].__validator;
 			const itemResult = itemValidator(data[i]);
-			if (itemResult && typeof itemResult === "object" && "message" in itemResult) {
-				return { message: `Item at index ${i}: ${(itemResult as { message?: string }).message || "Invalid"}` };
+			if (isValidationFailure(itemResult)) {
+				return validationFailure(`Item at index ${i}: ${itemResult.message || "Invalid"}`);
 			}
 		}
-
 		return data;
 	};
 }
 
-/**
- * Create a validator for objects with property validation.
- */
 function createObjectValidator(properties: Record<string, ArkSchema>, opts?: ObjectOpts): (data: unknown) => unknown {
 	return (data: unknown) => {
-		if (!data || typeof data !== "object") {
-			return { message: "Expected object" };
-		}
-
+		if (!data || typeof data !== "object") return validationFailure("Expected object");
 		const obj = data as Record<string, unknown>;
 		const result: Record<string, unknown> = {};
-		const keys = new Set(Object.keys(obj));
 
-		// Validate each property
-		for (const [key, schema] of Object.entries(properties)) {
-			const validator = getValidator(schema);
-			const value = obj[key];
-			const validated = validator(value);
+		const keys = new Set<string>();
+		for (const key in obj) {
+			keys.add(key);
+		}
 
-			if (validated && typeof validated === "object" && "message" in validated) {
-				return { message: `Property ${key}: ${(validated as { message?: string }).message || "Invalid"}` };
+		for (const key in properties) {
+			const schema = properties[key];
+			const validated = schema.__validator(obj[key]);
+			if (isValidationFailure(validated)) {
+				return validationFailure(`Property ${key}: ${validated.message || "Invalid"}`);
 			}
-
-			result[key] = validated;
+			if (obj[key] !== undefined || schema.__optional !== true) {
+				result[key] = validated;
+			}
 			keys.delete(key);
 		}
 
-		// Handle additional properties
-		const ap = opts?.additionalProperties;
-		if (ap === false) {
-			if (keys.size > 0) {
-				return { message: `Unexpected properties: ${Array.from(keys).join(", ")}` };
-			}
-		} else if (ap === true || ap === undefined) {
-			// TypeBox default: preserve extra keys
-			for (const key of keys) {
-				result[key] = obj[key];
-			}
+		const additionalProperties = opts?.additionalProperties;
+		if (additionalProperties === false) {
+			if (keys.size > 0) return validationFailure(`Unexpected properties: ${Array.from(keys).join(", ")}`);
+		} else if (additionalProperties === true || additionalProperties === undefined) {
+			for (const key of keys) result[key] = obj[key];
 		} else {
-			// ap is a schema; validate extra properties against it
-			const apValidator = getValidator(ap);
+			const additionalValidator = additionalProperties.__validator;
 			for (const key of keys) {
-				const validated = apValidator(obj[key]);
-				if (validated && typeof validated === "object" && "message" in validated) {
-					return { message: `Property ${key}: ${(validated as { message?: string }).message || "Invalid"}` };
+				const validated = additionalValidator(obj[key]);
+				if (isValidationFailure(validated)) {
+					return validationFailure(`Property ${key}: ${validated.message || "Invalid"}`);
 				}
 				result[key] = validated;
 			}
 		}
-
 		return result;
 	};
 }
 
-/**
- * Create a validator for unions (oneOf).
- */
 function createUnionValidator(schemas: ArkSchema[]): (data: unknown) => unknown {
 	return (data: unknown) => {
-		if (schemas.length === 0) {
-			return { message: "Cannot validate empty union" };
-		}
-
+		if (schemas.length === 0) return validationFailure("Cannot validate empty union");
 		const errors: string[] = [];
-
 		for (const schema of schemas) {
-			const validator = getValidator(schema);
-			const result = validator(data);
-			if (!result || typeof result !== "object" || !("message" in result)) {
-				return result;
-			}
-			errors.push((result as { message?: string }).message || "Validation failed");
+			const result = schema.__validator(data);
+			if (!isValidationFailure(result)) return result;
+			errors.push(result.message || "Invalid");
 		}
-
-		return { message: `Failed all union options: ${errors.join("; ")}` };
+		return validationFailure(`Failed all union options: ${errors.join("; ")}`);
 	};
 }
 
-/**
- * Create a validator for intersections (allOf).
- */
 function createIntersectionValidator(schemas: ArkSchema[]): (data: unknown) => unknown {
 	return (data: unknown) => {
 		let result = data;
-
 		for (const schema of schemas) {
-			const validator = getValidator(schema);
-			result = validator(result);
-			if (result && typeof result === "object" && "message" in result) {
-				return result;
-			}
+			result = schema.__validator(result);
+			if (isValidationFailure(result)) return result;
 		}
-
 		return result;
 	};
 }
 
-/**
- * Create a validator for optional values (can be undefined).
- */
 function createOptionalValidator(schema: ArkSchema): (data: unknown) => unknown {
-	const baseValidator = getValidator(schema);
-	return (data: unknown) => {
-		if (data === undefined) {
-			return undefined;
-		}
-		return baseValidator(data);
-	};
+	const baseValidator = schema.__validator;
+	return (data: unknown) => (data === undefined ? undefined : baseValidator(data));
 }
 
-/**
- * Create a validator for nullable values (can be null).
- */
 function createNullableValidator(schema: ArkSchema): (data: unknown) => unknown {
-	const baseValidator = getValidator(schema);
-	return (data: unknown) => {
-		if (data === null) {
-			return null;
-		}
-		return baseValidator(data);
-	};
+	const baseValidator = schema.__validator;
+	return (data: unknown) => (data === null ? null : baseValidator(data));
 }
 
-/**
- * Create a validator for records (arbitrary keys mapped to values).
- */
-function createRecordValidator(valueSchema: ArkSchema): (data: unknown) => unknown {
+function createRecordValidator(keySchema: ArkSchema, valueSchema: ArkSchema): (data: unknown) => unknown {
 	return (data: unknown) => {
-		if (!data || typeof data !== "object") {
-			return { message: "Expected object" };
-		}
-
+		if (!data || typeof data !== "object") return validationFailure("Expected object");
 		const obj = data as Record<string, unknown>;
 		const result: Record<string, unknown> = {};
-		const valueValidator = getValidator(valueSchema);
-
-		for (const [key, value] of Object.entries(obj)) {
-			const validated = valueValidator(value);
-			if (validated && typeof validated === "object" && "message" in validated) {
-				return { message: `Key ${key}: ${(validated as { message?: string }).message || "Invalid"}` };
+		const keyValidator = keySchema.__validator;
+		const valueValidator = valueSchema.__validator;
+		for (const key in obj) {
+			const value = obj[key];
+			const keyResult = keyValidator(key);
+			if (isValidationFailure(keyResult)) {
+				return validationFailure(`Key ${key}: ${keyResult.message || "Invalid"}`);
 			}
-			result[key] = validated;
+			const valueResult = valueValidator(value);
+			if (isValidationFailure(valueResult)) {
+				return validationFailure(`Key ${key}: ${valueResult.message || "Invalid"}`);
+			}
+			result[key] = valueResult;
 		}
-
 		return result;
 	};
 }
@@ -566,170 +495,227 @@ function uniqueLiteralValues(values: readonly (string | number | boolean)[]): Ar
 	return unique;
 }
 
+function requiredKeys(properties: Record<string, ArkSchema>): string[] | undefined {
+	const required: string[] = [];
+	for (const key in properties) {
+		if (properties[key].__optional !== true) {
+			required.push(key);
+		}
+	}
+	return required.length === 0 ? undefined : required;
+}
+
+function objectJsonSchema(properties: Record<string, ArkSchema>, opts?: ObjectOpts): Record<string, unknown> {
+	const propertySchemas: Record<string, unknown> = {};
+	for (const key in properties) propertySchemas[key] = jsonSchemaOf(properties[key]);
+	const schema: Record<string, unknown> = { type: "object", properties: propertySchemas };
+	const required = requiredKeys(properties);
+	if (required) schema.required = required;
+	const additionalProperties = opts?.additionalProperties;
+	if (additionalProperties !== undefined) {
+		schema.additionalProperties =
+			typeof additionalProperties === "boolean" ? additionalProperties : jsonSchemaOf(additionalProperties);
+	}
+	return schema;
+}
+
+function schemaWithoutOptional(schema: ArkSchema): ArkSchema {
+	const base = schema.__inner ?? schema;
+	return createArkSchema(base.__validator, jsonSchemaOf(base), {
+		metadata: base.__metadata,
+		properties: base.__properties,
+		additionalProperties: base.__additionalProperties,
+	});
+}
+
 // ---------------------------------------------------------------------------
 // Builders
 // ---------------------------------------------------------------------------
 
 function tString(opts?: StringOpts): ArkSchema {
-	let validator: (data: unknown) => unknown;
-
-	if (opts?.format) {
-		validator = createFormatStringValidator(opts.format);
-	} else {
-		validator = (data: unknown) => {
-			if (typeof data !== "string") {
-				return { message: "Expected string" };
-			}
-			return data;
-		};
-	}
-
-	// Apply length/pattern constraints
+	let validator: (data: unknown) => unknown = opts?.format
+		? createFormatStringValidator(opts.format)
+		: (data: unknown) => (typeof data === "string" ? data : validationFailure("Expected string"));
 	validator = createStringValidator(validator, opts);
-
-	return applyMeta(createArkSchema(validator), opts);
+	return applyMeta(createArkSchema(validator, { type: "string" }), opts);
 }
 
 function tNumber(opts?: NumberOpts): ArkSchema {
 	const validator = createConstrainedNumberValidator(createNumberValidator(false), opts);
-	return applyMeta(createArkSchema(validator), opts);
+	return applyMeta(createArkSchema(validator, { type: "number" }), opts);
 }
 
 function tInteger(opts?: NumberOpts): ArkSchema {
 	const validator = createConstrainedNumberValidator(createNumberValidator(true), opts);
-	return applyMeta(createArkSchema(validator), opts);
+	return applyMeta(createArkSchema(validator, { type: "integer" }), opts);
 }
 
 function tBoolean(opts?: Meta): ArkSchema {
-	const validator = (data: unknown) => {
-		if (typeof data !== "boolean") {
-			return { message: "Expected boolean" };
-		}
-		return data;
-	};
-	return applyMeta(createArkSchema(validator), opts);
+	const validator = (data: unknown) => (typeof data === "boolean" ? data : validationFailure("Expected boolean"));
+	return applyMeta(createArkSchema(validator, { type: "boolean" }), opts);
 }
 
 function tNull(opts?: Meta): ArkSchema {
-	const validator = (data: unknown) => {
-		if (data !== null) {
-			return { message: "Expected null" };
-		}
-		return data;
-	};
-	return applyMeta(createArkSchema(validator), opts);
+	const validator = (data: unknown) => (data === null ? data : validationFailure("Expected null"));
+	return applyMeta(createArkSchema(validator, { type: "null" }), opts);
 }
 
 function tAny(opts?: Meta): ArkSchema {
-	const validator = (data: unknown) => data;
-	return applyMeta(createArkSchema(validator), opts);
+	return applyMeta(
+		createArkSchema((data: unknown) => data, {}),
+		opts,
+	);
 }
 
 function tUnknown(opts?: Meta): ArkSchema {
-	const validator = (data: unknown) => data;
-	return applyMeta(createArkSchema(validator), opts);
+	return applyMeta(
+		createArkSchema((data: unknown) => data, {}),
+		opts,
+	);
 }
 
 function tNever(opts?: Meta): ArkSchema {
-	const validator = (_data: unknown) => {
-		return { message: "Never type does not accept any value" };
-	};
-	return applyMeta(createArkSchema(validator), opts);
+	return applyMeta(
+		createArkSchema(() => validationFailure("Never type does not accept any value"), { not: {} }),
+		opts,
+	);
 }
 
 function tLiteral<V extends string | number | boolean>(value: V, opts?: Meta): ArkSchema {
-	const validator = (data: unknown) => {
-		if (data !== value) {
-			return { message: `Expected literal ${JSON.stringify(value)}` };
-		}
-		return data;
-	};
-	return applyMeta(createArkSchema(validator), opts);
+	const validator = (data: unknown) =>
+		data === value ? data : validationFailure(`Expected literal ${JSON.stringify(value)}`);
+	return applyMeta(createArkSchema(validator, { const: value }), opts);
 }
 
 function tUnion<T extends readonly ArkSchema[]>(schemas: T, opts?: Meta): ArkSchema {
 	if (schemas.length === 0)
 		return applyMeta(
-			createArkSchema(() => ({ message: "Empty union" })),
+			createArkSchema(() => validationFailure("Empty union"), { not: {} }),
 			opts,
 		);
 	if (schemas.length === 1) return applyMeta(schemas[0], opts);
-
 	const validator = createUnionValidator([...schemas]);
-	return applyMeta(createArkSchema(validator), opts);
+	return applyMeta(createArkSchema(validator, { anyOf: schemas.map(jsonSchemaOf) }), opts);
 }
 
 function tIntersect(schemas: readonly ArkSchema[], opts?: Meta): ArkSchema {
 	if (schemas.length === 0)
 		return applyMeta(
-			createArkSchema((data: unknown) => data),
+			createArkSchema((data: unknown) => data, {}),
 			opts,
 		);
-	if (schemas.length === 1) return applyMeta(schemas[0] as ArkSchema, opts);
-
+	if (schemas.length === 1) return applyMeta(schemas[0], opts);
 	const validator = createIntersectionValidator([...schemas]);
-	return applyMeta(createArkSchema(validator), opts);
+	return applyMeta(createArkSchema(validator, { allOf: schemas.map(jsonSchemaOf) }), opts);
 }
 
 function literalUnion(values: readonly (string | number | boolean)[], opts?: Meta): ArkSchema {
 	const unique = uniqueLiteralValues(values);
 	if (unique.length === 0)
 		return applyMeta(
-			createArkSchema(() => ({ message: "Empty literal union" })),
+			createArkSchema(() => validationFailure("Empty literal union"), { not: {} }),
 			opts,
 		);
 	if (unique.length === 1) return tLiteral(unique[0] as string | number | boolean, opts);
-
 	const validator = (data: unknown) => {
-		for (const value of unique) {
-			if (data === value) return data;
-		}
-		return { message: `Expected one of: ${unique.join(", ")}` };
+		for (const value of unique) if (data === value) return data;
+		return validationFailure(`Expected one of: ${unique.join(", ")}`);
 	};
-
-	return applyMeta(createArkSchema(validator), opts);
+	return applyMeta(createArkSchema(validator, { enum: unique }), opts);
 }
 
 function tEnum<T extends Record<string, string | number> | readonly (string | number)[]>(
 	values: T,
 	opts?: Meta,
 ): ArkSchema {
-	const list = Array.isArray(values)
-		? values
-		: Object.entries(values)
-				.filter(([key, value]) => !(isArrayIndexKey(key) && typeof value === "string"))
-				.map(([, value]) => value);
+	let list: (string | number)[];
+	if (Array.isArray(values)) {
+		list = values;
+	} else {
+		list = [];
+		for (const key in values) {
+			const value = values[key];
+			if (!(isArrayIndexKey(key) && typeof value === "string")) {
+				list.push(value as string | number);
+			}
+		}
+	}
 	return literalUnion(list, opts);
 }
 
 function tArray<E extends ArkSchema>(item: E, opts?: ArrayOpts): ArkSchema {
 	const validator = createArrayValidator(item, opts);
-	return applyMeta(createArkSchema(validator), opts);
+	return applyMeta(createArkSchema(validator, { type: "array", items: jsonSchemaOf(item) }), opts);
 }
 
 function tTuple(items: readonly ArkSchema[], opts?: Meta): ArkSchema {
 	const validator = createTupleValidator([...items]);
-	return applyMeta(createArkSchema(validator), opts);
+	return applyMeta(
+		createArkSchema(validator, {
+			type: "array",
+			prefixItems: items.map(jsonSchemaOf),
+			minItems: items.length,
+			maxItems: items.length,
+		}),
+		opts,
+	);
 }
 
 function tObject<P extends Record<string, ArkSchema>>(properties: P, opts?: ObjectOpts): ArkSchema {
-	const validator = createObjectValidator(properties as Record<string, ArkSchema>, opts);
-	return applyMeta(createArkSchema(validator), opts);
+	const props = properties as Record<string, ArkSchema>;
+	const validator = createObjectValidator(props, opts);
+	const schema = createArkSchema(validator, objectJsonSchema(props, opts), {
+		properties: props,
+		additionalProperties: opts?.additionalProperties,
+	});
+	return applyMeta(schema, opts);
 }
 
-function tRecord<V extends ArkSchema>(_key: ArkSchema, value: V, opts?: Meta): ArkSchema {
-	const validator = createRecordValidator(value);
-	return applyMeta(createArkSchema(validator), opts);
+function literalRecordKeys(keySchema: ArkSchema): string[] | null {
+	const json = jsonSchemaOf(keySchema);
+	if ("const" in json) return [String(json.const)];
+	const values = json.enum;
+	if (!Array.isArray(values)) return null;
+	const keys: string[] = [];
+	for (const value of values) {
+		const type = typeof value;
+		if (type !== "string" && type !== "number" && type !== "boolean") return null;
+		keys.push(String(value));
+	}
+	return keys;
 }
 
-function tOptional<E extends ArkSchema>(schema: E, _opts?: Meta): ArkSchema {
+function createRecordJson(keySchema: ArkSchema, valueSchema: ArkSchema): Record<string, unknown> {
+	const valueJson = jsonSchemaOf(valueSchema);
+	const keys = literalRecordKeys(keySchema);
+	if (keys) {
+		const properties: Record<string, unknown> = {};
+		for (const key of keys) properties[key] = valueJson;
+		return { type: "object", properties, required: keys, additionalProperties: false };
+	}
+	const json: Record<string, unknown> = { type: "object", additionalProperties: valueJson };
+	const keyJson = jsonSchemaOf(keySchema);
+	if (Object.keys(keyJson).length > 0) json.propertyNames = keyJson;
+	return json;
+}
+
+function tRecord<K extends ArkSchema, V extends ArkSchema>(key: K, value: V, opts?: Meta): ArkSchema {
+	const validator = createRecordValidator(key, value);
+	return applyMeta(createArkSchema(validator, createRecordJson(key, value)), opts);
+}
+
+function tOptional<E extends ArkSchema>(schema: E, opts?: Meta): ArkSchema {
 	const validator = createOptionalValidator(schema);
-	return createArkSchema(validator, schema.__metadata);
+	const optional = createArkSchema(validator, jsonSchemaOf(schema), {
+		optional: true,
+		inner: schema,
+	});
+	return applyMeta(optional, opts);
 }
 
 function tNullable<E extends ArkSchema>(schema: E, opts?: Meta): ArkSchema {
 	const validator = createNullableValidator(schema);
-	return applyMeta(createArkSchema(validator, schema.__metadata), opts);
+	return applyMeta(createArkSchema(validator, { anyOf: [jsonSchemaOf(schema), { type: "null" }] }), opts);
 }
 
 function tReadonly<E extends ArkSchema>(schema: E): ArkSchema {
@@ -738,29 +724,53 @@ function tReadonly<E extends ArkSchema>(schema: E): ArkSchema {
 }
 
 function tPartial<_P extends Record<string, ArkSchema>>(obj: ArkSchema): ArkSchema {
-	// Convert all properties to optional
-	const objValidator = getValidator(obj);
-	const partialValidator = (data: unknown) => {
-		const result = objValidator(data);
-		if (result && typeof result === "object" && "message" in result) {
-			return result;
+	if (obj.__properties) {
+		const properties: Record<string, ArkSchema> = {};
+		for (const key in obj.__properties) {
+			const schema = obj.__properties[key];
+			properties[key] = schema.__optional === true ? schema : tOptional(schema);
 		}
-		// Result is a validated object; make all keys optional by allowing undefined
-		return result;
-	};
-	return createArkSchema(partialValidator, obj.__metadata);
+		return tObject(properties, { additionalProperties: obj.__additionalProperties });
+	}
+	const objValidator = obj.__validator;
+	const metadata = jsonSchemaOf(obj);
+	delete metadata.required;
+	return createArkSchema(objValidator, metadata);
 }
 
 function tRequired<_P extends Record<string, ArkSchema>>(obj: ArkSchema): ArkSchema {
-	// Mark all properties as required (runtime is unchanged; this is a type marker)
-	return obj;
+	if (obj.__properties) {
+		const properties: Record<string, ArkSchema> = {};
+		for (const key in obj.__properties) {
+			properties[key] = schemaWithoutOptional(obj.__properties[key]);
+		}
+		return tObject(properties, { additionalProperties: obj.__additionalProperties });
+	}
+	const metadata = jsonSchemaOf(obj);
+	if (metadata.properties && typeof metadata.properties === "object" && !Array.isArray(metadata.properties)) {
+		const properties = metadata.properties as Record<string, unknown>;
+		const required: string[] = [];
+		for (const key in properties) {
+			required.push(key);
+		}
+		metadata.required = required;
+	}
+	return createArkSchema(obj.__validator, metadata);
 }
 
 function tPick<P extends Record<string, ArkSchema>, K extends keyof P>(obj: ArkSchema, keys: readonly K[]): ArkSchema {
 	const keySet = new Set([...keys].map(String));
+	if (obj.__properties) {
+		const properties: Record<string, ArkSchema> = {};
+		for (const key of keySet) {
+			const schema = obj.__properties[key];
+			if (schema) properties[key] = schema;
+		}
+		return tObject(properties, { additionalProperties: obj.__additionalProperties });
+	}
 	const validator = (data: unknown) => {
 		if (!data || typeof data !== "object") {
-			return { message: "Expected object" };
+			return validationFailure("Expected object");
 		}
 
 		const result: Record<string, unknown> = {};
@@ -775,36 +785,78 @@ function tPick<P extends Record<string, ArkSchema>, K extends keyof P>(obj: ArkS
 		return result;
 	};
 
-	return createArkSchema(validator, obj.__metadata);
+	const metadata = jsonSchemaOf(obj);
+	if (metadata.properties && typeof metadata.properties === "object" && !Array.isArray(metadata.properties)) {
+		const properties = metadata.properties as Record<string, unknown>;
+		const filteredProps: Record<string, unknown> = {};
+		for (const key in properties) {
+			if (keySet.has(key)) {
+				filteredProps[key] = properties[key];
+			}
+		}
+		metadata.properties = filteredProps;
+	}
+	if (Array.isArray(metadata.required)) {
+		metadata.required = metadata.required.filter(key => typeof key === "string" && keySet.has(key));
+	}
+	return createArkSchema(validator, metadata);
 }
 
 function tOmit<P extends Record<string, ArkSchema>, K extends keyof P>(obj: ArkSchema, keys: readonly K[]): ArkSchema {
 	const keySet = new Set([...keys].map(String));
+	if (obj.__properties) {
+		const properties: Record<string, ArkSchema> = {};
+		for (const key in obj.__properties) {
+			if (!keySet.has(key)) {
+				properties[key] = obj.__properties[key];
+			}
+		}
+		return tObject(properties, { additionalProperties: obj.__additionalProperties });
+	}
 	const validator = (data: unknown) => {
 		if (!data || typeof data !== "object") {
-			return { message: "Expected object" };
+			return validationFailure("Expected object");
 		}
 
 		const result: Record<string, unknown> = {};
 		const obj_data = data as Record<string, unknown>;
 
-		for (const [key, value] of Object.entries(obj_data)) {
+		for (const key in obj_data) {
 			if (!keySet.has(key)) {
-				result[key] = value;
+				result[key] = obj_data[key];
 			}
 		}
 
 		return result;
 	};
 
-	return createArkSchema(validator, obj.__metadata);
+	const metadata = jsonSchemaOf(obj);
+	if (metadata.properties && typeof metadata.properties === "object" && !Array.isArray(metadata.properties)) {
+		const properties = metadata.properties as Record<string, unknown>;
+		const filteredProps: Record<string, unknown> = {};
+		for (const key in properties) {
+			if (!keySet.has(key)) {
+				filteredProps[key] = properties[key];
+			}
+		}
+		metadata.properties = filteredProps;
+	}
+	if (Array.isArray(metadata.required)) {
+		metadata.required = metadata.required.filter(key => typeof key === "string" && !keySet.has(key));
+	}
+	return createArkSchema(validator, metadata);
 }
 
 function tComposite(objects: readonly ArkSchema[], opts?: Meta): ArkSchema {
 	// Composite flattens object schemas into one
 	if (objects.length === 0) {
 		return applyMeta(
-			createArkSchema((data: unknown) => (data && typeof data === "object" ? data : { message: "Expected object" })),
+			createArkSchema(
+				(data: unknown) => (data && typeof data === "object" ? data : validationFailure("Expected object")),
+				{
+					type: "object",
+				},
+			),
 			opts,
 		);
 	}
@@ -813,32 +865,47 @@ function tComposite(objects: readonly ArkSchema[], opts?: Meta): ArkSchema {
 		return applyMeta(objects[0], opts);
 	}
 
+	let canFlatten = true;
+	const properties: Record<string, ArkSchema> = {};
+	for (const schema of objects) {
+		if (!schema.__properties) {
+			canFlatten = false;
+			break;
+		}
+		for (const key in schema.__properties) {
+			properties[key] = schema.__properties[key];
+		}
+	}
+	if (canFlatten) return tObject(properties, opts as ObjectOpts | undefined);
+
 	// Merge all object validators
 	const validator = (data: unknown) => {
 		if (!data || typeof data !== "object") {
-			return { message: "Expected object" };
+			return validationFailure("Expected object");
 		}
 
-		let result = {} as Record<string, unknown>;
+		const result = {} as Record<string, unknown>;
 		const obj_data = data as Record<string, unknown>;
 
 		for (const schema of objects) {
-			const schemaValidator = getValidator(schema);
+			const schemaValidator = schema.__validator;
 			const schemaResult = schemaValidator(obj_data);
 
-			if (schemaResult && typeof schemaResult === "object" && "message" in schemaResult) {
+			if (isValidationFailure(schemaResult)) {
 				return schemaResult;
 			}
 
-			if (typeof schemaResult === "object") {
-				result = { ...result, ...schemaResult };
+			if (typeof schemaResult === "object" && schemaResult !== null) {
+				for (const key in schemaResult) {
+					result[key] = (schemaResult as Record<string, unknown>)[key];
+				}
 			}
 		}
 
 		return result;
 	};
 
-	return applyMeta(createArkSchema(validator), opts);
+	return applyMeta(createArkSchema(validator, { allOf: objects.map(jsonSchemaOf) }), opts);
 }
 
 // ---------------------------------------------------------------------------

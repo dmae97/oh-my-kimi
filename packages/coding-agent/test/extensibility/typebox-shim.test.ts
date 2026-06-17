@@ -83,7 +83,6 @@ describe("pi.typebox compatibility shim", () => {
 			expect((parsed.data as { extra?: unknown }).extra).toBe(1);
 		}
 	});
-
 	// Regression: issue #1101. Real TypeBox lets extension authors do
 	// `JSON.stringify(schema)` and get a clean JSON Schema — that's the
 	// contract the shim is impersonating. Without a `toJSON` stamp, the shim

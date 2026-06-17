@@ -8,6 +8,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { getAgentDir, getProjectDir, isEnoent, logger } from "@oh-my-pi/pi-utils";
 import * as arktype from "arktype";
+import * as zodModule from "zod/v4";
 import { getConfigDirs } from "../../config";
 import { execCommand } from "../../exec/exec";
 // Runtime self-reference: dereference this namespace only inside loader functions to keep the index.ts cycle safe.
@@ -187,6 +188,7 @@ export async function loadCustomCommands(options: LoadCustomCommandsOptions = {}
 			execCommand(command, args, execOptions?.cwd ?? cwd, execOptions),
 		typebox,
 		arktype,
+		zod: zodModule,
 		pi: PiCodingAgent,
 	};
 
