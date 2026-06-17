@@ -66,6 +66,88 @@ export function isArkSchema(value: unknown): value is Type {
 	);
 }
 
+function isArkJsonAst(value: unknown): boolean {
+	if (Array.isArray(value)) return value.some(isArkJsonAst);
+	if (!isSchemaRecord(value)) return false;
+	if (typeof value.domain === "string" || Object.hasOwn(value, "unit")) return true;
+	if (value.proto === "Array" && Object.hasOwn(value, "sequence")) return true;
+	const required = value.required;
+	return (
+		Array.isArray(required) &&
+		required.some(entry => isSchemaRecord(entry) && typeof entry.key === "string" && "value" in entry)
+	);
+}
+
+function parseArkObjectKey(key: string): { name: string; description?: string } {
+	const match = /^(.*?)\s*\/\*\*\s*([\s\S]*?)\s*\*\/\s*$/.exec(key);
+	if (!match) return { name: key };
+	return { name: match[1].trim(), description: match[2].trim() };
+}
+
+function withArkKeyDescription(schema: unknown, description: string | undefined): unknown {
+	if (!description) return schema;
+	if (isSchemaRecord(schema)) {
+		if (typeof schema.description !== "string") schema.description = description;
+		return schema;
+	}
+	return { anyOf: [schema], description };
+}
+
+function arkJsonAstToWire(value: unknown): unknown {
+	if (typeof value === "string") {
+		switch (value) {
+			case "string":
+			case "number":
+			case "integer":
+			case "boolean":
+			case "object":
+				return { type: value };
+			case "unknown":
+				return {};
+			default:
+				return {};
+		}
+	}
+
+	if (Array.isArray(value)) {
+		if (value.every(item => isSchemaRecord(item) && Object.hasOwn(item, "unit"))) {
+			return { enum: value.map(item => (item as { unit: unknown }).unit) };
+		}
+		return { anyOf: value.map(arkJsonAstToWire) };
+	}
+
+	if (!isSchemaRecord(value)) return {};
+
+	if (Object.hasOwn(value, "unit")) return { const: value.unit };
+
+	if (value.proto === "Array" && Object.hasOwn(value, "sequence")) {
+		return { type: "array", items: arkJsonAstToWire(value.sequence) };
+	}
+
+	if (value.domain === "object") {
+		const properties: Record<string, unknown> = {};
+		const required: string[] = [];
+		const addEntry = (entry: unknown, isRequired: boolean): void => {
+			if (!isSchemaRecord(entry) || typeof entry.key !== "string" || !("value" in entry)) return;
+			const key = parseArkObjectKey(entry.key);
+			properties[key.name] = withArkKeyDescription(arkJsonAstToWire(entry.value), key.description);
+			if (isRequired) required.push(key.name);
+		};
+		if (Array.isArray(value.required)) {
+			for (const entry of value.required) addEntry(entry, true);
+		}
+		if (Array.isArray(value.optional)) {
+			for (const entry of value.optional) addEntry(entry, false);
+		}
+		const schema: Record<string, unknown> = { type: "object", properties };
+		if (required.length > 0) schema.required = required;
+		return schema;
+	}
+
+	if (typeof value.domain === "string") return { type: value.domain };
+	return {};
+}
+
 /** Symbol-stamped caches keyed by schema object identity. */
 const kZodWireSchema = Symbol("pi.schema.zod.wire");
 const kJsonWireSchema = Symbol("pi.schema.json.wire");
@@ -87,12 +169,14 @@ const kArkWireSchema = Symbol("pi.schema.ark.wire");
 function postProcess(schema: Record<string, unknown>): Record<string, unknown> {
 	delete schema.$schema;
 	walk(schema, true);
+	normalizeArkPropertyComments(schema);
 	normalizeEmptySchemas(schema);
 	return schema;
 }
 
 function postProcessJsonSchema(schema: Record<string, unknown>): Record<string, unknown> {
 	walk(schema, false);
+	normalizeArkPropertyComments(schema);
 	normalizeEmptySchemas(schema);
 	return schema;
 }
@@ -208,6 +292,51 @@ const SCHEMA_MAP_KEYS = ["properties", "patternProperties", "$defs", "definition
 
 /** Keys whose values are an array of schemas. */
 const SCHEMA_ARRAY_KEYS = ["anyOf", "oneOf", "allOf", "prefixItems"] as const;
+
+function normalizeArkPropertyComments(node: unknown): void {
+	if (Array.isArray(node)) {
+		for (const child of node) normalizeArkPropertyComments(child);
+		return;
+	}
+	if (!isSchemaRecord(node)) return;
+	const obj = node as Record<string, unknown>;
+
+	const properties = obj.properties;
+	if (isSchemaRecord(properties)) {
+		const required = Array.isArray(obj.required) ? obj.required : undefined;
+		if (required) {
+			obj.required = required.map(key => (typeof key === "string" ? parseArkObjectKey(key).name : key));
+		}
+		for (const key of Object.keys(properties)) {
+			const parsed = parseArkObjectKey(key);
+			const targetKey = parsed.name;
+			let propertySchema = properties[key];
+			if (parsed.description) {
+				propertySchema = withArkKeyDescription(propertySchema, parsed.description);
+				delete properties[key];
+				properties[targetKey] = propertySchema;
+			}
+			normalizeArkPropertyComments(propertySchema);
+		}
+	}
+
+	for (const key of SCHEMA_VALUE_KEYS) {
+		if (Object.hasOwn(obj, key)) normalizeArkPropertyComments(obj[key]);
+	}
+	for (const mapKey of SCHEMA_MAP_KEYS) {
+		if (mapKey === "properties") continue;
+		const map = obj[mapKey];
+		if (isSchemaRecord(map)) {
+			for (const key in map) normalizeArkPropertyComments(map[key]);
+		}
+	}
+	for (const arrayKey of SCHEMA_ARRAY_KEYS) {
+		const array = obj[arrayKey];
+		if (Array.isArray(array)) {
+			for (const child of array) normalizeArkPropertyComments(child);
+		}
+	}
+}
 
 /** True when `val` is a plain empty object `{}`. */
 function isEmptyObject(val: unknown): val is Record<string, never> {
@@ -456,7 +585,8 @@ export function toolWireSchema(tool: Tool): Record<string, unknown> {
 	if (isArkSchema(params)) return arkToWireSchema(params);
 	if (isZodSchema(params)) return zodToWireSchema(params);
 	return stamp(params as Record<string, unknown>, kJsonWireSchema, p => {
-		const upgraded = upgradeJsonSchemaTo202012(p) as Record<string, unknown>;
+		const raw = isArkJsonAst(p) ? arkJsonAstToWire(p) : p;
+		const upgraded = upgradeJsonSchemaTo202012(raw) as Record<string, unknown>;
 		return postProcessJsonSchema(upgraded);
 	});
 }
