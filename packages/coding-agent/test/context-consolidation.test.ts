@@ -24,6 +24,7 @@ describe("Context usage consolidation", () => {
 		sharedDir = TempDir.createSync("@pi-context-shared-");
 		authStorage = await AuthStorage.create(path.join(sharedDir.path(), "testauth.db"));
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.setRuntimeApiKey("openai", "test-key");
 		modelRegistry = new ModelRegistry(authStorage);
 		await Settings.init({ inMemory: true });
 		await initTheme();
