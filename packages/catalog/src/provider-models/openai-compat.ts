@@ -847,7 +847,7 @@ interface XAICuratedModel {
 	 * Whether xAI accepts the `reasoning.effort` wire param for this model.
 	 * Default true. When false: picker hides the effort dial (via
 	 * getSupportedEfforts in model-thinking.ts) AND wire-side already omits
-	 * the param via GROK_EFFORT_CAPABLE_PREFIXES in providers/xai-responses.ts.
+	 * the param via GROK_EFFORT_CAPABLE_PREFIXES in pi-ai's stream.ts.
 	 * Must agree with that allowlist; two truths kept in sync by curated-catalog
 	 * author convention until a follow-up Op: compress unifies them.
 	 */
@@ -867,11 +867,9 @@ interface XAICuratedModel {
 // coding-fine-tuned chat model; 512K context per user spec (2026-05-17).
 //
 // supportsReasoningEffort=false entries reason natively but reject the wire
-// `reasoning.effort` param (api.x.ai returns HTTP 400). Mirrors the HTTP-side
-// GROK_EFFORT_CAPABLE_PREFIXES allowlist in providers/xai-responses.ts. The
-// curated flag is the picker-visible truth; the HTTP allowlist is the wire
-// truth. omitReasoningEffort in xai-responses.ts already prevents 400s; this
-// fixes the picker UX wart of advertising an inert dial.
+// `reasoning.effort` param (api.x.ai returns HTTP 400). The corresponding
+// omit/include/history replay defaults live in catalog compat so every
+// OpenAI-family endpoint consumes the same constraint.
 export const XAI_OAUTH_CURATED_MODELS: readonly XAICuratedModel[] = [
 	// grok-build is text-only per the bundled catalog; omit `input` for the default.
 	{ id: "grok-build", contextWindow: 512_000, name: "Grok Build", supportsReasoningEffort: false },
@@ -894,8 +892,7 @@ export const XAI_OAUTH_CURATED_MODELS: readonly XAICuratedModel[] = [
 	},
 	// Cursor's "Composer 2.5 Fast" exposed via SuperGrok: non-reasoning,
 	// text-only, 200K context (mirrors Cursor's composer-* catalog entries).
-	// Off the GROK_EFFORT_CAPABLE_PREFIXES allowlist, so the wire side already
-	// sets omitReasoningEffort=true; reasoning:false also hides the effort dial.
+	// Off the Grok effort-capable allowlist; reasoning:false also hides the effort dial.
 	{
 		id: "grok-composer-2.5-fast",
 		contextWindow: 200_000,
@@ -910,12 +907,31 @@ export const XAI_OAUTH_CURATED_MODELS: readonly XAICuratedModel[] = [
 // strings; the chat picker MUST exclude these prefixes or selecting them 400s.
 const XAI_NON_CHAT_PREFIXES = ["grok-imagine-", "grok-stt-", "grok-voice-"] as const;
 
+const GROK_EFFORT_CAPABLE_PREFIXES = ["grok-3-mini", "grok-4.20-multi-agent", "grok-4.3"] as const;
+
+function grokSupportsReasoningEffort(modelId: string): boolean {
+	const name = modelId.trim().toLowerCase();
+	if (!name) return false;
+	const bare = name.includes("/") ? name.slice(name.lastIndexOf("/") + 1) : name;
+	return GROK_EFFORT_CAPABLE_PREFIXES.some(prefix => bare.startsWith(prefix));
+}
+
+function withXaiOAuthCompatDefaults(model: ModelSpec<"openai-responses">): ModelSpec<"openai-responses"> {
+	const compat = {
+		...(model.compat ?? {}),
+		includeEncryptedReasoning: model.compat?.includeEncryptedReasoning ?? false,
+		filterReasoningHistory: model.compat?.filterReasoningHistory ?? true,
+		omitReasoningEffort: model.compat?.omitReasoningEffort ?? !grokSupportsReasoningEffort(model.id),
+	};
+	return { ...model, compat };
+}
+
 // Hermes-agent parity: only the `minimal -> low` clamp is applied (see
 // hermes-agent/agent/transports/codex.py:92 `_effort_clamp = {"minimal":
 // "low"}`). Hermes sends `xhigh` to xAI verbatim and we match that contract
 // — let xAI decide if the level is valid for the specific Grok model.
 // `resolveModelThinking` folds this into `model.thinking.effortMap`, downstream
-// of the omitReasoningEffort gate in xai-responses.ts.
+// of the omitReasoningEffort gate in pi-ai's stream.ts.
 const XAI_REASONING_EFFORT_MAP = { minimal: "low" } as const;
 
 // xai-oauth's /v1/models exposes no per-request output limit on the OAuth
@@ -942,6 +958,9 @@ function mergeCuratedIntoModel(
 	const compat = {
 		...(base.compat ?? {}),
 		reasoningEffortMap: { ...XAI_REASONING_EFFORT_MAP, ...(base.compat?.reasoningEffortMap ?? {}) },
+		includeEncryptedReasoning: base.compat?.includeEncryptedReasoning ?? false,
+		filterReasoningHistory: base.compat?.filterReasoningHistory ?? true,
+		omitReasoningEffort: base.compat?.omitReasoningEffort ?? !grokSupportsReasoningEffort(base.id),
 		...(effort === undefined ? {} : { supportsReasoningEffort: effort }),
 	};
 	return {
@@ -1005,7 +1024,7 @@ function applyXAIOAuthCuration(dynamic: readonly ModelSpec<"openai-responses">[]
 	const curatedFirst = XAI_OAUTH_CURATED_MODELS.map(c => byId.get(c.id)).filter(
 		(e): e is ModelSpec<"openai-responses"> => e !== undefined,
 	);
-	const rest = filtered.filter(e => !curatedIds.has(e.id));
+	const rest = filtered.filter(e => !curatedIds.has(e.id)).map(withXaiOAuthCompatDefaults);
 	return [...curatedFirst, ...rest];
 }
 

@@ -129,6 +129,18 @@ describe("Google Gemini CLI alignment", () => {
 		});
 	});
 
+	it("keeps projectId alias precedence and tolerates a mistyped projectId", () => {
+		// projectId wins over project_id even when it is an empty string.
+		const emptyPrimary = parseGeminiCliCredentials(
+			JSON.stringify({ token: "t", projectId: "", project_id: "fallback" }),
+		);
+		expect(emptyPrimary.projectId).toBe("");
+
+		// A non-string projectId is dropped, so project_id is used instead.
+		const mistyped = parseGeminiCliCredentials(JSON.stringify({ token: "t", projectId: 42, project_id: "fallback" }));
+		expect(mistyped.projectId).toBe("fallback");
+	});
+
 	it("avoids excessive antigravity refresh churn with pre-buffered OAuth expiry", () => {
 		const issuedAt = 1_700_000_000_000;
 		const preBufferedExpiry = issuedAt + 55 * 60 * 1000;

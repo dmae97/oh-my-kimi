@@ -6,13 +6,13 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 
 // Output-token wire policy for OpenAI-family providers:
-//   - Non-aggregator completions + all responses: clamp to OPENAI_MAX_OUTPUT_TOKENS
-//     (mirrors Anthropic's cap) so a catalog maxTokens that tracks the context
-//     window never overflows the upstream.
-//   - OpenRouter completions: omit default max_tokens entirely. OpenRouter filters
-//     out any upstream whose output cap is below the requested value (e.g. Cerebras
-//     GLM-4.7 ~40k), silently defeating provider routing. Explicit caller caps and
-//     Kimi via OpenRouter are still sent.
+//   - Non-aggregator completions + non-OpenRouter responses: clamp to
+//     OPENAI_MAX_OUTPUT_TOKENS (mirrors Anthropic's cap) so a catalog maxTokens
+//     that tracks the context window never overflows the upstream.
+//   - OpenRouter completions/responses: omit default max token fields entirely.
+//     OpenRouter filters out any upstream whose output cap is below the requested
+//     value (e.g. Cerebras GLM-4.7 ~40k), silently defeating provider routing.
+//     Explicit caller caps and Kimi chat-completions via OpenRouter are still sent.
 
 const ctx: Context = {
 	systemPrompt: ["hi"],
@@ -43,13 +43,30 @@ function captureResponsesBody(): { fetchMock: FetchImpl; captured: Record<string
 	return { fetchMock, captured };
 }
 
-async function drainResponses(model: Model<"openai-responses">): Promise<Record<string, unknown>> {
-	const { fetchMock, captured } = captureResponsesBody();
-	const stream = streamSimple(model, ctx, { apiKey: "k", fetch: fetchMock });
-	for await (const event of stream) {
-		if (event.type === "done" || event.type === "error") break;
+async function drainResponses(
+	model: Model<"openai-responses" | "openrouter">,
+	maxTokens?: number,
+): Promise<Record<string, unknown>> {
+	const previousOpenRouterResponses = Bun.env.PI_OPENROUTER_RESPONSES;
+	if (model.api === "openrouter") Bun.env.PI_OPENROUTER_RESPONSES = "1";
+	try {
+		const { fetchMock, captured } = captureResponsesBody();
+		const stream = streamSimple(model, ctx, {
+			apiKey: "k",
+			...(maxTokens === undefined ? {} : { maxTokens }),
+			fetch: fetchMock,
+		});
+		for await (const event of stream) {
+			if (event.type === "done" || event.type === "error") break;
+		}
+		return captured;
+	} finally {
+		if (previousOpenRouterResponses === undefined) {
+			delete Bun.env.PI_OPENROUTER_RESPONSES;
+		} else {
+			Bun.env.PI_OPENROUTER_RESPONSES = previousOpenRouterResponses;
+		}
 	}
-	return captured;
 }
 
 function completionsSse(): Response {
@@ -110,6 +127,21 @@ function glmCompletionsModel(maxTokens: number): Model<"openai-completions"> {
 	});
 }
 
+function openRouterResponsesModel(maxTokens: number): Model<"openrouter"> {
+	return buildModel({
+		id: "z-ai/glm-4.7",
+		name: "GLM 4.7",
+		api: "openrouter",
+		provider: "openrouter",
+		baseUrl: "https://openrouter.ai/api/v1",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 202_752,
+		maxTokens,
+	});
+}
+
 // Non-aggregator completions model: the 64k clamp applies (max_tokens is sent).
 function directCompletionsModel(maxTokens: number): Model<"openai-completions"> {
 	return buildModel({
@@ -153,6 +185,16 @@ describe("OpenAI-family output-token cap", () => {
 		} as ModelSpec<"openai-responses">);
 		const body = await drainResponses(model);
 		expect(body.max_output_tokens).toBe(OPENAI_MAX_OUTPUT_TOKENS);
+	});
+
+	it("omits default max_output_tokens for OpenRouter Responses so provider routing is not filtered", async () => {
+		const body = await drainResponses(openRouterResponsesModel(131_072));
+		expect(body.max_output_tokens).toBeUndefined();
+	});
+
+	it("sends explicit maxTokens for OpenRouter Responses caller caps", async () => {
+		const body = await drainResponses(openRouterResponsesModel(131_072), 2_048);
+		expect(body.max_output_tokens).toBe(2_048);
 	});
 
 	it("clamps non-aggregator completions output to the 64k ceiling", async () => {

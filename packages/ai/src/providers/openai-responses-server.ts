@@ -360,7 +360,7 @@ export function parseRequest(body: unknown, headers?: Headers): ParsedRequest {
 			if (effectiveType === "custom_tool_call") {
 				const call = item as { id?: string; call_id: string; name: string; input: string };
 				// Custom tools carry a raw input string. We stash it in `arguments.input`
-				// matching pi-ai's openai-responses-shared convention, and tag the call
+				// matching pi-ai's openai-shared convention, and tag the call
 				// with `customWireName` so encoders re-emit it as `custom_tool_call`.
 				const toolCall: ToolCall = {
 					type: "toolCall",

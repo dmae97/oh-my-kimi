@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "bun:test";
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import type { AgentMessage, AgentTelemetryConfig } from "@oh-my-pi/pi-agent-core";
 import { createAdvisorMessageCard } from "../../modes/components/advisor-message";
 import { getThemeByName } from "../../modes/theme/theme";
 import { formatSessionHistoryMarkdown } from "../../session/session-history-format";
@@ -11,6 +11,7 @@ import {
 	type AdvisorNote,
 	AdvisorRuntime,
 	type AdvisorRuntimeHost,
+	deriveAdvisorTelemetry,
 	formatAdvisorBatchContent,
 	isAdvisorInterruptImmuneTurnActive,
 	isInterruptingSeverity,
@@ -178,6 +179,37 @@ describe("advisor", () => {
 			expect(content).toContain("second &lt;note&gt; &amp; more");
 			// Exactly one severity attribute (only the blocker note carries one).
 			expect(content.split('severity="').length - 1).toBe(1);
+		});
+	});
+
+	describe("deriveAdvisorTelemetry", () => {
+		it("returns undefined when the primary has no telemetry so the advisor stays a no-op", () => {
+			expect(deriveAdvisorTelemetry(undefined, { id: "s-advisor", name: "Advisor" })).toBeUndefined();
+		});
+
+		it("inherits the primary's usage/cost hooks but restamps identity and clears the conversation", () => {
+			const onChatUsage = vi.fn();
+			const costEstimator = vi.fn();
+			const primary: AgentTelemetryConfig = {
+				agent: { id: "main", name: "Main" },
+				conversationId: "session-1",
+				attributes: { "deployment.id": "prod" },
+				onChatUsage,
+				costEstimator,
+			};
+			const identity = { id: "session-1-advisor", name: "Advisor", description: "anthropic/claude-sonnet-4-5" };
+
+			const derived = deriveAdvisorTelemetry(primary, identity);
+
+			// Usage/cost hooks are inherited so the advisor model's calls report through
+			// the same pipeline as the primary — the whole point of the fix.
+			expect(derived?.onChatUsage).toBe(onChatUsage);
+			expect(derived?.costEstimator).toBe(costEstimator);
+			expect(derived?.attributes).toEqual({ "deployment.id": "prod" });
+			// Advisor identity replaces the primary's so spans are attributable to the advisor.
+			expect(derived?.agent).toEqual(identity);
+			// Conversation cleared so the advisor loop falls back to its own `-advisor` session id.
+			expect(derived?.conversationId).toBeUndefined();
 		});
 	});
 

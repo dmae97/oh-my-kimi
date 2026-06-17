@@ -13,8 +13,8 @@
 // `output_item.done` event must be routed by `output_index`/`item_id`, not by
 // arrival order.
 import { describe, expect, test } from "bun:test";
-import { processResponsesStream } from "@oh-my-pi/pi-ai/providers/openai-responses-shared";
 import type { ResponseStreamEvent } from "@oh-my-pi/pi-ai/providers/openai-responses-wire";
+import { processResponsesStream } from "@oh-my-pi/pi-ai/providers/openai-shared";
 import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 

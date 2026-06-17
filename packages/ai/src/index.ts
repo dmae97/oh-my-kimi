@@ -1,4 +1,5 @@
 export { type ZodType, z } from "zod/v4";
+export { type, type Type } from "arktype";
 export * from "./api-registry";
 export * from "./auth-broker";
 export { type AuthGatewayBootOptions, type ModelResolver, startAuthGateway } from "./auth-gateway/server";
@@ -38,6 +39,7 @@ export * from "./usage/openai-codex-reset";
 export * from "./usage/zai";
 export * from "./utils/anthropic-auth";
 export * from "./utils/event-stream";
+export * from "./utils/openrouter-headers";
 export * from "./utils/overflow";
 export * from "./utils/retry";
 export * from "./utils/schema";

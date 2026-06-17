@@ -33,20 +33,20 @@ function createAbortedSignal(): AbortSignal {
 	return controller.signal;
 }
 
-function toObject(value: unknown): object | null {
-	return typeof value === "object" && value !== null ? value : null;
+function toObject(value: unknown): Record<string, unknown> | null {
+	return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
 }
 
-function getNestedObject(value: unknown, key: string): object | null {
+function getNestedObject(value: unknown, key: string): Record<string, unknown> | null {
 	const obj = toObject(value);
 	if (!obj) return null;
-	return toObject(Reflect.get(obj, key));
+	return toObject(obj[key]);
 }
 
 function getNestedBoolean(value: unknown, key: string): boolean | undefined {
 	const obj = toObject(value);
 	if (!obj) return undefined;
-	const property = Reflect.get(obj, key);
+	const property = obj[key];
 	return typeof property === "boolean" ? property : undefined;
 }
 
@@ -98,6 +98,17 @@ function zaiGlm52Model(): Model<"openai-completions"> {
 	} satisfies ModelSpec<"openai-completions">);
 }
 
+function kimiZaiModel(): Model<"openai-completions"> {
+	return buildModel({
+		...gpt4oMiniSpec,
+		api: "openai-completions",
+		provider: "moonshot",
+		baseUrl: "https://api.moonshot.ai/v1",
+		id: "kimi-k2.6",
+		reasoning: true,
+	} as ModelSpec<"openai-completions">);
+}
+
 async function captureOpenAICompletionsPayload(
 	model: Model<"openai-completions">,
 	context: Context = baseContext(),
@@ -115,9 +126,9 @@ async function captureOpenAICompletionsPayload(
 	return promise;
 }
 
-function getPayloadMessages(payload: unknown): object[] {
+function getPayloadMessages(payload: unknown): Record<string, unknown>[] {
 	const payloadObject = toObject(payload);
-	const messages = payloadObject ? Reflect.get(payloadObject, "messages") : undefined;
+	const messages = payloadObject?.messages;
 	if (!Array.isArray(messages)) throw new Error("payload messages missing");
 	return messages.map(message => {
 		const messageObject = toObject(message);
@@ -129,14 +140,14 @@ function getPayloadMessages(payload: unknown): object[] {
 function getLastPayloadContent(payload: unknown): unknown {
 	const lastMessage = getPayloadMessages(payload).at(-1);
 	if (!lastMessage) throw new Error("payload has no messages");
-	return Reflect.get(lastMessage, "content");
+	return lastMessage.content;
 }
 
-function getLastTextPart(content: unknown): object | undefined {
+function getLastTextPart(content: unknown): Record<string, unknown> | undefined {
 	if (!Array.isArray(content)) return undefined;
 	for (let index = content.length - 1; index >= 0; index--) {
 		const part = toObject(content[index]);
-		if (part && Reflect.get(part, "type") === "text") return part;
+		if (part?.type === "text") return part;
 	}
 	return undefined;
 }
@@ -164,8 +175,13 @@ describe("openai-completions compatibility", () => {
 			requiresThinkingAsText: false,
 			requiresMistralToolIds: false,
 			thinkingFormat: "openai",
+			reasoningDisableMode: "lowest-effort",
+			omitReasoningEffort: false,
+			includeEncryptedReasoning: true,
+			filterReasoningHistory: false,
 			reasoningContentField: "reasoning_content",
 			requiresReasoningContentForToolCalls: false,
+			requiresReasoningContentForAllAssistantTurns: false,
 			allowsSyntheticReasoningContentForToolCalls: true,
 			requiresAssistantContentForToolCalls: false,
 			openRouterRouting: {},
@@ -177,6 +193,12 @@ describe("openai-completions compatibility", () => {
 			alwaysSendMaxTokens: false,
 			isOpenRouterHost: false,
 			isVercelGatewayHost: false,
+			wireModelIdMode: "raw",
+			stripDeepseekSpecialTokens: false,
+			reasoningDeltasMayBeCumulative: false,
+			emptyLengthFinishIsContextError: false,
+			usesOpenAIToolCallIdLimit: false,
+			dropThinkingWhenReasoningEffort: false,
 		} satisfies ResolvedOpenAICompat;
 		const assistantMessage: AssistantMessage = {
 			role: "assistant",
@@ -350,7 +372,7 @@ describe("openai-completions compatibility", () => {
 		// Regression: Moonshot's Kimi chat template rejects the `developer` role
 		// with `400 Invalid request: tokenization failed` because `developer` is
 		// an OpenAI extension and most other hosts don't carry it through their
-		// tokenizer. The default for any non-OpenAI/Azure host MUST be `system`,
+		// tokenizer. The default for non-OpenAI/Azure hosts MUST be `system`,
 		// so reasoning models on those hosts cannot accidentally emit `developer`.
 		const cases: Array<{ provider: string; baseUrl: string; expected: boolean }> = [
 			{ provider: "openai", baseUrl: "https://api.openai.com/v1", expected: true },
@@ -612,10 +634,46 @@ describe("openai-completions compatibility", () => {
 		const payload = await promise;
 		const thinking = getNestedObject(payload, "thinking");
 
-		expect(Reflect.get(thinking ?? {}, "type")).toBe("enabled");
-		expect(Reflect.get(toObject(payload) ?? {}, "reasoning_effort")).toBe("max");
-		expect(Reflect.get(toObject(payload) ?? {}, "tool_stream")).toBe(true);
-		expect(Reflect.get(toObject(payload) ?? {}, "max_tokens")).toBe(65_536);
+		const payloadObject = toObject(payload);
+
+		expect(thinking?.type).toBe("enabled");
+		expect(payloadObject?.reasoning_effort).toBe("max");
+		expect(payloadObject?.tool_stream).toBe(true);
+		expect(payloadObject?.max_tokens).toBe(65_536);
+	});
+
+	it("keeps Z.AI tool streaming disabled for native Kimi reasoning models", async () => {
+		const model = kimiZaiModel();
+		expect(model.compat.thinkingFormat).toBe("zai");
+		expect(model.compat.supportsReasoningEffort).toBe(true);
+		const readTool: Tool = {
+			name: "read",
+			description: "Read a file",
+			parameters: {
+				type: "object",
+				properties: { path: { type: "string" } },
+				required: ["path"],
+			},
+		};
+
+		const { promise, resolve } = Promise.withResolvers<unknown>();
+		const fetchMock = createMockFetch(["[DONE]"]);
+		streamOpenAICompletions(
+			model,
+			{ ...baseContext(), tools: [readTool] },
+			{
+				apiKey: "test-key",
+				fetch: fetchMock,
+				reasoning: "high",
+				toolChoice: { type: "tool", name: "read" },
+				signal: createAbortedSignal(),
+				onPayload: payload => resolve(payload),
+			},
+		);
+		const payload = await promise;
+		const payloadObject = toObject(payload);
+
+		expect(payloadObject?.tool_stream).toBeUndefined();
 	});
 
 	it("maps GLM-5.2 minimal reasoning to disabled Z.AI thinking", async () => {
@@ -631,8 +689,8 @@ describe("openai-completions compatibility", () => {
 		const payload = await promise;
 		const thinking = getNestedObject(payload, "thinking");
 
-		expect(Reflect.get(thinking ?? {}, "type")).toBe("disabled");
-		expect(Reflect.get(toObject(payload) ?? {}, "reasoning_effort")).toBeUndefined();
+		expect(thinking?.type).toBe("disabled");
+		expect(toObject(payload)?.reasoning_effort).toBeUndefined();
 	});
 
 	it("treats finish_reason end as stop", async () => {
@@ -818,8 +876,8 @@ describe("openai-completions compatibility", () => {
 		expect(assistant).toBeDefined();
 		const assistantObject = toObject(assistant);
 		expect(assistantObject).toBeDefined();
-		expect(assistantObject ? Reflect.get(assistantObject, "reasoning_text") : undefined).toBe("inspect tool output");
-		expect(assistantObject ? Reflect.get(assistantObject, "reasoning_content") : undefined).toBeUndefined();
+		expect(assistantObject?.reasoning_text).toBe("inspect tool output");
+		expect(assistantObject?.reasoning_content).toBeUndefined();
 	});
 });
 
@@ -950,7 +1008,7 @@ describe("kimi model detection via detectCompat", () => {
 		const messages = convertMessages(model, { messages: [toolCallMessage] }, compat);
 		const assistant = messages.find(m => m.role === "assistant");
 		expect(assistant).toBeDefined();
-		expect(Reflect.get(assistant as object, "reasoning_content")).toBeUndefined();
+		expect(toObject(assistant)?.reasoning_content).toBeUndefined();
 	});
 
 	it("does not replay streamed reasoning fields for kimi on opencode-go", () => {
@@ -995,9 +1053,9 @@ describe("kimi model detection via detectCompat", () => {
 		if (!assistantObject) {
 			throw new Error("assistant message missing");
 		}
-		expect(Reflect.get(assistantObject, "reasoning")).toBeUndefined();
-		expect(Reflect.get(assistantObject, "reasoning_content")).toBeUndefined();
-		expect(Reflect.get(assistantObject, "reasoning_text")).toBeUndefined();
+		expect(assistantObject.reasoning).toBeUndefined();
+		expect(assistantObject.reasoning_content).toBeUndefined();
+		expect(assistantObject.reasoning_text).toBeUndefined();
 	});
 
 	// #1484: OpenCode Zen's Kimi gateway now 400s with `thinking is enabled but
@@ -1071,10 +1129,10 @@ describe("kimi model detection via detectCompat", () => {
 		const payload = (await promise) as { messages: Array<Record<string, unknown>> };
 		const assistant = payload.messages.find(m => m.role === "assistant");
 		expect(assistant).toBeDefined();
-		expect(Reflect.get(assistant as object, "reasoning_content")).toBe("Need to read the file before answering.");
+		expect(assistant?.reasoning_content).toBe("Need to read the file before answering.");
 		// The streamed `reasoning` key must NOT land in the wire body alongside
 		// `reasoning_content`; opencode's strict schema rejects unknown fields.
-		expect(Reflect.get(assistant as object, "reasoning")).toBeUndefined();
+		expect(assistant?.reasoning).toBeUndefined();
 	});
 
 	// #1071 regression guard alongside the #1484 fix: with thinking disabled the
@@ -1137,9 +1195,9 @@ describe("kimi model detection via detectCompat", () => {
 		const payload = (await promise) as { messages: Array<Record<string, unknown>> };
 		const assistant = payload.messages.find(m => m.role === "assistant");
 		expect(assistant).toBeDefined();
-		expect(Reflect.get(assistant as object, "reasoning_content")).toBeUndefined();
-		expect(Reflect.get(assistant as object, "reasoning")).toBeUndefined();
-		expect(Reflect.get(assistant as object, "reasoning_text")).toBeUndefined();
+		expect(assistant?.reasoning_content).toBeUndefined();
+		expect(assistant?.reasoning).toBeUndefined();
+		expect(assistant?.reasoning_text).toBeUndefined();
 	});
 
 	// #1485 review: `disableReasoningOnForcedToolChoice` strips thinking from
@@ -1226,9 +1284,9 @@ describe("kimi model detection via detectCompat", () => {
 		};
 		const assistant = payload.messages.find(m => m.role === "assistant");
 		expect(assistant).toBeDefined();
-		expect(Reflect.get(assistant as object, "reasoning_content")).toBeUndefined();
-		expect(Reflect.get(assistant as object, "reasoning")).toBeUndefined();
-		expect(Reflect.get(assistant as object, "reasoning_text")).toBeUndefined();
+		expect(assistant?.reasoning_content).toBeUndefined();
+		expect(assistant?.reasoning).toBeUndefined();
+		expect(assistant?.reasoning_text).toBeUndefined();
 		// The forced-tool guard must still strip the request-level thinking
 		// signal so neither end of the wire mentions reasoning.
 		expect(payload.reasoning_effort).toBeUndefined();
@@ -1319,7 +1377,7 @@ describe("kimi model detection via detectCompat", () => {
 		};
 		const assistant = payload.messages.find(m => m.role === "assistant");
 		expect(assistant).toBeDefined();
-		expect(Reflect.get(assistant as object, "reasoning_content")).toBe("Plan first, then call the tool.");
+		expect(assistant?.reasoning_content).toBe("Plan first, then call the tool.");
 		expect(payload.reasoning_effort).toBe("high");
 		expect(payload.tool_choice).toBe("auto");
 	});
@@ -1400,10 +1458,10 @@ describe("kimi model detection via detectCompat", () => {
 		const payload = (await promise) as { messages: Array<Record<string, unknown>> };
 		const assistant = payload.messages.find(m => m.role === "assistant");
 		expect(assistant).toBeDefined();
-		expect(Reflect.get(assistant as object, "reasoning_content")).toBe("Need to read the file before answering.");
+		expect(assistant?.reasoning_content).toBe("Need to read the file before answering.");
 		// DeepSeek's allowsSynthetic=false must keep the stale `reasoning` key
 		// off the wire body so opencode's schema validation does not flag it.
-		expect(Reflect.get(assistant as object, "reasoning")).toBeUndefined();
+		expect(assistant?.reasoning).toBeUndefined();
 	});
 
 	// #1484 follow-up: the Zen gateway invariant applies to every opencode-go
@@ -1485,13 +1543,13 @@ describe("kimi model detection via detectCompat", () => {
 		const assistant = payload.messages.find(m => m.role === "assistant");
 		expect(assistant).toBeDefined();
 		if (expectReplay) {
-			expect(Reflect.get(assistant as object, "reasoning_content")).toBe("Plan before acting.");
+			expect(assistant?.reasoning_content).toBe("Plan before acting.");
 			// The stale streamed `reasoning` key must never land in the wire body.
-			expect(Reflect.get(assistant as object, "reasoning")).toBeUndefined();
+			expect(assistant?.reasoning).toBeUndefined();
 		} else {
-			expect(Reflect.get(assistant as object, "reasoning_content")).toBeUndefined();
-			expect(Reflect.get(assistant as object, "reasoning")).toBeUndefined();
-			expect(Reflect.get(assistant as object, "reasoning_text")).toBeUndefined();
+			expect(assistant?.reasoning_content).toBeUndefined();
+			expect(assistant?.reasoning).toBeUndefined();
+			expect(assistant?.reasoning_text).toBeUndefined();
 		}
 	});
 
@@ -1526,7 +1584,7 @@ describe("kimi model detection via detectCompat", () => {
 		const messages = convertMessages(model, { messages: [toolCallMessage] }, compat);
 		const assistant = messages.find(m => m.role === "assistant");
 		expect(assistant).toBeDefined();
-		const reasoningContent = Reflect.get(assistant as object, "reasoning_content");
+		const reasoningContent = toObject(assistant)?.reasoning_content;
 		expect(reasoningContent).toBeDefined();
 		expect(typeof reasoningContent).toBe("string");
 		expect((reasoningContent as string).length).toBeGreaterThan(0);
@@ -1572,7 +1630,7 @@ describe("kimi model detection via detectCompat", () => {
 		const messages = convertMessages(model, { messages: [toolCallMessage] }, compat);
 		const assistant = messages.find(m => m.role === "assistant");
 		expect(assistant).toBeDefined();
-		expect(Reflect.get(assistant as object, "reasoning_content")).toBe(".");
+		expect(toObject(assistant)?.reasoning_content).toBe(".");
 	});
 
 	it("does not inject reasoning_content when model is not kimi", () => {
@@ -1825,8 +1883,8 @@ describe("anthropic cache control for OpenAI-compatible chat completions", () =>
 		const content = getLastPayloadContent(payload);
 		const textPart = getLastTextPart(content);
 
-		expect(Reflect.get(textPart ?? {}, "text")).toBe("cache me");
-		expect(Reflect.get(textPart ?? {}, "cache_control")).toEqual({ type: "ephemeral" });
+		expect(textPart?.text).toBe("cache me");
+		expect(textPart?.cache_control).toEqual({ type: "ephemeral" });
 	});
 
 	it("preserves OpenRouter Anthropic cache_control detection", async () => {
@@ -1835,7 +1893,7 @@ describe("anthropic cache control for OpenAI-compatible chat completions", () =>
 		const content = getLastPayloadContent(payload);
 		const textPart = getLastTextPart(content);
 
-		expect(Reflect.get(textPart ?? {}, "cache_control")).toEqual({ type: "ephemeral" });
+		expect(textPart?.cache_control).toEqual({ type: "ephemeral" });
 	});
 
 	it("does not attach Anthropic cache_control to empty assistant tool-call content", async () => {
@@ -1877,16 +1935,16 @@ describe("anthropic cache control for OpenAI-compatible chat completions", () =>
 		});
 		const messages = getPayloadMessages(payload);
 		const assistant = messages.find(message => {
-			const toolCalls = Reflect.get(message, "tool_calls");
-			return Reflect.get(message, "role") === "assistant" && Array.isArray(toolCalls);
+			const toolCalls = message.tool_calls;
+			return message.role === "assistant" && Array.isArray(toolCalls);
 		});
-		const firstUser = messages.find(message => Reflect.get(message, "role") === "user");
-		const userContent = firstUser ? Reflect.get(firstUser, "content") : undefined;
+		const firstUser = messages.find(message => message.role === "user");
+		const userContent = firstUser?.content;
 		const textPart = getLastTextPart(userContent);
 
-		expect(assistant ? Reflect.get(assistant, "content") : undefined).toBe("");
-		expect(Reflect.get(textPart ?? {}, "text")).toBe("cache me");
-		expect(Reflect.get(textPart ?? {}, "cache_control")).toEqual({ type: "ephemeral" });
+		expect(assistant?.content).toBe("");
+		expect(textPart?.text).toBe("cache me");
+		expect(textPart?.cache_control).toEqual({ type: "ephemeral" });
 	});
 
 	it("does not infer Anthropic cache_control for custom Claude ids without compat", async () => {

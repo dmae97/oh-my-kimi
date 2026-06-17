@@ -56,6 +56,7 @@ export interface ApiOptionsMap {
 	"anthropic-messages": AnthropicOptions;
 	"bedrock-converse-stream": BedrockOptions;
 	"openai-completions": OpenAICompletionsOptions;
+	openrouter: OpenAIResponsesOptions | OpenAICompletionsOptions;
 	"openai-responses": OpenAIResponsesOptions;
 	"openai-codex-responses": OpenAICodexResponsesOptions;
 	"azure-openai-responses": AzureOpenAIResponsesOptions;

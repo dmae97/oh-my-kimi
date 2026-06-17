@@ -13,7 +13,7 @@
  */
 
 import { ProviderHttpError } from "@oh-my-pi/pi-ai/errors";
-import { parseTextSignature } from "@oh-my-pi/pi-ai/providers/openai-responses-shared";
+import { parseTextSignature } from "@oh-my-pi/pi-ai/providers/openai-shared";
 import { transformMessages } from "@oh-my-pi/pi-ai/providers/transform-messages";
 import type { AssistantMessage, FetchImpl, Message, Model } from "@oh-my-pi/pi-ai/types";
 import {

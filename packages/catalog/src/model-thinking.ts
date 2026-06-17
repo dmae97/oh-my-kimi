@@ -266,11 +266,15 @@ function sameEffortList(left: readonly Effort[], right: readonly Effort[]): bool
 	return true;
 }
 
+function isOpenAICompatReasoningApi(api: Api): boolean {
+	return api === "openai-completions" || api === "openrouter";
+}
+
 function getModelDefinedEfforts<TApi extends Api>(spec: ModelSpec<TApi>): readonly Effort[] | undefined {
-	if (spec.api === "openai-completions" && isZaiGlm52ReasoningEffortModel(spec)) {
+	if (isOpenAICompatReasoningApi(spec.api) && isZaiGlm52ReasoningEffortModel(spec)) {
 		return DEFAULT_REASONING_EFFORTS_WITH_XHIGH;
 	}
-	return spec.api === "openai-completions" && (isMinimaxM2FamilyModelId(spec.id) || isOpenAIGptOssModelId(spec.id))
+	return isOpenAICompatReasoningApi(spec.api) && (isMinimaxM2FamilyModelId(spec.id) || isOpenAIGptOssModelId(spec.id))
 		? LOW_MEDIUM_HIGH_REASONING_EFFORTS
 		: undefined;
 }
@@ -298,7 +302,7 @@ function inferDetectedEffortMap<TApi extends Api>(
 			? ANTHROPIC_ADAPTIVE_EFFORT_MAP_5_TIER
 			: ANTHROPIC_ADAPTIVE_EFFORT_MAP_4_TIER;
 	}
-	if (spec.api !== "openai-completions") {
+	if (!isOpenAICompatReasoningApi(spec.api)) {
 		return undefined;
 	}
 	if (spec.provider === "groq" && spec.id === "qwen/qwen3-32b") {
@@ -437,7 +441,7 @@ function inferFallbackEfforts<TApi extends Api>(spec: ModelSpec<TApi>, compat: C
 	if (spec.api === "bedrock-converse-stream") {
 		return DEFAULT_REASONING_EFFORTS;
 	}
-	if (spec.api === "openai-completions") {
+	if (isOpenAICompatReasoningApi(spec.api)) {
 		const resolved = compat as ResolvedOpenAICompat;
 		if (resolved.thinkingFormat === "openai" && resolved.supportsReasoningEffort) {
 			return DEFAULT_REASONING_EFFORTS_WITH_XHIGH;
@@ -503,7 +507,7 @@ function isOpenRouterAnthropicAdaptiveReasoningModel<TApi extends Api>(
 	parsedModel: AnthropicModel,
 	spec: ModelSpec<TApi>,
 ): boolean {
-	if (spec.api !== "openai-completions") return false;
+	if (!isOpenAICompatReasoningApi(spec.api)) return false;
 	if (!modelMatchesHost(spec, "openrouter")) return false;
 	return isFableOrMythos(parsedModel.kind) || (parsedModel.kind === "opus" && semverGte(parsedModel.version, "4.6"));
 }

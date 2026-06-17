@@ -10,7 +10,7 @@ import { BUILTIN_DEFAULTS_PROVIDER_ID, type Rule, ruleCapability } from "@oh-my-
 import type { LoadContext } from "@oh-my-pi/pi-coding-agent/capability/types";
 // Register all discovery providers as a side effect.
 import "@oh-my-pi/pi-coding-agent/discovery";
-import { TtsrManager } from "@oh-my-pi/pi-coding-agent/export/ttsr";
+import { TtsrManager, type TtsrMatchContext } from "@oh-my-pi/pi-coding-agent/export/ttsr";
 
 function ruleProvider() {
 	const cap = getCapability(ruleCapability.id);
@@ -93,6 +93,56 @@ describe("builtin-defaults rule provider", () => {
 				source: "tool",
 				toolName: "write",
 				filePaths: ["packages/x/src/foo.ts"],
+			}),
+		).toEqual([]);
+	});
+
+	it("fires ts-no-inline-cast-access on inline cast-and-access but not named-type casts", async () => {
+		const rules = await loadBuiltinRules();
+		const rule = rules.find(r => r.name === "ts-no-inline-cast-access");
+		if (!rule) throw new Error("ts-no-inline-cast-access rule missing");
+
+		const manager = new TtsrManager();
+		expect(manager.addRule(rule)).toBe(true);
+
+		// AST conditions only run on edit/write streams, with the language inferred from the path.
+		const ctx: TtsrMatchContext = { source: "tool", toolName: "edit", filePaths: ["src/foo.ts"] };
+
+		// Inline object-type assertion immediately read — every access form is flagged.
+		const violations = [
+			"const a = (value as { content: unknown }).content;",
+			"const b = (value as { content: unknown })?.content;",
+			'const c = (opts as { enabled: boolean })["enabled"];',
+			"const d = (value as unknown as { content: unknown }).content;",
+		];
+		for (const snippet of violations) {
+			manager.resetBuffer();
+			const matches = await manager.checkAstSnapshot(snippet, ctx);
+			expect(
+				matches.map(r => r.name),
+				snippet,
+			).toEqual(["ts-no-inline-cast-access"]);
+		}
+
+		// A cast to a named type, plain member access, and a bare cast (no read) are all left alone.
+		const allowed = [
+			"const e = (value as Foo).bar;",
+			"const f = obj.content;",
+			"const g = value as { content: unknown };",
+		];
+		for (const snippet of allowed) {
+			manager.resetBuffer();
+			const matches = await manager.checkAstSnapshot(snippet, ctx);
+			expect(matches, snippet).toEqual([]);
+		}
+
+		// Out of scope: the same violation in a non-TS file never reaches the matcher.
+		manager.resetBuffer();
+		expect(
+			await manager.checkAstSnapshot("const h = (value as { content: unknown }).content;", {
+				source: "tool",
+				toolName: "edit",
+				filePaths: ["src/foo.js"],
 			}),
 		).toEqual([]);
 	});

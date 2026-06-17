@@ -12,6 +12,14 @@ import type { FetchImpl, Model } from "@oh-my-pi/pi-catalog/types";
 const TP_KEY = "tp-ci1p8t1w4e1sbxgyc8v65tnrjbzro287igmvyf25van9mt76";
 const SGP_BASE_URL = "https://token-plan-sgp.xiaomimimo.com/v1";
 
+interface MessageWithReasoningContent {
+	reasoning_content?: unknown;
+}
+
+function isMessageWithReasoningContent(value: unknown): value is MessageWithReasoningContent {
+	return value !== null && typeof value === "object";
+}
+
 afterEach(() => {
 	vi.restoreAllMocks();
 });
@@ -129,6 +137,8 @@ describe("issue #1846: Xiaomi Token Plan provider support", () => {
 		expect(compat.thinkingFormat).toBe("zai");
 		expect(compat.requiresReasoningContentForToolCalls).toBe(true);
 		expect(compat.allowsSyntheticReasoningContentForToolCalls).toBe(false);
-		expect(Reflect.get(assistant ?? {}, "reasoning_content")).toBe("I need to inspect the file before answering.");
+		expect(isMessageWithReasoningContent(assistant) ? assistant.reasoning_content : undefined).toBe(
+			"I need to inspect the file before answering.",
+		);
 	});
 });

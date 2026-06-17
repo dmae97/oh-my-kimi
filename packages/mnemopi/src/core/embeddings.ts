@@ -1,5 +1,5 @@
 import { mkdirSync } from "node:fs";
-import { type ApiKey, ProviderHttpError, withAuth } from "@oh-my-pi/pi-ai";
+import { type ApiKey, getOpenRouterHeaders, ProviderHttpError, withAuth } from "@oh-my-pi/pi-ai";
 import { hostMatchesUrl } from "@oh-my-pi/pi-catalog/hosts";
 import {
 	$env,
@@ -11,7 +11,6 @@ import {
 } from "@oh-my-pi/pi-utils";
 import type { EmbeddingModel } from "fastembed";
 import { LRUCache } from "lru-cache/raw";
-import packageJson from "../../package.json" with { type: "json" };
 import { loadFastembed } from "./fastembed-runtime";
 import {
 	type EmbeddingOutput,
@@ -268,10 +267,7 @@ async function embedApi(texts: readonly string[]): Promise<EmbeddingMatrix | nul
 		const response = await withAuth(apiKey, async key => {
 			const headers: Record<string, string> = {
 				"Content-Type": "application/json",
-				"User-Agent": `Oh-My-Pi/${packageJson.version}`,
-				"HTTP-Referer": "https://omp.sh/",
-				"X-OpenRouter-Title": "Oh-My-Pi",
-				"X-OpenRouter-Categories": "cli-agent",
+				...getOpenRouterHeaders(),
 			};
 			if (key !== "") {
 				headers.Authorization = `Bearer ${key}`;

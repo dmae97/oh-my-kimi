@@ -5,7 +5,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { isOfficialAnthropicApiUrl } from "@oh-my-pi/pi-catalog/compat/anthropic";
+import { buildOpenAICompat, buildOpenAIResponsesCompat } from "@oh-my-pi/pi-catalog/compat/openai";
 import { resolveProviderModels } from "@oh-my-pi/pi-catalog/model-manager";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import type { ModelSpec } from "@oh-my-pi/pi-catalog/types";
 
 function completionsSpec(overrides: Partial<ModelSpec<"openai-completions">> = {}): ModelSpec<"openai-completions"> {
@@ -20,6 +22,22 @@ function completionsSpec(overrides: Partial<ModelSpec<"openai-completions">> = {
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 128_000,
 		maxTokens: 8_192,
+		...overrides,
+	};
+}
+
+function openrouterSpec(overrides: Partial<ModelSpec<"openrouter">> = {}): ModelSpec<"openrouter"> {
+	return {
+		id: "anthropic/claude-sonnet-4",
+		name: "Claude Sonnet 4",
+		api: "openrouter",
+		provider: "openrouter",
+		baseUrl: "https://openrouter.ai/api/v1",
+		reasoning: true,
+		input: ["text", "image"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 200_000,
+		maxTokens: 64_000,
 		...overrides,
 	};
 }
@@ -75,6 +93,29 @@ describe("buildModel", () => {
 		expect(model.compat.whenThinking).toBeUndefined();
 	});
 
+	it("builds OpenRouter pseudo-API models with shared chat and Responses compat", () => {
+		const model = buildModel(
+			openrouterSpec({
+				compat: { openRouterRouting: { only: ["anthropic"], order: ["anthropic"] } },
+			}),
+		);
+
+		expect(model.compat).toBeDefined();
+		expect(model.compat.isOpenRouterHost).toBe(true);
+		expect(model.compat.thinkingFormat).toBe("openrouter");
+		expect(model.compat.supportsStrictMode).toBe(true);
+		expect(model.compat.strictResponsesPairing).toBe(false);
+		expect(model.compat.openRouterRouting).toEqual({ only: ["anthropic"], order: ["anthropic"] });
+	});
+
+	it("loads bundled OpenRouter models with resolved compat", () => {
+		const model = getBundledModel<"openrouter">("openrouter", "anthropic/claude-sonnet-4");
+
+		expect(model.compat).toBeDefined();
+		expect(model.compat?.isOpenRouterHost).toBe(true);
+		expect(model.compat?.supportsStrictMode).toBe(true);
+	});
+
 	it("strips gateway author prefixes and extrinsic tags from display names", () => {
 		const cases: [string, string][] = [
 			["Anthropic: Claude Opus 4.6 (Fast) ($$$$)", "Claude Opus 4.6 (Fast)"],
@@ -100,6 +141,103 @@ describe("buildModel", () => {
 		for (const name of keep) {
 			expect(buildModel(completionsSpec({ name })).name).toBe(name);
 		}
+	});
+});
+
+describe("openai-completions wire-quirk compat detection", () => {
+	it("derives wireModelIdMode from provider/host", () => {
+		expect(buildOpenAICompat(completionsSpec({ provider: "firepass" })).wireModelIdMode).toBe("firepass");
+		expect(
+			buildOpenAICompat(completionsSpec({ provider: "fireworks", baseUrl: "https://api.fireworks.ai/inference/v1" }))
+				.wireModelIdMode,
+		).toBe("fireworks");
+		expect(
+			buildOpenAICompat(completionsSpec({ provider: "openrouter", baseUrl: "https://openrouter.ai/api/v1" }))
+				.wireModelIdMode,
+		).toBe("openrouter");
+		expect(buildOpenAICompat(completionsSpec()).wireModelIdMode).toBe("raw");
+	});
+
+	it("strips DeepSeek special tokens only for deepseek ids on nvidia/deepseek providers", () => {
+		expect(
+			buildOpenAICompat(
+				completionsSpec({
+					provider: "nvidia",
+					id: "deepseek-ai/deepseek-v3.1",
+					baseUrl: "https://integrate.api.nvidia.com/v1",
+				}),
+			).stripDeepseekSpecialTokens,
+		).toBe(true);
+		expect(
+			buildOpenAICompat(
+				completionsSpec({ provider: "deepseek", id: "deepseek-chat", baseUrl: "https://api.deepseek.com/v1" }),
+			).stripDeepseekSpecialTokens,
+		).toBe(true);
+		// DeepSeek id behind another host must NOT strip (only nvidia/deepseek hosts emit the raw tokens).
+		expect(
+			buildOpenAICompat(
+				completionsSpec({
+					provider: "openrouter",
+					id: "deepseek/deepseek-v3.1",
+					baseUrl: "https://openrouter.ai/api/v1",
+				}),
+			).stripDeepseekSpecialTokens,
+		).toBe(false);
+		// Non-deepseek id on nvidia must NOT strip.
+		expect(
+			buildOpenAICompat(
+				completionsSpec({
+					provider: "nvidia",
+					id: "meta/llama-3.1",
+					baseUrl: "https://integrate.api.nvidia.com/v1",
+				}),
+			).stripDeepseekSpecialTokens,
+		).toBe(false);
+	});
+
+	it("flags cumulative reasoning deltas for MiniMax provider or id", () => {
+		expect(buildOpenAICompat(completionsSpec({ provider: "minimax" })).reasoningDeltasMayBeCumulative).toBe(true);
+		expect(buildOpenAICompat(completionsSpec({ id: "MiniMax-M2" })).reasoningDeltasMayBeCumulative).toBe(true);
+		expect(buildOpenAICompat(completionsSpec()).reasoningDeltasMayBeCumulative).toBe(false);
+	});
+
+	it("maps the remaining provider-keyed wire quirks", () => {
+		expect(buildOpenAICompat(completionsSpec({ provider: "ollama" })).emptyLengthFinishIsContextError).toBe(true);
+		expect(buildOpenAICompat(completionsSpec()).emptyLengthFinishIsContextError).toBe(false);
+		expect(
+			buildOpenAICompat(completionsSpec({ provider: "openai", baseUrl: "https://api.openai.com/v1" }))
+				.usesOpenAIToolCallIdLimit,
+		).toBe(true);
+		expect(buildOpenAICompat(completionsSpec()).usesOpenAIToolCallIdLimit).toBe(false);
+		expect(
+			buildOpenAICompat(completionsSpec({ provider: "fireworks", baseUrl: "https://api.fireworks.ai/inference/v1" }))
+				.dropThinkingWhenReasoningEffort,
+		).toBe(true);
+		expect(buildOpenAICompat(completionsSpec()).dropThinkingWhenReasoningEffort).toBe(false);
+	});
+
+	it("derives Responses obfuscation opt-out and wire mode per surface", () => {
+		expect(
+			buildOpenAIResponsesCompat({
+				id: "gpt-5",
+				provider: "openai",
+				name: "GPT 5",
+				baseUrl: "https://api.openai.com/v1",
+			}).supportsObfuscationOptOut,
+		).toBe(true);
+		// Azure mirrors the schema but is NOT the OpenAI host: no obfuscation opt-out.
+		expect(
+			buildOpenAIResponsesCompat({ id: "gpt-5", provider: "azure", name: "gpt-5", baseUrl: "" })
+				.supportsObfuscationOptOut,
+		).toBe(false);
+		const openrouterResponses = buildOpenAIResponsesCompat({
+			id: "anthropic/claude-sonnet-4",
+			provider: "openrouter",
+			name: "Claude Sonnet 4",
+			baseUrl: "https://openrouter.ai/api/v1",
+		});
+		expect(openrouterResponses.supportsObfuscationOptOut).toBe(false);
+		expect(openrouterResponses.wireModelIdMode).toBe("openrouter");
 	});
 });
 

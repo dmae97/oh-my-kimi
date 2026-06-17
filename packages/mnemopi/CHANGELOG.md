@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Changed
+
+- Updated OpenRouter request headers to use standard shared headers from the pi-ai package
 
 ## [16.0.5] - 2026-06-17
 

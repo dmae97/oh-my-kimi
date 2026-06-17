@@ -6,7 +6,7 @@ import { convertMessages as convertOpenAICompletionsMessages } from "@oh-my-pi/p
 import {
 	appendResponsesToolResultMessages,
 	convertResponsesInputContent,
-} from "@oh-my-pi/pi-ai/providers/openai-responses-shared";
+} from "@oh-my-pi/pi-ai/providers/openai-shared";
 import { NON_VISION_IMAGE_PLACEHOLDER } from "@oh-my-pi/pi-ai/providers/vision-guard";
 import type { Api, AssistantMessage, Context, Model, ModelSpec, ToolResultMessage, Usage } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
@@ -42,8 +42,13 @@ const compat: ResolvedOpenAICompat = {
 	requiresThinkingAsText: false,
 	requiresMistralToolIds: false,
 	thinkingFormat: "openai",
+	reasoningDisableMode: "lowest-effort",
+	omitReasoningEffort: false,
+	includeEncryptedReasoning: true,
+	filterReasoningHistory: false,
 	reasoningContentField: "reasoning_content",
 	requiresReasoningContentForToolCalls: false,
+	requiresReasoningContentForAllAssistantTurns: false,
 	allowsSyntheticReasoningContentForToolCalls: true,
 	requiresAssistantContentForToolCalls: false,
 	openRouterRouting: {},
@@ -51,6 +56,12 @@ const compat: ResolvedOpenAICompat = {
 	extraBody: {},
 	supportsStrictMode: true,
 	toolStrictMode: "none",
+	wireModelIdMode: "raw",
+	stripDeepseekSpecialTokens: false,
+	reasoningDeltasMayBeCumulative: false,
+	emptyLengthFinishIsContextError: false,
+	usesOpenAIToolCallIdLimit: false,
+	dropThinkingWhenReasoningEffort: false,
 };
 
 function makeModel<TApi extends Api>(api: TApi, provider: Model["provider"]): Model<TApi> {

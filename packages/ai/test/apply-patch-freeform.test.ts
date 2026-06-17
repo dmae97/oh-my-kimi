@@ -8,12 +8,12 @@ import {
 	mapOpenAIResponsesToolChoiceForTools,
 	supportsFreeformApplyPatch,
 } from "@oh-my-pi/pi-ai/providers/openai-responses";
+import type { ResponseStreamEvent } from "@oh-my-pi/pi-ai/providers/openai-responses-wire";
 import {
 	appendResponsesToolResultMessages,
 	convertResponsesAssistantMessage,
 	processResponsesStream,
-} from "@oh-my-pi/pi-ai/providers/openai-responses-shared";
-import type { ResponseStreamEvent } from "@oh-my-pi/pi-ai/providers/openai-responses-wire";
+} from "@oh-my-pi/pi-ai/providers/openai-shared";
 import type { AssistantMessage, Model, ModelSpec, Tool, ToolResultMessage } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { z } from "zod/v4";

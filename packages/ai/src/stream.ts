@@ -46,7 +46,6 @@ import {
 	streamOpenAIResponses,
 } from "./providers/register-builtins";
 import { isSyntheticModel, streamSynthetic } from "./providers/synthetic";
-import { streamXAIResponses } from "./providers/xai-responses";
 import { isUsageLimitError } from "./rate-limit-utils";
 import { PROVIDER_REGISTRY } from "./registry";
 import type {
@@ -73,6 +72,7 @@ function isGoogleVertexAuthenticatedModel(model: Model<Api>): boolean {
 			(model.api === "anthropic-messages" && isVertexRawPredictUrl(model.baseUrl)))
 	);
 }
+
 
 function createVertexAuthenticatedFetch(options: StreamOptions | undefined): FetchImpl {
 	const baseFetch = options?.fetch ?? fetch;
@@ -292,15 +292,19 @@ function streamDispatch<TApi extends Api>(
 			});
 		}
 
+		case "openrouter": {
+			const useResponses = $env.PI_OPENROUTER_RESPONSES !== "0";
+			if (useResponses) {
+				return streamOpenAIResponses(model as Model<"openai-responses">, context, providerOptions as any);
+			}
+			return streamOpenAICompletions(model as Model<"openai-completions">, context, providerOptions as any);
+		}
+
 		case "openai-completions":
 			return streamOpenAICompletions(model as Model<"openai-completions">, context, providerOptions as any);
 
-		case "openai-responses": {
-			if (model.provider === "xai-oauth") {
-				return streamXAIResponses(model as Model<"openai-responses">, context, providerOptions as any);
-			}
+		case "openai-responses":
 			return streamOpenAIResponses(model as Model<"openai-responses">, context, providerOptions as any);
-		}
 
 		case "azure-openai-responses":
 			return streamAzureOpenAIResponses(model as Model<"azure-openai-responses">, context, providerOptions as any);
@@ -679,11 +683,10 @@ function resolveOpenAiReasoningEffort<TApi extends Api>(
 	// Models that reason natively but expose no effort dial carry
 	// `thinking: undefined` (baked at build time from
 	// `compat.supportsReasoningEffort: false` on openai-responses*). The
-	// wire-side omitReasoningEffort gate (providers/xai-responses.ts:78) is the
-	// actual strip; returning undefined here avoids a redundant
-	// requireSupportedEffort throw that would defeat the gate and surface a
-	// confusing "Compaction failed: Thinking effort high is not supported
-	// by..." to the user.
+	// wire-side omitReasoningEffort gate (stream.ts) is the actual strip; returning
+	// undefined here avoids a redundant requireSupportedEffort throw that would
+	// defeat the gate and surface a confusing "Compaction failed: Thinking effort
+	// high is not supported by..." to the user.
 	if (!model.thinking) return undefined;
 	return requireSupportedEffort(model, reasoning);
 }
@@ -869,6 +872,31 @@ function mapOptionsForApi<TApi extends Api>(
 			return castApi<"bedrock-converse-stream">({ ...bedrockBase, maxTokens, thinkingBudgets });
 		}
 
+		case "openrouter": {
+			const useResponses = $env.PI_OPENROUTER_RESPONSES !== "0";
+			if (useResponses) {
+				return castApi<"openai-responses">({
+					...base,
+					reasoning: resolveOpenAiReasoningEffort(model, options),
+					toolChoice: mapOpenAiToolChoice(options?.toolChoice),
+					serviceTier: options?.serviceTier,
+					reasoningSummary: options?.hideThinkingSummary ? null : undefined,
+					openrouterVariant: options?.openrouterVariant,
+					maxTokensExplicit: rawOptions?.maxTokens !== undefined,
+					disableReasoning: options?.disableReasoning,
+				});
+			}
+			return castApi<"openai-completions">({
+				...base,
+				reasoning: resolveOpenAiReasoningEffort(model, options),
+				disableReasoning: options?.disableReasoning,
+				toolChoice: mapOpenAiToolChoice(options?.toolChoice),
+				serviceTier: options?.serviceTier,
+				openrouterVariant: options?.openrouterVariant,
+				maxTokensExplicit: rawOptions?.maxTokens !== undefined,
+			});
+		}
+
 		case "openai-completions":
 			return castApi<"openai-completions">({
 				...base,
@@ -887,6 +915,9 @@ function mapOptionsForApi<TApi extends Api>(
 				toolChoice: mapOpenAiToolChoice(options?.toolChoice),
 				serviceTier: options?.serviceTier,
 				reasoningSummary: options?.hideThinkingSummary ? null : undefined,
+				openrouterVariant: options?.openrouterVariant,
+				maxTokensExplicit: rawOptions?.maxTokens !== undefined,
+				disableReasoning: options?.disableReasoning,
 			});
 
 		case "azure-openai-responses":

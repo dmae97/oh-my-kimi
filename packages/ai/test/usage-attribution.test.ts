@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { applyAnthropicUsageExtras } from "@oh-my-pi/pi-ai/providers/anthropic";
 import { parseChunkUsage } from "@oh-my-pi/pi-ai/providers/openai-completions";
+import { calculateOpenAIUsageAccounting } from "@oh-my-pi/pi-ai/providers/openai-shared";
 import type { Model, Usage } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 
@@ -200,6 +201,59 @@ describe("openai-completions parseChunkUsage", () => {
 		expect(usage.cacheRead).toBe(200);
 		expect(usage.cacheWrite).toBe(5_000);
 		expect(usage.totalTokens).toBe(6_250);
+	});
+});
+
+describe("shared OpenAI usage accounting", () => {
+	it("uses provider cache-write details ahead of native DeepSeek passthrough fields", () => {
+		const usage = calculateOpenAIUsageAccounting({
+			promptTokens: 6_000,
+			outputTokens: 250,
+			cachedTokens: 200,
+			reasoningTokens: 0,
+			cacheWriteOpenRouter: 5_000,
+			cacheWriteDeepSeek: 50,
+			hasDeepSeekCacheHitAndMiss: true,
+		});
+
+		expect(usage.input).toBe(800);
+		expect(usage.cacheRead).toBe(200);
+		expect(usage.cacheWrite).toBe(5_000);
+		expect(usage.totalTokens).toBe(6_250);
+	});
+
+	it("does not emit DeepSeek cache misses as cache writes", () => {
+		const usage = calculateOpenAIUsageAccounting({
+			promptTokens: 150,
+			outputTokens: 200,
+			cachedTokens: 100,
+			reasoningTokens: 0,
+			cacheWriteOpenRouter: undefined,
+			cacheWriteDeepSeek: 50,
+			hasDeepSeekCacheHitAndMiss: true,
+		});
+
+		expect(usage.input).toBe(50);
+		expect(usage.cacheRead).toBe(100);
+		expect(usage.cacheWrite).toBe(0);
+		expect(usage.totalTokens).toBe(350);
+	});
+
+	it("treats zero provider cache-write as present when native fields pass through", () => {
+		const usage = calculateOpenAIUsageAccounting({
+			promptTokens: 150,
+			outputTokens: 25,
+			cachedTokens: 100,
+			reasoningTokens: 0,
+			cacheWriteOpenRouter: 0,
+			cacheWriteDeepSeek: 50,
+			hasDeepSeekCacheHitAndMiss: true,
+		});
+
+		expect(usage.input).toBe(50);
+		expect(usage.cacheRead).toBe(100);
+		expect(usage.cacheWrite).toBe(0);
+		expect(usage.totalTokens).toBe(175);
 	});
 });
 

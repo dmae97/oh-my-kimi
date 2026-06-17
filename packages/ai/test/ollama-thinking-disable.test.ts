@@ -3,6 +3,14 @@ import type { Context } from "@oh-my-pi/pi-ai";
 import { streamOllama } from "@oh-my-pi/pi-ai/providers/ollama";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 
+interface OllamaChatRequestPayload {
+	think?: unknown;
+}
+
+function isOllamaChatRequestPayload(value: unknown): value is OllamaChatRequestPayload {
+	return value !== null && typeof value === "object";
+}
+
 function createReasoningOllamaModel() {
 	return buildModel({
 		id: "deepseek-v4-flash",
@@ -20,10 +28,10 @@ function createReasoningOllamaModel() {
 
 describe("Ollama chat thinking controls", () => {
 	it("sends think false when reasoning is explicitly disabled", async () => {
-		let payload: object | undefined;
+		let payload: OllamaChatRequestPayload | undefined;
 		const fetchMock = async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
 			const parsed: unknown = JSON.parse(String(init?.body));
-			if (parsed === null || typeof parsed !== "object") {
+			if (!isOllamaChatRequestPayload(parsed)) {
 				throw new Error("Expected Ollama payload object");
 			}
 			payload = parsed;
@@ -41,6 +49,6 @@ describe("Ollama chat thinking controls", () => {
 			fetch: fetchMock,
 		}).result();
 
-		expect(payload ? Reflect.get(payload, "think") : undefined).toBe(false);
+		expect(payload?.think).toBe(false);
 	});
 });

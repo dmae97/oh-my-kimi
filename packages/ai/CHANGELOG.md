@@ -1,6 +1,27 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added `getOpenRouterHeaders` utility to export standard OpenRouter integration headers
+
+### Changed
+
+- Replaced the dedicated `xai-responses` provider with a unified `openai-responses` path that handles xAI-specific reasoning effort stripping dynamically
+- Updated OpenAI Responses stream handling to throw a clearer error message when a stream closes without a terminal response event
+- Consolidated shared OpenAI-compatible routing and strict-tool fallback helpers across Chat Completions and Responses providers.
+- Consolidated the OpenAI-family provider stack: merged `openai-responses-shared` into `openai-shared` and removed the now-dead `openai-responses-shared` re-export shim; folded the three duplicated `service_tier` request blocks and the per-provider wire model-id transform into shared `applyOpenAIServiceTier`/`applyWireModelIdTransform` helpers; moved residual provider-name wire-quirk checks (DeepSeek special-token strip, cumulative reasoning deltas, Ollama empty-length context error, OpenAI tool-call-id cap, Fireworks thinking drop, OpenRouter/OpenAI Responses request fields) into resolved compat fields; shared the Responses stream per-block accumulation helpers plus the terminal pending-tool-call finalization (`finalizePendingResponsesToolCalls`) and toolUse/pause stop-reason promotion (`promoteResponsesToolUseStopReason`) between `processResponsesStream` and the Codex stream handler; and removed the redundant `getOpenAIResponsesCacheSessionId` alias in favor of `getOpenAIResponsesPromptCacheKey`.
+- Centralized OpenAI-family request-param policy into shared `resolveOpenAIOutputTokenParam` (output-token field selection, OpenRouter default-cap omission, `alwaysSendMaxTokens` defaulting, model/provider clamp), `applyOpenAIGatewayRouting` (OpenRouter `provider` + Vercel AI Gateway `providerOptions`), and `applyOpenAIExtraBody` (extra-body merge + Fireworks thinking drop) helpers used by both Chat Completions and Responses `buildParams`, and moved the Chat Completions reasoning/thinking dialect dispatch (`applyChatCompletionsReasoningParams` + `disableChatCompletionsReasoningForDialect`) plus the `OpenAICompletionsParams` request type into `openai-shared` alongside `applyResponsesReasoningParams`. As a consistency consequence, direct `streamOpenAIResponses` calls (bypassing `streamSimple`) now emit `max_output_tokens` for `alwaysSendMaxTokens` (Kimi-family) models even without a caller cap — matching Chat Completions and the value `streamSimple` already supplied.
+- Centralized OpenAI-family reasoning compat resolution behind a shared `resolveOpenAICompatPolicy` consumed by both Chat Completions and Responses request builders. Shared policy now drives tool-choice reasoning suppression, dialect-specific disable encoding, reasoning-history replay filters, encrypted-reasoning inclusion, Mistral/OpenAI tool-call-id modes, stream healing/DeepSeek token stripping, and xAI/OpenRouter cache-affinity wiring instead of endpoint-local provider/model checks.
+
+### Fixed
+
+- Fixed Google Gemini CLI credential parsing to correctly prioritize `projectId` over `project_id` even when empty, and drop non-string values gracefully
+- Fixed OpenRouter Responses requests to omit default max token fields unless an explicit caller cap is provided, preventing upstream filtering issues
+- Fixed Chat Completions reasoning suppression (`disableReasoningOnToolChoice` / `disableReasoningOnForcedToolChoice`) to turn thinking off symmetrically across every dialect via a shared `disableChatCompletionsReasoningForDialect` helper. Previously the conflict path only deleted `reasoning_effort`/`reasoning` (and set Z.AI `thinking: { type: "disabled" }` on the forced branch alone), leaving Qwen `enable_thinking`, Qwen chat-template `chat_template_kwargs.enable_thinking`, and OpenRouter nested `reasoning` enabled — so those hosts could keep thinking on under forced/required tool choice and re-trip the incompatibility the policy guards against. OpenRouter is now set to `{ reasoning: { enabled: false } }` (not deleted, which OpenRouter treats as default-on).
+- Fixed OpenRouter Responses requests to send `session_id` from `sessionId` in the request body for sticky provider routing and observability grouping.
+- Fixed OpenRouter Responses request shaping to preserve provider routing, variant suffixes, caller header overrides, and strict-tool fallback behavior while omitting only unsafe default max-token caps.
+- Fixed OpenAI Responses stateful chaining so a non-ZDR stale `previous_response_id` retry keeps `store: true`: the full-context retry stays chainable on the next turn and the consecutive stale-failure circuit breaker trips after the configured limit instead of alternating cold turns. Zero Data Retention rejections still disable chaining on the first strike.
 
 ## [16.0.5] - 2026-06-17
 

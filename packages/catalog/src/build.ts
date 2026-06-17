@@ -10,7 +10,7 @@
  * compat per request.
  */
 import { buildAnthropicCompat } from "./compat/anthropic";
-import { buildOpenAICompat, buildOpenAIResponsesCompat } from "./compat/openai";
+import { buildOpenAICompat, buildOpenAIResponsesCompat, buildOpenRouterCompat } from "./compat/openai";
 import { resolveModelThinking } from "./model-thinking";
 import type { Api, CompatOf, Model, ModelSpec } from "./types";
 import { cleanModelName } from "./utils";
@@ -28,6 +28,8 @@ export function buildModel<TApi extends Api>(spec: ModelSpec<TApi>): Model<TApi>
 
 export function buildCompat(spec: ModelSpec<Api>): CompatOf<Api> {
 	switch (spec.api) {
+		case "openrouter":
+			return buildOpenRouterCompat(spec as ModelSpec<"openrouter">);
 		case "openai-completions":
 			return buildOpenAICompat(spec as ModelSpec<"openai-completions">);
 		case "openai-responses":

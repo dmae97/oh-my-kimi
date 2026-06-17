@@ -58424,7 +58424,7 @@
 		"~anthropic/claude-fable-latest": {
 			"id": "~anthropic/claude-fable-latest",
 			"name": "Claude Fable Latest",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -58453,7 +58453,7 @@
 		"~anthropic/claude-haiku-latest": {
 			"id": "~anthropic/claude-haiku-latest",
 			"name": "Claude Haiku Latest",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -58482,7 +58482,7 @@
 		"~anthropic/claude-opus-latest": {
 			"id": "~anthropic/claude-opus-latest",
 			"name": "Claude Opus Latest",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -58511,7 +58511,7 @@
 		"~anthropic/claude-sonnet-latest": {
 			"id": "~anthropic/claude-sonnet-latest",
 			"name": "Claude Sonnet Latest",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -58540,7 +58540,7 @@
 		"~google/gemini-flash-latest": {
 			"id": "~google/gemini-flash-latest",
 			"name": "Gemini Flash Latest",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -58569,7 +58569,7 @@
 		"~google/gemini-pro-latest": {
 			"id": "~google/gemini-pro-latest",
 			"name": "Gemini Pro Latest",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -58598,7 +58598,7 @@
 		"~moonshotai/kimi-latest": {
 			"id": "~moonshotai/kimi-latest",
 			"name": "Kimi Latest",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -58627,7 +58627,7 @@
 		"~openai/gpt-latest": {
 			"id": "~openai/gpt-latest",
 			"name": "GPT Latest",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -58656,7 +58656,7 @@
 		"~openai/gpt-mini-latest": {
 			"id": "~openai/gpt-mini-latest",
 			"name": "GPT Mini Latest",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -58685,7 +58685,7 @@
 		"ai21/jamba-large-1.7": {
 			"id": "ai21/jamba-large-1.7",
 			"name": "Jamba Large 1.7",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -58704,7 +58704,7 @@
 		"alibaba/tongyi-deepresearch-30b-a3b": {
 			"id": "alibaba/tongyi-deepresearch-30b-a3b",
 			"name": "Tongyi DeepResearch 30B A3B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -58732,7 +58732,7 @@
 		"allenai/olmo-3.1-32b-instruct": {
 			"id": "allenai/olmo-3.1-32b-instruct",
 			"name": "Olmo 3.1 32B Instruct",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -58751,7 +58751,7 @@
 		"amazon/nova-2-lite-v1": {
 			"id": "amazon/nova-2-lite-v1",
 			"name": "Nova 2 Lite",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -58780,7 +58780,7 @@
 		"amazon/nova-lite-v1": {
 			"id": "amazon/nova-lite-v1",
 			"name": "Nova Lite 1.0",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -58803,7 +58803,7 @@
 		"amazon/nova-micro-v1": {
 			"id": "amazon/nova-micro-v1",
 			"name": "Nova Micro 1.0",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -58825,7 +58825,7 @@
 		"amazon/nova-premier-v1": {
 			"id": "amazon/nova-premier-v1",
 			"name": "Nova Premier 1.0",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -58848,7 +58848,7 @@
 		"amazon/nova-pro-v1": {
 			"id": "amazon/nova-pro-v1",
 			"name": "Nova Pro 1.0",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -58871,7 +58871,7 @@
 		"anthropic/claude-3-haiku": {
 			"id": "anthropic/claude-3-haiku",
 			"name": "Claude Haiku 3",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -58891,7 +58891,7 @@
 		"anthropic/claude-3.5-haiku": {
 			"id": "anthropic/claude-3.5-haiku",
 			"name": "Claude 3.5 Haiku",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -58911,7 +58911,7 @@
 		"anthropic/claude-3.5-sonnet": {
 			"id": "anthropic/claude-3.5-sonnet",
 			"name": "Claude Sonnet 3.5 v2",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -58931,7 +58931,7 @@
 		"anthropic/claude-3.7-sonnet": {
 			"id": "anthropic/claude-3.7-sonnet",
 			"name": "Claude 3.7 Sonnet",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -58960,7 +58960,7 @@
 		"anthropic/claude-3.7-sonnet:thinking": {
 			"id": "anthropic/claude-3.7-sonnet:thinking",
 			"name": "Claude 3.7 Sonnet (thinking)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -58989,7 +58989,7 @@
 		"anthropic/claude-fable-5": {
 			"id": "anthropic/claude-fable-5",
 			"name": "Claude Fable 5",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -59026,7 +59026,7 @@
 		"anthropic/claude-haiku-4.5": {
 			"id": "anthropic/claude-haiku-4.5",
 			"name": "Claude Haiku 4.5",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -59055,7 +59055,7 @@
 		"anthropic/claude-opus-4": {
 			"id": "anthropic/claude-opus-4",
 			"name": "Claude Opus 4",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -59084,7 +59084,7 @@
 		"anthropic/claude-opus-4.1": {
 			"id": "anthropic/claude-opus-4.1",
 			"name": "Claude Opus 4.1",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -59113,7 +59113,7 @@
 		"anthropic/claude-opus-4.5": {
 			"id": "anthropic/claude-opus-4.5",
 			"name": "Claude Opus 4.5",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -59142,7 +59142,7 @@
 		"anthropic/claude-opus-4.6": {
 			"id": "anthropic/claude-opus-4.6",
 			"name": "Claude Opus 4.6",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -59176,7 +59176,7 @@
 		"anthropic/claude-opus-4.6-fast": {
 			"id": "anthropic/claude-opus-4.6-fast",
 			"name": "Claude Opus 4.6 (Fast)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -59210,7 +59210,7 @@
 		"anthropic/claude-opus-4.7": {
 			"id": "anthropic/claude-opus-4.7",
 			"name": "Claude Opus 4.7",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -59247,7 +59247,7 @@
 		"anthropic/claude-opus-4.7-fast": {
 			"id": "anthropic/claude-opus-4.7-fast",
 			"name": "Claude Opus 4.7 (Fast)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -59284,7 +59284,7 @@
 		"anthropic/claude-opus-4.8": {
 			"id": "anthropic/claude-opus-4.8",
 			"name": "Claude Opus 4.8",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -59321,7 +59321,7 @@
 		"anthropic/claude-opus-4.8-fast": {
 			"id": "anthropic/claude-opus-4.8-fast",
 			"name": "Claude Opus 4.8 (Fast)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -59358,7 +59358,7 @@
 		"anthropic/claude-sonnet-4": {
 			"id": "anthropic/claude-sonnet-4",
 			"name": "Claude Sonnet 4",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -59387,7 +59387,7 @@
 		"anthropic/claude-sonnet-4.5": {
 			"id": "anthropic/claude-sonnet-4.5",
 			"name": "Claude Sonnet 4.5",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -59416,7 +59416,7 @@
 		"anthropic/claude-sonnet-4.6": {
 			"id": "anthropic/claude-sonnet-4.6",
 			"name": "Claude Sonnet 4.6",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -59445,7 +59445,7 @@
 		"arcee-ai/trinity-large-preview": {
 			"id": "arcee-ai/trinity-large-preview",
 			"name": "Trinity Large Preview",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": false,
@@ -59467,7 +59467,7 @@
 		"arcee-ai/trinity-large-preview:free": {
 			"id": "arcee-ai/trinity-large-preview:free",
 			"name": "Trinity Large Preview (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -59489,7 +59489,7 @@
 		"arcee-ai/trinity-large-thinking": {
 			"id": "arcee-ai/trinity-large-thinking",
 			"name": "Trinity Large Thinking",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -59518,7 +59518,7 @@
 		"arcee-ai/trinity-large-thinking:free": {
 			"id": "arcee-ai/trinity-large-thinking:free",
 			"name": "Trinity Large Thinking (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -59547,7 +59547,7 @@
 		"arcee-ai/trinity-mini": {
 			"id": "arcee-ai/trinity-mini",
 			"name": "Trinity Mini",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -59575,7 +59575,7 @@
 		"arcee-ai/trinity-mini:free": {
 			"id": "arcee-ai/trinity-mini:free",
 			"name": "Trinity Mini (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -59603,7 +59603,7 @@
 		"arcee-ai/virtuoso-large": {
 			"id": "arcee-ai/virtuoso-large",
 			"name": "Virtuoso Large",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -59622,7 +59622,7 @@
 		"auto": {
 			"id": "auto",
 			"name": "Auto",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -59651,7 +59651,7 @@
 		"baidu/cobuddy:free": {
 			"id": "baidu/cobuddy:free",
 			"name": "CoBuddy (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -59682,7 +59682,7 @@
 		"baidu/ernie-4.5-21b-a3b": {
 			"id": "baidu/ernie-4.5-21b-a3b",
 			"name": "ERNIE 4.5 21B A3B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -59701,7 +59701,7 @@
 		"baidu/ernie-4.5-vl-28b-a3b": {
 			"id": "baidu/ernie-4.5-vl-28b-a3b",
 			"name": "ERNIE 4.5 VL 28B A3B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -59730,7 +59730,7 @@
 		"bytedance-seed/seed-1.6": {
 			"id": "bytedance-seed/seed-1.6",
 			"name": "Seed 1.6",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -59759,7 +59759,7 @@
 		"bytedance-seed/seed-1.6-flash": {
 			"id": "bytedance-seed/seed-1.6-flash",
 			"name": "Seed 1.6 Flash",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -59788,7 +59788,7 @@
 		"bytedance-seed/seed-2.0-lite": {
 			"id": "bytedance-seed/seed-2.0-lite",
 			"name": "Seed-2.0-Lite",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -59817,7 +59817,7 @@
 		"bytedance-seed/seed-2.0-mini": {
 			"id": "bytedance-seed/seed-2.0-mini",
 			"name": "Seed-2.0-Mini",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -59846,7 +59846,7 @@
 		"cohere/command-r-08-2024": {
 			"id": "cohere/command-r-08-2024",
 			"name": "Command R (08-2024)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -59865,7 +59865,7 @@
 		"cohere/command-r-plus-08-2024": {
 			"id": "cohere/command-r-plus-08-2024",
 			"name": "Command R+",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -59884,7 +59884,7 @@
 		"deepseek/deepseek-chat": {
 			"id": "deepseek/deepseek-chat",
 			"name": "DeepSeek V3",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -59903,7 +59903,7 @@
 		"deepseek/deepseek-chat-v3-0324": {
 			"id": "deepseek/deepseek-chat-v3-0324",
 			"name": "DeepSeek V3 0324",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -59937,7 +59937,7 @@
 		"deepseek/deepseek-chat-v3.1": {
 			"id": "deepseek/deepseek-chat-v3.1",
 			"name": "DeepSeek V3.1",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -59971,7 +59971,7 @@
 		"deepseek/deepseek-r1": {
 			"id": "deepseek/deepseek-r1",
 			"name": "R1",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -60005,7 +60005,7 @@
 		"deepseek/deepseek-r1-0528": {
 			"id": "deepseek/deepseek-r1-0528",
 			"name": "R1 0528",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -60039,7 +60039,7 @@
 		"deepseek/deepseek-v3.1-terminus": {
 			"id": "deepseek/deepseek-v3.1-terminus",
 			"name": "DeepSeek V3.1 Terminus",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -60073,7 +60073,7 @@
 		"deepseek/deepseek-v3.1-terminus:exacto": {
 			"id": "deepseek/deepseek-v3.1-terminus:exacto",
 			"name": "DeepSeek V3.1 Terminus (exacto)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -60107,7 +60107,7 @@
 		"deepseek/deepseek-v3.2": {
 			"id": "deepseek/deepseek-v3.2",
 			"name": "DeepSeek V3.2",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -60141,7 +60141,7 @@
 		"deepseek/deepseek-v3.2-exp": {
 			"id": "deepseek/deepseek-v3.2-exp",
 			"name": "DeepSeek V3.2 Exp",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -60175,7 +60175,7 @@
 		"deepseek/deepseek-v4-flash": {
 			"id": "deepseek/deepseek-v4-flash",
 			"name": "DeepSeek V4 Flash",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -60209,7 +60209,7 @@
 		"deepseek/deepseek-v4-flash:free": {
 			"id": "deepseek/deepseek-v4-flash:free",
 			"name": "DeepSeek V4 Flash (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -60243,7 +60243,7 @@
 		"deepseek/deepseek-v4-pro": {
 			"id": "deepseek/deepseek-v4-pro",
 			"name": "DeepSeek V4 Pro",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -60277,7 +60277,7 @@
 		"essentialai/rnj-1-instruct": {
 			"id": "essentialai/rnj-1-instruct",
 			"name": "Rnj 1 Instruct",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": false,
@@ -60296,7 +60296,7 @@
 		"google/gemini-2.0-flash-001": {
 			"id": "google/gemini-2.0-flash-001",
 			"name": "Gemini 2.0 Flash",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -60316,7 +60316,7 @@
 		"google/gemini-2.0-flash-lite-001": {
 			"id": "google/gemini-2.0-flash-lite-001",
 			"name": "Gemini 2.0 Flash Lite",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -60336,7 +60336,7 @@
 		"google/gemini-2.5-flash": {
 			"id": "google/gemini-2.5-flash",
 			"name": "Gemini 2.5 Flash",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -60365,7 +60365,7 @@
 		"google/gemini-2.5-flash-lite": {
 			"id": "google/gemini-2.5-flash-lite",
 			"name": "Gemini 2.5 Flash Lite",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -60394,7 +60394,7 @@
 		"google/gemini-2.5-flash-lite-preview-09-2025": {
 			"id": "google/gemini-2.5-flash-lite-preview-09-2025",
 			"name": "Gemini 2.5 Flash Lite Preview 09-2025",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -60423,7 +60423,7 @@
 		"google/gemini-2.5-flash-preview-09-2025": {
 			"id": "google/gemini-2.5-flash-preview-09-2025",
 			"name": "Gemini 2.5 Flash Preview 09-2025",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -60452,7 +60452,7 @@
 		"google/gemini-2.5-pro": {
 			"id": "google/gemini-2.5-pro",
 			"name": "Gemini 2.5 Pro",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -60482,7 +60482,7 @@
 		"google/gemini-2.5-pro-preview": {
 			"id": "google/gemini-2.5-pro-preview",
 			"name": "Gemini 2.5 Pro Preview 06-05",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -60512,7 +60512,7 @@
 		"google/gemini-2.5-pro-preview-05-06": {
 			"id": "google/gemini-2.5-pro-preview-05-06",
 			"name": "Gemini 2.5 Pro Preview 05-06",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -60542,7 +60542,7 @@
 		"google/gemini-3-flash-preview": {
 			"id": "google/gemini-3-flash-preview",
 			"name": "Gemini 3 Flash (Preview)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -60572,7 +60572,7 @@
 		"google/gemini-3-pro-preview": {
 			"id": "google/gemini-3-pro-preview",
 			"name": "Gemini 3 Pro Preview",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -60600,7 +60600,7 @@
 		"google/gemini-3.1-flash-lite": {
 			"id": "google/gemini-3.1-flash-lite",
 			"name": "Gemini 3.1 Flash Lite",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -60630,7 +60630,7 @@
 		"google/gemini-3.1-flash-lite-preview": {
 			"id": "google/gemini-3.1-flash-lite-preview",
 			"name": "Gemini 3.1 Flash Lite Preview",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": false,
@@ -60650,7 +60650,7 @@
 		"google/gemini-3.1-pro-preview": {
 			"id": "google/gemini-3.1-pro-preview",
 			"name": "Gemini 3.1 Pro (Preview)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -60678,7 +60678,7 @@
 		"google/gemini-3.1-pro-preview-customtools": {
 			"id": "google/gemini-3.1-pro-preview-customtools",
 			"name": "Gemini 3.1 Pro (Preview Custom Tools)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -60706,7 +60706,7 @@
 		"google/gemini-3.5-flash": {
 			"id": "google/gemini-3.5-flash",
 			"name": "Gemini 3.5 Flash",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -60736,7 +60736,7 @@
 		"google/gemma-3-12b-it": {
 			"id": "google/gemma-3-12b-it",
 			"name": "Gemma 3 12B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": false,
@@ -60756,7 +60756,7 @@
 		"google/gemma-3-27b-it": {
 			"id": "google/gemma-3-27b-it",
 			"name": "Gemma 3 27B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -60776,7 +60776,7 @@
 		"google/gemma-3-27b-it:free": {
 			"id": "google/gemma-3-27b-it:free",
 			"name": "Gemma 3 27B (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -60796,7 +60796,7 @@
 		"google/gemma-4-26b-a4b-it": {
 			"id": "google/gemma-4-26b-a4b-it",
 			"name": "Gemma 4 26B A4B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -60825,7 +60825,7 @@
 		"google/gemma-4-26b-a4b-it:free": {
 			"id": "google/gemma-4-26b-a4b-it:free",
 			"name": "Gemma 4 26B A4B (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -60854,7 +60854,7 @@
 		"google/gemma-4-31b-it": {
 			"id": "google/gemma-4-31b-it",
 			"name": "Gemma 4 31B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -60883,7 +60883,7 @@
 		"google/gemma-4-31b-it:free": {
 			"id": "google/gemma-4-31b-it:free",
 			"name": "Gemma 4 31B (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -60912,7 +60912,7 @@
 		"ibm-granite/granite-4.1-8b": {
 			"id": "ibm-granite/granite-4.1-8b",
 			"name": "Granite 4.1 8B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": false,
@@ -60931,7 +60931,7 @@
 		"inception/mercury": {
 			"id": "inception/mercury",
 			"name": "Mercury",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -60950,7 +60950,7 @@
 		"inception/mercury-2": {
 			"id": "inception/mercury-2",
 			"name": "Mercury 2",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -60978,7 +60978,7 @@
 		"inception/mercury-coder": {
 			"id": "inception/mercury-coder",
 			"name": "Mercury Coder",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -60997,7 +60997,7 @@
 		"inclusionai/ling-2.6-1t": {
 			"id": "inclusionai/ling-2.6-1t",
 			"name": "Ling-2.6-1T",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": false,
@@ -61016,7 +61016,7 @@
 		"inclusionai/ling-2.6-1t:free": {
 			"id": "inclusionai/ling-2.6-1t:free",
 			"name": "Ling-2.6-1T (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": false,
@@ -61035,7 +61035,7 @@
 		"inclusionai/ling-2.6-flash": {
 			"id": "inclusionai/ling-2.6-flash",
 			"name": "Ling-2.6 Flash",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": false,
@@ -61054,7 +61054,7 @@
 		"inclusionai/ling-2.6-flash:free": {
 			"id": "inclusionai/ling-2.6-flash:free",
 			"name": "Ling-2.6-flash (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": false,
@@ -61073,7 +61073,7 @@
 		"inclusionai/ring-2.6-1t": {
 			"id": "inclusionai/ring-2.6-1t",
 			"name": "Ring-2.6-1T",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -61101,7 +61101,7 @@
 		"inclusionai/ring-2.6-1t:free": {
 			"id": "inclusionai/ring-2.6-1t:free",
 			"name": "Ring-2.6-1T (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -61129,7 +61129,7 @@
 		"kwaipilot/kat-coder-pro": {
 			"id": "kwaipilot/kat-coder-pro",
 			"name": "KAT-Coder-Pro V1",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61148,7 +61148,7 @@
 		"kwaipilot/kat-coder-pro-v2": {
 			"id": "kwaipilot/kat-coder-pro-v2",
 			"name": "KAT-Coder-Pro V2",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": false,
@@ -61167,7 +61167,7 @@
 		"meituan/longcat-flash-chat": {
 			"id": "meituan/longcat-flash-chat",
 			"name": "LongCat Flash Chat",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": false,
@@ -61186,7 +61186,7 @@
 		"meta-llama/llama-3-8b-instruct": {
 			"id": "meta-llama/llama-3-8b-instruct",
 			"name": "Llama 3 8B Instruct",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61205,7 +61205,7 @@
 		"meta-llama/llama-3.1-405b-instruct": {
 			"id": "meta-llama/llama-3.1-405b-instruct",
 			"name": "Llama 3.1 405B Instruct",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61224,7 +61224,7 @@
 		"meta-llama/llama-3.1-70b-instruct": {
 			"id": "meta-llama/llama-3.1-70b-instruct",
 			"name": "Llama 3.1 70B Instruct",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61243,7 +61243,7 @@
 		"meta-llama/llama-3.1-8b-instruct": {
 			"id": "meta-llama/llama-3.1-8b-instruct",
 			"name": "Llama 3.1 8B Instruct",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61262,7 +61262,7 @@
 		"meta-llama/llama-3.3-70b-instruct": {
 			"id": "meta-llama/llama-3.3-70b-instruct",
 			"name": "Llama 3.3 70B Instruct",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61281,7 +61281,7 @@
 		"meta-llama/llama-3.3-70b-instruct:free": {
 			"id": "meta-llama/llama-3.3-70b-instruct:free",
 			"name": "Llama 3.3 70B Instruct (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61300,7 +61300,7 @@
 		"meta-llama/llama-4-maverick": {
 			"id": "meta-llama/llama-4-maverick",
 			"name": "Llama 4 Maverick",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61320,7 +61320,7 @@
 		"meta-llama/llama-4-scout": {
 			"id": "meta-llama/llama-4-scout",
 			"name": "Llama 4 Scout",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61340,7 +61340,7 @@
 		"minimax/minimax-m1": {
 			"id": "minimax/minimax-m1",
 			"name": "MiniMax M1",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -61368,7 +61368,7 @@
 		"minimax/minimax-m2": {
 			"id": "minimax/minimax-m2",
 			"name": "MiniMax M2",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -61396,7 +61396,7 @@
 		"minimax/minimax-m2.1": {
 			"id": "minimax/minimax-m2.1",
 			"name": "MiniMax M2.1",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -61424,7 +61424,7 @@
 		"minimax/minimax-m2.5": {
 			"id": "minimax/minimax-m2.5",
 			"name": "MiniMax M2.5",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -61452,7 +61452,7 @@
 		"minimax/minimax-m2.5:free": {
 			"id": "minimax/minimax-m2.5:free",
 			"name": "MiniMax M2.5 (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -61483,7 +61483,7 @@
 		"minimax/minimax-m2.7": {
 			"id": "minimax/minimax-m2.7",
 			"name": "MiniMax M2.7",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -61511,7 +61511,7 @@
 		"minimax/minimax-m3": {
 			"id": "minimax/minimax-m3",
 			"name": "MiniMax-M3",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -61540,7 +61540,7 @@
 		"mistralai/codestral-2508": {
 			"id": "mistralai/codestral-2508",
 			"name": "Codestral 2508",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61559,7 +61559,7 @@
 		"mistralai/devstral-2512": {
 			"id": "mistralai/devstral-2512",
 			"name": "Devstral 2 2512",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61578,7 +61578,7 @@
 		"mistralai/devstral-medium": {
 			"id": "mistralai/devstral-medium",
 			"name": "Devstral Medium",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61597,7 +61597,7 @@
 		"mistralai/devstral-small": {
 			"id": "mistralai/devstral-small",
 			"name": "Devstral Small 1.1",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61616,7 +61616,7 @@
 		"mistralai/ministral-14b-2512": {
 			"id": "mistralai/ministral-14b-2512",
 			"name": "Ministral 3 14B 2512",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61636,7 +61636,7 @@
 		"mistralai/ministral-3b-2512": {
 			"id": "mistralai/ministral-3b-2512",
 			"name": "Ministral 3 3B 2512",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61656,7 +61656,7 @@
 		"mistralai/ministral-8b-2512": {
 			"id": "mistralai/ministral-8b-2512",
 			"name": "Ministral 3 8B 2512",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61676,7 +61676,7 @@
 		"mistralai/mistral-large": {
 			"id": "mistralai/mistral-large",
 			"name": "Mistral Large",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61695,7 +61695,7 @@
 		"mistralai/mistral-large-2407": {
 			"id": "mistralai/mistral-large-2407",
 			"name": "Mistral Large 2407",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61714,7 +61714,7 @@
 		"mistralai/mistral-large-2411": {
 			"id": "mistralai/mistral-large-2411",
 			"name": "Mistral Large 2411",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61733,7 +61733,7 @@
 		"mistralai/mistral-large-2512": {
 			"id": "mistralai/mistral-large-2512",
 			"name": "Mistral Large 3 2512",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61753,7 +61753,7 @@
 		"mistralai/mistral-medium-3": {
 			"id": "mistralai/mistral-medium-3",
 			"name": "Mistral Medium 3",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61773,7 +61773,7 @@
 		"mistralai/mistral-medium-3-5": {
 			"id": "mistralai/mistral-medium-3-5",
 			"name": "Mistral Medium 3.5",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -61802,7 +61802,7 @@
 		"mistralai/mistral-medium-3.1": {
 			"id": "mistralai/mistral-medium-3.1",
 			"name": "Mistral Medium 3.1",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61822,7 +61822,7 @@
 		"mistralai/mistral-nemo": {
 			"id": "mistralai/mistral-nemo",
 			"name": "Mistral Nemo",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61841,7 +61841,7 @@
 		"mistralai/mistral-saba": {
 			"id": "mistralai/mistral-saba",
 			"name": "Saba",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61860,7 +61860,7 @@
 		"mistralai/mistral-small-24b-instruct-2501": {
 			"id": "mistralai/mistral-small-24b-instruct-2501",
 			"name": "Mistral Small 3",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61879,7 +61879,7 @@
 		"mistralai/mistral-small-2603": {
 			"id": "mistralai/mistral-small-2603",
 			"name": "Mistral Small 4",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -61908,7 +61908,7 @@
 		"mistralai/mistral-small-3.1-24b-instruct": {
 			"id": "mistralai/mistral-small-3.1-24b-instruct",
 			"name": "Mistral Small 3.1 24B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61928,7 +61928,7 @@
 		"mistralai/mistral-small-3.1-24b-instruct:free": {
 			"id": "mistralai/mistral-small-3.1-24b-instruct:free",
 			"name": "Mistral Small 3.1 24B (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61948,7 +61948,7 @@
 		"mistralai/mistral-small-3.2-24b-instruct": {
 			"id": "mistralai/mistral-small-3.2-24b-instruct",
 			"name": "Mistral Small 3.2 24B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61968,7 +61968,7 @@
 		"mistralai/mistral-small-creative": {
 			"id": "mistralai/mistral-small-creative",
 			"name": "Mistral Small Creative",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61987,7 +61987,7 @@
 		"mistralai/mixtral-8x22b-instruct": {
 			"id": "mistralai/mixtral-8x22b-instruct",
 			"name": "Mixtral 8x22B Instruct",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62006,7 +62006,7 @@
 		"mistralai/mixtral-8x7b-instruct": {
 			"id": "mistralai/mixtral-8x7b-instruct",
 			"name": "Mixtral 8x7B Instruct",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62025,7 +62025,7 @@
 		"mistralai/pixtral-large-2411": {
 			"id": "mistralai/pixtral-large-2411",
 			"name": "Pixtral Large 2411",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62045,7 +62045,7 @@
 		"mistralai/voxtral-small-24b-2507": {
 			"id": "mistralai/voxtral-small-24b-2507",
 			"name": "Voxtral Small 24B 2507",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62064,7 +62064,7 @@
 		"moonshotai/kimi-k2": {
 			"id": "moonshotai/kimi-k2",
 			"name": "Kimi K2 0711",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62083,7 +62083,7 @@
 		"moonshotai/kimi-k2-0905": {
 			"id": "moonshotai/kimi-k2-0905",
 			"name": "Kimi K2 0905",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62102,7 +62102,7 @@
 		"moonshotai/kimi-k2-0905:exacto": {
 			"id": "moonshotai/kimi-k2-0905:exacto",
 			"name": "Kimi K2 0905 (exacto)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62121,7 +62121,7 @@
 		"moonshotai/kimi-k2-thinking": {
 			"id": "moonshotai/kimi-k2-thinking",
 			"name": "Kimi K2 Thinking",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -62150,7 +62150,7 @@
 		"moonshotai/kimi-k2.5": {
 			"id": "moonshotai/kimi-k2.5",
 			"name": "Kimi K2.5",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -62179,7 +62179,7 @@
 		"moonshotai/kimi-k2.6": {
 			"id": "moonshotai/kimi-k2.6",
 			"name": "Kimi K2.6",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -62208,7 +62208,7 @@
 		"moonshotai/kimi-k2.6:free": {
 			"id": "moonshotai/kimi-k2.6:free",
 			"name": "Kimi K2.6 (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -62237,7 +62237,7 @@
 		"moonshotai/kimi-k2.7-code": {
 			"id": "moonshotai/kimi-k2.7-code",
 			"name": "Kimi K2.7 Code",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -62266,7 +62266,7 @@
 		"nex-agi/deepseek-v3.1-nex-n1": {
 			"id": "nex-agi/deepseek-v3.1-nex-n1",
 			"name": "DeepSeek V3.1 Nex N1",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62285,7 +62285,7 @@
 		"nex-agi/nex-n2-pro:free": {
 			"id": "nex-agi/nex-n2-pro:free",
 			"name": "Nex-N2-Pro (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -62314,7 +62314,7 @@
 		"nousresearch/deephermes-3-mistral-24b-preview": {
 			"id": "nousresearch/deephermes-3-mistral-24b-preview",
 			"name": "DeepHermes 3 Mistral 24B Preview",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -62342,7 +62342,7 @@
 		"nousresearch/hermes-4-70b": {
 			"id": "nousresearch/hermes-4-70b",
 			"name": "Hermes 4 70B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -62370,7 +62370,7 @@
 		"nvidia/llama-3.1-nemotron-70b-instruct": {
 			"id": "nvidia/llama-3.1-nemotron-70b-instruct",
 			"name": "Llama 3.1 Nemotron 70b Instruct",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62389,7 +62389,7 @@
 		"nvidia/llama-3.3-nemotron-super-49b-v1.5": {
 			"id": "nvidia/llama-3.3-nemotron-super-49b-v1.5",
 			"name": "Llama 3.3 Nemotron Super 49B V1.5",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -62417,7 +62417,7 @@
 		"nvidia/nemotron-3-nano-30b-a3b": {
 			"id": "nvidia/nemotron-3-nano-30b-a3b",
 			"name": "Nemotron 3 Nano 30B A3B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -62445,7 +62445,7 @@
 		"nvidia/nemotron-3-nano-30b-a3b:free": {
 			"id": "nvidia/nemotron-3-nano-30b-a3b:free",
 			"name": "Nemotron 3 Nano 30B A3B (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -62473,7 +62473,7 @@
 		"nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free": {
 			"id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
 			"name": "Nemotron 3 Nano Omni (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -62503,7 +62503,7 @@
 		"nvidia/nemotron-3-super-120b-a12b": {
 			"id": "nvidia/nemotron-3-super-120b-a12b",
 			"name": "Nemotron 3 Super",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -62531,7 +62531,7 @@
 		"nvidia/nemotron-3-super-120b-a12b:free": {
 			"id": "nvidia/nemotron-3-super-120b-a12b:free",
 			"name": "Nemotron 3 Super (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -62559,7 +62559,7 @@
 		"nvidia/nemotron-3-ultra-550b-a55b": {
 			"id": "nvidia/nemotron-3-ultra-550b-a55b",
 			"name": "Nemotron 3 Ultra 550B A55B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -62587,7 +62587,7 @@
 		"nvidia/nemotron-3-ultra-550b-a55b:free": {
 			"id": "nvidia/nemotron-3-ultra-550b-a55b:free",
 			"name": "Nemotron 3 Ultra (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -62615,7 +62615,7 @@
 		"nvidia/nemotron-nano-12b-v2-vl:free": {
 			"id": "nvidia/nemotron-nano-12b-v2-vl:free",
 			"name": "Nemotron Nano 12B 2 VL (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -62644,7 +62644,7 @@
 		"nvidia/nemotron-nano-9b-v2": {
 			"id": "nvidia/nemotron-nano-9b-v2",
 			"name": "Nemotron Nano 9B V2",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -62672,7 +62672,7 @@
 		"nvidia/nemotron-nano-9b-v2:free": {
 			"id": "nvidia/nemotron-nano-9b-v2:free",
 			"name": "Nemotron Nano 9B V2 (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -62700,7 +62700,7 @@
 		"openai/gpt-3.5-turbo": {
 			"id": "openai/gpt-3.5-turbo",
 			"name": "GPT-3.5 Turbo",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62719,7 +62719,7 @@
 		"openai/gpt-3.5-turbo-0613": {
 			"id": "openai/gpt-3.5-turbo-0613",
 			"name": "GPT-3.5 Turbo (older v0613)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62738,7 +62738,7 @@
 		"openai/gpt-3.5-turbo-16k": {
 			"id": "openai/gpt-3.5-turbo-16k",
 			"name": "GPT-3.5 Turbo 16k",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62757,7 +62757,7 @@
 		"openai/gpt-4": {
 			"id": "openai/gpt-4",
 			"name": "GPT-4",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62776,7 +62776,7 @@
 		"openai/gpt-4-0314": {
 			"id": "openai/gpt-4-0314",
 			"name": "GPT-4 (older v0314)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62795,7 +62795,7 @@
 		"openai/gpt-4-1106-preview": {
 			"id": "openai/gpt-4-1106-preview",
 			"name": "GPT-4 Turbo (older v1106)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62814,7 +62814,7 @@
 		"openai/gpt-4-turbo": {
 			"id": "openai/gpt-4-turbo",
 			"name": "GPT-4 Turbo",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62834,7 +62834,7 @@
 		"openai/gpt-4-turbo-preview": {
 			"id": "openai/gpt-4-turbo-preview",
 			"name": "GPT-4 Turbo Preview",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62853,7 +62853,7 @@
 		"openai/gpt-4.1": {
 			"id": "openai/gpt-4.1",
 			"name": "GPT-4.1",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62873,7 +62873,7 @@
 		"openai/gpt-4.1-mini": {
 			"id": "openai/gpt-4.1-mini",
 			"name": "GPT-4.1 Mini",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62893,7 +62893,7 @@
 		"openai/gpt-4.1-nano": {
 			"id": "openai/gpt-4.1-nano",
 			"name": "GPT-4.1 Nano",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62913,7 +62913,7 @@
 		"openai/gpt-4o": {
 			"id": "openai/gpt-4o",
 			"name": "GPT-4o",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62933,7 +62933,7 @@
 		"openai/gpt-4o-2024-05-13": {
 			"id": "openai/gpt-4o-2024-05-13",
 			"name": "GPT-4o (2024-05-13)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62953,7 +62953,7 @@
 		"openai/gpt-4o-2024-08-06": {
 			"id": "openai/gpt-4o-2024-08-06",
 			"name": "GPT-4o (2024-08-06)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62973,7 +62973,7 @@
 		"openai/gpt-4o-2024-11-20": {
 			"id": "openai/gpt-4o-2024-11-20",
 			"name": "GPT-4o (2024-11-20)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62993,7 +62993,7 @@
 		"openai/gpt-4o-audio-preview": {
 			"id": "openai/gpt-4o-audio-preview",
 			"name": "GPT-4o Audio",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -63012,7 +63012,7 @@
 		"openai/gpt-4o-mini": {
 			"id": "openai/gpt-4o-mini",
 			"name": "GPT-4o mini",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -63032,7 +63032,7 @@
 		"openai/gpt-4o-mini-2024-07-18": {
 			"id": "openai/gpt-4o-mini-2024-07-18",
 			"name": "GPT-4o-mini (2024-07-18)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -63052,7 +63052,7 @@
 		"openai/gpt-4o:extended": {
 			"id": "openai/gpt-4o:extended",
 			"name": "GPT-4o (extended)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -63072,7 +63072,7 @@
 		"openai/gpt-5": {
 			"id": "openai/gpt-5",
 			"name": "GPT-5",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -63101,7 +63101,7 @@
 		"openai/gpt-5-codex": {
 			"id": "openai/gpt-5-codex",
 			"name": "GPT-5 Codex",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -63130,7 +63130,7 @@
 		"openai/gpt-5-image": {
 			"id": "openai/gpt-5-image",
 			"name": "GPT-5 Image",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -63159,7 +63159,7 @@
 		"openai/gpt-5-image-mini": {
 			"id": "openai/gpt-5-image-mini",
 			"name": "GPT-5 Image Mini",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -63188,7 +63188,7 @@
 		"openai/gpt-5-mini": {
 			"id": "openai/gpt-5-mini",
 			"name": "GPT-5 Mini",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -63217,7 +63217,7 @@
 		"openai/gpt-5-nano": {
 			"id": "openai/gpt-5-nano",
 			"name": "GPT-5 Nano",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -63246,7 +63246,7 @@
 		"openai/gpt-5-pro": {
 			"id": "openai/gpt-5-pro",
 			"name": "GPT-5 Pro",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -63275,7 +63275,7 @@
 		"openai/gpt-5.1": {
 			"id": "openai/gpt-5.1",
 			"name": "GPT-5.1",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -63304,7 +63304,7 @@
 		"openai/gpt-5.1-chat": {
 			"id": "openai/gpt-5.1-chat",
 			"name": "GPT-5.1 Chat",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -63324,7 +63324,7 @@
 		"openai/gpt-5.1-codex": {
 			"id": "openai/gpt-5.1-codex",
 			"name": "GPT-5.1 Codex",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -63353,7 +63353,7 @@
 		"openai/gpt-5.1-codex-max": {
 			"id": "openai/gpt-5.1-codex-max",
 			"name": "GPT-5.1-Codex-Max",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -63382,7 +63382,7 @@
 		"openai/gpt-5.1-codex-mini": {
 			"id": "openai/gpt-5.1-codex-mini",
 			"name": "GPT-5.1-Codex-Mini",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -63409,7 +63409,7 @@
 		"openai/gpt-5.2": {
 			"id": "openai/gpt-5.2",
 			"name": "GPT-5.2",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -63438,7 +63438,7 @@
 		"openai/gpt-5.2-chat": {
 			"id": "openai/gpt-5.2-chat",
 			"name": "GPT-5.2 Chat",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -63458,7 +63458,7 @@
 		"openai/gpt-5.2-codex": {
 			"id": "openai/gpt-5.2-codex",
 			"name": "GPT-5.2 Codex",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -63487,7 +63487,7 @@
 		"openai/gpt-5.2-pro": {
 			"id": "openai/gpt-5.2-pro",
 			"name": "GPT-5.2 Pro",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -63516,7 +63516,7 @@
 		"openai/gpt-5.3-chat": {
 			"id": "openai/gpt-5.3-chat",
 			"name": "GPT-5.3 Chat",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": false,
@@ -63536,7 +63536,7 @@
 		"openai/gpt-5.3-codex": {
 			"id": "openai/gpt-5.3-codex",
 			"name": "GPT-5.3 Codex",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -63565,7 +63565,7 @@
 		"openai/gpt-5.4": {
 			"id": "openai/gpt-5.4",
 			"name": "GPT-5.4",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -63594,7 +63594,7 @@
 		"openai/gpt-5.4-mini": {
 			"id": "openai/gpt-5.4-mini",
 			"name": "GPT-5.4 Mini",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -63623,7 +63623,7 @@
 		"openai/gpt-5.4-nano": {
 			"id": "openai/gpt-5.4-nano",
 			"name": "GPT-5.4 Nano",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -63652,7 +63652,7 @@
 		"openai/gpt-5.4-pro": {
 			"id": "openai/gpt-5.4-pro",
 			"name": "GPT-5.4 Pro",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -63681,7 +63681,7 @@
 		"openai/gpt-5.5": {
 			"id": "openai/gpt-5.5",
 			"name": "GPT-5.5",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -63711,7 +63711,7 @@
 		"openai/gpt-5.5-pro": {
 			"id": "openai/gpt-5.5-pro",
 			"name": "GPT-5.5 Pro",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -63741,7 +63741,7 @@
 		"openai/gpt-audio": {
 			"id": "openai/gpt-audio",
 			"name": "GPT Audio",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": false,
@@ -63760,7 +63760,7 @@
 		"openai/gpt-audio-mini": {
 			"id": "openai/gpt-audio-mini",
 			"name": "GPT Audio Mini",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": false,
@@ -63779,7 +63779,7 @@
 		"openai/gpt-chat-latest": {
 			"id": "openai/gpt-chat-latest",
 			"name": "GPT Chat Latest",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -63808,7 +63808,7 @@
 		"openai/gpt-oss-120b": {
 			"id": "openai/gpt-oss-120b",
 			"name": "GPT OSS 120B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -63835,7 +63835,7 @@
 		"openai/gpt-oss-120b:exacto": {
 			"id": "openai/gpt-oss-120b:exacto",
 			"name": "gpt-oss-120b (exacto)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -63862,7 +63862,7 @@
 		"openai/gpt-oss-120b:free": {
 			"id": "openai/gpt-oss-120b:free",
 			"name": "gpt-oss-120b (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -63889,7 +63889,7 @@
 		"openai/gpt-oss-20b": {
 			"id": "openai/gpt-oss-20b",
 			"name": "GPT OSS 20B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -63916,7 +63916,7 @@
 		"openai/gpt-oss-20b:free": {
 			"id": "openai/gpt-oss-20b:free",
 			"name": "gpt-oss-20b (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -63943,7 +63943,7 @@
 		"openai/gpt-oss-safeguard-20b": {
 			"id": "openai/gpt-oss-safeguard-20b",
 			"name": "Safety GPT OSS 20B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -63970,7 +63970,7 @@
 		"openai/o1": {
 			"id": "openai/o1",
 			"name": "o1",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -64000,7 +64000,7 @@
 		"openai/o3": {
 			"id": "openai/o3",
 			"name": "o3",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -64030,7 +64030,7 @@
 		"openai/o3-deep-research": {
 			"id": "openai/o3-deep-research",
 			"name": "o3 Deep Research",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -64060,7 +64060,7 @@
 		"openai/o3-mini": {
 			"id": "openai/o3-mini",
 			"name": "o3-mini",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -64089,7 +64089,7 @@
 		"openai/o3-mini-high": {
 			"id": "openai/o3-mini-high",
 			"name": "o3 Mini High",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -64108,7 +64108,7 @@
 		"openai/o3-pro": {
 			"id": "openai/o3-pro",
 			"name": "o3-pro",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -64138,7 +64138,7 @@
 		"openai/o4-mini": {
 			"id": "openai/o4-mini",
 			"name": "o4-mini",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -64168,7 +64168,7 @@
 		"openai/o4-mini-deep-research": {
 			"id": "openai/o4-mini-deep-research",
 			"name": "o4 Mini Deep Research",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -64198,7 +64198,7 @@
 		"openai/o4-mini-high": {
 			"id": "openai/o4-mini-high",
 			"name": "o4 Mini High",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -64228,7 +64228,7 @@
 		"openrouter/aurora-alpha": {
 			"id": "openrouter/aurora-alpha",
 			"name": "Aurora Alpha",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -64256,7 +64256,7 @@
 		"openrouter/auto": {
 			"id": "openrouter/auto",
 			"name": "Auto Router",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -64285,7 +64285,7 @@
 		"openrouter/elephant-alpha": {
 			"id": "openrouter/elephant-alpha",
 			"name": "Elephant",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": false,
@@ -64304,7 +64304,7 @@
 		"openrouter/free": {
 			"id": "openrouter/free",
 			"name": "Free Models Router",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -64333,7 +64333,7 @@
 		"openrouter/healer-alpha": {
 			"id": "openrouter/healer-alpha",
 			"name": "Healer Alpha",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -64362,7 +64362,7 @@
 		"openrouter/hunter-alpha": {
 			"id": "openrouter/hunter-alpha",
 			"name": "Hunter Alpha",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -64390,7 +64390,7 @@
 		"openrouter/owl-alpha": {
 			"id": "openrouter/owl-alpha",
 			"name": "Owl Alpha",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -64421,7 +64421,7 @@
 		"poolside/laguna-m.1:free": {
 			"id": "poolside/laguna-m.1:free",
 			"name": "Laguna M.1 (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -64449,7 +64449,7 @@
 		"poolside/laguna-xs.2:free": {
 			"id": "poolside/laguna-xs.2:free",
 			"name": "Laguna XS.2 (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -64477,7 +64477,7 @@
 		"prime-intellect/intellect-3": {
 			"id": "prime-intellect/intellect-3",
 			"name": "INTELLECT-3",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -64505,7 +64505,7 @@
 		"qwen/qwen-2.5-72b-instruct": {
 			"id": "qwen/qwen-2.5-72b-instruct",
 			"name": "Qwen2.5 72B Instruct",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -64524,7 +64524,7 @@
 		"qwen/qwen-2.5-7b-instruct": {
 			"id": "qwen/qwen-2.5-7b-instruct",
 			"name": "Qwen2.5 7B Instruct",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -64543,7 +64543,7 @@
 		"qwen/qwen-max": {
 			"id": "qwen/qwen-max",
 			"name": "Qwen-Max",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -64562,7 +64562,7 @@
 		"qwen/qwen-plus": {
 			"id": "qwen/qwen-plus",
 			"name": "Qwen-Plus",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -64581,7 +64581,7 @@
 		"qwen/qwen-plus-2025-07-28": {
 			"id": "qwen/qwen-plus-2025-07-28",
 			"name": "Qwen Plus 0728",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -64600,7 +64600,7 @@
 		"qwen/qwen-plus-2025-07-28:thinking": {
 			"id": "qwen/qwen-plus-2025-07-28:thinking",
 			"name": "Qwen Plus 0728 (thinking)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -64628,7 +64628,7 @@
 		"qwen/qwen-turbo": {
 			"id": "qwen/qwen-turbo",
 			"name": "Qwen-Turbo",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -64647,7 +64647,7 @@
 		"qwen/qwen-vl-max": {
 			"id": "qwen/qwen-vl-max",
 			"name": "Qwen VL Max",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -64667,7 +64667,7 @@
 		"qwen/qwen3-14b": {
 			"id": "qwen/qwen3-14b",
 			"name": "Qwen3 14B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -64695,7 +64695,7 @@
 		"qwen/qwen3-235b-a22b": {
 			"id": "qwen/qwen3-235b-a22b",
 			"name": "Qwen3 235B A22B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -64723,7 +64723,7 @@
 		"qwen/qwen3-235b-a22b-2507": {
 			"id": "qwen/qwen3-235b-a22b-2507",
 			"name": "Qwen3 235B A22B Instruct 2507",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -64751,7 +64751,7 @@
 		"qwen/qwen3-235b-a22b-thinking-2507": {
 			"id": "qwen/qwen3-235b-a22b-thinking-2507",
 			"name": "Qwen3 235B A22B Thinking 2507",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -64780,7 +64780,7 @@
 		"qwen/qwen3-30b-a3b": {
 			"id": "qwen/qwen3-30b-a3b",
 			"name": "Qwen3 30B A3B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -64808,7 +64808,7 @@
 		"qwen/qwen3-30b-a3b-instruct-2507": {
 			"id": "qwen/qwen3-30b-a3b-instruct-2507",
 			"name": "Qwen3 30B A3B Instruct 2507",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -64827,7 +64827,7 @@
 		"qwen/qwen3-30b-a3b-thinking-2507": {
 			"id": "qwen/qwen3-30b-a3b-thinking-2507",
 			"name": "Qwen3 30B A3B Thinking 2507",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -64856,7 +64856,7 @@
 		"qwen/qwen3-32b": {
 			"id": "qwen/qwen3-32b",
 			"name": "Qwen3-32B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -64884,7 +64884,7 @@
 		"qwen/qwen3-4b": {
 			"id": "qwen/qwen3-4b",
 			"name": "Qwen3 4B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -64912,7 +64912,7 @@
 		"qwen/qwen3-4b:free": {
 			"id": "qwen/qwen3-4b:free",
 			"name": "Qwen3 4B (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -64940,7 +64940,7 @@
 		"qwen/qwen3-8b": {
 			"id": "qwen/qwen3-8b",
 			"name": "Qwen3 8B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -64968,7 +64968,7 @@
 		"qwen/qwen3-coder": {
 			"id": "qwen/qwen3-coder",
 			"name": "Qwen3 Coder 480B A35B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -64987,7 +64987,7 @@
 		"qwen/qwen3-coder-30b-a3b-instruct": {
 			"id": "qwen/qwen3-coder-30b-a3b-instruct",
 			"name": "Qwen3 Coder 30B A3B Instruct",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -65006,7 +65006,7 @@
 		"qwen/qwen3-coder-flash": {
 			"id": "qwen/qwen3-coder-flash",
 			"name": "Qwen3 Coder Flash",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -65025,7 +65025,7 @@
 		"qwen/qwen3-coder-next": {
 			"id": "qwen/qwen3-coder-next",
 			"name": "Qwen3 Coder Next",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -65044,7 +65044,7 @@
 		"qwen/qwen3-coder-plus": {
 			"id": "qwen/qwen3-coder-plus",
 			"name": "Qwen3 Coder Plus",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -65063,7 +65063,7 @@
 		"qwen/qwen3-coder:exacto": {
 			"id": "qwen/qwen3-coder:exacto",
 			"name": "Qwen3 Coder 480B A35B (exacto)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -65082,7 +65082,7 @@
 		"qwen/qwen3-coder:free": {
 			"id": "qwen/qwen3-coder:free",
 			"name": "Qwen3 Coder 480B A35B (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -65101,7 +65101,7 @@
 		"qwen/qwen3-max": {
 			"id": "qwen/qwen3-max",
 			"name": "Qwen3 Max",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -65120,7 +65120,7 @@
 		"qwen/qwen3-max-thinking": {
 			"id": "qwen/qwen3-max-thinking",
 			"name": "Qwen3 Max Thinking",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -65149,7 +65149,7 @@
 		"qwen/qwen3-next-80b-a3b-instruct": {
 			"id": "qwen/qwen3-next-80b-a3b-instruct",
 			"name": "Qwen3-Next-80B-A3B-Instruct",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -65168,7 +65168,7 @@
 		"qwen/qwen3-next-80b-a3b-instruct:free": {
 			"id": "qwen/qwen3-next-80b-a3b-instruct:free",
 			"name": "Qwen3 Next 80B A3B Instruct (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -65187,7 +65187,7 @@
 		"qwen/qwen3-next-80b-a3b-thinking": {
 			"id": "qwen/qwen3-next-80b-a3b-thinking",
 			"name": "Qwen3 Next 80B A3B Thinking",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -65216,7 +65216,7 @@
 		"qwen/qwen3-vl-235b-a22b-instruct": {
 			"id": "qwen/qwen3-vl-235b-a22b-instruct",
 			"name": "Qwen3 VL 235B A22B Instruct",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -65236,7 +65236,7 @@
 		"qwen/qwen3-vl-235b-a22b-thinking": {
 			"id": "qwen/qwen3-vl-235b-a22b-thinking",
 			"name": "Qwen3 VL 235B A22B Thinking",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -65266,7 +65266,7 @@
 		"qwen/qwen3-vl-30b-a3b-instruct": {
 			"id": "qwen/qwen3-vl-30b-a3b-instruct",
 			"name": "Qwen3 VL 30B A3B Instruct",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -65286,7 +65286,7 @@
 		"qwen/qwen3-vl-30b-a3b-thinking": {
 			"id": "qwen/qwen3-vl-30b-a3b-thinking",
 			"name": "Qwen3 VL 30B A3B Thinking",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -65316,7 +65316,7 @@
 		"qwen/qwen3-vl-32b-instruct": {
 			"id": "qwen/qwen3-vl-32b-instruct",
 			"name": "Qwen3 VL 32B Instruct",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -65336,7 +65336,7 @@
 		"qwen/qwen3-vl-8b-instruct": {
 			"id": "qwen/qwen3-vl-8b-instruct",
 			"name": "Qwen3 VL 8B Instruct",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -65356,7 +65356,7 @@
 		"qwen/qwen3-vl-8b-thinking": {
 			"id": "qwen/qwen3-vl-8b-thinking",
 			"name": "Qwen3 VL 8B Thinking",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -65386,7 +65386,7 @@
 		"qwen/qwen3.5-122b-a10b": {
 			"id": "qwen/qwen3.5-122b-a10b",
 			"name": "Qwen3.5 122B-A10B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -65415,7 +65415,7 @@
 		"qwen/qwen3.5-27b": {
 			"id": "qwen/qwen3.5-27b",
 			"name": "Qwen3.5-27B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -65444,7 +65444,7 @@
 		"qwen/qwen3.5-35b-a3b": {
 			"id": "qwen/qwen3.5-35b-a3b",
 			"name": "Qwen3.5-35B-A3B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -65473,7 +65473,7 @@
 		"qwen/qwen3.5-397b-a17b": {
 			"id": "qwen/qwen3.5-397b-a17b",
 			"name": "Qwen3.5 397B A17B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -65502,7 +65502,7 @@
 		"qwen/qwen3.5-9b": {
 			"id": "qwen/qwen3.5-9b",
 			"name": "Qwen3.5-9B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -65531,7 +65531,7 @@
 		"qwen/qwen3.5-flash-02-23": {
 			"id": "qwen/qwen3.5-flash-02-23",
 			"name": "Qwen3.5-Flash",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -65560,7 +65560,7 @@
 		"qwen/qwen3.5-plus-02-15": {
 			"id": "qwen/qwen3.5-plus-02-15",
 			"name": "Qwen3.5 Plus 2026-02-15",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -65589,7 +65589,7 @@
 		"qwen/qwen3.5-plus-20260420": {
 			"id": "qwen/qwen3.5-plus-20260420",
 			"name": "Qwen3.5 Plus 2026-04-20",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -65618,7 +65618,7 @@
 		"qwen/qwen3.6-27b": {
 			"id": "qwen/qwen3.6-27b",
 			"name": "Qwen3.6 27B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -65647,7 +65647,7 @@
 		"qwen/qwen3.6-35b-a3b": {
 			"id": "qwen/qwen3.6-35b-a3b",
 			"name": "Qwen3.6 35B A3B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -65676,7 +65676,7 @@
 		"qwen/qwen3.6-flash": {
 			"id": "qwen/qwen3.6-flash",
 			"name": "Qwen3.6 Flash",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -65705,7 +65705,7 @@
 		"qwen/qwen3.6-max-preview": {
 			"id": "qwen/qwen3.6-max-preview",
 			"name": "Qwen3.6 Max Preview",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -65733,7 +65733,7 @@
 		"qwen/qwen3.6-plus": {
 			"id": "qwen/qwen3.6-plus",
 			"name": "Qwen3.6 Plus",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -65762,7 +65762,7 @@
 		"qwen/qwen3.6-plus-preview:free": {
 			"id": "qwen/qwen3.6-plus-preview:free",
 			"name": "Qwen3.6 Plus Preview (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -65790,7 +65790,7 @@
 		"qwen/qwen3.6-plus:free": {
 			"id": "qwen/qwen3.6-plus:free",
 			"name": "Qwen3.6 Plus (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -65819,7 +65819,7 @@
 		"qwen/qwen3.7-max": {
 			"id": "qwen/qwen3.7-max",
 			"name": "Qwen3.7 Max",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -65847,7 +65847,7 @@
 		"qwen/qwen3.7-plus": {
 			"id": "qwen/qwen3.7-plus",
 			"name": "Qwen3.7 Plus",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -65876,7 +65876,7 @@
 		"qwen/qwq-32b": {
 			"id": "qwen/qwq-32b",
 			"name": "QwQ 32B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -65904,7 +65904,7 @@
 		"reka/reka-edge": {
 			"id": "reka/reka-edge",
 			"name": "Reka Edge",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": false,
@@ -65924,7 +65924,7 @@
 		"rekaai/reka-edge": {
 			"id": "rekaai/reka-edge",
 			"name": "Reka Edge",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": false,
@@ -65944,7 +65944,7 @@
 		"relace/relace-search": {
 			"id": "relace/relace-search",
 			"name": "Relace Search",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -65963,7 +65963,7 @@
 		"sao10k/l3-euryale-70b": {
 			"id": "sao10k/l3-euryale-70b",
 			"name": "Llama 3 Euryale 70B v2.1",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -65982,7 +65982,7 @@
 		"sao10k/l3.1-euryale-70b": {
 			"id": "sao10k/l3.1-euryale-70b",
 			"name": "Llama 3.1 Euryale 70B v2.2",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -66001,7 +66001,7 @@
 		"stepfun/step-3.5-flash": {
 			"id": "stepfun/step-3.5-flash",
 			"name": "Step 3.5 Flash",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -66032,7 +66032,7 @@
 		"stepfun/step-3.5-flash:free": {
 			"id": "stepfun/step-3.5-flash:free",
 			"name": "Step 3.5 Flash (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -66063,7 +66063,7 @@
 		"stepfun/step-3.7-flash": {
 			"id": "stepfun/step-3.7-flash",
 			"name": "Step 3.7 Flash",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -66095,7 +66095,7 @@
 		"tencent/hy3-preview": {
 			"id": "tencent/hy3-preview",
 			"name": "Hy3 Preview",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -66123,7 +66123,7 @@
 		"tencent/hy3-preview:free": {
 			"id": "tencent/hy3-preview:free",
 			"name": "Hy3 preview (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -66151,7 +66151,7 @@
 		"thedrummer/rocinante-12b": {
 			"id": "thedrummer/rocinante-12b",
 			"name": "Rocinante 12B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -66170,7 +66170,7 @@
 		"thedrummer/unslopnemo-12b": {
 			"id": "thedrummer/unslopnemo-12b",
 			"name": "UnslopNemo 12B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -66189,7 +66189,7 @@
 		"tngtech/deepseek-r1t2-chimera": {
 			"id": "tngtech/deepseek-r1t2-chimera",
 			"name": "DeepSeek R1T2 Chimera",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -66223,7 +66223,7 @@
 		"tngtech/tng-r1t-chimera": {
 			"id": "tngtech/tng-r1t-chimera",
 			"name": "R1T Chimera",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -66251,7 +66251,7 @@
 		"upstage/solar-pro-3": {
 			"id": "upstage/solar-pro-3",
 			"name": "Solar Pro 3",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -66279,7 +66279,7 @@
 		"upstage/solar-pro-3:free": {
 			"id": "upstage/solar-pro-3:free",
 			"name": "Solar Pro 3 (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -66307,7 +66307,7 @@
 		"x-ai/grok-3": {
 			"id": "x-ai/grok-3",
 			"name": "Grok 3",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -66326,7 +66326,7 @@
 		"x-ai/grok-3-beta": {
 			"id": "x-ai/grok-3-beta",
 			"name": "Grok 3 Beta",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -66345,7 +66345,7 @@
 		"x-ai/grok-3-mini": {
 			"id": "x-ai/grok-3-mini",
 			"name": "Grok 3 Mini",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -66373,7 +66373,7 @@
 		"x-ai/grok-3-mini-beta": {
 			"id": "x-ai/grok-3-mini-beta",
 			"name": "Grok 3 Mini Beta",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -66401,7 +66401,7 @@
 		"x-ai/grok-4": {
 			"id": "x-ai/grok-4",
 			"name": "Grok 4",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -66430,7 +66430,7 @@
 		"x-ai/grok-4-fast": {
 			"id": "x-ai/grok-4-fast",
 			"name": "Grok 4 Fast",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -66459,7 +66459,7 @@
 		"x-ai/grok-4.1-fast": {
 			"id": "x-ai/grok-4.1-fast",
 			"name": "Grok 4.1 Fast",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -66488,7 +66488,7 @@
 		"x-ai/grok-4.20": {
 			"id": "x-ai/grok-4.20",
 			"name": "Grok 4.20",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -66517,7 +66517,7 @@
 		"x-ai/grok-4.20-beta": {
 			"id": "x-ai/grok-4.20-beta",
 			"name": "Grok 4.20 Beta",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -66546,7 +66546,7 @@
 		"x-ai/grok-4.3": {
 			"id": "x-ai/grok-4.3",
 			"name": "Grok 4.3",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -66575,7 +66575,7 @@
 		"x-ai/grok-build-0.1": {
 			"id": "x-ai/grok-build-0.1",
 			"name": "Grok Build 0.1",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -66604,7 +66604,7 @@
 		"x-ai/grok-code-fast-1": {
 			"id": "x-ai/grok-code-fast-1",
 			"name": "Grok Code Fast 1",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -66632,7 +66632,7 @@
 		"xiaomi/mimo-v2-flash": {
 			"id": "xiaomi/mimo-v2-flash",
 			"name": "MiMo-V2-Flash",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -66660,7 +66660,7 @@
 		"xiaomi/mimo-v2-omni": {
 			"id": "xiaomi/mimo-v2-omni",
 			"name": "MiMo V2 Omni",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -66689,7 +66689,7 @@
 		"xiaomi/mimo-v2-pro": {
 			"id": "xiaomi/mimo-v2-pro",
 			"name": "MiMo-V2-Pro",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -66717,7 +66717,7 @@
 		"xiaomi/mimo-v2.5": {
 			"id": "xiaomi/mimo-v2.5",
 			"name": "MiMo-V2.5",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -66746,7 +66746,7 @@
 		"xiaomi/mimo-v2.5-pro": {
 			"id": "xiaomi/mimo-v2.5-pro",
 			"name": "MiMo V2.5 Pro",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -66774,7 +66774,7 @@
 		"z-ai/glm-4-32b": {
 			"id": "z-ai/glm-4-32b",
 			"name": "GLM 4 32B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -66793,7 +66793,7 @@
 		"z-ai/glm-4.5": {
 			"id": "z-ai/glm-4.5",
 			"name": "GLM 4.5",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -66821,7 +66821,7 @@
 		"z-ai/glm-4.5-air": {
 			"id": "z-ai/glm-4.5-air",
 			"name": "GLM 4.5 Air",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -66849,7 +66849,7 @@
 		"z-ai/glm-4.5-air:free": {
 			"id": "z-ai/glm-4.5-air:free",
 			"name": "GLM 4.5 Air (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -66877,7 +66877,7 @@
 		"z-ai/glm-4.5v": {
 			"id": "z-ai/glm-4.5v",
 			"name": "GLM 4.5V",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -66906,7 +66906,7 @@
 		"z-ai/glm-4.6": {
 			"id": "z-ai/glm-4.6",
 			"name": "GLM 4.6",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -66934,7 +66934,7 @@
 		"z-ai/glm-4.6:exacto": {
 			"id": "z-ai/glm-4.6:exacto",
 			"name": "GLM 4.6 (exacto)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -66962,7 +66962,7 @@
 		"z-ai/glm-4.6v": {
 			"id": "z-ai/glm-4.6v",
 			"name": "GLM 4.6V",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -66991,7 +66991,7 @@
 		"z-ai/glm-4.7": {
 			"id": "z-ai/glm-4.7",
 			"name": "GLM 4.7",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -67019,7 +67019,7 @@
 		"z-ai/glm-4.7-flash": {
 			"id": "z-ai/glm-4.7-flash",
 			"name": "GLM 4.7 Flash",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -67047,7 +67047,7 @@
 		"z-ai/glm-5": {
 			"id": "z-ai/glm-5",
 			"name": "GLM 5",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -67075,7 +67075,7 @@
 		"z-ai/glm-5-turbo": {
 			"id": "z-ai/glm-5-turbo",
 			"name": "GLM 5 Turbo",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": false,
@@ -67094,7 +67094,7 @@
 		"z-ai/glm-5.1": {
 			"id": "z-ai/glm-5.1",
 			"name": "GLM 5.1",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -67122,7 +67122,7 @@
 		"z-ai/glm-5.2": {
 			"id": "z-ai/glm-5.2",
 			"name": "GLM 5.2",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -67150,7 +67150,7 @@
 		"z-ai/glm-5v-turbo": {
 			"id": "z-ai/glm-5v-turbo",
 			"name": "GLM 5V Turbo",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": false,

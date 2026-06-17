@@ -13,6 +13,7 @@ import {
 	getGeminiCliHeaders,
 } from "@oh-my-pi/pi-catalog/wire/gemini-headers";
 import { extractHttpStatusFromError, fetchWithRetry, readSseJson } from "@oh-my-pi/pi-utils";
+import { z } from "zod/v4";
 import { ProviderHttpError } from "../errors";
 import type {
 	Api,
@@ -185,16 +186,22 @@ function extractErrorMessage(errorText: string): string {
 	return errorText;
 }
 
-interface GeminiCliApiKeyPayload {
-	token?: unknown;
-	projectId?: unknown;
-	project_id?: unknown;
-	refreshToken?: unknown;
-	expiresAt?: unknown;
-	email?: unknown;
-	refresh?: unknown;
-	expires?: unknown;
-}
+const optionalCredentialString = z.string().optional().catch(undefined);
+
+const geminiCliCredentialsSchema = z
+	.object({
+		token: optionalCredentialString,
+		projectId: optionalCredentialString,
+		project_id: optionalCredentialString,
+		refreshToken: optionalCredentialString,
+		refresh: optionalCredentialString,
+		email: optionalCredentialString,
+		expiresAt: z.unknown().optional(),
+		expires: z.unknown().optional(),
+	})
+	.loose()
+	.catch({});
+
 interface ParsedGeminiCliCredentials {
 	accessToken: string;
 	projectId: string;
@@ -215,32 +222,22 @@ export function parseGeminiCliCredentials(apiKeyRaw: string): ParsedGeminiCliCre
 	const missingCredentialsMessage =
 		"Missing token or projectId in Google Cloud credentials. Use /login to re-authenticate.";
 
-	let parsed: GeminiCliApiKeyPayload;
+	let rawCredentials: unknown;
 	try {
-		parsed = JSON.parse(apiKeyRaw) as GeminiCliApiKeyPayload;
+		rawCredentials = JSON.parse(apiKeyRaw);
 	} catch {
 		throw new Error(invalidCredentialsMessage);
 	}
+	const parsed = geminiCliCredentialsSchema.parse(rawCredentials);
 
-	const projectId =
-		typeof parsed.projectId === "string"
-			? parsed.projectId
-			: typeof parsed.project_id === "string"
-				? parsed.project_id
-				: undefined;
-
-	if (typeof parsed.token !== "string" || typeof projectId !== "string") {
+	const projectId = parsed.projectId ?? parsed.project_id;
+	if (parsed.token === undefined || projectId === undefined) {
 		throw new Error(missingCredentialsMessage);
 	}
 
-	const refreshToken =
-		typeof parsed.refreshToken === "string"
-			? parsed.refreshToken
-			: typeof parsed.refresh === "string"
-				? parsed.refresh
-				: undefined;
+	const refreshToken = parsed.refreshToken ?? parsed.refresh;
 	const expiresAt = normalizeExpiryMs(parsed.expiresAt ?? parsed.expires);
-	const email = typeof parsed.email === "string" && parsed.email.length > 0 ? parsed.email : undefined;
+	const email = parsed.email && parsed.email.length > 0 ? parsed.email : undefined;
 
 	return {
 		accessToken: parsed.token,

@@ -40,6 +40,7 @@
 		"@bufbuild/protobuf": "catalog:",
 		"@oh-my-pi/pi-catalog": "catalog:",
 		"@oh-my-pi/pi-utils": "catalog:",
+		"arktype": "catalog:",
 		"partial-json": "catalog:",
 		"zod": "catalog:"
 	},

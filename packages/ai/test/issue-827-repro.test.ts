@@ -111,7 +111,7 @@ describe("issue #827 — kimi reasoning models drop reasoning under forced tool_
 		})) as CompletionsBody;
 
 		expect(body.tool_choice).toMatchObject({ type: "function", function: { name: "echo" } });
-		expect(body.reasoning).toBeUndefined();
+		expect(body.reasoning).toEqual({ enabled: false });
 		expect(body.reasoning_effort).toBeUndefined();
 	});
 	it("sends explicit thinking disabled for Moonshot Kimi K2.6 when a named tool is forced", async () => {

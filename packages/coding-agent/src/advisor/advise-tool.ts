@@ -1,4 +1,11 @@
-import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import type {
+	AgentIdentity,
+	AgentTelemetryConfig,
+	AgentTool,
+	AgentToolContext,
+	AgentToolResult,
+	AgentToolUpdateCallback,
+} from "@oh-my-pi/pi-agent-core";
 import { escapeXmlText } from "@oh-my-pi/pi-utils";
 import { z } from "zod/v4";
 import adviseDescription from "../prompts/advisor/advise-tool.md" with { type: "text" };
@@ -107,6 +114,25 @@ export function resolveAdvisorDeliveryChannel(opts: {
 	if (opts.autoResumeSuppressed && (opts.aborting || !opts.streaming)) return "preserve";
 	if (opts.interruptImmuneTurnActive) return "aside";
 	return "steer";
+}
+
+/**
+ * Derive the advisor loop's telemetry from the primary session's config so the
+ * advisor model's GenAI spans and usage/cost hooks (onChatUsage, onCostDelta,
+ * costEstimator) fire under the same pipeline as every other model call —
+ * stamped with the advisor's own agent identity. `conversationId` is cleared so
+ * the advisor loop falls back to its own `-advisor` session id for
+ * `gen_ai.conversation.id` instead of inheriting the primary's conversation.
+ *
+ * Returns undefined when the primary has no telemetry (instrumentation off), so
+ * the advisor `Agent` stays a zero-overhead no-op as well.
+ */
+export function deriveAdvisorTelemetry(
+	primaryTelemetry: AgentTelemetryConfig | undefined,
+	identity: AgentIdentity,
+): AgentTelemetryConfig | undefined {
+	if (!primaryTelemetry) return undefined;
+	return { ...primaryTelemetry, agent: identity, conversationId: undefined };
 }
 
 /**

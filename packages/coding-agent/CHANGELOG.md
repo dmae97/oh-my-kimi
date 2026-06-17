@@ -1,23 +1,31 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
+- Added support for OpenRouter fallback in Perplexity web search when direct Perplexity API keys fail or are unavailable
+- Added support for streaming the Perplexity Responses API (`/v1/responses`) via the `PI_PERPLEXITY_RESPONSES=1` environment variable
 - Added `omp ttsr` top-level CLI command to inspect and test Time-Traveling Stream Rules
 - Added `omp ttsr list` to enumerate all project/user-loaded TTSR rules with their conditions, scope, and source metadata
 - Added `omp ttsr test` to run snippets through the real TTSR matching pipeline with inline text, `--file <path>`, or stdin via `--file -`
 - Added `--json` output to `omp ttsr test` and `omp ttsr list` for machine-readable reporting
 - Added `--rule`, `--source`, `--tool`, `--path`, and `--verbose` options to `omp ttsr test` to control matching context and inspection details
+- Added `omp ttsr` subcommand for inspecting and testing Time-Traveling Stream Rules: `omp ttsr list` shows every TTSR-registered rule the current project/user config would load, and `omp ttsr test` feeds a snippet (inline, `--file`, or stdin) through the real TTSR matching pipeline (`TtsrManager.checkSnapshot`/`checkAstSnapshot`) and reports which rules would trigger. A positional that resolves to a file defaults to tool/edit context; `--source`, `--tool`, and `--path` override the inferred match context so glob/AST/scope-scoped rules evaluate the same way they do in a live session. `--rule` tests a single rule markdown file in isolation.
 - Added support for reading embedded PDF images via `read <pdf>:<image>.png` and listing available image members with `read <pdf>:`
+- Added a built-in `ts-no-inline-cast-access` TTSR rule that interrupts inline object-type assertions read immediately as a property (`(x as { y: T }).y`, including `?.` and bracket access), steering toward schema validation, `in`/`typeof` narrowing, or a validated named type
 
 ### Changed
 
+- Changed advisor model calls and overflow-compaction tasks to inherit and propagate primary telemetry spans, usage, and cost tracking
 - Changed PDF read output to replace `<!-- image: ... -->` placeholders with clickable `read <pdf>:<image>.png` handles, including line-range and multi-range reads
+- Changed the built-in `ts-no-any` rule to recommend a schema parse at trust boundaries and `in`-narrowing (instead of an inline `as`-cast) when reading fields off `unknown`
 
 ### Fixed
 
+- Fixed Perplexity web search to use shared OpenAI streaming transports while preserving streamed sources, citations, and related questions
 - Fixed `read <pdf>:<member>` errors for unknown PDF images to surface available extracted image names
+- Fixed puppeteer stealth scripts to use cached Reflect methods (`Reflect_get`, `Reflect_apply`) and `Reflect.apply` instead of live `Reflect`/`Function.prototype.apply` calls, preventing page tampering from leaking through proxy traps.
+- Fixed Perplexity API-key web search to use shared OpenAI streaming transports while preserving streamed sources and OpenRouter fallback.
 
 ### Security
 

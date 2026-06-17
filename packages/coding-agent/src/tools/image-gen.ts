@@ -1,6 +1,14 @@
 import * as os from "node:os";
 import * as path from "node:path";
-import { type ApiKey, type FetchImpl, getEnvApiKey, type Model, ProviderHttpError, withAuth } from "@oh-my-pi/pi-ai";
+import {
+	type ApiKey,
+	type FetchImpl,
+	getEnvApiKey,
+	getOpenRouterHeaders,
+	type Model,
+	ProviderHttpError,
+	withAuth,
+} from "@oh-my-pi/pi-ai";
 import {
 	CODEX_BASE_URL,
 	getCodexAccountId,
@@ -20,7 +28,6 @@ import {
 	untilAborted,
 } from "@oh-my-pi/pi-utils";
 import { z } from "zod/v4";
-import packageJson from "../../package.json" with { type: "json" };
 import { isAuthenticated, type ModelRegistry } from "../config/model-registry";
 import { settings } from "../config/settings";
 import type { CustomTool } from "../extensibility/custom-tools/types";
@@ -1407,9 +1414,7 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 							headers: {
 								"Content-Type": "application/json",
 								Authorization: `Bearer ${key}`,
-								"HTTP-Referer": "https://omp.sh/",
-								"X-OpenRouter-Title": "Oh-My-Pi",
-								"X-OpenRouter-Categories": "cli-agent",
+								...getOpenRouterHeaders(),
 							},
 							body: JSON.stringify(requestBody),
 							signal: requestSignal,

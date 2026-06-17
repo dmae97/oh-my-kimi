@@ -1,9 +1,38 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { type OpenAIResponsesOptions, streamOpenAIResponses } from "@oh-my-pi/pi-ai/providers/openai-responses";
+import { stream as streamModel } from "@oh-my-pi/pi-ai/stream";
 import type { Context, FetchImpl, Model, ProviderSessionState } from "@oh-my-pi/pi-ai/types";
+import { buildOpenAIResponsesCompat } from "@oh-my-pi/pi-catalog/compat/openai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 
 const model = getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">;
+const openRouterResponsesModel: Model<"openai-responses"> = {
+	...model,
+	id: "openai/gpt-5.5",
+	name: "OpenRouter GPT 5.5",
+	provider: "openrouter",
+	baseUrl: "https://openrouter.ai/api/v1",
+	compat: buildOpenAIResponsesCompat({
+		id: "openai/gpt-5.5",
+		name: "OpenRouter GPT 5.5",
+		provider: "openrouter",
+		baseUrl: "https://openrouter.ai/api/v1",
+	}),
+};
+const xaiOAuthResponsesModel: Model<"openai-responses"> = {
+	...model,
+	id: "grok-build",
+	name: "Grok Build",
+	provider: "xai-oauth",
+	baseUrl: "https://api.x.ai/v1",
+	compat: buildOpenAIResponsesCompat({
+		id: "grok-build",
+		name: "Grok Build",
+		provider: "xai-oauth",
+		baseUrl: "https://api.x.ai/v1",
+		reasoning: true,
+	}),
+};
 
 function createSseResponse(events: unknown[]): Response {
 	const payload = `${events.map(event => `data: ${JSON.stringify(event)}`).join("\n\n")}\n\n`;
@@ -19,15 +48,23 @@ function getHeader(headers: RequestInit["headers"], name: string): string | null
 
 async function captureOpenAIResponseHeaders(
 	options: OpenAIResponsesOptions,
-): Promise<{ sessionId: string | null; clientRequestId: string | null; body: Record<string, unknown> | null }> {
+	requestModel: Model<"openai-responses"> = model,
+): Promise<{
+	sessionId: string | null;
+	clientRequestId: string | null;
+	headers: Headers;
+	body: Record<string, unknown> | null;
+}> {
 	const captured = {
 		sessionId: null as string | null,
 		clientRequestId: null as string | null,
+		headers: new Headers(),
 		body: null as Record<string, unknown> | null,
 	};
 	const fetchMock: FetchImpl = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
 		captured.sessionId = getHeader(init?.headers, "session_id");
 		captured.clientRequestId = getHeader(init?.headers, "x-client-request-id");
+		captured.headers = new Headers(init?.headers);
 		captured.body = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : null;
 		return createSseResponse([
 			{
@@ -65,7 +102,72 @@ async function captureOpenAIResponseHeaders(
 		systemPrompt: ["stable system", "stable durable context"],
 		messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
 	};
-	const stream = streamOpenAIResponses(model, context, { apiKey: "test-key", ...options, fetch: fetchMock });
+	const stream = streamOpenAIResponses(requestModel, context, { apiKey: "test-key", ...options, fetch: fetchMock });
+
+	for await (const event of stream) {
+		if (event.type === "done" || event.type === "error") break;
+	}
+
+	return captured;
+}
+
+async function captureDispatchedOpenAIResponseHeaders(
+	options: OpenAIResponsesOptions,
+	requestModel: Model<"openai-responses">,
+): Promise<{
+	sessionId: string | null;
+	clientRequestId: string | null;
+	headers: Headers;
+	body: Record<string, unknown> | null;
+}> {
+	const captured = {
+		sessionId: null as string | null,
+		clientRequestId: null as string | null,
+		headers: new Headers(),
+		body: null as Record<string, unknown> | null,
+	};
+	const fetchMock: FetchImpl = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+		captured.sessionId = getHeader(init?.headers, "session_id");
+		captured.clientRequestId = getHeader(init?.headers, "x-client-request-id");
+		captured.headers = new Headers(init?.headers);
+		captured.body = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : null;
+		return createSseResponse([
+			{
+				type: "response.output_item.added",
+				item: { type: "message", id: "msg_1", role: "assistant", status: "in_progress", content: [] },
+			},
+			{ type: "response.content_part.added", part: { type: "output_text", text: "" } },
+			{ type: "response.output_text.delta", delta: "Hello" },
+			{
+				type: "response.output_item.done",
+				item: {
+					type: "message",
+					id: "msg_1",
+					role: "assistant",
+					status: "completed",
+					content: [{ type: "output_text", text: "Hello" }],
+				},
+			},
+			{
+				type: "response.completed",
+				response: {
+					status: "completed",
+					usage: {
+						input_tokens: 5,
+						output_tokens: 3,
+						total_tokens: 8,
+						input_tokens_details: { cached_tokens: 0 },
+					},
+				},
+			},
+		]);
+	});
+
+	const context: Context = {
+		systemPrompt: ["stable system", "stable durable context"],
+		messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
+	};
+	const stream = streamModel(requestModel, context, { apiKey: "test-key", ...options, fetch: fetchMock });
 
 	for await (const event of stream) {
 		if (event.type === "done" || event.type === "error") break;
@@ -109,6 +211,102 @@ describe("openai-responses cache affinity", () => {
 		expect(captured.sessionId).toBe("override-session");
 		expect(captured.clientRequestId).toBe("override-request");
 		expect(captured.body?.prompt_cache_key).toBe("session-123");
+	});
+
+	it("xAI OAuth adapter request shaping does not mutate reused options", async () => {
+		const options: OpenAIResponsesOptions = {
+			sessionId: "session-123",
+			headers: { existing: "header" },
+			extraBody: { existing: true },
+		};
+
+		const first = await captureDispatchedOpenAIResponseHeaders(options, xaiOAuthResponsesModel);
+		const second = await captureDispatchedOpenAIResponseHeaders(options, xaiOAuthResponsesModel);
+
+		expect(options).toEqual({
+			sessionId: "session-123",
+			headers: { existing: "header" },
+			extraBody: { existing: true },
+		});
+		for (const captured of [first, second]) {
+			expect(getHeader(captured.headers, "x-grok-conv-id")).toBe("session-123");
+			expect(captured.body?.prompt_cache_key).toBe("session-123");
+			expect(captured.body?.existing).toBe(true);
+			expect(captured.body?.reasoning).toBeUndefined();
+		}
+	});
+
+	it("sets OpenRouter Responses session_id from sessionId in the body", async () => {
+		const captured = await captureOpenAIResponseHeaders(
+			{ sessionId: "workflow-123", promptCacheKey: "cache-key-123" },
+			openRouterResponsesModel,
+		);
+
+		expect(captured.sessionId).toBeNull();
+		expect(captured.clientRequestId).toBeNull();
+		expect(captured.body?.session_id).toBe("workflow-123");
+		expect(captured.body?.prompt_cache_key).toBe("cache-key-123");
+	});
+
+	it("lets explicit headers override OpenRouter Responses defaults", async () => {
+		const captured = await captureOpenAIResponseHeaders(
+			{
+				headers: {
+					"HTTP-Referer": "https://example.test/",
+					"X-OpenRouter-Title": "Custom App",
+					"X-OpenRouter-Cache": "false",
+				},
+			},
+			openRouterResponsesModel,
+		);
+
+		expect(getHeader(captured.headers, "HTTP-Referer")).toBe("https://example.test/");
+		expect(getHeader(captured.headers, "X-OpenRouter-Title")).toBe("Custom App");
+		expect(getHeader(captured.headers, "X-OpenRouter-Cache")).toBe("false");
+	});
+
+	it("applies OpenRouter Responses model variants and provider routing to the body", async () => {
+		const routedModel: Model<"openai-responses"> = {
+			...openRouterResponsesModel,
+			compat: {
+				...openRouterResponsesModel.compat,
+				openRouterRouting: { only: ["anthropic"], order: ["anthropic"] },
+			},
+		};
+		const captured = await captureOpenAIResponseHeaders({ openrouterVariant: "nitro" }, routedModel);
+
+		expect(captured.body?.model).toBe("openai/gpt-5.5:nitro");
+		expect(captured.body?.provider).toEqual({ only: ["anthropic"], order: ["anthropic"] });
+	});
+
+	it("keeps OpenRouter session_id on values longer than OpenAI prompt cache keys", async () => {
+		const longSessionId = "s".repeat(100);
+		const captured = await captureOpenAIResponseHeaders({ sessionId: longSessionId }, openRouterResponsesModel);
+
+		expect(captured.body?.session_id).toBe(longSessionId);
+		expect(captured.body?.prompt_cache_key).not.toBe(longSessionId);
+	});
+
+	it("hashes OpenRouter session_id only past the 256 character limit", async () => {
+		const tooLongSessionId = "s".repeat(300);
+		const captured = await captureOpenAIResponseHeaders({ sessionId: tooLongSessionId }, openRouterResponsesModel);
+		const sessionId = captured.body?.session_id;
+
+		expect(typeof sessionId).toBe("string");
+		expect((sessionId as string).length).toBeLessThanOrEqual(256);
+		expect(sessionId).not.toBe(tooLongSessionId);
+	});
+
+	it("lets explicit extraBody override OpenRouter Responses session_id", async () => {
+		const captured = await captureOpenAIResponseHeaders(
+			{
+				sessionId: "workflow-123",
+				extraBody: { session_id: "body-wins" },
+			},
+			openRouterResponsesModel,
+		);
+
+		expect(captured.body?.session_id).toBe("body-wins");
 	});
 
 	it("merges adapter extra body fields into the Responses request payload", async () => {
@@ -233,6 +431,16 @@ describe("openai-responses cache affinity", () => {
 
 		expect(captured.sessionId).toBeNull();
 		expect(captured.clientRequestId).toBeNull();
+		expect(captured.body?.prompt_cache_key).toBeUndefined();
+	});
+
+	it("omits OpenRouter Responses session_id when cache retention is disabled", async () => {
+		const captured = await captureOpenAIResponseHeaders(
+			{ cacheRetention: "none", sessionId: "workflow-123" },
+			openRouterResponsesModel,
+		);
+
+		expect(captured.body?.session_id).toBeUndefined();
 		expect(captured.body?.prompt_cache_key).toBeUndefined();
 	});
 });

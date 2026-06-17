@@ -126,6 +126,7 @@ import {
 	type AdvisorNote,
 	AdvisorRuntime,
 	type AdvisorSeverity,
+	deriveAdvisorTelemetry,
 	formatAdvisorBatchContent,
 	isAdvisorInterruptImmuneTurnActive,
 	isInterruptingSeverity,
@@ -150,7 +151,7 @@ import {
 	resolveModelRoleValue,
 	resolveRoleSelection,
 } from "../config/model-resolver";
-import { MODEL_ROLE_IDS } from "../config/model-roles";
+import { MODEL_ROLE_IDS, MODEL_ROLES } from "../config/model-roles";
 import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-templates";
 import type { Settings, SkillsSettings } from "../config/settings";
 import { onAppendOnlyModeChanged } from "../config/settings";
@@ -1755,6 +1756,15 @@ export class AgentSession {
 			systemPrompt.push(this.#advisorWatchdogPrompt);
 		}
 		const advisorSessionId = this.sessionId ? `${this.sessionId}-advisor` : undefined;
+
+		// Thread the primary's telemetry into the advisor loop so the advisor
+		// model's GenAI spans + usage/cost hooks fire like every other model call,
+		// stamped with the advisor's own identity (see deriveAdvisorTelemetry).
+		const advisorTelemetry = deriveAdvisorTelemetry(this.agent.telemetry, {
+			id: advisorSessionId,
+			name: MODEL_ROLES.advisor.name,
+			description: formatModelString(advisorSel.model),
+		});
 		const advisorAgent = new Agent({
 			initialState: {
 				systemPrompt,
@@ -1766,6 +1776,7 @@ export class AgentSession {
 			sessionId: advisorSessionId,
 			getApiKey: requestModel => this.#modelRegistry.resolver(requestModel, advisorSessionId),
 			intentTracing: false,
+			telemetry: advisorTelemetry,
 		});
 		advisorAgent.setDisableReasoning(shouldDisableReasoning(advisorThinkingLevel));
 
@@ -1941,24 +1952,26 @@ export class AgentSession {
 
 		let compactResult: CompactionResult | undefined;
 		let lastError: unknown;
+		const advisorSessionId = this.sessionId ? `${this.sessionId}-advisor` : undefined;
+		// Instrument the advisor's overflow-compaction one-shot like the primary
+		// compaction path so the advisor model's maintenance call also emits spans.
+		const telemetry = resolveTelemetry(advisor.telemetry, advisorSessionId);
 
 		for (const candidate of candidates) {
-			const apiKey = await this.#modelRegistry.getApiKey(
-				candidate,
-				this.sessionId ? `${this.sessionId}-advisor` : undefined,
-			);
+			const apiKey = await this.#modelRegistry.getApiKey(candidate, advisorSessionId);
 			if (!apiKey) continue;
 
 			try {
 				compactResult = await compact(
 					preparation,
 					candidate,
-					this.#modelRegistry.resolver(candidate, this.sessionId ? `${this.sessionId}-advisor` : undefined),
+					this.#modelRegistry.resolver(candidate, advisorSessionId),
 					undefined,
 					undefined,
 					{
 						thinkingLevel: advisorCompactionThinkingLevel,
 						convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
+						telemetry,
 					},
 				);
 				break;

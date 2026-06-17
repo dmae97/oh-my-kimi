@@ -672,7 +672,7 @@ describe("OpenAI-family first-event timeouts", () => {
 		);
 	});
 
-	it("errors when OpenAI responses stream closes without response.completed", async () => {
+	it("errors when OpenAI responses stream closes without a terminal response event", async () => {
 		const incompleteResponse = createSseResponse([
 			{ type: "response.created", response: { id: "resp_incomplete" } },
 			{
@@ -691,7 +691,7 @@ describe("OpenAI-family first-event timeouts", () => {
 					content: [{ type: "output_text", text: "Hello" }],
 				},
 			},
-			// Intentionally no response.completed — simulates premature provider disconnect.
+			// Intentionally no response.completed/incomplete — simulates premature provider disconnect.
 		]);
 		const fetchMock: FetchImpl = () => Promise.resolve(incompleteResponse);
 		const result = await streamOpenAIResponses(openAIResponsesModel, baseContext(), {
@@ -700,13 +700,13 @@ describe("OpenAI-family first-event timeouts", () => {
 		}).result();
 
 		expect(result.stopReason).toBe("error");
-		expect(result.errorMessage).toBe("OpenAI responses stream closed before response.completed was received");
+		expect(result.errorMessage).toBe("OpenAI responses stream closed before a terminal response event was received");
 		expect(result.content as unknown[]).toEqual([
 			{ type: "text", text: "Hello", textSignature: '{"v":1,"id":"msg_incomplete"}' },
 		]);
 	});
 
-	it("errors when Azure OpenAI responses stream closes without response.completed", async () => {
+	it("errors when Azure OpenAI responses stream closes without a terminal response event", async () => {
 		const incompleteResponse = createSseResponse([
 			{ type: "response.created", response: { id: "resp_incomplete_azure" } },
 			{
@@ -731,7 +731,7 @@ describe("OpenAI-family first-event timeouts", () => {
 					content: [{ type: "output_text", text: "Hello azure" }],
 				},
 			},
-			// Intentionally no response.completed — simulates premature provider disconnect.
+			// Intentionally no response.completed/incomplete — simulates premature provider disconnect.
 		]);
 		const fetchMock: FetchImpl = () => Promise.resolve(incompleteResponse);
 		const result = await streamAzureOpenAIResponses(azureOpenAIResponsesModel, baseContext(), {
@@ -742,7 +742,9 @@ describe("OpenAI-family first-event timeouts", () => {
 		}).result();
 
 		expect(result.stopReason).toBe("error");
-		expect(result.errorMessage).toBe("Azure OpenAI responses stream closed before response.completed was received");
+		expect(result.errorMessage).toBe(
+			"Azure OpenAI responses stream closed before a terminal response event was received",
+		);
 		expect(result.content as unknown[]).toEqual([
 			{ type: "text", text: "Hello azure", textSignature: '{"v":1,"id":"msg_incomplete_azure"}' },
 		]);

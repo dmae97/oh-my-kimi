@@ -8,10 +8,8 @@ import type {
 	ServiceTier,
 	StreamFunction,
 	StreamOptions,
-	Tool,
 	ToolChoice,
 } from "../types";
-import { normalizeSystemPrompts } from "../utils";
 import { createAbortSourceTracker } from "../utils/abort";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
@@ -23,43 +21,23 @@ import {
 import { postOpenAIStream } from "../utils/openai-http";
 import { sanitizeSchemaForOpenAIResponses, toolWireSchema } from "../utils/schema";
 import { mapToOpenAIResponsesToolChoice } from "../utils/tool-choice";
-import { getOpenAIResponsesCacheSessionId } from "./openai-responses";
+import type { ResponseCreateParamsStreaming, ResponseStreamEvent } from "./openai-responses-wire";
 import {
-	appendResponsesToolResultMessages,
 	applyCommonResponsesSamplingParams,
 	applyResponsesReasoningParams,
-	convertResponsesAssistantMessage,
-	convertResponsesInputContent,
+	buildResponsesInput,
 	createInitialResponsesAssistantMessage,
+	getOpenAIResponsesPromptCacheKey,
 	isOpenAIResponsesProgressEvent,
-	normalizeResponsesToolCallIdForTransform,
+	parseAzureDeploymentNameMap,
 	processResponsesStream,
-	repairOrphanResponsesToolCalls,
-} from "./openai-responses-shared";
-import type {
-	Tool as OpenAITool,
-	ResponseCreateParamsStreaming,
-	ResponseInput,
-	ResponseStreamEvent,
-} from "./openai-responses-wire";
-import { transformMessages } from "./transform-messages";
+} from "./openai-shared";
+
+export { parseAzureDeploymentNameMap } from "./openai-shared";
 
 const DEFAULT_AZURE_API_VERSION = "v1";
 const AZURE_OPENAI_RESPONSES_FIRST_EVENT_TIMEOUT_MESSAGE =
 	"Azure OpenAI responses stream timed out while waiting for the first event";
-
-export function parseAzureDeploymentNameMap(value: string | undefined): Map<string, string> {
-	const map = new Map<string, string>();
-	if (!value) return map;
-	for (const entry of value.split(",")) {
-		const trimmed = entry.trim();
-		if (!trimmed) continue;
-		const [modelId, deploymentName] = trimmed.split("=", 2);
-		if (!modelId || !deploymentName) continue;
-		map.set(modelId.trim(), deploymentName.trim());
-	}
-	return map;
-}
 
 function resolveDeploymentName(model: Model<"azure-openai-responses">, options?: AzureOpenAIResponsesOptions): string {
 	if (options?.azureDeploymentName) {
@@ -193,13 +171,13 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 				abortSignal: options?.signal,
 				isProgressItem: isOpenAIResponsesProgressEvent,
 			});
-			let sawCompleted = false;
+			let sawTerminalResponseEvent = false;
 			await processResponsesStream(timedOpenaiStream, output, stream, model, {
 				onFirstToken: () => {
 					if (!firstTokenTime) firstTokenTime = Date.now();
 				},
 				onCompleted: () => {
-					sawCompleted = true;
+					sawTerminalResponseEvent = true;
 				},
 			});
 
@@ -212,8 +190,8 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 				throw new Error("Request was aborted");
 			}
 
-			if (!sawCompleted) {
-				throw new Error("Azure OpenAI responses stream closed before response.completed was received");
+			if (!sawTerminalResponseEvent) {
+				throw new Error("Azure OpenAI responses stream closed before a terminal response event was received");
 			}
 
 			if (output.stopReason === "aborted" || output.stopReason === "error") {
@@ -240,14 +218,6 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 	return stream;
 };
 
-function normalizeAzureBaseUrl(baseUrl: string): string {
-	return baseUrl.replace(/\/+$/, "");
-}
-
-function buildDefaultBaseUrl(resourceName: string): string {
-	return `https://${resourceName}.openai.azure.com/openai/v1`;
-}
-
 function resolveAzureConfig(
 	model: Model<"azure-openai-responses">,
 	options?: AzureOpenAIResponsesOptions,
@@ -260,7 +230,7 @@ function resolveAzureConfig(
 	let resolvedBaseUrl = baseUrl;
 
 	if (!resolvedBaseUrl && resourceName) {
-		resolvedBaseUrl = buildDefaultBaseUrl(resourceName);
+		resolvedBaseUrl = `https://${resourceName}.openai.azure.com/openai/v1`;
 	}
 
 	if (!resolvedBaseUrl && model.baseUrl) {
@@ -274,7 +244,7 @@ function resolveAzureConfig(
 	}
 
 	return {
-		baseUrl: normalizeAzureBaseUrl(resolvedBaseUrl),
+		baseUrl: resolvedBaseUrl.replace(/\/+$/, ""),
 		apiVersion,
 	};
 }
@@ -322,13 +292,21 @@ function buildParams(
 	options: AzureOpenAIResponsesOptions | undefined,
 	deploymentName: string,
 ) {
-	const messages = convertMessages(model, context, true);
+	const systemRole = model.reasoning && model.compat.supportsDeveloperRole ? "developer" : "system";
+	const messages = buildResponsesInput({
+		model,
+		context,
+		strictResponsesPairing: true,
+		systemRole,
+		includeThinkingSignatures: true,
+		developerStringContent: true,
+	});
 
 	const params: AzureOpenAIResponsesSamplingParams = {
 		model: deploymentName,
 		input: messages,
 		stream: true,
-		prompt_cache_key: getOpenAIResponsesCacheSessionId(options),
+		prompt_cache_key: getOpenAIResponsesPromptCacheKey(options),
 		// Encrypted reasoning replay (applyResponsesReasoningParams) requires
 		// stateless responses, matching the openai provider.
 		store: false,
@@ -337,7 +315,13 @@ function buildParams(
 	applyCommonResponsesSamplingParams(params, options, model);
 
 	if (context.tools) {
-		params.tools = convertTools(context.tools);
+		params.tools = context.tools.map(tool => ({
+			type: "function" as const,
+			name: tool.name,
+			description: tool.description || "",
+			parameters: sanitizeSchemaForOpenAIResponses(toolWireSchema(tool)),
+			strict: false,
+		}));
 		if (options?.toolChoice) {
 			const toolChoice = mapToOpenAIResponsesToolChoice(options.toolChoice);
 			if (
@@ -354,61 +338,4 @@ function buildParams(
 	applyResponsesReasoningParams(params, model, options, messages);
 
 	return params;
-}
-
-function convertMessages(
-	model: Model<"azure-openai-responses">,
-	context: Context,
-	strictResponsesPairing: boolean,
-): ResponseInput {
-	const messages: ResponseInput = [];
-	const transformedMessages = transformMessages(context.messages, model, normalizeResponsesToolCallIdForTransform);
-	const knownCallIds = new Set<string>();
-	const customCallIds = new Set<string>();
-
-	const systemPrompts = normalizeSystemPrompts(context.systemPrompt);
-	if (systemPrompts.length > 0) {
-		const role = model.reasoning && model.compat.supportsDeveloperRole ? "developer" : "system";
-		for (const systemPrompt of systemPrompts) {
-			messages.push({ role, content: systemPrompt });
-		}
-	}
-
-	let msgIndex = 0;
-	for (const msg of transformedMessages) {
-		if (msg.role === "user" || msg.role === "developer") {
-			const content = convertResponsesInputContent(msg.content, model.input.includes("image"));
-			if (!content) continue;
-			messages.push({
-				role: "user",
-				content: msg.role === "developer" && typeof msg.content === "string" ? msg.content.toWellFormed() : content,
-			});
-		} else if (msg.role === "assistant") {
-			const outputItems = convertResponsesAssistantMessage(
-				msg as AssistantMessage,
-				model,
-				msgIndex,
-				knownCallIds,
-				true,
-				customCallIds,
-			);
-			if (outputItems.length === 0) continue;
-			messages.push(...outputItems);
-		} else if (msg.role === "toolResult") {
-			appendResponsesToolResultMessages(messages, msg, model, strictResponsesPairing, knownCallIds, customCallIds);
-		}
-		msgIndex++;
-	}
-
-	return repairOrphanResponsesToolCalls(messages);
-}
-
-function convertTools(tools: Tool[]): OpenAITool[] {
-	return tools.map(tool => ({
-		type: "function",
-		name: tool.name,
-		description: tool.description || "",
-		parameters: sanitizeSchemaForOpenAIResponses(toolWireSchema(tool)),
-		strict: false,
-	}));
 }
