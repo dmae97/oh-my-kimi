@@ -1,8 +1,8 @@
+import { countTokens } from "@oh-my-pi/pi-agent-core";
 import type { CompactionSettings } from "@oh-my-pi/pi-agent-core/compaction";
 import { effectiveReserveTokens, estimateTokens, resolveThresholdTokens } from "@oh-my-pi/pi-agent-core/compaction";
-import type { Model } from "@oh-my-pi/pi-ai";
-import { isZodSchema, zodToWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
-import { countTokens } from "@oh-my-pi/pi-natives";
+import type { Tool as AiTool, Model } from "@oh-my-pi/pi-ai";
+import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { formatNumber } from "@oh-my-pi/pi-utils";
 import type { Skill } from "../../extensibility/skills";
 import type { AgentSession } from "../../session/agent-session";
@@ -61,8 +61,12 @@ export function estimateToolSchemaTokens(
 	for (const tool of tools) {
 		fragments.push(tool.name, tool.description);
 		try {
-			const params = tool.parameters;
-			fragments.push(JSON.stringify((isZodSchema(params) ? zodToWireSchema(params) : params) ?? {}));
+			const wireTool: AiTool = {
+				name: tool.name,
+				description: tool.description,
+				parameters: tool.parameters as AiTool["parameters"],
+			};
+			fragments.push(JSON.stringify(toolWireSchema(wireTool) ?? {}));
 		} catch {
 			// Schema may contain functions or cycles; ignore.
 		}

@@ -1,5 +1,5 @@
 import { expect } from "bun:test";
-import type { Type } from "arktype";
+import { type as arkType, type Type } from "arktype";
 
 function formatIssues(error: unknown): string {
 	if (error instanceof Error) {
@@ -10,12 +10,12 @@ function formatIssues(error: unknown): string {
 
 export function expectAcpStructure(schema: Type, value: unknown): void {
 	const result = schema(value);
-	const isValid = !(result instanceof Error);
+	const isValid = !(result instanceof arkType.errors);
 	expect(isValid, isValid ? undefined : formatIssues(result)).toBe(true);
 }
 
 export function expectAcpStructureRejects(schema: Type, value: unknown): void {
 	const result = schema(value);
-	const isValid = !(result instanceof Error);
+	const isValid = !(result instanceof arkType.errors);
 	expect(isValid).toBe(false);
 }

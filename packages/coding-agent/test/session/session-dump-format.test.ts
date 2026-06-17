@@ -36,7 +36,7 @@ describe("formatSessionDumpText tool parameters", () => {
 				{
 					name: "web_search",
 					description: "Searches the web.",
-					parameters: webSearchSchema.json,
+					parameters: webSearchSchema,
 				},
 			],
 		});
@@ -83,7 +83,7 @@ describe("formatSessionDumpText tool parameters", () => {
 				{
 					name: "find",
 					description: "Finds files.",
-					parameters: findSchema.json,
+					parameters: findSchema,
 					examples: [{ call: { paths: ["src/**/*.ts"] } }],
 				},
 			],

@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:te
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import {
@@ -957,7 +958,7 @@ describe("github tool", () => {
 
 	it("exposes a flat op-based schema without legacy run_watch parameters", () => {
 		const tool = new GithubTool(createSession());
-		const wire = tool.parameters.json as Record<string, unknown>;
+		const wire = toolWireSchema(tool);
 		const properties = wire.properties as Record<string, unknown>;
 		expect(properties.op).toBeDefined();
 		expect(properties.interval).toBeUndefined();
