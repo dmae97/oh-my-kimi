@@ -90,5 +90,5 @@ export const alibabaCodingPlanProvider = {
 	id: "alibaba-coding-plan",
 	name: "Alibaba Coding Plan",
 	login: (cb: OAuthLoginCallbacks) => loginAlibabaCodingPlan(cb),
-	getApiKey: (credentials) => credentials.access,
+	getApiKey: credentials => credentials.access,
 } as const satisfies ProviderDefinition;
