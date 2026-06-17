@@ -33,7 +33,7 @@ There are no structured `head` or `tail` tool parameters in the current schema. 
 
 ## 2) Optional interception (blocked-command path)
 
-If `bashInterceptor.enabled` is true, `BashTool` loads rules from settings and runs `checkBashInterception()` against the normalized command.
+If `bashInterceptor.enabled` is true, `BashTool` loads rules from settings (`getBashInterceptorRules()`) and runs `checkBashInterception()` against the command — checking both the original and the cwd-normalized form (after a leading `cd … &&` is extracted) when they differ.
 
 Interception behavior:
 
@@ -75,13 +75,15 @@ Before execution, the tool allocates an artifact path/id (best-effort) for trunc
 
 ## 5) PTY vs non-PTY execution selection
 
-`BashTool` chooses PTY execution only when all are true:
+PTY eligibility is decided by `canUseInteractiveBashPty(pty, ctx)` (`src/tools/bash-pty-selection.ts`); the local PTY overlay runs only when all are true:
 
 - tool input `pty === true`
 - `PI_NO_PTY !== "1"`
 - tool context has UI (`ctx.hasUI === true` and `ctx.ui` set)
 
-Otherwise it uses non-interactive `executeBash()`.
+If `pty` is requested but unavailable, the call falls back to non-PTY and appends a `pty requested but unavailable …` notice.
+
+Before the local PTY/non-PTY choice, a foreground (`async: false`) call can route to a managed background job (auto-backgrounding; see below) or — when the session's client advertises a terminal capability (`clientBridge.capabilities.terminal` + `createTerminal`, with `pty` false) — to a **client-bridge editor terminal** that runs the command remotely (streaming `terminalId` updates, killing on timeout, mapping a signal kill to exit code `137`). Otherwise it uses non-interactive `executeBash()`.
 
 That means print mode and non-UI RPC/tool contexts always use non-PTY.
 
@@ -120,6 +122,14 @@ If `prefix` is configured, command becomes:
 <prefix> <command>
 ```
 
+The per-command child environment is built by `buildNonInteractiveEnv()` (`src/exec/non-interactive-env.ts`), which layers non-interactive hardening defaults **under** the caller's `env` overrides:
+
+- pagers disabled (`PAGER=cat`, `GIT_PAGER=cat`, … and `LESS=FRX`),
+- editor prompts disabled (`GIT_EDITOR=true`, `EDITOR=true`, `VISUAL=true`),
+- terminal/credential prompts reduced (`TERM=dumb`, `GIT_TERMINAL_PROMPT=0`, `SSH_ASKPASS=/usr/bin/false`, `NO_COLOR=1`, `CI=1`),
+- package-manager/tooling automation flags for non-interactive behavior (npm/pnpm/yarn/pip/cargo/terraform/gh, …),
+- on Windows, UTF-8 locale/codepage defaults are added when absent.
+
 ## Streaming and cancellation
 
 `Shell.run()` streams chunks to `OutputSink` and optional `onChunk` callback.
@@ -143,12 +153,7 @@ Behavior highlights:
 - `esc` while running kills the PTY session,
 - terminal resize propagates to PTY (`session.resize(cols, rows)`).
 
-Environment hardening defaults are injected for unattended runs:
-
-- pagers disabled (`PAGER=cat`, `GIT_PAGER=cat`, etc.),
-- editor prompts disabled (`GIT_EDITOR=true`, `EDITOR=true`, ...),
-- terminal/auth prompts reduced (`GIT_TERMINAL_PROMPT=0`, `SSH_ASKPASS=/usr/bin/false`, `CI=1`),
-- package-manager/tool automation flags for non-interactive behavior.
+Unlike the non-PTY engine, the interactive PTY path does **not** apply the non-interactive hardening. It inherits the user's environment and sets a real `TERM=xterm-256color` (applied as an override on the Rust side) so editors, pagers, and TUIs behave like a normal terminal.
 
 PTY output is normalized (`CRLF`/`CR` to `LF`, `sanitizeText`) and written into `OutputSink`, including artifact spill support.
 
@@ -160,11 +165,14 @@ Both PTY and non-PTY paths use `OutputSink`.
 
 ## OutputSink semantics
 
-- keeps an in-memory UTF-8-safe tail buffer (`DEFAULT_MAX_BYTES`, currently 50KB),
+The bash executor builds the sink with `headBytes` and `maxColumns` from settings (`resolveOutputSinkHeadBytes` / `resolveOutputMaxColumns`).
+
+- keeps a UTF-8-safe rolling **tail** window (`spillThreshold`, `DEFAULT_MAX_BYTES`, currently 50KB); on overflow it trims to the tail (UTF-8 boundary safe) and marks `truncated`,
+- when `headBytes > 0` (`tools.artifactHeadBytes`, default 20KB) it also retains a **head** window and elides the middle, splicing an elision marker between head and tail in `dump()`,
+- per-line column cap: when `maxColumns > 0` (`tools.outputMaxColumns`, default 768 bytes) over-wide lines are ellipsis-truncated at write time and the rest of the line is dropped,
 - tracks total bytes/lines seen,
-- if artifact path exists and output overflows (or file already active), writes full stream to artifact file,
-- when memory threshold overflows, trims in-memory buffer to tail (UTF-8 boundary safe),
-- marks `truncated` when overflow/file spill occurs.
+- mirrors the **raw, uncapped** stream to the artifact file when output overflows, a column cap dropped bytes, or the file is already active,
+- marks `truncated` on tail overflow, middle elision, column-cap drops, or file spill.
 
 `dump()` returns:
 
@@ -172,11 +180,13 @@ Both PTY and non-PTY paths use `OutputSink`.
 - `truncated`,
 - `totalLines/totalBytes`,
 - `outputLines/outputBytes`,
+- `elidedBytes/elidedLines` when the middle was elided,
+- `columnDroppedBytes/columnTruncatedLines` when the per-line cap fired,
 - `artifactId` if artifact file was active.
 
 ### Long-output caveat
 
-Runtime truncation is byte-threshold based in `OutputSink` (50KB default). It does not enforce a hard 2000-line cap in this code path.
+Runtime truncation is byte-threshold based in `OutputSink` (50KB tail window by default, plus an optional head window for middle elision). It does not enforce a hard line-count cap in this code path.
 
 ### Shell output minimizer
 
@@ -213,7 +223,7 @@ Success payload structure:
   - `shownRange`,
   - `artifactId` when available.
 
-Because built-in tools are wrapped with `wrapToolWithMetaNotice()`, truncation notice text is appended to final text content automatically (for example: `Full: artifact://<id>`).
+Because built-in tools are wrapped with `wrapToolWithMetaNotice()`, truncation notice text is appended to final text content automatically (for example: `Read artifact://<id> for full output`).
 
 ## Rendering paths
 
@@ -264,10 +274,12 @@ This component is wired by `CommandController.handleBashCommand()` and fed from 
 ## Implementation files
 
 - [`src/tools/bash.ts`](../packages/coding-agent/src/tools/bash.ts) — tool entrypoint, input handling/interception, async and PTY/non-PTY selection, result/error mapping, bash tool renderer.
+- [`src/tools/bash-pty-selection.ts`](../packages/coding-agent/src/tools/bash-pty-selection.ts) — `canUseInteractiveBashPty` predicate for choosing the local PTY overlay.
 - [`src/tools/bash-command-fixup.ts`](../packages/coding-agent/src/tools/bash-command-fixup.ts) — native-backed conservative cleanup for trailing `head`/`tail` pipes and redundant `2>&1`.
 - [`src/tools/bash-interceptor.ts`](../packages/coding-agent/src/tools/bash-interceptor.ts) — interceptor rule matching and blocked-command messages.
 - [`src/exec/bash-executor.ts`](../packages/coding-agent/src/exec/bash-executor.ts) — non-PTY executor, shell session reuse, cancellation wiring, output sink integration.
-- [`src/tools/bash-interactive.ts`](../packages/coding-agent/src/tools/bash-interactive.ts) — PTY runtime, overlay UI, input normalization, non-interactive env defaults.
+- [`src/exec/non-interactive-env.ts`](../packages/coding-agent/src/exec/non-interactive-env.ts) — non-interactive child-process env defaults (`buildNonInteractiveEnv`) used by the non-PTY executor.
+- [`src/tools/bash-interactive.ts`](../packages/coding-agent/src/tools/bash-interactive.ts) — PTY runtime, overlay UI, input normalization, and interactive `TERM` setup.
 - [`src/session/streaming-output.ts`](../packages/coding-agent/src/session/streaming-output.ts) — `OutputSink`, `TailBuffer`, truncation/artifact spill, and summary metadata.
 - [`src/tools/output-meta.ts`](../packages/coding-agent/src/tools/output-meta.ts) — truncation metadata shape + notice injection wrapper.
 - [`src/session/agent-session.ts`](../packages/coding-agent/src/session/agent-session.ts) — session-level `executeBash`, message recording, abort lifecycle.

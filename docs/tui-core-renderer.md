@@ -251,13 +251,20 @@ cosmetic, not corrupting.
 ## 5. Width model
 
 `visibleWidth` / `truncateToWidth` / `sliceByColumn` / `wrapTextWithAnsi`
-(`utils.ts`) all route through **one native UAX#11 engine**
-(`@oh-my-pi/pi-natives`, Rust `unicode-width`). `Bun.stringWidth` was dropped
-deliberately — mixing two width models in measure-vs-slice produced crashes.
+(`utils.ts`) all agree on **one UAX#11 width model**. Slicing, truncation,
+wrapping, and segment extraction run on the native engine
+(`@oh-my-pi/pi-natives`, Rust `unicode-width`); `visibleWidth` measures with
+`Bun.stringWidth` **pinned to that same model** (`STRING_WIDTH_OPTS`:
+`countAnsiEscapeCodes: false`, `ambiguousIsNarrow: true`) — a JSC builtin that
+shares the native width tables without the per-call N-API box the native
+scanner traps on under Bun 1.3.x. The two must never disagree; mixing unpinned
+width models in measure-vs-slice produced crashes.
 
 - Fast path: printable ASCII is one cell per code unit.
-- ZWJ pictographic emoji take the `visibleWidthByGrapheme` override.
-- OSC 66 sized text takes the native path.
+- Anything past the ASCII prefix measures through `Bun.stringWidth` (CSI/OSC
+  stripped to zero); tabs are added back at `getDefaultTabWidth()` columns.
+- OSC 66 sized spans are added back as `scale × (explicit w ?? payload width)` —
+  `Bun.stringWidth` would otherwise strip the whole span to zero.
 
 **Rule:** any new measuring code routes through these helpers, and the hot
 path clamps instead of throwing. Known residual: combining-heavy scripts

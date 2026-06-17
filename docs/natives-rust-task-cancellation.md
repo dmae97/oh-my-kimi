@@ -9,6 +9,7 @@ This document describes how `crates/pi-natives` schedules native work and how ca
 - `crates/pi-natives/src/glob.rs`
 - `crates/pi-natives/src/fd.rs`
 - `crates/pi-natives/src/ast.rs`
+- `crates/pi-natives/src/workspace.rs`
 - `crates/pi-natives/src/shell.rs`
 - `crates/pi-natives/src/pty.rs`
 - `crates/pi-natives/src/html.rs`
@@ -37,7 +38,7 @@ This document describes how `crates/pi-natives` schedules native work and how ca
    - `CancelToken::new(timeout_ms, signal)` combines an optional deadline and optional JS `AbortSignal` converted from `Unknown`.
    - `CancelToken::heartbeat()` is cooperative cancellation for blocking loops.
    - `CancelToken::wait()` asynchronously waits for signal or timeout.
-   - `CancelToken::emplace_abort_token()` creates an abortable flag when `AbortSignal`, `Shell.abort()`, or an internal bridge needs one.
+   - `CancelToken::emplace_abort_token()` lazily installs the shared abort flag (when the token has none) and returns an `AbortToken`; `CancelToken::new` uses it to bridge a JS `AbortSignal` to `AbortReason::Signal`.
    - `AbortToken::abort(reason)` lets external code request abort.
 
 ## `blocking` vs `future`: execution model and selection
@@ -77,7 +78,8 @@ Behavior:
 | `grep(options, onMatch?)`               | `grep`                      | `task::blocking("grep", ct, ...)`                              | `CancelToken::new(options.timeoutMs, options.signal)` + heartbeat checks                                                             |
 | `glob(options, onMatch?)`               | `glob`                      | `task::blocking("glob", ct, ...)`                              | `CancelToken::new(...)` + heartbeat checks                                                                                           |
 | `fuzzyFind(options)`                    | `fuzzy_find`                | `task::blocking("fuzzy_find", ct, ...)`                        | `CancelToken::new(...)` + heartbeat checks                                                                                           |
-| `astGrep(options)` / `astEdit(options)` | ast exports                 | blocking worker path                                           | timeout/signal fields are accepted by options and checked cooperatively in worker loops                                              |
+| `astGrep(options)` / `astMatch(options)` / `astEdit(options)` | ast exports                 | blocking worker path                                           | timeout/signal fields are accepted by options and checked cooperatively in worker loops                                              |
+| `listWorkspace(options)`                | `list_workspace`            | `task::blocking("listWorkspace", ct, ...)`                     | `CancelToken::new(options.timeoutMs, options.signal)` + heartbeat checks                                                             |
 | `Shell#run(options, onChunk?)`          | `Shell::run`                | `task::future(env, "shell.run", ...)`                          | JS `CancelToken` is converted into `pi_shell::cancel::CancelToken`; shell races it against command completion and descendant cleanup |
 | `executeShell(options, onChunk?)`       | `execute_shell`             | `task::future(env, "shell.execute", ...)`                      | same cancel race and 2s graceful window                                                                                              |
 | `PtySession#start(options, onChunk?)`   | `PtySession::start`         | `task::future(env, "pty.start", ...)` + inner `spawn_blocking` | `CancelToken` checked in sync PTY loop via `heartbeat()`                                                                             |
@@ -128,6 +130,7 @@ Observed patterns:
 - `fd` scoring checks scanned candidates.
 - `grep` checks before/during expensive search and passes tokens into shared scan/cache helpers.
 - `run_pty_sync` checks every loop tick with a maximum 16ms wait cadence.
+- `listWorkspace` checks before the parallel walk and per directory visit during traversal.
 
 Practical rule: no loop over external-size input should exceed a short bounded interval without a heartbeat.
 

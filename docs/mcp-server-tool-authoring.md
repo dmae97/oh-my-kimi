@@ -35,7 +35,7 @@ Config sources (.omp/.claude/.cursor/.vscode/mcp.json, mcp.json, etc.)
 
 - non-empty
 - max 100 chars
-- only `[a-zA-Z0-9_.-]`
+- only `[a-zA-Z0-9_.:-]` (colon allows namespaced plugin server names, e.g. `cloudflare:cloudflare-api`)
 
 ### Transport pitfalls
 

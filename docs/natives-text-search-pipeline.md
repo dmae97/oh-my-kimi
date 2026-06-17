@@ -32,6 +32,7 @@ Terminology follows `docs/natives-architecture.md`:
 | `glob(options, onMatch?)`                                                       | `glob`                                           | `glob.rs`      |
 | `invalidateFsScanCache(path?)`                                                  | `invalidateFsScanCache`                          | `fs_cache.rs`  |
 | `astGrep(options)`                                                              | `astGrep`                                        | `ast.rs`       |
+| `astMatch(options)`                                                             | `astMatch`                                       | `ast.rs`       |
 | `astEdit(options)`                                                              | `astEdit`                                        | `ast.rs`       |
 | `wrapTextWithAnsi(text, width, tabWidth)`                                       | `wrapTextWithAnsi`                               | `text.rs`      |
 | `truncateToWidth(text, maxWidth, ellipsis, pad, tabWidth)`                      | `truncateToWidth`                                | `text.rs`      |
@@ -100,6 +101,7 @@ Terminology follows `docs/natives-architecture.md`:
 
 - Invalid repetition-like braces are escaped (`{`/`}` -> `\{`/`\}`) when they cannot form `{N}`, `{N,}`, `{N,M}`.
 - This prevents common literal-template fragments (for example `${platform}`) from failing as malformed repetition.
+- After brace sanitization, a compile error reporting an unclosed/unopened group triggers one retry with unescaped parentheses escaped, so literal snippets like `fetchAnthropicProvider(` still search instead of erroring.
 - Remaining invalid regex syntax still returns a regex error.
 
 ## 2) File discovery (`glob`) and fuzzy path search (`fuzzyFind`)
@@ -144,11 +146,12 @@ Terminology follows `docs/natives-architecture.md`:
 - auto-prefixes simple recursive patterns with `**/` when `recursive=true`,
 - auto-closes unbalanced `{...` alternation groups before compile.
 
-## 3) AST search/edit (`astGrep`, `astEdit`)
+## 3) AST search/match/edit (`astGrep`, `astMatch`, `astEdit`)
 
 `ast.rs` exposes syntax-aware code search and rewrite operations.
 
 - `astGrep(options)` returns matches with byte/line/column coordinates and optional metavariable bindings.
+- `astMatch(options)` runs the same patterns against an in-memory `source` string instead of files; `lang` is required (there is no path to infer it from), and the result keeps matches, `totalMatches`, `limitReached`, and parse errors but omits the file-count fields.
 - `astEdit(options)` returns replacement changes, per-file counts, searched/touched file counts, parse errors, and whether edits were applied.
 - `dryRun` defaults to true for edit options in the generated documentation.
 - Options include language override, path/glob/selector, strictness, limits, parse-error policy, `signal`, and `timeoutMs`.
@@ -248,6 +251,7 @@ Text functions generally return deterministic transformed output; errors are lim
 | `text` module functions      | No                | No                   | ANSI/width utilities only                     |
 | `highlight` module functions | No                | No                   | syntax + ANSI coloring only                   |
 | `countTokens`                | No                | No                   | tokenization only                             |
+| `astMatch`                   | No                | No                   | in-memory syntax-aware match (no disk)        |
 | `astGrep` / `astEdit`        | Yes               | No                   | syntax-aware file search/edit                 |
 | `glob`                       | Yes               | Optional             | directory scans + glob filtering              |
 | `fuzzyFind`                  | Yes               | Optional             | directory scans + fuzzy scoring               |

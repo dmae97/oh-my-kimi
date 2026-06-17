@@ -22,7 +22,7 @@ Anthropic has no token-level tool delimiters in the public API. The unit is the 
 | `thinking` / `redacted_thinking` block | assistant | Extended-thinking reasoning blocks; carry a `signature`. Must be preserved verbatim across turns when thinking + tools are combined. |
 | `stop_reason: "tool_use"` | response top level | The model invoked one or more tools and is waiting for results. Drives the agentic loop. |
 | `stop_reason: "end_turn"` | response top level | Natural completion (no tool call); the loop exits. |
-| Other `stop_reason` | response top level | `"max_tokens"`, `"stop_sequence"`, `"pause_turn"` (long server-tool turn, resend as-is to continue), `"refusal"`. |
+| Other `stop_reason` | response top level | `"max_tokens"`, `"stop_sequence"`, `"pause_turn"` (long server-tool turn, resend as-is to continue), `"refusal"`, `"sensitive"` (output flagged by safety filters), `"model_context_window_exceeded"` (output truncated at the context window, treated like `max_tokens`). |
 | `id` prefixes | — | Messages `msg_…`; client tool calls `toolu_…`; server tool calls `srvtoolu_…`. |
 
 Streaming adds these SSE events / delta types (full list under [Roles / channels](#roles--channels--turn-structure) and [Tool-call format](#tool-call-format)):
@@ -61,7 +61,7 @@ The retired prompt-based format used these tags. They are nested-element tags (n
 
 ## Roles / channels / turn structure
 
-The Messages API uses only two conversational roles, `user` and `assistant`, alternating. There is **no** dedicated `tool`/`function` role and **no** top-level `system` role — the system prompt is a separate top-level `system` parameter (string or text-block array). Tool data rides inside the normal roles:
+The Messages API uses primarily two conversational roles, `user` and `assistant`, alternating. There is **no** dedicated `tool`/`function` role, and the standard system prompt is a separate top-level `system` parameter (string or text-block array) — not a message role. (Claude Opus 4.8+ and the Fable/Mythos 5 generation additionally accept an opt-in mid-conversation `system` **message** role, gated behind the `mid-conversation-system-2026-04-07` beta; otherwise only `user`/`assistant` are valid.) Tool data rides inside the normal roles:
 
 - `assistant` messages contain AI-generated `text`, `thinking`, and `tool_use` (and `server_tool_use`) blocks.
 - `user` messages contain your `text`/`image`/`document` content and `tool_result` blocks.
@@ -90,7 +90,7 @@ Tools are passed in the top-level `tools` array. Each user-defined (client) tool
 - `name` — matches `^[a-zA-Z0-9_-]{1,64}$`.
 - `description` — detailed plaintext (the single biggest driver of tool-call quality).
 - `input_schema` — a JSON Schema object (**not** `parameters`) describing the input the model must produce.
-- Optional: `input_examples`, `cache_control`, `strict`, `defer_loading`, `allowed_callers`.
+- Optional: `cache_control` (prompt-cache breakpoint), `strict` (structured-outputs beta), `eager_input_streaming` (fine-grained tool-streaming beta).
 
 ```json
 {

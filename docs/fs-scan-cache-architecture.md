@@ -19,6 +19,7 @@ Primary goals:
   - `crates/pi-natives/src/glob.rs`
   - `crates/pi-natives/src/fd.rs` (`fuzzyFind`)
   - `crates/pi-natives/src/grep.rs` (cached directory mode only)
+  - `crates/pi-natives/src/ast.rs` (`astGrep`/`astEdit` file discovery; always cached)
 - JS binding/export:
   - `packages/natives/native/index.d.ts` (`invalidateFsScanCache`)
   - `packages/natives/native/index.js`
@@ -97,16 +98,18 @@ Current consumers:
 - `glob`: rechecks when filtered matches are empty and scan age exceeds threshold
 - `fuzzyFind` (`fd.rs`): rechecks only when query is non-empty and scored matches are empty
 - `grep`: rechecks when cached directory candidate file list is empty
+- `astGrep`/`astEdit` (`ast.rs`): recheck when the candidate file list is empty
 
 ## Consumer defaults and cache usage
 
-Cache is opt-in on exposed scan/search APIs (`cache?: boolean`, default `false`).
+Cache is opt-in on `glob`/`fuzzyFind`/`grep` (`cache?: boolean`, default `false`). `astGrep`/`astEdit` file discovery always uses the cache (there is no opt-in flag).
 
 Current defaults in native APIs:
 
 - `glob`: `hidden=false`, `gitignore=true`, `cache=false`; `node_modules` is included only when `includeNodeModules=true` or the pattern mentions `node_modules`; full detail is used only when `sortByMtime=true`
 - `fuzzyFind`: `hidden=false`, `gitignore=true`, `cache=false`, `node_modules` is skipped, `follow_links=true`, minimal detail
 - `grep`: `hidden=true`, `gitignore=true`, `cache=false`; cached directory mode skips `node_modules` unless the glob mentions `node_modules`; minimal detail
+- `astGrep`/`astEdit` (file discovery): `hidden=true`, `gitignore=true`, always cached; `node_modules` is skipped unless the glob mentions `node_modules`; `follow_links=false`; minimal detail
 
 Current callers:
 
@@ -181,5 +184,5 @@ When introducing cache use in a new scanner/search path:
 
 - Cache scope is process-local in-memory (`DashMap`), not persisted across process restarts.
 - Cache stores scan entries, not final tool results.
-- `glob`/`fuzzyFind`/cached `grep` share scan entries only when key dimensions (`root`, `hidden`, `gitignore`, `skip_node_modules`, `detail`) match.
+- `glob`/`fuzzyFind`/cached `grep`/`astGrep` share scan entries only when key dimensions (`root`, `hidden`, `gitignore`, `skip_node_modules`, `detail`) match.
 - `.git` is always excluded at scan collection time regardless of caller options.

@@ -8,7 +8,7 @@
 - Key collaborators:
   - `packages/coding-agent/src/tools/index.ts` — registers tool, exposes session hooks, gates availability.
   - `packages/coding-agent/src/modes/controllers/event-controller.ts` — updates the visible todo UI on tool completion.
-  - `packages/coding-agent/src/session/agent-session.ts` — stores cached phases, auto-clears done/dropped tasks, emits failure reminders.
+  - `packages/coding-agent/src/session/agent-session.ts` — stores cached phases, strips done/dropped tasks on session resume, emits failure reminders.
   - `packages/coding-agent/src/modes/controllers/todo-command-controller.ts` — `/todo` command path, custom-entry persistence, transcript reminder injection.
   - `packages/coding-agent/src/tools/render-utils.ts` — collapsed-preview cap for renderer trees.
 
@@ -22,7 +22,7 @@
 
 | Op | Required fields | Optional fields | Effect |
 | --- | --- | --- | --- |
-| `init` | `list` | None of the other fields are used | Replaces the entire list with `list`; every new task starts `pending` before normalization. |
+| `init` | `list` **or** flat `items` | `phase` (names the phase for the flat `items` form; defaults to `Tasks`) | Replaces the entire list — with `list`, uses the given phases; with a flat `items` array, synthesizes one phase. Every new task starts `pending` before normalization. |
 | `start` | `task` | None | Marks one task `in_progress`; any other `in_progress` task is demoted to `pending`. |
 | `done` | `task` or `phase` or neither | None | Marks the target task, phase, or all tasks `completed`. |
 | `drop` | `task` or `phase` or neither | None | Marks the target task, phase, or all tasks `abandoned`. |
@@ -35,10 +35,10 @@
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `op` | `"init" | "start" | "done" | "rm" | "drop" | "append" | "view"` | Yes | Operation discriminator. |
-| `list` | `{ phase: string; items: string[] }[]` | For `init` | Full replacement payload. Each `items` array has `minItems: 1`. |
+| `list` | `{ phase: string; items: string[] }[]` | For `init` (unless a flat `items` list is given) | Full replacement payload. Each `items` array has `minItems: 1`. |
 | `task` | `string` | For `start`; for task-targeted `done`/`drop`/`rm` | Exact task content match. |
-| `phase` | `string` | For `append`; for phase-targeted `done`/`drop`/`rm` | Exact phase name match, except `append` lazily creates a missing phase. |
-| `items` | `string[]` | For `append` | Tasks to append. `minItems: 1`. |
+| `phase` | `string` | For `append`; for phase-targeted `done`/`drop`/`rm`; optional for a flat `init` | Exact phase name match, except `append` lazily creates a missing phase and a flat `init` synthesizes one (default `Tasks`). |
+| `items` | `string[]` | For `append`; or as a flat `init` payload | Tasks to append, or the full task list for a flat `init`. `minItems: 1`. |
 
 ## Outputs
 The tool returns a single-shot `AgentToolResult`:
@@ -131,7 +131,7 @@ The same file also exposes non-tool helpers used by `/todo`:
   - `Missing list for init operation`
   - `Missing task content`
   - `Duplicate phase "..." in init list` / `Duplicate task "..." in init list`
-  - `Task "..." not found` with an extra empty-list hint when applicable
+  - `Task "..." not found` with an extra empty-list hint when applicable, or a hint that tasks are referenced by content (not `task-N` IDs) when the missing content looks like an ID
   - `Missing phase name`
   - `Phase "..." not found`
   - `Missing phase name for append operation`

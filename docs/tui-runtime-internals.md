@@ -39,6 +39,7 @@ Boundary rule: the TUI engine is message-agnostic. It only knows `Component.rend
 - `btwContainer`
 - `omfgContainer`
 - `errorBannerContainer`
+- `modelCycleContainer` (ctrl+p model-role cycle chip track)
 - `statusLine`
 - `hookWidgetContainerAbove`
 - `editorContainer` (holds `CustomEditor`)
@@ -168,8 +169,8 @@ Status lane ownership:
 Loader behavior:
 
 - `Loader` advances its spinner every 80ms (animated message colorizers redraw at ~30fps) and requests a component-scoped render each frame (`requestComponentRender`), so idle spinner ticks repaint without re-walking the transcript.
-- Escape handlers are temporarily overridden during auto-compaction and auto-retry to cancel those operations.
-- On end/cancel paths, controllers restore prior escape handlers and stop/clear loader components.
+- Escape cancels an in-progress auto-compaction, handoff generation, or auto-retry: the editor's single `onEscape` handler dispatches on live session state (`isCompacting`/`isGeneratingHandoff`/`isRetrying`) and calls the matching abort method, rather than swapping the handler.
+- On end/cancel paths, controllers stop/clear the loader components.
 
 ## Mode transitions and backgrounding
 
@@ -200,7 +201,7 @@ Primary cancellation inputs:
 
 - `Escape` during active stream loader: restores queued messages to editor and aborts agent.
 - `Escape` during bash/python execution: aborts running command.
-- `Escape` during auto-compaction/retry: invokes dedicated abort methods through temporary escape handlers.
+- `Escape` during auto-compaction, handoff generation, or auto-retry: the editor's `onEscape` dispatches on live session state (`isCompacting`/`isGeneratingHandoff`/`isRetrying`) and calls the matching abort method (`abortCompaction`/`abortHandoff`/`abortRetry`).
 - `Ctrl+C` single press: clear editor; double press within 500ms: shutdown.
 
 Cancellation is state-conditional; same key can mean abort, mode-exit, selector trigger, or no-op depending on runtime state.

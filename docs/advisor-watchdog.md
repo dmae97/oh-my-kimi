@@ -44,14 +44,14 @@ Slash commands:
 | `/advisor on` | Enable the setting and start the runtime when an advisor model is assigned. |
 | `/advisor off` | Disable the setting and stop the runtime. |
 | `/advisor status` | Show active model, context usage, token usage, and cost. |
-| `/advisor dump` | Print the advisor's compact transcript. |
-| `/advisor dump raw` | Print the advisor's full dump with system prompt, tools, thinking, and calls. |
+| `/advisor dump` | Copy the advisor's compact transcript to the clipboard. |
+| `/advisor dump raw` | Copy the advisor's full dump (system prompt, tools, thinking, and calls) to the clipboard. |
 
 If `advisor.enabled` is true but no `modelRoles.advisor` value resolves to an available model, status reports that the setting is enabled but no advisor model is assigned.
 
 ## What the advisor sees
 
-At each primary turn end, `AdvisorRuntime` receives only the new transcript delta since the last advisor update. Deltas are rendered with `formatSessionHistoryMarkdown(..., { includeThinking: true })`, so the advisor can review assistant reasoning as well as user-visible text, tool calls, and tool results.
+At each primary turn end, `AdvisorRuntime` receives only the new transcript delta since the last advisor update. Deltas are rendered with `formatSessionHistoryMarkdown(..., { includeThinking: true, includeToolIntent: true, watchedRoles: true })`, so the advisor can review assistant reasoning as well as user-visible text, tool calls, and tool results.
 
 Advisor messages already injected into the primary transcript are filtered out before the next delta is rendered. This prevents the advisor from recursively reviewing its own advice.
 
