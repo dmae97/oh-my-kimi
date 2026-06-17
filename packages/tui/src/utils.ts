@@ -482,3 +482,17 @@ export function applyBackgroundToLine(line: string, width: number, bgFn: (text: 
 export function sliceByColumn(line: string, startCol: number, length: number, strict = false): string {
 	return sliceWithWidth(line, startCol, length, strict).text;
 }
+
+let globalTight = false;
+
+export function setTuiTight(tight: boolean): void {
+	globalTight = tight;
+}
+
+export function isTuiTight(): boolean {
+	return globalTight;
+}
+
+export function getPaddingX(basePadding: number): number {
+	return globalTight ? Math.max(0, basePadding - 1) : basePadding;
+}

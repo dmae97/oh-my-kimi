@@ -39,4 +39,20 @@ describe("selector setting side effects", () => {
 		expect(updateEditorTopBorder).toHaveBeenCalledTimes(1);
 		expect(requestRender).toHaveBeenCalledTimes(1);
 	});
+
+	it("invalidates UI and updates editor top border when tui.tight changes", () => {
+		const invalidate = vi.fn();
+		const updateEditorTopBorder = vi.fn();
+		const requestRender = vi.fn();
+		const controller = new SelectorController({
+			ui: { invalidate, requestRender },
+			updateEditorTopBorder,
+		} as unknown as ConstructorParameters<typeof SelectorController>[0]);
+
+		controller.handleSettingChange("tui.tight", true);
+
+		expect(invalidate).toHaveBeenCalledTimes(1);
+		expect(updateEditorTopBorder).toHaveBeenCalledTimes(1);
+		expect(requestRender).toHaveBeenCalledTimes(1);
+	});
 });

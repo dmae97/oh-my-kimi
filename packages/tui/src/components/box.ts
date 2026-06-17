@@ -1,5 +1,5 @@
 import type { Component } from "../tui";
-import { applyBackgroundToLine, padding, visibleWidth } from "../utils";
+import { applyBackgroundToLine, getPaddingX, padding, visibleWidth } from "../utils";
 
 type Cache = {
 	width: number;
@@ -17,6 +17,14 @@ export class Box implements Component {
 	#paddingY: number;
 	#bgFn?: (text: string) => string;
 
+	#ignoreTight = false;
+
+	setIgnoreTight(ignore: boolean): this {
+		this.#ignoreTight = ignore;
+		this.#invalidateCache();
+		return this;
+	}
+
 	// Cache for rendered output
 	#cached?: Cache;
 
@@ -28,6 +36,9 @@ export class Box implements Component {
 
 	addChild(component: Component): void {
 		this.children.push(component);
+		if (this.#ignoreTight) {
+			component.setIgnoreTight?.(true);
+		}
 		this.#invalidateCache();
 	}
 
@@ -75,7 +86,8 @@ export class Box implements Component {
 	render(width: number): readonly string[] {
 		const children = this.children;
 		const count = children.length;
-		const contentWidth = Math.max(1, width - this.#paddingX * 2);
+		const paddingX = this.#ignoreTight ? this.#paddingX : getPaddingX(this.#paddingX);
+		const contentWidth = Math.max(1, width - paddingX * 2);
 		// bgFn output can change without the function reference changing (theme
 		// mutation); sample it so a silent palette swap still misses the cache.
 		const bgSample = this.#bgFn ? this.#bgFn("test") : undefined;
@@ -102,7 +114,7 @@ export class Box implements Component {
 
 		const result: string[] = [];
 		if (contentRows > 0) {
-			const leftPad = padding(this.#paddingX);
+			const leftPad = padding(paddingX);
 			// Top padding
 			for (let i = 0; i < this.#paddingY; i++) {
 				result.push(this.#applyBg("", width));

@@ -9,6 +9,7 @@ import {
 	applyBackgroundToLine,
 	Ellipsis,
 	encodeTextSized,
+	getPaddingX,
 	getSegmenter,
 	padding,
 	replaceTabs,
@@ -475,6 +476,14 @@ export class Markdown implements Component {
 	#streamPrefixText?: string;
 	#streamPrefixTokens?: Token[];
 
+	#ignoreTight = false;
+
+	setIgnoreTight(ignore: boolean): this {
+		this.#ignoreTight = ignore;
+		this.invalidate();
+		return this;
+	}
+
 	constructor(
 		text: string,
 		paddingX: number,
@@ -599,7 +608,8 @@ export class Markdown implements Component {
 		}
 
 		// Calculate available width for content (subtract horizontal padding)
-		const contentWidth = Math.max(1, width - this.#paddingX * 2);
+		const paddingX = this.#ignoreTight ? this.#paddingX : getPaddingX(this.#paddingX);
+		const contentWidth = Math.max(1, width - paddingX * 2);
 
 		// Don't render anything if there's no actual text
 		if (!this.#text || this.#text.trim() === "") {
@@ -628,7 +638,7 @@ export class Markdown implements Component {
 		if (!this.transientRenderCache) {
 			const bgColorProbe = this.#defaultTextStyle?.bgColor ? this.#defaultTextStyle.bgColor("\x01") : "";
 			const headingProbe = this.#theme.heading("");
-			cacheKey = `${normalizedText}\x00${width}\x00${this.#paddingX}\x00${this.#paddingY}\x00${this.#codeBlockIndent}\x00${objectId(this.#theme)}\x00${this.#defaultTextStyle ? objectId(this.#defaultTextStyle) : -1}\x00${TERMINAL.imageProtocol ?? ""}\x00${TERMINAL.hyperlinks ? 1 : 0}\x00${TERMINAL.textSizing ? 1 : 0}\x00${bgColorProbe}\x00${headingProbe}`;
+			cacheKey = `${normalizedText}\x00${width}\x00${paddingX}\x00${this.#paddingY}\x00${this.#codeBlockIndent}\x00${objectId(this.#theme)}\x00${this.#defaultTextStyle ? objectId(this.#defaultTextStyle) : -1}\x00${TERMINAL.imageProtocol ?? ""}\x00${TERMINAL.hyperlinks ? 1 : 0}\x00${TERMINAL.textSizing ? 1 : 0}\x00${bgColorProbe}\x00${headingProbe}`;
 			const cached = renderCache.get(cacheKey);
 			if (cached !== undefined) {
 				// Populate L1 so subsequent calls from this instance are O(1) map lookup.
@@ -665,8 +675,8 @@ export class Markdown implements Component {
 		}
 
 		// Add margins and background to each wrapped line
-		const leftMargin = padding(this.#paddingX);
-		const rightMargin = padding(this.#paddingX);
+		const leftMargin = padding(paddingX);
+		const rightMargin = padding(paddingX);
 		const bgFn = this.#defaultTextStyle?.bgColor;
 		const contentLines: string[] = [];
 

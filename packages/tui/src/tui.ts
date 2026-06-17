@@ -161,6 +161,10 @@ export interface Component {
 	 * Called when theme changes or when component needs to re-render from scratch.
 	 */
 	invalidate?(): void;
+	/**
+	 * Optional hook to set whether this component ignores tight layout mode.
+	 */
+	setIgnoreTight?(ignore: boolean): any;
 
 	/**
 	 * Optional teardown. Called when the component is permanently removed from
@@ -505,8 +509,22 @@ export class Container implements Component {
 	#memoChildLines: (readonly string[])[] = [];
 	#memoWidth = -1;
 
+	#ignoreTight = false;
+
+	setIgnoreTight(ignore: boolean): this {
+		this.#ignoreTight = ignore;
+		for (const child of this.children) {
+			child.setIgnoreTight?.(ignore);
+		}
+		this.invalidate();
+		return this;
+	}
+
 	addChild(component: Component): void {
 		this.children.push(component);
+		if (this.#ignoreTight) {
+			component.setIgnoreTight?.(true);
+		}
 		this.#memoLines = undefined;
 	}
 
@@ -1351,6 +1369,7 @@ export class TUI extends Container {
 	 * Returns a handle to control the overlay's visibility.
 	 */
 	showOverlay(component: Component, options?: OverlayOptions): OverlayHandle {
+		component.setIgnoreTight?.(true);
 		const entry = { component, options, preFocus: this.#focusedComponent, hidden: false };
 		this.overlayStack.push(entry);
 		// Only focus if overlay is actually visible

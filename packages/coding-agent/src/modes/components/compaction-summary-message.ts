@@ -62,6 +62,7 @@ class SummaryDividerComponent implements Component {
 	#detailBox(): Box {
 		if (this.#detail) return this.#detail;
 		const box = new Box(1, 1, t => theme.bg("customMessageBg", t));
+		box.setIgnoreTight(true);
 		box.addChild(
 			new Markdown(this.options.detailMarkdown(), 0, 0, getMarkdownTheme(), {
 				color: (text: string) => theme.fg("customMessageText", text),

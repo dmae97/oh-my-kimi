@@ -13,6 +13,7 @@ export class SkillMessageComponent extends Container {
 		super();
 
 		this.#box = new Box(1, 1, t => theme.bg("customMessageBg", t));
+		this.#box.setIgnoreTight(true);
 		this.#rebuild();
 	}
 

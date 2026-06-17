@@ -30,6 +30,7 @@ import {
 	ProcessTerminal,
 	Spacer,
 	setTerminalTextSizing,
+	setTuiTight,
 	TERMINAL,
 	Text,
 	TUI,
@@ -566,6 +567,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			);
 		}
 
+		setTuiTight(settings.get("tui.tight"));
 		this.ui = new TUI(new ProcessTerminal(), settings.get("showHardwareCursor"));
 		this.ui.setMaxInlineImages(settings.get("tui.maxInlineImages"));
 		// OSC 66 text-sizing is Kitty-only; resolve the setting against the terminal's

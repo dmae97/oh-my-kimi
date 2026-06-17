@@ -3,7 +3,7 @@ import { PASTE_CODE_LOGIN_PROVIDERS } from "@oh-my-pi/pi-ai";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import type { OAuthProvider } from "@oh-my-pi/pi-ai/oauth/types";
 import type { Component, OverlayHandle } from "@oh-my-pi/pi-tui";
-import { Input, Loader, Spacer, Text } from "@oh-my-pi/pi-tui";
+import { Input, Loader, Spacer, setTuiTight, Text } from "@oh-my-pi/pi-tui";
 import { getAgentDbPath, getProjectDir, normalizePathForComparison } from "@oh-my-pi/pi-utils";
 import { formatModelSelectorValue } from "../../config/model-resolver";
 import { getRoleInfo } from "../../config/model-roles";
@@ -324,6 +324,13 @@ export class SelectorController {
 					}
 				}
 				break;
+			case "tui.tight":
+				setTuiTight(value as boolean);
+				this.ctx.ui.invalidate();
+				this.ctx.updateEditorTopBorder();
+				this.ctx.ui.requestRender();
+				break;
+
 			case "theme": {
 				setTheme(value as string, true).then(result => {
 					this.ctx.statusLine.invalidate();

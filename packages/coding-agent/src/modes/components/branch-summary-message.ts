@@ -11,6 +11,7 @@ export class BranchSummaryMessageComponent extends Box {
 
 	constructor(private readonly message: BranchSummaryMessage) {
 		super(1, 1, t => theme.bg("customMessageBg", t));
+		this.setIgnoreTight(true);
 		this.#updateDisplay();
 	}
 

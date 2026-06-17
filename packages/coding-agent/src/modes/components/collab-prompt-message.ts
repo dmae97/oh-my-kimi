@@ -12,7 +12,9 @@ export class CollabPromptMessageComponent extends Container {
 	constructor(message: CustomMessage<CollabPromptDetails>) {
 		super();
 		const from = message.details?.from?.trim() || "guest";
-		this.addChild(new Text(theme.fg("accent", `\x1b[1m«${from}»\x1b[22m ›`), 1, 0));
+		const authorText = new Text(theme.fg("accent", `\x1b[1m«${from}»\x1b[22m ›`), 1, 0);
+		authorText.setIgnoreTight(true);
+		this.addChild(authorText);
 		const text =
 			typeof message.content === "string"
 				? message.content
@@ -20,11 +22,11 @@ export class CollabPromptMessageComponent extends Container {
 						.filter((content): content is TextContent => content.type === "text")
 						.map(content => content.text)
 						.join("");
-		this.addChild(
-			new Markdown(text, 1, 1, getMarkdownTheme(), {
-				bgColor: (value: string) => theme.bg("userMessageBg", value),
-				color: (value: string) => theme.fg("userMessageText", value),
-			}),
-		);
+		const md = new Markdown(text, 1, 1, getMarkdownTheme(), {
+			bgColor: (value: string) => theme.bg("userMessageBg", value),
+			color: (value: string) => theme.fg("userMessageText", value),
+		});
+		md.setIgnoreTight(true);
+		this.addChild(md);
 	}
 }
