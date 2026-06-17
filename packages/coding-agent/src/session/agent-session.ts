@@ -261,6 +261,7 @@ import { type EditMode, resolveEditMode } from "../utils/edit-mode";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { extractFileMentions, generateFileMentionMessages } from "../utils/file-mentions";
 import { normalizeModelContextImages } from "../utils/image-loading";
+import { describeAttachedImagesForTextModel } from "../utils/image-vision-fallback";
 import { buildNamedToolChoice, isToolChoiceActive } from "../utils/tool-choice";
 import type { AuthStorage } from "./auth-storage";
 import type { ClientBridge, ClientBridgePermissionOption, ClientBridgePermissionOutcome } from "./client-bridge";
@@ -976,6 +977,10 @@ const MAGIC_KEYWORD_NOTICE_TYPES: ReadonlySet<string> = new Set([
 	"workflow-notice",
 ]);
 
+/** Custom-message type of the hidden companion carrying vision descriptions of image
+ *  attachments sent to a text-only model (see `#buildImageDescriptionNotice`). */
+const IMAGE_ATTACHMENT_DESCRIPTION_TYPE = "image-attachment-description";
+
 /**
  * A hidden, user-attributed companion of a queued user prompt: the magic-keyword
  * notices (`ultrathink`/`orchestrate`/`workflow`) enqueued alongside the user
@@ -989,7 +994,7 @@ function isHiddenUserCompanion(message: AgentMessage): boolean {
 		message.role === "custom" &&
 		message.attribution === "user" &&
 		message.display === false &&
-		MAGIC_KEYWORD_NOTICE_TYPES.has(message.customType)
+		(MAGIC_KEYWORD_NOTICE_TYPES.has(message.customType) || message.customType === IMAGE_ATTACHMENT_DESCRIPTION_TYPE)
 	);
 }
 
@@ -5114,6 +5119,62 @@ export class AgentSession {
 		return normalizeModelContextImages(images, { model: this.model });
 	}
 
+	/**
+	 * Build a hidden companion message describing image attachments for a text-only
+	 * model. Each image is saved under local:// and a vision-capable model describes
+	 * it; the descriptions are returned as a `display: false` custom message (so the
+	 * model reads them but the TUI does not render the blob) carrying one
+	 * `<image path="local://…">…</image>` block per image. Returns `undefined` when
+	 * the active model already accepts images, the feature is disabled, or no
+	 * description could be produced. Never throws.
+	 */
+	async #buildImageDescriptionNotice(
+		normalizedImages: ImageContent[],
+		signal?: AbortSignal,
+	): Promise<CustomMessage | undefined> {
+		const model = this.model;
+		const shouldDescribe =
+			!!model &&
+			!model.input.includes("image") &&
+			!this.settings.get("images.blockImages") &&
+			this.settings.get("images.describeForTextModels");
+		if (!shouldDescribe || !model) {
+			return undefined;
+		}
+		let blocks: TextContent[];
+		try {
+			blocks = await describeAttachedImagesForTextModel(
+				normalizedImages,
+				{
+					activeModel: model,
+					modelRegistry: this.#modelRegistry,
+					settings: this.settings,
+					localProtocolOptions: this.#localProtocolOptions(),
+					activeModelString: formatModelString(model),
+					telemetryConfig: this.agent.telemetry,
+					sessionId: this.sessionId,
+				},
+				signal,
+			);
+		} catch (err) {
+			logger.warn("image attachment vision fallback failed; image left undescribed", {
+				error: err instanceof Error ? err.message : String(err),
+			});
+			return undefined;
+		}
+		if (blocks.length === 0) {
+			return undefined;
+		}
+		return {
+			role: "custom",
+			customType: IMAGE_ATTACHMENT_DESCRIPTION_TYPE,
+			content: blocks,
+			display: false,
+			attribution: "user",
+			timestamp: Date.now(),
+		};
+	}
+
 	async #normalizeMessageContentImages(
 		content: string | (TextContent | ImageContent)[],
 	): Promise<string | (TextContent | ImageContent)[]> {
@@ -5261,9 +5322,14 @@ export class AgentSession {
 		const normalizedImages = await this.#normalizeImagesForModel(options?.images);
 
 		const userContent: (TextContent | ImageContent)[] = [{ type: "text", text: expandedText }];
-		if (normalizedImages) {
+		if (normalizedImages?.length) {
 			userContent.push(...normalizedImages);
 		}
+		// Text-only model + image attachment: describe via a vision model and inject the
+		// description as a hidden companion (the image stays in the visible user message).
+		const imageDescriptionNotice = normalizedImages?.length
+			? await this.#buildImageDescriptionNotice(normalizedImages)
+			: undefined;
 
 		const promptAttribution = options?.attribution ?? (options?.synthetic ? "agent" : "user");
 		const message = options?.synthetic
@@ -5288,8 +5354,8 @@ export class AgentSession {
 				...options,
 				images: normalizedImages,
 				prependMessages:
-					preludeMessages.length > 0 || keywordNotices.length > 0
-						? [...preludeMessages, ...keywordNotices]
+					preludeMessages.length > 0 || keywordNotices.length > 0 || imageDescriptionNotice
+						? [...preludeMessages, ...keywordNotices, ...(imageDescriptionNotice ? [imageDescriptionNotice] : [])]
 						: undefined,
 			});
 		} finally {
@@ -5699,7 +5765,13 @@ export class AgentSession {
 		if (normalizedImages?.length) {
 			content.push(...normalizedImages);
 		}
+		// Text-only model + image attachment: describe via a vision model and enqueue the
+		// description as a hidden companion immediately before the user message.
+		const imageDescriptionNotice = normalizedImages?.length
+			? await this.#buildImageDescriptionNotice(normalizedImages)
+			: undefined;
 		if (mode === "followUp") {
+			if (imageDescriptionNotice) this.agent.followUp(imageDescriptionNotice);
 			this.agent.followUp({
 				role: "user",
 				content,
@@ -5707,6 +5779,7 @@ export class AgentSession {
 				timestamp: Date.now(),
 			});
 		} else {
+			if (imageDescriptionNotice) this.agent.steer(imageDescriptionNotice);
 			this.agent.steer({
 				role: "user",
 				content,

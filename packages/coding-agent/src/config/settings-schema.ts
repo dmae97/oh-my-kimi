@@ -712,6 +712,18 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"images.describeForTextModels": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "model",
+			group: "Vision",
+			label: "Describe Images for Text Models",
+			description:
+				"When an image is attached to a model without vision support, save it under local:// and inject a description from a vision-capable model instead of dropping it",
+		},
+	},
+
 	"tui.maxInlineImageColumns": {
 		type: "number",
 		default: 100,

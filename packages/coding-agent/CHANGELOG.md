@@ -1,6 +1,14 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added `images.describeForTextModels` option (default `true`) to control automatic image description for attachments sent to models without vision input
+- Added automatic vision fallback prompts to describe images for text-only models
+
+### Fixed
+
+- Fixed image attachment handling for text-only models by saving attachments to `local://` and injecting generated descriptions so they are no longer lost when the target model cannot process images
 
 ## [16.0.4] - 2026-06-17
 
