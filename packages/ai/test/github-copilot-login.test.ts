@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import { getOAuthApiKey } from "@oh-my-pi/pi-ai/registry/oauth";
 import { loginGitHubCopilot } from "@oh-my-pi/pi-ai/registry/oauth/github-copilot";
 
 const FAST_POLL_OPTIONS = { pollIntervalFloorMs: 0, pollIntervalScaleMs: 1 } as const;
@@ -69,6 +70,67 @@ describe("loginGitHubCopilot", () => {
 		expect(credentials.expires).toBeGreaterThan(Date.now());
 		expect(credentials.enterpriseUrl).toBeUndefined();
 		expect(pollCount).toBeGreaterThanOrEqual(1);
+	});
+
+	it("stores business API endpoint and enables models against it", async () => {
+		const policyUrls: string[] = [];
+		const fetchMock = vi.fn(async (input: string | URL) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url === "https://github.com/login/device/code") {
+				return new Response(JSON.stringify(deviceCodeResponse()), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			}
+			if (url === "https://github.com/login/oauth/access_token") {
+				return new Response(JSON.stringify(accessTokenResponse()), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			}
+			if (url === "https://api.github.com/copilot_internal/user") {
+				return new Response(
+					JSON.stringify({
+						copilot_plan: "business",
+						endpoints: { api: "https://api.business.githubcopilot.com/" },
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			if (url.includes("/models/") && url.includes("/policy")) {
+				policyUrls.push(url);
+				return modelPolicyOk();
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		});
+
+		const credentials = await loginGitHubCopilot({
+			...FAST_POLL_OPTIONS,
+			fetch: fetchMock as unknown as typeof fetch,
+			onAuth: vi.fn(),
+			onPrompt: mockOnPrompt(""),
+		});
+
+		expect(credentials.apiEndpoint).toBe("https://api.business.githubcopilot.com");
+		expect(policyUrls.length).toBeGreaterThan(0);
+		expect(policyUrls.every(url => url.startsWith("https://api.business.githubcopilot.com/models/"))).toBe(true);
+	});
+
+	it("serializes business API endpoint into structured api keys", async () => {
+		const result = await getOAuthApiKey("github-copilot", {
+			"github-copilot": {
+				access: "ghu_test",
+				refresh: "ghu_test",
+				expires: Date.now() + 60_000,
+				apiEndpoint: "https://api.business.githubcopilot.com",
+			},
+		});
+
+		expect(result).not.toBeNull();
+		expect(JSON.parse(result!.apiKey)).toMatchObject({
+			token: "ghu_test",
+			apiEndpoint: "https://api.business.githubcopilot.com",
+		});
 	});
 
 	it("enterprise domain", async () => {

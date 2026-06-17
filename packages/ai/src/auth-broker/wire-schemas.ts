@@ -21,6 +21,7 @@ import { usageReportSchema } from "../usage";
 /** Real OAuth credential (broker-side) — refresh token is the actual upstream value. */
 export const oauthCredentialSchema = z
 	.object({
+		apiEndpoint: z.string().optional(),
 		type: z.literal("oauth"),
 		refresh: z
 			.string()

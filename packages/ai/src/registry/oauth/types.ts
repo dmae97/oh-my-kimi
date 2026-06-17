@@ -9,6 +9,7 @@ export type OAuthCredentials = {
 	projectId?: string;
 	email?: string;
 	accountId?: string;
+	apiEndpoint?: string;
 };
 
 export type OAuthProvider = OAuthProviderUnion;

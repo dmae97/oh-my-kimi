@@ -191,6 +191,7 @@ export type CompletionProbeCredential =
 			projectId?: string;
 			email?: string;
 			enterpriseUrl?: string;
+			apiEndpoint?: string;
 	  };
 
 /**
@@ -638,6 +639,7 @@ export interface OAuthAccess {
 	email?: string;
 	projectId?: string;
 	enterpriseUrl?: string;
+	apiEndpoint?: string;
 }
 
 export interface OAuthAccessFailure {
@@ -646,6 +648,7 @@ export interface OAuthAccessFailure {
 	email?: string;
 	projectId?: string;
 	enterpriseUrl?: string;
+	apiEndpoint?: string;
 	error: string;
 }
 
@@ -1803,6 +1806,7 @@ export class AuthStorage {
 			projectId: credential.projectId,
 			email: credential.email,
 			enterpriseUrl: credential.enterpriseUrl,
+			apiEndpoint: credential.apiEndpoint,
 		};
 	}
 
@@ -1881,6 +1885,7 @@ export class AuthStorage {
 			projectId: credential.projectId,
 			email: credential.email,
 			enterpriseUrl: credential.enterpriseUrl,
+			apiEndpoint: credential.apiEndpoint,
 		};
 	}
 
@@ -1904,6 +1909,7 @@ export class AuthStorage {
 			projectId: credential.projectId,
 			email: credential.email,
 			enterpriseUrl: credential.enterpriseUrl,
+			apiEndpoint: credential.apiEndpoint,
 		};
 	}
 
@@ -1917,6 +1923,7 @@ export class AuthStorage {
 			projectId: refreshed.projectId ?? credential.projectId,
 			email: refreshed.email ?? credential.email,
 			enterpriseUrl: refreshed.enterpriseUrl ?? credential.enterpriseUrl,
+			apiEndpoint: refreshed.apiEndpoint ?? credential.apiEndpoint,
 		};
 	}
 
@@ -1964,6 +1971,7 @@ export class AuthStorage {
 			projectId: next.projectId,
 			email: next.email,
 			enterpriseUrl: next.enterpriseUrl,
+			apiEndpoint: next.apiEndpoint,
 		});
 	}
 
@@ -3384,6 +3392,7 @@ export class AuthStorage {
 				email: result.newCredentials.email ?? selection.credential.email,
 				projectId: result.newCredentials.projectId ?? selection.credential.projectId,
 				enterpriseUrl: result.newCredentials.enterpriseUrl ?? selection.credential.enterpriseUrl,
+				apiEndpoint: result.newCredentials.apiEndpoint ?? selection.credential.apiEndpoint,
 			};
 			this.#replaceCredentialAt(provider, selection.index, updated);
 			if ((checkUsage && !allowBlocked) || requiresProModel) {
@@ -3510,6 +3519,7 @@ export class AuthStorage {
 					return JSON.stringify({
 						token: oauthSelection.credential.access,
 						enterpriseUrl: oauthSelection.credential.enterpriseUrl,
+						apiEndpoint: oauthSelection.credential.apiEndpoint,
 					});
 				}
 				return oauthSelection.credential.access;
@@ -3607,6 +3617,7 @@ export class AuthStorage {
 			email: credential.email,
 			projectId: credential.projectId,
 			enterpriseUrl: credential.enterpriseUrl,
+			apiEndpoint: credential.apiEndpoint,
 		};
 	}
 
@@ -4067,6 +4078,7 @@ export class AuthStorage {
 				email: refreshed.email ?? target.credential.email,
 				projectId: refreshed.projectId ?? target.credential.projectId,
 				enterpriseUrl: refreshed.enterpriseUrl ?? target.credential.enterpriseUrl,
+				apiEndpoint: refreshed.apiEndpoint ?? target.credential.apiEndpoint,
 			};
 			this.#replaceCredentialAt(provider, index, updated);
 			return {

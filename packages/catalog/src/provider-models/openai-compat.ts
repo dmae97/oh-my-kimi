@@ -2808,9 +2808,11 @@ export function githubCopilotModelManagerOptions(config?: GithubCopilotModelMana
 	const parsedApiKey = rawApiKey ? parseGitHubCopilotApiKey(rawApiKey) : undefined;
 	const apiKey = parsedApiKey?.accessToken;
 	const baseUrl =
-		parsedApiKey?.enterpriseUrl && configuredBaseUrl.includes("githubcopilot.com")
-			? getGitHubCopilotBaseUrl(parsedApiKey.enterpriseUrl)
-			: configuredBaseUrl;
+		parsedApiKey?.apiEndpoint && configuredBaseUrl.includes("githubcopilot.com")
+			? parsedApiKey.apiEndpoint
+			: parsedApiKey?.enterpriseUrl && configuredBaseUrl.includes("githubcopilot.com")
+				? getGitHubCopilotBaseUrl(parsedApiKey.enterpriseUrl)
+				: configuredBaseUrl;
 	const providerRefs = createBundledReferenceMap<Api>("github-copilot");
 	const resolveReference = createReferenceResolver(providerRefs);
 	return {

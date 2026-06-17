@@ -30,6 +30,7 @@ import {
 	REMOTE_REFRESH_SENTINEL,
 	type StoredAuthCredential,
 } from "@oh-my-pi/pi-ai/auth-storage";
+import type { UsageProvider } from "@oh-my-pi/pi-ai/usage";
 import * as claudeUsage from "@oh-my-pi/pi-ai/usage/claude";
 
 function oauthRow(id: number, email: string, opts?: { expired?: boolean }): StoredAuthCredential {
@@ -303,6 +304,65 @@ describe("AuthStorage.checkCredentials", () => {
 			}
 			expect(result.completion).toEqual({ ok: true, modelId: "test-probe-model", latencyMs: 42 });
 			expect(result.ok).toBe(true); // usage probe independently succeeded
+		} finally {
+			storage.close();
+		}
+	});
+
+	it("persists Copilot API endpoint after usage refresh", async () => {
+		const apiEndpoint = "https://api.business.githubcopilot.com";
+		const row: StoredAuthCredential = {
+			id: 8,
+			provider: "github-copilot",
+			credential: {
+				type: "oauth",
+				access: "oat-business",
+				refresh: "refresh-business",
+				expires: Date.now() - 60_000,
+				accountId: "account-business",
+				email: "business@example.com",
+				apiEndpoint,
+			},
+			disabledCause: null,
+		};
+		const refreshSpy = vi.fn<NonNullable<AuthCredentialStore["refreshOAuthCredential"]>>().mockResolvedValue({
+			access: "oat-business-refreshed",
+			refresh: "refresh-business-refreshed",
+			expires: Date.now() + 3_600_000,
+			accountId: "account-business",
+			email: "business@example.com",
+		});
+		const store = makeStore([row], refreshSpy);
+		const updatedCredentials: AuthCredential[] = [];
+		vi.spyOn(store, "updateAuthCredential").mockImplementation((_id, credential) => {
+			updatedCredentials.push(credential);
+		});
+		const usageProvider: UsageProvider = {
+			id: "github-copilot",
+			async fetchUsage(params) {
+				expect(params.credential.apiEndpoint).toBe(apiEndpoint);
+				return {
+					provider: "github-copilot",
+					fetchedAt: Date.now(),
+					limits: [],
+					metadata: {},
+				};
+			},
+		};
+		const storage = new AuthStorage(store, {
+			usageProviderResolver: provider => (provider === "github-copilot" ? usageProvider : undefined),
+		});
+		await storage.reload();
+
+		try {
+			const [result] = await storage.checkCredentials();
+			expect(refreshSpy).toHaveBeenCalledTimes(1);
+			expect(result.ok).toBe(true);
+			expect(updatedCredentials).toHaveLength(1);
+			const updated = updatedCredentials[0];
+			expect(updated?.type).toBe("oauth");
+			if (updated?.type !== "oauth") throw new Error("expected OAuth credential update");
+			expect(updated.apiEndpoint).toBe(apiEndpoint);
 		} finally {
 			storage.close();
 		}

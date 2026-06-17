@@ -210,6 +210,7 @@ export interface UsageCredential {
 	email?: string;
 	enterpriseUrl?: string;
 	metadata?: Record<string, unknown>;
+	apiEndpoint?: string;
 }
 
 /** Parameters provided to a usage fetcher. */
