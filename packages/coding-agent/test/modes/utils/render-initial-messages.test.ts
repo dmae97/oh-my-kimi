@@ -19,10 +19,10 @@ import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { SessionContext } from "@oh-my-pi/pi-coding-agent/session/session-context";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { type Component, Container, Image, ImageProtocol, setTerminalImageProtocol, TERMINAL } from "@oh-my-pi/pi-tui";
+import { TempDir } from "@oh-my-pi/pi-utils";
 
 beforeAll(() => {
 	initTheme();
@@ -171,8 +171,10 @@ function makeRenderCtx(transcript: SessionContext): { ctx: InteractiveModeContex
 		},
 		addMessageToChat: (message: AgentMessage, options?: { populateHistory?: boolean }) =>
 			helpers.addMessageToChat(message, options),
-		renderSessionContext: (context: SessionContext, options?: { updateFooter?: boolean; populateHistory?: boolean }) =>
-			helpers.renderSessionContext(context, options),
+		renderSessionContext: (
+			context: SessionContext,
+			options?: { updateFooter?: boolean; populateHistory?: boolean },
+		) => helpers.renderSessionContext(context, options),
 		showStatus: vi.fn(),
 	} as unknown as InteractiveModeContext;
 	helpers = new UiHelpers(ctx);
@@ -277,7 +279,9 @@ describe("UiHelpers.renderInitialMessages — image replay", () => {
 			isError: false,
 			timestamp: 2,
 		});
-		session.appendMessage(assistantToolCall("eval-reopened", "eval", { cells: [{ language: "py", code: "display(image)" }] }));
+		session.appendMessage(
+			assistantToolCall("eval-reopened", "eval", { cells: [{ language: "py", code: "display(image)" }] }),
+		);
 		session.appendMessage({
 			role: "toolResult",
 			toolCallId: "eval-reopened",

@@ -29,6 +29,8 @@ export interface ImageOptions {
 
 const EMPTY_IDS: readonly number[] = [];
 const EMPTY_TRANSMITS: readonly string[] = [];
+const SAVE_CURSOR = "\x1b7";
+const RESTORE_CURSOR = "\x1b8";
 // Direct placements reserve height with leading zero-width rows. Keep them
 // non-plain so transcript blank-edge trimming does not collapse image-only blocks.
 const RESERVED_IMAGE_ROW = "\x1b[0m";
@@ -366,16 +368,18 @@ export class Image implements Component {
 			} else if (result) {
 				// Direct placement: return `rows` lines so TUI accounts for image
 				// height. First (rows-1) lines are empty (TUI clears them); the last
-				// moves the cursor back up, emits the image sequence, then restores the
-				// cursor so the renderer's next CRLF starts below the reserved block.
+				// saves the final-row cursor, moves up to the image origin, emits the
+				// image sequence, then restores the final-row cursor. Save/restore is
+				// required because CUU clamps at the viewport top when leading rows are
+				// clipped away.
 				lines = [];
 				for (let i = 0; i < result.rows - 1; i++) {
 					lines.push(RESERVED_IMAGE_ROW);
 				}
 				const cursorRows = result.rows - 1;
 				const moveUp = cursorRows > 0 ? `\x1b[${cursorRows}A` : "";
-				const moveDown = cursorRows > 0 ? `\x1b[${cursorRows}B` : "";
-				lines.push(moveUp + (result.sequence ?? "") + moveDown);
+				const placement = moveUp + (result.sequence ?? "");
+				lines.push(cursorRows > 0 ? SAVE_CURSOR + placement + RESTORE_CURSOR : placement);
 			} else {
 				lines = this.#fallbackLines();
 			}
