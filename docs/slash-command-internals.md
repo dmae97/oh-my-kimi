@@ -103,7 +103,7 @@ Both sides are loaded then flattened in user-first order, so **user OpenCode com
 
 Loads plugin command roots via `listClaudePluginRoots(...)`, which reads `~/.claude/plugins/installed_plugins.json`, `~/.omp/plugins/installed_plugins.json`, and the nearest project-scoped registry resolved from cwd. For each root it scans `<pluginRoot>/commands/*.md` (the directory can be remapped by plugin config keys `commands`/`slash-commands`), and command names are prefixed with the plugin name: `<plugin>:<command>`.
 
-Ordering follows registry iteration order and per-plugin entry order from that JSON data. There is no additional sort step.
+Across the three registries, roots are merged by precedence rather than sorted: `--plugin-dir` injected roots come first, then project-scoped entries (which shadow user entries for the same plugin id), then user entries, with the OMP registry authoritative over Claude's for the same plugin id. Within each registry, per-plugin entry order from the JSON data is preserved; there is no additional sort step.
 
 ## 3) Materialization to runtime `FileSlashCommand`
 
@@ -144,6 +144,7 @@ Then `init()` calls `refreshSlashCommandState(...)` to load file-based commands 
 
 - pending commands above
 - discovered file-based commands
+- discovered prompt-template commands whose names aren't already taken by a built-in/hook/custom/skill/file command
 
 `refreshSlashCommandState(...)` also updates `session.setSlashCommands(...)` so prompt expansion uses the same discovered file command set.
 

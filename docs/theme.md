@@ -115,7 +115,7 @@ For custom theme files:
 
 1. read JSON
 2. parse JSON
-3. validate against `ThemeJsonSchema`
+3. validate against `themeJsonSchema`
 4. resolve `vars` references recursively
 5. convert resolved values to ANSI by terminal capability mode
 

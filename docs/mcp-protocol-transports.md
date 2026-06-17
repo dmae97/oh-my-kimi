@@ -114,7 +114,7 @@ Server-initiated notifications are surfaced through transport `onNotification`; 
 - `close()`:
   - `#handleClose()`: mark disconnected, reject all pending requests (`Transport closed`), emit `onClose`
   - kill subprocess
-  - await read loop shutdown
+  - detach read loop without awaiting (it can hang indefinitely)
 
 If read loop exits unexpectedly, `finally` triggers `#handleClose()` which performs the same pending-request rejection and close callback.
 

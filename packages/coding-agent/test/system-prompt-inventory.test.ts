@@ -86,6 +86,31 @@ describe("system prompt tool inventory", () => {
 		expect(text).not.toContain("- Read: `read`");
 	});
 
+	it("tells the agent to read matching skills before work", async () => {
+		const { systemPrompt } = await buildSystemPrompt({
+			cwd: tempDir,
+			contextFiles: [],
+			skills: [
+				{
+					name: "frontend-design",
+					description: "Frontend UI workflow",
+					filePath: path.join(tempDir, "SKILL.md"),
+					baseDir: tempDir,
+					source: "test",
+				},
+			],
+			rules: [],
+			toolNames: ["read"],
+			tools: TOOLS,
+			workspaceTree: { ...EMPTY_TREE, rootPath: tempDir },
+		});
+		const text = systemPrompt.join("\n\n");
+
+		expect(text).toContain("Skills are specialized knowledge. Scan descriptions for your task domain.");
+		expect(text).toContain("If a skill applies, you MUST read `skill://<name>` before proceeding.");
+		expect(text).toContain("- frontend-design: Frontend UI workflow");
+	});
+
 	it("places the inventory at the bottom of the TOOLS section (after I/O and Exploration)", async () => {
 		const text = await render({ nativeTools: true, repeatToolDescriptions: false });
 		const inventoryIdx = text.indexOf("# Inventory");

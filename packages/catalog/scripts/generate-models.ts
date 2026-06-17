@@ -14,7 +14,7 @@ import { AuthStorage, type OAuthAccess, SqliteAuthCredentialStore } from "@oh-my
 import type { OAuthProvider } from "@oh-my-pi/pi-ai/oauth/types";
 import { getGitLabDuoModels } from "@oh-my-pi/pi-ai/providers/gitlab-duo";
 import { $env } from "@oh-my-pi/pi-utils";
-import { fetchAntigravityDiscoveryModels } from "../src/discovery/antigravity";
+import { ANTIGRAVITY_PRIMARY_ENDPOINT, fetchAntigravityDiscoveryModels } from "../src/discovery/antigravity";
 import { fetchCodexModels } from "../src/discovery/codex";
 import { createModelManager } from "../src/model-manager";
 import prevModelsJson from "../src/models.json" with { type: "json" };
@@ -323,7 +323,16 @@ function dropXiaomiAudioOnlyIds(models: readonly ModelSpec[]): ModelSpec[] {
 	});
 }
 
-const ANTIGRAVITY_ENDPOINT = "https://daily-cloudcode-pa.sandbox.googleapis.com";
+function normalizeAntigravityEndpoint(models: readonly ModelSpec[]): ModelSpec[] {
+	return models.map(model => {
+		if (model.provider === "google-antigravity" && model.baseUrl) {
+			return { ...model, baseUrl: ANTIGRAVITY_PRIMARY_ENDPOINT };
+		}
+		return model;
+	});
+}
+
+const ANTIGRAVITY_ENDPOINT = ANTIGRAVITY_PRIMARY_ENDPOINT;
 
 async function getOAuthAccessFromStorage(provider: OAuthProvider): Promise<OAuthAccess | null> {
 	try {
@@ -522,6 +531,7 @@ async function generateModels() {
 	allModels = dropFireworksWireIds(allModels);
 	allModels = dropUnusableZaiContextTierIds(allModels);
 	allModels = dropXiaomiAudioOnlyIds(allModels);
+	allModels = normalizeAntigravityEndpoint(allModels);
 	// Normalize display names: gateway author prefixes ("OpenAI: …"), alias
 	// markers ("(latest)"), provider attribution ("(Antigravity)"), and
 	// price/promo tags are model-extrinsic — strip them from the bundle.

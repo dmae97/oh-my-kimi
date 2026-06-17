@@ -1,221 +1,103 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useRef, useState } from "react";
+import { AppLayout } from "./app/AppLayout";
+import type { DashboardSection } from "./app/routes";
+import { useHashRoute } from "./data/useHashRoute";
 import {
-	getBehaviorDashboardStats,
-	getCostDashboardStats,
-	getModelDashboardStats,
-	getOverviewStats,
-	getRecentErrors,
-	getRecentRequests,
-	sync,
-} from "./api";
-import { BehaviorChart } from "./components/BehaviorChart";
-import { BehaviorModelsTable } from "./components/BehaviorModelsTable";
-import { BehaviorSummary } from "./components/BehaviorSummary";
-import { ChartsContainer } from "./components/ChartsContainer";
-import { CostChart } from "./components/CostChart";
-import { CostSummary } from "./components/CostSummary";
-import { Header } from "./components/Header";
-import { ModelsTable } from "./components/ModelsTable";
-import { RequestDetail } from "./components/RequestDetail";
-import { RequestList } from "./components/RequestList";
-import { StatsGrid } from "./components/StatsGrid";
-import type {
-	BehaviorDashboardStats,
-	CostDashboardStats,
-	MessageStats,
-	ModelDashboardStats,
-	OverviewStats,
-	TimeRange,
-} from "./types";
-
-type Tab = "overview" | "requests" | "errors" | "models" | "costs" | "behavior";
+	BehaviorRoute,
+	CostsRoute,
+	ErrorsRoute,
+	ModelsRoute,
+	OverviewRoute,
+	ProjectsRoute,
+	RequestsRoute,
+} from "./routes";
+import { RequestDrawer } from "./ui/RequestDrawer";
 
 export default function App() {
-	const [overviewStats, setOverviewStats] = useState<OverviewStats | null>(null);
-	const [modelStats, setModelStats] = useState<ModelDashboardStats | null>(null);
-	const [costStats, setCostStats] = useState<CostDashboardStats | null>(null);
-	const [behaviorStats, setBehaviorStats] = useState<BehaviorDashboardStats | null>(null);
-	const [recentRequests, setRecentRequests] = useState<MessageStats[]>([]);
-	const [recentErrors, setRecentErrors] = useState<MessageStats[]>([]);
-	const [selectedRequest, setSelectedRequest] = useState<number | null>(null);
-	const [syncing, setSyncing] = useState(false);
-	const [activeTab, setActiveTab] = useState<Tab>("overview");
-	const [timeRange, setTimeRange] = useState<TimeRange>("24h");
+	const { section, setSection, range, setRange } = useHashRoute();
+	const [refreshTrigger, setRefreshTrigger] = useState(0);
+	const [selectedRequestId, setSelectedRequestId] = useState<number | null>(null);
+	const [updatedAt, setUpdatedAt] = useState<number | null>(() => Date.now());
 
-	const loadRecentLists = useCallback(async () => {
-		try {
-			const [requests, errors] = await Promise.all([getRecentRequests(50), getRecentErrors(50)]);
-			setRecentRequests(requests);
-			setRecentErrors(errors);
-		} catch (err) {
-			console.error(err);
+	const handleSyncComplete = useCallback((result: { success: boolean }) => {
+		if (result.success) {
+			setRefreshTrigger(prev => prev + 1);
+			setUpdatedAt(Date.now());
 		}
 	}, []);
 
-	const loadActiveTabStats = useCallback(async () => {
-		try {
-			if (activeTab === "models") {
-				setModelStats(await getModelDashboardStats(timeRange));
-				return;
-			}
-			if (activeTab === "costs") {
-				setCostStats(await getCostDashboardStats(timeRange));
-				return;
-			}
-			if (activeTab === "behavior") {
-				setBehaviorStats(await getBehaviorDashboardStats(timeRange));
-				return;
-			}
-			if (activeTab === "overview") {
-				setOverviewStats(await getOverviewStats(timeRange));
-			}
-		} catch (err) {
-			console.error(err);
-		}
-	}, [activeTab, timeRange]);
+	// Stable identity so the drawer's effects don't tear down on every App render.
+	const closeDrawer = useCallback(() => setSelectedRequestId(null), []);
 
-	const handleSync = async () => {
-		setSyncing(true);
-		try {
-			await sync();
-			await Promise.all([loadActiveTabStats(), loadRecentLists()]);
-		} finally {
-			setSyncing(false);
+	const active = section;
+
+	// Keep every visited section mounted and just toggle visibility. Remounting a
+	// route on each navigation replays the chart entry animations (a visible
+	// flicker); keeping it alive makes revisits instant while the live chart
+	// instances still animate in place on data/range updates. Only the active
+	// route fetches/polls (enabled), so hidden routes don't keep hitting the API.
+	const mountedRef = useRef<Set<DashboardSection>>(new Set());
+	mountedRef.current.add(active);
+
+	const renderRoute = (target: DashboardSection) => {
+		const isActive = target === active;
+		switch (target) {
+			case "overview":
+				return (
+					<OverviewRoute
+						active={isActive}
+						range={range}
+						refreshTrigger={refreshTrigger}
+						onRequestClick={setSelectedRequestId}
+					/>
+				);
+			case "requests":
+				return (
+					<RequestsRoute
+						active={isActive}
+						range={range}
+						refreshTrigger={refreshTrigger}
+						onRequestClick={setSelectedRequestId}
+					/>
+				);
+			case "errors":
+				return (
+					<ErrorsRoute
+						active={isActive}
+						range={range}
+						refreshTrigger={refreshTrigger}
+						onRequestClick={setSelectedRequestId}
+					/>
+				);
+			case "models":
+				return <ModelsRoute active={isActive} range={range} refreshTrigger={refreshTrigger} />;
+			case "costs":
+				return <CostsRoute active={isActive} range={range} refreshTrigger={refreshTrigger} />;
+			case "behavior":
+				return <BehaviorRoute active={isActive} range={range} refreshTrigger={refreshTrigger} />;
+			case "projects":
+				return <ProjectsRoute active={isActive} range={range} refreshTrigger={refreshTrigger} />;
 		}
 	};
 
-	useEffect(() => {
-		loadRecentLists();
-		const interval = setInterval(loadRecentLists, 30000);
-		return () => clearInterval(interval);
-	}, [loadRecentLists]);
-
-	useEffect(() => {
-		loadActiveTabStats();
-		const interval = setInterval(loadActiveTabStats, 30000);
-		return () => clearInterval(interval);
-	}, [loadActiveTabStats]);
-
 	return (
-		<div className="min-h-screen">
-			<div className="max-w-[1600px] mx-auto px-6 py-6">
-				<Header
-					activeTab={activeTab}
-					onTabChange={setActiveTab}
-					onSync={handleSync}
-					syncing={syncing}
-					timeRange={timeRange}
-					onTimeRangeChange={setTimeRange}
-				/>
-
-				{activeTab === "overview" && (
-					<div className="space-y-6 animate-fade-in">
-						{overviewStats ? (
-							<StatsGrid stats={overviewStats.overall} />
-						) : (
-							<LoadingState label="Loading overview..." />
-						)}
-
-						<div className="grid lg:grid-cols-2 gap-6">
-							<RequestList
-								title="Recent Requests"
-								requests={recentRequests.slice(0, 10)}
-								onSelect={r => r.id && setSelectedRequest(r.id)}
-							/>
-							<RequestList
-								title="Recent Errors"
-								requests={recentErrors.slice(0, 10)}
-								onSelect={r => r.id && setSelectedRequest(r.id)}
-							/>
-						</div>
+		<>
+			<AppLayout
+				activeSection={active}
+				onSectionChange={setSection}
+				range={range}
+				onRangeChange={setRange}
+				updatedAt={updatedAt}
+				onSyncComplete={handleSyncComplete}
+			>
+				{[...mountedRef.current].map(target => (
+					<div key={target} hidden={target !== active}>
+						{renderRoute(target)}
 					</div>
-				)}
+				))}
+			</AppLayout>
 
-				{activeTab === "requests" && (
-					<div className="h-[calc(100vh-140px)] animate-fade-in">
-						<RequestList
-							title="All Recent Requests"
-							requests={recentRequests}
-							onSelect={r => r.id && setSelectedRequest(r.id)}
-						/>
-					</div>
-				)}
-
-				{activeTab === "errors" && (
-					<div className="h-[calc(100vh-140px)] animate-fade-in">
-						<RequestList
-							title="Failed Requests"
-							requests={recentErrors}
-							onSelect={r => r.id && setSelectedRequest(r.id)}
-						/>
-					</div>
-				)}
-
-				{activeTab === "models" && (
-					<div className="space-y-6 animate-fade-in">
-						{modelStats ? (
-							<>
-								<ChartsContainer modelSeries={modelStats.modelSeries} timeRange={timeRange} />
-								<ModelsTable
-									models={modelStats.byModel}
-									performanceSeries={modelStats.modelPerformanceSeries}
-									timeRange={timeRange}
-								/>
-							</>
-						) : (
-							<LoadingState label="Loading models..." />
-						)}
-					</div>
-				)}
-
-				{activeTab === "costs" && (
-					<div className="space-y-6 animate-fade-in">
-						{costStats ? (
-							<>
-								<CostSummary costSeries={costStats.costSeries} />
-								<CostChart costSeries={costStats.costSeries} />
-							</>
-						) : (
-							<LoadingState label="Loading costs..." />
-						)}
-					</div>
-				)}
-
-				{activeTab === "behavior" && (
-					<div className="space-y-6 animate-fade-in">
-						{behaviorStats ? (
-							<>
-								<BehaviorSummary
-									overall={behaviorStats.overall}
-									behaviorSeries={behaviorStats.behaviorSeries}
-								/>
-								<BehaviorChart behaviorSeries={behaviorStats.behaviorSeries} />
-								<BehaviorModelsTable
-									models={behaviorStats.byModel}
-									behaviorSeries={behaviorStats.behaviorSeries}
-								/>
-							</>
-						) : (
-							<LoadingState label="Loading behavior..." />
-						)}
-					</div>
-				)}
-
-				{selectedRequest !== null && (
-					<RequestDetail id={selectedRequest} onClose={() => setSelectedRequest(null)} />
-				)}
-			</div>
-		</div>
-	);
-}
-
-function LoadingState({ label }: { label: string }) {
-	return (
-		<div className="min-h-[180px] flex items-center justify-center">
-			<div className="flex items-center gap-3 text-[var(--text-muted)]">
-				<div className="w-5 h-5 border-2 border-[var(--border-default)] border-t-[var(--accent-cyan)] rounded-full spin" />
-				<span className="text-sm">{label}</span>
-			</div>
-		</div>
+			<RequestDrawer id={selectedRequestId} onClose={closeDrawer} />
+		</>
 	);
 }

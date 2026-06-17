@@ -3,7 +3,10 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import { fetchAntigravityDiscoveryModels } from "@oh-my-pi/pi-catalog/discovery/antigravity";
+import {
+	ANTIGRAVITY_PRIMARY_ENDPOINT,
+	fetchAntigravityDiscoveryModels,
+} from "@oh-my-pi/pi-catalog/discovery/antigravity";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { stripThinkingVariantToken } from "@oh-my-pi/pi-catalog/identity/family";
 import { resolveProviderModels } from "@oh-my-pi/pi-catalog/model-manager";
@@ -530,5 +533,24 @@ describe("antigravity discovery collapsing", () => {
 		expect(flash?.baseUrl).toBe("https://cca.test");
 		expect(flash?.requestModelId).toBe("gemini-3.5-flash-extra-low");
 		expect(flash?.thinking?.effortRouting?.off).toBe("gemini-3.5-flash-extra-low");
+	});
+
+	it("uses the primary daily endpoint by default", async () => {
+		const requestedUrls: string[] = [];
+		const defaultFetcher = Object.assign(
+			(input: RequestInfo | URL, _init?: RequestInit) => {
+				requestedUrls.push(String(input));
+				return Promise.resolve(new Response(JSON.stringify(payload), { status: 200 }));
+			},
+			{ preconnect: fetch.preconnect },
+		);
+
+		const models = await fetchAntigravityDiscoveryModels({
+			token: "t",
+			fetcher: defaultFetcher,
+		});
+
+		expect(requestedUrls[0]).toContain(ANTIGRAVITY_PRIMARY_ENDPOINT);
+		expect(models?.[0]?.baseUrl).toBe(ANTIGRAVITY_PRIMARY_ENDPOINT);
 	});
 });

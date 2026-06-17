@@ -90,7 +90,7 @@ Each provider has one or more environment variables that supply a key when no st
 | `xai-oauth` | `XAI_OAUTH_TOKEN`, then `XAI_API_KEY` |
 | `github-copilot` | `COPILOT_GITHUB_TOKEN` |
 | `cursor` | `CURSOR_ACCESS_TOKEN` |
-| `azure-openai-responses` | `AZURE_OPENAI_API_KEY` |
+| `azure` | `AZURE_OPENAI_API_KEY` |
 | `amazon-bedrock` | `AWS_PROFILE`, or `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`, or an ECS/IRSA credential chain |
 
 ### Additional hosted providers
@@ -104,7 +104,6 @@ Each provider has one or more environment variables that supply a key when no st
 | `nvidia` | `NVIDIA_API_KEY` |
 | `huggingface` | `HUGGINGFACE_HUB_TOKEN`, then `HF_TOKEN` |
 | `moonshot` | `MOONSHOT_API_KEY` |
-| `kimi-code` | `KIMI_API_KEY` |
 | `nanogpt` | `NANO_GPT_API_KEY` |
 | `venice` | `VENICE_API_KEY` |
 | `vercel-ai-gateway` | `AI_GATEWAY_API_KEY` (also `VERCEL_AI_GATEWAY_API_KEY` for catalog discovery) |
@@ -132,7 +131,7 @@ Each provider has one or more environment variables that supply a key when no st
 | `lm-studio` | `LM_STUDIO_API_KEY` (optional; keyless by default) |
 | `llama.cpp` | `LLAMA_CPP_API_KEY` (only when the server requires auth) |
 
-OAuth-backed providers such as `anthropic`, `github-copilot`, `cursor`, `ollama-cloud`, `qwen-portal`, `xai-oauth`, `wafer-pass`, `wafer-serverless`, `google-gemini-cli`, and `google-antigravity` are normally reached through `/login` rather than an environment variable. See [Environment variables](./environment-variables.md) for search-tool and configuration variables not listed here.
+OAuth-backed providers such as `anthropic`, `github-copilot`, `cursor`, `ollama-cloud`, `qwen-portal`, `kimi-code`, `xai-oauth`, `wafer-pass`, `wafer-serverless`, `google-gemini-cli`, and `google-antigravity` are normally reached through `/login` rather than an environment variable. See [Environment variables](./environment-variables.md) for search-tool and configuration variables not listed here.
 
 ### `.env` discovery and precedence
 

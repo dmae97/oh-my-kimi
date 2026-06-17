@@ -5,6 +5,19 @@
 ### Added
 
 - Added `LITELLM_BASE_URL` guidance to the LiteLLM login prompt so non-default proxy endpoints are discoverable. ([#2726](https://github.com/can1357/oh-my-pi/issues/2726))
+### Fixed
+
+- Fixed Antigravity and Gemini CLI model requests failing with an opaque error when Google requires account verification. Cloud Code Assist `403 VALIDATION_REQUIRED` responses now surface the `validation_url` and the signed-in account email when available, so users see an actionable account-verification message instead of the raw API error body.
+## [16.0.4] - 2026-06-17
+
+### Fixed
+
+- Fixed tool argument coercion to parse double-encoded JSON strings, including quoted values like `"300"`, when schema expects a number
+- Fixed object-array coercion to parse JSON object and array strings into proper array arguments instead of wrapping raw strings
+- Fixed handling of malformed JSON container strings for array schema fields so validation now surfaces a top-level `expected array, received string` error rather than nested element errors
+- Fixed ChatGPT/Codex browser login missing connector OAuth scopes and rendering object-shaped token endpoint errors as `[object Object]`. ([#2825](https://github.com/can1357/oh-my-pi/issues/2825))
+- Fixed Zhipu/BigModel GLM-5.2 chat-completions requests so internal `xhigh` effort serializes as provider-native `reasoning_effort: "max"` and tool calls opt into `tool_stream`. ([#2833](https://github.com/can1357/oh-my-pi/issues/2833))
+- Fixed Google Gemini CLI and Antigravity tool calls with `toolChoice: "auto"` serializing an explicit `toolConfig` AUTO mode, which can cause Gemini-3 models to leak raw planning JSON instead of executing tools. ([#2830](https://github.com/can1357/oh-my-pi/issues/2830))
 
 ## [16.0.3] - 2026-06-16
 

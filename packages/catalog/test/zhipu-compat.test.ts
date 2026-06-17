@@ -5,10 +5,9 @@ import type { FetchImpl, ModelSpec } from "@oh-my-pi/pi-catalog/types";
 
 /**
  * Resolver-branch coverage for the `isZhipu` path added by the
- * `zhipu-coding-plan` provider. Mirrors the shape of existing zai/cerebras
- * tests: assert the contract the provider relies on (zai thinking format,
- * disabled `reasoning_effort`, no `developer` role) so future refactors of
- * `buildOpenAICompat` cannot silently regress the BigModel SKU.
+ * `zhipu-coding-plan` provider. GLM-5.2+ additionally accepts
+ * `reasoning_effort`; older BigModel thinking SKUs keep the binary Z.AI-shaped
+ * toggle only.
  */
 
 const baseModel: Omit<ModelSpec<"openai-completions">, "provider" | "baseUrl"> = {
@@ -40,8 +39,28 @@ function zhipuByBaseUrl(): ModelSpec<"openai-completions"> {
 	};
 }
 
+function zhipuGlm52ByProvider(): ModelSpec<"openai-completions"> {
+	return {
+		...baseModel,
+		id: "glm-5.2",
+		name: "GLM-5.2",
+		provider: "zhipu-coding-plan",
+		baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4",
+	};
+}
+
+function zhipuGlm52ByOfficialBaseUrl(): ModelSpec<"openai-completions"> {
+	return {
+		...baseModel,
+		id: "glm-5.2",
+		name: "GLM-5.2",
+		provider: "custom",
+		baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+	};
+}
+
 describe("openai-completions compat — zhipu-coding-plan branch", () => {
-	it("forces zai thinking format and disables reasoning_effort / developer role", () => {
+	it("forces zai thinking format and disables reasoning_effort before GLM-5.2", () => {
 		const compat = buildOpenAICompat(zhipuByProvider());
 
 		expect(compat.thinkingFormat).toBe("zai");
@@ -59,6 +78,19 @@ describe("openai-completions compat — zhipu-coding-plan branch", () => {
 
 		expect(compat.thinkingFormat).toBe("zai");
 		expect(compat.supportsReasoningEffort).toBe(false);
+	});
+
+	it("enables reasoning_effort for GLM-5.2 on both Zhipu route shapes", () => {
+		const codingPlanCompat = buildOpenAICompat(zhipuGlm52ByProvider());
+		const officialCompat = buildOpenAICompat(zhipuGlm52ByOfficialBaseUrl());
+
+		expect(codingPlanCompat.thinkingFormat).toBe("zai");
+		expect(codingPlanCompat.supportsReasoningEffort).toBe(true);
+		expect(officialCompat.thinkingFormat).toBe("zai");
+		expect(officialCompat.supportsReasoningEffort).toBe(true);
+		expect(officialCompat.reasoningContentField).toBe("reasoning_content");
+		expect(codingPlanCompat.maxTokensField).toBe("max_tokens");
+		expect(officialCompat.maxTokensField).toBe("max_tokens");
 	});
 
 	it("lets explicit model.compat overrides win at the resolver layer", () => {

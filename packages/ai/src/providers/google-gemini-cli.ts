@@ -27,6 +27,7 @@ import type {
 } from "../types";
 import { normalizeSystemPrompts } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
+import { extractGoogleValidationUrl, formatGoogleValidationRequiredMessage } from "../utils/google-validation";
 import { appendRawHttpRequestDumpFor400, type RawHttpRequestDump } from "../utils/http-inspector";
 import { getStreamFirstEventTimeoutMs } from "../utils/idle-iterator";
 // Refresh is the sole responsibility of AuthStorage (broker-aware, single-flighted);
@@ -153,6 +154,7 @@ interface GeminiCliApiKeyPayload {
 	project_id?: unknown;
 	refreshToken?: unknown;
 	expiresAt?: unknown;
+	email?: unknown;
 	refresh?: unknown;
 	expires?: unknown;
 }
@@ -161,6 +163,7 @@ interface ParsedGeminiCliCredentials {
 	projectId: string;
 	refreshToken?: string;
 	expiresAt?: number;
+	email?: string;
 }
 
 function normalizeExpiryMs(value: unknown): number | undefined {
@@ -200,12 +203,14 @@ export function parseGeminiCliCredentials(apiKeyRaw: string): ParsedGeminiCliCre
 				? parsed.refresh
 				: undefined;
 	const expiresAt = normalizeExpiryMs(parsed.expiresAt ?? parsed.expires);
+	const email = typeof parsed.email === "string" && parsed.email.length > 0 ? parsed.email : undefined;
 
 	return {
 		accessToken: parsed.token,
 		projectId,
 		refreshToken,
 		expiresAt,
+		email,
 	};
 }
 
@@ -400,10 +405,16 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 			);
 			if (!response.ok) {
 				const errorText = await response.text();
+				const validationUrl = extractGoogleValidationUrl(errorText);
+				const errorMessage = validationUrl
+					? formatGoogleValidationRequiredMessage(validationUrl, "retry your request", parsedCredentials.email)
+					: extractErrorMessage(errorText);
 				throw new GeminiCliApiError(
-					`Cloud Code Assist API error (${response.status}): ${extractErrorMessage(errorText)}`,
+					`Cloud Code Assist API error (${response.status}): ${errorMessage}`,
 					response.status,
-					{ headers: response.headers },
+					{
+						headers: response.headers,
+					},
 				);
 			}
 			const requestUrl = response.url;
@@ -849,9 +860,12 @@ export function buildRequest(
 		if (options.toolChoice) {
 			const choice = options.toolChoice;
 			if (typeof choice === "string") {
-				request.toolConfig = {
-					functionCallingConfig: { mode: mapToolChoice(choice) },
-				};
+				const mode = mapToolChoice(choice);
+				if (mode !== "AUTO") {
+					request.toolConfig = {
+						functionCallingConfig: { mode },
+					};
+				}
 			} else {
 				request.toolConfig = {
 					functionCallingConfig: {

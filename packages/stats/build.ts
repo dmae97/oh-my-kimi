@@ -71,6 +71,17 @@ const indexHtml = `<!DOCTYPE html>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI Usage Statistics</title>
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem("omp-stats-theme");
+          var system = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+          var theme = stored === "light" || stored === "dark" ? stored : system;
+          document.documentElement.dataset.theme = theme;
+          document.documentElement.style.colorScheme = theme;
+        } catch (e) {}
+      })();
+    </script>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>

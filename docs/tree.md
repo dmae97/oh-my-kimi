@@ -116,7 +116,7 @@ Assistant messages that contain **only tool calls** (no text) are hidden by defa
 ### Search behavior
 
 - Query is tokenized by spaces
-- Matching is case-insensitive
+- Matching is fuzzy (subsequence) and case-insensitive (`fuzzyMatch`)
 - All tokens must match (AND semantics)
 - Searchable text includes label, role, and type-specific content (message text, branch summary text, custom type, tool command snippets, etc.)
 

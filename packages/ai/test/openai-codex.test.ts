@@ -1,5 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { createOpenAICodexAuthorizationUrl } from "@oh-my-pi/pi-ai/oauth/openai-codex";
+import {
+	createOpenAICodexAuthorizationUrl,
+	formatOpenAICodexTokenEndpointError,
+} from "@oh-my-pi/pi-ai/oauth/openai-codex";
 import { type RequestBody, transformRequestBody } from "@oh-my-pi/pi-ai/providers/openai-codex/request-transformer";
 import { CodexApiError, parseCodexError } from "@oh-my-pi/pi-ai/providers/openai-codex/response-handler";
 import { convertOpenAICodexResponsesTools } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
@@ -19,6 +22,27 @@ describe("openai-codex oauth", () => {
 		});
 
 		expect(new URL(authUrl).searchParams.get("originator")).toBe(OPENAI_HEADER_VALUES.ORIGINATOR_CODEX);
+	});
+
+	it("requests Codex connector scopes during browser login", () => {
+		const authUrl = createOpenAICodexAuthorizationUrl({
+			state: "state",
+			redirectUri: "http://localhost:1455/auth/callback",
+			challenge: "challenge",
+		});
+
+		const scopes = new Set((new URL(authUrl).searchParams.get("scope") ?? "").split(" "));
+		expect(scopes.has("api.connectors.read")).toBe(true);
+		expect(scopes.has("api.connectors.invoke")).toBe(true);
+	});
+
+	it("formats object token endpoint errors without object coercion", () => {
+		const detail = formatOpenAICodexTokenEndpointError(
+			403,
+			JSON.stringify({ error: { code: "access_denied", message: "Connector scope missing" } }),
+		);
+
+		expect(detail).toBe("403 access_denied: Connector scope missing");
 	});
 });
 

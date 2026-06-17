@@ -20,3 +20,4 @@ Press ctrl+r to search your prompt history and reuse a past message
 Pair up live: `/collab` shares your session through an end-to-end encrypted relay link — a teammate runs `/join <link>` to watch tool calls stream and prompt the agent from their own omp
 Press ← ← to drill into a running or finished agent and inspect its tool calls and transcript
 Hit a Codex rate limit? `/usage reset` spends a saved reset credit to immediately restore your quota
+No native tool_calling? Inference provider botches parsing them? `PI_DIALECT=glm|kimi|anthropic…` rolls it locally for them!

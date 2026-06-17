@@ -158,7 +158,7 @@ In compiled mode (`PI_COMPILED`, Bun embedded URL markers, or populated embedded
    - package/executable directories.
 4. First successfully loaded addon with the expected version sentinel is returned.
 
-This is why packaging + runtime loader expectations must align: filenames, platform tags, CPU variants, and embedded manifest version must match what `native/index.js` probes.
+This is why packaging + runtime loader expectations must align: filenames, platform tags, CPU variants, and embedded manifest version must match what `native/loader-state.js` probes.
 
 ## JS API ↔ Rust export mapping (build sanity subset)
 
@@ -185,7 +185,7 @@ Generated declarations currently include exports from these Rust modules:
 - Install failure: explicit message; Windows includes locked-file hint.
 - Generated binding install failure: explicit source/destination message.
 
-## Runtime loader failures (`native/index.js`)
+## Runtime loader failures (`native/loader-state.js`)
 
 - Unsupported platform tag: throws with supported platform list after probing fails.
 - No candidate could load: throws with full candidate error list and mode-specific remediation hints.

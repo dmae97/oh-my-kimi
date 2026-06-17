@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [16.0.4] - 2026-06-17
+
+### Fixed
+
+- Fixed RPC/ACP startup forcing todo settings back to host defaults, so project-level `todo.enabled`, `todo.reminders`, and `todo.eager` opt-outs now suppress protocol-mode todo prompt injection; enabled todo reminders are now persisted to the JSONL transcript so the log matches the model-visible context ([#2824](https://github.com/can1357/oh-my-pi/issues/2824)).
+- Fixed default prompts to instruct the agent to read applicable `skill://<name>` content before starting work, so discovered skills influence broad task requests like frontend generation ([#2829](https://github.com/can1357/oh-my-pi/issues/2829)).
+- Fixed hashline visible-line validation for ACP editor reads so `INS.POST` anchors displayed by bridge-backed range and multi-range `read` output are merged into the session snapshot before `edit` validates them ([#2773](https://github.com/can1357/oh-my-pi/issues/2773)).
+
 ## [16.0.3] - 2026-06-16
 
 ### Added
@@ -267,6 +275,7 @@
 
 - Fixed Auto-Promote Context being pre-empted by compaction: the pre-prompt context check ran compaction directly, so snapcompact (or any strategy) fired before promotion ever got a chance. It now tries promotion to a larger-context model first — mirroring the post-turn threshold path — and only compacts when no larger-context target is available. Snapcompact (auto and manual) also falls back to a context-full LLM summary when its frame archive plus kept history would still overflow the model's usable window, instead of leaving the session over the limit.
 - Fixed `eval` JS cells intermittently failing after ~15s with exit code 1 under load (e.g. `bun test --parallel`, where each file runs in a worker subprocess and the eval worker is nested). The host swallowed asynchronous worker spawn/load/crash failures — `new Worker` reports module-load errors via an async `error` event, not a synchronous throw, so the spawn `try/catch` (and its inline-worker fallback) never fired, and no `error`/`messageerror` listener was wired — leaving a dead worker indistinguishable from a slow one and blocking the full worker-init timeout. The init handshake now rejects immediately on a worker `error`/`messageerror` event and falls back to the inline worker, and the `ready` listener is attached synchronously after `new Worker` (Bun does not buffer messages posted before a listener exists) so a fast worker's `ready` can no longer be dropped.
+- Fixed JSON-mode startup notices (export/resume/session-picker messages) writing to stdout before the JSON event stream; they now route to stderr so stdout remains newline-delimited JSON.
 
 ## [15.13.1] - 2026-06-15
 

@@ -51,7 +51,7 @@ Failure behavior:
 3. `getSSHConfigPath("project")` and `getSSHConfigPath("user")` in `packages/utils/src/dirs.ts` resolve those managed files to `.omp/ssh.json` in the project and `~/.omp/agent/ssh.json` in the user config dir. This tool does not read `~/.ssh/config`.
 4. Capability loading deduplicates by host name with first item winning; provider order is priority-sorted and the SSH JSON provider registers at priority `5`.
 5. `loadHosts()` in `packages/coding-agent/src/tools/ssh.ts` builds `hostsByName` and drops later duplicates again with `if (!hostsByName.has(host.name))`.
-6. Tool description text is built from `packages/coding-agent/src/prompts/tools/ssh.md` plus an `Available hosts:` list. Each host entry calls `getHostInfoForHost()` to show detected shell/OS when cached; otherwise it renders `detecting...`.
+6. Tool description text is built from `packages/coding-agent/src/prompts/tools/ssh.md` plus an `Available hosts:` list. Each host entry calls `getCachedHostInfoSync()` to show detected shell/OS when cached; otherwise it renders `detecting...`.
 7. On execute, `SshTool.execute()` rejects any `host` not in the discovered host-name set.
 8. `ensureHostInfo()` in `packages/coding-agent/src/ssh/connection-manager.ts` ensures an SSH master connection exists, loads cached host info from disk if present, and probes remote OS/shell when cache is missing or stale.
 9. `buildRemoteCommand()` in `packages/coding-agent/src/tools/ssh.ts` prepends a cwd change when `cwd` is provided:

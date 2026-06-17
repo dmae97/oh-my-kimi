@@ -61,7 +61,7 @@ Mnemopi:
   - `global` — one shared bank, no project tags.
   - `per-project` — bank id gets `-<project label>` appended, where the label is the git primary checkout root basename (cwd basename outside a repo).
   - `per-project-tagged` — shared bank plus `project:<project label>` tags on retained memories.
-- Mnemopi bank scoping from `resolveBankScope(...)`:
+- Mnemopi bank scoping from `computeMnemopiBankScope(...)`:
   - `global` — retain and recall use the shared bank.
   - `per-project` — retain and recall use the project bank.
   - `per-project-tagged` — retain writes project-local memories; recall also reads the shared bank.
