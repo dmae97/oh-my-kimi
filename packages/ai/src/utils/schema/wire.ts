@@ -351,6 +351,76 @@ function closeDeclaredObjects(node: unknown): void {
 	}
 }
 
+/** A subschema admitting any JSON value: `{}` or boolean `true` (draft 2020-12 §4.3.1). */
+function isUnconstrainedSchema(val: unknown): boolean {
+	return val === true || isEmptyObject(val);
+}
+
+/**
+ * ArkType-only: prune the unconstrained branch ArkType emits for a `T | undefined`
+ * value-union (e.g. `{ id: "string | undefined" }`).
+ *
+ * `undefined` has no JSON Schema form, so `arkToWireSchema`'s `fallback` degrades the
+ * `undefined` arm to the unconstrained empty schema, producing
+ * `{ anyOf: [{ type: "string" }, {}] }`. That bare `{}`/`true` combiner branch makes
+ * the property match any value; strict providers (OpenAI/Codex) reject it ("Invalid
+ * schema for function ..."), and `enforceStrictSchema` waves the non-object `true`
+ * branch straight through, so the break only surfaces server-side. This drops the
+ * unconstrained branch(es) from every ArkType-emitted `anyOf`/`oneOf` and inlines the
+ * lone remaining concrete branch (keeping sibling keywords like `description`).
+ *
+ * `required` is deliberately left untouched: ArkType validates a `T | undefined` key
+ * as required-present (an absent key is rejected at runtime), so the wire must keep the
+ * key required to stay consistent with runtime validation — demoting it to optional
+ * would let the model omit the key (or, under strict-mode nullable wrapping, send
+ * `null`) and then fail ArkType validation.
+ *
+ * Scoped to `arkToWireSchema` and run before `normalizeEmptySchemas` so the
+ * provider-agnostic `{}`→`true` pass (issue #1179) still preserves intentional open
+ * unions in Zod / raw-JSON tools. Traverses only schema-valued positions so it never
+ * descends into `default`/`examples`/`enum`/`const` instance data.
+ */
+function pruneArkUndefinedUnionBranches(node: unknown): void {
+	if (Array.isArray(node)) {
+		for (const child of node) pruneArkUndefinedUnionBranches(child);
+		return;
+	}
+	if (!node || typeof node !== "object") return;
+	const obj = node as Record<string, unknown>;
+
+	for (const unionKey of ["anyOf", "oneOf"] as const) {
+		const branches = obj[unionKey];
+		if (!Array.isArray(branches)) continue;
+		const concrete = branches.filter(branch => !isUnconstrainedSchema(branch));
+		if (concrete.length === branches.length || concrete.length === 0) continue;
+		const only = concrete.length === 1 ? concrete[0] : undefined;
+		if (only !== undefined && isSchemaRecord(only)) {
+			delete obj[unionKey];
+			for (const key in only) {
+				if (!(key in obj)) obj[key] = only[key];
+			}
+		} else {
+			obj[unionKey] = concrete;
+		}
+	}
+
+	for (const key of SCHEMA_VALUE_KEYS) {
+		if (Object.hasOwn(obj, key)) pruneArkUndefinedUnionBranches(obj[key]);
+	}
+	for (const mapKey of SCHEMA_MAP_KEYS) {
+		const map = obj[mapKey];
+		if (map !== null && typeof map === "object" && !Array.isArray(map)) {
+			for (const key in map as Record<string, unknown>) {
+				pruneArkUndefinedUnionBranches((map as Record<string, unknown>)[key]);
+			}
+		}
+	}
+	for (const arrKey of SCHEMA_ARRAY_KEYS) {
+		const arr = obj[arrKey];
+		if (Array.isArray(arr)) for (const child of arr) pruneArkUndefinedUnionBranches(child);
+	}
+}
+
 /**
  * Convert an ArkType schema into the JSON Schema shape providers consume.
  *
@@ -366,6 +436,7 @@ export function arkToWireSchema(schema: Type): Record<string, unknown> {
 	return stamp(schema, kArkWireSchema, s => {
 		const raw = s.toJsonSchema({ target: "draft-2020-12", fallback: ctx => ctx.base }) as Record<string, unknown>;
 		delete raw.$schema;
+		pruneArkUndefinedUnionBranches(raw);
 		const upgraded = postProcessJsonSchema(upgradeJsonSchemaTo202012(raw) as Record<string, unknown>);
 		closeDeclaredObjects(upgraded);
 		return upgraded;

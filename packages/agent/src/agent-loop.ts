@@ -5,9 +5,11 @@
 import {
 	type AssistantMessage,
 	type AssistantMessageEvent,
+	arkToWireSchema,
 	type Context,
 	EventStream,
 	isApiKeyResolver,
+	isArkSchema,
 	isZodSchema,
 	resolveApiKeyOnce,
 	seedApiKeyResolver,
@@ -565,6 +567,9 @@ export function normalizeTools(
 		if (injectIntent && intentMode !== "omit") {
 			if (isZodSchema(parameters)) {
 				const wired = zodToWireSchema(parameters);
+				parameters = injectIntentIntoSchema(wired, intentMode) as TSchema;
+			} else if (isArkSchema(parameters)) {
+				const wired = arkToWireSchema(parameters);
 				parameters = injectIntentIntoSchema(wired, intentMode) as TSchema;
 			} else {
 				parameters = injectIntentIntoSchema(parameters, intentMode) as TSchema;

@@ -77,9 +77,9 @@ const searchSchema = type({
 		),
 	"i?": type("boolean").describe("case-insensitive search"),
 	"gitignore?": type("boolean").describe("respect gitignore"),
-	"skip?": type("number | null").describe(
-		"files to skip before collecting results — use to paginate when the prior call hit the file limit",
-	),
+	"skip?": type("number")
+		.or("null")
+		.describe("files to skip before collecting results — use to paginate when the prior call hit the file limit"),
 });
 
 export type SearchToolInput = typeof searchSchema.infer;

@@ -1184,6 +1184,17 @@ function inferStrictPrimitiveTypeFromEnumOrConst(node: Record<string, unknown>):
 const kStrictSchema = Symbol("pi.schema.strict");
 
 /**
+ * A boolean schema (`true`/`false`) or the empty object schema `{}`: an
+ * unconstrained branch with no declared type. Strict providers (OpenAI/Codex)
+ * reject these, and `enforceStrictSchema` would otherwise wave a non-object
+ * branch through as `strict: true`, so they disqualify a schema from strict mode
+ * wherever they sit in a combinator or `items`/`prefixItems` position.
+ */
+function isUnrepresentableStrictBranch(value: unknown): boolean {
+	return typeof value === "boolean" || (isJsonObject(value) && isJsonObjectEmpty(value));
+}
+
+/**
  * Detect schemas that strict mode *cannot* represent.
  *
  * Strict mode requires closed object shapes — every property is declared in
@@ -1191,6 +1202,11 @@ const kStrictSchema = Symbol("pi.schema.strict");
  *  - `patternProperties` (open keyset matched by regex),
  *  - `additionalProperties: true` or `additionalProperties: <schema>` (open
  *    keyset with optional further constraint).
+ *  - boolean schemas (`true`/`false`) inside `anyOf`/`oneOf`/`allOf`/`items`/
+ *    `prefixItems` — strict providers (OpenAI/Codex) reject the unconstrained
+ *    branch, and `enforceStrictSchema` would otherwise wave the non-object
+ *    branch through as `strict: true` (the `T | undefined` → `anyOf: [<T>, {}]`
+ *    → `[<T>, true]` encoding is the canonical offender).
  *
  * This check recurses into every place a child schema may live (properties,
  * items/prefixItems, combinator branches, $defs) so a single offender deep
@@ -1217,18 +1233,23 @@ function hasUnrepresentableStrictObjectMap(schema: Record<string, unknown>, epoc
 		const properties = schema.properties;
 		for (const k in properties) {
 			const propertySchema = properties[k];
+			if (isUnrepresentableStrictBranch(propertySchema)) return true;
 			if (isJsonObject(propertySchema) && hasUnrepresentableStrictObjectMap(propertySchema, epoch)) {
 				return true;
 			}
 		}
 	}
 
+	if (isUnrepresentableStrictBranch(schema.items)) {
+		return true;
+	}
 	if (isJsonObject(schema.items)) {
 		if (hasUnrepresentableStrictObjectMap(schema.items, epoch)) {
 			return true;
 		}
 	} else if (Array.isArray(schema.items)) {
 		for (const itemSchema of schema.items) {
+			if (isUnrepresentableStrictBranch(itemSchema)) return true;
 			if (isJsonObject(itemSchema) && hasUnrepresentableStrictObjectMap(itemSchema, epoch)) {
 				return true;
 			}
@@ -1236,6 +1257,7 @@ function hasUnrepresentableStrictObjectMap(schema: Record<string, unknown>, epoc
 	}
 	if (Array.isArray(schema.prefixItems)) {
 		for (const itemSchema of schema.prefixItems) {
+			if (isUnrepresentableStrictBranch(itemSchema)) return true;
 			if (isJsonObject(itemSchema) && hasUnrepresentableStrictObjectMap(itemSchema, epoch)) {
 				return true;
 			}
@@ -1246,6 +1268,7 @@ function hasUnrepresentableStrictObjectMap(schema: Record<string, unknown>, epoc
 		const variants = schema[key];
 		if (!Array.isArray(variants)) continue;
 		for (const variant of variants) {
+			if (isUnrepresentableStrictBranch(variant)) return true;
 			if (isJsonObject(variant) && hasUnrepresentableStrictObjectMap(variant, epoch)) {
 				return true;
 			}
@@ -1257,6 +1280,7 @@ function hasUnrepresentableStrictObjectMap(schema: Record<string, unknown>, epoc
 		if (!isJsonObject(defs)) continue;
 		for (const k in defs) {
 			const defSchema = defs[k];
+			if (isUnrepresentableStrictBranch(defSchema)) return true;
 			if (isJsonObject(defSchema) && hasUnrepresentableStrictObjectMap(defSchema, epoch)) {
 				return true;
 			}

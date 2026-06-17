@@ -27,7 +27,7 @@ const fileChangeSchema = type({
 const commitItemSchema = type({
 	changes: fileChangeSchema.array(),
 	type: commitTypeSchema,
-	scope: "string | null",
+	scope: type("string").or("null"),
 	summary: "string",
 	"details?": detailSchema.array(),
 	"issue_refs?": "string[]",

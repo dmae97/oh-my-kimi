@@ -17,7 +17,7 @@ import { commitTypeSchema, detailSchema } from "./schemas.js";
 
 const proposeCommitSchema = type({
 	type: commitTypeSchema,
-	scope: "string | null",
+	scope: type("string").or("null"),
 	summary: "string",
 	details: detailSchema.array(),
 	issue_refs: "string[]",

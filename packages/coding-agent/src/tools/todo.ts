@@ -44,7 +44,7 @@ export interface TodoToolDetails {
 // Schema
 // =============================================================================
 
-const TodoOp = type('"init" | "start" | "done" | "rm" | "drop" | "append" | "view"');
+const TodoOp = type('"init" | "start" | "done" | "rm" | "drop" | "append" | "view"').describe("operation to apply");
 
 const InitListEntry = type({
 	phase: type("string").describe("phase name"),
@@ -61,7 +61,7 @@ const TodoOpEntry = type({
 
 const todoSchema = type({
 	ops: TodoOpEntry.array().atLeastLength(1).describe("ordered todo operations"),
-});
+}).describe("apply ordered todo operations");
 
 type TodoParams = TodoSchema;
 type TodoSchema = typeof todoSchema.infer;

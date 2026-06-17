@@ -21,7 +21,7 @@ const detailItem = t({
 
 export const conventionalAnalysisParameters = t({
 	type: "'feat' | 'fix' | 'refactor' | 'docs' | 'test' | 'chore' | 'style' | 'perf' | 'build' | 'ci' | 'revert'",
-	scope: "string | null",
+	scope: t("string").or("null"),
 	details: detailItem.array(),
 	issue_refs: "string[]",
 });

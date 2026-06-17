@@ -5,7 +5,8 @@
   "type": "module",
   "packageManager": "bun@1.3.14",
   "patchedDependencies": {
-    "beautiful-mermaid@1.1.3": "patches/beautiful-mermaid@1.1.3.patch"
+    "beautiful-mermaid@1.1.3": "patches/beautiful-mermaid@1.1.3.patch",
+    "@ark/schema@0.56.0": "patches/@ark%2Fschema@0.56.0.patch"
   },
   "workspaces": {
     "packages": [

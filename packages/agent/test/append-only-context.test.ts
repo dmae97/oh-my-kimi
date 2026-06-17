@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { AppendOnlyContextManager, AppendOnlyLog, StablePrefix } from "@oh-my-pi/pi-agent-core/append-only-context";
 import type { AgentContext, AgentTool } from "@oh-my-pi/pi-agent-core/types";
 import type { Message, Tool, ToolExample } from "@oh-my-pi/pi-ai";
+import { type } from "arktype";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -19,7 +20,7 @@ function makeContext(overrides?: Partial<AgentContext>): AgentContext {
 function makeTool(
 	name: string,
 	description?: string,
-	parameters?: Record<string, unknown>,
+	parameters?: Tool["parameters"],
 	examples?: readonly ToolExample[],
 ): AgentTool {
 	return {
@@ -604,6 +605,19 @@ describe("intent injection through build()", () => {
 		expect(params?.properties).toBeDefined();
 		expect(params!.properties!._i).toBeDefined();
 		expect(params!.required).toContain("_i");
+	});
+
+	it("materializes ArkType params and keeps `_i` first in authored order", () => {
+		const mgr = new AppendOnlyContextManager();
+		const tool = makeTool("write", "Write", type({ path: "string", content: "string" }));
+		const ctx = makeContext({ tools: [tool] });
+
+		const result = mgr.build(ctx, { intentTracing: true });
+		const params = result.tools?.[0]?.parameters as { properties?: Record<string, unknown>; required?: string[] };
+		// `_i` must lead; authored order (path before content) is preserved rather
+		// than ArkType's alphabetized-by-hash order (content, path).
+		expect(Object.keys(params.properties ?? {})).toEqual(["_i", "path", "content"]);
+		expect(params.required).toContain("_i");
 	});
 
 	it("omits `_i` when intentTracing is false", () => {

@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { normalizeAnthropicToolSchema } from "@oh-my-pi/pi-ai/providers/anthropic";
 import type { Tool } from "@oh-my-pi/pi-ai/types";
 import {
+	adaptSchemaForStrict,
 	decontaminateZodInstance,
 	isZodSchema,
 	normalizeEmptySchemas,
@@ -10,6 +11,7 @@ import {
 	toolWireSchema,
 	zodToWireSchema,
 } from "@oh-my-pi/pi-ai/utils/schema";
+import { type } from "arktype";
 import { z } from "zod/v4";
 
 describe("isZodSchema", () => {
@@ -304,5 +306,102 @@ describe("decontaminateZodInstance — nullable union", () => {
 					b => typeof b === "object" && b !== null && (b as Record<string, unknown>).type === "null",
 				));
 		expect(toleratesNull).toBe(true);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// arkToWireSchema — `T | undefined` value-union pruning (Codex strict-mode break)
+// ---------------------------------------------------------------------------
+
+describe("arkToWireSchema — undefined-union branch pruning", () => {
+	function arkTool(parameters: unknown): Tool {
+		return { name: "t", description: "d", parameters } as Tool;
+	}
+	/** True when any `anyOf`/`oneOf`/`allOf` carries a `true` or `{}` branch. */
+	function hasPermissiveBranch(node: unknown): boolean {
+		if (Array.isArray(node)) return node.some(hasPermissiveBranch);
+		if (!node || typeof node !== "object") return false;
+		const obj = node as Record<string, unknown>;
+		for (const key of ["anyOf", "oneOf", "allOf"]) {
+			const arr = obj[key];
+			if (
+				Array.isArray(arr) &&
+				arr.some(
+					b =>
+						b === true ||
+						(b !== null && typeof b === "object" && !Array.isArray(b) && Object.keys(b).length === 0),
+				)
+			) {
+				return true;
+			}
+		}
+		return Object.values(obj).some(hasPermissiveBranch);
+	}
+
+	it("inlines `T | undefined` to the concrete type and keeps the key required", () => {
+		const wire = toolWireSchema(arkTool(type({ id: "string | undefined", assignment: "string" })));
+		const props = wire.properties as Record<string, unknown>;
+		expect(props.id).toEqual({ type: "string" });
+		// ArkType validates `string | undefined` as required-present (an absent key is
+		// rejected at runtime), so the wire must keep the key required for consistency.
+		expect(wire.required).toEqual(expect.arrayContaining(["id", "assignment"]));
+		expect(hasPermissiveBranch(wire)).toBe(false);
+	});
+
+	it("prunes the undefined branch inside nested array items", () => {
+		const wire = toolWireSchema(
+			arkTool(type({ tasks: type({ id: "string | undefined", assignment: "string" }).array() })),
+		);
+		const tasks = (wire.properties as Record<string, unknown>).tasks as Record<string, unknown>;
+		const itemProps = (tasks.items as Record<string, unknown>).properties as Record<string, unknown>;
+		expect(itemProps.id).toEqual({ type: "string" });
+		expect(hasPermissiveBranch(wire)).toBe(false);
+	});
+
+	it("collapses `(string | undefined)[]` element unions to a typed item", () => {
+		const wire = toolWireSchema(arkTool(type({ xs: "(string | undefined)[]" })));
+		const xs = (wire.properties as Record<string, unknown>).xs as Record<string, unknown>;
+		expect(xs.items).toEqual({ type: "string" });
+		expect(hasPermissiveBranch(wire)).toBe(false);
+	});
+
+	it("stays strict-mode-representable end to end (Codex acceptance)", () => {
+		const wire = toolWireSchema(
+			arkTool(
+				type({
+					agent: "string",
+					context: "string",
+					tasks: type({ id: "string | undefined", assignment: "string" }).array(),
+				}),
+			),
+		);
+		const adapted = adaptSchemaForStrict(wire, true);
+		expect(adapted.strict).toBe(true);
+		expect(hasPermissiveBranch(adapted.schema)).toBe(false);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// arkToWireSchema — authored property order (guards the @ark/schema patch)
+// ---------------------------------------------------------------------------
+
+describe("arkToWireSchema — authored property order", () => {
+	function arkTool(parameters: unknown): Tool {
+		return { name: "t", description: "d", parameters } as Tool;
+	}
+
+	it("preserves declaration order rather than alphabetizing keys", () => {
+		// Without the @ark/schema patch, ArkType canonicalizes keys by hash
+		// (alphabetical): `zebra, content, path`. Streaming renderers and prompt
+		// caching depend on the authored order being preserved on the wire.
+		const wire = toolWireSchema(arkTool(type({ path: "string", content: "string", zebra: "string" })));
+		expect(Object.keys(wire.properties as Record<string, unknown>)).toEqual(["path", "content", "zebra"]);
+	});
+
+	it("emits required props before optional props, each in declaration order", () => {
+		const wire = toolWireSchema(
+			arkTool(type({ pattern: "string", "paths?": "string", i: "boolean", "skip?": "number" })),
+		);
+		expect(Object.keys(wire.properties as Record<string, unknown>)).toEqual(["pattern", "i", "paths", "skip"]);
 	});
 });
