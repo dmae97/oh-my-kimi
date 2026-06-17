@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed ACP approval-mode documentation to describe config inheritance, `omp acp --yolo`/`--auto-approve` runtime overrides, client permission precedence, and headless prompt behavior ([#2900](https://github.com/can1357/oh-my-pi/issues/2900)).
+
 ## [16.0.5] - 2026-06-17
 
 ### Added
