@@ -17,7 +17,12 @@ import { formatDuration, getProjectDir } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import type { ApiKeyResolverModel } from "../config/api-key-resolver";
 import { type CanonicalModelQueryOptions, ModelRegistry } from "../config/model-registry";
-import { formatModelSelectorValue, formatModelString, getModelMatchPreferences, resolveCliModel } from "../config/model-resolver";
+import {
+	formatModelSelectorValue,
+	formatModelString,
+	getModelMatchPreferences,
+	resolveCliModel,
+} from "../config/model-resolver";
 import { Settings } from "../config/settings";
 import benchPrompt from "../prompts/bench.md" with { type: "text" };
 import { discoverAuthStorage } from "../sdk";

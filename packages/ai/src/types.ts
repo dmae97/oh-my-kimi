@@ -476,12 +476,19 @@ export interface DeveloperMessage {
 	timestamp: number; // Unix timestamp in milliseconds
 }
 
+export interface ContextSnapshot {
+	promptTokens: number; // authoritative provider prompt/input tokens
+	nonMessageTokens: number; // estimated non-message total at send time
+	lastMessageTimestamp?: number;
+}
+
 export interface AssistantMessage {
 	role: "assistant";
 	content: (TextContent | ThinkingContent | RedactedThinkingContent | ToolCall)[];
 	api: Api;
 	provider: Provider;
 	model: string;
+	contextSnapshot?: ContextSnapshot;
 	responseId?: string; // Provider-specific response/message identifier when the upstream API exposes one
 	/**
 	 * Name of the upstream provider an aggregator routed this request to, as

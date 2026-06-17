@@ -427,7 +427,7 @@ export class CollabHost {
 			contextUsage: {
 				tokens,
 				contextWindow: breakdown.contextWindow,
-				percent: tokens !== null && breakdown.contextWindow > 0 ? (tokens / breakdown.contextWindow) * 100 : null,
+				percent: breakdown.contextWindow > 0 ? (tokens / breakdown.contextWindow) * 100 : 0,
 			},
 			participants: this.participants,
 		};

@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { type Component, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
 import { getProjectDir } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
@@ -55,21 +56,70 @@ function messageFingerprint(msg: AgentMessage): string {
 			}
 		}
 	} else if (role === "assistant") {
+		const assistantMsg = msg as AssistantMessage;
+		const usageExt = assistantMsg.usage as unknown as { promptTokensDetails?: unknown };
+		const usageTotal = assistantMsg.usage?.totalTokens ?? 0;
+		const promptBuckets = usageExt?.promptTokensDetails ? 1 : 0;
+		const stopReason = assistantMsg.stopReason ?? "";
+
+		let signatureLen = 0;
+		let redactedLen = 0;
+		const msgExt = assistantMsg as unknown as {
+			thinkingSignature?: string;
+			textSignature?: string;
+			thoughtSignature?: string;
+			redactedThinking?: { data?: string };
+		};
+		const thinkingSignature = msgExt.thinkingSignature;
+		if (typeof thinkingSignature === "string") {
+			signatureLen += thinkingSignature.length;
+		}
+		const textSignature = msgExt.textSignature;
+		if (typeof textSignature === "string") {
+			signatureLen += textSignature.length;
+		}
+		const thoughtSignature = msgExt.thoughtSignature;
+		if (typeof thoughtSignature === "string") {
+			signatureLen += thoughtSignature.length;
+		}
+		const redactedData = msgExt.redactedThinking?.data;
+		if (typeof redactedData === "string") {
+			redactedLen += redactedData.length;
+		}
+
 		const content = (msg as { content?: unknown }).content;
 		if (Array.isArray(content)) {
 			blocks = content.length;
 			for (const block of content) {
 				if (!block || typeof block !== "object") continue;
-				const b = block as { type?: string; text?: string; thinking?: string; name?: string; arguments?: unknown };
+				const b = block as {
+					type?: string;
+					text?: string;
+					thinking?: string;
+					thinkingSignature?: string;
+					signature?: string;
+					textSignature?: string;
+					thoughtSignature?: string;
+					data?: string;
+					name?: string;
+					arguments?: unknown;
+				};
 				if (b.type === "text" && typeof b.text === "string") textLen += b.text.length;
-				else if (b.type === "thinking" && typeof b.thinking === "string") textLen += b.thinking.length;
-				else if (b.type === "toolCall") {
+				else if (b.type === "thinking") {
+					if (typeof b.thinking === "string") textLen += b.thinking.length;
+					if (typeof b.thinkingSignature === "string") signatureLen += b.thinkingSignature.length;
+					if (typeof b.signature === "string") signatureLen += b.signature.length;
+					if (typeof b.textSignature === "string") signatureLen += b.textSignature.length;
+					if (typeof b.thoughtSignature === "string") signatureLen += b.thoughtSignature.length;
+				} else if (b.type === "redactedThinking" && typeof b.data === "string") {
+					redactedLen += b.data.length;
+				} else if (b.type === "toolCall") {
 					if (typeof b.name === "string") textLen += b.name.length;
-					// Argument bytes vary; a length proxy is enough to detect in-place edits.
 					textLen += b.arguments === undefined ? 0 : JSON.stringify(b.arguments).length;
 				}
 			}
 		}
+		return `${role}:${ts}:${textLen}:${blocks}:${images}:${signatureLen}:${redactedLen}:${usageTotal}:${promptBuckets}:${stopReason}`;
 	} else if (role === "toolResult" || role === "hookMessage") {
 		const content = (msg as { content?: unknown }).content;
 		if (typeof content === "string") {
@@ -95,8 +145,11 @@ interface ContextUsageMemo {
 	length: number;
 	lastFingerprint: string | undefined;
 	modelContextWindow: number;
-	usedTokens: number | null;
+	usedTokens: number;
 	contextWindow: number;
+	systemPromptRef: readonly string[] | undefined;
+	toolsRef: readonly any[] | undefined;
+	skillsRef: readonly any[] | undefined;
 }
 
 const EMPTY_MESSAGES: readonly AgentMessage[] = [];
@@ -545,11 +598,15 @@ export class StatusLineComponent implements Component {
 	 * (right after compaction, before the next response). Exposed (non-private)
 	 * for unit tests and the collab host's state broadcast.
 	 */
-	getCachedContextBreakdown(): { usedTokens: number | null; contextWindow: number } {
+	getCachedContextBreakdown(): { usedTokens: number; contextWindow: number } {
 		const messages = this.session.messages ?? EMPTY_MESSAGES;
 		const modelContextWindow = this.session.model?.contextWindow ?? 0;
 		const length = messages.length;
 		const lastFingerprint = length > 0 ? messageFingerprint(messages[length - 1]!) : undefined;
+
+		const systemPrompt = this.session.systemPrompt;
+		const tools = this.session.agent?.state?.tools;
+		const skills = this.session.skills;
 
 		const cache = this.#contextUsageCache;
 		if (
@@ -557,13 +614,16 @@ export class StatusLineComponent implements Component {
 			cache.messagesRef === messages &&
 			cache.length === length &&
 			cache.lastFingerprint === lastFingerprint &&
-			cache.modelContextWindow === modelContextWindow
+			cache.modelContextWindow === modelContextWindow &&
+			cache.systemPromptRef === systemPrompt &&
+			cache.toolsRef === tools &&
+			cache.skillsRef === skills
 		) {
 			return { usedTokens: cache.usedTokens, contextWindow: cache.contextWindow };
 		}
 
 		const usage = this.session.getContextUsage();
-		const usedTokens = usage?.tokens ?? null;
+		const usedTokens = usage?.tokens ?? 0;
 		const contextWindow = usage?.contextWindow ?? modelContextWindow;
 		this.#contextUsageCache = {
 			messagesRef: messages,
@@ -572,6 +632,9 @@ export class StatusLineComponent implements Component {
 			modelContextWindow,
 			usedTokens,
 			contextWindow,
+			systemPromptRef: systemPrompt,
+			toolsRef: tools,
+			skillsRef: skills,
 		};
 		return { usedTokens, contextWindow };
 	}
@@ -607,8 +670,7 @@ export class StatusLineComponent implements Component {
 		if (includeContext) {
 			const breakdown = this.getCachedContextBreakdown();
 			contextWindow = breakdown.contextWindow || contextWindow;
-			contextPercent =
-				breakdown.usedTokens === null ? null : contextWindow > 0 ? (breakdown.usedTokens / contextWindow) * 100 : 0;
+			contextPercent = contextWindow > 0 ? (breakdown.usedTokens / contextWindow) * 100 : 0;
 		}
 
 		// Collab guest: context comes from the host's state frames — the local

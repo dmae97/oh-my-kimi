@@ -2179,7 +2179,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	#formatKeepContextLabel(contextUsage: ContextUsage | undefined): string {
-		if (contextUsage?.tokens == null) {
+		if (!contextUsage) {
 			return "Approve and keep context";
 		}
 		const tokens = formatContextTokenCount(contextUsage.tokens);
@@ -2188,7 +2188,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	#isKeepContextDisabled(contextUsage: ContextUsage | undefined): boolean {
-		return contextUsage?.percent != null && contextUsage.percent > PLAN_KEEP_CONTEXT_DISABLE_THRESHOLD_PERCENT;
+		return contextUsage !== undefined && contextUsage.percent > PLAN_KEEP_CONTEXT_DISABLE_THRESHOLD_PERCENT;
 	}
 
 	async #openPlanInExternalEditor(planFilePath: string): Promise<void> {

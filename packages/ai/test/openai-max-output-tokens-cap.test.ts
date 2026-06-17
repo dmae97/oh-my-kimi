@@ -84,7 +84,11 @@ async function captureCompletionsBody(
 		return completionsSse();
 	};
 
-	const result = await streamSimple(model, ctx, { apiKey: "k", ...(maxTokens === undefined ? {} : { maxTokens }), fetch: fetchMock }).result();
+	const result = await streamSimple(model, ctx, {
+		apiKey: "k",
+		...(maxTokens === undefined ? {} : { maxTokens }),
+		fetch: fetchMock,
+	}).result();
 	expect(result.stopReason).toBe("stop");
 	if (!payload) throw new Error("Expected OpenAI completions request payload");
 	return payload;

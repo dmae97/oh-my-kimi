@@ -155,20 +155,20 @@ describe("StatusLineComponent context breakdown", () => {
 		expect(usageCalls()).toBe(2);
 	});
 
-	it("propagates an unknown (null) token count, e.g. right after compaction", () => {
+	it("propagates a speculative/numeric token count, e.g. right after compaction", () => {
 		const { session } = makeSession({
 			messages: [userMessage("compaction summary")],
-			usage: { tokens: null, contextWindow: 272_000, percent: null },
+			usage: { tokens: 1234, contextWindow: 272_000, percent: 0.45 },
 		});
 		const breakdown = new StatusLineComponent(session).getCachedContextBreakdown();
-		expect(breakdown.usedTokens).toBeNull();
+		expect(breakdown.usedTokens).toBe(1234);
 		expect(breakdown.contextWindow).toBe(272_000);
 	});
 
-	it("falls back to the model window with null tokens when usage is unavailable", () => {
+	it("falls back to the model window with 0 tokens when usage is unavailable", () => {
 		const { session } = makeSession({ messages: [userMessage("hi")], usage: undefined, contextWindow: 128_000 });
 		const breakdown = new StatusLineComponent(session).getCachedContextBreakdown();
-		expect(breakdown.usedTokens).toBeNull();
+		expect(breakdown.usedTokens).toBe(0);
 		expect(breakdown.contextWindow).toBe(128_000);
 	});
 
@@ -205,10 +205,10 @@ describe("StatusLineComponent context breakdown", () => {
 		expect(plain).toContain("1.8%/272K");
 	});
 
-	it("renders ? for the percent while the token count is unknown (post-compaction)", () => {
+	it("renders speculative percent instead of ? after compaction", () => {
 		const { session } = makeSession({
 			messages: [userMessage("compaction summary")],
-			usage: { tokens: null, contextWindow: 272_000, percent: null },
+			usage: { tokens: 1234, contextWindow: 272_000, percent: 0.45 },
 		});
 		const comp = new StatusLineComponent(session);
 		comp.updateSettings({
@@ -219,6 +219,6 @@ describe("StatusLineComponent context breakdown", () => {
 		});
 
 		const plain = comp.getTopBorder(80).content.replaceAll(/\x1b\[[0-9;]*m/g, "");
-		expect(plain).toContain("?/272K");
+		expect(plain).toContain("0.5%/272K");
 	});
 });

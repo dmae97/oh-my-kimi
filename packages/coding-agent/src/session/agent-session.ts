@@ -202,7 +202,7 @@ import { containsOrchestrate, ORCHESTRATE_NOTICE } from "../modes/orchestrate";
 import { getCurrentThemeName, theme } from "../modes/theme/theme";
 import { parseTurnBudget } from "../modes/turn-budget";
 import { containsUltrathink, ULTRATHINK_NOTICE } from "../modes/ultrathink";
-import { computeNonMessageTokens } from "../modes/utils/context-usage";
+import { computeNonMessageBreakdown, computeNonMessageTokens } from "../modes/utils/context-usage";
 import { containsWorkflow, WORKFLOW_NOTICE } from "../modes/workflow";
 import { createPlanReadMatcher } from "../plan-mode/plan-protection";
 import type { PlanModeState } from "../plan-mode/state";
@@ -554,6 +554,17 @@ export interface ResolvedRoleModel {
 export interface RoleModelCycle {
 	models: ResolvedRoleModel[];
 	currentIndex: number;
+}
+
+export interface ContextUsageBreakdown {
+	contextWindow: number;
+	anchored: boolean;
+	usedTokens: number;
+	systemPromptTokens: number;
+	systemToolsTokens: number;
+	systemContextTokens: number;
+	skillsTokens: number;
+	messagesTokens: number;
 }
 
 /** Session statistics for /session command */
@@ -1229,15 +1240,13 @@ export class AgentSession {
 	#unexpectedStopRetryCount = 0;
 	#promptGeneration = 0;
 	#pendingAgentEndEmit: AgentSessionEvent | undefined;
-	#pendingProviderRequestNonMessageTokens: number | undefined = undefined;
-	#lastProviderUsageNonMessage:
+	#pendingContextSnapshot:
 		| {
-				provider: AssistantMessage["provider"];
-				model: AssistantMessage["model"];
-				timestamp: AssistantMessage["timestamp"];
-				tokens: number;
+				promptTokens: number;
+				nonMessageTokens: number;
+				cutoffCount: number;
 		  }
-		| undefined;
+		| undefined = undefined;
 	#obfuscator: SecretObfuscator | undefined;
 	#checkpointState: CheckpointState | undefined = undefined;
 	#pendingRewindReport: string | undefined = undefined;
@@ -2359,6 +2368,15 @@ export class AgentSession {
 				event.message.role === "fileMention"
 			) {
 				// Regular LLM message - persist as SessionMessageEntry
+				if (event.message.role === "assistant") {
+					const assistantMsg = event.message as AssistantMessage;
+					if (assistantMsg.stopReason !== "aborted" && assistantMsg.stopReason !== "error" && assistantMsg.usage) {
+						assistantMsg.contextSnapshot = {
+							promptTokens: calculatePromptTokens(assistantMsg.usage),
+							nonMessageTokens: this.#pendingContextSnapshot?.nonMessageTokens ?? computeNonMessageTokens(this),
+						};
+					}
+				}
 				this.sessionManager.appendMessage(event.message);
 			}
 			// Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
@@ -2367,14 +2385,6 @@ export class AgentSession {
 			if (event.message.role === "assistant") {
 				this.#lastAssistantMessage = event.message;
 				const assistantMsg = event.message as AssistantMessage;
-				if (assistantMsg.stopReason !== "aborted" && assistantMsg.stopReason !== "error" && assistantMsg.usage) {
-					this.#lastProviderUsageNonMessage = {
-						provider: assistantMsg.provider,
-						model: assistantMsg.model,
-						timestamp: assistantMsg.timestamp,
-						tokens: this.#pendingProviderRequestNonMessageTokens ?? computeNonMessageTokens(this),
-					};
-				}
 				const currentGrantsAnthropicPriority =
 					this.serviceTier === "priority" || this.serviceTier === "claude-only";
 				if (assistantMsg.disabledFeatures?.includes("priority") && currentGrantsAnthropicPriority) {
@@ -2417,7 +2427,6 @@ export class AgentSession {
 					this.#retryAttempt = 0;
 				}
 			}
-
 			if (event.message.role === "toolResult") {
 				const { toolName, details, isError, content } = event.message as {
 					toolName?: string;
@@ -5576,11 +5585,23 @@ export class AgentSession {
 			}
 
 			const agentPromptOptions = options?.toolChoice ? { toolChoice: options.toolChoice } : undefined;
-			this.#pendingProviderRequestNonMessageTokens = computeNonMessageTokens(this);
+			const nonMessageTokens = computeNonMessageTokens(this);
+			const contextWindow = this.model?.contextWindow ?? 0;
+			const breakdown = this.getContextBreakdown({ contextWindow, pendingMessages: messages });
+			const promptTokens =
+				breakdown?.usedTokens ??
+				nonMessageTokens +
+					this.messages.reduce((sum, msg) => sum + estimateTokens(msg), 0) +
+					messages.reduce((sum, msg) => sum + estimateTokens(msg), 0);
+			this.#pendingContextSnapshot = {
+				promptTokens,
+				nonMessageTokens,
+				cutoffCount: this.messages.length + messages.length,
+			};
 			try {
 				await this.#promptAgentWithIdleRetry(messages, agentPromptOptions);
 			} finally {
-				this.#pendingProviderRequestNonMessageTokens = undefined;
+				this.#pendingContextSnapshot = undefined;
 			}
 			if (!options?.skipPostPromptRecoveryWait) {
 				await this.#waitForPostPromptRecovery(generation);
@@ -7531,39 +7552,12 @@ export class AgentSession {
 		}
 	}
 
-	#estimatePendingPromptTokens(messages: AgentMessage[]): number {
-		let tokens = computeNonMessageTokens(this);
-		for (const message of this.messages) {
-			tokens += estimateTokens(message);
-		}
-		for (const message of messages) {
-			tokens += estimateTokens(message);
-		}
-		return tokens;
-	}
-
 	#estimatePrePromptContextTokens(messages: AgentMessage[], contextWindow: number): number {
-		const currentUsage = this.getContextUsage({ contextWindow });
-		if (typeof currentUsage?.tokens !== "number" || !Number.isFinite(currentUsage.tokens)) {
-			return this.#estimatePendingPromptTokens(messages);
-		}
-
-		const currentEstimate = this.#estimateContextTokens();
-		if (!currentEstimate.providerAnchored) {
-			return this.#estimatePendingPromptTokens(messages);
-		}
-
-		let tokens = currentUsage.tokens;
-		const previousNonMessageTokens = currentEstimate.providerNonMessageTokens;
-		if (previousNonMessageTokens !== undefined) {
-			const currentNonMessageTokens = computeNonMessageTokens(this);
-			const nonMessageTokenGrowth = Math.max(0, currentNonMessageTokens - previousNonMessageTokens);
-			tokens += nonMessageTokenGrowth;
-		}
-		for (const message of messages) {
-			tokens += estimateTokens(message);
-		}
-		return tokens;
+		const breakdown = this.getContextBreakdown({ contextWindow, pendingMessages: messages });
+		return (
+			breakdown?.usedTokens ??
+			computeNonMessageTokens(this) + messages.reduce((sum, msg) => sum + estimateTokens(msg), 0)
+		);
 	}
 
 	async #runPrePromptCompactionIfNeeded(messages: AgentMessage[]): Promise<void> {
@@ -9327,7 +9321,7 @@ export class AgentSession {
 					const recoveryBand = Math.floor(thresholdTokens * SHAKE_RECOVERY_BAND);
 					stillOverThreshold = correctedTokens > recoveryBand;
 				} else {
-					const postShakeTokens = this.#estimatePendingPromptTokens([]);
+					const postShakeTokens = this.getContextUsage({ contextWindow })?.tokens ?? 0;
 					stillOverThreshold = shouldCompact(postShakeTokens, contextWindow, compactionSettings);
 				}
 			}
@@ -11261,47 +11255,151 @@ export class AgentSession {
 	 * Uses the last assistant message's usage data when available,
 	 * otherwise estimates tokens for all messages.
 	 */
-	getContextUsage(options?: { contextWindow?: number }): ContextUsage | undefined {
+	getContextBreakdown(options?: {
+		contextWindow?: number;
+		pendingMessages?: AgentMessage[];
+	}): ContextUsageBreakdown | undefined {
 		const model = this.model;
 		const contextWindow = options?.contextWindow ?? model?.contextWindow ?? 0;
 		if (!Number.isFinite(contextWindow) || contextWindow <= 0) return undefined;
 
-		// After compaction, the last assistant usage reflects pre-compaction context size.
-		// We can only trust usage from an assistant that responded after the latest compaction.
-		// If no such assistant exists, context token count is unknown until the next LLM response.
+		const { skillsTokens, toolsTokens, systemContextTokens, systemPromptTokens } = computeNonMessageBreakdown(this);
+		const categoryNonMessageTokens = skillsTokens + toolsTokens + systemContextTokens + systemPromptTokens;
+		const currentNonMessageTokens = computeNonMessageTokens(this);
+
 		const branchEntries = this.sessionManager.getBranch();
 		const latestCompaction = getLatestCompactionEntry(branchEntries);
+		const compactionIndex = latestCompaction ? branchEntries.lastIndexOf(latestCompaction) : -1;
 
-		if (latestCompaction) {
-			// Check if there's a valid assistant usage after the compaction boundary
-			const compactionIndex = branchEntries.lastIndexOf(latestCompaction);
-			let hasPostCompactionUsage = false;
+		let usedTokens = 0;
+		let anchored = false;
+
+		const pendingMessages = options?.pendingMessages ?? [];
+
+		let anchorEntry: SessionMessageEntry | undefined;
+		let isPending = false;
+
+		if (this.#pendingContextSnapshot) {
+			isPending = true;
+		} else {
 			for (let i = branchEntries.length - 1; i > compactionIndex; i--) {
 				const entry = branchEntries[i];
 				if (entry.type === "message" && entry.message.role === "assistant") {
 					const assistant = entry.message;
-					if (assistant.stopReason !== "aborted" && assistant.stopReason !== "error") {
-						const contextTokens = calculateContextTokens(assistant.usage);
-						if (contextTokens > 0) {
-							hasPostCompactionUsage = true;
-						}
+					if (assistant.stopReason !== "aborted" && assistant.stopReason !== "error" && assistant.usage) {
+						anchorEntry = entry;
 						break;
 					}
 				}
 			}
+		}
 
-			if (!hasPostCompactionUsage) {
-				return { tokens: null, contextWindow, percent: null };
+		if (isPending && this.#pendingContextSnapshot) {
+			const anchor = this.#pendingContextSnapshot;
+			anchored = true;
+
+			const resolvedActiveMessages = this.messages;
+			let tailTokens = 0;
+
+			if (resolvedActiveMessages.length > anchor.cutoffCount) {
+				for (let i = anchor.cutoffCount; i < resolvedActiveMessages.length; i++) {
+					tailTokens += estimateTokens(resolvedActiveMessages[i]);
+				}
+			}
+
+			usedTokens =
+				anchor.promptTokens +
+				Math.max(0, currentNonMessageTokens - anchor.nonMessageTokens) +
+				tailTokens +
+				pendingMessages.reduce((sum, msg) => sum + estimateTokens(msg), 0);
+		} else if (anchorEntry) {
+			const anchorAssistant = anchorEntry.message as AssistantMessage;
+			const promptTokens =
+				anchorAssistant.contextSnapshot?.promptTokens ?? calculatePromptTokens(anchorAssistant.usage);
+			const nonMessageTokens = anchorAssistant.contextSnapshot?.nonMessageTokens ?? computeNonMessageTokens(this);
+			const anchor = { promptTokens, nonMessageTokens };
+			anchored = true;
+
+			const resolvedActiveMessages = this.messages;
+			let resolvedAnchorIndex = resolvedActiveMessages.indexOf(anchorAssistant);
+			if (resolvedAnchorIndex === -1) {
+				resolvedAnchorIndex = resolvedActiveMessages.findIndex(
+					msg => msg.role === "assistant" && msg.timestamp === anchorAssistant.timestamp,
+				);
+			}
+
+			if (resolvedAnchorIndex !== -1) {
+				let tailTokens = 0;
+				for (let i = resolvedAnchorIndex + 1; i < resolvedActiveMessages.length; i++) {
+					tailTokens += estimateTokens(resolvedActiveMessages[i]);
+				}
+				usedTokens =
+					anchor.promptTokens +
+					Math.max(0, currentNonMessageTokens - anchor.nonMessageTokens) +
+					tailTokens +
+					pendingMessages.reduce((sum, msg) => sum + estimateTokens(msg), 0);
+			} else {
+				anchored = false;
 			}
 		}
 
-		const estimate = this.#estimateContextTokens();
-		const percent = (estimate.tokens / contextWindow) * 100;
+		if (!anchored && !isPending && branchEntries.length === 0) {
+			// Fallback: look for the latest assistant message with usage/snapshot in this.messages (for branchless/fake sessions in tests)
+			const resolvedActiveMessages = this.messages;
+			for (let i = resolvedActiveMessages.length - 1; i >= 0; i--) {
+				const msg = resolvedActiveMessages[i];
+				if (msg.role === "assistant" && msg.stopReason !== "aborted" && msg.stopReason !== "error" && msg.usage) {
+					const promptTokens = msg.contextSnapshot?.promptTokens ?? calculatePromptTokens(msg.usage);
+					const nonMessageTokens = msg.contextSnapshot?.nonMessageTokens ?? computeNonMessageTokens(this);
+
+					let tailTokens = 0;
+					for (let j = i + 1; j < resolvedActiveMessages.length; j++) {
+						tailTokens += estimateTokens(resolvedActiveMessages[j]);
+					}
+
+					usedTokens =
+						promptTokens +
+						Math.max(0, currentNonMessageTokens - nonMessageTokens) +
+						tailTokens +
+						pendingMessages.reduce((sum, msg) => sum + estimateTokens(msg), 0);
+					anchored = true;
+					break;
+				}
+			}
+		}
+		if (!anchored) {
+			const resolvedActiveMessages = this.messages;
+			let messagesTokens = 0;
+			for (const msg of resolvedActiveMessages) {
+				messagesTokens += estimateTokens(msg);
+			}
+			usedTokens =
+				currentNonMessageTokens +
+				messagesTokens +
+				pendingMessages.reduce((sum, msg) => sum + estimateTokens(msg), 0);
+		}
+
+		const messagesTokens = Math.max(0, usedTokens - categoryNonMessageTokens);
 
 		return {
-			tokens: estimate.tokens,
 			contextWindow,
-			percent,
+			anchored,
+			usedTokens,
+			systemPromptTokens,
+			systemToolsTokens: toolsTokens,
+			systemContextTokens,
+			skillsTokens,
+			messagesTokens,
+		};
+	}
+
+	getContextUsage(options?: { contextWindow?: number }): ContextUsage | undefined {
+		const breakdown = this.getContextBreakdown(options);
+		if (!breakdown) return undefined;
+		return {
+			tokens: breakdown.usedTokens,
+			contextWindow: breakdown.contextWindow,
+			percent: breakdown.contextWindow > 0 ? (breakdown.usedTokens / breakdown.contextWindow) * 100 : 0,
 		};
 	}
 
@@ -11483,64 +11581,6 @@ export class AgentSession {
 		})().finally(() => coordinator.inFlightByAccount.delete(accountKey));
 		coordinator.inFlightByAccount.set(accountKey, run);
 		return run;
-	}
-
-	/**
-	 * Estimate context tokens from messages, using the last assistant usage when available.
-	 */
-	#estimateContextTokens(): {
-		tokens: number;
-		providerAnchored: boolean;
-		providerNonMessageTokens?: number;
-	} {
-		const messages = this.messages;
-
-		// Find last assistant message with valid usage.
-		let lastUsageIndex: number | null = null;
-		let lastUsage: Usage | undefined;
-		for (let i = messages.length - 1; i >= 0; i--) {
-			const msg = messages[i];
-			if (msg.role === "assistant") {
-				const assistantMsg = msg as AssistantMessage;
-				if (assistantMsg.stopReason !== "aborted" && assistantMsg.stopReason !== "error" && assistantMsg.usage) {
-					lastUsage = assistantMsg.usage;
-					lastUsageIndex = i;
-					break;
-				}
-			}
-		}
-
-		if (!lastUsage || lastUsageIndex === null) {
-			// No usage data - estimate all messages
-			let estimated = 0;
-			for (const message of messages) {
-				estimated += estimateTokens(message);
-			}
-			return {
-				tokens: estimated,
-				providerAnchored: false,
-			};
-		}
-
-		const usageTokens = calculatePromptTokens(lastUsage);
-		const providerNonMessage =
-			this.#lastProviderUsageNonMessage &&
-			messages[lastUsageIndex]?.role === "assistant" &&
-			this.#lastProviderUsageNonMessage.provider === (messages[lastUsageIndex] as AssistantMessage).provider &&
-			this.#lastProviderUsageNonMessage.model === (messages[lastUsageIndex] as AssistantMessage).model &&
-			this.#lastProviderUsageNonMessage.timestamp === (messages[lastUsageIndex] as AssistantMessage).timestamp
-				? this.#lastProviderUsageNonMessage.tokens
-				: undefined;
-		let trailingTokens = 0;
-		for (let i = lastUsageIndex + 1; i < messages.length; i++) {
-			trailingTokens += estimateTokens(messages[i]);
-		}
-
-		return {
-			tokens: usageTokens + trailingTokens,
-			providerAnchored: true,
-			providerNonMessageTokens: providerNonMessage,
-		};
 	}
 
 	/**

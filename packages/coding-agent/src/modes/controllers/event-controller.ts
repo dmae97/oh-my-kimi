@@ -1,6 +1,5 @@
 import { INTENT_FIELD } from "@oh-my-pi/pi-agent-core";
-import { calculatePromptTokens } from "@oh-my-pi/pi-agent-core/compaction/compaction";
-import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
+import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { type Component, Loader, TERMINAL } from "@oh-my-pi/pi-tui";
 import { extractTextContent } from "../../commit/utils";
 import { settings } from "../../config/settings";
@@ -1107,11 +1106,7 @@ export class EventController {
 	}
 
 	#currentContextTokens(): number {
-		const lastAssistant = this.ctx.viewSession.agent.state.messages
-			.slice()
-			.reverse()
-			.find((m): m is AssistantMessage => m.role === "assistant" && m.stopReason !== "aborted");
-		return lastAssistant?.usage ? calculatePromptTokens(lastAssistant.usage) : 0;
+		return this.ctx.viewSession.getContextUsage()?.tokens ?? 0;
 	}
 
 	sendCompletionNotification(): void {

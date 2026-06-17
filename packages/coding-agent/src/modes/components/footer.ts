@@ -186,11 +186,8 @@ export class FooterComponent implements Component {
 		// Colorize context percentage based on usage
 		let contextPercentStr: string;
 		const autoIndicator = this.#autoCompactEnabled ? " (auto)" : "";
-		const contextPercentDisplay = `${formatContextUsage(
-			contextUsage?.percent === null ? null : contextPercentValue,
-			contextWindow,
-		)}${autoIndicator}`;
-		if (contextUsage?.percent !== null && contextUsage?.percent !== undefined) {
+		const contextPercentDisplay = `${formatContextUsage(contextPercentValue, contextWindow)}${autoIndicator}`;
+		if (contextUsage) {
 			const color = getContextUsageThemeColor(getContextUsageLevel(contextPercentValue, contextWindow));
 			contextPercentStr =
 				color === "statusLineContext" ? contextPercentDisplay : theme.fg(color, contextPercentDisplay);

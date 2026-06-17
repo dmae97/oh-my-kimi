@@ -1,17 +1,23 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
 - Added `images.describeForTextModels` option (default `true`) to control automatic image description for attachments sent to models without vision input
 - Added automatic vision fallback prompts to describe images for text-only models
 
+### Changed
+
+- Changed context usage reporting to always return numeric token counts and percentages, so status-line and footer now show estimated values instead of `?` immediately after compaction
+- Changed context usage reporting to use anchored snapshots and pending-prompts estimates, which now keeps `/context`, status line, and model selector token counts in sync
+
 ### Fixed
 
+- Fixed context token accounting to keep branch-local anchors during branching so sibling-branch messages no longer pollute context estimates
+- Fixed context usage consistency so `/context`, status line, and idle compaction logic now report the same used-token totals
+- Fixed status-line context cache invalidation when assistant reasoning signature data grows so displayed context usage updates accurately
 - Fixed image attachment handling for text-only models by saving attachments to `local://` and injecting generated descriptions so they are no longer lost when the target model cannot process images
-
-### Fixed
-
 - Fixed the ssh tool rejecting valid Windows identity files before invoking OpenSSH by skipping Unix mode-bit key validation on native Windows ([#2850](https://github.com/can1357/oh-my-pi/issues/2850)).
 
 ## [16.0.4] - 2026-06-17

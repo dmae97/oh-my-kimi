@@ -274,11 +274,11 @@ export interface ExtensionUIContext {
 // ============================================================================
 
 export interface ContextUsage {
-	/** Estimated context tokens, or null if unknown (e.g. right after compaction, before next LLM response). */
-	tokens: number | null;
+	/** Estimated context tokens. */
+	tokens: number;
 	contextWindow: number;
-	/** Context usage as percentage of context window, or null if tokens is unknown. */
-	percent: number | null;
+	/** Context usage as percentage of context window. */
+	percent: number;
 }
 
 export interface CompactOptions {

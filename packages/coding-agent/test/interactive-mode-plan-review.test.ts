@@ -546,7 +546,7 @@ describe("InteractiveMode plan review rendering", () => {
 		mode.planModeEnabled = true;
 		mode.planModePlanFilePath = planFilePath;
 		// Post-compaction: tokens unknown until the next LLM response.
-		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: null, contextWindow: 200000, percent: null });
+		vi.spyOn(session, "getContextUsage").mockReturnValue(undefined);
 		const selector = vi.spyOn(mode, "showPlanReview").mockResolvedValue("Refine plan");
 
 		await mode.handlePlanApproval({
@@ -578,7 +578,7 @@ describe("InteractiveMode plan review rendering", () => {
 
 		mode.planModeEnabled = true;
 		mode.planModePlanFilePath = planFilePath;
-		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: null, contextWindow: 200000, percent: null });
+		vi.spyOn(session, "getContextUsage").mockReturnValue(undefined);
 		vi.spyOn(mode, "showPlanReview").mockResolvedValue("Approve and keep context");
 		const clear = vi.spyOn(mode, "handleClearCommand").mockResolvedValue();
 		const prompt = vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
@@ -697,7 +697,7 @@ describe("InteractiveMode plan review rendering", () => {
 
 		// Keep-context path avoids newSession() so the assertion isolates the
 		// exit-plan-mode restore from session-clear effects.
-		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: null, contextWindow: 200000, percent: null });
+		vi.spyOn(session, "getContextUsage").mockReturnValue(undefined);
 		vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
 
 		let observedSegments: string[] = [];
@@ -744,7 +744,7 @@ describe("InteractiveMode plan review rendering", () => {
 		await mode.handlePlanModeCommand();
 		expect(session.model?.id).toBe(planModel.id);
 
-		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: null, contextWindow: 200000, percent: null });
+		vi.spyOn(session, "getContextUsage").mockReturnValue(undefined);
 		vi.spyOn(mode, "showPlanReview").mockResolvedValue("Approve and compact context");
 		vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
 
@@ -781,7 +781,7 @@ describe("InteractiveMode plan review rendering", () => {
 		await mode.handlePlanModeCommand();
 		expect(session.model?.id).toBe(planModel.id);
 
-		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: null, contextWindow: 200000, percent: null });
+		vi.spyOn(session, "getContextUsage").mockReturnValue(undefined);
 		vi.spyOn(mode, "showPlanReview").mockResolvedValue("Approve and compact context");
 		const promptSpy = vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
 
@@ -826,7 +826,7 @@ describe("InteractiveMode plan review rendering", () => {
 		await mode.handlePlanModeCommand();
 		expect(session.model?.id).toBe(planModel.id);
 
-		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: null, contextWindow: 200000, percent: null });
+		vi.spyOn(session, "getContextUsage").mockReturnValue(undefined);
 		vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
 
 		let compactModelId: string | undefined;
@@ -885,7 +885,7 @@ describe("InteractiveMode plan review rendering", () => {
 		await mode.handlePlanModeCommand();
 		expect(session.model?.id).toBe(planModel.id);
 
-		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: null, contextWindow: 200000, percent: null });
+		vi.spyOn(session, "getContextUsage").mockReturnValue(undefined);
 		vi.spyOn(mode, "showPlanReview").mockResolvedValue("Approve and compact context");
 		const promptSpy = vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
 
@@ -932,7 +932,7 @@ describe("InteractiveMode plan review rendering", () => {
 		await mode.handlePlanModeCommand();
 		expect(session.model?.id).toBe(planModel.id);
 
-		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: null, contextWindow: 200000, percent: null });
+		vi.spyOn(session, "getContextUsage").mockReturnValue(undefined);
 		vi.spyOn(mode, "showPlanReview").mockResolvedValue("Approve and compact context");
 		vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
 
@@ -1240,7 +1240,7 @@ describe("InteractiveMode plan review rendering", () => {
 		await mode.handlePlanModeCommand();
 		expect(session.getPlanModeState()?.planFilePath).toBe(planFilePath);
 
-		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: null, contextWindow: 200000, percent: null });
+		vi.spyOn(session, "getContextUsage").mockReturnValue(undefined);
 		const selector = vi.spyOn(mode, "showPlanReview").mockResolvedValue("Approve and keep context");
 		const showError = vi.spyOn(mode, "showError");
 		vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
