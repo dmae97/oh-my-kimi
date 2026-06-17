@@ -14,6 +14,7 @@ import {
 	sleepAllSessions,
 } from "@oh-my-pi/pi-mnemopi/core/beam/consolidate";
 import type { BeamMemoryState } from "@oh-my-pi/pi-mnemopi/core/beam/types";
+import { REGEX_EXTRACTION_MAX_INPUT_CHARS } from "@oh-my-pi/pi-mnemopi/core/entities";
 import { closeQuietly, openDatabase } from "@oh-my-pi/pi-mnemopi/db";
 
 function state(sessionId = "s1"): BeamMemoryState {
@@ -255,5 +256,25 @@ describe("beam consolidation free functions", () => {
 			count: number;
 		};
 		expect(facts.count).toBeGreaterThanOrEqual(4);
+	});
+
+	it("skips pattern fact extraction for oversized raw transcripts", () => {
+		const beam = trackedState();
+		const line = "progress boot done 615014ms downloading gapps its@66% priv-app files done 221MB version 1.2.3\n";
+		const text = line.repeat(Math.ceil((REGEX_EXTRACTION_MAX_INPUT_CHARS + 1) / line.length));
+		const counts = extractAndStoreFacts(beam, text, 7, "large-transcript");
+
+		expect(counts).toEqual({
+			metric: 0,
+			date: 0,
+			version: 0,
+			entity: 0,
+			sequence: 0,
+			timeline: 0,
+			negation: 0,
+			decision: 0,
+		});
+		const facts = beam.db.query("SELECT COUNT(*) AS count FROM memoria_facts").get() as { count: number };
+		expect(facts.count).toBe(0);
 	});
 });

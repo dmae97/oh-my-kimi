@@ -1,6 +1,7 @@
 import type { SQLQueryBindings } from "bun:sqlite";
 import { generateId, stableMemoryId } from "../../util/ids";
 import { aaakEncode } from "../aaak";
+import { REGEX_EXTRACTION_MAX_INPUT_CHARS } from "../entities";
 import { EpisodicGraph } from "../episodic-graph";
 import { heuristicExtractFacts } from "../extraction";
 import { clampVeracity } from "../veracity-consolidation";
@@ -57,6 +58,7 @@ const TIER2_DAYS = envInt("MNEMOPI_TIER2_DAYS", 30);
 const TIER3_DAYS = envInt("MNEMOPI_TIER3_DAYS", 180);
 const DEGRADE_BATCH_SIZE = envInt("MNEMOPI_DEGRADE_BATCH", 100);
 const TIER3_MAX_CHARS = envInt("MNEMOPI_TIER3_MAX_CHARS", 300);
+const PATTERN_FACT_EXTRACTION_MAX_INPUT_CHARS = REGEX_EXTRACTION_MAX_INPUT_CHARS;
 
 function isoNow(): string {
 	return new Date().toISOString();
@@ -440,6 +442,7 @@ export function extractAndStoreFacts(
 		decision: 0,
 	};
 	const text = String(content ?? "");
+	if (text.length > PATTERN_FACT_EXTRACTION_MAX_INPUT_CHARS) return counts;
 	for (const match of text.matchAll(
 		/(\d+(?:[.,]\d+)?)\s*(ms|sec|seconds?|minutes?|hours?|days?|weeks?|months?|%|KB|MB|GB|TB|rows?|columns?|roles?|features?|bugs?|commits?|cards?|users?|items?|tests?|APIs?|endpoints?|sprints?|tickets?)\b/gi,
 	)) {
