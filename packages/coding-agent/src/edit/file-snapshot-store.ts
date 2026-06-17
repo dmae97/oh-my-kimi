@@ -116,6 +116,17 @@ export function parseSeenLinesFromHashlineBody(body: string): number[] {
 	return seen;
 }
 
+/** Merge explicit 1-indexed displayed lines into a recorded hashline snapshot. */
+export function recordSeenLines(
+	session: FileSnapshotStoreOwner,
+	absolutePath: string,
+	tag: string,
+	lines: readonly number[],
+): void {
+	if (lines.length === 0) return;
+	getFileSnapshotStore(session).recordSeenLines(canonicalSnapshotKey(absolutePath), tag, lines);
+}
+
 /**
  * Attach the lines a read displayed to the snapshot it minted, so the patcher
  * can reject edits anchored on lines the model never saw. Best-effort: a no-op
@@ -128,7 +139,5 @@ export function recordSeenLinesFromBody(
 	tag: string,
 	body: string,
 ): void {
-	const seen = parseSeenLinesFromHashlineBody(body);
-	if (seen.length === 0) return;
-	getFileSnapshotStore(session).recordSeenLines(canonicalSnapshotKey(absolutePath), tag, seen);
+	recordSeenLines(session, absolutePath, tag, parseSeenLinesFromHashlineBody(body));
 }
