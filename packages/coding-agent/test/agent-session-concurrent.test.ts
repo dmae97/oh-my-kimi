@@ -373,6 +373,61 @@ describe("AgentSession concurrent prompt guard", () => {
 		).toBe(true);
 	});
 
+	it("does not continue session_stop feedback after aborting a slow hook", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({
+			handler: () => ({ content: ["Done"] }),
+		});
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+			convertToLlm,
+		});
+		const stopHook = Promise.withResolvers<{ continue: true; additionalContext: string }>();
+		const emitSessionStop = vi.fn(() => (emitSessionStop.mock.calls.length === 1 ? stopHook.promise : undefined));
+		const extensionRunner = {
+			emit: vi.fn().mockResolvedValue(undefined),
+			emitBeforeAgentStart: vi.fn().mockResolvedValue(undefined),
+			hasHandlers: vi.fn((eventType: string) => eventType === "session_stop"),
+			emitSessionStop,
+		} as unknown as ExtensionRunner;
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated();
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry, extensionRunner });
+
+		const promptPromise = session.prompt("First message");
+		await waitFor(() => emitSessionStop.mock.calls.length === 1);
+		const abortPromise = session.abort();
+		stopHook.resolve({ continue: true, additionalContext: "Should not run after abort." });
+
+		await abortPromise;
+		await promptPromise;
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(1);
+		expect(session.queuedMessageCount).toBe(0);
+
+		await session.prompt("Second message");
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(2);
+		expect(
+			mock.calls[1]?.context.messages.some(message =>
+				typeof message.content === "string"
+					? message.content.includes("Should not run after abort.")
+					: message.content.some(
+							content => content.type === "text" && content.text.includes("Should not run after abort."),
+						),
+			),
+		).toBe(false);
+	});
+
 	it("caps consecutive session_stop continuations at eight", async () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const mock = createMockModel({
@@ -436,6 +491,39 @@ describe("AgentSession concurrent prompt guard", () => {
 		await session.waitForIdle();
 
 		expect(mock.calls).toHaveLength(2);
+		expect(extensionRunner.emitSessionStop).toHaveBeenCalledTimes(1);
+	});
+
+	it("emits session_stop after empty-stop retry cap settles", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({
+			responses: [{ content: [""] }, { content: [""] }, { content: [""] }, { content: [""] }],
+		});
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+			convertToLlm,
+		});
+		const extensionRunner = {
+			emit: vi.fn().mockResolvedValue(undefined),
+			emitBeforeAgentStart: vi.fn().mockResolvedValue(undefined),
+			hasHandlers: vi.fn((eventType: string) => eventType === "session_stop"),
+			emitSessionStop: vi.fn().mockResolvedValue(undefined),
+		} as unknown as ExtensionRunner;
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated();
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry, extensionRunner });
+
+		await session.prompt("First message");
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(4);
 		expect(extensionRunner.emitSessionStop).toHaveBeenCalledTimes(1);
 	});
 
@@ -1793,11 +1881,19 @@ describe("AgentSession TTSR resume gate", () => {
 			},
 		});
 
+		const extensionRunner = {
+			emit: vi.fn().mockResolvedValue(undefined),
+			emitBeforeAgentStart: vi.fn().mockResolvedValue(undefined),
+			hasHandlers: vi.fn((eventType: string) => eventType === "session_stop"),
+			emitSessionStop: vi.fn().mockResolvedValue(undefined),
+		} as unknown as ExtensionRunner;
+
 		session = new AgentSession({
 			agent,
 			sessionManager: SessionManager.inMemory(),
 			settings: Settings.isolated({ "compaction.enabled": false, "contextPromotion.enabled": true }),
 			modelRegistry,
+			extensionRunner,
 		});
 
 		await session.prompt("Handle overflow");
@@ -1806,5 +1902,6 @@ describe("AgentSession TTSR resume gate", () => {
 		expect(streamCallCount).toBeGreaterThanOrEqual(2);
 		expect(session.model?.id).toBe(codexModel.id);
 		expect(session.isStreaming).toBe(false);
+		expect(extensionRunner.emitSessionStop).toHaveBeenCalledTimes(1);
 	});
 });
