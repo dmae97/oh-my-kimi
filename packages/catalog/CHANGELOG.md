@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Updated the default Gemini CLI user-agent version fallback to 0.46.0.
 ### Fixed
 
 - Routed google-antigravity default baseUrl to the stable primary daily endpoint in the catalog generator and all fallback snapshots, resolving connection drops on heavy queries.
