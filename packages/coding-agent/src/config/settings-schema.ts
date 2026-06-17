@@ -1517,7 +1517,7 @@ export const SETTINGS_SCHEMA = {
 	// Context promotion
 	"contextPromotion.enabled": {
 		type: "boolean",
-		default: true,
+		default: false,
 		ui: {
 			tab: "context",
 			group: "General",
