@@ -562,25 +562,32 @@ fn run_search_slice(
 }
 
 fn build_searcher_for_params(params: SearchParams) -> Searcher {
+	let collect_content = params.mode == OutputMode::Content;
 	build_searcher(
-		if params.mode == OutputMode::Content {
+		if collect_content {
 			params.context_before
 		} else {
 			0
 		},
-		if params.mode == OutputMode::Content {
+		if collect_content {
 			params.context_after
 		} else {
 			0
 		},
 		params.multiline,
+		collect_content,
 	)
 }
 
-fn build_searcher(context_before: u32, context_after: u32, multiline: bool) -> Searcher {
+fn build_searcher(
+	context_before: u32,
+	context_after: u32,
+	multiline: bool,
+	line_number: bool,
+) -> Searcher {
 	SearcherBuilder::new()
 		.binary_detection(BinaryDetection::quit(b'\x00'))
-		.line_number(true)
+		.line_number(line_number)
 		.multi_line(multiline)
 		.before_context(context_before as usize)
 		.after_context(context_after as usize)
