@@ -849,9 +849,12 @@ export function buildRequest(
 		if (options.toolChoice) {
 			const choice = options.toolChoice;
 			if (typeof choice === "string") {
-				request.toolConfig = {
-					functionCallingConfig: { mode: mapToolChoice(choice) },
-				};
+				const mode = mapToolChoice(choice);
+				if (mode !== "AUTO") {
+					request.toolConfig = {
+						functionCallingConfig: { mode },
+					};
+				}
 			} else {
 				request.toolConfig = {
 					functionCallingConfig: {
