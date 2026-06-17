@@ -3572,11 +3572,16 @@ export class AgentSession {
 
 	#sessionStopContinuationContext(result: SessionStopEventResult | undefined): string | undefined {
 		if (!result) return undefined;
+		const additionalContext =
+			typeof result.additionalContext === "string" && result.additionalContext.length > 0
+				? result.additionalContext
+				: undefined;
+		const reason = typeof result.reason === "string" && result.reason.length > 0 ? result.reason : undefined;
 		if (result.continue === true) {
-			return result.additionalContext ?? result.reason;
+			return additionalContext ?? reason;
 		}
 		if (result.decision === "block") {
-			return result.reason ?? result.additionalContext;
+			return reason ?? additionalContext;
 		}
 		return undefined;
 	}
