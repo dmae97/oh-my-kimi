@@ -39,6 +39,22 @@ function createContext(): Context {
 	};
 }
 
+const VALIDATION_URL = "https://accounts.google.com/signin/continue?sarp=1&scc=1&plt=AKgnsbtTOKEN";
+
+const validationRequiredBody = JSON.stringify({
+	error: {
+		code: 403,
+		status: "PERMISSION_DENIED",
+		details: [
+			{
+				"@type": "type.googleapis.com/google.rpc.ErrorInfo",
+				reason: "VALIDATION_REQUIRED",
+				metadata: { validation_url: VALIDATION_URL, validation_url_link_text: "Verify your account" },
+			},
+		],
+	},
+});
+
 describe("Google Gemini CLI alignment", () => {
 	it("encodes enriched OAuth JSON while preserving token + projectId", async () => {
 		const expiresAt = Date.now() + 60 * 60 * 1000;
@@ -77,6 +93,7 @@ describe("Google Gemini CLI alignment", () => {
 			projectId: "proj-legacy",
 			refreshToken: undefined,
 			expiresAt: undefined,
+			email: undefined,
 		});
 
 		const aliasPayload = parseGeminiCliCredentials(
@@ -92,6 +109,7 @@ describe("Google Gemini CLI alignment", () => {
 			projectId: "proj-alias",
 			refreshToken: "refresh-alias",
 			expiresAt: 1_737_000_000_000,
+			email: undefined,
 		});
 
 		const enriched = parseGeminiCliCredentials(
@@ -100,6 +118,7 @@ describe("Google Gemini CLI alignment", () => {
 				projectId: "proj-enriched",
 				refreshToken: "refresh-token",
 				expiresAt: 1_737_000_000_000,
+				email: "dev@example.com",
 			}),
 		);
 		expect(enriched).toEqual({
@@ -107,6 +126,7 @@ describe("Google Gemini CLI alignment", () => {
 			projectId: "proj-enriched",
 			refreshToken: "refresh-token",
 			expiresAt: 1_737_000_000_000,
+			email: "dev@example.com",
 		});
 	});
 
@@ -408,6 +428,23 @@ describe("Google Gemini CLI alignment", () => {
 		}
 
 		expect(events.filter(e => e.type === "toolcall_start")).toHaveLength(1);
+	});
+
+	it("surfaces account verification failures from model requests", async () => {
+		const fetchMock: FetchImpl = async () => new Response(validationRequiredBody, { status: 403 });
+		const model = createModel("google-antigravity");
+
+		const stream = streamGoogleGeminiCli(model, createContext(), {
+			apiKey: JSON.stringify({ token: "token", projectId: "proj-123", email: "dev@example.com" }),
+			fetch: fetchMock,
+		});
+
+		const result = await stream.result();
+		expect(result.stopReason).toBe("error");
+		expect(result.errorStatus).toBe(403);
+		expect(result.errorMessage).toBe(
+			`Cloud Code Assist API error (403): Account verification required for dev@example.com. Visit ${VALIDATION_URL} to continue, then retry your request.`,
+		);
 	});
 
 	describe("retry guardrails", () => {
