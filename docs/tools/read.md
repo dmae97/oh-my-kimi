@@ -170,8 +170,8 @@ URL selectors are parsed separately in `packages/coding-agent/src/tools/fetch.ts
 
 ### Documents
 - `CONVERTIBLE_EXTENSIONS` in `packages/coding-agent/src/tools/read.ts` covers `.pdf`, `.doc`, `.docx`, `.ppt`, `.pptx`, `.xls`, `.xlsx`, `.rtf`, `.epub`.
-- `convertFileWithMarkit()` converts the file to text/markdown.
-- Converted output is then head-truncated with normal shared limits; there is no line selector support inside the source document before conversion.
+- `convertFileWithMarkit()` converts the file to text/markdown; line-range and `:raw` selectors then apply to the converted output (`file.pdf:50-100`, `:5-16,40-80`).
+- For PDFs, embedded images are surfaced as browsable handles. markit emits a `<!-- image: <id> (page N, WxHpt) -->` region for each embedded image; `read.ts` rewrites it into a `read <pdf>:<id>.png` hint (as inline code, so spaces/parens in the path can't break markdown). Reading that handle (`doc.pdf:p11-img0.png`) extracts the image — passing markit an `imageDir` that lands in a session-artifact cache (`<artifacts>/pdf-assets/<key>/`, keyed by size+mtime, converted once per file) — and returns it through the normal image-loading path. `doc.pdf:` lists the extractable members; an unknown member errors with the available list. Requested members are matched against extracted basenames, so `..`/separators cannot escape the cache.
 - Conversion failures return a text block like `[Cannot read .pdf file: ...]`.
 
 ### Jupyter notebooks

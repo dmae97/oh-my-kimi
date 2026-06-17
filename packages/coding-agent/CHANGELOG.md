@@ -1,6 +1,21 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added support for reading embedded PDF images via `read <pdf>:<image>.png` and listing available image members with `read <pdf>:`
+
+### Changed
+
+- Changed PDF read output to replace `<!-- image: ... -->` placeholders with clickable `read <pdf>:<image>.png` handles, including line-range and multi-range reads
+
+### Fixed
+
+- Fixed `read <pdf>:<member>` errors for unknown PDF images to surface available extracted image names
+
+### Security
+
+- Secured PDF image reads by validating requested image members against the extracted member list before opening files and refusing traversal-style names
 
 ## [16.0.5] - 2026-06-17
 

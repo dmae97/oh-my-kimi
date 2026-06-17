@@ -8,6 +8,16 @@ export interface MarkitConversionResult {
 	error?: string;
 }
 
+export interface MarkitFileConversionOptions {
+	/**
+	 * Directory the PDF converter writes extracted images/diagrams into. When
+	 * set, each embedded image is rendered to `<id>.png` and referenced by path
+	 * in the markdown; when unset, markit emits an `<!-- image: <id> ... -->`
+	 * placeholder comment instead.
+	 */
+	imageDir?: string;
+}
+
 interface MuPdfWasmModuleConfig {
 	print?: (...values: unknown[]) => void;
 	printErr?: (...values: unknown[]) => void;
@@ -77,9 +87,14 @@ function finalizeConversion(markdown?: string): MarkitConversionResult {
 	return { content: "", ok: false, error: "Conversion produced no output" };
 }
 
-export async function convertFileWithMarkit(filePath: string, signal?: AbortSignal): Promise<MarkitConversionResult> {
+export async function convertFileWithMarkit(
+	filePath: string,
+	signal?: AbortSignal,
+	options?: MarkitFileConversionOptions,
+): Promise<MarkitConversionResult> {
+	const extra = options?.imageDir ? { imageDir: options.imageDir } : undefined;
 	try {
-		const result = await runMarkitConversion(markit => markit.convertFile(filePath), signal);
+		const result = await runMarkitConversion(markit => markit.convertFile(filePath, extra), signal);
 		return finalizeConversion(result.markdown);
 	} catch (error) {
 		if (error instanceof ToolAbortError) {
