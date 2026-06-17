@@ -142,6 +142,7 @@ export async function getOAuthApiKey(
 		provider === "alibaba-coding-plan";
 	const apiKey = needsStructuredApiKey
 		? JSON.stringify({
+				apiEndpoint: creds.apiEndpoint,
 				token: creds.access,
 				enterpriseUrl: creds.enterpriseUrl,
 				projectId: creds.projectId,

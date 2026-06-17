@@ -17,6 +17,6 @@ export const githubCopilotProvider = {
 	refreshToken: async (credentials: OAuthCredentials) => {
 		// Lazy import: keep heavy OAuth flow modules out of the eager registry graph.
 		const { refreshGitHubCopilotToken } = await import("./oauth/github-copilot");
-		return refreshGitHubCopilotToken(credentials.refresh, credentials.enterpriseUrl);
+		return refreshGitHubCopilotToken(credentials.refresh, credentials.enterpriseUrl, credentials.apiEndpoint);
 	},
 } as const satisfies ProviderDefinition;

@@ -81,6 +81,20 @@ describe("github copilot model limits mapping", () => {
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
+	it("unwraps structured OAuth keys for discovery and routes business discovery to the business host", async () => {
+		const structuredApiKey = JSON.stringify({
+			token: "ghu_test_copilot_token",
+			apiEndpoint: "https://api.business.githubcopilot.com",
+		});
+		const { fetchMock } = await discoverCopilotModels(
+			{ data: [] },
+			structuredApiKey,
+			"https://api.business.githubcopilot.com",
+			"ghu_test_copilot_token",
+		);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+
 	it("uses max_context_window_tokens as context window when Copilot reports a prompt budget", async () => {
 		const { models, fetchMock } = await discoverCopilotModels({
 			data: [
