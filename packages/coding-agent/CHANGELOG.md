@@ -29,10 +29,12 @@
 ### Fixed
 
 - Fixed edit seen-line guard mismatch assertion message formatting to report the actual state instead of generic failure notices
+- Fixed `omp ttsr scan` to discover files with gitignore-aware native globbing, skip binary/oversized files before text decoding, use a scan-specific matcher, keep default output summary-only, and avoid retaining per-file AST snapshots during scans
 - Fixed Perplexity web search to use shared OpenAI streaming transports while preserving streamed sources, citations, and related questions
 - Fixed `read <pdf>:<member>` errors for unknown PDF images to surface available extracted image names
 - Fixed puppeteer stealth scripts to use cached Reflect methods (`Reflect_get`, `Reflect_apply`) and `Reflect.apply` instead of live `Reflect`/`Function.prototype.apply` calls, preventing page tampering from leaking through proxy traps.
 - Fixed Perplexity API-key web search to use shared OpenAI streaming transports while preserving streamed sources and OpenRouter fallback.
+- Fixed subagents reporting success after a provider-error turn by preserving real run failures over earlier successful `yield` payloads, and retried bare OpenAI-compatible `finish_reason: "error"` provider failures after partial text instead of stopping immediately
 
 ### Security
 

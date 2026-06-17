@@ -275,7 +275,13 @@ export async function runCli(argv: string[]): Promise<void> {
 	// Declare this module as the worker-host entry now that the active profile
 	// is resolved. The worker-host module is side-effect-free; importing
 	// `@oh-my-pi/pi-utils/env` here would snapshot the wrong agent `.env`.
-	declareWorkerHostEntry();
+	// Gated on `import.meta.main`: only the real CLI process entry is a valid
+	// worker host. Worker-thread re-entry already returned above at the
+	// `__omp_worker_` dispatch, and importers (`runCli` in profile-CLI tests,
+	// SDK embedding) have `import.meta.main === false` — declaring there would
+	// poison `workerHostEntry()` for the whole test process, forcing eval/stats/
+	// browser workers onto the same-realm inline fallback.
+	if (import.meta.main) declareWorkerHostEntry();
 
 	if (resolvedArgv[0] === "--smoke-test") {
 		await runSmokeTest();

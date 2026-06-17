@@ -10,21 +10,32 @@
  * `omp ttsr list` — show every TTSR-registered rule the current project/user
  * config would load, with its conditions, scope, and source.
  */
+import * as fs from "node:fs";
 import * as path from "node:path";
-import { AstMatchStrictness, astMatch } from "@oh-my-pi/pi-natives";
-import { getProjectDir } from "@oh-my-pi/pi-utils";
+import { AstMatchStrictness, astMatch, FileType, type GlobMatch, glob } from "@oh-my-pi/pi-natives";
+import { getProjectDir } from "@oh-my-pi/pi-utils/dirs";
 import chalk from "chalk";
-import { type Rule, ruleCapability } from "../capability/rule";
+import { BUILTIN_DEFAULTS_PROVIDER_ID, type Rule, ruleCapability } from "../capability/rule";
 import { bucketRules } from "../capability/rule-buckets";
 import { Settings } from "../config/settings";
+import type { TtsrSettings } from "../config/settings-schema";
 import { initializeWithSettings, loadCapability } from "../discovery";
 import { buildRuleFromMarkdown, createSourceMeta } from "../discovery/helpers";
-import { TtsrManager, type TtsrMatchContext, type TtsrMatchSource } from "../export/ttsr";
+import type { TtsrManager } from "../export/ttsr";
 
-export type TtsrAction = "test" | "list";
+export type TtsrAction = "test" | "list" | "scan";
 
-export const TTSR_ACTIONS: TtsrAction[] = ["test", "list"];
+export const TTSR_ACTIONS: TtsrAction[] = ["test", "list", "scan"];
 export const TTSR_SOURCES: TtsrMatchSource[] = ["text", "thinking", "tool"];
+
+export type TtsrMatchSource = "text" | "thinking" | "tool";
+
+interface TtsrMatchContext {
+	source: TtsrMatchSource;
+	toolName?: string;
+	filePaths?: string[];
+	streamKey?: string;
+}
 
 export interface TtsrTestArgs {
 	/** Inline snippet text. */
@@ -43,9 +54,23 @@ export interface TtsrTestArgs {
 	verbose?: boolean;
 }
 
+export interface TtsrScanArgs {
+	/** Directory to glob and scan files in. */
+	directory?: string;
+	/** Path to a rule markdown file to test in isolation (skips project loading). */
+	rule?: string;
+	/** Respect gitignore files while discovering scan candidates. Defaults to true. */
+	gitignore?: boolean;
+	/** Maximum file size to scan in bytes; 0 disables the limit. */
+	maxBytes?: number;
+	/** Show details. */
+	verbose?: boolean;
+}
+
 export interface TtsrCommandArgs {
 	action: TtsrAction;
 	test?: TtsrTestArgs;
+	scan?: TtsrScanArgs;
 	json?: boolean;
 }
 
@@ -75,6 +100,44 @@ const STDIN_MARKER = "-";
 /** Extensions treated as source files for default tool-context inference. */
 const SOURCE_FILE_EXT =
 	/^\.(ts|tsx|js|jsx|mjs|cjs|rs|py|go|java|kt|swift|c|cc|cpp|h|hpp|rb|php|lua|css|scss|html|json|ya?ml|toml|md|mdc)$/i;
+
+const BINARY_PROBE_BYTES = 8192;
+const DEFAULT_MAX_SCAN_BYTES = 5 * 1024 * 1024;
+
+type ReadSkipReason = "binary" | "large" | "unreadable";
+
+interface ScanSkipSummary {
+	binary: number;
+	large: number;
+	unreadable: number;
+	noRelevantRules: number;
+}
+
+interface ScanRegexCondition {
+	pattern: string;
+	regex: RegExp;
+}
+
+interface ScanScopePlan {
+	toolName?: string;
+	pathGlob?: Bun.Glob;
+}
+
+interface ScanRulePlan {
+	rule: Rule;
+	globalPathGlobs?: Bun.Glob[];
+	defaultToolScope: boolean;
+	scopes: ScanScopePlan[];
+	regexConditions: ScanRegexCondition[];
+	astConditions: string[];
+	astPrefilters: RegExp[];
+	astRequiresFullScan: boolean;
+}
+
+interface ScanFileCandidate {
+	path: string;
+	size?: number;
+}
 
 async function readSnippet(opts: { snippet?: string; file?: string }): Promise<string> {
 	if (opts.file) {
@@ -178,11 +241,33 @@ async function evaluate(
 	return { triggered, notTriggered };
 }
 
+async function createTtsrManager(settings?: TtsrSettings): Promise<TtsrManager> {
+	const { TtsrManager } = await import("../export/ttsr");
+	return new TtsrManager(settings);
+}
+
+function filterTtsrRulesForScan(
+	rules: readonly Rule[],
+	options: { builtinRules?: boolean; disabledRules?: readonly string[] } = {},
+): Rule[] {
+	const includeBuiltin = options.builtinRules !== false;
+	const disabled = new Set<string>();
+	for (const raw of options.disabledRules ?? []) {
+		const name = raw.trim();
+		if (name.length > 0) disabled.add(name);
+	}
+	return rules.filter(rule => {
+		if (disabled.has(rule.name)) return false;
+		if (!includeBuiltin && rule._source?.provider === BUILTIN_DEFAULTS_PROVIDER_ID) return false;
+		return (rule.condition && rule.condition.length > 0) || (rule.astCondition && rule.astCondition.length > 0);
+	});
+}
+
 async function loadProjectTtsrRules(cwd: string): Promise<{ rules: Rule[]; manager: TtsrManager }> {
 	const settingsInstance = await Settings.init({ cwd });
 	initializeWithSettings(settingsInstance);
 	const ttsrSettings = settingsInstance.getGroup("ttsr");
-	const manager = new TtsrManager(ttsrSettings);
+	const manager = await createTtsrManager(ttsrSettings);
 	const result = await loadCapability<Rule>(ruleCapability.id, { cwd });
 	bucketRules(result.items, manager, {
 		builtinRules: ttsrSettings.builtinRules,
@@ -191,7 +276,21 @@ async function loadProjectTtsrRules(cwd: string): Promise<{ rules: Rule[]; manag
 	return { rules: manager.getRules(), manager };
 }
 
-async function loadIsolatedRule(rulePath: string): Promise<{ rules: Rule[]; manager: TtsrManager }> {
+async function loadProjectScanRules(cwd: string): Promise<Rule[]> {
+	const settingsInstance = await Settings.init({ cwd });
+	initializeWithSettings(settingsInstance);
+	const ttsrSettings = settingsInstance.getGroup("ttsr");
+	if (!ttsrSettings.enabled) {
+		return [];
+	}
+	const result = await loadCapability<Rule>(ruleCapability.id, { cwd });
+	return filterTtsrRulesForScan(result.items, {
+		builtinRules: ttsrSettings.builtinRules,
+		disabledRules: ttsrSettings.disabledRules,
+	});
+}
+
+async function readIsolatedRule(rulePath: string): Promise<Rule> {
 	const resolved = path.resolve(rulePath);
 	const file = Bun.file(resolved);
 	if (!(await file.exists())) {
@@ -199,10 +298,14 @@ async function loadIsolatedRule(rulePath: string): Promise<{ rules: Rule[]; mana
 	}
 	const content = await file.text();
 	const name = path.basename(resolved).replace(/\.(md|mdc)$/, "");
-	const rule = buildRuleFromMarkdown(name, content, resolved, createSourceMeta("ttsr-cli", resolved, "project"), {
+	return buildRuleFromMarkdown(name, content, resolved, createSourceMeta("ttsr-cli", resolved, "project"), {
 		ruleName: name,
 	});
-	const manager = new TtsrManager({
+}
+
+async function loadIsolatedRule(rulePath: string): Promise<{ rules: Rule[]; manager: TtsrManager }> {
+	const rule = await readIsolatedRule(rulePath);
+	const manager = await createTtsrManager({
 		enabled: true,
 		contextMode: "discard",
 		interruptMode: "always",
@@ -213,10 +316,15 @@ async function loadIsolatedRule(rulePath: string): Promise<{ rules: Rule[]; mana
 	});
 	if (!manager.addRule(rule)) {
 		throw new Error(
-			`Rule "${name}" has no usable TTSR condition. Add a \`condition\` (regex) or \`astCondition\` (ast-grep pattern) to its frontmatter.`,
+			`Rule "${rule.name}" has no usable TTSR condition. Add a \`condition\` (regex) or \`astCondition\` (ast-grep pattern) to its frontmatter.`,
 		);
 	}
 	return { rules: manager.getRules(), manager };
+}
+
+async function loadIsolatedScanRule(rulePath: string): Promise<Rule[]> {
+	const rule = await readIsolatedRule(rulePath);
+	return filterTtsrRulesForScan([rule]);
 }
 
 async function runTest(args: TtsrTestArgs, json: boolean, cwd: string): Promise<void> {
@@ -362,6 +470,504 @@ async function runList(json: boolean, cwd: string): Promise<void> {
 	}
 }
 
+function normalizeScanPath(pathValue: string): string {
+	return pathValue.replaceAll("\\", "/");
+}
+
+function isWithinDirectory(child: string, parent: string): boolean {
+	const rel = path.relative(parent, child);
+	return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
+function matchesScanGlob(glob: Bun.Glob, filePaths: string[] | undefined): boolean {
+	if (!filePaths || filePaths.length === 0) {
+		return false;
+	}
+	for (const filePath of filePaths) {
+		const normalized = normalizeScanPath(filePath);
+		if (glob.match(normalized)) {
+			return true;
+		}
+		const slashIndex = normalized.lastIndexOf("/");
+		const basename = slashIndex === -1 ? normalized : normalized.slice(slashIndex + 1);
+		if (basename !== normalized && glob.match(basename)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+function compileScanPathGlobs(globs: Rule["globs"]): Bun.Glob[] | undefined {
+	if (!globs || globs.length === 0) {
+		return undefined;
+	}
+	const compiled = globs
+		.map(globPattern => globPattern.trim())
+		.filter(globPattern => globPattern.length > 0)
+		.map(globPattern => new Bun.Glob(globPattern));
+	return compiled.length > 0 ? compiled : undefined;
+}
+
+function parseScanToolScopeToken(token: string): ScanScopePlan | undefined {
+	const match = /^(?:(?<prefix>tool)(?::(?<tool>[a-z0-9_-]+))?|(?<bare>[a-z0-9_-]+))(?:\((?<path>[^)]+)\))?$/i.exec(
+		token,
+	);
+	if (!match) {
+		return undefined;
+	}
+	const groups = match.groups;
+	const hasToolPrefix = groups?.prefix !== undefined;
+	const toolName = (groups?.tool ?? (hasToolPrefix ? undefined : groups?.bare))?.trim().toLowerCase();
+	const pathPattern = groups?.path?.trim();
+	return {
+		toolName,
+		pathGlob: pathPattern ? new Bun.Glob(pathPattern) : undefined,
+	};
+}
+
+function escapeRegexLiteral(value: string): string {
+	return value.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
+}
+
+function compileAstPrefilter(pattern: string): RegExp | undefined {
+	if (/\bas\s*\{/.test(pattern)) {
+		return /\bas\b(?:\s|\/\/[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/)*\{/;
+	}
+	const ignored = new Set(["if", "as", "const", "let", "var", "return", "true", "false", "null", "undefined"]);
+	const tokens = pattern
+		.match(/\b[A-Za-z_][A-Za-z0-9_]*\b/g)
+		?.filter(token => !ignored.has(token) && !/^[A-Z_]+$/.test(token))
+		.sort((a, b) => b.length - a.length);
+	const token = tokens?.[0];
+	return token ? new RegExp(`\\b${escapeRegexLiteral(token)}\\b`) : undefined;
+}
+
+function compileScanRulePlans(rules: Rule[]): ScanRulePlan[] {
+	return rules.map(rule => {
+		const scopes: ScanScopePlan[] = [];
+		let defaultToolScope = !rule.scope || rule.scope.length === 0;
+		for (const rawScope of rule.scope ?? []) {
+			const token = rawScope.trim();
+			const normalizedToken = token.toLowerCase();
+			if (token.length === 0 || normalizedToken === "text" || normalizedToken === "thinking") {
+				continue;
+			}
+			if (normalizedToken === "tool" || normalizedToken === "toolcall") {
+				scopes.push({});
+				continue;
+			}
+			const scope = parseScanToolScopeToken(token);
+			if (!scope) {
+				continue;
+			}
+			if (!scope.toolName && !scope.pathGlob) {
+				defaultToolScope = true;
+				continue;
+			}
+			scopes.push(scope);
+		}
+		const regexConditions: ScanRegexCondition[] = [];
+		for (const pattern of rule.condition ?? []) {
+			try {
+				regexConditions.push({ pattern, regex: new RegExp(pattern) });
+			} catch {
+				// Same behavior as TtsrManager: invalid regex conditions are unusable.
+			}
+		}
+		const astConditions = (rule.astCondition ?? [])
+			.map(pattern => pattern.trim())
+			.filter(pattern => pattern.length > 0);
+		const astPrefilters: RegExp[] = [];
+		let astRequiresFullScan = false;
+		for (const pattern of astConditions) {
+			const prefilter = compileAstPrefilter(pattern);
+			if (prefilter) {
+				astPrefilters.push(prefilter);
+			} else {
+				astRequiresFullScan = true;
+			}
+		}
+		return {
+			rule,
+			globalPathGlobs: compileScanPathGlobs(rule.globs),
+			defaultToolScope,
+			scopes,
+			regexConditions,
+			astConditions,
+			astPrefilters,
+			astRequiresFullScan,
+		};
+	});
+}
+
+function scanRulePlanMatchesPath(plan: ScanRulePlan, filePaths: string[]): boolean {
+	return !plan.globalPathGlobs || plan.globalPathGlobs.some(pathGlob => matchesScanGlob(pathGlob, filePaths));
+}
+
+function scanRulePlanMatchesToolScope(plan: ScanRulePlan, filePaths: string[]): boolean {
+	if (!scanRulePlanMatchesPath(plan, filePaths)) {
+		return false;
+	}
+	if (plan.defaultToolScope) {
+		return true;
+	}
+	for (const scope of plan.scopes) {
+		if (scope.pathGlob && !matchesScanGlob(scope.pathGlob, filePaths)) {
+			continue;
+		}
+		if (!scope.toolName || scope.toolName === "edit" || scope.toolName === "write") {
+			return true;
+		}
+	}
+	return false;
+}
+
+function scanRulePlanMayMatchAst(plan: ScanRulePlan, fileContent: string): boolean {
+	return (
+		plan.astConditions.length > 0 &&
+		(plan.astRequiresFullScan || plan.astPrefilters.some(prefilter => prefilter.test(fileContent)))
+	);
+}
+
+async function scanRulePlanMatchesContent(
+	plan: ScanRulePlan,
+	fileContent: string,
+	lang: string | undefined,
+	includeDetails: boolean,
+): Promise<RuleMatchDetail | undefined> {
+	let regexHit = false;
+	const matchedRegex: string[] = [];
+	for (const condition of plan.regexConditions) {
+		condition.regex.lastIndex = 0;
+		if (condition.regex.test(fileContent)) {
+			regexHit = true;
+			if (includeDetails) {
+				matchedRegex.push(condition.pattern);
+			}
+		}
+	}
+
+	const matchedAst: string[] = [];
+	let astHit = false;
+	if ((includeDetails || !regexHit) && lang && plan.astConditions.length > 0) {
+		if (includeDetails) {
+			matchedAst.push(...(await astMatches(plan.rule, fileContent, lang)));
+			astHit = matchedAst.length > 0;
+		} else {
+			try {
+				const result = await astMatch({
+					patterns: plan.astConditions,
+					source: fileContent,
+					lang,
+					strictness: AstMatchStrictness.Smart,
+					limit: 1,
+				});
+				astHit = result.matches.length > 0;
+			} catch {
+				astHit = false;
+			}
+		}
+	}
+
+	if (!regexHit && !astHit) {
+		return undefined;
+	}
+	return {
+		name: plan.rule.name,
+		path: plan.rule.path,
+		sourceProvider: plan.rule._source?.provider,
+		matched: { regex: matchedRegex, ast: matchedAst },
+		defined: { regex: plan.rule.condition ?? [], ast: plan.rule.astCondition ?? [] },
+	};
+}
+
+async function scanAnyAstConditionMatches(
+	plans: ScanRulePlan[],
+	fileContent: string,
+	lang: string | undefined,
+): Promise<boolean | undefined> {
+	if (!lang) {
+		return false;
+	}
+	const patterns = plans.flatMap(plan => plan.astConditions);
+	if (patterns.length === 0) {
+		return false;
+	}
+	try {
+		const result = await astMatch({
+			patterns,
+			source: fileContent,
+			lang,
+			strictness: AstMatchStrictness.Smart,
+			limit: 1,
+		});
+		if (result.matches.length > 0) {
+			return true;
+		}
+		return result.parseErrors && result.parseErrors.length > 0 ? undefined : false;
+	} catch {
+		return undefined;
+	}
+}
+
+async function discoverScanFiles(scanDir: string, cwd: string, gitignore: boolean): Promise<ScanFileCandidate[]> {
+	const globRoot = isWithinDirectory(scanDir, cwd) ? cwd : scanDir;
+	const relativeScanDir = normalizeScanPath(path.relative(globRoot, scanDir));
+	const pattern = relativeScanDir === "" ? "**/*" : `${relativeScanDir}/**/*`;
+	try {
+		const result = await glob({
+			pattern,
+			path: globRoot,
+			gitignore,
+			hidden: true,
+			fileType: FileType.File,
+		});
+		const candidates: ScanFileCandidate[] = [];
+		for (const match of result.matches as GlobMatch[]) {
+			const absPath = path.resolve(globRoot, match.path);
+			const filePath = normalizeScanPath(path.relative(scanDir, absPath));
+			if (
+				filePath.length === 0 ||
+				filePath.startsWith("..") ||
+				path.isAbsolute(filePath) ||
+				filePath === ".git" ||
+				filePath.startsWith(".git/")
+			) {
+				continue;
+			}
+			candidates.push({ path: filePath, size: match.size });
+		}
+		candidates.sort((a, b) => a.path.localeCompare(b.path));
+		return candidates;
+	} catch {
+		return [];
+	}
+}
+
+async function readScanFileText(
+	absPath: string,
+	maxBytes: number,
+	knownSize: number | undefined,
+): Promise<{ content: string } | { skip: ReadSkipReason }> {
+	const file = Bun.file(absPath);
+	try {
+		const fileSize = knownSize ?? file.size;
+		if (maxBytes > 0 && fileSize > maxBytes) {
+			return { skip: "large" };
+		}
+		const probeBytes = Math.min(fileSize, BINARY_PROBE_BYTES);
+		if (probeBytes > 0) {
+			const prefix = new Uint8Array(await file.slice(0, probeBytes).arrayBuffer());
+			if (prefix.includes(0)) {
+				return { skip: "binary" };
+			}
+		}
+		return { content: await file.text() };
+	} catch {
+		return { skip: "unreadable" };
+	}
+}
+
+function countSkipped(skipped: ScanSkipSummary): number {
+	return skipped.binary + skipped.large + skipped.unreadable + skipped.noRelevantRules;
+}
+
+async function runScan(args: TtsrScanArgs, json: boolean, cwd: string): Promise<void> {
+	const scanDir = args.directory ? path.resolve(cwd, args.directory) : cwd;
+	if (!fs.existsSync(scanDir)) {
+		if (json) {
+			process.stdout.write(`${JSON.stringify({ error: `Directory not found: ${scanDir}` })}\n`);
+		} else {
+			process.stderr.write(`${chalk.red(`error: scan directory not found: ${scanDir}`)}\n`);
+		}
+		process.exit(1);
+	}
+
+	const rules = args.rule ? await loadIsolatedScanRule(args.rule) : await loadProjectScanRules(cwd);
+
+	if (rules.length === 0) {
+		const msg = args.rule
+			? "Rule registered but produced no TTSR entry."
+			: "No TTSR rules registered for this project.";
+		if (json) {
+			process.stdout.write(`${JSON.stringify({ error: msg })}\n`);
+		} else {
+			process.stderr.write(`${chalk.yellow(msg)}\n`);
+		}
+		process.exit(1);
+	}
+
+	const scanRulePlans = compileScanRulePlans(rules).filter(
+		plan => plan.regexConditions.length > 0 || plan.astConditions.length > 0,
+	);
+	if (scanRulePlans.length === 0) {
+		const msg = args.rule
+			? "Rule registered but produced no usable TTSR condition."
+			: "No usable TTSR rules registered for this project.";
+		if (json) {
+			process.stdout.write(`${JSON.stringify({ error: msg })}\n`);
+		} else {
+			process.stderr.write(`${chalk.yellow(msg)}\n`);
+		}
+		process.exit(1);
+	}
+
+	const gitignore = args.gitignore ?? true;
+	const maxBytes = Math.max(0, args.maxBytes ?? DEFAULT_MAX_SCAN_BYTES);
+	const includeDetails = json || (args.verbose ?? false);
+	const files = await discoverScanFiles(scanDir, cwd, gitignore);
+	const emptySkipped: ScanSkipSummary = { binary: 0, large: 0, unreadable: 0, noRelevantRules: 0 };
+	if (files.length === 0) {
+		const msg = `No files found to scan in ${scanDir}`;
+		if (json) {
+			process.stdout.write(
+				`${JSON.stringify({
+					files: [],
+					summary: {
+						totalFiles: 0,
+						scannedFiles: 0,
+						matchedFiles: 0,
+						totalMatches: 0,
+						evaluatedRules: scanRulePlans.length,
+						skippedFiles: 0,
+						skipped: emptySkipped,
+						gitignore,
+						maxBytes,
+					},
+				})}\n`,
+			);
+		} else {
+			process.stdout.write(`${chalk.yellow(msg)}\n`);
+		}
+		return;
+	}
+
+	const fileResults: Array<{ file: string; matches: RuleMatchDetail[] }> = [];
+	const skipped: ScanSkipSummary = { binary: 0, large: 0, unreadable: 0, noRelevantRules: 0 };
+	let scannedFiles = 0;
+	let matchedFiles = 0;
+	let totalMatches = 0;
+
+	for (const candidate of files) {
+		const file = candidate.path;
+		const absPath = path.resolve(scanDir, file);
+		const relToProj = path.relative(cwd, absPath).replaceAll("\\", "/");
+		const basename = path.basename(absPath);
+		const filePaths = [absPath.replaceAll("\\", "/"), relToProj, basename];
+		const relevantPlans = scanRulePlans.filter(plan => scanRulePlanMatchesToolScope(plan, filePaths));
+		if (relevantPlans.length === 0) {
+			skipped.noRelevantRules++;
+			continue;
+		}
+
+		const readResult = await readScanFileText(absPath, maxBytes, candidate.size);
+		if ("skip" in readResult) {
+			skipped[readResult.skip]++;
+			continue;
+		}
+		const fileContent = readResult.content;
+		const lang = deriveLang(filePaths);
+		scannedFiles++;
+
+		const fileTriggeredDetails: RuleMatchDetail[] = [];
+		let fileMatchCount = 0;
+		const pendingAstPlans: ScanRulePlan[] = [];
+		for (const plan of relevantPlans) {
+			const detail = includeDetails
+				? await scanRulePlanMatchesContent(plan, fileContent, lang, true)
+				: await scanRulePlanMatchesContent(plan, fileContent, undefined, false);
+			if (detail) {
+				fileMatchCount++;
+				if (includeDetails) {
+					fileTriggeredDetails.push(detail);
+				}
+				continue;
+			}
+			if (!includeDetails && scanRulePlanMayMatchAst(plan, fileContent)) {
+				pendingAstPlans.push(plan);
+			}
+		}
+		if (!includeDetails && (await scanAnyAstConditionMatches(pendingAstPlans, fileContent, lang)) !== false) {
+			for (const plan of pendingAstPlans) {
+				const detail = await scanRulePlanMatchesContent(plan, fileContent, lang, false);
+				if (!detail) {
+					continue;
+				}
+				fileMatchCount++;
+			}
+		}
+
+		if (fileMatchCount > 0) {
+			matchedFiles++;
+			totalMatches += fileMatchCount;
+			if (includeDetails) {
+				fileResults.push({
+					file: relToProj,
+					matches: fileTriggeredDetails,
+				});
+			}
+		}
+	}
+
+	if (json) {
+		process.stdout.write(
+			`${JSON.stringify({
+				files: fileResults.map(fr => ({
+					filePath: fr.file,
+					matches: fr.matches.map(m => ({
+						name: m.name,
+						path: m.path,
+						matched: m.matched,
+					})),
+				})),
+				summary: {
+					totalFiles: files.length,
+					scannedFiles,
+					matchedFiles,
+					totalMatches,
+					evaluatedRules: scanRulePlans.length,
+					skippedFiles: countSkipped(skipped),
+					skipped,
+					gitignore,
+					maxBytes,
+				},
+			})}\n`,
+		);
+	} else {
+		process.stdout.write(
+			`${chalk.bold("TTSR scan")} — directory=${chalk.cyan(scanDir)} files=${chalk.dim(files.length)} scanned=${chalk.dim(scannedFiles)} rules=${chalk.dim(scanRulePlans.length)} gitignore=${chalk.dim(gitignore ? "on" : "off")} max-bytes=${chalk.dim(maxBytes === 0 ? "off" : String(maxBytes))}\n`,
+		);
+		if (countSkipped(skipped) > 0) {
+			process.stdout.write(
+				`${chalk.dim(`  skipped: binary=${skipped.binary} large=${skipped.large} unreadable=${skipped.unreadable} no-relevant-rules=${skipped.noRelevantRules}`)}\n`,
+			);
+		}
+
+		if (matchedFiles === 0) {
+			process.stdout.write(
+				`${chalk.green.bold("No rule matches found.")} (evaluated ${rules.length} rules on ${scannedFiles}/${files.length} files)\n`,
+			);
+		} else {
+			process.stdout.write(
+				`${chalk.red.bold("Found violations/matches:")} (${totalMatches} matches across ${matchedFiles} files)\n`,
+			);
+			if (!includeDetails) {
+				process.stdout.write(`${chalk.dim("  rerun with --verbose to list matched files and conditions")}\n`);
+				return;
+			}
+
+			process.stdout.write("\n");
+			for (const fr of fileResults) {
+				process.stdout.write(`${chalk.bold.underline(fr.file)}\n`);
+				for (const detail of fr.matches) {
+					renderRuleDetail(detail, true);
+				}
+				process.stdout.write("\n");
+			}
+		}
+	}
+}
+
 export async function runTtsrCommand(cmd: TtsrCommandArgs): Promise<void> {
 	const cwd = getProjectDir();
 	if (cmd.action === "test") {
@@ -374,6 +980,14 @@ export async function runTtsrCommand(cmd: TtsrCommandArgs): Promise<void> {
 	}
 	if (cmd.action === "list") {
 		await runList(cmd.json ?? false, cwd);
+		return;
+	}
+	if (cmd.action === "scan") {
+		if (!cmd.scan) {
+			process.stderr.write(`${chalk.red("error: scan arguments missing")}\n`);
+			process.exit(1);
+		}
+		await runScan(cmd.scan, cmd.json ?? false, cwd);
 		return;
 	}
 	process.stderr.write(`${chalk.red(`error: unknown ttsr action: ${cmd.action}`)}\n`);
