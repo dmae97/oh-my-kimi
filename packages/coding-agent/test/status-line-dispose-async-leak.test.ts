@@ -14,17 +14,18 @@
  * asserting `#onBranchChange` never fires post-dispose.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
-import type { GitRefHead } from "@oh-my-pi/pi-coding-agent/utils/git";
-import * as git from "@oh-my-pi/pi-coding-agent/utils/git";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { StatusLineSettings } from "@oh-my-pi/pi-coding-agent/modes/components/status-line";
 import { StatusLineComponent } from "@oh-my-pi/pi-coding-agent/modes/components/status-line";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import type { GitRefHead } from "@oh-my-pi/pi-coding-agent/utils/git";
+import * as git from "@oh-my-pi/pi-coding-agent/utils/git";
 import { getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
 
 const originalProjectDir = getProjectDir();
 
 beforeAll(async () => {
+	resetSettingsForTest();
 	await Settings.init({ inMemory: true });
 	await initTheme();
 });
@@ -74,20 +75,20 @@ function makeSession() {
 
 const fakeRefHead: GitRefHead = {
 	kind: "ref",
-	branchName: "feature",
-	ref: "refs/heads/feature",
+	branchName: "main",
+	ref: "refs/heads/main",
 	commit: null,
 	commonDir: "/fake/.git",
 	gitDir: "/fake/.git",
 	gitEntryPath: "/fake/.git",
 	headPath: "/fake/.git/HEAD",
 	repoRoot: "/fake",
-	headContent: "ref: refs/heads/feature\n",
+	headContent: "ref: refs/heads/main\n",
 };
 
 const gitSegmentSettings: StatusLineSettings = {
 	preset: "custom",
-	leftSegments: ["git", "pr"],
+	leftSegments: ["pr"],
 	rightSegments: ["session_name"],
 	separator: "powerline-thin",
 	sessionAccent: false,
@@ -96,21 +97,24 @@ const gitSegmentSettings: StatusLineSettings = {
 
 describe("StatusLineComponent dispose guards async callbacks", () => {
 	it("suppresses #onBranchChange when git.branch.default resolves after dispose()", async () => {
-		// #isDefaultBranch seeds #defaultBranch = "main" synchronously, so a
-		// "feature" branch starts the async git.branch.default IIFE. Delay it
-		// past dispose so the guard is the only thing preventing the callback.
+		// #isDefaultBranch seeds #defaultBranch = "main" synchronously. The
+		// fake HEAD is on "main", so #isDefaultBranch("main") returns true
+		// and #lookupPr short-circuits without spawning `gh pr view` — but
+		// the git.branch.default IIFE still starts (it fires whenever
+		// #defaultBranch is undefined, regardless of the sync result). Delay
+		// it past dispose so the guard is the only thing preventing the
+		// callback.
 		let resolveDefault: ((v: string | null) => void) | undefined;
-		vi.spyOn(git.branch, "default").mockImplementation(
-			() => new Promise<string | null>(r => (resolveDefault = r)),
-		);
+		vi.spyOn(git.branch, "default").mockImplementation(() => new Promise<string | null>(r => (resolveDefault = r)));
 
 		const onBranchChange = vi.fn();
 		const component = new StatusLineComponent(makeSession());
 		component.updateSettings(gitSegmentSettings);
 		component.watchBranch(onBranchChange);
 
-		// Render with a `pr` segment → #lookupPr → #isDefaultBranch("feature")
-		// → starts the delayed git.branch.default IIFE.
+		// Render with a `pr` segment → #lookupPr → #isDefaultBranch("main")
+		// → starts the delayed git.branch.default IIFE (no gh spawn: the
+		// sync default-branch check returns true and PR lookup bails).
 		component.getTopBorder(80);
 		expect(resolveDefault).toBeDefined();
 
