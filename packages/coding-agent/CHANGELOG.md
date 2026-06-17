@@ -37,7 +37,7 @@
 
 ### Fixed
 
-- Fixed the `tools.format` setting schema so `minimax` can be selected as an owned tool-calling dialect. ([#2759](https://github.com/can1357/oh-my-pi/issues/2759))
+- Fixed the `tools.format` setting schema so `minimax` can be selected as an owned tool-calling dialect, and taught auto mode to route tool-less MiniMax-family models to the MiniMax owned dialect. ([#2759](https://github.com/can1357/oh-my-pi/issues/2759))
 
 ## [16.0.3] - 2026-06-16
 

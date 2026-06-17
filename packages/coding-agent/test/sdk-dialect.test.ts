@@ -5,6 +5,7 @@ describe("resolveDialect", () => {
 	it("uses preferred owned dialects in auto mode for models without native tools", () => {
 		expect(resolveDialect("auto", { id: "MiniMax-M3", supportsTools: false })).toBe("minimax");
 		expect(resolveDialect("auto", { id: "qwen3-coder-plus", supportsTools: false })).toBe("qwen3");
+		expect(resolveDialect("auto", { id: "unclassified-model-id", supportsTools: false })).toBe("glm");
 		expect(resolveDialect("auto", { supportsTools: false })).toBe("glm");
 		expect(resolveDialect("auto", { supportsTools: true })).toBeUndefined();
 		expect(resolveDialect("auto", {})).toBeUndefined();

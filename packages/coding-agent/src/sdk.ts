@@ -17,7 +17,7 @@ import {
 	streamSimple,
 } from "@oh-my-pi/pi-ai";
 import type { Dialect } from "@oh-my-pi/pi-ai/dialect";
-import { preferredDialect } from "@oh-my-pi/pi-catalog/identity";
+import { FALLBACK_DIALECT, preferredDialect } from "@oh-my-pi/pi-catalog/identity";
 import {
 	getOpenAICodexTransportDetails,
 	prewarmOpenAICodexResponses,
@@ -572,7 +572,9 @@ export function resolveDialect(
 	if (format === "native") return undefined;
 	if (format === "auto") {
 		if (model?.supportsTools !== false) return undefined;
-		return model.id ? preferredDialect(model.id) : "glm";
+		if (!model.id) return "glm";
+		const preferred = preferredDialect(model.id);
+		return preferred === FALLBACK_DIALECT ? "glm" : preferred;
 	}
 	return format;
 }
