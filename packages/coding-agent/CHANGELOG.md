@@ -35,6 +35,10 @@
 - Fixed default prompts to instruct the agent to read applicable `skill://<name>` content before starting work, so discovered skills influence broad task requests like frontend generation ([#2829](https://github.com/can1357/oh-my-pi/issues/2829)).
 - Fixed hashline visible-line validation for ACP editor reads so `INS.POST` anchors displayed by bridge-backed range and multi-range `read` output are merged into the session snapshot before `edit` validates them ([#2773](https://github.com/can1357/oh-my-pi/issues/2773)).
 
+### Fixed
+
+- Fixed the `tools.format` setting schema so `minimax` can be selected as an owned tool-calling dialect. ([#2759](https://github.com/can1357/oh-my-pi/issues/2759))
+
 ## [16.0.3] - 2026-06-16
 
 ### Added

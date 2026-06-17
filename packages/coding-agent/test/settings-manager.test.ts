@@ -82,6 +82,7 @@ describe("Settings", () => {
 				"qwen3",
 				"gemini",
 				"gemma",
+				"minimax",
 			]);
 		});
 	});

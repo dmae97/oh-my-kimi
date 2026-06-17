@@ -12,5 +12,6 @@ describe("resolveDialect", () => {
 	it("keeps native unset and passes explicit in-band dialects through", () => {
 		expect(resolveDialect("native", { supportsTools: false })).toBeUndefined();
 		expect(resolveDialect("qwen3", undefined)).toBe("qwen3");
+		expect(resolveDialect("minimax", undefined)).toBe("minimax");
 	});
 });

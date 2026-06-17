@@ -1791,6 +1791,7 @@ export const SETTINGS_SCHEMA = {
 			"qwen3",
 			"gemini",
 			"gemma",
+			"minimax",
 		] as const,
 		default: "auto",
 		ui: {
@@ -1817,6 +1818,7 @@ export const SETTINGS_SCHEMA = {
 				{ value: "qwen3", label: "Qwen3", description: "Use the Qwen3 owned dialect." },
 				{ value: "gemini", label: "Gemini", description: "Use the Gemini owned dialect." },
 				{ value: "gemma", label: "Gemma", description: "Use the Gemma owned dialect." },
+				{ value: "minimax", label: "MiniMax", description: "Use the MiniMax owned dialect." },
 			],
 		},
 	},

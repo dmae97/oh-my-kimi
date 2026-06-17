@@ -146,9 +146,9 @@ describe("agentLoop with owned in-band tool calls", () => {
 		expect(resultsText).toContain("echoed:hi");
 	});
 
-	it("uses PI_DIALECT when config.dialect is unset", async () => {
+	it("uses PI_DIALECT=minimax when config.dialect is unset", async () => {
 		const before = Bun.env.PI_DIALECT;
-		Bun.env.PI_DIALECT = "hermes";
+		Bun.env.PI_DIALECT = "minimax";
 		try {
 			const echoArgs: Array<{ msg: string }> = [];
 			const toolSchema = z.object({ msg: z.string().describe("message to echo") });
@@ -168,7 +168,11 @@ describe("agentLoop with owned in-band tool calls", () => {
 				responses: [
 					context => {
 						captured.push(context);
-						return { content: ['<tool_call>\n{"name":"echo","arguments":{"msg":"from env"}}\n</tool_call>'] };
+						return {
+							content: [
+								'<minimax:tool_call>\n<invoke name="echo"><parameter name="msg">from env</parameter></invoke>\n</minimax:tool_call>',
+							],
+						};
 					},
 					context => {
 						captured.push(context);
@@ -184,7 +188,7 @@ describe("agentLoop with owned in-band tool calls", () => {
 
 			expect(echoArgs).toEqual([{ msg: "from env" }]);
 			expect(captured[0].tools).toBeUndefined();
-			expect((captured[0].systemPrompt ?? []).join("\n")).toContain('"name":"function_name","arguments"');
+			expect((captured[0].systemPrompt ?? []).join("\n")).toContain("<minimax:tool_call>");
 		} finally {
 			if (before === undefined) delete Bun.env.PI_DIALECT;
 			else Bun.env.PI_DIALECT = before;
