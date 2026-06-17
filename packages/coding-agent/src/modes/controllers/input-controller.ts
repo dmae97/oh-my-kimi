@@ -929,10 +929,14 @@ export class InputController {
 
 	async handleRetry(): Promise<void> {
 		const didRetry = await this.ctx.viewSession.retry();
-		if (!didRetry) {
+		if (didRetry) {
+			this.ctx.editor.setText("");
+			this.ctx.pendingImages = [];
+			this.ctx.pendingImageLinks = [];
+			this.ctx.editor.imageLinks = undefined;
+		} else {
 			this.ctx.showStatus("Nothing to retry");
 		}
-		this.ctx.editor.setText("");
 	}
 
 	/** Send editor text as a follow-up message (queued behind current stream). */

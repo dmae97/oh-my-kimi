@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `app.retry` as an `Alt+R` keybinding for retrying the last failed or aborted assistant turn ([#2790](https://github.com/can1357/oh-my-pi/issues/2790)).
+
 ## [16.0.5] - 2026-06-17
 
 ### Added
@@ -14,7 +18,6 @@
 - Added `advisor.immuneTurns` setting (default `1`) to limit how often advisor `concern`/`blocker` notes can interrupt the primary agent.
 - Added a main-session `session_stop` extension event with continuation feedback and an 8-continuation loop cap ([#2834](https://github.com/can1357/oh-my-pi/issues/2834)).
 - Added `--max-time <seconds>` so CLI sessions can stop after a wall-clock deadline.
-- Added `app.retry` as an `Alt+R` keybinding for retrying the last failed or aborted assistant turn ([#2790](https://github.com/can1357/oh-my-pi/issues/2790)).
 
 ### Changed
 
