@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "bun:test";
 import type { AgentMessage, AgentTelemetryConfig } from "@oh-my-pi/pi-agent-core";
+import { type } from "arktype";
 import { createAdvisorMessageCard } from "../../modes/components/advisor-message";
 import { getThemeByName } from "../../modes/theme/theme";
 import { formatSessionHistoryMarkdown } from "../../session/session-history-format";
@@ -115,6 +116,16 @@ describe("advisor", () => {
 			expect(onAdvice).toHaveBeenCalledWith("x", "concern");
 			expect(result.details).toEqual({ note: "x", severity: "concern" });
 			expect(result.useless).toBe(true);
+		});
+
+		it("validates parameters using ArkType", () => {
+			const onAdvice = vi.fn();
+			const tool = new AdviseTool(onAdvice);
+			const valid = tool.parameters({ note: "x", severity: "concern" });
+			expect(valid instanceof type.errors).toBe(false);
+
+			const invalid = tool.parameters({ note: 123, severity: "invalid" as any });
+			expect(invalid instanceof type.errors).toBe(true);
 		});
 	});
 

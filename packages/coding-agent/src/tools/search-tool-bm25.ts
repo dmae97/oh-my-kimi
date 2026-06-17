@@ -2,7 +2,7 @@ import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallb
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { prompt } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
+import { type } from "arktype";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import searchToolBm25Description from "../prompts/tools/search-tool-bm25.md" with { type: "text" };
@@ -27,12 +27,12 @@ const COLLAPSED_MATCH_LIMIT = 5;
 const MATCH_LABEL_LEN = 72;
 const MATCH_DESCRIPTION_LEN = 96;
 
-const searchToolBm25Schema = z.object({
-	query: z.string().describe("tool search query"),
-	limit: z.number().int().min(1).optional().describe("max matches"),
+const searchToolBm25Schema = type({
+	query: "string",
+	limit: "number>0?",
 });
 
-type SearchToolBm25Params = z.infer<typeof searchToolBm25Schema>;
+type SearchToolBm25Params = typeof searchToolBm25Schema.infer;
 
 interface SearchToolBm25Match {
 	name: string;

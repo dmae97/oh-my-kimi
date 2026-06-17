@@ -3,7 +3,7 @@ import { agentLoop } from "@oh-my-pi/pi-agent-core/agent-loop";
 import type { AgentContext, AgentLoopConfig, AgentMessage, AgentTool } from "@oh-my-pi/pi-agent-core/types";
 import type { AssistantMessage, Context, Message, TextContent, ToolResultMessage } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
-import { z } from "zod/v4";
+import { type } from "arktype";
 import { createUserMessage } from "./helpers";
 
 function identityConverter(messages: AgentMessage[]): Message[] {
@@ -20,7 +20,7 @@ function wireText(message: Message): string {
 describe("agentLoop with owned in-band tool calls", () => {
 	it("executes <tool_call> text, strips native tools from the wire, and re-encodes history as text", async () => {
 		const echoArgs: Array<{ msg: string }> = [];
-		const toolSchema = z.object({ msg: z.string().describe("message to echo") });
+		const toolSchema = type({ msg: "string" });
 		const echoTool: AgentTool<typeof toolSchema, { msg: string }> = {
 			name: "echo",
 			label: "Echo",
@@ -104,7 +104,7 @@ describe("agentLoop with owned in-band tool calls", () => {
 
 	it("executes Hermes/Qwen JSON tool calls when that dialect is selected", async () => {
 		const echoArgs: Array<{ msg: string }> = [];
-		const toolSchema = z.object({ msg: z.string().describe("message to echo") });
+		const toolSchema = type({ msg: "string" });
 		const echoTool: AgentTool<typeof toolSchema, { msg: string }> = {
 			name: "echo",
 			label: "Echo",
@@ -151,7 +151,7 @@ describe("agentLoop with owned in-band tool calls", () => {
 		Bun.env.PI_DIALECT = "minimax";
 		try {
 			const echoArgs: Array<{ msg: string }> = [];
-			const toolSchema = z.object({ msg: z.string().describe("message to echo") });
+			const toolSchema = type({ msg: "string" });
 			const echoTool: AgentTool<typeof toolSchema, { msg: string }> = {
 				name: "echo",
 				label: "Echo",

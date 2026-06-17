@@ -11,9 +11,9 @@ import {
 } from "@oh-my-pi/pi-natives";
 import type { EditorTheme, MarkdownTheme, SelectListTheme, SettingsListTheme, SymbolTheme } from "@oh-my-pi/pi-tui";
 import { adjustHsv, colorLuma, getCustomThemesDir, isEnoent, logger, relativeLuminance } from "@oh-my-pi/pi-utils";
+import { type } from "arktype";
 import chalk from "chalk";
 import { LRUCache } from "lru-cache/raw";
-import { z } from "zod/v4";
 // Embed theme JSON files at build time
 import darkThemeJson from "./dark.json" with { type: "json" };
 import { defaultThemes } from "./defaults";
@@ -972,125 +972,100 @@ function normalizeSpinnerFramesOverride(
 // Types & Schema
 // ============================================================================
 
-const colorValueSchema = z.union([
-	z.string(), // hex "#ff0000", var ref "primary", or empty ""
-	z.number().int().min(0).max(255), // 256-color index
-]);
+type ColorValue = string | number;
 
-type ColorValue = z.infer<typeof colorValueSchema>;
-
-const THEME_COLOR_KEYS = [
-	"accent",
-	"border",
-	"borderAccent",
-	"borderMuted",
-	"success",
-	"error",
-	"warning",
-	"muted",
-	"dim",
-	"text",
-	"thinkingText",
-	"selectedBg",
-	"userMessageBg",
-	"userMessageText",
-	"customMessageBg",
-	"customMessageText",
-	"customMessageLabel",
-	"toolPendingBg",
-	"toolSuccessBg",
-	"toolErrorBg",
-	"toolTitle",
-	"toolOutput",
-	"mdHeading",
-	"mdLink",
-	"mdLinkUrl",
-	"mdCode",
-	"mdCodeBlock",
-	"mdCodeBlockBorder",
-	"mdQuote",
-	"mdQuoteBorder",
-	"mdHr",
-	"mdListBullet",
-	"toolDiffAdded",
-	"toolDiffRemoved",
-	"toolDiffContext",
-	"syntaxComment",
-	"syntaxKeyword",
-	"syntaxFunction",
-	"syntaxVariable",
-	"syntaxString",
-	"syntaxNumber",
-	"syntaxType",
-	"syntaxOperator",
-	"syntaxPunctuation",
-	"thinkingOff",
-	"thinkingMinimal",
-	"thinkingLow",
-	"thinkingMedium",
-	"thinkingHigh",
-	"thinkingXhigh",
-	"bashMode",
-	"pythonMode",
-	"statusLineBg",
-	"statusLineSep",
-	"statusLineModel",
-	"statusLinePath",
-	"statusLineGitClean",
-	"statusLineGitDirty",
-	"statusLineContext",
-	"statusLineSpend",
-	"statusLineStaged",
-	"statusLineDirty",
-	"statusLineUntracked",
-	"statusLineOutput",
-	"statusLineCost",
-	"statusLineSubagents",
-] as const;
-
-const themeColorsSchema = z.object(
-	Object.fromEntries(THEME_COLOR_KEYS.map(key => [key, colorValueSchema])) as unknown as {
-		[K in (typeof THEME_COLOR_KEYS)[number]]: typeof colorValueSchema;
-	},
-);
-
-const spinnerFramesArraySchema = z.array(z.string().min(1)).min(1);
-const spinnerFramesSchema = z.union([
-	spinnerFramesArraySchema,
-	z
-		.object({
-			status: spinnerFramesArraySchema.optional(),
-			activity: spinnerFramesArraySchema.optional(),
-		})
-		.refine(value => value.status !== undefined || value.activity !== undefined, {
-			message: "spinnerFrames object must define `status` and/or `activity`",
-		}),
-]);
-
-const symbolPresetSchema = z.enum(["unicode", "nerd", "ascii"]);
-
-const themeJsonSchema = z.object({
-	$schema: z.string().optional(),
-	name: z.string(),
-	vars: z.record(z.string(), colorValueSchema).optional(),
-	colors: themeColorsSchema,
-	export: z
-		.object({
-			pageBg: colorValueSchema.optional(),
-			cardBg: colorValueSchema.optional(),
-			infoBg: colorValueSchema.optional(),
-		})
-		.optional(),
-	symbols: z
-		.object({
-			preset: symbolPresetSchema.optional(),
-			overrides: z.record(z.string(), z.string()).optional(),
-			spinnerFrames: spinnerFramesSchema.optional(),
-		})
-		.optional(),
+const themeColorsSchema = type({
+	accent: "string | number",
+	border: "string | number",
+	borderAccent: "string | number",
+	borderMuted: "string | number",
+	success: "string | number",
+	error: "string | number",
+	warning: "string | number",
+	muted: "string | number",
+	dim: "string | number",
+	text: "string | number",
+	thinkingText: "string | number",
+	selectedBg: "string | number",
+	userMessageBg: "string | number",
+	userMessageText: "string | number",
+	customMessageBg: "string | number",
+	customMessageText: "string | number",
+	customMessageLabel: "string | number",
+	toolPendingBg: "string | number",
+	toolSuccessBg: "string | number",
+	toolErrorBg: "string | number",
+	toolTitle: "string | number",
+	toolOutput: "string | number",
+	mdHeading: "string | number",
+	mdLink: "string | number",
+	mdLinkUrl: "string | number",
+	mdCode: "string | number",
+	mdCodeBlock: "string | number",
+	mdCodeBlockBorder: "string | number",
+	mdQuote: "string | number",
+	mdQuoteBorder: "string | number",
+	mdHr: "string | number",
+	mdListBullet: "string | number",
+	toolDiffAdded: "string | number",
+	toolDiffRemoved: "string | number",
+	toolDiffContext: "string | number",
+	syntaxComment: "string | number",
+	syntaxKeyword: "string | number",
+	syntaxFunction: "string | number",
+	syntaxVariable: "string | number",
+	syntaxString: "string | number",
+	syntaxNumber: "string | number",
+	syntaxType: "string | number",
+	syntaxOperator: "string | number",
+	syntaxPunctuation: "string | number",
+	thinkingOff: "string | number",
+	thinkingMinimal: "string | number",
+	thinkingLow: "string | number",
+	thinkingMedium: "string | number",
+	thinkingHigh: "string | number",
+	thinkingXhigh: "string | number",
+	bashMode: "string | number",
+	pythonMode: "string | number",
+	statusLineBg: "string | number",
+	statusLineSep: "string | number",
+	statusLineModel: "string | number",
+	statusLinePath: "string | number",
+	statusLineGitClean: "string | number",
+	statusLineGitDirty: "string | number",
+	statusLineContext: "string | number",
+	statusLineSpend: "string | number",
+	statusLineStaged: "string | number",
+	statusLineDirty: "string | number",
+	statusLineUntracked: "string | number",
+	statusLineOutput: "string | number",
+	statusLineCost: "string | number",
+	statusLineSubagents: "string | number",
 });
 
-type ThemeJson = z.infer<typeof themeJsonSchema>;
+const spinnerFramesSchema = type("string[]").or({
+	"status?": "string[]",
+	"activity?": "string[]",
+});
+
+const themeJsonSchema = type({
+	"$schema?": "string",
+	name: "string",
+	"vars?": "Record<string, string | number>",
+	colors: themeColorsSchema,
+	"export?": {
+		"pageBg?": "string | number",
+		"cardBg?": "string | number",
+		"infoBg?": "string | number",
+	},
+	"symbols?": {
+		"preset?": "'unicode' | 'nerd' | 'ascii'",
+		"overrides?": "Record<string, string>",
+		"spinnerFrames?": spinnerFramesSchema,
+	},
+});
+
+type ThemeJson = typeof themeJsonSchema.infer;
 
 export type ThemeColor =
 	| "accent"
@@ -1952,37 +1927,30 @@ async function loadThemeJson(name: string): Promise<ThemeJson> {
 	} catch (error) {
 		throw new Error(`Failed to parse theme ${name}: ${error}`);
 	}
-	const parsed = themeJsonSchema.safeParse(json);
-	if (!parsed.success) {
-		const missingColors: string[] = [];
-		const otherErrors: string[] = [];
-
-		for (const issue of parsed.error.issues) {
-			const parts = issue.path;
-			const colorKey = parts.length === 2 && parts[0] === "colors" && typeof parts[1] === "string" ? parts[1] : null;
-
-			if (colorKey && issue.code === "invalid_type" && (issue as { received?: unknown }).received === undefined) {
-				missingColors.push(colorKey);
-			} else {
-				const pathStr = parts.length === 0 ? "/" : `/${parts.map(String).join("/")}`;
-				otherErrors.push(`  - ${pathStr}: ${issue.message}`);
-			}
+	let parsed: ThemeJson;
+	try {
+		parsed = themeJsonSchema(json) as ThemeJson;
+		if (parsed instanceof type.errors) {
+			throw new Error(parsed.summary);
 		}
+	} catch (error) {
+		const errorMessage = error instanceof Error ? error.message : String(error);
+		// Extract color key information if available
+		const missingColorMatch = errorMessage.match(/missing keys: (.+)/i);
+		const missingColors: string[] = missingColorMatch ? missingColorMatch[1].split(",").map(s => s.trim()) : [];
 
-		let errorMessage = `Invalid theme "${name}":\n`;
+		let fullErrorMessage = `Invalid theme "${name}":\n`;
 		if (missingColors.length > 0) {
-			errorMessage += `\nMissing required color tokens:\n`;
-			errorMessage += missingColors.map(c => `  - ${c}`).join("\n");
-			errorMessage += `\n\nPlease add these colors to your theme's "colors" object.`;
-			errorMessage += `\nSee the built-in themes (dark.json, light.json) for reference values.`;
+			fullErrorMessage += `\nMissing required color tokens:\n`;
+			fullErrorMessage += missingColors.map(c => `  - ${c}`).join("\n");
+			fullErrorMessage += `\n\nPlease add these colors to your theme's "colors" object.`;
+			fullErrorMessage += `\nSee the built-in themes (dark.json, light.json) for reference values.`;
 		}
-		if (otherErrors.length > 0) {
-			errorMessage += `\n\nOther errors:\n${otherErrors.join("\n")}`;
-		}
+		fullErrorMessage += `\n\nValidation error:\n  - ${errorMessage}`;
 
-		throw new Error(errorMessage);
+		throw new Error(fullErrorMessage);
 	}
-	return parsed.data;
+	return parsed;
 }
 
 interface CreateThemeOptions {

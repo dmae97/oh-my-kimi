@@ -1,7 +1,7 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, ToolExample } from "@oh-my-pi/pi-ai";
 import { prompt } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
+import { type } from "arktype";
 import { jsBackend, pythonBackend } from "../eval";
 import type { ExecutorBackend, ExecutorBackendResult } from "../eval/backend";
 import { EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP } from "../eval/bridge-timeout";
@@ -27,25 +27,19 @@ export { EVAL_DEFAULT_PREVIEW_LINES, evalToolRenderer } from "./eval-render";
  * Per-cell input. Each cell runs in order; state persists within a language
  * across cells and across tool calls.
  */
-const evalCellSchema = z.object({
-	language: z.enum(["py", "js"]).describe('runtime: "py" for the IPython kernel, "js" for the persistent JS VM'),
-	code: z.string().describe("cell body, verbatim. Use top-level await freely."),
-	title: z.string().optional().describe('short label shown in transcript (e.g. "imports", "load config")'),
-	timeout: z.number().int().min(1).max(3600).optional().describe("per-cell timeout in seconds (1-3600, default 30)"),
-	reset: z
-		.boolean()
-		.optional()
-		.describe("wipe this cell's language kernel before running. Other languages are untouched."),
+const evalCellSchema = type({
+	language: "'py' | 'js'",
+	code: "string",
+	"title?": "string",
+	"timeout?": "number",
+	"reset?": "boolean",
 });
-export type EvalCellInput = z.infer<typeof evalCellSchema>;
+export type EvalCellInput = typeof evalCellSchema.infer;
 
-export const evalSchema = z.object({
-	cells: z
-		.array(evalCellSchema)
-		.min(1)
-		.describe("cells executed in order. State persists within each language across cells and tool calls."),
+export const evalSchema = type({
+	cells: evalCellSchema.array().atLeastLength(1),
 });
-export type EvalToolParams = z.infer<typeof evalSchema>;
+export type EvalToolParams = typeof evalSchema.infer;
 
 export type EvalToolResult = {
 	content: Array<{ type: "text"; text: string }>;
@@ -183,7 +177,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 		const spawnsAllowed = sessionSpawns !== "" && sessionSpawns !== null;
 		return getEvalToolDescription({ py: backends.python, js: backends.js, spawns: spawnsAllowed });
 	}
-	readonly examples: readonly ToolExample<z.input<typeof evalSchema>>[] = [
+	readonly examples: readonly ToolExample<typeof evalSchema.infer>[] = [
 		{
 			call: {
 				cells: [
@@ -205,7 +199,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 	readonly parameters = evalSchema;
 	readonly concurrency = "exclusive";
 	readonly strict = true;
-	readonly intent = (args: Partial<z.infer<typeof evalSchema>>): string | undefined => {
+	readonly intent = (args: Partial<typeof evalSchema.infer>): string | undefined => {
 		const cells = Array.isArray(args.cells) ? args.cells : [];
 		const first = cells.find(c => c && typeof c === "object");
 		if (!first) return "evaluating";
@@ -226,7 +220,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 
 	async execute(
 		_toolCallId: string,
-		params: z.infer<typeof evalSchema>,
+		params: typeof evalSchema.infer,
 		signal?: AbortSignal,
 		onUpdate?: AgentToolUpdateCallback,
 		_ctx?: AgentToolContext,

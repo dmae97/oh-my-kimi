@@ -9,6 +9,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { type } from "arktype";
 import type { SnapshotResponse } from "./types";
 import { snapshotResponseSchema } from "./wire-schemas";
 
@@ -55,12 +56,12 @@ export async function readAuthBrokerSnapshotCache(
 		const plaintext = await decryptCachePayload(data, opts.token, opts.url);
 		if (!plaintext) return null;
 		const parsed: unknown = JSON.parse(TEXT_DECODER.decode(plaintext));
-		const result = snapshotResponseSchema.safeParse(parsed);
-		if (!result.success) {
+		const result = snapshotResponseSchema(parsed);
+		if (result instanceof type.errors) {
 			logger.debug("auth-broker snapshot cache schema invalid", { path: opts.path });
 			return null;
 		}
-		const snapshot = result.data;
+		const snapshot = result;
 		const now = opts.now?.() ?? Date.now();
 		if (now - snapshot.generatedAt > opts.ttlMs) return null;
 		return snapshot;

@@ -105,7 +105,7 @@ describe("read → edit seen-line guard", () => {
 
 		await expect(
 			executeHashlineSingle(execOptions(`[notes.txt#${tag}]\nSWAP 12.=12:\n+EDITED`, session)),
-		).rejects.toThrow(/were not shown in the read\/search output/);
+		).rejects.toThrow(/never displayed \(it showed/);
 		// The reject left the file untouched.
 		expect(await Bun.file(file).text()).toBe(CONTENT);
 	});
@@ -226,7 +226,7 @@ describe("search → edit seen-line guard", () => {
 		const tag = tagFromOutput(resultText(search));
 
 		await expect(executeHashlineSingle(execOptions(`[code.txt#${tag}]\nSWAP 8.=8:\n+X`, session))).rejects.toThrow(
-			/were not shown in the read\/search output/,
+			/never displayed \(it showed/,
 		);
 		expect(await Bun.file(file).text()).toBe(`${lines.join("\n")}\n`);
 	});

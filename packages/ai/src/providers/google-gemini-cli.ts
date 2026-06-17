@@ -13,7 +13,7 @@ import {
 	getGeminiCliHeaders,
 } from "@oh-my-pi/pi-catalog/wire/gemini-headers";
 import { extractHttpStatusFromError, fetchWithRetry, readSseJson } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
+import { type } from "arktype";
 import { ProviderHttpError } from "../errors";
 import type {
 	Api,
@@ -186,21 +186,26 @@ function extractErrorMessage(errorText: string): string {
 	return errorText;
 }
 
-const optionalCredentialString = z.string().optional().catch(undefined);
+const optionalCredentialString = type("unknown").pipe(raw => {
+	const out = type("string")(raw);
+	return out instanceof type.errors ? undefined : out;
+});
 
-const geminiCliCredentialsSchema = z
-	.object({
-		token: optionalCredentialString,
-		projectId: optionalCredentialString,
-		project_id: optionalCredentialString,
-		refreshToken: optionalCredentialString,
-		refresh: optionalCredentialString,
-		email: optionalCredentialString,
-		expiresAt: z.unknown().optional(),
-		expires: z.unknown().optional(),
-	})
-	.loose()
-	.catch({});
+const innerCredentialsSchema = type({
+	"token?": optionalCredentialString,
+	"projectId?": optionalCredentialString,
+	"project_id?": optionalCredentialString,
+	"refreshToken?": optionalCredentialString,
+	"refresh?": optionalCredentialString,
+	"email?": optionalCredentialString,
+	"expiresAt?": "unknown",
+	"expires?": "unknown",
+});
+
+const geminiCliCredentialsSchema = type("unknown").pipe(raw => {
+	const out = innerCredentialsSchema(raw);
+	return out instanceof type.errors ? {} : out;
+});
 
 interface ParsedGeminiCliCredentials {
 	accessToken: string;
@@ -228,7 +233,10 @@ export function parseGeminiCliCredentials(apiKeyRaw: string): ParsedGeminiCliCre
 	} catch {
 		throw new Error(invalidCredentialsMessage);
 	}
-	const parsed = geminiCliCredentialsSchema.parse(rawCredentials);
+	const parsed = geminiCliCredentialsSchema(rawCredentials);
+	if (parsed instanceof type.errors) {
+		throw new Error(invalidCredentialsMessage);
+	}
 
 	const projectId = parsed.projectId ?? parsed.project_id;
 	if (parsed.token === undefined || projectId === undefined) {

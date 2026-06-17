@@ -1,4 +1,4 @@
-import { z } from "zod/v4";
+import { type } from "arktype";
 import type { ModelSpec } from "../types";
 import { isRecord } from "../utils";
 import { CODEX_BASE_URL, OPENAI_HEADER_VALUES, OPENAI_HEADERS } from "../wire/codex";
@@ -9,36 +9,29 @@ const DEFAULT_MAX_TOKENS = 128_000;
 const DEFAULT_CODEX_CLIENT_VERSION = "0.99.0";
 const NPM_CODEX_LATEST_URL = "https://registry.npmjs.org/@openai%2Fcodex/latest";
 
-const codexReasoningPresetSchema = z
-	.object({
-		effort: z.unknown().optional(),
-	})
-	.loose();
+const codexReasoningPresetSchema = type({
+	"effort?": "unknown",
+});
 
-const codexModelEntrySchema = z
-	.object({
-		slug: z.unknown().optional(),
-		id: z.unknown().optional(),
-		display_name: z.unknown().optional(),
-		context_window: z.unknown().optional(),
-		default_reasoning_level: z.unknown().optional(),
-		supported_reasoning_levels: z.unknown().optional(),
-		input_modalities: z.unknown().optional(),
-		supported_in_api: z.unknown().optional(),
-		priority: z.unknown().optional(),
-		prefer_websockets: z.unknown().optional(),
-	})
-	.loose();
+const codexModelEntrySchema = type({
+	"slug?": "unknown",
+	"id?": "unknown",
+	"display_name?": "unknown",
+	"context_window?": "unknown",
+	"default_reasoning_level?": "unknown",
+	"supported_reasoning_levels?": "unknown",
+	"input_modalities?": "unknown",
+	"supported_in_api?": "unknown",
+	"priority?": "unknown",
+	"prefer_websockets?": "unknown",
+});
 
-const codexModelsResponseSchema = z
-	.object({
-		models: z.array(z.unknown()).optional(),
-		data: z.array(z.unknown()).optional(),
-	})
-	.loose();
+const codexModelsResponseSchema = type({
+	"models?": "unknown[]",
+	"data?": "unknown[]",
+});
 
-type CodexModelEntry = z.infer<typeof codexModelEntrySchema>;
-
+type CodexModelEntry = typeof codexModelEntrySchema.infer;
 interface NormalizedCodexModel {
 	model: ModelSpec<"openai-codex-responses">;
 	priority: number;
@@ -216,12 +209,12 @@ function isAbortError(error: unknown): error is Error {
 }
 
 function normalizeCodexModels(payload: unknown, baseUrl: string): ModelSpec<"openai-codex-responses">[] | null {
-	const parsedResponse = codexModelsResponseSchema.safeParse(payload);
-	if (!parsedResponse.success) {
+	const parsedResponse = codexModelsResponseSchema(payload);
+	if (parsedResponse instanceof type.errors) {
 		return null;
 	}
 
-	const entries = parsedResponse.data.models ?? parsedResponse.data.data ?? [];
+	const entries = parsedResponse.models ?? parsedResponse.data ?? [];
 	const normalized: NormalizedCodexModel[] = [];
 	for (const entry of entries) {
 		const model = normalizeCodexModelEntry(entry, baseUrl);
@@ -241,12 +234,12 @@ function normalizeCodexModels(payload: unknown, baseUrl: string): ModelSpec<"ope
 }
 
 function normalizeCodexModelEntry(entry: unknown, baseUrl: string): NormalizedCodexModel | null {
-	const parsedEntry = codexModelEntrySchema.safeParse(entry);
-	if (!parsedEntry.success) {
+	const parsedEntry = codexModelEntrySchema(entry);
+	if (parsedEntry instanceof type.errors) {
 		return null;
 	}
 
-	const payload: CodexModelEntry = parsedEntry.data;
+	const payload: CodexModelEntry = parsedEntry;
 	const slug = toNonEmptyString(payload.slug) ?? toNonEmptyString(payload.id);
 	if (!slug) {
 		return null;
@@ -295,11 +288,11 @@ function supportsReasoning(defaultReasoningLevel: unknown, supportedReasoningLev
 	}
 
 	for (const level of supportedReasoningLevels) {
-		const parsedLevel = codexReasoningPresetSchema.safeParse(level);
-		if (!parsedLevel.success) {
+		const parsedLevel = codexReasoningPresetSchema(level);
+		if (parsedLevel instanceof type.errors) {
 			continue;
 		}
-		const effort = toNonEmptyString(parsedLevel.data.effort)?.toLowerCase();
+		const effort = toNonEmptyString(parsedLevel.effort)?.toLowerCase();
 		if (effort && effort !== "none") {
 			return true;
 		}

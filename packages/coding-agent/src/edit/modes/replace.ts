@@ -5,7 +5,7 @@
  * fallback strategies for finding text in files.
  */
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
-import { z } from "zod/v4";
+import { type } from "arktype";
 import type { WritethroughCallback, WritethroughDeferredHandle } from "../../lsp";
 import type { ToolSession } from "../../tools";
 import { invalidateFsScanAfterWrite } from "../../tools/fs-cache-invalidation";
@@ -1010,23 +1010,19 @@ export function findContextLine(
 	return { index: undefined, confidence: bestScore };
 }
 
-export const replaceEditEntrySchema = z
-	.object({
-		old_text: z.string().describe("text to find"),
-		new_text: z.string().describe("replacement text"),
-		all: z.boolean().describe("replace all occurrences").optional(),
-	})
-	.strict();
+export const replaceEditEntrySchema = type({
+	old_text: "string",
+	new_text: "string",
+	"all?": "boolean",
+});
 
-export const replaceEditSchema = z
-	.object({
-		path: z.string().describe("file path"),
-		edits: z.array(replaceEditEntrySchema).min(1).describe("replacements"),
-	})
-	.strict();
+export const replaceEditSchema = type({
+	path: "string",
+	edits: replaceEditEntrySchema.array(),
+});
 
-export type ReplaceEditEntry = z.infer<typeof replaceEditEntrySchema>;
-export type ReplaceParams = z.infer<typeof replaceEditSchema>;
+export type ReplaceEditEntry = typeof replaceEditEntrySchema.infer;
+export type ReplaceParams = typeof replaceEditSchema.infer;
 
 export interface ExecuteReplaceSingleOptions {
 	session: ToolSession;
@@ -1042,7 +1038,7 @@ export interface ExecuteReplaceSingleOptions {
 
 export async function executeReplaceSingle(
 	options: ExecuteReplaceSingleOptions,
-): Promise<AgentToolResult<EditToolDetails, typeof replaceEditEntrySchema>> {
+): Promise<AgentToolResult<EditToolDetails, ReplaceEditEntry>> {
 	const {
 		session,
 		path,

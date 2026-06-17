@@ -1,5 +1,5 @@
+export { type Type, type } from "arktype";
 export { type ZodType, z } from "zod/v4";
-export { type, type Type } from "arktype";
 export * from "./api-registry";
 export * from "./auth-broker";
 export { type AuthGatewayBootOptions, type ModelResolver, startAuthGateway } from "./auth-gateway/server";

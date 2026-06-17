@@ -17,7 +17,7 @@ Use top-level `import type` declarations for type-only dependencies. NEVER write
 
 ```typescript
 // Bad — inline imports hide dependencies in signatures.
-function run(client: import("some-sdk").Client, input: import("zod/v4").infer<Schema>): Promise<Output>;
+function run(client: import("some-sdk").Client, input: import("arktype").infer<Schema>): Promise<Output>;
 
 // Bad — annotations become path dumps.
 const options: import("some-sdk/config").ClientOptions = { ... };
@@ -28,7 +28,7 @@ const options: import("some-sdk/config").ClientOptions = { ... };
 ```typescript
 import type { Client } from "some-sdk";
 import type { ClientOptions } from "some-sdk/config";
-import type { infer as Infer } from "zod/v4";
+import type { infer as Infer } from "arktype";
 
 function run(client: Client, input: Infer<Schema>): Promise<Output>;
 const options: ClientOptions = { ... };

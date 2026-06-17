@@ -9,7 +9,7 @@ import { executeJs } from "./executor";
 
 const JS_SESSION_PREFIX = "js:";
 
-function namespaceSessionId(sessionId: string): string {
+export function namespaceSessionId(sessionId: string): string {
 	return sessionId.startsWith(JS_SESSION_PREFIX) ? sessionId : `${JS_SESSION_PREFIX}${sessionId}`;
 }
 

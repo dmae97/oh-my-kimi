@@ -6,7 +6,7 @@ import { type AstFindMatch, astGrep } from "@oh-my-pi/pi-natives";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
+import { type } from "arktype";
 import { recordFileSnapshot, recordSeenLinesFromBody } from "../edit/file-snapshot-store";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
@@ -34,13 +34,10 @@ import {
 import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 
-const astGrepSchema = z.object({
-	pat: z.string().describe("ast pattern"),
-	paths: z
-		.array(z.string().describe("file, directory, glob, or internal URL to search"))
-		.min(1)
-		.describe("files, directories, globs, or internal URLs to search"),
-	skip: z.number().default(0).describe("matches to skip").optional(),
+const astGrepSchema = type({
+	pat: "string",
+	paths: type("string[]").atLeastLength(1),
+	"skip?": "number",
 });
 
 async function runMultiTargetAstGrep(
@@ -132,7 +129,7 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 	readonly parameters = astGrepSchema;
 	readonly strict = true;
 
-	readonly examples: readonly ToolExample<z.input<typeof astGrepSchema>>[] = [
+	readonly examples: readonly ToolExample<typeof astGrepSchema.inferIn>[] = [
 		{
 			caption: "Search TypeScript files under src",
 			call: { pat: "console.log($$$)", paths: ["src/**/*.ts"] },
@@ -162,7 +159,7 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 
 	async execute(
 		_toolCallId: string,
-		params: z.infer<typeof astGrepSchema>,
+		params: typeof astGrepSchema.infer,
 		signal?: AbortSignal,
 		_onUpdate?: AgentToolUpdateCallback<AstGrepToolDetails>,
 		_context?: AgentToolContext,

@@ -20,14 +20,14 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { AutocompleteProvider } from "@oh-my-pi/pi-tui";
 import { TempDir } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
+import { type } from "arktype";
 
 function makeTool(name: string): AgentTool {
 	return {
 		name,
 		label: name,
 		description: `Fake ${name}`,
-		parameters: z.object({}),
+		parameters: type({}),
 		async execute() {
 			return { content: [{ type: "text" as const, text: "ok" }] };
 		},

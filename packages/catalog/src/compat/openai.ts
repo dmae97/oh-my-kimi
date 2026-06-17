@@ -268,7 +268,6 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 						? "qwen"
 						: "openai";
 
-
 	const compat: ResolvedOpenAICompat = {
 		supportsStore: !isNonStandard,
 		// `developer` is an OpenAI-Responses-era extension to the chat-completions schema. Almost
@@ -372,7 +371,6 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 	if (spec.compat?.omitReasoningEffort === undefined && !compat.supportsReasoningEffort) {
 		compat.omitReasoningEffort = true;
 	}
-
 
 	const whenThinkingPolicy =
 		spec.compat?.whenThinking ?? (isOpenCodeProvider && spec.reasoning ? OPENCODE_WHEN_THINKING : undefined);

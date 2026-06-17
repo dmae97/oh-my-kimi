@@ -99,7 +99,7 @@ describe("GoalTool", () => {
 			completionBudgetReport: null,
 		});
 
-		const fetched = await tool.execute("call-get", { op: "get" });
+		const fetched = await tool.execute("call-get", { op: "get", objective: undefined, token_budget: undefined });
 		expect(getGoalModeState).toHaveBeenCalledTimes(1);
 		expect(fetched.details).toMatchObject({
 			op: "get",
@@ -109,7 +109,11 @@ describe("GoalTool", () => {
 		});
 		expect(runtime.completeGoalFromTool).not.toHaveBeenCalled();
 
-		const completed = await tool.execute("call-complete", { op: "complete" });
+		const completed = await tool.execute("call-complete", {
+			op: "complete",
+			objective: undefined,
+			token_budget: undefined,
+		});
 		expect(runtime.completeGoalFromTool).toHaveBeenCalledTimes(1);
 		expect(completed.details).toMatchObject({
 			op: "complete",
@@ -150,9 +154,9 @@ describe("GoalTool", () => {
 			}),
 		);
 
-		await expect(tool.execute("call-complete", { op: "complete" })).rejects.toThrow(
-			"cannot complete goal because no goal is active",
-		);
+		await expect(
+			tool.execute("call-complete", { op: "complete", objective: undefined, token_budget: undefined }),
+		).rejects.toThrow("cannot complete goal because no goal is active");
 	});
 
 	it("rejects op=create when the objective is missing or only whitespace", async () => {
@@ -164,9 +168,9 @@ describe("GoalTool", () => {
 			}),
 		);
 
-		await expect(tool.execute("call-empty", { op: "create", objective: "   \t\n" })).rejects.toThrow(
-			"objective is required when op=create",
-		);
+		await expect(
+			tool.execute("call-empty", { op: "create", objective: "   \t\n", token_budget: undefined }),
+		).rejects.toThrow("objective is required when op=create");
 		expect(harness.getState()).toBeUndefined();
 	});
 
@@ -198,7 +202,11 @@ describe("GoalTool", () => {
 			}),
 		);
 
-		const result = await tool.execute("call-complete", { op: "complete" });
+		const result = await tool.execute("call-complete", {
+			op: "complete",
+			objective: undefined,
+			token_budget: undefined,
+		});
 
 		expect(result.details).toMatchObject({ op: "complete" });
 		const after = harness.getState();
@@ -221,7 +229,11 @@ describe("GoalTool", () => {
 			}),
 		);
 
-		const result = await tool.execute("call-complete", { op: "complete" });
+		const result = await tool.execute("call-complete", {
+			op: "complete",
+			objective: undefined,
+			token_budget: undefined,
+		});
 		expect(result.details?.goal?.status).toBe("complete");
 		expect(harness.getState()?.goal.status).toBe("complete");
 	});
@@ -243,6 +255,7 @@ describe("GoalTool", () => {
 		const result = await tool.execute("call-create", {
 			op: "create",
 			objective: "Next goal",
+			token_budget: undefined,
 		});
 		expect(result.details?.goal?.objective).toBe("Next goal");
 		expect(result.details?.goal?.status).toBe("active");
@@ -261,7 +274,7 @@ describe("GoalTool", () => {
 			}),
 		);
 
-		const result = await tool.execute("call-get", { op: "get" });
+		const result = await tool.execute("call-get", { op: "get", objective: undefined, token_budget: undefined });
 		expect(result.details?.goal?.status).toBe("paused");
 		expect(result.details?.goal?.objective).toBe("Ship it");
 	});
@@ -279,7 +292,7 @@ describe("GoalTool", () => {
 			}),
 		);
 
-		const result = await tool.execute("call-resume", { op: "resume" });
+		const result = await tool.execute("call-resume", { op: "resume", objective: undefined, token_budget: undefined });
 		expect(result.details?.op).toBe("resume");
 		expect(result.details?.goal?.status).toBe("active");
 		expect(harness.getState()?.enabled).toBe(true);
@@ -298,7 +311,7 @@ describe("GoalTool", () => {
 			}),
 		);
 
-		const result = await tool.execute("call-drop", { op: "drop" });
+		const result = await tool.execute("call-drop", { op: "drop", objective: undefined, token_budget: undefined });
 		expect(result.details?.op).toBe("drop");
 		expect(result.details?.goal?.status).toBe("dropped");
 		expect(harness.getState()).toBeUndefined();

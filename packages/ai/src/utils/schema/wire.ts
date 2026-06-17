@@ -1,16 +1,17 @@
 /**
- * Compute the wire (JSON Schema) representation of a tool's parameters and
- * convert TypeBox-style schemas into Zod for internal validation.
+ * Compute the wire (JSON Schema) representation of a tool's parameters.
  *
- * Tools may author parameters in two shapes:
- *   1. Zod (canonical going forward) — converted to JSON Schema on demand.
- *   2. TypeBox / plain JSON Schema (legacy + extension compat) — upgraded to
- *      draft 2020-12 without converting through Zod.
+ * Tools may author parameters in three shapes:
+ *   1. Zod (canonical) — converted to JSON Schema on demand.
+ *   2. ArkType — converted to JSON Schema via its native `toJsonSchema`.
+ *   3. TypeBox / plain JSON Schema (legacy + extension compat) — upgraded to
+ *      draft 2020-12 without converting.
  *
- * Both are normalized at the boundary so providers and validators see the same
+ * All three are normalized at the boundary so providers and validators see the same
  * JSON Schema dialect.
  */
 
+import type { Type } from "arktype";
 // We import the Zod *value* (z) for runtime APIs. Marker checks rely on the
 // `_zod` symbol that every Zod v4 schema instance carries.
 import { type ZodType, z } from "zod/v4";
@@ -49,9 +50,26 @@ export function isZodSchema(value: unknown): value is ZodType {
 	);
 }
 
+/**
+ * True when `value` is a live ArkType schema instance.
+ *
+ * ArkType schemas are callable functions carrying `toJsonSchema`/`assert`
+ * methods. Zod v4 instances are non-callable objects (keyed off `_zod`), and
+ * raw JSON Schema is a plain object — the three are disjoint. We deliberately
+ * avoid the Standard Schema `~standard` marker because Zod v4 implements it too.
+ */
+export function isArkSchema(value: unknown): value is Type {
+	return (
+		typeof value === "function" &&
+		typeof (value as { toJsonSchema?: unknown }).toJsonSchema === "function" &&
+		typeof (value as { assert?: unknown }).assert === "function"
+	);
+}
+
 /** Symbol-stamped caches keyed by schema object identity. */
 const kZodWireSchema = Symbol("pi.schema.zod.wire");
 const kJsonWireSchema = Symbol("pi.schema.json.wire");
+const kArkWireSchema = Symbol("pi.schema.ark.wire");
 
 /**
  * Post-process Zod-emitted JSON Schema so it matches the wire shape providers
@@ -291,6 +309,70 @@ export function zodToWireSchema(schema: ZodType): Record<string, unknown> {
 }
 
 /**
+ * Recursively set `additionalProperties: false` on declared object nodes so the
+ * model-facing wire matches Zod's closed emission. Only nodes that declare
+ * `properties` and carry neither `additionalProperties` nor `patternProperties`
+ * are closed — open record/index nodes (which already carry one of those, e.g.
+ * `additionalProperties: true` after empty-schema normalization) stay open.
+ *
+ * Traverses only schema-valued positions via the shared traversal-key constants
+ * so it never descends into `default`/`examples`/`enum`/`const` instance data.
+ */
+function closeDeclaredObjects(node: unknown): void {
+	if (Array.isArray(node)) {
+		for (const child of node) closeDeclaredObjects(child);
+		return;
+	}
+	if (!node || typeof node !== "object") return;
+	const obj = node as Record<string, unknown>;
+
+	const isObjectType = obj.type === "object" || (Array.isArray(obj.type) && obj.type.includes("object"));
+	if (
+		isObjectType &&
+		obj.properties !== undefined &&
+		!("additionalProperties" in obj) &&
+		!("patternProperties" in obj)
+	) {
+		obj.additionalProperties = false;
+	}
+
+	for (const key of SCHEMA_VALUE_KEYS) {
+		if (Object.hasOwn(obj, key)) closeDeclaredObjects(obj[key]);
+	}
+	for (const mapKey of SCHEMA_MAP_KEYS) {
+		const map = obj[mapKey];
+		if (map !== null && typeof map === "object" && !Array.isArray(map)) {
+			for (const k in map as Record<string, unknown>) closeDeclaredObjects((map as Record<string, unknown>)[k]);
+		}
+	}
+	for (const arrKey of SCHEMA_ARRAY_KEYS) {
+		const arr = obj[arrKey];
+		if (Array.isArray(arr)) for (const child of arr) closeDeclaredObjects(child);
+	}
+}
+
+/**
+ * Convert an ArkType schema into the JSON Schema shape providers consume.
+ *
+ * Mirrors {@link zodToWireSchema}: emit draft-2020-12, drop the `$schema`
+ * metadata, run the JSON-schema post-process (NOT the Zod-only cleanup), then
+ * close declared objects so the wire is `additionalProperties: false` like Zod.
+ *
+ * The `fallback` degrades any un-emittable node (a `.narrow()` predicate or a
+ * morph) to its underlying base schema instead of throwing — matching Zod,
+ * whose `.refine()`/`.transform()` likewise never appear in the wire schema.
+ */
+export function arkToWireSchema(schema: Type): Record<string, unknown> {
+	return stamp(schema, kArkWireSchema, s => {
+		const raw = s.toJsonSchema({ target: "draft-2020-12", fallback: ctx => ctx.base }) as Record<string, unknown>;
+		delete raw.$schema;
+		const upgraded = postProcessJsonSchema(upgradeJsonSchemaTo202012(raw) as Record<string, unknown>);
+		closeDeclaredObjects(upgraded);
+		return upgraded;
+	});
+}
+
+/**
  * Resolve a tool's parameters to a JSON Schema object suitable for sending
  * over the wire. Zod schemas are converted (and cached); legacy TypeBox / raw
  * JSON Schema parameters are upgraded to draft 2020-12 (and cached).
@@ -300,6 +382,7 @@ export function zodToWireSchema(schema: ZodType): Record<string, unknown> {
  */
 export function toolWireSchema(tool: Tool): Record<string, unknown> {
 	const params: TSchema = tool.parameters;
+	if (isArkSchema(params)) return arkToWireSchema(params);
 	if (isZodSchema(params)) return zodToWireSchema(params);
 	return stamp(params as Record<string, unknown>, kJsonWireSchema, p => {
 		const upgraded = upgradeJsonSchemaTo202012(p) as Record<string, unknown>;

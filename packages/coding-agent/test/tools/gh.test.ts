@@ -13,7 +13,6 @@ import {
 } from "@oh-my-pi/pi-coding-agent/tools/gh";
 import * as git from "@oh-my-pi/pi-coding-agent/utils/git";
 import { getAgentDir, hashPath, setAgentDir } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
 
 // Isolate every `git` invocation in this file from the developer's host
 // configuration. The fixture spawns dozens of git subprocesses against tiny
@@ -958,7 +957,7 @@ describe("github tool", () => {
 
 	it("exposes a flat op-based schema without legacy run_watch parameters", () => {
 		const tool = new GithubTool(createSession());
-		const wire = z.toJSONSchema(tool.parameters, { target: "draft-2020-12" }) as Record<string, unknown>;
+		const wire = tool.parameters.json as Record<string, unknown>;
 		const properties = wire.properties as Record<string, unknown>;
 		expect(properties.op).toBeDefined();
 		expect(properties.interval).toBeUndefined();

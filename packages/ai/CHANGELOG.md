@@ -1,12 +1,15 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
+- Added support for ArkType schemas as tool parameters alongside existing Zod schemas
 - Added `getOpenRouterHeaders` utility to export standard OpenRouter integration headers
 
 ### Changed
 
+- Migrated internal wire-schema validation (auth-broker, Anthropic Messages request, OpenAI Chat/Responses requests, and /v1/usage shapes) from Zod to ArkType
 - Replaced the dedicated `xai-responses` provider with a unified `openai-responses` path that handles xAI-specific reasoning effort stripping dynamically
 - Updated OpenAI Responses stream handling to throw a clearer error message when a stream closes without a terminal response event
 - Consolidated shared OpenAI-compatible routing and strict-tool fallback helpers across Chat Completions and Responses providers.
@@ -16,6 +19,7 @@
 
 ### Fixed
 
+- Fixed Google Gemini CLI credential parsing schema to gracefully handle empty or unexpected non-string shapes without throwing unhandled exceptions
 - Fixed Google Gemini CLI credential parsing to correctly prioritize `projectId` over `project_id` even when empty, and drop non-string values gracefully
 - Fixed OpenRouter Responses requests to omit default max token fields unless an explicit caller cap is provided, preventing upstream filtering issues
 - Fixed Chat Completions reasoning suppression (`disableReasoningOnToolChoice` / `disableReasoningOnForcedToolChoice`) to turn thinking off symmetrically across every dialect via a shared `disableChatCompletionsReasoningForDialect` helper. Previously the conflict path only deleted `reasoning_effort`/`reasoning` (and set Z.AI `thinking: { type: "disabled" }` on the forced branch alone), leaving Qwen `enable_thinking`, Qwen chat-template `chat_template_kwargs.enable_thinking`, and OpenRouter nested `reasoning` enabled — so those hosts could keep thinking on under forced/required tool choice and re-trip the incompatibility the policy guards against. OpenRouter is now set to `{ reasoning: { enabled: false } }` (not deleted, which OpenRouter treats as default-on).

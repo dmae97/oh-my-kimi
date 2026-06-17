@@ -3,14 +3,14 @@
  * renderer — a simplified TypeScript signature (derived from the wire JSON
  * Schema) plus each tool's examples in the model's native tool-call syntax.
  *
- * Tools carry live Zod v4 schemas; the dump must surface a readable signature
+ * Tools carry live arktype schemas; the dump must surface a readable signature
  * (not the schema instance's internals) and must include examples, which the
  * previous `<parameter>`-per-key JSON Schema dump dropped entirely.
  */
 import { describe, expect, it } from "bun:test";
 import type { Model, Usage } from "@oh-my-pi/pi-ai";
 import { formatSessionDumpText } from "@oh-my-pi/pi-coding-agent/session/session-dump-format";
-import { z } from "zod/v4";
+import { type } from "arktype";
 
 const ZERO_USAGE: Usage = {
 	input: 0,
@@ -24,17 +24,19 @@ const ZERO_USAGE: Usage = {
 const HARMONY_MODEL = { provider: "openai", id: "gpt-5", name: "GPT-5" } as Model;
 
 describe("formatSessionDumpText tool parameters", () => {
-	it("renders Zod schemas as a TypeScript signature, not schema internals", () => {
+	it("renders arktype schemas as a TypeScript signature, not schema internals", () => {
+		const webSearchSchema = type({
+			"query /** search query */": "string",
+			"recency?": "'day' | 'week'",
+		});
+
 		const out = formatSessionDumpText({
 			messages: [],
 			tools: [
 				{
 					name: "web_search",
 					description: "Searches the web.",
-					parameters: z.object({
-						query: z.string().describe("search query"),
-						recency: z.enum(["day", "week"]).optional(),
-					}),
+					parameters: webSearchSchema.json,
 				},
 			],
 		});
@@ -44,9 +46,9 @@ describe("formatSessionDumpText tool parameters", () => {
 		expect(out).toContain("/** search query */");
 		expect(out).toContain("query: string;");
 		expect(out).toContain('recency?: "day" | "week";');
-		// Live Zod instance internals must never leak into the dump.
-		expect(out).not.toContain("_zod");
-		expect(out).not.toContain("ZodObject");
+		// Arktype JSON Schema should not leak arktype internals into the dump.
+		expect(out).not.toContain("_arktype");
+		expect(out).not.toContain("ArkType");
 		// Tool params are no longer emitted as XML <parameter> elements.
 		expect(out).not.toContain('<parameter name="type">');
 	});
@@ -73,13 +75,15 @@ describe("formatSessionDumpText tool parameters", () => {
 	});
 
 	it("includes tool examples in the model's native syntax", () => {
+		const findSchema = type({ paths: "string[]" });
+
 		const out = formatSessionDumpText({
 			messages: [],
 			tools: [
 				{
 					name: "find",
 					description: "Finds files.",
-					parameters: z.object({ paths: z.array(z.string()) }),
+					parameters: findSchema.json,
 					examples: [{ call: { paths: ["src/**/*.ts"] } }],
 				},
 			],

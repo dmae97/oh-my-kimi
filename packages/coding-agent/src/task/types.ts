@@ -1,7 +1,7 @@
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Usage } from "@oh-my-pi/pi-ai";
 import { $env } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
+import { type } from "arktype";
 import type { AgentSessionEvent } from "../session/agent-session";
 import type { NestedRepoPatch } from "./worktree";
 
@@ -79,36 +79,19 @@ export const ROLE_LABEL_MAX = 80;
 /** Schema bound on the raw `role` input, before it is label-normalized at every use site. */
 export const ROLE_INPUT_MAX = 256;
 
-/**
- * One unit of work. The single-spawn schema is `{ agent, ...taskItemSchema }`;
- * the batch schema (`task.batch`) is `{ agent, context, tasks: taskItemSchema[] }`.
- * When task isolation is enabled, `isolated` joins the item shape (per-item in
- * batch form, top-level in the flat form via the spread).
- */
-const taskItemShape = {
-	id: z.string().max(48).optional().describe("stable agent id; default generated"),
-	description: z.string().optional().describe("ui label, not seen by subagent"),
-	role: z
-		.string()
-		.max(ROLE_INPUT_MAX)
-		.optional()
-		.describe(
-			"specialist role/expertise this subagent embodies (e.g. 'Rust async-runtime specialist'); shapes its identity and display name",
-		),
-	assignment: z.string().describe("the work; self-contained instructions"),
-};
-const isolatedShape = {
-	isolated: z.boolean().optional().describe("run in isolated env; returns patches"),
-};
-const agentShape = {
-	agent: z.string().describe("agent type to spawn"),
-};
-const contextShape = {
-	context: z.string().describe("shared background prepended to each assignment"),
-};
-
-export const taskItemSchema = z.object(taskItemShape);
-const taskItemSchemaIsolated = z.object({ ...taskItemShape, ...isolatedShape });
+export const taskItemSchema = type({
+	id: "string | undefined",
+	description: "string | undefined",
+	role: "string | undefined",
+	assignment: "string",
+});
+const taskItemSchemaIsolated = type({
+	id: "string | undefined",
+	description: "string | undefined",
+	role: "string | undefined",
+	assignment: "string",
+	isolated: "boolean | undefined",
+});
 
 /** Single task item. Fields are optional defensively: args stream in token by token. */
 export interface TaskItem {
@@ -124,17 +107,30 @@ export interface TaskItem {
 	isolated?: boolean;
 }
 
-export const taskSchema = z.object({ ...agentShape, ...taskItemShape, ...isolatedShape });
-const taskSchemaNoIsolation = z.object({ ...agentShape, ...taskItemShape });
-const taskSchemaBatch = z.object({
-	...agentShape,
-	...contextShape,
-	tasks: z.array(taskItemSchemaIsolated).describe("tasks to spawn; one subagent per item"),
+export const taskSchema = type({
+	agent: "string",
+	id: "string | undefined",
+	description: "string | undefined",
+	role: "string | undefined",
+	assignment: "string",
+	isolated: "boolean | undefined",
 });
-const taskSchemaBatchNoIsolation = z.object({
-	...agentShape,
-	...contextShape,
-	tasks: z.array(taskItemSchema).describe("tasks to spawn; one subagent per item"),
+const taskSchemaNoIsolation = type({
+	agent: "string",
+	id: "string | undefined",
+	description: "string | undefined",
+	role: "string | undefined",
+	assignment: "string",
+});
+const taskSchemaBatch = type({
+	agent: "string",
+	context: "string",
+	tasks: taskItemSchemaIsolated.array(),
+});
+const taskSchemaBatchNoIsolation = type({
+	agent: "string",
+	context: "string",
+	tasks: taskItemSchema.array(),
 });
 const ALL_TASK_SCHEMAS = [taskSchema, taskSchemaNoIsolation, taskSchemaBatch, taskSchemaBatchNoIsolation] as const;
 

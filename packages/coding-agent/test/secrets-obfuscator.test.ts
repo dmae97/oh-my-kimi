@@ -10,7 +10,7 @@ import {
 	SecretObfuscator,
 } from "@oh-my-pi/pi-coding-agent/secrets/obfuscator";
 import { compileSecretRegex } from "@oh-my-pi/pi-coding-agent/secrets/regex";
-import { z } from "zod/v4";
+import { type } from "arktype";
 
 describe("compileSecretRegex", () => {
 	it("adds global flag when not provided", () => {
@@ -90,12 +90,12 @@ describe("SecretObfuscator regex behavior", () => {
 		expect(obfuscator.deobfuscateObject(obfuscated).tools?.[0]?.description).toEqual(payload.tools[0]?.description);
 	});
 
-	it("redacts Zod tool schemas without cloning the live schema instance", () => {
+	it("redacts arktype tool schemas without cloning the live schema instance", () => {
 		const secret = "SUPER_SECRET_TOKEN_12345";
 		const obfuscator = new SecretObfuscator([{ type: "plain", content: secret }]);
-		const parameters = z.object({
-			note: z.string().describe(`write ${secret}`),
-		});
+		const parameters = type({
+			note: "string",
+		}).describe(`write ${secret}`);
 		const context: Context = {
 			messages: [],
 			tools: [

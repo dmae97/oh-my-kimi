@@ -6,7 +6,7 @@ import { formatHashlineHeader, stripHashlinePrefixes } from "@oh-my-pi/hashline"
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { isEnoent, isRecord, prompt, untilAborted } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
+import { type } from "arktype";
 
 import { canonicalSnapshotKey, getFileSnapshotStore } from "../edit/file-snapshot-store";
 import { normalizeToLF } from "../edit/normalize";
@@ -71,12 +71,12 @@ async function loadFflate(): Promise<typeof import("fflate")> {
 	return fflateModulePromise;
 }
 
-const writeSchema = z.object({
-	path: z.string().describe("file path"),
-	content: z.string().describe("file content"),
+const writeSchema = type({
+	path: "string",
+	content: "string",
 });
 
-export type WriteToolInput = z.infer<typeof writeSchema>;
+export type WriteToolInput = typeof writeSchema.infer;
 
 /** Details returned by the write tool for TUI rendering */
 export interface WriteToolDetails {

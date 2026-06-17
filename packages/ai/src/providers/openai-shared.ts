@@ -199,7 +199,6 @@ export function resolveOpenAIRequestSetup(
 		headers[model.compat.promptCacheSessionHeader] ??= options.promptCacheSessionId;
 	}
 
-
 	if (options.defaultBaseUrl !== undefined) {
 		baseUrl = baseUrl ?? ($env.OPENAI_BASE_URL?.trim() || options.defaultBaseUrl);
 	}

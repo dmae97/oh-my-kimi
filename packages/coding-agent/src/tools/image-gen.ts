@@ -1,14 +1,6 @@
 import * as os from "node:os";
 import * as path from "node:path";
-import {
-	type ApiKey,
-	type FetchImpl,
-	getEnvApiKey,
-	getOpenRouterHeaders,
-	type Model,
-	ProviderHttpError,
-	withAuth,
-} from "@oh-my-pi/pi-ai";
+import { type ApiKey, type FetchImpl, getEnvApiKey, type Model, ProviderHttpError, withAuth } from "@oh-my-pi/pi-ai";
 import {
 	CODEX_BASE_URL,
 	getCodexAccountId,
@@ -27,7 +19,8 @@ import {
 	Snowflake,
 	untilAborted,
 } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
+import { type } from "arktype";
+import packageJson from "../../package.json" with { type: "json" };
 import { isAuthenticated, type ModelRegistry } from "../config/model-registry";
 import { settings } from "../config/settings";
 import type { CustomTool } from "../extensibility/custom-tools/types";
@@ -65,37 +58,32 @@ const XAI_IMAGE_ASPECT_RATIOS = [...COMMON_IMAGE_ASPECT_RATIOS, "3:2", "2:3"] as
 const COMMON_IMAGE_ASPECT_RATIO_SET = new Set<string>(COMMON_IMAGE_ASPECT_RATIOS);
 const IMAGE_PROVIDER_PREFERENCES = new Set<string>(["auto", "antigravity", "gemini", "openai", "openrouter", "xai"]);
 
-const responseModalitySchema = z.enum(["IMAGE", "TEXT"] as const);
-const aspectRatioSchema = z.enum(XAI_IMAGE_ASPECT_RATIOS).describe("aspect ratio");
-const imageSizeSchema = z.enum(["1024x1024", "1536x1024", "1024x1536"] as const).describe("image size");
+const responseModalitySchema = type('"IMAGE" | "TEXT"');
 
-const inputImageSchema = z
-	.object({
-		path: z.string().describe("input image path").optional(),
-		data: z.string().describe("base64 image data").optional(),
-		mime_type: z.string().describe("mime type").optional(),
-	})
-	.strict();
+const aspectRatioSchema = type.enumerated(...XAI_IMAGE_ASPECT_RATIOS);
+const imageSizeSchema = type('"1024x1024" | "1536x1024" | "1024x1536"');
 
-const baseImageSchema = z
-	.object({
-		subject: z.string().describe("main subject"),
-		action: z.string().describe("what subject is doing").optional(),
-		scene: z.string().describe("location or environment").optional(),
-		composition: z.string().describe("camera angle and framing").optional(),
-		lighting: z.string().describe("lighting setup").optional(),
-		style: z.string().describe("artistic style").optional(),
-		text: z.string().describe("text to render").optional(),
-		changes: z.array(z.string()).describe("edits to make").optional(),
-		aspect_ratio: aspectRatioSchema.optional(),
-		image_size: imageSizeSchema.optional(),
-		input: z.array(inputImageSchema).describe("input images").optional(),
-	})
-	.strict();
+const inputImageSchema = type({
+	"path?": "string",
+	"data?": "string",
+	"mime_type?": "string",
+});
 
-export const imageGenSchema = baseImageSchema;
-export type ImageGenParams = z.infer<typeof imageGenSchema>;
-export type GeminiResponseModality = z.infer<typeof responseModalitySchema>;
+export const imageGenSchema = type({
+	subject: "string",
+	"action?": "string",
+	"scene?": "string",
+	"composition?": "string",
+	"lighting?": "string",
+	"style?": "string",
+	"text?": "string",
+	"changes?": "string[]",
+	"aspect_ratio?": aspectRatioSchema,
+	"image_size?": imageSizeSchema,
+	"input?": inputImageSchema.array(),
+});
+export type ImageGenParams = typeof imageGenSchema.infer;
+export type GeminiResponseModality = typeof responseModalitySchema.infer;
 
 /**
  * Assembles a structured prompt from the provided parameters.
@@ -1414,7 +1402,9 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 							headers: {
 								"Content-Type": "application/json",
 								Authorization: `Bearer ${key}`,
-								...getOpenRouterHeaders(),
+								"HTTP-Referer": "https://omp.sh/",
+								"X-OpenRouter-Title": "Oh-My-Pi",
+								"X-OpenRouter-Categories": "cli-agent",
 							},
 							body: JSON.stringify(requestBody),
 							signal: requestSignal,

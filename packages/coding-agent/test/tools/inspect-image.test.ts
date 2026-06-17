@@ -11,6 +11,7 @@ import { InspectImageTool } from "@oh-my-pi/pi-coding-agent/tools/inspect-image"
 import { inspectImageToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/inspect-image-renderer";
 import { toolRenderers } from "@oh-my-pi/pi-coding-agent/tools/renderers";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
+import { type } from "arktype";
 
 const TINY_PNG_BASE64 =
 	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==";
@@ -203,10 +204,10 @@ describe("InspectImageTool", () => {
 	it("schema rejects unknown parameters", () => {
 		const tool = new InspectImageTool(createSession(testDir, visionModel));
 		expect(tool.strict).toBe(false);
-		expect(tool.parameters.safeParse({ path: "img.png", question: "What is visible?" }).success).toBe(true);
-		expect(tool.parameters.safeParse({ path: "img.png", question: "What is visible?", extra: "nope" }).success).toBe(
-			false,
-		);
+		expect(tool.parameters({ path: "img.png", question: "What is visible?" }) instanceof type.errors).toBe(false);
+		expect(
+			tool.parameters({ path: "img.png", question: "What is visible?", extra: "nope" }) instanceof type.errors,
+		).toBe(true);
 	});
 
 	it("fails when images.blockImages is enabled", async () => {

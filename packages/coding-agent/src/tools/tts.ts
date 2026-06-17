@@ -5,7 +5,7 @@
 
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { type ApiKey, ProviderHttpError, withAuth } from "@oh-my-pi/pi-ai";
-import { z } from "zod/v4";
+import { type } from "arktype";
 import { settings } from "../config/settings";
 import type { CustomTool, CustomToolContext } from "../extensibility/custom-tools/types";
 import { ohMyPiXAIUserAgent, resolveXAIHttpCredentials } from "../lib/xai-http";
@@ -16,7 +16,6 @@ import { formatPathRelativeToCwd, resolveToCwd } from "./path-utils";
 
 // Hermes tts_tool.py L167-171
 const DEFAULT_XAI_VOICE_ID = "eve" as const;
-const DEFAULT_XAI_LANGUAGE = "en" as const;
 const DEFAULT_XAI_SAMPLE_RATE = 24_000;
 const DEFAULT_XAI_BIT_RATE = 128_000;
 const XAI_MAX_TEXT_LENGTH = 15_000;
@@ -31,14 +30,16 @@ const formatVoiceList = (): string =>
 type TtsCodec = "mp3" | "wav";
 type TtsBackend = "local" | "xai";
 
-const ttsSchema = z.object({
-	text: z.string().min(1).max(XAI_MAX_TEXT_LENGTH),
-	voice_id: z.string().default(DEFAULT_XAI_VOICE_ID),
-	language: z.string().default(DEFAULT_XAI_LANGUAGE),
-	output_path: z.string(),
-	sample_rate: z.number().int().optional(),
-	bit_rate: z.number().int().optional(),
+const ttsSchema = type({
+	text: "1 <= string <= 15000",
+	voice_id: "string = 'eve'",
+	language: "string = 'en'",
+	output_path: "string",
+	sample_rate: "number.integer?",
+	bit_rate: "number.integer?",
 });
+
+type TtsSchemaType = typeof ttsSchema.infer;
 
 interface TtsToolDetails {
 	bytes: number;
@@ -87,13 +88,13 @@ function readStringSetting(key: "providers.tts" | "tts.localModel" | "tts.localV
 }
 
 async function synthesizeXai(
-	params: z.infer<typeof ttsSchema>,
+	params: TtsSchemaType,
 	ctx: CustomToolContext,
 	outputPath: string,
 	displayPath: string,
 	codec: TtsCodec,
 	signal: AbortSignal | undefined,
-): Promise<AgentToolResult<TtsToolDetails, typeof ttsSchema>> {
+): Promise<AgentToolResult<TtsToolDetails, TtsSchemaType>> {
 	const creds = await resolveXAIHttpCredentials(ctx.modelRegistry);
 	if (!creds) {
 		return {
@@ -187,11 +188,11 @@ async function synthesizeXai(
 }
 
 async function synthesizeLocal(
-	params: z.infer<typeof ttsSchema>,
+	params: TtsSchemaType,
 	cwd: string,
 	outputPath: string,
 	signal: AbortSignal | undefined,
-): Promise<AgentToolResult<TtsToolDetails, typeof ttsSchema>> {
+): Promise<AgentToolResult<TtsToolDetails, TtsSchemaType>> {
 	const modelSetting = readStringSetting("tts.localModel");
 	const modelKey = modelSetting && isTtsLocalModelKey(modelSetting) ? modelSetting : DEFAULT_TTS_LOCAL_MODEL_KEY;
 	const voice = readStringSetting("tts.localVoice") || DEFAULT_TTS_VOICE;
@@ -242,11 +243,11 @@ export const ttsTool: CustomTool<typeof ttsSchema, TtsToolDetails> = {
 	parameters: ttsSchema,
 	async execute(
 		_toolCallId: string,
-		params: z.infer<typeof ttsSchema>,
+		params: TtsSchemaType,
 		_onUpdate,
 		ctx: CustomToolContext,
 		signal?: AbortSignal,
-	): Promise<AgentToolResult<TtsToolDetails, typeof ttsSchema>> {
+	): Promise<AgentToolResult<TtsToolDetails, TtsSchemaType>> {
 		const cwd = ctx.sessionManager.getCwd();
 		const outputPath = resolveToCwd(params.output_path, cwd);
 		const displayPath = formatPathRelativeToCwd(outputPath, cwd);

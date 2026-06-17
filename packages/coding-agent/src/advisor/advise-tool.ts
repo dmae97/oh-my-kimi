@@ -7,20 +7,17 @@ import type {
 	AgentToolUpdateCallback,
 } from "@oh-my-pi/pi-agent-core";
 import { escapeXmlText } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
+import { type } from "arktype";
 import adviseDescription from "../prompts/advisor/advise-tool.md" with { type: "text" };
 
-const adviseSchema = z.object({
-	note: z
-		.string()
-		.describe("One concrete piece of advice for the agent you are watching. Terse, specific, actionable."),
-	severity: z
-		.enum(["nit", "concern", "blocker"])
-		.optional()
-		.describe("How strongly to weigh this. Omit for a plain nit."),
+const adviseSchema = type({
+	note: type("string").describe(
+		"One concrete piece of advice for the agent you are watching. Terse, specific, actionable.",
+	),
+	"severity?": type("'nit' | 'concern' | 'blocker'").describe("How strongly to weigh this. Omit for a plain nit."),
 });
 
-export type AdviseParams = z.infer<typeof adviseSchema>;
+export type AdviseParams = typeof adviseSchema.infer;
 
 export type AdvisorSeverity = "nit" | "concern" | "blocker";
 

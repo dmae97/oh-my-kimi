@@ -3,7 +3,7 @@ import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { callSessionTool } from "@oh-my-pi/pi-coding-agent/eval/js/tool-bridge";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { z } from "zod/v4";
+import { type } from "arktype";
 
 function createTool(
 	name: string,
@@ -13,7 +13,7 @@ function createTool(
 		name,
 		label: name,
 		description: `${name} tool`,
-		parameters: z.object({}),
+		parameters: type({}),
 		concurrency: "parallel",
 		execute,
 	} as unknown as AgentTool;

@@ -1,8 +1,10 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
+- Added evaluation macro syntactic parsing, evaluation, and expander integration tests (`macro-syntax`, `macro-evaluator`, and `macro-expand`)
 - Added support for OpenRouter fallback in Perplexity web search when direct Perplexity API keys fail or are unavailable
 - Added support for streaming the Perplexity Responses API (`/v1/responses`) via the `PI_PERPLEXITY_RESPONSES=1` environment variable
 - Added `omp ttsr` top-level CLI command to inspect and test Time-Traveling Stream Rules
@@ -16,12 +18,14 @@
 
 ### Changed
 
+- Replaced internal schema validation and `@sinclair/typebox` polyfills across all agent tools and configurations from Zod to ArkType
 - Changed advisor model calls and overflow-compaction tasks to inherit and propagate primary telemetry spans, usage, and cost tracking
 - Changed PDF read output to replace `<!-- image: ... -->` placeholders with clickable `read <pdf>:<image>.png` handles, including line-range and multi-range reads
 - Changed the built-in `ts-no-any` rule to recommend a schema parse at trust boundaries and `in`-narrowing (instead of an inline `as`-cast) when reading fields off `unknown`
 
 ### Fixed
 
+- Fixed edit seen-line guard mismatch assertion message formatting to report the actual state instead of generic failure notices
 - Fixed Perplexity web search to use shared OpenAI streaming transports while preserving streamed sources, citations, and related questions
 - Fixed `read <pdf>:<member>` errors for unknown PDF images to surface available extracted image names
 - Fixed puppeteer stealth scripts to use cached Reflect methods (`Reflect_get`, `Reflect_apply`) and `Reflect.apply` instead of live `Reflect`/`Function.prototype.apply` calls, preventing page tampering from leaking through proxy traps.

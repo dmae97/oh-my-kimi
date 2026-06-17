@@ -5,7 +5,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { prompt, Snowflake } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
+import { type } from "arktype";
 import { resolveAgentModelPatterns } from "../config/model-resolver";
 import type { LocalProtocolOptions } from "../internal-urls";
 import { MCPManager } from "../mcp/manager";
@@ -31,12 +31,12 @@ export const EVAL_AGENT_MAX_DEPTH = 3;
 const DEFAULT_AGENT_TYPE = "task";
 const DEFAULT_AGENT_LABEL = "EvalAgent";
 
-const agentArgsSchema = z.object({
-	prompt: z.string().min(1, "prompt must be a non-empty string"),
-	agentType: z.string().min(1).optional(),
-	model: z.union([z.string().min(1), z.array(z.string().min(1)).min(1)]).optional(),
-	label: z.string().optional(),
-	schema: z.unknown().optional(),
+const agentArgsSchema = type({
+	prompt: "string>0",
+	"agentType?": "string>0",
+	"model?": "string>0|string>0[]",
+	"label?": "string",
+	"schema?": "unknown",
 });
 
 interface EvalAgentArgs {
@@ -64,13 +64,11 @@ export interface EvalAgentResult {
 }
 
 function parseAgentArgs(args: unknown): EvalAgentArgs {
-	const parsed = agentArgsSchema.safeParse(args);
-	if (!parsed.success) {
-		const issue = parsed.error.issues[0];
-		const where = issue?.path.length ? `${issue.path.join(".")}: ` : "";
-		throw new ToolError(`agent() received invalid arguments: ${where}${issue?.message ?? "bad input"}`);
+	const result = agentArgsSchema(args);
+	if (result instanceof type.errors) {
+		throw new ToolError(`agent() received invalid arguments: ${result.summary}`);
 	}
-	return parsed.data;
+	return result;
 }
 
 function assertDepthAllowed(session: ToolSession): void {

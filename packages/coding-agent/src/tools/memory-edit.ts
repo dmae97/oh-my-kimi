@@ -1,17 +1,17 @@
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
-import { z } from "zod/v4";
+import { type } from "arktype";
 import memoryEditDescription from "../prompts/tools/memory-edit.md" with { type: "text" };
 import type { ToolSession } from ".";
 
-const memoryEditSchema = z.object({
-	op: z.enum(["update", "forget", "invalidate"]).describe("memory edit operation"),
-	id: z.string().describe("memory id from recall output"),
-	content: z.string().optional().describe("replacement content for update"),
-	importance: z.number().optional().describe("replacement importance for update, clamped to [0, 1]"),
-	replacement_id: z.string().optional().describe("replacement memory id for invalidate"),
+const memoryEditSchema = type({
+	op: "'update' | 'forget' | 'invalidate'",
+	id: "string",
+	content: "string?",
+	importance: "number?",
+	replacement_id: "string?",
 });
 
-export type MemoryEditParams = z.infer<typeof memoryEditSchema>;
+export type MemoryEditParams = typeof memoryEditSchema.infer;
 
 export class MemoryEditTool implements AgentTool<typeof memoryEditSchema> {
 	readonly name = "memory_edit";

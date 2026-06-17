@@ -17,7 +17,7 @@ import {
 	readSseJson,
 	structuredCloneJSON,
 } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
+import { type } from "arktype";
 import packageJson from "../../package.json" with { type: "json" };
 import { getEnvApiKey } from "../stream";
 import type {
@@ -3348,37 +3348,57 @@ class CodexProviderStreamError extends Error {
 	}
 }
 
-const optionalCodexString = z.string().optional().catch(undefined);
+const optionalCodexString = type("unknown").pipe(raw => {
+	const out = type("string")(raw);
+	return out instanceof type.errors ? undefined : out;
+});
 
-const codexErrorDetailSchema = z
-	.object({
-		code: optionalCodexString,
-		type: optionalCodexString,
-		message: optionalCodexString,
-	})
-	.loose();
+const innerErrorDetailSchema = type({
+	"code?": optionalCodexString,
+	"type?": optionalCodexString,
+	"message?": optionalCodexString,
+});
 
-const codexFailureEventSchema = z
-	.object({
-		type: optionalCodexString,
-		code: optionalCodexString,
-		message: optionalCodexString,
-		status: optionalCodexString,
-		error: codexErrorDetailSchema.optional().catch(undefined),
-		response: z
-			.object({
-				error: codexErrorDetailSchema.optional().catch(undefined),
-				message: optionalCodexString,
-				status: optionalCodexString,
-			})
-			.loose()
-			.optional()
-			.catch(undefined),
-	})
-	.loose();
+const codexErrorDetailSchema = type("unknown").pipe(raw => {
+	const out = innerErrorDetailSchema(raw);
+	return out instanceof type.errors ? undefined : out;
+});
+
+const innerFailureEventSchema = type({
+	"type?": optionalCodexString,
+	"code?": optionalCodexString,
+	"message?": optionalCodexString,
+	"status?": optionalCodexString,
+	"error?": codexErrorDetailSchema,
+	"response?": type("unknown").pipe(raw => {
+		const out = type({
+			"error?": codexErrorDetailSchema,
+			"message?": optionalCodexString,
+			"status?": optionalCodexString,
+		})(raw);
+		return out instanceof type.errors ? undefined : out;
+	}),
+});
+
+const codexFailureEventSchema = type("unknown").pipe(raw => {
+	const out = innerFailureEventSchema(raw);
+	return out instanceof type.errors
+		? {
+				type: undefined,
+				code: undefined,
+				message: undefined,
+				status: undefined,
+				error: undefined,
+				response: undefined,
+			}
+		: out;
+});
 
 export function isRetryableCodexFailureEvent(rawEvent: Record<string, unknown>): boolean {
-	const event = codexFailureEventSchema.parse(rawEvent);
+	const event = codexFailureEventSchema(rawEvent);
+	if (event instanceof type.errors) {
+		return false;
+	}
 	const error = event.error ?? event.response?.error;
 	const code = error?.code ?? error?.type ?? event.code;
 	if (code && CODEX_RETRYABLE_EVENT_CODES.has(code.toLowerCase())) {
@@ -3389,7 +3409,10 @@ export function isRetryableCodexFailureEvent(rawEvent: Record<string, unknown>):
 }
 
 export function createCodexProviderStreamError(rawEvent: Record<string, unknown>): CodexProviderStreamError {
-	const event = codexFailureEventSchema.parse(rawEvent);
+	const event = codexFailureEventSchema(rawEvent);
+	if (event instanceof type.errors) {
+		return new CodexProviderStreamError("Codex response failed", false);
+	}
 	const nestedError = event.error ?? event.response?.error;
 	const code = event.code ?? nestedError?.code ?? nestedError?.type ?? "";
 	const message = event.message ?? "";
@@ -3401,7 +3424,10 @@ export function createCodexProviderStreamError(rawEvent: Record<string, unknown>
 }
 
 function formatCodexFailure(rawEvent: Record<string, unknown>): string | null {
-	const event = codexFailureEventSchema.parse(rawEvent);
+	const event = codexFailureEventSchema(rawEvent);
+	if (event instanceof type.errors) {
+		return null;
+	}
 	const error = event.error ?? event.response?.error;
 	const message = error?.message ?? event.message ?? event.response?.message;
 	const code = error?.code ?? error?.type ?? event.code;

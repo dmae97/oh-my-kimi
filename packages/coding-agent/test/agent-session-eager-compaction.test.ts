@@ -13,7 +13,7 @@ import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TodoTool, type ToolSession, USER_TODO_EDIT_CUSTOM_TYPE } from "@oh-my-pi/pi-coding-agent/tools";
 import { TempDir } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
+import { type } from "arktype";
 
 // Re-injecting eager preludes after compaction: the first-message preludes are the
 // oldest messages, so compaction summarizes them away and the agent silently loses
@@ -164,14 +164,14 @@ describe("AgentSession eager prelude re-injection after compaction", () => {
 			name: "task",
 			label: "Task",
 			description: "Mock task tool",
-			parameters: z.object({}),
+			parameters: type({}),
 			execute: async () => ({ content: [{ type: "text" as const, text: "ok" }] }),
 		};
 		const mockBashTool: AgentTool = {
 			name: "bash",
 			label: "Bash",
 			description: "Mock bash tool",
-			parameters: z.object({}),
+			parameters: type({}),
 			execute: async () => ({ content: [{ type: "text" as const, text: "ok" }] }),
 		};
 		const todoEnabled = settings.get("todo.enabled") === true;

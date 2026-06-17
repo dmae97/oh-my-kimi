@@ -12,13 +12,13 @@ import type {
 } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
-import { z } from "zod/v4";
+import { type } from "arktype";
 
 const testTool: Tool = {
 	name: "echo",
 	description: "Echo input",
-	parameters: z.object({
-		text: z.string(),
+	parameters: type({
+		text: "string",
 	}),
 };
 
@@ -196,8 +196,8 @@ describe("OpenAI tool strict mode", () => {
 				{
 					name: "dynamic_map",
 					description: "Dynamic object map",
-					parameters: z.object({
-						values: z.record(z.string(), z.string()).optional(),
+					parameters: type({
+						values: "Record<string, string>?",
 					}),
 				},
 			],

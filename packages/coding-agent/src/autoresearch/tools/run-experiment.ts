@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { Text } from "@oh-my-pi/pi-tui";
 import { formatBytes } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
+import { type } from "arktype";
 import { executeBash } from "../../exec/bash-executor";
 import type { ToolDefinition } from "../../extensibility/extensions";
 import type { Theme } from "../../modes/theme/theme";
@@ -25,8 +25,8 @@ import { openAutoresearchStorageIfExists } from "../storage";
 import type { AutoresearchToolFactoryOptions, RunDetails, RunExperimentProgressDetails } from "../types";
 import { DEFAULT_HARNESS_COMMAND } from "./init-experiment";
 
-const runExperimentSchema = z.object({
-	timeout_seconds: z.number().describe("timeout in seconds (default 600)").optional(),
+const runExperimentSchema = type({
+	"timeout_seconds?": type("number").describe("timeout in seconds (default 600)"),
 });
 
 interface ProcessExecutionResult {

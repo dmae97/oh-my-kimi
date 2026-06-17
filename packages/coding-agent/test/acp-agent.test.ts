@@ -30,7 +30,19 @@ import type { AgentSession, AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/
 import { SILENT_ABORT_MARKER } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { getConfigRootDir, setAgentDir } from "@oh-my-pi/pi-utils";
-import { expectAcpStructure } from "./helpers/acp-schema";
+import type { z } from "zod/v4";
+
+/**
+ * Validate an ACP wire payload against the external `@agentclientprotocol/sdk`
+ * Zod schemas. Those schemas come from the ACP protocol SDK (external boundary)
+ * and cannot be expressed as ArkType, so they stay on Zod and are validated via
+ * `.safeParse` directly rather than through the ArkType-only `expectAcpStructure`
+ * helper in `./helpers/acp-schema`.
+ */
+function expectAcpStructure(schema: z.ZodType, value: unknown): void {
+	const result = schema.safeParse(value);
+	expect(result.success, result.success ? undefined : JSON.stringify(result.error.issues, null, 2)).toBe(true);
+}
 
 const TEST_MODELS: Model[] = [
 	buildModel({

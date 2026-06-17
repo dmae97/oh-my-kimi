@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { type } from "arktype";
 import { resolvePromptCacheKey } from "../auth-gateway/http";
 /**
  * Parsed inbound OpenAI chat-completions request, ready to feed into pi-ai
@@ -50,11 +51,11 @@ export function parseRequest(body: unknown, headers?: Headers): ParsedRequest {
 	// land on `options.headers` automatically). We consult `headers` here too
 	// for `resolvePromptCacheKey` to pull a cache identity out of inbound
 	// vendor-neutral headers when the body doesn't carry one.
-	const parsed = openaiChatRequestSchema.safeParse(body);
-	if (!parsed.success) {
-		throw new Error(`openai-chat: ${parsed.error.message}`);
+	const parsed = openaiChatRequestSchema(body);
+	if (parsed instanceof type.errors) {
+		throw new Error(`openai-chat: ${parsed.summary}`);
 	}
-	const data = parsed.data;
+	const data = parsed;
 
 	const now = Date.now();
 	const systemParts: string[] = [];

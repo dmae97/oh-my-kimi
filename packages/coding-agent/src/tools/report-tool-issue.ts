@@ -23,7 +23,7 @@ import { Database } from "bun:sqlite";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { FetchImpl } from "@oh-my-pi/pi-ai";
 import { $env, $flag, getAutoQaDbDir, getInstallId, logger, VERSION } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
+import { type } from "arktype";
 import type { Settings } from "..";
 import type { ToolSession } from "./index";
 
@@ -31,12 +31,10 @@ function buildReportToolIssueParams(activeBuiltinNames: readonly string[]) {
 	// Enum gives the model a tight schema; the runtime check in `execute` is the
 	// source of truth (handles models that ignore the enum and the empty-list
 	// fallback used by call sites that don't know the active set yet).
-	const toolSchema = activeBuiltinNames.length > 0 ? z.enum(activeBuiltinNames as [string, ...string[]]) : z.string();
-	return z.object({
-		tool: toolSchema.describe("tool name"),
-		report: z
-			.string()
-			.describe("unexpected behavior; generic, NEVER PII (paths, file contents, identifiers, prompt text)"),
+	const toolSchema = activeBuiltinNames.length > 0 ? type.enumerated(...activeBuiltinNames) : type("string");
+	return type({
+		tool: toolSchema,
+		report: "string",
 	});
 }
 

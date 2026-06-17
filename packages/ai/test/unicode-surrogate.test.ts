@@ -2,11 +2,11 @@ import { describe, expect, it } from "bun:test";
 import { complete } from "@oh-my-pi/pi-ai/stream";
 import type { Api, Context, Model, OptionsForApi, ToolResultMessage } from "@oh-my-pi/pi-ai/types";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
-import { z } from "zod/v4";
+import { type } from "arktype";
 import { e2eApiKey, resolveApiKey } from "./oauth";
 
 // Empty schema for test tools - must be proper OBJECT type for Cloud Code Assist
-const emptySchema = z.object({});
+const emptySchema = type({});
 
 // Resolve OAuth tokens at module level (async, runs before tests)
 const oauthTokens = await Promise.all([

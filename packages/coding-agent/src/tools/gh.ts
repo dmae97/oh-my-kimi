@@ -11,7 +11,7 @@ import type {
 } from "@oh-my-pi/pi-agent-core";
 
 import { getWorktreeDir, hashPath, isEnoent, prompt, untilAborted } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
+import { type } from "arktype";
 import type { Settings } from "../config/settings";
 import githubDescription from "../prompts/tools/github.md" with { type: "text" };
 import * as git from "../utils/git";
@@ -255,54 +255,32 @@ const GITHUB_READONLY_OPS: ReadonlySet<string> = new Set([
 	"run_watch",
 ]);
 
-const githubSchema = z
-	.object({
-		op: z
-			.enum([
-				"repo_view",
-				"pr_create",
-				"pr_checkout",
-				"pr_push",
-				"search_issues",
-				"search_prs",
-				"search_code",
-				"search_commits",
-				"search_repos",
-				"run_watch",
-			] as const)
-			.describe("github operation"),
-		repo: z.string().describe("owner/repo").optional(),
-		branch: z.string().describe("branch").optional(),
-		pr: z
-			.union([z.string(), z.array(z.string())])
-			.describe("pr number, url, or branch")
-			.optional(),
-		force: z.boolean().describe("reset existing local branch").optional(),
-		forceWithLease: z.boolean().describe("force-with-lease push").optional(),
-		title: z.string().describe("pr title").optional(),
-		body: z.string().describe("pr body markdown").optional(),
-		base: z.string().describe("pr base branch").optional(),
-		head: z.string().describe("pr head branch").optional(),
-		draft: z.boolean().describe("open pr as draft").optional(),
-		fill: z.boolean().describe("auto-fill pr title/body from commits").optional(),
-		reviewer: z.array(z.string()).describe("reviewers").optional(),
-		assignee: z.array(z.string()).describe("assignees").optional(),
-		label: z.array(z.string()).describe("labels").optional(),
-		query: z.string().describe("search query").optional(),
-		since: z.string().describe("lower-bound date filter").optional(),
-		until: z.string().describe("upper-bound date filter").optional(),
-		dateField: z
-			.enum(["created", "updated"] as const)
-			.describe("date field")
-			.default("created")
-			.optional(),
-		limit: z.number().default(10).describe("max results").optional(),
-		run: z.string().describe("actions run id or url").optional(),
-		tail: z.number().default(15).describe("log lines per failed job").optional(),
-	})
-	.strict();
+const githubSchema = type({
+	op: "'repo_view' | 'pr_create' | 'pr_checkout' | 'pr_push' | 'search_issues' | 'search_prs' | 'search_code' | 'search_commits' | 'search_repos' | 'run_watch'",
+	repo: "string?",
+	branch: "string?",
+	pr: "(string | string[])?",
+	force: "boolean?",
+	forceWithLease: "boolean?",
+	title: "string?",
+	body: "string?",
+	base: "string?",
+	head: "string?",
+	draft: "boolean?",
+	fill: "boolean?",
+	reviewer: "string[]?",
+	assignee: "string[]?",
+	label: "string[]?",
+	query: "string?",
+	since: "string?",
+	until: "string?",
+	"dateField?": "'created' | 'updated'",
+	"limit?": "number",
+	run: "string?",
+	"tail?": "number",
+});
 
-type GithubInput = z.infer<typeof githubSchema>;
+type GithubInput = typeof githubSchema.infer;
 
 export interface GhToolDetails {
 	meta?: OutputMeta;

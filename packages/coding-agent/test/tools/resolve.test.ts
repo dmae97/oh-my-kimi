@@ -4,7 +4,6 @@ import { getThemeByName } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { ResolveTool, resolveToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/resolve";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
 
 function createSession(handler?: (input: unknown) => Promise<unknown>): ToolSession {
 	return {
@@ -21,11 +20,19 @@ function getText(result: { content: Array<{ type: string; text?: string }> }): s
 	return result.content.find(part => part.type === "text")?.text ?? "";
 }
 
+function getRequiredFields(schema: { json?: { required?: Array<{ key: string }> } }): string[] {
+	const required: string[] = [];
+	if (schema.json?.required && Array.isArray(schema.json.required)) {
+		required.push(...schema.json.required.map(item => item.key));
+	}
+	return required.sort();
+}
+
 describe("ResolveTool", () => {
 	it("requires action and reason in schema", () => {
 		const tool = new ResolveTool(createSession());
-		const wire = z.toJSONSchema(tool.parameters, { target: "draft-2020-12" }) as { required?: string[] };
-		expect(wire.required).toEqual(["action", "reason"]);
+		const required = getRequiredFields(tool.parameters as { json?: { required?: Array<{ key: string }> } });
+		expect(required).toEqual(["action", "reason"]);
 	});
 
 	it("errors when there is no pending action", async () => {

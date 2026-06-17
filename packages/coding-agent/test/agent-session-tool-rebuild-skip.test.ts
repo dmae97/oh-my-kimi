@@ -6,7 +6,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { CustomTool } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools/types";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { z } from "zod/v4";
+import { type } from "arktype";
 
 // Cache-stability invariant: when MCP servers reconnect with byte-identical tool
 // definitions, `refreshMCPTools` must not rebuild the system prompt. A rebuild
@@ -33,7 +33,7 @@ function createBasicTool(name: string, label: string, description = `${label} to
 		name,
 		label,
 		description,
-		parameters: z.object({ value: z.string() }),
+		parameters: type({ value: "string" }),
 		strict: true,
 		async execute() {
 			return { content: [{ type: "text", text: `${name} executed` }] };
@@ -46,7 +46,7 @@ function createMcpCustomTool(name: string, serverName: string, mcpToolName: stri
 		name,
 		label: `${serverName}/${mcpToolName}`,
 		description,
-		parameters: z.object({ q: z.string() }),
+		parameters: type({ q: "string" }),
 		strict: true,
 		mcpServerName: serverName,
 		mcpToolName,

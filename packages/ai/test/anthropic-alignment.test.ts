@@ -32,7 +32,7 @@ import type {
 	Tool,
 } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import { z } from "zod/v4";
+import { type as arkType } from "arktype";
 import { withEnv } from "./helpers";
 
 const ANTHROPIC_MODEL_SPEC: ModelSpec<"anthropic-messages"> = {
@@ -1217,9 +1217,9 @@ describe("Anthropic request fingerprint alignment", () => {
 				name: "bash",
 				description: "bash tool",
 				strict: true,
-				parameters: z.object({
-					command: z.string(),
-					cwd: z.string(),
+				parameters: arkType({
+					command: "string",
+					cwd: "string",
 				}),
 			},
 		];

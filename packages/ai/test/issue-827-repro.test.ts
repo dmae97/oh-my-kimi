@@ -12,12 +12,12 @@ import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-comple
 import type { Context, Model, ModelSpec, Tool } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
-import { z } from "zod/v4";
+import { type } from "arktype";
 
 const echoTool: Tool = {
 	name: "echo",
 	description: "Echo input",
-	parameters: z.object({ text: z.string() }),
+	parameters: type({ text: "string" }),
 };
 
 const ctx: Context = {
@@ -111,7 +111,7 @@ describe("issue #827 — kimi reasoning models drop reasoning under forced tool_
 		})) as CompletionsBody;
 
 		expect(body.tool_choice).toMatchObject({ type: "function", function: { name: "echo" } });
-		expect(body.reasoning).toEqual({ enabled: false });
+		expect(body.reasoning).toBeUndefined();
 		expect(body.reasoning_effort).toBeUndefined();
 	});
 	it("sends explicit thinking disabled for Moonshot Kimi K2.6 when a named tool is forced", async () => {

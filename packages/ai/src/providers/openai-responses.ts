@@ -69,8 +69,8 @@ import {
 	type OpenAIStrictToolsScope,
 	type OpenAIStrictToolsState,
 	processResponsesStream,
-	resolveOpenAIOutputTokenParam,
 	resolveOpenAICompatPolicy,
+	resolveOpenAIOutputTokenParam,
 	resolveOpenAIRequestSetup,
 	shouldRetryWithoutStrictTools,
 } from "./openai-shared";

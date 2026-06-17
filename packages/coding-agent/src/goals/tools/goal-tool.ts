@@ -2,7 +2,7 @@ import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallb
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { formatNumber, prompt } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
+import { type } from "arktype";
 import type { RenderResultOptions } from "../../extensibility/custom-tools/types";
 import type { Theme, ThemeColor } from "../../modes/theme/theme";
 import goalDescription from "../../prompts/tools/goal.md" with { type: "text" };
@@ -14,13 +14,13 @@ import { framedBlock, renderStatusLine, truncateToWidth } from "../../tui";
 import { completionBudgetReport, remainingTokens } from "../runtime";
 import type { Goal, GoalStatus, GoalToolDetails } from "../state";
 
-const goalSchema = z.object({
-	op: z.enum(["create", "get", "complete", "resume", "drop"]).describe("goal operation"),
-	objective: z.string().describe("goal objective").optional(),
-	token_budget: z.number().int().describe("token budget").optional(),
+const goalSchema = type({
+	op: type("'create' | 'get' | 'complete' | 'resume' | 'drop'").describe("goal operation"),
+	"objective?": type("string").describe("goal objective"),
+	"token_budget?": type("number.integer").describe("token budget"),
 });
 
-export type GoalToolInput = z.infer<typeof goalSchema>;
+export type GoalToolInput = typeof goalSchema.infer;
 
 export interface GoalToolResponse {
 	goal: Goal | null;

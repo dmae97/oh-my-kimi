@@ -2,7 +2,7 @@ import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallb
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
+import { type } from "arktype";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import resolveDescription from "../prompts/tools/resolve.md" with { type: "text" };
@@ -11,13 +11,13 @@ import type { ToolSession } from ".";
 import { replaceTabs } from "./render-utils";
 import { ToolError } from "./tool-errors";
 
-const resolveSchema = z.object({
-	action: z.enum(["apply", "discard"]),
-	reason: z.string().describe("reason for action"),
-	extra: z.record(z.string(), z.unknown()).optional().describe("free-form metadata"),
+const resolveSchema = type({
+	action: "'apply' | 'discard'",
+	reason: "string",
+	extra: "(Record<string, unknown>)?",
 });
 
-type ResolveParams = z.infer<typeof resolveSchema>;
+type ResolveParams = typeof resolveSchema.infer;
 
 export interface ResolveToolDetails {
 	action: "apply" | "discard";

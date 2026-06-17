@@ -6,7 +6,7 @@ import * as natives from "@oh-my-pi/pi-natives";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { formatGroupedPaths, isEnoent, prompt, untilAborted } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
+import { type } from "arktype";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { InternalUrlRouter } from "../internal-urls";
 import type { Theme } from "../modes/theme/theme";
@@ -36,17 +36,20 @@ import {
 import { ToolAbortError, ToolError, throwIfAborted } from "./tool-errors";
 import { toolResult } from "./tool-result";
 
-const findSchema = z
-	.object({
-		paths: z.array(z.string().describe("glob including search path")).min(1).describe("globs including search paths"),
-		hidden: z.boolean().default(true).describe("include hidden files").optional(),
-		gitignore: z.boolean().default(true).describe("respect gitignore").optional(),
-		limit: z.number().default(200).describe("max results (clamped to 1-200)").optional(),
-		timeout: z.number().min(0.5).max(60).default(5).describe("timeout in seconds (0.5–60)").optional(),
-	})
-	.strict();
+const findSchema = type({
+	paths: "string[] >= 1",
+	"hidden?": "boolean",
+	"gitignore?": "boolean",
+	"limit?": "number",
+	"timeout?": "number",
+}).narrow((o, ctx) => {
+	if (o.timeout !== undefined && (o.timeout < 0.5 || o.timeout > 60)) {
+		return ctx.mustBe("a timeout between 0.5 and 60 seconds");
+	}
+	return true;
+});
 
-export type FindToolInput = z.infer<typeof findSchema>;
+export type FindToolInput = typeof findSchema.infer;
 
 const DEFAULT_LIMIT = 200;
 const MAX_LIMIT = 200;
@@ -108,7 +111,7 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 	readonly description: string;
 	readonly parameters = findSchema;
 
-	readonly examples: readonly ToolExample<z.input<typeof findSchema>>[] = [
+	readonly examples: readonly ToolExample<typeof findSchema.infer>[] = [
 		{
 			caption: "Find files",
 			call: { paths: ["src/**/*.ts"] },
@@ -144,7 +147,7 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 
 	async execute(
 		_toolCallId: string,
-		params: z.infer<typeof findSchema>,
+		params: typeof findSchema.infer,
 		signal?: AbortSignal,
 		onUpdate?: AgentToolUpdateCallback<FindToolDetails>,
 		_context?: AgentToolContext,

@@ -10,6 +10,7 @@
  */
 
 import { logger } from "@oh-my-pi/pi-utils";
+import { type } from "arktype";
 import { resolvePromptCacheKey } from "../auth-gateway/http";
 import type { AuthGatewayStreamControl, AuthGatewayParsedRequest as ParsedRequest } from "../auth-gateway/types";
 import type {
@@ -263,11 +264,10 @@ export function parseRequest(body: unknown, headers?: Headers): ParsedRequest {
 	// client signals a cache identity outside the body — see the
 	// `resolvePromptCacheKey` call further down.
 
-	const parsed = openaiResponsesRequestSchema.safeParse(body);
-	if (!parsed.success) {
-		throw new Error(`openai-responses: ${parsed.error.message}`);
+	const data = openaiResponsesRequestSchema(body);
+	if (data instanceof type.errors) {
+		throw new Error(`openai-responses: ${data.summary}`);
 	}
-	const data = parsed.data;
 
 	const now = Date.now();
 	const messages: Message[] = [];

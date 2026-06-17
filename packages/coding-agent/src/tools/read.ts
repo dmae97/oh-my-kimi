@@ -1,6 +1,5 @@
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import { formatHashlineHeader, formatNumberedLine, formatNumberedLines } from "@oh-my-pi/hashline";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
@@ -8,9 +7,9 @@ import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 import { glob, type SummaryResult, summarizeCode } from "@oh-my-pi/pi-natives";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
-import { getRemoteDir, type ImageMetadata, logger, prompt, readImageMetadata, untilAborted } from "@oh-my-pi/pi-utils";
+import { getRemoteDir, logger, prompt, readImageMetadata, untilAborted } from "@oh-my-pi/pi-utils";
+import { type } from "arktype";
 import { LRUCache } from "lru-cache/raw";
-import { z } from "zod/v4";
 import {
 	canonicalSnapshotKey,
 	getFileSnapshotStore,
@@ -663,17 +662,11 @@ function prependSuffixResolutionNotice(text: string, suffixResolution?: { from: 
 	return text ? `${notice}\n${text}` : notice;
 }
 
-const readSchema = z
-	.object({
-		path: z
-			.string()
-			.describe(
-				'Local path, internal URI (e.g. "omp://", "issue://123", "pr://123"), or URL; append :<sel> for line ranges or raw mode (e.g. "src/foo.ts:50-100")',
-			),
-	})
-	.strict();
+const readSchema = type({
+	path: "string",
+});
 
-export type ReadToolInput = z.infer<typeof readSchema>;
+export type ReadToolInput = typeof readSchema.infer;
 
 export interface ReadToolDetails {
 	kind?: "file" | "url";
@@ -767,59 +760,6 @@ function selToOffsetLimit(parsed: ParsedSelector): { offset?: number; limit?: nu
 		return { offset: first.startLine, limit };
 	}
 	return {};
-}
-
-/**
- * markit emits `<!-- image: <id> (page N, WxHpt) -->` placeholders for images
- * embedded in a PDF (the same `<id>` it would write as `<id>.png` when given an
- * image directory). Matches one placeholder; `id` is `\S+`, the parenthesised
- * metadata is captured verbatim.
- */
-const PDF_IMAGE_PLACEHOLDER_RE = /<!-- image: (\S+) \(([^)]*)\) -->/g;
-
-/** A converted-PDF image member is addressed as `<pdf>:<id>.png`. */
-const PDF_ASSET_RE = /^(.+\.pdf):(.*)$/i;
-
-/** Image member extensions a converted PDF can expose. */
-const PDF_IMAGE_MEMBER_RE = /\.(png|jpe?g|gif|webp|bmp|tiff?)$/i;
-
-interface PdfAssetTarget {
-	/** PDF path portion (before the `:` member separator), still unresolved. */
-	pdfPath: string;
-	/** Requested member basename, or `""` to list available members. */
-	member: string;
-}
-
-/**
- * Turn markit's inert image placeholders into browsable read handles so the
- * agent can open a specific diagram with `read <pdf>:<id>.png`. The handle is
- * emitted as inline code, never a markdown link, so PDF paths containing spaces,
- * parentheses, or backslashes can't break the surrounding markdown.
- */
-function rewritePdfImagePlaceholders(markdown: string, pdfRef: string): string {
-	return markdown.replace(
-		PDF_IMAGE_PLACEHOLDER_RE,
-		(_match, id: string, meta: string) => `[image ${id} (${meta}) — read \`${pdfRef}:${id}.png\` to view]`,
-	);
-}
-
-/**
- * Recognise a `<pdf>:<member>` read path that addresses a converted-PDF image
- * (or, with an empty member, a listing request). Returns `null` for anything
- * the normal read flow must keep owning: non-PDF paths, line/raw/conflicts
- * selectors (`doc.pdf:50-100`, `doc.pdf:raw`), and unknown non-image tails.
- */
-function parsePdfAssetReadPath(readPath: string): PdfAssetTarget | null {
-	const match = PDF_ASSET_RE.exec(readPath);
-	if (!match) return null;
-	const pdfPath = match[1]!;
-	const member = match[2]!;
-	if (member === "") return { pdfPath, member: "" };
-	// A real selector (line range / raw / conflicts) belongs to the normal flow.
-	if (parseSel(member).kind !== "none") return null;
-	// An unrecognised, non-image tail also stays on the normal flow (whole doc).
-	if (!PDF_IMAGE_MEMBER_RE.test(member)) return null;
-	return { pdfPath, member };
 }
 
 interface ResolvedArchiveReadPath {
@@ -938,203 +878,6 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const result = await findUniqueSuffixMatch(rawPath, this.session.cwd, signal);
 		cache.set(rawPath, result);
 		return result;
-	}
-
-	/**
-	 * Emit read-tool content for an image file at `absolutePath`. Shared by the
-	 * direct image-read branch and converted-PDF image members. Honors
-	 * `inspect_image.enabled` (metadata + tool hint) versus inlining the image.
-	 */
-	async #buildImageContent(opts: {
-		absolutePath: string;
-		mimeType: string;
-		fileSize: number;
-		imageMetadata: ImageMetadata | null;
-	}): Promise<{ content: Array<TextContent | ImageContent>; sourcePath: string }> {
-		const { absolutePath, mimeType, fileSize, imageMetadata } = opts;
-		if (this.#inspectImageEnabled) {
-			const outputMime = imageMetadata?.mimeType ?? mimeType;
-			const metadataLines = [
-				"Image metadata:",
-				`- MIME: ${outputMime}`,
-				`- Bytes: ${fileSize} (${formatBytes(fileSize)})`,
-				imageMetadata?.width !== undefined && imageMetadata.height !== undefined
-					? `- Dimensions: ${imageMetadata.width}x${imageMetadata.height}`
-					: "- Dimensions: unknown",
-				imageMetadata?.channels !== undefined ? `- Channels: ${imageMetadata.channels}` : "- Channels: unknown",
-				imageMetadata?.hasAlpha === true
-					? "- Alpha: yes"
-					: imageMetadata?.hasAlpha === false
-						? "- Alpha: no"
-						: "- Alpha: unknown",
-				"",
-				`If you want to analyze the image, call inspect_image with path="${formatPathRelativeToCwd(
-					absolutePath,
-					this.session.cwd,
-				)}" and a question describing what to inspect and the desired output format.`,
-			];
-			return { content: [{ type: "text", text: metadataLines.join("\n") }], sourcePath: absolutePath };
-		}
-		if (fileSize > MAX_IMAGE_SIZE) {
-			throw new ToolError(
-				`Image file too large: ${formatBytes(fileSize)} exceeds ${formatBytes(MAX_IMAGE_SIZE)} limit.`,
-			);
-		}
-		try {
-			const imageInput = await loadImageInput({
-				path: absolutePath,
-				cwd: this.session.cwd,
-				autoResize: this.#autoResizeImages,
-				maxBytes: MAX_IMAGE_SIZE,
-				resolvedPath: absolutePath,
-				detectedMimeType: mimeType,
-				excludeWebP: webpExclusionForModel(this.session.getActiveModel?.()),
-			});
-			if (!imageInput) {
-				throw new ToolError(`Read image file [${mimeType}] failed: unsupported image format.`);
-			}
-			return {
-				content: [
-					{ type: "text", text: imageInput.textNote },
-					{ type: "image", data: imageInput.data, mimeType: imageInput.mimeType },
-				],
-				sourcePath: imageInput.resolvedPath,
-			};
-		} catch (error) {
-			if (error instanceof ImageInputTooLargeError) {
-				throw new ToolError(error.message);
-			}
-			throw error;
-		}
-	}
-
-	/**
-	 * Read a converted-PDF image member (`<pdf>:<id>.png`) or, with an empty
-	 * member, list the extractable images. The PDF is converted once into a
-	 * stable session-artifact cache; members are served from that cache through
-	 * the normal image-loading path.
-	 */
-	async #readPdfAsset(
-		target: PdfAssetTarget,
-		suffixCache: SuffixMatchCache,
-		signal?: AbortSignal,
-	): Promise<AgentToolResult<ReadToolDetails>> {
-		throwIfAborted(signal);
-		// Resolve the PDF base path, mirroring the archive resolver's suffix fallback.
-		let absolutePath = resolveReadPath(target.pdfPath, this.session.cwd);
-		let suffixResolution: { from: string; to: string } | undefined;
-		let resolved = false;
-		try {
-			const stat = await Bun.file(absolutePath).stat();
-			resolved = !stat.isDirectory();
-		} catch (error) {
-			if (!isNotFoundError(error) || isRemoteMountPath(absolutePath)) throw error;
-		}
-		if (!resolved) {
-			const suffixMatch = await this.#findSuffixMatchCached(suffixCache, target.pdfPath, signal);
-			if (suffixMatch) {
-				try {
-					const retryStat = await Bun.file(suffixMatch.absolutePath).stat();
-					if (!retryStat.isDirectory()) {
-						absolutePath = suffixMatch.absolutePath;
-						suffixResolution = { from: target.pdfPath, to: suffixMatch.displayPath };
-						resolved = true;
-					}
-				} catch {
-					// fall through to not-found
-				}
-			}
-		}
-		if (!resolved) {
-			throw new ToolError(`Path '${target.pdfPath}' not found`);
-		}
-
-		const { dir, members } = await this.#ensurePdfImagesExtracted(absolutePath, signal);
-		const displayPath = formatPathRelativeToCwd(absolutePath, this.session.cwd);
-
-		// Listing mode: enumerate browsable members.
-		if (target.member === "") {
-			const pdfRef = suffixResolution?.to ?? target.pdfPath;
-			const body =
-				members.length === 0
-					? `No extractable images found in ${displayPath}.`
-					: `${members.length} image${members.length === 1 ? "" : "s"} in ${displayPath}:\n${members
-							.map(name => `- read \`${pdfRef}:${name}\``)
-							.join("\n")}`;
-			return toolResult<ReadToolDetails>({ resolvedPath: absolutePath, suffixResolution })
-				.text(prependSuffixResolutionNotice(body, suffixResolution))
-				.sourcePath(absolutePath)
-				.done();
-		}
-
-		// Membership check guards against path traversal: only known basenames serve.
-		if (!members.includes(target.member)) {
-			const available = members.length === 0 ? "(none)" : members.map(name => `\`${name}\``).join(", ");
-			throw new ToolError(`Image '${target.member}' not found in ${displayPath}. Available: ${available}`);
-		}
-
-		const memberPath = path.join(dir, target.member);
-		const memberStat = await Bun.file(memberPath).stat();
-		const memberMeta = await readImageMetadata(memberPath);
-		const { content, sourcePath } = await this.#buildImageContent({
-			absolutePath: memberPath,
-			mimeType: memberMeta?.mimeType ?? "image/png",
-			fileSize: memberStat.size,
-			imageMetadata: memberMeta,
-		});
-		if (suffixResolution) {
-			const notice = `[Path '${suffixResolution.from}' not found; resolved to '${suffixResolution.to}' via suffix match]`;
-			const firstText = content.find((c): c is TextContent => c.type === "text");
-			if (firstText) firstText.text = `${notice}\n${firstText.text}`;
-			else content.unshift({ type: "text", text: notice });
-		}
-		return toolResult<ReadToolDetails>({ resolvedPath: memberPath, suffixResolution })
-			.content(content)
-			.sourcePath(sourcePath)
-			.done();
-	}
-
-	/**
-	 * Convert `absolutePath` once into a stable per-file image cache and return
-	 * the cache dir plus extracted image basenames. Keyed by file size+mtime so
-	 * edits invalidate; a `.extracted` marker skips re-conversion on later reads.
-	 */
-	async #ensurePdfImagesExtracted(
-		absolutePath: string,
-		signal?: AbortSignal,
-	): Promise<{ dir: string; members: string[] }> {
-		const stat = await Bun.file(absolutePath).stat();
-		const key = Bun.hash(`${absolutePath}:${stat.size}:${stat.mtimeMs}`).toString(16);
-		const base = this.session.getArtifactsDir?.() ?? path.join(os.tmpdir(), "omp-pdf-assets");
-		const dir = path.join(base, "pdf-assets", key);
-		const marker = path.join(dir, ".extracted");
-		const listMembers = async (): Promise<string[]> => {
-			try {
-				const entries = await fs.readdir(dir);
-				return entries.filter(name => PDF_IMAGE_MEMBER_RE.test(name)).sort((a, b) => a.localeCompare(b));
-			} catch {
-				return [];
-			}
-		};
-		if (await Bun.file(marker).exists()) {
-			return { dir, members: await listMembers() };
-		}
-		const result = await convertFileWithMarkit(absolutePath, signal, { imageDir: dir });
-		// markit creates `dir` lazily (only when writing an image); ensure it
-		// exists so listing never faults on an image-less PDF.
-		await fs.mkdir(dir, { recursive: true });
-		const members = await listMembers();
-		if (!result.ok) {
-			// A failed conversion may still have written some images: serve what we
-			// have but do NOT mark complete, so a later read retries instead of
-			// permanently caching a partial member set.
-			if (members.length === 0) {
-				throw new ToolError(`Cannot extract images from PDF: ${result.error ?? "conversion failed"}`);
-			}
-			return { dir, members };
-		}
-		await Bun.write(marker, "");
-		return { dir, members };
 	}
 
 	async #resolveArchiveReadPath(
@@ -2139,15 +1882,6 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		// resolution share misses instead of re-globbing the workspace.
 		const suffixCache: SuffixMatchCache = new Map();
 
-		// A converted-PDF image member (`doc.pdf:p11-img0.png`) is not a real
-		// filesystem path, so it must be intercepted before the archive/sqlite/
-		// local resolvers stat it. Line/raw selectors on a PDF fall through here
-		// (parsePdfAssetReadPath returns null) and stay on the markit text path.
-		const pdfAsset = parsePdfAssetReadPath(readPath);
-		if (pdfAsset) {
-			return this.#readPdfAsset(pdfAsset, suffixCache, signal);
-		}
-
 		const archivePath = await this.#resolveArchiveReadPath(readPath, suffixCache, signal);
 		if (archivePath) {
 			const archiveSubPath = splitPathAndSel(archivePath.archiveSubPath);
@@ -2239,10 +1973,64 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			| undefined;
 
 		if (mimeType) {
-			const imageResult = await this.#buildImageContent({ absolutePath, mimeType, fileSize, imageMetadata });
-			content = imageResult.content;
-			details = {};
-			sourcePath = imageResult.sourcePath;
+			if (this.#inspectImageEnabled) {
+				const metadata = imageMetadata;
+				const outputMime = metadata?.mimeType ?? mimeType;
+				const outputBytes = fileSize;
+				const metadataLines = [
+					"Image metadata:",
+					`- MIME: ${outputMime}`,
+					`- Bytes: ${outputBytes} (${formatBytes(outputBytes)})`,
+					metadata?.width !== undefined && metadata.height !== undefined
+						? `- Dimensions: ${metadata.width}x${metadata.height}`
+						: "- Dimensions: unknown",
+					metadata?.channels !== undefined ? `- Channels: ${metadata.channels}` : "- Channels: unknown",
+					metadata?.hasAlpha === true
+						? "- Alpha: yes"
+						: metadata?.hasAlpha === false
+							? "- Alpha: no"
+							: "- Alpha: unknown",
+					"",
+					`If you want to analyze the image, call inspect_image with path="${formatPathRelativeToCwd(
+						absolutePath,
+						this.session.cwd,
+					)}" and a question describing what to inspect and the desired output format.`,
+				];
+				content = [{ type: "text", text: metadataLines.join("\n") }];
+				details = {};
+				sourcePath = absolutePath;
+			} else {
+				if (fileSize > MAX_IMAGE_SIZE) {
+					const sizeStr = formatBytes(fileSize);
+					const maxStr = formatBytes(MAX_IMAGE_SIZE);
+					throw new ToolError(`Image file too large: ${sizeStr} exceeds ${maxStr} limit.`);
+				}
+				try {
+					const imageInput = await loadImageInput({
+						path: readPath,
+						cwd: this.session.cwd,
+						autoResize: this.#autoResizeImages,
+						maxBytes: MAX_IMAGE_SIZE,
+						resolvedPath: absolutePath,
+						detectedMimeType: mimeType,
+						excludeWebP: webpExclusionForModel(this.session.getActiveModel?.()),
+					});
+					if (!imageInput) {
+						throw new ToolError(`Read image file [${mimeType}] failed: unsupported image format.`);
+					}
+					content = [
+						{ type: "text", text: imageInput.textNote },
+						{ type: "image", data: imageInput.data, mimeType: imageInput.mimeType },
+					];
+					details = {};
+					sourcePath = imageInput.resolvedPath;
+				} catch (error) {
+					if (error instanceof ImageInputTooLargeError) {
+						throw new ToolError(error.message);
+					}
+					throw error;
+				}
+			}
 		} else if (isNotebookPath(absolutePath) && !isRawSelector(parsed)) {
 			const notebookText = await readEditableNotebookText(absolutePath, localReadPath);
 			if (isMultiRange(parsed) && parsed.kind === "lines") {
@@ -2267,21 +2055,15 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				// raw mode apply against the converted output. Without this,
 				// `file.pdf:50-100` silently returned the head of the document
 				// because only `truncateHead` was being applied.
-				//
-				// For PDFs, rewrite markit's inert `<!-- image: ... -->` placeholders
-				// into `read <pdf>:<id>.png` handles. Applied to the whole body so
-				// every selector view (full, line-range, multi-range, raw) surfaces
-				// the browsable handle rather than the dead placeholder.
-				const md = ext === ".pdf" ? rewritePdfImagePlaceholders(result.content, localReadPath) : result.content;
 				if (isMultiRange(parsed) && parsed.kind === "lines") {
-					return this.#buildInMemoryMultiRangeResult(md, parsed.ranges, {
+					return this.#buildInMemoryMultiRangeResult(result.content, parsed.ranges, {
 						details: { resolvedPath: absolutePath },
 						sourcePath: absolutePath,
 						entityLabel: "document",
 					});
 				}
 				const { offset, limit } = selToOffsetLimit(parsed);
-				return this.#buildInMemoryTextResult(md, offset, limit, {
+				return this.#buildInMemoryTextResult(result.content, offset, limit, {
 					details: { resolvedPath: absolutePath },
 					sourcePath: absolutePath,
 					entityLabel: "document",

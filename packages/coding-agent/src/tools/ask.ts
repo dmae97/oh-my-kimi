@@ -19,7 +19,7 @@ import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallb
 import type { ToolExample } from "@oh-my-pi/pi-ai";
 import { type Component, Markdown, type MarkdownTheme, renderInlineMarkdown, TERMINAL, Text } from "@oh-my-pi/pi-tui";
 import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
+import { type as arkType } from "arktype";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { ExtensionUISelectItem } from "../extensibility/extensions";
 import { getMarkdownTheme, type Theme, theme } from "../modes/theme/theme";
@@ -34,24 +34,24 @@ import { ToolAbortError } from "./tool-errors";
 // Types
 // =============================================================================
 
-const OptionItem = z.object({
-	label: z.string().describe("display label"),
-	description: z.string().describe("optional explanatory text displayed below the label").optional(),
+const OptionItem = arkType({
+	label: "string",
+	"description?": "string",
 });
 
-const QuestionItem = z.object({
-	id: z.string().describe("question id"),
-	question: z.string().describe("question text"),
-	options: z.array(OptionItem).describe("available options"),
-	multi: z.boolean().describe("allow multiple selections").optional(),
-	recommended: z.number().describe("recommended option index").optional(),
+const QuestionItem = arkType({
+	id: "string",
+	question: "string",
+	options: OptionItem.array(),
+	"multi?": "boolean",
+	"recommended?": "number",
 });
 
-const askSchema = z.object({
-	questions: z.array(QuestionItem).min(1).describe("questions to ask"),
+const askSchema = arkType({
+	questions: QuestionItem.array().atLeastLength(1),
 });
 
-export type AskToolInput = z.infer<typeof askSchema>;
+export type AskToolInput = typeof askSchema.infer;
 
 /** Result for a single question */
 export interface QuestionResult {
@@ -424,7 +424,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 	readonly parameters = askSchema;
 	readonly strict = true;
 
-	readonly examples: readonly ToolExample<z.input<typeof askSchema>>[] = [
+	readonly examples: readonly ToolExample<typeof askSchema.infer>[] = [
 		{
 			caption: "Single question",
 			call: {

@@ -126,7 +126,6 @@ import {
 	type AdvisorNote,
 	AdvisorRuntime,
 	type AdvisorSeverity,
-	deriveAdvisorTelemetry,
 	formatAdvisorBatchContent,
 	isAdvisorInterruptImmuneTurnActive,
 	isInterruptingSeverity,
@@ -1759,12 +1758,21 @@ export class AgentSession {
 
 		// Thread the primary's telemetry into the advisor loop so the advisor
 		// model's GenAI spans + usage/cost hooks fire like every other model call,
-		// stamped with the advisor's own identity (see deriveAdvisorTelemetry).
-		const advisorTelemetry = deriveAdvisorTelemetry(this.agent.telemetry, {
-			id: advisorSessionId,
-			name: MODEL_ROLES.advisor.name,
-			description: formatModelString(advisorSel.model),
-		});
+		// stamped with the advisor's own identity. `conversationId` is cleared so
+		// the advisor loop falls back to its own `-advisor` session id for
+		// `gen_ai.conversation.id` instead of inheriting the primary's
+		// conversation; undefined telemetry stays undefined (zero-overhead no-op).
+		const advisorTelemetry = this.agent.telemetry
+			? {
+					...this.agent.telemetry,
+					agent: {
+						id: advisorSessionId,
+						name: MODEL_ROLES.advisor.name,
+						description: formatModelString(advisorSel.model),
+					},
+					conversationId: undefined,
+				}
+			: undefined;
 		const advisorAgent = new Agent({
 			initialState: {
 				systemPrompt,

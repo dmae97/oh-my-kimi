@@ -6,7 +6,7 @@
  * `/v1/healthz` require a bearer token.
  */
 import { readSseEvents } from "@oh-my-pi/pi-utils";
-import type { ZodType, infer as zInfer } from "zod/v4";
+import { type } from "arktype";
 import type { AuthCredential } from "../auth-storage";
 import type {
 	CredentialDisableRequest,
@@ -132,14 +132,14 @@ export class AuthBrokerClient {
 		}
 		const text = await response.text();
 		const raw = this.#parseJson(text, response.status);
-		const validated = snapshotResponseSchema.safeParse(raw);
-		if (!validated.success) {
+		const validated = snapshotResponseSchema(raw);
+		if (validated instanceof type.errors) {
 			throw new AuthBrokerError("Auth broker response failed schema validation", {
 				status: response.status,
-				body: validated.error.message,
+				body: validated.summary,
 			});
 		}
-		const snapshot = validated.data as SnapshotResponse;
+		const snapshot = validated as SnapshotResponse;
 		return { status: 200, snapshot, generation: etagGeneration ?? snapshot.generation };
 	}
 
@@ -200,13 +200,13 @@ export class AuthBrokerClient {
 					cause: err,
 				});
 			}
-			const validated = snapshotStreamEventSchema.safeParse(parsed);
-			if (!validated.success) {
+			const validated = snapshotStreamEventSchema(parsed);
+			if (validated instanceof type.errors) {
 				throw new AuthBrokerError("Auth broker stream event failed schema validation", {
-					body: validated.error.message,
+					body: validated.summary,
 				});
 			}
-			const event = validated.data;
+			const event = validated as SnapshotStreamEvent;
 			if (!sawFirstEvent) {
 				sawFirstEvent = true;
 				if (event.kind !== "snapshot") {
@@ -262,22 +262,22 @@ export class AuthBrokerClient {
 		}) as Promise<CredentialUploadResponse>;
 	}
 
-	async #request<TSchema extends ZodType>(
+	async #request(
 		method: "GET" | "POST",
 		path: string,
-		opts: { schema: TSchema; auth?: boolean; body?: unknown; signal?: AbortSignal },
-	): Promise<zInfer<TSchema>> {
+		opts: { schema: (input: unknown) => unknown; auth?: boolean; body?: unknown; signal?: AbortSignal },
+	): Promise<any> {
 		const response = await this.#fetchRaw(method, path, opts);
 		const text = await response.text();
 		const raw = this.#parseJson(text, response.status);
-		const validated = opts.schema.safeParse(raw);
-		if (!validated.success) {
+		const validated = opts.schema(raw);
+		if (validated instanceof type.errors) {
 			throw new AuthBrokerError("Auth broker response failed schema validation", {
 				status: response.status,
-				body: validated.error.message,
+				body: validated.summary,
 			});
 		}
-		return validated.data;
+		return validated;
 	}
 
 	#parseJson(text: string, status: number): unknown {

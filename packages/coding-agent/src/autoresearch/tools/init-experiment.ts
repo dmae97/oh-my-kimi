@@ -1,7 +1,7 @@
 import * as path from "node:path";
 
 import { Text } from "@oh-my-pi/pi-tui";
-import { z } from "zod/v4";
+import { type } from "arktype";
 import type { ToolDefinition } from "../../extensibility/extensions";
 import type { Theme } from "../../modes/theme/theme";
 import { replaceTabs, truncateToWidth } from "../../tools/render-utils";
@@ -16,21 +16,18 @@ export const HARNESS_FILENAME = "autoresearch.sh";
 export const DEFAULT_HARNESS_COMMAND = `bash ${HARNESS_FILENAME}`;
 const HARNESS_COMMIT_TITLE = "autoresearch: harness setup";
 
-const initExperimentSchema = z.object({
-	name: z.string().describe("experiment name"),
-	goal: z.string().describe("session goal").optional(),
-	primary_metric: z.string().describe("primary metric name"),
-	metric_unit: z.string().describe("metric unit (e.g. ms, µs, mb)").optional(),
-	direction: z
-		.enum(["lower", "higher"] as const)
-		.describe("better direction (default lower)")
-		.optional(),
-	secondary_metrics: z.array(z.string()).describe("secondary metric names").optional(),
-	scope_paths: z.array(z.string()).describe("expected-to-modify paths").optional(),
-	off_limits: z.array(z.string()).describe("off-limits paths").optional(),
-	constraints: z.array(z.string()).describe("free-form constraints").optional(),
-	max_iterations: z.number().describe("soft iteration cap per segment").optional(),
-	new_segment: z.boolean().describe("bump to a new segment in existing session").optional(),
+const initExperimentSchema = type({
+	name: "string",
+	"goal?": "string",
+	primary_metric: "string",
+	"metric_unit?": "string",
+	"direction?": "'lower' | 'higher'",
+	"secondary_metrics?": "string[]",
+	"scope_paths?": "string[]",
+	"off_limits?": "string[]",
+	"constraints?": "string[]",
+	"max_iterations?": "number",
+	"new_segment?": "boolean",
 });
 
 interface InitExperimentDetails {

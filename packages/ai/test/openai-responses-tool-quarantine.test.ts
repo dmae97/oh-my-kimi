@@ -3,7 +3,7 @@ import { buildParams, convertTools } from "@oh-my-pi/pi-ai/providers/openai-resp
 import type { Context, Model, ModelSpec, Tool } from "@oh-my-pi/pi-ai/types";
 import { findStrictToolSchemaViolation } from "@oh-my-pi/pi-ai/utils/schema";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import { z } from "zod/v4";
+import { type } from "arktype";
 
 function makeModel(): Model<"openai-responses"> {
 	return buildModel({
@@ -69,7 +69,7 @@ const badTool: Tool = {
 const goodTool: Tool = {
 	name: "read_file",
 	description: "read a file",
-	parameters: z.object({ path: z.string() }),
+	parameters: type({ path: "string" }),
 };
 
 describe("convertTools quarantine (#2652)", () => {

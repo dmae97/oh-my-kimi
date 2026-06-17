@@ -73,7 +73,6 @@ function isGoogleVertexAuthenticatedModel(model: Model<Api>): boolean {
 	);
 }
 
-
 function createVertexAuthenticatedFetch(options: StreamOptions | undefined): FetchImpl {
 	const baseFetch = options?.fetch ?? fetch;
 	const vertexFetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {

@@ -11,7 +11,7 @@ import {
 	selectDiscoverableToolNamesByServer,
 	summarizeDiscoverableTools,
 } from "@oh-my-pi/pi-coding-agent/tool-discovery/tool-index";
-import { z } from "zod/v4";
+import { type } from "arktype";
 
 // ─── Minimal AgentTool stub ───────────────────────────────────────────────────
 
@@ -120,7 +120,7 @@ describe("getDiscoverableTool", () => {
 
 	it("extracts schema keys from Zod-schema parameters via wire conversion", () => {
 		const tool = makeAgentTool("foo", {
-			parameters: z.object({ gamma: z.string(), alpha: z.number().optional(), beta: z.boolean() }),
+			parameters: type({ gamma: "string", alpha: "number?", beta: "boolean" }),
 		});
 		const result = getDiscoverableTool(tool);
 		expect(result!.schemaKeys).toEqual(["alpha", "beta", "gamma"]);

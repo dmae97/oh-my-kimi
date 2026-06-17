@@ -1,8 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getAgentDir, isEnoent, logger } from "@oh-my-pi/pi-utils";
+import type { Type } from "arktype";
 import { JSONC, YAML } from "bun";
-import type { ZodType } from "zod/v4";
 
 /** Minimal subset of the AJV ConfigSchemaError shape this module actually relies on. */
 interface ConfigSchemaError {
@@ -55,7 +55,7 @@ function migrateJsonToYml(jsonPath: string, ymlPath: string) {
 
 export interface IConfigFile<T> {
 	readonly id: string;
-	readonly schema: ZodType<T>;
+	readonly schema: Type;
 	path?(): string;
 	load(): T | null;
 	invalidate?(): void;
@@ -129,7 +129,7 @@ export class ConfigFile<T> implements IConfigFile<T> {
 
 	constructor(
 		readonly id: string,
-		readonly schema: ZodType<T>,
+		readonly schema: Type,
 		configPath: string = path.join(getAgentDir(), `${id}.yml`),
 	) {
 		this.#basePath = configPath;
@@ -193,10 +193,10 @@ export class ConfigFile<T> implements IConfigFile<T> {
 	}
 
 	createDefault(): T {
-		const parsed = this.schema.safeParse({});
-		if (parsed.success) return parsed.data;
-		const fallback = this.schema.safeParse(undefined);
-		if (fallback.success) return fallback.data;
+		const parsed = this.schema({});
+		if (!(parsed instanceof Error)) return parsed as T;
+		const fallback = this.schema(undefined);
+		if (!(fallback instanceof Error)) return fallback as T;
 		throw new ConfigError(this.id, undefined, {
 			err: new Error("Schema produced no default value"),
 			stage: "createDefault",
@@ -219,19 +219,17 @@ export class ConfigFile<T> implements IConfigFile<T> {
 				throw new Error(`Invalid config file path: ${this.#basePath}`);
 			}
 
-			const checked = this.schema.safeParse(parsed);
-			if (!checked.success) {
+			const checked = this.schema(parsed);
+			if (checked instanceof Error) {
 				const schemaErrors: ConfigSchemaError[] = [];
-				for (const issue of checked.error.issues) {
-					const instancePath = issue.path.length === 0 ? "" : `/${issue.path.map(String).join("/")}`;
-					schemaErrors.push({ instancePath, message: issue.message });
-					if (schemaErrors.length >= 50) break;
-				}
+				// arktype errors are Error instances with a message property
+				// Extract the error message as a single schema error
+				schemaErrors.push({ instancePath: "root", message: checked.message });
 				const error = new ConfigError(this.id, schemaErrors);
 				logger.warn("Failed to parse config file", { path: this.path(), error });
 				return this.#storeCache({ error, status: "error" });
 			}
-			const value = checked.data;
+			const value = checked as T;
 			try {
 				this.#auxValidate?.(value);
 			} catch (error) {

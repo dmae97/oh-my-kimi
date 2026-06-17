@@ -23,6 +23,7 @@
  * massage shapes the LLM almost got right.
  */
 import { structuredCloneJSON } from "@oh-my-pi/pi-utils";
+import { type Type, type } from "arktype";
 import type { ZodType } from "zod/v4";
 import type { $ZodIssue as ZodIssue } from "zod/v4/core";
 import type { Tool, ToolCall } from "../types";
@@ -32,7 +33,8 @@ import {
 	type JsonSchemaValidationIssue,
 	validateJsonSchemaValue,
 } from "./schema/json-schema-validator";
-import { isZodSchema, zodToWireSchema } from "./schema/wire";
+import { stamp } from "./schema/stamps";
+import { arkToWireSchema, isArkSchema, isZodSchema, zodToWireSchema } from "./schema/wire";
 
 // ============================================================================
 // Type Coercion Utilities
@@ -1139,26 +1141,30 @@ type ValidationContext =
 			json: Record<string, unknown>;
 	  }
 	| {
+			kind: "arktype";
+			ark: Type;
+			json: Record<string, unknown>;
+	  }
+	| {
 			kind: "json";
 			json: Record<string, unknown>;
 	  };
 
 /**
  * Cache the validation context derived from a tool's parameters schema.
- * Keyed by the parameters object identity, which is stable across tool
- * registrations.
+ * Keyed by the parameters object identity (stable across tool registrations),
+ * via {@link stamp} so callable ArkType schemas — and any frozen host — degrade
+ * to recompute-on-call instead of throwing on assignment.
  */
 const kValidationContext = Symbol("ai.validationContext");
-type ParamsWithValidationContext = object & { [kValidationContext]?: ValidationContext };
 function getValidationContext(tool: Tool): ValidationContext {
-	const params = tool.parameters as ParamsWithValidationContext;
-	const existing = params[kValidationContext];
-	if (existing) return existing;
-	const ctx: ValidationContext = isZodSchema(params)
-		? { kind: "zod", zod: params, json: zodToWireSchema(params) }
-		: { kind: "json", json: upgradeJsonSchemaTo202012(params) as Record<string, unknown> };
-	params[kValidationContext] = ctx;
-	return ctx;
+	return stamp(tool.parameters as object, kValidationContext, params =>
+		isArkSchema(params)
+			? { kind: "arktype", ark: params, json: arkToWireSchema(params) }
+			: isZodSchema(params)
+				? { kind: "zod", zod: params, json: zodToWireSchema(params) }
+				: { kind: "json", json: upgradeJsonSchemaTo202012(params) as Record<string, unknown> },
+	);
 }
 
 type ContextValidationResult =
@@ -1208,6 +1214,24 @@ function validateContext(ctx: ValidationContext, value: unknown): ContextValidat
 			success: false,
 			flatIssues: flattenIssues(result.error.issues),
 			messages: result.error.issues.map(issue => `  - ${formatIssuePath(issue.path)}: ${issue.message}`),
+		};
+	}
+
+	if (ctx.kind === "arktype") {
+		const out = ctx.ark(value);
+		if (!(out instanceof type.errors)) {
+			return { success: true, value: preserveUnknownRootFields(value, out) };
+		}
+		// A `.narrow()`/cross-field failure can have ArkType reject while the wire
+		// JSON (its predicate dropped by the toJsonSchema fallback) accepts — then
+		// there are no json issues to coerce and we fall through to the formatted
+		// error built from ArkType's own messages.
+		const jr = validateJsonSchemaValue(ctx.json, value);
+		const flatIssues = jr.success ? [] : flattenJsonSchemaIssues(jr.issues);
+		return {
+			success: false,
+			flatIssues,
+			messages: out.map(e => `  - ${formatIssuePath(e.path)}: ${e.message}`),
 		};
 	}
 

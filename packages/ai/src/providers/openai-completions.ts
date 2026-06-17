@@ -71,14 +71,14 @@ import {
 	isCompiledGrammarTooLargeStrictError,
 	isOpenRouterAnthropicModel,
 	isStrictToolsDisabledForScope,
-	type OpenAICompletionsParams,
 	type OpenAICompatPolicy,
+	type OpenAICompletionsParams,
 	type OpenAIRequestSetup,
 	type OpenAIStrictToolsState,
 	parseAzureDeploymentNameMap,
+	resolveOpenAICompatPolicy,
 	resolveOpenAIOutputTokenParam,
 	resolveOpenAIRequestSetup,
-	resolveOpenAICompatPolicy,
 	resolveZaiReasoningOutputClamp,
 	shouldRetryWithoutStrictTools,
 } from "./openai-shared";
@@ -1305,7 +1305,6 @@ function buildParams(
 	if (initialCompat.supportsStore) {
 		params.store = false;
 	}
-
 
 	if (options?.temperature !== undefined) {
 		params.temperature = options.temperature;

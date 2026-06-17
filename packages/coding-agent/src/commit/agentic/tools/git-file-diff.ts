@@ -1,4 +1,4 @@
-import { z } from "zod/v4";
+import { type } from "arktype";
 import type { CommitAgentState } from "../../../commit/agentic/state";
 import type { CustomTool } from "../../../extensibility/custom-tools/types";
 import * as git from "../../../utils/git";
@@ -131,9 +131,9 @@ function processDiffs(files: string[], diffs: Map<string, string>): { result: st
 	return { result: parts.join("\n\n"), truncatedFiles };
 }
 
-const gitFileDiffSchema = z.object({
-	files: z.array(z.string().describe("file to diff")).min(1).max(10),
-	staged: z.boolean().describe("use staged changes (default true)").optional(),
+const gitFileDiffSchema = type({
+	files: type("string[]").atLeastLength(1).atMostLength(10).describe("files to diff"),
+	"staged?": type("boolean").describe("use staged changes (default true)"),
 });
 
 export function createGitFileDiffTool(cwd: string, state: CommitAgentState): CustomTool<typeof gitFileDiffSchema> {

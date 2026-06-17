@@ -12,7 +12,7 @@ import type {
 import type { AssistantMessage, AssistantMessageEvent, Message, ToolResultMessage } from "@oh-my-pi/pi-ai";
 import { createMockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
-import { z } from "zod/v4";
+import { type } from "arktype";
 import { createAssistantMessage, createUserMessage } from "./helpers";
 
 // Simple identity converter for tests - just passes through standard messages
@@ -188,7 +188,7 @@ describe("agentLoop with AgentMessage", () => {
 		// gated on the trailing-garbage `T` co-signal, and the loop supplies no parse
 		// boundary, so the call commits + executes once instead of being detected as
 		// a leak and retried/escalated.
-		const toolSchema = z.object({ input: z.string() });
+		const toolSchema = type({ input: "string" });
 		const executed: string[] = [];
 		const tool: AgentTool<typeof toolSchema, { input: string }> = {
 			name: "edit",
@@ -401,7 +401,7 @@ describe("agentLoop with AgentMessage", () => {
 	});
 
 	it("provides tool call batch context", async () => {
-		const toolSchema = z.object({ value: z.string() });
+		const toolSchema = type({ value: "string" });
 		const contexts: ToolCallContext[] = [];
 		const tool: AgentTool<typeof toolSchema, { value: string }> = {
 			name: "echo",
@@ -456,7 +456,7 @@ describe("agentLoop with AgentMessage", () => {
 	});
 
 	it("should handle tool calls and results", async () => {
-		const toolSchema = z.object({ value: z.string() });
+		const toolSchema = type({ value: "string" });
 		const executed: string[] = [];
 		const tool: AgentTool<typeof toolSchema, { value: string }> = {
 			name: "echo",
@@ -503,7 +503,7 @@ describe("agentLoop with AgentMessage", () => {
 	});
 
 	it("injects and strips intent when intent tracing is enabled", async () => {
-		const toolSchema = z.object({ value: z.string() });
+		const toolSchema = type({ value: "string" });
 		const executedParams: Record<string, unknown>[] = [];
 		const tool: AgentTool<typeof toolSchema, { value: string }> = {
 			name: "echo",
@@ -568,7 +568,7 @@ describe("agentLoop with AgentMessage", () => {
 	});
 
 	it("runs shared tools in parallel and emits completion-ordered results", async () => {
-		const toolSchema = z.object({ value: z.string() });
+		const toolSchema = type({ value: "string" });
 		const startTimes: Record<string, number> = {};
 		const finishTimes: Record<string, number> = {};
 		const { promise: slowContinue, resolve: slowResolve } = Promise.withResolvers<void>();
@@ -648,7 +648,7 @@ describe("agentLoop with AgentMessage", () => {
 	});
 
 	it("resolves function-form concurrency per call", async () => {
-		const toolSchema = z.object({ value: z.string(), exclusive: z.boolean().optional() });
+		const toolSchema = type({ value: "string", exclusive: "boolean?" });
 		const startTimes: Record<string, number> = {};
 		const finishTimes: Record<string, number> = {};
 		const { promise: slowContinue, resolve: slowResolve } = Promise.withResolvers<void>();
@@ -778,7 +778,7 @@ describe("agentLoop with AgentMessage", () => {
 	});
 
 	it("should skip remaining tool calls when steering is queued", async () => {
-		const toolSchema = z.object({ value: z.string() });
+		const toolSchema = type({ value: "string" });
 		const executed: string[] = [];
 		const tool: AgentTool<typeof toolSchema, { value: string }> = {
 			name: "echo",
@@ -868,7 +868,7 @@ describe("agentLoop with AgentMessage", () => {
 	});
 
 	it("drains queued steering by aborting an interruptible tool mid-wait", async () => {
-		const toolSchema = z.object({});
+		const toolSchema = type({});
 		let steerReady = false;
 		let drained = false;
 		let observedAbort = false;
@@ -940,7 +940,7 @@ describe("agentLoop with AgentMessage", () => {
 	});
 
 	it("does not abort a non-interruptible tool mid-wait; steering still drains at the boundary", async () => {
-		const toolSchema = z.object({});
+		const toolSchema = type({});
 		let steerReady = false;
 		let drained = false;
 		let observedAbort = false;
@@ -1017,7 +1017,7 @@ describe("agentLoop with AgentMessage", () => {
 		// the message showed as "sent" but the agent never responded, and queue
 		// consumers (clearAllQueues/hasQueuedMessages) could no longer see it.
 		// The poll must only peek; an abort must leave the queue untouched.
-		const toolSchema = z.object({ value: z.string() });
+		const toolSchema = type({ value: "string" });
 		const executed: string[] = [];
 		const abortController = new AbortController();
 		const steerTriggered = Promise.withResolvers<void>();
@@ -1099,7 +1099,7 @@ describe("agentLoop with AgentMessage", () => {
 		// pulls the message back into the editor) before the loop reaches the
 		// injection boundary. The boundary dequeue must then find nothing and the
 		// loop must keep going without a phantom user message.
-		const toolSchema = z.object({ value: z.string() });
+		const toolSchema = type({ value: "string" });
 		const executed: string[] = [];
 		let steerReady = false;
 
@@ -1171,7 +1171,7 @@ describe("agentLoop with AgentMessage", () => {
 	});
 
 	it("injects aside messages at the step boundary without interrupting tools", async () => {
-		const toolSchema = z.object({ value: z.string() });
+		const toolSchema = type({ value: "string" });
 		const executed: string[] = [];
 		const tool: AgentTool<typeof toolSchema, { value: string }> = {
 			name: "echo",
@@ -1273,7 +1273,7 @@ describe("agentLoop with AgentMessage", () => {
 });
 
 it("refreshes tools and system prompt between same-turn model calls", async () => {
-	const toolSchema = z.object({ value: z.string() });
+	const toolSchema = type({ value: "string" });
 	let activeSystemPrompt = "prompt-one";
 	let activeTools: Array<AgentTool<typeof toolSchema, { value: string }>> = [];
 	const betaTool: AgentTool<typeof toolSchema, { value: string }> = {
@@ -1338,7 +1338,7 @@ it("refreshes tools and system prompt between same-turn model calls", async () =
 
 describe("agentLoop useless-flag propagation", () => {
 	async function runProbe(toolReturn: unknown): Promise<ToolResultMessage> {
-		const toolSchema = z.object({});
+		const toolSchema = type({});
 		const tool: AgentTool<typeof toolSchema> = {
 			name: "probe",
 			label: "Probe",
@@ -1492,7 +1492,7 @@ describe("agentLoopContinue with AgentMessage", () => {
 	});
 
 	it("blocks tool execution when beforeToolCall returns block", async () => {
-		const toolSchema = z.object({ value: z.string() });
+		const toolSchema = type({ value: "string" });
 		const executed: string[] = [];
 		const tool: AgentTool<typeof toolSchema, { value: string }> = {
 			name: "echo",
@@ -1538,7 +1538,7 @@ describe("agentLoopContinue with AgentMessage", () => {
 	});
 
 	it("passes beforeToolCall args mutations into tool.execute without revalidation", async () => {
-		const toolSchema = z.object({ value: z.string() });
+		const toolSchema = type({ value: "string" });
 		const executed: Array<string | number> = [];
 		const tool: AgentTool<typeof toolSchema, { value: string | number }> = {
 			name: "echo",
@@ -1580,7 +1580,7 @@ describe("agentLoopContinue with AgentMessage", () => {
 	});
 
 	it("afterToolCall overrides content and isError on the emitted tool result", async () => {
-		const toolSchema = z.object({ value: z.string() });
+		const toolSchema = type({ value: "string" });
 		const tool: AgentTool<typeof toolSchema, { value: string }> = {
 			name: "echo",
 			label: "Echo",
@@ -1644,7 +1644,7 @@ describe("agentLoopContinue with AgentMessage", () => {
 	});
 
 	it("runs afterToolCall for a completed result even when the run aborts before the hook", async () => {
-		const toolSchema = z.object({ value: z.string() });
+		const toolSchema = type({ value: "string" });
 		const controller = new AbortController();
 		const tool: AgentTool<typeof toolSchema, { value: string }> = {
 			name: "echo",
@@ -1693,7 +1693,7 @@ describe("agentLoopContinue with AgentMessage", () => {
 	});
 
 	it("surfaces afterToolCall errors as a tool error result", async () => {
-		const toolSchema = z.object({ value: z.string() });
+		const toolSchema = type({ value: "string" });
 		const tool: AgentTool<typeof toolSchema, { value: string }> = {
 			name: "echo",
 			label: "Echo",
@@ -1779,7 +1779,7 @@ describe("agentLoopContinue with AgentMessage", () => {
 		// tool result must guide the model towards a chunked retry — otherwise the
 		// auto-continue loop re-emits the same oversized payload and the file never
 		// gets written ("write tool crash" from the reporter's POV).
-		const writeSchema = z.object({ path: z.string(), content: z.string() });
+		const writeSchema = type({ path: "string", content: "string" });
 		const executed: { path: string; content: string }[] = [];
 		const writeTool: AgentTool<typeof writeSchema, { path: string }> = {
 			name: "write",
@@ -1842,7 +1842,7 @@ describe("agentLoopContinue with AgentMessage", () => {
 		expect(text).toMatch(/split|chunk/i);
 	});
 	it("fills whitespace-only error tool results so Anthropic does not 400", async () => {
-		const toolSchema = z.object({ value: z.string() });
+		const toolSchema = type({ value: "string" });
 		const tool: AgentTool<typeof toolSchema, { value: string }> = {
 			name: "echo",
 			label: "Echo",

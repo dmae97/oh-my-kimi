@@ -13,7 +13,7 @@ import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TOOL_DISCOVERY_AUTO_THRESHOLD } from "@oh-my-pi/pi-coding-agent/tool-discovery/mode";
 import { Snowflake } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
+import { type } from "arktype";
 
 function createMcpCustomTool(name: string, serverName: string, mcpToolName: string): CustomTool {
 	return {
@@ -22,7 +22,7 @@ function createMcpCustomTool(name: string, serverName: string, mcpToolName: stri
 		description: `Tool ${mcpToolName} from ${serverName}`,
 		mcpServerName: serverName,
 		mcpToolName,
-		parameters: z.object({ query: z.string() }),
+		parameters: type({ query: "string" }),
 		async execute() {
 			return { content: [{ type: "text", text: `${name} executed` }] };
 		},

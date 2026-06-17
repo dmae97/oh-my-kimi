@@ -15,7 +15,7 @@ import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
 import type { FetchImpl, Model, Static, TSchema } from "@oh-my-pi/pi-ai";
 import type { Component } from "@oh-my-pi/pi-tui";
 import type { logger as PiLogger } from "@oh-my-pi/pi-utils";
-import type { z } from "zod/v4";
+import type { type as ArkType } from "arktype";
 import type { Rule } from "../../capability/rule";
 import type { ModelRegistry } from "../../config/model-registry";
 import type { Settings } from "../../config/settings";
@@ -61,10 +61,10 @@ export interface CustomToolAPI {
 	hasUI: boolean;
 	/** File logger for error/warning/debug messages */
 	logger: typeof PiLogger;
-	/** Injected zod-backed typebox shim (legacy/compat — Zod-authored tools are preferred). */
+	/** Injected typebox shim (legacy/compat — arktype-authored tools are preferred). */
 	typebox: typeof TypeBox;
-	/** Injected zod module for Zod-authored custom tools. */
-	zod: typeof z;
+	/** Injected arktype module for arktype-authored custom tools. */
+	arktype: typeof ArkType;
 	/** Injected pi-coding-agent exports */
 	pi: typeof PiCodingAgent;
 	/** Push a preview action that can later be resolved with the hidden resolve tool */
@@ -195,7 +195,7 @@ export interface CustomTool<TParams extends TSchema = TSchema, TDetails = any> {
 	strict?: boolean;
 	/** Description for LLM */
 	description: string;
-	/** Parameter schema (Zod or TypeBox; TypeBox is auto-lifted to Zod at registration). */
+	/** Parameter schema (arktype, TypeBox, or legacy formats). */
 	parameters: TParams;
 	/** If true, tool is excluded unless explicitly listed in --tools or agent's tools field */
 	hidden?: boolean;

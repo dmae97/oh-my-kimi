@@ -1,6 +1,6 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { prompt } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
+import { type } from "arktype";
 import checkpointDescription from "../prompts/tools/checkpoint.md" with { type: "text" };
 import rewindDescription from "../prompts/tools/rewind.md" with { type: "text" };
 import type { ToolSession } from ".";
@@ -17,17 +17,17 @@ export interface CheckpointState {
 	startedAt: string;
 }
 
-const checkpointSchema = z.object({
-	goal: z.string().describe("investigation goal"),
+const checkpointSchema = type({
+	goal: "string",
 });
 
-type CheckpointParams = z.infer<typeof checkpointSchema>;
+type CheckpointParams = typeof checkpointSchema.infer;
 
-const rewindSchema = z.object({
-	report: z.string().describe("investigation findings"),
+const rewindSchema = type({
+	report: "string",
 });
 
-type RewindParams = z.infer<typeof rewindSchema>;
+type RewindParams = typeof rewindSchema.infer;
 
 export interface CheckpointToolDetails {
 	goal: string;

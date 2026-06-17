@@ -1,7 +1,7 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { ToolExample } from "@oh-my-pi/pi-ai";
 import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
+import { type } from "arktype";
 import browserDescription from "../prompts/tools/browser.md" with { type: "text" };
 import type { ToolSession } from "../sdk";
 import { enforceInlineByteCap } from "../session/streaming-output";
@@ -23,41 +23,33 @@ export type { Observation, ObservationEntry } from "./browser/tab-protocol";
 
 const DEFAULT_TAB_NAME = "main";
 
-const appSchema = z.object({
-	path: z.string().describe("binary path to spawn").optional(),
-	cdp_url: z.string().describe("existing cdp endpoint").optional(),
-	args: z.array(z.string()).describe("extra cli args").optional(),
-	target: z.string().describe("substring to pick a window").optional(),
+const appSchema = type({
+	"path?": "string",
+	"cdp_url?": "string",
+	"args?": "string[]",
+	"target?": "string",
 });
 
-const browserSchema = z.object({
-	action: z.enum(["open", "close", "run"] as const).describe("operation"),
-	name: z.string().describe("tab id (default 'main')").optional(),
-	url: z.string().describe("url to open").optional(),
-	app: appSchema.optional(),
-	viewport: z
-		.object({
-			width: z.number(),
-			height: z.number(),
-			scale: z.number().optional(),
-		})
-		.optional(),
-	wait_until: z
-		.enum(["load", "domcontentloaded", "networkidle0", "networkidle2"] as const)
-		.describe("navigation wait condition")
-		.optional(),
-	dialogs: z
-		.enum(["accept", "dismiss"] as const)
-		.describe("auto-handle dialogs")
-		.optional(),
-	code: z.string().describe("js body to run in tab").optional(),
-	timeout: z.number().default(30).describe("timeout in seconds (default 30, max 300)").optional(),
-	all: z.boolean().describe("close every tab").optional(),
-	kill: z.boolean().describe("also kill spawned-app browsers").optional(),
+const browserSchema = type({
+	action: "'open' | 'close' | 'run'",
+	"name?": "string",
+	"url?": "string",
+	"app?": appSchema,
+	"viewport?": {
+		width: "number",
+		height: "number",
+		"scale?": "number",
+	},
+	"wait_until?": "'load' | 'domcontentloaded' | 'networkidle0' | 'networkidle2'",
+	"dialogs?": "'accept' | 'dismiss'",
+	"code?": "string",
+	"timeout?": "number",
+	"all?": "boolean",
+	"kill?": "boolean",
 });
 
 /** Input schema for the browser tool. */
-export type BrowserParams = z.infer<typeof browserSchema>;
+export type BrowserParams = typeof browserSchema.infer;
 
 /** Details describing a browser tool execution result (for renderers + transcript). */
 export interface BrowserToolDetails {
@@ -119,7 +111,7 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 	readonly parameters = browserSchema;
 	readonly strict = true;
 
-	readonly examples: readonly ToolExample<z.input<typeof browserSchema>>[] = [
+	readonly examples: readonly ToolExample<typeof browserSchema.infer>[] = [
 		{
 			caption: "Open a tab",
 			call: { action: "open", name: "docs", url: "https://example.com" },

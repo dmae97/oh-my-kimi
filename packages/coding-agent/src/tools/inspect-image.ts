@@ -2,7 +2,7 @@ import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallb
 import { instrumentedCompleteSimple, resolveTelemetry } from "@oh-my-pi/pi-agent-core";
 import { type Api, completeSimple, type Model, type ToolExample } from "@oh-my-pi/pi-ai";
 import { prompt } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
+import { type } from "arktype";
 import { extractTextContent } from "../commit/utils";
 
 import { expandRoleAlias, getModelMatchPreferences, resolveModelFromString } from "../config/model-resolver";
@@ -18,14 +18,12 @@ import {
 import type { ToolSession } from "./index";
 import { ToolError } from "./tool-errors";
 
-const inspectImageSchema = z
-	.object({
-		path: z.string().describe("image path"),
-		question: z.string().describe("question about image"),
-	})
-	.strict();
+const inspectImageSchema = type({
+	path: "string",
+	question: "string",
+});
 
-export type InspectImageParams = z.infer<typeof inspectImageSchema>;
+export type InspectImageParams = typeof inspectImageSchema.infer;
 
 export interface InspectImageToolDetails {
 	model: string;
@@ -43,7 +41,7 @@ export class InspectImageTool implements AgentTool<typeof inspectImageSchema, In
 	readonly parameters = inspectImageSchema;
 	readonly strict = false;
 
-	readonly examples: readonly ToolExample<z.input<typeof inspectImageSchema>>[] = [
+	readonly examples: readonly ToolExample<typeof inspectImageSchema.infer>[] = [
 		{
 			caption: "OCR with strict formatting",
 			call: {

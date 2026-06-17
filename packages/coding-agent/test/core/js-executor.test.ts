@@ -6,7 +6,7 @@ import { disposeAllVmContexts } from "@oh-my-pi/pi-coding-agent/eval/js/context-
 import { executeJs, type JsResult } from "@oh-my-pi/pi-coding-agent/eval/js/executor";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { TempDir } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
+import { type } from "arktype";
 
 // JS eval cold-starts a Bun worker; under --isolate + high CI concurrency that startup
 // can exceed Bun's 5s default per-test timeout, flaking the suite. Give the worker-backed
@@ -21,7 +21,7 @@ function createTool(
 		name,
 		label: name,
 		description: `${name} tool`,
-		parameters: z.object({}),
+		parameters: type({}),
 		concurrency: "parallel",
 		execute,
 	} as unknown as AgentTool;

@@ -20,6 +20,7 @@ import type {
 } from "@oh-my-pi/pi-catalog/discovery/cursor-gen/agent_pb";
 import type { Effort } from "@oh-my-pi/pi-catalog/effort";
 import type { Api, FetchImpl, KnownApi, Model, Provider, ThinkingBudgets, Usage } from "@oh-my-pi/pi-catalog/types";
+import type { Type } from "arktype";
 import type { ZodType, z } from "zod/v4";
 import type { ApiKey } from "./auth-retry";
 import type { BedrockOptions } from "./providers/amazon-bedrock";
@@ -56,8 +57,8 @@ export interface ApiOptionsMap {
 	"anthropic-messages": AnthropicOptions;
 	"bedrock-converse-stream": BedrockOptions;
 	"openai-completions": OpenAICompletionsOptions;
-	openrouter: OpenAIResponsesOptions | OpenAICompletionsOptions;
 	"openai-responses": OpenAIResponsesOptions;
+	openrouter: OpenAIResponsesOptions | OpenAICompletionsOptions;
 	"openai-codex-responses": OpenAICodexResponsesOptions;
 	"azure-openai-responses": AzureOpenAIResponsesOptions;
 	"google-generative-ai": GoogleOptions;
@@ -582,20 +583,26 @@ export interface CursorExecHandlers {
 
 /**
  * Plain JSON Schema document used by extension-authored tools (legacy TypeBox
- * emits this shape). Distinguished from Zod at runtime via {@link isZodSchema}.
+ * emits this shape). Distinguished from arktype at runtime.
  */
 export type TJsonSchema = Record<string, unknown>;
 
 /**
  * Schema type accepted by the {@link Tool} interface.
  *
- * Canonical authoring uses Zod. Extension compat may supply a JSON Schema
- * object (including TypeBox static schema objects).
+ * Canonical authoring uses Zod or ArkType. Extension compat may supply a JSON
+ * Schema object (including TypeBox static schema objects).
  */
-export type TSchema = ZodType | TJsonSchema;
+export type TSchema = ZodType | Type | TJsonSchema;
 
 /** Resolve parameter types for tool execution / handlers. */
-export type Static<S> = S extends ZodType ? z.infer<S> : S extends { static: infer T } ? T : unknown;
+export type Static<S> = S extends ZodType
+	? z.infer<S>
+	: S extends Type
+		? S["infer"]
+		: S extends { static: infer T }
+			? T
+			: unknown;
 
 export interface ToolCallExample<TArgs = Record<string, unknown>> {
 	caption?: string;
@@ -644,7 +651,7 @@ export interface Tool<TParameters extends TSchema = TSchema> {
 	 * description. Author `call`/`bad`/`good` as plain argument objects WITHOUT
 	 * `_i` — when intent tracing injects `_i` into the schema, the renderer adds
 	 * a placeholder `_i` automatically. Type each tool's `examples` against its
-	 * own schema (e.g. `readonly ToolExample<z.input<typeof schema>>[]`).
+	 * own schema (e.g. `readonly ToolExample<typeof schema["type"]>[]`).
 	 */
 	examples?: readonly ToolExample[];
 }
