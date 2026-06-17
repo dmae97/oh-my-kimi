@@ -109,7 +109,7 @@ Each provider has one or more environment variables that supply a key when no st
 | `venice` | `VENICE_API_KEY` |
 | `vercel-ai-gateway` | `AI_GATEWAY_API_KEY` (also `VERCEL_AI_GATEWAY_API_KEY` for catalog discovery) |
 | `cloudflare-ai-gateway` | `CLOUDFLARE_AI_GATEWAY_API_KEY` |
-| `litellm` | `LITELLM_API_KEY` |
+| `litellm` | `LITELLM_API_KEY`; optional `LITELLM_BASE_URL` for the proxy endpoint |
 | `kilo` | `KILO_API_KEY` |
 | `zai` | `ZAI_API_KEY` |
 | `zenmux` | `ZENMUX_API_KEY` |

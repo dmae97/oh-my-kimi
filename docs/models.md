@@ -288,6 +288,17 @@ Runtime discovery fetches models (`GET /models`) and synthesizes model entries w
 
 This path also works for local OpenAI-compatible servers that are not LM Studio. For example, if oMLX is bound to Ollama's usual port, set `LM_STUDIO_BASE_URL=http://127.0.0.1:11434/v1` to discover it through the existing `/v1/models` flow. Running oMLX and Ollama side by side requires assigning a different port to one of them. Do not configure oMLX as `ollama`: Ollama discovery uses native `/api/tags` and `/api/show` endpoints, not OpenAI `/v1/models`.
 
+### LiteLLM provider discovery
+
+When `litellm` is active (for example through `LITELLM_API_KEY` or stored auth), runtime discovery uses the LiteLLM proxy:
+
+- provider: `litellm`
+- api: `openai-completions`
+- base URL: explicit provider `baseUrl` / `models.yml` config, otherwise `LITELLM_BASE_URL`, otherwise `http://localhost:4000/v1`
+- auth mode: `LITELLM_API_KEY` or stored LiteLLM auth when the proxy requires a key
+
+Runtime discovery fetches models (`GET /models`) from the proxy and enriches bare LiteLLM model ids against bundled reference metadata when available.
+
 ### Explicit provider discovery
 
 You can configure discovery yourself:

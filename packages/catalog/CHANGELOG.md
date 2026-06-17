@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `LITELLM_BASE_URL` as the LiteLLM provider discovery base URL fallback, with discovery caches scoped by the resolved proxy URL and explicit provider `baseUrl` config kept at higher precedence. ([#2726](https://github.com/can1357/oh-my-pi/issues/2726))
+
 ## [16.0.2] - 2026-06-16
 
 ### Fixed

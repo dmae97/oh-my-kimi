@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `LITELLM_BASE_URL` guidance to the LiteLLM login prompt so non-default proxy endpoints are discoverable. ([#2726](https://github.com/can1357/oh-my-pi/issues/2726))
+
 ## [16.0.3] - 2026-06-16
 
 ### Added
