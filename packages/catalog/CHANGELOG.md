@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Updated the default Gemini CLI user-agent version fallback to 0.46.0.
+
 ## [16.0.2] - 2026-06-16
 
 ### Fixed
