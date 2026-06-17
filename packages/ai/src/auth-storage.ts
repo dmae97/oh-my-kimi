@@ -1971,6 +1971,7 @@ export class AuthStorage {
 			projectId: next.projectId,
 			email: next.email,
 			enterpriseUrl: next.enterpriseUrl,
+			apiEndpoint: next.apiEndpoint,
 		});
 	}
 
