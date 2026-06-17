@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
-import { ftsWeight, importanceWeight, vectorWeight } from "../../config";
+import { ftsWeight, importanceWeight, maxEpisodeChars, vectorWeight } from "../../config";
 import { closeQuietly, openDatabase } from "../../db";
 import { AnnotationStore } from "../annotations";
 import { EpisodicGraph } from "../episodic-graph";
@@ -68,6 +68,7 @@ const DEFAULT_CONFIG: BeamConfig = {
 	importanceWeight: 0.2,
 	useCloud: false,
 	localLlmEnabled: false,
+	maxEpisodeChars: 100_000,
 };
 
 function normalizeConfig(options: BeamMemoryOptions): BeamConfig {
@@ -82,6 +83,7 @@ function normalizeConfig(options: BeamMemoryOptions): BeamConfig {
 		importanceWeight: configured.importanceWeight ?? importanceWeight(),
 		useCloud,
 		localLlmEnabled: configured.localLlmEnabled ?? DEFAULT_CONFIG.localLlmEnabled,
+		maxEpisodeChars: configured.maxEpisodeChars ?? maxEpisodeChars(),
 	};
 }
 function autoMigrateAnnotations(db: Database, dbPath: string | undefined): void {

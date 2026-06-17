@@ -57,6 +57,62 @@ const TIER2_DAYS = envInt("MNEMOPI_TIER2_DAYS", 30);
 const TIER3_DAYS = envInt("MNEMOPI_TIER3_DAYS", 180);
 const DEGRADE_BATCH_SIZE = envInt("MNEMOPI_DEGRADE_BATCH", 100);
 const TIER3_MAX_CHARS = envInt("MNEMOPI_TIER3_MAX_CHARS", 300);
+const DEFAULT_MAX_EPISODE_CHARS = 100_000;
+const SLEEP_SUMMARY_SEPARATOR = " | ";
+const SLEEP_TRUNCATION_MARKER = "\n[... sleep_consolidation episode truncated by maxEpisodeChars ...]";
+
+type SleepSummary = {
+	summary: string;
+	originalChars: number;
+	truncated: boolean;
+	maxChars: number;
+};
+
+function normalizedMaxEpisodeChars(beam: BeamMemoryState): number {
+	const configured = Math.trunc(beam.config?.maxEpisodeChars ?? DEFAULT_MAX_EPISODE_CHARS);
+	return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_MAX_EPISODE_CHARS;
+}
+
+function markTruncated(content: string, maxChars: number): string {
+	if (maxChars <= 0) return "";
+	if (maxChars <= SLEEP_TRUNCATION_MARKER.length) return content.slice(0, maxChars);
+	const bodyChars = maxChars - SLEEP_TRUNCATION_MARKER.length;
+	return `${content.slice(0, bodyChars).trimEnd()}${SLEEP_TRUNCATION_MARKER}`;
+}
+
+function buildSleepSummary(beam: BeamMemoryState, source: string, items: readonly Row[]): SleepSummary {
+	const maxChars = normalizedMaxEpisodeChars(beam);
+	const prefix = `[${source}] `;
+	const joinedLimit = Math.max(0, maxChars - prefix.length);
+	let joined = "";
+	let originalChars = 0;
+	let clipped = false;
+	for (let index = 0; index < items.length; index++) {
+		const content = rowValue(items[index] ?? {}, "content") ?? "";
+		const separator = index === 0 ? "" : SLEEP_SUMMARY_SEPARATOR;
+		originalChars += separator.length + content.length;
+		if (joined.length >= joinedLimit) {
+			if (separator.length + content.length > 0) clipped = true;
+			continue;
+		}
+		const next = `${separator}${content}`;
+		const remaining = joinedLimit - joined.length;
+		if (next.length <= remaining) {
+			joined += next;
+			continue;
+		}
+		joined += next.slice(0, remaining);
+		clipped = true;
+	}
+	const uncapped = `${prefix}${aaakEncode(joined)}`;
+	const truncated = clipped || uncapped.length > maxChars;
+	return {
+		summary: truncated ? markTruncated(uncapped, maxChars) : uncapped,
+		originalChars,
+		truncated,
+		maxChars,
+	};
+}
 
 function isoNow(): string {
 	return new Date().toISOString();
@@ -878,7 +934,6 @@ export function sleep(beam: BeamMemoryState, dryRun = false): SleepResult {
 	const consolidatedIds: string[] = [];
 	let summariesCreated = 0;
 	for (const [source, items] of grouped) {
-		const lines = items.map(item => rowValue(item, "content") ?? "");
 		const ids = items.map(item => rowValue(item, "id")).filter((id): id is string => id !== null);
 		let scope = "session";
 		let validUntil: string | null = null;
@@ -887,13 +942,20 @@ export function sleep(beam: BeamMemoryState, dryRun = false): SleepResult {
 			const itemValidUntil = rowValue(item, "valid_until");
 			if (itemValidUntil && (validUntil === null || itemValidUntil < validUntil)) validUntil = itemValidUntil;
 		}
-		const summary = `[${source}] ${aaakEncode(lines.join(" | "))}`;
+		const sleepSummary = buildSleepSummary(beam, source, items);
+		const metadata: Metadata = { original_count: items.length, source, llm_used: false };
+		if (sleepSummary.truncated) {
+			metadata.truncated = true;
+			metadata.original_chars = sleepSummary.originalChars;
+			metadata.max_chars = sleepSummary.maxChars;
+		}
+		const summary = sleepSummary.summary;
 		if (!dryRun) {
 			consolidateToEpisodic(beam, summary, ids, "sleep_consolidation", 0.6, {
 				scope,
 				validUntil,
 				veracity: aggregateEpisodicVeracity(items.map(item => rowValue(item, "veracity") ?? "unknown")),
-				metadata: { original_count: items.length, source, llm_used: false },
+				metadata,
 			});
 		}
 		consolidatedIds.push(...ids);

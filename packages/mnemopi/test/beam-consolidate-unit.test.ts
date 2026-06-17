@@ -43,6 +43,7 @@ function state(sessionId = "s1"): BeamMemoryState {
 			importanceWeight: 0.2,
 			useCloud: false,
 			localLlmEnabled: false,
+			maxEpisodeChars: 100_000,
 		},
 	};
 }
@@ -160,6 +161,36 @@ describe("beam consolidation free functions", () => {
 			count: 1,
 		});
 		expect(getConsolidationLog(beam, 1)[0]?.items_consolidated).toBe(2);
+	});
+	it("sleep caps oversized episodes before extraction and embedding", () => {
+		const beam = trackedState();
+		beam.config.maxEpisodeChars = 512;
+		const transcript = "[role: user] progress output with noisy tool transcript ".repeat(40);
+		insertWorking(beam.db, "wm-big", "s1", transcript, "conversation");
+
+		const result = sleep(beam, false);
+		const row = beam.db
+			.query(
+				`SELECT content, length(content) AS chars, json_extract(metadata_json, '$.truncated') AS truncated,
+				 json_extract(metadata_json, '$.original_chars') AS original_chars,
+				 json_extract(metadata_json, '$.max_chars') AS max_chars
+				 FROM episodic_memory WHERE source = 'sleep_consolidation'`,
+			)
+			.get() as {
+			content: string;
+			chars: number;
+			truncated: number;
+			original_chars: number;
+			max_chars: number;
+		} | null;
+
+		expect(result.status).toBe("consolidated");
+		expect(row).not.toBeNull();
+		expect(row?.chars).toBeLessThanOrEqual(512);
+		expect(row?.content.includes("sleep_consolidation episode truncated")).toBe(true);
+		expect(row?.truncated).toBe(1);
+		expect(row?.original_chars).toBeGreaterThan(512);
+		expect(row?.max_chars).toBe(512);
 	});
 
 	it("sleepAllSessions consolidates eligible rows outside the caller session", () => {

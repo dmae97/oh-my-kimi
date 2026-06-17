@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Capped `sleep_consolidation` episodic rows at `maxEpisodeChars` (default 100KB, `MNEMOPI_MAX_EPISODE_CHARS`) so raw session transcripts cannot be stored and extracted as multi-megabyte episodes. ([#2869](https://github.com/can1357/oh-my-pi/issues/2869))
+
 ## [15.13.1] - 2026-06-15
 
 ### Added
