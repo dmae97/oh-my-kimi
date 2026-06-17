@@ -33,6 +33,7 @@ const md = new Marked({
 			return `<a href="${escapeHtml(url)}"${titleAttr} target="_blank" rel="noopener">${inner}</a>`;
 		},
 	},
+	breaks: true,
 });
 
 export const Markdown = memo(function Markdown({ text }: { text: string }): ReactNode {
