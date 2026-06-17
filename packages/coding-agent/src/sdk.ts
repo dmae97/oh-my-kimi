@@ -17,6 +17,7 @@ import {
 	streamSimple,
 } from "@oh-my-pi/pi-ai";
 import type { Dialect } from "@oh-my-pi/pi-ai/dialect";
+import { preferredDialect } from "@oh-my-pi/pi-catalog/identity";
 import {
 	getOpenAICodexTransportDetails,
 	prewarmOpenAICodexResponses,
@@ -566,10 +567,13 @@ export type DialectFormat = "auto" | "native" | Dialect;
 
 export function resolveDialect(
 	format: DialectFormat,
-	model: Pick<Model, "supportsTools"> | undefined,
+	model: (Pick<Model, "supportsTools"> & Partial<Pick<Model, "id">>) | undefined,
 ): Dialect | undefined {
 	if (format === "native") return undefined;
-	if (format === "auto") return model?.supportsTools === false ? "glm" : undefined;
+	if (format === "auto") {
+		if (model?.supportsTools !== false) return undefined;
+		return model.id ? preferredDialect(model.id) : "glm";
+	}
 	return format;
 }
 
