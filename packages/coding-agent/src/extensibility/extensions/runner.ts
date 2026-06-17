@@ -638,7 +638,10 @@ export class ExtensionRunner {
 
 				if (event.type === "session_stop" && handlerResult) {
 					result = handlerResult as SessionStopEventResult;
-					if (result.continue === true || result.decision === "block") {
+					const hasContinuationContext =
+						(typeof result.additionalContext === "string" && result.additionalContext.length > 0) ||
+						(typeof result.reason === "string" && result.reason.length > 0);
+					if ((result.continue === true || result.decision === "block") && hasContinuationContext) {
 						return result as RunnerEmitResult<TEvent>;
 					}
 				}

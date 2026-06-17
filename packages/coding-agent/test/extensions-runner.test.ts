@@ -628,7 +628,7 @@ describe("ExtensionRunner", () => {
 				});
 			}
 		`;
-			fs.writeFileSync(path.join(extensionsDir, "session-stop.ts"), extCode);
+			await Bun.write(path.join(extensionsDir, "session-stop.ts"), extCode);
 
 			const result = await loadTestExtensions();
 			const runner = new ExtensionRunner(
@@ -665,8 +665,7 @@ describe("ExtensionRunner", () => {
 				stop_hook_active: false,
 			});
 
-			const events = fs
-				.readFileSync(eventsPath, "utf8")
+			const events = (await Bun.file(eventsPath).text())
 				.trim()
 				.split("\n")
 				.map(line => JSON.parse(line));
@@ -682,6 +681,55 @@ describe("ExtensionRunner", () => {
 				},
 			]);
 			expect(stopResult).toEqual({ continue: true, additionalContext: "Run one more pass." });
+		});
+
+		it("continues to later handlers after empty continuation feedback", async () => {
+			await Bun.write(
+				path.join(extensionsDir, "session-stop-empty.ts"),
+				`
+				export default function(pi) {
+					pi.on("session_stop", async () => ({ continue: true }));
+					pi.on("session_stop", async () => ({ decision: "block", reason: "Continue from second handler." }));
+				}
+			`,
+			);
+
+			const result = await loadTestExtensions();
+			const runner = new ExtensionRunner(
+				result.extensions,
+				result.runtime,
+				tempDir.path(),
+				sessionManager,
+				modelRegistry,
+			);
+			const completedMessage: AgentMessage = {
+				role: "assistant",
+				content: [{ type: "text", text: "main session finished" }],
+				api: "anthropic-messages",
+				provider: "anthropic",
+				model: "claude-sonnet-4-5",
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "stop",
+				timestamp: 123,
+			};
+
+			await expect(
+				runner.emitSessionStop({
+					messages: [completedMessage],
+					turn_id: 0,
+					last_assistant_message: completedMessage,
+					session_id: "session-123",
+					session_file: "/tmp/session.jsonl",
+					stop_hook_active: false,
+				}),
+			).resolves.toEqual({ decision: "block", reason: "Continue from second handler." });
 		});
 	});
 

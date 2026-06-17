@@ -2499,6 +2499,9 @@ export class AgentSession {
 
 		// Check auto-retry and auto-compaction after agent completes
 		if (event.type === "agent_end") {
+			const emitAgentEndNotification = async () => {
+				await this.#emitAgentEndNotification(event.messages);
+			};
 			const usage = this.getSessionStats().tokens;
 			await this.#goalRuntime.onAgentEnd({
 				currentUsage: {
@@ -2515,6 +2518,7 @@ export class AgentSession {
 			this.#lastAssistantMessage = undefined;
 			if (!msg) {
 				this.#lastSuccessfulYieldToolCallId = undefined;
+				await emitAgentEndNotification();
 				return;
 			}
 
@@ -2531,36 +2535,48 @@ export class AgentSession {
 			if (this.#skipPostTurnMaintenanceAssistantTimestamp === msg.timestamp) {
 				this.#skipPostTurnMaintenanceAssistantTimestamp = undefined;
 				this.#lastSuccessfulYieldToolCallId = undefined;
+				await emitAgentEndNotification();
 				return;
 			}
 
 			if (this.#assistantEndedWithSuccessfulYield(msg)) {
 				this.#lastSuccessfulYieldToolCallId = undefined;
+				await emitAgentEndNotification();
 				return;
 			}
 			this.#lastSuccessfulYieldToolCallId = undefined;
 
 			if (await this.#handleEmptyAssistantStop(msg)) {
+				await emitAgentEndNotification();
 				return;
 			}
 			if (await this.#handleUnexpectedAssistantStop(msg)) {
+				await emitAgentEndNotification();
 				return;
 			}
 
 			if (this.#isRetryableReasonlessAbort(msg)) {
 				const didRetry = await this.#handleRetryableError(msg, { allowModelFallback: false });
-				if (didRetry) return;
+				if (didRetry) {
+					await emitAgentEndNotification();
+					return;
+				}
 			}
 
 			// A deliberate abort should settle the current turn, not trigger queued continuations.
 			if (msg.stopReason === "aborted") {
 				this.#resolveRetry();
+				this.#resetSessionStopContinuationState();
+				await emitAgentEndNotification();
 				return;
 			}
 			// Check for retryable errors first (overloaded, rate limit, server errors)
 			if (this.#isRetryableError(msg)) {
 				const didRetry = await this.#handleRetryableError(msg);
-				if (didRetry) return; // Retry was initiated, don't proceed to compaction
+				if (didRetry) {
+					await emitAgentEndNotification();
+					return;
+				}
 			}
 			this.#resolveRetry();
 
@@ -2570,6 +2586,7 @@ export class AgentSession {
 			// Check for incomplete todos only after a final assistant stop, not intermediate tool-use turns.
 			const hasToolCalls = msg.content.some(content => content.type === "toolCall");
 			if (hasToolCalls) {
+				await emitAgentEndNotification();
 				return;
 			}
 			// When checkCompaction scheduled a deferred handoff, skip the rewind/todo passes:
@@ -2577,14 +2594,22 @@ export class AgentSession {
 			// #scheduleAgentContinue would start a fresh streaming turn alongside the handoff
 			// LLM call (visible as "Auto-handoff" loader + an assistant message still streaming).
 			if (compactionDeferredHandoff) {
+				await emitAgentEndNotification();
 				return;
 			}
 			if (msg.stopReason !== "error") {
 				if (this.#enforceRewindBeforeYield()) {
+					await emitAgentEndNotification();
 					return;
 				}
-				await this.#checkTodoCompletion();
+				const todoContinuationScheduled = await this.#checkTodoCompletion();
+				if (todoContinuationScheduled) {
+					await emitAgentEndNotification();
+					return;
+				}
 			}
+			await this.#emitSessionStopEvent(event.messages);
+			await emitAgentEndNotification();
 		}
 	};
 
@@ -3540,6 +3565,11 @@ export class AgentSession {
 		}
 	}
 
+	#resetSessionStopContinuationState(): void {
+		this.#sessionStopContinuationCount = 0;
+		this.#sessionStopHookActive = false;
+	}
+
 	#sessionStopContinuationContext(result: SessionStopEventResult | undefined): string | undefined {
 		if (!result) return undefined;
 		if (result.continue === true) {
@@ -3551,11 +3581,15 @@ export class AgentSession {
 		return undefined;
 	}
 
+	async #emitAgentEndNotification(messages: AgentMessage[]): Promise<void> {
+		await this.#extensionRunner?.emit({ type: "agent_end", messages });
+	}
+
 	async #emitSessionStopEvent(messages: AgentMessage[]): Promise<void> {
 		if (this.#agentKind === "sub" || !this.#extensionRunner?.hasHandlers("session_stop")) return;
 		const result = await this.#extensionRunner.emitSessionStop({
 			messages,
-			turn_id: this.#turnIndex,
+			turn_id: Math.max(0, this.#turnIndex - 1),
 			last_assistant_message: this.getLastAssistantMessage(),
 			session_id: this.sessionId,
 			session_file: this.sessionFile,
@@ -3563,8 +3597,7 @@ export class AgentSession {
 		});
 		const additionalContext = this.#sessionStopContinuationContext(result);
 		if (!additionalContext) {
-			this.#sessionStopContinuationCount = 0;
-			this.#sessionStopHookActive = false;
+			this.#resetSessionStopContinuationState();
 			return;
 		}
 		if (this.#sessionStopContinuationCount >= SESSION_STOP_CONTINUATION_CAP) {
@@ -3572,20 +3605,21 @@ export class AgentSession {
 				sessionId: this.sessionId,
 				cap: SESSION_STOP_CONTINUATION_CAP,
 			});
-			this.#sessionStopContinuationCount = 0;
-			this.#sessionStopHookActive = false;
+			this.#resetSessionStopContinuationState();
 			return;
 		}
 		this.#sessionStopContinuationCount++;
 		this.#sessionStopHookActive = true;
-		await this.sendCustomMessage(
+		this.#queueHiddenNextTurnMessage(
 			{
+				role: "custom",
 				customType: "session-stop-continuation",
 				content: additionalContext,
 				display: false,
 				attribution: "agent",
+				timestamp: Date.now(),
 			},
-			{ deliverAs: "nextTurn", triggerTurn: true },
+			true,
 		);
 	}
 
@@ -3596,8 +3630,9 @@ export class AgentSession {
 			this.#turnIndex = 0;
 			await this.#extensionRunner.emit({ type: "agent_start" });
 		} else if (event.type === "agent_end") {
-			await this.#extensionRunner.emit({ type: "agent_end", messages: event.messages });
-			await this.#emitSessionStopEvent(event.messages);
+			// `agent_end` extension notification is emitted from the settled
+			// agent_end maintenance path so `session_stop` control hooks are not
+			// blocked by unrelated notification-only work.
 		} else if (event.type === "turn_start") {
 			const hookEvent: TurnStartEvent = {
 				type: "turn_start",
@@ -6027,6 +6062,16 @@ export class AgentSession {
 		}
 	}
 
+	async #promptAgentInitiatedMessage(message: CustomMessage): Promise<void> {
+		this.#beginInFlight();
+		try {
+			await this.agent.prompt(message);
+			await this.#waitForPostPromptRecovery();
+		} finally {
+			this.#endInFlight();
+		}
+	}
+
 	/**
 	 * Send a custom message to the session. Creates a CustomMessageEntry.
 	 *
@@ -6086,7 +6131,7 @@ export class AgentSession {
 					this.#queueHiddenNextTurnMessage(normalizedAppMessage, false);
 					return false;
 				}
-				await this.agent.prompt(normalizedAppMessage);
+				await this.#promptAgentInitiatedMessage(normalizedAppMessage);
 				return true;
 			}
 			this.agent.appendMessage(normalizedAppMessage);
@@ -6105,7 +6150,7 @@ export class AgentSession {
 				this.#queueHiddenNextTurnMessage(normalizedAppMessage, false);
 				return false;
 			}
-			await this.agent.prompt(normalizedAppMessage);
+			await this.#promptAgentInitiatedMessage(normalizedAppMessage);
 			return true;
 		}
 
@@ -8224,12 +8269,12 @@ export class AgentSession {
 	/**
 	 * Check if agent stopped with incomplete todos and prompt to continue.
 	 */
-	async #checkTodoCompletion(): Promise<void> {
+	async #checkTodoCompletion(): Promise<boolean> {
 		// Skip todo reminders when the most recent turn was driven by an explicit user force —
 		// the user wanted exactly that tool, not a follow-up nag about incomplete todos.
 		const lastServedLabel = this.#toolChoiceQueue.consumeLastServedLabel();
 		if (lastServedLabel === "user-force") {
-			return;
+			return false;
 		}
 
 		// Suppress within a self-continuation chain: if the agent's last turn was driven by a
@@ -8240,7 +8285,7 @@ export class AgentSession {
 			logger.debug("Todo completion: prior reminder still awaiting agent action; staying silent", {
 				attempt: this.#todoReminderCount,
 			});
-			return;
+			return false;
 		}
 
 		const remindersEnabled = this.settings.get("todo.reminders");
@@ -8248,20 +8293,20 @@ export class AgentSession {
 		if (!remindersEnabled || !todosEnabled) {
 			this.#todoReminderCount = 0;
 			this.#todoReminderAwaitingProgress = false;
-			return;
+			return false;
 		}
 
 		const remindersMax = this.settings.get("todo.reminders.max");
 		if (this.#todoReminderCount >= remindersMax) {
 			logger.debug("Todo completion: max reminders reached", { count: this.#todoReminderCount });
-			return;
+			return false;
 		}
 
 		const phases = this.getTodoPhases();
 		if (phases.length === 0) {
 			this.#todoReminderCount = 0;
 			this.#todoReminderAwaitingProgress = false;
-			return;
+			return false;
 		}
 
 		const incompleteByPhase = phases
@@ -8279,7 +8324,7 @@ export class AgentSession {
 		if (incomplete.length === 0) {
 			this.#todoReminderCount = 0;
 			this.#todoReminderAwaitingProgress = false;
-			return;
+			return false;
 		}
 
 		// Build reminder message
@@ -8319,6 +8364,7 @@ export class AgentSession {
 		this.agent.appendMessage(reminderMessage);
 		this.sessionManager.appendMessage(reminderMessage);
 		this.#scheduleAgentContinue({ generation: this.#promptGeneration });
+		return true;
 	}
 
 	/**

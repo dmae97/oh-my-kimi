@@ -266,13 +266,19 @@ describe("AgentSession concurrent prompt guard", () => {
 		const stopEvents: Array<{
 			stop_hook_active: boolean;
 			session_id: string;
+			turn_id: number;
 			last_assistant_message?: AgentMessage;
 		}> = [];
+		const eventOrder: string[] = [];
 		const extensionRunner = {
-			emit: vi.fn().mockResolvedValue(undefined),
+			emit: vi.fn(event => {
+				eventOrder.push(event.type);
+				return Promise.resolve(undefined);
+			}),
 			emitBeforeAgentStart: vi.fn().mockResolvedValue(undefined),
 			hasHandlers: vi.fn((eventType: string) => eventType === "session_stop"),
 			emitSessionStop: vi.fn(event => {
+				eventOrder.push("session_stop");
 				stopEvents.push(event);
 				if (stopEvents.length === 1) {
 					return Promise.resolve({ continue: true, additionalContext: "Mission incomplete; continue." });
@@ -303,7 +309,14 @@ describe("AgentSession concurrent prompt guard", () => {
 						),
 			),
 		).toBe(true);
+		expect(eventOrder.filter(type => type === "session_stop" || type === "agent_end")).toEqual([
+			"session_stop",
+			"agent_end",
+			"session_stop",
+			"agent_end",
+		]);
 		expect(stopEvents.map(event => event.stop_hook_active)).toEqual([false, true]);
+		expect(stopEvents.map(event => event.turn_id)).toEqual([0, 0]);
 		expect(stopEvents[0]?.session_id).toBe(session.sessionId);
 		expect(stopEvents[0]?.last_assistant_message?.role).toBe("assistant");
 	});
@@ -339,6 +352,91 @@ describe("AgentSession concurrent prompt guard", () => {
 
 		expect(mock.calls).toHaveLength(9);
 		expect(extensionRunner.emitSessionStop).toHaveBeenCalledTimes(9);
+	});
+
+	it("emits session_stop only after empty-stop recovery reaches a final stop", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({
+			responses: [{ content: [""] }, { content: ["Recovered"] }],
+		});
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+			convertToLlm,
+		});
+		const extensionRunner = {
+			emit: vi.fn().mockResolvedValue(undefined),
+			emitBeforeAgentStart: vi.fn().mockResolvedValue(undefined),
+			hasHandlers: vi.fn((eventType: string) => eventType === "session_stop"),
+			emitSessionStop: vi.fn().mockResolvedValue(undefined),
+		} as unknown as ExtensionRunner;
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated();
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry, extensionRunner });
+
+		await session.prompt("First message");
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(2);
+		expect(extensionRunner.emitSessionStop).toHaveBeenCalledTimes(1);
+	});
+
+	it("continues session_stop feedback in ACP sessions with deferred client turns", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({
+			handler: () => ({ content: ["Done"] }),
+		});
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+			convertToLlm,
+		});
+		let stopCount = 0;
+		const extensionRunner = {
+			emit: vi.fn().mockResolvedValue(undefined),
+			emitBeforeAgentStart: vi.fn().mockResolvedValue(undefined),
+			hasHandlers: vi.fn((eventType: string) => eventType === "session_stop"),
+			emitSessionStop: vi.fn(() => {
+				stopCount++;
+				if (stopCount === 1) {
+					return Promise.resolve({ continue: true, additionalContext: "ACP stop continuation." });
+				}
+				return Promise.resolve(undefined);
+			}),
+		} as unknown as ExtensionRunner;
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated();
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry, extensionRunner });
+		session.setClientBridge({
+			capabilities: {},
+			deferAgentInitiatedTurns: true,
+		});
+
+		await session.prompt("First message");
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(2);
+		expect(
+			mock.calls[1]?.context.messages.some(message =>
+				typeof message.content === "string"
+					? message.content.includes("ACP stop continuation.")
+					: message.content.some(
+							content => content.type === "text" && content.text.includes("ACP stop continuation."),
+						),
+			),
+		).toBe(true);
 	});
 
 	it("does not emit session_stop for subagent sessions", async () => {
