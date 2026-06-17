@@ -36,12 +36,15 @@ interface Fake {
 	usageCalls: () => number;
 	/** Swap the value the next `getContextUsage()` query returns. */
 	setUsage: (usage: ContextUsage | undefined) => void;
+	/** Bump the in-flight pending revision the next `getCachedContextBreakdown()` reads. */
+	setRevision: (n: number) => void;
 }
 
 function makeSession(opts: { messages: unknown[]; contextWindow?: number; usage?: ContextUsage | undefined }): Fake {
 	const contextWindow = opts.contextWindow ?? 200_000;
 	let usage: ContextUsage | undefined = "usage" in opts ? opts.usage : { tokens: 1234, contextWindow, percent: 0.6 };
 	let calls = 0;
+	let revision = 0;
 	const session = {
 		messages: opts.messages,
 		systemPrompt: ["You are a helpful assistant."],
@@ -65,12 +68,18 @@ function makeSession(opts: { messages: unknown[]; contextWindow?: number; usage?
 			calls++;
 			return usage;
 		},
+		get contextUsageRevision() {
+			return revision;
+		},
 	} as unknown as AgentSession;
 	return {
 		session,
 		usageCalls: () => calls,
 		setUsage: next => {
 			usage = next;
+		},
+		setRevision: (n: number) => {
+			revision = n;
 		},
 	};
 }
@@ -153,6 +162,24 @@ describe("StatusLineComponent context breakdown", () => {
 		comp.getCachedContextBreakdown();
 
 		expect(usageCalls()).toBe(2);
+	});
+
+	it("re-queries when only the in-flight pending revision changes (no message change)", () => {
+		const fake = makeSession({
+			messages: [userMessage("hi")],
+			usage: { tokens: 190_000, contextWindow: 272_000, percent: 69.9 },
+		});
+		const comp = new StatusLineComponent(fake.session);
+		expect(comp.getCachedContextBreakdown().usedTokens).toBe(190_000);
+
+		// Turn ends/aborts: the message list and last-message fingerprint are
+		// unchanged, but clearing the pending snapshot recalibrates usage to the
+		// real provider anchor. The memo must not keep serving the stale estimate.
+		fake.setUsage({ tokens: 117_000, contextWindow: 272_000, percent: 43.0 });
+		fake.setRevision(1);
+
+		expect(comp.getCachedContextBreakdown().usedTokens).toBe(117_000);
+		expect(fake.usageCalls()).toBe(2);
 	});
 
 	it("propagates a speculative/numeric token count, e.g. right after compaction", () => {

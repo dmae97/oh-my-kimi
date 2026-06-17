@@ -415,7 +415,7 @@ export class CollabHost {
 		// render exactly the same anchored, provider-real count the host's own
 		// status line shows.
 		const breakdown = this.#ctx.statusLine.getCachedContextBreakdown();
-		const tokens = breakdown.usedTokens;
+		const tokens = breakdown.usedTokens ?? 0;
 		return {
 			isStreaming: session.isStreaming,
 			isAborting: session.isAborting,

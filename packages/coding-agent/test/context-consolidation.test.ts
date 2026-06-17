@@ -409,6 +409,105 @@ describe("Context usage consolidation", () => {
 		await tempDir.remove();
 	});
 
+	it("prefers a completed in-turn provider anchor over the pending snapshot", async () => {
+		const tempDir = TempDir.createSync("@inturn-anchor-");
+		const { session, sessionManager, agent } = createSession(tempDir);
+
+		const { promise, resolve } = Promise.withResolvers<void>();
+		const promptSpy = vi.spyOn(agent, "prompt").mockImplementation(async () => {
+			await promise;
+		});
+
+		const promptPromise = session.prompt("new question");
+		await Bun.sleep(10);
+
+		// While the request hangs (pending snapshot active, cutoff at the new
+		// prompt), simulate the turn's user message landing plus a completed tool
+		// step carrying a real, large provider prompt count.
+		sessionManager.appendMessage({ role: "user", content: "new question", timestamp: 5000 } as Message);
+		sessionManager.appendMessage({
+			role: "assistant",
+			content: [{ type: "text", text: "step" }],
+			api: mockModel.api,
+			provider: mockModel.provider,
+			model: mockModel.id,
+			stopReason: "toolUse",
+			usage: {
+				input: 9000,
+				output: 20,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 9020,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			contextSnapshot: { promptTokens: 9000, nonMessageTokens: 10 },
+			timestamp: 6000,
+		} as AssistantMessage);
+		syncSession(session, agent);
+
+		// The in-turn anchor (index >= pending cutoff) must win: usage reflects the
+		// real 9000-token prompt, not the tiny turn-start pending estimate that
+		// would otherwise stack an estimate of the whole tail on top.
+		const breakdown = session.getContextBreakdown();
+		expect(breakdown?.anchored).toBe(true);
+		expect(breakdown?.usedTokens).toBeGreaterThanOrEqual(9000);
+
+		resolve();
+		await promptPromise;
+		promptSpy.mockRestore();
+		await tempDir.remove();
+	});
+
+	it("keeps the pending snapshot (not a pre-cutoff anchor) while the first turn response is pending", async () => {
+		const tempDir = TempDir.createSync("@pending-precutoff-");
+		const { session, sessionManager, agent } = createSession(tempDir);
+
+		// Prior completed turn establishes a real anchor that PREDATES the new
+		// prompt (resolves before the pending cutoff).
+		sessionManager.appendMessage({ role: "user", content: "old", timestamp: 1000 } as Message);
+		sessionManager.appendMessage({
+			role: "assistant",
+			content: [{ type: "text", text: "old response" }],
+			api: mockModel.api,
+			provider: mockModel.provider,
+			model: mockModel.id,
+			stopReason: "stop",
+			usage: {
+				input: 5000,
+				output: 20,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 5020,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			contextSnapshot: { promptTokens: 5000, nonMessageTokens: 10 },
+			timestamp: 2000,
+		} as AssistantMessage);
+		syncSession(session, agent);
+
+		const { promise, resolve } = Promise.withResolvers<void>();
+		const promptSpy = vi.spyOn(agent, "prompt").mockImplementation(async () => {
+			await promise;
+		});
+
+		// Large prompt in flight, no in-turn step has produced provider usage yet.
+		const bigPrompt = "explain this in detail ".repeat(200);
+		const promptPromise = session.prompt(bigPrompt);
+		await Bun.sleep(10);
+
+		// Pending must win: it accounts for the just-submitted prompt on top of the
+		// prior anchor. The stale pre-cutoff anchor alone (5000) would omit it, so a
+		// regression to "always prefer the latest real anchor" would read ~5000.
+		const breakdown = session.getContextBreakdown();
+		expect(breakdown?.anchored).toBe(true);
+		expect(breakdown?.usedTokens).toBeGreaterThan(5500);
+
+		resolve();
+		await promptPromise;
+		promptSpy.mockRestore();
+		await tempDir.remove();
+	});
+
 	it("guarantees always numeric nullable-vs-speculative contract", async () => {
 		const tempDir = TempDir.createSync("@always-numeric-");
 		const { session, sessionManager, agent } = createSession(tempDir);

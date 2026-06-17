@@ -145,6 +145,7 @@ interface ContextUsageMemo {
 	length: number;
 	lastFingerprint: string | undefined;
 	modelContextWindow: number;
+	contextUsageRevision: number;
 	usedTokens: number;
 	contextWindow: number;
 	systemPromptRef: readonly string[] | undefined;
@@ -603,6 +604,10 @@ export class StatusLineComponent implements Component {
 		const modelContextWindow = this.session.model?.contextWindow ?? 0;
 		const length = messages.length;
 		const lastFingerprint = length > 0 ? messageFingerprint(messages[length - 1]!) : undefined;
+		// Bumps when the in-flight pending snapshot is set/cleared. Without it a
+		// value computed mid-turn (estimate of the active tail) would survive after
+		// the turn ends/aborts, since clearing the snapshot touches no message.
+		const contextUsageRevision = this.session.contextUsageRevision ?? 0;
 
 		const systemPrompt = this.session.systemPrompt;
 		const tools = this.session.agent?.state?.tools;
@@ -615,6 +620,7 @@ export class StatusLineComponent implements Component {
 			cache.length === length &&
 			cache.lastFingerprint === lastFingerprint &&
 			cache.modelContextWindow === modelContextWindow &&
+			cache.contextUsageRevision === contextUsageRevision &&
 			cache.systemPromptRef === systemPrompt &&
 			cache.toolsRef === tools &&
 			cache.skillsRef === skills
@@ -630,6 +636,7 @@ export class StatusLineComponent implements Component {
 			length,
 			lastFingerprint,
 			modelContextWindow,
+			contextUsageRevision,
 			usedTokens,
 			contextWindow,
 			systemPromptRef: systemPrompt,

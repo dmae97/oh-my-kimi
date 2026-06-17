@@ -1,7 +1,6 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
 - Added `images.describeForTextModels` option (default `true`) to control automatic image description for attachments sent to models without vision input
@@ -14,9 +13,11 @@
 
 ### Fixed
 
+- Fixed context usage breakdown to use a completed assistant usage anchor from the current turn instead of a pending prompt snapshot so totals no longer overcount when a large in-turn tool step returns usage
 - Fixed context token accounting to keep branch-local anchors during branching so sibling-branch messages no longer pollute context estimates
 - Fixed context usage consistency so `/context`, status line, and idle compaction logic now report the same used-token totals
 - Fixed status-line context cache invalidation when assistant reasoning signature data grows so displayed context usage updates accurately
+- Fixed the status-line context% reading inflated during long tool turns and then dropping sharply on the next message even though no compaction ran. While a request was in flight `getContextBreakdown` summed a cl100k estimate of the entire tail on top of the stale turn-start prompt and never re-anchored to completed in-turn steps; it now prefers the real provider prompt-token count of any step that resolves at or after the pending cutoff. The status-line memo also keys on a `contextUsageRevision` that bumps when the in-flight snapshot is set/cleared, so a mid-turn estimate is invalidated on turn end/abort instead of surviving into idle until the next message
 - Fixed image attachment handling for text-only models by saving attachments to `local://` and injecting generated descriptions so they are no longer lost when the target model cannot process images
 - Fixed the ssh tool rejecting valid Windows identity files before invoking OpenSSH by skipping Unix mode-bit key validation on native Windows ([#2850](https://github.com/can1357/oh-my-pi/issues/2850)).
 

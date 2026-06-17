@@ -1247,6 +1247,11 @@ export class AgentSession {
 				cutoffCount: number;
 		  }
 		| undefined = undefined;
+	// Bumped whenever the pending in-flight snapshot is set/cleared. The
+	// status-line context memo includes this so clearing the snapshot on
+	// turn-end/abort invalidates the cache even though the message list is
+	// unchanged — otherwise a mid-turn estimate would survive into idle.
+	#contextUsageRevision = 0;
 	#obfuscator: SecretObfuscator | undefined;
 	#checkpointState: CheckpointState | undefined = undefined;
 	#pendingRewindReport: string | undefined = undefined;
@@ -5593,15 +5598,15 @@ export class AgentSession {
 				nonMessageTokens +
 					this.messages.reduce((sum, msg) => sum + estimateTokens(msg), 0) +
 					messages.reduce((sum, msg) => sum + estimateTokens(msg), 0);
-			this.#pendingContextSnapshot = {
+			this.#setPendingContextSnapshot({
 				promptTokens,
 				nonMessageTokens,
 				cutoffCount: this.messages.length + messages.length,
-			};
+			});
 			try {
 				await this.#promptAgentWithIdleRetry(messages, agentPromptOptions);
 			} finally {
-				this.#pendingContextSnapshot = undefined;
+				this.#setPendingContextSnapshot(undefined);
 			}
 			if (!options?.skipPostPromptRecoveryWait) {
 				await this.#waitForPostPromptRecovery(generation);
@@ -11276,76 +11281,80 @@ export class AgentSession {
 
 		const pendingMessages = options?.pendingMessages ?? [];
 
-		let anchorEntry: SessionMessageEntry | undefined;
-		let isPending = false;
+		const pending = this.#pendingContextSnapshot;
 
-		if (this.#pendingContextSnapshot) {
-			isPending = true;
-		} else {
-			for (let i = branchEntries.length - 1; i > compactionIndex; i--) {
-				const entry = branchEntries[i];
-				if (entry.type === "message" && entry.message.role === "assistant") {
-					const assistant = entry.message;
-					if (assistant.stopReason !== "aborted" && assistant.stopReason !== "error" && assistant.usage) {
-						anchorEntry = entry;
-						break;
-					}
+		// Always locate the latest real assistant-usage anchor after the last
+		// compaction. Its provider-reported promptTokens is ground truth for
+		// everything up to that point; only the tail after it is estimated.
+		let anchorEntry: SessionMessageEntry | undefined;
+		for (let i = branchEntries.length - 1; i > compactionIndex; i--) {
+			const entry = branchEntries[i];
+			if (entry.type === "message" && entry.message.role === "assistant") {
+				const assistant = entry.message;
+				if (assistant.stopReason !== "aborted" && assistant.stopReason !== "error" && assistant.usage) {
+					anchorEntry = entry;
+					break;
 				}
 			}
 		}
 
-		if (isPending && this.#pendingContextSnapshot) {
-			const anchor = this.#pendingContextSnapshot;
-			anchored = true;
-
-			const resolvedActiveMessages = this.messages;
-			let tailTokens = 0;
-
-			if (resolvedActiveMessages.length > anchor.cutoffCount) {
-				for (let i = anchor.cutoffCount; i < resolvedActiveMessages.length; i++) {
-					tailTokens += estimateTokens(resolvedActiveMessages[i]);
-				}
+		const resolvedActiveMessages = this.messages;
+		let resolvedAnchorIndex = -1;
+		let anchorAssistant: AssistantMessage | undefined;
+		if (anchorEntry) {
+			const a = anchorEntry.message as AssistantMessage;
+			anchorAssistant = a;
+			resolvedAnchorIndex = resolvedActiveMessages.indexOf(a);
+			if (resolvedAnchorIndex === -1) {
+				resolvedAnchorIndex = resolvedActiveMessages.findIndex(
+					msg => msg.role === "assistant" && msg.timestamp === a.timestamp,
+				);
 			}
+		}
 
-			usedTokens =
-				anchor.promptTokens +
-				Math.max(0, currentNonMessageTokens - anchor.nonMessageTokens) +
-				tailTokens +
-				pendingMessages.reduce((sum, msg) => sum + estimateTokens(msg), 0);
-		} else if (anchorEntry) {
-			const anchorAssistant = anchorEntry.message as AssistantMessage;
+		// A real anchor supersedes the in-flight estimate only once a step of the
+		// CURRENT turn has produced provider usage — i.e. it resolves at or after
+		// the pending cutoff. While the turn's first response is still pending (or
+		// the newest real anchor predates this turn) the pending snapshot is the
+		// only thing accounting for the just-submitted prompt, so it wins. This
+		// keeps a long tool turn from stacking an estimate of the entire tail on
+		// top of a stale turn-start prompt.
+		const useAnchor =
+			anchorAssistant !== undefined &&
+			resolvedAnchorIndex !== -1 &&
+			(!pending || resolvedAnchorIndex >= pending.cutoffCount);
+
+		if (useAnchor && anchorAssistant) {
 			const promptTokens =
 				anchorAssistant.contextSnapshot?.promptTokens ?? calculatePromptTokens(anchorAssistant.usage);
 			const nonMessageTokens = anchorAssistant.contextSnapshot?.nonMessageTokens ?? computeNonMessageTokens(this);
-			const anchor = { promptTokens, nonMessageTokens };
 			anchored = true;
-
-			const resolvedActiveMessages = this.messages;
-			let resolvedAnchorIndex = resolvedActiveMessages.indexOf(anchorAssistant);
-			if (resolvedAnchorIndex === -1) {
-				resolvedAnchorIndex = resolvedActiveMessages.findIndex(
-					msg => msg.role === "assistant" && msg.timestamp === anchorAssistant.timestamp,
-				);
+			let tailTokens = 0;
+			for (let i = resolvedAnchorIndex + 1; i < resolvedActiveMessages.length; i++) {
+				tailTokens += estimateTokens(resolvedActiveMessages[i]);
 			}
-
-			if (resolvedAnchorIndex !== -1) {
-				let tailTokens = 0;
-				for (let i = resolvedAnchorIndex + 1; i < resolvedActiveMessages.length; i++) {
+			usedTokens =
+				promptTokens +
+				Math.max(0, currentNonMessageTokens - nonMessageTokens) +
+				tailTokens +
+				pendingMessages.reduce((sum, msg) => sum + estimateTokens(msg), 0);
+		} else if (pending) {
+			anchored = true;
+			let tailTokens = 0;
+			if (resolvedActiveMessages.length > pending.cutoffCount) {
+				for (let i = pending.cutoffCount; i < resolvedActiveMessages.length; i++) {
 					tailTokens += estimateTokens(resolvedActiveMessages[i]);
 				}
-				usedTokens =
-					anchor.promptTokens +
-					Math.max(0, currentNonMessageTokens - anchor.nonMessageTokens) +
-					tailTokens +
-					pendingMessages.reduce((sum, msg) => sum + estimateTokens(msg), 0);
-			} else {
-				anchored = false;
 			}
+			usedTokens =
+				pending.promptTokens +
+				Math.max(0, currentNonMessageTokens - pending.nonMessageTokens) +
+				tailTokens +
+				pendingMessages.reduce((sum, msg) => sum + estimateTokens(msg), 0);
 		}
 
-		if (!anchored && !isPending && branchEntries.length === 0) {
+		if (!anchored && !pending && branchEntries.length === 0) {
 			// Fallback: look for the latest assistant message with usage/snapshot in this.messages (for branchless/fake sessions in tests)
-			const resolvedActiveMessages = this.messages;
 			for (let i = resolvedActiveMessages.length - 1; i >= 0; i--) {
 				const msg = resolvedActiveMessages[i];
 				if (msg.role === "assistant" && msg.stopReason !== "aborted" && msg.stopReason !== "error" && msg.usage) {
@@ -11368,7 +11377,6 @@ export class AgentSession {
 			}
 		}
 		if (!anchored) {
-			const resolvedActiveMessages = this.messages;
 			let messagesTokens = 0;
 			for (const msg of resolvedActiveMessages) {
 				messagesTokens += estimateTokens(msg);
@@ -11401,6 +11409,22 @@ export class AgentSession {
 			contextWindow: breakdown.contextWindow,
 			percent: breakdown.contextWindow > 0 ? (breakdown.usedTokens / breakdown.contextWindow) * 100 : 0,
 		};
+	}
+
+	/**
+	 * Monotonic counter that changes whenever the in-flight pending context
+	 * snapshot is set or cleared. Status-line context memoization keys on this so
+	 * a value computed mid-turn cannot persist after the turn ends/aborts.
+	 */
+	get contextUsageRevision(): number {
+		return this.#contextUsageRevision;
+	}
+
+	#setPendingContextSnapshot(
+		snapshot: { promptTokens: number; nonMessageTokens: number; cutoffCount: number } | undefined,
+	): void {
+		this.#pendingContextSnapshot = snapshot;
+		this.#contextUsageRevision++;
 	}
 
 	#ingestProviderUsageHeaders(response: ProviderResponseMetadata, model?: Model): void {
