@@ -258,6 +258,13 @@ export interface AgentOptions {
 	afterToolCall?: AgentLoopConfig["afterToolCall"];
 
 	/**
+	 * Called once an assistant message is finalized, before it reaches the
+	 * context, the UI, or tool dispatch. May mutate the message in place (text +
+	 * tool-call arguments). See {@link AgentLoopConfig.transformAssistantMessage}.
+	 */
+	transformAssistantMessage?: AgentLoopConfig["transformAssistantMessage"];
+
+	/**
 	 * Opt-in OpenTelemetry instrumentation. Passing `{}` enables the loop's
 	 * GenAI-semantic-convention spans using the global tracer provider. See
 	 * {@link AgentLoopConfig.telemetry} for the full surface.
@@ -358,6 +365,11 @@ export class Agent {
 	 * message emission. Reassign at any time to swap the implementation.
 	 */
 	afterToolCall?: AgentLoopConfig["afterToolCall"];
+	/**
+	 * Hook invoked once an assistant message is finalized, before context append,
+	 * UI emission, and tool dispatch. Reassign at any time to swap the implementation.
+	 */
+	transformAssistantMessage?: AgentLoopConfig["transformAssistantMessage"];
 
 	constructor(opts: AgentOptions = {}) {
 		this.#state = { ...this.#state, ...opts.initialState };
@@ -402,6 +414,7 @@ export class Agent {
 		this.#onHarmonyLeak = opts.onHarmonyLeak;
 		this.beforeToolCall = opts.beforeToolCall;
 		this.afterToolCall = opts.afterToolCall;
+		this.transformAssistantMessage = opts.transformAssistantMessage;
 		this.#telemetry = opts.telemetry;
 		this.#appendOnlyContext = opts.appendOnlyContext;
 		this.#transformProviderContext = opts.transformProviderContext;
@@ -1051,6 +1064,9 @@ export class Agent {
 			appendOnlyContext: this.#appendOnlyContext,
 			beforeToolCall: this.beforeToolCall ? (ctx, signal) => this.beforeToolCall?.(ctx, signal) : undefined,
 			afterToolCall: this.afterToolCall ? (ctx, signal) => this.afterToolCall?.(ctx, signal) : undefined,
+			transformAssistantMessage: this.transformAssistantMessage
+				? (message, signal) => this.transformAssistantMessage?.(message, signal)
+				: undefined,
 			onAssistantMessageEvent: this.#onAssistantMessageEvent,
 			onHarmonyLeak: this.#onHarmonyLeak,
 			onTurnEnd: (messages, signal) => this.#onTurnEnd?.(messages, signal),

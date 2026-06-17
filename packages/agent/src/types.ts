@@ -294,6 +294,20 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	onTurnEnd?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<void> | void;
 
 	/**
+	 * Called once an assistant message is finalized from the model stream, before
+	 * it is appended to the context, emitted as `message_end`, or its tool calls
+	 * are validated and dispatched. The hook may mutate the message in place —
+	 * both its text content and its tool-call arguments — and those edits are seen
+	 * by the transcript, the UI, and tool execution alike (single source of truth).
+	 *
+	 * Used for inline macro expansion: rewriting `@[[runtime.name(args)]]` tokens
+	 * to host-computed values before anything downstream consumes the message.
+	 * Runs at most once per assistant message; must not throw (a throw would abort
+	 * the turn).
+	 */
+	transformAssistantMessage?: (message: AssistantMessage, signal?: AbortSignal) => Promise<void> | void;
+
+	/**
 	 * Called after a tool finishes executing, before `tool_execution_end` and the
 	 * tool-result message are emitted.
 	 *
