@@ -380,6 +380,7 @@ export class SelectorController {
 				this.ctx.session.agent.repetitionPenalty = repetitionPenalty >= 0 ? repetitionPenalty : undefined;
 				break;
 			}
+			case "git.enabled":
 			case "statusLinePreset":
 			case "statusLine.preset":
 			case "statusLineSeparator":
