@@ -149,6 +149,7 @@ export class InputController {
 			this.ctx.ui.addInputListener(data => {
 				if (!matchesKey(data, "b")) return undefined;
 				if (!this.ctx.canBranchBtw()) return undefined;
+				if (this.ctx.editor.getText().trim()) return undefined;
 				void this.ctx.handleBtwBranchKey();
 				return { consume: true };
 			});

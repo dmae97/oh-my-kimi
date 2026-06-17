@@ -210,6 +210,21 @@ describe("InputController keybinding setup", () => {
 		expect(spies.handleBtwBranchKey).toHaveBeenCalledTimes(1);
 	});
 
+	it("lets b fall through while the editor has draft text", async () => {
+		const { InputController, ctx, editor, spies } = await createContext();
+		(ctx.canBranchBtw as unknown as { mockReturnValue(value: boolean): void }).mockReturnValue(true);
+		editor.setText("build a branch");
+		const controller = new InputController(ctx);
+
+		controller.setupKeyHandlers();
+		const listener = spies.addInputListener.mock.calls[1]?.[0];
+		expect(listener).toBeDefined();
+		const result = listener?.("b");
+
+		expect(result).toBeUndefined();
+		expect(spies.handleBtwBranchKey).not.toHaveBeenCalled();
+	});
+
 	it("lets b fall through when /btw is not branchable", async () => {
 		const { InputController, ctx, spies } = await createContext();
 		const controller = new InputController(ctx);

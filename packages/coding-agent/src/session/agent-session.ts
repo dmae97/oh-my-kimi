@@ -11186,6 +11186,9 @@ export class AgentSession {
 
 		this.#pendingNextTurnMessages = [];
 		this.#scheduledHiddenNextTurnGeneration = undefined;
+		if (this.isStreaming) {
+			await this.abort({ goalReason: "internal", reason: "branching /btw" });
+		}
 		await this.sessionManager.flush();
 		this.#cancelOwnAsyncJobs();
 
