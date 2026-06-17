@@ -1,3 +1,4 @@
+/** Inputs used to decide whether the optional startup splash may run for this process. */
 export interface StartupSplashDecisionOptions {
 	readonly configured: boolean;
 	readonly isInteractive: boolean;
@@ -8,6 +9,7 @@ export interface StartupSplashDecisionOptions {
 	readonly stdoutIsTTY: boolean | undefined;
 }
 
+/** Returns true only for explicitly enabled, normal interactive TTY startup. */
 export function shouldShowStartupSplash(options: StartupSplashDecisionOptions): boolean {
 	if (!options.configured) return false;
 	if (!options.isInteractive) return false;

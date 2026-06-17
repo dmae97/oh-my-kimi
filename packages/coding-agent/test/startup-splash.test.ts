@@ -32,19 +32,24 @@ describe("startup splash", () => {
 	});
 
 	it("shows and hides a fullscreen setup-splash overlay", async () => {
+		const preSplashEditor: Component = { render: () => [] };
 		let hidden = false;
 		let renderRequests = 0;
-		let focused: Component | undefined;
+		let focused: Component | undefined = preSplashEditor;
 		let overlayComponent: Component | undefined;
-
 		const ctx = {
 			ui: {
 				terminal: { rows: 8 },
 				showOverlay: (component: Component) => {
 					overlayComponent = component;
+					const preFocus = focused;
+					focused = component;
 					return {
 						hide: () => {
 							hidden = true;
+							if (focused === component) {
+								focused = preFocus;
+							}
 						},
 					};
 				},
@@ -61,7 +66,7 @@ describe("startup splash", () => {
 
 		expect(hidden).toBe(true);
 		expect(renderRequests).toBeGreaterThan(0);
-		expect(focused).toBe(overlayComponent);
+		expect(focused).toBe(preSplashEditor);
 		expect(overlayComponent?.render(32)).toHaveLength(8);
 	});
 });
