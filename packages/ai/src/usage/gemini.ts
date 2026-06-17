@@ -16,7 +16,7 @@ const DEFAULT_ENDPOINT = "https://cloudcode-pa.googleapis.com";
 const GEMINI_TIER_MAP: Array<{ tier: string; models: string[] }> = [
 	{
 		tier: "3-Flash",
-		models: ["gemini-3-flash-preview", "gemini-3-flash"],
+		models: ["gemini-3-flash-preview", "gemini-3-flash", "gemini-3.5-flash"],
 	},
 	{
 		tier: "Flash",
@@ -24,7 +24,15 @@ const GEMINI_TIER_MAP: Array<{ tier: string; models: string[] }> = [
 	},
 	{
 		tier: "Pro",
-		models: ["gemini-2.5-pro", "gemini-3-pro-preview", "gemini-3.1-pro-preview", "gemini-3-pro", "gemini-1.5-pro"],
+		models: [
+			"gemini-2.5-pro",
+			"gemini-3-pro-preview",
+			"gemini-3.1-pro-preview",
+			"gemini-3-pro",
+			"gemini-3.1-pro",
+			"gemini-pro-agent",
+			"gemini-1.5-pro",
+		],
 	},
 ];
 

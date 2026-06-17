@@ -17749,6 +17749,7 @@
 					"high"
 				],
 				"effortRouting": {
+					"off": "claude-opus-4-5",
 					"minimal": "claude-opus-4-5-thinking",
 					"low": "claude-opus-4-5-thinking",
 					"medium": "claude-opus-4-5-thinking",
@@ -17785,6 +17786,7 @@
 					"high"
 				],
 				"effortRouting": {
+					"off": "claude-opus-4-6",
 					"minimal": "claude-opus-4-6-thinking",
 					"low": "claude-opus-4-6-thinking",
 					"medium": "claude-opus-4-6-thinking",
@@ -17953,15 +17955,29 @@
 			"contextWindow": 1048576,
 			"maxTokens": 65536,
 			"thinking": {
-				"mode": "google-level",
+				"mode": "budget",
 				"efforts": [
 					"minimal",
 					"low",
 					"medium",
 					"high"
 				],
-				"requiresEffort": true
-			}
+				"effortBudgets": {
+					"minimal": 1000,
+					"low": 1000,
+					"medium": 4000,
+					"high": 10000
+				},
+				"effortRouting": {
+					"off": "gemini-3.5-flash-extra-low",
+					"minimal": "gemini-3.5-flash-extra-low",
+					"low": "gemini-3.5-flash-extra-low",
+					"medium": "gemini-3.5-flash-low",
+					"high": "gemini-3-flash-agent"
+				},
+				"suppressWhenOff": true
+			},
+			"requestModelId": "gemini-3.5-flash-extra-low"
 		},
 		"gemini-3-pro": {
 			"id": "gemini-3-pro",
@@ -18017,11 +18033,15 @@
 			"contextWindow": 1048576,
 			"maxTokens": 65535,
 			"thinking": {
-				"mode": "google-level",
+				"mode": "budget",
 				"efforts": [
 					"low",
 					"high"
 				],
+				"effortBudgets": {
+					"low": 1001,
+					"high": 10001
+				},
 				"effortRouting": {
 					"off": "gemini-3.1-pro-low",
 					"low": "gemini-3.1-pro-low",
@@ -18110,7 +18130,11 @@
 					"high"
 				],
 				"effortRouting": {
-					"off": "gemini-2.5-flash"
+					"off": "gemini-2.5-flash",
+					"minimal": "gemini-2.5-flash-thinking",
+					"low": "gemini-2.5-flash-thinking",
+					"medium": "gemini-2.5-flash-thinking",
+					"high": "gemini-2.5-flash-thinking"
 				}
 			}
 		},

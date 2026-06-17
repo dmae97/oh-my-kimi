@@ -1,18 +1,25 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
 - Added `enableGeminiThinkingLoopGuard` to OpenAI compatibility options to allow explicit opt-in or opt-out of the Gemini thinking-loop guard for OpenAI-compatible model aliases
 - Added `LITELLM_BASE_URL` as the LiteLLM provider discovery base URL fallback, with discovery caches scoped by the resolved proxy URL and explicit provider `baseUrl` config kept at higher precedence. ([#2726](https://github.com/can1357/oh-my-pi/issues/2726))
+- Added `ThinkingConfig.effortBudgets` (per-effort thinking-budget contract baked into collapsed variants) and `ANTIGRAVITY_MODEL_WIRE_PROFILES` (`maxOutputTokens` + `model_enum` per Antigravity wire id) to mirror the captured Antigravity Cloud Code Assist client request shape.
 
 ### Changed
 
 - Defaulted `enableGeminiThinkingLoopGuard` from Gemini family detection for both OpenAI completions and responses compatibility specs so Gemini models now enable the thinking-loop guard automatically
 - Updated the default Gemini CLI user-agent version fallback to 0.46.0.
+- Changed the Antigravity (`google-antigravity`, daily-cloudcode-pa) gemini-3.x collapse families to the `budget` thinking transport with the client's per-tier `thinkingBudget` (3.5 Flash low/medium/high = 1000/4000/10000, 3.1 Pro low/high = 1001/10001) and corrected 3.5 Flash effort→wire routing (medium → `gemini-3.5-flash-low`, high → `gemini-3-flash-agent`). Split the shared CCA collapse table so `google-gemini-cli` (cloudcode-pa) keeps the `google-level` `thinkingLevel` transport for official Gemini CLI parity. Stale collapsed snapshots (bundled catalog, recycled `gemini-3-flash` alias) self-heal from the hand table at collapse time, and the model cache schema is bumped to v7 to invalidate pre-budget Antigravity rows.
+- Changed the Antigravity user-agent to the `antigravity/hub/<version>` format (default `2.1.4`) to match the captured client.
 
 ### Fixed
 
+- Fixed `off` effort routing for `claude-opus-4-5` and `claude-opus-4-6` to use their base model IDs when thinking is disabled
+- Fixed `gemini-2.5-flash` effort routing so all non-off effort levels resolve to `gemini-2.5-flash-thinking`
+- Fixed shared variant alias provider resolution so `resolveBareVariantAlias` reports all matching providers when model aliases are present in both CCA collapse tables
 - Routed google-antigravity default baseUrl to the stable primary daily endpoint in the catalog generator and all fallback snapshots, resolving connection drops on heavy queries.
 
 ## [16.0.4] - 2026-06-17

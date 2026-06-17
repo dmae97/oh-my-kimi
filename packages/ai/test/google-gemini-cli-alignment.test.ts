@@ -180,7 +180,11 @@ describe("Google Gemini CLI alignment", () => {
 	it("keeps antigravity metadata in antigravity request payloads", () => {
 		const model = createModel("google-antigravity");
 		const payload = buildRequest(model, createContext(), "proj-123", {}, true) as {
-			request: { sessionId?: string };
+			request: {
+				sessionId?: string;
+				labels?: Record<string, string>;
+				systemInstruction?: { role?: string };
+			};
 			requestType?: string;
 			userAgent?: string;
 			requestId?: string;
@@ -189,38 +193,74 @@ describe("Google Gemini CLI alignment", () => {
 		expect(payload.request.sessionId).toMatch(/^-[0-9]+$/);
 		expect(payload.requestType).toBe("agent");
 		expect(payload.userAgent).toBe("antigravity");
-		expect(payload.requestId).toMatch(/^agent-/);
+		// Structured requestId: agent/<agentId>/<ts>/<trajectoryId>/<step>.
+		expect(payload.requestId).toMatch(/^agent\/[0-9a-f-]+\/\d+\/[0-9a-f-]+\/\d+$/);
+		// Antigravity tags its system instruction with role "user".
+		expect(payload.request.systemInstruction?.role).toBe("user");
+		const labels = payload.request.labels;
+		expect(labels?.trajectory_id).toMatch(/^[0-9a-f-]+$/);
+		expect(labels?.last_step_index).toBe("1");
+		expect(labels?.used_claude).toBe("false");
+		expect(labels?.used_claude_conservative).toBe("false");
 	});
-	it("omits AUTO toolConfig for Google Gemini CLI tool calls", () => {
-		for (const provider of ["google-gemini-cli", "google-antigravity"] as const) {
-			const model = createModel(provider);
-			const context: Context = {
-				messages: [{ role: "user", content: "inspect repo", timestamp: Date.now() }],
-				tools: [
-					{
-						name: "read_file",
-						description: "Read a file",
-						parameters: {
-							type: "object",
-							properties: { path: { type: "string" } },
-							required: ["path"],
-						} as TJsonSchema,
-					},
-				],
-			};
-			const payload = buildRequest(
-				model,
-				context,
-				"proj-123",
-				{ toolChoice: "auto" },
-				provider === "google-antigravity",
-			) as {
-				request: { tools?: unknown; toolConfig?: unknown };
-			};
 
-			expect(payload.request.tools).toBeDefined();
-			expect(payload.request.toolConfig).toBeUndefined();
-		}
+	it("stamps the antigravity wire profile (maxOutputTokens + model_enum) by routed wire id", () => {
+		const model = createModel("google-antigravity");
+		const payload = buildRequest(
+			model,
+			createContext(),
+			"proj-123",
+			{ requestModelId: "gemini-3.5-flash-low" },
+			true,
+		) as {
+			model?: string;
+			request: { generationConfig?: { maxOutputTokens?: number }; labels?: Record<string, string> };
+		};
+
+		expect(payload.model).toBe("gemini-3.5-flash-low");
+		expect(payload.request.generationConfig?.maxOutputTokens).toBe(65536);
+		expect(payload.request.labels?.model_enum).toBe("MODEL_PLACEHOLDER_M20");
+	});
+
+	it("defaults antigravity tools to VALIDATED but omits AUTO toolConfig for plain gemini-cli", () => {
+		const context: Context = {
+			messages: [{ role: "user", content: "inspect repo", timestamp: Date.now() }],
+			tools: [
+				{
+					name: "read_file",
+					description: "Read a file",
+					parameters: {
+						type: "object",
+						properties: { path: { type: "string" } },
+						required: ["path"],
+					} as TJsonSchema,
+				},
+			],
+		};
+
+		const cli = buildRequest(
+			createModel("google-gemini-cli"),
+			context,
+			"proj-123",
+			{ toolChoice: "auto" },
+			false,
+		) as {
+			request: { tools?: unknown; toolConfig?: unknown };
+		};
+		expect(cli.request.tools).toBeDefined();
+		expect(cli.request.toolConfig).toBeUndefined();
+
+		const antigravity = buildRequest(
+			createModel("google-antigravity"),
+			context,
+			"proj-123",
+			{ toolChoice: "auto" },
+			true,
+		) as {
+			request: { tools?: unknown; toolConfig?: { functionCallingConfig: { mode: string } } };
+		};
+		expect(antigravity.request.tools).toBeDefined();
+		expect(antigravity.request.toolConfig).toEqual({ functionCallingConfig: { mode: "VALIDATED" } });
 	});
 
 	it("strips patternProperties when antigravity rewrites tools to legacy parameters", () => {
@@ -304,6 +344,23 @@ describe("Google Gemini CLI alignment", () => {
 		expect(requestHeaders!.get("anthropic-beta")).toBe("interleaved-thinking-2025-05-14");
 		expect(requestHeaders!.get("X-Goog-Api-Client")).toBeNull();
 		expect(requestHeaders!.get("Client-Metadata")).toBeNull();
+	});
+
+	it("sends the antigravity/hub User-Agent header on the Antigravity transport", async () => {
+		let requestHeaders: Headers | undefined;
+		const fetchMock: FetchImpl = async (_url, init) => {
+			requestHeaders = new Headers(init?.headers);
+			return new Response('{"error":{"message":"bad request"}}', { status: 400 });
+		};
+
+		const model = createModel("google-antigravity");
+		await streamGoogleGeminiCli(model, createContext(), {
+			apiKey: JSON.stringify({ token: "token", projectId: "proj-123" }),
+			fetch: fetchMock,
+		}).result();
+
+		expect(requestHeaders).toBeDefined();
+		expect(requestHeaders!.get("User-Agent")).toMatch(/^antigravity\/hub\/[0-9.]+ /);
 	});
 
 	it("filters out empty text parts at stream end but preserves terminal thought signatures", async () => {

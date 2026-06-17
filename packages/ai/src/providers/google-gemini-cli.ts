@@ -9,6 +9,7 @@ import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import {
 	ANTIGRAVITY_NO_PREAMBLE_INSTRUCTION,
 	ANTIGRAVITY_SYSTEM_INSTRUCTION,
+	getAntigravityModelWireProfile,
 	getAntigravityUserAgent,
 	getGeminiCliHeaders,
 } from "@oh-my-pi/pi-catalog/wire/gemini-headers";
@@ -104,6 +105,18 @@ export interface GoogleGeminiCliOptions extends StreamOptions {
 
 export interface AntigravityProviderSessionState extends ProviderSessionState {
 	lastGoodEndpoint?: string;
+	/**
+	 * Per-conversation request-envelope identity that mirrors the real
+	 * Antigravity client. `sessionId` is the signed-decimal session id;
+	 * `agentId`/`trajectoryId` are UUIDs; `stepIndex` is the monotonic step
+	 * counter; `lastExecutionId` is the prior response id echoed as
+	 * `labels.last_execution_id`.
+	 */
+	agentId?: string;
+	trajectoryId?: string;
+	sessionId?: string;
+	stepIndex?: number;
+	lastExecutionId?: string;
 }
 
 const ANTIGRAVITY_PROVIDER_SESSION_STATE_KEY = "google-antigravity-session-state";
@@ -277,6 +290,7 @@ interface CloudCodeAssistRequest {
 				allowedFunctionNames?: string[];
 			};
 		};
+		labels?: Record<string, string>;
 	};
 	requestType?: string;
 	userAgent?: string;
@@ -458,6 +472,7 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 
 			let started = false;
 			let sawFinishReason = false;
+			let lastResponseId: string | undefined;
 			const ensureStarted = () => {
 				if (!started) {
 					if (!firstTokenTime) firstTokenTime = Date.now();
@@ -487,6 +502,10 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 					throw new Error("No response body");
 				}
 
+				// Scoped per attempt so a failed/empty retry cannot leak its
+				// response id into the next request's last_execution_id.
+				lastResponseId = undefined;
+
 				let currentBlock: TextContent | ThinkingContent | null = null;
 				const blocks = output.content;
 				const blockIndex = () => blocks.length - 1;
@@ -505,6 +524,7 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 					}
 					const responseData = chunk.response;
 					if (!responseData) continue;
+					if (responseData.responseId) lastResponseId = responseData.responseId;
 					if (!responseData.candidates?.length && responseData.promptFeedback?.blockReason) {
 						const detail = responseData.promptFeedback.blockReasonMessage;
 						throw new Error(
@@ -750,6 +770,12 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 					) {
 						providerState.lastGoodEndpoint = endpoint;
 					}
+					// Commit after a fully successful attempt (content + finish reason);
+					// used as the next request's last_execution_id. Overwrite even when
+					// undefined so a response without an id can't leave a stale value.
+					if (providerState) {
+						providerState.lastExecutionId = lastResponseId;
+					}
 					break;
 				} catch (error) {
 					const status = extractHttpStatusFromError(error);
@@ -876,6 +902,48 @@ function normalizeAntigravityTools(
 	}));
 }
 
+interface AntigravityRequestEnvelope {
+	sessionId: string;
+	requestId: string;
+	labels: Record<string, string>;
+}
+
+/**
+ * Build the Antigravity request envelope (sessionId, structured requestId,
+ * labels) advancing the per-conversation session state. Mirrors the real
+ * `antigravity/hub` client: `requestId` is `agent/<agentId>/<ts>/<trajectoryId>/<step>`
+ * and `labels.last_step_index` trails the requestId step by one. Without session
+ * state (direct callers/tests) it falls back to ephemeral ids.
+ */
+function buildAntigravityRequestEnvelope(
+	model: Model<"google-gemini-cli">,
+	context: Context,
+	wireModelId: string,
+	state: AntigravityProviderSessionState | undefined,
+): AntigravityRequestEnvelope {
+	if (state) {
+		state.agentId ??= randomUUID();
+		state.trajectoryId ??= randomUUID();
+		state.sessionId ??= randomSignedDecimalSessionId();
+		state.stepIndex = (state.stepIndex ?? 1) + 1;
+	}
+	const agentId = state?.agentId ?? randomUUID();
+	const trajectoryId = state?.trajectoryId ?? randomUUID();
+	const sessionId = state?.sessionId ?? deriveAntigravitySessionId(context);
+	const step = state?.stepIndex ?? 2;
+	const requestId = `agent/${agentId}/${Date.now()}/${trajectoryId}/${step}`;
+	const isClaude = isClaudeModel(model.id);
+	const profile = getAntigravityModelWireProfile(wireModelId);
+	const labels: Record<string, string> = {};
+	if (state?.lastExecutionId) labels.last_execution_id = state.lastExecutionId;
+	labels.last_step_index = String(step - 1);
+	if (profile) labels.model_enum = profile.modelEnum;
+	labels.trajectory_id = trajectoryId;
+	labels.used_claude = String(isClaude);
+	labels.used_claude_conservative = String(isClaude);
+	return { sessionId, requestId, labels };
+}
+
 export function buildRequest(
 	model: Model<"google-gemini-cli">,
 	context: Context,
@@ -937,19 +1005,26 @@ export function buildRequest(
 		contents,
 	};
 
-	if (isAntigravity) {
-		request.sessionId = deriveAntigravitySessionId(context);
-	}
-
-	// System instruction must be object with parts, not plain string
+	// System instruction is an object with parts, not a plain string. Antigravity
+	// tags it with role "user" to mirror the real client.
 	if (systemPrompts.length > 0) {
 		request.systemInstruction = {
+			...(isAntigravity ? { role: "user" } : {}),
 			parts: systemPrompts.map(text => ({ text })),
 		};
 	}
 
-	if (Object.keys(generationConfig).length > 0) {
-		request.generationConfig = generationConfig;
+	if (isAntigravity && shouldInjectAntigravitySystemInstruction(model.id)) {
+		const existingParts = request.systemInstruction?.parts ?? [];
+		request.systemInstruction = {
+			role: "user",
+			parts: [
+				{ text: ANTIGRAVITY_SYSTEM_INSTRUCTION },
+				{ text: `Please ignore following [ignore]${ANTIGRAVITY_SYSTEM_INSTRUCTION}[/ignore]` },
+				{ text: ANTIGRAVITY_NO_PREAMBLE_INSTRUCTION },
+				...existingParts,
+			],
+		};
 	}
 
 	if (context.tools && context.tools.length > 0) {
@@ -973,15 +1048,16 @@ export function buildRequest(
 				};
 			}
 		}
-	}
-
-	if (isAntigravity && !isClaudeModel(model.id) && request.generationConfig?.maxOutputTokens !== undefined) {
-		delete request.generationConfig.maxOutputTokens;
-		if (Object.keys(request.generationConfig).length === 0) {
-			delete request.generationConfig;
+		// Antigravity's default tool mode is VALIDATED (verified for Gemini and
+		// Claude); an explicit non-auto tool choice above wins.
+		if (isAntigravity && !request.toolConfig) {
+			request.toolConfig = {
+				functionCallingConfig: { mode: "VALIDATED" as FunctionCallingConfigMode },
+			};
 		}
 	}
 
+	// Claude on Antigravity always forces VALIDATED, even with no tools declared.
 	if (isAntigravity && isClaudeModel(model.id)) {
 		request.toolConfig = {
 			functionCallingConfig: {
@@ -990,28 +1066,39 @@ export function buildRequest(
 		};
 	}
 
-	if (isAntigravity && shouldInjectAntigravitySystemInstruction(model.id)) {
-		const existingParts = request.systemInstruction?.parts ?? [];
-		request.systemInstruction = {
-			parts: [
-				{ text: ANTIGRAVITY_SYSTEM_INSTRUCTION },
-				{ text: `Please ignore following [ignore]${ANTIGRAVITY_SYSTEM_INSTRUCTION}[/ignore]` },
-				{ text: ANTIGRAVITY_NO_PREAMBLE_INSTRUCTION },
-				...existingParts,
-			],
+	const wireModelId = options.requestModelId ?? model.requestModelId ?? model.id;
+
+	if (isAntigravity) {
+		// The real client sends a fixed per-model output cap independent of the
+		// thinking budget; reassign so it keeps its slot ahead of thinkingConfig.
+		const profile = getAntigravityModelWireProfile(wireModelId);
+		if (profile) {
+			generationConfig.maxOutputTokens = profile.maxOutputTokens;
+		}
+		const state = getAntigravityProviderSessionState(options.providerSessionState);
+		const envelope = buildAntigravityRequestEnvelope(model, context, wireModelId, state);
+		request.labels = envelope.labels;
+		if (Object.keys(generationConfig).length > 0) {
+			request.generationConfig = generationConfig;
+		}
+		request.sessionId = envelope.sessionId;
+		return {
+			project: projectId,
+			requestId: envelope.requestId,
+			request,
+			model: wireModelId,
+			userAgent: "antigravity",
+			requestType: "agent",
 		};
+	}
+
+	if (Object.keys(generationConfig).length > 0) {
+		request.generationConfig = generationConfig;
 	}
 
 	return {
 		project: projectId,
-		model: options.requestModelId ?? model.requestModelId ?? model.id,
+		model: wireModelId,
 		request,
-		...(isAntigravity
-			? {
-					requestType: "agent",
-					userAgent: "antigravity",
-					requestId: `agent-${randomUUID()}`,
-				}
-			: {}),
 	};
 }

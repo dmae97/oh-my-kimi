@@ -1,7 +1,11 @@
 import { z } from "zod/v4";
 import type { ModelSpec } from "../types";
 import { toPositiveNumber } from "../utils";
-import { ANTIGRAVITY_VARIANT_COLLAPSE_TABLE, collapseEffortVariants } from "../variant-collapse";
+import {
+	ANTIGRAVITY_VARIANT_COLLAPSE_TABLE,
+	collapseEffortVariants,
+	type VariantCollapseTable,
+} from "../variant-collapse";
 import { getAntigravityUserAgent } from "../wire/gemini-headers";
 
 export const ANTIGRAVITY_PRIMARY_ENDPOINT = "https://daily-cloudcode-pa.googleapis.com";
@@ -156,6 +160,12 @@ export interface FetchAntigravityDiscoveryModelsOptions {
 	signal?: AbortSignal;
 	/** Optional fetch implementation override for tests. */
 	fetcher?: typeof fetch;
+	/**
+	 * Hand collapse table to apply to the discovered list. Defaults to the
+	 * Antigravity (budget-transport) table; `googleGeminiCli` passes the
+	 * level-transport table so cloudcode-pa keeps `thinkingLevel`.
+	 */
+	collapseTable?: VariantCollapseTable;
 }
 
 /**
@@ -238,7 +248,7 @@ export async function fetchAntigravityDiscoveryModels(
 		// Collapse effort-tier variants at the source so runtime discovery,
 		// the gemini-cli re-provision, and the catalog generator all see
 		// logical ids only.
-		const collapsed = collapseEffortVariants(models, ANTIGRAVITY_VARIANT_COLLAPSE_TABLE);
+		const collapsed = collapseEffortVariants(models, options.collapseTable ?? ANTIGRAVITY_VARIANT_COLLAPSE_TABLE);
 		collapsed.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
 		return collapsed;
 	}
