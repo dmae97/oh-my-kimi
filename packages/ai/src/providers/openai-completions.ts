@@ -356,6 +356,8 @@ export interface OpenAICompletionsOptions extends StreamOptions {
 	/** Force-disable reasoning where supported, or request the lowest effort on generic effort endpoints. */
 	disableReasoning?: boolean;
 	serviceTier?: ServiceTier;
+	/** @internal True when maxTokens came from the caller, not the model default. */
+	maxTokensExplicit?: boolean;
 	/**
 	 * Routing-variant suffix appended to OpenRouter model IDs when none is
 	 * already present (`anthropic/claude-haiku-latest` → `…:nitro`). Common
@@ -1357,13 +1359,14 @@ function buildParams(
 		compat.thinkingFormat === "zai" && isGlm52ReasoningEffortModelId(model.id)
 			? (model.maxTokens ?? OPENAI_MAX_OUTPUT_TOKENS)
 			: OPENAI_MAX_OUTPUT_TOKENS;
+	const maxTokensExplicit = options?.maxTokensExplicit ?? options?.maxTokens !== undefined;
 	// OpenRouter fans out to upstreams whose output caps differ from the catalog
-	// value (which tracks the highest-cap provider). A max_tokens above the routed
-	// upstream's cap makes OpenRouter silently skip that provider (e.g. Cerebras
-	// GLM-4.7, ~40k) for a higher-cap one, defeating `provider.order`/`only`. Omit
-	// it for OpenRouter so each upstream self-caps and routing is honored — unless
-	// the model always requires max_tokens (Kimi TPM accounting, see above).
-	const omitMaxTokensForRouting = compat.isOpenRouterHost && !compat.alwaysSendMaxTokens;
+	// value (which tracks the highest-cap provider). A default max_tokens above the
+	// routed upstream's cap makes OpenRouter silently skip that provider (e.g.
+	// Cerebras GLM-4.7, ~40k) for a higher-cap one, defeating `provider.order`/`only`.
+	// Omit catalog defaults for OpenRouter so each upstream self-caps and routing is
+	// honored. Explicit caller maxTokens still wins; the caller asked for that cap.
+	const omitMaxTokensForRouting = compat.isOpenRouterHost && !compat.alwaysSendMaxTokens && !maxTokensExplicit;
 	const effectiveMaxTokens =
 		requestedMaxTokens === undefined || omitMaxTokensForRouting
 			? undefined

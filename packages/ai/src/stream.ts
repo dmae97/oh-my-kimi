@@ -866,6 +866,7 @@ function mapOptionsForApi<TApi extends Api>(
 				toolChoice: mapOpenAiToolChoice(options?.toolChoice),
 				serviceTier: options?.serviceTier,
 				openrouterVariant: options?.openrouterVariant,
+				maxTokensExplicit: rawOptions?.maxTokens !== undefined,
 			});
 
 		case "openai-responses":

@@ -17,7 +17,7 @@ import { formatDuration, getProjectDir } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import type { ApiKeyResolverModel } from "../config/api-key-resolver";
 import { type CanonicalModelQueryOptions, ModelRegistry } from "../config/model-registry";
-import { formatModelString, getModelMatchPreferences, resolveCliModel } from "../config/model-resolver";
+import { formatModelSelectorValue, formatModelString, getModelMatchPreferences, resolveCliModel } from "../config/model-resolver";
 import { Settings } from "../config/settings";
 import benchPrompt from "../prompts/bench.md" with { type: "text" };
 import { discoverAuthStorage } from "../sdk";
@@ -144,9 +144,15 @@ function isFirstTokenEvent(event: AssistantMessageEvent): boolean {
  * latency does not dilute throughput. Falls back to total duration when the
  * response arrived as a single chunk (TTFT ~ duration).
  */
-function computeTokensPerSecond(outputTokens: number, durationMs: number, ttftMs: number): number {
+export function computeTokensPerSecond(
+	outputTokens: number,
+	durationMs: number,
+	ttftMs: number,
+	deltaChunkCount: number,
+): number {
 	const decodeMs = durationMs - ttftMs;
-	const windowMs = decodeMs > 0 ? decodeMs : durationMs;
+	// Fall back to total duration when the response arrived as a single chunk/non-streaming.
+	const windowMs = decodeMs > 0 && deltaChunkCount >= 2 ? decodeMs : durationMs;
 	return windowMs > 0 ? (outputTokens * 1000) / windowMs : 0;
 }
 
@@ -193,9 +199,16 @@ async function runBenchRequest(
 			headers: model.provider === "openrouter" ? { "X-OpenRouter-Cache": "false" } : undefined,
 		});
 		let message: AssistantMessage | undefined;
+		let deltaChunkCount = 0;
 		for await (const event of stream) {
 			if (firstTokenAt === undefined && isFirstTokenEvent(event)) {
 				firstTokenAt = now();
+			}
+			if (
+				(event.type === "text_delta" || event.type === "thinking_delta" || event.type === "toolcall_delta") &&
+				event.delta.length > 0
+			) {
+				deltaChunkCount++;
 			}
 			if (event.type === "error") {
 				return { ok: false, error: event.error.errorMessage ?? "request failed" };
@@ -218,7 +231,7 @@ async function runBenchRequest(
 			ttftMs,
 			durationMs,
 			outputTokens,
-			tokensPerSecond: computeTokensPerSecond(outputTokens, durationMs, ttftMs),
+			tokensPerSecond: computeTokensPerSecond(outputTokens, durationMs, ttftMs, deltaChunkCount),
 		};
 	} catch (error) {
 		return { ok: false, error: getErrorMessage(error) };
@@ -244,6 +257,10 @@ function buildModelReport(
 	return { selector, model: formatModelString(model), thinking, results, average };
 }
 
+function formatBenchModelLabel(report: BenchModelReport): string {
+	return formatModelSelectorValue(report.model, report.thinking);
+}
+
 function formatMs(ms: number): string {
 	return formatDuration(Math.max(0, Math.round(ms)));
 }
@@ -264,7 +281,7 @@ export function formatBenchTable(summary: BenchSummary): string {
 		return b.average.tokensPerSecond - a.average.tokensPerSecond;
 	});
 	const rows = ranked.map(report => ({
-		model: report.model,
+		model: formatBenchModelLabel(report),
 		ttft: report.average ? formatMs(report.average.ttftMs) : "-",
 		tps: report.average ? `${report.average.tokensPerSecond.toFixed(1)}/s` : "-",
 		tokens: report.average ? String(Math.round(report.average.outputTokens)) : "-",
@@ -382,8 +399,9 @@ export async function runBenchCommand(command: BenchCommandArgs, deps: BenchDepe
 		const reports: BenchModelReport[] = [];
 		for (const { selector, model, thinking } of targets) {
 			if (!json) {
-				const resolvedNote = selector === formatModelString(model) ? "" : chalk.dim(` (${selector})`);
-				writeStdout(`${chalk.bold(formatModelString(model))}${resolvedNote}\n`);
+				const resolvedModel = formatModelSelectorValue(formatModelString(model), thinking);
+				const resolvedNote = selector === resolvedModel ? "" : chalk.dim(` (${selector})`);
+				writeStdout(`${chalk.bold(resolvedModel)}${resolvedNote}\n`);
 			}
 			const results: BenchRunResult[] = [];
 			for (let index = 0; index < runs; index++) {

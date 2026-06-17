@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import { streamSimple } from "@oh-my-pi/pi-ai/stream";
 import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
 import { type Context, type Model, type ModelSpec, OPENAI_MAX_OUTPUT_TOKENS } from "@oh-my-pi/pi-ai/types";
@@ -10,10 +9,10 @@ import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 //   - Non-aggregator completions + all responses: clamp to OPENAI_MAX_OUTPUT_TOKENS
 //     (mirrors Anthropic's cap) so a catalog maxTokens that tracks the context
 //     window never overflows the upstream.
-//   - OpenRouter completions: omit max_tokens entirely. OpenRouter filters out any
-//     upstream whose output cap is below the requested value (e.g. Cerebras GLM-4.7
-//     ~40k), silently defeating provider routing. Kimi via OpenRouter is exempt
-//     (it derives TPM rate limits from max_tokens).
+//   - OpenRouter completions: omit default max_tokens entirely. OpenRouter filters
+//     out any upstream whose output cap is below the requested value (e.g. Cerebras
+//     GLM-4.7 ~40k), silently defeating provider routing. Explicit caller caps and
+//     Kimi via OpenRouter are still sent.
 
 const ctx: Context = {
 	systemPrompt: ["hi"],
@@ -77,7 +76,7 @@ function completionsSse(): Response {
 
 async function captureCompletionsBody(
 	model: Model<"openai-completions">,
-	maxTokens: number,
+	maxTokens?: number,
 ): Promise<Record<string, unknown>> {
 	let payload: Record<string, unknown> | undefined;
 	const fetchMock: FetchImpl = async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
@@ -85,7 +84,7 @@ async function captureCompletionsBody(
 		return completionsSse();
 	};
 
-	const result = await streamOpenAICompletions(model, ctx, { apiKey: "k", maxTokens, fetch: fetchMock }).result();
+	const result = await streamSimple(model, ctx, { apiKey: "k", ...(maxTokens === undefined ? {} : { maxTokens }), fetch: fetchMock }).result();
 	expect(result.stopReason).toBe("stop");
 	if (!payload) throw new Error("Expected OpenAI completions request payload");
 	return payload;
@@ -167,14 +166,19 @@ describe("OpenAI-family output-token cap", () => {
 		expect(body.max_completion_tokens ?? body.max_tokens).toBe(32_000);
 	});
 
-	it("omits max_tokens entirely for OpenRouter so provider routing is not filtered", async () => {
-		const body = await captureCompletionsBody(glmCompletionsModel(131_072), 131_072);
+	it("omits default max_tokens for OpenRouter so provider routing is not filtered", async () => {
+		const body = await captureCompletionsBody(glmCompletionsModel(131_072));
 		expect(body.max_tokens).toBeUndefined();
 		expect(body.max_completion_tokens).toBeUndefined();
 	});
 
+	it("sends explicit maxTokens for OpenRouter caller caps", async () => {
+		const body = await captureCompletionsBody(glmCompletionsModel(131_072), 2_048);
+		expect(body.max_completion_tokens ?? body.max_tokens).toBe(2_048);
+	});
+
 	it("still sends max_tokens for Kimi via OpenRouter (TPM rate-limit requirement)", async () => {
-		const body = await captureCompletionsBody(kimiOpenRouterModel(131_072), 131_072);
+		const body = await captureCompletionsBody(kimiOpenRouterModel(131_072));
 		expect(body.max_completion_tokens ?? body.max_tokens).toBe(OPENAI_MAX_OUTPUT_TOKENS);
 	});
 });
