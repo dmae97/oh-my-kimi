@@ -154,6 +154,16 @@ async function executeSearch(
 		};
 	}
 
+	// Invariant across providers; read once and tolerate an uninitialized
+	// Settings singleton (e.g. `omp q ...` CLI path, unit tests) so the
+	// provider-fallback loop never aborts before any provider runs.
+	let antigravityEndpointMode: "auto" | "production" | "sandbox" | undefined;
+	try {
+		antigravityEndpointMode = settings.get("providers.antigravityEndpoint");
+	} catch {
+		antigravityEndpointMode = undefined;
+	}
+
 	const failures: Array<{ provider: SearchProvider; error: unknown }> = [];
 	let lastProvider = providers[0];
 	for (const provider of providers) {
@@ -170,7 +180,7 @@ async function executeSearch(
 				signal,
 				authStorage,
 				sessionId,
-				antigravityEndpointMode: settings.get("providers.antigravityEndpoint"),
+				antigravityEndpointMode,
 			});
 
 			if (!hasRenderableSearchContent(response)) {

@@ -26,6 +26,8 @@
 - Fixed the status-line context% reading inflated during long tool turns and then dropping sharply on the next message even though no compaction ran. While a request was in flight `getContextBreakdown` summed a cl100k estimate of the entire tail on top of the stale turn-start prompt and never re-anchored to completed in-turn steps; it now prefers the real provider prompt-token count of any step that resolves at or after the pending cutoff. The status-line memo also keys on a `contextUsageRevision` that bumps when the in-flight snapshot is set/cleared, so a mid-turn estimate is invalidated on turn end/abort instead of surviving into idle until the next message
 - Fixed image attachment handling for text-only models by saving attachments to `local://` and injecting generated descriptions so they are no longer lost when the target model cannot process images
 - Fixed the ssh tool rejecting valid Windows identity files before invoking OpenSSH by skipping Unix mode-bit key validation on native Windows ([#2850](https://github.com/can1357/oh-my-pi/issues/2850)).
+- Fixed `web_search`/`omp q` aborting before any provider ran when the global Settings singleton was not initialized; `executeSearch` now reads `providers.antigravityEndpoint` once and tolerates an uninitialized settings store instead of throwing
+- Fixed the new `git.enabled` and `images.describeForTextModels` settings declaring section groups (`Git`, `Vision`) that were not registered in `TAB_GROUPS`, so they now render in their intended settings-panel sections
 
 ## [16.0.4] - 2026-06-17
 

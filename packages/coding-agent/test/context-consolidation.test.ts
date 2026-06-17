@@ -390,14 +390,16 @@ describe("Context usage consolidation", () => {
 		const { session, agent } = createSession(tempDir);
 
 		const { promise, resolve } = Promise.withResolvers<void>();
+		const started = Promise.withResolvers<void>();
 		const promptSpy = vi.spyOn(agent, "prompt").mockImplementation(async () => {
+			started.resolve();
 			await promise;
 		});
 
 		const promptPromise = session.prompt("query");
 
-		// Wait for the prompt request to become active
-		await Bun.sleep(10);
+		// Wait until the prompt request is actually in flight (pending snapshot set).
+		await started.promise;
 
 		const breakdown = session.getContextBreakdown();
 		expect(breakdown?.anchored).toBe(true);
@@ -414,12 +416,14 @@ describe("Context usage consolidation", () => {
 		const { session, sessionManager, agent } = createSession(tempDir);
 
 		const { promise, resolve } = Promise.withResolvers<void>();
+		const started = Promise.withResolvers<void>();
 		const promptSpy = vi.spyOn(agent, "prompt").mockImplementation(async () => {
+			started.resolve();
 			await promise;
 		});
 
 		const promptPromise = session.prompt("new question");
-		await Bun.sleep(10);
+		await started.promise;
 
 		// While the request hangs (pending snapshot active, cutoff at the new
 		// prompt), simulate the turn's user message landing plus a completed tool
@@ -486,14 +490,16 @@ describe("Context usage consolidation", () => {
 		syncSession(session, agent);
 
 		const { promise, resolve } = Promise.withResolvers<void>();
+		const started = Promise.withResolvers<void>();
 		const promptSpy = vi.spyOn(agent, "prompt").mockImplementation(async () => {
+			started.resolve();
 			await promise;
 		});
 
 		// Large prompt in flight, no in-turn step has produced provider usage yet.
 		const bigPrompt = "explain this in detail ".repeat(200);
 		const promptPromise = session.prompt(bigPrompt);
-		await Bun.sleep(10);
+		await started.promise;
 
 		// Pending must win: it accounts for the just-submitted prompt on top of the
 		// prior anchor. The stale pre-cutoff anchor alone (5000) would omit it, so a

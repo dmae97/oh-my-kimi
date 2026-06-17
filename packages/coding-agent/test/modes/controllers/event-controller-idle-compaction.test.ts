@@ -64,6 +64,7 @@ describe("EventController idle compaction teardown", () => {
 				isCompacting: false,
 				isStreaming: false,
 				runIdleCompaction,
+				getContextUsage: () => ({ tokens: 210 }),
 				agent: { state: { messages: [createAssistantMessage()] } },
 			},
 			get viewSession() {
