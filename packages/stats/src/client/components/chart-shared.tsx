@@ -1,40 +1,43 @@
 /**
- * Shared chart primitives for the dashboard timeline charts (BehaviorChart,
- * CostChart). Each chart owns its data shape and metric labels — this module
- * owns the layout, theme, legend/tooltip plumbing, and the top-N-by-model
- * bucketing scaffold that's identical between cost and behavior series.
+ * Shared chart primitives for the dashboard timeline charts: the OMP color
+ * palette, light/dark chart chrome, legend/tooltip + scale plumbing, dataset
+ * styling, and the top-N-by-model / aggregate bucketing used by the cost and
+ * behavior series.
  */
 
 import { format } from "date-fns";
 
+// OMP brand palette (packages/collab-web/src/styles/tokens.css): pink/purple/cyan.
+// Categorical series lead with the brand gradient hues (pink -> purple -> cyan).
 export const MODEL_COLORS = [
-	"#a78bfa", // violet
-	"#22d3ee", // cyan
-	"#ec4899", // pink
-	"#4ade80", // green
-	"#fbbf24", // amber
-	"#f87171", // red
-	"#60a5fa", // blue
+	"#ed4abf", // brand pink (accent)
+	"#9b4dff", // brand violet
+	"#5ad8e6", // brand cyan
+	"#62d394", // green
+	"#c77dff", // light purple
+	"#ff8fd1", // light pink
+	"#f5c14b", // amber
+	"#ff6b7d", // rose
 ];
 
 export const CHART_THEMES = {
 	dark: {
-		legendLabel: "#94a3b8",
-		tooltipBackground: "#16161e",
-		tooltipTitle: "#f8fafc",
-		tooltipBody: "#94a3b8",
-		tooltipBorder: "rgba(255, 255, 255, 0.1)",
+		legendLabel: "#a89fb3",
+		tooltipBackground: "#241a2e",
+		tooltipTitle: "#eae5ef",
+		tooltipBody: "#a89fb3",
+		tooltipBorder: "rgba(255, 255, 255, 0.12)",
 		grid: "rgba(255, 255, 255, 0.06)",
-		tick: "#64748b",
+		tick: "#867a93",
 	},
 	light: {
-		legendLabel: "#475569",
+		legendLabel: "#5a5462",
 		tooltipBackground: "#ffffff",
-		tooltipTitle: "#0f172a",
-		tooltipBody: "#334155",
-		tooltipBorder: "rgba(15, 23, 42, 0.18)",
-		grid: "rgba(15, 23, 42, 0.08)",
-		tick: "#64748b",
+		tooltipTitle: "#241a2e",
+		tooltipBody: "#5a5462",
+		tooltipBorder: "rgba(20, 12, 28, 0.15)",
+		grid: "rgba(20, 12, 28, 0.08)",
+		tick: "#6a6275",
 	},
 } as const;
 
@@ -128,7 +131,8 @@ export function barDatasetStyle(color: string) {
 		backgroundColor: color,
 		borderColor: color,
 		borderWidth: 0,
-		borderRadius: 3,
+		borderRadius: 4,
+		maxBarThickness: 56,
 	};
 }
 
@@ -250,71 +254,4 @@ export function buildTopNByModelSeries<T extends ModelKeyedPoint, B>(
 			}),
 		})),
 	};
-}
-
-/** All Models / By Model segmented toggle — identical UI in every time chart. */
-function ByModelToggle({ byModel, onChange }: { byModel: boolean; onChange: (v: boolean) => void }) {
-	return (
-		<div className="flex bg-[var(--bg-surface)] rounded-[var(--radius-sm)] p-0.5 border border-[var(--border-subtle)]">
-			<button
-				type="button"
-				onClick={() => onChange(false)}
-				className={`tab-btn text-xs ${!byModel ? "active" : ""}`}
-			>
-				All Models
-			</button>
-			<button type="button" onClick={() => onChange(true)} className={`tab-btn text-xs ${byModel ? "active" : ""}`}>
-				By Model
-			</button>
-		</div>
-	);
-}
-
-/**
- * Outer surface card used by both time charts. `controls` slot covers
- * chart-specific tabs (e.g. behavior metric picker); the by-model toggle and
- * empty-state are part of the frame so callers don't redeclare them.
- */
-export function ChartFrame({
-	title,
-	subtitle,
-	empty,
-	emptyMessage,
-	controls,
-	byModel,
-	onByModelChange,
-	children,
-}: {
-	title: string;
-	subtitle: string;
-	empty: boolean;
-	emptyMessage: string;
-	controls?: React.ReactNode;
-	byModel: boolean;
-	onByModelChange: (v: boolean) => void;
-	children: React.ReactNode;
-}) {
-	return (
-		<div className="surface overflow-hidden">
-			<div className="px-5 py-4 border-b border-[var(--border-subtle)] flex items-center justify-between gap-4 flex-wrap">
-				<div>
-					<h3 className="text-sm font-semibold text-[var(--text-primary)]">{title}</h3>
-					<p className="text-xs text-[var(--text-muted)] mt-1">{subtitle}</p>
-				</div>
-				<div className="flex items-center gap-2 flex-wrap">
-					{controls}
-					<ByModelToggle byModel={byModel} onChange={onByModelChange} />
-				</div>
-			</div>
-			<div className="p-5 min-h-[320px]">
-				{empty ? (
-					<div className="h-full flex items-center justify-center text-[var(--text-muted)] text-sm">
-						{emptyMessage}
-					</div>
-				) : (
-					<div className="h-[280px]">{children}</div>
-				)}
-			</div>
-		</div>
-	);
 }
