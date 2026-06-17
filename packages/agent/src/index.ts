@@ -14,6 +14,8 @@ export * from "./run-collector";
 export * from "./telemetry";
 // Thinking selectors
 export * from "./thinking";
+// Tokenizer choice
+export * from "./tokenizer";
 // Types
 export * from "./types";
 // Yield utilities for Bun event-loop busy-wait prevention
