@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `b branch` promotion for completed `/btw` answers, creating a branch that preserves the side-question input and full assistant response including thinking blocks.
+
 ## [16.0.5] - 2026-06-17
 
 ### Added

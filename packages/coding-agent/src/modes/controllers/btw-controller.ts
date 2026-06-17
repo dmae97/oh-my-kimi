@@ -1,3 +1,4 @@
+import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { prompt } from "@oh-my-pi/pi-utils";
 import btwUserPrompt from "../../prompts/system/btw-user.md" with { type: "text" };
 import { BtwPanelComponent } from "../components/btw-panel";
@@ -11,11 +12,29 @@ interface BtwRequest {
 
 export class BtwController {
 	#activeRequest: BtwRequest | undefined;
+	#lastQuestion: string | undefined;
+	#lastReplyText: string | undefined;
+	#lastAssistantMessage: AssistantMessage | undefined;
 
 	constructor(private readonly ctx: InteractiveModeContext) {}
 
 	hasActiveRequest(): boolean {
 		return this.#activeRequest !== undefined;
+	}
+
+	canBranch(): boolean {
+		return (
+			this.#activeRequest?.component.isBranchable() === true &&
+			this.#lastQuestion !== undefined &&
+			this.#lastReplyText !== undefined &&
+			this.#lastAssistantMessage !== undefined
+		);
+	}
+
+	async handleBranch(): Promise<boolean> {
+		if (!this.canBranch() || !this.#lastQuestion || !this.#lastAssistantMessage) return false;
+		await this.ctx.handleBtwBranch(this.#lastQuestion, this.#lastAssistantMessage);
+		return true;
 	}
 
 	handleEscape(): boolean {
@@ -58,7 +77,7 @@ export class BtwController {
 	async #runRequest(request: BtwRequest): Promise<void> {
 		try {
 			const promptText = prompt.render(btwUserPrompt, { question: request.question });
-			const { replyText } = await this.ctx.session.runEphemeralTurn({
+			const { replyText, assistantMessage } = await this.ctx.session.runEphemeralTurn({
 				promptText,
 				onTextDelta: delta => {
 					if (this.#isActiveRequest(request)) {
@@ -75,6 +94,13 @@ export class BtwController {
 				request.component.setAnswer(replyText);
 			}
 			request.component.markComplete();
+			if (request.component.isBranchable()) {
+				this.#lastQuestion = request.question;
+				this.#lastReplyText = replyText;
+				this.#lastAssistantMessage = assistantMessage;
+			} else {
+				this.#clearBranchState();
+			}
 		} catch (error) {
 			if (!this.#isActiveRequest(request)) {
 				return;
@@ -91,12 +117,19 @@ export class BtwController {
 		const request = this.#activeRequest;
 		if (!request) return;
 		this.#activeRequest = undefined;
+		this.#clearBranchState();
 		if (options.abort) {
 			request.abortController.abort();
 		}
 		request.component.close();
 		this.ctx.btwContainer.clear();
 		this.ctx.ui.requestRender();
+	}
+
+	#clearBranchState(): void {
+		this.#lastQuestion = undefined;
+		this.#lastReplyText = undefined;
+		this.#lastAssistantMessage = undefined;
 	}
 
 	#isActiveRequest(request: BtwRequest): boolean {

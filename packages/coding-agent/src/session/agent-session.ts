@@ -11157,6 +11157,72 @@ export class AgentSession {
 		return { selectedText, cancelled: false };
 	}
 
+	async branchFromBtw(
+		question: string,
+		assistantMessage: AssistantMessage,
+	): Promise<{ cancelled: boolean; sessionFile: string | undefined }> {
+		const previousSessionFile = this.sessionFile;
+		if (!this.sessionManager.getSessionFile()) {
+			throw new Error("Cannot branch /btw: session is not persisted");
+		}
+
+		const leafId = this.sessionManager.getLeafId();
+		if (!leafId) {
+			throw new Error("Cannot branch /btw: current session has no leaf");
+		}
+
+		let skipConversationRestore = false;
+		if (this.#extensionRunner?.hasHandlers("session_before_branch")) {
+			const result = (await this.#extensionRunner.emit({
+				type: "session_before_branch",
+				entryId: leafId,
+			})) as SessionBeforeBranchResult | undefined;
+
+			if (result?.cancel) {
+				return { cancelled: true, sessionFile: previousSessionFile };
+			}
+			skipConversationRestore = result?.skipConversationRestore ?? false;
+		}
+
+		this.#pendingNextTurnMessages = [];
+		this.#scheduledHiddenNextTurnGeneration = undefined;
+		await this.sessionManager.flush();
+		this.#cancelOwnAsyncJobs();
+
+		this.sessionManager.createBranchedSession(leafId);
+		this.sessionManager.appendMessage({
+			role: "user",
+			content: [{ type: "text", text: question }],
+			timestamp: Date.now(),
+		});
+		this.sessionManager.appendMessage(assistantMessage);
+		this.#syncTodoPhasesFromBranch();
+		this.#freshProviderSessionId = undefined;
+		this.#syncAgentSessionId();
+		this.#rekeyHindsightMemoryForCurrentSessionId();
+		this.#rekeyMnemopiMemoryForCurrentSessionId();
+		this.#resetHindsightConversationTrackingIfHindsight();
+		this.#resetMnemopiConversationTrackingIfMnemopi();
+
+		const sessionContext = this.buildDisplaySessionContext();
+		await this.#restoreMCPSelectionsForSessionContext(sessionContext);
+
+		if (this.#extensionRunner) {
+			await this.#extensionRunner.emit({
+				type: "session_branch",
+				previousSessionFile,
+			});
+		}
+
+		if (!skipConversationRestore) {
+			this.agent.replaceMessages(sessionContext.messages);
+			this.#advisorRuntime?.reset();
+			this.#closeCodexProviderSessionsForHistoryRewrite();
+		}
+
+		return { cancelled: false, sessionFile: this.sessionFile };
+	}
+
 	// =========================================================================
 	// Tree Navigation
 	// =========================================================================

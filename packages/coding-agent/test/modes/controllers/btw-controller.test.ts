@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it, vi } from "bun:test";
 import type { AssistantMessage, Usage } from "@oh-my-pi/pi-ai";
+import { BtwPanelComponent } from "@oh-my-pi/pi-coding-agent/modes/components/btw-panel";
 import { BtwController } from "@oh-my-pi/pi-coding-agent/modes/controllers/btw-controller";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
@@ -54,11 +55,30 @@ function makeCtx(session: InteractiveModeContext["session"], btwContainer = new 
 		session,
 		showStatus: vi.fn(),
 		showError: vi.fn(),
+		handleBtwBranch: vi.fn(async () => {}),
 	} as unknown as InteractiveModeContext;
 }
 
 beforeAll(async () => {
 	await initTheme();
+});
+async function drainBtwRequest(): Promise<void> {
+	await Promise.resolve();
+	await Promise.resolve();
+}
+
+describe("BtwPanelComponent", () => {
+	it("is branchable only after a complete non-empty answer", () => {
+		const ui = { requestRender: vi.fn(), requestComponentRender: vi.fn() } as unknown as TUI;
+		const panel = new BtwPanelComponent({ question: "Question?", tui: ui });
+
+		expect(panel.isBranchable()).toBe(false);
+		panel.setAnswer("   ");
+		panel.markComplete();
+		expect(panel.isBranchable()).toBe(false);
+		panel.setAnswer("Answer");
+		expect(panel.isBranchable()).toBe(true);
+	});
 });
 
 describe("BtwController", () => {
@@ -157,5 +177,102 @@ describe("BtwController", () => {
 		await controller.start("Anything?");
 		expect(runEphemeralTurn).not.toHaveBeenCalled();
 		expect(ctx.showError).toHaveBeenCalled();
+	});
+
+	it("does not allow branch while /btw is still running", async () => {
+		const runEphemeralTurn = vi.fn(async () => new Promise<RunEphemeralTurnResult>(() => {}));
+		const ctx = makeCtx(makeFakeSession(runEphemeralTurn));
+		const controller = new BtwController(ctx);
+
+		await controller.start("Question?");
+
+		expect(controller.canBranch()).toBe(false);
+	});
+
+	it("allows branch after a complete non-empty reply", async () => {
+		const assistantMessage = createAssistantMessage("Answer");
+		const runEphemeralTurn = vi.fn(async () => ({ replyText: "Answer", assistantMessage }));
+		const ctx = makeCtx(makeFakeSession(runEphemeralTurn));
+		const controller = new BtwController(ctx);
+
+		await controller.start("Question?");
+		await drainBtwRequest();
+
+		expect(controller.canBranch()).toBe(true);
+	});
+
+	it("does not allow branch after a complete empty reply", async () => {
+		const runEphemeralTurn = vi.fn(async () => ({
+			replyText: "   ",
+			assistantMessage: createAssistantMessage("   "),
+		}));
+		const ctx = makeCtx(makeFakeSession(runEphemeralTurn));
+		const controller = new BtwController(ctx);
+
+		await controller.start("Question?");
+		await drainBtwRequest();
+
+		expect(controller.canBranch()).toBe(false);
+	});
+
+	it("does not allow branch after aborted or errored requests", async () => {
+		const abortedRun = vi.fn(async () => new Promise<RunEphemeralTurnResult>(() => {}));
+		const abortedController = new BtwController(makeCtx(makeFakeSession(abortedRun)));
+		await abortedController.start("Question?");
+		expect(abortedController.handleEscape()).toBe(true);
+		expect(abortedController.canBranch()).toBe(false);
+
+		const erroredRun = vi.fn(async () => {
+			throw new Error("boom");
+		});
+		const erroredController = new BtwController(makeCtx(makeFakeSession(erroredRun)));
+		await erroredController.start("Question?");
+		await drainBtwRequest();
+		expect(erroredController.canBranch()).toBe(false);
+	});
+
+	it("handleBranch returns false and does not call the context when not branchable", async () => {
+		const runEphemeralTurn = vi.fn(async () => ({ replyText: "", assistantMessage: createAssistantMessage("") }));
+		const ctx = makeCtx(makeFakeSession(runEphemeralTurn));
+		const controller = new BtwController(ctx);
+
+		await controller.start("Question?");
+		await drainBtwRequest();
+
+		expect(await controller.handleBranch()).toBe(false);
+		expect(ctx.handleBtwBranch).not.toHaveBeenCalled();
+	});
+
+	it("handleBranch calls the context with the question and full assistant message when branchable", async () => {
+		const assistantMessage = createAssistantMessage("Answer");
+		const runEphemeralTurn = vi.fn(async () => ({ replyText: "Answer", assistantMessage }));
+		const ctx = makeCtx(makeFakeSession(runEphemeralTurn));
+		const controller = new BtwController(ctx);
+
+		await controller.start("Question?");
+		await drainBtwRequest();
+
+		expect(await controller.handleBranch()).toBe(true);
+		expect(ctx.handleBtwBranch).toHaveBeenCalledWith("Question?", assistantMessage);
+	});
+
+	it("clears stored branch state on escape and dispose", async () => {
+		const runEphemeralTurn = vi.fn(async () => ({
+			replyText: "Answer",
+			assistantMessage: createAssistantMessage("Answer"),
+		}));
+		const escapeController = new BtwController(makeCtx(makeFakeSession(runEphemeralTurn)));
+		await escapeController.start("Question?");
+		await drainBtwRequest();
+		expect(escapeController.canBranch()).toBe(true);
+		expect(escapeController.handleEscape()).toBe(true);
+		expect(escapeController.canBranch()).toBe(false);
+
+		const disposeController = new BtwController(makeCtx(makeFakeSession(runEphemeralTurn)));
+		await disposeController.start("Question?");
+		await drainBtwRequest();
+		expect(disposeController.canBranch()).toBe(true);
+		disposeController.dispose();
+		expect(disposeController.canBranch()).toBe(false);
 	});
 });

@@ -78,6 +78,7 @@ export class InputController {
 
 	#enhancedPaste?: EnhancedPasteController;
 	#focusedLeftTapListenerInstalled = false;
+	#btwBranchListenerInstalled = false;
 	// Tap counter for the double-← gesture; reset whenever a quiet gap
 	// (>= LEFT_DOUBLE_TAP_MAX_GAP_MS) starts a fresh sequence. See
 	// #detectLeftDoubleTap.
@@ -140,6 +141,15 @@ export class InputController {
 				if (!matchesKey(data, "left")) return undefined;
 				if (this.ctx.editor.getText().trim()) return undefined;
 				this.#handleFocusedLeftTap();
+				return { consume: true };
+			});
+		}
+		if (!this.#btwBranchListenerInstalled) {
+			this.#btwBranchListenerInstalled = true;
+			this.ctx.ui.addInputListener(data => {
+				if (!matchesKey(data, "b")) return undefined;
+				if (!this.ctx.canBranchBtw()) return undefined;
+				void this.ctx.handleBtwBranchKey();
 				return { consume: true };
 			});
 		}
