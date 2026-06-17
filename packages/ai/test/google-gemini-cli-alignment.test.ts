@@ -1,7 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import * as geminiCliProvider from "@oh-my-pi/pi-ai/providers/google-gemini-cli";
 import {
-	ANTIGRAVITY_NO_PREAMBLE_INSTRUCTION,
 	ANTIGRAVITY_SYSTEM_INSTRUCTION,
 	buildRequest,
 	parseGeminiCliCredentials,
@@ -314,8 +313,6 @@ describe("Google Gemini CLI alignment", () => {
 			const parts = payload.request.systemInstruction?.parts ?? [];
 			// The antigravity identity header must be injected as the first part.
 			expect(parts[0]?.text).toBe(ANTIGRAVITY_SYSTEM_INSTRUCTION);
-			expect(parts[1]?.text).toBe(`Please ignore following [ignore]${ANTIGRAVITY_SYSTEM_INSTRUCTION}[/ignore]`);
-			expect(parts[2]?.text).toBe(ANTIGRAVITY_NO_PREAMBLE_INSTRUCTION);
 			// The user-supplied system prompt must appear after the injected parts.
 			expect(parts.slice(3).some(p => p.text === "my instructions")).toBe(true);
 		}

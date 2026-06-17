@@ -201,12 +201,7 @@ async function callGeminiSearch(
 
 	const normalizedSystemPrompt = systemPrompt?.toWellFormed();
 	const systemInstructionParts: Array<{ text: string }> = [
-		...(auth.isAntigravity
-			? [
-					{ text: ANTIGRAVITY_SYSTEM_INSTRUCTION },
-					{ text: `Please ignore following [ignore]${ANTIGRAVITY_SYSTEM_INSTRUCTION}[/ignore]` },
-				]
-			: []),
+		...(auth.isAntigravity ? [{ text: ANTIGRAVITY_SYSTEM_INSTRUCTION }] : []),
 		...(normalizedSystemPrompt ? [{ text: normalizedSystemPrompt }] : []),
 	];
 
