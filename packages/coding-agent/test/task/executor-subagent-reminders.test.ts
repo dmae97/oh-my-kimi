@@ -7,7 +7,11 @@ import type { CreateAgentSessionResult } from "@oh-my-pi/pi-coding-agent/sdk";
 import * as sdkModule from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession, AgentSessionEvent, PromptOptions } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { runSubprocess, SUBAGENT_WARNING_MISSING_YIELD } from "@oh-my-pi/pi-coding-agent/task/executor";
+import {
+	finalizeSubprocessOutput,
+	runSubprocess,
+	SUBAGENT_WARNING_MISSING_YIELD,
+} from "@oh-my-pi/pi-coding-agent/task/executor";
 import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { logger } from "@oh-my-pi/pi-utils";
@@ -335,6 +339,38 @@ describe("runSubprocess yield reminders", () => {
 		expect(prompts).toHaveLength(2);
 		expect(result.exitCode).toBe(0);
 		expect(result.output).toContain('"ok": true');
+	});
+
+	it("keeps a real run failure from being masked by a successful yield", () => {
+		const result = finalizeSubprocessOutput({
+			rawOutput: "partial output",
+			exitCode: 1,
+			stderr: "Provider returned error finish_reason",
+			doneAborted: false,
+			signalAborted: false,
+			yieldItems: [{ status: "success", data: { ok: true } }],
+			outputSchema: undefined,
+		});
+
+		expect(result.exitCode).toBe(1);
+		expect(result.stderr).toBe("Provider returned error finish_reason");
+		expect(result.rawOutput).toContain('"ok": true');
+	});
+
+	it("lets a valid yield clear internal termination without stderr", () => {
+		const result = finalizeSubprocessOutput({
+			rawOutput: "",
+			exitCode: 1,
+			stderr: "",
+			doneAborted: true,
+			signalAborted: false,
+			yieldItems: [{ status: "success", data: { ok: true } }],
+			outputSchema: undefined,
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toBe("");
+		expect(result.rawOutput).toContain('"ok": true');
 	});
 	it("uses provided thinking level when model override has no explicit suffix", async () => {
 		vi.clearAllMocks();

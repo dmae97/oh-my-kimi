@@ -516,6 +516,7 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 	const { yieldItems, reportFindings, doneAborted, signalAborted, outputSchema } = args;
 	let abortedViaYield = false;
 	const hasYield = Array.isArray(yieldItems) && yieldItems.length > 0;
+	const hadFailureBeforeYield = exitCode !== 0 && stderr.trim().length > 0;
 
 	if (hasYield) {
 		const lastYield = yieldItems[yieldItems.length - 1];
@@ -553,12 +554,16 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 						const errorMessage = err instanceof Error ? err.message : String(err);
 						rawOutput = `{"error":"Failed to serialize yield data: ${errorMessage}"}`;
 					}
-					exitCode = 0;
-					stderr = overridden
-						? SUBAGENT_WARNING_SCHEMA_OVERRIDDEN
-						: schemaError
-							? `invalid output schema: ${schemaError}`
-							: "";
+					if (!hadFailureBeforeYield) {
+						exitCode = 0;
+						stderr = overridden
+							? SUBAGENT_WARNING_SCHEMA_OVERRIDDEN
+							: schemaError
+								? `invalid output schema: ${schemaError}`
+								: "";
+					} else if (!stderr) {
+						stderr = "Subagent failed after yielding a result.";
+					}
 				}
 			}
 		}
