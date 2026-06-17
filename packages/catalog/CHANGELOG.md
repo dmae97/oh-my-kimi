@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Routed google-antigravity default baseUrl to the stable primary daily endpoint in the catalog generator and all fallback snapshots, resolving connection drops on heavy queries.
+
 ## [16.0.4] - 2026-06-17
 
 ### Fixed
