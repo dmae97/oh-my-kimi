@@ -283,7 +283,7 @@ describe("AgentSession eager task prelude", () => {
 		expect(observedCalls[0]?.messageTexts[0]).toContain("delegation is enabled");
 	});
 
-	it("routes subagent completion to subagent_stop while main sessions keep agent_end", async () => {
+	it("routes subagent completion to session_stop while main sessions keep agent_end", async () => {
 		const mainAgentEndEvents: AgentMessage[][] = [];
 		const mainEmit = vi.fn((event: { type: string; messages?: AgentMessage[] }) => {
 			if (event.type === "agent_end" && event.messages) {
@@ -291,27 +291,27 @@ describe("AgentSession eager task prelude", () => {
 			}
 			return Promise.resolve(undefined);
 		});
-		const mainEmitSubagentStop = vi.fn((_messages: AgentMessage[]) => Promise.resolve());
+		const mainEmitSessionStop = vi.fn((_messages: AgentMessage[]) => Promise.resolve());
 		const mainEmitBeforeAgentStart = vi.fn((_prompt: string, _images: unknown, _systemPrompt: string[]) =>
 			Promise.resolve(undefined),
 		);
 		const mainExtensionRunner = {
 			emit: mainEmit,
 			emitBeforeAgentStart: mainEmitBeforeAgentStart,
-			emitSubagentStop: mainEmitSubagentStop,
+			emitSessionStop: mainEmitSessionStop,
 		} as unknown as ExtensionRunner;
 		const { session: mainSession } = await createHarness({}, undefined, undefined, undefined, mainExtensionRunner);
 
 		await mainSession.prompt("finish the main turn");
 		await mainSession.waitForIdle();
 
-		expect(mainEmitSubagentStop).not.toHaveBeenCalled();
+		expect(mainEmitSessionStop).not.toHaveBeenCalled();
 		expect(mainAgentEndEvents).toHaveLength(1);
 		expect(mainAgentEndEvents[0]?.some(message => message.role === "assistant")).toBe(true);
 
 		const subagentStopEvents: AgentMessage[][] = [];
 		const subEmit = vi.fn((_event: { type: string; messages?: AgentMessage[] }) => Promise.resolve(undefined));
-		const subEmitSubagentStop = vi.fn((messages: AgentMessage[]) => {
+		const subEmitSessionStop = vi.fn((messages: AgentMessage[]) => {
 			subagentStopEvents.push(messages);
 			return Promise.resolve();
 		});
@@ -321,7 +321,7 @@ describe("AgentSession eager task prelude", () => {
 		const subExtensionRunner = {
 			emit: subEmit,
 			emitBeforeAgentStart: subEmitBeforeAgentStart,
-			emitSubagentStop: subEmitSubagentStop,
+			emitSessionStop: subEmitSessionStop,
 		} as unknown as ExtensionRunner;
 		const { session: subSession } = await createHarness({}, "SubAgent", undefined, "sub", subExtensionRunner);
 

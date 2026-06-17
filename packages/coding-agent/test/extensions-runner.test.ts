@@ -604,14 +604,14 @@ describe("ExtensionRunner", () => {
 		});
 	});
 
-	describe("subagent_stop", () => {
-		it("invokes handlers with completed subagent messages", async () => {
-			const eventsPath = path.join(tempDir.path(), "subagent-stop-events.jsonl");
+	describe("session_stop", () => {
+		it("invokes handlers with completed stopped session messages", async () => {
+			const eventsPath = path.join(tempDir.path(), "session-stop-events.jsonl");
 			const extCode = `
 			import * as fs from "node:fs";
 
 			export default function(pi) {
-				pi.on("subagent_stop", async (event) => {
+				pi.on("session_stop", async (event) => {
 					fs.appendFileSync(
 						${JSON.stringify(eventsPath)},
 						JSON.stringify({
@@ -622,7 +622,7 @@ describe("ExtensionRunner", () => {
 				});
 			}
 		`;
-			fs.writeFileSync(path.join(extensionsDir, "subagent-stop.ts"), extCode);
+			fs.writeFileSync(path.join(extensionsDir, "session-stop.ts"), extCode);
 
 			const result = await loadTestExtensions();
 			const runner = new ExtensionRunner(
@@ -650,7 +650,7 @@ describe("ExtensionRunner", () => {
 				timestamp: 123,
 			};
 
-			await runner.emitSubagentStop([completedMessage]);
+			await runner.emitSessionStop([completedMessage]);
 
 			const events = fs
 				.readFileSync(eventsPath, "utf8")
@@ -659,7 +659,7 @@ describe("ExtensionRunner", () => {
 				.map(line => JSON.parse(line));
 			expect(events).toEqual([
 				{
-					type: "subagent_stop",
+					type: "session_stop",
 					messages: [completedMessage],
 				},
 			]);

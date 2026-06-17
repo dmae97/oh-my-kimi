@@ -202,9 +202,9 @@ pi.on("turn_end", async (_event, ctx) => {
   ctx.ui.setStatus("tokens", `~${ctx.getContextUsage()?.tokens ?? "?"} tokens`);
 });
 
-pi.on("subagent_stop", async (event, ctx) => {
-  // Fires for task/subagent completion; main-agent stop-style continuation stays on agent_end.
-  ctx.ui.setStatus("subagent", `${event.messages.length} completion messages`);
+pi.on("session_stop", async (event, ctx) => {
+  // Fires for task/subagent session completion; main-agent stop-style continuation stays on agent_end.
+  ctx.ui.setStatus("session", `${event.messages.length} completion messages`);
 });
 ```
 

@@ -181,9 +181,9 @@ export interface AgentEndEvent {
 	messages: AgentMessage[];
 }
 
-/** Fired when a subagent loop ends */
-export interface SubagentStopEvent {
-	type: "subagent_stop";
+/** Fired when a task/subagent session loop ends */
+export interface SessionStopEvent {
+	type: "session_stop";
 	messages: AgentMessage[];
 }
 

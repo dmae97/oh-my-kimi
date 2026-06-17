@@ -3534,7 +3534,7 @@ export class AgentSession {
 			await this.#extensionRunner.emit({ type: "agent_start" });
 		} else if (event.type === "agent_end") {
 			if (this.#agentKind === "sub") {
-				await this.#extensionRunner.emitSubagentStop(event.messages);
+				await this.#extensionRunner.emitSessionStop(event.messages);
 			} else {
 				await this.#extensionRunner.emit({ type: "agent_end", messages: event.messages });
 			}

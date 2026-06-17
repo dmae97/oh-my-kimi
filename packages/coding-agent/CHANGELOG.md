@@ -36,7 +36,7 @@
 - Fixed hashline visible-line validation for ACP editor reads so `INS.POST` anchors displayed by bridge-backed range and multi-range `read` output are merged into the session snapshot before `edit` validates them ([#2773](https://github.com/can1357/oh-my-pi/issues/2773)).
 ### Added
 
-- Added a `subagent_stop` extension event for task/subagent completion, leaving `agent_end` scoped to main-agent stop-style continuation ([#2834](https://github.com/can1357/oh-my-pi/issues/2834)).
+- Added a `session_stop` extension event for task/subagent completion, leaving `agent_end` scoped to main-agent stop-style continuation ([#2834](https://github.com/can1357/oh-my-pi/issues/2834)).
 
 ### Fixed
 

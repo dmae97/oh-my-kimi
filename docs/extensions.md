@@ -217,7 +217,7 @@ Cancelable pre-events:
 - `after_provider_response`
 - `context`
 - `agent_start` / `agent_end` — agent loop lifecycle; `agent_end` is the main-agent stop-style hook and can queue hidden continuation context with `pi.sendMessage(..., { deliverAs: "nextTurn", triggerTurn: true })`
-- `subagent_stop` — task/subagent completion lifecycle; use this instead of `agent_end` for subagent-only cleanup or mission status tracking
+- `session_stop` — task/subagent session completion lifecycle; use this instead of `agent_end` for subagent-only cleanup or mission status tracking
 - `turn_start` / `turn_end`
 - `message_start` / `message_update` / `message_end`
 
