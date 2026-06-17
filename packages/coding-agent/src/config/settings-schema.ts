@@ -2658,7 +2658,7 @@ export const SETTINGS_SCHEMA = {
 			group: "Read Summaries",
 			label: "Read Summary Unfold Ceiling",
 			description:
-				"Hard ceiling on summary size while BFS-unfolding. An unfold that would exceed this is reverted and unfolding stops.",
+				"Hard ceiling on summary size while BFS-unfolding. An unfold whose revealed lines would exceed this is skipped (that span stays folded) and unfolding continues with the remaining spans.",
 		},
 	},
 
