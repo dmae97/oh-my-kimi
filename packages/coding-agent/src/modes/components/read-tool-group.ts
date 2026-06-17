@@ -57,6 +57,7 @@ type ReadToolResultDetails = {
 	displayContent?: {
 		text?: string;
 		startLine?: number;
+		lineNumbers?: Array<number | null>;
 	};
 	meta?: {
 		source?: {
@@ -86,6 +87,8 @@ type ReadEntry = {
 	correctedFrom?: string;
 	contentText?: string;
 	conflictCount?: number;
+	codeStartLine?: number;
+	codeLineNumbers?: Array<number | null>;
 };
 
 /** Number of code lines to show in collapsed preview mode */
@@ -379,11 +382,12 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		entry.status = result.isError ? "error" : suffixResolution ? "warning" : "success";
 		// Store clean display content for preview/expanded display when the read
 		// tool provides it; fall back to model-facing text for legacy results.
-		const displayContent =
-			typeof details?.displayContent?.text === "string" ? details.displayContent.text : undefined;
+		const displayContent = details?.displayContent;
 		const textContent = result.content?.find(c => c.type === "text")?.text;
 		if (displayContent !== undefined || textContent !== undefined) {
-			entry.contentText = displayContent ?? textContent;
+			entry.contentText = displayContent?.text ?? textContent;
+			entry.codeStartLine = displayContent?.startLine;
+			entry.codeLineNumbers = displayContent?.lineNumbers;
 		}
 		this.#updateDisplay();
 	}
@@ -636,6 +640,8 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 						status: entry.status === "success" ? "complete" : entry.status,
 						expanded,
 						codeMaxLines: expanded ? undefined : COLLAPSED_PREVIEW_LINES,
+						codeStartLine: entry.codeStartLine,
+						codeLineNumbers: entry.codeLineNumbers,
 						width,
 					},
 					theme,

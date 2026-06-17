@@ -689,7 +689,11 @@ export interface ReadToolDetails {
 	/** Raw text + start line for user-visible TUI rendering, set when content is text-like.
 	 * Mirrors the same lines the model receives but without hashline/line-number prefixes,
 	 * so the TUI can render the file content with its own gutter without re-parsing the formatted text. */
-	displayContent?: { text: string; startLine: number };
+	displayContent?: {
+		text: string;
+		startLine: number;
+		lineNumbers?: Array<number | null>;
+	};
 	summary?: { lines: number; elidedSpans: number; elidedLines: number };
 	/** Number of unresolved git conflicts surfaced by this read (TUI uses for inline `⚠ N` badge). */
 	conflictCount?: number;
@@ -1058,7 +1062,12 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		let emittedHashlineHeader = false;
 		let seenLines: number[] | undefined;
 		const formatText = (content: string, startNum: number): string => {
-			details.displayContent = { text: content, startLine: startNum };
+			const lineCount = countTextLines(content);
+			details.displayContent = {
+				text: content,
+				startLine: startNum,
+				lineNumbers: Array.from({ length: lineCount }, (_, i) => startNum + i),
+			};
 			if (shouldAddHashLines) seenLines = contiguousLineNumbers(startNum, countTextLines(content));
 			const formatted = formatTextWithMode(content, startNum, shouldAddHashLines, shouldAddLineNumbers);
 			if (!hashContext || emittedHashlineHeader) return formatted;
@@ -1070,6 +1079,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			details.displayContent = {
 				text: lineEntriesToPlainText(entries, BRACKET_CONTEXT_ELLIPSIS),
 				startLine: firstLine?.kind === "line" ? firstLine.lineNumber : startNum,
+				lineNumbers: entries.map(entry => (entry.kind === "line" ? entry.lineNumber : null)),
 			};
 			if (shouldAddHashLines) seenLines = lineNumbersFromEntries(entries);
 			const formatted = formatLineEntriesWithMode(entries, shouldAddHashLines, shouldAddLineNumbers);
@@ -1218,6 +1228,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				details.displayContent = {
 					text: lineEntriesToPlainText(entries, BRACKET_CONTEXT_ELLIPSIS),
 					startLine: firstLine.lineNumber,
+					lineNumbers: entries.map(entry => (entry.kind === "line" ? entry.lineNumber : null)),
 				};
 			}
 			const formatted = formatLineEntriesWithMode(entries, shouldAddHashLines, shouldAddLineNumbers);
@@ -1255,7 +1266,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 	): Promise<{
 		outputText: string;
 		columnTruncated: number;
-		displayContent?: { text: string; startLine: number };
+		displayContent?: { text: string; startLine: number; lineNumbers?: Array<number | null> };
 		bridgeResult?: AgentToolResult<ReadToolDetails>;
 	}> {
 		const rawSelector = isRawSelector(parsed);
@@ -1375,6 +1386,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			displayContent = {
 				text: lineEntriesToPlainText(entries, BRACKET_CONTEXT_ELLIPSIS),
 				startLine: firstLine?.kind === "line" ? firstLine.lineNumber : (visibleSpans[0]?.startLine ?? 1),
+				lineNumbers: entries.map(entry => (entry.kind === "line" ? entry.lineNumber : null)),
 			};
 			outputText = formatLineEntriesWithMode(entries, shouldAddHashLines, shouldAddLineNumbers);
 		} else {
@@ -2292,10 +2304,17 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 						}
 					}
 
-					let capturedDisplayContent: { text: string; startLine: number } | undefined;
+					let capturedDisplayContent:
+						| { text: string; startLine: number; lineNumbers?: Array<number | null> }
+						| undefined;
 					let emittedHashlineHeader = false;
 					const formatText = (text: string, startNum: number): string => {
-						capturedDisplayContent = { text, startLine: startNum };
+						const lineCount = countTextLines(text);
+						capturedDisplayContent = {
+							text,
+							startLine: startNum,
+							lineNumbers: Array.from({ length: lineCount }, (_, i) => startNum + i),
+						};
 						const formatted = formatTextWithMode(text, startNum, shouldAddHashLines, shouldAddLineNumbers);
 						if (!hashContext || emittedHashlineHeader) return formatted;
 						emittedHashlineHeader = true;
@@ -2322,6 +2341,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 						capturedDisplayContent = {
 							text: lineEntriesToPlainText(entries, BRACKET_CONTEXT_ELLIPSIS),
 							startLine: firstLine?.kind === "line" ? firstLine.lineNumber : startLineDisplay,
+							lineNumbers: entries.map(entry => (entry.kind === "line" ? entry.lineNumber : null)),
 						};
 						const formatted = formatLineEntriesWithMode(entries, shouldAddHashLines, shouldAddLineNumbers);
 						if (!hashContext || emittedHashlineHeader) return formatted;
@@ -2928,6 +2948,8 @@ export const readToolRenderer = {
 								status: "complete",
 								output: warningLines.length > 0 ? warningLines.join("\n") : undefined,
 								expanded,
+								codeStartLine: details?.displayContent?.startLine,
+								codeLineNumbers: details?.displayContent?.lineNumbers,
 								width,
 							},
 							uiTheme,
