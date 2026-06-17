@@ -18,7 +18,11 @@ import type {
 import { normalizeSystemPrompts } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { type CapturedHttpErrorResponse, finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
-import { getOpenAIStreamFirstEventTimeoutMs, getOpenAIStreamIdleTimeoutMs } from "../utils/idle-iterator";
+import {
+	armPreResponseTimeout,
+	getOpenAIStreamFirstEventTimeoutMs,
+	getOpenAIStreamIdleTimeoutMs,
+} from "../utils/idle-iterator";
 import { parseStreamingJson } from "../utils/json-parse";
 import { toolWireSchema } from "../utils/schema/wire";
 import {
@@ -533,29 +537,29 @@ export const streamOllama: StreamFunction<"ollama-chat"> = (
 			const idleTimeoutMs = options.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs();
 			const firstEventTimeoutMs =
 				options.streamFirstEventTimeoutMs ?? getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs);
-			const preResponseWatchdog =
-				firstEventTimeoutMs !== undefined && firstEventTimeoutMs > 0
-					? AbortSignal.timeout(firstEventTimeoutMs)
-					: undefined;
-			const fetchSignal = preResponseWatchdog
-				? options.signal
-					? AbortSignal.any([options.signal, preResponseWatchdog])
-					: preResponseWatchdog
-				: options.signal;
-			const response = await fetchWithRetry(`${baseUrl}/api/chat`, {
-				method: "POST",
-				headers: {
-					...model.headers,
-					...options.headers,
-					Authorization: `Bearer ${apiKey}`,
-					"Content-Type": "application/json",
-				},
-				body: JSON.stringify(body),
-				signal: fetchSignal,
-				defaultDelayMs: OLLAMA_RETRY_DELAYS_MS,
-				fetch: options.fetch,
-				timeout: false,
-			});
+			// Cleared the instant headers arrive (below) so the pre-response timer
+			// never aborts the actively streaming body — an absolute
+			// `AbortSignal.timeout` would (issue #2422).
+			const watchdog = armPreResponseTimeout(options.signal, firstEventTimeoutMs);
+			let response: Response;
+			try {
+				response = await fetchWithRetry(`${baseUrl}/api/chat`, {
+					method: "POST",
+					headers: {
+						...model.headers,
+						...options.headers,
+						Authorization: `Bearer ${apiKey}`,
+						"Content-Type": "application/json",
+					},
+					body: JSON.stringify(body),
+					signal: watchdog.signal,
+					defaultDelayMs: OLLAMA_RETRY_DELAYS_MS,
+					fetch: options.fetch,
+					timeout: false,
+				});
+			} finally {
+				watchdog.clear();
+			}
 			if (!response.ok) {
 				capturedErrorResponse = await captureHttpErrorResponse(response);
 				throw new OllamaApiError(`HTTP ${response.status} from ${baseUrl}/api/chat`, response.status, {

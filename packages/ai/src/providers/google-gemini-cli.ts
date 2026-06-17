@@ -31,7 +31,7 @@ import { normalizeSystemPrompts } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { extractGoogleValidationUrl, formatGoogleValidationRequiredMessage } from "../utils/google-validation";
 import { appendRawHttpRequestDumpFor400, type RawHttpRequestDump } from "../utils/http-inspector";
-import { getStreamFirstEventTimeoutMs } from "../utils/idle-iterator";
+import { armPreResponseTimeout, getStreamFirstEventTimeoutMs } from "../utils/idle-iterator";
 // Refresh is the sole responsibility of AuthStorage (broker-aware, single-flighted);
 // the stream provider trusts the access token threaded through `options.apiKey`.
 import { normalizeSchemaForCCA } from "../utils/schema";
@@ -462,16 +462,7 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 			// would hang forever. Floor matches the lazy wrapper's 5min default.
 			const firstEventTimeoutMs =
 				options?.streamFirstEventTimeoutMs ?? getStreamFirstEventTimeoutMs(undefined, 300_000);
-			const preResponseWatchdog =
-				firstEventTimeoutMs !== undefined && firstEventTimeoutMs > 0
-					? AbortSignal.timeout(firstEventTimeoutMs)
-					: undefined;
 			const callerSignal = options?.signal;
-			const fetchSignal = preResponseWatchdog
-				? callerSignal
-					? AbortSignal.any([callerSignal, preResponseWatchdog])
-					: preResponseWatchdog
-				: callerSignal;
 
 			let started = false;
 			let sawFinishReason = false;
@@ -670,17 +661,26 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 					started = false;
 					resetOutput();
 
-					const response = await fetchWithRetry(() => `${endpoint}/v1internal:streamGenerateContent?alt=sse`, {
-						method: "POST",
-						headers: requestHeaders,
-						body: requestBodyJson,
-						signal: fetchSignal,
-						maxAttempts: isLastEndpoint ? MAX_RETRIES + 1 : 1,
-						defaultDelayMs: attempt => BASE_DELAY_MS * 2 ** attempt,
-						maxDelayMs: options?.maxRetryDelayMs ?? RATE_LIMIT_BUDGET_MS,
-						fetch: options?.fetch,
-						timeout: false,
-					});
+					// Per attempt: arm a pre-response (TTFT) timer, cleared the instant
+					// headers arrive so it never aborts the actively streaming body —
+					// an absolute `AbortSignal.timeout` would (issue #2422).
+					const watchdog = armPreResponseTimeout(callerSignal, firstEventTimeoutMs);
+					let response: Response;
+					try {
+						response = await fetchWithRetry(() => `${endpoint}/v1internal:streamGenerateContent?alt=sse`, {
+							method: "POST",
+							headers: requestHeaders,
+							body: requestBodyJson,
+							signal: watchdog.signal,
+							maxAttempts: isLastEndpoint ? MAX_RETRIES + 1 : 1,
+							defaultDelayMs: attempt => BASE_DELAY_MS * 2 ** attempt,
+							maxDelayMs: options?.maxRetryDelayMs ?? RATE_LIMIT_BUDGET_MS,
+							fetch: options?.fetch,
+							timeout: false,
+						});
+					} finally {
+						watchdog.clear();
+					}
 
 					if (!response.ok) {
 						if (response.status === 429 || (response.status >= 500 && response.status < 600)) {

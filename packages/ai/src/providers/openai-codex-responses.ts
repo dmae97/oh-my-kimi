@@ -46,6 +46,7 @@ import {
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
 import {
+	armPreResponseTimeout,
 	getOpenAIStreamFirstEventTimeoutMs,
 	getOpenAIStreamIdleTimeoutMs,
 	iterateWithIdleTimeout,
@@ -3017,32 +3018,29 @@ async function openCodexSseEventStream(
 			sentTurnStateHeader: headers.has(X_CODEX_TURN_STATE_HEADER),
 			sentModelsEtagHeader: headers.has(X_MODELS_ETAG_HEADER),
 		});
-	// `wrapCodexSseStream` arms a first-event watchdog only after this fetch
-	// resolves (it wraps the SSE generator). With `timeout: false` disabling
-	// Bun's native 300s ceiling, a stalled pre-response request needs its own
-	// watchdog — combine the caller signal with a fresh
-	// `AbortSignal.timeout(firstEventTimeoutMs)` so headers must arrive
-	// within the configured budget (issue #2422).
-	const preResponseWatchdog =
-		firstEventTimeoutMs !== undefined && firstEventTimeoutMs > 0
-			? AbortSignal.timeout(firstEventTimeoutMs)
-			: undefined;
-	const fetchSignal = preResponseWatchdog
-		? signal
-			? AbortSignal.any([signal, preResponseWatchdog])
-			: preResponseWatchdog
-		: signal;
-	const response = await fetchWithRetry(url, {
-		method: "POST",
-		headers,
-		body: JSON.stringify(body),
-		signal: fetchSignal,
-		maxAttempts: CODEX_MAX_RETRIES + 1,
-		defaultDelayMs: attempt => CODEX_RETRY_DELAY_MS * (attempt + 1),
-		maxDelayMs: CODEX_RATE_LIMIT_BUDGET_MS,
-		fetch: fetchOverride,
-		timeout: false,
-	});
+	// `wrapCodexSseStream` arms the iterator-level idle watchdog only after this
+	// fetch resolves. A pre-response timer still bounds time-to-first-byte (a
+	// proxy that accepts the POST but never sends headers would otherwise hang
+	// forever, since `timeout: false` disables Bun's native ceiling — issue
+	// #2422). It MUST be cleared the instant headers arrive: an absolute
+	// `AbortSignal.timeout` would keep aborting the actively-streaming body.
+	const watchdog = armPreResponseTimeout(signal, firstEventTimeoutMs);
+	let response: Response;
+	try {
+		response = await fetchWithRetry(url, {
+			method: "POST",
+			headers,
+			body: JSON.stringify(body),
+			signal: watchdog.signal,
+			maxAttempts: CODEX_MAX_RETRIES + 1,
+			defaultDelayMs: attempt => CODEX_RETRY_DELAY_MS * (attempt + 1),
+			maxDelayMs: CODEX_RATE_LIMIT_BUDGET_MS,
+			fetch: fetchOverride,
+			timeout: false,
+		});
+	} finally {
+		watchdog.clear();
+	}
 	CODEX_DEBUG &&
 		logger.debug("[codex] codex response", {
 			url: response.url,

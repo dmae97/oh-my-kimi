@@ -87,6 +87,40 @@ export function getOpenAIStreamFirstEventTimeoutMs(
 	return Math.max(base, idleTimeoutMs);
 }
 
+/**
+ * Arms a clearable pre-response (time-to-first-byte) abort guard for a streaming
+ * fetch, combined with the caller's signal.
+ *
+ * `AbortSignal.timeout(ms)` is an *absolute* wall-clock deadline: once handed to
+ * `fetch` it keeps governing the request after the response headers arrive, so
+ * it aborts an actively-streaming body the moment it fires — not just a stalled
+ * pre-response request (issue #2422 regression: large `write` tool-call streams
+ * died at the budget with `TimeoutError: The operation timed out.` despite
+ * deltas actively flowing). This arms a `clearTimeout`-able timer instead;
+ * callers MUST `clear()` as soon as `fetchWithRetry` resolves (headers in) so
+ * the body stream is left to the iterator-level idle watchdog. The timer aborts
+ * with a `TimeoutError` matching `AbortSignal.timeout`, so a genuine pre-response
+ * stall behaves exactly as the prior code did — `fetchWithRetry` normalizes the
+ * abort to "Request was aborted" either way (only a post-headers abort ever
+ * surfaced the raw `"The operation timed out."`, which clearing now prevents).
+ *
+ * Returns the caller signal unchanged (and a no-op `clear`) when no positive
+ * timeout is configured.
+ */
+export function armPreResponseTimeout(
+	callerSignal: AbortSignal | undefined,
+	timeoutMs: number | undefined,
+): { signal: AbortSignal | undefined; clear: () => void } {
+	if (timeoutMs === undefined || timeoutMs <= 0) return { signal: callerSignal, clear: () => {} };
+	const controller = new AbortController();
+	const timer = setTimeout(() => {
+		controller.abort(new DOMException("The operation timed out.", "TimeoutError"));
+	}, timeoutMs);
+	timer.unref?.();
+	const signal = callerSignal ? AbortSignal.any([callerSignal, controller.signal]) : controller.signal;
+	return { signal, clear: () => clearTimeout(timer) };
+}
+
 export interface IdleTimeoutIteratorOptions {
 	idleTimeoutMs?: number;
 	firstItemTimeoutMs?: number;
