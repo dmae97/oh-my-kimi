@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { TUI } from "@oh-my-pi/pi-tui";
 import { Image, ImageBudget } from "@oh-my-pi/pi-tui/components/image";
+import { Text } from "@oh-my-pi/pi-tui/components/text";
 import {
 	encodeKittyVirtualPlacement,
 	getKittyGraphics,
@@ -247,6 +248,59 @@ describe("Image budget integration", () => {
 		expect([...budget.takeTransmits()]).toEqual([]);
 	});
 
+	it("moves back up before multi-row direct Kitty placements and restores the cursor below them", () => {
+		const budget = new ImageBudget(3, () => {});
+		const id = budget.acquireId("k");
+		const image = new Image(
+			BASE64_ONE_PIXEL_PNG,
+			"image/png",
+			{ fallbackColor: t => t },
+			{ maxWidthCells: 4, maxHeightCells: 4, budget, imageKey: "k" },
+			{ widthPx: 40, heightPx: 40 },
+		);
+
+		budget.beginPass();
+		const lines = image.render(20);
+		budget.endPass();
+
+		const last = lines.at(-1) ?? "";
+		expect(lines).toHaveLength(4);
+		expect(lines.slice(0, -1)).toEqual(["\x1b[0m", "\x1b[0m", "\x1b[0m"]);
+		expect(last.startsWith("\x1b[3A")).toBe(true);
+		expect(last).toContain("\x1b_Ga=p");
+		expect(last).toContain("C=1");
+		expect(last).toContain(`i=${id}`);
+		expect(last).toContain("c=4");
+		expect(last).toContain("r=4");
+		expect(last.endsWith("\x1b[3B")).toBe(true);
+	});
+
+	it("does not move the cursor around single-row direct Kitty placements", () => {
+		const budget = new ImageBudget(3, () => {});
+		const id = budget.acquireId("k");
+		const image = new Image(
+			BASE64_ONE_PIXEL_PNG,
+			"image/png",
+			{ fallbackColor: t => t },
+			{ maxWidthCells: 4, maxHeightCells: 1, budget, imageKey: "k" },
+		);
+
+		budget.beginPass();
+		const lines = image.render(20);
+		budget.endPass();
+
+		const last = lines.at(-1) ?? "";
+		expect(lines).toHaveLength(1);
+		expect(last.startsWith("\x1b_Ga=p")).toBe(true);
+		expect(last).toContain("C=1");
+		expect(last).toContain(`i=${id}`);
+		expect(last).toContain("r=1");
+		expect(last.endsWith("\x1b\\")).toBe(true);
+		expect(last).not.toContain("\x1b[0A");
+		expect(last).not.toContain("\x1b[0B");
+		expect(last).not.toMatch(/\x1b\[\d+[AB]/);
+	});
+
 	it("renders an over-budget image as its text fallback instead of graphics", () => {
 		const budget = new ImageBudget(1, () => {});
 		const older = new Image(
@@ -392,6 +446,47 @@ describe("TUI inline-image budget", () => {
 			{ maxWidthCells: 4, maxHeightCells: 4, budget, imageKey: key },
 		);
 	}
+
+	it("renders following text below a multi-row direct Kitty placement", async () => {
+		const originalGraphics = { ...getKittyGraphics() };
+		const term = new VirtualTerminal(40, 12);
+		const writes: string[] = [];
+		const realWrite = term.write.bind(term);
+		vi.spyOn(term, "write").mockImplementation((data: string) => {
+			writes.push(data);
+			realWrite(data);
+		});
+
+		setKittyGraphics({ unicodePlaceholders: false });
+		const tui = new TUI(term);
+		tui.addChild(
+			new Image(
+				BASE64_ONE_PIXEL_PNG,
+				"image/png",
+				{ fallbackColor: t => t },
+				{ maxWidthCells: 4, maxHeightCells: 4, budget: tui.imageBudget, imageKey: "direct" },
+				{ widthPx: 40, heightPx: 40 },
+			),
+		);
+		tui.addChild(new Text("after-image", 0, 0));
+
+		try {
+			tui.start();
+			await settle(term);
+
+			const output = writes.join("");
+			expect(output).toContain("\x1b[3A");
+			expect(output).toContain("C=1");
+			expect(output).toContain("\x1b[3B");
+
+			const viewport = term.getViewport().map(line => line.trimEnd());
+			expect(viewport.slice(0, 5)).toEqual(["", "", "", "", "after-image"]);
+			expect(viewport.slice(0, 4).some(line => line.includes("after-image"))).toBe(false);
+		} finally {
+			tui.stop();
+			setKittyGraphics(originalGraphics);
+		}
+	});
 
 	it("purges demoted image graphics and repaints the fallback without a destructive replay", async () => {
 		const term = new VirtualTerminal(40, 12);

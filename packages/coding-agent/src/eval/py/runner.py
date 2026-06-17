@@ -190,6 +190,11 @@ class _RunnerState:
 
 
 _CURRENT_RID: contextvars.ContextVar[str | None] = contextvars.ContextVar("omp_current_rid", default=None)
+_CURRENT_DISPLAYED_MATPLOTLIB_FIGURE_IDS: contextvars.ContextVar[set[int] | None] = contextvars.ContextVar(
+    "omp_displayed_matplotlib_figure_ids",
+    default=None,
+)
+
 
 _STATE = _RunnerState()
 
@@ -670,6 +675,36 @@ _REPR_MIMES = [
 ]
 
 
+def _is_matplotlib_figure(value: Any) -> bool:
+    figure_module = sys.modules.get("matplotlib.figure")
+    figure_cls = getattr(figure_module, "Figure", None)
+    if isinstance(figure_cls, type) and isinstance(value, figure_cls):
+        return True
+
+    value_type = type(value)
+    return value_type.__module__ == "matplotlib.figure" and value_type.__name__ == "Figure"
+
+
+def _matplotlib_figure_png(value: Any) -> str | None:
+    if not _is_matplotlib_figure(value):
+        return None
+
+    savefig = getattr(value, "savefig", None)
+    if not callable(savefig):
+        return None
+
+    try:
+        buf = io.BytesIO()
+        savefig(buf, format="png", bbox_inches="tight")
+    except Exception:
+        return None
+
+    displayed_ids = _CURRENT_DISPLAYED_MATPLOTLIB_FIGURE_IDS.get()
+    if displayed_ids is not None:
+        displayed_ids.add(id(value))
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
 def _coerce_image_bytes(value: Any) -> str:
     if isinstance(value, (bytes, bytearray)):
         return base64.b64encode(bytes(value)).decode("ascii")
@@ -685,6 +720,10 @@ def _mime_bundle(value: Any) -> dict:
     accessors, and always provides ``text/plain``.
     """
     bundle: dict[str, Any] = {}
+    matplotlib_png = _matplotlib_figure_png(value)
+    if matplotlib_png is not None:
+        bundle["image/png"] = matplotlib_png
+
 
     mimebundle = getattr(value, "_repr_mimebundle_", None)
     if callable(mimebundle):
@@ -758,6 +797,9 @@ def _flush_matplotlib_figures() -> None:
     for num in fignums:
         try:
             fig = plt.figure(num)
+            if id(fig) in (_CURRENT_DISPLAYED_MATPLOTLIB_FIGURE_IDS.get() or set()):
+                plt.close(fig)
+                continue
             buf = io.BytesIO()
             fig.savefig(buf, format="png", bbox_inches="tight")
             data = base64.b64encode(buf.getvalue()).decode("ascii")
@@ -978,6 +1020,7 @@ def _start_parent_watchdog() -> None:
 async def _handle_request_async(req: dict) -> None:
     rid = str(req.get("id"))
     token = _CURRENT_RID.set(rid)
+    displayed_matplotlib_token = _CURRENT_DISPLAYED_MATPLOTLIB_FIGURE_IDS.set(set())
     _STATE.capture_rid = rid
     _STATE.user_ns["__omp_run_id__"] = rid
     _STATE.cancel_requested = False
@@ -1046,6 +1089,7 @@ async def _handle_request_async(req: dict) -> None:
             _STATE.capture_rid = None
         _flush_stream_proxies(rid)
         _CURRENT_RID.reset(token)
+        _CURRENT_DISPLAYED_MATPLOTLIB_FIGURE_IDS.reset(displayed_matplotlib_token)
 
 
 def _emit_error(rid: str, exc: BaseException) -> None:

@@ -6,11 +6,37 @@
  */
 import { afterEach, describe, expect, it } from "bun:test";
 import * as path from "node:path";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { disposeAllKernelSessions, executePythonWithKernel } from "@oh-my-pi/pi-coding-agent/eval/py/executor";
 import { PythonKernel } from "@oh-my-pi/pi-coding-agent/eval/py/kernel";
+import { filterEnv, resolvePythonRuntime } from "@oh-my-pi/pi-coding-agent/eval/py/runtime";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 const SHOULD_RUN = Bun.env.PI_PYTHON_INTEGRATION === "1";
+const MATPLOTLIB_TEST_CWD = process.cwd();
+
+async function hasMatplotlib(cwd: string): Promise<boolean> {
+	if (!SHOULD_RUN) return false;
+	try {
+		const { env } = (await Settings.init()).getShellConfig();
+		const runtime = resolvePythonRuntime(cwd, filterEnv(env));
+		const spawnEnv: Record<string, string> = {};
+		for (const [key, value] of Object.entries(runtime.env)) {
+			if (typeof value === "string") spawnEnv[key] = value;
+		}
+		const result = Bun.spawnSync([runtime.pythonPath, "-c", "import matplotlib"], {
+			cwd,
+			env: spawnEnv,
+			stdout: "ignore",
+			stderr: "ignore",
+		});
+		return result.exitCode === 0;
+	} catch {
+		return false;
+	}
+}
+
+const HAS_MATPLOTLIB = await hasMatplotlib(MATPLOTLIB_TEST_CWD);
 
 describe.skipIf(!SHOULD_RUN)("python runner subprocess", () => {
 	afterEach(async () => {
@@ -103,6 +129,51 @@ describe.skipIf(!SHOULD_RUN)("python runner subprocess", () => {
 			const second = await executePythonWithKernel(kernel, "x + 1");
 			expect(second.exitCode).toBe(0);
 			expect(second.output).toContain("22");
+		} finally {
+			await kernel.shutdown();
+		}
+	});
+
+	it.skipIf(!HAS_MATPLOTLIB)("captures display(fig) as a PNG before the figure is closed", async () => {
+		const kernel = await PythonKernel.start({ cwd: MATPLOTLIB_TEST_CWD });
+		try {
+			const result = await executePythonWithKernel(
+				kernel,
+				[
+					"import matplotlib.pyplot as plt",
+					"fig, ax = plt.subplots()",
+					"ax.plot([0, 1], [0, 1])",
+					"display(fig)",
+					"plt.close(fig)",
+				].join("\n"),
+			);
+
+			expect(result.exitCode).toBe(0);
+			const images = result.displayOutputs.filter(output => output.type === "image");
+			expect(images).toHaveLength(1);
+			expect(images[0]).toMatchObject({ mimeType: "image/png" });
+			expect(images[0]?.data).not.toContain("blob:");
+			expect(result.output).toContain("<Figure");
+		} finally {
+			await kernel.shutdown();
+		}
+	});
+
+	it.skipIf(!HAS_MATPLOTLIB)("does not flush a second PNG for a displayed open figure", async () => {
+		const kernel = await PythonKernel.start({ cwd: MATPLOTLIB_TEST_CWD });
+		try {
+			const result = await executePythonWithKernel(
+				kernel,
+				[
+					"import matplotlib.pyplot as plt",
+					"fig, ax = plt.subplots()",
+					"ax.plot([0, 1], [1, 0])",
+					"display(fig)",
+				].join("\n"),
+			);
+
+			expect(result.exitCode).toBe(0);
+			expect(result.displayOutputs.filter(output => output.type === "image")).toHaveLength(1);
 		} finally {
 			await kernel.shutdown();
 		}

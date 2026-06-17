@@ -1,4 +1,6 @@
+import { getKittyGraphics } from "../kitty-graphics";
 import {
+	getCellDimensions,
 	getImageDimensions,
 	type ImageDimensions,
 	imageFallback,
@@ -284,6 +286,10 @@ export class Image implements Component {
 	#cachedLines?: string[];
 	#cachedWidth?: number;
 	#cachedSuppressed = false;
+	#cachedImageProtocol: typeof TERMINAL.imageProtocol = null;
+	#cachedCellWidthPx = 0;
+	#cachedCellHeightPx = 0;
+	#cachedKittyUnicodePlaceholders = false;
 	// Tallest graphic placement this image has rendered. The text fallback
 	// pads itself to this height so a budget demotion never shrinks the block
 	// (its rows may already be committed to native scrollback).
@@ -311,14 +317,25 @@ export class Image implements Component {
 	}
 
 	render(width: number): readonly string[] {
-		const hasProtocol = TERMINAL.imageProtocol != null;
+		const imageProtocol = TERMINAL.imageProtocol;
+		const hasProtocol = imageProtocol != null;
+		const cellDimensions = getCellDimensions();
+		const kittyUnicodePlaceholders = getKittyGraphics().unicodePlaceholders;
 		// observe() must run on every pass — even a cache hit — so the image keeps
 		// its display-order slot in the budget. Only graphics-capable frames count
 		// toward (and are demoted by) the budget; without a protocol every image is
 		// already text.
 		const suppressed = hasProtocol && this.#budget !== undefined ? this.#budget.observe(this.#imageId ?? 0) : false;
 
-		if (this.#cachedLines && this.#cachedWidth === width && this.#cachedSuppressed === suppressed) {
+		if (
+			this.#cachedLines &&
+			this.#cachedWidth === width &&
+			this.#cachedSuppressed === suppressed &&
+			this.#cachedImageProtocol === imageProtocol &&
+			this.#cachedCellWidthPx === cellDimensions.widthPx &&
+			this.#cachedCellHeightPx === cellDimensions.heightPx &&
+			this.#cachedKittyUnicodePlaceholders === kittyUnicodePlaceholders
+		) {
 			return this.#cachedLines;
 		}
 
@@ -370,6 +387,10 @@ export class Image implements Component {
 		this.#cachedLines = lines;
 		this.#cachedWidth = width;
 		this.#cachedSuppressed = suppressed;
+		this.#cachedImageProtocol = imageProtocol;
+		this.#cachedCellWidthPx = cellDimensions.widthPx;
+		this.#cachedCellHeightPx = cellDimensions.heightPx;
+		this.#cachedKittyUnicodePlaceholders = kittyUnicodePlaceholders;
 
 		return lines;
 	}

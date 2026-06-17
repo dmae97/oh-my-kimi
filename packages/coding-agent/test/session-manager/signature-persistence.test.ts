@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
 import type { SessionMessageEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { getBlobsDir, TempDir } from "@oh-my-pi/pi-utils";
@@ -132,6 +132,71 @@ describe("SessionManager signature persistence", () => {
 				},
 			],
 		});
+	});
+
+	it("externalizes and restores tool result image blocks across reload", async () => {
+		using tempDir = TempDir.createSync("@pi-session-tool-image-persistence-");
+		const session = SessionManager.create(tempDir.path(), tempDir.path());
+		const contentImage: ImageContent = {
+			type: "image",
+			data: Buffer.from("read-image-payload".repeat(100)).toString("base64"),
+			mimeType: "image/png",
+		};
+		const detailImage: ImageContent = {
+			type: "image",
+			data: Buffer.from("eval-detail-image-payload".repeat(100)).toString("base64"),
+			mimeType: "image/png",
+		};
+
+		session.appendMessage({
+			role: "assistant",
+			content: [{ type: "toolCall", id: "tool_image", name: "eval", arguments: {} }],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "claude-sonnet",
+			usage: {
+				input: 1,
+				output: 1,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 2,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+			timestamp: 1,
+		} satisfies AssistantMessage);
+		session.appendMessage({
+			role: "toolResult",
+			toolCallId: "tool_image",
+			toolName: "eval",
+			content: [{ type: "text", text: "displayed image" }, contentImage],
+			details: { images: [detailImage] },
+			isError: false,
+			timestamp: 2,
+		});
+		await session.flush();
+
+		const sessionFile = session.getSessionFile();
+		if (!sessionFile) throw new Error("Expected persisted session file");
+		const rawSession = await fs.readFile(sessionFile, "utf8");
+		expect(rawSession).not.toContain(contentImage.data);
+		expect(rawSession).not.toContain(detailImage.data);
+
+		const contentHash = new Bun.SHA256().update(Buffer.from(contentImage.data, "base64")).digest("hex");
+		const detailHash = new Bun.SHA256().update(Buffer.from(detailImage.data, "base64")).digest("hex");
+		await expect(fs.readFile(path.join(getBlobsDir(), contentHash))).resolves.toBeDefined();
+		await expect(fs.readFile(path.join(getBlobsDir(), detailHash))).resolves.toBeDefined();
+
+		const reloaded = await SessionManager.open(sessionFile);
+		const reloadedToolEntry = reloaded
+			.getEntries()
+			.find(entry => entry.type === "message" && entry.message.role === "toolResult");
+		if (reloadedToolEntry?.type !== "message" || reloadedToolEntry.message.role !== "toolResult") {
+			throw new Error("Expected tool result message");
+		}
+
+		expect(reloadedToolEntry.message.content).toEqual([{ type: "text", text: "displayed image" }, contentImage]);
+		expect((reloadedToolEntry.message.details as { images?: ImageContent[] }).images).toEqual([detailImage]);
 	});
 
 	it("rehydrates assistant replay metadata in memory without rewriting the session file", async () => {
