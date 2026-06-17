@@ -1,4 +1,5 @@
 import type { Effort } from "@oh-my-pi/pi-catalog/effort";
+import { isKimiModelId } from "@oh-my-pi/pi-catalog/identity";
 import { resolveWireModelId } from "@oh-my-pi/pi-catalog/model-thinking";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import type { ResolvedOpenAICompat } from "@oh-my-pi/pi-catalog/types";
@@ -1280,6 +1281,21 @@ function resolveOpenAICompatForRequest(
 	});
 }
 
+function dropOpenRouterKimiForcedToolReasoning(
+	params: OpenAICompletionsParams,
+	model: Model<"openai-completions">,
+	policy: OpenAICompatPolicy,
+): void {
+	if (
+		policy.reasoning.disableReason === "forced-tool-choice" &&
+		policy.reasoning.disableMode === "openrouter-enabled-false" &&
+		policy.compat.isOpenRouterHost &&
+		isKimiModelId(model.id)
+	) {
+		delete params.reasoning;
+	}
+}
+
 function buildParams(
 	model: Model<"openai-completions">,
 	context: Context,
@@ -1417,6 +1433,7 @@ function buildParams(
 	applyChatCompletionsToolStream(params, model, compat);
 
 	applyChatCompletionsCompatPolicy(params, finalPolicy);
+	dropOpenRouterKimiForcedToolReasoning(params, model, finalPolicy);
 
 	applyOpenAIGatewayRouting(params, compat);
 
