@@ -252,6 +252,38 @@ describe("AgentSession.branchFromBtw", () => {
 		);
 	});
 
+	it("cancels post-prompt work after branch hooks before switching sessions", async () => {
+		const hookRelease = Promise.withResolvers<void>();
+		const extensionRunner = {
+			hasHandlers: vi.fn((eventType: string) => eventType === "session_before_branch"),
+			emit: vi.fn(async () => {
+				await hookRelease.promise;
+				return undefined;
+			}),
+		} as unknown as ExtensionRunner;
+		const activeSession = await createSession({ extensionRunner });
+		activeSession.sessionManager.appendMessage({ role: "user", content: "seed", timestamp: Date.now() });
+		await activeSession.sessionManager.flush();
+		activeSession.queueDeferredMessage({
+			role: "custom",
+			customType: "test-hidden-message",
+			content: "hidden",
+			display: false,
+			timestamp: Date.now(),
+		});
+		expect(activeSession.hasPostPromptWork).toBe(true);
+
+		const branchPromise = activeSession.branchFromBtw("question", createBtwAssistant());
+		await Promise.resolve();
+		expect(activeSession.hasPostPromptWork).toBe(true);
+
+		hookRelease.resolve();
+		const result = await branchPromise;
+
+		expect(result.cancelled).toBe(false);
+		expect(activeSession.hasPostPromptWork).toBe(false);
+	});
+
 	it("throws for in-memory sessions", async () => {
 		const activeSession = await createSession({ persisted: false });
 		activeSession.sessionManager.appendMessage({ role: "user", content: "seed", timestamp: Date.now() });
