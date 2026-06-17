@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `/guided-goal` to fall back to the current session model when neither the `plan` nor `slow` role resolves, instead of aborting during setup ([#2855](https://github.com/can1357/oh-my-pi/issues/2855)).
+
 ## [16.0.5] - 2026-06-17
 
 ### Added
