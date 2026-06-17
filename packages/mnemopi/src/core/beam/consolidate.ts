@@ -1,6 +1,7 @@
 import type { SQLQueryBindings } from "bun:sqlite";
 import { generateId, stableMemoryId } from "../../util/ids";
 import { aaakEncode } from "../aaak";
+import { REGEX_EXTRACTION_MAX_INPUT_CHARS } from "../entities";
 import { EpisodicGraph } from "../episodic-graph";
 import { heuristicExtractFacts } from "../extraction";
 import { clampVeracity } from "../veracity-consolidation";
@@ -60,6 +61,7 @@ const TIER3_MAX_CHARS = envInt("MNEMOPI_TIER3_MAX_CHARS", 300);
 const DEFAULT_MAX_EPISODE_CHARS = 100_000;
 const SLEEP_SUMMARY_SEPARATOR = " | ";
 const SLEEP_TRUNCATION_MARKER = "\n[... sleep_consolidation episode truncated by maxEpisodeChars ...]";
+const PATTERN_FACT_EXTRACTION_MAX_INPUT_CHARS = REGEX_EXTRACTION_MAX_INPUT_CHARS;
 
 type SleepSummary = {
 	summary: string;
@@ -503,6 +505,7 @@ export function extractAndStoreFacts(
 		decision: 0,
 	};
 	const text = String(content ?? "");
+	if (text.length > PATTERN_FACT_EXTRACTION_MAX_INPUT_CHARS) return counts;
 	for (const match of text.matchAll(
 		/(\d+(?:[.,]\d+)?)\s*(ms|sec|seconds?|minutes?|hours?|days?|weeks?|months?|%|KB|MB|GB|TB|rows?|columns?|roles?|features?|bugs?|commits?|cards?|users?|items?|tests?|APIs?|endpoints?|sprints?|tickets?)\b/gi,
 	)) {

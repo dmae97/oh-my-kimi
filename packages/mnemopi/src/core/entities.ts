@@ -118,6 +118,9 @@ const ENTITY_EXTRACTION_STOP_WORD_VALUES = [
 ] as const;
 
 export const ENTITY_EXTRACTION_STOP_WORDS: ReadonlySet<string> = new Set(ENTITY_EXTRACTION_STOP_WORD_VALUES);
+/** Maximum raw text size for regex-only entity extraction. */
+export const REGEX_EXTRACTION_MAX_INPUT_CHARS = 50_000;
+
 const ENTITY_PATTERNS: readonly RegExp[] = [
 	/@(\w{2,30})/g,
 	/#(\w{2,30})/g,
@@ -192,6 +195,7 @@ function isPureNumber(entity: string): boolean {
 
 export function extractEntitiesRegex(text: string): string[] {
 	if (typeof text !== "string" || text.length === 0) return [];
+	if (text.length > REGEX_EXTRACTION_MAX_INPUT_CHARS) return [];
 
 	const entities = new Set<string>();
 	for (const sourcePattern of ENTITY_PATTERNS) {
