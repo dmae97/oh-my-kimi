@@ -8,6 +8,7 @@
 - Added automatic endpoint-mode support for google-antigravity provider calls so users can force production-only or sandbox-only usage
 - Added `images.describeForTextModels` option (default `true`) to control automatic image description for attachments sent to models without vision input
 - Added automatic vision fallback prompts to describe images for text-only models
+- Added `advisor.immuneTurns` setting (default `1`) to limit how often advisor `concern`/`blocker` notes can interrupt the primary agent.
 
 ### Changed
 

@@ -68,6 +68,15 @@ export function isInterruptingSeverity(severity: AdvisorSeverity | undefined): b
 
 /** How an advisor note is routed to the primary. */
 export type AdvisorDeliveryChannel = "aside" | "steer" | "preserve";
+/** Half-open turn-count fence for the post-interrupt cooldown. */
+export function isAdvisorInterruptImmuneTurnActive(opts: {
+	completedTurns: number;
+	immuneTurnStart: number | undefined;
+	immuneTurns: number;
+}): boolean {
+	if (opts.immuneTurnStart === undefined || opts.immuneTurns <= 0) return false;
+	return opts.completedTurns < opts.immuneTurnStart + opts.immuneTurns;
+}
 
 /**
  * Decide how one advisor note reaches the primary agent.
@@ -84,15 +93,19 @@ export type AdvisorDeliveryChannel = "aside" | "steer" | "preserve";
  *   auto-resume anything, so it is delivered live. Parking it during an active
  *   run instead strands it (it never reaches the running agent) and the withheld
  *   notes dump as one burst at the next user prompt — the bug this guards.
+ * - During the post-interrupt immune-turn window, further `concern`/`blocker`
+ *   notes are downgraded to asides; suppression preservation still wins.
  */
 export function resolveAdvisorDeliveryChannel(opts: {
 	severity: AdvisorSeverity | undefined;
 	autoResumeSuppressed: boolean;
 	streaming: boolean;
 	aborting: boolean;
+	interruptImmuneTurnActive?: boolean;
 }): AdvisorDeliveryChannel {
 	if (!isInterruptingSeverity(opts.severity)) return "aside";
 	if (opts.autoResumeSuppressed && (opts.aborting || !opts.streaming)) return "preserve";
+	if (opts.interruptImmuneTurnActive) return "aside";
 	return "steer";
 }
 

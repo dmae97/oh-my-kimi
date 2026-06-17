@@ -12,6 +12,7 @@ import {
 	AdvisorRuntime,
 	type AdvisorRuntimeHost,
 	formatAdvisorBatchContent,
+	isAdvisorInterruptImmuneTurnActive,
 	isInterruptingSeverity,
 	resolveAdvisorDeliveryChannel,
 } from "..";
@@ -122,6 +123,44 @@ describe("advisor", () => {
 			expect(isInterruptingSeverity("concern")).toBe(true);
 			expect(isInterruptingSeverity("nit")).toBe(false);
 			expect(isInterruptingSeverity(undefined)).toBe(false);
+		});
+
+		it("keeps the interrupt-immune turn fence half-open for the configured window", () => {
+			expect(
+				isAdvisorInterruptImmuneTurnActive({
+					completedTurns: 4,
+					immuneTurnStart: undefined,
+					immuneTurns: 2,
+				}),
+			).toBe(false);
+			expect(
+				isAdvisorInterruptImmuneTurnActive({
+					completedTurns: 4,
+					immuneTurnStart: 5,
+					immuneTurns: 0,
+				}),
+			).toBe(false);
+			expect(
+				isAdvisorInterruptImmuneTurnActive({
+					completedTurns: 4,
+					immuneTurnStart: 5,
+					immuneTurns: 2,
+				}),
+			).toBe(true);
+			expect(
+				isAdvisorInterruptImmuneTurnActive({
+					completedTurns: 6,
+					immuneTurnStart: 5,
+					immuneTurns: 2,
+				}),
+			).toBe(true);
+			expect(
+				isAdvisorInterruptImmuneTurnActive({
+					completedTurns: 7,
+					immuneTurnStart: 5,
+					immuneTurns: 2,
+				}),
+			).toBe(false);
 		});
 
 		it("wraps each note in an advisory tag with severity as an attribute and escapes the body", () => {
@@ -688,6 +727,26 @@ describe("advisor", () => {
 			}
 		});
 
+		it("routes interrupting notes to the aside queue during immune turns without overriding preservation", () => {
+			expect(
+				resolveAdvisorDeliveryChannel({
+					severity: "concern",
+					autoResumeSuppressed: false,
+					streaming: true,
+					aborting: false,
+					interruptImmuneTurnActive: true,
+				}),
+			).toBe("aside");
+			expect(
+				resolveAdvisorDeliveryChannel({
+					severity: "blocker",
+					autoResumeSuppressed: true,
+					streaming: false,
+					aborting: false,
+					interruptImmuneTurnActive: true,
+				}),
+			).toBe("preserve");
+		});
 		it("preserves an interrupting note while suppressed AND idle (no auto-resume of a stopped run)", () => {
 			for (const severity of ["concern", "blocker"] as const) {
 				expect(

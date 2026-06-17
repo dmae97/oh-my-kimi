@@ -127,6 +127,8 @@ import {
 	AdvisorRuntime,
 	type AdvisorSeverity,
 	formatAdvisorBatchContent,
+	isAdvisorInterruptImmuneTurnActive,
+	isInterruptingSeverity,
 	resolveAdvisorDeliveryChannel,
 } from "../advisor";
 import { type AsyncJob, type AsyncJobDeliveryState, AsyncJobManager } from "../async";
@@ -1082,6 +1084,8 @@ export class AgentSession {
 	 *  suppresses advisor concern/blocker auto-resume until the user next resumes.
 	 *  Advisor advice is still recorded into the transcript, just not auto-run. */
 	#advisorAutoResumeSuppressed = false;
+	#advisorPrimaryTurnsCompleted = 0;
+	#advisorInterruptImmuneTurnStart: number | undefined;
 	#planModeState: PlanModeState | undefined;
 	#goalModeState: GoalModeState | undefined;
 	#goalRuntime: GoalRuntime;
@@ -1519,6 +1523,7 @@ export class AgentSession {
 		this.agent.setRawSseEventInterceptor(this.#onSseEvent);
 		this.agent.setOnTurnEnd(async (messages, signal) => {
 			if (signal?.aborted) return;
+			this.#advisorPrimaryTurnsCompleted++;
 			if (this.#advisorRuntime && !this.#advisorRuntime.disposed) {
 				this.#advisorRuntime.onTurnEnd(messages);
 				const syncBacklog = this.settings.get("advisor.syncBacklog");
@@ -1651,6 +1656,27 @@ export class AgentSession {
 	// -------------------------------------------------------------------------
 	// Advisor runtime lifecycle
 	// -------------------------------------------------------------------------
+	#advisorImmuneTurnLimit(): number {
+		const immuneTurns = this.settings.get("advisor.immuneTurns") as number;
+		if (!Number.isFinite(immuneTurns) || immuneTurns <= 0) return 0;
+		return Math.trunc(immuneTurns);
+	}
+
+	#isAdvisorInterruptImmuneTurnActive(): boolean {
+		return isAdvisorInterruptImmuneTurnActive({
+			completedTurns: this.#advisorPrimaryTurnsCompleted,
+			immuneTurnStart: this.#advisorInterruptImmuneTurnStart,
+			immuneTurns: this.#advisorImmuneTurnLimit(),
+		});
+	}
+
+	// The next primary turn number starts the immune-turn window. While the
+	// interrupting steer is still in flight, completedTurns is lower than this
+	// start, so duplicate concern/blocker advice is also downgraded.
+	#recordAdvisorInterruptDelivered(): void {
+		this.#advisorInterruptImmuneTurnStart = this.#advisorPrimaryTurnsCompleted + 1;
+	}
+
 	#buildAdvisorRuntime(seedToCurrent = false): boolean {
 		if (this.#isDisposed) return false;
 		if (this.#advisorRuntime) return true;
@@ -1680,6 +1706,7 @@ export class AgentSession {
 		// strand the advice and dump the backlog as one burst at the next prompt. A
 		// plain nit always rides the non-interrupting YieldQueue aside.
 		const enqueueAdvice = (note: string, severity?: AdvisorSeverity) => {
+			const interrupting = isInterruptingSeverity(severity);
 			const channel = resolveAdvisorDeliveryChannel({
 				severity,
 				autoResumeSuppressed: this.#advisorAutoResumeSuppressed,
@@ -1690,6 +1717,7 @@ export class AgentSession {
 				// auto-resume it despite the user's interrupt.
 				streaming: this.agent.state.isStreaming,
 				aborting: this.#abortInProgress,
+				interruptImmuneTurnActive: interrupting && this.#isAdvisorInterruptImmuneTurnActive(),
 			});
 			if (channel === "aside") {
 				this.yieldQueue.enqueue("advisor", { note, severity });
@@ -1710,6 +1738,7 @@ export class AgentSession {
 				});
 				return;
 			}
+			this.#recordAdvisorInterruptDelivered();
 			void this.sendCustomMessage(
 				{ customType: "advisor", content, display: true, attribution: "agent", details },
 				{ deliverAs: "steer", triggerTurn: true },
