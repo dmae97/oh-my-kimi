@@ -1264,6 +1264,7 @@ fn run_parallel_search(
 	matcher: &grep_regex::RegexMatcher,
 	params: SearchParams,
 	skipped_oversized: &AtomicU64,
+	files_searched: &AtomicU64,
 ) -> Vec<FileSearchResult> {
 	let file_params = per_file_params(params);
 	let raw: Vec<Option<FileSearchResult>> = entries
@@ -1279,6 +1280,7 @@ fn run_parallel_search(
 					},
 					ReadFile::Skipped => return None,
 				};
+				files_searched.fetch_add(1, Ordering::Relaxed);
 				let search = if file_params.mode == OutputMode::FilesWithMatches {
 					let matched = matcher.is_match(bytes.as_slice()).ok()?;
 					SearchResultInternal {
@@ -1290,6 +1292,9 @@ fn run_parallel_search(
 				} else {
 					run_search_slice(searcher, matcher, bytes.as_slice(), file_params).ok()?
 				};
+				if search.match_count == 0 {
+					return None;
+				}
 				Some(FileSearchResult {
 					relative_path: entry.relative_path.clone(),
 					matches:       search.matches,
