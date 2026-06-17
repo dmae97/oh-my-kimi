@@ -951,6 +951,7 @@ function mapOptionsForApi<TApi extends Api>(
 							level: mapEffortToGoogleThinkingLevel(effort),
 						},
 						toolChoice,
+						antigravityEndpointMode: options?.antigravityEndpointMode,
 					});
 				}
 
@@ -971,6 +972,7 @@ function mapOptionsForApi<TApi extends Api>(
 						requestModelId: resolveWireModelId(model, effort),
 						thinking: { enabled: true, budgetTokens: thinkingBudget },
 						toolChoice,
+						antigravityEndpointMode: options?.antigravityEndpointMode,
 					});
 				}
 				// Budget clamped to zero — fall through to the thinking-off path.
@@ -987,6 +989,7 @@ function mapOptionsForApi<TApi extends Api>(
 				requestModelId: resolveWireModelId(model, undefined),
 				thinking,
 				toolChoice,
+				antigravityEndpointMode: options?.antigravityEndpointMode,
 			});
 		}
 

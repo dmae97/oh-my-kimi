@@ -81,7 +81,7 @@ describe("AgentSession retry delay cap", () => {
 		const mock = createMockModel({ handler: () => ({ throw: rateLimitError }) });
 		const requestedModels: string[] = [];
 		const agent = new Agent({
-			getApiKey: provider => `${provider}-test-key`,
+			getApiKey: model => `${model.provider}-test-key`,
 			initialState: {
 				model,
 				systemPrompt: ["Test"],
@@ -159,7 +159,7 @@ describe("AgentSession retry delay cap", () => {
 		const requestedKeys: string[] = [];
 		let agent!: Agent;
 		agent = new Agent({
-			getApiKey: provider => modelRegistry.getApiKeyForProvider(provider, agent.sessionId),
+			getApiKey: model => modelRegistry.resolver(model, agent.sessionId),
 			initialState: {
 				model,
 				systemPrompt: ["Test"],
@@ -248,7 +248,7 @@ describe("AgentSession retry delay cap", () => {
 		let attempts = 0;
 		let agent!: Agent;
 		agent = new Agent({
-			getApiKey: provider => modelRegistry.getApiKeyForProvider(provider, agent.sessionId),
+			getApiKey: model => modelRegistry.resolver(model, agent.sessionId),
 			initialState: {
 				model,
 				systemPrompt: ["Test"],
@@ -319,7 +319,7 @@ describe("AgentSession retry delay cap", () => {
 			],
 		});
 		const agent = new Agent({
-			getApiKey: provider => `${provider}-test-key`,
+			getApiKey: model => `${model.provider}-test-key`,
 			initialState: {
 				model,
 				systemPrompt: ["Test"],
@@ -371,7 +371,7 @@ describe("AgentSession retry delay cap", () => {
 
 		let streamCalls = 0;
 		const agent = new Agent({
-			getApiKey: provider => `${provider}-test-key`,
+			getApiKey: model => `${model.provider}-test-key`,
 			initialState: {
 				model,
 				systemPrompt: ["Test"],
@@ -481,7 +481,7 @@ describe("AgentSession retry delay cap", () => {
 			],
 		});
 		const agent = new Agent({
-			getApiKey: provider => `${provider}-test-key`,
+			getApiKey: model => `${model.provider}-test-key`,
 			initialState: {
 				model,
 				systemPrompt: ["Test"],
@@ -535,7 +535,7 @@ describe("AgentSession retry delay cap", () => {
 			],
 		});
 		const agent = new Agent({
-			getApiKey: provider => `${provider}-test-key`,
+			getApiKey: model => `${model.provider}-test-key`,
 			initialState: {
 				model,
 				systemPrompt: ["Test"],
@@ -592,7 +592,7 @@ describe("AgentSession retry delay cap", () => {
 			],
 		});
 		const agent = new Agent({
-			getApiKey: provider => `${provider}-test-key`,
+			getApiKey: model => `${model.provider}-test-key`,
 			initialState: {
 				model,
 				systemPrompt: ["Test"],
@@ -650,7 +650,7 @@ describe("AgentSession retry delay cap", () => {
 			responses: [{ content: ["partial"], stopReason: "aborted", errorMessage: "Request was aborted" }],
 		});
 		const agent = new Agent({
-			getApiKey: provider => `${provider}-test-key`,
+			getApiKey: model => `${model.provider}-test-key`,
 			initialState: {
 				model,
 				systemPrompt: ["Test"],
@@ -707,7 +707,7 @@ describe("AgentSession retry delay cap", () => {
 			],
 		});
 		const agent = new Agent({
-			getApiKey: provider => `${provider}-test-key`,
+			getApiKey: model => `${model.provider}-test-key`,
 			initialState: {
 				model,
 				systemPrompt: ["Test"],
@@ -760,7 +760,7 @@ describe("AgentSession retry delay cap", () => {
 		const mock = createMockModel();
 		let attempts = 0;
 		const agent = new Agent({
-			getApiKey: provider => `${provider}-test-key`,
+			getApiKey: model => `${model.provider}-test-key`,
 			initialState: {
 				model,
 				systemPrompt: ["Test"],

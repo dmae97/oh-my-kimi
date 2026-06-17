@@ -374,6 +374,8 @@ export interface SimpleStreamOptions extends Omit<StreamOptions, "apiKey"> {
 	 * or the catalog entry already names the variant).
 	 */
 	openrouterVariant?: string;
+	/** Antigravity endpoint routing mode: "auto" (default with failover), "production", "sandbox". */
+	antigravityEndpointMode?: "auto" | "production" | "sandbox";
 }
 
 // Generic StreamFunction with typed options

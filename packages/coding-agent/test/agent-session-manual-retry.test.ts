@@ -52,7 +52,7 @@ describe("AgentSession manual retry", () => {
 			],
 		});
 		const agent = new Agent({
-			getApiKey: provider => `${provider}-test-key`,
+			getApiKey: model => `${model.provider}-test-key`,
 			initialState: {
 				model,
 				systemPrompt: ["Test"],
@@ -91,7 +91,7 @@ describe("AgentSession manual retry", () => {
 			responses: [{ content: ["already done"], stopReason: "stop" }],
 		});
 		const agent = new Agent({
-			getApiKey: provider => `${provider}-test-key`,
+			getApiKey: model => `${model.provider}-test-key`,
 			initialState: {
 				model,
 				systemPrompt: ["Test"],

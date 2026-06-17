@@ -21,8 +21,8 @@ import {
 } from "@oh-my-pi/pi-utils";
 import { z } from "zod/v4";
 import packageJson from "../../package.json" with { type: "json" };
-
 import { isAuthenticated, type ModelRegistry } from "../config/model-registry";
+import { settings } from "../config/settings";
 import type { CustomTool } from "../extensibility/custom-tools/types";
 import { ohMyPiXAIUserAgent, resolveXAIHttpCredentials } from "../lib/xai-http";
 import imageGenDescription from "../prompts/tools/image-gen.md" with { type: "text" };
@@ -38,7 +38,8 @@ const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 const OPENAI_IMAGE_OUTPUT_FORMAT = "webp";
 const OPENAI_IMAGE_MIME_TYPE = "image/webp";
 
-const ANTIGRAVITY_ENDPOINT = "https://daily-cloudcode-pa.sandbox.googleapis.com";
+const DEFAULT_ANTIGRAVITY_ENDPOINT_PROD = "https://daily-cloudcode-pa.googleapis.com";
+const DEFAULT_ANTIGRAVITY_ENDPOINT_SANDBOX = "https://daily-cloudcode-pa.sandbox.googleapis.com";
 const IMAGE_SYSTEM_INSTRUCTION =
 	"You are an AI image generator. Generate images based on user descriptions. Focus on creating high-quality, visually appealing images that match the user's request.";
 
@@ -1164,33 +1165,74 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 							resolvedImages,
 						);
 
-						const resp = await fetchImpl(`${ANTIGRAVITY_ENDPOINT}/v1internal:streamGenerateContent?alt=sse`, {
-							method: "POST",
-							headers: {
-								Authorization: `Bearer ${bearer}`,
-								"Content-Type": "application/json",
-								Accept: "text/event-stream",
-								"User-Agent": getAntigravityUserAgent(),
-							},
-							body: JSON.stringify(requestBody),
-							signal: requestSignal,
-						});
-
-						if (!resp.ok) {
-							const errorText = await resp.text();
-							let message = errorText;
-							try {
-								const parsedErr = JSON.parse(errorText) as { error?: { message?: string } };
-								message = parsedErr.error?.message ?? message;
-							} catch {
-								// Keep raw text.
+						let endpoints = [DEFAULT_ANTIGRAVITY_ENDPOINT_PROD, DEFAULT_ANTIGRAVITY_ENDPOINT_SANDBOX];
+						try {
+							const mode = settings.get("providers.antigravityEndpoint");
+							if (mode === "production") {
+								endpoints = [DEFAULT_ANTIGRAVITY_ENDPOINT_PROD];
+							} else if (mode === "sandbox") {
+								endpoints = [DEFAULT_ANTIGRAVITY_ENDPOINT_SANDBOX];
 							}
-							throw new ProviderHttpError(
-								`Antigravity image request failed (${resp.status}): ${message}`,
-								resp.status,
-								{ headers: resp.headers },
-							);
+						} catch {
+							// Ignored
 						}
+
+						let resp: Response | undefined;
+						let lastError: Error | undefined;
+
+						for (let i = 0; i < endpoints.length; i++) {
+							const endpoint = endpoints[i];
+							const isLastEndpoint = i === endpoints.length - 1;
+							try {
+								resp = await fetchImpl(`${endpoint}/v1internal:streamGenerateContent?alt=sse`, {
+									method: "POST",
+									headers: {
+										Authorization: `Bearer ${bearer}`,
+										"Content-Type": "application/json",
+										Accept: "text/event-stream",
+										"User-Agent": getAntigravityUserAgent(),
+									},
+									body: JSON.stringify(requestBody),
+									signal: requestSignal,
+								});
+
+								if (resp.ok) {
+									break;
+								}
+
+								const errorText = await resp.text();
+								let message = errorText;
+								try {
+									const parsedErr = JSON.parse(errorText) as { error?: { message?: string } };
+									message = parsedErr.error?.message ?? message;
+								} catch {
+									// Keep raw text.
+								}
+
+								lastError = new ProviderHttpError(
+									`Antigravity image request failed (${resp.status}): ${message}`,
+									resp.status,
+									{ headers: resp.headers },
+								);
+
+								if (resp.status === 429 || (resp.status >= 500 && resp.status < 600)) {
+									if (!isLastEndpoint) {
+										continue;
+									}
+								}
+								break;
+							} catch (error) {
+								lastError = error as Error;
+								if (isLastEndpoint) {
+									break;
+								}
+							}
+						}
+
+						if (!resp?.ok) {
+							throw lastError ?? new Error("Antigravity image generation failed");
+						}
+
 						return resp;
 					},
 					{ signal: requestSignal },

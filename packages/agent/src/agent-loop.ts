@@ -3,12 +3,14 @@
  * Transforms to Message[] only at the LLM call boundary.
  */
 import {
-	type ApiKeyResolveContext,
 	type AssistantMessage,
 	type AssistantMessageEvent,
 	type Context,
 	EventStream,
+	isApiKeyResolver,
 	isZodSchema,
+	resolveApiKeyOnce,
+	seedApiKeyResolver,
 	streamSimple,
 	type ToolResultMessage,
 	type TSchema,
@@ -985,17 +987,6 @@ async function streamAssistantResponse(
 
 	const streamFunction = streamFn || streamSimple;
 
-	// Resolve API key (important for expiring tokens) — do this before resolving
-	// metadata so that the session-sticky credential recorded by getApiKey is
-	// visible to metadataResolver (e.g. for the correct account_uuid in metadata.user_id).
-	const staticApiKey = typeof config.apiKey === "string" ? config.apiKey : undefined;
-	const resolvedApiKey =
-		(config.getApiKey ? await config.getApiKey(config.model.provider) : undefined) || staticApiKey;
-
-	// Re-resolve metadata after credential selection so the per-request value
-	// reflects the credential actually used, not the snapshot from AgentLoopConfig construction.
-	const resolvedMetadata = config.metadataResolver ? config.metadataResolver(config.model.provider) : config.metadata;
-
 	const dynamicToolChoice = config.getToolChoice?.();
 	const dynamicReasoning = config.getReasoning?.();
 	const dynamicDisableReasoning = config.getDisableReasoning?.();
@@ -1019,6 +1010,13 @@ async function streamAssistantResponse(
 	if (promptToolAbortController) providerAbortSignals.push(promptToolAbortController.signal);
 	const finalRequestSignal =
 		providerAbortSignals.length === 1 ? providerAbortSignals[0]! : AbortSignal.any(providerAbortSignals);
+	const requestApiKey = (config.getApiKey ? await config.getApiKey(config.model) : undefined) ?? config.apiKey;
+	const resolvedApiKey = await resolveApiKeyOnce(requestApiKey, finalRequestSignal);
+	const apiKey = isApiKeyResolver(requestApiKey) ? seedApiKeyResolver(resolvedApiKey, requestApiKey) : requestApiKey;
+
+	// Re-resolve metadata after credential selection so the per-request value
+	// reflects the credential actually used, not the snapshot from AgentLoopConfig construction.
+	const resolvedMetadata = config.metadataResolver ? config.metadataResolver(config.model.provider) : config.metadata;
 	const effectiveTemperature =
 		harmonyRetryAttempt > 0 && config.temperature !== undefined ? config.temperature + 0.05 : config.temperature;
 	// Owned tool calling sends no native tools, so any tool_choice would error.
@@ -1069,19 +1067,7 @@ async function streamAssistantResponse(
 		return await runInActiveSpan(chatSpan, async () => {
 			let response = await streamFunction(config.model, llmContext, {
 				...config,
-				// Hand streamSimple a resolver so its central auth-retry policy can
-				// re-resolve on 401 / usage-limit: the initial step reuses the key
-				// already resolved above (which set the session-sticky credential
-				// feeding metadataResolver), and retry steps forward the a/b/c ctx
-				// to config.getApiKey (force-refresh, then rotate). With no
-				// getApiKey hook the caller's own apiKey (string or resolver) flows
-				// through unchanged.
-				apiKey: config.getApiKey
-					? (ctx: ApiKeyResolveContext) =>
-							ctx.error === undefined
-								? resolvedApiKey
-								: Promise.resolve(config.getApiKey!(config.model.provider, ctx))
-					: config.apiKey,
+				apiKey,
 				metadata: resolvedMetadata,
 				toolChoice: effectiveToolChoice,
 				reasoning: effectiveReasoning,

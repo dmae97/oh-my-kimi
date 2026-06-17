@@ -151,8 +151,8 @@ const agent = new Agent({
   // Custom stream function (for proxy backends)
   streamFn: streamProxy,
 
-  // Dynamic API key resolution (for expiring OAuth tokens)
-  getApiKey: async (provider) => refreshToken(),
+  // Dynamic model-scoped API key resolution (for expiring OAuth tokens)
+  getApiKey: async (model) => tokenForModel(model),
 
   // Tool execution context (late-bound UI/session access)
   getToolContext: () => ({ /* app-defined */ }),

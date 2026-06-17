@@ -8,6 +8,7 @@ import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallb
 import type { AuthStorage } from "@oh-my-pi/pi-ai";
 import { prompt } from "@oh-my-pi/pi-utils";
 import { z } from "zod/v4";
+import { settings } from "../../config/settings";
 import type { CustomTool, CustomToolContext, RenderResultOptions } from "../../extensibility/custom-tools/types";
 import type { Theme } from "../../modes/theme/theme";
 import webSearchSystemPrompt from "../../prompts/system/web-search.md" with { type: "text" };
@@ -169,6 +170,7 @@ async function executeSearch(
 				signal,
 				authStorage,
 				sessionId,
+				antigravityEndpointMode: settings.get("providers.antigravityEndpoint"),
 			});
 
 			if (!hasRenderableSearchContent(response)) {

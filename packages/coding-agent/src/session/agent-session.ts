@@ -1701,6 +1701,7 @@ export class AgentSession {
 		if (this.#advisorWatchdogPrompt) {
 			systemPrompt.push(this.#advisorWatchdogPrompt);
 		}
+		const advisorSessionId = this.sessionId ? `${this.sessionId}-advisor` : undefined;
 		const advisorAgent = new Agent({
 			initialState: {
 				systemPrompt,
@@ -1709,15 +1710,8 @@ export class AgentSession {
 				tools: [adviseTool, ...advisorReadOnlyTools],
 			},
 			appendOnlyContext,
-			sessionId: this.sessionId ? `${this.sessionId}-advisor` : undefined,
-			getApiKey: async provider => {
-				const key = await this.#modelRegistry.getApiKeyForProvider(
-					provider,
-					this.sessionId ? `${this.sessionId}-advisor` : undefined,
-				);
-				if (!key) throw new Error(`No API key for advisor provider "${provider}"`);
-				return key;
-			},
+			sessionId: advisorSessionId,
+			getApiKey: requestModel => this.#modelRegistry.resolver(requestModel, advisorSessionId),
 			intentTracing: false,
 		});
 		advisorAgent.setDisableReasoning(shouldDisableReasoning(advisorThinkingLevel));
@@ -4810,11 +4804,24 @@ export class AgentSession {
 			openrouterRoutingPreset !== "default" && options.openrouterVariant === undefined
 				? openrouterRoutingPreset
 				: undefined;
-		if (!sessionOnPayload && !sessionOnResponse && !sessionMetadata && !sessionOnSseEvent && !openrouterVariant)
+		const antigravityEndpointMode =
+			provider === "google-antigravity" ? this.settings.get("providers.antigravityEndpoint") : undefined;
+
+		if (
+			!sessionOnPayload &&
+			!sessionOnResponse &&
+			!sessionMetadata &&
+			!sessionOnSseEvent &&
+			!openrouterVariant &&
+			!antigravityEndpointMode
+		)
 			return options;
 
-		const preparedOptions: SimpleStreamOptions =
-			openrouterVariant === undefined ? { ...options } : { ...options, openrouterVariant };
+		const preparedOptions: SimpleStreamOptions = {
+			...options,
+			...(openrouterVariant !== undefined && { openrouterVariant }),
+			...(antigravityEndpointMode !== undefined && { antigravityEndpointMode }),
+		};
 
 		// Stamp session metadata (e.g. user_id={session_id}) onto direct-call requests so
 		// they share the same session bucket as Agent.prompt-routed requests on Anthropic
@@ -10518,11 +10525,7 @@ export class AgentSession {
 		if (!model) {
 			throw new Error("No active model on session");
 		}
-		const apiKey = await this.#modelRegistry.getApiKey(model, this.sessionId);
-		if (!apiKey) {
-			throw new Error(`No API key for ${model.provider}/${model.id}`);
-		}
-
+		const cacheSessionId = this.sessionId;
 		const snapshot = this.#buildEphemeralSnapshot(args.promptText);
 		const llmMessages = await this.convertMessagesToLlm(snapshot, args.signal);
 		const context: Context = {
@@ -10534,10 +10537,9 @@ export class AgentSession {
 			// removes the surface entirely.
 			tools: [],
 		};
-		const cacheSessionId = this.sessionId;
 		const options = this.prepareSimpleStreamOptions(
 			{
-				apiKey,
+				apiKey: this.#modelRegistry.resolver(model, cacheSessionId),
 				// Side-channel turns must not share OpenAI/Codex append-only
 				// conversation state with the main agent turn: IRC and /btw can run
 				// while the main turn is mid-tool-call. Keep the prompt-cache key
@@ -11439,7 +11441,17 @@ export class AgentSession {
 		const authStorage = this.#modelRegistry.authStorage;
 		if (!authStorage.fetchUsageReports) return null;
 		return authStorage.fetchUsageReports({
-			baseUrlResolver: provider => this.#modelRegistry.getProviderBaseUrl?.(provider),
+			baseUrlResolver: provider => {
+				if (provider === "google-antigravity") {
+					const mode = this.settings.get("providers.antigravityEndpoint");
+					if (mode === "sandbox") {
+						return "https://daily-cloudcode-pa.sandbox.googleapis.com";
+					} else if (mode === "production") {
+						return "https://daily-cloudcode-pa.googleapis.com";
+					}
+				}
+				return this.#modelRegistry.getProviderBaseUrl?.(provider);
+			},
 			signal,
 		});
 	}

@@ -52,6 +52,25 @@ export async function resolveApiKeyOnce(key: ApiKey | undefined, signal?: AbortS
 }
 
 /**
+ * Wraps a resolver with a bearer that was already selected for this request.
+ *
+ * Callers that preflight credentials can pass the returned resolver to the
+ * auth-retry driver without making the driver know about that preflight: the
+ * first initial resolution reuses `seed`, and all later resolutions delegate to
+ * `resolver`.
+ */
+export function seedApiKeyResolver(seed: string | undefined, resolver: ApiKeyResolver): ApiKeyResolver {
+	let seedPending = seed !== undefined;
+	return ctx => {
+		if (seedPending && ctx.error === undefined) {
+			seedPending = false;
+			return seed;
+		}
+		return resolver(ctx);
+	};
+}
+
+/**
  * Classifies whether an error should trigger a credential refresh/rotation
  * retry: a hard `401`, or a rotatable usage-limit ("usage_limit_reached",
  * Codex's "you have hit your ChatGPT usage limit", etc.).

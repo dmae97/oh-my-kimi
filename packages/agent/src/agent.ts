@@ -3,7 +3,7 @@
  */
 import { isPromise } from "node:util/types";
 import {
-	type ApiKeyResolveContext,
+	type ApiKey,
 	type AssistantMessage,
 	type AssistantMessageEvent,
 	type Context,
@@ -148,10 +148,10 @@ export interface AgentOptions {
 	providerSessionState?: Map<string, ProviderSessionState>;
 
 	/**
-	 * Resolves an API key dynamically for each LLM call.
-	 * Useful for expiring tokens (e.g., GitHub Copilot OAuth).
+	 * Resolves an API key or resolver dynamically for each LLM call.
+	 * Useful for expiring tokens and model-scoped credential routing.
 	 */
-	getApiKey?: (provider: string, ctx?: ApiKeyResolveContext) => Promise<string | undefined> | string | undefined;
+	getApiKey?: (model: Model) => Promise<ApiKey | undefined> | ApiKey | undefined;
 
 	/**
 	 * Inspect or replace provider payloads before they are sent.
@@ -344,7 +344,7 @@ export class Agent {
 	#cursorToolResultBuffer: CursorToolResultEntry[] = [];
 
 	streamFn: StreamFn;
-	getApiKey?: (provider: string, ctx?: ApiKeyResolveContext) => Promise<string | undefined> | string | undefined;
+	getApiKey?: (model: Model) => Promise<ApiKey | undefined> | ApiKey | undefined;
 	/**
 	 * Hook invoked after tool arguments are validated and before execution.
 	 * Reassign at any time to swap the implementation (e.g. on extension reload).

@@ -40,7 +40,6 @@ import { AutoLearnController, buildAutoLearnInstructions } from "./autolearn/con
 import { loadCapability } from "./capability";
 import { type Rule, ruleCapability, setActiveRules } from "./capability/rule";
 import { bucketRules } from "./capability/rule-buckets";
-import { createApiKeyResolver } from "./config/api-key-resolver";
 import { shouldEnableAppendOnlyContext } from "./config/append-only-context-mode";
 import { ModelRegistry } from "./config/model-registry";
 import {
@@ -2475,28 +2474,16 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			kimiApiFormat: settings.get("providers.kimiApiFormat") ?? "anthropic",
 			preferWebsockets: preferOpenAICodexWebsockets,
 			getToolContext: tc => toolContextStore.getContext(tc),
-			getApiKey: async (provider, ctx) => {
-				// Read agent.sessionId at call time so credential selection stays aligned
-				// with metadataResolver after /new, fork, resume, or branch switches.
-				// Retry steps (ctx carries an auth error) drive the central a/b/c
-				// policy — force-refresh the same account, then rotate to a sibling —
-				// and may legitimately yield no key when every account is exhausted.
-				if (ctx?.error !== undefined) {
-					return createApiKeyResolver(modelRegistry, provider, { sessionId: agent.sessionId })(ctx);
-				}
-				const key = await modelRegistry.getApiKeyForProvider(provider, agent.sessionId);
-				if (!key) {
-					throw new Error(`No API key found for provider "${provider}"`);
-				}
-				return key;
-			},
+			getApiKey: requestModel => modelRegistry.resolver(requestModel, agent.sessionId),
 			streamFn: (streamModel, context, streamOptions) => {
 				const openrouterRoutingPreset = settings.get("providers.openrouterVariant");
 				const openrouterVariant =
 					openrouterRoutingPreset && openrouterRoutingPreset !== "default" ? openrouterRoutingPreset : undefined;
+				const antigravityEndpointMode = settings.get("providers.antigravityEndpoint");
 				return streamSimple(streamModel, context, {
 					...streamOptions,
 					openrouterVariant: streamOptions?.openrouterVariant ?? openrouterVariant,
+					antigravityEndpointMode: streamOptions?.antigravityEndpointMode ?? antigravityEndpointMode,
 				});
 			},
 			cursorExecHandlers,

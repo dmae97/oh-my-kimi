@@ -3879,6 +3879,34 @@ export const SETTINGS_SCHEMA = {
 			description: "Providers that web_search should never use, even as fallbacks",
 		},
 	},
+	"providers.antigravityEndpoint": {
+		type: "enum",
+		values: ["auto", "production", "sandbox"] as const,
+		default: "auto",
+		ui: {
+			tab: "providers",
+			group: "Services",
+			label: "Antigravity Endpoint Mode",
+			description: "Endpoint routing strategy for google-antigravity providers (chat, search, image, discovery)",
+			options: [
+				{
+					value: "auto",
+					label: "Auto",
+					description: "Try production endpoint, fail over to sandbox on 5xx/429",
+				},
+				{
+					value: "production",
+					label: "Production Only",
+					description: "Force production endpoint only",
+				},
+				{
+					value: "sandbox",
+					label: "Sandbox Only",
+					description: "Force sandbox endpoint only",
+				},
+			],
+		},
+	},
 	"providers.image": {
 		type: "enum",
 		values: ["auto", "openai", "antigravity", "xai", "gemini", "openrouter"] as const,

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Changed `AgentOptions.getApiKey` and `AgentLoopConfig.getApiKey` to receive the active `Model` and return an API key or `ApiKeyResolver`, so credential routing stays model-scoped and retry context is no longer exposed through the agent-core API
+
 ## [16.0.1] - 2026-06-15
 
 ### Fixed

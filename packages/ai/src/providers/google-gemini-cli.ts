@@ -19,6 +19,7 @@ import type {
 	AssistantMessage,
 	Context,
 	Model,
+	ProviderSessionState,
 	StreamFunction,
 	StreamOptions,
 	TextContent,
@@ -96,6 +97,31 @@ export interface GoogleGeminiCliOptions extends StreamOptions {
 	 */
 	requestModelId?: string;
 	projectId?: string;
+	/** Antigravity endpoint routing mode: "auto" (default with failover), "production", "sandbox". */
+	antigravityEndpointMode?: "auto" | "production" | "sandbox";
+	providerSessionState?: Map<string, ProviderSessionState>;
+}
+
+export interface AntigravityProviderSessionState extends ProviderSessionState {
+	lastGoodEndpoint?: string;
+}
+
+const ANTIGRAVITY_PROVIDER_SESSION_STATE_KEY = "google-antigravity-session-state";
+
+export function getAntigravityProviderSessionState(
+	providerSessionState: Map<string, ProviderSessionState> | undefined,
+): AntigravityProviderSessionState | undefined {
+	if (!providerSessionState) return undefined;
+	let existing = providerSessionState.get(ANTIGRAVITY_PROVIDER_SESSION_STATE_KEY) as
+		| AntigravityProviderSessionState
+		| undefined;
+	if (!existing) {
+		existing = {
+			close: () => {},
+		};
+		providerSessionState.set(ANTIGRAVITY_PROVIDER_SESSION_STATE_KEY, existing);
+	}
+	return existing;
 }
 
 const DEFAULT_ENDPOINT = "https://cloudcode-pa.googleapis.com";
@@ -329,6 +355,7 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 
 			const isAntigravity = model.provider === "google-antigravity";
 			const parsedCredentials = parseGeminiCliCredentials(apiKeyRaw);
+			const { accessToken, projectId } = parsedCredentials;
 			// AuthStorage already refreshed credentials before threading them
 			// here (see {@link OAUTH_REFRESH_SKEW_MS}). If the credential lands
 			// expired we bail rather than POSTing a stale token; the next call
@@ -343,10 +370,49 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 					"OAuth token expired before request — please retry; AuthStorage will refresh on the next attempt.",
 				);
 			}
-			const { accessToken, projectId } = parsedCredentials;
-
 			const baseUrl = model.baseUrl?.trim();
-			const endpoints = baseUrl ? [baseUrl] : isAntigravity ? ANTIGRAVITY_ENDPOINT_FALLBACKS : [DEFAULT_ENDPOINT];
+			let endpoints: string[];
+			const providerState = isAntigravity
+				? getAntigravityProviderSessionState(options?.providerSessionState)
+				: undefined;
+
+			if (isAntigravity) {
+				const mode = options?.antigravityEndpointMode ?? "auto";
+				if (mode === "sandbox") {
+					endpoints = [ANTIGRAVITY_SANDBOX_ENDPOINT];
+					if (providerState) providerState.lastGoodEndpoint = undefined;
+				} else if (mode === "production") {
+					endpoints = [ANTIGRAVITY_DAILY_ENDPOINT];
+					if (providerState) providerState.lastGoodEndpoint = undefined;
+				} else {
+					// auto mode
+					if (baseUrl) {
+						const cleanUrl = baseUrl.replace(/\/+$/, "");
+						if (cleanUrl !== ANTIGRAVITY_DAILY_ENDPOINT && cleanUrl !== ANTIGRAVITY_SANDBOX_ENDPOINT) {
+							endpoints = [baseUrl];
+							if (providerState) providerState.lastGoodEndpoint = undefined;
+						} else {
+							const defaultFallbacks = [...ANTIGRAVITY_ENDPOINT_FALLBACKS] as string[];
+							const lastGood = providerState?.lastGoodEndpoint;
+							if (lastGood && defaultFallbacks.includes(lastGood)) {
+								endpoints = [lastGood, ...defaultFallbacks.filter(e => e !== lastGood)];
+							} else {
+								endpoints = defaultFallbacks;
+							}
+						}
+					} else {
+						const defaultFallbacks = [...ANTIGRAVITY_ENDPOINT_FALLBACKS] as string[];
+						const lastGood = providerState?.lastGoodEndpoint;
+						if (lastGood && defaultFallbacks.includes(lastGood)) {
+							endpoints = [lastGood, ...defaultFallbacks.filter(e => e !== lastGood)];
+						} else {
+							endpoints = defaultFallbacks;
+						}
+					}
+				}
+			} else {
+				endpoints = baseUrl ? [baseUrl] : [DEFAULT_ENDPOINT];
+			}
 
 			let requestBody = buildRequest(model, context, projectId, options, isAntigravity);
 			const replacementPayload = await options?.onPayload?.(requestBody, model);
@@ -389,35 +455,6 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 					? AbortSignal.any([callerSignal, preResponseWatchdog])
 					: preResponseWatchdog
 				: callerSignal;
-			const response = await fetchWithRetry(
-				attempt => `${endpoints[Math.min(attempt, endpoints.length - 1)]}/v1internal:streamGenerateContent?alt=sse`,
-				{
-					method: "POST",
-					headers: requestHeaders,
-					body: requestBodyJson,
-					signal: fetchSignal,
-					maxAttempts: MAX_RETRIES + 1,
-					defaultDelayMs: attempt => BASE_DELAY_MS * 2 ** attempt,
-					maxDelayMs: options?.maxRetryDelayMs ?? RATE_LIMIT_BUDGET_MS,
-					fetch: options?.fetch,
-					timeout: false,
-				},
-			);
-			if (!response.ok) {
-				const errorText = await response.text();
-				const validationUrl = extractGoogleValidationUrl(errorText);
-				const errorMessage = validationUrl
-					? formatGoogleValidationRequiredMessage(validationUrl, "retry your request", parsedCredentials.email)
-					: extractErrorMessage(errorText);
-				throw new GeminiCliApiError(
-					`Cloud Code Assist API error (${response.status}): ${errorMessage}`,
-					response.status,
-					{
-						headers: response.headers,
-					},
-				);
-			}
-			const requestUrl = response.url;
 
 			let started = false;
 			let sawFinishReason = false;
@@ -602,66 +639,127 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 			};
 
 			let receivedContent = false;
-			let currentResponse = response;
 
-			for (let emptyAttempt = 0; emptyAttempt <= MAX_EMPTY_STREAM_RETRIES; emptyAttempt++) {
-				if (options?.signal?.aborted) {
-					throw new Error("Request was aborted");
-				}
+			for (let i = 0; i < endpoints.length; i++) {
+				const endpoint = endpoints[i];
+				const isLastEndpoint = i === endpoints.length - 1;
+				try {
+					started = false;
+					resetOutput();
 
-				if (emptyAttempt > 0) {
-					const backoffMs = EMPTY_STREAM_BASE_DELAY_MS * 2 ** (emptyAttempt - 1);
-					try {
-						await scheduler.wait(backoffMs, { signal: options?.signal });
-					} catch {
-						// Normalize AbortError to expected message for consistent error handling
-						throw new Error("Request was aborted");
-					}
-
-					if (!requestUrl) {
-						throw new Error("Missing request URL");
-					}
-
-					currentResponse = await (options?.fetch ?? fetch)(requestUrl, {
+					const response = await fetchWithRetry(() => `${endpoint}/v1internal:streamGenerateContent?alt=sse`, {
 						method: "POST",
 						headers: requestHeaders,
 						body: requestBodyJson,
-						signal: options?.signal,
+						signal: fetchSignal,
+						maxAttempts: isLastEndpoint ? MAX_RETRIES + 1 : 1,
+						defaultDelayMs: attempt => BASE_DELAY_MS * 2 ** attempt,
+						maxDelayMs: options?.maxRetryDelayMs ?? RATE_LIMIT_BUDGET_MS,
+						fetch: options?.fetch,
+						timeout: false,
 					});
 
-					if (!currentResponse.ok) {
-						const retryErrorText = await currentResponse.text();
+					if (!response.ok) {
+						if (response.status === 429 || (response.status >= 500 && response.status < 600)) {
+							if (!isLastEndpoint) {
+								continue;
+							}
+						}
+						const errorText = await response.text();
+						const validationUrl = extractGoogleValidationUrl(errorText);
+						const errorMessage = validationUrl
+							? formatGoogleValidationRequiredMessage(
+									validationUrl,
+									"retry your request",
+									parsedCredentials.email,
+								)
+							: extractErrorMessage(errorText);
 						throw new GeminiCliApiError(
-							`Cloud Code Assist API error (${currentResponse.status}): ${retryErrorText}`,
-							currentResponse.status,
-							{ headers: currentResponse.headers },
+							`Cloud Code Assist API error (${response.status}): ${errorMessage}`,
+							response.status,
+							{ headers: response.headers },
 						);
 					}
-				}
 
-				const streamed = await streamResponse(currentResponse);
-				if (streamed) {
-					receivedContent = true;
+					const requestUrl = response.url;
+					let currentResponse = response;
+
+					for (let emptyAttempt = 0; emptyAttempt <= MAX_EMPTY_STREAM_RETRIES; emptyAttempt++) {
+						if (options?.signal?.aborted) {
+							throw new Error("Request was aborted");
+						}
+
+						if (emptyAttempt > 0) {
+							const backoffMs = EMPTY_STREAM_BASE_DELAY_MS * 2 ** (emptyAttempt - 1);
+							try {
+								await scheduler.wait(backoffMs, { signal: options?.signal });
+							} catch {
+								throw new Error("Request was aborted");
+							}
+
+							if (!requestUrl) {
+								throw new Error("Missing request URL");
+							}
+
+							currentResponse = await (options?.fetch ?? fetch)(requestUrl, {
+								method: "POST",
+								headers: requestHeaders,
+								body: requestBodyJson,
+								signal: options?.signal,
+							});
+
+							if (!currentResponse.ok) {
+								const retryErrorText = await currentResponse.text();
+								throw new GeminiCliApiError(
+									`Cloud Code Assist API error (${currentResponse.status}): ${retryErrorText}`,
+									currentResponse.status,
+									{ headers: currentResponse.headers },
+								);
+							}
+						}
+
+						const streamed = await streamResponse(currentResponse);
+						if (streamed) {
+							receivedContent = true;
+							break;
+						}
+
+						if (emptyAttempt < MAX_EMPTY_STREAM_RETRIES) {
+							resetOutput();
+						}
+					}
+
+					if (!receivedContent) {
+						throw new Error("Cloud Code Assist API returned an empty response");
+					}
+
+					if (options?.signal?.aborted) {
+						throw new Error("Request was aborted");
+					}
+
+					if (!sawFinishReason) {
+						throw new Error(
+							"Cloud Code Assist stream ended without a finish reason (connection dropped or response truncated)",
+						);
+					}
+
+					// Succeeded! Break the endpoints loop.
+					if (
+						providerState &&
+						(options?.antigravityEndpointMode === "auto" || !options?.antigravityEndpointMode)
+					) {
+						providerState.lastGoodEndpoint = endpoint;
+					}
 					break;
+				} catch (error) {
+					const status = extractHttpStatusFromError(error);
+					if (status === 429 || (status !== undefined && status >= 500 && status < 600)) {
+						if (!isLastEndpoint && !started) {
+							continue;
+						}
+					}
+					throw error;
 				}
-
-				if (emptyAttempt < MAX_EMPTY_STREAM_RETRIES) {
-					resetOutput();
-				}
-			}
-
-			if (!receivedContent) {
-				throw new Error("Cloud Code Assist API returned an empty response");
-			}
-
-			if (options?.signal?.aborted) {
-				throw new Error("Request was aborted");
-			}
-
-			if (!sawFinishReason) {
-				throw new Error(
-					"Cloud Code Assist stream ended without a finish reason (connection dropped or response truncated)",
-				);
 			}
 
 			if (output.stopReason === "aborted" || output.stopReason === "error") {
