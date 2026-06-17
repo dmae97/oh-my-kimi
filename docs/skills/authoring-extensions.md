@@ -201,9 +201,14 @@ pi.on("tool_call", async (event, ctx) => {
 pi.on("turn_end", async (_event, ctx) => {
   ctx.ui.setStatus("tokens", `~${ctx.getContextUsage()?.tokens ?? "?"} tokens`);
 });
+
+pi.on("subagent_stop", async (event, ctx) => {
+  // Fires for task/subagent completion; main-agent stop-style continuation stays on agent_end.
+  ctx.ui.setStatus("subagent", `${event.messages.length} completion messages`);
+});
 ```
 
-Full event catalog: see [hooks authoring guide](./authoring-hooks.md).
+Full event catalog: see [extension authoring guide](../extensions.md).
 
 ## Extension vs hook — when to use which
 

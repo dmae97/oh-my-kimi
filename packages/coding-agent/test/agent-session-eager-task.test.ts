@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent, type AgentMessage, type AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { TextContent } from "@oh-my-pi/pi-ai";
@@ -6,6 +6,7 @@ import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream"
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
@@ -84,6 +85,7 @@ describe("AgentSession eager task prelude", () => {
 		agentId?: string,
 		taskWireName?: string,
 		agentKind?: "main" | "sub",
+		extensionRunner?: ExtensionRunner,
 	): Promise<Harness> {
 		const observedCalls: ObservedPromptCall[] = [];
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
@@ -177,6 +179,7 @@ describe("AgentSession eager task prelude", () => {
 			toolRegistry,
 			agentId,
 			agentKind,
+			extensionRunner,
 		});
 
 		const harness = { session, observedCalls, authStorage };
@@ -278,6 +281,56 @@ describe("AgentSession eager task prelude", () => {
 		expect(observedCalls).toHaveLength(1);
 		expect(observedCalls[0]?.messageRoles).toEqual(["developer", "user"]);
 		expect(observedCalls[0]?.messageTexts[0]).toContain("delegation is enabled");
+	});
+
+	it("routes subagent completion to subagent_stop while main sessions keep agent_end", async () => {
+		const mainAgentEndEvents: AgentMessage[][] = [];
+		const mainEmit = vi.fn((event: { type: string; messages?: AgentMessage[] }) => {
+			if (event.type === "agent_end" && event.messages) {
+				mainAgentEndEvents.push(event.messages);
+			}
+			return Promise.resolve(undefined);
+		});
+		const mainEmitSubagentStop = vi.fn((_messages: AgentMessage[]) => Promise.resolve());
+		const mainEmitBeforeAgentStart = vi.fn((_prompt: string, _images: unknown, _systemPrompt: string[]) =>
+			Promise.resolve(undefined),
+		);
+		const mainExtensionRunner = {
+			emit: mainEmit,
+			emitBeforeAgentStart: mainEmitBeforeAgentStart,
+			emitSubagentStop: mainEmitSubagentStop,
+		} as unknown as ExtensionRunner;
+		const { session: mainSession } = await createHarness({}, undefined, undefined, undefined, mainExtensionRunner);
+
+		await mainSession.prompt("finish the main turn");
+		await mainSession.waitForIdle();
+
+		expect(mainEmitSubagentStop).not.toHaveBeenCalled();
+		expect(mainAgentEndEvents).toHaveLength(1);
+		expect(mainAgentEndEvents[0]?.some(message => message.role === "assistant")).toBe(true);
+
+		const subagentStopEvents: AgentMessage[][] = [];
+		const subEmit = vi.fn((_event: { type: string; messages?: AgentMessage[] }) => Promise.resolve(undefined));
+		const subEmitSubagentStop = vi.fn((messages: AgentMessage[]) => {
+			subagentStopEvents.push(messages);
+			return Promise.resolve();
+		});
+		const subEmitBeforeAgentStart = vi.fn((_prompt: string, _images: unknown, _systemPrompt: string[]) =>
+			Promise.resolve(undefined),
+		);
+		const subExtensionRunner = {
+			emit: subEmit,
+			emitBeforeAgentStart: subEmitBeforeAgentStart,
+			emitSubagentStop: subEmitSubagentStop,
+		} as unknown as ExtensionRunner;
+		const { session: subSession } = await createHarness({}, "SubAgent", undefined, "sub", subExtensionRunner);
+
+		await subSession.prompt("finish the subagent turn");
+		await subSession.waitForIdle();
+
+		expect(subEmit).not.toHaveBeenCalledWith(expect.objectContaining({ type: "agent_end" }));
+		expect(subagentStopEvents).toHaveLength(1);
+		expect(subagentStopEvents[0]?.some(message => message.role === "assistant")).toBe(true);
 	});
 
 	it("prepends both todo and task preludes when both are eager, keeping the forced todo choice", async () => {

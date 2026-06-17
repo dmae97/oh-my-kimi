@@ -84,6 +84,7 @@ import type {
 	SessionStartEvent,
 	SessionSwitchEvent,
 	SessionTreeEvent,
+	SubagentStopEvent,
 	TodoReminderEvent,
 	ToolCallEventResult,
 	ToolResultEventResult,
@@ -525,7 +526,7 @@ export interface BeforeAgentStartEvent {
 	systemPrompt: string[];
 }
 
-export type { AgentEndEvent, AgentStartEvent, TurnEndEvent, TurnStartEvent } from "../shared-events";
+export type { AgentEndEvent, AgentStartEvent, SubagentStopEvent, TurnEndEvent, TurnStartEvent } from "../shared-events";
 
 /** Fired when a message starts (user, assistant, or toolResult) */
 export interface MessageStartEvent {
@@ -802,6 +803,7 @@ export type ExtensionEvent =
 	| BeforeAgentStartEvent
 	| AgentStartEvent
 	| AgentEndEvent
+	| SubagentStopEvent
 	| TurnStartEvent
 	| TurnEndEvent
 	| MessageStartEvent
@@ -978,6 +980,7 @@ export interface ExtensionAPI {
 	on(event: "before_agent_start", handler: ExtensionHandler<BeforeAgentStartEvent, BeforeAgentStartEventResult>): void;
 	on(event: "agent_start", handler: ExtensionHandler<AgentStartEvent>): void;
 	on(event: "agent_end", handler: ExtensionHandler<AgentEndEvent>): void;
+	on(event: "subagent_stop", handler: ExtensionHandler<SubagentStopEvent>): void;
 	on(event: "turn_start", handler: ExtensionHandler<TurnStartEvent>): void;
 	on(event: "turn_end", handler: ExtensionHandler<TurnEndEvent>): void;
 	on(event: "message_start", handler: ExtensionHandler<MessageStartEvent>): void;

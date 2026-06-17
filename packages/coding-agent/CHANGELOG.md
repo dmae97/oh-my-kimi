@@ -34,6 +34,9 @@
 - Fixed RPC/ACP startup forcing todo settings back to host defaults, so project-level `todo.enabled`, `todo.reminders`, and `todo.eager` opt-outs now suppress protocol-mode todo prompt injection; enabled todo reminders are now persisted to the JSONL transcript so the log matches the model-visible context ([#2824](https://github.com/can1357/oh-my-pi/issues/2824)).
 - Fixed default prompts to instruct the agent to read applicable `skill://<name>` content before starting work, so discovered skills influence broad task requests like frontend generation ([#2829](https://github.com/can1357/oh-my-pi/issues/2829)).
 - Fixed hashline visible-line validation for ACP editor reads so `INS.POST` anchors displayed by bridge-backed range and multi-range `read` output are merged into the session snapshot before `edit` validates them ([#2773](https://github.com/can1357/oh-my-pi/issues/2773)).
+### Added
+
+- Added a `subagent_stop` extension event for task/subagent completion, leaving `agent_end` scoped to main-agent stop-style continuation ([#2834](https://github.com/can1357/oh-my-pi/issues/2834)).
 
 ### Fixed
 

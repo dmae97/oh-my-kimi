@@ -5,6 +5,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { discoverAndLoadExtensions } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
 import {
@@ -600,6 +601,68 @@ describe("ExtensionRunner", () => {
 			expect(errors).toHaveLength(1);
 			expect(errors[0]?.event).toBe("after_provider_response");
 			expect(errors[0]?.error).toContain("response failed");
+		});
+	});
+
+	describe("subagent_stop", () => {
+		it("invokes handlers with completed subagent messages", async () => {
+			const eventsPath = path.join(tempDir.path(), "subagent-stop-events.jsonl");
+			const extCode = `
+			import * as fs from "node:fs";
+
+			export default function(pi) {
+				pi.on("subagent_stop", async (event) => {
+					fs.appendFileSync(
+						${JSON.stringify(eventsPath)},
+						JSON.stringify({
+							type: event.type,
+							messages: event.messages,
+						}) + "\\n",
+					);
+				});
+			}
+		`;
+			fs.writeFileSync(path.join(extensionsDir, "subagent-stop.ts"), extCode);
+
+			const result = await loadTestExtensions();
+			const runner = new ExtensionRunner(
+				result.extensions,
+				result.runtime,
+				tempDir.path(),
+				sessionManager,
+				modelRegistry,
+			);
+			const completedMessage: AgentMessage = {
+				role: "assistant",
+				content: [{ type: "text", text: "subagent finished" }],
+				api: "anthropic-messages",
+				provider: "anthropic",
+				model: "claude-sonnet-4-5",
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "stop",
+				timestamp: 123,
+			};
+
+			await runner.emitSubagentStop([completedMessage]);
+
+			const events = fs
+				.readFileSync(eventsPath, "utf8")
+				.trim()
+				.split("\n")
+				.map(line => JSON.parse(line));
+			expect(events).toEqual([
+				{
+					type: "subagent_stop",
+					messages: [completedMessage],
+				},
+			]);
 		});
 	});
 

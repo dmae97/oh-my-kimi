@@ -181,6 +181,12 @@ export interface AgentEndEvent {
 	messages: AgentMessage[];
 }
 
+/** Fired when a subagent loop ends */
+export interface SubagentStopEvent {
+	type: "subagent_stop";
+	messages: AgentMessage[];
+}
+
 /** Fired at the start of each turn */
 export interface TurnStartEvent {
 	type: "turn_start";

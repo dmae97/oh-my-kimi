@@ -322,6 +322,10 @@ export class ExtensionRunner {
 		await this.emit({ type: "credential_disabled", ...event });
 	}
 
+	async emitSubagentStop(messages: AgentMessage[]): Promise<void> {
+		await this.emit({ type: "subagent_stop", messages });
+	}
+
 	getUIContext(): ExtensionUIContext {
 		return this.#uiContext;
 	}
