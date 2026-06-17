@@ -395,7 +395,7 @@ export class StatusLineComponent implements Component {
 			this.#defaultBranch = "main";
 			(async () => {
 				const resolved = await git.branch.default(getProjectDir());
-
+				if (this.#disposed) return;
 				if (resolved) {
 					this.#defaultBranch = resolved;
 					if (this.#onBranchChange) {
