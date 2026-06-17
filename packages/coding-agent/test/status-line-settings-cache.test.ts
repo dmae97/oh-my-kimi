@@ -229,6 +229,7 @@ describe("StatusLineComponent effective settings cache", () => {
 	it("skips git probes when no git-backed segment is visible", async () => {
 		const headSpy = spyOn(git.head, "resolveSync").mockReturnValue(null);
 		const statusSpy = spyOn(git.status, "summary").mockResolvedValue({ staged: 0, unstaged: 0, untracked: 0 });
+		const repoSpy = spyOn(git.repo, "resolveSync").mockReturnValue(null);
 		try {
 			const component = makeComponent({
 				preset: "custom",
@@ -237,12 +238,17 @@ describe("StatusLineComponent effective settings cache", () => {
 				sessionAccent: false,
 			});
 
+			component.watchBranch(() => {
+				throw new Error("git watcher should not fire when no git-backed segment is visible");
+			});
 			component.getTopBorder(100);
 			await Promise.resolve();
 
+			expect(repoSpy).not.toHaveBeenCalled();
 			expect(headSpy).not.toHaveBeenCalled();
 			expect(statusSpy).not.toHaveBeenCalled();
 		} finally {
+			repoSpy.mockRestore();
 			statusSpy.mockRestore();
 			headSpy.mockRestore();
 		}

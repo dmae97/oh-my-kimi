@@ -111,6 +111,9 @@ function hasGitSegment(segments: readonly StatusLineSegmentId[]): boolean {
 function hasPrSegment(segments: readonly StatusLineSegmentId[]): boolean {
 	return segments.includes("pr");
 }
+function hasGitBackedSegment(segments: readonly StatusLineSegmentId[]): boolean {
+	return hasGitSegment(segments) || hasPrSegment(segments);
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // StatusLineComponent
@@ -176,6 +179,12 @@ export class StatusLineComponent implements Component {
 	#gitEnabled(): boolean {
 		return settings.get("git.enabled");
 	}
+	#hasGitBackedSegment(): boolean {
+		const effectiveSettings = this.#resolveSettings();
+		return (
+			hasGitBackedSegment(effectiveSettings.leftSegments) || hasGitBackedSegment(effectiveSettings.rightSegments)
+		);
+	}
 
 	/**
 	 * Re-point the status line at another session (focus proxy). Invalidate: model/context/usage all derive
@@ -193,6 +202,7 @@ export class StatusLineComponent implements Component {
 	updateSettings(settings: StatusLineSettings): void {
 		this.#settings = settings;
 		this.#effectiveSettings = undefined;
+		if (this.#onBranchChange) this.#setupGitWatcher();
 	}
 
 	getEffectiveSettingsForTest(): EffectiveStatusLineSettings {
@@ -251,7 +261,7 @@ export class StatusLineComponent implements Component {
 			this.#gitWatcher = null;
 		}
 
-		if (!this.#gitEnabled()) {
+		if (!this.#gitEnabled() || !this.#hasGitBackedSegment()) {
 			this.#invalidateGitCaches();
 			return;
 		}
