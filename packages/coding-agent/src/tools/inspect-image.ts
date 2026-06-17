@@ -21,6 +21,7 @@ import { ToolError } from "./tool-errors";
 const inspectImageSchema = type({
 	path: type("string").describe("image path"),
 	question: type("string").describe("question about image"),
+	"+": "reject",
 });
 
 export type InspectImageParams = typeof inspectImageSchema.infer;

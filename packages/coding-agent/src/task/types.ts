@@ -78,19 +78,22 @@ export interface SubagentLifecyclePayload {
 export const ROLE_LABEL_MAX = 80;
 /** Schema bound on the raw `role` input, before it is label-normalized at every use site. */
 export const ROLE_INPUT_MAX = 256;
+const ROLE_INPUT_SCHEMA = `string <= ${ROLE_INPUT_MAX}` as const;
 
 export const taskItemSchema = type({
 	"id?": "string",
 	"description?": "string",
-	"role?": "string",
+	"role?": ROLE_INPUT_SCHEMA,
 	assignment: "string",
+	"+": "delete",
 });
 const taskItemSchemaIsolated = type({
 	"id?": "string",
 	"description?": "string",
-	"role?": "string",
+	"role?": ROLE_INPUT_SCHEMA,
 	assignment: "string",
 	"isolated?": "boolean",
+	"+": "delete",
 });
 
 /** Single task item. Fields are optional defensively: args stream in token by token. */
@@ -111,26 +114,30 @@ export const taskSchema = type({
 	agent: "string",
 	"id?": "string",
 	"description?": "string",
-	"role?": "string",
+	"role?": ROLE_INPUT_SCHEMA,
 	assignment: "string",
 	"isolated?": "boolean",
+	"+": "delete",
 });
 const taskSchemaNoIsolation = type({
 	agent: "string",
 	"id?": "string",
 	"description?": "string",
-	"role?": "string",
+	"role?": ROLE_INPUT_SCHEMA,
 	assignment: "string",
+	"+": "delete",
 });
 const taskSchemaBatch = type({
 	agent: "string",
 	context: "string",
 	tasks: taskItemSchemaIsolated.array(),
+	"+": "delete",
 });
 const taskSchemaBatchNoIsolation = type({
 	agent: "string",
 	context: "string",
 	tasks: taskItemSchema.array(),
+	"+": "delete",
 });
 const ALL_TASK_SCHEMAS = [taskSchema, taskSchemaNoIsolation, taskSchemaBatch, taskSchemaBatchNoIsolation] as const;
 

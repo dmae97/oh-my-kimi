@@ -6,15 +6,14 @@
  */
 import { type } from "arktype";
 
-const baseSchema = type({ input: "string" });
+const requiredInputSchema = type({ input: "string" });
+const inputAliasSchema = type({ "input?": "string", "_input?": "string" });
 
-export const hashlineEditParamsSchema = baseSchema.pipe(raw => {
-	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
-
-	const record = raw as Record<string, unknown>;
-	if (typeof record.input === "string" || typeof record._input !== "string") return raw;
-
-	return { ...record, input: record._input };
-});
+export const hashlineEditParamsSchema = inputAliasSchema
+	.pipe(raw => {
+		if (raw.input !== undefined || raw._input === undefined) return raw;
+		return { ...raw, input: raw._input };
+	})
+	.pipe(requiredInputSchema);
 
 export type HashlineParams = Parameters<typeof hashlineEditParamsSchema.assert>[0];

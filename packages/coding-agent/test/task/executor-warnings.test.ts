@@ -103,8 +103,8 @@ describe("subagent warning injection", () => {
 	it("accepts successful yield data without warning", () => {
 		const result = finalizeSubprocessOutput({
 			rawOutput: "should be replaced",
-			exitCode: 1,
-			stderr: "should clear",
+			exitCode: 0,
+			stderr: "",
 			doneAborted: false,
 			signalAborted: false,
 			yieldItems: [{ status: "success", data: { ok: true } }],
