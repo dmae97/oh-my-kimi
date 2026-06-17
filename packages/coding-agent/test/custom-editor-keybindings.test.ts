@@ -30,4 +30,18 @@ describe("CustomEditor keybindings", () => {
 		expect(customHandler).toHaveBeenCalledTimes(1);
 		expect(onRetry).not.toHaveBeenCalled();
 	});
+
+	it("lets copy-prompt remaps keep precedence over the default retry chord", () => {
+		const editor = new CustomEditor(getEditorTheme());
+		const onRetry = vi.fn();
+		const onCopyPrompt = vi.fn();
+
+		editor.onRetry = onRetry;
+		editor.onCopyPrompt = onCopyPrompt;
+		editor.setActionKeys("app.clipboard.copyPrompt", ["alt+r"]);
+		editor.handleInput("\x1br");
+
+		expect(onCopyPrompt).toHaveBeenCalledTimes(1);
+		expect(onRetry).not.toHaveBeenCalled();
+	});
 });
