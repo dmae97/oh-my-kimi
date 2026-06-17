@@ -1841,7 +1841,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		let error: string | undefined;
 		let aborted = false;
 		let abortReasonText: string | undefined;
-		const pendingExtensionMessages: Promise<unknown>[] = [];
 		const checkAbort = () => {
 			if (abortSignal.aborted) {
 				throw new ToolAbortError();
@@ -2118,6 +2117,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				void session.abort();
 			}
 
+			const pendingExtensionMessages: Array<Promise<unknown>> = [];
 			const extensionRunner = session.extensionRunner;
 			if (extensionRunner) {
 				extensionRunner.initialize(
@@ -2226,19 +2226,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			const session = monitor.takeActiveSession();
 			if (session) {
 				monitor.captureSalvage(session);
-				const extensionRunner = session.extensionRunner;
-				if (!aborted && extensionRunner?.hasHandlers("session_stop")) {
-					try {
-						await extensionRunner.emitSessionStop(session.messages);
-						while (pendingExtensionMessages.length > 0) {
-							await Promise.all(pendingExtensionMessages.splice(0));
-						}
-					} catch (err) {
-						logger.warn("Failed to emit session_stop event", {
-							error: err instanceof Error ? err.message : String(err),
-						});
-					}
-				}
 				const registry = AgentRegistry.global();
 				if (aborted) {
 					// Hard abort (caller signal / wall-clock / budget): terminal teardown.

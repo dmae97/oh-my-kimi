@@ -18,6 +18,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
 import { isPromise } from "node:util/types";
+
 import type { InMemorySnapshotStore } from "@oh-my-pi/hashline";
 import {
 	type AfterToolCallContext,
@@ -178,6 +179,7 @@ import type {
 	SessionBeforeCompactResult,
 	SessionBeforeSwitchResult,
 	SessionBeforeTreeResult,
+	SessionStopEventResult,
 	ToolExecutionEndEvent,
 	ToolExecutionStartEvent,
 	ToolExecutionUpdateEvent,
@@ -295,6 +297,8 @@ import type { ShakeMode, ShakeResult } from "./shake-types";
 import { ToolChoiceQueue } from "./tool-choice-queue";
 import { classifyUnexpectedStop, isUnexpectedStopCandidate } from "./unexpected-stop-classifier";
 import { YieldQueue } from "./yield-queue";
+
+const SESSION_STOP_CONTINUATION_CAP = 8;
 
 /** Session-specific events that extend the core AgentEvent */
 export type AgentSessionEvent =
@@ -1241,6 +1245,16 @@ export class AgentSession {
 	#promptGeneration = 0;
 	#pendingAgentEndEmit: AgentSessionEvent | undefined;
 	#pendingContextSnapshot:
+		| {
+				promptTokens: number;
+				nonMessageTokens: number;
+				cutoffCount: number;
+		  }
+		| undefined = undefined;
+	#sessionStopContinuationCount = 0;
+	#sessionStopHookActive = false;
+	#pendingProviderRequestNonMessageTokens: number | undefined = undefined;
+	#lastProviderUsageNonMessage:
 		| {
 				promptTokens: number;
 				nonMessageTokens: number;
@@ -3526,6 +3540,55 @@ export class AgentSession {
 		}
 	}
 
+	#sessionStopContinuationContext(result: SessionStopEventResult | undefined): string | undefined {
+		if (!result) return undefined;
+		if (result.continue === true) {
+			return result.additionalContext ?? result.reason;
+		}
+		if (result.decision === "block") {
+			return result.reason ?? result.additionalContext;
+		}
+		return undefined;
+	}
+
+	async #emitSessionStopEvent(messages: AgentMessage[]): Promise<void> {
+		if (this.#agentKind === "sub" || !this.#extensionRunner?.hasHandlers("session_stop")) return;
+		const result = await this.#extensionRunner.emitSessionStop({
+			messages,
+			turn_id: this.#turnIndex,
+			last_assistant_message: this.getLastAssistantMessage(),
+			session_id: this.sessionId,
+			session_file: this.sessionFile,
+			stop_hook_active: this.#sessionStopHookActive,
+		});
+		const additionalContext = this.#sessionStopContinuationContext(result);
+		if (!additionalContext) {
+			this.#sessionStopContinuationCount = 0;
+			this.#sessionStopHookActive = false;
+			return;
+		}
+		if (this.#sessionStopContinuationCount >= SESSION_STOP_CONTINUATION_CAP) {
+			logger.warn("session_stop continuation cap reached", {
+				sessionId: this.sessionId,
+				cap: SESSION_STOP_CONTINUATION_CAP,
+			});
+			this.#sessionStopContinuationCount = 0;
+			this.#sessionStopHookActive = false;
+			return;
+		}
+		this.#sessionStopContinuationCount++;
+		this.#sessionStopHookActive = true;
+		await this.sendCustomMessage(
+			{
+				customType: "session-stop-continuation",
+				content: additionalContext,
+				display: false,
+				attribution: "agent",
+			},
+			{ deliverAs: "nextTurn", triggerTurn: true },
+		);
+	}
+
 	/** Emit extension events based on session events */
 	async #emitExtensionEvent(event: AgentSessionEvent): Promise<void> {
 		if (!this.#extensionRunner) return;
@@ -3534,6 +3597,7 @@ export class AgentSession {
 			await this.#extensionRunner.emit({ type: "agent_start" });
 		} else if (event.type === "agent_end") {
 			await this.#extensionRunner.emit({ type: "agent_end", messages: event.messages });
+			await this.#emitSessionStopEvent(event.messages);
 		} else if (event.type === "turn_start") {
 			const hookEvent: TurnStartEvent = {
 				type: "turn_start",

@@ -605,7 +605,7 @@ describe("ExtensionRunner", () => {
 	});
 
 	describe("session_stop", () => {
-		it("invokes handlers with completed stopped session messages", async () => {
+		it("invokes handlers with completed main-session messages and returns continuation feedback", async () => {
 			const eventsPath = path.join(tempDir.path(), "session-stop-events.jsonl");
 			const extCode = `
 			import * as fs from "node:fs";
@@ -617,8 +617,14 @@ describe("ExtensionRunner", () => {
 						JSON.stringify({
 							type: event.type,
 							messages: event.messages,
+							turn_id: event.turn_id,
+							last_assistant_message: event.last_assistant_message,
+							session_id: event.session_id,
+							session_file: event.session_file,
+							stop_hook_active: event.stop_hook_active,
 						}) + "\\n",
 					);
+					return { continue: true, additionalContext: "Run one more pass." };
 				});
 			}
 		`;
@@ -634,7 +640,7 @@ describe("ExtensionRunner", () => {
 			);
 			const completedMessage: AgentMessage = {
 				role: "assistant",
-				content: [{ type: "text", text: "subagent finished" }],
+				content: [{ type: "text", text: "main session finished" }],
 				api: "anthropic-messages",
 				provider: "anthropic",
 				model: "claude-sonnet-4-5",
@@ -650,7 +656,14 @@ describe("ExtensionRunner", () => {
 				timestamp: 123,
 			};
 
-			await runner.emitSessionStop([completedMessage]);
+			const stopResult = await runner.emitSessionStop({
+				messages: [completedMessage],
+				turn_id: 2,
+				last_assistant_message: completedMessage,
+				session_id: "session-123",
+				session_file: "/tmp/session.jsonl",
+				stop_hook_active: false,
+			});
 
 			const events = fs
 				.readFileSync(eventsPath, "utf8")
@@ -661,8 +674,14 @@ describe("ExtensionRunner", () => {
 				{
 					type: "session_stop",
 					messages: [completedMessage],
+					turn_id: 2,
+					last_assistant_message: completedMessage,
+					session_id: "session-123",
+					session_file: "/tmp/session.jsonl",
+					stop_hook_active: false,
 				},
 			]);
+			expect(stopResult).toEqual({ continue: true, additionalContext: "Run one more pass." });
 		});
 	});
 
