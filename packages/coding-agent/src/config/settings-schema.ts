@@ -415,6 +415,16 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 	shellPath: { type: "string", default: undefined },
+	"git.enabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "interaction",
+			group: "Git",
+			label: "Enable Git Integration",
+			description: "Show git branch, status, and PR information in the TUI and watch repository metadata.",
+		},
+	},
 
 	extensions: { type: "array", default: EMPTY_STRING_ARRAY },
 

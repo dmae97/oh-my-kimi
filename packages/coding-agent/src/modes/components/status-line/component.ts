@@ -104,6 +104,13 @@ const EMPTY_MESSAGES: readonly AgentMessage[] = [];
 function hasContextSegment(segments: readonly StatusLineSegmentId[]): boolean {
 	return segments.includes("context_pct") || segments.includes("context_total");
 }
+function hasGitSegment(segments: readonly StatusLineSegmentId[]): boolean {
+	return segments.includes("git");
+}
+
+function hasPrSegment(segments: readonly StatusLineSegmentId[]): boolean {
+	return segments.includes("pr");
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // StatusLineComponent
@@ -165,6 +172,9 @@ export class StatusLineComponent implements Component {
 			sessionAccent: settings.get("statusLine.sessionAccent"),
 			transparent: settings.get("statusLine.transparent"),
 		};
+	}
+	#gitEnabled(): boolean {
+		return settings.get("git.enabled");
 	}
 
 	/**
@@ -241,6 +251,11 @@ export class StatusLineComponent implements Component {
 			this.#gitWatcher = null;
 		}
 
+		if (!this.#gitEnabled()) {
+			this.#invalidateGitCaches();
+			return;
+		}
+
 		const repository = git.repo.resolveSync(getProjectDir());
 		if (!repository) return;
 
@@ -286,6 +301,8 @@ export class StatusLineComponent implements Component {
 		this.#cachedPrContext = undefined;
 	}
 	#getCurrentBranch(): string | null {
+		if (!this.#gitEnabled()) return null;
+
 		const cwd = getProjectDir();
 		if (this.#cachedBranch !== undefined && this.#cachedBranchCwd === cwd) {
 			return this.#cachedBranch;
@@ -322,6 +339,7 @@ export class StatusLineComponent implements Component {
 	}
 
 	#getGitStatus(): { staged: number; unstaged: number; untracked: number } | null {
+		if (!this.#gitEnabled()) return null;
 		if (this.#gitStatusInFlight || Date.now() - this.#gitStatusLastFetch < 1000) {
 			return this.#cachedGitStatus;
 		}
@@ -343,6 +361,8 @@ export class StatusLineComponent implements Component {
 	}
 
 	#lookupPr(): { number: number; url: string } | null {
+		if (!this.#gitEnabled()) return null;
+
 		const branch = this.#getCurrentBranch();
 		const currentContext = branch ? createPrCacheContext(branch, this.#cachedBranchRepoId ?? null) : null;
 
@@ -550,6 +570,8 @@ export class StatusLineComponent implements Component {
 		width: number,
 		segmentOptions: StatusLineSettings["segmentOptions"],
 		includeContext: boolean,
+		includeGit: boolean,
+		includePr: boolean,
 	): SegmentContext {
 		const state = this.session.state;
 
@@ -587,6 +609,10 @@ export class StatusLineComponent implements Component {
 			contextPercent = collabState.contextUsage.percent ?? contextPercent;
 		}
 
+		const gitBranch = includeGit || includePr ? this.#getCurrentBranch() : null;
+		const gitStatus = includeGit ? this.#getGitStatus() : null;
+		const gitPr = includePr ? this.#lookupPr() : null;
+
 		return {
 			session: this.session,
 			focusedAgentId: this.#focusedAgentId,
@@ -603,9 +629,9 @@ export class StatusLineComponent implements Component {
 			subagentCount: this.#subagentCount,
 			sessionStartTime: this.#sessionStartTime,
 			git: {
-				branch: this.#getCurrentBranch(),
-				status: this.#getGitStatus(),
-				pr: this.#lookupPr(),
+				branch: gitBranch,
+				status: gitStatus,
+				pr: gitPr,
 			},
 			usage: this.#cachedUsage,
 		};
@@ -656,7 +682,19 @@ export class StatusLineComponent implements Component {
 		const effectiveSettings = this.#resolveSettings();
 		const includeContext =
 			hasContextSegment(effectiveSettings.leftSegments) || hasContextSegment(effectiveSettings.rightSegments);
-		const ctx = this.#buildSegmentContext(width, effectiveSettings.segmentOptions, includeContext);
+		const gitEnabled = this.#gitEnabled();
+		const includeGit =
+			gitEnabled &&
+			(hasGitSegment(effectiveSettings.leftSegments) || hasGitSegment(effectiveSettings.rightSegments));
+		const includePr =
+			gitEnabled && (hasPrSegment(effectiveSettings.leftSegments) || hasPrSegment(effectiveSettings.rightSegments));
+		const ctx = this.#buildSegmentContext(
+			width,
+			effectiveSettings.segmentOptions,
+			includeContext,
+			includeGit,
+			includePr,
+		);
 		const separatorDef = getSeparator(effectiveSettings.separator ?? "powerline-thin", theme);
 
 		// `transparent` reuses the empty-string sentinel (`\x1b[49m`) so the bar
