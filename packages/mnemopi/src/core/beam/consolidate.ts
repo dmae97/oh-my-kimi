@@ -67,6 +67,10 @@ type SleepSummary = {
 	truncated: boolean;
 	maxChars: number;
 };
+type SleepChunk = {
+	items: Row[];
+	originalChars: number;
+};
 
 function normalizedMaxEpisodeChars(beam: BeamMemoryState): number {
 	const configured = Math.trunc(beam.config?.maxEpisodeChars ?? DEFAULT_MAX_EPISODE_CHARS);
@@ -80,35 +84,38 @@ function markTruncated(content: string, maxChars: number): string {
 	return `${content.slice(0, bodyChars).trimEnd()}${SLEEP_TRUNCATION_MARKER}`;
 }
 
-function buildSleepSummary(beam: BeamMemoryState, source: string, items: readonly Row[]): SleepSummary {
+function splitSleepItems(beam: BeamMemoryState, source: string, items: readonly Row[]): SleepChunk[] {
+	const maxChars = normalizedMaxEpisodeChars(beam);
+	const prefixChars = `[${source}] `.length;
+	const joinedLimit = Math.max(0, maxChars - prefixChars);
+	const chunks: SleepChunk[] = [];
+	let current: Row[] = [];
+	let currentChars = 0;
+
+	for (const item of items) {
+		const contentChars = (rowValue(item, "content") ?? "").length;
+		const separatorChars = current.length === 0 ? 0 : SLEEP_SUMMARY_SEPARATOR.length;
+		if (current.length > 0 && currentChars + separatorChars + contentChars > joinedLimit) {
+			chunks.push({ items: current, originalChars: currentChars });
+			current = [];
+			currentChars = 0;
+		}
+		current.push(item);
+		currentChars += (current.length === 1 ? 0 : SLEEP_SUMMARY_SEPARATOR.length) + contentChars;
+	}
+	if (current.length > 0) chunks.push({ items: current, originalChars: currentChars });
+	return chunks;
+}
+
+function buildSleepSummary(beam: BeamMemoryState, source: string, chunk: SleepChunk): SleepSummary {
 	const maxChars = normalizedMaxEpisodeChars(beam);
 	const prefix = `[${source}] `;
-	const joinedLimit = Math.max(0, maxChars - prefix.length);
-	let joined = "";
-	let originalChars = 0;
-	let clipped = false;
-	for (let index = 0; index < items.length; index++) {
-		const content = rowValue(items[index] ?? {}, "content") ?? "";
-		const separator = index === 0 ? "" : SLEEP_SUMMARY_SEPARATOR;
-		originalChars += separator.length + content.length;
-		if (joined.length >= joinedLimit) {
-			if (separator.length + content.length > 0) clipped = true;
-			continue;
-		}
-		const next = `${separator}${content}`;
-		const remaining = joinedLimit - joined.length;
-		if (next.length <= remaining) {
-			joined += next;
-			continue;
-		}
-		joined += next.slice(0, remaining);
-		clipped = true;
-	}
+	const joined = chunk.items.map(item => rowValue(item, "content") ?? "").join(SLEEP_SUMMARY_SEPARATOR);
 	const uncapped = `${prefix}${aaakEncode(joined)}`;
-	const truncated = clipped || uncapped.length > maxChars;
+	const truncated = uncapped.length > maxChars;
 	return {
 		summary: truncated ? markTruncated(uncapped, maxChars) : uncapped,
-		originalChars,
+		originalChars: chunk.originalChars,
 		truncated,
 		maxChars,
 	};
@@ -934,32 +941,34 @@ export function sleep(beam: BeamMemoryState, dryRun = false): SleepResult {
 	const consolidatedIds: string[] = [];
 	let summariesCreated = 0;
 	for (const [source, items] of grouped) {
-		const ids = items.map(item => rowValue(item, "id")).filter((id): id is string => id !== null);
-		let scope = "session";
-		let validUntil: string | null = null;
-		for (const item of items) {
-			if (rowValue(item, "scope") === "global") scope = "global";
-			const itemValidUntil = rowValue(item, "valid_until");
-			if (itemValidUntil && (validUntil === null || itemValidUntil < validUntil)) validUntil = itemValidUntil;
+		for (const chunk of splitSleepItems(beam, source, items)) {
+			const ids = chunk.items.map(item => rowValue(item, "id")).filter((id): id is string => id !== null);
+			let scope = "session";
+			let validUntil: string | null = null;
+			for (const item of chunk.items) {
+				if (rowValue(item, "scope") === "global") scope = "global";
+				const itemValidUntil = rowValue(item, "valid_until");
+				if (itemValidUntil && (validUntil === null || itemValidUntil < validUntil)) validUntil = itemValidUntil;
+			}
+			const sleepSummary = buildSleepSummary(beam, source, chunk);
+			const metadata: Metadata = { original_count: chunk.items.length, source, llm_used: false };
+			if (sleepSummary.truncated) {
+				metadata.truncated = true;
+				metadata.original_chars = sleepSummary.originalChars;
+				metadata.max_chars = sleepSummary.maxChars;
+			}
+			const summary = sleepSummary.summary;
+			if (!dryRun) {
+				consolidateToEpisodic(beam, summary, ids, "sleep_consolidation", 0.6, {
+					scope,
+					validUntil,
+					veracity: aggregateEpisodicVeracity(chunk.items.map(item => rowValue(item, "veracity") ?? "unknown")),
+					metadata,
+				});
+			}
+			consolidatedIds.push(...ids);
+			summariesCreated++;
 		}
-		const sleepSummary = buildSleepSummary(beam, source, items);
-		const metadata: Metadata = { original_count: items.length, source, llm_used: false };
-		if (sleepSummary.truncated) {
-			metadata.truncated = true;
-			metadata.original_chars = sleepSummary.originalChars;
-			metadata.max_chars = sleepSummary.maxChars;
-		}
-		const summary = sleepSummary.summary;
-		if (!dryRun) {
-			consolidateToEpisodic(beam, summary, ids, "sleep_consolidation", 0.6, {
-				scope,
-				validUntil,
-				veracity: aggregateEpisodicVeracity(items.map(item => rowValue(item, "veracity") ?? "unknown")),
-				metadata,
-			});
-		}
-		consolidatedIds.push(...ids);
-		summariesCreated++;
 	}
 	if (!dryRun) {
 		beam.db.run(

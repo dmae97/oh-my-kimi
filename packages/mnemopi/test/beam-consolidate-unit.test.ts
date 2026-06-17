@@ -192,6 +192,25 @@ describe("beam consolidation free functions", () => {
 		expect(row?.original_chars).toBeGreaterThan(512);
 		expect(row?.max_chars).toBe(512);
 	});
+	it("sleep splits capped source groups without dropping row ids", () => {
+		const beam = trackedState();
+		beam.config.maxEpisodeChars = 100;
+		insertWorking(beam.db, "wm-one", "s1", `first ${"a".repeat(70)}`, "conversation");
+		insertWorking(beam.db, "wm-two", "s1", `second ${"b".repeat(70)}`, "conversation");
+		insertWorking(beam.db, "wm-three", "s1", `third ${"c".repeat(70)}`, "conversation");
+
+		const result = sleep(beam, false);
+		const rows = beam.db
+			.query("SELECT summary_of, length(content) AS chars FROM episodic_memory WHERE source = 'sleep_consolidation'")
+			.all() as { summary_of: string; chars: number }[];
+
+		expect(result.status).toBe("consolidated");
+		expect(result.items_consolidated).toBe(3);
+		expect(result.summaries_created).toBe(3);
+		expect(rows).toHaveLength(3);
+		expect(rows.every(row => row.chars <= 100)).toBe(true);
+		expect(rows.map(row => row.summary_of).sort()).toEqual(["wm-one", "wm-three", "wm-two"]);
+	});
 
 	it("sleepAllSessions consolidates eligible rows outside the caller session", () => {
 		const beam = trackedState("maintenance");
