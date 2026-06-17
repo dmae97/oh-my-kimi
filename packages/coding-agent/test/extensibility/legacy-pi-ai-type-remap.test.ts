@@ -8,6 +8,7 @@ import {
 	installLegacyPiSpecifierShim,
 	loadLegacyPiModule,
 } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/legacy-pi-compat";
+import { getBundledModel, getBundledModels } from "@oh-my-pi/pi-catalog/models";
 import { Type as TypeBoxShimType } from "@oh-my-pi/pi-coding-agent/extensibility/typebox";
 
 // pi-ai 15.1.0 removed the runtime `Type` export from `@oh-my-pi/pi-ai`'s
@@ -102,6 +103,28 @@ describe("legacy-pi @(scope)/pi-ai root `Type` remap (issue #1437)", () => {
 
 		const loaded = (await loadLegacyPiModule(entry)) as { fn: unknown };
 		expect(typeof loaded.fn).toBe("function");
+	});
+
+	it("exports getModel as getBundledModel", async () => {
+		const loaded = (await loadLegacyPiModule(await writeFixtureExtension('import { getModel } from "@oh-my-pi/pi-ai"; export const testGetModel = getModel;'))) as { testGetModel: unknown };
+		expect(loaded.testGetModel).toBe(getBundledModel);
+	});
+
+	it("exports getModels as getBundledModels", async () => {
+		const loaded = (await loadLegacyPiModule(await writeFixtureExtension('import { getModels } from "@oh-my-pi/pi-ai"; export const testGetModels = getModels;'))) as { testGetModels: unknown };
+		expect(loaded.testGetModels).toBe(getBundledModels);
+	});
+
+	it("exports StringEnum as a schema builder", async () => {
+		const loaded = (await loadLegacyPiModule(await writeFixtureExtension(
+			[
+				'import { StringEnum } from "@oh-my-pi/pi-ai";',
+				'export const schema = StringEnum(["red", "green"] as const);',
+			].join("\n")
+		))) as { schema: { safeParse: (input: unknown) => { success: boolean } } };
+
+		expect(loaded.schema.safeParse("red").success).toBe(true);
+		expect(loaded.schema.safeParse("blue").success).toBe(false);
 	});
 });
 

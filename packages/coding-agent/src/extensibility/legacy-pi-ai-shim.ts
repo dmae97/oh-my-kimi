@@ -57,5 +57,11 @@ export function StringEnum<T extends string>(values: readonly T[], options?: Str
 	return schema;
 }
 
+import { getBundledModel, getBundledModels } from "@oh-my-pi/pi-catalog/models";
+
 export * from "@oh-my-pi/pi-ai";
 export { Type };
+
+/** Compatibility aliases for renamed catalog functions */
+export const getModel = getBundledModel;
+export const getModels = getBundledModels;
