@@ -143,6 +143,37 @@ export function expandPath(filePath: string): string {
 	const normalized = stripFileUrl(normalizeUnicodeSpaces(normalizeAtPrefix(filePath)));
 	return expandTilde(normalized);
 }
+
+function isAsciiDriveLetter(value: string): boolean {
+	if (value.length !== 1) return false;
+	const code = value.charCodeAt(0);
+	return (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+}
+
+function windowsDriveAliasPath(filePath: string): string | undefined {
+	if (!filePath.startsWith("/")) return undefined;
+	const parts = filePath.split("/");
+	if (parts[0] !== "") return undefined;
+
+	let drive: string | undefined;
+	let tailStart = 2;
+	if (parts.length >= 2 && isAsciiDriveLetter(parts[1] ?? "")) {
+		drive = parts[1]!.toUpperCase();
+	} else if (parts.length >= 3 && (parts[1] ?? "").toLowerCase() === "mnt" && isAsciiDriveLetter(parts[2] ?? "")) {
+		drive = parts[2]!.toUpperCase();
+		tailStart = 3;
+	}
+	if (!drive) return undefined;
+
+	const tail = parts.slice(tailStart).filter(Boolean).join("\\");
+	return tail ? `${drive}:\\${tail}` : `${drive}:\\`;
+}
+
+export function normalizeWindowsDriveAliasPath(filePath: string, platform: NodeJS.Platform = process.platform): string {
+	if (platform !== "win32") return filePath;
+	return windowsDriveAliasPath(filePath) ?? filePath;
+}
+
 /**
  * Inclusive line range describing one selector segment (e.g. `50-100`,
  * `301-`, or `50+10`). `endLine` is `undefined` for open-ended ranges.
@@ -353,7 +384,7 @@ export function isInternalUrlPath(filePath: string): boolean {
  */
 export function resolveToCwd(filePath: string, cwd: string): string {
 	const normalized = normalizeLocalScheme(filePath);
-	const expanded = expandPath(normalized);
+	const expanded = normalizeWindowsDriveAliasPath(expandPath(normalized));
 	const expandedAndNormalized = normalizeLocalScheme(expanded);
 
 	assertNotInternalUrl(expandedAndNormalized, normalized);
@@ -530,8 +561,8 @@ export async function splitDelimitedPathEntry(
 	}
 
 	return (
-		(await tryDelimitedPathSplit(normalizedEntry, cwd, splitter, "comma", false)) ??
 		(await tryDelimitedPathSplit(normalizedEntry, cwd, splitter, "semicolon", false)) ??
+		(await tryDelimitedPathSplit(normalizedEntry, cwd, splitter, "comma", false)) ??
 		(await tryDelimitedPathSplit(normalizedEntry, cwd, splitter, "whitespace", true)) ??
 		(await tryDelimitedPathSplit(normalizedEntry, cwd, splitter, "mixed", true))
 	);

@@ -16,12 +16,11 @@ import {
 	type SimpleStreamOptions,
 	streamSimple,
 } from "@oh-my-pi/pi-ai";
-import type { ToolCallSyntax } from "@oh-my-pi/pi-ai/grammar";
+import type { Dialect } from "@oh-my-pi/pi-ai/dialect";
 import {
 	getOpenAICodexTransportDetails,
 	prewarmOpenAICodexResponses,
 } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
-import { DEFAULT_MODEL_PER_PROVIDER } from "@oh-my-pi/pi-catalog/provider-models";
 import type { Component } from "@oh-my-pi/pi-tui";
 import {
 	$env,
@@ -35,6 +34,7 @@ import {
 	prompt,
 	Snowflake,
 } from "@oh-my-pi/pi-utils";
+import { ADVISOR_READONLY_TOOL_NAMES, discoverWatchdogFiles } from "./advisor";
 import { type AsyncJob, AsyncJobManager } from "./async";
 import { AutoLearnController, buildAutoLearnInstructions } from "./autolearn/controller";
 import { loadCapability } from "./capability";
@@ -48,6 +48,7 @@ import {
 	getModelMatchPreferences,
 	parseModelPattern,
 	parseModelString,
+	pickDefaultAvailableModel,
 	resolveAllowedModels,
 	resolveModelRoleValue,
 } from "./config/model-resolver";
@@ -128,6 +129,7 @@ import {
 	type CustomMessage,
 	convertToLlm,
 	LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE,
+	USER_INTERRUPT_LABEL,
 	wrapSteeringForModel,
 } from "./session/messages";
 import { getRestorableSessionModels } from "./session/session-context";
@@ -176,6 +178,7 @@ import {
 	getSearchTools,
 	HIDDEN_TOOLS,
 	isImageProviderPreference,
+	isSearchProviderId,
 	isSearchProviderPreference,
 	type LspStartupServerInfo,
 	loadSshTool,
@@ -184,6 +187,7 @@ import {
 	renderSearchToolBm25Description,
 	SearchTool,
 	SearchToolBm25Tool,
+	setExcludedSearchProviders,
 	setPreferredImageProvider,
 	setPreferredSearchProvider,
 	type Tool,
@@ -503,6 +507,14 @@ export interface CreateAgentSessionOptions {
 	agentRegistry?: AgentRegistry;
 	/** Parent task ID prefix for nested artifact naming (e.g., "Extensions") */
 	parentTaskPrefix?: string;
+	/**
+	 * Registry id of the spawning agent, recorded as this subagent's parent in
+	 * the agent registry. Distinct from `parentTaskPrefix`, which is this agent's
+	 * own artifact/output-id prefix (the executor passes the child's own id
+	 * there, so it must never double as the parent link). Undefined for the
+	 * top-level "Main" session, which has no parent.
+	 */
+	parentAgentId?: string;
 	/** Inherited eval executor session id for subagents sharing parent eval state. */
 	parentEvalSessionId?: string;
 
@@ -551,12 +563,12 @@ export interface CreateAgentSessionResult {
 	eventBus: EventBus;
 }
 
-export type ToolCallFormat = "auto" | "native" | ToolCallSyntax;
+export type DialectFormat = "auto" | "native" | Dialect;
 
-export function resolveToolCallSyntax(
-	format: ToolCallFormat,
+export function resolveDialect(
+	format: DialectFormat,
 	model: Pick<Model, "supportsTools"> | undefined,
-): ToolCallSyntax | undefined {
+): Dialect | undefined {
 	if (format === "native") return undefined;
 	if (format === "auto") return model?.supportsTools === false ? "glm" : undefined;
 	return format;
@@ -1141,6 +1153,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		? Promise.resolve(options.contextFiles)
 		: logger.time("discoverContextFiles", discoverContextFiles, cwd, agentDir);
 	contextFilesPromise.catch(() => {});
+	const watchdogFilesPromise = logger.time("discoverWatchdogFiles", () => discoverWatchdogFiles(cwd, agentDir));
+	watchdogFilesPromise.catch(() => {});
 	const promptTemplatesPromise = options.promptTemplates
 		? Promise.resolve(options.promptTemplates)
 		: logger.time("discoverPromptTemplates", discoverPromptTemplates, cwd, agentDir);
@@ -1161,6 +1175,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	discoveredSkillsPromise?.catch(() => {});
 
 	// Initialize provider preferences from settings
+	const excludedWebSearchProviders = settings.get("providers.webSearchExclude");
+	if (Array.isArray(excludedWebSearchProviders)) {
+		setExcludedSearchProviders(excludedWebSearchProviders.filter(isSearchProviderId));
+	}
+
 	const webSearchProvider = settings.get("providers.webSearch");
 	if (typeof webSearchProvider === "string" && isSearchProviderPreference(webSearchProvider)) {
 		setPreferredSearchProvider(webSearchProvider);
@@ -1370,9 +1389,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}
 		return result;
 	};
-	const [contextFiles, resolvedWorkspaceTree] = await Promise.all([
+	const [contextFiles, resolvedWorkspaceTree, watchdogFiles] = await Promise.all([
 		contextFilesPromise,
 		raceWithDeadline("buildWorkspaceTree", workspaceTreePromise),
+		watchdogFilesPromise,
 	]);
 
 	let agent: Agent;
@@ -1608,8 +1628,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		let startDeferredMCPDiscovery:
 			| ((liveSession: AgentSession, activation: DeferredMCPActivation) => void)
 			| undefined;
+		const startupQuiet = settings.get("startup.quiet");
 		const onMCPConnecting = (serverNames: string[]) => {
-			if (!options.hasUI || serverNames.length === 0) return;
+			if (!options.hasUI || startupQuiet || serverNames.length === 0) return;
 			eventBus.emit(MCP_CONNECTING_EVENT_CHANNEL, { serverNames } satisfies McpConnectingEvent);
 		};
 		const mcpDiscoverOptions = {
@@ -1915,29 +1936,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			// Re-resolve the allowed set: extension factories above may have
 			// registered providers/models that weren't visible at startup.
 			const fallbackCandidates = await resolveAllowedModels(modelRegistry, settings, modelMatchPreferences);
-			// Prefer each provider's configured default model
-			// (DEFAULT_MODEL_PER_PROVIDER) over raw catalog order. Without this the
-			// first-run fallback picks whatever model sorts first in models.json for
-			// the winning provider (e.g. anthropic's claude-3-5-sonnet-20240620)
-			// instead of the intended provider default (claude-sonnet-4-6). Mirrors
-			// findInitialModel's precedence.
-			for (const [provider, defaultId] of Object.entries(DEFAULT_MODEL_PER_PROVIDER)) {
-				const preferred = fallbackCandidates.find(
-					candidate => candidate.provider === provider && candidate.id === defaultId,
-				);
-				if (preferred && hasModelAuth(preferred)) {
-					model = preferred;
-					break;
-				}
-			}
-			// Otherwise, first available model with a valid API key.
-			if (!model) {
-				for (const candidate of fallbackCandidates) {
-					if (hasModelAuth(candidate)) {
-						model = candidate;
-						break;
-					}
-				}
+			const defaultModel = pickDefaultAvailableModel(fallbackCandidates.filter(hasModelAuth));
+			if (defaultModel) {
+				model = defaultModel;
 			}
 			if (model) {
 				if (modelFallbackMessage) {
@@ -1992,7 +1993,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			isIdle: () => !session.isStreaming,
 			hasQueuedMessages: () => session.queuedMessageCount > 0,
 			abort: () => {
-				session.abort();
+				session.abort({ reason: USER_INTERRUPT_LABEL });
 			},
 			settings,
 			autoApprove: options.autoApprove ?? false,
@@ -2007,7 +2008,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				return { definition, extensionPath: "<sdk>" };
 			}) ?? []),
 		];
-		const wrappedExtensionTools: Tool[] = wrapRegisteredTools(allCustomTools, extensionRunner);
+		// `wrapToolWithMetaNotice` runs the centralized large-output → artifact spill.
+		// Built-in tools get it in `createTools`; extension, SDK-custom, image-gen,
+		// TTS, and startup (non-deferred) MCP tools all funnel through here, so apply
+		// it once at this adapter boundary (idempotent — a no-op if already wrapped).
+		const wrappedExtensionTools: Tool[] = wrapRegisteredTools(allCustomTools, extensionRunner).map(
+			wrapToolWithMetaNotice,
+		);
 
 		// All built-in tools are active (conditional tools like git/ask return null from factory if disabled)
 		const toolRegistry = new Map<string, Tool>();
@@ -2161,10 +2168,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				}
 				appendPrompt = parts.join("\n\n");
 			}
-			// Owned/in-band tool syntax (non-native) repeats the catalog as `# Tool:`
+			// Owned/in-band tool dialect (non-native) repeats the catalog as `# Tool:`
 			// sections; native tool calling lets the compact name list suffice.
-			const nativeTools =
-				resolveToolCallSyntax(settings.get("tools.format"), agent?.state.model ?? model) === undefined;
+			const nativeTools = resolveDialect(settings.get("tools.format"), agent?.state.model ?? model) === undefined;
 			const defaultPrompt = await buildSystemPromptInternal({
 				cwd,
 				skills,
@@ -2326,7 +2332,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			id: resolvedAgentId,
 			displayName: resolvedAgentDisplayName,
 			kind: agentKind,
-			parentId: options.parentTaskPrefix,
+			parentId: options.parentAgentId,
 			session: null,
 			sessionFile: sessionManager.getSessionFile() ?? null,
 			status: "running",
@@ -2506,7 +2512,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				return result;
 			},
 			intentTracing: !!intentField,
-			toolCallSyntax: resolveToolCallSyntax(settings.get("tools.format"), model),
+			dialect: resolveDialect(settings.get("tools.format"), model),
 			abortOnFabricatedToolResult: settings.get("tools.abortOnFabricatedResult"),
 			getToolChoice: () => session?.nextToolChoice(),
 			telemetry: options.telemetry,
@@ -2537,7 +2543,41 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}
 		}
 
+		// Hard-isolated read-only toolset for the advisor (built unconditionally so
+		// it can be toggled at runtime). Fresh ReadTool/SearchTool/FindTool bound to a
+		// DISTINCT ToolSession so the advisor's investigative reads never touch the
+		// primary's snapshot, seen-lines, conflict, or summary caches (all keyed on
+		// session identity). `cwd` stays dynamic; edit/yield capabilities are off.
+		const advisorToolSession: ToolSession = {
+			...toolSession,
+			get cwd() {
+				return sessionManager.getCwd();
+			},
+			hasEditTool: false,
+			requireYieldTool: false,
+			conflictHistory: undefined,
+			fileSnapshotStore: undefined,
+			getSessionId: () => {
+				const id = sessionManager.getSessionId?.();
+				return id ? `${id}-advisor` : null;
+			},
+			getAgentId: () => "advisor",
+		};
+		const built = await Promise.all(
+			[...ADVISOR_READONLY_TOOL_NAMES].map(name =>
+				BUILTIN_TOOLS[name as keyof typeof BUILTIN_TOOLS](advisorToolSession),
+			),
+		);
+		const advisorReadOnlyTools: Tool[] = built
+			.filter((tool): tool is Tool => tool != null)
+			.map(wrapToolWithMetaNotice);
+
+		let advisorWatchdogPrompt: string | undefined;
+		if (watchdogFiles && watchdogFiles.length > 0) {
+			advisorWatchdogPrompt = watchdogFiles.join("\n\n");
+		}
 		session = new AgentSession({
+			advisorWatchdogPrompt,
 			agent,
 			thinkingLevel: autoThinking ? AUTO_THINKING : effectiveThinkingLevel,
 			sessionManager,
@@ -2592,6 +2632,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			agentKind,
 			providerSessionId: options.providerSessionId,
 			parentEvalSessionId: options.parentEvalSessionId,
+			advisorReadOnlyTools,
 		});
 		hasSession = true;
 		if (asyncJobManager) {
@@ -2696,7 +2737,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 							type: "completed",
 							servers: result.servers,
 						};
-						eventBus.emit(LSP_STARTUP_EVENT_CHANNEL, event);
+						if (!startupQuiet) eventBus.emit(LSP_STARTUP_EVENT_CHANNEL, event);
 					} catch (error) {
 						const errorMessage = error instanceof Error ? error.message : String(error);
 						logger.warn("LSP server warmup failed", { cwd, error: errorMessage });
@@ -2708,7 +2749,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 							type: "failed",
 							error: errorMessage,
 						};
-						eventBus.emit(LSP_STARTUP_EVENT_CHANNEL, event);
+						if (!startupQuiet) eventBus.emit(LSP_STARTUP_EVENT_CHANNEL, event);
 					}
 				})();
 			}

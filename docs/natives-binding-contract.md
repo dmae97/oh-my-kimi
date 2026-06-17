@@ -62,9 +62,10 @@ Consumers in `packages/coding-agent` and `packages/tui` import directly from `@o
 | Fuzzy path search | `fuzzyFind(options)`                                                                                      | `fd.rs`                                          | `Promise<FuzzyFindResult>` |
 | Glob/workspace    | `glob(options, onMatch?)`, `listWorkspace(options)`                                                       | `glob.rs`, `workspace.rs`                        | `Promise<...>`             |
 | Glob cache        | `invalidateFsScanCache(path?)`                                                                            | `fs_cache.rs`                                    | `void`                     |
-| AST/block/summary | `astGrep(options)`, `astEdit(options)`, `blockRangeAt(options)`, `summarizeCode(options)`                 | `ast.rs`, `block.rs`, `summary.rs`               | mixed                      |
+| AST/block/summary | `astGrep(options)`, `astMatch(options)`, `astEdit(options)`, `blockRangeAt(options)`, `enclosingBlockBoundaries(options)`, `summarizeCode(options)` | `ast.rs`, `block.rs`, `summary.rs`               | mixed                      |
 | Shell             | `executeShell(options, onChunk?)`                                                                         | `shell.rs`                                       | `Promise<ShellRunResult>`  |
 | Shell             | `new Shell(options?)`, `shell.run(...)`, `shell.abort()`                                                  | `shell.rs`                                       | class / promises           |
+| Shell             | `applyBashFixups(command)`                                                                                | `shell.rs`                                       | `BashFixupResult`          |
 | PTY               | `new PtySession()`, `start/write/resize/kill`                                                             | `pty.rs`                                         | class / promises           |
 | Process           | `Process.fromPid/fromPath`, `status/children/killTree/terminate/waitForExit`                              | `ps.rs`                                          | class / mixed              |
 | Keys              | `parseKey`, `matchesKey`, Kitty/legacy helpers                                                            | `keys.rs`                                        | sync                       |
@@ -72,6 +73,7 @@ Consumers in `packages/coding-agent` and `packages/tui` import directly from `@o
 | Highlight         | `highlightCode`, `supportsLanguage`, `getSupportedLanguages`                                              | `highlight.rs`                                   | sync                       |
 | HTML              | `htmlToMarkdown(html, options?)`                                                                          | `html.rs`                                        | `Promise<string>`          |
 | SIXEL             | `encodeSixel`                                                                                             | `sixel.rs`                                       | sync                       |
+| Snapcompact       | `renderSnapcompactPng(text, options)`                                                                     | `snapcompact.rs`                                 | sync                       |
 | Clipboard         | `copyToClipboard`, `readImageFromClipboard`                                                               | `clipboard.rs`                                   | sync / promise             |
 | Tokens            | `countTokens(input, encoding?)`                                                                           | `tokens.rs`                                      | sync                       |
 | System/isolation  | `detectMacOSAppearance`, `MacAppearanceObserver`, `MacOSPowerAssertion`, `getWorkProfile`, `iso*` helpers | `appearance.rs`, `power.rs`, `prof.rs`, `iso.rs` | mixed                      |
@@ -80,7 +82,7 @@ Consumers in `packages/coding-agent` and `packages/tui` import directly from `@o
 
 The contract preserves Rust/N-API call style:
 
-- **Promise-returning exports** for worker-thread or async runtime work (`grep`, `glob`, `fuzzyFind`, `astGrep`, `astEdit`, `htmlToMarkdown`, shell/PTY runs, `isoStart`/`isoStop`/`isoDiff`, clipboard image read, workspace scan).
+- **Promise-returning exports** for worker-thread or async runtime work (`grep`, `glob`, `fuzzyFind`, `astGrep`, `astMatch`, `astEdit`, `htmlToMarkdown`, shell/PTY runs, `isoStart`/`isoStop`/`isoDiff`, clipboard image read, workspace scan).
 - **Synchronous exports** for deterministic in-memory transforms/parsers or direct system calls (`search`, `hasMatch`, highlighting, text utilities, token counting, process construction/status, `copyToClipboard`, `encodeSixel`, isolation probe/resolve helpers).
 - **Constructor exports** for stateful runtime objects (`Shell`, `PtySession`, `Process`, macOS observer/power handles).
 

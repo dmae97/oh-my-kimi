@@ -24,6 +24,12 @@ impl PatternPiece {
 
 type PatternWord = Vec<PatternPiece>;
 
+fn component_string(components: &[PatternWord], index: usize) -> Option<String> {
+	components
+		.get(index)
+		.map(|component| component.iter().map(|piece| piece.as_str()).collect())
+}
+
 /// Options for filename expansion.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct FilenameExpansionOptions {
@@ -213,20 +219,44 @@ impl Pattern {
 			}
 		}
 
-		// Check if the path appears to be absolute by inspecting the first component.
+		// Check if the path appears to be absolute by inspecting the first components.
 		// On Unix, a leading `/` produces an empty first component. On Windows, a
-		// drive-letter prefix like `c:` is also recognized. The platform-specific
-		// logic lives in `sys::fs::pattern_path_root`.
-		let absolute_root = components.first().and_then(|first_component| {
-			let flattened: String = first_component.iter().map(|p| p.as_str()).collect();
-			sys::fs::pattern_path_root(&flattened)
+		// drive-letter prefix like `c:` is also recognized, and a forward-slash
+		// MSYS/WSL drive alias (`/d/...`, `/mnt/d/...`) must be translated before
+		// `read_dir()` sees the root.
+		let starts_with_forward_slash = self
+			.pieces
+			.iter()
+			.find_map(|piece| piece.as_str().as_bytes().first().copied())
+			.is_some_and(|byte| byte == b'/');
+		let first_component = component_string(&components, 0);
+		let second_component = component_string(&components, 1);
+		let third_component = component_string(&components, 2);
+		let alias_root = first_component.as_deref().and_then(|first| {
+			sys::fs::pattern_drive_alias_root(
+				starts_with_forward_slash,
+				first,
+				second_component.as_deref(),
+				third_component.as_deref(),
+			)
 		});
+		let (absolute_root, components_to_remove) =
+			if let Some((root, consumed)) = alias_root {
+				(Some(root), consumed)
+			} else {
+				(
+					first_component
+						.as_deref()
+						.and_then(sys::fs::pattern_path_root),
+					1,
+				)
+			};
 
 		let prefix_to_remove;
 		let mut paths_so_far = if let Some(root) = absolute_root {
 			prefix_to_remove = None;
-			// Skip the first component; it was consumed to determine the root.
-			components.remove(0);
+			// Skip the component(s) consumed to determine the root.
+			drop(components.drain(0..components_to_remove));
 			vec![root]
 		} else {
 			// Build a prefix to remove after glob expansion so results are
@@ -925,6 +955,38 @@ mod tests {
 			assert!(
 				p.contains(scratch_normalized.as_str()),
 				"absolute result {p:?} should contain {scratch_normalized:?}"
+			);
+		}
+
+		Ok(())
+	}
+
+	#[cfg(windows)]
+	#[test]
+	fn test_msys_drive_alias_glob_expands_from_drive_root() -> Result<()> {
+		let scratch = tempfile::tempdir()?;
+		std::fs::write(scratch.path().join("one.txt"), "")?;
+		std::fs::write(scratch.path().join("two.txt"), "")?;
+
+		let scratch_normalized = scratch.path().to_string_lossy().replace('\\', "/");
+		let Some((drive, tail)) = scratch_normalized.split_once(":/") else {
+			anyhow::bail!("expected drive-qualified temp path, got {scratch_normalized:?}");
+		};
+		let alias_pattern = format!("/{}/{}/*.txt", drive.to_ascii_lowercase(), tail);
+
+		let pattern = Pattern::from(alias_pattern.as_str()).set_extended_globbing(false);
+		let result = pattern.expand::<fn(&Path) -> bool>(
+			Path::new("/"),
+			None,
+			&FilenameExpansionOptions::default(),
+		)?;
+
+		let paths = expect_expanded(result)?;
+		assert_eq!(paths.len(), 2, "unexpected results: {paths:?}");
+		for p in &paths {
+			assert!(
+				p.contains(scratch_normalized.as_str()),
+				"alias result {p:?} should contain native scratch path {scratch_normalized:?}"
 			);
 		}
 

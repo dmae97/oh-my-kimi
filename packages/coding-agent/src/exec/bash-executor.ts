@@ -11,7 +11,7 @@ import { Settings, type ShellMinimizerSettings } from "../config/settings";
 import { OutputSink } from "../session/streaming-output";
 import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../tools/output-meta";
 import { getOrCreateSnapshot } from "../utils/shell-snapshot";
-import { NON_INTERACTIVE_ENV } from "./non-interactive-env";
+import { buildNonInteractiveEnv } from "./non-interactive-env";
 
 export interface BashExecutorOptions {
 	cwd?: string;
@@ -184,7 +184,7 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 	const minimizer = buildMinimizerOptions(settings.getGroup("shellMinimizer"));
 
 	const commandCwd = await resolveShellCwd(options?.cwd);
-	const commandEnv = options?.env ? { ...NON_INTERACTIVE_ENV, ...options.env } : NON_INTERACTIVE_ENV;
+	const commandEnv = buildNonInteractiveEnv(options?.env);
 
 	// Apply command prefix if configured
 	const prefixedCommand = prefix ? `${prefix} ${command}` : command;

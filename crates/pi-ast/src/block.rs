@@ -412,6 +412,83 @@ mod tests {
 		assert_eq!(resolve(code, "g.swift", 3), Some(BlockRange { start_line: 3, end_line: 5 }));
 	}
 
+	#[test]
+	fn resolves_emacs_lisp_defun_block() {
+		let code = "(defun greet (name)\n  \"Doc.\"\n  (message \"Hello %s\" name))\n";
+		assert_eq!(resolve(code, "init.el", 1), Some(BlockRange { start_line: 1, end_line: 3 }));
+	}
+	#[test]
+	fn resolves_emacs_lisp_dot_emacs_block() {
+		let code = "(defun greet (name)\n  \"Doc.\"\n  (message \"Hello %s\" name))\n";
+		assert_eq!(resolve(code, ".emacs", 1), Some(BlockRange { start_line: 1, end_line: 3 }));
+	}
+
+	#[test]
+	fn resolves_emacs_lisp_macro_style_list_block() {
+		let code = "(ert-deftest ogent-zen-test ()\n  \"Doc.\"\n  (should t))\n";
+		assert_eq!(
+			resolve(code, "test/ogent-zen-tests.el", 1),
+			Some(BlockRange { start_line: 1, end_line: 3 })
+		);
+	}
+
+	#[test]
+	fn emacs_lisp_closing_paren_resolves_to_nothing() {
+		let code = "(defun greet (name)\n  \"Doc.\"\n  (message \"Hello %s\" name)\n)\n";
+		assert_eq!(resolve(code, "init.el", 4), None);
+	}
+
+	#[test]
+	fn emacs_lisp_visible_opener_surfaces_closer() {
+		let code = "(defun greet (name)\n  \"Doc.\"\n  (let ((message (format \"Hello %s\" \
+		            name)))\n    (message \"%s\" message))\n)\n";
+		assert_eq!(boundaries(code, "init.el", &[(1, 1)]), Some(vec![5]));
+	}
+
+	#[test]
+	fn emacs_lisp_top_level_macro_forms_resolve_as_single_sexprs() {
+		let cases = [
+			(
+				"use-package",
+				"(use-package magit\n  :commands (magit-status)\n  :config\n  (setq \
+				 magit-save-repository-buffers nil))\n",
+				4,
+			),
+			(
+				"with-eval-after-load",
+				"(with-eval-after-load 'org\n  (setq org-startup-indented t)\n  (add-hook \
+				 'org-mode-hook #'visual-line-mode))\n",
+				3,
+			),
+			(
+				"pcase",
+				"(pcase major-mode\n  ('emacs-lisp-mode\n   (message \"elisp\"))\n  (_\n   (message \
+				 \"other\")))\n",
+				5,
+			),
+		];
+
+		for (name, code, end_line) in cases {
+			assert_eq!(
+				resolve(code, "init.el", 1),
+				Some(BlockRange { start_line: 1, end_line }),
+				"{name}"
+			);
+		}
+	}
+
+	#[test]
+	fn resolves_emacs_lisp_explicit_language_block() {
+		let result = block_range_at(BlockRangeOptions {
+			code: "(defun greet (name)\n  \"Doc.\"\n  (message \"Hello %s\" name))\n".to_string(),
+			lang: Some("emacs-lisp".to_string()),
+			path: None,
+			line: 1,
+		})
+		.expect("block resolution succeeds");
+		assert_eq!(result, Some(BlockRange { start_line: 1, end_line: 3 }));
+	}
+
 	fn boundaries(code: &str, path: &str, ranges: &[(u32, u32)]) -> Option<Vec<u32>> {
 		enclosing_block_boundaries(EnclosingBoundaryOptions {
 			code:   code.to_string(),

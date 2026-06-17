@@ -229,6 +229,34 @@ describe("TanCommandController", () => {
 		);
 	});
 
+	it("parents the tan clone to the spawning agent, not to the clone itself", async () => {
+		const harness = createContext({ agentId: "FocusedParent" });
+		vi.spyOn(SessionManager, "forkFrom").mockResolvedValue(harness.cloneManager);
+		const clone = {
+			prompt: vi.fn(async () => {}),
+			waitForIdle: vi.fn(async () => {}),
+			getLastAssistantMessage: vi.fn(() => assistantText("done")),
+			abort: vi.fn(),
+			dispose: vi.fn(async () => {}),
+		};
+		const createAgentSessionSpy = vi
+			.spyOn(sdkModule, "createAgentSession")
+			.mockResolvedValue({ session: clone } as unknown as CreateAgentSessionResult);
+		const controller = new TanCommandController(harness.ctx);
+		await controller.start("follow the tangent");
+		const capturedRun = harness.capturedRun;
+		if (!capturedRun) throw new Error("run function was not captured");
+		await capturedRun({ jobId: "job-1", signal: new AbortController().signal, reportProgress: async () => {} });
+
+		const opts = createAgentSessionSpy.mock.calls[0]?.[0];
+		// The clone's registry parent is the spawning (focused) agent. Its own
+		// `Tan-<id>` artifact prefix must never double as the parent link, or the
+		// hub would render the tan parented to itself.
+		expect(opts?.parentAgentId).toBe("FocusedParent");
+		expect(opts?.parentTaskPrefix).toMatch(/^Tan-/);
+		expect(opts?.parentTaskPrefix).not.toBe("FocusedParent");
+	});
+
 	it("parks the finished tan in the registry so it stays visible in the Agent Hub", async () => {
 		const harness = createContext();
 		vi.spyOn(SessionManager, "forkFrom").mockResolvedValue(harness.cloneManager);

@@ -4,7 +4,7 @@
 import * as path from "node:path";
 
 import { type Api, type AssistantMessage, completeSimple, type Model, type Tool } from "@oh-my-pi/pi-ai";
-import { logger, prompt } from "@oh-my-pi/pi-utils";
+import { isTerminalHeadless, logger, prompt } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
 
 import { resolveRoleSelection } from "../config/model-resolver";
@@ -391,7 +391,7 @@ export function formatSessionTerminalTitle(sessionName: string | undefined, cwd?
  * Set the terminal title using OSC 0 (sets both tab and window title). Unsupported terminals ignore it.
  */
 export function setTerminalTitle(title: string): void {
-	if (!process.stdout.isTTY) return;
+	if (!process.stdout.isTTY || isTerminalHeadless()) return;
 	process.stdout.write(`\x1b]0;${sanitizeTerminalTitlePart(title) ?? DEFAULT_TERMINAL_TITLE}\x07`);
 }
 
@@ -403,7 +403,7 @@ export function setSessionTerminalTitle(sessionName: string | undefined, cwd?: s
  * Save the current terminal title on terminals that support xterm window ops.
  */
 export function pushTerminalTitle(): void {
-	if (!process.stdout.isTTY) return;
+	if (!process.stdout.isTTY || isTerminalHeadless()) return;
 	process.stdout.write("\x1b[22;2t");
 }
 
@@ -411,6 +411,6 @@ export function pushTerminalTitle(): void {
  * Restore the previously saved terminal title on terminals that support xterm window ops.
  */
 export function popTerminalTitle(): void {
-	if (!process.stdout.isTTY) return;
+	if (!process.stdout.isTTY || isTerminalHeadless()) return;
 	process.stdout.write("\x1b[23;2t");
 }

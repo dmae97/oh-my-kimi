@@ -280,6 +280,7 @@ describe("InputController keybinding setup", () => {
 				cancelled: false,
 				started: true,
 				synthetic: true,
+				userInitiated: true,
 			});
 		}
 	});

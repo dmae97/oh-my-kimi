@@ -51,7 +51,7 @@ describe("agentLoop with owned in-band tool calls", () => {
 		});
 
 		const context: AgentContext = { systemPrompt: ["BASE PROMPT"], messages: [], tools: [echoTool] };
-		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter, toolCallSyntax: "glm" };
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter, dialect: "glm" };
 
 		const messages = await agentLoop([createUserMessage("say hi")], context, config, undefined, mock.stream).result();
 
@@ -102,7 +102,7 @@ describe("agentLoop with owned in-band tool calls", () => {
 		expect(wireText(internalResult!)).toBe("echoed:hello world");
 	});
 
-	it("executes Hermes/Qwen JSON tool calls when that syntax is selected", async () => {
+	it("executes Hermes/Qwen JSON tool calls when that dialect is selected", async () => {
 		const echoArgs: Array<{ msg: string }> = [];
 		const toolSchema = z.object({ msg: z.string().describe("message to echo") });
 		const echoTool: AgentTool<typeof toolSchema, { msg: string }> = {
@@ -131,7 +131,7 @@ describe("agentLoop with owned in-band tool calls", () => {
 		});
 
 		const context: AgentContext = { systemPrompt: ["BASE PROMPT"], messages: [], tools: [echoTool] };
-		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter, toolCallSyntax: "hermes" };
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter, dialect: "hermes" };
 
 		await agentLoop([createUserMessage("say hi")], context, config, undefined, mock.stream).result();
 
@@ -144,5 +144,50 @@ describe("agentLoop with owned in-band tool calls", () => {
 			.join("\n");
 		expect(resultsText).toContain("<tool_response>");
 		expect(resultsText).toContain("echoed:hi");
+	});
+
+	it("uses PI_DIALECT when config.dialect is unset", async () => {
+		const before = Bun.env.PI_DIALECT;
+		Bun.env.PI_DIALECT = "hermes";
+		try {
+			const echoArgs: Array<{ msg: string }> = [];
+			const toolSchema = z.object({ msg: z.string().describe("message to echo") });
+			const echoTool: AgentTool<typeof toolSchema, { msg: string }> = {
+				name: "echo",
+				label: "Echo",
+				description: "Echo a message back",
+				parameters: toolSchema,
+				async execute(_toolCallId, params) {
+					echoArgs.push(params);
+					return { content: [{ type: "text", text: `echoed:${params.msg}` }], details: params };
+				},
+			};
+
+			const captured: Context[] = [];
+			const mock = createMockModel({
+				responses: [
+					context => {
+						captured.push(context);
+						return { content: ['<tool_call>\n{"name":"echo","arguments":{"msg":"from env"}}\n</tool_call>'] };
+					},
+					context => {
+						captured.push(context);
+						return { content: ["done"] };
+					},
+				],
+			});
+
+			const context: AgentContext = { systemPrompt: ["BASE PROMPT"], messages: [], tools: [echoTool] };
+			const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
+
+			await agentLoop([createUserMessage("say hi")], context, config, undefined, mock.stream).result();
+
+			expect(echoArgs).toEqual([{ msg: "from env" }]);
+			expect(captured[0].tools).toBeUndefined();
+			expect((captured[0].systemPrompt ?? []).join("\n")).toContain('"name":"function_name","arguments"');
+		} finally {
+			if (before === undefined) delete Bun.env.PI_DIALECT;
+			else Bun.env.PI_DIALECT = before;
+		}
 	});
 });

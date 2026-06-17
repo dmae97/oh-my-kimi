@@ -9,6 +9,9 @@
   - `packages/coding-agent/src/tools/bash-interactive.ts` — PTY/TUI execution path.
   - `packages/coding-agent/src/tools/bash-interceptor.ts` — blocks tool-better shell patterns.
   - `packages/coding-agent/src/tools/bash-skill-urls.ts` — expands internal URLs to paths.
+  - `packages/coding-agent/src/tools/bash-command-fixup.ts` — strips trailing `| head`/`| tail` pipes and redundant `2>&1` (thin wrapper over native `pi_shell::fixup`).
+  - `packages/coding-agent/src/tools/bash-pty-selection.ts` — `canUseInteractiveBashPty()` decides whether a call may use the local PTY overlay.
+  - `packages/coding-agent/src/tools/gh-cache-invalidation.ts` — drops `github-cache` rows for mutating `gh issue`/`gh pr` subcommands.
   - `packages/coding-agent/src/exec/bash-executor.ts` — non-PTY shell execution.
   - `packages/coding-agent/src/session/streaming-output.ts` — tail buffer, truncation, artifact spill.
   - `packages/coding-agent/src/tools/tool-timeouts.ts` — timeout clamp bounds.
@@ -60,7 +63,7 @@ Stdout and stderr are merged before the model sees them. Definite non-zero exit 
 7. `clampTimeout("bash", requestedTimeoutSec)` enforces `TOOL_TIMEOUTS.bash` (`default: 300`, `min: 1`, `max: 3600`). When clamped, `#buildCompletedResult()` / `#buildBackgroundStartResult()` append a notice line.
 8. Execution path splits:
    1. `async: true` -> `#startManagedBashJob()` registers a session async job and returns immediately.
-   2. Non-PTY with `bash.autoBackground.enabled` and an async job manager -> starts a managed job, waits up to `min(thresholdMs, timeoutMs - 1000)`, and either returns the completed result or converts the run into a background job.
+   2. Non-PTY with `bash.autoBackground.enabled`, an async job manager below its running-job cap, and no client-terminal bridge available (the bridge wins when both apply) -> starts a managed job, waits up to `min(thresholdMs, timeoutMs - 1000)`, and either returns the completed result or converts the run into a background job.
    3. Non-PTY client-terminal bridge, when the session advertises terminal capability and `pty` is false -> creates a remote terminal, streams/polls current output, and releases the terminal after completion.
    4. Otherwise runs foreground execution.
 9. Foreground non-PTY without client terminal calls `executeBash()` from `packages/coding-agent/src/exec/bash-executor.ts`.
@@ -109,9 +112,10 @@ Stdout and stderr are merged before the model sees them. Definite non-zero exit 
   - Registers jobs with `session.asyncJobManager` for explicit/auto background runs.
   - Uses `session.getSessionId()` to isolate shell reuse and async session keys.
   - Uses `session.allocateOutputArtifact()` for spill files.
+  - Invalidates `github-cache` rows before execution when the command contains a mutating `gh issue`/`gh pr` subcommand, so later `issue://`/`pr://` reads see post-mutation state (`invalidateGithubCacheForBashCommand`).
 - User-visible prompts / interactive UI
   - PTY mode opens a TUI overlay titled `Console` and forwards input to the PTY.
-  - Background start messages direct the agent to the `job` tool (use `list: true` for a snapshot, or pass `poll: [id]` to wait).
+  - Background start messages note that the result is delivered automatically when complete and that the `job` tool can poll until then.
 - Background work / cancellation
   - Async and auto-background jobs continue after the initial tool return.
   - Cancellation aborts the native run; PTY overlay dismissal also kills the PTY.
@@ -153,8 +157,8 @@ Stdout and stderr are merged before the model sees them. Definite non-zero exit 
   - `find|fd|locate` with name/type/glob flags -> `find`
   - `sed -i`, `perl -i`, `awk -i inplace` -> `edit`
   - `echo|printf|cat <<` with redirection -> `write`
-- PTY mode is ignored in non-UI contexts and when `PI_NO_PTY=1`; the tool silently falls back to non-PTY execution.
-- Non-PTY runs merge `NON_INTERACTIVE_ENV` with `env`; PTY runs also prepend `NON_INTERACTIVE_ENV` before custom env values.
+- PTY mode is ignored in non-UI contexts and when `PI_NO_PTY=1` (gated by `canUseInteractiveBashPty()`); the tool falls back to non-PTY execution and appends a `pty requested but unavailable in this environment; ran without a terminal` notice.
+- Non-PTY runs merge `NON_INTERACTIVE_ENV` with `env` via `buildNonInteractiveEnv()`; PTY runs instead inherit the user environment with `TERM=xterm-256color` prepended before the custom `env` values.
 - When the shell minimizer rewrites output inside `executeBash()`, the visible output is replaced with minimized text and a `[raw output: artifact://<id>]` footer may be appended if `onMinimizedSave` persisted the original text.
 - The TUI renderer parses partial JSON to recover `env` assignments early in streaming previews; that behavior is display-only.
 - For executor internals that are not tool-specific — shell session reuse keys, snapshots, prefix handling, and native timeout behavior — see `docs/bash-tool-runtime.md`.

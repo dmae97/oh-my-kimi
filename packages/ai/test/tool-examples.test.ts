@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { renderToolExamples } from "../src/grammar/examples";
-import type { InbandTool } from "../src/grammar/types";
+import { renderToolExamples } from "../src/dialect/examples";
+import type { InbandTool } from "../src/dialect/types";
 
 describe("renderToolExamples", () => {
 	it("renders call example in anthropic format", () => {

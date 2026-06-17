@@ -413,27 +413,39 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 		prefix: string,
 	): { lines: string[]; cursorLine: number; cursorCol: number } {
 		const currentLine = lines[cursorLine] || "";
-		const beforePrefix = currentLine.slice(0, cursorCol - prefix.length);
+		const textBeforeCursor = currentLine.slice(0, cursorCol);
 		const afterCursor = currentLine.slice(cursorCol);
 
-		// Check if we're completing a slash command (prefix starts with "/" but NOT a file path)
-		// Slash commands are at the start of the line and don't contain path separators after the first /
-		const isSlashCommand = prefix.startsWith("/") && beforePrefix.trim() === "" && !prefix.slice(1).includes("/");
-		if (isSlashCommand) {
-			// This is a command name completion
-			const newLine = `${beforePrefix}/${item.value} ${afterCursor}`;
-			const newLines = [...lines];
-			newLines[cursorLine] = newLine;
+		const slashStart = textBeforeCursor.indexOf("/");
+		const hasOnlyWhitespaceBeforeSlash = slashStart >= 0 && textBeforeCursor.slice(0, slashStart).trim() === "";
 
-			return {
-				lines: newLines,
-				cursorLine,
-				cursorCol: beforePrefix.length + item.value.length + 2, // +2 for "/" and space
-			};
+		// Slash command suggestions can be accepted before the debounced refresh
+		// catches up to newly typed characters. Replace the live command token,
+		// not only the prefix captured when the suggestion list was rendered.
+		if (prefix.startsWith("/") && hasOnlyWhitespaceBeforeSlash) {
+			const slashPrefix = textBeforeCursor.slice(slashStart);
+			if (!slashPrefix.includes(" ") && !slashPrefix.slice(1).includes("/")) {
+				const beforeSlash = currentLine.slice(0, slashStart);
+				const newLine = `${beforeSlash}/${item.value} ${afterCursor}`;
+				const newLines = [...lines];
+				newLines[cursorLine] = newLine;
+
+				return {
+					lines: newLines,
+					cursorLine,
+					cursorCol: beforeSlash.length + item.value.length + 2, // +2 for "/" and space
+				};
+			}
 		}
+
+		let beforePrefix = currentLine.slice(0, cursorCol - prefix.length);
 
 		// Check if we're completing a file attachment (prefix starts with "@")
 		if (prefix.startsWith("@")) {
+			const liveAtPrefix = this.#extractAtPrefix(textBeforeCursor);
+			if (liveAtPrefix) {
+				beforePrefix = currentLine.slice(0, cursorCol - liveAtPrefix.length);
+			}
 			// This is a file attachment completion
 			const newLine = `${beforePrefix + item.value} ${afterCursor}`;
 			const newLines = [...lines];
@@ -446,21 +458,10 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 			};
 		}
 
-		// Check if we're in a slash command context (beforePrefix contains "/command ")
-		const textBeforeCursor = currentLine.slice(0, cursorCol);
-		if (textBeforeCursor.includes("/") && textBeforeCursor.includes(" ")) {
-			// This is likely a command argument completion
-			const newLine = beforePrefix + item.value + afterCursor;
-			const newLines = [...lines];
-			newLines[cursorLine] = newLine;
-
-			return {
-				lines: newLines,
-				cursorLine,
-				cursorCol: beforePrefix.length + item.value.length,
-			};
-		}
-
+		// Slash command argument and plain file path completion both fall through
+		// to the path-completion tail below — `beforePrefix` already covers the
+		// rendered prefix, which preserves earlier arguments (e.g. accepting
+		// `package.json` for `/swarm run pac<Tab>` keeps the `run` token intact).
 		// For file paths, complete the path
 		const newLine = beforePrefix + item.value + afterCursor;
 		const newLines = [...lines];

@@ -124,43 +124,6 @@ async function loadSkills(ctx: LoadContext): Promise<LoadResult<Skill>> {
 	}
 	return { items, warnings };
 }
-async function loadSkillSlashCommands(ctx: LoadContext, root: ClaudePluginRoot): Promise<LoadResult<SlashCommand>> {
-	const { dir: skillsDir, warning } = await resolvePluginDir(root, ["skills"], "skills");
-	const warnings: string[] = warning ? [warning] : [];
-	const skillsResult = await scanSkillsFromDir(ctx, {
-		dir: skillsDir,
-		providerId: PROVIDER_ID,
-		level: root.scope,
-	});
-	warnings.push(...(skillsResult.warnings ?? []));
-
-	const commands = await Promise.all(
-		skillsResult.items.map(async skill => {
-			const content = await readFile(skill.path);
-			if (content === null) {
-				warnings.push(`Failed to read skill slash command: ${skill.path}`);
-				return null;
-			}
-			// Slash command name MUST come from the skill directory basename, not
-			// frontmatter `name`: `expandSlashCommand` splits the command at the first
-			// whitespace, so a display name like "Understand Anything" would never match
-			// `/understand`. The documented layout is `skills/<name>/SKILL.md` → `/<name>`.
-			const command: SlashCommand = {
-				name: path.basename(path.dirname(skill.path)),
-				path: skill.path,
-				content,
-				level: skill.level,
-				_source: skill._source,
-			};
-			return command;
-		}),
-	);
-
-	return {
-		items: commands.filter((command): command is SlashCommand => command !== null),
-		warnings,
-	};
-}
 
 // =============================================================================
 // Slash Commands
@@ -189,16 +152,14 @@ async function loadSlashCommands(ctx: LoadContext): Promise<LoadResult<SlashComm
 					};
 				},
 			});
-			const skillCommandResult = await loadSkillSlashCommands(ctx, root);
-			return { commandResult, skillCommandResult, warning };
+			return { commandResult, warning };
 		}),
 	);
 
-	for (const { commandResult, skillCommandResult, warning } of results) {
+	for (const { commandResult, warning } of results) {
 		if (warning) warnings.push(warning);
-		items.push(...commandResult.items, ...skillCommandResult.items);
+		items.push(...commandResult.items);
 		if (commandResult.warnings) warnings.push(...commandResult.warnings);
-		if (skillCommandResult.warnings) warnings.push(...skillCommandResult.warnings);
 	}
 
 	return { items, warnings };

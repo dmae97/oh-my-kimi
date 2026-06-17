@@ -54,7 +54,7 @@ Put broad, durable project background in `AGENTS.md`. Reserve `RULES.md` for sho
 
 ## Other supported context conventions
 
-`omp` also discovers the context files of other agent tools so existing projects keep working without migration. The table lists context-file behavior only; each provider may also contribute other capabilities.
+`omp` also discovers the context and rule files of other agent tools so existing projects keep working without migration.
 
 | Provider id | Convention path | Scope | Notes |
 |---|---|---|---|
@@ -63,9 +63,10 @@ Put broad, durable project background in `AGENTS.md`. Reserve `RULES.md` for sho
 | `codex` | `.codex/AGENTS.md` | User | User file `~/.codex/AGENTS.md` only. Project-level Codex context comes from a standalone `AGENTS.md` via the `agents-md` provider, not from `<cwd>/.codex/AGENTS.md`. |
 | `gemini` | `.gemini/GEMINI.md` | User + project | User file `~/.gemini/GEMINI.md`; project file `<cwd>/.gemini/GEMINI.md` only (no ancestor walk-up). |
 | `opencode` | `.config/opencode/AGENTS.md` | User | User file `~/.config/opencode/AGENTS.md` only. |
-| `github` | `.github/copilot-instructions.md` | Project | Project-only GitHub Copilot instructions from `<cwd>/.github/copilot-instructions.md`. |
+| `github` | `.github/copilot-instructions.md` | User + project | Project file `<cwd>/.github/copilot-instructions.md` only (no ancestor walk-up), plus a user-global `~/.copilot/copilot-instructions.md` (relocate with `COPILOT_HOME`) and an `AGENTS.md` from each `COPILOT_CUSTOM_INSTRUCTIONS_DIRS` entry. |
 | `agents` | `.agent/AGENTS.md`, `.agents/AGENTS.md` | User + project | User files from `~/.agent/` and `~/.agents/`; project files discovered while walking up from the current directory to the repository root. |
 | `agents-md` | `AGENTS.md` | Project | Standalone (non-config-directory) `AGENTS.md` files, discovered by walking up from the current directory to the repository root (or home when no repo root is known). Files whose parent directory name starts with `.` are ignored — those belong to a config-directory provider instead. |
+| `github` | `.github/instructions/**/*.instructions.md` | Project rules | GitHub Copilot / VS Code instruction files become rules. `applyTo: '*'` or `applyTo: '**'` is injected as always-apply context; other `applyTo` globs are listed in the rulebook with `description` and are readable as `rule://<name>`. |
 
 Providers marked "(no ancestor walk-up)" only look in the current working directory's config directory. If you need ancestor walk-up behavior, prefer the native `.omp/AGENTS.md` format or a standalone `AGENTS.md` (the `agents-md` provider), or launch `omp` from the directory that holds the config directory.
 
@@ -224,7 +225,7 @@ At one user scope or project depth, the higher-priority provider shadows the oth
 
 ### User context disappeared
 
-Only one user-level context file survives, and `~/.omp/agent/AGENTS.md` has the highest priority. If it exists, it shadows user-level `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.gemini/GEMINI.md`, `~/.config/opencode/AGENTS.md`, and `~/.agent`/`~/.agents` files. Consolidate user guidance into the native file or remove the native one if you prefer another tool's file.
+Only one user-level context file survives, and `~/.omp/agent/AGENTS.md` has the highest priority. If it exists, it shadows user-level `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.gemini/GEMINI.md`, `~/.config/opencode/AGENTS.md`, `~/.copilot/copilot-instructions.md`, and `~/.agent`/`~/.agents` files. Consolidate user guidance into the native file or remove the native one if you prefer another tool's file.
 
 ### A `RULES.md` file is ignored
 

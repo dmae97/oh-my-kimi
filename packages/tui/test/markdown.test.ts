@@ -1436,3 +1436,80 @@ describe("Markdown.render reference stability", () => {
 		expect(wide.every(line => visibleWidth(line) <= 60)).toBe(true);
 	});
 });
+
+describe("Math rendering", () => {
+	const plain = (c: Markdown): string =>
+		c
+			.render(80)
+			.map(line => stripVTControlCharacters(line))
+			.join("\n");
+
+	it("converts a bare \\begin{cases} block (no $$ delimiters) to Unicode", () => {
+		const md = new Markdown(
+			"\\operatorname{sgn}(x) =\n\\begin{cases}\n-1 & x < 0 \\\\\n1 & x > 0\n\\end{cases}",
+			0,
+			0,
+			defaultMarkdownTheme,
+		);
+		const out = plain(md);
+		expect(out).toContain("sgn(x)");
+		expect(out).toContain("x < 0");
+		expect(out).not.toContain("begin{cases}");
+	});
+
+	it("converts a $$-delimited matrix block to multi-line Unicode", () => {
+		const md = new Markdown("$$\n\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}\n$$", 0, 0, defaultMarkdownTheme);
+		const out = plain(md);
+		expect(out).toContain("(a");
+		expect(out).toContain("d)");
+		expect(out).not.toContain("pmatrix");
+	});
+
+	it("leaves a bare \\begin{itemize} block verbatim (non-math environment)", () => {
+		const md = new Markdown(
+			"\\begin{itemize}\n\\item first\n\\item second\n\\end{itemize}",
+			0,
+			0,
+			defaultMarkdownTheme,
+		);
+		const out = plain(md);
+		expect(out).toContain("begin{itemize}");
+		expect(out).toContain("item first");
+	});
+
+	it("keeps a fenced tex block with \\begin{cases} as code, not math", () => {
+		const md = new Markdown(
+			"```tex\n\\begin{cases}\na & x > 0 \\\\\nb & x < 0\n\\end{cases}\n```",
+			0,
+			0,
+			defaultMarkdownTheme,
+		);
+		const out = plain(md);
+		expect(out).toContain("begin{cases}");
+	});
+
+	it("converts inline $…$ and \\(…\\) spans without breaking surrounding prose", () => {
+		const md = new Markdown("Energy $E = mc^2$ and \\(a + b\\) end.", 0, 0, defaultMarkdownTheme);
+		const out = plain(md);
+		expect(out).toContain("Energy");
+		expect(out).toContain("mc²");
+		expect(out).toContain("a + b");
+		expect(out).toContain("end.");
+		expect(out).not.toContain("$");
+	});
+
+	it("folds a plain `f(x) =` prefix line into the bare cases block (no blank-line split)", () => {
+		const md = new Markdown(
+			"f(x) =\n\\begin{cases}\n1 & x > 0 \\\\\n0 & x < 0\n\\end{cases}",
+			0,
+			0,
+			defaultMarkdownTheme,
+		);
+		const lines = md.render(80).map(line => stripVTControlCharacters(line));
+		const fxIdx = lines.findIndex(line => line.includes("f(x)"));
+		expect(fxIdx).toBeGreaterThanOrEqual(0);
+		expect(lines.join("\n")).not.toContain("begin{cases}");
+		// The cases body follows immediately: folding the lhs in avoids a blank-line paragraph split.
+		expect(lines[fxIdx + 1]).toContain("x > 0");
+	});
+});

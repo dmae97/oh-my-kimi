@@ -62,7 +62,7 @@ import { loadAllExtensions } from "../../modes/components/extensions/state-manag
 import { theme } from "../../modes/theme/theme";
 import { type PlanApprovalDetails, resolveApprovedPlan } from "../../plan-mode/approved-plan";
 import type { AgentSession, AgentSessionEvent } from "../../session/agent-session";
-import { isSilentAbort, SKILL_PROMPT_MESSAGE_TYPE } from "../../session/messages";
+import { isSilentAbort, SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../../session/messages";
 import type { UsageStatistics } from "../../session/session-entries";
 import type { SessionInfo as StoredSessionInfo } from "../../session/session-listing";
 import { SessionManager } from "../../session/session-manager";
@@ -836,7 +836,7 @@ export class AcpAgent implements Agent {
 			timer = setTimeout(() => reject(new Error("ACP cancel cleanup timed out")), this.#cancelCleanupTimeoutMs);
 		});
 		try {
-			await Promise.race([record.session.abort(), timeout]);
+			await Promise.race([record.session.abort({ reason: USER_INTERRUPT_LABEL }), timeout]);
 		} finally {
 			if (timer) clearTimeout(timer);
 			// Order matters: clear `cleanup` before evicting the slot so the slot-eviction
@@ -2098,7 +2098,7 @@ export class AcpAgent implements Agent {
 				getModel: () => record.session.model,
 				isIdle: () => !record.session.isStreaming,
 				abort: () => {
-					void record.session.abort();
+					void record.session.abort({ reason: USER_INTERRUPT_LABEL });
 				},
 				hasPendingMessages: () => record.session.queuedMessageCount > 0,
 				shutdown: () => {},

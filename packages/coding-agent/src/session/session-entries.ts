@@ -124,6 +124,10 @@ export interface SessionInitEntry extends SessionEntryBase {
 	tools: string[];
 	/** Output schema if structured output was requested */
 	outputSchema?: unknown;
+	/** Spawn allowlist the subagent ran with ("" = none, "*" = any, else CSV); absent on pre-spawns files. */
+	spawns?: string;
+	/** The agent's `readSummarize` setting (`false` = read summarization disabled); absent uses the session default. */
+	readSummarize?: boolean;
 }
 
 /** Mode change entry - tracks agent mode transitions (e.g. plan mode). */

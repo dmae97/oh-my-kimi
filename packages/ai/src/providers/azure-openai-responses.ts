@@ -139,8 +139,11 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 		try {
 			const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
 			const { url, headers } = buildAzureResponsesRequest(model, apiKey, options);
-			const params = buildParams(model, context, options, deploymentName);
-			options?.onPayload?.(params);
+			let params = buildParams(model, context, options, deploymentName);
+			const replacementPayload = await options?.onPayload?.(params, model);
+			if (replacementPayload !== undefined) {
+				params = replacementPayload as typeof params;
+			}
 			const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs();
 			const firstEventTimeoutMs =
 				options?.streamFirstEventTimeoutMs ?? getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs);

@@ -167,6 +167,33 @@ export function isBunTestRuntime(): boolean {
 	return Bun.env.BUN_ENV === "test" || Bun.env.NODE_ENV === "test";
 }
 
+let terminalHeadless = isBunTestRuntime();
+
+/**
+ * True when real-terminal side effects must be suppressed: stdout escape/frame
+ * writes, stdin raw-mode + resume, CSI/OSC capability probes, SIGWINCH, window
+ * title changes, and emergency restore. Defaults to {@link isBunTestRuntime} so
+ * `bun test` launched inside a real TTY never paints the TUI, leaks probe
+ * queries, or hijacks the developer's stdin; production runtimes stay
+ * interactive.
+ *
+ * Terminal-contract tests that must exercise the real I/O path opt out with
+ * `setTerminalHeadless(false)` and restore it afterwards.
+ */
+export function isTerminalHeadless(): boolean {
+	return terminalHeadless;
+}
+
+/**
+ * Override the {@link isTerminalHeadless} default and return the previous value
+ * so callers can restore exact prior state (`const prev = setTerminalHeadless(false); … setTerminalHeadless(prev);`).
+ */
+export function setTerminalHeadless(headless: boolean): boolean {
+	const previous = terminalHeadless;
+	terminalHeadless = headless;
+	return previous;
+}
+
 /**
  * True when this code is running inside a `bun build --compile` standalone
  * binary. Detects via the embedded virtual-filesystem path markers

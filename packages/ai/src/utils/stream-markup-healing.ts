@@ -3,15 +3,15 @@
  *
  * Hosted models sometimes leak raw template markup into visible `content` instead
  * of returning structured events. Tool-call healing delegates to the same
- * grammar scanners used by owned in-band tool calling; this file keeps the
+ * dialect scanners used by owned in-band tool calling; this file keeps the
  * provider-facing compatibility wrapper and model/provider gating.
  */
 
 import { isDeepseekModelIdOrName } from "@oh-my-pi/pi-catalog/identity";
 
-import { createInbandScanner } from "../grammar/factory";
-import { ThinkingInbandScanner } from "../grammar/thinking";
-import type { InbandScanEvent, InbandScanner } from "../grammar/types";
+import { createInbandScanner } from "../dialect/factory";
+import { ThinkingInbandScanner } from "../dialect/thinking";
+import type { InbandScanEvent, InbandScanner } from "../dialect/types";
 
 const KIMI_SECTION_END = "<|tool_calls_section_end|>";
 const DSML_TOOL_CALLS_CLOSE_FULLWIDTH = "</｜DSML｜tool_calls>";
@@ -88,16 +88,23 @@ export class StreamMarkupHealing {
 	}
 
 	/**
-	 * Like {@link feed}, but discards completed calls. Used when the upstream
-	 * chunk also carries structured `tool_calls`, keeping that structured payload
-	 * as the single source of truth.
+	 * Feed a chunk and return cleaned events, excluding synthesized tool calls.
+	 * Used when the upstream chunk also carries structured `tool_calls`, keeping
+	 * that structured payload as the single source of truth while preserving
+	 * adjacent text and thinking events.
 	 */
-	consumeWithoutCalls(text: string): string {
-		let clean = "";
-		for (const event of this.feedEvents(text)) {
-			if (event.type === "text") clean += event.text;
+	feedEventsWithoutCalls(text: string): StreamMarkupHealingEvent[] {
+		const events = this.feedEvents(text);
+		let out: StreamMarkupHealingEvent[] | undefined;
+		for (let i = 0; i < events.length; i++) {
+			const event = events[i]!;
+			if (event.type === "toolCall") {
+				out ??= events.slice(0, i);
+			} else if (out) {
+				out.push(event);
+			}
 		}
-		return clean;
+		return out ?? events;
 	}
 
 	/** Drain accumulated tool calls from calls to {@link feed}. */

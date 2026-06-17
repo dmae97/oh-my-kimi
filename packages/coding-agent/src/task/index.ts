@@ -46,7 +46,7 @@ import "../tools/review";
 import type { AsyncJobManager } from "../async";
 import type { LocalProtocolOptions } from "../internal-urls";
 import { loadOverallPlanReference } from "../plan-mode/plan-handoff";
-import { AgentRegistry } from "../registry/agent-registry";
+import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import { generateCommitMessage } from "../utils/commit-message-generator";
 import * as git from "../utils/git";
 import { type DiscoveryResult, discoverAgents, getAgent } from "./discovery";
@@ -156,7 +156,6 @@ export const READ_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
 	"reflect",
 	"retain",
 	"memory_edit",
-	"render_mermaid",
 	"inspect_image",
 	"checkpoint",
 	"rewind",
@@ -366,6 +365,49 @@ export function buildSpecializationAdvisory(
 	);
 }
 
+/**
+ * Suggestion — never a rejection — nudging the spawner to coordinate via `irc`
+ * when one call creates ≥2 live siblings and it still holds spawn capacity.
+ * Returns undefined when there is nothing to coordinate or IRC is unavailable.
+ */
+export function buildCoordinationAdvisory(
+	items: TaskItem[],
+	depthCapacity: boolean,
+	ircEnabled: boolean,
+): string | undefined {
+	if (!depthCapacity || !ircEnabled || items.length < 2) return undefined;
+	return (
+		`Coordinate: ${items.length} siblings are running together. If their work overlaps, have them ` +
+		`message each other via \`irc\` (by id, or "all" to broadcast) before editing shared files — ` +
+		`live coordination beats a serial handoff. Check \`irc\` op:"list" to see who is doing what.`
+	);
+}
+
+/**
+ * Compose the non-blocking advisory appended to a `task` result: the
+ * specialization nudge, plus — only when the siblings keep running after this
+ * call (`willRunAsync`) — the coordination suggestion. Coordination is gated on
+ * async because a sync fanout's siblings have already finished, so a
+ * "coordinate while they run" hint would misfire. Returns undefined when
+ * neither applies.
+ */
+export function composeSpawnAdvisory(args: {
+	agentName: string | undefined;
+	items: TaskItem[];
+	depthCapacity: boolean;
+	ircEnabled: boolean;
+	willRunAsync: boolean;
+}): string | undefined {
+	return (
+		[
+			buildSpecializationAdvisory(args.agentName, args.items, args.depthCapacity),
+			args.willRunAsync ? buildCoordinationAdvisory(args.items, args.depthCapacity, args.ircEnabled) : undefined,
+		]
+			.filter(Boolean)
+			.join("\n\n") || undefined
+	);
+}
+
 /** Sentinel for async jobs whose subagent finished with a failing result; progress is already updated. */
 class TaskJobError extends Error {}
 
@@ -539,16 +581,35 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			this.session.settings.get("task.maxRecursionDepth") ?? 2,
 			this.session.taskDepth ?? 0,
 		);
-		const advisory = buildSpecializationAdvisory(params.agent, spawnItems, depthCapacity);
+		const ircEnabled = isIrcEnabled(this.session.settings, this.session.taskDepth ?? 0);
+		// Coordination only makes sense when the siblings keep running after this
+		// call returns (async). In the sync fallback they have already completed,
+		// so a "coordinate while they run" hint would misfire.
+		const willRunAsync = !!manager && selectedAgent?.blocking !== true;
+		const advisory = this.session.suppressSpawnAdvisory
+			? undefined
+			: composeSpawnAdvisory({
+					agentName: params.agent,
+					items: spawnItems,
+					depthCapacity,
+					ircEnabled,
+					willRunAsync,
+				});
+		// Returns a fresh result (copied content array, copied text part) rather
+		// than mutating the caller's — task results are short-lived here, but an
+		// in-place edit on a shared/cached AgentToolResult would be a hidden trap.
 		const withAdvisory = (result: AgentToolResult<TaskToolDetails>): AgentToolResult<TaskToolDetails> => {
 			if (!advisory) return result;
-			const textPart = result.content.find(part => part.type === "text");
-			if (textPart && typeof textPart.text === "string") {
-				textPart.text = `${textPart.text}\n\n${advisory}`;
-			} else {
-				result.content.push({ type: "text", text: advisory });
-			}
-			return result;
+			let appended = false;
+			const content = result.content.map(part => {
+				if (!appended && part.type === "text" && typeof part.text === "string") {
+					appended = true;
+					return { ...part, text: `${part.text}\n\n${advisory}` };
+				}
+				return part;
+			});
+			if (!appended) content.push({ type: "text", text: advisory });
+			return { ...result, content };
 		};
 		if (!asyncEnabled || !manager || selectedAgent?.blocking === true) {
 			// Sync fallback: async execution disabled, orphaned host that never
@@ -614,7 +675,6 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			},
 		});
 
-		const ircEnabled = isIrcEnabled(this.session.settings, this.session.taskDepth ?? 0);
 		const started: Array<{ agentId: string; jobId: string; description?: string }> = [];
 		const failedSchedules: string[] = [];
 		for (const spawn of spawns) {
@@ -1240,6 +1300,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				parentMnemopiSessionState: this.session.getMnemopiSessionState?.(),
 				parentTelemetry: this.session.getTelemetry?.(),
 				parentEvalSessionId,
+				parentAgentId: this.session.getAgentId?.() ?? MAIN_AGENT_ID,
 			};
 
 			const runTask = async (): Promise<SingleResult> => {

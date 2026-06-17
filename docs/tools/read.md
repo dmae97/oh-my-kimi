@@ -68,7 +68,7 @@ URL selectors are parsed separately in `packages/coding-agent/src/tools/fetch.ts
 2. It tries URL handling first via `parseReadUrlTarget()` from `packages/coding-agent/src/tools/fetch.ts`.
    - Plain URL reads call `executeReadUrl()`.
    - URL reads with line selectors load or refresh the URL cache with `loadReadUrlCacheEntry()` and paginate the cached text locally with `#buildInMemoryTextResult()`.
-3. If not a web URL, it checks `session.internalRouter.canHandle(...)`.
+3. If not a web URL, it checks `InternalUrlRouter.instance().canHandle(...)`.
    - Internal URLs are resolved with `internalRouter.resolve()`.
    - `agent://` query extraction (`/path` or `?q=`) bypasses pagination and returns the extracted content directly.
    - Other internal resources are paginated in-memory by `#buildInMemoryTextResult()`.
@@ -195,7 +195,7 @@ URL selectors are parsed separately in `packages/coding-agent/src/tools/fetch.ts
 - Unsupported/undecodable image formats throw a `ToolError`.
 
 ### Internal URLs
-- `read` does not resolve these itself; it delegates to `session.internalRouter.resolve()`.
+- `read` does not resolve these itself; it delegates to `InternalUrlRouter.instance().resolve()`.
 - Registered protocols are outside this file, but the router in `packages/coding-agent/src/internal-urls/router.ts` is built for `agent://`, `artifact://`, `history://`, `issue://`, `local://`, `mcp://`, `memory://`, `omp://`, `pr://`, `rule://`, `skill://`, and `vault://`.
 - `#handleInternalUrl()` behavior:
   - parses the URL with `parseInternalUrl()` so colons inside the host segment are legal
@@ -246,7 +246,7 @@ Notes: ...
   - URL HTML rendering can delegate into site handlers and HTML-to-text backends from `packages/coding-agent/src/tools/fetch.ts`.
 - Session state
   - Records whole-file snapshots of local text reads into `session.fileSnapshotStore` for later stale-anchor recovery.
-  - Uses `session.internalRouter` for internal URLs.
+  - Passes session `cwd`, `settings`, and `localProtocolOptions` into the process-global `InternalUrlRouter.instance().resolve()` for internal URLs.
   - Uses `session.allocateOutputArtifact()` for cached/truncated URL output.
 - Background work / cancellation
   - Only the deterministic disk reads are non-abortable: plain-file line/range reads (`streamLinesFromFile`, multi-range) and directory listings (`#readDirectory`) are called with `undefined` instead of the `AbortSignal`, so an interrupt mid-read can't surface a misleading "Operation aborted" on a read that would have finished instantly. Every other branch keeps the signal and its helpers call `throwIfAborted(signal)` to stop promptly: URL/internal-URL reads (network), archive, sqlite, document conversion, image decode, structural summary, conflict scan, and the suffix-glob path resolution.

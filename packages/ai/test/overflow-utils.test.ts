@@ -33,6 +33,12 @@ describe("isContextOverflow - model_context_window_exceeded", () => {
 		const message = createErrorMessage("model_context_window_exceeded");
 		expect(isContextOverflow(message)).toBe(true);
 	});
+	it("detects empty Ollama length completion guidance", () => {
+		const message = createErrorMessage(
+			"Model returned no content: prompt filled the context window; raise Ollama num_ctx or shorten the prompt.",
+		);
+		expect(isContextOverflow(message)).toBe(true);
+	});
 });
 
 describe("isContextOverflow - HTTP 413 variants", () => {

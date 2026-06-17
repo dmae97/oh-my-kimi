@@ -396,7 +396,7 @@ export class CollabHost {
 		}
 		const name = peer.name;
 		void this.#ctx.session
-			.abort()
+			.abort({ reason: USER_INTERRUPT_LABEL })
 			.then(() => this.#ctx.session.emitNotice("info", `${name} interrupted`, "collab"))
 			.catch(err => logger.warn("collab guest abort failed", { error: String(err) }));
 	}

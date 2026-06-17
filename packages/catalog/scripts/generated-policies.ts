@@ -82,9 +82,11 @@ export function applyGeneratedModelPolicies(models: ModelSpec<Api>[]): void {
  */
 export function rebakeModelThinking(model: ModelSpec<Api>): void {
 	if (isVariantCollapsedSpec(model)) return;
+	const requiresProviderAuthoredEffort =
+		model.provider === "umans" && (model.thinking?.requiresEffort === true || model.id === "umans-kimi-k2.7");
 	const thinking = resolveModelThinking({ ...model, thinking: undefined }, buildCompat(model));
 	if (thinking) {
-		model.thinking = thinking;
+		model.thinking = requiresProviderAuthoredEffort ? { ...thinking, requiresEffort: true } : thinking;
 	} else {
 		delete model.thinking;
 	}
@@ -206,9 +208,9 @@ function applyGeneratedModelPolicy(model: ModelSpec<Api>): void {
 		model.maxTokens = copilotLimits.maxTokens;
 	}
 
-	// GLM Coding Plan (zai): GLM-5.2 is the selectable 1M served id; pin it
-	// so endpoint discovery or older bundled fallbacks cannot regress to 200k.
-	if (model.provider === "zai" && model.id === "glm-5.2") {
+	// GLM Coding Plan: GLM-5.2 is the selectable 1M served id; pin it so
+	// endpoint discovery or older bundled fallbacks cannot regress to 200k.
+	if ((model.provider === "zai" || model.provider === "zhipu-coding-plan") && model.id === "glm-5.2") {
 		model.contextWindow = 1_000_000;
 		model.maxTokens = 131_072;
 	}

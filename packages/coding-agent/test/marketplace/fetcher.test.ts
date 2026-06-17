@@ -180,6 +180,57 @@ describe("fetchMarketplace", () => {
 		await expect(fetchMarketplace(fakeSrc, tmpDir)).rejects.toThrow(/Marketplace catalog not found/);
 	});
 
+	it("loads catalog from .omp-plugin/marketplace.json when present", async () => {
+		const root = path.join(tmpDir, "omp-only");
+		fs.mkdirSync(path.join(root, ".omp-plugin"), { recursive: true });
+		const catalog = {
+			name: "omp-only-marketplace",
+			owner: { name: "Test" },
+			plugins: [{ name: "omp-plugin", source: "./plugins/omp-plugin", description: "x" }],
+		};
+		fs.writeFileSync(path.join(root, ".omp-plugin", "marketplace.json"), JSON.stringify(catalog));
+
+		const result = await fetchMarketplace(root, tmpDir);
+		expect(result.catalog.name).toBe("omp-only-marketplace");
+		expect(result.catalog.plugins[0].name).toBe("omp-plugin");
+	});
+
+	it("prefers .omp-plugin/marketplace.json over .claude-plugin/marketplace.json when both exist", async () => {
+		const root = path.join(tmpDir, "both-catalogs");
+		fs.mkdirSync(path.join(root, ".omp-plugin"), { recursive: true });
+		fs.mkdirSync(path.join(root, ".claude-plugin"), { recursive: true });
+		const ompCatalog = {
+			name: "from-omp-plugin",
+			owner: { name: "Test" },
+			plugins: [{ name: "p", source: "./p", description: "x" }],
+		};
+		const claudeCatalog = {
+			name: "from-claude-plugin",
+			owner: { name: "Test" },
+			plugins: [{ name: "p", source: "./p", description: "x" }],
+		};
+		fs.writeFileSync(path.join(root, ".omp-plugin", "marketplace.json"), JSON.stringify(ompCatalog));
+		fs.writeFileSync(path.join(root, ".claude-plugin", "marketplace.json"), JSON.stringify(claudeCatalog));
+
+		const result = await fetchMarketplace(root, tmpDir);
+		expect(result.catalog.name).toBe("from-omp-plugin");
+	});
+
+	it("falls back to .claude-plugin/marketplace.json when .omp-plugin is absent", async () => {
+		// The shared fixture only ships .claude-plugin/marketplace.json — confirms
+		// the legacy path still loads unchanged.
+		const result = await fetchMarketplace(FIXTURE_DIR, tmpDir);
+		expect(result.catalog.name).toBe("test-marketplace");
+	});
+
+	it("error message names both candidate paths when neither exists", async () => {
+		const empty = path.join(tmpDir, "empty-dir");
+		fs.mkdirSync(empty, { recursive: true });
+		await expect(fetchMarketplace(empty, tmpDir)).rejects.toThrow(
+			/\.omp-plugin[\\/]marketplace\.json.*\.claude-plugin[\\/]marketplace\.json/,
+		);
+	});
+
 	// Network-dependent tests — skip in CI / offline environments.
 	// These verify real git clone and HTTP fetch error handling.
 	it.skip("github source throws on nonexistent repo", async () => {

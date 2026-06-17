@@ -27,6 +27,7 @@ const DEFAULT_MODEL_PROVIDER_ORDER = [
 	// Generic gateways and editor/proxy providers. These are useful when picked
 	// explicitly, but should not win ambiguous automatic role selection.
 	"alibaba-coding-plan",
+	"umans",
 	"google-antigravity",
 	"opencode-zen",
 	"gitlab-duo",

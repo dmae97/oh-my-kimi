@@ -40,6 +40,7 @@ Render results are component-owned and immutable to callers; a component that di
 ```ts
 export interface Focusable {
   focused: boolean;
+  setUseTerminalCursor?(useTerminalCursor: boolean): void;
 }
 ```
 

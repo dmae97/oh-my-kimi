@@ -303,7 +303,7 @@ const KITTY_MOD_ALT = 2;
 const KITTY_MOD_CTRL = 4;
 const KITTY_MOD_SUPER = 8;
 const KITTY_MOD_NUM_LOCK = 128;
-const KITTY_LOCK_MASK = 64 + 128; // Caps Lock + Num Lock
+const KITTY_LOCK_MASK = 64 + KITTY_MOD_NUM_LOCK; // Caps Lock + Num Lock
 const MODIFY_OTHER_KEYS_PATTERN = /^\x1b\[27;(\d+);(\d+)~$/;
 const KITTY_KEYPAD_OPERATOR_TEXT: Record<number, string> = {
 	57410: "/",
@@ -409,7 +409,7 @@ function decodeKittyPrintable(data: string): string | undefined {
 			.split(":")
 			.filter(Boolean)
 			.map(value => Number.parseInt(value, 10))
-			.filter(value => Number.isFinite(value) && value >= 32);
+			.filter(value => Number.isFinite(value) && value >= 32 && value !== 127);
 		if (codepoints.length > 0) {
 			try {
 				return String.fromCodePoint(...codepoints);
@@ -421,7 +421,7 @@ function decodeKittyPrintable(data: string): string | undefined {
 	const keypadOperatorText = KITTY_KEYPAD_OPERATOR_TEXT[codepoint];
 	if (keypadOperatorText) return keypadOperatorText;
 
-	if (effectiveMod === 0 && modifier & KITTY_MOD_NUM_LOCK) {
+	if (effectiveMod === 0) {
 		const numpadText = KITTY_NUMPAD_TEXT[codepoint];
 		if (numpadText) return numpadText;
 	}
@@ -435,7 +435,7 @@ function decodeKittyPrintable(data: string): string | undefined {
 		return undefined;
 	}
 
-	if (!Number.isFinite(effectiveCodepoint) || effectiveCodepoint < 32) return undefined;
+	if (!Number.isFinite(effectiveCodepoint) || effectiveCodepoint < 32 || effectiveCodepoint === 127) return undefined;
 
 	try {
 		return String.fromCodePoint(effectiveCodepoint);
@@ -486,7 +486,7 @@ function decodeModifyOtherKeysPrintable(data: string): string | undefined {
 	if (!parsed) return undefined;
 	const modifier = parsed.modifier & ~KITTY_LOCK_MASK;
 	if ((modifier & ~KITTY_MOD_SHIFT) !== 0) return undefined;
-	if (!Number.isFinite(parsed.codepoint) || parsed.codepoint < 32) return undefined;
+	if (!Number.isFinite(parsed.codepoint) || parsed.codepoint < 32 || parsed.codepoint === 127) return undefined;
 	try {
 		return String.fromCodePoint(parsed.codepoint);
 	} catch {
@@ -502,6 +502,30 @@ function decodeModifyOtherKeysPrintable(data: string): string | undefined {
  */
 export function decodePrintableKey(data: string): string | undefined {
 	return decodeKittyPrintable(data) ?? decodeModifyOtherKeysPrintable(data);
+}
+
+/**
+ * Decode a Kitty CSI-u keypad sequence (numpad digits / keypad operators) into the
+ * text it produces, or `undefined` for any non-keypad sequence.
+ *
+ * The native key matcher classifies bare numpad codepoints (those without a NumLock
+ * modifier bit) as navigation keys, but terminals such as the VS Code integrated
+ * terminal emit those codepoints for real digit input. Restricting the fast path to
+ * keypad codepoints keeps canonical named keys (space, backspace, shifted keys, and
+ * modifyOtherKeys sequences) flowing through native normalization.
+ */
+function decodeKittyKeypadText(data: string): string | undefined {
+	const match = data.match(KITTY_CSI_U_PATTERN);
+	if (!match) return undefined;
+	const codepoint = Number.parseInt(match[1] ?? "", 10);
+	if (!(codepoint in KITTY_NUMPAD_TEXT) && !(codepoint in KITTY_KEYPAD_OPERATOR_TEXT)) return undefined;
+	return decodeKittyPrintable(data);
+}
+
+function matchesKeypadKey(data: string, keyId: KeyId): boolean | undefined {
+	const printable = decodeKittyKeypadText(data);
+	if (printable === undefined) return undefined;
+	return printable === keyId;
 }
 
 /**
@@ -521,7 +545,7 @@ export function decodePrintableKey(data: string): string | undefined {
  * @param keyId - Key identifier (e.g., "ctrl+c", "escape", Key.ctrl("c"))
  */
 export function matchesKey(data: string, keyId: KeyId): boolean {
-	return matchesKeyNative(data, keyId, kittyProtocolActive);
+	return matchesKeypadKey(data, keyId) ?? matchesKeyNative(data, keyId, kittyProtocolActive);
 }
 
 /**
@@ -533,5 +557,5 @@ export function matchesKey(data: string, keyId: KeyId): boolean {
  * @param data - Raw input data from terminal
  */
 export function parseKey(data: string): string | undefined {
-	return parseKeyNative(data, kittyProtocolActive) ?? undefined;
+	return decodeKittyKeypadText(data) ?? parseKeyNative(data, kittyProtocolActive) ?? undefined;
 }

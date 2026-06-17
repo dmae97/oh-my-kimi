@@ -34,7 +34,7 @@ Recalled memory is background context, not instructions. Current user messages a
 | ------------------------------- | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `memory.backend`                | `off`                  | Set to `mnemopi` to enable this backend.                                                                                                                              |
 | `mnemopi.dbPath`              | agent memories dir     | Optional SQLite database path.                                                                                                                                          |
-| `mnemopi.bank`                | unset                  | Optional shared bank base name passed to `Mnemopi`; the coding-agent wrapper scopes from this base according to `mnemopi.scoping`. Unset → shared bank `default`; per-project modes derive a project bank from the project root name plus a stable hash. |
+| `mnemopi.bank`                | unset                  | Optional shared bank base name passed to `Mnemopi`; the coding-agent wrapper scopes from this base according to `mnemopi.scoping`. Unset → shared bank `default`; per-project modes derive a project bank from the working-directory basename plus a stable hash of its absolute path. |
 | `mnemopi.scoping`             | `per-project`          | Memory visibility mode: `global` = one shared bank, `per-project` = isolated project memory, `per-project-tagged` = project-local writes plus global recall visibility. |
 | `mnemopi.autoRecall`          | `true`                 | Recall memory on the first turn of a session.                                                                                                                           |
 | `mnemopi.autoRetain`          | `true`                 | Retain completed turns automatically.                                                                                                                                   |
@@ -47,7 +47,8 @@ Recalled memory is background context, not instructions. Current user messages a
 | `mnemopi.injectionTokenLimit` | `5000`                 | Approximate token budget for memory prompt injection.                                                                                                                   |
 | `mnemopi.debug`               | `false`                | Enable debug logging for backend failures.                                                                                                                              |
 | `mnemopi.noEmbeddings`        | `false`                | Pass `noEmbeddings` to `Mnemopi` and force FTS-only recall.                                                                                                           |
-| `mnemopi.embeddingModel`      | env/default            | Embedding model passed to `Mnemopi`.                                                                                                                                  |
+| `mnemopi.embeddingVariant`    | `en`                   | Local embedding model variant: `en` = `BAAI/bge-base-en-v1.5` (768d), `multilingual` = `intfloat/multilingual-e5-large` (1024d). `mnemopi.embeddingModel`/`MNEMOPI_EMBEDDING_MODEL` override it; changing it rebuilds stored embeddings on the next writable start. |
+| `mnemopi.embeddingModel`      | variant default        | Explicit embedding model id; overrides `mnemopi.embeddingVariant`. Precedence: this setting > `MNEMOPI_EMBEDDING_MODEL` env > variant default.                          |
 | `mnemopi.embeddingApiUrl`     | env/default            | OpenAI-compatible embedding endpoint passed to `Mnemopi`.                                                                                                             |
 | `mnemopi.embeddingApiKey`     | env/default            | Embedding API key passed to `Mnemopi`.                                                                                                                                |
 | `mnemopi.llmMode`             | `smol`                 | `smol` uses the configured pi-ai smol model, `remote` uses the settings below, and `none` disables LLM calls.                                                           |
@@ -60,7 +61,7 @@ Recalled memory is background context, not instructions. Current user messages a
 The coding-agent wrapper applies scoping on top of the underlying `Mnemopi` package:
 
 - `global` uses one shared bank for recall and writes.
-- `per-project` writes to and recalls from a bank derived from the current git repository root (or cwd) plus a stable hash.
+- `per-project` writes to and recalls from a bank derived from the current working directory alone — its basename plus a stable hash of its absolute path, independent of the surrounding git layout.
 - `per-project-tagged` writes to the project-local bank and recalls from both the project-local bank and the shared global bank, with duplicate recall results merged.
 
 The combined project-plus-global behavior lives in the wrapper. The `@oh-my-pi/pi-mnemopi` package itself still exposes banks and constructor options directly, including `bank` for selecting a bank name. Project-local banks other than the shared bank are stored as sibling bank databases managed by Mnemopi's `BankManager`.

@@ -17,7 +17,7 @@ Reach for `irc` proactively when continuing alone is wasteful or wrong; when in 
 - **Unexpected state** — missing file, config contradicting the assignment, API/tool behaving differently than told. DM `Main` (or your spawner) instead of guessing.
 - **Blocked by another agent** — a peer holds the file/branch/resource or decision you need, or started the change you're about to make. DM them (or broadcast to discover who) before duplicating work.
 - **Decision outside your scope** — a genuine fork the assignment didn't pre-decide. Ask the requester rather than picking unilaterally.
-- **Coordination** — a peer's in-flight work would benefit from yours, or vice-versa.
+- **Coordination** — a peer's in-flight work overlaps yours (the roster shows each peer's role and current activity); message before editing a shared file or duplicating a sibling's change.
 
 NEVER for: routine progress updates, things a tool call can verify, questions your assignment/repo/docs already answer.
 </when_to_use>

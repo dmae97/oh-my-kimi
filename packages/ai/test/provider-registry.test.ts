@@ -13,7 +13,7 @@ import type { OAuthCredentials, OAuthProvider } from "@oh-my-pi/pi-ai/registry/o
 import { getEnvApiKey } from "@oh-my-pi/pi-ai/stream";
 
 const FIXTURE_SOURCE = "provider-registry-test";
-const ENV_KEYS = ["ZENMUX_API_KEY", "EXA_API_KEY", "XAI_OAUTH_TOKEN"] as const;
+const ENV_KEYS = ["ZENMUX_API_KEY", "EXA_API_KEY", "XAI_OAUTH_TOKEN", "UMANS_AI_CODING_PLAN_API_KEY"] as const;
 const originalEnv = new Map(ENV_KEYS.map(key => [key, Bun.env[key]]));
 
 afterEach(() => {
@@ -35,6 +35,8 @@ describe("provider registry auth surface", () => {
 		Bun.env.EXA_API_KEY = "exa-env";
 		// Plain name derived from the catalog table's `envVars`.
 		expect(getEnvApiKey("zenmux")).toBe("zenmux-env");
+		Bun.env.UMANS_AI_CODING_PLAN_API_KEY = "umans-env";
+		expect(getEnvApiKey("umans")).toBe("umans-env");
 		// Legacy search-tool key preserved (not a registry provider def).
 		expect(getEnvApiKey("exa")).toBe("exa-env");
 	});
@@ -48,6 +50,7 @@ describe("provider registry auth surface", () => {
 		const ids = getOAuthProviders().map(provider => provider.id);
 		expect(ids).toContain("zenmux");
 		expect(ids).toContain("kagi");
+		expect(ids).toContain("umans");
 		// openai has no interactive login flow.
 		expect(ids).not.toContain("openai");
 	});

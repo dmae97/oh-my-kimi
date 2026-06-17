@@ -16,6 +16,15 @@ import { canonicalizeMessage } from "../../utils/thinking-display";
 const MAX_TRANSCRIPT_ERROR_LINES = 8;
 
 /**
+ * Frames for the streaming "thinking" pulse rendered in place of a hidden
+ * thinking block while the model is still producing it. A single fixed-width
+ * glyph that rises ▁▃▄▃ so the indicator animates without shifting the line.
+ * Advanced every {@link THINKING_DOTS_FRAME_MS}.
+ */
+const THINKING_DOTS_FRAMES = ["▁", "▃", "▄", "▃"] as const;
+const THINKING_DOTS_FRAME_MS = 320;
+
+/**
  * Component that renders a complete assistant message
  */
 export class AssistantMessageComponent extends Container {
@@ -50,6 +59,11 @@ export class AssistantMessageComponent extends Container {
 	#fastPathItems:
 		| Array<{ md: Markdown; contentIndex: number; blockType: "text" | "thinking"; lastText: string }>
 		| undefined;
+	/** Live "thinking" pulse shown in place of a hidden thinking block while it
+	 *  streams; undefined when not animating. Driven by {@link #thinkingDotsTimer}. */
+	#thinkingDots: Text | undefined;
+	#thinkingDotsTimer: NodeJS.Timeout | undefined;
+	#thinkingDotsFrame = 0;
 
 	constructor(
 		message?: AssistantMessage,
@@ -87,6 +101,60 @@ export class AssistantMessageComponent extends Container {
 		this.hideThinkingBlock = hide;
 	}
 
+	override dispose(): void {
+		this.#stopThinkingAnimation();
+		super.dispose();
+	}
+
+	/**
+	 * Whether to render the animated "thinking" pulse in place of the suppressed
+	 * reasoning: only while this block is still streaming (not yet finalized — the
+	 * in-flight message always carries `stopReason: "stop"`, so finalization is the
+	 * only reliable live signal), thinking is hidden, no tool call has started, and
+	 * the active tail block is a thinking block (the model is reasoning right now).
+	 * Once text starts, a tool call streams, or the block is sealed, the pulse ends.
+	 */
+	#shouldAnimateThinking(message: AssistantMessage): boolean {
+		if (!this.hideThinkingBlock || this.#transcriptBlockFinalized) return false;
+		let tail: "text" | "thinking" | undefined;
+		for (const content of message.content) {
+			if (content.type === "toolCall") return false;
+			if (content.type === "text" && canonicalizeMessage(content.text)) tail = "text";
+			else if (content.type === "thinking" && canonicalizeMessage(content.thinking)) tail = "thinking";
+		}
+		return tail === "thinking";
+	}
+
+	#thinkingDotsLabel(): string {
+		const glyph = THINKING_DOTS_FRAMES[this.#thinkingDotsFrame % THINKING_DOTS_FRAMES.length] ?? "…";
+		return theme.fg("thinkingText", glyph);
+	}
+
+	#startThinkingAnimation(): void {
+		if (this.#thinkingDotsTimer) return;
+		this.#thinkingDotsTimer = setInterval(() => this.#advanceThinkingDots(), THINKING_DOTS_FRAME_MS);
+		this.#thinkingDotsTimer.unref?.();
+	}
+
+	#advanceThinkingDots(): void {
+		if (!this.#thinkingDots) {
+			this.#stopThinkingAnimation();
+			return;
+		}
+		this.#thinkingDotsFrame = (this.#thinkingDotsFrame + 1) % THINKING_DOTS_FRAMES.length;
+		if (this.#thinkingDots.setText(this.#thinkingDotsLabel())) {
+			this.onImageUpdate?.();
+		}
+	}
+
+	#stopThinkingAnimation(): void {
+		if (this.#thinkingDotsTimer) {
+			clearInterval(this.#thinkingDotsTimer);
+			this.#thinkingDotsTimer = undefined;
+		}
+		this.#thinkingDotsFrame = 0;
+	}
+
 	/**
 	 * Toggle suppression of the inline `Error: …` line while the same error is
 	 * pinned in the banner above the editor. Re-renders so the change is visible.
@@ -109,6 +177,14 @@ export class AssistantMessageComponent extends Container {
 
 	markTranscriptBlockFinalized(): void {
 		this.#transcriptBlockFinalized = true;
+		this.#stopThinkingAnimation();
+		// If the live pulse was on screen when the block sealed, drop the fast path
+		// and rebuild so the placeholder is removed — finalized blocks never animate.
+		if (this.#thinkingDots) {
+			this.#fastPathKey = undefined;
+			this.#fastPathItems = undefined;
+			if (this.#lastMessage) this.updateContent(this.#lastMessage, { transient: this.#lastUpdateTransient });
+		}
 	}
 
 	/**
@@ -326,6 +402,7 @@ export class AssistantMessageComponent extends Container {
 
 		// Clear content container
 		this.#contentContainer.clear();
+		this.#thinkingDots = undefined;
 
 		// Determine if we should capture Markdown instances for next fast path
 		const shouldCapture = this.#canFastPath(message);
@@ -380,6 +457,15 @@ export class AssistantMessageComponent extends Container {
 					this.#contentContainer.addChild(new Spacer(1));
 				}
 			}
+		}
+
+		if (this.#shouldAnimateThinking(message)) {
+			if (hasVisibleContent) this.#contentContainer.addChild(new Spacer(1));
+			this.#thinkingDots = new Text(this.#thinkingDotsLabel(), 1, 0);
+			this.#contentContainer.addChild(this.#thinkingDots);
+			this.#startThinkingAnimation();
+		} else {
+			this.#stopThinkingAnimation();
 		}
 
 		this.#renderToolImages();

@@ -13,7 +13,7 @@ In the TUI, `/marketplace` with no arguments opens the interactive plugin browse
 
 ## Concepts
 
-A **marketplace** is a Git repository (or local directory) containing a catalog file at `.claude-plugin/marketplace.json`. The catalog lists available plugins with their sources, descriptions, and metadata.
+A **marketplace** is a Git repository (or local directory) containing a catalog file at `.omp-plugin/marketplace.json` (preferred) or `.claude-plugin/marketplace.json` (Claude Code-compatible fallback). The catalog lists available plugins with their sources, descriptions, and metadata.
 
 A **plugin** is a directory containing Claude/OMP plugin content such as skills, commands, agents, hooks, tools, MCP servers, or LSP servers. Extension modules (`package.json` `omp.extensions` entry points) are not loaded from marketplace installs — they only load for npm-installed or `omp plugin link`ed plugins. Plugins are identified by `name@marketplace` (e.g. `code-review@claude-plugins-official`).
 
@@ -83,11 +83,11 @@ When you run `/marketplace add <source>`, the system classifies the source:
 | `git@...` / `ssh://...`         | Git repository                                     | `git@github.com:org/repo.git`          |
 | `./path` or `~/path` or `/path` | Local directory                                    | `./my-marketplace`                     |
 
-Git and local sources must contain `.claude-plugin/marketplace.json`. Direct catalog URLs cache only the JSON catalog; plugins in URL-sourced catalogs cannot use relative string sources like `"./plugins/foo"`.
+Git and local sources must contain a catalog at `.omp-plugin/marketplace.json` (preferred) or `.claude-plugin/marketplace.json` (Claude Code-compatible fallback). Direct catalog URLs cache only the JSON catalog; plugins in URL-sourced catalogs cannot use relative string sources like `"./plugins/foo"`.
 
 ## Catalog format (marketplace.json)
 
-A marketplace catalog lives at `.claude-plugin/marketplace.json` in the repository root:
+A marketplace catalog lives at `.omp-plugin/marketplace.json` in the repository root. When omp is the only intended consumer, prefer this path. To remain Claude Code-compatible (omp loads the same shape from either path), publish at `.claude-plugin/marketplace.json` instead — omp uses it as a fallback when `.omp-plugin/marketplace.json` is absent. A repository may ship both: omp reads the `.omp-plugin/` copy, Claude Code reads the `.claude-plugin/` copy. Same catalog format either way:
 
 ```json
 {

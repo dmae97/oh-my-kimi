@@ -268,4 +268,64 @@ describe("Cursor history encoding", () => {
 			[expect.objectContaining({ assistantMessage: { text: "[Tool Result]\npackage contents" } })],
 		]);
 	});
+
+	it("formats tool errors with [Tool Error] prefix", () => {
+		const errorContext: Context = {
+			messages: [
+				{
+					role: "user",
+					content: "Search for nothing.",
+					timestamp: 1,
+				},
+				{
+					role: "assistant",
+					api: "cursor-agent",
+					provider: "cursor",
+					model: "cursor-composer-2.5",
+					content: [
+						{
+							type: "toolCall",
+							id: "call-search",
+							name: "search",
+							arguments: { pattern: "" },
+						},
+					],
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					stopReason: "toolUse",
+					timestamp: 2,
+				},
+				{
+					role: "toolResult",
+					toolCallId: "call-search",
+					toolName: "search",
+					content: [{ type: "text", text: "Pattern must not be empty" }],
+					isError: true,
+					timestamp: 3,
+				},
+			],
+		};
+
+		const history = buildCursorHistoryForTest(errorContext.messages, -1);
+
+		expect(history.rootPromptMessagesJson).toEqual([
+			{
+				role: "user",
+				content: [{ type: "text", text: "Search for nothing." }],
+			},
+			{
+				role: "user",
+				content: [{ type: "text", text: "[Tool Error]\nPattern must not be empty" }],
+			},
+		]);
+		expect(history.turnStepMessagesJson).toEqual([
+			[expect.objectContaining({ assistantMessage: { text: "[Tool Error]\nPattern must not be empty" } })],
+		]);
+	});
 });

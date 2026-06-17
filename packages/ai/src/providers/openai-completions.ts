@@ -1,6 +1,6 @@
 import type { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { toFirepassWireModelId, toFireworksWireModelId } from "@oh-my-pi/pi-catalog/fireworks-model-id";
-import { isDeepseekModelIdOrName } from "@oh-my-pi/pi-catalog/identity";
+import { isDeepseekModelIdOrName, isGlm52ReasoningEffortModelId } from "@oh-my-pi/pi-catalog/identity";
 import { getSupportedEfforts, resolveWireModelId } from "@oh-my-pi/pi-catalog/model-thinking";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import type { ResolvedOpenAICompat } from "@oh-my-pi/pi-catalog/types";
@@ -186,6 +186,105 @@ function serializeToolArguments(value: unknown): string {
 	return "{}";
 }
 
+function isUnsafeToolArgumentKey(key: string): boolean {
+	return key === "__proto__" || key === "constructor" || key === "prototype";
+}
+
+function isStreamingArgumentObject(value: unknown): value is Record<string, unknown> {
+	return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function cloneStreamingArgumentValue(value: unknown): unknown {
+	if (Array.isArray(value)) {
+		return value.map(cloneStreamingArgumentValue);
+	}
+	if (isStreamingArgumentObject(value)) {
+		return mergeStreamingArgumentObjects(undefined, value);
+	}
+	return value;
+}
+
+function streamingArgumentValuesEqual(left: unknown, right: unknown): boolean {
+	if (left === right) return true;
+	if (Array.isArray(left) && Array.isArray(right)) {
+		if (left.length !== right.length) return false;
+		for (let i = 0; i < left.length; i++) {
+			if (!streamingArgumentValuesEqual(left[i], right[i])) return false;
+		}
+		return true;
+	}
+	if (isStreamingArgumentObject(left) && isStreamingArgumentObject(right)) {
+		let leftKeys = 0;
+		for (const key in left) {
+			if (!Object.hasOwn(left, key) || isUnsafeToolArgumentKey(key)) continue;
+			leftKeys++;
+			if (!Object.hasOwn(right, key) || !streamingArgumentValuesEqual(left[key], right[key])) return false;
+		}
+		let rightKeys = 0;
+		for (const key in right) {
+			if (!Object.hasOwn(right, key) || isUnsafeToolArgumentKey(key)) continue;
+			rightKeys++;
+		}
+		return leftKeys === rightKeys;
+	}
+	return false;
+}
+
+function streamingArgumentArrayStartsWith(value: unknown[], prefix: unknown[]): boolean {
+	if (prefix.length > value.length) return false;
+	for (let i = 0; i < prefix.length; i++) {
+		if (!streamingArgumentValuesEqual(value[i], prefix[i])) return false;
+	}
+	return true;
+}
+
+function mergeStreamingArgumentArrays(prev: unknown[], fragment: unknown[]): unknown[] {
+	if (streamingArgumentArrayStartsWith(fragment, prev)) {
+		return fragment.map(cloneStreamingArgumentValue);
+	}
+	if (streamingArgumentArrayStartsWith(prev, fragment)) {
+		return prev.map(cloneStreamingArgumentValue);
+	}
+	const merged = prev.map(cloneStreamingArgumentValue);
+	for (const value of fragment) {
+		merged.push(cloneStreamingArgumentValue(value));
+	}
+	return merged;
+}
+
+function mergeStreamingArgumentValues(prev: unknown, fragment: unknown): unknown {
+	if (typeof prev === "string" && typeof fragment === "string") {
+		return fragment.startsWith(prev) ? fragment : prev + fragment;
+	}
+	if (Array.isArray(prev) && Array.isArray(fragment)) {
+		return mergeStreamingArgumentArrays(prev, fragment);
+	}
+	if (isStreamingArgumentObject(prev) && isStreamingArgumentObject(fragment)) {
+		return mergeStreamingArgumentObjects(prev, fragment);
+	}
+	return cloneStreamingArgumentValue(fragment);
+}
+
+function mergeStreamingArgumentObjects(
+	prev: Record<string, unknown> | undefined,
+	fragment: Record<string, unknown>,
+): Record<string, unknown> {
+	const merged: Record<string, unknown> = {};
+	if (prev) {
+		for (const key in prev) {
+			if (!Object.hasOwn(prev, key) || isUnsafeToolArgumentKey(key)) continue;
+			merged[key] = cloneStreamingArgumentValue(prev[key]);
+		}
+	}
+	for (const key in fragment) {
+		if (!Object.hasOwn(fragment, key) || isUnsafeToolArgumentKey(key)) continue;
+		merged[key] = Object.hasOwn(merged, key)
+			? mergeStreamingArgumentValues(merged[key], fragment[key])
+			: cloneStreamingArgumentValue(fragment[key]);
+	}
+	return merged;
+}
+
 /**
  * Check if conversation messages contain tool calls or tool results.
  * This is needed because Anthropic (via proxy) requires the tools param
@@ -268,7 +367,7 @@ export interface OpenAICompletionsOptions extends StreamOptions {
 	openrouterVariant?: string;
 }
 
-type OpenAICompletionsParams = ChatCompletionCreateParamsStreaming & {
+type OpenAICompletionsParams = Omit<ChatCompletionCreateParamsStreaming, "reasoning_effort"> & {
 	top_k?: number;
 	min_p?: number;
 	repetition_penalty?: number;
@@ -276,6 +375,8 @@ type OpenAICompletionsParams = ChatCompletionCreateParamsStreaming & {
 	enable_thinking?: boolean;
 	chat_template_kwargs?: { enable_thinking: boolean };
 	reasoning?: { effort?: string } | { enabled: false };
+	reasoning_effort?: string | null;
+	tool_stream?: boolean;
 	provider?: OpenAICompat["openRouterRouting"];
 	providerOptions?: { gateway?: { only?: string[]; order?: string[] } };
 };
@@ -756,6 +857,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				? new StreamMarkupHealing({ pattern: streamMarkupHealingPattern })
 				: undefined;
 			const explicitReasoningDeltasMayBeCumulative = modelMayLeakThinkingTags(model.provider, model.id);
+			let suppressHealedThinking = false;
 			let healedToolCallEmitted = false;
 			const emitHealedToolCall = (call: HealedToolCall): void => {
 				finishCurrentBlock(currentBlock);
@@ -780,11 +882,11 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				currentBlock = undefined;
 				healedToolCallEmitted = true;
 			};
-			const emitHealingEvent = (event: StreamMarkupHealingEvent): void => {
+			const emitHealingEvent = (event: StreamMarkupHealingEvent, suppressThinking: boolean): void => {
 				if (event.type === "text") {
 					appendProcessedText(event.text);
 				} else if (event.type === "thinking") {
-					appendThinkingDelta(event.thinking);
+					if (!suppressThinking) appendThinkingDelta(event.thinking);
 				} else {
 					emitHealedToolCall(event.call);
 				}
@@ -887,6 +989,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 							foundReasoningField,
 							explicitReasoningDeltasMayBeCumulative ? "cumulative" : "delta",
 						);
+						suppressHealedThinking = true;
 					}
 
 					const normalizedDeltaText = normalizeStreamingContentText(choice.delta.content);
@@ -894,21 +997,13 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 						if (!firstTokenTime) firstTokenTime = Date.now();
 						const hasStructuredToolCalls =
 							Array.isArray(choice.delta.tool_calls) && choice.delta.tool_calls.length > 0;
-						const suppressContentThinking =
-							foundReasoningField !== undefined && streamMarkupHealing?.pattern === "thinking";
 
 						if (streamMarkupHealing) {
-							if (hasStructuredToolCalls) {
-								// Same chunk leaks markers AND carries structured tool_calls.
-								// Strip the marker text from visible output, but drop any
-								// synthesized calls so the structured payload stays the
-								// single source of truth (avoids double-dispatch).
-								appendProcessedText(streamMarkupHealing.consumeWithoutCalls(normalizedDeltaText));
-							} else {
-								for (const event of streamMarkupHealing.feedEvents(normalizedDeltaText)) {
-									if (suppressContentThinking && event.type === "thinking") continue;
-									emitHealingEvent(event);
-								}
+							const healingEvents = hasStructuredToolCalls
+								? streamMarkupHealing.feedEventsWithoutCalls(normalizedDeltaText)
+								: streamMarkupHealing.feedEvents(normalizedDeltaText);
+							for (const event of healingEvents) {
+								emitHealingEvent(event, suppressHealedThinking);
 							}
 						} else {
 							appendProcessedText(normalizedDeltaText);
@@ -987,31 +1082,17 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 								// OpenAI JSON-string contract. Most chunks carry the complete object in one delta,
 								// but cannot rely on that: replacing per-chunk drops earlier keys (and earlier
 								// string content for the same key) when the host fragments the args across deltas.
-								// Shallow-merge into the accumulated object; for shared string keys, detect
-								// cumulative-vs-delta semantics with `startsWith` so we neither duplicate cumulative
-								// payloads nor lose delta fragments. Degenerates to the previous "last wins"
-								// behaviour for the common single-chunk shape (no prior value to merge with).
+								// Deep-merge into the accumulated object. Strings and arrays detect
+								// cumulative-vs-delta semantics by prefix, nested objects merge by key, and
+								// prototype-polluting keys are ignored before storing or comparing values.
 								//
 								// `delta` stays empty here: emitting `JSON.stringify(rawArgs)` per chunk feeds
 								// downstream concat-based accumulators (proxy.ts, openai-chat-server,
 								// openai-responses-server, anthropic-messages-server) an invalid sequence like
 								// `{"input":"a"}{"input":"b"}`. The merged object is flushed as a single
 								// concat-safe delta in `finishToolCallBlock` before `toolcall_end` instead.
-								const prev =
-									block.partialArgs &&
-									typeof block.partialArgs === "object" &&
-									!Array.isArray(block.partialArgs)
-										? (block.partialArgs as Record<string, unknown>)
-										: undefined;
-								const merged: Record<string, unknown> = prev ? { ...prev } : {};
-								for (const [key, value] of Object.entries(rawArgs)) {
-									const prevValue = merged[key];
-									if (typeof prevValue === "string" && typeof value === "string") {
-										merged[key] = value.startsWith(prevValue) ? value : prevValue + value;
-									} else {
-										merged[key] = value;
-									}
-								}
+								const prev = isStreamingArgumentObject(block.partialArgs) ? block.partialArgs : undefined;
+								const merged = mergeStreamingArgumentObjects(prev, rawArgs);
 								block.partialArgs = merged;
 								block.arguments = merged;
 							}
@@ -1048,7 +1129,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 
 			if (streamMarkupHealing) {
 				for (const event of streamMarkupHealing.flushEvents()) {
-					emitHealingEvent(event);
+					emitHealingEvent(event, suppressHealedThinking);
 				}
 				flushHealedToolCalls();
 				if (healedToolCallEmitted && output.stopReason === "stop") {
@@ -1083,6 +1164,10 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				output.stopReason = "toolUse";
 			}
 
+			if (model.provider === "ollama" && output.stopReason === "length" && !hasVisibleCompletionContent(output)) {
+				output.stopReason = "error";
+				output.errorMessage = EMPTY_OLLAMA_LENGTH_COMPLETION_MESSAGE;
+			}
 			const firstEventTimeoutError = abortTracker.getLocalAbortReason();
 			if (firstEventTimeoutError) {
 				throw firstEventTimeoutError;
@@ -1198,6 +1283,19 @@ async function createRequestSetup(
 		copilotPremiumRequests = copilot.premiumRequests;
 		baseUrl = resolveGitHubCopilotBaseUrl(model.baseUrl, rawApiKey) ?? model.baseUrl;
 	}
+	if (model.provider === "alibaba-coding-plan") {
+		try {
+			const parsed = JSON.parse(rawApiKey);
+			if (typeof parsed?.token === "string") {
+				apiKey = parsed.token;
+			}
+			if (typeof parsed?.enterpriseUrl === "string") {
+				baseUrl = parsed.enterpriseUrl;
+			}
+		} catch {
+			// Not JSON — use raw apiKey and catalog baseUrl
+		}
+	}
 	// Azure OpenAI requires /deployments/{id}/chat/completions?api-version=YYYY-MM-DD.
 	// The generic openai-completions path adds neither, producing silent 404s.
 	let azureDefaultQuery: Record<string, string> | undefined;
@@ -1255,6 +1353,10 @@ function buildParams(
 	// `compat.alwaysSendMaxTokens` carries that detection.
 	const requestedMaxTokens =
 		options?.maxTokens ?? (compat.alwaysSendMaxTokens ? (model.maxTokens ?? OPENAI_MAX_OUTPUT_TOKENS) : undefined);
+	const providerOutputClamp =
+		compat.thinkingFormat === "zai" && isGlm52ReasoningEffortModelId(model.id)
+			? (model.maxTokens ?? OPENAI_MAX_OUTPUT_TOKENS)
+			: OPENAI_MAX_OUTPUT_TOKENS;
 	// OpenRouter fans out to upstreams whose output caps differ from the catalog
 	// value (which tracks the highest-cap provider). A max_tokens above the routed
 	// upstream's cap makes OpenRouter silently skip that provider (e.g. Cerebras
@@ -1265,7 +1367,7 @@ function buildParams(
 	const effectiveMaxTokens =
 		requestedMaxTokens === undefined || omitMaxTokensForRouting
 			? undefined
-			: Math.min(requestedMaxTokens, model.maxTokens ?? Number.POSITIVE_INFINITY, OPENAI_MAX_OUTPUT_TOKENS);
+			: Math.min(requestedMaxTokens, model.maxTokens ?? Number.POSITIVE_INFINITY, providerOutputClamp);
 
 	const requestModelId = resolveOpenAICompletionsModelId(model, options);
 	const params: OpenAICompletionsParams = {
@@ -1339,6 +1441,15 @@ function buildParams(
 		// so LiteLLM → Bedrock never sees an empty `toolConfig` block.
 		params.tools = [];
 	}
+	if (
+		compat.thinkingFormat === "zai" &&
+		compat.supportsReasoningEffort &&
+		isGlm52ReasoningEffortModelId(model.id) &&
+		Array.isArray(params.tools) &&
+		params.tools.length > 0
+	) {
+		params.tool_stream = true;
+	}
 
 	if (options?.toolChoice && compat.supportsToolChoice) {
 		params.tool_choice = mapToOpenAICompletionsToolChoice(options.toolChoice);
@@ -1376,12 +1487,23 @@ function buildParams(
 	}
 
 	if (supportsReasoningParams && compat.thinkingFormat === "zai" && model.reasoning) {
-		// Z.ai uses binary thinking: { type: "enabled" | "disabled" }
-		// Must explicitly disable since z.ai defaults to thinking enabled.
-		const enabled = options?.reasoning && !options?.disableReasoning;
+		// Z.AI-style hosts use binary thinking, while GLM-5.2+ also accepts
+		// `reasoning_effort` when thinking is enabled. `minimal` maps to the
+		// provider's skip-thinking path, so keep the effort field absent there.
+		const requestedEffort = options?.reasoning;
+		const mappedEffort =
+			requestedEffort === undefined
+				? undefined
+				: (compat.reasoningEffortMap?.[requestedEffort] ??
+					model.thinking?.effortMap?.[requestedEffort] ??
+					requestedEffort);
+		const enabled = mappedEffort !== undefined && mappedEffort !== "none" && !options?.disableReasoning;
 		params.thinking = { type: enabled ? "enabled" : "disabled" };
 		if (enabled && compat.thinkingKeep) {
 			params.thinking.keep = compat.thinkingKeep;
+		}
+		if (enabled && compat.supportsReasoningEffort) {
+			params.reasoning_effort = mappedEffort;
 		}
 	} else if (supportsReasoningParams && compat.thinkingFormat === "qwen" && model.reasoning) {
 		// Qwen uses top-level enable_thinking: boolean
@@ -2116,6 +2238,19 @@ function shouldRetryWithoutStrictTools(
 		messageParts,
 	);
 }
+
+const NON_WHITESPACE_RE = /\S/;
+
+function hasVisibleCompletionContent(message: AssistantMessage): boolean {
+	for (const block of message.content) {
+		if (block.type === "toolCall") return true;
+		if (block.type === "text" && NON_WHITESPACE_RE.test(block.text)) return true;
+	}
+	return false;
+}
+
+const EMPTY_OLLAMA_LENGTH_COMPLETION_MESSAGE =
+	"Model returned no content: prompt filled the context window; raise Ollama num_ctx or shorten the prompt.";
 
 function mapStopReason(reason: ChatCompletionChunk.Choice["finish_reason"] | string): {
 	stopReason: StopReason;

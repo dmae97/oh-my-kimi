@@ -36,3 +36,31 @@ function sanitizeWellFormedText(text: string): string {
 	CONTROL_RE.lastIndex = 0;
 	return stripped.replace(CONTROL_RE, "");
 }
+
+/**
+ * Escape the three XML-significant characters (`&`, `<`, `>`) in text destined
+ * for an XML/markup element body. Allocation-conscious: returns the input
+ * unchanged (same reference) when nothing needs escaping. Quotes are left as-is
+ * — use it for element text, not attribute values.
+ */
+export function escapeXmlText(input: string): string {
+	let firstEscapable = -1;
+	for (let index = 0; index < input.length; index++) {
+		const char = input.charCodeAt(index);
+		if (char === 38 || char === 60 || char === 62) {
+			firstEscapable = index;
+			break;
+		}
+	}
+	if (firstEscapable === -1) return input;
+
+	let output = input.slice(0, firstEscapable);
+	for (let index = firstEscapable; index < input.length; index++) {
+		const char = input[index];
+		if (char === "&") output += "&amp;";
+		else if (char === "<") output += "&lt;";
+		else if (char === ">") output += "&gt;";
+		else output += char;
+	}
+	return output;
+}

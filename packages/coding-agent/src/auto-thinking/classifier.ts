@@ -22,7 +22,11 @@ import type { Settings } from "../config/settings";
 import difficultySystemPrompt from "../prompts/system/auto-thinking-difficulty.md" with { type: "text" };
 import difficultyLocalPrompt from "../prompts/system/auto-thinking-difficulty-local.md" with { type: "text" };
 import { clampAutoThinkingEffort } from "../thinking";
-import { isTinyMemoryLocalModelKey, ONLINE_AUTO_THINKING_MODEL_KEY } from "../tiny/models";
+import {
+	isTinyMemoryLocalModelKey,
+	isTinyMemoryReasoningModelKey,
+	ONLINE_AUTO_THINKING_MODEL_KEY,
+} from "../tiny/models";
 import { tinyModelClient } from "../tiny/title-client";
 
 const DIFFICULTY_SYSTEM_PROMPT = prompt.render(difficultySystemPrompt);
@@ -31,8 +35,10 @@ const DIFFICULTY_SYSTEM_PROMPT = prompt.render(difficultySystemPrompt);
 const MAX_INPUT_CHARS = 6000;
 const HEAD_CHARS = 4000;
 const TAIL_CHARS = 2000;
-/** The answer is a single word; keep budgets tiny for non-reasoning backends. */
+/** The online answer is a single word; keep budgets tiny for non-reasoning backends. */
 const ANSWER_MAX_TOKENS = 8;
+/** Local classifiers occasionally need more room for chat-template boilerplate. */
+const LOCAL_ANSWER_MAX_TOKENS = 16;
 /**
  * Reasoning backends ignore `disableReasoning` on some providers, so reserve
  * enough output room for the keyword to still land after unavoidable thinking.
@@ -107,9 +113,12 @@ async function classifyLocal(input: string, modelKey: string, deps: ClassifyDiff
 	if (!isTinyMemoryLocalModelKey(modelKey)) {
 		throw new Error(`auto-thinking: unsupported local classifier model: ${modelKey}`);
 	}
+	const maxTokens = isTinyMemoryReasoningModelKey(modelKey)
+		? Math.max(LOCAL_ANSWER_MAX_TOKENS, REASONING_SAFE_MAX_TOKENS)
+		: LOCAL_ANSWER_MAX_TOKENS;
 	const builtPrompt = prompt.render(difficultyLocalPrompt, { prompt: input });
 	const text = await tinyModelClient.complete(modelKey, builtPrompt, {
-		maxTokens: ANSWER_MAX_TOKENS,
+		maxTokens,
 		signal: deps.signal,
 	});
 	if (!text) {

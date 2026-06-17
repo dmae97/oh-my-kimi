@@ -543,7 +543,9 @@ export class ExtensionRunner {
 			event.type === "session_before_tree"
 		);
 	}
-
+	#isSessionShutdownEvent(event: RunnerEmitEvent): event is Extract<RunnerEmitEvent, { type: "session_shutdown" }> {
+		return event.type === "session_shutdown";
+	}
 	async #runHandlerWithTimeout<TEvent extends { type: string }, TResult>(
 		handler: (event: TEvent, ctx: ExtensionContext) => Promise<TResult | undefined> | TResult | undefined,
 		event: TEvent,
@@ -587,6 +589,20 @@ export class ExtensionRunner {
 	async emit<TEvent extends RunnerEmitEvent>(event: TEvent): Promise<RunnerEmitResult<TEvent>> {
 		const ctx = this.createContext();
 		let result: SessionBeforeEventResult | SessionCompactingResult | undefined;
+
+		if (this.#isSessionShutdownEvent(event)) {
+			const timeoutMs = handlerTimeoutForEvent(event.type);
+			const promises: Promise<unknown>[] = [];
+			for (const ext of this.extensions) {
+				const handlers = ext.handlers.get(event.type);
+				if (!handlers || handlers.length === 0) continue;
+				for (const handler of handlers) {
+					promises.push(this.#runHandlerWithTimeout(handler, event, ctx, ext, timeoutMs));
+				}
+			}
+			await Promise.all(promises);
+			return result as RunnerEmitResult<TEvent>;
+		}
 
 		for (const ext of this.extensions) {
 			const handlers = ext.handlers.get(event.type);

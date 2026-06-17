@@ -2,6 +2,233 @@
 
 ## [Unreleased]
 
+## [16.0.4] - 2026-06-17
+
+### Fixed
+
+- Fixed RPC/ACP startup forcing todo settings back to host defaults, so project-level `todo.enabled`, `todo.reminders`, and `todo.eager` opt-outs now suppress protocol-mode todo prompt injection; enabled todo reminders are now persisted to the JSONL transcript so the log matches the model-visible context ([#2824](https://github.com/can1357/oh-my-pi/issues/2824)).
+- Fixed default prompts to instruct the agent to read applicable `skill://<name>` content before starting work, so discovered skills influence broad task requests like frontend generation ([#2829](https://github.com/can1357/oh-my-pi/issues/2829)).
+- Fixed hashline visible-line validation for ACP editor reads so `INS.POST` anchors displayed by bridge-backed range and multi-range `read` output are merged into the session snapshot before `edit` validates them ([#2773](https://github.com/can1357/oh-my-pi/issues/2773)).
+
+## [16.0.3] - 2026-06-16
+
+### Added
+
+- Added support for LaTeX color commands (`\textcolor`, `\colorbox`, and `\fcolorbox`) in user-visible terminal prose and final chat to colorize output
+
+### Changed
+
+- Changed STT dependency setup to validate recorder and model assets per `stt.modelName`, so switching speech models re-runs dependency checks and downloads for the new model
+- Changed STT startup with cached models to warm the speech model in the background and defer full model loading until transcription begins, reducing push-to-talk start latency
+- Allowed user-visible terminal and final-chat responses to include LaTeX math delimiters/commands and Mermaid ` ```mermaid ` diagrams
+- Changed the hold-`Space` push-to-talk gesture to recognize a held bar from the *regularity* of the OS key auto-repeat rather than a raw space count or speed alone, so it no longer spams the editor, no longer eats deliberate space taps, and no longer triggers when the bar is smashed. Recording starts only after two consecutive inter-space deltas are "mechanical" — both fast (within ~120 ms) and near-identical, the metronomic signature of auto-repeat; the few pre-burst spaces typed are then tracked back out. Smashing (fast but jittery) and deliberate spacing (steady but slow) both keep typing real spaces and never start recording.
+- Updated markdown Mermaid rendering to color ASCII diagrams with the active theme and automatically choose a narrower layout that better fits the terminal width
+- Made the watched-session transcript sent to the advisor (and shown by `/advisor dump`) clearer: each turn now opens with a `### Session update` heading; watched-agent roles render as inline `**agent**:` / `**user**:` labels instead of level-2 headings that collided with the advisor's own turns; consecutive same-role messages collapse under one label (the watched agent emits one assistant message per tool call); and batched updates are joined by a blank line rather than a `---` rule.
+- Changed the compact transcript tool-intent prefix (`history://`, `/advisor dump`) from `# ` to `// ` so intent lines read as comments instead of rendering as Markdown H1 headings.
+- Changed the advisor advice injected into the primary transcript from a `Advisor (...): - [severity] note` prose block to one `<advisory severity="…" guidance="weigh, don't blindly obey">…</advisory>` element per note, with XML-escaped bodies. (Relocated the shared `escapeXmlText` helper to `@oh-my-pi/pi-utils`.)
+- Reverted `/dump` and `/advisor dump raw` to the pre-16.x full verbose dump: system prompt, model/thinking config, tool inventory with parameters, and the message transcript rendered with markdown role headings (`## User`, `## Assistant`, `### Tool Call: <name>` with the call's `_i` intent as a `//` comment under the heading and the remaining arguments as a fenced YAML block, `### Tool Result: <name>`, plus `## Bash Execution`/`## File Mention`/summary sections) instead of the model's native-dialect turn envelopes and `<invoke>`/`<parameter>` XML tool calls. Dropped the compact default and the `[raw]` flag on `/dump`; the compact `→ tool(...) ⇒ ok` history format is no longer reachable from `/dump`. `/advisor dump` still defaults to compact, and `/advisor dump raw` now renders the same markdown dump (previously the model's native-dialect envelopes).
+
+### Fixed
+
+- Fixed Whisper STT cache detection to require both encoder and decoder `.onnx` files, so partial model downloads now trigger a proper foreground download instead of being treated as fully cached
+- Fixed same-process `JsRuntime` cleanup so disposing an older inline/direct runtime no longer deletes a newer runtime's JS helper globals; inactive cmux/direct runtimes now re-activate their globals before sequential use while overlapping cross-runtime runs fail explicitly.
+- Fixed magic-keyword steering notices (`ultrathink-notice`, `orchestrate-notice`, `workflow-notice`) to be prepended before the related user message so they influence that same turn
+- Fixed dequeuing or popping queued user messages to remove their preceding hidden magic-keyword notice companions, preventing orphaned queued notices
+- Fixed queued user steers to auto-resume after interrupts even when the transcript tail is a preserved advisor card or other non-conversational custom message
+- Fixed queued user follow-up messages to remain queued after an interrupt and only run on explicit resume, even when an IRC wake leaves a provider-valid tail
+- Fixed stranded IRC asides to wake a response turn after interruption instead of remaining pending
+- Fixed accepted IRC asides to be flushed into the transcript during disposal instead of being discarded
+- Fixed interactive submissions made while the TUI had no active input waiter: they now start a real prompt directly, with steer fallback if a background turn races in, instead of queueing behind a non-resumable idle transcript and appearing to do nothing.
+- Fixed pressing Esc (or Alt+Up dequeue) while agent-authored messages were queued — advisor concern/blocker notes, hidden goal/plan/budget steers, IRC/extension asides — dumping their text into the user's editor. Editor restoration (`clearQueue()`), pending chips (`getQueuedMessages()`), and `popLastQueuedMessage()` now surface only genuinely user-authored queued messages (plain user turns and `attribution: "user"` custom messages like `/skill`). Plain Alt+Up dequeue leaves all other queued messages in place for the continuing stream; only the Esc interrupt path keeps just advisor cards (so abort's preservation still re-records them as visible advice) and drops other internal steers, so a user interrupt can't be silently undone by an auto-resume on leftover internal context. `queuedMessageCount` still reflects all actual queued work (advisor cards included) so `hasPendingMessages()`/RPC and the empty-submit abort gate stay accurate.
+- Fixed advisor `concern`/`blocker` advice being withheld from the running agent and then dumped as one burst at the next user prompt after a deliberate interrupt. A user interrupt latches advisor auto-resume suppression, but a non-user resume (synthetic/auto-continue, or a queued steer draining after the abort) leaves the run streaming with that latch still set, so every interrupting note was parked hidden in the next-turn queue instead of steered into the live turn — the agent never heard the advisor mid-run and the backlog flushed all at once on the next prompt. Suppression now only withholds interrupting advice while the agent is idle (or still tearing the interrupted turn down); once a turn is streaming again the note is steered in live, since steering an active run never auto-resumes a stopped one. A concern that strands in the steer queue past the resumed turn's final poll is reclaimed as visible advice when the agent settles (mirroring abort), so it neither auto-resumes the stopped run nor lingers to flush at the next prompt.
+- Fixed `omp --continue`/`-c` sometimes resuming into a subagent transcript instead of the interactive session. Subagent (and HTML-export) `SessionManager.open()` calls run in the parent's terminal and were clobbering the per-TTY `--continue` breadcrumb with their own artifact-dir session file; these headless opens now suppress the breadcrumb. `continueRecent()` also recovers already-poisoned breadcrumbs by resolving any session file inside a parent's artifacts dir (`<parent>/<agentId>.jsonl`) back up to the top-level session.
+- Fixed the Agent Hub stacking duplicate `Agent Hub · N running` frames and stranding garbage rows in scrollback while navigating with subagents still streaming. The hub was a non-fullscreen overlay composited over a live transcript, so each time a running subagent's progress grew the frame and scrolled the window the previously-painted hub copy was pushed permanently into the terminal's native scrollback (which the engine can't rewrite). It now renders inline in the editor slot — the same anchored region every other selector and the `ask` tool use — riding the normal append-only commit path, so the transcript commits above it exactly once and the hub repaints in place instead of leaking copies. (Avoids borrowing the alternate screen.)
+- Fixed every subagent registering itself as its own parent in the agent registry (`parentId === id`), so the Agent Hub rendered each agent as `sub · of <itself>` and the ←← parent-navigation gesture looped on the same agent. The SDK was reusing `parentTaskPrefix` — the agent's own artifact/output-id prefix — as the registry parent link; spawns now pass a separate `parentAgentId` (the spawning agent's id: `Main` for top-level `task` spawns, the parent subagent for nested spawns and eval `agent()`, the focused agent for `/tan`) and the registry records that as the parent.
+- Fixed messaging a `parked` subagent that was restored from disk (Agent Hub scan, or a resumed/restarted session) failing with `cannot be revived (no reviver registered)` even though its transcript was intact. Such refs carry a session file but no in-memory reviver — the executor's live reviver closure dies with the spawning turn/process — so IRC sends and Agent Hub focus refused them. `AgentLifecycleManager.ensureLive` now cold-revives them through a persisted-subagent reviver factory (installed by the top-level interactive/RPC session) that rebuilds the subagent from its JSONL the way `--resume` rebuilds a session: it reopens the file and replays it through `createAgentSession`, but sources the runtime contract from a now-readable `session_init` record (`SessionManager.peekSessionInit`) so tools, system prompt, output schema, and kind are restored rather than resurrected as a default top-level session. `session_init` now also persists the effective `spawns` allowlist and read-summarization flag so a cold revive keeps the original capability surface (old files without them deny re-spawning rather than defaulting to wildcard). Isolated runs and pre-`session_init` files whose recorded workspace no longer exists stay transcript-only (`history://`).
+- Fixed the terminal window-title OSC writes (`setTerminalTitle`/`pushTerminalTitle`/`popTerminalTitle`) leaking escape sequences to a developer's terminal during `bun test`; they now skip when the terminal is headless (the test-runtime default), matching the `ProcessTerminal` render/probe suppression so interactive-mode tests no longer paint to the real terminal
+- Fixed empty CLI sessions being retained after opening `omp` and exiting without a prompt ([#2800](https://github.com/can1357/oh-my-pi/issues/2800)).
+- Fixed `hooks/pre/*.ts` and `hooks/post/*.ts` files discovered through `hookCapability` being registered in discovery but never loaded into the extension runner, so their `tool_call` handlers now run without a manual `settings.json` `extensions` entry ([#2796](https://github.com/can1357/oh-my-pi/issues/2796)).
+- Fixed startup model fallback choosing the plain OpenAI `gpt-5.5` provider before the Codex OAuth provider when both shared the same default model id, which could surface a misleading OpenAI 401 despite valid Codex credentials ([#2807](https://github.com/can1357/oh-my-pi/issues/2807)).
+- Fixed local auto-thinking classification for reasoning-capable tiny models by giving them the same safe answer budget as online reasoning classifiers, with a larger local floor for non-reasoning tiny models ([#2808](https://github.com/can1357/oh-my-pi/issues/2808)).
+
+### Removed
+
+- Removed the built-in `render_mermaid` tool and its `renderMermaid.enabled` setting, so it can no longer be invoked directly
+
+## [16.0.2] - 2026-06-16
+
+### Added
+
+- Added the `UMANS_WEBSEARCH_PROVIDER` environment variable to CLI help for Umans gateway web search backend selection.
+
+### Changed
+
+- The eager `task` (`task.eager: always`) and eager `todo` (`todo.eager: preferred`/`always`) hidden reminders now re-fire on the auto-continuation turn after a compaction (context-full / snapcompact / handoff / shake). Compaction summarizes away the first-message prelude, so the agent would otherwise silently lose the delegate-via-tasks / phased-todo guidance mid-work; the post-compaction todo nudge is reminder-only and never forces the `todo` tool onto the resumed turn.
+
+### Fixed
+
+- Fixed edit-tool block operations on Emacs Lisp files: `.el` and `.emacs` paths now resolve top-level forms for `SWAP.BLK`, `DEL.BLK`, and `INS.BLK.POST` instead of reporting an unsupported-language block-resolution error.
+- Fixed PDF reads leaking recoverable MuPDF WASM warnings into the terminal TUI by routing MuPDF output through the file logger before `markit-ai` loads it ([#2766](https://github.com/can1357/oh-my-pi/issues/2766)).
+- Fixed `/exit` and `/quit` waiting one shutdown timeout per hanging extension by running `session_shutdown` handlers within a shared shutdown window ([#2736](https://github.com/can1357/oh-my-pi/issues/2736)).
+- Fixed GitHub Copilot `.github/instructions/*.instructions.md` discovery by loading those files as rules that honor `applyTo` scoping, including always-apply `**` files and `rule://<name>` access for glob-scoped entries ([#2731](https://github.com/can1357/oh-my-pi/issues/2731)).
+- Fixed Windows bash-tool child processes defaulting interpreter pipe I/O to the ANSI codepage by adding UTF-8 encoding defaults when the inherited environment is unset ([#2701](https://github.com/can1357/oh-my-pi/issues/2701)).
+- Fixed `/advisor dump raw` so Opus 4.5 thinking content that already includes literal `<thinking>` tags is not rendered with nested thinking tags ([#2700](https://github.com/can1357/oh-my-pi/issues/2700)).
+- The `plugin-extensions-discovery` test suite no longer writes fixtures into — and `rm -rf`s the `node_modules` of — the developer's real `~/.omp/plugins`. Its `XDG_DATA_HOME` isolation was a no-op on Windows (XDG is gated to Linux/macOS) and was bypassed in XDG-migrated Linux/macOS environments, so a local run could delete installed plugins. The suite now isolates the whole config root via an `os.homedir()` mock plus cleared `XDG_*` vars, with a pre-write guard that fails if resolution escapes the temp home ([#2721](https://github.com/can1357/oh-my-pi/issues/2721)).
+- Installed plugins whose `extensions` manifest entry points at a directory of sub-extensions (the standard pi `extensions/<name>/index.ts` layout, e.g. `pi.extensions: ["./extensions"]`) are no longer rejected at install (`declared extension entry not found on disk`) or silently dropped at load. The plugin manifest resolver now resolves a directory the same way as the configured-directory (`-e`) extension loader: the directory's own `package.json` `omp`/`pi` `extensions` (authoritative — a missing declared entry is reported instead of falling back to a decoy `index`), then a direct `index.{ts,js,mjs,cjs}`, then a one-level scan of sub-extensions ([#2713](https://github.com/can1357/oh-my-pi/issues/2713)).
+- Fixed OpenRouter `@upstream` routing selectors whose upstream slug also appears in the model id, so `openrouter/...@deepseek:high` keeps `openRouterRouting.only` instead of being consumed by provider-scoped fuzzy matching ([#2708](https://github.com/can1357/oh-my-pi/issues/2708)).
+- Fixed `omp plugin list --json` omitting locally linked plugins that exist only in `omp-plugins.lock.json` and `node_modules` symlinks. ([#2742](https://github.com/can1357/oh-my-pi/issues/2742))
+- Fixed task subagents to install their configured ordered model candidates as child-session retry fallback chains, so retryable provider failures can advance to the next subagent model instead of failing the worker ([#2750](https://github.com/can1357/oh-my-pi/issues/2750)).
+- Fixed empty reasonless aborted assistant turns to auto-retry without switching model fallback, so transient provider-side aborts after tool results do not end headless sessions ([#2685](https://github.com/can1357/oh-my-pi/issues/2685)).
+
+## [16.0.1] - 2026-06-15
+
+### Breaking Changes
+
+- **Settings:** `hooks` and `customTools` arrays replaced with single `extensions` array
+- **CLI:** `--hook` and `--tool` flags replaced with `--extension` / `-e`
+- **Directories:** `hooks/`, `tools/` → `extensions/`; `commands/` → `prompts/`
+- **Types:** See type renames above
+- **SDK:** See SDK migration above
+- **Key detection functions removed from `@mariozechner/pi-tui`**: All `isXxx()` key detection functions (`isEnter()`, `isEscape()`, `isCtrlC()`, etc.) have been removed. Use `matchesKey(data, keyId)` instead (e.g., `matchesKey(data, "enter")`, `matchesKey(data, "ctrl+c")`). This affects hooks and custom tools that use `ctx.ui.custom()` with keyboard input handling. ([#405](https://github.com/badlogic/pi-mono/pull/405))
+
+### Added
+
+- Added GitHub Copilot user-global discovery to the `github` provider: it now loads user-global instructions from `~/.copilot/copilot-instructions.md`, honors the `COPILOT_HOME` relocation override, reads each directory listed in `COPILOT_CUSTOM_INSTRUCTIONS_DIRS` for an `AGENTS.md` and `.github/instructions/**/*.instructions.md` (matching Copilot CLI), scans the project `.github/instructions/` tree recursively, and surfaces VS Code Copilot prompt files (`*.prompt.md`) from `.github/prompts/` as slash commands. Previously only the project `.github/` tree was scanned, so Copilot CLI users' cross-repo config was silently ignored. Closes #1913, #1915, #1916.
+- Added web search provider exclusions so `web_search` can skip configured providers without disabling them for model use ([#2608](https://github.com/can1357/oh-my-pi/issues/2608)).
+- Added an optional `role` field to `task` spawns that gives each subagent a tailored specialist identity: the role is injected as a system-prompt specialization preamble and becomes the subagent's display name and telemetry identity in the registry, IRC roster, and Agent Hub, so delegated trees are no longer clones of one generic worker ([#2467](https://github.com/can1357/oh-my-pi/issues/2467))
+- Added a non-blocking specialization advisory to the `task` tool: when a spawner with remaining depth capacity spawns generic role-less workers (a `task`/`quick_task` spawn without a `role`, or the same agent cloned ≥2× all without roles), the result steers it toward tailored specialists. Gated so a leaf at max recursion depth is never nudged; the task-tool depth gate is extracted into a shared `canSpawnAtDepth` helper ([#2469](https://github.com/can1357/oh-my-pi/issues/2469))
+- Added a work-aware IRC roster: `irc list` and the subagent peer roster now show each peer's current activity (a short gist of its latest intent/tool) alongside its role-derived display name, so a tree of tailored specialists is legible enough to coordinate. Backed by a new display-only `activity` field on the agent registry ([#2470](https://github.com/can1357/oh-my-pi/issues/2470))
+- Added proactive IRC coordination: when one `task` call spawns ≥2 live siblings with spawn capacity remaining, the result suggests coordinating overlapping work via `irc` (composed onto the specialization advisory), and the subagent COOP/`irc` prompts now actively steer discovery (`list`), coordination (message before overlapping edits), and follow-up (`replyTo`/`await`) instead of only assuming agents resolve collisions on their own ([#2471](https://github.com/can1357/oh-my-pi/issues/2471))
+- Added `/review` support for explicit GitHub pull request URLs and detected PR URLs from recent conversation context ([#1743](https://github.com/can1357/oh-my-pi/issues/1743)).
+- Added a `plan.defaultOnStartup` setting (Tasks tab, default off) that automatically enters plan mode at the start of a new interactive session. It applies to any session that opens with no prior history — including a `--continue`/auto-resume that finds no recent session and starts fresh — while sessions with restored history keep the mode reconciled from that history. It is a silent no-op when plan mode is globally disabled (`plan.enabled`), and the setting is hidden from the settings UI unless plan mode is enabled.
+- Added `UMANS_AI_CODING_PLAN_API_KEY` to the CLI environment help ([#2636](https://github.com/can1357/oh-my-pi/pull/2636) by [@oldschoola](https://github.com/oldschoola)).
+- Added `WebSearchProviderError` class with HTTP status for actionable provider error messages
+- `$ARGUMENTS` syntax for custom slash commands as alternative to `$@` for all arguments joined. Aligns with patterns used by Claude, Codex, and OpenCode. Both syntaxes remain fully supported. ([#418](https://github.com/badlogic/pi-mono/pull/418) by [@skuridin](https://github.com/skuridin))
+- Configurable double-escape action: choose whether double-escape with empty editor opens `/tree` (default) or `/branch`. Configure via `/settings` or `doubleEscapeAction` in settings.json ([#404](https://github.com/badlogic/pi-mono/issues/404))
+- Vertex AI provider (`google-vertex`): access Gemini models via Google Cloud Vertex AI using Application Default Credentials ([#300](https://github.com/badlogic/pi-mono/pull/300) by [@default-anton](https://github.com/default-anton))
+- Built-in provider overrides in `models.json`: override just `baseUrl` to route a built-in provider through a proxy while keeping all its models, or define `models` to fully replace the provider ([#406](https://github.com/badlogic/pi-mono/pull/406) by [@yevhen](https://github.com/yevhen))
+- Automatic image resizing: images larger than 2000x2000 are resized for better model compatibility. Original dimensions are injected into the prompt. Controlled via `/settings` or `images.autoResize` in settings.json. ([#402](https://github.com/badlogic/pi-mono/pull/402) by [@mitsuhiko](https://github.com/mitsuhiko))
+- Alt+Enter keybind to queue follow-up messages while agent is streaming
+- `Theme` and `ThemeColor` types now exported for hooks using `ctx.ui.custom()`
+- Terminal window title now displays "pi - dirname" to identify which project session you're in ([#407](https://github.com/badlogic/pi-mono/pull/407) by [@kaofelix](https://github.com/kaofelix))
+- Hook API: `ctx.ui.setTitle(title)` allows hooks to set the terminal window/tab title ([#446](https://github.com/badlogic/pi-mono/pull/446) by [@aliou](https://github.com/aliou))
+- Hook API: `before_agent_start` handlers can now return `systemPromptAppend` to dynamically append text to the system prompt for that turn. Multiple hooks' appends are concatenated.
+- Hook API: `before_agent_start` handlers can now return multiple messages (all are injected, not just the first)
+- New example hook: `tools.ts` - Interactive `/tools` command to enable/disable tools with session persistence
+- New example hook: `pirate.ts` - Demonstrates `systemPromptAppend` to make the agent speak like a pirate
+- Tool registry now contains all built-in tools (read, bash, edit, write, grep, find, ls) even when `--tools` limits the initially active set. Hooks can enable any tool from the registry via `pi.setActiveTools()`.
+- System prompt now automatically rebuilds when tools change via `setActiveTools()`, updating tool descriptions and guidelines to match the new tool set
+- Hook errors now display full stack traces for easier debugging
+- Clipboard image paste support via `Ctrl+V`. Images are saved to a temp file and attached to the message. Works on macOS, Windows, and Linux (X11). ([#419](https://github.com/badlogic/pi-mono/issues/419))
+- Configurable keybindings via `~/.pi/agent/keybindings.json`. All keyboard shortcuts (editor navigation, deletion, app actions like model cycling, etc.) can now be customized. Supports multiple bindings per action. ([#405](https://github.com/badlogic/pi-mono/pull/405) by [@hjanuschka](https://github.com/hjanuschka))
+- `/quit` and `/exit` slash commands to gracefully exit the application. Unlike double Ctrl+C, these properly await hook and custom tool cleanup handlers before exiting. ([#426](https://github.com/badlogic/pi-mono/pull/426) by [@ben-vargas](https://github.com/ben-vargas))
+
+### Changed
+
+- Enriched the bundled `designer`, `reviewer`, and `task` agent prompts: `designer` gains a token-first four-phase design-system workflow (analyze → build-if-missing → compose-with-tokens → verify), `reviewer` gains an evidence standard (a finding is not real until you can name the triggering input; passing tests are not proof of correctness), and `task` gains an evidence-bound completion requirement.
+- Updated the session-continuation tip to mention Zellij and WezTerm panes.
+- Documented the `role` task parameter in the task-tool description (both the batch and single-spawn shapes) and made tailored specialists the default delegation guidance, so the model gives each spawn a specialist identity instead of cloning generic workers ([#2468](https://github.com/can1357/oh-my-pi/issues/2468))
+- Changed the `eval` `agent()` helper to accept `return_handle` (Python) / `returnHandle` (JS): instead of bare text it returns a DAG node dict `{ text, output, handle, id, agent }` whose `handle` is the spawned agent's recoverable `agent://<id>` URI, so a downstream `pipeline`/`parallel` stage can wire a large transcript by reference instead of re-inlining it. The default path is unchanged (bare text, or the parsed object under `schema`).
+- Changed `isAutoresearchShCommand()` to use proper command-line argument parsing instead of regex, improving accuracy for complex shell invocations
+- Changed autoresearch initialization prompt to display collected tradeoff metrics in the setup summary
+- Changed `command-initialize.md` template to include guidance on preflight requirements, comparability invariants, and marking measurement-critical files as off-limits
+- Changed `command-initialize.md` to instruct users to write or update `autoresearch.program.md` with durable heuristics and repo-specific strategy
+- Changed autoresearch resume guidance to emphasize continuing on the current protected branch rather than switching branches
+- Changed autoresearch prompt to clarify that `autoresearch.md` holds durable conclusions while `autoresearch.ideas.md` is the scratch backlog
+- Changed autoresearch prompt guidance to require stable measurement harness and fixed benchmark inputs unless intentionally starting a new segment
+- Changed autoresearch prompt to recommend keeping equal or near-equal results when they materially simplify implementation
+- Changed `init_experiment` to reset pending run state (checks, duration, ASI, artifact directory) when initializing a new segment
+- Changed `log_experiment` to set `autoResumeArmed` flag after successfully logging a run to enable auto-resume on next agent turn
+- Changed `run_experiment` to set `autoResumeArmed` flag and update dashboard after completing a run
+- Changed auto-resume logic to only prompt when a new pending run exists or when `autoResumeArmed` is explicitly set, preventing duplicate prompts
+- Changed path normalization in contract validation to use `path.posix.normalize()` for consistent path handling
+- Extended extension `registerProvider()` typing with OAuth provider support and source-aware registration metadata.
+- **Slash commands and hook commands now work during streaming**: Previously, using a slash command or hook command while the agent was streaming would crash with "Agent is already processing". Now:
+  - Hook commands execute immediately (they manage their own LLM interaction via `pi.sendMessage()`)
+  - File-based slash commands are expanded and queued via steer/followUp
+  - `steer()` and `followUp()` now expand file-based slash commands and error on hook commands (hook commands cannot be queued)
+  - `prompt()` accepts new `streamingBehavior` option (`"steer"` or `"followUp"`) to specify queueing behavior during streaming
+  - RPC `prompt` command now accepts optional `streamingBehavior` field
+  ([#420](https://github.com/badlogic/pi-mono/issues/420))
+- Editor component now uses word wrapping instead of character-level wrapping for better readability ([#382](https://github.com/badlogic/pi-mono/pull/382) by [@nickseelert](https://github.com/nickseelert))
+- Extensions can have their own `package.json` with dependencies (resolved via jiti)
+- Documentation: `docs/hooks.md` and `docs/custom-tools.md` merged into `docs/extensions.md`
+- Examples: `examples/hooks/` and `examples/custom-tools/` merged into `examples/extensions/`
+- README: Extensions section expanded with custom tools, commands, events, state persistence, shortcuts, flags, and UI examples
+- SDK: `customTools` option now accepts `ToolDefinition[]` directly (simplified from `Array<{ path?, tool }>`)
+- SDK: `extensions` option accepts `ExtensionFactory[]` for inline extensions
+- SDK: `additionalExtensionPaths` replaces both `additionalHookPaths` and `additionalCustomToolPaths`
+- Removed image placeholders after copy & paste, replaced with inserting image file paths directly. ([#442](https://github.com/badlogic/pi-mono/pull/442) by [@mitsuhiko](https://github.com/mitsuhiko))
+
+### Fixed
+
+- Fixed the advisor auto-resuming a run after the user deliberately interrupts it (Esc, or a cancel from collab/ACP/RPC/SDK/extension). A user interrupt now suppresses advisor `concern`/`blocker` auto-resume until the user next resumes (a typed message, `.`/`c` continue, or a steer/follow-up); the concern is still recorded as a visible, persisted advisor card — including one already steered into the run or arriving mid-abort — so it re-enters context on resume instead of being discarded. Natural yields are unchanged: the advisor can still steer and resume a stalled run.
+- Fixed `/advisor on|off` not being session-local by overriding the setting instead of modifying global configuration, and fixed changes not updating the TUI status line immediately.
+- Fixed `plan.defaultOnStartup` setting schema configuration missing the required `ui.group` property.
+- Fixed `web_search` using stale or missing provider exclusions after `/move` or resuming a session from another project. Provider preferences (`providers.webSearchExclude`, `providers.webSearch`, `providers.image`) are now reapplied when project settings reload on cwd change ([#2611](https://github.com/can1357/oh-my-pi/pull/2611)).
+- Fixed isolated task subagents with persisted transcripts resolving file tools against the parent repository instead of the isolated worktree, which made `rcopy` patch capture report no changes after tool-based edits.
+- Fixed plugin config writes against older `omp-plugins.lock.json` files that did not have a top-level `settings` object, which crashed `omp plugin config set` before persisting the option ([#2236](https://github.com/can1357/oh-my-pi/issues/2236)).
+- Fixed auto-retry regenerating a large `write` call after the provider stream timed out mid-tool-call ([#2683](https://github.com/can1357/oh-my-pi/issues/2683)).
+- Fixed soft-expired `issue://` and `pr://` reads to refresh live before returning stale state, with an explicit stale warning when the live refresh fails ([#2684](https://github.com/can1357/oh-my-pi/issues/2684)).
+- Fixed Claude marketplace plugin skills appearing as bare slash commands while keeping real plugin `commands/` entries available ([#2645](https://github.com/can1357/oh-my-pi/issues/2645)).
+- Fixed boundary duplication warnings to always display when replacement lines match the next surviving line, even when auto-correction is disabled
+- Fixed secondary metrics validation to properly reject missing configured metrics and new metrics without force flag
+- Fixed ASI data cloning to prevent prototype pollution attacks by filtering reserved property names
+- Fixed CLI `--api-key` handling for deferred model resolution by applying runtime API key overrides after extension model selection.
+- Fixed extension provider registration cleanup to remove stale source-scoped custom API/OAuth providers across extension reloads.
+- `--list-models` no longer shows Google Vertex AI models without explicit authentication configured
+- JPEG/GIF/WebP images not displaying in terminals using Kitty graphics protocol (Kitty, Ghostty, WezTerm). The protocol requires PNG format, so non-PNG images are now converted before display.
+- Version check URL typo preventing update notifications from working ([#423](https://github.com/badlogic/pi-mono/pull/423) by [@skuridin](https://github.com/skuridin))
+- Large images exceeding Anthropic's 5MB limit now retry with progressive quality/size reduction ([#424](https://github.com/badlogic/pi-mono/pull/424) by [@mitsuhiko](https://github.com/mitsuhiko))
+- Slash command argument substitution now processes positional arguments (`$1`, `$2`, etc.) before all-arguments (`$@`, `$ARGUMENTS`) to prevent recursive substitution when argument values contain dollar-digit patterns like `$100`. ([#418](https://github.com/badlogic/pi-mono/pull/418) by [@skuridin](https://github.com/skuridin))
+- Edit tool diff not displaying in TUI due to race condition between async preview computation and tool execution
+- `/model` selector now opens instantly instead of waiting for OAuth token refresh. Token refresh is deferred until a model is actually used.
+- Shift+Space, Shift+Backspace, and Shift+Delete now work correctly in Kitty-protocol terminals (Kitty, WezTerm, etc.) instead of being silently ignored ([#411](https://github.com/badlogic/pi-mono/pull/411) by [@nathyong](https://github.com/nathyong))
+- `AgentSession.prompt()` now throws if called while the agent is already streaming, preventing race conditions. Use `steer()` or `followUp()` to queue messages during streaming.
+- Ctrl+C now works like Escape in selector components, so mashing Ctrl+C will eventually close the program ([#400](https://github.com/badlogic/pi-mono/pull/400) by [@mitsuhiko](https://github.com/mitsuhiko))
+- External editor (Ctrl-G) now shows full pasted content instead of `[paste #N ...]` placeholders ([#444](https://github.com/badlogic/pi-mono/pull/444) by [@aliou](https://github.com/aliou))
+- Subagent example README referenced incorrect filename `subagent.ts` instead of `index.ts` ([#427](https://github.com/badlogic/pi-mono/pull/427) by [@Whamp](https://github.com/Whamp))
+
+## [16.0.0] - 2026-06-15
+
+### Breaking Changes
+
+- Renamed the SDK tool format type and resolver from `ToolCallFormat`/`resolveToolCallSyntax` to `DialectFormat`/`resolveDialect`, and the agent option from `toolCallSyntax` to `dialect`.
+- Changed `/dump` transcript output to render messages with the selected model's native dialect turn and thinking envelopes instead of markdown role headings.
+
+### Added
+
+- Added `advisor.syncBacklog` setting (`off`, `1`, `3`, `5`) to pause turn completion until advisor review backlog drops below the threshold, with a maximum 30-second wait
+- Added advisor backlog synchronization at turn end when enabled so the main session stays aligned with the advisor's pending review turns
+- Added automatic discovery of WATCHDOG.md files from user and project locations so advisor guidance from local watchdog instructions is appended to its system prompt
+- Added `/advisor on`, `/advisor off`, `/advisor status`, and `/advisor dump [raw]` slash-command subcommands to manage the advisor at runtime
+- Added `advisor.enabled` and `advisor.subagents` settings to enable the advisor and extend it to spawned task/eval subagents
+- Added advisor status badge (`++` in success color) to the status line when an advisor is active
+- Added `/dump [raw]` flag to toggle between compact and legacy uncompact transcript output formats
+- Added `/advisor on`, `/advisor off`, and `/advisor status` slash-command subcommands to enable or disable the advisor at runtime and view advisor status metrics
+- Added a passive advisor: assign a second model to the `advisor` role and enable `advisor.enabled` to have it silently review each primary turn and inject severity-tagged advice notes via the `advise` tool. A `nit` rides the non-interrupting aside queue (batched into one card at the next step boundary), while a `concern` or `blocker` interrupts the running agent through the steering channel — aborting in-flight tools, or resuming the agent when it has already yielded — so high-severity advice is acted on immediately. Advice renders in the primary transcript as a distinct `Advisor` card, and the advisor gets hard-isolated read-only `read`/`search`/`find` access — bound to its own `ToolSession` so its reads never touch the primary's snapshot/seen-lines caches — to investigate the workspace before weighing in. The status line shows a `++` badge (in the success color, kept distinct from the model name) after the model name while an advisor is active, and `/advisor dump` copies the advisor's own transcript to the clipboard. Advisors are created only for the top-level session by default; enable `advisor.subagents` to extend them to spawned task/eval subagents.
+- Animated "thinking" pulse (`·‥…‥`) shown in place of a hidden thinking block while the model is actively reasoning, so streaming progress is visible even with `hideThinkingBlock` enabled.
+
+### Changed
+
+- Changed advisor prompting guidance to emit at most one `advise` per update and to prefer silence when the agent is on track
+- Changed `/dump` default output to compact markdown format; use `/dump raw` for the legacy uncompact format
+- Changed `/dump` and `/advisor dump` to default to compact transcript output and accept an optional `raw` flag for the legacy uncompact format
+- Session dump output now renders message history using the model's native dialect turn envelope instead of markdown role headings
+- Changed RPC, RPC-UI, and ACP hosts to default the advisor settings off instead of inheriting a user's interactive-session advisor preference.
+
+### Fixed
+
+- Fixed advisor backlog tracking so failed advice prompts do not stall catch-up indefinitely by dropping pending backlog after repeated consecutive failures
+- Fixed backlog accounting to decrement only after successful advisor prompts so sync waits correctly reflect advisor progress
+- Fixed advisor context batching to still send pending review updates when context maintenance fails instead of dropping the batch
+- Fixed explicit advisor enablement to clear protocol-default overrides so enabling the advisor applies immediately
+- Fixed advisor message card notes getting truncated to two lines when the card is collapsed.
+- Fixed advisor context handling to maintain its token budget by promoting or compacting/restarting advisor context while preserving advisor reasoning-off settings.
+- Fixed `startup.quiet` leaving MCP and LSP startup status events visible during launch ([#2639](https://github.com/can1357/oh-my-pi/issues/2639)).
+- Registered the `Advisor` group in the `model` settings tab so advisor settings render correctly in the settings panel.
+- Fixed Windows bash path handling so MSYS/Git-Bash drive aliases like `/d/project` and WSL-style `/mnt/d/project` normalize to native drive paths consistently across the bash tool cwd validation and brush filesystem builtins ([#2634](https://github.com/can1357/oh-my-pi/issues/2634)).
+
 ## [15.13.3] - 2026-06-15
 
 ### Added
@@ -48,6 +275,7 @@
 
 - Fixed Auto-Promote Context being pre-empted by compaction: the pre-prompt context check ran compaction directly, so snapcompact (or any strategy) fired before promotion ever got a chance. It now tries promotion to a larger-context model first — mirroring the post-turn threshold path — and only compacts when no larger-context target is available. Snapcompact (auto and manual) also falls back to a context-full LLM summary when its frame archive plus kept history would still overflow the model's usable window, instead of leaving the session over the limit.
 - Fixed `eval` JS cells intermittently failing after ~15s with exit code 1 under load (e.g. `bun test --parallel`, where each file runs in a worker subprocess and the eval worker is nested). The host swallowed asynchronous worker spawn/load/crash failures — `new Worker` reports module-load errors via an async `error` event, not a synchronous throw, so the spawn `try/catch` (and its inline-worker fallback) never fired, and no `error`/`messageerror` listener was wired — leaving a dead worker indistinguishable from a slow one and blocking the full worker-init timeout. The init handshake now rejects immediately on a worker `error`/`messageerror` event and falls back to the inline worker, and the `ready` listener is attached synchronously after `new Worker` (Bun does not buffer messages posted before a listener exists) so a fast worker's `ready` can no longer be dropped.
+- Fixed JSON-mode startup notices (export/resume/session-picker messages) writing to stdout before the JSON event stream; they now route to stderr so stdout remains newline-delimited JSON.
 
 ## [15.13.1] - 2026-06-15
 
@@ -2056,6 +2284,12 @@
 ### Fixed
 
 - Fixed `RULES.md` not being injected. The documented sticky-rules file at `~/.omp/agent/RULES.md` and `<repo>/.omp/RULES.md` was never read by any discovery provider; only `.omp/rules/*.md` was scanned. The native provider now loads both as always-apply rules so they re-attach every turn as documented ([#1266](https://github.com/can1357/oh-my-pi/issues/1266)).
+
+## [15.2.1] - 2026-05-21
+
+### Added
+
+- Added `.omp-plugin/marketplace.json` as a preferred marketplace catalog path. `fetchMarketplace` now searches `.omp-plugin/marketplace.json` before `.claude-plugin/marketplace.json` for every local and cloned source. Lets a single marketplace repository publish a tool-specific catalog (e.g. an omp-only superset of a shared Claude Code marketplace) without forcing the omp/Claude distinction into per-plugin tagging. Mirrors the `package.json#omp.extensions` precedence pattern; the `.claude-plugin/marketplace.json` fallback keeps every existing marketplace loading unchanged.
 
 ## [15.2.1] - 2026-05-21
 
@@ -4228,19 +4462,6 @@
 
 ### Changed
 
-- Changed `isAutoresearchShCommand()` to use proper command-line argument parsing instead of regex, improving accuracy for complex shell invocations
-- Changed autoresearch initialization prompt to display collected tradeoff metrics in the setup summary
-- Changed `command-initialize.md` template to include guidance on preflight requirements, comparability invariants, and marking measurement-critical files as off-limits
-- Changed `command-initialize.md` to instruct users to write or update `autoresearch.program.md` with durable heuristics and repo-specific strategy
-- Changed autoresearch resume guidance to emphasize continuing on the current protected branch rather than switching branches
-- Changed autoresearch prompt to clarify that `autoresearch.md` holds durable conclusions while `autoresearch.ideas.md` is the scratch backlog
-- Changed autoresearch prompt guidance to require stable measurement harness and fixed benchmark inputs unless intentionally starting a new segment
-- Changed autoresearch prompt to recommend keeping equal or near-equal results when they materially simplify implementation
-- Changed `init_experiment` to reset pending run state (checks, duration, ASI, artifact directory) when initializing a new segment
-- Changed `log_experiment` to set `autoResumeArmed` flag after successfully logging a run to enable auto-resume on next agent turn
-- Changed `run_experiment` to set `autoResumeArmed` flag and update dashboard after completing a run
-- Changed auto-resume logic to only prompt when a new pending run exists or when `autoResumeArmed` is explicitly set, preventing duplicate prompts
-- Changed path normalization in contract validation to use `path.posix.normalize()` for consistent path handling
 - Changed autoresearch initialization to collect and validate benchmark command, metric definition, scope paths, off-limits list, and constraints before `init_experiment`
 - Changed `init_experiment` to require exact benchmark command, metric definition, scope, off-limits, and constraints matching collected contract
 - Changed `log_experiment` to record run number, benchmark command, scope paths, off-limits list, constraints, and segment fingerprint with each result
@@ -4290,9 +4511,6 @@
 
 ### Fixed
 
-- Fixed boundary duplication warnings to always display when replacement lines match the next surviving line, even when auto-correction is disabled
-- Fixed secondary metrics validation to properly reject missing configured metrics and new metrics without force flag
-- Fixed ASI data cloning to prevent prototype pollution attacks by filtering reserved property names
 - Fixed autoresearch resume to detect and recover pending run artifacts that were left unlogged from previous sessions
 - Fixed dashboard overlay to display when running experiment even with zero completed results
 - Fixed tab character rendering in dashboard command display and tool output summaries
@@ -5908,15 +6126,12 @@
 ### Changed
 
 - Improved welcome screen responsiveness to dynamically show or hide the right column based on available terminal width
-- Extended extension `registerProvider()` typing with OAuth provider support and source-aware registration metadata.
 
 ### Fixed
 
 - Fixed welcome screen layout to gracefully handle small terminal widths and prevent rendering errors on narrow displays
 - Fixed welcome screen title truncation to prevent overflow when content exceeds available width
 - Fixed deferred `--model` resolution so extension-provided models are matched before fallback selection and unresolved explicit patterns no longer silently fallback.
-- Fixed CLI `--api-key` handling for deferred model resolution by applying runtime API key overrides after extension model selection.
-- Fixed extension provider registration cleanup to remove stale source-scoped custom API/OAuth providers across extension reloads.
 
 ## [12.5.1] - 2026-02-15
 
@@ -8777,7 +8992,6 @@
 - Added `git.enabled` setting to enable/disable the structured git tool
 - Added `offset` and `limit` parameters to Output tool for paginated reading of large outputs
 - Added provider fallback chain for web search that tries all configured providers before failing
-- Added `WebSearchProviderError` class with HTTP status for actionable provider error messages
 - Added bash interceptor rule to block git commands when structured git tool is enabled
 - Added validation requiring `message` parameter for git commit operations (prevents interactive editor)
 - Added output ID hints in multi-agent Task results pointing to Output tool for full logs
@@ -10178,109 +10392,17 @@ pi --extension ./safety.ts -e ./todo.ts
 **Automatic.** Session version bumped from 2 to 3. Existing sessions are migrated on first load:
 - Message role `"hookMessage"` → `"custom"`
 
-### Breaking Changes
-
-- **Settings:** `hooks` and `customTools` arrays replaced with single `extensions` array
-- **CLI:** `--hook` and `--tool` flags replaced with `--extension` / `-e`
-- **Directories:** `hooks/`, `tools/` → `extensions/`; `commands/` → `prompts/`
-- **Types:** See type renames above
-- **SDK:** See SDK migration above
-
-### Changed
-
-- Extensions can have their own `package.json` with dependencies (resolved via jiti)
-- Documentation: `docs/hooks.md` and `docs/custom-tools.md` merged into `docs/extensions.md`
-- Examples: `examples/hooks/` and `examples/custom-tools/` merged into `examples/extensions/`
-- README: Extensions section expanded with custom tools, commands, events, state persistence, shortcuts, flags, and UI examples
-- SDK: `customTools` option now accepts `ToolDefinition[]` directly (simplified from `Array<{ path?, tool }>`)
-- SDK: `extensions` option accepts `ExtensionFactory[]` for inline extensions
-- SDK: `additionalExtensionPaths` replaces both `additionalHookPaths` and `additionalCustomToolPaths`
-
 ## [0.34.1] - 2026-01-04
-
-### Added
-
-- Hook API: `ctx.ui.setTitle(title)` allows hooks to set the terminal window/tab title ([#446](https://github.com/badlogic/pi-mono/pull/446) by [@aliou](https://github.com/aliou))
 
 ### Changed
 
 - Expanded keybinding documentation to list all 32 supported symbol keys with notes on ctrl+symbol behavior ([#450](https://github.com/badlogic/pi-mono/pull/450) by [@kaofelix](https://github.com/kaofelix))
-
-## [0.34.0] - 2026-01-04
-
-### Added
-
-- Hook API: `before_agent_start` handlers can now return `systemPromptAppend` to dynamically append text to the system prompt for that turn. Multiple hooks' appends are concatenated.
-- Hook API: `before_agent_start` handlers can now return multiple messages (all are injected, not just the first)
-- New example hook: `tools.ts` - Interactive `/tools` command to enable/disable tools with session persistence
-- New example hook: `pirate.ts` - Demonstrates `systemPromptAppend` to make the agent speak like a pirate
-- Tool registry now contains all built-in tools (read, bash, edit, write, grep, find, ls) even when `--tools` limits the initially active set. Hooks can enable any tool from the registry via `pi.setActiveTools()`.
-- System prompt now automatically rebuilds when tools change via `setActiveTools()`, updating tool descriptions and guidelines to match the new tool set
-- Hook errors now display full stack traces for easier debugging
-
-### Changed
-
-- Removed image placeholders after copy & paste, replaced with inserting image file paths directly. ([#442](https://github.com/badlogic/pi-mono/pull/442) by [@mitsuhiko](https://github.com/mitsuhiko))
-
-### Fixed
-
-- Fixed potential text decoding issues in bash executor by using streaming TextDecoder instead of Buffer.toString()
-- External editor (Ctrl-G) now shows full pasted content instead of `[paste #N ...]` placeholders ([#444](https://github.com/badlogic/pi-mono/pull/444) by [@aliou](https://github.com/aliou))
-
-## [0.33.0] - 2026-01-04
-
-### Breaking Changes
-
-- **Key detection functions removed from `@mariozechner/pi-tui`**: All `isXxx()` key detection functions (`isEnter()`, `isEscape()`, `isCtrlC()`, etc.) have been removed. Use `matchesKey(data, keyId)` instead (e.g., `matchesKey(data, "enter")`, `matchesKey(data, "ctrl+c")`). This affects hooks and custom tools that use `ctx.ui.custom()` with keyboard input handling. ([#405](https://github.com/badlogic/pi-mono/pull/405))
-
-### Added
-
-- Clipboard image paste support via `Ctrl+V`. Images are saved to a temp file and attached to the message. Works on macOS, Windows, and Linux (X11). ([#419](https://github.com/badlogic/pi-mono/issues/419))
-- Configurable keybindings via `~/.pi/agent/keybindings.json`. All keyboard shortcuts (editor navigation, deletion, app actions like model cycling, etc.) can now be customized. Supports multiple bindings per action. ([#405](https://github.com/badlogic/pi-mono/pull/405) by [@hjanuschka](https://github.com/hjanuschka))
-- `/quit` and `/exit` slash commands to gracefully exit the application. Unlike double Ctrl+C, these properly await hook and custom tool cleanup handlers before exiting. ([#426](https://github.com/badlogic/pi-mono/pull/426) by [@ben-vargas](https://github.com/ben-vargas))
-
-### Fixed
-
-- Subagent example README referenced incorrect filename `subagent.ts` instead of `index.ts` ([#427](https://github.com/badlogic/pi-mono/pull/427) by [@Whamp](https://github.com/Whamp))
-
-## [0.32.3] - 2026-01-03
-
-### Fixed
-
-- `--list-models` no longer shows Google Vertex AI models without explicit authentication configured
-- JPEG/GIF/WebP images not displaying in terminals using Kitty graphics protocol (Kitty, Ghostty, WezTerm). The protocol requires PNG format, so non-PNG images are now converted before display.
-- Version check URL typo preventing update notifications from working ([#423](https://github.com/badlogic/pi-mono/pull/423) by [@skuridin](https://github.com/skuridin))
-- Large images exceeding Anthropic's 5MB limit now retry with progressive quality/size reduction ([#424](https://github.com/badlogic/pi-mono/pull/424) by [@mitsuhiko](https://github.com/mitsuhiko))
-
-## [0.32.2] - 2026-01-03
-
-### Added
-
-- `$ARGUMENTS` syntax for custom slash commands as alternative to `$@` for all arguments joined. Aligns with patterns used by Claude, Codex, and OpenCode. Both syntaxes remain fully supported. ([#418](https://github.com/badlogic/pi-mono/pull/418) by [@skuridin](https://github.com/skuridin))
-
-### Changed
-
-- **Slash commands and hook commands now work during streaming**: Previously, using a slash command or hook command while the agent was streaming would crash with "Agent is already processing". Now:
-  - Hook commands execute immediately (they manage their own LLM interaction via `pi.sendMessage()`)
-  - File-based slash commands are expanded and queued via steer/followUp
-  - `steer()` and `followUp()` now expand file-based slash commands and error on hook commands (hook commands cannot be queued)
-  - `prompt()` accepts new `streamingBehavior` option (`"steer"` or `"followUp"`) to specify queueing behavior during streaming
-  - RPC `prompt` command now accepts optional `streamingBehavior` field
-  ([#420](https://github.com/badlogic/pi-mono/issues/420))
-
-### Fixed
-
-- Slash command argument substitution now processes positional arguments (`$1`, `$2`, etc.) before all-arguments (`$@`, `$ARGUMENTS`) to prevent recursive substitution when argument values contain dollar-digit patterns like `$100`. ([#418](https://github.com/badlogic/pi-mono/pull/418) by [@skuridin](https://github.com/skuridin))
 
 ## [0.32.1] - 2026-01-03
 
 ### Added
 
 - Shell commands without context contribution: use `!!command` to execute a bash command that is shown in the TUI and saved to session history but excluded from LLM context. Useful for running commands you don't want the AI to see. ([#414](https://github.com/badlogic/pi-mono/issues/414))
-
-### Fixed
-
-- Edit tool diff not displaying in TUI due to race condition between async preview computation and tool execution
 
 ## [0.32.0] - 2026-01-03
 
@@ -10304,27 +10426,6 @@ pi --extension ./safety.ts -e ./todo.ts
   - `set_queue_mode` command → `set_steering_mode` and `set_follow_up_mode` commands
   - `RpcSessionState.queueMode` → `steeringMode` and `followUpMode`
 - **Settings UI**: "Queue mode" setting split into "Steering mode" and "Follow-up mode"
-
-### Added
-
-- Configurable double-escape action: choose whether double-escape with empty editor opens `/tree` (default) or `/branch`. Configure via `/settings` or `doubleEscapeAction` in settings.json ([#404](https://github.com/badlogic/pi-mono/issues/404))
-- Vertex AI provider (`google-vertex`): access Gemini models via Google Cloud Vertex AI using Application Default Credentials ([#300](https://github.com/badlogic/pi-mono/pull/300) by [@default-anton](https://github.com/default-anton))
-- Built-in provider overrides in `models.json`: override just `baseUrl` to route a built-in provider through a proxy while keeping all its models, or define `models` to fully replace the provider ([#406](https://github.com/badlogic/pi-mono/pull/406) by [@yevhen](https://github.com/yevhen))
-- Automatic image resizing: images larger than 2000x2000 are resized for better model compatibility. Original dimensions are injected into the prompt. Controlled via `/settings` or `images.autoResize` in settings.json. ([#402](https://github.com/badlogic/pi-mono/pull/402) by [@mitsuhiko](https://github.com/mitsuhiko))
-- Alt+Enter keybind to queue follow-up messages while agent is streaming
-- `Theme` and `ThemeColor` types now exported for hooks using `ctx.ui.custom()`
-- Terminal window title now displays "pi - dirname" to identify which project session you're in ([#407](https://github.com/badlogic/pi-mono/pull/407) by [@kaofelix](https://github.com/kaofelix))
-
-### Changed
-
-- Editor component now uses word wrapping instead of character-level wrapping for better readability ([#382](https://github.com/badlogic/pi-mono/pull/382) by [@nickseelert](https://github.com/nickseelert))
-
-### Fixed
-
-- `/model` selector now opens instantly instead of waiting for OAuth token refresh. Token refresh is deferred until a model is actually used.
-- Shift+Space, Shift+Backspace, and Shift+Delete now work correctly in Kitty-protocol terminals (Kitty, WezTerm, etc.) instead of being silently ignored ([#411](https://github.com/badlogic/pi-mono/pull/411) by [@nathyong](https://github.com/nathyong))
-- `AgentSession.prompt()` now throws if called while the agent is already streaming, preventing race conditions. Use `steer()` or `followUp()` to queue messages during streaming.
-- Ctrl+C now works like Escape in selector components, so mashing Ctrl+C will eventually close the program ([#400](https://github.com/badlogic/pi-mono/pull/400) by [@mitsuhiko](https://github.com/mitsuhiko))
 
 ## [0.31.1] - 2026-01-02
 

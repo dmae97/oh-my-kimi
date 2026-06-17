@@ -5,7 +5,17 @@
 import { isValidThemeColor, type ThemeColor } from "../modes/theme/theme";
 import type { Settings } from "./settings";
 
-export type ModelRole = "default" | "smol" | "slow" | "vision" | "plan" | "designer" | "commit" | "title" | "task";
+export type ModelRole =
+	| "default"
+	| "smol"
+	| "slow"
+	| "vision"
+	| "plan"
+	| "designer"
+	| "commit"
+	| "title"
+	| "task"
+	| "advisor";
 
 export interface ModelRoleInfo {
 	tag?: string;
@@ -25,6 +35,7 @@ export const MODEL_ROLES: Record<ModelRole, ModelRoleInfo> = {
 	commit: { tag: "COMMIT", name: "Commit", color: "dim" },
 	title: { tag: "TITLE", name: "Title", color: "dim", hidden: true },
 	task: { tag: "TASK", name: "Subtask", color: "muted" },
+	advisor: { tag: "ADVISOR", name: "Advisor", color: "accent" },
 };
 
 export const MODEL_ROLE_IDS: ModelRole[] = [
@@ -37,6 +48,7 @@ export const MODEL_ROLE_IDS: ModelRole[] = [
 	"commit",
 	"title",
 	"task",
+	"advisor",
 ];
 
 export type RoleInfo = ModelRoleInfo;

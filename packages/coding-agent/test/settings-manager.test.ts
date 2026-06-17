@@ -66,7 +66,7 @@ describe("Settings", () => {
 			expect(settings.get("tui.maxInlineImages")).toBe(8);
 		});
 
-		it("exposes all tool call format options", () => {
+		it("exposes all tool calling mode options", () => {
 			const values = getEnumValues("tools.format");
 			expect(values).toEqual([
 				"auto",
@@ -80,6 +80,8 @@ describe("Settings", () => {
 				"harmony",
 				"pi",
 				"qwen3",
+				"gemini",
+				"gemma",
 			]);
 		});
 	});

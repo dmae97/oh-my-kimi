@@ -592,12 +592,11 @@ export const streamOllama: StreamFunction<"ollama-chat"> = (
 				const structuredCalls = chunk.message?.tool_calls?.length ? chunk.message.tool_calls : undefined;
 				if (chunkContent) {
 					if (streamMarkupHealing) {
-						if (structuredCalls) {
-							appendVisibleText(streamMarkupHealing.consumeWithoutCalls(chunkContent));
-						} else {
-							for (const event of streamMarkupHealing.feedEvents(chunkContent)) {
-								emitHealingEvent(event);
-							}
+						const healingEvents = structuredCalls
+							? streamMarkupHealing.feedEventsWithoutCalls(chunkContent)
+							: streamMarkupHealing.feedEvents(chunkContent);
+						for (const event of healingEvents) {
+							emitHealingEvent(event);
 						}
 					} else {
 						appendVisibleText(chunkContent);

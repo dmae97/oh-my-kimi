@@ -67,6 +67,7 @@ export function buildAnthropicCompat(spec: ModelSpec<"anthropic-messages">): Res
 		// arguments (#2005). Known non-signing hosts (Z.AI, DeepSeek) are also
 		// preserved for compatibility.
 		replayUnsignedThinking: isZai || modelMatchesHost(spec, "deepseekFamily") || (spec.reasoning && !official),
+		escapeBuiltinToolNames: modelMatchesHost(spec, "umans"),
 	};
 	applyCompatOverrides(compat, spec.compat);
 	return compat;

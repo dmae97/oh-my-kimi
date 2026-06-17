@@ -101,6 +101,30 @@ describe("zodToWireSchema — nullable scalar normalization", () => {
 		});
 	});
 
+	it("preserves null semantics when rewriting nullable scalar enum anyOf", () => {
+		const wire = toolWireSchema({
+			name: "mcp__sentry_search_docs",
+			description: "",
+			parameters: {
+				type: "object",
+				properties: {
+					guide: {
+						anyOf: [{ type: "string", enum: ["javascript", "python"], description: "guide" }, { type: "null" }],
+					},
+				},
+				required: ["guide"],
+			},
+			async execute() {},
+		} as unknown as Tool);
+		const guide = (wire.properties as Record<string, unknown>).guide as Record<string, unknown>;
+
+		expect(guide).toEqual({
+			type: ["string", "null"],
+			enum: ["javascript", "python", null],
+			description: "guide",
+		});
+	});
+
 	it("keeps nullable integers free of Zod safe-integer bounds", () => {
 		const schema = z.object({ count: z.number().int().nullable() });
 		const wire = zodToWireSchema(schema);

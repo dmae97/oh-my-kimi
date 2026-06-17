@@ -23,7 +23,8 @@ import type { AssistantMessage } from "../types";
  * - HTTP 413 variants: "Payload Too Large" / "Request Entity Too Large"
  * - z.ai / GLM: Returns finish_reason: "model_context_window_exceeded" mapped to error message
  * - z.ai: Does NOT error, accepts overflow silently - handled via usage.input > contextWindow
- * - Ollama: Silently truncates input - not detectable via error message
+ * - Ollama OpenAI-compatible: "prompt filled the context window" after empty finish_reason:length
+ * - Ollama native: Silently truncates input - not detectable via error message
  */
 const OVERFLOW_PATTERNS = [
 	/prompt is too long/i, // Anthropic
@@ -51,6 +52,7 @@ const OVERFLOW_PATTERNS = [
 	/entity too large/i, // Generic HTTP 413 variant
 	/\b413\b.*\b(request|payload|entity)\b.*\btoo large\b/i, // "413 Request Entity Too Large" variants
 	/model_context_window_exceeded/i, // z.ai non-standard finish_reason surfaced as error text
+	/prompt filled the context window/i, // Ollama OpenAI-compatible empty length completion
 ];
 /**
  * Check if an assistant message represents a context overflow error.
@@ -78,11 +80,12 @@ const OVERFLOW_PATTERNS = [
  * - Kimi For Coding: "exceeded model token limit: X (requested: Y)"
  * - Anthropic 413: "request_too_large" (request body exceeds size limit)
  * - HTTP 413: "Payload Too Large" / "Request Entity Too Large"
+ * - Ollama OpenAI-compatible: "prompt filled the context window"
  *
  * **Unreliable detection:**
  * - z.ai: Sometimes accepts overflow silently (detectable via usage.input > contextWindow),
  *   sometimes returns rate limit errors. Pass contextWindow param to detect silent overflow.
- * - Ollama: Silently truncates input without error. Cannot be detected via this function.
+ * - Ollama native: Silently truncates input without error. Cannot be detected via this function.
  *   The response will have usage.input < expected, but we don't know the expected value.
  *
  * ## Custom Providers

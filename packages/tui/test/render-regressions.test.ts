@@ -188,10 +188,18 @@ async function withEnvPatch<T>(patch: Record<string, string | undefined>, run: (
 
 describe("TUI terminal-state regressions", () => {
 	let monotonicNow = 0;
+	let savedTerminalEnv: Record<string, string | undefined> = {};
 	// Keep TUI's ~33ms render throttle deterministic without sleeping a real frame per render.
 
 	beforeEach(() => {
 		monotonicNow = 0;
+		// Resize classification now depends on TERM_PROGRAM (Warp takes the
+		// in-place path), so neutralize the ambient terminal identity to keep
+		// these direct-terminal assertions deterministic on any dev machine.
+		for (const key of ["TERM_PROGRAM", "PI_TUI_RESIZE_IN_PLACE"]) {
+			savedTerminalEnv[key] = Bun.env[key];
+			delete Bun.env[key];
+		}
 		vi.spyOn(performance, "now").mockImplementation(() => {
 			monotonicNow += 40;
 			return monotonicNow;
@@ -199,6 +207,12 @@ describe("TUI terminal-state regressions", () => {
 	});
 
 	afterEach(() => {
+		for (const key in savedTerminalEnv) {
+			const value = savedTerminalEnv[key];
+			if (value === undefined) delete Bun.env[key];
+			else Bun.env[key] = value;
+		}
+		savedTerminalEnv = {};
 		vi.restoreAllMocks();
 	});
 

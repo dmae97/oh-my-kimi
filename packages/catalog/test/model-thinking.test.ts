@@ -477,6 +477,29 @@ describe("model thinking runtime helpers", () => {
 		);
 	});
 
+	it("maps GLM-5.2 xhigh to Z.AI provider-native max", () => {
+		const model = createModel({
+			id: "glm-5.2",
+			api: "openai-completions",
+			provider: "zhipu-coding-plan",
+			baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4",
+			compat: { thinkingFormat: "zai" },
+		});
+
+		expect(model.thinking).toEqual({
+			mode: "effort",
+			efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+			effortMap: {
+				minimal: "none",
+				low: "high",
+				medium: "high",
+				high: "high",
+				xhigh: "max",
+			},
+		});
+		expect(requireSupportedEffort(model, Effort.XHigh)).toBe(Effort.XHigh);
+	});
+
 	it("derives binary-thinking fallback from resolved compat when catalog compat is partial", () => {
 		const model = createModel({
 			id: "qwen/qwen3-32b",

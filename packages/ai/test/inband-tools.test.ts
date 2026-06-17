@@ -2,14 +2,14 @@ import { describe, expect, it } from "bun:test";
 import type { AssistantMessage, Context, ToolCall, ToolResultMessage, Usage } from "@oh-my-pi/pi-ai";
 import {
 	createInbandScanner,
+	type Dialect,
+	type DialectToolResult,
 	encodeInbandToolHistory,
-	type GrammarToolResult,
-	getInbandGrammar,
+	getDialectDefinition,
 	type InbandScanEvent,
 	parseInbandToolMessage,
 	renderInbandToolPrompt,
-	type ToolCallSyntax,
-} from "@oh-my-pi/pi-ai/grammar";
+} from "@oh-my-pi/pi-ai/dialect";
 
 const TOOLS = [
 	{
@@ -32,7 +32,7 @@ const TOOLS = [
 	},
 ] as unknown as NonNullable<Context["tools"]>;
 
-const SYNTAXES: readonly ToolCallSyntax[] = [
+const DIALECTS: readonly Dialect[] = [
 	"glm",
 	"hermes",
 	"kimi",
@@ -74,8 +74,8 @@ function result(toolCallId: string, toolName: string, text: string, isError = fa
 	return { role: "toolResult", toolCallId, toolName, content: [{ type: "text", text }], isError, timestamp: 0 };
 }
 
-function feedText(syntax: ToolCallSyntax, text: string): InbandScanEvent[] {
-	const scanner = createInbandScanner(syntax, { tools: TOOLS, parseThinking: true });
+function feedText(dialect: Dialect, text: string): InbandScanEvent[] {
+	const scanner = createInbandScanner(dialect, { tools: TOOLS, parseThinking: true });
 	const events: InbandScanEvent[] = [];
 	for (const char of text) events.push(...scanner.feed(char));
 	events.push(...scanner.flush());
@@ -86,37 +86,37 @@ function toolEnds(events: readonly InbandScanEvent[]): Extract<InbandScanEvent, 
 	return events.filter((event): event is Extract<InbandScanEvent, { type: "toolEnd" }> => event.type === "toolEnd");
 }
 
-function firstRawBlock(syntax: ToolCallSyntax, text: string): string | undefined {
-	return toolEnds(feedText(syntax, text))[0]?.rawBlock;
+function firstRawBlock(dialect: Dialect, text: string): string | undefined {
+	return toolEnds(feedText(dialect, text))[0]?.rawBlock;
 }
 
-function expectRawBlock(syntax: ToolCallSyntax, text: string, expected: string): void {
-	expect(firstRawBlock(syntax, text), syntax).toBe(expected);
+function expectRawBlock(dialect: Dialect, text: string, expected: string): void {
+	expect(firstRawBlock(dialect, text), dialect).toBe(expected);
 }
 
-describe("in-band tool grammars", () => {
-	it("renders a tool prompt for every syntax", () => {
-		for (const syntax of SYNTAXES) {
-			const prompt = renderInbandToolPrompt(TOOLS, syntax);
+describe("in-band tool dialects", () => {
+	it("renders a tool prompt for every dialect", () => {
+		for (const dialect of DIALECTS) {
+			const prompt = renderInbandToolPrompt(TOOLS, dialect);
 			expect(prompt).toContain("<tools>");
 			expect(prompt).toContain("</tools>");
 			expect(prompt).toContain('"name":"read"');
-			expect(prompt).toContain(getInbandGrammar(syntax).prompt.trim().split("\n", 1)[0]!);
+			expect(prompt).toContain(getDialectDefinition(dialect).prompt.trim().split("\n", 1)[0]!);
 		}
 	});
 
-	it("each grammar renders calls that its scanner parses back", () => {
+	it("each dialect renders calls that its scanner parses back", () => {
 		const call: ToolCall = {
 			type: "toolCall",
 			id: "functions.read:0",
 			name: "read",
 			arguments: { path: "src/a.ts", count: 2 },
 		};
-		for (const syntax of SYNTAXES) {
-			const grammar = getInbandGrammar(syntax);
-			const rendered = grammar.renderAssistantToolCalls([call], { tools: TOOLS });
-			const calls = toolEnds(feedText(syntax, rendered));
-			expect(calls, syntax).toHaveLength(1);
+		for (const dialect of DIALECTS) {
+			const definition = getDialectDefinition(dialect);
+			const rendered = definition.renderAssistantToolCalls([call], { tools: TOOLS });
+			const calls = toolEnds(feedText(dialect, rendered));
+			expect(calls, dialect).toHaveLength(1);
 			expect(calls[0]!.name).toBe("read");
 			expect(calls[0]!.arguments).toEqual({ path: "src/a.ts", count: 2 });
 		}
@@ -180,40 +180,42 @@ describe("in-band tool grammars", () => {
 		expect(calls[0]?.arguments).toEqual({ path: "rubygems.ts:85-93" });
 	});
 
-	it("keeps result rendering in the owning grammar", () => {
-		const resultBlock: GrammarToolResult = {
+	it("keeps result rendering in the owning dialect", () => {
+		const resultBlock: DialectToolResult = {
 			id: "functions.read:0",
 			name: "read",
 			index: 0,
 			text: "FILE",
 			isError: false,
 		};
-		expect(getInbandGrammar("glm").renderToolResults([resultBlock])).toBe(
+		expect(getDialectDefinition("glm").renderToolResults([resultBlock])).toBe(
 			"<observation>\n<tool_response>\nFILE\n</tool_response>\n</observation>",
 		);
-		expect(getInbandGrammar("deepseek").renderToolResults([resultBlock])).toBe(
+		expect(getDialectDefinition("deepseek").renderToolResults([resultBlock])).toBe(
 			"<｜tool▁output▁begin｜>FILE<｜tool▁output▁end｜>",
 		);
-		expect(getInbandGrammar("kimi").renderToolResults([resultBlock])).toBe(
+		expect(getDialectDefinition("kimi").renderToolResults([resultBlock])).toBe(
 			"<|im_system|>read<|im_middle|>## Return of functions.read:0\nFILE<|im_end|>",
 		);
-		expect(getInbandGrammar("harmony").renderToolResults([resultBlock])).toBe(
+		expect(getDialectDefinition("harmony").renderToolResults([resultBlock])).toBe(
 			"<|start|>functions.read to=assistant<|channel|>commentary<|message|>FILE<|end|>",
 		);
-		expect(getInbandGrammar("anthropic").renderToolResults([resultBlock])).toBe(
+		expect(getDialectDefinition("anthropic").renderToolResults([resultBlock])).toBe(
 			"<function_results>\n<result>\n<tool_name>read</tool_name>\n<stdout>FILE</stdout>\n</result>\n</function_results>",
 		);
-		expect(getInbandGrammar("qwen3").renderToolResults([resultBlock])).toBe(
+		expect(getDialectDefinition("qwen3").renderToolResults([resultBlock])).toBe(
 			"<tool_response>\nFILE\n</tool_response>",
 		);
-		expect(getInbandGrammar("pi").renderToolResults([resultBlock])).toBe("<tool_response>\nFILE\n</tool_response>");
-		expect(getInbandGrammar("gemini").renderToolResults([resultBlock])).toBe("```tool_outputs\nFILE\n```");
-		expect(getInbandGrammar("gemma").renderToolResults([resultBlock])).toBe(
+		expect(getDialectDefinition("pi").renderToolResults([resultBlock])).toBe(
+			"<tool_response>\nFILE\n</tool_response>",
+		);
+		expect(getDialectDefinition("gemini").renderToolResults([resultBlock])).toBe("```tool_outputs\nFILE\n```");
+		expect(getDialectDefinition("gemma").renderToolResults([resultBlock])).toBe(
 			'<|tool_response>response:read{output:<|"|>FILE<|"|>}<tool_response|>',
 		);
 	});
 
-	it("encodes assistant calls and tool results through the selected grammar", () => {
+	it("encodes assistant calls and tool results through the selected dialect", () => {
 		const history: Context["messages"] = [
 			{ role: "user", content: "hi", timestamp: 0 },
 			assistant([
@@ -236,7 +238,7 @@ describe("in-band tool grammars", () => {
 	});
 
 	it("streams string arguments incrementally for GLM", () => {
-		const text = getInbandGrammar("glm").renderAssistantToolCalls(
+		const text = getDialectDefinition("glm").renderAssistantToolCalls(
 			[
 				{
 					type: "toolCall",

@@ -7,11 +7,16 @@
 import path from "node:path";
 import type { AgentEvent, AgentIdentity, AgentTelemetryConfig, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { recordHandoff, resolveTelemetry } from "@oh-my-pi/pi-agent-core";
-import type { Usage } from "@oh-my-pi/pi-ai";
+import type { Api, Model, Usage } from "@oh-my-pi/pi-ai";
 import { logger, popLoopPhase, prompt, pushLoopPhase, untilAborted } from "@oh-my-pi/pi-utils";
 import type { Rule } from "../capability/rule";
 import { ModelRegistry } from "../config/model-registry";
-import { resolveModelOverrideWithAuthFallback } from "../config/model-resolver";
+import {
+	formatModelSelectorValue,
+	formatModelStringWithRouting,
+	resolveModelOverride,
+	resolveModelOverrideWithAuthFallback,
+} from "../config/model-resolver";
 import type { PromptTemplate } from "../config/prompt-templates";
 import { Settings } from "../config/settings";
 import { SETTINGS_SCHEMA, type SettingPath } from "../config/settings-schema";
@@ -33,7 +38,7 @@ import { type CreateAgentSessionOptions, createAgentSession, discoverAuthStorage
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import type { ArtifactManager } from "../session/artifacts";
 import type { AuthStorage } from "../session/auth-storage";
-import { SKILL_PROMPT_MESSAGE_TYPE } from "../session/messages";
+import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../session/messages";
 import { SessionManager } from "../session/session-manager";
 import { truncateTail } from "../session/streaming-output";
 import type { ContextFileEntry } from "../tools";
@@ -118,6 +123,74 @@ function normalizeModelPatterns(value: string | string[] | undefined): string[] 
 		.split(",")
 		.map(entry => entry.trim())
 		.filter(Boolean);
+}
+
+const SUBAGENT_RETRY_FALLBACK_ROLE_PREFIX = "subagent:";
+
+interface SubagentRetryFallbackCandidate {
+	model: Model<Api>;
+	selector: string;
+}
+
+function resolveSubagentRetryFallbackCandidates(
+	modelPatterns: string[],
+	modelRegistry: ModelRegistry,
+	settings: Settings,
+): SubagentRetryFallbackCandidate[] {
+	const candidates: SubagentRetryFallbackCandidate[] = [];
+	const seen = new Set<string>();
+	for (const pattern of modelPatterns) {
+		const resolved = resolveModelOverride([pattern], modelRegistry, settings);
+		if (!resolved.model) continue;
+		const selector = resolved.explicitThinkingLevel
+			? formatModelSelectorValue(formatModelStringWithRouting(resolved.model), resolved.thinkingLevel)
+			: formatModelStringWithRouting(resolved.model);
+		if (seen.has(selector)) continue;
+		seen.add(selector);
+		candidates.push({ model: resolved.model, selector });
+	}
+	return candidates;
+}
+
+function installSubagentRetryFallbackChain(args: {
+	settings: Settings;
+	id: string;
+	candidates: SubagentRetryFallbackCandidate[];
+	model: Model<Api> | undefined;
+	authFallbackUsed: boolean;
+}): string | undefined {
+	const { settings, id, candidates, model, authFallbackUsed } = args;
+	if (!model || authFallbackUsed || candidates.length <= 1) return undefined;
+
+	const selectedIndex = candidates.findIndex(
+		candidate => candidate.model.provider === model.provider && candidate.model.id === model.id,
+	);
+	if (selectedIndex < 0) return undefined;
+	const fallbackSelectors = candidates.slice(selectedIndex + 1).map(candidate => candidate.selector);
+	if (fallbackSelectors.length === 0) return undefined;
+
+	const role = `${SUBAGENT_RETRY_FALLBACK_ROLE_PREFIX}${id}`;
+	const modelRoles: Record<string, string> = {};
+	const existingRoles = settings.getModelRoles();
+	for (const existingRole in existingRoles) {
+		const selector = existingRoles[existingRole];
+		if (selector) {
+			modelRoles[existingRole] = selector;
+		}
+	}
+	modelRoles[role] = candidates[selectedIndex].selector;
+	settings.override("modelRoles", modelRoles);
+	const fallbackChains: Record<string, string[]> = {
+		[role]: fallbackSelectors,
+	};
+	const existingFallbackChains = settings.get("retry.fallbackChains");
+	for (const existingRole in existingFallbackChains) {
+		if (existingRole !== role) {
+			fallbackChains[existingRole] = existingFallbackChains[existingRole];
+		}
+	}
+	settings.override("retry.fallbackChains", fallbackChains);
+	return role;
 }
 
 function renderIrcPeerRoster(selfId: string): string {
@@ -278,6 +351,12 @@ export interface ExecutorOptions {
 	parentTelemetry?: AgentTelemetryConfig;
 	/** Skills to autoload via sendCustomMessage before the first prompt */
 	autoloadSkills?: Skill[];
+	/**
+	 * Registry id of the spawning agent, recorded as this subagent's parent.
+	 * Forwarded verbatim to the SDK; the executor never derives it (the spawner
+	 * passes its own `getAgentId()`).
+	 */
+	parentAgentId?: string;
 }
 
 function parseStringifiedJson(value: unknown): unknown {
@@ -1222,6 +1301,16 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 					popLoopPhase();
 				}
 			}
+			if (event.type === "retry_fallback_applied") {
+				progress.resolvedModel = event.to;
+				scheduleProgress(true);
+				return;
+			}
+			if (event.type === "retry_fallback_succeeded") {
+				progress.resolvedModel = event.model;
+				scheduleProgress(true);
+				return;
+			}
 		});
 
 	const captureSalvage = (session: AgentSession): void => {
@@ -1817,21 +1906,40 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					resolvedModel: model.id,
 				});
 			}
+			const retryFallbackRole = installSubagentRetryFallbackChain({
+				settings: subagentSettings,
+				id,
+				candidates: resolveSubagentRetryFallbackCandidates(modelPatterns, modelRegistry, settings),
+				model,
+				authFallbackUsed,
+			});
+			if (retryFallbackRole) {
+				logger.debug("Configured subagent runtime model fallback chain", {
+					role: retryFallbackRole,
+					requested: modelPatterns,
+				});
+			}
 			if (model?.contextWindow && model.contextWindow > 0) {
 				progress.contextWindow = model.contextWindow;
 			}
 			if (model) {
 				progress.resolvedModel = explicitThinkingLevel
-					? `${model.provider}/${model.id}:${resolvedThinkingLevel}`
-					: `${model.provider}/${model.id}`;
+					? formatModelSelectorValue(formatModelStringWithRouting(model), resolvedThinkingLevel)
+					: formatModelStringWithRouting(model);
 			}
 			const effectiveThinkingLevel = explicitThinkingLevel
 				? resolvedThinkingLevel
 				: (thinkingLevel ?? resolvedThinkingLevel);
 
+			const effectiveCwd = worktree ?? cwd;
 			const sessionManager = sessionFile
-				? await awaitAbortable(SessionManager.open(sessionFile))
-				: SessionManager.inMemory(worktree ?? cwd);
+				? await awaitAbortable(
+						SessionManager.open(sessionFile, undefined, undefined, {
+							initialCwd: effectiveCwd,
+							suppressBreadcrumb: true,
+						}),
+					)
+				: SessionManager.inMemory(effectiveCwd);
 			if (options.parentArtifactManager) {
 				sessionManager.adoptArtifactManager(options.parentArtifactManager);
 			}
@@ -1919,6 +2027,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				parentHindsightSessionState: options.parentHindsightSessionState,
 				parentMnemopiSessionState: options.parentMnemopiSessionState,
 				parentTaskPrefix: id,
+				parentAgentId: options.parentAgentId,
 				agentId: id,
 				agentDisplayName: subagentDisplayName,
 				enableLsp: lspEnabled,
@@ -1951,7 +2060,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				// (createAgentSession → agent.replaceMessages). Isolated runs are not
 				// resumable (worktree is merged + cleaned) and never get a reviver.
 				reviveSession = async () => {
-					const reopened = await SessionManager.open(sessionFile);
+					const reopened = await SessionManager.open(sessionFile, undefined, undefined, {
+						suppressBreadcrumb: true,
+					});
 					if (options.parentArtifactManager) {
 						reopened.adoptArtifactManager(options.parentArtifactManager);
 					}
@@ -1987,6 +2098,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				systemPrompt: session.agent.state.systemPrompt.join("\n\n"),
 				task,
 				tools: session.getActiveToolNames(),
+				spawns: spawnsEnv,
+				readSummarize: agent.readSummarize,
 				outputSchema,
 			});
 
@@ -2047,7 +2160,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					{
 						getModel: () => session.model,
 						isIdle: () => !session.isStreaming,
-						abort: () => session.abort(),
+						abort: () => session.abort({ reason: USER_INTERRUPT_LABEL }),
 						hasPendingMessages: () => session.queuedMessageCount > 0,
 						shutdown: () => {},
 						getContextUsage: () => session.getContextUsage(),

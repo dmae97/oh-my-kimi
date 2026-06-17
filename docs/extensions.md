@@ -157,6 +157,7 @@ Handlers and tool `execute` receive `ctx` with:
 - `isIdle()`, `hasPendingMessages()`, `abort()`
 - `shutdown()`
 - `getSystemPrompt()`
+- `memory` (optional structured memory runtime — status/search/save across the configured backend)
 
 ### Model selection (`ctx.models`)
 
@@ -224,6 +225,7 @@ Cancelable pre-events:
 - `tool_call` (pre-exec, may block)
 - `tool_result` (post-exec, may patch content/details/isError)
 - `tool_execution_start` / `tool_execution_update` / `tool_execution_end` (observability)
+- `tool_approval_requested` / `tool_approval_resolved` (observability; emitted by `wrapper.ts` only when a tool requires approval and an approval handler is registered)
 
 `tool_result` is middleware-style: handlers run in extension order and each sees prior modifications.
 

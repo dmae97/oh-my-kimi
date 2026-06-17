@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { initializeWithSettings } from "@oh-my-pi/pi-coding-agent/discovery";
 import { discoverAndLoadExtensions, loadExtensions } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
 import { getProjectAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 import { filterUserScoped } from "./utils/filter-user-extensions";
@@ -13,8 +15,10 @@ describe("extensions discovery", () => {
 		tempDir = TempDir.createSync("@pi-ext-test-");
 		extensionsDir = path.join(getProjectAgentDir(tempDir.path()), "extensions");
 		fs.mkdirSync(extensionsDir, { recursive: true });
+		resetSettingsForTest();
 	});
 	afterEach(() => {
+		resetSettingsForTest();
 		tempDir.removeSync();
 	});
 
@@ -589,6 +593,59 @@ describe("extensions discovery", () => {
 		expect(result.extensions[0].handlers.has("agent_start")).toBe(true);
 		expect(result.extensions[0].handlers.has("tool_call")).toBe(true);
 		expect(result.extensions[0].handlers.has("agent_end")).toBe(true);
+	});
+
+	it("loads hookCapability JS factories as extension handlers", async () => {
+		const hookDir = path.join(getProjectAgentDir(tempDir.path()), "hooks", "pre");
+		fs.mkdirSync(hookDir, { recursive: true });
+		const hookPath = path.join(hookDir, "guard-test.ts");
+		fs.writeFileSync(
+			hookPath,
+			`
+				export default function(pi) {
+					pi.on("tool_call", async () => ({ block: true, reason: "blocked by hook" }));
+				}
+			`,
+		);
+
+		const result = await discoverForTest();
+		const loadedHook = result.extensions.find(extension => extension.path === hookPath);
+
+		expect(result.errors).toHaveLength(0);
+		expect(loadedHook).toBeDefined();
+		expect(loadedHook?.handlers.has("tool_call")).toBe(true);
+	});
+
+	it("keeps discovered hooks separate from disabled extension-module ids", async () => {
+		const extensionPath = path.join(extensionsDir, "guard.ts");
+		fs.writeFileSync(extensionPath, extensionCode);
+
+		const hookDir = path.join(getProjectAgentDir(tempDir.path()), "hooks", "pre");
+		fs.mkdirSync(hookDir, { recursive: true });
+		const hookPath = path.join(hookDir, "guard.ts");
+		fs.writeFileSync(
+			hookPath,
+			`
+				export default function(pi) {
+					pi.on("tool_call", async () => ({ block: true, reason: "blocked by hook" }));
+				}
+			`,
+		);
+
+		const settings = await Settings.init({
+			inMemory: true,
+			cwd: tempDir.path(),
+			overrides: { disabledExtensions: ["extension-module:guard"] },
+		});
+		initializeWithSettings(settings);
+
+		const result = await discoverForTest();
+		const loadedHook = result.extensions.find(extension => extension.path === hookPath);
+
+		expect(result.errors).toHaveLength(0);
+		expect(result.extensions.find(extension => extension.path === extensionPath)).toBeUndefined();
+		expect(loadedHook).toBeDefined();
+		expect(loadedHook?.handlers.has("tool_call")).toBe(true);
 	});
 
 	it("loads extension with shortcuts", async () => {

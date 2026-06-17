@@ -132,4 +132,24 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 		expect(forwarded?.preloadedExtensionPaths).toBeUndefined();
 		expect(forwarded?.preloadedCustomToolPaths).toBeUndefined();
 	});
+
+	it("records the spawning agent as parentAgentId, distinct from the child's own id and prefix", async () => {
+		const session = yieldEmittingSession();
+		const spy = vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));
+
+		const result = await runSubprocess({
+			...baseOptions,
+			id: "ChildAgent",
+			parentAgentId: "SpawnerAgent",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const forwarded = spy.mock.calls[0]?.[0];
+		// The registry parent is the spawning agent — never the child itself (the
+		// self-parent bug). The child's own id still drives both its agent id and
+		// its artifact/output-id prefix; those must not double as the parent link.
+		expect(forwarded?.parentAgentId).toBe("SpawnerAgent");
+		expect(forwarded?.agentId).toBe("ChildAgent");
+		expect(forwarded?.parentTaskPrefix).toBe("ChildAgent");
+	});
 });

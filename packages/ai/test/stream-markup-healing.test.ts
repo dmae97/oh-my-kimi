@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import { stream } from "@oh-my-pi/pi-ai/stream";
-import type { Context, FetchImpl, Model, Tool, ToolCall } from "@oh-my-pi/pi-ai/types";
+import type { Context, FetchImpl, Model, ThinkingContent, Tool, ToolCall } from "@oh-my-pi/pi-ai/types";
 import { getStreamMarkupHealingPattern, StreamMarkupHealing } from "@oh-my-pi/pi-ai/utils/stream-markup-healing";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
@@ -16,6 +16,7 @@ interface SseToolCallDelta {
 interface SseChoiceDelta {
 	content?: string;
 	tool_calls?: SseToolCallDelta[];
+	reasoning_content?: string;
 }
 
 interface SseChunk {
@@ -466,6 +467,57 @@ describe("Kimi K2 leaked markup healing", () => {
 		// Structured calls drove the finish reason themselves; promotion path
 		// is bypassed because the synthesized calls were discarded.
 		expect(result.stopReason).toBe("toolUse");
+	});
+
+	it("preserves leaked Kimi thinking when structured tool calls suppress synthesized calls", async () => {
+		const fetchMock = mockFetch([
+			chunk(model.id, {
+				content: "<think>plan</think>",
+				tool_calls: [
+					{
+						index: 0,
+						id: "call_structured_abc",
+						type: "function",
+						function: { name: "read", arguments: '{"path":"src/index.ts"}' },
+					},
+				],
+			}),
+			chunk(model.id, {}, "tool_calls"),
+			"[DONE]",
+		]);
+
+		const result = await streamOpenAICompletions(model, baseContext(), { apiKey: "test", fetch: fetchMock }).result();
+		const thinking = result.content
+			.filter((b): b is ThinkingContent => b.type === "thinking")
+			.map(b => b.thinking)
+			.join("");
+		const toolCalls = result.content.filter((b): b is ToolCall => b.type === "toolCall");
+
+		expect(thinking).toBe("plan");
+		expect(toolCalls).toHaveLength(1);
+		expect(toolCalls[0].id).toBe("call_structured_abc");
+		expect(toolCalls[0].arguments).toEqual({ path: "src/index.ts" });
+	});
+
+	it("does not duplicate leaked Kimi thinking when explicit reasoning is present", async () => {
+		const fetchMock = mockFetch([
+			chunk(model.id, { reasoning_content: "plan", content: "<think>plan</think>answer" }),
+			chunk(model.id, {}, "stop"),
+			"[DONE]",
+		]);
+
+		const result = await streamOpenAICompletions(model, baseContext(), { apiKey: "test", fetch: fetchMock }).result();
+		const thinking = result.content
+			.filter((b): b is ThinkingContent => b.type === "thinking")
+			.map(b => b.thinking)
+			.join("");
+		const text = result.content
+			.filter(b => b.type === "text")
+			.map(b => b.text)
+			.join("");
+
+		expect(thinking).toBe("plan");
+		expect(text).toBe("answer");
 	});
 
 	it("promotes a later healed call even if an earlier chunk had structured tool_calls", async () => {

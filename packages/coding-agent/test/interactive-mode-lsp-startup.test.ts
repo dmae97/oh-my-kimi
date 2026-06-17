@@ -119,4 +119,16 @@ describe("InteractiveMode LSP startup welcome banner", () => {
 		expect(findServerLine()).toContain(theme.status.enabled);
 		expect(findServerLine()).not.toContain(theme.status.pending);
 	});
+
+	it("does not render LSP startup warnings when startup.quiet is enabled", () => {
+		session.settings.set("startup.quiet", true);
+		const showWarningSpy = vi.spyOn(mode, "showWarning").mockImplementation(() => {});
+
+		eventBus.emit(LSP_STARTUP_EVENT_CHANNEL, {
+			type: "failed",
+			error: "rust-analyzer timed out",
+		} satisfies LspStartupEvent);
+
+		expect(showWarningSpy).not.toHaveBeenCalled();
+	});
 });

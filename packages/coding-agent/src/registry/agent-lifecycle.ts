@@ -12,9 +12,18 @@
 
 import { logger } from "@oh-my-pi/pi-utils";
 import type { AgentSession } from "../session/agent-session";
-import { AgentRegistry, MAIN_AGENT_ID, type RegistryEvent } from "./agent-registry";
+import { type AgentRef, AgentRegistry, MAIN_AGENT_ID, type RegistryEvent } from "./agent-registry";
 
 export type AgentReviver = () => Promise<AgentSession>;
+
+/**
+ * Builds a reviver for a `parked` ref restored from disk (Agent Hub scan,
+ * collab mirror, resumed process) that carries a sessionFile but no in-memory
+ * adoption. Returns undefined when the ref cannot be faithfully rebuilt (no
+ * persisted session contract, or its workspace is gone). Injected from the
+ * top-level session so this manager stays free of sdk/SessionManager imports.
+ */
+export type PersistedSubagentReviverFactory = (ref: AgentRef) => Promise<AgentReviver | undefined>;
 
 export interface AdoptOptions {
 	/** TTL before an idle agent is parked. <= 0 disables parking. */
@@ -51,6 +60,7 @@ export class AgentLifecycleManager {
 			current.#adopted.clear();
 			current.#revivals.clear();
 			current.#parking.clear();
+			current.#persistedReviverFactory = undefined;
 		}
 		AgentLifecycleManager.#global = undefined;
 	}
@@ -62,10 +72,24 @@ export class AgentLifecycleManager {
 	/** In-flight revives, so concurrent {@link ensureLive} calls coalesce. */
 	readonly #revivals = new Map<string, Promise<AgentSession>>();
 	#unsubscribe: (() => void) | undefined;
+	#persistedReviverFactory: PersistedSubagentReviverFactory | undefined;
+	/** TTL applied when a cold-revived ref is adopted on demand. */
+	#persistedReviveTtlMs = 0;
 
 	constructor(registry: AgentRegistry = AgentRegistry.global()) {
 		this.#registry = registry;
 		this.#unsubscribe = registry.onChange(event => this.#onRegistryEvent(event));
+	}
+
+	/**
+	 * Install the factory used to cold-revive `parked` refs restored from disk
+	 * (Agent Hub scan, collab mirror, resumed process) — they carry a sessionFile
+	 * but no adoption. Set by the top-level session, which owns the ambient deps
+	 * (auth, models, MCP, artifacts) the factory needs at revive time.
+	 */
+	setPersistedSubagentReviverFactory(factory: PersistedSubagentReviverFactory, idleTtlMs: number): void {
+		this.#persistedReviverFactory = factory;
+		this.#persistedReviveTtlMs = idleTtlMs;
 	}
 
 	/**
@@ -137,18 +161,45 @@ export class AgentLifecycleManager {
 		if (ref.session) return ref.session;
 		const inflight = this.#revivals.get(id);
 		if (inflight) return inflight;
-		const adopted = this.#adopted.get(id);
-		if (ref.status !== "parked" || !adopted?.revive) {
-			throw new Error(
-				`Agent "${id}" is ${ref.status} and cannot be revived${adopted?.revive ? "" : " (no reviver registered)"}. Its transcript remains readable at history://${id}.`,
-			);
-		}
-		const revival = this.#revive(id, adopted.revive, ref.sessionFile);
+		const revival = this.#resolveAndRevive(id, ref);
 		this.#revivals.set(id, revival);
 		try {
 			return await revival;
 		} finally {
 			this.#revivals.delete(id);
+		}
+	}
+
+	/**
+	 * Resolve a reviver and bring the agent back to a live session. A ref
+	 * restored from disk is `parked` with a sessionFile but no in-memory
+	 * adoption; build a reviver via the injected persisted-subagent factory and
+	 * adopt it so the agent rejoins the normal idle↔parked lifecycle. Throws
+	 * when the agent is not revivable or no reviver can be produced.
+	 */
+	async #resolveAndRevive(id: string, ref: AgentRef): Promise<AgentSession> {
+		let revive = this.#adopted.get(id)?.revive;
+		let coldAdopted = false;
+		if (!revive && ref.status === "parked" && ref.sessionFile && this.#persistedReviverFactory) {
+			revive = await this.#persistedReviverFactory(ref);
+			if (revive) {
+				this.#adopted.set(id, { idleTtlMs: this.#persistedReviveTtlMs, revive });
+				coldAdopted = true;
+			}
+		}
+		if (ref.status !== "parked" || !revive) {
+			throw new Error(
+				`Agent "${id}" is ${ref.status} and cannot be revived${revive ? "" : " (no reviver registered)"}. Its transcript remains readable at history://${id}.`,
+			);
+		}
+		try {
+			return await this.#revive(id, revive, ref.sessionFile);
+		} catch (error) {
+			// A failed cold revive (stale ctx, missing cwd, bad MCP) must not leave a
+			// poisoned reviver stuck in #adopted — drop it so a later ensureLive
+			// rebuilds via the factory (which may have fresher context by then).
+			if (coldAdopted) this.#adopted.delete(id);
+			throw error;
 		}
 	}
 
@@ -176,6 +227,7 @@ export class AgentLifecycleManager {
 		await Promise.all(ids.map(id => this.release(id)));
 		this.#revivals.clear();
 		this.#parking.clear();
+		this.#persistedReviverFactory = undefined;
 	}
 
 	async #revive(id: string, revive: AgentReviver, sessionFile: string | null): Promise<AgentSession> {

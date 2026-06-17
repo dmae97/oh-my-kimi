@@ -37,6 +37,7 @@ import {
 	qwenPortalModelManagerOptions,
 	syntheticModelManagerOptions,
 	togetherModelManagerOptions,
+	umansModelManagerOptions,
 	veniceModelManagerOptions,
 	vercelAiGatewayModelManagerOptions,
 	vllmModelManagerOptions,
@@ -312,6 +313,14 @@ export const CATALOG_PROVIDERS = [
 		envVars: ["TOGETHER_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => togetherModelManagerOptions(config),
 		catalogDiscovery: { label: "Together" },
+	},
+	{
+		id: "umans",
+		defaultModel: "umans-coder",
+		envVars: ["UMANS_AI_CODING_PLAN_API_KEY"],
+		createModelManagerOptions: (config: ModelManagerConfig) => umansModelManagerOptions(config),
+		dynamicModelsAuthoritative: true,
+		catalogDiscovery: { label: "Umans AI Coding Plan", allowUnauthenticated: true },
 	},
 	{
 		id: "venice",

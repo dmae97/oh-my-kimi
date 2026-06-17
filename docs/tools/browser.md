@@ -1,6 +1,6 @@
 # browser
 
-> Open, reuse, close, and script Puppeteer tabs against headless Chromium or CDP-attached apps.
+> Open, reuse, close, and script browser tabs against headless Chromium, CDP-attached apps, or cmux surfaces.
 
 ## Source
 - Entry: `packages/coding-agent/src/tools/browser.ts`
@@ -14,6 +14,10 @@
   - `packages/coding-agent/src/tools/browser/attach.ts` — CDP attach/reuse, target picking, spawned-app process handling.
   - `packages/coding-agent/src/tools/browser/tab-protocol.ts` — worker init/run/result message schema.
   - `packages/coding-agent/src/tools/browser/readable.ts` — `tab.extract()` readability extraction.
+  - `packages/coding-agent/src/tools/browser/cmux/rpc.ts` — cmux browser-kind resolution plus snapshot/eval/wait-state helpers for the cmux backend.
+  - `packages/coding-agent/src/tools/browser/cmux/socket-client.ts` — `CmuxSocketClient`: JSON-RPC over the cmux unix socket.
+  - `packages/coding-agent/src/tools/browser/cmux/cmux-tab.ts` — `CmuxTab` surface helper API and `runCmuxCode()` execution path.
+  - `packages/coding-agent/src/eval/js/shared/runtime.ts` — shared `JsRuntime` that executes `run` code (same engine as the `eval` JS tool); both the worker and cmux backends delegate to it.
   - `packages/coding-agent/src/tools/browser/render.ts` — TUI rendering for `open`/`close` status lines and `run` JS cells.
   - `packages/coding-agent/src/tools/puppeteer/00_stealth_tampering.txt` — mask patched functions/descriptors as native.
   - `packages/coding-agent/src/tools/puppeteer/01_stealth_activity.txt` — synthesize visibility/focus/scroll activity.
@@ -48,7 +52,7 @@
 | `viewport` | `{ width: number; height: number; scale?: number }` | No | Requested viewport. For headless launch this becomes the initial viewport; for a page it is applied with `page.setViewport()`. `scale` maps to Puppeteer `deviceScaleFactor`. |
 | `wait_until` | `"load" \| "domcontentloaded" \| "networkidle0" \| "networkidle2"` | No | Navigation wait condition. Defaults to `"load"` where omitted, including `open` navigation and later `tab.goto(...)`. |
 | `dialogs` | `"accept" \| "dismiss"` | No | Installs a page `dialog` handler that auto-accepts or auto-dismisses dialogs. Omitted means no handler. |
-| `app` | `{ path?: string; cdp_url?: string; args?: string[]; target?: string }` | No | Selects browser kind. No `app` uses the session `browser.headless` setting. `app.path` is resolved against the session cwd and used as the executable path for spawn/attach reuse. `app.cdp_url` connects to an existing CDP endpoint. `args` are appended only when spawning `app.path`. `target` is only used for attached/spawned-app page selection. |
+| `app` | `{ path?: string; cdp_url?: string; args?: string[]; target?: string }` | No | Selects browser kind. With no `app`, the cmux backend is used when a cmux socket is available (`CMUX_SOCKET_PATH`, gated by the `browser.cmux` setting / `PI_BROWSER_CMUX` override); otherwise the session `browser.headless` setting applies. `app.path` is resolved against the session cwd and used as the executable path for spawn/attach reuse. `app.cdp_url` connects to an existing CDP endpoint. `args` are appended only when spawning `app.path`. `target` is only used for attached/spawned-app page selection. |
 
 ### `action: "close"`
 
@@ -61,7 +65,7 @@
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `code` | `string` | Yes | Async-function body executed in a VM context with `page`, `browser`, `tab`, `display`, `assert`, `wait`, `console`, timers, `URL`, `TextEncoder`, `TextDecoder`, and `Buffer` in scope. |
+| `code` | `string` | Yes | Async-function body executed by the shared `JsRuntime` (`src/eval/js/shared/runtime.ts`, the same engine as the `eval` JS tool). In scope: browser-specific `page`, `browser`, `tab`, `assert(cond, msg?)`, and `wait(ms)`, plus the runtime prelude helpers (`display`, `print`, `read`, `write`, `append`, `tree`, `env`, `tool`, `completion`, `agent`, `parallel`, `pipeline`, `log`, `phase`, `budget`, ...) and ambient Bun globals (`console`, timers, `URL`, `TextEncoder`/`TextDecoder`, `Buffer`). |
 
 ## Outputs
 The tool returns one result per call; no streaming partial output is emitted from the browser implementation itself.
@@ -69,13 +73,14 @@ The tool returns one result per call; no streaming partial output is emitted fro
 - `open`: text content with `Opened` or `Reused`, browser description, URL, and optional title. `details` includes `action`, `name`, `browser`, `url`, `viewport`, and the same text in `details.result`.
 - `close`: text content with either `Closed ...` or `No tab named ...`. `details` includes `action`, `name`, and `details.result`.
 - `run`: ordered `content` array built as:
-  1. every `display(value)` call in execution order,
+  1. every structured display output in execution order (object/image `display(value)` calls plus helper status events),
   2. final return value, JSON-stringified unless already a string,
   3. or `Ran code on tab "..."` if nothing else was produced.
-- `display(value)` coercion in `packages/coding-agent/src/tools/browser/tab-worker.ts`:
-  - `{ type: "image", data: string, mimeType: string }` becomes image content,
-  - `string` becomes text content,
-  - other values become pretty JSON text when serializable, else `String(value)`.
+- `display(value)` is handled by the shared runtime's `displayValue()` (`src/eval/js/shared/runtime.ts`), then mapped to content by `WorkerCore.#pushDisplay()` (`packages/coding-agent/src/tools/browser/tab-worker.ts`):
+  - `{ type: "image", data, mimeType }` with decodable base64 becomes image content; an unrecognized `data` shape is dropped with a debug note.
+  - any other object/array becomes pretty JSON text (`JSON.stringify(value, null, 2)`); a value that is not structured-cloneable is dropped with a debug note.
+  - helper side effects (`read`/`write`/`tree`/...) emit `status` events that surface as compact JSON text.
+  - primitive `display(value)` (string/number/...) and `console.*` flow to the text channel, which the worker forwards as debug logs rather than tool content; `undefined` is ignored.
 - `tab.screenshot()` also appends text plus an image content item unless `silent: true`; `details.screenshots` records persisted screenshot metadata `{ dest, mimeType, bytes, width, height }`.
 - `run` `details` includes `action`, `name`, current `browser`/`url` when the tab exists, optional `screenshots`, and `details.result` containing only the concatenated text outputs. Combined run text is capped at the inline byte limit via `enforceInlineByteCap()`; over-cap text is saved as a session artifact (`saveBrowserOutputArtifact()`) and the capped text replaces it in content and `details.result`.
 
@@ -84,6 +89,7 @@ The tool returns one result per call; no streaming partial output is emitted fro
 2. `open` resolves browser kind with `resolveBrowserKind()`:
    - `app.cdp_url` → `{ kind: "connected" }` after trimming trailing slashes.
    - `app.path` → `{ kind: "spawned" }` after resolving against session cwd.
+   - otherwise, `resolveCmuxKind()` → `{ kind: "cmux", socketPath, password?, surface? }` when `CMUX_SOCKET_PATH` is set and cmux is enabled (`browser.cmux` setting, overridable by `PI_BROWSER_CMUX`).
    - otherwise → `{ kind: "headless", headless: session.settings.get("browser.headless") }`.
 3. `open` rejects reusing the same tab name across different browser kinds (`sameBrowserKind()`); callers must close first.
 4. `open` acquires a browser handle through `acquireBrowser()` (`packages/coding-agent/src/tools/browser/registry.ts`):
@@ -92,6 +98,7 @@ The tool returns one result per call; no streaming partial output is emitted fro
    - headless launches via `launchHeadlessBrowser()`;
    - `connected` waits for `${cdpUrl}/json/version`, then `puppeteer.connect()`;
    - `spawned` first tries `findReusableCdp()`, else kills same-path processes, allocates a free loopback port, spawns the executable with `--remote-debugging-port=<port>`, waits for CDP, then connects.
+   - `cmux` connects a `CmuxSocketClient` to the cmux unix socket; existing cmux handles are reused unconditionally (no connection-liveness recheck).
 5. `open` acquires a tab through `acquireTab()` (`packages/coding-agent/src/tools/browser/tab-supervisor.ts`):
    - same-name + same-browser + alive tab is reused unless `dialogs` changed;
    - same-name but different browser handle, dead state, or changed dialog policy forces release and recreation;
@@ -104,7 +111,7 @@ The tool returns one result per call; no streaming partial output is emitted fro
 9. On success the worker sends `ready` with `{ url, title, viewport, targetId }`; the supervisor stores a `TabSession`, increments browser-handle refcount with `holdBrowser()`, and keeps the tab in a process-global `Map<string, TabSession>`.
 10. `run` requires non-empty `code`, looks up the tab with `getTab()`, then delegates to `runInTab()`.
 11. `runInTabWithSnapshot()` rejects dead tabs and concurrent runs (`Tab ... is busy`), captures session cwd plus optional `browser.screenshotDir`, registers an abort hook, sends a `run` message to the worker, and races the result against `timeoutMs + 750` ms. Timeouts force-kill the tab worker and, for headless tabs, close the orphaned page target.
-12. `WorkerCore.#run()` creates a VM context, exposes the raw Puppeteer `page`/`browser` plus a synthetic `tab` API, and executes `(async () => { ...code... })()` via `vm.runInContext()`.
+12. `WorkerCore.#run()` builds the `tab` API, lazily creates a shared `JsRuntime` via `#ensureRuntime()`, injects `page`/`browser`/`tab`/`assert`/`wait` with `runtime.setRunScope()`, and executes the user code through `runtime.run(code, ...)` raced against a cancel/timeout rejection. Cmux tabs take a parallel path through `runCmuxCode()`, which drives the same `JsRuntime`.
 13. The `tab` helper API implemented in `#createTabApi()` is:
    - `tab.name: string`
    - `tab.page: Page`
@@ -147,6 +154,7 @@ The tool returns one result per call; no streaming partial output is emitted fro
   - **Headless**: launches local Chromium with Puppeteer, applies stealth patches, and creates a fresh page per tab.
   - **Spawned app (`app.path`)**: reuses an existing CDP-enabled process for that executable when possible; otherwise kills same-path processes, spawns the executable with remote debugging enabled, then attaches. No stealth patches are injected.
   - **Connected browser (`app.cdp_url`)**: attaches to an already-running CDP endpoint. No process ownership; close only disconnects.
+  - **Cmux surface (`browser.cmux`)**: with no `app` and a cmux socket available (`CMUX_SOCKET_PATH`, enabled by the `browser.cmux` setting / `PI_BROWSER_CMUX` override), drives a cmux WKWebView surface over a unix-socket JSON-RPC client instead of Puppeteer. No Bun worker and no stealth patches; `open` opens a split (owning that surface), `run` executes via `runCmuxCode()`, and `close` issues `surface.close` for surfaces it owns (leaving the workspace's last surface open).
 - **Target selection for attached/spawned browsers**
   - With `app.target`, `pickElectronTarget()` returns the first page whose URL or title contains the case-insensitive substring.
   - Without `app.target`, it skips titles/URLs matching `request handler|devtools|background page|background host|service worker` and otherwise falls back to the first page.
@@ -213,6 +221,7 @@ The tool returns one result per call; no streaming partial output is emitted fro
   - `Target ... is no longer available on the attached browser`
 - Spawned-app path validation requires an absolute executable path after cwd resolution, not an app bundle directory path.
 - Spawn/attach failures are wrapped into `ToolError`s such as `Timed out waiting for CDP endpoint ...`, `Failed to attach to ...`, or `Connected to ... but puppeteer.connect failed: ...`.
+- `app.cdp_url` must be the HTTP CDP discovery endpoint, not a `ws://` URL; otherwise `normalizeConnectedCdpUrl()` throws `browser app.cdp_url must be the HTTP CDP discovery endpoint ...`.
 - `tab` helper errors are user-visible `ToolError`s, including unsupported selector prefix, stale/unknown element id, invalid drag target, missing upload files, non-`<select>` for `tab.select()`, non-file-input for `tab.uploadFile()`, and screenshot selector misses.
 - On run timeout, the worker reports `Browser code execution timed out after <ms>ms`; the supervisor may escalate to `Browser code execution hung past grace; tab killed` if the worker does not respond after the grace window.
 
@@ -223,7 +232,7 @@ The tool returns one result per call; no streaming partial output is emitted fro
 - Proxy-related env vars only affect headless launch: `PUPPETEER_PROXY`, `PUPPETEER_PROXY_BYPASS_LOOPBACK`, and `PUPPETEER_PROXY_IGNORE_CERT_ERRORS`.
 - Stealth patches are applied only in headless mode. Spawned or externally connected browsers are intentionally left untouched.
 - `applyStealthPatches()` also strips Puppeteer's `//# sourceURL=__puppeteer_evaluation_script__` suffix from CDP `Runtime.evaluate` / `Runtime.callFunctionOn` payloads.
-- `tab.extract()` reads `page.content()`, runs Readability first, then falls back to `main article`/`article`/`main`/`[role='main']`/`body`, and returns `null` if neither extraction path yields content.
+- `tab.extract()` reads `page.content()`, runs Readability first, then falls back to the first non-empty of `[data-pagefind-body]`/`main article`/`article`/`main`/`[role='main']`/`body`, and returns `null` if neither extraction path yields content.
 - `close(all: true, kill: false)` disconnects from spawned/connected browsers when the last tab closes but leaves spawned app processes running.
 - Headless orphan cleanup is best-effort: if a worker dies before closing its page, the supervisor searches browser targets by `targetId` and closes that page.
 - Console methods inside `run` do not appear in tool output; they are forwarded as debug/warn/error logs through the worker transport.

@@ -411,6 +411,47 @@ function tryHealMalformedJson(value: string): unknown | undefined {
 	return undefined;
 }
 
+const MAX_NESTED_JSON_STRING_PARSE_DEPTH = 3;
+
+function acceptParsedJsonForTypes(
+	parsed: unknown,
+	source: string,
+	expectedTypes: string[],
+	depth: number,
+): { value: unknown; changed: boolean } {
+	if (parsed === null && source.trim() === "null") {
+		return { value: null, changed: true };
+	}
+	if (matchesExpectedType(parsed, expectedTypes)) {
+		return { value: parsed, changed: true };
+	}
+	if (typeof parsed === "string" && !expectedTypes.includes("string") && depth < MAX_NESTED_JSON_STRING_PARSE_DEPTH) {
+		return tryParseJsonForTypes(parsed, expectedTypes, depth + 1);
+	}
+	return { value: source, changed: false };
+}
+
+function looksLikeJsonContainerString(value: unknown): boolean {
+	if (typeof value !== "string") return false;
+	const trimmed = value.trimStart();
+	if (trimmed.startsWith("{")) {
+		const body = trimmed.slice(1);
+		return body.trimStart().startsWith('"') || body.includes(":") || body.trimStart().startsWith("}");
+	}
+	if (!trimmed.startsWith("[")) return false;
+	const firstItem = trimmed.slice(1).trimStart();
+	return (
+		firstItem.startsWith("{") ||
+		firstItem.startsWith("[") ||
+		firstItem.startsWith('"') ||
+		firstItem.startsWith("]") ||
+		firstItem.startsWith("true") ||
+		firstItem.startsWith("false") ||
+		firstItem.startsWith("null") ||
+		/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?(?:\s*(?:,|\]|$))/.test(firstItem)
+	);
+}
+
 /**
  * Attempts to parse a string as JSON if it looks like a JSON literal and
  * the parsed result matches one of the expected types.
@@ -424,7 +465,7 @@ function tryHealMalformedJson(value: string): unknown | undefined {
  * matches an expected type. This prevents false positives like parsing
  * the string `"123"` when the schema actually wants a string.
  */
-function tryParseJsonForTypes(value: string, expectedTypes: string[]): { value: unknown; changed: boolean } {
+function tryParseJsonForTypes(value: string, expectedTypes: string[], depth = 0): { value: unknown; changed: boolean } {
 	const trimmed = value.trim();
 	if (!trimmed) return { value, changed: false };
 
@@ -434,28 +475,20 @@ function tryParseJsonForTypes(value: string, expectedTypes: string[]): { value: 
 	}
 
 	// Quick syntactic checks to avoid unnecessary parse attempts
-	const looksJsonObject = trimmed.startsWith("{");
-	const looksJsonArray = trimmed.startsWith("[");
+	const looksJsonObject = trimmed.startsWith("{") && looksLikeJsonContainerString(trimmed);
+	const looksJsonArray = trimmed.startsWith("[") && looksLikeJsonContainerString(trimmed);
+	const looksJsonString = trimmed.startsWith('"') && !expectedTypes.includes("string");
 	const looksJsonLiteral =
 		trimmed === "true" || trimmed === "false" || trimmed === "null" || JSON_NUMBER_PATTERN.test(trimmed);
 
-	if (!looksJsonObject && !looksJsonArray && !looksJsonLiteral) {
+	if (!looksJsonObject && !looksJsonArray && !looksJsonString && !looksJsonLiteral) {
 		return { value, changed: false };
 	}
 
 	try {
 		const parsed = JSON.parse(trimmed) as unknown;
-		// If the string was "null", we parsed it to actual null.
-		// Accept this even if null isn't in expectedTypes — the LLM meant "no value".
-		// normalizeOptionalNullsForSchema will strip it from optional fields, and
-		// the validator will correctly error on required fields.
-		if (parsed === null && trimmed === "null") {
-			return { value: null, changed: true };
-		}
-		// For non-null values, only accept if the parsed type matches what the schema expects
-		if (matchesExpectedType(parsed, expectedTypes)) {
-			return { value: parsed, changed: true };
-		}
+		const accepted = acceptParsedJsonForTypes(parsed, trimmed, expectedTypes, depth);
+		if (accepted.changed) return accepted;
 	} catch {
 		if (looksJsonObject || looksJsonArray) {
 			// Try escaping raw control chars inside string literals (LLMs sometimes
@@ -464,20 +497,21 @@ function tryParseJsonForTypes(value: string, expectedTypes: string[]): { value: 
 			if (escapedControls !== trimmed) {
 				try {
 					const parsed = JSON.parse(escapedControls) as unknown;
-					if (matchesExpectedType(parsed, expectedTypes)) {
-						return { value: parsed, changed: true };
-					}
+					const accepted = acceptParsedJsonForTypes(parsed, escapedControls, expectedTypes, depth);
+					if (accepted.changed) return accepted;
 				} catch {}
 			}
 			// Try extracting a valid JSON prefix (handles trailing junk after balanced container)
 			const leading = tryParseLeadingJsonContainer(trimmed);
-			if (leading !== undefined && matchesExpectedType(leading, expectedTypes)) {
-				return { value: leading, changed: true };
+			if (leading !== undefined) {
+				const accepted = acceptParsedJsonForTypes(leading, trimmed, expectedTypes, depth);
+				if (accepted.changed) return accepted;
 			}
 			// Try healing single-character bracket errors near the end of the string
 			const healed = tryHealMalformedJson(trimmed);
-			if (healed !== undefined && matchesExpectedType(healed, expectedTypes)) {
-				return { value: healed, changed: true };
+			if (healed !== undefined) {
+				const accepted = acceptParsedJsonForTypes(healed, trimmed, expectedTypes, depth);
+				if (accepted.changed) return accepted;
 			}
 		}
 		return { value, changed: false };
@@ -796,6 +830,146 @@ function normalizeOptionalNullsForSchema(
 }
 
 // ============================================================================
+// String-encoded array coercion for union(string, array) schemas.
+// ============================================================================
+
+/**
+ * Detects whether a schema node accepts BOTH the `string` and `array` JSON
+ * Schema types. Recognizes:
+ *   - `{ "type": ["string", "array"] }` (multi-type),
+ *   - `{ "anyOf": [...] }` / `{ "oneOf": [...] }` with at least one string
+ *     branch and one array branch.
+ */
+function schemaAcceptsStringAndArray(schema: Record<string, unknown>): boolean {
+	if (Array.isArray(schema.type) && schema.type.includes("string") && schema.type.includes("array")) {
+		return true;
+	}
+
+	for (const key of ["anyOf", "oneOf"] as const) {
+		const branches = schema[key];
+		if (!Array.isArray(branches)) continue;
+		let hasString = false;
+		let hasArray = false;
+		for (const branch of branches) {
+			if (!branch || typeof branch !== "object") continue;
+			const branchType = (branch as Record<string, unknown>).type;
+			if (branchType === "string" || (Array.isArray(branchType) && branchType.includes("string"))) {
+				hasString = true;
+			}
+			if (branchType === "array" || (Array.isArray(branchType) && branchType.includes("array"))) {
+				hasArray = true;
+			}
+			if (hasString && hasArray) return true;
+		}
+	}
+	return false;
+}
+
+function schemaNodeAcceptsArray(schema: unknown): schema is Record<string, unknown> {
+	if (!schema || typeof schema !== "object") return false;
+	const schemaObject = schema as Record<string, unknown>;
+	const schemaType = schemaObject.type;
+	return schemaType === "array" || (Array.isArray(schemaType) && schemaType.includes("array"));
+}
+
+function parsedArrayMatchesArrayBranch(schema: Record<string, unknown>, value: unknown[]): boolean {
+	if (schemaNodeAcceptsArray(schema)) {
+		return isJsonSchemaValueValid(schema, value);
+	}
+
+	for (const key of ["anyOf", "oneOf"] as const) {
+		const branches = schema[key];
+		if (!Array.isArray(branches)) continue;
+		const branchList: unknown[] = branches;
+		for (const branch of branchList) {
+			if (!schemaNodeAcceptsArray(branch)) continue;
+			if (isJsonSchemaValueValid(branch, value)) return true;
+		}
+	}
+	return false;
+}
+
+/**
+ * Pre-validation normalization: when a schema field accepts BOTH `string` and
+ * `array`, providers that double-serialize tool arguments (e.g. Z.AI / GLM)
+ * deliver array values as JSON-encoded strings like `'["a","b"]'`. Zod's
+ * `union([string, array])` happily accepts that string against the string
+ * branch, so the type-error driven coercion in {@link coerceArgsFromIssues}
+ * never fires, and downstream tools treat the literal `["a","b"]` as a path
+ * (silently producing zero matches or glob parse errors).
+ *
+ * Walk the schema; when both shapes are accepted AND the incoming value is a
+ * JSON-array-shaped string, substitute the parsed array only if it validates
+ * against the schema's array branch. Conservative: array-shaped strings like
+ * `"[1]"` stay on the string branch when the array branch is `string[]`.
+ *
+ * See https://github.com/can1357/oh-my-pi/issues/1788.
+ */
+function normalizeStringEncodedArrayUnions(schema: unknown, value: unknown): { value: unknown; changed: boolean } {
+	if (value === null || value === undefined) return { value, changed: false };
+	if (schema === null || typeof schema !== "object") return { value, changed: false };
+
+	const schemaObject = schema as Record<string, unknown>;
+
+	// Leaf case: this schema node accepts both string and array.
+	if (typeof value === "string" && schemaAcceptsStringAndArray(schemaObject)) {
+		const trimmed = value.trim();
+		if (!trimmed.startsWith("[")) return { value, changed: false };
+		try {
+			const parsed = JSON.parse(trimmed) as unknown;
+			if (Array.isArray(parsed) && parsedArrayMatchesArrayBranch(schemaObject, parsed)) {
+				return { value: parsed, changed: true };
+			}
+		} catch {
+			// Not valid JSON — leave the string alone for the validator to handle.
+		}
+		return { value, changed: false };
+	}
+
+	// Recurse into array items.
+	if (Array.isArray(value)) {
+		const itemSchema = schemaObject.items;
+		if (!itemSchema || typeof itemSchema !== "object" || Array.isArray(itemSchema)) {
+			return { value, changed: false };
+		}
+		let changed = false;
+		let nextValue = value;
+		for (let i = 0; i < value.length; i += 1) {
+			const normalized = normalizeStringEncodedArrayUnions(itemSchema, value[i]);
+			if (!normalized.changed) continue;
+			if (!changed) {
+				nextValue = [...value];
+				changed = true;
+			}
+			nextValue[i] = normalized.value;
+		}
+		return { value: changed ? nextValue : value, changed };
+	}
+
+	// Recurse into object properties.
+	if (schemaObject.type !== "object") return { value, changed: false };
+	if (typeof value !== "object" || value === null) return { value, changed: false };
+	const properties = schemaObject.properties;
+	if (!properties || typeof properties !== "object") return { value, changed: false };
+
+	const propsObject = properties as Record<string, unknown>;
+	const valueObject = value as Record<string, unknown>;
+	let changed = false;
+	let nextValue = valueObject;
+	for (const [key, propertySchema] of Object.entries(propsObject)) {
+		if (!(key in nextValue)) continue;
+		const normalized = normalizeStringEncodedArrayUnions(propertySchema, nextValue[key]);
+		if (!normalized.changed) continue;
+		if (!changed) {
+			nextValue = { ...nextValue };
+			changed = true;
+		}
+		nextValue[key] = normalized.value;
+	}
+	return { value: changed ? nextValue : valueObject, changed };
+}
+
+// ============================================================================
 // Zod issue → coercion bridge
 // ============================================================================
 
@@ -925,14 +1099,22 @@ function coerceArgsFromIssues(args: unknown, issues: FlatIssue[]): { value: unkn
 
 		const currentValue = getValueAtPointer(nextArgs, issue.instancePath);
 		const result = tryCoerceForExpectedTypes(currentValue, issue.expectedTypes);
-		const coercedValue = result.changed
-			? result.value
-			: issue.expectedTypes.includes("array") &&
-					!issue.unionBranch &&
-					currentValue !== undefined &&
-					!Array.isArray(currentValue)
-				? [currentValue]
-				: undefined;
+		let coercedValue = result.changed ? result.value : undefined;
+		if (
+			coercedValue === undefined &&
+			issue.expectedTypes.includes("array") &&
+			!issue.unionBranch &&
+			currentValue !== undefined &&
+			!Array.isArray(currentValue)
+		) {
+			const objectCoercion =
+				typeof currentValue === "string"
+					? tryParseJsonForTypes(currentValue, ["object"])
+					: { value: currentValue, changed: false };
+			if (objectCoercion.changed || !looksLikeJsonContainerString(currentValue)) {
+				coercedValue = [objectCoercion.changed ? objectCoercion.value : currentValue];
+			}
+		}
 		if (coercedValue === undefined) continue;
 
 		if (!owned) {
@@ -1095,6 +1277,16 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): ToolCall[
 		changed = true;
 	}
 
+	// Then re-shape JSON-stringified arrays whose schema accepts both string
+	// and array (e.g. `paths: string | string[]`). Without this, zod accepts
+	// the literal `'["a","b"]'` as a string and downstream tools treat it as
+	// a single path with embedded glob brackets — silent zero results.
+	const stringEncodedArrayNorm = normalizeStringEncodedArrayUnions(json, normalizedArgs);
+	if (stringEncodedArrayNorm.changed) {
+		normalizedArgs = stringEncodedArrayNorm.value;
+		changed = true;
+	}
+
 	let result = validateContext(ctx, normalizedArgs);
 	if (result.success) return result.value as ToolCall["arguments"];
 
@@ -1108,6 +1300,15 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): ToolCall[
 		const nullNormalization = normalizeOptionalNullsForSchema(json, normalizedArgs);
 		if (nullNormalization.changed) {
 			normalizedArgs = nullNormalization.value;
+		}
+
+		// Re-run the union-string coercion because `coerceArgsFromIssues` may
+		// have just unwrapped a JSON-stringified object at the root or inside a
+		// nested field — exposing `string | string[]` descendants the initial
+		// pre-validation pass could not reach.
+		const stringEncodedArrayNormPass = normalizeStringEncodedArrayUnions(json, normalizedArgs);
+		if (stringEncodedArrayNormPass.changed) {
+			normalizedArgs = stringEncodedArrayNormPass.value;
 		}
 
 		result = validateContext(ctx, normalizedArgs);

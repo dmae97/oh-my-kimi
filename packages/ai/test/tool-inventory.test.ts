@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { z } from "zod/v4";
-import { renderToolInventory } from "../src/grammar/inventory";
-import type { InbandTool } from "../src/grammar/types";
+import { renderToolInventory } from "../src/dialect/inventory";
+import type { InbandTool } from "../src/dialect/types";
 
 const searchTool: InbandTool = {
 	name: "web_search",
@@ -39,5 +39,43 @@ describe("renderToolInventory", () => {
 
 	it("returns an empty string when there are no tools", () => {
 		expect(renderToolInventory([], "claude-3-5-sonnet-20241022")).toBe("");
+	});
+
+	it("demotes description headers by one level when a top-level `# ` header is present", () => {
+		const tool: InbandTool = {
+			name: "read",
+			description: ["Reads files.", "", "## Parameters", "", "- `path`", "", "# Files", "", "Stuff."].join("\n"),
+			parameters: z.object({ path: z.string() }),
+		};
+		const out = renderToolInventory([tool], "claude-3-5-sonnet-20241022");
+		// The wrapper heading stays at level 1; description headers drop one level.
+		expect(out).toContain("# Tool: read");
+		expect(out).toContain("\n### Parameters");
+		expect(out).toContain("\n## Files");
+		// No level-1 header survives inside the description body.
+		expect(out).not.toContain("\n# Files");
+	});
+
+	it("leaves descriptions untouched when no top-level `# ` header is present", () => {
+		const tool: InbandTool = {
+			name: "noop",
+			description: ["Does nothing.", "", "## Parameters", "", "- `x`"].join("\n"),
+			parameters: z.object({ x: z.string() }),
+		};
+		const out = renderToolInventory([tool], "claude-3-5-sonnet-20241022");
+		expect(out).toContain("\n## Parameters");
+		expect(out).not.toContain("\n### Parameters");
+	});
+
+	it("never rewrites headers inside fenced code blocks", () => {
+		const tool: InbandTool = {
+			name: "shell",
+			description: ["Runs commands.", "", "# Usage", "", "```bash", "# not a header", "ls", "```"].join("\n"),
+			parameters: z.object({ cmd: z.string() }),
+		};
+		const out = renderToolInventory([tool], "claude-3-5-sonnet-20241022");
+		expect(out).toContain("\n## Usage");
+		// The `#` comment inside the code fence is preserved verbatim.
+		expect(out).toContain("\n# not a header");
 	});
 });

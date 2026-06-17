@@ -8,6 +8,7 @@ export * from "./json-schema-validator";
 export * from "./meta-validator";
 export * from "./normalize";
 export * from "./spill";
+export * from "./strict-tool-validation";
 export * from "./types";
 export * from "./typescript";
 export * from "./wire";

@@ -9,6 +9,7 @@ It explicitly excludes context-overflow recovery via auto-compaction. Overflow i
 - [`../src/session/agent-session.ts`](../packages/coding-agent/src/session/agent-session.ts)
 - [`../src/config/settings-schema.ts`](../packages/coding-agent/src/config/settings-schema.ts)
 - [`../src/modes/controllers/event-controller.ts`](../packages/coding-agent/src/modes/controllers/event-controller.ts)
+- [`../src/modes/controllers/input-controller.ts`](../packages/coding-agent/src/modes/controllers/input-controller.ts)
 - [`../src/modes/rpc/rpc-mode.ts`](../packages/coding-agent/src/modes/rpc/rpc-mode.ts)
 - [`../src/modes/rpc/rpc-client.ts`](../packages/coding-agent/src/modes/rpc/rpc-client.ts)
 - [`../src/modes/rpc/rpc-types.ts`](../packages/coding-agent/src/modes/rpc/rpc-types.ts)
@@ -37,6 +38,8 @@ So: overload/rate/server/network-style failures use this retry policy; context-w
   - the error is a stale OpenAI Responses replay failure (`Item with id '…' not found`, or an invalid/expired/not-found `previous_response`)
   - `errorMessage` matches transient transport/envelope patterns or `isUsageLimitError(...)`
 
+The stale-replay and transient/usage-limit branches additionally require that the stream was **not** interrupted after already emitting observable output. `#streamInterruptedAfterObservableOutput(...)` treats a `STREAM_INTERRUPTED_AFTER_CONTENT` stop detail — or any tool call, non-empty text, thinking, or redacted-thinking block — as non-retryable, so a partially produced turn is not silently replayed. Classifier refusals are checked first and bypass this exclusion.
+
 Current retryable inputs are regex/string-classified:
 
 - transient transport/envelope failures, including Anthropic stream-envelope failures before `message_start`
@@ -48,6 +51,8 @@ Current retryable inputs are regex/string-classified:
 - network/connection/socket failures, refused/closed connections, upstream connect/reset-before-headers, socket hang up, timeout/timed out, fetch failed, terminated, retry delay wording, and unexpected socket close messages
 
 Transport classification is regex text matching, not typed provider error codes; classifier refusals are the exception, detected from the typed `stopDetails` field.
+
+Beyond `#isRetryableError(...)`, a narrower trigger feeds the same retry engine: `#isRetryableReasonlessAbort(...)` routes a content-less `aborted` stop carrying the generic abort sentinel (`GENERIC_ABORT_SENTINEL`) — only when no user, dispose, or streaming-edit-guard abort is in progress — into `#handleRetryableError(message, { allowModelFallback: false })`, i.e. retried without model fallback.
 
 ## Retry lifecycle and state transitions
 
@@ -133,12 +138,14 @@ If abort hits while sleeping, catch path emits:
 
 ### TUI interaction
 
-On `auto_retry_start`, EventController:
+On `auto_retry_start`, EventController (`#handleAutoRetryStart`):
 
-- swaps `Esc` handler to `session.abortRetry()`
-- renders loader text: `Retrying (attempt/maxAttempts) in Ns… (esc to cancel)`
+- stops the working loader and clears the status container
+- renders a `retryLoader` with text: `Retrying (attempt/maxAttempts) in Ns… (esc to cancel)`
 
-On `auto_retry_end`, it restores prior `Esc` handler and clears loader state.
+`Esc` cancellation dispatches on live session state rather than a swapped handler: the input controller checks `viewSession.isRetrying` and calls `viewSession.abortRetry()` (alongside its compaction/handoff abort checks).
+
+On `auto_retry_end` (`#handleAutoRetryEnd`), it stops and clears the `retryLoader` and status container.
 
 ## Streaming and prompt completion behavior
 

@@ -1,12 +1,50 @@
 import { describe, expect, it } from "bun:test";
+import {
+	createOpenAICodexAuthorizationUrl,
+	formatOpenAICodexTokenEndpointError,
+} from "@oh-my-pi/pi-ai/oauth/openai-codex";
 import { type RequestBody, transformRequestBody } from "@oh-my-pi/pi-ai/providers/openai-codex/request-transformer";
 import { CodexApiError, parseCodexError } from "@oh-my-pi/pi-ai/providers/openai-codex/response-handler";
 import { convertOpenAICodexResponsesTools } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import type { Tool } from "@oh-my-pi/pi-ai/types";
+import { OPENAI_HEADER_VALUES } from "@oh-my-pi/pi-catalog/wire/codex";
 import { createCodexModel } from "./helpers";
 
 const DEFAULT_PROMPT_PREFIX =
 	"You are an expert coding assistant. You help users with coding tasks by reading files, executing commands";
+
+describe("openai-codex oauth", () => {
+	it("uses the same default originator for browser login and API requests", () => {
+		const authUrl = createOpenAICodexAuthorizationUrl({
+			state: "state",
+			redirectUri: "http://localhost:1455/auth/callback",
+			challenge: "challenge",
+		});
+
+		expect(new URL(authUrl).searchParams.get("originator")).toBe(OPENAI_HEADER_VALUES.ORIGINATOR_CODEX);
+	});
+
+	it("requests Codex connector scopes during browser login", () => {
+		const authUrl = createOpenAICodexAuthorizationUrl({
+			state: "state",
+			redirectUri: "http://localhost:1455/auth/callback",
+			challenge: "challenge",
+		});
+
+		const scopes = new Set((new URL(authUrl).searchParams.get("scope") ?? "").split(" "));
+		expect(scopes.has("api.connectors.read")).toBe(true);
+		expect(scopes.has("api.connectors.invoke")).toBe(true);
+	});
+
+	it("formats object token endpoint errors without object coercion", () => {
+		const detail = formatOpenAICodexTokenEndpointError(
+			403,
+			JSON.stringify({ error: { code: "access_denied", message: "Connector scope missing" } }),
+		);
+
+		expect(detail).toBe("403 access_denied: Connector scope missing");
+	});
+});
 
 describe("openai-codex tool schemas", () => {
 	it("adds empty properties to no-argument object parameter schemas", () => {
@@ -25,6 +63,69 @@ describe("openai-codex tool schemas", () => {
 			name: "list_outgoing_messages",
 			description: "List outgoing messages",
 			parameters: { type: "object", properties: {} },
+		});
+	});
+	it("strips MCP regex lookaround patterns from function parameters", () => {
+		const tools: Tool[] = [
+			{
+				name: "get_design_context",
+				description: "Get Figma design context",
+				parameters: {
+					type: "object",
+					properties: {
+						fileKey: { type: "string", pattern: "^(?!undefined$|null$)" },
+					},
+					propertyNames: { pattern: "^(?!undefined$|null$)" },
+				},
+			},
+		];
+
+		const converted = convertOpenAICodexResponsesTools(tools, createCodexModel("gpt-5.5"));
+
+		expect(converted[0]).toEqual({
+			type: "function",
+			name: "get_design_context",
+			description: "Get Figma design context",
+			parameters: {
+				type: "object",
+				properties: {
+					fileKey: { type: "string" },
+				},
+				propertyNames: true,
+			},
+		});
+	});
+	it("strips MCP regex lookaround patternProperties from function parameters", () => {
+		const tools: Tool[] = [
+			{
+				name: "read_dynamic_values",
+				description: "Read dynamic values",
+				parameters: {
+					type: "object",
+					patternProperties: {
+						"^(?!secret_)": { type: "string" },
+						"^public_": { type: "string" },
+					},
+					additionalProperties: false,
+				},
+			},
+		];
+
+		const converted = convertOpenAICodexResponsesTools(tools, createCodexModel("gpt-5.5"));
+
+		expect(converted[0]).toEqual({
+			type: "function",
+			name: "read_dynamic_values",
+			description: "Read dynamic values",
+			parameters: {
+				type: "object",
+				patternProperties: {
+					".*": { type: "string" },
+					"^public_": { type: "string" },
+				},
+				additionalProperties: false,
+				properties: {},
+			},
 		});
 	});
 });

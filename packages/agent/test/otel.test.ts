@@ -364,6 +364,32 @@ describe("agent-loop OTEL instrumentation", () => {
 		expect(JSON.parse(systemAttr!)).toEqual([{ type: "text", content: "sys-instruction" }]);
 	});
 
+	it("captures string systemPrompt without crashing when captureMessageContent is true", async () => {
+		const mock = createMockModel({
+			...MOCK_IDENT,
+			responses: [{ content: ["hi back"], stopReason: "stop" }],
+		});
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			telemetry: { captureMessageContent: true },
+		};
+		// Providers normalize systemPrompt to `string | string[]`; telemetry must accept a bare string.
+		const ctx: AgentContext = { systemPrompt: "sys-as-string" as unknown as string[], messages: [], tools: [] };
+		await runAndDrain(agentLoop([createUserMessage("hi")], ctx, config, undefined, mock.stream));
+
+		const chat = findSpan(exporter.getFinishedSpans(), "chat mock-model");
+		expect(chat).toBeDefined();
+		expect(chat?.status.code).not.toBe(SpanStatusCode.ERROR);
+		const systemAttr = chat?.attributes[GenAIAttr.SystemInstructions] as string | undefined;
+		expect(JSON.parse(systemAttr!)).toEqual([{ type: "text", content: "sys-as-string" }]);
+		const request = JSON.parse(chat?.attributes[PiGenAIAttr.RequestMessages] as string) as Array<{
+			content: unknown;
+			role: string;
+		}>;
+		expect(request.filter(message => message.role === "system")).toHaveLength(1);
+	});
+
 	it("captures bounded dashboard summary content when requested", async () => {
 		const mock = createMockModel({
 			...MOCK_IDENT,

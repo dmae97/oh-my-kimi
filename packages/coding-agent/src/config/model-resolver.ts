@@ -34,17 +34,36 @@ import { isAuthenticated, kNoAuth, type ModelRegistry } from "./model-registry";
 import { MODEL_ROLE_IDS, type ModelRole } from "./model-roles";
 import type { Settings } from "./settings";
 
+function isKnownProvider(provider: string): provider is KnownProvider {
+	return provider in DEFAULT_MODEL_PER_PROVIDER;
+}
+
 /**
- * Pick the first available model matching a known provider's default id
- * (catalog table order), falling back to the first available model.
+ * Pick the first provider-default model in availability order.
+ *
+ * If multiple providers expose that same default id, rank only that shared-id
+ * group by canonical provider priority so native/OAuth transports beat mirrors
+ * without changing unrelated provider fallback precedence.
  */
-function pickDefaultAvailableModel(availableModels: Model<Api>[]): Model<Api> | undefined {
-	for (const provider of Object.keys(DEFAULT_MODEL_PER_PROVIDER) as KnownProvider[]) {
-		const defaultId = DEFAULT_MODEL_PER_PROVIDER[provider];
-		const match = availableModels.find(m => m.provider === provider && m.id === defaultId);
-		if (match) return match;
-	}
-	return availableModels[0];
+export function pickDefaultAvailableModel(availableModels: Model<Api>[]): Model<Api> | undefined {
+	const firstDefault = availableModels.find(
+		model => isKnownProvider(model.provider) && DEFAULT_MODEL_PER_PROVIDER[model.provider] === model.id,
+	);
+	if (!firstDefault) return availableModels[0];
+
+	const providerPriority = buildModelProviderPriorityRank();
+	const sharedDefaultMatches = availableModels.filter(
+		model =>
+			model.id === firstDefault.id &&
+			isKnownProvider(model.provider) &&
+			DEFAULT_MODEL_PER_PROVIDER[model.provider] === model.id,
+	);
+	return [...sharedDefaultMatches].sort((a, b) => {
+		const aRank = providerPriority.get(a.provider.toLowerCase()) ?? Number.POSITIVE_INFINITY;
+		const bRank = providerPriority.get(b.provider.toLowerCase()) ?? Number.POSITIVE_INFINITY;
+		if (aRank !== bRank) return aRank - bRank;
+		return availableModels.indexOf(a) - availableModels.indexOf(b);
+	})[0];
 }
 
 export interface ScopedModel {
@@ -90,6 +109,33 @@ export function parseModelString(
  */
 export function formatModelString(model: Model<Api>): string {
 	return `${model.provider}/${model.id}`;
+}
+
+function getSingleRoutingOnly(routing: unknown): string | undefined {
+	if (!routing || typeof routing !== "object" || !("only" in routing) || !Array.isArray(routing.only)) {
+		return undefined;
+	}
+	if (routing.only.length !== 1) return undefined;
+	const upstream = routing.only[0];
+	return typeof upstream === "string" && upstream ? upstream : undefined;
+}
+
+function getSingleUpstreamRoute(model: Model<Api>): string | undefined {
+	const compat = model.compat;
+	if (!compat || typeof compat !== "object") return undefined;
+	if (modelMatchesHost(model, "vercelAIGateway") && "vercelGatewayRouting" in compat) {
+		return getSingleRoutingOnly(compat.vercelGatewayRouting);
+	}
+	if (modelMatchesHost(model, "openrouter") && "openRouterRouting" in compat) {
+		return getSingleRoutingOnly(compat.openRouterRouting);
+	}
+	return undefined;
+}
+
+export function formatModelStringWithRouting(model: Model<Api>): string {
+	const selector = formatModelString(model);
+	const upstream = getSingleUpstreamRoute(model);
+	return upstream ? `${selector}@${upstream}` : selector;
 }
 
 export function formatModelSelectorValue(selector: string, thinkingLevel: ThinkingLevel | undefined): string {
@@ -161,7 +207,7 @@ const UPSTREAM_ROUTING_SLUG = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i;
  * `@` or the suffix is not a bare provider slug, so model ids that legitimately
  * contain `@` (`claude-opus-4-8@default`, `workers-ai/@cf/...`) are never split.
  */
-function splitUpstreamRouting(pattern: string): { base: string; upstream: string } | undefined {
+export function splitUpstreamRouting(pattern: string): { base: string; upstream: string } | undefined {
 	const at = pattern.lastIndexOf("@");
 	if (at <= 0) return undefined;
 	const rest = pattern.slice(at + 1);
@@ -437,12 +483,10 @@ function matchModel(
 	context: ModelPreferenceContext,
 	options?: { modelRegistry?: CanonicalModelRegistry },
 ): Model<Api> | undefined {
-	// Explicit provider/model selectors always bypass canonical coalescing.
 	const exactRefMatch = findExactModelReferenceMatch(modelPattern, availableModels);
 	if (exactRefMatch) {
 		return exactRefMatch;
 	}
-
 	// Exact canonical ids coalesce provider variants before bare-id matching.
 	const exactCanonicalMatch = findExactCanonicalModelMatch(modelPattern, availableModels, options?.modelRegistry);
 	if (exactCanonicalMatch) {
@@ -481,6 +525,13 @@ function matchModel(
 			// The prefix is not a known provider in this candidate set, so treat the
 			// slash as part of the raw model ID and continue with generic matching.
 		} else {
+			// Let the routing fallback apply `@upstream` before fuzzy matching can consume the
+			// slug — but only for aggregator providers (OpenRouter / Vercel Gateway). Other
+			// providers have ids that legitimately end in `@` (Vertex `claude-opus-4-8@default`),
+			// and the fallback never routes them, so they must keep fuzzy matching.
+			if (splitUpstreamRouting(modelId) && providerModels.some(supportsUpstreamRouting)) {
+				return undefined;
+			}
 			const scored = providerModels
 				.map(model => ({ model, match: fuzzyMatch(modelId, model.id) }))
 				.filter(entry => entry.match.matches);

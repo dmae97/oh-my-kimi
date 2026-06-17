@@ -2,6 +2,41 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `LITELLM_BASE_URL` as the LiteLLM provider discovery base URL fallback, with discovery caches scoped by the resolved proxy URL and explicit provider `baseUrl` config kept at higher precedence. ([#2726](https://github.com/can1357/oh-my-pi/issues/2726))
+### Changed
+
+- Updated the default Gemini CLI user-agent version fallback to 0.46.0.
+### Fixed
+
+- Routed google-antigravity default baseUrl to the stable primary daily endpoint in the catalog generator and all fallback snapshots, resolving connection drops on heavy queries.
+
+## [16.0.4] - 2026-06-17
+
+### Fixed
+
+- Fixed GLM-5.2 catalog thinking metadata for Zhipu/BigModel so the top effort is exposed as `xhigh` and maps to provider-native `max`. ([#2833](https://github.com/can1357/oh-my-pi/issues/2833))
+
+## [16.0.2] - 2026-06-16
+
+### Fixed
+
+- Fixed Kimi output caps for Umans AI Coding Plan and Venice so discovery metadata cannot use context-sized token ceilings as request caps.
+- Marked Umans Anthropic-compatible models as client-tool escaped so cached and bundled metadata do not expose `web_search` as a provider server tool.
+
+## [16.0.1] - 2026-06-15
+
+### Added
+
+- Added the Umans AI Coding Plan provider catalog with Anthropic-compatible model metadata and dynamic discovery ([#2636](https://github.com/can1357/oh-my-pi/pull/2636) by [@oldschoola](https://github.com/oldschoola)).
+
+## [16.0.0] - 2026-06-15
+
+### Breaking Changes
+
+- Renamed the catalog-owned tool syntax API from `ToolCallSyntax`/`FALLBACK_TOOL_SYNTAX`/`preferredToolSyntax` to `Dialect`/`FALLBACK_DIALECT`/`preferredDialect`.
+
 ## [15.13.3] - 2026-06-15
 
 ### Added

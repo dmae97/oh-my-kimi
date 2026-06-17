@@ -6,7 +6,7 @@ Find out which model you emotionally abuse the most with `omp stats`
 Try task isolation to create CoW worktrees
 Need a cheap nested model call? Use `completion(x...)`. Have a big batch of tasks? Ask clanker to use it!
 Spaghetti code? Try complaining with /omfg
-Did you know? Each kitty/tmux/cmux split keeps its own session — `omp -c` resumes the right one
+Did you know? Each kitty/tmux/cmux/zellij/wezterm split keeps its own session — `omp -c` resumes the right one
 Drop the word `ultrathink` in your message for harder multi-step reasoning — watch it glow rainbow as you type
 Say `orchestrate` in your message to drive a multi-phase task with parallel subagents — watch it glow as you type
 Say `workflowz` in your message to drive the task with parallel subagents in eval — watch it glow as you type
@@ -20,3 +20,4 @@ Press ctrl+r to search your prompt history and reuse a past message
 Pair up live: `/collab` shares your session through an end-to-end encrypted relay link — a teammate runs `/join <link>` to watch tool calls stream and prompt the agent from their own omp
 Press ← ← to drill into a running or finished agent and inspect its tool calls and transcript
 Hit a Codex rate limit? `/usage reset` spends a saved reset credit to immediately restore your quota
+No native tool_calling? Inference provider botches parsing them? `PI_DIALECT=glm|kimi|anthropic…` rolls it locally for them!

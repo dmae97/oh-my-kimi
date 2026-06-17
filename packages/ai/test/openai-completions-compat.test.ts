@@ -78,6 +78,26 @@ function baseContext(): Context {
 	};
 }
 
+function zaiGlm52Model(): Model<"openai-completions"> {
+	return buildModel({
+		id: "glm-5.2",
+		name: "GLM-5.2",
+		api: "openai-completions",
+		provider: "zhipu-coding-plan",
+		baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+		reasoning: true,
+		compat: {
+			thinkingFormat: "zai",
+			reasoningContentField: "reasoning_content",
+			supportsDeveloperRole: false,
+		},
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 1_000_000,
+		maxTokens: 131_072,
+	} satisfies ModelSpec<"openai-completions">);
+}
+
 async function captureOpenAICompletionsPayload(
 	model: Model<"openai-completions">,
 	context: Context = baseContext(),
@@ -565,6 +585,56 @@ describe("openai-completions compatibility", () => {
 		expect(getNestedBoolean(chatTemplateArgs, "enable_thinking")).toBe(true);
 	});
 
+	it("maps GLM-5.2 xhigh to Z.AI max and enables tool streaming", async () => {
+		const model = zaiGlm52Model();
+		const readTool: Tool = {
+			name: "read",
+			description: "Read a file",
+			parameters: {
+				type: "object",
+				properties: { path: { type: "string" } },
+				required: ["path"],
+			},
+		};
+
+		const { promise, resolve } = Promise.withResolvers<unknown>();
+		streamOpenAICompletions(
+			model,
+			{ ...baseContext(), tools: [readTool] },
+			{
+				apiKey: "test-key",
+				reasoning: "xhigh",
+				signal: createAbortedSignal(),
+				onPayload: payload => resolve(payload),
+				maxTokens: 65_536,
+			},
+		);
+		const payload = await promise;
+		const thinking = getNestedObject(payload, "thinking");
+
+		expect(Reflect.get(thinking ?? {}, "type")).toBe("enabled");
+		expect(Reflect.get(toObject(payload) ?? {}, "reasoning_effort")).toBe("max");
+		expect(Reflect.get(toObject(payload) ?? {}, "tool_stream")).toBe(true);
+		expect(Reflect.get(toObject(payload) ?? {}, "max_tokens")).toBe(65_536);
+	});
+
+	it("maps GLM-5.2 minimal reasoning to disabled Z.AI thinking", async () => {
+		const model = zaiGlm52Model();
+
+		const { promise, resolve } = Promise.withResolvers<unknown>();
+		streamOpenAICompletions(model, baseContext(), {
+			apiKey: "test-key",
+			reasoning: "minimal",
+			signal: createAbortedSignal(),
+			onPayload: payload => resolve(payload),
+		});
+		const payload = await promise;
+		const thinking = getNestedObject(payload, "thinking");
+
+		expect(Reflect.get(thinking ?? {}, "type")).toBe("disabled");
+		expect(Reflect.get(toObject(payload) ?? {}, "reasoning_effort")).toBeUndefined();
+	});
+
 	it("treats finish_reason end as stop", async () => {
 		const model: Model<"openai-completions"> = buildModel({
 			...gpt4oMiniSpec,
@@ -594,6 +664,84 @@ describe("openai-completions compatibility", () => {
 		}).result();
 		expect(result.stopReason).toBe("stop");
 		expect(result.content[0]).toMatchObject({ type: "text", text: "done" });
+	});
+	it("surfaces empty Ollama length completions as context-window errors", async () => {
+		const model: Model<"openai-completions"> = buildModel({
+			...gpt4oMiniSpec,
+			api: "openai-completions",
+			provider: "ollama" as Model["provider"],
+			id: "local-12b",
+			baseUrl: "http://ollama.invalid/v1",
+		} as ModelSpec<"openai-completions">);
+		const fetchMock = createMockFetch([
+			{
+				id: "chatcmpl-empty-length",
+				object: "chat.completion.chunk",
+				created: 0,
+				model: model.id,
+				choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: "length" }],
+				usage: {
+					prompt_tokens: 8191,
+					completion_tokens: 1,
+					total_tokens: 8192,
+				},
+			},
+			"[DONE]",
+		]);
+
+		const stream = streamOpenAICompletions(model, baseContext(), {
+			apiKey: "test-key",
+			fetch: fetchMock,
+		});
+		const resultPromise = stream.result();
+		const eventTypes: string[] = [];
+		for await (const event of stream) {
+			eventTypes.push(event.type);
+		}
+		const result = await resultPromise;
+
+		expect(result.stopReason).toBe("error");
+		expect(eventTypes).toContain("error");
+		expect(result.errorMessage).toBe(
+			"Model returned no content: prompt filled the context window; raise Ollama num_ctx or shorten the prompt.",
+		);
+		expect(result.content).toEqual([]);
+		expect(result.usage.input).toBe(8191);
+		expect(result.usage.output).toBe(1);
+	});
+	it("preserves empty non-Ollama length completions for recovery", async () => {
+		const model: Model<"openai-completions"> = buildModel({
+			...gpt4oMiniSpec,
+			api: "openai-completions",
+			provider: "custom" as Model["provider"],
+			baseUrl: "https://gateway.example/v1",
+		} as ModelSpec<"openai-completions">);
+		const fetchMock = createMockFetch([
+			{
+				id: "chatcmpl-empty-length",
+				object: "chat.completion.chunk",
+				created: 0,
+				model: model.id,
+				choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: "length" }],
+			},
+			"[DONE]",
+		]);
+
+		const stream = streamOpenAICompletions(model, baseContext(), {
+			apiKey: "test-key",
+			fetch: fetchMock,
+		});
+		const resultPromise = stream.result();
+		const eventTypes: string[] = [];
+		for await (const event of stream) {
+			eventTypes.push(event.type);
+		}
+		const result = await resultPromise;
+
+		expect(result.stopReason).toBe("length");
+		expect(eventTypes).toContain("done");
+		expect(result.errorMessage).toBeUndefined();
+		expect(result.content).toEqual([]);
 	});
 
 	it("injects compat.extraBody into OpenAI payload", async () => {

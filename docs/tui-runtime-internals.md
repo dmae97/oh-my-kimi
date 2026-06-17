@@ -39,6 +39,7 @@ Boundary rule: the TUI engine is message-agnostic. It only knows `Component.rend
 - `btwContainer`
 - `omfgContainer`
 - `errorBannerContainer`
+- `modelCycleContainer` (ctrl+p model-role cycle chip track)
 - `statusLine`
 - `hookWidgetContainerAbove`
 - `editorContainer` (holds `CustomEditor`)
@@ -142,6 +143,7 @@ Effects:
 
 - A resize is an explicit user gesture: outside multiplexers the engine erases and replays (`ED3` + full paint) so history rewraps at the new geometry; the commit ledger restarts from the replayed frame.
 - Inside terminal multiplexers, resize repaints the visible window in place after a settle debounce (issue #2088); pane history keeps its old wrap, like any shell output, because pane scrollback cannot be erased safely.
+- Terminals that re-report their size when the alternate screen buffer is toggled (Warp reports a height one row different for the alt buffer) take the in-place path too. The non-multiplexer fast path borrows the alternate screen for drag frames, so on these terminals each alt enter/leave emits a fresh resize event, which re-enters the fast path — a self-sustaining loop that floods ED3 full repaints with stable geometry. `resizeRepaintsInPlace()` (covering multiplexers and these terminals; overridable via `PI_TUI_RESIZE_IN_PLACE`) routes them through the in-place repaint, which never touches the alt buffer.
 - Overlay visibility can depend on terminal dimensions (`OverlayOptions.visible`); focus is corrected when overlays become non-visible after resize.
 
 ## Streaming and incremental UI updates
@@ -167,8 +169,8 @@ Status lane ownership:
 Loader behavior:
 
 - `Loader` advances its spinner every 80ms (animated message colorizers redraw at ~30fps) and requests a component-scoped render each frame (`requestComponentRender`), so idle spinner ticks repaint without re-walking the transcript.
-- Escape handlers are temporarily overridden during auto-compaction and auto-retry to cancel those operations.
-- On end/cancel paths, controllers restore prior escape handlers and stop/clear loader components.
+- Escape cancels an in-progress auto-compaction, handoff generation, or auto-retry: the editor's single `onEscape` handler dispatches on live session state (`isCompacting`/`isGeneratingHandoff`/`isRetrying`) and calls the matching abort method, rather than swapping the handler.
+- On end/cancel paths, controllers stop/clear the loader components.
 
 ## Mode transitions and backgrounding
 
@@ -199,7 +201,7 @@ Primary cancellation inputs:
 
 - `Escape` during active stream loader: restores queued messages to editor and aborts agent.
 - `Escape` during bash/python execution: aborts running command.
-- `Escape` during auto-compaction/retry: invokes dedicated abort methods through temporary escape handlers.
+- `Escape` during auto-compaction, handoff generation, or auto-retry: the editor's `onEscape` dispatches on live session state (`isCompacting`/`isGeneratingHandoff`/`isRetrying`) and calls the matching abort method (`abortCompaction`/`abortHandoff`/`abortRetry`).
 - `Ctrl+C` single press: clear editor; double press within 500ms: shutdown.
 
 Cancellation is state-conditional; same key can mean abort, mode-exit, selector trigger, or no-op depending on runtime state.

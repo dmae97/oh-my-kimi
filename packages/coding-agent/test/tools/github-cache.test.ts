@@ -19,6 +19,7 @@ import {
 	putCached,
 	resetForTests as resetCacheForTests,
 } from "@oh-my-pi/pi-coding-agent/tools/github-cache";
+import { ToolAbortError, throwIfAborted } from "@oh-my-pi/pi-coding-agent/tools/tool-errors";
 import * as git from "@oh-my-pi/pi-coding-agent/utils/git";
 
 const TEST_REPO = "owner/example";
@@ -299,7 +300,7 @@ describe("getOrFetchView (TTL semantics)", () => {
 		expect(fetchFresh).not.toHaveBeenCalled();
 	});
 
-	it("returns cached row AND schedules a background refresh past soft TTL", async () => {
+	it("refreshes issue rows synchronously past soft TTL", async () => {
 		const settings = Settings.isolated({
 			"github.cache.softTtlSec": 60,
 			"github.cache.hardTtlSec": 86400,
@@ -326,18 +327,128 @@ describe("getOrFetchView (TTL semantics)", () => {
 			fetchFresh,
 			settings,
 		});
-		expect(result.status).toBe("stale");
-		expect(result.rendered).toBe("old");
-
-		// Background refresh runs on a microtask; flush + give the write a tick
-		// to land before asserting.
-		await Promise.resolve();
-		// Wait for the chained .then() (writes) to settle.
-		await new Promise<void>(resolve => setTimeout(resolve, 5));
-
+		expect(result.status).toBe("refreshed");
+		expect(result.rendered).toBe("refreshed");
 		expect(fetchFresh).toHaveBeenCalledTimes(1);
+
 		const updated = getCached<{ refreshed: boolean }>(TEST_REPO, "issue", 50, true);
 		expect(updated?.rendered).toBe("refreshed");
+		expect(updated?.payload.refreshed).toBe(true);
+	});
+
+	it("falls back to stale issue rows when a soft-expired synchronous refresh fails", async () => {
+		const settings = Settings.isolated({
+			"github.cache.softTtlSec": 60,
+			"github.cache.hardTtlSec": 86400,
+		});
+		const fetchFresh = vi.fn(
+			async (): Promise<{
+				rendered: string;
+				sourceUrl: undefined;
+				payload: { number: number; refreshed: boolean };
+			}> => {
+				throw new Error("offline");
+			},
+		);
+		putCached({
+			repo: TEST_REPO,
+			kind: "issue",
+			number: 51,
+			includeComments: true,
+			payload: { number: 51, refreshed: false },
+			rendered: "old",
+			fetchedAt: Date.now() - 5 * 60_000,
+		});
+
+		const result = await getOrFetchView({
+			repo: TEST_REPO,
+			kind: "issue",
+			number: 51,
+			includeComments: true,
+			fetchFresh,
+			settings,
+		});
+
+		expect(result.status).toBe("stale");
+		expect(result.rendered).toBe("old");
+		expect(fetchFresh).toHaveBeenCalledTimes(1);
+	});
+	it("propagates aborts during a soft-expired synchronous refresh", async () => {
+		const settings = Settings.isolated({
+			"github.cache.softTtlSec": 60,
+			"github.cache.hardTtlSec": 86400,
+		});
+		const controller = new AbortController();
+		controller.abort();
+		const fetchFresh = vi.fn(async () => {
+			throwIfAborted(controller.signal);
+			return {
+				rendered: "never",
+				sourceUrl: undefined,
+				payload: { number: 53 },
+			};
+		});
+		putCached({
+			repo: TEST_REPO,
+			kind: "issue",
+			number: 53,
+			includeComments: true,
+			payload: { number: 53 },
+			rendered: "stale-after-abort",
+			fetchedAt: Date.now() - 5 * 60_000,
+		});
+
+		await expect(
+			getOrFetchView({
+				repo: TEST_REPO,
+				kind: "issue",
+				number: 53,
+				includeComments: true,
+				fetchFresh,
+				settings,
+			}),
+		).rejects.toThrow(ToolAbortError);
+		expect(fetchFresh).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps PR diff rows stale-first past soft TTL", async () => {
+		const settings = Settings.isolated({
+			"github.cache.softTtlSec": 60,
+			"github.cache.hardTtlSec": 86400,
+		});
+		const fetchFresh = vi.fn(async () => ({
+			rendered: "refreshed-diff",
+			sourceUrl: undefined,
+			payload: { files: [], refreshed: true },
+		}));
+		putCached({
+			repo: TEST_REPO,
+			kind: "pr-diff",
+			number: 52,
+			includeComments: false,
+			payload: { files: [], refreshed: false },
+			rendered: "old-diff",
+			fetchedAt: Date.now() - 5 * 60_000,
+		});
+
+		const result = await getOrFetchView({
+			repo: TEST_REPO,
+			kind: "pr-diff",
+			number: 52,
+			includeComments: false,
+			fetchFresh,
+			settings,
+		});
+
+		expect(result.status).toBe("stale");
+		expect(result.rendered).toBe("old-diff");
+
+		await Promise.resolve();
+		await Bun.sleep(5);
+
+		expect(fetchFresh).toHaveBeenCalledTimes(1);
+		const updated = getCached<{ refreshed: boolean }>(TEST_REPO, "pr-diff", 52, false);
+		expect(updated?.rendered).toBe("refreshed-diff");
 		expect(updated?.payload.refreshed).toBe(true);
 	});
 

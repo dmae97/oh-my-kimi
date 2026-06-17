@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import { resetForTests as resetCacheForTests } from "@oh-my-pi/pi-coding-agent/tools/github-cache";
 import * as git from "@oh-my-pi/pi-coding-agent/utils/git";
@@ -171,6 +172,27 @@ describe("issue:// protocol handler", () => {
 		expect(second.notes?.[0]).toMatch(/^Cached:/);
 		// Same key, soft TTL hit — no additional gh invocation.
 		expect(spy).toHaveBeenCalledTimes(1);
+	});
+
+	it("marks soft-expired issue fallback content as stale when live refresh fails", async () => {
+		const spy = vi.spyOn(git.github, "json").mockResolvedValue(issuePayload(43, "cached body") as never);
+		const settings = Settings.isolated({
+			"github.cache.softTtlSec": 0,
+			"github.cache.hardTtlSec": 86400,
+		});
+
+		const router = InternalUrlRouter.instance();
+		await router.resolve("issue://owner/example/43");
+		await Bun.sleep(1);
+		spy.mockImplementation(async () => {
+			throw new Error("offline");
+		});
+
+		const resource = await router.resolve("issue://owner/example/43", { settings });
+		expect(resource.content.startsWith("> WARNING: Live GitHub refresh failed")).toBe(true);
+		expect(resource.notes?.[0]).toMatch(/^WARNING: showing cached content/);
+		expect(resource.content).toContain("cached body");
+		expect(spy).toHaveBeenCalledTimes(2);
 	});
 
 	it("retries issue://owner/repo/<n> without stateReason when gh does not support it", async () => {

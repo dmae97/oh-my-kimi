@@ -1,39 +1,19 @@
 /**
- * Shared primitives for the per-model breakdown tables (ModelsTable,
- * BehaviorModelsTable). Each table still owns its column definitions, sort
- * order, sidebar contents and chart type — this module owns the surface
- * chrome, expand-row plumbing, theme palette, and the mini-sparkline plus
+ * Shared primitives for the per-model breakdown tables. Each table owns its
+ * column definitions, sort order, and chart type — this module owns the
+ * surface chrome, expand-row plumbing, theme palette, the mini-sparkline, and
  * the shared plugin/scale config consumed by multi-line detail charts.
  */
 
 import { format } from "date-fns";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { Line } from "react-chartjs-2";
+import type { ChartTheme } from "./chart-shared";
 
-export { MODEL_COLORS } from "./chart-shared";
-
-export const TABLE_CHART_THEMES = {
-	dark: {
-		legendLabel: "#cbd5e1",
-		tooltipBackground: "#16161e",
-		tooltipTitle: "#f8fafc",
-		tooltipBody: "#94a3b8",
-		tooltipBorder: "rgba(255, 255, 255, 0.1)",
-		grid: "rgba(255, 255, 255, 0.06)",
-		tick: "#94a3b8",
-	},
-	light: {
-		legendLabel: "#334155",
-		tooltipBackground: "#ffffff",
-		tooltipTitle: "#0f172a",
-		tooltipBody: "#334155",
-		tooltipBorder: "rgba(15, 23, 42, 0.18)",
-		grid: "rgba(15, 23, 42, 0.08)",
-		tick: "#475569",
-	},
-} as const;
-
-export type TableChartTheme = (typeof TABLE_CHART_THEMES)[keyof typeof TABLE_CHART_THEMES];
+// Detail-table charts share the exact OMP chart chrome as the timeline charts;
+// re-export rather than duplicate so the palette has a single source of truth.
+export { CHART_THEMES as TABLE_CHART_THEMES, MODEL_COLORS } from "./chart-shared";
+export type TableChartTheme = ChartTheme;
 
 /** Style defaults for one line in a non-stacked detail chart. */
 export function lineSeriesStyle(color: string) {
@@ -167,7 +147,7 @@ export function ModelTableShell({
 	children: React.ReactNode;
 }) {
 	return (
-		<div className="surface overflow-hidden">
+		<div className="stats-panel overflow-hidden">
 			<div className="px-5 py-4 border-b border-[var(--border-subtle)]">
 				<h3 className="text-sm font-semibold text-[var(--text-primary)]">{title}</h3>
 				{subtitle ? <p className="text-xs text-[var(--text-muted)] mt-1">{subtitle}</p> : null}

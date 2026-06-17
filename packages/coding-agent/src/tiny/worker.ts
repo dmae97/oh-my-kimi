@@ -31,7 +31,8 @@ const TITLE_PREFILL = "<title>";
 const TITLE_CLOSE = "</title>";
 const TITLE_MAX_NEW_TOKENS = 20;
 const STOP_DECODE_WINDOW_TOKENS = 32;
-const MEMORY_COMPLETION_MAX_NEW_TOKENS = 256;
+const MEMORY_COMPLETION_DEFAULT_MAX_NEW_TOKENS = 256;
+const COMPLETION_MAX_NEW_TOKENS = 1024;
 const TINY_TITLE_SYSTEM_PROMPT = prompt.render(tinyTitleSystemPrompt);
 const TRANSFORMERS_PACKAGE = "@huggingface/transformers";
 const COMPILED_TRANSFORMERS_VERSION = process.env.PI_TINY_TRANSFORMERS_VERSION;
@@ -426,8 +427,8 @@ async function generateCompletion(
 ): Promise<string | null> {
 	const generator = await loadPipeline(modelKey, transport, requestId);
 	const text = buildCompletionPrompt(generator, promptText);
-	const requested = maxTokens ?? MEMORY_COMPLETION_MAX_NEW_TOKENS;
-	const maxNewTokens = Math.min(Math.max(1, requested), MEMORY_COMPLETION_MAX_NEW_TOKENS);
+	const requested = maxTokens ?? MEMORY_COMPLETION_DEFAULT_MAX_NEW_TOKENS;
+	const maxNewTokens = Math.min(Math.max(1, requested), COMPLETION_MAX_NEW_TOKENS);
 	const output = (await generator(text, {
 		max_new_tokens: maxNewTokens,
 		do_sample: false,

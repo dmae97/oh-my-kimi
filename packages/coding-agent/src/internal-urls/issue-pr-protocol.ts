@@ -28,7 +28,7 @@ import {
 	parsePositiveDecimalInt,
 	resolveDefaultRepoMemoized,
 } from "../tools/gh";
-import { formatFreshnessNote } from "../tools/github-cache";
+import { type CacheStatus, formatFreshnessNote } from "../tools/github-cache";
 import * as git from "../utils/git";
 import type { InternalResource, InternalUrl, ProtocolHandler, ResolveContext } from "./types";
 
@@ -355,7 +355,7 @@ interface BuildSingleArgs {
 	scheme: Scheme;
 	parsed: ParsedSingle;
 	rendered: string;
-	status: "miss" | "fresh" | "stale" | "disabled";
+	status: CacheStatus;
 	fetchedAt: number;
 	/** Resolved repo (post short-form expansion) — used for the PR-only diff hint. */
 	repo?: string;
@@ -377,11 +377,15 @@ function buildSingleResource({
 		const diffUrl = repoSegment ? `pr://${repoSegment}/${parsed.number}/diff` : `pr://${parsed.number}/diff`;
 		notes.push(`Diff: ${diffUrl}`);
 	}
+	const content =
+		status === "stale"
+			? `> WARNING: Live GitHub refresh failed; this ${scheme} content is cached and may be stale.\n\n${rendered}`
+			: rendered;
 	return {
 		url: url.href,
-		content: rendered,
+		content,
 		contentType: "text/markdown",
-		size: Buffer.byteLength(rendered, "utf-8"),
+		size: Buffer.byteLength(content, "utf-8"),
 		notes,
 	};
 }

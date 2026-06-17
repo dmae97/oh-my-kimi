@@ -29,6 +29,9 @@ export * from "./keybindings";
 export * from "./keys";
 // Kitty graphics: Unicode placeholders
 export * from "./kitty-graphics";
+// LaTeX → Unicode/ANSI math rendering
+export * from "./latex-block";
+export * from "./latex-to-unicode";
 // SGR mouse report parsing
 export * from "./mouse";
 // Mermaid diagram support

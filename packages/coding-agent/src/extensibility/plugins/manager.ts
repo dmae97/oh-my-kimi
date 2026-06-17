@@ -15,6 +15,7 @@ import { type GitSource, parseGitUrl } from "./git-url";
 import { installLegacyPiSpecifierShim, loadLegacyPiModule } from "./legacy-pi-compat";
 import { resolvePluginManifestEntries } from "./loader";
 import { extractPackageName, parsePluginSpec } from "./parser";
+import { normalizePluginRuntimeConfig } from "./runtime-config";
 import type {
 	DoctorCheck,
 	DoctorOptions,
@@ -124,11 +125,11 @@ export class PluginManager {
 	async #loadRuntimeConfig(): Promise<PluginRuntimeConfig> {
 		const lockPath = getPluginsLockfile();
 		try {
-			return await Bun.file(lockPath).json();
+			return normalizePluginRuntimeConfig(await Bun.file(lockPath).json());
 		} catch (err) {
-			if (isEnoent(err)) return { plugins: {}, settings: {} };
+			if (isEnoent(err)) return normalizePluginRuntimeConfig({});
 			logger.warn("Failed to load plugin runtime config", { path: lockPath, error: String(err) });
-			return { plugins: {}, settings: {} };
+			return normalizePluginRuntimeConfig({});
 		}
 	}
 
@@ -202,6 +203,17 @@ export class PluginManager {
 			if (isEnoent(err)) return {};
 			throw err;
 		}
+	}
+
+	#collectInstalledNames(deps: Record<string, string>, config: PluginRuntimeConfig): Set<string> {
+		const installedNames = new Set<string>();
+		for (const name of Object.keys(deps)) {
+			installedNames.add(name);
+		}
+		for (const name of Object.keys(config.plugins)) {
+			installedNames.add(name);
+		}
+		return installedNames;
 	}
 
 	async #snapshotInstalledPackage(actualName: string | undefined): Promise<PluginPackageSnapshot | null> {
@@ -489,21 +501,22 @@ export class PluginManager {
 	 */
 	async list(): Promise<InstalledPlugin[]> {
 		const pkgJsonPath = getPluginsPackageJson();
-		let pkg: { dependencies?: Record<string, string> };
+		let deps: Record<string, string> = {};
 		try {
-			pkg = await Bun.file(pkgJsonPath).json();
+			const pkg: { dependencies?: Record<string, string> } = await Bun.file(pkgJsonPath).json();
+			deps = pkg.dependencies ?? {};
 		} catch (err) {
-			if (isEnoent(err)) return [];
-			throw err;
+			if (!isEnoent(err)) throw err;
 		}
 
-		const deps = pkg.dependencies || {};
 		const projectOverrides = await this.#loadProjectOverrides();
 		const config = await this.#ensureConfigLoaded();
 		const plugins: InstalledPlugin[] = [];
+		const installedNames = this.#collectInstalledNames(deps, config);
 
-		for (const [name] of Object.entries(deps)) {
-			const pluginPkgPath = path.join(getPluginsNodeModules(), name, "package.json");
+		for (const name of installedNames) {
+			const pluginPath = path.join(getPluginsNodeModules(), name);
+			const pluginPkgPath = path.join(pluginPath, "package.json");
 			let pluginPkg: { version: string; omp?: PluginManifest; pi?: PluginManifest };
 			try {
 				pluginPkg = await Bun.file(pluginPkgPath).json();
@@ -520,14 +533,13 @@ export class PluginManager {
 				enabled: true,
 			};
 
-			// Apply project overrides
 			const isDisabledInProject = projectOverrides.disabled?.includes(name) ?? false;
 			const projectFeatures = projectOverrides.features?.[name];
 
 			plugins.push({
 				name,
 				version: pluginPkg.version,
-				path: path.join(getPluginsNodeModules(), name),
+				path: pluginPath,
 				manifest,
 				enabledFeatures: projectFeatures ?? runtimeState.enabledFeatures,
 				enabled: runtimeState.enabled && !isDisabledInProject,
@@ -743,15 +755,14 @@ export class PluginManager {
 			message: hasNodeModules ? "Found" : "Missing (run npm install in plugins dir)",
 		});
 
-		if (!hasPkgJson) {
-			return checks;
-		}
 		const deps = pkg.dependencies || {};
 		const config = await this.#ensureConfigLoaded();
+		const installedNames = this.#collectInstalledNames(deps, config);
 
-		for (const [name] of Object.entries(deps)) {
+		for (const name of installedNames) {
 			const pluginPath = path.join(nodeModulesPath, name);
 			const pluginPkgPath = path.join(pluginPath, "package.json");
+			const fromDependencies = name in deps;
 
 			let pluginPkg: { version: string; description?: string; omp?: PluginManifest; pi?: PluginManifest };
 			try {
@@ -759,13 +770,23 @@ export class PluginManager {
 			} catch (err) {
 				if (isEnoent(err)) {
 					if (!fs.existsSync(pluginPath)) {
-						const fixed = options.fix ? await this.#fixMissingPlugin() : false;
-						checks.push({
-							name: `plugin:${name}`,
-							status: "error",
-							message: "Missing from node_modules",
-							fixed,
-						});
+						if (fromDependencies) {
+							const fixed = options.fix ? await this.#fixMissingPlugin() : false;
+							checks.push({
+								name: `plugin:${name}`,
+								status: "error",
+								message: "Missing from node_modules",
+								fixed,
+							});
+						} else {
+							const fixed = options.fix ? await this.#removeOrphanedConfig(name) : false;
+							checks.push({
+								name: `orphan:${name}`,
+								status: "warning",
+								message: "Plugin in config but not installed",
+								fixed,
+							});
+						}
 					} else {
 						checks.push({
 							name: `plugin:${name}`,
@@ -840,19 +861,6 @@ export class PluginManager {
 						});
 					}
 				}
-			}
-		}
-
-		// Check for orphaned runtime config entries
-		for (const name of Object.keys(config.plugins)) {
-			if (!(name in deps)) {
-				const fixed = options.fix ? await this.#removeOrphanedConfig(name) : false;
-				checks.push({
-					name: `orphan:${name}`,
-					status: "warning",
-					message: "Plugin in config but not installed",
-					fixed,
-				});
 			}
 		}
 

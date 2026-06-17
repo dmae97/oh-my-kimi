@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -93,6 +96,7 @@ function createSession(
 		isolationMode?: "none" | "auto";
 		parentEnableLsp?: boolean;
 		planMode?: PlanModeState;
+		sessionFile?: string | null;
 		taskEnableLsp?: boolean;
 	} = {},
 ): ToolSession {
@@ -112,7 +116,7 @@ function createSession(
 			"task.isolation.mode": options.isolationMode ?? "none",
 			...(options.taskEnableLsp !== undefined ? { "task.enableLsp": options.taskEnableLsp } : {}),
 		}),
-		getSessionFile: () => null,
+		getSessionFile: () => options.sessionFile ?? null,
 		getSessionSpawns: () => "*",
 		modelRegistry,
 		getPlanModeState: () => options.planMode,
@@ -236,6 +240,30 @@ describe("subagent LSP availability", () => {
 
 		expect(getOptions()?.cwd).toBe("/tmp/isolated-subagent");
 		expect(getOptions()?.enableLsp).toBe(false);
+	});
+
+	it("opens isolated persisted subagent sessions with the worktree cwd", async () => {
+		mockAgents({
+			name: "task",
+			description: "Task agent",
+			systemPrompt: "Use normal tools.",
+			source: "bundled",
+			tools: ["write"],
+		});
+		mockIsolation();
+		const { getOptions } = mockCreateAgentSession();
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-isolated-session-cwd-"));
+		try {
+			const parentSessionFile = path.join(tempDir, "parent.jsonl");
+			const tool = await TaskTool.create(createSession({ isolationMode: "auto", sessionFile: parentSessionFile }));
+			await tool.execute("tool-call", { ...TEST_TASK, isolated: true });
+
+			const sessionManager = getOptions()?.sessionManager as { getCwd?: () => string } | undefined;
+			expect(getOptions()?.cwd).toBe("/tmp/isolated-subagent");
+			expect(sessionManager?.getCwd?.()).toBe("/tmp/isolated-subagent");
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
 	});
 
 	it("applies plan-mode subagent tools, preserves read-only agent tools, and honors task.enableLsp", async () => {

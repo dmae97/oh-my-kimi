@@ -372,6 +372,7 @@ export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
 interface JobRenderArgs {
 	poll?: string[];
 	cancel?: string[];
+	list?: boolean;
 }
 
 const COLLAPSED_LIST_LIMIT = PREVIEW_LIMITS.COLLAPSED_ITEMS;
@@ -433,6 +434,7 @@ function flattenStructuredPreview(text: string): string {
 }
 
 function describeTarget(args: JobRenderArgs | undefined): string {
+	if (args?.list) return "background jobs";
 	const poll = args?.poll ?? [];
 	const cancel = args?.cancel ?? [];
 	const parts: string[] = [];
@@ -460,12 +462,23 @@ export const jobToolRenderer = {
 		uiTheme: Theme,
 		args?: JobRenderArgs,
 	): Component {
-		const jobs = result.details?.jobs ?? [];
+		let jobs = result.details?.jobs ?? [];
 
 		if (jobs.length === 0) {
 			const fallback = result.content?.find(c => c.type === "text")?.text || "No jobs to process";
 			const header = renderStatusLine({ icon: "warning", title: describeTarget(args) || "Job" }, uiTheme);
 			return new Text([header, formatEmptyMessage(fallback, uiTheme)].join("\n"), 0, 0);
+		}
+
+		const isPollCall = args
+			? !args.list && (!args.cancel || args.cancel.length === 0 || args.poll !== undefined)
+			: true;
+
+		if (!options.isPartial && isPollCall) {
+			jobs = jobs.filter(job => job.status !== "running");
+			if (jobs.length === 0) {
+				return new Text("", 0, 0);
+			}
 		}
 
 		const counts = { completed: 0, failed: 0, cancelled: 0, running: 0 };

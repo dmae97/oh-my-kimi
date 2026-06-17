@@ -292,6 +292,36 @@ describe("openai-codex streaming", () => {
 		]);
 	});
 
+	it("sends an async onPayload replacement body", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+		const token = createCodexTestToken();
+		const context = createCodexTestContext();
+		const model = { ...createCodexTestModel("https://chatgpt.com/backend-api"), preferWebsockets: false };
+		let capturedBody: Record<string, unknown> | undefined;
+		const fetchMock = vi.fn(async (_input: string | URL, init?: RequestInit) => {
+			capturedBody = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
+			return new Response(createCompletedCodexSse("Hello"), {
+				status: 200,
+				headers: { "content-type": "text/event-stream" },
+			});
+		});
+
+		const result = await streamOpenAICodexResponses(model, context, {
+			apiKey: token,
+			fetch: fetchMock as unknown as typeof fetch,
+			onPayload: async payload => ({
+				...(payload as Record<string, unknown>),
+				input: [{ role: "user", content: [{ type: "input_text", text: "replacement" }] }],
+				prompt_cache_key: "replacement-cache-key",
+			}),
+		}).result();
+
+		expect(result.stopReason).toBe("stop");
+		expect(capturedBody?.input).toEqual([{ role: "user", content: [{ type: "input_text", text: "replacement" }] }]);
+		expect(capturedBody?.prompt_cache_key).toBe("replacement-cache-key");
+	});
+
 	it("maps end_turn=false on the terminal event to a pause_turn stop", async () => {
 		const tempDir = TempDir.createSync("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
@@ -2179,6 +2209,123 @@ describe("openai-codex streaming", () => {
 			lastDeltaInputItems: 1,
 			lastPreviousResponseId: "resp_1",
 		});
+	});
+
+	it("applies onPayload to the final chained websocket frame", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-ws-payload-hook-");
+		setAgentDir(tempDir.path());
+		const token = createCodexTestToken();
+		const sentRequests: Array<Record<string, unknown>> = [];
+		const fetchMock = vi.fn(async () => {
+			throw new Error("SSE fallback should not be called");
+		});
+
+		class HookWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				this.scheduleOpen();
+			}
+
+			send(data: string): void {
+				sentRequests.push(JSON.parse(data) as Record<string, unknown>);
+				const responseIndex = sentRequests.length;
+				this.emitCodexResponse({
+					messageId: `msg_${responseIndex}`,
+					responseId: `resp_${responseIndex}`,
+					text: responseIndex === 1 ? "First answer" : "Second answer",
+					terminalType: "response.completed",
+					includeCreated: true,
+				});
+			}
+		}
+
+		global.WebSocket = HookWebSocket as unknown as typeof WebSocket;
+		const model: Model<"openai-codex-responses"> = buildModel({
+			id: "gpt-5.3-codex-spark",
+			name: "GPT-5.3 Codex Spark",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			preferWebsockets: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128000,
+			maxTokens: 128000,
+		});
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const firstContext: Context = {
+			systemPrompt: ["You are a helpful assistant."],
+			messages: [{ role: "user", content: "First question", timestamp: Date.now() }],
+		};
+		const firstResponse = await streamOpenAICodexResponses(model, firstContext, {
+			fetch: fetchMock as FetchImpl,
+			apiKey: token,
+			sessionId: "ws-hook-session",
+			providerSessionState,
+		}).result();
+
+		let hookCalls = 0;
+		let capturedSecondPayload: Record<string, unknown> | undefined;
+		const secondContext: Context = {
+			systemPrompt: ["You are a helpful assistant."],
+			messages: [
+				...firstContext.messages,
+				firstResponse,
+				{ role: "user", content: "Second question", timestamp: Date.now() },
+			],
+		};
+		const secondResponse = await streamOpenAICodexResponses(model, secondContext, {
+			fetch: fetchMock as FetchImpl,
+			apiKey: token,
+			sessionId: "ws-hook-session",
+			providerSessionState,
+			onPayload: async payload => {
+				const observed = payload as Record<string, unknown>;
+				hookCalls++;
+				capturedSecondPayload = observed;
+				if (observed.previous_response_id !== "resp_1") {
+					throw new Error("onPayload must see the chained previous_response_id");
+				}
+				const deltaInput = observed.input as Array<Record<string, unknown>>;
+				if (!Array.isArray(deltaInput) || deltaInput.length !== 1) {
+					throw new Error("onPayload must see the delta input");
+				}
+				return {
+					...observed,
+					input: [{ role: "user", content: [{ type: "input_text", text: "replaced by hook" }] }],
+				};
+			},
+		}).result();
+		const thirdContext: Context = {
+			systemPrompt: ["You are a helpful assistant."],
+			messages: [
+				...secondContext.messages,
+				secondResponse,
+				{ role: "user", content: "Third question", timestamp: Date.now() },
+			],
+		};
+		await streamOpenAICodexResponses(model, thirdContext, {
+			fetch: fetchMock as FetchImpl,
+			apiKey: token,
+			sessionId: "ws-hook-session",
+			providerSessionState,
+		}).result();
+
+		expect(fetchMock).not.toHaveBeenCalled();
+		expect(sentRequests).toHaveLength(3);
+		expect(sentRequests[0]?.previous_response_id).toBeUndefined();
+		expect(sentRequests[1]?.type).toBe("response.create");
+		expect(sentRequests[1]?.previous_response_id).toBe("resp_1");
+		expect(hookCalls).toBe(1);
+		expect(capturedSecondPayload?.type).toBe("response.create");
+		const secondInput = sentRequests[1]?.input as Array<Record<string, unknown>>;
+		expect(secondInput).toEqual([{ role: "user", content: [{ type: "input_text", text: "replaced by hook" }] }]);
+		expect(sentRequests[2]?.previous_response_id).toBe("resp_2");
+		const thirdInput = sentRequests[2]?.input as Array<Record<string, unknown>>;
+		expect(thirdInput).toHaveLength(1);
+		expect(JSON.stringify(thirdInput)).toContain("Third question");
+		expect(JSON.stringify(thirdInput)).not.toContain("First question");
 	});
 
 	it("retries websocket continuations with full context when previous_response_id expires", async () => {
