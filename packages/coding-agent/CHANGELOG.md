@@ -10,6 +10,10 @@
 
 - Fixed image attachment handling for text-only models by saving attachments to `local://` and injecting generated descriptions so they are no longer lost when the target model cannot process images
 
+### Fixed
+
+- Fixed the ssh tool rejecting valid Windows identity files before invoking OpenSSH by skipping Unix mode-bit key validation on native Windows ([#2850](https://github.com/can1357/oh-my-pi/issues/2850)).
+
 ## [16.0.4] - 2026-06-17
 
 ### Fixed

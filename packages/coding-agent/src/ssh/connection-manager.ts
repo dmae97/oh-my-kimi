@@ -65,8 +65,8 @@ async function deleteHostInfoFromDisk(hostName: string): Promise<void> {
 	}
 }
 
-async function validateKeyPermissions(keyPath?: string): Promise<void> {
-	if (!keyPath) return;
+async function validateKeyPermissions(keyPath?: string, platform: SshPlatform = process.platform): Promise<void> {
+	if (!keyPath || platform === "win32") return;
 	let stats: fs.Stats;
 	try {
 		stats = await fs.promises.stat(keyPath);
@@ -402,7 +402,7 @@ export async function buildRemoteCommand(
 	command: string,
 	options?: SSHArgsOptions,
 ): Promise<string[]> {
-	await validateKeyPermissions(host.keyPath);
+	await validateKeyPermissions(host.keyPath, options?.platform);
 	return [...buildCommonArgs(host, options), buildSshTarget(host.username, host.host), command];
 }
 
