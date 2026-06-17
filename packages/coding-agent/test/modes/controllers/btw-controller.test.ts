@@ -260,7 +260,13 @@ describe("BtwController", () => {
 		const assistantMessage: AssistantMessage = {
 			...createAssistantMessage("raw repeated repeated repeated"),
 			content: [
-				{ type: "thinking", thinking: "Keep this reasoning." },
+				{
+					type: "thinking",
+					thinking: "Keep this reasoning.",
+					thinkingSignature: "signed-for-ephemeral-prompt",
+					itemId: "item-1",
+				},
+				{ type: "redactedThinking", data: "encrypted-ephemeral-thinking" },
 				{ type: "text", text: "raw repeated repeated repeated" },
 				{ type: "text", text: "raw duplicate tail" },
 			],
