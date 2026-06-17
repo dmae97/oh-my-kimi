@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.0.4] - 2026-06-17
+
 ### Fixed
 
 - Fixed GLM-5.2 catalog thinking metadata for Zhipu/BigModel so the top effort is exposed as `xhigh` and maps to provider-native `max`. ([#2833](https://github.com/can1357/oh-my-pi/issues/2833))

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.0.4] - 2026-06-17
+
 ### Fixed
 
 - Fixed RPC/ACP startup forcing todo settings back to host defaults, so project-level `todo.enabled`, `todo.reminders`, and `todo.eager` opt-outs now suppress protocol-mode todo prompt injection; enabled todo reminders are now persisted to the JSONL transcript so the log matches the model-visible context ([#2824](https://github.com/can1357/oh-my-pi/issues/2824)).

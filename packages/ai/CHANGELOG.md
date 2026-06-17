@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+
+## [16.0.4] - 2026-06-17
+
 ### Fixed
 
 - Fixed tool argument coercion to parse double-encoded JSON strings, including quoted values like `"300"`, when schema expects a number
