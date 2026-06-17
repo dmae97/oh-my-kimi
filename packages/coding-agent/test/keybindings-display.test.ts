@@ -10,6 +10,12 @@ describe("KeybindingsManager.getDisplayString", () => {
 		expect(keybindings.getDisplayString("app.message.dequeue")).toBe("Alt+Up");
 	});
 
+	it("defaults retry to Alt+R", () => {
+		const keybindings = KeybindingsManager.inMemory();
+
+		expect(keybindings.getDisplayString("app.retry")).toBe("Alt+R");
+	});
+
 	it("formats multiple bindings with the existing separator", () => {
 		const keybindings = KeybindingsManager.inMemory({
 			"app.clipboard.copyPrompt": ["alt+shift+c", "ctrl+shift+c"],

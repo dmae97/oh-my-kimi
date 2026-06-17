@@ -20,7 +20,7 @@ type FakeEditor = {
 	onExpandTools?: () => void;
 	onToggleThinking?: () => void;
 	onExternalEditor?: () => void;
-	onDequeue?: () => void;
+	onRetry?: () => void;
 	onChange?: (text: string) => void;
 	onSubmit?: (text: string) => Promise<void>;
 	setText(text: string): void;
@@ -38,6 +38,7 @@ async function createContext() {
 		"app.display.reset": ["ctrl+l"],
 		"app.model.selectTemporary": ["ctrl+y"],
 		"app.model.select": ["alt+m"],
+		"app.retry": ["alt+r"],
 	};
 	const customHandlers = new Map<string, () => void>();
 	const setActionKeys = vi.fn();
@@ -54,7 +55,20 @@ async function createContext() {
 	const addStartListener = vi.fn();
 	const terminalWrite = vi.fn();
 	const prompt = vi.fn(async () => {});
+	const retry = vi.fn(async () => true);
 	const abort = vi.fn(async () => {});
+	const session = {
+		isStreaming: false,
+		isCompacting: false,
+		isGeneratingHandoff: false,
+		isBashRunning: false,
+		isEvalRunning: false,
+		extensionRunner: undefined,
+		prompt,
+		queuedMessageCount: 0,
+		abort,
+		retry,
+	};
 	const updatePendingMessagesDisplay = vi.fn();
 	const editor: FakeEditor = {
 		setText(text: string) {
@@ -85,17 +99,8 @@ async function createContext() {
 		retryLoader: undefined,
 		autoCompactionEscapeHandler: undefined,
 		retryEscapeHandler: undefined,
-		session: {
-			isStreaming: false,
-			isCompacting: false,
-			isGeneratingHandoff: false,
-			isBashRunning: false,
-			isEvalRunning: false,
-			extensionRunner: undefined,
-			prompt,
-			queuedMessageCount: 0,
-			abort,
-		} as unknown as InteractiveModeContext["session"],
+		session: session as unknown as InteractiveModeContext["session"],
+		viewSession: session as unknown as InteractiveModeContext["viewSession"],
 		keybindings: {
 			getKeys(action: string) {
 				return keyMap[action] ? [...keyMap[action]] : [];
@@ -146,6 +151,7 @@ async function createContext() {
 		updateEditorBorderColor: vi.fn(),
 		hasActiveBtw: vi.fn(() => false),
 		showError: vi.fn(),
+		showStatus: vi.fn(),
 	} as unknown as InteractiveModeContext;
 
 	return {
@@ -159,6 +165,7 @@ async function createContext() {
 			prompt,
 			updatePendingMessagesDisplay,
 			requestRender,
+			retry,
 			abort,
 			resetDisplay,
 		},
@@ -187,6 +194,52 @@ describe("InputController keybinding setup", () => {
 		expect(spies.showModelSelector).toHaveBeenNthCalledWith(1, { temporaryOnly: true });
 		expect(spies.showModelSelector).toHaveBeenNthCalledWith(2);
 		expect(spies.resetDisplay).toHaveBeenCalledTimes(1);
+	});
+
+	it("registers retry as an editor action and retries the failed turn", async () => {
+		const { InputController, ctx, editor, spies } = await createContext();
+		const controller = new InputController(ctx);
+
+		controller.setupKeyHandlers();
+
+		expect(spies.setActionKeys).toHaveBeenCalledWith("app.retry", ["alt+r"]);
+		expect(editor.onRetry).toBeDefined();
+
+		editor.setText("draft that should clear after retry");
+		editor.onRetry?.();
+		await Promise.resolve();
+
+		expect(spies.retry).toHaveBeenCalledTimes(1);
+		expect(editor.getText()).toBe("");
+	});
+
+	it("retries the focused view session instead of the main session", async () => {
+		const { InputController, ctx, editor, spies } = await createContext();
+		const focusedRetry = vi.fn(async () => true);
+		(ctx as unknown as { focusedAgentId: string; viewSession: { retry: typeof focusedRetry } }).focusedAgentId =
+			"worker";
+		(ctx as unknown as { viewSession: { retry: typeof focusedRetry } }).viewSession = { retry: focusedRetry };
+		const controller = new InputController(ctx);
+
+		controller.setupKeyHandlers();
+		editor.onRetry?.();
+		await Promise.resolve();
+
+		expect(focusedRetry).toHaveBeenCalledTimes(1);
+		expect(spies.retry).not.toHaveBeenCalled();
+	});
+
+	it("shows the slash-command retry status when there is nothing to retry", async () => {
+		const { InputController, ctx, editor, spies } = await createContext();
+		spies.retry.mockResolvedValueOnce(false);
+		const showStatus = ctx.showStatus as unknown as ReturnType<typeof vi.fn>;
+		const controller = new InputController(ctx);
+
+		controller.setupKeyHandlers();
+		editor.onRetry?.();
+		await Promise.resolve();
+
+		expect(showStatus).toHaveBeenCalledWith("Nothing to retry");
 	});
 
 	it("empty Enter aborts the active stream when queued messages are pending", async () => {

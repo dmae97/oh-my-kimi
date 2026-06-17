@@ -21,6 +21,7 @@ describe("buildHotkeysMarkdown", () => {
 			"app.history.search": "Ctrl+R",
 			"app.thinking.toggle": "Ctrl+T",
 			"app.editor.external": "Ctrl+G",
+			"app.retry": "Alt+R",
 			"app.clipboard.pasteImage": "Ctrl+V",
 			"app.stt.toggle": "Alt+H",
 		};
@@ -38,6 +39,7 @@ describe("buildHotkeysMarkdown", () => {
 		expect(markdown).toContain("| `Ctrl+Shift+L` | Select model (temporary) |");
 		expect(markdown).toContain("| `Alt+M` | Select model (set roles) |");
 		expect(markdown).toContain("| `Ctrl+L` | Reset terminal display |");
+		expect(markdown).toContain("| `Alt+R` | Retry last failed assistant turn |");
 		expect(markdown).toContain("| `Alt+Shift+P` | Toggle plan mode |");
 		expect(markdown).toContain("| `#` | Open prompt actions |");
 		for (const line of lines) {
