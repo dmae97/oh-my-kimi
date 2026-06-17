@@ -349,13 +349,16 @@ export class Image implements Component {
 			} else if (result) {
 				// Direct placement: return `rows` lines so TUI accounts for image
 				// height. First (rows-1) lines are empty (TUI clears them); the last
-				// moves the cursor back up, then emits the image sequence.
+				// moves the cursor back up, emits the image sequence, then restores the
+				// cursor so the renderer's next CRLF starts below the reserved block.
 				lines = [];
 				for (let i = 0; i < result.rows - 1; i++) {
 					lines.push(RESERVED_IMAGE_ROW);
 				}
-				const moveUp = result.rows > 1 ? `\x1b[${result.rows - 1}A` : "";
-				lines.push(moveUp + (result.sequence ?? ""));
+				const cursorRows = result.rows - 1;
+				const moveUp = cursorRows > 0 ? `\x1b[${cursorRows}A` : "";
+				const moveDown = cursorRows > 0 ? `\x1b[${cursorRows}B` : "";
+				lines.push(moveUp + (result.sequence ?? "") + moveDown);
 			} else {
 				lines = this.#fallbackLines();
 			}
