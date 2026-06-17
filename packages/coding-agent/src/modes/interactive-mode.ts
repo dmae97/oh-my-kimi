@@ -854,14 +854,16 @@ export class InteractiveMode implements InteractiveModeContext {
 			}),
 		);
 		// Set up theme file watcher
-		onThemeChange(() => {
-			this.#clearWorkingMessageAccentCache();
-			clearRenderCache();
-			clearMermaidCache();
-			this.ui.invalidate();
-			this.updateEditorBorderColor();
-			this.ui.requestRender();
-		});
+		this.#eventBusUnsubscribers.push(
+			onThemeChange(() => {
+				this.#clearWorkingMessageAccentCache();
+				clearRenderCache();
+				clearMermaidCache();
+				this.ui.invalidate();
+				this.updateEditorBorderColor();
+				this.ui.requestRender();
+			}),
+		);
 
 		// Subscribe to terminal dark/light appearance changes.
 		// The terminal queries background color via OSC 11 at startup and on

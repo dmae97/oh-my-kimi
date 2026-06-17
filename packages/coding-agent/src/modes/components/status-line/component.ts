@@ -181,6 +181,7 @@ export class StatusLineComponent implements Component {
 	#cachedBranchCwd: string | undefined = undefined;
 	#gitWatcher: fs.FSWatcher | null = null;
 	#onBranchChange: (() => void) | null = null;
+	#disposed = false;
 	#autoCompactEnabled: boolean = true;
 	#hookStatuses: Map<string, string> = new Map();
 	#subagentCount: number = 0;
@@ -329,6 +330,7 @@ export class StatusLineComponent implements Component {
 
 		try {
 			this.#gitWatcher = fs.watch(watchPath, () => {
+				if (this.#disposed) return;
 				this.#invalidateGitCaches();
 				if (this.#onBranchChange) {
 					this.#onBranchChange();
@@ -340,6 +342,8 @@ export class StatusLineComponent implements Component {
 	}
 
 	dispose(): void {
+		this.#disposed = true;
+		this.#onBranchChange = null;
 		if (this.#gitWatcher) {
 			this.#gitWatcher.close();
 			this.#gitWatcher = null;
@@ -391,6 +395,7 @@ export class StatusLineComponent implements Component {
 			this.#defaultBranch = "main";
 			(async () => {
 				const resolved = await git.branch.default(getProjectDir());
+
 				if (resolved) {
 					this.#defaultBranch = resolved;
 					if (this.#onBranchChange) {
@@ -460,6 +465,7 @@ export class StatusLineComponent implements Component {
 			try {
 				// Requires `gh repo set-default` to be configured; fails gracefully if not
 				const result = await $`gh pr view --json number,url`.quiet().nothrow();
+				if (this.#disposed) return;
 				if (result.exitCode !== 0) {
 					setCachedPr(null);
 					return;
@@ -471,10 +477,11 @@ export class StatusLineComponent implements Component {
 					setCachedPr(null);
 				}
 			} catch {
+				if (this.#disposed) return;
 				setCachedPr(null);
 			} finally {
 				this.#prLookupInFlight = false;
-				if (this.#onBranchChange) {
+				if (!this.#disposed && this.#onBranchChange) {
 					this.#onBranchChange();
 				}
 			}

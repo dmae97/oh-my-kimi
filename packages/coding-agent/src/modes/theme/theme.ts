@@ -1042,12 +1042,29 @@ const themeColorsSchema = type({
 	statusLineCost: "string | number",
 	statusLineSubagents: "string | number",
 });
-
-const spinnerFramesSchema = type("string[]").or({
-	"status?": "string[]",
-	"activity?": "string[]",
+const spinnerFramesSchema = type("unknown").narrow((value): value is SpinnerFramesOverride => {
+	if (Array.isArray(value)) {
+		return value.length >= 1 && value.every(item => typeof item === "string");
+	}
+	if (value && typeof value === "object") {
+		const obj = value as Record<string, unknown>;
+		const status = obj.status;
+		const activity = obj.activity;
+		if (status === undefined && activity === undefined) return false;
+		if (status !== undefined) {
+			if (!Array.isArray(status) || status.length < 1 || !status.every(item => typeof item === "string")) {
+				return false;
+			}
+		}
+		if (activity !== undefined) {
+			if (!Array.isArray(activity) || activity.length < 1 || !activity.every(item => typeof item === "string")) {
+				return false;
+			}
+		}
+		return true;
+	}
+	return false;
 });
-
 const themeJsonSchema = type({
 	"$schema?": "string",
 	name: "string",
@@ -2270,8 +2287,13 @@ export function getColorBlindMode(): boolean {
 	return currentColorBlindMode;
 }
 
-export function onThemeChange(callback: () => void): void {
+export function onThemeChange(callback: () => void): () => void {
 	onThemeChangeCallback = callback;
+	return () => {
+		if (onThemeChangeCallback === callback) {
+			onThemeChangeCallback = undefined;
+		}
+	};
 }
 
 /**

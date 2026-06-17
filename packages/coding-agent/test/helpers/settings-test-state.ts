@@ -1,5 +1,6 @@
 import { vi } from "bun:test";
 import { resetSettingsForTest } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { isTuiTight, setTuiTight } from "@oh-my-pi/pi-tui";
 import {
 	getAgentDir,
 	getDefaultTabWidth,
@@ -14,6 +15,7 @@ export interface SettingsTestState {
 	env: Record<string, string | undefined>;
 	projectDir: string;
 	tabWidth: number;
+	tuiTight: boolean;
 }
 
 export function beginSettingsTest(): SettingsTestState {
@@ -29,6 +31,7 @@ export function beginSettingsTest(): SettingsTestState {
 		env,
 		projectDir: getProjectDir(),
 		tabWidth: getDefaultTabWidth(),
+		tuiTight: isTuiTight(),
 	};
 	resetSettingsForTest();
 	return state;
@@ -43,6 +46,7 @@ export function restoreSettingsTestState(state: SettingsTestState | undefined): 
 	setDefaultTabWidth(state.tabWidth);
 	setProjectDir(state.projectDir);
 	setAgentDir(state.agentDir);
+	setTuiTight(state.tuiTight);
 	restoreEnvValue("PI_CODING_AGENT_DIR", state.env.PI_CODING_AGENT_DIR);
 }
 
