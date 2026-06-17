@@ -928,6 +928,10 @@ export class InputController {
 	}
 
 	async handleRetry(): Promise<void> {
+		if (this.ctx.collabGuest) {
+			this.ctx.showStatus("/retry is host-only during a collab session");
+			return;
+		}
 		const didRetry = await this.ctx.viewSession.retry();
 		if (didRetry) {
 			this.ctx.editor.setText("");
