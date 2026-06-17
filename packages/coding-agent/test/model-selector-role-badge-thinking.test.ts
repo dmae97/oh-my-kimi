@@ -154,7 +154,7 @@ describe("ModelSelector role badge thinking display", () => {
 		expect(rendered).toContain("[SLOW auto]");
 	});
 
-	test("dims and disables models below the current context size", async () => {
+	test("dims and disables models below the current context size in temporary mode", async () => {
 		installTestTheme();
 		const settings = Settings.isolated({});
 		const small = createContextTestModel("a-small", 4096);
@@ -175,7 +175,7 @@ describe("ModelSelector role badge thinking display", () => {
 		expect(selected).toEqual(["b-large"]);
 	});
 
-	test("does not open the model menu when every candidate is disabled", async () => {
+	test("opens the role assignment menu for models below the current context size", async () => {
 		installTestTheme();
 		const settings = Settings.isolated({});
 		const small = createContextTestModel("only-small", 4096);
@@ -188,11 +188,11 @@ describe("ModelSelector role badge thinking display", () => {
 
 		const rendered = normalizeRenderedText(selector.render(220).join("\n"));
 		expect(rendered).toContain("only-small");
-		expect(rendered).toContain("current context 6k > 4.1k limit");
+		expect(rendered).not.toContain("current context 6k > 4.1k limit");
 
 		selector.handleInput("\n");
 		const afterEnter = normalizeRenderedText(selector.render(220).join("\n"));
-		expect(afterEnter).not.toContain("Action for");
+		expect(afterEnter).toContain("Action for: only-small");
 		expect(onSelect).not.toHaveBeenCalled();
 	});
 

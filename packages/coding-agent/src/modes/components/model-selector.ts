@@ -700,7 +700,12 @@ export class ModelSelectorComponent extends Container {
 
 	#isModelOverContextLimit(model: Model): boolean {
 		const contextWindow = model.contextWindow ?? 0;
-		return this.#currentContextTokens > 0 && contextWindow > 0 && this.#currentContextTokens > contextWindow;
+		return (
+			this.#temporaryOnly &&
+			this.#currentContextTokens > 0 &&
+			contextWindow > 0 &&
+			this.#currentContextTokens > contextWindow
+		);
 	}
 
 	#isItemDisabled(item: ModelItem | CanonicalModelItem): boolean {
