@@ -640,6 +640,103 @@ interface PreparedLine {
 
 const SGR_SEQUENCE = /\x1b\[[0-9;:]*m/g;
 
+// SGR coalescing. The renderer's component tree emits a styled span as
+// `<set-color>text<reset>`, so adjacent spans produce runs of byte-adjacent
+// SGR sequences (e.g. a `CSI 39 m` fg-reset immediately followed by the next
+// span's `CSI 38;2;r;g;b m`). Two byte-adjacent SGR sequences are semantically
+// identical to one SGR carrying both parameter lists (SGR params apply
+// left-to-right), so merging the run into a single `CSI … m` is
+// behavior-preserving: it drops the redundant `ESC[`/`m` framing and lets the
+// terminal dispatch one SGR instead of several. On a real transcript ~40% of
+// all SGR sequences are collapsible this way, which meaningfully cuts the
+// per-frame byte volume and SGR-dispatch count a slow (xterm.js/WebGL) terminal
+// must process. On by default; `PI_NO_SGR_COALESCE=1` disables it.
+const SGR_COALESCE_ENABLED = !$flag("PI_NO_SGR_COALESCE");
+const CC_ESC = 0x1b;
+const CC_BRACKET = 0x5b; // [
+const CC_M = 0x6d; // m
+const CC_SEMI = 0x3b; // ;
+const CC_COLON = 0x3a; // :
+// Max parameter tokens per emitted merged SGR. Kept well under xterm.js's
+// 32-param cap (and the tighter limits of some real terminals) so a long
+// adjacent run is split into several valid CSIs instead of overflowing one.
+const MERGE_TOKEN_CAP = 16;
+
+function isSgrParamByte(c: number): boolean {
+	return (c >= 0x30 && c <= 0x39) || c === CC_SEMI || c === CC_COLON;
+}
+
+/**
+ * Merge runs of byte-adjacent SGR sequences (`CSI [0-9;:]* m`) into one. Only
+ * CSI-SGR sequences are touched; text, cursor moves, OSC, hyperlinks and image
+ * payloads pass through verbatim. Returns the original reference when nothing
+ * merges, so SGR-light lines incur only a single `indexOf` scan.
+ */
+export function coalesceAdjacentSgr(line: string): string {
+	if (!SGR_COALESCE_ENABLED || line.indexOf("\x1b[") === -1) return line;
+	const n = line.length;
+	let out = "";
+	let copiedUpto = 0;
+	let i = 0;
+	while (i < n) {
+		if (line.charCodeAt(i) !== CC_ESC || line.charCodeAt(i + 1) !== CC_BRACKET) {
+			i++;
+			continue;
+		}
+		// Scan a candidate SGR sequence: ESC [ <params> m.
+		let j = i + 2;
+		while (j < n && isSgrParamByte(line.charCodeAt(j))) j++;
+		if (j >= n || line.charCodeAt(j) !== CC_M) {
+			// Not an SGR (e.g. cursor move); leave it in the pending region.
+			i = j;
+			continue;
+		}
+		// Collect the run of adjacent SGR sequences starting here.
+		const params: string[] = [line.slice(i + 2, j)];
+		let k = j + 1;
+		while (k < n && line.charCodeAt(k) === CC_ESC && line.charCodeAt(k + 1) === CC_BRACKET) {
+			let p = k + 2;
+			while (p < n && isSgrParamByte(line.charCodeAt(p))) p++;
+			if (p >= n || line.charCodeAt(p) !== CC_M) break;
+			params.push(line.slice(k + 2, p));
+			k = p + 1;
+		}
+		if (params.length > 1) {
+			out += line.slice(copiedUpto, i);
+			// Emit the merged run, but cap each emitted CSI at MERGE_TOKEN_CAP
+			// parameter tokens. SGR params apply left-to-right regardless of how
+			// they are grouped across adjacent CSIs, so splitting a long run into
+			// several capped sequences stays behavior-preserving — while a single
+			// unbounded merge would overflow a terminal's CSI parameter buffer
+			// (xterm.js caps at 32 and silently truncates the rest, corrupting
+			// the colors). Empty params (`CSI m`) mean a full reset; normalize to
+			// `0` so the merged list stays unambiguous.
+			let group = "";
+			let groupTokens = 0;
+			for (let q = 0; q < params.length; q++) {
+				const norm = params[q]!.length === 0 ? "0" : params[q]!;
+				let tk = 1;
+				for (let z = 0; z < norm.length; z++) {
+					const cc = norm.charCodeAt(z);
+					if (cc === CC_SEMI || cc === CC_COLON) tk++;
+				}
+				if (groupTokens > 0 && groupTokens + tk > MERGE_TOKEN_CAP) {
+					out += `\x1b[${group}m`;
+					group = "";
+					groupTokens = 0;
+				}
+				group += group.length === 0 ? norm : `;${norm}`;
+				groupTokens += tk;
+			}
+			if (group.length > 0) out += `\x1b[${group}m`;
+			copiedUpto = k;
+		}
+		i = k;
+	}
+	if (copiedUpto === 0) return line;
+	return out + line.slice(copiedUpto);
+}
+
 /** Compare two rows ignoring SGR styling (theme restyles keep alignment). */
 function rowsEquivalent(a: string, b: string): boolean {
 	if (a === b) return true;
@@ -2249,7 +2346,8 @@ export class TUI extends Container {
 
 	#terminalLine(line: string): string {
 		if (TERMINAL.isImageLine(line)) return line;
-		return line + (line.includes("\x1b]8;") ? LINE_TERMINATOR : SEGMENT_RESET);
+		const coalesced = coalesceAdjacentSgr(line);
+		return coalesced + (line.includes("\x1b]8;") ? LINE_TERMINATOR : SEGMENT_RESET);
 	}
 
 	/**
