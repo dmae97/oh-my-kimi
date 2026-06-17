@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `LITELLM_BASE_URL` as the LiteLLM provider discovery base URL fallback, with discovery caches scoped by the resolved proxy URL and explicit provider `baseUrl` config kept at higher precedence. ([#2726](https://github.com/can1357/oh-my-pi/issues/2726))
 ### Changed
 
 - Updated the default Gemini CLI user-agent version fallback to 0.46.0.

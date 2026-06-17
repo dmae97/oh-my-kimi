@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `LITELLM_BASE_URL` guidance to the LiteLLM login prompt so non-default proxy endpoints are discoverable. ([#2726](https://github.com/can1357/oh-my-pi/issues/2726))
 ### Fixed
 
 - Fixed Antigravity and Gemini CLI model requests failing with an opaque error when Google requires account verification. Cloud Code Assist `403 VALIDATION_REQUIRED` responses now surface the `validation_url` and the signed-in account email when available, so users see an actionable account-verification message instead of the raw API error body.

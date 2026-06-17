@@ -2522,9 +2522,10 @@ export function litellmModelManagerOptions(
 	config?: LiteLLMModelManagerConfig,
 ): ModelManagerOptions<"openai-completions"> {
 	const apiKey = config?.apiKey;
-	const baseUrl = config?.baseUrl ?? "http://localhost:4000/v1";
+	const baseUrl = config?.baseUrl ?? Bun.env.LITELLM_BASE_URL ?? "http://localhost:4000/v1";
 	return {
 		providerId: "litellm",
+		cacheProviderId: `litellm:${Bun.hash(baseUrl).toString(36)}`,
 		// litellm is a local-only proxy whose /v1/models returns bare ids with no
 		// metadata, and it is never bundled in models.json (that would leak the
 		// machine's localhost catalog). It proxies known upstream models, so we
