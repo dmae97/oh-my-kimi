@@ -256,6 +256,32 @@ describe("BtwController", () => {
 		expect(ctx.handleBtwBranch).toHaveBeenCalledWith("Question?", assistantMessage);
 	});
 
+	it("ignores duplicate branch requests while branch promotion is in flight", async () => {
+		const assistantMessage = createAssistantMessage("Answer");
+		const runEphemeralTurn = vi.fn(async () => ({ replyText: "Answer", assistantMessage }));
+		const ctx = makeCtx(makeFakeSession(runEphemeralTurn));
+		const branchStarted = Promise.withResolvers<void>();
+		const releaseBranch = Promise.withResolvers<void>();
+		ctx.handleBtwBranch = vi.fn(async () => {
+			branchStarted.resolve();
+			await releaseBranch.promise;
+		});
+		const controller = new BtwController(ctx);
+
+		await controller.start("Question?");
+		await drainBtwRequest();
+
+		const firstBranch = controller.handleBranch();
+		await branchStarted.promise;
+
+		expect(controller.canBranch()).toBe(false);
+		expect(await controller.handleBranch()).toBe(false);
+		expect(ctx.handleBtwBranch).toHaveBeenCalledTimes(1);
+
+		releaseBranch.resolve();
+		expect(await firstBranch).toBe(true);
+	});
+
 	it("clears stored branch state on escape and dispose", async () => {
 		const runEphemeralTurn = vi.fn(async () => ({
 			replyText: "Answer",

@@ -15,6 +15,7 @@ export class BtwController {
 	#lastQuestion: string | undefined;
 	#lastReplyText: string | undefined;
 	#lastAssistantMessage: AssistantMessage | undefined;
+	#branchInFlight = false;
 
 	constructor(private readonly ctx: InteractiveModeContext) {}
 
@@ -24,6 +25,7 @@ export class BtwController {
 
 	canBranch(): boolean {
 		return (
+			!this.#branchInFlight &&
 			this.#activeRequest?.component.isBranchable() === true &&
 			this.#lastQuestion !== undefined &&
 			this.#lastReplyText !== undefined &&
@@ -33,8 +35,13 @@ export class BtwController {
 
 	async handleBranch(): Promise<boolean> {
 		if (!this.canBranch() || !this.#lastQuestion || !this.#lastAssistantMessage) return false;
-		await this.ctx.handleBtwBranch(this.#lastQuestion, this.#lastAssistantMessage);
-		return true;
+		this.#branchInFlight = true;
+		try {
+			await this.ctx.handleBtwBranch(this.#lastQuestion, this.#lastAssistantMessage);
+			return true;
+		} finally {
+			this.#branchInFlight = false;
+		}
 	}
 
 	handleEscape(): boolean {
