@@ -2117,8 +2117,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				void session.abort();
 			}
 
+			const pendingExtensionMessages: Array<Promise<unknown>> = [];
 			const extensionRunner = session.extensionRunner;
-			const pendingExtensionMessages: Promise<unknown>[] = [];
 			if (extensionRunner) {
 				extensionRunner.initialize(
 					{

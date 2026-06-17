@@ -18,6 +18,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
 import { isPromise } from "node:util/types";
+
 import type { InMemorySnapshotStore } from "@oh-my-pi/hashline";
 import {
 	type AfterToolCallContext,
@@ -178,6 +179,7 @@ import type {
 	SessionBeforeCompactResult,
 	SessionBeforeSwitchResult,
 	SessionBeforeTreeResult,
+	SessionStopEventResult,
 	ToolExecutionEndEvent,
 	ToolExecutionStartEvent,
 	ToolExecutionUpdateEvent,
@@ -296,6 +298,8 @@ import { ToolChoiceQueue } from "./tool-choice-queue";
 import { classifyUnexpectedStop, isUnexpectedStopCandidate } from "./unexpected-stop-classifier";
 import { YieldQueue } from "./yield-queue";
 
+const SESSION_STOP_CONTINUATION_CAP = 8;
+
 /** Session-specific events that extend the core AgentEvent */
 export type AgentSessionEvent =
 	| AgentEvent
@@ -339,6 +343,24 @@ const UNEXPECTED_STOP_MAX_RETRIES = 3;
 const UNEXPECTED_STOP_TIMEOUT_MS = 4000;
 const EMPTY_STOP_MAX_RETRIES = 3;
 const RETRY_BACKOFF_MAX_DELAY_MS = 8_000;
+
+type CompactionCheckResult = Readonly<{
+	deferredHandoff: boolean;
+	continuationScheduled: boolean;
+}>;
+
+const COMPACTION_CHECK_NONE: CompactionCheckResult = {
+	deferredHandoff: false,
+	continuationScheduled: false,
+};
+const COMPACTION_CHECK_DEFERRED_HANDOFF: CompactionCheckResult = {
+	deferredHandoff: true,
+	continuationScheduled: true,
+};
+const COMPACTION_CHECK_CONTINUATION: CompactionCheckResult = {
+	deferredHandoff: false,
+	continuationScheduled: true,
+};
 export type CommandMetadataChangedListener = () => void | Promise<void>;
 export type AsyncJobSnapshotItem = Pick<AsyncJob, "id" | "type" | "status" | "label" | "startTime">;
 
@@ -1247,6 +1269,8 @@ export class AgentSession {
 				cutoffCount: number;
 		  }
 		| undefined = undefined;
+	#sessionStopContinuationCount = 0;
+	#sessionStopHookActive = false;
 	// Bumped whenever the pending in-flight snapshot is set/cleared. The
 	// status-line context memo includes this so clearing the snapshot on
 	// turn-end/abort invalidates the cache even though the message list is
@@ -2485,6 +2509,9 @@ export class AgentSession {
 
 		// Check auto-retry and auto-compaction after agent completes
 		if (event.type === "agent_end") {
+			const emitAgentEndNotification = async () => {
+				await this.#emitAgentEndNotification(event.messages);
+			};
 			const usage = this.getSessionStats().tokens;
 			await this.#goalRuntime.onAgentEnd({
 				currentUsage: {
@@ -2501,6 +2528,7 @@ export class AgentSession {
 			this.#lastAssistantMessage = undefined;
 			if (!msg) {
 				this.#lastSuccessfulYieldToolCallId = undefined;
+				await emitAgentEndNotification();
 				return;
 			}
 
@@ -2517,60 +2545,81 @@ export class AgentSession {
 			if (this.#skipPostTurnMaintenanceAssistantTimestamp === msg.timestamp) {
 				this.#skipPostTurnMaintenanceAssistantTimestamp = undefined;
 				this.#lastSuccessfulYieldToolCallId = undefined;
+				await emitAgentEndNotification();
 				return;
 			}
 
 			if (this.#assistantEndedWithSuccessfulYield(msg)) {
 				this.#lastSuccessfulYieldToolCallId = undefined;
+				await emitAgentEndNotification();
 				return;
 			}
 			this.#lastSuccessfulYieldToolCallId = undefined;
 
 			if (await this.#handleEmptyAssistantStop(msg)) {
+				await emitAgentEndNotification();
 				return;
 			}
 			if (await this.#handleUnexpectedAssistantStop(msg)) {
+				await emitAgentEndNotification();
 				return;
 			}
 
 			if (this.#isRetryableReasonlessAbort(msg)) {
 				const didRetry = await this.#handleRetryableError(msg, { allowModelFallback: false });
-				if (didRetry) return;
+				if (didRetry) {
+					await emitAgentEndNotification();
+					return;
+				}
 			}
 
 			// A deliberate abort should settle the current turn, not trigger queued continuations.
 			if (msg.stopReason === "aborted") {
 				this.#resolveRetry();
+				this.#resetSessionStopContinuationState();
+				await emitAgentEndNotification();
 				return;
 			}
 			// Check for retryable errors first (overloaded, rate limit, server errors)
 			if (this.#isRetryableError(msg)) {
 				const didRetry = await this.#handleRetryableError(msg);
-				if (didRetry) return; // Retry was initiated, don't proceed to compaction
+				if (didRetry) {
+					await emitAgentEndNotification();
+					return;
+				}
 			}
 			this.#resolveRetry();
 
 			const compactionTask = this.#checkCompaction(msg);
 			this.#trackPostPromptTask(compactionTask);
-			const compactionDeferredHandoff = await compactionTask;
+			const compactionResult = await compactionTask;
 			// Check for incomplete todos only after a final assistant stop, not intermediate tool-use turns.
 			const hasToolCalls = msg.content.some(content => content.type === "toolCall");
 			if (hasToolCalls) {
+				await emitAgentEndNotification();
 				return;
 			}
-			// When checkCompaction scheduled a deferred handoff, skip the rewind/todo passes:
-			// any reminder we append here would race the handoff's session reset, and
-			// #scheduleAgentContinue would start a fresh streaming turn alongside the handoff
-			// LLM call (visible as "Auto-handoff" loader + an assistant message still streaming).
-			if (compactionDeferredHandoff) {
+			// When compaction queued recovery, skip the rewind/todo/session_stop passes:
+			// any reminder or hook continuation we append here would race the handoff,
+			// retry, auto-continue prompt, or queued-message drain that already owns the
+			// next turn.
+			if (compactionResult.deferredHandoff || compactionResult.continuationScheduled) {
+				await emitAgentEndNotification();
 				return;
 			}
 			if (msg.stopReason !== "error") {
 				if (this.#enforceRewindBeforeYield()) {
+					await emitAgentEndNotification();
 					return;
 				}
-				await this.#checkTodoCompletion();
+				const todoContinuationScheduled = await this.#checkTodoCompletion();
+				if (todoContinuationScheduled) {
+					await emitAgentEndNotification();
+					return;
+				}
 			}
+			await this.#emitSessionStopEvent(event.messages);
+			await emitAgentEndNotification();
 		}
 	};
 
@@ -3526,6 +3575,83 @@ export class AgentSession {
 		}
 	}
 
+	#resetSessionStopContinuationState(): void {
+		this.#sessionStopContinuationCount = 0;
+		this.#sessionStopHookActive = false;
+	}
+
+	#clearPendingSessionStopContinuations(): void {
+		if (!this.#pendingNextTurnMessages.some(message => message.customType === "session-stop-continuation")) {
+			return;
+		}
+		this.#pendingNextTurnMessages = this.#pendingNextTurnMessages.filter(
+			message => message.customType !== "session-stop-continuation",
+		);
+	}
+
+	#sessionStopContinuationContext(result: SessionStopEventResult | undefined): string | undefined {
+		if (!result) return undefined;
+		const additionalContext =
+			typeof result.additionalContext === "string" && result.additionalContext.length > 0
+				? result.additionalContext
+				: undefined;
+		const reason = typeof result.reason === "string" && result.reason.length > 0 ? result.reason : undefined;
+		if (result.continue === true) {
+			return additionalContext ?? reason;
+		}
+		if (result.decision === "block") {
+			return reason ?? additionalContext;
+		}
+		return undefined;
+	}
+
+	async #emitAgentEndNotification(messages: AgentMessage[]): Promise<void> {
+		await this.#extensionRunner?.emit({ type: "agent_end", messages });
+	}
+
+	async #emitSessionStopEvent(messages: AgentMessage[]): Promise<void> {
+		if (this.#agentKind === "sub" || !this.#extensionRunner?.hasHandlers("session_stop")) return;
+		const generation = this.#promptGeneration;
+		const result = await this.#extensionRunner.emitSessionStop({
+			messages,
+			turn_id: Math.max(0, this.#turnIndex - 1),
+			last_assistant_message: this.getLastAssistantMessage(),
+			session_id: this.sessionId,
+			session_file: this.sessionFile,
+			stop_hook_active: this.#sessionStopHookActive,
+		});
+		if (this.#promptGeneration !== generation || this.#abortInProgress || this.#isDisposed) {
+			this.#resetSessionStopContinuationState();
+			return;
+		}
+		const additionalContext = this.#sessionStopContinuationContext(result);
+		if (!additionalContext) {
+			this.#resetSessionStopContinuationState();
+			return;
+		}
+		if (this.#sessionStopContinuationCount >= SESSION_STOP_CONTINUATION_CAP) {
+			logger.warn("session_stop continuation cap reached", {
+				sessionId: this.sessionId,
+				cap: SESSION_STOP_CONTINUATION_CAP,
+			});
+			this.#resetSessionStopContinuationState();
+			return;
+		}
+		this.#sessionStopContinuationCount++;
+		this.#sessionStopHookActive = true;
+		this.#queueHiddenNextTurnMessage(
+			{
+				role: "custom",
+				customType: "session-stop-continuation",
+				content: additionalContext,
+				display: false,
+				attribution: "agent",
+				timestamp: Date.now(),
+			},
+			true,
+		);
+	}
+
 	/** Emit extension events based on session events */
 	async #emitExtensionEvent(event: AgentSessionEvent): Promise<void> {
 		if (!this.#extensionRunner) return;
@@ -3533,7 +3659,9 @@ export class AgentSession {
 			this.#turnIndex = 0;
 			await this.#extensionRunner.emit({ type: "agent_start" });
 		} else if (event.type === "agent_end") {
-			await this.#extensionRunner.emit({ type: "agent_end", messages: event.messages });
+			// `agent_end` extension notification is emitted from the settled
+			// agent_end maintenance path so `session_stop` control hooks are not
+			// blocked by unrelated notification-only work.
 		} else if (event.type === "turn_start") {
 			const hookEvent: TurnStartEvent = {
 				type: "turn_start",
@@ -5963,6 +6091,16 @@ export class AgentSession {
 		}
 	}
 
+	async #promptAgentInitiatedMessage(message: CustomMessage): Promise<void> {
+		this.#beginInFlight();
+		try {
+			await this.agent.prompt(message);
+			await this.#waitForPostPromptRecovery();
+		} finally {
+			this.#endInFlight();
+		}
+	}
+
 	/**
 	 * Send a custom message to the session. Creates a CustomMessageEntry.
 	 *
@@ -6022,7 +6160,7 @@ export class AgentSession {
 					this.#queueHiddenNextTurnMessage(normalizedAppMessage, false);
 					return false;
 				}
-				await this.agent.prompt(normalizedAppMessage);
+				await this.#promptAgentInitiatedMessage(normalizedAppMessage);
 				return true;
 			}
 			this.agent.appendMessage(normalizedAppMessage);
@@ -6041,7 +6179,7 @@ export class AgentSession {
 				this.#queueHiddenNextTurnMessage(normalizedAppMessage, false);
 				return false;
 			}
-			await this.agent.prompt(normalizedAppMessage);
+			await this.#promptAgentInitiatedMessage(normalizedAppMessage);
 			return true;
 		}
 
@@ -6264,6 +6402,8 @@ export class AgentSession {
 			// block runs, but nested prompt setup/finalizers may still be unwinding. Without this,
 			// a subsequent prompt() can incorrectly observe the session as busy after an abort.
 			this.#resetInFlight();
+			this.#resetSessionStopContinuationState();
+			this.#clearPendingSessionStopContinuations();
 			// Safety net: if the agent loop aborted without producing an assistant
 			// message (e.g. failed before the first stream), the in-flight yield was
 			// never resolved or rejected by the normal message_end path. Reject it now
@@ -7623,19 +7763,19 @@ export class AgentSession {
 	 *   on the pre-prompt path (where the next agent turn is about to start) set it to false
 	 *   to avoid racing the deferred handoff against the new turn.
 	 * @param autoContinue Whether maintenance may schedule the agent-authored continuation prompt.
-	 * @returns true when a deferred handoff was scheduled. Callers MUST then skip any
-	 *   subsequent `#scheduleAgentContinue` / reminder appends for this turn — the
-	 *   handoff will replace session state and a concurrent `agent.continue()` would
-	 *   stream into the soon-to-be-discarded session.
+	 * @returns whether compaction/recovery scheduled a handoff, retry, auto-continue, or
+	 *   queued-message drain that already owns the next turn. Callers MUST skip
+	 *   `session_stop` and other agent continuations when `continuationScheduled`
+	 *   is true.
 	 */
 	async #checkCompaction(
 		assistantMessage: AssistantMessage,
 		skipAbortedCheck = true,
 		allowDefer = true,
 		autoContinue = true,
-	): Promise<boolean> {
+	): Promise<CompactionCheckResult> {
 		// Skip if message was aborted (user cancelled) - unless skipAbortedCheck is false
-		if (skipAbortedCheck && assistantMessage.stopReason === "aborted") return false;
+		if (skipAbortedCheck && assistantMessage.stopReason === "aborted") return COMPACTION_CHECK_NONE;
 		const contextWindow = this.model?.contextWindow ?? 0;
 		const generation = this.#promptGeneration;
 		// Skip overflow check if the message came from a different model.
@@ -7664,15 +7804,15 @@ export class AgentSession {
 			if (promoted) {
 				// Retry on the promoted (larger) model without compacting
 				this.#scheduleAgentContinue({ delayMs: 100, generation });
-				return false;
+				return COMPACTION_CHECK_CONTINUATION;
 			}
 
 			// No promotion target available fall through to compaction
 			const compactionSettings = this.settings.getGroup("compaction");
 			if (compactionSettings.enabled && compactionSettings.strategy !== "off") {
-				await this.#runAutoCompaction("overflow", true, false, allowDefer, { autoContinue });
+				return await this.#runAutoCompaction("overflow", true, false, allowDefer, { autoContinue });
 			}
-			return false;
+			return COMPACTION_CHECK_NONE;
 		}
 
 		// Case 3: Output-side incomplete — `response.incomplete` from OpenAI Responses
@@ -7693,7 +7833,7 @@ export class AgentSession {
 					from: `${assistantMessage.provider}/${assistantMessage.model}`,
 				});
 				this.#scheduleAgentContinue({ delayMs: 100, generation });
-				return false;
+				return COMPACTION_CHECK_CONTINUATION;
 			}
 
 			const incompleteCompactionSettings = this.settings.getGroup("compaction");
@@ -7702,18 +7842,17 @@ export class AgentSession {
 					model: `${assistantMessage.provider}/${assistantMessage.model}`,
 					strategy: incompleteCompactionSettings.strategy,
 				});
-				await this.#runAutoCompaction("incomplete", true, false, allowDefer, {
+				return await this.#runAutoCompaction("incomplete", true, false, allowDefer, {
 					autoContinue,
 					triggerContextTokens: calculateContextTokens(assistantMessage.usage),
 				});
-			} else {
-				// Neither promotion nor compaction is available — surface the dead-end so
-				// the user understands why the turn yielded with nothing.
-				logger.warn("response.incomplete with no recovery path (promotion + compaction both unavailable)", {
-					model: `${assistantMessage.provider}/${assistantMessage.model}`,
-				});
 			}
-			return false;
+			// Neither promotion nor compaction is available — surface the dead-end so
+			// the user understands why the turn yielded with nothing.
+			logger.warn("response.incomplete with no recovery path (promotion + compaction both unavailable)", {
+				model: `${assistantMessage.provider}/${assistantMessage.model}`,
+			});
+			return COMPACTION_CHECK_NONE;
 		}
 
 		// Stale-result pass runs every turn, before any threshold gating: it is
@@ -7722,11 +7861,11 @@ export class AgentSession {
 		const supersedeResult = await this.#pruneStaleToolResults();
 
 		const compactionSettings = this.settings.getGroup("compaction");
-		if (!compactionSettings.enabled || compactionSettings.strategy === "off") return false;
+		if (!compactionSettings.enabled || compactionSettings.strategy === "off") return COMPACTION_CHECK_NONE;
 
 		// Case 4: Threshold - turn succeeded but context is getting large
 		// Skip if this was an error (non-overflow errors don't have usage data)
-		if (assistantMessage.stopReason === "error") return false;
+		if (assistantMessage.stopReason === "error") return COMPACTION_CHECK_NONE;
 		const pruneResult = await this.#pruneToolOutputs();
 		let contextTokens = calculateContextTokens(assistantMessage.usage);
 		if (supersedeResult) {
@@ -7745,7 +7884,7 @@ export class AgentSession {
 				});
 			}
 		}
-		return false;
+		return COMPACTION_CHECK_NONE;
 	}
 	#assistantEndedWithSuccessfulYield(assistantMessage: AssistantMessage): boolean {
 		const toolCallId = this.#lastSuccessfulYieldToolCallId;
@@ -7785,7 +7924,7 @@ export class AgentSession {
 			if (assistantMessage.stopReason === "toolUse") {
 				this.#removeEmptyStopFromActiveContext(assistantMessage);
 			}
-			return true;
+			return false;
 		}
 		this.#removeEmptyStopFromActiveContext(assistantMessage);
 		this.agent.appendMessage({
@@ -8160,12 +8299,12 @@ export class AgentSession {
 	/**
 	 * Check if agent stopped with incomplete todos and prompt to continue.
 	 */
-	async #checkTodoCompletion(): Promise<void> {
+	async #checkTodoCompletion(): Promise<boolean> {
 		// Skip todo reminders when the most recent turn was driven by an explicit user force —
 		// the user wanted exactly that tool, not a follow-up nag about incomplete todos.
 		const lastServedLabel = this.#toolChoiceQueue.consumeLastServedLabel();
 		if (lastServedLabel === "user-force") {
-			return;
+			return false;
 		}
 
 		// Suppress within a self-continuation chain: if the agent's last turn was driven by a
@@ -8176,7 +8315,7 @@ export class AgentSession {
 			logger.debug("Todo completion: prior reminder still awaiting agent action; staying silent", {
 				attempt: this.#todoReminderCount,
 			});
-			return;
+			return false;
 		}
 
 		const remindersEnabled = this.settings.get("todo.reminders");
@@ -8184,20 +8323,20 @@ export class AgentSession {
 		if (!remindersEnabled || !todosEnabled) {
 			this.#todoReminderCount = 0;
 			this.#todoReminderAwaitingProgress = false;
-			return;
+			return false;
 		}
 
 		const remindersMax = this.settings.get("todo.reminders.max");
 		if (this.#todoReminderCount >= remindersMax) {
 			logger.debug("Todo completion: max reminders reached", { count: this.#todoReminderCount });
-			return;
+			return false;
 		}
 
 		const phases = this.getTodoPhases();
 		if (phases.length === 0) {
 			this.#todoReminderCount = 0;
 			this.#todoReminderAwaitingProgress = false;
-			return;
+			return false;
 		}
 
 		const incompleteByPhase = phases
@@ -8215,7 +8354,7 @@ export class AgentSession {
 		if (incomplete.length === 0) {
 			this.#todoReminderCount = 0;
 			this.#todoReminderAwaitingProgress = false;
-			return;
+			return false;
 		}
 
 		// Build reminder message
@@ -8255,6 +8394,7 @@ export class AgentSession {
 		this.agent.appendMessage(reminderMessage);
 		this.sessionManager.appendMessage(reminderMessage);
 		this.#scheduleAgentContinue({ generation: this.#promptGeneration });
+		return true;
 	}
 
 	/**
@@ -8788,14 +8928,14 @@ export class AgentSession {
 	 * Internal: Run auto-compaction with events.
 	 *
 	 * @param allowDefer If true (default), threshold-driven handoff strategy is allowed to
-	 *   schedule itself as a deferred post-prompt task and return `true` immediately. The
-	 *   caller MUST treat that as "compaction will happen async — do not also schedule
-	 *   `agent.continue()` for this turn", otherwise the deferred handoff races a fresh
-	 *   streaming turn (the symptom: "Auto-handoff" loader + assistant message still
-	 *   streaming). Callers on a path that is about to start a new agent turn (e.g.
-	 *   the pre-prompt check in `#promptWithMessage`) pass `false` to force inline
-	 *   execution so the handoff completes before the new turn begins.
-	 * @returns true when a deferred handoff was scheduled. Inline runs always return false.
+	 *   schedule itself as a deferred post-prompt task and return a deferred-handoff result
+	 *   immediately. The caller MUST treat that as "compaction will happen async — do not
+	 *   also schedule `agent.continue()` for this turn", otherwise the deferred handoff
+	 *   races a fresh streaming turn (the symptom: "Auto-handoff" loader + assistant
+	 *   message still streaming). Callers on a path that is about to start a new agent
+	 *   turn (e.g. the pre-prompt check in `#promptWithMessage`) pass `false` to force
+	 *   inline execution so the handoff completes before the new turn begins.
+	 * @returns whether auto-compaction scheduled a follow-up turn.
 	 */
 	async #runAutoCompaction(
 		reason: "overflow" | "threshold" | "idle" | "incomplete",
@@ -8803,10 +8943,10 @@ export class AgentSession {
 		deferred = false,
 		allowDefer = true,
 		options: { autoContinue?: boolean; triggerContextTokens?: number } = {},
-	): Promise<boolean> {
+	): Promise<CompactionCheckResult> {
 		const compactionSettings = this.settings.getGroup("compaction");
-		if (compactionSettings.strategy === "off") return false;
-		if (reason !== "idle" && !compactionSettings.enabled) return false;
+		if (compactionSettings.strategy === "off") return COMPACTION_CHECK_NONE;
+		if (reason !== "idle" && !compactionSettings.enabled) return COMPACTION_CHECK_NONE;
 		const generation = this.#promptGeneration;
 		const shouldAutoContinue = options.autoContinue !== false && compactionSettings.autoContinue !== false;
 		// Shake runs inline (cheap, no remote LLM). On overflow recovery, if shake
@@ -8820,7 +8960,7 @@ export class AgentSession {
 				shouldAutoContinue,
 				options.triggerContextTokens,
 			);
-			if (outcome !== "fallback") return false;
+			if (outcome !== "fallback") return outcome;
 		}
 		// "overflow" and "incomplete" force inline execution because they are recovery
 		// paths the caller wants resolved before scheduling the next turn. "idle" is
@@ -8841,7 +8981,7 @@ export class AgentSession {
 				},
 				{ generation },
 			);
-			return true;
+			return COMPACTION_CHECK_DEFERRED_HANDOFF;
 		}
 
 		// "overflow" forces context-full because the input itself is broken — a handoff
@@ -8889,7 +9029,7 @@ export class AgentSession {
 							aborted: true,
 							willRetry: false,
 						});
-						return false;
+						return COMPACTION_CHECK_NONE;
 					}
 					logger.warn("Auto-handoff returned no document; falling back to context-full maintenance", {
 						reason,
@@ -8904,10 +9044,11 @@ export class AgentSession {
 						aborted: false,
 						willRetry: false,
 					});
-					if (!autoCompactionSignal.aborted && reason !== "idle" && shouldAutoContinue) {
+					const continuationScheduled = !autoCompactionSignal.aborted && reason !== "idle" && shouldAutoContinue;
+					if (continuationScheduled) {
 						this.#scheduleAutoContinuePrompt(generation);
 					}
-					return false;
+					return continuationScheduled ? COMPACTION_CHECK_CONTINUATION : COMPACTION_CHECK_NONE;
 				}
 			}
 
@@ -8920,7 +9061,7 @@ export class AgentSession {
 					willRetry: false,
 					skipped: true,
 				});
-				return false;
+				return COMPACTION_CHECK_NONE;
 			}
 
 			const availableModels = this.#modelRegistry.getAvailable();
@@ -8933,7 +9074,7 @@ export class AgentSession {
 					willRetry: false,
 					skipped: true,
 				});
-				return false;
+				return COMPACTION_CHECK_NONE;
 			}
 
 			const pathEntries = this.sessionManager.getBranch();
@@ -8954,8 +9095,9 @@ export class AgentSession {
 						generation,
 						shouldContinue: () => this.agent.hasQueuedMessages(),
 					});
+					return COMPACTION_CHECK_CONTINUATION;
 				}
-				return false;
+				return COMPACTION_CHECK_NONE;
 			}
 
 			let hookCompaction: CompactionResult | undefined;
@@ -8979,7 +9121,7 @@ export class AgentSession {
 						aborted: true,
 						willRetry: false,
 					});
-					return false;
+					return COMPACTION_CHECK_NONE;
 				}
 
 				if (hookResult?.compaction) {
@@ -9162,7 +9304,7 @@ export class AgentSession {
 					aborted: true,
 					willRetry: false,
 				});
-				return false;
+				return COMPACTION_CHECK_NONE;
 			}
 
 			this.sessionManager.appendCompaction(
@@ -9204,8 +9346,10 @@ export class AgentSession {
 			};
 			await this.#emitSessionEvent({ type: "auto_compaction_end", action, result, aborted: false, willRetry });
 
+			let continuationScheduled = false;
 			if (!willRetry && reason !== "idle" && shouldAutoContinue) {
 				this.#scheduleAutoContinuePrompt(generation);
+				continuationScheduled = true;
 			}
 
 			if (willRetry) {
@@ -9226,6 +9370,7 @@ export class AgentSession {
 				}
 
 				this.#scheduleAgentContinue({ delayMs: 100, generation });
+				continuationScheduled = true;
 			} else if (this.agent.hasQueuedMessages()) {
 				// Auto-compaction can complete while follow-up/steering/custom messages are waiting.
 				// Kick the loop so queued messages are actually delivered.
@@ -9234,7 +9379,9 @@ export class AgentSession {
 					generation,
 					shouldContinue: () => this.agent.hasQueuedMessages(),
 				});
+				continuationScheduled = true;
 			}
+			return continuationScheduled ? COMPACTION_CHECK_CONTINUATION : COMPACTION_CHECK_NONE;
 		} catch (error) {
 			if (autoCompactionSignal.aborted) {
 				await this.#emitSessionEvent({
@@ -9244,7 +9391,7 @@ export class AgentSession {
 					aborted: true,
 					willRetry: false,
 				});
-				return false;
+				return COMPACTION_CHECK_NONE;
 			}
 			const errorMessage = error instanceof Error ? error.message : "compaction failed";
 			await this.#emitSessionEvent({
@@ -9265,7 +9412,7 @@ export class AgentSession {
 				this.#autoCompactionAbortController = undefined;
 			}
 		}
-		return false;
+		return COMPACTION_CHECK_NONE;
 	}
 
 	/**
@@ -9284,7 +9431,7 @@ export class AgentSession {
 		generation: number,
 		autoContinue: boolean,
 		triggerContextTokens?: number,
-	): Promise<"handled" | "fallback"> {
+	): Promise<CompactionCheckResult | "fallback"> {
 		const action = "shake";
 		await this.#emitSessionEvent({ type: "auto_compaction_start", reason, action });
 		this.#autoCompactionAbortController?.abort();
@@ -9301,7 +9448,7 @@ export class AgentSession {
 					aborted: true,
 					willRetry: false,
 				});
-				return "handled";
+				return COMPACTION_CHECK_NONE;
 			}
 			const reclaimed = result.toolResultsDropped + result.blocksDropped > 0;
 			// Detect the dead-loop reported in issues #2119/#2275: the threshold check
@@ -9362,8 +9509,10 @@ export class AgentSession {
 				skipped: !reclaimed,
 			});
 
+			let continuationScheduled = false;
 			if (!willRetry && reason !== "idle" && autoContinue) {
 				this.#scheduleAutoContinuePrompt(generation);
+				continuationScheduled = true;
 			}
 			if (willRetry) {
 				// The shake rebuild replays every entry, so a trailing error/length
@@ -9379,14 +9528,16 @@ export class AgentSession {
 					if (shouldDrop) this.agent.replaceMessages(messages.slice(0, -1));
 				}
 				this.#scheduleAgentContinue({ delayMs: 100, generation });
+				continuationScheduled = true;
 			} else if (this.agent.hasQueuedMessages()) {
 				this.#scheduleAgentContinue({
 					delayMs: 100,
 					generation,
 					shouldContinue: () => this.agent.hasQueuedMessages(),
 				});
+				continuationScheduled = true;
 			}
-			return "handled";
+			return continuationScheduled ? COMPACTION_CHECK_CONTINUATION : COMPACTION_CHECK_NONE;
 		} catch (error) {
 			if (signal.aborted) {
 				await this.#emitSessionEvent({
@@ -9396,7 +9547,7 @@ export class AgentSession {
 					aborted: true,
 					willRetry: false,
 				});
-				return "handled";
+				return COMPACTION_CHECK_NONE;
 			}
 			const message = error instanceof Error ? error.message : "shake failed";
 			await this.#emitSessionEvent({
@@ -9408,7 +9559,7 @@ export class AgentSession {
 				errorMessage: `Auto-shake failed: ${message}`,
 			});
 			// Overflow still needs recovery even if shake threw.
-			return reason === "overflow" ? "fallback" : "handled";
+			return reason === "overflow" ? "fallback" : COMPACTION_CHECK_NONE;
 		} finally {
 			if (this.#autoCompactionAbortController === controller) {
 				this.#autoCompactionAbortController = undefined;

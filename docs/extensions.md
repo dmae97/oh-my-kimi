@@ -216,7 +216,8 @@ Cancelable pre-events:
 - `before_provider_request` (may replace provider request payload)
 - `after_provider_response`
 - `context`
-- `agent_start` / `agent_end`
+- `agent_start` / `agent_end` — agent loop lifecycle notification; `agent_end` remains notification-only
+- `session_stop` — main-session stop hook, awaited before settle; may continue with `{ continue: true, additionalContext }` or `{ decision: "block", reason }`; capped at 8 consecutive continuations and never fires for task/subagent sessions
 - `turn_start` / `turn_end`
 - `message_start` / `message_update` / `message_end`
 

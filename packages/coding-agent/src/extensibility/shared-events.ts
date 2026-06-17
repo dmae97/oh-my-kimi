@@ -93,6 +93,17 @@ export interface SessionShutdownEvent {
 	type: "session_shutdown";
 }
 
+/** Fired when a main-agent turn is about to settle; handlers may request one continuation turn. */
+export interface SessionStopEvent {
+	type: "session_stop";
+	messages: AgentMessage[];
+	turn_id: number;
+	last_assistant_message?: AgentMessage;
+	session_id: string;
+	session_file?: string;
+	stop_hook_active: boolean;
+}
+
 /** Preparation data for tree navigation (used by session_before_tree event) */
 export interface TreePreparation {
 	/** Node being switched to */
@@ -145,6 +156,7 @@ export type SessionEvent =
 	| SessionBeforeCompactEvent
 	| SessionCompactingEvent
 	| SessionCompactEvent
+	| SessionStopEvent
 	| SessionShutdownEvent
 	| SessionBeforeTreeEvent
 	| SessionTreeEvent
@@ -326,6 +338,18 @@ export interface SessionCompactingResult {
 	prompt?: string;
 	/** Custom data to store in compaction entry */
 	preserveData?: Record<string, unknown>;
+}
+
+/** Return type for `session_stop` handlers */
+export interface SessionStopEventResult {
+	/** Continue the main session with additional context before settling */
+	continue?: boolean;
+	/** OMP-native model-visible context for the continuation */
+	additionalContext?: string;
+	/** Claude/Codex-compatible block decision; maps to a continuation */
+	decision?: "block";
+	/** Claude/Codex-compatible model-visible continuation reason */
+	reason?: string;
 }
 
 /** Return type for `session_before_tree` handlers */

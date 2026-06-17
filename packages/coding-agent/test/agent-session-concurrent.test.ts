@@ -7,7 +7,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
-import { Agent, AgentBusyError, type AgentTool } from "@oh-my-pi/pi-agent-core";
+import { Agent, AgentBusyError, type AgentMessage, type AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, Message, ToolCall } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
@@ -17,6 +17,7 @@ import type { Rule } from "@oh-my-pi/pi-coding-agent/capability/rule";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { TtsrManager } from "@oh-my-pi/pi-coding-agent/export/ttsr";
+import type { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
@@ -249,6 +250,374 @@ describe("AgentSession concurrent prompt guard", () => {
 				);
 			}),
 		).toBe(true);
+	});
+
+	it("continues a main session from session_stop feedback before settling", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({
+			handler: () => ({ content: ["Done"] }),
+		});
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+			convertToLlm,
+		});
+		const stopEvents: Array<{
+			stop_hook_active: boolean;
+			session_id: string;
+			turn_id: number;
+			last_assistant_message?: AgentMessage;
+		}> = [];
+		const eventOrder: string[] = [];
+		const extensionRunner = {
+			emit: vi.fn(event => {
+				eventOrder.push(event.type);
+				return Promise.resolve(undefined);
+			}),
+			emitBeforeAgentStart: vi.fn().mockResolvedValue(undefined),
+			hasHandlers: vi.fn((eventType: string) => eventType === "session_stop"),
+			emitSessionStop: vi.fn(event => {
+				eventOrder.push("session_stop");
+				stopEvents.push(event);
+				if (stopEvents.length === 1) {
+					return Promise.resolve({ continue: true, additionalContext: "Mission incomplete; continue." });
+				}
+				return Promise.resolve(undefined);
+			}),
+		} as unknown as ExtensionRunner;
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated();
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry, extensionRunner });
+
+		await session.prompt("First message");
+		await session.waitForIdle();
+
+		const callMessages = mock.calls.map(call => call.context.messages);
+		expect(callMessages).toHaveLength(2);
+		expect(
+			callMessages[1]?.some(message =>
+				typeof message.content === "string"
+					? message.content.includes("Mission incomplete; continue.")
+					: message.content.some(
+							content => content.type === "text" && content.text.includes("Mission incomplete; continue."),
+						),
+			),
+		).toBe(true);
+		expect(eventOrder.filter(type => type === "session_stop" || type === "agent_end")).toEqual([
+			"session_stop",
+			"agent_end",
+			"session_stop",
+			"agent_end",
+		]);
+		expect(stopEvents.map(event => event.stop_hook_active)).toEqual([false, true]);
+		expect(stopEvents.map(event => event.turn_id)).toEqual([0, 0]);
+		expect(stopEvents[0]?.session_id).toBe(session.sessionId);
+		expect(stopEvents[0]?.last_assistant_message?.role).toBe("assistant");
+	});
+
+	it("uses non-empty session_stop reason when additional context is empty", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({
+			handler: () => ({ content: ["Done"] }),
+		});
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+			convertToLlm,
+		});
+		let stopCount = 0;
+		const extensionRunner = {
+			emit: vi.fn().mockResolvedValue(undefined),
+			emitBeforeAgentStart: vi.fn().mockResolvedValue(undefined),
+			hasHandlers: vi.fn((eventType: string) => eventType === "session_stop"),
+			emitSessionStop: vi.fn(() => {
+				stopCount++;
+				if (stopCount === 1) {
+					return Promise.resolve({
+						continue: true,
+						additionalContext: "",
+						reason: "Continue from fallback reason.",
+					});
+				}
+				return Promise.resolve(undefined);
+			}),
+		} as unknown as ExtensionRunner;
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated();
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry, extensionRunner });
+
+		await session.prompt("First message");
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(2);
+		expect(
+			mock.calls[1]?.context.messages.some(message =>
+				typeof message.content === "string"
+					? message.content.includes("Continue from fallback reason.")
+					: message.content.some(
+							content => content.type === "text" && content.text.includes("Continue from fallback reason."),
+						),
+			),
+		).toBe(true);
+	});
+
+	it("does not continue session_stop feedback after aborting a slow hook", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({
+			handler: () => ({ content: ["Done"] }),
+		});
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+			convertToLlm,
+		});
+		const stopHook = Promise.withResolvers<{ continue: true; additionalContext: string }>();
+		const emitSessionStop = vi.fn(() => (emitSessionStop.mock.calls.length === 1 ? stopHook.promise : undefined));
+		const extensionRunner = {
+			emit: vi.fn().mockResolvedValue(undefined),
+			emitBeforeAgentStart: vi.fn().mockResolvedValue(undefined),
+			hasHandlers: vi.fn((eventType: string) => eventType === "session_stop"),
+			emitSessionStop,
+		} as unknown as ExtensionRunner;
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated();
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry, extensionRunner });
+
+		const promptPromise = session.prompt("First message");
+		await waitFor(() => emitSessionStop.mock.calls.length === 1);
+		const abortPromise = session.abort();
+		stopHook.resolve({ continue: true, additionalContext: "Should not run after abort." });
+
+		await abortPromise;
+		await promptPromise;
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(1);
+		expect(session.queuedMessageCount).toBe(0);
+
+		await session.prompt("Second message");
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(2);
+		expect(
+			mock.calls[1]?.context.messages.some(message =>
+				typeof message.content === "string"
+					? message.content.includes("Should not run after abort.")
+					: message.content.some(
+							content => content.type === "text" && content.text.includes("Should not run after abort."),
+						),
+			),
+		).toBe(false);
+	});
+
+	it("caps consecutive session_stop continuations at eight", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({
+			handler: () => ({ content: ["Pass"] }),
+		});
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+			convertToLlm,
+		});
+		const extensionRunner = {
+			emit: vi.fn().mockResolvedValue(undefined),
+			emitBeforeAgentStart: vi.fn().mockResolvedValue(undefined),
+			hasHandlers: vi.fn((eventType: string) => eventType === "session_stop"),
+			emitSessionStop: vi.fn(() => Promise.resolve({ decision: "block" as const, reason: "Run another pass." })),
+		} as unknown as ExtensionRunner;
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated();
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry, extensionRunner });
+
+		await session.prompt("First message");
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(9);
+		expect(extensionRunner.emitSessionStop).toHaveBeenCalledTimes(9);
+	});
+
+	it("emits session_stop only after empty-stop recovery reaches a final stop", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({
+			responses: [{ content: [""] }, { content: ["Recovered"] }],
+		});
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+			convertToLlm,
+		});
+		const extensionRunner = {
+			emit: vi.fn().mockResolvedValue(undefined),
+			emitBeforeAgentStart: vi.fn().mockResolvedValue(undefined),
+			hasHandlers: vi.fn((eventType: string) => eventType === "session_stop"),
+			emitSessionStop: vi.fn().mockResolvedValue(undefined),
+		} as unknown as ExtensionRunner;
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated();
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry, extensionRunner });
+
+		await session.prompt("First message");
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(2);
+		expect(extensionRunner.emitSessionStop).toHaveBeenCalledTimes(1);
+	});
+
+	it("emits session_stop after empty-stop retry cap settles", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({
+			responses: [{ content: [""] }, { content: [""] }, { content: [""] }, { content: [""] }],
+		});
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+			convertToLlm,
+		});
+		const extensionRunner = {
+			emit: vi.fn().mockResolvedValue(undefined),
+			emitBeforeAgentStart: vi.fn().mockResolvedValue(undefined),
+			hasHandlers: vi.fn((eventType: string) => eventType === "session_stop"),
+			emitSessionStop: vi.fn().mockResolvedValue(undefined),
+		} as unknown as ExtensionRunner;
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated();
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry, extensionRunner });
+
+		await session.prompt("First message");
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(4);
+		expect(extensionRunner.emitSessionStop).toHaveBeenCalledTimes(1);
+	});
+
+	it("continues session_stop feedback in ACP sessions with deferred client turns", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({
+			handler: () => ({ content: ["Done"] }),
+		});
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+			convertToLlm,
+		});
+		let stopCount = 0;
+		const extensionRunner = {
+			emit: vi.fn().mockResolvedValue(undefined),
+			emitBeforeAgentStart: vi.fn().mockResolvedValue(undefined),
+			hasHandlers: vi.fn((eventType: string) => eventType === "session_stop"),
+			emitSessionStop: vi.fn(() => {
+				stopCount++;
+				if (stopCount === 1) {
+					return Promise.resolve({ continue: true, additionalContext: "ACP stop continuation." });
+				}
+				return Promise.resolve(undefined);
+			}),
+		} as unknown as ExtensionRunner;
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated();
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry, extensionRunner });
+		session.setClientBridge({
+			capabilities: {},
+			deferAgentInitiatedTurns: true,
+		});
+
+		await session.prompt("First message");
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(2);
+		expect(
+			mock.calls[1]?.context.messages.some(message =>
+				typeof message.content === "string"
+					? message.content.includes("ACP stop continuation.")
+					: message.content.some(
+							content => content.type === "text" && content.text.includes("ACP stop continuation."),
+						),
+			),
+		).toBe(true);
+	});
+
+	it("does not emit session_stop for subagent sessions", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({
+			handler: () => ({ content: ["Subagent done"] }),
+		});
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+			convertToLlm,
+		});
+		const extensionRunner = {
+			emit: vi.fn().mockResolvedValue(undefined),
+			emitBeforeAgentStart: vi.fn().mockResolvedValue(undefined),
+			hasHandlers: vi.fn((eventType: string) => eventType === "session_stop"),
+			emitSessionStop: vi.fn().mockResolvedValue(undefined),
+		} as unknown as ExtensionRunner;
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated();
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+		session = new AgentSession({
+			agent,
+			sessionManager,
+			settings,
+			modelRegistry,
+			extensionRunner,
+			agentKind: "sub",
+		});
+
+		await session.prompt("Subagent message");
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(1);
+		expect(extensionRunner.emit).toHaveBeenCalledWith({ type: "agent_end", messages: expect.any(Array) });
+		expect(extensionRunner.emitSessionStop).not.toHaveBeenCalled();
 	});
 
 	it("should allow prompt() after previous completes", async () => {
@@ -1512,11 +1881,19 @@ describe("AgentSession TTSR resume gate", () => {
 			},
 		});
 
+		const extensionRunner = {
+			emit: vi.fn().mockResolvedValue(undefined),
+			emitBeforeAgentStart: vi.fn().mockResolvedValue(undefined),
+			hasHandlers: vi.fn((eventType: string) => eventType === "session_stop"),
+			emitSessionStop: vi.fn().mockResolvedValue(undefined),
+		} as unknown as ExtensionRunner;
+
 		session = new AgentSession({
 			agent,
 			sessionManager: SessionManager.inMemory(),
 			settings: Settings.isolated({ "compaction.enabled": false, "contextPromotion.enabled": true }),
 			modelRegistry,
+			extensionRunner,
 		});
 
 		await session.prompt("Handle overflow");
@@ -1525,5 +1902,6 @@ describe("AgentSession TTSR resume gate", () => {
 		expect(streamCallCount).toBeGreaterThanOrEqual(2);
 		expect(session.model?.id).toBe(codexModel.id);
 		expect(session.isStreaming).toBe(false);
+		expect(extensionRunner.emitSessionStop).toHaveBeenCalledTimes(1);
 	});
 });

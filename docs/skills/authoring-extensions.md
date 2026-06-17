@@ -201,9 +201,14 @@ pi.on("tool_call", async (event, ctx) => {
 pi.on("turn_end", async (_event, ctx) => {
   ctx.ui.setStatus("tokens", `~${ctx.getContextUsage()?.tokens ?? "?"} tokens`);
 });
+
+pi.on("session_stop", async (event) => {
+  if (event.stop_hook_active) return;
+  return { continue: true, additionalContext: `Review final status after turn ${event.turn_id}.` };
+});
 ```
 
-Full event catalog: see [hooks authoring guide](./authoring-hooks.md).
+Full event catalog: see [extension authoring guide](../extensions.md).
 
 ## Extension vs hook — when to use which
 
