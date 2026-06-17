@@ -47,6 +47,14 @@ omp config reset steeringMode   # restore a key to its schema default
 omp config path                 # print the active agent directory
 ```
 
+For users who want the full first-run animation on normal launches, set `startup.showSplash`:
+
+```bash
+omp config set startup.showSplash true
+```
+
+This only controls the startup splash animation. It does not rerun setup or change setup state, and `startup.quiet: true` still suppresses all startup chrome including the splash.
+
 ### Subcommands
 
 | Command | Effect |
