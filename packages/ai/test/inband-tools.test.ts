@@ -38,6 +38,7 @@ const DIALECTS: readonly Dialect[] = [
 	"kimi",
 	"xml",
 	"anthropic",
+	"minimax",
 	"deepseek",
 	"harmony",
 	"pi",
@@ -144,6 +145,11 @@ describe("in-band tool dialects", () => {
 			'<invoke name="read"><parameter name="path" string="true">src/a.ts</parameter></invoke>',
 		);
 		expectRawBlock(
+			"minimax",
+			'<minimax:tool_call>\n<invoke name="read"><parameter name="path" string="true">src/a.ts</parameter></invoke>\n</minimax:tool_call>',
+			'<invoke name="read"><parameter name="path" string="true">src/a.ts</parameter></invoke>',
+		);
+		expectRawBlock(
 			"harmony",
 			'<|start|>assistant<|channel|>commentary to=functions.read<|message|>{"path":"src/a.ts"}<|call|>',
 			'<|start|>assistant<|channel|>commentary to=functions.read<|message|>{"path":"src/a.ts"}<|call|>',
@@ -161,6 +167,35 @@ describe("in-band tool dialects", () => {
 		const call = parsed.content.find((block): block is ToolCall => block.type === "toolCall");
 
 		expect(call?.rawBlock).toBe(raw);
+	});
+
+	it("parses MiniMax tool-call wrapper arguments without mangling parameter names", () => {
+		const raw =
+			'<minimax:tool_call>\n<invoke name="read">\n<parameter name="path" string="true">src/a.ts</parameter>\n<parameter name="count" string="false">2</parameter>\n</invoke>\n</minimax:tool_call>';
+		const parsed = parseInbandToolMessage(assistant([{ type: "text", text: raw }]), "minimax", TOOLS);
+		const calls = parsed.content.filter((block): block is ToolCall => block.type === "toolCall");
+
+		expect(calls).toHaveLength(1);
+		expect(calls[0]?.name).toBe("read");
+		expect(calls[0]?.arguments).toEqual({ path: "src/a.ts", count: 2 });
+		expect(calls[0]?.arguments).not.toHaveProperty('parameter name="path"');
+		expect(calls[0]?.arguments).not.toHaveProperty('parameter name="count"');
+	});
+
+	it("buffers unprefixed MiniMax wrappers across streaming tag splits", () => {
+		const raw =
+			'<tool_call>\n<invoke name="read">\n<parameter name="path" string="true">src/a.ts</parameter>\n<parameter name="count" string="false">2</parameter>\n</invoke>\n</tool_call>';
+		const events = feedText("minimax", raw);
+		const calls = toolEnds(events);
+		const visibleText = events
+			.filter((event): event is Extract<InbandScanEvent, { type: "text" }> => event.type === "text")
+			.map(event => event.text)
+			.join("");
+
+		expect(calls).toHaveLength(1);
+		expect(calls[0]?.name).toBe("read");
+		expect(calls[0]?.arguments).toEqual({ path: "src/a.ts", count: 2 });
+		expect(visibleText).toBe("");
 	});
 
 	it("stops before hallucinated Anthropic function results", () => {
@@ -201,6 +236,9 @@ describe("in-band tool dialects", () => {
 			"<|start|>functions.read to=assistant<|channel|>commentary<|message|>FILE<|end|>",
 		);
 		expect(getDialectDefinition("anthropic").renderToolResults([resultBlock])).toBe(
+			"<function_results>\n<result>\n<tool_name>read</tool_name>\n<stdout>FILE</stdout>\n</result>\n</function_results>",
+		);
+		expect(getDialectDefinition("minimax").renderToolResults([resultBlock])).toBe(
 			"<function_results>\n<result>\n<tool_name>read</tool_name>\n<stdout>FILE</stdout>\n</result>\n</function_results>",
 		);
 		expect(getDialectDefinition("qwen3").renderToolResults([resultBlock])).toBe(

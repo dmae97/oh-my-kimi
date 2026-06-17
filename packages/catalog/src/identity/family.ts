@@ -73,6 +73,13 @@ export function isMinimaxM2FamilyModelId(modelId: string): boolean {
 	return /(?:^|[/.-])m2\d*(?:[.-]\d+)?(?:[-.:_]|$)/i.test(lower);
 }
 
+/** MiniMax M3 family ids in bundled/default and aggregator namespace forms. */
+export function isMinimaxM3FamilyModelId(modelId: string): boolean {
+	const lower = modelId.toLowerCase();
+	if (!lower.includes("minimax")) return false;
+	return /(?:^|[/._-])(?:minimax[/._-])?m3(?:[-.:_]|$)/i.test(lower);
+}
+
 /**
  * OpenAI gpt-oss family (`gpt-oss-20b`, `gpt-oss-120b`, `gpt-oss:120b`,
  * `vendor/gpt-oss-…`). The Harmony reasoning format only accepts
@@ -139,7 +146,7 @@ export function modelFamilyToken(modelId: string): string {
 	if (isOpenAIModelId(modelId)) return "openai";
 	if (isKimiModelId(modelId)) return "kimi";
 	if (isQwenModelId(modelId)) return "qwen";
-	if (isMinimaxM2FamilyModelId(modelId)) return "minimax";
+	if (isMinimaxM2FamilyModelId(modelId) || isMinimaxM3FamilyModelId(modelId)) return "minimax";
 	if (isOpenAIGptOssModelId(modelId)) return "gpt-oss";
 	if (isDeepseekModelIdOrName(modelId)) return "deepseek";
 	if (isMimoModelIdOrName(modelId)) return "mimo";

@@ -16,6 +16,7 @@ const RESPONSE_OPEN_TOKENS: Record<Dialect, readonly string[]> = {
 	kimi: ["<|im_system|>"],
 	xml: ["<tool_response>"],
 	anthropic: ["<function_results>", "<tool_response>"],
+	minimax: ["<function_results>", "<tool_response>"],
 	deepseek: ["<｜tool▁outputs▁begin｜>", "<｜tool▁output▁begin｜>"],
 	harmony: ["<|start|>functions."],
 	pi: ["<tool_response>"],

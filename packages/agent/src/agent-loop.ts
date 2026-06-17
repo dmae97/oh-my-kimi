@@ -113,6 +113,7 @@ function resolveOwnedDialectFromEnv(value: string | undefined): Dialect | undefi
 		case "qwen3":
 		case "gemini":
 		case "gemma":
+		case "minimax":
 			return value;
 		default:
 			return undefined;
