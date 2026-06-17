@@ -51,6 +51,9 @@ function createMockSession(
 
 	const session = {
 		state,
+		get messages() {
+			return state.messages;
+		},
 		agent: { state: { systemPrompt: ["test"] } },
 		model: undefined,
 		extensionRunner: undefined,
@@ -158,6 +161,7 @@ describe("runSubprocess yield reminders", () => {
 				}
 				return undefined;
 			},
+			hasHandlers: () => false,
 		} as unknown as NonNullable<AgentSession["extensionRunner"]>;
 
 		mockCreateAgentSession(session);
@@ -269,6 +273,52 @@ describe("runSubprocess yield reminders", () => {
 		expect(promptOptions[1]?.attribution).toBe("agent");
 		expect(result.output).toContain('"done": true');
 		expect(result.output.includes("SYSTEM WARNING")).toBe(false);
+	});
+
+	it("emits session_stop once after yield reminders finish", async () => {
+		const prompts: string[] = [];
+		const sessionStopPromptCounts: number[] = [];
+		const sessionStopMessages: Array<AgentSession["messages"]> = [];
+		const session = createMockSession(({ text, promptIndex, emit, state }) => {
+			prompts.push(text);
+			if (promptIndex === 1) {
+				const assistant = createAssistantStopMessage("did some work");
+				state.messages.push(assistant);
+				emit({ type: "message_end", message: assistant });
+				return;
+			}
+			emit({
+				type: "tool_execution_end",
+				toolCallId: "tool-session-stop",
+				toolName: "yield",
+				result: {
+					content: [{ type: "text", text: "Result submitted." }],
+					details: { status: "success", data: { done: true } },
+				},
+				isError: false,
+			});
+		});
+		const mutableSession = session as unknown as {
+			extensionRunner: NonNullable<AgentSession["extensionRunner"]>;
+		};
+		mutableSession.extensionRunner = {
+			initialize: () => {},
+			onError: () => {},
+			emit: async () => undefined,
+			hasHandlers: (eventType: string) => eventType === "session_stop",
+			emitSessionStop: async (messages: AgentSession["messages"]) => {
+				sessionStopPromptCounts.push(prompts.length);
+				sessionStopMessages.push(messages);
+			},
+		} as unknown as NonNullable<AgentSession["extensionRunner"]>;
+
+		mockCreateAgentSession(session);
+
+		const result = await runSubprocess({ ...baseOptions, id: "subagent-session-stop" });
+		expect(result.output).toContain('"done": true');
+		expect(sessionStopPromptCounts).toEqual([2]);
+		expect(sessionStopMessages).toHaveLength(1);
+		expect(sessionStopMessages[0]?.some(message => message.role === "assistant")).toBe(true);
 	});
 
 	it("keeps null yield warning when subagent submits success without data", async () => {

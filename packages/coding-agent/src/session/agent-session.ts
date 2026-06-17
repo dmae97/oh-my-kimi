@@ -3533,11 +3533,7 @@ export class AgentSession {
 			this.#turnIndex = 0;
 			await this.#extensionRunner.emit({ type: "agent_start" });
 		} else if (event.type === "agent_end") {
-			if (this.#agentKind === "sub") {
-				await this.#extensionRunner.emitSessionStop(event.messages);
-			} else {
-				await this.#extensionRunner.emit({ type: "agent_end", messages: event.messages });
-			}
+			await this.#extensionRunner.emit({ type: "agent_end", messages: event.messages });
 		} else if (event.type === "turn_start") {
 			const hookEvent: TurnStartEvent = {
 				type: "turn_start",
