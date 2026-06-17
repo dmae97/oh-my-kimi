@@ -4,7 +4,7 @@ const addContentWindowProxy = (iframe) => {
 			if (key === "self") return this;
 			if (key === "frameElement") return iframe;
 			if (key === "0") return undefined;
-			return Reflect.get(target, key);
+			return Reflect_get(target, key);
 		},
 	};
 
@@ -24,7 +24,7 @@ const addContentWindowProxy = (iframe) => {
 };
 
 const handleIframeCreation = (target, thisArg, args) => {
-	const iframe = target.apply(thisArg, args);
+	const iframe = Reflect_apply(target, thisArg, args);
 	const originalIframe = iframe;
 	const originalSrcdoc = originalIframe.srcdoc;
 
@@ -53,12 +53,12 @@ const addIframeCreationSniffer = () => {
 		apply(target, thisArg, args) {
 			const isIframe = args && args.length && `${args[0]}`.toLowerCase() === "iframe";
 			if (!isIframe) {
-				return target.apply(thisArg, args);
+				return Reflect_apply(target, thisArg, args);
 			}
 			return handleIframeCreation(target, thisArg, args);
 		},
 		get(target, key) {
-			return Reflect.get(target, key);
+			return Reflect_get(target, key);
 		},
 	};
 

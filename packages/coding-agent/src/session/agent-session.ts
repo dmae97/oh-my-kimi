@@ -4422,7 +4422,7 @@ export class AgentSession {
 		}
 		return new Proxy(tool, {
 			get: (target, prop) => {
-				if (prop !== "execute") return Reflect.get(target, prop, target);
+				if (prop !== "execute") return target[prop as keyof T];
 				return async (
 					toolCallId: string,
 					args: unknown,

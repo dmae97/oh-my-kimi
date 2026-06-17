@@ -22,7 +22,7 @@ const getParameterProxyHandler = {
     if (param === 0x9245) return vendor;
     // UNMASKED_RENDERER_WEBGL = 0x9246
     if (param === 0x9246) return renderer;
-    return target.apply(thisArg, args);
+	    return Reflect_apply(target, thisArg, args);
   },
 };
 
