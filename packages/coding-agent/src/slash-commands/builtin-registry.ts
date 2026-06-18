@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { setNextRequestDebugPath } from "@oh-my-pi/pi-ai/utils/request-debug";
 import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
-import { APP_NAME, setProjectDir } from "@oh-my-pi/pi-utils";
+import { APP_NAME, getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
 import { COLLAB_GUEST_ALLOWED_COMMANDS, CollabGuestLink } from "../collab/guest";
 import { CollabHost } from "../collab/host";
 import type { SettingPath, SettingValue } from "../config/settings";
@@ -28,6 +28,7 @@ import { theme } from "../modes/theme/theme";
 import type { InteractiveModeContext } from "../modes/types";
 import type { AgentSession, FreshSessionResult } from "../session/agent-session";
 import { formatShakeSummary, type ShakeMode } from "../session/shake-types";
+import { expandTilde } from "../tools/path-utils";
 import { urlHyperlinkAlways } from "../tui";
 import { getChangelogPath, parseChangelog } from "../utils/changelog";
 import { buildContextReportText } from "./helpers/context-report";
@@ -1491,7 +1492,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		handle: async (command, runtime) => {
 			if (runtime.session.isStreaming) return usage("Cannot move while streaming.", runtime);
 			if (!command.args) return usage("Usage: /move <path>", runtime);
-			const resolvedPath = path.resolve(runtime.cwd, command.args);
+			const resolvedPath = path.resolve(runtime.cwd, expandTilde(command.args));
 			let isDirectory: boolean;
 			try {
 				isDirectory = (await fs.stat(resolvedPath)).isDirectory();
@@ -2184,6 +2185,106 @@ function buildStaticInlineHint(hint: string): (argumentText: string) => string |
 	return (argumentText: string) => (argumentText.trim().length === 0 ? hint : null);
 }
 
+/**
+ * Build getArgumentCompletions that suggests directories relative to the
+ * current project directory. Used by /move so users can Tab-complete the
+ * destination directory.
+ */
+function buildDirectoryArgumentCompletions(): (prefix: string) => Promise<AutocompleteItem[] | null> {
+	return async (argumentPrefix: string) => {
+		const prefix = argumentPrefix.trim();
+
+		const cwd = getProjectDir();
+		const expandedPrefix = expandTilde(prefix);
+		const isAbsolute = path.isAbsolute(expandedPrefix);
+
+		let searchDir: string;
+		let searchPrefix: string;
+		if (
+			prefix === "" ||
+			prefix === "." ||
+			prefix === "./" ||
+			prefix === ".." ||
+			prefix === "../" ||
+			prefix === "~" ||
+			prefix === "~/" ||
+			prefix === "/"
+		) {
+			searchDir = isAbsolute ? expandedPrefix : path.join(cwd, expandedPrefix);
+			searchPrefix = "";
+		} else if (expandedPrefix.endsWith("/")) {
+			searchDir = isAbsolute ? expandedPrefix : path.join(cwd, expandedPrefix);
+			searchPrefix = "";
+		} else {
+			const dir = path.dirname(expandedPrefix);
+			searchDir = isAbsolute ? dir : path.join(cwd, dir);
+			searchPrefix = path.basename(expandedPrefix);
+		}
+
+		try {
+			const entries = await fs.readdir(searchDir, { withFileTypes: true });
+			const suggestions: AutocompleteItem[] = [];
+			for (const entry of entries) {
+				if (!entry.name.toLowerCase().startsWith(searchPrefix.toLowerCase())) continue;
+				if (entry.name === ".git") continue;
+
+				let isDirectory = entry.isDirectory();
+				if (!isDirectory && entry.isSymbolicLink()) {
+					try {
+						isDirectory = (await fs.stat(path.join(searchDir, entry.name))).isDirectory();
+					} catch {
+						continue;
+					}
+				}
+				if (!isDirectory) continue;
+
+				const absoluteValue = path.join(searchDir, entry.name);
+				const displayValue = buildDirectoryCompletionDisplayValue(prefix, absoluteValue, cwd);
+				suggestions.push({ value: displayValue, label: `${entry.name}/` });
+			}
+			suggestions.sort((a, b) => a.label.localeCompare(b.label));
+			return suggestions.length > 0 ? suggestions : null;
+		} catch {
+			return null;
+		}
+	};
+}
+function buildDirectoryCompletionDisplayValue(prefix: string, absoluteValue: string, cwd: string): string {
+	// Preserve the user's prefix style where possible, but always return a
+	// value that /move can resolve (absolute or relative) without escaping.
+	const normalized = path.normalize(absoluteValue);
+
+	if (prefix.startsWith("~/")) {
+		const home = os.homedir();
+		const homeRelative = path.relative(home, normalized);
+		return `~/${homeRelative.replaceAll("\\", "/")}/`;
+	}
+	if (prefix === "~") {
+		const home = os.homedir();
+		const homeRelative = path.relative(home, normalized);
+		return `~/${homeRelative.replaceAll("\\", "/")}/`;
+	}
+	if (prefix.startsWith("/")) {
+		return `${normalized.replaceAll("\\", "/")}/`;
+	}
+	if (prefix.startsWith("./")) {
+		const relative = path.relative(cwd, normalized);
+		return `./${relative.replaceAll("\\", "/")}/`;
+	}
+	if (prefix.startsWith("../")) {
+		const relative = path.relative(cwd, normalized);
+		return `${relative.replaceAll("\\", "/")}/`;
+	}
+	if (prefix === "..") {
+		const relative = path.relative(cwd, normalized);
+		return `${relative.replaceAll("\\", "/")}/`;
+	}
+
+	// Default: relative to cwd.
+	const relative = path.relative(cwd, normalized);
+	return `${relative.replaceAll("\\", "/")}/`;
+}
+
 /** Builtin command metadata used for slash-command autocomplete and help text. */
 export const BUILTIN_SLASH_COMMAND_DEFS: ReadonlyArray<BuiltinSlashCommand> = BUILTIN_SLASH_COMMAND_REGISTRY.map(
 	command => ({
@@ -2201,7 +2302,9 @@ export const BUILTIN_SLASH_COMMAND_DEFS: ReadonlyArray<BuiltinSlashCommand> = BU
  */
 export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<
 	BuiltinSlashCommand & {
-		getArgumentCompletions?: (prefix: string) => AutocompleteItem[] | null;
+		getArgumentCompletions?:
+			| ((prefix: string) => AutocompleteItem[] | null)
+			| ((prefix: string) => Promise<AutocompleteItem[] | null>);
 		getInlineHint?: (argumentText: string) => string | null;
 	}
 > = BUILTIN_SLASH_COMMAND_DEFS.map(cmd => {
@@ -2210,6 +2313,13 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<
 			...cmd,
 			getArgumentCompletions: buildArgumentCompletions(cmd.subcommands),
 			getInlineHint: buildSubcommandInlineHint(cmd.subcommands),
+		};
+	}
+	if (cmd.name === "move") {
+		return {
+			...cmd,
+			getArgumentCompletions: buildDirectoryArgumentCompletions(),
+			...(cmd.inlineHint ? { getInlineHint: buildStaticInlineHint(cmd.inlineHint) } : {}),
 		};
 	}
 	if (cmd.inlineHint) {
