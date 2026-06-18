@@ -15,6 +15,7 @@ describe("GoogleOAuthFlow callback hostname", () => {
 			scopes: ["scope1"],
 			callbackPort: 51121,
 			callbackPath: "/callback",
+			discoverProject: async () => "test-project",
 		});
 
 		expect(flow.callbackHostname).toBe("127.0.0.1");
