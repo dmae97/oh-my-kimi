@@ -144,6 +144,9 @@ function formatProviderTabLabel(providerId: string): string {
 function createProviderTab(providerId: string): ProviderTabState {
 	return { id: providerId, label: formatProviderTabLabel(providerId), providerId };
 }
+const TEMPORARY_MODEL_PICKER_HINT =
+	"Temporary/session model only. Use Alt+M or /model for role models (default/smol/plan/task/slow/custom roles).";
+
 /**
  * Component that renders a model selector with provider tabs and context menu.
  * - Tab/Arrow Left/Right: Switch between provider tabs
@@ -151,6 +154,7 @@ function createProviderTab(providerId: string): ProviderTabState {
  * - Enter: Open context menu to select action
  * - Escape: Close menu or selector
  */
+
 export class ModelSelectorComponent extends Container {
 	#searchInput: Input;
 	#headerContainer: Container;
@@ -230,6 +234,10 @@ export class ModelSelectorComponent extends Container {
 				: "Only showing models with configured API keys (see README for details)";
 		this.addChild(new Text(theme.fg("warning", hintText), 0, 0));
 		this.addChild(new Spacer(1));
+		if (this.#temporaryOnly) {
+			this.addChild(new Text(theme.fg("muted", TEMPORARY_MODEL_PICKER_HINT), 0, 0));
+			this.addChild(new Spacer(1));
+		}
 
 		// Create header container for tab bar
 		this.#headerContainer = new Container();

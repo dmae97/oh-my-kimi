@@ -71,6 +71,10 @@ import { buildCopyTargets } from "../utils/copy-targets";
 
 const MANUAL_LOGIN_TIP = "Tip: You can complete pairing with /login <redirect URL>.";
 
+export function formatTemporaryModelStatus(modelLabel: string, roleSelectorHint = "Alt+M"): string {
+	return `Temporary session model: ${modelLabel}. Role models (default/smol/plan/task/slow/custom roles): use ${roleSelectorHint} or /model.`;
+}
+
 export class SelectorController {
 	constructor(private ctx: InteractiveModeContext) {}
 
@@ -473,7 +477,8 @@ export class SelectorController {
 							}
 							this.ctx.statusLine.invalidate();
 							this.ctx.updateEditorBorderColor();
-							this.ctx.showStatus(`Temporary model: ${selector ?? model.id}`);
+							const roleSelectorHint = this.ctx.keybindings.getKeys("app.model.select")[0] ?? "Alt+M";
+							this.ctx.showStatus(formatTemporaryModelStatus(selector ?? model.id, roleSelectorHint));
 							done();
 							this.ctx.ui.requestRender();
 						} else if (role === "default") {

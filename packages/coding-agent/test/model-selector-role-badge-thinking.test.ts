@@ -175,6 +175,20 @@ describe("ModelSelector role badge thinking display", () => {
 		expect(selected).toEqual(["b-large"]);
 	});
 
+	test("labels temporary picker as session-only and points to role assignment", async () => {
+		installTestTheme();
+		const settings = Settings.isolated({});
+		const model = createContextTestModel("session-model", 128_000);
+		const selector = createScopedSelector([model], settings, () => {}, { temporaryOnly: true });
+		await Bun.sleep(0);
+		installTestTheme();
+
+		const rendered = normalizeRenderedText(selector.render(220).join("\n"));
+		expect(rendered).toContain("Temporary/session model only");
+		expect(rendered).toContain("Alt+M or /model");
+		expect(rendered).toContain("default/smol/plan/task/slow/custom roles");
+	});
+
 	test("does not open the model menu when every candidate is disabled", async () => {
 		installTestTheme();
 		const settings = Settings.isolated({});
