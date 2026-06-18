@@ -72,6 +72,8 @@ async function createContext() {
 		retry,
 	};
 	const updatePendingMessagesDisplay = vi.fn();
+	const handleBtwBranchKey = vi.fn(async () => true);
+	const canBranchBtw = vi.fn(() => false);
 	const editor: FakeEditor = {
 		setText(text: string) {
 			editorText = text;
@@ -152,6 +154,8 @@ async function createContext() {
 		showModelSelector,
 		updateEditorBorderColor: vi.fn(),
 		hasActiveBtw: vi.fn(() => false),
+		handleBtwBranchKey,
+		canBranchBtw,
 		showError: vi.fn(),
 		showStatus: vi.fn(),
 	} as unknown as InteractiveModeContext;
@@ -170,6 +174,9 @@ async function createContext() {
 			retry,
 			abort,
 			resetDisplay,
+			handleBtwBranchKey,
+			addInputListener,
+			canBranchBtw,
 		},
 	};
 }
@@ -281,6 +288,47 @@ describe("InputController keybinding setup", () => {
 		expect(editor.getText()).toBe("");
 	});
 
+	it("routes b to branch a branchable /btw panel", async () => {
+		const { InputController, ctx, spies } = await createContext();
+		(ctx.canBranchBtw as unknown as { mockReturnValue(value: boolean): void }).mockReturnValue(true);
+		const controller = new InputController(ctx);
+
+		controller.setupKeyHandlers();
+		const listener = spies.addInputListener.mock.calls[1]?.[0];
+		expect(listener).toBeDefined();
+		const result = listener?.("b");
+
+		expect(result).toEqual({ consume: true });
+		expect(spies.handleBtwBranchKey).toHaveBeenCalledTimes(1);
+	});
+
+	it("lets b fall through while the editor has draft text", async () => {
+		const { InputController, ctx, editor, spies } = await createContext();
+		(ctx.canBranchBtw as unknown as { mockReturnValue(value: boolean): void }).mockReturnValue(true);
+		editor.setText("build a branch");
+		const controller = new InputController(ctx);
+
+		controller.setupKeyHandlers();
+		const listener = spies.addInputListener.mock.calls[1]?.[0];
+		expect(listener).toBeDefined();
+		const result = listener?.("b");
+
+		expect(result).toBeUndefined();
+		expect(spies.handleBtwBranchKey).not.toHaveBeenCalled();
+	});
+
+	it("lets b fall through when /btw is not branchable", async () => {
+		const { InputController, ctx, spies } = await createContext();
+		const controller = new InputController(ctx);
+
+		controller.setupKeyHandlers();
+		const listener = spies.addInputListener.mock.calls[1]?.[0];
+		expect(listener).toBeDefined();
+		const result = listener?.("b");
+
+		expect(result).toBeUndefined();
+		expect(spies.handleBtwBranchKey).not.toHaveBeenCalled();
+	});
 	it("empty Enter aborts the active stream when queued messages are pending", async () => {
 		const { InputController, ctx, editor, spies } = await createContext();
 		const session = ctx.session as unknown as { isStreaming: boolean; queuedMessageCount: number };

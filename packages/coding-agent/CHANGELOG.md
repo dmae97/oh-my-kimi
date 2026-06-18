@@ -69,6 +69,10 @@
 
 - Added `app.retry` as an `Alt+R` keybinding for retrying the last failed or aborted assistant turn ([#2790](https://github.com/can1357/oh-my-pi/issues/2790)).
 
+### Added
+
+- Added `b branch` promotion for completed `/btw` answers, creating a branch that preserves the side-question input and full assistant response including thinking blocks.
+
 ## [16.0.5] - 2026-06-17
 
 ### Added

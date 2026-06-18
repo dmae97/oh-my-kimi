@@ -58,6 +58,10 @@ export class BtwPanelComponent extends Container {
 		this.#rebuild();
 	}
 
+	isBranchable(): boolean {
+		return this.#state === "complete" && this.#answer.trim().length > 0;
+	}
+
 	close(): void {
 		this.#closed = true;
 	}
@@ -85,7 +89,7 @@ export class BtwPanelComponent extends Container {
 			case "running":
 				return theme.fg("muted", "Esc cancel /btw");
 			case "complete":
-				return theme.fg("muted", "Esc dismiss");
+				return theme.fg("muted", this.isBranchable() ? "b branch · Esc dismiss" : "Esc dismiss");
 			case "aborted":
 				return theme.fg("warning", `${theme.status.warning} Cancelled · Esc dismiss`);
 			case "error":
