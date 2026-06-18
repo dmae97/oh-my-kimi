@@ -23,7 +23,7 @@ from omp_rpc import HostTool, HostToolContext, RpcCommandError, host_tool
 
 from robomp import persona
 from robomp.config import Settings
-from robomp.db import Database, issue_key
+from robomp.db import Database, IssueState, issue_key
 from robomp.git_ops import GitCommandError, HeadDriftError
 from robomp.github_backend import GitHubBackend
 from robomp.github_client import GitHubError, IssueInfo, PullRequestFileInfo, RepoInfo
@@ -49,6 +49,7 @@ _REPO_COMMAND_SCRUBBED_ENV_KEYS: tuple[str, ...] = (
     "ROBOMP_REPLAY_TOKEN",
     "ROBOMP_GH_PROXY_HMAC_KEY",
 )
+_NEEDS_INFO_LABEL = "needs-info"
 _AGENT_HOME = Path("/srv/agent-home")
 _PRE_PR_FIX_TIMEOUT_SECONDS = 600.0
 _PRE_PR_CHECK_TIMEOUT_SECONDS = 600.0
@@ -135,6 +136,43 @@ def _run_coro(loop: asyncio.AbstractEventLoop, coro: Any) -> Any:
     """Block the agent thread until an async call completes on the worker loop."""
     future = asyncio.run_coroutine_threadsafe(coro, loop)
     return future.result()
+
+
+def _issue_needs_info(bindings: ToolBindings) -> bool:
+    row = bindings.db.get_issue(bindings.issue_key)
+    return row is not None and row.state == "needs_info"
+
+
+def _optional_label_error(exc: Exception) -> str:
+    return f"{type(exc).__name__}: {exc}"
+
+
+def _remove_needs_info_label(bindings: ToolBindings) -> bool:
+    try:
+        _run_coro(
+            bindings.loop,
+            bindings.github.remove_issue_label(bindings.repo.full_name, bindings.issue.number, _NEEDS_INFO_LABEL),
+        )
+    except GitHubError as exc:
+        if exc.status == 404:
+            return True
+        log.warning("needs-info label cleanup failed", extra={"issue": bindings.issue_key, "err": str(exc)})
+        return False
+    except Exception as exc:  # noqa: BLE001 - best-effort optional label cleanup
+        log.warning(
+            "needs-info label cleanup failed",
+            extra={"issue": bindings.issue_key, "err": _optional_label_error(exc)},
+        )
+        return False
+    return True
+
+
+def _advance_needs_info(bindings: ToolBindings, state: IssueState) -> bool:
+    if not _issue_needs_info(bindings):
+        return False
+    label_cleared = _remove_needs_info_label(bindings)
+    bindings.db.set_issue_state(bindings.issue_key, state)
+    return label_cleared
 
 
 def _audit(
@@ -405,17 +443,14 @@ def _run_pre_publish_bun_check(
         _raise_command(msg)
 
 
-_AUTOCLOSE_INELIGIBLE_STATES: frozenset[str] = frozenset({"closed", "merged", "abandoned"})
+_AUTOCLOSE_INELIGIBLE_STATES: frozenset[str] = frozenset({"closed", "merged", "needs_info", "abandoned"})
 
 
 def _should_schedule_autoclose(bindings: ToolBindings, target_number: int) -> float | None:
     """Return the configured close window (hours) when this comment should
-    schedule an auto-close; ``None`` otherwise.
-
-    Conditions: feature enabled in `Settings`, the comment lands on the
-    originating issue (not a different number, not a PR thread), the issue is
-    classified as `question`, and the issue is not already in a terminal
-    state (closed/merged/abandoned).
+    schedule the question auto-close job: feature enabled, same issue,
+    classified as `question`, and the issue is not already in a terminal or
+    waiting-for-reporter state.
     """
     settings = bindings.settings
     if settings is None or not settings.question_autoclose_enabled:
@@ -697,6 +732,7 @@ def _build_open_pr(bindings: ToolBindings) -> HostTool[Any, Any]:
         # Make sure the branch is pushed (idempotent) using the same preflight as gh_push_branch.
         _guarded_push_branch(bindings, args, "gh_open_pr", bindings.workspace.branch)
         base = args.get("base") or bindings.repo.default_branch
+        was_needs_info = _issue_needs_info(bindings)
         try:
             pr = _run_coro(
                 bindings.loop,
@@ -714,6 +750,7 @@ def _build_open_pr(bindings: ToolBindings) -> HostTool[Any, Any]:
             _raise_command(f"GitHub rejected PR: {exc.status} {exc.message}")
         bindings.db.set_issue_pr(bindings.issue_key, pr.number)
         bindings.db.set_issue_state(bindings.issue_key, "opened")
+        needs_info_label_cleared = _remove_needs_info_label(bindings) if was_needs_info else False
         artifact = bindings.workspace.artifacts_dir / "pr.json"
         artifact.write_text(
             json.dumps(
@@ -728,7 +765,10 @@ def _build_open_pr(bindings: ToolBindings) -> HostTool[Any, Any]:
             ),
             encoding="utf-8",
         )
-        _audit(bindings, "gh_open_pr", args, result={"pr_number": pr.number, "url": pr.html_url})
+        result: dict[str, Any] = {"pr_number": pr.number, "url": pr.html_url}
+        if needs_info_label_cleared:
+            result["cleared_needs_info"] = True
+        _audit(bindings, "gh_open_pr", args, result=result)
         return f"opened #{pr.number}: {pr.html_url}"
 
     return host_tool(
@@ -842,7 +882,10 @@ def _build_repro_record(bindings: ToolBindings) -> HostTool[Any, Any]:
         if _slot_permissions_active(bindings.slot_uid):
             assert bindings.slot_uid is not None
             os.chown(target, bindings.slot_uid, bindings.slot_uid)
-        _audit(bindings, "repro_record", args, result={"path": str(target.relative_to(bindings.workspace.root))})
+        result: dict[str, Any] = {"path": str(target.relative_to(bindings.workspace.root))}
+        if _advance_needs_info(bindings, "reproducing"):
+            result["cleared_needs_info"] = True
+        _audit(bindings, "repro_record", args, result=result)
         return "recorded"
 
     return host_tool(
@@ -888,9 +931,26 @@ def _build_mark_unable(bindings: ToolBindings) -> HostTool[Any, Any]:
         except GitHubError as exc:
             _audit(bindings, "mark_unable_to_reproduce", args, error=str(exc))
             _raise_command(f"GitHub rejected comment: {exc.status} {exc.message}")
-        bindings.db.set_issue_state(bindings.issue_key, "abandoned")
-        _audit(bindings, "mark_unable_to_reproduce", args, result={"comment_id": comment.id})
-        return f"posted abandonment comment id={comment.id}"
+        result: dict[str, Any] = {"comment_id": comment.id, "state": "needs_info"}
+        try:
+            labels = _run_coro(
+                bindings.loop,
+                bindings.github.add_issue_labels(bindings.repo.full_name, bindings.issue.number, [_NEEDS_INFO_LABEL]),
+            )
+            result["labels"] = list(labels)
+        except GitHubError as exc:
+            # Some repos have not created the optional status label yet. The
+            # durable behavior is the non-terminal sqlite state plus the visible
+            # info-request comment, so label setup must not block resumption.
+            log.warning("needs-info label failed", extra={"issue": bindings.issue_key, "err": str(exc)})
+            result["label_error"] = f"{exc.status} {exc.message}"
+        except Exception as exc:  # noqa: BLE001 - best-effort optional label setup
+            error = _optional_label_error(exc)
+            log.warning("needs-info label failed", extra={"issue": bindings.issue_key, "err": error})
+            result["label_error"] = error
+        bindings.db.set_issue_state(bindings.issue_key, "needs_info")
+        _audit(bindings, "mark_unable_to_reproduce", args, result=result)
+        return f"posted needs-info comment id={comment.id}"
 
     return host_tool(
         name="mark_unable_to_reproduce",

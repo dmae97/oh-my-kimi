@@ -2211,6 +2211,87 @@ async def test_handle_comment_finalized_without_directive_still_replies(
     close_database()
 
 
+async def test_handle_comment_resumes_needs_info_without_preemptive_cleanup(
+    settings: Settings, tmp_path: Path, stub_run_task, monkeypatch
+) -> None:
+    """A needs-info reply resumes first; host tools clear state only after actionable work."""
+    from robomp import tasks
+    from robomp.github_client import GitHubClient, IssueInfo, RepoInfo
+
+    sandbox = _RecordingSandbox(tmp_path)
+    db = get_database(settings.sqlite_path)
+    db.upsert_issue(
+        key="octo/widget#88",
+        repo="octo/widget",
+        number=88,
+        state="needs_info",
+        branch="farm/old/branch",
+    )
+
+    repo = RepoInfo(
+        full_name="octo/widget", default_branch="main", clone_url="https://github.com/octo/widget.git", private=False
+    )
+    issue = IssueInfo(
+        repo="octo/widget",
+        number=88,
+        title="boom",
+        body="details",
+        state="open",
+        author="alice",
+        labels=("needs-info",),
+        is_pull_request=False,
+    )
+
+    async def _resolve(_gh, _payload):
+        return repo, issue
+
+    monkeypatch.setattr(tasks, "_resolve_repo_and_issue", _resolve)
+
+    post_comment_calls: list = []
+    removed_labels: list[tuple[str, int, str]] = []
+
+    async def _capture_post(self, *args, **kwargs):
+        post_comment_calls.append((args, kwargs))
+        return None
+
+    async def _capture_remove_label(self, repo: str, number: int, label: str) -> None:
+        removed_labels.append((repo, number, label))
+
+    monkeypatch.setattr(GitHubClient, "post_comment", _capture_post)
+    monkeypatch.setattr(GitHubClient, "remove_issue_label", _capture_remove_label)
+
+    payload = {
+        "action": "created",
+        "issue": {"number": 88, "user": {"login": "alice"}, "title": "boom"},
+        "comment": {
+            "user": {"login": "alice"},
+            "body": "I am on Bun 1.3.14 and here is the trace",
+            "id": 4,
+            "created_at": "2026-05-14T23:00:00Z",
+        },
+        "repository": {"full_name": "octo/widget"},
+    }
+    await tasks.handle_comment(
+        settings=settings,
+        db=db,
+        github=GitHubClient("t"),
+        git_transport=LocalGitTransport(token=None),
+        sandbox=sandbox,
+        payload=payload,
+        delivery_id="test-delivery-needs-info",
+    )
+    assert len(stub_run_task) == 1
+    call = stub_run_task[0]
+    assert call["task_kind"] == "handle_comment"
+    assert call["comment"].body == "I am on Bun 1.3.14 and here is the trace"
+    assert sandbox.ensure_calls[0]["existing_branch"] == "farm/old/branch"
+    assert removed_labels == []
+    assert post_comment_calls == [], "needs-info replies must not get the finalized-issue notice"
+    row = db.get_issue("octo/widget#88")
+    assert row is not None and row.state == "needs_info"
+    close_database()
+
+
 async def test_directive_handler_attaches_thread_from_github(
     settings: Settings, tmp_path: Path, stub_run_task, monkeypatch
 ) -> None:
