@@ -9683,6 +9683,7 @@ export class AgentSession {
 
 		if (this.#isClassifierRefusal(message)) return true;
 		if (this.#isProviderErrorFinishReasonBeforeToolUse(message)) return true;
+		if (this.#isMalformedFunctionCallError(message)) return true;
 		if (this.#streamInterruptedAfterObservableOutput(message)) return false;
 		if (this.#isStaleOpenAIResponsesReplayError(message)) return true;
 
@@ -9731,6 +9732,11 @@ export class AgentSession {
 		if (!message.errorMessage) return false;
 		if (message.content.some(block => block.type === "toolCall")) return false;
 		return /\bProvider (?:returned error finish_reason|finish_reason:\s*error)\b/i.test(message.errorMessage);
+	}
+
+	#isMalformedFunctionCallError(message: AssistantMessage): boolean {
+		if (!message.errorMessage) return false;
+		return /\bmalformed.?function.?call\b/i.test(message.errorMessage);
 	}
 
 	#isTransientErrorMessage(errorMessage: string): boolean {
