@@ -289,6 +289,9 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		} else {
 			this.addChild(this.#contentText);
 		}
+		// Tool blocks are visually distinct cards (background-tinted or framed),
+		// so keep their horizontal padding even when the user enables tight layout.
+		this.setIgnoreTight(true);
 
 		this.#editMode = resolveEditModeForTool(toolName, tool);
 
