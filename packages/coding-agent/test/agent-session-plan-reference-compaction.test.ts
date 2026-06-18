@@ -22,11 +22,6 @@ import type { TextContent } from "@oh-my-pi/pi-ai";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { TempDir } from "@oh-my-pi/pi-utils";
-// NOTE: coding-agent modules are imported via relative ../src paths (not the
-// @oh-my-pi/pi-coding-agent alias) because in this worktree node_modules is a
-// symlink to the primary checkout, so the package alias would resolve to the
-// primary copy and bypass the fix under test. Cross-package deps stay on their
-// aliases — the worktree's agent-session imports them the same way.
 import { ModelRegistry } from "../src/config/model-registry";
 import { Settings } from "../src/config/settings";
 import { resolveLocalUrlToPath } from "../src/internal-urls";
