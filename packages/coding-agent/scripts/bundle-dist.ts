@@ -19,8 +19,8 @@ const ALWAYS_EXTERNAL = ["mupdf", "@oh-my-pi/pi-natives", "@huggingface/transfor
 // redundant copy that bloats dist/cli.js. NEVER add a patched dependency here — the
 // bundle is where a root `patchedDependencies` patch is baked in, so an externalized
 // import would load the unpatched npm package in users' installs (currently
-// beautiful-mermaid and @ark/schema are patched, so they — and arktype, which pulls
-// @ark/schema — stay bundled).
+// @ark/schema is patched, so it — and arktype, which pulls @ark/schema — stay
+// bundled).
 const RUNTIME_EXTERNAL = [
 	"puppeteer-core",
 	"@puppeteer/browsers",
@@ -30,7 +30,6 @@ const RUNTIME_EXTERNAL = [
 	"turndown-plugin-gfm",
 	"@mozilla/readability",
 	"linkedom",
-	"markit-ai",
 	"@agentclientprotocol/sdk",
 ];
 

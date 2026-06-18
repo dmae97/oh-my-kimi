@@ -36,11 +36,12 @@
 		"check:types": "tsgo -p tsconfig.json --noEmit",
 		"lint": "biome lint .",
 		"test": "bun test --parallel=4",
-		"fix": "biome check --write --unsafe . && bun run format-prompts && bun run generate-docs-index",
+		"fix": "biome check --write --unsafe . && bun run format-prompts",
 		"fmt": "biome format --write . && bun run format-prompts",
 		"format-prompts": "bun scripts/format-prompts.ts",
-		"generate-docs-index": "bun scripts/generate-docs-index.ts",
-		"prepack": "bun scripts/generate-docs-index.ts && bun --cwd=../collab-web run build:tool-views && bun scripts/bundle-dist.ts",
+		"generate-docs-index": "bun scripts/generate-docs-index.ts --generate",
+		"prepack": "bun scripts/generate-docs-index.ts --generate && bun --cwd=../collab-web run build:tool-views && bun scripts/bundle-dist.ts || ( bun scripts/generate-docs-index.ts --reset; exit 1 )",
+		"postpack": "bun scripts/generate-docs-index.ts --reset",
 		"bench:guard": "bun scripts/bench-guard.ts"
 	},
 	"dependencies": {
