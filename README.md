@@ -474,6 +474,23 @@ Key ideas:
 
 ## Development
 
+### Getting started from source
+
+Fresh clones need both workspace dependencies and the local Rust/N-API addon before the source CLI can start.
+
+```sh
+bun setup
+bun dev
+```
+
+`bun setup` installs Bun workspaces and builds `@oh-my-pi/pi-natives`. Re-run `bun run build:native` after changing Rust crates or `packages/natives`.
+
+For a non-interactive smoke check:
+
+```sh
+bun dev -- --version
+```
+
 ### Debug Command
 
 `/debug` opens tools for debugging, reporting, and profiling.
