@@ -129,6 +129,15 @@ describe("MiniMax Anthropic adaptive thinking", () => {
 		expect(payload.thinking).toEqual({ type: "adaptive" });
 		expect(payload.output_config?.effort).toBeUndefined();
 	});
+
+	it("serializes MiniMax M3 thinking-off requests without the Claude effort pin", async () => {
+		const payload = await capturePayload(makeMiniMaxAnthropicModel("MiniMax-M3"), {
+			thinkingEnabled: false,
+		});
+
+		expect(payload.thinking).toEqual({ type: "disabled" });
+		expect(payload.output_config?.effort).toBeUndefined();
+	});
 	it("maps every MiniMax M2 reasoning tier to the documented adaptive tag", async () => {
 		const payload = await capturePayload(makeMiniMaxAnthropicModel("MiniMax-M2.7"), {
 			reasoning: Effort.Low,
