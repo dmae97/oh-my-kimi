@@ -934,9 +934,6 @@ export function zip(entries: Unzipped): Uint8Array {
 	let count = 0;
 
 	for (const name in entries) {
-		if (count >= ZIP_UINT16_MAX || offset >= ZIP_UINT32_MAX) {
-			throw new ToolError("ZIP archive is too large to write (ZIP64 is not supported)");
-		}
 		const data = entries[name]!;
 		const nameBytes = ENCODER.encode(name);
 		const crc = zlib.crc32(data) >>> 0;
@@ -945,6 +942,18 @@ export function zip(entries: Unzipped): Uint8Array {
 		const stored = deflated.byteLength >= uncompressedSize;
 		const method = stored ? ZIP_STORED_COMPRESSION : ZIP_DEFLATE_COMPRESSION;
 		const payload = stored ? data : deflated;
+
+		// Without ZIP64 the name length is a u16 and offsets/sizes are u32 (with
+		// 0xffff/0xffffffff reserved as ZIP64 sentinels); reject anything that
+		// would silently wrap a header field instead of producing a valid archive.
+		if (
+			count + 1 >= ZIP_UINT16_MAX ||
+			nameBytes.byteLength > ZIP_UINT16_MAX ||
+			uncompressedSize >= ZIP_UINT32_MAX ||
+			offset + 30 + nameBytes.byteLength + payload.byteLength >= ZIP_UINT32_MAX
+		) {
+			throw new ToolError("ZIP archive is too large to write (ZIP64 is not supported)");
+		}
 
 		const header = new Uint8Array(30 + nameBytes.byteLength);
 		writeUInt32LE(header, 0, ZIP_LOCAL_FILE_HEADER_SIGNATURE);
@@ -980,6 +989,9 @@ export function zip(entries: Unzipped): Uint8Array {
 	}
 
 	const centralSize = centralParts.reduce((sum, part) => sum + part.byteLength, 0);
+	if (centralSize >= ZIP_UINT32_MAX || offset + centralSize + ZIP_EOCD_MIN_LENGTH >= ZIP_UINT32_MAX) {
+		throw new ToolError("ZIP archive is too large to write (ZIP64 is not supported)");
+	}
 	const eocd = new Uint8Array(ZIP_EOCD_MIN_LENGTH);
 	writeUInt32LE(eocd, 0, ZIP_EOCD_SIGNATURE);
 	writeUInt16LE(eocd, 8, count);
